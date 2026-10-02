@@ -1,0 +1,87 @@
+{
+  "rules": [
+    {
+      "rule_id": "rule_001",
+      "rule_name": "Prefer Master Tables",
+      "rule_type": "BOOST",
+      "enabled": true,
+      "priority": 100,
+      "conditions": {
+        "source_table_pattern": "MASTER_.*|.*_MASTER",
+        "target_column_pattern": ".*"
+      },
+      "action": {
+        "boost_score": 15,
+        "reason": "Master tables contain authoritative data"
+      }
+    },
+    {
+      "rule_id": "rule_002",
+      "rule_name": "Block Staging Tables",
+      "rule_type": "FILTER",
+      "enabled": true,
+      "priority": 200,
+      "conditions": {
+        "source_table_pattern": "STG_.*|STAGING_.*|.*_STG"
+      },
+      "action": {
+        "filter_out": true,
+        "reason": "Staging tables are transient and unreliable"
+      }
+    },
+    {
+      "rule_id": "rule_003",
+      "rule_name": "High Quality Required for Keys",
+      "rule_type": "FILTER",
+      "enabled": true,
+      "priority": 75,
+      "conditions": {
+        "target_column_pattern": ".*_ID|.*_KEY|.*_PK",
+        "min_quality_score": 70
+      },
+      "action": {
+        "filter_out": true,
+        "reason": "Key columns need high quality sources (\u226570%)"
+      }
+    },
+    {
+      "rule_id": "rule_004",
+      "rule_name": "Penalize Test/Temp Tables",
+      "rule_type": "PENALTY",
+      "enabled": true,
+      "priority": 50,
+      "conditions": {
+        "source_table_pattern": "TEST_.*|TEMP_.*|TMP_.*"
+      },
+      "action": {
+        "penalty_score": 30,
+        "reason": "Test/temp tables are not production-ready"
+      }
+    },
+    {
+      "rule_id": "rule_005",
+      "rule_name": "Boost Dimension Table Sources",
+      "rule_type": "BOOST",
+      "enabled": true,
+      "priority": 80,
+      "conditions": {
+        "source_table_pattern": "DIM_.*",
+        "target_table_pattern": ".*"
+      },
+      "action": {
+        "boost_score": 10,
+        "reason": "Dimension tables are well-structured for analytics"
+      }
+    }
+  ],
+  "thresholds": {
+    "min_confidence_warning": 60,
+    "min_confidence_for_approval": 50,
+    "auto_approve_threshold": 90
+  },
+  "metadata": {
+    "created_at": "2026-02-07",
+    "version": "1.0",
+    "description": "Default business rules for mapping quality"
+  }
+}

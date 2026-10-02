@@ -1,0 +1,228 @@
+{
+  "iterations": [
+    {
+      "iteration_id": "8f3753c3-631a-4809-8c69-6d9ac1e06df0",
+      "iteration": 1,
+      "timestamp": "2026-02-08T14:53:18.938716",
+      "user_feedback": "SUFFIX_TYPE column should not mapped to  property name column",
+      "improvement_stats": {
+        "total_mappings": 22,
+        "improved_count": 14,
+        "degraded_count": 3,
+        "unchanged_count": 5,
+        "avg_score_original": 51.0,
+        "avg_score_refined": 77.82051282051282,
+        "avg_improvement": 26.820512820512818,
+        "total_score_change": 765,
+        "top_improvements": [
+          {
+            "mapping": "PROPERTY_DIM.YEAR_PROPERTY_BUILT",
+            "original_score": 0,
+            "refined_score": 90,
+            "change": 90
+          },
+          {
+            "mapping": "PROPERTY_DIM.OWNER_OCCUPIED_F",
+            "original_score": 0,
+            "refined_score": 90,
+            "change": 90
+          },
+          {
+            "mapping": "PROPERTY_DIM.LAST_SALE_PRICE",
+            "original_score": 0,
+            "refined_score": 90,
+            "change": 90
+          },
+          {
+            "mapping": "PROPERTY_DIM.LAST_PURCHASE_DATE",
+            "original_score": 0,
+            "refined_score": 90,
+            "change": 90
+          },
+          {
+            "mapping": "PROPERTY_DIM.IS_CURRENT",
+            "original_score": 0,
+            "refined_score": 90,
+            "change": 90
+          },
+          {
+            "mapping": "PROPERTY_DIM.PROPERTY_NOTES",
+            "original_score": 0,
+            "refined_score": 85,
+            "change": 85
+          },
+          {
+            "mapping": "PROPERTY_DIM.EXPIRY_DATE",
+            "original_score": 0,
+            "refined_score": 85,
+            "change": 85
+          },
+          {
+            "mapping": "PROPERTY_DIM.EFFECTIVE_DATE",
+            "original_score": 0,
+            "refined_score": 80,
+            "change": 80
+          },
+          {
+            "mapping": "PROPERTY_DIM.PROPERTY_CLASS_TYPE_DESC",
+            "original_score": 50,
+            "refined_score": 85,
+            "change": 35
+          },
+          {
+            "mapping": "PROPERTY_DIM.PROPERTY_GLOBAL_ID",
+            "original_score": 70,
+            "refined_score": 90,
+            "change": 20
+          }
+        ],
+        "top_degradations": [
+          {
+            "mapping": "PROPERTY_DIM.PROPERTY_ZONING_CODE",
+            "original_score": 85,
+            "refined_score": 85,
+            "change": 0
+          },
+          {
+            "mapping": "PROPERTY_DIM.PROPERTY_CONSTRUCTION_TYPE_DESC",
+            "original_score": 70,
+            "refined_score": 70,
+            "change": 0
+          },
+          {
+            "mapping": "PROPERTY_DIM.PROPERTY_NAME",
+            "original_score": 80,
+            "refined_score": 70,
+            "change": -10
+          },
+          {
+            "mapping": "PROPERTY_DIM.GLOBAL_REGION_DESC",
+            "original_score": 80,
+            "refined_score": 70,
+            "change": -10
+          },
+          {
+            "mapping": "PROPERTY_DIM.NUMBER_OF_UNITS",
+            "original_score": 70,
+            "refined_score": 50,
+            "change": -20
+          }
+        ]
+      }
+    },
+    {
+      "iteration_id": "9e074f79-718c-4e73-adee-4dc2740193f7",
+      "iteration": 2,
+      "timestamp": "2026-02-08T15:02:53.815345",
+      "user_feedback": "",
+      "improvement_stats": {
+        "total_mappings": 22,
+        "improved_count": 3,
+        "degraded_count": 13,
+        "unchanged_count": 6,
+        "avg_score_original": 77.82051282051282,
+        "avg_score_refined": 63.214285714285715,
+        "avg_improvement": -14.606227106227102,
+        "total_score_change": -375,
+        "top_improvements": [
+          {
+            "mapping": "PROPERTY_DIM.NUMBER_OF_UNITS",
+            "original_score": 50,
+            "refined_score": 70,
+            "change": 20
+          },
+          {
+            "mapping": "PROPERTY_DIM.PROPERTY_NAME",
+            "original_score": 70,
+            "refined_score": 80,
+            "change": 10
+          },
+          {
+            "mapping": "PROPERTY_DIM.PROPERTY_SKEY",
+            "original_score": 85,
+            "refined_score": 90,
+            "change": 5
+          },
+          {
+            "mapping": "PROPERTY_DIM.PROPERTY_GLOBAL_ID",
+            "original_score": 90,
+            "refined_score": 90,
+            "change": 0
+          },
+          {
+            "mapping": "PROPERTY_DIM.ENTERPRISE_PROPERTY_ID",
+            "original_score": 90,
+            "refined_score": 90,
+            "change": 0
+          },
+          {
+            "mapping": "PROPERTY_DIM.PROPERTY_KIND",
+            "original_score": 70,
+            "refined_score": 70,
+            "change": 0
+          },
+          {
+            "mapping": "PROPERTY_DIM.PARCEL_NUMBER",
+            "original_score": 90,
+            "refined_score": 90,
+            "change": 0
+          },
+          {
+            "mapping": "PROPERTY_DIM.YEAR_PROPERTY_BUILT",
+            "original_score": 90,
+            "refined_score": 90,
+            "change": 0
+          },
+          {
+            "mapping": "PROPERTY_DIM.PROPERTY_CONSTRUCTION_TYPE_DESC",
+            "original_score": 70,
+            "refined_score": 70,
+            "change": 0
+          },
+          {
+            "mapping": "PROPERTY_DIM.PROPERTY_ZONING_CODE",
+            "original_score": 85,
+            "refined_score": 80,
+            "change": -5
+          }
+        ],
+        "top_degradations": [
+          {
+            "mapping": "PROPERTY_DIM.PROPERTY_NOTES",
+            "original_score": 85,
+            "refined_score": 60,
+            "change": -25
+          },
+          {
+            "mapping": "PROPERTY_DIM.PROPERTY_CLASS_TYPE_DESC",
+            "original_score": 85,
+            "refined_score": 40,
+            "change": -45
+          },
+          {
+            "mapping": "PROPERTY_DIM.EFFECTIVE_DATE",
+            "original_score": 80,
+            "refined_score": 0,
+            "change": -80
+          },
+          {
+            "mapping": "PROPERTY_DIM.EXPIRY_DATE",
+            "original_score": 85,
+            "refined_score": 0,
+            "change": -85
+          },
+          {
+            "mapping": "PROPERTY_DIM.IS_CURRENT",
+            "original_score": 90,
+            "refined_score": 0,
+            "change": -90
+          }
+        ]
+      }
+    }
+  ],
+  "metadata": {
+    "created_at": "2026-02-08T14:53:18.930793",
+    "total_iterations": 2
+  }
+}

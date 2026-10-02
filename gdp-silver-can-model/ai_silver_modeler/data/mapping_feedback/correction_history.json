@@ -1,0 +1,28 @@
+{
+  "corrections": [
+    {
+      "correction_id": "1346934a-8eb4-4508-8769-67db884d43e3",
+      "timestamp": "2026-02-07T18:38:05.177413",
+      "target_column": "CUSTOMER_ID",
+      "target_table": "DIM_CUSTOMER",
+      "original_mapping": {
+        "source_column": "CUST_NUM",
+        "source_table": "STG_CUSTOMERS",
+        "mapping_score": 75,
+        "transformation_logic": "CUST_NUM"
+      },
+      "corrected_mapping": {
+        "source_column": "CUSTOMER_KEY",
+        "source_table": "MASTER_CUSTOMER",
+        "mapping_score": 95,
+        "transformation_logic": "CUSTOMER_KEY"
+      },
+      "user_feedback": "CUSTOMER_KEY is the authoritative source from MASTER table"
+    }
+  ],
+  "metadata": {
+    "created_at": "2026-02-07T18:38:05.170202",
+    "total_corrections": 1,
+    "patterns_learned": 2
+  }
+}

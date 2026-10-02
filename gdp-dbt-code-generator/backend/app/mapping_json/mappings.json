@@ -1,0 +1,360 @@
+[
+    {
+        "id": "b95d1b5a-5ec5-47dc-8a37-e1ace918cc06",
+        "source": {
+            "table_name": "patients",
+            "column_name": "registration_date",
+            "data_type": "string"
+        },
+        "target": {
+            "table_name": "patient_encounter_details",
+            "column_name": "registration_date",
+            "data_type": "date"
+        },
+        "similarity": 0.95,
+        "match": "mapped"
+    },
+    {
+        "id": "bc0de67d-b5f8-4cff-ad09-a5cf54006998",
+        "source": {
+            "table_name": "doctors",
+            "column_name": "years_experience",
+            "data_type": "string"
+        },
+        "target": null,
+        "similarity": 0,
+        "match": "unmapped"
+    },
+    {
+        "id": "ddf5df09-bc34-4620-b70f-1675cbc3d9a4",
+        "source": {
+            "table_name": "doctors",
+            "column_name": "first_name",
+            "data_type": "string"
+        },
+        "target": {
+            "table_name": "patient_encounter_details",
+            "column_name": "doctor_first_name",
+            "data_type": "string"
+        },
+        "similarity": 0.9,
+        "match": "mapped"
+    },
+    {
+        "id": "0b1c68cf-169d-4de4-a355-63f07030cd71",
+        "source": {
+            "table_name": "doctors",
+            "column_name": "doctor_id",
+            "data_type": "string"
+        },
+        "target": {
+            "table_name": "patient_encounter_details",
+            "column_name": "doctor_id",
+            "data_type": "string"
+        },
+        "similarity": 0.95,
+        "match": "mapped"
+    },
+    {
+        "id": "2c69a0c8-5e13-4e94-bfbb-059db0f30803",
+        "source": {
+            "table_name": "doctors",
+            "column_name": "email",
+            "data_type": "string"
+        },
+        "target": null,
+        "similarity": 0,
+        "match": "unmapped"
+    },
+    {
+        "id": "bf07eb91-9ece-41c6-ab28-1eacdce73263",
+        "source": {
+            "table_name": "patients",
+            "column_name": "last_name",
+            "data_type": "string"
+        },
+        "target": {
+            "table_name": "patient_encounter_details",
+            "column_name": "last_name",
+            "data_type": "string"
+        },
+        "similarity": 0.9,
+        "match": "mapped"
+    },
+    {
+        "id": "d185cf75-a17b-4900-9041-934200ebcb49",
+        "source": {
+            "table_name": "doctors",
+            "column_name": "hospital_branch",
+            "data_type": "string"
+        },
+        "target": {
+            "table_name": "patient_encounter_details",
+            "column_name": "hospital_branch",
+            "data_type": "string"
+        },
+        "similarity": 0.85,
+        "match": "mapped"
+    },
+    {
+        "id": "39027846-5c7e-4965-a6e7-1be04d9509c7",
+        "source": {
+            "table_name": "patients",
+            "column_name": "first_name",
+            "data_type": "string"
+        },
+        "target": {
+            "table_name": "patient_encounter_details",
+            "column_name": "first_name",
+            "data_type": "string"
+        },
+        "similarity": 0.9,
+        "match": "mapped"
+    },
+    {
+        "id": "cff2b66b-8672-48cd-8b1f-abd40124412b",
+        "source": {
+            "table_name": "patients",
+            "column_name": "date_of_birth",
+            "data_type": "string"
+        },
+        "target": null,
+        "similarity": 0,
+        "match": "unmapped"
+    },
+    {
+        "id": "d6962c03-0be5-4185-b0ac-ceea1ca3df58",
+        "source": {
+            "table_name": "patients",
+            "column_name": "patient_id",
+            "data_type": "string"
+        },
+        "target": {
+            "table_name": "patient_encounter_details",
+            "column_name": "patient_id",
+            "data_type": "string"
+        },
+        "similarity": 0.95,
+        "match": "mapped"
+    },
+    {
+        "id": "8f62f6b1-964f-406b-9bcc-efeebd8aa11e",
+        "source": {
+            "table_name": "doctors",
+            "column_name": "phone_number",
+            "data_type": "string"
+        },
+        "target": null,
+        "similarity": 0,
+        "match": "unmapped"
+    },
+    {
+        "id": "d5a834b6-6a1e-4e53-9c05-de9ea80209ef",
+        "source": {
+            "table_name": "patients",
+            "column_name": "email",
+            "data_type": "string"
+        },
+        "target": {
+            "table_name": "patient_encounter_details",
+            "column_name": "email",
+            "data_type": "string"
+        },
+        "similarity": 0.85,
+        "match": "mapped"
+    },
+    {
+        "id": "c096dd83-ef6b-42db-bf16-ca733287dc10",
+        "source": {
+            "table_name": "patients",
+            "column_name": "insurance_number",
+            "data_type": "string"
+        },
+        "target": {
+            "table_name": "patient_encounter_details",
+            "column_name": "insurance_number",
+            "data_type": "string"
+        },
+        "similarity": 0.9,
+        "match": "mapped"
+    },
+    {
+        "id": "849b4b42-916b-4080-b740-66932309437f",
+        "source": {
+            "table_name": "patients",
+            "column_name": "insurance_provider",
+            "data_type": "string"
+        },
+        "target": {
+            "table_name": "patient_encounter_details",
+            "column_name": "insurance_provider",
+            "data_type": "string"
+        },
+        "similarity": 0.9,
+        "match": "mapped"
+    },
+    {
+        "id": "a49e7a9f-953d-462e-9805-e238d7666e24",
+        "source": {
+            "table_name": "patients",
+            "column_name": "address",
+            "data_type": "string"
+        },
+        "target": null,
+        "similarity": 0,
+        "match": "unmapped"
+    },
+    {
+        "id": "a78a963e-4674-40a4-a574-709385f8fd69",
+        "source": {
+            "table_name": "patients",
+            "column_name": "contact_number",
+            "data_type": "string"
+        },
+        "target": null,
+        "similarity": 0,
+        "match": "unmapped"
+    },
+    {
+        "id": "23eb4c63-be43-416f-80ac-a371e77ebfed",
+        "source": {
+            "table_name": "doctors",
+            "column_name": "specialization",
+            "data_type": "string"
+        },
+        "target": null,
+        "similarity": 0,
+        "match": "unmapped"
+    },
+    {
+        "id": "7185452a-009c-4185-983d-b6f0389713fa",
+        "source": {
+            "table_name": "patients",
+            "column_name": "gender",
+            "data_type": "string"
+        },
+        "target": {
+            "table_name": "patient_encounter_details",
+            "column_name": "gender",
+            "data_type": "string"
+        },
+        "similarity": 0.85,
+        "match": "mapped"
+    },
+    {
+        "id": "f191a8c8-7d3b-4429-97e1-c39bc4e4f288",
+        "source": {
+            "table_name": "doctors",
+            "column_name": "last_name",
+            "data_type": "string"
+        },
+        "target": {
+            "table_name": "patient_encounter_details",
+            "column_name": "doctor_last_name",
+            "data_type": "string"
+        },
+        "similarity": 0.9,
+        "match": "mapped"
+    },
+    {
+        "id": "7cd38d16-21cf-466e-a41b-eeb518d28961",
+        "source": {
+            "table_name": "appointments",
+            "column_name": "status",
+            "data_type": "string"
+        },
+        "target": {
+            "table_name": "patient_encounter_details",
+            "column_name": "status",
+            "data_type": "string"
+        },
+        "similarity": 0.9,
+        "match": "mapped"
+    },
+    {
+        "id": "d73556af-df0b-4769-aa6b-f79e57dd3ece",
+        "source": {
+            "table_name": "appointments",
+            "column_name": "appointment_time",
+            "data_type": "string"
+        },
+        "target": {
+            "table_name": "patient_encounter_details",
+            "column_name": "appointment_time",
+            "data_type": "string"
+        },
+        "similarity": 0.9,
+        "match": "mapped"
+    },
+    {
+        "id": "7d847c6a-d423-4ca3-829a-bdc4cc7a5e9c",
+        "source": {
+            "table_name": "appointments",
+            "column_name": "reason_for_visit",
+            "data_type": "string"
+        },
+        "target": {
+            "table_name": "patient_encounter_details",
+            "column_name": "reason_for_visit",
+            "data_type": "string"
+        },
+        "similarity": 0.9,
+        "match": "mapped"
+    },
+    {
+        "id": "731d1d53-8868-4d5e-9edb-5d0975582374",
+        "source": {
+            "table_name": "appointments",
+            "column_name": "doctor_id",
+            "data_type": "string"
+        },
+        "target": {
+            "table_name": "patient_encounter_details",
+            "column_name": "doctor_id",
+            "data_type": "string"
+        },
+        "similarity": 0.95,
+        "match": "mapped"
+    },
+    {
+        "id": "a5e2ee36-0afc-44e8-bd92-6085f90073a8",
+        "source": {
+            "table_name": "appointments",
+            "column_name": "appointment_id",
+            "data_type": "string"
+        },
+        "target": null,
+        "similarity": 0,
+        "match": "unmapped"
+    },
+    {
+        "id": "086a61eb-22af-46ec-8303-5dd27aa51c58",
+        "source": {
+            "table_name": "appointments",
+            "column_name": "patient_id",
+            "data_type": "string"
+        },
+        "target": {
+            "table_name": "patient_encounter_details",
+            "column_name": "patient_id",
+            "data_type": "string"
+        },
+        "similarity": 0.95,
+        "match": "mapped"
+    },
+    {
+        "id": "973f5d1e-dcfe-480e-b25b-052ee1ebf6d7",
+        "source": {
+            "table_name": "appointments",
+            "column_name": "appointment_date",
+            "data_type": "string"
+        },
+        "target": {
+            "table_name": "patient_encounter_details",
+            "column_name": "appointment_date",
+            "data_type": "date"
+        },
+        "similarity": 0.95,
+        "match": "mapped"
+    }
+]

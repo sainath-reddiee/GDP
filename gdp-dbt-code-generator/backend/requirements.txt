@@ -1,0 +1,40 @@
+# FastAPI Framework and ASGI Server
+fastapi==0.115.6          # FastAPI: Web framework for building APIs
+uvicorn==0.34.0  # Uvicorn: ASGI server to run FastAPI apps with additional features
+
+# Database and ORM
+sqlalchemy==2.0.36        # SQLAlchemy: Database ORM for schema and queries
+
+pydantic-settings==2.7.1  # Pydantic-Settings: Settings management with Pydantic models
+
+# Pydantic for Data Validation
+pydantic~=2.10.4   # Pydantic: Data validation and settings management with email validation support
+pydantic[email]==2.10.4
+# Security Libraries
+python-jose==3.3.0        # Python-JOSE: JWT token generation and validation
+passlib[bcrypt]==1.7.4    # Passlib: Password hashing and verification with bcrypt
+
+# Testing Libraries
+pytest==7.4.0             # Pytest: Framework for testing
+pytest-asyncio==0.20.3    # Pytest-Asyncio: Async testing support
+httpx==0.24.1             # HTTPX: Async HTTP client for API testing
+
+# Logging Library
+loguru==0.6.0             # Loguru: Simplified logging with advanced features
+
+# Environment Configuration
+python-dotenv==1.0.0      # Python-dotenv: Load environment variables from .env file
+
+# Optional (Database Migrations - Use if planning to integrate Alembic)
+# alembic==1.11.3          # Alembic: Database migrations for SQLAlchemy projects
+python-multipart==0.0.20
+
+pandas==2.2.3
+python-multipart==0.0.20
+
+rapidfuzz==3.12.2
+pyarrow==19.0.1
+
+snowflake-sqlalchemy==1.7.5
+snowflake-snowpark-python==1.11.1
+cryptography==45.0.5

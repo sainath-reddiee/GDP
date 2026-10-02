@@ -1,0 +1,172 @@
+{
+  "approvals": [
+    {
+      "approval_id": "ab5245b3-fa50-483e-b676-8559a3485b68",
+      "timestamp": "2026-02-07T15:38:23.938490",
+      "mapping": {
+        "target_column": "EMAIL_ADDRESS",
+        "target_table": "DIM_CUSTOMER",
+        "target_schema": "SILVER",
+        "source_column": "EMAIL",
+        "source_table": "CRM_CONTACTS",
+        "source_schema": "BRONZE",
+        "mapping_score": 88,
+        "transformation_logic": "LOWER(TRIM(EMAIL))",
+        "justification": "Direct email field mapping"
+      },
+      "status": "APPROVED",
+      "reviewer": "test_user",
+      "review_notes": "Looks good!"
+    },
+    {
+      "approval_id": "2eb43873-e414-47c8-92c7-aca57fa8ca7f",
+      "timestamp": "2026-02-08T14:55:10.990823",
+      "mapping": {
+        "target_column": "PROPERTY_SKEY",
+        "target_table": "PROPERTY_DIM",
+        "target_schema": "PROPERTY",
+        "source_column": "BUILDING_LID",
+        "source_table": "BUILDINGS",
+        "source_schema": "LIGHTBOX",
+        "mapping_score": 85,
+        "transformation_logic": "BUILDING_LID",
+        "justification": "Semantic match, both represent unique identifiers"
+      },
+      "status": "APPROVED",
+      "reviewer": "user",
+      "review_notes": ""
+    },
+    {
+      "approval_id": "e882eeb2-76ab-4380-a3ab-34031137309d",
+      "timestamp": "2026-02-08T14:55:31.097813",
+      "mapping": {
+        "target_column": "PROPERTY_GLOBAL_ID",
+        "target_table": "PROPERTY_DIM",
+        "target_schema": "PROPERTY",
+        "source_column": "UBID",
+        "source_table": "BUILDINGS",
+        "source_schema": "LIGHTBOX",
+        "mapping_score": 90,
+        "transformation_logic": "UBID",
+        "justification": "Perfect semantic match, both represent unique global identifiers"
+      },
+      "status": "APPROVED",
+      "reviewer": "user",
+      "review_notes": ""
+    },
+    {
+      "approval_id": "545c135b-237a-4312-a46e-983e830c530c",
+      "timestamp": "2026-02-08T14:55:38.924540",
+      "mapping": {
+        "target_column": "PROPERTY_NAME",
+        "target_table": "PROPERTY_DIM",
+        "target_schema": "PROPERTY",
+        "source_column": "COUNTY",
+        "source_table": "BUILDINGS",
+        "source_schema": "LIGHTBOX",
+        "mapping_score": 70,
+        "transformation_logic": "COUNTY",
+        "justification": "Partial semantic match, both relate to property characteristics"
+      },
+      "status": "REJECTED",
+      "reviewer": "user",
+      "review_notes": ""
+    },
+    {
+      "approval_id": "799bca1d-758d-47d8-bc32-da8a3185da60",
+      "timestamp": "2026-02-08T14:55:44.985299",
+      "mapping": {
+        "target_column": "YEAR_PROPERTY_BUILT",
+        "target_table": "PROPERTY_DIM",
+        "target_schema": "PROPERTY",
+        "source_column": "BF_BLDG_YEAR_BUILT",
+        "source_table": "BUILDINGS",
+        "source_schema": "LIGHTBOX",
+        "mapping_score": 80,
+        "transformation_logic": "BF_BLDG_YEAR_BUILT",
+        "justification": "Good semantic match, both represent year of construction"
+      },
+      "status": "APPROVED",
+      "reviewer": "user",
+      "review_notes": ""
+    },
+    {
+      "approval_id": "4b91258a-e5b9-4ee9-bf75-b40080806de1",
+      "timestamp": "2026-02-08T14:55:56.067772",
+      "mapping": {
+        "target_column": "LAST_SALE_PRICE",
+        "target_table": "PROPERTY_DIM",
+        "target_schema": "PROPERTY",
+        "source_column": "BF_LAST_SALE_PRICE",
+        "source_table": "BUILDINGS",
+        "source_schema": "LIGHTBOX",
+        "mapping_score": 80,
+        "transformation_logic": "BF_LAST_SALE_PRICE",
+        "justification": "Good semantic match, both represent last sale price"
+      },
+      "status": "APPROVED",
+      "reviewer": "user",
+      "review_notes": ""
+    },
+    {
+      "approval_id": "b8ed95be-bcdd-4a60-b4d5-7b3bfd92f9d7",
+      "timestamp": "2026-02-08T14:56:01.565207",
+      "mapping": {
+        "target_column": "LAST_PURCHASE_DATE",
+        "target_table": "PROPERTY_DIM",
+        "target_schema": "PROPERTY",
+        "source_column": "BF_LAST_PURCHASE_DATE",
+        "source_table": "BUILDINGS",
+        "source_schema": "LIGHTBOX",
+        "mapping_score": 80,
+        "transformation_logic": "BF_LAST_PURCHASE_DATE",
+        "justification": "Good semantic match, both represent last purchase date"
+      },
+      "status": "APPROVED",
+      "reviewer": "user",
+      "review_notes": ""
+    },
+    {
+      "approval_id": "8ff271bd-e964-467b-951e-648c1d3633ed",
+      "timestamp": "2026-02-08T14:56:07.379553",
+      "mapping": {
+        "target_column": "EFFECTIVE_DATE",
+        "target_table": "PROPERTY_DIM",
+        "target_schema": "PROPERTY",
+        "source_column": "BF_EFFECTIVE_DATE",
+        "source_table": "BUILDINGS",
+        "source_schema": "LIGHTBOX",
+        "mapping_score": 80,
+        "transformation_logic": "BF_EFFECTIVE_DATE",
+        "justification": "Good semantic match, both represent effective date"
+      },
+      "status": "APPROVED",
+      "reviewer": "user",
+      "review_notes": ""
+    },
+    {
+      "approval_id": "f12d9cab-a363-4351-a5d8-bef9bdf9e837",
+      "timestamp": "2026-02-08T14:56:11.218188",
+      "mapping": {
+        "target_column": "EXPIRY_DATE",
+        "target_table": "PROPERTY_DIM",
+        "target_schema": "PROPERTY",
+        "source_column": "BF_EXPIRY_DATE",
+        "source_table": "BUILDINGS",
+        "source_schema": "LIGHTBOX",
+        "mapping_score": 80,
+        "transformation_logic": "BF_EXPIRY_DATE",
+        "justification": "Good semantic match, both represent expiry date"
+      },
+      "status": "APPROVED",
+      "reviewer": "user",
+      "review_notes": ""
+    }
+  ],
+  "metadata": {
+    "created_at": "2026-02-07T15:38:23.932204",
+    "total_approvals": 8,
+    "total_rejections": 1,
+    "total_pending": 0
+  }
+}

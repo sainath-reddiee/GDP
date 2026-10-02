@@ -1,0 +1,190 @@
+{
+  "approvals": [
+    {
+      "approval_id": "7345c7ca-3b60-4c54-9bcd-7d229e70f65b",
+      "timestamp": "2026-02-07T20:24:02.472139",
+      "mapping": {
+        "target_column": "YEAR_PROPERTY_BUILT",
+        "target_table": "PROPERTY_DIM",
+        "target_schema": "PROPERTY",
+        "source_column": "N/A",
+        "source_table": "N/A",
+        "source_schema": "N/A",
+        "mapping_score": 0,
+        "transformation_logic": "",
+        "justification": "No matching source column found"
+      },
+      "status": "PENDING",
+      "reviewer": "user",
+      "review_notes": "Flagged for review (confidence <= 60%)"
+    },
+    {
+      "approval_id": "e6348ecf-58fa-4d91-bfee-4276675ceb70",
+      "timestamp": "2026-02-07T20:24:02.485016",
+      "mapping": {
+        "target_column": "PROPERTY_CLASS_TYPE_DESC",
+        "target_table": "PROPERTY_DIM",
+        "target_schema": "PROPERTY",
+        "source_column": "COUNTY",
+        "source_table": "BUILDINGS",
+        "source_schema": "LIGHTBOX",
+        "mapping_score": 50,
+        "transformation_logic": "TRIM(UPPER(COUNTY))",
+        "justification": "Both represent descriptive text, similar semantic type"
+      },
+      "status": "PENDING",
+      "reviewer": "user",
+      "review_notes": "Flagged for review (confidence <= 60%)"
+    },
+    {
+      "approval_id": "2b8ea21c-7285-45c6-a392-600b721184dc",
+      "timestamp": "2026-02-07T20:24:02.498378",
+      "mapping": {
+        "target_column": "OWNER_OCCUPIED_F",
+        "target_table": "PROPERTY_DIM",
+        "target_schema": "PROPERTY",
+        "source_column": "N/A",
+        "source_table": "N/A",
+        "source_schema": "N/A",
+        "mapping_score": 0,
+        "transformation_logic": "",
+        "justification": "No matching source column found"
+      },
+      "status": "PENDING",
+      "reviewer": "user",
+      "review_notes": "Flagged for review (confidence <= 60%)"
+    },
+    {
+      "approval_id": "5df0263f-e278-4ce1-9b24-fd9bbd45ab9a",
+      "timestamp": "2026-02-07T20:24:02.511773",
+      "mapping": {
+        "target_column": "PROPERTY_NOTES",
+        "target_table": "PROPERTY_DIM",
+        "target_schema": "PROPERTY",
+        "source_column": "N/A",
+        "source_table": "N/A",
+        "source_schema": "N/A",
+        "mapping_score": 0,
+        "transformation_logic": "",
+        "justification": "No matching source column found"
+      },
+      "status": "PENDING",
+      "reviewer": "user",
+      "review_notes": "Flagged for review (confidence <= 60%)"
+    },
+    {
+      "approval_id": "f6cdd69d-9e25-4a57-9edf-0b8f2c262255",
+      "timestamp": "2026-02-07T20:24:02.526903",
+      "mapping": {
+        "target_column": "LAST_SALE_PRICE",
+        "target_table": "PROPERTY_DIM",
+        "target_schema": "PROPERTY",
+        "source_column": "N/A",
+        "source_table": "N/A",
+        "source_schema": "N/A",
+        "mapping_score": 0,
+        "transformation_logic": "",
+        "justification": "No matching source column found"
+      },
+      "status": "PENDING",
+      "reviewer": "user",
+      "review_notes": "Flagged for review (confidence <= 60%)"
+    },
+    {
+      "approval_id": "39eb534b-1baa-43e7-9a10-680f3aa071b4",
+      "timestamp": "2026-02-07T20:24:02.539591",
+      "mapping": {
+        "target_column": "LAST_PURCHASE_DATE",
+        "target_table": "PROPERTY_DIM",
+        "target_schema": "PROPERTY",
+        "source_column": "N/A",
+        "source_table": "N/A",
+        "source_schema": "N/A",
+        "mapping_score": 0,
+        "transformation_logic": "",
+        "justification": "No matching source column found"
+      },
+      "status": "PENDING",
+      "reviewer": "user",
+      "review_notes": "Flagged for review (confidence <= 60%)"
+    },
+    {
+      "approval_id": "f174a131-36f3-4598-b6aa-14abe3960867",
+      "timestamp": "2026-02-07T20:24:02.553749",
+      "mapping": {
+        "target_column": "EFFECTIVE_DATE",
+        "target_table": "PROPERTY_DIM",
+        "target_schema": "PROPERTY",
+        "source_column": "N/A",
+        "source_table": "N/A",
+        "source_schema": "N/A",
+        "mapping_score": 0,
+        "transformation_logic": "",
+        "justification": "No matching source column found"
+      },
+      "status": "PENDING",
+      "reviewer": "user",
+      "review_notes": "Flagged for review (confidence <= 60%)"
+    },
+    {
+      "approval_id": "9e4c75b8-19e8-4ea7-83e1-8362555264be",
+      "timestamp": "2026-02-07T20:24:02.570856",
+      "mapping": {
+        "target_column": "EXPIRY_DATE",
+        "target_table": "PROPERTY_DIM",
+        "target_schema": "PROPERTY",
+        "source_column": "N/A",
+        "source_table": "N/A",
+        "source_schema": "N/A",
+        "mapping_score": 0,
+        "transformation_logic": "",
+        "justification": "No matching source column found"
+      },
+      "status": "PENDING",
+      "reviewer": "user",
+      "review_notes": "Flagged for review (confidence <= 60%)"
+    },
+    {
+      "approval_id": "8fb4b8ea-d649-415b-ae1e-6d532e491d0c",
+      "timestamp": "2026-02-07T20:24:02.585324",
+      "mapping": {
+        "target_column": "IS_CURRENT",
+        "target_table": "PROPERTY_DIM",
+        "target_schema": "PROPERTY",
+        "source_column": "N/A",
+        "source_table": "N/A",
+        "source_schema": "N/A",
+        "mapping_score": 0,
+        "transformation_logic": "",
+        "justification": "No matching source column found"
+      },
+      "status": "PENDING",
+      "reviewer": "user",
+      "review_notes": "Flagged for review (confidence <= 60%)"
+    },
+    {
+      "approval_id": "3b66f15d-1a22-40ee-a0d9-88a939f966f3",
+      "timestamp": "2026-02-07T21:27:00.676470",
+      "mapping": {
+        "target_column": "PARCEL_NUMBER",
+        "target_table": "PROPERTY_DIM",
+        "target_schema": "PROPERTY",
+        "source_column": "PRIMARY_PARCEL_LID",
+        "source_table": "BUILDINGS",
+        "source_schema": "LIGHTBOX",
+        "mapping_score": 90,
+        "transformation_logic": "PRIMARY_PARCEL_LID",
+        "justification": "Both represent unique identifiers, similar semantic type"
+      },
+      "status": "APPROVED",
+      "reviewer": "user",
+      "review_notes": ""
+    }
+  ],
+  "metadata": {
+    "created_at": "2026-02-07T20:16:27.097563",
+    "total_approvals": 1,
+    "total_rejections": 0,
+    "total_pending": 9
+  }
+}
