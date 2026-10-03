@@ -1,0 +1,43 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 210 20% 98%;
+    --foreground: 222 47% 11%;
+    --card: 0 0% 100%;
+    --card-foreground: 222 47% 11%;
+    --primary: 213 65% 33%;
+    --primary-foreground: 210 40% 98%;
+    --secondary: 210 40% 96%;
+    --secondary-foreground: 222 47% 11%;
+    --muted: 210 40% 96%;
+    --muted-foreground: 215 16% 47%;
+    --accent: 214 95% 93%;
+    --accent-foreground: 213 65% 25%;
+    --destructive: 0 72% 45%;
+    --destructive-foreground: 210 40% 98%;
+    --success: 152 70% 30%;
+    --warning: 35 92% 40%;
+    --border: 214 32% 91%;
+    --input: 214 32% 85%;
+    --ring: 213 65% 33%;
+    --sidebar: 217 44% 14%;
+    --sidebar-foreground: 213 30% 86%;
+    --radius: 0.6rem;
+  }
+  * { @apply border-border; }
+  body { @apply bg-background text-foreground antialiased; font-family: "Segoe UI", ui-sans-serif, system-ui, sans-serif; }
+  h2 { @apply text-xl font-semibold tracking-tight; }
+  h3 { @apply text-base font-semibold; }
+}
+
+@keyframes nav-progress {
+  from { width: 8%; }
+  to { width: 88%; }
+}
+.animate-nav-progress {
+  width: 8%;
+  animation: nav-progress 10s cubic-bezier(0.1, 0.4, 0.2, 1) forwards;
+}

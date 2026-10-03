@@ -1,0 +1,32 @@
+{
+  "project_name_template": "gdp_{source}",
+  "profile": "gdp_platform",
+  "dbt_version": "1.9.4",
+  "layers": {
+    "staging": {"folder": "staging", "materialized": "view", "prefix": "stg_"},
+    "intermediate": {"folder": "intermediate", "materialized": "ephemeral", "prefix": "int_"},
+    "marts": {"folder": "marts/gdp", "materialized": "incremental", "prefix": {"DIMENSION": "dim_", "FACT": "fct_"}}
+  },
+  "incremental": {"strategy": "merge", "on_schema_change": "fail"},
+  "surrogate_key": "MD5(CAST({keys} AS VARCHAR))",
+  "macros": [
+    {"name": "initcap_trim", "pattern": "^INITCAP\\(TRIM\\((\\w+)\\)\\)$",
+     "description": "Trim whitespace and capitalize the first letter of each word.",
+     "sql": "{% macro initcap_trim(column_name) %}\n    INITCAP(TRIM({{ column_name }}))\n{% endmacro %}\n"},
+    {"name": "standardize_phone", "pattern": "^REGEXP_REPLACE\\((\\w+), '\\[\\^0-9\\]', ''\\)$",
+     "description": "Remove non-numeric characters from phone numbers.",
+     "sql": "{% macro standardize_phone(column_name) %}\n    REGEXP_REPLACE({{ column_name }}, '[^0-9]', '')\n{% endmacro %}\n"},
+    {"name": "mask_email", "pattern": null,
+     "description": "Mask email addresses: first two characters and the domain.",
+     "sql": "{% macro mask_email(column_name) %}\n    CASE\n        WHEN {{ column_name }} LIKE '%@%' THEN CONCAT(LEFT({{ column_name }}, 2), '***', SUBSTR({{ column_name }}, POSITION('@' IN {{ column_name }})))\n        ELSE '***INVALID_EMAIL***'\n    END\n{% endmacro %}\n"},
+    {"name": "convert_timezone", "pattern": null,
+     "description": "Convert a UTC timestamp to a target timezone.",
+     "sql": "{% macro convert_timezone(column_name, target_tz='UTC') %}\n    CONVERT_TIMEZONE('UTC', '{{ target_tz }}', {{ column_name }}::timestamp_ntz)\n{% endmacro %}\n"},
+    {"name": "clean_boolean", "pattern": null,
+     "description": "Convert Y/N, 1/0, Yes/No markers to booleans.",
+     "sql": "{% macro clean_boolean(column_name) %}\n    CASE\n        WHEN UPPER(TRIM({{ column_name }})) IN ('Y', 'YES', '1', 'TRUE') THEN TRUE\n        WHEN UPPER(TRIM({{ column_name }})) IN ('N', 'NO', '0', 'FALSE') THEN FALSE\n        ELSE NULL\n    END\n{% endmacro %}\n"},
+    {"name": "safe_divide", "pattern": null,
+     "description": "Division that returns NULL instead of failing on zero.",
+     "sql": "{% macro safe_divide(numerator, denominator) %}\n    IFF({{ denominator }} = 0, NULL, {{ numerator }} / {{ denominator }})\n{% endmacro %}\n"}
+  ]
+}

@@ -1,0 +1,52 @@
+-- V002 security: database roles scoped to the platform database.
+-- Callers never receive INSERT/UPDATE/DELETE on platform tables: all writes go through
+-- owner's-rights procedures granted per role (see snowflake/procedures/*.sql).
+-- Mapping database roles to account roles is an admin step, e.g.:
+--   GRANT DATABASE ROLE {{database}}.REVIEWER TO ROLE <account_role>;
+
+CREATE DATABASE ROLE IF NOT EXISTS {{database}}.VIEWER         COMMENT = 'Read platform metadata';
+CREATE DATABASE ROLE IF NOT EXISTS {{database}}.SERVICE_AGENT  COMMENT = 'Cortex Agent tool execution identity';
+CREATE DATABASE ROLE IF NOT EXISTS {{database}}.DATA_ENGINEER  COMMENT = 'Create and drive onboarding runs';
+CREATE DATABASE ROLE IF NOT EXISTS {{database}}.REVIEWER       COMMENT = 'Approve or reject human review gates';
+CREATE DATABASE ROLE IF NOT EXISTS {{database}}.DATA_STEWARD   COMMENT = 'Reviewer with access to unmasked profile samples';
+CREATE DATABASE ROLE IF NOT EXISTS {{database}}.DOMAIN_OWNER   COMMENT = 'Reviewer and owner of domain knowledge';
+CREATE DATABASE ROLE IF NOT EXISTS {{database}}.PLATFORM_ADMIN COMMENT = 'Platform operations';
+
+GRANT DATABASE ROLE {{database}}.VIEWER        TO DATABASE ROLE {{database}}.SERVICE_AGENT;
+GRANT DATABASE ROLE {{database}}.VIEWER        TO DATABASE ROLE {{database}}.DATA_ENGINEER;
+GRANT DATABASE ROLE {{database}}.VIEWER        TO DATABASE ROLE {{database}}.REVIEWER;
+GRANT DATABASE ROLE {{database}}.REVIEWER      TO DATABASE ROLE {{database}}.DATA_STEWARD;
+GRANT DATABASE ROLE {{database}}.REVIEWER      TO DATABASE ROLE {{database}}.DOMAIN_OWNER;
+GRANT DATABASE ROLE {{database}}.DATA_ENGINEER TO DATABASE ROLE {{database}}.PLATFORM_ADMIN;
+GRANT DATABASE ROLE {{database}}.DATA_STEWARD  TO DATABASE ROLE {{database}}.PLATFORM_ADMIN;
+GRANT DATABASE ROLE {{database}}.DOMAIN_OWNER  TO DATABASE ROLE {{database}}.PLATFORM_ADMIN;
+GRANT DATABASE ROLE {{database}}.SERVICE_AGENT TO DATABASE ROLE {{database}}.PLATFORM_ADMIN;
+
+GRANT USAGE ON DATABASE {{database}} TO DATABASE ROLE {{database}}.VIEWER;
+
+GRANT USAGE ON SCHEMA {{database}}.CORE      TO DATABASE ROLE {{database}}.VIEWER;
+GRANT USAGE ON SCHEMA {{database}}.SOURCE    TO DATABASE ROLE {{database}}.VIEWER;
+GRANT USAGE ON SCHEMA {{database}}.PROFILE   TO DATABASE ROLE {{database}}.VIEWER;
+GRANT USAGE ON SCHEMA {{database}}.KNOWLEDGE TO DATABASE ROLE {{database}}.VIEWER;
+GRANT USAGE ON SCHEMA {{database}}.MAPPING   TO DATABASE ROLE {{database}}.VIEWER;
+GRANT USAGE ON SCHEMA {{database}}.CONTRACT  TO DATABASE ROLE {{database}}.VIEWER;
+GRANT USAGE ON SCHEMA {{database}}.CODEGEN   TO DATABASE ROLE {{database}}.VIEWER;
+GRANT USAGE ON SCHEMA {{database}}.AUDIT     TO DATABASE ROLE {{database}}.VIEWER;
+
+GRANT SELECT ON ALL TABLES IN SCHEMA {{database}}.CORE      TO DATABASE ROLE {{database}}.VIEWER;
+GRANT SELECT ON ALL TABLES IN SCHEMA {{database}}.SOURCE    TO DATABASE ROLE {{database}}.VIEWER;
+GRANT SELECT ON ALL TABLES IN SCHEMA {{database}}.PROFILE   TO DATABASE ROLE {{database}}.VIEWER;
+GRANT SELECT ON ALL TABLES IN SCHEMA {{database}}.KNOWLEDGE TO DATABASE ROLE {{database}}.VIEWER;
+GRANT SELECT ON ALL TABLES IN SCHEMA {{database}}.MAPPING   TO DATABASE ROLE {{database}}.VIEWER;
+GRANT SELECT ON ALL TABLES IN SCHEMA {{database}}.CONTRACT  TO DATABASE ROLE {{database}}.VIEWER;
+GRANT SELECT ON ALL TABLES IN SCHEMA {{database}}.CODEGEN   TO DATABASE ROLE {{database}}.VIEWER;
+GRANT SELECT ON ALL TABLES IN SCHEMA {{database}}.AUDIT     TO DATABASE ROLE {{database}}.VIEWER;
+
+GRANT SELECT ON FUTURE TABLES IN SCHEMA {{database}}.CORE      TO DATABASE ROLE {{database}}.VIEWER;
+GRANT SELECT ON FUTURE TABLES IN SCHEMA {{database}}.SOURCE    TO DATABASE ROLE {{database}}.VIEWER;
+GRANT SELECT ON FUTURE TABLES IN SCHEMA {{database}}.PROFILE   TO DATABASE ROLE {{database}}.VIEWER;
+GRANT SELECT ON FUTURE TABLES IN SCHEMA {{database}}.KNOWLEDGE TO DATABASE ROLE {{database}}.VIEWER;
+GRANT SELECT ON FUTURE TABLES IN SCHEMA {{database}}.MAPPING   TO DATABASE ROLE {{database}}.VIEWER;
+GRANT SELECT ON FUTURE TABLES IN SCHEMA {{database}}.CONTRACT  TO DATABASE ROLE {{database}}.VIEWER;
+GRANT SELECT ON FUTURE TABLES IN SCHEMA {{database}}.CODEGEN   TO DATABASE ROLE {{database}}.VIEWER;
+GRANT SELECT ON FUTURE TABLES IN SCHEMA {{database}}.AUDIT     TO DATABASE ROLE {{database}}.VIEWER;
