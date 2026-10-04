@@ -5,7 +5,9 @@ from services.knowledge.search import search_request
 from services.knowledge.usage import STAGE_SKILLS, assert_safe_transformation
 from services.mapping.features import SYSTEM_DERIVED, propose_transformation
 from services.mapping.feedback import pattern as feedback_pattern
-from services.soda.expectations import from_sttm, render_yaml
+from services.soda.expectations import from_client, from_sttm, merge_checks, render_yaml, without_rejected
+from services.soda.extract import parse_client_document, requirement_from_row
+from services.soda.feedback import pattern as soda_feedback
 from services.sttm.assemble import assemble
 from services.validation.checks import run as validate, summary
 from infrastructure.seed_knowledge import DEFAULT_WEIGHTS, DEFAULT_THRESHOLDS, list_skills, load_domain_pack
@@ -66,13 +68,54 @@ def test_soda_from_sttm_includes_grain_and_accepted_values():
         {"target_column": "CUSTOMER_ID", "nullable_rule": False, "accepted_values": [], "target_datatype": "VARCHAR"},
         {"target_column": "CUSTOMER_STATUS", "nullable_rule": False, "accepted_values": ["ACTIVE", "INACTIVE"],
          "target_datatype": "VARCHAR", "business_definition": "status"},
+        {"target_column": "EMAIL_ADDRESS", "nullable_rule": True, "accepted_values": [],
+         "target_datatype": "VARCHAR", "business_definition": "customer email", "semantic_type": "EMAIL"},
+        {"target_column": "LOADED_AT", "nullable_rule": False, "accepted_values": [],
+         "target_datatype": "TIMESTAMP_NTZ", "semantic_type": "AUDIT_TIMESTAMP"},
     ]
     checks = from_sttm("DIM_CUSTOMER", lines, ["CUSTOMER_ID"])
     kinds = {c["check_type"] for c in checks}
-    assert {"ROW_COUNT", "UNIQUE", "NOT_NULL", "ACCEPTED_VALUES"} <= kinds
+    assert {"ROW_COUNT", "UNIQUE", "NOT_NULL", "ACCEPTED_VALUES", "SCHEMA", "FRESHNESS", "CUSTOM"} <= kinds
     yaml = render_yaml("dim_customer", checks)
     assert "checks for dim_customer" in yaml
     assert "row_count" in yaml
+    assert "missing_count(CUSTOMER_ID) = 0" in yaml
+    assert "duplicate_count(CUSTOMER_ID) = 0" in yaml
+    assert "valid format: email" in yaml
+    assert "freshness(LOADED_AT) < 1d" in yaml
+    assert "when required column missing" in yaml
+
+
+def test_soda_parses_client_brief_and_csv():
+    csv_doc = parse_client_document(
+        "attribute,check_type,severity,requirement\nEMAIL_ADDRESS,CUSTOM,WARN,Email must be valid\n",
+        "rules.csv",
+    )
+    assert csv_doc["rows"][0]["attribute"] == "EMAIL_ADDRESS"
+    text_doc = parse_client_document("Customers must have a unique id and a valid email.")
+    assert "unique id" in text_doc["brief"]
+    check = requirement_from_row("DIM_CUSTOMER", {
+        "attribute": "EMAIL_ADDRESS", "check_type": "email", "severity": "WARN",
+        "valid_format": "email", "requirement": "Email must be valid",
+    })
+    assert check["definition"]["kind"] == "format"
+    packed = merge_checks(from_client("DIM_CUSTOMER", csv_doc["rows"]), [check])
+    assert any(c["target_column"] == "EMAIL_ADDRESS" for c in packed)
+
+
+def test_soda_feedback_becomes_a_pattern():
+    kept = soda_feedback("DIM_CUSTOMER", "EMAIL_ADDRESS", "CUSTOM", "APPROVED",
+                         "valid email", "client SLA", {"kind": "format", "format": "email"})
+    assert kept["active"] and kept["source_reference"].startswith("SODA.")
+    dropped = soda_feedback("DIM_CUSTOMER", "PHONE", "CUSTOM", "REJECTED", None, "out of scope", {})
+    assert dropped["active"] is False
+    assert "must not be generated" in dropped["content"]
+    kept_set = without_rejected(
+        [{"check_type": "CUSTOM", "target_column": "PHONE", "origin": "AI"},
+         {"check_type": "CUSTOM", "target_column": "PHONE", "origin": "CLIENT"}],
+        [{"check_type": "CUSTOM", "target_column": "PHONE"}],
+    )
+    assert [c["origin"] for c in kept_set] == ["CLIENT"]
 
 
 def test_dbt_project_and_validation_pass():

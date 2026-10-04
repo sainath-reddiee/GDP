@@ -94,7 +94,7 @@ tools:
   - tool_spec:
       type: generic
       name: generate_soda
-      description: Propose Soda expectations after the STTM is approved
+      description: Generate official SodaCL from the approved STTM, uploaded client brief, and learned Soda patterns
       input_schema:
         type: object
         properties:

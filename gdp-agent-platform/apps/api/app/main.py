@@ -4,11 +4,17 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 import threading
 import time
+from pathlib import Path
 from typing import Optional
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
+
+_ROOT = Path(__file__).resolve().parents[3]
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
@@ -114,7 +120,14 @@ class MappingDecisions(BaseModel):
 
 
 class ClientExpectations(BaseModel):
-    rows: list[dict]
+    rows: Optional[list[dict]] = None
+    brief: Optional[str] = None
+    text: Optional[str] = None
+    filename: Optional[str] = None
+
+
+class SodaDecisions(BaseModel):
+    decisions: list[dict]
 
 
 class KnowledgeQuery(BaseModel):
@@ -702,25 +715,81 @@ def generate_soda(run_id: str, db: Db = Depends(current_db)):
 
 @app.post("/api/runs/{run_id}/soda/import")
 def import_soda(run_id: str, body: ClientExpectations, db: Db = Depends(current_db)):
+    payload: dict | list
+    if body.brief or body.text:
+        payload = {"text": body.brief or body.text, "filename": body.filename or ""}
+    elif body.rows:
+        payload = body.rows
+    else:
+        raise HTTPException(400, "Upload a client brief or a JSON/CSV array of requirement rows")
     try:
         return db.call("CALL CONTRACT.IMPORT_CLIENT_EXPECTATIONS(%s, %s)",
-                       (run_id, json.dumps(body.rows)))
+                       (run_id, json.dumps(payload)))
+    except Exception as exc:
+        raise _snowflake_error(exc) from exc
+
+
+@app.post("/api/runs/{run_id}/soda/decisions")
+def save_soda(run_id: str, body: SodaDecisions, db: Db = Depends(current_db)):
+    try:
+        return db.call("CALL CONTRACT.SAVE_SODA_DECISIONS(%s, %s)",
+                       (run_id, json.dumps(body.decisions)))
     except Exception as exc:
         raise _snowflake_error(exc) from exc
 
 
 @app.get("/api/runs/{run_id}/soda")
 def get_soda(run_id: str, db: Db = Depends(current_db)):
-    return {"checks": db.query(
+    from services.soda.expectations import render_check, render_yaml
+    checks = db.query(
         """
         SELECT EXPECTATION_ID, TARGET_TABLE, TARGET_COLUMN, CHECK_TYPE, CHECK_DEFINITION, SEVERITY,
-               ORIGIN, CLIENT_REQUIREMENT, STATUS, VERSION
+               ORIGIN, CLIENT_REQUIREMENT, STATUS, VERSION, REVIEWED_BY
           FROM CONTRACT.SODA_EXPECTATION_REGISTRY
          WHERE RUN_ID = %s AND IS_CURRENT
          ORDER BY TARGET_TABLE, TARGET_COLUMN, CHECK_TYPE
         """,
         (run_id,),
-    )}
+    )
+    briefs = db.query(
+        """
+        SELECT TITLE, CONTENT, SOURCE_REFERENCE, CREATED_AT::VARCHAR AS CREATED_AT
+          FROM KNOWLEDGE.DOMAIN_KNOWLEDGE
+         WHERE IS_CURRENT AND SOURCE_REFERENCE = %s
+         ORDER BY VERSION DESC LIMIT 1
+        """,
+        (f"soda.brief.{run_id}",),
+    )
+    def _definition(value):
+        if isinstance(value, str):
+            try:
+                return json.loads(value)
+            except ValueError:
+                return {}
+        return value or {}
+
+    table = next((c["target_table"] for c in checks if c.get("target_table")), "dataset")
+    rendered = []
+    for c in checks:
+        item = {
+            "target_table": c["target_table"], "target_column": c["target_column"],
+            "check_type": c["check_type"], "definition": _definition(c.get("check_definition")),
+            "severity": c["severity"], "requirement": c.get("client_requirement"),
+            "status": c["status"],
+        }
+        c["sodacl"] = render_check(item)
+        rendered.append(item)
+    return {
+        "checks": checks,
+        "brief": briefs[0] if briefs else None,
+        "yaml": render_yaml(str(table).lower(), rendered),
+        "status": {
+            "total": len(checks),
+            "proposed": sum(1 for c in checks if c["status"] == "PROPOSED"),
+            "approved": sum(1 for c in checks if c["status"] == "APPROVED"),
+            "rejected": sum(1 for c in checks if c["status"] == "REJECTED"),
+        },
+    }
 
 
 @app.post("/api/runs/{run_id}/dbt")

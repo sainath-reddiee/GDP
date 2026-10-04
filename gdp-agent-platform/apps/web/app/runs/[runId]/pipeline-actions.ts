@@ -34,16 +34,15 @@ export async function generateSoda(runId: string): Promise<ActionResult> {
   return after(runId, await attempt(() => api(`/api/runs/${runId}/soda`, { method: "POST" })));
 }
 
-export async function importSoda(runId: string, rowsJson: string): Promise<ActionResult> {
-  let rows: unknown;
-  try {
-    rows = JSON.parse(rowsJson);
-  } catch {
-    return { ok: false, error: "Client expectations must be a JSON array" };
-  }
-  if (!Array.isArray(rows)) return { ok: false, error: "Client expectations must be a JSON array" };
+export async function importSoda(runId: string, payload: { brief?: string; text?: string; filename?: string; rows?: unknown[] }): Promise<ActionResult> {
   return after(runId, await attempt(() =>
-    api(`/api/runs/${runId}/soda/import`, { method: "POST", body: JSON.stringify({ rows }) }),
+    api(`/api/runs/${runId}/soda/import`, { method: "POST", body: JSON.stringify(payload) }),
+  ));
+}
+
+export async function saveSodaDecisions(runId: string, decisions: Record<string, unknown>[]): Promise<ActionResult> {
+  return after(runId, await attempt(() =>
+    api(`/api/runs/${runId}/soda/decisions`, { method: "POST", body: JSON.stringify({ decisions }) }),
   ));
 }
 

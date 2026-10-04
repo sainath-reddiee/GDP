@@ -90,7 +90,7 @@
     {"key": "pattern.dbt_layers", "type": "DBT_PATTERN", "title": "GDP dbt layering",
      "content": "Staging models select from sources, rename to lower snake case and cast nothing. Intermediate models deduplicate. Mart models apply STTM transformations, cast to target types and are incremental merges for dimensions."},
     {"key": "pattern.soda_dimension", "type": "SODA_PATTERN", "title": "Soda checks for dimensions",
-     "content": "Dimensions must have row_count > 0, no missing or duplicate business keys, no missing values in required columns, valid accepted values, and email format checks as warnings."},
+     "content": "Write official SodaCL. Dimensions must have row_count > 0, missing_count and duplicate_count = 0 on the business key, missing_count = 0 on required columns, invalid_count with valid values for codes, valid format email as a warning, freshness(loaded_at) < 1d as a warning, and a schema fail when required columns are missing."},
     {"key": "history.crm_v1.cust_id", "type": "MAPPING_PATTERN", "title": "Approved mapping CUST_ID to CUSTOMER_ID",
      "content": "Previous CRM onboarding: CRM_CUSTOMER.CUST_ID was approved as DIM_CUSTOMER.CUSTOMER_ID (enterprise identifier).",
      "content_json": {"source_column": "CUST_ID", "target_table": "DIM_CUSTOMER", "target_column": "CUSTOMER_ID"}},

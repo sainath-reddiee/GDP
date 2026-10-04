@@ -271,7 +271,7 @@ def review_transition(session, run_id: str, to_state: str, decision: str,
         if from_state == "SODA_REVIEW" and to_state == "SODA_APPROVED":
             session.sql(
                 "UPDATE CONTRACT.SODA_EXPECTATION_REGISTRY SET STATUS = 'APPROVED', REVIEWED_BY = CURRENT_USER(), "
-                "REVIEWED_AT = CURRENT_TIMESTAMP() WHERE RUN_ID = ? AND IS_CURRENT",
+                "REVIEWED_AT = CURRENT_TIMESTAMP() WHERE RUN_ID = ? AND IS_CURRENT AND STATUS <> 'REJECTED'",
                 params=[run_id],
             ).collect()
         if from_state == "DBT_REVIEW" and to_state == "DBT_APPROVED":
