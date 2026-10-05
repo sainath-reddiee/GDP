@@ -30,11 +30,19 @@ function detail(text: string): string {
 
 /** Server-side call to the FastAPI backend with the caller's session. */
 export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const res = await fetch(`${API_URL}${path}`, {
-    ...init,
-    cache: "no-store",
-    headers: { "Content-Type": "application/json", ...sessionHeaders(), ...(init.headers ?? {}) },
-  });
+  let res: Response;
+  try {
+    res = await fetch(`${API_URL}${path}`, {
+      ...init,
+      cache: "no-store",
+      headers: { "Content-Type": "application/json", ...sessionHeaders(), ...(init.headers ?? {}) },
+    });
+  } catch {
+    throw new ApiError(
+      503,
+      `Cannot reach the API at ${API_URL}. From apps/api run: python -m uvicorn app.main:app --host 127.0.0.1 --port 8001`,
+    );
+  }
   const text = await res.text();
   if (res.status === 401) redirect("/login");
   if (!res.ok) throw new ApiError(res.status, detail(text));
