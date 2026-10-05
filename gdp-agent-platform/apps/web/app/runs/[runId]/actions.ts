@@ -15,14 +15,30 @@ export async function transitionRun(runId: string, toState: string): Promise<Act
 }
 
 export async function reviewRun(runId: string, form: FormData): Promise<ActionResult> {
+  return approveStage(
+    runId,
+    String(form.get("to_state") || ""),
+    String(form.get("justification") || ""),
+    String(form.get("decision") || "APPROVE"),
+    String(form.get("comments") || "") || null,
+  );
+}
+
+export async function approveStage(
+  runId: string,
+  toState: string,
+  justification: string,
+  decision = "APPROVE",
+  comments: string | null = null,
+): Promise<ActionResult> {
   const result = await attempt(() =>
     api(`/api/runs/${runId}/review`, {
       method: "POST",
       body: JSON.stringify({
-        to_state: form.get("to_state"),
-        decision: form.get("decision"),
-        business_justification: form.get("justification") || null,
-        comments: form.get("comments") || null,
+        to_state: toState,
+        decision,
+        business_justification: justification || null,
+        comments,
       }),
     }),
   );

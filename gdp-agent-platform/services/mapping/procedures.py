@@ -17,7 +17,7 @@ from services.common.llm import complete_json
 from services.common.sql import clip, config_value, insert_rows, rows, scalar, variant
 from services.common.stage import Stage
 from services.knowledge import search as ks
-from services.knowledge.procedures import current_knowledge_version
+from services.knowledge.procedures import current_knowledge_version, identify_domain
 from services.knowledge.usage import STAGE_SKILLS, assert_safe_transformation, use_skills
 from services.mapping import features, scoring
 from services.mapping.feedback import pattern as feedback_pattern
@@ -187,6 +187,9 @@ def _scoring_config(session, domain_id: str) -> Dict[str, Any]:
 
 def generate_mapping_candidates(session, run_id: str) -> Dict[str, Any]:
     stage = Stage(session, run_id)
+    if stage.state == "PROFILING_COMPLETE":
+        identify_domain(session, run_id)
+        stage = Stage(session, run_id)
     stage.require("DOMAIN_IDENTIFIED", "MAPPING_PENDING")
     stage.walk(["DOMAIN_IDENTIFIED", "MAPPING_PENDING"], "mapping generation started")
     database = scalar(session, "SELECT CURRENT_DATABASE()")

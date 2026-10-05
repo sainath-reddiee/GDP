@@ -6,6 +6,8 @@ import json
 import re
 from typing import Any, Dict, List, Optional
 
+from services.sttm.refine import render_csv
+
 IDENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
@@ -197,6 +199,12 @@ def build(sttm: Dict[str, Any], macros: List[Dict[str, str]], soda_yaml: str,
                 "target_column", "target_datatype", "source_table", "source_column", "source_datatype",
                 "mapping_type", "transformation", "business_definition")} for l in lines],
         }, indent=2),
+        "mappings/sttm.csv": render_csv([{
+            "target_column": l.get("target_column"), "target_datatype": l.get("target_datatype"),
+            "mapping_type": l.get("mapping_type"), "source_table": l.get("source_table"),
+            "source_column": l.get("source_column"), "source_datatype": l.get("source_datatype"),
+            "transformation": l.get("transformation"), "business_definition": l.get("business_definition"),
+        } for l in lines]),
         "soda/checks.yml": soda_yaml or "# no soda checks\n",
     }
     for macro in macros:

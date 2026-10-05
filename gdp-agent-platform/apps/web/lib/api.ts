@@ -62,6 +62,15 @@ export async function attempt(fn: () => Promise<unknown>): Promise<ActionResult>
   }
 }
 
+export async function attemptValue<T>(fn: () => Promise<T>): Promise<{ ok: true; data: T } | { ok: false; error: string }> {
+  try {
+    return { ok: true, data: await fn() };
+  } catch (e) {
+    if (e instanceof ApiError) return { ok: false, error: e.message };
+    throw e;
+  }
+}
+
 export const getRun = cache((runId: string) => api<RunState>(`/api/runs/${runId}`));
 
 export const whoami = cache(async (): Promise<WhoAmI | null> => {

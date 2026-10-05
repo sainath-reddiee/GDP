@@ -13,6 +13,8 @@ export type RunInfo = {
   environment: string;
   created_by: string;
   created_at: string;
+  domain_name?: string | null;
+  domain_id?: string | null;
 };
 
 export type RunState = {

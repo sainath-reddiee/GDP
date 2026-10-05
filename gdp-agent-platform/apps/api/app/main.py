@@ -130,6 +130,27 @@ class SodaDecisions(BaseModel):
     decisions: list[dict]
 
 
+class TransformPrompt(BaseModel):
+    prompt: str = Field(min_length=1, max_length=2000)
+    sttm_line_id: Optional[str] = None
+    target_column: Optional[str] = None
+    source_column: Optional[str] = None
+    source_table: Optional[str] = None
+    source_datatype: Optional[str] = None
+    target_datatype: Optional[str] = None
+    current_transformation: Optional[str] = None
+    business_definition: Optional[str] = None
+
+
+class TransformApply(BaseModel):
+    sttm_line_id: str
+    transformation: str = Field(min_length=1, max_length=4000)
+    prompt: Optional[str] = None
+    rationale: Optional[str] = None
+    dbt_notes: Optional[str] = None
+    soda_checks: Optional[list[dict]] = None
+
+
 class KnowledgeQuery(BaseModel):
     query: str = Field(min_length=1, max_length=2000)
     domain: Optional[str] = None
@@ -208,12 +229,29 @@ def list_runs(include_test: bool = False, db: Db = Depends(current_db)):
     return {"runs": rows}
 
 
+def _domain_id_for_target(db: Db, target_model: Optional[str], domain_id: Optional[str]) -> Optional[str]:
+    if domain_id:
+        return domain_id
+    if not target_model:
+        return None
+    name = target_model.split(".")[-1]
+    found = db.query(
+        """
+        SELECT DOMAIN_ID FROM KNOWLEDGE.TARGET_TABLE_REGISTRY
+         WHERE ACTIVE_FLAG AND UPPER(TARGET_TABLE) = UPPER(%s)
+         ORDER BY TARGET_TABLE LIMIT 1
+        """,
+        (name,),
+    )
+    return found[0]["domain_id"] if found else None
+
+
 @app.post("/api/runs")
 def create_run(body: CreateRun, db: Db = Depends(current_db)):
     payload = {
         "RUN_NAME": body.run_name,
         "TARGET_MODEL": body.target_model,
-        "DOMAIN_ID": body.domain_id,
+        "DOMAIN_ID": _domain_id_for_target(db, body.target_model, body.domain_id),
         "ENVIRONMENT": body.environment,
     }
     try:
@@ -231,9 +269,12 @@ def get_run(run_id: str, db: Db = Depends(current_db)):
             raise _snowflake_error(exc) from exc
         state["run"] = db.query(
             """
-            SELECT RUN_NAME, TARGET_MODEL, SOURCE_SYSTEM_ID, SOURCE_DATABASE, SOURCE_SCHEMA,
-                   ENVIRONMENT, CREATED_BY, CREATED_AT::VARCHAR AS CREATED_AT
-              FROM CORE.WORKFLOW_RUN WHERE RUN_ID = %s
+            SELECT R.RUN_NAME, R.TARGET_MODEL, R.SOURCE_SYSTEM_ID, R.SOURCE_DATABASE, R.SOURCE_SCHEMA,
+                   R.ENVIRONMENT, R.CREATED_BY, R.CREATED_AT::VARCHAR AS CREATED_AT,
+                   R.DOMAIN_ID, D.DOMAIN_NAME
+              FROM CORE.WORKFLOW_RUN R
+              LEFT JOIN KNOWLEDGE.DOMAIN_REGISTRY D ON D.DOMAIN_ID = R.DOMAIN_ID
+             WHERE R.RUN_ID = %s
             """,
             (run_id,),
         )[0]
@@ -703,6 +744,30 @@ def get_sttm(run_id: str, db: Db = Depends(current_db)):
             (header[0]["sttm_id"],),
         )
     return {"sttm": header[0] if header else None, "lines": lines}
+
+
+@app.post("/api/runs/{run_id}/sttm/refine")
+def refine_sttm_transform(run_id: str, body: TransformPrompt, db: Db = Depends(current_db)):
+    try:
+        return db.call("CALL CONTRACT.REFINE_TRANSFORMATION(%s, %s)", (run_id, body.model_dump_json()))
+    except Exception as exc:
+        raise _snowflake_error(exc) from exc
+
+
+@app.post("/api/runs/{run_id}/sttm/apply")
+def apply_sttm_transform(run_id: str, body: TransformApply, db: Db = Depends(current_db)):
+    try:
+        return db.call("CALL CONTRACT.APPLY_TRANSFORMATION(%s, %s)", (run_id, body.model_dump_json()))
+    except Exception as exc:
+        raise _snowflake_error(exc) from exc
+
+
+@app.post("/api/runs/{run_id}/sttm/export")
+def export_sttm_csv(run_id: str, db: Db = Depends(current_db)):
+    try:
+        return db.call("CALL CONTRACT.EXPORT_STTM_CSV(%s)", (run_id,))
+    except Exception as exc:
+        raise _snowflake_error(exc) from exc
 
 
 @app.post("/api/runs/{run_id}/soda")

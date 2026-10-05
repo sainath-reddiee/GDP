@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any, Dict, List
 
 from services.soda.extract import requirement_from_row
+from services.sttm.refine import from_transform
 
 FORMATS = {
     "EMAIL": "email", "PHONE": "phone number", "UUID": "uuid",
@@ -61,6 +62,7 @@ def from_sttm(target_table: str, lines: List[Dict[str, Any]], grain_keys: List[s
                            "definition": {"kind": "freshness", "threshold": "1d"}, "severity": "WARN",
                            "origin": "DOMAIN_RULE",
                            "requirement": f"{col} should be fresher than one day."})
+        checks.extend(from_transform(target_table, line))
     return checks
 
 

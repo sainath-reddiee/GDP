@@ -149,4 +149,9 @@ def run_profiling(session, run_id: str) -> Dict[str, Any]:
         call.summary = "; ".join(f"{t['table']}: {t['columns']} columns, {t['pii_columns']} PII"
                                  for t in summary["tables"])
     stage.move("PROFILING_COMPLETE", f"profiled {len(tables)} tables", summary)
-    return {"profiled": summary, "state": stage.payload()}
+    try:
+        from services.knowledge.procedures import identify_domain
+        identified = identify_domain(session, run_id)
+        return {"profiled": summary, "domain": identified.get("domain"), "state": identified.get("state") or stage.payload()}
+    except Exception:
+        return {"profiled": summary, "state": stage.payload()}

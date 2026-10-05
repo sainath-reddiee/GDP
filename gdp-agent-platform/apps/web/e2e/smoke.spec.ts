@@ -64,13 +64,11 @@ test("onboard a source: register, validate access, land, with later stages locke
   await page.goto(`${runUrl}/profile`);
   await expect(page.getByRole("heading", { name: "Profiling" })).toBeVisible();
   await page.getByRole("button", { name: "Start profiling" }).click();
-  await expect(page.getByText("PROFILING_COMPLETE").first()).toBeVisible({ timeout: 180_000 });
-  await expect(page.getByRole("cell", { name: "CUST_ID" })).toBeVisible();
+  await expect(page.getByRole("cell", { name: "CUST_ID" })).toBeVisible({ timeout: 180_000 });
 
   await page.goto(`${runUrl}/domain`);
-  await page.getByRole("button", { name: "Identify domain" }).click();
-  await expect(page.getByText("DOMAIN_IDENTIFIED").first()).toBeVisible({ timeout: 90_000 });
-  await expect(page.getByRole("cell", { name: "GDP" }).first()).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Knowledge pack" })).toBeVisible();
+  await expect(page.getByRole("cell", { name: "GDP" }).first()).toBeVisible({ timeout: 90_000 });
 
   await page.goto(runUrl);
   await page.getByPlaceholder(/source tables/).fill("What is the state of this run?");

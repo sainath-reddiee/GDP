@@ -52,7 +52,7 @@ def test_phase1_source_to_dbt_review(cur):
     assert landing["state"]["current_state"] == "LANDING_COMPLETE"
 
     profile = call(cur, "CALL PROFILE.RUN_PROFILING(%s)", (run_id,))
-    assert profile["state"]["current_state"] == "PROFILING_COMPLETE"
+    assert profile["state"]["current_state"] in ("PROFILING_COMPLETE", "DOMAIN_IDENTIFIED")
 
     domain = call(cur, "CALL KNOWLEDGE.IDENTIFY_DOMAIN(%s)", (run_id,))
     assert domain["state"]["current_state"] == "DOMAIN_IDENTIFIED"

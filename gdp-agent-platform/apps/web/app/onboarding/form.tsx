@@ -3,10 +3,10 @@
 import { useState, useTransition } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input, Label, Select } from "@/components/ui/input";
-import { Badge } from "@/components/ui/badge";
+import { Input, Label } from "@/components/ui/input";
 import { createRun } from "./actions";
 import { loadSchemas, loadTables, registerTarget } from "./catalog";
+import { CatalogBrowser } from "@/components/catalog-browser";
 import type { DatabaseRow, SchemaRow, TableRow, TargetRow } from "./catalog-types";
 
 export function OnboardingForm({ databases, targets }: { databases: DatabaseRow[]; targets: TargetRow[] }) {
@@ -17,19 +17,24 @@ export function OnboardingForm({ databases, targets }: { databases: DatabaseRow[
   const [schema, setSchema] = useState("");
   const [tables, setTables] = useState<TableRow[]>([]);
   const [table, setTable] = useState("");
+  const [loading, setLoading] = useState<"schemas" | "tables" | null>(null);
   const [error, setError] = useState("");
   const [pending, start] = useTransition();
+  const [, load] = useTransition();
 
   const pickDatabase = (name: string) => {
     setDatabase(name);
     setSchema("");
     setTable("");
     setTables([]);
-    start(async () => {
+    setLoading("schemas");
+    load(async () => {
       try {
         setSchemas((await loadSchemas(name)).schemas);
       } catch (e) {
         setError(e instanceof Error ? e.message : "Could not list schemas");
+      } finally {
+        setLoading(null);
       }
     });
   };
@@ -37,22 +42,25 @@ export function OnboardingForm({ databases, targets }: { databases: DatabaseRow[
   const pickSchema = (name: string) => {
     setSchema(name);
     setTable("");
-    start(async () => {
+    setLoading("tables");
+    load(async () => {
       try {
         setTables((await loadTables(database, name)).tables);
       } catch (e) {
         setError(e instanceof Error ? e.message : "Could not list tables");
+      } finally {
+        setLoading(null);
       }
     });
   };
 
   return (
-    <Card className="max-w-3xl">
+    <Card className="max-w-5xl">
       <CardHeader>
         <CardTitle>New source onboarding</CardTitle>
         <CardDescription>
-          Point this run at the target table you are modeling, then choose the source database on the next screen.
-          A Snowflake share shows up here once an admin has mounted it as a database.
+          Point this run at the silver table you are modeling. Then register the source database on the next screen
+          and pick the tables to land. A Snowflake share appears once an admin has mounted it.
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -93,10 +101,11 @@ export function OnboardingForm({ databases, targets }: { databases: DatabaseRow[
               {targets.map((t) => {
                 const fqn = `${t.target_database}.${t.target_schema}.${t.target_table}`;
                 return (
-                  <label key={t.target_table_id} className="flex cursor-pointer items-start gap-3 rounded-md border p-3">
+                  <label key={t.target_table_id} className="flex cursor-pointer items-start gap-3 rounded-lg border p-3 hover:bg-muted/40">
                     <input type="radio" name="registered_target" checked={registered === fqn} onChange={() => setRegistered(fqn)} />
                     <span>
-                      <span className="font-medium">{fqn}</span>
+                      <span className="font-medium">{t.target_table}</span>
+                      <span className="mt-1 block font-mono text-xs text-muted-foreground">{fqn}</span>
                       <span className="mt-1 block text-sm text-muted-foreground">{t.domain_name} · {t.columns} columns · {t.grain}</span>
                     </span>
                   </label>
@@ -107,33 +116,19 @@ export function OnboardingForm({ databases, targets }: { databases: DatabaseRow[
           )}
 
           {targetMode === "account" && (
-            <div className="mt-3 grid gap-4 md:grid-cols-3">
-              <div>
-                <Label>Database</Label>
-                <div className="max-h-64 space-y-1 overflow-auto rounded-md border p-2">
-                  {databases.map((d) => (
-                    <button type="button" key={d.database_name} onClick={() => pickDatabase(d.database_name)}
-                            className={`flex w-full items-center justify-between rounded px-2 py-1 text-left text-sm ${database === d.database_name ? "bg-accent" : "hover:bg-accent/50"}`}>
-                      {d.database_name}
-                      <Badge variant="outline">{d.type === "IMPORTED DATABASE" ? "share" : "database"}</Badge>
-                    </button>
-                  ))}
-                </div>
-              </div>
-              <div>
-                <Label htmlFor="schema">Schema</Label>
-                <Select id="schema" value={schema} onChange={(e) => pickSchema(e.target.value)}>
-                  <option value="">Select…</option>
-                  {schemas.map((s) => <option key={s.schema_name}>{s.schema_name}</option>)}
-                </Select>
-              </div>
-              <div>
-                <Label htmlFor="table">Table</Label>
-                <Select id="table" value={table} onChange={(e) => setTable(e.target.value)}>
-                  <option value="">Select…</option>
-                  {tables.map((t) => <option key={t.table_name} value={t.table_name}>{t.table_name}</option>)}
-                </Select>
-              </div>
+            <div className="mt-4">
+              <CatalogBrowser
+                databases={databases}
+                schemas={schemas}
+                tables={tables}
+                database={database}
+                schema={schema}
+                table={table}
+                loading={loading}
+                onDatabase={(name) => pickDatabase(name)}
+                onSchema={pickSchema}
+                onTable={setTable}
+              />
             </div>
           )}
 

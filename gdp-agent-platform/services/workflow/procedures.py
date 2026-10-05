@@ -171,6 +171,20 @@ def create_run(session, payload_json: str) -> Dict[str, Any]:
     assert not unknown, f"unknown fields: {sorted(unknown)}"
     values = {k: _text(payload.get(k), k) for k in CREATE_RUN_FIELDS}
     _text(values["RUN_NAME"], "RUN_NAME", required=True)
+    domain_id = _n(values["DOMAIN_ID"])
+    target_model = _n(values["TARGET_MODEL"])
+    if not domain_id and target_model:
+        found = _rows(
+            session,
+            """
+            SELECT DOMAIN_ID FROM KNOWLEDGE.TARGET_TABLE_REGISTRY
+             WHERE ACTIVE_FLAG AND UPPER(TARGET_TABLE) = UPPER(?)
+             ORDER BY TARGET_TABLE LIMIT 1
+            """,
+            [str(target_model).split(".")[-1]],
+        )
+        if found:
+            domain_id = found[0]["DOMAIN_ID"]
 
     graph = _load_graph(session)
     run_id = str(uuid.uuid4())
@@ -184,8 +198,8 @@ def create_run(session, payload_json: str) -> Dict[str, Any]:
             SELECT ?, ?, NULLIF(?, ''), NULLIF(?, ''), NULLIF(?, ''), ?, ?, ?, CURRENT_USER(),
                    NULLIF(?, ''), COALESCE(NULLIF(?, ''), 'DEV'), NULLIF(?, ''), ?
             """,
-            params=[run_id, values["RUN_NAME"], _n(values["DOMAIN_ID"]), _n(values["SOURCE_SYSTEM_ID"]),
-                    _n(values["TARGET_MODEL"]), INITIAL_STATE, graph.states[INITIAL_STATE].stage,
+            params=[run_id, values["RUN_NAME"], domain_id, _n(values["SOURCE_SYSTEM_ID"]),
+                    target_model, INITIAL_STATE, graph.states[INITIAL_STATE].stage,
                     run_status_for(graph, INITIAL_STATE), _n(values["CORRELATION_ID"]),
                     _n(values["ENVIRONMENT"]), _n(values["CONFIG_VERSION"]), graph.version],
         ).collect()

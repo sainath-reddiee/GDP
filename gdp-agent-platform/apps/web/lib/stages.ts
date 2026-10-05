@@ -4,7 +4,6 @@ export const STAGES: { slug: string; stage: string; label: string; phase: number
   { slug: "access", stage: "ACCESS", label: "Access", phase: 3 },
   { slug: "landing", stage: "LANDING", label: "Landing", phase: 3 },
   { slug: "profile", stage: "PROFILING", label: "Profiling", phase: 4 },
-  { slug: "domain", stage: "DOMAIN", label: "Domain", phase: 5 },
   { slug: "mapping", stage: "MAPPING", label: "Mapping", phase: 6 },
   { slug: "sttm", stage: "STTM", label: "STTM", phase: 8 },
   { slug: "soda", stage: "SODA", label: "Soda", phase: 9 },

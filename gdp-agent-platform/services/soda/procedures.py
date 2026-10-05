@@ -30,11 +30,12 @@ def _lines(session, sttm_id: str) -> List[Dict[str, Any]]:
         "nullable_rule": r["NULLABLE_RULE"], "uniqueness_rule": r["UNIQUENESS_RULE"],
         "accepted_values": variant(r["ACCEPTED_VALUES"]) or [],
         "business_definition": r["BUSINESS_DEFINITION"],
+        "transformation": r.get("TRANSFORMATION"),
         "semantic_type": r.get("SEMANTIC_TYPE"),
         "range_rule": variant(r.get("RANGE_RULE")),
     } for r in rows(session, """
         SELECT L.TARGET_COLUMN, L.TARGET_DATATYPE, L.NULLABLE_RULE, L.UNIQUENESS_RULE,
-               L.ACCEPTED_VALUES, L.BUSINESS_DEFINITION, L.RANGE_RULE, C.SEMANTIC_TYPE
+               L.ACCEPTED_VALUES, L.BUSINESS_DEFINITION, L.TRANSFORMATION, L.RANGE_RULE, C.SEMANTIC_TYPE
           FROM CONTRACT.STTM_LINE L
           JOIN CONTRACT.STTM_REGISTRY S ON S.STTM_ID = L.STTM_ID
           LEFT JOIN KNOWLEDGE.TARGET_COLUMN_REGISTRY C
@@ -58,10 +59,29 @@ def _rejected(session, domain_id: str) -> List[Dict[str, Any]]:
 
 def _knowledge(session, domain_id: str) -> List[str]:
     found = rows(session, """SELECT TITLE, CONTENT FROM KNOWLEDGE.DOMAIN_KNOWLEDGE
-                             WHERE IS_CURRENT AND KNOWLEDGE_TYPE IN ('SODA_PATTERN', 'BUSINESS_RULE', 'EXCEPTION')
-                               AND (DOMAIN_ID = ? OR SOURCE_REFERENCE LIKE 'SODA.%' OR SOURCE_REFERENCE LIKE 'soda.brief.%')
-                             ORDER BY UPDATED_AT DESC NULLS LAST LIMIT 12""", [domain_id])
+                             WHERE IS_CURRENT AND KNOWLEDGE_TYPE IN
+                                   ('SODA_PATTERN', 'BUSINESS_RULE', 'EXCEPTION', 'TRANSFORMATION_RULE', 'STTM_TEMPLATE')
+                               AND (DOMAIN_ID = ? OR SOURCE_REFERENCE LIKE 'SODA.%'
+                                    OR SOURCE_REFERENCE LIKE 'soda.brief.%' OR SOURCE_REFERENCE LIKE 'transform.%'
+                                    OR SOURCE_REFERENCE LIKE 'sttm.csv.%')
+                             ORDER BY UPDATED_AT DESC NULLS LAST LIMIT 16""", [domain_id])
     return [f"{r['TITLE']}: {r['CONTENT']}" for r in found]
+
+
+def _transform_checks(session, domain_id: str, table: str) -> List[Dict[str, Any]]:
+    found = rows(session, """SELECT CONTENT_JSON FROM KNOWLEDGE.DOMAIN_KNOWLEDGE
+                             WHERE IS_CURRENT AND STATUS = 'ACTIVE' AND KNOWLEDGE_TYPE = 'TRANSFORMATION_RULE'
+                               AND (DOMAIN_ID = ? OR SOURCE_REFERENCE LIKE 'transform.%')""", [domain_id])
+    out = []
+    for row in found:
+        content = variant(row["CONTENT_JSON"]) or {}
+        target = content.get("target_column")
+        for raw in content.get("soda_checks") or []:
+            item = dict(raw)
+            item.setdefault("target_column", target)
+            item["origin"] = "TRANSFORM"
+            out.append(requirement_from_row(table, item))
+    return out
 
 
 def _briefs(session, run_id: str) -> List[str]:
@@ -130,6 +150,7 @@ def generate_soda(session, run_id: str) -> Dict[str, Any]:
             columns = [l["target_column"] for l in lines]
             knowledge = _knowledge(session, sttm["DOMAIN_ID"])
             checks = from_sttm(table, lines, design.get("business_keys") or [])
+            stored = _transform_checks(session, sttm["DOMAIN_ID"], table)
             extracted: List[Dict[str, Any]] = []
             for brief in _briefs(session, run_id):
                 try:
@@ -145,7 +166,7 @@ def generate_soda(session, run_id: str) -> Dict[str, Any]:
                          "check_type": r["CHECK_TYPE"], "definition": variant(r["CHECK_DEFINITION"]),
                          "severity": r["SEVERITY"], "origin": r["ORIGIN"],
                          "requirement": r["CLIENT_REQUIREMENT"]} for r in existing_client]
-            checks = without_rejected(merge_checks(checks, extracted, imported),
+            checks = without_rejected(merge_checks(checks, stored, extracted, imported),
                                      _rejected(session, sttm["DOMAIN_ID"]))
             yaml_text = render_yaml(table.lower(), checks)
 

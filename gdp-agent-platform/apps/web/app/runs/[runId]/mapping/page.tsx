@@ -5,6 +5,7 @@ import { StageAction } from "@/components/stage-action";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { generateMapping } from "../pipeline-actions";
 import { MappingBoard } from "./mapping-board";
+import { MappingGate } from "./mapping-gate";
 
 export default async function MappingPage({ params }: { params: { runId: string } }) {
   const [state, data] = await Promise.all([
@@ -18,9 +19,9 @@ export default async function MappingPage({ params }: { params: { runId: string 
         <CardHeader>
           <CardTitle>Hybrid mapping</CardTitle>
           <CardDescription>
-            Seven scored components plus Cortex Search. The model only explains ambiguous columns; it does not change
-            the ranking. Approve, modify, choose another target, or reject. Required targets must be covered before
-            the mapping stage can be approved.
+            Seven scored components plus Cortex Search. Approve a match, map to another target, or leave the
+            column unmapped so it loads as NULL. Required target columns still need a source before the stage can
+            be approved.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -33,6 +34,16 @@ export default async function MappingPage({ params }: { params: { runId: string 
           )}
         </CardContent>
       </Card>
+      {state.current_state === "MAPPING_REVIEW" && data.candidates.length > 0 && (
+        <MappingGate
+          runId={params.runId}
+          complete={data.status.complete}
+          decided={data.status.decided}
+          total={data.status.source_columns}
+          missing={data.status.missing_required_targets}
+          undecided={data.status.undecided}
+        />
+      )}
       {data.candidates.length > 0 && <MappingBoard runId={params.runId} data={data} />}
     </StageGate>
   );

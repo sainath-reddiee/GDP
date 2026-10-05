@@ -1,6 +1,7 @@
 """Knowledge procedures (KNOWLEDGE schema, EXECUTE AS OWNER).
 
-IDENTIFY_DOMAIN   PROFILING_COMPLETE -> DOMAIN_IDENTIFIED, records a DOMAIN_RECOMMENDATION
+IDENTIFY_DOMAIN   side track: scores domains after profiling, records DOMAIN_RECOMMENDATION.
+                  Does not overwrite a DOMAIN_ID already stamped from the onboarding target.
 SEARCH_KNOWLEDGE  Cortex Search over current, active knowledge (agent tool and UI)
 LOAD_SKILL        current version of a skill, loaded on demand
 """
@@ -42,8 +43,23 @@ def _domain_terms(session) -> List[Dict[str, Any]]:
     return out
 
 
+def _identified_payload(session, run_id: str, stage: Stage) -> Dict[str, Any]:
+    recs = rows(session, """SELECT R.DOMAIN_ID, D.DOMAIN_NAME, R.CONFIDENCE, R.STATUS
+                              FROM KNOWLEDGE.DOMAIN_RECOMMENDATION R
+                              JOIN KNOWLEDGE.DOMAIN_REGISTRY D ON D.DOMAIN_ID = R.DOMAIN_ID
+                             WHERE R.RUN_ID = ? ORDER BY R.CONFIDENCE DESC""", [run_id])
+    accepted = next((r for r in recs if r["STATUS"] == "ACCEPTED"), recs[0] if recs else None)
+    domain = None
+    if accepted:
+        domain = {"domain_id": accepted["DOMAIN_ID"], "domain_name": accepted["DOMAIN_NAME"],
+                  "confidence": accepted["CONFIDENCE"]}
+    return {"domain": domain, "state": stage.payload()}
+
+
 def identify_domain(session, run_id: str) -> Dict[str, Any]:
     stage = Stage(session, run_id)
+    if stage.state != "PROFILING_COMPLETE":
+        return _identified_payload(session, run_id, stage)
     stage.require("PROFILING_COMPLETE")
     database = _database(session)
     with tool_call(session, run_id, "get_domain_candidates", {"run_id": run_id}) as call:
@@ -69,9 +85,9 @@ def identify_domain(session, run_id: str) -> Dict[str, Any]:
             threshold = float(config_value(session, "DOMAIN_CONFIDENCE_THRESHOLD", 0.3))
         except Exception as exc:
             call.status, call.error = "FAILED", clip(exc)
-            stage.fail(exc)
-            return {"state": stage.payload()}
+            raise
         top = ranked[0]
+        stamped_id = stage.run.get("DOMAIN_ID")
         matched = [{"knowledge_id": r.get("KNOWLEDGE_ID"), "title": r.get("TITLE"), "type": r.get("KNOWLEDGE_TYPE")}
                    for r in results if r.get("DOMAIN_NAME") == top["domain_name"]]
         recommendation = (f"{top['domain_name']} (confidence {top['confidence']:.2f}); matched terms: "
@@ -79,6 +95,9 @@ def identify_domain(session, run_id: str) -> Dict[str, Any]:
         if top["confidence"] < threshold:
             recommendation += f". Below the {threshold:.2f} threshold: confirm the domain with the domain owner."
         call.summary = f"Cortex Search: {len(results)} knowledge items; selected {recommendation}"
+
+    def accepted(d: Dict[str, Any]) -> bool:
+        return (stamped_id and d["domain_id"] == stamped_id) or (not stamped_id and d is top)
 
     def record(_event_id: str) -> None:
         insert_rows(session, "KNOWLEDGE.DOMAIN_RECOMMENDATION",
@@ -88,10 +107,12 @@ def identify_domain(session, run_id: str) -> Dict[str, Any]:
                      "IFF(? = 'ACCEPTED', CURRENT_TIMESTAMP(), NULL)", "'domain-scoring-v1'"],
                     [[str(uuid.uuid4()), run_id, d["domain_id"], d["confidence"], d["evidence"],
                       matched if d is top else [], recommendation if d is top else f"{d['domain_name']} not selected",
-                      "ACCEPTED" if d is top else "PROPOSED", "SYSTEM" if d is top else None,
-                      "ACCEPTED" if d is top else "PROPOSED"] for d in ranked])
-        session.sql("UPDATE CORE.WORKFLOW_RUN SET DOMAIN_ID = ? WHERE RUN_ID = ?",
-                    params=[top["domain_id"], run_id]).collect()
+                      "ACCEPTED" if accepted(d) else "PROPOSED",
+                      "SYSTEM" if accepted(d) else None,
+                      "ACCEPTED" if accepted(d) else "PROPOSED"] for d in ranked])
+        if not stamped_id:
+            session.sql("UPDATE CORE.WORKFLOW_RUN SET DOMAIN_ID = ? WHERE RUN_ID = ?",
+                        params=[top["domain_id"], run_id]).collect()
 
     stage.move("DOMAIN_IDENTIFIED", recommendation, {"domains": ranked[:3]}, in_transaction=record)
     return {"domain": top, "alternatives": ranked[1:], "matched_knowledge": matched, "state": stage.payload()}

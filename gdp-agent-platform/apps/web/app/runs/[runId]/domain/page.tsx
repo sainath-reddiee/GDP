@@ -1,5 +1,4 @@
 import { api, getRun } from "@/lib/api";
-import { StageGate } from "@/components/stage-gate";
 import { StageAction } from "@/components/stage-action";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -14,31 +13,55 @@ export default async function DomainPage({ params }: { params: { runId: string }
       status: string; decided_by: string | null;
     }[] }>(`/api/runs/${params.runId}/domain`),
   ]);
-  const canRun = state.current_state === "PROFILING_COMPLETE";
+  const canScore = state.current_state === "PROFILING_COMPLETE";
+  const accepted = recommendations.find((r) => r.status === "ACCEPTED");
+  const packName = state.run.domain_name ?? accepted?.domain_name ?? null;
   return (
-    <StageGate state={state} stage="DOMAIN">
+    <>
       <Card>
         <CardHeader>
-          <CardTitle>Domain identification</CardTitle>
+          <CardTitle>Knowledge pack</CardTitle>
           <CardDescription>
-            The platform scores active domains from profile tokens and Cortex Search. The top match is recorded on
-            the run; a human can still override later knowledge, but Phase 1 uses the accepted recommendation.
+            This is not a factory step. The pack is stamped from the target you picked at onboarding
+            {packName ? ` — currently ${packName}` : ""}.
+            Scoring after profiling is an audit trail so you can see why the source looks like that pack.
+            Mapping, glossary, and Soda patterns stay scoped to the stamped pack.
           </CardDescription>
         </CardHeader>
-        <CardContent>
-          {canRun && (
+        <CardContent className="space-y-3">
+          <div className="flex flex-wrap items-center gap-2 text-sm">
+            <span className="text-muted-foreground">Run pack</span>
+            <Badge variant={packName ? "success" : "outline"}>
+              {packName ?? "Not stamped yet"}
+            </Badge>
+            {state.run.target_model && (
+              <span className="text-muted-foreground">from {state.run.target_model}</span>
+            )}
+          </div>
+          {canScore && (
             <StageAction
-              label="Identify domain"
+              label="Score source against packs"
               pendingLabel="Scoring domains…"
               action={identifyDomain.bind(null, params.runId)}
             />
           )}
         </CardContent>
       </Card>
-      {recommendations.length > 0 && (
-        <Card>
-          <CardHeader><CardTitle>Recommendations</CardTitle></CardHeader>
-          <CardContent>
+      <Card>
+        <CardHeader>
+          <CardTitle>Scoring trail</CardTitle>
+          <CardDescription>
+            Token overlap and Cortex Search after profiling. This does not block Mapping.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          {recommendations.length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              {canScore
+                ? "Profiling is complete. Score the source to record pack confidence."
+                : "Scores appear automatically after profiling."}
+            </p>
+          ) : (
             <Table>
               <THead><TR><TH>Domain</TH><TH>Confidence</TH><TH>Status</TH><TH>Evidence</TH></TR></THead>
               <TBody>
@@ -52,9 +75,9 @@ export default async function DomainPage({ params }: { params: { runId: string }
                 ))}
               </TBody>
             </Table>
-          </CardContent>
-        </Card>
-      )}
-    </StageGate>
+          )}
+        </CardContent>
+      </Card>
+    </>
   );
 }

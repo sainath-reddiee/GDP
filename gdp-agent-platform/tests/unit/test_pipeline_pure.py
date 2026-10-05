@@ -9,6 +9,7 @@ from services.soda.expectations import from_client, from_sttm, merge_checks, ren
 from services.soda.extract import parse_client_document, requirement_from_row
 from services.soda.feedback import pattern as soda_feedback
 from services.sttm.assemble import assemble
+from services.sttm.refine import case_literals, from_transform, refine_prompt, render_csv, reusable_expression
 from services.validation.checks import run as validate, summary
 from infrastructure.seed_knowledge import DEFAULT_WEIGHTS, DEFAULT_THRESHOLDS, list_skills, load_domain_pack
 from services.mapping.scoring import validate_config
@@ -133,7 +134,9 @@ def test_dbt_project_and_validation_pass():
     assert any(p.startswith("models/marts/") and p.endswith(".sql") for p in files)
     assert "macros/initcap_trim.sql" in files
     assert "mappings/sttm.json" in files
+    assert "mappings/sttm.csv" in files
     assert "CUSTOMER_ID" in files["mappings/sttm.json"]
+    assert "CUSTOMER_ID" in files["mappings/sttm.csv"]
     results = validate(files, [{**l, "required": l["mapping_type"] != "UNMAPPED" and not l["nullable_rule"]}
                                for l in sttm["lines"]], files["soda/checks.yml"])
     status, errors, _ = summary(results)
@@ -200,3 +203,34 @@ def test_mapping_skill_blocks_destructive_sql():
 
 def test_system_derived_not_mappable():
     assert SYSTEM_DERIVED == {"SURROGATE_KEY", "RECORD_SOURCE", "AUDIT_TIMESTAMP"}
+
+
+def test_refine_prompt_includes_profile_and_instruction():
+    text = refine_prompt({
+        "source_column": "end_date", "source_table": "EXTRACTION_DETAILS", "source_datatype": "VARCHAR",
+        "target_column": "BIRTH_DATE", "target_datatype": "DATE",
+        "current_transformation": "CAST(end_date AS DATE)",
+        "business_definition": "date of birth",
+        "profile": {"null_percentage": 2, "distinct_percentage": 40, "samples": ["2020-01-01", "n/a"],
+                    "semantic_type": "DATE", "description": "extraction end"},
+        "prior_rules": ["Transform BIRTH_DATE: TRY_TO_DATE({col}, 'YYYY-MM-DD')"],
+    }, "treat n/a as null and parse YYYY-MM-DD")
+    assert "end_date" in text and "BIRTH_DATE" in text
+    assert "n/a" in text and "YYYY-MM-DD" in text
+
+
+def test_transform_expression_feeds_soda_and_csv():
+    expr = "CASE UPPER(TRIM(extraction_status)) WHEN 'Y' THEN 'ACTIVE' WHEN 'N' THEN 'INACTIVE' ELSE NULL END"
+    assert case_literals(expr) == ["ACTIVE", "INACTIVE"]
+    assert reusable_expression("TRY_TO_DATE(end_date, 'YYYY-MM-DD')", "end_date") == "TRY_TO_DATE({col}, 'YYYY-MM-DD')"
+    checks = from_transform("DIM_CUSTOMER", {"target_column": "CUSTOMER_STATUS", "transformation": expr})
+    assert any(c["check_type"] == "ACCEPTED_VALUES" for c in checks)
+    dates = from_transform("DIM_CUSTOMER", {
+        "target_column": "BIRTH_DATE", "transformation": "TRY_TO_DATE(end_date, 'YYYY-MM-DD')",
+    })
+    assert any(c["definition"].get("format") == "date iso 8601" for c in dates)
+    csv_text = render_csv([{
+        "target_column": "CUSTOMER_STATUS", "mapping_type": "TRANSFORM", "transformation": expr,
+        "soda_checks": checks, "prompt": "map Y/N",
+    }])
+    assert "CUSTOMER_STATUS" in csv_text and "map Y/N" in csv_text
