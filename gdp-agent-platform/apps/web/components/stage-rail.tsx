@@ -90,7 +90,7 @@ export function StageRail({ runId, stages }: { runId: string; stages: StageStatu
                   {body}
                 </Link>
               )}
-              {i === 6 && <span className="sr-only">Soda and dbt generate from the approved STTM in parallel</span>}
+              {i === 6 && <span className="sr-only">Data Quality and dbt generate from the approved STTM in parallel</span>}
             </li>
           );
         })}

@@ -122,7 +122,7 @@ export function SttmBoard({
             <CardTitle>Lines</CardTitle>
             <CardDescription>
               Prompt a change in plain English. Cortex uses the profile, current SQL, and stored transform rules.
-              Apply writes the contract and feeds Soda / dbt.
+              Apply writes the contract and feeds Data Quality / dbt.
             </CardDescription>
           </div>
           <Button variant="outline" onClick={exportCsv} disabled={pending}>

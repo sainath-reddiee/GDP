@@ -20,12 +20,16 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from app.agent import AGENT_NAME, stream_agent
-from app.db import AUTH_MODE, DATABASE, WAREHOUSE, Db, close_session, dev_db, lookup_session, open_pat_session
+from app.db import (
+    AUTH_MODE, DATABASE, WAREHOUSE, Db, SnowflakeSessionError,
+    close_session, dev_db, lookup_session, open_pat_session,
+)
 
-app = FastAPI(title="GDP Agent Platform API")
+app = FastAPI(title="Agentic pipeline API")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000",
+                   "http://localhost:3001", "http://127.0.0.1:3001"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -65,8 +69,11 @@ async def bust_run_cache(request: Request, call_next):
 
 
 def current_db(x_aip_session: Optional[str] = Header(default=None)) -> Db:
-    if AUTH_MODE == "dev":
-        return dev_db()
+    try:
+        if AUTH_MODE == "dev":
+            return dev_db()
+    except SnowflakeSessionError as exc:
+        raise HTTPException(503, str(exc)) from exc
     db = lookup_session(x_aip_session)
     if db is None:
         raise HTTPException(401, "Sign in required")
@@ -83,6 +90,7 @@ class CreateRun(BaseModel):
     target_model: Optional[str] = None
     domain_id: Optional[str] = None
     environment: str = "DEV"
+    intent: Optional[dict] = None
 
 
 class Transition(BaseModel):
@@ -128,6 +136,27 @@ class ClientExpectations(BaseModel):
 
 class SodaDecisions(BaseModel):
     decisions: list[dict]
+
+
+class DbtPlan(BaseModel):
+    base_branch: Optional[str] = "main"
+    cut_branch: Optional[str] = None
+    repo: Optional[str] = None
+    origin: Optional[str] = None
+    git_repository: Optional[str] = None
+    api_integration: Optional[str] = None
+    dbt_project: Optional[str] = None
+    allowed_prefixes: Optional[list[str]] = None
+    push: bool = False
+    fetch_skeleton: bool = True
+
+
+class DbtEnhance(BaseModel):
+    file_path: str = Field(min_length=1, max_length=400)
+    prompt: Optional[str] = Field(default=None, max_length=2000)
+    model: Optional[str] = Field(default=None, max_length=120)
+    content: Optional[str] = None
+    apply: bool = False
 
 
 class TransformPrompt(BaseModel):
@@ -178,6 +207,14 @@ def _snowflake_error(exc: Exception) -> HTTPException:
     found = PROC_ERROR.findall(message)
     if found:
         message = found[-1].strip()
+    lower = message.lower()
+    if "too many arguments" in lower or "expected 1, got 2" in lower:
+        message = (
+            "Snowflake still has the one-argument GENERATE_DBT. "
+            "The API now saves the branch plan and retries that signature."
+        )
+    elif "unexpected 'null'" in lower or 'unexpected "null"' in lower:
+        message = "Snowflake rejected a null argument. Choose a git repository or origin URL and generate again."
     status = 400
     if any(k in message for k in ("TRANSITION_REJECTED", "CONCURRENT_UPDATE", "SOURCE_NAME_CONFLICT")):
         status = 409
@@ -229,6 +266,29 @@ def list_runs(include_test: bool = False, db: Db = Depends(current_db)):
     return {"runs": rows}
 
 
+_POST_STTM = {
+    "STTM_APPROVED", "SODA_PENDING", "SODA_REVIEW", "SODA_APPROVED",
+    "DBT_PENDING", "DBT_GENERATING", "VALIDATION_PENDING", "VALIDATION_RUNNING",
+    "VALIDATION_PASSED", "VALIDATION_FAILED", "DBT_REVIEW", "DBT_APPROVED",
+}
+
+
+def _unlock_parallel_tracks(state: dict) -> dict:
+    """Soda and dbt both open after STTM. Overlay in case the deployed rail is still linear."""
+    current = str(state.get("current_state") or "").upper()
+    if current not in _POST_STTM:
+        return state
+    for stage in state.get("stages") or []:
+        name = stage.get("stage")
+        if name in ("SODA", "DBT") and stage.get("status") == "LOCKED":
+            stage["status"] = "ACTIVE"
+        if name == "VALIDATION" and stage.get("status") == "LOCKED" and current not in {
+            "STTM_APPROVED", "SODA_PENDING",
+        }:
+            stage["status"] = "ACTIVE"
+    return state
+
+
 def _domain_id_for_target(db: Db, target_model: Optional[str], domain_id: Optional[str]) -> Optional[str]:
     if domain_id:
         return domain_id
@@ -246,6 +306,46 @@ def _domain_id_for_target(db: Db, target_model: Optional[str], domain_id: Option
     return found[0]["domain_id"] if found else None
 
 
+def _save_intent(db: Db, run_id: str, intent: dict) -> None:
+    from services.source.intent import intent_key
+    key = intent_key(run_id)
+    payload = {**intent, "run_id": run_id}
+    db.execute(
+        "UPDATE CORE.PLATFORM_CONFIG SET IS_CURRENT = FALSE WHERE CONFIG_KEY = %s AND IS_CURRENT",
+        (key,),
+    )
+    version_rows = db.query(
+        "SELECT COALESCE(MAX(VERSION), 0) + 1 AS V FROM CORE.PLATFORM_CONFIG WHERE CONFIG_KEY = %s",
+        (key,),
+    )
+    version = version_rows[0]["v"] if version_rows else 1
+    db.execute(
+        """
+        INSERT INTO CORE.PLATFORM_CONFIG
+          (CONFIG_KEY, CONFIG_VALUE, DESCRIPTION, VERSION, IS_CURRENT, CREATED_BY)
+        SELECT %s, PARSE_JSON(%s), %s, %s, TRUE, CURRENT_USER()
+        """,
+        (key, json.dumps(payload), "Onboarding source/target intent", version),
+    )
+
+
+def _load_intent(db: Db, run_id: str) -> Optional[dict]:
+    from services.source.intent import intent_key
+    rows = db.query(
+        "SELECT CONFIG_VALUE FROM CORE.PLATFORM_CONFIG WHERE CONFIG_KEY = %s AND IS_CURRENT",
+        (intent_key(run_id),),
+    )
+    if not rows:
+        return None
+    value = rows[0].get("config_value")
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except ValueError:
+            return None
+    return value if isinstance(value, dict) else None
+
+
 @app.post("/api/runs")
 def create_run(body: CreateRun, db: Db = Depends(current_db)):
     payload = {
@@ -255,9 +355,16 @@ def create_run(body: CreateRun, db: Db = Depends(current_db)):
         "ENVIRONMENT": body.environment,
     }
     try:
-        return db.call("CALL CORE.CREATE_RUN(%s)", (json.dumps(payload),))
+        created = db.call("CALL CORE.CREATE_RUN(%s)", (json.dumps(payload),))
     except Exception as exc:
         raise _snowflake_error(exc) from exc
+    run_id = (created or {}).get("run_id") or (created or {}).get("RUN_ID")
+    if body.intent and run_id:
+        try:
+            _save_intent(db, run_id, body.intent)
+        except Exception:
+            pass
+    return created
 
 
 @app.get("/api/runs/{run_id}")
@@ -278,9 +385,134 @@ def get_run(run_id: str, db: Db = Depends(current_db)):
             """,
             (run_id,),
         )[0]
-        return state
+        return _unlock_parallel_tracks(state)
 
     return _cached_run(run_id, load)
+
+
+@app.get("/api/runs/{run_id}/intent")
+def get_run_intent(run_id: str, db: Db = Depends(current_db)):
+    return {"intent": _load_intent(db, run_id)}
+
+
+@app.get("/api/runs/{run_id}/model-graph")
+def get_model_graph(run_id: str, db: Db = Depends(current_db)):
+    from services.source.intent import suggest_models
+
+    intent = _load_intent(db, run_id) or {}
+    run_rows = db.query(
+        "SELECT TARGET_MODEL, DOMAIN_ID, SOURCE_DATABASE, SOURCE_SCHEMA FROM CORE.WORKFLOW_RUN WHERE RUN_ID = %s",
+        (run_id,),
+    )
+    run = run_rows[0] if run_rows else {}
+    sources = db.query(
+        """
+        SELECT OBJECT_NAME, OBJECT_TYPE, ROW_COUNT_ESTIMATE, SELECTED_FLAG
+          FROM SOURCE.SOURCE_OBJECT WHERE RUN_ID = %s
+         ORDER BY OBJECT_NAME
+        """,
+        (run_id,),
+    )
+    if not sources:
+        planned = (intent.get("source") or {}).get("tables") or []
+        sources = [{"object_name": name, "object_type": "TABLE", "row_count_estimate": None, "selected_flag": True}
+                   for name in planned]
+    else:
+        sources = [s for s in sources if s.get("selected_flag")] or sources
+    profile = db.query(
+        """
+        SELECT TABLE_NAME, COLUMN_NAME, DATA_TYPE, SEMANTIC_TYPE, POTENTIAL_KEY_FLAG
+          FROM PROFILE.PROFILE_REGISTRY
+         WHERE RUN_ID = %s AND IS_CURRENT
+         ORDER BY TABLE_NAME, COLUMN_NAME
+        """,
+        (run_id,),
+    )
+    target_rows = db.query(
+        """
+        SELECT T.TARGET_TABLE_ID, D.DOMAIN_NAME, T.DOMAIN_ID, T.TARGET_DATABASE, T.TARGET_SCHEMA,
+               T.TARGET_TABLE, T.TABLE_TYPE, T.GRAIN
+          FROM KNOWLEDGE.TARGET_TABLE_REGISTRY T
+          JOIN KNOWLEDGE.DOMAIN_REGISTRY D ON D.DOMAIN_ID = T.DOMAIN_ID
+         WHERE T.ACTIVE_FLAG
+         ORDER BY T.TARGET_TABLE
+        """
+    )
+    columns_by_table: dict[str, list[str]] = {}
+    for col in db.query(
+        """
+        SELECT T.TARGET_TABLE, C.COLUMN_NAME
+          FROM KNOWLEDGE.TARGET_COLUMN_REGISTRY C
+          JOIN KNOWLEDGE.TARGET_TABLE_REGISTRY T ON T.TARGET_TABLE_ID = C.TARGET_TABLE_ID
+         WHERE T.ACTIVE_FLAG
+        """
+    ):
+        columns_by_table.setdefault(col["target_table"], []).append(col["column_name"])
+    selected_fqns = {
+        str(t.get("fqn") or t.get("target_table") or "").upper()
+        for t in (intent.get("targets") or [])
+    }
+    if run.get("target_model"):
+        selected_fqns.add(str(run["target_model"]).upper())
+        selected_fqns.add(str(run["target_model"]).split(".")[-1].upper())
+    from services.source.catalog_display import display_domain_name, is_hidden_target
+
+    targets = []
+    for row in target_rows:
+        fqn = f"{row['target_database']}.{row['target_schema']}.{row['target_table']}"
+        chosen = fqn.upper() in selected_fqns or str(row["target_table"]).upper() in selected_fqns
+        if is_hidden_target(row) and not chosen:
+            continue
+        if intent.get("path") == "map_existing" and not chosen:
+            if run.get("domain_id") and row.get("domain_id") != run.get("domain_id"):
+                continue
+        targets.append({
+            **row,
+            "fqn": fqn,
+            "domain_name": display_domain_name(row.get("domain_name")),
+            "columns": columns_by_table.get(row["target_table"], []),
+            "selected": chosen,
+        })
+    if intent.get("path") == "map_existing":
+        targets = [t for t in targets if t["selected"]] or targets
+    try:
+        mappings = db.query(
+            """
+            SELECT TBL.SOURCE_TABLE, TGT.TARGET_TABLE, COUNT(*) AS EDGES
+              FROM MAPPING.MAPPING_DECISION D
+              JOIN SOURCE.LANDING_COLUMN_REGISTRY L ON L.LANDING_COLUMN_ID = D.SOURCE_COLUMN_ID
+              JOIN SOURCE.LANDING_TABLE_REGISTRY TBL ON TBL.LANDING_ID = L.LANDING_ID
+              JOIN KNOWLEDGE.TARGET_COLUMN_REGISTRY C ON C.TARGET_COLUMN_ID = D.TARGET_COLUMN_ID
+              JOIN KNOWLEDGE.TARGET_TABLE_REGISTRY TGT ON TGT.TARGET_TABLE_ID = C.TARGET_TABLE_ID
+             WHERE D.RUN_ID = %s AND D.IS_CURRENT AND D.DECISION <> 'REJECTED' AND D.TARGET_COLUMN_ID IS NOT NULL
+             GROUP BY TBL.SOURCE_TABLE, TGT.TARGET_TABLE
+            """,
+            (run_id,),
+        )
+    except Exception:
+        mappings = []
+    edges = [{"from": m["source_table"], "to": m["target_table"], "kind": "mapped", "weight": m["edges"]}
+             for m in mappings]
+    if not edges:
+        for src in sources:
+            for tgt in [t for t in targets if t.get("selected")]:
+                edges.append({
+                    "from": src["object_name"], "to": tgt["target_table"],
+                    "kind": "planned", "weight": 1,
+                })
+    suggestions = suggest_models(profile, targets, [s["object_name"] for s in sources])
+    return {
+        "intent": intent or None,
+        "source": {
+            "database": (intent.get("source") or {}).get("database") or run.get("source_database"),
+            "schema": (intent.get("source") or {}).get("schema") or run.get("source_schema"),
+        },
+        "sources": sources,
+        "targets": targets,
+        "edges": edges,
+        "suggestions": suggestions,
+        "profiled": bool(profile),
+    }
 
 
 @app.post("/api/runs/{run_id}/transition")
@@ -336,6 +568,15 @@ class TargetBind(BaseModel):
     table: str
 
 
+class IntentPatch(BaseModel):
+    path: Optional[str] = None
+    tables: Optional[list[str]] = None
+    targets: Optional[list[dict]] = None
+    domain_id: Optional[str] = None
+    domain_name: Optional[str] = None
+    source_system_name: Optional[str] = None
+
+
 @app.get("/api/sources/databases")
 def source_databases(db: Db = Depends(current_db)):
     return {"databases": db.query(
@@ -375,9 +616,148 @@ def catalog_tables(database: str, schema: str, db: Db = Depends(current_db)):
     )}
 
 
+@app.get("/api/catalog/columns")
+def catalog_columns(database: str, schema: str, table: str, db: Db = Depends(current_db)):
+    database, schema, table = _ident(database, "database"), _ident(schema, "schema"), _ident(table, "table")
+    return {"columns": db.query(
+        f"""
+        SELECT COLUMN_NAME, DATA_TYPE, ORDINAL_POSITION
+          FROM {database}.INFORMATION_SCHEMA.COLUMNS
+         WHERE TABLE_SCHEMA = %s AND TABLE_NAME = %s
+         ORDER BY ORDINAL_POSITION
+        """,
+        (schema, table),
+    )}
+
+
+def _targets_with_columns(db: Db) -> list[dict]:
+    rows = db.query(
+        """
+        SELECT T.TARGET_TABLE_ID, D.DOMAIN_ID, D.DOMAIN_NAME, T.TARGET_DATABASE, T.TARGET_SCHEMA,
+               T.TARGET_TABLE, T.TABLE_TYPE, T.GRAIN
+          FROM KNOWLEDGE.TARGET_TABLE_REGISTRY T
+          JOIN KNOWLEDGE.DOMAIN_REGISTRY D ON D.DOMAIN_ID = T.DOMAIN_ID
+         WHERE T.ACTIVE_FLAG
+         ORDER BY T.TARGET_TABLE
+        """
+    )
+    cols = db.query(
+        """
+        SELECT T.TARGET_TABLE, C.COLUMN_NAME
+          FROM KNOWLEDGE.TARGET_COLUMN_REGISTRY C
+          JOIN KNOWLEDGE.TARGET_TABLE_REGISTRY T ON T.TARGET_TABLE_ID = C.TARGET_TABLE_ID
+         WHERE T.ACTIVE_FLAG
+        """
+    )
+    by_table: dict[str, list[str]] = {}
+    for col in cols:
+        by_table.setdefault(col["target_table"], []).append(col["column_name"])
+    from services.source.catalog_display import is_hidden_target
+
+    out = []
+    for row in rows:
+        if is_hidden_target(row):
+            continue
+        fqn = f"{row['target_database']}.{row['target_schema']}.{row['target_table']}"
+        out.append({**row, "fqn": fqn, "columns": by_table.get(row["target_table"], [])})
+    return out
+
+
+def _catalog_profile(db: Db, database: Optional[str], schema: Optional[str], tables: list[str]) -> list[dict]:
+    profile: list[dict] = []
+    if not database or not schema:
+        return [{"table_name": table, "column_name": ""} for table in tables]
+    for table in tables:
+        try:
+            db_name, sch, tbl = _ident(database, "database"), _ident(schema, "schema"), _ident(table, "table")
+            cols = db.query(
+                f"""
+                SELECT COLUMN_NAME FROM {db_name}.INFORMATION_SCHEMA.COLUMNS
+                 WHERE TABLE_SCHEMA = %s AND TABLE_NAME = %s
+                """,
+                (sch, tbl),
+            )
+            if cols:
+                for col in cols:
+                    profile.append({"table_name": table, "column_name": col["column_name"]})
+            else:
+                profile.append({"table_name": table, "column_name": ""})
+        except Exception:
+            profile.append({"table_name": table, "column_name": ""})
+    return profile
+
+
+def _suggest_for_catalog(db: Db, database: Optional[str], schema: Optional[str], tables: list[str]) -> dict:
+    from services.source.catalog_display import display_domain_name, workspace_targets
+    from services.source.intent import suggest_models
+
+    targets = _targets_with_columns(db)
+    scoped = workspace_targets(targets, database, schema)
+    profile = _catalog_profile(db, database, schema, tables)
+    suggestions = suggest_models(profile, targets, tables)
+    scoped_fqns = {str(t.get("fqn") or "").upper() for t in scoped}
+    existing = []
+    for item in suggestions:
+        if item["kind"] != "existing":
+            continue
+        fqn = str(item.get("fqn") or "").upper()
+        if item["score"] >= 0.2 or fqn in scoped_fqns:
+            existing.append({**item, "domain_name": display_domain_name(item.get("domain_name"))})
+    proposed = [item for item in suggestions if item["kind"] == "proposed"]
+    related = bool(existing) or bool(scoped)
+    return {
+        "related": related,
+        "suggestions": existing if related else existing + proposed,
+        "targets": [{**row, "domain_name": display_domain_name(row.get("domain_name"))} for row in scoped],
+        "tables": tables,
+    }
+
+
+@app.put("/api/runs/{run_id}/intent")
+def put_run_intent(run_id: str, body: IntentPatch, db: Db = Depends(current_db)):
+    current = _load_intent(db, run_id) or {
+        "path": "profile_suggest", "run_name": "", "source": {}, "targets": [],
+        "model_existing": False, "created_at": "",
+    }
+    source = dict(current.get("source") or {})
+    if body.tables is not None:
+        source["tables"] = body.tables
+    if body.source_system_name:
+        source["source_system_name"] = body.source_system_name
+    current["source"] = source
+    if body.path:
+        current["path"] = body.path
+        current["model_existing"] = body.path == "map_existing"
+    if body.targets is not None:
+        current["targets"] = body.targets
+    if body.domain_id is not None:
+        current["domain_id"] = body.domain_id
+    if body.domain_name is not None:
+        current["domain_name"] = body.domain_name
+    _save_intent(db, run_id, current)
+    return {"intent": current}
+
+
+@app.get("/api/catalog/target-suggestions")
+def catalog_target_suggestions(database: str = "", schema: str = "", tables: str = "", db: Db = Depends(current_db)):
+    table_list = [part.strip() for part in (tables or "").split(",") if part.strip()]
+    return _suggest_for_catalog(db, database or None, schema or None, table_list)
+
+
+@app.get("/api/runs/{run_id}/target-suggestions")
+def target_suggestions(run_id: str, tables: str = "", db: Db = Depends(current_db)):
+    table_list = [part.strip() for part in (tables or "").split(",") if part.strip()]
+    intent = _load_intent(db, run_id) or {}
+    source = intent.get("source") or {}
+    database, schema = source.get("database"), source.get("schema")
+    return _suggest_for_catalog(db, database, schema, table_list)
+
+
 @app.get("/api/targets")
 def list_targets(db: Db = Depends(current_db)):
-    return {"targets": db.query(
+    from services.source.catalog_display import display_domain_name, is_hidden_target
+
+    rows = db.query(
         """
         SELECT T.TARGET_TABLE_ID, D.DOMAIN_NAME, T.TARGET_DATABASE, T.TARGET_SCHEMA, T.TARGET_TABLE,
                T.TABLE_TYPE, T.GRAIN,
@@ -388,7 +768,13 @@ def list_targets(db: Db = Depends(current_db)):
          WHERE T.ACTIVE_FLAG
          ORDER BY T.TARGET_TABLE
         """
-    )}
+    )
+    visible = []
+    for row in rows:
+        if is_hidden_target(row):
+            continue
+        visible.append({**row, "domain_name": display_domain_name(row.get("domain_name"))})
+    return {"targets": visible}
 
 
 @app.post("/api/targets/register")
@@ -857,12 +1243,85 @@ def get_soda(run_id: str, db: Db = Depends(current_db)):
     }
 
 
+def _clean_dbt_plan(body: Optional[DbtPlan]) -> dict:
+    raw = (body or DbtPlan()).model_dump(exclude_none=True)
+    return {key: value for key, value in raw.items() if value != "" and value != []}
+
+
+def _is_dbt_arity_error(exc: Exception) -> bool:
+    text = str(exc).lower()
+    return "too many arguments" in text or "expected 1, got 2" in text
+
+
+def _save_dbt_plan(db: Db, run_id: str, payload: dict) -> None:
+    run = db.query("SELECT DOMAIN_ID FROM CORE.WORKFLOW_RUN WHERE RUN_ID = %s", (run_id,))
+    if not run or not run[0].get("domain_id"):
+        return
+    ref = f"dbt.branch.{run_id}"
+    db.execute(
+        "UPDATE KNOWLEDGE.DOMAIN_KNOWLEDGE SET IS_CURRENT = FALSE, STATUS = 'RETIRED' "
+        "WHERE SOURCE_REFERENCE = %s AND IS_CURRENT",
+        (ref,),
+    )
+    version_rows = db.query(
+        "SELECT COALESCE(MAX(VERSION), 0) + 1 AS V FROM KNOWLEDGE.DOMAIN_KNOWLEDGE WHERE SOURCE_REFERENCE = %s",
+        (ref,),
+    )
+    version = version_rows[0]["v"] if version_rows else 1
+    db.execute(
+        """
+        INSERT INTO KNOWLEDGE.DOMAIN_KNOWLEDGE
+          (KNOWLEDGE_ID, DOMAIN_ID, KNOWLEDGE_TYPE, TITLE, CONTENT, CONTENT_JSON, TAGS,
+           SOURCE_REFERENCE, STATUS, VERSION, IS_CURRENT, CREATED_BY)
+        SELECT UUID_STRING(), %s, 'TRANSFORMATION_RULE', %s, %s, PARSE_JSON(%s),
+               PARSE_JSON('["DBT","BRANCH"]'), %s, 'ACTIVE', %s, TRUE, CURRENT_USER()
+        """,
+        (
+            run[0]["domain_id"],
+            f"dbt branch plan {run_id}"[:500],
+            json.dumps(payload)[:8000],
+            json.dumps(payload),
+            ref,
+            version,
+        ),
+    )
+
+
+def _is_transition_rejected(exc: Exception) -> bool:
+    return "TRANSITION_REJECTED" in str(exc)
+
+
+def _generate_dbt_overlay(db: Db, run_id: str, payload: dict):
+    from services.dbt.overlay import generate_via_db
+    return generate_via_db(db, run_id, payload)
+
+
 @app.post("/api/runs/{run_id}/dbt")
-def generate_dbt(run_id: str, db: Db = Depends(current_db)):
+def generate_dbt(run_id: str, body: Optional[DbtPlan] = None, db: Db = Depends(current_db)):
+    payload = _clean_dbt_plan(body)
     try:
-        return db.call("CALL CODEGEN.GENERATE_DBT(%s)", (run_id,))
-    except Exception as exc:
-        raise _snowflake_error(exc) from exc
+        _save_dbt_plan(db, run_id, payload)
+    except Exception:
+        pass
+    try:
+        return db.call("CALL CODEGEN.GENERATE_DBT(%s, %s)", (run_id, json.dumps(payload)))
+    except Exception as two_arg:
+        if _is_transition_rejected(two_arg):
+            try:
+                return _generate_dbt_overlay(db, run_id, payload)
+            except Exception as overlay_exc:
+                raise _snowflake_error(overlay_exc) from overlay_exc
+        if not _is_dbt_arity_error(two_arg):
+            raise _snowflake_error(two_arg) from two_arg
+        try:
+            return db.call("CALL CODEGEN.GENERATE_DBT(%s)", (run_id,))
+        except Exception as one_arg:
+            if _is_transition_rejected(one_arg):
+                try:
+                    return _generate_dbt_overlay(db, run_id, payload)
+                except Exception as overlay_exc:
+                    raise _snowflake_error(overlay_exc) from overlay_exc
+            raise _snowflake_error(one_arg) from one_arg
 
 
 @app.get("/api/runs/{run_id}/dbt")
@@ -885,7 +1344,184 @@ def get_dbt(run_id: str, db: Db = Depends(current_db)):
             """,
             (gen[0]["generation_id"],),
         )
-    return {"generation": gen[0] if gen else None, "artifacts": artifacts}
+    extras: dict = {"branch": None, "skills": None, "workspace": None}
+    for art in artifacts:
+        path = art.get("file_path")
+        if path not in {"release/branch.json", "release/skills.json", "release/workspace.json"}:
+            continue
+        key = path.split("/")[-1].split(".")[0]
+        try:
+            extras[key] = json.loads(art.get("content") or "{}")
+        except ValueError:
+            extras[key] = None
+    return {"generation": gen[0] if gen else None, "artifacts": artifacts, **extras}
+
+
+def _quote_fqn(name: str) -> str:
+    """Quote hyphenated Snowflake identifiers so ALTER/SHOW/LIST accept DBT-DEMO."""
+    ident = re.compile(r"^[A-Za-z_][A-Za-z0-9_$]*$")
+    quoted_ok = re.compile(r"^[A-Za-z0-9_$-]+$")
+    parts = []
+    for raw in (name or "").split("."):
+        part = raw.strip()
+        if not part:
+            continue
+        if part.startswith('"') and part.endswith('"') and len(part) >= 3:
+            inner = part[1:-1]
+            if '"' in inner or not quoted_ok.match(inner):
+                raise ValueError(f"unsafe identifier: {name}")
+            parts.append(f'"{inner}"')
+        elif ident.match(part):
+            parts.append(part)
+        elif quoted_ok.match(part):
+            parts.append(f'"{part}"')
+        else:
+            raise ValueError(f"unsafe identifier: {name}")
+    if not parts:
+        raise ValueError("missing object name")
+    return ".".join(parts)
+
+
+@app.get("/api/runs/{run_id}/dbt/branches")
+def get_dbt_branches(run_id: str, repo: str, fetch: bool = True, db: Db = Depends(current_db)):
+    from services.dbt.workspace import latest_branch, parse_git_branches, parse_listed_branches
+
+    if not (repo or "").strip():
+        raise HTTPException(400, "Pick a Snowflake GIT REPOSITORY first.")
+    empty = {
+        "run_id": run_id, "repo": repo, "fetched": False, "fetch_warning": "",
+        "branches": [], "latest": "main",
+    }
+    try:
+        repo_sql = _quote_fqn(repo)
+    except ValueError as exc:
+        return {**empty, "fetch_warning": str(exc)}
+
+    warning = ""
+    fetched = False
+    if fetch:
+        try:
+            db.execute(f"ALTER GIT REPOSITORY {repo_sql} FETCH")
+            fetched = True
+        except Exception as exc:
+            warning = str(exc)[:400]
+    branches: list = []
+    for sql in (
+        f"SHOW GIT BRANCHES IN GIT REPOSITORY {repo_sql}",
+        f"SHOW GIT BRANCHES IN {repo_sql}",
+    ):
+        try:
+            branches = parse_git_branches(db.query(sql) or [])
+            if branches:
+                break
+        except Exception as exc:
+            warning = warning or str(exc)[:400]
+    if not branches:
+        try:
+            branches = parse_listed_branches(db.query(f"LIST @{repo_sql}/branches/") or [])
+        except Exception as exc:
+            warning = warning or str(exc)[:400]
+    return {
+        "run_id": run_id,
+        "repo": repo_sql,
+        "fetched": fetched,
+        "fetch_warning": warning,
+        "branches": branches,
+        "latest": latest_branch(branches),
+    }
+
+
+@app.get("/api/runs/{run_id}/dbt/workspace")
+def get_dbt_workspace(run_id: str, db: Db = Depends(current_db)):
+    from services.dbt.workspace import discover
+    from services.knowledge.usage import STAGE_SKILLS
+
+    workspace = discover(lambda sql: db.query(sql))
+    try:
+        skills = db.query(
+            """
+            SELECT SKILL_NAME, VERSION, DESCRIPTION, SKILL_TYPE
+              FROM KNOWLEDGE.SKILL_REGISTRY
+             WHERE IS_CURRENT AND STATUS = 'ACTIVE'
+               AND UPPER(REPLACE(SKILL_NAME, '_', '-')) IN ('DBT-ONBOARD-SOURCE', 'SILVER-MODEL', 'GDP-DOMAIN-SKILL')
+             ORDER BY SKILL_NAME
+            """,
+        )
+    except Exception:
+        skills = []
+    if not skills:
+        skills = [{"skill_name": n, "version": None, "description": "", "skill_type": "DBT"}
+                  for n in STAGE_SKILLS["DBT"]]
+    from services.common.models import discover_models
+    models = discover_models(lambda sql: db.query(sql))
+    return {"run_id": run_id, "skills": skills, "models": models["models"],
+            "default_model": models["default"], **workspace}
+
+
+@app.post("/api/runs/{run_id}/dbt/enhance")
+def enhance_dbt(run_id: str, body: DbtEnhance, db: Db = Depends(current_db)):
+    import hashlib
+    from services.dbt.enhance import enhance_file
+
+    gen = db.query(
+        """
+        SELECT GENERATION_ID FROM CODEGEN.DBT_GENERATION_REGISTRY
+         WHERE RUN_ID = %s ORDER BY GENERATION_VERSION DESC LIMIT 1
+        """,
+        (run_id,),
+    )
+    if not gen:
+        raise HTTPException(400, "Generate dbt first, then enhance a file.")
+    generation_id = gen[0]["generation_id"]
+    path = body.file_path.strip()
+    if body.apply:
+        if not (body.content or "").strip():
+            raise HTTPException(400, "Apply needs the previewed file content.")
+        content = body.content
+        sha = hashlib.sha256(content.encode("utf-8")).hexdigest()
+        db.execute(
+            "UPDATE CODEGEN.GENERATED_ARTIFACT SET CONTENT = %s, CONTENT_SHA256 = %s "
+            "WHERE GENERATION_ID = %s AND FILE_PATH = %s",
+            (content, sha, generation_id, path),
+        )
+        return {"applied": True, "file_path": path, "content": content}
+
+    rows = db.query(
+        "SELECT CONTENT FROM CODEGEN.GENERATED_ARTIFACT WHERE GENERATION_ID = %s AND FILE_PATH = %s",
+        (generation_id, path),
+    )
+    if not rows:
+        raise HTTPException(404, f"No generated file {path}")
+    if not (body.prompt or "").strip():
+        raise HTTPException(400, "Describe the change you want Cortex to make.")
+    try:
+        sttm = db.query(
+            """
+            SELECT L.TARGET_COLUMN, L.SOURCE_TABLE, L.SOURCE_COLUMN, L.TRANSFORMATION
+              FROM CONTRACT.STTM_LINE L
+              JOIN CONTRACT.STTM_REGISTRY S ON S.STTM_ID = L.STTM_ID
+             WHERE S.RUN_ID = %s AND S.STATUS IN ('REVIEW', 'APPROVED')
+             ORDER BY S.STTM_VERSION DESC, L.TARGET_COLUMN LIMIT 40
+            """,
+            (run_id,),
+        )
+    except Exception:
+        sttm = []
+    context = "\n".join(
+        f"{r.get('source_table')}.{r.get('source_column')} -> {r.get('target_column')}: {r.get('transformation') or ''}"
+        for r in sttm
+    )
+    try:
+        return enhance_file(
+            lambda sql, params=(): db.query(sql, params),
+            path,
+            rows[0]["content"] or "",
+            body.prompt.strip(),
+            model=body.model,
+            context=context,
+        )
+    except Exception as exc:
+        raise _snowflake_error(exc) from exc
 
 
 @app.post("/api/runs/{run_id}/validation")

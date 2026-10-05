@@ -4,6 +4,8 @@ import { StageAction } from "@/components/stage-action";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { generateSoda } from "../pipeline-actions";
 import { SodaBoard } from "./soda-board";
+import { SodaGate } from "./soda-gate";
+import type { SttmLine } from "../sttm/sttm-board";
 
 type SodaPayload = {
   checks: {
@@ -17,28 +19,28 @@ type SodaPayload = {
 };
 
 export default async function SodaPage({ params }: { params: { runId: string } }) {
-  const [state, soda] = await Promise.all([
+  const [state, soda, contract] = await Promise.all([
     getRun(params.runId),
     api<SodaPayload>(`/api/runs/${params.runId}/soda`),
+    api<{ lines: SttmLine[] }>(`/api/runs/${params.runId}/sttm`).catch(() => ({ lines: [] })),
   ]);
-  const canGenerate = ["STTM_APPROVED", "SODA_PENDING"].includes(state.current_state);
-  const canImport = ["STTM_APPROVED", "SODA_PENDING", "SODA_REVIEW"].includes(state.current_state);
-  const canReview = state.current_state === "SODA_REVIEW";
+  const canGenerate = ["STTM_APPROVED", "SODA_PENDING", "SODA_REVIEW", "DBT_PENDING", "DBT_GENERATING"].includes(state.current_state);
+  const canImport = ["STTM_APPROVED", "SODA_PENDING", "SODA_REVIEW", "SODA_APPROVED", "DBT_PENDING", "DBT_GENERATING", "VALIDATION_PENDING"].includes(state.current_state);
+  const canReview = ["SODA_REVIEW", "SODA_PENDING", "STTM_APPROVED", "DBT_PENDING", "DBT_GENERATING", "VALIDATION_PENDING", "VALIDATION_FAILED"].includes(state.current_state);
   return (
     <StageGate state={state} stage="SODA">
       <Card>
         <CardHeader>
-          <CardTitle>Soda checks</CardTitle>
+          <CardTitle>Data Quality</CardTitle>
           <CardDescription>
-            Checks come from the approved STTM plus the client brief. Cortex writes official SodaCL
-            — missing, validity, uniqueness, freshness, schema — and you confirm each one against
-            the business need. Feedback becomes a Soda pattern for the next run.
+            Checks lineage starts at the approved STTM, then the client brief. Cortex writes official
+            SodaCL. You confirm each check. Approving a check is not the pack gate.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           {canGenerate && (
             <StageAction
-              label="Generate Soda checks"
+              label="Generate Data Quality checks"
               pendingLabel="Building SodaCL from the STTM and client brief…"
               action={generateSoda.bind(null, params.runId)}
             />
@@ -48,11 +50,20 @@ export default async function SodaPage({ params }: { params: { runId: string } }
               {soda.status.approved} approved · {soda.status.proposed} still to confirm · {soda.status.rejected} rejected
             </p>
           )}
+          <SodaGate
+            runId={params.runId}
+            currentState={state.current_state}
+            complete={soda.status.total > 0 && soda.status.proposed === 0}
+            proposed={soda.status.proposed}
+            approved={soda.status.approved}
+            rejected={soda.status.rejected}
+          />
           <SodaBoard
             runId={params.runId}
             checks={soda.checks}
             yaml={soda.yaml}
             brief={soda.brief}
+            sttmLines={contract.lines}
             canImport={canImport}
             canReview={canReview}
           />

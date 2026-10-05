@@ -2,12 +2,14 @@ import { api, getRun } from "@/lib/api";
 import { StageGate } from "@/components/stage-gate";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { RunConsole } from "../console";
+import { DbtStudio } from "../dbt/dbt-studio";
+import type { DbtArtifact, DbtGeneration } from "../dbt/dbt-types";
 
 export default async function ReviewPage({ params }: { params: { runId: string } }) {
   const [state, dbt, validation] = await Promise.all([
     getRun(params.runId),
-    api<{ generation: { generation_status: string; files_generated: number } | null;
-          artifacts: { artifact_id: string; file_path: string; content: string; artifact_type: string }[];
+    api<{ generation: DbtGeneration | null; artifacts: DbtArtifact[];
+          branch: { base_branch?: string; cut_branch?: string; repo?: string; instruction?: string } | null;
         }>(`/api/runs/${params.runId}/dbt`),
     api<{ runs: { validation_id: string; validation_type: string; status: string; error_count: number }[] }>(
       `/api/runs/${params.runId}/validation`,
@@ -19,15 +21,19 @@ export default async function ReviewPage({ params }: { params: { runId: string }
         <CardHeader>
           <CardTitle>Code review</CardTitle>
           <CardDescription>
-            Approve the generated project to complete Phase 1. Approval records the reviewer and does not deploy,
-            merge a PR, or enable a pipeline.
+            Review the generated dbt project and the branch it should be cut from. Approval records the
+            reviewer and does not deploy, merge a PR, or enable a pipeline.
           </CardDescription>
         </CardHeader>
         <CardContent className="text-sm">
-          {dbt.generation
-            ? `${dbt.generation.files_generated} files · ${dbt.generation.generation_status}`
-            : "No generation on this run yet."}
-          <ul className="mt-2 list-disc pl-5 text-muted-foreground">
+          {dbt.branch && (
+            <p className="mb-2">
+              Cut <span className="font-mono">{dbt.branch.cut_branch}</span> from{" "}
+              <span className="font-mono">{dbt.branch.base_branch}</span>
+              {dbt.branch.repo ? ` in ${dbt.branch.repo}` : ""}.
+            </p>
+          )}
+          <ul className="list-disc pl-5 text-muted-foreground">
             {validation.runs.filter((r) => r.validation_type !== "SUMMARY").map((r) => (
               <li key={r.validation_id}>{r.validation_type}: {r.status} ({r.error_count} errors)</li>
             ))}
@@ -35,12 +41,15 @@ export default async function ReviewPage({ params }: { params: { runId: string }
         </CardContent>
       </Card>
       <RunConsole state={state} />
-      {dbt.artifacts.map((a) => (
-        <Card key={a.artifact_id}>
-          <CardHeader><CardTitle className="font-mono text-sm">{a.file_path}</CardTitle></CardHeader>
-          <CardContent><pre className="max-h-80 overflow-auto rounded-md bg-muted p-3 text-xs">{a.content}</pre></CardContent>
-        </Card>
-      ))}
+      <DbtStudio
+        runId={params.runId}
+        runName={state.run.run_name}
+        domainName={state.run.domain_name}
+        canGenerate={false}
+        generation={dbt.generation}
+        artifacts={dbt.artifacts}
+        branch={dbt.branch}
+      />
     </StageGate>
   );
 }

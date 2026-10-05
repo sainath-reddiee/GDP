@@ -3,11 +3,27 @@ import { Suspense, type ReactNode } from "react";
 import { getRun } from "@/lib/api";
 import { StageRail } from "@/components/stage-rail";
 import { Badge } from "@/components/ui/badge";
+import { displayDomain, isHiddenTarget } from "@/lib/catalog-display";
 import RunLoading from "./loading";
+
+function runTargetLabel(model: string | null | undefined) {
+  if (!model) return null;
+  const parts = model.split(".");
+  const row = {
+    fqn: model,
+    target_database: parts[0],
+    target_schema: parts[1],
+    target_table: parts[2] || parts[parts.length - 1],
+  };
+  if (isHiddenTarget(row)) return null;
+  return parts.length >= 3 ? parts[2] : model;
+}
 
 async function RunShell({ runId, children }: { runId: string; children: ReactNode }) {
   const state = await getRun(runId);
   const tone = state.status === "FAILED" ? "destructive" : state.status === "COMPLETED" ? "success" : "secondary";
+  const targetLabel = runTargetLabel(state.run.target_model);
+  const packLabel = displayDomain(state.run.domain_name);
   return (
     <div>
       <div className="mb-6 flex flex-wrap items-center gap-2.5">
@@ -15,10 +31,10 @@ async function RunShell({ runId, children }: { runId: string; children: ReactNod
         <Badge variant={tone}>{state.status}</Badge>
         <Badge variant="outline">{state.current_state}</Badge>
         <span className="text-sm text-muted-foreground">
-          {state.run.target_model ?? "No target"} · {state.run.environment}
+          {targetLabel ? `${targetLabel} · ` : ""}{state.run.environment}
         </span>
         <Link href={`/runs/${runId}/domain`} className="text-sm font-medium text-primary hover:underline">
-          Knowledge pack{state.run.domain_name ? `: ${state.run.domain_name}` : ""}
+          Knowledge pack{packLabel ? `: ${packLabel}` : ""}
         </Link>
         <Link href={`/runs/${runId}/audit`} className="ml-auto text-sm font-medium text-primary hover:underline">
           Audit trail

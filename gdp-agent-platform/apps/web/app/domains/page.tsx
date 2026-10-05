@@ -1,6 +1,7 @@
 import { api } from "@/lib/api";
 import { Card } from "@/components/ui/card";
 import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
+import { displayDomain } from "@/lib/catalog-display";
 
 type Domain = {
   domain_id: string; domain_name: string; description: string | null; owner: string | null;
@@ -18,12 +19,12 @@ export default async function Domains() {
           <TBody>
             {domains.map((d) => (
               <TR key={d.domain_id}>
-                <TD><div className="font-medium">{d.domain_name}</div><div className="text-muted-foreground">{d.description}</div></TD>
-                <TD>{d.owner ?? "-"}</TD><TD>{d.knowledge_items}</TD><TD>{d.target_tables}</TD><TD>{d.version}</TD>
+                <TD><div className="font-medium">{displayDomain(d.domain_name) || "Default pack"}</div><div className="text-muted-foreground">{(d.description || "").replace(/Global Data Platform\s*/i, "").replace(/\bGDP\b/g, "").trim() || "—"}</div></TD>
+                <TD>{d.owner && !/GDP/i.test(d.owner) ? d.owner : "—"}</TD><TD>{d.knowledge_items}</TD><TD>{d.target_tables}</TD><TD>{d.version}</TD>
               </TR>
             ))}
             {domains.length === 0 && (
-              <TR><TD colSpan={5} className="text-muted-foreground">No domains registered yet. The GDP domain pack is seeded in build phase 5.</TD></TR>
+              <TR><TD colSpan={5} className="text-muted-foreground">No domains registered yet. A domain pack is seeded in build phase 5.</TD></TR>
             )}
           </TBody>
         </Table>

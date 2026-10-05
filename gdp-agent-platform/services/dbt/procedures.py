@@ -1,4 +1,4 @@
-"""CODEGEN.GENERATE_DBT: SODA_APPROVED -> DBT_PENDING -> DBT_GENERATING -> VALIDATION_PENDING."""
+"""CODEGEN.GENERATE_DBT: runs from the approved STTM in parallel with Soda."""
 
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ from services.common.audit import tool_call
 from services.common.sql import clip, insert_rows, rows, scalar, variant
 from services.common.stage import Stage
 from services.dbt.project import build
+from services.dbt.workspace import create_dbt_project, fetch_branch_files, merge_skeleton, origin_allowed, push_branch
 from services.knowledge.procedures import current_knowledge_version, load_skill
 from services.knowledge.usage import STAGE_SKILLS, use_skills
 from services.soda.expectations import render_yaml
@@ -56,10 +57,94 @@ def _put_files(session, stage_root: str, files: Dict[str, str]) -> None:
         shutil.rmtree(tmp, ignore_errors=True)
 
 
-def generate_dbt(session, run_id: str) -> Dict[str, Any]:
+POST_STTM = (
+    "STTM_APPROVED", "SODA_PENDING", "SODA_REVIEW", "SODA_APPROVED",
+    "DBT_PENDING", "DBT_GENERATING",
+    "VALIDATION_PENDING", "VALIDATION_RUNNING", "VALIDATION_PASSED", "VALIDATION_FAILED",
+    "DBT_REVIEW",
+)
+
+
+def merge_branch_plan(payload: Dict[str, Any], prior: Dict[str, Any], run_name: str, run_id: str) -> Dict[str, Any]:
+    """Merge the request body over the last stored plan. Empty/null fields do not wipe prior values."""
+    def pick(*keys: str, default: str = "") -> str:
+        for src in (payload, prior):
+            for key in keys:
+                value = src.get(key)
+                if value is not None and str(value).strip():
+                    return str(value).strip()
+        return default
+
+    def flag(key: str, default: bool) -> bool:
+        for src in (payload, prior):
+            if key in src and src[key] is not None:
+                return bool(src[key])
+        return default
+
+    slug = "".join(c.lower() if c.isalnum() else "-" for c in (run_name or run_id)[:40]).strip("-") or "run"
+    origin = pick("origin", "repo")
+    return {
+        "base_branch": pick("base_branch", default="main") or "main",
+        "cut_branch": pick("cut_branch", default=f"feat/gdp-{slug}"),
+        "repo": pick("repo", "origin"),
+        "origin": origin,
+        "git_repository": pick("git_repository"),
+        "api_integration": pick("api_integration"),
+        "dbt_project": pick("dbt_project"),
+        "push": flag("push", False),
+        "fetch_skeleton": flag("fetch_skeleton", True),
+        "allowed_prefixes": payload.get("allowed_prefixes") or prior.get("allowed_prefixes") or [],
+    }
+
+
+def _stored_plan(session, run_id: str) -> Dict[str, Any]:
+    stored = rows(session, """SELECT CONTENT_JSON FROM KNOWLEDGE.DOMAIN_KNOWLEDGE
+                              WHERE IS_CURRENT AND SOURCE_REFERENCE = ?""", [f"dbt.branch.{run_id}"])
+    return variant(stored[0]["CONTENT_JSON"]) if stored else {}
+
+
+def _branch_plan(session, run_id: str, payload: Dict[str, Any], run_name: str) -> Dict[str, Any]:
+    return merge_branch_plan(payload or {}, _stored_plan(session, run_id), run_name, run_id)
+
+
+def _store_branch(session, run_id: str, domain_id: str, plan: Dict[str, str], instruction: str) -> None:
+    if not domain_id:
+        return
+    ref = f"dbt.branch.{run_id}"
+    session.sql("""UPDATE KNOWLEDGE.DOMAIN_KNOWLEDGE SET IS_CURRENT = FALSE, STATUS = 'RETIRED'
+                   WHERE SOURCE_REFERENCE = ? AND IS_CURRENT""", params=[ref]).collect()
+    version = (scalar(session, "SELECT MAX(VERSION) FROM KNOWLEDGE.DOMAIN_KNOWLEDGE WHERE SOURCE_REFERENCE = ?",
+                      [ref]) or 0) + 1
+    insert_rows(session, "KNOWLEDGE.DOMAIN_KNOWLEDGE",
+                ["KNOWLEDGE_ID", "DOMAIN_ID", "KNOWLEDGE_TYPE", "TITLE", "CONTENT", "CONTENT_JSON",
+                 "TAGS", "SOURCE_REFERENCE", "STATUS", "VERSION", "IS_CURRENT", "CREATED_BY"],
+                ["?", "?", "'TRANSFORMATION_RULE'", "?", "?", "PARSE_JSON(?)", "PARSE_JSON(?)", "?",
+                 "'ACTIVE'", "?::NUMBER", "TRUE", "CURRENT_USER()"],
+                [[str(uuid.uuid4()), domain_id, f"dbt branch plan {run_id}"[:500],
+                  clip(instruction, 8000), {**plan, "run_id": run_id},
+                  ["DBT", "BRANCH", "RELEASE"], ref, version]])
+
+
+def generate_dbt_simple(session, run_id: str) -> Dict[str, Any]:
+    """One-arg Snowflake signature: reuse the last persisted branch plan."""
+    return generate_dbt(session, run_id, json.dumps(_stored_plan(session, run_id) or {}))
+
+
+def generate_dbt(session, run_id: str, payload_json: str = "{}") -> Dict[str, Any]:
     stage = Stage(session, run_id)
-    stage.require("SODA_APPROVED", "DBT_PENDING")
-    stage.walk(["SODA_APPROVED", "DBT_PENDING", "DBT_GENERATING"], "dbt generation started")
+    stage.require(*POST_STTM)
+    payload = json.loads(payload_json or "{}")
+    walked = False
+    if stage.state in ("STTM_APPROVED", "DBT_PENDING", "SODA_APPROVED"):
+        try:
+            if stage.state == "STTM_APPROVED":
+                stage.move("DBT_PENDING", "dbt generation started")
+            if stage.state == "SODA_APPROVED":
+                stage.move("DBT_PENDING", "dbt generation started")
+            stage.walk(["DBT_PENDING", "DBT_GENERATING"], "dbt generation started")
+            walked = True
+        except Exception:
+            walked = False
     with tool_call(session, run_id, "generate_dbt", {"run_id": run_id}) as call:
         try:
             use_skills(session, STAGE_SKILLS["DBT"])
@@ -90,12 +175,90 @@ def generate_dbt(session, run_id: str) -> Dict[str, Any]:
                                              WHERE R.RUN_ID = ?""", [run_id]) or "SOURCE"
             files = build({"sttm_id": sttm["STTM_ID"], "table_design": design, "lines": lines}, _macros(session), soda_yaml,
                           _landing_tables(session, run_id), source_name)
+            plan = _branch_plan(session, run_id, payload, stage.run.get("RUN_NAME") or "")
+            skill_names = STAGE_SKILLS["DBT"]
+            skill_meta = []
+            for name in skill_names:
+                try:
+                    loaded = load_skill(session, name)
+                    skill_meta.append({"name": loaded.get("skill_name") or name,
+                                       "version": loaded.get("version"),
+                                       "description": (loaded.get("description") or "")[:240]})
+                except Exception:
+                    skill_meta.append({"name": name, "version": None, "description": ""})
+            skeleton: Dict[str, str] = {}
+            if plan.get("fetch_skeleton") and plan.get("git_repository"):
+                try:
+                    skeleton = fetch_branch_files(session, plan["git_repository"], plan["base_branch"])
+                except Exception as exc:
+                    plan["skeleton_error"] = clip(exc, 400)
+            if skeleton:
+                files = merge_skeleton(skeleton, files)
+                plan["skeleton_files"] = len(skeleton)
+            prefixes = payload.get("allowed_prefixes") or []
+            if plan.get("origin") and prefixes and not origin_allowed(plan["origin"], prefixes):
+                raise AssertionError(
+                    f"origin {plan['origin']} is not in the API integration allowed prefixes"
+                )
+            instruction = (
+                f"Cut `{plan['cut_branch']}` from `{plan['base_branch']}`"
+                + (f" in {plan.get('origin') or plan['repo']}" if (plan.get("origin") or plan["repo"]) else "")
+                + " using DBT-ONBOARD-SOURCE on the approved STTM. "
+                + "Review the models, then push the cut branch into the Snowflake git repository."
+            )
+            files["release/branch.json"] = json.dumps({**plan, "instruction": instruction}, indent=2)
+            files["release/skills.json"] = json.dumps({
+                "applied": skill_meta,
+                "domain_id": stage.run.get("DOMAIN_ID"),
+                "source": "DBT-ONBOARD-SOURCE + STTM + domain skill macros",
+            }, indent=2)
             version = (scalar(session, "SELECT MAX(GENERATION_VERSION) FROM CODEGEN.DBT_GENERATION_REGISTRY WHERE RUN_ID = ?",
                               [run_id]) or 0) + 1
             generation_id = str(uuid.uuid4())
             kv = current_knowledge_version(session, stage.run["DOMAIN_ID"])
             stage_path = f"CODEGEN.DBT_STAGE/{run_id}/v{version}"
             _put_files(session, stage_path, files)
+            workspace: Dict[str, Any] = {
+                "stage_path": f"@{stage_path}",
+                "pull_request": {
+                    "created": False,
+                    "reason": (
+                        "GDP copies files onto the Snowflake git branch with COPY FILES. "
+                        "It does not open a GitHub or GitLab pull request."
+                    ),
+                },
+            }
+            project_name = plan.get("dbt_project") or (
+                f"{scalar(session, 'SELECT CURRENT_DATABASE()')}.CODEGEN.GDP_{run_id.replace('-', '')[:18]}_V{version}"
+            )
+            try:
+                workspace["dbt_project"] = create_dbt_project(
+                    session, project_name, f"@{stage_path}", f"GDP run {run_id} compile-only",
+                )
+            except Exception as exc:
+                workspace["dbt_project"] = {"status": "SKIPPED", "detail": clip(exc, 400)}
+            if plan.get("push") and plan.get("git_repository"):
+                workspace["push"] = push_branch(session, plan["git_repository"], plan["cut_branch"], f"@{stage_path}")
+            else:
+                workspace["push"] = {"status": "NOT_REQUESTED"}
+            workspace["lineage"] = {
+                "sttm_id": sttm["STTM_ID"],
+                "skills": skill_names,
+                "skeleton": {
+                    "requested": bool(plan.get("fetch_skeleton")),
+                    "files": plan.get("skeleton_files") or 0,
+                    "branch": plan.get("base_branch"),
+                    "error": plan.get("skeleton_error"),
+                },
+                "stage": f"@{stage_path}",
+                "files": len(files),
+                "dbt_project": workspace.get("dbt_project"),
+                "git_copy": workspace.get("push"),
+                "pull_request": workspace["pull_request"],
+            }
+            files["release/workspace.json"] = json.dumps(workspace, indent=2)
+            _put_files(session, stage_path, {"release/workspace.json": files["release/workspace.json"]})
+            plan["workspace"] = workspace
 
             def write(_event_id: str) -> None:
                 session.sql("UPDATE CODEGEN.DBT_GENERATION_REGISTRY SET GENERATION_STATUS = 'SUPERSEDED' "
@@ -119,15 +282,21 @@ def generate_dbt(session, run_id: str) -> Dict[str, Any]:
                             [[str(uuid.uuid4()), generation_id, run_id, _artifact_type(path), path, content,
                               hashlib.sha256(content.encode("utf-8")).hexdigest()]
                              for path, content in files.items()])
+                _store_branch(session, run_id, stage.run.get("DOMAIN_ID") or sttm.get("DOMAIN_ID"), plan, instruction)
 
-            call.summary = f"dbt v{version}: {len(files)} files on @{stage_path}"
+            call.summary = f"dbt v{version}: {len(files)} files on @{stage_path}; push={workspace['push'].get('status')}"
         except Exception as exc:
             call.status, call.error = "FAILED", clip(exc)
-            stage.fail(exc)
-            return {"state": stage.payload()}
-    stage.move("VALIDATION_PENDING", call.summary,
-               {"generation_id": generation_id, "files": list(files)}, in_transaction=write)
-    return {"generation_id": generation_id, "version": version, "files": list(files), "state": stage.payload()}
+            if walked:
+                stage.fail(exc)
+            return {"state": stage.payload(), "error": clip(exc)}
+    if walked:
+        stage.move("VALIDATION_PENDING", call.summary,
+                   {"generation_id": generation_id, "files": list(files), "branch": plan}, in_transaction=write)
+    else:
+        write("")
+    return {"generation_id": generation_id, "version": version, "files": list(files),
+            "branch": plan, "workspace": plan.get("workspace"), "state": stage.payload()}
 
 
 def _artifact_type(path: str) -> str:
@@ -143,4 +312,6 @@ def _artifact_type(path: str) -> str:
         return "SODA_CHECKS"
     if path.startswith("mappings/"):
         return "STTM_EXPORT"
+    if path.startswith("release/"):
+        return "RELEASE_PLAN"
     return "DBT_MODEL"

@@ -31,10 +31,12 @@ const NEXT_STEP: Record<string, { slug: string; label: string }> = {
   DOMAIN_IDENTIFIED: { slug: "mapping", label: "Generate mapping candidates" },
   MAPPING_REVIEW: { slug: "mapping", label: "Approve the mapping pack" },
   MAPPING_APPROVED: { slug: "sttm", label: "Generate the STTM" },
-  STTM_REVIEW: { slug: "sttm", label: "Approve the STTM and continue to Soda" },
-  STTM_APPROVED: { slug: "soda", label: "Generate Soda checks" },
-  SODA_REVIEW: { slug: "soda", label: "Review Soda checks" },
-  SODA_APPROVED: { slug: "dbt", label: "Generate dbt" },
+  STTM_REVIEW: { slug: "sttm", label: "Approve the STTM" },
+  STTM_APPROVED: { slug: "soda", label: "Start Data Quality or dbt" },
+  SODA_REVIEW: { slug: "soda", label: "Approve the Data Quality pack" },
+  SODA_APPROVED: { slug: "dbt", label: "Generate or review dbt" },
+  DBT_PENDING: { slug: "dbt", label: "Generate dbt" },
+  DBT_GENERATING: { slug: "dbt", label: "Review generated dbt" },
   VALIDATION_PENDING: { slug: "validation", label: "Run validation" },
   VALIDATION_FAILED: { slug: "validation", label: "Inspect validation" },
   DBT_REVIEW: { slug: "review", label: "Review generated code" },
@@ -67,7 +69,12 @@ export function RunConsole({ state }: { state: RunState }) {
         <CardContent>
           {state.failure_reason && <p className="mb-3 text-sm text-destructive">Failure: {state.failure_reason}</p>}
           {error && <p role="alert" className="mb-3 text-sm text-destructive">{error}</p>}
-          {next && (
+          {["STTM_APPROVED", "SODA_PENDING", "SODA_REVIEW"].includes(state.current_state) ? (
+            <div className="mb-3 flex flex-wrap gap-2">
+              <Link href={`/runs/${state.run_id}/soda`} className={buttonVariants()}>Open Data Quality</Link>
+              <Link href={`/runs/${state.run_id}/dbt`} className={buttonVariants({ variant: "outline" })}>Open dbt</Link>
+            </div>
+          ) : next && (
             <Link href={`/runs/${state.run_id}/${next.slug}`} className={buttonVariants({ className: "mb-3" })}>
               Next: {next.label}
             </Link>

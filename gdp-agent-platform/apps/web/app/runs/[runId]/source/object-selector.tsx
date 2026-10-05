@@ -10,9 +10,15 @@ import { validateAccess } from "../source-actions";
 
 const MAX_SELECTED = 50;
 
-export function ObjectSelector({ runId, objects }: { runId: string; objects: SourceOverview["objects"] }) {
+export function ObjectSelector({ runId, objects, planned = [] }: {
+  runId: string; objects: SourceOverview["objects"]; planned?: string[];
+}) {
   const [query, setQuery] = useState("");
-  const [selected, setSelected] = useState<Set<string>>(new Set(objects.filter((o) => o.selected_flag).map((o) => o.object_name)));
+  const [selected, setSelected] = useState<Set<string>>(() => {
+    const fromRun = objects.filter((o) => o.selected_flag).map((o) => o.object_name);
+    const seed = fromRun.length ? fromRun : planned.filter((name) => objects.some((o) => o.object_name === name));
+    return new Set(seed);
+  });
   const visible = useMemo(
     () => objects.filter((o) => o.object_name.toLowerCase().includes(query.toLowerCase())),
     [objects, query],

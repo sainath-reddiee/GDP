@@ -16,7 +16,7 @@ export function SttmGate({
   lineCount: number;
 }) {
   const router = useRouter();
-  const [note, setNote] = useState("STTM matches the approved mappings and is ready for Soda checks.");
+  const [note, setNote] = useState("STTM matches the approved mappings and is ready for Data Quality checks.");
   const [error, setError] = useState("");
   const [pending, start] = useTransition();
 
@@ -25,10 +25,11 @@ export function SttmGate({
       <Card className="border-primary/30">
         <CardHeader>
           <CardTitle>STTM approved</CardTitle>
-          <CardDescription>Soda and dbt generate from this contract in parallel after you start Soda.</CardDescription>
+          <CardDescription>Data Quality and dbt both open from this contract. Run them in either order.</CardDescription>
         </CardHeader>
-        <CardContent>
-          <Button onClick={() => router.push(`/runs/${runId}/soda`)}>Continue to Soda</Button>
+        <CardContent className="flex flex-wrap gap-2">
+          <Button onClick={() => router.push(`/runs/${runId}/soda`)}>Open Data Quality</Button>
+          <Button variant="outline" onClick={() => router.push(`/runs/${runId}/dbt`)}>Open dbt</Button>
         </CardContent>
       </Card>
     );
@@ -41,8 +42,7 @@ export function SttmGate({
       <CardHeader>
         <CardTitle>Approve the STTM</CardTitle>
         <CardDescription>
-          This is the pack gate. Approving moves the run to STTM_APPROVED and unlocks Soda.
-          Refine transforms above first if the SQL still needs a change.
+          This is the pack gate. Approving unlocks Data Quality and dbt in parallel.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">
@@ -62,7 +62,7 @@ export function SttmGate({
           })}
         >
           {pending && <Loader2 className="h-4 w-4 animate-spin" />}
-          {pending ? "Approving STTM…" : "Approve STTM and continue to Soda"}
+          {pending ? "Approving STTM…" : "Approve STTM (opens Data Quality and dbt)"}
         </Button>
       </CardContent>
     </Card>

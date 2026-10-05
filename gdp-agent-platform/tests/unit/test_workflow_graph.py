@@ -57,6 +57,7 @@ def test_happy_path_order(graph):
     for a, b in zip(path, path[1:]):
         t = graph.find(a, b)
         assert t is not None and t.enabled, f"missing {a}->{b}"
+    assert graph.find("STTM_APPROVED", "DBT_PENDING") is not None
 
 
 def test_human_gates_are_exactly_the_review_approvals(graph):

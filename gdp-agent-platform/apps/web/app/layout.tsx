@@ -5,7 +5,7 @@ import { AUTH_MODE, DEV_COOKIE, SESSION_COOKIE, whoami } from "@/lib/api";
 import { NavProgress } from "@/components/nav-progress";
 import { Sidebar } from "@/components/sidebar";
 
-export const metadata = { title: "GDP Engineering Factory" };
+export const metadata = { title: "Agentic pipeline" };
 
 export default async function RootLayout({ children }: { children: ReactNode }) {
   const jar = cookies();

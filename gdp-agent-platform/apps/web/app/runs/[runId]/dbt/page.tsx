@@ -1,57 +1,50 @@
 import { api, getRun } from "@/lib/api";
 import { StageGate } from "@/components/stage-gate";
-import { StageAction } from "@/components/stage-action";
-import { Badge } from "@/components/ui/badge";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { generateDbt } from "../pipeline-actions";
+import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { DbtStudio } from "./dbt-studio";
+import type { DbtArtifact, DbtGeneration, DbtWorkspace } from "./dbt-types";
+
+const CAN_GENERATE = new Set([
+  "STTM_APPROVED", "SODA_PENDING", "SODA_REVIEW", "SODA_APPROVED",
+  "DBT_PENDING", "DBT_GENERATING", "VALIDATION_PENDING", "VALIDATION_FAILED",
+]);
 
 export default async function DbtPage({ params }: { params: { runId: string } }) {
-  const [state, { generation, artifacts }] = await Promise.all([
+  const [state, data, workspace] = await Promise.all([
     getRun(params.runId),
-    api<{ generation: { generation_id: string; generation_version: number; generation_status: string;
-                        files_generated: number; stage_path: string; model_version: string } | null;
-          artifacts: { artifact_id: string; artifact_type: string; file_path: string; content: string }[];
+    api<{ generation: DbtGeneration | null; artifacts: DbtArtifact[];
+          branch: Record<string, unknown> | null;
+          skills: { applied?: { name: string; version?: string; description?: string }[] } | null;
+          workspace: Record<string, unknown> | null;
         }>(`/api/runs/${params.runId}/dbt`),
+    api<DbtWorkspace>(`/api/runs/${params.runId}/dbt/workspace`).catch(() => ({
+      integrations: [], git_repositories: [], dbt_projects: [], skills: [], models: [], warnings: ["Could not list Snowflake git objects"],
+    })),
   ]);
-  const canGenerate = ["SODA_APPROVED", "DBT_PENDING"].includes(state.current_state);
   return (
     <StageGate state={state} stage="DBT">
       <Card>
         <CardHeader>
-          <CardTitle>dbt generation</CardTitle>
+          <CardTitle>dbt workspace</CardTitle>
           <CardDescription>
-            A compile-only project is written from the approved STTM and staged. Phase 1 does not run models against
-            production and does not open a pull request.
+            Parallel to Data Quality. Models come from the approved STTM. Optional git copy uses
+            COPY FILES onto a Snowflake branch path — it does not open a pull request.
+            CREATE DBT PROJECT stays WRITEBACK=FALSE. Enhance any file with a Cortex model from this account.
           </CardDescription>
         </CardHeader>
-        <CardContent>
-          {canGenerate && (
-            <StageAction
-              label="Generate dbt project"
-              pendingLabel="Writing dbt files…"
-              action={generateDbt.bind(null, params.runId)}
-            />
-          )}
-          {generation && (
-            <p className="mt-3 text-sm">
-              Version {generation.generation_version}{" "}
-              <Badge variant="outline">{generation.generation_status}</Badge>
-              {" · "}{generation.files_generated} files · {generation.stage_path}
-            </p>
-          )}
-        </CardContent>
       </Card>
-      {artifacts.map((a) => (
-        <Card key={a.artifact_id}>
-          <CardHeader>
-            <CardTitle className="font-mono text-sm">{a.file_path}</CardTitle>
-            <CardDescription>{a.artifact_type}</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <pre className="max-h-96 overflow-auto rounded-md bg-muted p-3 text-xs">{a.content}</pre>
-          </CardContent>
-        </Card>
-      ))}
+      <DbtStudio
+        runId={params.runId}
+        runName={state.run.run_name}
+        domainName={state.run.domain_name}
+        canGenerate={CAN_GENERATE.has(state.current_state)}
+        generation={data.generation}
+        artifacts={data.artifacts}
+        branch={data.branch}
+        appliedSkills={data.skills?.applied ?? []}
+        lastWorkspace={data.workspace}
+        workspace={workspace}
+      />
     </StageGate>
   );
 }

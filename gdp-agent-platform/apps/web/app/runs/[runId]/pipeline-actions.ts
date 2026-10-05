@@ -69,14 +69,95 @@ export async function importSoda(runId: string, payload: { brief?: string; text?
   ));
 }
 
-export async function saveSodaDecisions(runId: string, decisions: Record<string, unknown>[]): Promise<ActionResult> {
+export type SodaSaveResult = {
+  decided: number;
+  skipped: { expectation_id: string; reason: string }[];
+  remaining: string[];
+  complete: boolean;
+};
+
+export async function saveSodaDecisions(runId: string, decisions: Record<string, unknown>[]) {
+  const result = await attemptValue(() =>
+    api<SodaSaveResult>(`/api/runs/${runId}/soda/decisions`, {
+      method: "POST",
+      body: JSON.stringify({ decisions }),
+    }),
+  );
+  if (result.ok) revalidatePath(`/runs/${runId}`, "layout");
+  return result;
+}
+
+export type DbtPlanInput = {
+  base_branch?: string;
+  cut_branch?: string;
+  repo?: string;
+  origin?: string;
+  git_repository?: string;
+  api_integration?: string;
+  dbt_project?: string;
+  allowed_prefixes?: string[];
+  push?: boolean;
+  fetch_skeleton?: boolean;
+};
+
+export type GitBranch = {
+  name: string;
+  commit?: string;
+  last_modified?: string;
+  author?: string;
+  message?: string;
+};
+
+export type GitBranchList = {
+  repo: string;
+  fetched: boolean;
+  fetch_warning?: string;
+  branches: GitBranch[];
+  latest: string;
+};
+
+export async function listDbtBranches(runId: string, repo: string, fetchRemote = true) {
+  const qs = new URLSearchParams({ repo, fetch: fetchRemote ? "true" : "false" });
+  return attemptValue(() => api<GitBranchList>(`/api/runs/${runId}/dbt/branches?${qs}`));
+}
+
+export async function generateDbt(runId: string, plan?: DbtPlanInput): Promise<ActionResult> {
   return after(runId, await attempt(() =>
-    api(`/api/runs/${runId}/soda/decisions`, { method: "POST", body: JSON.stringify({ decisions }) }),
+    api(`/api/runs/${runId}/dbt`, { method: "POST", body: JSON.stringify(plan ?? {}) }),
   ));
 }
 
-export async function generateDbt(runId: string): Promise<ActionResult> {
-  return after(runId, await attempt(() => api(`/api/runs/${runId}/dbt`, { method: "POST" })));
+export type DbtEnhanceResult = {
+  file_path?: string;
+  content: string;
+  rationale?: string;
+  summary?: string;
+  model?: string;
+  applied?: boolean;
+};
+
+export async function previewDbtEnhance(
+  runId: string,
+  payload: { file_path: string; prompt: string; model?: string },
+) {
+  return attemptValue(() =>
+    api<DbtEnhanceResult>(`/api/runs/${runId}/dbt/enhance`, {
+      method: "POST",
+      body: JSON.stringify({ ...payload, apply: false }),
+    }),
+  );
+}
+
+export async function applyDbtEnhance(
+  runId: string,
+  payload: { file_path: string; content: string },
+): Promise<ActionResult> {
+  return after(runId, await attempt(() =>
+    api(`/api/runs/${runId}/dbt/enhance`, {
+      method: "POST",
+      body: JSON.stringify({ ...payload, apply: true }),
+    }),
+  ));
 }
 
 export async function validateDbt(runId: string): Promise<ActionResult> {

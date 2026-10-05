@@ -3,6 +3,7 @@ import { StageGate } from "@/components/stage-gate";
 import { StageAction } from "@/components/stage-action";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { SttmFork } from "@/components/sttm-fork";
 import { generateSttm } from "../pipeline-actions";
 import { SttmBoard, type ProfileCol, type SttmLine } from "./sttm-board";
 import { SttmGate } from "./sttm-gate";
@@ -26,7 +27,8 @@ export default async function SttmPage({ params }: { params: { runId: string } }
           <CardTitle>STTM</CardTitle>
           <CardDescription>
             Table-level contract assembled from approved mappings. Refine a line in natural language — Cortex
-            sees the profile, current SQL, and stored rules — then export the CSV for Soda and dbt.
+            sees the profile, current SQL, and stored rules. After approval the contract fans out into two
+            parallel flows.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -47,6 +49,11 @@ export default async function SttmPage({ params }: { params: { runId: string } }
           )}
         </CardContent>
       </Card>
+      {(state.current_state === "STTM_REVIEW" || state.current_state === "STTM_APPROVED"
+        || state.current_state.startsWith("SODA") || state.current_state.startsWith("DBT")
+        || state.current_state.startsWith("VALIDATION")) && (
+        <SttmFork runId={params.runId} currentState={state.current_state} />
+      )}
       <SttmGate
         runId={params.runId}
         currentState={state.current_state}

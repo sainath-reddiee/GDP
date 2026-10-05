@@ -58,6 +58,7 @@
     {"from": "STTM_REVIEW",        "to": "STTM_PENDING",       "actor": "HUMAN"},
     {"from": "STTM_REVIEW",        "to": "MAPPING_REVIEW",     "actor": "HUMAN"},
     {"from": "STTM_APPROVED",      "to": "SODA_PENDING",       "actor": "SYSTEM"},
+    {"from": "STTM_APPROVED",      "to": "DBT_PENDING",        "actor": "SYSTEM"},
     {"from": "SODA_PENDING",       "to": "SODA_REVIEW",        "actor": "SYSTEM"},
     {"from": "SODA_REVIEW",        "to": "SODA_APPROVED",      "actor": "HUMAN"},
     {"from": "SODA_REVIEW",        "to": "SODA_PENDING",       "actor": "HUMAN"},

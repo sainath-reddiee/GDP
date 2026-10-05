@@ -12,6 +12,7 @@ from services.common.sql import clip, insert_rows, rows, scalar, variant
 from services.common.stage import Stage
 from services.knowledge.usage import STAGE_SKILLS, use_skills
 from services.soda.expectations import from_client, from_sttm, merge_checks, render_yaml, without_rejected
+from services.soda.decisions import DecisionPayloadError, parse_decision_payload, stored_status
 from services.soda.extract import EXTRACT_SCHEMA, extract_prompt, parse_client_document, requirement_from_row
 from services.soda.feedback import pattern as feedback_pattern
 
@@ -134,8 +135,11 @@ def _store(session, run_id: str, sttm: Dict[str, Any], checks: List[Dict[str, An
 
 def generate_soda(session, run_id: str) -> Dict[str, Any]:
     stage = Stage(session, run_id)
-    stage.require("STTM_APPROVED", "SODA_PENDING")
-    stage.walk(["STTM_APPROVED", "SODA_PENDING"], "Soda generation started")
+    stage.require("STTM_APPROVED", "SODA_PENDING", "SODA_REVIEW", "SODA_APPROVED",
+                  "DBT_PENDING", "DBT_GENERATING", "VALIDATION_PENDING", "VALIDATION_RUNNING",
+                  "VALIDATION_PASSED", "VALIDATION_FAILED", "DBT_REVIEW")
+    if stage.state in ("STTM_APPROVED", "SODA_PENDING"):
+        stage.walk(["STTM_APPROVED", "SODA_PENDING"], "Soda generation started")
     version = 0
     with tool_call(session, run_id, "generate_soda", {"run_id": run_id}) as call:
         try:
@@ -179,13 +183,17 @@ def generate_soda(session, run_id: str) -> Dict[str, Any]:
             call.status, call.error = "FAILED", clip(exc)
             stage.fail(exc)
             return {"state": stage.payload()}
-    stage.move("SODA_REVIEW", call.summary, {"count": len(checks)}, in_transaction=write)
+    if stage.state == "SODA_PENDING":
+        stage.move("SODA_REVIEW", call.summary, {"count": len(checks)}, in_transaction=write)
+    else:
+        write("")
     return {"version": version, "count": len(checks), "yaml": yaml_text, "checks": checks, "state": stage.payload()}
 
 
 def import_client_expectations(session, run_id: str, rows_json: str) -> Dict[str, Any]:
     stage = Stage(session, run_id)
-    stage.require("STTM_APPROVED", "SODA_PENDING", "SODA_REVIEW")
+    stage.require("STTM_APPROVED", "SODA_PENDING", "SODA_REVIEW", "SODA_APPROVED",
+                  "DBT_PENDING", "DBT_GENERATING", "VALIDATION_PENDING", "DBT_REVIEW")
     parsed = json.loads(rows_json or "[]")
     if isinstance(parsed, str):
         parsed = parse_client_document(parsed)
@@ -242,34 +250,41 @@ def _store_feedback(session, domain_id: str, item: Dict[str, Any]) -> None:
 
 def save_soda_decisions(session, run_id: str, decisions_json: str) -> Dict[str, Any]:
     stage = Stage(session, run_id)
-    stage.require("SODA_REVIEW")
-    decisions = json.loads(decisions_json or "[]")
-    if isinstance(decisions, dict):
-        decisions = [decisions]
-    assert isinstance(decisions, list) and decisions, "provide at least one Soda decision"
+    stage.require("SODA_REVIEW", "STTM_APPROVED", "SODA_PENDING", "SODA_APPROVED",
+                  "DBT_PENDING", "DBT_GENERATING", "VALIDATION_PENDING", "VALIDATION_RUNNING",
+                  "VALIDATION_PASSED", "VALIDATION_FAILED", "DBT_REVIEW")
+    try:
+        decisions = parse_decision_payload(decisions_json)
+    except DecisionPayloadError as exc:
+        raise AssertionError(str(exc)) from exc
     sttm = _current_sttm(session, run_id)
+    applied = 0
+    skipped: List[Dict[str, str]] = []
     for raw in decisions:
-        expectation_id = raw.get("expectation_id")
-        decision = str(raw.get("decision") or "").upper()
-        assert expectation_id and decision in {"APPROVED", "REJECTED", "MODIFIED"}, \
-            "each decision needs expectation_id and APPROVED | REJECTED | MODIFIED"
+        expectation_id = raw["expectation_id"]
+        decision = raw["decision"]
         found = rows(session, """SELECT * FROM CONTRACT.SODA_EXPECTATION_REGISTRY
                                  WHERE EXPECTATION_ID = ? AND RUN_ID = ? AND IS_CURRENT""",
                      [expectation_id, run_id])
-        assert found, f"unknown expectation {expectation_id}"
+        if not found:
+            raise AssertionError(f"unknown expectation {expectation_id}")
         row = found[0]
+        target = stored_status(decision)
+        if row["STATUS"] == target and decision != "MODIFIED":
+            skipped.append({"expectation_id": expectation_id, "reason": "already_decided"})
+            continue
         definition = variant(raw.get("definition")) or variant(row["CHECK_DEFINITION"]) or {}
         requirement = raw.get("requirement") or row["CLIENT_REQUIREMENT"]
         session.sql("""UPDATE CONTRACT.SODA_EXPECTATION_REGISTRY
                           SET STATUS = ?, CHECK_DEFINITION = PARSE_JSON(?), CLIENT_REQUIREMENT = NULLIF(?, ''),
                               REVIEWED_BY = CURRENT_USER(), REVIEWED_AT = CURRENT_TIMESTAMP()
-                        WHERE EXPECTATION_ID = ?""",
-                    params=[decision if decision != "MODIFIED" else "APPROVED",
-                            json.dumps(definition), clip(requirement), expectation_id]).collect()
+                        WHERE EXPECTATION_ID = ? AND RUN_ID = ? AND IS_CURRENT""",
+                    params=[target, json.dumps(definition), clip(requirement), expectation_id, run_id]).collect()
         _store_feedback(session, sttm["DOMAIN_ID"], feedback_pattern(
             row["TARGET_TABLE"], row["TARGET_COLUMN"], row["CHECK_TYPE"], decision,
             requirement, raw.get("justification"), definition))
+        applied += 1
     remaining = rows(session, """SELECT EXPECTATION_ID FROM CONTRACT.SODA_EXPECTATION_REGISTRY
                                  WHERE RUN_ID = ? AND IS_CURRENT AND STATUS = 'PROPOSED'""", [run_id])
-    return {"decided": len(decisions), "remaining": [r["EXPECTATION_ID"] for r in remaining],
-            "complete": not remaining}
+    return {"decided": applied, "skipped": skipped,
+            "remaining": [r["EXPECTATION_ID"] for r in remaining], "complete": not remaining}

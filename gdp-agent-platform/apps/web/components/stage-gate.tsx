@@ -9,7 +9,11 @@ export function StageGate({ state, stage, children }: { state: RunState; stage: 
   const status = state.stages.find((s) => s.stage === stage)?.status ?? "LOCKED";
   if (status !== "LOCKED") return <>{children}</>;
   const index = STAGES.findIndex((s) => s.stage === stage);
-  const previous = index > 0 ? STAGES[index - 1].label : "the previous stage";
+  const previous = stage === "SODA" || stage === "DBT"
+    ? "the approved STTM"
+    : stage === "VALIDATION"
+      ? "Data Quality or dbt generation"
+      : index > 0 ? STAGES[index - 1].label : "the previous stage";
   return (
     <Card>
       <CardHeader>

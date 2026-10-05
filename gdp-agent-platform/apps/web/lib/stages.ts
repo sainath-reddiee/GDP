@@ -6,7 +6,7 @@ export const STAGES: { slug: string; stage: string; label: string; phase: number
   { slug: "profile", stage: "PROFILING", label: "Profiling", phase: 4 },
   { slug: "mapping", stage: "MAPPING", label: "Mapping", phase: 6 },
   { slug: "sttm", stage: "STTM", label: "STTM", phase: 8 },
-  { slug: "soda", stage: "SODA", label: "Soda", phase: 9 },
+  { slug: "soda", stage: "SODA", label: "Data Quality", phase: 9 },
   { slug: "dbt", stage: "DBT", label: "dbt", phase: 10 },
   { slug: "validation", stage: "VALIDATION", label: "Validation", phase: 11 },
   { slug: "review", stage: "REVIEW", label: "Code review", phase: 12 },

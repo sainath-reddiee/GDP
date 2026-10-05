@@ -18,7 +18,7 @@ const pillars = [
   {
     icon: Database,
     title: "Point at a source and a target that already exist",
-    body: "Onboard from an account database or a mounted Snowflake share. Choose the GDP table you are modelling into — DIM_CUSTOMER, FACT_SALES, or any registered target — instead of inventing a model in a notebook.",
+    body: "Onboard from an account database or a mounted Snowflake share. Choose the silver table you are modelling into, or profile a new source and store the suggestion — instead of inventing a model in a notebook.",
   },
   {
     icon: ScanSearch,
@@ -32,8 +32,8 @@ const pillars = [
   },
   {
     icon: Workflow,
-    title: "From one STTM, Soda and dbt run as separate tracks",
-    body: "Approved columns become the source-to-target contract. That contract fans out: Soda expectations on one track, compile-only dbt on the other. They generate in parallel. Neither waits on the other.",
+    title: "From one STTM, Data Quality and dbt run as separate tracks",
+    body: "Approved columns become the source-to-target contract. That contract fans out: Data Quality expectations on one track, compile-only dbt on the other. They generate in parallel. Neither waits on the other.",
   },
 ];
 
@@ -41,7 +41,7 @@ const principles = [
   {
     icon: ShieldCheck,
     title: "Gates you cannot skip",
-    body: "Mapping and the STTM stop for a person. Soda and dbt each review on their own track after they generate from that contract. The supervisor can recommend the next step. It cannot approve a gate.",
+    body: "Mapping and the STTM stop for a person. Data Quality and dbt each review on their own track after they generate from that contract. The supervisor can recommend the next step. It cannot approve a gate.",
   },
   {
     icon: Sparkles,
@@ -92,7 +92,7 @@ function FactoryFlow() {
             <div aria-hidden className="h-4 w-px bg-white/30" />
             <div className="w-full rounded-lg border border-white/15 bg-white/5 px-3 py-3 text-center">
               <p className="text-[10px] font-semibold uppercase tracking-wide text-white/45">Parallel track</p>
-              <p className="mt-1 text-sm font-semibold text-white">Soda</p>
+              <p className="mt-1 text-sm font-semibold text-white">Data Quality</p>
               <p className="mt-1 text-[11px] leading-relaxed text-white/55">
                 Quality expectations generated from the contract.
               </p>
@@ -141,7 +141,7 @@ export default function LoginPage() {
         }}
       />
       <header className="relative flex items-center justify-between px-6 py-5 lg:px-10">
-        <p className="text-sm font-semibold text-white">GDP Engineering Factory</p>
+        <p className="text-sm font-semibold text-white">Agentic pipeline</p>
         <LoginAction />
       </header>
       <main className="relative mx-auto flex max-w-3xl flex-col gap-10 px-6 pb-16 pt-4 lg:px-10">
@@ -150,10 +150,10 @@ export default function LoginPage() {
             Snowflake-native · Cortex-orchestrated · Human-gated
           </p>
           <h1 className="mt-4 text-4xl font-semibold leading-tight tracking-tight text-white lg:text-[2.6rem]">
-            Onboard a new source onto the GDP model you already run.
+            Onboard a new source onto the Agentic pipeline you already run.
           </h1>
           <p className="mt-4 max-w-2xl text-lg leading-relaxed text-white/85">
-            Profile it, map it, approve the contract — then Soda and dbt generate
+            Profile it, map it, approve the contract — then Data Quality and dbt generate
             from that STTM in parallel.
           </p>
         </div>
@@ -163,7 +163,7 @@ export default function LoginPage() {
           You point the factory at the source tables and the silver target they
           must land on. Tables copy as-is. Profiling builds the evidence. Mapping
           proposes every column. After you approve the source-to-target document,
-          two tracks start from it at the same time: Soda writes the quality
+          two tracks start from it at the same time: Data Quality writes the
           checks, dbt compiles the models. Cortex does the analysis. You sign
           every gate.
         </p>

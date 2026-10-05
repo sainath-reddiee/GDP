@@ -14,16 +14,19 @@ export default async function ValidationPage({ params }: { params: { runId: stri
       warning_count: number; result_json: unknown; started_at: string;
     }[] }>(`/api/runs/${params.runId}/validation`),
   ]);
-  const canRun = ["VALIDATION_PENDING", "VALIDATION_FAILED"].includes(state.current_state);
+  const canRun = [
+    "VALIDATION_PENDING", "VALIDATION_FAILED", "VALIDATION_RUNNING",
+    "SODA_REVIEW", "SODA_APPROVED", "DBT_PENDING", "DBT_GENERATING",
+  ].includes(state.current_state);
   return (
     <StageGate state={state} stage="VALIDATION">
       <Card>
         <CardHeader>
           <CardTitle>Validation</CardTitle>
           <CardDescription>
-            Naming, required columns, STTM consistency, schema.yml and SodaCL are checked in process. dbt compile
-            runs with WRITEBACK=FALSE when dbt project objects are available; if they are not, that check is recorded
-            as ERROR and the deterministic results still decide the stage.
+            Data Quality review and dbt compile run as two tracks. Naming, required columns, STTM
+            consistency, schema.yml and SodaCL are checked here. dbt compile uses WRITEBACK=FALSE.
+            You can run this while Data Quality is still in review.
           </CardDescription>
         </CardHeader>
         <CardContent>

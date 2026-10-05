@@ -95,3 +95,17 @@ def test_stage_rail_order(graph):
     stages = [r["stage"] for r in stage_rail(graph, "CREATED", None)]
     assert stages == ["SOURCE", "ACCESS", "LANDING", "PROFILING", "DOMAIN", "MAPPING",
                       "STTM", "SODA", "DBT", "VALIDATION", "REVIEW"]
+
+
+def test_sttm_approval_opens_soda_and_dbt(graph):
+    rail = {r["stage"]: r["status"] for r in stage_rail(graph, "STTM_APPROVED", None)}
+    assert rail["STTM"] == "COMPLETE"
+    assert rail["SODA"] == "ACTIVE" and rail["DBT"] == "ACTIVE"
+    assert rail["VALIDATION"] == "LOCKED"
+
+
+def test_soda_review_does_not_lock_dbt(graph):
+    rail = {r["stage"]: r["status"] for r in stage_rail(graph, "SODA_REVIEW", None)}
+    assert rail["SODA"] == "REVIEW_REQUIRED"
+    assert rail["DBT"] == "ACTIVE"
+    assert rail["VALIDATION"] == "ACTIVE"

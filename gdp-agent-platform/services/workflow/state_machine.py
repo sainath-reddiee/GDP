@@ -93,10 +93,15 @@ def stage_order(graph: WorkflowGraph) -> List[str]:
     return sorted(first_ordinal, key=first_ordinal.__getitem__)
 
 
+FORK_AFTER = "STTM"
+FORK_STAGES = frozenset({"SODA", "DBT"})
+
+
 def stage_rail(graph: WorkflowGraph, current_state: str, interrupted_from: Optional[str]) -> List[dict]:
     """Per-stage status for the UI: COMPLETE, ACTIVE, REVIEW_REQUIRED, BLOCKED, FAILED, CANCELLED, LOCKED.
 
     `interrupted_from` is the state a FAILED or CANCELLED run was in when it stopped.
+    After STTM is done, Soda and dbt stay unlocked together — they are not a linear gate.
     """
     stages = stage_order(graph)
     current = graph.states[current_state]
@@ -114,11 +119,22 @@ def stage_rail(graph: WorkflowGraph, current_state: str, interrupted_from: Optio
         anchor_status = {"REVIEW": "REVIEW_REQUIRED", "BLOCKED": "BLOCKED", "DONE": "COMPLETE"}.get(current.kind, "ACTIVE")
 
     anchor_index = stages.index(anchor)
+    sttm_index = stages.index(FORK_AFTER) if FORK_AFTER in stages else -1
     # A finished stage (LANDING_COMPLETE, PROFILING_COMPLETE, ...) opens the next stage.
     opened_next = current.kind == "DONE" and current_state not in (FAILED_STATE, CANCELLED_STATE)
+    sttm_done = sttm_index >= 0 and (anchor_index > sttm_index or (opened_next and anchor == FORK_AFTER))
     rail = []
     for i, st in enumerate(stages):
-        if i < anchor_index or (opened_next and i == anchor_index):
+        if sttm_done and st in FORK_STAGES:
+            if st == anchor:
+                status = anchor_status
+            elif anchor in {"VALIDATION", "REVIEW"} and st == "DBT":
+                status = "COMPLETE"
+            else:
+                status = "ACTIVE"
+        elif sttm_done and st == "VALIDATION" and anchor in {"SODA", "DBT", "VALIDATION"}:
+            status = anchor_status if st == anchor else "ACTIVE"
+        elif i < anchor_index or (opened_next and i == anchor_index):
             status = "COMPLETE"
         elif opened_next and i == anchor_index + 1:
             status = "ACTIVE"

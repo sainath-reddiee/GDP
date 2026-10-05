@@ -67,10 +67,19 @@ def _compile(session, generation: Dict[str, Any], run_id: str) -> Dict[str, Any]
                 "query_id": None}
 
 
+POST_STTM_VALIDATE = (
+    "VALIDATION_PENDING", "VALIDATION_RUNNING", "VALIDATION_FAILED",
+    "SODA_REVIEW", "SODA_APPROVED", "DBT_PENDING", "DBT_GENERATING",
+)
+
+
 def validate_dbt(session, run_id: str) -> Dict[str, Any]:
     stage = Stage(session, run_id)
-    stage.require("VALIDATION_PENDING", "VALIDATION_RUNNING")
-    stage.walk(["VALIDATION_PENDING", "VALIDATION_RUNNING"], "validation started")
+    stage.require(*POST_STTM_VALIDATE)
+    walked = False
+    if stage.state in ("VALIDATION_PENDING", "VALIDATION_RUNNING"):
+        stage.walk(["VALIDATION_PENDING", "VALIDATION_RUNNING"], "validation started")
+        walked = True
     with tool_call(session, run_id, "validate_dbt", {"run_id": run_id}) as call:
         try:
             generation = _current_generation(session, run_id)
@@ -104,7 +113,10 @@ def validate_dbt(session, run_id: str) -> Dict[str, Any]:
             stage.fail(exc)
             return {"state": stage.payload()}
     next_state = "VALIDATION_PASSED" if status == "PASSED" else "VALIDATION_FAILED"
-    stage.move(next_state, call.summary, {"errors": errors, "warnings": warnings}, in_transaction=write)
-    if next_state == "VALIDATION_PASSED":
-        stage.move("DBT_REVIEW", "validation passed; ready for code review", {"validation_id": validation_id})
+    if walked:
+        stage.move(next_state, call.summary, {"errors": errors, "warnings": warnings}, in_transaction=write)
+        if next_state == "VALIDATION_PASSED":
+            stage.move("DBT_REVIEW", "validation passed; ready for code review", {"validation_id": validation_id})
+    else:
+        write("")
     return {"status": status, "errors": errors, "warnings": warnings, "results": results, "state": stage.payload()}

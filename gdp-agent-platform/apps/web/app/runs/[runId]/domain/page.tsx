@@ -3,15 +3,19 @@ import { StageAction } from "@/components/stage-action";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
+import { ModelEr } from "@/components/model-er";
+import type { ModelGraph } from "@/app/onboarding/intent-types";
+import { displayDomain, isHiddenTarget } from "@/lib/catalog-display";
 import { identifyDomain } from "../pipeline-actions";
 
 export default async function DomainPage({ params }: { params: { runId: string } }) {
-  const [state, { recommendations }] = await Promise.all([
+  const [state, { recommendations }, graph] = await Promise.all([
     getRun(params.runId),
     api<{ recommendations: {
       recommendation_id: string; domain_name: string; confidence: number; recommendation: string;
       status: string; decided_by: string | null;
     }[] }>(`/api/runs/${params.runId}/domain`),
+    api<ModelGraph>(`/api/runs/${params.runId}/model-graph`).catch(() => null),
   ]);
   const canScore = state.current_state === "PROFILING_COMPLETE";
   const accepted = recommendations.find((r) => r.status === "ACCEPTED");
@@ -22,22 +26,32 @@ export default async function DomainPage({ params }: { params: { runId: string }
         <CardHeader>
           <CardTitle>Knowledge pack</CardTitle>
           <CardDescription>
-            This is not a factory step. The pack is stamped from the target you picked at onboarding
-            {packName ? ` — currently ${packName}` : ""}.
+            This is not a factory step. The pack is stamped from the model you picked at onboarding.
             Scoring after profiling is an audit trail so you can see why the source looks like that pack.
-            Mapping, glossary, and Soda patterns stay scoped to the stamped pack.
+            Mapping, glossary, and Data Quality patterns stay scoped to the stamped pack.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
           <div className="flex flex-wrap items-center gap-2 text-sm">
             <span className="text-muted-foreground">Run pack</span>
             <Badge variant={packName ? "success" : "outline"}>
-              {packName ?? "Not stamped yet"}
+              {displayDomain(packName) ?? (packName ? "Stamped" : "Not stamped yet")}
             </Badge>
-            {state.run.target_model && (
-              <span className="text-muted-foreground">from {state.run.target_model}</span>
+            {state.run.target_model && !isHiddenTarget({
+              fqn: state.run.target_model,
+              target_database: state.run.target_model.split(".")[0],
+              target_schema: state.run.target_model.split(".")[1],
+              target_table: state.run.target_model.split(".").pop(),
+            }) && (
+              <span className="text-muted-foreground">from {state.run.target_model.split(".").pop()}</span>
             )}
           </div>
+          {graph?.intent?.path === "map_existing" && (
+            <p className="text-sm text-muted-foreground">
+              This source was marked as already modeled. Mapping uses the selected target tables — a new
+              model is not generated.
+            </p>
+          )}
           {canScore && (
             <StageAction
               label="Score source against packs"
@@ -47,6 +61,20 @@ export default async function DomainPage({ params }: { params: { runId: string }
           )}
         </CardContent>
       </Card>
+      {graph && (graph.sources.length > 0 || graph.targets.length > 0) && (
+        <Card>
+          <CardHeader>
+            <CardTitle>How the mapping looks</CardTitle>
+            <CardDescription>
+              Source tables on the left, selected or suggested target models on the right.
+              Solid lines are approved mappings; dashed lines are the plan from onboarding.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <ModelEr graph={graph} runName={state.run.run_name} />
+          </CardContent>
+        </Card>
+      )}
       <Card>
         <CardHeader>
           <CardTitle>Scoring trail</CardTitle>
@@ -67,7 +95,7 @@ export default async function DomainPage({ params }: { params: { runId: string }
               <TBody>
                 {recommendations.map((r) => (
                   <TR key={r.recommendation_id}>
-                    <TD className="font-medium">{r.domain_name}</TD>
+                    <TD className="font-medium">{displayDomain(r.domain_name) || "Default pack"}</TD>
                     <TD>{Number(r.confidence).toFixed(2)}</TD>
                     <TD><Badge variant={r.status === "ACCEPTED" ? "success" : "outline"}>{r.status}</Badge></TD>
                     <TD className="text-sm text-muted-foreground">{r.recommendation}</TD>

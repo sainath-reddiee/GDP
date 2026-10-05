@@ -47,7 +47,7 @@ export function MappingGate({
         <CardTitle>Approve the mapping pack</CardTitle>
         <CardDescription>
           Column decisions are saved. This gate moves the run to MAPPING_APPROVED and unlocks STTM.
-          Soda and dbt stay locked until that contract is approved.
+          Data Quality and dbt stay locked until that contract is approved.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">

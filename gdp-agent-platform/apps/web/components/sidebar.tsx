@@ -38,10 +38,10 @@ export function Sidebar({ user, role, canLogout }: { user: string | null; role: 
     <nav className="flex flex-col bg-sidebar px-3 py-4 text-sidebar-foreground">
       <div className="mb-6 flex items-center gap-2.5 px-2">
         <span className="flex h-7 w-7 items-center justify-center rounded-md bg-white/15 text-[11px] font-semibold text-white">
-          GDP
+          AP
         </span>
         <div>
-          <div className="text-sm font-semibold leading-none text-white">Engineering Factory</div>
+          <div className="text-sm font-semibold leading-none text-white">Agentic pipeline</div>
           <div className="mt-1 text-[10px] uppercase tracking-wide text-white/45">Snowflake workspace</div>
         </div>
       </div>
