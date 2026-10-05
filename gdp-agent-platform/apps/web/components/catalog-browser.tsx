@@ -1,8 +1,9 @@
 "use client";
 
 import { useMemo, useState, type ReactNode } from "react";
-import { Search } from "lucide-react";
+import { ChevronLeft, Search } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import type { DatabaseRow, SchemaRow, TableRow } from "@/app/onboarding/catalog-types";
 import { cn } from "@/lib/utils";
@@ -27,9 +28,32 @@ function Filter({ value, onChange, placeholder }: { value: string; onChange: (v:
   );
 }
 
+function ScrollList({
+  title, count, empty, maxHeight = "max-h-44", children,
+}: { title: string; count: number; empty: string; maxHeight?: string; children: ReactNode }) {
+  return (
+    <div className="rounded-md border bg-card">
+      <div className="flex items-center justify-between border-b px-2.5 py-1.5">
+        <p className="text-xs font-medium">{title}</p>
+        <span className="text-[11px] text-muted-foreground">{count}</span>
+      </div>
+      <div className={cn("overflow-y-auto overscroll-contain p-1", maxHeight)}>
+        {count === 0 ? <p className="px-2 py-4 text-center text-xs text-muted-foreground">{empty}</p> : children}
+      </div>
+    </div>
+  );
+}
+
 function Pane({
-  title, count, empty, children,
-}: { title: string; count: number; empty: string; children: ReactNode }) {
+  title, count, empty, children, compact = false,
+}: { title: string; count: number; empty: string; children: ReactNode; compact?: boolean }) {
+  if (compact) {
+    return (
+      <ScrollList title={title} count={count} empty={empty}>
+        {children}
+      </ScrollList>
+    );
+  }
   return (
     <div className="flex min-h-[280px] min-w-0 flex-col rounded-lg border bg-card">
       <div className="flex items-center justify-between border-b px-3 py-2">
@@ -45,6 +69,7 @@ function Pane({
 
 export function CatalogBrowser({
   databases, schemas, tables, database, schema, table, depth = "table", loading, onDatabase, onSchema, onTable,
+  variant = "stack", onClearCatalog, onClearSchema,
 }: {
   databases: DatabaseRow[];
   schemas: SchemaRow[];
@@ -57,6 +82,9 @@ export function CatalogBrowser({
   onDatabase: (name: string, type: string) => void;
   onSchema: (name: string) => void;
   onTable?: (name: string) => void;
+  variant?: "stack" | "grid";
+  onClearCatalog?: () => void;
+  onClearSchema?: () => void;
 }) {
   const [dbQuery, setDbQuery] = useState("");
   const [schemaQuery, setSchemaQuery] = useState("");
@@ -72,22 +100,163 @@ export function CatalogBrowser({
   const shownSchemas = useMemo(() => schemas.filter((s) => match(schemaQuery, s.schema_name)), [schemas, schemaQuery]);
   const shownTables = useMemo(() => tables.filter((t) => match(tableQuery, t.table_name)), [tables, tableQuery]);
 
+  const compact = variant === "stack";
+  const step = !database ? "catalog" : !schema ? "schema" : depth === "table" && !table ? "table" : "done";
+
+  const catalogButtons = shownDatabases.map((d) => {
+    const share = d.type === "IMPORTED DATABASE";
+    return (
+      <button
+        type="button"
+        key={d.database_name}
+        title={d.comment || d.database_name}
+        onClick={() => onDatabase(d.database_name, d.type)}
+        className={cn(
+          "flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-muted",
+          database === d.database_name && "bg-accent text-accent-foreground",
+        )}
+      >
+        <span className="min-w-0 flex-1 break-all font-medium">{d.database_name}</span>
+        <Badge variant="outline" className="shrink-0 text-[10px]">{share ? "share" : "database"}</Badge>
+      </button>
+    );
+  });
+
+  const schemaButtons = shownSchemas.map((s) => (
+    <button
+      type="button"
+      key={s.schema_name}
+      onClick={() => onSchema(s.schema_name)}
+      className={cn(
+        "w-full rounded-md px-2 py-1.5 text-left text-sm hover:bg-muted",
+        schema === s.schema_name && "bg-accent text-accent-foreground",
+      )}
+    >
+      {s.schema_name}
+    </button>
+  ));
+
+  const tableButtons = shownTables.map((t) => (
+    <button
+      type="button"
+      key={t.table_name}
+      title={t.comment || t.table_name}
+      onClick={() => onTable?.(t.table_name)}
+      className={cn(
+        "flex w-full flex-col rounded-md px-2 py-1.5 text-left hover:bg-muted",
+        table === t.table_name && "bg-accent text-accent-foreground",
+      )}
+    >
+      <span className="truncate text-sm font-medium">{t.table_name}</span>
+      <span className="text-[11px] text-muted-foreground">
+        {(t.table_type || "TABLE").toLowerCase()} · {rowsLabel(t.row_count)}
+      </span>
+    </button>
+  ));
+
+  const filters = (
+    <div className="flex flex-wrap items-center gap-2">
+      {(["all", "database", "share"] as const).map((k) => (
+        <button
+          key={k}
+          type="button"
+          onClick={() => setKind(k)}
+          className={cn(
+            "rounded-full border px-2.5 py-0.5 text-xs capitalize",
+            kind === k ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:bg-muted",
+          )}
+        >
+          {k === "all" ? "All catalogs" : k === "share" ? "Shares" : "Databases"}
+        </button>
+      ))}
+    </div>
+  );
+
+  if (variant === "stack") {
+    return (
+      <div className="space-y-2">
+        {(database || schema || table) && (
+          <div className="flex flex-wrap items-center gap-2 rounded-md border bg-muted/30 px-2 py-1.5">
+            {step !== "catalog" && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="h-7 px-2 text-xs"
+                onClick={() => {
+                  if (step === "schema") onClearCatalog?.();
+                  else onClearSchema?.();
+                }}
+              >
+                <ChevronLeft className="mr-1 h-3 w-3" />
+                Back
+              </Button>
+            )}
+            <p className="min-w-0 flex-1 truncate font-mono text-xs text-muted-foreground">
+              {[database, schema, depth === "table" ? table : null].filter(Boolean).join(" · ") || "Pick a catalog"}
+            </p>
+            {step === "done" && (
+              <div className="flex gap-1">
+                {schema && (
+                  <Button type="button" variant="outline" size="sm" className="h-7 px-2 text-xs" onClick={() => onClearSchema?.()}>
+                    Change schema
+                  </Button>
+                )}
+                {database && (
+                  <Button type="button" variant="outline" size="sm" className="h-7 px-2 text-xs" onClick={() => onClearCatalog?.()}>
+                    Change catalog
+                  </Button>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
+        {step === "catalog" && (
+          <>
+            {filters}
+            <Filter value={dbQuery} onChange={setDbQuery} placeholder="Search databases or shares" />
+            <ScrollList title="Catalog" count={shownDatabases.length} empty="No catalogs match that search." maxHeight="max-h-52">
+              {catalogButtons}
+            </ScrollList>
+          </>
+        )}
+
+        {step === "schema" && (
+          <>
+            <Filter value={schemaQuery} onChange={setSchemaQuery} placeholder="Search schemas" />
+            <ScrollList
+              title="Schema"
+              count={shownSchemas.length}
+              empty={loading === "schemas" ? "Loading schemas…" : "No schemas in this catalog."}
+              maxHeight="max-h-52"
+            >
+              {schemaButtons}
+            </ScrollList>
+          </>
+        )}
+
+        {step === "table" && (
+          <>
+            <Filter value={tableQuery} onChange={setTableQuery} placeholder="Search tables" />
+            <ScrollList
+              title="Table"
+              count={shownTables.length}
+              empty={loading === "tables" ? "Loading tables…" : "No tables in this schema."}
+              maxHeight="max-h-52"
+            >
+              {tableButtons}
+            </ScrollList>
+          </>
+        )}
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center gap-2">
-        {(["all", "database", "share"] as const).map((k) => (
-          <button
-            key={k}
-            type="button"
-            onClick={() => setKind(k)}
-            className={cn(
-              "rounded-full border px-2.5 py-0.5 text-xs capitalize",
-              kind === k ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:bg-muted",
-            )}
-          >
-            {k === "all" ? "All catalogs" : k === "share" ? "Shares" : "Databases"}
-          </button>
-        ))}
+        {filters}
         {(database || schema || table) && (
           <p className="ml-auto truncate font-mono text-xs text-muted-foreground">
             {[database, schema, depth === "table" ? table : null].filter(Boolean).join(" · ")}
@@ -97,25 +266,8 @@ export function CatalogBrowser({
       <div className={cn("grid gap-3", depth === "table" ? "lg:grid-cols-3" : "lg:grid-cols-2")}>
         <div className="space-y-2">
           <Filter value={dbQuery} onChange={setDbQuery} placeholder="Search databases or shares" />
-          <Pane title="Catalog" count={shownDatabases.length} empty="No catalogs match that search.">
-            {shownDatabases.map((d) => {
-              const share = d.type === "IMPORTED DATABASE";
-              return (
-                <button
-                  type="button"
-                  key={d.database_name}
-                  title={d.comment || d.database_name}
-                  onClick={() => onDatabase(d.database_name, d.type)}
-                  className={cn(
-                    "flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-muted",
-                    database === d.database_name && "bg-accent text-accent-foreground",
-                  )}
-                >
-                  <span className="min-w-0 flex-1 break-all font-medium">{d.database_name}</span>
-                  <Badge variant="outline">{share ? "share" : "database"}</Badge>
-                </button>
-              );
-            })}
+          <Pane title="Catalog" count={shownDatabases.length} empty="No catalogs match that search." compact={compact}>
+            {catalogButtons}
           </Pane>
         </div>
         <div className="space-y-2">
@@ -124,20 +276,9 @@ export function CatalogBrowser({
             title="Schema"
             count={shownSchemas.length}
             empty={loading === "schemas" ? "Loading schemas…" : database ? "No schemas in this catalog." : "Select a catalog first."}
+            compact={compact}
           >
-            {shownSchemas.map((s) => (
-              <button
-                type="button"
-                key={s.schema_name}
-                onClick={() => onSchema(s.schema_name)}
-                className={cn(
-                  "w-full rounded-md px-2 py-1.5 text-left text-sm hover:bg-muted",
-                  schema === s.schema_name && "bg-accent text-accent-foreground",
-                )}
-              >
-                {s.schema_name}
-              </button>
-            ))}
+            {schemaButtons}
           </Pane>
         </div>
         {depth === "table" && (
@@ -147,25 +288,9 @@ export function CatalogBrowser({
               title="Table"
               count={shownTables.length}
               empty={loading === "tables" ? "Loading tables…" : schema ? "No tables in this schema." : "Select a schema to see tables."}
+              compact={compact}
             >
-              {shownTables.map((t) => (
-                <button
-                  type="button"
-                  key={t.table_name}
-                  title={t.comment || t.table_name}
-                  onClick={() => onTable?.(t.table_name)}
-                  className={cn(
-                    "flex w-full flex-col rounded-md px-2 py-1.5 text-left hover:bg-muted",
-                    table === t.table_name && "bg-accent text-accent-foreground",
-                  )}
-                >
-                  <span className="truncate text-sm font-medium">{t.table_name}</span>
-                  <span className="text-[11px] text-muted-foreground">
-                    {(t.table_type || "TABLE").toLowerCase()} · {rowsLabel(t.row_count)}
-                    {t.comment ? ` · ${t.comment}` : ""}
-                  </span>
-                </button>
-              ))}
+              {tableButtons}
             </Pane>
           </div>
         )}

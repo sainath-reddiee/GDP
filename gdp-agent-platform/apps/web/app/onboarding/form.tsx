@@ -143,6 +143,24 @@ export function OnboardingForm({
     setSelectedTargets((prev) => prev.includes(fqn) ? prev.filter((t) => t !== fqn) : [...prev, fqn]);
   };
 
+  const clearCatalog = () => {
+    setDatabase("");
+    setSchema("");
+    setSchemas([]);
+    setTables([]);
+    setPickedTables([]);
+    setSelectedTargets([]);
+    setSuggestions([]);
+    setScopedTargets([]);
+  };
+
+  const clearSchema = () => {
+    setSchema("");
+    setTables([]);
+    setPickedTables([]);
+    setSelectedTargets([]);
+  };
+
   const choosePath = (next: OnboardingPath) => {
     setPath(next);
     if (next === "profile_suggest") {
@@ -195,21 +213,22 @@ export function OnboardingForm({
   const pathReady = path === "map_existing" ? selectedTargets.length > 0 : path === "profile_suggest";
 
   return (
-    <div className="max-w-5xl space-y-4">
+    <div className="mx-auto flex max-w-3xl flex-col gap-3 pb-4">
       <PathRadios value={path} onChange={choosePath} />
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Start from the source</CardTitle>
+      <Card className="flex min-h-0 flex-1 flex-col overflow-hidden">
+        <CardHeader className="shrink-0 space-y-1 pb-3">
+          <CardTitle className="text-lg">New run</CardTitle>
           <CardDescription>
-            Pick the database, schema, and source tables. Suggested models come from the same catalog.
+            Scroll through each step: name the run, pick catalog → schema, then tables and models.
           </CardDescription>
         </CardHeader>
-        <CardContent className="space-y-4">
+        <CardContent className="min-h-0 space-y-4 overflow-y-auto overscroll-contain pr-1 max-h-[calc(100vh-11rem)]">
           <div>
             <Label htmlFor="run_name">Run name</Label>
             <Input id="run_name" value={runName} onChange={(e) => setRunName(e.target.value)} required placeholder="CRM customer onboard" />
           </div>
+
           <CatalogBrowser
             databases={databases}
             schemas={schemas}
@@ -218,93 +237,78 @@ export function OnboardingForm({
             schema={schema}
             depth="schema"
             loading={loading}
+            variant="stack"
             onDatabase={pickDatabase}
             onSchema={pickSchema}
+            onClearCatalog={clearCatalog}
+            onClearSchema={clearSchema}
           />
+
           {sourceTables.length > 0 && (
-            <div>
-              <p className="mb-2 text-sm font-medium">Source tables</p>
-              <div className="mb-2 flex gap-2">
-                <Button type="button" variant="outline" onClick={() => setPickedTables(sourceTables.map((t) => t.table_name))}>Select all</Button>
-                <Button type="button" variant="outline" onClick={() => setPickedTables([])}>Clear</Button>
-                <span className="self-center text-sm text-muted-foreground">{pickedTables.length} selected</span>
+            <section className="space-y-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <p className="text-sm font-medium">Source tables</p>
+                <span className="text-xs text-muted-foreground">{pickedTables.length} selected</span>
+                <div className="ml-auto flex gap-2">
+                  <Button type="button" variant="outline" size="sm" onClick={() => setPickedTables(sourceTables.map((t) => t.table_name))}>All</Button>
+                  <Button type="button" variant="outline" size="sm" onClick={() => setPickedTables([])}>Clear</Button>
+                </div>
               </div>
-              <div className="grid max-h-56 gap-2 overflow-auto md:grid-cols-2">
+              <div className="max-h-48 space-y-1 overflow-y-auto rounded-md border p-1">
                 {sourceTables.map((t) => (
-                  <label key={t.table_name} className="flex cursor-pointer items-start gap-2 rounded-md border p-2 text-sm">
+                  <label key={t.table_name} className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-muted/50">
                     <input type="checkbox" checked={pickedTables.includes(t.table_name)} onChange={() => toggleTable(t.table_name)} />
-                    <span>
-                      <span className="font-medium">{t.table_name}</span>
-                      <span className="block text-xs text-muted-foreground">{t.table_type}{t.row_count != null ? ` · ${t.row_count.toLocaleString()} rows` : ""}</span>
-                    </span>
+                    <span className="min-w-0 flex-1 truncate font-medium">{t.table_name}</span>
+                    <span className="shrink-0 text-xs text-muted-foreground">{t.row_count?.toLocaleString() ?? "—"} rows</span>
                   </label>
                 ))}
               </div>
-            </div>
+            </section>
+          )}
+
+          {path === "map_existing" && (
+            <section className="space-y-2">
+              <p className="text-sm font-medium">Suggested models</p>
+              {!database || !schema ? (
+                <p className="text-sm text-muted-foreground">Finish catalog and schema above.</p>
+              ) : suggestedExisting.length === 0 ? (
+                <p className="text-sm text-muted-foreground">No related model — use new source or pick source tables.</p>
+              ) : (
+                <div className="max-h-44 space-y-1 overflow-y-auto rounded-md border p-1">
+                  {suggestedExisting.map((s) => (
+                    <label key={s.fqn} className="flex cursor-pointer items-start gap-2 rounded px-2 py-1.5 text-sm hover:bg-muted/50">
+                      <input type="checkbox" className="mt-0.5" checked={selectedTargets.includes(s.fqn)} onChange={() => toggleTarget(s.fqn)} />
+                      <span className="min-w-0">
+                        <span className="font-medium">{s.target_table}</span>
+                        <span className="block truncate font-mono text-[11px] text-muted-foreground">{s.fqn}</span>
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              )}
+            </section>
+          )}
+
+          {path === "profile_suggest" && (
+            <p className="text-sm text-muted-foreground">Profiling will propose a model if nothing in this catalog fits.</p>
           )}
         </CardContent>
-      </Card>
 
-      {path === "map_existing" && (
-        <Card>
-          <CardHeader>
-            <CardTitle>Suggested models</CardTitle>
-            <CardDescription>
-              Multi-select every silver table this source should map into. Suggestions follow the catalog you picked.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-2">
-            {!database || !schema ? (
-              <p className="text-sm text-muted-foreground">Select a source catalog first.</p>
-            ) : suggestedExisting.length === 0 ? (
-              <p className="text-sm text-muted-foreground">
-                No related model for this catalog. Switch to new source if you want profiling to propose one.
-              </p>
-            ) : suggestedExisting.map((s) => (
-              <label key={s.fqn} className="flex cursor-pointer items-start gap-3 rounded-lg border p-3 hover:bg-muted/40">
-                <input type="checkbox" checked={selectedTargets.includes(s.fqn)} onChange={() => toggleTarget(s.fqn)} />
-                <span>
-                  <span className="font-medium">{s.target_table}</span>
-                  {displayDomain(s.domain_name) && (
-                    <span className="ml-2 text-xs text-muted-foreground">{displayDomain(s.domain_name)}</span>
-                  )}
-                  <span className="mt-1 block font-mono text-xs text-muted-foreground">{s.fqn}</span>
-                  <span className="mt-1 block text-sm text-muted-foreground">{s.reason}</span>
-                </span>
-              </label>
-            ))}
-          </CardContent>
-        </Card>
-      )}
-
-      {path === "profile_suggest" && (
-        <Card>
-          <CardHeader>
-            <CardTitle>Profile first</CardTitle>
-            <CardDescription>
-              After landing and profiling, a model is proposed if nothing in this catalog already fits.
-            </CardDescription>
-          </CardHeader>
-        </Card>
-      )}
-
-      <Card>
-        <CardHeader>
-          <CardTitle>Save this plan</CardTitle>
-        </CardHeader>
-        <CardContent>
-          {error && <p role="alert" className="mb-3 text-sm text-destructive">{error}</p>}
+        <div className="sticky bottom-0 shrink-0 border-t bg-card px-6 py-3">
+          {error && <p role="alert" className="mb-2 text-sm text-destructive">{error}</p>}
           <div className="flex flex-wrap gap-2">
             <Button
               type="button"
               variant="outline"
+              size="sm"
               disabled={!sourceReady}
               onClick={() => downloadJson(`${(runName || "onboarding-plan").replace(/\s+/g, "-")}.json`, intent())}
             >
-              Download plan JSON
+              Download plan
             </Button>
             <Button
               type="button"
+              size="sm"
               disabled={pending || !sourceReady || !pathReady}
               onClick={() => start(async () => {
                 setError("");
@@ -315,16 +319,12 @@ export function OnboardingForm({
               {pending ? "Creating…" : "Create run"}
             </Button>
           </div>
-          {!sourceReady && <p className="mt-2 text-sm text-muted-foreground">Name the run and select a source catalog to continue.</p>}
-          {sourceReady && !path && <p className="mt-2 text-sm text-muted-foreground">Choose a modeling path above.</p>}
+          {!sourceReady && <p className="mt-2 text-xs text-muted-foreground">Run name + catalog + schema required.</p>}
+          {sourceReady && !path && <p className="mt-2 text-xs text-muted-foreground">Choose map vs new source above.</p>}
           {sourceReady && path === "map_existing" && !pathReady && (
-            <p className="mt-2 text-sm text-muted-foreground">
-              {suggestedExisting.length
-                ? "Check at least one model in Suggested models, or wait a moment while defaults load."
-                : "No model matches this catalog yet — pick source tables or switch to new source."}
-            </p>
+            <p className="mt-2 text-xs text-muted-foreground">Select at least one suggested model.</p>
           )}
-        </CardContent>
+        </div>
       </Card>
     </div>
   );

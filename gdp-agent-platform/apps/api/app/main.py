@@ -22,7 +22,7 @@ from pydantic import BaseModel, Field
 from app.agent import AGENT_NAME, stream_agent
 from app.db import (
     AUTH_MODE, DATABASE, WAREHOUSE, Db, SnowflakeSessionError,
-    close_session, dev_db, lookup_session, open_pat_session,
+    apply_work_role, close_session, dev_db, list_grantable_roles, lookup_session, open_pat_session,
 )
 
 app = FastAPI(title="Agentic pipeline API")
@@ -68,21 +68,33 @@ async def bust_run_cache(request: Request, call_next):
     return response
 
 
-def current_db(x_aip_session: Optional[str] = Header(default=None)) -> Db:
+def current_db(
+    x_aip_session: Optional[str] = Header(default=None),
+    x_aip_role: Optional[str] = Header(default=None),
+) -> Db:
     try:
         if AUTH_MODE == "dev":
-            return dev_db()
+            db = dev_db()
+        else:
+            db = lookup_session(x_aip_session)
+            if db is None:
+                raise HTTPException(401, "Sign in required")
+        try:
+            apply_work_role(db, x_aip_role)
+        except SnowflakeSessionError as exc:
+            raise HTTPException(403, str(exc)) from exc
+        return db
     except SnowflakeSessionError as exc:
         raise HTTPException(503, str(exc)) from exc
-    db = lookup_session(x_aip_session)
-    if db is None:
-        raise HTTPException(401, "Sign in required")
-    return db
 
 
 class Login(BaseModel):
     user: str = Field(min_length=1, max_length=256)
     token: str = Field(min_length=1)
+
+
+class RolePick(BaseModel):
+    role: str = Field(min_length=1, max_length=256)
 
 
 class CreateRun(BaseModel):
@@ -220,6 +232,11 @@ def _snowflake_error(exc: Exception) -> HTTPException:
         status = 409
     elif "BUSINESS_JUSTIFICATION is required" in message or "SOURCE_NOT_ACCESSIBLE" in message:
         status = 422
+        if "SOURCE_NOT_ACCESSIBLE" in message:
+            message = (
+                f"{message} Switch the Snowflake role in the sidebar if this catalog is "
+                "granted to another role for your user."
+            )
     return HTTPException(status, message)
 
 
@@ -248,6 +265,21 @@ def logout(x_aip_session: Optional[str] = Header(default=None)):
 @app.get("/api/auth/me")
 def me(db: Db = Depends(current_db)):
     return {"user": db.user, "role": db.role, "auth_mode": AUTH_MODE, "agent": AGENT_NAME}
+
+
+@app.get("/api/auth/roles")
+def auth_roles(db: Db = Depends(current_db)):
+    roles = list_grantable_roles(db)
+    return {"current": db.role, "roles": roles}
+
+
+@app.put("/api/auth/role")
+def auth_set_role(body: RolePick, db: Db = Depends(current_db)):
+    try:
+        apply_work_role(db, body.role.strip())
+    except SnowflakeSessionError as exc:
+        raise HTTPException(403, str(exc)) from exc
+    return {"role": db.role}
 
 
 @app.get("/api/runs")

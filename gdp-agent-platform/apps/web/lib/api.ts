@@ -7,6 +7,7 @@ export const API_URL = process.env.AIP_API_URL ?? "http://127.0.0.1:8001";
 export const AUTH_MODE = process.env.AIP_AUTH ?? "dev";
 export const SESSION_COOKIE = "aip_session";
 export const DEV_COOKIE = "aip_dev";
+export const ROLE_COOKIE = "aip_role";
 
 export class ApiError extends Error {
   constructor(public status: number, message: string) {
@@ -16,7 +17,11 @@ export class ApiError extends Error {
 
 function sessionHeaders(): Record<string, string> {
   const session = cookies().get(SESSION_COOKIE)?.value;
-  return session ? { "X-AIP-Session": session } : {};
+  const role = cookies().get(ROLE_COOKIE)?.value;
+  const headers: Record<string, string> = {};
+  if (session) headers["X-AIP-Session"] = session;
+  if (role) headers["X-AIP-Role"] = role;
+  return headers;
 }
 
 function detail(text: string): string {

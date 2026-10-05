@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import secrets
 import threading
 import time
@@ -225,3 +226,56 @@ def close_session(session_id: Optional[str]) -> None:
         db = _sessions.pop(session_id or "", None)
     if db:
         db.conn.close()
+
+
+_ROLE_IDENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_$]{0,254}$")
+
+
+def _quote_role(name: str) -> str:
+    value = (name or "").strip()
+    if _ROLE_IDENT.match(value):
+        return value
+    escaped = value.replace('"', '""')
+    return f'"{escaped}"'
+
+
+def list_grantable_roles(db: Db) -> list[str]:
+    roles: set[str] = {db.role} if db.role else set()
+    try:
+        for row in db.query("SELECT ROLE_NAME FROM INFORMATION_SCHEMA.APPLICABLE_ROLES ORDER BY ROLE_NAME"):
+            if row.get("role_name"):
+                roles.add(str(row["role_name"]))
+    except Exception:
+        pass
+    if len(roles) > 1 or (roles and db.role not in roles):
+        return sorted(roles, key=str.upper)
+    try:
+        db.execute(f'SHOW GRANTS TO USER "{db.user}"')
+        for row in db.query(
+            """
+            SELECT "name" AS name, "privilege" AS privilege, "granted_on" AS granted_on
+              FROM TABLE(RESULT_SCAN(LAST_QUERY_ID()))
+            """
+        ):
+            if (row.get("granted_on") or "").upper() == "ROLE" and (row.get("privilege") or "").upper() == "USAGE":
+                if row.get("name"):
+                    roles.add(str(row["name"]))
+    except Exception:
+        pass
+    return sorted(roles, key=str.upper) if roles else ([db.role] if db.role else [])
+
+
+def apply_work_role(db: Db, role: Optional[str]) -> None:
+    picked = (role or "").strip()
+    if not picked or picked == db.role:
+        return
+    allowed = set(list_grantable_roles(db))
+    if allowed and picked not in allowed:
+        raise SnowflakeSessionError(f"Role {picked} is not available for {db.user}")
+    try:
+        db.execute(f"USE ROLE {_quote_role(picked)}")
+        db.role = _identity(db.conn)[1]
+    except SnowflakeSessionError:
+        raise
+    except Exception as exc:
+        raise SnowflakeSessionError(f"Could not activate role {picked}: {_friendly(exc)}") from exc
