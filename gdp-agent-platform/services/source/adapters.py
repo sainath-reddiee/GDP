@@ -2,7 +2,8 @@
 
 An adapter only reads metadata and builds SELECT statements; it never writes. All SQL runs through
 `Runner`, a callable (sql, params) -> list of row dicts, so the logic is unit-testable without Snowflake.
-Checks run in the procedure owner's context: they prove the *platform* can read what it must land.
+Source onboarding procedures run as CALLER so the Snowflake role chosen in the UI governs
+catalog access, registration, validation, and landing reads.
 """
 
 from __future__ import annotations

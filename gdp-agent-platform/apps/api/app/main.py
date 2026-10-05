@@ -20,6 +20,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from app.agent import AGENT_NAME, stream_agent
+from app.source_invoke import USE_CALLER, invoke_source
 from app.db import (
     AUTH_MODE, DATABASE, WAREHOUSE, Db, SnowflakeSessionError,
     apply_work_role, close_session, dev_db, list_grantable_roles, lookup_session, open_pat_session,
@@ -234,8 +235,8 @@ def _snowflake_error(exc: Exception) -> HTTPException:
         status = 422
         if "SOURCE_NOT_ACCESSIBLE" in message:
             message = (
-                f"{message} Switch the Snowflake role in the sidebar if this catalog is "
-                "granted to another role for your user."
+                f"{message} Catalog browse uses your sidebar Snowflake role; register/landing must "
+                "use the same role (EXECUTE AS CALLER). Switch the role in the sidebar and retry."
             )
     return HTTPException(status, message)
 
@@ -860,8 +861,16 @@ def register_target(body: TargetBind, db: Db = Depends(current_db)):
         raise _snowflake_error(exc) from exc
 
 
+def _source_call(db: Db, proc: str, handler, *args):
+    if USE_CALLER:
+        return invoke_source(db, handler, *args)
+    return db.call(proc, args)
+
+
 @app.post("/api/runs/{run_id}/source")
 def register_source(run_id: str, body: RegisterSource, db: Db = Depends(current_db)):
+    from services.source.procedures import register_source as register_source_handler
+
     payload = {
         "SOURCE_SYSTEM_NAME": body.source_system_name,
         "SOURCE_TYPE": body.source_type,
@@ -870,25 +879,42 @@ def register_source(run_id: str, body: RegisterSource, db: Db = Depends(current_
         "OWNER": body.owner,
         "SECURITY_CLASSIFICATION": body.security_classification,
     }
+    payload_json = json.dumps({k: v for k, v in payload.items() if v})
     try:
-        return db.call("CALL SOURCE.REGISTER_SOURCE(%s, %s)",
-                       (run_id, json.dumps({k: v for k, v in payload.items() if v})))
+        return _source_call(
+            db,
+            "CALL SOURCE.REGISTER_SOURCE(%s, %s)",
+            register_source_handler,
+            run_id,
+            payload_json,
+        )
     except Exception as exc:
         raise _snowflake_error(exc) from exc
 
 
 @app.post("/api/runs/{run_id}/access")
 def validate_access(run_id: str, body: AccessRequest, db: Db = Depends(current_db)):
+    from services.source.procedures import validate_source_access
+
+    selected_json = json.dumps(body.selected)
     try:
-        return db.call("CALL SOURCE.VALIDATE_SOURCE_ACCESS(%s, %s)", (run_id, json.dumps(body.selected)))
+        return _source_call(
+            db,
+            "CALL SOURCE.VALIDATE_SOURCE_ACCESS(%s, %s)",
+            validate_source_access,
+            run_id,
+            selected_json,
+        )
     except Exception as exc:
         raise _snowflake_error(exc) from exc
 
 
 @app.post("/api/runs/{run_id}/landing")
 def execute_landing(run_id: str, db: Db = Depends(current_db)):
+    from services.source.procedures import execute_landing as execute_landing_handler
+
     try:
-        return db.call("CALL SOURCE.EXECUTE_LANDING(%s)", (run_id,))
+        return _source_call(db, "CALL SOURCE.EXECUTE_LANDING(%s)", execute_landing_handler, run_id)
     except Exception as exc:
         raise _snowflake_error(exc) from exc
 

@@ -181,7 +181,19 @@ def deploy(args) -> None:
 
     import snowflake.connector
 
-    connect_args = {"connection_name": args.connection, "login_timeout": 300}
+    # Same in-memory token cache as apps/api (Windows CredWrite 1783).
+    sys.path.insert(0, str(ROOT / "apps" / "api"))
+    try:
+        import app.db  # noqa: F401
+    except Exception:
+        pass
+
+    connect_args = {
+        "connection_name": args.connection,
+        "login_timeout": 300,
+        "client_session_keep_alive": True,
+        "client_store_temporary_credential": True,
+    }
     if args.role:
         connect_args["role"] = args.role
     if args.warehouse:
