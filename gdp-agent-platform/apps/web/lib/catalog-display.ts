@@ -46,6 +46,55 @@ function stem(name: string) {
   return name.replace(/^(SILVER_|DIM_|FCT_|FACT_|SRC_|RAW_|STG_)/i, "").replace(/S$/i, "").toUpperCase();
 }
 
+export function catalogRelatedTarget(database: string, schema: string, row: {
+  target_database: string; target_schema: string;
+}) {
+  const db = database.trim().toUpperCase();
+  const sch = schema.trim().toUpperCase();
+  const tdb = row.target_database.trim().toUpperCase();
+  const tsch = row.target_schema.trim().toUpperCase();
+  if (db && tdb && db === tdb) return true;
+  if (sch && tsch && (tsch.includes(sch) || sch.includes(tsch))) return true;
+  return false;
+}
+
+export function targetFqn(row: { target_database: string; target_schema: string; target_table: string; fqn?: string }) {
+  return row.fqn || `${row.target_database}.${row.target_schema}.${row.target_table}`;
+}
+
+export function registryTargetOptions(
+  rows: { target_database: string; target_schema: string; target_table: string; fqn?: string; domain_name?: string | null }[],
+) {
+  return rows.filter((t) => !isHiddenTarget(t)).map((t) => ({
+    kind: "existing" as const,
+    target_table: t.target_table,
+    fqn: targetFqn(t),
+    domain_name: displayDomain(t.domain_name),
+    score: 0.75,
+    overlap_columns: [] as string[],
+    reason: "Registered model for this catalog",
+  }));
+}
+
+export function defaultMapExistingFqns(
+  database: string,
+  schema: string,
+  tables: { table_name: string }[],
+  pickedTables: string[],
+  registryRows: { target_database: string; target_schema: string; target_table: string; fqn?: string }[],
+  apiSuggestions: { kind: string; fqn: string; score: number }[],
+) {
+  const local = localModelSuggestions(database, schema, tables, pickedTables);
+  const registry = registryTargetOptions(registryRows);
+  const fromApi = apiSuggestions.filter((s) => s.kind === "existing" && s.score >= 0.2);
+  const fqns = new Set<string>([
+    ...local.map((s) => s.fqn),
+    ...registry.map((s) => s.fqn),
+    ...fromApi.map((s) => s.fqn),
+  ]);
+  return [...fqns];
+}
+
 export function localModelSuggestions(
   database: string,
   schema: string,

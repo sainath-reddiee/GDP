@@ -6,7 +6,10 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input, Label } from "@/components/ui/input";
 import { CatalogBrowser } from "@/components/catalog-browser";
 import { PathRadios } from "@/components/path-radios";
-import { displayDomain, isHiddenTarget, isModelTable, localModelSuggestions, sourceSystemName } from "@/lib/catalog-display";
+import {
+  catalogRelatedTarget, defaultMapExistingFqns, displayDomain, isHiddenTarget, isModelTable,
+  localModelSuggestions, registryTargetOptions, sourceSystemName, targetFqn,
+} from "@/lib/catalog-display";
 import { createRun } from "./actions";
 import { loadCatalogSuggestions, loadSchemas, loadTables } from "./catalog";
 import type { DatabaseRow, SchemaRow, TableRow, TargetRow } from "./catalog-types";
@@ -45,15 +48,25 @@ export function OnboardingForm({
   const [path, setPath] = useState<OnboardingPath | "">("");
   const [selectedTargets, setSelectedTargets] = useState<string[]>([]);
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
+  const [scopedTargets, setScopedTargets] = useState<TargetRow[]>([]);
   const [error, setError] = useState("");
   const [pending, start] = useTransition();
   const [, load] = useTransition();
 
   const visibleTargets = targets.filter((t) => !isHiddenTarget(t));
 
+  const applyDefaultTargets = (
+    db: string, sch: string, catalog: TableRow[], sources: string[], api: Suggestion[], registry: TargetRow[],
+  ) => {
+    const defaults = defaultMapExistingFqns(db, sch, catalog, sources, registry, api);
+    if (!defaults.length) return;
+    setSelectedTargets((prev) => (prev.length ? prev : defaults));
+  };
+
   useEffect(() => {
     if (path !== "map_existing" || !database || !schema) {
       setSuggestions([]);
+      setScopedTargets([]);
       return;
     }
     let cancelled = false;
@@ -62,29 +75,26 @@ export function OnboardingForm({
         const result = await loadCatalogSuggestions(database, schema, pickedTables);
         if (cancelled) return;
         const next = (result.suggestions || []).filter((s) => s.kind === "existing" && !isHiddenTarget(s));
+        const registry = (result.targets?.length
+          ? result.targets
+          : visibleTargets.filter((t) => catalogRelatedTarget(database, schema, t))
+        ).filter((t) => !isHiddenTarget(t));
         setSuggestions(next);
-        setSelectedTargets((prev) => {
-          const local = localModelSuggestions(database, schema, tables, pickedTables);
-          const allowed = new Set([...next, ...local].map((s) => s.fqn));
-          if (prev.length) return prev.filter((fqn) => allowed.has(fqn));
-          return [...next, ...local].filter((s) => s.score >= 0.8).map((s) => s.fqn);
-        });
+        setScopedTargets(registry);
+        applyDefaultTargets(database, schema, tables, pickedTables, next, registry);
       } catch (e) {
         if (!cancelled) setError(e instanceof Error ? e.message : "Could not suggest models");
       }
     })();
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [path, database, schema, pickedTables.join("|")]);
+  }, [path, database, schema, pickedTables.join("|"), tables.length]);
 
   useEffect(() => {
-    if (path !== "map_existing" || !database || !schema) return;
-    const hits = localModelSuggestions(database, schema, tables, pickedTables)
-      .filter((s) => s.score >= 0.8)
-      .map((s) => s.fqn);
-    if (!hits.length) return;
-    setSelectedTargets((prev) => Array.from(new Set([...prev, ...hits])));
-  }, [path, database, schema, tables, pickedTables]);
+    if (path !== "map_existing" || !database || !schema || !tables.length) return;
+    applyDefaultTargets(database, schema, tables, pickedTables, suggestions, scopedTargets);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [path, database, schema, tables, pickedTables, suggestions, scopedTargets]);
 
   const pickDatabase = (name: string, type: string) => {
     setDatabase(name);
@@ -112,7 +122,11 @@ export function OnboardingForm({
     setLoading("tables");
     load(async () => {
       try {
-        setTables((await loadTables(database, name)).tables);
+        const nextTables = (await loadTables(database, name)).tables;
+        setTables(nextTables);
+        if (path === "map_existing") {
+          setSelectedTargets(defaultMapExistingFqns(database, name, nextTables, [], [], []));
+        }
       } catch (e) {
         setError(e instanceof Error ? e.message : "Could not list tables");
       } finally {
@@ -131,18 +145,25 @@ export function OnboardingForm({
 
   const choosePath = (next: OnboardingPath) => {
     setPath(next);
-    if (next === "profile_suggest") setSelectedTargets([]);
+    if (next === "profile_suggest") {
+      setSelectedTargets([]);
+      return;
+    }
+    if (database && schema) {
+      applyDefaultTargets(database, schema, tables, pickedTables, suggestions, scopedTargets);
+    }
   };
 
   const sourceTables = tables.filter((t) => !isModelTable(t.table_name));
   const suggestedExisting = [
     ...(database && schema ? localModelSuggestions(database, schema, tables, pickedTables) : []),
+    ...registryTargetOptions(scopedTargets),
     ...suggestions.filter((s) => s.kind === "existing" && !isHiddenTarget(s)),
   ].filter((s, index, all) => all.findIndex((item) => item.fqn === s.fqn) === index);
 
   const intent = (): OnboardingIntent => {
     const chosen = selectedTargets.map((fqn) => {
-      const registered = visibleTargets.find((t) => `${t.target_database}.${t.target_schema}.${t.target_table}` === fqn);
+      const registered = visibleTargets.find((t) => targetFqn(t) === fqn);
       const suggested = suggestedExisting.find((s) => s.fqn === fqn);
       return {
         fqn,
@@ -151,7 +172,7 @@ export function OnboardingForm({
         target_table_id: registered?.target_table_id,
       };
     });
-    const domainName = visibleTargets.find((t) => selectedTargets.includes(`${t.target_database}.${t.target_schema}.${t.target_table}`))?.domain_name || null;
+    const domainName = visibleTargets.find((t) => selectedTargets.includes(targetFqn(t)))?.domain_name || null;
     const domainId = domains.find((d) => d.domain_name === domainName)?.domain_id ?? null;
     return {
       path: (path || "profile_suggest") as OnboardingPath,
@@ -297,7 +318,11 @@ export function OnboardingForm({
           {!sourceReady && <p className="mt-2 text-sm text-muted-foreground">Name the run and select a source catalog to continue.</p>}
           {sourceReady && !path && <p className="mt-2 text-sm text-muted-foreground">Choose a modeling path above.</p>}
           {sourceReady && path === "map_existing" && !pathReady && (
-            <p className="mt-2 text-sm text-muted-foreground">Select at least one suggested model, or switch to new source.</p>
+            <p className="mt-2 text-sm text-muted-foreground">
+              {suggestedExisting.length
+                ? "Check at least one model in Suggested models, or wait a moment while defaults load."
+                : "No model matches this catalog yet — pick source tables or switch to new source."}
+            </p>
           )}
         </CardContent>
       </Card>

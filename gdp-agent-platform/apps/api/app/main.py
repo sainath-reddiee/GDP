@@ -704,6 +704,21 @@ def _suggest_for_catalog(db: Db, database: Optional[str], schema: Optional[str],
         if item["score"] >= 0.2 or fqn in scoped_fqns:
             existing.append({**item, "domain_name": display_domain_name(item.get("domain_name"))})
     proposed = [item for item in suggestions if item["kind"] == "proposed"]
+    seen = {str(item.get("fqn") or "").upper() for item in existing}
+    for row in scoped:
+        fqn = str(row.get("fqn") or "")
+        if not fqn or fqn.upper() in seen:
+            continue
+        seen.add(fqn.upper())
+        existing.append({
+            "kind": "existing",
+            "target_table": row.get("target_table"),
+            "fqn": fqn,
+            "domain_name": display_domain_name(row.get("domain_name")),
+            "score": 0.75,
+            "overlap_columns": [],
+            "reason": "Registered model for this catalog",
+        })
     related = bool(existing) or bool(scoped)
     return {
         "related": related,
