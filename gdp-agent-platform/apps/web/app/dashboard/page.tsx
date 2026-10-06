@@ -31,7 +31,7 @@ export default async function Dashboard() {
           </Card>
         ))}
       </div>
-      <RunTable runs={runs.slice(0, 10)} />
+      <RunTable runs={runs.slice(0, 10)} selectable={false} />
     </div>
   );
 }

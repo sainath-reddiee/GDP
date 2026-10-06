@@ -4,6 +4,7 @@ import { Cloud, Database, FileSpreadsheet, Globe, HardDrive, Server, Snowflake, 
 import { Badge } from "@/components/ui/badge";
 import { Input, Label } from "@/components/ui/input";
 import type { SourceDetails, SourceOrigin } from "../intent-types";
+import type { SourceConnection } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 export const EXTERNAL_CONNECTORS = [
@@ -42,6 +43,7 @@ function OriginCard({
 
 export function SourceStep({
   runName, setRunName, origin, setOrigin, details, setDetails,
+  connections = [], connectionId = "", onPickConnection,
 }: {
   runName: string;
   setRunName: (v: string) => void;
@@ -49,6 +51,9 @@ export function SourceStep({
   setOrigin: (v: SourceOrigin) => void;
   details: SourceDetails;
   setDetails: (v: SourceDetails) => void;
+  connections?: SourceConnection[];
+  connectionId?: string;
+  onPickConnection?: (c: SourceConnection) => void;
 }) {
   return (
     <div className="space-y-5">
@@ -56,6 +61,40 @@ export function SourceStep({
         <Label htmlFor="run_name" className="mt-0">Run name</Label>
         <Input id="run_name" value={runName} onChange={(e) => setRunName(e.target.value)} placeholder="CRM customer onboard" maxLength={256} />
       </div>
+
+      {connections.length > 0 && onPickConnection && (
+        <div>
+          <p className="mb-1 text-sm font-medium">Use a registered source</p>
+          <p className="mb-2 text-xs text-muted-foreground">
+            Registered once, reused by every run. Picking one fills in the catalog and schema for you.
+          </p>
+          <div className="grid gap-2 sm:grid-cols-2">
+            {connections.map((c) => (
+              <button
+                key={c.source_system_id}
+                type="button"
+                aria-pressed={connectionId === c.source_system_id}
+                onClick={() => onPickConnection(c)}
+                className={cn(
+                  "flex items-start gap-3 rounded-lg border px-3 py-2 text-left",
+                  connectionId === c.source_system_id ? "border-primary bg-primary/5" : "hover:bg-muted/50",
+                )}
+              >
+                <Snowflake className="mt-0.5 h-4 w-4 text-muted-foreground" />
+                <span className="min-w-0">
+                  <span className="block text-sm font-medium">{c.source_system_name}</span>
+                  <span className="block truncate font-mono text-[11px] text-muted-foreground">
+                    {c.database_name}.{c.schema_name}
+                  </span>
+                  <span className="block text-[11px] text-muted-foreground">
+                    {c.runs} run{c.runs === 1 ? "" : "s"}{c.last_run_at ? `, last ${c.last_run_at.slice(0, 10)}` : ""}
+                  </span>
+                </span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div>
         <p className="mb-2 text-sm font-medium">Is this source Snowflake-native?</p>

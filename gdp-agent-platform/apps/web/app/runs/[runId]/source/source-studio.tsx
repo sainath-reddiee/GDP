@@ -13,10 +13,16 @@ import { displayDomain, isHiddenTarget, isModelTable, localModelSuggestions, sou
 import type { OnboardingIntent, ModelGraph, OnboardingPath } from "@/app/onboarding/intent-types";
 import type { TableRow } from "@/app/onboarding/catalog-types";
 import { loadTables } from "@/app/onboarding/catalog";
-import type { SourceOverview } from "@/lib/types";
+import { cn } from "@/lib/utils";
+import type { CachedProfile, LandingTargets, SourceOverview, StorageType } from "@/lib/types";
+import { Badge } from "@/components/ui/badge";
 import {
-  loadTargetSuggestions, registerSourceStudio, saveSourceIntent, validateAndLand,
+  loadTargetSuggestions, registerSourceStudio, saveSourceIntent, setLandingTarget, validateAndLand,
 } from "../source-actions";
+
+const MAX_SELECTED = 500;
+
+type Target = { landing_database: string; landing_schema: string; storage_type: StorageType };
 
 type Suggestion = {
   kind: "existing" | "proposed"; target_table: string; fqn: string;
@@ -31,6 +37,7 @@ export function SourceStudio({
   runId, sourceName, sourceType, database, schema,
   intent, overview, initialTables = [], canRegister, canValidate,
   canResumeLanding = false, landed = false, failureReason = null,
+  cachedProfiles = [], landingTargets = null, target,
 }: {
   runId: string;
   sourceName: string;
@@ -45,8 +52,19 @@ export function SourceStudio({
   canResumeLanding?: boolean;
   landed?: boolean;
   failureReason?: string | null;
+  cachedProfiles?: CachedProfile[];
+  landingTargets?: LandingTargets | null;
+  target: Target;
 }) {
   const objects = overview.objects ?? [];
+  const cachedByTable = useMemo(
+    () => new Map(cachedProfiles.map((p) => [p.table_name, p])),
+    [cachedProfiles],
+  );
+  const [landingSchema, setLandingSchema] = useState(target.landing_schema);
+  const [storageType, setStorageType] = useState<StorageType>(target.storage_type);
+  const targetDirty = landingSchema !== target.landing_schema || storageType !== target.storage_type;
+  const landingSchemas = Array.from(new Set([target.landing_schema, ...(landingTargets?.schemas ?? [])]));
   const planned = intent?.source.tables ?? [];
   const name = sourceSystemName(database, schema, intent?.source.source_system_name || sourceName);
   const [catalog, setCatalog] = useState<TableRow[]>(initialTables);
@@ -218,29 +236,49 @@ export function SourceStudio({
         </CardHeader>
         <CardContent>
           <Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search tables" className="mb-3 max-w-sm" />
-          <div className="mb-3 flex gap-2">
+          <div className="mb-3 flex flex-wrap gap-2">
             <Button type="button" variant="outline" onClick={() => setSelected(rows.map((r) => r.name))}>Select all</Button>
+            <Button type="button" variant="outline"
+                    onClick={() => setSelected(rows.filter((r) => !cachedByTable.has(r.name)).map((r) => r.name))}>
+              Select unprofiled
+            </Button>
             <Button type="button" variant="outline" onClick={() => setSelected([])}>Clear</Button>
-            <span className="self-center text-sm text-muted-foreground">{selected.length} selected</span>
+            <span className="self-center text-sm text-muted-foreground" aria-live="polite">
+              {selected.length} selected
+              {selected.length > 0 && ` · ${selected.filter((n) => cachedByTable.has(n)).length} already profiled`}
+            </span>
           </div>
+          {selected.length > MAX_SELECTED && (
+            <p role="alert" className="mb-3 text-sm text-destructive">
+              Select at most {MAX_SELECTED} tables per run. Split larger schemas across runs; profiles are shared.
+            </p>
+          )}
           <Table>
-            <THead><TR><TH className="w-10"></TH><TH>Table</TH><TH>Type</TH><TH>Rows</TH></TR></THead>
+            <THead><TR><TH className="w-10"></TH><TH>Table</TH><TH>Type</TH><TH>Rows</TH><TH>Profile</TH></TR></THead>
             <TBody>
-              {loadingTables && <TR><TD colSpan={4} className="text-muted-foreground">Loading tables…</TD></TR>}
+              {loadingTables && <TR><TD colSpan={5} className="text-muted-foreground">Loading tables…</TD></TR>}
               {!loadingTables && visible.length === 0 && (
-                <TR><TD colSpan={4} className="text-muted-foreground">No tables match.</TD></TR>
+                <TR><TD colSpan={5} className="text-muted-foreground">No tables match.</TD></TR>
               )}
-              {visible.map((row) => (
-                <TR key={row.name}>
-                  <TD>
-                    <input type="checkbox" aria-label={`select ${row.name}`} className="h-4 w-4"
-                           checked={selected.includes(row.name)} onChange={() => toggle(row.name)} />
-                  </TD>
-                  <TD className="font-medium">{row.name}</TD>
-                  <TD>{row.type}</TD>
-                  <TD>{row.rows ?? "—"}</TD>
-                </TR>
-              ))}
+              {visible.map((row) => {
+                const cached = cachedByTable.get(row.name);
+                return (
+                  <TR key={row.name}>
+                    <TD>
+                      <input type="checkbox" aria-label={`select ${row.name}`} className="h-4 w-4"
+                             checked={selected.includes(row.name)} onChange={() => toggle(row.name)} />
+                    </TD>
+                    <TD className="font-medium">{row.name}</TD>
+                    <TD>{row.type}</TD>
+                    <TD>{row.rows ?? "—"}</TD>
+                    <TD>
+                      {cached
+                        ? <Badge variant="success" title={`Profiled ${cached.profiled_at.slice(0, 16)} by ${cached.profiled_by ?? "unknown"}`}>Profiled (cached)</Badge>
+                        : <Badge variant="outline">Unprofiled</Badge>}
+                    </TD>
+                  </TR>
+                );
+              })}
             </TBody>
           </Table>
         </CardContent>
@@ -311,11 +349,60 @@ export function SourceStudio({
         </Card>
       )}
 
+      {(canRegister || canValidate || canResumeLanding) && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Landing target</CardTitle>
+            <CardDescription>
+              Where the selected tables are copied before profiling. This is separate from the source connection,
+              so the same source can land in different schemas per run.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="flex flex-wrap items-end gap-4">
+            <div>
+              <label htmlFor="landing_schema" className="mb-1 block text-xs font-medium">
+                Landing schema in {target.landing_database || landingTargets?.database || "the platform database"}
+              </label>
+              <select id="landing_schema" value={landingSchema} onChange={(e) => setLandingSchema(e.target.value)}
+                      className="h-9 rounded-md border bg-card px-2 text-sm">
+                {landingSchemas.map((s) => <option key={s} value={s}>{s}</option>)}
+              </select>
+            </div>
+            <fieldset>
+              <legend className="mb-1 text-xs font-medium">Storage</legend>
+              <div className="flex gap-3 text-sm">
+                <label className="flex items-center gap-1.5">
+                  <input type="radio" name="storage_type" checked={storageType === "MANAGED"}
+                         onChange={() => setStorageType("MANAGED")} />
+                  Managed table
+                </label>
+                <label className={cn("flex items-center gap-1.5", !landingTargets?.iceberg_available && "opacity-50")}
+                       title={landingTargets?.iceberg_available ? undefined : "Set PLATFORM_CONFIG LANDING_EXTERNAL_VOLUME to enable"}>
+                  <input type="radio" name="storage_type" checked={storageType === "ICEBERG"}
+                         disabled={!landingTargets?.iceberg_available} onChange={() => setStorageType("ICEBERG")} />
+                  Iceberg table
+                </label>
+              </div>
+            </fieldset>
+            {targetDirty && !canRegister && (
+              <Button type="button" variant="outline" size="sm" disabled={pending}
+                      onClick={() => start(async () => {
+                        setError("");
+                        const saved = await setLandingTarget(runId, { landing_schema: landingSchema, storage_type: storageType });
+                        if (!saved.ok) setError(saved.error);
+                      })}>
+                Save target
+              </Button>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
       {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
 
       {canRegister && (
         <Button
-          disabled={pending || !database || !schema || !name || selected.length === 0}
+          disabled={pending || !database || !schema || !name || selected.length === 0 || selected.length > MAX_SELECTED}
           onClick={() => start(async () => {
             setError("");
             const saved = await persistIntent();
@@ -325,6 +412,8 @@ export function SourceStudio({
               source_type: sourceType || "SNOWFLAKE_DATABASE",
               database,
               schema,
+              landing_schema: landingSchema,
+              storage_type: storageType,
             });
             if (!result.ok) setError(result.error);
           })}
@@ -346,9 +435,13 @@ export function SourceStudio({
             {failureReason && <p className="text-sm text-destructive">Last attempt failed: {failureReason}</p>}
             <div className="flex flex-wrap items-center gap-3">
               <Button
-                disabled={pending || (canValidate && selected.length === 0)}
+                disabled={pending || (canValidate && (selected.length === 0 || selected.length > MAX_SELECTED))}
                 onClick={() => start(async () => {
                   setError("");
+                  if (targetDirty) {
+                    const saved = await setLandingTarget(runId, { landing_schema: landingSchema, storage_type: storageType });
+                    if (!saved.ok) { setError(saved.error); return; }
+                  }
                   if (canValidate) {
                     const saved = await persistIntent();
                     if (!saved.ok) { setError(saved.error); return; }

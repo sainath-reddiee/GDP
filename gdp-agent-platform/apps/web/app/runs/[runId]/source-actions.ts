@@ -2,39 +2,19 @@
 
 import { revalidatePath } from "next/cache";
 import { api, attempt, attemptValue, type ActionResult } from "@/lib/api";
+import type { StorageType } from "@/lib/types";
 
 function after(runId: string, result: ActionResult): ActionResult {
   revalidatePath(`/runs/${runId}`, "layout");
   return result;
 }
 
-export async function registerSource(runId: string, _: ActionResult | null, form: FormData): Promise<ActionResult> {
-  const result = await attempt(() =>
-    api(`/api/runs/${runId}/source`, {
-      method: "POST",
-      body: JSON.stringify({
-        source_system_name: form.get("source_system_name"),
-        source_type: form.get("source_type"),
-        database: form.get("database"),
-        schema: form.get("schema"),
-        owner: form.get("owner") || null,
-        security_classification: form.get("security_classification") || null,
-      }),
-    }),
-  );
-  return after(runId, result);
-}
-
-export async function validateAccess(runId: string, selected: string[]): Promise<ActionResult> {
-  const result = await attempt(() =>
-    api(`/api/runs/${runId}/access`, { method: "POST", body: JSON.stringify({ selected }) }),
-  );
-  return after(runId, result);
-}
-
-export async function executeLanding(runId: string): Promise<ActionResult> {
-  const result = await attempt(() => api(`/api/runs/${runId}/landing`, { method: "POST" }));
-  return after(runId, result);
+export async function setLandingTarget(runId: string, target: {
+  landing_database?: string | null; landing_schema: string; storage_type: StorageType;
+}): Promise<ActionResult> {
+  return after(runId, await attempt(() =>
+    api(`/api/runs/${runId}/target`, { method: "PUT", body: JSON.stringify(target) }),
+  ));
 }
 
 /** Validate access to the selection, then land it as-is, resuming wherever the last attempt stopped. */
@@ -61,6 +41,7 @@ export async function saveSourceIntent(runId: string, body: Record<string, unkno
 export async function registerSourceStudio(runId: string, body: {
   source_system_name: string; source_type: string; database: string; schema: string;
   owner?: string | null; security_classification?: string | null;
+  landing_schema?: string | null; storage_type?: StorageType | null;
 }): Promise<ActionResult> {
   return after(runId, await attempt(() =>
     api(`/api/runs/${runId}/source`, { method: "POST", body: JSON.stringify(body) }),

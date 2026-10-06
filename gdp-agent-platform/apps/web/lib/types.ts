@@ -15,13 +15,26 @@ export type RunInfo = {
   created_at: string;
   domain_name?: string | null;
   domain_id?: string | null;
+  landing_database?: string | null;
+  landing_schema?: string | null;
+  storage_type?: StorageType | null;
+  archived_at?: string | null;
+  archived_by?: string | null;
 };
+
+export type Lifecycle = "DRAFT" | "RUNNING" | "COMPLETED" | "FAILED" | "ARCHIVED";
+
+export type RunStatusFilter = "all" | "active" | "completed" | "failed" | "archived";
+
+export type StorageType = "MANAGED" | "ICEBERG";
 
 export type RunState = {
   run_id: string;
   current_state: string;
   current_stage: string | null;
   status: string;
+  lifecycle?: Lifecycle;
+  is_archived?: boolean;
   state_version: number;
   failed_from_state: string | null;
   failure_reason: string | null;
@@ -36,9 +49,59 @@ export type RunSummary = {
   current_state: string;
   current_stage: string | null;
   status: string;
+  lifecycle: Lifecycle;
+  is_archived: boolean;
   target_model: string | null;
   created_by: string;
   created_at: string;
+  updated_at?: string | null;
+  source_system_name?: string | null;
+  source_database?: string | null;
+  source_schema?: string | null;
+  domain_name?: string | null;
+  age_minutes?: number | null;
+  table_count: number;
+};
+
+export type CleanupResult = {
+  requested: number;
+  not_found: string[];
+  deleted: string[];
+  skipped: { run_id: string; reason: string }[];
+  landing: { dropped: string[]; kept: { table: string; reason: string; runs?: string[] }[]; errors: { table: string; error: string }[] };
+  workspaces: { run_id: string; files_removed: number; projects_dropped: string[]; errors: string[] }[];
+  profiles_preserved: boolean;
+};
+
+export type ArchiveResult = { archived: boolean; changed: string[]; skipped: { run_id: string; reason: string }[] };
+
+export type ProfileCacheTable = {
+  table_name: string;
+  status: "CACHED" | "UNPROFILED";
+  profiled_at: string | null;
+  row_count: number | null;
+  column_count: number | null;
+  is_approximate: boolean | null;
+  profiled_in_run: string | null;
+};
+
+export type CachedProfile = {
+  source_name: string; database_name: string; schema_name: string; table_name: string;
+  row_count: number | null; column_count: number | null; is_approximate: boolean | null;
+  profiled_in_run: string | null; profiled_by: string | null; profiled_at: string;
+};
+
+export type SourceConnection = {
+  source_system_id: string; source_system_name: string; source_type: string;
+  owner: string | null; security_classification: string | null;
+  database_name: string; schema_name: string; created_at: string; runs: number; last_run_at: string | null;
+};
+
+export type LandingTargets = {
+  default: { landing_database: string; landing_schema: string; storage_type: StorageType };
+  database: string;
+  schemas: string[];
+  iceberg_available: boolean;
 };
 
 export type SourceOverview = {

@@ -8,14 +8,16 @@ performs HUMAN transitions and records the review decision.
 from __future__ import annotations
 
 import json
+import re
 import uuid
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from services.workflow.graph import CANCELLED_STATE, FAILED_STATE, INITIAL_STATE, graph_from_rows
 from services.workflow.state_machine import (
     RunContext,
     evaluate,
     failed_from_after,
+    lifecycle_status,
     run_status_for,
     stage_rail,
 )
@@ -23,6 +25,8 @@ from services.workflow.state_machine import (
 MAX_TEXT = 4000
 MAX_DETAILS_BYTES = 16_000
 REVIEW_DECISIONS = {"APPROVE", "REJECT", "REQUEST_CHANGES", "REOPEN"}
+MAX_BULK_RUNS = 200
+RUN_ID = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
 
 CREATE_RUN_FIELDS = {
     "RUN_NAME", "DOMAIN_ID", "SOURCE_SYSTEM_ID", "TARGET_MODEL",
@@ -77,6 +81,24 @@ def _get_run(session, run_id: str) -> Dict[str, Any]:
     return rows[0]
 
 
+def _is_closed(run: Dict[str, Any]) -> bool:
+    """Archived or soft-deleted; columns are absent before V006 is applied."""
+    return bool(run.get("IS_ARCHIVED")) or run.get("DELETED_AT") is not None
+
+
+def parse_run_ids(value: Any) -> List[str]:
+    """RUN_IDS arrive as a Python list (ARRAY argument) or JSON text; every id must be a UUID."""
+    if isinstance(value, str):
+        value = json.loads(value or "[]")
+    assert isinstance(value, list), "RUN_IDS must be an array of run ids"
+    ids = sorted({str(v).strip() for v in value if str(v).strip()})
+    assert ids, "RUN_IDS is empty"
+    assert len(ids) <= MAX_BULK_RUNS, f"at most {MAX_BULK_RUNS} runs per call"
+    bad = [i for i in ids if not RUN_ID.match(i)]
+    assert not bad, f"not run ids: {bad[:5]}"
+    return ids
+
+
 def _state_payload(graph, run: Dict[str, Any]) -> Dict[str, Any]:
     state = run["CURRENT_STATE"]
     interrupted = run["FAILED_FROM_STATE"] if state == FAILED_STATE else run["PREVIOUS_STATE"]
@@ -90,6 +112,8 @@ def _state_payload(graph, run: Dict[str, Any]) -> Dict[str, Any]:
         "current_state": state,
         "current_stage": run["CURRENT_STAGE"],
         "status": run["STATUS"],
+        "lifecycle": lifecycle_status(state, _is_closed(run)),
+        "is_archived": _is_closed(run),
         "state_version": run["STATE_VERSION"],
         "failed_from_state": run["FAILED_FROM_STATE"],
         "failure_reason": run["FAILURE_REASON"],
@@ -102,7 +126,7 @@ def _state_payload(graph, run: Dict[str, Any]) -> Dict[str, Any]:
 def _apply_transition(session, graph, run: Dict[str, Any], to_state: str, actor_type: str,
                       reason: Optional[str], details: Dict[str, Any],
                       in_transaction: Optional[Callable[[str], None]] = None) -> Dict[str, Any]:
-    ctx = RunContext(run["CURRENT_STATE"], run["FAILED_FROM_STATE"])
+    ctx = RunContext(run["CURRENT_STATE"], run["FAILED_FROM_STATE"], _is_closed(run))
     decision = evaluate(graph, ctx, to_state, actor_type)
     if not decision.allowed:
         raise ValueError(f"TRANSITION_REJECTED: {decision.reason}")
@@ -302,3 +326,69 @@ def review_transition(session, run_id: str, to_state: str, decision: str,
                           "phase 1 complete after dbt approval", {})
     result["state"] = _state_payload(graph, _get_run(session, run_id))
     return result
+
+
+def _record_run_event(session, run: Dict[str, Any], actor_type: str, reason: str, details: Dict[str, Any]) -> None:
+    """Lifecycle event that does not change workflow state (FROM_STATE = TO_STATE)."""
+    session.sql(
+        """
+        INSERT INTO CORE.WORKFLOW_EVENT
+            (EVENT_ID, RUN_ID, FROM_STATE, TO_STATE, ACTOR_TYPE, ACTOR, REASON, DETAILS, GRAPH_VERSION)
+        SELECT ?, ?, ?, ?, ?, CURRENT_USER(), ?, PARSE_JSON(?), ?
+        """,
+        params=[str(uuid.uuid4()), run["RUN_ID"], run["CURRENT_STATE"], run["CURRENT_STATE"], actor_type,
+                reason, json.dumps(details), run["GRAPH_VERSION"]],
+    ).collect()
+
+
+def set_runs_archived(session, run_ids_json: str, archived: bool) -> Dict[str, Any]:
+    """Archive hides runs from the default list and freezes their state; restore reverses it.
+
+    Bumping STATE_VERSION makes any stage procedure that read the run before archiving fail
+    with CONCURRENT_UPDATE instead of moving an archived run.
+    """
+    ids = parse_run_ids(run_ids_json)
+    archived = bool(archived)
+    graph = _load_graph(session)
+    changed: List[str] = []
+    skipped: List[Dict[str, str]] = []
+    for run_id in ids:
+        found = _rows(session, "SELECT * FROM CORE.WORKFLOW_RUN WHERE RUN_ID = ?", [run_id])
+        if not found:
+            skipped.append({"run_id": run_id, "reason": "not found"})
+            continue
+        run = found[0]
+        if run.get("DELETED_AT") is not None:
+            skipped.append({"run_id": run_id, "reason": "deleted"})
+            continue
+        if bool(run.get("IS_ARCHIVED")) == archived:
+            skipped.append({"run_id": run_id, "reason": "already archived" if archived else "not archived"})
+            continue
+        state = graph.states.get(run["CURRENT_STATE"])
+        if archived and state is not None and state.kind == "RUNNING":
+            skipped.append({"run_id": run_id, "reason": f"{run['CURRENT_STATE']} is still running"})
+            continue
+        session.sql("BEGIN TRANSACTION").collect()
+        try:
+            updated = session.sql(
+                """
+                UPDATE CORE.WORKFLOW_RUN
+                   SET IS_ARCHIVED   = ?,
+                       ARCHIVED_AT   = IFF(?, CURRENT_TIMESTAMP(), NULL),
+                       ARCHIVED_BY   = IFF(?, CURRENT_USER(), NULL),
+                       STATE_VERSION = STATE_VERSION + 1,
+                       UPDATED_AT    = CURRENT_TIMESTAMP()
+                 WHERE RUN_ID = ? AND STATE_VERSION = ? AND DELETED_AT IS NULL
+                """,
+                params=[archived, archived, archived, run_id, run["STATE_VERSION"]],
+            ).collect()
+            if updated[0][0] != 1:
+                raise ValueError("CONCURRENT_UPDATE: run state changed since it was read; reload and retry")
+            _record_run_event(session, run, "HUMAN", "run archived" if archived else "run restored",
+                              {"archived": archived})
+            session.sql("COMMIT").collect()
+        except Exception:
+            session.sql("ROLLBACK").collect()
+            raise
+        changed.append(run_id)
+    return {"archived": archived, "changed": changed, "skipped": skipped}

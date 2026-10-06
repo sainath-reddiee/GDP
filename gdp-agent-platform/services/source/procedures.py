@@ -4,8 +4,12 @@ REGISTER_SOURCE         CREATED -> SOURCE_REGISTERED, records the source and dis
 VALIDATE_SOURCE_ACCESS  SOURCE_REGISTERED -> ACCESS_VALIDATION -> ACCESS_APPROVED | SOURCE_REGISTERED
 EXECUTE_LANDING         ACCESS_APPROVED -> LANDING_PENDING -> LANDING_RUNNING -> LANDING_COMPLETE | FAILED
 
-Landing copies each selected object as-is (CTAS) into <platform db>.LANDING and reconciles row counts.
+Landing copies each selected object as-is (CTAS) into the run's target landing schema (default
+<platform db>.LANDING, managed tables) and reconciles row counts.
 Every state change goes through the workflow state machine; nothing here can skip a stage.
+
+The source connection (SOURCE_REGISTRY) is registered once and reused by name; the landing target
+is a property of the run, so inspecting a source never needs the landing definition and vice versa.
 """
 
 from __future__ import annotations
@@ -14,27 +18,95 @@ import json
 import uuid
 from typing import Any, Dict, List, Optional
 
+from services.common.sql import config_value
 from services.common.sql import insert_rows as _insert
-from services.source.adapters import SourceAdapter, adapter_for, checks_passed
-from services.source.identifiers import SOURCE_SYSTEM_NAME, fqn, format_data_type, landing_table_name
+from services.source.adapters import (
+    FAILED,
+    PASSED,
+    AccessCheck,
+    SourceAdapter,
+    TargetSpec,
+    adapter_for,
+    checks_passed,
+)
+from services.source.identifiers import SOURCE_SYSTEM_NAME, fqn, format_data_type, landing_table_name, quote
 from services.workflow.procedures import (
     MAX_TEXT,
     _apply_transition,
     _get_run,
+    _is_closed,
     _load_graph,
     _parse_details,
+    _record_run_event,
     _rows,
     _state_payload,
     _text,
 )
 
+TARGET_EDITABLE_STATES = {"CREATED", "SOURCE_REGISTERED", "ACCESS_APPROVED", "LANDING_PENDING"}
+TARGET_EDITABLE_FAILURES = {"ACCESS_VALIDATION", "LANDING_RUNNING"}
+
 REGISTER_FIELDS = {"SOURCE_SYSTEM_NAME", "SOURCE_TYPE", "DATABASE", "SCHEMA", "OWNER",
-                   "SECURITY_CLASSIFICATION", "DOMAIN_ID"}
-LANDING_SCHEMA = "LANDING"
+                   "SECURITY_CLASSIFICATION", "DOMAIN_ID", "LANDING_DATABASE", "LANDING_SCHEMA", "STORAGE_TYPE"}
+TARGET_FIELDS = ("LANDING_DATABASE", "LANDING_SCHEMA", "STORAGE_TYPE")
 
 
 def _runner(session):
     return lambda sql, params: _rows(session, sql, params)
+
+
+def _platform_database(session) -> str:
+    database = _rows(session, "SELECT CURRENT_DATABASE() AS D")[0]["D"]
+    assert database, "no current database in procedure context"
+    return database
+
+
+def _target_spec(session, run: Dict[str, Any], raw: Optional[Dict[str, Any]] = None) -> TargetSpec:
+    """The run's landing target; runs created before V006 have no columns and get the default."""
+    raw = raw if raw is not None else {
+        "landing_database": run.get("LANDING_DATABASE"), "landing_schema": run.get("LANDING_SCHEMA"),
+        "storage_type": run.get("STORAGE_TYPE"),
+    }
+    volume = None
+    if str(raw.get("storage_type") or "").upper() == "ICEBERG":
+        volume = config_value(session, "LANDING_EXTERNAL_VOLUME")
+        volume = volume.get("name") if isinstance(volume, dict) else volume
+    return TargetSpec.parse(raw, _platform_database(session), volume)
+
+
+def _landing_check(session, spec: TargetSpec) -> AccessCheck:
+    try:
+        found = _rows(session, f"SELECT SCHEMA_NAME FROM {quote(spec.landing_database)}.INFORMATION_SCHEMA.SCHEMATA "
+                               "WHERE SCHEMA_NAME = ?", [spec.landing_schema])
+    except Exception as exc:
+        return AccessCheck("LANDING_TARGET", FAILED, f"{spec.landing_database} is not accessible: {exc}",
+                           f"Grant USAGE on {spec.landing_database} to the role running the onboarding")
+    if not found:
+        return AccessCheck("LANDING_TARGET", FAILED,
+                           f"{spec.landing_database}.{spec.landing_schema} not found",
+                           "Create the schema or grant USAGE and CREATE TABLE on it")
+    return AccessCheck("LANDING_TARGET", PASSED,
+                       f"{spec.landing_database}.{spec.landing_schema} ({spec.storage_type.lower()} tables)")
+
+
+def fetch_schema_catalog(session, connection_id: str, database: Optional[str] = None,
+                         schema: Optional[str] = None) -> Dict[str, Any]:
+    """Inspect a registered connection without touching any run: objects, row counts, columns."""
+    connection_id = _text(connection_id, "CONNECTION_ID", required=True)
+    found = _rows(session, "SELECT SOURCE_SYSTEM_ID, SOURCE_SYSTEM_NAME, SOURCE_TYPE, CONFIGURATION_JSON "
+                           "FROM SOURCE.SOURCE_REGISTRY WHERE SOURCE_SYSTEM_ID = ? AND ACTIVE_FLAG", [connection_id])
+    assert found, f"connection {connection_id} not found"
+    source = found[0]
+    config = json.loads(source["CONFIGURATION_JSON"]) if isinstance(source["CONFIGURATION_JSON"], str) \
+        else (source["CONFIGURATION_JSON"] or {})
+    adapter = adapter_for(source["SOURCE_TYPE"], database or config["database"], schema or config["schema"])
+    try:
+        objects = adapter.fetch_schema_catalog(_runner(session))
+    except Exception as exc:
+        raise ValueError(f"SOURCE_NOT_ACCESSIBLE: {adapter.database}.{adapter.schema}: {exc}") from exc
+    return {"connection_id": source["SOURCE_SYSTEM_ID"], "source_system_name": source["SOURCE_SYSTEM_NAME"],
+            "source_type": source["SOURCE_TYPE"], "database": adapter.database, "schema": adapter.schema,
+            "objects": objects}
 
 
 def _clip(value: Optional[str]) -> str:
@@ -71,6 +143,9 @@ def register_source(session, run_id: str, payload_json: str) -> Dict[str, Any]:
     graph = _load_graph(session)
     run = _get_run(session, run_id)
     _require_state(run, "CREATED")
+    target = None
+    if any(payload.get(k) for k in TARGET_FIELDS):
+        target = _target_spec(session, run, {k.lower(): payload.get(k) for k in TARGET_FIELDS})
     try:
         objects = adapter.discover_objects(_runner(session))
     except Exception as exc:
@@ -108,10 +183,15 @@ def register_source(session, run_id: str, payload_json: str) -> Dict[str, Any]:
                   o.row_count, o.bytes, o.last_altered] for o in objects])
         session.sql("UPDATE CORE.WORKFLOW_RUN SET SOURCE_SYSTEM_ID = ?, SOURCE_DATABASE = ?, SOURCE_SCHEMA = ? "
                     "WHERE RUN_ID = ?", params=[source_id, adapter.database, adapter.schema, run_id]).collect()
+        if target is not None:
+            session.sql("UPDATE CORE.WORKFLOW_RUN SET LANDING_DATABASE = ?, LANDING_SCHEMA = ?, STORAGE_TYPE = ? "
+                        "WHERE RUN_ID = ?", params=[target.landing_database, target.landing_schema,
+                                                    target.storage_type, run_id]).collect()
 
     _apply_transition(session, graph, run, "SOURCE_REGISTERED", "SYSTEM", f"source {name} registered",
                       {"source_system_id": source_id, "source_type": source_type, **config,
-                       "objects_discovered": len(objects)}, in_transaction=write)
+                       "objects_discovered": len(objects),
+                       **({"target": target.as_dict()} if target else {})}, in_transaction=write)
     return {"source_system_id": source_id, "objects_discovered": len(objects),
             "state": _state_payload(graph, _get_run(session, run_id))}
 
@@ -137,6 +217,11 @@ def validate_source_access(session, run_id: str, selected_json: str) -> Dict[str
 
     try:
         checks = adapter.validate_access(_runner(session), selected)
+        if checks_passed(checks):
+            try:
+                checks.append(_landing_check(session, _target_spec(session, run)))
+            except AssertionError as exc:
+                checks.append(AccessCheck("LANDING_TARGET", FAILED, str(exc)))
     except Exception as exc:
         _apply_transition(session, graph, _get_run(session, run_id), "FAILED", "SYSTEM",
                           _clip(f"access validation error: {exc}"), {})
@@ -159,21 +244,18 @@ def validate_source_access(session, run_id: str, selected_json: str) -> Dict[str
             "state": _state_payload(graph, _get_run(session, run_id))}
 
 
-def _escape_literal(value: str) -> str:
-    return value.replace("\\", "\\\\").replace("'", "''")
-
-
-def _land_object(session, run_id: str, source: Dict[str, Any], adapter: SourceAdapter, database: str,
+def _land_object(session, run_id: str, source: Dict[str, Any], adapter: SourceAdapter, spec: TargetSpec,
                  object_name: str, columns: List[Dict[str, Any]]) -> Dict[str, Any]:
     landing_name = landing_table_name(source["SOURCE_SYSTEM_NAME"], object_name)
-    target = fqn(database, LANDING_SCHEMA, landing_name)
-    result: Dict[str, Any] = {"object": object_name, "landing_table": f"{database}.{LANDING_SCHEMA}.{landing_name}",
+    database, schema = spec.landing_database, spec.landing_schema
+    target = fqn(database, schema, landing_name)
+    result: Dict[str, Any] = {"object": object_name, "landing_table": f"{database}.{schema}.{landing_name}",
                               "status": "FAILED", "source_rows": None, "landed_rows": None, "query_id": None,
                               "error": None}
     try:
         result["source_rows"] = _rows(session, adapter.count_sql(object_name))[0]["N"]
-        comment = _escape_literal(f"As-is landing of {adapter.database}.{adapter.schema}.{object_name} by run {run_id}")
-        session.sql(f"CREATE OR REPLACE TABLE {target} COMMENT = '{comment}' AS {adapter.select_sql(object_name)}").collect()
+        comment = f"As-is landing of {adapter.database}.{adapter.schema}.{object_name} by run {run_id}"
+        session.sql(spec.create_sql(landing_name, adapter.select_sql(object_name), comment)).collect()
         result["query_id"] = _rows(session, "SELECT LAST_QUERY_ID() AS Q")[0]["Q"]
         result["landed_rows"] = _rows(session, f"SELECT COUNT(*) AS N FROM {target}")[0]["N"]
         if result["landed_rows"] == result["source_rows"]:
@@ -192,7 +274,7 @@ def _land_object(session, run_id: str, source: Dict[str, Any], adapter: SourceAd
              "NULLIF(?, '')::NUMBER", "IFF(? = 'COMPLETE', CURRENT_TIMESTAMP(), NULL)", "NULLIF(?, '')",
              "CURRENT_USER()", "NULLIF(?, '')"],
             [[landing_id, run_id, source["SOURCE_SYSTEM_ID"], adapter.database, adapter.schema, object_name,
-              database, LANDING_SCHEMA, landing_name, result["status"], result["landed_rows"], result["source_rows"],
+              database, schema, landing_name, result["status"], result["landed_rows"], result["source_rows"],
               result["status"], result["query_id"], result["error"]]])
     if result["status"] == "COMPLETE" and columns:
         _insert(session, "SOURCE.LANDING_COLUMN_REGISTRY",
@@ -225,13 +307,12 @@ def execute_landing(session, run_id: str) -> Dict[str, Any]:
 
     results: List[Dict[str, Any]] = []
     try:
-        database = _rows(session, "SELECT CURRENT_DATABASE() AS D")[0]["D"]
-        assert database, "no current database in procedure context"
+        spec = _target_spec(session, run)
         columns_by_table: Dict[str, List[Dict[str, Any]]] = {}
         for row in _rows(session, adapter.columns_sql(), [adapter.schema]):
             columns_by_table.setdefault(row["TABLE_NAME"], []).append(row)
         for name in selected:
-            results.append(_land_object(session, run_id, source, adapter, database, name,
+            results.append(_land_object(session, run_id, source, adapter, spec, name,
                                         columns_by_table.get(name, [])))
     except Exception as exc:
         _apply_transition(session, graph, _get_run(session, run_id), "FAILED", "SYSTEM",
@@ -246,3 +327,38 @@ def execute_landing(session, run_id: str) -> Dict[str, Any]:
         _apply_transition(session, graph, _get_run(session, run_id), "LANDING_COMPLETE", "SYSTEM",
                           f"{len(results)} objects landed, row counts reconciled", {"tables": results})
     return {"tables": results, "state": _state_payload(graph, _get_run(session, run_id))}
+
+
+def set_landing_target(session, run_id: str, payload_json: str) -> Dict[str, Any]:
+    """Choose where the run lands (database, schema, MANAGED or ICEBERG) any time before landing completes."""
+    run_id = _text(run_id, "RUN_ID", required=True)
+    raw = {k.lower(): v for k, v in _parse_details(payload_json).items()}
+    unknown = set(raw) - {f.lower() for f in TARGET_FIELDS}
+    assert not unknown, f"unknown fields: {sorted(unknown)}"
+    graph = _load_graph(session)
+    run = _get_run(session, run_id)
+    assert not _is_closed(run), "run is archived or deleted; restore it first"
+    state = run["CURRENT_STATE"]
+    if state not in TARGET_EDITABLE_STATES and not (state == "FAILED" and run["FAILED_FROM_STATE"] in TARGET_EDITABLE_FAILURES):
+        raise ValueError(f"TRANSITION_REJECTED: the landing target is fixed once landing has run; run is in {state}")
+    spec = _target_spec(session, run, raw)
+    check = _landing_check(session, spec)
+    if check.status == FAILED:
+        raise ValueError(f"LANDING_TARGET_INVALID: {check.detail}. {check.remediation or ''}".strip())
+
+    session.sql("BEGIN TRANSACTION").collect()
+    try:
+        updated = session.sql(
+            "UPDATE CORE.WORKFLOW_RUN SET LANDING_DATABASE = ?, LANDING_SCHEMA = ?, STORAGE_TYPE = ?, "
+            "STATE_VERSION = STATE_VERSION + 1, UPDATED_AT = CURRENT_TIMESTAMP() "
+            "WHERE RUN_ID = ? AND STATE_VERSION = ?",
+            params=[spec.landing_database, spec.landing_schema, spec.storage_type, run_id, run["STATE_VERSION"]],
+        ).collect()
+        if updated[0][0] != 1:
+            raise ValueError("CONCURRENT_UPDATE: run state changed since it was read; reload and retry")
+        _record_run_event(session, run, "HUMAN", "landing target set", spec.as_dict())
+        session.sql("COMMIT").collect()
+    except Exception:
+        session.sql("ROLLBACK").collect()
+        raise
+    return {"target": spec.as_dict(), "check": check.as_dict(), "state": _state_payload(graph, _get_run(session, run_id))}

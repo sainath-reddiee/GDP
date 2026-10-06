@@ -18,6 +18,7 @@ export type OnboardingIntent = {
   run_name: string;
   source: {
     origin?: SourceOrigin;
+    connection_id?: string | null;
     database: string;
     schema: string;
     source_system_name: string;

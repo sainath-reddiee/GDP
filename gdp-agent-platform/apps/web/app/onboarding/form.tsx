@@ -19,6 +19,7 @@ import type {
 import { DomainStep, type ModelOption } from "./steps/domain-step";
 import { ReviewStep, type CheckItem } from "./steps/review-step";
 import { EXTERNAL_CONNECTORS, SourceStep } from "./steps/source-step";
+import type { SourceConnection } from "@/lib/types";
 
 type Suggestion = {
   kind: "existing" | "proposed"; target_table: string; fqn: string;
@@ -47,16 +48,19 @@ const sameDomain = (a?: string | null, b?: string | null) =>
   (displayDomain(a) || "").toLowerCase() === (displayDomain(b) || "").toLowerCase();
 
 export function OnboardingForm({
-  databases, targets, domains,
+  databases, targets, domains, connections = [],
 }: {
   databases: DatabaseRow[];
   targets: TargetRow[];
   domains: DomainRow[];
+  connections?: SourceConnection[];
 }) {
   const [step, setStep] = useState(0);
   const [runName, setRunName] = useState("");
   const [origin, setOrigin] = useState<SourceOrigin | "">("");
   const [details, setDetails] = useState<SourceDetails>({});
+  const [connectionId, setConnectionId] = useState("");
+  const connection = connections.find((c) => c.source_system_id === connectionId);
 
   const [database, setDatabase] = useState("");
   const [sourceType, setSourceType] = useState("SNOWFLAKE_DATABASE");
@@ -152,8 +156,30 @@ export function OnboardingForm({
     setPickedTables([]); setSelectedTargets([]); setGraph(null); setRelated(null);
   };
 
+  const pickConnection = (c: SourceConnection) => {
+    setConnectionId(c.source_system_id);
+    setOrigin("snowflake");
+    setDatabase(c.database_name);
+    setSourceType(c.source_type);
+    setSchema(c.schema_name);
+    resetDownstream();
+    setLoading("tables");
+    load(async () => {
+      try {
+        const [s, t] = await Promise.all([loadSchemas(c.database_name), loadTables(c.database_name, c.schema_name)]);
+        setSchemas(s.schemas);
+        setTables(t.tables);
+      } catch (e) {
+        setError(e instanceof Error ? `${e.message} — your role may not read ${c.database_name}.${c.schema_name}.` : "Could not list tables");
+      } finally {
+        setLoading(null);
+      }
+    });
+  };
+
   const pickDatabase = (name: string, type: string) => {
     if (name === database) return;
+    setConnectionId("");
     setDatabase(name);
     setSourceType(type === "IMPORTED DATABASE" ? "SNOWFLAKE_SHARE" : "SNOWFLAKE_DATABASE");
     setSchema(""); setTables([]); setSchemas([]);
@@ -172,6 +198,7 @@ export function OnboardingForm({
 
   const pickSchema = (name: string) => {
     if (name === schema) return;
+    if (connection && name !== connection.schema_name) setConnectionId("");
     setSchema(name);
     resetDownstream();
     setLoading("tables");
@@ -227,8 +254,9 @@ export function OnboardingForm({
       run_name: runName.trim(),
       source: {
         origin: origin || "snowflake",
+        connection_id: connection?.source_system_id ?? null,
         database, schema,
-        source_system_name: sourceSystemName(database, schema),
+        source_system_name: connection?.source_system_name || sourceSystemName(database, schema),
         source_type: external ? `EXTERNAL_${(details.external_connector || "UNKNOWN").toUpperCase()}` : sourceType,
         tables: pickedTables,
         details,
@@ -358,6 +386,7 @@ export function OnboardingForm({
               runName={runName} setRunName={setRunName}
               origin={origin} setOrigin={setOrigin}
               details={details} setDetails={setDetails}
+              connections={connections} connectionId={connectionId} onPickConnection={pickConnection}
             />
           )}
           {step === 1 && (

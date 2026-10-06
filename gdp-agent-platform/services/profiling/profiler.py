@@ -6,8 +6,11 @@ iterative_mapper.py (semantic hints), extended with patterns, lengths, duplicate
 
 from __future__ import annotations
 
+import hashlib
+import json
+import math
 import re
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from services.source.identifiers import quote
 
@@ -15,6 +18,14 @@ NULL_PLACEHOLDERS = ("", "N/A", "NA", "NULL", "NONE", "<NULL>", ".")
 TOP_VALUES = 10
 TOP_PATTERNS = 5
 ENUM_MAX_DISTINCT = 20
+
+PROFILER_VERSION = "2"
+LARGE_TABLE_ROWS = 10_000_000
+SAMPLE_ROWS = 100_000
+HISTOGRAM_BUCKETS = 10
+APPROX_KEY_TOLERANCE = 0.02
+RUN_SCOPED_KEYS = ("landing_column_id", "potential_foreign_key")
+STAGE_PATH = re.compile(r"^[A-Z0-9_]+(/[A-Z0-9_]+){3}\.json$")
 
 FAMILIES = {
     "TEXT": ("VARCHAR", "CHAR", "STRING", "TEXT"),
@@ -43,8 +54,19 @@ def type_family(data_type: str) -> str:
     return "OTHER"
 
 
-def stats_sql(table_fqn: str, columns: Sequence[Tuple[str, str]]) -> str:
-    """One pass over the table: counts, robust nulls, distinct, min/max, length and numeric stats per column."""
+def is_large(row_count: Optional[int]) -> bool:
+    return row_count is not None and int(row_count) > LARGE_TABLE_ROWS
+
+
+def sampled(table_fqn: str, approximate: bool) -> str:
+    return f"{table_fqn} SAMPLE ({SAMPLE_ROWS} ROWS)" if approximate else table_fqn
+
+
+def stats_sql(table_fqn: str, columns: Sequence[Tuple[str, str]], approximate: bool = False) -> str:
+    """One pass over the table: counts, robust nulls, distinct, min/max, length and numeric stats per column.
+
+    Above LARGE_TABLE_ROWS the distinct count is APPROX_COUNT_DISTINCT (HyperLogLog) so the scan stays linear.
+    """
     parts = ["COUNT(*) AS ROW_COUNT"]
     placeholders = ", ".join(f"'{p}'" for p in NULL_PLACEHOLDERS)
     for i, (name, data_type) in enumerate(columns):
@@ -62,8 +84,76 @@ def stats_sql(table_fqn: str, columns: Sequence[Tuple[str, str]]) -> str:
             parts.append(f"COUNT({q}) AS V{i}")
         if family == "NUMBER":
             parts.append(f"AVG({q})::FLOAT AS AVG{i}")
-        parts += [f"COUNT(DISTINCT {q}) AS D{i}", f"MIN({q})::VARCHAR AS MIN{i}", f"MAX({q})::VARCHAR AS MAX{i}"]
+        count_distinct = f"APPROX_COUNT_DISTINCT({q})" if approximate else f"COUNT(DISTINCT {q})"
+        parts += [f"{count_distinct} AS D{i}", f"MIN({q})::VARCHAR AS MIN{i}", f"MAX({q})::VARCHAR AS MAX{i}"]
     return f"SELECT {', '.join(parts)} FROM {table_fqn}"
+
+
+def frequencies_sql(table_fqn: str, columns: Sequence[Tuple[str, str]], limit: int = TOP_VALUES,
+                    approximate: bool = False) -> Optional[str]:
+    """Top values of every profilable column in one statement; C is the column's position in `columns`."""
+    source = sampled(table_fqn, approximate)
+    parts = []
+    for i, (name, data_type) in enumerate(columns):
+        if type_family(data_type) == "OTHER":
+            continue
+        q = quote(name)
+        parts.append(f"SELECT {i} AS C, V, N FROM (SELECT {q}::VARCHAR AS V, COUNT(*) AS N FROM {source} "
+                     f"WHERE {q} IS NOT NULL GROUP BY 1 ORDER BY 2 DESC, 1 LIMIT {int(limit)})")
+    return " UNION ALL ".join(parts) or None
+
+
+def patterns_sql(table_fqn: str, columns: Sequence[Tuple[str, str]], limit: int = TOP_PATTERNS,
+                 approximate: bool = False) -> Optional[str]:
+    source = sampled(table_fqn, approximate)
+    parts = []
+    for i, (name, data_type) in enumerate(columns):
+        if type_family(data_type) != "TEXT":
+            continue
+        q = quote(name)
+        shape = f"REGEXP_REPLACE(REGEXP_REPLACE(REGEXP_REPLACE({q}::VARCHAR, '[A-Z]', 'A'), '[a-z]', 'a'), '[0-9]', '9')"
+        parts.append(f"SELECT {i} AS C, P, N FROM (SELECT {shape} AS P, COUNT(*) AS N FROM {source} "
+                     f"WHERE {q} IS NOT NULL GROUP BY 1 ORDER BY 2 DESC, 1 LIMIT {int(limit)})")
+    return " UNION ALL ".join(parts) or None
+
+
+def _finite(value: Any) -> Optional[float]:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
+
+
+def histogram_specs(columns: Sequence[Tuple[str, str]], stats_row: Dict[str, Any]) -> List[Tuple[int, str, float, float]]:
+    """Numeric columns with a usable range: (position, name, low, high)."""
+    specs = []
+    for i, (name, data_type) in enumerate(columns):
+        if type_family(data_type) != "NUMBER":
+            continue
+        low, high = _finite(stats_row.get(f"MIN{i}")), _finite(stats_row.get(f"MAX{i}"))
+        if low is not None and high is not None and high > low:
+            specs.append((i, name, low, high))
+    return specs
+
+
+def histogram_sql(table_fqn: str, specs: Sequence[Tuple[int, str, float, float]],
+                  buckets: int = HISTOGRAM_BUCKETS, approximate: bool = False) -> Optional[str]:
+    """Equal-width buckets 1..buckets per numeric column; the maximum value falls in the last bucket."""
+    source = sampled(table_fqn, approximate)
+    parts = []
+    for i, name, low, high in specs:
+        q = quote(name)
+        parts.append(f"SELECT {i} AS C, LEAST(GREATEST(WIDTH_BUCKET({q}, {low!r}, {high!r}, {int(buckets)}), 1), "
+                     f"{int(buckets)}) AS B, COUNT(*) AS N FROM {source} WHERE {q} IS NOT NULL GROUP BY 2")
+    return " UNION ALL ".join(parts) or None
+
+
+def build_histogram(low: float, high: float, counts: Dict[int, int],
+                    buckets: int = HISTOGRAM_BUCKETS) -> List[Dict[str, Any]]:
+    width = (high - low) / buckets
+    return [{"lower": low + width * (b - 1), "upper": low + width * b, "count": int(counts.get(b, 0))}
+            for b in range(1, buckets + 1)]
 
 
 def frequency_sql(table_fqn: str, column: str, limit: int = TOP_VALUES) -> str:
@@ -80,10 +170,12 @@ def pattern_sql(table_fqn: str, column: str, limit: int = TOP_PATTERNS) -> str:
             f"GROUP BY 1 ORDER BY 2 DESC, 1 LIMIT {int(limit)}")
 
 
-def column_stats(row: Dict[str, Any], i: int, row_count: int) -> Dict[str, Any]:
+def column_stats(row: Dict[str, Any], i: int, row_count: int, approximate: bool = False) -> Dict[str, Any]:
     non_null = int(row.get(f"N{i}") or 0)
     valid = int(row.get(f"V{i}") or 0)
     distinct = row.get(f"D{i}")
+    if approximate and distinct is not None:
+        distinct = min(int(distinct), non_null)
     stats: Dict[str, Any] = {
         "row_count": row_count,
         "null_count": row_count - valid,
@@ -180,13 +272,21 @@ def mask(value: Optional[str], pii: str) -> Optional[str]:
     return "***"
 
 
-def potential_key(row_count: int, stats: Dict[str, Any]) -> bool:
-    return bool(row_count) and stats.get("null_count") == 0 and stats.get("distinct_count") == row_count
+def potential_key(row_count: int, stats: Dict[str, Any], approximate: bool = False) -> bool:
+    if not row_count or stats.get("null_count") != 0 or stats.get("distinct_count") is None:
+        return False
+    if approximate:
+        return stats["distinct_count"] >= row_count * (1 - APPROX_KEY_TOLERANCE)
+    return stats["distinct_count"] == row_count
 
 
 def build_profile(name: str, data_type: str, stats: Dict[str, Any], frequencies: List[Dict[str, Any]],
-                  patterns: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """Combine raw statistics into the profile record; masks values of PII columns."""
+                  patterns: List[Dict[str, Any]], histogram: Optional[List[Dict[str, Any]]] = None,
+                  approximate: bool = False) -> Dict[str, Any]:
+    """Combine raw statistics into the profile record; masks values of PII columns.
+
+    With `approximate`, distinct counts are HyperLogLog estimates and frequencies come from a sample.
+    """
     family = type_family(data_type)
     non_null = stats["row_count"] - stats["physical_null_count"]
     card = cardinality(stats.get("distinct_count"), non_null)
@@ -202,7 +302,7 @@ def build_profile(name: str, data_type: str, stats: Dict[str, Any], frequencies:
         "cardinality": card,
         "semantic_type": semantic,
         "pii_classification": pii,
-        "potential_key": potential_key(stats["row_count"], stats),
+        "potential_key": potential_key(stats["row_count"], stats, approximate),
         "patterns": patterns,
         "sample_values": masked_freq[:5],
         "statistics": {
@@ -218,6 +318,11 @@ def build_profile(name: str, data_type: str, stats: Dict[str, Any], frequencies:
         profile["statistics"]["date_range"] = {"min": stats.get("min"), "max": stats.get("max")}
     if family == "NUMBER":
         profile["statistics"]["numeric_range"] = {"min": stats.get("min"), "max": stats.get("max")}
+        if histogram and pii == "NONE":
+            profile["statistics"]["histogram"] = histogram
+    if approximate:
+        profile["statistics"]["approximate"] = {"distinct": "APPROX_COUNT_DISTINCT",
+                                                "frequencies_sample_rows": SAMPLE_ROWS}
     return profile
 
 
@@ -265,3 +370,68 @@ ENRICHMENT_SCHEMA = {
 }
 
 GENERIC_TYPES = {"TEXT", "NUMBER", "OTHER", "CODE", "NAME"}
+
+
+# ---------------------------------------------------------------- persistent profile documents
+
+
+def stage_segment(name: str) -> str:
+    """Upper-case [A-Z0-9_] path segment. A short hash of the raw name is appended whenever cleaning
+    changed it, so "crm-customer", "crm customer" and "CRM_CUSTOMER" never share a file."""
+    raw = (name or "").strip()
+    assert raw, "empty name in profile path"
+    cleaned = re.sub(r"[^A-Z0-9_]", "_", raw.upper())
+    if cleaned != raw:
+        cleaned = f"{cleaned}__{hashlib.sha1(raw.encode('utf-8')).hexdigest()[:8].upper()}"
+    return cleaned
+
+
+def profile_stage_path(source_name: str, database: str, schema: str, table: str) -> str:
+    path = "/".join(stage_segment(p) for p in (source_name, database, schema, table)) + ".json"
+    assert STAGE_PATH.match(path), f"unsafe profile path: {path}"
+    return path
+
+
+def source_fingerprint(columns: Iterable[Tuple[str, str]], row_count: Optional[int],
+                       last_altered: Optional[str] = None) -> str:
+    """Changes when the table's columns, row count or source LAST_ALTERED change; a mismatch means stale."""
+    payload = {"columns": [[str(n), str(t)] for n, t in columns], "rows": None if row_count is None else int(row_count),
+               "altered": str(last_altered or ""), "profiler": PROFILER_VERSION}
+    return hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
+
+
+def profile_document(source: Dict[str, str], row_count: int, columns: Sequence[Dict[str, Any]],
+                     fingerprint: str, approximate: bool, model: Optional[str],
+                     profiled_at: str) -> Dict[str, Any]:
+    """Run-independent profile of one table. Landing ids and foreign keys depend on the run and are dropped."""
+    return {
+        "profiler_version": PROFILER_VERSION,
+        "source": {k: source[k] for k in ("source_name", "database", "schema", "table")},
+        "row_count": int(row_count),
+        "column_count": len(columns),
+        "approximate": bool(approximate),
+        "fingerprint": fingerprint,
+        "model_version": model,
+        "profiled_at": profiled_at,
+        "columns": [{k: v for k, v in c.items() if k not in RUN_SCOPED_KEYS} for c in columns],
+    }
+
+
+def document_checksum(document: Dict[str, Any]) -> str:
+    return hashlib.sha256(json.dumps(document, sort_keys=True, default=str).encode("utf-8")).hexdigest()
+
+
+def cache_is_fresh(index_row: Optional[Dict[str, Any]], fingerprint: str) -> bool:
+    return bool(index_row) and index_row.get("SOURCE_FINGERPRINT") == fingerprint \
+        and str(index_row.get("PROFILER_VERSION") or "") == PROFILER_VERSION
+
+
+def group_rows(raw: Iterable[Dict[str, Any]], value_key: str) -> Dict[int, List[Dict[str, Any]]]:
+    """Rows of the batched per-table queries (C = column position) grouped by column, most frequent first.
+    UNION ALL does not keep the branches' ORDER BY, so the order is restored here."""
+    grouped: Dict[int, List[Dict[str, Any]]] = {}
+    for row in raw:
+        grouped.setdefault(int(row["C"]), []).append({"value": row[value_key], "count": int(row["N"])})
+    for items in grouped.values():
+        items.sort(key=lambda x: (-x["count"], str(x["value"])))
+    return grouped

@@ -6,19 +6,22 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
 import { ModelEr } from "@/components/model-er";
 import type { ModelGraph } from "@/app/onboarding/intent-types";
-import { runProfiling } from "../pipeline-actions";
+import type { ProfileCacheTable } from "@/lib/types";
+import { refreshTableProfile, runProfiling, runProfilingFresh } from "../pipeline-actions";
 
 export default async function ProfilePage({ params }: { params: { runId: string } }) {
-  const [state, { columns }, graph] = await Promise.all([
+  const [state, { columns, tables = [], source = "registry" }, graph] = await Promise.all([
     getRun(params.runId),
     api<{ columns: {
       profile_id: string; table_name: string; column_name: string; data_type: string; semantic_type: string;
       pii_classification: string; row_count: number; null_percentage: number; distinct_percentage: number;
       cardinality: string | null; potential_key_flag: boolean; generated_description: string | null;
-    }[] }>(`/api/runs/${params.runId}/profile`),
+    }[]; tables?: ProfileCacheTable[]; source?: "registry" | "cache" }>(`/api/runs/${params.runId}/profile`),
     api<ModelGraph>(`/api/runs/${params.runId}/model-graph`).catch(() => null),
   ]);
-  const canRun = ["LANDING_COMPLETE", "PROFILING_PENDING"].includes(state.current_state);
+  const canRun = !state.is_archived && ["LANDING_COMPLETE", "PROFILING_PENDING"].includes(state.current_state);
+  const canRefresh = !state.is_archived && !["PROFILING_RUNNING", "LANDING_RUNNING"].includes(state.current_state);
+  const cachedCount = tables.filter((t) => t.status === "CACHED").length;
   return (
     <StageGate state={state} stage="PROFILING">
       <Card>
@@ -36,15 +39,81 @@ export default async function ProfilePage({ params }: { params: { runId: string 
               new table name appear below. Download the graph to keep the recommendation.
             </p>
           )}
+          {canRun && tables.length > 0 && (
+            <p className="mb-3 text-sm text-muted-foreground">
+              {cachedCount} of {tables.length} landed table{tables.length === 1 ? "" : "s"} already have a stored
+              profile and will be reused without scanning the data again.
+            </p>
+          )}
           {canRun && (
-            <StageAction
-              label={state.current_state === "PROFILING_PENDING" ? "Retry profiling" : "Start profiling"}
-              pendingLabel="Profiling tables…"
-              action={runProfiling.bind(null, params.runId)}
-            />
+            <div className="flex flex-wrap items-start gap-3">
+              <StageAction
+                label={state.current_state === "PROFILING_PENDING" ? "Retry profiling" : "Start profiling"}
+                pendingLabel="Profiling tables…"
+                action={runProfiling.bind(null, params.runId)}
+              />
+              {cachedCount > 0 && (
+                <StageAction
+                  variant="outline"
+                  label="Profile all from scratch"
+                  pendingLabel="Profiling every table…"
+                  action={runProfilingFresh.bind(null, params.runId)}
+                />
+              )}
+            </div>
           )}
         </CardContent>
       </Card>
+      {tables.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Table profiles</CardTitle>
+            <CardDescription>
+              Profiles are stored per source table and shared by every run. Re-profile a table when its data
+              changed in a way the row count does not show.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {source === "cache" && (
+              <p className="mb-3 text-sm text-muted-foreground">
+                This run has no profile rows of its own, so the stored profiles are shown instead.
+              </p>
+            )}
+            <Table>
+              <THead>
+                <TR><TH>Table</TH><TH>Profile</TH><TH>Rows</TH><TH>Columns</TH><TH>Mode</TH><TH>Profiled</TH><TH></TH></TR>
+              </THead>
+              <TBody>
+                {tables.map((t) => (
+                  <TR key={t.table_name}>
+                    <TD className="font-medium">{t.table_name}</TD>
+                    <TD>
+                      {t.status === "CACHED"
+                        ? <Badge variant="success">Profiled (cached)</Badge>
+                        : <Badge variant="outline">Unprofiled</Badge>}
+                    </TD>
+                    <TD>{t.row_count ?? "—"}</TD>
+                    <TD>{t.column_count ?? "—"}</TD>
+                    <TD>{t.status === "CACHED" ? (t.is_approximate ? "Sampled" : "Exact") : "—"}</TD>
+                    <TD className="text-muted-foreground">{t.profiled_at?.slice(0, 16) ?? "—"}</TD>
+                    <TD>
+                      {canRefresh && t.status === "CACHED" && (
+                        <StageAction
+                          size="sm"
+                          variant="outline"
+                          label="Re-profile table"
+                          pendingLabel="Re-profiling…"
+                          action={refreshTableProfile.bind(null, params.runId, t.table_name)}
+                        />
+                      )}
+                    </TD>
+                  </TR>
+                ))}
+              </TBody>
+            </Table>
+          </CardContent>
+        </Card>
+      )}
       {graph && (graph.suggestions.length > 0 || graph.targets.length > 0) && (
         <Card>
           <CardHeader>

@@ -24,6 +24,20 @@ export async function runProfiling(runId: string): Promise<ActionResult> {
   return after(runId, await attempt(() => api(`/api/runs/${runId}/profile`, { method: "POST" })));
 }
 
+/** Profiles every landed table, ignoring the persistent cache. */
+export async function runProfilingFresh(runId: string): Promise<ActionResult> {
+  return after(runId, await attempt(() =>
+    api(`/api/runs/${runId}/profile`, { method: "POST", body: JSON.stringify({ force_refresh: true }) }),
+  ));
+}
+
+/** Busts the cached profile of one table and re-profiles it; the run's stage does not change. */
+export async function refreshTableProfile(runId: string, table: string): Promise<ActionResult> {
+  return after(runId, await attempt(() =>
+    api(`/api/runs/${runId}/profile/refresh`, { method: "POST", body: JSON.stringify({ table }) }),
+  ));
+}
+
 export async function identifyDomain(runId: string): Promise<ActionResult> {
   return after(runId, await attempt(() => api(`/api/runs/${runId}/domain`, { method: "POST" })));
 }

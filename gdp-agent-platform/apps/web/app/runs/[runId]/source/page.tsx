@@ -1,5 +1,5 @@
 import { api, getRun } from "@/lib/api";
-import type { SourceOverview } from "@/lib/types";
+import type { CachedProfile, LandingTargets, SourceOverview } from "@/lib/types";
 import type { OnboardingIntent } from "@/app/onboarding/intent-types";
 import type { TableRow } from "@/app/onboarding/catalog-types";
 import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -14,11 +14,16 @@ export default async function SourcePage({ params }: { params: { runId: string }
   const intent = intentWrap.intent;
   const database = intent?.source.database || state.run.source_database || "";
   const schema = intent?.source.schema || state.run.source_schema || "";
-  const catalog = database && schema
-    ? await api<{ tables: TableRow[] }>(
-        `/api/catalog/tables?database=${encodeURIComponent(database)}&schema=${encodeURIComponent(schema)}`,
-      ).catch(() => ({ tables: [] as TableRow[] }))
-    : { tables: [] as TableRow[] };
+  const qs = `database=${encodeURIComponent(database)}&schema=${encodeURIComponent(schema)}`;
+  const [catalog, cache, landing] = await Promise.all([
+    database && schema
+      ? api<{ tables: TableRow[] }>(`/api/catalog/tables?${qs}`).catch(() => ({ tables: [] as TableRow[] }))
+      : { tables: [] as TableRow[] },
+    database && schema
+      ? api<{ profiles: CachedProfile[] }>(`/api/profiles?${qs}`).catch(() => ({ profiles: [] as CachedProfile[] }))
+      : { profiles: [] as CachedProfile[] },
+    api<LandingTargets>("/api/landing/targets").catch(() => null),
+  ]);
 
   if (!database || !schema) {
     return (
@@ -46,6 +51,13 @@ export default async function SourcePage({ params }: { params: { runId: string }
       intent={intent}
       overview={overview}
       initialTables={catalog.tables}
+      cachedProfiles={cache.profiles}
+      landingTargets={landing}
+      target={{
+        landing_database: state.run.landing_database || landing?.default.landing_database || "",
+        landing_schema: state.run.landing_schema || landing?.default.landing_schema || "LANDING",
+        storage_type: state.run.storage_type || "MANAGED",
+      }}
       canRegister={current === "CREATED"}
       canValidate={current === "SOURCE_REGISTERED" || failedIn === "ACCESS_VALIDATION"}
       canResumeLanding={["ACCESS_APPROVED", "LANDING_PENDING"].includes(current) || failedIn === "LANDING_RUNNING"}

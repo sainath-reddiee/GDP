@@ -41,7 +41,43 @@ CREATE OR REPLACE PROCEDURE {{database}}.CORE.REVIEW_TRANSITION(RUN_ID VARCHAR, 
   COMMENT = 'HUMAN review gate transition; records the reviewer and justification'
   EXECUTE AS OWNER;
 
+CREATE OR REPLACE PROCEDURE {{database}}.CORE.SET_RUN_ARCHIVED(RUN_IDS_JSON VARCHAR, ARCHIVED BOOLEAN)
+  RETURNS VARIANT
+  LANGUAGE PYTHON
+  RUNTIME_VERSION = '3.11'
+  PACKAGES = ('snowflake-snowpark-python')
+  IMPORTS = ('{{services_import}}')
+  HANDLER = 'services.workflow.procedures.set_runs_archived'
+  COMMENT = 'Archive (freeze and hide) or restore runs; recorded as workflow events'
+  EXECUTE AS OWNER;
+
+-- Cleanup soft-deletes runs (audit rows stay) and purges their sandbox: landing tables no other live
+-- run uses, the staged dbt workspace and auto-named DBT PROJECTs. METADATA profiles are never touched.
+CREATE OR REPLACE PROCEDURE {{database}}.CORE.SP_CLEANUP_PIPELINE_RUNS(RUN_IDS ARRAY, DROP_SANDBOX_TABLES BOOLEAN)
+  RETURNS VARIANT
+  LANGUAGE PYTHON
+  RUNTIME_VERSION = '3.11'
+  PACKAGES = ('snowflake-snowpark-python')
+  IMPORTS = ('{{services_import}}')
+  HANDLER = 'services.workflow.cleanup.cleanup_pipeline_runs_basic'
+  COMMENT = 'Delete runs; optionally drop their landing tables and dbt workspaces'
+  EXECUTE AS OWNER;
+
+CREATE OR REPLACE PROCEDURE {{database}}.CORE.SP_CLEANUP_PIPELINE_RUNS(
+    RUN_IDS ARRAY, DROP_SANDBOX_TABLES BOOLEAN, DELETE_WORKSPACES BOOLEAN, MARK_DELETED BOOLEAN)
+  RETURNS VARIANT
+  LANGUAGE PYTHON
+  RUNTIME_VERSION = '3.11'
+  PACKAGES = ('snowflake-snowpark-python')
+  IMPORTS = ('{{services_import}}')
+  HANDLER = 'services.workflow.cleanup.cleanup_pipeline_runs'
+  COMMENT = 'Delete runs or purge only their sandbox (MARK_DELETED = FALSE, archived or finished runs)'
+  EXECUTE AS OWNER;
+
 GRANT USAGE ON PROCEDURE {{database}}.CORE.GET_WORKFLOW_STATE(VARCHAR) TO DATABASE ROLE {{database}}.VIEWER;
+GRANT USAGE ON PROCEDURE {{database}}.CORE.SET_RUN_ARCHIVED(VARCHAR, BOOLEAN) TO DATABASE ROLE {{database}}.DATA_ENGINEER;
+GRANT USAGE ON PROCEDURE {{database}}.CORE.SP_CLEANUP_PIPELINE_RUNS(ARRAY, BOOLEAN) TO DATABASE ROLE {{database}}.DATA_ENGINEER;
+GRANT USAGE ON PROCEDURE {{database}}.CORE.SP_CLEANUP_PIPELINE_RUNS(ARRAY, BOOLEAN, BOOLEAN, BOOLEAN) TO DATABASE ROLE {{database}}.DATA_ENGINEER;
 GRANT USAGE ON PROCEDURE {{database}}.CORE.CREATE_RUN(VARCHAR) TO DATABASE ROLE {{database}}.DATA_ENGINEER;
 GRANT USAGE ON PROCEDURE {{database}}.CORE.REVIEW_TRANSITION(VARCHAR, VARCHAR, VARCHAR, VARCHAR, VARCHAR) TO DATABASE ROLE {{database}}.REVIEWER;
 GRANT USAGE ON PROCEDURE {{database}}.CORE.TRANSITION_RUN(VARCHAR, VARCHAR, VARCHAR, VARCHAR) TO DATABASE ROLE {{database}}.PLATFORM_ADMIN;
