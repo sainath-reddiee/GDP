@@ -781,19 +781,20 @@ export function SourcesHub({
               <span className="text-xs text-muted-foreground">· {notReady.length} not ready for modeling</span>
             )}
             <span className="mx-1 h-5 w-px bg-border" />
-            <Button size="sm" variant="ghost" disabled={submitting} onClick={() => void runProfile(checked, false)}>
-              {submitting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />} Profile
-            </Button>
-            <Button size="sm" variant="ghost" disabled={submitting} onClick={() => void runProfile(checked, true)}>
-              <RefreshCw className="h-3.5 w-3.5" /> Re-profile
-            </Button>
-            {notReady.length > 0 ? (
+            {/* Profile only touches tables without a current profile (unprofiled, stale, failed); ready ones are reused.
+                Re-profile forces a fresh run for every selected table even when the source has not changed. */}
+            {notReady.length > 0 && (
               <Button size="sm" variant="outline" disabled={submitting}
-                      onClick={() => void runProfile(notReady.map((t) => t.table_name), notReady.some((t) => t.status !== "UNPROFILED"))}
-                      title="Profile the selected tables that are not ready, then send them to modeling">
-                Profile {notReady.length} first
+                      onClick={() => void runProfile(notReady.map((t) => t.table_name), false)}
+                      title="Profile the selected tables that have no current profile; ready tables are reused as they are">
+                {submitting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
+                Profile {notReady.length} not ready
               </Button>
-            ) : null}
+            )}
+            <Button size="sm" variant="ghost" disabled={submitting} onClick={() => void runProfile(checked, true)}
+                    title="Run profiling again for every selected table, even if the source has not changed">
+              <RefreshCw className="h-3.5 w-3.5" /> Force re-profile
+            </Button>
             <Button size="sm" disabled={!canModel} onClick={() => setModeling([...checked].sort())}
                     title={canModel ? "Open the modeling panel for these tables" : "Every selected table must be ready (profiled and unchanged)"}>
               Send to modeling <ArrowRight className="h-3.5 w-3.5" />
