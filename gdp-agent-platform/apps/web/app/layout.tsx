@@ -22,9 +22,11 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
     <html lang="en">
       <body>
         <NavProgress />
-        <div className="grid min-h-screen grid-cols-[240px_1fr]">
+        <div className="flex min-h-screen">
           <Sidebar user={me?.user ?? null} role={me?.role ?? null} canLogout />
-          <main className="min-w-0 bg-background px-8 py-7">{children}</main>
+          <main className="min-w-0 flex-1 bg-background">
+            <div className="mx-auto w-full max-w-[1600px] px-6 py-7 lg:px-10">{children}</div>
+          </main>
         </div>
       </body>
     </html>

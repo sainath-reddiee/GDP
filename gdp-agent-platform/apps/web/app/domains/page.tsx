@@ -1,4 +1,5 @@
 import { api } from "@/lib/api";
+import { PageHeader } from "@/components/page-header";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
@@ -40,12 +41,8 @@ export default async function Domains() {
 
   return (
     <div className="space-y-5">
-      <div>
-        <h2>Domains</h2>
-        <p className="text-sm text-muted-foreground">
-          Domain contracts drive source detection on the Sources page and the mapping, STTM and dbt generation for every run.
-        </p>
-      </div>
+      <PageHeader eyebrow="Knowledge" title="Domains"
+                  description="Domain contracts drive source detection on the Sources page and the mapping, STTM and dbt generation for every run." />
       {visible.length === 0 && (
         <Card className="p-5 text-sm text-muted-foreground">No domains registered yet. Deploy the platform to seed the domain packs.</Card>
       )}

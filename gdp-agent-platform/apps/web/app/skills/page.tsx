@@ -1,4 +1,5 @@
 import { api } from "@/lib/api";
+import { PageHeader } from "@/components/page-header";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
@@ -9,7 +10,8 @@ export default async function Skills() {
   const { skills } = await api<{ skills: Skill[] }>("/api/skills");
   return (
     <div className="space-y-5">
-      <h2>Skills</h2>
+      <PageHeader eyebrow="Knowledge" title="Skills"
+                  description={`${skills.length} current playbooks the agents load before acting: profiling, mapping, STTM, data quality and dbt.`} />
       <Card>
         <Table>
           <THead><TR><TH>Skill</TH><TH>Type</TH><TH>Version</TH><TH>Status</TH><TH>Stage path</TH></TR></THead>

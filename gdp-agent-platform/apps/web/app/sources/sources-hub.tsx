@@ -396,8 +396,8 @@ export function SourcesHub({
       {/* header */}
       <div className="flex flex-wrap items-end gap-4">
         <div className="min-w-0">
-          <p className="text-xs font-medium uppercase tracking-wider text-primary">Data sources</p>
-          <h2 className="mt-1 text-2xl font-semibold tracking-tight">Sources</h2>
+          <p className="eyebrow">Work</p>
+          <h1 className="mt-1">Sources</h1>
           <p className="mt-1 max-w-3xl text-sm text-muted-foreground">
             Browse any database or share your role can read, profile tables where they live, and start modeling from any
             combination of staged profiles. Profiling never copies data.

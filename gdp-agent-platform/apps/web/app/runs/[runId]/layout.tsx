@@ -27,8 +27,13 @@ async function RunShell({ runId, children }: { runId: string; children: ReactNod
   const packLabel = displayDomain(state.run.domain_name);
   return (
     <div>
-      <div className="mb-6 flex flex-wrap items-center gap-2.5">
-        <h2>{state.run.run_name}</h2>
+      <p className="eyebrow mb-1">
+        <Link href="/runs" className="hover:underline">Runs</Link>
+        <span className="mx-1.5 text-muted-foreground">/</span>
+        <span className="font-mono normal-case tracking-normal text-muted-foreground">{runId.slice(0, 8)}</span>
+      </p>
+      <div className="mb-5 flex flex-wrap items-center gap-2.5">
+        <h1>{state.run.run_name}</h1>
         <Badge variant={tone}>{state.status}</Badge>
         <Badge variant="outline">{state.current_state}</Badge>
         <span className="text-sm text-muted-foreground">

@@ -11,6 +11,9 @@ import { Card } from "@/components/ui/card";
 import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
 import { STATUS_FILTERS } from "@/lib/run-filters";
+import { byStage } from "@/lib/stages";
+import { REVIEW_STATES } from "@/lib/run-insights";
+import { displayDomain } from "@/lib/catalog-display";
 
 
 export function lifecycleVariant(lifecycle: Lifecycle | string) {
@@ -19,6 +22,28 @@ export function lifecycleVariant(lifecycle: Lifecycle | string) {
   if (lifecycle === "RUNNING") return "warning" as const;
   if (lifecycle === "ARCHIVED") return "outline" as const;
   return "secondary" as const;
+}
+
+const STAGE_ORDER = ["SOURCE", "PROFILING", "MAPPING", "STTM", "SODA", "DBT", "VALIDATION", "REVIEW"];
+
+function stageInfo(r: RunSummary) {
+  const stage = r.current_stage === "DOMAIN" ? "PROFILING" : r.current_stage;
+  const index = stage ? STAGE_ORDER.indexOf(stage) : -1;
+  const label = stage ? byStage(stage)?.label ?? stage : "Not started";
+  const state = (r.current_state || "").replace(/_/g, " ").toLowerCase();
+  return { index, label, state };
+}
+
+function statusPill(r: RunSummary) {
+  if (r.current_state === "CANCELLED") return { label: "Cancelled", cls: "bg-muted text-muted-foreground", dot: "bg-muted-foreground/50" };
+  if (!r.is_archived && REVIEW_STATES.has(r.current_state)) return { label: "Needs review", cls: "bg-rose-500/10 text-rose-600", dot: "bg-rose-500" };
+  switch (r.lifecycle) {
+    case "RUNNING": return { label: "Running", cls: "bg-blue-500/10 text-blue-600", dot: "bg-blue-500 animate-pulse" };
+    case "DRAFT": return { label: "Draft", cls: "bg-slate-500/10 text-slate-600", dot: "bg-slate-400" };
+    case "COMPLETED": return { label: "Completed", cls: "bg-emerald-500/10 text-emerald-600", dot: "bg-emerald-500" };
+    case "FAILED": return { label: "Failed", cls: "bg-amber-500/10 text-amber-700", dot: "bg-amber-500" };
+    default: return { label: "Archived", cls: "bg-muted text-muted-foreground", dot: "bg-muted-foreground/50" };
+  }
 }
 
 export function formatAge(minutes: number | null | undefined, createdAt: string): string {
@@ -207,14 +232,38 @@ export function RunTable({
                 <Link href={`/runs/${r.run_id}`} className="font-medium text-primary hover:underline">{r.run_name}</Link>
                 <div className="font-mono text-[11px] text-muted-foreground">{r.run_id.slice(0, 8)}</div>
               </TD>
-              <TD>{r.domain_name ?? "—"}</TD>
+              <TD>{displayDomain(r.domain_name) ?? <span className="text-muted-foreground">—</span>}</TD>
               <TD className="font-mono text-xs">{sourceLabel(r)}</TD>
               <TD>{r.table_count || "—"}</TD>
               <TD>
-                <div>{r.current_stage ?? "—"}</div>
-                <div className="font-mono text-[11px] text-muted-foreground">{r.current_state}</div>
+                {(() => {
+                  const info = stageInfo(r);
+                  return (
+                    <div className="min-w-[150px]">
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-medium">{info.label}</span>
+                        <span className="flex gap-0.5" aria-label={`stage ${info.index + 1} of ${STAGE_ORDER.length}`}>
+                          {STAGE_ORDER.map((st, i) => (
+                            <span key={st} className={cn("h-1.5 w-2.5 rounded-full",
+                              i < info.index ? "bg-emerald-400" : i === info.index ? "bg-blue-500" : "bg-muted")} />
+                          ))}
+                        </span>
+                      </div>
+                      <div className="text-[11px] text-muted-foreground">{info.state}</div>
+                    </div>
+                  );
+                })()}
               </TD>
-              <TD><Badge variant={lifecycleVariant(r.lifecycle)}>{r.lifecycle}</Badge></TD>
+              <TD>
+                {(() => {
+                  const pill = statusPill(r);
+                  return (
+                    <span className={cn("inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 py-1 text-xs font-medium", pill.cls)}>
+                      <span className={cn("h-1.5 w-1.5 rounded-full", pill.dot)} /> {pill.label}
+                    </span>
+                  );
+                })()}
+              </TD>
               <TD className="text-muted-foreground" title={r.created_at}>{formatAge(r.age_minutes, r.created_at)}</TD>
             </TR>
           ))}
