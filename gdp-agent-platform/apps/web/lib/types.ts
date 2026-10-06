@@ -209,6 +209,7 @@ export type SourceInventory = {
   source: { source_system_id: string; source_system_name: string; source_type: string; database_name: string; schema_name: string };
   tables: InventoryTable[];
   jobs: { job_id: string; tables: string[]; started_at: number }[];
+  domain_candidates?: DomainCandidate[];
 };
 
 export type ProfileColumn = {
@@ -240,6 +241,7 @@ export type CatalogInventory = {
   source: { source_system_id: string; source_system_name: string } | null;
   tables: InventoryTable[];
   jobs: { job_id: string; tables: string[]; started_at: number }[];
+  domain_candidates?: DomainCandidate[];
 };
 
 export type ProfileStoreRow = {

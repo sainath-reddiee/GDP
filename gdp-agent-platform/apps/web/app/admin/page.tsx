@@ -1,4 +1,5 @@
 import { api, whoami } from "@/lib/api";
+import { PageHeader } from "@/components/page-header";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
@@ -15,7 +16,8 @@ export default async function Admin() {
   const outgoing = (s: string) => graph.transitions.filter((t) => t.from_state === s && t.enabled);
   return (
     <div className="space-y-5">
-      <h2>Admin</h2>
+      <PageHeader eyebrow="Platform" title="Admin"
+                  description="Session, Snowflake deployment and the workflow graph that governs every run." />
       <Card>
         <CardHeader>
           <CardTitle>Session</CardTitle>

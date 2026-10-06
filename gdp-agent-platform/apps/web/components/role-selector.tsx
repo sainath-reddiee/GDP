@@ -21,13 +21,13 @@ export function RoleSelector({ currentRole }: { currentRole: string | null }) {
   }, []);
 
   return (
-    <div className="mt-3 border-t border-white/10 pt-3">
+    <div className="mt-3 border-t border-white/10 pt-2.5">
       <label htmlFor="snowflake_role" className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-white/45">
         Snowflake role
       </label>
       <select
         id="snowflake_role"
-        className="w-full rounded-md border border-white/15 bg-white/10 px-2 py-1.5 text-xs text-white"
+        className="w-full rounded-lg border border-white/10 bg-white/[0.06] px-2 py-1.5 text-xs text-white outline-none transition hover:border-white/25 focus:border-sky-400/60 [&>option]:text-slate-900"
         value={value}
         disabled={pending || roles.length === 0}
         onChange={(e) => {
