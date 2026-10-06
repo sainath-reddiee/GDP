@@ -158,7 +158,7 @@ def test_seed_pack_and_skills():
     skills = list_skills()
     names = {s["name"] for s in skills}
     assert {"GDP_DOMAIN_SKILL", "MAPPING_SKILL", "STTM_SKILL", "SODA_SKILL", "VALIDATION_SKILL"} <= names
-    assert {"SILVER-MODEL", "DBT-ONBOARD-SOURCE", "AI-DATA-MODELING", "COLUMN-PROFILING",
+    assert {"SILVER-MODEL", "GDP-DBT-ONBOARD-SOURCE", "AI-DATA-MODELING", "COLUMN-PROFILING",
             "AI-SCHEMA-MAPPING", "DEV-DATAREADINESS-CHECK"} <= names
     silver = next(s for s in skills if s["name"] == "SILVER-MODEL")
     assert silver["source_name"] == "silver-model"

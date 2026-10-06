@@ -1,0 +1,1711 @@
+{
+  "domain": {
+    "name": "OPPORTUNITY",
+    "description": "Sales opportunities and deals: a single OPPORTUNITY_CORE hub linked to company and contact.",
+    "owner": "GDP Data Office",
+    "silver_database": "DEV_GDP_SILVER_DB",
+    "silver_schema": "OPPORTUNITY",
+    "contract": "snowflake/skills/gdp/dbt-onboard-source/references/opportunity-contract.md",
+    "signals": {
+      "tables": {
+        "OPPORTUNITY": 3,
+        "OPPTY": 3,
+        "OPP": 2,
+        "DEAL": 3,
+        "PIPELINE": 3,
+        "PURSUIT": 3,
+        "LEAD": 2,
+        "PROPOSAL": 2,
+        "BID": 2
+      },
+      "columns": {
+        "STAGE": 3,
+        "DEAL": 2,
+        "CLOSE": 2,
+        "PIPELINE": 3,
+        "WIN": 2,
+        "LOSS": 2,
+        "PROBABILITY": 3,
+        "RFP": 3,
+        "SOP": 2,
+        "COP": 2,
+        "REVENUE": 1,
+        "FEE": 1,
+        "SERVICE": 1,
+        "SALES": 1,
+        "MOMENTUM": 2,
+        "FORECAST": 2,
+        "OPPORTUNITY": 3,
+        "__C": 1
+      }
+    },
+    "source_systems": []
+  },
+  "targets": [
+    {
+      "schema": "OPPORTUNITY",
+      "table": "OPPORTUNITY_CORE",
+      "table_type": "HUB",
+      "grain": "one row per SOURCE_UNIQUE_ID per REF_GDP_SOURCE_SYSTEM_SKEY",
+      "business_keys": [
+        "SOURCE_UNIQUE_ID",
+        "REF_GDP_SOURCE_SYSTEM_SKEY"
+      ],
+      "scd_type": "1+HIST",
+      "description": "Hub OPPORTUNITY_CORE of OPPORTUNITY.",
+      "model_spec": {
+        "role": "hub",
+        "hub": "OPPORTUNITY_CORE",
+        "hub_fk": null,
+        "hkey_columns": [
+          "OPPORTUNITY_NAME",
+          "OPPORTUNITY_RECORD_TYPE_DESC",
+          "PROPOSAL_TYPE",
+          "OPPORTUNITY_CONVERSION_TYPE",
+          "ACCOUNT_NAME",
+          "OPPORTUNITY_CREATE_DATE",
+          "OCCUPIER_VS_INVESTOR",
+          "OPPORTUNITY_OWNER",
+          "OPPORTUNITY_TEAM",
+          "PURSUIT_NOTES",
+          "CLIENT_TYPE",
+          "SQFT_SIZE",
+          "ESTIMATED_CLOSE_DATE",
+          "EXPECTED_REVENUE_START_DATE",
+          "ESTIMATED_CBRE_NET_REVENUE_BY_SERVICE_LINE",
+          "ESTIMATED_SOP_BY_SERVICE_LINE",
+          "ESTIMATED_COP_BY_SERVICE_LINE",
+          "CONFIDENTIAL",
+          "WIN_LOSS_TYPE",
+          "PROBABILITY_ADJUSTED_PIPELINE_ANALYTICS",
+          "INCLUDED_IN_PIPELINE",
+          "MANAGING_OFFICE_ALLOCATIONS_CBRE_COMMISSION_PCT",
+          "FUNCTIONAL_UNIT_ALLOCATIONS_CBRE_COMMISSION_PCT",
+          "OPPORTUNITY_NAME_LEGACY",
+          "OPPORTUNITY_LOSS_REASON_NAME",
+          "OPPORTUNITY_LEAD_SOURCE",
+          "OWNER_LOCAL_MARKET_AREA_NAME",
+          "OWNER_MARKET_GROUP",
+          "LOCAL_CURRENCY_CODE",
+          "OPPORTUNITY_CREATE_TS",
+          "OPPORTUNITY_MODIFIED_TS",
+          "EST_CLOSE_DATE",
+          "ACTUAL_CLOSE_DATE",
+          "EMERALD_LEAD",
+          "PARENT_OPPORTUNITY_ID",
+          "IS_MANAGED_BROKERAGE",
+          "IS_PIPELINE_MANAGED_BROKERAGE",
+          "IS_DCS_OPPORTUNITY",
+          "PRIMARY_PRODUCT",
+          "PIPELINE_SEGMENT_SOURCE_NAME",
+          "TARGET_OPPORTUNITY_CATEGORY_NAME",
+          "OUTSOURCING_GENERATION",
+          "EXECUTIVE_SPONSOR",
+          "SOA_ROLE",
+          "SOA_DEAL_STATUS_NOTES",
+          "OPPORTUNITY_PORTFOLIO_SIZE",
+          "OPPORTUNITY_PORTFOLIO_SIZE_UOM",
+          "LATEST_OPPORTUNITY_UPDATES",
+          "CLIENT_DIAGNOSTIC",
+          "MOMENTUM_SCORE_INITIAL",
+          "MOMENTUM_SCORE_CURRENT",
+          "OVERALL_PURSUIT_STRATEGY",
+          "PURSUIT_CHARTER",
+          "WIN_STRATEGY",
+          "DAYS_IN_CURRENT_STAGE",
+          "RECORDED_YEAR",
+          "RECORDED_DATE",
+          "PROJECT_ID",
+          "PS_PROJECT_ID",
+          "JV_DSA_PHASE_ID",
+          "JV_DSA_PHASE_NAME",
+          "BUILDING_ID",
+          "PROJECT_DESC",
+          "CBRE_PROJECT_MANAGEMENT_ROLE",
+          "CBRE_AUDIT_RESULT_F",
+          "PROJECT_COMPLETION_DATE",
+          "PROJECT_LOCATION",
+          "PROJECT_START_DATE",
+          "SUB_PRODUCTS",
+          "CLOSE_DATE_PROGNOSIS",
+          "RFP_RELEASE_DATE",
+          "RFP_RELEASE_QTR",
+          "RFP_RELEASE_YEAR",
+          "RENEWAL_EXPIRATION_DATE",
+          "ADDITIONAL_SOURCE_SECTOR",
+          "LAND_SIZE",
+          "LAND_SIZE_UOM",
+          "STRATEGIC_PARTNER_NAME",
+          "STRATEGIC_PARTNER_ID",
+          "EQUITY_PARTNER_CSA",
+          "EQUITY_PARTNER_CSA_2",
+          "EQUITY_PARTNER_JV",
+          "EQUITY_PARTNER_JV_2",
+          "BUYER_NAME",
+          "EXPECTED_GROSS_REVENUE_AMT_LOCAL_CURR",
+          "EXPECTED_GROSS_REVENUE_AMT_USD",
+          "EST_YRLY_CLIENT_OPERATING_PROFIT_USD",
+          "EST_YRLY_SEGMENT_OPERATING_PROFIT_USD",
+          "EXPECTED_NET_REVENUE_AMT_LOCAL_CURR",
+          "EXPECTED_NET_REVENUE_AMT_USD",
+          "EXPECTED_ANNUAL_GROSS_REVENUE_AMS_US",
+          "EXPECTED_ANNUAL_GROSS_REVENUE_AMS_CAN",
+          "EXPECTED_ANNUAL_GROSS_REVENUE_AMS_LATAM",
+          "EXPECTED_ANNUAL_GROSS_REVENUE_TOTAL_AMS",
+          "EXPECTED_ANNUAL_GROSS_REVENUE_TOTAL_APAC",
+          "EXPECTED_ANNUAL_GROSS_REVENUE_TOTAL_EMEA",
+          "EXPECTED_ANNUAL_NET_REVENUE_AMS_US",
+          "EXPECTED_ANNUAL_NET_REVENUE_AMS_CAN",
+          "EXPECTED_ANNUAL_NET_REVENUE_AMS_LATAM",
+          "EXPECTED_ANNUAL_NET_REVENUE_TOTAL_AMS",
+          "EXPECTED_ANNUAL_NET_REVENUE_TOTAL_APAC",
+          "EXPECTED_ANNUAL_NET_REVENUE_TOTAL_EMEA",
+          "EXPECTED_GROSS_REVENUE_LOB_PJM",
+          "EXPECTED_GROSS_REVENUE_LOB_FM",
+          "EXPECTED_GROSS_REVENUE_LOB_LEASING",
+          "EXPECTED_NET_REVENUE_LOB_PJM",
+          "EXPECTED_NET_REVENUE_LOB_FM",
+          "EXPECTED_NET_REVENUE_LOB_LEASING",
+          "ESTIMATED_COP_LOB_PJM",
+          "ESTIMATED_COP_LOB_FM",
+          "ESTIMATED_COP_LOB_LEASING",
+          "ESTIMATED_SOP_LOB_PJM",
+          "ESTIMATED_SOP_LOB_FM",
+          "ESTIMATED_SOP_LOB_LEASING",
+          "EST_GR_COP_MARGIN",
+          "EST_NR_COP_MARGIN",
+          "EST_GR_SOP_MARGIN",
+          "EST_NR_SOP_MARGIN"
+        ],
+        "reference_ctes": {
+          "country_mapping": "country_mapping as (\n    select\n        upper(trim(value_1)) as value_1_norm,\n        target_value\n    from {{ source('opportunity_shared_reference', 'gdp_country_mapping') }}\n    where model_name = 'country_name_std'\n)",
+          "ref_country": "ref_country as (\n    select ref_country_skey, country_name\n    from {{ source('opportunity_geo_reference', 'ref_country') }}\n    where gdp_is_active = TRUE\n)",
+          "ref_status": "ref_status as (\n    select opportunity_status_skey, opportunity_status_desc\n    from {{ source('opportunity_reference', 'ref_opportunity_status') }}\n)",
+          "ref_deal_type": "ref_deal_type as (\n    select opportunity_deal_type_skey, opportunity_deal_type_desc\n    from {{ source('opportunity_reference', 'ref_opportunity_deal_types') }}\n)",
+          "ref_service_lines": "ref_service_lines as (\n    select opportunity_service_lines_skey, opportunity_service_lines_desc\n    from {{ source('opportunity_reference', 'ref_opportunity_service_lines') }}\n)",
+          "ref_category": "ref_category as (\n    select opportunity_category_skey, opportunity_category_desc\n    from {{ source('opportunity_reference', 'ref_opportunity_category') }}\n)",
+          "ref_segment": "ref_segment as (\n    select opportunity_segment_skey, opportunity_segment_desc\n    from {{ source('opportunity_reference', 'ref_opportunity_segment') }}\n)",
+          "ref_business_line": "ref_business_line as (\n    select opportunity_business_line_skey, opportunity_business_line_name\n    from {{ source('opportunity_reference', 'ref_opportunity_business_line') }}\n)",
+          "ref_selling_team": "ref_selling_team as (\n    select opportunity_selling_team_skey, opportunity_selling_team_desc\n    from {{ source('opportunity_reference', 'ref_opportunity_selling_team') }}\n)",
+          "ref_global_region": "ref_global_region as (\n    select ref_global_region_skey, global_region_name\n    from {{ source('opportunity_geo_reference', 'ref_global_region') }}\n)"
+        },
+        "reference_joins": [
+          {
+            "cte": "country_mapping",
+            "alias": "cm",
+            "condition": "upper(trim(o.lead_country)) = cm.value_1_norm"
+          },
+          {
+            "cte": "ref_country",
+            "alias": "cntry",
+            "condition": "upper(trim(coalesce(cm.target_value, o.lead_country))) = upper(trim(cntry.country_name))"
+          },
+          {
+            "cte": "ref_status",
+            "alias": "st",
+            "condition": "upper(trim(o.stage_name)) = upper(trim(st.opportunity_status_desc))"
+          },
+          {
+            "cte": "ref_deal_type",
+            "alias": "dt",
+            "condition": "upper(trim(o.deal_type)) = upper(trim(dt.opportunity_deal_type_desc))"
+          },
+          {
+            "cte": "ref_service_lines",
+            "alias": "svc",
+            "condition": "upper(trim(o.service_line)) = upper(trim(svc.opportunity_service_lines_desc))"
+          },
+          {
+            "cte": "ref_category",
+            "alias": "cat",
+            "condition": "upper(trim(o.category)) = upper(trim(cat.opportunity_category_desc))"
+          },
+          {
+            "cte": "ref_segment",
+            "alias": "seg",
+            "condition": "upper(trim(o.stage_name)) = upper(trim(seg.opportunity_segment_desc))"
+          },
+          {
+            "cte": "ref_business_line",
+            "alias": "bl",
+            "condition": "upper(trim(o.service_line)) = upper(trim(bl.opportunity_business_line_name))"
+          },
+          {
+            "cte": "ref_selling_team",
+            "alias": "stm",
+            "condition": "upper(trim(o.sales_lead)) = upper(trim(stm.opportunity_selling_team_desc))"
+          },
+          {
+            "cte": "ref_global_region",
+            "alias": "gr",
+            "condition": "upper(trim(o.region)) = upper(trim(gr.global_region_name))"
+          }
+        ],
+        "minimum_mapping": [
+          "`source_unique_id`",
+          "`opportunity_name`",
+          "`stage_name` (drives `ref_opportunity_status`, `ref_opportunity_segment`)"
+        ],
+        "casts": [
+          {
+            "target_column": "SQFT_SIZE",
+            "target_type": "FLOAT",
+            "source_type": "NUMBER",
+            "cast": "o.col::float"
+          },
+          {
+            "target_column": "PROBABILITY_ADJUSTED_PIPELINE_ANALYTICS",
+            "target_type": "FLOAT",
+            "source_type": "NUMBER",
+            "cast": "o.col::float"
+          },
+          {
+            "target_column": "MOMENTUM_SCORE_INITIAL",
+            "target_type": "FLOAT",
+            "source_type": "NUMBER",
+            "cast": "o.col::float"
+          },
+          {
+            "target_column": "MOMENTUM_SCORE_CURRENT",
+            "target_type": "FLOAT",
+            "source_type": "NUMBER",
+            "cast": "o.col::float"
+          },
+          {
+            "target_column": "LAND_SIZE",
+            "target_type": "FLOAT",
+            "source_type": "NUMBER",
+            "cast": "o.col::float"
+          },
+          {
+            "target_column": "ESTIMATED_CLOSE_DATE",
+            "target_type": "TIMESTAMP_NTZ",
+            "source_type": "DATE",
+            "cast": "o.col::timestamp_ntz"
+          },
+          {
+            "target_column": "EST_CLOSE_DATE",
+            "target_type": "TIMESTAMP_NTZ",
+            "source_type": "DATE",
+            "cast": "o.col::timestamp_ntz"
+          },
+          {
+            "target_column": "RFP_RELEASE_DATE",
+            "target_type": "TIMESTAMP_NTZ",
+            "source_type": "DATE",
+            "cast": "o.col::timestamp_ntz"
+          },
+          {
+            "target_column": "RENEWAL_EXPIRATION_DATE",
+            "target_type": "TIMESTAMP_NTZ",
+            "source_type": "DATE",
+            "cast": "o.col::timestamp_ntz"
+          }
+        ]
+      },
+      "columns": [
+        {
+          "name": "OPPORTUNITY_CORE_SKEY",
+          "type": "NUMBER(19,0)",
+          "nullable": false,
+          "definition": "Generated by hub (sequence)",
+          "business_key": false
+        },
+        {
+          "name": "SOURCE_UNIQUE_ID",
+          "type": "TEXT",
+          "nullable": false,
+          "definition": "From source PK",
+          "business_key": true
+        },
+        {
+          "name": "REF_GDP_SOURCE_SYSTEM_SKEY",
+          "type": "NUMBER(3,0)",
+          "nullable": false,
+          "definition": "Cross join to ref_source_system",
+          "business_key": true
+        },
+        {
+          "name": "COMPANY_CORE_SKEY",
+          "type": "NUMBER(19,0)",
+          "nullable": false,
+          "definition": "FK to company_core (null if no link)",
+          "business_key": false
+        },
+        {
+          "name": "CONTACT_CORE_SKEY",
+          "type": "NUMBER(38,0)",
+          "nullable": false,
+          "definition": "FK to contact_core (null if no link)",
+          "business_key": false
+        },
+        {
+          "name": "REF_OPPORTUNITY_SERVICE_LINES_SKEY",
+          "type": "NUMBER(19,0)",
+          "nullable": true,
+          "definition": "LEFT JOIN to ref_opportunity_service_lines",
+          "business_key": false
+        },
+        {
+          "name": "REF_OPPORTUNITY_DEAL_TYPE_SKEY",
+          "type": "NUMBER(19,0)",
+          "nullable": true,
+          "definition": "LEFT JOIN to ref_opportunity_deal_types",
+          "business_key": false
+        },
+        {
+          "name": "REF_OPPORTUNITY_DEAL_SUBTYPE_SKEY",
+          "type": "NUMBER(19,0)",
+          "nullable": true,
+          "definition": "LEFT JOIN to ref_opportunity_deal_subtypes",
+          "business_key": false
+        },
+        {
+          "name": "REF_OPPORTUNITY_STATUS_SKEY",
+          "type": "NUMBER(19,0)",
+          "nullable": true,
+          "definition": "LEFT JOIN to ref_opportunity_status",
+          "business_key": false
+        },
+        {
+          "name": "PROPERTY_USAGE_SKEY",
+          "type": "NUMBER(19,0)",
+          "nullable": true,
+          "definition": "FK",
+          "business_key": false
+        },
+        {
+          "name": "COMPANY_INDUSTRY_SKEY",
+          "type": "NUMBER(38,0)",
+          "nullable": true,
+          "definition": "FK",
+          "business_key": false
+        },
+        {
+          "name": "REF_OPPORTUNITY_CATEGORY_SKEY",
+          "type": "NUMBER(19,0)",
+          "nullable": true,
+          "definition": "LEFT JOIN to ref_opportunity_category",
+          "business_key": false
+        },
+        {
+          "name": "OPPORTUNITY_RECORD_TYPE_DESC",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "REF_OPPORTUNITY_SEGMENT_SKEY",
+          "type": "NUMBER(19,0)",
+          "nullable": true,
+          "definition": "LEFT JOIN to ref_opportunity_segment",
+          "business_key": false
+        },
+        {
+          "name": "REF_OPPORTUNITY_BUSINESS_LINE_SKEY",
+          "type": "NUMBER(19,0)",
+          "nullable": true,
+          "definition": "LEFT JOIN to ref_opportunity_business_line",
+          "business_key": false
+        },
+        {
+          "name": "REF_OPPORTUNITY_ACCOUNT_TYPE_SKEY",
+          "type": "NUMBER(19,0)",
+          "nullable": true,
+          "definition": "FK",
+          "business_key": false
+        },
+        {
+          "name": "PROPOSAL_TYPE",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "OPPORTUNITY_CONVERSION_TYPE",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "REF_OPPORTUNITY_CONTRACT_STRUCTURE_SKEY",
+          "type": "NUMBER(19,0)",
+          "nullable": true,
+          "definition": "FK",
+          "business_key": false
+        },
+        {
+          "name": "REF_OPPORTUNITY_SELLING_TEAM_SKEY",
+          "type": "NUMBER(19,0)",
+          "nullable": true,
+          "definition": "LEFT JOIN to ref_opportunity_selling_team",
+          "business_key": false
+        },
+        {
+          "name": "REF_COUNTRY_NAME_SKEY",
+          "type": "NUMBER(19,0)",
+          "nullable": true,
+          "definition": "LEFT JOIN via country_mapping \u2192 ref_country",
+          "business_key": false
+        },
+        {
+          "name": "REF_GLOBAL_REGION_NAME_SKEY",
+          "type": "NUMBER(19,0)",
+          "nullable": true,
+          "definition": "LEFT JOIN to ref_global_region",
+          "business_key": false
+        },
+        {
+          "name": "REF_GLOBAL_SUB_REGION_NAME_SKEY",
+          "type": "NUMBER(19,0)",
+          "nullable": true,
+          "definition": "FK",
+          "business_key": false
+        },
+        {
+          "name": "REF_REPORTING_REGION_NAME_SKEY",
+          "type": "NUMBER(19,0)",
+          "nullable": true,
+          "definition": "FK",
+          "business_key": false
+        },
+        {
+          "name": "REF_MARKET_NAME_SKEY",
+          "type": "NUMBER(19,0)",
+          "nullable": true,
+          "definition": "FK",
+          "business_key": false
+        },
+        {
+          "name": "REF_SUB_MARKET_NAME_SKEY",
+          "type": "NUMBER(19,0)",
+          "nullable": true,
+          "definition": "FK",
+          "business_key": false
+        },
+        {
+          "name": "ACCOUNT_NAME",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "OPPORTUNITY_NAME",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "OPPORTUNITY_CREATE_DATE",
+          "type": "TIMESTAMP_NTZ",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "OCCUPIER_VS_INVESTOR",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "OPPORTUNITY_OWNER",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "OPPORTUNITY_TEAM",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "PURSUIT_NOTES",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "CLIENT_TYPE",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "SQFT_SIZE",
+          "type": "FLOAT",
+          "nullable": true,
+          "definition": "Cast NUMBER\u2192FLOAT in base CTE",
+          "business_key": false
+        },
+        {
+          "name": "ESTIMATED_CLOSE_DATE",
+          "type": "TIMESTAMP_NTZ",
+          "nullable": true,
+          "definition": "Cast DATE\u2192TIMESTAMP_NTZ in base CTE",
+          "business_key": false
+        },
+        {
+          "name": "EXPECTED_REVENUE_START_DATE",
+          "type": "TIMESTAMP_NTZ",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "ESTIMATED_CBRE_NET_REVENUE_BY_SERVICE_LINE",
+          "type": "NUMBER(38,6)",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "ESTIMATED_SOP_BY_SERVICE_LINE",
+          "type": "NUMBER(38,6)",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "ESTIMATED_COP_BY_SERVICE_LINE",
+          "type": "NUMBER(38,6)",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "CONFIDENTIAL",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "WIN_LOSS_TYPE",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "PROBABILITY_ADJUSTED_PIPELINE_ANALYTICS",
+          "type": "FLOAT",
+          "nullable": true,
+          "definition": "Cast NUMBER\u2192FLOAT in base CTE",
+          "business_key": false
+        },
+        {
+          "name": "INCLUDED_IN_PIPELINE",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "MANAGING_OFFICE_ALLOCATIONS_CBRE_COMMISSION_PCT",
+          "type": "NUMBER(18,6)",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "FUNCTIONAL_UNIT_ALLOCATIONS_CBRE_COMMISSION_PCT",
+          "type": "NUMBER(18,6)",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "OPPORTUNITY_NAME_LEGACY",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "OPPORTUNITY_LOSS_REASON_NAME",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "OPPORTUNITY_LEAD_SOURCE",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "OWNER_LOCAL_MARKET_AREA_NAME",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "OWNER_MARKET_GROUP",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "LOCAL_CURRENCY_CODE",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "OPPORTUNITY_CREATE_TS",
+          "type": "TIMESTAMP_NTZ",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "OPPORTUNITY_MODIFIED_TS",
+          "type": "TIMESTAMP_NTZ",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "EST_CLOSE_DATE",
+          "type": "TIMESTAMP_NTZ",
+          "nullable": true,
+          "definition": "Cast DATE\u2192TIMESTAMP_NTZ in base CTE",
+          "business_key": false
+        },
+        {
+          "name": "ACTUAL_CLOSE_DATE",
+          "type": "TIMESTAMP_NTZ",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "EMERALD_LEAD",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "PARENT_OPPORTUNITY_ID",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "IS_MANAGED_BROKERAGE",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "IS_PIPELINE_MANAGED_BROKERAGE",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "IS_DCS_OPPORTUNITY",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "PRIMARY_PRODUCT",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "PIPELINE_SEGMENT_SOURCE_NAME",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "TARGET_OPPORTUNITY_CATEGORY_NAME",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "OUTSOURCING_GENERATION",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "EXECUTIVE_SPONSOR",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "SOA_ROLE",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "SOA_DEAL_STATUS_NOTES",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "OPPORTUNITY_PORTFOLIO_SIZE",
+          "type": "NUMBER(38,6)",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "OPPORTUNITY_PORTFOLIO_SIZE_UOM",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "LATEST_OPPORTUNITY_UPDATES",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "CLIENT_DIAGNOSTIC",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "MOMENTUM_SCORE_INITIAL",
+          "type": "FLOAT",
+          "nullable": true,
+          "definition": "Cast NUMBER\u2192FLOAT in base CTE",
+          "business_key": false
+        },
+        {
+          "name": "MOMENTUM_SCORE_CURRENT",
+          "type": "FLOAT",
+          "nullable": true,
+          "definition": "Cast NUMBER\u2192FLOAT in base CTE",
+          "business_key": false
+        },
+        {
+          "name": "OVERALL_PURSUIT_STRATEGY",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "PURSUIT_CHARTER",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "WIN_STRATEGY",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "DAYS_IN_CURRENT_STAGE",
+          "type": "NUMBER(38,0)",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "RECORDED_YEAR",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "RECORDED_DATE",
+          "type": "TIMESTAMP_NTZ",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "PROJECT_ID",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "PS_PROJECT_ID",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "JV_DSA_PHASE_ID",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "JV_DSA_PHASE_NAME",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "BUILDING_ID",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "PROJECT_DESC",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "CBRE_PROJECT_MANAGEMENT_ROLE",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "CBRE_AUDIT_RESULT_F",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "PROJECT_COMPLETION_DATE",
+          "type": "TIMESTAMP_NTZ",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "PROJECT_LOCATION",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "PROJECT_START_DATE",
+          "type": "TIMESTAMP_NTZ",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "SUB_PRODUCTS",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "CLOSE_DATE_PROGNOSIS",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "RFP_RELEASE_DATE",
+          "type": "TIMESTAMP_NTZ",
+          "nullable": true,
+          "definition": "Cast DATE\u2192TIMESTAMP_NTZ in base CTE",
+          "business_key": false
+        },
+        {
+          "name": "RFP_RELEASE_QTR",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "RFP_RELEASE_YEAR",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "RENEWAL_EXPIRATION_DATE",
+          "type": "TIMESTAMP_NTZ",
+          "nullable": true,
+          "definition": "Cast DATE\u2192TIMESTAMP_NTZ in base CTE",
+          "business_key": false
+        },
+        {
+          "name": "ADDITIONAL_SOURCE_SECTOR",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "LAND_SIZE",
+          "type": "FLOAT",
+          "nullable": true,
+          "definition": "Cast NUMBER\u2192FLOAT in base CTE",
+          "business_key": false
+        },
+        {
+          "name": "LAND_SIZE_UOM",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "STRATEGIC_PARTNER_NAME",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "STRATEGIC_PARTNER_ID",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "EQUITY_PARTNER_CSA",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "EQUITY_PARTNER_CSA_2",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "EQUITY_PARTNER_JV",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "EQUITY_PARTNER_JV_2",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "BUYER_NAME",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "EXPECTED_GROSS_REVENUE_AMT_LOCAL_CURR",
+          "type": "NUMBER(38,6)",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "EXPECTED_GROSS_REVENUE_AMT_USD",
+          "type": "NUMBER(38,6)",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "EST_YRLY_CLIENT_OPERATING_PROFIT_USD",
+          "type": "NUMBER(38,6)",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "EST_YRLY_SEGMENT_OPERATING_PROFIT_USD",
+          "type": "NUMBER(38,6)",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "EXPECTED_NET_REVENUE_AMT_LOCAL_CURR",
+          "type": "NUMBER(38,6)",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "EXPECTED_NET_REVENUE_AMT_USD",
+          "type": "NUMBER(38,6)",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "EXPECTED_ANNUAL_GROSS_REVENUE_AMS_US",
+          "type": "NUMBER(38,6)",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "EXPECTED_ANNUAL_GROSS_REVENUE_AMS_CAN",
+          "type": "NUMBER(38,6)",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "EXPECTED_ANNUAL_GROSS_REVENUE_AMS_LATAM",
+          "type": "NUMBER(38,6)",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "EXPECTED_ANNUAL_GROSS_REVENUE_TOTAL_AMS",
+          "type": "NUMBER(38,6)",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "EXPECTED_ANNUAL_GROSS_REVENUE_TOTAL_APAC",
+          "type": "NUMBER(38,6)",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "EXPECTED_ANNUAL_GROSS_REVENUE_TOTAL_EMEA",
+          "type": "NUMBER(38,6)",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "EXPECTED_ANNUAL_NET_REVENUE_AMS_US",
+          "type": "NUMBER(38,6)",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "EXPECTED_ANNUAL_NET_REVENUE_AMS_CAN",
+          "type": "NUMBER(38,6)",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "EXPECTED_ANNUAL_NET_REVENUE_AMS_LATAM",
+          "type": "NUMBER(38,6)",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "EXPECTED_ANNUAL_NET_REVENUE_TOTAL_AMS",
+          "type": "NUMBER(38,6)",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "EXPECTED_ANNUAL_NET_REVENUE_TOTAL_APAC",
+          "type": "NUMBER(38,6)",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "EXPECTED_ANNUAL_NET_REVENUE_TOTAL_EMEA",
+          "type": "NUMBER(38,6)",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "EXPECTED_GROSS_REVENUE_LOB_PJM",
+          "type": "NUMBER(38,6)",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "EXPECTED_GROSS_REVENUE_LOB_FM",
+          "type": "NUMBER(38,6)",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "EXPECTED_GROSS_REVENUE_LOB_LEASING",
+          "type": "NUMBER(38,6)",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "EXPECTED_NET_REVENUE_LOB_PJM",
+          "type": "NUMBER(38,6)",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "EXPECTED_NET_REVENUE_LOB_FM",
+          "type": "NUMBER(38,6)",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "EXPECTED_NET_REVENUE_LOB_LEASING",
+          "type": "NUMBER(38,6)",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "ESTIMATED_COP_LOB_PJM",
+          "type": "NUMBER(38,6)",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "ESTIMATED_COP_LOB_FM",
+          "type": "NUMBER(38,6)",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "ESTIMATED_COP_LOB_LEASING",
+          "type": "NUMBER(38,6)",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "ESTIMATED_SOP_LOB_PJM",
+          "type": "NUMBER(38,6)",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "ESTIMATED_SOP_LOB_FM",
+          "type": "NUMBER(38,6)",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "ESTIMATED_SOP_LOB_LEASING",
+          "type": "NUMBER(38,6)",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "EST_GR_COP_MARGIN",
+          "type": "NUMBER(18,6)",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "EST_NR_COP_MARGIN",
+          "type": "NUMBER(18,6)",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "EST_GR_SOP_MARGIN",
+          "type": "NUMBER(18,6)",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "EST_NR_SOP_MARGIN",
+          "type": "NUMBER(18,6)",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "OPPORTUNITY_CORE_HKEY",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "Generated by `{{ m_opportunity_core_hkey() }}`",
+          "business_key": false
+        },
+        {
+          "name": "GDP_IS_ACTIVE",
+          "type": "BOOLEAN",
+          "nullable": false,
+          "definition": "From source `GDP_IS_ACTIVE`",
+          "business_key": false
+        },
+        {
+          "name": "GDP_INSERTED_TS",
+          "type": "TIMESTAMP_NTZ",
+          "nullable": false,
+          "definition": "Set by hub model",
+          "business_key": false
+        },
+        {
+          "name": "GDP_INSERTED_BY",
+          "type": "TEXT",
+          "nullable": false,
+          "definition": "`current_user`",
+          "business_key": false
+        },
+        {
+          "name": "GDP_UPDATED_TS",
+          "type": "TIMESTAMP_NTZ",
+          "nullable": false,
+          "definition": "Set by hub model",
+          "business_key": false
+        },
+        {
+          "name": "GDP_UPDATED_BY",
+          "type": "TEXT",
+          "nullable": false,
+          "definition": "`current_user`",
+          "business_key": false
+        }
+      ]
+    }
+  ],
+  "knowledge": [
+    {
+      "key": "opportunity.model.opportunity_core",
+      "type": "MODEL_DEFINITION",
+      "title": "OPPORTUNITY_CORE (hub)",
+      "content": "Hub OPPORTUNITY_CORE of OPPORTUNITY. Grain: one row per SOURCE_UNIQUE_ID per REF_GDP_SOURCE_SYSTEM_SKEY. HKEY over OPPORTUNITY_NAME, OPPORTUNITY_RECORD_TYPE_DESC, PROPOSAL_TYPE, OPPORTUNITY_CONVERSION_TYPE, ACCOUNT_NAME, OPPORTUNITY_CREATE_DATE, OCCUPIER_VS_INVESTOR, OPPORTUNITY_OWNER, OPPORTUNITY_TEAM, PURSUIT_NOTES, CLIENT_TYPE, SQFT_SIZE, ESTIMATED_CLOSE_DATE, EXPECTED_REVENUE_START_DATE, ESTIMATED_CBRE_NET_REVENUE_BY_SERVICE_LINE, ESTIMATED_SOP_BY_SERVICE_LINE, ESTIMATED_COP_BY_SERVICE_LINE, CONFIDENTIAL, WIN_LOSS_TYPE, PROBABILITY_ADJUSTED_PIPELINE_ANALYTICS, INCLUDED_IN_PIPELINE, MANAGING_OFFICE_ALLOCATIONS_CBRE_COMMISSION_PCT, FUNCTIONAL_UNIT_ALLOCATIONS_CBRE_COMMISSION_PCT, OPPORTUNITY_NAME_LEGACY, OPPORTUNITY_LOSS_REASON_NAME, OPPORTUNITY_LEAD_SOURCE, OWNER_LOCAL_MARKET_AREA_NAME, OWNER_MARKET_GROUP, LOCAL_CURRENCY_CODE, OPPORTUNITY_CREATE_TS, OPPORTUNITY_MODIFIED_TS, EST_CLOSE_DATE, ACTUAL_CLOSE_DATE, EMERALD_LEAD, PARENT_OPPORTUNITY_ID, IS_MANAGED_BROKERAGE, IS_PIPELINE_MANAGED_BROKERAGE, IS_DCS_OPPORTUNITY, PRIMARY_PRODUCT, PIPELINE_SEGMENT_SOURCE_NAME, TARGET_OPPORTUNITY_CATEGORY_NAME, OUTSOURCING_GENERATION, EXECUTIVE_SPONSOR, SOA_ROLE, SOA_DEAL_STATUS_NOTES, OPPORTUNITY_PORTFOLIO_SIZE, OPPORTUNITY_PORTFOLIO_SIZE_UOM, LATEST_OPPORTUNITY_UPDATES, CLIENT_DIAGNOSTIC, MOMENTUM_SCORE_INITIAL, MOMENTUM_SCORE_CURRENT, OVERALL_PURSUIT_STRATEGY, PURSUIT_CHARTER, WIN_STRATEGY, DAYS_IN_CURRENT_STAGE, RECORDED_YEAR, RECORDED_DATE, PROJECT_ID, PS_PROJECT_ID, JV_DSA_PHASE_ID, JV_DSA_PHASE_NAME, BUILDING_ID, PROJECT_DESC, CBRE_PROJECT_MANAGEMENT_ROLE, CBRE_AUDIT_RESULT_F, PROJECT_COMPLETION_DATE, PROJECT_LOCATION, PROJECT_START_DATE, SUB_PRODUCTS, CLOSE_DATE_PROGNOSIS, RFP_RELEASE_DATE, RFP_RELEASE_QTR, RFP_RELEASE_YEAR, RENEWAL_EXPIRATION_DATE, ADDITIONAL_SOURCE_SECTOR, LAND_SIZE, LAND_SIZE_UOM, STRATEGIC_PARTNER_NAME, STRATEGIC_PARTNER_ID, EQUITY_PARTNER_CSA, EQUITY_PARTNER_CSA_2, EQUITY_PARTNER_JV, EQUITY_PARTNER_JV_2, BUYER_NAME, EXPECTED_GROSS_REVENUE_AMT_LOCAL_CURR, EXPECTED_GROSS_REVENUE_AMT_USD, EST_YRLY_CLIENT_OPERATING_PROFIT_USD, EST_YRLY_SEGMENT_OPERATING_PROFIT_USD, EXPECTED_NET_REVENUE_AMT_LOCAL_CURR, EXPECTED_NET_REVENUE_AMT_USD, EXPECTED_ANNUAL_GROSS_REVENUE_AMS_US, EXPECTED_ANNUAL_GROSS_REVENUE_AMS_CAN, EXPECTED_ANNUAL_GROSS_REVENUE_AMS_LATAM, EXPECTED_ANNUAL_GROSS_REVENUE_TOTAL_AMS, EXPECTED_ANNUAL_GROSS_REVENUE_TOTAL_APAC, EXPECTED_ANNUAL_GROSS_REVENUE_TOTAL_EMEA, EXPECTED_ANNUAL_NET_REVENUE_AMS_US, EXPECTED_ANNUAL_NET_REVENUE_AMS_CAN, EXPECTED_ANNUAL_NET_REVENUE_AMS_LATAM, EXPECTED_ANNUAL_NET_REVENUE_TOTAL_AMS, EXPECTED_ANNUAL_NET_REVENUE_TOTAL_APAC, EXPECTED_ANNUAL_NET_REVENUE_TOTAL_EMEA, EXPECTED_GROSS_REVENUE_LOB_PJM, EXPECTED_GROSS_REVENUE_LOB_FM, EXPECTED_GROSS_REVENUE_LOB_LEASING, EXPECTED_NET_REVENUE_LOB_PJM, EXPECTED_NET_REVENUE_LOB_FM, EXPECTED_NET_REVENUE_LOB_LEASING, ESTIMATED_COP_LOB_PJM, ESTIMATED_COP_LOB_FM, ESTIMATED_COP_LOB_LEASING, ESTIMATED_SOP_LOB_PJM, ESTIMATED_SOP_LOB_FM, ESTIMATED_SOP_LOB_LEASING, EST_GR_COP_MARGIN, EST_NR_COP_MARGIN, EST_GR_SOP_MARGIN, EST_NR_SOP_MARGIN.",
+      "content_json": {
+        "target_table": "OPPORTUNITY_CORE",
+        "role": "hub",
+        "hub_fk": null,
+        "hkey_columns": [
+          "OPPORTUNITY_NAME",
+          "OPPORTUNITY_RECORD_TYPE_DESC",
+          "PROPOSAL_TYPE",
+          "OPPORTUNITY_CONVERSION_TYPE",
+          "ACCOUNT_NAME",
+          "OPPORTUNITY_CREATE_DATE",
+          "OCCUPIER_VS_INVESTOR",
+          "OPPORTUNITY_OWNER",
+          "OPPORTUNITY_TEAM",
+          "PURSUIT_NOTES",
+          "CLIENT_TYPE",
+          "SQFT_SIZE",
+          "ESTIMATED_CLOSE_DATE",
+          "EXPECTED_REVENUE_START_DATE",
+          "ESTIMATED_CBRE_NET_REVENUE_BY_SERVICE_LINE",
+          "ESTIMATED_SOP_BY_SERVICE_LINE",
+          "ESTIMATED_COP_BY_SERVICE_LINE",
+          "CONFIDENTIAL",
+          "WIN_LOSS_TYPE",
+          "PROBABILITY_ADJUSTED_PIPELINE_ANALYTICS",
+          "INCLUDED_IN_PIPELINE",
+          "MANAGING_OFFICE_ALLOCATIONS_CBRE_COMMISSION_PCT",
+          "FUNCTIONAL_UNIT_ALLOCATIONS_CBRE_COMMISSION_PCT",
+          "OPPORTUNITY_NAME_LEGACY",
+          "OPPORTUNITY_LOSS_REASON_NAME",
+          "OPPORTUNITY_LEAD_SOURCE",
+          "OWNER_LOCAL_MARKET_AREA_NAME",
+          "OWNER_MARKET_GROUP",
+          "LOCAL_CURRENCY_CODE",
+          "OPPORTUNITY_CREATE_TS",
+          "OPPORTUNITY_MODIFIED_TS",
+          "EST_CLOSE_DATE",
+          "ACTUAL_CLOSE_DATE",
+          "EMERALD_LEAD",
+          "PARENT_OPPORTUNITY_ID",
+          "IS_MANAGED_BROKERAGE",
+          "IS_PIPELINE_MANAGED_BROKERAGE",
+          "IS_DCS_OPPORTUNITY",
+          "PRIMARY_PRODUCT",
+          "PIPELINE_SEGMENT_SOURCE_NAME",
+          "TARGET_OPPORTUNITY_CATEGORY_NAME",
+          "OUTSOURCING_GENERATION",
+          "EXECUTIVE_SPONSOR",
+          "SOA_ROLE",
+          "SOA_DEAL_STATUS_NOTES",
+          "OPPORTUNITY_PORTFOLIO_SIZE",
+          "OPPORTUNITY_PORTFOLIO_SIZE_UOM",
+          "LATEST_OPPORTUNITY_UPDATES",
+          "CLIENT_DIAGNOSTIC",
+          "MOMENTUM_SCORE_INITIAL",
+          "MOMENTUM_SCORE_CURRENT",
+          "OVERALL_PURSUIT_STRATEGY",
+          "PURSUIT_CHARTER",
+          "WIN_STRATEGY",
+          "DAYS_IN_CURRENT_STAGE",
+          "RECORDED_YEAR",
+          "RECORDED_DATE",
+          "PROJECT_ID",
+          "PS_PROJECT_ID",
+          "JV_DSA_PHASE_ID",
+          "JV_DSA_PHASE_NAME",
+          "BUILDING_ID",
+          "PROJECT_DESC",
+          "CBRE_PROJECT_MANAGEMENT_ROLE",
+          "CBRE_AUDIT_RESULT_F",
+          "PROJECT_COMPLETION_DATE",
+          "PROJECT_LOCATION",
+          "PROJECT_START_DATE",
+          "SUB_PRODUCTS",
+          "CLOSE_DATE_PROGNOSIS",
+          "RFP_RELEASE_DATE",
+          "RFP_RELEASE_QTR",
+          "RFP_RELEASE_YEAR",
+          "RENEWAL_EXPIRATION_DATE",
+          "ADDITIONAL_SOURCE_SECTOR",
+          "LAND_SIZE",
+          "LAND_SIZE_UOM",
+          "STRATEGIC_PARTNER_NAME",
+          "STRATEGIC_PARTNER_ID",
+          "EQUITY_PARTNER_CSA",
+          "EQUITY_PARTNER_CSA_2",
+          "EQUITY_PARTNER_JV",
+          "EQUITY_PARTNER_JV_2",
+          "BUYER_NAME",
+          "EXPECTED_GROSS_REVENUE_AMT_LOCAL_CURR",
+          "EXPECTED_GROSS_REVENUE_AMT_USD",
+          "EST_YRLY_CLIENT_OPERATING_PROFIT_USD",
+          "EST_YRLY_SEGMENT_OPERATING_PROFIT_USD",
+          "EXPECTED_NET_REVENUE_AMT_LOCAL_CURR",
+          "EXPECTED_NET_REVENUE_AMT_USD",
+          "EXPECTED_ANNUAL_GROSS_REVENUE_AMS_US",
+          "EXPECTED_ANNUAL_GROSS_REVENUE_AMS_CAN",
+          "EXPECTED_ANNUAL_GROSS_REVENUE_AMS_LATAM",
+          "EXPECTED_ANNUAL_GROSS_REVENUE_TOTAL_AMS",
+          "EXPECTED_ANNUAL_GROSS_REVENUE_TOTAL_APAC",
+          "EXPECTED_ANNUAL_GROSS_REVENUE_TOTAL_EMEA",
+          "EXPECTED_ANNUAL_NET_REVENUE_AMS_US",
+          "EXPECTED_ANNUAL_NET_REVENUE_AMS_CAN",
+          "EXPECTED_ANNUAL_NET_REVENUE_AMS_LATAM",
+          "EXPECTED_ANNUAL_NET_REVENUE_TOTAL_AMS",
+          "EXPECTED_ANNUAL_NET_REVENUE_TOTAL_APAC",
+          "EXPECTED_ANNUAL_NET_REVENUE_TOTAL_EMEA",
+          "EXPECTED_GROSS_REVENUE_LOB_PJM",
+          "EXPECTED_GROSS_REVENUE_LOB_FM",
+          "EXPECTED_GROSS_REVENUE_LOB_LEASING",
+          "EXPECTED_NET_REVENUE_LOB_PJM",
+          "EXPECTED_NET_REVENUE_LOB_FM",
+          "EXPECTED_NET_REVENUE_LOB_LEASING",
+          "ESTIMATED_COP_LOB_PJM",
+          "ESTIMATED_COP_LOB_FM",
+          "ESTIMATED_COP_LOB_LEASING",
+          "ESTIMATED_SOP_LOB_PJM",
+          "ESTIMATED_SOP_LOB_FM",
+          "ESTIMATED_SOP_LOB_LEASING",
+          "EST_GR_COP_MARGIN",
+          "EST_NR_COP_MARGIN",
+          "EST_GR_SOP_MARGIN",
+          "EST_NR_SOP_MARGIN"
+        ],
+        "column_count": 147
+      }
+    },
+    {
+      "key": "opportunity.pattern.opportunity_core.references",
+      "type": "DBT_PATTERN",
+      "title": "OPPORTUNITY_CORE reference lookups",
+      "content": "Reference CTEs:\ncountry_mapping as (\n    select\n        upper(trim(value_1)) as value_1_norm,\n        target_value\n    from {{ source('opportunity_shared_reference', 'gdp_country_mapping') }}\n    where model_name = 'country_name_std'\n),\n\nref_country as (\n    select ref_country_skey, country_name\n    from {{ source('opportunity_geo_reference', 'ref_country') }}\n    where gdp_is_active = TRUE\n),\n\nref_status as (\n    select opportunity_status_skey, opportunity_status_desc\n    from {{ source('opportunity_reference', 'ref_opportunity_status') }}\n),\n\nref_deal_type as (\n    select opportunity_deal_type_skey, opportunity_deal_type_desc\n    from {{ source('opportunity_reference', 'ref_opportunity_deal_types') }}\n),\n\nref_service_lines as (\n    select opportunity_service_lines_skey, opportunity_service_lines_desc\n    from {{ source('opportunity_reference', 'ref_opportunity_service_lines') }}\n),\n\nref_category as (\n    select opportunity_category_skey, opportunity_category_desc\n    from {{ source('opportunity_reference', 'ref_opportunity_category') }}\n),\n\nref_segment as (\n    select opportunity_segment_skey, opportunity_segment_desc\n    from {{ source('opportunity_reference', 'ref_opportunity_segment') }}\n),\n\nref_business_line as (\n    select opportunity_business_line_skey, opportunity_business_line_name\n    from {{ source('opportunity_reference', 'ref_opportunity_business_line') }}\n),\n\nref_selling_team as (\n    select opportunity_selling_team_skey, opportunity_selling_team_desc\n    from {{ source('opportunity_reference', 'ref_opportunity_selling_team') }}\n),\n\nref_global_region as (\n    select ref_global_region_skey, global_region_name\n    from {{ source('opportunity_geo_reference', 'ref_global_region') }}\n)\n\nJoins:\nleft join country_mapping as cm on upper(trim(o.lead_country)) = cm.value_1_norm\nleft join ref_country as cntry on upper(trim(coalesce(cm.target_value, o.lead_country))) = upper(trim(cntry.country_name))\nleft join ref_status as st on upper(trim(o.stage_name)) = upper(trim(st.opportunity_status_desc))\nleft join ref_deal_type as dt on upper(trim(o.deal_type)) = upper(trim(dt.opportunity_deal_type_desc))\nleft join ref_service_lines as svc on upper(trim(o.service_line)) = upper(trim(svc.opportunity_service_lines_desc))\nleft join ref_category as cat on upper(trim(o.category)) = upper(trim(cat.opportunity_category_desc))\nleft join ref_segment as seg on upper(trim(o.stage_name)) = upper(trim(seg.opportunity_segment_desc))\nleft join ref_business_line as bl on upper(trim(o.service_line)) = upper(trim(bl.opportunity_business_line_name))\nleft join ref_selling_team as stm on upper(trim(o.sales_lead)) = upper(trim(stm.opportunity_selling_team_desc))\nleft join ref_global_region as gr on upper(trim(o.region)) = upper(trim(gr.global_region_name))"
+    },
+    {
+      "key": "opportunity.glossary.opportunity_core.sqft_size",
+      "type": "GLOSSARY",
+      "title": "OPPORTUNITY_CORE.SQFT_SIZE",
+      "content": "Cast NUMBER\u2192FLOAT in base CTE",
+      "content_json": {
+        "target_column": "SQFT_SIZE",
+        "target_table": "OPPORTUNITY_CORE",
+        "definition": "Cast NUMBER\u2192FLOAT in base CTE",
+        "synonyms": []
+      }
+    },
+    {
+      "key": "opportunity.glossary.opportunity_core.estimated_close_date",
+      "type": "GLOSSARY",
+      "title": "OPPORTUNITY_CORE.ESTIMATED_CLOSE_DATE",
+      "content": "Cast DATE\u2192TIMESTAMP_NTZ in base CTE",
+      "content_json": {
+        "target_column": "ESTIMATED_CLOSE_DATE",
+        "target_table": "OPPORTUNITY_CORE",
+        "definition": "Cast DATE\u2192TIMESTAMP_NTZ in base CTE",
+        "synonyms": []
+      }
+    },
+    {
+      "key": "opportunity.glossary.opportunity_core.probability_adjusted_pipeline_analytics",
+      "type": "GLOSSARY",
+      "title": "OPPORTUNITY_CORE.PROBABILITY_ADJUSTED_PIPELINE_ANALYTICS",
+      "content": "Cast NUMBER\u2192FLOAT in base CTE",
+      "content_json": {
+        "target_column": "PROBABILITY_ADJUSTED_PIPELINE_ANALYTICS",
+        "target_table": "OPPORTUNITY_CORE",
+        "definition": "Cast NUMBER\u2192FLOAT in base CTE",
+        "synonyms": []
+      }
+    },
+    {
+      "key": "opportunity.glossary.opportunity_core.est_close_date",
+      "type": "GLOSSARY",
+      "title": "OPPORTUNITY_CORE.EST_CLOSE_DATE",
+      "content": "Cast DATE\u2192TIMESTAMP_NTZ in base CTE",
+      "content_json": {
+        "target_column": "EST_CLOSE_DATE",
+        "target_table": "OPPORTUNITY_CORE",
+        "definition": "Cast DATE\u2192TIMESTAMP_NTZ in base CTE",
+        "synonyms": []
+      }
+    },
+    {
+      "key": "opportunity.glossary.opportunity_core.momentum_score_initial",
+      "type": "GLOSSARY",
+      "title": "OPPORTUNITY_CORE.MOMENTUM_SCORE_INITIAL",
+      "content": "Cast NUMBER\u2192FLOAT in base CTE",
+      "content_json": {
+        "target_column": "MOMENTUM_SCORE_INITIAL",
+        "target_table": "OPPORTUNITY_CORE",
+        "definition": "Cast NUMBER\u2192FLOAT in base CTE",
+        "synonyms": []
+      }
+    },
+    {
+      "key": "opportunity.glossary.opportunity_core.momentum_score_current",
+      "type": "GLOSSARY",
+      "title": "OPPORTUNITY_CORE.MOMENTUM_SCORE_CURRENT",
+      "content": "Cast NUMBER\u2192FLOAT in base CTE",
+      "content_json": {
+        "target_column": "MOMENTUM_SCORE_CURRENT",
+        "target_table": "OPPORTUNITY_CORE",
+        "definition": "Cast NUMBER\u2192FLOAT in base CTE",
+        "synonyms": []
+      }
+    },
+    {
+      "key": "opportunity.glossary.opportunity_core.rfp_release_date",
+      "type": "GLOSSARY",
+      "title": "OPPORTUNITY_CORE.RFP_RELEASE_DATE",
+      "content": "Cast DATE\u2192TIMESTAMP_NTZ in base CTE",
+      "content_json": {
+        "target_column": "RFP_RELEASE_DATE",
+        "target_table": "OPPORTUNITY_CORE",
+        "definition": "Cast DATE\u2192TIMESTAMP_NTZ in base CTE",
+        "synonyms": []
+      }
+    },
+    {
+      "key": "opportunity.glossary.opportunity_core.renewal_expiration_date",
+      "type": "GLOSSARY",
+      "title": "OPPORTUNITY_CORE.RENEWAL_EXPIRATION_DATE",
+      "content": "Cast DATE\u2192TIMESTAMP_NTZ in base CTE",
+      "content_json": {
+        "target_column": "RENEWAL_EXPIRATION_DATE",
+        "target_table": "OPPORTUNITY_CORE",
+        "definition": "Cast DATE\u2192TIMESTAMP_NTZ in base CTE",
+        "synonyms": []
+      }
+    },
+    {
+      "key": "opportunity.glossary.opportunity_core.land_size",
+      "type": "GLOSSARY",
+      "title": "OPPORTUNITY_CORE.LAND_SIZE",
+      "content": "Cast NUMBER\u2192FLOAT in base CTE",
+      "content_json": {
+        "target_column": "LAND_SIZE",
+        "target_table": "OPPORTUNITY_CORE",
+        "definition": "Cast NUMBER\u2192FLOAT in base CTE",
+        "synonyms": []
+      }
+    },
+    {
+      "key": "opportunity.transform.sqft_size",
+      "type": "TRANSFORMATION_RULE",
+      "title": "SQFT_SIZE cast",
+      "content": "NUMBER to FLOAT: o.col::float",
+      "content_json": {
+        "target_column": "SQFT_SIZE",
+        "transformation": "o.col::float",
+        "target_type": "FLOAT"
+      }
+    },
+    {
+      "key": "opportunity.transform.probability_adjusted_pipeline_analytics",
+      "type": "TRANSFORMATION_RULE",
+      "title": "PROBABILITY_ADJUSTED_PIPELINE_ANALYTICS cast",
+      "content": "NUMBER to FLOAT: o.col::float",
+      "content_json": {
+        "target_column": "PROBABILITY_ADJUSTED_PIPELINE_ANALYTICS",
+        "transformation": "o.col::float",
+        "target_type": "FLOAT"
+      }
+    },
+    {
+      "key": "opportunity.transform.momentum_score_initial",
+      "type": "TRANSFORMATION_RULE",
+      "title": "MOMENTUM_SCORE_INITIAL cast",
+      "content": "NUMBER to FLOAT: o.col::float",
+      "content_json": {
+        "target_column": "MOMENTUM_SCORE_INITIAL",
+        "transformation": "o.col::float",
+        "target_type": "FLOAT"
+      }
+    },
+    {
+      "key": "opportunity.transform.momentum_score_current",
+      "type": "TRANSFORMATION_RULE",
+      "title": "MOMENTUM_SCORE_CURRENT cast",
+      "content": "NUMBER to FLOAT: o.col::float",
+      "content_json": {
+        "target_column": "MOMENTUM_SCORE_CURRENT",
+        "transformation": "o.col::float",
+        "target_type": "FLOAT"
+      }
+    },
+    {
+      "key": "opportunity.transform.land_size",
+      "type": "TRANSFORMATION_RULE",
+      "title": "LAND_SIZE cast",
+      "content": "NUMBER to FLOAT: o.col::float",
+      "content_json": {
+        "target_column": "LAND_SIZE",
+        "transformation": "o.col::float",
+        "target_type": "FLOAT"
+      }
+    },
+    {
+      "key": "opportunity.transform.estimated_close_date",
+      "type": "TRANSFORMATION_RULE",
+      "title": "ESTIMATED_CLOSE_DATE cast",
+      "content": "DATE to TIMESTAMP_NTZ: o.col::timestamp_ntz",
+      "content_json": {
+        "target_column": "ESTIMATED_CLOSE_DATE",
+        "transformation": "o.col::timestamp_ntz",
+        "target_type": "TIMESTAMP_NTZ"
+      }
+    },
+    {
+      "key": "opportunity.transform.est_close_date",
+      "type": "TRANSFORMATION_RULE",
+      "title": "EST_CLOSE_DATE cast",
+      "content": "DATE to TIMESTAMP_NTZ: o.col::timestamp_ntz",
+      "content_json": {
+        "target_column": "EST_CLOSE_DATE",
+        "transformation": "o.col::timestamp_ntz",
+        "target_type": "TIMESTAMP_NTZ"
+      }
+    },
+    {
+      "key": "opportunity.transform.rfp_release_date",
+      "type": "TRANSFORMATION_RULE",
+      "title": "RFP_RELEASE_DATE cast",
+      "content": "DATE to TIMESTAMP_NTZ: o.col::timestamp_ntz",
+      "content_json": {
+        "target_column": "RFP_RELEASE_DATE",
+        "transformation": "o.col::timestamp_ntz",
+        "target_type": "TIMESTAMP_NTZ"
+      }
+    },
+    {
+      "key": "opportunity.transform.renewal_expiration_date",
+      "type": "TRANSFORMATION_RULE",
+      "title": "RENEWAL_EXPIRATION_DATE cast",
+      "content": "DATE to TIMESTAMP_NTZ: o.col::timestamp_ntz",
+      "content_json": {
+        "target_column": "RENEWAL_EXPIRATION_DATE",
+        "transformation": "o.col::timestamp_ntz",
+        "target_type": "TIMESTAMP_NTZ"
+      }
+    },
+    {
+      "key": "opportunity.pattern.reference_implementation",
+      "type": "DBT_PATTERN",
+      "title": "Reference Implementation",
+      "content": "## Reference Implementation\n\n| File | Role |\n|---|---|\n| `models/silver/opportunity/boe/gws_boe_opportunity_core.sql` | Reference ephemeral staging model (BOE source) |\n| `models/silver/opportunity/opportunity_core.sql` | Hub model with SCD1 merge + HIST |\n| `models/silver/opportunity/opportunity_reference.yml` | Shared reference source declarations |\n| `models/bronze/opportunity_boe_source.yml` | Reference bronze source YAML |\n| `macros/opportunity_utils.sql` | HKEY + source system SKEY macros |\n| `macros/source_filter_utils.sql` | `set_watermark_var`, `update_watermark_hook`, `m_insert_history`, `m_is_source_active` |\n| `macros/lightbox_utils.sql` | `generate_sha2_hash_key` (shared utility) |"
+    },
+    {
+      "key": "opportunity.guide.minimum_mapping",
+      "type": "ONBOARDING_GUIDE",
+      "title": "OPPORTUNITY minimum mapping",
+      "content": "A source must map at least: `source_unique_id`; `opportunity_name`; `stage_name` (drives `ref_opportunity_status`, `ref_opportunity_segment`)",
+      "content_json": {
+        "required": [
+          "`source_unique_id`",
+          "`opportunity_name`",
+          "`stage_name` (drives `ref_opportunity_status`, `ref_opportunity_segment`)"
+        ]
+      }
+    },
+    {
+      "key": "opportunity.guide.known_sources",
+      "type": "ONBOARDING_GUIDE",
+      "title": "OPPORTUNITY sources",
+      "content": "## Known Sources\n\n| Source | Status | Notes |\n|---|---|---|\n| GWS_BOE (Salesforce) | DONE | Reference implementation |\n| CIQ | Planned | Capital IQ pipeline data |\n| TPC | Planned | Transaction Pipeline Council |\n| DirectLine | Planned | DirectLine opportunity data |\n| PearceServices | Planned | Pearce Services opportunities |\n| Sustainability (Smartsheet) | Planned | Sustainability pipeline via Smartsheet |\n| T&T (Smartsheet) | Planned | Turner & Townsend pipeline via Smartsheet |"
+    }
+  ]
+}

@@ -1,29 +1,13 @@
 ---
-name: dbt-onboard-source
-description: "Domain-agnostic skill to onboard a new bronze source into a silver iceberg SCD1 + HIST model. Accepts an STTM CSV as input — auto-derives source tables, target tables, joins, source_unique_id, and column maps. Loads per-domain canonical contract from references/<domain>-contract.md (or an example under examples/<domain>-contract.md). Generates ephemeral staging model(s), extends hub model(s), creates macros if missing, and registers watermark(s). Supports multi-target + multi-source-table UNION patterns. Triggers: 'onboard <domain> source', 'STTM to dbt', 'generate dbt from STTM', 'add source to <domain>', 'dbt onboard source'."
+name: gdp-dbt-onboard-source
+description: "Domain-agnostic skill to onboard a new bronze source into a GDP silver iceberg SCD1 + HIST model. Accepts an STTM CSV as input — auto-derives source tables, target tables, joins, source_unique_id, and column maps. Loads per-domain canonical contract from references/<domain>-contract.md. Generates ephemeral staging model(s), extends hub model(s), creates macros if missing, and registers watermark(s). Supports multi-target + multi-source-table UNION patterns. Triggers: 'onboard <domain> source', 'STTM to dbt', 'generate dbt from STTM', 'add source to <domain>', 'gdp onboard'."
 ---
 
-# dbt — Onboard Source Skill (Domain-Agnostic)
+# GDP dbt — Onboard Source Skill (Domain-Agnostic)
 
-Reusable scaffold for adding a new bronze source to ANY silver iceberg SCD1 + HIST hub model in a dbt project.
+Reusable scaffold for adding a new bronze source to ANY GDP silver iceberg SCD1 + HIST hub model in `gdp-dbt`.
 
-The domain-specific canonical column contract, reference-table joins, type-cast rules, and HKEY column list live in `references/<domain>-contract.md`. The workflow below is identical across domains. Worked examples for a few common CRM domains ship under `examples/` (see "Domain Contract Files" below).
-
----
-
-## Project Configuration (gather once per project)
-
-Before the first run, establish (or ask the user for) these project-specific conventions and reuse them for every onboarding:
-
-| Setting | Example | Notes |
-|---|---|---|
-| **Project prefix (`{PREFIX}`)** | `GDP`, `DW`, `EDW` | Namespace used for audit columns and shared reference objects. May be blank. |
-| **Bronze database** | `DEV_{PREFIX}_BRONZE_DB` | Where bronze source tables live |
-| **Silver database** | `DEV_{PREFIX}_SILVER_DB` | Where silver hub/spoke models materialize |
-| **Watermark table** | `DEV_{PREFIX}_UTIL_DB.CONFIG.{PREFIX}_DBT_WATERMARK_TBL` | Incremental-load watermark registry |
-| **Source-system reference table** | `REF_{PREFIX}_SOURCE_SYSTEM` | Lookup used to resolve `source_system_name` → `{PREFIX}_SOURCE_SYSTEM_SKEY` |
-
-If these are already documented elsewhere in the repo (e.g. an AGENTS.md or dbt_project.yml vars), read them from there instead of asking again.
+The domain-specific canonical column contract, reference-table joins, type-cast rules, and HKEY column list live in `references/<domain>-contract.md`. The workflow below is identical across domains.
 
 ---
 
@@ -32,8 +16,8 @@ If these are already documented elsewhere in the repo (e.g. an AGENTS.md or dbt_
 The skill runs end-to-end without stopping for confirmation EXCEPT for the following true blockers:
 
 **ALWAYS stop and ask** when:
-1. Source system not found in `REF_{PREFIX}_SOURCE_SYSTEM` AND no clear inferable replacement
-2. Bronze table referenced in STTM does not exist anywhere in the bronze database (including under different schemas)
+1. Source system not found in `REF_GDP_SOURCE_SYSTEM` AND no clear inferable replacement
+2. Bronze table referenced in STTM does not exist anywhere in `DEV_GDP_BRONZE_DB` (including under different schemas)
 3. STTM target column doesn't exist on the silver table AND no obvious rename mapping
 4. Compound `SOURCE_UNIQUE_ID` cannot be deterministically derived from STTM
 5. Hub model file path conflict (would overwrite existing source's branch)
@@ -41,13 +25,13 @@ The skill runs end-to-end without stopping for confirmation EXCEPT for the follo
 **NEVER stop for these — apply default and continue (note in summary):**
 - Domain contract is a stub → populate inline from DESCRIBE TABLE on the fly
 - LOV Mapping references → emit `null` with `-- TODO: LOV mapping pending` comment
-- STTM column not in silver contract (drop) → skip with note
+- STTM column not in silver contract (drop, e.g. LEGAL_ENTITY_NAME) → skip with note
 - Contract column not mapped in STTM → emit `null`
 - Source-table name case mismatch → resolve via DESCRIBE
-- Standardisation-step annotations (e.g. address/geocoding placeholders) → emit `null` with TODO comment
+- `<ESRI ADDRESS Standardisation>` annotations → emit `null` with TODO comment
 - Multiple bronze candidates with similar names → prefer non-DIM/non-HIST/non-BKP variant with most rows
-- Bronze schema not documented in the project's source registry → use INFORMATION_SCHEMA lookup, note for registry update
-- Per-target join graph differences (e.g., Pattern A vs Pattern B) → generate distinct ephemeral models per target
+- Bronze schema not in AGENTS.md registry → use INFORMATION_SCHEMA lookup, note for AGENTS.md update
+- Per-target join graph differences (e.g., EDP Pattern A vs Pattern B) → generate distinct ephemeral models per target
 - Files-to-create plan → execute directly, summarize at end
 
 The user can override by saying "ask before X" or "manual mode".
@@ -60,7 +44,7 @@ The skill accepts inputs in two modes:
 
 ### Mode A — STTM-driven (preferred)
 
-User provides a path to an STTM CSV (e.g., `<project>/mappings/<source>/...STTM.csv`). The skill parses the CSV and derives ALL required inputs automatically. **No manual column-map needed.**
+User provides a path to an STTM CSV (e.g., `GDP/projects/gdp-<domain>/mappings/<source>/...STTM.csv`). The skill parses the CSV and derives ALL required inputs automatically. **No manual column-map needed.**
 
 ### Mode B — Manual inputs
 
@@ -70,14 +54,14 @@ User provides each input directly. Use only when no STTM exists.
 
 ## Step 0 — STTM Parsing (Mode A only)
 
-When invoked with an STTM path, parse it deterministically using the standard STTM CSV layout:
+When invoked with an STTM path, parse it deterministically using the GDP STTM CSV layout:
 
 ### STTM CSV Schema
 
 | Header Row | Format | Extracts |
 |---|---|---|
 | Row 1 | `Domain ,<value>` | `domain` (lowercase) |
-| Row 2 | `Target DB.SCHEMA,<value>` | Validates `DEV_{PREFIX}_SILVER_DB.<DOMAIN>` |
+| Row 2 | `Target DB.SCHEMA,<value>` | Validates `DEV_GDP_SILVER_DB.<DOMAIN>` |
 | Row 3+ | `Target Table,"<multi-line list>"` | `targets[]` (one per line, lowercase entity name) |
 | Next | `Source Tables,"<multi-line list>"` | `source_tables[]` (one per line) |
 | Next | `Join,"<multi-line SQL>"` | `join_sql` (raw FROM/JOIN clause + UNION ALL pattern) |
@@ -94,19 +78,19 @@ High-level (AUTO mode — no stops unless true blocker):
 1. Read CSV, strip blank rows + trailing-comma padding (Excel artifact)
 2. Parse header block until first body row
 3. Infer:
-   - domain                   = Row 1.Domain (lowercase). If absent, infer from STTM file path (`<project>/mappings/<domain>/` or similar).
-   - target_db, target_schema = Row 2 (split on '.'). Default DEV_{PREFIX}_SILVER_DB.<DOMAIN>.
+   - domain                   = Row 1.Domain (lowercase). If absent, infer from STTM file path (`gdp-<domain>/`).
+   - target_db, target_schema = Row 2 (split on '.'). Default DEV_GDP_SILVER_DB.<DOMAIN>.
    - targets[]                = unique list from "Target Table" header (lowercase, strip schema prefix)
    - source_tables[]          = list from "Source Tables" header
    - source_fqns[]            = each source_table resolved by:
-       (a) project source registry lookup (if one exists), then
-       (b) INFORMATION_SCHEMA.TABLES scan in the bronze database if (a) misses, then
+       (a) AGENTS.md source registry lookup, then
+       (b) INFORMATION_SCHEMA.TABLES scan in DEV_GDP_BRONZE_DB if (a) misses, then
        (c) STOP if not found anywhere.
      If STTM names a *_SYNTHETIC / *_BACKUP / *_TEST variant: prefer the live equivalent (most rows, no _BKP/_HIST/_TEST/_SYNTHETIC suffix).
    - source_system_name       = resolved by:
-       (a) STTM transformation `{PREFIX}_SOURCE_SYSTEM_NAME = '<X>'` if present,
+       (a) STTM transformation `GDP_SOURCE_SYSTEM_NAME = '<X>'` if present,
        (b) STTM file path parent folder UPPER if (a) absent,
-       (c) Look up in REF_{PREFIX}_SOURCE_SYSTEM. If exact match misses, fuzzy match against known source-system names. If no fuzzy match, STOP.
+       (c) Look up in REF_GDP_SOURCE_SYSTEM. If exact match misses, fuzzy match (e.g. STTM 'FINANCIAL_RCOE' → registry 'FPD' SKEY 202). If no fuzzy match, STOP.
    - source_unique_id_expr    = COMPOUND_PK rule (see rulebook). Compound keys MUST use `||` delimiter + `coalesce(...,'')`.
    - join_blocks[]            = parse "Join" cell. Detect:
        • single-source pattern (one FROM clause)
@@ -125,12 +109,12 @@ High-level (AUTO mode — no stops unless true blocker):
 
 The skill DOES NOT stop on these — it applies a default and notes in summary:
 
-- Target column in STTM but not in contract → DROP with note.
+- Target column in STTM but not in contract → DROP with note (e.g., MTA STTM has `LEGAL_ENTITY_NAME`/`TRADE_NAME` not in COMPANY_CORE → drop).
 - Contract column not mapped in STTM → emit `null`, list in unmapped summary.
 - Source column reference not in `DESCRIBE TABLE` output → case-insensitive retry; if still missing, emit `null` with TODO comment.
-- Downstream standardisation-step placeholders (e.g. address/geocoding) → emit `null` with a `-- TODO: populated by downstream standardization step` comment.
-- STTM Source Tables outside the expected bronze schema → INFORMATION_SCHEMA scan, prefer non-HIST/non-BKP.
-- STTM source-system name doesn't match registry → fuzzy match against known aliases.
+- `<ESRI ADDRESS Standardisation>` / `<ESRI OUTPUT>` → emit `null` with `-- TODO: ESRI step` comment.
+- STTM Source Tables outside `BRONZE_<SOURCE>` → INFORMATION_SCHEMA scan, prefer non-HIST/non-BKP.
+- STTM source-system name doesn't match registry → fuzzy match (e.g., FINANCIAL_RCOE → FPD).
 - LOV mapping references → emit `null` with `-- TODO: LOV mapping pending`.
 - Empty target (0 mapped business cols) → DROP target, note in summary.
 
@@ -146,8 +130,8 @@ Collect ALL of these before generating any files. Ask the user for any not provi
 |---|---|---|
 | `domain` | `opportunity` | Lowercase domain folder name. Drives `references/<domain>-contract.md` lookup. |
 | `entity` | `opportunity_core` | Hub model file name (without `.sql`). UPPER form used for watermark + tags. |
-| `source_fqns` | `['DEV_{PREFIX}_BRONZE_DB.BRONZE_MTA.PS_CUSTOMER', 'DEV_{PREFIX}_BRONZE_DB.BRONZE_MTA.PS_VENDOR']` | One or more bronze tables. Multiple tables → UNION ALL extraction (see Multi-Source Pattern). |
-| `source_system_name` | `MTA` | Must exist in `REF_{PREFIX}_SOURCE_SYSTEM.{PREFIX}_SOURCE_SYSTEM_NAME` |
+| `source_fqns` | `['DEV_GDP_BRONZE_DB.BRONZE_MTA.PS_CUSTOMER', 'DEV_GDP_BRONZE_DB.BRONZE_MTA.PS_VENDOR']` | One or more bronze tables. Multiple tables → UNION ALL extraction (see Multi-Source Pattern). |
+| `source_system_name` | `MTA` | Must exist in `REF_GDP_SOURCE_SYSTEM.GDP_SOURCE_SYSTEM_NAME` |
 | `source_prefix` | `mta` | Short name for ephemeral file. Produces `<prefix>_<entity>.sql` |
 | `source_key` | `mta` | Value passed to `m_is_source_active('<source_key>')` in hub model |
 | `source_unique_id_expr` | `c."Name1" \|\| '\|\|' \|\| coalesce(ca."COUNTRY",'')` | Source column(s) used as `SOURCE_UNIQUE_ID`. Compound keys MUST use `\|\|` delimiter + `coalesce(...,'')` sentinel. |
@@ -173,7 +157,7 @@ Bronze Source Table              →   Ephemeral Staging Model               →
 (<ENTITY_UPPER>_<SRC>_DEV)            (<prefix>_<entity>.sql)                   UNION ALL branch + SCD1 merge
 ```
 
-### Multi-source, multi-target
+### Multi-source, multi-target (MTA-style)
 ```
 N bronze tables → UNION ALL extraction CTE → M ephemeral staging models (one per target)
                                               → M hub-model patches
@@ -202,16 +186,16 @@ macros/
 
 ---
 
-## Standard Rules (MUST follow — domain-independent)
+## GDP Standard Rules (MUST follow — domain-independent)
 
 ### Rule 1: Extraction CTE (`sp_<entity_plural>`)
 - **TEXT columns**: `NULLIF(TRIM("Column_Name"), '') as target_alias`
 - **NUMBER/FLOAT columns**: `"Column_Name" as target_alias` (plain passthrough)
 - **DATE/TIMESTAMP columns**: `"Column_Name" as target_alias` (plain passthrough)
 - **Derived columns**: CASE/IFF expressions
-- **Dedup**: `qualify row_number() over(partition by <PK> order by {prefix_lower}_updated_ts desc) = 1`
+- **Dedup**: `qualify row_number() over(partition by <PK> order by gdp_updated_ts desc) = 1`
 - **Filter**: `where <PK> is not null and TRIM(<PK>) <> ''`
-- **Multi-source UNION**: When `source_fqns` has > 1 entry, build one branch per source pair with **identical aliases and order** in each branch, then `UNION ALL`, then dedup with `qualify` over `source_unique_id`. See `references/<domain>-contract.md` Multi-Source-Table Extraction Pattern.
+- **Multi-source UNION**: When `source_fqns` has > 1 entry, build one branch per source pair (e.g., `PS_CUSTOMER` + `PS_CUST_ADDRESS`) with **identical aliases and order** in each branch, then `UNION ALL`, then dedup with `qualify` over `source_unique_id`. See `references/<domain>-contract.md` Multi-Source-Table Extraction Pattern.
 
 ### Rule 2: Base CTE (column conformance)
 - Type cast ONLY where bronze source type differs from silver target type:
@@ -223,11 +207,11 @@ macros/
 
 ### Rule 3: HKEY Macro (`m_<entity>_hkey`)
 - Include ONLY pure business/descriptive columns in DDL position order
-- EXCLUDE: `*_SKEY`, `SOURCE_UNIQUE_ID`, `<ENTITY_UPPER>_HKEY`, all `{PREFIX}_*` audit columns
+- EXCLUDE: `*_SKEY`, `SOURCE_UNIQUE_ID`, `<ENTITY_UPPER>_HKEY`, all `GDP_*` audit columns
 - The exact column list lives in `references/<domain>-contract.md` under the HKEY section
 
-### Rule 4: Defensive Coding
-- Parent SKEY lookups: ALWAYS add `QUALIFY ROW_NUMBER() OVER (PARTITION BY SOURCE_UNIQUE_ID ORDER BY {PREFIX}_INSERTED_TS DESC) = 1`
+### Rule 4: Defensive Coding (per AGENTS.md)
+- Parent SKEY lookups: ALWAYS add `QUALIFY ROW_NUMBER() OVER (PARTITION BY SOURCE_UNIQUE_ID ORDER BY GDP_INSERTED_TS DESC) = 1`
 - SOURCE_UNIQUE_ID: Use safe CONCAT with `||` delimiter and blank `''` sentinel for NULLs
 - Joins to ref tables: Always LEFT JOIN (never INNER) to prevent silent data loss
 - Bronze dedup: Add optional QUALIFY on PK when source has known duplicates
@@ -242,10 +226,10 @@ macros/
 
 **Mode A (STTM)**:
 1. Run Step 0 (STTM Parsing) end-to-end.
-2. Load `references/<domain>-contract.md`. If file is a stub: populate inline from `DESCRIBE TABLE` on each target silver table. If a worked example exists under `examples/<domain>-contract.md`, use it as a structural reference only — do not assume its business columns apply to a new project.
+2. Load `references/<domain>-contract.md`. If file is a stub: populate inline from `DESCRIBE TABLE` on each target silver table.
 3. Cross-validate STTM targets/columns against the contract; build anomaly list (handled per AUTO rules).
 4. `DESCRIBE TABLE` each `source_fqns[]` entry. Capture column names + types.
-5. Verify source system in `REF_{PREFIX}_SOURCE_SYSTEM`. If exact miss, fuzzy match. If still miss, STOP.
+5. Verify source system in `REF_GDP_SOURCE_SYSTEM`. If exact miss, fuzzy match. If still miss, STOP.
 6. Identify type-mismatch casts.
 7. **AUTO mode**: proceed to file generation. Stop only on the 5 true blockers.
 
@@ -320,11 +304,11 @@ In AUTO mode (default), only the 5 true blockers in Autonomy Mode require stoppi
 
 | Domain | Reference File | Status |
 |---|---|---|
-| opportunity | `examples/opportunity-contract.md` | Worked example (single-hub, 147-col contract). |
-| company | `examples/company-contract.md` | Worked example (multi-target: COMPANY_CORE + 5 spokes; multi-source UNION pattern). |
-| property | `examples/property-contract.md` | Worked example (4 targets: CORE/USAGE/ADDRESS/OWNER; per-target join graph pattern). |
+| opportunity | `references/opportunity-contract.md` | Complete (single-hub, 147-col contract). |
+| company | `references/company-contract.md` | Complete (multi-target: COMPANY_CORE + 5 spokes; multi-source UNION pattern). |
+| property | `references/property-contract.md` | Complete (4 targets: CORE/USAGE/ADDRESS/OWNER; per-target join graph pattern). |
 
-These are **illustrative examples**, not requirements — they demonstrate the contract format for a few common CRM domains. To onboard any domain (new or one without a shipped example):
+To onboard a brand-new domain (e.g., `contact`):
 1. Skill auto-creates `references/<domain>-contract.md` by running `DESCRIBE TABLE` against the domain's silver targets (declared in the STTM `Target Table` cell).
 2. The skill populates the contract sections (column list, HKEY block, type-cast table) on the fly from DDL.
 3. User can refine the contract after first onboarding for downstream sources to consume.

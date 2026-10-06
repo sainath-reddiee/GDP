@@ -18,7 +18,7 @@ from services.common.sql import clip, config_value, insert_rows, rows, scalar, v
 from services.common.stage import Stage
 from services.knowledge import search as ks
 from services.knowledge.procedures import current_knowledge_version, identify_domain
-from services.knowledge.usage import STAGE_SKILLS, assert_safe_transformation, use_skills
+from services.knowledge.usage import STAGE_SKILLS, assert_safe_transformation, domain_context, use_skills
 from services.mapping import features, scoring
 from services.mapping.feedback import pattern as feedback_pattern
 
@@ -200,6 +200,10 @@ def generate_mapping_candidates(session, run_id: str) -> Dict[str, Any]:
             run = stage.run
             target = target_table(session, run)
             targets = target_columns(session, target["TARGET_TABLE_ID"])
+            try:
+                guidance += "\n\n" + domain_context(session, run["DOMAIN_ID"], target["TARGET_TABLE"], 4000)
+            except Exception:
+                pass
             mappable = features.mappable_targets(targets)
             sources = source_columns(session, run_id)
             assert sources, "no current profile for this run"

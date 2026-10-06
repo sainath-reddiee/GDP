@@ -34,13 +34,15 @@ export function ModelPanel({ database, schema, tables, domains, onClose }: {
       if (!live) return;
       if (!r.ok) { setError(r.error); return; }
       setData(r.data);
+      const detected = r.data.domain?.detected;
+      if (detected && domains.some((d) => d.domain_id === detected.domain_id)) setDomainId(detected.domain_id);
       const strong = r.data.models.suggestions.filter((s) => s.kind === "existing" && s.score >= 0.5).map((s) => s.fqn);
       if (strong.length) { setMode("existing"); setPicked(strong); }
     });
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
     window.addEventListener("keydown", onKey);
     return () => { live = false; window.removeEventListener("keydown", onKey); };
-  }, [database, schema, tables, onClose]);
+  }, [database, schema, tables, domains, onClose]);
 
   const existing = (data?.models.suggestions ?? []).filter((s) => s.kind === "existing");
   const proposed = (data?.models.suggestions ?? []).find((s) => s.kind === "proposed");
@@ -166,6 +168,26 @@ export function ModelPanel({ database, schema, tables, domains, onClose }: {
                   <Layers className="h-4 w-4 text-primary" />
                   <h4 className="text-sm font-semibold">Target model</h4>
                 </div>
+                {data.domain?.detected ? (
+                  <div className="rounded-lg border border-primary/30 bg-primary/5 p-3 text-sm">
+                    <p>
+                      <span className="font-semibold">{data.domain.detected.domain_name}</span> domain detected
+                      <span className="ml-2 text-xs text-muted-foreground">{Math.round(data.domain.detected.confidence * 100)}% confidence</span>
+                    </p>
+                    {data.domain.detected.signals.length > 0 && (
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        Signals: {data.domain.detected.signals.join(", ")}. Its contract drives the mapping, STTM and dbt generation.
+                      </p>
+                    )}
+                    {data.domain.candidates.length > 1 && (
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        Also considered: {data.domain.candidates.slice(1).map((c) => `${c.domain_name} ${Math.round(c.confidence * 100)}%`).join(", ")}
+                      </p>
+                    )}
+                  </div>
+                ) : data.domain && (
+                  <p className="text-xs text-muted-foreground">No domain contract matched these tables with enough confidence; pick a pack below or propose a new model.</p>
+                )}
                 <div className="grid gap-2 sm:grid-cols-2">
                   {([
                     ["existing", "Map to existing models", existing.length ? `${existing.length} matching model${existing.length === 1 ? "" : "s"} found` : "No matching model found"],

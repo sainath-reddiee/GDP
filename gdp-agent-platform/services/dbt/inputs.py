@@ -78,6 +78,14 @@ def load_inputs(query: Query, run_id: str, plan: Dict[str, Any], sttm: Dict[str,
                              ORDER BY C.ORDINAL_POSITION""", [run.get("DOMAIN_ID"), target])]
     except Exception:
         target_columns = []
+    model_spec: Dict[str, Any] = {}
+    try:
+        found = query("""SELECT MODEL_SPEC FROM KNOWLEDGE.TARGET_TABLE_REGISTRY
+                          WHERE ACTIVE_FLAG AND DOMAIN_ID = ? AND UPPER(TARGET_TABLE) = UPPER(?)
+                          ORDER BY TARGET_TABLE LIMIT 1""", [run.get("DOMAIN_ID"), target])
+        model_spec = _json(found[0].get("MODEL_SPEC")) if found else {}
+    except Exception:
+        model_spec = {}
     tables = {s["name"]: [{"column_name": c, "data_type": t.split("(")[0]} for c, t in s["columns"].items()]
               for s in sources}
     system = str(run.get("SOURCE_SYSTEM_NAME") or "SOURCE")
@@ -94,6 +102,7 @@ def load_inputs(query: Query, run_id: str, plan: Dict[str, Any], sttm: Dict[str,
         "lines": lines,
         "joins": _planned_joins(design) or (infer_joins(tables) if len(tables) > 1 else []),
         "primary": (design.get("join_graph") or {}).get("driving_table") or design.get("driving_table"),
+        "model_spec": model_spec or {},
     }
 
 

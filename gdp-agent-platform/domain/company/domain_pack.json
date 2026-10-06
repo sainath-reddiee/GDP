@@ -1,0 +1,2165 @@
+{
+  "domain": {
+    "name": "COMPANY",
+    "description": "Companies and organizations (customers, vendors, clients, legal entities): a COMPANY_CORE hub with address, industry, segment, relationship and hierarchy spokes.",
+    "owner": "GDP Data Office",
+    "silver_database": "DEV_GDP_SILVER_DB",
+    "silver_schema": "COMPANY",
+    "contract": "snowflake/skills/gdp/dbt-onboard-source/references/company-contract.md",
+    "signals": {
+      "tables": {
+        "COMPANY": 3,
+        "CUSTOMER": 3,
+        "CUST": 2,
+        "VENDOR": 3,
+        "ORGANIZATION": 3,
+        "ORG": 2,
+        "CLIENT": 3,
+        "ACCOUNT": 2,
+        "PARTY": 2,
+        "FIRM": 2,
+        "SUPPLIER": 2,
+        "EMPLOYER": 2
+      },
+      "columns": {
+        "DUNS": 3,
+        "NAICS": 3,
+        "SIC": 2,
+        "NAME1": 3,
+        "LEGAL": 2,
+        "ALIAS": 2,
+        "TRADE": 1,
+        "EFF_STATUS": 2,
+        "PARENT": 1,
+        "HIERARCHY": 2,
+        "INDUSTRY": 2,
+        "SEGMENT": 1,
+        "WEBSITE": 2,
+        "REGISTRATION": 2,
+        "VENDOR": 2,
+        "CUSTOMER": 2,
+        "COMPANY": 2,
+        "TAX": 1,
+        "EMPLOYEE": 1
+      }
+    },
+    "source_systems": [
+      {
+        "skey": 107,
+        "name": "SPOC",
+        "bronze_schema": "BRONZE_SPOC"
+      },
+      {
+        "skey": 110,
+        "name": "INTROHIVE",
+        "bronze_schema": "BRONZE_INTROHIVE"
+      },
+      {
+        "skey": 112,
+        "name": "BUSINESS_SMARTSHEET",
+        "bronze_schema": "BRONZE_BUSINESS_SMARTSHEET"
+      },
+      {
+        "skey": 115,
+        "name": "CLIENT_SENTIMENT",
+        "bronze_schema": "BRONZE_CLIENT_SENTIMENT"
+      },
+      {
+        "skey": 120,
+        "name": "NEWS_TO_LEADS",
+        "bronze_schema": "BRONZE_NEWS_TO_LEADS"
+      },
+      {
+        "skey": 123,
+        "name": "TAT",
+        "bronze_schema": "BRONZE_TAT"
+      },
+      {
+        "skey": 201,
+        "name": "MTA",
+        "bronze_schema": "BRONZE_MTA"
+      },
+      {
+        "skey": 202,
+        "name": "FPD",
+        "bronze_schema": "BRONZE_FINANCE"
+      }
+    ]
+  },
+  "targets": [
+    {
+      "schema": "COMPANY",
+      "table": "COMPANY_CORE",
+      "table_type": "HUB",
+      "grain": "one row per SOURCE_UNIQUE_ID per REF_GDP_SOURCE_SYSTEM_SKEY",
+      "business_keys": [
+        "SOURCE_UNIQUE_ID",
+        "REF_GDP_SOURCE_SYSTEM_SKEY"
+      ],
+      "scd_type": "1+HIST",
+      "description": "Hub COMPANY_CORE of COMPANY.",
+      "model_spec": {
+        "role": "hub",
+        "hub": "COMPANY_CORE",
+        "hub_fk": null,
+        "hkey_columns": [
+          "DUNS_NUMBER",
+          "COMPANY_NAME",
+          "ALIAS_NAME",
+          "WEBSITE_URL",
+          "IS_CBRE_ENTITY",
+          "COMPANY_STATUS"
+        ],
+        "reference_ctes": {
+          "ref_source_system": "ref_source_system as (\n    {{ m_get_source_system_skey_company('<SOURCE_SYSTEM_NAME>') }}\n)",
+          "country_mapping": "country_mapping as (\n    select upper(trim(value_1)) as value_1_norm, target_value\n    from {{ source('company_shared_reference', 'gdp_country_mapping') }}\n    where model_name = 'country_name_std'\n)",
+          "ref_country": "ref_country as (\n    select country_skey as ref_country_skey, country_name\n    from {{ source('company_geo_reference', 'ref_country') }}\n    where gdp_is_active = TRUE\n)",
+          "ref_company_type": "ref_company_type as (\n    select ref_company_type_skey, company_type_desc\n    from {{ source('company_reference', 'ref_company_type') }}\n)"
+        },
+        "reference_joins": [
+          {
+            "cte": "country_mapping",
+            "alias": "cm",
+            "condition": "upper(trim(o.country_of_registration)) = cm.value_1_norm"
+          },
+          {
+            "cte": "ref_country",
+            "alias": "cntry",
+            "condition": "upper(trim(coalesce(cm.target_value, o.country_of_registration))) = upper(trim(cntry.country_name))"
+          },
+          {
+            "cte": "ref_company_type",
+            "alias": "ct",
+            "condition": "upper(trim(o.company_type)) = upper(trim(ct.company_type_desc))"
+          }
+        ],
+        "minimum_mapping": [
+          "`source_unique_id` (often compound, e.g., `Name1 || '||' || Country`)",
+          "`company_name`",
+          "One of: `duns_number`, `legal_entity_name`, `trade_name`, or `alias_name` (for HKEY uniqueness)"
+        ],
+        "casts": []
+      },
+      "columns": [
+        {
+          "name": "COMPANY_CORE_SKEY",
+          "type": "NUMBER(19,0)",
+          "nullable": false,
+          "definition": "Sequence default",
+          "business_key": false
+        },
+        {
+          "name": "SOURCE_UNIQUE_ID",
+          "type": "TEXT",
+          "nullable": false,
+          "definition": "From source PK / compound expression",
+          "business_key": true
+        },
+        {
+          "name": "REF_GDP_SOURCE_SYSTEM_SKEY",
+          "type": "NUMBER(38,0)",
+          "nullable": false,
+          "definition": "Cross join to ref_gdp_source_system",
+          "business_key": true
+        },
+        {
+          "name": "DUNS_NUMBER",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "COMPANY_NAME",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "DBA/trading name",
+          "business_key": false
+        },
+        {
+          "name": "ALIAS_NAME",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "CBRE internal alias",
+          "business_key": false
+        },
+        {
+          "name": "REF_COMPANY_TYPE_SKEY",
+          "type": "NUMBER(38,0)",
+          "nullable": true,
+          "definition": "LEFT JOIN ref_company_type",
+          "business_key": false
+        },
+        {
+          "name": "REF_COUNTRY_OF_REGISTRATION_SKEY",
+          "type": "NUMBER(38,0)",
+          "nullable": true,
+          "definition": "LEFT JOIN ref_country (via country_mapping)",
+          "business_key": false
+        },
+        {
+          "name": "REF_ADDRESS_SKEY",
+          "type": "NUMBER(38,0)",
+          "nullable": true,
+          "definition": "FK to SHARED.ADDRESS",
+          "business_key": false
+        },
+        {
+          "name": "WEBSITE_URL",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "IS_CBRE_ENTITY",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "Default `'N'`",
+          "business_key": false
+        },
+        {
+          "name": "COMPANY_STATUS",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "Active/Inactive/Dissolved/In Liquidation",
+          "business_key": false
+        },
+        {
+          "name": "COMPANY_CORE_HKEY",
+          "type": "TEXT",
+          "nullable": false,
+          "definition": "`m_company_core_hkey()`",
+          "business_key": false
+        },
+        {
+          "name": "GDP_IS_ACTIVE",
+          "type": "BOOLEAN",
+          "nullable": false,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "GDP_INSERTED_TS",
+          "type": "TIMESTAMP_NTZ(6)",
+          "nullable": false,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "GDP_INSERTED_BY",
+          "type": "TEXT",
+          "nullable": false,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "GDP_UPDATED_TS",
+          "type": "TIMESTAMP_NTZ(6)",
+          "nullable": false,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "GDP_UPDATED_BY",
+          "type": "TEXT",
+          "nullable": false,
+          "definition": null,
+          "business_key": false
+        }
+      ]
+    },
+    {
+      "schema": "COMPANY",
+      "table": "COMPANY_ADDRESS",
+      "table_type": "SPOKE",
+      "grain": "one row per SOURCE_UNIQUE_ID per REF_GDP_SOURCE_SYSTEM_SKEY",
+      "business_keys": [
+        "SOURCE_UNIQUE_ID",
+        "REF_GDP_SOURCE_SYSTEM_SKEY"
+      ],
+      "scd_type": "1+HIST",
+      "description": "Spoke COMPANY_ADDRESS of COMPANY.",
+      "model_spec": {
+        "role": "spoke",
+        "hub": "COMPANY_CORE",
+        "hub_fk": "COMPANY_CORE_SKEY",
+        "hkey_columns": [
+          "SOURCE_ADDRESS_LINE_1",
+          "SOURCE_ADDRESS_LINE_2",
+          "SOURCE_CITY",
+          "SOURCE_STATE",
+          "SOURCE_COUNTRY_NAME",
+          "SOURCE_POSTAL_CODE",
+          "SOURCE_LATITUDE",
+          "SOURCE_LONGITUDE"
+        ],
+        "reference_ctes": {},
+        "reference_joins": [],
+        "minimum_mapping": [
+          "source_unique_id"
+        ],
+        "casts": [
+          {
+            "target_column": "LATITUDE",
+            "target_type": "NUMBER(12,8)",
+            "source_type": "TEXT or FLOAT",
+            "cast": "o.col::number(12,8)"
+          },
+          {
+            "target_column": "LONGITUDE",
+            "target_type": "NUMBER(12,8)",
+            "source_type": "TEXT or FLOAT",
+            "cast": "o.col::number(12,8)"
+          }
+        ]
+      },
+      "columns": [
+        {
+          "name": "COMPANY_ADDRESS_SKEY",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "PK",
+          "business_key": false
+        },
+        {
+          "name": "COMPANY_CORE_SKEY",
+          "type": "NUMBER(38,0)",
+          "nullable": true,
+          "definition": "FK to COMPANY_CORE",
+          "business_key": false
+        },
+        {
+          "name": "REF_ADDRESS_TYPE_SKEY",
+          "type": "NUMBER(38,0)",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "ADDRESS_LINE_1",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "ESRI standardized",
+          "business_key": false
+        },
+        {
+          "name": "ADDRESS_LINE_2",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "ESRI standardized",
+          "business_key": false
+        },
+        {
+          "name": "STREET_NAME",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "ESRI standardized",
+          "business_key": false
+        },
+        {
+          "name": "STREET_NUMBER_1",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "ESRI standardized",
+          "business_key": false
+        },
+        {
+          "name": "STREET_NUMBER_2",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "ESRI standardized",
+          "business_key": false
+        },
+        {
+          "name": "STREET_NUMBER_3",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "ESRI standardized",
+          "business_key": false
+        },
+        {
+          "name": "PRE_STREET_DIRECTION_NAME",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "ESRI standardized",
+          "business_key": false
+        },
+        {
+          "name": "STREET_TYPE",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "ESRI standardized",
+          "business_key": false
+        },
+        {
+          "name": "POST_STREET_DIRECTION_NAME",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "ESRI standardized",
+          "business_key": false
+        },
+        {
+          "name": "CITY",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "ESRI standardized",
+          "business_key": false
+        },
+        {
+          "name": "STATE",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "ESRI standardized",
+          "business_key": false
+        },
+        {
+          "name": "COUNTRY",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "ESRI standardized",
+          "business_key": false
+        },
+        {
+          "name": "COUNTY",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "ESRI standardized",
+          "business_key": false
+        },
+        {
+          "name": "POSTAL_CODE",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "ESRI standardized",
+          "business_key": false
+        },
+        {
+          "name": "POSTAL_CODE_EXTENSION",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "ESRI standardized",
+          "business_key": false
+        },
+        {
+          "name": "LATITUDE",
+          "type": "NUMBER(12,8)",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "LONGITUDE",
+          "type": "NUMBER(12,8)",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "SOURCE_ADDRESS_LINE_1",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "raw passthrough",
+          "business_key": false
+        },
+        {
+          "name": "SOURCE_ADDRESS_LINE_2",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "raw passthrough",
+          "business_key": false
+        },
+        {
+          "name": "SOURCE_STREET_NAME",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "raw passthrough",
+          "business_key": false
+        },
+        {
+          "name": "SOURCE_STREET_NUMBER_1",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "raw passthrough",
+          "business_key": false
+        },
+        {
+          "name": "SOURCE_STREET_NUMBER_2",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "raw passthrough",
+          "business_key": false
+        },
+        {
+          "name": "SOURCE_STREET_NUMBER_3",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "raw passthrough",
+          "business_key": false
+        },
+        {
+          "name": "SOURCE_PRE_STREET_DIRECTION_NAME",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "raw passthrough",
+          "business_key": false
+        },
+        {
+          "name": "SOURCE_STREET_TYPE",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "raw passthrough",
+          "business_key": false
+        },
+        {
+          "name": "SOURCE_POST_STREET_DIRECTION_NAME",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "raw passthrough",
+          "business_key": false
+        },
+        {
+          "name": "SOURCE_CITY",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "raw passthrough",
+          "business_key": false
+        },
+        {
+          "name": "SOURCE_STATE",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "raw passthrough",
+          "business_key": false
+        },
+        {
+          "name": "SOURCE_COUNTRY_NAME",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "raw passthrough",
+          "business_key": false
+        },
+        {
+          "name": "SOURCE_COUNTY",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "raw passthrough",
+          "business_key": false
+        },
+        {
+          "name": "SOURCE_POSTAL_CODE",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "raw passthrough",
+          "business_key": false
+        },
+        {
+          "name": "SOURCE_POSTAL_CODE_EXTENSION",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "raw passthrough",
+          "business_key": false
+        },
+        {
+          "name": "SOURCE_LATITUDE",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "raw passthrough",
+          "business_key": false
+        },
+        {
+          "name": "SOURCE_LONGITUDE",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "raw passthrough",
+          "business_key": false
+        },
+        {
+          "name": "SOURCE_GEOCODE_OUTPUT",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "raw passthrough",
+          "business_key": false
+        },
+        {
+          "name": "SOURCE_LATITUDE_OVERRIDE",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "raw passthrough",
+          "business_key": false
+        },
+        {
+          "name": "SOURCE_LONGITUDE_OVERRIDE",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "raw passthrough",
+          "business_key": false
+        },
+        {
+          "name": "SOURCE_GEOCODE_OVERRIDE_SOURCE",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "raw passthrough",
+          "business_key": false
+        },
+        {
+          "name": "ADDRESS_MATCH_SCORE",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "ESRI output",
+          "business_key": false
+        },
+        {
+          "name": "ADDRESS_MATCH_CODE",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "ESRI output",
+          "business_key": false
+        },
+        {
+          "name": "ADDRESS_PRECISION_CODE",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "ESRI output",
+          "business_key": false
+        },
+        {
+          "name": "GEOCODE_OUTPUT",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "ESRI output",
+          "business_key": false
+        },
+        {
+          "name": "GEOCODE_PROVIDER_NAME",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "ESRI output",
+          "business_key": false
+        },
+        {
+          "name": "COMPANY_ADDRESS_HKEY",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "SOURCE_UNIQUE_ID",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": null,
+          "business_key": true
+        },
+        {
+          "name": "REF_GDP_SOURCE_SYSTEM_SKEY",
+          "type": "NUMBER(38,0)",
+          "nullable": true,
+          "definition": null,
+          "business_key": true
+        },
+        {
+          "name": "GDP_IS_ACTIVE",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "GDP_INSERTED_TS",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "GDP_INSERTED_BY",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "GDP_UPDATED_TS",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "GDP_UPDATED_BY",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "COMPANY_ADDRESS_SKEY_NEW",
+          "type": "NUMBER(19,0)",
+          "nullable": true,
+          "definition": "transition column",
+          "business_key": false
+        }
+      ]
+    },
+    {
+      "schema": "COMPANY",
+      "table": "COMPANY_INDUSTRY",
+      "table_type": "SPOKE",
+      "grain": "one row per SOURCE_UNIQUE_ID per REF_GDP_SOURCE_SYSTEM_SKEY",
+      "business_keys": [
+        "SOURCE_UNIQUE_ID",
+        "REF_GDP_SOURCE_SYSTEM_SKEY"
+      ],
+      "scd_type": "1+HIST",
+      "description": "Spoke COMPANY_INDUSTRY of COMPANY.",
+      "model_spec": {
+        "role": "spoke",
+        "hub": "COMPANY_CORE",
+        "hub_fk": "COMPANY_CORE_SKEY",
+        "hkey_columns": [
+          "REF_INDUSTRY_NAME_SKEY",
+          "SOURCE_NAICS_CODE",
+          "SOURCE_NAICS_DESCRIPTION",
+          "IS_PRIMARY_INDUSTRY"
+        ],
+        "reference_ctes": {},
+        "reference_joins": [],
+        "minimum_mapping": [
+          "source_unique_id"
+        ],
+        "casts": []
+      },
+      "columns": [
+        {
+          "name": "COMPANY_INDUSTRY_SKEY",
+          "type": "NUMBER(38,0)",
+          "nullable": false,
+          "definition": "sequence",
+          "business_key": false
+        },
+        {
+          "name": "SOURCE_UNIQUE_ID",
+          "type": "TEXT",
+          "nullable": false,
+          "definition": null,
+          "business_key": true
+        },
+        {
+          "name": "REF_GDP_SOURCE_SYSTEM_SKEY",
+          "type": "NUMBER(38,0)",
+          "nullable": false,
+          "definition": null,
+          "business_key": true
+        },
+        {
+          "name": "COMPANY_CORE_SKEY",
+          "type": "NUMBER(38,0)",
+          "nullable": true,
+          "definition": "FK",
+          "business_key": false
+        },
+        {
+          "name": "REF_INDUSTRY_NAME_SKEY",
+          "type": "NUMBER(38,0)",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "SOURCE_NAICS_CODE",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "SOURCE_NAICS_DESCRIPTION",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "IS_PRIMARY_INDUSTRY",
+          "type": "BOOLEAN",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "COMPANY_INDUSTRY_HKEY",
+          "type": "TEXT",
+          "nullable": false,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "GDP_IS_ACTIVE",
+          "type": "TEXT",
+          "nullable": false,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "GDP_INSERTED_TS",
+          "type": "TEXT",
+          "nullable": false,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "GDP_INSERTED_BY",
+          "type": "TEXT",
+          "nullable": false,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "GDP_UPDATED_TS",
+          "type": "TEXT",
+          "nullable": false,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "GDP_UPDATED_BY",
+          "type": "TEXT",
+          "nullable": false,
+          "definition": null,
+          "business_key": false
+        }
+      ]
+    },
+    {
+      "schema": "COMPANY",
+      "table": "COMPANY_SEGMENT",
+      "table_type": "SPOKE",
+      "grain": "one row per SOURCE_UNIQUE_ID per REF_GDP_SOURCE_SYSTEM_SKEY",
+      "business_keys": [
+        "SOURCE_UNIQUE_ID",
+        "REF_GDP_SOURCE_SYSTEM_SKEY"
+      ],
+      "scd_type": "1+HIST",
+      "description": "Spoke COMPANY_SEGMENT of COMPANY.",
+      "model_spec": {
+        "role": "spoke",
+        "hub": "COMPANY_CORE",
+        "hub_fk": "COMPANY_CORE_SKEY",
+        "hkey_columns": [
+          "REF_SEGMENT_SKEY",
+          "REF_SERVICE_LINE_SKEY",
+          "SOURCE_SEGMENT_NAME",
+          "SOURCE_SERVICE_LINE_NAME",
+          "VALID_FROM",
+          "VALID_TO"
+        ],
+        "reference_ctes": {},
+        "reference_joins": [],
+        "minimum_mapping": [
+          "source_unique_id"
+        ],
+        "casts": [
+          {
+            "target_column": "VALID_FROM",
+            "target_type": "TIMESTAMP_NTZ",
+            "source_type": "DATE",
+            "cast": "o.col::timestamp_ntz"
+          },
+          {
+            "target_column": "VALID_TO",
+            "target_type": "TIMESTAMP_NTZ",
+            "source_type": "DATE",
+            "cast": "o.col::timestamp_ntz"
+          }
+        ]
+      },
+      "columns": [
+        {
+          "name": "COMPANY_SEGMENT_SKEY",
+          "type": "NUMBER(38,0)",
+          "nullable": false,
+          "definition": "sequence",
+          "business_key": false
+        },
+        {
+          "name": "SOURCE_UNIQUE_ID",
+          "type": "TEXT",
+          "nullable": false,
+          "definition": null,
+          "business_key": true
+        },
+        {
+          "name": "REF_GDP_SOURCE_SYSTEM_SKEY",
+          "type": "NUMBER(38,0)",
+          "nullable": false,
+          "definition": null,
+          "business_key": true
+        },
+        {
+          "name": "COMPANY_CORE_SKEY",
+          "type": "NUMBER(38,0)",
+          "nullable": true,
+          "definition": "FK",
+          "business_key": false
+        },
+        {
+          "name": "REF_SEGMENT_SKEY",
+          "type": "NUMBER(38,0)",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "REF_SERVICE_LINE_SKEY",
+          "type": "NUMBER(38,0)",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "VALID_FROM",
+          "type": "TIMESTAMP_NTZ",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "VALID_TO",
+          "type": "TIMESTAMP_NTZ",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "COMPANY_SEGMENT_HKEY",
+          "type": "TEXT",
+          "nullable": false,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "SOURCE_SEGMENT_NAME",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "SOURCE_SERVICE_LINE_NAME",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "GDP_IS_ACTIVE",
+          "type": "TEXT",
+          "nullable": false,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "GDP_INSERTED_TS",
+          "type": "TEXT",
+          "nullable": false,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "GDP_INSERTED_BY",
+          "type": "TEXT",
+          "nullable": false,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "GDP_UPDATED_TS",
+          "type": "TEXT",
+          "nullable": false,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "GDP_UPDATED_BY",
+          "type": "TEXT",
+          "nullable": false,
+          "definition": null,
+          "business_key": false
+        }
+      ]
+    },
+    {
+      "schema": "COMPANY",
+      "table": "COMPANY_RELATIONSHIP",
+      "table_type": "SPOKE",
+      "grain": "one row per SOURCE_UNIQUE_ID per REF_GDP_SOURCE_SYSTEM_SKEY",
+      "business_keys": [
+        "SOURCE_UNIQUE_ID",
+        "REF_GDP_SOURCE_SYSTEM_SKEY"
+      ],
+      "scd_type": "1+HIST",
+      "description": "Spoke COMPANY_RELATIONSHIP of COMPANY.",
+      "model_spec": {
+        "role": "spoke",
+        "hub": "COMPANY_CORE",
+        "hub_fk": "COMPANY_CORE_SKEY",
+        "hkey_columns": [
+          "REF_RELATIONSHIP_TYPE_SKEY",
+          "ACCOUNT_NAME",
+          "ACCOUNT_NUMBER",
+          "ACCOUNT_STATUS",
+          "SOURCE_ACCOUNT_ID",
+          "RELATIONSHIP_START_DATE",
+          "RELATIONSHIP_END_DATE"
+        ],
+        "reference_ctes": {},
+        "reference_joins": [],
+        "minimum_mapping": [
+          "source_unique_id"
+        ],
+        "casts": [
+          {
+            "target_column": "ACCOUNT_NUMBER",
+            "target_type": "NUMBER(38,0)",
+            "source_type": "TEXT",
+            "cast": "try_to_number(o.col)"
+          },
+          {
+            "target_column": "RELATIONSHIP_START_DATE",
+            "target_type": "TIMESTAMP_NTZ",
+            "source_type": "DATE",
+            "cast": "o.col::timestamp_ntz"
+          }
+        ]
+      },
+      "columns": [
+        {
+          "name": "COMPANY_RELATIONSHIP_SKEY",
+          "type": "NUMBER(38,0)",
+          "nullable": false,
+          "definition": "sequence",
+          "business_key": false
+        },
+        {
+          "name": "SOURCE_UNIQUE_ID",
+          "type": "TEXT",
+          "nullable": false,
+          "definition": null,
+          "business_key": true
+        },
+        {
+          "name": "REF_GDP_SOURCE_SYSTEM_SKEY",
+          "type": "NUMBER(38,0)",
+          "nullable": false,
+          "definition": null,
+          "business_key": true
+        },
+        {
+          "name": "COMPANY_CORE_SKEY",
+          "type": "NUMBER(38,0)",
+          "nullable": true,
+          "definition": "FK",
+          "business_key": false
+        },
+        {
+          "name": "REF_RELATIONSHIP_TYPE_SKEY",
+          "type": "NUMBER(38,0)",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "ACCOUNT_NAME",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "ACCOUNT_NUMBER",
+          "type": "NUMBER(38,0)",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "ACCOUNT_STATUS",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "SOURCE_ACCOUNT_ID",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "RELATIONSHIP_START_DATE",
+          "type": "TIMESTAMP_NTZ",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "RELATIONSHIP_END_DATE",
+          "type": "TIMESTAMP_NTZ",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "COMPANY_RELATIONSHIP_HKEY",
+          "type": "TEXT",
+          "nullable": false,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "GDP_IS_ACTIVE",
+          "type": "TEXT",
+          "nullable": false,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "GDP_INSERTED_TS",
+          "type": "TEXT",
+          "nullable": false,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "GDP_INSERTED_BY",
+          "type": "TEXT",
+          "nullable": false,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "GDP_UPDATED_TS",
+          "type": "TEXT",
+          "nullable": false,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "GDP_UPDATED_BY",
+          "type": "TEXT",
+          "nullable": false,
+          "definition": null,
+          "business_key": false
+        }
+      ]
+    },
+    {
+      "schema": "COMPANY",
+      "table": "COMPANY_HIERARCHY",
+      "table_type": "SPOKE",
+      "grain": "one row per SOURCE_UNIQUE_ID per REF_GDP_SOURCE_SYSTEM_SKEY",
+      "business_keys": [
+        "SOURCE_UNIQUE_ID",
+        "REF_GDP_SOURCE_SYSTEM_SKEY"
+      ],
+      "scd_type": "1+HIST",
+      "description": "Spoke COMPANY_HIERARCHY of COMPANY.",
+      "model_spec": {
+        "role": "spoke",
+        "hub": "COMPANY_CORE",
+        "hub_fk": "COMPANY_CORE_SKEY",
+        "hkey_columns": [
+          "COMPANY_NAME",
+          "REF_COMPANY_TYPE_SKEY",
+          "DOMESTIC_PARENT_SKEY",
+          "GLOBAL_PARENT_SKEY",
+          "IMMEDIATE_PARENT_SKEY",
+          "HIERARCHY_LEVEL",
+          "HIERARCHY_PATH",
+          "REF_HIERARCHY_TYPE_SKEY",
+          "VALID_FROM",
+          "VALID_TO"
+        ],
+        "reference_ctes": {},
+        "reference_joins": [],
+        "minimum_mapping": [
+          "source_unique_id"
+        ],
+        "casts": [
+          {
+            "target_column": "VALID_FROM",
+            "target_type": "TIMESTAMP_NTZ",
+            "source_type": "DATE",
+            "cast": "o.col::timestamp_ntz"
+          },
+          {
+            "target_column": "VALID_TO",
+            "target_type": "TIMESTAMP_NTZ",
+            "source_type": "DATE",
+            "cast": "o.col::timestamp_ntz"
+          },
+          {
+            "target_column": "HIERARCHY_LEVEL",
+            "target_type": "NUMBER(10,0)",
+            "source_type": "TEXT",
+            "cast": "try_to_number(o.col)"
+          }
+        ]
+      },
+      "columns": [
+        {
+          "name": "COMPANY_HIERARCHY_SKEY",
+          "type": "NUMBER(38,0)",
+          "nullable": false,
+          "definition": "sequence",
+          "business_key": false
+        },
+        {
+          "name": "SOURCE_UNIQUE_ID",
+          "type": "TEXT",
+          "nullable": false,
+          "definition": null,
+          "business_key": true
+        },
+        {
+          "name": "REF_GDP_SOURCE_SYSTEM_SKEY",
+          "type": "NUMBER(38,0)",
+          "nullable": false,
+          "definition": null,
+          "business_key": true
+        },
+        {
+          "name": "COMPANY_CORE_SKEY",
+          "type": "NUMBER(38,0)",
+          "nullable": true,
+          "definition": "FK",
+          "business_key": false
+        },
+        {
+          "name": "COMPANY_NAME",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "REF_COMPANY_TYPE_SKEY",
+          "type": "NUMBER(38,0)",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "DOMESTIC_PARENT_SKEY",
+          "type": "NUMBER(38,0)",
+          "nullable": true,
+          "definition": "NOT `REF_DOMESTIC_PARENT_SKEY` per STTM",
+          "business_key": false
+        },
+        {
+          "name": "GLOBAL_PARENT_SKEY",
+          "type": "NUMBER(38,0)",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "HIERARCHY_LEVEL",
+          "type": "NUMBER(10,0)",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "HIERARCHY_PATH",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "pipe-delimited SKEY chain",
+          "business_key": false
+        },
+        {
+          "name": "VALID_FROM",
+          "type": "TIMESTAMP_NTZ",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "VALID_TO",
+          "type": "TIMESTAMP_NTZ",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "REF_HIERARCHY_TYPE_SKEY",
+          "type": "NUMBER(38,0)",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "COMPANY_HIERARCHY_HKEY",
+          "type": "TEXT",
+          "nullable": false,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "GDP_IS_ACTIVE",
+          "type": "TEXT",
+          "nullable": false,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "GDP_INSERTED_TS",
+          "type": "TEXT",
+          "nullable": false,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "GDP_INSERTED_BY",
+          "type": "TEXT",
+          "nullable": false,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "GDP_UPDATED_TS",
+          "type": "TEXT",
+          "nullable": false,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "GDP_UPDATED_BY",
+          "type": "TEXT",
+          "nullable": false,
+          "definition": null,
+          "business_key": false
+        },
+        {
+          "name": "IMMEDIATE_PARENT_SKEY",
+          "type": "NUMBER(38,0)",
+          "nullable": true,
+          "definition": null,
+          "business_key": false
+        }
+      ]
+    }
+  ],
+  "knowledge": [
+    {
+      "key": "company.model.company_core",
+      "type": "MODEL_DEFINITION",
+      "title": "COMPANY_CORE (hub)",
+      "content": "Hub COMPANY_CORE of COMPANY. Grain: one row per SOURCE_UNIQUE_ID per REF_GDP_SOURCE_SYSTEM_SKEY. HKEY over DUNS_NUMBER, COMPANY_NAME, ALIAS_NAME, WEBSITE_URL, IS_CBRE_ENTITY, COMPANY_STATUS.",
+      "content_json": {
+        "target_table": "COMPANY_CORE",
+        "role": "hub",
+        "hub_fk": null,
+        "hkey_columns": [
+          "DUNS_NUMBER",
+          "COMPANY_NAME",
+          "ALIAS_NAME",
+          "WEBSITE_URL",
+          "IS_CBRE_ENTITY",
+          "COMPANY_STATUS"
+        ],
+        "column_count": 18
+      }
+    },
+    {
+      "key": "company.pattern.company_core.references",
+      "type": "DBT_PATTERN",
+      "title": "COMPANY_CORE reference lookups",
+      "content": "Reference CTEs:\nref_source_system as (\n    {{ m_get_source_system_skey_company('<SOURCE_SYSTEM_NAME>') }}\n),\n\ncountry_mapping as (\n    select upper(trim(value_1)) as value_1_norm, target_value\n    from {{ source('company_shared_reference', 'gdp_country_mapping') }}\n    where model_name = 'country_name_std'\n),\n\nref_country as (\n    select country_skey as ref_country_skey, country_name\n    from {{ source('company_geo_reference', 'ref_country') }}\n    where gdp_is_active = TRUE\n),\n\nref_company_type as (\n    select ref_company_type_skey, company_type_desc\n    from {{ source('company_reference', 'ref_company_type') }}\n)\n\nJoins:\nleft join country_mapping as cm on upper(trim(o.country_of_registration)) = cm.value_1_norm\nleft join ref_country as cntry on upper(trim(coalesce(cm.target_value, o.country_of_registration))) = upper(trim(cntry.country_name))\nleft join ref_company_type as ct on upper(trim(o.company_type)) = upper(trim(ct.company_type_desc))"
+    },
+    {
+      "key": "company.glossary.company_core.company_name",
+      "type": "GLOSSARY",
+      "title": "COMPANY_CORE.COMPANY_NAME",
+      "content": "DBA/trading name",
+      "content_json": {
+        "target_column": "COMPANY_NAME",
+        "target_table": "COMPANY_CORE",
+        "definition": "DBA/trading name",
+        "synonyms": []
+      }
+    },
+    {
+      "key": "company.glossary.company_core.alias_name",
+      "type": "GLOSSARY",
+      "title": "COMPANY_CORE.ALIAS_NAME",
+      "content": "CBRE internal alias",
+      "content_json": {
+        "target_column": "ALIAS_NAME",
+        "target_table": "COMPANY_CORE",
+        "definition": "CBRE internal alias",
+        "synonyms": []
+      }
+    },
+    {
+      "key": "company.glossary.company_core.is_cbre_entity",
+      "type": "GLOSSARY",
+      "title": "COMPANY_CORE.IS_CBRE_ENTITY",
+      "content": "Default `'N'`",
+      "content_json": {
+        "target_column": "IS_CBRE_ENTITY",
+        "target_table": "COMPANY_CORE",
+        "definition": "Default `'N'`",
+        "synonyms": []
+      }
+    },
+    {
+      "key": "company.glossary.company_core.company_status",
+      "type": "GLOSSARY",
+      "title": "COMPANY_CORE.COMPANY_STATUS",
+      "content": "Active/Inactive/Dissolved/In Liquidation",
+      "content_json": {
+        "target_column": "COMPANY_STATUS",
+        "target_table": "COMPANY_CORE",
+        "definition": "Active/Inactive/Dissolved/In Liquidation",
+        "synonyms": []
+      }
+    },
+    {
+      "key": "company.model.company_address",
+      "type": "MODEL_DEFINITION",
+      "title": "COMPANY_ADDRESS (spoke)",
+      "content": "Spoke COMPANY_ADDRESS of COMPANY. Grain: one row per SOURCE_UNIQUE_ID per REF_GDP_SOURCE_SYSTEM_SKEY. Spoke of COMPANY_CORE through COMPANY_CORE_SKEY. HKEY over SOURCE_ADDRESS_LINE_1, SOURCE_ADDRESS_LINE_2, SOURCE_CITY, SOURCE_STATE, SOURCE_COUNTRY_NAME, SOURCE_POSTAL_CODE, SOURCE_LATITUDE, SOURCE_LONGITUDE.",
+      "content_json": {
+        "target_table": "COMPANY_ADDRESS",
+        "role": "spoke",
+        "hub_fk": "COMPANY_CORE_SKEY",
+        "hkey_columns": [
+          "SOURCE_ADDRESS_LINE_1",
+          "SOURCE_ADDRESS_LINE_2",
+          "SOURCE_CITY",
+          "SOURCE_STATE",
+          "SOURCE_COUNTRY_NAME",
+          "SOURCE_POSTAL_CODE",
+          "SOURCE_LATITUDE",
+          "SOURCE_LONGITUDE"
+        ],
+        "column_count": 55
+      }
+    },
+    {
+      "key": "company.glossary.company_address.address_line_1",
+      "type": "GLOSSARY",
+      "title": "COMPANY_ADDRESS.ADDRESS_LINE_1",
+      "content": "ESRI standardized",
+      "content_json": {
+        "target_column": "ADDRESS_LINE_1",
+        "target_table": "COMPANY_ADDRESS",
+        "definition": "ESRI standardized",
+        "synonyms": []
+      }
+    },
+    {
+      "key": "company.glossary.company_address.address_line_2",
+      "type": "GLOSSARY",
+      "title": "COMPANY_ADDRESS.ADDRESS_LINE_2",
+      "content": "ESRI standardized",
+      "content_json": {
+        "target_column": "ADDRESS_LINE_2",
+        "target_table": "COMPANY_ADDRESS",
+        "definition": "ESRI standardized",
+        "synonyms": []
+      }
+    },
+    {
+      "key": "company.glossary.company_address.street_name",
+      "type": "GLOSSARY",
+      "title": "COMPANY_ADDRESS.STREET_NAME",
+      "content": "ESRI standardized",
+      "content_json": {
+        "target_column": "STREET_NAME",
+        "target_table": "COMPANY_ADDRESS",
+        "definition": "ESRI standardized",
+        "synonyms": []
+      }
+    },
+    {
+      "key": "company.glossary.company_address.street_number_1",
+      "type": "GLOSSARY",
+      "title": "COMPANY_ADDRESS.STREET_NUMBER_1",
+      "content": "ESRI standardized",
+      "content_json": {
+        "target_column": "STREET_NUMBER_1",
+        "target_table": "COMPANY_ADDRESS",
+        "definition": "ESRI standardized",
+        "synonyms": []
+      }
+    },
+    {
+      "key": "company.glossary.company_address.street_number_2",
+      "type": "GLOSSARY",
+      "title": "COMPANY_ADDRESS.STREET_NUMBER_2",
+      "content": "ESRI standardized",
+      "content_json": {
+        "target_column": "STREET_NUMBER_2",
+        "target_table": "COMPANY_ADDRESS",
+        "definition": "ESRI standardized",
+        "synonyms": []
+      }
+    },
+    {
+      "key": "company.glossary.company_address.street_number_3",
+      "type": "GLOSSARY",
+      "title": "COMPANY_ADDRESS.STREET_NUMBER_3",
+      "content": "ESRI standardized",
+      "content_json": {
+        "target_column": "STREET_NUMBER_3",
+        "target_table": "COMPANY_ADDRESS",
+        "definition": "ESRI standardized",
+        "synonyms": []
+      }
+    },
+    {
+      "key": "company.glossary.company_address.pre_street_direction_name",
+      "type": "GLOSSARY",
+      "title": "COMPANY_ADDRESS.PRE_STREET_DIRECTION_NAME",
+      "content": "ESRI standardized",
+      "content_json": {
+        "target_column": "PRE_STREET_DIRECTION_NAME",
+        "target_table": "COMPANY_ADDRESS",
+        "definition": "ESRI standardized",
+        "synonyms": []
+      }
+    },
+    {
+      "key": "company.glossary.company_address.street_type",
+      "type": "GLOSSARY",
+      "title": "COMPANY_ADDRESS.STREET_TYPE",
+      "content": "ESRI standardized",
+      "content_json": {
+        "target_column": "STREET_TYPE",
+        "target_table": "COMPANY_ADDRESS",
+        "definition": "ESRI standardized",
+        "synonyms": []
+      }
+    },
+    {
+      "key": "company.glossary.company_address.post_street_direction_name",
+      "type": "GLOSSARY",
+      "title": "COMPANY_ADDRESS.POST_STREET_DIRECTION_NAME",
+      "content": "ESRI standardized",
+      "content_json": {
+        "target_column": "POST_STREET_DIRECTION_NAME",
+        "target_table": "COMPANY_ADDRESS",
+        "definition": "ESRI standardized",
+        "synonyms": []
+      }
+    },
+    {
+      "key": "company.glossary.company_address.city",
+      "type": "GLOSSARY",
+      "title": "COMPANY_ADDRESS.CITY",
+      "content": "ESRI standardized",
+      "content_json": {
+        "target_column": "CITY",
+        "target_table": "COMPANY_ADDRESS",
+        "definition": "ESRI standardized",
+        "synonyms": []
+      }
+    },
+    {
+      "key": "company.glossary.company_address.state",
+      "type": "GLOSSARY",
+      "title": "COMPANY_ADDRESS.STATE",
+      "content": "ESRI standardized",
+      "content_json": {
+        "target_column": "STATE",
+        "target_table": "COMPANY_ADDRESS",
+        "definition": "ESRI standardized",
+        "synonyms": []
+      }
+    },
+    {
+      "key": "company.glossary.company_address.country",
+      "type": "GLOSSARY",
+      "title": "COMPANY_ADDRESS.COUNTRY",
+      "content": "ESRI standardized",
+      "content_json": {
+        "target_column": "COUNTRY",
+        "target_table": "COMPANY_ADDRESS",
+        "definition": "ESRI standardized",
+        "synonyms": []
+      }
+    },
+    {
+      "key": "company.glossary.company_address.county",
+      "type": "GLOSSARY",
+      "title": "COMPANY_ADDRESS.COUNTY",
+      "content": "ESRI standardized",
+      "content_json": {
+        "target_column": "COUNTY",
+        "target_table": "COMPANY_ADDRESS",
+        "definition": "ESRI standardized",
+        "synonyms": []
+      }
+    },
+    {
+      "key": "company.glossary.company_address.postal_code",
+      "type": "GLOSSARY",
+      "title": "COMPANY_ADDRESS.POSTAL_CODE",
+      "content": "ESRI standardized",
+      "content_json": {
+        "target_column": "POSTAL_CODE",
+        "target_table": "COMPANY_ADDRESS",
+        "definition": "ESRI standardized",
+        "synonyms": []
+      }
+    },
+    {
+      "key": "company.glossary.company_address.postal_code_extension",
+      "type": "GLOSSARY",
+      "title": "COMPANY_ADDRESS.POSTAL_CODE_EXTENSION",
+      "content": "ESRI standardized",
+      "content_json": {
+        "target_column": "POSTAL_CODE_EXTENSION",
+        "target_table": "COMPANY_ADDRESS",
+        "definition": "ESRI standardized",
+        "synonyms": []
+      }
+    },
+    {
+      "key": "company.glossary.company_address.source_address_line_1",
+      "type": "GLOSSARY",
+      "title": "COMPANY_ADDRESS.SOURCE_ADDRESS_LINE_1",
+      "content": "raw passthrough",
+      "content_json": {
+        "target_column": "SOURCE_ADDRESS_LINE_1",
+        "target_table": "COMPANY_ADDRESS",
+        "definition": "raw passthrough",
+        "synonyms": []
+      }
+    },
+    {
+      "key": "company.glossary.company_address.source_address_line_2",
+      "type": "GLOSSARY",
+      "title": "COMPANY_ADDRESS.SOURCE_ADDRESS_LINE_2",
+      "content": "raw passthrough",
+      "content_json": {
+        "target_column": "SOURCE_ADDRESS_LINE_2",
+        "target_table": "COMPANY_ADDRESS",
+        "definition": "raw passthrough",
+        "synonyms": []
+      }
+    },
+    {
+      "key": "company.glossary.company_address.source_street_name",
+      "type": "GLOSSARY",
+      "title": "COMPANY_ADDRESS.SOURCE_STREET_NAME",
+      "content": "raw passthrough",
+      "content_json": {
+        "target_column": "SOURCE_STREET_NAME",
+        "target_table": "COMPANY_ADDRESS",
+        "definition": "raw passthrough",
+        "synonyms": []
+      }
+    },
+    {
+      "key": "company.glossary.company_address.source_street_number_1",
+      "type": "GLOSSARY",
+      "title": "COMPANY_ADDRESS.SOURCE_STREET_NUMBER_1",
+      "content": "raw passthrough",
+      "content_json": {
+        "target_column": "SOURCE_STREET_NUMBER_1",
+        "target_table": "COMPANY_ADDRESS",
+        "definition": "raw passthrough",
+        "synonyms": []
+      }
+    },
+    {
+      "key": "company.glossary.company_address.source_street_number_2",
+      "type": "GLOSSARY",
+      "title": "COMPANY_ADDRESS.SOURCE_STREET_NUMBER_2",
+      "content": "raw passthrough",
+      "content_json": {
+        "target_column": "SOURCE_STREET_NUMBER_2",
+        "target_table": "COMPANY_ADDRESS",
+        "definition": "raw passthrough",
+        "synonyms": []
+      }
+    },
+    {
+      "key": "company.glossary.company_address.source_street_number_3",
+      "type": "GLOSSARY",
+      "title": "COMPANY_ADDRESS.SOURCE_STREET_NUMBER_3",
+      "content": "raw passthrough",
+      "content_json": {
+        "target_column": "SOURCE_STREET_NUMBER_3",
+        "target_table": "COMPANY_ADDRESS",
+        "definition": "raw passthrough",
+        "synonyms": []
+      }
+    },
+    {
+      "key": "company.glossary.company_address.source_pre_street_direction_name",
+      "type": "GLOSSARY",
+      "title": "COMPANY_ADDRESS.SOURCE_PRE_STREET_DIRECTION_NAME",
+      "content": "raw passthrough",
+      "content_json": {
+        "target_column": "SOURCE_PRE_STREET_DIRECTION_NAME",
+        "target_table": "COMPANY_ADDRESS",
+        "definition": "raw passthrough",
+        "synonyms": []
+      }
+    },
+    {
+      "key": "company.glossary.company_address.source_street_type",
+      "type": "GLOSSARY",
+      "title": "COMPANY_ADDRESS.SOURCE_STREET_TYPE",
+      "content": "raw passthrough",
+      "content_json": {
+        "target_column": "SOURCE_STREET_TYPE",
+        "target_table": "COMPANY_ADDRESS",
+        "definition": "raw passthrough",
+        "synonyms": []
+      }
+    },
+    {
+      "key": "company.glossary.company_address.source_post_street_direction_name",
+      "type": "GLOSSARY",
+      "title": "COMPANY_ADDRESS.SOURCE_POST_STREET_DIRECTION_NAME",
+      "content": "raw passthrough",
+      "content_json": {
+        "target_column": "SOURCE_POST_STREET_DIRECTION_NAME",
+        "target_table": "COMPANY_ADDRESS",
+        "definition": "raw passthrough",
+        "synonyms": []
+      }
+    },
+    {
+      "key": "company.glossary.company_address.source_city",
+      "type": "GLOSSARY",
+      "title": "COMPANY_ADDRESS.SOURCE_CITY",
+      "content": "raw passthrough",
+      "content_json": {
+        "target_column": "SOURCE_CITY",
+        "target_table": "COMPANY_ADDRESS",
+        "definition": "raw passthrough",
+        "synonyms": []
+      }
+    },
+    {
+      "key": "company.glossary.company_address.source_state",
+      "type": "GLOSSARY",
+      "title": "COMPANY_ADDRESS.SOURCE_STATE",
+      "content": "raw passthrough",
+      "content_json": {
+        "target_column": "SOURCE_STATE",
+        "target_table": "COMPANY_ADDRESS",
+        "definition": "raw passthrough",
+        "synonyms": []
+      }
+    },
+    {
+      "key": "company.glossary.company_address.source_country_name",
+      "type": "GLOSSARY",
+      "title": "COMPANY_ADDRESS.SOURCE_COUNTRY_NAME",
+      "content": "raw passthrough",
+      "content_json": {
+        "target_column": "SOURCE_COUNTRY_NAME",
+        "target_table": "COMPANY_ADDRESS",
+        "definition": "raw passthrough",
+        "synonyms": []
+      }
+    },
+    {
+      "key": "company.glossary.company_address.source_county",
+      "type": "GLOSSARY",
+      "title": "COMPANY_ADDRESS.SOURCE_COUNTY",
+      "content": "raw passthrough",
+      "content_json": {
+        "target_column": "SOURCE_COUNTY",
+        "target_table": "COMPANY_ADDRESS",
+        "definition": "raw passthrough",
+        "synonyms": []
+      }
+    },
+    {
+      "key": "company.glossary.company_address.source_postal_code",
+      "type": "GLOSSARY",
+      "title": "COMPANY_ADDRESS.SOURCE_POSTAL_CODE",
+      "content": "raw passthrough",
+      "content_json": {
+        "target_column": "SOURCE_POSTAL_CODE",
+        "target_table": "COMPANY_ADDRESS",
+        "definition": "raw passthrough",
+        "synonyms": []
+      }
+    },
+    {
+      "key": "company.glossary.company_address.source_postal_code_extension",
+      "type": "GLOSSARY",
+      "title": "COMPANY_ADDRESS.SOURCE_POSTAL_CODE_EXTENSION",
+      "content": "raw passthrough",
+      "content_json": {
+        "target_column": "SOURCE_POSTAL_CODE_EXTENSION",
+        "target_table": "COMPANY_ADDRESS",
+        "definition": "raw passthrough",
+        "synonyms": []
+      }
+    },
+    {
+      "key": "company.glossary.company_address.source_latitude",
+      "type": "GLOSSARY",
+      "title": "COMPANY_ADDRESS.SOURCE_LATITUDE",
+      "content": "raw passthrough",
+      "content_json": {
+        "target_column": "SOURCE_LATITUDE",
+        "target_table": "COMPANY_ADDRESS",
+        "definition": "raw passthrough",
+        "synonyms": []
+      }
+    },
+    {
+      "key": "company.glossary.company_address.source_longitude",
+      "type": "GLOSSARY",
+      "title": "COMPANY_ADDRESS.SOURCE_LONGITUDE",
+      "content": "raw passthrough",
+      "content_json": {
+        "target_column": "SOURCE_LONGITUDE",
+        "target_table": "COMPANY_ADDRESS",
+        "definition": "raw passthrough",
+        "synonyms": []
+      }
+    },
+    {
+      "key": "company.glossary.company_address.source_geocode_output",
+      "type": "GLOSSARY",
+      "title": "COMPANY_ADDRESS.SOURCE_GEOCODE_OUTPUT",
+      "content": "raw passthrough",
+      "content_json": {
+        "target_column": "SOURCE_GEOCODE_OUTPUT",
+        "target_table": "COMPANY_ADDRESS",
+        "definition": "raw passthrough",
+        "synonyms": []
+      }
+    },
+    {
+      "key": "company.glossary.company_address.source_latitude_override",
+      "type": "GLOSSARY",
+      "title": "COMPANY_ADDRESS.SOURCE_LATITUDE_OVERRIDE",
+      "content": "raw passthrough",
+      "content_json": {
+        "target_column": "SOURCE_LATITUDE_OVERRIDE",
+        "target_table": "COMPANY_ADDRESS",
+        "definition": "raw passthrough",
+        "synonyms": []
+      }
+    },
+    {
+      "key": "company.glossary.company_address.source_longitude_override",
+      "type": "GLOSSARY",
+      "title": "COMPANY_ADDRESS.SOURCE_LONGITUDE_OVERRIDE",
+      "content": "raw passthrough",
+      "content_json": {
+        "target_column": "SOURCE_LONGITUDE_OVERRIDE",
+        "target_table": "COMPANY_ADDRESS",
+        "definition": "raw passthrough",
+        "synonyms": []
+      }
+    },
+    {
+      "key": "company.glossary.company_address.source_geocode_override_source",
+      "type": "GLOSSARY",
+      "title": "COMPANY_ADDRESS.SOURCE_GEOCODE_OVERRIDE_SOURCE",
+      "content": "raw passthrough",
+      "content_json": {
+        "target_column": "SOURCE_GEOCODE_OVERRIDE_SOURCE",
+        "target_table": "COMPANY_ADDRESS",
+        "definition": "raw passthrough",
+        "synonyms": []
+      }
+    },
+    {
+      "key": "company.glossary.company_address.address_match_score",
+      "type": "GLOSSARY",
+      "title": "COMPANY_ADDRESS.ADDRESS_MATCH_SCORE",
+      "content": "ESRI output",
+      "content_json": {
+        "target_column": "ADDRESS_MATCH_SCORE",
+        "target_table": "COMPANY_ADDRESS",
+        "definition": "ESRI output",
+        "synonyms": []
+      }
+    },
+    {
+      "key": "company.glossary.company_address.address_match_code",
+      "type": "GLOSSARY",
+      "title": "COMPANY_ADDRESS.ADDRESS_MATCH_CODE",
+      "content": "ESRI output",
+      "content_json": {
+        "target_column": "ADDRESS_MATCH_CODE",
+        "target_table": "COMPANY_ADDRESS",
+        "definition": "ESRI output",
+        "synonyms": []
+      }
+    },
+    {
+      "key": "company.glossary.company_address.address_precision_code",
+      "type": "GLOSSARY",
+      "title": "COMPANY_ADDRESS.ADDRESS_PRECISION_CODE",
+      "content": "ESRI output",
+      "content_json": {
+        "target_column": "ADDRESS_PRECISION_CODE",
+        "target_table": "COMPANY_ADDRESS",
+        "definition": "ESRI output",
+        "synonyms": []
+      }
+    },
+    {
+      "key": "company.glossary.company_address.geocode_output",
+      "type": "GLOSSARY",
+      "title": "COMPANY_ADDRESS.GEOCODE_OUTPUT",
+      "content": "ESRI output",
+      "content_json": {
+        "target_column": "GEOCODE_OUTPUT",
+        "target_table": "COMPANY_ADDRESS",
+        "definition": "ESRI output",
+        "synonyms": []
+      }
+    },
+    {
+      "key": "company.glossary.company_address.geocode_provider_name",
+      "type": "GLOSSARY",
+      "title": "COMPANY_ADDRESS.GEOCODE_PROVIDER_NAME",
+      "content": "ESRI output",
+      "content_json": {
+        "target_column": "GEOCODE_PROVIDER_NAME",
+        "target_table": "COMPANY_ADDRESS",
+        "definition": "ESRI output",
+        "synonyms": []
+      }
+    },
+    {
+      "key": "company.model.company_industry",
+      "type": "MODEL_DEFINITION",
+      "title": "COMPANY_INDUSTRY (spoke)",
+      "content": "Spoke COMPANY_INDUSTRY of COMPANY. Grain: one row per SOURCE_UNIQUE_ID per REF_GDP_SOURCE_SYSTEM_SKEY. Spoke of COMPANY_CORE through COMPANY_CORE_SKEY. HKEY over REF_INDUSTRY_NAME_SKEY, SOURCE_NAICS_CODE, SOURCE_NAICS_DESCRIPTION, IS_PRIMARY_INDUSTRY.",
+      "content_json": {
+        "target_table": "COMPANY_INDUSTRY",
+        "role": "spoke",
+        "hub_fk": "COMPANY_CORE_SKEY",
+        "hkey_columns": [
+          "REF_INDUSTRY_NAME_SKEY",
+          "SOURCE_NAICS_CODE",
+          "SOURCE_NAICS_DESCRIPTION",
+          "IS_PRIMARY_INDUSTRY"
+        ],
+        "column_count": 14
+      }
+    },
+    {
+      "key": "company.model.company_segment",
+      "type": "MODEL_DEFINITION",
+      "title": "COMPANY_SEGMENT (spoke)",
+      "content": "Spoke COMPANY_SEGMENT of COMPANY. Grain: one row per SOURCE_UNIQUE_ID per REF_GDP_SOURCE_SYSTEM_SKEY. Spoke of COMPANY_CORE through COMPANY_CORE_SKEY. HKEY over REF_SEGMENT_SKEY, REF_SERVICE_LINE_SKEY, SOURCE_SEGMENT_NAME, SOURCE_SERVICE_LINE_NAME, VALID_FROM, VALID_TO.",
+      "content_json": {
+        "target_table": "COMPANY_SEGMENT",
+        "role": "spoke",
+        "hub_fk": "COMPANY_CORE_SKEY",
+        "hkey_columns": [
+          "REF_SEGMENT_SKEY",
+          "REF_SERVICE_LINE_SKEY",
+          "SOURCE_SEGMENT_NAME",
+          "SOURCE_SERVICE_LINE_NAME",
+          "VALID_FROM",
+          "VALID_TO"
+        ],
+        "column_count": 16
+      }
+    },
+    {
+      "key": "company.model.company_relationship",
+      "type": "MODEL_DEFINITION",
+      "title": "COMPANY_RELATIONSHIP (spoke)",
+      "content": "Spoke COMPANY_RELATIONSHIP of COMPANY. Grain: one row per SOURCE_UNIQUE_ID per REF_GDP_SOURCE_SYSTEM_SKEY. Spoke of COMPANY_CORE through COMPANY_CORE_SKEY. HKEY over REF_RELATIONSHIP_TYPE_SKEY, ACCOUNT_NAME, ACCOUNT_NUMBER, ACCOUNT_STATUS, SOURCE_ACCOUNT_ID, RELATIONSHIP_START_DATE, RELATIONSHIP_END_DATE.",
+      "content_json": {
+        "target_table": "COMPANY_RELATIONSHIP",
+        "role": "spoke",
+        "hub_fk": "COMPANY_CORE_SKEY",
+        "hkey_columns": [
+          "REF_RELATIONSHIP_TYPE_SKEY",
+          "ACCOUNT_NAME",
+          "ACCOUNT_NUMBER",
+          "ACCOUNT_STATUS",
+          "SOURCE_ACCOUNT_ID",
+          "RELATIONSHIP_START_DATE",
+          "RELATIONSHIP_END_DATE"
+        ],
+        "column_count": 17
+      }
+    },
+    {
+      "key": "company.model.company_hierarchy",
+      "type": "MODEL_DEFINITION",
+      "title": "COMPANY_HIERARCHY (spoke)",
+      "content": "Spoke COMPANY_HIERARCHY of COMPANY. Grain: one row per SOURCE_UNIQUE_ID per REF_GDP_SOURCE_SYSTEM_SKEY. Spoke of COMPANY_CORE through COMPANY_CORE_SKEY. HKEY over COMPANY_NAME, REF_COMPANY_TYPE_SKEY, DOMESTIC_PARENT_SKEY, GLOBAL_PARENT_SKEY, IMMEDIATE_PARENT_SKEY, HIERARCHY_LEVEL, HIERARCHY_PATH, REF_HIERARCHY_TYPE_SKEY, VALID_FROM, VALID_TO.",
+      "content_json": {
+        "target_table": "COMPANY_HIERARCHY",
+        "role": "spoke",
+        "hub_fk": "COMPANY_CORE_SKEY",
+        "hkey_columns": [
+          "COMPANY_NAME",
+          "REF_COMPANY_TYPE_SKEY",
+          "DOMESTIC_PARENT_SKEY",
+          "GLOBAL_PARENT_SKEY",
+          "IMMEDIATE_PARENT_SKEY",
+          "HIERARCHY_LEVEL",
+          "HIERARCHY_PATH",
+          "REF_HIERARCHY_TYPE_SKEY",
+          "VALID_FROM",
+          "VALID_TO"
+        ],
+        "column_count": 20
+      }
+    },
+    {
+      "key": "company.glossary.company_hierarchy.hierarchy_path",
+      "type": "GLOSSARY",
+      "title": "COMPANY_HIERARCHY.HIERARCHY_PATH",
+      "content": "pipe-delimited SKEY chain",
+      "content_json": {
+        "target_column": "HIERARCHY_PATH",
+        "target_table": "COMPANY_HIERARCHY",
+        "definition": "pipe-delimited SKEY chain",
+        "synonyms": []
+      }
+    },
+    {
+      "key": "company.transform.latitude",
+      "type": "TRANSFORMATION_RULE",
+      "title": "LATITUDE cast",
+      "content": "TEXT or FLOAT to NUMBER(12,8): o.col::number(12,8)",
+      "content_json": {
+        "target_column": "LATITUDE",
+        "transformation": "o.col::number(12,8)",
+        "target_type": "NUMBER(12,8)"
+      }
+    },
+    {
+      "key": "company.transform.longitude",
+      "type": "TRANSFORMATION_RULE",
+      "title": "LONGITUDE cast",
+      "content": "TEXT or FLOAT to NUMBER(12,8): o.col::number(12,8)",
+      "content_json": {
+        "target_column": "LONGITUDE",
+        "transformation": "o.col::number(12,8)",
+        "target_type": "NUMBER(12,8)"
+      }
+    },
+    {
+      "key": "company.transform.account_number",
+      "type": "TRANSFORMATION_RULE",
+      "title": "ACCOUNT_NUMBER cast",
+      "content": "TEXT to NUMBER(38,0): try_to_number(o.col)",
+      "content_json": {
+        "target_column": "ACCOUNT_NUMBER",
+        "transformation": "try_to_number(o.col)",
+        "target_type": "NUMBER(38,0)"
+      }
+    },
+    {
+      "key": "company.transform.relationship_start_date",
+      "type": "TRANSFORMATION_RULE",
+      "title": "RELATIONSHIP_START_DATE cast",
+      "content": "DATE to TIMESTAMP_NTZ: o.col::timestamp_ntz",
+      "content_json": {
+        "target_column": "RELATIONSHIP_START_DATE",
+        "transformation": "o.col::timestamp_ntz",
+        "target_type": "TIMESTAMP_NTZ"
+      }
+    },
+    {
+      "key": "company.transform.end_date",
+      "type": "TRANSFORMATION_RULE",
+      "title": "END_DATE cast",
+      "content": "DATE to TIMESTAMP_NTZ: o.col::timestamp_ntz",
+      "content_json": {
+        "target_column": "END_DATE",
+        "transformation": "o.col::timestamp_ntz",
+        "target_type": "TIMESTAMP_NTZ"
+      }
+    },
+    {
+      "key": "company.transform.valid_from",
+      "type": "TRANSFORMATION_RULE",
+      "title": "VALID_FROM cast",
+      "content": "DATE to TIMESTAMP_NTZ: o.col::timestamp_ntz",
+      "content_json": {
+        "target_column": "VALID_FROM",
+        "transformation": "o.col::timestamp_ntz",
+        "target_type": "TIMESTAMP_NTZ"
+      }
+    },
+    {
+      "key": "company.transform.valid_to",
+      "type": "TRANSFORMATION_RULE",
+      "title": "VALID_TO cast",
+      "content": "DATE to TIMESTAMP_NTZ: o.col::timestamp_ntz",
+      "content_json": {
+        "target_column": "VALID_TO",
+        "transformation": "o.col::timestamp_ntz",
+        "target_type": "TIMESTAMP_NTZ"
+      }
+    },
+    {
+      "key": "company.transform.hierarchy_level",
+      "type": "TRANSFORMATION_RULE",
+      "title": "HIERARCHY_LEVEL cast",
+      "content": "TEXT to NUMBER(10,0): try_to_number(o.col)",
+      "content_json": {
+        "target_column": "HIERARCHY_LEVEL",
+        "transformation": "try_to_number(o.col)",
+        "target_type": "NUMBER(10,0)"
+      }
+    },
+    {
+      "key": "company.pattern.multi_source_table_extraction_pattern",
+      "type": "DBT_PATTERN",
+      "title": "Multi-Source-Table Extraction Pattern",
+      "content": "## Multi-Source-Table Extraction Pattern (MTA-style)\n\nWhen a single source spans multiple bronze tables (e.g., MTA = `PS_CUSTOMER` + `PS_VENDOR`), use a UNION ALL extraction CTE:\n\n```sql\nwith sp_companies as (\n    -- Customers\n    select distinct\n        upper(trim(c.\"Name1\")) || '||' || coalesce(upper(trim(ca.\"COUNTRY\")), '') as source_unique_id,\n        NULLIF(TRIM(c.\"Name1\"), '') as company_name,\n        -- ... other customer-side fields\n        c.GDP_IS_ACTIVE, c.GDP_INSERTED_TS, c.GDP_UPDATED_TS\n    from {{ source('company_mta_source', 'PS_CUSTOMER') }} c\n    left join {{ source('company_mta_source', 'PS_CUST_ADDRESS') }} ca\n        on c.\"CUST_ID\" = ca.\"CUST_ID\" and ca.\"EFF_STATUS\" = 'A'\n    where c.\"CUST_STATUS\" = 'A' and c.\"Name1\" is not null\n\n    union all\n\n    -- Vendors\n    select distinct\n        upper(trim(v.\"Name1\")) || '||' || coalesce(upper(trim(va.\"COUNTRY\")), '') as source_unique_id,\n        NULLIF(TRIM(v.\"Name1\"), '') as company_name,\n        -- ... other vendor-side fields (same alias names!)\n        v.GDP_IS_ACTIVE, v.GDP_INSERTED_TS, v.GDP_UPDATED_TS\n    from {{ source('company_mta_source', 'PS_VENDOR') }} v\n    left join {{ source('company_mta_source', 'PS_VENDOR_ADDR') }} va\n        on v.\"VENDOR_ID\" = va.\"VENDOR_ID\" and va.\"EFF_STATUS\" = 'A'\n    where v.\"VENDOR_STATUS\" = 'A' and v.\"Name1\" is not null\n)\nqualify row_number() over (\n    partition by source_unique_id\n    order by greatest(coalesce(gdp_updated_ts, '1900-01-01'::timestamp_ntz),\n                       coalesce(gdp_inserted_ts, '1900-01-01'::timestamp_ntz)) desc\n) = 1\n```\n\nKey rules for the UNION pattern:\n- Each branch outputs **identical aliases** (column names) and **same order**\n- Compound `SOURCE_UNIQUE_ID` MUST be deterministic and survive nulls (`'||'` delimiter, `coalesce(...,'')` sentinel)\n- `qualify` runs **after** the union to dedup across branches\n\n---"
+    },
+    {
+      "key": "company.pattern.multi_target_onboarding_pattern",
+      "type": "DBT_PATTERN",
+      "title": "Multi-Target Onboarding Pattern",
+      "content": "## Multi-Target Onboarding Pattern (MTA-style)\n\nA single source onboarding wave generates **N ephemeral staging models** + **N hub patches**, one per target spoke:\n\n| File | Target |\n|---|---|\n| `models/silver/company/mta/mta_company_core.sql` | COMPANY_CORE |\n| `models/silver/company/mta/mta_company_address.sql` | COMPANY_ADDRESS |\n| `models/silver/company/mta/mta_company_industry.sql` | COMPANY_INDUSTRY |\n| `models/silver/company/mta/mta_company_segment.sql` | COMPANY_SEGMENT |\n| `models/silver/company/mta/mta_company_relationship.sql` | COMPANY_RELATIONSHIP |\n| `models/silver/company/mta/mta_company_hierarchy.sql` | COMPANY_HIERARCHY |\n\nEach ephemeral spoke model joins back to `{{ ref('company_core') }}` to resolve `COMPANY_CORE_SKEY` from `SOURCE_UNIQUE_ID`. Watermark rows: one per target.\n\n---"
+    },
+    {
+      "key": "company.pattern.bronze_mta_source_tables",
+      "type": "DBT_PATTERN",
+      "title": "Bronze MTA Source Tables",
+      "content": "## Bronze MTA Source Tables (verified)\n\n| Table | Rows | Notes |\n|---|---|---|\n| PS_CUSTOMER | 744K | Customer master |\n| PS_CUST_ADDRESS | 922K | Customer address (multi-row per customer; filter `EFF_STATUS = 'A'`) |\n| PS_VENDOR | 364K | Vendor master |\n| PS_VENDOR_ADDR | 610K | Vendor address (filter `EFF_STATUS = 'A'`) |\n| PS_CUST_ADDR_SEQ | 922K | Address sequence (optional) |\n| PS_CBTA_DEAL_HDR | 834K | (Property/opportunity domain \u2014 not company) |\n| PS_CBTA_DEAL_LINE | 3.5M | (Property/opportunity domain) |\n| PS_CBTA_PROPERTY | 398K | (Property domain) |"
+    },
+    {
+      "key": "company.guide.minimum_mapping",
+      "type": "ONBOARDING_GUIDE",
+      "title": "COMPANY minimum mapping",
+      "content": "A source must map at least: `source_unique_id` (often compound, e.g., `Name1 || '||' || Country`); `company_name`; One of: `duns_number`, `legal_entity_name`, `trade_name`, or `alias_name` (for HKEY uniqueness)",
+      "content_json": {
+        "required": [
+          "`source_unique_id` (often compound, e.g., `Name1 || '||' || Country`)",
+          "`company_name`",
+          "One of: `duns_number`, `legal_entity_name`, `trade_name`, or `alias_name` (for HKEY uniqueness)"
+        ]
+      }
+    },
+    {
+      "key": "company.guide.known_sources",
+      "type": "ONBOARDING_GUIDE",
+      "title": "COMPANY sources",
+      "content": "## Known Sources to Onboard\n\n| SKEY | Source | Status |\n|---|---|---|\n| 107 | SPOC | Planned |\n| 110 | INTROHIVE | Planned |\n| 112 | BUSINESS_SMARTSHEET | Planned |\n| 115 | CLIENT_SENTIMENT (NPS) | Planned |\n| 120 | NEWS_TO_LEADS | Planned |\n| 123 | TAT | Planned |\n| 201 | MTA | **In progress** (this contract) |"
+    }
+  ]
+}

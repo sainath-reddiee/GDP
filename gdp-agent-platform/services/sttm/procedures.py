@@ -14,7 +14,7 @@ from services.common.llm import complete_json
 from services.common.sql import clip, insert_rows, rows, scalar, variant
 from services.common.stage import Stage
 from services.knowledge.procedures import current_knowledge_version
-from services.knowledge.usage import STAGE_SKILLS, assert_safe_transformation, use_skills
+from services.knowledge.usage import STAGE_SKILLS, assert_safe_transformation, domain_context, use_skills
 from services.mapping.procedures import target_columns, target_table
 from services.sttm.assemble import assemble
 from services.sttm.join_graph import apply_overrides, build_join_graph, join_logic_by_table
@@ -193,6 +193,12 @@ def _line_context(session, run_id: str, payload: Dict[str, Any]) -> Dict[str, An
     context["domain_id"] = context["domain_id"] or (run[0]["DOMAIN_ID"] if run else None)
     context["profile"] = _profile_for(session, run_id, context["source_table"], context["source_column"])
     context["prior_rules"] = _prior_rules(session, context["domain_id"], context["target_column"])
+    try:
+        target = rows(session, "SELECT TARGET_MODEL FROM CORE.WORKFLOW_RUN WHERE RUN_ID = ?", [run_id])
+        model = ((target[0]["TARGET_MODEL"] if target else "") or "").split(".")[-1] or None
+        context["domain_rules"] = domain_context(session, context["domain_id"], model, 3000)
+    except Exception:
+        context["domain_rules"] = ""
     return context
 
 

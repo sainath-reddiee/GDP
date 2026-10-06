@@ -7,10 +7,11 @@ import json
 import re
 import uuid
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 ROOT = Path(__file__).resolve().parents[1]
-DOMAIN_PACK = ROOT / "domain" / "gdp" / "domain_pack.json"
+DOMAIN_DIR = ROOT / "domain"
+DOMAIN_PACK = DOMAIN_DIR / "gdp" / "domain_pack.json"
 SKILLS_DIR = ROOT / "snowflake" / "skills"
 FRONTMATTER = re.compile(r"^---\n(.*?)\n---\n(.*)$", re.S)
 
@@ -40,6 +41,35 @@ def _stable_id(prefix: str, *parts: str) -> str:
 
 def load_domain_pack() -> Dict[str, Any]:
     return json.loads(DOMAIN_PACK.read_text(encoding="utf-8"))
+
+
+def load_domain_packs() -> List[Dict[str, Any]]:
+    """Every domain/<name>/domain_pack.json; GDP first so its fixed IDs are assigned before the others."""
+    packs = [json.loads(p.read_text(encoding="utf-8")) for p in sorted(DOMAIN_DIR.glob("*/domain_pack.json"))]
+    return sorted(packs, key=lambda pk: (pk["domain"]["name"] != "GDP", pk["domain"]["name"]))
+
+
+def domain_id(name: str) -> str:
+    return GDP_DOMAIN_ID if name == "GDP" else _stable_id("domain", name)
+
+
+LiveColumns = Dict[Tuple[str, str], List[Dict[str, Any]]]
+
+
+def merge_columns(contract: List[Dict[str, Any]], live: Optional[List[Dict[str, Any]]]) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    """Live silver columns win for names, types, nullability and order; the contract adds definitions and keys."""
+    if not live:
+        return contract, {"live": False}
+    by_name = {c["name"].upper(): c for c in contract}
+    merged = []
+    for col in live:
+        known = by_name.get(col["name"].upper(), {})
+        merged.append({**known, "name": col["name"], "type": col["type"], "nullable": col["nullable"]})
+    live_names = {c["name"].upper() for c in live}
+    drift = {"live": True,
+             "missing_in_silver": sorted(n for n in by_name if n not in live_names),
+             "not_in_contract": sorted(n for n in live_names if n not in by_name) if contract else []}
+    return merged, drift
 
 
 def _frontmatter_meta(raw: str) -> Dict[str, str]:
@@ -120,29 +150,71 @@ def list_skills() -> List[Dict[str, Any]]:
     return [parse_skill(p) for p in sorted(SKILLS_DIR.rglob("SKILL.md"))]
 
 
-def domain_rows(database: str) -> Dict[str, List[Tuple]]:
-    pack = load_domain_pack()
-    domain = pack["domain"]
-    domains = [(GDP_DOMAIN_ID, domain["name"], domain["description"], domain["owner"], True, 1)]
-    tables, columns, knowledge = [], [], []
-    for table in pack["targets"]:
-        tables.append((
-            GDP_TABLE_ID, GDP_DOMAIN_ID, database, table["schema"], table["table"],
-            table.get("table_type"), table.get("grain"), table.get("business_keys") or [],
-            str(table.get("scd_type") or "1"), table.get("description"), 1, True,
-        ))
-        for i, col in enumerate(table["columns"], start=1):
-            columns.append((
-                _stable_id("col", table["table"], col["name"]), GDP_TABLE_ID, col["name"], col["type"], i,
-                bool(col.get("nullable")), col.get("definition"), col.get("semantic_type"),
-                bool(col.get("business_key")), bool(col.get("pii")), col.get("accepted_values") or [], 1,
+def domain_rows(database: str, live: Optional[LiveColumns] = None) -> Dict[str, Any]:
+    """Rows for every domain pack. GDP keeps its fixed domain/table IDs and column-ID scheme so existing runs resolve."""
+    live = live or {}
+    domains, tables, columns, knowledge, drift = [], [], [], [], []
+    for pack in load_domain_packs():
+        meta = pack["domain"]
+        name = meta["name"]
+        did = domain_id(name)
+        is_gdp = name == "GDP"
+        config = {k: meta[k] for k in ("silver_database", "silver_schema", "contract", "signals", "source_systems")
+                  if k in meta}
+        domains.append((did, name, meta["description"], meta["owner"], True, 1, config))
+        target_db = database if is_gdp else meta.get("silver_database") or database
+        for i, table in enumerate(pack["targets"]):
+            tid = GDP_TABLE_ID if is_gdp and i == 0 else _stable_id("table", target_db, table["schema"], table["table"])
+            cols, report = merge_columns(table.get("columns") or [], live.get((table["schema"], table["table"])))
+            if not is_gdp:
+                drift.append({"domain": name, "table": table["table"], "columns": len(cols), **report})
+            tables.append((
+                tid, did, target_db, table["schema"], table["table"], table.get("table_type"), table.get("grain"),
+                # A target with no live silver table and no contract columns stays as knowledge only: mapping
+                # cannot use it, so it is registered inactive until the silver table exists.
+                table.get("business_keys") or [], str(table.get("scd_type") or "1"), table.get("description"), 1,
+                bool(cols), table.get("model_spec"),
             ))
-    for item in pack["knowledge"]:
-        knowledge.append((
-            _stable_id("k", item["key"]), GDP_DOMAIN_ID, item["type"], item["title"], item["content"],
-            item.get("content_json"), ["GDP"], item["key"], "ACTIVE", 1, True,
-        ))
-    return {"domains": domains, "tables": tables, "columns": columns, "knowledge": knowledge}
+            for n, col in enumerate(cols, start=1):
+                cid = (_stable_id("col", table["table"], col["name"]) if is_gdp
+                       else _stable_id("col", table["schema"], table["table"], col["name"]))
+                columns.append((
+                    cid, tid, col["name"], col.get("type") or "TEXT", n, bool(col.get("nullable")), col.get("definition"),
+                    col.get("semantic_type"), bool(col.get("business_key")), bool(col.get("pii")),
+                    col.get("accepted_values") or [], 1,
+                ))
+        for item in pack["knowledge"]:
+            knowledge.append((
+                _stable_id("k", item["key"]), did, item["type"], item["title"], item["content"],
+                item.get("content_json"), [name], item["key"], "ACTIVE", 1, True,
+            ))
+    return {"domains": domains, "tables": tables, "columns": columns, "knowledge": knowledge, "drift": drift}
+
+
+def silver_locations() -> List[Tuple[str, str]]:
+    return sorted({(p["domain"]["silver_database"], p["domain"]["silver_schema"]) for p in load_domain_packs()
+                   if p["domain"].get("silver_database") and p["domain"].get("silver_schema")})
+
+
+def fetch_live_columns(cur) -> Tuple[LiveColumns, List[str]]:
+    """Exact target columns from DEV_GDP_SILVER_DB.<DOMAIN>; unreachable schemas fall back to the contract."""
+    from services.source.identifiers import format_data_type
+
+    live: LiveColumns = {}
+    log: List[str] = []
+    for db, schema in silver_locations():
+        try:
+            cur.execute(
+                f"""SELECT TABLE_NAME, COLUMN_NAME, DATA_TYPE, CHARACTER_MAXIMUM_LENGTH, NUMERIC_PRECISION, NUMERIC_SCALE,
+                           IS_NULLABLE FROM {db}.INFORMATION_SCHEMA.COLUMNS
+                     WHERE TABLE_SCHEMA = %s ORDER BY TABLE_NAME, ORDINAL_POSITION""", (schema,))
+            for t, c, dt, ln, pr, sc, nl in cur.fetchall():
+                live.setdefault((schema, t), []).append(
+                    {"name": c, "type": format_data_type(dt, ln, pr, sc), "nullable": nl == "YES"})
+            log.append(f"silver {db}.{schema}: {len({k for k in live if k[0] == schema})} tables read")
+        except Exception as exc:
+            log.append(f"silver {db}.{schema}: not readable ({str(exc)[:120]}); contract columns used")
+    return live, log
 
 
 def skill_rows() -> List[Tuple]:
@@ -173,39 +245,50 @@ def _dumps(value: Any) -> str:
     return str(value)
 
 
-def seed_platform(cur, database: str) -> None:
-    """MERGE domain pack, skills, config and scoring weights; PUT skill files to the stage."""
-    data = domain_rows(database)
-    cur.execute(
-        f"""MERGE INTO {database}.KNOWLEDGE.DOMAIN_REGISTRY t
-            USING (SELECT %s AS DOMAIN_ID, %s AS DOMAIN_NAME, %s AS DESCRIPTION, %s AS OWNER,
-                          %s AS ACTIVE_FLAG, %s AS VERSION) s
-               ON t.DOMAIN_ID = s.DOMAIN_ID
-            WHEN MATCHED THEN UPDATE SET DOMAIN_NAME = s.DOMAIN_NAME, DESCRIPTION = s.DESCRIPTION,
-                 OWNER = s.OWNER, ACTIVE_FLAG = s.ACTIVE_FLAG, VERSION = s.VERSION,
-                 UPDATED_AT = CURRENT_TIMESTAMP()
-            WHEN NOT MATCHED THEN INSERT (DOMAIN_ID, DOMAIN_NAME, DESCRIPTION, OWNER, ACTIVE_FLAG, VERSION)
-                 VALUES (s.DOMAIN_ID, s.DOMAIN_NAME, s.DESCRIPTION, s.OWNER, s.ACTIVE_FLAG, s.VERSION)""",
-        data["domains"][0],
-    )
+def seed_platform(cur, database: str) -> List[str]:
+    """MERGE domain packs, skills, config and scoring weights; PUT skill files to the stage. Returns log lines."""
+    live, log = fetch_live_columns(cur)
+    data = domain_rows(database, live)
+    for d in data["drift"]:
+        if d["live"] and (d["missing_in_silver"] or d["not_in_contract"]):
+            log.append(f"drift {d['domain']}.{d['table']}: contract-only {d['missing_in_silver'][:6]}, "
+                       f"silver-only {d['not_in_contract'][:6]}")
+        elif not d["live"]:
+            log.append(f"{d['domain']}.{d['table']}: no live silver table; {d['columns']} contract columns used"
+                       + ("" if d["columns"] else " (registered inactive, knowledge only)"))
+    for row in data["domains"]:
+        cur.execute(
+            f"""MERGE INTO {database}.KNOWLEDGE.DOMAIN_REGISTRY t
+                USING (SELECT %s AS DOMAIN_ID, %s AS DOMAIN_NAME, %s AS DESCRIPTION, %s AS OWNER,
+                              %s AS ACTIVE_FLAG, %s AS VERSION, PARSE_JSON(%s) AS CONFIG) s
+                   ON t.DOMAIN_ID = s.DOMAIN_ID
+                WHEN MATCHED THEN UPDATE SET DOMAIN_NAME = s.DOMAIN_NAME, DESCRIPTION = s.DESCRIPTION,
+                     OWNER = s.OWNER, ACTIVE_FLAG = s.ACTIVE_FLAG, VERSION = s.VERSION, CONFIG = s.CONFIG,
+                     UPDATED_AT = CURRENT_TIMESTAMP()
+                WHEN NOT MATCHED THEN INSERT (DOMAIN_ID, DOMAIN_NAME, DESCRIPTION, OWNER, ACTIVE_FLAG, VERSION, CONFIG)
+                     VALUES (s.DOMAIN_ID, s.DOMAIN_NAME, s.DESCRIPTION, s.OWNER, s.ACTIVE_FLAG, s.VERSION, s.CONFIG)""",
+            (*row[:6], json.dumps(row[6] or {})),
+        )
     for row in data["tables"]:
         cur.execute(
             f"""MERGE INTO {database}.KNOWLEDGE.TARGET_TABLE_REGISTRY t
                 USING (SELECT %s AS TARGET_TABLE_ID, %s AS DOMAIN_ID, %s AS TARGET_DATABASE,
                               %s AS TARGET_SCHEMA, %s AS TARGET_TABLE, %s AS TABLE_TYPE, %s AS GRAIN,
                               PARSE_JSON(%s) AS BUSINESS_KEYS, %s AS SCD_TYPE, %s AS DESCRIPTION,
-                              %s AS VERSION, %s AS ACTIVE_FLAG) s
+                              %s AS VERSION, %s AS ACTIVE_FLAG, PARSE_JSON(NULLIF(%s, '')) AS MODEL_SPEC) s
                    ON t.TARGET_TABLE_ID = s.TARGET_TABLE_ID
                 WHEN MATCHED THEN UPDATE SET TARGET_DATABASE = s.TARGET_DATABASE, TARGET_SCHEMA = s.TARGET_SCHEMA,
                      TARGET_TABLE = s.TARGET_TABLE, TABLE_TYPE = s.TABLE_TYPE, GRAIN = s.GRAIN,
                      BUSINESS_KEYS = s.BUSINESS_KEYS, SCD_TYPE = s.SCD_TYPE, DESCRIPTION = s.DESCRIPTION,
-                     VERSION = s.VERSION, ACTIVE_FLAG = s.ACTIVE_FLAG
+                     VERSION = s.VERSION, ACTIVE_FLAG = s.ACTIVE_FLAG, MODEL_SPEC = s.MODEL_SPEC
                 WHEN NOT MATCHED THEN INSERT (TARGET_TABLE_ID, DOMAIN_ID, TARGET_DATABASE, TARGET_SCHEMA,
-                     TARGET_TABLE, TABLE_TYPE, GRAIN, BUSINESS_KEYS, SCD_TYPE, DESCRIPTION, VERSION, ACTIVE_FLAG)
+                     TARGET_TABLE, TABLE_TYPE, GRAIN, BUSINESS_KEYS, SCD_TYPE, DESCRIPTION, VERSION, ACTIVE_FLAG,
+                     MODEL_SPEC)
                      VALUES (s.TARGET_TABLE_ID, s.DOMAIN_ID, s.TARGET_DATABASE, s.TARGET_SCHEMA, s.TARGET_TABLE,
-                             s.TABLE_TYPE, s.GRAIN, s.BUSINESS_KEYS, s.SCD_TYPE, s.DESCRIPTION, s.VERSION, s.ACTIVE_FLAG)""",
+                             s.TABLE_TYPE, s.GRAIN, s.BUSINESS_KEYS, s.SCD_TYPE, s.DESCRIPTION, s.VERSION, s.ACTIVE_FLAG,
+                             s.MODEL_SPEC)""",
             (row[0], row[1], row[2], row[3], row[4], row[5], row[6], _dumps(row[7]),
-             row[8], row[9], row[10], row[11]),
+             row[8], row[9], row[10], row[11], _dumps(row[12])),
         )
     for row in data["columns"]:
         cur.execute(
@@ -277,6 +360,10 @@ def seed_platform(cur, database: str) -> None:
             (row[0], row[1], row[2], row[3] or "", row[4], row[5], row[6], row[7], row[8], row[9],
              _dumps(row[10]), row[11]),
         )
+    current = [row[0] for row in skill_rows()]
+    cur.execute(f"""UPDATE {database}.KNOWLEDGE.SKILL_REGISTRY SET IS_CURRENT = FALSE
+                     WHERE CREATED_BY = 'SEED' AND IS_CURRENT
+                       AND NOT ARRAY_CONTAINS(SKILL_ID::VARIANT, PARSE_JSON(%s)::ARRAY)""", (json.dumps(current),))
 
     for key, value, desc, version, current in config_rows():
         cur.execute(
@@ -301,3 +388,4 @@ def seed_platform(cur, database: str) -> None:
                  VALUES (s.CONFIG_ID, s.DOMAIN_ID, s.VERSION, s.WEIGHTS, s.THRESHOLDS, s.ACTIVE_FLAG, s.CREATED_BY)""",
         (SCORING_CONFIG_ID, 1, json.dumps(DEFAULT_WEIGHTS), json.dumps(DEFAULT_THRESHOLDS)),
     )
+    return log

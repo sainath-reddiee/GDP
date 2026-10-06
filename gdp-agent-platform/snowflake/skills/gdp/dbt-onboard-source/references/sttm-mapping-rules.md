@@ -1,6 +1,6 @@
 # STTM CSV → dbt Code Mapping Rules
 
-How the skill translates each STTM transformation note into standard SQL for this project. This is the deterministic rulebook that backs Step 0 in `SKILL.md`. `{PREFIX}` is the project's audit-column / shared-object namespace (may be blank).
+How the skill translates each STTM transformation note into GDP-standard SQL. This is the deterministic rulebook that backs Step 0 in `SKILL.md`.
 
 ---
 
@@ -11,7 +11,7 @@ The STTM CSV begins with a header block (typically rows 1–22). Field names are
 | Header Field | Maps To | Notes |
 |---|---|---|
 | `Domain` | `domain` | Lowercase |
-| `Target DB.SCHEMA` | `target_db`, `target_schema` | Validates `DEV_{PREFIX}_SILVER_DB.<DOMAIN>` |
+| `Target DB.SCHEMA` | `target_db`, `target_schema` | Validates `DEV_GDP_SILVER_DB.<DOMAIN>` |
 | `Target Table` | `targets[]` | Multi-line cell. Each line = one target. Strip schema prefix. |
 | `Source Tables` | `source_tables[]` | Multi-line cell. Each non-empty line = one bronze table. |
 | `Join` | `join_blocks[]` | Free-form SQL. Split on `UNION ALL` to identify multi-source pattern. |
@@ -36,14 +36,14 @@ Each body row's `Transformation` cell is classified into one of these categories
 
 ### 1. AUDIT
 - **Triggers**: `transformation = "ETL AUDIT"`
-- **Action**: Skip — handled by ephemeral template footer (`{prefix_lower}_inserted_ts` etc.).
+- **Action**: Skip — handled by ephemeral template footer (`gdp_inserted_ts` etc.).
 
 ### 2. SEQUENCE
 - **Triggers**: `transformation = "DB Auto incremental ID"`
 - **Action**: Skip — handled by hub model SCD1 merge (sequence default in DDL).
 
 ### 3. SOURCE_SYSTEM_REF
-- **Triggers**: `transformation` matches `{PREFIX}_SOURCE_SYSTEM_NAME = '<X>'`
+- **Triggers**: `transformation` matches `GDP_SOURCE_SYSTEM_NAME = '<X>'`
 - **Action**: Capture `<X>` as `source_system_name`. Skip from column map (handled by `cross join ref_source_system`).
 
 ### 4. COMPOUND_PK
@@ -79,13 +79,13 @@ Each body row's `Transformation` cell is classified into one of these categories
   ```
   Then `hub.<hub>_core_skey as <hub>_core_skey` in base SELECT.
 
-### 7. STANDARDIZATION_STEP
-- **Triggers**: `transformation` references a downstream standardisation/enrichment step not available at onboarding time (e.g. address or geocode normalization)
-- **Action**: Emit `null as <target_col>` + comment `-- TODO: populated by downstream standardization step`.
+### 7. ESRI_STD
+- **Triggers**: `transformation = "<ESRI ADDRESS Standardisation>"`
+- **Action**: Emit `null as <target_col>` + comment `-- TODO: populated by ESRI standardization step (downstream)`.
 
-### 8. STANDARDIZATION_OUTPUT
-- **Triggers**: `transformation` references the *output* of a downstream standardisation step
-- **Action**: Same as STANDARDIZATION_STEP — leave `null` with TODO comment.
+### 8. ESRI_OUTPUT
+- **Triggers**: `transformation = "ESRI OUTPUT"`
+- **Action**: Same as ESRI_STD — leave `null` with TODO comment.
 
 ### 9. PASSTHROUGH (default)
 - **Triggers**: None of the above, source_col is present.
@@ -114,7 +114,7 @@ If the `Join` cell contains `UNION ALL`, treat the source as multi-source:
    - `primary_table`: the table after `FROM`
    - `joined_tables[]`: tables introduced by `JOIN` clauses
    - `join_predicates[]`: `ON ...` clauses
-   - `where_filter`: any filter inside the branch
+   - `where_filter`: any filter inside the branch (e.g., `c.cust_status = 'A'`)
 3. Generate a UNION ALL extraction CTE — each branch outputs **identical aliases and order** (copy the column-map output across branches).
 4. Apply final `qualify row_number() over (partition by source_unique_id order by ...) = 1` AFTER the union.
 
@@ -139,30 +139,30 @@ When targets within a single STTM share most bronze tables but require distinct 
 **Detection signals** (any one):
 - STTM `Join` cell contains target-name section markers (e.g., `------ PROPERTY_OWNER`).
 - Different targets reference disjoint sets of bronze tables.
-- A subset of targets requires a filter not applicable to others (e.g., a role-type filter specific to one target).
+- A subset of targets requires a filter not applicable to others (e.g., `party_role_type_desc IN ('Legal Owner','True Owner')` for PROPERTY_OWNER only).
 
 **Code pattern**: each ephemeral model has its own `sp_<target>` extraction CTE with its own bronze JOIN graph; the contract documents Pattern A / Pattern B / etc. per target.
 
-**Reference example**: see `examples/property-contract.md` — PROPERTY_CORE/USAGE/ADDRESS share one join pattern; PROPERTY_OWNER uses a distinct pattern with different bronze tables.
+**Reference example**: EDP property domain — PROPERTY_CORE/USAGE/ADDRESS use Pattern A (`dim_property_building` + `dim_property_usage` + `country` + `fact_aar`); PROPERTY_OWNER uses Pattern B (`dim_property_building` + `fact_property_role` + `dim_party_role` + `dim_organization`).
 
 ---
 
 ## Empty-Target Drop Rule
 
-A target is considered empty when its STTM body rows contain ZERO of: PASSTHROUGH, FK_LOOKUP, or COMPOUND_PK rows (i.e., only AUDIT/SEQUENCE/STANDARDIZATION/UNMAPPED).
+A target is considered empty when its STTM body rows contain ZERO of: PASSTHROUGH, FK_LOOKUP, or COMPOUND_PK rows (i.e., only AUDIT/SEQUENCE/ESRI/UNMAPPED).
 
 **Action**: AUTO-mode drops the target entirely — no ephemeral model, no hub patch, no watermark. Note in summary.
 
-**Reference example**: see `examples/company-contract.md` — a source STTM lists 6 targets but only 2 have business mappings; the rest are dropped.
+**Reference example**: FPD STTM lists 6 targets but only `company_core` and `company_segment` have business mappings; `company_address`, `company_industry`, `company_relationship`, `company_hierarchy` are dropped.
 
 ---
 
 ## Source-System Reconciliation
 
-When STTM transformation row says `{PREFIX}_SOURCE_SYSTEM_NAME = '<X>'` but `<X>` is not in `REF_{PREFIX}_SOURCE_SYSTEM`:
+When STTM transformation row says `GDP_SOURCE_SYSTEM_NAME = '<X>'` but `<X>` is not in `REF_GDP_SOURCE_SYSTEM`:
 
-1. Try fuzzy match (substring, abbreviation) against known source-system names/aliases.
-2. Try STTM file path parent folder as the source-system short name.
+1. Try fuzzy match (substring, abbreviation): `FINANCIAL_RCOE` → `FPD` if STTM folder is `FPD/`.
+2. Try STTM file path parent folder: `gdp-company/mappings/FPD/...` → `FPD`.
 3. If both miss — STOP (true blocker #1).
 
 Reconciliation outcome is logged in summary, not silently swapped.
@@ -171,30 +171,37 @@ Reconciliation outcome is logged in summary, not silently swapped.
 
 ## Bronze Table Discovery
 
-When STTM `Source Tables` references a table not in the expected bronze schema:
+When STTM `Source Tables` references a table not in the registry's expected schema:
 
-1. Try `DEV_{PREFIX}_BRONZE_DB.BRONZE_<SOURCE_KEY>.<TABLE>` (registry path, if the project documents one).
+1. Try `DEV_GDP_BRONZE_DB.BRONZE_<SOURCE_KEY>.<TABLE>` (registry path).
 2. If miss, run `INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME ILIKE '<TABLE>'` across the database. Prefer:
    - Non-`*_HIST`, non-`*_BKP*`, non-`*_TEST`, non-`*_SYNTHETIC*` variants
    - Highest row count among candidates
-3. If STTM names a `*_SYNTHETIC` variant, prefer the live equivalent table with the same base name.
-4. Add the resolved schema to the project's source registry update list (note in summary).
+3. If STTM names a `*_SYNTHETIC` variant: prefer the live equivalent (FPD example: `C360_CLIENTPROFITABILITYREPORT_SYNTHETIC` → `C360_CLIENTPROFITABILITYREPORT` in `BRONZE_FINANCE`).
+4. Add the resolved schema to AGENTS.md update list (note in summary).
 5. If no candidate found — STOP (true blocker #2).
 
 ---
 
 ## Bronze Schema Lookup
 
-If the project maintains a source registry (mapping source-system name/SKEY to its bronze schema), consult it first. **This list is never assumed to be exhaustive** — fall through to `INFORMATION_SCHEMA.TABLES` discovery (see Bronze Table Discovery rule above) whenever a source isn't listed, or when no registry exists yet.
-
-Example registry shape (values below are illustrative, not real project data):
+Use the AGENTS.md source registry to resolve bronze schema. **This list is NOT exhaustive** — fall through to `INFORMATION_SCHEMA.TABLES` discovery (see Bronze Table Discovery rule above) if a source isn't listed.
 
 | SKEY | Source | Bronze Schema |
 |---|---|---|
-| 100 | EXAMPLE_CRM | BRONZE_EXAMPLE_CRM |
-| 101 | EXAMPLE_ERP | BRONZE_EXAMPLE_ERP |
+| 100 | EDP | BRONZE_EDP |
+| 102 | LIGHTBOX | BRONZE_LIGHTBOX |
+| 107 | SPOC | BRONZE_SPOC |
+| 110 | INTROHIVE | BRONZE_INTROHIVE |
+| 112 | BUSINESS_SMARTSHEET | BRONZE_BUSINESS_SMARTSHEET |
+| 115 | CLIENT_SENTIMENT | BRONZE_CLIENT_SENTIMENT |
+| 120 | NEWS_TO_LEADS | BRONZE_NEWS_TO_LEADS |
+| 123 | TAT | BRONZE_TAT |
+| 200 | DIQ | BRONZE_DIQ |
+| 201 | MTA | BRONZE_MTA |
+| 202 | FPD | BRONZE_FINANCE *(registry SKEY=FPD; physical schema=BRONZE_FINANCE — documentation drift, AGENTS.md needs update)* |
 
-The skill validates the source-system name against `REF_{PREFIX}_SOURCE_SYSTEM` (with fuzzy match per Source-System Reconciliation rule).
+The skill validates the source-system name against `REF_GDP_SOURCE_SYSTEM` (with fuzzy match per Source-System Reconciliation rule).
 
 ---
 
@@ -213,11 +220,11 @@ FILES_CREATED   : [...]
 FILES_MODIFIED  : [...]
 WATERMARKS      : N rows inserted
 DECISIONS       :
-  - <auto-resolved choice>
+  - <auto-resolved choice> (e.g., "DIM_COUNTRY skipped — only 2 rows; used COUNTRY")
   - <auto-resolved choice>
 TODOS           :
   - <e.g., LOV mapping pending for ref_property_kind_skey>
-  - <e.g., standardization step downstream>
+  - <e.g., ESRI standardization downstream>
 UNMAPPED COLS   : [...]
 ```
 

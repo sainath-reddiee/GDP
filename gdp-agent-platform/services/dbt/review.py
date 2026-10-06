@@ -15,8 +15,8 @@ from services.common.llm import DEFAULT_MODEL
 from services.dbt.enhance import parse_complete
 
 Rows = Callable[..., List[Dict[str, Any]]]
-SKILL = "DBT-ONBOARD-SOURCE"
-SECTIONS = ("## Standard Rules", "## STTM Anomalies", "### STTM Anomalies", "## Transformation", "# references/sttm-mapping-rules.md")
+SKILL = "GDP-DBT-ONBOARD-SOURCE"
+SECTIONS = ("## GDP Standard Rules", "## Standard Rules", "## STTM Anomalies", "### STTM Anomalies", "## Transformation", "# references/sttm-mapping-rules.md")
 REF = re.compile(r"\{\{\s*(ref|source)\(([^)]*)\)\s*\}\}")
 
 REVIEW_SCHEMA = {
@@ -47,6 +47,8 @@ REVIEW_SCHEMA = {
 def skill_excerpt(content: str, limit: int = 9000) -> str:
     """Rule-bearing parts of the skill text first (standard rules, anomalies, rulebook), then the rest."""
     text = content or ""
+    if "SKILL RULES:" in text:
+        return text[:limit]
     picked: List[str] = []
     for marker in SECTIONS:
         at = text.find(marker)

@@ -295,8 +295,8 @@ def apply_to_connection(con, database: str, warehouse: str, variables: Dict[str,
         log.append(f"procedures {path.name}: applied")
     log.append(refresh_github_publisher(cur, database, variables["services_import"]))
 
-    seed_platform(cur, database)
-    log.append("seed domain pack, skills, platform config")
+    log.extend(seed_platform(cur, database) or [])
+    log.append("seed domain packs, skills, platform config")
 
     for path in extra_sql:
         try:

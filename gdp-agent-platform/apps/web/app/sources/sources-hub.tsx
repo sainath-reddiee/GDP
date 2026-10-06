@@ -17,6 +17,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
+import { displayDomain } from "@/lib/catalog-display";
 import type { DomainRow } from "@/app/onboarding/intent-types";
 import { loadCatalogInventory, loadOverview, loadProfileStore, profileCatalogTables } from "./actions";
 import { ModelPanel } from "./model-panel";
@@ -459,7 +460,16 @@ export function SourcesHub({
                         </button>
                         <div className="text-[11px] text-muted-foreground">{t.table_type === "BASE TABLE" ? "table" : t.table_type.toLowerCase()}</div>
                       </TD>
-                      <TD className="text-sm">{t.domain_name ?? <span className="text-muted-foreground">—</span>}</TD>
+                      <TD className="text-sm">
+                        {!displayDomain(t.domain_name) ? <span className="text-muted-foreground">—</span>
+                          : t.domain_inferred ? (
+                            <span title="Inferred from table and column names against the domain contracts"
+                                  className="inline-flex items-center gap-1 whitespace-nowrap rounded-full border border-dashed border-primary/40 px-2 py-0.5 text-xs">
+                              {t.domain_name}
+                              <span className="text-muted-foreground">inferred {Math.round((t.domain_confidence ?? 0) * 100)}%</span>
+                            </span>
+                          ) : t.domain_name}
+                      </TD>
                       <TD className="text-right tabular-nums">{formatCount(t.row_count)}</TD>
                       <TD className="text-right tabular-nums">{t.column_count}</TD>
                       <TD>

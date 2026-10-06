@@ -2,11 +2,10 @@ version: 2
 
 # Multi-table bronze source declaration. Lists ALL bronze tables this source onboarding consumes.
 # Bronze table names are NOT auto-suffixed with _DEV — use whatever the live name is (case-insensitive).
-# {PREFIX} = project audit-column / shared-object namespace (may be blank).
 
 sources:
   - name: <entity>_<source_key>_source
-    database: "{{ var('bronze_db', 'DEV_{PREFIX}_BRONZE_DB') }}"
+    database: "{{ var('bronze_db', 'DEV_GDP_BRONZE_DB') }}"
     schema: "{{ var('bronze_schema_<source_key>', 'BRONZE_<SOURCE_KEY_UPPER>') }}"
     tables:
       - name: <BRONZE_TABLE_1>
@@ -16,5 +15,5 @@ sources:
         identifier: "<BRONZE_TABLE_2>"
         description: "<source_system_name> <purpose>"
       # Add one block per bronze table the source uses.
-      # For multi-source UNION patterns, include all branches' tables.
-      # For per-target join graph patterns, include the union of all tables across patterns.
+      # For multi-source UNION patterns (MTA), include all branches' tables.
+      # For per-target join graph (EDP), include the union of all tables across patterns.

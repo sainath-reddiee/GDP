@@ -13,6 +13,8 @@ import json
 import re
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
+from services.knowledge.contracts import ref_lookup
+
 ENGINE = "dbt-onboard-source/engine-v1"
 SIMPLE = re.compile(r"^[A-Z_][A-Z0-9_$]*$")
 AUDIT_SUFFIXES = ("IS_ACTIVE", "INSERTED_TS", "INSERTED_BY", "UPDATED_TS", "UPDATED_BY", "ROW_HASH")
@@ -254,6 +256,24 @@ def _join_plan(primary: str, sources: Dict[str, Dict[str, Any]], used: Iterable[
     return plan, remaining
 
 
+# ----------------------------------------------------------------------------------------------- domain contract
+
+def missing_minimum_mapping(required: List[str], mapped: Iterable[str]) -> List[str]:
+    """Contract 'Required Mapping Keys': each entry names one column, or 'One of: `a`, `b`' alternatives."""
+    have = {m.lower() for m in mapped}
+    missing = []
+    for entry in required:
+        names = [n.lower() for n in re.findall(r"`([A-Za-z0-9_]+)`", entry)]
+        if names and not any(n in have for n in names):
+            missing.append(" or ".join(names) if len(names) > 1 else names[0])
+    return missing
+
+
+def contract_cast(template: str, alias: str) -> str:
+    """'try_to_number(o.col)' / 'o.col::number(12,8)' with the column substituted."""
+    return re.sub(r"\bo\.col\b", f"o.{alias}", template)
+
+
 # ----------------------------------------------------------------------------------------------- render helpers
 
 def _sources_yml(name: str, source_key: str, sources: Dict[str, Dict[str, Any]], system: str) -> str:
@@ -399,6 +419,18 @@ def generate(inputs: Dict[str, Any], skeleton: Optional[Dict[str, str]] = None) 
     cols = _ordered_targets(lines, inputs.get("target_columns") or [])
     for c in cols:
         c["_class"] = classify(c, target, prefix, source_system_col)
+    spec = inputs.get("model_spec") or {}
+    mapped = [str(c["target_column"]) for c in cols
+              if c.get("source_column") or str(c.get("transformation") or "").strip() or c["_class"] == "COMPOUND_PK"]
+    missing_keys = missing_minimum_mapping(spec.get("minimum_mapping") or [], mapped)
+    if missing_keys:
+        raise ValueError("MINIMUM_MAPPING: the domain contract requires " + ", ".join(missing_keys)
+                         + f" for {target.upper()}; map them in the STTM before generating dbt")
+    casts = {str(c["target_column"]).upper(): c["cast"] for c in spec.get("casts") or []}
+    contract_ctes: List[str] = []
+    contract_joins: List[Dict[str, str]] = []
+    lookups_used: List[str] = []
+    hub_join = ""
 
     counts: Dict[str, int] = {}
     for c in cols:
@@ -474,6 +506,32 @@ def generate(inputs: Dict[str, Any], skeleton: Optional[Dict[str, str]] = None) 
         elif cls == "SEQUENCE":
             final.append(f"    {{{{ this.schema }}}}.seq_{target}_skey.nextval as {alias}")
             note = f"assigned from sequence SEQ_{target.upper()}_SKEY (silver-model convention)"
+        elif cls == "FK_LOOKUP" and scol and table not in unjoined and ref_lookup(name, spec):
+            lookup = ref_lookup(name, spec)
+            a = alias_of.get(table, "o")
+            present = " ".join(sp_select)
+            for attr in lookup["attributes"]:
+                if f" as {attr}" not in present:
+                    sp_select.append(f"nullif(trim({a}.{quote(scol)}), '') as {attr}")
+            for cte in lookup["ctes"]:
+                if cte not in contract_ctes:
+                    contract_ctes.append(cte)
+            for j in lookup["joins"]:
+                if j not in contract_joins:
+                    contract_joins.append(j)
+            base_select.append(f"{lookup['expr']} as {alias}")
+            final.append(f"    {alias}")
+            lookups_used.append(name)
+            note = f"contract lookup {' -> '.join(lookup['ctes'])} on {', '.join(lookup['attributes'])}"
+        elif cls == "HUB_FK" and spec.get("role") == "spoke" and name == str(spec.get("hub_fk") or "").upper():
+            hub = str(spec.get("hub") or "").lower()
+            hub_join = (f"\n    left join (\n        select source_unique_id, {name.lower()}\n"
+                        f"        from {{{{ ref('{hub}') }}}}\n        where gdp_is_active\n"
+                        f"        qualify row_number() over (partition by source_unique_id order by gdp_inserted_ts desc) = 1\n"
+                        f"    ) as hub\n        on hub.source_unique_id = o.source_unique_id")
+            base_select.append(f"hub.{name.lower()} as {alias}")
+            final.append(f"    {alias}")
+            note = f"resolved from ref('{hub}') by SOURCE_UNIQUE_ID (latest active row)"
         elif cls in {"FK_LOOKUP", "HUB_FK", "STANDARDIZATION", "LOV", "UNMAPPED"} or table in unjoined:
             reason = {
                 "FK_LOOKUP": f"FK lookup pending: add ref CTE + LEFT JOIN on upper(trim(...)) for {name}",
@@ -500,7 +558,9 @@ def generate(inputs: Dict[str, Any], skeleton: Optional[Dict[str, str]] = None) 
                 else:
                     sp_select.append(f"{ref} as {alias}")
                 expr, cast = conform(f"o.{alias}", stype, ttype)
-                if not stype:
+                if name in casts:
+                    expr, cast = contract_cast(casts[name], alias), f"contract cast {casts[name]}"
+                elif not stype:
                     note = "source type unknown; passthrough"
             base_select.append(f"{expr} as {alias}")
             final.append(f"    {alias}")
@@ -532,8 +592,12 @@ def generate(inputs: Dict[str, Any], skeleton: Optional[Dict[str, str]] = None) 
     if need_ref_system:
         ref_cte = f",\n\nref_source_system as (\n    {{{{ m_get_source_system_skey_{domain}('{system}') }}}}\n)"
         ref_join = "\n    cross join ref_source_system as r"
+    ctes = spec.get("reference_ctes") or {}
+    for name in contract_ctes:
+        ref_cte += ",\n\n" + ctes[name]
+    lookup_joins = "".join(f"\n    left join {j['cte']} as {j['alias']}\n        on {j['condition']}" for j in contract_joins)
     base = (",\n\nbase as (\n    select\n        " + ",\n        ".join(base_select) + f"\n    from sp_{target} as o"
-            + ref_join + "\n)")
+            + ref_join + lookup_joins + hub_join + "\n)")
     final_cols = final if has_uid_col else ["    source_unique_id", *final]
     ephemeral = (
         "{{ config(materialized = 'ephemeral') }}\n\n"
@@ -607,6 +671,9 @@ def generate(inputs: Dict[str, Any], skeleton: Optional[Dict[str, str]] = None) 
         if tests:
             entry += ["        tests:", *tests]
         yml += entry
+    if spec.get("hkey_columns"):
+        present = {str(c["target_column"]).upper() for c in cols}
+        hkey_cols = [h.lower() for h in spec["hkey_columns"] if h.upper() in present] or hkey_cols
     macro_path, macro_sql, macros_added = _macros(domain, target, hkey_cols, skeleton, need_ref_system, prefix)
     first = sources[primary]
     project_path = "dbt_project.yml"
@@ -640,7 +707,10 @@ def generate(inputs: Dict[str, Any], skeleton: Optional[Dict[str, str]] = None) 
               for p in files}
     report = {
         "engine": ENGINE,
-        "skill": "DBT-ONBOARD-SOURCE",
+        "skill": "GDP-DBT-ONBOARD-SOURCE",
+        "contract": {"applied": bool(spec), "role": spec.get("role"), "hkey_from_contract": bool(spec.get("hkey_columns")),
+                     "lookups": lookups_used, "hub_fk": bool(hub_join),
+                     "casts": [c["target_column"] for c in report_cols if str(c.get("cast") or "").startswith("contract")]},
         "convention": "bronze -> ephemeral silver staging -> silver hub (SCD1)",
         "domain": domain, "target": target, "source_key": source_key, "prefix": prefix, "source_system": system,
         "primary_source": primary, "joins": joins, "source_unique_id": {"expression": uid, "reason": key_reason,

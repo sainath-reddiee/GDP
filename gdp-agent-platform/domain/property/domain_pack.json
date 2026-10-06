@@ -1,0 +1,253 @@
+{
+  "domain": {
+    "name": "PROPERTY",
+    "description": "Real estate properties and buildings: PROPERTY_CORE with usage, address and owner tables.",
+    "owner": "GDP Data Office",
+    "silver_database": "DEV_GDP_SILVER_DB",
+    "silver_schema": "PROPERTY",
+    "contract": "snowflake/skills/gdp/dbt-onboard-source/references/property-contract.md",
+    "signals": {
+      "tables": {
+        "PROPERTY": 3,
+        "BUILDING": 3,
+        "PARCEL": 3,
+        "ASSET": 1,
+        "SITE": 2,
+        "LOT": 2,
+        "ASSESSMENT": 3,
+        "LAND": 2,
+        "PREMISE": 2,
+        "FACILITY": 2,
+        "AAR": 1
+      },
+      "columns": {
+        "PARCEL": 3,
+        "APN": 3,
+        "SQFT": 3,
+        "SQ_FT": 3,
+        "SQUARE": 2,
+        "LOT": 2,
+        "LAND": 2,
+        "BUILDING": 3,
+        "YEAR_BUILT": 3,
+        "BUILT": 2,
+        "ZONING": 3,
+        "USAGE": 2,
+        "OWNER": 1,
+        "ASSESS": 2,
+        "FLOOR": 2,
+        "STORIES": 2,
+        "UNITS": 1,
+        "PROPERTY": 3,
+        "ACRE": 2
+      }
+    },
+    "source_systems": [
+      {
+        "skey": 100,
+        "name": "EDP",
+        "bronze_schema": "BRONZE_EDP"
+      },
+      {
+        "skey": 102,
+        "name": "LIGHTBOX",
+        "bronze_schema": "BRONZE_LIGHTBOX"
+      },
+      {
+        "skey": 200,
+        "name": "DIQ",
+        "bronze_schema": "BRONZE_DIQ"
+      },
+      {
+        "skey": 201,
+        "name": "MTA",
+        "bronze_schema": "BRONZE_MTA"
+      }
+    ]
+  },
+  "targets": [
+    {
+      "schema": "PROPERTY",
+      "table": "PROPERTY_CORE",
+      "table_type": "HUB",
+      "grain": "one row per SOURCE_UNIQUE_ID per REF_GDP_SOURCE_SYSTEM_SKEY",
+      "business_keys": [
+        "SOURCE_UNIQUE_ID",
+        "REF_GDP_SOURCE_SYSTEM_SKEY"
+      ],
+      "scd_type": "1+HIST",
+      "description": "Hub PROPERTY_CORE of PROPERTY.",
+      "model_spec": {
+        "role": "hub",
+        "hub": "PROPERTY_CORE",
+        "hub_fk": null,
+        "hkey_columns": [],
+        "reference_ctes": {},
+        "reference_joins": [],
+        "minimum_mapping": [
+          "`source_unique_id`",
+          "`property_name`",
+          "`property_address`",
+          "`property_usage_desc`"
+        ],
+        "casts": []
+      },
+      "columns": []
+    },
+    {
+      "schema": "PROPERTY",
+      "table": "PROPERTY_USAGE",
+      "table_type": "SPOKE",
+      "grain": "one row per SOURCE_UNIQUE_ID per REF_GDP_SOURCE_SYSTEM_SKEY",
+      "business_keys": [
+        "SOURCE_UNIQUE_ID",
+        "REF_GDP_SOURCE_SYSTEM_SKEY"
+      ],
+      "scd_type": "1+HIST",
+      "description": "Property usage (Pattern A: dim_property_building + dim_property_usage + country + fact_aar).",
+      "model_spec": {
+        "role": "spoke",
+        "hub": "PROPERTY_CORE",
+        "hub_fk": "PROPERTY_CORE_SKEY",
+        "hkey_columns": [],
+        "reference_ctes": {},
+        "reference_joins": [],
+        "minimum_mapping": [
+          "source_unique_id"
+        ],
+        "casts": []
+      },
+      "columns": []
+    },
+    {
+      "schema": "PROPERTY",
+      "table": "PROPERTY_ADDRESS",
+      "table_type": "SPOKE",
+      "grain": "one row per SOURCE_UNIQUE_ID per REF_GDP_SOURCE_SYSTEM_SKEY",
+      "business_keys": [
+        "SOURCE_UNIQUE_ID",
+        "REF_GDP_SOURCE_SYSTEM_SKEY"
+      ],
+      "scd_type": "1+HIST",
+      "description": "Property address (Pattern A).",
+      "model_spec": {
+        "role": "spoke",
+        "hub": "PROPERTY_CORE",
+        "hub_fk": "PROPERTY_CORE_SKEY",
+        "hkey_columns": [],
+        "reference_ctes": {},
+        "reference_joins": [],
+        "minimum_mapping": [
+          "source_unique_id"
+        ],
+        "casts": []
+      },
+      "columns": []
+    },
+    {
+      "schema": "PROPERTY",
+      "table": "PROPERTY_OWNER",
+      "table_type": "SPOKE",
+      "grain": "one row per SOURCE_UNIQUE_ID per REF_GDP_SOURCE_SYSTEM_SKEY",
+      "business_keys": [
+        "SOURCE_UNIQUE_ID",
+        "REF_GDP_SOURCE_SYSTEM_SKEY"
+      ],
+      "scd_type": "1+HIST",
+      "description": "Property owners (Pattern B: dim_property_building + fact_property_role + dim_party_role + dim_organization, filtered to party_role_type_desc IN ('Legal Owner','True Owner')).",
+      "model_spec": {
+        "role": "spoke",
+        "hub": "PROPERTY_CORE",
+        "hub_fk": "PROPERTY_CORE_SKEY",
+        "hkey_columns": [],
+        "reference_ctes": {},
+        "reference_joins": [],
+        "minimum_mapping": [
+          "source_unique_id"
+        ],
+        "casts": []
+      },
+      "columns": []
+    }
+  ],
+  "knowledge": [
+    {
+      "key": "property.model.property_core",
+      "type": "MODEL_DEFINITION",
+      "title": "PROPERTY_CORE (hub)",
+      "content": "Hub PROPERTY_CORE of PROPERTY. Grain: one row per SOURCE_UNIQUE_ID per REF_GDP_SOURCE_SYSTEM_SKEY. ",
+      "content_json": {
+        "target_table": "PROPERTY_CORE",
+        "role": "hub",
+        "hub_fk": null,
+        "hkey_columns": [],
+        "column_count": 0
+      }
+    },
+    {
+      "key": "property.model.property_usage",
+      "type": "MODEL_DEFINITION",
+      "title": "PROPERTY_USAGE (spoke)",
+      "content": "Property usage (Pattern A: dim_property_building + dim_property_usage + country + fact_aar). Grain: one row per SOURCE_UNIQUE_ID per REF_GDP_SOURCE_SYSTEM_SKEY. Spoke of PROPERTY_CORE through PROPERTY_CORE_SKEY. ",
+      "content_json": {
+        "target_table": "PROPERTY_USAGE",
+        "role": "spoke",
+        "hub_fk": "PROPERTY_CORE_SKEY",
+        "hkey_columns": [],
+        "column_count": 0
+      }
+    },
+    {
+      "key": "property.model.property_address",
+      "type": "MODEL_DEFINITION",
+      "title": "PROPERTY_ADDRESS (spoke)",
+      "content": "Property address (Pattern A). Grain: one row per SOURCE_UNIQUE_ID per REF_GDP_SOURCE_SYSTEM_SKEY. Spoke of PROPERTY_CORE through PROPERTY_CORE_SKEY. ",
+      "content_json": {
+        "target_table": "PROPERTY_ADDRESS",
+        "role": "spoke",
+        "hub_fk": "PROPERTY_CORE_SKEY",
+        "hkey_columns": [],
+        "column_count": 0
+      }
+    },
+    {
+      "key": "property.model.property_owner",
+      "type": "MODEL_DEFINITION",
+      "title": "PROPERTY_OWNER (spoke)",
+      "content": "Property owners (Pattern B: dim_property_building + fact_property_role + dim_party_role + dim_organization, filtered to party_role_type_desc IN ('Legal Owner','True Owner')). Grain: one row per SOURCE_UNIQUE_ID per REF_GDP_SOURCE_SYSTEM_SKEY. Spoke of PROPERTY_CORE through PROPERTY_CORE_SKEY. ",
+      "content_json": {
+        "target_table": "PROPERTY_OWNER",
+        "role": "spoke",
+        "hub_fk": "PROPERTY_CORE_SKEY",
+        "hkey_columns": [],
+        "column_count": 0
+      }
+    },
+    {
+      "key": "property.pattern.join_graph",
+      "type": "DBT_PATTERN",
+      "title": "Per-Target Join Graph",
+      "content": "## Per-Target Join Graph (third pattern)\n\nWhen targets within a single STTM share most bronze tables but require distinct join shapes, generate per-target extraction CTEs (NOT a shared CTE).\n\n**Detection signals** (any one):\n- STTM `Join` cell contains target-name section markers (e.g., `------ PROPERTY_OWNER`).\n- Different targets reference disjoint sets of bronze tables.\n- A subset of targets requires a filter not applicable to others (e.g., `party_role_type_desc IN ('Legal Owner','True Owner')` for PROPERTY_OWNER only).\n\n**Code pattern**: each ephemeral model has its own `sp_<target>` extraction CTE with its own bronze JOIN graph; the contract documents Pattern A / Pattern B / etc. per target.\n\n**Reference example**: EDP property domain \u2014 PROPERTY_CORE/USAGE/ADDRESS use Pattern A (`dim_property_building` + `dim_property_usage` + `country` + `fact_aar`); PROPERTY_OWNER uses Pattern B (`dim_property_building` + `fact_property_role` + `dim_party_role` + `dim_organization`).\n\n---"
+    },
+    {
+      "key": "property.guide.minimum_mapping",
+      "type": "ONBOARDING_GUIDE",
+      "title": "PROPERTY minimum mapping",
+      "content": "A source must map at least: `source_unique_id`; `property_name`; `property_address`; `property_usage_desc`",
+      "content_json": {
+        "required": [
+          "`source_unique_id`",
+          "`property_name`",
+          "`property_address`",
+          "`property_usage_desc`"
+        ]
+      }
+    },
+    {
+      "key": "property.guide.known_sources",
+      "type": "ONBOARDING_GUIDE",
+      "title": "PROPERTY sources",
+      "content": "## Known Sources to Onboard\n\nPer `AGENTS.md` source registry:\n\n| SKEY | Source | Status |\n|---|---|---|\n| 100 | EDP | Planned |\n| 102 | LIGHTBOX | Planned |\n| 200 | DIQ | Planned |\n| 201 | MTA | Planned (shared with company) |"
+    }
+  ]
+}

@@ -198,6 +198,11 @@ export type InventoryTable = {
   profiled_at: string | null; profiled_by: string | null; avg_null_percentage: number | null;
   key_candidates: number | null; pii_columns: number | null; is_approximate: boolean | null; error_message: string | null;
   quality?: Scorecard | null;
+  domain_inferred?: boolean; domain_confidence?: number | null;
+};
+
+export type DomainCandidate = {
+  domain_id: string; domain_name: string; confidence: number; signals: string[]; matched_terms: string[];
 };
 
 export type SourceInventory = {
@@ -277,6 +282,7 @@ export type AnalyzeResult = {
   }[];
   relationships: Relationship[];
   graph: import("@/app/onboarding/intent-types").ModelGraph;
+  domain?: { detected: DomainCandidate | null; candidates: DomainCandidate[] };
   models: {
     related: boolean;
     suggestions: { kind: "existing" | "proposed"; target_table: string; fqn: string; domain_name?: string | null;

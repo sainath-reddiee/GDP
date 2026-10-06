@@ -1,15 +1,14 @@
 -- ====================================================================
 -- Generic <domain> macros — created/extended by the onboarding skill.
 -- One m_<target>_hkey macro per silver target in the domain.
--- {PREFIX} = project audit-column / shared-object namespace (may be blank).
 -- ====================================================================
 
 -- Source-system SKEY lookup (one per domain)
 {% macro m_get_source_system_skey_<domain>(source_system_name) -%}
     select distinct
-        {PREFIX}_SOURCE_SYSTEM_SKEY as {prefix_lower}_source_system_skey
-    from {{ source('<domain>_shared_reference', 'ref_{prefix_lower}_source_system') }}
-    where upper({PREFIX}_SOURCE_SYSTEM_NAME) = '{{ source_system_name | upper }}'
+        GDP_SOURCE_SYSTEM_SKEY as gdp_source_system_skey
+    from {{ source('<domain>_shared_reference', 'ref_gdp_source_system') }}
+    where upper(GDP_SOURCE_SYSTEM_NAME) = '{{ source_system_name | upper }}'
 {%- endmacro %}
 
 

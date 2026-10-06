@@ -980,7 +980,8 @@ def _catalog_profile(db: Db, database: Optional[str], schema: Optional[str], tab
     return profile
 
 
-def _suggest_for_catalog(db: Db, database: Optional[str], schema: Optional[str], tables: list[str]) -> dict:
+def _suggest_for_catalog(db: Db, database: Optional[str], schema: Optional[str], tables: list[str],
+                         domain: Optional[str] = None) -> dict:
     from services.source.catalog_display import display_domain_name, workspace_targets
     from services.source.intent import suggest_models
 
@@ -1012,6 +1013,20 @@ def _suggest_for_catalog(db: Db, database: Optional[str], schema: Optional[str],
             "overlap_columns": [],
             "reason": "Registered model for this catalog",
         })
+    if domain:
+        for row in targets:
+            fqn = str(row.get("fqn") or "")
+            if str(row.get("domain_name") or "").upper() != domain.upper() or not fqn or fqn.upper() in seen:
+                continue
+            seen.add(fqn.upper())
+            existing.append({
+                "kind": "existing", "target_table": row.get("target_table"), "fqn": fqn,
+                "domain_name": display_domain_name(row.get("domain_name")), "score": 0.45, "overlap_columns": [],
+                "reason": f"{display_domain_name(domain)} domain model (detected from the source)",
+            })
+        shown = str(display_domain_name(domain) or domain).upper()
+        existing.sort(key=lambda i: (str(i.get("domain_name") or "").upper() not in {domain.upper(), shown},
+                                     -float(i.get("score") or 0)))
     related = bool(existing) or bool(scoped)
     return {
         "related": related,
@@ -1049,7 +1064,9 @@ def put_run_intent(run_id: str, body: IntentPatch, db: Db = Depends(current_db))
 @app.get("/api/catalog/target-suggestions")
 def catalog_target_suggestions(database: str = "", schema: str = "", tables: str = "", db: Db = Depends(current_db)):
     table_list = [part.strip() for part in (tables or "").split(",") if part.strip()]
-    return _suggest_for_catalog(db, database or None, schema or None, table_list)
+    detected = _infer_domains(db, table_list, [], schema or None)[:1] if table_list else []
+    domain = detected[0]["domain_name"] if detected and detected[0]["confidence"] >= INFERRED_MIN_CONFIDENCE else None
+    return _suggest_for_catalog(db, database or None, schema or None, table_list, domain)
 
 
 class PreviewGraph(BaseModel):
@@ -1428,9 +1445,54 @@ def skills(db: Db = Depends(current_db)):
         SELECT SKILL_ID, SKILL_NAME, SKILL_TYPE, DOMAIN_ID, VERSION, STAGE_PATH, STATUS,
                CREATED_BY, CREATED_AT::VARCHAR AS CREATED_AT
           FROM KNOWLEDGE.SKILL_REGISTRY
+         WHERE IS_CURRENT
          ORDER BY SKILL_NAME, CREATED_AT DESC
         """
     )}
+
+
+_DOMAIN_TARGETS_SQL = """
+    SELECT T.TARGET_TABLE_ID, T.TARGET_DATABASE, T.TARGET_SCHEMA, T.TARGET_TABLE, T.DESCRIPTION, {spec} AS MODEL_SPEC,
+           (SELECT COUNT(*) FROM KNOWLEDGE.TARGET_COLUMN_REGISTRY C WHERE C.TARGET_TABLE_ID = T.TARGET_TABLE_ID) AS COLUMN_COUNT
+      FROM KNOWLEDGE.TARGET_TABLE_REGISTRY T
+     WHERE T.DOMAIN_ID = %s AND T.ACTIVE_FLAG
+     ORDER BY T.TARGET_TABLE
+"""
+
+
+@app.get("/api/domains/{domain_id}")
+def domain_detail(domain_id: str, db: Db = Depends(current_db)):
+    """Targets (hub and spokes with column counts and model spec), detection signals, source systems, knowledge mix."""
+    try:
+        found = db.query("SELECT DOMAIN_ID, DOMAIN_NAME, DESCRIPTION, OWNER, CONFIG FROM KNOWLEDGE.DOMAIN_REGISTRY "
+                         "WHERE DOMAIN_ID = %s", (domain_id,))
+        targets = db.query(_DOMAIN_TARGETS_SQL.format(spec="T.MODEL_SPEC"), (domain_id,))
+    except Exception:
+        found = db.query("SELECT DOMAIN_ID, DOMAIN_NAME, DESCRIPTION, OWNER, NULL AS CONFIG "
+                         "FROM KNOWLEDGE.DOMAIN_REGISTRY WHERE DOMAIN_ID = %s", (domain_id,))
+        targets = db.query(_DOMAIN_TARGETS_SQL.format(spec="NULL"), (domain_id,))
+    if not found:
+        raise HTTPException(404, "domain not found")
+    domain = found[0]
+    config = _json(domain.pop("config", None)) or {}
+    for t in targets:
+        spec = _json(t.pop("model_spec", None)) or {}
+        t["role"] = spec.get("role")
+        t["hub_fk"] = spec.get("hub_fk")
+        t["hkey_columns"] = spec.get("hkey_columns") or []
+        t["minimum_mapping"] = spec.get("minimum_mapping") or []
+        t["lookups"] = sorted((spec.get("reference_ctes") or {}).keys())
+        t["casts"] = len(spec.get("casts") or [])
+    targets.sort(key=lambda t: (t["role"] != "hub", t["target_table"]))
+    knowledge = db.query(
+        "SELECT KNOWLEDGE_TYPE, COUNT(*) AS N FROM KNOWLEDGE.DOMAIN_KNOWLEDGE WHERE DOMAIN_ID = %s AND IS_CURRENT "
+        "GROUP BY KNOWLEDGE_TYPE ORDER BY N DESC",
+        (domain_id,),
+    )
+    return {"domain": domain, "targets": targets, "signals": config.get("signals") or {},
+            "source_systems": config.get("source_systems") or [], "contract": config.get("contract"),
+            "silver": {"database": config.get("silver_database"), "schema": config.get("silver_schema")},
+            "knowledge": knowledge}
 
 
 @app.get("/api/domains")
@@ -2430,6 +2492,42 @@ def _skill_content(db: Db, name: str) -> str:
     return str((rows[0].get("content") if rows else "") or "")
 
 
+def _domain_skill(db: Db, run_id: str, budget: int = 9000) -> str:
+    """GDP dbt skill rules plus the run domain's contract and target model definition."""
+    from services.knowledge.usage import DBT_SKILL, compose_domain_context
+
+    content = _skill_content(db, DBT_SKILL)
+    try:
+        run = db.query(
+            """
+            SELECT D.DOMAIN_NAME, R.DOMAIN_ID, R.TARGET_MODEL FROM CORE.WORKFLOW_RUN R
+              LEFT JOIN KNOWLEDGE.DOMAIN_REGISTRY D ON D.DOMAIN_ID = R.DOMAIN_ID
+             WHERE R.RUN_ID = %s
+            """,
+            (run_id,),
+        )
+    except Exception:
+        run = []
+    if not run:
+        return compose_domain_context(content, budget=budget)
+    domain = run[0].get("domain_name")
+    target = (str(run[0].get("target_model") or "").split(".")[-1] or None)
+    definitions = []
+    if target and run[0].get("domain_id"):
+        try:
+            definitions = [f"{r['title']}: {r['content']}" for r in db.query(
+                """
+                SELECT TITLE, CONTENT FROM KNOWLEDGE.DOMAIN_KNOWLEDGE
+                 WHERE DOMAIN_ID = %s AND IS_CURRENT AND KNOWLEDGE_TYPE = 'MODEL_DEFINITION'
+                   AND CONTENT_JSON:target_table::STRING = %s
+                """,
+                (run[0]["domain_id"], target.upper()),
+            )]
+        except Exception:
+            definitions = []
+    return compose_domain_context(content, domain, target, definitions, budget)
+
+
 def _sttm_context(db: Db, run_id: str) -> str:
     try:
         lines = db.query(
@@ -2479,7 +2577,7 @@ def review_dbt(run_id: str, body: DbtReview, db: Db = Depends(current_db)):
         pass
     try:
         return review_file(lambda sql, params=(): db.query(sql, params), path, files[path],
-                           _skill_content(db, "DBT-ONBOARD-SOURCE"), _sttm_context(db, run_id), notes, model=body.model)
+                           _domain_skill(db, run_id), _sttm_context(db, run_id), notes, model=body.model)
     except Exception as exc:
         raise _snowflake_error(exc) from exc
 
@@ -2539,11 +2637,11 @@ def enhance_dbt(run_id: str, body: DbtEnhance, db: Db = Depends(current_db)):
     )
     try:
         from services.dbt.review import skill_excerpt
-        skill = skill_excerpt(_skill_content(db, "DBT-ONBOARD-SOURCE"), 3000)
+        skill = skill_excerpt(_domain_skill(db, run_id, 5000), 5000)
     except Exception:
         skill = ""
     if skill:
-        context = f"{context}\n\nFOLLOW THESE DBT-ONBOARD-SOURCE RULES:\n{skill}"
+        context = f"{context}\n\nFOLLOW THESE GDP-DBT-ONBOARD-SOURCE RULES AND DOMAIN CONTRACT:\n{skill}"
     try:
         return enhance_file(
             lambda sql, params=(): db.query(sql, params),
@@ -2667,6 +2765,7 @@ def _source_tables(db: Db, src: dict) -> list[dict]:
     for t in tables:
         cols = columns.get(t["table_name"], [])
         t["column_count"] = len(cols)
+        t["column_names"] = [c[0] for c in cols]
         t["fingerprint"] = source_fingerprint(cols, t["row_count"], t["last_altered"])
     return tables
 
@@ -2776,6 +2875,7 @@ def source_inventory(source_id: str, db: Db = Depends(current_db)):
             domains[r["object_name"]] = r["domain_name"]
     except Exception:
         pass
+    inferred, _ = _inferred_table_domains(db, tables, domains, src["schema_name"])
     inventory = []
     for t in tables:
         entry = store.get(t["table_name"])
@@ -2784,7 +2884,10 @@ def source_inventory(source_id: str, db: Db = Depends(current_db)):
         inventory.append({
             "table_name": t["table_name"], "table_type": t["table_type"], "row_count": t["row_count"],
             "bytes": t["bytes"], "column_count": t["column_count"], "last_altered": t["last_altered"],
-            "status": status, "domain_name": domains.get(t["table_name"]),
+            "status": status,
+            "domain_name": domains.get(t["table_name"]) or (inferred.get(t["table_name"]) or {}).get("domain_name"),
+            "domain_inferred": t["table_name"] not in domains and t["table_name"] in inferred,
+            "domain_confidence": (inferred.get(t["table_name"]) or {}).get("confidence"),
             "stage_path": entry["profile_stage_path"] if staged else None,
             "profiled_at": entry["profiled_at"] if staged else None,
             "profiled_by": entry.get("profiled_by") if staged else None,
@@ -2970,6 +3073,72 @@ def _registered_source(db: Db, database: str, schema: str) -> Optional[dict]:
     return found[0] if found else None
 
 
+_DOMAIN_VOCAB: dict = {"at": 0.0, "domains": []}
+INFERRED_MIN_CONFIDENCE = 0.3
+INHERITED_MIN_CONFIDENCE = 0.2
+
+
+def _domain_vocab(db: Db) -> list[dict]:
+    """Detection vocabulary per domain (signals, glossary synonyms, target columns), cached for a minute."""
+    from services.knowledge.terms import entity_tokens, token_set
+
+    if time.time() - _DOMAIN_VOCAB["at"] < 60 and _DOMAIN_VOCAB["domains"]:
+        return _DOMAIN_VOCAB["domains"]
+    try:
+        registry = db.query("SELECT DOMAIN_ID, DOMAIN_NAME, CONFIG FROM KNOWLEDGE.DOMAIN_REGISTRY WHERE ACTIVE_FLAG")
+    except Exception:
+        registry = db.query("SELECT DOMAIN_ID, DOMAIN_NAME FROM KNOWLEDGE.DOMAIN_REGISTRY WHERE ACTIVE_FLAG")
+    terms: dict[str, set] = {d["domain_id"]: set() for d in registry}
+    for k in db.query("SELECT DOMAIN_ID, CONTENT_JSON FROM KNOWLEDGE.DOMAIN_KNOWLEDGE WHERE IS_CURRENT "
+                      "AND STATUS = 'ACTIVE' AND KNOWLEDGE_TYPE = 'GLOSSARY'"):
+        content = _json(k.get("content_json")) or {}
+        for word in (content.get("synonyms") or []) + [content.get("target_column") or ""]:
+            terms.setdefault(k["domain_id"], set()).update(token_set(word))
+    for c in db.query("""SELECT T.DOMAIN_ID, C.COLUMN_NAME, T.TARGET_TABLE FROM KNOWLEDGE.TARGET_COLUMN_REGISTRY C
+                           JOIN KNOWLEDGE.TARGET_TABLE_REGISTRY T ON T.TARGET_TABLE_ID = C.TARGET_TABLE_ID
+                          WHERE T.ACTIVE_FLAG"""):
+        terms.setdefault(c["domain_id"], set()).update(token_set(c["column_name"]) | entity_tokens(c["target_table"]))
+    out = [{"domain_id": d["domain_id"], "name": d["domain_name"], "terms": terms.get(d["domain_id"], set()),
+            "signals": (_json(d.get("config")) or {}).get("signals")} for d in registry]
+    _DOMAIN_VOCAB.update(at=time.time(), domains=out)
+    return out
+
+
+def _infer_domains(db: Db, tables: list[str], columns: list[str], schema: Optional[str] = None) -> list[dict]:
+    """Ranked domain candidates for a set of source tables. Only domains with detection signals compete, so the
+    generic GDP pack never claims an unrelated table."""
+    from services.knowledge.domain import infer_domain
+
+    try:
+        vocab = [d for d in _domain_vocab(db) if d.get("signals")]
+    except Exception:
+        return []
+    names = list(tables) + ([schema] if schema else [])
+    return [{"domain_id": r["domain_id"], "domain_name": r["domain_name"], "confidence": r["confidence"],
+             "signals": r["evidence"]["signals"][:6], "matched_terms": r["evidence"]["matched_terms"][:10]}
+            for r in infer_domain(names, columns, vocab)]
+
+
+def _inferred_table_domains(db: Db, tables: list[dict], known: dict[str, str],
+                            schema: Optional[str]) -> tuple[dict[str, dict], list[dict]]:
+    """Per-table inferred domain for tables no run has classified yet, plus the schema-level candidates.
+    A single table carries few signals, so it inherits the schema's lead domain when it hits that domain's signals."""
+    schema_domain = _infer_domains(db, [t["table_name"] for t in tables],
+                                   [c for t in tables for c in t.get("column_names") or []], schema)[:3]
+    lead = schema_domain[0] if schema_domain and schema_domain[0]["confidence"] >= INFERRED_MIN_CONFIDENCE else None
+    inferred: dict[str, dict] = {}
+    for t in tables:
+        if t["table_name"] in known:
+            continue
+        ranked = _infer_domains(db, [t["table_name"]], t.get("column_names") or [])
+        own = next((r for r in ranked if lead and r["domain_id"] == lead["domain_id"]), None)
+        if ranked and ranked[0]["confidence"] >= INFERRED_MIN_CONFIDENCE:
+            inferred[t["table_name"]] = ranked[0]
+        elif own and own["signals"] and own["confidence"] >= INHERITED_MIN_CONFIDENCE:
+            inferred[t["table_name"]] = own
+    return inferred, [d for d in schema_domain if d["confidence"] >= INFERRED_MIN_CONFIDENCE]
+
+
 def _catalog_inventory(db: Db, database: str, schema: str) -> dict:
     src = {"database_name": database, "schema_name": schema}
     try:
@@ -2999,6 +3168,7 @@ def _catalog_inventory(db: Db, database: str, schema: str) -> dict:
     from services.profiling.insights import scorecard
 
     _backfill_quality(db, [e for e in store.values() if e.get("source_fingerprint") and not e.get("quality_json")])
+    inferred, schema_domain = _inferred_table_domains(db, tables, domains, schema)
     inventory = []
     for t in tables:
         entry = store.get(t["table_name"])
@@ -3008,7 +3178,10 @@ def _catalog_inventory(db: Db, database: str, schema: str) -> dict:
         inventory.append({
             "table_name": t["table_name"], "table_type": t["table_type"], "row_count": t["row_count"],
             "bytes": t["bytes"], "column_count": t["column_count"], "last_altered": t["last_altered"],
-            "status": status, "domain_name": domains.get(t["table_name"]),
+            "status": status,
+            "domain_name": domains.get(t["table_name"]) or (inferred.get(t["table_name"]) or {}).get("domain_name"),
+            "domain_inferred": t["table_name"] not in domains and t["table_name"] in inferred,
+            "domain_confidence": (inferred.get(t["table_name"]) or {}).get("confidence"),
             "stage_path": entry["profile_stage_path"] if staged else None,
             "profiled_at": entry["profiled_at"] if staged else None,
             "profiled_by": entry.get("profiled_by") if staged else None,
@@ -3019,7 +3192,8 @@ def _catalog_inventory(db: Db, database: str, schema: str) -> dict:
             "error_message": entry.get("error_message") if entry and status == "FAILED" else None,
             "quality": scorecard(dims, t["last_altered"]) if staged and dims else None,
         })
-    return {"database": database, "schema": schema, "source": registered, "tables": inventory, "jobs": jobs}
+    return {"database": database, "schema": schema, "source": registered, "tables": inventory, "jobs": jobs,
+            "domain_candidates": [d for d in schema_domain if d["confidence"] >= INFERRED_MIN_CONFIDENCE]}
 
 
 def _json(value):
@@ -3222,8 +3396,15 @@ def catalog_analyze(body: CatalogAnalyzeRequest, db: Db = Depends(current_db)):
         for c in src.get("columns") or []:
             c["pk"] = c["pk"] or c["name"] in keys.get(src["object_name"], set())
     graph["profiled"] = True
+    columns = [c["column_name"] for doc in docs.values() for c in doc.get("columns", [])]
+    if not columns:
+        columns = [c for t in tables for c in (meta.get(t) or {}).get("column_names") or []]
+    candidates = _infer_domains(db, tables, columns, schema)[:3]
+    detected = candidates[0] if candidates and candidates[0]["confidence"] >= INFERRED_MIN_CONFIDENCE else None
     return {"tables": summary, "relationships": relationships, "graph": graph,
-            "models": _suggest_for_catalog(db, database, schema, tables)}
+            "domain": {"detected": detected, "candidates": candidates},
+            "models": _suggest_for_catalog(db, database, schema, tables,
+                                           detected["domain_name"] if detected else None)}
 
 
 # ---------------------------------------------------------------- External sources: register, upload, land
