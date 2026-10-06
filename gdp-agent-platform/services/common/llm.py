@@ -27,6 +27,8 @@ def complete_json(session, prompt: str, schema: Dict[str, Any], max_tokens: int 
         [model, prompt, json.dumps({"type": "json", "schema": schema})],
     )
     details = variant(result[0]["R"])
+    if not details or not details.get("structured_output"):
+        raise AssertionError(f"Cortex ({model}) returned no structured answer; try again or rephrase the request")
     output = details["structured_output"][0]["raw_message"]
     if isinstance(output, str):
         output = json.loads(output)

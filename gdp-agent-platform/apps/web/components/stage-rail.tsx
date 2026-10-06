@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { AlertTriangle, CheckCircle2, CircleDot, Eye, Lock, XCircle } from "lucide-react";
+import { AlertTriangle, CheckCircle2, CircleDot, Eye, FlaskConical, Lock, XCircle } from "lucide-react";
 import type { StageStatus, StageStatusValue } from "@/lib/types";
 import { byStage } from "@/lib/stages";
 import { cn } from "@/lib/utils";
@@ -40,6 +40,9 @@ const RING: Record<StageStatusValue, string> = {
 export function StageRail({ runId, stages }: { runId: string; stages: StageStatus[] }) {
   const path = usePathname();
   const overview = path === `/runs/${runId}`;
+  const sttm = stages.find((s) => s.stage === "STTM");
+  const qaOpen = !!sttm && sttm.status !== "LOCKED";
+  const qaHref = `/runs/${runId}/qa`;
   return (
     <nav aria-label="Run stages" className="overflow-x-auto rounded-xl border bg-card px-3 py-2.5 shadow-sm">
       <ol className="flex min-w-max items-center gap-0">
@@ -94,6 +97,26 @@ export function StageRail({ runId, stages }: { runId: string; stages: StageStatu
             </li>
           );
         })}
+        <li className="flex items-center">
+          <span className="mx-1.5 h-5 w-px bg-border" aria-hidden />
+          {qaOpen ? (
+            <Link href={qaHref} prefetch
+                  className={cn("flex items-center gap-2 rounded-md px-1.5 py-1 hover:bg-muted", path === qaHref && "bg-accent text-accent-foreground")}>
+              <span className="flex h-7 w-7 items-center justify-center rounded-full border border-violet-400/40 bg-violet-500/10">
+                <FlaskConical className="h-3.5 w-3.5 text-violet-600" />
+              </span>
+              <span className="leading-tight">
+                <span className="block text-sm font-medium">QA tests</span>
+                <span className="block text-[10px] uppercase tracking-wide text-muted-foreground">from the STTM</span>
+              </span>
+            </Link>
+          ) : (
+            <div className="flex cursor-not-allowed items-center gap-2 px-1.5 py-1 text-muted-foreground" title="Available once an STTM exists">
+              <span className="flex h-7 w-7 items-center justify-center rounded-full border bg-muted/40"><Lock className="h-3.5 w-3.5" /></span>
+              <span className="text-sm font-medium">QA tests</span>
+            </div>
+          )}
+        </li>
       </ol>
     </nav>
   );

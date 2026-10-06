@@ -2009,6 +2009,60 @@ def save_soda(run_id: str, body: SodaDecisions, db: Db = Depends(current_db)):
         raise _snowflake_error(exc) from exc
 
 
+class QaAsk(BaseModel):
+    question: str = Field(min_length=3, max_length=2000)
+
+
+class QaTest(BaseModel):
+    title: str = Field(min_length=1, max_length=500)
+    sql: str = Field(min_length=6, max_length=16000)
+    objective: Optional[str] = Field(default=None, max_length=4000)
+    expected: Optional[str] = Field(default=None, max_length=1000)
+    category: Optional[str] = Field(default="CUSTOM", max_length=32)
+    severity: Optional[str] = Field(default="MEDIUM", max_length=16)
+    target_column: Optional[str] = Field(default=None, max_length=256)
+    prompt: Optional[str] = Field(default=None, max_length=4000)
+
+
+@app.get("/api/runs/{run_id}/qa")
+def qa_suite(run_id: str, db: Db = Depends(current_db)):
+    """Functional QA test SQL for the run's target, derived from the current STTM, plus saved queries."""
+    from services.qa.procedures import qa_suite as handler
+
+    try:
+        return _source_call(db, "CALL CONTRACT.QA_SUITE(%s)", handler, run_id)
+    except Exception as exc:
+        raise _snowflake_error(exc) from exc
+
+
+@app.post("/api/runs/{run_id}/qa/ask")
+def qa_ask(run_id: str, body: QaAsk, db: Db = Depends(current_db)):
+    """Natural language to one guarded, read-only test query (compiled, never executed)."""
+    from services.qa.procedures import qa_ask as handler
+
+    try:
+        return _source_call(db, "CALL CONTRACT.QA_ASK(%s, %s)", handler, run_id, body.question)
+    except Exception as exc:
+        raise _snowflake_error(exc) from exc
+
+
+@app.post("/api/runs/{run_id}/qa/tests")
+def qa_save(run_id: str, body: QaTest, db: Db = Depends(current_db)):
+    from services.qa.procedures import qa_save as handler
+
+    try:
+        return _source_call(db, "CALL CONTRACT.QA_SAVE(%s, %s)", handler, run_id, body.model_dump_json())
+    except Exception as exc:
+        raise _snowflake_error(exc) from exc
+
+
+@app.delete("/api/runs/{run_id}/qa/tests/{test_id}")
+def qa_delete(run_id: str, test_id: str, db: Db = Depends(current_db)):
+    db.execute("UPDATE CONTRACT.QA_TEST_CASE SET IS_DELETED = TRUE WHERE RUN_ID = %s AND TEST_ID = %s",
+               (run_id, test_id))
+    return {"deleted": test_id}
+
+
 @app.post("/api/runs/{run_id}/soda/backtest")
 def backtest_soda(run_id: str, db: Db = Depends(current_db)):
     """Dry-run the current checks on today's source data with the signed-in role."""
