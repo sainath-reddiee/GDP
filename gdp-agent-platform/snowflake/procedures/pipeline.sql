@@ -4,7 +4,7 @@ CREATE OR REPLACE PROCEDURE {{database}}.PROFILE.RUN_PROFILING(RUN_ID VARCHAR)
   RETURNS VARIANT LANGUAGE PYTHON RUNTIME_VERSION = '3.11'
   PACKAGES = ('snowflake-snowpark-python')
   IMPORTS = ('{{services_import}}')
-  HANDLER = 'services.profiling.procedures.run_profiling'
+  HANDLER = 'services.profiling.procedures.run_profiling_basic'
   COMMENT = 'Profile landed tables and enrich descriptions; reuses persistent METADATA.TABLE_PROFILES'
   EXECUTE AS OWNER;
 

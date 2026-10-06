@@ -453,3 +453,8 @@ def refresh_table_profile(session, run_id: str, source_table: str) -> Dict[str, 
         call.summary = f"{source_table}: re-profiled, {len(profiles[table['LANDING_ID']])} columns"
     return {**_table_summary(table, profiles[table["LANDING_ID"]], result), "cache": "REFRESHED",
             "registry_updated": bool(profiled)}
+
+
+def run_profiling_basic(session, run_id: str) -> Dict[str, Any]:
+    """One-argument RUN_PROFILING; Snowflake requires the handler arity to match the signature."""
+    return run_profiling(session, run_id)
