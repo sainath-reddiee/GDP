@@ -6,7 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input, Label, Select, Textarea } from "@/components/ui/input";
 import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
-import { importSoda, saveSodaDecisions } from "../pipeline-actions";
+import { backtestSoda, importSoda, saveSodaDecisions } from "../pipeline-actions";
 import type { SttmLine } from "../sttm/sttm-board";
 
 export type Check = {
@@ -20,7 +20,15 @@ export type Check = {
   client_requirement: string | null;
   status: string;
   sodacl?: string;
+  evidence?: string | null;
+  backtest?: { status: "PASS" | "FAIL" | "NOT_EVALUATED"; observed?: number; percent?: number; detail?: string } | null;
 };
+
+function BacktestBadge({ result }: { result?: Check["backtest"] }) {
+  if (!result) return <span className="text-xs text-muted-foreground">—</span>;
+  if (result.status === "NOT_EVALUATED") return <Badge variant="outline" title={result.detail}>n/a</Badge>;
+  return <Badge variant={result.status === "PASS" ? "success" : "destructive"} title={result.detail}>{result.status.toLowerCase()}</Badge>;
+}
 
 type MassKind = "APPROVED" | "REJECTED";
 
@@ -54,11 +62,12 @@ function proposedOf(checks: Check[], ids: Set<string>) {
 }
 
 export function SodaBoard({
-  runId, checks, yaml, brief, sttmLines = [], canImport, canReview,
+  runId, checks, yaml, gxSuite, brief, sttmLines = [], canImport, canReview,
 }: {
   runId: string;
   checks: Check[];
   yaml: string;
+  gxSuite?: Record<string, unknown> | null;
   brief: { title: string; content: string } | null;
   sttmLines?: SttmLine[];
   canImport: boolean;
@@ -80,10 +89,12 @@ export function SodaBoard({
   const [mass, setMass] = useState<MassKind | null>(null);
   const [massNote, setMassNote] = useState("Checks match the approved STTM and the client quality need.");
   const [showYaml, setShowYaml] = useState(false);
+  const [outputTab, setOutputTab] = useState<"soda" | "gx">("soda");
   const [showCoverage, setShowCoverage] = useState(true);
   const [groupByColumn, setGroupByColumn] = useState(false);
   const [columnFocus, setColumnFocus] = useState("");
   const [pending, start] = useTransition();
+  const [testing, startTest] = useTransition();
   const lastIndex = useRef<number>(-1);
   const headerBox = useRef<HTMLInputElement>(null);
 
@@ -248,15 +259,29 @@ export function SodaBoard({
   const lineFor = (check: Check) =>
     sttmLines.find((l) => l.target_column.toUpperCase() === (check.target_column || "").toUpperCase());
 
-  const downloadYaml = () => {
-    const blob = new Blob([yaml], { type: "text/yaml" });
+  const download = (content: string, name: string, type: string) => {
+    const blob = new Blob([content], { type });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = "data-quality.soda.yml";
+    a.download = name;
     a.click();
     URL.revokeObjectURL(url);
   };
+  const gxText = gxSuite ? JSON.stringify(gxSuite, null, 2) : "";
+  const gxCount = Array.isArray((gxSuite as { expectations?: unknown[] } | null)?.expectations)
+    ? (gxSuite as { expectations: unknown[] }).expectations.length : 0;
+  const tested = checks.filter((c) => c.backtest && c.backtest.status !== "NOT_EVALUATED");
+  const failing = tested.filter((c) => c.backtest?.status === "FAIL");
+
+  const runBacktest = () => startTest(async () => {
+    setError("");
+    setNotice("");
+    const result = await backtestSoda(runId);
+    if (!result.ok) { setError(result.error); return; }
+    const s = result.data.summary;
+    setNotice(`Backtest on today's source data: ${s.PASS} pass · ${s.FAIL} fail · ${s.NOT_EVALUATED} only checkable on the built model`);
+  });
 
   const groups = useMemo(() => {
     const map = new Map<string, Check[]>();
@@ -329,6 +354,12 @@ export function SodaBoard({
           <Badge variant="success">{checks.filter((c) => c.status === "APPROVED").length} approved</Badge>
           <Badge variant="destructive">{checks.filter((c) => c.status === "REJECTED").length} rejected</Badge>
           <Badge variant="outline">{checks.filter((c) => c.severity === "FAIL").length} FAIL severity</Badge>
+          <Badge variant="outline">{checks.filter((c) => c.origin === "PROFILE").length} from the data profile</Badge>
+          {tested.length > 0 && (
+            <Badge variant={failing.length ? "destructive" : "success"}>
+              backtest {tested.length - failing.length}/{tested.length} pass
+            </Badge>
+          )}
           {sttmLines.length > 0 && (
             <Badge variant={coverage.uncovered.length ? "warning" : "success"}>
               {coverage.covered}/{coverage.rows.length} STTM columns covered
@@ -441,6 +472,11 @@ export function SodaBoard({
               <Button type="button" size="sm" variant="ghost" disabled={pending || selected.size === 0} onClick={() => { setSelected(new Set()); setMass(null); }}>
                 Clear selection
               </Button>
+              <Button type="button" size="sm" variant="outline" className="ml-auto" disabled={pending || testing} onClick={runBacktest}
+                      title="Evaluate every check on the current source data before accepting it">
+                {testing && <Loader2 className="h-4 w-4 animate-spin" />}
+                {testing ? "Backtesting…" : "Backtest on source data"}
+              </Button>
             </div>
           )}
         </div>
@@ -499,6 +535,7 @@ export function SodaBoard({
               <TH>Type</TH>
               <TH>Severity</TH>
               <TH>Origin</TH>
+              <TH>Backtest</TH>
               <TH>Status</TH>
             </TR>
           </THead>
@@ -509,7 +546,7 @@ export function SodaBoard({
             ]) : visible.map((c, index) => ({ kind: "row" as const, c, index, col: "" }))).map((item) => (
               item.kind === "head" ? (
                 <TR key={`g-${item.col}`}>
-                  <TD colSpan={7} className="bg-muted/50 text-xs font-semibold">
+                  <TD colSpan={8} className="bg-muted/50 text-xs font-semibold">
                     {item.col} · {item.rows.length} check{item.rows.length === 1 ? "" : "s"}
                   </TD>
                 </TR>
@@ -559,6 +596,7 @@ export function SodaBoard({
                   <Badge variant={item.c.severity === "FAIL" ? "destructive" : "outline"}>{item.c.severity}</Badge>
                 </TD>
                 <TD>{item.c.origin}</TD>
+                <TD><BacktestBadge result={item.c.backtest} /></TD>
                 <TD><Badge variant={badgeForStatus(item.c.status)}>{item.c.status}</Badge></TD>
               </TR>
               )
@@ -590,6 +628,18 @@ export function SodaBoard({
             </div>
           )}
           <p className="text-sm">{current.client_requirement || "Derived from the STTM and SodaCL defaults."}</p>
+          {current.evidence && (
+            <div className="rounded-md border border-primary/20 bg-primary/5 px-3 py-2 text-xs">
+              <span className="font-semibold">Evidence: </span>{current.evidence}
+            </div>
+          )}
+          {current.backtest && (
+            <div className={`rounded-md border px-3 py-2 text-xs ${current.backtest.status === "FAIL" ? "border-destructive/40 bg-destructive/5" : "bg-muted/30"}`}>
+              <span className="font-semibold">Backtest: </span>
+              {current.backtest.status === "NOT_EVALUATED" ? "not evaluable on source data; " : `${current.backtest.status.toLowerCase()}; `}
+              {current.backtest.detail}
+            </div>
+          )}
           <p className="font-mono text-xs text-muted-foreground">
             {current.target_table}{current.target_column ? `.${current.target_column}` : ""}
           </p>
@@ -618,15 +668,34 @@ export function SodaBoard({
       {yaml && (
         <div className="flex flex-wrap items-center gap-2">
           <Button type="button" size="sm" variant="ghost" onClick={() => setShowYaml((v) => !v)}>
-            {showYaml ? "Hide compiled SodaCL" : "Show compiled SodaCL"}
+            {showYaml ? "Hide compiled checks" : "Show compiled checks"}
           </Button>
-          <Button type="button" size="sm" variant="outline" onClick={downloadYaml}>
+          <Button type="button" size="sm" variant="outline" onClick={() => download(yaml, "data-quality.soda.yml", "text/yaml")}>
             Download SodaCL
           </Button>
+          {gxText && (
+            <Button type="button" size="sm" variant="outline"
+                    onClick={() => download(gxText, "data-quality.gx-suite.json", "application/json")}>
+              Download Great Expectations suite
+            </Button>
+          )}
         </div>
       )}
       {yaml && showYaml && (
-        <pre className="overflow-auto rounded-lg border bg-muted/30 p-3 text-xs leading-relaxed">{yaml}</pre>
+        <div className="space-y-2">
+          <div role="tablist" className="flex gap-1">
+            {([["soda", "SodaCL"], ["gx", `Great Expectations (${gxCount})`]] as const).map(([key, label]) => (
+              <button key={key} type="button" role="tab" aria-selected={outputTab === key}
+                      disabled={key === "gx" && !gxText} onClick={() => setOutputTab(key)}
+                      className={`rounded-md px-3 py-1 text-xs font-medium ${outputTab === key ? "bg-primary text-primary-foreground" : "hover:bg-muted"}`}>
+                {label}
+              </button>
+            ))}
+          </div>
+          <pre className="max-h-[520px] overflow-auto rounded-lg border bg-muted/30 p-3 text-xs leading-relaxed">
+            {outputTab === "soda" ? yaml : gxText}
+          </pre>
+        </div>
       )}
     </div>
   );

@@ -122,49 +122,65 @@ def render_yaml(model: str, checks: List[Dict[str, Any]]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _yq(value: Any) -> str:
+    return "'" + str(value).replace("'", "''") + "'"
+
+
 def _yaml_check(c: Dict[str, Any]) -> List[str]:
+    """One SodaCL v3 check. FAIL checks put the threshold on the check line; WARN checks use an alert
+    configuration (`warn: when ...`) because Soda does not allow both on the same check."""
     d = c.get("definition") or {}
     kind = d.get("kind")
     col = c.get("target_column")
     name = (c.get("requirement") or "")[:80]
     warn = str(c.get("severity") or "").upper() == "WARN"
-    body: List[str] = []
+    config: List[str] = []
+    metric, fail_line, warn_when = "", "", ""
     if kind == "row_count":
         if d.get("min") is not None and d.get("max") is not None:
-            body.append(f"  - row_count between {d['min']} and {d['max']}")
+            metric, fail_line = "row_count", f"row_count between {d['min']} and {d['max']}"
+            warn_when = f"not between {d['min']} and {d['max']}"
         else:
-            body.append(f"  - row_count > {d.get('gt', 0)}")
+            metric, fail_line, warn_when = "row_count", f"row_count > {d.get('gt', 0)}", f"<= {d.get('gt', 0)}"
     elif kind == "not_null" and col:
-        body.append(f"  - missing_count({col}) = 0")
+        metric, fail_line, warn_when = f"missing_count({col})", f"missing_count({col}) = 0", "> 0"
         if d.get("missing_values"):
-            values = ", ".join(repr(v) for v in d["missing_values"])
-            body.append(f"      missing values: [{values}]")
+            config.append(f"missing values: [{', '.join(repr(v) for v in d['missing_values'])}]")
+    elif kind == "missing_percent" and col:
+        limit = f"{d.get('max_percent', 0):g}%"
+        metric, fail_line, warn_when = f"missing_percent({col})", f"missing_percent({col}) < {limit}", f"> {limit}"
     elif kind == "unique":
-        cols = d.get("columns") or ([col] if col else [])
-        joined = ", ".join(cols)
-        body.append(f"  - duplicate_count({joined}) = 0")
+        joined = ", ".join(d.get("columns") or ([col] if col else []))
+        metric, fail_line, warn_when = f"duplicate_count({joined})", f"duplicate_count({joined}) = 0", "> 0"
     elif kind == "accepted_values" and col:
-        values = ", ".join(repr(v) for v in d.get("values", []))
-        body.append(f"  - invalid_count({col}) = 0:")
-        body.append(f"      valid values: [{values}]")
+        metric, fail_line, warn_when = f"invalid_count({col})", f"invalid_count({col}) = 0", "> 0"
+        config.append(f"valid values: [{', '.join(repr(v) for v in d.get('values', []))}]")
     elif kind == "regex" and col:
-        body.append(f"  - invalid_count({col}) = 0:")
-        body.append(f"      valid regex: {d.get('pattern')}")
+        if d.get("max_invalid_percent"):
+            limit = f"{d['max_invalid_percent']:g}%"
+            metric, fail_line, warn_when = f"invalid_percent({col})", f"invalid_percent({col}) < {limit}", f"> {limit}"
+        else:
+            metric, fail_line, warn_when = f"invalid_count({col})", f"invalid_count({col}) = 0", "> 0"
+        config.append(f"valid regex: {_yq(d.get('pattern'))}")
     elif kind == "format" and col:
-        body.append(f"  - invalid_count({col}) = 0:")
-        body.append(f"      valid format: {d.get('format')}")
+        metric, fail_line, warn_when = f"invalid_count({col})", f"invalid_count({col}) = 0", "> 0"
+        config.append(f"valid format: {d.get('format')}")
     elif kind == "range" and col:
-        body.append(f"  - invalid_count({col}) = 0:")
+        metric, fail_line, warn_when = f"invalid_count({col})", f"invalid_count({col}) = 0", "> 0"
         if d.get("min") is not None:
-            body.append(f"      valid min: {d['min']}")
+            config.append(f"valid min: {d['min']}")
         if d.get("max") is not None:
-            body.append(f"      valid max: {d['max']}")
+            config.append(f"valid max: {d['max']}")
+    elif kind == "max_length" and col:
+        metric, fail_line, warn_when = f"invalid_count({col})", f"invalid_count({col}) = 0", "> 0"
+        config.append(f"valid max length: {d.get('max')}")
     elif kind == "freshness":
-        body.append(f"  - freshness({col or 'LOADED_AT'}) < {d.get('threshold') or '1d'}")
+        target = col or "LOADED_AT"
+        threshold = d.get("threshold") or "1d"
+        metric, fail_line, warn_when = f"freshness({target})", f"freshness({target}) < {threshold}", f"> {threshold}"
     elif kind == "schema":
+        body = ["  - schema:", "      fail:"]
         required = ", ".join(d.get("required") or [])
-        body.append("  - schema:")
-        body.append("      fail:")
         if required:
             body.append(f"        when required column missing: [{required}]")
         types = d.get("types") or {}
@@ -172,23 +188,25 @@ def _yaml_check(c: Dict[str, Any]) -> List[str]:
             body.append("        when wrong column type:")
             for name_, typ in list(types.items())[:12]:
                 body.append(f"          {name_}: {typ}")
+        if name:
+            body.append(f"      name: {name}")
+        return body
     elif kind == "reference" and col:
         ref_t = d.get("reference_table") or "REF"
         ref_c = d.get("reference_column") or col
-        body.append(f"  - values in ({col}) must exist in {ref_t} ({ref_c})")
+        body = [f"  - values in ({col}) must exist in {ref_t} ({ref_c}):"]
+        if name:
+            body.append(f"      name: {name}")
+        return body
     else:
-        metric = kind or "row_count"
-        ident = f"  - {metric}({col}) = 0" if col else f"  - {metric} > 0"
-        if d.get("threshold"):
-            ident = f"  - {metric}({col}) {d['threshold']}" if col else f"  - {metric} {d['threshold']}"
-        body.append(ident)
+        base = kind or "row_count"
+        metric = f"{base}({col})" if col else base
+        threshold = d.get("threshold") or ("= 0" if col else "> 0")
+        fail_line, warn_when = f"{metric} {threshold}", "> 0"
     if name:
-        last = body[-1]
-        if last.endswith(":"):
-            body.append(f"      name: {name}")
-        else:
-            body[-1] = last + ":"
-            body.append(f"      name: {name}")
-    if warn and kind not in ("freshness", "schema"):
-        body.append("    warn: when > 0")
-    return body
+        config.append(f"name: {name}")
+    if warn:
+        return [f"  - {metric}:"] + [f"      {line}" for line in config] + [f"      warn: when {warn_when}"]
+    if not config:
+        return [f"  - {fail_line}"]
+    return [f"  - {fail_line}:"] + [f"      {line}" for line in config]

@@ -12,8 +12,11 @@ type SodaPayload = {
     expectation_id: string; target_table: string; target_column: string | null; check_type: string;
     check_definition?: Record<string, unknown> | null; severity: string; origin: string;
     client_requirement: string | null; status: string; version: number; sodacl?: string;
+    evidence?: string | null;
+    backtest?: { status: "PASS" | "FAIL" | "NOT_EVALUATED"; observed?: number; percent?: number; detail?: string } | null;
   }[];
   yaml: string;
+  gx_suite?: Record<string, unknown> | null;
   brief: { title: string; content: string } | null;
   status: { total: number; proposed: number; approved: number; rejected: number };
 };
@@ -33,8 +36,9 @@ export default async function SodaPage({ params }: { params: { runId: string } }
         <CardHeader>
           <CardTitle>Data Quality</CardTitle>
           <CardDescription>
-            Checks lineage starts at the approved STTM, then the client brief. Cortex writes official
-            SodaCL. You confirm each check. Approving a check is not the pack gate.
+            Checks come from the approved STTM, the client brief and the data profile of each source column,
+            with the evidence for every threshold. Backtest them on today&apos;s data, confirm each one, then
+            download SodaCL or a Great Expectations suite. Approving a check is not the pack gate.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -62,6 +66,7 @@ export default async function SodaPage({ params }: { params: { runId: string } }
             runId={params.runId}
             checks={soda.checks}
             yaml={soda.yaml}
+            gxSuite={soda.gx_suite}
             brief={soda.brief}
             sttmLines={contract.lines}
             canImport={canImport}

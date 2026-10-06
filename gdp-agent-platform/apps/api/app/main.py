@@ -2009,8 +2009,20 @@ def save_soda(run_id: str, body: SodaDecisions, db: Db = Depends(current_db)):
         raise _snowflake_error(exc) from exc
 
 
+@app.post("/api/runs/{run_id}/soda/backtest")
+def backtest_soda(run_id: str, db: Db = Depends(current_db)):
+    """Dry-run the current checks on today's source data with the signed-in role."""
+    from services.soda.procedures import backtest_soda as backtest_handler
+
+    try:
+        return _source_call(db, "CALL CONTRACT.BACKTEST_SODA(%s)", backtest_handler, run_id)
+    except Exception as exc:
+        raise _snowflake_error(exc) from exc
+
+
 @app.get("/api/runs/{run_id}/soda")
 def get_soda(run_id: str, db: Db = Depends(current_db)):
+    from services.quality.gx import render_suite
     from services.soda.expectations import render_check, render_yaml
     checks = db.query(
         """
@@ -2046,14 +2058,17 @@ def get_soda(run_id: str, db: Db = Depends(current_db)):
             "target_table": c["target_table"], "target_column": c["target_column"],
             "check_type": c["check_type"], "definition": _definition(c.get("check_definition")),
             "severity": c["severity"], "requirement": c.get("client_requirement"),
-            "status": c["status"],
+            "status": c["status"], "origin": c.get("origin"),
         }
         c["sodacl"] = render_check(item)
+        c["evidence"] = item["definition"].get("evidence")
+        c["backtest"] = item["definition"].get("backtest")
         rendered.append(item)
     return {
         "checks": checks,
         "brief": briefs[0] if briefs else None,
         "yaml": render_yaml(str(table).lower(), rendered),
+        "gx_suite": render_suite(str(table), rendered),
         "status": {
             "total": len(checks),
             "proposed": sum(1 for c in checks if c["status"] == "PROPOSED"),

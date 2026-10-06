@@ -83,7 +83,7 @@ def test_soda_from_sttm_includes_grain_and_accepted_values():
     assert "missing_count(CUSTOMER_ID) = 0" in yaml
     assert "duplicate_count(CUSTOMER_ID) = 0" in yaml
     assert "valid format: email" in yaml
-    assert "freshness(LOADED_AT) < 1d" in yaml
+    assert "freshness(LOADED_AT):" in yaml and "warn: when > 1d" in yaml
     assert "when required column missing" in yaml
 
 
