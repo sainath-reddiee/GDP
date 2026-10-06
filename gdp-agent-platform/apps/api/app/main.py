@@ -130,10 +130,13 @@ class RegisterSource(BaseModel):
     schema_name: str = Field(min_length=1, max_length=255, alias="schema")
     owner: Optional[str] = None
     security_classification: Optional[str] = None
+    landing_database: Optional[str] = Field(default=None, max_length=255)
+    landing_schema: Optional[str] = Field(default=None, max_length=255)
+    storage_type: Optional[str] = Field(default=None, pattern=r"^(MANAGED|ICEBERG)$")
 
 
 class AccessRequest(BaseModel):
-    selected: list[str] = Field(min_length=1, max_length=50)
+    selected: list[str] = Field(min_length=1, max_length=500)
 
 
 class MappingDecisions(BaseModel):
@@ -232,8 +235,11 @@ def _snowflake_error(exc: Exception) -> HTTPException:
     elif "unexpected 'null'" in lower or 'unexpected "null"' in lower:
         message = "Snowflake rejected a null argument. Choose a git repository or origin URL and generate again."
     status = 400
-    if any(k in message for k in ("TRANSITION_REJECTED", "CONCURRENT_UPDATE", "SOURCE_NAME_CONFLICT")):
+    if any(k in message for k in ("TRANSITION_REJECTED", "CONCURRENT_UPDATE", "SOURCE_NAME_CONFLICT",
+                                  "archived or deleted")):
         status = 409
+    elif "LANDING_TARGET_INVALID" in message:
+        status = 422
     elif "BUSINESS_JUSTIFICATION is required" in message or "SOURCE_NOT_ACCESSIBLE" in message:
         status = 422
         if "SOURCE_NOT_ACCESSIBLE" in message:
@@ -286,20 +292,132 @@ def auth_set_role(body: RolePick, db: Db = Depends(current_db)):
     return {"role": db.role}
 
 
+def _intent_table_counts(db: Db) -> dict[str, int]:
+    try:
+        found = db.query(
+            """
+            SELECT CONFIG_KEY, ARRAY_SIZE(CONFIG_VALUE:source:tables) AS N
+              FROM CORE.PLATFORM_CONFIG
+             WHERE IS_CURRENT AND CONFIG_KEY LIKE 'onboarding.intent.%'
+            """
+        )
+    except Exception:
+        return {}
+    return {r["config_key"].rsplit(".", 1)[-1]: int(r["n"] or 0) for r in found}
+
+
 @app.get("/api/runs")
-def list_runs(include_test: bool = False, db: Db = Depends(current_db)):
-    rows = db.query(
-        """
-        SELECT RUN_ID, RUN_NAME, CURRENT_STATE, CURRENT_STAGE, STATUS, TARGET_MODEL,
-               CREATED_BY, CREATED_AT::VARCHAR AS CREATED_AT
-          FROM CORE.WORKFLOW_RUN
-         WHERE ENVIRONMENT <> 'TEST' OR %s
-         ORDER BY CREATED_AT DESC
-         LIMIT 100
-        """,
-        (include_test,),
-    )
-    return {"runs": rows}
+def list_runs(include_test: bool = False, status: str = "all", limit: int = 200, db: Db = Depends(current_db)):
+    from services.workflow.state_machine import lifecycle_filter_sql, lifecycle_status
+
+    try:
+        predicate = lifecycle_filter_sql(status)
+    except AssertionError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    limit = max(1, min(int(limit), 500))
+    try:
+        rows = db.query(
+            f"""
+            SELECT R.RUN_ID, R.RUN_NAME, R.CURRENT_STATE, R.CURRENT_STAGE, R.STATUS, R.TARGET_MODEL,
+                   R.CREATED_BY, R.CREATED_AT::VARCHAR AS CREATED_AT, R.UPDATED_AT::VARCHAR AS UPDATED_AT,
+                   COALESCE(R.IS_ARCHIVED, FALSE) AS IS_ARCHIVED, R.SOURCE_DATABASE, R.SOURCE_SCHEMA,
+                   S.SOURCE_SYSTEM_NAME, D.DOMAIN_NAME,
+                   DATEDIFF('minute', R.CREATED_AT, CURRENT_TIMESTAMP()) AS AGE_MINUTES,
+                   (SELECT COUNT(*) FROM SOURCE.SOURCE_OBJECT O WHERE O.RUN_ID = R.RUN_ID AND O.SELECTED_FLAG)
+                     AS SELECTED_TABLES,
+                   (SELECT COUNT(DISTINCT L.SOURCE_TABLE) FROM SOURCE.LANDING_TABLE_REGISTRY L
+                     WHERE L.RUN_ID = R.RUN_ID AND L.INGESTION_STATUS = 'COMPLETE') AS LANDED_TABLES
+              FROM CORE.WORKFLOW_RUN R
+              LEFT JOIN SOURCE.SOURCE_REGISTRY S ON S.SOURCE_SYSTEM_ID = R.SOURCE_SYSTEM_ID
+              LEFT JOIN KNOWLEDGE.DOMAIN_REGISTRY D ON D.DOMAIN_ID = R.DOMAIN_ID
+             WHERE R.DELETED_AT IS NULL AND (R.ENVIRONMENT <> 'TEST' OR %s) AND {predicate}
+             ORDER BY R.CREATED_AT DESC
+             LIMIT %s
+            """,
+            (include_test, limit),
+        )
+    except Exception:
+        # Before V006 is applied there are no lifecycle columns: show the plain list instead of failing.
+        if status.lower() == "archived":
+            return {"runs": [], "status": "archived"}
+        rows = db.query(
+            """
+            SELECT RUN_ID, RUN_NAME, CURRENT_STATE, CURRENT_STAGE, STATUS, TARGET_MODEL,
+                   CREATED_BY, CREATED_AT::VARCHAR AS CREATED_AT, FALSE AS IS_ARCHIVED
+              FROM CORE.WORKFLOW_RUN
+             WHERE ENVIRONMENT <> 'TEST' OR %s
+             ORDER BY CREATED_AT DESC
+             LIMIT %s
+            """,
+            (include_test, limit),
+        )
+    intent_counts = _intent_table_counts(db)
+    for r in rows:
+        r["lifecycle"] = lifecycle_status(r["current_state"], bool(r.get("is_archived")))
+        r["table_count"] = (r.get("selected_tables") or r.get("landed_tables")
+                            or intent_counts.get(r["run_id"]) or 0)
+    return {"runs": rows, "status": status.lower()}
+
+
+class RunIds(BaseModel):
+    run_ids: list[str] = Field(min_length=1, max_length=200)
+
+
+class BatchArchive(RunIds):
+    archived: bool = True
+
+
+class BatchCleanup(RunIds):
+    drop_landing_tables: bool = False
+    delete_workspaces: bool = False
+    delete_runs: bool = True
+
+
+def _set_archived(db: Db, run_ids: list[str], archived: bool) -> dict:
+    try:
+        result = db.call("CALL CORE.SET_RUN_ARCHIVED(%s, %s)", (json.dumps(run_ids), archived))
+    except Exception as exc:
+        raise _snowflake_error(exc) from exc
+    for run_id in run_ids:
+        _drop_run(run_id)
+    return result
+
+
+@app.post("/api/runs/batch-archive")
+def batch_archive(body: BatchArchive, db: Db = Depends(current_db)):
+    return _set_archived(db, body.run_ids, body.archived)
+
+
+@app.post("/api/runs/batch-cleanup")
+def batch_cleanup(body: BatchCleanup, db: Db = Depends(current_db)):
+    """Soft-delete runs (audit stays) and purge their sandbox. Staged table profiles are never removed."""
+    from services.workflow.cleanup import cleanup_pipeline_runs
+
+    try:
+        result = _source_call(
+            db,
+            "CALL CORE.SP_CLEANUP_PIPELINE_RUNS(PARSE_JSON(%s)::ARRAY, %s, %s, %s)",
+            cleanup_pipeline_runs,
+            json.dumps(body.run_ids),
+            body.drop_landing_tables,
+            body.delete_workspaces,
+            body.delete_runs,
+        )
+    except Exception as exc:
+        raise _snowflake_error(exc) from exc
+    for run_id in body.run_ids:
+        _drop_run(run_id)
+    return result
+
+
+@app.post("/api/runs/{run_id}/archive")
+def archive_run(run_id: str, db: Db = Depends(current_db)):
+    return _set_archived(db, [run_id], True)
+
+
+@app.post("/api/runs/{run_id}/restore")
+def restore_run(run_id: str, db: Db = Depends(current_db)):
+    return _set_archived(db, [run_id], False)
 
 
 _POST_STTM = {
@@ -403,7 +521,36 @@ def create_run(body: CreateRun, db: Db = Depends(current_db)):
             _save_intent(db, run_id, body.intent)
         except Exception:
             pass
+        created = _register_from_intent(db, run_id, body.intent, created)
     return created
+
+
+def _register_from_intent(db: Db, run_id: str, intent: dict, created: dict) -> dict:
+    """The wizard already chose the connection and target, so register now instead of asking again on the
+    Source stage. A failure (grants, name conflict) leaves the run in CREATED with manual registration."""
+    from services.source.procedures import register_source as register_source_handler
+
+    source = intent.get("source") or {}
+    target = intent.get("target") or {}
+    if not (source.get("database") and source.get("schema") and source.get("source_system_name")):
+        return created
+    payload = {
+        "SOURCE_SYSTEM_NAME": source.get("source_system_name"),
+        "SOURCE_TYPE": source.get("source_type") or "SNOWFLAKE_DATABASE",
+        "DATABASE": source.get("database"),
+        "SCHEMA": source.get("schema"),
+        "DOMAIN_ID": intent.get("domain_id"),
+        "LANDING_DATABASE": target.get("landing_database"),
+        "LANDING_SCHEMA": target.get("landing_schema"),
+        "STORAGE_TYPE": target.get("storage_type"),
+    }
+    try:
+        registered = _source_call(db, "CALL SOURCE.REGISTER_SOURCE(%s, %s)", register_source_handler, run_id,
+                                  json.dumps({k: v for k, v in payload.items() if v}))
+    except Exception as exc:
+        return {**created, "registration_error": _snowflake_error(exc).detail}
+    _drop_run(run_id)
+    return {**created, **(registered.get("state") or {}), "source_system_id": registered.get("source_system_id")}
 
 
 @app.get("/api/runs/{run_id}")
@@ -413,17 +560,20 @@ def get_run(run_id: str, db: Db = Depends(current_db)):
             state = db.call("CALL CORE.GET_WORKFLOW_STATE(%s)", (run_id,))
         except Exception as exc:
             raise _snowflake_error(exc) from exc
-        state["run"] = db.query(
-            """
+        base = """
             SELECT R.RUN_NAME, R.TARGET_MODEL, R.SOURCE_SYSTEM_ID, R.SOURCE_DATABASE, R.SOURCE_SCHEMA,
                    R.ENVIRONMENT, R.CREATED_BY, R.CREATED_AT::VARCHAR AS CREATED_AT,
-                   R.DOMAIN_ID, D.DOMAIN_NAME
+                   R.DOMAIN_ID, D.DOMAIN_NAME{extra}
               FROM CORE.WORKFLOW_RUN R
               LEFT JOIN KNOWLEDGE.DOMAIN_REGISTRY D ON D.DOMAIN_ID = R.DOMAIN_ID
              WHERE R.RUN_ID = %s
-            """,
-            (run_id,),
-        )[0]
+            """
+        try:
+            state["run"] = db.query(base.format(extra=", R.LANDING_DATABASE, R.LANDING_SCHEMA, R.STORAGE_TYPE, "
+                                                      "R.ARCHIVED_AT::VARCHAR AS ARCHIVED_AT, R.ARCHIVED_BY"),
+                                    (run_id,))[0]
+        except Exception:
+            state["run"] = db.query(base.format(extra=""), (run_id,))[0]
         return _unlock_parallel_tracks(state)
 
     return _cached_run(run_id, load)
@@ -634,6 +784,99 @@ def source_databases(db: Db = Depends(current_db)):
         """,
         (DATABASE,),
     )}
+
+
+@app.get("/api/sources")
+def source_connections(db: Db = Depends(current_db)):
+    """Registered source connections; registering once lets every later run reuse the same connection."""
+    return {"sources": db.query(
+        """
+        SELECT S.SOURCE_SYSTEM_ID, S.SOURCE_SYSTEM_NAME, S.SOURCE_TYPE, S.OWNER, S.SECURITY_CLASSIFICATION,
+               S.CONFIGURATION_JSON:database::VARCHAR AS DATABASE_NAME,
+               S.CONFIGURATION_JSON:schema::VARCHAR AS SCHEMA_NAME,
+               S.CREATED_AT::VARCHAR AS CREATED_AT,
+               (SELECT COUNT(*) FROM CORE.WORKFLOW_RUN R WHERE R.SOURCE_SYSTEM_ID = S.SOURCE_SYSTEM_ID) AS RUNS,
+               (SELECT MAX(R.CREATED_AT)::VARCHAR FROM CORE.WORKFLOW_RUN R
+                 WHERE R.SOURCE_SYSTEM_ID = S.SOURCE_SYSTEM_ID) AS LAST_RUN_AT
+          FROM SOURCE.SOURCE_REGISTRY S
+         WHERE S.ACTIVE_FLAG
+         ORDER BY LAST_RUN_AT DESC NULLS LAST, S.SOURCE_SYSTEM_NAME
+        """
+    )}
+
+
+@app.get("/api/sources/{connection_id}/catalog")
+def source_catalog(connection_id: str, database: str = "", schema: str = "", db: Db = Depends(current_db)):
+    """Inspect a registered connection (objects, row counts, columns) without creating or touching a run."""
+    from services.source.procedures import fetch_schema_catalog
+
+    try:
+        return _source_call(db, "CALL SOURCE.FETCH_SCHEMA_CATALOG(%s, %s, %s)", fetch_schema_catalog,
+                            connection_id, database or None, schema or None)
+    except Exception as exc:
+        raise _snowflake_error(exc) from exc
+
+
+@app.get("/api/landing/targets")
+def landing_targets(db: Db = Depends(current_db)):
+    """Where runs can land: schemas of the platform database, and whether Iceberg landing is configured."""
+    schemas = db.query(
+        f"""
+        SELECT SCHEMA_NAME FROM {DATABASE}.INFORMATION_SCHEMA.SCHEMATA
+         WHERE SCHEMA_NAME NOT IN ('INFORMATION_SCHEMA', 'CORE', 'SOURCE', 'PROFILE', 'KNOWLEDGE', 'MAPPING',
+                                   'CONTRACT', 'CODEGEN', 'AUDIT', 'METADATA')
+         ORDER BY SCHEMA_NAME
+        """
+    )
+    volume = db.query(
+        "SELECT CONFIG_VALUE FROM CORE.PLATFORM_CONFIG WHERE CONFIG_KEY = 'LANDING_EXTERNAL_VOLUME' AND IS_CURRENT"
+    )
+    return {
+        "default": {"landing_database": DATABASE, "landing_schema": "LANDING", "storage_type": "MANAGED"},
+        "database": DATABASE,
+        "schemas": [s["schema_name"] for s in schemas],
+        "iceberg_available": bool(volume),
+    }
+
+
+@app.get("/api/profiles")
+def cached_profiles(database: str, schema: str, db: Db = Depends(current_db)):
+    """Persistent table profiles for a source schema, for 'Profiled (cached)' badges before any run lands."""
+    try:
+        found = db.query(
+            """
+            SELECT SOURCE_NAME, DATABASE_NAME, SCHEMA_NAME, TABLE_NAME, ROW_COUNT, COLUMN_COUNT, IS_APPROXIMATE,
+                   PROFILED_IN_RUN, PROFILED_BY, PROFILED_AT::VARCHAR AS PROFILED_AT
+              FROM METADATA.TABLE_PROFILES
+             WHERE DATABASE_NAME = %s AND SCHEMA_NAME = %s
+             ORDER BY TABLE_NAME
+            """,
+            (_ident(database, "database"), _ident(schema, "schema")),
+        )
+    except HTTPException:
+        raise
+    except Exception:
+        found = []
+    return {"profiles": found}
+
+
+class LandingTarget(BaseModel):
+    landing_database: Optional[str] = Field(default=None, max_length=255)
+    landing_schema: str = Field(min_length=1, max_length=255)
+    storage_type: str = Field(default="MANAGED", pattern=r"^(MANAGED|ICEBERG)$")
+
+
+@app.put("/api/runs/{run_id}/target")
+def set_landing_target(run_id: str, body: LandingTarget, db: Db = Depends(current_db)):
+    from services.source.procedures import set_landing_target as set_landing_target_handler
+
+    payload = json.dumps({"landing_database": body.landing_database or DATABASE,
+                          "landing_schema": body.landing_schema, "storage_type": body.storage_type})
+    try:
+        return _source_call(db, "CALL SOURCE.SET_LANDING_TARGET(%s, %s)", set_landing_target_handler,
+                            run_id, payload)
+    except Exception as exc:
+        raise _snowflake_error(exc) from exc
 
 
 @app.get("/api/catalog/schemas")
@@ -1014,6 +1257,9 @@ def register_source(run_id: str, body: RegisterSource, db: Db = Depends(current_
         "SCHEMA": body.schema_name,
         "OWNER": body.owner,
         "SECURITY_CLASSIFICATION": body.security_classification,
+        "LANDING_DATABASE": body.landing_database,
+        "LANDING_SCHEMA": body.landing_schema,
+        "STORAGE_TYPE": body.storage_type,
     }
     payload_json = json.dumps({k: v for k, v in payload.items() if v})
     try:
@@ -1225,27 +1471,110 @@ def workflow_graph(db: Db = Depends(current_db)):
     return {"states": states, "transitions": transitions}
 
 
+class ProfileOptions(BaseModel):
+    force_refresh: bool = False
+    refresh_tables: list[str] = Field(default_factory=list, max_length=500)
+    concurrency_limit: int = Field(default=5, ge=1, le=16)
+
+
+class ProfileRefresh(BaseModel):
+    table: str = Field(min_length=1, max_length=255)
+
+
 @app.post("/api/runs/{run_id}/profile")
-def run_profiling(run_id: str, db: Db = Depends(current_db)):
+def run_profiling(run_id: str, body: Optional[ProfileOptions] = None, db: Db = Depends(current_db)):
     try:
-        return db.call("CALL PROFILE.RUN_PROFILING(%s)", (run_id,))
+        if body is None:
+            return db.call("CALL PROFILE.RUN_PROFILING(%s)", (run_id,))
+        return db.call("CALL PROFILE.RUN_PROFILING(%s, %s)", (run_id, body.model_dump_json()))
     except Exception as exc:
         raise _snowflake_error(exc) from exc
 
 
+@app.post("/api/runs/{run_id}/profile/refresh")
+def refresh_table_profile(run_id: str, body: ProfileRefresh, db: Db = Depends(current_db)):
+    """Bust the persistent profile of one table and re-profile it; no workflow transition."""
+    try:
+        return db.call("CALL PROFILE.REFRESH_TABLE_PROFILE(%s, %s)", (run_id, body.table))
+    except Exception as exc:
+        raise _snowflake_error(exc) from exc
+
+
+def _profile_cache_status(db: Db, run_id: str) -> list[dict]:
+    """Cache status per table of the run: landed tables first, else the tables planned in the intent."""
+    try:
+        landed = db.query(
+            """
+            SELECT L.SOURCE_TABLE AS TABLE_NAME, P.PROFILED_AT::VARCHAR AS PROFILED_AT, P.ROW_COUNT,
+                   P.COLUMN_COUNT, P.IS_APPROXIMATE, P.PROFILE_STAGE_PATH, P.PROFILED_IN_RUN
+              FROM SOURCE.LANDING_TABLE_REGISTRY L
+              LEFT JOIN SOURCE.SOURCE_REGISTRY S ON S.SOURCE_SYSTEM_ID = L.SOURCE_SYSTEM_ID
+              LEFT JOIN METADATA.TABLE_PROFILES P
+                     ON P.SOURCE_NAME = S.SOURCE_SYSTEM_NAME AND P.DATABASE_NAME = L.SOURCE_DATABASE
+                    AND P.SCHEMA_NAME = L.SOURCE_SCHEMA AND P.TABLE_NAME = L.SOURCE_TABLE
+             WHERE L.RUN_ID = %s AND L.INGESTION_STATUS = 'COMPLETE'
+           QUALIFY ROW_NUMBER() OVER (PARTITION BY L.SOURCE_TABLE ORDER BY L.CREATED_AT DESC) = 1
+             ORDER BY L.SOURCE_TABLE
+            """,
+            (run_id,),
+        )
+    except Exception:
+        return []
+    return [{**r, "status": "CACHED" if r.get("profile_stage_path") else "UNPROFILED"} for r in landed]
+
+
+def _cached_profile_columns(db: Db, tables: list[dict]) -> list[dict]:
+    """Columns from staged profile documents, shaped like PROFILE_REGISTRY rows (older or purged runs)."""
+    from services.profiling.profiler import STAGE_PATH
+
+    out: list[dict] = []
+    for t in tables:
+        path = t.get("profile_stage_path") or ""
+        if not STAGE_PATH.match(path):
+            continue
+        try:
+            found = db.query(f"SELECT $1 AS DOC FROM @METADATA.PROFILES_STAGE/{path} "
+                             "(FILE_FORMAT => 'METADATA.PROFILE_JSON_FORMAT')")
+        except Exception:
+            continue
+        doc = found[0]["doc"] if found else None
+        doc = json.loads(doc) if isinstance(doc, str) else doc
+        for c in (doc or {}).get("columns", []):
+            s = c.get("statistics") or {}
+            out.append({
+                "profile_id": f"cache:{t['table_name']}:{c.get('column_name')}",
+                "table_name": t["table_name"], "column_name": c.get("column_name"), "data_type": c.get("data_type"),
+                "semantic_type": c.get("semantic_type"), "pii_classification": c.get("pii_classification") or "NONE",
+                "row_count": s.get("row_count"), "null_percentage": s.get("null_percentage"),
+                "distinct_percentage": s.get("distinct_percentage"), "cardinality": c.get("cardinality"),
+                "potential_key_flag": bool(c.get("potential_key")), "potential_foreign_key_flag": False,
+                "generated_description": c.get("description"), "profile_status": "CACHED",
+                "values": (s.get("enum_values")
+                           or [f.get("value") for f in s.get("frequency_distribution") or []])[:8],
+            })
+    return out
+
+
 @app.get("/api/runs/{run_id}/profile")
 def get_profile(run_id: str, db: Db = Depends(current_db)):
-    return {"columns": db.query(
+    columns = db.query(
         """
         SELECT PROFILE_ID, TABLE_NAME, COLUMN_NAME, DATA_TYPE, SEMANTIC_TYPE, PII_CLASSIFICATION,
                ROW_COUNT, NULL_PERCENTAGE, DISTINCT_PERCENTAGE, CARDINALITY, POTENTIAL_KEY_FLAG,
-               POTENTIAL_FOREIGN_KEY_FLAG, GENERATED_DESCRIPTION, PROFILE_STATUS
+               POTENTIAL_FOREIGN_KEY_FLAG, GENERATED_DESCRIPTION, PROFILE_STATUS,
+               STATISTICS_JSON:cache::VARCHAR AS CACHE
           FROM PROFILE.PROFILE_REGISTRY
          WHERE RUN_ID = %s AND IS_CURRENT
          ORDER BY TABLE_NAME, COLUMN_NAME
         """,
         (run_id,),
-    )}
+    )
+    tables = _profile_cache_status(db, run_id)
+    source = "registry"
+    if not columns and any(t["status"] == "CACHED" for t in tables):
+        columns = _cached_profile_columns(db, tables)
+        source = "cache" if columns else source
+    return {"columns": columns, "tables": tables, "source": source}
 
 
 @app.post("/api/runs/{run_id}/domain")
@@ -1346,6 +1675,36 @@ def _mapping_profile(db: Db, run_id: str) -> dict[str, dict]:
             "null_percentage": p["null_percentage"], "distinct_percentage": p["distinct_percentage"],
             "cardinality": p["cardinality"], "description": p["generated_description"],
             "pii": p["pii_classification"], "values": values,
+        }
+    return out or _mapping_profile_from_cache(db, run_id)
+
+
+def _mapping_profile_from_cache(db: Db, run_id: str) -> dict[str, dict]:
+    """Runs without PROFILE_REGISTRY rows still give the copilot statistics, from the persistent profiles."""
+    tables = [t for t in _profile_cache_status(db, run_id) if t["status"] == "CACHED"]
+    if not tables:
+        return {}
+    cached = {(c["table_name"], c["column_name"]): c for c in _cached_profile_columns(db, tables)}
+    out = {}
+    for col in db.query(
+        """
+        SELECT C.LANDING_COLUMN_ID, T.SOURCE_TABLE, C.COLUMN_NAME
+          FROM SOURCE.LANDING_COLUMN_REGISTRY C
+          JOIN SOURCE.LANDING_TABLE_REGISTRY T ON T.LANDING_ID = C.LANDING_ID
+         WHERE T.RUN_ID = %s AND T.INGESTION_STATUS = 'COMPLETE'
+        """,
+        (run_id,),
+    ):
+        c = cached.get((col["source_table"], col["column_name"]))
+        if not c:
+            continue
+        values = None if c["pii_classification"] != "NONE" else c.get("values")
+        out[col["landing_column_id"]] = {
+            "source_column_id": col["landing_column_id"], "source_table": col["source_table"],
+            "column_name": c["column_name"], "data_type": c["data_type"], "semantic_type": c["semantic_type"],
+            "null_percentage": c["null_percentage"], "distinct_percentage": c["distinct_percentage"],
+            "cardinality": c["cardinality"], "description": c["generated_description"],
+            "pii": c["pii_classification"], "values": values,
         }
     return out
 

@@ -2,10 +2,13 @@ import pytest
 
 from services.source.adapters import (
     FAILED,
+    MAX_SELECTED,
     PASSED,
     WARNING,
     SnowflakeDatabaseAdapter,
     SnowflakeShareAdapter,
+    SourceSpec,
+    TargetSpec,
     adapter_for,
     checks_passed,
 )
@@ -109,8 +112,57 @@ def test_failures_are_reported_with_the_failing_check(fake, selected, failed_che
 
 
 def test_selected_limit():
-    checks = SnowflakeDatabaseAdapter("DEMO", "CRM").validate_access(FakeSnowflake(), [f"T{i}" for i in range(51)])
+    selected = [f"T{i}" for i in range(MAX_SELECTED + 1)]
+    checks = SnowflakeDatabaseAdapter("DEMO", "CRM").validate_access(FakeSnowflake(), selected)
     assert checks[-1].status == FAILED and "at most" in checks[-1].remediation
+
+
+def test_fetch_schema_catalog_returns_columns_per_object():
+    class WithColumns(FakeSnowflake):
+        def __call__(self, sql, params):
+            if "INFORMATION_SCHEMA.COLUMNS" in sql:
+                return [
+                    {"TABLE_NAME": "CRM_CUSTOMER", "COLUMN_NAME": "CUST_ID", "DATA_TYPE": "NUMBER",
+                     "ORDINAL_POSITION": 1, "IS_NULLABLE": "NO", "COMMENT": None},
+                    {"TABLE_NAME": "CRM_CUSTOMER", "COLUMN_NAME": "CUSTOMER_NM", "DATA_TYPE": "TEXT",
+                     "ORDINAL_POSITION": 2, "IS_NULLABLE": "YES", "COMMENT": "name"},
+                ]
+            return super().__call__(sql, params)
+
+    catalog = SnowflakeDatabaseAdapter("demo", "crm").fetch_schema_catalog(WithColumns())
+    by_name = {o["name"]: o for o in catalog}
+    assert by_name["CRM_CUSTOMER"]["row_count"] == 500
+    assert [c["column_name"] for c in by_name["CRM_CUSTOMER"]["columns"]] == ["CUST_ID", "CUSTOMER_NM"]
+    assert by_name["CRM_CUSTOMER"]["columns"][1]["nullable"] is True
+    assert by_name["V_ACTIVE"]["column_count"] == 0
+
+
+def test_source_spec_normalizes_and_limits():
+    spec = SourceSpec.parse({"connection_id": "c1", "database": "demo", "schema": "crm",
+                             "tables": ["B", "A", "A"]})
+    assert (spec.database, spec.schema, spec.tables) == ("DEMO", "CRM", ("A", "B"))
+    with pytest.raises(AssertionError):
+        SourceSpec.parse({"database": "D", "schema": "S", "tables": [f"T{i}" for i in range(MAX_SELECTED + 1)]})
+
+
+def test_target_spec_defaults_and_ddl():
+    spec = TargetSpec.parse(None, "AI_PLATFORM")
+    assert spec.as_dict() == {"landing_database": "AI_PLATFORM", "landing_schema": "LANDING",
+                              "storage_type": "MANAGED"}
+    sql = spec.create_sql("CRM__CUST", 'SELECT * FROM "DEMO"."CRM"."CUST"', "landing by run 'x'")
+    assert sql.startswith('CREATE OR REPLACE TABLE "AI_PLATFORM"."LANDING"."CRM__CUST"')
+    assert "'landing by run ''x'''" in sql
+
+
+def test_target_spec_iceberg_needs_external_volume():
+    with pytest.raises(AssertionError, match="external volume"):
+        TargetSpec.parse({"storage_type": "ICEBERG"}, "AI_PLATFORM")
+    with pytest.raises(AssertionError):
+        TargetSpec.parse({"storage_type": "PARQUET"}, "AI_PLATFORM")
+    spec = TargetSpec.parse({"landing_schema": "bronze", "storage_type": "iceberg"}, "AI_PLATFORM", "LAKE_VOL")
+    sql = spec.create_sql("CRM__CUST", "SELECT 1", "c")
+    assert "CREATE OR REPLACE ICEBERG TABLE \"AI_PLATFORM\".\"BRONZE\".\"CRM__CUST\"" in sql
+    assert "EXTERNAL_VOLUME = 'LAKE_VOL'" in sql and "CATALOG = 'SNOWFLAKE'" in sql
 
 
 def test_adapter_for_rejects_unknown_type():

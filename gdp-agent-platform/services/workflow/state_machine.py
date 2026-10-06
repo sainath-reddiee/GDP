@@ -9,6 +9,7 @@ from services.workflow.graph import (
     CANCELLED_STATE,
     FAILED_STATE,
     GUARD_RETRY,
+    INITIAL_STATE,
     WorkflowGraph,
 )
 
@@ -21,11 +22,42 @@ RUN_STATUS_BY_KIND = {
     "FAILED": "FAILED",
 }
 
+LIFECYCLE_STATUSES = ("DRAFT", "RUNNING", "COMPLETED", "FAILED", "ARCHIVED")
+
+# Predicates over CORE.WORKFLOW_RUN for the run list filters. Constant SQL, never user input.
+LIFECYCLE_FILTERS = {
+    "all": "NOT COALESCE(IS_ARCHIVED, FALSE)",
+    "active": "NOT COALESCE(IS_ARCHIVED, FALSE) AND CURRENT_STATE NOT IN ('COMPLETED', 'FAILED', 'CANCELLED')",
+    "completed": "NOT COALESCE(IS_ARCHIVED, FALSE) AND CURRENT_STATE = 'COMPLETED'",
+    "failed": "NOT COALESCE(IS_ARCHIVED, FALSE) AND CURRENT_STATE IN ('FAILED', 'CANCELLED')",
+    "archived": "COALESCE(IS_ARCHIVED, FALSE)",
+}
+
+
+def lifecycle_status(current_state: str, is_archived: bool = False) -> str:
+    """Coarse lifecycle for run management; the workflow STATUS column keeps its own meaning."""
+    if is_archived:
+        return "ARCHIVED"
+    if current_state == INITIAL_STATE:
+        return "DRAFT"
+    if current_state == "COMPLETED":
+        return "COMPLETED"
+    if current_state in (FAILED_STATE, CANCELLED_STATE):
+        return "FAILED"
+    return "RUNNING"
+
+
+def lifecycle_filter_sql(name: Optional[str]) -> str:
+    key = (name or "all").lower()
+    assert key in LIFECYCLE_FILTERS, f"status filter must be one of {sorted(LIFECYCLE_FILTERS)}"
+    return LIFECYCLE_FILTERS[key]
+
 
 @dataclass(frozen=True)
 class RunContext:
     current_state: str
     failed_from_state: Optional[str] = None
+    archived: bool = False
 
 
 @dataclass(frozen=True)
@@ -49,6 +81,8 @@ def evaluate(graph: WorkflowGraph, run: RunContext, to_state: str, actor: str) -
     """Decide whether `actor` ('SYSTEM' or 'HUMAN') may move the run to `to_state`."""
     assert actor in ("SYSTEM", "HUMAN"), f"actor must be SYSTEM or HUMAN, got {actor}"
 
+    if run.archived:
+        return Decision(False, "run is archived or deleted; restore it before continuing")
     if run.current_state not in graph.states:
         return Decision(False, f"current state {run.current_state} is unknown")
     if to_state not in graph.states:

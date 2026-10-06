@@ -8,9 +8,10 @@ catalog access, registration, validation, and landing reads.
 
 from __future__ import annotations
 
+import re
 from abc import ABC, abstractmethod
-from dataclasses import asdict, dataclass
-from typing import Callable, Dict, List, Optional, Sequence
+from dataclasses import asdict, dataclass, field
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from services.source.identifiers import fqn, normalize, quote
 
@@ -19,7 +20,66 @@ Runner = Callable[[str, list], List[Dict]]
 PASSED, FAILED, WARNING = "PASSED", "FAILED", "WARNING"
 OBJECT_TYPES = {"BASE TABLE": "TABLE", "VIEW": "VIEW", "MATERIALIZED VIEW": "MATERIALIZED_VIEW"}
 MAX_OBJECTS = 1000
-MAX_SELECTED = 50
+MAX_SELECTED = 500
+STORAGE_TYPES = ("MANAGED", "ICEBERG")
+DEFAULT_LANDING_SCHEMA = "LANDING"
+VOLUME_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_$]*$")
+
+
+@dataclass(frozen=True)
+class SourceSpec:
+    """What to read: a registered connection (SOURCE_REGISTRY id) and the objects selected in it."""
+
+    connection_id: Optional[str]
+    database: str
+    schema: str
+    tables: Tuple[str, ...] = ()
+
+    @classmethod
+    def parse(cls, raw: Dict[str, Any]) -> "SourceSpec":
+        tables = raw.get("tables") or []
+        assert isinstance(tables, (list, tuple)) and all(isinstance(t, str) for t in tables), \
+            "source_spec.tables must be a list of object names"
+        assert len(tables) <= MAX_SELECTED, f"select at most {MAX_SELECTED} objects per run"
+        return cls(raw.get("connection_id") or None, normalize(raw.get("database") or ""),
+                   normalize(raw.get("schema") or ""), tuple(sorted(set(tables))))
+
+
+@dataclass(frozen=True)
+class TargetSpec:
+    """Where to land: decoupled from the source so one connection can feed several landing zones."""
+
+    landing_database: str
+    landing_schema: str = DEFAULT_LANDING_SCHEMA
+    storage_type: str = "MANAGED"
+    external_volume: Optional[str] = field(default=None, compare=False)
+
+    @classmethod
+    def parse(cls, raw: Optional[Dict[str, Any]], default_database: str,
+              external_volume: Optional[str] = None) -> "TargetSpec":
+        raw = raw or {}
+        storage = str(raw.get("storage_type") or "MANAGED").upper()
+        assert storage in STORAGE_TYPES, f"storage_type must be one of {STORAGE_TYPES}"
+        spec = cls(normalize(raw.get("landing_database") or default_database),
+                   normalize(raw.get("landing_schema") or DEFAULT_LANDING_SCHEMA), storage, external_volume)
+        if storage == "ICEBERG":
+            assert external_volume and VOLUME_NAME.match(external_volume), (
+                "ICEBERG landing needs an external volume: set PLATFORM_CONFIG LANDING_EXTERNAL_VOLUME")
+        return spec
+
+    def as_dict(self) -> Dict[str, str]:
+        return {"landing_database": self.landing_database, "landing_schema": self.landing_schema,
+                "storage_type": self.storage_type}
+
+    def create_sql(self, table: str, select_sql: str, comment: str) -> str:
+        target = fqn(self.landing_database, self.landing_schema, table)
+        safe_comment = comment.replace("\\", "\\\\").replace("'", "''")
+        if self.storage_type == "ICEBERG":
+            location = f"{self.landing_schema}/{table}".lower()
+            return (f"CREATE OR REPLACE ICEBERG TABLE {target} EXTERNAL_VOLUME = '{self.external_volume}' "
+                    f"CATALOG = 'SNOWFLAKE' BASE_LOCATION = '{location}' "
+                    f"COMMENT = '{safe_comment}' AS {select_sql}")
+        return f"CREATE OR REPLACE TABLE {target} COMMENT = '{safe_comment}' AS {select_sql}"
 
 
 @dataclass(frozen=True)
@@ -94,6 +154,18 @@ class SourceAdapter(ABC):
                              r["ROW_COUNT"], r["BYTES"], r["LAST_ALTERED"])
             for r in rows
         ]
+
+    def fetch_schema_catalog(self, run: Runner) -> List[Dict[str, Any]]:
+        """Inspection only: every object with its row count and column metadata, in two queries."""
+        columns: Dict[str, List[Dict[str, Any]]] = {}
+        for c in run(self.columns_sql(), [self.schema]):
+            columns.setdefault(c["TABLE_NAME"], []).append({
+                "column_name": c["COLUMN_NAME"], "data_type": c["DATA_TYPE"],
+                "ordinal_position": c["ORDINAL_POSITION"], "nullable": c["IS_NULLABLE"] == "YES",
+                "comment": c.get("COMMENT"),
+            })
+        return [{**asdict(o), "column_count": len(columns.get(o.name, [])), "columns": columns.get(o.name, [])}
+                for o in self.discover_objects(run)]
 
     def validate_access(self, run: Runner, selected: Sequence[str]) -> List[AccessCheck]:
         """Ordered checks; stops at the first failure that makes later checks meaningless."""
