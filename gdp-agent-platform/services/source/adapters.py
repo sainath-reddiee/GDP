@@ -21,7 +21,7 @@ PASSED, FAILED, WARNING = "PASSED", "FAILED", "WARNING"
 OBJECT_TYPES = {"BASE TABLE": "TABLE", "VIEW": "VIEW", "MATERIALIZED VIEW": "MATERIALIZED_VIEW"}
 MAX_OBJECTS = 1000
 MAX_SELECTED = 500
-STORAGE_TYPES = ("MANAGED", "ICEBERG")
+STORAGE_TYPES = ("IN_PLACE", "MANAGED", "ICEBERG")
 DEFAULT_LANDING_SCHEMA = "LANDING"
 VOLUME_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_$]*$")
 
@@ -71,7 +71,13 @@ class TargetSpec:
         return {"landing_database": self.landing_database, "landing_schema": self.landing_schema,
                 "storage_type": self.storage_type}
 
+    @property
+    def copies(self) -> bool:
+        """IN_PLACE reads the source table directly; nothing is copied or created."""
+        return self.storage_type != "IN_PLACE"
+
     def create_sql(self, table: str, select_sql: str, comment: str) -> str:
+        assert self.copies, "IN_PLACE targets never create tables"
         target = fqn(self.landing_database, self.landing_schema, table)
         safe_comment = comment.replace("\\", "\\\\").replace("'", "''")
         if self.storage_type == "ICEBERG":

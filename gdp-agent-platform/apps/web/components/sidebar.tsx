@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { BookOpen, Boxes, FileClock, LayoutDashboard, ListChecks, PlusCircle, Settings, Sparkles } from "lucide-react";
+import { BookOpen, Boxes, Database, FileClock, LayoutDashboard, ListChecks, PlusCircle, Settings, Sparkles } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { logout } from "@/app/login/actions";
 import { RoleSelector } from "@/components/role-selector";
@@ -12,6 +12,7 @@ const groups = [
     label: "Work",
     links: [
       { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
+      { href: "/sources", label: "Sources", icon: Database },
       { href: "/onboarding", label: "New onboarding", icon: PlusCircle },
       { href: "/runs", label: "Runs", icon: ListChecks },
     ],

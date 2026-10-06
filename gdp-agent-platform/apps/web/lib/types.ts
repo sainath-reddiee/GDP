@@ -26,7 +26,7 @@ export type Lifecycle = "DRAFT" | "RUNNING" | "COMPLETED" | "FAILED" | "ARCHIVED
 
 export type RunStatusFilter = "all" | "active" | "completed" | "failed" | "archived";
 
-export type StorageType = "MANAGED" | "ICEBERG";
+export type StorageType = "IN_PLACE" | "MANAGED" | "ICEBERG";
 
 export type RunState = {
   run_id: string;
@@ -176,4 +176,53 @@ export type AuditEvent = {
   actor: string;
   reason: string | null;
   created_at: string;
+};
+
+export type ProfileStatus = "UNPROFILED" | "PROFILING" | "STAGED_READY_FOR_MODELING" | "STALE" | "FAILED";
+
+export type SourceOverviewItem = SourceConnection & {
+  health: "HEALTHY" | "UNREACHABLE"; health_detail: string; table_count: number | null;
+  staged_tables: number; profiling_tables: number; failed_tables: number;
+  last_profiled_at: string | null; active_jobs: number;
+};
+
+export type SourcesOverview = {
+  sources: SourceOverviewItem[];
+  totals: { sources: number; tables: number; staged: number; profiling: number };
+};
+
+export type InventoryTable = {
+  table_name: string; table_type: string; row_count: number | null; bytes: number | null; column_count: number;
+  last_altered: string | null; status: ProfileStatus; domain_name: string | null; stage_path: string | null;
+  profiled_at: string | null; profiled_by: string | null; avg_null_percentage: number | null;
+  key_candidates: number | null; pii_columns: number | null; is_approximate: boolean | null; error_message: string | null;
+};
+
+export type SourceInventory = {
+  source: { source_system_id: string; source_system_name: string; source_type: string; database_name: string; schema_name: string };
+  tables: InventoryTable[];
+  jobs: { job_id: string; tables: string[]; started_at: number }[];
+};
+
+export type ProfileColumn = {
+  column_name: string; data_type: string; family: string; cardinality: string | null; semantic_type: string;
+  pii_classification: string; potential_key: boolean; description?: string | null;
+  patterns: { pattern: string; count: number }[];
+  sample_values: { value: string | null; count: number }[];
+  statistics: {
+    row_count: number; null_count: number; null_percentage: number; distinct_count: number | null;
+    distinct_percentage?: number; min?: string | null; max?: string | null; min_length?: number; max_length?: number;
+    avg_length?: number; average?: number; enum_values?: string[] | null; date_format?: string | null;
+    frequency_distribution?: { value: string | null; count: number }[];
+    histogram?: { lower: number; upper: number; count: number }[];
+  };
+};
+
+export type TableProfileDoc = {
+  entry: { profile_stage_path: string; profiled_at: string; profiled_by: string | null; is_approximate: boolean | null };
+  profile: {
+    profiler_version: string; row_count: number; column_count: number; approximate: boolean;
+    model_version: string | null; profiled_at: string; columns: ProfileColumn[];
+    source: { source_name: string; database: string; schema: string; table: string };
+  };
 };

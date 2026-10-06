@@ -7,6 +7,7 @@ import re
 import sys
 import threading
 import time
+import uuid
 from pathlib import Path
 from typing import Optional
 
@@ -132,7 +133,7 @@ class RegisterSource(BaseModel):
     security_classification: Optional[str] = None
     landing_database: Optional[str] = Field(default=None, max_length=255)
     landing_schema: Optional[str] = Field(default=None, max_length=255)
-    storage_type: Optional[str] = Field(default=None, pattern=r"^(MANAGED|ICEBERG)$")
+    storage_type: Optional[str] = Field(default=None, pattern=r"^(IN_PLACE|MANAGED|ICEBERG)$")
 
 
 class AccessRequest(BaseModel):
@@ -863,7 +864,7 @@ def cached_profiles(database: str, schema: str, db: Db = Depends(current_db)):
 class LandingTarget(BaseModel):
     landing_database: Optional[str] = Field(default=None, max_length=255)
     landing_schema: str = Field(min_length=1, max_length=255)
-    storage_type: str = Field(default="MANAGED", pattern=r"^(MANAGED|ICEBERG)$")
+    storage_type: str = Field(default="MANAGED", pattern=r"^(IN_PLACE|MANAGED|ICEBERG)$")
 
 
 @app.put("/api/runs/{run_id}/target")
@@ -1483,6 +1484,7 @@ class ProfileRefresh(BaseModel):
 
 @app.post("/api/runs/{run_id}/profile")
 def run_profiling(run_id: str, body: Optional[ProfileOptions] = None, db: Db = Depends(current_db)):
+    _prewarm_run_profiles(db, run_id, bool(body and body.force_refresh))
     try:
         if body is None:
             return db.call("CALL PROFILE.RUN_PROFILING(%s)", (run_id,))
@@ -2550,3 +2552,330 @@ def search_knowledge(body: KnowledgeQuery, db: Db = Depends(current_db)):
 @app.post("/api/agent/stream")
 def agent_stream(body: AgentMessage, db: Db = Depends(current_db)):
     return StreamingResponse(stream_agent(db, body.run_id, body.message), media_type="text/event-stream")
+
+
+# ---------------------------------------------------------------- Sources hub: in-place profiling and profile store
+
+_jobs_lock = threading.Lock()
+_profile_jobs: dict[str, dict] = {}
+
+
+def _profile_source(db: Db, source_id: str, tables: list[str], force: bool) -> dict:
+    from services.profiling.procedures import profile_source_tables as profile_source_handler
+
+    payload = json.dumps({"tables": tables, "force_refresh": force})
+    return _source_call(db, "CALL SOURCE.PROFILE_SOURCE_TABLES(%s, %s)", profile_source_handler, source_id, payload)
+
+
+def _prewarm_run_profiles(db: Db, run_id: str, force: bool = False) -> None:
+    """Profile the run's tables in place with the caller's role first, so RUN_PROFILING binds cached
+    profiles instead of reading data under the procedure owner. Best effort: on failure the procedure profiles."""
+    try:
+        run = db.query("SELECT SOURCE_SYSTEM_ID FROM CORE.WORKFLOW_RUN WHERE RUN_ID = %s", (run_id,))
+        tables = [r["source_table"] for r in db.query(
+            "SELECT DISTINCT SOURCE_TABLE FROM SOURCE.LANDING_TABLE_REGISTRY WHERE RUN_ID = %s "
+            "AND INGESTION_STATUS = 'COMPLETE'", (run_id,))]
+        if run and run[0]["source_system_id"] and tables:
+            _profile_source(db, run[0]["source_system_id"], tables, force)
+    except Exception:
+        pass
+
+
+def _source_row(db: Db, source_id: str) -> dict:
+    found = db.query(
+        """
+        SELECT SOURCE_SYSTEM_ID, SOURCE_SYSTEM_NAME, SOURCE_TYPE, OWNER, DOMAIN_ID,
+               CONFIGURATION_JSON:database::VARCHAR AS DATABASE_NAME, CONFIGURATION_JSON:schema::VARCHAR AS SCHEMA_NAME,
+               CREATED_AT::VARCHAR AS CREATED_AT
+          FROM SOURCE.SOURCE_REGISTRY WHERE SOURCE_SYSTEM_ID = %s AND ACTIVE_FLAG
+        """,
+        (source_id,),
+    )
+    if not found:
+        raise HTTPException(404, "source not found")
+    return found[0]
+
+
+def _quote_ident(name: str) -> str:
+    return '"' + str(name).replace('"', '""') + '"'
+
+
+def _source_tables(db: Db, src: dict) -> list[dict]:
+    """Objects of the source schema with the fingerprint the profiler uses to decide freshness."""
+    from services.profiling.profiler import source_fingerprint
+    from services.source.identifiers import format_data_type
+
+    database = _quote_ident(src["database_name"])
+    tables = db.query(
+        f"""
+        SELECT TABLE_NAME, TABLE_TYPE, ROW_COUNT, BYTES, LAST_ALTERED::VARCHAR AS LAST_ALTERED
+          FROM {database}.INFORMATION_SCHEMA.TABLES
+         WHERE TABLE_SCHEMA = %s AND TABLE_TYPE IN ('BASE TABLE', 'VIEW', 'MATERIALIZED VIEW')
+         ORDER BY TABLE_NAME LIMIT 1000
+        """,
+        (src["schema_name"],),
+    )
+    columns: dict[str, list[tuple[str, str]]] = {}
+    for c in db.query(
+        f"""
+        SELECT TABLE_NAME, COLUMN_NAME, DATA_TYPE, CHARACTER_MAXIMUM_LENGTH, NUMERIC_PRECISION, NUMERIC_SCALE
+          FROM {database}.INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = %s
+         ORDER BY TABLE_NAME, ORDINAL_POSITION
+        """,
+        (src["schema_name"],),
+    ):
+        columns.setdefault(c["table_name"], []).append((c["column_name"], format_data_type(
+            c["data_type"], c["character_maximum_length"], c["numeric_precision"], c["numeric_scale"])))
+    for t in tables:
+        cols = columns.get(t["table_name"], [])
+        t["column_count"] = len(cols)
+        t["fingerprint"] = source_fingerprint(cols, t["row_count"], t["last_altered"])
+    return tables
+
+
+def _store_rows(db: Db, source_names: Optional[list[str]] = None) -> list[dict]:
+    where, params = ("", ())
+    if source_names:
+        where, params = ("WHERE ARRAY_CONTAINS(SOURCE_NAME::VARIANT, PARSE_JSON(%s)::ARRAY)", (json.dumps(source_names),))
+    try:
+        return db.query(
+            f"""
+            SELECT SOURCE_NAME, DATABASE_NAME, SCHEMA_NAME, TABLE_NAME, ROW_COUNT, COLUMN_COUNT, PROFILE_STAGE_PATH,
+                   SOURCE_FINGERPRINT, IS_APPROXIMATE, PROFILED_IN_RUN, PROFILED_BY, PROFILED_AT::VARCHAR AS PROFILED_AT,
+                   STATUS, STATUS_UPDATED_AT::VARCHAR AS STATUS_UPDATED_AT, ERROR_MESSAGE, AVG_NULL_PERCENTAGE,
+                   KEY_CANDIDATES, PII_COLUMNS
+              FROM METADATA.TABLE_PROFILES {where}
+            """,
+            params,
+        )
+    except Exception:
+        return []
+
+
+def _table_status(entry: Optional[dict], fingerprint: str) -> str:
+    if not entry:
+        return "UNPROFILED"
+    status = entry.get("status") or "STAGED_READY_FOR_MODELING"
+    if status in ("PROFILING", "FAILED"):
+        return status
+    if not entry.get("source_fingerprint"):
+        return "UNPROFILED"
+    return "STAGED_READY_FOR_MODELING" if entry["source_fingerprint"] == fingerprint else "STALE"
+
+
+def _active_jobs(source_id: Optional[str] = None) -> list[dict]:
+    with _jobs_lock:
+        return [dict(j) for j in _profile_jobs.values()
+                if j["status"] == "RUNNING" and (source_id is None or j["source_id"] == source_id)]
+
+
+@app.get("/api/sources/overview")
+def sources_overview(db: Db = Depends(current_db)):
+    """Every registered source with health, inventory size and profile-store coverage."""
+    sources = source_connections(db)["sources"]
+    by_source: dict[str, list[dict]] = {}
+    for row in _store_rows(db):
+        by_source.setdefault(row["source_name"], []).append(row)
+    out = []
+    for s in sources:
+        health, detail, table_count = "HEALTHY", "", None
+        try:
+            table_count = db.query(
+                f"SELECT COUNT(*) AS N FROM {_quote_ident(s['database_name'])}.INFORMATION_SCHEMA.TABLES "
+                "WHERE TABLE_SCHEMA = %s AND TABLE_TYPE IN ('BASE TABLE', 'VIEW', 'MATERIALIZED VIEW')",
+                (s["schema_name"],),
+            )[0]["n"]
+        except Exception as exc:
+            health, detail = "UNREACHABLE", str(_snowflake_error(exc).detail)[:300]
+        rows = [r for r in by_source.get(s["source_system_name"], [])
+                if r["database_name"] == s["database_name"] and r["schema_name"] == s["schema_name"]]
+        staged = [r for r in rows if (r.get("status") or "STAGED_READY_FOR_MODELING") == "STAGED_READY_FOR_MODELING"
+                  and r.get("source_fingerprint")]
+        out.append({
+            **s, "health": health, "health_detail": detail, "table_count": table_count,
+            "staged_tables": len(staged), "profiling_tables": sum(r.get("status") == "PROFILING" for r in rows),
+            "failed_tables": sum(r.get("status") == "FAILED" for r in rows),
+            "last_profiled_at": max((r["profiled_at"] for r in staged), default=None),
+            "active_jobs": len(_active_jobs(s["source_system_id"])),
+        })
+    return {
+        "sources": out,
+        "totals": {
+            "sources": len(out),
+            "tables": sum(s["table_count"] or 0 for s in out),
+            "staged": sum(s["staged_tables"] for s in out),
+            "profiling": sum(s["profiling_tables"] for s in out),
+        },
+    }
+
+
+@app.get("/api/sources/{source_id}/inventory")
+def source_inventory(source_id: str, db: Db = Depends(current_db)):
+    """Tables of one source with profile status: UNPROFILED, PROFILING, STAGED_READY_FOR_MODELING,
+    STALE (the source changed since it was profiled) or FAILED."""
+    src = _source_row(db, source_id)
+    try:
+        tables = _source_tables(db, src)
+    except Exception as exc:
+        raise _snowflake_error(exc) from exc
+    store = {r["table_name"]: r for r in _store_rows(db, [src["source_system_name"]])
+             if r["database_name"] == src["database_name"] and r["schema_name"] == src["schema_name"]}
+    domains: dict[str, str] = {}
+    try:
+        for r in db.query(
+            """
+            SELECT O.OBJECT_NAME, D.DOMAIN_NAME
+              FROM SOURCE.SOURCE_OBJECT O
+              JOIN CORE.WORKFLOW_RUN R ON R.RUN_ID = O.RUN_ID
+              JOIN KNOWLEDGE.DOMAIN_REGISTRY D ON D.DOMAIN_ID = R.DOMAIN_ID
+             WHERE O.SOURCE_SYSTEM_ID = %s AND O.SELECTED_FLAG
+           QUALIFY ROW_NUMBER() OVER (PARTITION BY O.OBJECT_NAME ORDER BY O.DISCOVERED_AT DESC) = 1
+            """,
+            (source_id,),
+        ):
+            domains[r["object_name"]] = r["domain_name"]
+    except Exception:
+        pass
+    inventory = []
+    for t in tables:
+        entry = store.get(t["table_name"])
+        status = _table_status(entry, t["fingerprint"])
+        staged = bool(entry and entry.get("source_fingerprint"))
+        inventory.append({
+            "table_name": t["table_name"], "table_type": t["table_type"], "row_count": t["row_count"],
+            "bytes": t["bytes"], "column_count": t["column_count"], "last_altered": t["last_altered"],
+            "status": status, "domain_name": domains.get(t["table_name"]),
+            "stage_path": entry["profile_stage_path"] if staged else None,
+            "profiled_at": entry["profiled_at"] if staged else None,
+            "profiled_by": entry.get("profiled_by") if staged else None,
+            "avg_null_percentage": entry.get("avg_null_percentage") if staged else None,
+            "key_candidates": entry.get("key_candidates") if staged else None,
+            "pii_columns": entry.get("pii_columns") if staged else None,
+            "is_approximate": entry.get("is_approximate") if staged else None,
+            "error_message": entry.get("error_message") if entry and status == "FAILED" else None,
+        })
+    return {"source": src, "tables": inventory, "jobs": _active_jobs(source_id)}
+
+
+@app.get("/api/sources/{source_id}/profiles/{table}")
+def source_table_profile(source_id: str, table: str, db: Db = Depends(current_db)):
+    """The staged profile document of one table, read from @METADATA.PROFILES_STAGE."""
+    from services.profiling.profiler import STAGE_PATH
+
+    src = _source_row(db, source_id)
+    entry = next((r for r in _store_rows(db, [src["source_system_name"]])
+                  if r["table_name"] == table and r["database_name"] == src["database_name"]
+                  and r["schema_name"] == src["schema_name"]), None)
+    if not entry or not entry.get("source_fingerprint") or not STAGE_PATH.match(entry["profile_stage_path"] or ""):
+        raise HTTPException(404, f"{table} has no staged profile yet")
+    found = db.query(f"SELECT $1 AS DOC FROM @METADATA.PROFILES_STAGE/{entry['profile_stage_path']} "
+                     "(FILE_FORMAT => 'METADATA.PROFILE_JSON_FORMAT')")
+    if not found:
+        raise HTTPException(404, f"the staged file for {table} is missing; re-profile it")
+    doc = found[0]["doc"]
+    return {"entry": entry, "profile": json.loads(doc) if isinstance(doc, str) else doc}
+
+
+class SourceProfileRequest(BaseModel):
+    tables: list[str] = Field(min_length=1, max_length=500)
+    force_refresh: bool = False
+    wait: bool = False
+
+
+@app.post("/api/sources/{source_id}/profile-tables")
+def profile_source_tables(source_id: str, body: SourceProfileRequest, db: Db = Depends(current_db)):
+    """Profile exactly the given tables in place (no copy). Runs in the background unless `wait` is set."""
+    _source_row(db, source_id)
+    tables = sorted(set(body.tables))
+    if body.wait:
+        try:
+            return {"status": "DONE", "result": _profile_source(db, source_id, tables, body.force_refresh)}
+        except Exception as exc:
+            raise _snowflake_error(exc) from exc
+    busy = {t for j in _active_jobs(source_id) for t in j["tables"]} & set(tables)
+    if busy:
+        raise HTTPException(409, f"already profiling: {', '.join(sorted(busy)[:5])}")
+    job = {"job_id": str(uuid.uuid4()), "source_id": source_id, "tables": tables, "force_refresh": body.force_refresh,
+           "status": "RUNNING", "started_at": time.time(), "finished_at": None, "result": None, "error": None}
+
+    def work() -> None:
+        try:
+            job.update(status="DONE", result=_profile_source(db, source_id, tables, body.force_refresh))
+        except Exception as exc:
+            job.update(status="FAILED", error=str(_snowflake_error(exc).detail))
+        job["finished_at"] = time.time()
+
+    with _jobs_lock:
+        _profile_jobs[job["job_id"]] = job
+    threading.Thread(target=work, name=f"profile-{job['job_id'][:8]}", daemon=True).start()
+    return {"status": "QUEUED", "job_id": job["job_id"], "tables": tables}
+
+
+@app.get("/api/profile-jobs/{job_id}")
+def profile_job(job_id: str, db: Db = Depends(current_db)):
+    with _jobs_lock:
+        job = _profile_jobs.get(job_id)
+        if not job:
+            raise HTTPException(404, "job not found")
+        return dict(job)
+
+
+class SourceConnectionCreate(BaseModel):
+    source_system_name: Optional[str] = Field(default=None, max_length=64)
+    source_type: str = Field(default="SNOWFLAKE_DATABASE", pattern=r"^(SNOWFLAKE_DATABASE|SNOWFLAKE_SHARE)$")
+    database: str = Field(min_length=1, max_length=255)
+    schema_name: str = Field(min_length=1, max_length=255, alias="schema")
+    domain_id: Optional[str] = None
+
+
+@app.post("/api/sources")
+def create_source_connection(body: SourceConnectionCreate, db: Db = Depends(current_db)):
+    from services.source.procedures import register_connection
+
+    name = body.source_system_name or re.sub(r"[^A-Za-z0-9_]", "_", body.schema_name).strip("_") or "SOURCE"
+    if not re.match(r"^[A-Za-z]", name):
+        name = f"SRC_{name}"
+    payload = json.dumps({k: v for k, v in {
+        "SOURCE_SYSTEM_NAME": name[:64], "SOURCE_TYPE": body.source_type, "DATABASE": body.database,
+        "SCHEMA": body.schema_name, "DOMAIN_ID": body.domain_id}.items() if v})
+    try:
+        return _source_call(db, "CALL SOURCE.REGISTER_CONNECTION(%s)", register_connection, payload)
+    except Exception as exc:
+        raise _snowflake_error(exc) from exc
+
+
+class ModelingRunRequest(BaseModel):
+    tables: list[str] = Field(min_length=1, max_length=500)
+    run_name: Optional[str] = Field(default=None, max_length=256)
+    domain_id: Optional[str] = None
+
+
+@app.post("/api/sources/{source_id}/modeling-run")
+def send_to_modeling(source_id: str, body: ModelingRunRequest, db: Db = Depends(current_db)):
+    """Create a run from staged tables: register, validate access and bind the tables in place (no copy),
+    then bind their cached profiles. The run opens at mapping without re-profiling or re-ingesting."""
+    src = _source_row(db, source_id)
+    tables = sorted(set(body.tables))
+    run_name = body.run_name or f"{src['source_system_name']} modeling {time.strftime('%Y-%m-%d %H:%M')}"
+    intent = {
+        "path": "profile_suggest", "run_name": run_name, "model_existing": False, "targets": [],
+        "created_at": time.strftime("%Y-%m-%dT%H:%M:%S"), "domain_id": body.domain_id,
+        "source": {"origin": "snowflake", "connection_id": source_id, "database": src["database_name"],
+                   "schema": src["schema_name"], "source_system_name": src["source_system_name"],
+                   "source_type": src["source_type"], "tables": tables},
+        "target": {"storage_type": "IN_PLACE"},
+    }
+    created = create_run(CreateRun(run_name=run_name, domain_id=body.domain_id, intent=intent), db)
+    run_id = created.get("run_id")
+    if created.get("registration_error"):
+        return {"run_id": run_id, "stage": "SOURCE", "error": created["registration_error"]}
+    prepared = prepare_source(run_id, AccessRequest(selected=tables), db)
+    if not prepared.get("passed"):
+        return {"run_id": run_id, "stage": "SOURCE", "error": "access check failed; open the run to see which table"}
+    try:
+        profiled = run_profiling(run_id, None, db)
+    except HTTPException as exc:
+        return {"run_id": run_id, "stage": "PROFILING", "error": exc.detail}
+    summary = (profiled or {}).get("profiled") or {}
+    return {"run_id": run_id, "stage": "MAPPING", "cache_hits": summary.get("cache_hits"),
+            "computed": summary.get("computed"), "state": (profiled or {}).get("state")}

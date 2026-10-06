@@ -268,6 +268,7 @@ export function OnboardingForm({
         ? { domain_name: newDomain.domain_name.trim(), description: newDomain.description.trim() || undefined }
         : null,
       targets: chosen,
+      target: { storage_type: "IN_PLACE" },
       model_existing: path === "map_existing",
       created_at: new Date().toISOString(),
     };

@@ -95,3 +95,11 @@ def test_workspace_cleanup_never_raises():
 
     out = run_workspace_cleanup(failing, str(uuid.uuid4()))
     assert out["files_removed"] == 0 and len(out["errors"]) == 2
+
+
+def test_in_place_landing_rows_are_never_dropped():
+    owned = [{**_landing("r1", "CUSTOMER", schema="CRM"), "INGESTION_METHOD": "IN_PLACE"},
+             {**_landing("r1", "CRM__ORDER"), "INGESTION_METHOD": "CTAS"}]
+    drops, kept = plan_landing_drops(owned, [])
+    assert drops == [("AI", "LANDING", "CRM__ORDER")]
+    assert kept == [{"table": "AI.CRM.CUSTOMER", "reason": "read in place: this is the source table"}]

@@ -92,6 +92,7 @@ export function SourceStudio({
   const [editingTarget, setEditingTarget] = useState(false);
   const [landingSchema, setLandingSchema] = useState(target.landing_schema);
   const [storageType, setStorageType] = useState<StorageType>(target.storage_type);
+  const inPlace = storageType === "IN_PLACE";
   const targetDirty = landingSchema !== target.landing_schema || storageType !== target.storage_type;
   const landingSchemas = Array.from(new Set([target.landing_schema, ...(landingTargets?.schemas ?? [])]));
 
@@ -119,7 +120,8 @@ export function SourceStudio({
 
   const cachedCount = tables.filter((t) => cached.has(t)).length;
   const actionLabel = profiled ? "" : landed ? `Profile ${tables.length} tables`
-    : failed ? "Retry from the failed step" : `Validate, land & profile ${tables.length} tables`;
+    : failed ? "Retry from the failed step"
+      : inPlace ? `Validate & profile ${tables.length} tables` : `Validate, copy & profile ${tables.length} tables`;
 
   const run = () => start(async () => {
     setError("");
@@ -170,16 +172,16 @@ export function SourceStudio({
         <CardHeader>
           <CardTitle>Run the source plan</CardTitle>
           <CardDescription>
-            One action checks access, copies each table as-is into the landing schema with row-count
-            reconciliation, then profiles it. Profiles are saved to the shared profile store, so any later run
-            reuses them.
+            One action checks access and profiles every table where it lives. Nothing is copied unless you
+            choose a copy mode. Profiles are saved to the shared profile store, so any later run reuses them.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-5">
           <ol className="grid gap-3 md:grid-cols-3">
             {([
-              ["land", ShieldCheck, "Validate & land", landed
-                ? `${landedBy.size} landed in ${target.landing_schema}` : `Into ${target.landing_database}.${landingSchema}`],
+              ["land", ShieldCheck, inPlace ? "Validate access" : "Validate & copy", landed
+                ? (inPlace ? `${landedBy.size} tables bound in place` : `${landedBy.size} copied into ${target.landing_schema}`)
+                : inPlace ? "Read-only check; nothing is copied" : `Into ${target.landing_database}.${landingSchema}`],
               ["profile", Sparkles, "Profile & store", profiled
                 ? "Saved to the profile store" : cachedCount ? `${cachedCount} of ${tables.length} reused from cache` : "Statistics, PII, keys, descriptions"],
               ["model", Layers, "Model", profiled ? "Ready for mapping" : "Unlocks after profiling"],
@@ -205,17 +207,27 @@ export function SourceStudio({
           </ol>
 
           <div className="flex flex-wrap items-center gap-2 rounded-lg bg-muted/40 px-3 py-2 text-sm">
-            <span className="text-muted-foreground">Lands in</span>
-            <span className="font-mono text-xs">{target.landing_database}.{landingSchema}</span>
-            <Badge variant="outline">{storageType === "ICEBERG" ? "Iceberg" : "Managed"}</Badge>
+            {inPlace ? (
+              <>
+                <span className="text-muted-foreground">Reads tables in place from</span>
+                <span className="font-mono text-xs">{database}.{schema}</span>
+                <Badge variant="success">No copy</Badge>
+              </>
+            ) : (
+              <>
+                <span className="text-muted-foreground">Copies into</span>
+                <span className="font-mono text-xs">{target.landing_database}.{landingSchema}</span>
+                <Badge variant="outline">{storageType === "ICEBERG" ? "Iceberg" : "Managed"}</Badge>
+              </>
+            )}
             {canEditTarget && !editingTarget && (
               <button type="button" className="ml-auto text-xs font-medium text-primary hover:underline"
-                      onClick={() => setEditingTarget(true)}>Change landing target</button>
+                      onClick={() => setEditingTarget(true)}>Change ingestion mode</button>
             )}
           </div>
           {editingTarget && canEditTarget && (
             <div className="flex flex-wrap items-end gap-4 rounded-lg border p-3">
-              <div>
+              <div className={cn(storageType === "IN_PLACE" && "hidden")}>
                 <label htmlFor="landing_schema" className="mb-1 block text-xs font-medium">
                   Landing schema in {target.landing_database}
                 </label>
@@ -226,15 +238,19 @@ export function SourceStudio({
               </div>
               <fieldset>
                 <legend className="mb-1 text-xs font-medium">Storage</legend>
-                <div className="flex gap-3 text-sm">
+                <div className="flex flex-wrap gap-3 text-sm">
+                  <label className="flex items-center gap-1.5">
+                    <input type="radio" name="storage_type" checked={storageType === "IN_PLACE"}
+                           onChange={() => setStorageType("IN_PLACE")} /> Read in place (no copy)
+                  </label>
                   <label className="flex items-center gap-1.5">
                     <input type="radio" name="storage_type" checked={storageType === "MANAGED"}
-                           onChange={() => setStorageType("MANAGED")} /> Managed table
+                           onChange={() => setStorageType("MANAGED")} /> Copy to managed table
                   </label>
                   <label className={cn("flex items-center gap-1.5", !landingTargets?.iceberg_available && "opacity-50")}
                          title={landingTargets?.iceberg_available ? undefined : "Set PLATFORM_CONFIG LANDING_EXTERNAL_VOLUME to enable"}>
                     <input type="radio" name="storage_type" checked={storageType === "ICEBERG"}
-                           disabled={!landingTargets?.iceberg_available} onChange={() => setStorageType("ICEBERG")} /> Iceberg table
+                           disabled={!landingTargets?.iceberg_available} onChange={() => setStorageType("ICEBERG")} /> Copy to Iceberg table
                   </label>
                 </div>
               </fieldset>
@@ -250,7 +266,7 @@ export function SourceStudio({
               <Button size="lg" disabled={pending || tables.length === 0 || tables.length > MAX_TABLES} onClick={run}>
                 {pending && <Loader2 className="h-4 w-4 animate-spin" />}
                 {pending
-                  ? phase === "register" ? "Registering source…" : phase === "land" ? "Checking access and landing…" : "Profiling tables…"
+                  ? phase === "register" ? "Registering source…" : phase === "land" ? (inPlace ? "Checking access…" : "Checking access and copying…") : "Profiling tables…"
                   : actionLabel}
               </Button>
             )}

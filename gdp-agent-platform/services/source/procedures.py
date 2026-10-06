@@ -75,6 +75,8 @@ def _target_spec(session, run: Dict[str, Any], raw: Optional[Dict[str, Any]] = N
 
 
 def _landing_check(session, spec: TargetSpec) -> AccessCheck:
+    if not spec.copies:
+        return AccessCheck("LANDING_TARGET", PASSED, "read in place: no landing copy is created")
     try:
         found = _rows(session, f"SELECT SCHEMA_NAME FROM {quote(spec.landing_database)}.INFORMATION_SCHEMA.SCHEMATA "
                                "WHERE SCHEMA_NAME = ?", [spec.landing_schema])
@@ -246,22 +248,32 @@ def validate_source_access(session, run_id: str, selected_json: str) -> Dict[str
 
 def _land_object(session, run_id: str, source: Dict[str, Any], adapter: SourceAdapter, spec: TargetSpec,
                  object_name: str, columns: List[Dict[str, Any]]) -> Dict[str, Any]:
-    landing_name = landing_table_name(source["SOURCE_SYSTEM_NAME"], object_name)
-    database, schema = spec.landing_database, spec.landing_schema
+    if spec.copies:
+        landing_name = landing_table_name(source["SOURCE_SYSTEM_NAME"], object_name)
+        database, schema = spec.landing_database, spec.landing_schema
+    else:
+        landing_name, database, schema = object_name, adapter.database, adapter.schema
     target = fqn(database, schema, landing_name)
     result: Dict[str, Any] = {"object": object_name, "landing_table": f"{database}.{schema}.{landing_name}",
                               "status": "FAILED", "source_rows": None, "landed_rows": None, "query_id": None,
                               "error": None}
     try:
-        result["source_rows"] = _rows(session, adapter.count_sql(object_name))[0]["N"]
-        comment = f"As-is landing of {adapter.database}.{adapter.schema}.{object_name} by run {run_id}"
-        session.sql(spec.create_sql(landing_name, adapter.select_sql(object_name), comment)).collect()
-        result["query_id"] = _rows(session, "SELECT LAST_QUERY_ID() AS Q")[0]["Q"]
-        result["landed_rows"] = _rows(session, f"SELECT COUNT(*) AS N FROM {target}")[0]["N"]
-        if result["landed_rows"] == result["source_rows"]:
-            result["status"] = "COMPLETE"
+        if not spec.copies:
+            # Zero-copy: the registry points at the source table itself; row counts come from metadata.
+            estimate = _rows(session, "SELECT ROW_COUNT_ESTIMATE AS N FROM SOURCE.SOURCE_OBJECT WHERE RUN_ID = ? "
+                                      "AND OBJECT_NAME = ? ORDER BY DISCOVERED_AT DESC LIMIT 1", [run_id, object_name])
+            rows_known = estimate[0]["N"] if estimate else None
+            result.update(source_rows=rows_known, landed_rows=rows_known, status="COMPLETE")
         else:
-            result["error"] = f"row count mismatch: source {result['source_rows']}, landed {result['landed_rows']}"
+            result["source_rows"] = _rows(session, adapter.count_sql(object_name))[0]["N"]
+            comment = f"As-is landing of {adapter.database}.{adapter.schema}.{object_name} by run {run_id}"
+            session.sql(spec.create_sql(landing_name, adapter.select_sql(object_name), comment)).collect()
+            result["query_id"] = _rows(session, "SELECT LAST_QUERY_ID() AS Q")[0]["Q"]
+            result["landed_rows"] = _rows(session, f"SELECT COUNT(*) AS N FROM {target}")[0]["N"]
+            if result["landed_rows"] == result["source_rows"]:
+                result["status"] = "COMPLETE"
+            else:
+                result["error"] = f"row count mismatch: source {result['source_rows']}, landed {result['landed_rows']}"
     except Exception as exc:
         result["error"] = _clip(str(exc))
 
@@ -270,11 +282,12 @@ def _land_object(session, run_id: str, source: Dict[str, Any], adapter: SourceAd
             ["LANDING_ID", "RUN_ID", "SOURCE_SYSTEM_ID", "SOURCE_DATABASE", "SOURCE_SCHEMA", "SOURCE_TABLE",
              "LANDING_DATABASE", "LANDING_SCHEMA", "LANDING_TABLE", "INGESTION_METHOD", "INGESTION_STATUS",
              "ROW_COUNT", "SOURCE_ROW_COUNT", "INGESTED_AT", "QUERY_ID", "CREATED_BY", "ERROR_MESSAGE"],
-            ["?", "?", "?", "?", "?", "?", "?", "?", "?", "'CTAS'", "?", "NULLIF(?, '')::NUMBER",
+            ["?", "?", "?", "?", "?", "?", "?", "?", "?", "?", "?", "NULLIF(?, '')::NUMBER",
              "NULLIF(?, '')::NUMBER", "IFF(? = 'COMPLETE', CURRENT_TIMESTAMP(), NULL)", "NULLIF(?, '')",
              "CURRENT_USER()", "NULLIF(?, '')"],
             [[landing_id, run_id, source["SOURCE_SYSTEM_ID"], adapter.database, adapter.schema, object_name,
-              database, schema, landing_name, result["status"], result["landed_rows"], result["source_rows"],
+              database, schema, landing_name, "CTAS" if spec.copies else "IN_PLACE", result["status"],
+              result["landed_rows"], result["source_rows"],
               result["status"], result["query_id"], result["error"]]])
     if result["status"] == "COMPLETE" and columns:
         _insert(session, "SOURCE.LANDING_COLUMN_REGISTRY",
@@ -362,3 +375,39 @@ def set_landing_target(session, run_id: str, payload_json: str) -> Dict[str, Any
         session.sql("ROLLBACK").collect()
         raise
     return {"target": spec.as_dict(), "check": check.as_dict(), "state": _state_payload(graph, _get_run(session, run_id))}
+
+
+def register_connection(session, payload_json: str) -> Dict[str, Any]:
+    """Register a source connection once, without a run, so it can be profiled and reused by any run."""
+    payload = {k.upper(): v for k, v in _parse_details(payload_json).items()}
+    unknown = set(payload) - {"SOURCE_SYSTEM_NAME", "SOURCE_TYPE", "DATABASE", "SCHEMA", "OWNER",
+                              "SECURITY_CLASSIFICATION", "DOMAIN_ID"}
+    assert not unknown, f"unknown fields: {sorted(unknown)}"
+    name = _text(payload.get("SOURCE_SYSTEM_NAME"), "SOURCE_SYSTEM_NAME", required=True)
+    assert SOURCE_SYSTEM_NAME.match(name), "SOURCE_SYSTEM_NAME must be a letter followed by up to 63 letters, digits or _"
+    name = name.upper()
+    source_type = (_text(payload.get("SOURCE_TYPE"), "SOURCE_TYPE") or "SNOWFLAKE_DATABASE").upper()
+    adapter = adapter_for(source_type, _text(payload.get("DATABASE"), "DATABASE", required=True),
+                          _text(payload.get("SCHEMA"), "SCHEMA", required=True))
+    try:
+        objects = adapter.discover_objects(_runner(session))
+    except Exception as exc:
+        raise ValueError(f"SOURCE_NOT_ACCESSIBLE: {adapter.database}.{adapter.schema}: {exc}") from exc
+    config = {"database": adapter.database, "schema": adapter.schema}
+    existing = _rows(session, "SELECT SOURCE_SYSTEM_ID, SOURCE_TYPE, CONFIGURATION_JSON FROM SOURCE.SOURCE_REGISTRY "
+                              "WHERE SOURCE_SYSTEM_NAME = ? AND ACTIVE_FLAG", [name])
+    if existing:
+        prior = existing[0]
+        if prior["SOURCE_TYPE"] != source_type or json.loads(prior["CONFIGURATION_JSON"]) != config:
+            raise ValueError(f"SOURCE_NAME_CONFLICT: {name} is already registered as {prior['SOURCE_TYPE']} "
+                             f"{json.loads(prior['CONFIGURATION_JSON'])}")
+        return {"source_system_id": prior["SOURCE_SYSTEM_ID"], "created": False, "objects_discovered": len(objects)}
+    source_id = str(uuid.uuid4())
+    _insert(session, "SOURCE.SOURCE_REGISTRY",
+            ["SOURCE_SYSTEM_ID", "SOURCE_SYSTEM_NAME", "SOURCE_TYPE", "DOMAIN_ID", "OWNER", "CONNECTION_TYPE",
+             "SECURITY_CLASSIFICATION", "CONFIGURATION_REFERENCE", "CONFIGURATION_JSON", "CREATED_BY"],
+            ["?", "?", "?", "NULLIF(?, '')", "NULLIF(?, '')", "?", "NULLIF(?, '')", "?", "PARSE_JSON(?)",
+             "CURRENT_USER()"],
+            [[source_id, name, source_type, payload.get("DOMAIN_ID"), payload.get("OWNER"), "SNOWFLAKE",
+              payload.get("SECURITY_CLASSIFICATION"), adapter.database, json.dumps(config)]])
+    return {"source_system_id": source_id, "created": True, "objects_discovered": len(objects)}

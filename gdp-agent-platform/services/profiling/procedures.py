@@ -206,7 +206,8 @@ def _upsert_index(session, ref: TableRef, document: Dict[str, Any], run_id: Opti
         USING (SELECT ? AS SOURCE_NAME, ? AS DATABASE_NAME, ? AS SCHEMA_NAME, ? AS TABLE_NAME,
                       ?::NUMBER AS ROW_COUNT, ?::NUMBER AS COLUMN_COUNT, ? AS PROFILE_STAGE_PATH,
                       ? AS PROFILE_CHECKSUM, ? AS SOURCE_FINGERPRINT, ?::BOOLEAN AS IS_APPROXIMATE,
-                      ? AS PROFILER_VERSION, NULLIF(?, '') AS MODEL_VERSION, NULLIF(?, '') AS PROFILED_IN_RUN) S
+                      ? AS PROFILER_VERSION, NULLIF(?, '') AS MODEL_VERSION, NULLIF(?, '') AS PROFILED_IN_RUN,
+                      ?::FLOAT AS AVG_NULL_PERCENTAGE, ?::NUMBER AS KEY_CANDIDATES, ?::NUMBER AS PII_COLUMNS) S
            ON T.SOURCE_NAME = S.SOURCE_NAME AND T.DATABASE_NAME = S.DATABASE_NAME
           AND T.SCHEMA_NAME = S.SCHEMA_NAME AND T.TABLE_NAME = S.TABLE_NAME
         WHEN MATCHED THEN UPDATE SET
@@ -214,20 +215,63 @@ def _upsert_index(session, ref: TableRef, document: Dict[str, Any], run_id: Opti
              PROFILE_CHECKSUM = S.PROFILE_CHECKSUM, SOURCE_FINGERPRINT = S.SOURCE_FINGERPRINT,
              IS_APPROXIMATE = S.IS_APPROXIMATE, PROFILER_VERSION = S.PROFILER_VERSION,
              MODEL_VERSION = S.MODEL_VERSION, PROFILED_IN_RUN = S.PROFILED_IN_RUN,
+             AVG_NULL_PERCENTAGE = S.AVG_NULL_PERCENTAGE, KEY_CANDIDATES = S.KEY_CANDIDATES,
+             PII_COLUMNS = S.PII_COLUMNS, STATUS = 'STAGED_READY_FOR_MODELING',
+             STATUS_UPDATED_AT = CURRENT_TIMESTAMP(), ERROR_MESSAGE = NULL,
              PROFILED_BY = CURRENT_USER(), PROFILED_AT = CURRENT_TIMESTAMP()
         WHEN NOT MATCHED THEN INSERT
              (SOURCE_NAME, DATABASE_NAME, SCHEMA_NAME, TABLE_NAME, ROW_COUNT, COLUMN_COUNT, PROFILE_STAGE_PATH,
               PROFILE_CHECKSUM, SOURCE_FINGERPRINT, IS_APPROXIMATE, PROFILER_VERSION, MODEL_VERSION,
-              PROFILED_IN_RUN, PROFILED_BY, PROFILED_AT)
+              PROFILED_IN_RUN, AVG_NULL_PERCENTAGE, KEY_CANDIDATES, PII_COLUMNS, STATUS, STATUS_UPDATED_AT,
+              PROFILED_BY, PROFILED_AT)
         VALUES (S.SOURCE_NAME, S.DATABASE_NAME, S.SCHEMA_NAME, S.TABLE_NAME, S.ROW_COUNT, S.COLUMN_COUNT,
                 S.PROFILE_STAGE_PATH, S.PROFILE_CHECKSUM, S.SOURCE_FINGERPRINT, S.IS_APPROXIMATE,
-                S.PROFILER_VERSION, S.MODEL_VERSION, S.PROFILED_IN_RUN, CURRENT_USER(), CURRENT_TIMESTAMP())
+                S.PROFILER_VERSION, S.MODEL_VERSION, S.PROFILED_IN_RUN, S.AVG_NULL_PERCENTAGE, S.KEY_CANDIDATES,
+                S.PII_COLUMNS, 'STAGED_READY_FOR_MODELING', CURRENT_TIMESTAMP(), CURRENT_USER(), CURRENT_TIMESTAMP())
         """,
         params=[ref.source_name, ref.database, ref.schema, ref.table, str(document["row_count"]),
                 str(document["column_count"]), ref.stage_path, profiler.document_checksum(document),
                 document["fingerprint"], "TRUE" if document["approximate"] else "FALSE",
-                document["profiler_version"], document.get("model_version") or "", run_id or ""],
+                document["profiler_version"], document.get("model_version") or "", run_id or "",
+                *_summary_metrics(document["columns"])],
     ).collect()
+
+
+def _summary_metrics(columns: Sequence[Dict[str, Any]]) -> List[str]:
+    nulls = [float((c.get("statistics") or {}).get("null_percentage") or 0) for c in columns]
+    return [str(round(sum(nulls) / len(nulls), 4) if nulls else 0.0),
+            str(sum(1 for c in columns if c.get("potential_key"))),
+            str(sum(1 for c in columns if (c.get("pii_classification") or "NONE") != "NONE"))]
+
+
+def _ensure_index_rows(session, refs: Sequence[TableRef]) -> None:
+    """placeholder rows so a table profiled for the first time shows up as PROFILING."""
+    for ref in refs:
+        session.sql(
+            """
+            MERGE INTO METADATA.TABLE_PROFILES T
+            USING (SELECT ? AS SOURCE_NAME, ? AS DATABASE_NAME, ? AS SCHEMA_NAME, ? AS TABLE_NAME,
+                          ? AS PROFILE_STAGE_PATH) S
+               ON T.SOURCE_NAME = S.SOURCE_NAME AND T.DATABASE_NAME = S.DATABASE_NAME
+              AND T.SCHEMA_NAME = S.SCHEMA_NAME AND T.TABLE_NAME = S.TABLE_NAME
+            WHEN NOT MATCHED THEN INSERT
+                 (SOURCE_NAME, DATABASE_NAME, SCHEMA_NAME, TABLE_NAME, PROFILE_STAGE_PATH, PROFILE_CHECKSUM,
+                  SOURCE_FINGERPRINT, PROFILER_VERSION, STATUS, STATUS_UPDATED_AT, PROFILED_BY, PROFILED_AT)
+            VALUES (S.SOURCE_NAME, S.DATABASE_NAME, S.SCHEMA_NAME, S.TABLE_NAME, S.PROFILE_STAGE_PATH, '', '', '',
+                    'PROFILING', CURRENT_TIMESTAMP(), CURRENT_USER(), CURRENT_TIMESTAMP())
+            """,
+            params=[*ref.key, ref.stage_path],
+        ).collect()
+
+
+def _set_status(session, refs: Sequence[TableRef], status: str, error: Optional[str] = None) -> None:
+    for ref in refs:
+        session.sql(
+            "UPDATE METADATA.TABLE_PROFILES SET STATUS = ?, STATUS_UPDATED_AT = CURRENT_TIMESTAMP(), "
+            "ERROR_MESSAGE = NULLIF(?, '') WHERE SOURCE_NAME = ? AND DATABASE_NAME = ? AND SCHEMA_NAME = ? "
+            "AND TABLE_NAME = ?",
+            params=[status, clip(error, 4000), *ref.key],
+        ).collect()
 
 
 def _forced(force_refresh: ForceRefresh, ref: TableRef) -> bool:
@@ -331,8 +375,11 @@ def _foreign_keys(session, tables: List[Dict[str, Any]], profiles: Dict[str, Lis
                 child = profiler.sampled(t["REF"].landing_fqn, t["REF"].approximate)
                 parent = other["REF"].landing_fqn
                 q = quote(key_col)
-                orphans = scalar(session, f"SELECT COUNT(*) FROM (SELECT {q} AS K FROM {child}) C WHERE C.K IS NOT NULL "
-                                          f"AND NOT EXISTS (SELECT 1 FROM {parent} P WHERE P.{q} = C.K)")
+                try:
+                    orphans = scalar(session, f"SELECT COUNT(*) FROM (SELECT {q} AS K FROM {child}) C WHERE C.K IS NOT NULL "
+                                              f"AND NOT EXISTS (SELECT 1 FROM {parent} P WHERE P.{q} = C.K)")
+                except Exception:
+                    continue  # in-place sources may be unreadable by the procedure owner; FKs are only a hint
                 if orphans == 0:
                     p["potential_foreign_key"] = f"{other['SOURCE_TABLE']}.{key_col}"
 
@@ -458,3 +505,82 @@ def refresh_table_profile(session, run_id: str, source_table: str) -> Dict[str, 
 def run_profiling_basic(session, run_id: str) -> Dict[str, Any]:
     """One-argument RUN_PROFILING; Snowflake requires the handler arity to match the signature."""
     return run_profiling(session, run_id)
+
+
+# ---------------------------------------------------------------- in-place source profiling (no landing copy)
+
+
+def source_table_refs(session, source_id: str,
+                      tables: Optional[Sequence[str]] = None) -> Tuple[Dict[str, Any], List[TableRef]]:
+    """TableRefs pointing at the source tables themselves, built from INFORMATION_SCHEMA the same way landing
+    registers them, so a later run over the same tables hits the same cache entries."""
+    from services.source.adapters import adapter_for
+    from services.source.identifiers import format_data_type
+
+    found = rows(session, "SELECT SOURCE_SYSTEM_ID, SOURCE_SYSTEM_NAME, SOURCE_TYPE, CONFIGURATION_JSON "
+                          "FROM SOURCE.SOURCE_REGISTRY WHERE SOURCE_SYSTEM_ID = ? AND ACTIVE_FLAG", [source_id])
+    assert found, f"source {source_id} not found"
+    source = found[0]
+    config = variant(source["CONFIGURATION_JSON"]) or {}
+    adapter = adapter_for(source["SOURCE_TYPE"], config["database"], config["schema"])
+    run = lambda sql, params: rows(session, sql, params)  # noqa: E731
+    objects = {o.name: o for o in adapter.discover_objects(run)}
+    columns: Dict[str, List[Tuple[str, str]]] = {}
+    for c in run(adapter.columns_sql(), [adapter.schema]):
+        columns.setdefault(c["TABLE_NAME"], []).append(
+            (c["COLUMN_NAME"], format_data_type(c["DATA_TYPE"], c["CHARACTER_MAXIMUM_LENGTH"],
+                                                c["NUMERIC_PRECISION"], c["NUMERIC_SCALE"])))
+    wanted = list(tables) if tables else sorted(objects)
+    missing = [t for t in wanted if t not in objects]
+    assert not missing, f"not in {adapter.database}.{adapter.schema}: {missing[:10]}"
+    refs = [TableRef(source["SOURCE_SYSTEM_NAME"], adapter.database, adapter.schema, t, adapter.object_fqn(t),
+                     objects[t].row_count, tuple(columns.get(t, ())), objects[t].last_altered) for t in wanted]
+    return {"source_system_id": source["SOURCE_SYSTEM_ID"], "source_system_name": source["SOURCE_SYSTEM_NAME"],
+            "database": adapter.database, "schema": adapter.schema}, refs
+
+
+def profile_source_tables(session, source_id: str, payload_json: str) -> Dict[str, Any]:
+    """Profile selected tables of a registered source in place: read-only queries against the source, results
+    written only to @METADATA.PROFILES_STAGE and METADATA.TABLE_PROFILES. Nothing is copied."""
+    payload = json.loads(payload_json or "{}")
+    tables = payload.get("tables") or []
+    assert isinstance(tables, list) and tables and all(isinstance(t, str) for t in tables), \
+        "tables must be a non-empty list of table names"
+    assert len(tables) <= 500, "profile at most 500 tables per request"
+    force = bool(payload.get("force_refresh"))
+    limit = max(1, min(int(payload.get("concurrency_limit") or DEFAULT_CONCURRENCY), MAX_CONCURRENCY))
+    source, refs = source_table_refs(session, source_id, sorted(set(tables)))
+    _ensure_index_rows(session, refs)
+    _set_status(session, refs, "PROFILING")
+    try:
+        guidance = use_skills(session, STAGE_SKILLS["PROFILING"])
+    except Exception:
+        guidance = ""
+
+    out: Dict[str, Any] = {**source, "profiled": [], "cached": [], "failed": []}
+
+    def settle(chunk: List[TableRef]) -> None:
+        results = profile_tables(session, chunk, limit, force, None, guidance)
+        for ref in chunk:
+            r = results[ref.key]
+            if r.cached:
+                _set_status(session, [ref], "STAGED_READY_FOR_MODELING")
+                out["cached"].append(ref.table)
+            elif r.persisted:
+                out["profiled"].append(ref.table)
+            else:
+                _set_status(session, [ref], "FAILED", r.persist_error or "profile could not be stored")
+                out["failed"].append({"table": ref.table, "error": r.persist_error})
+
+    for start in range(0, len(refs), limit):
+        chunk = refs[start:start + limit]
+        try:
+            settle(chunk)
+        except Exception:
+            for ref in chunk:
+                try:
+                    settle([ref])
+                except Exception as exc:
+                    _set_status(session, [ref], "FAILED", f"{type(exc).__name__}: {exc}")
+                    out["failed"].append({"table": ref.table, "error": clip(exc, 400)})
+    return out

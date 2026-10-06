@@ -41,9 +41,12 @@ def plan_landing_drops(owned: Iterable[Dict[str, Any]],
         shared.setdefault(_key(row), []).append(str(row["RUN_ID"]))
     drops: List[TableKey] = []
     kept: List[Dict[str, Any]] = []
+    in_place = {_key(r) for r in owned if r.get("INGESTION_METHOD") == "IN_PLACE"}
     for key in sorted({_key(r) for r in owned}):
         name = ".".join(key)
-        if key[1].upper() in PROTECTED_SCHEMAS:
+        if key in in_place:
+            kept.append({"table": name, "reason": "read in place: this is the source table"})
+        elif key[1].upper() in PROTECTED_SCHEMAS:
             kept.append({"table": name, "reason": f"{key[1]} is a platform schema"})
         elif key in shared:
             kept.append({"table": name, "reason": "still used by another run",
@@ -57,7 +60,7 @@ def _purge_landing(session, run_ids: List[str]) -> Dict[str, Any]:
     out: Dict[str, Any] = {"dropped": [], "kept": [], "errors": []}
     ids_json = json.dumps(run_ids)
     owned = rows(session, """
-        SELECT RUN_ID, LANDING_DATABASE, LANDING_SCHEMA, LANDING_TABLE
+        SELECT RUN_ID, LANDING_DATABASE, LANDING_SCHEMA, LANDING_TABLE, INGESTION_METHOD
           FROM SOURCE.LANDING_TABLE_REGISTRY
          WHERE ARRAY_CONTAINS(RUN_ID::VARIANT, PARSE_JSON(?)::ARRAY) AND INGESTION_STATUS <> 'PURGED'""",
                  [ids_json])

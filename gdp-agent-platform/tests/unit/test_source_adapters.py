@@ -169,3 +169,11 @@ def test_adapter_for_rejects_unknown_type():
     assert isinstance(adapter_for("SNOWFLAKE_SHARE", "D", "S"), SnowflakeShareAdapter)
     with pytest.raises(AssertionError):
         adapter_for("FILE", "D", "S")
+
+
+def test_in_place_target_never_creates_tables():
+    spec = TargetSpec.parse({"storage_type": "in_place"}, "AI_PLATFORM")
+    assert spec.storage_type == "IN_PLACE" and not spec.copies
+    with pytest.raises(AssertionError):
+        spec.create_sql("T", "SELECT 1", "c")
+    assert TargetSpec.parse(None, "AI_PLATFORM").copies

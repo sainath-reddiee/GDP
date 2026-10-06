@@ -1,12 +1,15 @@
 import Link from "next/link";
 import { api } from "@/lib/api";
-import type { RunSummary } from "@/lib/types";
+import type { RunSummary, SourcesOverview } from "@/lib/types";
 import { RunTable } from "@/components/run-table";
 import { buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader } from "@/components/ui/card";
 
 export default async function Dashboard() {
-  const { runs } = await api<{ runs: RunSummary[] }>("/api/runs");
+  const [{ runs }, sources] = await Promise.all([
+    api<{ runs: RunSummary[] }>("/api/runs"),
+    api<SourcesOverview>("/api/sources/overview").catch(() => null),
+  ]);
   const count = (pred: (r: RunSummary) => boolean) => runs.filter(pred).length;
   const stats = [
     ["Open runs", count((r) => !["COMPLETED", "CANCELLED"].includes(r.status))],
@@ -31,6 +34,22 @@ export default async function Dashboard() {
           </Card>
         ))}
       </div>
+      {sources && (
+        <Link href="/sources" className="flex flex-wrap items-center gap-4 rounded-xl border bg-card px-5 py-4 hover:border-primary/50">
+          <div>
+            <p className="text-sm font-semibold">Profile store</p>
+            <p className="text-xs text-muted-foreground">
+              {sources.totals.staged} of {sources.totals.tables} tables across {sources.totals.sources} sources are staged
+              and ready for modeling{sources.totals.profiling ? `, ${sources.totals.profiling} profiling now` : ""}.
+            </p>
+          </div>
+          <div className="h-2 min-w-[160px] flex-1 rounded-full bg-muted">
+            <div className="h-2 rounded-full bg-success"
+                 style={{ width: `${sources.totals.tables ? Math.round((sources.totals.staged / sources.totals.tables) * 100) : 0}%` }} />
+          </div>
+          <span className="text-sm font-medium text-primary">Open Sources →</span>
+        </Link>
+      )}
       <RunTable runs={runs.slice(0, 10)} selectable={false} />
     </div>
   );
