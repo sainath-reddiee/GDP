@@ -1846,12 +1846,48 @@ def get_sttm(run_id: str, db: Db = Depends(current_db)):
             """
             SELECT STTM_LINE_ID, SOURCE_TABLE, SOURCE_COLUMN, SOURCE_DATATYPE, TARGET_COLUMN, TARGET_DATATYPE,
                    MAPPING_TYPE, TRANSFORMATION, BUSINESS_RULE, BUSINESS_DEFINITION, NULLABLE_RULE,
-                   UNIQUENESS_RULE, HUMAN_APPROVED, REVIEWER, MAPPING_CONFIDENCE
+                   UNIQUENESS_RULE, HUMAN_APPROVED, REVIEWER, MAPPING_CONFIDENCE, JOIN_LOGIC
               FROM CONTRACT.STTM_LINE WHERE STTM_ID = %s ORDER BY TARGET_COLUMN
             """,
             (header[0]["sttm_id"],),
         )
     return {"sttm": header[0] if header else None, "lines": lines}
+
+
+class JoinEdit(BaseModel):
+    left_table: str = Field(min_length=1, max_length=255)
+    right_table: str = Field(min_length=1, max_length=255)
+    keys: list[str] = Field(default_factory=list, max_length=10)
+    join_type: str = Field(default="LEFT", pattern=r"^(LEFT|INNER)$")
+    cardinality: Optional[str] = Field(default=None, pattern=r"^(1:1|N:1|1:N|N:N)$")
+    remove: bool = False
+
+
+class JoinPlanEdit(BaseModel):
+    driving_table: Optional[str] = Field(default=None, max_length=255)
+    joins: list[JoinEdit] = Field(default_factory=list, max_length=50)
+
+
+@app.put("/api/runs/{run_id}/sttm/joins")
+def update_sttm_joins(run_id: str, body: JoinPlanEdit, db: Db = Depends(current_db)):
+    """Edit the STTM join plan while it is under review; dbt generation follows the edited plan."""
+    try:
+        return db.call("CALL CONTRACT.UPDATE_JOIN_GRAPH(%s, %s)", (run_id, body.model_dump_json()))
+    except Exception as exc:
+        raise _snowflake_error(exc) from exc
+
+
+@app.get("/api/runs/{run_id}/sttm/preview")
+def sttm_preview(run_id: str, db: Db = Depends(current_db)):
+    """The SELECT the confirmed joins and mappings produce, before dbt generation."""
+    from services.sttm.join_graph import preview_sql
+
+    data = get_sttm(run_id, db)
+    if not data["sttm"]:
+        raise HTTPException(404, "no STTM for this run yet")
+    design = _json(data["sttm"].get("table_design")) or {}
+    return {"sql": preview_sql(design.get("join_graph") or {}, data["lines"], design.get("target_table") or "TARGET"),
+            "join_graph": design.get("join_graph")}
 
 
 @app.post("/api/runs/{run_id}/sttm/refine")

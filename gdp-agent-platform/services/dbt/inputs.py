@@ -92,8 +92,17 @@ def load_inputs(query: Query, run_id: str, plan: Dict[str, Any], sttm: Dict[str,
         "sources": sources,
         "target_columns": target_columns,
         "lines": lines,
-        "joins": infer_joins(tables) if len(tables) > 1 else [],
+        "joins": _planned_joins(design) or (infer_joins(tables) if len(tables) > 1 else []),
+        "primary": (design.get("join_graph") or {}).get("driving_table") or design.get("driving_table"),
     }
+
+
+def _planned_joins(design: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Joins the reviewer saw in the STTM; dbt follows them instead of re-inferring from column names."""
+    from services.sttm.join_graph import to_dbt_joins
+
+    graph = design.get("join_graph") or {}
+    return to_dbt_joins(graph) if graph.get("joins") else []
 
 
 def upper_rows(raw: List[Dict[str, Any]]) -> List[Dict[str, Any]]:

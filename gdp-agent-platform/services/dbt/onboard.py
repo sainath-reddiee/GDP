@@ -217,24 +217,41 @@ def _updated_column(columns: Dict[str, str], prefix: str) -> Optional[str]:
 
 def _join_plan(primary: str, sources: Dict[str, Dict[str, Any]], used: Iterable[str],
                joins: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], List[str]]:
-    """LEFT JOIN every other used table to the primary on inferred keys; report tables with no join path."""
-    plan, missing = [], []
+    """Join every other used table to the plan through the first edge that reaches a table already joined
+    (multi-hop paths allowed). Join type comes from the STTM join plan (default LEFT); cardinality is oriented
+    from the joined table's point of view. Tables with no path are reported."""
+    plan: List[Dict[str, Any]] = []
     aliases = {primary: "o"}
-    for i, table in enumerate(t for t in used if t != primary):
-        aliases[table] = f"j{i + 1}"
-        edge = next((j for j in joins if {j["left"].upper(), j["right"].upper()} == {primary, table}), None)
-        if not edge:
-            missing.append(table)
-            continue
-        conds = []
-        for key in edge["keys"]:
-            left_col, _, right_col = key.partition("=")
-            right_col = right_col or left_col
-            if edge["left"].upper() != primary:
-                left_col, right_col = right_col, left_col
-            conds.append(f"o.{quote(left_col)} = {aliases[table]}.{quote(right_col)}")
-        plan.append({"table": table, "alias": aliases[table], "on": " and ".join(conds), "cardinality": edge["cardinality"]})
-    return plan, missing
+    remaining = [t for t in used if t != primary]
+    progress = True
+    while remaining and progress:
+        progress = False
+        for table in list(remaining):
+            edge, anchor = None, None
+            for j in joins:
+                ends = {j["left"].upper(), j["right"].upper()}
+                if table in ends and len(ends) == 2:
+                    other = (ends - {table}).pop()
+                    if other in aliases:
+                        edge, anchor = j, other
+                        break
+            if edge is None:
+                continue
+            aliases[table] = f"j{len(aliases)}"
+            conds = []
+            for key in edge["keys"]:
+                left_col, _, right_col = key.partition("=")
+                right_col = right_col or left_col
+                if edge["left"].upper() != anchor:
+                    left_col, right_col = right_col, left_col
+                conds.append(f"{aliases[anchor]}.{quote(left_col)} = {aliases[table]}.{quote(right_col)}")
+            card = edge["cardinality"] if edge["left"].upper() == anchor else {"N:1": "1:N", "1:N": "N:1"}.get(
+                edge["cardinality"], edge["cardinality"])
+            plan.append({"table": table, "alias": aliases[table], "on": " and ".join(conds), "cardinality": card,
+                         "join_type": str(edge.get("join_type") or "LEFT").lower()})
+            remaining.remove(table)
+            progress = True
+    return plan, remaining
 
 
 # ----------------------------------------------------------------------------------------------- render helpers
@@ -387,7 +404,9 @@ def generate(inputs: Dict[str, Any], skeleton: Optional[Dict[str, str]] = None) 
     for c in cols:
         if c.get("source_table") and c["_class"] in {"PASSTHROUGH", "DERIVED"}:
             counts[str(c["source_table"]).upper()] = counts.get(str(c["source_table"]).upper(), 0) + 1
-    primary = max(counts, key=counts.get) if counts else (next(iter(sources), "SOURCE"))
+    planned = str(inputs.get("primary") or "").upper()
+    primary = planned if planned and (planned in counts or planned in sources) else (
+        max(counts, key=counts.get) if counts else (next(iter(sources), "SOURCE")))
     used = [primary] + sorted(t for t in counts if t != primary)
     joins, unjoined = _join_plan(primary, sources, used, inputs.get("joins") or [])
     alias_of = {primary: "o", **{j["table"]: j["alias"] for j in joins}}
@@ -497,7 +516,7 @@ def generate(inputs: Dict[str, Any], skeleton: Optional[Dict[str, str]] = None) 
     src_name = f"{target}_{source_key}_source"
     sp_from = f"    from {{{{ source('{src_name}', '{snake(primary)}') }}}} as o"
     for j in joins:
-        sp_from += (f"\n    left join {{{{ source('{src_name}', '{snake(j['table'])}') }}}} as {j['alias']}"
+        sp_from += (f"\n    {j.get('join_type', 'left')} join {{{{ source('{src_name}', '{snake(j['table'])}') }}}} as {j['alias']}"
                     f" /* {j['cardinality']} */\n        on {j['on']}")
         if j["cardinality"] in {"1:N", "N:N"}:
             anomalies.append(f"{j['cardinality']} join to {j['table']}: the dedup keeps one {j['table']} row per key")
