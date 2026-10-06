@@ -58,3 +58,31 @@ export type DbtPublication = {
 };
 
 export type GithubStatus = { ready: boolean; config: { secret?: string; external_access_integration?: string } | null };
+
+export type ReportColumn = {
+  target_column: string; class: string; source?: string | null; source_type?: string | null;
+  target_type?: string | null; cast?: string | null; note?: string;
+};
+
+export type GenerationReport = {
+  engine?: string; skill?: string; convention?: string; domain?: string; target?: string; source_key?: string;
+  prefix?: string; source_system?: string; primary_source?: string;
+  joins?: { table: string; alias: string; on: string; cardinality: string }[];
+  source_unique_id?: { expression: string; reason: string; columns: string[] };
+  dedup_order?: string; hub?: string; macros_added?: string[];
+  columns?: ReportColumn[]; counts?: Record<string, number>; casts?: number; todos?: number;
+  anomalies?: string[]; files?: Record<string, "new" | "patched" | "unchanged">; rules?: string[];
+  skeleton_files?: number;
+};
+
+export type ReviewFinding = { severity: "error" | "warning" | "info"; rule: string; message: string; line_hint: string };
+
+export type ReviewResult = {
+  file_path: string; summary: string; findings: ReviewFinding[]; revised_content: string;
+  rejected_revision: string[]; model?: string;
+};
+
+export type GithubCheck = {
+  status: string; detail?: string; repository?: string; default_branch?: string; push?: boolean | null;
+  private?: boolean; html_url?: string;
+};

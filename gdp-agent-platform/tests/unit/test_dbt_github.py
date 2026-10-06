@@ -1,6 +1,6 @@
 import pytest
 
-from services.dbt.github import PublishError, check_branch, parse_origin, publish, tree_entries
+from services.dbt.github import PublishError, check_branch, explain, parse_origin, preflight, publish, tree_entries
 
 
 class FakeGitHub:
@@ -10,6 +10,8 @@ class FakeGitHub:
 
     def __call__(self, method, path, body):
         self.calls.append((method, path, body))
+        if method == "GET" and path == "/repos/o/r":
+            return 200, {"full_name": "o/r", "default_branch": "main", "permissions": {"push": True}}
         if method == "GET" and path.endswith("/git/ref/heads/main"):
             return 200, {"object": {"sha": "base1"}}
         if method == "GET" and "/git/ref/heads/feat/gdp-run" in path:
@@ -76,7 +78,31 @@ def test_no_changes_skips_pr_and_errors_surface():
 
     def denied(method, path, body):
         return 403, {"message": "Resource not accessible by personal access token"}
-    with pytest.raises(PublishError, match="read base branch failed \\(403\\)"):
+    with pytest.raises(PublishError, match="read repository failed \\(403\\)") as caught:
         publish(denied, "https://github.com/o/r", "main", "feat/gdp-run", FILES, "t", "b", "m")
+    assert explain(caught.value, "https://github.com/o/r")["status"] == "TOKEN_SCOPE"
     with pytest.raises(ValueError):
         publish(FakeGitHub(), "https://github.com/o/r", "main", "main", FILES, "t", "b", "m")
+
+
+def test_preflight_and_write_scope_errors():
+    gh = FakeGitHub()
+    assert preflight(gh, "https://github.com/o/r")["push"] is True
+
+    def tree_denied(method, path, body):
+        if path == "/repos/o/r":
+            return 200, {"full_name": "o/r", "permissions": {"push": True}}
+        if path.endswith("/git/trees"):
+            return 403, {"message": "Resource not accessible by personal access token"}
+        return gh(method, path, body)
+    with pytest.raises(PublishError) as caught:
+        publish(tree_denied, "https://github.com/o/r", "main", "feat/gdp-run", FILES, "t", "b", "m")
+    info = explain(caught.value, "https://github.com/o/r")
+    assert info["status"] == "TOKEN_SCOPE" and "Contents: Read and write" in info["detail"]
+    assert explain(PublishError("x", 401, {"message": "Bad credentials"}))["status"] == "AUTH"
+
+    def missing(method, path, body):
+        return 404, {"message": "Not Found"}
+    with pytest.raises(PublishError) as caught:
+        preflight(missing, "https://github.com/o/r")
+    assert explain(caught.value, "https://github.com/o/r")["status"] == "TOKEN_SCOPE"

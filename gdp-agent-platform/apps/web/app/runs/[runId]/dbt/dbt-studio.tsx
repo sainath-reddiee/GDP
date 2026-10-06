@@ -1,26 +1,26 @@
 "use client";
 
 import { useEffect, useMemo, useState, useTransition } from "react";
-import { Copy, ExternalLink, GitBranch as GitBranchIcon, GitPullRequest, Loader2, Lock, Plus, RefreshCw } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Input, Label, Select, Textarea } from "@/components/ui/input";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import {
-  applyDbtEnhance, createGitRepository, generateDbt, listDbtBranches, previewDbtEnhance, publishDbt, setupGithubPublishing,
+  CheckCircle2, ExternalLink, GitBranch as GitBranchIcon, GitPullRequest, KeyRound, Loader2, Lock, Plus, RefreshCw,
+  Rocket, ShieldCheck, Sparkles,
+} from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Input, Label, Select } from "@/components/ui/input";
+import { cn } from "@/lib/utils";
+import {
+  checkGithub, createGitRepository, generateDbt, listDbtBranches, publishDbt, rotateGithubToken, setupGithubPublishing,
 } from "../pipeline-actions";
 import type {
-  DbtArtifact, CortexModel, DbtGeneration, DbtPublication, DbtRepo, DbtWorkspace, GitBranch, GithubStatus,
+  CortexModel, DbtArtifact, DbtGeneration, DbtPublication, DbtRepo, DbtWorkspace, GenerationReport, GitBranch,
+  GithubCheck, GithubStatus,
 } from "./dbt-types";
+import { ReviewPanel } from "./review-panel";
+import { Callout, CopyButton, Section, StatusPill, StepIcon, ToastProvider, type Tone, useToast } from "./studio-ui";
 
-type StepTone = "done" | "fail" | "skip" | "idle";
-
-function stepTone(tone: StepTone) {
-  if (tone === "done") return "border-success/40 bg-success/10";
-  if (tone === "fail") return "border-destructive/40 bg-destructive/10";
-  if (tone === "skip") return "border-dashed bg-muted/30";
-  return "border-border bg-card";
-}
+const sameName = (a?: string | null, b?: string | null) => (a || "").toUpperCase() === (b || "").toUpperCase();
+const snake = (v: string) => v.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "");
+const TOKEN_FAIL = new Set(["TOKEN_SCOPE", "AUTH"]);
 
 function originOk(origin: string, prefixes: string[]) {
   const url = origin.trim().toLowerCase();
@@ -29,40 +29,14 @@ function originOk(origin: string, prefixes: string[]) {
   return prefixes.some((p) => url.startsWith(p.trim().toLowerCase().replace(/\/$/, "")));
 }
 
-function friendlyError(raw: string) {
-  const text = raw || "";
-  if (/too many arguments|expected 1, got 2/i.test(text)) {
-    return "Snowflake still has the one-argument GENERATE_DBT. The plan was saved and retried — generate again if this persists.";
+function friendly(raw: string) {
+  if (/too many arguments|expected 1, got 2/i.test(raw)) {
+    return "Snowflake still has the old one-argument GENERATE_DBT. Deploy from Admin, then generate again.";
   }
-  if (/unexpected ['"]null['"]/i.test(text)) {
-    return "Snowflake rejected a null argument. Pick a git repository or paste a real origin URL.";
-  }
-  return text;
+  return raw;
 }
 
-const sameName = (a?: string | null, b?: string | null) => (a || "").toUpperCase() === (b || "").toUpperCase();
-
-function GrantHint({ sql }: { sql: string }) {
-  const [copied, setCopied] = useState(false);
-  return (
-    <div className="rounded-md border border-amber-300 bg-amber-50 p-2.5 text-xs text-amber-900">
-      <p className="mb-1 flex items-center gap-1 font-medium"><Lock className="h-3.5 w-3.5" /> Your role can&apos;t use this repository&apos;s integration</p>
-      <p className="mb-1.5">Ask an admin to run:</p>
-      <div className="flex items-center gap-2">
-        <code className="min-w-0 flex-1 truncate rounded bg-white px-2 py-1 font-mono">{sql}</code>
-        <Button type="button" size="sm" variant="outline" className="h-7"
-          onClick={() => { navigator.clipboard?.writeText(sql); setCopied(true); setTimeout(() => setCopied(false), 1500); }}>
-          <Copy className="h-3.5 w-3.5" /> {copied ? "Copied" : "Copy"}
-        </Button>
-      </div>
-    </div>
-  );
-}
-
-export function DbtStudio({
-  runId, runName, domainName, canGenerate, generation, artifacts, branch,
-  appliedSkills, lastWorkspace, workspace, publication, github,
-}: {
+type Props = {
   runId: string;
   runName: string;
   domainName?: string | null;
@@ -75,42 +49,50 @@ export function DbtStudio({
   workspace?: DbtWorkspace;
   publication?: DbtPublication | null;
   github?: GithubStatus;
-}) {
+  report?: GenerationReport | null;
+  skeletonBase?: Record<string, string> | null;
+};
+
+export function DbtStudio(props: Props) {
+  return <ToastProvider><Studio {...props} /></ToastProvider>;
+}
+
+function Studio({
+  runId, runName, domainName, canGenerate, generation, artifacts, branch, workspace, publication, github, report,
+  skeletonBase, lastWorkspace,
+}: Props) {
+  const toast = useToast();
   const slug = runName.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "run";
   const allRepos = workspace?.git_repositories ?? [];
   const integrations = (workspace?.integrations ?? []).filter((i) => !i.provider || i.provider === "GIT_HTTPS_API");
   const projects = workspace?.dbt_projects ?? [];
   const role = workspace?.role || "";
   const publisherReady = Boolean(github?.ready || workspace?.capabilities?.github_publish);
-  // Start from the saved integration when this role can use it, else the first usable one; then pick a
-  // repository bound to that integration that this role can FETCH (never a repo from another integration).
+  const models: CortexModel[] = workspace?.models ?? [];
+
+  // ---------------------------------------------------------------- defaults: saved plan → usable repo → its integration
   const savedInt = integrations.find((i) => sameName(i.name, String(branch?.api_integration ?? "")) && i.usable !== false);
   const firstUsableRepo = allRepos.find((r) => r.usable !== false);
-  const startInt = savedInt?.name
-    ?? firstUsableRepo?.api_integration
-    ?? integrations.find((i) => i.usable !== false)?.name
+  const startInt = savedInt?.name ?? firstUsableRepo?.api_integration ?? integrations.find((i) => i.usable !== false)?.name
     ?? integrations[0]?.name ?? "";
   const reposForStart = allRepos.filter((r) => sameName(r.api_integration, startInt));
   const startRepo = reposForStart.find((r) => sameName(r.fqn, String(branch?.git_repository ?? "")) && r.usable !== false)
     ?? reposForStart.find((r) => r.usable !== false) ?? reposForStart[0];
   const startPrefixes = integrations.find((i) => sameName(i.name, startInt))?.allowed_prefixes ?? [];
+  const savedOrigin = String(branch?.origin ?? branch?.repo ?? "");
+
   const [integration, setIntegration] = useState(startInt);
   const [showAllRepos, setShowAllRepos] = useState(false);
-  const repos = useMemo(
-    () => (showAllRepos || !integration ? allRepos : allRepos.filter((r) => sameName(r.api_integration, integration))),
-    [allRepos, integration, showAllRepos],
-  );
   const [gitRepo, setGitRepo] = useState(startRepo?.fqn ?? "");
-  const selectedRepo: DbtRepo | undefined = allRepos.find((r) => sameName(r.fqn, gitRepo));
-  const selectedInt = integrations.find((i) => sameName(i.name, integration));
-  const prefixes = selectedInt?.allowed_prefixes ?? [];
-  const savedOrigin = String(branch?.origin ?? branch?.repo ?? "");
   const [origin, setOrigin] = useState(
     startRepo?.origin || (savedOrigin && originOk(savedOrigin, startPrefixes) ? savedOrigin : startPrefixes[0] || savedOrigin),
   );
   const [baseBranch, setBaseBranch] = useState(String(branch?.base_branch ?? "main"));
   const [cutBranch, setCutBranch] = useState(String(branch?.cut_branch ?? `feat/gdp-${slug}`));
   const [dbtProject, setDbtProject] = useState(String(branch?.dbt_project ?? ""));
+  const [prefix, setPrefix] = useState(String(branch?.prefix ?? report?.prefix ?? "GDP"));
+  const [sourceKey, setSourceKey] = useState(String(branch?.source_key ?? report?.source_key ?? ""));
+  const [domainFolder, setDomainFolder] = useState(String(branch?.domain_folder ?? report?.domain ?? snake(domainName || "")));
   const [push, setPush] = useState(Boolean(branch?.push ?? true) && publisherReady);
   const [fetchSkeleton, setFetchSkeleton] = useState(branch?.fetch_skeleton !== false);
   const [draftPr, setDraftPr] = useState(false);
@@ -123,19 +105,42 @@ export function DbtStudio({
     ((startPrefixes[0] || "").split("/").filter(Boolean).pop() || "").replace(/[^A-Za-z0-9_]/g, "_").toUpperCase(),
   );
   const [token, setToken] = useState("");
+  const [rotating, setRotating] = useState(false);
+  const [check, setCheck] = useState<GithubCheck | null>(null);
   const [setupLog, setSetupLog] = useState<{ sql: string; ok: boolean; error?: string }[]>([]);
-  const [notice, setNotice] = useState("");
-  const [query, setQuery] = useState("");
-  const [open, setOpen] = useState(artifacts.find((a) => a.file_path.endsWith(".sql"))?.file_path ?? artifacts[0]?.file_path ?? "");
-  const [error, setError] = useState("");
-  const [mode, setMode] = useState<"generate" | "push" | "publish" | "setup" | "repo" | "enhance" | "apply" | null>(null);
-  const [pending, start] = useTransition();
-  const models: CortexModel[] = workspace?.models ?? [];
-  const [model, setModel] = useState(workspace?.default_model || models[0]?.name || "claude-sonnet-4-5");
-  const [enhancePrompt, setEnhancePrompt] = useState("");
-  const [preview, setPreview] = useState<{ content: string; rationale?: string; summary?: string; model?: string } | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [lastPublish, setLastPublish] = useState<{ status: string; detail?: string } | null>(null);
+  const [, start] = useTransition();
 
-  /** Picking an integration cascades: its repositories → the first usable one → its origin → its branches. */
+  const repos = useMemo(
+    () => (showAllRepos || !integration ? allRepos : allRepos.filter((r) => sameName(r.api_integration, integration))),
+    [allRepos, integration, showAllRepos],
+  );
+  const selectedRepo: DbtRepo | undefined = allRepos.find((r) => sameName(r.fqn, gitRepo));
+  const selectedInt = integrations.find((i) => sameName(i.name, integration));
+  const prefixes = selectedInt?.allowed_prefixes ?? [];
+  const originValid = originOk(origin, prefixes);
+  const isGithub = /^(https:\/\/github\.com\/|git@github\.com:)[^/]+\/[^/]+/i.test(origin.trim());
+  const sameBranch = baseBranch.trim() !== "" && baseBranch.trim() === cutBranch.trim();
+  const branchExists = branches.some((b) => b.name === cutBranch.trim());
+  const pub = publication;
+  const pubStatus = lastPublish?.status ?? pub?.status;
+  const pubDetail = lastPublish?.detail ?? pub?.detail ?? "";
+  const published = pubStatus === "PUBLISHED" || pubStatus === "NO_CHANGES";
+  const tokenProblem = (pubStatus && TOKEN_FAIL.has(pubStatus)) || (check && TOKEN_FAIL.has(check.status));
+  const skeleton = (lastWorkspace?.lineage as { skeleton?: { files?: number; error?: string } } | undefined)?.skeleton;
+
+  // ---------------------------------------------------------------- step status
+  const connectTone: Tone = !integration ? "active"
+    : selectedRepo?.usable === false || grantSql ? "warn"
+      : (gitRepo || !fetchSkeleton) && (publisherReady || !push) && !tokenProblem ? "done" : "warn";
+  const configureTone: Tone = sameBranch || !originValid ? "fail" : baseBranch && cutBranch ? "done" : "active";
+  const generateTone: Tone = generation ? (report?.anomalies?.length || report?.todos ? "warn" : "done") : "active";
+  const publishTone: Tone = published ? "done" : pubStatus && pubStatus !== "NOT_REQUESTED" ? "fail" : generation ? "active" : "idle";
+  const [openStep, setOpenStep] = useState<string>(!generation ? (connectTone === "done" ? "configure" : "connect") : "review");
+  const toggle = (id: string) => setOpenStep((s) => (s === id ? "" : id));
+
+  // ---------------------------------------------------------------- actions
   const chooseIntegration = (name: string) => {
     setIntegration(name);
     setShowAllRepos(false);
@@ -144,41 +149,38 @@ export function DbtStudio({
     const intPrefixes = integrations.find((i) => sameName(i.name, name))?.allowed_prefixes ?? [];
     setGitRepo(next?.fqn ?? "");
     setOrigin(next?.origin || intPrefixes[0] || "");
+    setGrantSql(null);
     if (!next) {
       setBranches([]);
       setLatestBranch("");
-      setGrantSql(null);
-      setFetchNote(intPrefixes.length
-        ? `No Snowflake git repository uses ${name} yet. Create one below to read branches.`
-        : "");
+      setFetchNote(intPrefixes.length ? `No Snowflake git clone uses ${name} yet; create one to read branches.` : "");
     }
-    const repoName = (intPrefixes[0] || "").split("/").filter(Boolean).pop() || "";
-    setNewRepoName(repoName.replace(/[^A-Za-z0-9_]/g, "_").toUpperCase());
+    setNewRepoName(((intPrefixes[0] || "").split("/").filter(Boolean).pop() || "").replace(/[^A-Za-z0-9_]/g, "_").toUpperCase());
+    setCheck(null);
+  };
+
+  const applyRepo = (fqn: string) => {
+    setGitRepo(fqn);
+    const next = allRepos.find((r) => r.fqn === fqn);
+    if (next?.origin) setOrigin(next.origin);
+    if (next?.api_integration && !sameName(next.api_integration, integration)) setIntegration(next.api_integration);
+    setCheck(null);
   };
 
   const refreshBranches = (repo: string, preferLatest = false) => {
-    if (!repo.trim()) {
-      setBranches([]);
-      setLatestBranch("");
-      return;
-    }
+    if (!repo.trim()) { setBranches([]); setLatestBranch(""); return; }
     setListing(true);
     setGrantSql(null);
     start(async () => {
       const result = await listDbtBranches(runId, repo.trim(), true);
       setListing(false);
-      if (!result.ok) {
-        setFetchNote(result.error);
-        return;
-      }
+      if (!result.ok) { setFetchNote(result.error); return; }
       setBranches(result.data.branches);
       setLatestBranch(result.data.latest);
       setGrantSql(result.data.grant_sql ?? null);
       setFetchNote(result.data.fetched
-        ? `Fetched ${result.data.branches.length} branch${result.data.branches.length === 1 ? "" : "es"} from ${result.data.repo}.`
-        : result.data.grant_sql
-          ? `Could not FETCH; showing branches from the last fetch (${result.data.branches.length}).`
-          : (result.data.fetch_warning || "Listed the local clone without a fresh FETCH."));
+        ? `${result.data.branches.length} branch${result.data.branches.length === 1 ? "" : "es"} fetched`
+        : result.data.grant_sql ? "FETCH blocked; showing last-fetched branches" : (result.data.fetch_warning || "Listed without a fresh FETCH"));
       if (preferLatest || !baseBranch.trim() || baseBranch === "main" || !result.data.branches.some((b) => b.name === baseBranch)) {
         if (result.data.latest) setBaseBranch(result.data.latest);
       }
@@ -190,618 +192,493 @@ export function DbtStudio({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- reload whenever the selected repository changes
   }, [gitRepo]);
 
-  const visible = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    return q ? artifacts.filter((a) => `${a.file_path} ${a.artifact_type}`.toLowerCase().includes(q)) : artifacts;
-  }, [artifacts, query]);
-  const current = visible.find((a) => a.file_path === open) ?? visible[0] ?? artifacts[0];
-  const originValid = originOk(origin, prefixes);
-  const isGithub = /^(https:\/\/github\.com\/|git@github\.com:)[^/]+\/[^/]+/i.test(origin.trim());
-  const repoReady = Boolean(gitRepo.trim());
-  const sameBranch = baseBranch.trim() !== "" && baseBranch.trim() === cutBranch.trim();
-  const ready = Boolean(baseBranch.trim() && cutBranch.trim() && originValid && !sameBranch
-    && (!fetchSkeleton || repoReady) && (!push || (isGithub && publisherReady)));
-  const skills = appliedSkills?.length
-    ? appliedSkills
-    : (workspace?.skills ?? []).map((s) => ({
-      name: s.skill_name || s.name || "",
-      version: s.version ?? undefined,
-      description: s.description,
-    }));
-  const projectStatus = lastWorkspace && typeof lastWorkspace.dbt_project === "object"
-    ? (lastWorkspace.dbt_project as { status?: string; detail?: string; dbt_project?: string })
-    : null;
-  const lineage = lastWorkspace && typeof lastWorkspace.lineage === "object"
-    ? lastWorkspace.lineage as Record<string, unknown>
-    : null;
-  const skeleton = lineage && typeof lineage.skeleton === "object"
-    ? lineage.skeleton as { requested?: boolean; files?: number; branch?: string; error?: string }
-    : null;
-  const pub = publication;
-  const published = pub && ["PUBLISHED", "NO_CHANGES"].includes(pub.status);
+  const runCheck = () => {
+    if (!isGithub) { toast("warn", "Pick a github.com origin first."); return; }
+    setBusy("check");
+    start(async () => {
+      const result = await checkGithub(origin.trim());
+      setBusy(null);
+      if (!result.ok) { toast("fail", result.error); return; }
+      setCheck(result.data);
+      if (result.data.status === "OK") {
+        toast(result.data.push === false ? "warn" : "done",
+          result.data.push === false ? `Connected to ${result.data.repository}, but your account can't push.` : `Connected to ${result.data.repository}.`);
+      } else toast("fail", result.data.detail || result.data.status);
+    });
+  };
 
-  const steps: { title: string; detail: string; tone: StepTone }[] = [
+  const runRotate = () => {
+    if (!token.trim()) return;
+    setBusy("rotate");
+    start(async () => {
+      const result = await rotateGithubToken(token.trim());
+      setBusy(null);
+      setToken("");
+      if (!result.ok) { toast("fail", result.error); return; }
+      setRotating(false);
+      setLastPublish(null);
+      toast("done", "Token updated in the Snowflake secret. Testing the connection…");
+      runCheck();
+    });
+  };
+
+  const runSetup = () => {
+    setBusy("setup");
+    start(async () => {
+      const result = await setupGithubPublishing(runId, { token: token.trim() || undefined });
+      setBusy(null);
+      setToken("");
+      if (!result.ok) { toast("fail", result.error); return; }
+      setSetupLog(result.data.log);
+      toast(result.data.ready ? "done" : "fail", result.data.ready ? "GitHub publishing is ready." : (result.data.detail || "Setup did not finish."));
+    });
+  };
+
+  const runCreateRepo = () => {
+    setBusy("repo");
+    start(async () => {
+      const result = await createGitRepository(runId, {
+        name: newRepoName || "DBT_REPO", origin: origin.trim() || prefixes[0] || "", api_integration: integration,
+      });
+      setBusy(null);
+      if (!result.ok) { toast("fail", friendly(result.error)); return; }
+      setGitRepo(result.data.git_repository);
+      toast("done", `Created ${result.data.git_repository} and fetched it.`);
+    });
+  };
+
+  const runGenerate = (doPush: boolean) => {
+    if (sameBranch) { toast("fail", "The new branch must differ from the cut-from branch."); return; }
+    if (origin.trim() && prefixes.length && !originValid) { toast("fail", "Origin is outside the integration's allowed prefixes."); return; }
+    if (fetchSkeleton && !gitRepo.trim()) { toast("warn", "Pick or create a Snowflake git clone, or turn the skeleton off."); return; }
+    if (doPush && !isGithub) { toast("fail", "Opening a PR needs a github.com origin."); return; }
+    setBusy(doPush ? "push" : "generate");
+    start(async () => {
+      const result = await generateDbt(runId, {
+        repo: origin.trim() || gitRepo || undefined, origin: origin.trim() || undefined,
+        git_repository: gitRepo.trim() || undefined, api_integration: integration || undefined,
+        dbt_project: dbtProject.trim() || undefined, allowed_prefixes: prefixes.length ? prefixes : undefined,
+        base_branch: baseBranch.trim(), cut_branch: cutBranch.trim(), push: doPush, fetch_skeleton: fetchSkeleton,
+        prefix: prefix.trim().toUpperCase(), source_key: sourceKey.trim() || undefined, domain_folder: domainFolder.trim() || undefined,
+      });
+      setBusy(null);
+      if (!result.ok) { toast("fail", friendly(result.error)); return; }
+      setLastPublish(null);
+      setOpenStep(doPush ? "publish" : "review");
+      toast("done", doPush ? "Generated. Publishing to GitHub — see step 4." : "Generated. Review the files below.");
+    });
+  };
+
+  const runPublish = () => {
+    if (!isGithub) { toast("fail", "Opening a PR needs a github.com origin."); return; }
+    setBusy("publish");
+    start(async () => {
+      const result = await publishDbt(runId, {
+        origin: origin.trim(), base_branch: baseBranch.trim(), cut_branch: cutBranch.trim(),
+        git_repository: gitRepo.trim() || undefined, draft: draftPr,
+      });
+      setBusy(null);
+      if (!result.ok) { toast("fail", friendly(result.error)); return; }
+      setLastPublish({ status: result.data.status, detail: result.data.detail });
+      if (result.data.pull_request?.url) toast("done", `Pull request ready: ${result.data.pull_request.url}`);
+      else if (result.data.status === "NO_CHANGES") toast("done", "Branch is up to date; nothing changed vs. the base branch.");
+      else toast("fail", result.data.detail || result.data.status);
+    });
+  };
+
+  // ---------------------------------------------------------------- header CTA
+  const cta = !generation
+    ? { label: push ? "Generate & open PR" : "Generate", icon: Sparkles, onClick: () => runGenerate(push), busy: busy === "generate" || busy === "push" }
+    : published && pub?.pr_url
+      ? { label: `Open PR #${pub.pr_number}`, icon: ExternalLink, href: pub.pr_url }
+      : publisherReady
+        ? { label: `Push v${generation.generation_version} & open PR`, icon: GitPullRequest, onClick: runPublish, busy: busy === "publish" }
+        : { label: "Set up GitHub", icon: KeyRound, onClick: () => setOpenStep("connect") };
+
+  const steps: { id: string; title: string; tone: Tone }[] = [
+    { id: "connect", title: "Connect", tone: connectTone },
+    { id: "configure", title: "Configure", tone: configureTone },
+    { id: "review", title: "Generate & review", tone: generateTone },
+    { id: "publish", title: "Publish", tone: publishTone },
+  ];
+
+  const timeline: { title: string; detail: string; tone: Tone; href?: string }[] = [
+    { title: "Read approved STTM", detail: "DBT-ONBOARD-SOURCE rules engine", tone: generation ? "done" : "idle" },
     {
-      title: "1. Read approved STTM",
-      detail: "Deterministic models from the contract + DBT-ONBOARD-SOURCE / domain skill macros.",
-      tone: artifacts.length ? "done" : "idle",
+      title: `Read skeleton from ${baseBranch}`,
+      detail: !generation ? (fetchSkeleton ? "Every file on the cut-from branch is kept as-is" : "Off: models only")
+        : skeleton?.error ? skeleton.error : `${report?.skeleton_files ?? skeleton?.files ?? 0} files from ${baseBranch}`,
+      tone: !generation ? "idle" : skeleton?.error ? "fail" : (report?.skeleton_files ?? skeleton?.files) ? "done" : "warn",
     },
     {
-      title: `2. Read skeleton from ${skeleton?.branch || baseBranch}`,
-      detail: !skeleton
-        ? (fetchSkeleton ? `Runs when you generate: reads every file on ${baseBranch || "the cut-from branch"}.` : "Off — models only.")
-        : skeleton.error
-          ? String(skeleton.error)
-          : skeleton.files
-            ? `${skeleton.files} files from the cut-from branch, kept as-is`
-            : skeleton.requested ? "The branch had no readable dbt files." : "Skipped. Generate used only the STTM models.",
-      tone: !skeleton ? "idle" : skeleton.error ? "fail" : skeleton.files ? "done" : "skip",
-    },
-    {
-      title: "3. Write compile-only project to stage",
-      detail: generation
-        ? `${generation.files_generated} files on ${generation.stage_path}`
-        : "Not generated yet.",
+      title: "Write compile-only project",
+      detail: generation ? `${generation.files_generated} files · ${generation.stage_path}` : "@CODEGEN.DBT_STAGE",
       tone: generation ? "done" : "idle",
     },
     {
-      title: `4. Push branch ${pub?.head_branch || cutBranch} to GitHub`,
-      detail: pub
-        ? pub.status === "FAILED"
-          ? pub.detail || "Publish failed."
-          : `${pub.files_pushed ?? "?"} files${pub.commit_sha ? ` · commit ${pub.commit_sha.slice(0, 7)}` : ""} on top of ${pub.base_branch}${pub.status === "NO_CHANGES" ? " · no changes vs base" : ""}`
-        : publisherReady ? "Runs after generate when GitHub publishing is selected." : "GitHub publishing is not set up yet (see below).",
-      tone: !pub ? (publisherReady ? "idle" : "skip") : pub.status === "FAILED" ? "fail" : "done",
+      title: `Push ${pub?.head_branch || cutBranch}`,
+      detail: pubStatus ? (published ? `${pub?.files_pushed ?? "?"} files${pub?.commit_sha ? ` · ${pub.commit_sha.slice(0, 7)}` : ""}` : pubDetail || pubStatus)
+        : publisherReady ? "GitHub API via CODEGEN.PUBLISH_DBT_PR" : "GitHub publishing not set up",
+      tone: published ? "done" : pubStatus && pubStatus !== "NOT_REQUESTED" ? "fail" : "idle",
     },
     {
-      title: "5. Pull request",
-      detail: pub?.pr_url ? `#${pub.pr_number} ${pub.pr_url}` : pub?.status === "NO_CHANGES" ? "No changes, so no PR was opened." : "Opened against the cut-from branch.",
-      tone: pub?.pr_url ? "done" : pub?.status === "FAILED" ? "fail" : "idle",
+      title: "Pull request",
+      detail: pub?.pr_url ? `#${pub.pr_number}` : pubStatus === "NO_CHANGES" ? "No changes vs. base" : `Into ${baseBranch}`,
+      tone: pub?.pr_url ? "done" : pubStatus && !published ? "fail" : "idle", href: pub?.pr_url ?? undefined,
     },
     {
-      title: "6. dbt project in Snowflake",
-      detail: pub?.dbt_project
-        ? `${pub.dbt_project} · from @repo/branches/${pub.head_branch} (WRITEBACK=FALSE)`
-        : projectStatus
-          ? `${projectStatus.status || "unknown"}${projectStatus.dbt_project ? ` · ${projectStatus.dbt_project} (from stage)` : ""}${projectStatus.detail ? ` — ${projectStatus.detail}` : ""}`
-          : "Created from the stage on generate, then from the pushed branch after publish.",
-      tone: pub?.dbt_project || projectStatus?.status === "CREATED" ? "done" : projectStatus ? "fail" : "idle",
+      title: "dbt project in Snowflake",
+      detail: pub?.dbt_project ? `${pub.dbt_project} (from branch)` : "WRITEBACK=FALSE, created from the pushed branch",
+      tone: pub?.dbt_project ? "done" : "idle",
     },
   ];
 
-  const applyRepo = (fqn: string) => {
-    setGitRepo(fqn);
-    const next = allRepos.find((r) => r.fqn === fqn);
-    if (next?.origin) setOrigin(next.origin);
-    if (next?.api_integration && !sameName(next.api_integration, integration)) setIntegration(next.api_integration);
-  };
-
-  const branchExists = branches.some((b) => b.name === cutBranch.trim());
-
-  const runGenerate = (doPush: boolean) => {
-    if (!baseBranch.trim() || !cutBranch.trim()) {
-      setError("Cut-from and new branch are required.");
-      return;
-    }
-    if (sameBranch) {
-      setError("The new branch must differ from the cut-from branch.");
-      return;
-    }
-    if (origin.trim() && prefixes.length && !originValid) {
-      setError("Origin is not in the API integration allowed prefixes.");
-      return;
-    }
-    if (fetchSkeleton && !gitRepo.trim()) {
-      setError("Pick or create a Snowflake GIT REPOSITORY to read the skeleton, or turn the skeleton off.");
-      return;
-    }
-    if (doPush && !isGithub) {
-      setError("Pushing a branch and opening a PR needs a GitHub origin URL.");
-      return;
-    }
-    start(async () => {
-      setError("");
-      setNotice("");
-      setMode(doPush ? "push" : "generate");
-      const result = await generateDbt(runId, {
-        repo: origin.trim() || gitRepo || undefined,
-        origin: origin.trim() || undefined,
-        git_repository: gitRepo.trim() || undefined,
-        api_integration: integration || undefined,
-        dbt_project: dbtProject.trim() || undefined,
-        allowed_prefixes: prefixes.length ? prefixes : undefined,
-        base_branch: baseBranch.trim(),
-        cut_branch: cutBranch.trim(),
-        push: doPush,
-        fetch_skeleton: fetchSkeleton,
-      });
-      setMode(null);
-      if (!result.ok) setError(friendlyError(result.error));
-      else setNotice(doPush ? "Generated. Check the push and pull request steps above." : "Generated to the stage.");
-    });
-  };
-
-  const runPublish = () => start(async () => {
-    setError("");
-    setNotice("");
-    setMode("publish");
-    const result = await publishDbt(runId, {
-      origin: origin.trim(), base_branch: baseBranch.trim(), cut_branch: cutBranch.trim(),
-      git_repository: gitRepo.trim() || undefined, draft: draftPr,
-    });
-    setMode(null);
-    if (!result.ok) { setError(friendlyError(result.error)); return; }
-    if (result.data.status === "FAILED" || result.data.status === "NOT_CONFIGURED") setError(result.data.detail || result.data.status);
-    else setNotice(result.data.pull_request?.url ? `Pull request ready: ${result.data.pull_request.url}` : "Branch pushed; nothing changed vs the base branch.");
-  });
-
-  const runSetup = () => start(async () => {
-    setError("");
-    setMode("setup");
-    const result = await setupGithubPublishing(runId, { token: token.trim() || undefined });
-    setMode(null);
-    setToken("");
-    if (!result.ok) { setError(result.error); return; }
-    setSetupLog(result.data.log);
-    if (!result.data.ready) setError(result.data.detail || "Setup did not finish.");
-    else setNotice("GitHub publishing is ready.");
-  });
-
-  const runCreateRepo = () => start(async () => {
-    setError("");
-    setMode("repo");
-    const result = await createGitRepository(runId, {
-      name: newRepoName || "DBT_REPO", origin: origin.trim() || prefixes[0] || "", api_integration: integration,
-    });
-    setMode(null);
-    if (!result.ok) { setError(friendlyError(result.error)); return; }
-    setGitRepo(result.data.git_repository);
-    setNotice(`Created ${result.data.git_repository} and fetched it.`);
-  });
-
-  const runEnhance = () => {
-    if (!current) {
-      setError("Open a generated file first.");
-      return;
-    }
-    if (!enhancePrompt.trim()) {
-      setError("Describe the change you want Cortex to make.");
-      return;
-    }
-    start(async () => {
-      setError("");
-      setMode("enhance");
-      const result = await previewDbtEnhance(runId, {
-        file_path: current.file_path,
-        prompt: enhancePrompt.trim(),
-        model: model || undefined,
-      });
-      setMode(null);
-      if (!result.ok) {
-        setError(friendlyError(result.error));
-        return;
-      }
-      setPreview({
-        content: result.data.content,
-        rationale: result.data.rationale,
-        summary: result.data.summary,
-        model: result.data.model,
-      });
-    });
-  };
-
-  const runApply = () => {
-    if (!current || !preview) return;
-    start(async () => {
-      setError("");
-      setMode("apply");
-      const result = await applyDbtEnhance(runId, { file_path: current.file_path, content: preview.content });
-      setMode(null);
-      if (!result.ok) {
-        setError(friendlyError(result.error));
-        return;
-      }
-      setPreview(null);
-      setEnhancePrompt("");
-    });
-  };
+  const pathPreview = `models/silver/${domainFolder || "<domain>"}/${sourceKey || "<source>"}/${sourceKey || "<source>"}_${report?.target || "<target>"}.sql`;
 
   return (
     <div className="space-y-5">
-      <Card>
-        <CardHeader>
-          <CardTitle>1. Snowflake git connection</CardTitle>
-          <CardDescription>
-            Pick an API integration. Its Snowflake git repositories, allowed origin URLs and branches load automatically.
-            The repository clone is used read-only, to read the cut-from branch skeleton.
-            {domainName ? ` Domain: ${domainName}.` : ""}
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          {!!workspace?.warnings?.length && (
-            <details className="text-xs text-muted-foreground">
-              <summary className="cursor-pointer">{workspace.warnings.length} discovery note(s)</summary>
-              <ul className="mt-1 list-inside list-disc">{workspace.warnings.map((w) => <li key={w}>{w}</li>)}</ul>
-            </details>
+      {/* ------------------------------------------------------------------ header */}
+      <div className="rounded-xl border bg-gradient-to-r from-slate-900 to-slate-800 p-5 text-white shadow-sm">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div className="min-w-0">
+            <p className="text-xs uppercase tracking-wider text-slate-300">dbt workspace</p>
+            <h2 className="mt-1 text-xl font-semibold">{runName}{report?.target ? ` → ${report.target}` : ""}</h2>
+            <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-300">
+              <span className="inline-flex items-center gap-1 rounded-full bg-white/10 px-2 py-0.5"><ShieldCheck className="h-3.5 w-3.5" /> DBT-ONBOARD-SOURCE</span>
+              <span className="rounded-full bg-white/10 px-2 py-0.5">bronze → silver staging → silver hub</span>
+              {generation && <span className="rounded-full bg-white/10 px-2 py-0.5">v{generation.generation_version} · {generation.files_generated} files</span>}
+              {domainName && <span className="rounded-full bg-white/10 px-2 py-0.5">Domain {domainName}</span>}
+            </div>
+          </div>
+          {canGenerate && (
+            "href" in cta && cta.href ? (
+              <a href={cta.href} target="_blank" rel="noreferrer"
+                className="inline-flex h-10 items-center gap-2 rounded-md bg-emerald-500 px-5 text-sm font-medium text-white hover:bg-emerald-400">
+                <cta.icon className="h-4 w-4" /> {cta.label}
+              </a>
+            ) : (
+              <Button size="lg" className="bg-white text-slate-900 hover:bg-slate-100" onClick={"onClick" in cta ? cta.onClick : undefined}
+                disabled={Boolean("busy" in cta && cta.busy) || busy !== null}>
+                {"busy" in cta && cta.busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <cta.icon className="h-4 w-4" />} {cta.label}
+              </Button>
+            )
           )}
-          <div className="grid gap-3 md:grid-cols-2">
+        </div>
+        <ol className="mt-5 grid gap-2 sm:grid-cols-4">
+          {steps.map((s, i) => (
+            <li key={s.id}>
+              <button type="button" onClick={() => { setOpenStep(s.id); document.getElementById(`dbt-${s.id}`)?.scrollIntoView({ behavior: "smooth" }); }}
+                className={cn("flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm transition-colors",
+                  openStep === s.id ? "bg-white text-slate-900" : "bg-white/5 hover:bg-white/10")}>
+                <StepIcon tone={s.tone} n={i + 1} />
+                <span className="font-medium">{s.title}</span>
+              </button>
+            </li>
+          ))}
+        </ol>
+      </div>
+
+      {/* ------------------------------------------------------------------ 1. connect */}
+      <Section id="dbt-connect" n={1} title="Connect" tone={connectTone} open={openStep === "connect"} onToggle={() => toggle("connect")}
+        subtitle="Choose the git integration. Its repository clone, allowed origins and branches load automatically."
+        summary={<>{integration || "no integration"} · {selectedRepo?.fqn || gitRepo || "no clone"} · GitHub {publisherReady ? (tokenProblem ? "needs token fix" : "ready") : "not set up"}</>}>
+        <div className="grid gap-4 lg:grid-cols-2">
+          <div className="space-y-3 rounded-lg border p-4">
+            <p className="flex items-center gap-2 text-sm font-semibold"><GitBranchIcon className="h-4 w-4" /> Snowflake git (read-only skeleton)</p>
+            {!!workspace?.warnings?.length && (
+              <details className="text-[11px] text-muted-foreground">
+                <summary className="cursor-pointer">{workspace.warnings.length} discovery note(s)</summary>
+                <ul className="mt-1 list-inside list-disc">{workspace.warnings.map((w) => <li key={w}>{w}</li>)}</ul>
+              </details>
+            )}
             <div>
-              <Label htmlFor="git_int">API integration (git)</Label>
-              <Select id="git_int" value={integration} onChange={(e) => chooseIntegration(e.target.value)}>
-                <option value="">Select integration</option>
+              <Label htmlFor="git_int" className="mt-0">API integration</Label>
+              <div className="grid gap-1.5">
                 {integrations.map((i) => {
                   const count = allRepos.filter((r) => sameName(r.api_integration, i.name)).length;
+                  const active = sameName(i.name, integration);
                   return (
-                    <option key={i.name} value={i.name}>
-                      {i.name}{i.usable === false ? " · no USAGE" : ""} · {count} repo{count === 1 ? "" : "s"}
-                    </option>
+                    <button key={i.name} type="button" onClick={() => chooseIntegration(i.name)}
+                      className={cn("flex items-center justify-between rounded-md border px-3 py-2 text-left text-xs",
+                        active ? "border-blue-500 bg-blue-50/60 ring-1 ring-blue-200" : "hover:bg-slate-50")}>
+                      <span className="min-w-0">
+                        <span className="block truncate font-mono font-medium">{i.name}</span>
+                        <span className="block truncate text-[11px] text-muted-foreground">{(i.allowed_prefixes ?? []).join(", ") || "no allowed prefixes"}</span>
+                      </span>
+                      <span className="ml-2 flex shrink-0 items-center gap-1.5">
+                        {i.usable === false && <StatusPill tone="warn">no USAGE</StatusPill>}
+                        <StatusPill tone={count ? "done" : "idle"}>{count} clone{count === 1 ? "" : "s"}</StatusPill>
+                      </span>
+                    </button>
                   );
                 })}
-              </Select>
-              {selectedInt?.usable === false && (
-                <p className="mt-1 text-xs text-amber-700">
-                  This role can&apos;t describe {selectedInt.name}. Run: <code className="font-mono">GRANT USAGE ON INTEGRATION &quot;{selectedInt.name}&quot; TO ROLE {role || "<role>"};</code>
-                </p>
-              )}
+                {!integrations.length && <p className="text-xs text-muted-foreground">No GIT_HTTPS_API integrations are visible to {role || "this role"}.</p>}
+              </div>
             </div>
             <div>
               <div className="flex items-center justify-between">
-                <Label htmlFor="git_repo">Snowflake GIT REPOSITORY</Label>
+                <Label htmlFor="git_repo">Repository clone</Label>
                 {integration && allRepos.length > repos.length && (
-                  <button type="button" className="mt-3 text-[11px] text-muted-foreground underline" onClick={() => setShowAllRepos(true)}>
-                    show all {allRepos.length}
-                  </button>
+                  <button type="button" className="mt-3 text-[11px] text-muted-foreground underline" onClick={() => setShowAllRepos(true)}>show all {allRepos.length}</button>
                 )}
               </div>
               {repos.length > 0 ? (
                 <Select id="git_repo" value={gitRepo} onChange={(e) => applyRepo(e.target.value)}>
                   <option value="">Select repository</option>
-                  {repos.map((r) => (
-                    <option key={r.fqn} value={r.fqn}>{r.fqn}{r.usable === false ? " · no access" : ""}</option>
-                  ))}
+                  {repos.map((r) => <option key={r.fqn} value={r.fqn}>{r.fqn}{r.usable === false ? " · no access" : ""}</option>)}
                 </Select>
-              ) : (
-                <div className="space-y-2 rounded-md border border-dashed p-2.5">
-                  <p className="text-xs text-muted-foreground">
-                    {integration ? `No repository clone uses ${integration} yet.` : "Pick an integration first."}
-                    {integration && " Create one to read its branches (one-time, read-only)."}
-                  </p>
-                  {integration && (
-                    <div className="flex gap-2">
-                      <Input value={newRepoName} onChange={(e) => setNewRepoName(e.target.value.toUpperCase())} placeholder="DBT_DEMO" className="h-8 font-mono text-xs" />
-                      <Button type="button" size="sm" disabled={pending || !(origin.trim() || prefixes[0])} onClick={runCreateRepo}>
-                        {pending && mode === "repo" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />} Create clone
-                      </Button>
-                    </div>
-                  )}
+              ) : integration ? (
+                <div className="flex gap-2">
+                  <Input value={newRepoName} onChange={(e) => setNewRepoName(e.target.value.toUpperCase())} placeholder="DBT_DEMO" className="font-mono text-xs" />
+                  <Button type="button" variant="outline" disabled={busy !== null || !(origin.trim() || prefixes[0])} onClick={runCreateRepo}>
+                    {busy === "repo" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />} Create clone
+                  </Button>
+                </div>
+              ) : <p className="text-xs text-muted-foreground">Pick an integration.</p>}
+            </div>
+            {(selectedRepo?.grant_sql || grantSql) && (
+              <Callout tone="warn" title="Your role can't use this clone's integration" action={<CopyButton text={(grantSql || selectedRepo?.grant_sql) as string} />}>
+                Ask an admin to run <code className="font-mono">{grantSql || selectedRepo?.grant_sql}</code>
+              </Callout>
+            )}
+            <div>
+              <Label htmlFor="origin">Origin URL</Label>
+              <Input id="origin" value={origin} onChange={(e) => setOrigin(e.target.value)} placeholder={prefixes[0] || "https://github.com/org/repo"}
+                aria-invalid={!originValid} className={cn(!originValid && "border-red-400")} />
+              {!originValid && <p className="mt-1 text-xs text-red-600">Must start with an allowed prefix of {integration}.</p>}
+              {prefixes.length > 1 && (
+                <div className="mt-1.5 flex flex-wrap gap-1">
+                  {prefixes.map((p) => (
+                    <button key={p} type="button" onClick={() => setOrigin(p)}
+                      className={cn("rounded-full border px-2 py-0.5 font-mono text-[11px]", origin.startsWith(p) ? "border-blue-500 bg-blue-50" : "hover:bg-slate-50")}>{p}</button>
+                  ))}
                 </div>
               )}
             </div>
           </div>
-          {(selectedRepo?.grant_sql || grantSql) && <GrantHint sql={(grantSql || selectedRepo?.grant_sql) as string} />}
-          <div>
-            <Label htmlFor="origin">Origin URL</Label>
-            <Input
-              id="origin"
-              value={origin}
-              onChange={(e) => setOrigin(e.target.value)}
-              placeholder={prefixes[0] || "https://github.com/org/repo"}
-              aria-invalid={!originValid}
-            />
-            {!originValid && (
-              <p className="mt-1 text-xs text-destructive">
-                Origin must start with an allowed prefix for {integration || "the selected integration"}.
-              </p>
+
+          <div className="space-y-3 rounded-lg border p-4">
+            <div className="flex items-center justify-between">
+              <p className="flex items-center gap-2 text-sm font-semibold"><GitPullRequest className="h-4 w-4" /> GitHub publishing</p>
+              <StatusPill tone={!publisherReady ? "idle" : tokenProblem ? "fail" : check?.status === "OK" && check.push !== false ? "done" : "active"}>
+                {!publisherReady ? "not set up" : tokenProblem ? "token needs access" : check?.status === "OK" ? "connected" : "ready"}
+              </StatusPill>
+            </div>
+            {!publisherReady ? (
+              <>
+                <p className="text-xs text-muted-foreground">
+                  Snowflake git clones are read-only, so branches and PRs go through the GitHub API from a Snowflake procedure.
+                  The token is stored in a Snowflake secret; this app never keeps it. This one-time setup needs CREATE INTEGRATION
+                  and CREATE SECRET.
+                </p>
+                <TokenHelp repo={origin} />
+                <div className="flex gap-2">
+                  <Input type="password" autoComplete="off" value={token} onChange={(e) => setToken(e.target.value)} placeholder="github_pat_…" />
+                  <Button onClick={runSetup} disabled={busy !== null}>{busy === "setup" && <Loader2 className="h-4 w-4 animate-spin" />} Set up</Button>
+                </div>
+                {setupLog.length > 0 && (
+                  <ol className="space-y-1 text-[11px]">
+                    {setupLog.map((s) => (
+                      <li key={s.sql} className={cn("rounded border px-2 py-1 font-mono", s.ok ? "border-emerald-200 bg-emerald-50" : "border-red-200 bg-red-50")}>
+                        <span className="block whitespace-pre-wrap break-all">{s.sql}</span>
+                        {s.error && <span className="mt-0.5 block font-sans text-red-700">{s.error}</span>}
+                      </li>
+                    ))}
+                  </ol>
+                )}
+              </>
+            ) : (
+              <>
+                {check?.status === "OK" && (
+                  <Callout tone={check.push === false ? "warn" : "done"} title={`Connected to ${check.repository}`}>
+                    Default branch {check.default_branch} · {check.private ? "private" : "public"} · push {check.push === false ? "not allowed for your account" : "allowed"}
+                  </Callout>
+                )}
+                {tokenProblem && (
+                  <Callout tone="fail" title="GitHub refused the token for this repository">
+                    <p className="mb-1 break-words">{(check && TOKEN_FAIL.has(check.status) ? check.detail : pubDetail)?.split(". Edit the token")[0]}</p>
+                    <TokenHelp repo={origin} />
+                  </Callout>
+                )}
+                <div className="flex flex-wrap gap-2">
+                  <Button variant="outline" size="sm" onClick={runCheck} disabled={busy !== null || !isGithub}>
+                    {busy === "check" ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />} Test connection
+                  </Button>
+                  <Button variant={tokenProblem ? "default" : "ghost"} size="sm" onClick={() => setRotating((r) => !r)}>
+                    <KeyRound className="h-4 w-4" /> {tokenProblem ? "Replace token" : "Rotate token"}
+                  </Button>
+                </div>
+                {rotating && (
+                  <div className="flex gap-2">
+                    <Input type="password" autoComplete="off" value={token} onChange={(e) => setToken(e.target.value)} placeholder="new github_pat_…" />
+                    <Button size="sm" onClick={runRotate} disabled={busy !== null || !token.trim()}>
+                      {busy === "rotate" && <Loader2 className="h-4 w-4 animate-spin" />} Save
+                    </Button>
+                  </div>
+                )}
+                {!isGithub && origin && <p className="text-xs text-amber-700">The origin must be a github.com repository to open PRs.</p>}
+              </>
             )}
           </div>
-          {prefixes.length > 0 && (
-            <div>
-              <p className="mb-1 text-xs font-medium text-muted-foreground">Allowed URL prefixes</p>
-              <div className="flex flex-wrap gap-1">
-                {prefixes.map((p) => (
-                  <button key={p} type="button" onClick={() => setOrigin(p)}
-                    className={`rounded-full border px-2 py-0.5 font-mono text-[11px] ${origin.trim().startsWith(p) ? "border-primary bg-primary/5" : "hover:bg-muted"}`}>
-                    {p}
-                  </button>
-                ))}
+        </div>
+      </Section>
+
+      {/* ------------------------------------------------------------------ 2. configure */}
+      <Section id="dbt-configure" n={2} title="Configure" tone={configureTone} open={openStep === "configure"} onToggle={() => toggle("configure")}
+        subtitle="Naming from the skill: audit-column prefix, source key and domain folder decide the file layout."
+        summary={<>{cutBranch} from {baseBranch} · prefix {prefix || "none"} · {push ? "GitHub PR" : "stage only"}</>}>
+        <div className="grid gap-4 lg:grid-cols-[1fr_1fr]">
+          <div className="space-y-1">
+            <p className="text-sm font-semibold">Skill naming</p>
+            <div className="grid gap-3 sm:grid-cols-3">
+              <div>
+                <Label htmlFor="prefix">{"{PREFIX}"}</Label>
+                <Input id="prefix" value={prefix} maxLength={16} onChange={(e) => setPrefix(e.target.value.replace(/[^A-Za-z0-9]/g, "").toUpperCase())} placeholder="GDP" className="font-mono" />
+              </div>
+              <div>
+                <Label htmlFor="skey">Source key</Label>
+                <Input id="skey" value={sourceKey} onChange={(e) => setSourceKey(snake(e.target.value))} placeholder="auto (source system)" className="font-mono" />
+              </div>
+              <div>
+                <Label htmlFor="dom">Domain folder</Label>
+                <Input id="dom" value={domainFolder} onChange={(e) => setDomainFolder(snake(e.target.value))} placeholder="auto (domain)" className="font-mono" />
               </div>
             </div>
-          )}
-          {projects.length > 0 && (
-            <p className="text-xs text-muted-foreground">
-              Existing dbt projects: {projects.map((p) => p.fqn).join(", ")}
-            </p>
-          )}
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>2. Skills from the STTM</CardTitle>
-          <CardDescription>
-            Models are built from the approved STTM with DBT-ONBOARD-SOURCE and added on top of the cut-from branch.
-            Files that aren&apos;t generated stay exactly as they are on that branch.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="flex flex-wrap gap-2">
-          {skills.length === 0 && <Badge variant="outline">DBT-ONBOARD-SOURCE</Badge>}
-          {skills.map((s) => (
-            <Badge key={s.name} variant="secondary" title={s.description}>
-              {s.name}{s.version ? ` v${s.version}` : ""}
-            </Badge>
-          ))}
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>How this run produces code</CardTitle>
-          <CardDescription>
-            Snowflake git repository clones are read-only from SQL. The skeleton is read from the clone, and the new branch,
-            commit and pull request go through the GitHub API (CODEGEN.PUBLISH_DBT_PR, using a Snowflake secret). Then the
-            pushed branch is fetched back into Snowflake as a compile-only dbt project.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="grid gap-2 md:grid-cols-2">
-          {steps.map((step) => (
-            <div key={step.title} className={`rounded-lg border px-3 py-2 ${stepTone(step.tone)}`}>
-              <p className="text-sm font-medium">{step.title}</p>
-              <p className="mt-1 break-all text-xs text-muted-foreground">{step.detail}</p>
+            <div className="mt-3 rounded-lg bg-slate-50 p-3 font-mono text-[11px] leading-5 text-slate-600">
+              <p>models/bronze/{report?.target || "<target>"}_{sourceKey || "<source>"}_source.yml</p>
+              <p className="text-slate-900">{pathPreview}</p>
+              <p>models/silver/{domainFolder || "<domain>"}/{report?.target || "<target>"}.sql <span className="text-slate-400">(hub; patched if on the branch)</span></p>
+              <p>macros/{domainFolder || "<domain>"}_utils.sql</p>
+              <p className="mt-1 text-slate-400">audit: {prefix ? `${prefix}_IS_ACTIVE, ${prefix}_INSERTED_TS, ${prefix}_UPDATED_TS …` : "no prefix"}</p>
             </div>
+          </div>
+          <div className="space-y-1">
+            <p className="text-sm font-semibold">Branch</p>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div>
+                <Label htmlFor="base">Cut from</Label>
+                {branches.length > 0 ? (
+                  <Select id="base" value={baseBranch} onChange={(e) => setBaseBranch(e.target.value)}>
+                    {branches.map((b) => <option key={b.name} value={b.name}>{b.name}{b.name === latestBranch ? " · latest" : ""}</option>)}
+                  </Select>
+                ) : <Input id="base" value={baseBranch} onChange={(e) => setBaseBranch(e.target.value)} placeholder="main" />}
+              </div>
+              <div>
+                <Label htmlFor="cut">New branch</Label>
+                <Input id="cut" value={cutBranch} onChange={(e) => setCutBranch(e.target.value)} className={cn("font-mono", sameBranch && "border-red-400")} />
+              </div>
+            </div>
+            <div className="flex flex-wrap items-center gap-2 pt-2 text-xs">
+              <Button type="button" size="sm" variant="outline" disabled={!gitRepo.trim() || listing} onClick={() => refreshBranches(gitRepo, true)}>
+                {listing ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />} Refresh
+              </Button>
+              {latestBranch && latestBranch !== baseBranch && (
+                <button type="button" className="text-blue-700 underline" onClick={() => setBaseBranch(latestBranch)}>use latest ({latestBranch})</button>
+              )}
+              <span className="text-muted-foreground">{fetchNote}</span>
+            </div>
+            {branchExists && <p className="text-xs text-muted-foreground">{cutBranch} exists: publishing adds a commit and reuses its open PR.</p>}
+            {sameBranch && <p className="text-xs text-red-600">The new branch must differ from the cut-from branch.</p>}
+            <div className="mt-3 inline-flex rounded-lg border p-0.5 text-xs">
+              <button type="button" disabled={!publisherReady} onClick={() => setPush(true)}
+                className={cn("rounded-md px-3 py-1.5", push ? "bg-slate-900 text-white" : "text-slate-600", !publisherReady && "opacity-50")}>
+                <GitPullRequest className="mr-1 inline h-3.5 w-3.5" /> GitHub branch + PR
+              </button>
+              <button type="button" onClick={() => setPush(false)} className={cn("rounded-md px-3 py-1.5", !push ? "bg-slate-900 text-white" : "text-slate-600")}>
+                Stage only
+              </button>
+            </div>
+            <div className="flex flex-wrap gap-4 pt-2 text-sm">
+              <label className="flex items-center gap-2"><input type="checkbox" checked={fetchSkeleton} onChange={(e) => setFetchSkeleton(e.target.checked)} /> Build on the branch skeleton</label>
+              {push && <label className="flex items-center gap-2"><input type="checkbox" checked={draftPr} onChange={(e) => setDraftPr(e.target.checked)} /> Draft PR</label>}
+            </div>
+            <details className="pt-1 text-xs">
+              <summary className="cursor-pointer text-muted-foreground">Advanced</summary>
+              <Label htmlFor="dbt_proj">dbt project object (optional)</Label>
+              <Input id="dbt_proj" value={dbtProject} onChange={(e) => setDbtProject(e.target.value)} list="dbt_proj_list"
+                placeholder={projects[0]?.fqn || "DEV_AI_PLATFORM.CODEGEN.GDP_<run>_V<n>"} />
+              <datalist id="dbt_proj_list">{projects.map((p) => <option key={p.fqn} value={p.fqn} />)}</datalist>
+            </details>
+          </div>
+        </div>
+        {canGenerate && (
+          <div className="mt-4 flex flex-wrap items-center gap-2 border-t pt-4">
+            <Button onClick={() => runGenerate(push)} disabled={busy !== null || sameBranch || !originValid}>
+              {(busy === "generate" || busy === "push") ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+              {generation ? "Regenerate" : "Generate"}{push ? " & open PR" : ""}
+            </Button>
+            {push && <Button variant="ghost" onClick={() => runGenerate(false)} disabled={busy !== null}>Generate only (review first)</Button>}
+          </div>
+        )}
+      </Section>
+
+      {/* ------------------------------------------------------------------ 3. review */}
+      <Section id="dbt-review" n={3} title="Generate & review" tone={generateTone} open={openStep === "review"} onToggle={() => toggle("review")}
+        subtitle="Every file the skill produced, with the per-column rule report, a diff against the branch, and a Cortex review."
+        summary={generation ? <>v{generation.generation_version} · {report?.todos ?? 0} TODO · {report?.anomalies?.length ?? 0} notes</> : "not generated"}>
+        <ReviewPanel runId={runId} artifacts={artifacts} report={report ?? null} skeletonBase={skeletonBase ?? null}
+          models={models} defaultModel={workspace?.default_model || models[0]?.name || "claude-sonnet-4-5"} canEdit={canGenerate} />
+      </Section>
+
+      {/* ------------------------------------------------------------------ 4. publish */}
+      <Section id="dbt-publish" n={4} title="Publish" tone={publishTone} open={openStep === "publish"} onToggle={() => toggle("publish")}
+        subtitle="Push a new branch on top of the cut-from branch, open the pull request, and create the dbt project from that branch."
+        summary={pub?.pr_url ? <>PR #{pub.pr_number} · {pub.head_branch}</> : pubStatus || "not published"}>
+        <ol className="relative space-y-3 border-l pl-6">
+          {timeline.map((t) => (
+            <li key={t.title} className="relative">
+              <span className="absolute -left-[33px] top-0 rounded-full bg-card"><StepIcon tone={t.tone} n={0} /></span>
+              <p className="text-sm font-medium">{t.title}</p>
+              {t.href
+                ? <a href={t.href} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-xs text-blue-700 underline">{t.detail} <ExternalLink className="h-3 w-3" /></a>
+                : <p className="break-words text-xs text-muted-foreground">{t.detail}</p>}
+            </li>
           ))}
+        </ol>
+        {pubStatus && !published && !tokenProblem && pubStatus !== "NOT_REQUESTED" && (
+          <div className="mt-3"><Callout tone="fail" title={`Publish ${pubStatus.toLowerCase().replace("_", " ")}`}>{pubDetail}</Callout></div>
+        )}
+        {tokenProblem && (
+          <div className="mt-3">
+            <Callout tone="fail" title="Fix the GitHub token, then push again"
+              action={<Button size="sm" onClick={() => { setOpenStep("connect"); setRotating(true); }}><KeyRound className="h-4 w-4" /> Replace token</Button>}>
+              <TokenHelp repo={origin} />
+            </Callout>
+          </div>
+        )}
+        <div className="mt-4 flex flex-wrap gap-2 border-t pt-4">
           {pub?.pr_url && (
             <a href={pub.pr_url} target="_blank" rel="noreferrer"
-              className="flex items-center gap-2 rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-800 md:col-span-2">
-              <GitPullRequest className="h-4 w-4" /> Open pull request #{pub.pr_number} on GitHub <ExternalLink className="h-3.5 w-3.5" />
+              className="inline-flex h-9 items-center gap-2 rounded-md bg-emerald-600 px-4 text-sm font-medium text-white hover:bg-emerald-500">
+              <GitPullRequest className="h-4 w-4" /> Open PR #{pub.pr_number}
             </a>
           )}
-        </CardContent>
-      </Card>
-
-      {!publisherReady && (
-        <Card className="border-amber-300">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2"><GitPullRequest className="h-4 w-4" /> Set up GitHub publishing (one time)</CardTitle>
-            <CardDescription>
-              Creates a network rule for api.github.com, a Snowflake SECRET holding a GitHub token, an external access
-              integration, and the CODEGEN.PUBLISH_DBT_PR procedure. The token goes straight into the Snowflake secret;
-              it isn&apos;t stored by this app. Use a fine-grained token with <b>Contents: read/write</b> and
-              <b> Pull requests: read/write</b> on the repository. This needs a role that can create integrations and secrets.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-2">
-            <div className="flex flex-wrap gap-2">
-              <Input type="password" autoComplete="off" value={token} onChange={(e) => setToken(e.target.value)}
-                placeholder="github_pat_… (leave empty if CODEGEN.GITHUB_TOKEN already exists)" className="max-w-md" />
-              <Button type="button" disabled={pending} onClick={runSetup}>
-                {pending && mode === "setup" && <Loader2 className="h-4 w-4 animate-spin" />} Set up publishing
-              </Button>
-            </div>
-            {setupLog.length > 0 && (
-              <ol className="space-y-1 text-xs">
-                {setupLog.map((s) => (
-                  <li key={s.sql} className={`rounded border px-2 py-1 font-mono ${s.ok ? "border-emerald-200 bg-emerald-50" : "border-destructive/30 bg-destructive/5"}`}>
-                    <span className="block whitespace-pre-wrap break-all">{s.sql}</span>
-                    {s.error && <span className="mt-0.5 block font-sans text-destructive">{s.error}</span>}
-                  </li>
-                ))}
-              </ol>
-            )}
-          </CardContent>
-        </Card>
-      )}
-
-      <Card>
-        <CardHeader>
-          <CardTitle>3. Cut branch, generate and open PR</CardTitle>
-          <CardDescription>
-            Read the cut-from branch, write the STTM models to the stage and a compile-only dbt project, then push a new
-            branch to GitHub and open a pull request.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <div className="grid gap-3 sm:grid-cols-3">
-            <div>
-              <Label htmlFor="base">Cut from (existing branch)</Label>
-              {branches.length > 0 ? (
-                <Select id="base" value={baseBranch} onChange={(e) => setBaseBranch(e.target.value)}>
-                  {branches.map((b) => (
-                    <option key={b.name} value={b.name}>
-                      {b.name}{b.name === latestBranch ? " · latest" : ""}{b.last_modified ? ` · ${b.last_modified.slice(0, 16)}` : ""}
-                    </option>
-                  ))}
-                </Select>
-              ) : (
-                <Input id="base" value={baseBranch} onChange={(e) => setBaseBranch(e.target.value)} placeholder="main" />
-              )}
-            </div>
-            <div>
-              <Label htmlFor="cut">New branch to create</Label>
-              <Input id="cut" value={cutBranch} onChange={(e) => setCutBranch(e.target.value)} placeholder={`feat/gdp-${slug}`} />
-              {branchExists && (
-                <p className="mt-1 text-xs text-muted-foreground">
-                  {cutBranch} already exists. Publishing adds a new commit on it and reuses its open PR.
-                </p>
-              )}
-              {sameBranch && <p className="mt-1 text-xs text-destructive">Must differ from the cut-from branch.</p>}
-            </div>
-            <div>
-              <Label htmlFor="dbt_proj">dbt project (optional)</Label>
-              <Input
-                id="dbt_proj"
-                value={dbtProject}
-                onChange={(e) => setDbtProject(e.target.value)}
-                placeholder={projects[0]?.fqn || "DEV_AI_PLATFORM.CODEGEN.PIPELINE_RUN"}
-                list="dbt_proj_list"
-              />
-              {projects.length > 0 && (
-                <datalist id="dbt_proj_list">
-                  {projects.map((p) => <option key={p.fqn} value={p.fqn} />)}
-                </datalist>
-              )}
-            </div>
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <Button type="button" size="sm" variant="outline" disabled={!gitRepo.trim() || listing} onClick={() => refreshBranches(gitRepo, true)}>
-              {listing ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-              {listing ? "Fetching branches…" : "Refresh branches"}
+          {generation && publisherReady && canGenerate && (
+            <Button variant={pub?.pr_url ? "outline" : "default"} onClick={runPublish} disabled={busy !== null || !isGithub || sameBranch}>
+              {busy === "publish" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Rocket className="h-4 w-4" />}
+              {published ? "Push again & update PR" : `Push v${generation.generation_version} & open PR`}
             </Button>
-            {latestBranch && latestBranch !== baseBranch && (
-              <Button type="button" size="sm" variant="ghost" onClick={() => setBaseBranch(latestBranch)}>
-                <GitBranchIcon className="h-4 w-4" /> Use latest ({latestBranch})
-              </Button>
-            )}
-            {fetchNote && <span className="text-xs text-muted-foreground">{fetchNote}</span>}
-          </div>
-          <div className="space-y-2">
-            <p className="text-sm font-medium">Destination</p>
-            <label className="flex items-start gap-2 text-sm">
-              <input type="radio" name="dest" checked={push} onChange={() => setPush(true)} disabled={!publisherReady} />
-              <span>
-                GitHub branch + pull request: cut <span className="font-mono">{cutBranch || "feat/gdp-…"}</span> from{" "}
-                <span className="font-mono">{baseBranch || "latest"}</span>, commit the models and open a PR.
-                {!publisherReady && <span className="block text-xs text-amber-700">Set up GitHub publishing above first.</span>}
-                {publisherReady && !isGithub && origin.trim() && <span className="block text-xs text-amber-700">The origin must be a github.com repository.</span>}
-              </span>
-            </label>
-            <label className="flex items-start gap-2 text-sm">
-              <input type="radio" name="dest" checked={!push} onChange={() => setPush(false)} />
-              <span>Stage only: write <span className="font-mono">@CODEGEN.DBT_STAGE</span> and the dbt project, without touching git.</span>
-            </label>
-          </div>
-          <div className="flex flex-wrap gap-4">
-            <label className="flex items-center gap-2 text-sm">
-              <input type="checkbox" checked={fetchSkeleton} onChange={(e) => setFetchSkeleton(e.target.checked)} />
-              Build on the cut-from branch skeleton
-            </label>
-            {push && (
-              <label className="flex items-center gap-2 text-sm">
-                <input type="checkbox" checked={draftPr} onChange={(e) => setDraftPr(e.target.checked)} /> Open as draft PR
-              </label>
-            )}
-          </div>
-          {generation && (
-            <p className="text-sm">
-              Version {generation.generation_version}{" "}
-              <Badge variant="outline">{generation.generation_status}</Badge>
-              {" · "}{generation.files_generated} files · {generation.stage_path}
-              {pub && <> · last publish <Badge variant={published ? "success" : "destructive"}>{pub.status}</Badge></>}
-            </p>
           )}
-          {notice && <p className="rounded-md bg-emerald-50 px-3 py-2 text-sm text-emerald-800">{notice}</p>}
-          {error && <p role="alert" className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">{error}</p>}
-          {canGenerate && (
-            <div className="flex flex-wrap gap-2">
-              <Button disabled={pending || !ready} onClick={() => runGenerate(push)}>
-                {pending && mode === (push ? "push" : "generate") && <Loader2 className="h-4 w-4 animate-spin" />}
-                {pending && mode === "push" ? "Generating, pushing and opening PR…"
-                  : pending && mode === "generate" ? "Generating…"
-                    : push ? "Generate, push branch & open PR" : "Generate to stage"}
-              </Button>
-              {generation && publisherReady && (
-                <Button variant="outline" disabled={pending || !isGithub || sameBranch} onClick={runPublish}>
-                  {pending && mode === "publish" ? <Loader2 className="h-4 w-4 animate-spin" /> : <GitPullRequest className="h-4 w-4" />}
-                  {pub && published ? "Push again & update PR" : `Push v${generation.generation_version} & open PR`}
-                </Button>
-              )}
-            </div>
-          )}
-        </CardContent>
-      </Card>
-      {artifacts.length > 0 && (
-        <Card>
-          <CardHeader>
-            <CardTitle>Generated code</CardTitle>
-            <CardDescription>
-              {visible.length} files{cutBranch ? ` targeting ${cutBranch}` : ""}. Search and open any SQL or YAML.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            <Input aria-label="Search files" placeholder="Search files…" value={query} onChange={(e) => setQuery(e.target.value)} />
-            {visible.length === 0 && <p className="text-sm text-muted-foreground">No files match.</p>}
-            {current && (
-              <div className="grid gap-4 lg:grid-cols-[240px_1fr]">
-                <ol className="max-h-[28rem] space-y-1 overflow-auto">
-                  {visible.map((a) => (
-                    <li key={a.artifact_id}>
-                      <button
-                        type="button"
-                        onClick={() => setOpen(a.file_path)}
-                        className={`w-full truncate rounded-md px-2 py-1.5 text-left font-mono text-xs ${a.file_path === current.file_path ? "bg-accent" : "hover:bg-muted"}`}
-                      >
-                        {a.file_path}
-                      </button>
-                    </li>
-                  ))}
-                </ol>
-                <div>
-                  <div className="mb-2 flex flex-wrap items-center gap-2">
-                    <span className="font-mono text-sm">{current.file_path}</span>
-                    <Badge variant="outline">{current.artifact_type}</Badge>
-                  </div>
-                  <pre className="max-h-[28rem] overflow-auto rounded-md bg-muted p-3 text-xs">{preview?.content ?? current.content}</pre>
-                  <div className="mt-4 space-y-3 rounded-lg border p-3">
-                    <p className="text-sm font-medium">Enhance this file with Cortex</p>
-                    <p className="text-xs text-muted-foreground">
-                      Pick a model available to this Snowflake account. Preview the rewrite, then apply it
-                      onto the generated artifact. This does not push git or open a PR.
-                    </p>
-                    <div className="grid gap-3 md:grid-cols-[220px_1fr]">
-                      <div>
-                        <Label htmlFor="cortex_model">Model</Label>
-                        <Select id="cortex_model" value={model} onChange={(e) => setModel(e.target.value)}>
-                          {(models.length ? models : [{ name: model, family: "other" } as CortexModel]).map((m) => (
-                            <option key={m.name} value={m.name}>
-                              {m.family ? `${m.family} · ` : ""}{m.name}
-                            </option>
-                          ))}
-                        </Select>
-                      </div>
-                      <div>
-                        <Label htmlFor="enhance_need">What should change</Label>
-                        <Textarea
-                          id="enhance_need"
-                          rows={2}
-                          value={enhancePrompt}
-                          onChange={(e) => setEnhancePrompt(e.target.value)}
-                          placeholder="Example: use the clean_boolean macro, add freshness tests, document grain."
-                        />
-                      </div>
-                    </div>
-                    <div className="flex flex-wrap gap-2">
-                      {["Harden nulls and tests", "Use existing macros", "Document columns", "Simplify Jinja"].map((hint) => (
-                        <Button key={hint} type="button" size="sm" variant="ghost" onClick={() => setEnhancePrompt(hint)}>
-                          {hint}
-                        </Button>
-                      ))}
-                    </div>
-                    {preview?.rationale && (
-                      <p className="text-sm text-muted-foreground">
-                        {preview.model ? `${preview.model}: ` : ""}{preview.summary || preview.rationale}
-                      </p>
-                    )}
-                    <div className="flex flex-wrap gap-2">
-                      <Button type="button" variant="outline" disabled={pending || !enhancePrompt.trim()} onClick={runEnhance}>
-                        {pending && mode === "enhance" && <Loader2 className="h-4 w-4 animate-spin" />}
-                        {pending && mode === "enhance" ? "Asking Cortex…" : "Preview enhance"}
-                      </Button>
-                      <Button type="button" disabled={pending || !preview} onClick={runApply}>
-                        {pending && mode === "apply" && <Loader2 className="h-4 w-4 animate-spin" />}
-                        {pending && mode === "apply" ? "Applying…" : "Apply to this file"}
-                      </Button>
-                      {preview && (
-                        <Button type="button" variant="ghost" disabled={pending} onClick={() => setPreview(null)}>
-                          Discard preview
-                        </Button>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              </div>
-            )}
-          </CardContent>
-        </Card>
-      )}
+          {!publisherReady && <Button variant="outline" onClick={() => setOpenStep("connect")}><Lock className="h-4 w-4" /> Set up GitHub publishing</Button>}
+        </div>
+      </Section>
     </div>
+  );
+}
+
+function TokenHelp({ repo }: { repo: string }) {
+  const name = repo.replace(/^https:\/\/github\.com\//, "").replace(/\.git$/, "") || "your repository";
+  return (
+    <ol className="list-inside list-decimal space-y-0.5 text-xs">
+      <li>
+        Open{" "}
+        <a className="underline" href="https://github.com/settings/personal-access-tokens" target="_blank" rel="noreferrer">GitHub → Fine-grained tokens</a>
+        {" "}and edit (or create) the token.
+      </li>
+      <li>Repository access: <b>Only select repositories</b> → <span className="font-mono">{name}</span>.</li>
+      <li>Repository permissions: <b>Contents: Read and write</b>, <b>Pull requests: Read and write</b> (Metadata is read-only, added automatically).</li>
+      <li>If the repo belongs to an organization, the org may need to approve the token.</li>
+      <li>Paste the token here with <b>Replace token</b>, then <b>Test connection</b>.</li>
+    </ol>
   );
 }

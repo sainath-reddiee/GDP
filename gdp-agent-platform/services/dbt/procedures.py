@@ -13,8 +13,9 @@ from typing import Any, Dict, List
 from services.common.audit import tool_call
 from services.common.sql import clip, insert_rows, rows, scalar, variant
 from services.common.stage import Stage
-from services.dbt.project import build
-from services.dbt.workspace import create_dbt_project, fetch_branch_files, merge_skeleton, origin_allowed, push_pending
+from services.dbt.inputs import assemble, load_inputs, session_query
+from services.dbt.onboard import ENGINE
+from services.dbt.workspace import create_dbt_project, fetch_branch_files, origin_allowed, push_pending
 from services.knowledge.procedures import current_knowledge_version, load_skill
 from services.knowledge.usage import STAGE_SKILLS, use_skills
 from services.soda.expectations import render_yaml
@@ -94,6 +95,9 @@ def merge_branch_plan(payload: Dict[str, Any], prior: Dict[str, Any], run_name: 
         "push": flag("push", False),
         "fetch_skeleton": flag("fetch_skeleton", True),
         "allowed_prefixes": payload.get("allowed_prefixes") or prior.get("allowed_prefixes") or [],
+        "prefix": (payload["prefix"] if "prefix" in payload else prior.get("prefix", "GDP")) or "",
+        "source_key": pick("source_key"),
+        "domain_folder": pick("domain_folder"),
     }
 
 
@@ -170,11 +174,6 @@ def generate_dbt(session, run_id: str, payload_json: str = "{}") -> Dict[str, An
                 "severity": r["SEVERITY"], "origin": r["ORIGIN"], "requirement": r["CLIENT_REQUIREMENT"],
             } for r in soda_rows]
             soda_yaml = render_yaml((design.get("target_table") or "dim_customer").lower(), checks)
-            source_name = scalar(session, """SELECT S.SOURCE_SYSTEM_NAME FROM SOURCE.SOURCE_REGISTRY S
-                                             JOIN CORE.WORKFLOW_RUN R ON R.SOURCE_SYSTEM_ID = S.SOURCE_SYSTEM_ID
-                                             WHERE R.RUN_ID = ?""", [run_id]) or "SOURCE"
-            files = build({"sttm_id": sttm["STTM_ID"], "table_design": design, "lines": lines}, _macros(session), soda_yaml,
-                          _landing_tables(session, run_id), source_name)
             plan = _branch_plan(session, run_id, payload, stage.run.get("RUN_NAME") or "")
             skill_names = STAGE_SKILLS["DBT"]
             skill_meta = []
@@ -192,9 +191,13 @@ def generate_dbt(session, run_id: str, payload_json: str = "{}") -> Dict[str, An
                     skeleton = fetch_branch_files(session, plan["git_repository"], plan["base_branch"])
                 except Exception as exc:
                     plan["skeleton_error"] = clip(exc, 400)
-            if skeleton:
-                files = merge_skeleton(skeleton, files)
-                plan["skeleton_files"] = len(skeleton)
+            plan["skeleton_files"] = len(skeleton)
+            # dbt-onboard-source engine: generated/patched files only; the stage gets skeleton + generated.
+            inputs = load_inputs(session_query(session, rows), run_id, plan,
+                                 {"sttm_id": sttm["STTM_ID"], "table_design": design}, lines)
+            built = assemble(inputs, {"sttm_id": sttm["STTM_ID"], "table_design": design}, soda_yaml, skeleton)
+            files, stage_files = built["generated"], built["files"]
+            plan["generation_report"] = {k: built["report"].get(k) for k in ("counts", "todos", "casts", "hub")}
             prefixes = payload.get("allowed_prefixes") or []
             if plan.get("origin") and prefixes and not origin_allowed(plan["origin"], prefixes):
                 raise AssertionError(
@@ -206,18 +209,20 @@ def generate_dbt(session, run_id: str, payload_json: str = "{}") -> Dict[str, An
                 + " using DBT-ONBOARD-SOURCE on the approved STTM. "
                 + "Review the models, then publish the branch and pull request to GitHub."
             )
-            files["release/branch.json"] = json.dumps({**plan, "instruction": instruction}, indent=2)
+            files["release/branch.json"] = json.dumps({**plan, "instruction": instruction}, indent=2, default=str)
             files["release/skills.json"] = json.dumps({
                 "applied": skill_meta,
+                "engine": built["report"].get("engine"),
                 "domain_id": stage.run.get("DOMAIN_ID"),
-                "source": "DBT-ONBOARD-SOURCE + STTM + domain skill macros",
+                "source": "DBT-ONBOARD-SOURCE rules engine (bronze -> ephemeral silver staging -> silver hub)",
             }, indent=2)
+            stage_files.update({k: files[k] for k in ("release/branch.json", "release/skills.json")})
             version = (scalar(session, "SELECT MAX(GENERATION_VERSION) FROM CODEGEN.DBT_GENERATION_REGISTRY WHERE RUN_ID = ?",
                               [run_id]) or 0) + 1
             generation_id = str(uuid.uuid4())
             kv = current_knowledge_version(session, stage.run["DOMAIN_ID"])
             stage_path = f"CODEGEN.DBT_STAGE/{run_id}/v{version}"
-            _put_files(session, stage_path, files)
+            _put_files(session, stage_path, stage_files)
             workspace: Dict[str, Any] = {
                 "stage_path": f"@{stage_path}",
                 "pull_request": {
@@ -262,8 +267,8 @@ def generate_dbt(session, run_id: str, payload_json: str = "{}") -> Dict[str, An
                             ["GENERATION_ID", "RUN_ID", "DOMAIN", "TARGET_MODEL", "STTM_ID", "STTM_VERSION",
                              "FILES_GENERATED", "SKILL_VERSION", "KNOWLEDGE_VERSION", "MODEL_VERSION",
                              "GENERATION_VERSION", "GENERATION_STATUS", "STAGE_PATH", "CREATED_BY"],
-                            ["?", "?", "?", "?", "?", "?::NUMBER", "?::NUMBER", "'GDP_DOMAIN_SKILL:1.0.0'",
-                             "?", "'dbt-deterministic-v1'", "?::NUMBER", "'GENERATED'", "?", "CURRENT_USER()"],
+                            ["?", "?", "?", "?", "?", "?::NUMBER", "?::NUMBER", "'DBT-ONBOARD-SOURCE:1.0.0'",
+                             "?", f"'{ENGINE}'", "?::NUMBER", "'GENERATED'", "?", "CURRENT_USER()"],
                             [[generation_id, run_id,
                               scalar(session, "SELECT DOMAIN_NAME FROM KNOWLEDGE.DOMAIN_REGISTRY WHERE DOMAIN_ID = ?",
                                      [stage.run["DOMAIN_ID"]]) or "GDP",
@@ -298,7 +303,7 @@ def _artifact_type(path: str) -> str:
         return "DBT_PROJECT"
     if path.startswith("macros/"):
         return "DBT_MACRO"
-    if path.endswith("_sources.yml"):
+    if path.endswith("_sources.yml") or path.startswith("models/bronze/"):
         return "DBT_SOURCES_YML"
     if path.endswith(".yml"):
         return "DBT_SCHEMA_YML"

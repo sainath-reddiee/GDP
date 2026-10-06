@@ -108,11 +108,16 @@ def project_from_branch(session, repo_fqn: str, branch: str, project_fqn: str, c
 
 def publish_dbt_pr(session, run_id: str, payload_json: str = "{}") -> Dict[str, Any]:
     payload = json.loads(payload_json or "{}")
+    plan = _plan(session, run_id, payload) if run_id else dict(payload)
+    if payload.get("check_only"):
+        try:
+            return {"status": "OK", **github.preflight(github.urllib_request(_token()), plan.get("origin") or "")}
+        except Exception as exc:
+            return {**github.explain(exc, plan.get("origin") or ""), "check": True}
     run = rows(session, "SELECT RUN_ID, RUN_NAME FROM CORE.WORKFLOW_RUN WHERE RUN_ID = ?", [run_id])
     assert run, f"run not found: {run_id}"
     gen = rows(session, """SELECT GENERATION_ID, GENERATION_VERSION, STTM_ID FROM CODEGEN.DBT_GENERATION_REGISTRY
                            WHERE RUN_ID = ? ORDER BY GENERATION_VERSION DESC LIMIT 1""", [run_id])
-    plan = _plan(session, run_id, payload)
     generation_id = gen[0]["GENERATION_ID"] if gen else None
     result: Dict[str, Any]
     with tool_call(session, run_id, "publish_dbt_pr", {"cut_branch": plan.get("cut_branch")}) as call:
@@ -144,8 +149,9 @@ def publish_dbt_pr(session, run_id: str, payload_json: str = "{}") -> Dict[str, 
             call.summary = f"{result['status']} {result.get('repository')} {plan.get('cut_branch')}: " \
                            f"PR {(result.get('pull_request') or {}).get('url') or 'none'}"
         except Exception as exc:
-            result = {"status": "FAILED", "detail": clip(exc, 1000), "base_branch": plan.get("base_branch"),
-                      "head_branch": plan.get("cut_branch")}
+            result = {**github.explain(exc, plan.get("origin") or ""),
+                      "base_branch": plan.get("base_branch"), "head_branch": plan.get("cut_branch")}
+            result["detail"] = clip(result.get("detail"), 1000)
             call.status, call.error = "FAILED", clip(exc)
     _record(session, run_id, generation_id, plan, result)
     return result

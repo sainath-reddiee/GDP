@@ -1,4 +1,4 @@
-"""API-side dbt write that does not walk the workflow graph.
+﻿"""API-side dbt write that does not walk the workflow graph.
 
 Snowflake GENERATE_DBT still require()s early post-STTM states. After Data Quality
 moves the run to VALIDATION_PENDING, regenerate/push must run here instead.
@@ -15,8 +15,8 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 from services.dbt.procedures import _artifact_type, merge_branch_plan
-from services.dbt.project import build
-from services.dbt.workspace import merge_skeleton, origin_allowed, push_pending, read_repo_text, safe_fqn
+from services.dbt.inputs import assemble, db_query, load_inputs
+from services.dbt.workspace import origin_allowed, push_pending, read_repo_text, safe_fqn
 from services.soda.expectations import render_yaml
 
 TEXT_SUFFIXES = (".sql", ".yml", ".yaml", ".md", ".json", ".csv", ".txt", ".toml")
@@ -142,31 +142,6 @@ def generate_via_db(db, run_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         "requirement": r.get("client_requirement"),
     } for r in soda_rows]
     soda_yaml = render_yaml((design.get("target_table") or "dim_customer").lower(), checks)
-    source_rows = db.query(
-        """
-        SELECT S.SOURCE_SYSTEM_NAME FROM SOURCE.SOURCE_REGISTRY S
-          JOIN CORE.WORKFLOW_RUN R ON R.SOURCE_SYSTEM_ID = S.SOURCE_SYSTEM_ID
-         WHERE R.RUN_ID = %s
-        """,
-        (run_id,),
-    )
-    source_name = (source_rows[0].get("source_system_name") if source_rows else None) or "SOURCE"
-    landing = [{
-        "source_table": r.get("source_table"), "landing_table": r.get("landing_table"),
-        "database": r.get("landing_database"), "schema": r.get("landing_schema"),
-    } for r in db.query(
-        """
-        SELECT SOURCE_TABLE, LANDING_TABLE, LANDING_DATABASE, LANDING_SCHEMA
-          FROM SOURCE.LANDING_TABLE_REGISTRY
-         WHERE RUN_ID = %s AND INGESTION_STATUS = 'COMPLETE'
-        QUALIFY ROW_NUMBER() OVER (PARTITION BY SOURCE_TABLE ORDER BY CREATED_AT DESC) = 1
-        """,
-        (run_id,),
-    )]
-    files = build(
-        {"sttm_id": sttm["STTM_ID"], "table_design": design, "lines": lines},
-        [], soda_yaml, landing, source_name,
-    )
     prior_rows = db.query(
         "SELECT CONTENT_JSON FROM KNOWLEDGE.DOMAIN_KNOWLEDGE "
         "WHERE IS_CURRENT AND SOURCE_REFERENCE = %s",
@@ -182,9 +157,11 @@ def generate_via_db(db, run_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
             skeleton = _fetch_skeleton(db, plan["git_repository"], plan["base_branch"])
         except Exception as exc:
             plan["skeleton_error"] = str(exc)[:400]
-    if skeleton:
-        files = merge_skeleton(skeleton, files)
-        plan["skeleton_files"] = len(skeleton)
+    plan["skeleton_files"] = len(skeleton)
+    contract = {"sttm_id": sttm["STTM_ID"], "table_design": design}
+    built = assemble(load_inputs(db_query(db), run_id, plan, contract, lines), contract, soda_yaml, skeleton)
+    files, stage_files = built["generated"], built["files"]
+    plan["generation_report"] = {k: built["report"].get(k) for k in ("counts", "todos", "casts", "hub")}
     prefixes = payload.get("allowed_prefixes") or []
     if plan.get("origin") and prefixes and not origin_allowed(plan["origin"], prefixes):
         raise AssertionError(f"origin {plan['origin']} is not in the API integration allowed prefixes")
@@ -196,10 +173,12 @@ def generate_via_db(db, run_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
     )
     files["release/branch.json"] = json.dumps({**plan, "instruction": instruction}, indent=2)
     files["release/skills.json"] = json.dumps({
-        "applied": [],
+        "applied": ["DBT-ONBOARD-SOURCE"],
+        "engine": built["report"].get("engine"),
         "domain_id": run.get("DOMAIN_ID"),
-        "source": "DBT-ONBOARD-SOURCE + STTM (API overlay, no workflow walk)",
+        "source": "DBT-ONBOARD-SOURCE rules engine (API overlay, no workflow walk)",
     }, indent=2)
+    stage_files.update({k: files[k] for k in ("release/branch.json", "release/skills.json")})
     version_rows = db.query(
         "SELECT COALESCE(MAX(GENERATION_VERSION), 0) + 1 AS V "
         "FROM CODEGEN.DBT_GENERATION_REGISTRY WHERE RUN_ID = %s",
@@ -208,7 +187,7 @@ def generate_via_db(db, run_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
     version = version_rows[0]["v"] if version_rows else 1
     generation_id = str(uuid.uuid4())
     stage_path = f"CODEGEN.DBT_STAGE/{run_id}/v{version}"
-    _put_files(db, stage_path, files)
+    _put_files(db, stage_path, stage_files)
     workspace: Dict[str, Any] = {
         "stage_path": f"@{stage_path}",
         "overlay": True,
@@ -262,8 +241,8 @@ def generate_via_db(db, run_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
           (GENERATION_ID, RUN_ID, DOMAIN, TARGET_MODEL, STTM_ID, STTM_VERSION,
            FILES_GENERATED, SKILL_VERSION, KNOWLEDGE_VERSION, MODEL_VERSION,
            GENERATION_VERSION, GENERATION_STATUS, STAGE_PATH, CREATED_BY)
-        SELECT %s, %s, %s, %s, %s, %s, %s, 'GDP_DOMAIN_SKILL:1.0.0',
-               NULL, 'dbt-deterministic-v1', %s, 'GENERATED', %s, CURRENT_USER()
+        SELECT %s, %s, %s, %s, %s, %s, %s, 'DBT-ONBOARD-SOURCE:1.0.0',
+               NULL, 'dbt-onboard-source/engine-v1', %s, 'GENERATED', %s, CURRENT_USER()
         """,
         (
             generation_id, run_id, domain,

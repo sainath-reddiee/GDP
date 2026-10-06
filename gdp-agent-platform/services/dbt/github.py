@@ -19,7 +19,8 @@ Request = Callable[[str, str, Optional[Dict[str, Any]]], Tuple[int, Any]]
 
 ORIGIN = re.compile(r"^(?:https?://(?:[^@/]+@)?github\.com/|git@github\.com:)([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+?)(?:\.git)?/?$")
 BRANCH = re.compile(r"^(?!/)(?!.*\.\.)(?!.*//)[A-Za-z0-9._/-]{1,200}(?<!/)(?<!\.lock)$")
-SKIP_PATHS = ("release/workspace.json",)
+# Pipeline bookkeeping that should not land in the customer's repository.
+SKIP_PATHS = ("release/workspace.json", "release/branch.json", "release/skills.json", "release/skeleton-base.json")
 
 
 class PublishError(RuntimeError):
@@ -77,6 +78,45 @@ def _ok(step: str, result: Tuple[int, Any], *allowed: int) -> Any:
     return body
 
 
+TOKEN_HELP = ("Edit the token at github.com > Settings > Developer settings > Fine-grained tokens: give it access to "
+              "{repo} with Repository permissions Contents: Read and write and Pull requests: Read and write "
+              "(classic tokens need the 'repo' scope).")
+
+
+def explain(exc: Exception, origin: str = "") -> Dict[str, Any]:
+    """Map GitHub failures to an actionable status for the UI."""
+    try:
+        repo = "/".join(parse_origin(origin))
+    except ValueError:
+        repo = "the repository"
+    status = getattr(exc, "status", 0)
+    text = str(exc)
+    if status == 401:
+        return {"status": "AUTH", "detail": f"GitHub rejected the token (expired or revoked). {TOKEN_HELP.format(repo=repo)}"}
+    if status in (403, 404) and ("personal access token" in text.lower() or "not accessible" in text.lower()
+                                 or status == 404):
+        return {"status": "TOKEN_SCOPE", "detail": f"{text}. {TOKEN_HELP.format(repo=repo)}"}
+    return {"status": "FAILED", "detail": text}
+
+
+def preflight(request: Request, origin: str) -> Dict[str, Any]:
+    """Read-only check that the token can see the repository; reports the caller's permissions."""
+    owner, repo = parse_origin(origin)
+    status, body = request("GET", f"/repos/{owner}/{repo}", None)
+    if status == 404:
+        raise PublishError("find repository", 404, {"message": f"{owner}/{repo} not found or not granted to this token"})
+    body = _ok("read repository", (status, body))
+    perms = body.get("permissions") or {}
+    return {
+        "repository": body.get("full_name") or f"{owner}/{repo}",
+        "default_branch": body.get("default_branch"),
+        "private": body.get("private"),
+        "push": perms.get("push"),
+        "admin": perms.get("admin"),
+        "html_url": body.get("html_url"),
+    }
+
+
 def publish(request: Request, origin: str, base: str, head: str, files: Dict[str, str],
             title: str, body: str, message: str, draft: bool = False) -> Dict[str, Any]:
     owner, repo = parse_origin(origin)
@@ -87,6 +127,9 @@ def publish(request: Request, origin: str, base: str, head: str, files: Dict[str
     if not entries:
         raise ValueError("no files to publish")
     root = f"/repos/{owner}/{repo}"
+    access = preflight(request, origin)
+    if access.get("push") is False:
+        raise PublishError("check permissions", 403, {"message": "your GitHub account has no write access to this repository"})
 
     base_ref = _ok("read base branch", request("GET", f"{root}/git/ref/heads/{quote(base, safe='/')}", None))
     base_sha = base_ref["object"]["sha"]

@@ -107,6 +107,9 @@ export type DbtPlanInput = {
   allowed_prefixes?: string[];
   push?: boolean;
   fetch_skeleton?: boolean;
+  prefix?: string;
+  source_key?: string;
+  domain_folder?: string;
 };
 
 export type GitBranch = {
@@ -161,6 +164,26 @@ export async function createGitRepository(runId: string, body: { name: string; o
   ));
   revalidatePath(`/runs/${runId}`, "layout");
   return result;
+}
+
+export async function checkGithub(origin: string) {
+  return attemptValue(() => api<{
+    status: string; detail?: string; repository?: string; default_branch?: string; push?: boolean | null;
+    private?: boolean; html_url?: string;
+  }>("/api/dbt/github/check", { method: "POST", body: JSON.stringify({ origin }) }));
+}
+
+export async function rotateGithubToken(token: string) {
+  return attemptValue(() => api<{ rotated: boolean; secret: string }>(
+    "/api/dbt/github/token", { method: "POST", body: JSON.stringify({ token }) },
+  ));
+}
+
+export async function reviewDbtFile(runId: string, filePath: string, model?: string) {
+  return attemptValue(() => api<{
+    file_path: string; summary: string; revised_content: string; rejected_revision: string[]; model?: string;
+    findings: { severity: "error" | "warning" | "info"; rule: string; message: string; line_hint: string }[];
+  }>(`/api/runs/${runId}/dbt/review`, { method: "POST", body: JSON.stringify({ file_path: filePath, model }) }));
 }
 
 export async function listDbtBranches(runId: string, repo: string, fetchRemote = true) {

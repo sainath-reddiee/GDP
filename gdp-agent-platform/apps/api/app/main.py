@@ -162,6 +162,9 @@ class DbtPlan(BaseModel):
     allowed_prefixes: Optional[list[str]] = None
     push: bool = False
     fetch_skeleton: bool = True
+    prefix: Optional[str] = Field(default=None, max_length=16, pattern=r"^[A-Za-z0-9]*$")
+    source_key: Optional[str] = Field(default=None, max_length=40, pattern=r"^[A-Za-z0-9_]*$")
+    domain_folder: Optional[str] = Field(default=None, max_length=40, pattern=r"^[A-Za-z0-9_]*$")
 
 
 class DbtEnhance(BaseModel):
@@ -1601,7 +1604,8 @@ def get_soda(run_id: str, db: Db = Depends(current_db)):
 
 def _clean_dbt_plan(body: Optional[DbtPlan]) -> dict:
     raw = (body or DbtPlan()).model_dump(exclude_none=True)
-    return {key: value for key, value in raw.items() if value != "" and value != []}
+    # A blank prefix is meaningful (projects without an audit-column namespace), so keep it.
+    return {key: value for key, value in raw.items() if key == "prefix" or (value != "" and value != [])}
 
 
 def _is_dbt_arity_error(exc: Exception) -> bool:
@@ -1794,6 +1798,44 @@ def github_publish_setup(body: GithubSetup, db: Db = Depends(current_db)):
     return {"ready": True, "log": log}
 
 
+class GithubCheck(BaseModel):
+    origin: str = Field(min_length=10, max_length=1024)
+
+
+@app.post("/api/dbt/github/check")
+def github_check(body: GithubCheck, db: Db = Depends(current_db)):
+    """Read-only: can the stored token see the repository, and does the account have push access?"""
+    if not _github_publisher_ready(db):
+        return {"status": "NOT_CONFIGURED", "detail": "Set up GitHub publishing first."}
+    try:
+        return db.call("CALL CODEGEN.PUBLISH_DBT_PR(%s, %s)", ("", json.dumps({"check_only": True, "origin": body.origin})))
+    except Exception as exc:
+        return {"status": "FAILED", "detail": str(exc)[:600]}
+
+
+class GithubToken(BaseModel):
+    token: str = Field(min_length=20, max_length=255)
+
+
+@app.post("/api/dbt/github/token")
+def github_rotate_token(body: GithubToken, db: Db = Depends(current_db)):
+    """Replace the token in the publishing secret. The value goes straight to Snowflake and is never echoed."""
+    from services.dbt.publish import NAME
+
+    token = body.token.strip()
+    if not re.fullmatch(r"[A-Za-z0-9_\-]{20,255}", token):
+        raise HTTPException(400, "That does not look like a GitHub token (ghp_… or github_pat_…).")
+    config = github_publish_status(db).get("config") or {}
+    secret = str(config.get("secret") or "")
+    if not NAME.match(secret):
+        raise HTTPException(409, "GitHub publishing is not set up yet.")
+    try:
+        db.execute(f"ALTER SECRET {secret} SET SECRET_STRING = '{token}'")
+    except Exception as exc:
+        raise HTTPException(400, str(exc)[:400].replace(token, "***")) from None
+    return {"rotated": True, "secret": secret}
+
+
 class GitRepositoryCreate(BaseModel):
     name: str = Field(min_length=1, max_length=128)
     origin: str = Field(min_length=10, max_length=1024)
@@ -1843,12 +1885,13 @@ def get_dbt(run_id: str, db: Db = Depends(current_db)):
             """,
             (gen[0]["generation_id"],),
         )
-    extras: dict = {"branch": None, "skills": None, "workspace": None}
+    extras: dict = {"branch": None, "skills": None, "workspace": None, "report": None, "skeleton_base": None}
+    release = {"release/branch.json": "branch", "release/skills.json": "skills", "release/workspace.json": "workspace",
+               "release/generation-report.json": "report", "release/skeleton-base.json": "skeleton_base"}
     for art in artifacts:
-        path = art.get("file_path")
-        if path not in {"release/branch.json", "release/skills.json", "release/workspace.json"}:
+        key = release.get(art.get("file_path"))
+        if not key:
             continue
-        key = path.split("/")[-1].split(".")[0]
         try:
             extras[key] = json.loads(art.get("content") or "{}")
         except ValueError:
@@ -1971,6 +2014,77 @@ def get_dbt_workspace(run_id: str, db: Db = Depends(current_db)):
             "default_model": models["default"], **workspace}
 
 
+class DbtReview(BaseModel):
+    file_path: str = Field(min_length=1, max_length=400)
+    model: Optional[str] = Field(default=None, max_length=120)
+
+
+def _skill_content(db: Db, name: str) -> str:
+    rows = db.query(
+        """
+        SELECT CONTENT FROM KNOWLEDGE.SKILL_REGISTRY
+         WHERE IS_CURRENT AND UPPER(REPLACE(SKILL_NAME, '_', '-')) = %s
+         ORDER BY VERSION DESC LIMIT 1
+        """,
+        (name.upper().replace("_", "-"),),
+    )
+    return str((rows[0].get("content") if rows else "") or "")
+
+
+def _sttm_context(db: Db, run_id: str) -> str:
+    try:
+        lines = db.query(
+            """
+            SELECT L.TARGET_COLUMN, L.TARGET_DATATYPE, L.SOURCE_TABLE, L.SOURCE_COLUMN, L.MAPPING_TYPE, L.TRANSFORMATION
+              FROM CONTRACT.STTM_LINE L
+              JOIN CONTRACT.STTM_REGISTRY S ON S.STTM_ID = L.STTM_ID
+             WHERE S.RUN_ID = %s AND S.STATUS IN ('REVIEW', 'APPROVED')
+            QUALIFY DENSE_RANK() OVER (ORDER BY S.STTM_VERSION DESC) = 1
+             ORDER BY L.TARGET_COLUMN LIMIT 120
+            """,
+            (run_id,),
+        )
+    except Exception:
+        lines = []
+    return "\n".join(
+        f"{r.get('source_table') or '-'}.{r.get('source_column') or '-'} -> {r.get('target_column')} "
+        f"{r.get('target_datatype') or ''} [{r.get('mapping_type') or ''}] {r.get('transformation') or ''}"
+        for r in lines
+    )
+
+
+@app.post("/api/runs/{run_id}/dbt/review")
+def review_dbt(run_id: str, body: DbtReview, db: Db = Depends(current_db)):
+    """Cortex review of one generated file against the DBT-ONBOARD-SOURCE skill. Read-only; apply via /enhance."""
+    from services.dbt.review import review_file
+
+    gen = db.query(
+        "SELECT GENERATION_ID FROM CODEGEN.DBT_GENERATION_REGISTRY WHERE RUN_ID = %s ORDER BY GENERATION_VERSION DESC LIMIT 1",
+        (run_id,),
+    )
+    if not gen:
+        raise HTTPException(400, "Generate dbt first, then review a file.")
+    files = {r["file_path"]: r.get("content") or "" for r in db.query(
+        "SELECT FILE_PATH, CONTENT FROM CODEGEN.GENERATED_ARTIFACT WHERE GENERATION_ID = %s "
+        "AND (FILE_PATH = %s OR FILE_PATH = 'release/generation-report.json')",
+        (gen[0]["generation_id"], body.file_path.strip()),
+    )}
+    path = body.file_path.strip()
+    if path not in files:
+        raise HTTPException(404, f"No generated file {path}")
+    notes = files.get("release/generation-report.json", "")
+    try:
+        report = json.loads(notes) if notes else {}
+        notes = json.dumps({k: report.get(k) for k in ("source_unique_id", "dedup_order", "anomalies", "hub", "counts")})
+    except ValueError:
+        pass
+    try:
+        return review_file(lambda sql, params=(): db.query(sql, params), path, files[path],
+                           _skill_content(db, "DBT-ONBOARD-SOURCE"), _sttm_context(db, run_id), notes, model=body.model)
+    except Exception as exc:
+        raise _snowflake_error(exc) from exc
+
+
 @app.post("/api/runs/{run_id}/dbt/enhance")
 def enhance_dbt(run_id: str, body: DbtEnhance, db: Db = Depends(current_db)):
     import hashlib
@@ -2024,6 +2138,13 @@ def enhance_dbt(run_id: str, body: DbtEnhance, db: Db = Depends(current_db)):
         f"{r.get('source_table')}.{r.get('source_column')} -> {r.get('target_column')}: {r.get('transformation') or ''}"
         for r in sttm
     )
+    try:
+        from services.dbt.review import skill_excerpt
+        skill = skill_excerpt(_skill_content(db, "DBT-ONBOARD-SOURCE"), 3000)
+    except Exception:
+        skill = ""
+    if skill:
+        context = f"{context}\n\nFOLLOW THESE DBT-ONBOARD-SOURCE RULES:\n{skill}"
     try:
         return enhance_file(
             lambda sql, params=(): db.query(sql, params),

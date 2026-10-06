@@ -28,7 +28,7 @@ def enhance_prompt(path: str, content: str, request: str, context: str = "") -> 
         "Return the full file plus a short rationale.\n\n"
         f"FILE: {path}\n\n"
         f"ENGINEER REQUEST:\n{request.strip()[:2000]}\n\n"
-        f"CONTEXT:\n{(context or 'Approved STTM generated this file.')[:3000]}\n\n"
+        f"CONTEXT:\n{(context or 'Approved STTM generated this file.')[:7000]}\n\n"
         f"CURRENT FILE:\n{content[:8000]}\n"
     )
 

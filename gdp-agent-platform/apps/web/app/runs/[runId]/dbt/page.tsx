@@ -1,8 +1,7 @@
 import { api, getRun } from "@/lib/api";
 import { StageGate } from "@/components/stage-gate";
-import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { DbtStudio } from "./dbt-studio";
-import type { DbtArtifact, DbtGeneration, DbtPublication, DbtWorkspace, GithubStatus } from "./dbt-types";
+import type { DbtArtifact, DbtGeneration, DbtPublication, DbtWorkspace, GenerationReport, GithubStatus } from "./dbt-types";
 
 const CAN_GENERATE = new Set([
   "STTM_APPROVED", "SODA_PENDING", "SODA_REVIEW", "SODA_APPROVED",
@@ -17,6 +16,8 @@ export default async function DbtPage({ params }: { params: { runId: string } })
           skills: { applied?: { name: string; version?: string; description?: string }[] } | null;
           workspace: Record<string, unknown> | null;
           publication: DbtPublication | null;
+          report: GenerationReport | null;
+          skeleton_base: Record<string, string> | null;
         }>(`/api/runs/${params.runId}/dbt`),
     api<DbtWorkspace>(`/api/runs/${params.runId}/dbt/workspace`).catch(() => ({
       integrations: [], git_repositories: [], dbt_projects: [], skills: [], models: [], warnings: ["Could not list Snowflake git objects"],
@@ -25,16 +26,6 @@ export default async function DbtPage({ params }: { params: { runId: string } })
   ]);
   return (
     <StageGate state={state} stage="DBT">
-      <Card>
-        <CardHeader>
-          <CardTitle>dbt workspace</CardTitle>
-          <CardDescription>
-            Runs in parallel with Data Quality. Models come from the approved STTM and are added to the cut-from branch.
-            Everything else on that branch stays as it is. The code is pushed to a new GitHub branch with a pull request,
-            and a compile-only dbt project (WRITEBACK=FALSE) is created in Snowflake from that branch.
-          </CardDescription>
-        </CardHeader>
-      </Card>
       <DbtStudio
         runId={params.runId}
         runName={state.run.run_name}
@@ -48,6 +39,8 @@ export default async function DbtPage({ params }: { params: { runId: string } })
         workspace={workspace}
         publication={data.publication ?? null}
         github={github}
+        report={data.report ?? null}
+        skeletonBase={data.skeleton_base ?? null}
       />
     </StageGate>
   );
