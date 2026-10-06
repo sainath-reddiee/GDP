@@ -107,7 +107,7 @@ def test_failure_and_retry(cur):
         system(cur, run_id, state)
     failed = system(cur, run_id, "FAILED", "itest: simulated copy failure")
     rail = {s["stage"]: s["status"] for s in failed["state"]["stages"]}
-    assert rail["LANDING"] == "FAILED"
+    assert rail["SOURCE"] == "FAILED"
 
     with pytest.raises(Exception, match="retry must go to LANDING_PENDING"):
         system(cur, run_id, "PROFILING_PENDING")

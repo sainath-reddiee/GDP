@@ -15,7 +15,7 @@ def graph():
 
 def test_system_forward_transition(graph):
     d = evaluate(graph, RunContext("ACCESS_APPROVED"), "LANDING_PENDING", "SYSTEM")
-    assert d.allowed and d.new_status == "IN_PROGRESS" and d.new_stage == "LANDING"
+    assert d.allowed and d.new_status == "IN_PROGRESS" and d.new_stage == "SOURCE"
 
 
 def test_skipping_stages_is_rejected(graph):
@@ -81,19 +81,25 @@ def test_stage_rail_mapping_review(graph):
 
 def test_finished_stage_opens_the_next_one(graph):
     rail = {r["stage"]: r["status"] for r in stage_rail(graph, "LANDING_COMPLETE", None)}
-    assert rail["LANDING"] == "COMPLETE"
+    assert rail["SOURCE"] == "COMPLETE"
     assert rail["PROFILING"] == "ACTIVE"
     assert rail["DOMAIN"] == "LOCKED"
 
 
+@pytest.mark.parametrize("state", ["SOURCE_REGISTERED", "ACCESS_APPROVED", "LANDING_RUNNING"])
+def test_access_and_landing_checkpoints_keep_source_active(graph, state):
+    rail = {r["stage"]: r["status"] for r in stage_rail(graph, state, None)}
+    assert rail["SOURCE"] == "ACTIVE" and rail["PROFILING"] == "LOCKED"
+
+
 def test_stage_rail_failed_anchors_on_failed_stage(graph):
     rail = {r["stage"]: r["status"] for r in stage_rail(graph, "FAILED", "LANDING_RUNNING")}
-    assert rail["ACCESS"] == "COMPLETE" and rail["LANDING"] == "FAILED" and rail["PROFILING"] == "LOCKED"
+    assert rail["SOURCE"] == "FAILED" and rail["PROFILING"] == "LOCKED"
 
 
 def test_stage_rail_order(graph):
     stages = [r["stage"] for r in stage_rail(graph, "CREATED", None)]
-    assert stages == ["SOURCE", "ACCESS", "LANDING", "PROFILING", "DOMAIN", "MAPPING",
+    assert stages == ["SOURCE", "PROFILING", "DOMAIN", "MAPPING",
                       "STTM", "SODA", "DBT", "VALIDATION", "REVIEW"]
 
 

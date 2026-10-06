@@ -229,7 +229,11 @@ def list_repo_branches(execute: Execute, repo_fqn: str, do_fetch: bool = True) -
 
 
 def discover(execute: Execute) -> Dict[str, Any]:
-    """Read Snowflake git integrations, git repositories, and dbt projects. Never raises."""
+    """Read Snowflake git integrations, git repositories, and dbt projects. Never raises.
+
+    Only GIT_HTTPS_API integrations are returned. `usable` means this role could DESCRIBE it (USAGE);
+    a repository is usable when its integration is, otherwise `grant_sql` is the fix to show.
+    """
     warnings: List[str] = []
 
     def try_show(sql: str) -> List[Dict[str, Any]]:
@@ -239,45 +243,112 @@ def discover(execute: Execute) -> Dict[str, Any]:
             warnings.append(f"{sql}: {exc}")
             return []
 
-    integrations = parse_integrations(try_show("SHOW INTEGRATIONS"))
-    for item in integrations:
+    role_rows = try_show("SELECT CURRENT_ROLE() AS ROLE")
+    role = str((_lower_rows(role_rows)[0].get("role") if role_rows else "") or "")
+    integrations: List[Dict[str, Any]] = []
+    for item in parse_integrations(try_show("SHOW API INTEGRATIONS") or try_show("SHOW INTEGRATIONS")):
         try:
-            desc = execute(f"DESC INTEGRATION {safe_ident(item['name'])}") or []
-            item["allowed_prefixes"] = parse_allowed_prefixes(desc)
+            desc = execute(f"DESC INTEGRATION {quote_exact(item['name'])}") or []
         except Exception as exc:
-            warnings.append(f"DESC INTEGRATION {item['name']}: {exc}")
+            item.update(usable=False, provider="", detail=str(exc)[:300])
+            integrations.append(item)
+            continue
+        info = parse_integration_desc(desc)
+        if info["provider"] and info["provider"] != "GIT_HTTPS_API":
+            continue
+        item.update(usable=True, **info)
+        integrations.append(item)
+    usable = {i["name"].upper() for i in integrations if i.get("usable")}
     repos: List[Dict[str, Any]] = []
     for sql in ("SHOW GIT REPOSITORIES IN ACCOUNT", "SHOW GIT REPOSITORIES IN DATABASE", "SHOW GIT REPOSITORIES"):
         repos = parse_git_repos(try_show(sql))
         if repos:
             break
+    for repo in repos:
+        repo["usable"] = repo["api_integration"].upper() in usable
+        repo["grant_sql"] = None if repo["usable"] else grant_sql(repo["api_integration"], role)
     projects: List[Dict[str, Any]] = []
     for sql in ("SHOW DBT PROJECTS IN ACCOUNT", "SHOW DBT PROJECTS IN DATABASE", "SHOW DBT PROJECTS"):
         projects = parse_dbt_projects(try_show(sql))
         if projects:
             break
+    publisher = bool(try_show("SHOW PROCEDURES LIKE 'PUBLISH_DBT_PR' IN SCHEMA CODEGEN"))
     return {
+        "role": role,
         "integrations": integrations,
         "git_repositories": repos,
         "dbt_projects": projects,
-        "warnings": warnings,
+        "warnings": [w for w in warnings if not w.startswith("SHOW GIT REPOSITORIES IN")],
         "capabilities": {
-            "git_read": bool(repos),
-            "git_write": bool(repos),
+            "git_read": any(r["usable"] for r in repos),
+            # Snowflake git repository clones are read-only; branches/PRs go through the GitHub API.
+            "git_write": publisher,
+            "github_publish": publisher,
             "dbt_project": True,
         },
     }
 
 
-def fetch_branch_files(session, repo_fqn: str, branch: str, limit: int = 80) -> Dict[str, str]:
+def quote_exact(name: str) -> str:
+    """Quote a name exactly as SHOW returned it, so mixed-case identifiers keep their case."""
+    value = (name or "").strip().strip('"')
+    assert value and '"' not in value and ";" not in value, f"unsafe identifier: {name}"
+    return f'"{value}"'
+
+
+def parse_integration_desc(raw: Iterable[Dict[str, Any]]) -> Dict[str, Any]:
+    props = {str(r.get("property") or "").upper(): r.get("property_value") for r in _lower_rows(raw)}
+
+    def listed(key: str) -> List[str]:
+        text = str(props.get(key) or "").strip().strip("[]")
+        return [p.strip().strip("'\"") for p in text.split(",") if p.strip()]
+
+    return {
+        "provider": str(props.get("API_PROVIDER") or "").upper(),
+        "allowed_prefixes": parse_allowed_prefixes(raw),
+        "allowed_secrets": listed("ALLOWED_AUTHENTICATION_SECRETS"),
+        "enabled": str(props.get("ENABLED") or "true").lower() == "true",
+    }
+
+
+def grant_sql(integration: str, role: str) -> str:
+    return f"GRANT USAGE ON INTEGRATION {quote_exact(integration)} TO ROLE {role or '<your_role>'};"
+
+
+INTEGRATION_ERROR = re.compile(r"Integration '([^']+)'", re.I)
+
+
+def grant_hint(error: str, role: str) -> Optional[str]:
+    """Turn 'Insufficient privileges to operate on Integration X' into the GRANT that fixes it."""
+    match = INTEGRATION_ERROR.search(error or "")
+    if match and "privilege" in (error or "").lower():
+        return grant_sql(match.group(1), role)
+    return None
+
+
+def read_repo_text(read: Callable[[str], List[Any]], repo: str, branch: str, rel: str) -> str:
+    """Whole-file read via CODEGEN.RAW_TEXT_FORMAT; falls back to line reads where the format is missing."""
+    path = f"@{repo}/branches/{branch}/{rel}"
+    try:
+        chunks = read(f"SELECT $1 FROM {path} (FILE_FORMAT => 'CODEGEN.RAW_TEXT_FORMAT')")
+    except Exception:
+        chunks = read(f"SELECT $1 FROM {path}")
+    return "\n".join(str(c) for c in chunks if c is not None)
+
+
+def fetch_branch_files(session, repo_fqn: str, branch: str, limit: int = 120) -> Dict[str, str]:
     repo = safe_fqn(repo_fqn)
     branch_name = (branch or "main").strip().strip("/")
     assert re.fullmatch(r"[A-Za-z0-9._/\-]+", branch_name), f"unsafe branch: {branch}"
+    fetch_error = ""
     try:
         session.sql(f"ALTER GIT REPOSITORY {repo} FETCH").collect()
-    except Exception:
-        pass
+    except Exception as exc:  # a stale clone is still a usable skeleton
+        fetch_error = str(exc)[:400]
     listed = session.sql(f"LIST @{repo}/branches/{branch_name}/").collect()
+    if not listed and fetch_error:
+        raise RuntimeError(f"FETCH failed and the clone has no {branch_name} files: {fetch_error}")
+    read = lambda sql: [r[0] for r in session.sql(sql).collect()]  # noqa: E731
     files: Dict[str, str] = {}
     for row in listed:
         raw = row.as_dict() if hasattr(row, "as_dict") else {"name": row[0]}
@@ -288,8 +359,7 @@ def fetch_branch_files(session, repo_fqn: str, branch: str, limit: int = 80) -> 
         if len(files) >= limit:
             break
         try:
-            chunks = session.sql(f"SELECT $1 FROM @{repo}/branches/{branch_name}/{rel}").collect()
-            text = "\n".join(str(c[0]) for c in chunks if c[0] is not None)
+            text = read_repo_text(read, repo, branch_name, rel)
             if text:
                 files[rel] = text
         except Exception:
@@ -309,34 +379,15 @@ def create_dbt_project(session, project_fqn: str, stage_path: str, comment: str)
     return {"dbt_project": name, "from": source, "status": "CREATED"}
 
 
-def push_branch(session, repo_fqn: str, cut_branch: str, stage_path: str) -> Dict[str, Any]:
-    repo = safe_fqn(repo_fqn)
-    branch = (cut_branch or "").strip().strip("/")
-    assert re.fullmatch(r"[A-Za-z0-9._/\-]+", branch), f"unsafe branch: {cut_branch}"
-    source = stage_path if stage_path.startswith("@") else f"@{stage_path}"
-    try:
-        session.sql(f"ALTER GIT REPOSITORY {repo} FETCH").collect()
-    except Exception as exc:
-        return {"status": "FETCH_FAILED", "detail": str(exc)[:400]}
-    try:
-        session.sql(
-            f"COPY FILES INTO @{repo}/branches/{branch}/ FROM {source} OVERWRITE = TRUE"
-        ).collect()
-        return {
-            "status": "PUSHED",
-            "repo": repo,
-            "branch": branch,
-            "from": source,
-            "method": f"COPY FILES INTO @{repo}/branches/{branch}/",
-            "pull_request": False,
-        }
-    except Exception as exc:
-        return {
-            "status": "STAGE_ONLY",
-            "repo": repo,
-            "branch": branch,
-            "from": source,
-            "method": f"COPY FILES INTO @{repo}/branches/{branch}/",
-            "pull_request": False,
-            "detail": str(exc)[:400],
-        }
+def push_pending(plan: Dict[str, Any], publisher: bool) -> Dict[str, Any]:
+    """Snowflake git clones are read-only; pushes happen in CODEGEN.PUBLISH_DBT_PR via the GitHub API."""
+    if not plan.get("push"):
+        return {"status": "NOT_REQUESTED"}
+    return {
+        "status": "PENDING_PUBLISH" if publisher else "NOT_CONFIGURED",
+        "branch": plan.get("cut_branch"),
+        "detail": ("Publishing the branch and pull request through the GitHub API."
+                   if publisher else
+                   "GitHub publishing is not set up. Snowflake git repositories are read-only from SQL; "
+                   "set up CODEGEN.PUBLISH_DBT_PR to push branches and open pull requests."),
+    }

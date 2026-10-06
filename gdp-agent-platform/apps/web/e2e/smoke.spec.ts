@@ -41,22 +41,16 @@ test("onboard a source: register, validate access, land, with later stages locke
 
   await expect(page.getByRole("heading", { name: "Select objects to onboard" })).toBeVisible({ timeout: 90_000 });
   await page.getByLabel("select CRM_CUSTOMER").check();
-  await page.getByRole("button", { name: /Validate access \(1 selected\)/ }).click();
-  await expect(page.getByText("ACCESS_APPROVED").first()).toBeVisible({ timeout: 90_000 });
+  await page.getByRole("button", { name: /Validate & land \(1 selected\)/ }).click();
+  await expect(page.getByText("LANDING_COMPLETE").first()).toBeVisible({ timeout: 240_000 });
 
-  await page.goto(`${runUrl}/profile`);
-  await expect(page.getByRole("heading", { name: "Stage locked" })).toBeVisible();
-
-  await page.goto(`${runUrl}/access`);
   await expect(page.getByRole("cell", { name: "CRM_CUSTOMER readable" })).toBeVisible();
-  await page.getByRole("button", { name: "Start landing" }).click();
-  await expect(page.getByText("LANDING_COMPLETE").first()).toBeVisible({ timeout: 180_000 });
-
-  await page.goto(`${runUrl}/landing`);
   await expect(page.getByRole("heading", { name: "Landed tables" })).toBeVisible();
   await expect(page.getByRole("cell", { name: "SMOKE_CRM__CRM_CUSTOMER", exact: false })).toBeVisible();
   await expect(page.getByRole("cell", { name: "500", exact: true }).first()).toBeVisible();
-  await expect(page.getByText("LANDING_COMPLETE").first()).toBeVisible();
+
+  await page.goto(`${runUrl}/landing`);
+  await expect(page).toHaveURL(new RegExp(`${runUrl}/source$`));
 
   await page.goto(`${runUrl}/mapping`);
   await expect(page.getByRole("heading", { name: "Stage locked" })).toBeVisible();

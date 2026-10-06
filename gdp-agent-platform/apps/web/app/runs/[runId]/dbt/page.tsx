@@ -2,7 +2,7 @@ import { api, getRun } from "@/lib/api";
 import { StageGate } from "@/components/stage-gate";
 import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { DbtStudio } from "./dbt-studio";
-import type { DbtArtifact, DbtGeneration, DbtWorkspace } from "./dbt-types";
+import type { DbtArtifact, DbtGeneration, DbtPublication, DbtWorkspace, GithubStatus } from "./dbt-types";
 
 const CAN_GENERATE = new Set([
   "STTM_APPROVED", "SODA_PENDING", "SODA_REVIEW", "SODA_APPROVED",
@@ -10,16 +10,18 @@ const CAN_GENERATE = new Set([
 ]);
 
 export default async function DbtPage({ params }: { params: { runId: string } }) {
-  const [state, data, workspace] = await Promise.all([
+  const [state, data, workspace, github] = await Promise.all([
     getRun(params.runId),
     api<{ generation: DbtGeneration | null; artifacts: DbtArtifact[];
           branch: Record<string, unknown> | null;
           skills: { applied?: { name: string; version?: string; description?: string }[] } | null;
           workspace: Record<string, unknown> | null;
+          publication: DbtPublication | null;
         }>(`/api/runs/${params.runId}/dbt`),
     api<DbtWorkspace>(`/api/runs/${params.runId}/dbt/workspace`).catch(() => ({
       integrations: [], git_repositories: [], dbt_projects: [], skills: [], models: [], warnings: ["Could not list Snowflake git objects"],
     })),
+    api<GithubStatus>("/api/dbt/github").catch(() => ({ ready: false, config: null })),
   ]);
   return (
     <StageGate state={state} stage="DBT">
@@ -27,9 +29,9 @@ export default async function DbtPage({ params }: { params: { runId: string } })
         <CardHeader>
           <CardTitle>dbt workspace</CardTitle>
           <CardDescription>
-            Parallel to Data Quality. Models come from the approved STTM. Optional git copy uses
-            COPY FILES onto a Snowflake branch path — it does not open a pull request.
-            CREATE DBT PROJECT stays WRITEBACK=FALSE. Enhance any file with a Cortex model from this account.
+            Runs in parallel with Data Quality. Models come from the approved STTM and are added to the cut-from branch.
+            Everything else on that branch stays as it is. The code is pushed to a new GitHub branch with a pull request,
+            and a compile-only dbt project (WRITEBACK=FALSE) is created in Snowflake from that branch.
           </CardDescription>
         </CardHeader>
       </Card>
@@ -44,6 +46,8 @@ export default async function DbtPage({ params }: { params: { runId: string } })
         appliedSkills={data.skills?.applied ?? []}
         lastWorkspace={data.workspace}
         workspace={workspace}
+        publication={data.publication ?? null}
+        github={github}
       />
     </StageGate>
   );

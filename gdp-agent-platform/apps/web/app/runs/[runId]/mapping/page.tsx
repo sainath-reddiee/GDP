@@ -15,25 +15,24 @@ export default async function MappingPage({ params }: { params: { runId: string 
   const canGenerate = ["DOMAIN_IDENTIFIED", "MAPPING_PENDING"].includes(state.current_state);
   return (
     <StageGate state={state} stage="MAPPING">
-      <Card>
-        <CardHeader>
-          <CardTitle>Hybrid mapping</CardTitle>
-          <CardDescription>
-            Seven scored components plus Cortex Search. Approve a match, map to another target, or leave the
-            column unmapped so it loads as NULL. Required target columns still need a source before the stage can
-            be approved.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          {canGenerate && (
+      {canGenerate && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Hybrid mapping</CardTitle>
+            <CardDescription>
+              Seven scored signals (semantic, name, type, statistics, domain, context, history) plus Cortex Search and an
+              AI adjudicator rank target candidates for every source column.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
             <StageAction
               label={state.current_state === "MAPPING_PENDING" ? "Retry mapping" : "Generate mapping candidates"}
               pendingLabel="Scoring columns… this can take a few minutes"
               action={generateMapping.bind(null, params.runId)}
             />
-          )}
-        </CardContent>
-      </Card>
+          </CardContent>
+        </Card>
+      )}
       {state.current_state === "MAPPING_REVIEW" && data.candidates.length > 0 && (
         <MappingGate
           runId={params.runId}

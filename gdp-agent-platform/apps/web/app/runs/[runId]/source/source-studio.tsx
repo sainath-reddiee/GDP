@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useState, useTransition } from "react";
-import { Button } from "@/components/ui/button";
+import Link from "next/link";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
@@ -14,7 +15,7 @@ import type { TableRow } from "@/app/onboarding/catalog-types";
 import { loadTables } from "@/app/onboarding/catalog";
 import type { SourceOverview } from "@/lib/types";
 import {
-  loadTargetSuggestions, registerSourceStudio, saveSourceIntent, validateAccess,
+  loadTargetSuggestions, registerSourceStudio, saveSourceIntent, validateAndLand,
 } from "../source-actions";
 
 type Suggestion = {
@@ -29,6 +30,7 @@ type CatalogTarget = {
 export function SourceStudio({
   runId, sourceName, sourceType, database, schema,
   intent, overview, initialTables = [], canRegister, canValidate,
+  canResumeLanding = false, landed = false, failureReason = null,
 }: {
   runId: string;
   sourceName: string;
@@ -40,6 +42,9 @@ export function SourceStudio({
   initialTables?: TableRow[];
   canRegister: boolean;
   canValidate: boolean;
+  canResumeLanding?: boolean;
+  landed?: boolean;
+  failureReason?: string | null;
 }) {
   const objects = overview.objects ?? [];
   const planned = intent?.source.tables ?? [];
@@ -328,34 +333,96 @@ export function SourceStudio({
         </Button>
       )}
 
-      {canValidate && (
-        <div className="flex flex-wrap items-center gap-3">
-          <Button
-            disabled={pending || selected.length === 0}
-            onClick={() => start(async () => {
-              setError("");
-              const saved = await persistIntent();
-              if (!saved.ok) { setError(saved.error); return; }
-              const result = await validateAccess(runId, selected);
-              if (!result.ok) setError(result.error);
-            })}
-          >
-            {pending ? "Checking access…" : `Validate access (${selected.length} selected)`}
-          </Button>
-        </div>
-      )}
-
-      {canValidate && lastAttempt.some((c) => c.status === "FAILED") && (
+      {(canValidate || canResumeLanding) && (
         <Card>
           <CardHeader>
-            <CardTitle>Last access check failed</CardTitle>
-            <CardDescription>Fix the table selection or ask an admin to grant access, then validate again.</CardDescription>
+            <CardTitle>Validate access and land</CardTitle>
+            <CardDescription>
+              One step: check that the platform can read every selected table, then copy each one as-is into LANDING
+              (CREATE TABLE … AS SELECT) and reconcile row counts. Profiling unlocks when every table has landed.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {failureReason && <p className="text-sm text-destructive">Last attempt failed: {failureReason}</p>}
+            <div className="flex flex-wrap items-center gap-3">
+              <Button
+                disabled={pending || (canValidate && selected.length === 0)}
+                onClick={() => start(async () => {
+                  setError("");
+                  if (canValidate) {
+                    const saved = await persistIntent();
+                    if (!saved.ok) { setError(saved.error); return; }
+                  }
+                  const result = await validateAndLand(runId, selected);
+                  if (!result.ok) setError(result.error);
+                })}
+              >
+                {pending
+                  ? (canValidate ? "Checking access, then landing… this can take a few minutes" : "Landing tables…")
+                  : canValidate
+                    ? `Validate & land (${selected.length} selected)`
+                    : "Resume landing"}
+              </Button>
+              {canResumeLanding && (
+                <span className="text-xs text-muted-foreground">Access already passed, so only landing runs again.</span>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {lastAttempt.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle>{lastAttempt.some((c) => c.status === "FAILED") ? "Access check failed" : "Access checks"}</CardTitle>
+            <CardDescription>
+              {lastAttempt.some((c) => c.status === "FAILED")
+                ? "Fix the table selection or ask an admin to grant access, then validate again."
+                : `Latest attempt ${lastAttempt[0].checked_at.slice(0, 19)}`}
+            </CardDescription>
           </CardHeader>
           <CardContent><ChecksTable checks={lastAttempt} /></CardContent>
         </Card>
       )}
 
-      {!canRegister && !canValidate && objects.length > 0 && (
+      {(overview.landing ?? []).length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Landed tables</CardTitle>
+            <CardDescription>Source and landed row counts must match. Landed data is readable only by data stewards.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Table>
+              <THead>
+                <TR><TH>Source object</TH><TH>Landing table</TH><TH>Status</TH><TH>Source rows</TH><TH>Landed rows</TH><TH>Columns</TH></TR>
+              </THead>
+              <TBody>
+                {overview.landing.map((t) => (
+                  <TR key={t.landing_id}>
+                    <TD className="font-medium">{t.source_table}</TD>
+                    <TD className="font-mono text-xs">{t.landing_table}</TD>
+                    <TD>
+                      <span className={t.ingestion_status === "COMPLETE" ? "text-emerald-700" : "text-destructive"}>{t.ingestion_status}</span>
+                      {t.error_message && <div className="mt-1 text-xs text-destructive">{t.error_message}</div>}
+                    </TD>
+                    <TD>{t.source_row_count ?? "—"}</TD>
+                    <TD>{t.row_count ?? "—"}</TD>
+                    <TD>{t.columns}</TD>
+                  </TR>
+                ))}
+              </TBody>
+            </Table>
+          </CardContent>
+        </Card>
+      )}
+
+      {landed && (
+        <Link href={`/runs/${runId}/profile`} className={buttonVariants({ className: "self-start" })}>
+          Next: Start profiling
+        </Link>
+      )}
+
+      {!canRegister && !canValidate && !canResumeLanding && !landed && objects.length > 0 && (
         <Card>
           <CardHeader><CardTitle>Selected objects</CardTitle></CardHeader>
           <CardContent>

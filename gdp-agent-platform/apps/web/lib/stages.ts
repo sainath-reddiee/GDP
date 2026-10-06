@@ -1,8 +1,7 @@
-/** URL slug for each workflow stage and the build phase that delivers its workspace. */
+/** URL slug for each workflow stage and the build phase that delivers its workspace.
+ *  Access validation and landing run inside the Source stage ("Validate & land"). */
 export const STAGES: { slug: string; stage: string; label: string; phase: number }[] = [
   { slug: "source", stage: "SOURCE", label: "Source", phase: 3 },
-  { slug: "access", stage: "ACCESS", label: "Access", phase: 3 },
-  { slug: "landing", stage: "LANDING", label: "Landing", phase: 3 },
   { slug: "profile", stage: "PROFILING", label: "Profiling", phase: 4 },
   { slug: "mapping", stage: "MAPPING", label: "Mapping", phase: 6 },
   { slug: "sttm", stage: "STTM", label: "STTM", phase: 8 },

@@ -2,6 +2,28 @@
 
 import { api } from "@/lib/api";
 import type { SchemaRow, TableRow, TargetRow } from "./catalog-types";
+import type { DomainRow, ModelGraph } from "./intent-types";
+
+export async function loadColumns(database: string, schema: string, table: string) {
+  const qs = new URLSearchParams({ database, schema, table });
+  return api<{ columns: { column_name: string; data_type: string; ordinal_position: number }[] }>(
+    `/api/catalog/columns?${qs}`,
+  );
+}
+
+export async function previewGraph(database: string, schema: string, tables: string[], targets: string[]) {
+  return api<ModelGraph>("/api/catalog/preview-graph", {
+    method: "POST",
+    body: JSON.stringify({ database, schema, tables, targets }),
+  });
+}
+
+export async function createDomain(domain_name: string, description?: string) {
+  return api<{ domain: DomainRow; created: boolean }>("/api/domains", {
+    method: "POST",
+    body: JSON.stringify({ domain_name, description: description || null }),
+  });
+}
 
 export async function loadSchemas(database: string) {
   return api<{ schemas: SchemaRow[] }>(`/api/catalog/schemas?database=${encodeURIComponent(database)}`);

@@ -34,6 +34,8 @@ export default async function SourcePage({ params }: { params: { runId: string }
     );
   }
 
+  const current = state.current_state;
+  const failedIn = current === "FAILED" ? state.failed_from_state : null;
   return (
     <SourceStudio
       runId={params.runId}
@@ -44,8 +46,11 @@ export default async function SourcePage({ params }: { params: { runId: string }
       intent={intent}
       overview={overview}
       initialTables={catalog.tables}
-      canRegister={state.current_state === "CREATED"}
-      canValidate={state.current_state === "SOURCE_REGISTERED"}
+      canRegister={current === "CREATED"}
+      canValidate={current === "SOURCE_REGISTERED" || failedIn === "ACCESS_VALIDATION"}
+      canResumeLanding={["ACCESS_APPROVED", "LANDING_PENDING"].includes(current) || failedIn === "LANDING_RUNNING"}
+      landed={current === "LANDING_COMPLETE"}
+      failureReason={failedIn ? state.failure_reason : null}
     />
   );
 }

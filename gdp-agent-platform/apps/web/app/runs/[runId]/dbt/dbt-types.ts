@@ -29,12 +29,32 @@ export type CortexModel = {
   kind?: string;
 };
 
+export type DbtIntegration = {
+  name: string; type: string; enabled?: boolean; allowed_prefixes?: string[]; comment?: string;
+  usable?: boolean; provider?: string; detail?: string; allowed_secrets?: string[];
+};
+
+export type DbtRepo = {
+  name: string; fqn: string; origin: string; api_integration: string; last_fetched?: string;
+  usable?: boolean; grant_sql?: string | null;
+};
+
 export type DbtWorkspace = {
-  integrations?: { name: string; type: string; enabled?: boolean; allowed_prefixes?: string[]; comment?: string }[];
-  git_repositories?: { name: string; fqn: string; origin: string; api_integration: string; last_fetched?: string }[];
+  role?: string;
+  integrations?: DbtIntegration[];
+  git_repositories?: DbtRepo[];
   dbt_projects?: { name: string; fqn: string; comment?: string }[];
   skills?: { skill_name?: string; name?: string; version?: string | null; description?: string; skill_type?: string }[];
   models?: CortexModel[];
   default_model?: string;
   warnings?: string[];
+  capabilities?: { git_read?: boolean; git_write?: boolean; github_publish?: boolean; dbt_project?: boolean };
 };
+
+export type DbtPublication = {
+  status: string; origin?: string | null; base_branch?: string | null; head_branch?: string | null;
+  commit_sha?: string | null; files_pushed?: number | null; pr_number?: number | null; pr_url?: string | null;
+  dbt_project?: string | null; detail?: string | null; generation_id?: string | null; created_at?: string;
+};
+
+export type GithubStatus = { ready: boolean; config: { secret?: string; external_access_integration?: string } | null };

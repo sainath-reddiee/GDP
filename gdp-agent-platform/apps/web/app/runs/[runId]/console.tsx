@@ -23,9 +23,9 @@ const PROCEDURE_OWNED = new Set([
 
 const NEXT_STEP: Record<string, { slug: string; label: string }> = {
   CREATED: { slug: "source", label: "Register the source" },
-  SOURCE_REGISTERED: { slug: "source", label: "Select objects and validate access" },
-  ACCESS_APPROVED: { slug: "access", label: "Start landing" },
-  LANDING_PENDING: { slug: "landing", label: "Start landing" },
+  SOURCE_REGISTERED: { slug: "source", label: "Validate & land the source" },
+  ACCESS_APPROVED: { slug: "source", label: "Resume landing" },
+  LANDING_PENDING: { slug: "source", label: "Resume landing" },
   LANDING_COMPLETE: { slug: "profile", label: "Start profiling" },
   PROFILING_COMPLETE: { slug: "mapping", label: "Generate mapping candidates" },
   DOMAIN_IDENTIFIED: { slug: "mapping", label: "Generate mapping candidates" },

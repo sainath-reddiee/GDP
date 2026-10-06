@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { api, attempt, attemptValue, type ActionResult } from "@/lib/api";
+import type { MappingSuggestion } from "@/lib/types";
 
 export type TransformProposal = {
   target_column: string;
@@ -34,6 +35,14 @@ export async function generateMapping(runId: string): Promise<ActionResult> {
 export async function saveMappingDecisions(runId: string, decisions: Record<string, unknown>[]): Promise<ActionResult> {
   return after(runId, await attempt(() =>
     api(`/api/runs/${runId}/mapping/decisions`, { method: "POST", body: JSON.stringify({ decisions }) }),
+  ));
+}
+
+/** AI copilot review. Read-only: returns proposals; nothing is saved until the reviewer accepts them. */
+export async function assistMapping(runId: string, sourceColumnIds: string[], instructions: string) {
+  return attemptValue(() => api<{ suggestions: MappingSuggestion[]; model: string | null; skipped: number }>(
+    `/api/runs/${runId}/mapping/assist`,
+    { method: "POST", body: JSON.stringify({ source_column_ids: sourceColumnIds, instructions }) },
   ));
 }
 
@@ -112,9 +121,47 @@ export type GitBranchList = {
   repo: string;
   fetched: boolean;
   fetch_warning?: string;
+  grant_sql?: string | null;
   branches: GitBranch[];
   latest: string;
 };
+
+export type PublishResult = {
+  status: string;
+  detail?: string;
+  repository?: string;
+  head_branch?: string;
+  base_branch?: string;
+  commit_sha?: string;
+  files_pushed?: number;
+  branch_created?: boolean;
+  pull_request?: { number?: number; url?: string; created?: boolean };
+  dbt_project?: { status?: string; dbt_project?: string; detail?: string };
+};
+
+export async function publishDbt(runId: string, body: Record<string, unknown>) {
+  const result = await attemptValue(() => api<PublishResult>(`/api/runs/${runId}/dbt/publish`, {
+    method: "POST", body: JSON.stringify(body),
+  }));
+  revalidatePath(`/runs/${runId}`, "layout");
+  return result;
+}
+
+export async function setupGithubPublishing(runId: string, body: { token?: string; secret?: string; external_access_integration?: string }) {
+  const result = await attemptValue(() => api<{ ready: boolean; detail?: string; log: { sql: string; ok: boolean; error?: string }[] }>(
+    "/api/dbt/github/setup", { method: "POST", body: JSON.stringify(body) },
+  ));
+  revalidatePath(`/runs/${runId}`, "layout");
+  return result;
+}
+
+export async function createGitRepository(runId: string, body: { name: string; origin: string; api_integration: string; git_credentials?: string }) {
+  const result = await attemptValue(() => api<{ git_repository: string; origin: string; api_integration: string }>(
+    "/api/dbt/git-repository", { method: "POST", body: JSON.stringify(body) },
+  ));
+  revalidatePath(`/runs/${runId}`, "layout");
+  return result;
+}
 
 export async function listDbtBranches(runId: string, repo: string, fetchRemote = true) {
   const qs = new URLSearchParams({ repo, fetch: fetchRemote ? "true" : "false" });

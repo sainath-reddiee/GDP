@@ -24,18 +24,36 @@ export function MappingGate({
   const [pending, start] = useTransition();
 
   if (!complete) {
+    const pct = total ? Math.round((decided / total) * 100) : 0;
     return (
       <Card>
-        <CardHeader>
-          <CardTitle>Mapping pack is not ready</CardTitle>
+        <CardHeader className="pb-3">
+          <CardTitle className="flex items-center gap-3">
+            Mapping pack is not ready
+            <span className="text-sm font-normal text-muted-foreground">{decided}/{total} decided · {pct}%</span>
+          </CardTitle>
           <CardDescription>
-            {decided}/{total} source columns decided. STTM stays locked until every column is approved or left as NULL,
-            and every required target has a source.
+            STTM unlocks when every source column is approved or set to NULL and every required target has a source.
+            Use bulk approve or the AI copilot below to move faster.
           </CardDescription>
         </CardHeader>
-        <CardContent className="space-y-1 text-sm text-muted-foreground">
-          {undecided.length > 0 && <p>Still to review: {undecided.join(", ")}</p>}
-          {missing.length > 0 && <p>Required targets with no source: {missing.join(", ")}</p>}
+        <CardContent className="space-y-2 text-sm">
+          <div className="h-2 overflow-hidden rounded-full bg-muted">
+            <div className="h-full bg-emerald-500 transition-all" style={{ width: `${pct}%` }} />
+          </div>
+          {undecided.length > 0 && (
+            <p className="text-muted-foreground">
+              {undecided.length} still to review: {undecided.slice(0, 8).join(", ")}{undecided.length > 8 ? ` +${undecided.length - 8} more` : ""}
+            </p>
+          )}
+          {missing.length > 0 && (
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="text-destructive">Required targets with no source:</span>
+              {missing.map((m) => (
+                <span key={m} className="rounded-full bg-destructive/10 px-2 py-0.5 text-xs text-destructive">{m}</span>
+              ))}
+            </div>
+          )}
         </CardContent>
       </Card>
     );

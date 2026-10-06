@@ -381,6 +381,9 @@ def _load_intent(db: Db, run_id: str) -> Optional[dict]:
 
 @app.post("/api/runs")
 def create_run(body: CreateRun, db: Db = Depends(current_db)):
+    origin = ((body.intent or {}).get("source") or {}).get("origin") or "snowflake"
+    if origin != "snowflake":
+        raise HTTPException(400, "External sources are not supported yet; land them into Snowflake first")
     payload = {
         "RUN_NAME": body.run_name,
         "TARGET_MODEL": body.target_model,
@@ -534,6 +537,12 @@ def get_model_graph(run_id: str, db: Db = Depends(current_db)):
                     "kind": "planned", "weight": 1,
                 })
     suggestions = suggest_models(profile, targets, [s["object_name"] for s in sources])
+    from services.source.er_graph import infer_joins, isolated_tables
+
+    profiled_columns: dict[str, list[dict]] = {}
+    for col in profile:
+        profiled_columns.setdefault(col["table_name"], []).append(col)
+    joins = infer_joins(profiled_columns)
     return {
         "intent": intent or None,
         "source": {
@@ -543,6 +552,8 @@ def get_model_graph(run_id: str, db: Db = Depends(current_db)):
         "sources": sources,
         "targets": targets,
         "edges": edges,
+        "joins": joins,
+        "isolated": isolated_tables(profiled_columns, joins),
         "suggestions": suggestions,
         "profiled": bool(profile),
     }
@@ -792,6 +803,128 @@ def catalog_target_suggestions(database: str = "", schema: str = "", tables: str
     return _suggest_for_catalog(db, database or None, schema or None, table_list)
 
 
+class PreviewGraph(BaseModel):
+    database: str
+    schema_name: str = Field(alias="schema")
+    tables: list[str] = Field(default_factory=list, max_length=60)
+    targets: list[str] = Field(default_factory=list)
+
+
+@app.post("/api/catalog/preview-graph")
+def catalog_preview_graph(body: PreviewGraph, db: Db = Depends(current_db)):
+    """Pre-run ER preview: source columns, inferred joins and source->target overlap edges."""
+    from services.source.catalog_display import display_domain_name
+    from services.source.er_graph import infer_joins, isolated_tables, key_columns, mapping_edges
+
+    database, schema = _ident(body.database, "database"), _ident(body.schema_name, "schema")
+    tables = [_ident(t, "table") for t in body.tables]
+    meta = {r["table_name"]: r for r in db.query(
+        f"""
+        SELECT TABLE_NAME, TABLE_TYPE, ROW_COUNT FROM {database}.INFORMATION_SCHEMA.TABLES
+         WHERE TABLE_SCHEMA = %s AND TABLE_TYPE IN ('BASE TABLE', 'VIEW')
+        """,
+        (schema,),
+    )}
+    if not tables:
+        tables = sorted(meta)[:60]
+    columns: dict[str, list[dict]] = {t: [] for t in tables}
+    if tables:
+        placeholders = ", ".join(["%s"] * len(tables))
+        for col in db.query(
+            f"""
+            SELECT TABLE_NAME, COLUMN_NAME, DATA_TYPE, IS_NULLABLE, ORDINAL_POSITION
+              FROM {database}.INFORMATION_SCHEMA.COLUMNS
+             WHERE TABLE_SCHEMA = %s AND TABLE_NAME IN ({placeholders})
+             ORDER BY TABLE_NAME, ORDINAL_POSITION
+            """,
+            (schema, *tables),
+        ):
+            columns.setdefault(col["table_name"], []).append(col)
+    wanted = {t.upper() for t in body.targets}
+    targets = [
+        {**t, "domain_name": display_domain_name(t.get("domain_name")), "selected": True}
+        for t in _targets_with_columns(db)
+        if str(t.get("fqn") or "").upper() in wanted
+    ]
+    # unregistered model tables (e.g. DIM_* in the source schema) still get their live columns
+    for fqn in sorted(wanted - {str(t["fqn"]).upper() for t in targets}):
+        parts = fqn.split(".")
+        if len(parts) != 3:
+            continue
+        try:
+            tdb, tsch, ttbl = (_ident(p, "target") for p in parts)
+            cols = db.query(
+                f"""
+                SELECT COLUMN_NAME FROM {tdb}.INFORMATION_SCHEMA.COLUMNS
+                 WHERE TABLE_SCHEMA = %s AND TABLE_NAME = %s ORDER BY ORDINAL_POSITION
+                """,
+                (tsch, ttbl),
+            )
+        except Exception:
+            cols = []
+        targets.append({
+            "target_table": parts[2], "fqn": fqn, "domain_name": None,
+            "columns": [c["column_name"] for c in cols], "selected": True,
+        })
+    joins = infer_joins(columns)
+    sources = []
+    for name in tables:
+        keys = key_columns(name, columns.get(name, []))
+        row = meta.get(name) or {}
+        sources.append({
+            "object_name": name,
+            "object_type": row.get("table_type") or "TABLE",
+            "row_count_estimate": row.get("row_count"),
+            "selected_flag": True,
+            "missing": name not in meta,
+            "columns": [
+                {"name": c["column_name"], "type": c["data_type"], "nullable": c.get("is_nullable") == "YES",
+                 "pk": c["column_name"] in keys}
+                for c in columns.get(name, [])
+            ],
+        })
+    return {
+        "intent": None,
+        "source": {"database": database, "schema": schema},
+        "sources": sources,
+        "targets": targets,
+        "edges": mapping_edges(columns, targets),
+        "joins": joins,
+        "isolated": isolated_tables(columns, joins),
+        "suggestions": [],
+        "profiled": False,
+    }
+
+
+class CreateDomain(BaseModel):
+    domain_name: str = Field(min_length=2, max_length=128)
+    description: Optional[str] = Field(default=None, max_length=4000)
+
+
+@app.post("/api/domains")
+def create_domain(body: CreateDomain, db: Db = Depends(current_db)):
+    name = body.domain_name.strip()
+    existing = db.query(
+        "SELECT DOMAIN_ID, DOMAIN_NAME FROM KNOWLEDGE.DOMAIN_REGISTRY WHERE UPPER(DOMAIN_NAME) = UPPER(%s)",
+        (name,),
+    )
+    if existing:
+        return {"domain": existing[0], "created": False}
+    import uuid
+    domain_id = str(uuid.uuid4())
+    try:
+        db.execute(
+            """
+            INSERT INTO KNOWLEDGE.DOMAIN_REGISTRY (DOMAIN_ID, DOMAIN_NAME, DESCRIPTION, OWNER)
+            SELECT %s, %s, %s, CURRENT_USER()
+            """,
+            (domain_id, name, body.description),
+        )
+    except Exception as exc:
+        raise _snowflake_error(exc) from exc
+    return {"domain": {"domain_id": domain_id, "domain_name": name}, "created": True}
+
+
 @app.get("/api/runs/{run_id}/target-suggestions")
 def target_suggestions(run_id: str, tables: str = "", db: Db = Depends(current_db)):
     table_list = [part.strip() for part in (tables or "").split(",") if part.strip()]
@@ -917,6 +1050,43 @@ def execute_landing(run_id: str, db: Db = Depends(current_db)):
         return _source_call(db, "CALL SOURCE.EXECUTE_LANDING(%s)", execute_landing_handler, run_id)
     except Exception as exc:
         raise _snowflake_error(exc) from exc
+
+
+@app.post("/api/runs/{run_id}/prepare")
+def prepare_source(run_id: str, body: AccessRequest, db: Db = Depends(current_db)):
+    """One action for the Source stage: validate access to the selection, then land it as-is."""
+    from services.source.prepare import ACCESS, LANDING, prepare_plan
+
+    rows = db.query("SELECT CURRENT_STATE, FAILED_FROM_STATE FROM CORE.WORKFLOW_RUN WHERE RUN_ID = %s", (run_id,))
+    if not rows:
+        raise HTTPException(404, "run not found")
+    try:
+        steps = prepare_plan(rows[0]["current_state"], rows[0].get("failed_from_state"))
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+    out: dict = {"passed": True, "checks": [], "tables": [], "steps": steps, "state": None}
+    for step in steps:
+        if step.startswith("retry:"):
+            try:
+                db.call("CALL CORE.TRANSITION_RUN(%s, %s, %s, %s)",
+                        (run_id, step.split(":", 1)[1], "retry from Validate & land", "{}"))
+            except Exception as exc:
+                raise _snowflake_error(exc) from exc
+        elif step == ACCESS:
+            result = validate_access(run_id, body, db) or {}
+            out.update(checks=result.get("checks", []), state=result.get("state"))
+            if not result.get("passed"):
+                out["passed"] = False
+                out["failed_step"] = ACCESS
+                return out
+        elif step == LANDING:
+            result = execute_landing(run_id, db) or {}
+            out.update(tables=result.get("tables", []), state=result.get("state"))
+            if any(t.get("status") != "COMPLETE" for t in out["tables"]):
+                out["passed"] = False
+                out["failed_step"] = LANDING
+    return out
 
 
 @app.get("/api/runs/{run_id}/source")
@@ -1115,6 +1285,68 @@ def save_mapping(run_id: str, body: MappingDecisions, db: Db = Depends(current_d
         raise _snowflake_error(exc) from exc
 
 
+def _mapping_target_table(db: Db, run_id: str) -> Optional[dict]:
+    """The run's target model, resolved exactly like MAPPING.SAVE_MAPPING_DECISIONS does."""
+    found = db.query(
+        """
+        SELECT TB.TARGET_TABLE_ID, TB.TARGET_TABLE, TB.TARGET_DATABASE, TB.TARGET_SCHEMA, TB.GRAIN
+          FROM CORE.WORKFLOW_RUN R
+          JOIN KNOWLEDGE.TARGET_TABLE_REGISTRY TB ON TB.ACTIVE_FLAG AND TB.DOMAIN_ID = R.DOMAIN_ID
+               AND (UPPER(TB.TARGET_TABLE) = UPPER(SPLIT_PART(COALESCE(R.TARGET_MODEL, ''), '.', -1))
+                    OR COALESCE(R.TARGET_MODEL, '') = '')
+         WHERE R.RUN_ID = %s
+         ORDER BY TB.TARGET_TABLE LIMIT 1
+        """,
+        (run_id,),
+    )
+    return found[0] if found else None
+
+
+def _mapping_targets(db: Db, target_table_id: str) -> list[dict]:
+    return db.query(
+        """
+        SELECT T.TARGET_COLUMN_ID, T.COLUMN_NAME, T.DATA_TYPE, T.NULLABLE, T.IS_BUSINESS_KEY, T.SEMANTIC_TYPE,
+               T.IS_PII, T.BUSINESS_DEFINITION AS DEFINITION
+          FROM KNOWLEDGE.TARGET_COLUMN_REGISTRY T
+         WHERE T.TARGET_TABLE_ID = %s
+         ORDER BY T.ORDINAL_POSITION
+        """,
+        (target_table_id,),
+    )
+
+
+def _mapping_profile(db: Db, run_id: str) -> dict[str, dict]:
+    out = {}
+    for p in db.query(
+        """
+        SELECT SOURCE_COLUMN_ID, TABLE_NAME, COLUMN_NAME, DATA_TYPE, SEMANTIC_TYPE, NULL_PERCENTAGE,
+               DISTINCT_PERCENTAGE, CARDINALITY, GENERATED_DESCRIPTION, PII_CLASSIFICATION,
+               STATISTICS_JSON:enum_values AS ENUM_VALUES, STATISTICS_JSON:frequency_distribution AS TOP_VALUES
+          FROM PROFILE.PROFILE_REGISTRY WHERE RUN_ID = %s AND IS_CURRENT
+        """,
+        (run_id,),
+    ):
+        values = None
+        for key in ("enum_values", "top_values"):
+            raw = p.get(key)
+            if isinstance(raw, str):
+                try:
+                    raw = json.loads(raw)
+                except ValueError:
+                    raw = None
+            if raw:
+                values = [v.get("value", next(iter(v.values()), None)) if isinstance(v, dict) else v for v in raw][:8]
+                break
+        out[p["source_column_id"]] = {
+            "source_column_id": p["source_column_id"], "source_table": p["table_name"],
+            "column_name": p["column_name"], "data_type": p["data_type"], "semantic_type": p["semantic_type"],
+            "null_percentage": p["null_percentage"], "distinct_percentage": p["distinct_percentage"],
+            "cardinality": p["cardinality"], "description": p["generated_description"],
+            "pii": p["pii_classification"], "values": values,
+        }
+    return out
+
+
 @app.get("/api/runs/{run_id}/mapping")
 def get_mapping(run_id: str, db: Db = Depends(current_db)):
     candidates = db.query(
@@ -1123,7 +1355,9 @@ def get_mapping(run_id: str, db: Db = Depends(current_db)):
                TBL.SOURCE_TABLE, C.TARGET_COLUMN_ID, T.COLUMN_NAME AS TARGET_COLUMN, T.DATA_TYPE AS TARGET_DATATYPE,
                T.NULLABLE, T.IS_BUSINESS_KEY, C.FINAL_SCORE, C.RANK, C.CONFIDENCE, C.RECOMMENDATION,
                C.GENERATED_REASON, C.TRANSFORMATION, C.SEMANTIC_SCORE, C.KEYWORD_SCORE, C.DATATYPE_SCORE,
-               C.STATISTICAL_SCORE, C.DOMAIN_SCORE, C.CONTEXT_SCORE, C.HISTORICAL_SCORE
+               C.STATISTICAL_SCORE, C.DOMAIN_SCORE, C.CONTEXT_SCORE, C.HISTORICAL_SCORE,
+               C.EVIDENCE_JSON:llm:preferred_target::VARCHAR AS LLM_PREFERRED,
+               C.EVIDENCE_JSON:llm:agrees::BOOLEAN AS LLM_AGREES
           FROM MAPPING.MAPPING_CANDIDATE C
           JOIN SOURCE.LANDING_COLUMN_REGISTRY L ON L.LANDING_COLUMN_ID = C.SOURCE_COLUMN_ID
           JOIN SOURCE.LANDING_TABLE_REGISTRY TBL ON TBL.LANDING_ID = L.LANDING_ID
@@ -1142,34 +1376,83 @@ def get_mapping(run_id: str, db: Db = Depends(current_db)):
         """,
         (run_id,),
     )
-    targets = db.query(
-        """
-        SELECT T.TARGET_COLUMN_ID, T.COLUMN_NAME, T.DATA_TYPE, T.NULLABLE, T.IS_BUSINESS_KEY, T.SEMANTIC_TYPE
-          FROM KNOWLEDGE.TARGET_COLUMN_REGISTRY T
-          JOIN CORE.WORKFLOW_RUN R ON R.DOMAIN_ID IS NOT NULL
-          JOIN KNOWLEDGE.TARGET_TABLE_REGISTRY TB ON TB.TARGET_TABLE_ID = T.TARGET_TABLE_ID
-               AND TB.DOMAIN_ID = R.DOMAIN_ID AND TB.ACTIVE_FLAG
-         WHERE R.RUN_ID = %s
-         ORDER BY T.ORDINAL_POSITION
-        """,
-        (run_id,),
-    )
+    table = _mapping_target_table(db, run_id)
+    targets = _mapping_targets(db, table["target_table_id"]) if table else []
+    profile = _mapping_profile(db, run_id) if candidates else {}
+    system_derived = ("SURROGATE_KEY", "RECORD_SOURCE", "AUDIT_TIMESTAMP")
     sources = {c["source_column_id"] for c in candidates}
     decided = {d["source_column_id"] for d in decisions}
     mapped = {d["target_column_id"] for d in decisions if d["decision"] != "REJECTED" and d["target_column_id"]}
     missing = [t["column_name"] for t in targets
-               if not t["nullable"] and t["semantic_type"] not in ("SURROGATE_KEY", "RECORD_SOURCE", "AUDIT_TIMESTAMP")
-               and t["target_column_id"] not in mapped]
-    undecided = [next(c["source_column"] for c in candidates if c["source_column_id"] == s)
-                 for s in sources if s not in decided]
+               if not t["nullable"] and t["semantic_type"] not in system_derived and t["target_column_id"] not in mapped]
+    undecided = sorted({c["source_column"] for c in candidates if c["source_column_id"] not in decided})
     return {
         "candidates": candidates, "decisions": decisions, "targets": targets,
+        "target_table": table, "profile": profile,
         "status": {
-            "source_columns": len(sources), "decided": len(sources) - len(undecided),
+            "source_columns": len(sources), "decided": len(sources & decided),
             "undecided": undecided, "missing_required_targets": missing,
-            "complete": bool(sources) and not undecided and not missing,
+            "complete": bool(sources) and sources <= decided and not missing,
         },
     }
+
+
+class MappingAssist(BaseModel):
+    source_column_ids: list[str] = Field(default_factory=list, max_length=200)
+    instructions: str = Field(default="", max_length=2000)
+
+
+@app.post("/api/runs/{run_id}/mapping/assist")
+def mapping_assist(run_id: str, body: MappingAssist, db: Db = Depends(current_db)):
+    """AI copilot: proposes a decision per column. Read-only — nothing is saved until the reviewer accepts."""
+    from services.mapping import assist
+
+    data = get_mapping(run_id, db)
+    table = data["target_table"]
+    if not table or not data["candidates"]:
+        raise HTTPException(409, "Generate mapping candidates first")
+    decided = {d["source_column_id"] for d in data["decisions"]}
+    wanted = set(body.source_column_ids) or {c["source_column_id"] for c in data["candidates"]} - decided
+    by_source: dict[str, list] = {}
+    for c in data["candidates"]:
+        by_source.setdefault(c["source_column_id"], []).append(c)
+    sources = []
+    for sid in sorted(wanted, key=lambda s: (by_source.get(s, [{}])[0].get("source_table") or "",
+                                             by_source.get(s, [{}])[0].get("source_column") or "")):
+        if sid not in by_source:
+            continue
+        first = by_source[sid][0]
+        sources.append(data["profile"].get(sid) or {
+            "source_column_id": sid, "source_table": first["source_table"], "column_name": first["source_column"],
+            "data_type": first["source_datatype"]})
+    sources = sources[:assist.MAX_COLUMNS]
+    if not sources:
+        return {"suggestions": [], "model": None, "skipped": 0}
+    taken = {d["target_column_id"]: d["source_column_id"] for d in data["decisions"]
+             if d["decision"] != "REJECTED" and d["target_column_id"] and d["source_column_id"] not in wanted}
+    prompt = assist.build_prompt(sources, by_source, data["targets"], table["target_table"], taken, body.instructions)
+    model_rows = db.query(
+        "SELECT CONFIG_VALUE::VARCHAR AS M FROM CORE.PLATFORM_CONFIG WHERE CONFIG_KEY = 'LLM_MODEL' AND IS_CURRENT"
+    )
+    model = (model_rows[0]["m"] if model_rows else None) or "claude-sonnet-4-5"
+    try:
+        result = db.query(
+            "SELECT AI_COMPLETE(model => %s, prompt => %s, "
+            "model_parameters => {'temperature': 0, 'max_tokens': 8000}, "
+            "response_format => PARSE_JSON(%s), show_details => TRUE) AS R",
+            (model, prompt, json.dumps({"type": "json", "schema": assist.SCHEMA})),
+        )
+    except Exception as exc:
+        raise _snowflake_error(exc) from exc
+    details = result[0]["r"]
+    details = json.loads(details) if isinstance(details, str) else details
+    raw = details["structured_output"][0]["raw_message"]
+    raw = json.loads(raw) if isinstance(raw, str) else raw
+    suggestions = assist.normalize(raw, sources, by_source, data["targets"], taken)
+    for s in suggestions:
+        s["decision"] = assist.to_decision(s)
+    return {"suggestions": suggestions, "model": details.get("model", model),
+            "skipped": max(0, len(wanted) - len(sources))}
 
 
 @app.post("/api/runs/{run_id}/sttm")
@@ -1372,6 +1655,13 @@ def _generate_dbt_overlay(db: Db, run_id: str, payload: dict):
 @app.post("/api/runs/{run_id}/dbt")
 def generate_dbt(run_id: str, body: Optional[DbtPlan] = None, db: Db = Depends(current_db)):
     payload = _clean_dbt_plan(body)
+    result = _generate_dbt(run_id, payload, db)
+    if payload.get("push") and isinstance(result, dict) and not result.get("error"):
+        result["publish"] = _publish_dbt(db, run_id, {})
+    return result
+
+
+def _generate_dbt(run_id: str, payload: dict, db: Db):
     try:
         _save_dbt_plan(db, run_id, payload)
     except Exception:
@@ -1395,6 +1685,142 @@ def generate_dbt(run_id: str, body: Optional[DbtPlan] = None, db: Db = Depends(c
                 except Exception as overlay_exc:
                     raise _snowflake_error(overlay_exc) from overlay_exc
             raise _snowflake_error(one_arg) from one_arg
+
+
+def _github_publisher_ready(db: Db) -> bool:
+    try:
+        return bool(db.query("SHOW PROCEDURES LIKE 'PUBLISH_DBT_PR' IN SCHEMA CODEGEN"))
+    except Exception:
+        return False
+
+
+def _publish_dbt(db: Db, run_id: str, payload: dict) -> dict:
+    if not _github_publisher_ready(db):
+        return {"status": "NOT_CONFIGURED",
+                "detail": "GitHub publishing is not set up. An admin can set it up in the GitHub publishing card."}
+    try:
+        return db.call("CALL CODEGEN.PUBLISH_DBT_PR(%s, %s)", (run_id, json.dumps(payload)))
+    except Exception as exc:
+        return {"status": "FAILED", "detail": str(exc)[:1000]}
+
+
+class DbtPublish(BaseModel):
+    origin: Optional[str] = None
+    base_branch: Optional[str] = None
+    cut_branch: Optional[str] = None
+    git_repository: Optional[str] = None
+    title: Optional[str] = Field(default=None, max_length=200)
+    draft: bool = False
+    create_project: bool = True
+
+
+@app.post("/api/runs/{run_id}/dbt/publish")
+def publish_dbt(run_id: str, body: DbtPublish, db: Db = Depends(current_db)):
+    """Push the latest generation to a new GitHub branch and open a PR (CODEGEN.PUBLISH_DBT_PR)."""
+    return _publish_dbt(db, run_id, body.model_dump(exclude_none=True))
+
+
+def _services_import(db: Db) -> str:
+    """IMPORTS of the deployed GENERATE_DBT, so the publisher runs the same code package."""
+    for row in db.query("DESC PROCEDURE CODEGEN.GENERATE_DBT(VARCHAR, VARCHAR)"):
+        if str(row.get("property") or "").lower() == "imports":
+            value = str(row.get("value") or "").strip("[] ")
+            if value:
+                return value.split(",")[0].strip().strip("'\"")
+    raise HTTPException(409, "Deploy the platform first (Admin > Apply) so CODEGEN.GENERATE_DBT exists.")
+
+
+def _set_config(db: Db, key: str, value: dict, description: str) -> None:
+    db.execute("UPDATE CORE.PLATFORM_CONFIG SET IS_CURRENT = FALSE WHERE CONFIG_KEY = %s AND IS_CURRENT", (key,))
+    db.execute(
+        """
+        INSERT INTO CORE.PLATFORM_CONFIG (CONFIG_KEY, CONFIG_VALUE, DESCRIPTION, VERSION, IS_CURRENT, CREATED_BY)
+        SELECT %s, PARSE_JSON(%s), %s,
+               COALESCE((SELECT MAX(VERSION) FROM CORE.PLATFORM_CONFIG WHERE CONFIG_KEY = %s), 0) + 1,
+               TRUE, CURRENT_USER()
+        """,
+        (key, json.dumps(value), description, key),
+    )
+
+
+@app.get("/api/dbt/github")
+def github_publish_status(db: Db = Depends(current_db)):
+    config = db.query(
+        "SELECT CONFIG_VALUE FROM CORE.PLATFORM_CONFIG WHERE CONFIG_KEY = 'GITHUB_PUBLISH' AND IS_CURRENT"
+    )
+    value = config[0]["config_value"] if config else None
+    value = json.loads(value) if isinstance(value, str) else value
+    return {"ready": _github_publisher_ready(db), "config": value or None}
+
+
+class GithubSetup(BaseModel):
+    token: Optional[str] = Field(default=None, max_length=255)
+    secret: str = Field(default="CODEGEN.GITHUB_TOKEN", max_length=256)
+    external_access_integration: str = Field(default="GDP_GITHUB_ACCESS", max_length=256)
+
+
+@app.post("/api/dbt/github/setup")
+def github_publish_setup(body: GithubSetup, db: Db = Depends(current_db)):
+    """One-time admin setup: network rule, secret, external access integration and the publisher procedure."""
+    from services.dbt.publish import procedure_sql, setup_sql
+
+    database = DATABASE.upper()
+    secret = body.secret.strip().upper()
+    secret = secret if secret.count(".") == 2 else f"{database}.{secret}"
+    eai = body.external_access_integration.strip().upper()
+    token = (body.token or "").strip()
+    if token and not re.fullmatch(r"[A-Za-z0-9_\-]{20,255}", token):
+        raise HTTPException(400, "That does not look like a GitHub token (ghp_… or github_pat_…).")
+    try:
+        statements = setup_sql(database, eai, secret, create_secret=bool(token))
+        ddl = procedure_sql(database, _services_import(db), eai, secret)
+    except AssertionError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    log: list[dict] = []
+    for sql in [*statements, ddl]:
+        shown = sql
+        run = sql.replace("'<github token>'", "'" + token + "'") if token else sql
+        try:
+            db.execute(run)
+            log.append({"sql": shown, "ok": True})
+        except Exception as exc:
+            error = str(exc)[:500].replace(token, "***") if token else str(exc)[:500]
+            log.append({"sql": shown, "ok": False, "error": error})
+            return {"ready": False, "log": log,
+                    "detail": "A step needs more privileges (CREATE INTEGRATION / CREATE SECRET / CREATE NETWORK RULE). "
+                              "Ask an admin to run the SQL shown, or retry with a role that has them."}
+    _set_config(db, "GITHUB_PUBLISH", {"secret": secret, "external_access_integration": eai},
+                "GitHub publishing for generated dbt branches and pull requests")
+    return {"ready": True, "log": log}
+
+
+class GitRepositoryCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=128)
+    origin: str = Field(min_length=10, max_length=1024)
+    api_integration: str = Field(min_length=1, max_length=256)
+    git_credentials: Optional[str] = Field(default=None, max_length=512)
+
+
+@app.post("/api/dbt/git-repository")
+def create_git_repository(body: GitRepositoryCreate, db: Db = Depends(current_db)):
+    """Create a Snowflake git repository clone for an integration that has none yet, then FETCH it."""
+    from services.dbt.workspace import quote_exact, safe_fqn
+
+    name = re.sub(r"[^A-Za-z0-9_]", "_", body.name.strip()).upper().strip("_") or "DBT_REPO"
+    origin = body.origin.strip()
+    if not re.fullmatch(r"https://[A-Za-z0-9.\-]+/[A-Za-z0-9_.\-/]+", origin):
+        raise HTTPException(400, "Origin must be an https git URL")
+    fqn = f"{DATABASE.upper()}.CODEGEN.{name}"
+    creds = f" GIT_CREDENTIALS = {safe_fqn(body.git_credentials)}" if body.git_credentials else ""
+    try:
+        db.execute(
+            f"CREATE GIT REPOSITORY IF NOT EXISTS {fqn} API_INTEGRATION = {quote_exact(body.api_integration)} "
+            f"ORIGIN = '{origin}'{creds} COMMENT = 'GDP dbt skeleton source'"
+        )
+        db.execute(f"ALTER GIT REPOSITORY {fqn} FETCH")
+    except Exception as exc:
+        raise _snowflake_error(exc) from exc
+    return {"git_repository": fqn, "origin": origin, "api_integration": body.api_integration}
 
 
 @app.get("/api/runs/{run_id}/dbt")
@@ -1427,7 +1853,19 @@ def get_dbt(run_id: str, db: Db = Depends(current_db)):
             extras[key] = json.loads(art.get("content") or "{}")
         except ValueError:
             extras[key] = None
-    return {"generation": gen[0] if gen else None, "artifacts": artifacts, **extras}
+    try:
+        publication = db.query(
+            """
+            SELECT STATUS, ORIGIN, BASE_BRANCH, HEAD_BRANCH, COMMIT_SHA, FILES_PUSHED, PR_NUMBER, PR_URL,
+                   DBT_PROJECT, DETAIL, GENERATION_ID, CREATED_AT::VARCHAR AS CREATED_AT
+              FROM CODEGEN.GIT_PUBLICATION WHERE RUN_ID = %s ORDER BY CREATED_AT DESC LIMIT 1
+            """,
+            (run_id,),
+        )
+    except Exception:
+        publication = []
+    return {"generation": gen[0] if gen else None, "artifacts": artifacts, **extras,
+            "publication": publication[0] if publication else None}
 
 
 def _quote_fqn(name: str) -> str:
@@ -1494,11 +1932,13 @@ def get_dbt_branches(run_id: str, repo: str, fetch: bool = True, db: Db = Depend
             branches = parse_listed_branches(db.query(f"LIST @{repo_sql}/branches/") or [])
         except Exception as exc:
             warning = warning or str(exc)[:400]
+    from services.dbt.workspace import grant_hint
     return {
         "run_id": run_id,
         "repo": repo_sql,
         "fetched": fetched,
         "fetch_warning": warning,
+        "grant_sql": grant_hint(warning, db.role) if warning else None,
         "branches": branches,
         "latest": latest_branch(branches),
     }

@@ -97,6 +97,18 @@ FORK_AFTER = "STTM"
 FORK_STAGES = frozenset({"SODA", "DBT"})
 
 
+def finishes_stage(graph: WorkflowGraph, state: str) -> bool:
+    """A DONE state closes its stage only if no later DONE state shares that stage
+    (e.g. SOURCE_REGISTERED and ACCESS_APPROVED are checkpoints inside SOURCE; LANDING_COMPLETE closes it)."""
+    s = graph.states[state]
+    if s.kind != "DONE":
+        return False
+    return not any(
+        o.enabled and o.stage == s.stage and o.kind == "DONE" and o.ordinal > s.ordinal
+        for o in graph.states.values()
+    )
+
+
 def stage_rail(graph: WorkflowGraph, current_state: str, interrupted_from: Optional[str]) -> List[dict]:
     """Per-stage status for the UI: COMPLETE, ACTIVE, REVIEW_REQUIRED, BLOCKED, FAILED, CANCELLED, LOCKED.
 
@@ -116,12 +128,13 @@ def stage_rail(graph: WorkflowGraph, current_state: str, interrupted_from: Optio
         anchor_status = "FAILED" if current_state == FAILED_STATE else "CANCELLED"
     else:
         anchor = current.stage
-        anchor_status = {"REVIEW": "REVIEW_REQUIRED", "BLOCKED": "BLOCKED", "DONE": "COMPLETE"}.get(current.kind, "ACTIVE")
+        done = "COMPLETE" if finishes_stage(graph, current_state) else "ACTIVE"
+        anchor_status = {"REVIEW": "REVIEW_REQUIRED", "BLOCKED": "BLOCKED", "DONE": done}.get(current.kind, "ACTIVE")
 
     anchor_index = stages.index(anchor)
     sttm_index = stages.index(FORK_AFTER) if FORK_AFTER in stages else -1
     # A finished stage (LANDING_COMPLETE, PROFILING_COMPLETE, ...) opens the next stage.
-    opened_next = current.kind == "DONE" and current_state not in (FAILED_STATE, CANCELLED_STATE)
+    opened_next = finishes_stage(graph, current_state)
     sttm_done = sttm_index >= 0 and (anchor_index > sttm_index or (opened_next and anchor == FORK_AFTER))
     rail = []
     for i, st in enumerate(stages):

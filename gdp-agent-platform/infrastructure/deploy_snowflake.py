@@ -209,6 +209,24 @@ def deploy(args) -> None:
         con.close()
 
 
+def refresh_github_publisher(cur, database: str, services_import: str) -> str:
+    """Re-point CODEGEN.PUBLISH_DBT_PR at the new code package once GitHub publishing has been set up."""
+    import json as _json
+    from services.dbt.publish import procedure_sql
+
+    cur.execute(f"SELECT CONFIG_VALUE FROM {database}.CORE.PLATFORM_CONFIG "
+                f"WHERE CONFIG_KEY = 'GITHUB_PUBLISH' AND IS_CURRENT")
+    row = cur.fetchone()
+    if not row:
+        return "github publisher: not set up (skipped)"
+    config = _json.loads(row[0]) if isinstance(row[0], str) else row[0]
+    try:
+        cur.execute(procedure_sql(database, services_import, config["external_access_integration"], config["secret"]))
+        return "github publisher: refreshed"
+    except Exception as exc:
+        return f"github publisher: skipped ({exc})"
+
+
 def apply_to_connection(con, database: str, warehouse: str, variables: Dict[str, str],
                         zip_name: str, zip_bytes: bytes, migrations, procedures, extra_sql,
                         graph_version, state_rows, transition_rows, demo_files) -> List[str]:
@@ -275,6 +293,7 @@ def apply_to_connection(con, database: str, warehouse: str, variables: Dict[str,
     for path in procedures:
         con.execute_string(render(path.read_text(encoding="utf-8"), variables))
         log.append(f"procedures {path.name}: applied")
+    log.append(refresh_github_publisher(cur, database, variables["services_import"]))
 
     seed_platform(cur, database)
     log.append("seed domain pack, skills, platform config")

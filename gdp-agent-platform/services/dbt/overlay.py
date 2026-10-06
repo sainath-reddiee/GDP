@@ -16,7 +16,7 @@ from typing import Any, Dict, List
 
 from services.dbt.procedures import _artifact_type, merge_branch_plan
 from services.dbt.project import build
-from services.dbt.workspace import merge_skeleton, origin_allowed, safe_fqn
+from services.dbt.workspace import merge_skeleton, origin_allowed, push_pending, read_repo_text, safe_fqn
 from services.soda.expectations import render_yaml
 
 TEXT_SUFFIXES = (".sql", ".yml", ".yaml", ".md", ".json", ".csv", ".txt", ".toml")
@@ -54,14 +54,18 @@ def _put_files(db, stage_root: str, files: Dict[str, str]) -> None:
         shutil.rmtree(tmp, ignore_errors=True)
 
 
-def _fetch_skeleton(db, repo_fqn: str, branch: str, limit: int = 80) -> Dict[str, str]:
+def _fetch_skeleton(db, repo_fqn: str, branch: str, limit: int = 120) -> Dict[str, str]:
     repo = safe_fqn(repo_fqn)
     branch_name = (branch or "main").strip().strip("/")
+    fetch_error = ""
     try:
         db.execute(f"ALTER GIT REPOSITORY {repo} FETCH")
-    except Exception:
-        pass
+    except Exception as exc:  # a stale clone is still a usable skeleton
+        fetch_error = str(exc)[:400]
     listed = db.query(f"LIST @{repo}/branches/{branch_name}/")
+    if not listed and fetch_error:
+        raise RuntimeError(f"FETCH failed and the clone has no {branch_name} files: {fetch_error}")
+    read = lambda sql: [next(iter(r.values()), None) for r in db.query(sql)]  # noqa: E731
     files: Dict[str, str] = {}
     for row in listed:
         name = str(row.get("name") or "")
@@ -71,8 +75,7 @@ def _fetch_skeleton(db, repo_fqn: str, branch: str, limit: int = 80) -> Dict[str
         if len(files) >= limit:
             break
         try:
-            chunks = db.query(f"SELECT $1 AS TXT FROM @{repo}/branches/{branch_name}/{rel}")
-            text = "\n".join(str(c.get("txt")) for c in chunks if c.get("txt") is not None)
+            text = read_repo_text(read, repo, branch_name, rel)
             if text:
                 files[rel] = text
         except Exception:
@@ -89,28 +92,6 @@ def _create_project(db, project_fqn: str, stage_path: str, comment: str) -> Dict
         f"COMMENT = '{comment.replace(chr(39), '')[:200]}'"
     )
     return {"dbt_project": name, "from": source, "status": "CREATED"}
-
-
-def _push_branch(db, repo_fqn: str, cut_branch: str, stage_path: str) -> Dict[str, Any]:
-    repo = safe_fqn(repo_fqn)
-    branch = (cut_branch or "").strip().strip("/")
-    source = stage_path if stage_path.startswith("@") else f"@{stage_path}"
-    try:
-        db.execute(f"ALTER GIT REPOSITORY {repo} FETCH")
-    except Exception as exc:
-        return {"status": "FETCH_FAILED", "detail": str(exc)[:400]}
-    try:
-        db.execute(f"COPY FILES INTO @{repo}/branches/{branch}/ FROM {source} OVERWRITE = TRUE")
-        return {
-            "status": "PUSHED",
-            "repo": repo,
-            "branch": branch,
-            "from": source,
-            "method": f"COPY FILES INTO @{repo}/branches/{branch}/",
-            "pull_request": False,
-        }
-    except Exception as exc:
-        return {"status": "COPY_FAILED", "detail": str(exc)[:400], "repo": repo, "branch": branch}
 
 
 def generate_via_db(db, run_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -211,7 +192,7 @@ def generate_via_db(db, run_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         f"Cut `{plan['cut_branch']}` from `{plan['base_branch']}`"
         + (f" in {plan.get('origin') or plan['repo']}" if (plan.get("origin") or plan["repo"]) else "")
         + " using DBT-ONBOARD-SOURCE on the approved STTM. "
-        + "Review the models, then push the cut branch into the Snowflake git repository."
+        + "Review the models, then publish the branch and pull request to GitHub."
     )
     files["release/branch.json"] = json.dumps({**plan, "instruction": instruction}, indent=2)
     files["release/skills.json"] = json.dumps({
@@ -233,10 +214,7 @@ def generate_via_db(db, run_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         "overlay": True,
         "pull_request": {
             "created": False,
-            "reason": (
-                "GDP copies files onto the Snowflake git branch with COPY FILES. "
-                "It does not open a GitHub or GitLab pull request."
-            ),
+            "reason": "Opened by CODEGEN.PUBLISH_DBT_PR through the GitHub API after generation.",
         },
     }
     project_name = plan.get("dbt_project") or (
@@ -246,10 +224,7 @@ def generate_via_db(db, run_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         workspace["dbt_project"] = _create_project(db, project_name, f"@{stage_path}", f"GDP run {run_id} compile-only")
     except Exception as exc:
         workspace["dbt_project"] = {"status": "SKIPPED", "detail": str(exc)[:400]}
-    if plan.get("push") and plan.get("git_repository"):
-        workspace["push"] = _push_branch(db, plan["git_repository"], plan["cut_branch"], f"@{stage_path}")
-    else:
-        workspace["push"] = {"status": "NOT_REQUESTED"}
+    workspace["push"] = push_pending(plan, True)
     workspace["lineage"] = {
         "sttm_id": sttm["STTM_ID"],
         "skills": ["DBT-ONBOARD-SOURCE"],

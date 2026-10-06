@@ -66,6 +66,7 @@ export type MappingOverview = {
     recommendation: string; generated_reason: string | null; transformation: string | null;
     semantic_score: number; keyword_score: number; datatype_score: number; statistical_score: number;
     domain_score: number; context_score: number; historical_score: number;
+    llm_preferred?: string | null; llm_agrees?: boolean | null;
   }[];
   decisions: {
     decision_id: string; source_column_id: string; target_column_id: string | null; candidate_id: string | null;
@@ -74,9 +75,30 @@ export type MappingOverview = {
   }[];
   targets: {
     target_column_id: string; column_name: string; data_type: string; nullable: boolean;
-    is_business_key: boolean; semantic_type: string;
+    is_business_key: boolean; semantic_type: string; is_pii?: boolean | null; definition?: string | null;
   }[];
+  target_table?: { target_table_id: string; target_table: string; target_database: string; target_schema: string; grain?: string | null } | null;
+  profile?: Record<string, MappingProfile>;
   status: { source_columns: number; decided: number; undecided: string[]; missing_required_targets: string[]; complete: boolean };
+};
+
+export type MappingProfile = {
+  source_column_id: string; source_table: string; column_name: string; data_type: string;
+  semantic_type: string | null; null_percentage: number | null; distinct_percentage: number | null;
+  cardinality: number | null; description: string | null; pii: string | null; values: unknown[] | null;
+};
+
+export type MappingSuggestion = {
+  source_column_id: string;
+  action: "APPROVE" | "MODIFY" | "ALTERNATIVE" | "NULL";
+  target_column_id: string | null;
+  target_column: string | null;
+  candidate_id: string | null;
+  transformation: string | null;
+  confidence: number;
+  reason: string;
+  note: string | null;
+  decision: Record<string, unknown>;
 };
 
 export type WhoAmI = { user: string; role: string; auth_mode: "dev" | "pat"; agent: string | null };

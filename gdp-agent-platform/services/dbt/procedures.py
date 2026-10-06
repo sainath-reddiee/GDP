@@ -14,7 +14,7 @@ from services.common.audit import tool_call
 from services.common.sql import clip, insert_rows, rows, scalar, variant
 from services.common.stage import Stage
 from services.dbt.project import build
-from services.dbt.workspace import create_dbt_project, fetch_branch_files, merge_skeleton, origin_allowed, push_branch
+from services.dbt.workspace import create_dbt_project, fetch_branch_files, merge_skeleton, origin_allowed, push_pending
 from services.knowledge.procedures import current_knowledge_version, load_skill
 from services.knowledge.usage import STAGE_SKILLS, use_skills
 from services.soda.expectations import render_yaml
@@ -204,7 +204,7 @@ def generate_dbt(session, run_id: str, payload_json: str = "{}") -> Dict[str, An
                 f"Cut `{plan['cut_branch']}` from `{plan['base_branch']}`"
                 + (f" in {plan.get('origin') or plan['repo']}" if (plan.get("origin") or plan["repo"]) else "")
                 + " using DBT-ONBOARD-SOURCE on the approved STTM. "
-                + "Review the models, then push the cut branch into the Snowflake git repository."
+                + "Review the models, then publish the branch and pull request to GitHub."
             )
             files["release/branch.json"] = json.dumps({**plan, "instruction": instruction}, indent=2)
             files["release/skills.json"] = json.dumps({
@@ -222,10 +222,7 @@ def generate_dbt(session, run_id: str, payload_json: str = "{}") -> Dict[str, An
                 "stage_path": f"@{stage_path}",
                 "pull_request": {
                     "created": False,
-                    "reason": (
-                        "GDP copies files onto the Snowflake git branch with COPY FILES. "
-                        "It does not open a GitHub or GitLab pull request."
-                    ),
+                    "reason": "Opened by CODEGEN.PUBLISH_DBT_PR through the GitHub API after generation.",
                 },
             }
             project_name = plan.get("dbt_project") or (
@@ -237,10 +234,7 @@ def generate_dbt(session, run_id: str, payload_json: str = "{}") -> Dict[str, An
                 )
             except Exception as exc:
                 workspace["dbt_project"] = {"status": "SKIPPED", "detail": clip(exc, 400)}
-            if plan.get("push") and plan.get("git_repository"):
-                workspace["push"] = push_branch(session, plan["git_repository"], plan["cut_branch"], f"@{stage_path}")
-            else:
-                workspace["push"] = {"status": "NOT_REQUESTED"}
+            workspace["push"] = push_pending(plan, True)
             workspace["lineage"] = {
                 "sttm_id": sttm["STTM_ID"],
                 "skills": skill_names,
