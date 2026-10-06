@@ -196,6 +196,7 @@ export type InventoryTable = {
   last_altered: string | null; status: ProfileStatus; domain_name: string | null; stage_path: string | null;
   profiled_at: string | null; profiled_by: string | null; avg_null_percentage: number | null;
   key_candidates: number | null; pii_columns: number | null; is_approximate: boolean | null; error_message: string | null;
+  quality?: Scorecard | null;
 };
 
 export type SourceInventory = {
@@ -241,4 +242,44 @@ export type ProfileStoreRow = {
   is_approximate: boolean | null; profiled_by: string | null; profiled_at: string;
   status: string | null; status_updated_at: string | null; error_message: string | null;
   avg_null_percentage: number | null; key_candidates: number | null; pii_columns: number | null;
+};
+
+export type Scorecard = {
+  overall: number | null;
+  grade: string;
+  dimensions: { completeness: number | null; uniqueness: number | null; validity: number | null; freshness: number | null };
+  age_days: number | null;
+};
+
+export type SuggestedCheck = {
+  check: string; column: string | null; reason: string; valid_values?: string[]; valid_regex?: string;
+};
+
+export type Drift = {
+  added: string[]; removed: string[]; retyped: { column: string; from: string; to: string }[];
+  row_count: { before: number | null; after: number | null; delta: number | null; pct: number | null };
+  profiled_at: string | null; schema_changed: boolean; changed: boolean;
+};
+
+export type TableInsights = TableProfileDoc & {
+  scorecard: Scorecard; checks: SuggestedCheck[]; checks_yaml: string; drift: Drift | null;
+};
+
+export type Relationship = {
+  left: string; right: string; keys: string[]; cardinality: string; confidence: number; evidence?: string[]; source?: string;
+};
+
+export type AnalyzeResult = {
+  tables: {
+    table: string; staged: boolean; row_count: number | null; column_count: number | null;
+    quality: Scorecard | null; key_candidates: string[]; pii_columns: string[];
+  }[];
+  relationships: Relationship[];
+  graph: import("@/app/onboarding/intent-types").ModelGraph;
+  models: {
+    related: boolean;
+    suggestions: { kind: "existing" | "proposed"; target_table: string; fqn: string; domain_name?: string | null;
+      score: number; overlap_columns: string[]; reason: string }[];
+    targets: { target_table_id: string; domain_name: string; target_table: string; fqn: string }[];
+  };
 };

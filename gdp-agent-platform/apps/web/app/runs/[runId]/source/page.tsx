@@ -31,8 +31,7 @@ export default async function SourcePage({ params }: { params: { runId: string }
         <CardHeader>
           <CardTitle>Source is not on the plan yet</CardTitle>
           <CardDescription>
-            Start from New onboarding and pick the source catalog there. This stage maps those
-            tables — it does not ask you to browse the catalog again.
+            Start from Sources: pick a schema, profile the tables, then use Send to modeling.
           </CardDescription>
         </CardHeader>
       </Card>

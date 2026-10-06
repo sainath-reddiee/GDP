@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { api, attemptValue } from "@/lib/api";
-import type { CatalogInventory, ProfileStoreRow, SourcesOverview, TableProfileDoc } from "@/lib/types";
+import type { AnalyzeResult, CatalogInventory, ProfileStoreRow, SourcesOverview, TableInsights } from "@/lib/types";
 
 export async function loadOverview() {
   return attemptValue(() => api<SourcesOverview>("/api/sources/overview"));
@@ -15,7 +15,7 @@ export async function loadCatalogInventory(database: string, schema: string) {
 
 export async function loadCatalogProfile(database: string, schema: string, table: string) {
   const qs = new URLSearchParams({ database, schema, table });
-  return attemptValue(() => api<TableProfileDoc>(`/api/catalog/profile?${qs}`));
+  return attemptValue(() => api<TableInsights>(`/api/catalog/profile?${qs}`));
 }
 
 export async function loadProfileStore() {
@@ -31,11 +31,23 @@ export async function profileCatalogTables(database: string, schema: string, tab
   );
 }
 
-export async function catalogModelingRun(database: string, schema: string, tables: string[], runName: string) {
+export async function analyzeTables(database: string, schema: string, tables: string[]) {
+  return attemptValue(() =>
+    api<AnalyzeResult>("/api/catalog/analyze", {
+      method: "POST",
+      body: JSON.stringify({ database, schema, tables }),
+    }),
+  );
+}
+
+export async function catalogModelingRun(body: {
+  database: string; schema: string; tables: string[]; run_name: string | null; domain_id: string | null;
+  targets: { fqn: string; target_table: string; domain_name?: string | null; target_table_id?: string | null }[];
+}) {
   const result = await attemptValue(() =>
     api<{ run_id: string; stage: string; error?: string }>("/api/catalog/modeling-run", {
       method: "POST",
-      body: JSON.stringify({ database, schema, tables, run_name: runName || null }),
+      body: JSON.stringify(body),
     }),
   );
   revalidatePath("/runs");

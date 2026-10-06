@@ -17,10 +17,10 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
-import {
-  catalogModelingRun, loadCatalogInventory, loadOverview, loadProfileStore, profileCatalogTables,
-} from "./actions";
-import { ProfileDrawer } from "./profile-drawer";
+import type { DomainRow } from "@/app/onboarding/intent-types";
+import { loadCatalogInventory, loadOverview, loadProfileStore, profileCatalogTables } from "./actions";
+import { ModelPanel } from "./model-panel";
+import { GradeChip, ProfileDrawer, type DrawerTab } from "./profile-drawer";
 
 const STATUS_META: Record<ProfileStatus, { label: string; variant: "outline" | "warning" | "success" | "destructive" }> = {
   UNPROFILED: { label: "Unprofiled", variant: "outline" },
@@ -39,7 +39,7 @@ const FILTERS: { value: ProfileStatus | "ALL"; label: string }[] = [
 ];
 
 type Target = { database: string; schema: string };
-type Drawer = Target & { table: string };
+type Drawer = Target & { table: string; tab?: DrawerTab };
 
 function formatCount(n: number | null | undefined) {
   if (n == null) return "—";
@@ -111,8 +111,15 @@ function Picker({ id, label, value, options, placeholder, disabled, loading, onC
   );
 }
 
-function StatusBadge({ status, error }: { status: ProfileStatus; error?: string | null }) {
+function StatusBadge({ status, error, onOpen }: { status: ProfileStatus; error?: string | null; onOpen?: () => void }) {
   const meta = STATUS_META[status];
+  if (status === "STALE" && onOpen) {
+    return (
+      <button type="button" onClick={onOpen} title="See what changed since profiling" className="hover:opacity-80">
+        <Badge variant={meta.variant}>{meta.label} · see changes</Badge>
+      </button>
+    );
+  }
   return (
     <span title={error ?? undefined}>
       <Badge variant={meta.variant}>
@@ -124,9 +131,10 @@ function StatusBadge({ status, error }: { status: ProfileStatus; error?: string 
 }
 
 export function SourcesHub({
-  initialOverview, initialStore, databases, initialTarget, initialInventory,
+  initialOverview, initialStore, databases, domains = [], initialTarget, initialInventory,
 }: {
   initialOverview: SourcesOverview | null;
+  domains?: DomainRow[];
   initialStore: ProfileStoreRow[];
   databases: DatabaseRow[];
   initialTarget: Target | null;
@@ -148,8 +156,7 @@ export function SourcesHub({
   const [storeQuery, setStoreQuery] = useState("");
   const [drawer, setDrawer] = useState<Drawer | null>(null);
   const [notice, setNotice] = useState<{ tone: "ok" | "error"; text: string } | null>(null);
-  const [modelingName, setModelingName] = useState("");
-  const [confirmModeling, setConfirmModeling] = useState(false);
+  const [modeling, setModeling] = useState<string[] | null>(null);
   const [pending, start] = useTransition();
 
   useEffect(() => {
@@ -163,7 +170,6 @@ export function SourcesHub({
     setChecked([]);
     setFilter("ALL");
     setNotice(null);
-    setConfirmModeling(false);
     setTab("explore");
     setLoadingInventory(true);
     router.replace(`/sources?db=${encodeURIComponent(next.database)}&schema=${encodeURIComponent(next.schema)}`, { scroll: false });
@@ -227,13 +233,6 @@ export function SourcesHub({
     await refresh();
   });
 
-  const toModeling = () => start(async () => {
-    setNotice(null);
-    const r = await catalogModelingRun(database, schema, checked, modelingName);
-    if (!r.ok) { setNotice({ tone: "error", text: r.error }); return; }
-    router.push(r.data.error ? `/runs/${r.data.run_id}/source` : `/runs/${r.data.run_id}/mapping`);
-  });
-
   const quickTargets = useMemo(() => {
     const seen = new Map<string, { target: Target; label: string; staged: number }>();
     for (const r of store) {
@@ -253,6 +252,7 @@ export function SourcesHub({
     `${r.database_name}.${r.schema_name}.${r.table_name}`.toLowerCase().includes(storeQuery.toLowerCase()));
   const storeSchemas = new Set(store.map((r) => `${r.database_name}.${r.schema_name}`)).size;
   const closeDrawer = useCallback(() => setDrawer(null), []);
+  const closeModeling = useCallback(() => setModeling(null), []);
   const dbOptions = databases.map((d) => ({ value: d.database_name, hint: d.type === "IMPORTED DATABASE" ? "share" : undefined }));
   const schemaOptions = schemas.map((s) => ({ value: s.schema_name }));
 
@@ -367,26 +367,11 @@ export function SourcesHub({
                 </Button>
                 <Button size="sm" variant="secondary" disabled={pending || !allStaged}
                         title={allStaged ? undefined : "Every selected table must be staged & ready"}
-                        onClick={() => setConfirmModeling(true)}>
+                        onClick={() => setModeling([...checked].sort())}>
                   Send to modeling <ArrowRight className="h-3.5 w-3.5" />
                 </Button>
               </div>
             </div>
-
-            {confirmModeling && allStaged && (
-              <div className="flex flex-wrap items-end gap-3 rounded-lg border border-primary/40 bg-primary/5 p-3">
-                <div className="min-w-0 flex-1">
-                  <p className="text-sm font-medium">Start a modeling run with {chosen.length} staged table{chosen.length === 1 ? "" : "s"}</p>
-                  <p className="text-xs text-muted-foreground">Reads the tables in place, reuses their staged profiles, then opens at mapping.</p>
-                </div>
-                <Input value={modelingName} onChange={(e) => setModelingName(e.target.value)}
-                       placeholder={`${schema} modeling`} className="w-64" aria-label="Run name" />
-                <Button disabled={pending} onClick={toModeling}>
-                  {pending ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowRight className="h-4 w-4" />} Create run
-                </Button>
-                <Button variant="ghost" onClick={() => setConfirmModeling(false)}>Cancel</Button>
-              </div>
-            )}
 
             <Table>
               <THead>
@@ -426,14 +411,20 @@ export function SourcesHub({
                       <TD className="text-sm">{t.domain_name ?? <span className="text-muted-foreground">—</span>}</TD>
                       <TD className="text-right tabular-nums">{formatCount(t.row_count)}</TD>
                       <TD className="text-right tabular-nums">{t.column_count}</TD>
-                      <TD><StatusBadge status={t.status} error={t.error_message} /></TD>
+                      <TD>
+                        <StatusBadge status={t.status} error={t.error_message}
+                                     onOpen={() => setDrawer({ database, schema, table: t.table_name, tab: "overview" })} />
+                      </TD>
                       <TD className="text-xs text-muted-foreground">
                         {staged ? (
-                          <span>
-                            {t.avg_null_percentage != null ? `${Number(t.avg_null_percentage).toFixed(1)}% null` : "—"}
-                            {t.key_candidates ? ` · ${t.key_candidates} key` : ""}
-                            {t.pii_columns ? <span className="text-destructive"> · {t.pii_columns} PII</span> : ""}
-                          </span>
+                          <div className="flex items-center gap-2">
+                            <GradeChip card={t.quality} />
+                            <span>
+                              {t.avg_null_percentage != null ? `${Number(t.avg_null_percentage).toFixed(1)}% null` : ""}
+                              {t.key_candidates ? ` · ${t.key_candidates} key` : ""}
+                              {t.pii_columns ? <span className="text-destructive"> · {t.pii_columns} PII</span> : ""}
+                            </span>
+                          </div>
                         ) : "—"}
                       </TD>
                       <TD className="max-w-[220px] truncate font-mono text-[11px] text-muted-foreground" title={t.stage_path ?? undefined}>
@@ -537,7 +528,15 @@ export function SourcesHub({
         </Card>
       )}
 
-      {drawer && <ProfileDrawer database={drawer.database} schema={drawer.schema} table={drawer.table} onClose={closeDrawer} />}
+      {drawer && (
+        <ProfileDrawer database={drawer.database} schema={drawer.schema} table={drawer.table} initialTab={drawer.tab}
+                       onClose={closeDrawer}
+                       onReprofile={drawer.database === database && drawer.schema === schema
+                         ? (table) => { setDrawer(null); runProfile([table], true); } : undefined} />
+      )}
+      {modeling && (
+        <ModelPanel database={database} schema={schema} tables={modeling} domains={domains} onClose={closeModeling} />
+      )}
     </div>
   );
 }

@@ -27,6 +27,7 @@ from services.common.sql import clip, insert_rows, rows, scalar, variant
 from services.common.stage import Stage
 from services.knowledge.usage import STAGE_SKILLS, use_skills
 from services.profiling import profiler
+from services.profiling.insights import quality_dimensions
 from services.source.identifiers import fqn, quote
 from services.workflow.procedures import _get_run, _is_closed
 
@@ -207,7 +208,8 @@ def _upsert_index(session, ref: TableRef, document: Dict[str, Any], run_id: Opti
                       ?::NUMBER AS ROW_COUNT, ?::NUMBER AS COLUMN_COUNT, ? AS PROFILE_STAGE_PATH,
                       ? AS PROFILE_CHECKSUM, ? AS SOURCE_FINGERPRINT, ?::BOOLEAN AS IS_APPROXIMATE,
                       ? AS PROFILER_VERSION, NULLIF(?, '') AS MODEL_VERSION, NULLIF(?, '') AS PROFILED_IN_RUN,
-                      ?::FLOAT AS AVG_NULL_PERCENTAGE, ?::NUMBER AS KEY_CANDIDATES, ?::NUMBER AS PII_COLUMNS) S
+                      ?::FLOAT AS AVG_NULL_PERCENTAGE, ?::NUMBER AS KEY_CANDIDATES, ?::NUMBER AS PII_COLUMNS,
+                      PARSE_JSON(?) AS QUALITY_JSON) S
            ON T.SOURCE_NAME = S.SOURCE_NAME AND T.DATABASE_NAME = S.DATABASE_NAME
           AND T.SCHEMA_NAME = S.SCHEMA_NAME AND T.TABLE_NAME = S.TABLE_NAME
         WHEN MATCHED THEN UPDATE SET
@@ -216,24 +218,24 @@ def _upsert_index(session, ref: TableRef, document: Dict[str, Any], run_id: Opti
              IS_APPROXIMATE = S.IS_APPROXIMATE, PROFILER_VERSION = S.PROFILER_VERSION,
              MODEL_VERSION = S.MODEL_VERSION, PROFILED_IN_RUN = S.PROFILED_IN_RUN,
              AVG_NULL_PERCENTAGE = S.AVG_NULL_PERCENTAGE, KEY_CANDIDATES = S.KEY_CANDIDATES,
-             PII_COLUMNS = S.PII_COLUMNS, STATUS = 'STAGED_READY_FOR_MODELING',
+             PII_COLUMNS = S.PII_COLUMNS, QUALITY_JSON = S.QUALITY_JSON, STATUS = 'STAGED_READY_FOR_MODELING',
              STATUS_UPDATED_AT = CURRENT_TIMESTAMP(), ERROR_MESSAGE = NULL,
              PROFILED_BY = CURRENT_USER(), PROFILED_AT = CURRENT_TIMESTAMP()
         WHEN NOT MATCHED THEN INSERT
              (SOURCE_NAME, DATABASE_NAME, SCHEMA_NAME, TABLE_NAME, ROW_COUNT, COLUMN_COUNT, PROFILE_STAGE_PATH,
               PROFILE_CHECKSUM, SOURCE_FINGERPRINT, IS_APPROXIMATE, PROFILER_VERSION, MODEL_VERSION,
-              PROFILED_IN_RUN, AVG_NULL_PERCENTAGE, KEY_CANDIDATES, PII_COLUMNS, STATUS, STATUS_UPDATED_AT,
+              PROFILED_IN_RUN, AVG_NULL_PERCENTAGE, KEY_CANDIDATES, PII_COLUMNS, QUALITY_JSON, STATUS, STATUS_UPDATED_AT,
               PROFILED_BY, PROFILED_AT)
         VALUES (S.SOURCE_NAME, S.DATABASE_NAME, S.SCHEMA_NAME, S.TABLE_NAME, S.ROW_COUNT, S.COLUMN_COUNT,
                 S.PROFILE_STAGE_PATH, S.PROFILE_CHECKSUM, S.SOURCE_FINGERPRINT, S.IS_APPROXIMATE,
                 S.PROFILER_VERSION, S.MODEL_VERSION, S.PROFILED_IN_RUN, S.AVG_NULL_PERCENTAGE, S.KEY_CANDIDATES,
-                S.PII_COLUMNS, 'STAGED_READY_FOR_MODELING', CURRENT_TIMESTAMP(), CURRENT_USER(), CURRENT_TIMESTAMP())
+                S.PII_COLUMNS, S.QUALITY_JSON, 'STAGED_READY_FOR_MODELING', CURRENT_TIMESTAMP(), CURRENT_USER(), CURRENT_TIMESTAMP())
         """,
         params=[ref.source_name, ref.database, ref.schema, ref.table, str(document["row_count"]),
                 str(document["column_count"]), ref.stage_path, profiler.document_checksum(document),
                 document["fingerprint"], "TRUE" if document["approximate"] else "FALSE",
                 document["profiler_version"], document.get("model_version") or "", run_id or "",
-                *_summary_metrics(document["columns"])],
+                *_summary_metrics(document["columns"]), json.dumps(quality_dimensions(document))],
     ).collect()
 
 

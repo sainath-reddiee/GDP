@@ -2844,10 +2844,18 @@ def create_source_connection(body: SourceConnectionCreate, db: Db = Depends(curr
         raise _snowflake_error(exc) from exc
 
 
+class ModelTarget(BaseModel):
+    fqn: str = Field(min_length=1, max_length=768)
+    target_table: str = Field(min_length=1, max_length=255)
+    domain_name: Optional[str] = None
+    target_table_id: Optional[str] = None
+
+
 class ModelingRunRequest(BaseModel):
     tables: list[str] = Field(min_length=1, max_length=500)
     run_name: Optional[str] = Field(default=None, max_length=256)
     domain_id: Optional[str] = None
+    targets: list[ModelTarget] = Field(default_factory=list, max_length=50)
 
 
 @app.post("/api/sources/{source_id}/modeling-run")
@@ -2857,15 +2865,18 @@ def send_to_modeling(source_id: str, body: ModelingRunRequest, db: Db = Depends(
     src = _source_row(db, source_id)
     tables = sorted(set(body.tables))
     run_name = body.run_name or f"{src['source_system_name']} modeling {time.strftime('%Y-%m-%d %H:%M')}"
+    targets = [t.model_dump() for t in body.targets]
     intent = {
-        "path": "profile_suggest", "run_name": run_name, "model_existing": False, "targets": [],
+        "path": "map_existing" if targets else "profile_suggest", "run_name": run_name,
+        "model_existing": bool(targets), "targets": targets,
         "created_at": time.strftime("%Y-%m-%dT%H:%M:%S"), "domain_id": body.domain_id,
         "source": {"origin": "snowflake", "connection_id": source_id, "database": src["database_name"],
                    "schema": src["schema_name"], "source_system_name": src["source_system_name"],
                    "source_type": src["source_type"], "tables": tables},
         "target": {"storage_type": "IN_PLACE"},
     }
-    created = create_run(CreateRun(run_name=run_name, domain_id=body.domain_id, intent=intent), db)
+    created = create_run(CreateRun(run_name=run_name, domain_id=body.domain_id,
+                                   target_model=targets[0]["fqn"] if targets else None, intent=intent), db)
     run_id = created.get("run_id")
     if created.get("registration_error"):
         return {"run_id": run_id, "stage": "SOURCE", "error": created["registration_error"]}
@@ -2892,7 +2903,7 @@ def _catalog_store_rows(db: Db, database: str, schema: str) -> dict[str, dict]:
             SELECT SOURCE_NAME, DATABASE_NAME, SCHEMA_NAME, TABLE_NAME, ROW_COUNT, COLUMN_COUNT, PROFILE_STAGE_PATH,
                    SOURCE_FINGERPRINT, IS_APPROXIMATE, PROFILED_IN_RUN, PROFILED_BY, PROFILED_AT::VARCHAR AS PROFILED_AT,
                    STATUS, STATUS_UPDATED_AT::VARCHAR AS STATUS_UPDATED_AT, ERROR_MESSAGE, AVG_NULL_PERCENTAGE,
-                   KEY_CANDIDATES, PII_COLUMNS
+                   KEY_CANDIDATES, PII_COLUMNS, QUALITY_JSON
               FROM METADATA.TABLE_PROFILES
              WHERE DATABASE_NAME = %s AND SCHEMA_NAME = %s
            QUALIFY ROW_NUMBER() OVER (PARTITION BY TABLE_NAME
@@ -2945,10 +2956,14 @@ def _catalog_inventory(db: Db, database: str, schema: str) -> dict:
     registered = _registered_source(db, database, schema)
     jobs = _active_jobs(registered["source_system_id"]) if registered else []
     busy = {t for j in jobs for t in j["tables"]}
+    from services.profiling.insights import scorecard
+
+    _backfill_quality(db, [e for e in store.values() if e.get("source_fingerprint") and not e.get("quality_json")])
     inventory = []
     for t in tables:
         entry = store.get(t["table_name"])
         status = "PROFILING" if t["table_name"] in busy else _table_status(entry, t["fingerprint"])
+        dims = _json(entry.get("quality_json")) if entry else None
         staged = bool(entry and entry.get("source_fingerprint"))
         inventory.append({
             "table_name": t["table_name"], "table_type": t["table_type"], "row_count": t["row_count"],
@@ -2962,8 +2977,65 @@ def _catalog_inventory(db: Db, database: str, schema: str) -> dict:
             "pii_columns": entry.get("pii_columns") if staged else None,
             "is_approximate": entry.get("is_approximate") if staged else None,
             "error_message": entry.get("error_message") if entry and status == "FAILED" else None,
+            "quality": scorecard(dims, t["last_altered"]) if staged and dims else None,
         })
     return {"database": database, "schema": schema, "source": registered, "tables": inventory, "jobs": jobs}
+
+
+def _json(value):
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except ValueError:
+            return None
+    return value
+
+
+def _read_stage_doc(db: Db, stage_path: str) -> Optional[dict]:
+    from services.profiling.profiler import STAGE_PATH
+
+    if not STAGE_PATH.match(stage_path or ""):
+        return None
+    found = db.query(f"SELECT $1 AS DOC FROM @METADATA.PROFILES_STAGE/{stage_path} "
+                     "(FILE_FORMAT => 'METADATA.PROFILE_JSON_FORMAT')")
+    return _json(found[0]["doc"]) if found else None
+
+
+def _backfill_quality(db: Db, entries: list[dict], limit: int = 25) -> None:
+    """Profiles staged before quality scoring existed get their dimensions once, then read from the index."""
+    from services.profiling.insights import quality_dimensions
+
+    for entry in entries[:limit]:
+        try:
+            doc = _read_stage_doc(db, entry["profile_stage_path"])
+            if not doc:
+                continue
+            dims = quality_dimensions(doc)
+            db.execute(
+                "UPDATE METADATA.TABLE_PROFILES SET QUALITY_JSON = PARSE_JSON(%s) WHERE SOURCE_NAME = %s "
+                "AND DATABASE_NAME = %s AND SCHEMA_NAME = %s AND TABLE_NAME = %s",
+                (json.dumps(dims), entry["source_name"], entry["database_name"], entry["schema_name"], entry["table_name"]),
+            )
+            entry["quality_json"] = dims
+        except Exception:
+            continue
+
+
+def _live_table(db: Db, database: str, schema: str, table: str) -> tuple[list[tuple[str, str]], Optional[int], Optional[str]]:
+    from services.source.identifiers import format_data_type
+
+    cols = [(c["column_name"], format_data_type(c["data_type"], c["character_maximum_length"], c["numeric_precision"],
+                                                c["numeric_scale"]))
+            for c in db.query(
+                f"""
+                SELECT COLUMN_NAME, DATA_TYPE, CHARACTER_MAXIMUM_LENGTH, NUMERIC_PRECISION, NUMERIC_SCALE
+                  FROM {database}.INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = %s AND TABLE_NAME = %s
+                 ORDER BY ORDINAL_POSITION
+                """,
+                (schema, table))]
+    meta = db.query(f"SELECT ROW_COUNT, LAST_ALTERED::VARCHAR AS LAST_ALTERED FROM {database}.INFORMATION_SCHEMA.TABLES "
+                    "WHERE TABLE_SCHEMA = %s AND TABLE_NAME = %s", (schema, table))
+    return cols, (meta[0]["row_count"] if meta else None), (meta[0]["last_altered"] if meta else None)
 
 
 @app.get("/api/catalog/inventory")
@@ -2978,15 +3050,24 @@ def catalog_table_profile(database: str, schema: str, table: str, db: Db = Depen
     from services.profiling.profiler import STAGE_PATH
 
     database, schema, table = _ident(database, "database"), _ident(schema, "schema"), _ident(table, "table")
+    from services.profiling import insights
+
     entry = _catalog_store_rows(db, database, schema).get(table)
     if not entry or not entry.get("source_fingerprint") or not STAGE_PATH.match(entry["profile_stage_path"] or ""):
         raise HTTPException(404, f"{table} has no staged profile yet")
-    found = db.query(f"SELECT $1 AS DOC FROM @METADATA.PROFILES_STAGE/{entry['profile_stage_path']} "
-                     "(FILE_FORMAT => 'METADATA.PROFILE_JSON_FORMAT')")
-    if not found:
+    doc = _read_stage_doc(db, entry["profile_stage_path"])
+    if not doc:
         raise HTTPException(404, f"the staged file for {table} is missing; re-profile it")
-    doc = found[0]["doc"]
-    return {"entry": entry, "profile": json.loads(doc) if isinstance(doc, str) else doc}
+    try:
+        columns, rows, last_altered = _live_table(db, database, schema, table)
+        change = insights.drift(doc, columns, rows) if columns else None
+    except Exception:
+        last_altered, change = None, None
+    checks = insights.suggested_checks(doc)
+    entry.pop("quality_json", None)
+    return {"entry": entry, "profile": doc,
+            "scorecard": insights.scorecard(insights.quality_dimensions(doc), last_altered),
+            "checks": checks, "checks_yaml": insights.checks_yaml(table, checks), "drift": change}
 
 
 @app.get("/api/profiles/store")
@@ -3049,9 +3130,57 @@ def catalog_profile_tables(body: CatalogProfileRequest, db: Db = Depends(current
 class CatalogModelingRequest(CatalogTarget):
     tables: list[str] = Field(min_length=1, max_length=500)
     run_name: Optional[str] = Field(default=None, max_length=256)
+    domain_id: Optional[str] = None
+    targets: list[ModelTarget] = Field(default_factory=list, max_length=50)
 
 
 @app.post("/api/catalog/modeling-run")
 def catalog_modeling_run(body: CatalogModelingRequest, db: Db = Depends(current_db)):
     src = _ensure_source(db, _ident(body.database, "database"), _ident(body.schema_name, "schema"))
-    return send_to_modeling(src["source_system_id"], ModelingRunRequest(tables=body.tables, run_name=body.run_name), db)
+    return send_to_modeling(src["source_system_id"], ModelingRunRequest(
+        tables=body.tables, run_name=body.run_name, domain_id=body.domain_id, targets=body.targets), db)
+
+
+class CatalogAnalyzeRequest(CatalogTarget):
+    tables: list[str] = Field(min_length=1, max_length=60)
+
+
+@app.post("/api/catalog/analyze")
+def catalog_analyze(body: CatalogAnalyzeRequest, db: Db = Depends(current_db)):
+    """Everything the modeling panel needs for a set of staged tables, from their profiles only:
+    ER graph with profile-inferred relationships, a quality scorecard per table and domain model matches."""
+    from services.profiling import insights
+
+    database, schema = _ident(body.database, "database"), _ident(body.schema_name, "schema")
+    tables = sorted({_ident(t, "table") for t in body.tables})
+    store = _catalog_store_rows(db, database, schema)
+    meta = {t["table_name"]: t for t in _source_tables(db, {"database_name": database, "schema_name": schema})}
+    docs, summary = {}, []
+    for name in tables:
+        entry = store.get(name)
+        doc = _read_stage_doc(db, entry["profile_stage_path"]) if entry and entry.get("source_fingerprint") else None
+        if doc:
+            docs[name] = doc
+        last_altered = (meta.get(name) or {}).get("last_altered")
+        summary.append({
+            "table": name, "staged": bool(doc), "row_count": (doc or {}).get("row_count"),
+            "column_count": (doc or {}).get("column_count"),
+            "quality": insights.scorecard(insights.quality_dimensions(doc), last_altered) if doc else None,
+            "key_candidates": [c["column_name"] for c in (doc or {}).get("columns", []) if c.get("potential_key")],
+            "pii_columns": [c["column_name"] for c in (doc or {}).get("columns", [])
+                            if (c.get("pii_classification") or "NONE") != "NONE"],
+        })
+    relationships = insights.infer_relationships(docs)
+    graph = catalog_preview_graph(PreviewGraph(database=database, schema=schema, tables=tables, targets=[]), db)
+    profiled_pairs = {frozenset((j["left"], j["right"])) for j in relationships}
+    graph["joins"] = relationships + [j for j in graph.get("joins") or []
+                                      if frozenset((j["left"], j["right"])) not in profiled_pairs]
+    linked = {j["left"] for j in graph["joins"]} | {j["right"] for j in graph["joins"]}
+    graph["isolated"] = sorted(t for t in tables if t not in linked) if len(tables) > 1 else []
+    keys = {name: {c["column_name"] for c in doc["columns"] if c.get("potential_key")} for name, doc in docs.items()}
+    for src in graph.get("sources") or []:
+        for c in src.get("columns") or []:
+            c["pk"] = c["pk"] or c["name"] in keys.get(src["object_name"], set())
+    graph["profiled"] = True
+    return {"tables": summary, "relationships": relationships, "graph": graph,
+            "models": _suggest_for_catalog(db, database, schema, tables)}

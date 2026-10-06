@@ -24,7 +24,7 @@ export default async function Dashboard() {
           <h2>Dashboard</h2>
           <p className="mt-1 text-sm text-muted-foreground">Open onboarding runs and the gates waiting on you.</p>
         </div>
-        <Link href="/onboarding" className={buttonVariants({ className: "ml-auto" })}>Start a source onboarding</Link>
+        <Link href="/sources" className={buttonVariants({ className: "ml-auto" })}>Profile & model a source</Link>
       </div>
       <div className="grid grid-cols-4 gap-4">
         {stats.map(([label, value]) => (

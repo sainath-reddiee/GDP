@@ -47,7 +47,7 @@ function Stat({ icon: Icon, label, value, detail }: {
   );
 }
 
-/** Source stage: executes the plan captured by the onboarding wizard. No re-selection, no model choice here. */
+/** Source stage: executes the plan chosen in the Sources hub. No re-selection, no model choice here. */
 export function SourceStudio({
   runId, sourceName, sourceType, database, schema, intent, overview, initialTables = [],
   currentState, failedIn = null, failureReason = null, cachedProfiles = [], landingTargets = null, target,
@@ -304,7 +304,7 @@ export function SourceStudio({
             <CardTitle>{hasPlan ? "Tables in this run" : "Choose tables"}</CardTitle>
             <CardDescription>
               {hasPlan
-                ? `Chosen in the onboarding wizard (${displayDomain(intent?.domain_name) || "no domain yet"}). Landing and profile status update as the plan runs.`
+                ? `Chosen in Sources (${displayDomain(intent?.domain_name) || "no domain yet"}). Landing and profile status update as the plan runs.`
                 : "This run was created without a plan. Pick the tables to onboard."}
             </CardDescription>
           </div>
