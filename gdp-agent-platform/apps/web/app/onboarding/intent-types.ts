@@ -31,6 +31,7 @@ export type OnboardingIntent = {
   domain_name?: string | null;
   new_domain?: { domain_name: string; description?: string } | null;
   targets: IntentTarget[];
+  target?: { storage_type: "IN_PLACE" | "MANAGED" | "ICEBERG"; landing_schema?: string | null };
   model_existing: boolean;
   created_at: string;
 };

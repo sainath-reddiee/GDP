@@ -54,6 +54,15 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   return JSON.parse(text) as T;
 }
 
+/** Multipart POST (file uploads) with the caller's session; the browser sets the boundary header. */
+export async function apiForm<T>(path: string, form: FormData): Promise<T> {
+  const res = await fetch(`${API_URL}${path}`, { method: "POST", body: form, cache: "no-store", headers: sessionHeaders() });
+  const text = await res.text();
+  if (res.status === 401) redirect("/login");
+  if (!res.ok) throw new ApiError(res.status, detail(text));
+  return JSON.parse(text) as T;
+}
+
 export type ActionResult = { ok: true } | { ok: false; error: string };
 
 /** Server actions return errors instead of throwing so the message reaches the UI. */

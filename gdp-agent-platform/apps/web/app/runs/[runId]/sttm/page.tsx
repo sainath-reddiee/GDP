@@ -7,6 +7,7 @@ import { SttmFork } from "@/components/sttm-fork";
 import { generateSttm } from "../pipeline-actions";
 import { SttmBoard, type ProfileCol, type SttmLine } from "./sttm-board";
 import { SttmGate } from "./sttm-gate";
+import { JoinPlan, type JoinGraph } from "./join-plan";
 
 export default async function SttmPage({ params }: { params: { runId: string } }) {
   const [state, contract, profile] = await Promise.all([
@@ -18,8 +19,18 @@ export default async function SttmPage({ params }: { params: { runId: string } }
   ]);
   const canGenerate = ["MAPPING_APPROVED", "STTM_PENDING"].includes(state.current_state);
   const canEdit = ["STTM_REVIEW", "STTM_PENDING"].includes(state.current_state);
-  const design = (contract.sttm?.table_design && typeof contract.sttm.table_design === "object"
-    ? contract.sttm.table_design : {}) as Record<string, unknown>;
+  const raw = contract.sttm?.table_design;
+  const design = (typeof raw === "string" ? JSON.parse(raw) : raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+  const graph = (design.join_graph ?? null) as JoinGraph | null;
+  const preview = contract.sttm
+    ? await api<{ sql: string }>(`/api/runs/${params.runId}/sttm/preview`).catch(() => null)
+    : null;
+  const tables = Array.from(new Set([
+    ...(graph?.driving_table ? [graph.driving_table] : []),
+    ...(graph?.joins ?? []).map((j) => j.right_table),
+    ...(graph?.unreachable ?? []),
+    ...contract.lines.map((l) => String((l as { source_table?: string | null }).source_table ?? "").toUpperCase()).filter(Boolean),
+  ]));
   return (
     <StageGate state={state} stage="STTM">
       <Card>
@@ -49,6 +60,10 @@ export default async function SttmPage({ params }: { params: { runId: string } }
           )}
         </CardContent>
       </Card>
+      {graph && (
+        <JoinPlan key={JSON.stringify(graph)} runId={params.runId} graph={graph} tables={tables}
+                  previewSql={preview?.sql ?? null} canEdit={state.current_state === "STTM_REVIEW" && !state.is_archived} />
+      )}
       {(state.current_state === "STTM_REVIEW" || state.current_state === "STTM_APPROVED"
         || state.current_state.startsWith("SODA") || state.current_state.startsWith("DBT")
         || state.current_state.startsWith("VALIDATION")) && (

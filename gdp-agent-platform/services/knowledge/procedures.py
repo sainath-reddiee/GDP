@@ -17,7 +17,7 @@ from services.common.audit import record_cost, tool_call
 from services.common.sql import clip, config_value, insert_rows, rows, scalar, variant
 from services.common.stage import Stage
 from services.knowledge import search as ks
-from services.knowledge.domain import score_domains
+from services.knowledge.domain import infer_domain
 from services.knowledge.terms import entity_tokens, token_set
 
 
@@ -26,7 +26,10 @@ def _database(session) -> str:
 
 
 def _domain_terms(session) -> List[Dict[str, Any]]:
-    domains = rows(session, "SELECT DOMAIN_ID, DOMAIN_NAME FROM KNOWLEDGE.DOMAIN_REGISTRY WHERE ACTIVE_FLAG")
+    try:
+        domains = rows(session, "SELECT DOMAIN_ID, DOMAIN_NAME, CONFIG FROM KNOWLEDGE.DOMAIN_REGISTRY WHERE ACTIVE_FLAG")
+    except Exception:
+        domains = rows(session, "SELECT DOMAIN_ID, DOMAIN_NAME FROM KNOWLEDGE.DOMAIN_REGISTRY WHERE ACTIVE_FLAG")
     out = []
     for d in domains:
         terms = set()
@@ -39,7 +42,8 @@ def _domain_terms(session) -> List[Dict[str, Any]]:
                                   JOIN KNOWLEDGE.TARGET_TABLE_REGISTRY T ON T.TARGET_TABLE_ID = C.TARGET_TABLE_ID
                                   WHERE T.DOMAIN_ID = ? AND T.ACTIVE_FLAG""", [d["DOMAIN_ID"]]):
             terms |= token_set(c["COLUMN_NAME"]) | entity_tokens(c["TARGET_TABLE"])
-        out.append({"domain_id": d["DOMAIN_ID"], "name": d["DOMAIN_NAME"], "terms": terms})
+        signals = (variant(d.get("CONFIG")) or {}).get("signals")
+        out.append({"domain_id": d["DOMAIN_ID"], "name": d["DOMAIN_NAME"], "terms": terms, "signals": signals})
     return out
 
 
@@ -67,9 +71,6 @@ def identify_domain(session, run_id: str) -> Dict[str, Any]:
             profile = rows(session, """SELECT TABLE_NAME, COLUMN_NAME, SEMANTIC_TYPE, GENERATED_DESCRIPTION
                                        FROM PROFILE.PROFILE_REGISTRY WHERE RUN_ID = ? AND IS_CURRENT""", [run_id])
             assert profile, "no current profile for this run"
-            source_terms = set()
-            for p in profile:
-                source_terms |= token_set(p["COLUMN_NAME"]) | entity_tokens(p["TABLE_NAME"])
             started = time.time()
             query = " ".join(sorted({p["TABLE_NAME"] for p in profile}) + [p["COLUMN_NAME"] for p in profile])
             try:
@@ -80,7 +81,8 @@ def identify_domain(session, run_id: str) -> Dict[str, Any]:
             for r in results:
                 hits[r.get("DOMAIN_NAME")] = hits.get(r.get("DOMAIN_NAME"), 0) + 1
             record_cost(session, run_id, "DOMAIN", None, {}, int((time.time() - started) * 1000), search_calls=1)
-            ranked = score_domains(source_terms, _domain_terms(session), hits)
+            ranked = infer_domain(sorted({p["TABLE_NAME"] for p in profile}), [p["COLUMN_NAME"] for p in profile],
+                                  _domain_terms(session), hits)
             assert ranked, "no active domains are registered"
             threshold = float(config_value(session, "DOMAIN_CONFIDENCE_THRESHOLD", 0.3))
         except Exception as exc:
@@ -90,7 +92,8 @@ def identify_domain(session, run_id: str) -> Dict[str, Any]:
         stamped_id = stage.run.get("DOMAIN_ID")
         matched = [{"knowledge_id": r.get("KNOWLEDGE_ID"), "title": r.get("TITLE"), "type": r.get("KNOWLEDGE_TYPE")}
                    for r in results if r.get("DOMAIN_NAME") == top["domain_name"]]
-        recommendation = (f"{top['domain_name']} (confidence {top['confidence']:.2f}); matched terms: "
+        recommendation = (f"{top['domain_name']} (confidence {top['confidence']:.2f}); signals: "
+                          f"{'; '.join(top['evidence']['signals'][:6]) or 'none'}; matched terms: "
                           f"{', '.join(top['evidence']['matched_terms'][:12])}")
         if top["confidence"] < threshold:
             recommendation += f". Below the {threshold:.2f} threshold: confirm the domain with the domain owner."
@@ -104,7 +107,7 @@ def identify_domain(session, run_id: str) -> Dict[str, Any]:
                     ["RECOMMENDATION_ID", "RUN_ID", "DOMAIN_ID", "CONFIDENCE", "EVIDENCE_JSON", "MATCHED_KNOWLEDGE",
                      "RECOMMENDATION", "STATUS", "DECIDED_BY", "DECIDED_AT", "MODEL_VERSION"],
                     ["?", "?", "?", "?::FLOAT", "PARSE_JSON(?)", "PARSE_JSON(?)", "?", "?", "NULLIF(?, '')",
-                     "IFF(? = 'ACCEPTED', CURRENT_TIMESTAMP(), NULL)", "'domain-scoring-v1'"],
+                     "IFF(? = 'ACCEPTED', CURRENT_TIMESTAMP(), NULL)", "'domain-scoring-v2'"],
                     [[str(uuid.uuid4()), run_id, d["domain_id"], d["confidence"], d["evidence"],
                       matched if d is top else [], recommendation if d is top else f"{d['domain_name']} not selected",
                       "ACCEPTED" if accepted(d) else "PROPOSED",

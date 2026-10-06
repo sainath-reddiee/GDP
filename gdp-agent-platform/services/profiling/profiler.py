@@ -395,8 +395,10 @@ def profile_stage_path(source_name: str, database: str, schema: str, table: str)
 def source_fingerprint(columns: Iterable[Tuple[str, str]], row_count: Optional[int],
                        last_altered: Optional[str] = None) -> str:
     """Changes when the table's columns, row count or source LAST_ALTERED change; a mismatch means stale."""
+    # LAST_ALTERED is compared to the second: it reaches here from INFORMATION_SCHEMA and from stored copies
+    # whose fractional-second and time-zone rendering can differ.
     payload = {"columns": [[str(n), str(t)] for n, t in columns], "rows": None if row_count is None else int(row_count),
-               "altered": str(last_altered or ""), "profiler": PROFILER_VERSION}
+               "altered": str(last_altered or "")[:19], "profiler": PROFILER_VERSION}
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
 
 

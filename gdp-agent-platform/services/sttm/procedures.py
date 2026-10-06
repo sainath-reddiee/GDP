@@ -14,9 +14,10 @@ from services.common.llm import complete_json
 from services.common.sql import clip, insert_rows, rows, scalar, variant
 from services.common.stage import Stage
 from services.knowledge.procedures import current_knowledge_version
-from services.knowledge.usage import STAGE_SKILLS, assert_safe_transformation, use_skills
+from services.knowledge.usage import STAGE_SKILLS, assert_safe_transformation, domain_context, use_skills
 from services.mapping.procedures import target_columns, target_table
 from services.sttm.assemble import assemble
+from services.sttm.join_graph import apply_overrides, build_join_graph, join_logic_by_table
 from services.sttm.refine import REFINE_SCHEMA, refine_prompt, render_csv, reusable_expression
 
 
@@ -58,6 +59,10 @@ def generate_sttm(session, run_id: str) -> Dict[str, Any]:
                  "target_table": target["TARGET_TABLE"], "table_name": target["TARGET_TABLE"]},
                 columns, decisions, source_name, run["SOURCE_DATABASE"], run["SOURCE_SCHEMA"],
             )
+            graph = plan_joins(session, run_id, contract["lines"])
+            contract["table_design"].update(join_graph=graph, driving_table=graph["driving_table"],
+                                            join_paths=[j["condition"] for j in graph["joins"]])
+            join_logic = join_logic_by_table(graph)
             if contract["unmapped_required"]:
                 raise ValueError("STTM_INCOMPLETE: required columns have no approved mapping: "
                                  + ", ".join(contract["unmapped_required"]))
@@ -82,11 +87,12 @@ def generate_sttm(session, run_id: str) -> Dict[str, Any]:
                              "TARGET_DOMAIN", "TARGET_DATABASE", "TARGET_SCHEMA", "TARGET_TABLE", "TARGET_COLUMN",
                              "TARGET_DATATYPE", "MAPPING_TYPE", "TRANSFORMATION", "BUSINESS_RULE",
                              "BUSINESS_DEFINITION", "NULLABLE_RULE", "UNIQUENESS_RULE", "ACCEPTED_VALUES",
-                             "SCD_BEHAVIOR", "MAPPING_CONFIDENCE", "HUMAN_APPROVED", "REVIEWER"],
+                             "SCD_BEHAVIOR", "MAPPING_CONFIDENCE", "HUMAN_APPROVED", "REVIEWER", "JOIN_LOGIC"],
                             ["?", "?", "NULLIF(?, '')", "NULLIF(?, '')", "NULLIF(?, '')", "NULLIF(?, '')",
                              "NULLIF(?, '')", "NULLIF(?, '')", "NULLIF(?, '')", "?", "?", "?", "?", "?", "?",
                              "?", "NULLIF(?, '')", "NULLIF(?, '')", "NULLIF(?, '')", "?::BOOLEAN", "?::BOOLEAN",
-                             "PARSE_JSON(?)", "NULLIF(?, '')", "NULLIF(?, '')::FLOAT", "?::BOOLEAN", "NULLIF(?, '')"],
+                             "PARSE_JSON(?)", "NULLIF(?, '')", "NULLIF(?, '')::FLOAT", "?::BOOLEAN", "NULLIF(?, '')",
+                             "NULLIF(?, '')"],
                             [[str(uuid.uuid4()), sttm_id, l.get("decision_id"), l.get("source_system"),
                               l.get("source_database"), l.get("source_schema"), l.get("source_table"),
                               l.get("source_column"), l.get("source_datatype"),
@@ -96,7 +102,8 @@ def generate_sttm(session, run_id: str) -> Dict[str, Any]:
                               l["target_column"], l["target_datatype"], l["mapping_type"], l.get("transformation"),
                               l.get("business_rule"), l.get("business_definition"), l["nullable_rule"],
                               l["uniqueness_rule"], l.get("accepted_values") or [], l.get("scd_behavior"),
-                              l.get("mapping_confidence"), l["human_approved"], l.get("reviewer")]
+                              l.get("mapping_confidence"), l["human_approved"], l.get("reviewer"),
+                              join_logic.get(str(l.get("source_table") or "").upper())]
                              for l in contract["lines"]])
 
             call.summary = f"STTM v{version}: {len(contract['lines'])} lines, grain {contract['table_design']['grain']}"
@@ -186,6 +193,12 @@ def _line_context(session, run_id: str, payload: Dict[str, Any]) -> Dict[str, An
     context["domain_id"] = context["domain_id"] or (run[0]["DOMAIN_ID"] if run else None)
     context["profile"] = _profile_for(session, run_id, context["source_table"], context["source_column"])
     context["prior_rules"] = _prior_rules(session, context["domain_id"], context["target_column"])
+    try:
+        target = rows(session, "SELECT TARGET_MODEL FROM CORE.WORKFLOW_RUN WHERE RUN_ID = ?", [run_id])
+        model = ((target[0]["TARGET_MODEL"] if target else "") or "").split(".")[-1] or None
+        context["domain_rules"] = domain_context(session, context["domain_id"], model, 3000)
+    except Exception:
+        context["domain_rules"] = ""
     return context
 
 
@@ -335,3 +348,90 @@ def export_sttm_csv(session, run_id: str) -> Dict[str, Any]:
     with tool_call(session, run_id, "export_sttm_csv", {"path": stage_path, "rows": len(lines)}) as call:
         call.summary = f"{len(lines)} lines -> {stage_path}"
     return {"stage_path": stage_path, "csv": csv_text, "rows": len(lines), "sttm_version": version}
+
+
+# ---------------------------------------------------------------- multi-table join planning
+
+
+def _run_columns(session, run_id: str) -> Dict[str, List[Dict[str, Any]]]:
+    out: Dict[str, List[Dict[str, Any]]] = {}
+    for c in rows(session, """
+        SELECT T.SOURCE_TABLE, C.COLUMN_NAME, C.DATA_TYPE
+          FROM SOURCE.LANDING_TABLE_REGISTRY T
+          JOIN SOURCE.LANDING_COLUMN_REGISTRY C ON C.LANDING_ID = T.LANDING_ID
+         WHERE T.RUN_ID = ? AND T.INGESTION_STATUS = 'COMPLETE'
+       QUALIFY DENSE_RANK() OVER (PARTITION BY T.SOURCE_TABLE ORDER BY T.CREATED_AT DESC) = 1
+         ORDER BY T.SOURCE_TABLE, C.ORDINAL_POSITION """, [run_id]):
+        out.setdefault(str(c["SOURCE_TABLE"]).upper(), []).append(
+            {"column_name": str(c["COLUMN_NAME"]).upper(), "data_type": c["DATA_TYPE"]})
+    return out
+
+
+def _profile_docs(session, run_id: str) -> Dict[str, Dict[str, Any]]:
+    """The run's current column profiles in the shape services.profiling.insights reads."""
+    docs: Dict[str, Dict[str, Any]] = {}
+    for p in rows(session, """SELECT TABLE_NAME, COLUMN_NAME, POTENTIAL_KEY_FLAG, PII_CLASSIFICATION, STATISTICS_JSON
+                              FROM PROFILE.PROFILE_REGISTRY WHERE RUN_ID = ? AND IS_CURRENT """, [run_id]):
+        stats = variant(p["STATISTICS_JSON"]) or {}
+        docs.setdefault(str(p["TABLE_NAME"]).upper(), {"columns": []})["columns"].append({
+            "column_name": str(p["COLUMN_NAME"]).upper(), "family": stats.get("family"),
+            "potential_key": bool(p["POTENTIAL_KEY_FLAG"]), "pii_classification": p["PII_CLASSIFICATION"] or "NONE",
+            "statistics": stats,
+        })
+    return docs
+
+
+def plan_joins(session, run_id: str, lines: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Join graph for the run's source tables from profile evidence (keys, ranges, overlap) and name matches.
+    A reviewer-edited graph from the previous STTM version is kept when it still covers the same tables."""
+    from services.profiling.insights import infer_relationships
+    from services.source.er_graph import infer_joins
+
+    columns = _run_columns(session, run_id)
+    tables = sorted(columns)
+    prior = rows(session, """SELECT TABLE_DESIGN:join_graph AS G FROM CONTRACT.STTM_REGISTRY
+                              WHERE RUN_ID = ? AND TABLE_DESIGN:join_graph:edited::BOOLEAN
+                              ORDER BY STTM_VERSION DESC LIMIT 1""", [run_id])
+    if prior:
+        graph = variant(prior[0]["G"]) or {}
+        planned = {graph.get("driving_table"), *[j["right_table"] for j in graph.get("joins") or []]}
+        if planned <= set(tables) | {None}:
+            return graph
+    docs = _profile_docs(session, run_id)
+    relationships = infer_relationships(docs)
+    relationships += [{**j, "source": "name"} for j in infer_joins(columns)] if len(columns) > 1 else []
+    complete = {(t, c["column_name"]): float((c.get("statistics") or {}).get("null_percentage") or 0) == 0
+                for t, d in docs.items() for c in d["columns"]}
+    counts: Dict[str, int] = {}
+    for line in lines:
+        table = str(line.get("source_table") or "").upper()
+        if table:
+            counts[table] = counts.get(table, 0) + 1
+    return build_join_graph(tables, relationships, counts, complete)
+
+
+def update_join_graph(session, run_id: str, payload_json: str) -> Dict[str, Any]:
+    """Reviewer edits to the join plan of the STTM under review: driving table and joins (keys, LEFT or INNER)."""
+    from services.workflow.procedures import _get_run, _is_closed, _record_run_event
+
+    payload = json.loads(payload_json or "{}")
+    run = _get_run(session, run_id)
+    assert not _is_closed(run), "run is archived or deleted; restore it first"
+    sttm = _current_sttm(session, run_id)
+    assert sttm["STATUS"] in ("REVIEW", "DRAFT"), "the STTM is approved; reopen it before changing joins"
+    design = variant(sttm["TABLE_DESIGN"]) or {}
+    columns = {t: [c["column_name"] for c in cs] for t, cs in _run_columns(session, run_id).items()}
+    graph = apply_overrides(design.get("join_graph") or {"joins": []}, payload.get("driving_table"),
+                            payload.get("joins") or [], columns)
+    design.update(join_graph=graph, driving_table=graph["driving_table"],
+                  join_paths=[j["condition"] for j in graph["joins"]])
+    logic = join_logic_by_table(graph)
+    session.sql("UPDATE CONTRACT.STTM_REGISTRY SET TABLE_DESIGN = PARSE_JSON(?) WHERE STTM_ID = ?",
+                params=[json.dumps(design), sttm["STTM_ID"]]).collect()
+    for table, text in logic.items():
+        session.sql("UPDATE CONTRACT.STTM_LINE SET JOIN_LOGIC = ? WHERE STTM_ID = ? AND UPPER(SOURCE_TABLE) = ?",
+                    params=[text, sttm["STTM_ID"], table]).collect()
+    _record_run_event(session, run, "HUMAN", "join plan edited",
+                      {"driving_table": graph["driving_table"], "joins": len(graph["joins"]),
+                       "unreachable": graph["unreachable"]})
+    return {"sttm_id": sttm["STTM_ID"], "join_graph": graph}

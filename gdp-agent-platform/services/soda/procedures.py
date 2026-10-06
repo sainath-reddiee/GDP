@@ -11,6 +11,9 @@ from services.common.llm import complete_json
 from services.common.sql import clip, insert_rows, rows, scalar, variant
 from services.common.stage import Stage
 from services.knowledge.usage import STAGE_SKILLS, use_skills
+from services.quality.backtest import evaluate as evaluate_check, plan as backtest_plan
+from services.quality.gx import render_suite
+from services.quality.profile_checks import profile_checks
 from services.soda.expectations import from_client, from_sttm, merge_checks, render_yaml, without_rejected
 from services.soda.decisions import DecisionPayloadError, parse_decision_payload, stored_status
 from services.soda.extract import EXTRACT_SCHEMA, extract_prompt, parse_client_document, requirement_from_row
@@ -34,9 +37,12 @@ def _lines(session, sttm_id: str) -> List[Dict[str, Any]]:
         "transformation": r.get("TRANSFORMATION"),
         "semantic_type": r.get("SEMANTIC_TYPE"),
         "range_rule": variant(r.get("RANGE_RULE")),
+        "source_table": r.get("SOURCE_TABLE"), "source_column": r.get("SOURCE_COLUMN"),
+        "mapping_type": r.get("MAPPING_TYPE"),
     } for r in rows(session, """
         SELECT L.TARGET_COLUMN, L.TARGET_DATATYPE, L.NULLABLE_RULE, L.UNIQUENESS_RULE,
-               L.ACCEPTED_VALUES, L.BUSINESS_DEFINITION, L.TRANSFORMATION, L.RANGE_RULE, C.SEMANTIC_TYPE
+               L.ACCEPTED_VALUES, L.BUSINESS_DEFINITION, L.TRANSFORMATION, L.RANGE_RULE, C.SEMANTIC_TYPE,
+               L.SOURCE_TABLE, L.SOURCE_COLUMN, L.MAPPING_TYPE
           FROM CONTRACT.STTM_LINE L
           JOIN CONTRACT.STTM_REGISTRY S ON S.STTM_ID = L.STTM_ID
           LEFT JOIN KNOWLEDGE.TARGET_COLUMN_REGISTRY C
@@ -44,6 +50,46 @@ def _lines(session, sttm_id: str) -> List[Dict[str, Any]]:
          WHERE L.STTM_ID = ?
          ORDER BY L.TARGET_COLUMN
     """, [sttm_id])]
+
+
+def _profile_docs(session, run_id: str) -> Dict[str, Dict[str, Any]]:
+    """Current column profiles of the run's source tables, in the profiler's document shape."""
+    docs: Dict[str, Dict[str, Any]] = {}
+    for p in rows(session, """SELECT TABLE_NAME, COLUMN_NAME, ROW_COUNT, CARDINALITY, POTENTIAL_KEY_FLAG,
+                                     PII_CLASSIFICATION, PATTERN_JSON, STATISTICS_JSON
+                                FROM PROFILE.PROFILE_REGISTRY WHERE RUN_ID = ? AND IS_CURRENT""", [run_id]):
+        stats = variant(p["STATISTICS_JSON"]) or {}
+        table = str(p["TABLE_NAME"]).upper()
+        doc = docs.setdefault(table, {"row_count": p["ROW_COUNT"], "columns": []})
+        doc["row_count"] = doc["row_count"] or p["ROW_COUNT"]
+        doc["columns"].append({
+            "column_name": str(p["COLUMN_NAME"]).upper(), "family": stats.get("family"),
+            "cardinality": p["CARDINALITY"], "potential_key": bool(p["POTENTIAL_KEY_FLAG"]),
+            "pii_classification": p["PII_CLASSIFICATION"] or "NONE",
+            "patterns": variant(p["PATTERN_JSON"]) or [], "statistics": {"row_count": p["ROW_COUNT"], **stats},
+        })
+    return docs
+
+
+def _model_spec(session, sttm: Dict[str, Any]) -> Dict[str, Any]:
+    try:
+        found = rows(session, "SELECT MODEL_SPEC FROM KNOWLEDGE.TARGET_TABLE_REGISTRY WHERE TARGET_TABLE_ID = ?",
+                     [sttm.get("TARGET_TABLE_ID")])
+        return (variant(found[0]["MODEL_SPEC"]) or {}) if found else {}
+    except Exception:
+        return {}
+
+
+def _driving_table(design: Dict[str, Any], lines: List[Dict[str, Any]]) -> str | None:
+    driving = (design.get("join_graph") or {}).get("driving_table")
+    if driving:
+        return str(driving).upper()
+    counts: Dict[str, int] = {}
+    for line in lines:
+        if line.get("source_table"):
+            key = str(line["source_table"]).upper()
+            counts[key] = counts.get(key, 0) + 1
+    return max(counts, key=counts.get) if counts else None
 
 
 def _rejected(session, domain_id: str) -> List[Dict[str, Any]]:
@@ -170,7 +216,12 @@ def generate_soda(session, run_id: str) -> Dict[str, Any]:
                          "check_type": r["CHECK_TYPE"], "definition": variant(r["CHECK_DEFINITION"]),
                          "severity": r["SEVERITY"], "origin": r["ORIGIN"],
                          "requirement": r["CLIENT_REQUIREMENT"]} for r in existing_client]
-            checks = without_rejected(merge_checks(checks, stored, extracted, imported),
+            try:
+                profiled = profile_checks(table, lines, _profile_docs(session, run_id), checks,
+                                          _model_spec(session, sttm), _driving_table(design, lines))
+            except Exception:
+                profiled = []
+            checks = without_rejected(merge_checks(checks, stored, extracted, imported, profiled),
                                      _rejected(session, sttm["DOMAIN_ID"]))
             yaml_text = render_yaml(table.lower(), checks)
 
@@ -187,7 +238,53 @@ def generate_soda(session, run_id: str) -> Dict[str, Any]:
         stage.move("SODA_REVIEW", call.summary, {"count": len(checks)}, in_transaction=write)
     else:
         write("")
-    return {"version": version, "count": len(checks), "yaml": yaml_text, "checks": checks, "state": stage.payload()}
+    return {"version": version, "count": len(checks), "yaml": yaml_text, "checks": checks,
+            "gx_suite": render_suite(table, checks), "state": stage.payload()}
+
+
+def backtest_soda(session, run_id: str) -> Dict[str, Any]:
+    """Evaluate the run's current checks against today's source data (caller's role) and keep the result on each
+    expectation, so a reviewer accepts thresholds that the data actually meets."""
+    sttm = _current_sttm(session, run_id)
+    design = variant(sttm["TABLE_DESIGN"]) or {}
+    lines = _lines(session, sttm["STTM_ID"])
+    stored = rows(session, """SELECT EXPECTATION_ID, TARGET_COLUMN, CHECK_TYPE, CHECK_DEFINITION, SEVERITY
+                                FROM CONTRACT.SODA_EXPECTATION_REGISTRY
+                               WHERE RUN_ID = ? AND IS_CURRENT AND STATUS <> 'REJECTED'""", [run_id])
+    checks = [{"expectation_id": r["EXPECTATION_ID"], "target_column": r["TARGET_COLUMN"],
+               "check_type": r["CHECK_TYPE"], "definition": variant(r["CHECK_DEFINITION"]) or {},
+               "severity": r["SEVERITY"]} for r in stored]
+    landed = rows(session, """SELECT SOURCE_TABLE, LANDING_DATABASE, LANDING_SCHEMA, LANDING_TABLE
+                                FROM SOURCE.LANDING_TABLE_REGISTRY
+                               WHERE RUN_ID = ? AND INGESTION_STATUS = 'COMPLETE'
+                             QUALIFY ROW_NUMBER() OVER (PARTITION BY SOURCE_TABLE ORDER BY CREATED_AT DESC) = 1""",
+                  [run_id])
+    sources = {str(r["SOURCE_TABLE"]).upper(): f"{r['LANDING_DATABASE']}.{r['LANDING_SCHEMA']}.{r['LANDING_TABLE']}"
+               for r in landed}
+    queries, slots = backtest_plan(checks, lines, sources, _driving_table(design, lines))
+    results: Dict[str, Any] = {}
+    for table, sql in queries.items():
+        try:
+            found = rows(session, sql)
+            results[table] = found[0] if found else None
+        except Exception as exc:
+            results[table] = None
+            for slot in slots:
+                if slot.get("table") == table:
+                    slot["reason"] = f"query failed: {clip(exc, 200)}"
+    outcome = []
+    for slot in slots:
+        check = checks[slot["index"]]
+        result = {**evaluate_check(check, slot, results.get(slot.get("table"))),
+                  "expectation_id": check["expectation_id"]}
+        outcome.append(result)
+        session.sql("""UPDATE CONTRACT.SODA_EXPECTATION_REGISTRY
+                          SET CHECK_DEFINITION = OBJECT_INSERT(CHECK_DEFINITION, 'backtest', PARSE_JSON(?), TRUE)
+                        WHERE EXPECTATION_ID = ? AND RUN_ID = ?""",
+                    params=[json.dumps({k: result.get(k) for k in ("status", "observed", "percent", "detail")}),
+                            check["expectation_id"], run_id]).collect()
+    summary = {s: sum(1 for r in outcome if r["status"] == s) for s in ("PASS", "FAIL", "NOT_EVALUATED")}
+    return {"results": outcome, "summary": summary, "queries": list(queries.values())}
 
 
 def import_client_expectations(session, run_id: str, rows_json: str) -> Dict[str, Any]:

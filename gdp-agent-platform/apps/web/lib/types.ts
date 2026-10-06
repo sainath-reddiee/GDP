@@ -26,7 +26,7 @@ export type Lifecycle = "DRAFT" | "RUNNING" | "COMPLETED" | "FAILED" | "ARCHIVED
 
 export type RunStatusFilter = "all" | "active" | "completed" | "failed" | "archived";
 
-export type StorageType = "MANAGED" | "ICEBERG";
+export type StorageType = "IN_PLACE" | "MANAGED" | "ICEBERG";
 
 export type RunState = {
   run_id: string;
@@ -95,6 +95,7 @@ export type SourceConnection = {
   source_system_id: string; source_system_name: string; source_type: string;
   owner: string | null; security_classification: string | null;
   database_name: string; schema_name: string; created_at: string; runs: number; last_run_at: string | null;
+  connection_type?: string | null; landed_tables?: number | null; last_landed_at?: string | null;
 };
 
 export type LandingTargets = {
@@ -176,4 +177,128 @@ export type AuditEvent = {
   actor: string;
   reason: string | null;
   created_at: string;
+};
+
+export type ProfileStatus = "UNPROFILED" | "PROFILING" | "STAGED_READY_FOR_MODELING" | "STALE" | "FAILED";
+
+export type SourceOverviewItem = SourceConnection & {
+  health: "HEALTHY" | "UNREACHABLE" | "NOT_LANDED"; health_detail: string; table_count: number | null;
+  staged_tables: number; profiling_tables: number; failed_tables: number;
+  last_profiled_at: string | null; active_jobs: number;
+};
+
+export type SourcesOverview = {
+  sources: SourceOverviewItem[];
+  totals: { sources: number; tables: number; staged: number; profiling: number };
+};
+
+export type InventoryTable = {
+  table_name: string; table_type: string; row_count: number | null; bytes: number | null; column_count: number;
+  last_altered: string | null; status: ProfileStatus; domain_name: string | null; stage_path: string | null;
+  profiled_at: string | null; profiled_by: string | null; avg_null_percentage: number | null;
+  key_candidates: number | null; pii_columns: number | null; is_approximate: boolean | null; error_message: string | null;
+  quality?: Scorecard | null;
+  domain_inferred?: boolean; domain_confidence?: number | null;
+};
+
+export type DomainCandidate = {
+  domain_id: string; domain_name: string; confidence: number; signals: string[]; matched_terms: string[];
+};
+
+export type SourceInventory = {
+  source: { source_system_id: string; source_system_name: string; source_type: string; database_name: string; schema_name: string };
+  tables: InventoryTable[];
+  jobs: { job_id: string; tables: string[]; started_at: number }[];
+};
+
+export type ProfileColumn = {
+  column_name: string; data_type: string; family: string; cardinality: string | null; semantic_type: string;
+  pii_classification: string; potential_key: boolean; description?: string | null;
+  patterns: { pattern: string; count: number }[];
+  sample_values: { value: string | null; count: number }[];
+  statistics: {
+    row_count: number; null_count: number; null_percentage: number; distinct_count: number | null;
+    distinct_percentage?: number; min?: string | null; max?: string | null; min_length?: number; max_length?: number;
+    avg_length?: number; average?: number; enum_values?: string[] | null; date_format?: string | null;
+    frequency_distribution?: { value: string | null; count: number }[];
+    histogram?: { lower: number; upper: number; count: number }[];
+  };
+};
+
+export type TableProfileDoc = {
+  entry: { profile_stage_path: string; profiled_at: string; profiled_by: string | null; is_approximate: boolean | null };
+  profile: {
+    profiler_version: string; row_count: number; column_count: number; approximate: boolean;
+    model_version: string | null; profiled_at: string; columns: ProfileColumn[];
+    source: { source_name: string; database: string; schema: string; table: string };
+  };
+};
+
+export type CatalogInventory = {
+  database: string;
+  schema: string;
+  source: { source_system_id: string; source_system_name: string } | null;
+  tables: InventoryTable[];
+  jobs: { job_id: string; tables: string[]; started_at: number }[];
+};
+
+export type ProfileStoreRow = {
+  source_name: string; database_name: string; schema_name: string; table_name: string;
+  row_count: number | null; column_count: number | null; profile_stage_path: string;
+  is_approximate: boolean | null; profiled_by: string | null; profiled_at: string;
+  status: string | null; status_updated_at: string | null; error_message: string | null;
+  avg_null_percentage: number | null; key_candidates: number | null; pii_columns: number | null;
+};
+
+export type Scorecard = {
+  overall: number | null;
+  grade: string;
+  dimensions: { completeness: number | null; uniqueness: number | null; validity: number | null; freshness: number | null };
+  age_days: number | null;
+};
+
+export type SuggestedCheck = {
+  check: string; column: string | null; reason: string; valid_values?: string[]; valid_regex?: string;
+};
+
+export type Drift = {
+  added: string[]; removed: string[]; retyped: { column: string; from: string; to: string }[];
+  row_count: { before: number | null; after: number | null; delta: number | null; pct: number | null };
+  profiled_at: string | null; schema_changed: boolean; changed: boolean;
+};
+
+export type TableInsights = TableProfileDoc & {
+  scorecard: Scorecard; checks: SuggestedCheck[]; checks_yaml: string; drift: Drift | null;
+};
+
+export type Relationship = {
+  left: string; right: string; keys: string[]; cardinality: string; confidence: number; evidence?: string[]; source?: string;
+};
+
+export type AnalyzeResult = {
+  tables: {
+    table: string; staged: boolean; row_count: number | null; column_count: number | null;
+    quality: Scorecard | null; key_candidates: string[]; pii_columns: string[];
+  }[];
+  relationships: Relationship[];
+  graph: import("@/app/onboarding/intent-types").ModelGraph;
+  domain?: { detected: DomainCandidate | null; candidates: DomainCandidate[] };
+  models: {
+    related: boolean;
+    suggestions: { kind: "existing" | "proposed"; target_table: string; fqn: string; domain_name?: string | null;
+      score: number; overlap_columns: string[]; reason: string }[];
+    targets: { target_table_id: string; domain_name: string; target_table: string; fqn: string }[];
+  };
+};
+
+export type Connector = {
+  id: string; label: string; kind: "FILE" | "DATABASE" | "SAAS" | "API"; landable: boolean;
+  fields: string[]; guidance: string | null;
+};
+
+export type ExternalFile = { path: string; size: number | null; last_modified: string };
+
+export type LandResult = {
+  source_system_id: string; database: string; schema: string;
+  tables: { table: string; files: string[]; status: "LOADED" | "FAILED"; rows_loaded: number; error: string | null }[];
 };

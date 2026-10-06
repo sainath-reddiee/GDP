@@ -110,6 +110,20 @@ export async function saveSodaDecisions(runId: string, decisions: Record<string,
   return result;
 }
 
+export type BacktestResult = {
+  results: { expectation_id: string; status: "PASS" | "FAIL" | "NOT_EVALUATED"; detail: string }[];
+  summary: { PASS: number; FAIL: number; NOT_EVALUATED: number };
+  queries: string[];
+};
+
+export async function backtestSoda(runId: string) {
+  const result = await attemptValue(() =>
+    api<BacktestResult>(`/api/runs/${runId}/soda/backtest`, { method: "POST" }),
+  );
+  if (result.ok) revalidatePath(`/runs/${runId}`, "layout");
+  return result;
+}
+
 export type DbtPlanInput = {
   base_branch?: string;
   cut_branch?: string;

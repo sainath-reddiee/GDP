@@ -21,7 +21,7 @@ instructions:
     domain: AI-DATA-MODELING.
     mapping: AI-SCHEMA-MAPPING, MAPPING-VALIDATION, MAPPING-BUSINESS-RULES,
     MAPPING-APPROVAL-WORKFLOW, MAPPING-PATTERN-LIBRARY.
-    sttm and dbt: DBT-ONBOARD-SOURCE, plus SILVER-MODEL and GDP_DOMAIN_SKILL for dbt.
+    sttm and dbt: GDP-DBT-ONBOARD-SOURCE, plus SILVER-MODEL and GDP_DOMAIN_SKILL for dbt.
     validation: MAPPING-VALIDATION, DEV-DATAREADINESS-CHECK, QA-DATAREADINESS-CHECK.
     Gold-model, Iceberg DDL, watermark inserts, and readiness jobs are guidance only.
     Do not execute them. Search domain knowledge before glossary or rule answers.

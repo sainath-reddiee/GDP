@@ -1,13 +1,13 @@
 -- Hub-model patch snippet — add a new source CTE + UNION ALL branch to <entity>.sql.
--- Replace <source_key>, <prefix>, <entity>, <SOURCE_SYSTEM_NAME>. {prefix_lower} = project audit-column prefix (may be blank).
+-- Replace <source_key>, <prefix>, <entity>, <SOURCE_SYSTEM_NAME>.
 
 -- 1) Add AFTER existing source CTEs:
 <source_key>_source as (
     select * from {{ ref('<prefix>_<entity>') }}
     {% if is_incremental() %}
     where GREATEST(
-        coalesce({prefix_lower}_inserted_ts, '1900-01-01'::timestamp_ntz),
-        coalesce({prefix_lower}_updated_ts,  '1900-01-01'::timestamp_ntz)
+        coalesce(gdp_inserted_ts, '1900-01-01'::timestamp_ntz),
+        coalesce(gdp_updated_ts,  '1900-01-01'::timestamp_ntz)
     ) > $wm_ts
     {% endif %}
 ),
