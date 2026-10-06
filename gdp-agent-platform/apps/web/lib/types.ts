@@ -95,6 +95,7 @@ export type SourceConnection = {
   source_system_id: string; source_system_name: string; source_type: string;
   owner: string | null; security_classification: string | null;
   database_name: string; schema_name: string; created_at: string; runs: number; last_run_at: string | null;
+  connection_type?: string | null; landed_tables?: number | null; last_landed_at?: string | null;
 };
 
 export type LandingTargets = {
@@ -181,7 +182,7 @@ export type AuditEvent = {
 export type ProfileStatus = "UNPROFILED" | "PROFILING" | "STAGED_READY_FOR_MODELING" | "STALE" | "FAILED";
 
 export type SourceOverviewItem = SourceConnection & {
-  health: "HEALTHY" | "UNREACHABLE"; health_detail: string; table_count: number | null;
+  health: "HEALTHY" | "UNREACHABLE" | "NOT_LANDED"; health_detail: string; table_count: number | null;
   staged_tables: number; profiling_tables: number; failed_tables: number;
   last_profiled_at: string | null; active_jobs: number;
 };
@@ -282,4 +283,16 @@ export type AnalyzeResult = {
       score: number; overlap_columns: string[]; reason: string }[];
     targets: { target_table_id: string; domain_name: string; target_table: string; fqn: string }[];
   };
+};
+
+export type Connector = {
+  id: string; label: string; kind: "FILE" | "DATABASE" | "SAAS" | "API"; landable: boolean;
+  fields: string[]; guidance: string | null;
+};
+
+export type ExternalFile = { path: string; size: number | null; last_modified: string };
+
+export type LandResult = {
+  source_system_id: string; database: string; schema: string;
+  tables: { table: string; files: string[]; status: "LOADED" | "FAILED"; rows_loaded: number; error: string | null }[];
 };

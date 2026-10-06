@@ -11,7 +11,7 @@ import uuid
 from pathlib import Path
 from typing import Optional
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from fastapi import Depends, FastAPI, File, Header, HTTPException, Request, UploadFile
 
 _ROOT = Path(__file__).resolve().parents[3]
 if str(_ROOT) not in sys.path:
@@ -793,6 +793,8 @@ def source_connections(db: Db = Depends(current_db)):
     return {"sources": db.query(
         """
         SELECT S.SOURCE_SYSTEM_ID, S.SOURCE_SYSTEM_NAME, S.SOURCE_TYPE, S.OWNER, S.SECURITY_CLASSIFICATION,
+               S.CONNECTION_TYPE, ARRAY_SIZE(S.CONFIGURATION_JSON:landed_tables) AS LANDED_TABLES,
+               S.CONFIGURATION_JSON:last_landed_at::VARCHAR AS LAST_LANDED_AT,
                S.CONFIGURATION_JSON:database::VARCHAR AS DATABASE_NAME,
                S.CONFIGURATION_JSON:schema::VARCHAR AS SCHEMA_NAME,
                S.CREATED_AT::VARCHAR AS CREATED_AT,
@@ -2686,7 +2688,9 @@ def sources_overview(db: Db = Depends(current_db)):
                 (s["schema_name"],),
             )[0]["n"]
         except Exception as exc:
-            health, detail = "UNREACHABLE", str(_snowflake_error(exc).detail)[:300]
+            external = str(s["source_type"]).startswith("EXTERNAL_")
+            health = "NOT_LANDED" if external else "UNREACHABLE"
+            detail = "Not landed into Snowflake yet" if external else str(_snowflake_error(exc).detail)[:300]
         rows = [r for r in by_source.get(s["source_system_name"], [])
                 if r["database_name"] == s["database_name"] and r["schema_name"] == s["schema_name"]]
         staged = [r for r in rows if (r.get("status") or "STAGED_READY_FOR_MODELING") == "STAGED_READY_FOR_MODELING"
@@ -3184,3 +3188,105 @@ def catalog_analyze(body: CatalogAnalyzeRequest, db: Db = Depends(current_db)):
     graph["profiled"] = True
     return {"tables": summary, "relationships": relationships, "graph": graph,
             "models": _suggest_for_catalog(db, database, schema, tables)}
+
+
+# ---------------------------------------------------------------- External sources: register, upload, land
+
+MAX_UPLOAD_BYTES = 200 * 1024 * 1024
+
+
+@app.get("/api/connectors")
+def connectors():
+    from services.source.external import connector_catalog
+
+    return {"connectors": connector_catalog()}
+
+
+class ExternalSourceCreate(BaseModel):
+    source_system_name: str = Field(min_length=1, max_length=64)
+    connector: str = Field(min_length=1, max_length=32)
+    config: dict = Field(default_factory=dict)
+    owner: Optional[str] = Field(default=None, max_length=256)
+    security_classification: Optional[str] = Field(default=None, max_length=32)
+
+
+@app.post("/api/sources/external")
+def create_external_source(body: ExternalSourceCreate, db: Db = Depends(current_db)):
+    """Register an external system. Only the name of a Snowflake SECRET or STORAGE INTEGRATION is kept."""
+    from services.source.external import register_external_source
+
+    try:
+        return _source_call(db, "CALL SOURCE.REGISTER_EXTERNAL_SOURCE(%s)", register_external_source,
+                            body.model_dump_json())
+    except Exception as exc:
+        raise _snowflake_error(exc) from exc
+
+
+def _external_row(db: Db, source_id: str) -> dict:
+    src = _source_row(db, source_id)
+    if not str(src["source_type"]).startswith("EXTERNAL_"):
+        raise HTTPException(400, "not an external source")
+    return src
+
+
+@app.get("/api/sources/{source_id}/files")
+def external_files(source_id: str, db: Db = Depends(current_db)):
+    from services.source.external import list_external_files
+
+    _external_row(db, source_id)
+    try:
+        return _source_call(db, "CALL SOURCE.LIST_EXTERNAL_FILES(%s)", list_external_files, source_id)
+    except Exception as exc:
+        raise _snowflake_error(exc) from exc
+
+
+@app.post("/api/sources/{source_id}/upload")
+async def upload_external_files(source_id: str, files: list[UploadFile] = File(...), db: Db = Depends(current_db)):
+    """Upload files to the source's internal stage (file-upload sources). Nothing is loaded until Land."""
+    import tempfile
+
+    src = _external_row(db, source_id)
+    found = db.query("SELECT CONNECTION_TYPE FROM SOURCE.SOURCE_REGISTRY WHERE SOURCE_SYSTEM_ID = %s", (source_id,))
+    if not found or found[0]["connection_type"] != "upload":
+        raise HTTPException(400, "files can only be uploaded to a file-upload source; cloud sources read their bucket")
+    database, schema = _ident(src["database_name"], "database"), _ident(src["schema_name"], "schema")
+    uploaded = []
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        for f in files:
+            name = re.sub(r"[^A-Za-z0-9._-]", "_", Path(f.filename or "file").name)[:200]
+            if not re.search(r"\.(csv|tsv|txt|parquet|json|ndjson)(\.gz)?$", name, re.I):
+                raise HTTPException(400, f"{name}: only CSV, Parquet and JSON files are supported")
+            data = await f.read()
+            if len(data) > MAX_UPLOAD_BYTES:
+                raise HTTPException(413, f"{name} is larger than {MAX_UPLOAD_BYTES // (1024 * 1024)} MB")
+            local = tmp / name
+            local.write_bytes(data)
+            try:
+                db.execute(f"PUT 'file://{local.as_posix()}' @{database}.{schema}.FILES AUTO_COMPRESS = FALSE OVERWRITE = TRUE")
+            except Exception as exc:
+                raise _snowflake_error(exc) from exc
+            uploaded.append({"file": name, "bytes": len(data)})
+    finally:
+        import shutil
+
+        shutil.rmtree(tmp, ignore_errors=True)
+    return {"uploaded": uploaded}
+
+
+class LandRequest(BaseModel):
+    files: list[str] = Field(default_factory=list, max_length=200)
+    table: Optional[str] = Field(default=None, max_length=255)
+
+
+@app.post("/api/sources/{source_id}/land")
+def land_external(source_id: str, body: LandRequest, db: Db = Depends(current_db)):
+    """Load staged files into tables of the source's landing schema; they can then be profiled in place."""
+    from services.source.external import land_external_files
+
+    _external_row(db, source_id)
+    try:
+        return _source_call(db, "CALL SOURCE.LAND_EXTERNAL_FILES(%s, %s)", land_external_files, source_id,
+                            body.model_dump_json())
+    except Exception as exc:
+        raise _snowflake_error(exc) from exc

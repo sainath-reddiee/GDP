@@ -246,9 +246,20 @@ class SnowflakeShareAdapter(SourceAdapter):
         return AccessCheck("SHARE", PASSED, f"{self.database} is a mounted share")
 
 
+class LandedExternalAdapter(SnowflakeDatabaseAdapter):
+    """An external source (files, database, SaaS, API) after it has been landed into a Snowflake schema."""
+
+    source_type = "EXTERNAL"
+
+    def type_check(self, db_type: Optional[str]) -> AccessCheck:
+        return AccessCheck("SOURCE_TYPE", PASSED, f"external source landed in {self.database}.{self.schema}")
+
+
 ADAPTERS = {a.source_type: a for a in (SnowflakeDatabaseAdapter, SnowflakeShareAdapter)}
 
 
 def adapter_for(source_type: str, database: str, schema: str) -> SourceAdapter:
+    if str(source_type or "").upper().startswith("EXTERNAL_"):
+        return LandedExternalAdapter(database, schema)
     assert source_type in ADAPTERS, f"SOURCE_TYPE must be one of {sorted(ADAPTERS)}"
     return ADAPTERS[source_type](database, schema)

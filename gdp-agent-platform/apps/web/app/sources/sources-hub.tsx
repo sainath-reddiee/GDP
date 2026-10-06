@@ -3,8 +3,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import {
-  AlertTriangle, ArrowRight, CheckCircle2, ChevronDown, CircleDashed, Database, Eye, FolderTree, History, Layers,
-  Loader2, RefreshCw, Search, Sparkles, XCircle,
+  AlertTriangle, ArrowRight, CheckCircle2, ChevronDown, CircleDashed, Database, Eye, FolderTree, Globe, History, Layers,
+  Loader2, Plus, RefreshCw, Search, Sparkles, XCircle,
 } from "lucide-react";
 import type {
   CatalogInventory, InventoryTable, ProfileStatus, ProfileStoreRow, SourcesOverview,
@@ -20,6 +20,7 @@ import { cn } from "@/lib/utils";
 import type { DomainRow } from "@/app/onboarding/intent-types";
 import { loadCatalogInventory, loadOverview, loadProfileStore, profileCatalogTables } from "./actions";
 import { ModelPanel } from "./model-panel";
+import { ConnectSource, type ManagedSource } from "./connect-source";
 import { GradeChip, ProfileDrawer, type DrawerTab } from "./profile-drawer";
 
 const STATUS_META: Record<ProfileStatus, { label: string; variant: "outline" | "warning" | "success" | "destructive" }> = {
@@ -157,6 +158,7 @@ export function SourcesHub({
   const [drawer, setDrawer] = useState<Drawer | null>(null);
   const [notice, setNotice] = useState<{ tone: "ok" | "error"; text: string } | null>(null);
   const [modeling, setModeling] = useState<string[] | null>(null);
+  const [connect, setConnect] = useState<{ managed: ManagedSource | null } | null>(null);
   const [pending, start] = useTransition();
 
   useEffect(() => {
@@ -253,17 +255,32 @@ export function SourcesHub({
   const storeSchemas = new Set(store.map((r) => `${r.database_name}.${r.schema_name}`)).size;
   const closeDrawer = useCallback(() => setDrawer(null), []);
   const closeModeling = useCallback(() => setModeling(null), []);
+  const closeConnect = useCallback(() => {
+    setConnect(null);
+    loadOverview().then((r) => r.ok && setOverview(r.data));
+  }, []);
+  const externals = (overview?.sources ?? []).filter((x) => x.source_type.startsWith("EXTERNAL_"));
+  const currentExternal = externals.find((x) => x.database_name === database && x.schema_name === schema);
+  const manage = (x: (typeof externals)[number]) => setConnect({ managed: {
+    id: x.source_system_id, name: x.source_system_name, connector: x.connection_type ?? "upload",
+    database: x.database_name, schema: x.schema_name,
+  } });
   const dbOptions = databases.map((d) => ({ value: d.database_name, hint: d.type === "IMPORTED DATABASE" ? "share" : undefined }));
   const schemaOptions = schemas.map((s) => ({ value: s.schema_name }));
 
   return (
     <div className="space-y-6">
-      <div>
+      <div className="flex flex-wrap items-end gap-3">
+       <div>
         <h2>Sources</h2>
         <p className="mt-1 text-sm text-muted-foreground">
           Browse any database or share your role can read, profile the tables you choose where they live, and start
           modeling from any combination of staged profiles. Profiling never copies data.
         </p>
+       </div>
+        <Button className="ml-auto" onClick={() => setConnect({ managed: null })}>
+          <Plus className="h-4 w-4" /> Connect source
+        </Button>
       </div>
 
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
@@ -299,9 +316,43 @@ export function SourcesHub({
         </CardContent>
       </Card>
 
+      {externals.length > 0 && (
+        <div className="space-y-2">
+          <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">External sources</p>
+          <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+            {externals.map((x) => {
+              const landedCount = x.landed_tables ?? 0;
+              const isLanded = x.health === "HEALTHY" && landedCount > 0;
+              return (
+                <div key={x.source_system_id} className="flex items-center gap-3 rounded-xl border bg-card p-3">
+                  <Globe className="h-4 w-4 text-muted-foreground" />
+                  <div className="min-w-0">
+                    <p className="flex items-center gap-2 text-sm font-semibold">
+                      {x.source_system_name}
+                      <Badge variant="outline" className="text-[10px]">{x.connection_type ?? "external"}</Badge>
+                    </p>
+                    <p className="text-[11px] text-muted-foreground">
+                      {isLanded ? `${landedCount} table${landedCount === 1 ? "" : "s"} landed · ${x.staged_tables} staged` : "Not landed into Snowflake yet"}
+                    </p>
+                  </div>
+                  <div className="ml-auto flex gap-1">
+                    <Button size="sm" variant="ghost" onClick={() => manage(x)}>Land</Button>
+                    {isLanded && (
+                      <Button size="sm" variant="outline" onClick={() => openTarget({ database: x.database_name, schema: x.schema_name })}>
+                        Open
+                      </Button>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       <div className="flex gap-1 border-b" role="tablist">
         {([
-          ["explore", database && schema ? `Explore ${database}.${schema}` : "Explore"],
+          ["explore", database && schema ? `Explore ${database}.${schema}${currentExternal ? ` (external: ${currentExternal.source_system_name})` : ""}` : "Explore"],
           ["store", `Profile store (${store.length})`],
         ] as const).map(([value, label]) => (
           <button key={value} type="button" role="tab" aria-selected={tab === value} onClick={() => setTab(value)}
@@ -533,6 +584,11 @@ export function SourcesHub({
                        onClose={closeDrawer}
                        onReprofile={drawer.database === database && drawer.schema === schema
                          ? (table) => { setDrawer(null); runProfile([table], true); } : undefined} />
+      )}
+      {connect && (
+        <ConnectSource initial={connect.managed} onClose={closeConnect}
+                       onSnowflake={() => document.getElementById("pick_db")?.click()}
+                       onOpenSchema={(t) => openTarget(t)} />
       )}
       {modeling && (
         <ModelPanel database={database} schema={schema} tables={modeling} domains={domains} onClose={closeModeling} />

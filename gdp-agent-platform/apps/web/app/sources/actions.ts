@@ -1,8 +1,8 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { api, attemptValue } from "@/lib/api";
-import type { AnalyzeResult, CatalogInventory, ProfileStoreRow, SourcesOverview, TableInsights } from "@/lib/types";
+import { api, apiForm, attemptValue } from "@/lib/api";
+import type { AnalyzeResult, Connector, ExternalFile, LandResult, CatalogInventory, ProfileStoreRow, SourcesOverview, TableInsights } from "@/lib/types";
 
 export async function loadOverview() {
   return attemptValue(() => api<SourcesOverview>("/api/sources/overview"));
@@ -52,5 +52,39 @@ export async function catalogModelingRun(body: {
   );
   revalidatePath("/runs");
   revalidatePath("/dashboard");
+  return result;
+}
+
+export async function loadConnectors() {
+  return attemptValue(() => api<{ connectors: Connector[] }>("/api/connectors"));
+}
+
+export async function registerExternalSource(body: {
+  source_system_name: string; connector: string; config: Record<string, string>;
+}) {
+  const result = await attemptValue(() =>
+    api<{ source_system_id: string; source_system_name: string; landing: { database: string; schema: string };
+      landable: boolean; guidance: string | null }>("/api/sources/external", { method: "POST", body: JSON.stringify(body) }),
+  );
+  revalidatePath("/sources");
+  return result;
+}
+
+export async function listExternalFiles(sourceId: string) {
+  return attemptValue(() => api<{ files: ExternalFile[]; landable: boolean }>(`/api/sources/${sourceId}/files`));
+}
+
+export async function uploadExternalFiles(sourceId: string, form: FormData) {
+  return attemptValue(() => apiForm<{ uploaded: { file: string; bytes: number }[] }>(`/api/sources/${sourceId}/upload`, form));
+}
+
+export async function landExternalFiles(sourceId: string, files: string[], table?: string) {
+  const result = await attemptValue(() =>
+    api<LandResult>(`/api/sources/${sourceId}/land`, {
+      method: "POST",
+      body: JSON.stringify({ files, table: table || null }),
+    }),
+  );
+  revalidatePath("/sources");
   return result;
 }
