@@ -1,10 +1,10 @@
 import { api } from "@/lib/api";
-import type { RunStatusFilter, RunSummary } from "@/lib/types";
-import { RunTable, STATUS_FILTERS } from "@/components/run-table";
+import type { RunSummary } from "@/lib/types";
+import { RunTable } from "@/components/run-table";
+import { parseStatusFilter } from "@/lib/run-filters";
 
 export default async function Runs({ searchParams }: { searchParams: { status?: string } }) {
-  const requested = (searchParams.status ?? "all").toLowerCase();
-  const filter = (STATUS_FILTERS.some((f) => f.value === requested) ? requested : "all") as RunStatusFilter;
+  const filter = parseStatusFilter(searchParams.status);
   const { runs } = await api<{ runs: RunSummary[] }>(`/api/runs?status=${filter}`);
   return (
     <div className="space-y-5">

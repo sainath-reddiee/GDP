@@ -109,29 +109,23 @@ function watchHydration(page: Page): string[] {
   return errors;
 }
 
-test("source step: multi-select tables, profile badges and landing target", async ({ page }) => {
+test("source stage executes the wizard plan without re-selecting tables", async ({ page }) => {
   test.setTimeout(180_000);
   await signIn(page);
   const errors = watchHydration(page);
   const runId = await createRunViaApi(page, `smoke-src-${Date.now()}`, "TEST");
 
   await page.goto(`/runs/${runId}/source`);
-  await expect(page.getByRole("heading", { name: "Select source tables" })).toBeVisible({ timeout: 60_000 });
-  await expect(page.getByRole("button", { name: "Register source and keep this map" })).toHaveCount(0);
-
-  await page.getByRole("button", { name: "Select all" }).click();
-  await expect(page.getByText(/^2 selected/)).toBeVisible();
-  await page.getByLabel("select CRM_ORDER").uncheck();
-  await expect(page.getByText(/^1 selected/)).toBeVisible();
-  await expect(page.getByLabel("select CRM_CUSTOMER")).toBeChecked();
-  await page.getByRole("button", { name: "Clear" }).click();
-  await expect(page.getByText(/^0 selected/)).toBeVisible();
-
-  await expect(page.getByRole("columnheader", { name: "Profile" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Run the source plan" })).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByRole("heading", { name: "Tables in this run" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Select all" })).toHaveCount(0);
+  await expect(page.getByText("How should this source be modeled?")).toHaveCount(0);
+  await expect(page.getByRole("cell", { name: "CRM_CUSTOMER", exact: true })).toBeVisible();
   await expect(page.getByText(/Profiled \(cached\)|Unprofiled/).first()).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Landing target" })).toBeVisible();
+  await expect(page.getByRole("button", { name: /Validate, land & profile 2 tables/ })).toBeEnabled();
+
+  await page.getByRole("button", { name: "Change landing target" }).click();
   await expect(page.getByLabel(/Landing schema in/)).toHaveValue("LANDING");
-  await expect(page.getByRole("button", { name: /Validate & land \(0 selected\)/ })).toBeDisabled();
 
   expect(errors).toEqual([]);
 });
