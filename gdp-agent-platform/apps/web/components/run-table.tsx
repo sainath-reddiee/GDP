@@ -10,14 +10,8 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
+import { STATUS_FILTERS } from "@/lib/run-filters";
 
-export const STATUS_FILTERS: { value: RunStatusFilter; label: string }[] = [
-  { value: "all", label: "All" },
-  { value: "active", label: "Active" },
-  { value: "completed", label: "Completed" },
-  { value: "failed", label: "Failed" },
-  { value: "archived", label: "Archived" },
-];
 
 export function lifecycleVariant(lifecycle: Lifecycle | string) {
   if (lifecycle === "FAILED") return "destructive" as const;

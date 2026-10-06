@@ -51,6 +51,9 @@ export default async function SourcePage({ params }: { params: { runId: string }
       intent={intent}
       overview={overview}
       initialTables={catalog.tables}
+      currentState={current}
+      failedIn={failedIn}
+      failureReason={failedIn ? state.failure_reason : null}
       cachedProfiles={cache.profiles}
       landingTargets={landing}
       target={{
@@ -58,11 +61,6 @@ export default async function SourcePage({ params }: { params: { runId: string }
         landing_schema: state.run.landing_schema || landing?.default.landing_schema || "LANDING",
         storage_type: state.run.storage_type || "MANAGED",
       }}
-      canRegister={current === "CREATED"}
-      canValidate={current === "SOURCE_REGISTERED" || failedIn === "ACCESS_VALIDATION"}
-      canResumeLanding={["ACCESS_APPROVED", "LANDING_PENDING"].includes(current) || failedIn === "LANDING_RUNNING"}
-      landed={current === "LANDING_COMPLETE"}
-      failureReason={failedIn ? state.failure_reason : null}
     />
   );
 }
