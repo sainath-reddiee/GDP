@@ -1,23 +1,25 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState, useTransition } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import {
-  AlertTriangle, ArrowRight, CheckCircle2, CircleDashed, Database, Eye, Loader2, Plus, RefreshCw, Search,
-  Sparkles, XCircle,
+  AlertTriangle, ArrowRight, CheckCircle2, ChevronDown, CircleDashed, Database, Eye, FolderTree, History, Layers,
+  Loader2, RefreshCw, Search, Sparkles, XCircle,
 } from "lucide-react";
 import type {
-  InventoryTable, ProfileStatus, SourceInventory, SourceOverviewItem, SourcesOverview,
+  CatalogInventory, InventoryTable, ProfileStatus, ProfileStoreRow, SourcesOverview,
 } from "@/lib/types";
 import type { DatabaseRow, SchemaRow } from "@/app/onboarding/catalog-types";
 import { loadSchemas } from "@/app/onboarding/catalog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
-import { loadInventory, loadOverview, profileTables, registerConnection, sendToModeling } from "./actions";
+import {
+  catalogModelingRun, loadCatalogInventory, loadOverview, loadProfileStore, profileCatalogTables,
+} from "./actions";
 import { ProfileDrawer } from "./profile-drawer";
 
 const STATUS_META: Record<ProfileStatus, { label: string; variant: "outline" | "warning" | "success" | "destructive" }> = {
@@ -36,6 +38,9 @@ const FILTERS: { value: ProfileStatus | "ALL"; label: string }[] = [
   { value: "FAILED", label: "Failed" },
 ];
 
+type Target = { database: string; schema: string };
+type Drawer = Target & { table: string };
+
 function formatCount(n: number | null | undefined) {
   if (n == null) return "—";
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
@@ -43,164 +48,162 @@ function formatCount(n: number | null | undefined) {
   return n.toLocaleString();
 }
 
-function Kpi({ label, value, hint }: { label: string; value: React.ReactNode; hint?: string }) {
+function Kpi({ icon: Icon, label, value, hint }: { icon: typeof Database; label: string; value: React.ReactNode; hint?: string }) {
   return (
-    <div className="rounded-xl border bg-card px-4 py-3">
-      <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">{label}</p>
-      <p className="text-2xl font-semibold tabular-nums">{value}</p>
-      {hint && <p className="text-xs text-muted-foreground">{hint}</p>}
+    <div className="flex items-start gap-3 rounded-xl border bg-card px-4 py-3">
+      <span className="rounded-lg bg-primary/10 p-2 text-primary"><Icon className="h-4 w-4" /></span>
+      <div>
+        <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">{label}</p>
+        <p className="text-2xl font-semibold tabular-nums">{value}</p>
+        {hint && <p className="text-xs text-muted-foreground">{hint}</p>}
+      </div>
     </div>
   );
 }
 
-function SourceCard({ s, active, onClick }: { s: SourceOverviewItem; active: boolean; onClick: () => void }) {
-  const coverage = s.table_count ? Math.round((s.staged_tables / s.table_count) * 100) : 0;
+/** Searchable single-select used for databases and schemas (dozens to hundreds of entries). */
+function Picker({ id, label, value, options, placeholder, disabled, loading, onChange }: {
+  id: string; label: string; value: string; options: { value: string; hint?: string }[]; placeholder: string;
+  disabled?: boolean; loading?: boolean; onChange: (v: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const close = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false); };
+    document.addEventListener("mousedown", close);
+    return () => document.removeEventListener("mousedown", close);
+  }, [open]);
+  const shown = options.filter((o) => o.value.toLowerCase().includes(query.toLowerCase())).slice(0, 200);
   return (
-    <button type="button" onClick={onClick} aria-pressed={active}
-            className={cn("flex w-full flex-col gap-2 rounded-xl border bg-card p-4 text-left transition-all",
-              active ? "border-primary ring-2 ring-primary/25" : "hover:border-foreground/25")}>
-      <div className="flex items-center gap-2">
-        <span className={cn("h-2 w-2 rounded-full", s.health === "HEALTHY" ? "bg-success" : "bg-destructive")}
-              title={s.health === "HEALTHY" ? "Reachable with your role" : s.health_detail} />
-        <span className="truncate text-sm font-semibold">{s.source_system_name}</span>
-        <Badge variant="outline" className="ml-auto text-[10px]">{s.source_type === "SNOWFLAKE_SHARE" ? "share" : "database"}</Badge>
-      </div>
-      <p className="truncate font-mono text-[11px] text-muted-foreground">{s.database_name}.{s.schema_name}</p>
-      <div>
-        <div className="mb-1 flex justify-between text-[11px] text-muted-foreground">
-          <span>{s.staged_tables} of {s.table_count ?? "?"} staged</span>
-          <span>{coverage}%</span>
+    <div ref={ref} className="relative min-w-[220px] flex-1">
+      <label htmlFor={id} className="mb-1 block text-[11px] font-medium uppercase tracking-wide text-muted-foreground">{label}</label>
+      <button id={id} type="button" disabled={disabled} onClick={() => setOpen((v) => !v)} aria-expanded={open}
+              className="flex h-10 w-full items-center gap-2 rounded-lg border bg-card px-3 text-left text-sm disabled:opacity-50">
+        {loading ? <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" /> : null}
+        <span className={cn("truncate font-mono", !value && "font-sans text-muted-foreground")}>{value || placeholder}</span>
+        <ChevronDown className="ml-auto h-4 w-4 text-muted-foreground" />
+      </button>
+      {open && (
+        <div className="absolute z-30 mt-1 w-full rounded-lg border bg-card p-2 shadow-xl">
+          <div className="relative mb-2">
+            <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
+            <Input autoFocus value={query} onChange={(e) => setQuery(e.target.value)} placeholder={`Search ${label.toLowerCase()}`} className="pl-8" />
+          </div>
+          <ul role="listbox" className="max-h-72 overflow-y-auto">
+            {shown.map((o) => (
+              <li key={o.value}>
+                <button type="button" role="option" aria-selected={o.value === value}
+                        onClick={() => { onChange(o.value); setOpen(false); setQuery(""); }}
+                        className={cn("flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-muted",
+                          o.value === value && "bg-primary/10 text-primary")}>
+                  <span className="truncate font-mono">{o.value}</span>
+                  {o.hint && <span className="ml-auto text-[11px] text-muted-foreground">{o.hint}</span>}
+                </button>
+              </li>
+            ))}
+            {shown.length === 0 && <li className="px-2 py-1.5 text-sm text-muted-foreground">No match</li>}
+          </ul>
         </div>
-        <div className="h-1.5 rounded-full bg-muted">
-          <div className="h-1.5 rounded-full bg-success" style={{ width: `${coverage}%` }} />
-        </div>
-      </div>
-      <p className="text-[11px] text-muted-foreground">
-        {s.health === "UNREACHABLE" ? "Not reachable with the current role"
-          : s.profiling_tables || s.active_jobs ? `Profiling ${s.profiling_tables || ""} now`.replace("  ", " ")
-          : s.last_profiled_at ? `Last profiled ${s.last_profiled_at.slice(0, 16)}` : "Not profiled yet"}
-      </p>
-    </button>
+      )}
+    </div>
   );
 }
 
-function StatusBadge({ t }: { t: InventoryTable }) {
-  const meta = STATUS_META[t.status];
+function StatusBadge({ status, error }: { status: ProfileStatus; error?: string | null }) {
+  const meta = STATUS_META[status];
   return (
-    <span title={t.error_message ?? undefined}>
+    <span title={error ?? undefined}>
       <Badge variant={meta.variant}>
-        {t.status === "PROFILING" && <Loader2 className="mr-1 h-3 w-3 animate-spin" />}
+        {status === "PROFILING" && <Loader2 className="mr-1 h-3 w-3 animate-spin" />}
         {meta.label}
       </Badge>
     </span>
   );
 }
 
-function AddSource({ databases, onAdded }: { databases: DatabaseRow[]; onAdded: (id: string) => void }) {
-  const [database, setDatabase] = useState("");
-  const [schemas, setSchemas] = useState<SchemaRow[]>([]);
-  const [schema, setSchema] = useState("");
-  const [name, setName] = useState("");
-  const [error, setError] = useState("");
-  const [pending, start] = useTransition();
-  const type = databases.find((d) => d.database_name === database)?.type === "IMPORTED DATABASE" ? "SNOWFLAKE_SHARE" : "SNOWFLAKE_DATABASE";
-  return (
-    <div className="flex flex-wrap items-end gap-3 rounded-xl border border-dashed bg-card p-4">
-      <div>
-        <label htmlFor="add_db" className="mb-1 block text-xs font-medium">Catalog</label>
-        <select id="add_db" value={database} className="h-9 w-56 rounded-md border bg-card px-2 text-sm"
-                onChange={(e) => {
-                  setDatabase(e.target.value); setSchema(""); setSchemas([]);
-                  if (e.target.value) start(async () => {
-                    try { setSchemas((await loadSchemas(e.target.value)).schemas); }
-                    catch (err) { setError(err instanceof Error ? err.message : "Could not list schemas"); }
-                  });
-                }}>
-          <option value="">Choose a database or share</option>
-          {databases.map((d) => <option key={d.database_name} value={d.database_name}>{d.database_name}</option>)}
-        </select>
-      </div>
-      <div>
-        <label htmlFor="add_schema" className="mb-1 block text-xs font-medium">Schema</label>
-        <select id="add_schema" value={schema} disabled={!schemas.length} onChange={(e) => setSchema(e.target.value)}
-                className="h-9 w-48 rounded-md border bg-card px-2 text-sm">
-          <option value="">{pending ? "Loading…" : "Choose a schema"}</option>
-          {schemas.map((s) => <option key={s.schema_name} value={s.schema_name}>{s.schema_name}</option>)}
-        </select>
-      </div>
-      <div>
-        <label htmlFor="add_name" className="mb-1 block text-xs font-medium">Name (optional)</label>
-        <Input id="add_name" value={name} onChange={(e) => setName(e.target.value)} placeholder={schema || "CRM"} className="w-40" />
-      </div>
-      <Button disabled={!database || !schema || pending} onClick={() => start(async () => {
-        setError("");
-        const r = await registerConnection({ database, schema, source_type: type, source_system_name: name || undefined });
-        if (!r.ok) setError(r.error);
-        else onAdded(r.data.source_system_id);
-      })}>
-        {pending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />} Connect source
-      </Button>
-      {error && <p role="alert" className="w-full text-sm text-destructive">{error}</p>}
-    </div>
-  );
-}
-
 export function SourcesHub({
-  initialOverview, databases, initialSelected, initialInventory,
+  initialOverview, initialStore, databases, initialTarget, initialInventory,
 }: {
-  initialOverview: SourcesOverview;
+  initialOverview: SourcesOverview | null;
+  initialStore: ProfileStoreRow[];
   databases: DatabaseRow[];
-  initialSelected: string;
-  initialInventory: SourceInventory | null;
+  initialTarget: Target | null;
+  initialInventory: CatalogInventory | null;
 }) {
   const router = useRouter();
   const [overview, setOverview] = useState(initialOverview);
-  const [selectedId, setSelectedId] = useState(initialSelected);
-  const [inventory, setInventory] = useState<SourceInventory | null>(initialInventory);
+  const [store, setStore] = useState(initialStore);
+  const [tab, setTab] = useState<"explore" | "store">("explore");
+  const [database, setDatabase] = useState(initialTarget?.database ?? "");
+  const [schema, setSchema] = useState(initialTarget?.schema ?? "");
+  const [schemas, setSchemas] = useState<SchemaRow[]>([]);
+  const [loadingSchemas, setLoadingSchemas] = useState(false);
+  const [inventory, setInventory] = useState<CatalogInventory | null>(initialInventory);
   const [loadingInventory, setLoadingInventory] = useState(false);
   const [checked, setChecked] = useState<string[]>([]);
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<ProfileStatus | "ALL">("ALL");
-  const [drawer, setDrawer] = useState<string | null>(null);
+  const [storeQuery, setStoreQuery] = useState("");
+  const [drawer, setDrawer] = useState<Drawer | null>(null);
   const [notice, setNotice] = useState<{ tone: "ok" | "error"; text: string } | null>(null);
-  const [adding, setAdding] = useState(initialOverview.sources.length === 0);
   const [modelingName, setModelingName] = useState("");
   const [confirmModeling, setConfirmModeling] = useState(false);
   const [pending, start] = useTransition();
 
-  const refresh = useCallback(async (id = selectedId) => {
-    const [ov, inv] = await Promise.all([loadOverview(), id ? loadInventory(id) : Promise.resolve(null)]);
-    if (ov.ok) setOverview(ov.data);
-    if (inv && inv.ok) setInventory(inv.data);
-    else if (inv && !inv.ok) setNotice({ tone: "error", text: inv.error });
-  }, [selectedId]);
-
-  const busyTables = useMemo(() => new Set((inventory?.jobs ?? []).flatMap((j) => j.tables)), [inventory]);
-  const tables = useMemo(() => (inventory?.tables ?? []).map((t) =>
-    busyTables.has(t.table_name) && t.status !== "PROFILING" ? { ...t, status: "PROFILING" as const } : t,
-  ), [inventory, busyTables]);
-  const profiling = tables.some((t) => t.status === "PROFILING");
-
   useEffect(() => {
-    if (!profiling) return;
-    const timer = setInterval(() => { void refresh(); }, 4000);
-    return () => clearInterval(timer);
-  }, [profiling, refresh]);
+    if (!initialTarget?.database) return;
+    loadSchemas(initialTarget.database).then((r) => setSchemas(r.schemas)).catch(() => undefined);
+  }, [initialTarget?.database]);
 
-  const selectSource = (id: string) => {
-    if (id === selectedId) return;
-    setSelectedId(id);
+  const openTarget = useCallback((next: Target) => {
+    setDatabase(next.database);
+    setSchema(next.schema);
     setChecked([]);
     setFilter("ALL");
     setNotice(null);
+    setConfirmModeling(false);
+    setTab("explore");
     setLoadingInventory(true);
-    router.replace(`/sources?source=${id}`, { scroll: false });
-    loadInventory(id).then((r) => {
+    router.replace(`/sources?db=${encodeURIComponent(next.database)}&schema=${encodeURIComponent(next.schema)}`, { scroll: false });
+    loadCatalogInventory(next.database, next.schema).then((r) => {
       if (r.ok) setInventory(r.data);
       else { setInventory(null); setNotice({ tone: "error", text: r.error }); }
       setLoadingInventory(false);
     });
+  }, [router]);
+
+  const pickDatabase = (name: string) => {
+    setDatabase(name);
+    setSchema("");
+    setSchemas([]);
+    setInventory(null);
+    setLoadingSchemas(true);
+    loadSchemas(name)
+      .then((r) => setSchemas(r.schemas))
+      .catch((e) => setNotice({ tone: "error", text: e instanceof Error ? e.message : "Could not list schemas" }))
+      .finally(() => setLoadingSchemas(false));
   };
+
+  const refresh = useCallback(async () => {
+    const [inv, st, ov] = await Promise.all([
+      database && schema ? loadCatalogInventory(database, schema) : Promise.resolve(null),
+      loadProfileStore(),
+      loadOverview(),
+    ]);
+    if (inv?.ok) setInventory(inv.data);
+    if (st.ok) setStore(st.data.profiles);
+    if (ov.ok) setOverview(ov.data);
+  }, [database, schema]);
+
+  const tables = inventory?.tables ?? [];
+  const profilingNow = tables.some((t) => t.status === "PROFILING") || store.some((r) => r.status === "PROFILING");
+  useEffect(() => {
+    if (!profilingNow) return;
+    const timer = setInterval(() => { void refresh(); }, 4000);
+    return () => clearInterval(timer);
+  }, [profilingNow, refresh]);
 
   const counts = useMemo(() => {
     const c: Record<string, number> = { ALL: tables.length };
@@ -212,94 +215,123 @@ export function SourcesHub({
   const chosen = tables.filter((t) => checked.includes(t.table_name));
   const allStaged = chosen.length > 0 && chosen.every((t) => t.status === "STAGED_READY_FOR_MODELING");
   const allVisibleChecked = visible.length > 0 && visible.every((t) => checked.includes(t.table_name));
-
   const toggle = (name: string) =>
     setChecked((prev) => (prev.includes(name) ? prev.filter((n) => n !== name) : [...prev, name]));
 
   const runProfile = (names: string[], force: boolean) => start(async () => {
     setNotice(null);
-    const r = await profileTables(selectedId, names, force);
+    const r = await profileCatalogTables(database, schema, names, force);
     if (!r.ok) { setNotice({ tone: "error", text: r.error }); return; }
-    setNotice({ tone: "ok", text: `Profiling ${r.data.tables.length} table(s) in place. Nothing is copied; results go to the profile store.` });
+    setNotice({ tone: "ok", text: `Profiling ${r.data.tables.length} table(s) of ${database}.${schema} in place. Nothing is copied.` });
     setChecked([]);
     await refresh();
   });
 
   const toModeling = () => start(async () => {
     setNotice(null);
-    const r = await sendToModeling(selectedId, checked, modelingName);
+    const r = await catalogModelingRun(database, schema, checked, modelingName);
     if (!r.ok) { setNotice({ tone: "error", text: r.error }); return; }
-    if (r.data.error) {
-      setNotice({ tone: "error", text: `Run created but stopped at ${r.data.stage}: ${r.data.error}` });
-      router.push(`/runs/${r.data.run_id}/source`);
-      return;
-    }
-    router.push(`/runs/${r.data.run_id}/mapping`);
+    router.push(r.data.error ? `/runs/${r.data.run_id}/source` : `/runs/${r.data.run_id}/mapping`);
   });
 
-  const source = overview.sources.find((s) => s.source_system_id === selectedId);
+  const quickTargets = useMemo(() => {
+    const seen = new Map<string, { target: Target; label: string; staged: number }>();
+    for (const r of store) {
+      const key = `${r.database_name}.${r.schema_name}`;
+      const item = seen.get(key) ?? { target: { database: r.database_name, schema: r.schema_name }, label: key, staged: 0 };
+      item.staged += r.status === "PROFILING" ? 0 : 1;
+      seen.set(key, item);
+    }
+    for (const s of overview?.sources ?? []) {
+      const key = `${s.database_name}.${s.schema_name}`;
+      if (!seen.has(key)) seen.set(key, { target: { database: s.database_name, schema: s.schema_name }, label: key, staged: 0 });
+    }
+    return Array.from(seen.values()).slice(0, 12);
+  }, [store, overview]);
+
+  const storeVisible = store.filter((r) =>
+    `${r.database_name}.${r.schema_name}.${r.table_name}`.toLowerCase().includes(storeQuery.toLowerCase()));
+  const storeSchemas = new Set(store.map((r) => `${r.database_name}.${r.schema_name}`)).size;
   const closeDrawer = useCallback(() => setDrawer(null), []);
+  const dbOptions = databases.map((d) => ({ value: d.database_name, hint: d.type === "IMPORTED DATABASE" ? "share" : undefined }));
+  const schemaOptions = schemas.map((s) => ({ value: s.schema_name }));
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-wrap items-end gap-3">
-        <div>
-          <h2>Sources</h2>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Profile tables where they live, stage the profiles once, and start modeling from any combination of them.
-            Profiling never copies data.
-          </p>
-        </div>
-        <Button variant="outline" className="ml-auto" onClick={() => setAdding((v) => !v)}>
-          <Plus className="h-4 w-4" /> Connect source
-        </Button>
+      <div>
+        <h2>Sources</h2>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Browse any database or share your role can read, profile the tables you choose where they live, and start
+          modeling from any combination of staged profiles. Profiling never copies data.
+        </p>
       </div>
 
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-        <Kpi label="Connected sources" value={overview.totals.sources} />
-        <Kpi label="Tables available" value={formatCount(overview.totals.tables)} />
-        <Kpi label="Staged & ready" value={overview.totals.staged}
-             hint={overview.totals.tables ? `${Math.round((overview.totals.staged / overview.totals.tables) * 100)}% coverage` : undefined} />
-        <Kpi label="Profiling now" value={overview.totals.profiling} />
+        <Kpi icon={Database} label="Catalogs available" value={databases.length} />
+        <Kpi icon={FolderTree} label="Schemas profiled" value={storeSchemas} />
+        <Kpi icon={Layers} label="Tables staged" value={store.filter((r) => r.status !== "PROFILING").length} />
+        <Kpi icon={Sparkles} label="Profiling now" value={store.filter((r) => r.status === "PROFILING").length} />
       </div>
 
-      {adding && (
-        <AddSource databases={databases} onAdded={(id) => {
-          setAdding(false);
-          start(async () => {
-            const ov = await loadOverview();
-            if (ov.ok) setOverview(ov.data);
-            selectSource(id);
-          });
-        }} />
+      <Card>
+        <CardContent className="space-y-4 pt-6">
+          <div className="flex flex-wrap items-end gap-3">
+            <Picker id="pick_db" label="Database" value={database} options={dbOptions} placeholder="Choose any database or share"
+                    onChange={pickDatabase} />
+            <Picker id="pick_schema" label="Schema" value={schema} options={schemaOptions} loading={loadingSchemas}
+                    placeholder={database ? "Choose a schema" : "Pick a database first"} disabled={!database || loadingSchemas}
+                    onChange={(s) => openTarget({ database, schema: s })} />
+          </div>
+          {quickTargets.length > 0 && (
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="flex items-center gap-1 text-[11px] uppercase tracking-wide text-muted-foreground">
+                <History className="h-3 w-3" /> Jump to
+              </span>
+              {quickTargets.map((q) => (
+                <button key={q.label} type="button" onClick={() => openTarget(q.target)}
+                        className={cn("rounded-full border px-3 py-1 font-mono text-[11px] hover:bg-muted",
+                          q.target.database === database && q.target.schema === schema && "border-primary bg-primary/10 text-primary")}>
+                  {q.label}{q.staged ? <span className="ml-1 text-success">· {q.staged} staged</span> : null}
+                </button>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <div className="flex gap-1 border-b" role="tablist">
+        {([
+          ["explore", database && schema ? `Explore ${database}.${schema}` : "Explore"],
+          ["store", `Profile store (${store.length})`],
+        ] as const).map(([value, label]) => (
+          <button key={value} type="button" role="tab" aria-selected={tab === value} onClick={() => setTab(value)}
+                  className={cn("-mb-px border-b-2 px-4 py-2 text-sm font-medium",
+                    tab === value ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground")}>
+            {label}
+          </button>
+        ))}
+        <Button variant="ghost" size="sm" className="ml-auto" disabled={pending} onClick={() => start(() => refresh())} aria-label="Refresh">
+          <RefreshCw className={cn("h-4 w-4", pending && "animate-spin")} />
+        </Button>
+      </div>
+
+      {notice && (
+        <p role={notice.tone === "error" ? "alert" : "status"}
+           className={cn("rounded-lg border px-3 py-2 text-sm", notice.tone === "error" ? "border-destructive/40 text-destructive" : "text-muted-foreground")}>
+          {notice.text}
+        </p>
       )}
 
-      {overview.sources.length > 0 && (
-        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-          {overview.sources.map((s) => (
-            <SourceCard key={s.source_system_id} s={s} active={s.source_system_id === selectedId}
-                        onClick={() => selectSource(s.source_system_id)} />
-          ))}
-        </div>
+      {tab === "explore" && !(database && schema) && (
+        <Card><CardContent className="py-12 text-center text-sm text-muted-foreground">
+          Pick a database and schema above, or jump to one you profiled before.
+        </CardContent></Card>
       )}
 
-      {source && (
+      {tab === "explore" && database && schema && (
         <Card>
-          <CardHeader className="flex flex-row flex-wrap items-end gap-3 space-y-0">
-            <div className="mr-auto">
-              <CardTitle className="flex items-center gap-2"><Database className="h-4 w-4 text-primary" /> {source.source_system_name} inventory</CardTitle>
-              <CardDescription className="font-mono text-xs">{source.database_name}.{source.schema_name}</CardDescription>
-            </div>
-            <div className="relative">
-              <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
-              <Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search tables" className="w-60 pl-8" />
-            </div>
-            <Button variant="ghost" size="sm" disabled={pending} onClick={() => start(() => refresh())} aria-label="Refresh inventory">
-              <RefreshCw className={cn("h-4 w-4", pending && "animate-spin")} />
-            </Button>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            <div className="flex flex-wrap items-center gap-1">
+          <CardContent className="space-y-3 pt-6">
+            <div className="flex flex-wrap items-center gap-2">
               {FILTERS.map((f) => (
                 <button key={f.value} type="button" onClick={() => setFilter(f.value)} aria-pressed={filter === f.value}
                         className={cn("rounded-full border px-3 py-1 text-xs",
@@ -307,6 +339,10 @@ export function SourcesHub({
                   {f.label} <span className="tabular-nums opacity-70">{counts[f.value] ?? 0}</span>
                 </button>
               ))}
+              <div className="relative ml-auto">
+                <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
+                <Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search tables" className="w-60 pl-8" />
+              </div>
             </div>
 
             <div className="sticky top-0 z-10 flex flex-wrap items-center gap-2 rounded-lg border bg-muted/60 px-3 py-2 backdrop-blur">
@@ -341,24 +377,15 @@ export function SourcesHub({
               <div className="flex flex-wrap items-end gap-3 rounded-lg border border-primary/40 bg-primary/5 p-3">
                 <div className="min-w-0 flex-1">
                   <p className="text-sm font-medium">Start a modeling run with {chosen.length} staged table{chosen.length === 1 ? "" : "s"}</p>
-                  <p className="text-xs text-muted-foreground">
-                    The run reads the tables in place and reuses their staged profiles, then opens at mapping.
-                  </p>
+                  <p className="text-xs text-muted-foreground">Reads the tables in place, reuses their staged profiles, then opens at mapping.</p>
                 </div>
                 <Input value={modelingName} onChange={(e) => setModelingName(e.target.value)}
-                       placeholder={`${source.source_system_name} modeling`} className="w-64" aria-label="Run name" />
+                       placeholder={`${schema} modeling`} className="w-64" aria-label="Run name" />
                 <Button disabled={pending} onClick={toModeling}>
                   {pending ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowRight className="h-4 w-4" />} Create run
                 </Button>
                 <Button variant="ghost" onClick={() => setConfirmModeling(false)}>Cancel</Button>
               </div>
-            )}
-
-            {notice && (
-              <p role={notice.tone === "error" ? "alert" : "status"}
-                 className={cn("text-sm", notice.tone === "error" ? "text-destructive" : "text-muted-foreground")}>
-                {notice.text}
-              </p>
             )}
 
             <Table>
@@ -377,11 +404,12 @@ export function SourcesHub({
               <TBody>
                 {loadingInventory && (
                   <TR><TD colSpan={10} className="py-6 text-center text-muted-foreground">
-                    <Loader2 className="mr-2 inline h-4 w-4 animate-spin" /> Reading the source catalog…
+                    <Loader2 className="mr-2 inline h-4 w-4 animate-spin" /> Reading {database}.{schema}…
                   </TD></TR>
                 )}
-                {!loadingInventory && visible.map((t) => {
+                {!loadingInventory && visible.map((t: InventoryTable) => {
                   const staged = t.status === "STAGED_READY_FOR_MODELING" || t.status === "STALE";
+                  const open = () => setDrawer({ database, schema, table: t.table_name });
                   return (
                     <TR key={t.table_name} className={cn(checked.includes(t.table_name) && "bg-primary/5")}>
                       <TD>
@@ -389,7 +417,7 @@ export function SourcesHub({
                                checked={checked.includes(t.table_name)} onChange={() => toggle(t.table_name)} />
                       </TD>
                       <TD>
-                        <button type="button" disabled={!staged} onClick={() => setDrawer(t.table_name)}
+                        <button type="button" disabled={!staged} onClick={open}
                                 className={cn("text-left font-medium", staged && "text-primary hover:underline")}>
                           {t.table_name}
                         </button>
@@ -398,7 +426,7 @@ export function SourcesHub({
                       <TD className="text-sm">{t.domain_name ?? <span className="text-muted-foreground">—</span>}</TD>
                       <TD className="text-right tabular-nums">{formatCount(t.row_count)}</TD>
                       <TD className="text-right tabular-nums">{t.column_count}</TD>
-                      <TD><StatusBadge t={t} /></TD>
+                      <TD><StatusBadge status={t.status} error={t.error_message} /></TD>
                       <TD className="text-xs text-muted-foreground">
                         {staged ? (
                           <span>
@@ -415,7 +443,7 @@ export function SourcesHub({
                       <TD className="text-right">
                         <div className="inline-flex gap-1">
                           {staged && (
-                            <Button size="sm" variant="ghost" onClick={() => setDrawer(t.table_name)} aria-label={`View profile of ${t.table_name}`}>
+                            <Button size="sm" variant="ghost" onClick={open} aria-label={`View profile of ${t.table_name}`}>
                               <Eye className="h-3.5 w-3.5" />
                             </Button>
                           )}
@@ -438,7 +466,7 @@ export function SourcesHub({
             </Table>
             <div className="flex flex-wrap gap-4 pt-1 text-[11px] text-muted-foreground">
               <span className="flex items-center gap-1"><CircleDashed className="h-3 w-3" /> Unprofiled: no stored profile</span>
-              <span className="flex items-center gap-1"><CheckCircle2 className="h-3 w-3 text-success" /> Staged: profile on @METADATA.PROFILES_STAGE matches the source</span>
+              <span className="flex items-center gap-1"><CheckCircle2 className="h-3 w-3 text-success" /> Staged: stored profile matches the source</span>
               <span className="flex items-center gap-1"><AlertTriangle className="h-3 w-3 text-warning" /> Stale: columns, row count or last change differ</span>
               <span className="flex items-center gap-1"><XCircle className="h-3 w-3 text-destructive" /> Failed: hover for the reason</span>
             </div>
@@ -446,13 +474,70 @@ export function SourcesHub({
         </Card>
       )}
 
-      {!source && !adding && (
-        <Card><CardContent className="py-10 text-center text-sm text-muted-foreground">
-          No sources connected yet. Connect a database or share to start profiling.
-        </CardContent></Card>
+      {tab === "store" && (
+        <Card>
+          <CardContent className="space-y-3 pt-6">
+            <div className="flex flex-wrap items-center gap-2">
+              <p className="text-sm text-muted-foreground">
+                Every profile on <span className="font-mono">@METADATA.PROFILES_STAGE</span>, from any database. Open one to
+                inspect it, or jump to its schema to profile more or start modeling.
+              </p>
+              <div className="relative ml-auto">
+                <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
+                <Input value={storeQuery} onChange={(e) => setStoreQuery(e.target.value)} placeholder="Search database, schema or table" className="w-72 pl-8" />
+              </div>
+            </div>
+            <Table>
+              <THead>
+                <TR>
+                  <TH>Table</TH><TH>Database.schema</TH><TH className="text-right">Rows</TH><TH className="text-right">Cols</TH>
+                  <TH>Quality</TH><TH>Status</TH><TH>Profiled</TH><TH className="text-right">Actions</TH>
+                </TR>
+              </THead>
+              <TBody>
+                {storeVisible.map((r) => (
+                  <TR key={`${r.source_name}.${r.database_name}.${r.schema_name}.${r.table_name}`}>
+                    <TD className="font-medium">{r.table_name}</TD>
+                    <TD>
+                      <button type="button" className="font-mono text-xs text-primary hover:underline"
+                              onClick={() => openTarget({ database: r.database_name, schema: r.schema_name })}>
+                        {r.database_name}.{r.schema_name}
+                      </button>
+                    </TD>
+                    <TD className="text-right tabular-nums">{formatCount(r.row_count)}</TD>
+                    <TD className="text-right tabular-nums">{r.column_count ?? "—"}</TD>
+                    <TD className="text-xs text-muted-foreground">
+                      {r.avg_null_percentage != null ? `${Number(r.avg_null_percentage).toFixed(1)}% null` : "—"}
+                      {r.key_candidates ? ` · ${r.key_candidates} key` : ""}
+                      {r.pii_columns ? <span className="text-destructive"> · {r.pii_columns} PII</span> : ""}
+                    </TD>
+                    <TD>
+                      <StatusBadge status={r.status === "PROFILING" ? "PROFILING" : r.status === "FAILED" ? "FAILED" : "STAGED_READY_FOR_MODELING"}
+                                   error={r.error_message} />
+                    </TD>
+                    <TD className="text-xs text-muted-foreground">{r.profiled_at?.slice(0, 16)}</TD>
+                    <TD className="text-right">
+                      {r.status !== "PROFILING" && (
+                        <Button size="sm" variant="ghost" aria-label={`View profile of ${r.table_name}`}
+                                onClick={() => setDrawer({ database: r.database_name, schema: r.schema_name, table: r.table_name })}>
+                          <Eye className="h-3.5 w-3.5" />
+                        </Button>
+                      )}
+                    </TD>
+                  </TR>
+                ))}
+                {storeVisible.length === 0 && (
+                  <TR><TD colSpan={8} className="py-6 text-center text-muted-foreground">
+                    {store.length ? "Nothing matches that search." : "Nothing profiled yet. Explore a schema and profile some tables."}
+                  </TD></TR>
+                )}
+              </TBody>
+            </Table>
+          </CardContent>
+        </Card>
       )}
 
-      {drawer && <ProfileDrawer sourceId={selectedId} table={drawer} onClose={closeDrawer} />}
+      {drawer && <ProfileDrawer database={drawer.database} schema={drawer.schema} table={drawer.table} onClose={closeDrawer} />}
     </div>
   );
 }

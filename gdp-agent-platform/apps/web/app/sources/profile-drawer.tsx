@@ -5,7 +5,7 @@ import { FileJson, KeyRound, Loader2, ShieldAlert, X } from "lucide-react";
 import type { ProfileColumn, TableProfileDoc } from "@/lib/types";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
-import { loadTableProfile } from "./actions";
+import { loadCatalogProfile } from "./actions";
 
 function Meter({ value, tone = "primary" }: { value: number; tone?: "primary" | "warning" | "destructive" }) {
   const pct = Math.max(0, Math.min(100, value));
@@ -85,7 +85,9 @@ function ColumnCard({ c }: { c: ProfileColumn }) {
   );
 }
 
-export function ProfileDrawer({ sourceId, table, onClose }: { sourceId: string; table: string; onClose: () => void }) {
+export function ProfileDrawer({ database, schema, table, onClose }: {
+  database: string; schema: string; table: string; onClose: () => void;
+}) {
   const [doc, setDoc] = useState<TableProfileDoc | null>(null);
   const [error, setError] = useState("");
   const [query, setQuery] = useState("");
@@ -94,7 +96,7 @@ export function ProfileDrawer({ sourceId, table, onClose }: { sourceId: string; 
     let live = true;
     setDoc(null);
     setError("");
-    loadTableProfile(sourceId, table).then((r) => {
+    loadCatalogProfile(database, schema, table).then((r) => {
       if (!live) return;
       if (r.ok) setDoc(r.data);
       else setError(r.error);
@@ -102,7 +104,7 @@ export function ProfileDrawer({ sourceId, table, onClose }: { sourceId: string; 
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
     window.addEventListener("keydown", onKey);
     return () => { live = false; window.removeEventListener("keydown", onKey); };
-  }, [sourceId, table, onClose]);
+  }, [database, schema, table, onClose]);
 
   const p = doc?.profile;
   const columns = (p?.columns ?? []).filter((c) => c.column_name.toLowerCase().includes(query.toLowerCase()));
@@ -118,6 +120,7 @@ export function ProfileDrawer({ sourceId, table, onClose }: { sourceId: string; 
           <FileJson className="mt-0.5 h-5 w-5 text-primary" />
           <div className="min-w-0">
             <h3 className="truncate text-base font-semibold">{table}</h3>
+            <p className="truncate font-mono text-[11px] text-muted-foreground">{database}.{schema}</p>
             <p className="truncate font-mono text-[11px] text-muted-foreground">
               @METADATA.PROFILES_STAGE/{doc?.entry.profile_stage_path ?? "…"}
             </p>

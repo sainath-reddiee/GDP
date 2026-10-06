@@ -2879,3 +2879,179 @@ def send_to_modeling(source_id: str, body: ModelingRunRequest, db: Db = Depends(
     summary = (profiled or {}).get("profiled") or {}
     return {"run_id": run_id, "stage": "MAPPING", "cache_hits": summary.get("cache_hits"),
             "computed": summary.get("computed"), "state": (profiled or {}).get("state")}
+
+
+# ---------------------------------------------------------------- Catalog-first profiling: any database, any schema
+
+
+def _catalog_store_rows(db: Db, database: str, schema: str) -> dict[str, dict]:
+    """Latest profile-store row per table of database.schema, whichever source name profiled it."""
+    try:
+        found = db.query(
+            """
+            SELECT SOURCE_NAME, DATABASE_NAME, SCHEMA_NAME, TABLE_NAME, ROW_COUNT, COLUMN_COUNT, PROFILE_STAGE_PATH,
+                   SOURCE_FINGERPRINT, IS_APPROXIMATE, PROFILED_IN_RUN, PROFILED_BY, PROFILED_AT::VARCHAR AS PROFILED_AT,
+                   STATUS, STATUS_UPDATED_AT::VARCHAR AS STATUS_UPDATED_AT, ERROR_MESSAGE, AVG_NULL_PERCENTAGE,
+                   KEY_CANDIDATES, PII_COLUMNS
+              FROM METADATA.TABLE_PROFILES
+             WHERE DATABASE_NAME = %s AND SCHEMA_NAME = %s
+           QUALIFY ROW_NUMBER() OVER (PARTITION BY TABLE_NAME
+                                      ORDER BY IFF(STATUS = 'PROFILING', 0, 1), STATUS_UPDATED_AT DESC NULLS LAST) = 1
+            """,
+            (database, schema),
+        )
+    except Exception:
+        return {}
+    return {r["table_name"]: r for r in found}
+
+
+def _registered_source(db: Db, database: str, schema: str) -> Optional[dict]:
+    found = db.query(
+        """
+        SELECT SOURCE_SYSTEM_ID, SOURCE_SYSTEM_NAME, SOURCE_TYPE,
+               CONFIGURATION_JSON:database::VARCHAR AS DATABASE_NAME, CONFIGURATION_JSON:schema::VARCHAR AS SCHEMA_NAME
+          FROM SOURCE.SOURCE_REGISTRY
+         WHERE ACTIVE_FLAG AND CONFIGURATION_JSON:database::VARCHAR = %s AND CONFIGURATION_JSON:schema::VARCHAR = %s
+         ORDER BY CREATED_AT LIMIT 1
+        """,
+        (database, schema),
+    )
+    return found[0] if found else None
+
+
+def _catalog_inventory(db: Db, database: str, schema: str) -> dict:
+    src = {"database_name": database, "schema_name": schema}
+    try:
+        tables = _source_tables(db, src)
+    except Exception as exc:
+        raise _snowflake_error(exc) from exc
+    store = _catalog_store_rows(db, database, schema)
+    domains: dict[str, str] = {}
+    try:
+        for r in db.query(
+            """
+            SELECT O.OBJECT_NAME, D.DOMAIN_NAME
+              FROM SOURCE.SOURCE_OBJECT O
+              JOIN CORE.WORKFLOW_RUN R ON R.RUN_ID = O.RUN_ID
+              JOIN KNOWLEDGE.DOMAIN_REGISTRY D ON D.DOMAIN_ID = R.DOMAIN_ID
+             WHERE O.SOURCE_DATABASE = %s AND O.SOURCE_SCHEMA = %s AND O.SELECTED_FLAG
+           QUALIFY ROW_NUMBER() OVER (PARTITION BY O.OBJECT_NAME ORDER BY O.DISCOVERED_AT DESC) = 1
+            """,
+            (database, schema),
+        ):
+            domains[r["object_name"]] = r["domain_name"]
+    except Exception:
+        pass
+    registered = _registered_source(db, database, schema)
+    jobs = _active_jobs(registered["source_system_id"]) if registered else []
+    busy = {t for j in jobs for t in j["tables"]}
+    inventory = []
+    for t in tables:
+        entry = store.get(t["table_name"])
+        status = "PROFILING" if t["table_name"] in busy else _table_status(entry, t["fingerprint"])
+        staged = bool(entry and entry.get("source_fingerprint"))
+        inventory.append({
+            "table_name": t["table_name"], "table_type": t["table_type"], "row_count": t["row_count"],
+            "bytes": t["bytes"], "column_count": t["column_count"], "last_altered": t["last_altered"],
+            "status": status, "domain_name": domains.get(t["table_name"]),
+            "stage_path": entry["profile_stage_path"] if staged else None,
+            "profiled_at": entry["profiled_at"] if staged else None,
+            "profiled_by": entry.get("profiled_by") if staged else None,
+            "avg_null_percentage": entry.get("avg_null_percentage") if staged else None,
+            "key_candidates": entry.get("key_candidates") if staged else None,
+            "pii_columns": entry.get("pii_columns") if staged else None,
+            "is_approximate": entry.get("is_approximate") if staged else None,
+            "error_message": entry.get("error_message") if entry and status == "FAILED" else None,
+        })
+    return {"database": database, "schema": schema, "source": registered, "tables": inventory, "jobs": jobs}
+
+
+@app.get("/api/catalog/inventory")
+def catalog_inventory(database: str, schema: str, db: Db = Depends(current_db)):
+    """Tables of any database.schema the role can read, with profile-store status. Read only."""
+    return _catalog_inventory(db, _ident(database, "database"), _ident(schema, "schema"))
+
+
+@app.get("/api/catalog/profile")
+def catalog_table_profile(database: str, schema: str, table: str, db: Db = Depends(current_db)):
+    """The staged profile document of any profiled table, read from @METADATA.PROFILES_STAGE."""
+    from services.profiling.profiler import STAGE_PATH
+
+    database, schema, table = _ident(database, "database"), _ident(schema, "schema"), _ident(table, "table")
+    entry = _catalog_store_rows(db, database, schema).get(table)
+    if not entry or not entry.get("source_fingerprint") or not STAGE_PATH.match(entry["profile_stage_path"] or ""):
+        raise HTTPException(404, f"{table} has no staged profile yet")
+    found = db.query(f"SELECT $1 AS DOC FROM @METADATA.PROFILES_STAGE/{entry['profile_stage_path']} "
+                     "(FILE_FORMAT => 'METADATA.PROFILE_JSON_FORMAT')")
+    if not found:
+        raise HTTPException(404, f"the staged file for {table} is missing; re-profile it")
+    doc = found[0]["doc"]
+    return {"entry": entry, "profile": json.loads(doc) if isinstance(doc, str) else doc}
+
+
+@app.get("/api/profiles/store")
+def profile_store(db: Db = Depends(current_db)):
+    """Every staged profile across all databases, newest first."""
+    rows = [r for r in _store_rows(db) if r.get("source_fingerprint") or r.get("status") == "PROFILING"]
+    rows.sort(key=lambda r: r.get("status_updated_at") or r.get("profiled_at") or "", reverse=True)
+    return {"profiles": rows}
+
+
+class CatalogTarget(BaseModel):
+    database: str = Field(min_length=1, max_length=255)
+    schema_name: str = Field(min_length=1, max_length=255, alias="schema")
+
+
+def _ensure_source(db: Db, database: str, schema: str) -> dict:
+    """The registered connection for database.schema, registering one on first use (profiling or modeling).
+    Browsing never registers anything."""
+    from services.source.procedures import register_connection
+
+    existing = _registered_source(db, database, schema)
+    if existing:
+        return existing
+    kind = db.query(f"SELECT TYPE FROM {DATABASE}.INFORMATION_SCHEMA.DATABASES WHERE DATABASE_NAME = %s", (database,))
+    source_type = "SNOWFLAKE_SHARE" if kind and kind[0]["type"] == "IMPORTED DATABASE" else "SNOWFLAKE_DATABASE"
+    clean = lambda v: re.sub(r"[^A-Za-z0-9_]", "_", v).strip("_") or "SOURCE"  # noqa: E731
+    base = clean(schema)
+    candidates = [base, f"{clean(database)}_{base}", f"{clean(database)}_{base}_{uuid.uuid4().hex[:4].upper()}"]
+    last_error: Exception | None = None
+    for name in candidates:
+        name = (name if re.match(r"^[A-Za-z]", name) else f"SRC_{name}")[:64]
+        payload = json.dumps({"SOURCE_SYSTEM_NAME": name, "SOURCE_TYPE": source_type,
+                              "DATABASE": database, "SCHEMA": schema})
+        try:
+            _source_call(db, "CALL SOURCE.REGISTER_CONNECTION(%s)", register_connection, payload)
+            break
+        except Exception as exc:
+            last_error = exc
+            if "SOURCE_NAME_CONFLICT" not in str(exc):
+                raise _snowflake_error(exc) from exc
+    registered = _registered_source(db, database, schema)
+    if not registered:
+        raise _snowflake_error(last_error or RuntimeError("could not register the source"))
+    return registered
+
+
+class CatalogProfileRequest(CatalogTarget):
+    tables: list[str] = Field(min_length=1, max_length=500)
+    force_refresh: bool = False
+
+
+@app.post("/api/catalog/profile-tables")
+def catalog_profile_tables(body: CatalogProfileRequest, db: Db = Depends(current_db)):
+    """Profile any tables of any database.schema in place; registers the connection on first use."""
+    src = _ensure_source(db, _ident(body.database, "database"), _ident(body.schema_name, "schema"))
+    return profile_source_tables(src["source_system_id"],
+                                 SourceProfileRequest(tables=body.tables, force_refresh=body.force_refresh), db)
+
+
+class CatalogModelingRequest(CatalogTarget):
+    tables: list[str] = Field(min_length=1, max_length=500)
+    run_name: Optional[str] = Field(default=None, max_length=256)
+
+
+@app.post("/api/catalog/modeling-run")
+def catalog_modeling_run(body: CatalogModelingRequest, db: Db = Depends(current_db)):
+    src = _ensure_source(db, _ident(body.database, "database"), _ident(body.schema_name, "schema"))
+    return send_to_modeling(src["source_system_id"], ModelingRunRequest(tables=body.tables, run_name=body.run_name), db)

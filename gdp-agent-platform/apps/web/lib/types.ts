@@ -226,3 +226,19 @@ export type TableProfileDoc = {
     source: { source_name: string; database: string; schema: string; table: string };
   };
 };
+
+export type CatalogInventory = {
+  database: string;
+  schema: string;
+  source: { source_system_id: string; source_system_name: string } | null;
+  tables: InventoryTable[];
+  jobs: { job_id: string; tables: string[]; started_at: number }[];
+};
+
+export type ProfileStoreRow = {
+  source_name: string; database_name: string; schema_name: string; table_name: string;
+  row_count: number | null; column_count: number | null; profile_stage_path: string;
+  is_approximate: boolean | null; profiled_by: string | null; profiled_at: string;
+  status: string | null; status_updated_at: string | null; error_message: string | null;
+  avg_null_percentage: number | null; key_candidates: number | null; pii_columns: number | null;
+};

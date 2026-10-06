@@ -1,18 +1,26 @@
 import { api } from "@/lib/api";
-import type { SourceInventory, SourcesOverview } from "@/lib/types";
+import type { CatalogInventory, ProfileStoreRow, SourcesOverview } from "@/lib/types";
 import type { DatabaseRow } from "@/app/onboarding/catalog-types";
 import { SourcesHub } from "./sources-hub";
 
-export default async function SourcesPage({ searchParams }: { searchParams: { source?: string } }) {
-  const [overview, { databases }] = await Promise.all([
-    api<SourcesOverview>("/api/sources/overview"),
+export default async function SourcesPage({ searchParams }: { searchParams: { db?: string; schema?: string } }) {
+  const [overview, { profiles }, { databases }] = await Promise.all([
+    api<SourcesOverview>("/api/sources/overview").catch(() => null),
+    api<{ profiles: ProfileStoreRow[] }>("/api/profiles/store").catch(() => ({ profiles: [] as ProfileStoreRow[] })),
     api<{ databases: DatabaseRow[] }>("/api/sources/databases").catch(() => ({ databases: [] as DatabaseRow[] })),
   ]);
-  const selectedId = overview.sources.some((s) => s.source_system_id === searchParams.source)
-    ? searchParams.source!
-    : overview.sources[0]?.source_system_id ?? "";
-  const inventory = selectedId
-    ? await api<SourceInventory>(`/api/sources/${selectedId}/inventory`).catch(() => null)
+  // An explicit ?db=&schema= wins; otherwise reopen the schema profiled most recently. Nothing is preselected
+  // when nothing was profiled yet, so the user starts from the catalog pickers.
+  const target = searchParams.db && searchParams.schema
+    ? { database: searchParams.db.toUpperCase(), schema: searchParams.schema.toUpperCase() }
+    : profiles[0] ? { database: profiles[0].database_name, schema: profiles[0].schema_name } : null;
+  const inventory = target
+    ? await api<CatalogInventory>(
+        `/api/catalog/inventory?database=${encodeURIComponent(target.database)}&schema=${encodeURIComponent(target.schema)}`,
+      ).catch(() => null)
     : null;
-  return <SourcesHub initialOverview={overview} databases={databases} initialSelected={selectedId} initialInventory={inventory} />;
+  return (
+    <SourcesHub initialOverview={overview} initialStore={profiles} databases={databases}
+                initialTarget={target} initialInventory={inventory} />
+  );
 }
