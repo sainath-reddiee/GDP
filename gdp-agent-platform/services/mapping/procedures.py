@@ -90,8 +90,11 @@ def source_columns(session, run_id: str) -> List[Dict[str, Any]]:
     return out
 
 
-def domain_knowledge(session, domain_id: str, run_id: str) -> Dict[str, Any]:
+def domain_knowledge(session, domain_id: str, run_id: str, target: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Knowledge for one run. Learned evidence (reviewer patterns, past decisions) is scoped to the run's domain and
+    target table, so a column name approved for one company's table never steers an unrelated table."""
     knowledge: Dict[str, Any] = {"glossary": {}, "rules": {}, "transforms": [], "history": [], "notes": []}
+    target_name = str((target or {}).get("TARGET_TABLE") or "").upper()
     for k in rows(session, """SELECT KNOWLEDGE_TYPE, CONTENT_JSON FROM KNOWLEDGE.DOMAIN_KNOWLEDGE
                               WHERE DOMAIN_ID = ? AND IS_CURRENT AND STATUS = 'ACTIVE' AND CONTENT_JSON IS NOT NULL""",
                   [domain_id]):
@@ -106,6 +109,8 @@ def domain_knowledge(session, domain_id: str, run_id: str) -> Dict[str, Any]:
         elif kind == "TRANSFORMATION_RULE":
             knowledge["transforms"].append(content)
         elif kind == "MAPPING_PATTERN" and content.get("source_column") and content.get("target_column"):
+            if target_name and content.get("target_table") and str(content["target_table"]).upper() != target_name:
+                continue
             knowledge["history"].append((content["source_column"], content["target_column"], 1.0))
             if content.get("justification") or content.get("overridden"):
                 knowledge["notes"].append(
@@ -117,8 +122,11 @@ def domain_knowledge(session, domain_id: str, run_id: str) -> Dict[str, Any]:
                               FROM MAPPING.MAPPING_DECISION D
                               JOIN SOURCE.LANDING_COLUMN_REGISTRY L ON L.LANDING_COLUMN_ID = D.SOURCE_COLUMN_ID
                               JOIN KNOWLEDGE.TARGET_COLUMN_REGISTRY T ON T.TARGET_COLUMN_ID = D.TARGET_COLUMN_ID
-                              WHERE D.IS_CURRENT AND D.RUN_ID <> ? AND D.DECISION IN ('APPROVED', 'MODIFIED', 'ALTERNATIVE_TARGET')""",
-                  [run_id]):
+                              JOIN KNOWLEDGE.TARGET_TABLE_REGISTRY TT ON TT.TARGET_TABLE_ID = T.TARGET_TABLE_ID
+                              WHERE D.IS_CURRENT AND D.RUN_ID <> ? AND D.DECISION IN ('APPROVED', 'MODIFIED', 'ALTERNATIVE_TARGET')
+                                AND TT.DOMAIN_ID = ? AND (NULLIF(?, '') IS NULL OR TT.TARGET_TABLE_ID = ?)""",
+                  [run_id, domain_id or "", (target or {}).get("TARGET_TABLE_ID") or "",
+                   (target or {}).get("TARGET_TABLE_ID") or ""]):
         knowledge["history"].append((h["SRC"], h["TGT"], 1.0))
     return knowledge
 
@@ -240,7 +248,7 @@ def generate_mapping_candidates(session, run_id: str) -> Dict[str, Any]:
             mappable = features.mappable_targets(targets)
             sources = source_columns(session, run_id)
             assert sources, "no current profile for this run"
-            knowledge = domain_knowledge(session, run["DOMAIN_ID"], run_id)
+            knowledge = domain_knowledge(session, run["DOMAIN_ID"], run_id, target)
             cfg = _scoring_config(session, run["DOMAIN_ID"])
             top_k = int(config_value(session, "MAPPING_TOP_K", 3))
             model = config_value(session, "EMBED_MODEL", EMBED_MODEL_DEFAULT)

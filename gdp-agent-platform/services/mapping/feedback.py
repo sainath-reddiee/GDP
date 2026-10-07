@@ -29,7 +29,8 @@ def pattern(source_column: str, source_table: str, target_column: Optional[str],
     if justification:
         bits.append(f"justification: {justification}")
     return {
-        "source_reference": f"feedback.{source_column.upper()}",
+        # keyed by target and source table too: the same column name in another table is a different fact
+        "source_reference": f"feedback.{str(target_table).upper()}.{str(source_table).upper()}.{source_column.upper()}",
         "title": title[:500],
         "content": ". ".join(bits) + ".",
         "content_json": {

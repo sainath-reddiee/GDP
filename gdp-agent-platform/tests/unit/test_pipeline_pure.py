@@ -184,7 +184,7 @@ def test_reviewer_feedback_becomes_a_pattern():
     item = feedback_pattern("CUST_ID", "CRM_CUSTOMER", "CUSTOMER_ID", "DIM_CUSTOMER",
                             "MODIFIED", "TRIM(cust_id)", "enterprise key", "CUSTOMER_NAME")
     assert item["active"] and item["content_json"]["overridden"]
-    assert item["source_reference"] == "feedback.CUST_ID"
+    assert item["source_reference"] == "feedback.DIM_CUSTOMER.CRM_CUSTOMER.CUST_ID"
     rejected = feedback_pattern("PHONE_NO", "CRM_CUSTOMER", None, "DIM_CUSTOMER", "REJECTED", None, None, "PHONE")
     assert rejected["active"] is False
 

@@ -258,6 +258,57 @@ def pii_classification(semantic_type: str) -> str:
     return PII_TYPES.get(semantic_type, "NONE")
 
 
+VALUE_PII = (
+    ("SSN", re.compile(r"^\d{3}-\d{2}-\d{4}$")),
+    ("EMAIL", re.compile(r"^[^@\s]+@[^@\s]+\.[A-Za-z]{2,}$")),
+    ("IP_ADDRESS", re.compile(r"^(25[0-5]|2[0-4]\d|1?\d?\d)(\.(25[0-5]|2[0-4]\d|1?\d?\d)){3}$")),
+    ("PHONE", re.compile(r"^\+?[\d\s().-]{10,20}$")),
+)
+VALUE_PII_SHARE = 0.8
+
+
+def _luhn(digits: str) -> bool:
+    total = 0
+    for i, ch in enumerate(reversed(digits)):
+        d = int(ch) * (2 if i % 2 else 1)
+        total += d - 9 if d > 9 else d
+    return total % 10 == 0
+
+
+def _value_kind(value: str) -> Optional[str]:
+    v = value.strip()
+    digits = re.sub(r"[\s-]", "", v)
+    if digits.isdigit() and 13 <= len(digits) <= 19 and _luhn(digits) and (len(digits) != len(v) or len(v) >= 15):
+        return "CARD"
+    for kind, pattern in VALUE_PII:
+        if pattern.match(v):
+            if kind == "PHONE":  # formatted numbers only: a bare digit run is far more often an id
+                count = sum(c.isdigit() for c in v)
+                if not (10 <= count <= 15) or v.isdigit():
+                    continue
+            return kind
+    return None
+
+
+def value_pii(frequencies: Sequence[Dict[str, Any]]) -> str:
+    """PII detected from the values themselves (any column name or language): SSN, card (Luhn), email, phone, IP.
+    A kind is reported when it covers most of the observed values."""
+    seen: Dict[str, int] = {}
+    total = 0
+    for f in frequencies or []:
+        if f.get("value") is None:
+            continue
+        n = int(f.get("count") or 1)
+        total += n
+        kind = _value_kind(str(f["value"]))
+        if kind:
+            seen[kind] = seen.get(kind, 0) + n
+    if not total or not seen:
+        return "NONE"
+    kind, hits = max(seen.items(), key=lambda kv: kv[1])
+    return kind if hits / total >= VALUE_PII_SHARE else "NONE"
+
+
 def mask(value: Optional[str], pii: str) -> Optional[str]:
     if value is None or pii == "NONE":
         return value
@@ -269,6 +320,9 @@ def mask(value: Optional[str], pii: str) -> Optional[str]:
         return "***" + v[-2:] if len(v) > 2 else "***"
     if pii == "NAME":
         return (v.strip()[:1] + "***") if v.strip() else "***"
+    if pii in ("SSN", "CARD"):
+        digits = re.sub(r"\D", "", v)
+        return "***" + digits[-4:] if len(digits) > 8 else "***"
     return "***"
 
 
@@ -292,6 +346,8 @@ def build_profile(name: str, data_type: str, stats: Dict[str, Any], frequencies:
     card = cardinality(stats.get("distinct_count"), non_null)
     semantic = infer_semantic_type(name, family, patterns, card)
     pii = pii_classification(semantic)
+    if pii == "NONE" and family in ("TEXT", "OTHER"):
+        pii = value_pii(frequencies)
     if pii != "NONE":
         stats = {**stats, "min": None, "max": None}
     masked_freq = [{"value": mask(f["value"], pii), "count": f["count"]} for f in frequencies]

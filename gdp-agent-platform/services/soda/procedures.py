@@ -97,7 +97,7 @@ def _driving_table(design: Dict[str, Any], lines: List[Dict[str, Any]]) -> str |
 def _rejected(session, domain_id: str) -> List[Dict[str, Any]]:
     found = rows(session, """SELECT CONTENT_JSON FROM KNOWLEDGE.DOMAIN_KNOWLEDGE
                              WHERE IS_CURRENT AND KNOWLEDGE_TYPE = 'SODA_PATTERN'
-                               AND (DOMAIN_ID = ? OR SOURCE_REFERENCE LIKE 'SODA.%')""", [domain_id])
+                               AND DOMAIN_ID = ?""", [domain_id])
     out = []
     for row in found:
         payload = variant(row["CONTENT_JSON"]) or {}
@@ -110,9 +110,7 @@ def _knowledge(session, domain_id: str) -> List[str]:
     found = rows(session, """SELECT TITLE, CONTENT FROM KNOWLEDGE.DOMAIN_KNOWLEDGE
                              WHERE IS_CURRENT AND KNOWLEDGE_TYPE IN
                                    ('SODA_PATTERN', 'BUSINESS_RULE', 'EXCEPTION', 'TRANSFORMATION_RULE', 'STTM_TEMPLATE')
-                               AND (DOMAIN_ID = ? OR SOURCE_REFERENCE LIKE 'SODA.%'
-                                    OR SOURCE_REFERENCE LIKE 'soda.brief.%' OR SOURCE_REFERENCE LIKE 'transform.%'
-                                    OR SOURCE_REFERENCE LIKE 'sttm.csv.%')
+                               AND DOMAIN_ID = ?
                              ORDER BY UPDATED_AT DESC NULLS LAST LIMIT 16""", [domain_id])
     return [f"{r['TITLE']}: {r['CONTENT']}" for r in found]
 
@@ -120,10 +118,12 @@ def _knowledge(session, domain_id: str) -> List[str]:
 def _transform_checks(session, domain_id: str, table: str) -> List[Dict[str, Any]]:
     found = rows(session, """SELECT CONTENT_JSON FROM KNOWLEDGE.DOMAIN_KNOWLEDGE
                              WHERE IS_CURRENT AND STATUS = 'ACTIVE' AND KNOWLEDGE_TYPE = 'TRANSFORMATION_RULE'
-                               AND (DOMAIN_ID = ? OR SOURCE_REFERENCE LIKE 'transform.%')""", [domain_id])
+                               AND DOMAIN_ID = ?""", [domain_id])
     out = []
     for row in found:
         content = normalize_content("TRANSFORMATION_RULE", variant(row["CONTENT_JSON"])) or {}
+        if content.get("target_table") and str(content["target_table"]).upper() != str(table).upper():
+            continue  # a rule learned on another target table
         target = content.get("target_column")
         for raw in content.get("soda_checks") or []:
             item = dict(raw)

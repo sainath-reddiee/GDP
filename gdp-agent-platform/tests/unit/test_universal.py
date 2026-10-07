@@ -163,3 +163,21 @@ def test_dbt_never_guesses_a_row_key():
     assert picked[0]["source_column"] == "order_no" and "profiled as unique" in reason
     picked, _ = _unique_key(cols, ["NAME"], {}, "T", {"T": []})
     assert picked[0]["target_column"] == "NAME"
+
+
+def test_pii_detected_from_values_whatever_the_column_is_called():
+    from services.profiling.profiler import build_profile, value_pii
+
+    freq = lambda *vals: [{"value": v, "count": 1} for v in vals]  # noqa: E731
+    assert value_pii(freq("123-45-6789", "987-65-4321")) == "SSN"
+    assert value_pii(freq("4111 1111 1111 1111", "5500-0000-0000-0004")) == "CARD"
+    assert value_pii(freq("a@x.com", "b.c@y.org")) == "EMAIL"
+    assert value_pii(freq("10.0.0.1", "192.168.1.20")) == "IP_ADDRESS"
+    assert value_pii(freq("+1 (555) 123-4567", "555-987-6543")) == "PHONE"
+    assert value_pii(freq("1000234567", "1000234568")) == "NONE"  # plain ids are not phones
+    assert value_pii(freq("2024-01-31", "2023-12-01")) == "NONE"
+    stats = {"row_count": 2, "physical_null_count": 0, "null_count": 0, "distinct_count": 2,
+             "min": "123-45-6789", "max": "987-65-4321"}
+    p = build_profile("ref_x", "VARCHAR", stats, freq("123-45-6789", "987-65-4321"), [])
+    assert p["pii_classification"] == "SSN"
+    assert p["sample_values"][0]["value"] == "***6789" and p["statistics"]["min"] is None

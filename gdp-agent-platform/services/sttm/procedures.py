@@ -257,7 +257,10 @@ def apply_transformation(session, run_id: str, payload_json: str) -> Dict[str, A
         f"{context.get('source_table')}.{context.get('source_column')} -> {context['target_column']}: {sql}. "
         f"{rationale or prompt}"
     )
-    ref = f"transform.{str(context['target_column']).upper()}"
+    model_row = rows(session, "SELECT TARGET_MODEL FROM CORE.WORKFLOW_RUN WHERE RUN_ID = ?", [run_id])
+    target_table = str((model_row[0]["TARGET_MODEL"] if model_row else "") or "").split(".")[-1].strip('"').upper()
+    # one rule per domain + target table + column: the same column name on another table is a different rule
+    ref = f"transform.{target_table}.{str(context['target_column']).upper()}" if target_table         else f"transform.{str(context['target_column']).upper()}"
     with tool_call(session, run_id, "apply_transformation",
                    {"target": context["target_column"], "sql": clip(sql, 400)}) as call:
         session.sql("""UPDATE CONTRACT.STTM_LINE SET TRANSFORMATION = ?, MAPPING_TYPE = ?
@@ -280,7 +283,8 @@ def apply_transformation(session, run_id: str, payload_json: str) -> Dict[str, A
                          "'ACTIVE'", "?::NUMBER", "TRUE", "CURRENT_USER()"],
                         [[str(uuid.uuid4()), context["domain_id"],
                           f"Transform {context['target_column']}"[:500], clip(content, 8000),
-                          {"target_column": context["target_column"], "source_column": context.get("source_column"),
+                          {"target_column": context["target_column"], "target_table": target_table or None,
+                           "source_column": context.get("source_column"),
                            "source_table": context.get("source_table"), "expression": expression, "sql": sql,
                            "prompt": prompt, "rationale": rationale, "soda_checks": soda_checks,
                            "dbt_notes": payload.get("dbt_notes"), "run_id": run_id,
