@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import json
+import time
 import uuid
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
-from services.common.audit import tool_call
+from services.common.audit import record_cost, tool_call
 from services.common.llm import complete_json
 from services.common.sql import clip, insert_rows, rows, scalar, variant
 from services.common.stage import Stage
@@ -155,12 +156,16 @@ def _store_brief(session, run_id: str, domain_id: str, brief: str, filename: str
                   ["CLIENT", "SODA", "BRIEF"], ref, version]])
 
 
-def _extract(session, brief: str, table: str, columns: List[str], knowledge: List[str]) -> List[Dict[str, Any]]:
+def _extract(session, brief: str, table: str, columns: List[str], knowledge: List[str],
+             run_id: Optional[str] = None) -> List[Dict[str, Any]]:
     try:
         use_skills(session, ["SODA_SKILL"])
     except Exception:
         pass
-    output, _, _ = complete_json(session, extract_prompt(brief, table, columns, knowledge), EXTRACT_SCHEMA)
+    started = time.time()
+    output, usage, model = complete_json(session, extract_prompt(brief, table, columns, knowledge), EXTRACT_SCHEMA)
+    if run_id:
+        record_cost(session, run_id, "SODA", model, usage, int((time.time() - started) * 1000), tool_calls=1)
     return [requirement_from_row(table, {**r, "origin": "AI"}) for r in output.get("requirements") or []]
 
 
@@ -206,7 +211,7 @@ def generate_soda(session, run_id: str) -> Dict[str, Any]:
             extracted: List[Dict[str, Any]] = []
             for brief in _briefs(session, run_id):
                 try:
-                    extracted.extend(_extract(session, brief, table, columns, knowledge))
+                    extracted.extend(_extract(session, brief, table, columns, knowledge, run_id))
                 except Exception:
                     continue
             existing_client = rows(session, """SELECT TARGET_TABLE, TARGET_COLUMN, CHECK_TYPE, CHECK_DEFINITION,
@@ -313,7 +318,7 @@ def import_client_expectations(session, run_id: str, rows_json: str) -> Dict[str
     imported: List[Dict[str, Any]] = []
     if parsed.get("brief"):
         _store_brief(session, run_id, sttm["DOMAIN_ID"], parsed["brief"], parsed.get("filename") or "")
-        imported = _extract(session, parsed["brief"], table, columns, _knowledge(session, sttm["DOMAIN_ID"]))
+        imported = _extract(session, parsed["brief"], table, columns, _knowledge(session, sttm["DOMAIN_ID"]), run_id)
     if parsed.get("rows"):
         imported = merge_checks(imported, from_client(table, parsed["rows"]))
     assert imported, "no Soda requirements could be extracted from the client brief"

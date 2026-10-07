@@ -1,4 +1,5 @@
 import { api, getRun } from "@/lib/api";
+import { AiSuggestions } from "@/components/ai-suggestions";
 import { StageGate } from "@/components/stage-gate";
 import { StageAction } from "@/components/stage-action";
 import { Badge } from "@/components/ui/badge";
@@ -82,6 +83,7 @@ export default async function SttmPage({ params }: { params: { runId: string } }
           canEdit={canEdit}
         />
       )}
+      <AiSuggestions runId={params.runId} stage="STTM" canAct={canEdit} />
     </StageGate>
   );
 }

@@ -391,8 +391,28 @@ def _foreign_keys(session, tables: List[Dict[str, Any]], profiles: Dict[str, Lis
                     p["potential_foreign_key"] = f"{other['SOURCE_TABLE']}.{key_col}"
 
 
+def _column_rules(session, run_id: str, source_table: str) -> Dict[str, Dict[str, Any]]:
+    """Accepted COLUMN_RULE knowledge for this run's source table (same source system), by column name."""
+    try:
+        found = rows(session, """SELECT K.CONTENT_JSON FROM KNOWLEDGE.DOMAIN_KNOWLEDGE K
+                                   JOIN CORE.WORKFLOW_RUN R ON R.RUN_ID = ?
+                                  WHERE K.IS_CURRENT AND K.STATUS = 'ACTIVE' AND K.KNOWLEDGE_TYPE = 'COLUMN_RULE'
+                                    AND K.CONTENT_JSON:source_system_id::STRING = R.SOURCE_SYSTEM_ID
+                                    AND UPPER(K.CONTENT_JSON:source_table::STRING) = UPPER(?)""",
+                     [run_id, source_table])
+    except Exception:
+        return {}
+    out = {}
+    for r in found:
+        content = variant(r["CONTENT_JSON"]) or {}
+        if content.get("column_name"):
+            out[str(content["column_name"]).upper()] = content
+    return out
+
+
 def _store(session, run_id: str, table: Dict[str, Any], profiles: List[Dict[str, Any]], model: Optional[str],
            cache: str) -> None:
+    profiler.apply_column_rules(profiles, _column_rules(session, run_id, table["SOURCE_TABLE"]))
     version = (scalar(session, "SELECT MAX(PROFILE_VERSION) FROM PROFILE.PROFILE_REGISTRY WHERE RUN_ID = ? "
                                "AND SOURCE_TABLE_ID = ?", [run_id, table["LANDING_ID"]]) or 0) + 1
     session.sql("UPDATE PROFILE.PROFILE_REGISTRY SET IS_CURRENT = FALSE WHERE RUN_ID = ? AND SOURCE_TABLE_ID = ?",

@@ -1343,6 +1343,28 @@ def register_target(body: TargetBind, db: Db = Depends(current_db)):
         raise _snowflake_error(exc) from exc
 
 
+def _record_cost(db: Db, run_id: str, stage: str, model: Optional[str], usage: Optional[dict], started: float) -> None:
+    """AUDIT.COST_USAGE row for an AI call the API makes directly (same rate table as the procedures).
+    Never fails the request it describes."""
+    try:
+        usage = usage or {}
+        prompt, completion = int(usage.get("prompt_tokens") or 0), int(usage.get("completion_tokens") or 0)
+        total = int(usage.get("total_tokens") or prompt + completion)
+        found = db.query("SELECT CONFIG_VALUE FROM CORE.PLATFORM_CONFIG "
+                         "WHERE CONFIG_KEY = 'CREDITS_PER_MILLION_TOKENS' AND IS_CURRENT")
+        rates = _json(found[0].get("config_value")) if found else {}
+        rate = float((rates or {}).get(model or "", (rates or {}).get("default", 0)) or 0)
+        db.execute(
+            """INSERT INTO AUDIT.COST_USAGE (COST_USAGE_ID, RUN_ID, STAGE, AGENT, MODEL, INPUT_TOKENS, OUTPUT_TOKENS,
+                   TOTAL_TOKENS, TOOL_CALL_COUNT, SEARCH_CALL_COUNT, CODE_CALL_COUNT, DURATION_MS, ESTIMATED_COST)
+               SELECT %s, %s, %s, 'PLATFORM', %s, %s, %s, %s, 1, 0, 0, %s, %s""",
+            (str(uuid.uuid4()), run_id, stage, model, prompt, completion, total,
+             int((time.time() - started) * 1000), round(total / 1_000_000 * rate, 6)),
+        )
+    except Exception:
+        pass
+
+
 def _source_call(db: Db, proc: str, handler, *args):
     if USE_CALLER:
         return invoke_source(db, handler, *args)
@@ -1976,6 +1998,7 @@ def mapping_assist(run_id: str, body: MappingAssist, db: Db = Depends(current_db
         "SELECT CONFIG_VALUE::VARCHAR AS M FROM CORE.PLATFORM_CONFIG WHERE CONFIG_KEY = 'LLM_MODEL' AND IS_CURRENT"
     )
     model = (model_rows[0]["m"] if model_rows else None) or "claude-sonnet-4-5"
+    started = time.time()
     try:
         result = db.query(
             "SELECT AI_COMPLETE(model => %s, prompt => %s, "
@@ -1987,6 +2010,7 @@ def mapping_assist(run_id: str, body: MappingAssist, db: Db = Depends(current_db
         raise _snowflake_error(exc) from exc
     details = result[0]["r"] if result else None
     details = json.loads(details) if isinstance(details, str) else (details or {})
+    _record_cost(db, run_id, "MAPPING", details.get("model", model), details.get("usage"), started)
     structured = details.get("structured_output") or []
     if not structured:
         raise HTTPException(502, "Cortex returned no structured answer for these columns. Try fewer columns or again.")
@@ -2763,11 +2787,14 @@ def review_dbt(run_id: str, body: DbtReview, db: Db = Depends(current_db)):
         notes = json.dumps({k: report.get(k) for k in ("source_unique_id", "dedup_order", "anomalies", "hub", "counts")})
     except ValueError:
         pass
+    started = time.time()
     try:
-        return review_file(lambda sql, params=(): db.query(sql, params), path, files[path],
-                           _domain_skill(db, run_id), _sttm_context(db, run_id), notes, model=body.model)
+        reviewed = review_file(lambda sql, params=(): db.query(sql, params), path, files[path],
+                               _domain_skill(db, run_id), _sttm_context(db, run_id), notes, model=body.model)
     except Exception as exc:
         raise _snowflake_error(exc) from exc
+    _record_cost(db, run_id, "DBT", reviewed.get("model"), reviewed.get("usage"), started)
+    return reviewed
 
 
 @app.post("/api/runs/{run_id}/dbt/enhance")
@@ -2830,8 +2857,9 @@ def enhance_dbt(run_id: str, body: DbtEnhance, db: Db = Depends(current_db)):
         skill = ""
     if skill:
         context = f"{context}\n\nFOLLOW THESE GDP-DBT-ONBOARD-SOURCE RULES AND DOMAIN CONTRACT:\n{skill}"
+    started = time.time()
     try:
-        return enhance_file(
+        enhanced = enhance_file(
             lambda sql, params=(): db.query(sql, params),
             path,
             rows[0]["content"] or "",
@@ -2841,6 +2869,8 @@ def enhance_dbt(run_id: str, body: DbtEnhance, db: Db = Depends(current_db)):
         )
     except Exception as exc:
         raise _snowflake_error(exc) from exc
+    _record_cost(db, run_id, "DBT", enhanced.get("model"), enhanced.get("usage"), started)
+    return enhanced
 
 
 @app.post("/api/runs/{run_id}/validation")
@@ -3939,3 +3969,71 @@ def put_domain_rules(domain_id: str, body: RulesUpdate, db: Db = Depends(current
     )
     _RULES_CACHE.clear()
     return get_rules(domain_id, db)
+
+
+# ---------------------------------------------------------------- AI suggestions next to rule results
+
+SUGGESTION_STAGES = ("PROFILING", "DOMAIN", "STTM", "SODA", "DBT")
+
+
+class SuggestionDecision(BaseModel):
+    suggestion_id: Optional[str] = None
+    scope_key: str = Field(min_length=1, max_length=1024)
+    item: dict
+    decision: Literal["ACCEPTED", "REJECTED"]
+    note: Optional[str] = Field(default=None, max_length=2000)
+
+
+def _suggestion_stage(stage: str) -> str:
+    stage = stage.upper()
+    if stage not in SUGGESTION_STAGES:
+        raise HTTPException(400, f"stage must be one of {', '.join(SUGGESTION_STAGES)}")
+    return stage
+
+
+@app.get("/api/runs/{run_id}/suggestions/{stage}")
+def get_suggestions(run_id: str, stage: str, db: Db = Depends(current_db)):
+    """Earlier AI suggestions for this stage (no model call)."""
+    from services.common.suggestion_stages import run_suggestions
+
+    try:
+        return invoke_source(db, run_suggestions, _suggestion_stage(stage), run_id, False, True)
+    except AssertionError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise _snowflake_error(exc) from exc
+
+
+@app.post("/api/runs/{run_id}/suggestions/{stage}")
+def ask_suggestions(run_id: str, stage: str, refresh: bool = False, db: Db = Depends(current_db)):
+    """Ask the model to review the rule results: one call per table, reused while the inputs are unchanged."""
+    from services.common.suggestion_stages import run_suggestions
+
+    try:
+        return invoke_source(db, run_suggestions, _suggestion_stage(stage), run_id, refresh, False)
+    except AssertionError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise _snowflake_error(exc) from exc
+
+
+@app.post("/api/runs/{run_id}/suggestions/{stage}/decision")
+def decide_suggestion(run_id: str, stage: str, body: SuggestionDecision, db: Db = Depends(current_db)):
+    from services.common.suggestion_stages import decide
+
+    try:
+        result = invoke_source(db, decide, _suggestion_stage(stage), run_id, body.model_dump_json())
+    except AssertionError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise _snowflake_error(exc) from exc
+    _drop_run(run_id)
+    return result

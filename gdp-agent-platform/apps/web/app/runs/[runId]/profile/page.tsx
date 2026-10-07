@@ -1,4 +1,5 @@
 import { api, getRun } from "@/lib/api";
+import { AiSuggestions } from "@/components/ai-suggestions";
 import { StageGate } from "@/components/stage-gate";
 import { StageAction } from "@/components/stage-action";
 import { Badge } from "@/components/ui/badge";
@@ -170,6 +171,7 @@ export default async function ProfilePage({ params }: { params: { runId: string 
           </CardContent>
         </Card>
       )}
+      <AiSuggestions runId={params.runId} stage="PROFILING" canAct={!state.is_archived} />
     </StageGate>
   );
 }

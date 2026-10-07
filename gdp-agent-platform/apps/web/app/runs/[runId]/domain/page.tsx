@@ -4,6 +4,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
 import { ModelEr } from "@/components/model-er";
+import { AiSuggestions } from "@/components/ai-suggestions";
 import type { ModelGraph } from "@/app/onboarding/intent-types";
 import { displayDomain, isHiddenTarget } from "@/lib/catalog-display";
 import { confirmDomain, identifyDomain } from "../pipeline-actions";
@@ -115,6 +116,7 @@ export default async function DomainPage({ params }: { params: { runId: string }
           )}
         </CardContent>
       </Card>
+      <AiSuggestions runId={params.runId} stage="DOMAIN" canAct={canPick} />
     </>
   );
 }

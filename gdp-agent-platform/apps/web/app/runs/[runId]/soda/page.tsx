@@ -1,4 +1,5 @@
 import { api, getRun } from "@/lib/api";
+import { AiSuggestions } from "@/components/ai-suggestions";
 import { StageGate } from "@/components/stage-gate";
 import { StageAction } from "@/components/stage-action";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -74,6 +75,7 @@ export default async function SodaPage({ params }: { params: { runId: string } }
           />
         </CardContent>
       </Card>
+      <AiSuggestions runId={params.runId} stage="SODA" canAct={canImport} />
     </StageGate>
   );
 }

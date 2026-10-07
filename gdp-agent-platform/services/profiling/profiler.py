@@ -371,6 +371,28 @@ def mask(value: Optional[str], pii: str) -> Optional[str]:
     return "***"
 
 
+def apply_column_rules(profiles: List[Dict[str, Any]], column_rules: Dict[str, Dict[str, Any]]) -> None:
+    """Reviewer-accepted facts about these exact source columns override the rule result. Raising PII re-masks."""
+    for p in profiles:
+        found = column_rules.get(str(p["column_name"]).upper())
+        if not found:
+            continue
+        if found.get("semantic_type"):
+            p["semantic_type"] = str(found["semantic_type"]).upper()
+        if found.get("date_format"):
+            p.setdefault("statistics", {})["date_format"] = found["date_format"]
+        pii = str(found.get("pii_classification") or "").upper()
+        if pii:
+            if pii != "NONE" and p.get("pii_classification", "NONE") == "NONE":
+                p["sample_values"] = [{**v, "value": mask(v.get("value"), pii)} for v in p.get("sample_values") or []]
+                stats = p.setdefault("statistics", {})
+                stats["frequency_distribution"] = [{**v, "value": mask(v.get("value"), pii)}
+                                                   for v in stats.get("frequency_distribution") or []]
+                stats["min"] = stats["max"] = None
+            p["pii_classification"] = pii
+        p["rule_source"] = "accepted column rule"
+
+
 def potential_key(row_count: int, stats: Dict[str, Any], approximate: bool = False) -> bool:
     if not row_count or stats.get("null_count") != 0 or stats.get("distinct_count") is None:
         return False
