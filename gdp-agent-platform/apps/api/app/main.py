@@ -9,7 +9,7 @@ import threading
 import time
 import uuid
 from pathlib import Path
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 
 from fastapi import Depends, FastAPI, File, Header, HTTPException, Request, UploadFile
 
@@ -70,6 +70,26 @@ async def bust_run_cache(request: Request, call_next):
     return response
 
 
+_CATALOG_DISPLAY_AT = {"at": 0.0}
+
+
+def _load_catalog_display(db: Db) -> None:
+    """CATALOG_DISPLAY (Admin-editable) applied to the catalog filters; cheap, refreshed once a minute."""
+    if time.time() - _CATALOG_DISPLAY_AT["at"] < 60:
+        return
+    _CATALOG_DISPLAY_AT["at"] = time.time()
+    try:
+        from services.source.catalog_display import configure
+
+        found = db.query("SELECT CONFIG_VALUE FROM CORE.PLATFORM_CONFIG WHERE CONFIG_KEY = 'CATALOG_DISPLAY' "
+                         "AND IS_CURRENT ORDER BY VERSION DESC LIMIT 1")
+        if found:
+            value = found[0].get("config_value")
+            configure(json.loads(value) if isinstance(value, str) else value)
+    except Exception:
+        pass
+
+
 def current_db(
     x_aip_session: Optional[str] = Header(default=None),
     x_aip_role: Optional[str] = Header(default=None),
@@ -85,6 +105,7 @@ def current_db(
             apply_work_role(db, x_aip_role)
         except SnowflakeSessionError as exc:
             raise HTTPException(403, str(exc)) from exc
+        _load_catalog_display(db)
         return db
     except SnowflakeSessionError as exc:
         raise HTTPException(503, str(exc)) from exc
@@ -1637,10 +1658,16 @@ def domain_detail(domain_id: str, db: Db = Depends(current_db)):
         "GROUP BY KNOWLEDGE_TYPE ORDER BY N DESC",
         (domain_id,),
     )
+    from services.knowledge.domain_admin import can_delete, repository_pack_names
+
+    deletable, reason = can_delete(domain_id, domain["domain_name"], config, repository_pack_names())
     return {"domain": domain, "targets": targets, "signals": config.get("signals") or {},
             "source_systems": config.get("source_systems") or [], "contract": config.get("contract"),
             "silver": {"database": config.get("silver_database"), "schema": config.get("silver_schema")},
-            "knowledge": knowledge}
+            "knowledge": knowledge, "origin": config.get("origin") or "repository",
+            "deletable": deletable, "not_deletable_reason": reason,
+            "active_runs": _domain_active_runs(db, domain_id),
+            "deleted": {"at": config.get("deleted_at"), "by": config.get("deleted_by")} if config.get("deleted_at") else None}
 
 
 @app.get("/api/domains")
@@ -2489,7 +2516,7 @@ def _set_config(db: Db, key: str, value: dict, description: str) -> None:
         """
         INSERT INTO CORE.PLATFORM_CONFIG (CONFIG_KEY, CONFIG_VALUE, DESCRIPTION, VERSION, IS_CURRENT, CREATED_BY)
         SELECT %s, PARSE_JSON(%s), %s,
-               COALESCE((SELECT MAX(VERSION) FROM CORE.PLATFORM_CONFIG WHERE CONFIG_KEY = %s), 0) + 1,
+               COALESCE((SELECT MAX(VERSION) FROM CORE.PLATFORM_CONFIG WHERE CONFIG_KEY = %s), 1) + 1,
                TRUE, CURRENT_USER()
         """,
         (key, json.dumps(value), description, key),
@@ -4183,3 +4210,359 @@ def export_domain_pack(domain_id: str, db: Db = Depends(current_db)):
         return {"pack": export_pack(lambda sql, params: db.query(sql, params), domain_id)}
     except AssertionError as exc:
         raise HTTPException(404, str(exc)) from exc
+
+
+# ---------------------------------------------------------------- Knowledge management
+
+
+class KnowledgeItemIn(BaseModel):
+    domain_id: Optional[str] = Field(default=None, max_length=64)
+    knowledge_type: str = Field(min_length=1, max_length=32)
+    title: str = Field(min_length=1, max_length=500)
+    content: str = Field(min_length=1, max_length=8000)
+    content_json: Any = None
+
+
+class KnowledgeAnswerIn(BaseModel):
+    question: str = Field(min_length=3, max_length=2000)
+    domain: Optional[str] = None
+    knowledge_type: Optional[str] = None
+
+
+_KNOWLEDGE_COLUMNS = """K.KNOWLEDGE_ID, K.DOMAIN_ID, D.DOMAIN_NAME, K.KNOWLEDGE_TYPE, K.TITLE, K.CONTENT, K.CONTENT_JSON,
+       K.SOURCE_REFERENCE, K.STATUS, K.VERSION, K.CREATED_BY, K.CREATED_AT::VARCHAR AS CREATED_AT,
+       K.UPDATED_AT::VARCHAR AS UPDATED_AT"""
+
+
+def _knowledge_item(db: Db, knowledge_id: str) -> dict:
+    found = db.query(f"""SELECT {_KNOWLEDGE_COLUMNS} FROM KNOWLEDGE.DOMAIN_KNOWLEDGE K
+                          JOIN KNOWLEDGE.DOMAIN_REGISTRY D ON D.DOMAIN_ID = K.DOMAIN_ID
+                         WHERE K.KNOWLEDGE_ID = %s""", (knowledge_id,))
+    if not found:
+        raise HTTPException(404, "knowledge item not found")
+    return _shape_knowledge(found[0])
+
+
+def _shape_knowledge(row: dict) -> dict:
+    from services.knowledge.manage import editable
+
+    row["content_json"] = _json(row.get("content_json"))
+    ok, reason = editable(row.get("created_by"))
+    row["editable"], row["read_only_reason"] = ok, reason
+    return row
+
+
+@app.get("/api/knowledge")
+def list_knowledge(domain_id: Optional[str] = None, knowledge_type: Optional[str] = None,
+                   status: Optional[str] = None, q: Optional[str] = None, offset: int = 0, limit: int = 50,
+                   db: Db = Depends(current_db)):
+    """Current version of each knowledge item, filtered and paged."""
+    from services.knowledge.manage import list_query
+
+    try:
+        where, params = list_query(domain_id, knowledge_type, status, q, offset, limit)
+    except AssertionError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    items = db.query(f"""SELECT {_KNOWLEDGE_COLUMNS} FROM KNOWLEDGE.DOMAIN_KNOWLEDGE K
+                          JOIN KNOWLEDGE.DOMAIN_REGISTRY D ON D.DOMAIN_ID = K.DOMAIN_ID
+                         WHERE {where} ORDER BY K.UPDATED_AT DESC NULLS LAST, K.TITLE LIMIT %s OFFSET %s""",
+                     tuple(params))
+    total = db.query(f"SELECT COUNT(*) AS N FROM KNOWLEDGE.DOMAIN_KNOWLEDGE K WHERE {where}", tuple(params[:-2]))
+    return {"items": [_shape_knowledge(r) for r in items], "total": int(total[0]["n"]) if total else 0}
+
+
+@app.post("/api/knowledge")
+def add_knowledge(body: KnowledgeItemIn, db: Db = Depends(current_db)):
+    from services.knowledge.manage import new_key, prepare_item
+
+    if not body.domain_id:
+        raise HTTPException(400, "choose the domain this knowledge belongs to")
+    item, problems = prepare_item(body.knowledge_type, body.title, body.content, body.content_json)
+    if problems:
+        raise HTTPException(400, "; ".join(problems))
+    domain = db.query("SELECT DOMAIN_NAME FROM KNOWLEDGE.DOMAIN_REGISTRY WHERE DOMAIN_ID = %s AND ACTIVE_FLAG",
+                      (body.domain_id,))
+    if not domain:
+        raise HTTPException(400, "unknown or deleted domain")
+    knowledge_id = str(uuid.uuid4())
+    db.execute("""INSERT INTO KNOWLEDGE.DOMAIN_KNOWLEDGE (KNOWLEDGE_ID, DOMAIN_ID, KNOWLEDGE_TYPE, TITLE, CONTENT,
+                         CONTENT_JSON, TAGS, SOURCE_REFERENCE, STATUS, VERSION, IS_CURRENT, CREATED_BY)
+                  SELECT %s, %s, %s, %s, %s, PARSE_JSON(NULLIF(%s, '')), PARSE_JSON('["UI"]'), %s, 'ACTIVE', 1, TRUE,
+                         CURRENT_USER()""",
+               (knowledge_id, body.domain_id, item["knowledge_type"], item["title"], item["content"],
+                json.dumps(item["content_json"]) if item["content_json"] is not None else "",
+                new_key(domain[0]["domain_name"], item["knowledge_type"], item["title"])))
+    _DOMAIN_VOCAB.update(at=0.0, domains=[])
+    return _knowledge_item(db, knowledge_id)
+
+
+@app.put("/api/knowledge/{knowledge_id}")
+def edit_knowledge(knowledge_id: str, body: KnowledgeItemIn, db: Db = Depends(current_db)):
+    """An edit is a new version of the item; the previous version stays in its history."""
+    from services.knowledge.manage import prepare_item
+
+    current = _knowledge_item(db, knowledge_id)
+    if not current["editable"]:
+        raise HTTPException(409, current["read_only_reason"])
+    item, problems = prepare_item(body.knowledge_type or current["knowledge_type"], body.title, body.content,
+                                  body.content_json)
+    if problems:
+        raise HTTPException(400, "; ".join(problems))
+    new_id = str(uuid.uuid4())
+    db.execute("UPDATE KNOWLEDGE.DOMAIN_KNOWLEDGE SET IS_CURRENT = FALSE, UPDATED_AT = CURRENT_TIMESTAMP() "
+               "WHERE KNOWLEDGE_ID = %s", (knowledge_id,))
+    db.execute("""INSERT INTO KNOWLEDGE.DOMAIN_KNOWLEDGE (KNOWLEDGE_ID, DOMAIN_ID, KNOWLEDGE_TYPE, TITLE, CONTENT,
+                         CONTENT_JSON, TAGS, SOURCE_REFERENCE, STATUS, VERSION, IS_CURRENT, CREATED_BY)
+                  SELECT %s, %s, %s, %s, %s, PARSE_JSON(NULLIF(%s, '')), PARSE_JSON('["UI"]'), %s, %s, %s, TRUE,
+                         CURRENT_USER()""",
+               (new_id, current["domain_id"], item["knowledge_type"], item["title"], item["content"],
+                json.dumps(item["content_json"]) if item["content_json"] is not None else "",
+                current["source_reference"], current["status"], int(current["version"]) + 1))
+    _DOMAIN_VOCAB.update(at=0.0, domains=[])
+    return _knowledge_item(db, new_id)
+
+
+def _set_knowledge_status(db: Db, knowledge_id: str, status: str) -> dict:
+    current = _knowledge_item(db, knowledge_id)
+    if not current["editable"]:
+        raise HTTPException(409, current["read_only_reason"])
+    db.execute("UPDATE KNOWLEDGE.DOMAIN_KNOWLEDGE SET STATUS = %s, UPDATED_AT = CURRENT_TIMESTAMP() "
+               "WHERE KNOWLEDGE_ID = %s", (status, knowledge_id))
+    _DOMAIN_VOCAB.update(at=0.0, domains=[])
+    return _knowledge_item(db, knowledge_id)
+
+
+@app.post("/api/knowledge/{knowledge_id}/retire")
+def retire_knowledge(knowledge_id: str, db: Db = Depends(current_db)):
+    return _set_knowledge_status(db, knowledge_id, "RETIRED")
+
+
+@app.post("/api/knowledge/{knowledge_id}/restore")
+def restore_knowledge(knowledge_id: str, db: Db = Depends(current_db)):
+    return _set_knowledge_status(db, knowledge_id, "ACTIVE")
+
+
+@app.get("/api/knowledge/{knowledge_id}/history")
+def knowledge_history(knowledge_id: str, db: Db = Depends(current_db)):
+    current = _knowledge_item(db, knowledge_id)
+    versions = db.query(f"""SELECT {_KNOWLEDGE_COLUMNS}, K.IS_CURRENT FROM KNOWLEDGE.DOMAIN_KNOWLEDGE K
+                             JOIN KNOWLEDGE.DOMAIN_REGISTRY D ON D.DOMAIN_ID = K.DOMAIN_ID
+                            WHERE K.DOMAIN_ID = %s AND K.SOURCE_REFERENCE = %s ORDER BY K.VERSION DESC""",
+                        (current["domain_id"], current["source_reference"])) if current["source_reference"] else []
+    return {"versions": [_shape_knowledge(v) for v in versions] or [current]}
+
+
+@app.post("/api/knowledge/answer")
+def answer_knowledge(body: KnowledgeAnswerIn, db: Db = Depends(current_db)):
+    """Search, then answer from the hits only, with citations."""
+    from services.knowledge.manage import answer
+
+    started = time.time()
+    try:
+        result = invoke_source(db, answer, _current_db_name(db), body.question, body.domain, body.knowledge_type)
+    except AssertionError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except Exception as exc:
+        raise _snowflake_error(exc) from exc
+    _record_cost(db, None, "KNOWLEDGE", result.get("model"), result.pop("usage", None), started)
+    return result
+
+
+# ---------------------------------------------------------------- Admin: platform settings
+
+
+class PlatformSetting(BaseModel):
+    key: str = Field(min_length=1, max_length=128)
+    value: Any = None
+    reset: bool = False
+
+
+def _platform_settings(db: Db) -> dict:
+    from services.common.platform_config import DEFAULTS, KNOWN_MODELS, SETTINGS
+    from services.common.standard import PRESETS
+
+    found = {r["config_key"]: r for r in db.query(
+        """SELECT CONFIG_KEY, CONFIG_VALUE, VERSION, CREATED_BY, CREATED_AT::VARCHAR AS CREATED_AT
+             FROM CORE.PLATFORM_CONFIG WHERE IS_CURRENT AND ARRAY_CONTAINS(CONFIG_KEY::VARIANT, PARSE_JSON(%s)::ARRAY)
+           QUALIFY ROW_NUMBER() OVER (PARTITION BY CONFIG_KEY ORDER BY VERSION DESC) = 1""",
+        (json.dumps(list(SETTINGS)),))}
+    settings = {}
+    for key in SETTINGS:
+        row = found.get(key)
+        settings[key] = {"value": _json(row["config_value"]) if row else DEFAULTS[key],
+                         "default": DEFAULTS[key], "customised": bool(row and int(row["version"]) > 1),
+                         "changed_by": row["created_by"] if row else None, "changed_at": row["created_at"] if row else None}
+    return {"settings": settings, "known_models": KNOWN_MODELS, "presets": PRESETS}
+
+
+@app.get("/api/config/platform")
+def get_platform_settings(db: Db = Depends(current_db)):
+    return _platform_settings(db)
+
+
+@app.put("/api/config/platform")
+def put_platform_setting(body: PlatformSetting, db: Db = Depends(current_db)):
+    """Change one setting (validated), or reset it to the platform default."""
+    from services.common.platform_config import DEFAULTS, validate
+
+    value = DEFAULTS.get(body.key) if body.reset else body.value
+    cleaned, problems = validate(body.key, value)
+    if problems:
+        raise HTTPException(400, "; ".join(problems))
+    _put_config(db, body.key, cleaned, f"Set from Admin by {'reset' if body.reset else 'edit'}")
+    if body.key == "CATALOG_DISPLAY":
+        from services.source.catalog_display import configure
+
+        configure(cleaned)
+    _RULES_CACHE.clear()
+    return _platform_settings(db)
+
+
+@app.get("/api/config/catalog-display")
+def get_catalog_display(db: Db = Depends(current_db)):
+    """The hidden-catalog lists the web app applies (single source with the API's own filtering)."""
+    from services.common.platform_config import DEFAULTS
+
+    try:
+        found = db.query("SELECT CONFIG_VALUE FROM CORE.PLATFORM_CONFIG WHERE CONFIG_KEY = 'CATALOG_DISPLAY' "
+                         "AND IS_CURRENT ORDER BY VERSION DESC LIMIT 1")
+    except Exception:
+        found = []
+    return (_json(found[0]["config_value"]) if found else None) or DEFAULTS["CATALOG_DISPLAY"]
+
+
+# ---------------------------------------------------------------- Domains: soft delete and restore
+
+
+def _domain_active_runs(db: Db, domain_id: str) -> list[dict]:
+    """Runs still in flight on this domain (not completed, cancelled, archived or deleted)."""
+    try:
+        return db.query(
+            """SELECT RUN_ID, RUN_NAME, CURRENT_STATE FROM CORE.WORKFLOW_RUN
+                WHERE DOMAIN_ID = %s AND CURRENT_STATE NOT IN ('COMPLETED', 'CANCELLED')
+                  AND NOT COALESCE(IS_ARCHIVED, FALSE) AND DELETED_AT IS NULL
+                ORDER BY CREATED_AT DESC LIMIT 50""", (domain_id,))
+    except Exception:
+        return []
+
+
+def _domain_row(db: Db, domain_id: str) -> dict:
+    found = db.query("SELECT DOMAIN_ID, DOMAIN_NAME, ACTIVE_FLAG, CONFIG FROM KNOWLEDGE.DOMAIN_REGISTRY "
+                     "WHERE DOMAIN_ID = %s", (domain_id,))
+    if not found:
+        raise HTTPException(404, "domain not found")
+    row = found[0]
+    row["config"] = _json(row.get("config")) or {}
+    return row
+
+
+def _domain_caches_changed() -> None:
+    _DOMAIN_VOCAB.update(at=0.0, domains=[])
+    _RULES_CACHE.clear()
+
+
+@app.delete("/api/domains/{domain_id}")
+def delete_domain(domain_id: str, force: bool = False, db: Db = Depends(current_db)):
+    """Soft delete of a UI-added domain: the domain, its targets and its knowledge are deactivated; run history keeps
+    the domain id. Repository and platform domains are refused; runs in flight block unless force=true."""
+    from services.knowledge.domain_admin import can_delete, repository_pack_names
+
+    row = _domain_row(db, domain_id)
+    ok, reason = can_delete(domain_id, row["domain_name"], row["config"], repository_pack_names())
+    if not ok:
+        raise HTTPException(409, reason)
+    active = _domain_active_runs(db, domain_id)
+    if active and not force:
+        raise HTTPException(409, f"{len(active)} run(s) still use {row['domain_name']}: "
+                                 + ", ".join(r["run_name"] for r in active[:5])
+                                 + ". Finish or archive them, or delete anyway.")
+    db.execute("""UPDATE KNOWLEDGE.DOMAIN_REGISTRY
+                     SET ACTIVE_FLAG = FALSE, UPDATED_AT = CURRENT_TIMESTAMP(),
+                         CONFIG = OBJECT_INSERT(OBJECT_INSERT(COALESCE(CONFIG, OBJECT_CONSTRUCT()),
+                                  'deleted_at', CURRENT_TIMESTAMP()::VARCHAR, TRUE), 'deleted_by', CURRENT_USER(), TRUE)
+                   WHERE DOMAIN_ID = %s""", (domain_id,))
+    db.execute("UPDATE KNOWLEDGE.TARGET_TABLE_REGISTRY SET ACTIVE_FLAG = FALSE WHERE DOMAIN_ID = %s", (domain_id,))
+    db.execute("UPDATE KNOWLEDGE.DOMAIN_KNOWLEDGE SET STATUS = 'RETIRED', UPDATED_AT = CURRENT_TIMESTAMP() "
+               "WHERE DOMAIN_ID = %s AND IS_CURRENT AND STATUS = 'ACTIVE'", (domain_id,))
+    _domain_caches_changed()
+    return {"domain_id": domain_id, "deleted": True, "active_runs": len(active)}
+
+
+@app.post("/api/domains/{domain_id}/restore")
+def restore_domain(domain_id: str, db: Db = Depends(current_db)):
+    """Undo a delete: the domain, its targets (those with columns) and its retired knowledge come back."""
+    row = _domain_row(db, domain_id)
+    if not row["config"].get("deleted_at"):
+        raise HTTPException(409, f"{row['domain_name']} is not deleted.")
+    db.execute("""UPDATE KNOWLEDGE.DOMAIN_REGISTRY
+                     SET ACTIVE_FLAG = TRUE, UPDATED_AT = CURRENT_TIMESTAMP(),
+                         CONFIG = OBJECT_DELETE(CONFIG, 'deleted_at', 'deleted_by')
+                   WHERE DOMAIN_ID = %s""", (domain_id,))
+    db.execute("""UPDATE KNOWLEDGE.TARGET_TABLE_REGISTRY T SET ACTIVE_FLAG = TRUE
+                   WHERE T.DOMAIN_ID = %s AND EXISTS (SELECT 1 FROM KNOWLEDGE.TARGET_COLUMN_REGISTRY C
+                                                       WHERE C.TARGET_TABLE_ID = T.TARGET_TABLE_ID)""", (domain_id,))
+    db.execute("UPDATE KNOWLEDGE.DOMAIN_KNOWLEDGE SET STATUS = 'ACTIVE', UPDATED_AT = CURRENT_TIMESTAMP() "
+               "WHERE DOMAIN_ID = %s AND IS_CURRENT AND STATUS = 'RETIRED'", (domain_id,))
+    _domain_caches_changed()
+    return {"domain_id": domain_id, "restored": True}
+
+
+# ---------------------------------------------------------------- Domains: AI review of the pack, Ask the domain
+
+
+class DomainDecision(BaseModel):
+    suggestion_id: Optional[str] = None
+    item: dict
+    decision: Literal["ACCEPTED", "REJECTED"]
+    note: Optional[str] = Field(default=None, max_length=2000)
+
+
+class DomainQuestion(BaseModel):
+    question: str = Field(min_length=3, max_length=2000)
+
+
+def _domain_ai(db: Db, fn, *args):
+    try:
+        return invoke_source(db, fn, *args)
+    except AssertionError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise _snowflake_error(exc) from exc
+
+
+@app.get("/api/domains/{domain_id}/suggestions")
+def domain_suggestions(domain_id: str, db: Db = Depends(current_db)):
+    """Earlier AI review of this domain's pack (no model call)."""
+    from services.knowledge.domain_ai import review
+
+    return _domain_ai(db, review, domain_id, False, True)
+
+
+@app.post("/api/domains/{domain_id}/suggestions")
+def review_domain(domain_id: str, refresh: bool = False, db: Db = Depends(current_db)):
+    """Ask the model to review the pack: one call per pack version, reused until the pack changes."""
+    from services.knowledge.domain_ai import review
+
+    return _domain_ai(db, review, domain_id, refresh, False)
+
+
+@app.post("/api/domains/{domain_id}/suggestions/decision")
+def decide_domain_suggestion(domain_id: str, body: DomainDecision, db: Db = Depends(current_db)):
+    from services.knowledge.domain_ai import decide
+
+    result = _domain_ai(db, decide, domain_id, body.model_dump_json())
+    _domain_caches_changed()
+    return result
+
+
+@app.post("/api/domains/{domain_id}/ask")
+def ask_domain(domain_id: str, body: DomainQuestion, db: Db = Depends(current_db)):
+    """Answer a question about the domain from its pack and knowledge, citing only what the model was shown."""
+    from services.knowledge.domain_ai import ask
+
+    started = time.time()
+    result = _domain_ai(db, ask, domain_id, body.question)
+    _record_cost(db, None, "KNOWLEDGE", result.get("model"), result.pop("usage", None), started)
+    return result

@@ -10,12 +10,31 @@ const OVERRIDES: Record<string, string[]> = (() => {
 })();
 const list = (key: string, fallback: string[]) =>
   new Set((Array.isArray(OVERRIDES[key]) ? OVERRIDES[key] : fallback).map((v) => (key === "hidden_target_ids" ? v.trim() : v.trim().toUpperCase())));
-const HIDDEN_TARGET_TABLES = list("hidden_target_tables", ["COMPLETE_EMPLOYEE_DETAILS"]);
-const HIDDEN_TARGET_DATABASES = list("hidden_target_databases", ["ALATION_POC"]);
-const HIDDEN_TARGET_SCHEMAS = list("hidden_target_schemas", ["GDP_SILVER"]);
-const HIDDEN_TARGET_IDS = list("hidden_target_ids", ["00000000-0000-4000-a000-000000000002"]);
+const HIDDEN_TARGET_TABLES = list("hidden_target_tables", []);
+const HIDDEN_TARGET_DATABASES = list("hidden_target_databases", []);
+const HIDDEN_TARGET_SCHEMAS = list("hidden_target_schemas", []);
+const HIDDEN_TARGET_IDS = list("hidden_target_ids", []);
 const HIDDEN_DOMAIN_NAMES = list("hidden_domain_names", ["GDP"]);
 const STRIP_TOKENS = list("strip_tokens", ["GDP"]);
+const SETS: Record<string, Set<string>> = {
+  hidden_target_tables: HIDDEN_TARGET_TABLES, hidden_target_databases: HIDDEN_TARGET_DATABASES,
+  hidden_target_schemas: HIDDEN_TARGET_SCHEMAS, hidden_target_ids: HIDDEN_TARGET_IDS,
+  hidden_domain_names: HIDDEN_DOMAIN_NAMES, strip_tokens: STRIP_TOKENS,
+};
+
+export type CatalogDisplayConfig = Partial<Record<keyof typeof SETS, string[]>>;
+
+/** Apply the API's CATALOG_DISPLAY lists (the single source, editable in Admin). Called by the root layout on the
+ *  server and by CatalogDisplayProvider in the browser before any page renders. */
+export function configureCatalogDisplay(config?: CatalogDisplayConfig | null) {
+  if (!config) return;
+  for (const [key, set] of Object.entries(SETS)) {
+    const values = (config as Record<string, unknown>)[key];
+    if (!Array.isArray(values)) continue;
+    set.clear();
+    for (const v of values) set.add(key === "hidden_target_ids" ? String(v).trim() : String(v).trim().toUpperCase());
+  }
+}
 
 function upper(value?: string | null) {
   return (value || "").trim().toUpperCase();

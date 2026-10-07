@@ -1,5 +1,9 @@
+import pytest
+
+from infrastructure.seed_knowledge import PLATFORM_CONFIG
 from services.source.catalog_display import (
     catalog_related,
+    configure,
     display_domain_name,
     is_hidden_target,
     source_system_name,
@@ -7,7 +11,20 @@ from services.source.catalog_display import (
 )
 
 
-def test_hides_seed_and_poc_targets():
+@pytest.fixture
+def seeded_lists():
+    """The installation's lists are seeded config (CATALOG_DISPLAY), applied by the API at runtime."""
+    configure(next(v for k, v, _ in PLATFORM_CONFIG if k == "CATALOG_DISPLAY"))
+    yield
+    configure({"hidden_target_tables": [], "hidden_target_databases": [], "hidden_target_schemas": [],
+               "hidden_target_ids": []})
+
+
+def test_nothing_installation_specific_is_hidden_by_code():
+    assert not is_hidden_target({"target_table": "COMPLETE_EMPLOYEE_DETAILS", "target_database": "ALATION_POC"})
+
+
+def test_hides_seed_and_poc_targets(seeded_lists):
     assert is_hidden_target({
         "target_table": "COMPLETE_EMPLOYEE_DETAILS",
         "target_database": "ALATION_POC",

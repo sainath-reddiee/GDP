@@ -62,8 +62,8 @@ def pack_rows(pack: Dict[str, Any], database: str, live: Optional[LiveColumns] =
     name = meta["name"]
     did = domain_id(name)
     is_gdp = name == "GDP"
-    config = {k: meta[k] for k in ("silver_database", "silver_schema", "contract", "signals", "source_systems")
-              if k in meta}
+    config = {k: meta[k] for k in ("silver_database", "silver_schema", "contract", "signals", "source_systems",
+                                   "origin") if k in meta}
     standard = normalize_standard(meta.get("standard")) or GENERIC
     config["standard"] = standard
     domains.append((did, name, meta["description"], meta["owner"], True, 1, config))
@@ -194,6 +194,7 @@ def prepare(pack: Dict[str, Any]) -> Tuple[Dict[str, Any], List[str]]:
     meta.setdefault("description", f"{name} domain")
     meta.setdefault("owner", "Imported")
     meta["standard"] = normalize_standard(meta.get("standard")) or GENERIC
+    meta["origin"] = "imported"  # added through the UI: deletable, never re-seeded by a deploy
     pack.setdefault("targets", [])
     pack.setdefault("knowledge", [])
     problems: List[str] = []

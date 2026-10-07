@@ -3,21 +3,25 @@ import { PageHeader } from "@/components/page-header";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
+import type { PlatformState, RulesState } from "./actions";
 import { DeployButton } from "./deploy-button";
+import { SettingsPanel } from "./settings-panel";
 
 type State = { state: string; stage: string | null; kind: string; ordinal: number; phase: number; enabled: boolean; graph_version: string };
 type Transition = { from_state: string; to_state: string; actor: string; enabled: boolean };
 
 export default async function Admin() {
-  const [me, graph] = await Promise.all([
+  const [me, graph, rules, platform] = await Promise.all([
     whoami(),
     api<{ states: State[]; transitions: Transition[] }>("/api/admin/workflow"),
+    api<RulesState>("/api/config/rules").catch(() => null),
+    api<PlatformState>("/api/config/platform").catch(() => null),
   ]);
   const outgoing = (s: string) => graph.transitions.filter((t) => t.from_state === s && t.enabled);
   return (
     <div className="space-y-5">
       <PageHeader eyebrow="Platform" title="Admin"
-                  description="Session, Snowflake deployment and the workflow graph that governs every run." />
+                  description="Session, platform settings, Snowflake deployment and the workflow graph that governs every run." />
       <Card>
         <CardHeader>
           <CardTitle>Session</CardTitle>
@@ -25,6 +29,20 @@ export default async function Admin() {
             Signed in as {me?.user} with role {me?.role}. Auth mode {me?.auth_mode}. Agent {me?.agent ?? "not deployed"}.
           </CardDescription>
         </CardHeader>
+      </Card>
+      <Card>
+        <CardHeader>
+          <CardTitle>Platform settings</CardTitle>
+          <CardDescription>
+            Rules, thresholds and name hints, the AI model and cost rates, catalog display lists and modeling standards.
+            Changes are versioned and survive deploys.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          {rules && platform
+            ? <SettingsPanel rules={rules} platform={platform} />
+            : <p className="text-sm text-muted-foreground">Settings are not available from the API yet. Restart the API after pulling.</p>}
+        </CardContent>
       </Card>
       <Card>
         <CardHeader>
