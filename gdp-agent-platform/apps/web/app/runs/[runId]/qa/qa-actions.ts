@@ -44,3 +44,16 @@ export async function deleteQaTest(runId: string, testId: string) {
   if (result.ok) revalidatePath(`/runs/${runId}/qa`);
   return result;
 }
+
+export type QaSignoff = { decision: "APPROVED" | "REJECTED"; note: string | null; decided_by: string; decided_at: string };
+
+/** Approve or reject the QA tests of the current STTM version (a rejection needs a reason). */
+export async function signOffQa(runId: string, decision: "APPROVED" | "REJECTED", note: string) {
+  const result = await attemptValue(() =>
+    api<{ signoff: QaSignoff | null }>(`/api/runs/${runId}/qa/signoff`, {
+      method: "POST", body: JSON.stringify({ decision, note }),
+    }),
+  );
+  if (result.ok) revalidatePath(`/runs/${runId}`, "layout");
+  return result;
+}
