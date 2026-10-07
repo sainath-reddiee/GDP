@@ -146,8 +146,8 @@ async function Overview() {
               hint={<>{graph?.states[0]?.graph_version ?? ""} · {go("workflow", "View")}</>} />
       </div>
       {rateCount === 0 && (
-        <Panel title="Set AI rates" description="No model has a rate yet, so new AI calls are estimated at 0 credits until Snowflake bills them. Add the rates for the models you use, or reconcile with Snowflake billing to learn them from actual usage."
-               actions={<Link href="/admin?section=cost" className="rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground">Open rate card</Link>} />
+        <Panel title="AI cost uses learned rates" description="No rate card is set, so estimates use the credits per million tokens this account was actually billed for each model, learned from Snowflake's Cortex usage on every reconcile. Set a rate card to use contracted rates instead."
+               actions={<Link href="/admin?section=cost" className="rounded-md border px-3 py-1.5 text-xs font-medium hover:bg-muted">Open rate card</Link>} />
       )}
     </div>
   );

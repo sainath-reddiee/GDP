@@ -18,8 +18,9 @@ const toDraft = (r: Rates): Draft =>
 const key = (d: Draft) => JSON.stringify(d.filter((r) => r.model.trim()));
 
 /** Credits per million tokens, input and output, per model; plus the fallback rate and the credit price. */
-export function RateCardEditor({ rateCard, fallback, legacy, price, modelNames }: {
+export function RateCardEditor({ rateCard, fallback, legacy, price, modelNames, billed }: {
   rateCard: Rates; fallback: number; legacy: Record<string, number>; price: number | null; modelNames: string[];
+  billed: Record<string, number>;
 }) {
   const router = useRouter();
   const toast = useToast();
@@ -63,7 +64,9 @@ export function RateCardEditor({ rateCard, fallback, legacy, price, modelNames }
           <table className="w-full text-sm">
             <thead className="bg-muted/40 text-left text-xs text-muted-foreground">
               <tr><th className="px-3 py-2 font-medium">Model</th><th className="px-3 py-2 font-medium">Input</th>
-                <th className="px-3 py-2 font-medium">Output</th><th className="w-10" /></tr>
+                <th className="px-3 py-2 font-medium">Output</th>
+                <th className="px-3 py-2 font-medium" title="Credits per million tokens this account was actually billed (blended input and output)">Billed rate</th>
+                <th className="w-10" /></tr>
             </thead>
             <tbody className="divide-y">
               {rows.map((r, i) => (
@@ -71,6 +74,7 @@ export function RateCardEditor({ rateCard, fallback, legacy, price, modelNames }
                   <td className="px-3 py-2 font-mono text-xs">{r.model}</td>
                   <td className="px-3 py-1.5"><Input value={r.input} onChange={(e) => set(i, "input", e.target.value)} inputMode="decimal" aria-label={`${r.model} input rate`} className="h-8 w-28 tabular-nums" /></td>
                   <td className="px-3 py-1.5"><Input value={r.output} onChange={(e) => set(i, "output", e.target.value)} inputMode="decimal" aria-label={`${r.model} output rate`} className="h-8 w-28 tabular-nums" /></td>
+                  <td className="px-3 py-2 text-xs tabular-nums text-muted-foreground">{billed[r.model] != null ? billed[r.model].toFixed(3) : "-"}</td>
                   <td className="px-2">
                     <button type="button" aria-label={`Remove ${r.model}`} className="text-muted-foreground hover:text-destructive"
                             onClick={() => setRows((rs) => rs.filter((_, j) => j !== i))}><Trash2 className="h-4 w-4" /></button>
@@ -78,11 +82,18 @@ export function RateCardEditor({ rateCard, fallback, legacy, price, modelNames }
                 </tr>
               ))}
               {rows.length === 0 && (
-                <tr><td colSpan={4} className="px-3 py-4 text-center text-xs text-muted-foreground">No rates yet. Add the models you use.</td></tr>
+                <tr><td colSpan={5} className="px-3 py-4 text-center text-xs text-muted-foreground">No rates set. Estimates use the billed rates learned from Snowflake below.</td></tr>
               )}
             </tbody>
           </table>
         </div>
+        {Object.keys(billed).length > 0 && (
+          <p className="mt-3 text-[11px] text-muted-foreground">
+            Learned from this account&apos;s Cortex billing (credits per million tokens):{" "}
+            {Object.entries(billed).sort(([, a], [, b]) => b - a).map(([m, v]) => `${m} ${v.toFixed(3)}`).join(" · ")}.
+            These apply automatically to models without a rate here.
+          </p>
+        )}
         <div className="mt-3 flex flex-wrap items-center gap-2">
           <select value={adding} onChange={(e) => setAdding(e.target.value)} aria-label="Model to add"
                   className="h-9 rounded-md border bg-background px-2 text-sm">

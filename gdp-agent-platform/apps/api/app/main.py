@@ -1680,7 +1680,7 @@ def costs(group_by: str = "stage", since: Optional[str] = None, until: Optional[
     except (TypeError, ValueError):
         price = None
     return {"group_by": group_by, "rows": rows, "totals": totals, "credit_price_usd": price,
-            "reconcile": _RECONCILE_STATE.get("last")}
+            "reconcile": _RECONCILE_STATE.get("last"), "calibrated_rates": _config(db, "CALIBRATED_RATES", {}) or {}}
 
 
 @app.get("/api/metrics/summary")

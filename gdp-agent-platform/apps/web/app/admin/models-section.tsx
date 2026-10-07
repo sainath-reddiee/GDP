@@ -23,7 +23,7 @@ const STAGE_INFO: Record<string, string> = {
 };
 const FAMILY_LABEL: Record<string, string> = {
   claude: "Anthropic", openai: "OpenAI", llama: "Meta Llama", mistral: "Mistral", deepseek: "DeepSeek",
-  snowflake: "Snowflake", other: "Other",
+  snowflake: "Snowflake", google: "Google", xai: "xAI", qwen: "Qwen", other: "Other",
 };
 const SOURCE_LABEL: Record<string, string> = {
   cortex: "Cortex", account: "Account model", inference_profile: "Inference profile", config: "Configured",

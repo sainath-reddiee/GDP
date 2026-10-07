@@ -8,7 +8,8 @@ import { Panel, Stat } from "./section";
 
 type Row = { key: string | null; calls: number; total_tokens: number; credits?: number; estimated_cost?: number;
   actual_credits?: number | null; estimated_credits?: number };
-type Costs = { rows: Row[]; totals: Record<string, number>; credit_price_usd?: number | null; reconcile?: ReconcileResult | null };
+type Costs = { rows: Row[]; totals: Record<string, number>; credit_price_usd?: number | null; reconcile?: ReconcileResult | null;
+  calibrated_rates?: Record<string, number> };
 
 const n = (v: unknown) => Number(v ?? 0);
 const credits = (r: Row) => n(r.credits ?? r.estimated_cost);
@@ -100,6 +101,7 @@ export async function CostSection({ platform, modelNames }: { platform: Platform
         fallback={n((s.CREDITS_PER_MILLION_TOKENS?.value as Record<string, number> | undefined)?.default)}
         legacy={(s.CREDITS_PER_MILLION_TOKENS?.value as Record<string, number>) ?? {}}
         price={(s.CREDIT_PRICE_USD?.value as number | null) ?? null}
+        billed={byStage.calibrated_rates ?? {}}
         modelNames={Array.from(new Set([...modelNames, ...byModel.rows.map((r) => r.key ?? "").filter((k) => k && k !== "unknown")]))}
       />
     </div>
