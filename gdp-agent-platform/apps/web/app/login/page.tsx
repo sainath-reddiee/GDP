@@ -1,199 +1,87 @@
-import type { ReactNode } from "react";
-import {
-  Database,
-  GitMerge,
-  ScanSearch,
-  ShieldCheck,
-  Sparkles,
-  Workflow,
-} from "lucide-react";
+import { Cpu, Layers3, Snowflake } from "lucide-react";
 import { AUTH_MODE } from "@/lib/api";
-import { continueDev } from "./actions";
-import { LoginButton } from "./login-button";
-import { LoginForm } from "./form";
+import { LoginForm, type AuthMode } from "./form";
+import { AgentOrchestration } from "./agent-orchestration";
 
-const trunk = ["Source", "Landing", "Profiling", "Mapping"] as const;
+export const metadata = { title: "Sign in · Agentic Pipeline" };
 
-const pillars = [
-  {
-    icon: Database,
-    title: "Point at a source and a target that already exist",
-    body: "Onboard from an account database or a mounted Snowflake share. Choose the silver table you are modelling into, or profile a new source and store the suggestion — instead of inventing a model in a notebook.",
-  },
-  {
-    icon: ScanSearch,
-    title: "Profile so mapping has evidence, not guesses",
-    body: "Landing is a CTAS as-is. Profiling then captures SQL statistics, PII signals, and Cortex column descriptions so every later decision has evidence, not a guess.",
-  },
-  {
-    icon: GitMerge,
-    title: "Hybrid mapping, then a human review card",
-    body: "Seven scores rank each candidate: datatype, cardinality, keywords, embeddings, domain rules, historical approvals, and uniqueness. Cortex only adjudicates the ambiguous band. You see the evidence and Approve, Modify, or Reject.",
-  },
-  {
-    icon: Workflow,
-    title: "From one STTM, Data Quality and dbt run as separate tracks",
-    body: "Approved columns become the source-to-target contract. That contract fans out: Data Quality expectations on one track, compile-only dbt on the other. They generate in parallel. Neither waits on the other.",
-  },
-];
-
-const principles = [
-  {
-    icon: ShieldCheck,
-    title: "Gates you cannot skip",
-    body: "Mapping and the STTM stop for a person. Data Quality and dbt each review on their own track after they generate from that contract. The supervisor can recommend the next step. It cannot approve a gate.",
-  },
-  {
-    icon: Sparkles,
-    title: "Every review makes the next run smarter",
-    body: "Your decision is stored as domain knowledge. Later runs score historical matches higher, and Cortex sees the patterns your team already accepted.",
-  },
-];
-
-function Node({ children }: { children: ReactNode }) {
+function LogoMark() {
   return (
-    <span className="rounded-md bg-white/10 px-2.5 py-1 text-xs font-medium text-white">
-      {children}
+    <span className="relative grid h-10 w-10 place-items-center rounded-xl bg-gradient-to-br from-cyan-400 via-indigo-500 to-violet-600 shadow-[0_0_28px_rgba(99,102,241,0.45)]">
+      <svg viewBox="0 0 24 24" className="h-5 w-5 text-white" fill="none" stroke="currentColor" strokeWidth="2"
+           strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+        <circle cx="5" cy="6" r="2.2" />
+        <circle cx="5" cy="18" r="2.2" />
+        <circle cx="19" cy="12" r="2.4" />
+        <path d="M7.2 6.4c4.6.6 6 2.6 9.4 4.8M7.2 17.6c4.6-.6 6-2.6 9.4-4.8" />
+      </svg>
+      <span aria-hidden className="absolute inset-0 rounded-xl ring-1 ring-inset ring-white/25" />
     </span>
   );
 }
 
-function FactoryFlow() {
-  return (
-    <figure className="rounded-xl border border-white/10 bg-black/20 p-5">
-      <figcaption className="mb-4 text-[11px] font-semibold uppercase tracking-[0.16em] text-white/50">
-        How a run moves
-      </figcaption>
-
-      <ol className="flex flex-wrap items-center justify-center gap-1.5">
-        {trunk.map((stage, i) => (
-          <li key={stage} className="flex items-center gap-1.5">
-            <Node>{stage}</Node>
-            {i < trunk.length - 1 && <span aria-hidden className="text-white/30">→</span>}
-          </li>
-        ))}
-      </ol>
-
-      <div className="mt-1 flex flex-col items-center">
-        <span aria-hidden className="py-1 text-white/30">↓</span>
-        <div className="rounded-lg border border-white/25 bg-white/10 px-4 py-2 text-center">
-          <p className="text-sm font-semibold text-white">STTM</p>
-          <p className="text-[11px] text-white/55">Approved source-to-target contract</p>
-        </div>
-      </div>
-
-      <div className="mx-auto mt-0 w-full max-w-lg">
-        <div className="flex justify-center">
-          <div aria-hidden className="h-4 w-px bg-white/30" />
-        </div>
-        <div aria-hidden className="mx-[25%] h-px bg-white/30" />
-        <div className="grid grid-cols-2 gap-3">
-          <div className="flex flex-col items-center">
-            <div aria-hidden className="h-4 w-px bg-white/30" />
-            <div className="w-full rounded-lg border border-white/15 bg-white/5 px-3 py-3 text-center">
-              <p className="text-[10px] font-semibold uppercase tracking-wide text-white/45">Parallel track</p>
-              <p className="mt-1 text-sm font-semibold text-white">Data Quality</p>
-              <p className="mt-1 text-[11px] leading-relaxed text-white/55">
-                Quality expectations generated from the contract.
-              </p>
-            </div>
-          </div>
-          <div className="flex flex-col items-center">
-            <div aria-hidden className="h-4 w-px bg-white/30" />
-            <div className="w-full rounded-lg border border-white/15 bg-white/5 px-3 py-3 text-center">
-              <p className="text-[10px] font-semibold uppercase tracking-wide text-white/45">Parallel track</p>
-              <p className="mt-1 text-sm font-semibold text-white">dbt</p>
-              <p className="mt-1 text-[11px] leading-relaxed text-white/55">
-                Models compiled from the same STTM, then validated.
-              </p>
-            </div>
-          </div>
-        </div>
-      </div>
-    </figure>
-  );
-}
-
-function LoginAction() {
-  if (AUTH_MODE === "pat") {
-    return (
-      <div className="w-full max-w-xs rounded-lg bg-card p-4 shadow-sm">
-        <LoginForm />
-      </div>
-    );
-  }
-  return (
-    <form action={continueDev}>
-      <LoginButton />
-    </form>
-  );
-}
+const TELEMETRY = [
+  { icon: Snowflake, label: "Snowflake native" },
+  { icon: Cpu, label: "Cortex enabled" },
+  { icon: Layers3, label: "Medallion ready" },
+];
 
 export default function LoginPage() {
+  const mode: AuthMode = AUTH_MODE === "pat" ? "pat" : "dev";
   return (
-    <div className="relative min-h-screen overflow-hidden bg-sidebar text-sidebar-foreground">
-      <div
-        aria-hidden
-        className="pointer-events-none absolute inset-0 opacity-40"
-        style={{
-          backgroundImage:
-            "radial-gradient(ellipse 80% 50% at 10% -10%, hsl(213 80% 40% / 0.45), transparent 55%), radial-gradient(ellipse 50% 40% at 90% 110%, hsl(213 70% 28% / 0.35), transparent 50%)",
-        }}
-      />
-      <header className="relative flex items-center justify-between px-6 py-5 lg:px-10">
-        <p className="text-sm font-semibold text-white">Agentic pipeline</p>
-        <LoginAction />
-      </header>
-      <main className="relative mx-auto flex max-w-3xl flex-col gap-10 px-6 pb-16 pt-4 lg:px-10">
-        <div>
-          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-white/70">
-            Snowflake-native · Cortex-orchestrated · Human-gated
-          </p>
-          <h1 className="mt-4 text-4xl font-semibold leading-tight tracking-tight text-white lg:text-[2.6rem]">
-            Onboard a new source onto the Agentic pipeline you already run.
-          </h1>
-          <p className="mt-4 max-w-2xl text-lg leading-relaxed text-white/85">
-            Profile it, map it, approve the contract — then Data Quality and dbt generate
-            from that STTM in parallel.
-          </p>
-        </div>
+    <div className="relative min-h-screen overflow-clip bg-[#080B10] font-sans text-slate-200 antialiased">
+      {/* ambient light and fine grid */}
+      <div aria-hidden className="pointer-events-none absolute inset-0 overflow-hidden">
+        <div className="absolute left-1/2 top-[-20%] h-[640px] w-[900px] -translate-x-1/2 rounded-full bg-indigo-600/20 blur-[140px]" />
+        <div className="absolute bottom-[-25%] right-[-10%] h-[520px] w-[620px] rounded-full bg-cyan-500/10 blur-[140px]" />
+        <div className="absolute inset-0 bg-[linear-gradient(to_right,#1f293710_1px,transparent_1px),linear-gradient(to_bottom,#1f293710_1px,transparent_1px)] bg-[size:4rem_4rem] [mask-image:radial-gradient(ellipse_60%_50%_at_50%_0%,#000_70%,transparent_100%)]" />
+      </div>
 
-        <p className="max-w-2xl text-sm leading-relaxed text-white/70">
-          A customer share is mounted, or the database is already in the account.
-          You point the factory at the source tables and the silver target they
-          must land on. Tables copy as-is. Profiling builds the evidence. Mapping
-          proposes every column. After you approve the source-to-target document,
-          two tracks start from it at the same time: Data Quality writes the
-          checks, dbt compiles the models. Cortex does the analysis. You sign
-          every gate.
-        </p>
+      <div className="relative mx-auto grid min-h-screen max-w-[1440px] grid-cols-1 gap-10 px-5 py-8 sm:px-8 lg:grid-cols-12 lg:gap-12 lg:px-12 lg:py-10">
+        <div className="flex min-w-0 flex-col lg:col-span-5">
+          <header className="flex items-center gap-3">
+            <LogoMark />
+            <div>
+              <p className="text-sm font-semibold tracking-tight text-white">Agentic Pipeline</p>
+              <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-slate-500">Autonomous data engineering</p>
+            </div>
+          </header>
 
-        <FactoryFlow />
+          <main className="flex flex-1 flex-col justify-center py-10 lg:py-0">
+            <div className="mx-auto w-full max-w-md">
+              <span className="inline-flex items-center gap-2 rounded-full border border-indigo-400/25 bg-indigo-500/10 px-3 py-1 text-[11px] font-medium text-indigo-200">
+                <span className="h-1.5 w-1.5 animate-glow rounded-full bg-emerald-400" /> Workspace sign-in
+              </span>
+              <h1 className="mt-5 text-3xl font-semibold leading-tight tracking-tight text-white sm:text-[2.1rem]">
+                Sign in to your workspace
+              </h1>
+              <p className="mt-3 text-[15px] leading-relaxed text-slate-400">
+                AI agents profile your sources, model them against your domain, write the tests and generate dbt.
+                You approve every gate.
+              </p>
 
-        <div className="grid gap-3 sm:grid-cols-2">
-          {pillars.map(({ icon: Icon, title, body }) => (
-            <article key={title} className="rounded-lg border border-white/10 bg-white/5 p-4">
-              <div className="mb-2 flex h-8 w-8 items-center justify-center rounded-md bg-white/10 text-white">
-                <Icon className="h-4 w-4" />
+              <div className="mt-8 rounded-2xl border border-slate-800/60 bg-[rgba(15,23,42,0.65)] p-5 shadow-[0_20px_60px_-30px_rgba(2,6,23,0.9)] backdrop-blur-xl sm:p-6">
+                <LoginForm mode={mode} />
               </div>
-              <p className="text-sm font-semibold text-white">{title}</p>
-              <p className="mt-1.5 text-xs leading-relaxed text-white/65">{body}</p>
-            </article>
-          ))}
+            </div>
+          </main>
+
+          <footer className="flex flex-wrap items-center gap-2">
+            {TELEMETRY.map(({ icon: Icon, label }, i) => (
+              <span key={label} className="inline-flex items-center gap-1.5 rounded-full border border-slate-800 bg-slate-900/60 px-2.5 py-1 text-[11px] text-slate-400">
+                <Icon className={i === 0 ? "h-3 w-3 text-cyan-400" : i === 1 ? "h-3 w-3 text-violet-400" : "h-3 w-3 text-emerald-400"} />
+                {label}
+              </span>
+            ))}
+          </footer>
         </div>
 
-        <div className="grid gap-3 sm:grid-cols-2">
-          {principles.map(({ icon: Icon, title, body }) => (
-            <article key={title} className="flex gap-3 rounded-lg border border-white/10 px-4 py-3">
-              <Icon className="mt-0.5 h-4 w-4 shrink-0 text-white/80" />
-              <div>
-                <h3 className="text-sm font-semibold text-white">{title}</h3>
-                <p className="mt-1 text-xs leading-relaxed text-white/65">{body}</p>
-              </div>
-            </article>
-          ))}
-        </div>
-      </main>
+        <aside className="min-w-0 lg:col-span-7 lg:py-2">
+          <div className="lg:sticky lg:top-10 lg:h-[calc(100vh-5rem)] lg:min-h-[600px]">
+            <AgentOrchestration />
+          </div>
+        </aside>
+      </div>
     </div>
   );
 }
