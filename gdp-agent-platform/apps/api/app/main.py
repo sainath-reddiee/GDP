@@ -4037,3 +4037,64 @@ def decide_suggestion(run_id: str, stage: str, body: SuggestionDecision, db: Db 
         raise _snowflake_error(exc) from exc
     _drop_run(run_id)
     return result
+
+
+# ---------------------------------------------------------------- Knowledge packs: add a domain without code
+
+
+def _current_db_name(db: Db) -> str:
+    found = db.query("SELECT CURRENT_DATABASE() AS D")
+    name = (found[0].get("d") if found else None) or ""
+    assert re.match(r"^[A-Za-z_][A-Za-z0-9_$]*$", name), "no current database"
+    return name
+
+
+class PackImport(BaseModel):
+    pack: dict
+
+
+class PackDraft(BaseModel):
+    text: str = Field(min_length=20, max_length=200_000)
+    standard: Optional[Literal["GDP", "GENERIC"]] = "GENERIC"
+
+
+@app.post("/api/domains/import")
+def import_domain_pack(body: PackImport, db: Db = Depends(current_db)):
+    """Register a pack (domain, targets, columns, knowledge) exactly as the deploy seeds the repository packs."""
+    from services.knowledge.packs import import_pack
+
+    try:
+        result = import_pack(db.execute, _current_db_name(db), body.pack)
+    except AssertionError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except Exception as exc:
+        raise _snowflake_error(exc) from exc
+    _DOMAIN_VOCAB.update(at=0.0, domains=[])
+    _RULES_CACHE.clear()
+    return result
+
+
+@app.post("/api/domains/draft")
+def draft_domain_pack(body: PackDraft, db: Db = Depends(current_db)):
+    """AI drafts a pack from any contract document; nothing is saved until the reviewer imports it."""
+    from services.knowledge.packs import draft_pack
+
+    started = time.time()
+    try:
+        result = invoke_source(db, draft_pack, body.text, body.standard)
+    except AssertionError as exc:
+        raise HTTPException(502, str(exc)) from exc
+    except Exception as exc:
+        raise _snowflake_error(exc) from exc
+    _record_cost(db, None, "KNOWLEDGE", result.get("model"), result.pop("usage", None), started)
+    return result
+
+
+@app.get("/api/domains/{domain_id}/export")
+def export_domain_pack(domain_id: str, db: Db = Depends(current_db)):
+    from services.knowledge.packs import export_pack
+
+    try:
+        return {"pack": export_pack(lambda sql, params: db.query(sql, params), domain_id)}
+    except AssertionError as exc:
+        raise HTTPException(404, str(exc)) from exc

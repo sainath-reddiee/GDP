@@ -4,6 +4,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
 import { displayDomain } from "@/lib/catalog-display";
+import { PackEditor } from "./pack-editor";
 
 type Domain = {
   domain_id: string; domain_name: string; description: string | null; owner: string | null;
@@ -43,8 +44,10 @@ export default async function Domains() {
     <div className="space-y-5">
       <PageHeader eyebrow="Knowledge" title="Domains"
                   description="Domain contracts drive source detection on the Sources page and the mapping, STTM and dbt generation for every run." />
+      <PackEditor domains={visible.filter((d) => d.domain_name !== "GDP")
+        .map((d) => ({ domain_id: d.domain_id, domain_name: d.domain_name, label: displayDomain(d.domain_name) ?? d.domain_name }))} />
       {visible.length === 0 && (
-        <Card className="p-5 text-sm text-muted-foreground">No domains registered yet. Deploy the platform to seed the domain packs.</Card>
+        <Card className="p-5 text-sm text-muted-foreground">No domains registered yet. Add a knowledge pack above, or deploy the platform to seed the repository packs.</Card>
       )}
       {visible.map((d, i) => {
         const detail = details[i];
