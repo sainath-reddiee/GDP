@@ -10,6 +10,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
+import { OraclePanel } from "./oracle-panel";
 import {
   landExternalFiles, listExternalFiles, loadConnectors, registerExternalSource, uploadExternalFiles,
 } from "./actions";
@@ -130,8 +131,12 @@ export function ConnectSource({ initial, onClose, onSnowflake, onOpenSchema }: {
   });
 
   const fileConnectors = connectors.filter((c) => c.kind === "FILE");
-  const otherConnectors = connectors.filter((c) => c.kind !== "FILE");
-  const canRegister = connector && /^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(name)
+  const extractedConnectors = connectors.filter((c) => c.kind !== "FILE" && c.extractor);
+  const otherConnectors = connectors.filter((c) => c.kind !== "FILE" && !c.extractor);
+  const isOracle = connector?.id === "oracle";
+  const oracleReady = !isOracle || (!!config.host && !!config.user && !!(config.service_name || config.sid)
+    && ((config.runtime ?? "snowflake") === "snowflake" || !!config.password_env));
+  const canRegister = connector && /^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(name) && oracleReady
     && connector.fields.filter((f) => ["url", "storage_integration"].includes(f)).every((f) => config[f]);
 
   return (
@@ -146,7 +151,7 @@ export function ConnectSource({ initial, onClose, onSnowflake, onOpenSchema }: {
           )}
           <div>
             <h3 className="text-base font-semibold">
-              {step === "manage" && managed ? `${managed.name}: land into Snowflake` : "Connect a source"}
+              {step === "manage" && managed ? `${managed.name}: ${managed.connector === "oracle" ? "Oracle source" : "land into Snowflake"}` : "Connect a source"}
             </h3>
             <p className="text-xs text-muted-foreground">
               {step === "choose" && "Where does the data live?"}
@@ -174,7 +179,9 @@ export function ConnectSource({ initial, onClose, onSnowflake, onOpenSchema }: {
 
           {step === "connector" && (
             <div className="space-y-4">
-              {[["Files (landed by the platform)", fileConnectors], ["Databases, SaaS and APIs (landed by a Snowflake connector)", otherConnectors]].map(
+              {[["Files (landed by the platform)", fileConnectors],
+                ["Databases extracted and landed by the platform", extractedConnectors],
+                ["Databases, SaaS and APIs (landed by a Snowflake connector)", otherConnectors]].filter(([, list]) => (list as Connector[]).length).map(
                 ([title, list]) => (
                   <div key={title as string}>
                     <p className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">{title as string}</p>
@@ -183,7 +190,7 @@ export function ConnectSource({ initial, onClose, onSnowflake, onOpenSchema }: {
                         const Icon = ICONS[c.id] ?? Database;
                         return (
                           <button key={c.id} type="button"
-                                  onClick={() => { setConnector(c); setConfig(c.kind === "FILE" ? { file_format: "CSV" } : {}); setStep("form"); }}
+                                  onClick={() => { setConnector(c); setConfig(c.kind === "FILE" ? { file_format: "CSV" } : c.id === "oracle" ? { port: "1521", runtime: "snowflake", service_name: "" } : {}); setStep("form"); }}
                                   className="flex items-center gap-2 rounded-lg border px-3 py-2.5 text-left text-sm hover:border-primary hover:bg-primary/5">
                             <Icon className="h-4 w-4 text-muted-foreground" /> {c.label}
                           </button>
@@ -210,6 +217,7 @@ export function ConnectSource({ initial, onClose, onSnowflake, onOpenSchema }: {
                   Tables land in <span className="font-mono">EXT_{name || "NAME"}</span> of the platform database.
                 </p>
               </div>
+              {isOracle ? <OracleForm config={config} setConfig={setConfig} /> : (
               <div className="grid gap-3 sm:grid-cols-2">
                 {connector.fields.map((f) => {
                   const meta = FIELD_LABELS[f] ?? { label: f, placeholder: "" };
@@ -230,6 +238,7 @@ export function ConnectSource({ initial, onClose, onSnowflake, onOpenSchema }: {
                   );
                 })}
               </div>
+              )}
             </div>
           )}
 
@@ -244,7 +253,11 @@ export function ConnectSource({ initial, onClose, onSnowflake, onOpenSchema }: {
                   </div>
                 </div>
               )}
-              {managedSpec?.landable && (
+              {managed.connector === "oracle" && (
+                <OraclePanel sourceId={managed.id} name={managed.name}
+                             onOpenSchema={(target) => { onOpenSchema(target); onClose(); }} />
+              )}
+              {managedSpec?.landable && !managedSpec.extractor && (
                 <>
                   {managed.connector === "upload" && (
                     <div className="flex flex-wrap items-center gap-3 rounded-lg border border-dashed p-3">
@@ -314,7 +327,10 @@ export function ConnectSource({ initial, onClose, onSnowflake, onOpenSchema }: {
         <footer className="flex items-center gap-3 border-t px-6 py-3">
           {step === "form" && (
             <>
-              <p className="text-[11px] text-muted-foreground">Only object names are stored; credentials stay in Snowflake.</p>
+              <p className="text-[11px] text-muted-foreground">
+                {isOracle ? "No password is stored here: it goes into a Snowflake secret (next step) or stays in an environment variable on the API host."
+                  : "Only object names are stored; credentials stay in Snowflake."}
+              </p>
               <Button className="ml-auto" disabled={!canRegister || pending} onClick={register}>
                 {pending ? <Loader2 className="h-4 w-4 animate-spin" /> : null} Register source
               </Button>
@@ -331,6 +347,83 @@ export function ConnectSource({ initial, onClose, onSnowflake, onOpenSchema }: {
           )}
         </footer>
       </div>
+    </div>
+  );
+}
+
+
+/** Oracle connection settings: where the database is, how to reach it, and which runtime reads it. */
+function OracleForm({ config, setConfig }: {
+  config: Record<string, string>; setConfig: (c: Record<string, string>) => void;
+}) {
+  const bySid = config.sid !== undefined && config.service_name === undefined;
+  const set = (k: string, v: string) => setConfig({ ...config, [k]: v });
+  const connectBy = (k: "service_name" | "sid") => {
+    const rest = Object.fromEntries(Object.entries(config).filter(([key]) => key !== "service_name" && key !== "sid"));
+    setConfig({ ...rest, [k]: "" });
+  };
+  const runtime = config.runtime ?? "snowflake";
+  return (
+    <div className="space-y-4">
+      <div className="grid gap-3 sm:grid-cols-[1fr_120px]">
+        <div>
+          <label htmlFor="ora_host" className="mb-1 block text-xs font-medium">Host</label>
+          <Input id="ora_host" value={config.host ?? ""} onChange={(e) => set("host", e.target.value.trim())} placeholder="db.acme.com or 10.0.4.12" />
+        </div>
+        <div>
+          <label htmlFor="ora_port" className="mb-1 block text-xs font-medium">Port</label>
+          <Input id="ora_port" value={config.port ?? "1521"} onChange={(e) => set("port", e.target.value.replace(/[^0-9]/g, ""))} />
+        </div>
+      </div>
+      <div>
+        <div className="mb-1 flex items-center gap-2 text-xs font-medium">
+          Connect by
+          {(["service_name", "sid"] as const).map((k) => {
+            const active = k === "sid" ? bySid : !bySid;
+            return (
+              <button key={k} type="button" aria-pressed={active} onClick={() => connectBy(k)}
+                      className={cn("rounded-md border px-2 py-0.5", active ? "border-primary bg-primary/10 text-primary" : "hover:bg-muted")}>
+                {k === "sid" ? "SID" : "Service name"}
+              </button>
+            );
+          })}
+        </div>
+        <Input aria-label={bySid ? "SID" : "Service name"} value={(bySid ? config.sid : config.service_name) ?? ""}
+               onChange={(e) => set(bySid ? "sid" : "service_name", e.target.value.trim())} placeholder={bySid ? "ORCL" : "ORCLPDB1"} />
+      </div>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <div>
+          <label htmlFor="ora_user" className="mb-1 block text-xs font-medium">User</label>
+          <Input id="ora_user" value={config.user ?? ""} onChange={(e) => set("user", e.target.value.toUpperCase())} placeholder="ETL_READER" />
+        </div>
+        <div>
+          <label htmlFor="ora_owner" className="mb-1 block text-xs font-medium">Schema owner</label>
+          <Input id="ora_owner" value={config.schema_owner ?? ""} onChange={(e) => set("schema_owner", e.target.value.toUpperCase())}
+                 placeholder={config.user || "HR"} />
+          <p className="mt-1 text-[11px] text-muted-foreground">Whose tables to read; defaults to the user.</p>
+        </div>
+      </div>
+      <div>
+        <p className="mb-1 text-xs font-medium">Where the extraction runs</p>
+        <div className="grid gap-2 sm:grid-cols-2">
+          {([["snowflake", "Inside Snowflake", "Recommended. Oracle must be reachable from Snowflake (public endpoint, allow-listed IPs or PrivateLink). The password is kept in a Snowflake secret."],
+             ["api_host", "On this platform's server", "For an Oracle only your network reaches. The password is read from an environment variable on the API host."]] as const).map(([v, t, d]) => (
+            <button key={v} type="button" aria-pressed={runtime === v} onClick={() => set("runtime", v)}
+                    className={cn("rounded-xl border p-3 text-left", runtime === v ? "border-primary bg-primary/5 ring-2 ring-primary/20" : "hover:bg-muted/40")}>
+              <span className="block text-sm font-semibold">{t}</span>
+              <span className="block text-[11px] text-muted-foreground">{d}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+      {runtime === "api_host" && (
+        <div>
+          <label htmlFor="ora_env" className="mb-1 block text-xs font-medium">Password environment variable</label>
+          <Input id="ora_env" value={config.password_env ?? ""} onChange={(e) => set("password_env", e.target.value.toUpperCase())}
+                 placeholder="ORACLE_HR_PASSWORD" className="font-mono" />
+          <p className="mt-1 text-[11px] text-muted-foreground">Set it on the machine that runs the API, then restart the API.</p>
+        </div>
+      )}
     </div>
   );
 }

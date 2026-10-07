@@ -130,6 +130,13 @@ def _source_for_run(session, run: Dict[str, Any]) -> tuple[Dict[str, Any], Sourc
     return source, adapter_for(source["SOURCE_TYPE"], config["database"], config["schema"])
 
 
+def _location(configuration_json: Any) -> Dict[str, Any]:
+    """Database and schema of a registered source. External sources also store connector settings and load
+    history in CONFIGURATION_JSON; those never make a registration conflict."""
+    cfg = json.loads(configuration_json) if isinstance(configuration_json, str) else (configuration_json or {})
+    return {"database": cfg.get("database"), "schema": cfg.get("schema")}
+
+
 def register_source(session, run_id: str, payload_json: str) -> Dict[str, Any]:
     run_id = _text(run_id, "RUN_ID", required=True)
     payload = {k.upper(): v for k, v in _parse_details(payload_json).items()}
@@ -160,7 +167,7 @@ def register_source(session, run_id: str, payload_json: str) -> Dict[str, Any]:
                               "WHERE SOURCE_SYSTEM_NAME = ? AND ACTIVE_FLAG", [name])
     if existing:
         prior = existing[0]
-        if prior["SOURCE_TYPE"] != source_type or json.loads(prior["CONFIGURATION_JSON"]) != config:
+        if prior["SOURCE_TYPE"] != source_type or _location(prior["CONFIGURATION_JSON"]) != config:
             raise ValueError(f"SOURCE_NAME_CONFLICT: {name} is already registered as {prior['SOURCE_TYPE']} "
                              f"{json.loads(prior['CONFIGURATION_JSON'])}")
         source_id = prior["SOURCE_SYSTEM_ID"]
@@ -398,7 +405,7 @@ def register_connection(session, payload_json: str) -> Dict[str, Any]:
                               "WHERE SOURCE_SYSTEM_NAME = ? AND ACTIVE_FLAG", [name])
     if existing:
         prior = existing[0]
-        if prior["SOURCE_TYPE"] != source_type or json.loads(prior["CONFIGURATION_JSON"]) != config:
+        if prior["SOURCE_TYPE"] != source_type or _location(prior["CONFIGURATION_JSON"]) != config:
             raise ValueError(f"SOURCE_NAME_CONFLICT: {name} is already registered as {prior['SOURCE_TYPE']} "
                              f"{json.loads(prior['CONFIGURATION_JSON'])}")
         return {"source_system_id": prior["SOURCE_SYSTEM_ID"], "created": False, "objects_discovered": len(objects)}

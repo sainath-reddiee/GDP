@@ -227,6 +227,30 @@ def refresh_github_publisher(cur, database: str, services_import: str) -> str:
         return f"github publisher: skipped ({exc})"
 
 
+def refresh_oracle_sources(cur, database: str, services_import: str) -> str:
+    """Re-point each Oracle source's procedure (Snowflake runtime, already set up) at the new code package."""
+    import json as _json
+    from services.source.oracle.procedures import procedure_sql
+
+    try:
+        cur.execute(f"SELECT CONFIGURATION_JSON FROM {database}.SOURCE.SOURCE_REGISTRY "
+                    "WHERE CONNECTION_TYPE = 'oracle' AND ACTIVE_FLAG")
+        configs = [_json.loads(r[0]) if isinstance(r[0], str) else r[0] for r in cur.fetchall()]
+    except Exception as exc:
+        return f"oracle sources: skipped ({exc})"
+    done, failed = 0, []
+    for cfg in configs:
+        if cfg.get("runtime", "snowflake") != "snowflake" or not cfg.get("oracle_procedure"):
+            continue
+        try:
+            cur.execute(procedure_sql(cfg["database"], cfg["schema"], services_import,
+                                      cfg["external_access_integration"]))
+            done += 1
+        except Exception as exc:
+            failed.append(f"{cfg.get('schema')}: {str(exc)[:120]}")
+    return f"oracle sources: {done} procedure(s) refreshed" + (f"; failed {failed}" if failed else "")
+
+
 def apply_to_connection(con, database: str, warehouse: str, variables: Dict[str, str],
                         zip_name: str, zip_bytes: bytes, migrations, procedures, extra_sql,
                         graph_version, state_rows, transition_rows, demo_files) -> List[str]:
@@ -294,6 +318,7 @@ def apply_to_connection(con, database: str, warehouse: str, variables: Dict[str,
         con.execute_string(render(path.read_text(encoding="utf-8"), variables))
         log.append(f"procedures {path.name}: applied")
     log.append(refresh_github_publisher(cur, database, variables["services_import"]))
+    log.append(refresh_oracle_sources(cur, database, variables["services_import"]))
 
     log.extend(seed_platform(cur, database) or [])
     log.append("seed domain packs, skills, platform config")

@@ -3832,7 +3832,10 @@ def catalog_table_profile(database: str, schema: str, table: str, db: Db = Depen
 @app.get("/api/profiles/store")
 def profile_store(db: Db = Depends(current_db)):
     """Every staged profile across all databases, newest first."""
-    rows = [r for r in _store_rows(db) if r.get("source_fingerprint") or r.get("status") == "PROFILING"]
+    # In-place Oracle profiles (source ORACLE_<NAME>) describe tables outside Snowflake; they show in the Oracle
+    # panel, not as Snowflake schemas to open.
+    rows = [r for r in _store_rows(db) if (r.get("source_fingerprint") or r.get("status") == "PROFILING")
+            and not str(r.get("source_name") or "").upper().startswith("ORACLE_")]
     rows.sort(key=lambda r: r.get("status_updated_at") or r.get("profiled_at") or "", reverse=True)
     return {"profiles": rows}
 
@@ -4632,3 +4635,235 @@ def ask_domain(domain_id: str, body: DomainQuestion, db: Db = Depends(current_db
     result = _domain_ai(db, ask, domain_id, body.question)
     _record_cost(db, None, "KNOWLEDGE", result.get("model"), result.pop("usage", None), started)
     return result
+
+
+# ---------------------------------------------------------------- Oracle sources: setup, test, catalog, profile, ingest
+
+_ingest_jobs: dict[str, dict] = {}
+
+
+class OracleSetup(BaseModel):
+    password: str = Field(min_length=1, max_length=1024)
+    external_access_integration: Optional[str] = Field(default=None, max_length=255)
+
+
+class OracleTables(BaseModel):
+    tables: list[str] = Field(min_length=1, max_length=500)
+
+
+class OracleIngest(OracleTables):
+    mode: Literal["replace", "append"] = "replace"
+    storage: Literal["MANAGED", "ICEBERG"] = "MANAGED"
+    watermark_columns: dict[str, str] = Field(default_factory=dict)
+    profile_after_landing: bool = True
+
+
+def _oracle_source(db: Db, source_id: str) -> dict:
+    found = db.query("SELECT SOURCE_SYSTEM_ID, SOURCE_SYSTEM_NAME, CONNECTION_TYPE, CONFIGURATION_JSON "
+                     "FROM SOURCE.SOURCE_REGISTRY WHERE SOURCE_SYSTEM_ID = %s AND ACTIVE_FLAG", (source_id,))
+    if not found or found[0]["connection_type"] != "oracle":
+        raise HTTPException(404, "Oracle source not found")
+    src = found[0]
+    src["config"] = _json(src["configuration_json"]) or {}
+    return src
+
+
+def _oracle_call(db: Db, source_id: str, action: str, payload: dict, progress=None) -> dict:
+    """Run an Oracle action in the source's runtime: its Snowflake procedure, or this API host."""
+    from services.source.oracle.procedures import api_host_password, object_names, run
+
+    src = _oracle_source(db, source_id)
+    cfg = src["config"]
+    if cfg.get("runtime", "snowflake") == "api_host":
+        try:
+            password = api_host_password(cfg)
+        except AssertionError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        return invoke_source(db, run, source_id, action, json.dumps(payload), password, progress)
+    if not cfg.get("oracle_procedure"):
+        raise HTTPException(409, "Set up the Snowflake connection for this source first (Oracle password, network "
+                                 "rule and external access integration).")
+    proc = object_names(cfg["database"], cfg["schema"])["procedure"]
+    result = db.call(f"CALL {proc}(%s, %s, %s)", (source_id, action, json.dumps(payload)))
+    return _json(result) if isinstance(result, str) else result
+
+
+def _oracle_errors(fn):
+    try:
+        return fn()
+    except HTTPException:
+        raise
+    except AssertionError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except Exception as exc:
+        text = str(exc)
+        if "ORA-01017" in text:
+            raise HTTPException(401, "Oracle rejected the user name or password (ORA-01017).") from exc
+        if any(code in text for code in ("ORA-12541", "ORA-12170", "DPY-6005", "DPY-4011", "timed out")):
+            raise HTTPException(502, "Could not reach the Oracle listener. Check host, port and that this runtime "
+                                     "is allowed through the network (for Snowflake: the network rule).") from exc
+        raise _snowflake_error(exc) from exc
+
+
+@app.post("/api/sources/{source_id}/oracle/setup")
+def oracle_setup(source_id: str, body: OracleSetup, db: Db = Depends(current_db)):
+    """Snowflake runtime: network rule to the Oracle listener, PASSWORD secret, external access integration and
+    the source's procedure. The password is used only while running the statements and never stored elsewhere."""
+    from services.source.oracle.procedures import object_names, procedure_sql, setup_sql
+
+    src = _oracle_source(db, source_id)
+    cfg = src["config"]
+    if cfg.get("runtime", "snowflake") != "snowflake":
+        raise HTTPException(409, "This source runs on the API host; its password comes from an environment variable.")
+    eai = (body.external_access_integration or f"{src['source_system_name']}_ORACLE_ACCESS").strip().upper()
+    password = body.password
+    escaped = password.replace("\\", "\\\\").replace("'", "''")
+    try:
+        statements = setup_sql(cfg["database"], cfg["schema"], eai, cfg["host"], int(cfg.get("port") or 1521),
+                               cfg["user"])
+        ddl = procedure_sql(cfg["database"], cfg["schema"], _services_import(db), eai)
+    except AssertionError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    log: list[dict] = []
+    for sql in [*statements, ddl]:
+        try:
+            db.execute(sql.replace("'<oracle password>'", "'" + escaped + "'"))
+            log.append({"sql": sql, "ok": True})
+        except Exception as exc:
+            log.append({"sql": sql, "ok": False, "error": str(exc)[:500].replace(password, "***")})
+            return {"ready": False, "log": log,
+                    "detail": "A step needs more privileges (CREATE NETWORK RULE, CREATE SECRET, CREATE INTEGRATION "
+                              "or the oracledb package). Ask an admin to run the SQL shown, or retry with a role "
+                              "that has them."}
+    cfg.update(oracle_procedure=object_names(cfg["database"], cfg["schema"])["procedure"],
+               external_access_integration=eai, secret=object_names(cfg["database"], cfg["schema"])["secret"])
+    db.execute("UPDATE SOURCE.SOURCE_REGISTRY SET CONFIGURATION_JSON = PARSE_JSON(%s), CONFIGURATION_REFERENCE = %s, "
+               "UPDATED_AT = CURRENT_TIMESTAMP() WHERE SOURCE_SYSTEM_ID = %s",
+               (json.dumps(cfg), cfg["secret"], source_id))
+    return {"ready": True, "log": log}
+
+
+@app.post("/api/sources/{source_id}/oracle/test")
+def oracle_test(source_id: str, db: Db = Depends(current_db)):
+    """Connect, report the Oracle version and what the user can see in the schema owner."""
+    started = time.time()
+    result = _oracle_errors(lambda: _oracle_call(db, source_id, "test", {}))
+    return {**result, "elapsed_ms": int((time.time() - started) * 1000)}
+
+
+@app.post("/api/sources/{source_id}/oracle/catalog")
+def oracle_catalog(source_id: str, db: Db = Depends(current_db)):
+    """Tables and views of the schema owner with row estimates, last analysis and comments, plus what was profiled
+    or landed already."""
+    result = _oracle_errors(lambda: _oracle_call(db, source_id, "catalog", {}))
+    src = _oracle_source(db, source_id)
+    cfg = src["config"]
+    try:
+        profiled = {r["table_name"]: r for r in db.query(
+            """SELECT TABLE_NAME, ROW_COUNT, STATUS, PROFILED_AT::VARCHAR AS PROFILED_AT, PII_COLUMNS, KEY_CANDIDATES,
+                      PROFILE_STAGE_PATH FROM METADATA.TABLE_PROFILES WHERE SOURCE_NAME = %s""",
+            (f"ORACLE_{src['source_system_name']}",))}
+    except Exception:
+        profiled = {}
+    loads = cfg.get("loads") or {}
+    by_oracle = {v.get("oracle_table", "").split(".", 1)[-1]: {**v, "landed_as": k} for k, v in loads.items()}
+    for t in result.get("tables", []):
+        t["profile"] = profiled.get(t["table"])
+        t["load"] = by_oracle.get(t["table"])
+    return {**result, "landing": {"database": cfg.get("database"), "schema": cfg.get("schema")},
+            "runtime": cfg.get("runtime", "snowflake"), "ready": bool(cfg.get("oracle_procedure"))
+            or cfg.get("runtime") == "api_host"}
+
+
+@app.post("/api/sources/{source_id}/oracle/columns")
+def oracle_columns(source_id: str, body: OracleTables, db: Db = Depends(current_db)):
+    return _oracle_errors(lambda: _oracle_call(db, source_id, "columns", {"tables": body.tables}))
+
+
+@app.get("/api/sources/{source_id}/oracle/profile")
+def oracle_profile_doc(source_id: str, table: str, db: Db = Depends(current_db)):
+    """The in-place Oracle profile document of one table (same shape as Snowflake profiles)."""
+    src = _oracle_source(db, source_id)
+    found = db.query("SELECT PROFILE_STAGE_PATH FROM METADATA.TABLE_PROFILES WHERE SOURCE_NAME = %s AND TABLE_NAME = %s "
+                     "AND STATUS <> 'PROFILING' ORDER BY PROFILED_AT DESC LIMIT 1",
+                     (f"ORACLE_{src['source_system_name']}", table))
+    if not found or not found[0]["profile_stage_path"]:
+        raise HTTPException(404, f"{table} has not been profiled in Oracle yet")
+    doc = _read_stage_doc(db, found[0]["profile_stage_path"])
+    if not doc:
+        raise HTTPException(404, "profile document not found")
+    from services.profiling import insights
+
+    return {"profile": doc, "scorecard": insights.scorecard(insights.quality_dimensions(doc), None)}
+
+
+def _start_oracle_job(db: Db, source_id: str, kind: str, tables: list[str], payload: dict) -> dict:
+    job_id = str(uuid.uuid4())
+    job = {"job_id": job_id, "source_id": source_id, "kind": kind, "status": "RUNNING", "started_at": time.time(),
+           "finished_at": None, "tables": {t: {"phase": "QUEUED"} for t in tables}, "result": None, "error": None}
+    with _jobs_lock:
+        _ingest_jobs[job_id] = job
+
+    def progress(event: dict) -> None:
+        with _jobs_lock:
+            entry = job["tables"].setdefault(event.get("table", "?"), {})
+            entry.update({k: v for k, v in event.items() if k != "table"})
+
+    def work() -> None:
+        results = []
+        try:
+            for table in tables:  # one table per call: progress per table in either runtime
+                progress({"table": table, "phase": "EXTRACTING" if kind == "ingest" else "PROFILING"})
+                try:
+                    out = _oracle_call(db, source_id, "extract" if kind == "ingest" else "profile",
+                                       {**payload, "tables": [table]}, progress)
+                    row = (out.get("tables") or [{}])[0]
+                except HTTPException as exc:
+                    row = {"table": table, "status": "FAILED", "error": exc.detail}
+                except Exception as exc:
+                    row = {"table": table, "status": "FAILED", "error": str(exc)[:600]}
+                if kind == "ingest" and row.get("status") == "LANDED" and payload.get("profile_after_landing"):
+                    progress({"table": table, "phase": "PROFILING"})
+                    try:
+                        landed = row["landed_as"].rsplit(".", 1)[-1]
+                        profile_source_tables(source_id, SourceProfileRequest(tables=[landed], force_refresh=True,
+                                                                               wait=True), db)
+                        row["profiled"] = True
+                    except Exception as exc:
+                        row["profile_error"] = str(exc)[:300]
+                progress({"table": table, "phase": "DONE" if row.get("status") in ("LANDED", "PROFILED") else "FAILED",
+                          **{k: row.get(k) for k in ("rows_loaded", "rows_extracted", "row_count", "error")}})
+                results.append(row)
+            job["status"] = "DONE" if all(r.get("status") in ("LANDED", "PROFILED") for r in results) else "PARTIAL"
+        except Exception as exc:
+            job["status"], job["error"] = "FAILED", str(exc)[:800]
+        finally:
+            job["result"], job["finished_at"] = results, time.time()
+
+    threading.Thread(target=work, daemon=True).start()
+    return {"job_id": job_id, "status": "RUNNING", "tables": tables}
+
+
+@app.post("/api/sources/{source_id}/oracle/profile")
+def oracle_profile(source_id: str, body: OracleTables, db: Db = Depends(current_db)):
+    """Profile the chosen tables inside Oracle (sampled above 200k rows); only statistics leave Oracle."""
+    _oracle_source(db, source_id)
+    return _start_oracle_job(db, source_id, "profile", body.tables, {})
+
+
+@app.post("/api/sources/{source_id}/oracle/ingest")
+def oracle_ingest(source_id: str, body: OracleIngest, db: Db = Depends(current_db)):
+    """Extract the chosen tables to Parquet, land them in the source's schema and profile them for modeling."""
+    _oracle_source(db, source_id)
+    return _start_oracle_job(db, source_id, "ingest", body.tables,
+                             {"mode": body.mode, "storage": body.storage, "watermark_columns": body.watermark_columns,
+                              "profile_after_landing": body.profile_after_landing})
+
+
+@app.get("/api/ingest-jobs/{job_id}")
+def ingest_job(job_id: str):
+    with _jobs_lock:
+        job = _ingest_jobs.get(job_id)
+        if not job:
+            raise HTTPException(404, "job not found (jobs are kept while the API runs)")
+        return json.loads(json.dumps(job, default=str))

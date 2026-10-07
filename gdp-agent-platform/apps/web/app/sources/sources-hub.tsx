@@ -476,7 +476,7 @@ export function SourcesHub({
                     </p>
                   </div>
                   <div className="ml-auto flex gap-1">
-                    <Button size="sm" variant="ghost" onClick={() => manage(x)}>Land files</Button>
+                    <Button size="sm" variant="ghost" onClick={() => manage(x)}>{x.connection_type === "oracle" ? "Tables & loads" : "Land files"}</Button>
                     {isLanded && (
                       <Button size="sm" variant="outline" onClick={() => openTarget({ database: x.database_name, schema: x.schema_name })}>
                         Open

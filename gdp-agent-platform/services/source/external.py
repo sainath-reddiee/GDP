@@ -42,8 +42,9 @@ CONNECTORS: Dict[str, Dict[str, Any]] = {
                  "fields": ["host", "port", "database", "schema", "secret"]},
     "sqlserver": {"label": "SQL Server", "kind": "DATABASE", "landable": False,
                   "fields": ["host", "port", "database", "schema", "secret"]},
-    "oracle": {"label": "Oracle", "kind": "DATABASE", "landable": False,
-               "fields": ["host", "port", "database", "schema", "secret"]},
+    "oracle": {"label": "Oracle Database", "kind": "DATABASE", "landable": True, "extractor": "oracle",
+               "fields": ["host", "port", "service_name", "sid", "user", "schema_owner", "runtime", "secret",
+                          "password_env", "external_access_integration"]},
     "mysql": {"label": "MySQL", "kind": "DATABASE", "landable": False,
               "fields": ["host", "port", "database", "schema", "secret"]},
     "salesforce": {"label": "Salesforce", "kind": "SAAS", "landable": False, "fields": ["instance_url", "secret"]},
@@ -58,7 +59,7 @@ LANDING_GUIDANCE = {
 
 
 def connector_catalog() -> List[Dict[str, Any]]:
-    return [{"id": k, **{f: v[f] for f in ("label", "kind", "landable", "fields")},
+    return [{"id": k, **{f: v[f] for f in ("label", "kind", "landable", "fields")}, "extractor": v.get("extractor"),
              "guidance": None if v["landable"] else LANDING_GUIDANCE[v["kind"]]} for k, v in CONNECTORS.items()]
 
 
@@ -103,12 +104,34 @@ def validate_config(connector: str, config: Dict[str, Any]) -> Dict[str, Any]:
             assert value.lower().startswith("https://") and "'" not in value, f"{key} must be an https URL"
         elif key in ("database", "schema"):
             assert re.match(r"^[A-Za-z0-9_$\-]{1,255}$", value), f"{key} has invalid characters"
+        elif key in ("service_name", "sid"):
+            assert re.match(r"^[A-Za-z0-9_.$#\-]{1,128}$", value), f"{key} has invalid characters"
+        elif key in ("user", "schema_owner"):
+            assert re.match(r"^[A-Za-z][A-Za-z0-9_$#]{0,127}$", value), f"{key} must be an Oracle name"
+            value = value.upper()
+        elif key == "runtime":
+            assert value in ("snowflake", "api_host"), "runtime must be snowflake or api_host"
+        elif key == "password_env":
+            assert re.match(r"^[A-Za-z_][A-Za-z0-9_]{0,127}$", value), "password_env must be an environment variable name"
+        elif key == "external_access_integration":
+            assert OBJECT_NAME.match(value), f"{key} must be a Snowflake object name"
         clean[key] = value
     if connector in ("s3", "azure", "gcs"):
         assert clean.get("url"), "url is required"
         assert clean.get("storage_integration"), "storage_integration is required: an admin creates it once"
     if spec["kind"] == "FILE":
         clean.setdefault("file_format", "CSV")
+    if connector == "oracle":
+        assert clean.get("host"), "host is required"
+        assert bool(clean.get("service_name")) != bool(clean.get("sid")), "give either a service name or a SID"
+        assert clean.get("user"), "user is required"
+        clean.setdefault("port", "1521")
+        clean.setdefault("schema_owner", clean["user"])
+        clean.setdefault("runtime", "snowflake")
+        if clean["runtime"] == "api_host":
+            assert clean.get("password_env"), ("the API host reads the password from an environment variable; "
+                                               "give its name in password_env")
+        clean["file_format"] = "PARQUET"
     return clean
 
 
@@ -137,7 +160,7 @@ def setup_sql(database: str, schema: str, connector: str, config: Dict[str, Any]
         f"CREATE SCHEMA IF NOT EXISTS {fqn(database, schema)} COMMENT = 'Landed external source {schema}'",
         f"CREATE FILE FORMAT IF NOT EXISTS {format_name(database, schema, file_format)} {FILE_FORMATS[file_format]}",
     ]
-    if connector == "upload":
+    if connector in ("upload", "oracle"):
         statements.append(f"CREATE STAGE IF NOT EXISTS {stage} DIRECTORY = (ENABLE = TRUE) "
                           "ENCRYPTION = (TYPE = 'SNOWFLAKE_SSE')")
     else:
@@ -172,6 +195,43 @@ def land_sql(database: str, schema: str, file_format: str, table: str, files: Li
         f"COPY INTO {target} FROM @{stage} FILES = ({file_list}) FILE_FORMAT = (FORMAT_NAME = '{fmt}') "
         "MATCH_BY_COLUMN_NAME = CASE_INSENSITIVE ON_ERROR = ABORT_STATEMENT",
     ]
+
+
+def land_parquet_sql(database: str, schema: str, table: str, prefix: str, mode: str = "replace",
+                     exists: bool = False, external_volume: Optional[str] = None) -> List[str]:
+    """Land the Parquet parts under @<stage>/<prefix>/ into <table>.
+
+    The table is created once from the files' inferred shape (managed, or Iceberg on an external volume) with the
+    two load-lineage columns; later loads keep it (and its history) and either truncate first (replace) or append.
+    COPY records the source file and scan time of every row; the extractor already wrote _SOURCE_SYSTEM,
+    _SOURCE_TABLE and _BATCH_ID into the files."""
+    assert mode in ("replace", "append"), "mode must be replace or append"
+    assert re.match(r"^[A-Za-z0-9_/\-]{1,512}$", prefix), "unsafe stage prefix"
+    stage = stage_name(database, schema)
+    fmt = format_name(database, schema, "PARQUET")
+    target = fqn(database, schema, table)
+    location = f"@{stage}/{prefix.strip('/')}/"
+    statements: List[str] = []
+    if not exists:
+        template = (f"USING TEMPLATE (SELECT ARRAY_AGG(OBJECT_CONSTRUCT('COLUMN_NAME', COLUMN_NAME, 'TYPE', TYPE, "
+                    f"'NULLABLE', TRUE)) WITHIN GROUP (ORDER BY ORDER_ID) FROM TABLE(INFER_SCHEMA("
+                    f"LOCATION => '{location}', FILE_FORMAT => '{fmt}')))")
+        if external_volume:
+            assert OBJECT_NAME.match(external_volume), "external volume must be a Snowflake object name"
+            statements.append(f"CREATE ICEBERG TABLE IF NOT EXISTS {target} CATALOG = 'SNOWFLAKE' "
+                              f"EXTERNAL_VOLUME = '{external_volume}' BASE_LOCATION = '{schema}/{table}' {template}")
+        else:
+            statements.append(f"CREATE TABLE IF NOT EXISTS {target} {template}")
+        statements.append(f"ALTER TABLE {target} ADD COLUMN IF NOT EXISTS _SOURCE_FILE VARCHAR, "
+                          "_INGESTED_AT TIMESTAMP_LTZ")
+    elif mode == "replace":
+        statements.append(f"TRUNCATE TABLE {target}")
+    statements.append(
+        f"COPY INTO {target} FROM {location} FILE_FORMAT = (FORMAT_NAME = '{fmt}') PATTERN = '.*[.]parquet' "
+        "MATCH_BY_COLUMN_NAME = CASE_INSENSITIVE "
+        "INCLUDE_METADATA = (_SOURCE_FILE = METADATA$FILENAME, _INGESTED_AT = METADATA$START_SCAN_TIME) "
+        "ON_ERROR = ABORT_STATEMENT FORCE = TRUE")
+    return statements
 
 
 def group_files(files: List[str], table: Optional[str] = None) -> Dict[str, List[str]]:
@@ -255,6 +315,8 @@ def land_external_files(session, source_id: str, payload_json: str) -> Dict[str,
     cfg = src["CONFIG"]
     assert CONNECTORS[src["CONNECTION_TYPE"]]["landable"], LANDING_GUIDANCE.get(
         CONNECTORS[src["CONNECTION_TYPE"]]["kind"], "this source is landed outside the platform")
+    assert not CONNECTORS[src["CONNECTION_TYPE"]].get("extractor"), \
+        "this source is extracted and landed with its own action (Extract & land)"
     available = {f["path"] for f in list_external_files(session, source_id)["files"]}
     files = payload.get("files") or sorted(available)
     assert files, "no files to land; upload or add files to the source location first"
