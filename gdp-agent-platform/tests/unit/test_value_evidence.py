@@ -38,3 +38,11 @@ def test_relationship_found_from_values_when_names_differ():
     joins = overlap_relationships(pairs, [{"I": 0, "N": 420, "HIT": 420}])
     assert joins[0]["keys"] == ["holder=memberRef"] and joins[0]["source"] == "values"
     assert overlap_relationships(pairs, [{"i": 0, "n": 420, "hit": 100}]) == []  # weak overlap is not a join
+
+
+def test_a_key_inside_a_longer_key_sequence_is_not_a_join():
+    docs = {"MEMBERS": {"columns": [col("memberRef", "NUMBER", key=True, min=1, max=500, distinct_count=500)]},
+            "BOOKINGS": {"columns": [col("bookingNo", "NUMBER", key=True, min=1, max=2000, distinct_count=2000),
+                                     col("holder", "NUMBER", min=1, max=500, distinct_count=420)]}}
+    pairs = [(p["child"], p["column"], p["parent"], p["key"]) for p in overlap_candidates(docs)]
+    assert pairs == [("BOOKINGS", "holder", "MEMBERS", "memberRef")]

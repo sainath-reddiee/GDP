@@ -336,6 +336,8 @@ def overlap_candidates(docs: Dict[str, Dict[str, Any]], limit: int = 12) -> List
                     cd = _stats(c).get("distinct_count")
                     if not cd or not kd or int(cd) < 2 or int(cd) > int(kd):
                         continue
+                    if c.get("potential_key") and abs(1 - int(cd) / int(kd)) > 0.1:
+                        continue  # a key inside a longer key sequence (1..500 within 1..2000) is not a reference
                     nested = _range_within(c, k)
                     if c.get("family") == "NUMBER" and not nested:
                         continue
