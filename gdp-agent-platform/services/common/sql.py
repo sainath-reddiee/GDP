@@ -64,5 +64,6 @@ def _bind(value: Any) -> str:
 
 
 def config_value(session, key: str, default: Any = None) -> Any:
-    found = rows(session, "SELECT CONFIG_VALUE FROM CORE.PLATFORM_CONFIG WHERE CONFIG_KEY = ? AND IS_CURRENT", [key])
+    found = rows(session, "SELECT CONFIG_VALUE FROM CORE.PLATFORM_CONFIG WHERE CONFIG_KEY = ? AND IS_CURRENT "
+                          "ORDER BY VERSION DESC LIMIT 1", [key])
     return variant(found[0]["CONFIG_VALUE"]) if found else default

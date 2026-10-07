@@ -2,13 +2,24 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable, Dict, List
+from typing import Any, Callable, Dict, List, Optional
 
 Execute = Callable[[str], List[Dict[str, Any]]]
 
 CORTEX_INFERENCE = [
     {"name": "claude-sonnet-4-5", "family": "claude", "source": "cortex"},
+    {"name": "claude-opus-4-5", "family": "claude", "source": "cortex"},
+    {"name": "claude-haiku-4-5", "family": "claude", "source": "cortex"},
+    {"name": "claude-4-sonnet", "family": "claude", "source": "cortex"},
+    {"name": "claude-4-opus", "family": "claude", "source": "cortex"},
+    {"name": "claude-3-7-sonnet", "family": "claude", "source": "cortex"},
     {"name": "claude-3-5-sonnet", "family": "claude", "source": "cortex"},
+    {"name": "openai-gpt-5", "family": "openai", "source": "cortex"},
+    {"name": "openai-gpt-5-mini", "family": "openai", "source": "cortex"},
+    {"name": "llama4-maverick", "family": "llama", "source": "cortex"},
+    {"name": "llama4-scout", "family": "llama", "source": "cortex"},
+    {"name": "deepseek-r1", "family": "deepseek", "source": "cortex"},
+    {"name": "snowflake-arctic", "family": "snowflake", "source": "cortex"},
     {"name": "llama3.1-70b", "family": "llama", "source": "cortex"},
     {"name": "llama3.1-8b", "family": "llama", "source": "cortex"},
     {"name": "llama3.3-70b", "family": "llama", "source": "cortex"},
@@ -30,6 +41,10 @@ def _family(name: str) -> str:
         return "mistral"
     if "openai" in lower or "gpt" in lower:
         return "openai"
+    if "deepseek" in lower:
+        return "deepseek"
+    if "arctic" in lower or lower.startswith("snowflake"):
+        return "snowflake"
     return "other"
 
 
@@ -80,3 +95,32 @@ def discover_models(execute: Execute, default: str = "claude-sonnet-4-5") -> Dic
         by_name[default] = {"name": default, "family": _family(default), "source": "config", "kind": "MODEL"}
     models = sorted(by_name.values(), key=lambda m: (m["family"], m["name"]))
     return {"default": default, "models": models, "warnings": warnings}
+
+
+def parse_allowlist(raw: List[Dict[str, Any]]) -> Optional[List[str]]:
+    """CORTEX_MODELS_ALLOWLIST from SHOW PARAMETERS: None when every model is allowed ('All' or unset)."""
+    for row in raw or []:
+        item = {str(k).lower(): v for k, v in (row or {}).items()}
+        if str(item.get("key") or "").upper() != "CORTEX_MODELS_ALLOWLIST":
+            continue
+        value = str(item.get("value") or "").strip()
+        if not value or value.lower() == "all":
+            return None
+        if value.lower() == "none":
+            return []
+        return [v.strip().lower() for v in value.split(",") if v.strip()]
+    return None
+
+
+def account_models(execute: Execute, default: str = "") -> Dict[str, Any]:
+    """discover_models plus whether the account allows each model (CORTEX_MODELS_ALLOWLIST)."""
+    data = discover_models(execute, default or "claude-sonnet-4-5")
+    allowlist: Optional[List[str]] = None
+    try:
+        allowlist = parse_allowlist(execute("SHOW PARAMETERS LIKE 'CORTEX_MODELS_ALLOWLIST' IN ACCOUNT") or [])
+    except Exception as exc:
+        data["warnings"].append(f"CORTEX_MODELS_ALLOWLIST: {exc}")
+    for m in data["models"]:
+        m["available"] = allowlist is None or m["name"].lower() in allowlist
+    data["allowlist"] = allowlist
+    return data

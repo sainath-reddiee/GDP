@@ -112,6 +112,15 @@ class Db:
         finally:
             cur.close()
 
+    def query_with_id(self, sql: str, params: tuple = ()) -> tuple[list[dict], Optional[str]]:
+        cur = self.conn.cursor()
+        try:
+            cur.execute(sql, params)
+            columns = [d[0].lower() for d in cur.description]
+            return [dict(zip(columns, row)) for row in cur.fetchall()], cur.sfqid
+        finally:
+            cur.close()
+
     def query(self, sql: str, params: tuple = ()) -> list[dict]:
         cur = self.conn.cursor()
         try:

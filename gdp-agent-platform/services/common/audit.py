@@ -7,7 +7,7 @@ import uuid
 from contextlib import contextmanager
 from typing import Any, Dict, Iterator, Optional
 
-from services.common.sql import clip, config_value, insert_rows
+from services.common.sql import clip, config_value, insert_rows, rows
 
 
 class ToolCall:
@@ -45,17 +45,25 @@ def tool_call(session, run_id: Optional[str], tool: str, inputs: Dict[str, Any])
 def record_cost(session, run_id: Optional[str], stage: str, model: Optional[str], usage: Dict[str, Any],
                 duration_ms: int, tool_calls: int = 0, search_calls: int = 0, code_calls: int = 0,
                 agent: str = "PLATFORM") -> None:
+    from services.common.cost import calibrated_rates, estimate, rates_for
+
     prompt = int(usage.get("prompt_tokens") or 0)
     completion = int(usage.get("completion_tokens") or 0)
     total = int(usage.get("total_tokens") or prompt + completion)
-    rates = config_value(session, "CREDITS_PER_MILLION_TOKENS", {}) or {}
-    rate = rates.get(model or "", rates.get("default", 0))
-    insert_rows(
-        session, "AUDIT.COST_USAGE",
-        ["COST_USAGE_ID", "RUN_ID", "STAGE", "AGENT", "MODEL", "INPUT_TOKENS", "OUTPUT_TOKENS", "TOTAL_TOKENS",
-         "TOOL_CALL_COUNT", "SEARCH_CALL_COUNT", "CODE_CALL_COUNT", "DURATION_MS", "ESTIMATED_COST"],
-        ["?", "NULLIF(?, '')", "?", "?", "NULLIF(?, '')", "?::NUMBER", "?::NUMBER", "?::NUMBER", "?::NUMBER",
-         "?::NUMBER", "?::NUMBER", "?::NUMBER", "?::NUMBER(18,6)"],
-        [[str(uuid.uuid4()), run_id, stage, agent, model, prompt, completion, total, tool_calls, search_calls,
-          code_calls, duration_ms, round(total / 1_000_000 * float(rate), 6)]],
-    )
+    estimated = 0.0
+    if total:
+        rates = rates_for(model, config_value(session, "RATE_CARD", {}) or {},
+                          calibrated_rates(lambda sql, params: rows(session, sql, list(params))),
+                          config_value(session, "CREDITS_PER_MILLION_TOKENS", {}) or {})
+        estimated = estimate(prompt, completion, rates)
+    row = [str(uuid.uuid4()), run_id, stage, agent, model, prompt, completion, total, tool_calls, search_calls,
+           code_calls, duration_ms, estimated, usage.get("query_id"), "ESTIMATE" if total else "NONE"]
+    columns = ["COST_USAGE_ID", "RUN_ID", "STAGE", "AGENT", "MODEL", "INPUT_TOKENS", "OUTPUT_TOKENS", "TOTAL_TOKENS",
+               "TOOL_CALL_COUNT", "SEARCH_CALL_COUNT", "CODE_CALL_COUNT", "DURATION_MS", "ESTIMATED_COST"]
+    exprs = ["?", "NULLIF(?, '')", "?", "?", "NULLIF(?, '')", "?::NUMBER", "?::NUMBER", "?::NUMBER", "?::NUMBER",
+             "?::NUMBER", "?::NUMBER", "?::NUMBER", "?::NUMBER(18,6)"]
+    try:
+        insert_rows(session, "AUDIT.COST_USAGE", columns + ["QUERY_ID", "COST_SOURCE"],
+                    exprs + ["NULLIF(?, '')", "?"], [row])
+    except Exception:  # before V014: no query id / cost source columns yet
+        insert_rows(session, "AUDIT.COST_USAGE", columns, exprs, [row[:13]])

@@ -100,7 +100,7 @@ def answer(session, database: str, question: str, domain_name: Optional[str] = N
                          f"{str(h.get('CONTENT') or '')[:700]}" for i, h in enumerate(hits))
     prompt = ("Answer the question using only the numbered knowledge items. Cite the numbers you used. If they do not "
               f"answer it, say so.\n\nQUESTION: {question[:2000]}\n\nITEMS:\n{numbered}")
-    output, usage, model = complete_json(session, prompt, ANSWER_SCHEMA, max_tokens=1500)
+    output, usage, model = complete_json(session, prompt, ANSWER_SCHEMA, max_tokens=1500, stage="KNOWLEDGE")
     cited = sorted({int(n) for n in output.get("cited") or [] if isinstance(n, (int, float)) and 1 <= int(n) <= len(hits)})
     return {"answer": str(output.get("answer") or ""), "citations": [hits[n - 1] for n in cited], "hits": hits,
             "model": model, "usage": usage}

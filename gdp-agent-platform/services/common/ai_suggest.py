@@ -86,7 +86,7 @@ def suggest(session, spec: Spec, scope_key: str, context: Dict[str, Any], run_id
         started = time.time()
         rejected = [k for k, v in verdicts.items() if v["decision"] == "REJECTED"]
         try:
-            output, usage, used = complete_json(session, spec.prompt(context, rejected), spec.schema, max_tokens=4000)
+            output, usage, used = complete_json(session, spec.prompt(context, rejected), spec.schema, max_tokens=4000, stage="SUGGESTIONS")
         except Exception as exc:
             return {"suggestion_id": None, "items": [], "model": model, "cached": False,
                     "error": f"AI suggestions unavailable: {clip(exc, 300)}"}

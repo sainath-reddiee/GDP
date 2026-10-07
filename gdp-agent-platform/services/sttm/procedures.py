@@ -216,7 +216,7 @@ def refine_transformation(session, run_id: str, payload_json: str) -> Dict[str, 
                 use_skills(session, stage_skills("STTM", context["standard"]))
             except Exception:
                 pass
-            output, usage, model = complete_json(session, refine_prompt(context, prompt), REFINE_SCHEMA, max_tokens=1500)
+            output, usage, model = complete_json(session, refine_prompt(context, prompt), REFINE_SCHEMA, max_tokens=1500, stage="STTM")
             record_cost(session, run_id, "STTM", model, usage, 0, tool_calls=1)
             sql = (output.get("transformation") or "").strip()
             assert_safe_transformation(sql)

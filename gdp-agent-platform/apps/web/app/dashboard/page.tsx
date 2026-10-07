@@ -17,7 +17,7 @@ type DomainRow = { domain_id: string; domain_name: string; knowledge_items: numb
 type Metrics = {
   total: number; lifecycle: Record<string, number>; by_stage: Record<string, number>; needs_review: number;
   failed: number; cancelled: number; archived: number;
-  cost_30d: { calls: number; tokens: number; estimated_cost: number } | null;
+  cost_30d: { calls: number; tokens: number; estimated_cost: number; credits?: number; actual_credits?: number; estimated_credits?: number } | null;
 };
 
 const STATE_LABEL: Record<string, string> = {
@@ -120,7 +120,7 @@ export default async function Dashboard() {
         <Link href="/audit?tab=cost" className="flex flex-wrap items-center gap-3 rounded-xl border bg-card px-4 py-3 text-sm shadow-sm hover:bg-muted/40">
           <Sparkles className="h-4 w-4 text-violet-600" />
           <span className="font-medium">AI usage, last 30 days</span>
-          <span className="text-muted-foreground">{cost.calls.toLocaleString()} calls · {cost.tokens.toLocaleString()} tokens · {cost.estimated_cost.toFixed(2)} credits estimated</span>
+          <span className="text-muted-foreground">{cost.calls.toLocaleString()} calls · {cost.tokens.toLocaleString()} tokens · {(cost.credits ?? cost.estimated_cost).toFixed(2)} credits{cost.actual_credits ? ` (${cost.actual_credits.toFixed(2)} billed)` : " estimated"}</span>
           <ArrowRight className="ml-auto h-4 w-4 text-muted-foreground" />
         </Link>
       )}

@@ -1424,22 +1424,46 @@ def _record_cost(db: Db, run_id: str, stage: str, model: Optional[str], usage: O
     """AUDIT.COST_USAGE row for an AI call the API makes directly (same rate table as the procedures).
     Never fails the request it describes."""
     try:
+        from services.common.cost import calibrated_rates, estimate, rates_for
+
         usage = usage or {}
         prompt, completion = int(usage.get("prompt_tokens") or 0), int(usage.get("completion_tokens") or 0)
         total = int(usage.get("total_tokens") or prompt + completion)
-        found = db.query("SELECT CONFIG_VALUE FROM CORE.PLATFORM_CONFIG "
-                         "WHERE CONFIG_KEY = 'CREDITS_PER_MILLION_TOKENS' AND IS_CURRENT")
-        rates = _json(found[0].get("config_value")) if found else {}
-        rate = float((rates or {}).get(model or "", (rates or {}).get("default", 0)) or 0)
+        rates = rates_for(model, _config(db, "RATE_CARD", {}) or {},
+                          calibrated_rates(lambda sql, params: db.query(sql, params)),
+                          _config(db, "CREDITS_PER_MILLION_TOKENS", {}) or {})
         db.execute(
             """INSERT INTO AUDIT.COST_USAGE (COST_USAGE_ID, RUN_ID, STAGE, AGENT, MODEL, INPUT_TOKENS, OUTPUT_TOKENS,
-                   TOTAL_TOKENS, TOOL_CALL_COUNT, SEARCH_CALL_COUNT, CODE_CALL_COUNT, DURATION_MS, ESTIMATED_COST)
-               SELECT %s, %s, %s, 'PLATFORM', %s, %s, %s, %s, 1, 0, 0, %s, %s""",
+                   TOTAL_TOKENS, TOOL_CALL_COUNT, SEARCH_CALL_COUNT, CODE_CALL_COUNT, DURATION_MS, ESTIMATED_COST,
+                   QUERY_ID, COST_SOURCE)
+               SELECT %s, %s, %s, 'PLATFORM', %s, %s, %s, %s, 1, 0, 0, %s, %s, %s, %s""",
             (str(uuid.uuid4()), run_id, stage, model, prompt, completion, total,
-             int((time.time() - started) * 1000), round(total / 1_000_000 * rate, 6)),
+             int((time.time() - started) * 1000), estimate(prompt, completion, rates), usage.get("query_id"),
+             "ESTIMATE" if total else "NONE"),
         )
     except Exception:
         pass
+
+
+def _config(db: Db, key: str, default: Any = None) -> Any:
+    """Newest current PLATFORM_CONFIG value (older rows left current can never win)."""
+    try:
+        found = db.query("SELECT CONFIG_VALUE FROM CORE.PLATFORM_CONFIG WHERE CONFIG_KEY = %s AND IS_CURRENT "
+                         "ORDER BY VERSION DESC LIMIT 1", (key,))
+    except Exception:
+        return default
+    if not found:
+        return default
+    value = _json(found[0].get("config_value"))
+    return found[0].get("config_value") if value is None else value
+
+
+def _model_for(db: Db, stage: Optional[str] = None) -> str:
+    """The model an AI step uses: the stage's own (Admin, LLM_MODEL_BY_STAGE) or the platform default."""
+    from services.common.llm import DEFAULT_MODEL, resolve_model
+
+    return resolve_model(str(_config(db, "LLM_MODEL", DEFAULT_MODEL) or DEFAULT_MODEL),
+                         _config(db, "LLM_MODEL_BY_STAGE", {}) if stage else {}, stage)
 
 
 def _source_call(db: Db, proc: str, handler, *args):
@@ -1645,10 +1669,18 @@ def costs(group_by: str = "stage", since: Optional[str] = None, until: Optional[
         sql, params = cost_query(group_by, since, until, limit)
     except AssertionError as exc:
         raise HTTPException(400, str(exc)) from exc
+    _reconcile_if_due(db)
     rows = db.query(sql, tuple(params))
     totals = {k: sum(float(r.get(k) or 0) for r in rows)
-              for k in ("calls", "input_tokens", "output_tokens", "total_tokens", "estimated_cost")}
-    return {"group_by": group_by, "rows": rows, "totals": totals}
+              for k in ("calls", "input_tokens", "output_tokens", "total_tokens", "estimated_cost", "credits",
+                        "actual_credits", "estimated_credits", "actual_calls")}
+    price = _config(db, "CREDIT_PRICE_USD", None)
+    try:
+        price = float(price) if price not in (None, "", 0) else None
+    except (TypeError, ValueError):
+        price = None
+    return {"group_by": group_by, "rows": rows, "totals": totals, "credit_price_usd": price,
+            "reconcile": _RECONCILE_STATE.get("last")}
 
 
 @app.get("/api/metrics/summary")
@@ -1664,10 +1696,14 @@ def metrics_summary(db: Db = Depends(current_db)):
     out = summarise(groups, lifecycle_status)
     try:
         cost = db.query("""SELECT COUNT(*) AS CALLS, COALESCE(SUM(TOTAL_TOKENS), 0) AS TOKENS,
-                                  COALESCE(SUM(ESTIMATED_COST), 0) AS COST
+                                  COALESCE(SUM(COALESCE(ACTUAL_CREDITS, ESTIMATED_COST, 0)), 0) AS COST,
+                                  COALESCE(SUM(ACTUAL_CREDITS), 0) AS ACTUAL,
+                                  COALESCE(SUM(IFF(ACTUAL_CREDITS IS NULL, ESTIMATED_COST, 0)), 0) AS ESTIMATED
                              FROM AUDIT.COST_USAGE WHERE CREATED_AT >= DATEADD('day', -30, CURRENT_TIMESTAMP())""")
         out["cost_30d"] = {"calls": int(cost[0]["calls"] or 0), "tokens": int(cost[0]["tokens"] or 0),
-                           "estimated_cost": float(cost[0]["cost"] or 0)}
+                           "estimated_cost": float(cost[0]["cost"] or 0), "credits": float(cost[0]["cost"] or 0),
+                           "actual_credits": float(cost[0]["actual"] or 0),
+                           "estimated_credits": float(cost[0]["estimated"] or 0)}
     except Exception:
         out["cost_30d"] = None
     return out
@@ -2130,13 +2166,10 @@ def mapping_assist(run_id: str, body: MappingAssist, db: Db = Depends(current_db
     taken = {d["target_column_id"]: d["source_column_id"] for d in data["decisions"]
              if d["decision"] != "REJECTED" and d["target_column_id"] and d["source_column_id"] not in wanted}
     prompt = assist.build_prompt(sources, by_source, data["targets"], table["target_table"], taken, body.instructions)
-    model_rows = db.query(
-        "SELECT CONFIG_VALUE::VARCHAR AS M FROM CORE.PLATFORM_CONFIG WHERE CONFIG_KEY = 'LLM_MODEL' AND IS_CURRENT"
-    )
-    model = (model_rows[0]["m"] if model_rows else None) or "claude-sonnet-4-5"
+    model = _model_for(db, "MAPPING")
     started = time.time()
     try:
-        result = db.query(
+        result, query_id = db.query_with_id(
             "SELECT AI_COMPLETE(model => %s, prompt => %s, "
             "model_parameters => {'temperature': 0, 'max_tokens': 8000}, "
             "response_format => PARSE_JSON(%s), show_details => TRUE) AS R",
@@ -2146,7 +2179,8 @@ def mapping_assist(run_id: str, body: MappingAssist, db: Db = Depends(current_db
         raise _snowflake_error(exc) from exc
     details = result[0]["r"] if result else None
     details = json.loads(details) if isinstance(details, str) else (details or {})
-    _record_cost(db, run_id, "MAPPING", details.get("model", model), details.get("usage"), started)
+    _record_cost(db, run_id, "MAPPING", details.get("model", model),
+                 {**(details.get("usage") or {}), "query_id": query_id}, started)
     structured = details.get("structured_output") or []
     if not structured:
         raise HTTPException(502, "Cortex returned no structured answer for these columns. Try fewer columns or again.")
@@ -2958,11 +2992,13 @@ def review_dbt(run_id: str, body: DbtReview, db: Db = Depends(current_db)):
         pass
     started = time.time()
     try:
-        reviewed = review_file(lambda sql, params=(): db.query(sql, params), path, files[path],
-                               _domain_skill(db, run_id), _sttm_context(db, run_id), notes, model=body.model)
+        fetch, ids = _fetch_with_ids(db)
+        reviewed = review_file(fetch, path, files[path], _domain_skill(db, run_id), _sttm_context(db, run_id), notes,
+                               model=body.model or _model_for(db, "DBT"))
     except Exception as exc:
         raise _snowflake_error(exc) from exc
-    _record_cost(db, run_id, "DBT", reviewed.get("model"), reviewed.get("usage"), started)
+    _record_cost(db, run_id, "DBT", reviewed.get("model"),
+                 {**(reviewed.get("usage") or {}), "query_id": ids[-1] if ids else None}, started)
     return reviewed
 
 
@@ -3028,17 +3064,19 @@ def enhance_dbt(run_id: str, body: DbtEnhance, db: Db = Depends(current_db)):
         context = f"{context}\n\nFOLLOW THESE GDP-DBT-ONBOARD-SOURCE RULES AND DOMAIN CONTRACT:\n{skill}"
     started = time.time()
     try:
+        fetch, ids = _fetch_with_ids(db)
         enhanced = enhance_file(
-            lambda sql, params=(): db.query(sql, params),
+            fetch,
             path,
             rows[0]["content"] or "",
             body.prompt.strip(),
-            model=body.model,
+            model=body.model or _model_for(db, "DBT"),
             context=context,
         )
     except Exception as exc:
         raise _snowflake_error(exc) from exc
-    _record_cost(db, run_id, "DBT", enhanced.get("model"), enhanced.get("usage"), started)
+    _record_cost(db, run_id, "DBT", enhanced.get("model"),
+                 {**(enhanced.get("usage") or {}), "query_id": ids[-1] if ids else None}, started)
     return enhanced
 
 
@@ -4447,7 +4485,8 @@ class PlatformSetting(BaseModel):
 
 
 def _platform_settings(db: Db) -> dict:
-    from services.common.platform_config import DEFAULTS, KNOWN_MODELS, SETTINGS
+    from services.common.platform_config import ADMIN_SETTINGS as SETTINGS
+    from services.common.platform_config import DEFAULTS, KNOWN_MODELS
     from services.common.standard import PRESETS
 
     found = {r["config_key"]: r for r in db.query(
@@ -4458,8 +4497,8 @@ def _platform_settings(db: Db) -> dict:
     settings = {}
     for key in SETTINGS:
         row = found.get(key)
-        settings[key] = {"value": _json(row["config_value"]) if row else DEFAULTS[key],
-                         "default": DEFAULTS[key], "customised": bool(row and int(row["version"]) > 1),
+        value = _json(row["config_value"]) if row else DEFAULTS[key]
+        settings[key] = {"value": value, "default": DEFAULTS[key], "customised": bool(row) and value != DEFAULTS[key],
                          "changed_by": row["created_by"] if row else None, "changed_at": row["created_at"] if row else None}
     return {"settings": settings, "known_models": KNOWN_MODELS, "presets": PRESETS}
 
@@ -4484,6 +4523,7 @@ def put_platform_setting(body: PlatformSetting, db: Db = Depends(current_db)):
 
         configure(cleaned)
     _RULES_CACHE.clear()
+    _MODELS_CACHE.update(at=0.0, data=None)
     return _platform_settings(db)
 
 
@@ -4867,3 +4907,100 @@ def ingest_job(job_id: str):
         if not job:
             raise HTTPException(404, "job not found (jobs are kept while the API runs)")
         return json.loads(json.dumps(job, default=str))
+
+
+def _fetch_with_ids(db: Db):
+    """A fetch_rows for helpers that call AI_COMPLETE themselves, remembering each statement's query id."""
+    ids: list[str] = []
+
+    def fetch(sql: str, params: tuple = ()):
+        found, query_id = db.query_with_id(sql, params)
+        if query_id:
+            ids.append(query_id)
+        return found
+
+    return fetch, ids
+
+
+# ---------------------------------------------------------------- Admin: models available to this account
+
+_MODELS_CACHE: dict = {"at": 0.0, "data": None}
+_RECONCILE_STATE: dict = {"at": 0.0, "last": None}
+
+
+class ModelTest(BaseModel):
+    model: str = Field(min_length=2, max_length=128)
+
+
+def _account_models(db: Db, refresh: bool = False) -> dict:
+    """Models this account can use: SHOW MODELS / inference profiles, the Cortex catalog, and the account's
+    CORTEX_MODELS_ALLOWLIST. Cached for ten minutes."""
+    from services.common.models import account_models
+
+    if not refresh and _MODELS_CACHE["data"] and time.time() - _MODELS_CACHE["at"] < 600:
+        return _MODELS_CACHE["data"]
+
+    def execute(sql: str):
+        return db.query(sql)
+
+    data = account_models(execute, str(_config(db, "LLM_MODEL", "") or ""))
+    _MODELS_CACHE.update(at=time.time(), data=data)
+    return data
+
+
+@app.get("/api/config/models")
+def config_models(refresh: bool = False, db: Db = Depends(current_db)):
+    from services.common.llm import STAGES
+
+    data = _account_models(db, refresh)
+    return {**data, "default": _model_for(db), "by_stage": _config(db, "LLM_MODEL_BY_STAGE", {}) or {},
+            "stages": list(STAGES)}
+
+
+@app.post("/api/config/models/test")
+def test_model(body: ModelTest, db: Db = Depends(current_db)):
+    """A tiny AI_COMPLETE to prove the model answers in this account's region (costs a few tokens)."""
+    started = time.time()
+    try:
+        found, query_id = db.query_with_id(
+            "SELECT AI_COMPLETE(model => %s, prompt => 'Reply with the single word OK.', "
+            "model_parameters => {'temperature': 0, 'max_tokens': 5}, show_details => TRUE) AS R", (body.model,))
+    except Exception as exc:
+        text = str(exc)
+        reason = ("not available in this account or region" if "unknown model" in text.lower()
+                  or "not supported" in text.lower() or "unavailable" in text.lower() else text[:300])
+        return {"model": body.model, "ok": False, "error": reason, "latency_ms": int((time.time() - started) * 1000)}
+    details = _json(found[0]["r"]) if found else {}
+    _record_cost(db, None, "ADMIN", body.model, {**((details or {}).get("usage") or {}), "query_id": query_id}, started)
+    reply = (((details or {}).get("choices") or [{}])[0].get("messages") or "")
+    return {"model": body.model, "ok": True, "reply": str(reply)[:40], "latency_ms": int((time.time() - started) * 1000),
+            "usage": (details or {}).get("usage")}
+
+
+@app.post("/api/costs/reconcile")
+def reconcile_costs(db: Db = Depends(current_db)):
+    """Actual credits from Snowflake's Cortex usage views by query id; calls that had no rate get an estimate."""
+    from services.common.cost import backfill_estimates, reconcile
+
+    result = reconcile(lambda sql, params: db.query(sql, params), lambda sql, params: db.execute(sql, params))
+    try:
+        result["estimates_filled"] = backfill_estimates(
+            lambda sql, params: db.query(sql, params), lambda sql, params: db.execute(sql, params),
+            _config(db, "RATE_CARD", {}) or {}, _config(db, "CREDITS_PER_MILLION_TOKENS", {}) or {})
+    except Exception as exc:
+        result["estimates_filled"] = 0
+        result["backfill_error"] = str(exc)[:200]
+    result["at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+    _RECONCILE_STATE.update(at=time.time(), last=result)
+    return result
+
+
+def _reconcile_if_due(db: Db) -> None:
+    """At most hourly, on the way into cost views (Snowflake's usage views lag; more often adds nothing)."""
+    if time.time() - _RECONCILE_STATE["at"] < 3600:
+        return
+    _RECONCILE_STATE["at"] = time.time()
+    try:
+        reconcile_costs(db)
+    except Exception:
+        pass
