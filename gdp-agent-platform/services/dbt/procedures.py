@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 from services.common.audit import tool_call
-from services.common.standard import GDP, default_prefix, run_standard
+from services.common.standard import GDP, conventions, conventions_for, default_prefix, run_standard
 from services.common.sql import clip, insert_rows, rows, scalar, variant
 from services.common.stage import Stage
 from services.dbt.inputs import assemble, load_inputs, session_query
@@ -88,7 +88,7 @@ def merge_branch_plan(payload: Dict[str, Any], prior: Dict[str, Any], run_name: 
     origin = pick("origin", "repo")
     return {
         "base_branch": pick("base_branch", default="main") or "main",
-        "cut_branch": pick("cut_branch", default=f"feat/{'gdp' if standard == GDP else 'onboard'}-{slug}"),
+        "cut_branch": pick("cut_branch", default=f"{conventions(standard)['branch_prefix']}{slug}"),
         "repo": pick("repo", "origin"),
         "origin": origin,
         "git_repository": pick("git_repository"),
@@ -236,12 +236,14 @@ def generate_dbt(session, run_id: str, payload_json: str = "{}") -> Dict[str, An
                     "reason": "Opened by CODEGEN.PUBLISH_DBT_PR through the GitHub API after generation.",
                 },
             }
+            conv = conventions_for(lambda sql, params: rows(session, sql, params), run_standard(stage.run))
             project_name = plan.get("dbt_project") or (
-                f"{scalar(session, 'SELECT CURRENT_DATABASE()')}.CODEGEN.GDP_{run_id.replace('-', '')[:18]}_V{version}"
+                f"{scalar(session, 'SELECT CURRENT_DATABASE()')}.CODEGEN.{conv['codegen_prefix']}"
+                f"{run_id.replace('-', '')[:18]}_V{version}"
             )
             try:
                 workspace["dbt_project"] = create_dbt_project(
-                    session, project_name, f"@{stage_path}", f"GDP run {run_id} compile-only",
+                    session, project_name, f"@{stage_path}", f"Agentic pipeline run {run_id} compile-only",
                 )
             except Exception as exc:
                 workspace["dbt_project"] = {"status": "SKIPPED", "detail": clip(exc, 400)}
@@ -277,7 +279,7 @@ def generate_dbt(session, run_id: str, payload_json: str = "{}") -> Dict[str, An
                              "?", f"'{ENGINE}'", "?::NUMBER", "'GENERATED'", "?", "CURRENT_USER()"],
                             [[generation_id, run_id,
                               scalar(session, "SELECT DOMAIN_NAME FROM KNOWLEDGE.DOMAIN_REGISTRY WHERE DOMAIN_ID = ?",
-                                     [stage.run["DOMAIN_ID"]]) or "GDP",
+                                     [stage.run["DOMAIN_ID"]]) or conventions(run_standard(stage.run))["default_domain"].upper(),
                               stage.run.get("TARGET_MODEL") or design.get("target_table"),
                               sttm["STTM_ID"], sttm["STTM_VERSION"], len(files), kv, version, f"@{stage_path}"]])
                 insert_rows(session, "CODEGEN.GENERATED_ARTIFACT",

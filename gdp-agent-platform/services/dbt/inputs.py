@@ -10,7 +10,7 @@ import json
 import re
 from typing import Any, Callable, Dict, List, Optional
 
-from services.common.standard import GDP, default_prefix, run_standard
+from services.common.standard import conventions_for, default_prefix, run_standard
 from services.source.er_graph import infer_joins
 
 Query = Callable[[str, list], List[Dict[str, Any]]]
@@ -46,6 +46,7 @@ def load_inputs(query: Query, run_id: str, plan: Dict[str, Any], sttm: Dict[str,
                      WHERE R.RUN_ID = ?""", [run_id]) or [{}])[0]
     design = sttm.get("table_design") or {}
     standard = run_standard(run)
+    conv = conventions_for(query, standard)
     target = design.get("target_table") or str(run.get("TARGET_MODEL") or "target").split(".")[-1]
     landed = query("""SELECT SOURCE_TABLE, LANDING_TABLE, LANDING_DATABASE, LANDING_SCHEMA
                         FROM SOURCE.LANDING_TABLE_REGISTRY
@@ -108,10 +109,11 @@ def load_inputs(query: Query, run_id: str, plan: Dict[str, Any], sttm: Dict[str,
     except Exception:
         key_candidates = None
     return {
-        "domain": plan.get("domain_folder") or run.get("DOMAIN_NAME") or ("gdp" if standard == GDP else "general"),
+        "domain": plan.get("domain_folder") or run.get("DOMAIN_NAME") or conv["default_domain"],
         "target": target,
         "prefix": plan.get("prefix") if plan.get("prefix") is not None else default_prefix(standard),
         "standard": standard,
+        "conventions": conv,
         "source_key": plan.get("source_key") or source_key_of(system),
         "source_system": system.upper(),
         "business_keys": design.get("business_keys") or [],

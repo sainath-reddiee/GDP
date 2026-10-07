@@ -397,9 +397,15 @@ DBT_STAGE = "CODEGEN.DBT_STAGE"
 RUN_ID_TEXT = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
 
 
-def run_project_prefix(run_id: str) -> str:
-    """Auto-named compile-only projects are CODEGEN.GDP_<first 18 hex of run id>_V<version>."""
-    return "GDP_" + run_id.replace("-", "")[:18].upper() + "_V"
+def run_project_prefix(run_id: str, codegen_prefix: str = "GDP_") -> str:
+    """Auto-named compile-only projects are CODEGEN.<standard prefix><first 18 hex of run id>_V<version>."""
+    return codegen_prefix.upper() + run_id.replace("-", "")[:18].upper() + "_V"
+
+
+def run_project_prefixes(run_id: str) -> list:
+    from services.common.standard import PRESETS
+
+    return sorted({run_project_prefix(run_id, p["codegen_prefix"]) for p in PRESETS.values()})
 
 
 def run_workspace_cleanup(execute: Execute, run_id: str) -> Dict[str, Any]:
@@ -411,19 +417,19 @@ def run_workspace_cleanup(execute: Execute, run_id: str) -> Dict[str, Any]:
         out["files_removed"] = len(execute(f"REMOVE @{DBT_STAGE}/{run_id}/") or [])
     except Exception as exc:
         out["errors"].append(f"REMOVE @{DBT_STAGE}/{run_id}/: {str(exc)[:300]}")
-    prefix = run_project_prefix(run_id)
-    try:
-        listed = _lower_rows(execute(f"SHOW DBT PROJECTS LIKE '{prefix}%' IN SCHEMA CODEGEN") or [])
-    except Exception as exc:
-        listed = []
-        out["errors"].append(f"SHOW DBT PROJECTS: {str(exc)[:300]}")
-    for row in listed:
-        name = str(row.get("name") or "")
-        if not name.upper().startswith(prefix):
-            continue
+    for prefix in run_project_prefixes(run_id):
         try:
-            execute(f"DROP DBT PROJECT IF EXISTS CODEGEN.{quote_exact(name)}")
-            out["projects_dropped"].append(name)
+            listed = _lower_rows(execute(f"SHOW DBT PROJECTS LIKE '{prefix}%' IN SCHEMA CODEGEN") or [])
         except Exception as exc:
-            out["errors"].append(f"DROP DBT PROJECT {name}: {str(exc)[:300]}")
+            listed = []
+            out["errors"].append(f"SHOW DBT PROJECTS: {str(exc)[:300]}")
+        for row in listed:
+            name = str(row.get("name") or "")
+            if not name.upper().startswith(prefix):
+                continue
+            try:
+                execute(f"DROP DBT PROJECT IF EXISTS CODEGEN.{quote_exact(name)}")
+                out["projects_dropped"].append(name)
+            except Exception as exc:
+                out["errors"].append(f"DROP DBT PROJECT {name}: {str(exc)[:300]}")
     return out

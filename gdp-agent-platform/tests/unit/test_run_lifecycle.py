@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from services.dbt.workspace import run_project_prefix, run_workspace_cleanup
+from services.dbt.workspace import run_project_prefix, run_project_prefixes, run_workspace_cleanup
 from services.workflow.cleanup import plan_landing_drops
 from services.workflow.graph import load_graph
 from services.workflow.procedures import parse_run_ids
@@ -93,8 +93,9 @@ def test_workspace_cleanup_never_raises():
     def failing(sql):
         raise RuntimeError("Insufficient privileges")
 
-    out = run_workspace_cleanup(failing, str(uuid.uuid4()))
-    assert out["files_removed"] == 0 and len(out["errors"]) == 2
+    run_id = str(uuid.uuid4())
+    out = run_workspace_cleanup(failing, run_id)
+    assert out["files_removed"] == 0 and len(out["errors"]) == 1 + len(run_project_prefixes(run_id))
 
 
 def test_in_place_landing_rows_are_never_dropped():
