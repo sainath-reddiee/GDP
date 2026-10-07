@@ -14,6 +14,12 @@ import { cn } from "@/lib/utils";
 
 type DomainRow = { domain_id: string; domain_name: string; knowledge_items: number; target_tables: number };
 
+type Metrics = {
+  total: number; lifecycle: Record<string, number>; by_stage: Record<string, number>; needs_review: number;
+  failed: number; cancelled: number; archived: number;
+  cost_30d: { calls: number; tokens: number; estimated_cost: number } | null;
+};
+
 const STATE_LABEL: Record<string, string> = {
   MAPPING_REVIEW: "Mapping waits for approval", STTM_REVIEW: "STTM waits for approval",
   SODA_REVIEW: "Data quality checks to confirm", DBT_REVIEW: "Generated dbt code to review",
@@ -60,17 +66,26 @@ function Panel({ title, icon: Icon, action, children, className }: {
 }
 
 export default async function Dashboard() {
-  const [me, { runs }, overview, store, domains, audit] = await Promise.all([
+  const [me, { runs }, metrics, review, failing, overview, store, domains, audit] = await Promise.all([
     whoami(),
-    api<{ runs: RunSummary[] }>("/api/runs?limit=500"),
+    api<{ runs: RunSummary[] }>("/api/runs?limit=8"),
+    api<Metrics>("/api/metrics/summary").catch(() => null),
+    api<{ runs: RunSummary[] }>("/api/runs?needs_review=true&limit=6&sort=updated").catch(() => ({ runs: [] as RunSummary[] })),
+    api<{ runs: RunSummary[] }>("/api/runs?status=failed&limit=10&sort=updated").catch(() => ({ runs: [] as RunSummary[] })),
     api<{ sources: unknown[] }>("/api/sources").catch(() => null),
     api<{ profiles: ProfileStoreRow[] }>("/api/profiles/store").catch(() => ({ profiles: [] as ProfileStoreRow[] })),
     api<{ domains: DomainRow[] }>("/api/domains").catch(() => ({ domains: [] as DomainRow[] })),
-    api<{ events: AuditEvent[] }>("/api/audit").catch(() => ({ events: [] as AuditEvent[] })),
+    api<{ events: AuditEvent[] }>("/api/audit?limit=7").catch(() => ({ events: [] as AuditEvent[] })),
   ]);
-  const s = summarize(runs);
-  const attention = runs.filter((r) => needsReview(r)).slice(0, 6);
-  const failed = runs.filter((r) => !r.is_archived && r.lifecycle === "FAILED" && !isCancelled(r)).slice(0, 3);
+  // Counts come from the server (correct at any number of runs); the run lists below are small, targeted fetches.
+  const s = metrics
+    ? { total: metrics.total, running: metrics.lifecycle.RUNNING ?? 0, drafts: metrics.lifecycle.DRAFT ?? 0,
+        review: metrics.needs_review, completed: metrics.lifecycle.COMPLETED ?? 0, failed: metrics.failed,
+        cancelled: metrics.cancelled, stages: metrics.by_stage }
+    : summarize(runs);
+  const attention = review.runs.filter((r) => needsReview(r)).slice(0, 6);
+  const failed = failing.runs.filter((r) => !r.is_archived && !isCancelled(r)).slice(0, 3);
+  const cost = metrics?.cost_30d;
   const funnelMax = Math.max(1, ...FUNNEL.map((f) => s.stages[f.stage] ?? 0));
   const profiles = store.profiles;
   const staged = profiles.filter((p) => p.status !== "PROFILING" && p.status !== "FAILED").length;
@@ -96,11 +111,19 @@ export default async function Dashboard() {
 
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-5">
         <Kpi href="/runs?status=active" label="Running" value={s.running} hint="Moving through the pipeline" icon={PlayCircle} tone="bg-blue-500" />
-        <Kpi href="/runs?status=active" label="Needs review" value={s.review} hint="Mapping, STTM, checks or code" icon={Eye} tone="bg-rose-500" highlight={s.review > 0} />
-        <Kpi href="/runs?status=active" label="Drafts" value={s.drafts} hint="Created, source not chosen yet" icon={CircleDashed} tone="bg-slate-500" />
+        <Kpi href="/runs?needs_review=1" label="Needs review" value={s.review} hint="Mapping, STTM, checks or code" icon={Eye} tone="bg-rose-500" highlight={s.review > 0} />
+        <Kpi href="/runs?status=draft" label="Drafts" value={s.drafts} hint="Created, source not chosen yet" icon={CircleDashed} tone="bg-slate-500" />
         <Kpi href="/runs?status=completed" label="Completed" value={s.completed} hint="Approved and delivered" icon={CheckCircle2} tone="bg-emerald-500" />
         <Kpi href="/runs?status=failed" label="Failed" value={s.failed} hint={`${s.cancelled} more cancelled`} icon={XCircle} tone="bg-amber-500" />
       </div>
+      {cost && (
+        <Link href="/audit?tab=cost" className="flex flex-wrap items-center gap-3 rounded-xl border bg-card px-4 py-3 text-sm shadow-sm hover:bg-muted/40">
+          <Sparkles className="h-4 w-4 text-violet-600" />
+          <span className="font-medium">AI usage, last 30 days</span>
+          <span className="text-muted-foreground">{cost.calls.toLocaleString()} calls · {cost.tokens.toLocaleString()} tokens · {cost.estimated_cost.toFixed(2)} credits estimated</span>
+          <ArrowRight className="ml-auto h-4 w-4 text-muted-foreground" />
+        </Link>
+      )}
 
       <div className="grid gap-4 xl:grid-cols-5">
         <Panel title="Pipeline: where running work sits" icon={Activity} className="xl:col-span-3"

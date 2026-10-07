@@ -3,6 +3,7 @@ import type { RunStatusFilter } from "./types";
 export const STATUS_FILTERS: { value: RunStatusFilter; label: string }[] = [
   { value: "all", label: "All" },
   { value: "active", label: "Active" },
+  { value: "draft", label: "Drafts" },
   { value: "completed", label: "Completed" },
   { value: "failed", label: "Failed" },
   { value: "archived", label: "Archived" },
