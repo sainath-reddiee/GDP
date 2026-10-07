@@ -30,7 +30,7 @@ def _files(session, generation_id: str) -> Dict[str, str]:
 def _sttm_lines(session, sttm_id: str) -> List[Dict[str, Any]]:
     return [{
         "target_column": r["TARGET_COLUMN"], "target_datatype": r["TARGET_DATATYPE"],
-        "mapping_type": r["MAPPING_TYPE"], "transformation": r["TRANSFORMATION"],
+        "source_datatype": r.get("SOURCE_DATATYPE"), "mapping_type": r["MAPPING_TYPE"], "transformation": r["TRANSFORMATION"],
         "nullable_rule": r["NULLABLE_RULE"], "uniqueness_rule": r["UNIQUENESS_RULE"],
         "accepted_values": variant(r["ACCEPTED_VALUES"]) or [],
         "required": not r["NULLABLE_RULE"] and r["MAPPING_TYPE"] != "UNMAPPED",
@@ -39,7 +39,8 @@ def _sttm_lines(session, sttm_id: str) -> List[Dict[str, Any]]:
 
 
 UNAVAILABLE_MARKERS = ("unsupported feature", "not supported", "insufficient privileges",
-                       "unexpected 'dbt'", "unknown object type", "feature is not enabled")
+                       "unexpected 'dbt'", "unknown object type", "feature is not enabled",
+                       "unsupported statement type")  # dbt inside an owner's-rights procedure cannot run SHOW
 
 
 def _compile(session, generation: Dict[str, Any], run_id: str) -> Dict[str, Any]:

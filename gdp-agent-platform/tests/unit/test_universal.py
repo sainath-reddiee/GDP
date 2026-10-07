@@ -181,3 +181,40 @@ def test_pii_detected_from_values_whatever_the_column_is_called():
     p = build_profile("ref_x", "VARCHAR", stats, freq("123-45-6789", "987-65-4321"), [])
     assert p["pii_classification"] == "SSN"
     assert p["sample_values"][0]["value"] == "***6789" and p["statistics"]["min"] is None
+
+
+def test_catalog_table_names_keep_their_spelling():
+    import pytest
+    from fastapi import HTTPException
+
+    from app.main import _table_ident
+
+    assert _table_ident("members") == "members"
+    assert _table_ident("Order Items") == "Order Items"
+    assert _table_ident('"Bookings"') == "Bookings"
+    with pytest.raises(HTTPException):
+        _table_ident('bad"name')
+
+
+def test_day_first_dates_are_read_from_the_values():
+    from services.profiling.profiler import date_format
+
+    shape = [{"pattern": "99/99/9999"}]
+    assert date_format(shape, ["27/11/2023", "13/03/2023"]) == "DD/MM/YYYY"
+    assert date_format(shape, ["11/27/2023", "03/13/2023"]) == "MM/DD/YYYY"
+    assert date_format(shape, ["01/02/2023"]) == "MM/DD/YYYY"  # ambiguous keeps the shape's reading
+    assert date_format([{"pattern": "99.99.9999"}], ["31.12.2023"]) == "DD.MM.YYYY"
+
+
+def test_enrichment_never_clears_detected_pii(monkeypatch):
+    from services.profiling import procedures
+
+    monkeypatch.setattr(procedures, "complete_json", lambda *a, **k: (
+        {"columns": [{"column_name": "tax_ref", "semantic_type": "ACCOUNT_NUMBER", "description": "ref"},
+                     {"column_name": "mail", "semantic_type": "EMAIL", "description": "mail"}]}, {}, "m"))
+    profiles = [{"column_name": "tax_ref", "semantic_type": "IDENTIFIER", "pii_classification": "SSN"},
+                {"column_name": "mail", "semantic_type": "TEXT", "pii_classification": "NONE"}]
+    monkeypatch.setattr(procedures.profiler, "enrichment_prompt", lambda *a, **k: "prompt")
+    procedures._enrich(None, None, "members", profiles, "")
+    assert profiles[0]["pii_classification"] == "SSN"  # model relabelled the type; detected PII stays
+    assert profiles[1]["pii_classification"] == "EMAIL"

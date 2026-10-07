@@ -812,6 +812,18 @@ def _ident(value: str, field: str) -> str:
     return name
 
 
+def _table_ident(value: str, field: str = "table") -> str:
+    """A table picked from the catalog listing: its exact stored spelling ("members", "Order Items"). A quoted
+    form is accepted too. Unlike _ident, an unquoted lowercase name is not folded to upper case, because it came
+    from INFORMATION_SCHEMA as-is."""
+    value = (value or "").strip()
+    if len(value) >= 2 and value[0] == value[-1] == '"':
+        return _ident(value, field)
+    if not value or len(value) > 255 or '"' in value or any(ord(ch) < 32 for ch in value):
+        raise HTTPException(400, f"{field} must be a table name from the catalog")
+    return value
+
+
 def _column_type(column: dict) -> str:
     kind = (column.get("data_type") or "").upper()
     if kind == "TEXT" and column.get("character_maximum_length") is not None:
@@ -974,7 +986,7 @@ def catalog_tables(database: str, schema: str, db: Db = Depends(current_db)):
 
 @app.get("/api/catalog/columns")
 def catalog_columns(database: str, schema: str, table: str, db: Db = Depends(current_db)):
-    database, schema, table = _ident(database, "database"), _ident(schema, "schema"), _ident(table, "table")
+    database, schema, table = _ident(database, "database"), _ident(schema, "schema"), _table_ident(table)
     return {"columns": db.query(
         f"""
         SELECT COLUMN_NAME, DATA_TYPE, ORDINAL_POSITION
@@ -1025,7 +1037,7 @@ def _catalog_profile(db: Db, database: Optional[str], schema: Optional[str], tab
         return [{"table_name": table, "column_name": ""} for table in tables]
     for table in tables:
         try:
-            db_name, sch, tbl = _ident(database, "database"), _ident(schema, "schema"), _ident(table, "table")
+            db_name, sch, tbl = _ident(database, "database"), _ident(schema, "schema"), _table_ident(table)
             cols = db.query(
                 f"""
                 SELECT COLUMN_NAME FROM {_quote_ident(db_name)}.INFORMATION_SCHEMA.COLUMNS
@@ -1146,7 +1158,7 @@ def catalog_preview_graph(body: PreviewGraph, db: Db = Depends(current_db)):
     from services.source.er_graph import infer_joins, isolated_tables, key_columns, mapping_edges
 
     database, schema = _ident(body.database, "database"), _ident(body.schema_name, "schema")
-    tables = [_ident(t, "table") for t in body.tables]
+    tables = [_table_ident(t) for t in body.tables]
     meta = {r["table_name"]: r for r in db.query(
         f"""
         SELECT TABLE_NAME, TABLE_TYPE, ROW_COUNT FROM {_quote_ident(database)}.INFORMATION_SCHEMA.TABLES
@@ -3556,7 +3568,7 @@ def catalog_table_profile(database: str, schema: str, table: str, db: Db = Depen
     """The staged profile document of any profiled table, read from @METADATA.PROFILES_STAGE."""
     from services.profiling.profiler import STAGE_PATH
 
-    database, schema, table = _ident(database, "database"), _ident(schema, "schema"), _ident(table, "table")
+    database, schema, table = _ident(database, "database"), _ident(schema, "schema"), _table_ident(table)
     from services.profiling import insights
 
     entry = _catalog_store_rows(db, database, schema).get(table)
@@ -3664,7 +3676,7 @@ def catalog_analyze(body: CatalogAnalyzeRequest, db: Db = Depends(current_db)):
     from services.profiling import insights
 
     database, schema = _ident(body.database, "database"), _ident(body.schema_name, "schema")
-    tables = sorted({_ident(t, "table") for t in body.tables})
+    tables = sorted({_table_ident(t) for t in body.tables})
     store = _catalog_store_rows(db, database, schema)
     meta = {t["table_name"]: t for t in _source_tables(db, {"database_name": database, "schema_name": schema})}
     docs, summary = {}, []

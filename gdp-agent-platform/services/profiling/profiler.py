@@ -210,10 +210,28 @@ def cardinality(distinct: Optional[int], non_null: int) -> Optional[str]:
     return "MEDIUM"
 
 
-def date_format(patterns: Sequence[Dict[str, Any]]) -> Optional[str]:
+DAY_MONTH_SHAPES = {"99/99/9999": "/", "99-99-9999": "-", "99.99.9999": "."}
+
+
+def date_format(patterns: Sequence[Dict[str, Any]], values: Sequence[Any] = ()) -> Optional[str]:
+    """Date format of a text column. For dd?mm?yyyy shapes the values decide day-first or month-first: a first
+    part above 12 can only be a day, a second part above 12 can only be a day. Ambiguous values keep the
+    shape's conventional reading."""
     if not patterns:
         return None
     top = patterns[0]["pattern"]
+    sep = DAY_MONTH_SHAPES.get(top)
+    if sep:
+        first = second = 0
+        for v in values or []:
+            parts = str(v).split(sep)
+            if len(parts) == 3 and parts[0].isdigit() and parts[1].isdigit():
+                first, second = max(first, int(parts[0])), max(second, int(parts[1]))
+        if first > 12 and second <= 12:
+            return f"DD{sep}MM{sep}YYYY"
+        if second > 12 and first <= 12:
+            return f"MM{sep}DD{sep}YYYY"
+        return DATE_FORMATS.get(top) or f"DD{sep}MM{sep}YYYY"
     return DATE_FORMATS.get(top)
 
 
@@ -364,7 +382,8 @@ def build_profile(name: str, data_type: str, stats: Dict[str, Any], frequencies:
         "statistics": {
             **stats,
             "frequency_distribution": masked_freq,
-            "date_format": date_format(patterns) if family == "TEXT" else None,
+            "date_format": (date_format(patterns, [f.get("value") for f in frequencies]) if family == "TEXT"
+                            else None),
             "enum_values": ([f["value"] for f in masked_freq]
                             if card in ("LOW", "CONSTANT") and stats.get("distinct_count", 99) <= ENUM_MAX_DISTINCT
                             else None),

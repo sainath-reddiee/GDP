@@ -107,7 +107,7 @@ def test_backtest_plans_one_query_per_table_and_evaluates():
     queries, slots = plan(checks, LINES, {"CRM_CUSTOMER": "DB.LANDING.CRM_CUSTOMER"}, "CRM_CUSTOMER")
     sql = queries["CRM_CUSTOMER"]
     assert sql.startswith("SELECT COUNT(*) AS N") and sql.endswith("FROM DB.LANDING.CRM_CUSTOMER")
-    assert "REGEXP_LIKE" in sql and "$$^[0-9]{5}$$$" in sql
+    assert "REGEXP_LIKE" in sql and "'^[0-9]{5}$'" in sql and "$$$" not in sql
     assert "'SMB', 'ENT'" in sql and "LENGTH(\"NAME\"::STRING) > 50" in sql
     seg_i = next(i for i, c in enumerate(checks) if c["definition"]["kind"] == "missing_percent")
     seg_slot = next(s for s in slots if s["index"] == seg_i)
@@ -118,4 +118,6 @@ def test_backtest_plans_one_query_per_table_and_evaluates():
     vol_slot = next(s for s in slots if s["index"] == vol_i)
     assert evaluate(checks[vol_i], vol_slot, {"N": 1000})["status"] == "PASS"
     assert metric_sql({"definition": {"kind": "accepted_values", "values": ["O'Neil"]}}, "X").count("'O''Neil'") == 1
-    assert metric_sql({"definition": {"kind": "regex", "pattern": "a$$b"}}, "X") is None
+    assert "'a$$b'" in metric_sql({"definition": {"kind": "regex", "pattern": "a$$b"}}, "X")
+    ssn = metric_sql({"definition": {"kind": "regex", "pattern": r"^[0-9]{3}\-[0-9]{2}$"}}, "X")
+    assert r"'^[0-9]{3}\\-[0-9]{2}$'" in ssn  # backslash escaped for a single-quoted Snowflake literal

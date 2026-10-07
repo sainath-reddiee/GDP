@@ -23,7 +23,8 @@ def _lit(value: Any) -> str:
 
 
 def _pattern(value: str) -> Optional[str]:
-    return None if "$$" in value else f"$${value}$$"
+    """Regex as a single-quoted literal. A $$...$$ literal breaks on the common end anchor: '^...$' + '$$' is '$$$'."""
+    return _lit(value) if value else None
 
 
 def metric_sql(check: Dict[str, Any], column: str) -> Optional[str]:

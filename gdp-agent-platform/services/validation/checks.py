@@ -120,6 +120,9 @@ def _datatypes(files: Dict[str, str], lines: List[Dict[str, Any]]) -> List[Dict[
             continue
         dtype = (line.get("target_datatype") or "").upper()
         col = (line.get("target_column") or "").lower()
+        source_type = (line.get("source_datatype") or "").upper()
+        if source_type and source_type.split("(")[0] == dtype.split("(")[0]:
+            continue  # same type end to end: Rule 2 says no cast
         if dtype.startswith("DATE") or dtype.startswith("TIMESTAMP") or dtype.startswith("NUMBER"):
             upper = sql.upper()
             if "CAST(" not in upper and "TRY_TO_" not in upper and "::" not in upper:

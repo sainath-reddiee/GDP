@@ -163,7 +163,8 @@ def _enrich(session, run_id: Optional[str], table: str, profiles: List[Dict[str,
         suggested = (found.get("semantic_type") or "").upper()
         if p["semantic_type"] in profiler.GENERIC_TYPES and suggested and suggested not in profiler.GENERIC_TYPES:
             p["semantic_type"] = suggested
-            p["pii_classification"] = profiler.pii_classification(suggested)
+            if (p.get("pii_classification") or "NONE") == "NONE":  # the model may add PII, never clear it
+                p["pii_classification"] = profiler.pii_classification(suggested)
     return model
 
 
