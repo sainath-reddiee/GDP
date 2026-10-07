@@ -330,35 +330,46 @@ def _intent_table_counts(db: Db) -> dict[str, int]:
 
 
 @app.get("/api/runs")
-def list_runs(include_test: bool = False, status: str = "all", limit: int = 200, db: Db = Depends(current_db)):
+def list_runs(include_test: bool = False, status: str = "all", limit: int = 200, offset: int = 0,
+              q: Optional[str] = None, domain_id: Optional[str] = None, stage: Optional[str] = None,
+              needs_review: bool = False, sort: str = "newest", db: Db = Depends(current_db)):
+    """Runs with search, domain/stage/needs-review filters, sorting and paging (`total` counts all matches)."""
+    from services.workflow.listing import MAX_RUNS, SORTS, page, runs_where
     from services.workflow.state_machine import lifecycle_filter_sql, lifecycle_status
 
     try:
         predicate = lifecycle_filter_sql(status)
     except AssertionError as exc:
         raise HTTPException(400, str(exc)) from exc
-    limit = max(1, min(int(limit), 500))
+    offset, limit = page(offset, limit, max(MAX_RUNS, 500))
+    where, params = runs_where(predicate, include_test, q, domain_id, stage, needs_review)
+    order = SORTS.get(sort, SORTS["newest"])
+    total = None
     try:
         rows = db.query(
             f"""
-            SELECT R.RUN_ID, R.RUN_NAME, R.CURRENT_STATE, R.CURRENT_STAGE, R.STATUS, R.TARGET_MODEL,
+            WITH SEL AS (SELECT RUN_ID, COUNT(*) AS N FROM SOURCE.SOURCE_OBJECT WHERE SELECTED_FLAG GROUP BY RUN_ID),
+                 LAND AS (SELECT RUN_ID, COUNT(DISTINCT SOURCE_TABLE) AS N FROM SOURCE.LANDING_TABLE_REGISTRY
+                           WHERE INGESTION_STATUS = 'COMPLETE' GROUP BY RUN_ID)
+            SELECT R.RUN_ID, R.RUN_NAME, R.CURRENT_STATE, R.CURRENT_STAGE, R.STATUS, R.TARGET_MODEL, R.DOMAIN_ID,
                    R.CREATED_BY, R.CREATED_AT::VARCHAR AS CREATED_AT, R.UPDATED_AT::VARCHAR AS UPDATED_AT,
                    COALESCE(R.IS_ARCHIVED, FALSE) AS IS_ARCHIVED, R.SOURCE_DATABASE, R.SOURCE_SCHEMA,
                    S.SOURCE_SYSTEM_NAME, D.DOMAIN_NAME,
                    DATEDIFF('minute', R.CREATED_AT, CURRENT_TIMESTAMP()) AS AGE_MINUTES,
-                   (SELECT COUNT(*) FROM SOURCE.SOURCE_OBJECT O WHERE O.RUN_ID = R.RUN_ID AND O.SELECTED_FLAG)
-                     AS SELECTED_TABLES,
-                   (SELECT COUNT(DISTINCT L.SOURCE_TABLE) FROM SOURCE.LANDING_TABLE_REGISTRY L
-                     WHERE L.RUN_ID = R.RUN_ID AND L.INGESTION_STATUS = 'COMPLETE') AS LANDED_TABLES
+                   COALESCE(SEL.N, 0) AS SELECTED_TABLES, COALESCE(LAND.N, 0) AS LANDED_TABLES,
+                   COUNT(*) OVER () AS TOTAL_MATCHES
               FROM CORE.WORKFLOW_RUN R
               LEFT JOIN SOURCE.SOURCE_REGISTRY S ON S.SOURCE_SYSTEM_ID = R.SOURCE_SYSTEM_ID
               LEFT JOIN KNOWLEDGE.DOMAIN_REGISTRY D ON D.DOMAIN_ID = R.DOMAIN_ID
-             WHERE R.DELETED_AT IS NULL AND (R.ENVIRONMENT <> 'TEST' OR %s) AND {predicate}
-             ORDER BY R.CREATED_AT DESC
-             LIMIT %s
+              LEFT JOIN SEL ON SEL.RUN_ID = R.RUN_ID
+              LEFT JOIN LAND ON LAND.RUN_ID = R.RUN_ID
+             WHERE {where}
+             ORDER BY {order}
+             LIMIT %s OFFSET %s
             """,
-            (include_test, limit),
+            (*params, limit, offset),
         )
+        total = int(rows[0]["total_matches"]) if rows else 0
     except Exception:
         # Before V006 is applied there are no lifecycle columns: show the plain list instead of failing.
         if status.lower() == "archived":
@@ -376,10 +387,12 @@ def list_runs(include_test: bool = False, status: str = "all", limit: int = 200,
         )
     intent_counts = _intent_table_counts(db)
     for r in rows:
+        r.pop("total_matches", None)
         r["lifecycle"] = lifecycle_status(r["current_state"], bool(r.get("is_archived")))
         r["table_count"] = (r.get("selected_tables") or r.get("landed_tables")
                             or intent_counts.get(r["run_id"]) or 0)
-    return {"runs": rows, "status": status.lower()}
+    return {"runs": rows, "status": status.lower(), "total": total if total is not None else len(rows),
+            "offset": offset, "limit": limit}
 
 
 class RunIds(BaseModel):
@@ -1593,18 +1606,71 @@ def audit(run_id: str, db: Db = Depends(current_db)):
 
 
 @app.get("/api/audit")
-def recent_audit(db: Db = Depends(current_db)):
+def recent_audit(run_id: Optional[str] = None, actor_type: Optional[str] = None, to_state: Optional[str] = None,
+                 since: Optional[str] = None, until: Optional[str] = None, q: Optional[str] = None,
+                 offset: int = 0, limit: int = 100, db: Db = Depends(current_db)):
+    """Workflow events with filters and paging (`total` counts all matches)."""
+    from services.workflow.listing import MAX_AUDIT, audit_where, page
+
+    try:
+        where, params = audit_where(run_id, actor_type, to_state, since, until, q)
+    except AssertionError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    offset, limit = page(offset, limit, MAX_AUDIT)
     events = db.query(
-        """
+        f"""
         SELECT E.EVENT_ID, E.RUN_ID, R.RUN_NAME, E.FROM_STATE, E.TO_STATE, E.ACTOR_TYPE, E.ACTOR,
-               E.REASON, E.CREATED_AT::VARCHAR AS CREATED_AT
+               E.REASON, E.CREATED_AT::VARCHAR AS CREATED_AT, COUNT(*) OVER () AS TOTAL_MATCHES
           FROM CORE.WORKFLOW_EVENT E
           JOIN CORE.WORKFLOW_RUN R ON R.RUN_ID = E.RUN_ID
+         WHERE {where}
          ORDER BY E.CREATED_AT DESC
-         LIMIT 200
-        """
+         LIMIT %s OFFSET %s
+        """,
+        (*params, limit, offset),
     )
-    return {"events": events}
+    total = int(events[0]["total_matches"]) if events else 0
+    for e in events:
+        e.pop("total_matches", None)
+    return {"events": events, "total": total, "offset": offset, "limit": limit}
+
+
+@app.get("/api/costs")
+def costs(group_by: str = "stage", since: Optional[str] = None, until: Optional[str] = None, limit: int = 50,
+          db: Db = Depends(current_db)):
+    """AI usage and estimated cost from AUDIT.COST_USAGE, grouped by stage, model, run or day."""
+    from services.workflow.listing import cost_query
+
+    try:
+        sql, params = cost_query(group_by, since, until, limit)
+    except AssertionError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    rows = db.query(sql, tuple(params))
+    totals = {k: sum(float(r.get(k) or 0) for r in rows)
+              for k in ("calls", "input_tokens", "output_tokens", "total_tokens", "estimated_cost")}
+    return {"group_by": group_by, "rows": rows, "totals": totals}
+
+
+@app.get("/api/metrics/summary")
+def metrics_summary(db: Db = Depends(current_db)):
+    """Server-side counts for the dashboard and sidebar (correct at any number of runs) plus 30-day AI cost."""
+    from services.workflow.listing import summarise
+    from services.workflow.state_machine import lifecycle_status
+
+    groups = db.query(
+        """SELECT CURRENT_STATE, CURRENT_STAGE, STATUS, COALESCE(IS_ARCHIVED, FALSE) AS IS_ARCHIVED, COUNT(*) AS N
+             FROM CORE.WORKFLOW_RUN WHERE DELETED_AT IS NULL AND ENVIRONMENT <> 'TEST'
+            GROUP BY 1, 2, 3, 4""")
+    out = summarise(groups, lifecycle_status)
+    try:
+        cost = db.query("""SELECT COUNT(*) AS CALLS, COALESCE(SUM(TOTAL_TOKENS), 0) AS TOKENS,
+                                  COALESCE(SUM(ESTIMATED_COST), 0) AS COST
+                             FROM AUDIT.COST_USAGE WHERE CREATED_AT >= DATEADD('day', -30, CURRENT_TIMESTAMP())""")
+        out["cost_30d"] = {"calls": int(cost[0]["calls"] or 0), "tokens": int(cost[0]["tokens"] or 0),
+                           "estimated_cost": float(cost[0]["cost"] or 0)}
+    except Exception:
+        out["cost_30d"] = None
+    return out
 
 
 @app.get("/api/skills")

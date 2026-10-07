@@ -30,7 +30,7 @@ export type RunInfo = {
 
 export type Lifecycle = "DRAFT" | "RUNNING" | "COMPLETED" | "FAILED" | "ARCHIVED";
 
-export type RunStatusFilter = "all" | "active" | "completed" | "failed" | "archived";
+export type RunStatusFilter = "all" | "active" | "draft" | "completed" | "failed" | "archived";
 
 export type StorageType = "IN_PLACE" | "MANAGED" | "ICEBERG";
 

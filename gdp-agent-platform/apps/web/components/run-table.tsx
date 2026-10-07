@@ -216,7 +216,7 @@ export function RunTable({
                 />
               </TH>
             )}
-            <TH>Run</TH><TH>Domain</TH><TH>Source</TH><TH>Tables</TH><TH>Current stage</TH><TH>Status</TH><TH>Age</TH>
+            <TH>Run</TH><TH>Domain</TH><TH>Source</TH><TH>Tables</TH><TH>Current stage</TH><TH>Status</TH><TH>Owner</TH><TH>Age</TH>
           </TR>
         </THead>
         <TBody>
@@ -264,12 +264,13 @@ export function RunTable({
                   );
                 })()}
               </TD>
+              <TD className="text-xs text-muted-foreground">{r.created_by}</TD>
               <TD className="text-muted-foreground" title={r.created_at}>{formatAge(r.age_minutes, r.created_at)}</TD>
             </TR>
           ))}
           {runs.length === 0 && (
             <TR>
-              <TD colSpan={selectable ? 8 : 7} className="text-muted-foreground">
+              <TD colSpan={selectable ? 9 : 8} className="text-muted-foreground">
                 {filter === "archived" ? "No archived runs." : filter === "all" ? "No runs yet." : "No runs match this filter."}
               </TD>
             </TR>

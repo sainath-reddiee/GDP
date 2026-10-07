@@ -10,11 +10,13 @@ export type NavCounts = { running: number; review: number; drafts: number; stage
  *  Uses the fast run list and profile store, never the per-source health check. */
 export async function GET() {
   try {
-    const [{ runs }, store] = await Promise.all([
-      api<{ runs: RunSummary[] }>("/api/runs?limit=500"),
+    const [metrics, store] = await Promise.all([
+      api<{ lifecycle: Record<string, number>; needs_review: number }>("/api/metrics/summary").catch(() => null),
       api<{ profiles: ProfileStoreRow[] }>("/api/profiles/store").catch(() => ({ profiles: [] as ProfileStoreRow[] })),
     ]);
-    const s = summarize(runs);
+    const s = metrics
+      ? { running: metrics.lifecycle.RUNNING ?? 0, review: metrics.needs_review, drafts: metrics.lifecycle.DRAFT ?? 0 }
+      : summarize((await api<{ runs: RunSummary[] }>("/api/runs?limit=500")).runs);
     const counts: NavCounts = {
       running: s.running, review: s.review, drafts: s.drafts,
       staged: store.profiles.filter((p) => p.status !== "PROFILING" && p.status !== "FAILED").length,
