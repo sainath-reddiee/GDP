@@ -9,7 +9,7 @@ import threading
 import time
 import uuid
 from pathlib import Path
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 
 from fastapi import Depends, FastAPI, File, Header, HTTPException, Request, UploadFile
 
@@ -4183,3 +4183,159 @@ def export_domain_pack(domain_id: str, db: Db = Depends(current_db)):
         return {"pack": export_pack(lambda sql, params: db.query(sql, params), domain_id)}
     except AssertionError as exc:
         raise HTTPException(404, str(exc)) from exc
+
+
+# ---------------------------------------------------------------- Knowledge management
+
+
+class KnowledgeItemIn(BaseModel):
+    domain_id: Optional[str] = Field(default=None, max_length=64)
+    knowledge_type: str = Field(min_length=1, max_length=32)
+    title: str = Field(min_length=1, max_length=500)
+    content: str = Field(min_length=1, max_length=8000)
+    content_json: Any = None
+
+
+class KnowledgeAnswerIn(BaseModel):
+    question: str = Field(min_length=3, max_length=2000)
+    domain: Optional[str] = None
+    knowledge_type: Optional[str] = None
+
+
+_KNOWLEDGE_COLUMNS = """K.KNOWLEDGE_ID, K.DOMAIN_ID, D.DOMAIN_NAME, K.KNOWLEDGE_TYPE, K.TITLE, K.CONTENT, K.CONTENT_JSON,
+       K.SOURCE_REFERENCE, K.STATUS, K.VERSION, K.CREATED_BY, K.CREATED_AT::VARCHAR AS CREATED_AT,
+       K.UPDATED_AT::VARCHAR AS UPDATED_AT"""
+
+
+def _knowledge_item(db: Db, knowledge_id: str) -> dict:
+    found = db.query(f"""SELECT {_KNOWLEDGE_COLUMNS} FROM KNOWLEDGE.DOMAIN_KNOWLEDGE K
+                          JOIN KNOWLEDGE.DOMAIN_REGISTRY D ON D.DOMAIN_ID = K.DOMAIN_ID
+                         WHERE K.KNOWLEDGE_ID = %s""", (knowledge_id,))
+    if not found:
+        raise HTTPException(404, "knowledge item not found")
+    return _shape_knowledge(found[0])
+
+
+def _shape_knowledge(row: dict) -> dict:
+    from services.knowledge.manage import editable
+
+    row["content_json"] = _json(row.get("content_json"))
+    ok, reason = editable(row.get("created_by"))
+    row["editable"], row["read_only_reason"] = ok, reason
+    return row
+
+
+@app.get("/api/knowledge")
+def list_knowledge(domain_id: Optional[str] = None, knowledge_type: Optional[str] = None,
+                   status: Optional[str] = None, q: Optional[str] = None, offset: int = 0, limit: int = 50,
+                   db: Db = Depends(current_db)):
+    """Current version of each knowledge item, filtered and paged."""
+    from services.knowledge.manage import list_query
+
+    try:
+        where, params = list_query(domain_id, knowledge_type, status, q, offset, limit)
+    except AssertionError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    items = db.query(f"""SELECT {_KNOWLEDGE_COLUMNS} FROM KNOWLEDGE.DOMAIN_KNOWLEDGE K
+                          JOIN KNOWLEDGE.DOMAIN_REGISTRY D ON D.DOMAIN_ID = K.DOMAIN_ID
+                         WHERE {where} ORDER BY K.UPDATED_AT DESC NULLS LAST, K.TITLE LIMIT %s OFFSET %s""",
+                     tuple(params))
+    total = db.query(f"SELECT COUNT(*) AS N FROM KNOWLEDGE.DOMAIN_KNOWLEDGE K WHERE {where}", tuple(params[:-2]))
+    return {"items": [_shape_knowledge(r) for r in items], "total": int(total[0]["n"]) if total else 0}
+
+
+@app.post("/api/knowledge")
+def add_knowledge(body: KnowledgeItemIn, db: Db = Depends(current_db)):
+    from services.knowledge.manage import new_key, prepare_item
+
+    if not body.domain_id:
+        raise HTTPException(400, "choose the domain this knowledge belongs to")
+    item, problems = prepare_item(body.knowledge_type, body.title, body.content, body.content_json)
+    if problems:
+        raise HTTPException(400, "; ".join(problems))
+    domain = db.query("SELECT DOMAIN_NAME FROM KNOWLEDGE.DOMAIN_REGISTRY WHERE DOMAIN_ID = %s AND ACTIVE_FLAG",
+                      (body.domain_id,))
+    if not domain:
+        raise HTTPException(400, "unknown or deleted domain")
+    knowledge_id = str(uuid.uuid4())
+    db.execute("""INSERT INTO KNOWLEDGE.DOMAIN_KNOWLEDGE (KNOWLEDGE_ID, DOMAIN_ID, KNOWLEDGE_TYPE, TITLE, CONTENT,
+                         CONTENT_JSON, TAGS, SOURCE_REFERENCE, STATUS, VERSION, IS_CURRENT, CREATED_BY)
+                  SELECT %s, %s, %s, %s, %s, PARSE_JSON(NULLIF(%s, '')), PARSE_JSON('["UI"]'), %s, 'ACTIVE', 1, TRUE,
+                         CURRENT_USER()""",
+               (knowledge_id, body.domain_id, item["knowledge_type"], item["title"], item["content"],
+                json.dumps(item["content_json"]) if item["content_json"] is not None else "",
+                new_key(domain[0]["domain_name"], item["knowledge_type"], item["title"])))
+    _DOMAIN_VOCAB.update(at=0.0, domains=[])
+    return _knowledge_item(db, knowledge_id)
+
+
+@app.put("/api/knowledge/{knowledge_id}")
+def edit_knowledge(knowledge_id: str, body: KnowledgeItemIn, db: Db = Depends(current_db)):
+    """An edit is a new version of the item; the previous version stays in its history."""
+    from services.knowledge.manage import prepare_item
+
+    current = _knowledge_item(db, knowledge_id)
+    if not current["editable"]:
+        raise HTTPException(409, current["read_only_reason"])
+    item, problems = prepare_item(body.knowledge_type or current["knowledge_type"], body.title, body.content,
+                                  body.content_json)
+    if problems:
+        raise HTTPException(400, "; ".join(problems))
+    new_id = str(uuid.uuid4())
+    db.execute("UPDATE KNOWLEDGE.DOMAIN_KNOWLEDGE SET IS_CURRENT = FALSE, UPDATED_AT = CURRENT_TIMESTAMP() "
+               "WHERE KNOWLEDGE_ID = %s", (knowledge_id,))
+    db.execute("""INSERT INTO KNOWLEDGE.DOMAIN_KNOWLEDGE (KNOWLEDGE_ID, DOMAIN_ID, KNOWLEDGE_TYPE, TITLE, CONTENT,
+                         CONTENT_JSON, TAGS, SOURCE_REFERENCE, STATUS, VERSION, IS_CURRENT, CREATED_BY)
+                  SELECT %s, %s, %s, %s, %s, PARSE_JSON(NULLIF(%s, '')), PARSE_JSON('["UI"]'), %s, %s, %s, TRUE,
+                         CURRENT_USER()""",
+               (new_id, current["domain_id"], item["knowledge_type"], item["title"], item["content"],
+                json.dumps(item["content_json"]) if item["content_json"] is not None else "",
+                current["source_reference"], current["status"], int(current["version"]) + 1))
+    _DOMAIN_VOCAB.update(at=0.0, domains=[])
+    return _knowledge_item(db, new_id)
+
+
+def _set_knowledge_status(db: Db, knowledge_id: str, status: str) -> dict:
+    current = _knowledge_item(db, knowledge_id)
+    if not current["editable"]:
+        raise HTTPException(409, current["read_only_reason"])
+    db.execute("UPDATE KNOWLEDGE.DOMAIN_KNOWLEDGE SET STATUS = %s, UPDATED_AT = CURRENT_TIMESTAMP() "
+               "WHERE KNOWLEDGE_ID = %s", (status, knowledge_id))
+    _DOMAIN_VOCAB.update(at=0.0, domains=[])
+    return _knowledge_item(db, knowledge_id)
+
+
+@app.post("/api/knowledge/{knowledge_id}/retire")
+def retire_knowledge(knowledge_id: str, db: Db = Depends(current_db)):
+    return _set_knowledge_status(db, knowledge_id, "RETIRED")
+
+
+@app.post("/api/knowledge/{knowledge_id}/restore")
+def restore_knowledge(knowledge_id: str, db: Db = Depends(current_db)):
+    return _set_knowledge_status(db, knowledge_id, "ACTIVE")
+
+
+@app.get("/api/knowledge/{knowledge_id}/history")
+def knowledge_history(knowledge_id: str, db: Db = Depends(current_db)):
+    current = _knowledge_item(db, knowledge_id)
+    versions = db.query(f"""SELECT {_KNOWLEDGE_COLUMNS}, K.IS_CURRENT FROM KNOWLEDGE.DOMAIN_KNOWLEDGE K
+                             JOIN KNOWLEDGE.DOMAIN_REGISTRY D ON D.DOMAIN_ID = K.DOMAIN_ID
+                            WHERE K.DOMAIN_ID = %s AND K.SOURCE_REFERENCE = %s ORDER BY K.VERSION DESC""",
+                        (current["domain_id"], current["source_reference"])) if current["source_reference"] else []
+    return {"versions": [_shape_knowledge(v) for v in versions] or [current]}
+
+
+@app.post("/api/knowledge/answer")
+def answer_knowledge(body: KnowledgeAnswerIn, db: Db = Depends(current_db)):
+    """Search, then answer from the hits only, with citations."""
+    from services.knowledge.manage import answer
+
+    started = time.time()
+    try:
+        result = invoke_source(db, answer, _current_db_name(db), body.question, body.domain, body.knowledge_type)
+    except AssertionError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except Exception as exc:
+        raise _snowflake_error(exc) from exc
+    _record_cost(db, None, "KNOWLEDGE", result.get("model"), result.pop("usage", None), started)
+    return result
