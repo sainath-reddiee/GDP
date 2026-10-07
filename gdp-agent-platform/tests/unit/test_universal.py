@@ -62,3 +62,28 @@ def test_domain_keywords_match_whole_tokens_only():
     assert _matches("BUILDING", "BUILDINGS") and _matches("DUNS", "COMPANY_DUNS_NO")
     assert _matches("EFF_STATUS", "CUST_EFF_STATUS") and not _matches("EFF_STATUS", "EFF_DT_STATUS")
     assert _matches("__C", "STAGE__C") and _matches("LOT", "LOT_SIZE") and not _matches("LOT", "PILOT_FLAG")
+
+
+def test_dbt_keeps_lowercase_source_names_exact():
+    from services.dbt.onboard import generate
+
+    src = {"name": "ORDERS", "identifier": "orders", "database": "RAW", "schema": "shop",
+           "columns": {"ORDER_ID": "TEXT", "CUSTOMER_ID": "TEXT", "AMOUNT": "NUMBER(12,2)"},
+           "names": {"ORDER_ID": "orderId", "CUSTOMER_ID": "customer_id", "AMOUNT": "AMOUNT"}}
+    cust = {"name": "CUSTOMERS", "identifier": "customers", "database": "RAW", "schema": "shop",
+            "columns": {"CUSTOMER_ID": "TEXT", "NAME": "TEXT"}, "names": {"CUSTOMER_ID": "customer_id", "NAME": "name"}}
+    line = lambda col, dt, scol, table="ORDERS": {"target_column": col, "target_datatype": dt, "source_table": table,  # noqa: E731
+                                                  "source_column": scol, "mapping_type": "DIRECT", "transformation": None}
+    out = generate({
+        "domain": "shop", "target": "ORDERS_DIM", "source_key": "shop", "source_system": "SHOP", "prefix": "",
+        "business_keys": ["ORDER_ID"], "grain": "one row per order", "sources": [src, cust],
+        "target_columns": [{"column_name": "ORDER_ID", "data_type": "VARCHAR"}, {"column_name": "AMOUNT", "data_type": "NUMBER(12,2)"},
+                           {"column_name": "CUSTOMER_NAME", "data_type": "VARCHAR"}],
+        "lines": [line("ORDER_ID", "VARCHAR", "orderId"), line("AMOUNT", "NUMBER(12,2)", "AMOUNT"),
+                  line("CUSTOMER_NAME", "VARCHAR", "name", "CUSTOMERS")],
+        "joins": [{"left": "ORDERS", "right": "CUSTOMERS", "keys": ["CUSTOMER_ID"], "cardinality": "N:1"}],
+    })
+    text = "\n".join(out["files"].values())
+    assert 'o."orderId"' in text and 'o.AMOUNT' in text and '"name"' in text
+    assert 'o."customer_id" = j1."customer_id"' in text
+    assert "quoting:" in text and "identifier: true" in text

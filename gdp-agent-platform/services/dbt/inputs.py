@@ -50,20 +50,25 @@ def load_inputs(query: Query, run_id: str, plan: Dict[str, Any], sttm: Dict[str,
                        WHERE RUN_ID = ? AND INGESTION_STATUS = 'COMPLETE'
                      QUALIFY ROW_NUMBER() OVER (PARTITION BY SOURCE_TABLE ORDER BY CREATED_AT DESC) = 1""", [run_id])
     sources = []
+    from services.source.identifiers import quote
+
     for row in landed:
         db, schema, table = row.get("LANDING_DATABASE"), row.get("LANDING_SCHEMA"), row.get("LANDING_TABLE")
         columns: Dict[str, str] = {}
-        if all(SAFE.match(str(v or "")) for v in (db, schema, table)):
+        names: Dict[str, str] = {}
+        if db and schema and table:
             try:
                 for col in query(f"""SELECT COLUMN_NAME, DATA_TYPE, NUMERIC_PRECISION, NUMERIC_SCALE
-                                      FROM {db}.INFORMATION_SCHEMA.COLUMNS
+                                      FROM {quote(str(db))}.INFORMATION_SCHEMA.COLUMNS
                                      WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? ORDER BY ORDINAL_POSITION""",
                                  [schema, table]):
                     columns[str(col["COLUMN_NAME"]).upper()] = _type(col)
+                    names[str(col["COLUMN_NAME"]).upper()] = str(col["COLUMN_NAME"])
             except Exception:
-                columns = {}
+                columns, names = {}, {}
+        # columns is keyed upper case for matching; names maps back to the exact stored spelling for SQL.
         sources.append({"name": str(row["SOURCE_TABLE"]).upper(), "identifier": table, "database": db,
-                        "schema": schema, "columns": columns})
+                        "schema": schema, "columns": columns, "names": names})
     target_columns: List[Dict[str, Any]] = []
     try:
         target_columns = [{

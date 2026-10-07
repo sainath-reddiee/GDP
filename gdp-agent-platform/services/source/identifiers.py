@@ -53,6 +53,12 @@ def landing_table_name(source_system_name: str, object_name: str) -> str:
     cleaned = re.sub(r"[^A-Z0-9_]", "_", raw)
     if not re.match(r"^[A-Z_]", cleaned):
         cleaned = "_" + cleaned
+    if not SIMPLE_UPPER.match(object_name or ""):
+        # "customer" and "CUSTOMER", or "Order-Items" and "ORDER_ITEMS", would clean to the same landing table and
+        # the second load would overwrite the first; a short hash of the exact name keeps them apart.
+        import hashlib
+
+        cleaned = f"{cleaned}_{hashlib.md5(object_name.encode('utf-8')).hexdigest()[:6].upper()}"
     assert len(cleaned) <= MAX_IDENTIFIER, f"landing table name too long: {cleaned[:40]}..."
     return cleaned
 

@@ -261,7 +261,9 @@ def backtest_soda(session, run_id: str) -> Dict[str, Any]:
                                WHERE RUN_ID = ? AND INGESTION_STATUS = 'COMPLETE'
                              QUALIFY ROW_NUMBER() OVER (PARTITION BY SOURCE_TABLE ORDER BY CREATED_AT DESC) = 1""",
                   [run_id])
-    sources = {str(r["SOURCE_TABLE"]).upper(): f"{r['LANDING_DATABASE']}.{r['LANDING_SCHEMA']}.{r['LANDING_TABLE']}"
+    from services.source.identifiers import sql_ident
+
+    sources = {str(r["SOURCE_TABLE"]).upper(): ".".join(sql_ident(str(r[k])) for k in ("LANDING_DATABASE", "LANDING_SCHEMA", "LANDING_TABLE"))
                for r in landed}
     queries, slots = backtest_plan(checks, lines, sources, _driving_table(design, lines))
     results: Dict[str, Any] = {}

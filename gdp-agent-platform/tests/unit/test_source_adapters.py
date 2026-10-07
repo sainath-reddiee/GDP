@@ -53,7 +53,10 @@ def test_identifiers():
     assert normalize("has space") == "has space"
     assert quote('a"b') == '"a""b"'
     assert fqn("DB", "S", "T") == '"DB"."S"."T"'
-    assert landing_table_name("CRM", "crm-customer v2") == "CRM__CRM_CUSTOMER_V2"
+    assert landing_table_name("CRM", "crm-customer v2").startswith("CRM__CRM_CUSTOMER_V2_")
+    assert landing_table_name("CRM", "CUSTOMER") == "CRM__CUSTOMER"
+    assert landing_table_name("CRM", "customer") != landing_table_name("CRM", "CUSTOMER")  # no overwrite
+    assert landing_table_name("CRM", "Order-Items") != landing_table_name("CRM", "ORDER_ITEMS")
     assert landing_table_name("CRM", "1X") == "CRM__1X"
     assert format_data_type("TEXT", 50) == "VARCHAR(50)"
     assert format_data_type("NUMBER", None, 12, 2) == "NUMBER(12,2)"

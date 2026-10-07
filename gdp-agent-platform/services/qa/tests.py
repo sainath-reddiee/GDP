@@ -78,7 +78,7 @@ def _keys(lines: Sequence[Dict[str, Any]], business_keys: Sequence[str], driving
         line = by_target.get(str(key).upper())
         if (line and str(line.get("source_table") or "").upper() == driving and line.get("source_column")
                 and not line.get("transformation")):
-            out.append((str(line["source_column"]).upper(), str(key).upper()))
+            out.append((str(line["source_column"]), str(key).upper()))  # real source spelling for SQL
     return out if len(out) == len(business_keys) else []
 
 
@@ -106,6 +106,10 @@ def build_suite(target: Dict[str, Any], sources: Dict[str, str], lines: List[Dic
     graph = graph or {}
     spec = spec or {}
     columns = {k.upper(): list(v) for k, v in (columns or {}).items()}
+
+    def real(table: str, column: str) -> str:
+        """Join keys arrive upper-cased from the join planner; SQL needs the column's stored spelling."""
+        return next((c for c in columns.get(str(table).upper(), []) if c.upper() == column.upper()), column)
     mapped = [l for l in lines if str(l.get("mapping_type") or "").upper() != "UNMAPPED"]
     counts: Dict[str, int] = {}
     for l in mapped:
@@ -167,14 +171,14 @@ def build_suite(target: Dict[str, Any], sources: Dict[str, str], lines: List[Dic
         on = " AND ".join(f"t.{tk} = s.{ident(sc)}" for (sc, _), tk in zip(keys, tkeys))
         sel_keys = ", ".join(f"s.{ident(sc)}" for sc, _ in keys)
         for l in direct:
-            sc, tc = ident(str(l["source_column"]).upper()), ident(str(l["target_column"]))
+            sc, tc = ident(str(l["source_column"])), ident(str(l["target_column"]))
             suite.add("SOURCE_TO_TARGET", f"{l['target_column']} equals {driving}.{l['source_column']}",
                       "DIRECT mapping: the value is moved without change.",
                       f"SELECT {sel_keys}, s.{sc} AS source_value, t.{tc} AS target_value\nFROM {src} AS s\n"
                       f"JOIN {tgt} AS t ON {on}\nWHERE NOT EQUAL_NULL(s.{sc}, t.{tc})\nLIMIT {FAILING_ROWS}",
                       "0 rows", "MEDIUM", str(l["target_column"]), f"{driving}.{l['source_column']}")
     elif src and direct:
-        scols = ", ".join(ident(str(l["source_column"]).upper()) for l in direct)
+        scols = ", ".join(ident(str(l["source_column"])) for l in direct)
         tcols = ", ".join(ident(str(l["target_column"])) for l in direct)
         suite.add("SOURCE_TO_TARGET", f"DIRECT columns match as a set ({len(direct)})",
                   "No business key is mapped directly, so the DIRECT columns are compared as row sets.",
@@ -257,7 +261,7 @@ def build_suite(target: Dict[str, Any], sources: Dict[str, str], lines: List[Dic
         left, right = str(j.get("left_table") or "").upper(), str(j.get("right_table") or "").upper()
         if left not in sources or right not in sources or not j.get("keys"):
             continue
-        cond = " AND ".join(f"l.{ident(a.strip().upper())} = r.{ident((b or a).strip().upper())}"
+        cond = " AND ".join(f"l.{ident(real(left, a.strip()))} = r.{ident(real(right, (b or a).strip()))}"
                             for a, _, b in (str(k).partition("=") for k in j["keys"]))
         suite.add("JOINS", f"{left} to {right} does not fan out",
                   f"{j.get('join_type', 'LEFT')} join on {', '.join(j['keys'])} ({j.get('cardinality', '?')}); "

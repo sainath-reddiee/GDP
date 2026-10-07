@@ -32,6 +32,12 @@ def snake(name: str) -> str:
     return re.sub(r"[^a-z0-9]+", "_", (name or "").strip().lower()).strip("_") or "x"
 
 
+def real_name(sources: Dict[str, Dict[str, Any]], table: str, column: str) -> str:
+    """Exact stored spelling of a source column (matching is case-insensitive, SQL must not be)."""
+    names = (sources.get(str(table).upper()) or {}).get("names") or {}
+    return names.get(str(column).upper(), str(column))
+
+
 def quote(col: str) -> str:
     """Bronze column reference: plain when it is a simple UPPER identifier, else double-quoted."""
     value = (col or "").strip().strip('"')
@@ -199,7 +205,7 @@ def _source_unique_id(keys: List[Dict[str, Any]], alias: str, sources: Dict[str,
     for i, key in enumerate(keys):
         table = str(key.get("source_table") or "").upper()
         src_type = (sources.get(table) or {}).get("columns", {}).get(str(key["source_column"]).upper(), "TEXT")
-        ref = f"{alias}.{quote(key['source_column'])}"
+        ref = f"{alias}.{quote(real_name(sources, table, key['source_column']))}"
         ref = ref if family(src_type) == "text" else f"{ref}::varchar"
         parts.append(f"upper(trim({ref}))" if i == 0 else f"coalesce(upper(trim({ref})), '')")
     return " || '||' || ".join(parts) if parts else "null"
@@ -246,7 +252,8 @@ def _join_plan(primary: str, sources: Dict[str, Dict[str, Any]], used: Iterable[
                 right_col = right_col or left_col
                 if edge["left"].upper() != anchor:
                     left_col, right_col = right_col, left_col
-                conds.append(f"{aliases[anchor]}.{quote(left_col)} = {aliases[table]}.{quote(right_col)}")
+                conds.append(f"{aliases[anchor]}.{quote(real_name(sources, anchor, left_col))} = "
+                             f"{aliases[table]}.{quote(real_name(sources, table, right_col))}")
             card = edge["cardinality"] if edge["left"].upper() == anchor else {"N:1": "1:N", "1:N": "N:1"}.get(
                 edge["cardinality"], edge["cardinality"])
             plan.append({"table": table, "alias": aliases[table], "on": " and ".join(conds), "cardinality": card,
@@ -289,7 +296,10 @@ def _sources_yml(name: str, source_key: str, sources: Dict[str, Dict[str, Any]],
     ]
     for table, info in sources.items():
         lines += [f"      - name: {snake(table)}",
-                  f"        identifier: \"{info['identifier']}\"",
+                  f"        identifier: \"{info['identifier']}\""]
+        if not SIMPLE.match(str(info.get("identifier") or "")):
+            lines += ["        quoting:", "          identifier: true"]  # keep lower/mixed-case table names exact
+        lines += [
                   f"        description: \"{system} {table.lower()} (landed copy)\""]
         if info.get("columns"):
             lines.append("        columns:")
@@ -481,6 +491,7 @@ def generate(inputs: Dict[str, Any], skeleton: Optional[Dict[str, str]] = None) 
         ttype = str(c.get("target_datatype") or "")
         table = str(c.get("source_table") or primary).upper()
         scol = str(c.get("source_column") or "").upper()
+        scol_sql = real_name(sources, table, c.get("source_column") or "")
         stype = sources.get(table, {}).get("columns", {}).get(scol, "")
         note, cast = "", None
         if cls == "AUDIT":
@@ -512,7 +523,7 @@ def generate(inputs: Dict[str, Any], skeleton: Optional[Dict[str, str]] = None) 
             present = " ".join(sp_select)
             for attr in lookup["attributes"]:
                 if f" as {attr}" not in present:
-                    sp_select.append(f"nullif(trim({a}.{quote(scol)}), '') as {attr}")
+                    sp_select.append(f"nullif(trim({a}.{quote(scol_sql)}), '') as {attr}")
             for cte in lookup["ctes"]:
                 if cte not in contract_ctes:
                     contract_ctes.append(cte)
@@ -552,7 +563,7 @@ def generate(inputs: Dict[str, Any], skeleton: Optional[Dict[str, str]] = None) 
                 expr = f"o.{alias}"
                 note = "STTM transformation"
             else:
-                ref = f"{a}.{quote(scol)}"
+                ref = f"{a}.{quote(scol_sql)}"
                 if family(stype or ttype) == "text":
                     sp_select.append(f"nullif(trim({ref}), '') as {alias}")
                 else:
