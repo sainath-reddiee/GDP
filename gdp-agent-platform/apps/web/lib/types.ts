@@ -1,6 +1,12 @@
 export type StageStatusValue = "COMPLETE" | "ACTIVE" | "REVIEW_REQUIRED" | "LOCKED" | "FAILED" | "BLOCKED" | "CANCELLED";
 
-export type StageStatus = { stage: string; status: StageStatusValue };
+export type StageStatus = { stage: string; status: StageStatusValue; note?: string };
+
+export type LaneInfo = { status: StageStatusValue; note: string; done: boolean };
+export type RunLanes = {
+  SODA: LaneInfo; QA: LaneInfo; VALIDATION: { done: boolean };
+  gate: { ready: boolean; waiting_on: string[] };
+};
 
 export type AllowedTransition = { to_state: string; actor: "SYSTEM" | "HUMAN" | "ANY" };
 
@@ -41,6 +47,8 @@ export type RunState = {
   stages: StageStatus[];
   allowed_transitions: AllowedTransition[];
   run: RunInfo;
+  /** Parallel lanes after the STTM, from the work actually done (absent before the STTM is approved). */
+  lanes?: RunLanes;
 };
 
 export type RunSummary = {

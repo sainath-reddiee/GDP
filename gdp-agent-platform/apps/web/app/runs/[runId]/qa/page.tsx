@@ -1,10 +1,20 @@
-import { api, ApiError } from "@/lib/api";
-import type { QaSuite } from "./qa-actions";
+import { api, ApiError, getRun } from "@/lib/api";
+import type { QaSignoff, QaSuite } from "./qa-actions";
+import { QaSignoffCard } from "./qa-signoff";
 import { QaWorkbench } from "./qa-workbench";
+
+const SIGNABLE = new Set([
+  "STTM_APPROVED", "SODA_PENDING", "SODA_REVIEW", "SODA_APPROVED", "DBT_PENDING", "DBT_GENERATING",
+  "VALIDATION_PENDING", "VALIDATION_RUNNING", "VALIDATION_PASSED", "VALIDATION_FAILED", "DBT_REVIEW",
+]);
 
 export default async function QaPage({ params }: { params: { runId: string } }) {
   let suite: QaSuite | null = null;
   let error = "";
+  const [state, signoff] = await Promise.all([
+    getRun(params.runId),
+    api<{ signoff: QaSignoff | null }>(`/api/runs/${params.runId}/qa/signoff`).catch(() => ({ signoff: null })),
+  ]);
   try {
     suite = await api<QaSuite>(`/api/runs/${params.runId}/qa`);
   } catch (e) {
@@ -18,5 +28,11 @@ export default async function QaPage({ params }: { params: { runId: string } }) 
       </div>
     );
   }
-  return <QaWorkbench runId={params.runId} suite={suite} />;
+  const canSign = !state.is_archived && SIGNABLE.has(state.current_state);
+  return (
+    <div className="space-y-5">
+      <QaSignoffCard runId={params.runId} signoff={signoff.signoff} canSign={canSign} />
+      <QaWorkbench runId={params.runId} suite={suite} />
+    </div>
+  );
 }

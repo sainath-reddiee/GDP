@@ -99,6 +99,7 @@ function Branches({ lanes, direction, done }: { lanes: number; direction: "fork"
 export function StageRail({ runId, stages }: { runId: string; stages: StageStatus[] }) {
   const path = usePathname();
   const status = (stage: string): StageStatusValue => stages.find((s) => s.stage === stage)?.status ?? "LOCKED";
+  const noteOf = (stage: string) => stages.find((s) => s.stage === stage)?.note;
   const href = (stage: string) => {
     const meta = byStage(stage);
     return meta ? `/runs/${runId}/${meta.slug}` : undefined;
@@ -107,13 +108,15 @@ export function StageRail({ runId, stages }: { runId: string; stages: StageStatu
     const h = extra?.href ?? href(stage);
     return (
       <Node id={stage} label={extra?.label ?? byStage(stage)?.label ?? stage} status={extra?.status ?? status(stage)}
-            href={h} current={!!h && path === h} note={extra?.note} />
+            href={h} current={!!h && path === h} note={extra?.note ?? noteOf(stage)} />
     );
   };
   const done = (stage: string) => status(stage) === "COMPLETE";
   const live = (stage: string) => ["ACTIVE", "REVIEW_REQUIRED"].includes(status(stage));
   const sttm = status("STTM");
-  const qaStatus: NodeStatus = sttm === "LOCKED" ? "LOCKED" : "AVAILABLE";
+  // QA is a lane once the STTM is approved (status from its sign-off); before that it only previews tests.
+  const qaLane = stages.find((s) => s.stage === "QA");
+  const qaStatus: NodeStatus = qaLane ? qaLane.status : sttm === "LOCKED" ? "LOCKED" : "AVAILABLE";
   const spine = ["SOURCE", "PROFILING", "MAPPING", "STTM"];
   const overview = path === `/runs/${runId}`;
 
@@ -140,8 +143,8 @@ export function StageRail({ runId, stages }: { runId: string; stages: StageStatu
              aria-label="Built in parallel from the approved STTM: QA tests, Data Quality, and dbt then Validation">
           <div className="flex items-center" style={{ height: LANE_H }}>
             {node("QA", { status: qaStatus, href: qaStatus === "LOCKED" ? undefined : `/runs/${runId}/qa`, label: "QA tests",
-                          note: qaStatus === "AVAILABLE" ? "from the STTM" : undefined })}
-            <Edge done={false} grow />
+                          note: qaStatus === "AVAILABLE" ? "from the STTM" : qaLane?.note })}
+            <Edge done={qaStatus === "COMPLETE"} grow />
           </div>
           <div className="flex items-center" style={{ height: LANE_H }}>
             {node("SODA")}
@@ -155,7 +158,7 @@ export function StageRail({ runId, stages }: { runId: string; stages: StageStatu
           </div>
         </div>
 
-        <Branches lanes={3} direction="merge" done={[false, done("SODA"), done("VALIDATION")]} />
+        <Branches lanes={3} direction="merge" done={[qaStatus === "COMPLETE", done("SODA"), done("VALIDATION")]} />
         {node("REVIEW")}
         {status("VALIDATION") === "FAILED" || status("VALIDATION") === "BLOCKED" ? (
           <span className="ml-3 inline-flex items-center gap-1 rounded-full bg-rose-500/10 px-2 py-1 text-[11px] font-medium text-rose-600">

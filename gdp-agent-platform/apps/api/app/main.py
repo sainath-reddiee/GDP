@@ -445,6 +445,36 @@ def _unlock_parallel_tracks(state: dict) -> dict:
     return state
 
 
+def _qa_signoff(db: Db, run_id: str) -> Optional[dict]:
+    """The latest sign-off for the run's current STTM version (an older version's sign-off does not count)."""
+    try:
+        found = db.query(
+            """SELECT Q.DECISION, Q.NOTE, Q.DECIDED_BY, Q.DECIDED_AT::VARCHAR AS DECIDED_AT, Q.STTM_ID
+                 FROM CONTRACT.QA_SIGNOFF Q
+                WHERE Q.RUN_ID = %s
+                  AND Q.STTM_ID IS NOT DISTINCT FROM (SELECT STTM_ID FROM CONTRACT.STTM_REGISTRY WHERE RUN_ID = %s
+                                                     ORDER BY STTM_VERSION DESC LIMIT 1)
+                ORDER BY Q.DECIDED_AT DESC LIMIT 1""", (run_id, run_id))
+    except Exception:
+        return None
+    return found[0] if found else None
+
+
+def _run_lanes(db: Db, run_id: str, current_state: Optional[str]) -> Optional[dict]:
+    """Data Quality, QA and Validation lane status from the work done (see services.workflow.lanes)."""
+    from services.workflow.lanes import POST_STTM, lanes
+
+    if str(current_state or "").upper() not in POST_STTM:
+        return None
+    try:
+        counts = {r["status"]: int(r["n"]) for r in db.query(
+            """SELECT STATUS, COUNT(*) AS N FROM CONTRACT.SODA_EXPECTATION_REGISTRY
+                WHERE RUN_ID = %s AND IS_CURRENT GROUP BY STATUS""", (run_id,))}
+    except Exception:
+        counts = {}
+    return lanes(current_state or "", counts, _qa_signoff(db, run_id), 0)
+
+
 def _domain_id_for_target(db: Db, target_model: Optional[str], domain_id: Optional[str]) -> Optional[str]:
     if domain_id:
         return domain_id
@@ -628,7 +658,14 @@ def get_run(run_id: str, db: Db = Depends(current_db)):
                                     (run_id,))[0]
         except Exception:
             state["run"] = db.query(base.format(extra=""), (run_id,))[0]
-        return _unlock_parallel_tracks(state)
+        state = _unlock_parallel_tracks(state)
+        lanes = _run_lanes(db, run_id, state.get("current_state"))
+        if lanes:
+            from services.workflow.lanes import apply
+
+            state["stages"] = apply(state.get("stages") or [], state.get("current_state"), lanes)
+            state["lanes"] = lanes
+        return state
 
     return _cached_run(run_id, load)
 
@@ -785,6 +822,12 @@ def transition(run_id: str, body: Transition, db: Db = Depends(current_db)):
 
 @app.post("/api/runs/{run_id}/review")
 def review(run_id: str, body: Review, db: Db = Depends(current_db)):
+    if str(body.to_state).upper() == "DBT_APPROVED" and str(body.decision).upper() == "APPROVE":
+        current = db.query("SELECT CURRENT_STATE FROM CORE.WORKFLOW_RUN WHERE RUN_ID = %s", (run_id,))
+        lanes = _run_lanes(db, run_id, current[0]["current_state"] if current else None)
+        if lanes and not lanes["gate"]["ready"]:
+            raise HTTPException(409, "Code review needs every parallel lane finished first: "
+                                     + "; ".join(lanes["gate"]["waiting_on"]))
     try:
         return db.call(
             "CALL CORE.REVIEW_TRANSITION(%s, %s, %s, %s, %s)",
@@ -2176,6 +2219,39 @@ def qa_suite(run_id: str, db: Db = Depends(current_db)):
         return _source_call(db, "CALL CONTRACT.QA_SUITE(%s)", handler, run_id)
     except Exception as exc:
         raise _snowflake_error(exc) from exc
+
+
+class QaSignoff(BaseModel):
+    decision: Literal["APPROVED", "REJECTED"]
+    note: Optional[str] = Field(default=None, max_length=4000)
+
+
+@app.get("/api/runs/{run_id}/qa/signoff")
+def get_qa_signoff(run_id: str, db: Db = Depends(current_db)):
+    return {"signoff": _qa_signoff(db, run_id)}
+
+
+@app.post("/api/runs/{run_id}/qa/signoff")
+def qa_signoff(run_id: str, body: QaSignoff, db: Db = Depends(current_db)):
+    """A tester approves or rejects the QA tests of the current STTM version; a rejection needs a reason."""
+    from services.workflow.lanes import POST_STTM
+
+    current = db.query("SELECT CURRENT_STATE FROM CORE.WORKFLOW_RUN WHERE RUN_ID = %s", (run_id,))
+    if not current:
+        raise HTTPException(404, "run not found")
+    if current[0]["current_state"] not in POST_STTM or current[0]["current_state"] in ("DBT_APPROVED", "COMPLETED"):
+        raise HTTPException(409, "QA can be signed off after the STTM is approved and before code review is approved.")
+    if body.decision == "REJECTED" and not (body.note or "").strip():
+        raise HTTPException(400, "Say what failed when rejecting the QA tests.")
+    sttm = db.query("SELECT STTM_ID FROM CONTRACT.STTM_REGISTRY WHERE RUN_ID = %s ORDER BY STTM_VERSION DESC LIMIT 1",
+                    (run_id,))
+    if not sttm:
+        raise HTTPException(409, "The run has no STTM yet.")
+    db.execute("INSERT INTO CONTRACT.QA_SIGNOFF (SIGNOFF_ID, RUN_ID, STTM_ID, DECISION, NOTE) "
+               "SELECT %s, %s, %s, %s, NULLIF(%s, '')",
+               (str(uuid.uuid4()), run_id, sttm[0]["sttm_id"], body.decision, (body.note or "").strip()))
+    _drop_run(run_id)
+    return {"signoff": _qa_signoff(db, run_id)}
 
 
 @app.post("/api/runs/{run_id}/qa/ask")
