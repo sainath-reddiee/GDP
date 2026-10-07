@@ -554,11 +554,53 @@ def _register_from_intent(db: Db, run_id: str, intent: dict, created: dict) -> d
     return {**created, **(registered.get("state") or {}), "source_system_id": registered.get("source_system_id")}
 
 
+_GRAPH_TTL = 300.0
+_graph_cache: dict = {"at": 0.0, "graph": None}
+
+
+def _upper_keys(rows: list[dict]) -> list[dict]:
+    return [{k.upper(): v for k, v in r.items()} for r in rows]
+
+
+def _workflow_graph(db: Db):
+    """The workflow graph changes only on deploy; read it once every few minutes instead of per request."""
+    from services.workflow.graph import graph_from_rows
+
+    now = time.time()
+    if _graph_cache["graph"] is not None and now - _graph_cache["at"] < _GRAPH_TTL:
+        return _graph_cache["graph"]
+    states = _upper_keys(db.query("SELECT STATE, STAGE, KIND, ORDINAL, PHASE, ENABLED, RETRY_TO, GRAPH_VERSION "
+                                  "FROM CORE.WORKFLOW_STATE"))
+    versions = {r["GRAPH_VERSION"] for r in states}
+    assert states and len(versions) == 1, "CORE.WORKFLOW_STATE must hold exactly one graph version"
+    transitions = _upper_keys(db.query("SELECT FROM_STATE, TO_STATE, ACTOR, GUARD, ENABLED FROM CORE.WORKFLOW_TRANSITION"))
+    graph = graph_from_rows(versions.pop(), states, transitions)
+    _graph_cache.update(at=time.time(), graph=graph)
+    return graph
+
+
+def _workflow_state(db: Db, run_id: str) -> dict:
+    """Same payload as CORE.GET_WORKFLOW_STATE, read with plain queries: the stored procedure pays a Python
+    sandbox start on every call (several seconds) for what is a read-only lookup."""
+    from services.workflow.procedures import _state_payload
+
+    try:
+        graph = _workflow_graph(db)
+        rows = _upper_keys(db.query("SELECT * FROM CORE.WORKFLOW_RUN WHERE RUN_ID = %s", (run_id,)))
+    except AssertionError:
+        return db.call("CALL CORE.GET_WORKFLOW_STATE(%s)", (run_id,))
+    if not rows:
+        raise HTTPException(404, f"run {run_id} not found")
+    return _state_payload(graph, rows[0])
+
+
 @app.get("/api/runs/{run_id}")
 def get_run(run_id: str, db: Db = Depends(current_db)):
     def load():
         try:
-            state = db.call("CALL CORE.GET_WORKFLOW_STATE(%s)", (run_id,))
+            state = _workflow_state(db, run_id)
+        except HTTPException:
+            raise
         except Exception as exc:
             raise _snowflake_error(exc) from exc
         base = """
@@ -1519,6 +1561,7 @@ def apply_platform(db: Db = Depends(current_db)):
     if str(root) not in sys.path:
         sys.path.insert(0, str(root))
     from infrastructure.deploy_snowflake import apply_from_session
+    _graph_cache.update(at=0.0, graph=None)
     try:
         return {"ok": True, "log": apply_from_session(db.conn, DATABASE, WAREHOUSE)}
     except Exception as exc:
@@ -2810,25 +2853,25 @@ def _source_tables(db: Db, src: dict) -> list[dict]:
     from services.profiling.profiler import source_fingerprint
     from services.source.identifiers import format_data_type
 
+    from concurrent.futures import ThreadPoolExecutor
+
     database = _quote_ident(src["database_name"])
-    tables = db.query(
-        f"""
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        tables_future = pool.submit(db.query, f"""
         SELECT TABLE_NAME, TABLE_TYPE, ROW_COUNT, BYTES, LAST_ALTERED::VARCHAR AS LAST_ALTERED
           FROM {database}.INFORMATION_SCHEMA.TABLES
          WHERE TABLE_SCHEMA = %s AND TABLE_TYPE IN ('BASE TABLE', 'VIEW', 'MATERIALIZED VIEW')
          ORDER BY TABLE_NAME LIMIT 1000
-        """,
-        (src["schema_name"],),
-    )
-    columns: dict[str, list[tuple[str, str]]] = {}
-    for c in db.query(
-        f"""
+        """, (src["schema_name"],))
+        columns_future = pool.submit(db.query, f"""
         SELECT TABLE_NAME, COLUMN_NAME, DATA_TYPE, CHARACTER_MAXIMUM_LENGTH, NUMERIC_PRECISION, NUMERIC_SCALE
           FROM {database}.INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = %s
          ORDER BY TABLE_NAME, ORDINAL_POSITION
-        """,
-        (src["schema_name"],),
-    ):
+        """, (src["schema_name"],))
+        tables = tables_future.result()
+        column_rows = columns_future.result()
+    columns: dict[str, list[tuple[str, str]]] = {}
+    for c in column_rows:
         columns.setdefault(c["table_name"], []).append((c["column_name"], format_data_type(
             c["data_type"], c["character_maximum_length"], c["numeric_precision"], c["numeric_scale"])))
     for t in tables:
@@ -2875,26 +2918,69 @@ def _active_jobs(source_id: Optional[str] = None) -> list[dict]:
                 if j["status"] == "RUNNING" and (source_id is None or j["source_id"] == source_id)]
 
 
+_HEALTH_TTL = 300.0
+_health_cache: dict[tuple[str, str], tuple[float, dict]] = {}
+
+
+def _schema_table_counts(db: Db, sources: list[dict]) -> dict[tuple[str, str], tuple[Optional[int], Optional[str]]]:
+    """Table count per (database, schema): one INFORMATION_SCHEMA query per database (not per source), run in
+    parallel and cached for a few minutes. A database the role cannot read maps to (None, error)."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    user = getattr(db, "user", "") or ""
+    wanted: dict[str, set[str]] = {}
+    out: dict[tuple[str, str], tuple[Optional[int], Optional[str]]] = {}
+    now = time.time()
+    for s in sources:
+        key = (s["database_name"], s["schema_name"])
+        hit = _health_cache.get((user,) + key)  # type: ignore[arg-type]
+        if hit and now - hit[0] < _HEALTH_TTL:
+            out[key] = (hit[1]["count"], hit[1]["error"])
+        else:
+            wanted.setdefault(s["database_name"], set()).add(s["schema_name"])
+
+    def count(database: str, schemas: set[str]):
+        try:
+            marks = ", ".join(["%s"] * len(schemas))
+            found = db.query(
+                f"SELECT TABLE_SCHEMA, COUNT(*) AS N FROM {_quote_ident(database)}.INFORMATION_SCHEMA.TABLES "
+                f"WHERE TABLE_SCHEMA IN ({marks}) AND TABLE_TYPE IN ('BASE TABLE', 'VIEW', 'MATERIALIZED VIEW') "
+                "GROUP BY TABLE_SCHEMA",
+                tuple(sorted(schemas)),
+            )
+            counts = {r["table_schema"]: int(r["n"]) for r in found}
+            return database, {sc: (counts.get(sc, 0), None) for sc in schemas}
+        except Exception as exc:
+            error = str(_snowflake_error(exc).detail)[:300]
+            return database, {sc: (None, error) for sc in schemas}
+
+    if wanted:
+        with ThreadPoolExecutor(max_workers=min(8, len(wanted))) as pool:
+            for database, per_schema in pool.map(lambda kv: count(*kv), wanted.items()):
+                for schema, value in per_schema.items():
+                    out[(database, schema)] = value
+                    _health_cache[(user, database, schema)] = (time.time(), {"count": value[0], "error": value[1]})  # type: ignore[index]
+    return out
+
+
 @app.get("/api/sources/overview")
-def sources_overview(db: Db = Depends(current_db)):
+def sources_overview(fresh: bool = False, db: Db = Depends(current_db)):
     """Every registered source with health, inventory size and profile-store coverage."""
     sources = source_connections(db)["sources"]
     by_source: dict[str, list[dict]] = {}
     for row in _store_rows(db):
         by_source.setdefault(row["source_name"], []).append(row)
+    if fresh:
+        _health_cache.clear()
+    counts = _schema_table_counts(db, sources)
     out = []
     for s in sources:
-        health, detail, table_count = "HEALTHY", "", None
-        try:
-            table_count = db.query(
-                f"SELECT COUNT(*) AS N FROM {_quote_ident(s['database_name'])}.INFORMATION_SCHEMA.TABLES "
-                "WHERE TABLE_SCHEMA = %s AND TABLE_TYPE IN ('BASE TABLE', 'VIEW', 'MATERIALIZED VIEW')",
-                (s["schema_name"],),
-            )[0]["n"]
-        except Exception as exc:
+        health, detail = "HEALTHY", ""
+        table_count, error = counts.get((s["database_name"], s["schema_name"]), (None, "not checked"))
+        if error is not None:
             external = str(s["source_type"]).startswith("EXTERNAL_")
             health = "NOT_LANDED" if external else "UNREACHABLE"
-            detail = "Not landed into Snowflake yet" if external else str(_snowflake_error(exc).detail)[:300]
+            detail = "Not landed into Snowflake yet" if external else error
         rows = [r for r in by_source.get(s["source_system_name"], [])
                 if r["database_name"] == s["database_name"] and r["schema_name"] == s["schema_name"]]
         staged = [r for r in rows if (r.get("status") or "STAGED_READY_FOR_MODELING") == "STAGED_READY_FOR_MODELING"
@@ -3208,16 +3294,9 @@ def _inferred_table_domains(db: Db, tables: list[dict], known: dict[str, str],
     return inferred, [d for d in schema_domain if d["confidence"] >= INFERRED_MIN_CONFIDENCE]
 
 
-def _catalog_inventory(db: Db, database: str, schema: str) -> dict:
-    src = {"database_name": database, "schema_name": schema}
+def _run_domains(db: Db, database: str, schema: str) -> dict[str, str]:
     try:
-        tables = _source_tables(db, src)
-    except Exception as exc:
-        raise _snowflake_error(exc) from exc
-    store = _catalog_store_rows(db, database, schema)
-    domains: dict[str, str] = {}
-    try:
-        for r in db.query(
+        return {r["object_name"]: r["domain_name"] for r in db.query(
             """
             SELECT O.OBJECT_NAME, D.DOMAIN_NAME
               FROM SOURCE.SOURCE_OBJECT O
@@ -3227,11 +3306,28 @@ def _catalog_inventory(db: Db, database: str, schema: str) -> dict:
            QUALIFY ROW_NUMBER() OVER (PARTITION BY O.OBJECT_NAME ORDER BY O.DISCOVERED_AT DESC) = 1
             """,
             (database, schema),
-        ):
-            domains[r["object_name"]] = r["domain_name"]
+        )}
     except Exception:
-        pass
-    registered = _registered_source(db, database, schema)
+        return {}
+
+
+def _catalog_inventory(db: Db, database: str, schema: str) -> dict:
+    """Tables, profile store, run domains, the registered source and the domain vocabulary are independent
+    lookups, so they run in parallel; the slowest one sets the response time instead of their sum."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    src = {"database_name": database, "schema_name": schema}
+    with ThreadPoolExecutor(max_workers=5) as pool:
+        tables_f = pool.submit(_source_tables, db, src)
+        store_f = pool.submit(_catalog_store_rows, db, database, schema)
+        domains_f = pool.submit(_run_domains, db, database, schema)
+        registered_f = pool.submit(_registered_source, db, database, schema)
+        pool.submit(_domain_vocab, db)  # warms the cached vocabulary used by domain inference
+        try:
+            tables = tables_f.result()
+        except Exception as exc:
+            raise _snowflake_error(exc) from exc
+        store, domains, registered = store_f.result(), domains_f.result(), registered_f.result()
     jobs = _active_jobs(registered["source_system_id"]) if registered else []
     busy = {t for j in jobs for t in j["tables"]}
     from services.profiling.insights import scorecard
