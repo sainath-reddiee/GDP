@@ -138,6 +138,17 @@ def historical_score(source: Dict[str, Any], target: Dict[str, Any], knowledge: 
     return round(best, 4), evidence
 
 
+def rule_expression(rule: Dict[str, Any]) -> Optional[str]:
+    """A rule's SQL with {col} standing for the source column. Domain-contract casts are stored as `transformation`
+    written against the dbt alias (`o.col`); a rule with neither form is ignored instead of failing the mapping."""
+    expr = rule.get("expression")
+    if not expr and rule.get("transformation"):
+        expr = re.sub(r"\bo\.col\b", "{col}", str(rule["transformation"]))
+        if "{col}" not in expr:
+            return None
+    return str(expr) if expr else None
+
+
 def propose_transformation(source: Dict[str, Any], target: Dict[str, Any], knowledge: Dict[str, Any]) -> Tuple[Optional[str], Optional[str]]:
     """Deterministic transformation from domain rules. Returns (expression, rule title) or (None, None) for direct."""
     col = source["column_name"].lower()
@@ -145,18 +156,19 @@ def propose_transformation(source: Dict[str, Any], target: Dict[str, Any], knowl
     if rule.get("source_values"):
         whens = " ".join(f"WHEN '{k}' THEN '{v}'" for k, v in sorted(rule["source_values"].items()))
         return f"CASE UPPER(TRIM({col})) {whens} ELSE NULL END", "business rule decode"
-    if rule.get("expression"):
-        return rule["expression"].format(col=col), "business rule"
-    for t in knowledge.get("transforms", []):
+    if rule_expression(rule):
+        return rule_expression(rule).format(col=col), "business rule"
+    transforms = [t for t in knowledge.get("transforms", []) if rule_expression(t)]
+    for t in transforms:
         if t.get("target_column") and t["target_column"].upper() == target["column_name"].upper():
-            return t["expression"].format(col=col), "transformation rule"
-    for t in knowledge.get("transforms", []):
+            return rule_expression(t).format(col=col), "transformation rule"
+    for t in transforms:
         if t.get("source_pattern") and source.get("pattern") == t["source_pattern"] \
                 and type_family(target["data_type"]) in ("DATE", "TIMESTAMP"):
-            return t["expression"].format(col=col), "transformation rule"
-    for t in knowledge.get("transforms", []):
+            return rule_expression(t).format(col=col), "transformation rule"
+    for t in transforms:
         if t.get("semantic_type") and t["semantic_type"] == target.get("semantic_type"):
-            return t["expression"].format(col=col), "transformation rule"
+            return rule_expression(t).format(col=col), "transformation rule"
     sf, tf = type_family(source["data_type"]), type_family(target["data_type"])
     if sf == "TIMESTAMP" and tf == "DATE":
         return f"CAST({col} AS DATE)", "type conversion"

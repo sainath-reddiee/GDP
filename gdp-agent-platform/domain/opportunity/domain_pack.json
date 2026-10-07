@@ -1591,6 +1591,7 @@
       "content_json": {
         "target_column": "SQFT_SIZE",
         "transformation": "o.col::float",
+        "expression": "{col}::float",
         "target_type": "FLOAT"
       }
     },
@@ -1602,6 +1603,7 @@
       "content_json": {
         "target_column": "PROBABILITY_ADJUSTED_PIPELINE_ANALYTICS",
         "transformation": "o.col::float",
+        "expression": "{col}::float",
         "target_type": "FLOAT"
       }
     },
@@ -1613,6 +1615,7 @@
       "content_json": {
         "target_column": "MOMENTUM_SCORE_INITIAL",
         "transformation": "o.col::float",
+        "expression": "{col}::float",
         "target_type": "FLOAT"
       }
     },
@@ -1624,6 +1627,7 @@
       "content_json": {
         "target_column": "MOMENTUM_SCORE_CURRENT",
         "transformation": "o.col::float",
+        "expression": "{col}::float",
         "target_type": "FLOAT"
       }
     },
@@ -1635,6 +1639,7 @@
       "content_json": {
         "target_column": "LAND_SIZE",
         "transformation": "o.col::float",
+        "expression": "{col}::float",
         "target_type": "FLOAT"
       }
     },
@@ -1646,6 +1651,7 @@
       "content_json": {
         "target_column": "ESTIMATED_CLOSE_DATE",
         "transformation": "o.col::timestamp_ntz",
+        "expression": "{col}::timestamp_ntz",
         "target_type": "TIMESTAMP_NTZ"
       }
     },
@@ -1657,6 +1663,7 @@
       "content_json": {
         "target_column": "EST_CLOSE_DATE",
         "transformation": "o.col::timestamp_ntz",
+        "expression": "{col}::timestamp_ntz",
         "target_type": "TIMESTAMP_NTZ"
       }
     },
@@ -1668,6 +1675,7 @@
       "content_json": {
         "target_column": "RFP_RELEASE_DATE",
         "transformation": "o.col::timestamp_ntz",
+        "expression": "{col}::timestamp_ntz",
         "target_type": "TIMESTAMP_NTZ"
       }
     },
@@ -1679,6 +1687,7 @@
       "content_json": {
         "target_column": "RENEWAL_EXPIRATION_DATE",
         "transformation": "o.col::timestamp_ntz",
+        "expression": "{col}::timestamp_ntz",
         "target_type": "TIMESTAMP_NTZ"
       }
     },
