@@ -19,6 +19,14 @@ def _tokens(name: str) -> set[str]:
     return {t for t in re.split(r"[^a-z0-9]+", (name or "").lower()) if len(t) > 1}
 
 
+def proposed_model_name(tables: List[str]) -> str:
+    """Suggested name for a new model from its main source table (editable before registering)."""
+    primary = (tables or ["SOURCE"])[0]
+    entity = re.sub(r"^(crm_|src_|stg_|raw_)", "", primary, flags=re.I)
+    entity = re.sub(r"[^A-Za-z0-9]+", "_", entity).strip("_").upper() or "SOURCE"
+    return f"DIM_{entity}" if not entity.startswith(("DIM_", "FCT_")) else entity
+
+
 def suggest_models(
     profile_columns: Iterable[Dict[str, Any]],
     targets: Iterable[Dict[str, Any]],
@@ -77,9 +85,7 @@ def suggest_models(
     scored.sort(key=lambda item: item["score"], reverse=True)
 
     primary = next(iter(by_table), "SOURCE")
-    entity = re.sub(r"^(crm_|src_|stg_|raw_)", "", primary, flags=re.I)
-    entity = re.sub(r"[^A-Za-z0-9]+", "_", entity).strip("_").upper() or "SOURCE"
-    proposed = f"DIM_{entity}" if not entity.startswith(("DIM_", "FCT_")) else entity
+    proposed = proposed_model_name([primary])
     return scored[:5] + [{
         "kind": "proposed",
         "target_table": proposed,

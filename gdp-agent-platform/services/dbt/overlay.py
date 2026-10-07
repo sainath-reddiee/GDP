@@ -141,7 +141,9 @@ def generate_via_db(db, run_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         "severity": r.get("severity"), "origin": r.get("origin"),
         "requirement": r.get("client_requirement"),
     } for r in soda_rows]
-    soda_yaml = render_yaml((design.get("target_table") or "dim_customer").lower(), checks)
+    target_name = design.get("target_table") or next((c["target_table"] for c in checks if c.get("target_table")), None)
+    assert target_name, "TARGET_UNKNOWN: this STTM has no target table; regenerate the STTM after choosing a target model"
+    soda_yaml = render_yaml(str(target_name).lower(), checks)
     prior_rows = db.query(
         "SELECT CONTENT_JSON FROM KNOWLEDGE.DOMAIN_KNOWLEDGE "
         "WHERE IS_CURRENT AND SOURCE_REFERENCE = %s",
@@ -150,7 +152,9 @@ def generate_via_db(db, run_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
     prior = _json(prior_rows[0].get("content_json")) if prior_rows else {}
     if not isinstance(prior, dict):
         prior = {}
-    plan = merge_branch_plan(payload or {}, prior, run.get("RUN_NAME") or "", run_id)
+    from services.common.standard import run_standard
+
+    plan = merge_branch_plan(payload or {}, prior, run.get("RUN_NAME") or "", run_id, run_standard(run))
     skeleton: Dict[str, str] = {}
     if plan.get("fetch_skeleton") and plan.get("git_repository"):
         try:

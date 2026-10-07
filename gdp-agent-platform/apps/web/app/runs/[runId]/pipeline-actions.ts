@@ -42,6 +42,11 @@ export async function identifyDomain(runId: string): Promise<ActionResult> {
   return after(runId, await attempt(() => api(`/api/runs/${runId}/domain`, { method: "POST" })));
 }
 
+export async function confirmDomain(runId: string, domainId: string): Promise<ActionResult> {
+  return after(runId, await attempt(() =>
+    api(`/api/runs/${runId}/domain`, { method: "PUT", body: JSON.stringify({ domain_id: domainId }) })));
+}
+
 export async function generateMapping(runId: string): Promise<ActionResult> {
   return after(runId, await attempt(() => api(`/api/runs/${runId}/mapping`, { method: "POST" })));
 }

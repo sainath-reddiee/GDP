@@ -10,6 +10,7 @@ import json
 import re
 from typing import Any, Callable, Dict, List, Optional
 
+from services.common.standard import GDP, default_prefix, run_standard
 from services.source.er_graph import infer_joins
 
 Query = Callable[[str, list], List[Dict[str, Any]]]
@@ -38,32 +39,38 @@ def source_key_of(name: str) -> str:
 
 def load_inputs(query: Query, run_id: str, plan: Dict[str, Any], sttm: Dict[str, Any],
                 lines: List[Dict[str, Any]]) -> Dict[str, Any]:
-    run = (query("""SELECT R.RUN_NAME, R.TARGET_MODEL, R.DOMAIN_ID, D.DOMAIN_NAME, S.SOURCE_SYSTEM_NAME
+    run = (query("""SELECT R.*, D.DOMAIN_NAME, S.SOURCE_SYSTEM_NAME
                       FROM CORE.WORKFLOW_RUN R
                       LEFT JOIN KNOWLEDGE.DOMAIN_REGISTRY D ON D.DOMAIN_ID = R.DOMAIN_ID
                       LEFT JOIN SOURCE.SOURCE_REGISTRY S ON S.SOURCE_SYSTEM_ID = R.SOURCE_SYSTEM_ID
                      WHERE R.RUN_ID = ?""", [run_id]) or [{}])[0]
     design = sttm.get("table_design") or {}
+    standard = run_standard(run)
     target = design.get("target_table") or str(run.get("TARGET_MODEL") or "target").split(".")[-1]
     landed = query("""SELECT SOURCE_TABLE, LANDING_TABLE, LANDING_DATABASE, LANDING_SCHEMA
                         FROM SOURCE.LANDING_TABLE_REGISTRY
                        WHERE RUN_ID = ? AND INGESTION_STATUS = 'COMPLETE'
                      QUALIFY ROW_NUMBER() OVER (PARTITION BY SOURCE_TABLE ORDER BY CREATED_AT DESC) = 1""", [run_id])
     sources = []
+    from services.source.identifiers import quote
+
     for row in landed:
         db, schema, table = row.get("LANDING_DATABASE"), row.get("LANDING_SCHEMA"), row.get("LANDING_TABLE")
         columns: Dict[str, str] = {}
-        if all(SAFE.match(str(v or "")) for v in (db, schema, table)):
+        names: Dict[str, str] = {}
+        if db and schema and table:
             try:
                 for col in query(f"""SELECT COLUMN_NAME, DATA_TYPE, NUMERIC_PRECISION, NUMERIC_SCALE
-                                      FROM {db}.INFORMATION_SCHEMA.COLUMNS
+                                      FROM {quote(str(db))}.INFORMATION_SCHEMA.COLUMNS
                                      WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? ORDER BY ORDINAL_POSITION""",
                                  [schema, table]):
                     columns[str(col["COLUMN_NAME"]).upper()] = _type(col)
+                    names[str(col["COLUMN_NAME"]).upper()] = str(col["COLUMN_NAME"])
             except Exception:
-                columns = {}
+                columns, names = {}, {}
+        # columns is keyed upper case for matching; names maps back to the exact stored spelling for SQL.
         sources.append({"name": str(row["SOURCE_TABLE"]).upper(), "identifier": table, "database": db,
-                        "schema": schema, "columns": columns})
+                        "schema": schema, "columns": columns, "names": names})
     target_columns: List[Dict[str, Any]] = []
     try:
         target_columns = [{
@@ -89,13 +96,26 @@ def load_inputs(query: Query, run_id: str, plan: Dict[str, Any], sttm: Dict[str,
     tables = {s["name"]: [{"column_name": c, "data_type": t.split("(")[0]} for c, t in s["columns"].items()]
               for s in sources}
     system = str(run.get("SOURCE_SYSTEM_NAME") or "SOURCE")
+    key_candidates: Optional[Dict[str, List[str]]] = None
+    try:
+        measured = query("""SELECT TABLE_NAME, COLUMN_NAME FROM PROFILE.PROFILE_REGISTRY
+                             WHERE RUN_ID = ? AND IS_CURRENT AND POTENTIAL_KEY_FLAG""", [run_id])
+        profiled = query("SELECT COUNT(*) AS N FROM PROFILE.PROFILE_REGISTRY WHERE RUN_ID = ? AND IS_CURRENT", [run_id])
+        if profiled and int(profiled[0].get("N") or 0):
+            key_candidates = {}
+            for r in measured:
+                key_candidates.setdefault(str(r["TABLE_NAME"]).upper(), []).append(str(r["COLUMN_NAME"]).upper())
+    except Exception:
+        key_candidates = None
     return {
-        "domain": plan.get("domain_folder") or run.get("DOMAIN_NAME") or "gdp",
+        "domain": plan.get("domain_folder") or run.get("DOMAIN_NAME") or ("gdp" if standard == GDP else "general"),
         "target": target,
-        "prefix": plan.get("prefix") if plan.get("prefix") is not None else "GDP",
+        "prefix": plan.get("prefix") if plan.get("prefix") is not None else default_prefix(standard),
+        "standard": standard,
         "source_key": plan.get("source_key") or source_key_of(system),
         "source_system": system.upper(),
         "business_keys": design.get("business_keys") or [],
+        "key_candidates": key_candidates,
         "grain": design.get("grain") or "",
         "sources": sources,
         "target_columns": target_columns,

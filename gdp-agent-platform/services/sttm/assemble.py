@@ -17,11 +17,30 @@ def mapping_type(transformation: Optional[str], semantic_type: Optional[str], de
     return "DIRECT"
 
 
+def sttm_target_name(session, sttm: Dict[str, Any]) -> str:
+    """Target table of an STTM: its table design, else its registered target. Never a demo default."""
+    from services.common.sql import rows, variant
+
+    design = variant(sttm.get("TABLE_DESIGN")) or {}
+    if design.get("target_table"):
+        return str(design["target_table"])
+    found = rows(session, "SELECT TARGET_TABLE FROM KNOWLEDGE.TARGET_TABLE_REGISTRY WHERE TARGET_TABLE_ID = ?",
+                 [sttm.get("TARGET_TABLE_ID")]) if sttm.get("TARGET_TABLE_ID") else []
+    assert found, "TARGET_UNKNOWN: this STTM has no target table; regenerate the STTM after choosing a target model"
+    return str(found[0]["TARGET_TABLE"])
+
+
 def derived_expression(column: Dict[str, Any], source_system: str) -> str:
     semantic = column.get("semantic_type")
     if semantic == "SURROGATE_KEY":
-        keys = column.get("business_keys") or ["customer_id"]
-        return "MD5(CAST(" + " || '|' || ".join(k.lower() for k in keys) + " AS VARCHAR))"
+        keys = column.get("business_keys") or []
+        if not keys:
+            return "NULL /* surrogate key: choose the business key columns in the STTM */"
+        from services.source.identifiers import sql_ident
+
+        return "MD5(CAST(" + " || '|' || ".join(sql_ident(k) for k in keys) + " AS VARCHAR))"
+    if semantic == "DERIVED_KEY":
+        return "NULL /* resolved from the hub by the dbt model */"
     if semantic == "RECORD_SOURCE":
         return f"'{source_system}'"
     if semantic == "AUDIT_TIMESTAMP":

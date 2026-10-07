@@ -14,6 +14,7 @@ import { analyzeTables, catalogModelingRun } from "./actions";
 import { GradeChip } from "./profile-drawer";
 
 type Mode = "existing" | "new";
+type Standard = "GDP" | "GENERIC";
 
 /** Replaces the onboarding wizard: everything needed to start modeling a set of staged tables, on one panel. */
 export function ModelPanel({ database, schema, tables, domains, onClose }: {
@@ -26,6 +27,7 @@ export function ModelPanel({ database, schema, tables, domains, onClose }: {
   const [picked, setPicked] = useState<string[]>([]);
   const [domainId, setDomainId] = useState("");
   const [runName, setRunName] = useState("");
+  const [standard, setStandard] = useState<Standard | null>(null);
   const [pending, start] = useTransition();
 
   useEffect(() => {
@@ -34,6 +36,7 @@ export function ModelPanel({ database, schema, tables, domains, onClose }: {
       if (!live) return;
       if (!r.ok) { setError(r.error); return; }
       setData(r.data);
+      setStandard(r.data.suggested_standard === "GDP" ? "GDP" : "GENERIC");
       const detected = r.data.domain?.detected;
       if (detected && domains.some((d) => d.domain_id === detected.domain_id)) setDomainId(detected.domain_id);
       const strong = r.data.models.suggestions.filter((s) => s.kind === "existing" && s.score >= 0.5).map((s) => s.fqn);
@@ -70,6 +73,7 @@ export function ModelPanel({ database, schema, tables, domains, onClose }: {
       : [];
     const r = await catalogModelingRun({
       database, schema, tables, run_name: runName || null, domain_id: domainId || null, targets,
+      modeling_standard: standard ?? "GENERIC",
     });
     if (!r.ok) { setError(r.error); return; }
     router.push(r.data.error ? `/runs/${r.data.run_id}/source` : `/runs/${r.data.run_id}/mapping`);
@@ -163,6 +167,32 @@ export function ModelPanel({ database, schema, tables, domains, onClose }: {
                 {graph && <ModelEr graph={graph} runName={runName || `${schema} modeling`} />}
               </section>
 
+              <section className="space-y-2">
+                <div className="flex items-center gap-2">
+                  <GitBranch className="h-4 w-4 text-primary" />
+                  <h4 className="text-sm font-semibold">Is this source part of GDP?</h4>
+                </div>
+                <div role="radiogroup" aria-label="Modeling standard" className="grid gap-2 sm:grid-cols-2">
+                  {([
+                    ["GDP", "Yes, GDP", "Hub and spoke model with GDP keys, audit columns, prefix and GDP knowledge packs"],
+                    ["GENERIC", "No, another source", "Plain model with no GDP conventions; GDP packs are not used"],
+                  ] as const).map(([value, title, body]) => (
+                    <button key={value} type="button" role="radio" aria-checked={standard === value}
+                            onClick={() => setStandard(value)}
+                            className={cn("rounded-xl border p-3 text-left",
+                              standard === value ? "border-primary bg-primary/5 ring-2 ring-primary/20" : "hover:bg-muted/40")}>
+                      <p className="text-sm font-semibold">{title}</p>
+                      <p className="text-xs text-muted-foreground">{body}</p>
+                    </button>
+                  ))}
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  {data.suggested_standard === "GDP"
+                    ? "Preselected because a GDP pack matched these tables. Change it if this source is not GDP."
+                    : "No GDP pack matched these tables, so this defaults to another source. Choose GDP if it belongs there."}
+                </p>
+              </section>
+
               <section className="space-y-3">
                 <div className="flex items-center gap-2">
                   <Layers className="h-4 w-4 text-primary" />
@@ -227,7 +257,8 @@ export function ModelPanel({ database, schema, tables, domains, onClose }: {
                     <select id="model_domain" value={domainId} onChange={(e) => setDomainId(e.target.value)}
                             className="h-9 w-64 rounded-md border bg-card px-2 text-sm">
                       <option value="">Infer from profiles and models</option>
-                      {domains.map((d) => <option key={d.domain_id} value={d.domain_id}>{d.domain_name}</option>)}
+                      {domains.filter((d) => standard === "GDP" || d.standard !== "GDP" || d.domain_id === domainId)
+                        .map((d) => <option key={d.domain_id} value={d.domain_id}>{d.domain_name}</option>)}
                     </select>
                   </div>
                   <div className="flex-1">
@@ -244,7 +275,7 @@ export function ModelPanel({ database, schema, tables, domains, onClose }: {
           <p className="text-xs text-muted-foreground">
             The run reads these tables in place and reuses their staged profiles, then opens at mapping. Nothing is copied.
           </p>
-          <Button className="ml-auto" disabled={!data || pending || (mode === "existing" && picked.length === 0)} onClick={create}>
+          <Button className="ml-auto" disabled={!data || !standard || pending || (mode === "existing" && picked.length === 0)} onClick={create}>
             {pending ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowRight className="h-4 w-4" />}
             {pending ? "Creating run…" : "Create modeling run"}
           </Button>

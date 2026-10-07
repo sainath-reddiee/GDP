@@ -18,6 +18,8 @@ from services.common.sql import clip, config_value, insert_rows, rows, scalar, v
 from services.common.stage import Stage
 from services.knowledge import search as ks
 from services.knowledge.procedures import current_knowledge_version, identify_domain
+from services.knowledge.validate import normalize_content
+from services.common.standard import run_standard
 from services.knowledge.usage import STAGE_SKILLS, assert_safe_transformation, domain_context, use_skills
 from services.mapping import features, scoring
 from services.mapping.feedback import pattern as feedback_pattern
@@ -27,12 +29,35 @@ EMBED_MODEL_DEFAULT = "snowflake-arctic-embed-l-v2.0"
 EMBED_MODELS = {EMBED_MODEL_DEFAULT}
 
 
+NO_TARGET = ("NO_TARGET_MODEL: this run has no target model. In Sources, open the modeling panel and pick an "
+             "existing model or propose a new one before mapping.")
+
+
 def target_table(session, run: Dict[str, Any]) -> Dict[str, Any]:
-    name = (run.get("TARGET_MODEL") or "").split(".")[-1].upper()
-    found = rows(session, """SELECT * FROM KNOWLEDGE.TARGET_TABLE_REGISTRY
-                             WHERE ACTIVE_FLAG AND DOMAIN_ID = ? AND (UPPER(TARGET_TABLE) = ? OR ? = '')
-                             ORDER BY TARGET_TABLE LIMIT 1""", [run["DOMAIN_ID"], name, name])
-    assert found, f"target model {run.get('TARGET_MODEL')} is not registered in domain knowledge"
+    """The run's target model, resolved exactly: DB.SCHEMA.TABLE when the run names one (preferring the run's
+    domain), otherwise the table name inside the run's domain. Never a guess: no target means a clear error."""
+    model = (run.get("TARGET_MODEL") or "").strip()
+    assert model, NO_TARGET
+    parts = model.split(".")
+    if len(parts) == 3:
+        found = rows(session, """SELECT * FROM KNOWLEDGE.TARGET_TABLE_REGISTRY
+                                 WHERE ACTIVE_FLAG AND TARGET_DATABASE = ? AND TARGET_SCHEMA = ? AND TARGET_TABLE = ?
+                                 ORDER BY IFF(DOMAIN_ID = ?, 0, 1), CREATED_AT LIMIT 1""",
+                     [parts[0], parts[1], parts[2], run.get("DOMAIN_ID") or ""])
+        if not found:  # registered before identifiers kept their case
+            found = rows(session, """SELECT * FROM KNOWLEDGE.TARGET_TABLE_REGISTRY
+                                     WHERE ACTIVE_FLAG AND UPPER(TARGET_DATABASE) = UPPER(?)
+                                       AND UPPER(TARGET_SCHEMA) = UPPER(?) AND UPPER(TARGET_TABLE) = UPPER(?)
+                                     ORDER BY IFF(DOMAIN_ID = ?, 0, 1), CREATED_AT LIMIT 1""",
+                         [parts[0], parts[1], parts[2], run.get("DOMAIN_ID") or ""])
+    else:
+        assert run.get("DOMAIN_ID"), ("NO_DOMAIN: confirm the knowledge pack on the Domain page before mapping, "
+                                      f"so the target {model} can be found.")
+        found = rows(session, """SELECT * FROM KNOWLEDGE.TARGET_TABLE_REGISTRY
+                                 WHERE ACTIVE_FLAG AND DOMAIN_ID = ? AND UPPER(TARGET_TABLE) = UPPER(?)
+                                 ORDER BY CREATED_AT LIMIT 1""", [run["DOMAIN_ID"], parts[-1]])
+    assert found, (f"TARGET_NOT_REGISTERED: target model {model} is not registered. Register it from Sources "
+                   "(modeling panel) and retry.")
     return found[0]
 
 
@@ -65,13 +90,18 @@ def source_columns(session, run_id: str) -> List[Dict[str, Any]]:
     return out
 
 
-def domain_knowledge(session, domain_id: str, run_id: str) -> Dict[str, Any]:
+def domain_knowledge(session, domain_id: str, run_id: str, target: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Knowledge for one run. Learned evidence (reviewer patterns, past decisions) is scoped to the run's domain and
+    target table, so a column name approved for one company's table never steers an unrelated table."""
     knowledge: Dict[str, Any] = {"glossary": {}, "rules": {}, "transforms": [], "history": [], "notes": []}
+    target_name = str((target or {}).get("TARGET_TABLE") or "").upper()
     for k in rows(session, """SELECT KNOWLEDGE_TYPE, CONTENT_JSON FROM KNOWLEDGE.DOMAIN_KNOWLEDGE
                               WHERE DOMAIN_ID = ? AND IS_CURRENT AND STATUS = 'ACTIVE' AND CONTENT_JSON IS NOT NULL""",
                   [domain_id]):
-        content = variant(k["CONTENT_JSON"]) or {}
         kind = k["KNOWLEDGE_TYPE"]
+        content = normalize_content(kind, variant(k["CONTENT_JSON"]))
+        if content is None:
+            continue
         if kind == "GLOSSARY" and content.get("target_column"):
             knowledge["glossary"][content["target_column"].upper()] = content
         elif kind == "BUSINESS_RULE" and content.get("target_column"):
@@ -79,6 +109,8 @@ def domain_knowledge(session, domain_id: str, run_id: str) -> Dict[str, Any]:
         elif kind == "TRANSFORMATION_RULE":
             knowledge["transforms"].append(content)
         elif kind == "MAPPING_PATTERN" and content.get("source_column") and content.get("target_column"):
+            if target_name and content.get("target_table") and str(content["target_table"]).upper() != target_name:
+                continue
             knowledge["history"].append((content["source_column"], content["target_column"], 1.0))
             if content.get("justification") or content.get("overridden"):
                 knowledge["notes"].append(
@@ -90,8 +122,11 @@ def domain_knowledge(session, domain_id: str, run_id: str) -> Dict[str, Any]:
                               FROM MAPPING.MAPPING_DECISION D
                               JOIN SOURCE.LANDING_COLUMN_REGISTRY L ON L.LANDING_COLUMN_ID = D.SOURCE_COLUMN_ID
                               JOIN KNOWLEDGE.TARGET_COLUMN_REGISTRY T ON T.TARGET_COLUMN_ID = D.TARGET_COLUMN_ID
-                              WHERE D.IS_CURRENT AND D.RUN_ID <> ? AND D.DECISION IN ('APPROVED', 'MODIFIED', 'ALTERNATIVE_TARGET')""",
-                  [run_id]):
+                              JOIN KNOWLEDGE.TARGET_TABLE_REGISTRY TT ON TT.TARGET_TABLE_ID = T.TARGET_TABLE_ID
+                              WHERE D.IS_CURRENT AND D.RUN_ID <> ? AND D.DECISION IN ('APPROVED', 'MODIFIED', 'ALTERNATIVE_TARGET')
+                                AND TT.DOMAIN_ID = ? AND (NULLIF(?, '') IS NULL OR TT.TARGET_TABLE_ID = ?)""",
+                  [run_id, domain_id or "", (target or {}).get("TARGET_TABLE_ID") or "",
+                   (target or {}).get("TARGET_TABLE_ID") or ""]):
         knowledge["history"].append((h["SRC"], h["TGT"], 1.0))
     return knowledge
 
@@ -171,7 +206,9 @@ def _adjudicate(session, run_id: str, ambiguous: List[Tuple[Dict[str, Any], List
     except Exception:
         return {}
     record_cost(session, run_id, "MAPPING", model, usage, int((time.time() - started) * 1000), tool_calls=1)
-    return {c["source_column"].upper(): {**c, "model": model} for c in result.get("columns", [])}
+    return {str(c["source_column"]).upper(): {**c, "model": model} for c in (result.get("columns") or [])
+            if isinstance(c, dict) and isinstance(c.get("source_column"), str)
+            and isinstance(c.get("preferred_target"), str)}
 
 
 def _scoring_config(session, domain_id: str) -> Dict[str, Any]:
@@ -200,14 +237,18 @@ def generate_mapping_candidates(session, run_id: str) -> Dict[str, Any]:
             run = stage.run
             target = target_table(session, run)
             targets = target_columns(session, target["TARGET_TABLE_ID"])
+            assert targets, (f"TARGET_EMPTY: {target['TARGET_DATABASE']}.{target['TARGET_SCHEMA']}."
+                             f"{target['TARGET_TABLE']} has no registered columns. Register the table again from "
+                             "Sources so its columns are captured, or pick another target.")
             try:
-                guidance += "\n\n" + domain_context(session, run["DOMAIN_ID"], target["TARGET_TABLE"], 4000)
+                guidance += "\n\n" + domain_context(session, run["DOMAIN_ID"], target["TARGET_TABLE"], 4000,
+                                                     run_standard(run))
             except Exception:
                 pass
             mappable = features.mappable_targets(targets)
             sources = source_columns(session, run_id)
             assert sources, "no current profile for this run"
-            knowledge = domain_knowledge(session, run["DOMAIN_ID"], run_id)
+            knowledge = domain_knowledge(session, run["DOMAIN_ID"], run_id, target)
             cfg = _scoring_config(session, run["DOMAIN_ID"])
             top_k = int(config_value(session, "MAPPING_TOP_K", 3))
             model = config_value(session, "EMBED_MODEL", EMBED_MODEL_DEFAULT)
@@ -249,7 +290,8 @@ def generate_mapping_candidates(session, run_id: str) -> Dict[str, Any]:
                         agrees = verdict["preferred_target"].upper() == c["target"]["column_name"].upper()
                         c["evidence"]["llm"] = {"preferred_target": verdict["preferred_target"], "agrees": agrees,
                                                 "model": verdict["model"]}
-                        reason = f"{verdict['reason']} (deterministic evidence: {reason})"
+                        if verdict.get("reason"):
+                            reason = f"{verdict['reason']} (deterministic evidence: {reason})"
                     sc = c["scores"]
                     values.append([str(uuid.uuid4()), run_id, s["source_column_id"], c["target"]["target_column_id"],
                                    run["DOMAIN_ID"], sc["semantic"], sc["keyword"], sc["datatype"], sc["statistical"],
@@ -334,7 +376,8 @@ def _store_feedback(session, run: Dict[str, Any], targets: Dict[str, Dict[str, A
          WHERE C.RUN_ID = ? AND C.IS_CURRENT AND C.RANK = 1""", [run["RUN_ID"]])
     for r in rank1:
         proposed[r["SOURCE_COLUMN_ID"]] = r["COLUMN_NAME"]
-    target_table_name = next(iter(targets.values()), {}).get("table_name") or "DIM_CUSTOMER"
+    target_table_name = (next(iter(targets.values()), {}).get("table_name")
+                         or (run.get("TARGET_MODEL") or "").split(".")[-1] or "TARGET")
     for source_id, decision, _candidate, target_id, transformation, justification, _comments in prepared:
         src = names.get(source_id) or {}
         target_name = targets.get(target_id, {}).get("column_name") if target_id else None

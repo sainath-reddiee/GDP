@@ -6,18 +6,19 @@ import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
 import { ModelEr } from "@/components/model-er";
 import type { ModelGraph } from "@/app/onboarding/intent-types";
 import { displayDomain, isHiddenTarget } from "@/lib/catalog-display";
-import { identifyDomain } from "../pipeline-actions";
+import { confirmDomain, identifyDomain } from "../pipeline-actions";
 
 export default async function DomainPage({ params }: { params: { runId: string } }) {
   const [state, { recommendations }, graph] = await Promise.all([
     getRun(params.runId),
     api<{ recommendations: {
-      recommendation_id: string; domain_name: string; confidence: number; recommendation: string;
+      recommendation_id: string; domain_id: string; domain_name: string; confidence: number; recommendation: string;
       status: string; decided_by: string | null;
     }[] }>(`/api/runs/${params.runId}/domain`),
     api<ModelGraph>(`/api/runs/${params.runId}/model-graph`).catch(() => null),
   ]);
   const canScore = state.current_state === "PROFILING_COMPLETE";
+  const canPick = ["PROFILING_COMPLETE", "DOMAIN_IDENTIFIED", "MAPPING_PENDING", "FAILED"].includes(state.current_state);
   const accepted = recommendations.find((r) => r.status === "ACCEPTED");
   const packName = state.run.domain_name ?? accepted?.domain_name ?? null;
   return (
@@ -79,7 +80,7 @@ export default async function DomainPage({ params }: { params: { runId: string }
         <CardHeader>
           <CardTitle>Scoring trail</CardTitle>
           <CardDescription>
-            Token overlap and Cortex Search after profiling. This does not block Mapping.
+            Detection signals, term overlap and Cortex Search after profiling. When no pack is confident, none is applied: pick the right one here before mapping, or map without a pack.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -91,7 +92,7 @@ export default async function DomainPage({ params }: { params: { runId: string }
             </p>
           ) : (
             <Table>
-              <THead><TR><TH>Domain</TH><TH>Confidence</TH><TH>Status</TH><TH>Evidence</TH></TR></THead>
+              <THead><TR><TH>Domain</TH><TH>Confidence</TH><TH>Status</TH><TH>Evidence</TH>{canPick && <TH />}</TR></THead>
               <TBody>
                 {recommendations.map((r) => (
                   <TR key={r.recommendation_id}>
@@ -99,6 +100,14 @@ export default async function DomainPage({ params }: { params: { runId: string }
                     <TD>{Number(r.confidence).toFixed(2)}</TD>
                     <TD><Badge variant={r.status === "ACCEPTED" ? "success" : "outline"}>{r.status}</Badge></TD>
                     <TD className="text-sm text-muted-foreground">{r.recommendation}</TD>
+                    {canPick && (
+                      <TD className="text-right">
+                        {r.status !== "ACCEPTED" && (
+                          <StageAction label="Use this pack" pendingLabel="Applying…"
+                                       action={confirmDomain.bind(null, params.runId, r.domain_id)} />
+                        )}
+                      </TD>
+                    )}
                   </TR>
                 ))}
               </TBody>

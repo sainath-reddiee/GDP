@@ -14,6 +14,8 @@ from services.quality.gx import FORMAT_REGEX
 from services.quality.profile_checks import carry
 
 SAFE = re.compile(r"^[A-Za-z_][A-Za-z0-9_$]*$")
+_PART = r'(?:"(?:[^"]|"")+"|[A-Za-z_][A-Za-z0-9_$]*)'
+FQN = re.compile(rf"^{_PART}\.{_PART}\.{_PART}$")  # DB.SCHEMA.TABLE, each part bare or quoted
 
 
 def _lit(value: Any) -> str:
@@ -21,14 +23,15 @@ def _lit(value: Any) -> str:
 
 
 def _pattern(value: str) -> Optional[str]:
-    return None if "$$" in value else f"$${value}$$"
+    """Regex as a single-quoted literal. A $$...$$ literal breaks on the common end anchor: '^...$' + '$$' is '$$$'."""
+    return _lit(value) if value else None
 
 
 def metric_sql(check: Dict[str, Any], column: str) -> Optional[str]:
     """Aggregate over the source table counting rows that violate the check; None when not evaluable."""
     d = check.get("definition") or {}
     kind = d.get("kind")
-    c = f'"{column}"'
+    c = '"' + str(column).replace('"', '""') + '"'  # exact stored spelling, always quoted
     text = f"TRIM({c}::STRING)"
     if kind in ("not_null", "missing_percent"):
         return f"COUNT_IF({c} IS NULL)"
@@ -81,8 +84,8 @@ def plan(checks: List[Dict[str, Any]], lines: List[Dict[str, Any]], sources: Dic
         if level == "none" or (level == "shape" and kind in ("accepted_values", "regex", "format", "unique")):
             slots.append({"index": i, "reason": "derived column; evaluate after the model is built"})
             continue
-        table, column = str(line.get("source_table") or "").upper(), str(line.get("source_column") or "").upper()
-        if table not in sources or not SAFE.match(column):
+        table, column = str(line.get("source_table") or "").upper(), str(line.get("source_column") or "")
+        if table not in sources or not column:
             slots.append({"index": i, "reason": "source table not landed"})
             continue
         sql = metric_sql(check, column)
@@ -95,7 +98,7 @@ def plan(checks: List[Dict[str, Any]], lines: List[Dict[str, Any]], sources: Dic
     queries = {}
     for table, parts in metrics.items():
         fqn = sources[table]
-        if not all(SAFE.match(p) for p in fqn.split(".")):
+        if not FQN.match(fqn):
             continue
         queries[table] = "SELECT " + ", ".join(["COUNT(*) AS N"] + parts) + f" FROM {fqn}"
     return queries, slots

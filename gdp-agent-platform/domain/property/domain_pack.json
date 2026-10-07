@@ -1,6 +1,7 @@
 {
   "domain": {
     "name": "PROPERTY",
+    "standard": "GDP",
     "description": "Real estate properties and buildings: PROPERTY_CORE with usage, address and owner tables.",
     "owner": "GDP Data Office",
     "silver_database": "DEV_GDP_SILVER_DB",

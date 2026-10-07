@@ -11,6 +11,8 @@ from services.common.llm import complete_json
 from services.common.sql import clip, insert_rows, rows, scalar, variant
 from services.common.stage import Stage
 from services.knowledge.usage import STAGE_SKILLS, use_skills
+from services.knowledge.validate import normalize_content
+from services.sttm.assemble import sttm_target_name
 from services.quality.backtest import evaluate as evaluate_check, plan as backtest_plan
 from services.quality.gx import render_suite
 from services.quality.profile_checks import profile_checks
@@ -95,7 +97,7 @@ def _driving_table(design: Dict[str, Any], lines: List[Dict[str, Any]]) -> str |
 def _rejected(session, domain_id: str) -> List[Dict[str, Any]]:
     found = rows(session, """SELECT CONTENT_JSON FROM KNOWLEDGE.DOMAIN_KNOWLEDGE
                              WHERE IS_CURRENT AND KNOWLEDGE_TYPE = 'SODA_PATTERN'
-                               AND (DOMAIN_ID = ? OR SOURCE_REFERENCE LIKE 'SODA.%')""", [domain_id])
+                               AND DOMAIN_ID = ?""", [domain_id])
     out = []
     for row in found:
         payload = variant(row["CONTENT_JSON"]) or {}
@@ -108,9 +110,7 @@ def _knowledge(session, domain_id: str) -> List[str]:
     found = rows(session, """SELECT TITLE, CONTENT FROM KNOWLEDGE.DOMAIN_KNOWLEDGE
                              WHERE IS_CURRENT AND KNOWLEDGE_TYPE IN
                                    ('SODA_PATTERN', 'BUSINESS_RULE', 'EXCEPTION', 'TRANSFORMATION_RULE', 'STTM_TEMPLATE')
-                               AND (DOMAIN_ID = ? OR SOURCE_REFERENCE LIKE 'SODA.%'
-                                    OR SOURCE_REFERENCE LIKE 'soda.brief.%' OR SOURCE_REFERENCE LIKE 'transform.%'
-                                    OR SOURCE_REFERENCE LIKE 'sttm.csv.%')
+                               AND DOMAIN_ID = ?
                              ORDER BY UPDATED_AT DESC NULLS LAST LIMIT 16""", [domain_id])
     return [f"{r['TITLE']}: {r['CONTENT']}" for r in found]
 
@@ -118,10 +118,12 @@ def _knowledge(session, domain_id: str) -> List[str]:
 def _transform_checks(session, domain_id: str, table: str) -> List[Dict[str, Any]]:
     found = rows(session, """SELECT CONTENT_JSON FROM KNOWLEDGE.DOMAIN_KNOWLEDGE
                              WHERE IS_CURRENT AND STATUS = 'ACTIVE' AND KNOWLEDGE_TYPE = 'TRANSFORMATION_RULE'
-                               AND (DOMAIN_ID = ? OR SOURCE_REFERENCE LIKE 'transform.%')""", [domain_id])
+                               AND DOMAIN_ID = ?""", [domain_id])
     out = []
     for row in found:
-        content = variant(row["CONTENT_JSON"]) or {}
+        content = normalize_content("TRANSFORMATION_RULE", variant(row["CONTENT_JSON"])) or {}
+        if content.get("target_table") and str(content["target_table"]).upper() != str(table).upper():
+            continue  # a rule learned on another target table
         target = content.get("target_column")
         for raw in content.get("soda_checks") or []:
             item = dict(raw)
@@ -195,7 +197,7 @@ def generate_soda(session, run_id: str) -> Dict[str, Any]:
                 pass
             sttm = _current_sttm(session, run_id)
             design = variant(sttm["TABLE_DESIGN"]) or {}
-            table = design.get("target_table") or "DIM_CUSTOMER"
+            table = sttm_target_name(session, sttm)
             lines = _lines(session, sttm["STTM_ID"])
             columns = [l["target_column"] for l in lines]
             knowledge = _knowledge(session, sttm["DOMAIN_ID"])
@@ -259,7 +261,9 @@ def backtest_soda(session, run_id: str) -> Dict[str, Any]:
                                WHERE RUN_ID = ? AND INGESTION_STATUS = 'COMPLETE'
                              QUALIFY ROW_NUMBER() OVER (PARTITION BY SOURCE_TABLE ORDER BY CREATED_AT DESC) = 1""",
                   [run_id])
-    sources = {str(r["SOURCE_TABLE"]).upper(): f"{r['LANDING_DATABASE']}.{r['LANDING_SCHEMA']}.{r['LANDING_TABLE']}"
+    from services.source.identifiers import sql_ident
+
+    sources = {str(r["SOURCE_TABLE"]).upper(): ".".join(sql_ident(str(r[k])) for k in ("LANDING_DATABASE", "LANDING_SCHEMA", "LANDING_TABLE"))
                for r in landed}
     queries, slots = backtest_plan(checks, lines, sources, _driving_table(design, lines))
     results: Dict[str, Any] = {}
@@ -304,7 +308,7 @@ def import_client_expectations(session, run_id: str, rows_json: str) -> Dict[str
         "provide a client brief or a JSON/CSV array of requirement rows"
     sttm = _current_sttm(session, run_id)
     design = variant(sttm["TABLE_DESIGN"]) or {}
-    table = design.get("target_table") or "DIM_CUSTOMER"
+    table = sttm_target_name(session, sttm)
     columns = [l["target_column"] for l in _lines(session, sttm["STTM_ID"])]
     imported: List[Dict[str, Any]] = []
     if parsed.get("brief"):

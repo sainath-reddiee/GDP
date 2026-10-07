@@ -42,6 +42,7 @@ export async function analyzeTables(database: string, schema: string, tables: st
 
 export async function catalogModelingRun(body: {
   database: string; schema: string; tables: string[]; run_name: string | null; domain_id: string | null;
+  modeling_standard: "GDP" | "GENERIC";
   targets: { fqn: string; target_table: string; domain_name?: string | null; target_table_id?: string | null }[];
 }) {
   const result = await attemptValue(() =>

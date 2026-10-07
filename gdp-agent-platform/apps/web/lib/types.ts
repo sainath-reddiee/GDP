@@ -285,6 +285,7 @@ export type AnalyzeResult = {
   relationships: Relationship[];
   graph: import("@/app/onboarding/intent-types").ModelGraph;
   domain?: { detected: DomainCandidate | null; candidates: DomainCandidate[] };
+  suggested_standard?: "GDP" | "GENERIC";
   models: {
     related: boolean;
     suggestions: { kind: "existing" | "proposed"; target_table: string; fqn: string; domain_name?: string | null;

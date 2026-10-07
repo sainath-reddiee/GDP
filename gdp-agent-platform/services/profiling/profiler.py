@@ -210,10 +210,28 @@ def cardinality(distinct: Optional[int], non_null: int) -> Optional[str]:
     return "MEDIUM"
 
 
-def date_format(patterns: Sequence[Dict[str, Any]]) -> Optional[str]:
+DAY_MONTH_SHAPES = {"99/99/9999": "/", "99-99-9999": "-", "99.99.9999": "."}
+
+
+def date_format(patterns: Sequence[Dict[str, Any]], values: Sequence[Any] = ()) -> Optional[str]:
+    """Date format of a text column. For dd?mm?yyyy shapes the values decide day-first or month-first: a first
+    part above 12 can only be a day, a second part above 12 can only be a day. Ambiguous values keep the
+    shape's conventional reading."""
     if not patterns:
         return None
     top = patterns[0]["pattern"]
+    sep = DAY_MONTH_SHAPES.get(top)
+    if sep:
+        first = second = 0
+        for v in values or []:
+            parts = str(v).split(sep)
+            if len(parts) == 3 and parts[0].isdigit() and parts[1].isdigit():
+                first, second = max(first, int(parts[0])), max(second, int(parts[1]))
+        if first > 12 and second <= 12:
+            return f"DD{sep}MM{sep}YYYY"
+        if second > 12 and first <= 12:
+            return f"MM{sep}DD{sep}YYYY"
+        return DATE_FORMATS.get(top) or f"DD{sep}MM{sep}YYYY"
     return DATE_FORMATS.get(top)
 
 
@@ -258,6 +276,57 @@ def pii_classification(semantic_type: str) -> str:
     return PII_TYPES.get(semantic_type, "NONE")
 
 
+VALUE_PII = (
+    ("SSN", re.compile(r"^\d{3}-\d{2}-\d{4}$")),
+    ("EMAIL", re.compile(r"^[^@\s]+@[^@\s]+\.[A-Za-z]{2,}$")),
+    ("IP_ADDRESS", re.compile(r"^(25[0-5]|2[0-4]\d|1?\d?\d)(\.(25[0-5]|2[0-4]\d|1?\d?\d)){3}$")),
+    ("PHONE", re.compile(r"^\+?[\d\s().-]{10,20}$")),
+)
+VALUE_PII_SHARE = 0.8
+
+
+def _luhn(digits: str) -> bool:
+    total = 0
+    for i, ch in enumerate(reversed(digits)):
+        d = int(ch) * (2 if i % 2 else 1)
+        total += d - 9 if d > 9 else d
+    return total % 10 == 0
+
+
+def _value_kind(value: str) -> Optional[str]:
+    v = value.strip()
+    digits = re.sub(r"[\s-]", "", v)
+    if digits.isdigit() and 13 <= len(digits) <= 19 and _luhn(digits) and (len(digits) != len(v) or len(v) >= 15):
+        return "CARD"
+    for kind, pattern in VALUE_PII:
+        if pattern.match(v):
+            if kind == "PHONE":  # formatted numbers only: a bare digit run is far more often an id
+                count = sum(c.isdigit() for c in v)
+                if not (10 <= count <= 15) or v.isdigit():
+                    continue
+            return kind
+    return None
+
+
+def value_pii(frequencies: Sequence[Dict[str, Any]]) -> str:
+    """PII detected from the values themselves (any column name or language): SSN, card (Luhn), email, phone, IP.
+    A kind is reported when it covers most of the observed values."""
+    seen: Dict[str, int] = {}
+    total = 0
+    for f in frequencies or []:
+        if f.get("value") is None:
+            continue
+        n = int(f.get("count") or 1)
+        total += n
+        kind = _value_kind(str(f["value"]))
+        if kind:
+            seen[kind] = seen.get(kind, 0) + n
+    if not total or not seen:
+        return "NONE"
+    kind, hits = max(seen.items(), key=lambda kv: kv[1])
+    return kind if hits / total >= VALUE_PII_SHARE else "NONE"
+
+
 def mask(value: Optional[str], pii: str) -> Optional[str]:
     if value is None or pii == "NONE":
         return value
@@ -269,6 +338,9 @@ def mask(value: Optional[str], pii: str) -> Optional[str]:
         return "***" + v[-2:] if len(v) > 2 else "***"
     if pii == "NAME":
         return (v.strip()[:1] + "***") if v.strip() else "***"
+    if pii in ("SSN", "CARD"):
+        digits = re.sub(r"\D", "", v)
+        return "***" + digits[-4:] if len(digits) > 8 else "***"
     return "***"
 
 
@@ -292,6 +364,8 @@ def build_profile(name: str, data_type: str, stats: Dict[str, Any], frequencies:
     card = cardinality(stats.get("distinct_count"), non_null)
     semantic = infer_semantic_type(name, family, patterns, card)
     pii = pii_classification(semantic)
+    if pii == "NONE" and family in ("TEXT", "OTHER"):
+        pii = value_pii(frequencies)
     if pii != "NONE":
         stats = {**stats, "min": None, "max": None}
     masked_freq = [{"value": mask(f["value"], pii), "count": f["count"]} for f in frequencies]
@@ -308,7 +382,8 @@ def build_profile(name: str, data_type: str, stats: Dict[str, Any], frequencies:
         "statistics": {
             **stats,
             "frequency_distribution": masked_freq,
-            "date_format": date_format(patterns) if family == "TEXT" else None,
+            "date_format": (date_format(patterns, [f.get("value") for f in frequencies]) if family == "TEXT"
+                            else None),
             "enum_values": ([f["value"] for f in masked_freq]
                             if card in ("LOW", "CONSTANT") and stats.get("distinct_count", 99) <= ENUM_MAX_DISTINCT
                             else None),

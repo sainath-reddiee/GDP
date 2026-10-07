@@ -34,12 +34,26 @@ SATURATION = 8.0
 COLUMN_HIT_CAP = 3
 
 
+def _tokens(text: str) -> List[str]:
+    return [t for t in re.split(r"[^A-Z0-9]+", text.upper()) if t]
+
+
 def _matches(keyword: str, name: str) -> bool:
-    """Short keywords match whole tokens (LOT never matches PILOT); longer or punctuated ones match substrings."""
+    """Keyword hits on whole name tokens, never inside another word: SITE does not match WEBSITE, LAND does not
+    match ISLAND. A keyword of 4+ characters also matches as a token prefix (BUILDING ~ BUILDINGS), a multi-token
+    keyword (EFF_STATUS) matches the same token run, and punctuation-only keywords (__C) match as text."""
     kw, upper = keyword.upper(), name.upper()
-    if len(kw) >= 4 or not kw.isalnum():
+    if not re.search(r"[A-Z0-9]", kw):
         return kw in upper
-    return kw in {t for t in re.split(r"[^A-Z0-9]+", upper) if t}
+    if not kw.replace("_", "").isalnum():
+        return kw in upper
+    want, have = _tokens(kw), _tokens(upper)
+    if not want:
+        return False
+    if len(want) > 1:
+        return any(have[i:i + len(want)] == want for i in range(len(have) - len(want) + 1))
+    token = want[0]
+    return any(t == token or (len(token) >= 4 and t.startswith(token)) for t in have)
 
 
 def signal_score(tables: Iterable[str], columns: Iterable[str], signals: Dict[str, Dict[str, float]]) -> Tuple[float, List[str]]:

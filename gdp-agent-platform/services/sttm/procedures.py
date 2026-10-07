@@ -14,7 +14,8 @@ from services.common.llm import complete_json
 from services.common.sql import clip, insert_rows, rows, scalar, variant
 from services.common.stage import Stage
 from services.knowledge.procedures import current_knowledge_version
-from services.knowledge.usage import STAGE_SKILLS, assert_safe_transformation, domain_context, use_skills
+from services.common.standard import run_standard
+from services.knowledge.usage import assert_safe_transformation, domain_context, stage_skills, use_skills
 from services.mapping.procedures import target_columns, target_table
 from services.sttm.assemble import assemble
 from services.sttm.join_graph import apply_overrides, build_join_graph, join_logic_by_table
@@ -27,8 +28,8 @@ def generate_sttm(session, run_id: str) -> Dict[str, Any]:
     stage.walk(["MAPPING_APPROVED", "STTM_PENDING"], "STTM generation started")
     with tool_call(session, run_id, "generate_sttm", {"run_id": run_id}) as call:
         try:
-            use_skills(session, STAGE_SKILLS["STTM"])
             run = stage.run
+            use_skills(session, stage_skills("STTM", run_standard(run)))
             target = target_table(session, run)
             columns = target_columns(session, target["TARGET_TABLE_ID"])
             source = rows(session, "SELECT SOURCE_SYSTEM_NAME FROM SOURCE.SOURCE_REGISTRY WHERE SOURCE_SYSTEM_ID = ?",
@@ -189,14 +190,15 @@ def _line_context(session, run_id: str, payload: Dict[str, Any]) -> Dict[str, An
         "domain_id": (line or {}).get("DOMAIN_ID"),
     }
     assert context["target_column"], "target_column or sttm_line_id is required"
-    run = rows(session, "SELECT DOMAIN_ID FROM CORE.WORKFLOW_RUN WHERE RUN_ID = ?", [run_id])
+    run = rows(session, "SELECT * FROM CORE.WORKFLOW_RUN WHERE RUN_ID = ?", [run_id])
+    context["standard"] = run_standard(run[0] if run else {})
     context["domain_id"] = context["domain_id"] or (run[0]["DOMAIN_ID"] if run else None)
     context["profile"] = _profile_for(session, run_id, context["source_table"], context["source_column"])
     context["prior_rules"] = _prior_rules(session, context["domain_id"], context["target_column"])
     try:
         target = rows(session, "SELECT TARGET_MODEL FROM CORE.WORKFLOW_RUN WHERE RUN_ID = ?", [run_id])
         model = ((target[0]["TARGET_MODEL"] if target else "") or "").split(".")[-1] or None
-        context["domain_rules"] = domain_context(session, context["domain_id"], model, 3000)
+        context["domain_rules"] = domain_context(session, context["domain_id"], model, 3000, context["standard"])
     except Exception:
         context["domain_rules"] = ""
     return context
@@ -211,7 +213,7 @@ def refine_transformation(session, run_id: str, payload_json: str) -> Dict[str, 
                    {"target": context["target_column"], "prompt": clip(prompt, 500)}) as call:
         try:
             try:
-                use_skills(session, STAGE_SKILLS["STTM"])
+                use_skills(session, stage_skills("STTM", context["standard"]))
             except Exception:
                 pass
             output, usage, model = complete_json(session, refine_prompt(context, prompt), REFINE_SCHEMA, max_tokens=1500)
@@ -255,7 +257,10 @@ def apply_transformation(session, run_id: str, payload_json: str) -> Dict[str, A
         f"{context.get('source_table')}.{context.get('source_column')} -> {context['target_column']}: {sql}. "
         f"{rationale or prompt}"
     )
-    ref = f"transform.{str(context['target_column']).upper()}"
+    model_row = rows(session, "SELECT TARGET_MODEL FROM CORE.WORKFLOW_RUN WHERE RUN_ID = ?", [run_id])
+    target_table = str((model_row[0]["TARGET_MODEL"] if model_row else "") or "").split(".")[-1].strip('"').upper()
+    # one rule per domain + target table + column: the same column name on another table is a different rule
+    ref = f"transform.{target_table}.{str(context['target_column']).upper()}" if target_table         else f"transform.{str(context['target_column']).upper()}"
     with tool_call(session, run_id, "apply_transformation",
                    {"target": context["target_column"], "sql": clip(sql, 400)}) as call:
         session.sql("""UPDATE CONTRACT.STTM_LINE SET TRANSFORMATION = ?, MAPPING_TYPE = ?
@@ -278,7 +283,8 @@ def apply_transformation(session, run_id: str, payload_json: str) -> Dict[str, A
                          "'ACTIVE'", "?::NUMBER", "TRUE", "CURRENT_USER()"],
                         [[str(uuid.uuid4()), context["domain_id"],
                           f"Transform {context['target_column']}"[:500], clip(content, 8000),
-                          {"target_column": context["target_column"], "source_column": context.get("source_column"),
+                          {"target_column": context["target_column"], "target_table": target_table or None,
+                           "source_column": context.get("source_column"),
                            "source_table": context.get("source_table"), "expression": expression, "sql": sql,
                            "prompt": prompt, "rationale": rationale, "soda_checks": soda_checks,
                            "dbt_notes": payload.get("dbt_notes"), "run_id": run_id,

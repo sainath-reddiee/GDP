@@ -1,6 +1,7 @@
 {
   "domain": {
     "name": "GDP",
+    "standard": "GDP",
     "description": "Global Data Platform conformed model: customers, accounts and sales hierarchies shared across business units.",
     "owner": "GDP Data Office"
   },

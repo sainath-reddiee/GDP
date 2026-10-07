@@ -32,6 +32,12 @@ def snake(name: str) -> str:
     return re.sub(r"[^a-z0-9]+", "_", (name or "").strip().lower()).strip("_") or "x"
 
 
+def real_name(sources: Dict[str, Dict[str, Any]], table: str, column: str) -> str:
+    """Exact stored spelling of a source column (matching is case-insensitive, SQL must not be)."""
+    names = (sources.get(str(table).upper()) or {}).get("names") or {}
+    return names.get(str(column).upper(), str(column))
+
+
 def quote(col: str) -> str:
     """Bronze column reference: plain when it is a simple UPPER identifier, else double-quoted."""
     value = (col or "").strip().strip('"')
@@ -173,24 +179,38 @@ def _ordered_targets(lines: List[Dict[str, Any]], target_columns: List[Dict[str,
     return out
 
 
+class NoUniqueKey(ValueError):
+    """No confirmed unique key for the record: generating anyway would silently collapse rows in dedup."""
+
+
 def _unique_key(cols: List[Dict[str, Any]], business_keys: List[str], sources: Dict[str, Dict[str, Any]],
-                primary: str) -> Tuple[List[Dict[str, Any]], str]:
-    """Columns forming SOURCE_UNIQUE_ID: design business keys -> registry keys -> first *_ID/_LID/_KEY column."""
+                primary: str, key_candidates: Optional[Dict[str, List[str]]] = None
+                ) -> Tuple[List[Dict[str, Any]], str]:
+    """Columns forming SOURCE_UNIQUE_ID, only from confirmed keys: STTM business keys -> target registry business
+    keys -> a column the profiler measured as unique on the driving table. A key-like name alone is used only when
+    the run has no profiles at all. Without any of these generation stops instead of guessing."""
     keys = [k.upper() for k in business_keys or []]
     picked = [c for c in cols if str(c["target_column"]).upper() in keys and c.get("source_column")]
     reason = "STTM business keys"
     if not picked:
         picked = [c for c in cols if (c.get("_registry") or {}).get("is_business_key") and c.get("source_column")]
         reason = "target registry business keys"
-    if not picked:
-        candidates = [c for c in cols if c.get("source_column") and KEY_SUFFIX.search(str(c["target_column"]).upper())
-                      and (c.get("source_table") or primary).upper() == primary]
-        picked = candidates[:1]
-        reason = f"inferred from {picked[0]['target_column']} (first key-like column; no business key in the STTM)" \
+    on_primary = [c for c in cols if c.get("source_column") and (c.get("source_table") or primary).upper() == primary]
+    if not picked and key_candidates is not None:
+        unique = {str(k).upper() for k in key_candidates.get(primary, [])}
+        measured = [c for c in on_primary if str(c["source_column"]).upper() in unique]
+        measured.sort(key=lambda c: (not KEY_SUFFIX.search(str(c["target_column"]).upper()), str(c["target_column"])))
+        picked = measured[:1]
+        reason = f"profiled as unique: {picked[0]['source_column']} (confirm business keys in the STTM)" if picked else ""
+    if not picked and not key_candidates:
+        named = [c for c in on_primary if KEY_SUFFIX.search(str(c["target_column"]).upper())]
+        picked = named[:1]
+        reason = f"inferred from {picked[0]['target_column']} (no profiles; confirm business keys in the STTM)" \
             if picked else ""
     if not picked:
-        mapped = [c for c in cols if c.get("source_column")]
-        picked, reason = mapped[:1], "fallback: first mapped column (set business keys in the STTM)"
+        raise NoUniqueKey(
+            f"NO_UNIQUE_KEY: no confirmed unique key for {primary}. Mark the business key columns in the STTM "
+            "(or the target registry), or re-profile so a unique column is measured, then generate again.")
     return picked, reason
 
 
@@ -199,7 +219,7 @@ def _source_unique_id(keys: List[Dict[str, Any]], alias: str, sources: Dict[str,
     for i, key in enumerate(keys):
         table = str(key.get("source_table") or "").upper()
         src_type = (sources.get(table) or {}).get("columns", {}).get(str(key["source_column"]).upper(), "TEXT")
-        ref = f"{alias}.{quote(key['source_column'])}"
+        ref = f"{alias}.{quote(real_name(sources, table, key['source_column']))}"
         ref = ref if family(src_type) == "text" else f"{ref}::varchar"
         parts.append(f"upper(trim({ref}))" if i == 0 else f"coalesce(upper(trim({ref})), '')")
     return " || '||' || ".join(parts) if parts else "null"
@@ -246,7 +266,8 @@ def _join_plan(primary: str, sources: Dict[str, Dict[str, Any]], used: Iterable[
                 right_col = right_col or left_col
                 if edge["left"].upper() != anchor:
                     left_col, right_col = right_col, left_col
-                conds.append(f"{aliases[anchor]}.{quote(left_col)} = {aliases[table]}.{quote(right_col)}")
+                conds.append(f"{aliases[anchor]}.{quote(real_name(sources, anchor, left_col))} = "
+                             f"{aliases[table]}.{quote(real_name(sources, table, right_col))}")
             card = edge["cardinality"] if edge["left"].upper() == anchor else {"N:1": "1:N", "1:N": "N:1"}.get(
                 edge["cardinality"], edge["cardinality"])
             plan.append({"table": table, "alias": aliases[table], "on": " and ".join(conds), "cardinality": card,
@@ -289,7 +310,10 @@ def _sources_yml(name: str, source_key: str, sources: Dict[str, Dict[str, Any]],
     ]
     for table, info in sources.items():
         lines += [f"      - name: {snake(table)}",
-                  f"        identifier: \"{info['identifier']}\"",
+                  f"        identifier: \"{info['identifier']}\""]
+        if not SIMPLE.match(str(info.get("identifier") or "")):
+            lines += ["        quoting:", "          identifier: true"]  # keep lower/mixed-case table names exact
+        lines += [
                   f"        description: \"{system} {table.lower()} (landed copy)\""]
         if info.get("columns"):
             lines.append("        columns:")
@@ -449,8 +473,16 @@ def generate(inputs: Dict[str, Any], skeleton: Optional[Dict[str, str]] = None) 
     for table in unjoined:
         anomalies.append(f"no join path from {primary} to {table}; its columns load as null with a TODO")
 
-    keys, key_reason = _unique_key(cols, inputs.get("business_keys") or [], sources, primary)
-    uid = _source_unique_id(keys, "o", sources)
+    explicit = next((str(c.get("transformation")).strip() for c in cols
+                     if str(c["target_column"]).upper() == "SOURCE_UNIQUE_ID" and not c.get("source_column")
+                     and str(c.get("transformation") or "").strip()
+                     and not str(c.get("transformation")).strip().upper().startswith("NULL")), None)
+    if explicit:  # the STTM defines the record key itself
+        uid, key_reason, keys = f"({explicit})", "STTM SOURCE_UNIQUE_ID expression", []
+    else:
+        keys, key_reason = _unique_key(cols, inputs.get("business_keys") or [], sources, primary,
+                                       inputs.get("key_candidates"))
+        uid = _source_unique_id(keys, "o", sources)
     pcols = sources[primary]["columns"]
     updated_src = _updated_column(pcols, prefix)
     inserted_src = f"{prefix}_INSERTED_TS" if prefix and f"{prefix}_INSERTED_TS" in pcols else None
@@ -467,10 +499,13 @@ def generate(inputs: Dict[str, Any], skeleton: Optional[Dict[str, str]] = None) 
     todos = 0
     need_ref_system = False
     has_uid_col = any(str(c["target_column"]).upper() == "SOURCE_UNIQUE_ID" for c in cols)
+    def pref(col: str) -> str:  # driving-table column by its exact spelling
+        return f"o.{quote(real_name(sources, primary, col))}"
+
     audit_exprs = {
-        "IS_ACTIVE": f"o.{active_src}" if active_src else "true",
-        "INSERTED_TS": f"o.{inserted_src}" if inserted_src else "current_timestamp()::timestamp_ntz",
-        "UPDATED_TS": f"o.{updated_src}" if updated_src else "current_timestamp()::timestamp_ntz",
+        "IS_ACTIVE": pref(active_src) if active_src else "true",
+        "INSERTED_TS": pref(inserted_src) if inserted_src else "current_timestamp()::timestamp_ntz",
+        "UPDATED_TS": pref(updated_src) if updated_src else "current_timestamp()::timestamp_ntz",
         "INSERTED_BY": "current_user()",
         "UPDATED_BY": "current_user()",
     }
@@ -481,6 +516,7 @@ def generate(inputs: Dict[str, Any], skeleton: Optional[Dict[str, str]] = None) 
         ttype = str(c.get("target_datatype") or "")
         table = str(c.get("source_table") or primary).upper()
         scol = str(c.get("source_column") or "").upper()
+        scol_sql = real_name(sources, table, c.get("source_column") or "")
         stype = sources.get(table, {}).get("columns", {}).get(scol, "")
         note, cast = "", None
         if cls == "AUDIT":
@@ -512,7 +548,7 @@ def generate(inputs: Dict[str, Any], skeleton: Optional[Dict[str, str]] = None) 
             present = " ".join(sp_select)
             for attr in lookup["attributes"]:
                 if f" as {attr}" not in present:
-                    sp_select.append(f"nullif(trim({a}.{quote(scol)}), '') as {attr}")
+                    sp_select.append(f"nullif(trim({a}.{quote(scol_sql)}), '') as {attr}")
             for cte in lookup["ctes"]:
                 if cte not in contract_ctes:
                     contract_ctes.append(cte)
@@ -552,7 +588,7 @@ def generate(inputs: Dict[str, Any], skeleton: Optional[Dict[str, str]] = None) 
                 expr = f"o.{alias}"
                 note = "STTM transformation"
             else:
-                ref = f"{a}.{quote(scol)}"
+                ref = f"{a}.{quote(scol_sql)}"
                 if family(stype or ttype) == "text":
                     sp_select.append(f"nullif(trim({ref}), '') as {alias}")
                 else:
@@ -581,9 +617,9 @@ def generate(inputs: Dict[str, Any], skeleton: Optional[Dict[str, str]] = None) 
         if j["cardinality"] in {"1:N", "N:N"}:
             anomalies.append(f"{j['cardinality']} join to {j['table']}: the dedup keeps one {j['table']} row per key")
     for col in (inserted_src, updated_src, active_src):
-        if col and f"o.{col}" not in "".join(sp_select):
-            sp_select.append(f"o.{col}")
-    order = f"o.{updated_src} desc" if updated_src else "source_unique_id"
+        if col and pref(col) not in "".join(sp_select):
+            sp_select.append(pref(col))
+    order = f"{pref(updated_src)} desc" if updated_src else "source_unique_id"
     sp = (f"with sp_{target} as (\n    select\n        " + ",\n        ".join(sp_select) + "\n" + sp_from
           + f"\n    where nullif({uid}, '') is not null"
           + f"\n    qualify row_number() over (partition by {uid} order by {order}) = 1\n)")
