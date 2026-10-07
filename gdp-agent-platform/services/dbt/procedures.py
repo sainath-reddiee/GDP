@@ -11,13 +11,14 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 from services.common.audit import tool_call
+from services.common.standard import GDP, default_prefix, run_standard
 from services.common.sql import clip, insert_rows, rows, scalar, variant
 from services.common.stage import Stage
 from services.dbt.inputs import assemble, load_inputs, session_query
 from services.dbt.onboard import ENGINE
 from services.dbt.workspace import create_dbt_project, fetch_branch_files, origin_allowed, push_pending
 from services.knowledge.procedures import current_knowledge_version, load_skill
-from services.knowledge.usage import STAGE_SKILLS, use_skills
+from services.knowledge.usage import stage_skills, use_skills
 from services.soda.expectations import render_yaml
 from services.soda.procedures import _current_sttm, _lines
 
@@ -66,7 +67,8 @@ POST_STTM = (
 )
 
 
-def merge_branch_plan(payload: Dict[str, Any], prior: Dict[str, Any], run_name: str, run_id: str) -> Dict[str, Any]:
+def merge_branch_plan(payload: Dict[str, Any], prior: Dict[str, Any], run_name: str, run_id: str,
+                      standard: str = GDP) -> Dict[str, Any]:
     """Merge the request body over the last stored plan. Empty/null fields do not wipe prior values."""
     def pick(*keys: str, default: str = "") -> str:
         for src in (payload, prior):
@@ -86,7 +88,7 @@ def merge_branch_plan(payload: Dict[str, Any], prior: Dict[str, Any], run_name: 
     origin = pick("origin", "repo")
     return {
         "base_branch": pick("base_branch", default="main") or "main",
-        "cut_branch": pick("cut_branch", default=f"feat/gdp-{slug}"),
+        "cut_branch": pick("cut_branch", default=f"feat/{'gdp' if standard == GDP else 'onboard'}-{slug}"),
         "repo": pick("repo", "origin"),
         "origin": origin,
         "git_repository": pick("git_repository"),
@@ -95,7 +97,7 @@ def merge_branch_plan(payload: Dict[str, Any], prior: Dict[str, Any], run_name: 
         "push": flag("push", False),
         "fetch_skeleton": flag("fetch_skeleton", True),
         "allowed_prefixes": payload.get("allowed_prefixes") or prior.get("allowed_prefixes") or [],
-        "prefix": (payload["prefix"] if "prefix" in payload else prior.get("prefix", "GDP")) or "",
+        "prefix": (payload["prefix"] if "prefix" in payload else prior.get("prefix", default_prefix(standard))) or "",
         "source_key": pick("source_key"),
         "domain_folder": pick("domain_folder"),
     }
@@ -108,7 +110,9 @@ def _stored_plan(session, run_id: str) -> Dict[str, Any]:
 
 
 def _branch_plan(session, run_id: str, payload: Dict[str, Any], run_name: str) -> Dict[str, Any]:
-    return merge_branch_plan(payload or {}, _stored_plan(session, run_id), run_name, run_id)
+    run = rows(session, "SELECT * FROM CORE.WORKFLOW_RUN WHERE RUN_ID = ?", [run_id])
+    return merge_branch_plan(payload or {}, _stored_plan(session, run_id), run_name, run_id,
+                             run_standard(run[0] if run else {}))
 
 
 def _store_branch(session, run_id: str, domain_id: str, plan: Dict[str, str], instruction: str) -> None:
@@ -151,7 +155,7 @@ def generate_dbt(session, run_id: str, payload_json: str = "{}") -> Dict[str, An
             walked = False
     with tool_call(session, run_id, "generate_dbt", {"run_id": run_id}) as call:
         try:
-            use_skills(session, STAGE_SKILLS["DBT"])
+            use_skills(session, stage_skills("DBT", run_standard(stage.run)))
             sttm = _current_sttm(session, run_id)
             design = variant(sttm["TABLE_DESIGN"]) or {}
             lines = [{
@@ -177,7 +181,7 @@ def generate_dbt(session, run_id: str, payload_json: str = "{}") -> Dict[str, An
 
             soda_yaml = render_yaml(sttm_target_name(session, sttm).lower(), checks)
             plan = _branch_plan(session, run_id, payload, stage.run.get("RUN_NAME") or "")
-            skill_names = STAGE_SKILLS["DBT"]
+            skill_names = stage_skills("DBT", run_standard(stage.run))
             skill_meta = []
             for name in skill_names:
                 try:

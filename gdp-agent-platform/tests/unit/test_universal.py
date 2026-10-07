@@ -108,3 +108,43 @@ def test_validation_accepts_the_generators_own_layout():
     results = {r["validation_type"]: r for r in run(files, lines, files["soda/checks.yml"])}
     for kind in ("REQUIRED_COLUMNS", "STTM_CONSISTENCY", "SCHEMA", "NAMING"):
         assert results[kind]["status"] == "PASSED", (kind, results[kind]["findings"])
+
+
+def test_technical_columns_come_from_the_table_definition_first():
+    from services.common.standard import GDP, GENERIC, default_prefix, run_standard, technical_semantic
+
+    # any company: the column definition decides
+    assert technical_semantic("ROW_ID", GENERIC, is_identity=True) == "SURROGATE_KEY"
+    assert technical_semantic("loaded", GENERIC, column_default="CURRENT_TIMESTAMP()") == "AUDIT_TIMESTAMP"
+    assert technical_semantic("ORDERS_HKEY", GENERIC, "ORDERS") is None  # GDP naming is not imposed
+    # GDP runs add the GDP conventions
+    assert technical_semantic("ORDERS_HKEY", GDP, "ORDERS") == "SURROGATE_KEY"
+    assert technical_semantic("GDP_INSERTED_TS", GDP, "ORDERS") == "AUDIT_TIMESTAMP"
+    assert technical_semantic("COMPANY_CORE_SKEY", GDP, "COMPANY_ADDRESS", hub_fk="COMPANY_CORE_SKEY") == "DERIVED_KEY"
+    assert technical_semantic("COMPANY_CORE_SKEY", GDP, "OPPORTUNITY_CORE") is None  # another hub: mapped
+    assert run_standard({}) == GDP and run_standard({"MODELING_STANDARD": "generic"}) == GENERIC
+    assert default_prefix(GENERIC) == "" and default_prefix(GDP) == "GDP"
+
+
+def test_modeling_standard_drives_prefix_branch_and_skills():
+    from services.common.standard import GDP, GENERIC, default_prefix, run_standard
+    from services.dbt.procedures import merge_branch_plan
+    from services.knowledge.usage import stage_skills
+
+    assert run_standard({}) == GDP  # runs from before the choice keep GDP behaviour
+    assert run_standard({"MODELING_STANDARD": "generic"}) == GENERIC
+    assert default_prefix(GENERIC) == ""
+    plan = merge_branch_plan({}, {}, "Orders onboarding", "r1", GENERIC)
+    assert plan["prefix"] == "" and plan["cut_branch"].startswith("feat/onboard-")
+    assert merge_branch_plan({}, {}, "Orders", "r1")["prefix"] == "GDP"
+    assert not [s for s in stage_skills("DBT", GENERIC) if s.startswith("GDP")]
+    assert "GDP-DBT-ONBOARD-SOURCE" in stage_skills("DBT", GDP)
+
+
+def test_generic_standard_ignores_gdp_naming():
+    from services.common.standard import GDP, GENERIC, technical_semantic
+
+    assert technical_semantic("CUSTOMER_HKEY", GDP) == "SURROGATE_KEY"
+    assert technical_semantic("CUSTOMER_HKEY", GENERIC) is None
+    assert technical_semantic("id", GENERIC, is_identity=True) == "SURROGATE_KEY"
+    assert technical_semantic("loaded_at", GENERIC, column_default="CURRENT_TIMESTAMP()") == "AUDIT_TIMESTAMP"

@@ -19,6 +19,7 @@ from services.common.stage import Stage
 from services.knowledge import search as ks
 from services.knowledge.procedures import current_knowledge_version, identify_domain
 from services.knowledge.validate import normalize_content
+from services.common.standard import run_standard
 from services.knowledge.usage import STAGE_SKILLS, assert_safe_transformation, domain_context, use_skills
 from services.mapping import features, scoring
 from services.mapping.feedback import pattern as feedback_pattern
@@ -232,7 +233,8 @@ def generate_mapping_candidates(session, run_id: str) -> Dict[str, Any]:
                              f"{target['TARGET_TABLE']} has no registered columns. Register the table again from "
                              "Sources so its columns are captured, or pick another target.")
             try:
-                guidance += "\n\n" + domain_context(session, run["DOMAIN_ID"], target["TARGET_TABLE"], 4000)
+                guidance += "\n\n" + domain_context(session, run["DOMAIN_ID"], target["TARGET_TABLE"], 4000,
+                                                     run_standard(run))
             except Exception:
                 pass
             mappable = features.mappable_targets(targets)

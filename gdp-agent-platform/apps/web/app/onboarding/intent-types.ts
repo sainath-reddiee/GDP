@@ -64,4 +64,5 @@ export type ModelGraph = {
 export type DomainRow = {
   domain_id: string; domain_name: string; description?: string | null;
   target_tables?: number;
+  standard?: string | null;
 };

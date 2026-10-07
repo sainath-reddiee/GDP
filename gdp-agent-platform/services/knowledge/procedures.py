@@ -17,6 +17,7 @@ from services.common.audit import record_cost, tool_call
 from services.common.sql import clip, config_value, insert_rows, rows, scalar, variant
 from services.common.stage import Stage
 from services.knowledge import search as ks
+from services.common.standard import GDP, GENERIC, run_standard
 from services.knowledge.domain import infer_domain
 from services.knowledge.validate import normalize_content
 from services.knowledge.terms import entity_tokens, token_set
@@ -43,8 +44,9 @@ def _domain_terms(session) -> List[Dict[str, Any]]:
                                   JOIN KNOWLEDGE.TARGET_TABLE_REGISTRY T ON T.TARGET_TABLE_ID = C.TARGET_TABLE_ID
                                   WHERE T.DOMAIN_ID = ? AND T.ACTIVE_FLAG""", [d["DOMAIN_ID"]]):
             terms |= token_set(c["COLUMN_NAME"]) | entity_tokens(c["TARGET_TABLE"])
-        signals = (variant(d.get("CONFIG")) or {}).get("signals")
-        out.append({"domain_id": d["DOMAIN_ID"], "name": d["DOMAIN_NAME"], "terms": terms, "signals": signals})
+        config = variant(d.get("CONFIG")) or {}
+        out.append({"domain_id": d["DOMAIN_ID"], "name": d["DOMAIN_NAME"], "terms": terms,
+                    "signals": config.get("signals"), "standard": config.get("standard")})
     return out
 
 
@@ -85,12 +87,15 @@ def identify_domain(session, run_id: str) -> Dict[str, Any]:
             vocab = _domain_terms(session)
             # Same rule as the Sources page: when packs define detection signals, a pack without signals (a generic
             # demo pack) does not compete on common words like ID or NAME. A domain already stamped stays eligible.
+            stamped = stage.run.get("DOMAIN_ID")
+            if run_standard(stage.run) == GENERIC:  # "not GDP": GDP packs are not offered
+                vocab = [d for d in vocab if d.get("standard") != GDP or d["domain_id"] == stamped]
             if any(d.get("signals") for d in vocab):
-                stamped = stage.run.get("DOMAIN_ID")
                 vocab = [d for d in vocab if d.get("signals") or d["domain_id"] == stamped]
             ranked = infer_domain(sorted({p["TABLE_NAME"] for p in profile}), [p["COLUMN_NAME"] for p in profile],
                                   vocab, hits)
-            assert ranked, "no active domains are registered"
+            assert ranked, ("NO_DOMAIN_PACK: no knowledge pack applies to this run; map without a pack or create "
+                            "one on the Domains page")
             threshold = float(config_value(session, "DOMAIN_CONFIDENCE_THRESHOLD", 0.3))
         except Exception as exc:
             call.status, call.error = "FAILED", clip(exc)

@@ -10,6 +10,7 @@ import json
 import re
 from typing import Any, Callable, Dict, List, Optional
 
+from services.common.standard import GDP, default_prefix, run_standard
 from services.source.er_graph import infer_joins
 
 Query = Callable[[str, list], List[Dict[str, Any]]]
@@ -38,12 +39,13 @@ def source_key_of(name: str) -> str:
 
 def load_inputs(query: Query, run_id: str, plan: Dict[str, Any], sttm: Dict[str, Any],
                 lines: List[Dict[str, Any]]) -> Dict[str, Any]:
-    run = (query("""SELECT R.RUN_NAME, R.TARGET_MODEL, R.DOMAIN_ID, D.DOMAIN_NAME, S.SOURCE_SYSTEM_NAME
+    run = (query("""SELECT R.*, D.DOMAIN_NAME, S.SOURCE_SYSTEM_NAME
                       FROM CORE.WORKFLOW_RUN R
                       LEFT JOIN KNOWLEDGE.DOMAIN_REGISTRY D ON D.DOMAIN_ID = R.DOMAIN_ID
                       LEFT JOIN SOURCE.SOURCE_REGISTRY S ON S.SOURCE_SYSTEM_ID = R.SOURCE_SYSTEM_ID
                      WHERE R.RUN_ID = ?""", [run_id]) or [{}])[0]
     design = sttm.get("table_design") or {}
+    standard = run_standard(run)
     target = design.get("target_table") or str(run.get("TARGET_MODEL") or "target").split(".")[-1]
     landed = query("""SELECT SOURCE_TABLE, LANDING_TABLE, LANDING_DATABASE, LANDING_SCHEMA
                         FROM SOURCE.LANDING_TABLE_REGISTRY
@@ -95,9 +97,10 @@ def load_inputs(query: Query, run_id: str, plan: Dict[str, Any], sttm: Dict[str,
               for s in sources}
     system = str(run.get("SOURCE_SYSTEM_NAME") or "SOURCE")
     return {
-        "domain": plan.get("domain_folder") or run.get("DOMAIN_NAME") or "gdp",
+        "domain": plan.get("domain_folder") or run.get("DOMAIN_NAME") or ("gdp" if standard == GDP else "general"),
         "target": target,
-        "prefix": plan.get("prefix") if plan.get("prefix") is not None else "GDP",
+        "prefix": plan.get("prefix") if plan.get("prefix") is not None else default_prefix(standard),
+        "standard": standard,
         "source_key": plan.get("source_key") or source_key_of(system),
         "source_system": system.upper(),
         "business_keys": design.get("business_keys") or [],

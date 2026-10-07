@@ -13,6 +13,9 @@ import { Input, Select, Textarea } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { assistMapping, saveMappingDecisions } from "../pipeline-actions";
 import { MappingDetail, pct, ScoreBar } from "./mapping-detail";
+
+/** Target columns the platform fills (keys, record source, audit, hub reference); never mapped from a source. */
+const SYSTEM_DERIVED: (string | null)[] = ["SURROGATE_KEY", "RECORD_SOURCE", "AUDIT_TIMESTAMP", "DERIVED_KEY"];
 import {
   buildRows, planAcceptAi, planApproveTop, planNull, withJustification, type BulkPlan, type MappingRow,
 } from "./mapping-plan";
@@ -180,7 +183,7 @@ export function MappingBoard({ runId, data }: { runId: string; data: MappingOver
   }, [focus]);
 
   const total = rows.length || 1;
-  const required = data.targets.filter((t) => !t.nullable && !["SURROGATE_KEY", "RECORD_SOURCE", "AUDIT_TIMESTAMP"].includes(t.semantic_type));
+  const required = data.targets.filter((t) => !t.nullable && !SYSTEM_DERIVED.includes(t.semantic_type));
   const aiCount = Object.keys(suggestions).length;
 
   return (
@@ -489,7 +492,7 @@ function TargetCoverage({
       .sort((a, b) => b.score - a.score)
       .slice(0, 3);
   const aiFor = (targetId: string) => Object.values(suggestions).find((s) => s.target_column_id === targetId);
-  const systemDerived = ["SURROGATE_KEY", "RECORD_SOURCE", "AUDIT_TIMESTAMP"];
+  const systemDerived = SYSTEM_DERIVED;
 
   return (
     <div className="max-h-[44rem] overflow-y-auto">

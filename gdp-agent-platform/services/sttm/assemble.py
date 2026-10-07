@@ -39,6 +39,8 @@ def derived_expression(column: Dict[str, Any], source_system: str) -> str:
         from services.source.identifiers import sql_ident
 
         return "MD5(CAST(" + " || '|' || ".join(sql_ident(k) for k in keys) + " AS VARCHAR))"
+    if semantic == "DERIVED_KEY":
+        return "NULL /* resolved from the hub by the dbt model */"
     if semantic == "RECORD_SOURCE":
         return f"'{source_system}'"
     if semantic == "AUDIT_TIMESTAMP":

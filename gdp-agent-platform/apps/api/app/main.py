@@ -9,7 +9,7 @@ import threading
 import time
 import uuid
 from pathlib import Path
-from typing import Optional
+from typing import Literal, Optional
 
 from fastapi import Depends, FastAPI, File, Header, HTTPException, Request, UploadFile
 
@@ -105,6 +105,7 @@ class CreateRun(BaseModel):
     domain_id: Optional[str] = None
     environment: str = "DEV"
     intent: Optional[dict] = None
+    modeling_standard: Optional[Literal["GDP", "GENERIC"]] = None
 
 
 class Transition(BaseModel):
@@ -520,6 +521,8 @@ def create_run(body: CreateRun, db: Db = Depends(current_db)):
         "DOMAIN_ID": _domain_id_for_target(db, body.target_model, body.domain_id),
         "ENVIRONMENT": body.environment,
     }
+    if body.modeling_standard:
+        payload["MODELING_STANDARD"] = body.modeling_standard
     try:
         created = db.call("CALL CORE.CREATE_RUN(%s)", (json.dumps(payload),))
     except Exception as exc:
@@ -1568,6 +1571,7 @@ def domains(db: Db = Depends(current_db)):
     return {"domains": db.query(
         """
         SELECT D.DOMAIN_ID, D.DOMAIN_NAME, D.DESCRIPTION, D.OWNER, D.ACTIVE_FLAG, D.VERSION,
+               D.CONFIG:standard::VARCHAR AS STANDARD,
                (SELECT COUNT(*) FROM KNOWLEDGE.DOMAIN_KNOWLEDGE K
                  WHERE K.DOMAIN_ID = D.DOMAIN_ID AND K.IS_CURRENT) AS KNOWLEDGE_ITEMS,
                (SELECT COUNT(*) FROM KNOWLEDGE.TARGET_TABLE_REGISTRY T
@@ -1904,7 +1908,7 @@ def get_mapping(run_id: str, db: Db = Depends(current_db)):
     table = _mapping_target_table(db, run_id)
     targets = _mapping_targets(db, table["target_table_id"]) if table else []
     profile = _mapping_profile(db, run_id) if candidates else {}
-    system_derived = ("SURROGATE_KEY", "RECORD_SOURCE", "AUDIT_TIMESTAMP")
+    from services.common.standard import SYSTEM_DERIVED as system_derived
     sources = {c["source_column_id"] for c in candidates}
     decided = {d["source_column_id"] for d in decisions}
     mapped = {d["target_column_id"] for d in decisions if d["decision"] != "REJECTED" and d["target_column_id"]}
@@ -3216,6 +3220,7 @@ class ModelingRunRequest(BaseModel):
     targets: list[ModelTarget] = Field(default_factory=list, max_length=50)
     proposed_name: Optional[str] = Field(default=None, max_length=255)
     proposed_schema: Optional[str] = Field(default=None, max_length=255)
+    modeling_standard: Literal["GDP", "GENERIC"] = "GENERIC"
 
 
 def _proposed_name(tables: list[str]) -> str:
@@ -3286,13 +3291,15 @@ def send_to_modeling(source_id: str, body: ModelingRunRequest, db: Db = Depends(
         "proposed_target": proposed,
         "model_existing": bool(targets), "targets": targets,
         "created_at": time.strftime("%Y-%m-%dT%H:%M:%S"), "domain_id": body.domain_id,
+        "modeling_standard": body.modeling_standard,
         "source": {"origin": "snowflake", "connection_id": source_id, "database": src["database_name"],
                    "schema": src["schema_name"], "source_system_name": src["source_system_name"],
                    "source_type": src["source_type"], "tables": tables},
         "target": {"storage_type": "IN_PLACE"},
     }
     created = create_run(CreateRun(run_name=run_name, domain_id=body.domain_id or (proposed or {}).get("domain_id"),
-                                   target_model=targets[0]["fqn"] if targets else proposed["fqn"], intent=intent), db)
+                                   target_model=targets[0]["fqn"] if targets else proposed["fqn"], intent=intent,
+                                   modeling_standard=body.modeling_standard), db)
     run_id = created.get("run_id")
     if created.get("registration_error"):
         return {"run_id": run_id, "stage": "SOURCE", "error": created["registration_error"]}
@@ -3372,7 +3379,8 @@ def _domain_vocab(db: Db) -> list[dict]:
                           WHERE T.ACTIVE_FLAG"""):
         terms.setdefault(c["domain_id"], set()).update(token_set(c["column_name"]) | entity_tokens(c["target_table"]))
     out = [{"domain_id": d["domain_id"], "name": d["domain_name"], "terms": terms.get(d["domain_id"], set()),
-            "signals": (_json(d.get("config")) or {}).get("signals")} for d in registry]
+            "signals": (_json(d.get("config")) or {}).get("signals"),
+            "standard": (_json(d.get("config")) or {}).get("standard")} for d in registry]
     _DOMAIN_VOCAB.update(at=time.time(), domains=out)
     return out
 
@@ -3387,7 +3395,9 @@ def _infer_domains(db: Db, tables: list[str], columns: list[str], schema: Option
     except Exception:
         return []
     names = list(tables) + ([schema] if schema else [])
+    standards = {d["domain_id"]: d.get("standard") for d in vocab}
     return [{"domain_id": r["domain_id"], "domain_name": r["domain_name"], "confidence": r["confidence"],
+             "standard": standards.get(r["domain_id"]),
              "signals": r["evidence"]["signals"][:6], "matched_terms": r["evidence"]["matched_terms"][:10]}
             for r in infer_domain(names, columns, vocab)]
 
@@ -3631,6 +3641,7 @@ class CatalogModelingRequest(CatalogTarget):
     targets: list[ModelTarget] = Field(default_factory=list, max_length=50)
     proposed_name: Optional[str] = Field(default=None, max_length=255)
     proposed_schema: Optional[str] = Field(default=None, max_length=255)
+    modeling_standard: Literal["GDP", "GENERIC"] = "GENERIC"
 
 
 @app.post("/api/catalog/modeling-run")
@@ -3638,7 +3649,8 @@ def catalog_modeling_run(body: CatalogModelingRequest, db: Db = Depends(current_
     src = _ensure_source(db, _ident(body.database, "database"), _ident(body.schema_name, "schema"))
     return send_to_modeling(src["source_system_id"], ModelingRunRequest(
         tables=body.tables, run_name=body.run_name, domain_id=body.domain_id, targets=body.targets,
-        proposed_name=body.proposed_name, proposed_schema=body.proposed_schema), db)
+        proposed_name=body.proposed_name, proposed_schema=body.proposed_schema,
+        modeling_standard=body.modeling_standard), db)
 
 
 class CatalogAnalyzeRequest(CatalogTarget):
@@ -3689,6 +3701,8 @@ def catalog_analyze(body: CatalogAnalyzeRequest, db: Db = Depends(current_db)):
     detected = candidates[0] if candidates and candidates[0]["confidence"] >= INFERRED_MIN_CONFIDENCE else None
     return {"tables": summary, "relationships": relationships, "graph": graph,
             "domain": {"detected": detected, "candidates": candidates},
+            # The panel always asks "GDP or not"; this is only the preselection.
+            "suggested_standard": "GDP" if detected and detected.get("standard") == "GDP" else "GENERIC",
             "models": _suggest_for_catalog(db, database, schema, tables,
                                            detected["domain_name"] if detected else None)}
 

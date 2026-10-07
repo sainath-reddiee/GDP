@@ -152,7 +152,9 @@ def generate_via_db(db, run_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
     prior = _json(prior_rows[0].get("content_json")) if prior_rows else {}
     if not isinstance(prior, dict):
         prior = {}
-    plan = merge_branch_plan(payload or {}, prior, run.get("RUN_NAME") or "", run_id)
+    from services.common.standard import run_standard
+
+    plan = merge_branch_plan(payload or {}, prior, run.get("RUN_NAME") or "", run_id, run_standard(run))
     skeleton: Dict[str, str] = {}
     if plan.get("fetch_skeleton") and plan.get("git_repository"):
         try:

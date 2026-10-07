@@ -19,7 +19,7 @@ from services.profiling.profiler import type_family
 from services.source.identifiers import apply_col, sql_ident
 
 COSINE_FLOOR, COSINE_SPAN = 0.25, 0.55
-SYSTEM_DERIVED = {"SURROGATE_KEY", "RECORD_SOURCE", "AUDIT_TIMESTAMP"}
+from services.common.standard import SYSTEM_DERIVED  # noqa: E402  (filled by the platform, never mapped)
 
 CASTS = {  # (source family, target family) -> score; same family is 1.0
     ("TIMESTAMP", "DATE"): 0.85, ("DATE", "TIMESTAMP"): 0.8, ("NUMBER", "TEXT"): 0.5,

@@ -181,7 +181,7 @@ def build(domain: str, rules: str) -> Dict[str, Any]:
         knowledge.append({"key": f"{key}.guide.known_sources", "type": "ONBOARDING_GUIDE",
                           "title": f"{meta['name']} sources", "content": known})
     return {
-        "domain": {"name": meta["name"], "description": meta["description"], "owner": "GDP Data Office",
+        "domain": {"name": meta["name"], "standard": "GDP", "description": meta["description"], "owner": "GDP Data Office",
                    "silver_database": c["database"] or "DEV_GDP_SILVER_DB", "silver_schema": schema,
                    "contract": (CONTRACTS / f"{domain}-contract.md").relative_to(ROOT).as_posix(),
                    "signals": meta["signals"], "source_systems": sources},

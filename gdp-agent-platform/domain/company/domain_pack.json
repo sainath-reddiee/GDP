@@ -1,6 +1,7 @@
 {
   "domain": {
     "name": "COMPANY",
+    "standard": "GDP",
     "description": "Companies and organizations (customers, vendors, clients, legal entities): a COMPANY_CORE hub with address, industry, segment, relationship and hierarchy spokes.",
     "owner": "GDP Data Office",
     "silver_database": "DEV_GDP_SILVER_DB",

@@ -14,7 +14,8 @@ from services.common.llm import complete_json
 from services.common.sql import clip, insert_rows, rows, scalar, variant
 from services.common.stage import Stage
 from services.knowledge.procedures import current_knowledge_version
-from services.knowledge.usage import STAGE_SKILLS, assert_safe_transformation, domain_context, use_skills
+from services.common.standard import run_standard
+from services.knowledge.usage import assert_safe_transformation, domain_context, stage_skills, use_skills
 from services.mapping.procedures import target_columns, target_table
 from services.sttm.assemble import assemble
 from services.sttm.join_graph import apply_overrides, build_join_graph, join_logic_by_table
@@ -27,8 +28,8 @@ def generate_sttm(session, run_id: str) -> Dict[str, Any]:
     stage.walk(["MAPPING_APPROVED", "STTM_PENDING"], "STTM generation started")
     with tool_call(session, run_id, "generate_sttm", {"run_id": run_id}) as call:
         try:
-            use_skills(session, STAGE_SKILLS["STTM"])
             run = stage.run
+            use_skills(session, stage_skills("STTM", run_standard(run)))
             target = target_table(session, run)
             columns = target_columns(session, target["TARGET_TABLE_ID"])
             source = rows(session, "SELECT SOURCE_SYSTEM_NAME FROM SOURCE.SOURCE_REGISTRY WHERE SOURCE_SYSTEM_ID = ?",
@@ -189,14 +190,15 @@ def _line_context(session, run_id: str, payload: Dict[str, Any]) -> Dict[str, An
         "domain_id": (line or {}).get("DOMAIN_ID"),
     }
     assert context["target_column"], "target_column or sttm_line_id is required"
-    run = rows(session, "SELECT DOMAIN_ID FROM CORE.WORKFLOW_RUN WHERE RUN_ID = ?", [run_id])
+    run = rows(session, "SELECT * FROM CORE.WORKFLOW_RUN WHERE RUN_ID = ?", [run_id])
+    context["standard"] = run_standard(run[0] if run else {})
     context["domain_id"] = context["domain_id"] or (run[0]["DOMAIN_ID"] if run else None)
     context["profile"] = _profile_for(session, run_id, context["source_table"], context["source_column"])
     context["prior_rules"] = _prior_rules(session, context["domain_id"], context["target_column"])
     try:
         target = rows(session, "SELECT TARGET_MODEL FROM CORE.WORKFLOW_RUN WHERE RUN_ID = ?", [run_id])
         model = ((target[0]["TARGET_MODEL"] if target else "") or "").split(".")[-1] or None
-        context["domain_rules"] = domain_context(session, context["domain_id"], model, 3000)
+        context["domain_rules"] = domain_context(session, context["domain_id"], model, 3000, context["standard"])
     except Exception:
         context["domain_rules"] = ""
     return context
@@ -211,7 +213,7 @@ def refine_transformation(session, run_id: str, payload_json: str) -> Dict[str, 
                    {"target": context["target_column"], "prompt": clip(prompt, 500)}) as call:
         try:
             try:
-                use_skills(session, STAGE_SKILLS["STTM"])
+                use_skills(session, stage_skills("STTM", context["standard"]))
             except Exception:
                 pass
             output, usage, model = complete_json(session, refine_prompt(context, prompt), REFINE_SCHEMA, max_tokens=1500)

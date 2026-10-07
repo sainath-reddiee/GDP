@@ -1,6 +1,7 @@
 {
   "domain": {
     "name": "OPPORTUNITY",
+    "standard": "GDP",
     "description": "Sales opportunities and deals: a single OPPORTUNITY_CORE hub linked to company and contact.",
     "owner": "GDP Data Office",
     "silver_database": "DEV_GDP_SILVER_DB",

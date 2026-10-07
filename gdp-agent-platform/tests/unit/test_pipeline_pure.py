@@ -202,7 +202,7 @@ def test_mapping_skill_blocks_destructive_sql():
 
 
 def test_system_derived_not_mappable():
-    assert SYSTEM_DERIVED == {"SURROGATE_KEY", "RECORD_SOURCE", "AUDIT_TIMESTAMP"}
+    assert SYSTEM_DERIVED == {"SURROGATE_KEY", "RECORD_SOURCE", "AUDIT_TIMESTAMP", "DERIVED_KEY"}
 
 
 def test_refine_prompt_includes_profile_and_instruction():

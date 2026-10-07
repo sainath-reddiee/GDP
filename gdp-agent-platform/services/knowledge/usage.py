@@ -25,6 +25,15 @@ STAGE_SKILLS: Dict[str, List[str]] = {
     "VALIDATION": ["MAPPING-VALIDATION", "DEV-DATAREADINESS-CHECK", "QA-DATAREADINESS-CHECK"],
 }
 
+GDP_ONLY_SKILLS = {"GDP-DBT-ONBOARD-SOURCE", "GDP_DOMAIN_SKILL"}
+
+
+def stage_skills(stage: str, standard: str = "GDP") -> List[str]:
+    """Skills a stage loads for a run: GDP convention skills only when the run follows the GDP standard."""
+    names = STAGE_SKILLS.get(stage, [])
+    return names if standard == "GDP" else [n for n in names if n not in GDP_ONLY_SKILLS]
+
+
 FORBIDDEN_SQL = re.compile(
     r"\b(DROP|DELETE|TRUNCATE|ALTER|INSERT|UPDATE|MERGE|COPY|GRANT|REVOKE|CALL|EXECUTE)\b",
     re.IGNORECASE,
@@ -88,9 +97,10 @@ def compose_domain_context(skill_content: str, domain: str | None = None, target
     return text[:budget]
 
 
-def domain_context(session, domain_id: str | None, target: str | None = None, budget: int = 6000) -> str:
-    """Prompt context for mapping, STTM and dbt: GDP skill rules plus the run domain's contract."""
-    skill = load_skill(session, DBT_SKILL)
+def domain_context(session, domain_id: str | None, target: str | None = None, budget: int = 6000,
+                   standard: str = "GDP") -> str:
+    """Prompt context for mapping, STTM and dbt: the GDP skill rules (GDP runs only) plus the domain's contract."""
+    skill = load_skill(session, DBT_SKILL) if standard == "GDP" else {}
     domain = None
     definitions: List[str] = []
     if domain_id:

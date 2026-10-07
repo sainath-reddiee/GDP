@@ -9,6 +9,8 @@ import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from services.common.standard import GENERIC, normalize_standard, technical_semantic
+
 ROOT = Path(__file__).resolve().parents[1]
 DOMAIN_DIR = ROOT / "domain"
 DOMAIN_PACK = DOMAIN_DIR / "gdp" / "domain_pack.json"
@@ -168,6 +170,8 @@ def domain_rows(database: str, live: Optional[LiveColumns] = None) -> Dict[str, 
         is_gdp = name == "GDP"
         config = {k: meta[k] for k in ("silver_database", "silver_schema", "contract", "signals", "source_systems")
                   if k in meta}
+        standard = normalize_standard(meta.get("standard")) or GENERIC
+        config["standard"] = standard
         domains.append((did, name, meta["description"], meta["owner"], True, 1, config))
         target_db = database if is_gdp else meta.get("silver_database") or database
         for i, table in enumerate(pack["targets"]):
@@ -187,7 +191,9 @@ def domain_rows(database: str, live: Optional[LiveColumns] = None) -> Dict[str, 
                        else _stable_id("col", table["schema"], table["table"], col["name"]))
                 columns.append((
                     cid, tid, col["name"], col.get("type") or "TEXT", n, bool(col.get("nullable")), col.get("definition"),
-                    col.get("semantic_type"), bool(col.get("business_key")), bool(col.get("pii")),
+                    col.get("semantic_type") or technical_semantic(
+                        col["name"], standard, table["table"], hub_fk=(table.get("model_spec") or {}).get("hub_fk")),
+                    bool(col.get("business_key")), bool(col.get("pii")),
                     col.get("accepted_values") or [], 1,
                 ))
         for item in pack["knowledge"]:
