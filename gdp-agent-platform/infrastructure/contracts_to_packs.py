@@ -154,7 +154,9 @@ def build(domain: str, rules: str) -> Dict[str, Any]:
         knowledge.append({
             "key": f"{key}.transform.{cast['target_column'].lower()}", "type": "TRANSFORMATION_RULE",
             "title": f"{cast['target_column']} cast", "content": f"{cast['source_type']} to {cast['target_type']}: {cast['cast']}",
+            # Mapping applies `expression` with {col} as the source column (services.mapping.features).
             "content_json": {"target_column": cast["target_column"], "transformation": cast["cast"],
+                             "expression": re.sub(r"\bo\.col\b", "{col}", cast["cast"]),
                              "target_type": cast["target_type"]},
         })
     for title in ("Multi-Source-Table Extraction Pattern", "Multi-Target Onboarding Pattern", "Reference Implementation",

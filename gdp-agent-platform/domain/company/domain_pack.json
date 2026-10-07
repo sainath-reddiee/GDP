@@ -2044,6 +2044,7 @@
       "content_json": {
         "target_column": "LATITUDE",
         "transformation": "o.col::number(12,8)",
+        "expression": "{col}::number(12,8)",
         "target_type": "NUMBER(12,8)"
       }
     },
@@ -2055,6 +2056,7 @@
       "content_json": {
         "target_column": "LONGITUDE",
         "transformation": "o.col::number(12,8)",
+        "expression": "{col}::number(12,8)",
         "target_type": "NUMBER(12,8)"
       }
     },
@@ -2066,6 +2068,7 @@
       "content_json": {
         "target_column": "ACCOUNT_NUMBER",
         "transformation": "try_to_number(o.col)",
+        "expression": "try_to_number({col})",
         "target_type": "NUMBER(38,0)"
       }
     },
@@ -2077,6 +2080,7 @@
       "content_json": {
         "target_column": "RELATIONSHIP_START_DATE",
         "transformation": "o.col::timestamp_ntz",
+        "expression": "{col}::timestamp_ntz",
         "target_type": "TIMESTAMP_NTZ"
       }
     },
@@ -2088,6 +2092,7 @@
       "content_json": {
         "target_column": "END_DATE",
         "transformation": "o.col::timestamp_ntz",
+        "expression": "{col}::timestamp_ntz",
         "target_type": "TIMESTAMP_NTZ"
       }
     },
@@ -2099,6 +2104,7 @@
       "content_json": {
         "target_column": "VALID_FROM",
         "transformation": "o.col::timestamp_ntz",
+        "expression": "{col}::timestamp_ntz",
         "target_type": "TIMESTAMP_NTZ"
       }
     },
@@ -2110,6 +2116,7 @@
       "content_json": {
         "target_column": "VALID_TO",
         "transformation": "o.col::timestamp_ntz",
+        "expression": "{col}::timestamp_ntz",
         "target_type": "TIMESTAMP_NTZ"
       }
     },
@@ -2121,6 +2128,7 @@
       "content_json": {
         "target_column": "HIERARCHY_LEVEL",
         "transformation": "try_to_number(o.col)",
+        "expression": "try_to_number({col})",
         "target_type": "NUMBER(10,0)"
       }
     },
