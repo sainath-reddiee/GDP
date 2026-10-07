@@ -10,10 +10,11 @@ from __future__ import annotations
 import re
 from typing import Any, Dict, Iterable, List, Optional
 
-HIDDEN_TARGET_TABLES = {"COMPLETE_EMPLOYEE_DETAILS"}
-HIDDEN_TARGET_DATABASES = {"ALATION_POC"}
-HIDDEN_TARGET_SCHEMAS = {"GDP_SILVER"}
-HIDDEN_TARGET_IDS = {"00000000-0000-4000-a000-000000000002"}
+# Installation-specific entries come from CATALOG_DISPLAY (seeded, editable in Admin), not from code.
+HIDDEN_TARGET_TABLES: set = set()
+HIDDEN_TARGET_DATABASES: set = set()
+HIDDEN_TARGET_SCHEMAS: set = set()
+HIDDEN_TARGET_IDS: set = set()
 HIDDEN_DOMAIN_NAMES = {"GDP"}
 STRIP_TOKENS = {"GDP"}  # product-name tokens removed from suggested source system names
 
