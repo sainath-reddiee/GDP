@@ -82,8 +82,14 @@ def identify_domain(session, run_id: str) -> Dict[str, Any]:
             for r in results:
                 hits[r.get("DOMAIN_NAME")] = hits.get(r.get("DOMAIN_NAME"), 0) + 1
             record_cost(session, run_id, "DOMAIN", None, {}, int((time.time() - started) * 1000), search_calls=1)
+            vocab = _domain_terms(session)
+            # Same rule as the Sources page: when packs define detection signals, a pack without signals (a generic
+            # demo pack) does not compete on common words like ID or NAME. A domain already stamped stays eligible.
+            if any(d.get("signals") for d in vocab):
+                stamped = stage.run.get("DOMAIN_ID")
+                vocab = [d for d in vocab if d.get("signals") or d["domain_id"] == stamped]
             ranked = infer_domain(sorted({p["TABLE_NAME"] for p in profile}), [p["COLUMN_NAME"] for p in profile],
-                                  _domain_terms(session), hits)
+                                  vocab, hits)
             assert ranked, "no active domains are registered"
             threshold = float(config_value(session, "DOMAIN_CONFIDENCE_THRESHOLD", 0.3))
         except Exception as exc:
@@ -96,12 +102,14 @@ def identify_domain(session, run_id: str) -> Dict[str, Any]:
         recommendation = (f"{top['domain_name']} (confidence {top['confidence']:.2f}); signals: "
                           f"{'; '.join(top['evidence']['signals'][:6]) or 'none'}; matched terms: "
                           f"{', '.join(top['evidence']['matched_terms'][:12])}")
-        if top["confidence"] < threshold:
-            recommendation += f". Below the {threshold:.2f} threshold: confirm the domain with the domain owner."
+        confident = top["confidence"] >= threshold
+        if not confident:
+            recommendation += (f". Below the {threshold:.2f} threshold, so no pack was applied: pick the domain on "
+                               "the Domain page before mapping.")
         call.summary = f"Cortex Search: {len(results)} knowledge items; selected {recommendation}"
 
     def accepted(d: Dict[str, Any]) -> bool:
-        return (stamped_id and d["domain_id"] == stamped_id) or (not stamped_id and d is top)
+        return bool((stamped_id and d["domain_id"] == stamped_id) or (not stamped_id and confident and d is top))
 
     def record(_event_id: str) -> None:
         insert_rows(session, "KNOWLEDGE.DOMAIN_RECOMMENDATION",
@@ -114,7 +122,7 @@ def identify_domain(session, run_id: str) -> Dict[str, Any]:
                       "ACCEPTED" if accepted(d) else "PROPOSED",
                       "SYSTEM" if accepted(d) else None,
                       "ACCEPTED" if accepted(d) else "PROPOSED"] for d in ranked])
-        if not stamped_id:
+        if not stamped_id and confident:
             session.sql("UPDATE CORE.WORKFLOW_RUN SET DOMAIN_ID = ? WHERE RUN_ID = ?",
                         params=[top["domain_id"], run_id]).collect()
 
@@ -148,6 +156,54 @@ def load_skill(session, skill_name: str) -> Dict[str, Any]:
     return {k.lower(): v for k, v in skill.items()}
 
 
+GENERAL_DOMAIN = "GENERAL"
+
+
+def ensure_domain(session, name: str, description: str = "") -> str:
+    """Domain id by name, created (active) when it does not exist yet."""
+    name = (name or "").strip().upper()
+    assert name, "domain name is required"
+    found = rows(session, "SELECT DOMAIN_ID FROM KNOWLEDGE.DOMAIN_REGISTRY WHERE UPPER(DOMAIN_NAME) = ?", [name])
+    if found:
+        return found[0]["DOMAIN_ID"]
+    domain_id = str(uuid.uuid4())
+    insert_rows(session, "KNOWLEDGE.DOMAIN_REGISTRY",
+                ["DOMAIN_ID", "DOMAIN_NAME", "DESCRIPTION", "OWNER", "ACTIVE_FLAG", "VERSION"],
+                ["?", "?", "NULLIF(?, '')", "CURRENT_USER()", "TRUE", "1"],
+                [[domain_id, name, description]])
+    return domain_id
+
+
+def _target_domain(session, payload: Dict[str, Any], registered_domain: Optional[str]) -> str:
+    """Domain for a target: the caller's choice, else where the same table is already registered, else GENERAL.
+    Never a fixed client domain, so any company's tables are filed under their own domain."""
+    if payload.get("domain_id"):
+        found = rows(session, "SELECT DOMAIN_ID FROM KNOWLEDGE.DOMAIN_REGISTRY WHERE DOMAIN_ID = ?", [payload["domain_id"]])
+        assert found, f"unknown domain {payload['domain_id']}"
+        return found[0]["DOMAIN_ID"]
+    if payload.get("domain_name"):
+        return ensure_domain(session, payload["domain_name"])
+    if registered_domain:
+        return registered_domain
+    return ensure_domain(session, GENERAL_DOMAIN, "Targets registered without a domain pack")
+
+
+def _add_new_target_columns(session, target_id: str, columns: List[Dict[str, Any]]) -> None:
+    """Re-registering a target picks up columns added to the table since its last snapshot."""
+    known = {str(r["COLUMN_NAME"]) for r in rows(session, "SELECT COLUMN_NAME FROM KNOWLEDGE.TARGET_COLUMN_REGISTRY "
+                                                          "WHERE TARGET_TABLE_ID = ?", [target_id])}
+    new = [c for c in columns if c["column_name"] not in known]
+    if new:
+        insert_rows(session, "KNOWLEDGE.TARGET_COLUMN_REGISTRY",
+                    ["TARGET_COLUMN_ID", "TARGET_TABLE_ID", "COLUMN_NAME", "DATA_TYPE", "ORDINAL_POSITION",
+                     "NULLABLE", "BUSINESS_DEFINITION", "SEMANTIC_TYPE", "IS_BUSINESS_KEY", "IS_PII",
+                     "ACCEPTED_VALUES", "VERSION"],
+                    ["?", "?", "?", "?", "?::NUMBER", "?::BOOLEAN", "NULLIF(?, '')", "NULLIF(?, '')",
+                     "?::BOOLEAN", "FALSE", "PARSE_JSON(?)", "1"],
+                    [[str(uuid.uuid4()), target_id, c["column_name"], c["data_type"], c["ordinal_position"],
+                      bool(c.get("nullable")), c.get("comment"), None, bool(c.get("business_key")), []] for c in new])
+
+
 def register_target_table(session, payload_json: str) -> Dict[str, Any]:
     """Store a target snapshot. The caller reads the external table; this procedure only writes platform metadata.
 
@@ -157,17 +213,15 @@ def register_target_table(session, payload_json: str) -> Dict[str, Any]:
 
     payload = json.loads(payload_json or "{}")
     database, schema, table = normalize(payload.get("database")), normalize(payload.get("schema")), normalize(payload.get("table"))
-    assert all(c.isalnum() or c in "_$" for c in database + schema + table), "target identifiers must be unquoted names"
     columns = payload.get("columns") or []
     assert isinstance(columns, list) and columns, f"TARGET_NOT_VISIBLE: {database}.{schema}.{table}"
-    domain = rows(session, "SELECT DOMAIN_ID FROM KNOWLEDGE.DOMAIN_REGISTRY WHERE DOMAIN_NAME = 'GDP' AND ACTIVE_FLAG")
-    assert domain, "GDP domain is not registered"
-    domain_id = domain[0]["DOMAIN_ID"]
-    found = rows(session, """SELECT TARGET_TABLE_ID FROM KNOWLEDGE.TARGET_TABLE_REGISTRY
-                             WHERE DOMAIN_ID = ? AND TARGET_DATABASE = ? AND TARGET_SCHEMA = ? AND TARGET_TABLE = ?
-                               AND ACTIVE_FLAG""", [domain_id, database, schema, table])
+    found = rows(session, """SELECT TARGET_TABLE_ID, DOMAIN_ID FROM KNOWLEDGE.TARGET_TABLE_REGISTRY
+                             WHERE TARGET_DATABASE = ? AND TARGET_SCHEMA = ? AND TARGET_TABLE = ? AND ACTIVE_FLAG
+                             ORDER BY CREATED_AT LIMIT 1""", [database, schema, table])
+    domain_id = _target_domain(session, payload, found[0]["DOMAIN_ID"] if found else None)
     if found:
         target_id = found[0]["TARGET_TABLE_ID"]
+        _add_new_target_columns(session, target_id, columns)
     else:
         target_id = str(uuid.uuid4())
         insert_rows(session, "KNOWLEDGE.TARGET_TABLE_REGISTRY",

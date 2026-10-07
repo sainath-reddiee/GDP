@@ -449,16 +449,24 @@ def _domain_id_for_target(db: Db, target_model: Optional[str], domain_id: Option
         return domain_id
     if not target_model:
         return None
-    name = target_model.split(".")[-1]
+    parts = target_model.split(".")
+    if len(parts) == 3:
+        found = db.query(
+            """
+            SELECT DOMAIN_ID FROM KNOWLEDGE.TARGET_TABLE_REGISTRY
+             WHERE ACTIVE_FLAG AND UPPER(TARGET_DATABASE) = UPPER(%s) AND UPPER(TARGET_SCHEMA) = UPPER(%s)
+               AND UPPER(TARGET_TABLE) = UPPER(%s)
+             ORDER BY CREATED_AT LIMIT 1
+            """,
+            tuple(parts),
+        )
+        return found[0]["domain_id"] if found else None
+    # A bare table name is ambiguous across domains (ADDRESS exists in several); only accept a unique match.
     found = db.query(
-        """
-        SELECT DOMAIN_ID FROM KNOWLEDGE.TARGET_TABLE_REGISTRY
-         WHERE ACTIVE_FLAG AND UPPER(TARGET_TABLE) = UPPER(%s)
-         ORDER BY TARGET_TABLE LIMIT 1
-        """,
-        (name,),
+        "SELECT DISTINCT DOMAIN_ID FROM KNOWLEDGE.TARGET_TABLE_REGISTRY WHERE ACTIVE_FLAG AND UPPER(TARGET_TABLE) = UPPER(%s)",
+        (parts[-1],),
     )
-    return found[0]["domain_id"] if found else None
+    return found[0]["domain_id"] if len(found) == 1 else None
 
 
 def _save_intent(db: Db, run_id: str, intent: dict) -> None:
@@ -787,10 +795,18 @@ SAFE_IDENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_$]{0,254}$")
 
 
 def _ident(value: str, field: str) -> str:
+    """User input -> the name as stored in INFORMATION_SCHEMA. Unquoted names resolve upper case; a quoted name
+    ("orderItems") keeps its exact spelling. Callers quote it (_quote_ident) wherever it reaches SQL text."""
+    from services.source.identifiers import normalize
+
     value = (value or "").strip()
-    if not SAFE_IDENT.match(value):
-        raise HTTPException(400, f"{field} must be an unquoted identifier")
-    return value.upper()
+    try:
+        name = normalize(value)
+    except AssertionError as exc:
+        raise HTTPException(400, f"{field}: {exc}") from exc
+    if not SAFE_IDENT.match(value) and not (len(value) >= 2 and value[0] == value[-1] == '"'):
+        raise HTTPException(400, f"{field} must be an identifier, or a quoted name for mixed case or symbols")
+    return name
 
 
 def _column_type(column: dict) -> str:
@@ -806,6 +822,8 @@ class TargetBind(BaseModel):
     database: str
     schema_name: str = Field(alias="schema")
     table: str
+    domain_id: Optional[str] = Field(default=None, max_length=64)
+    domain_name: Optional[str] = Field(default=None, max_length=128)
 
 
 class IntentPatch(BaseModel):
@@ -929,7 +947,7 @@ def catalog_schemas(database: str, db: Db = Depends(current_db)):
     database = _ident(database, "database")
     return {"schemas": db.query(
         f"""
-        SELECT SCHEMA_NAME FROM {database}.INFORMATION_SCHEMA.SCHEMATA
+        SELECT SCHEMA_NAME FROM {_quote_ident(database)}.INFORMATION_SCHEMA.SCHEMATA
          WHERE SCHEMA_NAME <> 'INFORMATION_SCHEMA'
          ORDER BY SCHEMA_NAME
         """
@@ -943,7 +961,7 @@ def catalog_tables(database: str, schema: str, db: Db = Depends(current_db)):
     return {"tables": db.query(
         f"""
         SELECT TABLE_NAME, TABLE_TYPE, ROW_COUNT, COMMENT
-          FROM {database}.INFORMATION_SCHEMA.TABLES
+          FROM {_quote_ident(database)}.INFORMATION_SCHEMA.TABLES
          WHERE TABLE_SCHEMA = %s AND TABLE_TYPE IN ('BASE TABLE', 'VIEW')
          ORDER BY TABLE_NAME
         """,
@@ -957,7 +975,7 @@ def catalog_columns(database: str, schema: str, table: str, db: Db = Depends(cur
     return {"columns": db.query(
         f"""
         SELECT COLUMN_NAME, DATA_TYPE, ORDINAL_POSITION
-          FROM {database}.INFORMATION_SCHEMA.COLUMNS
+          FROM {_quote_ident(database)}.INFORMATION_SCHEMA.COLUMNS
          WHERE TABLE_SCHEMA = %s AND TABLE_NAME = %s
          ORDER BY ORDINAL_POSITION
         """,
@@ -1007,7 +1025,7 @@ def _catalog_profile(db: Db, database: Optional[str], schema: Optional[str], tab
             db_name, sch, tbl = _ident(database, "database"), _ident(schema, "schema"), _ident(table, "table")
             cols = db.query(
                 f"""
-                SELECT COLUMN_NAME FROM {db_name}.INFORMATION_SCHEMA.COLUMNS
+                SELECT COLUMN_NAME FROM {_quote_ident(db_name)}.INFORMATION_SCHEMA.COLUMNS
                  WHERE TABLE_SCHEMA = %s AND TABLE_NAME = %s
                 """,
                 (sch, tbl),
@@ -1128,7 +1146,7 @@ def catalog_preview_graph(body: PreviewGraph, db: Db = Depends(current_db)):
     tables = [_ident(t, "table") for t in body.tables]
     meta = {r["table_name"]: r for r in db.query(
         f"""
-        SELECT TABLE_NAME, TABLE_TYPE, ROW_COUNT FROM {database}.INFORMATION_SCHEMA.TABLES
+        SELECT TABLE_NAME, TABLE_TYPE, ROW_COUNT FROM {_quote_ident(database)}.INFORMATION_SCHEMA.TABLES
          WHERE TABLE_SCHEMA = %s AND TABLE_TYPE IN ('BASE TABLE', 'VIEW')
         """,
         (schema,),
@@ -1141,7 +1159,7 @@ def catalog_preview_graph(body: PreviewGraph, db: Db = Depends(current_db)):
         for col in db.query(
             f"""
             SELECT TABLE_NAME, COLUMN_NAME, DATA_TYPE, IS_NULLABLE, ORDINAL_POSITION
-              FROM {database}.INFORMATION_SCHEMA.COLUMNS
+              FROM {_quote_ident(database)}.INFORMATION_SCHEMA.COLUMNS
              WHERE TABLE_SCHEMA = %s AND TABLE_NAME IN ({placeholders})
              ORDER BY TABLE_NAME, ORDINAL_POSITION
             """,
@@ -1163,7 +1181,7 @@ def catalog_preview_graph(body: PreviewGraph, db: Db = Depends(current_db)):
             tdb, tsch, ttbl = (_ident(p, "target") for p in parts)
             cols = db.query(
                 f"""
-                SELECT COLUMN_NAME FROM {tdb}.INFORMATION_SCHEMA.COLUMNS
+                SELECT COLUMN_NAME FROM {_quote_ident(tdb)}.INFORMATION_SCHEMA.COLUMNS
                  WHERE TABLE_SCHEMA = %s AND TABLE_NAME = %s ORDER BY ORDINAL_POSITION
                 """,
                 (tsch, ttbl),
@@ -1275,7 +1293,7 @@ def register_target(body: TargetBind, db: Db = Depends(current_db)):
             f"""
             SELECT COLUMN_NAME, DATA_TYPE, ORDINAL_POSITION, IS_NULLABLE, COMMENT,
                    CHARACTER_MAXIMUM_LENGTH, NUMERIC_PRECISION, NUMERIC_SCALE
-              FROM {database}.INFORMATION_SCHEMA.COLUMNS
+              FROM {_quote_ident(database)}.INFORMATION_SCHEMA.COLUMNS
              WHERE TABLE_SCHEMA = %s AND TABLE_NAME = %s
              ORDER BY ORDINAL_POSITION
             """,
@@ -1285,15 +1303,23 @@ def register_target(body: TargetBind, db: Db = Depends(current_db)):
         raise HTTPException(400, f"TARGET_NOT_VISIBLE: {database}.{schema}.{table}: {exc}") from exc
     if not raw:
         raise HTTPException(400, f"TARGET_NOT_VISIBLE: {database}.{schema}.{table}")
+    # Business keys come from the table's declared primary key; without one the STTM decides. Guessing from names
+    # (every NOT NULL *_ID) marked foreign keys as keys and produced the wrong grain.
+    try:
+        pk = {r.get("column_name") for r in db.query(
+            f"SHOW PRIMARY KEYS IN TABLE {_quote_ident(database)}.{_quote_ident(schema)}.{_quote_ident(table)}")}
+    except Exception:
+        pk = set()
     payload = {
         "database": database, "schema": schema, "table": table,
+        "domain_id": body.domain_id, "domain_name": body.domain_name,
         "columns": [{
             "column_name": c["column_name"],
             "data_type": _column_type(c),
             "ordinal_position": c["ordinal_position"],
             "nullable": c["is_nullable"] == "YES",
             "comment": c["comment"],
-            "business_key": str(c["column_name"]).endswith("_ID") and c["is_nullable"] != "YES",
+            "business_key": c["column_name"] in pk,
         } for c in raw],
     }
     try:
@@ -1694,6 +1720,30 @@ def identify_domain(run_id: str, db: Db = Depends(current_db)):
         raise _snowflake_error(exc) from exc
 
 
+class DomainChoice(BaseModel):
+    domain_id: str = Field(min_length=1, max_length=64)
+
+
+@app.put("/api/runs/{run_id}/domain")
+def confirm_domain(run_id: str, body: DomainChoice, db: Db = Depends(current_db)):
+    """A reviewer picks the knowledge pack when detection was not confident (or overrides it before mapping)."""
+    run = db.query("SELECT CURRENT_STATE FROM CORE.WORKFLOW_RUN WHERE RUN_ID = %s", (run_id,))
+    if not run:
+        raise HTTPException(404, "run not found")
+    if run[0]["current_state"] not in ("PROFILING_COMPLETE", "DOMAIN_IDENTIFIED", "MAPPING_PENDING", "FAILED"):
+        raise HTTPException(409, "The pack can only be changed before mapping starts.")
+    if not db.query("SELECT 1 FROM KNOWLEDGE.DOMAIN_REGISTRY WHERE DOMAIN_ID = %s AND ACTIVE_FLAG", (body.domain_id,)):
+        raise HTTPException(400, "unknown or inactive domain")
+    db.execute("UPDATE CORE.WORKFLOW_RUN SET DOMAIN_ID = %s, UPDATED_AT = CURRENT_TIMESTAMP() WHERE RUN_ID = %s",
+               (body.domain_id, run_id))
+    db.execute("UPDATE KNOWLEDGE.DOMAIN_RECOMMENDATION SET STATUS = IFF(DOMAIN_ID = %s, 'ACCEPTED', 'PROPOSED'), "
+               "DECIDED_BY = IFF(DOMAIN_ID = %s, CURRENT_USER(), DECIDED_BY), "
+               "DECIDED_AT = IFF(DOMAIN_ID = %s, CURRENT_TIMESTAMP(), DECIDED_AT) WHERE RUN_ID = %s",
+               (body.domain_id, body.domain_id, body.domain_id, run_id))
+    _drop_run(run_id)
+    return {"domain_id": body.domain_id, "confirmed": True}
+
+
 @app.get("/api/runs/{run_id}/domain")
 def get_domain(run_id: str, db: Db = Depends(current_db)):
     return {"recommendations": db.query(
@@ -1732,11 +1782,15 @@ def _mapping_target_table(db: Db, run_id: str) -> Optional[dict]:
         """
         SELECT TB.TARGET_TABLE_ID, TB.TARGET_TABLE, TB.TARGET_DATABASE, TB.TARGET_SCHEMA, TB.GRAIN
           FROM CORE.WORKFLOW_RUN R
-          JOIN KNOWLEDGE.TARGET_TABLE_REGISTRY TB ON TB.ACTIVE_FLAG AND TB.DOMAIN_ID = R.DOMAIN_ID
-               AND (UPPER(TB.TARGET_TABLE) = UPPER(SPLIT_PART(COALESCE(R.TARGET_MODEL, ''), '.', -1))
-                    OR COALESCE(R.TARGET_MODEL, '') = '')
+          JOIN KNOWLEDGE.TARGET_TABLE_REGISTRY TB ON TB.ACTIVE_FLAG
+               AND COALESCE(R.TARGET_MODEL, '') <> ''
+               AND UPPER(TB.TARGET_TABLE) = UPPER(SPLIT_PART(R.TARGET_MODEL, '.', -1))
+               AND (ARRAY_SIZE(SPLIT(R.TARGET_MODEL, '.')) < 3
+                    OR (UPPER(TB.TARGET_DATABASE) = UPPER(SPLIT_PART(R.TARGET_MODEL, '.', 1))
+                        AND UPPER(TB.TARGET_SCHEMA) = UPPER(SPLIT_PART(R.TARGET_MODEL, '.', 2))))
+               AND (ARRAY_SIZE(SPLIT(R.TARGET_MODEL, '.')) = 3 OR TB.DOMAIN_ID = R.DOMAIN_ID)
          WHERE R.RUN_ID = %s
-         ORDER BY TB.TARGET_TABLE LIMIT 1
+         ORDER BY IFF(TB.DOMAIN_ID = R.DOMAIN_ID, 0, 1), TB.CREATED_AT LIMIT 1
         """,
         (run_id,),
     )
@@ -3160,6 +3214,60 @@ class ModelingRunRequest(BaseModel):
     run_name: Optional[str] = Field(default=None, max_length=256)
     domain_id: Optional[str] = None
     targets: list[ModelTarget] = Field(default_factory=list, max_length=50)
+    proposed_name: Optional[str] = Field(default=None, max_length=255)
+    proposed_schema: Optional[str] = Field(default=None, max_length=255)
+
+
+def _proposed_name(tables: list[str]) -> str:
+    from services.source.intent import proposed_model_name
+
+    return proposed_model_name(tables)
+
+
+def _register_proposed_target(db: Db, src: dict, tables: list[str], domain_id: Optional[str],
+                              name: Optional[str], schema: Optional[str]) -> dict:
+    """'Propose a new model' becomes a real target: registered from the selected tables' own columns and types,
+    so mapping has something concrete to map onto instead of falling back to an unrelated model. Nothing is
+    created in Snowflake; the dbt stage builds it."""
+    database = src["database_name"]
+    rows_ = db.query(
+        f"""
+        SELECT TABLE_NAME, COLUMN_NAME, DATA_TYPE, ORDINAL_POSITION, IS_NULLABLE, COMMENT,
+               CHARACTER_MAXIMUM_LENGTH, NUMERIC_PRECISION, NUMERIC_SCALE
+          FROM {_quote_ident(database)}.INFORMATION_SCHEMA.COLUMNS
+         WHERE TABLE_SCHEMA = %s AND ARRAY_CONTAINS(TABLE_NAME::VARIANT, PARSE_JSON(%s)::ARRAY)
+         ORDER BY TABLE_NAME, ORDINAL_POSITION
+        """,
+        (src["schema_name"], json.dumps(tables)),
+    )
+    order = {t: i for i, t in enumerate(tables)}
+    rows_.sort(key=lambda r: (order.get(r["table_name"], 99), r["ordinal_position"]))
+    seen: set[str] = set()
+    columns = []
+    for r in rows_:
+        if r["column_name"] in seen:
+            continue
+        seen.add(r["column_name"])
+        columns.append({"column_name": r["column_name"], "data_type": _column_type(r),
+                        "ordinal_position": len(columns) + 1, "nullable": True,
+                        "comment": r["comment"] or f"From {r['table_name']}.{r['column_name']}", "business_key": False})
+    if not columns:
+        raise HTTPException(400, "The selected tables have no visible columns to propose a model from.")
+    try:
+        pk = {r.get("column_name") for r in db.query(
+            f"SHOW PRIMARY KEYS IN TABLE {_quote_ident(database)}.{_quote_ident(src['schema_name'])}.{_quote_ident(tables[0])}")}
+    except Exception:
+        pk = set()
+    for c in columns:
+        c["business_key"] = c["column_name"] in pk
+    payload = {"database": database, "schema": schema or "SILVER", "table": name or _proposed_name(tables),
+               "columns": columns, "domain_id": domain_id}
+    try:
+        registered = db.call("CALL KNOWLEDGE.REGISTER_TARGET_TABLE(%s)", (json.dumps(payload),))
+    except Exception as exc:
+        raise _snowflake_error(exc) from exc
+    return {"fqn": registered["target_model"], "target_table": payload["table"],
+            "target_table_id": registered["target_table_id"], "domain_id": registered.get("domain_id")}
 
 
 @app.post("/api/sources/{source_id}/modeling-run")
@@ -3170,8 +3278,12 @@ def send_to_modeling(source_id: str, body: ModelingRunRequest, db: Db = Depends(
     tables = sorted(set(body.tables))
     run_name = body.run_name or f"{src['source_system_name']} modeling {time.strftime('%Y-%m-%d %H:%M')}"
     targets = [t.model_dump() for t in body.targets]
+    proposed = None
+    if not targets:
+        proposed = _register_proposed_target(db, src, tables, body.domain_id, body.proposed_name, body.proposed_schema)
     intent = {
         "path": "map_existing" if targets else "profile_suggest", "run_name": run_name,
+        "proposed_target": proposed,
         "model_existing": bool(targets), "targets": targets,
         "created_at": time.strftime("%Y-%m-%dT%H:%M:%S"), "domain_id": body.domain_id,
         "source": {"origin": "snowflake", "connection_id": source_id, "database": src["database_name"],
@@ -3179,8 +3291,8 @@ def send_to_modeling(source_id: str, body: ModelingRunRequest, db: Db = Depends(
                    "source_type": src["source_type"], "tables": tables},
         "target": {"storage_type": "IN_PLACE"},
     }
-    created = create_run(CreateRun(run_name=run_name, domain_id=body.domain_id,
-                                   target_model=targets[0]["fqn"] if targets else None, intent=intent), db)
+    created = create_run(CreateRun(run_name=run_name, domain_id=body.domain_id or (proposed or {}).get("domain_id"),
+                                   target_model=targets[0]["fqn"] if targets else proposed["fqn"], intent=intent), db)
     run_id = created.get("run_id")
     if created.get("registration_error"):
         return {"run_id": run_id, "stage": "SOURCE", "error": created["registration_error"]}
@@ -3414,11 +3526,11 @@ def _live_table(db: Db, database: str, schema: str, table: str) -> tuple[list[tu
             for c in db.query(
                 f"""
                 SELECT COLUMN_NAME, DATA_TYPE, CHARACTER_MAXIMUM_LENGTH, NUMERIC_PRECISION, NUMERIC_SCALE
-                  FROM {database}.INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = %s AND TABLE_NAME = %s
+                  FROM {_quote_ident(database)}.INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = %s AND TABLE_NAME = %s
                  ORDER BY ORDINAL_POSITION
                 """,
                 (schema, table))]
-    meta = db.query(f"SELECT ROW_COUNT, LAST_ALTERED::VARCHAR AS LAST_ALTERED FROM {database}.INFORMATION_SCHEMA.TABLES "
+    meta = db.query(f"SELECT ROW_COUNT, LAST_ALTERED::VARCHAR AS LAST_ALTERED FROM {_quote_ident(database)}.INFORMATION_SCHEMA.TABLES "
                     "WHERE TABLE_SCHEMA = %s AND TABLE_NAME = %s", (schema, table))
     return cols, (meta[0]["row_count"] if meta else None), (meta[0]["last_altered"] if meta else None)
 
@@ -3517,13 +3629,16 @@ class CatalogModelingRequest(CatalogTarget):
     run_name: Optional[str] = Field(default=None, max_length=256)
     domain_id: Optional[str] = None
     targets: list[ModelTarget] = Field(default_factory=list, max_length=50)
+    proposed_name: Optional[str] = Field(default=None, max_length=255)
+    proposed_schema: Optional[str] = Field(default=None, max_length=255)
 
 
 @app.post("/api/catalog/modeling-run")
 def catalog_modeling_run(body: CatalogModelingRequest, db: Db = Depends(current_db)):
     src = _ensure_source(db, _ident(body.database, "database"), _ident(body.schema_name, "schema"))
     return send_to_modeling(src["source_system_id"], ModelingRunRequest(
-        tables=body.tables, run_name=body.run_name, domain_id=body.domain_id, targets=body.targets), db)
+        tables=body.tables, run_name=body.run_name, domain_id=body.domain_id, targets=body.targets,
+        proposed_name=body.proposed_name, proposed_schema=body.proposed_schema), db)
 
 
 class CatalogAnalyzeRequest(CatalogTarget):
@@ -3637,7 +3752,7 @@ async def upload_external_files(source_id: str, files: list[UploadFile] = File(.
     found = db.query("SELECT CONNECTION_TYPE FROM SOURCE.SOURCE_REGISTRY WHERE SOURCE_SYSTEM_ID = %s", (source_id,))
     if not found or found[0]["connection_type"] != "upload":
         raise HTTPException(400, "files can only be uploaded to a file-upload source; cloud sources read their bucket")
-    database, schema = _ident(src["database_name"], "database"), _ident(src["schema_name"], "schema")
+    database, schema = src["database_name"], src["schema_name"]  # stored spelling; quoted where used
     uploaded = []
     tmp = Path(tempfile.mkdtemp())
     try:
@@ -3651,7 +3766,7 @@ async def upload_external_files(source_id: str, files: list[UploadFile] = File(.
             local = tmp / name
             local.write_bytes(data)
             try:
-                db.execute(f"PUT 'file://{local.as_posix()}' @{database}.{schema}.FILES AUTO_COMPRESS = FALSE OVERWRITE = TRUE")
+                db.execute(f"PUT 'file://{local.as_posix()}' @{_quote_ident(database)}.{_quote_ident(schema)}.FILES AUTO_COMPRESS = FALSE OVERWRITE = TRUE")
             except Exception as exc:
                 raise _snowflake_error(exc) from exc
             uploaded.append({"file": name, "bytes": len(data)})

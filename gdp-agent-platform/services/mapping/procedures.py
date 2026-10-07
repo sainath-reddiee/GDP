@@ -28,12 +28,35 @@ EMBED_MODEL_DEFAULT = "snowflake-arctic-embed-l-v2.0"
 EMBED_MODELS = {EMBED_MODEL_DEFAULT}
 
 
+NO_TARGET = ("NO_TARGET_MODEL: this run has no target model. In Sources, open the modeling panel and pick an "
+             "existing model or propose a new one before mapping.")
+
+
 def target_table(session, run: Dict[str, Any]) -> Dict[str, Any]:
-    name = (run.get("TARGET_MODEL") or "").split(".")[-1].upper()
-    found = rows(session, """SELECT * FROM KNOWLEDGE.TARGET_TABLE_REGISTRY
-                             WHERE ACTIVE_FLAG AND DOMAIN_ID = ? AND (UPPER(TARGET_TABLE) = ? OR ? = '')
-                             ORDER BY TARGET_TABLE LIMIT 1""", [run["DOMAIN_ID"], name, name])
-    assert found, f"target model {run.get('TARGET_MODEL')} is not registered in domain knowledge"
+    """The run's target model, resolved exactly: DB.SCHEMA.TABLE when the run names one (preferring the run's
+    domain), otherwise the table name inside the run's domain. Never a guess: no target means a clear error."""
+    model = (run.get("TARGET_MODEL") or "").strip()
+    assert model, NO_TARGET
+    parts = model.split(".")
+    if len(parts) == 3:
+        found = rows(session, """SELECT * FROM KNOWLEDGE.TARGET_TABLE_REGISTRY
+                                 WHERE ACTIVE_FLAG AND TARGET_DATABASE = ? AND TARGET_SCHEMA = ? AND TARGET_TABLE = ?
+                                 ORDER BY IFF(DOMAIN_ID = ?, 0, 1), CREATED_AT LIMIT 1""",
+                     [parts[0], parts[1], parts[2], run.get("DOMAIN_ID") or ""])
+        if not found:  # registered before identifiers kept their case
+            found = rows(session, """SELECT * FROM KNOWLEDGE.TARGET_TABLE_REGISTRY
+                                     WHERE ACTIVE_FLAG AND UPPER(TARGET_DATABASE) = UPPER(?)
+                                       AND UPPER(TARGET_SCHEMA) = UPPER(?) AND UPPER(TARGET_TABLE) = UPPER(?)
+                                     ORDER BY IFF(DOMAIN_ID = ?, 0, 1), CREATED_AT LIMIT 1""",
+                         [parts[0], parts[1], parts[2], run.get("DOMAIN_ID") or ""])
+    else:
+        assert run.get("DOMAIN_ID"), ("NO_DOMAIN: confirm the knowledge pack on the Domain page before mapping, "
+                                      f"so the target {model} can be found.")
+        found = rows(session, """SELECT * FROM KNOWLEDGE.TARGET_TABLE_REGISTRY
+                                 WHERE ACTIVE_FLAG AND DOMAIN_ID = ? AND UPPER(TARGET_TABLE) = UPPER(?)
+                                 ORDER BY CREATED_AT LIMIT 1""", [run["DOMAIN_ID"], parts[-1]])
+    assert found, (f"TARGET_NOT_REGISTERED: target model {model} is not registered. Register it from Sources "
+                   "(modeling panel) and retry.")
     return found[0]
 
 
@@ -205,6 +228,9 @@ def generate_mapping_candidates(session, run_id: str) -> Dict[str, Any]:
             run = stage.run
             target = target_table(session, run)
             targets = target_columns(session, target["TARGET_TABLE_ID"])
+            assert targets, (f"TARGET_EMPTY: {target['TARGET_DATABASE']}.{target['TARGET_SCHEMA']}."
+                             f"{target['TARGET_TABLE']} has no registered columns. Register the table again from "
+                             "Sources so its columns are captured, or pick another target.")
             try:
                 guidance += "\n\n" + domain_context(session, run["DOMAIN_ID"], target["TARGET_TABLE"], 4000)
             except Exception:
@@ -340,7 +366,8 @@ def _store_feedback(session, run: Dict[str, Any], targets: Dict[str, Dict[str, A
          WHERE C.RUN_ID = ? AND C.IS_CURRENT AND C.RANK = 1""", [run["RUN_ID"]])
     for r in rank1:
         proposed[r["SOURCE_COLUMN_ID"]] = r["COLUMN_NAME"]
-    target_table_name = next(iter(targets.values()), {}).get("table_name") or "DIM_CUSTOMER"
+    target_table_name = (next(iter(targets.values()), {}).get("table_name")
+                         or (run.get("TARGET_MODEL") or "").split(".")[-1] or "TARGET")
     for source_id, decision, _candidate, target_id, transformation, justification, _comments in prepared:
         src = names.get(source_id) or {}
         target_name = targets.get(target_id, {}).get("column_name") if target_id else None

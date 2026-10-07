@@ -141,7 +141,9 @@ def generate_via_db(db, run_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         "severity": r.get("severity"), "origin": r.get("origin"),
         "requirement": r.get("client_requirement"),
     } for r in soda_rows]
-    soda_yaml = render_yaml((design.get("target_table") or "dim_customer").lower(), checks)
+    target_name = design.get("target_table") or next((c["target_table"] for c in checks if c.get("target_table")), None)
+    assert target_name, "TARGET_UNKNOWN: this STTM has no target table; regenerate the STTM after choosing a target model"
+    soda_yaml = render_yaml(str(target_name).lower(), checks)
     prior_rows = db.query(
         "SELECT CONTENT_JSON FROM KNOWLEDGE.DOMAIN_KNOWLEDGE "
         "WHERE IS_CURRENT AND SOURCE_REFERENCE = %s",

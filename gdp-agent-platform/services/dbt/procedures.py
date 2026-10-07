@@ -173,7 +173,9 @@ def generate_dbt(session, run_id: str, payload_json: str = "{}") -> Dict[str, An
                 "check_type": r["CHECK_TYPE"], "definition": variant(r["CHECK_DEFINITION"]) or {},
                 "severity": r["SEVERITY"], "origin": r["ORIGIN"], "requirement": r["CLIENT_REQUIREMENT"],
             } for r in soda_rows]
-            soda_yaml = render_yaml((design.get("target_table") or "dim_customer").lower(), checks)
+            from services.sttm.assemble import sttm_target_name
+
+            soda_yaml = render_yaml(sttm_target_name(session, sttm).lower(), checks)
             plan = _branch_plan(session, run_id, payload, stage.run.get("RUN_NAME") or "")
             skill_names = STAGE_SKILLS["DBT"]
             skill_meta = []

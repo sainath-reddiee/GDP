@@ -12,6 +12,7 @@ from services.common.sql import clip, insert_rows, rows, scalar, variant
 from services.common.stage import Stage
 from services.knowledge.usage import STAGE_SKILLS, use_skills
 from services.knowledge.validate import normalize_content
+from services.sttm.assemble import sttm_target_name
 from services.quality.backtest import evaluate as evaluate_check, plan as backtest_plan
 from services.quality.gx import render_suite
 from services.quality.profile_checks import profile_checks
@@ -196,7 +197,7 @@ def generate_soda(session, run_id: str) -> Dict[str, Any]:
                 pass
             sttm = _current_sttm(session, run_id)
             design = variant(sttm["TABLE_DESIGN"]) or {}
-            table = design.get("target_table") or "DIM_CUSTOMER"
+            table = sttm_target_name(session, sttm)
             lines = _lines(session, sttm["STTM_ID"])
             columns = [l["target_column"] for l in lines]
             knowledge = _knowledge(session, sttm["DOMAIN_ID"])
@@ -305,7 +306,7 @@ def import_client_expectations(session, run_id: str, rows_json: str) -> Dict[str
         "provide a client brief or a JSON/CSV array of requirement rows"
     sttm = _current_sttm(session, run_id)
     design = variant(sttm["TABLE_DESIGN"]) or {}
-    table = design.get("target_table") or "DIM_CUSTOMER"
+    table = sttm_target_name(session, sttm)
     columns = [l["target_column"] for l in _lines(session, sttm["STTM_ID"])]
     imported: List[Dict[str, Any]] = []
     if parsed.get("brief"):

@@ -53,3 +53,12 @@ def test_validate_pack_flags_problems():
     problems = " | ".join(validate_pack(bad))
     assert "missing its name" in problems and "synonyms must be a list" in problems
     assert "unknown knowledge type" in problems and "must reference {col}" in problems
+
+
+def test_domain_keywords_match_whole_tokens_only():
+    from services.knowledge.domain import _matches
+
+    assert not _matches("SITE", "WEBSITE_URL") and not _matches("LAND", "ISLAND_CODE")
+    assert _matches("BUILDING", "BUILDINGS") and _matches("DUNS", "COMPANY_DUNS_NO")
+    assert _matches("EFF_STATUS", "CUST_EFF_STATUS") and not _matches("EFF_STATUS", "EFF_DT_STATUS")
+    assert _matches("__C", "STAGE__C") and _matches("LOT", "LOT_SIZE") and not _matches("LOT", "PILOT_FLAG")
