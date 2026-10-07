@@ -4364,6 +4364,8 @@ def answer_knowledge(body: KnowledgeAnswerIn, db: Db = Depends(current_db)):
         raise HTTPException(400, str(exc)) from exc
     except Exception as exc:
         raise _snowflake_error(exc) from exc
+    _record_cost(db, None, "KNOWLEDGE", result.get("model"), result.pop("usage", None), started)
+    return result
 
 
 # ---------------------------------------------------------------- Admin: platform settings
