@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { api, attemptValue } from "@/lib/api";
+import type { SuggestionResult } from "@/app/runs/[runId]/pipeline-actions";
 
 export type Pack = Record<string, unknown>;
 
@@ -28,4 +29,51 @@ export async function importPack(pack: Pack) {
     revalidatePath("/sources");
   }
   return result;
+}
+
+
+function refreshDomains() {
+  revalidatePath("/domains");
+  revalidatePath("/sources");
+}
+
+/** Soft delete of a UI-added domain; `force` also deletes it when runs are still in flight. */
+export async function deleteDomain(domainId: string, force: boolean) {
+  const result = await attemptValue(() =>
+    api<{ deleted: boolean }>(`/api/domains/${domainId}?force=${force}`, { method: "DELETE" }));
+  if (result.ok) refreshDomains();
+  return result;
+}
+
+export async function restoreDomain(domainId: string) {
+  const result = await attemptValue(() => api<{ restored: boolean }>(`/api/domains/${domainId}/restore`, { method: "POST" }));
+  if (result.ok) refreshDomains();
+  return result;
+}
+
+export async function loadDomainReview(domainId: string) {
+  return attemptValue(() => api<SuggestionResult>(`/api/domains/${domainId}/suggestions`));
+}
+
+export async function askDomainReview(domainId: string, refresh: boolean) {
+  return attemptValue(() =>
+    api<SuggestionResult>(`/api/domains/${domainId}/suggestions?refresh=${refresh}`, { method: "POST" }));
+}
+
+export async function decideDomainSuggestion(domainId: string, body: {
+  suggestion_id: string | null; scope_key: string; item: Record<string, unknown>; decision: "ACCEPTED" | "REJECTED";
+}) {
+  const result = await attemptValue(() =>
+    api<{ applied?: string | null }>(`/api/domains/${domainId}/suggestions/decision`, {
+      method: "POST", body: JSON.stringify({ suggestion_id: body.suggestion_id, item: body.item, decision: body.decision }),
+    }));
+  if (result.ok) refreshDomains();
+  return result;
+}
+
+export type DomainAnswer = { answer: string; citations: { kind: string; key: string; title: string }[]; model: string };
+
+export async function askDomain(domainId: string, question: string) {
+  return attemptValue(() =>
+    api<DomainAnswer>(`/api/domains/${domainId}/ask`, { method: "POST", body: JSON.stringify({ question }) }));
 }

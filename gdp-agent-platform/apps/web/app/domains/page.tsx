@@ -4,6 +4,8 @@ import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
 import { displayDomain } from "@/lib/catalog-display";
+import Link from "next/link";
+import { DomainTools } from "./domain-tools";
 import { PackEditor } from "./pack-editor";
 
 type Domain = {
@@ -24,6 +26,10 @@ type DomainDetail = {
   contract: string | null;
   silver: { database: string | null; schema: string | null };
   knowledge: { knowledge_type: string; n: number }[];
+  deletable?: boolean;
+  not_deletable_reason?: string | null;
+  active_runs?: { run_id: string; run_name: string; current_state: string }[];
+  deleted?: { at: string; by: string } | null;
 };
 
 function topSignals(weights?: Record<string, number>, limit = 10) {
@@ -34,9 +40,12 @@ function cleanDescription(text: string | null) {
   return (text || "").replace(/Global Data Platform\s*/i, "").replace(/\bGDP\b/g, "").trim() || null;
 }
 
-export default async function Domains() {
+export default async function Domains({ searchParams }: { searchParams?: { deleted?: string } }) {
+  const showDeleted = searchParams?.deleted === "1";
   const { domains } = await api<{ domains: Domain[] }>("/api/domains");
-  const visible = domains.filter((d) => displayDomain(d.domain_name));
+  const named = domains.filter((d) => displayDomain(d.domain_name));
+  const deletedCount = named.filter((d) => !d.active_flag).length;
+  const visible = named.filter((d) => (showDeleted ? !d.active_flag : d.active_flag));
   const details = await Promise.all(visible.map((d) =>
     api<DomainDetail>(`/api/domains/${d.domain_id}`).catch(() => null)));
 
@@ -44,7 +53,14 @@ export default async function Domains() {
     <div className="space-y-5">
       <PageHeader eyebrow="Knowledge" title="Domains"
                   description="Domain contracts drive source detection on the Sources page and the mapping, STTM and dbt generation for every run." />
-      <PackEditor domains={visible.filter((d) => d.domain_name !== "GDP")
+      {deletedCount > 0 && (
+        <div className="flex justify-end text-xs">
+          <Link href={showDeleted ? "/domains" : "/domains?deleted=1"} className="text-primary hover:underline">
+            {showDeleted ? "Back to active domains" : `Show deleted domains (${deletedCount})`}
+          </Link>
+        </div>
+      )}
+      <PackEditor domains={named.filter((d) => d.active_flag && d.domain_name !== "GDP")
         .map((d) => ({ domain_id: d.domain_id, domain_name: d.domain_name, label: displayDomain(d.domain_name) ?? d.domain_name }))} />
       {visible.length === 0 && (
         <Card className="p-5 text-sm text-muted-foreground">No domains registered yet. Add a knowledge pack above, or deploy the platform to seed the repository packs.</Card>
@@ -128,6 +144,11 @@ export default async function Domains() {
                   {detail.contract && <p className="mt-2 font-mono text-[11px] text-muted-foreground">{detail.contract.split("/").pop()}</p>}
                 </div>
               </div>
+            )}
+            {detail && (
+              <DomainTools domainId={d.domain_id} name={d.domain_name} deletable={!!detail.deletable}
+                           reason={detail.not_deletable_reason ?? null} activeRuns={detail.active_runs ?? []}
+                           deleted={!d.active_flag} />
             )}
           </Card>
         );

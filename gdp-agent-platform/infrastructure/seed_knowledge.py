@@ -133,6 +133,7 @@ def domain_rows(database: str, live: Optional[LiveColumns] = None) -> Dict[str, 
     """Rows for every domain pack. GDP keeps its fixed domain/table IDs and column-ID scheme so existing runs resolve."""
     out: Dict[str, Any] = {"domains": [], "tables": [], "columns": [], "knowledge": [], "drift": []}
     for pack in load_domain_packs():
+        pack["domain"]["origin"] = "repository"  # re-registered on every deploy; not deletable from the UI
         for key, values in pack_rows(pack, database, live).items():
             out[key].extend(values)
     return out
