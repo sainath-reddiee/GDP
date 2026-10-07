@@ -90,12 +90,11 @@ def suggest(session, spec: Spec, scope_key: str, context: Dict[str, Any], run_id
         except Exception as exc:
             return {"suggestion_id": None, "items": [], "model": model, "cached": False,
                     "error": f"AI suggestions unavailable: {clip(exc, 300)}"}
-        if run_id:
-            try:
-                record_cost(session, run_id, spec.stage, used, usage, int((time.time() - started) * 1000),
-                            tool_calls=1)
-            except Exception:
-                pass
+        try:  # recorded with or without a run (domain reviews have none)
+            record_cost(session, run_id, spec.stage, used, usage, int((time.time() - started) * 1000),
+                        tool_calls=1)
+        except Exception:
+            pass
         items = [i for i in (output.get("items") or []) if spec.valid(i)][:60]
         suggestion_id = str(uuid.uuid4())
         insert_rows(session, "CORE.AI_SUGGESTION",
