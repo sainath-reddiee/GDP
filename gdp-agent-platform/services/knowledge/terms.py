@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 from typing import Iterable, List, Set
 
+from services.common.rules import rule
+
 ABBREVIATIONS = {
     "CUST": ["CUSTOMER"], "CLT": ["CLIENT"], "NM": ["NAME"], "DOB": ["BIRTH", "DATE"], "DT": ["DATE"],
     "TS": ["TIMESTAMP"], "ADDR": ["ADDRESS"], "CD": ["CODE"], "AMT": ["AMOUNT"], "QTY": ["QUANTITY"],
@@ -27,7 +29,7 @@ def split_name(name: str) -> List[str]:
 def tokens(name: str) -> List[str]:
     out: List[str] = []
     for t in split_name(name):
-        for expanded in ABBREVIATIONS.get(t, [t]):
+        for expanded in {**ABBREVIATIONS, **(rule("hints.abbreviations") or {})}.get(t, [t]):
             if expanded not in STOPWORDS:
                 out.append(CANONICAL.get(expanded, expanded))
     return out

@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from typing import Any, Dict, List
 
+from services.common.rules import rule
+
 COMPONENTS = ("semantic", "keyword", "datatype", "statistical", "domain", "context", "historical")
-AMBIGUITY_MARGIN = 0.08
 
 
 def validate_config(weights: Dict[str, float], thresholds: Dict[str, float]) -> None:
@@ -41,7 +42,7 @@ def rank_candidates(candidates: List[Dict[str, Any]], weights: Dict[str, float],
         c["confidence"] = round(min(1.0, c["final_score"] * (0.85 + min(margin, 0.3) / 2)), 4) if i == 0 \
             else round(c["final_score"] * 0.85, 4)
         c["recommendation"] = recommendation(c["final_score"], thresholds) if i == 0 else "MANUAL"
-        c["ambiguous"] = i == 0 and (c["recommendation"] != "AUTO_SUGGEST" or margin < AMBIGUITY_MARGIN)
+        c["ambiguous"] = i == 0 and (c["recommendation"] != "AUTO_SUGGEST" or margin < rule("mapping.ambiguity_margin"))
     return ranked
 
 

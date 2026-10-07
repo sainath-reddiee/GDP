@@ -266,3 +266,48 @@ export async function applyDbtEnhance(
 export async function validateDbt(runId: string): Promise<ActionResult> {
   return after(runId, await attempt(() => api(`/api/runs/${runId}/validation`, { method: "POST" })));
 }
+
+export type SuggestionStage = "PROFILING" | "DOMAIN" | "STTM" | "SODA" | "DBT";
+
+export type SuggestionItem = Record<string, unknown> & {
+  item_key: string;
+  reason: string;
+  review?: { decision: "ACCEPTED" | "REJECTED"; decided_by?: string; decided_at?: string; note?: string } | null;
+};
+
+export type SuggestionScope = {
+  scope_key: string;
+  suggestion_id: string | null;
+  items: SuggestionItem[];
+  model: string | null;
+  cached: boolean;
+  generated: boolean;
+  error: string | null;
+};
+
+export type SuggestionResult = { stage: SuggestionStage; scopes: SuggestionScope[]; count: number };
+
+/** Earlier suggestions only; never calls the model. */
+export async function loadSuggestions(runId: string, stage: SuggestionStage) {
+  return attemptValue(() => api<SuggestionResult>(`/api/runs/${runId}/suggestions/${stage}`));
+}
+
+/** One batched model call per table, reused while the inputs are unchanged (refresh forces a new answer). */
+export async function askSuggestions(runId: string, stage: SuggestionStage, refresh = false) {
+  return attemptValue(() =>
+    api<SuggestionResult>(`/api/runs/${runId}/suggestions/${stage}?refresh=${refresh}`, { method: "POST" }),
+  );
+}
+
+export async function decideSuggestion(runId: string, stage: SuggestionStage, body: {
+  suggestion_id: string | null; scope_key: string; item: Record<string, unknown>;
+  decision: "ACCEPTED" | "REJECTED"; note?: string;
+}) {
+  const result = await attemptValue(() =>
+    api<{ item_key: string; decision: string; applied?: string }>(`/api/runs/${runId}/suggestions/${stage}/decision`, {
+      method: "POST", body: JSON.stringify(body),
+    }),
+  );
+  if (result.ok) revalidatePath(`/runs/${runId}`, "layout");
+  return result;
+}

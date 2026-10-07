@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Callable, Dict, Optional, Sequence
 
+from services.common.rules import activate, rules_for
 from services.common.sql import clip
 from services.workflow.procedures import _apply_transition, _get_run, _load_graph, _state_payload
 
@@ -14,6 +15,10 @@ class Stage:
         self.run_id = run_id
         self.graph = _load_graph(session)
         self.run = _get_run(session, run_id)
+        try:  # thresholds and name hints for this run: platform config, then the run's domain
+            activate(rules_for(session, self.run.get("DOMAIN_ID")))
+        except Exception:
+            pass
 
     @property
     def state(self) -> str:

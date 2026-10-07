@@ -1,4 +1,5 @@
 import { api, getRun } from "@/lib/api";
+import { AiSuggestions } from "@/components/ai-suggestions";
 import { StageGate } from "@/components/stage-gate";
 import { DbtStudio } from "./dbt-studio";
 import type { DbtArtifact, DbtGeneration, DbtPublication, DbtWorkspace, GenerationReport, GithubStatus } from "./dbt-types";
@@ -42,6 +43,7 @@ export default async function DbtPage({ params }: { params: { runId: string } })
         report={data.report ?? null}
         skeletonBase={data.skeleton_base ?? null}
       />
+      <AiSuggestions runId={params.runId} stage="DBT" canAct={!state.is_archived} />
     </StageGate>
   );
 }

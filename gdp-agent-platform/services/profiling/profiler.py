@@ -13,11 +13,11 @@ import re
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from services.source.identifiers import quote
+from services.common.rules import rule
 
 NULL_PLACEHOLDERS = ("", "N/A", "NA", "NULL", "NONE", "<NULL>", ".")
 TOP_VALUES = 10
 TOP_PATTERNS = 5
-ENUM_MAX_DISTINCT = 20
 
 PROFILER_VERSION = "2"
 LARGE_TABLE_ROWS = 10_000_000
@@ -205,7 +205,7 @@ def cardinality(distinct: Optional[int], non_null: int) -> Optional[str]:
     ratio = distinct / non_null if non_null else 0
     if ratio >= 0.9:
         return "HIGH"
-    if distinct <= ENUM_MAX_DISTINCT or ratio < 0.05:
+    if distinct <= rule("profile.enum_max_distinct") or ratio < 0.05:
         return "LOW"
     return "MEDIUM"
 
@@ -232,7 +232,35 @@ def date_format(patterns: Sequence[Dict[str, Any]], values: Sequence[Any] = ()) 
         if second > 12 and first <= 12:
             return f"MM{sep}DD{sep}YYYY"
         return DATE_FORMATS.get(top) or f"DD{sep}MM{sep}YYYY"
+    if top == "99999999" and values and all(_compact_date(v) for v in values if v is not None):
+        return "YYYYMMDD"  # every observed value is a real calendar date, not just eight digits
+    for shape, fmt in TEXT_TIMESTAMPS.items():
+        if top.startswith(shape):
+            fraction = top[len(shape):]
+            if not fraction:
+                return fmt
+            if fraction.startswith(".") and set(fraction[1:]) == {"9"}:
+                return fmt + ".FF"
     return DATE_FORMATS.get(top)
+
+
+TEXT_TIMESTAMPS = {  # value shape (letters as A/a) -> Snowflake format
+    "9999-99-99 99:99:99": "YYYY-MM-DD HH24:MI:SS",
+    "9999-99-99A99:99:99": 'YYYY-MM-DD"T"HH24:MI:SS',
+    "9999/99/99 99:99:99": "YYYY/MM/DD HH24:MI:SS",
+}
+
+
+def _compact_date(value: Any) -> bool:
+    text = str(value)
+    if len(text) != 8 or not text.isdigit():
+        return False
+    year, month, day = int(text[:4]), int(text[4:6]), int(text[6:])
+    if not (1900 <= year <= 2100 and 1 <= month <= 12):
+        return False
+    days = [31, 29 if year % 4 == 0 and (year % 100 != 0 or year % 400 == 0) else 28, 31, 30, 31, 30, 31, 31, 30,
+            31, 30, 31][month - 1]
+    return 1 <= day <= days
 
 
 def _tokens(name: str) -> List[str]:
@@ -282,7 +310,6 @@ VALUE_PII = (
     ("IP_ADDRESS", re.compile(r"^(25[0-5]|2[0-4]\d|1?\d?\d)(\.(25[0-5]|2[0-4]\d|1?\d?\d)){3}$")),
     ("PHONE", re.compile(r"^\+?[\d\s().-]{10,20}$")),
 )
-VALUE_PII_SHARE = 0.8
 
 
 def _luhn(digits: str) -> bool:
@@ -324,7 +351,7 @@ def value_pii(frequencies: Sequence[Dict[str, Any]]) -> str:
     if not total or not seen:
         return "NONE"
     kind, hits = max(seen.items(), key=lambda kv: kv[1])
-    return kind if hits / total >= VALUE_PII_SHARE else "NONE"
+    return kind if hits / total >= rule("profile.value_pii_share") else "NONE"
 
 
 def mask(value: Optional[str], pii: str) -> Optional[str]:
@@ -342,6 +369,28 @@ def mask(value: Optional[str], pii: str) -> Optional[str]:
         digits = re.sub(r"\D", "", v)
         return "***" + digits[-4:] if len(digits) > 8 else "***"
     return "***"
+
+
+def apply_column_rules(profiles: List[Dict[str, Any]], column_rules: Dict[str, Dict[str, Any]]) -> None:
+    """Reviewer-accepted facts about these exact source columns override the rule result. Raising PII re-masks."""
+    for p in profiles:
+        found = column_rules.get(str(p["column_name"]).upper())
+        if not found:
+            continue
+        if found.get("semantic_type"):
+            p["semantic_type"] = str(found["semantic_type"]).upper()
+        if found.get("date_format"):
+            p.setdefault("statistics", {})["date_format"] = found["date_format"]
+        pii = str(found.get("pii_classification") or "").upper()
+        if pii:
+            if pii != "NONE" and p.get("pii_classification", "NONE") == "NONE":
+                p["sample_values"] = [{**v, "value": mask(v.get("value"), pii)} for v in p.get("sample_values") or []]
+                stats = p.setdefault("statistics", {})
+                stats["frequency_distribution"] = [{**v, "value": mask(v.get("value"), pii)}
+                                                   for v in stats.get("frequency_distribution") or []]
+                stats["min"] = stats["max"] = None
+            p["pii_classification"] = pii
+        p["rule_source"] = "accepted column rule"
 
 
 def potential_key(row_count: int, stats: Dict[str, Any], approximate: bool = False) -> bool:
@@ -385,7 +434,7 @@ def build_profile(name: str, data_type: str, stats: Dict[str, Any], frequencies:
             "date_format": (date_format(patterns, [f.get("value") for f in frequencies]) if family == "TEXT"
                             else None),
             "enum_values": ([f["value"] for f in masked_freq]
-                            if card in ("LOW", "CONSTANT") and stats.get("distinct_count", 99) <= ENUM_MAX_DISTINCT
+                            if card in ("LOW", "CONSTANT") and stats.get("distinct_count", 99) <= rule("profile.enum_max_distinct")
                             else None),
         },
     }

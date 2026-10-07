@@ -1140,7 +1140,7 @@ def put_run_intent(run_id: str, body: IntentPatch, db: Db = Depends(current_db))
 def catalog_target_suggestions(database: str = "", schema: str = "", tables: str = "", db: Db = Depends(current_db)):
     table_list = [part.strip() for part in (tables or "").split(",") if part.strip()]
     detected = _infer_domains(db, table_list, [], schema or None)[:1] if table_list else []
-    domain = detected[0]["domain_name"] if detected and detected[0]["confidence"] >= INFERRED_MIN_CONFIDENCE else None
+    domain = detected[0]["domain_name"] if detected and detected[0]["confidence"] >= _min_confidence(db) else None
     return _suggest_for_catalog(db, database or None, schema or None, table_list, domain)
 
 
@@ -1341,6 +1341,28 @@ def register_target(body: TargetBind, db: Db = Depends(current_db)):
         return db.call("CALL KNOWLEDGE.REGISTER_TARGET_TABLE(%s)", (json.dumps(payload),))
     except Exception as exc:
         raise _snowflake_error(exc) from exc
+
+
+def _record_cost(db: Db, run_id: str, stage: str, model: Optional[str], usage: Optional[dict], started: float) -> None:
+    """AUDIT.COST_USAGE row for an AI call the API makes directly (same rate table as the procedures).
+    Never fails the request it describes."""
+    try:
+        usage = usage or {}
+        prompt, completion = int(usage.get("prompt_tokens") or 0), int(usage.get("completion_tokens") or 0)
+        total = int(usage.get("total_tokens") or prompt + completion)
+        found = db.query("SELECT CONFIG_VALUE FROM CORE.PLATFORM_CONFIG "
+                         "WHERE CONFIG_KEY = 'CREDITS_PER_MILLION_TOKENS' AND IS_CURRENT")
+        rates = _json(found[0].get("config_value")) if found else {}
+        rate = float((rates or {}).get(model or "", (rates or {}).get("default", 0)) or 0)
+        db.execute(
+            """INSERT INTO AUDIT.COST_USAGE (COST_USAGE_ID, RUN_ID, STAGE, AGENT, MODEL, INPUT_TOKENS, OUTPUT_TOKENS,
+                   TOTAL_TOKENS, TOOL_CALL_COUNT, SEARCH_CALL_COUNT, CODE_CALL_COUNT, DURATION_MS, ESTIMATED_COST)
+               SELECT %s, %s, %s, 'PLATFORM', %s, %s, %s, %s, 1, 0, 0, %s, %s""",
+            (str(uuid.uuid4()), run_id, stage, model, prompt, completion, total,
+             int((time.time() - started) * 1000), round(total / 1_000_000 * rate, 6)),
+        )
+    except Exception:
+        pass
 
 
 def _source_call(db: Db, proc: str, handler, *args):
@@ -1929,7 +1951,7 @@ def get_mapping(run_id: str, db: Db = Depends(current_db)):
     undecided = sorted({c["source_column"] for c in candidates if c["source_column_id"] not in decided})
     return {
         "candidates": candidates, "decisions": decisions, "targets": targets,
-        "target_table": table, "profile": profile,
+        "target_table": table, "profile": profile, "bands": _ui_bands(db, run_id),
         "status": {
             "source_columns": len(sources), "decided": len(sources & decided),
             "undecided": undecided, "missing_required_targets": missing,
@@ -1976,6 +1998,7 @@ def mapping_assist(run_id: str, body: MappingAssist, db: Db = Depends(current_db
         "SELECT CONFIG_VALUE::VARCHAR AS M FROM CORE.PLATFORM_CONFIG WHERE CONFIG_KEY = 'LLM_MODEL' AND IS_CURRENT"
     )
     model = (model_rows[0]["m"] if model_rows else None) or "claude-sonnet-4-5"
+    started = time.time()
     try:
         result = db.query(
             "SELECT AI_COMPLETE(model => %s, prompt => %s, "
@@ -1987,6 +2010,7 @@ def mapping_assist(run_id: str, body: MappingAssist, db: Db = Depends(current_db
         raise _snowflake_error(exc) from exc
     details = result[0]["r"] if result else None
     details = json.loads(details) if isinstance(details, str) else (details or {})
+    _record_cost(db, run_id, "MAPPING", details.get("model", model), details.get("usage"), started)
     structured = details.get("structured_output") or []
     if not structured:
         raise HTTPException(502, "Cortex returned no structured answer for these columns. Try fewer columns or again.")
@@ -2763,11 +2787,14 @@ def review_dbt(run_id: str, body: DbtReview, db: Db = Depends(current_db)):
         notes = json.dumps({k: report.get(k) for k in ("source_unique_id", "dedup_order", "anomalies", "hub", "counts")})
     except ValueError:
         pass
+    started = time.time()
     try:
-        return review_file(lambda sql, params=(): db.query(sql, params), path, files[path],
-                           _domain_skill(db, run_id), _sttm_context(db, run_id), notes, model=body.model)
+        reviewed = review_file(lambda sql, params=(): db.query(sql, params), path, files[path],
+                               _domain_skill(db, run_id), _sttm_context(db, run_id), notes, model=body.model)
     except Exception as exc:
         raise _snowflake_error(exc) from exc
+    _record_cost(db, run_id, "DBT", reviewed.get("model"), reviewed.get("usage"), started)
+    return reviewed
 
 
 @app.post("/api/runs/{run_id}/dbt/enhance")
@@ -2830,8 +2857,9 @@ def enhance_dbt(run_id: str, body: DbtEnhance, db: Db = Depends(current_db)):
         skill = ""
     if skill:
         context = f"{context}\n\nFOLLOW THESE GDP-DBT-ONBOARD-SOURCE RULES AND DOMAIN CONTRACT:\n{skill}"
+    started = time.time()
     try:
-        return enhance_file(
+        enhanced = enhance_file(
             lambda sql, params=(): db.query(sql, params),
             path,
             rows[0]["content"] or "",
@@ -2841,6 +2869,8 @@ def enhance_dbt(run_id: str, body: DbtEnhance, db: Db = Depends(current_db)):
         )
     except Exception as exc:
         raise _snowflake_error(exc) from exc
+    _record_cost(db, run_id, "DBT", enhanced.get("model"), enhanced.get("usage"), started)
+    return enhanced
 
 
 @app.post("/api/runs/{run_id}/validation")
@@ -3366,8 +3396,40 @@ def _registered_source(db: Db, database: str, schema: str) -> Optional[dict]:
 
 
 _DOMAIN_VOCAB: dict = {"at": 0.0, "domains": []}
-INFERRED_MIN_CONFIDENCE = 0.3
-INHERITED_MIN_CONFIDENCE = 0.2
+_RULES_CACHE: dict = {}
+
+
+def _rules(db: Db, domain_id: Optional[str] = None) -> dict:
+    """Thresholds and name hints (services.common.rules) for the API, cached for a minute per domain, and made
+    active for the rest of this request so shared helpers (insights, inference) read the same values."""
+    from services.common.rules import activate, load_rules
+
+    key = domain_id or ""
+    hit = _RULES_CACHE.get(key)
+    if not hit or time.time() - hit[0] > 60:
+        hit = (time.time(), load_rules(lambda sql, params: db.query(sql.replace("?", "%s"), tuple(params)),
+                                       domain_id))
+        _RULES_CACHE[key] = hit
+    activate(hit[1])
+    return hit[1]
+
+
+def _ui_bands(db: Db, run_id: Optional[str] = None) -> dict:
+    """Confidence bands for the pages, from the rules of the run's domain (platform rules without a run)."""
+    from services.common.rules import DEFAULTS, ui_bands
+
+    try:
+        domain = None
+        if run_id:
+            found = db.query("SELECT DOMAIN_ID FROM CORE.WORKFLOW_RUN WHERE RUN_ID = %s", (run_id,))
+            domain = found[0]["domain_id"] if found else None
+        return ui_bands(_rules(db, domain))
+    except Exception:
+        return ui_bands(DEFAULTS)
+
+
+def _min_confidence(db: Db, kind: str = "inferred") -> float:
+    return float(_rules(db)[f"domain.{kind}_min_confidence"])
 
 
 def _domain_vocab(db: Db) -> list[dict]:
@@ -3420,18 +3482,18 @@ def _inferred_table_domains(db: Db, tables: list[dict], known: dict[str, str],
     A single table carries few signals, so it inherits the schema's lead domain when it hits that domain's signals."""
     schema_domain = _infer_domains(db, [t["table_name"] for t in tables],
                                    [c for t in tables for c in t.get("column_names") or []], schema)[:3]
-    lead = schema_domain[0] if schema_domain and schema_domain[0]["confidence"] >= INFERRED_MIN_CONFIDENCE else None
+    lead = schema_domain[0] if schema_domain and schema_domain[0]["confidence"] >= _min_confidence(db) else None
     inferred: dict[str, dict] = {}
     for t in tables:
         if t["table_name"] in known:
             continue
         ranked = _infer_domains(db, [t["table_name"]], t.get("column_names") or [])
         own = next((r for r in ranked if lead and r["domain_id"] == lead["domain_id"]), None)
-        if ranked and ranked[0]["confidence"] >= INFERRED_MIN_CONFIDENCE:
+        if ranked and ranked[0]["confidence"] >= _min_confidence(db):
             inferred[t["table_name"]] = ranked[0]
-        elif own and own["signals"] and own["confidence"] >= INHERITED_MIN_CONFIDENCE:
+        elif own and own["signals"] and own["confidence"] >= _min_confidence(db, "inherited"):
             inferred[t["table_name"]] = own
-    return inferred, [d for d in schema_domain if d["confidence"] >= INFERRED_MIN_CONFIDENCE]
+    return inferred, [d for d in schema_domain if d["confidence"] >= _min_confidence(db)]
 
 
 def _run_domains(db: Db, database: str, schema: str) -> dict[str, str]:
@@ -3498,7 +3560,7 @@ def _catalog_inventory(db: Db, database: str, schema: str) -> dict:
             "quality": scorecard(dims, t["last_altered"]) if staged and dims else None,
         })
     return {"database": database, "schema": schema, "source": registered, "tables": inventory, "jobs": jobs,
-            "domain_candidates": [d for d in schema_domain if d["confidence"] >= INFERRED_MIN_CONFIDENCE]}
+            "domain_candidates": [d for d in schema_domain if d["confidence"] >= _min_confidence(db)]}
 
 
 def _json(value):
@@ -3665,6 +3727,21 @@ def catalog_modeling_run(body: CatalogModelingRequest, db: Db = Depends(current_
         modeling_standard=body.modeling_standard), db)
 
 
+def _value_relationships(db: Db, database: str, schema: str, docs: dict) -> list[dict]:
+    """Joins the names do not reveal, proven by one overlap query over the staged tables (never blocks analyze)."""
+    from services.profiling import insights
+
+    pairs = insights.overlap_candidates(docs)
+    sql = insights.overlap_sql(pairs, lambda t, c: (
+        f"{_quote_ident(database)}.{_quote_ident(schema)}.{_quote_ident(t)}", _quote_ident(c)))
+    if not sql:
+        return []
+    try:
+        return insights.overlap_relationships(pairs, db.query(sql))
+    except Exception:
+        return []
+
+
 class CatalogAnalyzeRequest(CatalogTarget):
     tables: list[str] = Field(min_length=1, max_length=60)
 
@@ -3677,6 +3754,7 @@ def catalog_analyze(body: CatalogAnalyzeRequest, db: Db = Depends(current_db)):
 
     database, schema = _ident(body.database, "database"), _ident(body.schema_name, "schema")
     tables = sorted({_table_ident(t) for t in body.tables})
+    _rules(db)
     store = _catalog_store_rows(db, database, schema)
     meta = {t["table_name"]: t for t in _source_tables(db, {"database_name": database, "schema_name": schema})}
     docs, summary = {}, []
@@ -3695,6 +3773,7 @@ def catalog_analyze(body: CatalogAnalyzeRequest, db: Db = Depends(current_db)):
                             if (c.get("pii_classification") or "NONE") != "NONE"],
         })
     relationships = insights.infer_relationships(docs)
+    relationships += _value_relationships(db, database, schema, docs)
     graph = catalog_preview_graph(PreviewGraph(database=database, schema=schema, tables=tables, targets=[]), db)
     profiled_pairs = {frozenset((j["left"], j["right"])) for j in relationships}
     graph["joins"] = relationships + [j for j in graph.get("joins") or []
@@ -3710,9 +3789,10 @@ def catalog_analyze(body: CatalogAnalyzeRequest, db: Db = Depends(current_db)):
     if not columns:
         columns = [c for t in tables for c in (meta.get(t) or {}).get("column_names") or []]
     candidates = _infer_domains(db, tables, columns, schema)[:3]
-    detected = candidates[0] if candidates and candidates[0]["confidence"] >= INFERRED_MIN_CONFIDENCE else None
+    detected = candidates[0] if candidates and candidates[0]["confidence"] >= _min_confidence(db) else None
     return {"tables": summary, "relationships": relationships, "graph": graph,
             "domain": {"detected": detected, "candidates": candidates},
+            "bands": _ui_bands(db),
             # The panel always asks "GDP or not"; this is only the preselection.
             "suggested_standard": "GDP" if detected and detected.get("standard") == "GDP" else "GENERIC",
             "models": _suggest_for_catalog(db, database, schema, tables,
@@ -3819,3 +3899,141 @@ def land_external(source_id: str, body: LandRequest, db: Db = Depends(current_db
                             body.model_dump_json())
     except Exception as exc:
         raise _snowflake_error(exc) from exc
+
+
+# ---------------------------------------------------------------- Rules: thresholds and name hints as configuration
+
+
+class RulesUpdate(BaseModel):
+    overrides: dict = Field(default_factory=dict)
+
+
+def _put_config(db: Db, key: str, value: dict, description: str) -> None:
+    db.execute("UPDATE CORE.PLATFORM_CONFIG SET IS_CURRENT = FALSE WHERE CONFIG_KEY = %s AND IS_CURRENT", (key,))
+    db.execute(
+        """
+        INSERT INTO CORE.PLATFORM_CONFIG (CONFIG_KEY, CONFIG_VALUE, DESCRIPTION, VERSION, IS_CURRENT, CREATED_BY)
+        SELECT %s, PARSE_JSON(%s), %s,
+               COALESCE((SELECT MAX(VERSION) FROM CORE.PLATFORM_CONFIG WHERE CONFIG_KEY = %s), 0) + 1,
+               TRUE, CURRENT_USER()
+        """,
+        (key, json.dumps(value), description, key),
+    )
+
+
+def _clean_overrides(overrides: dict) -> dict:
+    """Only known keys with values of the right kind; anything else is reported, not silently dropped."""
+    from services.common.rules import DEFAULTS, merged
+
+    unknown = sorted(set(overrides) - set(DEFAULTS))
+    if unknown:
+        raise HTTPException(400, f"unknown rule keys: {', '.join(unknown)}")
+    applied = merged(overrides)
+    rejected = sorted(k for k, v in overrides.items() if v is not None and applied[k] == DEFAULTS[k] and v != DEFAULTS[k])
+    if rejected:
+        raise HTTPException(400, f"invalid values for: {', '.join(rejected)}")
+    return {k: applied[k] for k in overrides if overrides[k] is not None}
+
+
+@app.get("/api/config/rules")
+def get_rules(domain_id: Optional[str] = None, db: Db = Depends(current_db)):
+    """Effective rules (defaults, platform overrides, then the domain's), plus the bands the UI shows."""
+    from services.common.rules import DEFAULTS, ui_bands
+
+    effective = _rules(db, domain_id)
+    return {"rules": effective, "defaults": DEFAULTS, "ui": ui_bands(effective),
+            "overridden": sorted(k for k in DEFAULTS if effective[k] != DEFAULTS[k])}
+
+
+@app.put("/api/config/rules")
+def put_rules(body: RulesUpdate, db: Db = Depends(current_db)):
+    """Platform-wide overrides; keys not sent fall back to their defaults."""
+    overrides = _clean_overrides(body.overrides)
+    _put_config(db, "RULES", overrides, "Rule thresholds and name hints (platform overrides)")
+    _RULES_CACHE.clear()
+    return get_rules(None, db)
+
+
+@app.put("/api/domains/{domain_id}/rules")
+def put_domain_rules(domain_id: str, body: RulesUpdate, db: Db = Depends(current_db)):
+    """Overrides for one domain, on top of the platform's."""
+    overrides = _clean_overrides(body.overrides)
+    found = db.query("SELECT DOMAIN_ID FROM KNOWLEDGE.DOMAIN_REGISTRY WHERE DOMAIN_ID = %s", (domain_id,))
+    if not found:
+        raise HTTPException(404, "domain not found")
+    db.execute(
+        """UPDATE KNOWLEDGE.DOMAIN_REGISTRY
+              SET CONFIG = OBJECT_INSERT(COALESCE(CONFIG, OBJECT_CONSTRUCT()), 'rules', PARSE_JSON(%s), TRUE)
+            WHERE DOMAIN_ID = %s""",
+        (json.dumps(overrides), domain_id),
+    )
+    _RULES_CACHE.clear()
+    return get_rules(domain_id, db)
+
+
+# ---------------------------------------------------------------- AI suggestions next to rule results
+
+SUGGESTION_STAGES = ("PROFILING", "DOMAIN", "STTM", "SODA", "DBT")
+
+
+class SuggestionDecision(BaseModel):
+    suggestion_id: Optional[str] = None
+    scope_key: str = Field(min_length=1, max_length=1024)
+    item: dict
+    decision: Literal["ACCEPTED", "REJECTED"]
+    note: Optional[str] = Field(default=None, max_length=2000)
+
+
+def _suggestion_stage(stage: str) -> str:
+    stage = stage.upper()
+    if stage not in SUGGESTION_STAGES:
+        raise HTTPException(400, f"stage must be one of {', '.join(SUGGESTION_STAGES)}")
+    return stage
+
+
+@app.get("/api/runs/{run_id}/suggestions/{stage}")
+def get_suggestions(run_id: str, stage: str, db: Db = Depends(current_db)):
+    """Earlier AI suggestions for this stage (no model call)."""
+    from services.common.suggestion_stages import run_suggestions
+
+    try:
+        return invoke_source(db, run_suggestions, _suggestion_stage(stage), run_id, False, True)
+    except AssertionError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise _snowflake_error(exc) from exc
+
+
+@app.post("/api/runs/{run_id}/suggestions/{stage}")
+def ask_suggestions(run_id: str, stage: str, refresh: bool = False, db: Db = Depends(current_db)):
+    """Ask the model to review the rule results: one call per table, reused while the inputs are unchanged."""
+    from services.common.suggestion_stages import run_suggestions
+
+    try:
+        return invoke_source(db, run_suggestions, _suggestion_stage(stage), run_id, refresh, False)
+    except AssertionError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise _snowflake_error(exc) from exc
+
+
+@app.post("/api/runs/{run_id}/suggestions/{stage}/decision")
+def decide_suggestion(run_id: str, stage: str, body: SuggestionDecision, db: Db = Depends(current_db)):
+    from services.common.suggestion_stages import decide
+
+    try:
+        result = invoke_source(db, decide, _suggestion_stage(stage), run_id, body.model_dump_json())
+    except AssertionError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise _snowflake_error(exc) from exc
+    _drop_run(run_id)
+    return result

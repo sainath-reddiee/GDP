@@ -17,10 +17,8 @@ import math
 import re
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
-ENUM_MAX = 20
-REGEX_COVERAGE = 0.95
-MISSING_SOFT_MAX = 20.0
-VOLUME_TOLERANCE = 0.1
+from services.common.rules import rule as setting
+
 WRAPPERS = re.compile(r"\b(TRIM|LTRIM|RTRIM|UPPER|LOWER|INITCAP|NULLIF|CAST|TRY_CAST|TO_VARCHAR|TO_CHAR|TO_NUMBER|"
                       r"TRY_TO_NUMBER|TO_DECIMAL|TRY_TO_DECIMAL|TO_DATE|TRY_TO_DATE|TO_TIMESTAMP|TRY_TO_TIMESTAMP|"
                       r"TO_TIMESTAMP_NTZ|TRY_TO_TIMESTAMP_NTZ|AS|VARCHAR|STRING|TEXT|NUMBER|DATE|TIMESTAMP_NTZ|"
@@ -126,7 +124,7 @@ def profile_checks(target_table: str, lines: List[Dict[str, Any]], docs: Dict[st
                 out.append(_check(target_table, target, "NOT_NULL", {"kind": "not_null"}, "WARN",
                                   f"{target} had no missing values in the profiled source.",
                                   f"0 nulls in {rows:,} rows of {where}"))
-            elif null_pct <= MISSING_SOFT_MAX:
+            elif null_pct <= setting("quality.missing_soft_max"):
                 limit = min(100.0, math.ceil(null_pct * 1.5 + 1))
                 out.append(_check(target_table, target, "NOT_NULL", {"kind": "missing_percent", "max_percent": limit},
                                   "WARN", f"{target} missing share should stay under {limit:g}%.",
@@ -166,7 +164,7 @@ def profile_checks(target_table: str, lines: List[Dict[str, Any]], docs: Dict[st
             extra = [v for v in enum if v.upper() not in allowed]
             _annotate(rule, f"source {where} holds {len(enum)} values"
                       + (f"; NOT in the STTM list: {', '.join(extra[:8])}" if extra else "; all within the list"))
-        elif 1 < len(enum) <= ENUM_MAX and col.get("cardinality") in ("LOW", "CONSTANT"):
+        elif 1 < len(enum) <= setting("quality.enum_max") and col.get("cardinality") in ("LOW", "CONSTANT"):
             out.append(_check(target_table, target, "ACCEPTED_VALUES", {"kind": "accepted_values", "values": enum},
                               "WARN", f"{target} should stay within the {len(enum)} observed codes.",
                               f"{len(enum)} distinct values in {rows:,} rows of {where}"))
@@ -174,7 +172,7 @@ def profile_checks(target_table: str, lines: List[Dict[str, Any]], docs: Dict[st
 
         # dominant shape
         top = _top_pattern(col)
-        if (col.get("family") == "TEXT" and top and top[1] >= REGEX_COVERAGE and len(top[0]) <= 40
+        if (col.get("family") == "TEXT" and top and top[1] >= setting("quality.regex_coverage") and len(top[0]) <= 40
                 and (target, "pattern") not in stated and not enum):
             out.append(_check(target_table, target, "CUSTOM",
                               {"kind": "regex", "pattern": _regex(top[0]), "max_invalid_percent": 5}, "WARN",
@@ -185,9 +183,10 @@ def profile_checks(target_table: str, lines: List[Dict[str, Any]], docs: Dict[st
     driving = (driving_table or "").upper()
     source_rows = int((docs.get(driving) or {}).get("row_count") or 0)
     if source_rows and (None, "volume") not in stated:
-        low_n, high_n = math.floor(source_rows * (1 - VOLUME_TOLERANCE)), math.ceil(source_rows * (1 + VOLUME_TOLERANCE))
+        tolerance = setting("quality.volume_tolerance")
+        low_n, high_n = math.floor(source_rows * (1 - tolerance)), math.ceil(source_rows * (1 + tolerance))
         out.append(_check(target_table, None, "ROW_COUNT", {"kind": "row_count", "min": low_n, "max": high_n}, "WARN",
-                          f"Row count should stay within {int(VOLUME_TOLERANCE * 100)}% of the driving source.",
+                          f"Row count should stay within {int(tolerance * 100)}% of the driving source.",
                           f"{driving} has {source_rows:,} rows; adjust when the model filters or aggregates"))
 
     # spoke to hub referential integrity from the domain contract

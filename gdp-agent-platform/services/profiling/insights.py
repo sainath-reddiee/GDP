@@ -7,10 +7,10 @@ import re
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
+from services.common.rules import contains_hint, ends_with_hint, rule
+
 WEIGHTS = {"completeness": 0.35, "uniqueness": 0.25, "validity": 0.25, "freshness": 0.15}
 GRADES = ((90, "A"), (75, "B"), (60, "C"), (40, "D"))
-MIN_RELATIONSHIP_CONFIDENCE = 0.6
-FRESHNESS_COLUMN = re.compile(r"(UPDATED|MODIFIED|LOAD|INGEST|CREATED|EVENT|TS|DATE|TIME)", re.I)
 
 
 def _cols(doc: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -106,11 +106,10 @@ def _regex(shape: str) -> str:
     return "^" + "".join(out) + "$"
 
 
-IDENTIFIER_NAME = re.compile(r"(^ID$|_ID$|_KEY$|_CODE$|_NO$|_NUM$|_NBR$|ID$)", re.I)
 
 
 def _is_identifier(col: Dict[str, Any]) -> bool:
-    return col.get("semantic_type") == "IDENTIFIER" or bool(IDENTIFIER_NAME.search(col["column_name"]))
+    return col.get("semantic_type") == "IDENTIFIER" or ends_with_hint(col["column_name"], "hints.identifier_suffixes")
 
 
 def suggested_checks(doc: Dict[str, Any], limit: int = 20, max_not_null: int = 6) -> List[Dict[str, Any]]:
@@ -130,20 +129,21 @@ def suggested_checks(doc: Dict[str, Any], limit: int = 20, max_not_null: int = 6
     for c in cols:
         name, s = c["column_name"], _stats(c)
         enum = s.get("enum_values")
-        if enum and c.get("pii_classification", "NONE") == "NONE" and len(enum) <= 20:
+        if enum and c.get("pii_classification", "NONE") == "NONE" and len(enum) <= rule("quality.enum_max"):
             checks.append({"check": f"invalid_count({name}) = 0", "column": name, "valid_values": [str(v) for v in enum],
                            "reason": f"{len(enum)} distinct values observed"})
             continue
         patterns = c.get("patterns") or []
         total = sum(int(p.get("count") or 0) for p in patterns)
-        if c.get("family") == "TEXT" and total and int(patterns[0]["count"]) / total >= 0.95 and len(patterns[0]["pattern"]) <= 40:
+        if (c.get("family") == "TEXT" and total and int(patterns[0]["count"]) / total >= rule("quality.regex_coverage")
+                and len(patterns[0]["pattern"]) <= 40):
             checks.append({"check": f"invalid_percent({name}) < 5%", "column": name,
                            "valid_regex": _regex(patterns[0]["pattern"]),
                            "reason": f"{round(100 * int(patterns[0]['count']) / total)}% match pattern {patterns[0]['pattern']}"})
-    stamps = [c for c in cols if c.get("family") in ("TIMESTAMP", "DATE") and FRESHNESS_COLUMN.search(c["column_name"])]
-    if stamps:
-        checks.append({"check": f"freshness({stamps[0]['column_name']}) < 1d", "column": stamps[0]["column_name"],
-                       "reason": "latest change column; adjust the threshold to the load schedule"})
+    stamp, why = freshness_column(cols)
+    if stamp:
+        checks.append({"check": f"freshness({stamp}) < 1d", "column": stamp,
+                       "reason": f"{why}; adjust the threshold to the load schedule"})
     complete = [c for c in cols if c["column_name"] not in keyed and (_num(_stats(c).get("null_percentage")) or 0) == 0
                 and (_stats(c).get("row_count") or 0) > 0]
     for c in complete[:max_not_null]:
@@ -259,7 +259,7 @@ def infer_relationships(docs: Dict[str, Dict[str, Any]]) -> List[Dict[str, Any]]
                         score += 0.1
                         evidence.append(f"{len(overlap)} shared sample values")
                     score = round(min(score, 1.0), 2)
-                    if score < MIN_RELATIONSHIP_CONFIDENCE:
+                    if score < rule("relationships.min_confidence"):
                         continue
                     pair = (child, parent)
                     if pair in best and best[pair]["confidence"] >= score:
@@ -274,3 +274,109 @@ def infer_relationships(docs: Dict[str, Dict[str, Any]]) -> List[Dict[str, Any]]
         if reverse and join["cardinality"] == "1:1" and reverse["cardinality"] == "1:1" and child > parent:
             del best[(child, parent)]
     return sorted(best.values(), key=lambda j: (-j["confidence"], j["left"], j["right"]))
+
+
+# ---------------------------------------------------------------- value evidence: freshness and overlap
+
+
+def _timestamp(value: Any) -> Optional[datetime]:
+    text = str(value or "").strip().replace("T", " ")
+    for size in (19, 10):
+        try:
+            stamp = datetime.fromisoformat(text[:size])
+            return stamp.replace(tzinfo=timezone.utc) if stamp.tzinfo is None else stamp
+        except ValueError:
+            continue
+    return None
+
+
+def freshness_column(cols: Sequence[Dict[str, Any]], now: Optional[datetime] = None
+                     ) -> Tuple[Optional[str], str]:
+    """The column that shows how recent a table is, chosen by its values first: a date/time column whose latest
+    value is recent and that actually varies. A name hint only breaks ties or stands in when no value is recent."""
+    now = now or datetime.now(timezone.utc)
+    best: Tuple[float, Optional[str], str] = (0.0, None, "")
+    for c in cols:
+        if c.get("family") not in ("TIMESTAMP", "DATE"):
+            continue
+        s = _stats(c)
+        if s.get("distinct_count") is not None and int(s["distinct_count"]) < 2 and int(s.get("row_count") or 0) > 1:
+            continue  # a constant stamp says nothing about freshness
+        latest = _timestamp(s.get("max"))
+        score, why = 0.0, ""
+        if latest:
+            age = (now - latest).days
+            if age <= 7:
+                score, why = 2.0, f"latest value {age}d old"
+            elif age <= 45:
+                score, why = 1.0, f"latest value {age}d old"
+        if contains_hint(c["column_name"], "hints.freshness_columns"):
+            score += 0.5
+            why = why or "named like a load or change time"
+        if score > best[0]:
+            best = (score, c["column_name"], why)
+    return best[1], best[2]
+
+
+def overlap_candidates(docs: Dict[str, Dict[str, Any]], limit: int = 12) -> List[Dict[str, Any]]:
+    """Child.column -> parent.key pairs worth testing by value overlap: same type family, the child's distinct
+    values fit inside the parent key, numeric ranges nest. Name-matched pairs are left to infer_relationships."""
+    out: List[Tuple[Tuple, Dict[str, Any]]] = []
+    for parent, pdoc in docs.items():
+        for k in [c for c in _cols(pdoc) if c.get("potential_key") and c.get("family") in ("NUMBER", "TEXT")]:
+            kd = _stats(k).get("distinct_count")
+            for child, cdoc in docs.items():
+                if child == parent:
+                    continue
+                for c in _cols(cdoc):
+                    if c.get("family") != k.get("family") or c.get("pii_classification", "NONE") != "NONE":
+                        continue
+                    if _name_match(c["column_name"], parent, k["column_name"]):
+                        continue
+                    cd = _stats(c).get("distinct_count")
+                    if not cd or not kd or int(cd) < 2 or int(cd) > int(kd):
+                        continue
+                    if c.get("potential_key") and abs(1 - int(cd) / int(kd)) > 0.1:
+                        continue  # a key inside a longer key sequence (1..500 within 1..2000) is not a reference
+                    nested = _range_within(c, k)
+                    if c.get("family") == "NUMBER" and not nested:
+                        continue
+                    rank = (not nested, abs(1 - int(cd) / int(kd)))
+                    out.append((rank, {"child": child, "column": c["column_name"], "parent": parent,
+                                       "key": k["column_name"], "child_unique": bool(c.get("potential_key"))}))
+    out.sort(key=lambda item: item[0])
+    return [pair for _, pair in out[:limit]]
+
+
+def overlap_sql(pairs: Sequence[Dict[str, Any]], ref) -> Optional[str]:
+    """One query measuring, per pair, how many distinct child values exist in the parent key.
+    `ref(table, column)` returns (table_sql, column_sql) with exact, quoted spellings."""
+    parts = []
+    for i, p in enumerate(pairs):
+        child_sql, col_sql = ref(p["child"], p["column"])
+        parent_sql, key_sql = ref(p["parent"], p["key"])
+        parts.append(f"SELECT {i} AS I, COUNT(*) AS N, COUNT(P.V) AS HIT FROM "
+                     f"(SELECT DISTINCT {col_sql} AS V FROM {child_sql} WHERE {col_sql} IS NOT NULL LIMIT 5000) X "
+                     f"LEFT JOIN (SELECT DISTINCT {key_sql} AS V FROM {parent_sql}) P ON P.V = X.V")
+    return " UNION ALL ".join(parts) if parts else None
+
+
+def overlap_relationships(pairs: Sequence[Dict[str, Any]], measured: Sequence[Dict[str, Any]]
+                          ) -> List[Dict[str, Any]]:
+    """Joins proven by the data: most child values exist in the parent key."""
+    out = []
+    for row in measured:
+        get = (lambda k: row.get(k, row.get(k.lower())))
+        i, n, hit = int(get("I")), int(get("N") or 0), int(get("HIT") or 0)
+        if not n or i >= len(pairs):
+            continue
+        share = hit / n
+        if share < rule("relationships.min_value_overlap"):
+            continue
+        p = pairs[i]
+        out.append({"left": p["child"], "right": p["parent"], "keys": [f"{p['column']}={p['key']}"],
+                    "cardinality": "1:1" if p["child_unique"] else "N:1",
+                    "confidence": round(min(1.0, 0.6 + 0.4 * share), 2), "source": "values",
+                    "evidence": [f"{round(100 * share)}% of {n} distinct {p['child']}.{p['column']} values exist in "
+                                 f"{p['parent']}.{p['key']}", "found from the data; the names do not match"]})
+    return out
