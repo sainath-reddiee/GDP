@@ -38,6 +38,10 @@ def _sttm_lines(session, sttm_id: str) -> List[Dict[str, Any]]:
     } for r in rows(session, "SELECT * FROM CONTRACT.STTM_LINE WHERE STTM_ID = ?", [sttm_id])]
 
 
+UNAVAILABLE_MARKERS = ("unsupported feature", "not supported", "insufficient privileges",
+                       "unexpected 'dbt'", "unknown object type", "feature is not enabled")
+
+
 def _compile(session, generation: Dict[str, Any], run_id: str) -> Dict[str, Any]:
     """CREATE DBT PROJECT FROM the staged files and EXECUTE compile WRITEBACK=FALSE.
 
@@ -60,10 +64,17 @@ def _compile(session, generation: Dict[str, Any], run_id: str) -> Dict[str, Any]
                 "findings": [{"severity": "INFO", "message": f"compiled {name} WRITEBACK=FALSE"}],
                 "query_id": None}
     except Exception as exc:
-        return {"validation_type": "DBT_COMPILE", "status": "ERROR", "error_count": 0, "warning_count": 1,
-                "findings": [{"severity": "WARN",
-                              "message": "dbt project compile unavailable or failed; deterministic checks still apply: "
-                                         + clip(exc, 800)}],
+        text = str(exc)
+        unavailable = any(marker in text.lower() for marker in UNAVAILABLE_MARKERS)
+        if unavailable:  # the account cannot compile dbt projects: deterministic checks decide
+            return {"validation_type": "DBT_COMPILE", "status": "SKIPPED", "error_count": 0, "warning_count": 1,
+                    "findings": [{"severity": "WARN",
+                                  "message": "dbt projects are not available to this role/account, so compile was "
+                                             "skipped; deterministic checks still apply: " + clip(exc, 600)}],
+                    "query_id": None}
+        # A real compile error (bad SQL, missing ref or source) fails validation.
+        return {"validation_type": "DBT_COMPILE", "status": "FAILED", "error_count": 1, "warning_count": 0,
+                "findings": [{"severity": "ERROR", "message": "dbt compile failed: " + clip(exc, 800)}],
                 "query_id": None}
 
 

@@ -1,4 +1,7 @@
-"""Deterministic validation of a generated dbt project (pure)."""
+"""Deterministic validation of a generated dbt project (pure).
+
+Layout-agnostic: the model under test is whichever generated model carries the STTM's target columns (silver
+ephemeral models today, marts in older projects), and the model YAML is any models/ YAML that declares models."""
 
 from __future__ import annotations
 
@@ -49,41 +52,51 @@ def _naming(files: Dict[str, str]) -> List[Dict[str, Any]]:
             if path.startswith(folder):
                 ok = name.startswith(prefix) if isinstance(prefix, str) else name.startswith(prefix)
                 if not ok:
-                    findings.append(_err(f"{path} does not use the GDP layer prefix {prefix}"))
+                    findings.append(_err(f"{path} does not use the {folder.split('/')[1]} layer prefix {prefix}"))
     return findings
 
 
-def _mart_sql(files: Dict[str, str]) -> Tuple[str, str]:
+def _model_sql(files: Dict[str, str], lines: List[Dict[str, Any]] = ()) -> Tuple[str, str]:
+    """The generated model that carries the STTM: the models/*.sql file aliasing the most target columns."""
+    cols = [(line.get("target_column") or "").lower() for line in lines if line.get("target_column")]
+    best, best_hits = ("", ""), -1
     for path, content in files.items():
-        if path.startswith("models/marts/") and path.endswith(".sql"):
-            return path, content
-    return "", ""
+        if not (path.startswith("models/") and path.endswith(".sql")):
+            continue
+        hits = sum(1 for c in cols if re.search(rf"\bas\s+{re.escape(c)}\b", content, re.I))
+        if hits > best_hits:
+            best, best_hits = (path, content), hits
+    return best
+
+
+def _mart_sql(files: Dict[str, str], lines: List[Dict[str, Any]] = ()) -> Tuple[str, str]:  # kept for callers
+    return _model_sql(files, lines)
 
 
 def _required_columns(files: Dict[str, str], lines: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    _, sql = _mart_sql(files)
+    path, sql = _model_sql(files, lines)
     if not sql:
-        return [_err("no mart model was generated")]
+        return [_err("no model was generated under models/")]
     findings = []
     for line in lines:
         col = (line.get("target_column") or "").lower()
         if line.get("required") or (not line.get("nullable_rule") and (line.get("mapping_type") or "") != "UNMAPPED"):
             if not re.search(rf"\bas\s+{re.escape(col)}\b", sql, re.I):
-                findings.append(_err(f"required column {col} is missing from the mart model"))
+                findings.append(_err(f"required column {col} is missing from {path}"))
     return findings
 
 
 def _sttm_consistency(files: Dict[str, str], lines: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    _, sql = _mart_sql(files)
+    path, sql = _model_sql(files, lines)
     findings = []
     for line in lines:
         col = (line.get("target_column") or "").lower()
         if not re.search(rf"\bas\s+{re.escape(col)}\b", sql, re.I):
-            findings.append(_err(f"STTM column {col} has no corresponding mart expression"))
+            findings.append(_err(f"STTM column {col} has no expression in {path or 'the model'}"))
         mapping = (line.get("mapping_type") or "").upper()
         transform = (line.get("transformation") or "").strip()
         if mapping == "TRANSFORM" and transform and transform.split("(")[0].lower() not in sql.lower():
-            findings.append(_warn(f"transformation for {col} does not appear in the mart SQL"))
+            findings.append(_warn(f"transformation for {col} does not appear in {path}"))
     return findings
 
 
@@ -100,7 +113,7 @@ def _soda_config(files: Dict[str, str], soda_yaml: str) -> List[Dict[str, Any]]:
 
 
 def _datatypes(files: Dict[str, str], lines: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    _, sql = _mart_sql(files)
+    _, sql = _model_sql(files, lines)
     findings = []
     for line in lines:
         if (line.get("mapping_type") or "").upper() in {"UNMAPPED", "DERIVED"}:
@@ -108,15 +121,17 @@ def _datatypes(files: Dict[str, str], lines: List[Dict[str, Any]]) -> List[Dict[
         dtype = (line.get("target_datatype") or "").upper()
         col = (line.get("target_column") or "").lower()
         if dtype.startswith("DATE") or dtype.startswith("TIMESTAMP") or dtype.startswith("NUMBER"):
-            if "CAST(" not in sql.upper() and "TRY_TO_DATE" not in sql.upper():
-                findings.append(_warn(f"{col} ({dtype}) has no CAST in the mart SQL"))
+            upper = sql.upper()
+            if "CAST(" not in upper and "TRY_TO_" not in upper and "::" not in upper:
+                findings.append(_warn(f"{col} ({dtype}) has no cast in the model SQL"))
     return findings
 
 
 def _schema_yml(files: Dict[str, str], lines: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    yml = next((c for p, c in files.items() if p.endswith("_schema.yml") and "marts" in p), "")
+    yml = next((c for p, c in files.items()
+                if p.startswith("models/") and p.endswith((".yml", ".yaml")) and re.search(r"^models:", c, re.M)), "")
     if not yml:
-        return [_err("mart schema.yml is missing")]
+        return [_err("no model YAML (models: block) was generated under models/")]
     findings = []
     for line in lines:
         col = (line.get("target_column") or "").lower()

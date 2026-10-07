@@ -87,3 +87,24 @@ def test_dbt_keeps_lowercase_source_names_exact():
     assert 'o."orderId"' in text and 'o.AMOUNT' in text and '"name"' in text
     assert 'o."customer_id" = j1."customer_id"' in text
     assert "quoting:" in text and "identifier: true" in text
+
+
+def test_validation_accepts_the_generators_own_layout():
+    from services.dbt.onboard import generate
+    from services.validation.checks import run
+
+    src = {"name": "ORDERS", "identifier": "ORDERS", "database": "RAW", "schema": "SHOP",
+           "columns": {"ORDER_ID": "TEXT", "AMOUNT": "NUMBER(12,2)"}, "names": {}}
+    lines = [{"target_column": "ORDER_ID", "target_datatype": "VARCHAR", "source_table": "ORDERS",
+              "source_column": "ORDER_ID", "mapping_type": "DIRECT", "transformation": None, "nullable_rule": False},
+             {"target_column": "AMOUNT", "target_datatype": "NUMBER(12,2)", "source_table": "ORDERS",
+              "source_column": "AMOUNT", "mapping_type": "DIRECT", "transformation": None, "nullable_rule": True}]
+    out = generate({"domain": "shop", "target": "ORDERS_DIM", "source_key": "shop", "source_system": "SHOP", "prefix": "",
+                    "business_keys": ["ORDER_ID"], "grain": "one row per order", "sources": [src],
+                    "target_columns": [{"column_name": "ORDER_ID", "data_type": "VARCHAR"},
+                                       {"column_name": "AMOUNT", "data_type": "NUMBER(12,2)"}],
+                    "lines": lines, "joins": []})
+    files = {**out["files"], "soda/checks.yml": "checks for orders_dim:\n  - row_count > 0\n"}
+    results = {r["validation_type"]: r for r in run(files, lines, files["soda/checks.yml"])}
+    for kind in ("REQUIRED_COLUMNS", "STTM_CONSISTENCY", "SCHEMA", "NAMING"):
+        assert results[kind]["status"] == "PASSED", (kind, results[kind]["findings"])
