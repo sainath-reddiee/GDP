@@ -178,6 +178,8 @@ def propose_transformation(source: Dict[str, Any], target: Dict[str, Any], knowl
         return f"CAST({col} AS DATE)", "type conversion"
     if sf == "TEXT" and tf == "DATE" and source.get("date_format"):
         return f"TRY_TO_DATE({col}, '{source['date_format']}')", "type conversion"
+    if sf == "TEXT" and tf == "TIMESTAMP" and source.get("date_format"):
+        return f"TRY_TO_TIMESTAMP({col}, '{source['date_format']}')", "type conversion"
     return None, None
 
 

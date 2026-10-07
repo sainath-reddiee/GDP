@@ -42,7 +42,7 @@ DEFAULTS: Dict[str, Any] = {
     "hints.freshness_columns": ["UPDATED", "MODIFIED", "LOAD", "INGEST", "CREATED", "EVENT", "TS", "DATE", "TIME"],
     "hints.identifier_suffixes": ["_ID", "_KEY", "_CODE", "_NO", "_NUM", "_NBR", "ID", "_LID", "_REF"],
     "hints.updated_columns": ["UPDATED_TS", "UPDATED_AT", "LAST_MODIFIED", "MODIFIED_AT", "LOADED_AT", "LOAD_TS",
-                              "_LOAD_DATE"],
+                              "_LOAD_DATE", "EFFECTIVE_FROM"],
     "hints.abbreviations": {},  # extra {ABBR: [WORD, ...]} merged over the built-in list
 }
 

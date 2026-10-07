@@ -7,7 +7,7 @@ import shutil
 import tempfile
 import uuid
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from services.common.audit import record_cost, tool_call
 from services.common.llm import complete_json
@@ -373,6 +373,30 @@ def _run_columns(session, run_id: str) -> Dict[str, List[Dict[str, Any]]]:
     return out
 
 
+def _value_relationships(session, run_id: str, docs: Dict[str, Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Joins proven by value overlap between the run's landed tables; failures leave the name-based plan."""
+    from services.profiling.insights import overlap_candidates, overlap_relationships, overlap_sql
+    from services.source.identifiers import quote
+
+    exact: Dict[Tuple[str, str], str] = {}
+    tables: Dict[str, str] = {}
+    try:
+        for r in rows(session, """
+            SELECT T.SOURCE_TABLE, T.LANDING_DATABASE, T.LANDING_SCHEMA, T.LANDING_TABLE, C.COLUMN_NAME
+              FROM SOURCE.LANDING_TABLE_REGISTRY T
+              JOIN SOURCE.LANDING_COLUMN_REGISTRY C ON C.LANDING_ID = T.LANDING_ID
+             WHERE T.RUN_ID = ? AND T.INGESTION_STATUS = 'COMPLETE'
+           QUALIFY DENSE_RANK() OVER (PARTITION BY T.SOURCE_TABLE ORDER BY T.CREATED_AT DESC) = 1""", [run_id]):
+            key = str(r["SOURCE_TABLE"]).upper()
+            tables[key] = ".".join(quote(str(p)) for p in (r["LANDING_DATABASE"], r["LANDING_SCHEMA"], r["LANDING_TABLE"]))
+            exact[(key, str(r["COLUMN_NAME"]).upper())] = str(r["COLUMN_NAME"])
+        pairs = [p for p in overlap_candidates(docs) if p["child"] in tables and p["parent"] in tables]
+        sql = overlap_sql(pairs, lambda t, c: (tables[t], quote(exact.get((t, c), c))))
+        return overlap_relationships(pairs, rows(session, sql)) if sql else []
+    except Exception:
+        return []
+
+
 def _profile_docs(session, run_id: str) -> Dict[str, Dict[str, Any]]:
     """The run's current column profiles in the shape services.profiling.insights reads."""
     docs: Dict[str, Dict[str, Any]] = {}
@@ -405,6 +429,7 @@ def plan_joins(session, run_id: str, lines: List[Dict[str, Any]]) -> Dict[str, A
             return graph
     docs = _profile_docs(session, run_id)
     relationships = infer_relationships(docs)
+    relationships += _value_relationships(session, run_id, docs)
     relationships += [{**j, "source": "name"} for j in infer_joins(columns)] if len(columns) > 1 else []
     complete = {(t, c["column_name"]): float((c.get("statistics") or {}).get("null_percentage") or 0) == 0
                 for t, d in docs.items() for c in d["columns"]}

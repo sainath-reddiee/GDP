@@ -3697,6 +3697,21 @@ def catalog_modeling_run(body: CatalogModelingRequest, db: Db = Depends(current_
         modeling_standard=body.modeling_standard), db)
 
 
+def _value_relationships(db: Db, database: str, schema: str, docs: dict) -> list[dict]:
+    """Joins the names do not reveal, proven by one overlap query over the staged tables (never blocks analyze)."""
+    from services.profiling import insights
+
+    pairs = insights.overlap_candidates(docs)
+    sql = insights.overlap_sql(pairs, lambda t, c: (
+        f"{_quote_ident(database)}.{_quote_ident(schema)}.{_quote_ident(t)}", _quote_ident(c)))
+    if not sql:
+        return []
+    try:
+        return insights.overlap_relationships(pairs, db.query(sql))
+    except Exception:
+        return []
+
+
 class CatalogAnalyzeRequest(CatalogTarget):
     tables: list[str] = Field(min_length=1, max_length=60)
 
@@ -3728,6 +3743,7 @@ def catalog_analyze(body: CatalogAnalyzeRequest, db: Db = Depends(current_db)):
                             if (c.get("pii_classification") or "NONE") != "NONE"],
         })
     relationships = insights.infer_relationships(docs)
+    relationships += _value_relationships(db, database, schema, docs)
     graph = catalog_preview_graph(PreviewGraph(database=database, schema=schema, tables=tables, targets=[]), db)
     profiled_pairs = {frozenset((j["left"], j["right"])) for j in relationships}
     graph["joins"] = relationships + [j for j in graph.get("joins") or []

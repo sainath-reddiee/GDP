@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any, Dict, List
 
 from services.soda.extract import requirement_from_row
+from services.common.rules import ends_with_hint
 from services.sttm.refine import from_transform
 
 FORMATS = {
@@ -57,7 +58,7 @@ def from_sttm(target_table: str, lines: List[Dict[str, Any]], grain_keys: List[s
                                           "max": rng.get("max", rng.get("valid_max"))},
                            "severity": "FAIL", "origin": "STTM",
                            "requirement": f"{col} must stay within the STTM range."})
-        if semantic == "AUDIT_TIMESTAMP" or col.upper() in {"LOADED_AT", "UPDATED_AT", "EFFECTIVE_FROM"}:
+        if semantic == "AUDIT_TIMESTAMP" or ends_with_hint(col, "hints.updated_columns"):
             checks.append({"target_table": target_table, "target_column": col, "check_type": "FRESHNESS",
                            "definition": {"kind": "freshness", "threshold": "1d"}, "severity": "WARN",
                            "origin": "DOMAIN_RULE",

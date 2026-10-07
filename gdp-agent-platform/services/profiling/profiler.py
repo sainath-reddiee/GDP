@@ -232,7 +232,35 @@ def date_format(patterns: Sequence[Dict[str, Any]], values: Sequence[Any] = ()) 
         if second > 12 and first <= 12:
             return f"MM{sep}DD{sep}YYYY"
         return DATE_FORMATS.get(top) or f"DD{sep}MM{sep}YYYY"
+    if top == "99999999" and values and all(_compact_date(v) for v in values if v is not None):
+        return "YYYYMMDD"  # every observed value is a real calendar date, not just eight digits
+    for shape, fmt in TEXT_TIMESTAMPS.items():
+        if top.startswith(shape):
+            fraction = top[len(shape):]
+            if not fraction:
+                return fmt
+            if fraction.startswith(".") and set(fraction[1:]) == {"9"}:
+                return fmt + ".FF"
     return DATE_FORMATS.get(top)
+
+
+TEXT_TIMESTAMPS = {  # value shape (letters as A/a) -> Snowflake format
+    "9999-99-99 99:99:99": "YYYY-MM-DD HH24:MI:SS",
+    "9999-99-99A99:99:99": 'YYYY-MM-DD"T"HH24:MI:SS',
+    "9999/99/99 99:99:99": "YYYY/MM/DD HH24:MI:SS",
+}
+
+
+def _compact_date(value: Any) -> bool:
+    text = str(value)
+    if len(text) != 8 or not text.isdigit():
+        return False
+    year, month, day = int(text[:4]), int(text[4:6]), int(text[6:])
+    if not (1900 <= year <= 2100 and 1 <= month <= 12):
+        return False
+    days = [31, 29 if year % 4 == 0 and (year % 100 != 0 or year % 400 == 0) else 28, 31, 30, 31, 30, 31, 31, 30,
+            31, 30, 31][month - 1]
+    return 1 <= day <= days
 
 
 def _tokens(name: str) -> List[str]:
