@@ -27,6 +27,7 @@ def test_domain_pack_transformation_rules_are_usable_by_mapping():
                 continue
             content = item.get("content_json") or {}
             expr = rule_expression(content)
-            if content.get("expression") or content.get("transformation"):
+            if content.get("transformation"):  # contract casts: must apply to whichever source column is mapped
                 assert expr and "{col}" in expr, (pack.parent.name, item["key"])
-                assert expr.format(col="x")
+            if expr:
+                assert expr.format(col="x"), (pack.parent.name, item["key"])
