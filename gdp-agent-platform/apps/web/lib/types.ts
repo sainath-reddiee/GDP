@@ -122,7 +122,12 @@ export type SourceOverview = {
   }[];
 };
 
+export type UiBands = { confident: number; weak: number; model_match_strong: number; join_strong: number };
+
+export const DEFAULT_BANDS: UiBands = { confident: 0.8, weak: 0.45, model_match_strong: 0.5, join_strong: 0.85 };
+
 export type MappingOverview = {
+  bands?: UiBands;
   candidates: {
     candidate_id: string; source_column_id: string; source_column: string; source_datatype: string;
     source_table: string; target_column_id: string; target_column: string; target_datatype: string;
@@ -286,6 +291,7 @@ export type AnalyzeResult = {
   graph: import("@/app/onboarding/intent-types").ModelGraph;
   domain?: { detected: DomainCandidate | null; candidates: DomainCandidate[] };
   suggested_standard?: "GDP" | "GENERIC";
+  bands?: UiBands;
   models: {
     related: boolean;
     suggestions: { kind: "existing" | "proposed"; target_table: string; fqn: string; domain_name?: string | null;

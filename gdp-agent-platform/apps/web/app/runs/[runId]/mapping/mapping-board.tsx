@@ -6,6 +6,7 @@ import {
   ArrowRight, Bot, Check, CheckCheck, CircleSlash, KeyRound, ListChecks, Loader2, Search, Sparkles, Target, X,
 } from "lucide-react";
 import type { MappingOverview, MappingSuggestion } from "@/lib/types";
+import { DEFAULT_BANDS } from "@/lib/types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -35,6 +36,7 @@ const FILTERS: { id: Filter; label: string }[] = [
 type Pending = { title: string; plan: BulkPlan; defaultNote: string } | null;
 
 export function MappingBoard({ runId, data }: { runId: string; data: MappingOverview }) {
+  const bands = data.bands ?? DEFAULT_BANDS;
   const router = useRouter();
   const rows = useMemo(() => buildRows(data), [data]);
   const [filter, setFilter] = useState<Filter>("pending");
@@ -64,7 +66,7 @@ export function MappingBoard({ runId, data }: { runId: string; data: MappingOver
     mapped: rows.filter((r) => r.status === "mapped").length,
     null: rows.filter((r) => r.status === "null").length,
     pending: rows.filter((r) => r.status === "pending").length,
-    confident: rows.filter((r) => r.status === "pending" && r.score >= 0.8).length,
+    confident: rows.filter((r) => r.status === "pending" && r.score >= bands.confident).length,
   }), [rows]);
 
   const visible = useMemo(() => {
@@ -74,8 +76,8 @@ export function MappingBoard({ runId, data }: { runId: string; data: MappingOver
       if (q && !`${r.column} ${r.top.target_column} ${r.mappedName ?? ""}`.toLowerCase().includes(q)) return false;
       switch (filter) {
         case "pending": return r.status === "pending";
-        case "confident": return r.status === "pending" && r.score >= 0.8;
-        case "weak": return r.score < 0.45;
+        case "confident": return r.status === "pending" && r.score >= bands.confident;
+        case "weak": return r.score < bands.weak;
         case "ai": return Boolean(suggestions[r.id]);
         case "disagree": return r.top.llm_agrees === false
           || (suggestions[r.id] && suggestions[r.id].target_column_id !== r.top.target_column_id);
@@ -226,7 +228,7 @@ export function MappingBoard({ runId, data }: { runId: string; data: MappingOver
 
         <div className="flex flex-wrap items-center gap-2">
           <Button size="sm" disabled={pending || !counts.confident}
-            onClick={() => approveSelected(new Set(rows.filter((r) => r.status === "pending" && r.score >= 0.8).map((r) => r.id)), 0.8, "Approved all confident matches")}>
+            onClick={() => approveSelected(new Set(rows.filter((r) => r.status === "pending" && r.score >= bands.confident).map((r) => r.id)), bands.confident, "Approved all confident matches")}>
             <CheckCheck className="h-4 w-4" /> Approve all confident ({counts.confident})
           </Button>
           <Button size="sm" variant="outline" className="border-violet-300 text-violet-700 hover:bg-violet-50" disabled={aiPending || !counts.pending}

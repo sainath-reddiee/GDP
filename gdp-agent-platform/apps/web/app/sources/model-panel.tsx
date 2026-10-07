@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { ArrowRight, GitBranch, KeyRound, Layers, Loader2, ShieldAlert, Sparkles, X } from "lucide-react";
 import type { AnalyzeResult } from "@/lib/types";
+import { DEFAULT_BANDS } from "@/lib/types";
 import type { DomainRow, ModelGraph } from "@/app/onboarding/intent-types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -39,7 +40,7 @@ export function ModelPanel({ database, schema, tables, domains, onClose }: {
       setStandard(r.data.suggested_standard === "GDP" ? "GDP" : "GENERIC");
       const detected = r.data.domain?.detected;
       if (detected && domains.some((d) => d.domain_id === detected.domain_id)) setDomainId(detected.domain_id);
-      const strong = r.data.models.suggestions.filter((s) => s.kind === "existing" && s.score >= 0.5).map((s) => s.fqn);
+      const strong = r.data.models.suggestions.filter((s) => s.kind === "existing" && s.score >= (r.data.bands ?? DEFAULT_BANDS).model_match_strong).map((s) => s.fqn);
       if (strong.length) { setMode("existing"); setPicked(strong); }
     });
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
@@ -156,7 +157,7 @@ export function ModelPanel({ database, schema, tables, domains, onClose }: {
                         <ArrowRight className="h-3.5 w-3.5 text-muted-foreground" />
                         <span className="font-mono">{j.right}.{j.keys[0].split("=").pop()}</span>
                         <Badge variant="outline">{j.cardinality}</Badge>
-                        <span className={cn("ml-auto text-xs tabular-nums", j.confidence >= 0.85 ? "text-success" : "text-warning")}>
+                        <span className={cn("ml-auto text-xs tabular-nums", j.confidence >= (data.bands ?? DEFAULT_BANDS).join_strong ? "text-success" : "text-warning")}>
                           {Math.round(j.confidence * 100)}% confidence
                         </span>
                         {j.evidence && <p className="w-full text-[11px] text-muted-foreground">{j.evidence.join(" · ")}</p>}

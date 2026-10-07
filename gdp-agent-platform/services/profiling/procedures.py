@@ -25,6 +25,7 @@ from services.common.audit import record_cost, tool_call
 from services.common.llm import complete_json
 from services.common.sql import clip, insert_rows, rows, scalar, variant
 from services.common.stage import Stage
+from services.common.rules import ensure_active
 from services.knowledge.usage import STAGE_SKILLS, use_skills
 from services.profiling import profiler
 from services.profiling.insights import quality_dimensions
@@ -290,6 +291,7 @@ def profile_tables(session, tables: List[TableRef], concurrency_limit: int = DEF
                    guidance: str = "") -> Dict[TableKey, TableProfile]:
     """Profile N tables: fresh cached documents are reused, the rest are computed `concurrency_limit`
     tables at a time, enriched, written to @METADATA.PROFILES_STAGE and upserted into the index."""
+    ensure_active(session)
     limit = max(1, min(int(concurrency_limit or DEFAULT_CONCURRENCY), MAX_CONCURRENCY))
     index = _load_index(session, tables)
     out: Dict[TableKey, TableProfile] = {}

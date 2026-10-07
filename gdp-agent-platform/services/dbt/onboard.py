@@ -14,12 +14,11 @@ import re
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from services.knowledge.contracts import ref_lookup
+from services.common.rules import ends_with_hint, rule
 
 ENGINE = "dbt-onboard-source/engine-v1"
 SIMPLE = re.compile(r"^[A-Z_][A-Z0-9_$]*$")
 AUDIT_SUFFIXES = ("IS_ACTIVE", "INSERTED_TS", "INSERTED_BY", "UPDATED_TS", "UPDATED_BY", "ROW_HASH")
-UPDATED_HINTS = ("UPDATED_TS", "UPDATED_AT", "LAST_MODIFIED", "MODIFIED_AT", "LOADED_AT", "LOAD_TS", "_LOAD_DATE")
-KEY_SUFFIX = re.compile(r"(_ID|_LID|_KEY|_CODE|_NO|_NUM)$")
 TODO_HINTS = {
     "STANDARDIZATION": re.compile(r"standardi[sz]|geocod|downstream", re.I),
     "LOV": re.compile(r"\bLOV\b|list of values", re.I),
@@ -199,11 +198,12 @@ def _unique_key(cols: List[Dict[str, Any]], business_keys: List[str], sources: D
     if not picked and key_candidates is not None:
         unique = {str(k).upper() for k in key_candidates.get(primary, [])}
         measured = [c for c in on_primary if str(c["source_column"]).upper() in unique]
-        measured.sort(key=lambda c: (not KEY_SUFFIX.search(str(c["target_column"]).upper()), str(c["target_column"])))
+        measured.sort(key=lambda c: (not ends_with_hint(c["target_column"], "hints.identifier_suffixes"),
+                                     str(c["target_column"])))
         picked = measured[:1]
         reason = f"profiled as unique: {picked[0]['source_column']} (confirm business keys in the STTM)" if picked else ""
     if not picked and not key_candidates:
-        named = [c for c in on_primary if KEY_SUFFIX.search(str(c["target_column"]).upper())]
+        named = [c for c in on_primary if ends_with_hint(c["target_column"], "hints.identifier_suffixes")]
         picked = named[:1]
         reason = f"inferred from {picked[0]['target_column']} (no profiles; confirm business keys in the STTM)" \
             if picked else ""
@@ -230,7 +230,7 @@ def _updated_column(columns: Dict[str, str], prefix: str) -> Optional[str]:
     pref = f"{prefix.upper()}_UPDATED_TS" if prefix else ""
     if pref and pref in columns:
         return pref
-    for hint in UPDATED_HINTS:
+    for hint in rule("hints.updated_columns"):
         for name in names:
             if name.endswith(hint) and family(columns[name]) in {"timestamp", "date"}:
                 return name

@@ -13,11 +13,11 @@ import re
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from services.source.identifiers import quote
+from services.common.rules import rule
 
 NULL_PLACEHOLDERS = ("", "N/A", "NA", "NULL", "NONE", "<NULL>", ".")
 TOP_VALUES = 10
 TOP_PATTERNS = 5
-ENUM_MAX_DISTINCT = 20
 
 PROFILER_VERSION = "2"
 LARGE_TABLE_ROWS = 10_000_000
@@ -205,7 +205,7 @@ def cardinality(distinct: Optional[int], non_null: int) -> Optional[str]:
     ratio = distinct / non_null if non_null else 0
     if ratio >= 0.9:
         return "HIGH"
-    if distinct <= ENUM_MAX_DISTINCT or ratio < 0.05:
+    if distinct <= rule("profile.enum_max_distinct") or ratio < 0.05:
         return "LOW"
     return "MEDIUM"
 
@@ -282,7 +282,6 @@ VALUE_PII = (
     ("IP_ADDRESS", re.compile(r"^(25[0-5]|2[0-4]\d|1?\d?\d)(\.(25[0-5]|2[0-4]\d|1?\d?\d)){3}$")),
     ("PHONE", re.compile(r"^\+?[\d\s().-]{10,20}$")),
 )
-VALUE_PII_SHARE = 0.8
 
 
 def _luhn(digits: str) -> bool:
@@ -324,7 +323,7 @@ def value_pii(frequencies: Sequence[Dict[str, Any]]) -> str:
     if not total or not seen:
         return "NONE"
     kind, hits = max(seen.items(), key=lambda kv: kv[1])
-    return kind if hits / total >= VALUE_PII_SHARE else "NONE"
+    return kind if hits / total >= rule("profile.value_pii_share") else "NONE"
 
 
 def mask(value: Optional[str], pii: str) -> Optional[str]:
@@ -385,7 +384,7 @@ def build_profile(name: str, data_type: str, stats: Dict[str, Any], frequencies:
             "date_format": (date_format(patterns, [f.get("value") for f in frequencies]) if family == "TEXT"
                             else None),
             "enum_values": ([f["value"] for f in masked_freq]
-                            if card in ("LOW", "CONSTANT") and stats.get("distinct_count", 99) <= ENUM_MAX_DISTINCT
+                            if card in ("LOW", "CONSTANT") and stats.get("distinct_count", 99) <= rule("profile.enum_max_distinct")
                             else None),
         },
     }

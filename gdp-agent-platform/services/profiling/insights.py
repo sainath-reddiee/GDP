@@ -7,10 +7,10 @@ import re
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
+from services.common.rules import contains_hint, ends_with_hint, rule
+
 WEIGHTS = {"completeness": 0.35, "uniqueness": 0.25, "validity": 0.25, "freshness": 0.15}
 GRADES = ((90, "A"), (75, "B"), (60, "C"), (40, "D"))
-MIN_RELATIONSHIP_CONFIDENCE = 0.6
-FRESHNESS_COLUMN = re.compile(r"(UPDATED|MODIFIED|LOAD|INGEST|CREATED|EVENT|TS|DATE|TIME)", re.I)
 
 
 def _cols(doc: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -106,11 +106,10 @@ def _regex(shape: str) -> str:
     return "^" + "".join(out) + "$"
 
 
-IDENTIFIER_NAME = re.compile(r"(^ID$|_ID$|_KEY$|_CODE$|_NO$|_NUM$|_NBR$|ID$)", re.I)
 
 
 def _is_identifier(col: Dict[str, Any]) -> bool:
-    return col.get("semantic_type") == "IDENTIFIER" or bool(IDENTIFIER_NAME.search(col["column_name"]))
+    return col.get("semantic_type") == "IDENTIFIER" or ends_with_hint(col["column_name"], "hints.identifier_suffixes")
 
 
 def suggested_checks(doc: Dict[str, Any], limit: int = 20, max_not_null: int = 6) -> List[Dict[str, Any]]:
@@ -140,7 +139,7 @@ def suggested_checks(doc: Dict[str, Any], limit: int = 20, max_not_null: int = 6
             checks.append({"check": f"invalid_percent({name}) < 5%", "column": name,
                            "valid_regex": _regex(patterns[0]["pattern"]),
                            "reason": f"{round(100 * int(patterns[0]['count']) / total)}% match pattern {patterns[0]['pattern']}"})
-    stamps = [c for c in cols if c.get("family") in ("TIMESTAMP", "DATE") and FRESHNESS_COLUMN.search(c["column_name"])]
+    stamps = [c for c in cols if c.get("family") in ("TIMESTAMP", "DATE") and contains_hint(c["column_name"], "hints.freshness_columns")]
     if stamps:
         checks.append({"check": f"freshness({stamps[0]['column_name']}) < 1d", "column": stamps[0]["column_name"],
                        "reason": "latest change column; adjust the threshold to the load schedule"})
@@ -259,7 +258,7 @@ def infer_relationships(docs: Dict[str, Dict[str, Any]]) -> List[Dict[str, Any]]
                         score += 0.1
                         evidence.append(f"{len(overlap)} shared sample values")
                     score = round(min(score, 1.0), 2)
-                    if score < MIN_RELATIONSHIP_CONFIDENCE:
+                    if score < rule("relationships.min_confidence"):
                         continue
                     pair = (child, parent)
                     if pair in best and best[pair]["confidence"] >= score:

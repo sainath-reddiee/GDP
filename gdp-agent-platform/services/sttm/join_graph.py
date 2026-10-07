@@ -18,8 +18,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
-AMBIGUITY_MARGIN = 0.1
-INNER_MIN_CONFIDENCE = 0.9
+from services.common.rules import rule
+
 JOIN_TYPES = ("LEFT", "INNER")
 
 Edge = Dict[str, Any]
@@ -80,7 +80,7 @@ def _orient(edge: Edge, from_table: str) -> Edge:
 
 
 def _join_type(edge: Edge, complete_keys: Dict[Tuple[str, str], bool]) -> str:
-    if edge["cardinality"] != "1:1" or edge["confidence"] < INNER_MIN_CONFIDENCE:
+    if edge["cardinality"] != "1:1" or edge["confidence"] < rule("joins.inner_min_confidence"):
         return "LEFT"
     for lcol, rcol in _pairs(edge["keys"]):
         if not complete_keys.get((edge["left"], lcol)) or not complete_keys.get((edge["right"], rcol)):
@@ -127,7 +127,7 @@ def build_join_graph(tables: Sequence[str], relationships: Iterable[Edge], mappe
         alternatives = [{"left_table": e["left"], "keys": e["keys"], "condition": condition(e),
                          "cardinality": e["cardinality"], "confidence": e["confidence"], "source": e["source"]}
                         for e in rivals[:3]]
-        if rivals and best["confidence"] - rivals[0]["confidence"] < AMBIGUITY_MARGIN:
+        if rivals and best["confidence"] - rivals[0]["confidence"] < rule("joins.ambiguity_margin"):
             ambiguities.append({"table": best["right"], "options": 1 + len(rivals),
                                 "message": f"{best['right']} can join on more than one key with similar confidence; confirm the join"})
         joins.append({
