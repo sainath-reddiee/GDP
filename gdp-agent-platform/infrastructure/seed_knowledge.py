@@ -45,7 +45,14 @@ def load_domain_pack() -> Dict[str, Any]:
 
 def load_domain_packs() -> List[Dict[str, Any]]:
     """Every domain/<name>/domain_pack.json; GDP first so its fixed IDs are assigned before the others."""
-    packs = [json.loads(p.read_text(encoding="utf-8")) for p in sorted(DOMAIN_DIR.glob("*/domain_pack.json"))]
+    from services.knowledge.validate import validate_pack
+
+    packs = []
+    for path in sorted(DOMAIN_DIR.glob("*/domain_pack.json")):
+        pack = json.loads(path.read_text(encoding="utf-8"))
+        problems = validate_pack(pack)
+        assert not problems, f"{path.parent.name} domain pack is invalid: " + "; ".join(problems[:10])
+        packs.append(pack)
     return sorted(packs, key=lambda pk: (pk["domain"]["name"] != "GDP", pk["domain"]["name"]))
 
 

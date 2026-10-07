@@ -18,6 +18,7 @@ from services.common.sql import clip, config_value, insert_rows, rows, scalar, v
 from services.common.stage import Stage
 from services.knowledge import search as ks
 from services.knowledge.procedures import current_knowledge_version, identify_domain
+from services.knowledge.validate import normalize_content
 from services.knowledge.usage import STAGE_SKILLS, assert_safe_transformation, domain_context, use_skills
 from services.mapping import features, scoring
 from services.mapping.feedback import pattern as feedback_pattern
@@ -70,8 +71,10 @@ def domain_knowledge(session, domain_id: str, run_id: str) -> Dict[str, Any]:
     for k in rows(session, """SELECT KNOWLEDGE_TYPE, CONTENT_JSON FROM KNOWLEDGE.DOMAIN_KNOWLEDGE
                               WHERE DOMAIN_ID = ? AND IS_CURRENT AND STATUS = 'ACTIVE' AND CONTENT_JSON IS NOT NULL""",
                   [domain_id]):
-        content = variant(k["CONTENT_JSON"]) or {}
         kind = k["KNOWLEDGE_TYPE"]
+        content = normalize_content(kind, variant(k["CONTENT_JSON"]))
+        if content is None:
+            continue
         if kind == "GLOSSARY" and content.get("target_column"):
             knowledge["glossary"][content["target_column"].upper()] = content
         elif kind == "BUSINESS_RULE" and content.get("target_column"):
@@ -171,7 +174,9 @@ def _adjudicate(session, run_id: str, ambiguous: List[Tuple[Dict[str, Any], List
     except Exception:
         return {}
     record_cost(session, run_id, "MAPPING", model, usage, int((time.time() - started) * 1000), tool_calls=1)
-    return {c["source_column"].upper(): {**c, "model": model} for c in result.get("columns", [])}
+    return {str(c["source_column"]).upper(): {**c, "model": model} for c in (result.get("columns") or [])
+            if isinstance(c, dict) and isinstance(c.get("source_column"), str)
+            and isinstance(c.get("preferred_target"), str)}
 
 
 def _scoring_config(session, domain_id: str) -> Dict[str, Any]:
@@ -249,7 +254,8 @@ def generate_mapping_candidates(session, run_id: str) -> Dict[str, Any]:
                         agrees = verdict["preferred_target"].upper() == c["target"]["column_name"].upper()
                         c["evidence"]["llm"] = {"preferred_target": verdict["preferred_target"], "agrees": agrees,
                                                 "model": verdict["model"]}
-                        reason = f"{verdict['reason']} (deterministic evidence: {reason})"
+                        if verdict.get("reason"):
+                            reason = f"{verdict['reason']} (deterministic evidence: {reason})"
                     sc = c["scores"]
                     values.append([str(uuid.uuid4()), run_id, s["source_column_id"], c["target"]["target_column_id"],
                                    run["DOMAIN_ID"], sc["semantic"], sc["keyword"], sc["datatype"], sc["statistical"],

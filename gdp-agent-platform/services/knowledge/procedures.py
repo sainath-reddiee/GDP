@@ -18,6 +18,7 @@ from services.common.sql import clip, config_value, insert_rows, rows, scalar, v
 from services.common.stage import Stage
 from services.knowledge import search as ks
 from services.knowledge.domain import infer_domain
+from services.knowledge.validate import normalize_content
 from services.knowledge.terms import entity_tokens, token_set
 
 
@@ -35,8 +36,8 @@ def _domain_terms(session) -> List[Dict[str, Any]]:
         terms = set()
         for k in rows(session, "SELECT CONTENT_JSON FROM KNOWLEDGE.DOMAIN_KNOWLEDGE WHERE DOMAIN_ID = ? AND IS_CURRENT "
                                "AND STATUS = 'ACTIVE' AND KNOWLEDGE_TYPE = 'GLOSSARY'", [d["DOMAIN_ID"]]):
-            content = variant(k["CONTENT_JSON"]) or {}
-            for s in content.get("synonyms", []) + [content.get("target_column", "")]:
+            content = normalize_content("GLOSSARY", variant(k["CONTENT_JSON"])) or {}
+            for s in (content.get("synonyms") or []) + [content.get("target_column") or ""]:
                 terms |= token_set(s)
         for c in rows(session, """SELECT C.COLUMN_NAME, T.TARGET_TABLE FROM KNOWLEDGE.TARGET_COLUMN_REGISTRY C
                                   JOIN KNOWLEDGE.TARGET_TABLE_REGISTRY T ON T.TARGET_TABLE_ID = C.TARGET_TABLE_ID

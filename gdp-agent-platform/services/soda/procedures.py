@@ -11,6 +11,7 @@ from services.common.llm import complete_json
 from services.common.sql import clip, insert_rows, rows, scalar, variant
 from services.common.stage import Stage
 from services.knowledge.usage import STAGE_SKILLS, use_skills
+from services.knowledge.validate import normalize_content
 from services.quality.backtest import evaluate as evaluate_check, plan as backtest_plan
 from services.quality.gx import render_suite
 from services.quality.profile_checks import profile_checks
@@ -121,7 +122,7 @@ def _transform_checks(session, domain_id: str, table: str) -> List[Dict[str, Any
                                AND (DOMAIN_ID = ? OR SOURCE_REFERENCE LIKE 'transform.%')""", [domain_id])
     out = []
     for row in found:
-        content = variant(row["CONTENT_JSON"]) or {}
+        content = normalize_content("TRANSFORMATION_RULE", variant(row["CONTENT_JSON"])) or {}
         target = content.get("target_column")
         for raw in content.get("soda_checks") or []:
             item = dict(raw)

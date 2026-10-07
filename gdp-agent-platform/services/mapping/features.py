@@ -16,6 +16,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from services.knowledge.terms import entity_tokens, jaccard, token_set
 from services.profiling.profiler import type_family
+from services.source.identifiers import apply_col, sql_ident
 
 COSINE_FLOOR, COSINE_SPAN = 0.25, 0.55
 SYSTEM_DERIVED = {"SURROGATE_KEY", "RECORD_SOURCE", "AUDIT_TIMESTAMP"}
@@ -107,10 +108,11 @@ def statistical_score(source: Dict[str, Any], target: Dict[str, Any], knowledge:
 
 def domain_score(source: Dict[str, Any], target: Dict[str, Any], knowledge: Dict[str, Any]) -> Tuple[float, Dict]:
     name = source["column_name"].upper()
-    synonyms = {s.upper() for s in knowledge.get("glossary", {}).get(target["column_name"], {}).get("synonyms", [])}
+    entry = knowledge.get("glossary", {}).get(str(target["column_name"]).upper()) or {}
+    synonyms = {str(s).upper() for s in (entry.get("synonyms") or [])}
     if name in synonyms:
         return 1.0, {"glossary": f"{name} is a listed synonym of {target['column_name']}"}
-    rule = knowledge.get("rules", {}).get(target["column_name"], {})
+    rule = knowledge.get("rules", {}).get(str(target["column_name"]).upper(), {})
     if rule.get("source_values") and _value_fit(source, target, knowledge):
         return 0.8, {"business_rule": f"source values decode to {target['column_name']} accepted values"}
     return 0.0, {}
@@ -151,24 +153,26 @@ def rule_expression(rule: Dict[str, Any]) -> Optional[str]:
 
 def propose_transformation(source: Dict[str, Any], target: Dict[str, Any], knowledge: Dict[str, Any]) -> Tuple[Optional[str], Optional[str]]:
     """Deterministic transformation from domain rules. Returns (expression, rule title) or (None, None) for direct."""
-    col = source["column_name"].lower()
-    rule = knowledge.get("rules", {}).get(target["column_name"], {})
-    if rule.get("source_values"):
-        whens = " ".join(f"WHEN '{k}' THEN '{v}'" for k, v in sorted(rule["source_values"].items()))
+    col = sql_ident(source["column_name"])
+    rule = knowledge.get("rules", {}).get(str(target["column_name"]).upper(), {})
+    values = rule.get("source_values")
+    if isinstance(values, dict) and values:
+        lit = lambda v: "'" + str(v).replace("'", "''") + "'"  # noqa: E731
+        whens = " ".join(f"WHEN {lit(k)} THEN {lit(v)}" for k, v in sorted(values.items()))
         return f"CASE UPPER(TRIM({col})) {whens} ELSE NULL END", "business rule decode"
     if rule_expression(rule):
-        return rule_expression(rule).format(col=col), "business rule"
-    transforms = [t for t in knowledge.get("transforms", []) if rule_expression(t)]
+        return apply_col(rule_expression(rule), col), "business rule"
+    transforms = [t for t in knowledge.get("transforms", []) if isinstance(t, dict) and rule_expression(t)]
     for t in transforms:
-        if t.get("target_column") and t["target_column"].upper() == target["column_name"].upper():
-            return rule_expression(t).format(col=col), "transformation rule"
+        if t.get("target_column") and str(t["target_column"]).upper() == str(target["column_name"]).upper():
+            return apply_col(rule_expression(t), col), "transformation rule"
     for t in transforms:
         if t.get("source_pattern") and source.get("pattern") == t["source_pattern"] \
                 and type_family(target["data_type"]) in ("DATE", "TIMESTAMP"):
-            return rule_expression(t).format(col=col), "transformation rule"
+            return apply_col(rule_expression(t), col), "transformation rule"
     for t in transforms:
         if t.get("semantic_type") and t["semantic_type"] == target.get("semantic_type"):
-            return rule_expression(t).format(col=col), "transformation rule"
+            return apply_col(rule_expression(t), col), "transformation rule"
     sf, tf = type_family(source["data_type"]), type_family(target["data_type"])
     if sf == "TIMESTAMP" and tf == "DATE":
         return f"CAST({col} AS DATE)", "type conversion"

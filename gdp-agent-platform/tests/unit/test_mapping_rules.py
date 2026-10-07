@@ -13,7 +13,7 @@ def test_contract_casts_apply_and_rules_without_sql_are_ignored():
     ]}
     assert propose_transformation({"column_name": "LAT", "data_type": "TEXT"},
                                   {"column_name": "LATITUDE", "data_type": "NUMBER(12,8)"}, knowledge) \
-        == ("lat::number(12,8)", "transformation rule")
+        == ("LAT::number(12,8)", "transformation rule")
     assert propose_transformation({"column_name": "N", "data_type": "TEXT"},
                                   {"column_name": "NOTES", "data_type": "TEXT"}, knowledge) == (None, None)
     assert rule_expression({"expression": "TRIM({col})"}) == "TRIM({col})"

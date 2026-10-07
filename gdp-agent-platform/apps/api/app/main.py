@@ -1915,10 +1915,16 @@ def mapping_assist(run_id: str, body: MappingAssist, db: Db = Depends(current_db
         )
     except Exception as exc:
         raise _snowflake_error(exc) from exc
-    details = result[0]["r"]
-    details = json.loads(details) if isinstance(details, str) else details
-    raw = details["structured_output"][0]["raw_message"]
-    raw = json.loads(raw) if isinstance(raw, str) else raw
+    details = result[0]["r"] if result else None
+    details = json.loads(details) if isinstance(details, str) else (details or {})
+    structured = details.get("structured_output") or []
+    if not structured:
+        raise HTTPException(502, "Cortex returned no structured answer for these columns. Try fewer columns or again.")
+    raw = structured[0].get("raw_message")
+    try:
+        raw = json.loads(raw) if isinstance(raw, str) else (raw or {})
+    except ValueError as exc:
+        raise HTTPException(502, "Cortex returned an answer that was not valid JSON. Try again.") from exc
     suggestions = assist.normalize(raw, sources, by_source, data["targets"], taken)
     for s in suggestions:
         s["decision"] = assist.to_decision(s)

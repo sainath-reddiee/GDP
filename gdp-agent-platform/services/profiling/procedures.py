@@ -152,7 +152,9 @@ def _enrich(session, run_id: Optional[str], table: str, profiles: List[Dict[str,
         return None
     if run_id:
         record_cost(session, run_id, "PROFILING", model, usage, int((time.time() - started) * 1000), tool_calls=1)
-    by_name = {c["column_name"].upper(): c for c in result.get("columns", [])}
+    # The model's answer is untrusted: keep only well-formed items, never fail the profile over one.
+    by_name = {str(c["column_name"]).upper(): c for c in (result.get("columns") or [])
+               if isinstance(c, dict) and isinstance(c.get("column_name"), str)}
     for p in profiles:
         found = by_name.get(p["column_name"].upper())
         if not found:

@@ -25,6 +25,23 @@ def quote(name: str) -> str:
     return '"' + name.replace('"', '""') + '"'
 
 
+SIMPLE_UPPER = re.compile(r"^[A-Z_][A-Z0-9_$]*$")
+
+
+def sql_ident(name: str) -> str:
+    """A column/table name exactly as stored (INFORMATION_SCHEMA spelling) -> safe SQL reference.
+
+    Simple upper-case names stay bare (readable SQL, same meaning); anything else (lower or mixed case,
+    spaces, symbols) is quoted so the exact spelling survives. Never upper-case a stored name before this."""
+    return name if SIMPLE_UPPER.match(name or "") else quote(name)
+
+
+def apply_col(expression: str, column_sql: str) -> str:
+    """Put a column reference into a reusable rule written with {col}. Plain substitution, not str.format, so
+    braces elsewhere in the rule (regex quantifiers, JSON, Jinja) are left alone."""
+    return str(expression).replace("{col}", column_sql)
+
+
 def fqn(database: str, schema: str, name: Optional[str] = None) -> str:
     parts = [database, schema] + ([name] if name is not None else [])
     return ".".join(quote(p) for p in parts)
