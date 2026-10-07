@@ -204,7 +204,7 @@ def ask(session, domain_id: str, question: str) -> Dict[str, Any]:
               + json.dumps([{"key": h.get("SOURCE_REFERENCE") or h.get("KNOWLEDGE_ID"), "title": h.get("TITLE"),
                              "content": clip(h.get("CONTENT"), 600)} for h in hits], default=str))
     started = time.time()
-    output, usage, model = complete_json(session, prompt, ASK_SCHEMA, max_tokens=2000)
+    output, usage, model = complete_json(session, prompt, ASK_SCHEMA, max_tokens=2000, stage="KNOWLEDGE")
     return {"answer": str(output.get("answer") or ""),
             "citations": keep_citations(output.get("citations") or [], citation_keys(ctx, hits)),
             "model": model, "usage": usage, "duration_ms": int((time.time() - started) * 1000)}

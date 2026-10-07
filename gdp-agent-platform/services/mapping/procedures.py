@@ -202,7 +202,7 @@ def _adjudicate(session, run_id: str, ambiguous: List[Tuple[Dict[str, Any], List
               + "\n".join(blocks))
     started = time.time()
     try:
-        result, usage, model = complete_json(session, prompt, ADJUDICATION_SCHEMA, max_tokens=2000)
+        result, usage, model = complete_json(session, prompt, ADJUDICATION_SCHEMA, max_tokens=2000, stage="MAPPING")
     except Exception:
         return {}
     record_cost(session, run_id, "MAPPING", model, usage, int((time.time() - started) * 1000), tool_calls=1)

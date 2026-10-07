@@ -1424,22 +1424,46 @@ def _record_cost(db: Db, run_id: str, stage: str, model: Optional[str], usage: O
     """AUDIT.COST_USAGE row for an AI call the API makes directly (same rate table as the procedures).
     Never fails the request it describes."""
     try:
+        from services.common.cost import estimate, rates_for
+
         usage = usage or {}
         prompt, completion = int(usage.get("prompt_tokens") or 0), int(usage.get("completion_tokens") or 0)
         total = int(usage.get("total_tokens") or prompt + completion)
-        found = db.query("SELECT CONFIG_VALUE FROM CORE.PLATFORM_CONFIG "
-                         "WHERE CONFIG_KEY = 'CREDITS_PER_MILLION_TOKENS' AND IS_CURRENT")
-        rates = _json(found[0].get("config_value")) if found else {}
-        rate = float((rates or {}).get(model or "", (rates or {}).get("default", 0)) or 0)
+        rates = rates_for(model, _config(db, "RATE_CARD", {}) or {},
+                          _config(db, "CALIBRATED_RATES", {}) or {},
+                          _config(db, "CREDITS_PER_MILLION_TOKENS", {}) or {})
         db.execute(
             """INSERT INTO AUDIT.COST_USAGE (COST_USAGE_ID, RUN_ID, STAGE, AGENT, MODEL, INPUT_TOKENS, OUTPUT_TOKENS,
-                   TOTAL_TOKENS, TOOL_CALL_COUNT, SEARCH_CALL_COUNT, CODE_CALL_COUNT, DURATION_MS, ESTIMATED_COST)
-               SELECT %s, %s, %s, 'PLATFORM', %s, %s, %s, %s, 1, 0, 0, %s, %s""",
+                   TOTAL_TOKENS, TOOL_CALL_COUNT, SEARCH_CALL_COUNT, CODE_CALL_COUNT, DURATION_MS, ESTIMATED_COST,
+                   QUERY_ID, COST_SOURCE)
+               SELECT %s, %s, %s, 'PLATFORM', %s, %s, %s, %s, 1, 0, 0, %s, %s, %s, %s""",
             (str(uuid.uuid4()), run_id, stage, model, prompt, completion, total,
-             int((time.time() - started) * 1000), round(total / 1_000_000 * rate, 6)),
+             int((time.time() - started) * 1000), estimate(prompt, completion, rates), usage.get("query_id"),
+             "ESTIMATE" if total else "NONE"),
         )
     except Exception:
         pass
+
+
+def _config(db: Db, key: str, default: Any = None) -> Any:
+    """Newest current PLATFORM_CONFIG value (older rows left current can never win)."""
+    try:
+        found = db.query("SELECT CONFIG_VALUE FROM CORE.PLATFORM_CONFIG WHERE CONFIG_KEY = %s AND IS_CURRENT "
+                         "ORDER BY VERSION DESC LIMIT 1", (key,))
+    except Exception:
+        return default
+    if not found:
+        return default
+    value = _json(found[0].get("config_value"))
+    return found[0].get("config_value") if value is None else value
+
+
+def _model_for(db: Db, stage: Optional[str] = None) -> str:
+    """The model an AI step uses: the stage's own (Admin, LLM_MODEL_BY_STAGE) or the platform default."""
+    from services.common.llm import DEFAULT_MODEL, resolve_model
+
+    return resolve_model(str(_config(db, "LLM_MODEL", DEFAULT_MODEL) or DEFAULT_MODEL),
+                         _config(db, "LLM_MODEL_BY_STAGE", {}) if stage else {}, stage)
 
 
 def _source_call(db: Db, proc: str, handler, *args):
@@ -1645,10 +1669,18 @@ def costs(group_by: str = "stage", since: Optional[str] = None, until: Optional[
         sql, params = cost_query(group_by, since, until, limit)
     except AssertionError as exc:
         raise HTTPException(400, str(exc)) from exc
+    _reconcile_if_due(db)
     rows = db.query(sql, tuple(params))
     totals = {k: sum(float(r.get(k) or 0) for r in rows)
-              for k in ("calls", "input_tokens", "output_tokens", "total_tokens", "estimated_cost")}
-    return {"group_by": group_by, "rows": rows, "totals": totals}
+              for k in ("calls", "input_tokens", "output_tokens", "total_tokens", "estimated_cost", "credits",
+                        "actual_credits", "estimated_credits", "actual_calls")}
+    price = _config(db, "CREDIT_PRICE_USD", None)
+    try:
+        price = float(price) if price not in (None, "", 0) else None
+    except (TypeError, ValueError):
+        price = None
+    return {"group_by": group_by, "rows": rows, "totals": totals, "credit_price_usd": price,
+            "reconcile": _RECONCILE_STATE.get("last")}
 
 
 @app.get("/api/metrics/summary")
@@ -1664,10 +1696,14 @@ def metrics_summary(db: Db = Depends(current_db)):
     out = summarise(groups, lifecycle_status)
     try:
         cost = db.query("""SELECT COUNT(*) AS CALLS, COALESCE(SUM(TOTAL_TOKENS), 0) AS TOKENS,
-                                  COALESCE(SUM(ESTIMATED_COST), 0) AS COST
+                                  COALESCE(SUM(COALESCE(ACTUAL_CREDITS, ESTIMATED_COST, 0)), 0) AS COST,
+                                  COALESCE(SUM(ACTUAL_CREDITS), 0) AS ACTUAL,
+                                  COALESCE(SUM(IFF(ACTUAL_CREDITS IS NULL, ESTIMATED_COST, 0)), 0) AS ESTIMATED
                              FROM AUDIT.COST_USAGE WHERE CREATED_AT >= DATEADD('day', -30, CURRENT_TIMESTAMP())""")
         out["cost_30d"] = {"calls": int(cost[0]["calls"] or 0), "tokens": int(cost[0]["tokens"] or 0),
-                           "estimated_cost": float(cost[0]["cost"] or 0)}
+                           "estimated_cost": float(cost[0]["cost"] or 0), "credits": float(cost[0]["cost"] or 0),
+                           "actual_credits": float(cost[0]["actual"] or 0),
+                           "estimated_credits": float(cost[0]["estimated"] or 0)}
     except Exception:
         out["cost_30d"] = None
     return out
@@ -2130,13 +2166,10 @@ def mapping_assist(run_id: str, body: MappingAssist, db: Db = Depends(current_db
     taken = {d["target_column_id"]: d["source_column_id"] for d in data["decisions"]
              if d["decision"] != "REJECTED" and d["target_column_id"] and d["source_column_id"] not in wanted}
     prompt = assist.build_prompt(sources, by_source, data["targets"], table["target_table"], taken, body.instructions)
-    model_rows = db.query(
-        "SELECT CONFIG_VALUE::VARCHAR AS M FROM CORE.PLATFORM_CONFIG WHERE CONFIG_KEY = 'LLM_MODEL' AND IS_CURRENT"
-    )
-    model = (model_rows[0]["m"] if model_rows else None) or "claude-sonnet-4-5"
+    model = _model_for(db, "MAPPING")
     started = time.time()
     try:
-        result = db.query(
+        result, query_id = db.query_with_id(
             "SELECT AI_COMPLETE(model => %s, prompt => %s, "
             "model_parameters => {'temperature': 0, 'max_tokens': 8000}, "
             "response_format => PARSE_JSON(%s), show_details => TRUE) AS R",
@@ -2146,7 +2179,8 @@ def mapping_assist(run_id: str, body: MappingAssist, db: Db = Depends(current_db
         raise _snowflake_error(exc) from exc
     details = result[0]["r"] if result else None
     details = json.loads(details) if isinstance(details, str) else (details or {})
-    _record_cost(db, run_id, "MAPPING", details.get("model", model), details.get("usage"), started)
+    _record_cost(db, run_id, "MAPPING", details.get("model", model),
+                 {**(details.get("usage") or {}), "query_id": query_id}, started)
     structured = details.get("structured_output") or []
     if not structured:
         raise HTTPException(502, "Cortex returned no structured answer for these columns. Try fewer columns or again.")
@@ -2958,11 +2992,13 @@ def review_dbt(run_id: str, body: DbtReview, db: Db = Depends(current_db)):
         pass
     started = time.time()
     try:
-        reviewed = review_file(lambda sql, params=(): db.query(sql, params), path, files[path],
-                               _domain_skill(db, run_id), _sttm_context(db, run_id), notes, model=body.model)
+        fetch, ids = _fetch_with_ids(db)
+        reviewed = review_file(fetch, path, files[path], _domain_skill(db, run_id), _sttm_context(db, run_id), notes,
+                               model=body.model or _model_for(db, "DBT"))
     except Exception as exc:
         raise _snowflake_error(exc) from exc
-    _record_cost(db, run_id, "DBT", reviewed.get("model"), reviewed.get("usage"), started)
+    _record_cost(db, run_id, "DBT", reviewed.get("model"),
+                 {**(reviewed.get("usage") or {}), "query_id": ids[-1] if ids else None}, started)
     return reviewed
 
 
@@ -3028,17 +3064,19 @@ def enhance_dbt(run_id: str, body: DbtEnhance, db: Db = Depends(current_db)):
         context = f"{context}\n\nFOLLOW THESE GDP-DBT-ONBOARD-SOURCE RULES AND DOMAIN CONTRACT:\n{skill}"
     started = time.time()
     try:
+        fetch, ids = _fetch_with_ids(db)
         enhanced = enhance_file(
-            lambda sql, params=(): db.query(sql, params),
+            fetch,
             path,
             rows[0]["content"] or "",
             body.prompt.strip(),
-            model=body.model,
+            model=body.model or _model_for(db, "DBT"),
             context=context,
         )
     except Exception as exc:
         raise _snowflake_error(exc) from exc
-    _record_cost(db, run_id, "DBT", enhanced.get("model"), enhanced.get("usage"), started)
+    _record_cost(db, run_id, "DBT", enhanced.get("model"),
+                 {**(enhanced.get("usage") or {}), "query_id": ids[-1] if ids else None}, started)
     return enhanced
 
 
@@ -3832,7 +3870,10 @@ def catalog_table_profile(database: str, schema: str, table: str, db: Db = Depen
 @app.get("/api/profiles/store")
 def profile_store(db: Db = Depends(current_db)):
     """Every staged profile across all databases, newest first."""
-    rows = [r for r in _store_rows(db) if r.get("source_fingerprint") or r.get("status") == "PROFILING"]
+    # In-place Oracle profiles (source ORACLE_<NAME>) describe tables outside Snowflake; they show in the Oracle
+    # panel, not as Snowflake schemas to open.
+    rows = [r for r in _store_rows(db) if (r.get("source_fingerprint") or r.get("status") == "PROFILING")
+            and not str(r.get("source_name") or "").upper().startswith("ORACLE_")]
     rows.sort(key=lambda r: r.get("status_updated_at") or r.get("profiled_at") or "", reverse=True)
     return {"profiles": rows}
 
@@ -4444,7 +4485,8 @@ class PlatformSetting(BaseModel):
 
 
 def _platform_settings(db: Db) -> dict:
-    from services.common.platform_config import DEFAULTS, KNOWN_MODELS, SETTINGS
+    from services.common.platform_config import ADMIN_SETTINGS as SETTINGS
+    from services.common.platform_config import DEFAULTS, KNOWN_MODELS
     from services.common.standard import PRESETS
 
     found = {r["config_key"]: r for r in db.query(
@@ -4455,8 +4497,8 @@ def _platform_settings(db: Db) -> dict:
     settings = {}
     for key in SETTINGS:
         row = found.get(key)
-        settings[key] = {"value": _json(row["config_value"]) if row else DEFAULTS[key],
-                         "default": DEFAULTS[key], "customised": bool(row and int(row["version"]) > 1),
+        value = _json(row["config_value"]) if row else DEFAULTS[key]
+        settings[key] = {"value": value, "default": DEFAULTS[key], "customised": bool(row) and value != DEFAULTS[key],
                          "changed_by": row["created_by"] if row else None, "changed_at": row["created_at"] if row else None}
     return {"settings": settings, "known_models": KNOWN_MODELS, "presets": PRESETS}
 
@@ -4481,6 +4523,7 @@ def put_platform_setting(body: PlatformSetting, db: Db = Depends(current_db)):
 
         configure(cleaned)
     _RULES_CACHE.clear()
+    _MODELS_CACHE.update(at=0.0, data=None)
     return _platform_settings(db)
 
 
@@ -4632,3 +4675,341 @@ def ask_domain(domain_id: str, body: DomainQuestion, db: Db = Depends(current_db
     result = _domain_ai(db, ask, domain_id, body.question)
     _record_cost(db, None, "KNOWLEDGE", result.get("model"), result.pop("usage", None), started)
     return result
+
+
+# ---------------------------------------------------------------- Oracle sources: setup, test, catalog, profile, ingest
+
+_ingest_jobs: dict[str, dict] = {}
+
+
+class OracleSetup(BaseModel):
+    password: str = Field(min_length=1, max_length=1024)
+    external_access_integration: Optional[str] = Field(default=None, max_length=255)
+
+
+class OracleTables(BaseModel):
+    tables: list[str] = Field(min_length=1, max_length=500)
+
+
+class OracleIngest(OracleTables):
+    mode: Literal["replace", "append"] = "replace"
+    storage: Literal["MANAGED", "ICEBERG"] = "MANAGED"
+    watermark_columns: dict[str, str] = Field(default_factory=dict)
+    profile_after_landing: bool = True
+
+
+def _oracle_source(db: Db, source_id: str) -> dict:
+    found = db.query("SELECT SOURCE_SYSTEM_ID, SOURCE_SYSTEM_NAME, CONNECTION_TYPE, CONFIGURATION_JSON "
+                     "FROM SOURCE.SOURCE_REGISTRY WHERE SOURCE_SYSTEM_ID = %s AND ACTIVE_FLAG", (source_id,))
+    if not found or found[0]["connection_type"] != "oracle":
+        raise HTTPException(404, "Oracle source not found")
+    src = found[0]
+    src["config"] = _json(src["configuration_json"]) or {}
+    return src
+
+
+def _oracle_call(db: Db, source_id: str, action: str, payload: dict, progress=None) -> dict:
+    """Run an Oracle action in the source's runtime: its Snowflake procedure, or this API host."""
+    from services.source.oracle.procedures import api_host_password, object_names, run
+
+    src = _oracle_source(db, source_id)
+    cfg = src["config"]
+    if cfg.get("runtime", "snowflake") == "api_host":
+        try:
+            password = api_host_password(cfg)
+        except AssertionError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        return invoke_source(db, run, source_id, action, json.dumps(payload), password, progress)
+    if not cfg.get("oracle_procedure"):
+        raise HTTPException(409, "Set up the Snowflake connection for this source first (Oracle password, network "
+                                 "rule and external access integration).")
+    proc = object_names(cfg["database"], cfg["schema"])["procedure"]
+    result = db.call(f"CALL {proc}(%s, %s, %s)", (source_id, action, json.dumps(payload)))
+    return _json(result) if isinstance(result, str) else result
+
+
+def _oracle_errors(fn):
+    try:
+        return fn()
+    except HTTPException:
+        raise
+    except AssertionError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except Exception as exc:
+        text = str(exc)
+        if "ORA-01017" in text:
+            raise HTTPException(401, "Oracle rejected the user name or password (ORA-01017).") from exc
+        if any(code in text for code in ("ORA-12541", "ORA-12170", "DPY-6005", "DPY-4011", "timed out")):
+            raise HTTPException(502, "Could not reach the Oracle listener. Check host, port and that this runtime "
+                                     "is allowed through the network (for Snowflake: the network rule).") from exc
+        raise _snowflake_error(exc) from exc
+
+
+@app.post("/api/sources/{source_id}/oracle/setup")
+def oracle_setup(source_id: str, body: OracleSetup, db: Db = Depends(current_db)):
+    """Snowflake runtime: network rule to the Oracle listener, PASSWORD secret, external access integration and
+    the source's procedure. The password is used only while running the statements and never stored elsewhere."""
+    from services.source.oracle.procedures import object_names, procedure_sql, setup_sql
+
+    src = _oracle_source(db, source_id)
+    cfg = src["config"]
+    if cfg.get("runtime", "snowflake") != "snowflake":
+        raise HTTPException(409, "This source runs on the API host; its password comes from an environment variable.")
+    eai = (body.external_access_integration or f"{src['source_system_name']}_ORACLE_ACCESS").strip().upper()
+    password = body.password
+    escaped = password.replace("\\", "\\\\").replace("'", "''")
+    try:
+        statements = setup_sql(cfg["database"], cfg["schema"], eai, cfg["host"], int(cfg.get("port") or 1521),
+                               cfg["user"])
+        ddl = procedure_sql(cfg["database"], cfg["schema"], _services_import(db), eai)
+    except AssertionError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    log: list[dict] = []
+    for sql in [*statements, ddl]:
+        try:
+            db.execute(sql.replace("'<oracle password>'", "'" + escaped + "'"))
+            log.append({"sql": sql, "ok": True})
+        except Exception as exc:
+            log.append({"sql": sql, "ok": False, "error": str(exc)[:500].replace(password, "***")})
+            return {"ready": False, "log": log,
+                    "detail": "A step needs more privileges (CREATE NETWORK RULE, CREATE SECRET, CREATE INTEGRATION "
+                              "or the oracledb package). Ask an admin to run the SQL shown, or retry with a role "
+                              "that has them."}
+    cfg.update(oracle_procedure=object_names(cfg["database"], cfg["schema"])["procedure"],
+               external_access_integration=eai, secret=object_names(cfg["database"], cfg["schema"])["secret"])
+    db.execute("UPDATE SOURCE.SOURCE_REGISTRY SET CONFIGURATION_JSON = PARSE_JSON(%s), CONFIGURATION_REFERENCE = %s, "
+               "UPDATED_AT = CURRENT_TIMESTAMP() WHERE SOURCE_SYSTEM_ID = %s",
+               (json.dumps(cfg), cfg["secret"], source_id))
+    return {"ready": True, "log": log}
+
+
+@app.post("/api/sources/{source_id}/oracle/test")
+def oracle_test(source_id: str, db: Db = Depends(current_db)):
+    """Connect, report the Oracle version and what the user can see in the schema owner."""
+    started = time.time()
+    result = _oracle_errors(lambda: _oracle_call(db, source_id, "test", {}))
+    return {**result, "elapsed_ms": int((time.time() - started) * 1000)}
+
+
+@app.post("/api/sources/{source_id}/oracle/catalog")
+def oracle_catalog(source_id: str, db: Db = Depends(current_db)):
+    """Tables and views of the schema owner with row estimates, last analysis and comments, plus what was profiled
+    or landed already."""
+    result = _oracle_errors(lambda: _oracle_call(db, source_id, "catalog", {}))
+    src = _oracle_source(db, source_id)
+    cfg = src["config"]
+    try:
+        profiled = {r["table_name"]: r for r in db.query(
+            """SELECT TABLE_NAME, ROW_COUNT, STATUS, PROFILED_AT::VARCHAR AS PROFILED_AT, PII_COLUMNS, KEY_CANDIDATES,
+                      PROFILE_STAGE_PATH FROM METADATA.TABLE_PROFILES WHERE SOURCE_NAME = %s""",
+            (f"ORACLE_{src['source_system_name']}",))}
+    except Exception:
+        profiled = {}
+    loads = cfg.get("loads") or {}
+    by_oracle = {v.get("oracle_table", "").split(".", 1)[-1]: {**v, "landed_as": k} for k, v in loads.items()}
+    for t in result.get("tables", []):
+        t["profile"] = profiled.get(t["table"])
+        t["load"] = by_oracle.get(t["table"])
+    return {**result, "landing": {"database": cfg.get("database"), "schema": cfg.get("schema")},
+            "runtime": cfg.get("runtime", "snowflake"), "ready": bool(cfg.get("oracle_procedure"))
+            or cfg.get("runtime") == "api_host"}
+
+
+@app.post("/api/sources/{source_id}/oracle/columns")
+def oracle_columns(source_id: str, body: OracleTables, db: Db = Depends(current_db)):
+    return _oracle_errors(lambda: _oracle_call(db, source_id, "columns", {"tables": body.tables}))
+
+
+@app.get("/api/sources/{source_id}/oracle/profile")
+def oracle_profile_doc(source_id: str, table: str, db: Db = Depends(current_db)):
+    """The in-place Oracle profile document of one table (same shape as Snowflake profiles)."""
+    src = _oracle_source(db, source_id)
+    found = db.query("SELECT PROFILE_STAGE_PATH FROM METADATA.TABLE_PROFILES WHERE SOURCE_NAME = %s AND TABLE_NAME = %s "
+                     "AND STATUS <> 'PROFILING' ORDER BY PROFILED_AT DESC LIMIT 1",
+                     (f"ORACLE_{src['source_system_name']}", table))
+    if not found or not found[0]["profile_stage_path"]:
+        raise HTTPException(404, f"{table} has not been profiled in Oracle yet")
+    doc = _read_stage_doc(db, found[0]["profile_stage_path"])
+    if not doc:
+        raise HTTPException(404, "profile document not found")
+    from services.profiling import insights
+
+    return {"profile": doc, "scorecard": insights.scorecard(insights.quality_dimensions(doc), None)}
+
+
+def _start_oracle_job(db: Db, source_id: str, kind: str, tables: list[str], payload: dict) -> dict:
+    job_id = str(uuid.uuid4())
+    job = {"job_id": job_id, "source_id": source_id, "kind": kind, "status": "RUNNING", "started_at": time.time(),
+           "finished_at": None, "tables": {t: {"phase": "QUEUED"} for t in tables}, "result": None, "error": None}
+    with _jobs_lock:
+        _ingest_jobs[job_id] = job
+
+    def progress(event: dict) -> None:
+        with _jobs_lock:
+            entry = job["tables"].setdefault(event.get("table", "?"), {})
+            entry.update({k: v for k, v in event.items() if k != "table"})
+
+    def work() -> None:
+        results = []
+        try:
+            for table in tables:  # one table per call: progress per table in either runtime
+                progress({"table": table, "phase": "EXTRACTING" if kind == "ingest" else "PROFILING"})
+                try:
+                    out = _oracle_call(db, source_id, "extract" if kind == "ingest" else "profile",
+                                       {**payload, "tables": [table]}, progress)
+                    row = (out.get("tables") or [{}])[0]
+                except HTTPException as exc:
+                    row = {"table": table, "status": "FAILED", "error": exc.detail}
+                except Exception as exc:
+                    row = {"table": table, "status": "FAILED", "error": str(exc)[:600]}
+                if kind == "ingest" and row.get("status") == "LANDED" and payload.get("profile_after_landing"):
+                    progress({"table": table, "phase": "PROFILING"})
+                    try:
+                        landed = row["landed_as"].rsplit(".", 1)[-1]
+                        profile_source_tables(source_id, SourceProfileRequest(tables=[landed], force_refresh=True,
+                                                                               wait=True), db)
+                        row["profiled"] = True
+                    except Exception as exc:
+                        row["profile_error"] = str(exc)[:300]
+                progress({"table": table, "phase": "DONE" if row.get("status") in ("LANDED", "PROFILED") else "FAILED",
+                          **{k: row.get(k) for k in ("rows_loaded", "rows_extracted", "row_count", "error")}})
+                results.append(row)
+            job["status"] = "DONE" if all(r.get("status") in ("LANDED", "PROFILED") for r in results) else "PARTIAL"
+        except Exception as exc:
+            job["status"], job["error"] = "FAILED", str(exc)[:800]
+        finally:
+            job["result"], job["finished_at"] = results, time.time()
+
+    threading.Thread(target=work, daemon=True).start()
+    return {"job_id": job_id, "status": "RUNNING", "tables": tables}
+
+
+@app.post("/api/sources/{source_id}/oracle/profile")
+def oracle_profile(source_id: str, body: OracleTables, db: Db = Depends(current_db)):
+    """Profile the chosen tables inside Oracle (sampled above 200k rows); only statistics leave Oracle."""
+    _oracle_source(db, source_id)
+    return _start_oracle_job(db, source_id, "profile", body.tables, {})
+
+
+@app.post("/api/sources/{source_id}/oracle/ingest")
+def oracle_ingest(source_id: str, body: OracleIngest, db: Db = Depends(current_db)):
+    """Extract the chosen tables to Parquet, land them in the source's schema and profile them for modeling."""
+    _oracle_source(db, source_id)
+    return _start_oracle_job(db, source_id, "ingest", body.tables,
+                             {"mode": body.mode, "storage": body.storage, "watermark_columns": body.watermark_columns,
+                              "profile_after_landing": body.profile_after_landing})
+
+
+@app.get("/api/ingest-jobs/{job_id}")
+def ingest_job(job_id: str):
+    with _jobs_lock:
+        job = _ingest_jobs.get(job_id)
+        if not job:
+            raise HTTPException(404, "job not found (jobs are kept while the API runs)")
+        return json.loads(json.dumps(job, default=str))
+
+
+def _fetch_with_ids(db: Db):
+    """A fetch_rows for helpers that call AI_COMPLETE themselves, remembering each statement's query id."""
+    ids: list[str] = []
+
+    def fetch(sql: str, params: tuple = ()):
+        found, query_id = db.query_with_id(sql, params)
+        if query_id:
+            ids.append(query_id)
+        return found
+
+    return fetch, ids
+
+
+# ---------------------------------------------------------------- Admin: models available to this account
+
+_MODELS_CACHE: dict = {"at": 0.0, "data": None}
+_RECONCILE_STATE: dict = {"at": 0.0, "last": None}
+
+
+class ModelTest(BaseModel):
+    model: str = Field(min_length=2, max_length=128)
+
+
+def _account_models(db: Db, refresh: bool = False) -> dict:
+    """Models this account can use: SHOW MODELS / inference profiles, the Cortex catalog, and the account's
+    CORTEX_MODELS_ALLOWLIST. Cached for ten minutes."""
+    from services.common.models import account_models
+
+    if not refresh and _MODELS_CACHE["data"] and time.time() - _MODELS_CACHE["at"] < 600:
+        return _MODELS_CACHE["data"]
+
+    def execute(sql: str):
+        return db.query(sql)
+
+    data = account_models(execute, str(_config(db, "LLM_MODEL", "") or ""))
+    _MODELS_CACHE.update(at=time.time(), data=data)
+    return data
+
+
+@app.get("/api/config/models")
+def config_models(refresh: bool = False, db: Db = Depends(current_db)):
+    from services.common.llm import STAGES
+
+    data = _account_models(db, refresh)
+    return {**data, "default": _model_for(db), "by_stage": _config(db, "LLM_MODEL_BY_STAGE", {}) or {},
+            "stages": list(STAGES)}
+
+
+@app.post("/api/config/models/test")
+def test_model(body: ModelTest, db: Db = Depends(current_db)):
+    """A tiny AI_COMPLETE to prove the model answers in this account's region (costs a few tokens)."""
+    started = time.time()
+    try:
+        found, query_id = db.query_with_id(
+            "SELECT AI_COMPLETE(model => %s, prompt => 'Reply with the single word OK.', "
+            "model_parameters => {'temperature': 0, 'max_tokens': 5}, show_details => TRUE) AS R", (body.model,))
+    except Exception as exc:
+        text = str(exc)
+        reason = ("not available in this account or region" if "unknown model" in text.lower()
+                  or "not supported" in text.lower() or "unavailable" in text.lower() else text[:300])
+        return {"model": body.model, "ok": False, "error": reason, "latency_ms": int((time.time() - started) * 1000)}
+    details = _json(found[0]["r"]) if found else {}
+    _record_cost(db, None, "ADMIN", body.model, {**((details or {}).get("usage") or {}), "query_id": query_id}, started)
+    reply = (((details or {}).get("choices") or [{}])[0].get("messages") or "")
+    return {"model": body.model, "ok": True, "reply": str(reply)[:40], "latency_ms": int((time.time() - started) * 1000),
+            "usage": (details or {}).get("usage")}
+
+
+@app.post("/api/costs/reconcile")
+def reconcile_costs(db: Db = Depends(current_db)):
+    """Actual credits from Snowflake's Cortex usage views by query id; calls that had no rate get an estimate."""
+    from services.common.cost import backfill_estimates, calibrated_rates, reconcile
+
+    query = (lambda sql, params: db.query(sql, params))
+    result = reconcile(query, lambda sql, params: db.execute(sql, params))
+    calibrated = calibrated_rates(query)
+    if calibrated and calibrated != (_config(db, "CALIBRATED_RATES", {}) or {}):
+        _put_config(db, "CALIBRATED_RATES", calibrated, "Billed credits per million tokens, learned on reconcile")
+    result["calibrated_rates"] = calibrated
+    try:
+        result["estimates_filled"] = backfill_estimates(
+            query, lambda sql, params: db.execute(sql, params),
+            _config(db, "RATE_CARD", {}) or {}, _config(db, "CREDITS_PER_MILLION_TOKENS", {}) or {}, calibrated)
+    except Exception as exc:
+        result["estimates_filled"] = 0
+        result["backfill_error"] = str(exc)[:200]
+    result["at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+    _RECONCILE_STATE.update(at=time.time(), last=result)
+    return result
+
+
+def _reconcile_if_due(db: Db) -> None:
+    """At most hourly, on the way into cost views (Snowflake's usage views lag; more often adds nothing)."""
+    if time.time() - _RECONCILE_STATE["at"] < 3600:
+        return
+    _RECONCILE_STATE["at"] = time.time()
+
+    def run():
+        try:
+            reconcile_costs(db)
+        except Exception:
+            pass
+
+    threading.Thread(target=run, name="cost-reconcile", daemon=True).start()

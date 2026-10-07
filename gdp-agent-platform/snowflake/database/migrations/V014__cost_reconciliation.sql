@@ -1,0 +1,6 @@
+-- AI cost: each call keeps its Snowflake query id so the credits Snowflake actually bills (ACCOUNT_USAGE Cortex
+-- usage views) can replace the estimate made at call time.
+ALTER TABLE {{database}}.AUDIT.COST_USAGE ADD COLUMN IF NOT EXISTS QUERY_ID VARCHAR(64);
+ALTER TABLE {{database}}.AUDIT.COST_USAGE ADD COLUMN IF NOT EXISTS ACTUAL_CREDITS NUMBER(18,6);
+ALTER TABLE {{database}}.AUDIT.COST_USAGE ADD COLUMN IF NOT EXISTS RECONCILED_AT TIMESTAMP_LTZ;
+ALTER TABLE {{database}}.AUDIT.COST_USAGE ADD COLUMN IF NOT EXISTS COST_SOURCE VARCHAR(16);

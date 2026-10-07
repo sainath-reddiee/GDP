@@ -19,10 +19,15 @@ KNOWN_MODELS = [
 MODEL_NAME = re.compile(r"^[a-z0-9][a-z0-9.\-]{1,62}$")
 CATALOG_KEYS = ("hidden_target_tables", "hidden_target_databases", "hidden_target_schemas", "hidden_target_ids",
                 "hidden_domain_names", "strip_tokens")
-SETTINGS = ("LLM_MODEL", "CREDITS_PER_MILLION_TOKENS", "CATALOG_DISPLAY", "MODELING_STANDARD.GDP",
-            "MODELING_STANDARD.GENERIC")
+SETTINGS = ("LLM_MODEL", "LLM_MODEL_BY_STAGE", "RATE_CARD", "CREDIT_PRICE_USD", "CREDITS_PER_MILLION_TOKENS",
+            "CATALOG_DISPLAY", "MODELING_STANDARD.GDP", "MODELING_STANDARD.GENERIC")
+# What the Admin page lists; CATALOG_DISPLAY is still read by the app but no longer edited there.
+ADMIN_SETTINGS = tuple(k for k in SETTINGS if k != "CATALOG_DISPLAY")
 DEFAULTS: Dict[str, Any] = {
     "LLM_MODEL": "claude-sonnet-4-5",
+    "LLM_MODEL_BY_STAGE": {},
+    "RATE_CARD": {},
+    "CREDIT_PRICE_USD": None,
     "CREDITS_PER_MILLION_TOKENS": {"default": 0},
     "CATALOG_DISPLAY": {"hidden_target_tables": [], "hidden_target_databases": [], "hidden_target_schemas": [],
                         "hidden_target_ids": [], "hidden_domain_names": ["GDP"], "strip_tokens": ["GDP"]},
@@ -38,6 +43,60 @@ def validate(key: str, value: Any) -> Tuple[Any, List[str]]:
     if key == "LLM_MODEL":
         name = str(value or "").strip().lower()
         return name, [] if MODEL_NAME.match(name) else ["model must be a Cortex model name, for example claude-sonnet-4-5"]
+    if key == "LLM_MODEL_BY_STAGE":
+        from services.common.llm import STAGES
+
+        if not isinstance(value, dict):
+            return None, ["stage models must be an object of stage -> model"]
+        out, problems = {}, []
+        for stage, model in value.items():
+            stage = str(stage).strip().upper()
+            model = str(model or "").strip().lower()
+            if stage not in STAGES:
+                problems.append(f"unknown stage {stage}")
+            elif not model:
+                continue  # inherit the default
+            elif not MODEL_NAME.match(model):
+                problems.append(f"{stage}: {model} is not a model name")
+            else:
+                out[stage] = model
+        return out, problems
+    if key == "RATE_CARD":
+        if not isinstance(value, dict):
+            return None, ["rate card must be an object of model -> {input, output}"]
+        out, problems = {}, []
+        for model, rates in value.items():
+            model = str(model).strip().lower()
+            if not MODEL_NAME.match(model):
+                problems.append(f"{model}: not a model name")
+                continue
+            if not isinstance(rates, dict):
+                problems.append(f"{model}: rates must be {{input, output}}")
+                continue
+            clean = {}
+            for side in ("input", "output"):
+                raw = rates.get(side)
+                if raw in (None, ""):
+                    continue
+                try:
+                    number = float(raw)
+                except (TypeError, ValueError):
+                    problems.append(f"{model} {side}: must be a number")
+                    continue
+                if number < 0:
+                    problems.append(f"{model} {side}: cannot be negative")
+                clean[side] = number
+            if clean:
+                out[model] = clean
+        return out, problems
+    if key == "CREDIT_PRICE_USD":
+        if value in (None, ""):
+            return None, []
+        try:
+            price = float(value)
+        except (TypeError, ValueError):
+            return None, ["credit price must be a number"]
+        return price, [] if price >= 0 else ["credit price cannot be negative"]
     if key == "CREDITS_PER_MILLION_TOKENS":
         if not isinstance(value, dict):
             return None, ["rates must be an object of model -> credits per million tokens"]

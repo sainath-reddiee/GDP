@@ -27,7 +27,7 @@ def wire(monkeypatch, answer, calls):
     monkeypatch.setattr(ai_suggest, "model_for", lambda s: "m1")
     monkeypatch.setattr(ai_suggest, "record_cost", lambda *a, **k: calls.append("cost"))
 
-    def complete(session, prompt, schema, max_tokens=0):
+    def complete(session, prompt, schema, max_tokens=0, **kwargs):
         calls.append(prompt)
         return answer, {"total_tokens": 10}, "m1"
     monkeypatch.setattr(ai_suggest, "complete_json", complete)

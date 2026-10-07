@@ -2,7 +2,10 @@
 
 import { revalidatePath } from "next/cache";
 import { api, apiForm, attemptValue } from "@/lib/api";
-import type { AnalyzeResult, Connector, ExternalFile, LandResult, CatalogInventory, ProfileStoreRow, SourcesOverview, TableInsights } from "@/lib/types";
+import type {
+  AnalyzeResult, CatalogInventory, Connector, ExternalFile, IngestJob, LandResult, OracleCatalog, OracleColumn, OracleProfileDoc, OracleTest,
+  ProfileStoreRow, SourcesOverview, TableInsights,
+} from "@/lib/types";
 
 export async function loadOverview() {
   return attemptValue(() => api<SourcesOverview>("/api/sources/overview"));
@@ -88,4 +91,52 @@ export async function landExternalFiles(sourceId: string, files: string[], table
   );
   revalidatePath("/sources");
   return result;
+}
+
+// ---------------------------------------------------------------- Oracle
+
+export async function oracleSetup(sourceId: string, password: string, externalAccessIntegration?: string) {
+  return attemptValue(() => api<{ ready: boolean; log: { sql: string; ok: boolean; error?: string }[]; detail?: string }>(
+    `/api/sources/${sourceId}/oracle/setup`,
+    { method: "POST", body: JSON.stringify({ password, external_access_integration: externalAccessIntegration || null }) },
+  ));
+}
+
+export async function oracleTest(sourceId: string) {
+  return attemptValue(() => api<OracleTest>(`/api/sources/${sourceId}/oracle/test`, { method: "POST" }));
+}
+
+export async function oracleCatalog(sourceId: string) {
+  return attemptValue(() => api<OracleCatalog>(`/api/sources/${sourceId}/oracle/catalog`, { method: "POST" }));
+}
+
+export async function oracleColumns(sourceId: string, tables: string[]) {
+  return attemptValue(() => api<{ columns: Record<string, OracleColumn[]> }>(`/api/sources/${sourceId}/oracle/columns`, {
+    method: "POST", body: JSON.stringify({ tables }),
+  }));
+}
+
+export async function oracleProfileDoc(sourceId: string, table: string) {
+  return attemptValue(() => api<OracleProfileDoc>(`/api/sources/${sourceId}/oracle/profile?table=${encodeURIComponent(table)}`));
+}
+
+export async function oracleProfile(sourceId: string, tables: string[]) {
+  return attemptValue(() => api<{ job_id: string }>(`/api/sources/${sourceId}/oracle/profile`, {
+    method: "POST", body: JSON.stringify({ tables }),
+  }));
+}
+
+export async function oracleIngest(sourceId: string, body: {
+  tables: string[]; mode: "replace" | "append"; storage: "MANAGED" | "ICEBERG"; watermark_columns: Record<string, string>;
+  profile_after_landing: boolean;
+}) {
+  const result = await attemptValue(() => api<{ job_id: string }>(`/api/sources/${sourceId}/oracle/ingest`, {
+    method: "POST", body: JSON.stringify(body),
+  }));
+  revalidatePath("/sources");
+  return result;
+}
+
+export async function ingestJob(jobId: string) {
+  return attemptValue(() => api<IngestJob>(`/api/ingest-jobs/${jobId}`));
 }

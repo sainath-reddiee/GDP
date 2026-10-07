@@ -163,7 +163,7 @@ def _extract(session, brief: str, table: str, columns: List[str], knowledge: Lis
     except Exception:
         pass
     started = time.time()
-    output, usage, model = complete_json(session, extract_prompt(brief, table, columns, knowledge), EXTRACT_SCHEMA)
+    output, usage, model = complete_json(session, extract_prompt(brief, table, columns, knowledge), EXTRACT_SCHEMA, stage="SODA")
     if run_id:
         record_cost(session, run_id, "SODA", model, usage, int((time.time() - started) * 1000), tool_calls=1)
     return [requirement_from_row(table, {**r, "origin": "AI"}) for r in output.get("requirements") or []]

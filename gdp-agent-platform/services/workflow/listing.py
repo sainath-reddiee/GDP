@@ -75,10 +75,15 @@ def cost_query(group_by: str, since: Optional[str], until: Optional[str], limit:
         where.append("C.CREATED_AT < DATEADD('day', 1, %s::DATE)"); params.append(until)
     run_name = ", MAX(R.RUN_NAME) AS RUN_NAME" if group_by == "run" else ""
     join = " LEFT JOIN CORE.WORKFLOW_RUN R ON R.RUN_ID = C.RUN_ID" if group_by == "run" else ""
-    order = "KEY ASC" if group_by == "day" else "ESTIMATED_COST DESC, TOTAL_TOKENS DESC"
+    order = "KEY ASC" if group_by == "day" else "CREDITS DESC, TOTAL_TOKENS DESC"
     sql = (f"""SELECT {key} AS KEY{run_name}, COUNT(*) AS CALLS, SUM(C.INPUT_TOKENS) AS INPUT_TOKENS,
                      SUM(C.OUTPUT_TOKENS) AS OUTPUT_TOKENS, SUM(C.TOTAL_TOKENS) AS TOTAL_TOKENS,
-                     SUM(C.ESTIMATED_COST) AS ESTIMATED_COST, SUM(C.DURATION_MS) AS DURATION_MS
+                     SUM(COALESCE(C.ACTUAL_CREDITS, C.ESTIMATED_COST, 0)) AS CREDITS,
+                     SUM(COALESCE(C.ACTUAL_CREDITS, C.ESTIMATED_COST, 0)) AS ESTIMATED_COST,
+                     SUM(C.ACTUAL_CREDITS) AS ACTUAL_CREDITS,
+                     SUM(IFF(C.ACTUAL_CREDITS IS NULL, C.ESTIMATED_COST, 0)) AS ESTIMATED_CREDITS,
+                     COUNT_IF(C.ACTUAL_CREDITS IS NOT NULL) AS ACTUAL_CALLS,
+                     SUM(C.DURATION_MS) AS DURATION_MS
                 FROM AUDIT.COST_USAGE C{join}
                WHERE {' AND '.join(where)}
                GROUP BY {key}

@@ -356,7 +356,7 @@ def draft_pack(session, text: str, standard: Optional[str] = None) -> Dict[str, 
     """AI extraction of a pack from any contract document. Nothing is registered: the reviewer edits, then imports."""
     from services.common.llm import complete_json
 
-    answer, usage, model = complete_json(session, DRAFT_PROMPT + text[:60000], DRAFT_SCHEMA, max_tokens=12000)
+    answer, usage, model = complete_json(session, DRAFT_PROMPT + text[:60000], DRAFT_SCHEMA, max_tokens=12000, stage="KNOWLEDGE")
     pack = draft_from_answer(answer, standard)
     _, problems = prepare(pack)
     return {"pack": pack, "problems": problems, "model": model, "usage": usage}

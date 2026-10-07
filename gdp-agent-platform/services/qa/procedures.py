@@ -172,9 +172,9 @@ def qa_ask(session, run_id: str, question: str) -> Dict[str, Any]:
     with tool_call(session, run_id, "qa_ask", {"question": clip(question, 300)}) as call:
         prompt = ask_prompt(ctx, question)
         try:
-            output, usage, model = complete_json(session, prompt, ASK_SCHEMA, max_tokens=2500)
+            output, usage, model = complete_json(session, prompt, ASK_SCHEMA, max_tokens=2500, stage="QA")
         except AssertionError:
-            output, usage, model = complete_json(session, prompt, ASK_SCHEMA, max_tokens=4000)
+            output, usage, model = complete_json(session, prompt, ASK_SCHEMA, max_tokens=4000, stage="QA")
         record_cost(session, run_id, "QA", model, usage, int((time.time() - started) * 1000), tool_calls=1)
         ok, problems, sql = check(output.get("sql") or "", ctx["allowed"])
         compile_error, note = compile_check(session, sql, ctx) if ok else (None, None)

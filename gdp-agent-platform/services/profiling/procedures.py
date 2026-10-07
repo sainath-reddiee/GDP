@@ -148,7 +148,7 @@ def _enrich(session, run_id: Optional[str], table: str, profiles: List[Dict[str,
     try:
         result, usage, model = complete_json(
             session, profiler.enrichment_prompt(table, profiles, skill_excerpt),
-            profiler.ENRICHMENT_SCHEMA, max_tokens=2000)
+            profiler.ENRICHMENT_SCHEMA, max_tokens=2000, stage="PROFILING")
     except Exception:
         return None
     if run_id:

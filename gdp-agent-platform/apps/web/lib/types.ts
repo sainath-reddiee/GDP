@@ -311,6 +311,48 @@ export type AnalyzeResult = {
 export type Connector = {
   id: string; label: string; kind: "FILE" | "DATABASE" | "SAAS" | "API"; landable: boolean;
   fields: string[]; guidance: string | null;
+  /** set when the platform extracts and lands the source itself (e.g. "oracle") */
+  extractor?: string | null;
+};
+
+export type OracleTest = {
+  version: string; user: string; database: string; service: string; schema_owner: string;
+  visible_tables: number; visible_views: number; warning: string | null; elapsed_ms?: number;
+};
+
+export type OracleTable = {
+  table: string; type: "TABLE" | "VIEW"; estimated_rows: number | null; last_analyzed: string | null;
+  comment: string | null; partitioned: boolean; temporary: boolean;
+  profile?: { row_count: number | null; status: string; profiled_at: string | null; pii_columns: number | null;
+              key_candidates: number | null } | null;
+  load?: { landed_as: string; at: string; rows: number; mode: string; watermark_column: string | null;
+           watermark: string | null } | null;
+};
+
+export type OracleCatalog = {
+  tables: OracleTable[]; landing: { database: string; schema: string }; runtime: "snowflake" | "api_host"; ready: boolean;
+};
+
+export type OracleColumn = {
+  column_name: string; ordinal: number; oracle_type: string; snowflake_type: string; family: string; lob: boolean;
+  nullable: boolean; comment: string | null; constraints: string[];
+};
+
+export type OracleProfileDoc = {
+  profile: {
+    row_count: number; approximate: boolean;
+    columns: { column_name: string; data_type: string; source_type?: string; semantic_type: string;
+               pii_classification: string; potential_key: boolean; constraints?: string[];
+               statistics: { null_percentage?: number; distinct_count?: number | null } }[];
+  };
+  scorecard: { overall: number | null; grade: string | null } | null;
+};
+
+export type IngestJob = {
+  job_id: string; source_id: string; kind: "profile" | "ingest"; status: "RUNNING" | "DONE" | "PARTIAL" | "FAILED";
+  tables: Record<string, { phase: string; rows?: number; files?: number; rows_loaded?: number; rows_extracted?: number;
+                           row_count?: number; error?: string | null }>;
+  result: Record<string, unknown>[] | null; error: string | null;
 };
 
 export type ExternalFile = { path: string; size: number | null; last_modified: string };
