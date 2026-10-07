@@ -148,3 +148,18 @@ def test_generic_standard_ignores_gdp_naming():
     assert technical_semantic("CUSTOMER_HKEY", GENERIC) is None
     assert technical_semantic("id", GENERIC, is_identity=True) == "SURROGATE_KEY"
     assert technical_semantic("loaded_at", GENERIC, column_default="CURRENT_TIMESTAMP()") == "AUDIT_TIMESTAMP"
+
+
+def test_dbt_never_guesses_a_row_key():
+    import pytest
+
+    from services.dbt.onboard import NoUniqueKey, _unique_key
+
+    cols = [{"target_column": "NAME", "source_column": "name", "source_table": "T"},
+            {"target_column": "ORDER_NO", "source_column": "order_no", "source_table": "T"}]
+    with pytest.raises(NoUniqueKey):  # profiled, nothing unique: stop instead of collapsing rows
+        _unique_key(cols, [], {}, "T", {"T": []})
+    picked, reason = _unique_key(cols, [], {}, "T", {"T": ["ORDER_NO"]})
+    assert picked[0]["source_column"] == "order_no" and "profiled as unique" in reason
+    picked, _ = _unique_key(cols, ["NAME"], {}, "T", {"T": []})
+    assert picked[0]["target_column"] == "NAME"

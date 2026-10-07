@@ -96,6 +96,17 @@ def load_inputs(query: Query, run_id: str, plan: Dict[str, Any], sttm: Dict[str,
     tables = {s["name"]: [{"column_name": c, "data_type": t.split("(")[0]} for c, t in s["columns"].items()]
               for s in sources}
     system = str(run.get("SOURCE_SYSTEM_NAME") or "SOURCE")
+    key_candidates: Optional[Dict[str, List[str]]] = None
+    try:
+        measured = query("""SELECT TABLE_NAME, COLUMN_NAME FROM PROFILE.PROFILE_REGISTRY
+                             WHERE RUN_ID = ? AND IS_CURRENT AND POTENTIAL_KEY_FLAG""", [run_id])
+        profiled = query("SELECT COUNT(*) AS N FROM PROFILE.PROFILE_REGISTRY WHERE RUN_ID = ? AND IS_CURRENT", [run_id])
+        if profiled and int(profiled[0].get("N") or 0):
+            key_candidates = {}
+            for r in measured:
+                key_candidates.setdefault(str(r["TABLE_NAME"]).upper(), []).append(str(r["COLUMN_NAME"]).upper())
+    except Exception:
+        key_candidates = None
     return {
         "domain": plan.get("domain_folder") or run.get("DOMAIN_NAME") or ("gdp" if standard == GDP else "general"),
         "target": target,
@@ -104,6 +115,7 @@ def load_inputs(query: Query, run_id: str, plan: Dict[str, Any], sttm: Dict[str,
         "source_key": plan.get("source_key") or source_key_of(system),
         "source_system": system.upper(),
         "business_keys": design.get("business_keys") or [],
+        "key_candidates": key_candidates,
         "grain": design.get("grain") or "",
         "sources": sources,
         "target_columns": target_columns,
