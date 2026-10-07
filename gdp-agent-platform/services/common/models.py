@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any, Callable, Dict, List, Optional
 
 Execute = Callable[[str], List[Dict[str, Any]]]
@@ -31,6 +32,10 @@ CORTEX_INFERENCE = [
 ]
 
 
+# Models AI_COMPLETE cannot use (embeddings, extraction, speech, video, safety classifiers).
+NOT_COMPLETION = re.compile(r"embed|^e5-|voyage|arctic-(extract|parse|transcribe|sentiment|translate)|marengo|pegasus|guard|rerank")
+
+
 def _family(name: str) -> str:
     lower = name.lower()
     if "claude" in lower:
@@ -43,6 +48,12 @@ def _family(name: str) -> str:
         return "openai"
     if "deepseek" in lower:
         return "deepseek"
+    if "gemini" in lower or "gemma" in lower:
+        return "google"
+    if "grok" in lower:
+        return "xai"
+    if "qwen" in lower:
+        return "qwen"
     if "arctic" in lower or lower.startswith("snowflake"):
         return "snowflake"
     return "other"
@@ -53,7 +64,9 @@ def parse_show_models(raw: List[Dict[str, Any]], source: str) -> List[Dict[str, 
     for row in raw or []:
         item = {str(k).lower(): v for k, v in (row or {}).items()}
         name = str(item.get("name") or item.get("model_name") or item.get("inference_profile_name") or "").strip()
-        if not name:
+        if "-" in name or "." in name:  # Cortex names (claude-sonnet-4-5); identifiers like MY_LLAMA keep their case
+            name = name.lower()
+        if not name or NOT_COMPLETION.search(name):
             continue
         out.append({
             "name": name,
@@ -74,7 +87,8 @@ def discover_models(execute: Execute, default: str = "claude-sonnet-4-5") -> Dic
         try:
             found.extend(parse_show_models(execute(sql) or [], source))
         except Exception as exc:
-            warnings.append(f"{sql}: {exc}")
+            if "syntax error" not in str(exc).lower():  # statement not offered on this account: nothing to report
+                warnings.append(f"{sql}: {exc}")
     try:
         rows = execute(
             "SELECT CONFIG_VALUE FROM CORE.PLATFORM_CONFIG WHERE CONFIG_KEY = 'LLM_MODEL' AND IS_CURRENT"
@@ -90,7 +104,7 @@ def discover_models(execute: Execute, default: str = "claude-sonnet-4-5") -> Dic
 
     by_name = {m["name"]: m for m in CORTEX_INFERENCE}
     for item in found:
-        by_name[item["name"]] = item
+        by_name[item["name"]] = {**by_name.get(item["name"], {}), **item}
     if default not in by_name:
         by_name[default] = {"name": default, "family": _family(default), "source": "config", "kind": "MODEL"}
     models = sorted(by_name.values(), key=lambda m: (m["family"], m["name"]))

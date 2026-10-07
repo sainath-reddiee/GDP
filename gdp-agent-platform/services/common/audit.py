@@ -45,7 +45,7 @@ def tool_call(session, run_id: Optional[str], tool: str, inputs: Dict[str, Any])
 def record_cost(session, run_id: Optional[str], stage: str, model: Optional[str], usage: Dict[str, Any],
                 duration_ms: int, tool_calls: int = 0, search_calls: int = 0, code_calls: int = 0,
                 agent: str = "PLATFORM") -> None:
-    from services.common.cost import calibrated_rates, estimate, rates_for
+    from services.common.cost import estimate, rates_for
 
     prompt = int(usage.get("prompt_tokens") or 0)
     completion = int(usage.get("completion_tokens") or 0)
@@ -53,7 +53,7 @@ def record_cost(session, run_id: Optional[str], stage: str, model: Optional[str]
     estimated = 0.0
     if total:
         rates = rates_for(model, config_value(session, "RATE_CARD", {}) or {},
-                          calibrated_rates(lambda sql, params: rows(session, sql, list(params))),
+                          config_value(session, "CALIBRATED_RATES", {}) or {},
                           config_value(session, "CREDITS_PER_MILLION_TOKENS", {}) or {})
         estimated = estimate(prompt, completion, rates)
     row = [str(uuid.uuid4()), run_id, stage, agent, model, prompt, completion, total, tool_calls, search_calls,

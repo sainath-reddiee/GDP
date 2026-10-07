@@ -1424,13 +1424,13 @@ def _record_cost(db: Db, run_id: str, stage: str, model: Optional[str], usage: O
     """AUDIT.COST_USAGE row for an AI call the API makes directly (same rate table as the procedures).
     Never fails the request it describes."""
     try:
-        from services.common.cost import calibrated_rates, estimate, rates_for
+        from services.common.cost import estimate, rates_for
 
         usage = usage or {}
         prompt, completion = int(usage.get("prompt_tokens") or 0), int(usage.get("completion_tokens") or 0)
         total = int(usage.get("total_tokens") or prompt + completion)
         rates = rates_for(model, _config(db, "RATE_CARD", {}) or {},
-                          calibrated_rates(lambda sql, params: db.query(sql, params)),
+                          _config(db, "CALIBRATED_RATES", {}) or {},
                           _config(db, "CREDITS_PER_MILLION_TOKENS", {}) or {})
         db.execute(
             """INSERT INTO AUDIT.COST_USAGE (COST_USAGE_ID, RUN_ID, STAGE, AGENT, MODEL, INPUT_TOKENS, OUTPUT_TOKENS,
@@ -4980,13 +4980,18 @@ def test_model(body: ModelTest, db: Db = Depends(current_db)):
 @app.post("/api/costs/reconcile")
 def reconcile_costs(db: Db = Depends(current_db)):
     """Actual credits from Snowflake's Cortex usage views by query id; calls that had no rate get an estimate."""
-    from services.common.cost import backfill_estimates, reconcile
+    from services.common.cost import backfill_estimates, calibrated_rates, reconcile
 
-    result = reconcile(lambda sql, params: db.query(sql, params), lambda sql, params: db.execute(sql, params))
+    query = (lambda sql, params: db.query(sql, params))
+    result = reconcile(query, lambda sql, params: db.execute(sql, params))
+    calibrated = calibrated_rates(query)
+    if calibrated and calibrated != (_config(db, "CALIBRATED_RATES", {}) or {}):
+        _put_config(db, "CALIBRATED_RATES", calibrated, "Billed credits per million tokens, learned on reconcile")
+    result["calibrated_rates"] = calibrated
     try:
         result["estimates_filled"] = backfill_estimates(
-            lambda sql, params: db.query(sql, params), lambda sql, params: db.execute(sql, params),
-            _config(db, "RATE_CARD", {}) or {}, _config(db, "CREDITS_PER_MILLION_TOKENS", {}) or {})
+            query, lambda sql, params: db.execute(sql, params),
+            _config(db, "RATE_CARD", {}) or {}, _config(db, "CREDITS_PER_MILLION_TOKENS", {}) or {}, calibrated)
     except Exception as exc:
         result["estimates_filled"] = 0
         result["backfill_error"] = str(exc)[:200]
@@ -5000,7 +5005,11 @@ def _reconcile_if_due(db: Db) -> None:
     if time.time() - _RECONCILE_STATE["at"] < 3600:
         return
     _RECONCILE_STATE["at"] = time.time()
-    try:
-        reconcile_costs(db)
-    except Exception:
-        pass
+
+    def run():
+        try:
+            reconcile_costs(db)
+        except Exception:
+            pass
+
+    threading.Thread(target=run, name="cost-reconcile", daemon=True).start()

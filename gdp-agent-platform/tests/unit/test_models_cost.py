@@ -27,10 +27,12 @@ def test_estimate_charges_input_and_output_separately():
     assert estimate(0, 0, (1.0, 4.0, "x")) == 0.0
 
 
-def test_calibrated_rates_from_actuals():
+def test_calibrated_rates_own_calls_win_over_account_history():
     def query(sql, params):
+        if "CORTEX_AI_FUNCTIONS_USAGE_HISTORY" in sql:
+            return [{"MODEL": "m", "CREDITS": 3.0, "TOKENS": 1_000_000}, {"MODEL": "a", "CREDITS": 1.0, "TOKENS": 500_000}]
         return [{"MODEL": "m", "CREDITS": 2.0, "TOKENS": 1_000_000}, {"MODEL": "z", "CREDITS": 0, "TOKENS": 10}]
-    assert calibrated_rates(query) == {"m": 2.0}
+    assert calibrated_rates(query) == {"m": 2.0, "a": 2.0}
     assert calibrated_rates(lambda s, p: (_ for _ in ()).throw(RuntimeError("no table"))) == {}
 
 
@@ -42,11 +44,17 @@ def test_reconcile_reports_missing_privilege_and_keeps_estimates():
     assert out["access"] is False and out["awaiting_billing"] == 3 and "IMPORTED PRIVILEGES" in out["detail"]
 
 
-def test_reconcile_merges_on_query_id():
-    seen = []
-    out = reconcile(lambda s, p: [{"n": 2}], lambda s, p: seen.append(s))
-    assert out["access"] and out["reconciled"] == 2
-    assert "ON C.QUERY_ID = U.QUERY_ID" in seen[0] and "TOKEN_CREDITS" in seen[0]
+def test_reconcile_reads_every_view_and_counts_new_actuals():
+    seen, actual = [], iter([5, 7])
+
+    def query(sql, params):
+        if "ACTUAL_CREDITS IS NOT NULL" in sql and "QUERY_ID IS" not in sql:
+            return [{"n": next(actual)}]
+        return [{"n": 1}]
+
+    out = reconcile(query, lambda s, p: seen.append(s))
+    assert out["access"] and out["reconciled"] == 2 and len(seen) == 2
+    assert "CORTEX_AI_FUNCTIONS_USAGE_HISTORY" in seen[0] and "ON C.QUERY_ID = U.QUERY_ID" in seen[0]
 
 
 def test_backfill_only_models_with_a_rate():
@@ -94,3 +102,20 @@ def test_cost_query_prefers_actual_credits():
     sql, _ = cost_query("model", None, None)
     assert "COALESCE(C.ACTUAL_CREDITS, C.ESTIMATED_COST, 0)" in sql and "ACTUAL_CREDITS" in sql
     assert "ORDER BY CREDITS DESC" in sql
+
+
+def test_show_models_normalised_and_filtered():
+    def execute(sql):
+        if sql.startswith("SHOW MODELS"):
+            return [{"name": "CLAUDE-SONNET-4-5"}, {"name": "SNOWFLAKE-ARCTIC-EMBED-M"}, {"name": "GEMINI-3-PRO"},
+                    {"name": "ARCTIC-TRANSCRIBE"}]
+        if sql.startswith("SHOW INFERENCE"):
+            raise RuntimeError("001003 (42000): SQL compilation error: syntax error line 1")
+        return []
+
+    data = account_models(execute, "claude-sonnet-4-5")
+    names = [m["name"] for m in data["models"]]
+    assert names.count("claude-sonnet-4-5") == 1 and "gemini-3-pro" in names
+    assert not any("embed" in n or "transcribe" in n for n in names)
+    assert data["warnings"] == []
+    assert next(m for m in data["models"] if m["name"] == "gemini-3-pro")["family"] == "google"
