@@ -88,7 +88,7 @@ function Studio({
     startRepo?.origin || (savedOrigin && originOk(savedOrigin, startPrefixes) ? savedOrigin : startPrefixes[0] || savedOrigin),
   );
   const [baseBranch, setBaseBranch] = useState(String(branch?.base_branch ?? "main"));
-  const [cutBranch, setCutBranch] = useState(String(branch?.cut_branch ?? `feat/gdp-${slug}`));
+  const [cutBranch, setCutBranch] = useState(String(branch?.cut_branch ?? `feat/onboard-${slug}`));
   const [dbtProject, setDbtProject] = useState(String(branch?.dbt_project ?? ""));
   const [prefix, setPrefix] = useState(String(branch?.prefix ?? report?.prefix ?? "GDP"));
   const [sourceKey, setSourceKey] = useState(String(branch?.source_key ?? report?.source_key ?? ""));

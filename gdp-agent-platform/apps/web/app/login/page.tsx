@@ -1,9 +1,9 @@
 import { Cpu, Layers3, Snowflake } from "lucide-react";
 import { AUTH_MODE } from "@/lib/api";
 import { LoginForm, type AuthMode } from "./form";
-import { PipelineVisualizer } from "./pipeline-visualizer";
+import { AgentOrchestration } from "./agent-orchestration";
 
-export const metadata = { title: "Sign in · GDP Autonomous Platform" };
+export const metadata = { title: "Sign in · Agentic Pipeline" };
 
 function LogoMark() {
   return (
@@ -42,8 +42,8 @@ export default function LoginPage() {
           <header className="flex items-center gap-3">
             <LogoMark />
             <div>
-              <p className="text-sm font-semibold tracking-tight text-white">GDP Autonomous Platform</p>
-              <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-slate-500">Agentic data engineering</p>
+              <p className="text-sm font-semibold tracking-tight text-white">Agentic Pipeline</p>
+              <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-slate-500">Autonomous data engineering</p>
             </div>
           </header>
 
@@ -56,7 +56,8 @@ export default function LoginPage() {
                 Sign in to your workspace
               </h1>
               <p className="mt-3 text-[15px] leading-relaxed text-slate-400">
-                Autonomous data engineering, semantic modeling and quality gates for Snowflake.
+                AI agents profile your sources, model them against your domain, write the tests and generate dbt.
+                You approve every gate.
               </p>
 
               <div className="mt-8 rounded-2xl border border-slate-800/60 bg-[rgba(15,23,42,0.65)] p-5 shadow-[0_20px_60px_-30px_rgba(2,6,23,0.9)] backdrop-blur-xl sm:p-6">
@@ -77,7 +78,7 @@ export default function LoginPage() {
 
         <aside className="min-w-0 lg:col-span-7 lg:py-2">
           <div className="lg:sticky lg:top-10 lg:h-[calc(100vh-5rem)] lg:min-h-[600px]">
-            <PipelineVisualizer />
+            <AgentOrchestration />
           </div>
         </aside>
       </div>
