@@ -3407,6 +3407,15 @@ def _rules(db: Db, domain_id: Optional[str] = None) -> dict:
     key = domain_id or ""
     hit = _RULES_CACHE.get(key)
     if not hit or time.time() - hit[0] > 60:
+        try:
+            from services.source.catalog_display import configure
+
+            found = db.query("SELECT CONFIG_VALUE FROM CORE.PLATFORM_CONFIG "
+                             "WHERE CONFIG_KEY = 'CATALOG_DISPLAY' AND IS_CURRENT")
+            if found:
+                configure(_json(found[0].get("config_value")))
+        except Exception:
+            pass
         hit = (time.time(), load_rules(lambda sql, params: db.query(sql.replace("?", "%s"), tuple(params)),
                                        domain_id))
         _RULES_CACHE[key] = hit

@@ -218,3 +218,16 @@ def test_enrichment_never_clears_detected_pii(monkeypatch):
     procedures._enrich(None, None, "members", profiles, "")
     assert profiles[0]["pii_classification"] == "SSN"  # model relabelled the type; detected PII stays
     assert profiles[1]["pii_classification"] == "EMAIL"
+
+
+def test_product_tokens_are_stripped_only_as_whole_tokens():
+    from services.source.catalog_display import configure, source_system_name
+
+    assert source_system_name(explicit="GDPR_EVENTS") == "GDPR_EVENTS"
+    assert source_system_name(schema="GDP_CRM") == "CRM"
+    assert source_system_name(schema="SALES_GDP_RAW") == "SALES_RAW"
+    configure({"strip_tokens": ["ACME"]})
+    try:
+        assert source_system_name(schema="ACME_ERP") == "ERP" and source_system_name(schema="GDP_CRM") == "GDP_CRM"
+    finally:
+        configure({"strip_tokens": ["GDP"]})

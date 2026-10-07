@@ -90,7 +90,9 @@ function Studio({
   const [baseBranch, setBaseBranch] = useState(String(branch?.base_branch ?? "main"));
   const [cutBranch, setCutBranch] = useState(String(branch?.cut_branch ?? `feat/onboard-${slug}`));
   const [dbtProject, setDbtProject] = useState(String(branch?.dbt_project ?? ""));
-  const [prefix, setPrefix] = useState(String(branch?.prefix ?? report?.prefix ?? "GDP"));
+  const [prefix, setPrefix] = useState(String(branch?.prefix ?? report?.prefix ?? ""));
+  // Untouched and never stored: let the run's modeling standard choose (GDP for GDP runs, none otherwise).
+  const [prefixChosen, setPrefixChosen] = useState(branch?.prefix != null || report?.prefix != null);
   const [sourceKey, setSourceKey] = useState(String(branch?.source_key ?? report?.source_key ?? ""));
   const [domainFolder, setDomainFolder] = useState(String(branch?.domain_folder ?? report?.domain ?? snake(domainName || "")));
   const [push, setPush] = useState(Boolean(branch?.push ?? true) && publisherReady);
@@ -259,7 +261,7 @@ function Studio({
         git_repository: gitRepo.trim() || undefined, api_integration: integration || undefined,
         dbt_project: dbtProject.trim() || undefined, allowed_prefixes: prefixes.length ? prefixes : undefined,
         base_branch: baseBranch.trim(), cut_branch: cutBranch.trim(), push: doPush, fetch_skeleton: fetchSkeleton,
-        prefix: prefix.trim().toUpperCase(), source_key: sourceKey.trim() || undefined, domain_folder: domainFolder.trim() || undefined,
+        prefix: prefixChosen ? prefix.trim().toUpperCase() : undefined, source_key: sourceKey.trim() || undefined, domain_folder: domainFolder.trim() || undefined,
       });
       setBusy(null);
       if (!result.ok) { toast("fail", friendly(result.error)); return; }
@@ -533,7 +535,7 @@ function Studio({
             <div className="grid gap-3 sm:grid-cols-3">
               <div>
                 <Label htmlFor="prefix">{"{PREFIX}"}</Label>
-                <Input id="prefix" value={prefix} maxLength={16} onChange={(e) => setPrefix(e.target.value.replace(/[^A-Za-z0-9]/g, "").toUpperCase())} placeholder="GDP" className="font-mono" />
+                <Input id="prefix" value={prefix} maxLength={16} onChange={(e) => { setPrefixChosen(true); setPrefix(e.target.value.replace(/[^A-Za-z0-9]/g, "").toUpperCase()); }} placeholder="Set by the run's standard" className="font-mono" />
               </div>
               <div>
                 <Label htmlFor="skey">Source key</Label>
@@ -596,7 +598,7 @@ function Studio({
               <summary className="cursor-pointer text-muted-foreground">Advanced</summary>
               <Label htmlFor="dbt_proj">dbt project object (optional)</Label>
               <Input id="dbt_proj" value={dbtProject} onChange={(e) => setDbtProject(e.target.value)} list="dbt_proj_list"
-                placeholder={projects[0]?.fqn || "DEV_AI_PLATFORM.CODEGEN.GDP_<run>_V<n>"} />
+                placeholder={projects[0]?.fqn || "Leave empty to auto-name a compile project for this run"} />
               <datalist id="dbt_proj_list">{projects.map((p) => <option key={p.fqn} value={p.fqn} />)}</datalist>
             </details>
           </div>

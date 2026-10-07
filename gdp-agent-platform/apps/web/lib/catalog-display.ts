@@ -1,8 +1,21 @@
-const HIDDEN_TARGET_TABLES = new Set(["COMPLETE_EMPLOYEE_DETAILS"]);
-const HIDDEN_TARGET_DATABASES = new Set(["ALATION_POC"]);
-const HIDDEN_TARGET_SCHEMAS = new Set(["GDP_SILVER"]);
-const HIDDEN_TARGET_IDS = new Set(["00000000-0000-4000-a000-000000000002"]);
-const HIDDEN_DOMAIN_NAMES = new Set(["GDP"]);
+/** Defaults; an installation overrides any list with NEXT_PUBLIC_CATALOG_DISPLAY (same JSON keys as the API's
+ *  CATALOG_DISPLAY config: hidden_target_tables, hidden_target_databases, hidden_target_schemas,
+ *  hidden_target_ids, hidden_domain_names, strip_tokens). */
+const OVERRIDES: Record<string, string[]> = (() => {
+  try {
+    return JSON.parse(process.env.NEXT_PUBLIC_CATALOG_DISPLAY || "{}") as Record<string, string[]>;
+  } catch {
+    return {};
+  }
+})();
+const list = (key: string, fallback: string[]) =>
+  new Set((Array.isArray(OVERRIDES[key]) ? OVERRIDES[key] : fallback).map((v) => (key === "hidden_target_ids" ? v.trim() : v.trim().toUpperCase())));
+const HIDDEN_TARGET_TABLES = list("hidden_target_tables", ["COMPLETE_EMPLOYEE_DETAILS"]);
+const HIDDEN_TARGET_DATABASES = list("hidden_target_databases", ["ALATION_POC"]);
+const HIDDEN_TARGET_SCHEMAS = list("hidden_target_schemas", ["GDP_SILVER"]);
+const HIDDEN_TARGET_IDS = list("hidden_target_ids", ["00000000-0000-4000-a000-000000000002"]);
+const HIDDEN_DOMAIN_NAMES = list("hidden_domain_names", ["GDP"]);
+const STRIP_TOKENS = list("strip_tokens", ["GDP"]);
 
 function upper(value?: string | null) {
   return (value || "").trim().toUpperCase();
@@ -27,7 +40,8 @@ export function isHiddenTarget(row: {
 }
 
 export function sourceSystemName(database?: string | null, schema?: string | null, explicit?: string | null) {
-  const strip = (raw: string) => raw.replace(/_?GDP_?/gi, "_").replace(/_+/g, "_").replace(/^_|_$/g, "");
+  // whole tokens only: GDP_CRM -> CRM, GDPR_EVENTS stays GDPR_EVENTS
+  const strip = (raw: string) => raw.split(/_+/).filter((t) => t && !STRIP_TOKENS.has(t.toUpperCase())).join("_");
   const seed = explicit && !HIDDEN_DOMAIN_NAMES.has(upper(explicit)) ? strip(explicit) : strip(schema || database || "SOURCE");
   const ident = seed.replace(/[^A-Za-z0-9_]/g, "");
   if (!ident) return "SOURCE";
