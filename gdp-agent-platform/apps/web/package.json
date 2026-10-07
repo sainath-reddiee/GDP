@@ -5,6 +5,7 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
+    "fast": "next build && next start",
     "typecheck": "tsc --noEmit",
     "test:e2e": "playwright test"
   },
