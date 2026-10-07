@@ -9,7 +9,7 @@ import threading
 import time
 import uuid
 from pathlib import Path
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 
 from fastapi import Depends, FastAPI, File, Header, HTTPException, Request, UploadFile
 
@@ -70,6 +70,26 @@ async def bust_run_cache(request: Request, call_next):
     return response
 
 
+_CATALOG_DISPLAY_AT = {"at": 0.0}
+
+
+def _load_catalog_display(db: Db) -> None:
+    """CATALOG_DISPLAY (Admin-editable) applied to the catalog filters; cheap, refreshed once a minute."""
+    if time.time() - _CATALOG_DISPLAY_AT["at"] < 60:
+        return
+    _CATALOG_DISPLAY_AT["at"] = time.time()
+    try:
+        from services.source.catalog_display import configure
+
+        found = db.query("SELECT CONFIG_VALUE FROM CORE.PLATFORM_CONFIG WHERE CONFIG_KEY = 'CATALOG_DISPLAY' "
+                         "AND IS_CURRENT ORDER BY VERSION DESC LIMIT 1")
+        if found:
+            value = found[0].get("config_value")
+            configure(json.loads(value) if isinstance(value, str) else value)
+    except Exception:
+        pass
+
+
 def current_db(
     x_aip_session: Optional[str] = Header(default=None),
     x_aip_role: Optional[str] = Header(default=None),
@@ -85,6 +105,7 @@ def current_db(
             apply_work_role(db, x_aip_role)
         except SnowflakeSessionError as exc:
             raise HTTPException(403, str(exc)) from exc
+        _load_catalog_display(db)
         return db
     except SnowflakeSessionError as exc:
         raise HTTPException(503, str(exc)) from exc
@@ -2489,7 +2510,7 @@ def _set_config(db: Db, key: str, value: dict, description: str) -> None:
         """
         INSERT INTO CORE.PLATFORM_CONFIG (CONFIG_KEY, CONFIG_VALUE, DESCRIPTION, VERSION, IS_CURRENT, CREATED_BY)
         SELECT %s, PARSE_JSON(%s), %s,
-               COALESCE((SELECT MAX(VERSION) FROM CORE.PLATFORM_CONFIG WHERE CONFIG_KEY = %s), 0) + 1,
+               COALESCE((SELECT MAX(VERSION) FROM CORE.PLATFORM_CONFIG WHERE CONFIG_KEY = %s), 1) + 1,
                TRUE, CURRENT_USER()
         """,
         (key, json.dumps(value), description, key),
@@ -4183,3 +4204,66 @@ def export_domain_pack(domain_id: str, db: Db = Depends(current_db)):
         return {"pack": export_pack(lambda sql, params: db.query(sql, params), domain_id)}
     except AssertionError as exc:
         raise HTTPException(404, str(exc)) from exc
+
+
+# ---------------------------------------------------------------- Admin: platform settings
+
+
+class PlatformSetting(BaseModel):
+    key: str = Field(min_length=1, max_length=128)
+    value: Any = None
+    reset: bool = False
+
+
+def _platform_settings(db: Db) -> dict:
+    from services.common.platform_config import DEFAULTS, KNOWN_MODELS, SETTINGS
+    from services.common.standard import PRESETS
+
+    found = {r["config_key"]: r for r in db.query(
+        """SELECT CONFIG_KEY, CONFIG_VALUE, VERSION, CREATED_BY, CREATED_AT::VARCHAR AS CREATED_AT
+             FROM CORE.PLATFORM_CONFIG WHERE IS_CURRENT AND ARRAY_CONTAINS(CONFIG_KEY::VARIANT, PARSE_JSON(%s)::ARRAY)
+           QUALIFY ROW_NUMBER() OVER (PARTITION BY CONFIG_KEY ORDER BY VERSION DESC) = 1""",
+        (json.dumps(list(SETTINGS)),))}
+    settings = {}
+    for key in SETTINGS:
+        row = found.get(key)
+        settings[key] = {"value": _json(row["config_value"]) if row else DEFAULTS[key],
+                         "default": DEFAULTS[key], "customised": bool(row and int(row["version"]) > 1),
+                         "changed_by": row["created_by"] if row else None, "changed_at": row["created_at"] if row else None}
+    return {"settings": settings, "known_models": KNOWN_MODELS, "presets": PRESETS}
+
+
+@app.get("/api/config/platform")
+def get_platform_settings(db: Db = Depends(current_db)):
+    return _platform_settings(db)
+
+
+@app.put("/api/config/platform")
+def put_platform_setting(body: PlatformSetting, db: Db = Depends(current_db)):
+    """Change one setting (validated), or reset it to the platform default."""
+    from services.common.platform_config import DEFAULTS, validate
+
+    value = DEFAULTS.get(body.key) if body.reset else body.value
+    cleaned, problems = validate(body.key, value)
+    if problems:
+        raise HTTPException(400, "; ".join(problems))
+    _put_config(db, body.key, cleaned, f"Set from Admin by {'reset' if body.reset else 'edit'}")
+    if body.key == "CATALOG_DISPLAY":
+        from services.source.catalog_display import configure
+
+        configure(cleaned)
+    _RULES_CACHE.clear()
+    return _platform_settings(db)
+
+
+@app.get("/api/config/catalog-display")
+def get_catalog_display(db: Db = Depends(current_db)):
+    """The hidden-catalog lists the web app applies (single source with the API's own filtering)."""
+    from services.common.platform_config import DEFAULTS
+
+    try:
+        found = db.query("SELECT CONFIG_VALUE FROM CORE.PLATFORM_CONFIG WHERE CONFIG_KEY = 'CATALOG_DISPLAY' "
+                         "AND IS_CURRENT ORDER BY VERSION DESC LIMIT 1")
+    except Exception:
+        found = []
+    return (_json(found[0]["config_value"]) if found else None) or DEFAULTS["CATALOG_DISPLAY"]

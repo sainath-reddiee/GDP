@@ -31,6 +31,10 @@ PLATFORM_CONFIG = [
     ("MAPPING_TOP_K", 3, "Candidates kept per source column"),
     ("DOMAIN_CONFIDENCE_THRESHOLD", 0.3, "Below this, identify_domain asks for confirmation"),
     ("CREDITS_PER_MILLION_TOKENS", {"default": 0, "claude-sonnet-4-5": 0}, "Cost estimate rates"),
+    ("CATALOG_DISPLAY", {"hidden_target_tables": ["COMPLETE_EMPLOYEE_DETAILS"], "hidden_target_databases": ["ALATION_POC"],
+      "hidden_target_schemas": ["GDP_SILVER"], "hidden_target_ids": ["00000000-0000-4000-a000-000000000002"],
+      "hidden_domain_names": ["GDP"], "strip_tokens": ["GDP"]},
+     "Catalog objects hidden from task screens and product tokens stripped from suggested names (editable in Admin)"),
 ]
 
 
@@ -230,7 +234,14 @@ def seed_platform(cur, database: str) -> List[str]:
                      WHERE CREATED_BY = 'SEED' AND IS_CURRENT
                        AND NOT ARRAY_CONTAINS(SKILL_ID::VARIANT, PARSE_JSON(%s)::ARRAY)""", (json.dumps(current),))
 
+    # Settings an admin changed (a version above the seeded one) belong to the admin: the deploy leaves them alone,
+    # otherwise re-marking the seeded version as current would leave two current rows.
+    cur.execute(f"SELECT DISTINCT CONFIG_KEY FROM {database}.CORE.PLATFORM_CONFIG WHERE VERSION > 1")
+    edited = {r[0] for r in cur.fetchall()}
     for key, value, desc, version, current in config_rows():
+        if key in edited:
+            log.append(f"config {key}: kept the admin's value")
+            continue
         cur.execute(
             f"""MERGE INTO {database}.CORE.PLATFORM_CONFIG t
                 USING (SELECT %s AS CONFIG_KEY, PARSE_JSON(%s) AS CONFIG_VALUE, %s AS DESCRIPTION,

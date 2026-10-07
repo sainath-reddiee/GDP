@@ -1,7 +1,9 @@
 import "./globals.css";
 import { cookies } from "next/headers";
 import type { ReactNode } from "react";
-import { AUTH_MODE, DEV_COOKIE, SESSION_COOKIE, whoami } from "@/lib/api";
+import { api, AUTH_MODE, DEV_COOKIE, SESSION_COOKIE, whoami } from "@/lib/api";
+import { CatalogDisplayProvider } from "@/components/catalog-display-provider";
+import { configureCatalogDisplay, type CatalogDisplayConfig } from "@/lib/catalog-display";
 import { NavProgress } from "@/components/nav-progress";
 import { Sidebar } from "@/components/sidebar";
 
@@ -17,7 +19,11 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
       </html>
     );
   }
-  const me = await whoami();
+  const [me, catalog] = await Promise.all([
+    whoami(),
+    api<CatalogDisplayConfig>("/api/config/catalog-display").catch(() => null),
+  ]);
+  configureCatalogDisplay(catalog);
   return (
     <html lang="en">
       <body>
@@ -25,7 +31,9 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
         <div className="flex min-h-screen">
           <Sidebar user={me?.user ?? null} role={me?.role ?? null} canLogout />
           <main className="min-w-0 flex-1 bg-background">
-            <div className="mx-auto w-full max-w-[1600px] px-6 py-7 lg:px-10">{children}</div>
+            <div className="mx-auto w-full max-w-[1600px] px-6 py-7 lg:px-10">
+              <CatalogDisplayProvider config={catalog}>{children}</CatalogDisplayProvider>
+            </div>
           </main>
         </div>
       </body>
