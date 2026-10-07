@@ -53,7 +53,7 @@ def landing_table_name(source_system_name: str, object_name: str) -> str:
     cleaned = re.sub(r"[^A-Z0-9_]", "_", raw)
     if not re.match(r"^[A-Z_]", cleaned):
         cleaned = "_" + cleaned
-    if not SIMPLE_UPPER.match(object_name or ""):
+    if (object_name or "") != re.sub(r"[^A-Z0-9_]", "_", (object_name or "").upper()):
         # "customer" and "CUSTOMER", or "Order-Items" and "ORDER_ITEMS", would clean to the same landing table and
         # the second load would overwrite the first; a short hash of the exact name keeps them apart.
         import hashlib
