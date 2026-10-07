@@ -12,7 +12,7 @@ import shutil
 import tempfile
 import uuid
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict
 
 from services.dbt.procedures import _artifact_type, merge_branch_plan
 from services.dbt.inputs import assemble, db_query, load_inputs
@@ -200,11 +200,15 @@ def generate_via_db(db, run_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
             "reason": "Opened by CODEGEN.PUBLISH_DBT_PR through the GitHub API after generation.",
         },
     }
+    from services.common.standard import conventions_for, run_standard
+
+    conv = conventions_for(lambda sql, params: db.query(sql.replace("?", "%s"), tuple(params)), run_standard(run))
     project_name = plan.get("dbt_project") or (
-        f"{_current_database(db)}.CODEGEN.GDP_{run_id.replace('-', '')[:18]}_V{version}"
+        f"{_current_database(db)}.CODEGEN.{conv['codegen_prefix']}{run_id.replace('-', '')[:18]}_V{version}"
     )
     try:
-        workspace["dbt_project"] = _create_project(db, project_name, f"@{stage_path}", f"GDP run {run_id} compile-only")
+        workspace["dbt_project"] = _create_project(db, project_name, f"@{stage_path}",
+                                                   f"Agentic pipeline run {run_id} compile-only")
     except Exception as exc:
         workspace["dbt_project"] = {"status": "SKIPPED", "detail": str(exc)[:400]}
     workspace["push"] = push_pending(plan, True)
@@ -231,7 +235,7 @@ def generate_via_db(db, run_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         "WHERE RUN_ID = %s AND GENERATION_STATUS IN ('GENERATING', 'GENERATED')",
         (run_id,),
     )
-    domain = "GDP"
+    domain = conv["default_domain"].upper()
     if run.get("DOMAIN_ID"):
         domain_rows = db.query(
             "SELECT DOMAIN_NAME FROM KNOWLEDGE.DOMAIN_REGISTRY WHERE DOMAIN_ID = %s",

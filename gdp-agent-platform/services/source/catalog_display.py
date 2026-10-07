@@ -1,4 +1,9 @@
-"""Hide seed/POC catalog leftovers and product-name labels from task UIs."""
+"""Hide seed/POC catalog leftovers and product-name labels from task UIs.
+
+The lists are defaults; an installation replaces them through PLATFORM_CONFIG key CATALOG_DISPLAY
+({"hidden_target_tables": [...], "hidden_target_databases": [...], "hidden_target_schemas": [...],
+"hidden_target_ids": [...], "hidden_domain_names": [...], "strip_tokens": [...]}) with `configure()`.
+"""
 
 from __future__ import annotations
 
@@ -10,6 +15,27 @@ HIDDEN_TARGET_DATABASES = {"ALATION_POC"}
 HIDDEN_TARGET_SCHEMAS = {"GDP_SILVER"}
 HIDDEN_TARGET_IDS = {"00000000-0000-4000-a000-000000000002"}
 HIDDEN_DOMAIN_NAMES = {"GDP"}
+STRIP_TOKENS = {"GDP"}  # product-name tokens removed from suggested source system names
+
+_SETS = {"hidden_target_tables": HIDDEN_TARGET_TABLES, "hidden_target_databases": HIDDEN_TARGET_DATABASES,
+         "hidden_target_schemas": HIDDEN_TARGET_SCHEMAS, "hidden_target_ids": HIDDEN_TARGET_IDS,
+         "hidden_domain_names": HIDDEN_DOMAIN_NAMES, "strip_tokens": STRIP_TOKENS}
+
+
+def configure(config: Optional[Dict[str, Any]]) -> None:
+    """Replace any list from configuration (keys missing from `config` keep their defaults)."""
+    for key, target in _SETS.items():
+        values = (config or {}).get(key)
+        if isinstance(values, list):
+            target.clear()
+            target.update(str(v).strip() if key == "hidden_target_ids" else str(v).strip().upper()
+                          for v in values if str(v).strip())
+
+
+def strip_tokens(raw: str) -> str:
+    """Drop whole product-name tokens only: GDP_CRM -> CRM, but GDPR_EVENTS stays GDPR_EVENTS."""
+    parts = [p for p in re.split(r"_+", str(raw or "")) if p and p.upper() not in STRIP_TOKENS]
+    return "_".join(parts)
 
 
 def _upper(value: Any) -> str:
@@ -78,11 +104,7 @@ def source_system_name(
     explicit: Optional[str] = None,
 ) -> str:
     if explicit:
-        cleaned = re.sub(r"(?i)_?GDP_?", "_", explicit)
-        cleaned = re.sub(r"_+", "_", cleaned).strip("_")
+        cleaned = strip_tokens(explicit)
         if cleaned and not is_hidden_domain(cleaned):
             return _safe_ident(cleaned)
-    raw = schema or database or "SOURCE"
-    cleaned = re.sub(r"(?i)_?GDP_?", "_", raw)
-    cleaned = re.sub(r"_+", "_", cleaned).strip("_")
-    return _safe_ident(cleaned)
+    return _safe_ident(strip_tokens(schema or database or "SOURCE"))

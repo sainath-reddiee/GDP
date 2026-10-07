@@ -14,6 +14,7 @@ from typing import Any, Dict, Optional
 
 from services.common.audit import tool_call
 from services.common.sql import clip, insert_rows, rows, scalar, variant
+from services.common.standard import conventions_for, fill, run_standard
 from services.dbt import github
 from services.dbt.workspace import safe_fqn
 
@@ -53,7 +54,7 @@ def setup_sql(database: str, eai: str, secret: str, create_secret: bool) -> list
         f"CREATE OR REPLACE EXTERNAL ACCESS INTEGRATION {eai} "
         f"ALLOWED_NETWORK_RULES = ({database}.CODEGEN.GITHUB_API_EGRESS) "
         f"ALLOWED_AUTHENTICATION_SECRETS = ({secret}) ENABLED = TRUE "
-        "COMMENT = 'GDP: push generated dbt branches and open pull requests'"
+        "COMMENT = 'Agentic pipeline: push generated dbt branches and open pull requests'"
     )
     return statements
 
@@ -114,7 +115,8 @@ def publish_dbt_pr(session, run_id: str, payload_json: str = "{}") -> Dict[str, 
             return {"status": "OK", **github.preflight(github.urllib_request(_token()), plan.get("origin") or "")}
         except Exception as exc:
             return {**github.explain(exc, plan.get("origin") or ""), "check": True}
-    run = rows(session, "SELECT RUN_ID, RUN_NAME FROM CORE.WORKFLOW_RUN WHERE RUN_ID = ?", [run_id])
+    run = rows(session, "SELECT * FROM CORE.WORKFLOW_RUN WHERE RUN_ID = ?", [run_id])
+    conv = conventions_for(lambda sql, params: rows(session, sql, params), run_standard(run[0] if run else {}))
     assert run, f"run not found: {run_id}"
     gen = rows(session, """SELECT GENERATION_ID, GENERATION_VERSION, STTM_ID FROM CODEGEN.DBT_GENERATION_REGISTRY
                            WHERE RUN_ID = ? ORDER BY GENERATION_VERSION DESC LIMIT 1""", [run_id])
@@ -132,18 +134,19 @@ def publish_dbt_pr(session, run_id: str, payload_json: str = "{}") -> Dict[str, 
                 github.urllib_request(_token()),
                 plan.get("origin") or "", plan.get("base_branch") or "main", plan.get("cut_branch") or "",
                 files,
-                title=plan.get("title") or f"GDP: onboard {name} (dbt v{version})",
+                title=plan.get("title") or fill(conv["pr_title"], name=name, version=version),
                 body=github.pr_body(name, run_id, sorted(files), gen[0]["STTM_ID"]),
-                message=f"GDP run {name}: dbt v{version} from the approved STTM",
+                message=fill(conv["commit_message"], name=name, version=version),
                 draft=bool(plan.get("draft")),
             )
             if plan.get("git_repository") and plan.get("create_project", True) and result["status"] != "FAILED":
                 project = plan.get("dbt_project") or (
-                    f"{scalar(session, 'SELECT CURRENT_DATABASE()')}.CODEGEN.GDP_{run_id.replace('-', '')[:18]}_BRANCH")
+                    f"{scalar(session, 'SELECT CURRENT_DATABASE()')}.CODEGEN.{conv['codegen_prefix']}"
+                    f"{run_id.replace('-', '')[:18]}_BRANCH")
                 try:
                     result["dbt_project"] = project_from_branch(
                         session, plan["git_repository"], plan["cut_branch"], project,
-                        f"GDP run {run_id} branch {plan['cut_branch']} compile-only")
+                        f"Agentic pipeline run {run_id} branch {plan['cut_branch']} compile-only")
                 except Exception as exc:
                     result["dbt_project"] = {"status": "SKIPPED", "detail": clip(exc, 400)}
             call.summary = f"{result['status']} {result.get('repository')} {plan.get('cut_branch')}: " \
