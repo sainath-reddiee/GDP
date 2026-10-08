@@ -4914,7 +4914,7 @@ def oracle_integration_check(body: IntegrationCheck, db: Db = Depends(current_db
     rules = [x.strip() for x in props.get("ALLOWED_NETWORK_RULES", "").strip("[]").split(",") if x.strip()]
     secrets = [x.strip().upper() for x in props.get("ALLOWED_AUTHENTICATION_SECRETS", "").strip("[]").split(",")
                if x.strip()]
-    reachable, values = False, []
+    reachable, values, unreadable = False, [], []
     for rule in rules:
         try:
             for r in db.query(f"DESCRIBE NETWORK RULE {rule}"):
@@ -4922,15 +4922,18 @@ def oracle_integration_check(body: IntegrationCheck, db: Db = Depends(current_db
                 values += vals
                 reachable = reachable or any(_rule_allows(v, body.host, body.port) for v in vals)
         except Exception:
-            continue
+            unreadable.append(rule)  # DESCRIBE NETWORK RULE needs OWNERSHIP; the connection test settles it
+    allows_host: Optional[bool] = True if reachable else (None if unreadable else False)
     secret_ok = None
     if body.secret:
         short = body.secret.upper().split(".")[-1]
         secret_ok = any(s == body.secret.upper() or s.split(".")[-1] == short for s in secrets) or "ALL" in secrets
     enabled = props.get("ENABLED", "true").lower() == "true"
-    return {"name": body.name, "enabled": enabled, "allows_host": reachable, "allows_secret": secret_ok,
-            "network_values": values[:20], "secrets": secrets[:20],
-            "usable": enabled and reachable and secret_ok is not False}
+    return {"name": body.name, "enabled": enabled, "allows_host": allows_host, "allows_secret": secret_ok,
+            "network_values": values[:20], "secrets": secrets[:20], "unreadable_rules": unreadable,
+            "usable": enabled and allows_host is not False and secret_ok is not False,
+            "note": (f"This role cannot read {', '.join(unreadable)} (DESCRIBE needs ownership), so the allowed host is "
+                     "not verified here; the connection test confirms it.") if unreadable and not reachable else None}
 
 
 @app.post("/api/oracle/parse")
@@ -5001,7 +5004,7 @@ def oracle_setup(source_id: str, body: OracleSetup, db: Db = Depends(current_db)
                                                           secret=secret), db)
         problems = [p for p, bad in (("it is disabled", not check["enabled"]),
                                      (f"its network rules do not allow {cfg['host']}:{cfg.get('port')}",
-                                      not check["allows_host"]),
+                                      check["allows_host"] is False),
                                      (f"it does not allow the secret {secret}", check["allows_secret"] is False)) if bad]
         if problems:
             raise HTTPException(409, f"{eai} cannot be used: " + "; ".join(problems) +
@@ -5027,10 +5030,19 @@ def oracle_setup(source_id: str, body: OracleSetup, db: Db = Depends(current_db)
                 ("CREATE OR REPLACE SECRET", "CREATE SECRET"), ("CREATE OR REPLACE NETWORK RULE", "CREATE NETWORK RULE"),
                 ("CREATE OR REPLACE EXTERNAL ACCESS", "CREATE INTEGRATION")) if sql.startswith(prefix)),
                 "CREATE PROCEDURE (or the oracledb package)")
-            return {"ready": False, "log": log, "failed_step": step,
-                    "detail": f"This role could not run {step}. An admin can run the statements shown (with the real "
-                              "password in place of the placeholder), then choose Use existing for the secret and "
-                              "integration here."}
+            grants = []
+            if step.startswith("CREATE PROCEDURE") and "privilege" in text.lower():
+                role = (db.query("SELECT CURRENT_ROLE() AS R")[0]["r"] or "").upper()
+                grants = [f"GRANT USAGE ON INTEGRATION {eai} TO ROLE {role}",
+                          f"GRANT USAGE ON DATABASE {secret.split('.')[0]} TO ROLE {role}",
+                          f"GRANT USAGE ON SCHEMA {'.'.join(secret.split('.')[:2])} TO ROLE {role}",
+                          f"GRANT READ ON SECRET {secret} TO ROLE {role}"] if secret.count(".") == 2 else []
+            return {"ready": False, "log": log, "failed_step": step, "grants": grants,
+                    "detail": (f"This role may not use {eai} or {secret}. An admin can grant it (statements shown), "
+                               "then run setup again." if grants else
+                               f"This role could not run {step}. An admin can run the statements shown (with the real "
+                               "password in place of the placeholder), then choose Use existing for the secret and "
+                               "integration here.")}
     created = (["secret"] if body.secret_mode == "new" else []) + (["integration"] if body.integration_mode == "new" else [])
 
     def change(c: dict) -> None:

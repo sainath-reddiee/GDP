@@ -96,9 +96,10 @@ export async function landExternalFiles(sourceId: string, files: string[], table
 // ---------------------------------------------------------------- Oracle
 
 export type SetupResult = { ready: boolean; log: { sql: string; ok: boolean; error?: string }[]; detail?: string;
-                            failed_step?: string; secret?: string; integration?: string };
-export type IntegrationCheck = { name: string; enabled: boolean; allows_host: boolean; allows_secret: boolean | null;
-                                 network_values: string[]; secrets: string[]; usable: boolean };
+                            failed_step?: string; secret?: string; integration?: string; grants?: string[] };
+export type IntegrationCheck = { name: string; enabled: boolean; allows_host: boolean | null; allows_secret: boolean | null;
+                                 network_values: string[]; secrets: string[]; usable: boolean;
+                                 unreadable_rules?: string[]; note?: string | null };
 
 export async function oracleSecrets() {
   return attemptValue(() => api<{ secrets: { name: string; comment: string | null; owner: string | null; created_on: string }[];

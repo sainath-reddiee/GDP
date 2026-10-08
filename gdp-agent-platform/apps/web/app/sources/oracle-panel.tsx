@@ -95,7 +95,8 @@ function SetupCard({ sourceId, overview, onReady }: { sourceId: string; overview
                 {(eais ?? []).map((i) => <option key={i.name} value={i.name} disabled={!i.enabled}>{i.name}</option>)}
               </select>
               {secretMode === "new" && <p className="text-[11px] text-warning">An existing integration needs an existing secret it already allows.</p>}
-              {check && !check.usable && <p className="text-[11px] text-destructive">{eai} does not allow {!check.allows_host ? `${c.host}:${c.port}` : "this secret"}.</p>}
+              {check && !check.usable && <p className="text-[11px] text-destructive">{eai} does not allow {check.allows_host === false ? `${c.host}:${c.port}` : "this secret"}.</p>}
+              {check?.note && <p className="text-[11px] text-muted-foreground">{check.note}</p>}
             </>
           )}
         </div>
@@ -107,7 +108,9 @@ function SetupCard({ sourceId, overview, onReady }: { sourceId: string; overview
       {result && !result.ready && (
         <div className="space-y-2 rounded-xl border border-destructive/30 bg-card p-3 text-xs">
           <p>{result.detail}</p>
-          <CopyButton text={result.log.map((l) => l.sql.replace("'<oracle password>'", "'<the Oracle password>'")).join(";\n\n") + ";"} label="Copy SQL for an admin" />
+          {result.grants && result.grants.length > 0 && <pre className="whitespace-pre-wrap font-mono text-[11px]">{result.grants.join(";\n")};</pre>}
+          <CopyButton text={result.grants?.length ? result.grants.join(";\n") + ";"
+            : result.log.map((l) => l.sql.replace("'<oracle password>'", "'<the Oracle password>'")).join(";\n\n") + ";"} label="Copy SQL for an admin" />
         </div>
       )}
       {error && <p role="alert" className="text-sm text-destructive">{error}</p>}

@@ -145,7 +145,7 @@ export function OracleWizard({ onDone, onCancel }: {
     if (integrationMode === "existing") {
       if (!eaiExisting) out.push("choose the integration");
       if (secretMode === "new") out.push("an existing integration can only use a secret it already allows: choose an existing secret too, or let the platform create network access");
-      if (eaiCheck && !eaiCheck.usable) out.push(`${eaiExisting} does not allow ${!eaiCheck.allows_host ? target : "this secret"}`);
+      if (eaiCheck && !eaiCheck.usable) out.push(`${eaiExisting} does not allow ${eaiCheck.allows_host === false ? target : "this secret"}`);
     } else if (!/^[A-Za-z_][A-Za-z0-9_$]{0,254}$/.test(eaiNew || defaultEai)) out.push("integration name must be a Snowflake identifier");
     return out;
   }, [runtime, passwordEnv, secretMode, password, secret, integrationMode, eaiExisting, eaiCheck, eaiNew, defaultEai, target]);
@@ -306,11 +306,12 @@ export function OracleWizard({ onDone, onCancel }: {
                           <li key={String(label)} className={cn("flex items-center gap-1 rounded-md border px-2 py-1",
                             ok === null ? "text-muted-foreground" : ok ? "text-success" : "text-destructive")}>
                             {ok === null ? <span className="h-3.5 w-3.5" /> : ok ? <CheckCircle2 className="h-3.5 w-3.5" /> : <XCircle className="h-3.5 w-3.5" />}
-                            {String(label)}{ok === null ? " (choose a secret)" : ""}
+                            {String(label)}{ok === null ? (String(label).startsWith("Allows the secret") ? " (choose a secret)" : " (checked by the test)") : ""}
                           </li>
                         ))}
                       </ul>
                     )}
+                    {eaiCheck?.note && <p className="text-[11px] text-muted-foreground">{eaiCheck.note}</p>}
                   </div>
                 )}
               </section>
@@ -384,8 +385,11 @@ export function OracleWizard({ onDone, onCancel }: {
                   </li>
                 ))}
               </ol>
+              {setup.grants && setup.grants.length > 0 && (
+                <pre className="whitespace-pre-wrap rounded-lg bg-card p-2 font-mono text-[11px]">{setup.grants.join(";\n")};</pre>
+              )}
               <div className="flex flex-wrap gap-2">
-                <CopyButton text={failedSql} label="Copy SQL for an admin" />
+                <CopyButton text={setup.grants?.length ? setup.grants.join(";\n") + ";" : failedSql} label="Copy SQL for an admin" />
                 <Button size="sm" variant="ghost" onClick={() => setStep(2)}><ArrowLeft className="h-3.5 w-3.5" /> Use existing objects instead</Button>
               </div>
             </section>
