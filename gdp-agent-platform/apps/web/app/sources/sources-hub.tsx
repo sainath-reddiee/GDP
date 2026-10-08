@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
-  AlertTriangle, ArrowRight, CheckCircle2, ChevronDown, ChevronRight, CircleDashed, Database, Eye, FolderTree, Globe,
+  AlertTriangle, ArrowRight, CheckCircle2, ChevronDown, ChevronRight, CircleDashed, Database, Eye, FolderTree,
   History, Layers, Loader2, Plus, RefreshCw, Search, Sparkles, Table2, X, XCircle,
 } from "lucide-react";
 import type {
@@ -20,6 +20,7 @@ import type { DomainRow } from "@/app/onboarding/intent-types";
 import { loadCatalogInventory, loadOverview, loadProfileStore, profileCatalogTables } from "./actions";
 import { ModelPanel } from "./model-panel";
 import { ConnectSource, type ManagedSource } from "./connect-source";
+import { ExternalSources } from "./external-sources";
 import { GradeChip, ProfileDrawer, type DrawerTab } from "./profile-drawer";
 
 const STATUS_META: Record<ProfileStatus, { label: string; dot: string; pill: string; icon: typeof CheckCircle2 }> = {
@@ -240,7 +241,7 @@ export function SourcesHub({
   const [drawer, setDrawer] = useState<Drawer | null>(null);
   const [notice, setNotice] = useState<{ tone: "ok" | "error"; text: string } | null>(null);
   const [modeling, setModeling] = useState<string[] | null>(null);
-  const [connect, setConnect] = useState<{ managed: ManagedSource | null } | null>(null);
+  const [connect, setConnect] = useState<{ managed: ManagedSource | null; external?: boolean } | null>(null);
   // Separate busy flags: a background refresh must never block selection actions.
   const [submitting, setSubmitting] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -454,40 +455,8 @@ export function SourcesHub({
 
       {/* external sources */}
       {externals.length > 0 && (
-        <div className="space-y-2">
-          <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Connected external sources</p>
-          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-            {externals.map((x) => {
-              const landedCount = x.landed_tables ?? 0;
-              const isLanded = x.health === "HEALTHY" && landedCount > 0;
-              return (
-                <div key={x.source_system_id} className="flex items-center gap-3 rounded-2xl border bg-card p-4 shadow-sm">
-                  <span className="grid h-10 w-10 place-items-center rounded-xl bg-violet-500/10 text-violet-600">
-                    <Globe className="h-5 w-5" />
-                  </span>
-                  <div className="min-w-0">
-                    <p className="flex items-center gap-2 text-sm font-semibold">
-                      {x.source_system_name}
-                      <Badge variant="outline" className="text-[10px]">{x.connection_type ?? "external"}</Badge>
-                    </p>
-                    <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                      <span className={cn("h-1.5 w-1.5 rounded-full", isLanded ? "bg-success" : "bg-warning")} />
-                      {isLanded ? `${landedCount} landed · ${x.staged_tables} staged` : "Not landed into Snowflake yet"}
-                    </p>
-                  </div>
-                  <div className="ml-auto flex gap-1">
-                    <Button size="sm" variant="ghost" onClick={() => manage(x)}>{x.connection_type === "oracle" ? "Tables & loads" : "Land files"}</Button>
-                    {isLanded && (
-                      <Button size="sm" variant="outline" onClick={() => openTarget({ database: x.database_name, schema: x.schema_name })}>
-                        Open
-                      </Button>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
+        <ExternalSources sources={externals} onManage={manage} onAdd={() => setConnect({ managed: null, external: true })}
+                         onOpen={(x) => openTarget({ database: x.database_name, schema: x.schema_name })} />
       )}
 
       {/* workspace */}
@@ -814,7 +783,7 @@ export function SourcesHub({
                          ? (table) => { setDrawer(null); void runProfile([table], true); } : undefined} />
       )}
       {connect && (
-        <ConnectSource initial={connect.managed} onClose={closeConnect}
+        <ConnectSource initial={connect.managed} startAtConnectors={connect.external} onClose={closeConnect}
                        onSnowflake={() => document.getElementById("pick_db")?.click()}
                        onOpenSchema={(t) => openTarget(t)} />
       )}
@@ -824,3 +793,4 @@ export function SourcesHub({
     </div>
   );
 }
+

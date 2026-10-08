@@ -28,6 +28,20 @@ def table_ref(owner: str, table: str) -> str:
     return f"{q(owner.upper())}.{q(table)}"
 
 
+def value_sql(c: Dict[str, Any]) -> str:
+    """The column's value expression without its alias (XMLSERIALIZE(...), SYS_EXTRACT_UTC(...) or the quoted name)."""
+    expr = c.get("expr")
+    if expr and " AS " in expr:
+        return expr.rsplit(" AS ", 1)[0]
+    return q(c["column_name"])
+
+
+def profileable(columns: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Columns that can be profiled: readable, and not LONG / LONG RAW (Oracle allows no function on those)."""
+    return [c for c in columns if not c.get("skip_reason")
+            and str(c.get("data_type") or "").upper() not in ("LONG", "LONG RAW")]
+
+
 def sample_clause(estimated_rows: Optional[int], target: int = SAMPLE_TARGET_ROWS) -> Tuple[str, bool]:
     """SAMPLE(p) so about `target` rows are read; nothing for small or unknown tables. (sql, approximate)."""
     if not estimated_rows or estimated_rows <= target * 2:
@@ -42,7 +56,7 @@ def stats_sql(owner: str, table: str, columns: Sequence[Dict[str, Any]], sample:
     parts = ["COUNT(*) AS ROW_COUNT"]
     placeholders = ", ".join(f"'{p}'" for p in PLACEHOLDERS if p)
     for i, c in enumerate(columns):
-        col, family, lob = q(c["column_name"]), c["family"], c.get("lob")
+        col, family, lob = value_sql(c), c["family"], c.get("lob")
         parts.append(f"COUNT({col}) AS N{i}")
         if lob:  # LOBs cannot be compared, grouped or counted distinct; length is still useful
             if family == "TEXT":
@@ -65,7 +79,7 @@ def stats_sql(owner: str, table: str, columns: Sequence[Dict[str, Any]], sample:
 
 
 def _value_expr(c: Dict[str, Any]) -> str:
-    col = q(c["column_name"])
+    col = value_sql(c)
     if c["family"] == "TIMESTAMP":
         return f"TO_CHAR({col}, 'YYYY-MM-DD HH24:MI:SS')"
     if c["family"] == "TEXT":
@@ -82,7 +96,7 @@ def frequencies_sql(owner: str, table: str, columns: Sequence[Dict[str, Any]], s
             continue
         expr = _value_expr(c)
         branches.append(f"SELECT {i} AS C, V, N FROM (SELECT {expr} AS V, COUNT(*) AS N FROM {src}{sample} "
-                        f"WHERE {q(c['column_name'])} IS NOT NULL GROUP BY {expr} ORDER BY N DESC "
+                        f"WHERE {value_sql(c)} IS NOT NULL GROUP BY {expr} ORDER BY N DESC "
                         f"FETCH FIRST {TOP_VALUES} ROWS ONLY)")
     return " UNION ALL ".join(branches) or None
 
@@ -94,7 +108,7 @@ def patterns_sql(owner: str, table: str, columns: Sequence[Dict[str, Any]], samp
     for i, c in enumerate(columns):
         if c.get("lob") or c["family"] != "TEXT":
             continue
-        col = q(c["column_name"])
+        col = value_sql(c)
         shape = f"TRANSLATE(SUBSTR({col}, 1, 60), '{UPPER}{LOWER}0123456789', '{'A' * 26}{'a' * 26}{'9' * 10}')"
         branches.append(f"SELECT {i} AS C, P, N FROM (SELECT {shape} AS P, COUNT(*) AS N FROM {src}{sample} "
                         f"WHERE {col} IS NOT NULL GROUP BY {shape} ORDER BY N DESC FETCH FIRST {TOP_PATTERNS} ROWS ONLY)")
@@ -125,6 +139,8 @@ def profile_table(conn, owner: str, table: str, columns: Sequence[Dict[str, Any]
     """(profile columns, row count, approximate) built with the platform profiler."""
     from services.profiling import profiler
 
+    columns = profileable(columns)
+    assert columns, f"{table} has no columns that can be profiled"
     sample, approximate = sample_clause(estimated_rows)
     cur = cursor(conn, 5000)
     stats_row = _rows(cur, stats_sql(owner, table, columns, sample))[0]
