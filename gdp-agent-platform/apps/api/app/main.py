@@ -950,6 +950,14 @@ def source_connections(db: Db = Depends(current_db)):
                S.CONFIGURATION_JSON:last_landed_at::VARCHAR AS LAST_LANDED_AT,
                S.CONFIGURATION_JSON:database::VARCHAR AS DATABASE_NAME,
                S.CONFIGURATION_JSON:schema::VARCHAR AS SCHEMA_NAME,
+               IFF(S.CONNECTION_TYPE = 'oracle', OBJECT_CONSTRUCT(
+                   'host', S.CONFIGURATION_JSON:host, 'port', S.CONFIGURATION_JSON:port,
+                   'service', COALESCE(S.CONFIGURATION_JSON:service_name, S.CONFIGURATION_JSON:sid),
+                   'schema_owner', S.CONFIGURATION_JSON:schema_owner, 'runtime', S.CONFIGURATION_JSON:runtime,
+                   'protocol', S.CONFIGURATION_JSON:protocol, 'health', S.CONFIGURATION_JSON:health,
+                   'schedule', S.CONFIGURATION_JSON:schedule:cron, 'last_job', S.CONFIGURATION_JSON:last_job,
+                   'ready', S.CONFIGURATION_JSON:oracle_procedure IS NOT NULL OR S.CONFIGURATION_JSON:runtime = 'api_host'),
+                   NULL) AS ORACLE,
                S.CREATED_AT::VARCHAR AS CREATED_AT,
                (SELECT COUNT(*) FROM CORE.WORKFLOW_RUN R WHERE R.SOURCE_SYSTEM_ID = S.SOURCE_SYSTEM_ID) AS RUNS,
                (SELECT MAX(R.CREATED_AT)::VARCHAR FROM CORE.WORKFLOW_RUN R
@@ -3299,6 +3307,15 @@ def sources_overview(fresh: bool = False, db: Db = Depends(current_db)):
                 if r["database_name"] == s["database_name"] and r["schema_name"] == s["schema_name"]]
         staged = [r for r in rows if (r.get("status") or "STAGED_READY_FOR_MODELING") == "STAGED_READY_FOR_MODELING"
                   and r.get("source_fingerprint")]
+        if s.get("oracle"):
+            s["oracle"] = _json(s["oracle"]) if isinstance(s["oracle"], str) else s["oracle"]
+            with _jobs_lock:
+                job_id = _oracle_running.get(s["source_system_id"])
+                job = _ingest_jobs.get(job_id) if job_id else None
+            s["oracle"]["running"] = {"kind": job["kind"], "tables": len(job["tables"]),
+                                      "done": sum(1 for t in job["tables"].values()
+                                                  if t.get("phase") in ("DONE", "FAILED", "CANCELLED"))} \
+                if job and job["status"] == "RUNNING" else None
         out.append({
             **s, "health": health, "health_detail": detail, "table_count": table_count,
             "staged_tables": len(staged), "profiling_tables": sum(r.get("status") == "PROFILING" for r in rows),

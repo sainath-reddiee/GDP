@@ -104,6 +104,13 @@ export type SourceConnection = {
   owner: string | null; security_classification: string | null;
   database_name: string; schema_name: string; created_at: string; runs: number; last_run_at: string | null;
   connection_type?: string | null; landed_tables?: number | null; last_landed_at?: string | null;
+  oracle?: {
+    host: string; port: string; service: string; schema_owner: string; runtime: "snowflake" | "api_host";
+    protocol?: string | null; ready: boolean; schedule?: string | null;
+    health?: { status: "ok" | "warn" | "fail"; at: string; headline: string; version?: string | null } | null;
+    last_job?: { kind: string; status: string; at: string; tables: number; failed: string[]; rows: number } | null;
+    running?: { kind: string; tables: number; done: number } | null;
+  } | null;
 };
 
 export type LandingTargets = {
@@ -315,18 +322,45 @@ export type Connector = {
   extractor?: string | null;
 };
 
+export type CheckStatus = "ok" | "warn" | "fail" | "skip";
+export type OracleCheck = {
+  id: string; label: string; status: CheckStatus; detail: string; fix?: string | null; ms?: number | null;
+  code?: string | null; error?: string | null;
+};
 export type OracleTest = {
-  version: string; user: string; database: string; service: string; schema_owner: string;
-  visible_tables: number; visible_views: number; warning: string | null; elapsed_ms?: number;
+  ok: boolean; status: "ok" | "warn" | "fail"; headline: string; checks: OracleCheck[]; elapsed_ms?: number;
+  server: {
+    version?: string; database?: string; service?: string; container?: string; db_timezone?: string; charset?: string;
+    nchar_charset?: string; account_status?: string; password_expires_in_days?: number | null;
+    visible_tables?: number; visible_views?: number; skipped_columns?: number; latency_ms?: number;
+  };
+};
+
+export type OracleHealth = {
+  status: "ok" | "warn" | "fail"; at: string; headline: string; version?: string | null; latency_ms?: number | null;
+  password_expires_in_days?: number | null;
+} | null;
+
+export type OracleLoad = {
+  landed_as: string; oracle_table?: string; batch_id?: string; at: string; rows: number; mode: string;
+  watermark_column: string | null; watermark: string | null; verified?: boolean | null; merge_keys?: string[] | null;
+  skipped?: { column: string; reason: string }[];
+};
+
+export type OracleLoadEntry = {
+  batch_id: string; mode: string; at: string; status: string; rows: number; read: number | null;
+  verified: boolean | null; duration_s: number; drift: boolean; error: string | null; scheduled: boolean;
 };
 
 export type OracleTable = {
-  table: string; type: "TABLE" | "VIEW"; estimated_rows: number | null; last_analyzed: string | null;
-  comment: string | null; partitioned: boolean; temporary: boolean;
+  table: string; type: "TABLE" | "VIEW" | "MVIEW" | "EXTERNAL"; estimated_rows: number | null;
+  estimated_bytes: number | null; last_analyzed: string | null; stale_stats: boolean; comment: string | null;
+  partitioned: boolean; temporary: boolean; iot: boolean; primary_key: string[]; column_count: number;
+  skipped_columns: { column: string; reason: string }[];
+  watermark: { column: string; reason: string } | null; extractable: boolean; not_extractable_reason: string | null;
   profile?: { row_count: number | null; status: string; profiled_at: string | null; pii_columns: number | null;
               key_candidates: number | null } | null;
-  load?: { landed_as: string; at: string; rows: number; mode: string; watermark_column: string | null;
-           watermark: string | null } | null;
+  load?: OracleLoad | null;
 };
 
 export type OracleCatalog = {
@@ -334,8 +368,13 @@ export type OracleCatalog = {
 };
 
 export type OracleColumn = {
-  column_name: string; ordinal: number; oracle_type: string; snowflake_type: string; family: string; lob: boolean;
+  column_name: string; ordinal: number; oracle_type: string; data_type: string; snowflake_type: string | null;
+  family: string; lob: boolean; free_number?: boolean; expr: string | null; skip_reason: string | null;
   nullable: boolean; comment: string | null; constraints: string[];
+};
+
+export type OraclePreview = {
+  table: string; columns: string[]; rows: (string | number | null)[][]; skipped: { column: string; reason: string }[];
 };
 
 export type OracleProfileDoc = {
@@ -348,11 +387,48 @@ export type OracleProfileDoc = {
   scorecard: { overall: number | null; grade: string | null } | null;
 };
 
+export type OracleSchedule = {
+  cron: string; tables: string[]; mode: "append" | "merge" | "replace"; warehouse: string;
+  watermark_columns: Record<string, string>; merge_keys: Record<string, string[]>; lookback_minutes: number;
+  created_at: string;
+} | null;
+
+export type OracleExplain = { code: string | null; title: string; fix: string | null; retryable: boolean; detail: string };
+
+export type IngestJobTable = {
+  phase: string; rows?: number; files?: number; rows_loaded?: number; rows_extracted?: number; row_count?: number;
+  rows_per_s?: number; started?: number; finished?: number; duration_s?: number; error?: string | null;
+  explain?: OracleExplain | null; note?: string | null; profiled?: boolean; profile_error?: string | null;
+  verification?: { read_from_oracle: number; copied: number; in_table: number; verified: boolean } | null;
+  drift?: { added: Record<string, string>; missing: string[]; retyped: Record<string, { was: string; now: string }>;
+            changed: boolean } | null;
+  merged?: { inserted: number; updated: number } | null;
+  skipped?: { column: string; reason: string }[];
+};
+
 export type IngestJob = {
-  job_id: string; source_id: string; kind: "profile" | "ingest"; status: "RUNNING" | "DONE" | "PARTIAL" | "FAILED";
-  tables: Record<string, { phase: string; rows?: number; files?: number; rows_loaded?: number; rows_extracted?: number;
-                           row_count?: number; error?: string | null }>;
+  job_id: string; source_id: string; kind: "profile" | "ingest";
+  status: "RUNNING" | "DONE" | "PARTIAL" | "FAILED" | "CANCELLED";
+  started_at: number; finished_at: number | null; cancel_requested?: boolean;
+  options?: Record<string, unknown>;
+  tables: Record<string, IngestJobTable>;
   result: Record<string, unknown>[] | null; error: string | null;
+};
+
+export type OracleOverview = {
+  id: string; name: string;
+  connection: { host: string; port: string; service_name?: string | null; sid?: string | null; user: string;
+                schema_owner: string; protocol?: string; ssl_server_dn_match?: string; runtime: "snowflake" | "api_host";
+                password_env?: string | null; wallet_dir?: string | null };
+  access: { secret: string | null; integration: string | null; procedure: string | null; created: string[];
+            ready: boolean; password_env_present: boolean | null };
+  landing: { database: string; schema: string };
+  health: OracleHealth; loads: Record<string, OracleLoad>; history: Record<string, OracleLoadEntry[]>;
+  schedule: OracleSchedule;
+  last_scheduled_run: { at: string; tables: number; failed: string[]; rows: number } | null;
+  last_job: { job_id: string; kind: string; status: string; at: string; tables: number; failed: string[]; rows: number;
+              duration_s: number } | null;
+  running_job: IngestJob | null;
 };
 
 export type ExternalFile = { path: string; size: number | null; last_modified: string };

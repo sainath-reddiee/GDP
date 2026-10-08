@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   AlertTriangle, ArrowRight, CheckCircle2, ChevronDown, ChevronRight, CircleDashed, Database, Eye, FolderTree, Globe,
-  History, Layers, Loader2, Plus, RefreshCw, Search, Sparkles, Table2, X, XCircle,
+  HardDrive, History, Layers, Loader2, Plus, RefreshCw, Search, Sparkles, Table2, X, XCircle,
 } from "lucide-react";
 import type {
   CatalogInventory, InventoryTable, ProfileStatus, ProfileStoreRow, SourcesOverview,
@@ -460,6 +460,8 @@ export function SourcesHub({
             {externals.map((x) => {
               const landedCount = x.landed_tables ?? 0;
               const isLanded = x.health === "HEALTHY" && landedCount > 0;
+              if (x.connection_type === "oracle" && x.oracle) return <OracleCard key={x.source_system_id} x={x} landedCount={landedCount} isLanded={isLanded}
+                                                                              onManage={() => manage(x)} onOpen={() => openTarget({ database: x.database_name, schema: x.schema_name })} />;
               return (
                 <div key={x.source_system_id} className="flex items-center gap-3 rounded-2xl border bg-card p-4 shadow-sm">
                   <span className="grid h-10 w-10 place-items-center rounded-xl bg-violet-500/10 text-violet-600">
@@ -476,7 +478,7 @@ export function SourcesHub({
                     </p>
                   </div>
                   <div className="ml-auto flex gap-1">
-                    <Button size="sm" variant="ghost" onClick={() => manage(x)}>{x.connection_type === "oracle" ? "Tables & loads" : "Land files"}</Button>
+                    <Button size="sm" variant="ghost" onClick={() => manage(x)}>Land files</Button>
                     {isLanded && (
                       <Button size="sm" variant="outline" onClick={() => openTarget({ database: x.database_name, schema: x.schema_name })}>
                         Open
@@ -821,6 +823,57 @@ export function SourcesHub({
       {modeling && (
         <ModelPanel database={database} schema={schema} tables={modeling} domains={domains} onClose={closeModeling} />
       )}
+    </div>
+  );
+}
+
+
+type ExternalRow = SourcesOverview["sources"][number];
+
+/** An Oracle source at a glance: where it is, whether it answers, what landed and what runs next. */
+function OracleCard({ x, landedCount, isLanded, onManage, onOpen }: {
+  x: ExternalRow; landedCount: number; isLanded: boolean; onManage: () => void; onOpen: () => void;
+}) {
+  const o = x.oracle!;
+  const status = !o.ready ? "setup" : o.health?.status ?? null;
+  const dot = status === "ok" ? "bg-success" : status === "warn" ? "bg-warning" : status === "fail" ? "bg-destructive" : "bg-muted-foreground/40";
+  const label = status === "setup" ? "Setup needed" : status === "ok" ? "Connected" : status === "warn" ? "Needs attention"
+    : status === "fail" ? "Unreachable" : "Not checked";
+  const job = o.last_job;
+  return (
+    <div className="group relative overflow-hidden rounded-2xl border bg-card p-4 shadow-sm transition hover:shadow-md">
+      <div className="pointer-events-none absolute -right-8 -top-8 h-24 w-24 rounded-full bg-gradient-to-br from-red-500/15 to-orange-400/10 blur-xl" />
+      <div className="flex items-start gap-3">
+        <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-gradient-to-br from-red-600 to-orange-500 text-white shadow-sm">
+          <HardDrive className="h-5 w-5" />
+        </span>
+        <div className="min-w-0 flex-1">
+          <p className="flex flex-wrap items-center gap-2 text-sm font-semibold">
+            {x.source_system_name}
+            <Badge variant="outline" className="text-[10px]">Oracle</Badge>
+            {o.protocol === "tcps" && <Badge variant="success" className="text-[10px]">TLS</Badge>}
+          </p>
+          <p className="truncate font-mono text-[11px] text-muted-foreground" title={`${o.host}:${o.port}/${o.service}`}>{o.host}:{o.port}/{o.service}</p>
+        </div>
+        <span className="flex shrink-0 items-center gap-1.5 rounded-full border px-2 py-0.5 text-[10px] font-medium">
+          <span className={cn("h-1.5 w-1.5 rounded-full", dot, status === "ok" && "animate-pulse")} />{label}
+        </span>
+      </div>
+      <div className="mt-3 grid grid-cols-3 gap-2 text-center">
+        <div className="rounded-lg bg-muted/50 px-2 py-1.5"><p className="text-sm font-semibold tabular-nums">{landedCount}</p><p className="text-[10px] text-muted-foreground">landed</p></div>
+        <div className="rounded-lg bg-muted/50 px-2 py-1.5"><p className="text-sm font-semibold tabular-nums">{x.staged_tables}</p><p className="text-[10px] text-muted-foreground">ready to model</p></div>
+        <div className="rounded-lg bg-muted/50 px-2 py-1.5"><p className="text-sm font-semibold">{o.schedule ? "On" : "Off"}</p><p className="text-[10px] text-muted-foreground">schedule</p></div>
+      </div>
+      <p className="mt-2 flex items-center gap-1.5 truncate text-[11px] text-muted-foreground">
+        {o.running ? <><Loader2 className="h-3 w-3 animate-spin text-primary" /> {o.running.kind === "ingest" ? "Loading" : "Profiling"} {o.running.done}/{o.running.tables} tables</>
+          : job ? <>{job.status === "DONE" ? <CheckCircle2 className="h-3 w-3 text-success" /> : <AlertTriangle className="h-3 w-3 text-warning" />}
+              Last {job.kind === "ingest" ? "load" : "profile"} {job.status.toLowerCase()} · {job.at.slice(0, 16)} UTC{job.kind === "ingest" ? ` · ${job.rows.toLocaleString()} rows` : ""}</>
+          : o.health?.version ? <>Oracle {o.health.version} · schema {o.schema_owner}</> : <>Schema {o.schema_owner} · runs {o.runtime === "snowflake" ? "in Snowflake" : "on the API server"}</>}
+      </p>
+      <div className="mt-3 flex gap-2">
+        <Button size="sm" className="flex-1" variant={o.ready ? "outline" : "default"} onClick={onManage}>{o.ready ? "Tables & loads" : "Finish setup"}</Button>
+        {isLanded && <Button size="sm" variant="ghost" onClick={onOpen}>Open landed</Button>}
+      </div>
     </div>
   );
 }
