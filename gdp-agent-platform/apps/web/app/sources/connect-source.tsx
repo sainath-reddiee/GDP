@@ -55,15 +55,13 @@ function Tile({ icon: Icon, title, body, tag, onClick }: {
   );
 }
 
-export function ConnectSource({ initial, startAtConnectors, onClose, onSnowflake, onOpenSchema }: {
+export function ConnectSource({ initial, onClose, onSnowflake, onOpenSchema }: {
   initial?: ManagedSource | null;
-  /** open on the list of external connectors instead of "where does the data live?" */
-  startAtConnectors?: boolean;
   onClose: () => void;
   onSnowflake: () => void;
   onOpenSchema: (target: { database: string; schema: string }) => void;
 }) {
-  const [step, setStep] = useState<Step>(initial ? "manage" : startAtConnectors ? "connector" : "choose");
+  const [step, setStep] = useState<Step>(initial ? "manage" : "choose");
   const [connectors, setConnectors] = useState<Connector[]>([]);
   const [connector, setConnector] = useState<Connector | null>(null);
   const [name, setName] = useState("");
