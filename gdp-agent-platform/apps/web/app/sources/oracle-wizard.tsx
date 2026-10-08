@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState, useTransition } from "react";
 import {
-  ArrowLeft, ArrowRight, CheckCircle2, Eye, EyeOff, KeyRound, Loader2, Network, RefreshCw, Server, ShieldAlert,
+  ArrowLeft, ArrowRight, BookOpen, CheckCircle2, Eye, EyeOff, KeyRound, Loader2, Network, RefreshCw, Server, ShieldAlert,
   Snowflake, XCircle,
 } from "lucide-react";
 import type { OracleTest } from "@/lib/types";
@@ -14,6 +14,7 @@ import {
   oracleSetup, oracleTest, registerExternalSource, type IntegrationCheck, type SetupResult,
 } from "./actions";
 import type { ManagedSource } from "./connect-source";
+import { SetupGuide } from "./oracle-guide";
 import { Checklist, ConnectionFields, connectionProblems, CopyButton, SecretNote, type OracleFields } from "./oracle-ui";
 
 type Step = 1 | 2 | 3;
@@ -100,6 +101,7 @@ export function OracleWizard({ onDone, onCancel }: {
   const [setup, setSetup] = useState<SetupResult | null>(null);
   const [test, setTest] = useState<OracleTest | null>(null);
   const [error, setError] = useState("");
+  const [showGuide, setShowGuide] = useState(true);
   const [pending, start] = useTransition();
 
   const nameOk = /^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(name);
@@ -209,8 +211,16 @@ export function OracleWizard({ onDone, onCancel }: {
     ? setup.log.map((l) => l.sql.replace("'<oracle password>'", "'<the Oracle password>'")).join(";\n\n") + ";" : "";
 
   return (
-    <div className="space-y-5">
-      <StepDots step={step} />
+    <div className={cn("grid gap-5", showGuide && "lg:grid-cols-[minmax(0,1fr)_340px]")}>
+    <div className="min-w-0 space-y-5">
+      <div className="flex items-center gap-3">
+        <StepDots step={step} />
+        {!showGuide && (
+          <Button size="sm" variant="ghost" className="ml-auto" onClick={() => setShowGuide(true)}>
+            <BookOpen className="h-3.5 w-3.5" /> Setup guide
+          </Button>
+        )}
+      </div>
 
       {step === 1 && (
         <div className="space-y-4">
@@ -242,8 +252,14 @@ export function OracleWizard({ onDone, onCancel }: {
               <section className="space-y-2">
                 <p className="flex items-center gap-2 text-sm font-semibold"><KeyRound className="h-4 w-4 text-primary" /> Oracle password</p>
                 <div className="grid gap-2 sm:grid-cols-2">
-                  <Radio checked={secretMode === "new"} onChange={() => setSecretMode("new")}>Store it in a new Snowflake secret</Radio>
-                  <Radio checked={secretMode === "existing"} onChange={() => setSecretMode("existing")}>Use an existing secret</Radio>
+                  <Radio checked={secretMode === "new"} onChange={() => setSecretMode("new")}>
+                    <span><span className="block font-medium">Enter the password</span>
+                      <span className="block text-[11px] text-muted-foreground">Saved straight into a new Snowflake secret</span></span>
+                  </Radio>
+                  <Radio checked={secretMode === "existing"} onChange={() => setSecretMode("existing")}>
+                    <span><span className="block font-medium">Use an existing secret</span>
+                      <span className="block text-[11px] text-muted-foreground">One your admin already created</span></span>
+                  </Radio>
                 </div>
                 {secretMode === "new" ? (
                   <div>
@@ -284,8 +300,14 @@ export function OracleWizard({ onDone, onCancel }: {
               <section className="space-y-2">
                 <p className="flex items-center gap-2 text-sm font-semibold"><Network className="h-4 w-4 text-primary" /> Network access from Snowflake</p>
                 <div className="grid gap-2 sm:grid-cols-2">
-                  <Radio checked={integrationMode === "new"} onChange={() => setIntegrationMode("new")}>Create access to {target}</Radio>
-                  <Radio checked={integrationMode === "existing"} onChange={() => setIntegrationMode("existing")}>Use an existing integration</Radio>
+                  <Radio checked={integrationMode === "new"} onChange={() => setIntegrationMode("new")}>
+                    <span><span className="block font-medium">Create access</span>
+                      <span className="block text-[11px] text-muted-foreground">Allows only {target}</span></span>
+                  </Radio>
+                  <Radio checked={integrationMode === "existing"} onChange={() => setIntegrationMode("existing")}>
+                    <span><span className="block font-medium">Use an existing integration</span>
+                      <span className="block text-[11px] text-muted-foreground">Checked for this host and secret</span></span>
+                  </Radio>
                 </div>
                 {integrationMode === "new" ? (
                   <label className="block text-xs font-medium">Integration name
@@ -456,6 +478,14 @@ export function OracleWizard({ onDone, onCancel }: {
           </>
         )}
       </div>
+    </div>
+    {showGuide && (
+      <div className="lg:sticky lg:top-0 lg:self-start">
+        <SetupGuide user={fields.user ?? ""} owner={fields.schema_owner ?? ""} host={fields.host ?? ""} port={fields.port ?? ""}
+                    tls={fields.protocol === "tcps"} runtime={runtime} passwordEnv={passwordEnv} sourceName={name}
+                    onClose={() => setShowGuide(false)} />
+      </div>
+    )}
     </div>
   );
 }

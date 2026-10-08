@@ -143,7 +143,7 @@ export function ConnectSource({ initial, onClose, onSnowflake, onOpenSchema }: {
     <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/30 p-6">
       <div role="dialog" aria-label="Connect source"
            className={cn("relative w-full rounded-2xl border bg-background shadow-2xl",
-             step === "manage" && managed?.connector === "oracle" ? "max-w-6xl" : "max-w-3xl")}>
+             step === "manage" && managed?.connector === "oracle" ? "max-w-6xl" : step === "form" && isOracle ? "max-w-5xl" : "max-w-3xl")}>
         <header className="flex items-center gap-3 border-b px-6 py-4">
           {step !== "choose" && step !== "manage" && (
             <button type="button" aria-label="Back" className="rounded-md p-1 hover:bg-muted"
