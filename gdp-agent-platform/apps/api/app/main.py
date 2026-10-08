@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import sys
 import threading
@@ -4683,19 +4684,61 @@ _ingest_jobs: dict[str, dict] = {}
 
 
 class OracleSetup(BaseModel):
-    password: str = Field(min_length=1, max_length=1024)
+    """How the Snowflake runtime gets the password and network access: new objects, or ones that already exist."""
+    secret_mode: Literal["new", "existing"] = "new"
+    password: Optional[str] = Field(default=None, max_length=1024)
+    secret: Optional[str] = Field(default=None, max_length=255)
+    integration_mode: Literal["new", "existing"] = "new"
     external_access_integration: Optional[str] = Field(default=None, max_length=255)
+
+
+class OraclePassword(BaseModel):
+    password: str = Field(min_length=1, max_length=1024)
+
+
+class OracleConnection(BaseModel):
+    config: dict[str, Any]
+
+
+class ConnectString(BaseModel):
+    text: str = Field(min_length=3, max_length=4000)
+
+
+class IntegrationCheck(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+    host: str = Field(min_length=1, max_length=253)
+    port: int = Field(ge=1, le=65535)
+    secret: Optional[str] = Field(default=None, max_length=255)
 
 
 class OracleTables(BaseModel):
     tables: list[str] = Field(min_length=1, max_length=500)
 
 
+class OraclePreview(BaseModel):
+    table: str = Field(min_length=1, max_length=128)
+    limit: int = Field(default=20, ge=1, le=100)
+
+
 class OracleIngest(OracleTables):
-    mode: Literal["replace", "append"] = "replace"
+    mode: Literal["replace", "append", "merge"] = "replace"
     storage: Literal["MANAGED", "ICEBERG"] = "MANAGED"
     watermark_columns: dict[str, str] = Field(default_factory=dict)
+    merge_keys: dict[str, list[str]] = Field(default_factory=dict)
+    lookback_minutes: int = Field(default=0, ge=0, le=10080)
     profile_after_landing: bool = True
+
+
+class OracleSchedule(OracleTables):
+    mode: Literal["append", "merge", "replace"] = "append"
+    cron: str = Field(min_length=9, max_length=120)
+    watermark_columns: dict[str, str] = Field(default_factory=dict)
+    merge_keys: dict[str, list[str]] = Field(default_factory=dict)
+    lookback_minutes: int = Field(default=0, ge=0, le=10080)
+    warehouse: Optional[str] = Field(default=None, max_length=255)
+
+
+_oracle_running: dict[str, str] = {}   # source id -> job id of its running profile/load
 
 
 def _oracle_source(db: Db, source_id: str) -> dict:
@@ -4708,27 +4751,69 @@ def _oracle_source(db: Db, source_id: str) -> dict:
     return src
 
 
-def _oracle_call(db: Db, source_id: str, action: str, payload: dict, progress=None) -> dict:
+def _save_oracle_config(db: Db, source_id: str, change) -> dict:
+    """Read-modify-write of the source configuration (procedures write loads into it too)."""
+    cfg = _oracle_source(db, source_id)["config"]
+    change(cfg)
+    db.execute("UPDATE SOURCE.SOURCE_REGISTRY SET CONFIGURATION_JSON = PARSE_JSON(%s), CONFIGURATION_REFERENCE = %s, "
+               "UPDATED_AT = CURRENT_TIMESTAMP() WHERE SOURCE_SYSTEM_ID = %s",
+               (json.dumps(cfg, default=str), cfg.get("secret") or cfg.get("password_env"), source_id))
+    return cfg
+
+
+def _call_cancellable(db: Db, sql: str, params: tuple, job: Optional[dict]) -> Any:
+    """CALL a procedure asynchronously so a running query can be cancelled from the job (SYSTEM$CANCEL_QUERY)."""
+    cur = db.conn.cursor()
+    try:
+        cur.execute_async(sql, params)
+        query_id = cur.sfqid
+        if job is not None:
+            job["query_id"] = query_id
+        while db.conn.is_still_running(db.conn.get_query_status(query_id)):
+            if job is not None and job.get("cancel_requested"):
+                db.query("SELECT SYSTEM$CANCEL_QUERY(%s)", (query_id,))
+            time.sleep(0.5)
+        cur.get_results_from_sfqid(query_id)
+        row = cur.fetchone()
+        value = row[0] if row else None
+        return json.loads(value) if isinstance(value, str) else value
+    finally:
+        if job is not None:
+            job.pop("query_id", None)
+        cur.close()
+
+
+def _oracle_call(db: Db, source_id: str, action: str, payload: dict, progress=None, job: Optional[dict] = None) -> dict:
     """Run an Oracle action in the source's runtime: its Snowflake procedure, or this API host."""
     from services.source.oracle.procedures import api_host_password, object_names, run
 
-    src = _oracle_source(db, source_id)
-    cfg = src["config"]
+    cfg = _oracle_source(db, source_id)["config"]
+    cancelled = (lambda: bool(job and job.get("cancel_requested")))
     if cfg.get("runtime", "snowflake") == "api_host":
         try:
             password = api_host_password(cfg)
         except AssertionError as exc:
-            raise HTTPException(409, str(exc)) from exc
-        return invoke_source(db, run, source_id, action, json.dumps(payload), password, progress)
+            if action not in ("test", "diagnose"):
+                raise HTTPException(409, str(exc)) from exc
+            password = ""
+        return invoke_source(db, run, source_id, action, json.dumps(payload), password, progress, cancelled)
     if not cfg.get("oracle_procedure"):
-        raise HTTPException(409, "Set up the Snowflake connection for this source first (Oracle password, network "
-                                 "rule and external access integration).")
+        raise HTTPException(409, "Finish the Snowflake setup for this source first (secret, network access and "
+                                 "procedure).")
     proc = object_names(cfg["database"], cfg["schema"])["procedure"]
-    result = db.call(f"CALL {proc}(%s, %s, %s)", (source_id, action, json.dumps(payload)))
+    params = (source_id, action, json.dumps(payload))
+    if job is not None:
+        try:
+            return _call_cancellable(db, f"CALL {proc}(%s, %s, %s)", params, job)
+        except AttributeError:  # connector without async support
+            pass
+    result = db.call(f"CALL {proc}(%s, %s, %s)", params)
     return _json(result) if isinstance(result, str) else result
 
 
 def _oracle_errors(fn):
+    from services.source.oracle.errors import explain
+
     try:
         return fn()
     except HTTPException:
@@ -4736,32 +4821,181 @@ def _oracle_errors(fn):
     except AssertionError as exc:
         raise HTTPException(400, str(exc)) from exc
     except Exception as exc:
-        text = str(exc)
-        if "ORA-01017" in text:
-            raise HTTPException(401, "Oracle rejected the user name or password (ORA-01017).") from exc
-        if any(code in text for code in ("ORA-12541", "ORA-12170", "DPY-6005", "DPY-4011", "timed out")):
-            raise HTTPException(502, "Could not reach the Oracle listener. Check host, port and that this runtime "
-                                     "is allowed through the network (for Snowflake: the network rule).") from exc
+        why = explain(exc)
+        if why["fix"]:
+            raise HTTPException(why["status"] if why["status"] >= 400 else 400,
+                                f"{why['title']}. {why['fix']}" + (f" ({why['code']})" if why["code"] else "")) from exc
         raise _snowflake_error(exc) from exc
+
+
+# ---- discovery: what already exists in Snowflake for the access step
+
+
+@app.get("/api/oracle/secrets")
+def oracle_secrets(db: Db = Depends(current_db)):
+    """PASSWORD secrets this role can see (names only; secret values are never readable)."""
+    try:
+        found = db.query("SHOW SECRETS IN ACCOUNT")
+    except Exception as exc:
+        return {"secrets": [], "error": f"This role cannot list secrets: {str(exc)[:200]}"}
+    out = []
+    for r in found:
+        kind = str(r.get("secret_type") or r.get("type") or "").upper()
+        if kind and kind != "PASSWORD":
+            continue
+        out.append({"name": f"{r.get('database_name')}.{r.get('schema_name')}.{r.get('name')}",
+                    "comment": r.get("comment"), "owner": r.get("owner"),
+                    "created_on": str(r.get("created_on") or "")[:19]})
+    return {"secrets": sorted(out, key=lambda s: s["name"])}
+
+
+@app.get("/api/oracle/secrets/describe")
+def oracle_secret_describe(name: str, db: Db = Depends(current_db)):
+    """The user name stored in a PASSWORD secret (DESCRIBE never returns the password)."""
+    from services.source.oracle.procedures import NAME
+
+    if not NAME.match(name):
+        raise HTTPException(400, "secret must be a Snowflake object name")
+    try:
+        props = {str(r.get("property") or "").upper(): r.get("value") for r in db.query(f"DESCRIBE SECRET {name}")}
+    except Exception as exc:
+        raise _snowflake_error(exc) from exc
+    return {"name": name, "username": props.get("USERNAME"), "type": props.get("SECRET_TYPE")}
+
+
+@app.get("/api/oracle/integrations")
+def oracle_integrations(db: Db = Depends(current_db)):
+    try:
+        found = db.query("SHOW EXTERNAL ACCESS INTEGRATIONS")
+    except Exception as exc:
+        return {"integrations": [], "error": f"This role cannot list integrations: {str(exc)[:200]}"}
+    return {"integrations": sorted([{"name": r.get("name"), "enabled": str(r.get("enabled")).lower() == "true",
+                                     "comment": r.get("comment")} for r in found], key=lambda r: r["name"])}
+
+
+def _rule_allows(value: str, host: str, port: int) -> bool:
+    """A HOST_PORT network rule value ('host', 'host:port', '*.domain:port'; no port means 443) vs host:port."""
+    rule_host, _, rule_port = value.lower().partition(":")
+    if int(rule_port or 443) != int(port):
+        return False
+    host = host.lower()
+    return rule_host == host or (rule_host.startswith("*.") and host.endswith(rule_host[1:]))
+
+
+@app.post("/api/oracle/integrations/check")
+def oracle_integration_check(body: IntegrationCheck, db: Db = Depends(current_db)):
+    """Does an existing integration allow this Oracle listener and this secret? Each answer separately."""
+    from services.source.oracle.procedures import NAME
+
+    if not NAME.match(body.name) or (body.secret and not NAME.match(body.secret)):
+        raise HTTPException(400, "names must be Snowflake object names")
+    try:
+        props = {str(r.get("property") or "").upper(): str(r.get("property_value") or r.get("value") or "")
+                 for r in db.query(f"DESCRIBE INTEGRATION {body.name}")}
+    except Exception as exc:
+        raise _snowflake_error(exc) from exc
+    rules = [x.strip() for x in props.get("ALLOWED_NETWORK_RULES", "").strip("[]").split(",") if x.strip()]
+    secrets = [x.strip().upper() for x in props.get("ALLOWED_AUTHENTICATION_SECRETS", "").strip("[]").split(",")
+               if x.strip()]
+    reachable, values = False, []
+    for rule in rules:
+        try:
+            for r in db.query(f"DESCRIBE NETWORK RULE {rule}"):
+                vals = [v.strip().strip("'\"").lower() for v in str(r.get("value_list") or "").split(",") if v.strip()]
+                values += vals
+                reachable = reachable or any(_rule_allows(v, body.host, body.port) for v in vals)
+        except Exception:
+            continue
+    secret_ok = None
+    if body.secret:
+        short = body.secret.upper().split(".")[-1]
+        secret_ok = any(s == body.secret.upper() or s.split(".")[-1] == short for s in secrets) or "ALL" in secrets
+    enabled = props.get("ENABLED", "true").lower() == "true"
+    return {"name": body.name, "enabled": enabled, "allows_host": reachable, "allows_secret": secret_ok,
+            "network_values": values[:20], "secrets": secrets[:20],
+            "usable": enabled and reachable and secret_ok is not False}
+
+
+@app.post("/api/oracle/parse")
+def oracle_parse(body: ConnectString):
+    from services.source.oracle.connect import parse_connect_string
+
+    try:
+        return parse_connect_string(body.text)
+    except AssertionError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.get("/api/oracle/env-check")
+def oracle_env_check(name: str):
+    """Whether an environment variable is set on the API host (never its value)."""
+    if not re.match(r"^[A-Za-z_][A-Za-z0-9_]{0,127}$", name):
+        raise HTTPException(400, "not an environment variable name")
+    return {"name": name, "present": bool(os.environ.get(name))}
+
+
+# ---- one source: setup, credentials, connection, health
+
+
+@app.get("/api/sources/{source_id}/oracle")
+def oracle_overview(source_id: str, db: Db = Depends(current_db)):
+    """Everything the source page shows without contacting Oracle: connection, access, health, loads, schedule."""
+    src = _oracle_source(db, source_id)
+    cfg = src["config"]
+    with _jobs_lock:
+        running = _oracle_running.get(source_id)
+        job = _ingest_jobs.get(running) if running else None
+    return {"id": source_id, "name": src["source_system_name"],
+            "connection": {k: cfg.get(k) for k in ("host", "port", "service_name", "sid", "user", "schema_owner",
+                                                   "protocol", "ssl_server_dn_match", "runtime", "password_env",
+                                                   "wallet_dir")},
+            "access": {"secret": cfg.get("secret"), "integration": cfg.get("external_access_integration"),
+                       "procedure": cfg.get("oracle_procedure"), "created": cfg.get("created_objects") or [],
+                       "ready": bool(cfg.get("oracle_procedure")) or cfg.get("runtime") == "api_host",
+                       "password_env_present": bool(os.environ.get(cfg["password_env"]))
+                       if cfg.get("password_env") else None},
+            "landing": {"database": cfg.get("database"), "schema": cfg.get("schema")},
+            "health": cfg.get("health"), "loads": cfg.get("loads") or {}, "history": cfg.get("load_history") or {},
+            "schedule": cfg.get("schedule"), "last_scheduled_run": cfg.get("last_scheduled_run"),
+            "last_job": cfg.get("last_job"),
+            "running_job": json.loads(json.dumps(job, default=str)) if job and job["status"] == "RUNNING" else None}
 
 
 @app.post("/api/sources/{source_id}/oracle/setup")
 def oracle_setup(source_id: str, body: OracleSetup, db: Db = Depends(current_db)):
-    """Snowflake runtime: network rule to the Oracle listener, PASSWORD secret, external access integration and
-    the source's procedure. The password is used only while running the statements and never stored elsewhere."""
-    from services.source.oracle.procedures import object_names, procedure_sql, setup_sql
+    """Snowflake runtime: the PASSWORD secret (new, or an existing one), network access (a new network rule and
+    integration, or an existing integration that allows this listener and secret) and the source's procedure.
+    A new password is used only while its statement runs and is scrubbed from any error."""
+    from services.source.oracle.procedures import NAME, object_names, procedure_sql, setup_sql
 
     src = _oracle_source(db, source_id)
     cfg = src["config"]
     if cfg.get("runtime", "snowflake") != "snowflake":
         raise HTTPException(409, "This source runs on the API host; its password comes from an environment variable.")
+    names = object_names(cfg["database"], cfg["schema"])
+    if body.secret_mode == "new" and not body.password:
+        raise HTTPException(400, "enter the Oracle password, or choose an existing secret")
+    if body.secret_mode == "existing" and not (body.secret and NAME.match(body.secret)):
+        raise HTTPException(400, "choose the existing secret")
+    secret = body.secret if body.secret_mode == "existing" else names["secret"]
     eai = (body.external_access_integration or f"{src['source_system_name']}_ORACLE_ACCESS").strip().upper()
-    password = body.password
+    if body.integration_mode == "existing":
+        check = oracle_integration_check(IntegrationCheck(name=eai, host=cfg["host"], port=int(cfg.get("port") or 1521),
+                                                          secret=secret), db)
+        problems = [p for p, bad in (("it is disabled", not check["enabled"]),
+                                     (f"its network rules do not allow {cfg['host']}:{cfg.get('port')}",
+                                      not check["allows_host"]),
+                                     (f"it does not allow the secret {secret}", check["allows_secret"] is False)) if bad]
+        if problems:
+            raise HTTPException(409, f"{eai} cannot be used: " + "; ".join(problems) +
+                                ". Choose another integration or let the platform create one.")
+    password = body.password or ""
     escaped = password.replace("\\", "\\\\").replace("'", "''")
     try:
         statements = setup_sql(cfg["database"], cfg["schema"], eai, cfg["host"], int(cfg.get("port") or 1521),
-                               cfg["user"])
-        ddl = procedure_sql(cfg["database"], cfg["schema"], _services_import(db), eai)
+                               cfg["user"], secret=secret, create_secret=body.secret_mode == "new",
+                               create_integration=body.integration_mode == "new")
+        ddl = procedure_sql(cfg["database"], cfg["schema"], _services_import(db), eai, secret)
     except AssertionError as exc:
         raise HTTPException(400, str(exc)) from exc
     log: list[dict] = []
@@ -4770,31 +5004,140 @@ def oracle_setup(source_id: str, body: OracleSetup, db: Db = Depends(current_db)
             db.execute(sql.replace("'<oracle password>'", "'" + escaped + "'"))
             log.append({"sql": sql, "ok": True})
         except Exception as exc:
-            log.append({"sql": sql, "ok": False, "error": str(exc)[:500].replace(password, "***")})
-            return {"ready": False, "log": log,
-                    "detail": "A step needs more privileges (CREATE NETWORK RULE, CREATE SECRET, CREATE INTEGRATION "
-                              "or the oracledb package). Ask an admin to run the SQL shown, or retry with a role "
-                              "that has them."}
-    cfg.update(oracle_procedure=object_names(cfg["database"], cfg["schema"])["procedure"],
-               external_access_integration=eai, secret=object_names(cfg["database"], cfg["schema"])["secret"])
-    db.execute("UPDATE SOURCE.SOURCE_REGISTRY SET CONFIGURATION_JSON = PARSE_JSON(%s), CONFIGURATION_REFERENCE = %s, "
-               "UPDATED_AT = CURRENT_TIMESTAMP() WHERE SOURCE_SYSTEM_ID = %s",
-               (json.dumps(cfg), cfg["secret"], source_id))
-    return {"ready": True, "log": log}
+            text = str(exc)[:500].replace(password, "***") if password else str(exc)[:500]
+            log.append({"sql": sql, "ok": False, "error": text})
+            step = next((label for prefix, label in (
+                ("CREATE OR REPLACE SECRET", "CREATE SECRET"), ("CREATE OR REPLACE NETWORK RULE", "CREATE NETWORK RULE"),
+                ("CREATE OR REPLACE EXTERNAL ACCESS", "CREATE INTEGRATION")) if sql.startswith(prefix)),
+                "CREATE PROCEDURE (or the oracledb package)")
+            return {"ready": False, "log": log, "failed_step": step,
+                    "detail": f"This role could not run {step}. An admin can run the statements shown (with the real "
+                              "password in place of the placeholder), then choose Use existing for the secret and "
+                              "integration here."}
+    created = (["secret"] if body.secret_mode == "new" else []) + (["integration"] if body.integration_mode == "new" else [])
+
+    def change(c: dict) -> None:
+        c.update(oracle_procedure=names["procedure"], external_access_integration=eai, secret=secret,
+                 created_objects=sorted(set(c.get("created_objects") or []) | set(created)))
+
+    _save_oracle_config(db, source_id, change)
+    return {"ready": True, "log": log, "secret": secret, "integration": eai}
+
+
+@app.post("/api/sources/{source_id}/oracle/password")
+def oracle_password(source_id: str, body: OraclePassword, db: Db = Depends(current_db)):
+    """Point the source's secret at a new Oracle password (after a rotation in Oracle)."""
+    from services.source.oracle.procedures import rotate_password_sql
+
+    cfg = _oracle_source(db, source_id)["config"]
+    if cfg.get("runtime") == "api_host":
+        raise HTTPException(409, f"Set the new password in {cfg.get('password_env')} on the API host and restart it.")
+    if not cfg.get("secret"):
+        raise HTTPException(409, "This source has no secret yet; finish setup first.")
+    escaped = body.password.replace("\\", "\\\\").replace("'", "''")
+    try:
+        db.execute(rotate_password_sql(cfg["secret"]).replace("'<oracle password>'", "'" + escaped + "'"))
+    except Exception as exc:
+        raise HTTPException(403, f"Could not update {cfg['secret']}: {str(exc)[:300].replace(body.password, '***')}") from exc
+    return {"updated": cfg["secret"]}
+
+
+@app.put("/api/sources/{source_id}/oracle/connection")
+def oracle_connection(source_id: str, body: OracleConnection, db: Db = Depends(current_db)):
+    """Change where Oracle is (host, port, service, TLS, owner). The network rule follows when the platform owns it."""
+    from services.source.external import validate_config
+    from services.source.oracle.procedures import network_rule_sql
+
+    src = _oracle_source(db, source_id)
+    cfg = src["config"]
+    editable = ("host", "port", "service_name", "sid", "user", "schema_owner", "protocol", "ssl_server_dn_match",
+                "password_env", "wallet_dir", "wallet_password_env")
+    merged = {k: v for k, v in cfg.items() if k in editable}
+    merged.update({k: v for k, v in body.config.items() if k in editable})
+    if "sid" in body.config and body.config.get("sid"):
+        merged.pop("service_name", None)
+    if "service_name" in body.config and body.config.get("service_name"):
+        merged.pop("sid", None)
+    merged["runtime"] = cfg.get("runtime", "snowflake")
+    try:
+        clean = validate_config("oracle", merged)
+    except AssertionError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    moved = (clean["host"], str(clean["port"])) != (cfg.get("host"), str(cfg.get("port")))
+    note = None
+    if moved and clean["runtime"] == "snowflake" and cfg.get("oracle_procedure"):
+        if "integration" in (cfg.get("created_objects") or []):
+            try:
+                db.execute(network_rule_sql(cfg["database"], cfg["schema"], clean["host"], int(clean["port"])))
+            except Exception as exc:
+                raise HTTPException(403, f"Could not update the network rule: {str(exc)[:300]}") from exc
+        else:
+            note = (f"{cfg.get('external_access_integration')} was chosen, not created here: make sure it allows "
+                    f"{clean['host']}:{clean['port']}.")
+
+    def change(c: dict) -> None:
+        for k in editable:
+            c.pop(k, None)
+        c.update({k: v for k, v in clean.items() if k in editable})
+        c["health"] = None
+
+    _save_oracle_config(db, source_id, change)
+    return {"connection": {k: clean.get(k) for k in editable}, "note": note}
 
 
 @app.post("/api/sources/{source_id}/oracle/test")
 def oracle_test(source_id: str, db: Db = Depends(current_db)):
-    """Connect, report the Oracle version and what the user can see in the schema owner."""
+    """Step-by-step connection check. Never raises for Oracle problems: they come back as failed steps."""
+    from services.source.oracle.errors import explain
+
     started = time.time()
-    result = _oracle_errors(lambda: _oracle_call(db, source_id, "test", {}))
+    try:
+        result = _oracle_call(db, source_id, "diagnose", {})
+    except HTTPException as exc:
+        result = {"ok": False, "status": "fail", "server": {}, "headline": exc.detail,
+                  "checks": [{"id": "setup", "label": "Platform setup", "status": "fail", "detail": exc.detail,
+                              "fix": None}]}
+    except Exception as exc:
+        why = explain(exc)
+        result = {"ok": False, "status": "fail", "server": {}, "headline": why["title"],
+                  "checks": [{"id": "runtime", "label": "Runtime", "status": "fail", "detail": why["title"],
+                              "fix": why["fix"], "code": why["code"], "error": why["detail"]}]}
     return {**result, "elapsed_ms": int((time.time() - started) * 1000)}
+
+
+@app.delete("/api/sources/{source_id}/oracle")
+def oracle_remove(source_id: str, drop_landed: bool = False, db: Db = Depends(current_db)):
+    """Remove the source: its schedule and procedure, the secret / integration the platform created (never ones that
+    were chosen), and optionally the landed schema. Profiles stay in the profile store."""
+    from services.source.oracle.procedures import cleanup_sql
+
+    src = _oracle_source(db, source_id)
+    cfg = src["config"]
+    with _jobs_lock:
+        if _oracle_running.get(source_id):
+            raise HTTPException(409, "A load or profile is running for this source; stop it first.")
+    log = []
+    statements = cleanup_sql(cfg)
+    if drop_landed and cfg.get("database") and cfg.get("schema"):
+        statements.append(f"DROP SCHEMA IF EXISTS {cfg['database']}.{cfg['schema']}")
+    for sql in statements:
+        try:
+            db.execute(sql)
+            log.append({"sql": sql, "ok": True})
+        except Exception as exc:
+            log.append({"sql": sql, "ok": False, "error": str(exc)[:300]})
+    db.execute("UPDATE SOURCE.SOURCE_REGISTRY SET ACTIVE_FLAG = FALSE, UPDATED_AT = CURRENT_TIMESTAMP() "
+               "WHERE SOURCE_SYSTEM_ID = %s", (source_id,))
+    return {"removed": src["source_system_name"], "log": log}
+
+
+# ---- tables
 
 
 @app.post("/api/sources/{source_id}/oracle/catalog")
 def oracle_catalog(source_id: str, db: Db = Depends(current_db)):
-    """Tables and views of the schema owner with row estimates, last analysis and comments, plus what was profiled
-    or landed already."""
+    """Tables, views and materialized views of the schema owner with estimates, keys and suggested watermarks, plus
+    what was profiled or landed already."""
     result = _oracle_errors(lambda: _oracle_call(db, source_id, "catalog", {}))
     src = _oracle_source(db, source_id)
     cfg = src["config"]
@@ -4820,6 +5163,12 @@ def oracle_columns(source_id: str, body: OracleTables, db: Db = Depends(current_
     return _oracle_errors(lambda: _oracle_call(db, source_id, "columns", {"tables": body.tables}))
 
 
+@app.post("/api/sources/{source_id}/oracle/preview")
+def oracle_preview(source_id: str, body: OraclePreview, db: Db = Depends(current_db)):
+    """The first rows of a table, read live from Oracle with the same conversions as a load."""
+    return _oracle_errors(lambda: _oracle_call(db, source_id, "preview", {"tables": [body.table], "limit": body.limit}))
+
+
 @app.get("/api/sources/{source_id}/oracle/profile")
 def oracle_profile_doc(source_id: str, table: str, db: Db = Depends(current_db)):
     """The in-place Oracle profile document of one table (same shape as Snowflake profiles)."""
@@ -4837,32 +5186,53 @@ def oracle_profile_doc(source_id: str, table: str, db: Db = Depends(current_db))
     return {"profile": doc, "scorecard": insights.scorecard(insights.quality_dimensions(doc), None)}
 
 
+# ---- jobs: profile in Oracle, extract and land
+
+
 def _start_oracle_job(db: Db, source_id: str, kind: str, tables: list[str], payload: dict) -> dict:
-    job_id = str(uuid.uuid4())
-    job = {"job_id": job_id, "source_id": source_id, "kind": kind, "status": "RUNNING", "started_at": time.time(),
-           "finished_at": None, "tables": {t: {"phase": "QUEUED"} for t in tables}, "result": None, "error": None}
     with _jobs_lock:
+        running = _oracle_running.get(source_id)
+        if running and _ingest_jobs.get(running, {}).get("status") == "RUNNING":
+            raise HTTPException(409, "A profile or load is already running for this source; wait for it or stop it.")
+        job_id = str(uuid.uuid4())
+        job = {"job_id": job_id, "source_id": source_id, "kind": kind, "status": "RUNNING", "started_at": time.time(),
+               "finished_at": None, "tables": {t: {"phase": "QUEUED"} for t in tables}, "result": None, "error": None,
+               "options": {k: v for k, v in payload.items() if k != "tables"}, "cancel_requested": False}
         _ingest_jobs[job_id] = job
+        _oracle_running[source_id] = job_id
 
     def progress(event: dict) -> None:
         with _jobs_lock:
             entry = job["tables"].setdefault(event.get("table", "?"), {})
+            if event.get("phase") == "EXTRACTING" and "rows" in event:
+                elapsed = max(0.001, time.time() - entry.setdefault("extract_started", time.time()))
+                entry["rows_per_s"] = int(int(event["rows"]) / elapsed)
             entry.update({k: v for k, v in event.items() if k != "table"})
 
     def work() -> None:
         results = []
         try:
             for table in tables:  # one table per call: progress per table in either runtime
-                progress({"table": table, "phase": "EXTRACTING" if kind == "ingest" else "PROFILING"})
+                if job["cancel_requested"]:
+                    progress({"table": table, "phase": "CANCELLED"})
+                    results.append({"table": table, "status": "CANCELLED"})
+                    continue
+                progress({"table": table, "phase": "EXTRACTING" if kind == "ingest" else "PROFILING",
+                          "started": time.time()})
                 try:
                     out = _oracle_call(db, source_id, "extract" if kind == "ingest" else "profile",
-                                       {**payload, "tables": [table]}, progress)
+                                       {**payload, "tables": [table]}, progress, job)
                     row = (out.get("tables") or [{}])[0]
                 except HTTPException as exc:
                     row = {"table": table, "status": "FAILED", "error": exc.detail}
                 except Exception as exc:
-                    row = {"table": table, "status": "FAILED", "error": str(exc)[:600]}
-                if kind == "ingest" and row.get("status") == "LANDED" and payload.get("profile_after_landing"):
+                    from services.source.oracle.errors import explain
+
+                    cancelled = job["cancel_requested"] and "cancel" in str(exc).lower()
+                    row = {"table": table, "status": "CANCELLED" if cancelled else "FAILED", "error": str(exc)[:600],
+                           "explain": None if cancelled else explain(exc)}
+                if kind == "ingest" and row.get("status") == "LANDED" and payload.get("profile_after_landing") \
+                        and not job["cancel_requested"]:
                     progress({"table": table, "phase": "PROFILING"})
                     try:
                         landed = row["landed_as"].rsplit(".", 1)[-1]
@@ -4871,16 +5241,36 @@ def _start_oracle_job(db: Db, source_id: str, kind: str, tables: list[str], payl
                         row["profiled"] = True
                     except Exception as exc:
                         row["profile_error"] = str(exc)[:300]
-                progress({"table": table, "phase": "DONE" if row.get("status") in ("LANDED", "PROFILED") else "FAILED",
-                          **{k: row.get(k) for k in ("rows_loaded", "rows_extracted", "row_count", "error")}})
+                done = row.get("status") in ("LANDED", "PROFILED")
+                progress({"table": table, "phase": "DONE" if done else row.get("status", "FAILED"),
+                          "finished": time.time(),
+                          **{k: row.get(k) for k in ("rows_loaded", "rows_extracted", "row_count", "error", "explain",
+                                                     "verification", "drift", "merged", "skipped", "duration_s",
+                                                     "note", "profiled", "profile_error")}})
                 results.append(row)
-            job["status"] = "DONE" if all(r.get("status") in ("LANDED", "PROFILED") for r in results) else "PARTIAL"
+            statuses = {r.get("status") for r in results}
+            job["status"] = ("CANCELLED" if job["cancel_requested"] else
+                             "DONE" if statuses <= {"LANDED", "PROFILED"} else
+                             "FAILED" if not statuses & {"LANDED", "PROFILED"} else "PARTIAL")
         except Exception as exc:
             job["status"], job["error"] = "FAILED", str(exc)[:800]
         finally:
             job["result"], job["finished_at"] = results, time.time()
+            with _jobs_lock:
+                if _oracle_running.get(source_id) == job_id:
+                    _oracle_running.pop(source_id, None)
+            summary = {"job_id": job_id, "kind": kind, "status": job["status"],
+                       "at": time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime()),
+                       "tables": len(tables), "failed": [r["table"] for r in results
+                                                         if r.get("status") not in ("LANDED", "PROFILED")],
+                       "rows": sum(int(r.get("rows_loaded") or 0) for r in results),
+                       "duration_s": round(job["finished_at"] - job["started_at"], 1)}
+            try:
+                _save_oracle_config(db, source_id, lambda c: c.update(last_job=summary))
+            except Exception:
+                pass
 
-    threading.Thread(target=work, daemon=True).start()
+    threading.Thread(target=work, name=f"oracle-{kind}", daemon=True).start()
     return {"job_id": job_id, "status": "RUNNING", "tables": tables}
 
 
@@ -4893,10 +5283,11 @@ def oracle_profile(source_id: str, body: OracleTables, db: Db = Depends(current_
 
 @app.post("/api/sources/{source_id}/oracle/ingest")
 def oracle_ingest(source_id: str, body: OracleIngest, db: Db = Depends(current_db)):
-    """Extract the chosen tables to Parquet, land them in the source's schema and profile them for modeling."""
+    """Extract the chosen tables to Parquet, land them (replace, append or merge), verify and profile them."""
     _oracle_source(db, source_id)
     return _start_oracle_job(db, source_id, "ingest", body.tables,
                              {"mode": body.mode, "storage": body.storage, "watermark_columns": body.watermark_columns,
+                              "merge_keys": body.merge_keys, "lookback_minutes": body.lookback_minutes,
                               "profile_after_landing": body.profile_after_landing})
 
 
@@ -4907,6 +5298,66 @@ def ingest_job(job_id: str):
         if not job:
             raise HTTPException(404, "job not found (jobs are kept while the API runs)")
         return json.loads(json.dumps(job, default=str))
+
+
+@app.post("/api/ingest-jobs/{job_id}/cancel")
+def cancel_ingest_job(job_id: str):
+    """Stop after the current batch (API host) or cancel the running Snowflake call; later tables are skipped."""
+    with _jobs_lock:
+        job = _ingest_jobs.get(job_id)
+        if not job:
+            raise HTTPException(404, "job not found")
+        if job["status"] != "RUNNING":
+            return {"job_id": job_id, "status": job["status"]}
+        job["cancel_requested"] = True
+    return {"job_id": job_id, "status": "CANCELLING"}
+
+
+# ---- schedules (Snowflake runtime): a task calls the source's procedure
+
+
+@app.put("/api/sources/{source_id}/oracle/schedule")
+def oracle_schedule(source_id: str, body: OracleSchedule, db: Db = Depends(current_db)):
+    from services.source.oracle.procedures import schedule_sql
+
+    cfg = _oracle_source(db, source_id)["config"]
+    if cfg.get("runtime") == "api_host":
+        raise HTTPException(409, "Schedules run inside Snowflake; this source runs on the API host.")
+    if not cfg.get("oracle_procedure"):
+        raise HTTPException(409, "Finish the Snowflake setup first.")
+    warehouse = (body.warehouse or (db.query("SELECT CURRENT_WAREHOUSE() AS W")[0]["w"] or "")).upper()
+    payload = {"tables": body.tables, "mode": body.mode, "watermark_columns": body.watermark_columns,
+               "merge_keys": body.merge_keys, "lookback_minutes": body.lookback_minutes, "scheduled": True}
+    try:
+        statements = schedule_sql(cfg["database"], cfg["schema"], source_id, warehouse, body.cron, payload)
+    except AssertionError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    for sql in statements:
+        try:
+            db.execute(sql)
+        except Exception as exc:
+            raise HTTPException(403, f"Could not create the schedule (needs CREATE TASK on the schema and EXECUTE TASK "
+                                     f"on the account): {str(exc)[:300]}") from exc
+    schedule = {"cron": body.cron, "tables": body.tables, "mode": body.mode, "warehouse": warehouse,
+                "watermark_columns": body.watermark_columns, "merge_keys": body.merge_keys,
+                "lookback_minutes": body.lookback_minutes, "created_at": time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())}
+    _save_oracle_config(db, source_id, lambda c: c.update(schedule=schedule))
+    return {"schedule": schedule}
+
+
+@app.delete("/api/sources/{source_id}/oracle/schedule")
+def oracle_unschedule(source_id: str, db: Db = Depends(current_db)):
+    from services.source.oracle.procedures import unschedule_sql
+
+    cfg = _oracle_source(db, source_id)["config"]
+    for sql in unschedule_sql(cfg["database"], cfg["schema"]):
+        try:
+            db.execute(sql)
+        except Exception as exc:
+            raise _snowflake_error(exc) from exc
+    _save_oracle_config(db, source_id, lambda c: c.update(schedule=None))
+    return {"schedule": None}
+
 
 
 def _fetch_with_ids(db: Db):

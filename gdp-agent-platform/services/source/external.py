@@ -43,8 +43,9 @@ CONNECTORS: Dict[str, Dict[str, Any]] = {
     "sqlserver": {"label": "SQL Server", "kind": "DATABASE", "landable": False,
                   "fields": ["host", "port", "database", "schema", "secret"]},
     "oracle": {"label": "Oracle Database", "kind": "DATABASE", "landable": True, "extractor": "oracle",
-               "fields": ["host", "port", "service_name", "sid", "user", "schema_owner", "runtime", "secret",
-                          "password_env", "external_access_integration"]},
+               "fields": ["host", "port", "service_name", "sid", "user", "schema_owner", "protocol",
+                          "ssl_server_dn_match", "runtime", "secret", "password_env", "wallet_dir",
+                          "wallet_password_env", "external_access_integration"]},
     "mysql": {"label": "MySQL", "kind": "DATABASE", "landable": False,
               "fields": ["host", "port", "database", "schema", "secret"]},
     "salesforce": {"label": "Salesforce", "kind": "SAAS", "landable": False, "fields": ["instance_url", "secret"]},
@@ -111,8 +112,16 @@ def validate_config(connector: str, config: Dict[str, Any]) -> Dict[str, Any]:
             value = value.upper()
         elif key == "runtime":
             assert value in ("snowflake", "api_host"), "runtime must be snowflake or api_host"
-        elif key == "password_env":
-            assert re.match(r"^[A-Za-z_][A-Za-z0-9_]{0,127}$", value), "password_env must be an environment variable name"
+        elif key == "protocol":
+            value = value.lower()
+            assert value in ("tcp", "tcps"), "protocol must be tcp or tcps (TLS)"
+        elif key == "ssl_server_dn_match":
+            value = "false" if value.lower() in ("false", "no", "0", "off") else "true"
+        elif key == "wallet_dir":
+            assert re.match(r"^([A-Za-z]:[\\/]|/)[^'\"<>|*?]{0,400}$", value), \
+                "wallet_dir must be an absolute folder path on the API host"
+        elif key in ("password_env", "wallet_password_env"):
+            assert re.match(r"^[A-Za-z_][A-Za-z0-9_]{0,127}$", value), f"{key} must be an environment variable name"
         elif key == "external_access_integration":
             assert OBJECT_NAME.match(value), f"{key} must be a Snowflake object name"
         clean[key] = value
@@ -125,7 +134,12 @@ def validate_config(connector: str, config: Dict[str, Any]) -> Dict[str, Any]:
         assert clean.get("host"), "host is required"
         assert bool(clean.get("service_name")) != bool(clean.get("sid")), "give either a service name or a SID"
         assert clean.get("user"), "user is required"
-        clean.setdefault("port", "1521")
+        clean.setdefault("protocol", "tcp")
+        clean.setdefault("port", "1522" if clean["protocol"] == "tcps" else "1521")
+        if clean.get("wallet_dir") or clean.get("wallet_password_env"):
+            assert clean.get("runtime") == "api_host", ("a wallet folder can only be used when the extraction runs "
+                                                         "on this platform's server; inside Snowflake use TLS without "
+                                                         "a wallet")
         clean.setdefault("schema_owner", clean["user"])
         clean.setdefault("runtime", "snowflake")
         if clean["runtime"] == "api_host":
@@ -197,41 +211,104 @@ def land_sql(database: str, schema: str, file_format: str, table: str, files: Li
     ]
 
 
+def _infer_template(location: str, fmt: str) -> str:
+    return (f"USING TEMPLATE (SELECT ARRAY_AGG(OBJECT_CONSTRUCT('COLUMN_NAME', COLUMN_NAME, 'TYPE', TYPE, "
+            f"'NULLABLE', TRUE)) WITHIN GROUP (ORDER BY ORDER_ID) FROM TABLE(INFER_SCHEMA("
+            f"LOCATION => '{location}', FILE_FORMAT => '{fmt}')))")
+
+
+def _copy_sql(target: str, location: str, fmt: str) -> str:
+    return (f"COPY INTO {target} FROM {location} FILE_FORMAT = (FORMAT_NAME = '{fmt}') PATTERN = '.*[.]parquet' "
+            "MATCH_BY_COLUMN_NAME = CASE_INSENSITIVE "
+            "INCLUDE_METADATA = (_SOURCE_FILE = METADATA$FILENAME, _INGESTED_AT = METADATA$START_SCAN_TIME) "
+            "ON_ERROR = ABORT_STATEMENT FORCE = TRUE")
+
+
+def _ident(name: str) -> str:
+    assert re.match(r"^[A-Z_][A-Z0-9_$]*$", name or ""), f"unsafe column name {name!r}"
+    return f'"{name}"'
+
+
 def land_parquet_sql(database: str, schema: str, table: str, prefix: str, mode: str = "replace",
-                     exists: bool = False, external_volume: Optional[str] = None) -> List[str]:
+                     exists: bool = False, external_volume: Optional[str] = None,
+                     keys: Optional[List[str]] = None, columns: Optional[List[str]] = None) -> List[str]:
     """Land the Parquet parts under @<stage>/<prefix>/ into <table>.
 
     The table is created once from the files' inferred shape (managed, or Iceberg on an external volume) with the
-    two load-lineage columns; later loads keep it (and its history) and either truncate first (replace) or append.
-    COPY records the source file and scan time of every row; the extractor already wrote _SOURCE_SYSTEM,
-    _SOURCE_TABLE and _BATCH_ID into the files."""
-    assert mode in ("replace", "append"), "mode must be replace or append"
+    two load-lineage columns; later loads keep it (and its history) and either truncate first (replace), append, or
+    merge: COPY into a temporary staging table, then MERGE on the key columns (latest row per key wins), so reruns
+    and late updates never duplicate rows. COPY records the source file and scan time of every row; the extractor
+    already wrote _SOURCE_SYSTEM, _SOURCE_TABLE and _BATCH_ID into the files."""
+    assert mode in ("replace", "append", "merge"), "mode must be replace, append or merge"
     assert re.match(r"^[A-Za-z0-9_/\-]{1,512}$", prefix), "unsafe stage prefix"
     stage = stage_name(database, schema)
     fmt = format_name(database, schema, "PARQUET")
     target = fqn(database, schema, table)
     location = f"@{stage}/{prefix.strip('/')}/"
+    lineage = "ADD COLUMN IF NOT EXISTS _SOURCE_FILE VARCHAR, _INGESTED_AT TIMESTAMP_LTZ"
     statements: List[str] = []
     if not exists:
-        template = (f"USING TEMPLATE (SELECT ARRAY_AGG(OBJECT_CONSTRUCT('COLUMN_NAME', COLUMN_NAME, 'TYPE', TYPE, "
-                    f"'NULLABLE', TRUE)) WITHIN GROUP (ORDER BY ORDER_ID) FROM TABLE(INFER_SCHEMA("
-                    f"LOCATION => '{location}', FILE_FORMAT => '{fmt}')))")
         if external_volume:
             assert OBJECT_NAME.match(external_volume), "external volume must be a Snowflake object name"
             statements.append(f"CREATE ICEBERG TABLE IF NOT EXISTS {target} CATALOG = 'SNOWFLAKE' "
-                              f"EXTERNAL_VOLUME = '{external_volume}' BASE_LOCATION = '{schema}/{table}' {template}")
+                              f"EXTERNAL_VOLUME = '{external_volume}' BASE_LOCATION = '{schema}/{table}' "
+                              f"{_infer_template(location, fmt)}")
         else:
-            statements.append(f"CREATE TABLE IF NOT EXISTS {target} {template}")
-        statements.append(f"ALTER TABLE {target} ADD COLUMN IF NOT EXISTS _SOURCE_FILE VARCHAR, "
-                          "_INGESTED_AT TIMESTAMP_LTZ")
-    elif mode == "replace":
-        statements.append(f"TRUNCATE TABLE {target}")
-    statements.append(
-        f"COPY INTO {target} FROM {location} FILE_FORMAT = (FORMAT_NAME = '{fmt}') PATTERN = '.*[.]parquet' "
-        "MATCH_BY_COLUMN_NAME = CASE_INSENSITIVE "
-        "INCLUDE_METADATA = (_SOURCE_FILE = METADATA$FILENAME, _INGESTED_AT = METADATA$START_SCAN_TIME) "
-        "ON_ERROR = ABORT_STATEMENT FORCE = TRUE")
-    return statements
+            statements.append(f"CREATE TABLE IF NOT EXISTS {target} {_infer_template(location, fmt)}")
+        statements.append(f"ALTER TABLE {target} {lineage}")
+        statements.append(_copy_sql(target, location, fmt))
+        return statements
+    if mode == "replace":
+        return [f"TRUNCATE TABLE {target}", _copy_sql(target, location, fmt)]
+    if mode == "append":
+        return [_copy_sql(target, location, fmt)]
+    assert keys, "merge needs key columns (the table's primary key, or columns you choose)"
+    assert columns, "merge needs the landed column list"
+    all_cols = list(dict.fromkeys([*columns, "_SOURCE_SYSTEM", "_SOURCE_TABLE", "_BATCH_ID", "_SOURCE_FILE",
+                                   "_INGESTED_AT"]))
+    missing = [k for k in keys if k not in all_cols]
+    assert not missing, f"key columns not in the table: {missing}"
+    staging = fqn(database, schema, f"{table}__MERGE")
+    on = " AND ".join(f"T.{_ident(k)} IS NOT DISTINCT FROM S.{_ident(k)}" for k in keys)
+    updates = ", ".join(f"T.{_ident(c)} = S.{_ident(c)}" for c in all_cols if c not in keys)
+    insert_cols = ", ".join(_ident(c) for c in all_cols)
+    insert_vals = ", ".join(f"S.{_ident(c)}" for c in all_cols)
+    partition = ", ".join(_ident(k) for k in keys)
+    return [
+        f"CREATE OR REPLACE TEMPORARY TABLE {staging} {_infer_template(location, fmt)}",
+        f"ALTER TABLE {staging} {lineage}",
+        _copy_sql(staging, location, fmt),
+        f"MERGE INTO {target} T USING (SELECT * FROM {staging} QUALIFY ROW_NUMBER() OVER "
+        f"(PARTITION BY {partition} ORDER BY _SOURCE_FILE DESC) = 1) S ON {on} "
+        f"WHEN MATCHED THEN UPDATE SET {updates} "
+        f"WHEN NOT MATCHED THEN INSERT ({insert_cols}) VALUES ({insert_vals})",
+        f"DROP TABLE IF EXISTS {staging}",
+    ]
+
+
+def schema_drift(expected: Dict[str, str], existing: Dict[str, str]) -> Dict[str, Any]:
+    """Compare the columns a load brings (name -> Snowflake type) with the landed table's columns.
+    added: new in the source (added to the table before loading); missing: gone from the source (stay, NULL for new
+    rows); retyped: the source type family changed (kept as is, reported)."""
+    family = (lambda t: re.split(r"[(\s]", str(t or "").upper())[0]
+              .replace("FIXED", "NUMBER").replace("TEXT", "VARCHAR").replace("REAL", "FLOAT"))
+    lineage = {"_SOURCE_SYSTEM", "_SOURCE_TABLE", "_BATCH_ID", "_SOURCE_FILE", "_INGESTED_AT"}
+    have = {k.upper(): v for k, v in existing.items()}
+    added = {c: t for c, t in expected.items() if c.upper() not in have}
+    missing = [c for c in have if c not in {k.upper() for k in expected} and c not in lineage]
+    retyped = {c: {"was": have[c.upper()], "now": t} for c, t in expected.items()
+               if c.upper() in have and family(have[c.upper()]) != family(t)}
+    return {"added": added, "missing": missing, "retyped": retyped,
+            "changed": bool(added or missing or retyped)}
+
+
+def drift_sql(database: str, schema: str, table: str, added: Dict[str, str]) -> List[str]:
+    target = fqn(database, schema, table)
+    out = []
+    for column, sf_type in added.items():
+        assert re.match(r"^[A-Z0-9_(), ]+$", sf_type), f"unsafe type {sf_type!r}"
+        out.append(f"ALTER TABLE {target} ADD COLUMN IF NOT EXISTS {_ident(column)} {sf_type}")
+    return out
 
 
 def group_files(files: List[str], table: Optional[str] = None) -> Dict[str, List[str]]:

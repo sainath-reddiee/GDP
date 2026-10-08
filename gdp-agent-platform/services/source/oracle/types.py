@@ -9,14 +9,17 @@
   TIMESTAMP WITH (LOCAL) TZ timestamp[us,UTC] TIMESTAMP_TZ
   CHAR/VARCHAR2/CLOB/...   string             VARCHAR
   RAW / BLOB               binary             BINARY
-  INTERVAL, ROWID, XMLTYPE string             VARCHAR
+  INTERVAL, ROWID, UROWID  string             VARCHAR         read through TO_CHAR / CAST
+  XMLTYPE, JSON, VECTOR    string             VARCHAR         serialised in SQL (XMLSERIALIZE, JSON_SERIALIZE)
+  SDO_GEOMETRY             string             VARCHAR         as WKT text (SDO_UTIL.TO_WKTGEOMETRY)
+  BFILE, ANYDATA, object / user-defined types are skipped with a reason
 """
 
 from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 FREE_NUMBER_SCALE = 10
 LOB_TYPES = {"CLOB", "NCLOB", "BLOB", "LONG", "LONG RAW", "BFILE"}
@@ -73,7 +76,51 @@ def map_type(data_type: str, precision: Optional[int] = None, scale: Optional[in
         return ColumnType(name, "bool", "BOOLEAN", "BOOLEAN")
     if t in ("CHAR", "NCHAR", "VARCHAR2", "NVARCHAR2", "VARCHAR", "CLOB", "NCLOB", "LONG"):
         return ColumnType(name, "string", "VARCHAR", "TEXT", lob=t in LOB_TYPES)
-    return ColumnType(name, "string", "VARCHAR", "TEXT")  # INTERVAL, ROWID, UROWID, XMLTYPE, JSON, user types
+    if t in ("XMLTYPE", "SDO_GEOMETRY", "JSON", "VECTOR"):
+        return ColumnType(name, "string", "VARCHAR", "TEXT", lob=True)  # read as CLOB text (XML, WKT, JSON)
+    return ColumnType(name, "string", "VARCHAR", "TEXT")  # INTERVAL, ROWID, UROWID
+
+
+# Types read through a SQL conversion (thin mode returns objects or nothing useful for them) or not at all.
+SYSTEM_TYPE_OWNERS = {"SYS", "PUBLIC", "MDSYS", "XDB", "ORDSYS", "CTXSYS"}
+
+
+def source_expr(column: str, data_type: str, data_type_owner: Optional[str] = None) -> Tuple[Optional[str], Optional[str]]:
+    """(SELECT expression for the column, reason it is skipped). The expression keeps the column's own name as its
+    alias; None means the column cannot be read and is left out of extracts and profiles (with the reason)."""
+    from services.source.oracle.profile import q
+
+    t = re.sub(r"\(\d+\)", "", str(data_type or "").upper()).strip()
+    col = q(column)
+    if t == "XMLTYPE":
+        return f"XMLSERIALIZE(CONTENT {col} AS CLOB) AS {col}", None
+    if t == "SDO_GEOMETRY":
+        return f"SDO_UTIL.TO_WKTGEOMETRY({col}) AS {col}", None
+    if t == "JSON":
+        return f"JSON_SERIALIZE({col} RETURNING CLOB) AS {col}", None
+    if t == "VECTOR":
+        return f"FROM_VECTOR({col} RETURNING CLOB) AS {col}", None
+    if t.startswith("INTERVAL"):
+        return f"TO_CHAR({col}) AS {col}", None
+    if t in ("ROWID", "UROWID"):
+        return f"CAST({col} AS VARCHAR2(4000)) AS {col}", None
+    if t.startswith("TIMESTAMP") and "ZONE" in t:  # with (local) time zone -> the UTC instant
+        return f"SYS_EXTRACT_UTC(CAST({col} AS TIMESTAMP WITH TIME ZONE)) AS {col}", None
+    if t == "BFILE":
+        return None, "BFILE points to a file on the database server; its content is not readable remotely"
+    if t in ("ANYDATA", "ANYTYPE", "ANYDATASET"):
+        return None, f"{t} holds values of any type; not extracted"
+    if data_type_owner and str(data_type_owner).upper() not in SYSTEM_TYPE_OWNERS:
+        return None, f"user-defined type {data_type_owner}.{t}; not extracted"
+    if t.startswith("REF ") or t in ("REF",):
+        return None, "object reference; not extracted"
+    return col, None
+
+
+def is_aggregatable(data_type: str) -> bool:
+    """Whether MIN/MAX/COUNT(DISTINCT) work on the column (not LOBs, LONG, XML, spatial, JSON, vectors)."""
+    t = re.sub(r"\(\d+\)", "", str(data_type or "").upper()).strip()
+    return t not in LOB_TYPES | {"XMLTYPE", "SDO_GEOMETRY", "JSON", "VECTOR"}
 
 
 def arrow_type(spec: ColumnType):

@@ -41,8 +41,8 @@ def test_type_names_for_display():
 
 
 def test_dsn_and_validation():
-    assert OracleConfig.from_dict({"host": "db.acme.com", "service_name": "ORCLPDB", "user": "hr"}).dsn() == \
-        "db.acme.com:1521/ORCLPDB"
+    dsn = OracleConfig.from_dict({"host": "db.acme.com", "service_name": "ORCLPDB", "user": "hr"}).dsn()
+    assert "(PROTOCOL=TCP)(HOST=db.acme.com)(PORT=1521)" in dsn and "(SERVICE_NAME=ORCLPDB)" in dsn
     assert "(SID=ORCL)" in OracleConfig.from_dict({"host": "10.0.0.5", "port": 1522, "sid": "ORCL", "user": "hr"}).dsn()
     with pytest.raises(AssertionError):
         OracleConfig.from_dict({"host": "x", "service_name": "A", "sid": "B", "user": "hr"})
@@ -121,8 +121,8 @@ def test_oracle_connector_config():
 
 def test_snowflake_runtime_ddl():
     sql = setup_sql("DB", "EXT_HR", "HR_ORACLE_ACCESS", "db.acme.com", 1521, "HR")
-    assert "VALUE_LIST = ('db.acme.com:1521')" in sql[0] and "TYPE = PASSWORD" in sql[1]
-    assert "'<oracle password>'" in sql[1]  # bound only when the setup runs
+    assert "TYPE = PASSWORD" in sql[0] and "VALUE_LIST = ('db.acme.com:1521')" in sql[1]
+    assert "'<oracle password>'" in sql[0]  # bound only when the setup runs
     proc = procedure_sql("DB", "EXT_HR", "@DB.CORE.CODE_STAGE/services_x.zip", "HR_ORACLE_ACCESS")
     assert "EXECUTE AS OWNER" in proc and "'oracledb'" in proc and "SECRETS = ('oracle_login' = DB.EXT_HR.ORACLE_LOGIN)" in proc
 

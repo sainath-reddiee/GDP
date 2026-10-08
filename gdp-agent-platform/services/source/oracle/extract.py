@@ -17,7 +17,7 @@ import tempfile
 from typing import Any, Callable, Dict, List, Optional, Sequence
 
 from services.source.oracle.connect import cursor
-from services.source.oracle.profile import q, table_ref
+from services.source.oracle.profile import q, table_ref, value_sql
 from services.source.oracle.types import FREE_NUMBER_SCALE, ColumnType, map_type
 
 TARGET_FILE_BYTES = 128 * 1024 * 1024
@@ -26,6 +26,10 @@ MAX_TEXT_BYTES = 16 * 1024 * 1024      # Snowflake VARCHAR limit
 MAX_BINARY_BYTES = 8 * 1024 * 1024     # Snowflake BINARY limit
 FREE_NUMBER_LIMIT = decimal.Decimal(10) ** (38 - FREE_NUMBER_SCALE)
 LINEAGE = ("_SOURCE_SYSTEM", "_SOURCE_TABLE", "_BATCH_ID")
+
+
+class Cancelled(Exception):
+    """Raised between batches when the user stops a load."""
 
 
 def snowflake_names(names: Sequence[str]) -> Dict[str, str]:
@@ -105,10 +109,12 @@ def _convert(values: List[Any], spec: ColumnType, notes: Dict[str, int]) -> List
 
 def extract_table(conn, owner: str, table: str, columns: Sequence[Dict[str, Any]], *, source_system: str,
                   batch_id: str, put: Callable[[str, str], None], watermark_column: Optional[str] = None,
-                  watermark_value: Optional[Any] = None,
+                  watermark_value: Optional[Any] = None, lookback_minutes: int = 0,
                   progress: Optional[Callable[[Dict[str, Any]], None]] = None,
+                  cancelled: Optional[Callable[[], bool]] = None,
                   target_file_bytes: int = TARGET_FILE_BYTES) -> Dict[str, Any]:
-    """Stream one table to Parquet parts; returns rows, files, column name map, notes and the new watermark."""
+    """Stream one table to Parquet parts; returns rows, files, column name map, notes and the new watermark.
+    Columns with a skip_reason are left out (reported as `skipped`)."""
     import pyarrow as pa
     import pyarrow.parquet as pq
 
@@ -116,6 +122,9 @@ def extract_table(conn, owner: str, table: str, columns: Sequence[Dict[str, Any]
 
     import oracledb
 
+    skipped = [{"column": c["column_name"], "reason": c["skip_reason"]} for c in columns if c.get("skip_reason")]
+    columns = [c for c in columns if not c.get("skip_reason")]
+    assert columns, f"{table} has no columns that can be extracted"
     oversized = oversized_free_numbers(conn, owner, table, columns)
     specs = column_specs(columns, oversized)
     names = [c["column_name"] for c in columns]
@@ -127,14 +136,22 @@ def extract_table(conn, owner: str, table: str, columns: Sequence[Dict[str, Any]
     where, binds = "", {}
     wm_family = None
     if watermark_column:
-        assert watermark_column in names, f"watermark column {watermark_column} is not a column of {table}"
+        assert watermark_column in names, f"watermark column {watermark_column} is not a readable column of {table}"
         wm_family = specs[watermark_column].family
         assert wm_family in ("TIMESTAMP", "NUMBER"), "the watermark column must be a date/timestamp or a number"
         if watermark_value is not None:
-            cast = ("TO_TIMESTAMP(:wm, 'YYYY-MM-DD HH24:MI:SS.FF6')" if wm_family == "TIMESTAMP"
-                    else "TO_NUMBER(:wm)")
-            where, binds = f" WHERE {q(watermark_column)} > {cast}", {"wm": str(watermark_value)}
-    sql = f"SELECT {', '.join(q(n) for n in names)} FROM {table_ref(owner, table)}{where}"
+            wm_col = next(c for c in columns if c["column_name"] == watermark_column)
+            if wm_family == "TIMESTAMP":
+                bound = "TO_TIMESTAMP(:wm, 'YYYY-MM-DD HH24:MI:SS.FF6')"
+                if lookback_minutes:  # re-read a window: late commits with older timestamps are caught (merge dedupes)
+                    bound += f" - NUMTODSINTERVAL({int(lookback_minutes)}, 'MINUTE')"
+                if str(wm_col.get("data_type") or "").upper() == "DATE":
+                    bound = f"CAST({bound} AS DATE)"  # compare DATE to DATE so an index on the column is used
+            else:
+                bound = "TO_NUMBER(:wm)"
+            where, binds = f" WHERE {value_sql(wm_col)} > {bound}", {"wm": str(watermark_value)}
+    select = ", ".join(c.get("expr") or q(c["column_name"]) for c in columns)
+    sql = f"SELECT {select} FROM {table_ref(owner, table)}{where}"
     cur = cursor(conn, LOB_ARRAY_SIZE if has_lob else 10_000)
 
     # Exact NUMBERs (Decimal, never float) and LOBs read inline as str/bytes, for this extract only.
@@ -168,6 +185,8 @@ def extract_table(conn, owner: str, table: str, columns: Sequence[Dict[str, Any]
 
     try:
         while True:
+            if cancelled and cancelled():
+                raise Cancelled(f"load of {table} stopped after {rows_total} rows")
             batch = cur.fetchmany()
             if not batch:
                 break
@@ -195,6 +214,7 @@ def extract_table(conn, owner: str, table: str, columns: Sequence[Dict[str, Any]
         shutil.rmtree(tmp, ignore_errors=True)
     return {"rows": rows_total, "files": files, "columns": {n: safe[n] for n in names},
             "types": {safe[n]: specs[n].snowflake for n in names}, "text_numbers": oversized, "notes": notes,
+            "skipped": skipped,
             "watermark": watermark_text(max_wm) if max_wm is not None else watermark_value}
 
 
