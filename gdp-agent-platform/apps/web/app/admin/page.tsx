@@ -1,27 +1,24 @@
 import Link from "next/link";
 import { Suspense } from "react";
-import { Bot, Coins, GitBranch, LayoutDashboard, Rocket, Ruler, SlidersHorizontal } from "lucide-react";
+import { Bot, LayoutDashboard, Rocket, Ruler, SlidersHorizontal } from "lucide-react";
 import { api, whoami } from "@/lib/api";
 import { PageHeader } from "@/components/page-header";
 import { cn } from "@/lib/utils";
 import type { ModelsState, PlatformState, RulesState } from "./actions";
 import { ToastProvider } from "./admin-ui";
-import { CostSection } from "./cost-section";
 import { DeployButton } from "./deploy-button";
 import { ModelsSection } from "./models-section";
+import { RateCardEditor } from "./rate-card";
 import { RulesSection } from "./rules-section";
 import { Panel, SectionSkeleton, Stat } from "./section";
 import { StandardsSection } from "./standards-section";
-import { WorkflowLanes, type GraphState, type GraphTransition } from "./workflow-lanes";
 
 const SECTIONS = [
   { id: "overview", label: "Overview", icon: LayoutDashboard, hint: "Session and platform at a glance" },
-  { id: "models", label: "AI models", icon: Bot, hint: "Default and per-stage models" },
-  { id: "cost", label: "Cost and usage", icon: Coins, hint: "Credits, rate card, billing" },
+  { id: "models", label: "AI models", icon: Bot, hint: "Default and per-stage models, and their credit rates" },
   { id: "rules", label: "Rules", icon: SlidersHorizontal, hint: "Thresholds and hints" },
   { id: "standards", label: "Modeling standards", icon: Ruler, hint: "Naming and conventions" },
   { id: "deploy", label: "Deploy", icon: Rocket, hint: "Push code to Snowflake" },
-  { id: "workflow", label: "Workflow", icon: GitBranch, hint: "States and transitions" },
 ] as const;
 type SectionId = (typeof SECTIONS)[number]["id"];
 
@@ -34,7 +31,7 @@ export default function Admin({ searchParams }: { searchParams?: { section?: str
     <ToastProvider>
       <div className="space-y-5">
         <PageHeader eyebrow="Platform" title="Admin"
-                    description="AI models and cost, rules and standards, deployment and the workflow every run follows. Changes are versioned and survive deploys." />
+                    description="AI models and cost, rules, modeling standards and deployment. Changes are versioned and survive deploys." />
         <div className="grid gap-6 lg:grid-cols-[220px_1fr]">
           <nav aria-label="Admin sections" className="lg:sticky lg:top-4 lg:self-start">
             <ul className="flex gap-1 overflow-x-auto lg:flex-col">
@@ -68,17 +65,31 @@ export default function Admin({ searchParams }: { searchParams?: { section?: str
 async function Section({ id }: { id: SectionId }) {
   if (id === "overview") return <Overview />;
   if (id === "models") {
-    const models = await api<ModelsState>("/api/config/models").then((data) => ({ data, error: undefined }))
-      .catch((e: Error) => ({ data: null, error: e.message }));
-    return <ModelsSection initial={models.data} error={models.error} />;
-  }
-  if (id === "cost") {
-    const [platform, models] = await Promise.all([
+    const [models, platform, costs] = await Promise.all([
+      api<ModelsState>("/api/config/models").then((data) => ({ data, error: undefined }))
+        .catch((e: Error) => ({ data: null, error: e.message })),
       api<PlatformState>("/api/config/platform").catch(() => null),
-      api<ModelsState>("/api/config/models").catch(() => null),
+      api<{ calibrated_rates?: Record<string, number> }>("/api/costs?group_by=model&limit=50").catch(() => null),
     ]);
-    return <CostSection platform={platform}
-                        modelNames={(models?.models ?? []).filter((m) => m.available !== false).map((m) => m.name)} />;
+    const settings = platform?.settings ?? {};
+    const legacy = (settings.CREDITS_PER_MILLION_TOKENS?.value as Record<string, number>) ?? {};
+    return (
+      <div className="space-y-5">
+        <ModelsSection initial={models.data} error={models.error} />
+        {platform && (
+          <RateCardEditor
+            rateCard={(settings.RATE_CARD?.value as Record<string, { input?: number; output?: number }>) ?? {}}
+            fallback={Number(legacy.default ?? 0)} legacy={legacy}
+            price={(settings.CREDIT_PRICE_USD?.value as number | null) ?? null}
+            billed={costs?.calibrated_rates ?? {}}
+            modelNames={(models.data?.models ?? []).filter((m) => m.available !== false).map((m) => m.name)} />
+        )}
+        <p className="text-xs text-muted-foreground">
+          Spend by stage, model, run and day, and reconciling with Snowflake billing, are on{" "}
+          <Link href="/audit?tab=cost" className="text-primary hover:underline">Audit &gt; Cost</Link>.
+        </p>
+      </div>
+    );
   }
   if (id === "rules") {
     const rules = await api<RulesState>("/api/config/rules").catch(() => null);
@@ -99,25 +110,16 @@ async function Section({ id }: { id: SectionId }) {
       </Panel>
     );
   }
-  const graph = await api<{ states: GraphState[]; transitions: GraphTransition[] }>("/api/admin/workflow")
-    .catch(() => ({ states: [] as GraphState[], transitions: [] as GraphTransition[] }));
-  const enabled = graph.states.filter((s) => s.enabled).length;
-  return (
-    <Panel title={`Workflow graph ${graph.states[0]?.graph_version ?? ""}`}
-           description={`${graph.states.length} states (${enabled} enabled) and ${graph.transitions.length} transitions. Lanes follow the run order; a person icon marks a step that needs a human decision. Faded states belong to later phases and cannot be reached.`}>
-      {graph.states.length ? <WorkflowLanes states={graph.states} transitions={graph.transitions} /> : unavailable}
-    </Panel>
-  );
+  return unavailable;
 }
 
 async function Overview() {
   type Summary = { total?: number; cost_30d?: { calls: number; credits?: number; estimated_cost: number; actual_credits?: number } | null };
-  const [me, platform, rules, metrics, graph] = await Promise.all([
+  const [me, platform, rules, metrics] = await Promise.all([
     whoami(),
     api<PlatformState>("/api/config/platform").catch(() => null),
     api<RulesState>("/api/config/rules").catch(() => null),
     api<Summary>("/api/metrics/summary").catch(() => null),
-    api<{ states: GraphState[] }>("/api/admin/workflow").catch(() => null),
   ]);
   const s = platform?.settings ?? {};
   const byStage = Object.keys((s.LLM_MODEL_BY_STAGE?.value as Record<string, string>) ?? {}).length;
@@ -140,14 +142,14 @@ async function Overview() {
         <Stat label="Default AI model" value={<span className="font-mono text-base">{String(s.LLM_MODEL?.value ?? "not set")}</span>}
               hint={<>{byStage ? `${byStage} stage override(s)` : "No stage overrides"} · {go("models", "Manage")}</>} />
         <Stat label="AI credits, 30 days" value={cost ? (cost.credits ?? cost.estimated_cost).toFixed(2) : "-"}
-              hint={<>{cost?.actual_credits ? `${cost.actual_credits.toFixed(2)} billed` : "Estimated"} · {go("cost", "Details")}</>} />
+              hint={<>{cost?.actual_credits ? `${cost.actual_credits.toFixed(2)} billed` : "Estimated"} · <Link href="/audit?tab=cost" className="text-xs text-primary hover:underline">Details</Link></>} />
         <Stat label="Rules changed" value={rules ? rules.overridden.length : "-"} hint={<>From the platform defaults · {go("rules", "Review")}</>} />
-        <Stat label="Workflow" value={graph ? `${graph.states.filter((x) => x.enabled).length} states` : "-"}
-              hint={<>{graph?.states[0]?.graph_version ?? ""} · {go("workflow", "View")}</>} />
+        <Stat label="Standards overrides" value={["GDP", "GENERIC"].reduce((n, k) => n + Object.keys((s[`MODELING_STANDARD.${k}`]?.value as Record<string, unknown>) ?? {}).length, 0)}
+              hint={<>GDP and generic presets · {go("standards", "Review")}</>} />
       </div>
       {rateCount === 0 && (
         <Panel title="AI cost uses learned rates" description="No rate card is set, so estimates use the credits per million tokens this account was actually billed for each model, learned from Snowflake's Cortex usage on every reconcile. Set a rate card to use contracted rates instead."
-               actions={<Link href="/admin?section=cost" className="rounded-md border px-3 py-1.5 text-xs font-medium hover:bg-muted">Open rate card</Link>} />
+               actions={<Link href="/admin?section=models" className="rounded-md border px-3 py-1.5 text-xs font-medium hover:bg-muted">Open rate card</Link>} />
       )}
     </div>
   );

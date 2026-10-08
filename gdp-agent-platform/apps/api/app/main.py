@@ -950,6 +950,7 @@ def source_connections(db: Db = Depends(current_db)):
                S.CONFIGURATION_JSON:last_landed_at::VARCHAR AS LAST_LANDED_AT,
                S.CONFIGURATION_JSON:database::VARCHAR AS DATABASE_NAME,
                S.CONFIGURATION_JSON:schema::VARCHAR AS SCHEMA_NAME,
+               S.CONFIGURATION_JSON:url::VARCHAR AS LOCATION,
                IFF(S.CONNECTION_TYPE = 'oracle', OBJECT_CONSTRUCT(
                    'host', S.CONFIGURATION_JSON:host, 'port', S.CONFIGURATION_JSON:port,
                    'service', COALESCE(S.CONFIGURATION_JSON:service_name, S.CONFIGURATION_JSON:sid),
