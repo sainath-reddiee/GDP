@@ -104,6 +104,7 @@ export type SourceConnection = {
   owner: string | null; security_classification: string | null;
   database_name: string; schema_name: string; created_at: string; runs: number; last_run_at: string | null;
   connection_type?: string | null; landed_tables?: number | null; last_landed_at?: string | null;
+  location?: string | null;
   oracle?: {
     host: string; port: string; service: string; schema_owner: string; runtime: "snowflake" | "api_host";
     protocol?: string | null; ready: boolean; schedule?: string | null;
