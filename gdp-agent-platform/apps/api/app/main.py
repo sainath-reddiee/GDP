@@ -4848,11 +4848,25 @@ def _oracle_errors(fn):
 # ---- discovery: what already exists in Snowflake for the access step
 
 
+_DISCOVERY_CACHE: dict[str, tuple[float, Any]] = {}
+
+
+def _discover(db: Db, key: str, sql: str, refresh: bool = False) -> list:
+    """SHOW ... IN ACCOUNT can take seconds on a big account: cached for five minutes per role."""
+    cache_key = f"{db.role}:{key}"
+    hit = _DISCOVERY_CACHE.get(cache_key)
+    if hit and not refresh and time.time() - hit[0] < 300:
+        return hit[1]
+    found = db.query(sql)
+    _DISCOVERY_CACHE[cache_key] = (time.time(), found)
+    return found
+
+
 @app.get("/api/oracle/secrets")
-def oracle_secrets(db: Db = Depends(current_db)):
+def oracle_secrets(refresh: bool = False, db: Db = Depends(current_db)):
     """PASSWORD secrets this role can see (names only; secret values are never readable)."""
     try:
-        found = db.query("SHOW SECRETS IN ACCOUNT")
+        found = _discover(db, "secrets", "SHOW SECRETS IN ACCOUNT", refresh)
     except Exception as exc:
         return {"secrets": [], "error": f"This role cannot list secrets: {str(exc)[:200]}"}
     out = []
@@ -4881,9 +4895,9 @@ def oracle_secret_describe(name: str, db: Db = Depends(current_db)):
 
 
 @app.get("/api/oracle/integrations")
-def oracle_integrations(db: Db = Depends(current_db)):
+def oracle_integrations(refresh: bool = False, db: Db = Depends(current_db)):
     try:
-        found = db.query("SHOW EXTERNAL ACCESS INTEGRATIONS")
+        found = _discover(db, "integrations", "SHOW EXTERNAL ACCESS INTEGRATIONS", refresh)
     except Exception as exc:
         return {"integrations": [], "error": f"This role cannot list integrations: {str(exc)[:200]}"}
     return {"integrations": sorted([{"name": r.get("name"), "enabled": str(r.get("enabled")).lower() == "true",
@@ -5050,6 +5064,8 @@ def oracle_setup(source_id: str, body: OracleSetup, db: Db = Depends(current_db)
                  created_objects=sorted(set(c.get("created_objects") or []) | set(created)))
 
     _save_oracle_config(db, source_id, change)
+    if created:
+        _DISCOVERY_CACHE.clear()
     return {"ready": True, "log": log, "secret": secret, "integration": eai}
 
 

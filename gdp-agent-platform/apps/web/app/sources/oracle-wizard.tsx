@@ -110,17 +110,17 @@ export function OracleWizard({ onDone, onCancel }: {
   const target = `${fields.host || "host"}:${fields.port || "1521"}`;
   const defaultEai = `${name || "SOURCE"}_ORACLE_ACCESS`;
 
-  useEffect(() => {
-    if (runtime !== "snowflake") return;
-    if (secretMode === "existing" && secrets === null) {
+  useEffect(() => {  // load both lists as soon as the access step opens, so choosing is instant
+    if (step !== 2 || runtime !== "snowflake") return;
+    if (secrets === null) {
       oracleSecrets().then((r) => {
         if (r.ok) { setSecrets(r.data.secrets); setSecretsError(r.data.error ?? ""); } else setSecretsError(r.error);
       });
     }
-    if (integrationMode === "existing" && integrations === null) {
+    if (integrations === null) {
       oracleIntegrations().then((r) => r.ok && setIntegrations(r.data.integrations));
     }
-  }, [runtime, secretMode, integrationMode, secrets, integrations]);
+  }, [step, runtime, secrets, integrations]);
 
   useEffect(() => {
     setSecretUser(null);
