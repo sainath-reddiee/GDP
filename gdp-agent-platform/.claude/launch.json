@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "worktree-api",
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": ["/c", "cd /d C:\\Users\\satyasainath.p\\gdp-dev\\gdp-agent-platform\\apps\\api && python -m uvicorn app.main:app --host 127.0.0.1 --port 8011"],
+      "port": 8011
+    },
+    {
+      "name": "worktree-web",
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": ["/c", "cd /d C:\\Users\\satyasainath.p\\gdp-dev\\gdp-agent-platform\\apps\\web && npx next dev -p 3011"],
+      "port": 3011
+    }
+  ]
+}
