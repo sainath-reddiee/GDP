@@ -322,6 +322,17 @@ export type Relationship = {
   left: string; right: string; keys: string[]; cardinality: string; confidence: number; evidence?: string[]; source?: string;
 };
 
+export type ModelMatch = {
+  kind: "existing" | "proposed"; target_table: string; fqn: string; domain_name?: string | null;
+  score: number; overlap_columns: string[]; reason: string;
+  coverage_target?: number; coverage_source?: number; matched?: [string, string, string][];
+  missing_target_columns?: string[]; unmatched_source_columns?: string[]; evidence?: string[];
+};
+export type ModelRecommendation = {
+  action: "MAP_EXISTING" | "EXTEND_EXISTING" | "REVIEW" | "NEW"; fqn: string | null; target_table: string;
+  confidence: number; headline: string; why: string[];
+};
+
 export type AnalyzeResult = {
   tables: {
     table: string; staged: boolean; row_count: number | null; column_count: number | null;
@@ -329,13 +340,15 @@ export type AnalyzeResult = {
   }[];
   relationships: Relationship[];
   graph: import("@/app/onboarding/intent-types").ModelGraph;
-  domain?: { detected: DomainCandidate | null; candidates: DomainCandidate[] };
+  domain?: { detected: (DomainCandidate & { inherited_from_schema?: boolean }) | null; candidates: DomainCandidate[];
+             schema?: DomainCandidate | null };
   suggested_standard?: "GDP" | "GENERIC";
   bands?: UiBands;
   models: {
     related: boolean;
-    suggestions: { kind: "existing" | "proposed"; target_table: string; fqn: string; domain_name?: string | null;
-      score: number; overlap_columns: string[]; reason: string }[];
+    suggestions: ModelMatch[];
+    recommendation?: ModelRecommendation;
+    proposed?: ModelMatch | null;
     targets: { target_table_id: string; domain_name: string; target_table: string; fqn: string }[];
   };
 };
