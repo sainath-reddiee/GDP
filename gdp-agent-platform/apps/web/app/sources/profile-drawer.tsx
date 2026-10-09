@@ -8,6 +8,7 @@ import type { ProfileColumn, Scorecard, TableInsights } from "@/lib/types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { useCopilot } from "@/components/copilot/copilot-provider";
 import { loadCatalogProfile } from "./actions";
 
 export type DrawerTab = "overview" | "columns" | "checks";
@@ -259,6 +260,12 @@ export function TableProfileView({ database, schema, table, initialTab = "overvi
     });
     return () => { live = false; };
   }, [database, schema, table]);
+
+  const { setFocus } = useCopilot();
+  useEffect(() => {
+    setFocus({ database, schema, table });
+    return () => setFocus(null);
+  }, [database, schema, table, setFocus]);
 
   const p = data?.profile;
   const columns = (p?.columns ?? []).filter((c) => c.column_name.toLowerCase().includes(query.toLowerCase()));

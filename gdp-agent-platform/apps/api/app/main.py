@@ -3129,6 +3129,41 @@ def search_knowledge(body: KnowledgeQuery, db: Db = Depends(current_db)):
         raise _snowflake_error(exc) from exc
 
 
+class CopilotAsk(BaseModel):
+    question: str = Field(min_length=1, max_length=4000)
+    page: dict[str, Any] = Field(default_factory=dict)
+    history: list[dict[str, str]] = Field(default_factory=list, max_length=20)
+    conversation_id: Optional[str] = Field(default=None, max_length=36)
+
+
+@app.get("/api/copilot/suggestions")
+def copilot_suggestions(path: str = "/", database: str = "", schema: str = "", table: str = ""):
+    """Starter questions for the page (no model call)."""
+    from services.common.copilot import parse_page, suggestions
+
+    page = parse_page({"path": path, "database": database, "schema": schema, "table": table})
+    return {"page": page, "suggestions": suggestions(page)}
+
+
+@app.post("/api/copilot/ask")
+def copilot_ask(body: CopilotAsk, db: Db = Depends(current_db)):
+    """Answer about the current page: its run, profiles, checks and tests, plus domain knowledge; cited."""
+    from services.common.copilot import ask
+
+    started = time.time()
+    history = [{"role": str(m.get("role")), "content": str(m.get("content") or "")[:4000]} for m in body.history]
+    try:
+        result = invoke_source(db, ask, json.dumps(body.page), body.question, json.dumps(history), body.conversation_id)
+    except AssertionError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except Exception as exc:
+        raise _snowflake_error(exc) from exc
+    run_id = (body.page.get("path") or "").split("/")[2] if str(body.page.get("path") or "").startswith("/runs/") else None
+    _record_cost(db, run_id if run_id and len(run_id) == 36 else None, "COPILOT", result.get("model"),
+                 result.pop("usage", None), started)
+    return result
+
+
 @app.post("/api/agent/stream")
 def agent_stream(body: AgentMessage, db: Db = Depends(current_db)):
     return StreamingResponse(stream_agent(db, body.run_id, body.message), media_type="text/event-stream")
