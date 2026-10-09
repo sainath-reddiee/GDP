@@ -6,15 +6,21 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { generateMapping } from "../pipeline-actions";
 import { MappingBoard } from "./mapping-board";
 import { MappingGate } from "./mapping-gate";
+import { ModelDesign } from "./model-design";
+import type { ModelPayload } from "./model-actions";
 
 export default async function MappingPage({ params }: { params: { runId: string } }) {
-  const [state, data] = await Promise.all([
+  const [state, data, model] = await Promise.all([
     getRun(params.runId),
     api<MappingOverview>(`/api/runs/${params.runId}/mapping`),
+    api<ModelPayload>(`/api/runs/${params.runId}/model`).catch(() => null),
   ]);
+  const canApplyModel = !state.is_archived
+    && ["PROFILING_COMPLETE", "DOMAIN_IDENTIFIED", "MAPPING_PENDING", "MAPPING_REVIEW"].includes(state.current_state);
   const canGenerate = ["DOMAIN_IDENTIFIED", "MAPPING_PENDING"].includes(state.current_state);
   return (
     <StageGate state={state} stage="MAPPING">
+      {model && <ModelDesign runId={params.runId} data={model} canApply={canApplyModel} state={state.current_state} />}
       {canGenerate && (
         <Card>
           <CardHeader>

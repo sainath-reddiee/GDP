@@ -21,6 +21,7 @@ const STAGE_INFO: Record<string, string> = {
   KNOWLEDGE: "Domain knowledge, packs and answers",
   SUGGESTIONS: "Inline suggestions across stages",
   COPILOT: "The copilot assistant on every page",
+  MODELING: "Designs the target data model in Mapping",
 };
 const FAMILY_LABEL: Record<string, string> = {
   claude: "Anthropic", openai: "OpenAI", llama: "Meta Llama", mistral: "Mistral", deepseek: "DeepSeek",
