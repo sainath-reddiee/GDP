@@ -146,18 +146,21 @@ def search_knowledge(session, query: str, domain: Optional[str], knowledge_type:
 
 
 def load_skill(session, skill_name: str) -> Dict[str, Any]:
-    raw = (skill_name or "").strip().upper()
-    names = list({raw, raw.replace("_", "-"), raw.replace("-", "_")})
-    found = rows(session, """SELECT SKILL_NAME, SKILL_TYPE, VERSION, STAGE_PATH, CHECKSUM, DESCRIPTION, CONTENT, CONFIG
-                             FROM KNOWLEDGE.SKILL_REGISTRY
-                             WHERE IS_CURRENT AND STATUS = 'ACTIVE'
-                               AND SKILL_NAME IN (""" + ", ".join(["?"] * len(names)) + ")",
-                 names)
-    assert found, f"skill {skill_name} not found"
-    skill = found[0]
+    """KNOWLEDGE.LOAD_SKILL: the production version (the procedure signature takes the name only)."""
+    return load_skill_for(session, skill_name)
+
+
+def load_skill_for(session, skill_name: str, run_id: Optional[str] = None) -> Dict[str, Any]:
+    """The version a stage should use (run override, else production, else newest), audited against the run."""
+    from services.knowledge.skills import resolve
+
+    skill = resolve(session, skill_name, run_id)
+    assert skill, f"skill {skill_name} not found"
     skill["CONFIG"] = variant(skill["CONFIG"])
-    with tool_call(session, None, "load_skill", {"skill": skill["SKILL_NAME"], "version": skill["VERSION"]}) as call:
-        call.summary = f"{skill['SKILL_NAME']} v{skill['VERSION']}"
+    with tool_call(session, run_id, "load_skill", {"skill": skill["SKILL_NAME"], "version": skill["VERSION"],
+                                                   "skill_id": skill.get("SKILL_ID"), "revision": skill.get("REVISION"),
+                                                   "picked_by": skill.get("PICKED_BY")}) as call:
+        call.summary = f"{skill['SKILL_NAME']} v{skill['VERSION']} ({skill.get('PICKED_BY') or 'production'})"
     return {k.lower(): v for k, v in skill.items()}
 
 

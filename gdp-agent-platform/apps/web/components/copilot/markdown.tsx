@@ -33,7 +33,7 @@ function CodeBlock({ lang, code }: { lang: string; code: string }) {
   );
 }
 
-/** A small, safe Markdown subset for copilot answers: paragraphs, bullet and numbered lists, headings, fenced code. */
+/** A small, safe Markdown subset: paragraphs, bullet and numbered lists, headings, tables, fenced code. */
 export function Markdown({ text }: { text: string }) {
   const blocks: React.ReactNode[] = [];
   const lines = text.replace(/\r\n/g, "\n").split("\n");
@@ -61,6 +61,22 @@ export function Markdown({ text }: { text: string }) {
       );
       continue;
     }
+    if (/^\s*\|.*\|\s*$/.test(line) && /^\s*\|?\s*:?-{2,}/.test(lines[i + 1] ?? "")) {
+      const cells = (row: string) => row.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((c) => c.trim());
+      const head = cells(line);
+      i += 2;
+      const rows: string[][] = [];
+      while (i < lines.length && /^\s*\|.*\|\s*$/.test(lines[i])) rows.push(cells(lines[i++]));
+      blocks.push(
+        <div key={blocks.length} className="overflow-x-auto rounded-lg border">
+          <table className="w-full text-xs">
+            <thead className="bg-muted/50 text-left"><tr>{head.map((h, j) => <th key={j} className="px-2.5 py-1.5 font-semibold"><Inline text={h} /></th>)}</tr></thead>
+            <tbody className="divide-y">{rows.map((r, k) => <tr key={k}>{r.map((c, j) => <td key={j} className="px-2.5 py-1.5 align-top"><Inline text={c} /></td>)}</tr>)}</tbody>
+          </table>
+        </div>,
+      );
+      continue;
+    }
     const heading = line.match(/^#{1,4}\s+(.*)/);
     if (heading) {
       blocks.push(<p key={blocks.length} className="font-semibold"><Inline text={heading[1]} /></p>);
@@ -68,8 +84,8 @@ export function Markdown({ text }: { text: string }) {
       continue;
     }
     if (!line.trim()) { i += 1; continue; }
-    const para: string[] = [];
-    while (i < lines.length && lines[i].trim() && !/^```|^\s*([-*]|\d+\.)\s+|^#{1,4}\s+/.test(lines[i])) para.push(lines[i++]);
+    const para: string[] = [lines[i++]];
+    while (i < lines.length && lines[i].trim() && !/^```|^\s*([-*]|\d+\.)\s+|^#{1,4}\s+|^\s*\|.*\|\s*$/.test(lines[i])) para.push(lines[i++]);
     blocks.push(<p key={blocks.length}><Inline text={para.join(" ")} /></p>);
   }
   return <div className="space-y-2 text-sm leading-relaxed">{blocks}</div>;

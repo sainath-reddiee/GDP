@@ -20,7 +20,7 @@ from services.knowledge import search as ks
 from services.knowledge.procedures import current_knowledge_version, identify_domain
 from services.knowledge.validate import normalize_content
 from services.common.standard import run_standard
-from services.knowledge.usage import STAGE_SKILLS, assert_safe_transformation, domain_context, use_skills
+from services.knowledge.usage import assert_safe_transformation, domain_context, use_stage
 from services.mapping import features, scoring
 from services.mapping.feedback import pattern as feedback_pattern
 
@@ -233,7 +233,7 @@ def generate_mapping_candidates(session, run_id: str) -> Dict[str, Any]:
     started = time.time()
     with tool_call(session, run_id, "generate_mapping_candidates", {"run_id": run_id}) as call:
         try:
-            guidance = use_skills(session, STAGE_SKILLS["MAPPING"])
+            guidance = use_stage(session, "MAPPING", run_id=run_id)
             run = stage.run
             target = target_table(session, run)
             targets = target_columns(session, target["TARGET_TABLE_ID"])

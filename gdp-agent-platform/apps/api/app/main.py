@@ -1916,19 +1916,6 @@ def metrics_summary(db: Db = Depends(current_db)):
     return out
 
 
-@app.get("/api/skills")
-def skills(db: Db = Depends(current_db)):
-    return {"skills": db.query(
-        """
-        SELECT SKILL_ID, SKILL_NAME, SKILL_TYPE, DOMAIN_ID, VERSION, STAGE_PATH, STATUS,
-               CREATED_BY, CREATED_AT::VARCHAR AS CREATED_AT
-          FROM KNOWLEDGE.SKILL_REGISTRY
-         WHERE IS_CURRENT
-         ORDER BY SKILL_NAME, CREATED_AT DESC
-        """
-    )}
-
-
 _DOMAIN_TARGETS_SQL = """
     SELECT T.TARGET_TABLE_ID, T.TARGET_DATABASE, T.TARGET_SCHEMA, T.TARGET_TABLE, T.DESCRIPTION, {spec} AS MODEL_SPEC,
            (SELECT COUNT(*) FROM KNOWLEDGE.TARGET_COLUMN_REGISTRY C WHERE C.TARGET_TABLE_ID = T.TARGET_TABLE_ID) AS COLUMN_COUNT
@@ -6064,3 +6051,7 @@ def _reconcile_if_due(db: Db) -> None:
 from app.governance import router as governance_router  # noqa: E402
 
 app.include_router(governance_router)
+
+from app.skills_api import router as skills_router  # noqa: E402
+
+app.include_router(skills_router)

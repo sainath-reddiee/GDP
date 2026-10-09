@@ -26,7 +26,7 @@ from services.common.llm import complete_json
 from services.common.sql import clip, insert_rows, rows, scalar, variant
 from services.common.stage import Stage
 from services.common.rules import ensure_active
-from services.knowledge.usage import STAGE_SKILLS, use_skills
+from services.knowledge.usage import use_stage
 from services.profiling import profiler
 from services.profiling.insights import quality_dimensions
 from services.source.identifiers import fqn, quote
@@ -458,7 +458,7 @@ def parse_options(options_json: Optional[str]) -> Tuple[ForceRefresh, int]:
 
 def _profile_run(session, run_id: str, tables: List[Dict[str, Any]], force: ForceRefresh,
                  limit: int) -> Tuple[Dict[str, List[Dict[str, Any]]], Dict[TableKey, TableProfile]]:
-    guidance = use_skills(session, STAGE_SKILLS["PROFILING"])
+    guidance = use_stage(session, "PROFILING", run_id=run_id)
     results = profile_tables(session, [t["REF"] for t in tables], limit, force, run_id, guidance)
     profiles = {t["LANDING_ID"]: _bind(results[t["REF"].key], t) for t in tables}
     _foreign_keys(session, tables, profiles)
@@ -580,7 +580,7 @@ def profile_source_tables(session, source_id: str, payload_json: str) -> Dict[st
     _ensure_index_rows(session, refs)
     _set_status(session, refs, "PROFILING")
     try:
-        guidance = use_skills(session, STAGE_SKILLS["PROFILING"])
+        guidance = use_stage(session, "PROFILING")
     except Exception:
         guidance = ""
 

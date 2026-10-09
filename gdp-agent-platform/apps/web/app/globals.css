@@ -107,3 +107,6 @@
   from { opacity: 0; transform: translateY(8px) scale(0.97); }
   to { opacity: 1; transform: none; }
 }
+
+/* A drawer or dialog is open (components/use-scroll-lock.ts): keep the copilot launcher off its action bar. Ctrl+J still opens it. */
+html[data-overlay="open"] [data-copilot-launcher]:not([aria-expanded="true"]) { display: none; }

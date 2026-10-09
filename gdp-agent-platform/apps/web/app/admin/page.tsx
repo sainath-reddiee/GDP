@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { Suspense } from "react";
-import { Bot, LayoutDashboard, Rocket, Ruler, ShieldCheck, SlidersHorizontal } from "lucide-react";
+import { Bot, LayoutDashboard, Rocket, Ruler, ShieldCheck, SlidersHorizontal, Sparkles } from "lucide-react";
 import { api, whoami } from "@/lib/api";
 import { can } from "@/lib/types";
 import type { GovEvent, GovPolicy, GovPrivilege, GovRole, GovSettings, GovUser } from "../governance-actions";
@@ -13,6 +13,8 @@ import { DeployButton } from "./deploy-button";
 import { ModelsSection } from "./models-section";
 import { RateCardEditor } from "./rate-card";
 import { RulesSection } from "./rules-section";
+import { SkillsSection } from "./skills-section";
+import type { SkillBinding } from "../skills/types";
 import { Panel, SectionSkeleton, Stat } from "./section";
 import { StandardsSection } from "./standards-section";
 
@@ -20,6 +22,7 @@ const SECTIONS = [
   { id: "overview", label: "Overview", icon: LayoutDashboard, hint: "Session and platform at a glance" },
   { id: "models", label: "AI models", icon: Bot, hint: "Models in this account, the model per stage and the rate card" },
   { id: "access", label: "Access and governance", icon: ShieldCheck, hint: "Users, roles, privileges and approval policies" },
+  { id: "skills", label: "Skills per stage", icon: Sparkles, hint: "Which skills each pipeline stage loads, and in what order" },
   { id: "rules", label: "Rules", icon: SlidersHorizontal, hint: "Thresholds and hints" },
   { id: "standards", label: "Modeling standards", icon: Ruler, hint: "Naming and conventions" },
   { id: "deploy", label: "Deploy", icon: Rocket, hint: "Push code to Snowflake" },
@@ -111,6 +114,10 @@ async function Section({ id, view }: { id: SectionId; view: ModelView }) {
         </p>}
       </div>
     );
+  }
+  if (id === "skills") {
+    const data = await api<{ stages: string[]; bindings: SkillBinding[]; skills: string[] }>("/api/skills/bindings").catch(() => null);
+    return data ? <SkillsSection stages={data.stages} bindings={data.bindings} skills={data.skills} /> : unavailable;
   }
   if (id === "rules") {
     const rules = await api<RulesState>("/api/config/rules").catch(() => null);

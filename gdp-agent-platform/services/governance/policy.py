@@ -35,6 +35,8 @@ PRIVILEGES: Dict[str, Tuple[str, str]] = {
     "KNOWLEDGE.EDIT": ("Knowledge", "Add, edit, retire and restore knowledge"),
     "DOMAIN.EDIT": ("Knowledge", "Create, import, edit and delete domains"),
     "TAG.MANAGE": ("Knowledge", "Tag profiles, runs and models"),
+    "SKILL.EDIT": ("Skills", "Create skill versions and categories, set a candidate, try a version on a run"),
+    "SKILL.RELEASE": ("Skills", "Promote a skill version to production and change which skills each stage loads"),
     "CONFIG.EDIT": ("Admin", "Change platform settings, rules and models"),
     "ADMIN.VIEW": ("Admin", "Open the Admin panel"),
     "ADMIN.DEPLOY": ("Admin", "Redeploy procedures and integrations (GitHub)"),
@@ -65,10 +67,12 @@ SYSTEM_ROLES: Dict[str, Dict[str, Any]] = {
     "CODE_REVIEWER": {"description": "Approves dbt and code review",
                       "privileges": ["REVIEW.APPROVE", "REVIEW.DECIDE", "DBT.EDIT", "AI.USE"], "inherits": ["VIEWER"]},
     "DATA_STEWARD": {"description": "Owns domains and knowledge",
-                     "privileges": ["KNOWLEDGE.EDIT", "DOMAIN.EDIT", "TAG.MANAGE", "AI.USE"], "inherits": ["VIEWER"]},
+                     "privileges": ["KNOWLEDGE.EDIT", "DOMAIN.EDIT", "TAG.MANAGE", "SKILL.EDIT", "AI.USE"], "inherits": ["VIEWER"]},
+    "SKILL_OWNER": {"description": "Owns agent skills: versions, releases and stage bindings",
+                    "privileges": ["SKILL.EDIT", "SKILL.RELEASE", "AI.USE"], "inherits": ["VIEWER"]},
     "DATA_ENGINEER": {"description": "Builds runs end to end; approvals go to the owning roles",
                       "privileges": ["SOURCE.CONNECT", "PROFILE.RUN", "RUN.CREATE", "RUN.OPERATE", "RUN.ARCHIVE",
-                                     "MODEL.EDIT", "MAPPING.DECIDE", "QA.EDIT", "DBT.EDIT", "TAG.MANAGE",
+                                     "MODEL.EDIT", "MAPPING.DECIDE", "QA.EDIT", "DBT.EDIT", "TAG.MANAGE", "SKILL.EDIT",
                                      "REQUEST.CHANGES", "REVIEW.DECIDE", "AI.USE"],
                       "inherits": ["VIEWER"]},
     "VIEWER": {"description": "Read everything, change nothing (no AI calls, no requests)", "privileges": ["AUDIT.VIEW"],
@@ -76,8 +80,8 @@ SYSTEM_ROLES: Dict[str, Dict[str, Any]] = {
 }
 # Privileges added to system roles after their first release: {version: [privilege]}. Bootstrap grants them to the
 # system roles whose spec lists them, once, so existing deployments pick them up without overriding admin edits.
-SYSTEM_VERSION = 2
-ADDED_PRIVILEGES = {2: ["AI.USE"]}
+SYSTEM_VERSION = 3
+ADDED_PRIVILEGES = {2: ["AI.USE"], 3: ["SKILL.EDIT", "SKILL.RELEASE"]}
 
 # Actions routed for approval by default: privilege -> approver role. Everything else is privilege-only.
 DEFAULT_POLICIES: Dict[str, str] = {
@@ -87,6 +91,7 @@ DEFAULT_POLICIES: Dict[str, str] = {
     "QA.SIGNOFF": "QA_LEAD", "REVIEW.APPROVE": "CODE_REVIEWER",
     "KNOWLEDGE.EDIT": "DATA_STEWARD", "DOMAIN.EDIT": "DATA_STEWARD",
     "CONFIG.EDIT": "PLATFORM_ADMIN", "ADMIN.DEPLOY": "PLATFORM_ADMIN", "ROLE.MANAGE": "GOVERNANCE_ADMIN",
+    "SKILL.RELEASE": "SKILL_OWNER",
 }
 
 REVIEW_TARGETS = {"MAPPING_APPROVED": "MAPPING.APPROVE", "STTM_APPROVED": "STTM.APPROVE",
@@ -125,6 +130,18 @@ RULES: List[Tuple[str, str, Any, str]] = [
     ("PUT", r"/api/knowledge/[^/]+", "KNOWLEDGE.EDIT", "Edit knowledge"),
     ("POST", r"/api/knowledge/[^/]+/(retire|restore)", "KNOWLEDGE.EDIT", "Retire or restore knowledge"),
     ("PUT", r"/api/tags/.*", "TAG.MANAGE", ""),
+    ("POST", r"/api/skills/[^/]+/labels/production", "SKILL.RELEASE", "Promote a skill version to production"),
+    ("POST", r"/api/skills/[^/]+/labels/candidate", "SKILL.EDIT", ""),
+    ("DELETE", r"/api/skills/[^/]+/labels/candidate", "SKILL.EDIT", ""),
+    ("PUT", r"/api/skills/bindings", "SKILL.RELEASE", "Change which skills each stage loads"),
+    ("POST", r"/api/skills/[^/]+/versions", "SKILL.EDIT", ""),
+    ("POST", r"/api/skills/[^/]+/versions/[^/]+/(retire|restore)", "SKILL.EDIT", ""),
+    ("PUT", r"/api/skills/[^/]+/category", "SKILL.EDIT", ""),
+    ("POST", r"/api/skills/categories", "SKILL.EDIT", ""),
+    ("PUT", r"/api/skills/categories/[^/]+", "SKILL.EDIT", ""),
+    ("DELETE", r"/api/skills/categories/[^/]+", "SKILL.EDIT", ""),
+    ("PUT", rf"{R}/skills/[^/]+", "SKILL.EDIT", "Try a skill version on a run"),
+    ("DELETE", rf"{R}/skills/[^/]+", "SKILL.EDIT", ""),
     ("POST", r"/api/(sources|sources/external)", "SOURCE.CONNECT", "Connect a source"),
     ("DELETE", r"/api/sources/[^/]+/oracle(/schedule)?", "SOURCE.CONNECT", "Remove an Oracle source or schedule"),
     ("PUT", r"/api/sources/[^/]+/oracle/(connection|schedule)", "SOURCE.CONNECT", "Change an Oracle connection"),

@@ -151,7 +151,7 @@ function CopilotShell({ children }: { children: ReactNode }) {
     <CopilotCtx.Provider value={{ setFocus, open, shown: show }}>
       {children}
       {can("AI.USE") && <button type="button" onClick={() => setShow((v) => !v)} aria-label={show ? "Close copilot" : "Open copilot"}
-              title="Copilot (Ctrl+J)" aria-expanded={show}
+              title="Copilot (Ctrl+J)" aria-expanded={show} data-copilot-launcher
               className={cn("fixed bottom-5 right-5 z-[71] grid h-14 w-14 place-items-center rounded-full bg-gradient-to-br from-violet-500 to-primary text-white shadow-lg ring-4 ring-background transition hover:scale-105 hover:shadow-xl",
                             show && "max-sm:hidden")}>
         {show ? <X className="h-6 w-6" /> : <Sparkles className="h-6 w-6" />}
