@@ -1,3 +1,4 @@
+import { AccessProvider, ReadOnlyBanner } from "@/components/access";
 import "./globals.css";
 import { cookies } from "next/headers";
 import type { ReactNode } from "react";
@@ -33,11 +34,14 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
           <Sidebar user={me?.user ?? null} role={me?.role ?? null} canLogout
                    privileges={me?.governance ? me.privileges ?? [] : null} appRoles={me?.governance ? me.granted_roles ?? [] : null} />
           <main className="min-w-0 flex-1 bg-background">
+            <AccessProvider value={{ governance: Boolean(me?.governance), privileges: me?.privileges ?? [], readOnly: Boolean(me?.read_only) }}>
             <CopilotProvider>
               <div className="mx-auto w-full max-w-[1600px] px-6 py-7 lg:px-10">
+                <ReadOnlyBanner />
                 <CatalogDisplayProvider config={catalog}>{children}</CatalogDisplayProvider>
               </div>
             </CopilotProvider>
+            </AccessProvider>
           </main>
         </div>
       </body>

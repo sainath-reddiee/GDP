@@ -42,7 +42,10 @@ PRIVILEGES: Dict[str, Tuple[str, str]] = {
     "APPROVAL.VIEW": ("Governance", "See every change request"),
     "REQUEST.CHANGES": ("Governance", "Raise change requests for actions you cannot do yourself"),
     "AUDIT.VIEW": ("Governance", "Open the audit trail"),
+    "AI.USE": ("AI", "Use AI: copilot, AI review, ask for tests or checks, AI designs (each call costs credits)"),
 }
+# Privileges a viewer-style role never needs: holding none of the others means the user can only look.
+READ_ONLY = {"AUDIT.VIEW", "ADMIN.VIEW", "APPROVAL.VIEW"}
 ALL = "*"
 
 SYSTEM_ROLES: Dict[str, Dict[str, Any]] = {
@@ -53,23 +56,28 @@ SYSTEM_ROLES: Dict[str, Dict[str, Any]] = {
     "GOVERNANCE_ADMIN": {"description": "Users, roles and approval policies",
                          "privileges": ["ROLE.MANAGE", "ADMIN.VIEW", "APPROVAL.VIEW", "AUDIT.VIEW"], "inherits": ["VIEWER"]},
     "MODEL_APPROVER": {"description": "Approves data models and mapping",
-                       "privileges": ["MODEL.APPROVE", "MAPPING.APPROVE", "MODEL.EDIT", "MAPPING.DECIDE"], "inherits": ["VIEWER"]},
+                       "privileges": ["MODEL.APPROVE", "MAPPING.APPROVE", "MODEL.EDIT", "MAPPING.DECIDE", "AI.USE"], "inherits": ["VIEWER"]},
     "STTM_APPROVER": {"description": "Approves STTM changes and the STTM gate",
-                      "privileges": ["STTM.EDIT", "STTM.APPROVE"], "inherits": ["VIEWER"]},
+                      "privileges": ["STTM.EDIT", "STTM.APPROVE", "AI.USE"], "inherits": ["VIEWER"]},
     "DQ_APPROVER": {"description": "Approves data quality checks and the pack",
-                    "privileges": ["SODA.EDIT", "SODA.APPROVE"], "inherits": ["VIEWER"]},
-    "QA_LEAD": {"description": "Owns QA tests and sign-off", "privileges": ["QA.EDIT", "QA.SIGNOFF"], "inherits": ["VIEWER"]},
+                    "privileges": ["SODA.EDIT", "SODA.APPROVE", "AI.USE"], "inherits": ["VIEWER"]},
+    "QA_LEAD": {"description": "Owns QA tests and sign-off", "privileges": ["QA.EDIT", "QA.SIGNOFF", "AI.USE"], "inherits": ["VIEWER"]},
     "CODE_REVIEWER": {"description": "Approves dbt and code review",
-                      "privileges": ["REVIEW.APPROVE", "REVIEW.DECIDE", "DBT.EDIT"], "inherits": ["VIEWER"]},
+                      "privileges": ["REVIEW.APPROVE", "REVIEW.DECIDE", "DBT.EDIT", "AI.USE"], "inherits": ["VIEWER"]},
     "DATA_STEWARD": {"description": "Owns domains and knowledge",
-                     "privileges": ["KNOWLEDGE.EDIT", "DOMAIN.EDIT", "TAG.MANAGE"], "inherits": ["VIEWER"]},
+                     "privileges": ["KNOWLEDGE.EDIT", "DOMAIN.EDIT", "TAG.MANAGE", "AI.USE"], "inherits": ["VIEWER"]},
     "DATA_ENGINEER": {"description": "Builds runs end to end; approvals go to the owning roles",
                       "privileges": ["SOURCE.CONNECT", "PROFILE.RUN", "RUN.CREATE", "RUN.OPERATE", "RUN.ARCHIVE",
                                      "MODEL.EDIT", "MAPPING.DECIDE", "QA.EDIT", "DBT.EDIT", "TAG.MANAGE",
-                                     "REQUEST.CHANGES", "REVIEW.DECIDE"],
+                                     "REQUEST.CHANGES", "REVIEW.DECIDE", "AI.USE"],
                       "inherits": ["VIEWER"]},
-    "VIEWER": {"description": "Read everything, change nothing", "privileges": ["AUDIT.VIEW"], "inherits": []},
+    "VIEWER": {"description": "Read everything, change nothing (no AI calls, no requests)", "privileges": ["AUDIT.VIEW"],
+               "inherits": []},
 }
+# Privileges added to system roles after their first release: {version: [privilege]}. Bootstrap grants them to the
+# system roles whose spec lists them, once, so existing deployments pick them up without overriding admin edits.
+SYSTEM_VERSION = 2
+ADDED_PRIVILEGES = {2: ["AI.USE"]}
 
 # Actions routed for approval by default: privilege -> approver role. Everything else is privilege-only.
 DEFAULT_POLICIES: Dict[str, str] = {
@@ -89,10 +97,15 @@ R = "/api/runs/[^/]+"
 RULES: List[Tuple[str, str, Any, str]] = [
     ("POST", r"/api/auth/(login|logout)", None, ""),
     ("PUT", r"/api/auth/role", None, ""),
-    ("POST", r"/api/(agent/stream|copilot/ask|knowledge/search|knowledge/answer|catalog/analyze|catalog/preview-graph|oracle/parse|oracle/integrations/check)", None, ""),
-    ("POST", rf"{R}/(mapping/assist|qa/ask|qa/plan|model/validate|soda/backtest|sttm/refine)", None, ""),
+    ("POST", r"/api/(knowledge/search|catalog/analyze|catalog/preview-graph|oracle/parse)", None, ""),
+    ("POST", r"/api/(agent/stream|copilot/ask|knowledge/answer)", "AI.USE", ""),
+    ("POST", r"/api/oracle/integrations/check", "SOURCE.CONNECT", ""),
+    ("POST", rf"{R}/model/validate", None, ""),
+    ("POST", rf"{R}/(mapping/assist|qa/ask|qa/plan|sttm/refine)", "AI.USE", ""),
+    ("POST", rf"{R}/soda/backtest", "RUN.OPERATE", ""),
     ("POST", r"/api/governance/requests/[^/]+/(approve|reject|cancel)", None, ""),  # checked by the endpoint
     ("POST", r"/api/governance/roles", "ROLE.MANAGE", "Create a role"),
+    ("POST", r"/api/governance/roles/[^/]+/members", "ROLE.MANAGE", "Change role members"),
     ("PUT", r"/api/governance/(users|roles|policies)/[^/]+", "ROLE.MANAGE", "Change access or an approval policy"),
     ("DELETE", r"/api/governance/roles/[^/]+", "ROLE.MANAGE", "Delete a role"),
     ("PUT", r"/api/governance/settings", "ROLE.MANAGE", "Change governance settings"),
@@ -106,7 +119,7 @@ RULES: List[Tuple[str, str, Any, str]] = [
     ("DELETE", r"/api/domains/[^/]+", "DOMAIN.EDIT", "Delete a domain"),
     ("POST", r"/api/domains/[^/]+/restore", "DOMAIN.EDIT", "Restore a domain"),
     ("PUT", r"/api/domains/[^/]+/rules", "DOMAIN.EDIT", "Change domain rules"),
-    ("POST", r"/api/domains/[^/]+/(ask|suggestions)", None, ""),
+    ("POST", r"/api/domains/[^/]+/(ask|suggestions)", "AI.USE", ""),
     ("POST", r"/api/domains/[^/]+/suggestions/decision", "DOMAIN.EDIT", "Accept a domain suggestion"),
     ("POST", r"/api/knowledge", "KNOWLEDGE.EDIT", "Add knowledge"),
     ("PUT", r"/api/knowledge/[^/]+", "KNOWLEDGE.EDIT", "Edit knowledge"),
@@ -116,7 +129,7 @@ RULES: List[Tuple[str, str, Any, str]] = [
     ("DELETE", r"/api/sources/[^/]+/oracle(/schedule)?", "SOURCE.CONNECT", "Remove an Oracle source or schedule"),
     ("PUT", r"/api/sources/[^/]+/oracle/(connection|schedule)", "SOURCE.CONNECT", "Change an Oracle connection"),
     ("POST", r"/api/sources/[^/]+/oracle/(setup|password)", "SOURCE.CONNECT", "Set up an Oracle source"),
-    ("POST", r"/api/sources/[^/]+/oracle/(test|catalog|columns|preview)", None, ""),
+    ("POST", r"/api/sources/[^/]+/oracle/(test|catalog|columns|preview)", "PROFILE.RUN", ""),
     ("POST", r"/api/sources/[^/]+/(oracle/ingest|oracle/profile|land|upload|profile-tables)", "PROFILE.RUN", ""),
     ("POST", r"/api/catalog/profile-tables", "PROFILE.RUN", ""),
     ("POST", r"/api/ingest-jobs/[^/]+/cancel", "PROFILE.RUN", ""),
@@ -141,11 +154,12 @@ RULES: List[Tuple[str, str, Any, str]] = [
     ("DELETE", rf"{R}/qa/tests/[^/]+", "QA.EDIT", ""),
     ("POST", rf"{R}/dbt(/enhance|/publish|/review)?", "DBT.EDIT", ""),
     ("POST", rf"{R}/suggestions/[^/]+/decision", "RUN.OPERATE", ""),
-    ("POST", rf"{R}/suggestions/[^/]+", None, ""),
+    ("POST", rf"{R}/suggestions/[^/]+", "AI.USE", ""),
     ("POST", rf"{R}/.*", "RUN.OPERATE", ""),
 ]
 _COMPILED = [(m, re.compile(f"^{p}$"), priv, title) for m, p, priv, title in RULES]
 READ_RULES = [(re.compile(r"^/api/(admin/.*|config/(rules|platform|models))$"), "ADMIN.VIEW"),
+              (re.compile(r"^/api/(audit|costs)(/.*)?$"), "AUDIT.VIEW"),
               (re.compile(r"^/api/governance/(roles|users|policies|settings|events|privileges)$"), "ADMIN.VIEW")]
 
 
@@ -222,3 +236,24 @@ def summarize(method: str, path: str, body: Optional[Dict[str, Any]], title: str
                 detail = f"{key.replace('_', ' ')} {str(body[key])[:60]}"
                 break
     return " · ".join(x for x in (title or f"{method} {path}", f"run {run}" if run else "", detail) if x)
+
+
+def read_only(privileges: Iterable[str]) -> bool:
+    """True when the user can only look: no privilege beyond the viewing ones."""
+    privs = set(privileges)
+    return ALL not in privs and not (privs - READ_ONLY)
+
+
+def creates_cycle(role: str, inherits: Iterable[str], grants: Dict[str, Iterable[str]]) -> bool:
+    """Would granting `inherits` to `role` make a loop (role inheriting itself)?"""
+    role = role.upper()
+    stack, seen = [r.upper() for r in inherits], set()
+    while stack:
+        r = stack.pop()
+        if r == role:
+            return True
+        if r in seen:
+            continue
+        seen.add(r)
+        stack.extend(x.upper() for x in grants.get(r, []))
+    return False

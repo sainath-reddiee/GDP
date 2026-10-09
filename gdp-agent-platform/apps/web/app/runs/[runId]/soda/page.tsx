@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { Activity, FileCode2, ListChecks } from "lucide-react";
-import { api, getRun } from "@/lib/api";
+import { can, canAct } from "@/lib/types";
+import { api, getRun, whoami } from "@/lib/api";
 import { AiSuggestions } from "@/components/ai-suggestions";
 import { StageGate } from "@/components/stage-gate";
 import { StageAction } from "@/components/stage-action";
@@ -43,8 +44,9 @@ export default async function SodaPage({ params, searchParams }: {
   params: { runId: string };
   searchParams: { tab?: string };
 }) {
-  const [state, soda, contract, scans] = await Promise.all([
+  const [state, me, soda, contract, scans] = await Promise.all([
     getRun(params.runId),
+    whoami(),
     api<SodaPayload>(`/api/runs/${params.runId}/soda`),
     api<{ lines: SttmLine[] }>(`/api/runs/${params.runId}/sttm`).catch(() => ({ lines: [] as SttmLine[] })),
     api<ScansPayload>(`/api/runs/${params.runId}/soda/scans`).catch(() => EMPTY_SCANS),
@@ -55,9 +57,9 @@ export default async function SodaPage({ params, searchParams }: {
     ? await api<{ files: Record<string, string> }>(`/api/runs/${params.runId}/soda/kit`).catch((e: Error) => ({ error: e.message }))
     : null;
 
-  const canGenerate = ["STTM_APPROVED", "SODA_PENDING", "SODA_REVIEW", "DBT_PENDING", "DBT_GENERATING"].includes(state.current_state);
-  const canImport = ["STTM_APPROVED", "SODA_PENDING", "SODA_REVIEW", "SODA_APPROVED", "DBT_PENDING", "DBT_GENERATING", "VALIDATION_PENDING"].includes(state.current_state);
-  const canReview = ["SODA_REVIEW", "SODA_PENDING", "STTM_APPROVED", "DBT_PENDING", "DBT_GENERATING", "VALIDATION_PENDING", "VALIDATION_FAILED"].includes(state.current_state);
+  const canGenerate = can(me, "RUN.OPERATE") && ["STTM_APPROVED", "SODA_PENDING", "SODA_REVIEW", "DBT_PENDING", "DBT_GENERATING"].includes(state.current_state);
+  const canImport = canAct(me, "SODA.EDIT") && ["STTM_APPROVED", "SODA_PENDING", "SODA_REVIEW", "SODA_APPROVED", "DBT_PENDING", "DBT_GENERATING", "VALIDATION_PENDING"].includes(state.current_state);
+  const canReview = canAct(me, "SODA.EDIT") && ["SODA_REVIEW", "SODA_PENDING", "STTM_APPROVED", "DBT_PENDING", "DBT_GENERATING", "VALIDATION_PENDING", "VALIDATION_FAILED"].includes(state.current_state);
   const runnable = soda.status.total - soda.status.rejected;
   const last = scans.scans[0];
   const covered = new Set(soda.checks.filter((c) => c.target_column && c.status !== "REJECTED").map((c) => c.target_column!.toUpperCase()));
@@ -97,7 +99,7 @@ export default async function SodaPage({ params, searchParams }: {
             )}
             {canImport && <BriefImport runId={params.runId} brief={soda.brief} />}
             {canReview && <ApproveRemaining runId={params.runId} ids={proposedIds} />}
-            {runnable > 0 && <RunScanButton runId={params.runId} />}
+            {runnable > 0 && can(me, "RUN.OPERATE") && <RunScanButton runId={params.runId} />}
             <DownloadMenu yaml={soda.yaml} gxSuite={soda.gx_suite} />
           </div>
         </div>

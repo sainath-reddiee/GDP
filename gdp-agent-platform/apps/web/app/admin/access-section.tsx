@@ -1,14 +1,14 @@
 "use client";
 
-import { useMemo, useState, useTransition } from "react";
+import { useEffect, useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { Check, Loader2, Plus, Trash2, UserPlus } from "lucide-react";
+import { Check, Loader2, Plus, Trash2, UserPlus, Users2, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import {
-  deleteRole, savePolicy, saveRole, saveSettings, setUserRoles,
+  deleteRole, roleMember, savePolicy, saveRole, saveSettings, setUserRoles,
   type GovEvent, type GovPolicy, type GovPrivilege, type GovRole, type GovSettings, type GovUser,
 } from "../governance-actions";
 
@@ -95,91 +95,204 @@ function Users({ users, roles }: { users: GovUser[]; roles: GovRole[] }) {
   );
 }
 
-function Roles({ roles, privileges }: { roles: GovRole[]; privileges: GovPrivilege[] }) {
+const pretty = (role: string) => role.toLowerCase().replace(/_/g, " ");
+
+function Roles({ roles, privileges, users }: { roles: GovRole[]; privileges: GovPrivilege[]; users: GovUser[] }) {
   const { busy, msg, run } = useAction();
-  const [selected, setSelected] = useState(roles[0]?.role ?? "");
+  const [selected, setSelected] = useState(roles.find((r) => r.role !== "SUPER_ADMIN")?.role ?? roles[0]?.role ?? "");
   const [creating, setCreating] = useState(false);
-  const base = roles.find((r) => r.role === selected);
-  const [draft, setDraft] = useState<GovRole | null>(base ? { ...base } : null);
+  const blank: GovRole = { role: "", description: "", system: false, privileges: [], inherits: ["VIEWER"], members: [] };
+  const base = creating ? blank : roles.find((r) => r.role === selected) ?? blank;
+  const [draft, setDraft] = useState<GovRole>(base);
+  const [member, setMember] = useState("");
+  const [query, setQuery] = useState("");
   const groups = useMemo(() => Array.from(new Set(privileges.map((p) => p.group))), [privileges]);
-  const pick = (name: string) => { setSelected(name); setCreating(false); const r = roles.find((x) => x.role === name); setDraft(r ? { ...r } : null); };
-  const startNew = () => { setCreating(true); setSelected(""); setDraft({ role: "", description: "", system: false, privileges: [], inherits: ["VIEWER"], members: [] }); };
-  const togglePriv = (p: string) => draft && setDraft({ ...draft, privileges: draft.privileges.includes(p) ? draft.privileges.filter((x) => x !== p) : [...draft.privileges, p] });
-  const toggleInherit = (r: string) => draft && setDraft({ ...draft, inherits: draft.inherits.includes(r) ? draft.inherits.filter((x) => x !== r) : [...draft.inherits, r] });
-  const isSuper = draft?.role === "SUPER_ADMIN";
+  const byName = useMemo(() => new Map(roles.map((r) => [r.role, r])), [roles]);
+
+  // keep the editor in step with the server after a save (router.refresh) unless the user is mid-edit
+  const dirty = creating || draft.description !== base.description
+    || [...draft.privileges].sort().join() !== [...base.privileges].sort().join()
+    || [...draft.inherits].sort().join() !== [...base.inherits].sort().join();
+  useEffect(() => {
+    if (!creating) setDraft(roles.find((r) => r.role === selected) ?? blank);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [roles, selected]);
+
+  const pick = (name: string) => { setCreating(false); setSelected(name); setDraft(roles.find((r) => r.role === name) ?? blank); };
+  const startNew = () => { setCreating(true); setSelected(""); setDraft(blank); };
+  const isSuper = draft.role === "SUPER_ADMIN";
+
+  // what the draft would hold through inheritance (from each inherited role's effective privileges)
+  const via = useMemo(() => {
+    const out: Record<string, string> = {};
+    for (const parent of draft.inherits) for (const p of byName.get(parent)?.effective ?? []) out[p] ??= parent;
+    return out;
+  }, [draft.inherits, byName]);
+  const own = new Set(draft.privileges);
+  const total = new Set([...draft.privileges, ...Object.keys(via)]);
+  const viewOnly = !isSuper && Array.from(total).every((p) => ["AUDIT.VIEW", "ADMIN.VIEW", "APPROVAL.VIEW"].includes(p));
+  const togglePriv = (p: string) => setDraft({ ...draft, privileges: own.has(p) ? draft.privileges.filter((x) => x !== p) : [...draft.privileges, p] });
+  const toggleGroup = (g: string, on: boolean) => {
+    const ps = privileges.filter((p) => p.group === g && !via[p.privilege]).map((p) => p.privilege);
+    setDraft({ ...draft, privileges: on ? Array.from(new Set([...draft.privileges, ...ps])) : draft.privileges.filter((p) => !ps.includes(p)) });
+  };
+  const toggleInherit = (r: string) => setDraft({ ...draft, inherits: draft.inherits.includes(r) ? draft.inherits.filter((x) => x !== r) : [...draft.inherits, r] });
+  const shown = roles.filter((r) => !query || `${r.role} ${r.description ?? ""}`.toLowerCase().includes(query.toLowerCase()));
+
   return (
-    <div className="grid gap-4 lg:grid-cols-[240px_minmax(0,1fr)]">
-      <div className="space-y-1">
-        {roles.map((r) => (
-          <button key={r.role} type="button" onClick={() => pick(r.role)}
-                  className={cn("flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-sm",
-                                r.role === selected ? "bg-primary/10 font-medium text-primary" : "hover:bg-muted")}>
-            <span className="truncate">{r.role.toLowerCase().replace(/_/g, " ")}</span>
-            <span className="text-[10px] text-muted-foreground">{r.members.length}</span>
-          </button>
-        ))}
-        <Button size="sm" variant="outline" className="mt-2 w-full" onClick={startNew}><Plus className="h-3.5 w-3.5" />New role</Button>
-      </div>
-      {draft && (
-        <div className="space-y-4 rounded-xl border p-4">
-          <div className="flex flex-wrap items-end gap-3">
-            {creating ? (
-              <label className="space-y-1 text-xs">Role name
-                <Input value={draft.role} onChange={(e) => setDraft({ ...draft, role: e.target.value.toUpperCase().replace(/[^A-Z0-9_]/g, "_") })} className="w-56 font-mono" />
-              </label>
-            ) : <h3 className="font-mono text-base font-semibold">{draft.role}</h3>}
-            {draft.system && <Badge variant="outline">system</Badge>}
-            <label className="min-w-[16rem] flex-1 space-y-1 text-xs">Description
-              <Input value={draft.description ?? ""} onChange={(e) => setDraft({ ...draft, description: e.target.value })} disabled={isSuper} />
-            </label>
-          </div>
-          {!creating && <p className="text-xs text-muted-foreground">Members: {draft.members.length ? draft.members.join(", ") : "none"}</p>}
-          {isSuper ? (
-            <p className="text-sm text-muted-foreground">SUPER_ADMIN always holds every privilege.</p>
-          ) : (
-            <>
-              <div>
-                <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Inherits (like GRANT ROLE ... TO ROLE)</p>
-                <div className="flex flex-wrap gap-1">
-                  {roles.filter((r) => r.role !== draft.role && r.role !== "SUPER_ADMIN").map((r) => (
-                    <button key={r.role} type="button" onClick={() => toggleInherit(r.role)} aria-pressed={draft.inherits.includes(r.role)}
-                            className={cn("rounded-full border px-2 py-0.5 text-[11px]", draft.inherits.includes(r.role) ? "border-violet-500 bg-violet-500 text-white" : "bg-card text-muted-foreground")}>
-                      {r.role.toLowerCase().replace(/_/g, " ")}
-                    </button>
-                  ))}
-                </div>
-              </div>
-              <div className="grid gap-3 md:grid-cols-2">
-                {groups.map((g) => (
-                  <div key={g} className="rounded-lg border p-3">
-                    <p className="mb-1 text-xs font-semibold">{g}</p>
-                    {privileges.filter((p) => p.group === g).map((p) => (
-                      <label key={p.privilege} className="flex items-start gap-2 py-0.5 text-xs">
-                        <input type="checkbox" className="mt-0.5" checked={draft.privileges.includes(p.privilege)} onChange={() => togglePriv(p.privilege)} />
-                        <span><span className="font-mono">{p.privilege}</span><span className="block text-[11px] text-muted-foreground">{p.description}</span></span>
-                      </label>
-                    ))}
-                  </div>
-                ))}
-              </div>
-            </>
-          )}
-          <div className="flex flex-wrap items-center gap-2 border-t pt-3">
-            {!isSuper && (
-              <Button size="sm" disabled={busy || !draft.role} onClick={() => run(() => saveRole({ role: draft.role, description: draft.description, privileges: draft.privileges, inherits: draft.inherits }, creating),
-                                                                                  creating ? `${draft.role} created` : `${draft.role} saved`)}>
-                {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}{creating ? "Create role" : "Save role"}
-              </Button>
-            )}
-            {!creating && !draft.system && (
-              <Button size="sm" variant="ghost" disabled={busy} onClick={() => run(() => deleteRole(draft.role), `${draft.role} deleted`)}>
-                <Trash2 className="h-3.5 w-3.5" />Delete
-              </Button>
-            )}
-            <Message msg={msg} />
-          </div>
+    <div className="grid gap-4 lg:grid-cols-[280px_minmax(0,1fr)]">
+      <div className="space-y-2">
+        <Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Find a role" aria-label="Find a role" />
+        <div className="space-y-1">
+          {shown.map((r) => (
+            <button key={r.role} type="button" onClick={() => pick(r.role)}
+                    className={cn("w-full rounded-lg border px-3 py-2 text-left transition",
+                                  r.role === selected && !creating ? "border-primary bg-primary/5 ring-1 ring-primary/30" : "border-transparent hover:bg-muted")}>
+              <span className="flex items-center gap-1.5">
+                <span className="truncate text-sm font-medium capitalize">{pretty(r.role)}</span>
+                {r.role === "SUPER_ADMIN" && <Badge variant="destructive" className="px-1.5 py-0 text-[9px]">all</Badge>}
+                {r.read_only && <Badge variant="outline" className="px-1.5 py-0 text-[9px]">view only</Badge>}
+                {r.approves && <Badge variant="outline" className="border-violet-300 px-1.5 py-0 text-[9px] text-violet-700">approver</Badge>}
+                <span className="ml-auto text-[10px] text-muted-foreground" title="members">{r.members.length} <Users2 className="inline h-3 w-3" /></span>
+              </span>
+              <span className="mt-0.5 block truncate text-[11px] text-muted-foreground">{r.description}</span>
+              <span className="block text-[10px] text-muted-foreground">{r.role === "SUPER_ADMIN" ? "every privilege" : `${r.effective?.length ?? r.privileges.length} privileges`}{r.system ? " · system" : ""}</span>
+            </button>
+          ))}
         </div>
-      )}
+        <Button size="sm" variant="outline" className="w-full" onClick={startNew}><Plus className="h-3.5 w-3.5" />New role</Button>
+      </div>
+
+      <div className="relative space-y-4 rounded-xl border bg-card p-4 pb-16">
+        <div className="flex flex-wrap items-start gap-3">
+          <div className="min-w-0 flex-1 space-y-1">
+            {creating ? (
+              <label className="block space-y-1 text-xs">Role name
+                <Input value={draft.role} onChange={(e) => setDraft({ ...draft, role: e.target.value.toUpperCase().replace(/[^A-Z0-9_]/g, "_") })}
+                       className="w-64 font-mono" placeholder="FINANCE_REVIEWER" />
+              </label>
+            ) : (
+              <h3 className="flex flex-wrap items-center gap-2 font-mono text-lg font-semibold">
+                {draft.role}
+                {draft.system && <Badge variant="outline">system</Badge>}
+                {viewOnly && <Badge variant="outline" className="border-sky-300 text-sky-700">view only</Badge>}
+              </h3>
+            )}
+            <p className="text-xs text-muted-foreground">
+              {isSuper ? "Holds every privilege and can approve any request. Cannot be edited."
+                : viewOnly ? "Can open every page but cannot change, run, request or use AI for anything."
+                : `${total.size} privileges: ${own.size} granted directly, ${total.size - own.size} inherited.`}
+            </p>
+          </div>
+          <label className="w-full space-y-1 text-xs sm:w-96">Description
+            <Input value={draft.description ?? ""} disabled={isSuper} onChange={(e) => setDraft({ ...draft, description: e.target.value })} />
+          </label>
+        </div>
+
+        {!creating && (
+          <div className="rounded-lg border bg-muted/20 p-3">
+            <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Members</p>
+            <div className="flex flex-wrap items-center gap-1.5">
+              {draft.members.map((m) => (
+                <span key={m} className="inline-flex items-center gap-1 rounded-full border bg-card px-2 py-0.5 font-mono text-[11px]">
+                  {m}
+                  <button type="button" aria-label={`Remove ${m}`} disabled={busy} onClick={() => run(() => roleMember(draft.role, m, "remove"), `${m} removed from ${draft.role}`)}
+                          className="rounded-full hover:bg-muted"><X className="h-3 w-3" /></button>
+                </span>
+              ))}
+              {draft.members.length === 0 && <span className="text-xs text-muted-foreground">No members yet.</span>}
+              <span className="ml-auto flex items-center gap-1">
+                <Input list="known-users" value={member} onChange={(e) => setMember(e.target.value.toUpperCase())} placeholder="SNOWFLAKE.USER"
+                       className="h-8 w-48 font-mono text-xs" aria-label="Add member" />
+                <datalist id="known-users">{users.map((u) => <option key={u.user} value={u.user} />)}</datalist>
+                <Button size="sm" variant="outline" disabled={busy || !member.trim()}
+                        onClick={() => { run(() => roleMember(draft.role, member.trim(), "add"), `${member} added to ${draft.role}`); setMember(""); }}>
+                  <UserPlus className="h-3.5 w-3.5" />Add
+                </Button>
+              </span>
+            </div>
+          </div>
+        )}
+
+        {!isSuper && (
+          <>
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Inherits</p>
+              <p className="mb-2 text-[11px] text-muted-foreground">Everything the chosen roles can do, this role can do too (like GRANT ROLE ... TO ROLE in Snowflake).</p>
+              <div className="flex flex-wrap gap-1.5">
+                {roles.filter((r) => r.role !== draft.role && r.role !== "SUPER_ADMIN").map((r) => {
+                  const on = draft.inherits.includes(r.role);
+                  return (
+                    <button key={r.role} type="button" onClick={() => toggleInherit(r.role)} aria-pressed={on}
+                            className={cn("inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-[11px] capitalize transition",
+                                          on ? "border-violet-500 bg-violet-500 text-white" : "bg-card text-muted-foreground hover:border-violet-300")}>
+                      {on && <Check className="h-3 w-3" />}{pretty(r.role)}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="grid gap-3 md:grid-cols-2">
+              {groups.map((g) => {
+                const items = privileges.filter((p) => p.group === g);
+                const ownable = items.filter((p) => !via[p.privilege]);
+                const allOn = ownable.length > 0 && ownable.every((p) => own.has(p.privilege));
+                return (
+                  <div key={g} className="rounded-lg border p-3">
+                    <div className="mb-1.5 flex items-center justify-between">
+                      <p className="text-xs font-semibold">{g}</p>
+                      {ownable.length > 0 && (
+                        <button type="button" onClick={() => toggleGroup(g, !allOn)} className="text-[10px] text-primary hover:underline">
+                          {allOn ? "clear" : "select all"}
+                        </button>
+                      )}
+                    </div>
+                    {items.map((p) => {
+                      const inherited = via[p.privilege];
+                      return (
+                        <label key={p.privilege} className={cn("flex items-start gap-2 rounded px-1 py-1 text-xs", inherited ? "opacity-80" : "hover:bg-muted/40")}>
+                          <input type="checkbox" className="mt-0.5" checked={own.has(p.privilege) || Boolean(inherited)}
+                                 disabled={Boolean(inherited) && !own.has(p.privilege)} onChange={() => togglePriv(p.privilege)} />
+                          <span className="min-w-0">
+                            <span className="font-mono">{p.privilege}</span>
+                            {inherited && !own.has(p.privilege) && (
+                              <span className="ml-1.5 rounded-full bg-violet-100 px-1.5 py-0 text-[9px] text-violet-700 dark:bg-violet-950 dark:text-violet-300">via {pretty(inherited)}</span>
+                            )}
+                            <span className="block text-[11px] text-muted-foreground">{p.description}</span>
+                          </span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                );
+              })}
+            </div>
+          </>
+        )}
+
+        {(dirty || msg || (!creating && !draft.system)) && !isSuper && (
+          <div className="absolute inset-x-0 bottom-0 flex flex-wrap items-center gap-2 rounded-b-xl border-t bg-card/95 px-4 py-2 backdrop-blur">
+            {dirty ? <span className="text-xs font-medium text-warning">Unsaved changes</span> : <Message msg={msg} />}
+            <span className="ml-auto flex gap-2">
+              {!creating && !draft.system && !dirty && (
+                <Button size="sm" variant="ghost" disabled={busy} onClick={() => run(() => deleteRole(draft.role), `${draft.role} deleted`)}>
+                  <Trash2 className="h-3.5 w-3.5" />Delete role
+                </Button>
+              )}
+              {dirty && <Button size="sm" variant="ghost" disabled={busy} onClick={() => (creating ? pick(roles[0]?.role ?? "") : setDraft(base))}>Discard</Button>}
+              {dirty && (
+                <Button size="sm" disabled={busy || !draft.role}
+                        onClick={() => run(() => saveRole({ role: draft.role, description: draft.description, privileges: draft.privileges, inherits: draft.inherits }, creating),
+                                           creating ? `${draft.role} created` : `${draft.role} saved`)}>
+                  {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}{creating ? "Create role" : "Save role"}
+                </Button>
+              )}
+            </span>
+          </div>
+        )}
+        {dirty && msg && <Message msg={msg} />}
+      </div>
     </div>
   );
 }
@@ -300,7 +413,7 @@ export function AccessSection({ users, roles, privileges, policies, settings, ev
         ))}
       </div>
       {tab === "users" && <Users users={users} roles={roles} />}
-      {tab === "roles" && <Roles roles={roles} privileges={privileges} />}
+      {tab === "roles" && <Roles roles={roles} privileges={privileges} users={users} />}
       {tab === "policies" && <Policies policies={policies} roles={roles} />}
       {tab === "settings" && <Settings settings={settings} roles={roles} />}
       {tab === "log" && <Log events={events} />}

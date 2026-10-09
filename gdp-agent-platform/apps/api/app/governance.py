@@ -18,7 +18,7 @@ import secrets
 import threading
 import time
 import uuid
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
@@ -27,7 +27,8 @@ from pydantic import BaseModel, Field
 
 from app.db import AUTH_MODE, Db, dev_db, lookup_session
 from services.governance.policy import (
-    ALL, DEFAULT_POLICIES, PRIVILEGES, SYSTEM_ROLES, can_approve, decide, effective_privileges, privilege_for, summarize,
+    ADDED_PRIVILEGES, ALL, DEFAULT_POLICIES, PRIVILEGES, SYSTEM_ROLES, SYSTEM_VERSION, can_approve, creates_cycle, decide,
+    effective_privileges, privilege_for, read_only, summarize,
 )
 
 router = APIRouter()
@@ -128,6 +129,21 @@ def bootstrap(db: Db) -> None:
                 _merge(db, "ROLE_GRANT", {"ROLE_NAME": name, "GRANTED_ROLE": g})
         for priv, role in DEFAULT_POLICIES.items():
             _merge(db, "APPROVAL_POLICY", {"PRIVILEGE": priv}, {"APPROVER_ROLE": role})
+        # privileges introduced after a deployment was seeded: granted once to the system roles that list them
+        found = db.query("SELECT SETTING_VALUE FROM GOVERNANCE.SETTING WHERE SETTING_KEY = 'SYSTEM_VERSION'")
+        stored = int(_json(found[0]["setting_value"]) or 1) if found else 1
+        if stored < SYSTEM_VERSION:
+            for version, privs in sorted(ADDED_PRIVILEGES.items()):
+                if version <= stored:
+                    continue
+                for name, spec in SYSTEM_ROLES.items():
+                    for p in privs:
+                        if p in spec["privileges"]:
+                            _merge(db, "ROLE_PRIVILEGE", {"ROLE_NAME": name, "PRIVILEGE": p})
+            db.execute("""MERGE INTO GOVERNANCE.SETTING T USING (SELECT 'SYSTEM_VERSION' AS K) S ON T.SETTING_KEY = S.K
+                          WHEN MATCHED THEN UPDATE SET SETTING_VALUE = PARSE_JSON(%s)
+                          WHEN NOT MATCHED THEN INSERT (SETTING_KEY, SETTING_VALUE) VALUES (S.K, PARSE_JSON(%s))""",
+                       (str(SYSTEM_VERSION), str(SYSTEM_VERSION)))
         if not db.query("SELECT 1 FROM GOVERNANCE.USER_ROLE LIMIT 1"):
             admins = {db.user.upper()} | {u.strip().upper() for u in os.environ.get("AIP_SUPER_ADMINS", "").split(",") if u.strip()}
             for user in admins:
@@ -142,7 +158,7 @@ def bootstrap(db: Db) -> None:
 def settings(db: Db) -> dict:
     def load():
         out = dict(DEFAULT_SETTINGS)
-        for r in db.query("SELECT SETTING_KEY, SETTING_VALUE FROM GOVERNANCE.SETTING"):
+        for r in db.query("SELECT SETTING_KEY, SETTING_VALUE FROM GOVERNANCE.SETTING WHERE SETTING_KEY <> 'SYSTEM_VERSION'"):
             out[r["setting_key"]] = _json(r["setting_value"])
         return out
     return _cached("settings", load)
@@ -275,7 +291,7 @@ def summary(db: Db) -> dict:
     except Exception:
         pass
     return {"governance": True, "roles": who["roles"], "granted_roles": who["granted"],
-            "privileges": who["privileges"], "pending_for_me": pending}
+            "privileges": who["privileges"], "pending_for_me": pending, "read_only": read_only(who["privileges"])}
 
 
 def _requests(db: Db, where: str = "1 = 1", params: tuple = ()) -> list[dict]:
@@ -343,19 +359,23 @@ async def approve_request(request_id: str, body: Decision, request: Request):
             headers[h] = request.headers[h]
     from app.main import app as api_app
 
-    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=api_app), base_url="http://governance", timeout=600) as client:
-        response = await client.request(req["method"], req["path"], headers=headers,
-                                        content=json.dumps(req["payload"]) if req["payload"] is not None else None)
     try:
-        result = response.json()
-    except ValueError:
-        result = {"text": response.text[:2000]}
-    status = "APPLIED" if response.status_code < 400 else "FAILED"
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=api_app), base_url="http://governance", timeout=600) as client:
+            response = await client.request(req["method"], req["path"], headers=headers,
+                                            content=json.dumps(req["payload"]) if req["payload"] is not None else None)
+        code = response.status_code
+        try:
+            result = response.json()
+        except ValueError:
+            result = {"text": response.text[:2000]}
+    except Exception as exc:  # never leave a request stuck in APPROVED
+        code, result = 500, {"detail": f"Applying the change failed: {str(exc)[:500]}"}
+    status = "APPLIED" if code < 400 else "FAILED"
     await run_in_threadpool(lambda: db.execute(
         "UPDATE GOVERNANCE.CHANGE_REQUEST SET STATUS = %s, RESULT = PARSE_JSON(%s) WHERE REQUEST_ID = %s",
-        (status, json.dumps({"status_code": response.status_code, "body": result}, default=str)[:60000], request_id)))
-    await run_in_threadpool(_event, db, status, request_id, {"by": who["user"], "status_code": response.status_code})
-    return {"request_id": request_id, "status": status, "status_code": response.status_code, "result": result}
+        (status, json.dumps({"status_code": code, "body": result}, default=str)[:60000], request_id)))
+    await run_in_threadpool(_event, db, status, request_id, {"by": who["user"], "status_code": code})
+    return {"request_id": request_id, "status": status, "status_code": code, "result": result}
 
 
 @router.post("/api/governance/requests/{request_id}/reject")
@@ -398,10 +418,26 @@ def list_roles(db: Db = Depends(gov_db)):
     members: dict[str, list[str]] = {}
     for r in db.query("SELECT USER_NAME, ROLE_NAME FROM GOVERNANCE.USER_ROLE ORDER BY USER_NAME"):
         members.setdefault(r["role_name"], []).append(r["user_name"])
-    return {"roles": [{"role": r["role_name"], "description": r["description"], "system": bool(r["is_system"]),
-                       "privileges": sorted(role_privs.get(r["role_name"], [])), "inherits": sorted(grants.get(r["role_name"], [])),
-                       "members": members.get(r["role_name"], [])}
-                      for r in db.query("SELECT * FROM GOVERNANCE.APP_ROLE ORDER BY IS_SYSTEM DESC, ROLE_NAME")]}
+    def sources(role: str) -> dict:
+        """Privilege -> the inherited role it comes from (own privileges excluded)."""
+        out: dict = {}
+        for parent in grants.get(role, []):
+            _, privs = effective_privileges([parent], role_privs, grants)
+            for p in privs:
+                out.setdefault(p, parent)
+        return out
+
+    rows = db.query("SELECT * FROM GOVERNANCE.APP_ROLE ORDER BY IS_SYSTEM DESC, ROLE_NAME")
+    used = {r["approver_role"] for r in db.query("SELECT DISTINCT APPROVER_ROLE FROM GOVERNANCE.APPROVAL_POLICY WHERE ACTIVE")}
+    out = []
+    for r in rows:
+        name = r["role_name"]
+        _, effective = effective_privileges([name], role_privs, grants)
+        out.append({"role": name, "description": r["description"], "system": bool(r["is_system"]),
+                    "privileges": sorted(role_privs.get(name, [])), "inherits": sorted(grants.get(name, [])),
+                    "inherited": sources(name), "effective": sorted(effective), "read_only": read_only(effective),
+                    "approves": name in used, "members": members.get(name, [])})
+    return {"roles": out}
 
 
 class RoleIn(BaseModel):
@@ -417,9 +453,12 @@ def _write_role(db: Db, body: RoleIn, create: bool) -> dict:
     if unknown:
         raise HTTPException(400, f"Unknown privilege {unknown[0]}")
     known_roles = {r["role_name"] for r in db.query("SELECT ROLE_NAME FROM GOVERNANCE.APP_ROLE")}
-    bad = [r for r in body.inherits if r.upper() not in known_roles or r.upper() == name]
+    bad = [r for r in body.inherits if r.upper() not in known_roles or r.upper() in (name, "SUPER_ADMIN")]
     if bad:
         raise HTTPException(400, f"Cannot inherit {bad[0]}")
+    _, grants = role_model(db)
+    if creates_cycle(name, body.inherits, grants):
+        raise HTTPException(400, f"{name} would end up inheriting itself; remove the loop first.")
     if create:
         if name in known_roles:
             raise HTTPException(409, f"{name} already exists")
@@ -460,12 +499,39 @@ def delete_role(role: str, db: Db = Depends(gov_db)):
         raise HTTPException(404, f"{name} not found")
     if found[0]["is_system"]:
         raise HTTPException(400, "System roles cannot be deleted; remove their members or privileges instead.")
+    if db.query("SELECT 1 FROM GOVERNANCE.APPROVAL_POLICY WHERE APPROVER_ROLE = %s AND ACTIVE LIMIT 1", (name,)):
+        raise HTTPException(400, f"{name} approves at least one policy; pick another approver role first.")
+    if str(settings(db).get("DEFAULT_ROLE") or "").upper() == name:
+        raise HTTPException(400, f"{name} is the default role for new users; change the default first.")
     for table in ("USER_ROLE", "ROLE_PRIVILEGE", "APP_ROLE"):
         db.execute(f"DELETE FROM GOVERNANCE.{table} WHERE ROLE_NAME = %s", (name,))
     db.execute("DELETE FROM GOVERNANCE.ROLE_GRANT WHERE ROLE_NAME = %s OR GRANTED_ROLE = %s", (name, name))
     _event(db, "ROLE_DELETED", name, {})
     invalidate()
     return {"deleted": name}
+
+
+class MemberIn(BaseModel):
+    user: str = Field(min_length=1, max_length=256)
+    action: Literal["add", "remove"]
+
+
+@router.post("/api/governance/roles/{role}/members")
+def role_member(role: str, body: MemberIn, db: Db = Depends(gov_db)):
+    """Grant or revoke one role for one user, from the role page."""
+    name, user = role.upper(), body.user.strip().upper()
+    if not db.query("SELECT 1 FROM GOVERNANCE.APP_ROLE WHERE ROLE_NAME = %s", (name,)):
+        raise HTTPException(404, f"{name} not found")
+    if body.action == "add":
+        _merge(db, "USER_ROLE", {"USER_NAME": user, "ROLE_NAME": name})
+    else:
+        last = db.query("SELECT COUNT(*) AS N FROM GOVERNANCE.USER_ROLE WHERE ROLE_NAME = 'SUPER_ADMIN'")[0]["n"] <= 1
+        if name == "SUPER_ADMIN" and last:
+            raise HTTPException(400, "This is the last super admin; grant SUPER_ADMIN to someone else first.")
+        db.execute("DELETE FROM GOVERNANCE.USER_ROLE WHERE USER_NAME = %s AND ROLE_NAME = %s", (user, name))
+    _event(db, "ROLE_MEMBER", name, {"user": user, "action": body.action})
+    invalidate()
+    return {"role": name, "user": user, "action": body.action}
 
 
 @router.get("/api/governance/users")

@@ -1,5 +1,6 @@
 "use client";
 
+import { useAccess } from "@/components/access";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -77,6 +78,7 @@ function CopilotShell({ children }: { children: ReactNode }) {
   const readQuery = useCallback(() => setQuery(typeof window === "undefined" ? "" : window.location.search), []);
   const [focus, setFocus] = useState<Focus>(null);
   const [show, setShow] = useState(false);
+  const { can } = useAccess();
   const [wide, setWide] = useState(false);
   const [unread, setUnread] = useState(false);
   const showRef = useRef(show);
@@ -148,14 +150,14 @@ function CopilotShell({ children }: { children: ReactNode }) {
   return (
     <CopilotCtx.Provider value={{ setFocus, open, shown: show }}>
       {children}
-      <button type="button" onClick={() => setShow((v) => !v)} aria-label={show ? "Close copilot" : "Open copilot"}
+      {can("AI.USE") && <button type="button" onClick={() => setShow((v) => !v)} aria-label={show ? "Close copilot" : "Open copilot"}
               title="Copilot (Ctrl+J)" aria-expanded={show}
               className={cn("fixed bottom-5 right-5 z-[71] grid h-14 w-14 place-items-center rounded-full bg-gradient-to-br from-violet-500 to-primary text-white shadow-lg ring-4 ring-background transition hover:scale-105 hover:shadow-xl",
                             show && "max-sm:hidden")}>
         {show ? <X className="h-6 w-6" /> : <Sparkles className="h-6 w-6" />}
         {unread && !show && <span className="absolute right-1 top-1 h-3 w-3 rounded-full bg-destructive ring-2 ring-background" />}
-      </button>
-      {show && (
+      </button>}
+      {show && can("AI.USE") && (
         <aside role="dialog" aria-label="Copilot"
                className={cn("fixed z-[70] flex flex-col overflow-hidden bg-background shadow-2xl",
                              "max-sm:inset-0",

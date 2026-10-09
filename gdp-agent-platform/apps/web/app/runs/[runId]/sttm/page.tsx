@@ -1,4 +1,5 @@
-import { api, getRun } from "@/lib/api";
+import { can, canAct } from "@/lib/types";
+import { api, getRun, whoami } from "@/lib/api";
 import { AiSuggestions } from "@/components/ai-suggestions";
 import { StageGate } from "@/components/stage-gate";
 import { StageAction } from "@/components/stage-action";
@@ -11,15 +12,16 @@ import { SttmGate } from "./sttm-gate";
 import { JoinPlan, type JoinGraph } from "./join-plan";
 
 export default async function SttmPage({ params }: { params: { runId: string } }) {
-  const [state, contract, profile] = await Promise.all([
+  const [state, me, contract, profile] = await Promise.all([
     getRun(params.runId),
+    whoami(),
     api<{ sttm: { sttm_id: string; sttm_version: number; status: string; table_design: unknown; created_by: string } | null;
           lines: SttmLine[];
         }>(`/api/runs/${params.runId}/sttm`),
     api<{ columns: ProfileCol[] }>(`/api/runs/${params.runId}/profile`).catch(() => ({ columns: [] })),
   ]);
-  const canGenerate = ["MAPPING_APPROVED", "STTM_PENDING"].includes(state.current_state);
-  const canEdit = ["STTM_REVIEW", "STTM_PENDING"].includes(state.current_state);
+  const canGenerate = can(me, "RUN.OPERATE") && ["MAPPING_APPROVED", "STTM_PENDING"].includes(state.current_state);
+  const canEdit = canAct(me, "STTM.EDIT") && can(me, "AI.USE") && ["STTM_REVIEW", "STTM_PENDING"].includes(state.current_state);
   const raw = contract.sttm?.table_design;
   const design = (typeof raw === "string" ? JSON.parse(raw) : raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
   const graph = (design.join_graph ?? null) as JoinGraph | null;

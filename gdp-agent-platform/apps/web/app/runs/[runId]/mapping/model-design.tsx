@@ -167,7 +167,9 @@ function EntityCard({ entity, index, issues, editable, onChange, onRemove }: {
   );
 }
 
-export function ModelDesign({ runId, data, canApply, state }: { runId: string; data: ModelPayload; canApply: boolean; state: string }) {
+export function ModelDesign({ runId, data, canApply, state, canEdit = true, canAI = true }: {
+  runId: string; data: ModelPayload; canApply: boolean; state: string; canEdit?: boolean; canAI?: boolean;
+}) {
   const router = useRouter();
   const versions = data.versions;
   const [selected, setSelected] = useState<number>(data.current?.version ?? 0);
@@ -288,7 +290,8 @@ export function ModelDesign({ runId, data, canApply, state }: { runId: string; d
               <div className="flex gap-2">
                 <Textarea rows={2} value={instructions} onChange={(e) => setInstructions(e.target.value)} className="flex-1"
                           placeholder={shown ? "Optional: what to change, e.g. split customer into its own dimension" : "Optional: anything the model must respect"} aria-label="Design instructions" />
-                <Button className="self-stretch bg-gradient-to-r from-violet-600 to-primary text-white" disabled={busy} onClick={generate}>
+                <Button className="self-stretch bg-gradient-to-r from-violet-600 to-primary text-white" disabled={busy || !canAI} onClick={generate}
+                        title={canAI ? undefined : "Needs the AI.USE and MODEL.EDIT privileges"}>
                   {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}{instructions && shown ? "Revise" : shown ? "Redesign" : "Design"}
                 </Button>
               </div>
@@ -341,11 +344,11 @@ export function ModelDesign({ runId, data, canApply, state }: { runId: string; d
           {draft ? (
             <div className="space-y-3">
               {draft.entities.map((e, i) => (
-                <EntityCard key={i} entity={e} index={i} issues={issues} editable
+                <EntityCard key={i} entity={e} index={i} issues={issues} editable={canEdit}
                             onChange={(n) => edit({ ...draft, entities: draft.entities.map((x, k) => (k === i ? n : x)) })}
                             onRemove={() => edit({ ...draft, entities: draft.entities.filter((_, k) => k !== i) })} />
               ))}
-              <Button size="sm" variant="outline" onClick={() => edit({ ...draft, entities: [...draft.entities, { entity_name: "NEW_ENTITY", kind: "TABLE", purpose: "", grain: "", business_keys: [], attributes: [] }] })}>
+              <Button size="sm" variant="outline" disabled={!canEdit} onClick={() => edit({ ...draft, entities: [...draft.entities, { entity_name: "NEW_ENTITY", kind: "TABLE", purpose: "", grain: "", business_keys: [], attributes: [] }] })}>
                 <Plus className="h-3.5 w-3.5" />Add entity
               </Button>
             </div>
@@ -360,7 +363,7 @@ export function ModelDesign({ runId, data, canApply, state }: { runId: string; d
               <span className="text-xs text-muted-foreground">
                 {errors ? `${errors} problem${errors === 1 ? "" : "s"} to fix before approving` : issues.length ? `${issues.length} note${issues.length === 1 ? "" : "s"}` : "Grounded in the profiled sources"}
               </span>
-              <Button size="sm" variant="outline" className="ml-auto" disabled={busy || !dirty} onClick={save}><Save className="h-3.5 w-3.5" />Save as new version</Button>
+              <Button size="sm" variant="outline" className="ml-auto" disabled={busy || !dirty || !canEdit} onClick={save}><Save className="h-3.5 w-3.5" />Save as new version</Button>
               <Button size="sm" disabled={busy || dirty || !canApply || errors > 0 || isApproved} onClick={approve}
                       title={!canApply ? "The run is past mapping; reopen mapping to change the target" : dirty ? "Save your edits first" : undefined}>
                 {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}{isApproved ? "In use" : "Approve and use for mapping"}

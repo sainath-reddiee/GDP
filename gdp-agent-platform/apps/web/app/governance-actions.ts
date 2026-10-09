@@ -9,7 +9,10 @@ export type ChangeRequest = {
   status: string; decided_by: string | null; decision_note: string | null; result: { status_code?: number; body?: unknown } | null;
   created_at: string; decided_at: string | null; can_decide: boolean;
 };
-export type GovRole = { role: string; description: string | null; system: boolean; privileges: string[]; inherits: string[]; members: string[] };
+export type GovRole = {
+  role: string; description: string | null; system: boolean; privileges: string[]; inherits: string[]; members: string[];
+  inherited?: Record<string, string>; effective?: string[]; read_only?: boolean; approves?: boolean;
+};
 export type GovPrivilege = { privilege: string; group: string; description: string };
 export type GovPolicy = GovPrivilege & { requires_approval: boolean; approver_role: string | null; four_eyes: boolean; allow_self: boolean; active: boolean };
 export type GovUser = { user: string; roles: string[] };
@@ -72,6 +75,14 @@ export async function savePolicy(privilege: string, body: {
 
 export async function saveSettings(body: Partial<GovSettings>) {
   const r = await attemptValue(() => api("/api/governance/settings", { method: "PUT", body: JSON.stringify(body) }));
+  done();
+  return r;
+}
+
+export async function roleMember(role: string, user: string, action: "add" | "remove") {
+  const r = await attemptValue(() => api(`/api/governance/roles/${role}/members`, {
+    method: "POST", body: JSON.stringify({ user, action }),
+  }));
   done();
   return r;
 }

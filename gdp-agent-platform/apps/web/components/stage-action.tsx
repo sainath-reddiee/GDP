@@ -1,5 +1,6 @@
 "use client";
 
+import { useAccess } from "@/components/access";
 import { useState, useTransition } from "react";
 import { Loader2 } from "lucide-react";
 import type { ActionResult } from "@/lib/api";
@@ -10,11 +11,13 @@ export function StageAction({ action, label, pendingLabel, ...props }:
   { action: () => Promise<ActionResult>; label: string; pendingLabel: string } & ButtonProps) {
   const [error, setError] = useState("");
   const [pending, start] = useTransition();
+  const { readOnly } = useAccess();
   return (
     <div>
       <Button
         {...props}
-        disabled={pending || props.disabled}
+        title={readOnly ? "View-only access" : props.title}
+        disabled={pending || props.disabled || readOnly}
         onClick={() => start(async () => {
           setError("");
           const result = await action();
@@ -29,7 +32,7 @@ export function StageAction({ action, label, pendingLabel, ...props }:
           Working in Snowflake — this tab stays on the step until it finishes.
         </p>
       )}
-      {error && <p role="alert" className="mt-2 text-sm text-destructive">{error}</p>}
+      {error && <p role="alert" className={error.startsWith("Sent to ") ? "mt-2 text-sm text-violet-700 dark:text-violet-300" : "mt-2 text-sm text-destructive"}>{error}</p>}
     </div>
   );
 }

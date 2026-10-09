@@ -1,5 +1,6 @@
 "use client";
 
+import { useAccess } from "@/components/access";
 import { useEffect, useState, useTransition } from "react";
 import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
@@ -36,6 +37,8 @@ export function SuggestionsPanel({ source, summary, effect, intro, canAct = true
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
   const [pending, start] = useTransition();
+  const { can } = useAccess();
+  canAct = canAct && can("AI.USE");
   const [expanded, setExpanded] = useState(placement === "inline");
   const [slot, setSlot] = useState<HTMLElement | null>(null);
   useEffect(() => { if (placement === "top") setSlot(document.getElementById("run-ai-slot")); }, [placement]);
