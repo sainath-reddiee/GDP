@@ -2,7 +2,7 @@
 
 import { useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { ChevronRight, CircleDashed, KeyRound, Layers, Loader2, Lock, RefreshCw, Rows3, Search, Table2 } from "lucide-react";
+import { CircleDashed, Eye, KeyRound, Layers, Loader2, Lock, RefreshCw, Rows3, Search, Table2 } from "lucide-react";
 import type { ProfileCacheTable } from "@/lib/types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -128,7 +128,17 @@ export function ProfileWorkspace({ runId, tables, columns, canRefresh }: {
                       {refreshing === t.table_name ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
                     </Button>
                   )}
-                  {ready && <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground group-hover:text-primary" />}
+                  {ready ? (
+                    <Button size="sm" variant="outline" className="shrink-0"
+                            onClick={(e) => { e.stopPropagation(); setSelected(t.table_name); }}>
+                      <Eye className="h-3.5 w-3.5" />View profile
+                    </Button>
+                  ) : t.status === "CACHED" && (
+                    <span className="max-w-[9rem] text-right text-[10px] leading-tight text-muted-foreground"
+                          title="The API did not say where this profile is stored. Restart the API on the latest code, or re-profile the table.">
+                      profile location unknown
+                    </span>
+                  )}
                 </div>
               );
             })}
