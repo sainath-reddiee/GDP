@@ -18,7 +18,7 @@ _ROOT = Path(__file__).resolve().parents[3]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field
 
 from app.agent import AGENT_NAME, stream_agent
@@ -2334,11 +2334,139 @@ def import_soda(run_id: str, body: ClientExpectations, db: Db = Depends(current_
 
 @app.post("/api/runs/{run_id}/soda/decisions")
 def save_soda(run_id: str, body: SodaDecisions, db: Db = Depends(current_db)):
+    from services.soda.custom import validate
+
+    for d in body.decisions:  # an edited definition is checked like a new check before it is stored
+        if str(d.get("decision") or "").upper() == "MODIFIED" and isinstance(d.get("definition"), dict):
+            found = db.query("SELECT TARGET_COLUMN, SEVERITY FROM CONTRACT.SODA_EXPECTATION_REGISTRY "
+                             "WHERE EXPECTATION_ID = %s AND RUN_ID = %s AND IS_CURRENT", (d.get("expectation_id"), run_id))
+            if found:
+                cleaned, problems = validate({"target_column": found[0]["target_column"],
+                                              "severity": found[0]["severity"], "definition": d["definition"]})
+                if problems:
+                    raise HTTPException(400, "; ".join(problems))
+                d["definition"] = cleaned["definition"]
     try:
         return db.call("CALL CONTRACT.SAVE_SODA_DECISIONS(%s, %s)",
                        (run_id, json.dumps(body.decisions)))
     except Exception as exc:
         raise _snowflake_error(exc) from exc
+
+
+class SodaCheckIn(BaseModel):
+    target_column: Optional[str] = Field(default=None, max_length=255)
+    severity: Literal["FAIL", "WARN"] = "FAIL"
+    requirement: Optional[str] = Field(default=None, max_length=4000)
+    definition: dict[str, Any]
+
+
+@app.post("/api/runs/{run_id}/soda/checks")
+def add_soda_check(run_id: str, body: SodaCheckIn, db: Db = Depends(current_db)):
+    """A check written by a person (guided form or raw definition), validated for its kind, added as PROPOSED."""
+    from services.soda.custom import validate
+
+    check, problems = validate(body.model_dump())
+    if problems:
+        raise HTTPException(400, "; ".join(problems))
+    current = db.query("""SELECT STTM_ID, DOMAIN_ID, TARGET_TABLE, VERSION FROM CONTRACT.SODA_EXPECTATION_REGISTRY
+                           WHERE RUN_ID = %s AND IS_CURRENT ORDER BY VERSION DESC LIMIT 1""", (run_id,))
+    if not current:
+        raise HTTPException(409, "Generate the data quality checks first; custom checks are added to that set.")
+    c = current[0]
+    expectation_id = str(uuid.uuid4())
+    db.execute("""INSERT INTO CONTRACT.SODA_EXPECTATION_REGISTRY (EXPECTATION_ID, RUN_ID, STTM_ID, DOMAIN_ID, TARGET_TABLE,
+                         TARGET_COLUMN, CHECK_TYPE, CHECK_DEFINITION, SEVERITY, ORIGIN, CLIENT_REQUIREMENT, STATUS, VERSION,
+                         IS_CURRENT, CREATED_BY)
+                  SELECT %s, %s, %s, %s, %s, NULLIF(%s, ''), %s, PARSE_JSON(%s), %s, 'USER', NULLIF(%s, ''), 'PROPOSED',
+                         %s, TRUE, CURRENT_USER()""",
+               (expectation_id, run_id, c["sttm_id"], c["domain_id"], c["target_table"], check["target_column"] or "",
+                check["check_type"], json.dumps(check["definition"]), check["severity"], check["requirement"] or "",
+                c["version"]))
+    from services.soda.expectations import render_check
+
+    return {"expectation_id": expectation_id, "check": check, "sodacl": render_check({**check, "target_table": c["target_table"]})}
+
+
+@app.post("/api/runs/{run_id}/soda/scan")
+def scan_soda(run_id: str, db: Db = Depends(current_db)):
+    """Run the checks in Snowflake now (built model, or today's source data when it is not built yet) and keep the
+    results. Uses the signed-in role, so it reads exactly what that role may read."""
+    from services.quality.scan import run_scan
+
+    try:
+        return invoke_source(db, run_scan, run_id, "UI")
+    except AssertionError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except Exception as exc:
+        raise _snowflake_error(exc) from exc
+
+
+@app.get("/api/runs/{run_id}/soda/scans")
+def soda_scans(run_id: str, db: Db = Depends(current_db)):
+    """Scan history, the latest scan's results, and each check's recent outcomes for trends."""
+    try:
+        scans = db.query("""SELECT SCAN_ID, TARGET, MODE, STARTED_AT::VARCHAR AS STARTED_AT, DURATION_MS, CHECKS, PASSED,
+                                   WARNED, FAILED, NOT_EVALUATED, ERRORS, HEALTH, ROWS_SCANNED, TRIGGERED_BY, CREATED_BY
+                              FROM QUALITY.CHECK_RUN WHERE RUN_ID = %s ORDER BY STARTED_AT DESC LIMIT 30""", (run_id,))
+    except Exception:
+        return {"scans": [], "latest": [], "history": {}, "ready": False}
+    latest: list[dict] = []
+    history: dict[str, list] = {}
+    if scans:
+        latest = db.query("""SELECT EXPECTATION_ID, TARGET_TABLE, TARGET_COLUMN, CHECK_TYPE, KIND, DIMENSION, SEVERITY,
+                                    OUTCOME, MEASURED, THRESHOLD, FAILED_ROWS, DETAIL, SAMPLE, SQL_TEXT, DURATION_MS
+                               FROM QUALITY.CHECK_RESULT WHERE SCAN_ID = %s
+                              ORDER BY ARRAY_POSITION(OUTCOME::VARIANT, ARRAY_CONSTRUCT('FAIL','ERROR','WARN','NOT_EVALUATED','PASS')),
+                                       TARGET_COLUMN""", (scans[0]["scan_id"],))
+        for r in latest:
+            r["sample"] = _json(r.get("sample"))
+        for r in db.query("""SELECT EXPECTATION_ID, OUTCOME, MEASURED, CREATED_AT::VARCHAR AS AT
+                               FROM QUALITY.CHECK_RESULT WHERE RUN_ID = %s
+                              QUALIFY ROW_NUMBER() OVER (PARTITION BY EXPECTATION_ID ORDER BY CREATED_AT DESC) <= 12
+                              ORDER BY CREATED_AT""", (run_id,)):
+            history.setdefault(r["expectation_id"] or "", []).append({"outcome": r["outcome"], "measured": r["measured"], "at": r["at"]})
+    return {"scans": scans, "latest": latest, "history": history, "ready": True}
+
+
+def _soda_kit(db: Db, run_id: str) -> tuple[dict, str]:
+    from services.soda.kit import build_kit
+
+    run = db.query("SELECT RUN_NAME FROM CORE.WORKFLOW_RUN WHERE RUN_ID = %s", (run_id,))
+    if not run:
+        raise HTTPException(404, "run not found")
+    checks = db.query("""SELECT TARGET_TABLE, TARGET_COLUMN, CHECK_TYPE, CHECK_DEFINITION, SEVERITY, STATUS,
+                                CLIENT_REQUIREMENT AS REQUIREMENT
+                           FROM CONTRACT.SODA_EXPECTATION_REGISTRY WHERE RUN_ID = %s AND IS_CURRENT""", (run_id,))
+    if not checks:
+        raise HTTPException(409, "Generate the data quality checks first.")
+    for c in checks:
+        c["definition"] = _json(c.pop("check_definition")) or {}
+    target = db.query("""SELECT T.TARGET_DATABASE, T.TARGET_SCHEMA, COALESCE(S.TABLE_DESIGN:target_table::VARCHAR, T.TARGET_TABLE) AS T
+                           FROM CONTRACT.STTM_REGISTRY S JOIN KNOWLEDGE.TARGET_TABLE_REGISTRY T ON T.TARGET_TABLE_ID = S.TARGET_TABLE_ID
+                          WHERE S.RUN_ID = %s ORDER BY S.STTM_VERSION DESC LIMIT 1""", (run_id,))
+    ctx = db.query("""SELECT CURRENT_ORGANIZATION_NAME() || '-' || CURRENT_ACCOUNT_NAME() AS ACCOUNT,
+                             CURRENT_WAREHOUSE() AS WAREHOUSE, CURRENT_ROLE() AS ROLE""")[0]
+    database = target[0]["target_database"] if target else "<DATABASE>"
+    schema = target[0]["target_schema"] if target else "<SCHEMA>"
+    table = (target[0]["t"] if target else checks[0]["target_table"]).upper()
+    files = build_kit(run[0]["run_name"], ctx["account"] or "<account>", database, schema, table,
+                      ctx["warehouse"] or "<WAREHOUSE>", ctx["role"] or "<ROLE>", checks)
+    return files, re.sub(r"[^A-Za-z0-9_-]+", "-", run[0]["run_name"]).strip("-").lower() or "soda-kit"
+
+
+@app.get("/api/runs/{run_id}/soda/kit")
+def soda_kit(run_id: str, db: Db = Depends(current_db)):
+    files, slug = _soda_kit(db, run_id)
+    return {"files": files, "slug": slug}
+
+
+@app.get("/api/runs/{run_id}/soda/kit.zip")
+def soda_kit_zip(run_id: str, db: Db = Depends(current_db)):
+    from services.soda.kit import zip_kit
+
+    files, slug = _soda_kit(db, run_id)
+    return Response(content=zip_kit(files), media_type="application/zip",
+                    headers={"Content-Disposition": f'attachment; filename="{slug}-soda-kit.zip"'})
 
 
 class QaAsk(BaseModel):

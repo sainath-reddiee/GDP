@@ -6,8 +6,10 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input, Label, Select, Textarea } from "@/components/ui/input";
 import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
-import { backtestSoda, importSoda, saveSodaDecisions } from "../pipeline-actions";
+import { addSodaCheck, backtestSoda, importSoda, saveSodaDecisions } from "../pipeline-actions";
 import type { SttmLine } from "../sttm/sttm-board";
+import { CheckEditor, cleanDefinition, draftFrom, type Draft } from "./check-editor";
+import { OutcomeBadge, Spark, type CheckResult, type HistoryPoint } from "./quality-shared";
 
 export type Check = {
   expectation_id: string;
@@ -62,8 +64,11 @@ function proposedOf(checks: Check[], ids: Set<string>) {
 }
 
 export function SodaBoard({
-  runId, checks, yaml, gxSuite, brief, sttmLines = [], canImport, canReview,
+  runId, checks, yaml, gxSuite, brief, sttmLines = [], canImport, canReview, latest = [], history = {}, columns = [],
 }: {
+  latest?: CheckResult[];
+  history?: Record<string, HistoryPoint[]>;
+  columns?: string[];
   runId: string;
   checks: Check[];
   yaml: string;
@@ -93,8 +98,15 @@ export function SodaBoard({
   const [showCoverage, setShowCoverage] = useState(true);
   const [groupByColumn, setGroupByColumn] = useState(false);
   const [columnFocus, setColumnFocus] = useState("");
+  const [editing, setEditing] = useState<Draft | null>(null);
+  const [adding, setAdding] = useState<Draft | null>(null);
   const [pending, start] = useTransition();
   const [testing, startTest] = useTransition();
+  const lastResult = useMemo(() => new Map(latest.map((r) => [r.expectation_id, r])), [latest]);
+  const columnNames = useMemo(
+    () => Array.from(new Set([...columns, ...sttmLines.map((l) => l.target_column.toUpperCase())])).sort(),
+    [columns, sttmLines],
+  );
   const lastIndex = useRef<number>(-1);
   const headerBox = useRef<HTMLInputElement>(null);
 
@@ -244,7 +256,13 @@ export function SodaBoard({
       setError("Only proposed checks can be decided.");
       return;
     }
-    if (decision === "MODIFIED" && !requirement.trim() && !current.client_requirement) {
+    if (decision === "MODIFIED" && !editing) {
+      setEditing(draftFrom(current));
+      setError("");
+      return;
+    }
+    const need = (decision === "MODIFIED" ? editing?.requirement : requirement)?.trim() || current.client_requirement || "";
+    if (decision === "MODIFIED" && !need) {
       setError("Modify needs a business need so the check stays traceable.");
       return;
     }
@@ -252,9 +270,29 @@ export function SodaBoard({
       expectation_id: current.expectation_id,
       decision,
       justification: justification.trim() || undefined,
-      requirement: requirement.trim() || current.client_requirement || undefined,
+      requirement: need || undefined,
+      ...(decision === "MODIFIED" && editing
+        ? { definition: cleanDefinition(editing.definition), severity: editing.severity }
+        : {}),
     }]);
+    setEditing(null);
   };
+
+  const saveNew = () => start(async () => {
+    if (!adding) return;
+    setError("");
+    setNotice("");
+    const result = await addSodaCheck(runId, {
+      target_column: adding.target_column || null,
+      severity: adding.severity,
+      requirement: adding.requirement,
+      definition: cleanDefinition(adding.definition),
+    });
+    if (!result.ok) { setError(result.error); return; }
+    setNotice("Check added as proposed. Review and approve it like any other check.");
+    setAdding(null);
+    setOpen(result.data.expectation_id);
+  });
 
   const lineFor = (check: Check) =>
     sttmLines.find((l) => l.target_column.toUpperCase() === (check.target_column || "").toUpperCase());
@@ -455,9 +493,29 @@ export function SodaBoard({
               {tables.map((s) => <option key={s} value={s}>{s}</option>)}
             </Select>
           </div>
-          <p className="text-xs text-muted-foreground">
-            Showing {visible.length} of {checks.length}. Shift-click to select a range of proposed rows.
-          </p>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="text-xs text-muted-foreground">
+              Showing {visible.length} of {checks.length}. Shift-click to select a range of proposed rows.
+            </p>
+            {canReview && (
+              <Button type="button" size="sm" variant={adding ? "secondary" : "outline"}
+                      onClick={() => setAdding(adding ? null : { target_column: "", severity: "FAIL", requirement: "", definition: { kind: "failed_rows" } })}>
+                {adding ? "Close new check" : "Add check"}
+              </Button>
+            )}
+          </div>
+          {adding && (
+            <div className="space-y-3 rounded-lg border border-primary/30 bg-primary/5 p-3">
+              <p className="text-sm font-medium">New check</p>
+              <CheckEditor draft={adding} onChange={setAdding} columns={columnNames} />
+              <div className="flex gap-2">
+                <Button type="button" size="sm" disabled={pending} onClick={saveNew}>
+                  {pending && <Loader2 className="h-4 w-4 animate-spin" />}Add as proposed
+                </Button>
+                <Button type="button" size="sm" variant="ghost" onClick={() => setAdding(null)}>Cancel</Button>
+              </div>
+            </div>
+          )}
           {canReview && (
             <div className="flex flex-wrap gap-2">
               <Button type="button" size="sm" disabled={pending || selectedProposed.length === 0} onClick={() => beginMass("APPROVED")}>
@@ -535,7 +593,7 @@ export function SodaBoard({
               <TH>Type</TH>
               <TH>Severity</TH>
               <TH>Origin</TH>
-              <TH>Backtest</TH>
+              <TH>{latest.length ? "Last scan" : "Backtest"}</TH>
               <TH>Status</TH>
             </TR>
           </THead>
@@ -584,6 +642,7 @@ export function SodaBoard({
                     className="text-left font-mono text-xs hover:underline"
                     onClick={() => {
                       setOpen(item.c.expectation_id);
+                      setEditing(null);
                       setJustification("");
                       setRequirement(item.c.client_requirement || "");
                     }}
@@ -596,7 +655,14 @@ export function SodaBoard({
                   <Badge variant={item.c.severity === "FAIL" ? "destructive" : "outline"}>{item.c.severity}</Badge>
                 </TD>
                 <TD>{item.c.origin}</TD>
-                <TD><BacktestBadge result={item.c.backtest} /></TD>
+                <TD>
+                  {latest.length ? (
+                    <span className="flex items-center gap-2">
+                      <OutcomeBadge outcome={lastResult.get(item.c.expectation_id)?.outcome} />
+                      <Spark points={history[item.c.expectation_id] ?? []} />
+                    </span>
+                  ) : <BacktestBadge result={item.c.backtest} />}
+                </TD>
                 <TD><Badge variant={badgeForStatus(item.c.status)}>{item.c.status}</Badge></TD>
               </TR>
               )
@@ -643,10 +709,36 @@ export function SodaBoard({
           <p className="font-mono text-xs text-muted-foreground">
             {current.target_table}{current.target_column ? `.${current.target_column}` : ""}
           </p>
+          {lastResult.get(current.expectation_id) && (() => {
+            const r = lastResult.get(current.expectation_id)!;
+            return (
+              <div className={`space-y-1 rounded-md border px-3 py-2 text-xs ${r.outcome === "FAIL" || r.outcome === "ERROR" ? "border-destructive/40 bg-destructive/5" : r.outcome === "WARN" ? "border-warning/40 bg-warning/5" : "bg-muted/30"}`}>
+                <div className="flex items-center gap-2">
+                  <span className="font-semibold">Last scan</span>
+                  <OutcomeBadge outcome={r.outcome} />
+                  <Spark points={history[current.expectation_id] ?? []} />
+                </div>
+                <p>{r.detail}</p>
+              </div>
+            );
+          })()}
           {current.sodacl && (
             <pre className="overflow-auto rounded-md bg-muted/40 p-2 font-mono text-xs leading-relaxed">{current.sodacl}</pre>
           )}
-          {canReview && current.status === "PROPOSED" && (
+          {canReview && current.status === "PROPOSED" && editing && (
+            <div className="space-y-3 rounded-md border border-primary/30 bg-primary/5 p-3">
+              <p className="text-sm font-medium">Modify, then approve</p>
+              <CheckEditor draft={editing} onChange={setEditing} columns={columnNames} kindLocked />
+              <Label htmlFor="soda_why_edit">Justification</Label>
+              <Textarea id="soda_why_edit" rows={2} value={justification} onChange={(e) => setJustification(e.target.value)}
+                        placeholder="Why the threshold or values changed" />
+              <div className="flex gap-2">
+                <Button type="button" disabled={pending} onClick={() => decideOne("MODIFIED")}>Save & approve</Button>
+                <Button type="button" variant="ghost" disabled={pending} onClick={() => setEditing(null)}>Cancel</Button>
+              </div>
+            </div>
+          )}
+          {canReview && current.status === "PROPOSED" && !editing && (
             <>
               <Label htmlFor="soda_need">Business need</Label>
               <Textarea id="soda_need" rows={2} value={requirement} onChange={(e) => setRequirement(e.target.value)} placeholder="What the client asked this check to protect" />

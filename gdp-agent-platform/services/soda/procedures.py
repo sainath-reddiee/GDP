@@ -349,9 +349,36 @@ def _store_feedback(session, domain_id: str, item: Dict[str, Any]) -> None:
                 ["KNOWLEDGE_ID", "DOMAIN_ID", "KNOWLEDGE_TYPE", "TITLE", "CONTENT", "CONTENT_JSON",
                  "TAGS", "SOURCE_REFERENCE", "STATUS", "VERSION", "IS_CURRENT", "CREATED_BY"],
                 ["?", "?", "'SODA_PATTERN'", "?", "?", "PARSE_JSON(?)", "PARSE_JSON(?)", "?",
-                 "'ACTIVE'", "?::NUMBER", "TRUE", "CURRENT_USER()"],
+                 "?", "?::NUMBER", "TRUE", "CURRENT_USER()"],
+                # a rejection stays current (generation reads it to avoid proposing the check again) but is not
+                # ACTIVE, so knowledge search and the copilot never present it as a rule; DRAFT, not RETIRED,
+                # because restoring a domain re-activates its RETIRED rows
                 [[str(uuid.uuid4()), domain_id, item["title"], item["content"], item["content_json"],
-                  ["FEEDBACK", "SODA"], item["source_reference"], version]])
+                  ["FEEDBACK", "SODA"] + ([] if item.get("active", True) else ["REJECTED"]), item["source_reference"],
+                  "ACTIVE" if item.get("active", True) else "DRAFT", version]])
+
+
+def store_approved_set(session, run_id: str) -> None:
+    """When the data quality gate is approved, keep the whole approved check set as one SODA_PATTERN knowledge
+    item for the target table, so the next run on this model starts from what was agreed."""
+    found = rows(session, """SELECT TARGET_TABLE, TARGET_COLUMN, CHECK_TYPE, CHECK_DEFINITION, SEVERITY,
+                                    CLIENT_REQUIREMENT, DOMAIN_ID
+                               FROM CONTRACT.SODA_EXPECTATION_REGISTRY
+                              WHERE RUN_ID = ? AND IS_CURRENT AND STATUS = 'APPROVED'""", [run_id])
+    if not found or not found[0]["DOMAIN_ID"]:
+        return
+    table = found[0]["TARGET_TABLE"]
+    checks = [{"target_column": r["TARGET_COLUMN"], "check_type": r["CHECK_TYPE"],
+               "definition": variant(r["CHECK_DEFINITION"]) or {}, "severity": r["SEVERITY"],
+               "requirement": r["CLIENT_REQUIREMENT"]} for r in found]
+    summary = "; ".join(f"{c['check_type'].lower()} on {c['target_column'] or 'table'}" for c in checks[:40])
+    _store_feedback(session, found[0]["DOMAIN_ID"], {
+        "source_reference": f"soda.checkset.{table}".upper(),
+        "title": f"Approved data quality checks for {table}"[:500],
+        "content": f"{len(checks)} approved checks for {table}: {summary}.",
+        "content_json": {"target_table": table, "decision": "APPROVED", "run_id": run_id, "checks": checks},
+        "active": True,
+    })
 
 
 def save_soda_decisions(session, run_id: str, decisions_json: str) -> Dict[str, Any]:
@@ -381,11 +408,12 @@ def save_soda_decisions(session, run_id: str, decisions_json: str) -> Dict[str, 
             continue
         definition = variant(raw.get("definition")) or variant(row["CHECK_DEFINITION"]) or {}
         requirement = raw.get("requirement") or row["CLIENT_REQUIREMENT"]
+        severity = (raw.get("severity") if decision == "MODIFIED" else None) or row["SEVERITY"]
         session.sql("""UPDATE CONTRACT.SODA_EXPECTATION_REGISTRY
-                          SET STATUS = ?, CHECK_DEFINITION = PARSE_JSON(?), CLIENT_REQUIREMENT = NULLIF(?, ''),
+                          SET STATUS = ?, CHECK_DEFINITION = PARSE_JSON(?), CLIENT_REQUIREMENT = NULLIF(?, ''), SEVERITY = ?,
                               REVIEWED_BY = CURRENT_USER(), REVIEWED_AT = CURRENT_TIMESTAMP()
                         WHERE EXPECTATION_ID = ? AND RUN_ID = ? AND IS_CURRENT""",
-                    params=[target, json.dumps(definition), clip(requirement), expectation_id, run_id]).collect()
+                    params=[target, json.dumps(definition), clip(requirement), severity, expectation_id, run_id]).collect()
         _store_feedback(session, sttm["DOMAIN_ID"], feedback_pattern(
             row["TARGET_TABLE"], row["TARGET_COLUMN"], row["CHECK_TYPE"], decision,
             requirement, raw.get("justification"), definition))
