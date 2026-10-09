@@ -64,6 +64,9 @@ export function ModelPanel({ database, schema, tables, domains, onClose }: {
     };
   }, [data, mode, picked, existing, proposed]);
 
+  const [proposedName, setProposedName] = useState("");
+  const [proposedSchema, setProposedSchema] = useState("SILVER");
+
   const create = () => start(async () => {
     setError("");
     const targets = mode === "existing"
@@ -75,6 +78,7 @@ export function ModelPanel({ database, schema, tables, domains, onClose }: {
     const r = await catalogModelingRun({
       database, schema, tables, run_name: runName || null, domain_id: domainId || null, targets,
       modeling_standard: standard ?? "GENERIC",
+      ...(mode === "new" ? { proposed_name: proposedName.trim() || null, proposed_schema: proposedSchema.trim() || null } : {}),
     });
     if (!r.ok) { setError(r.error); return; }
     router.push(r.data.error ? `/runs/${r.data.run_id}/source` : `/runs/${r.data.run_id}/mapping`);
@@ -222,7 +226,7 @@ export function ModelPanel({ database, schema, tables, domains, onClose }: {
                 <div className="grid gap-2 sm:grid-cols-2">
                   {([
                     ["existing", "Map to existing models", existing.length ? `${existing.length} matching model${existing.length === 1 ? "" : "s"} found` : "No matching model found"],
-                    ["new", "Propose a new model", proposed ? `Suggested name ${proposed.target_table}; mapping proposes the columns` : "Mapping proposes the model from the profiles"],
+                    ["new", "Propose a new model", "Starts from the source columns; design it with AI in Mapping, your conventions or none"],
                   ] as const).map(([value, title, body]) => (
                     <button key={value} type="button" aria-pressed={mode === value} disabled={value === "existing" && !existing.length}
                             onClick={() => setMode(value)}
@@ -233,6 +237,17 @@ export function ModelPanel({ database, schema, tables, domains, onClose }: {
                     </button>
                   ))}
                 </div>
+                {mode === "new" && (
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    <label className="space-y-1 text-xs">Model name
+                      <Input value={proposedName} onChange={(e) => setProposedName(e.target.value)} className="font-mono"
+                             placeholder={proposed?.target_table ?? "DIM_..."} />
+                    </label>
+                    <label className="space-y-1 text-xs">Target schema
+                      <Input value={proposedSchema} onChange={(e) => setProposedSchema(e.target.value)} className="font-mono" />
+                    </label>
+                  </div>
+                )}
                 {mode === "existing" && (
                   <div className="space-y-1.5">
                     {existing.map((s) => (

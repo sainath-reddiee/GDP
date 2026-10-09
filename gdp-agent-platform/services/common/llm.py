@@ -9,7 +9,7 @@ from services.common.sql import config_value, rows, variant
 
 DEFAULT_MODEL = "claude-sonnet-4-5"
 # Stages an admin can give their own model (LLM_MODEL_BY_STAGE); anything else uses LLM_MODEL.
-STAGES = ("PROFILING", "MAPPING", "STTM", "SODA", "QA", "DBT", "KNOWLEDGE", "SUGGESTIONS", "COPILOT")
+STAGES = ("PROFILING", "MAPPING", "STTM", "SODA", "QA", "DBT", "KNOWLEDGE", "SUGGESTIONS", "COPILOT", "MODELING")
 
 
 def resolve_model(default: str, by_stage: Any, stage: Optional[str]) -> str:

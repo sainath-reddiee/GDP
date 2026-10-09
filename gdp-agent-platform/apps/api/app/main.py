@@ -855,6 +855,116 @@ def transition(run_id: str, body: Transition, db: Db = Depends(current_db)):
         raise _snowflake_error(exc) from exc
 
 
+class ModelDesignIn(BaseModel):
+    preset: Optional[Literal["GDP", "COMPANY", "CUSTOM", "NONE"]] = None
+    custom: Optional[dict[str, Any]] = None
+    instructions: Optional[str] = Field(default=None, max_length=4000)
+    base_version: Optional[int] = None
+    target_database: Optional[str] = Field(default=None, max_length=255)
+    target_schema: Optional[str] = Field(default=None, max_length=255)
+
+
+class ModelDesignSave(BaseModel):
+    design: dict[str, Any]
+    conventions: dict[str, Any] = Field(default_factory=dict)
+    note: Optional[str] = Field(default=None, max_length=2000)
+
+
+MODEL_APPLY_STATES = {"PROFILING_COMPLETE", "DOMAIN_IDENTIFIED", "MAPPING_PENDING", "MAPPING_REVIEW"}
+
+
+@app.get("/api/runs/{run_id}/model")
+def get_model_design(run_id: str, db: Db = Depends(current_db)):
+    """Every version of the run's target model design (the registered 1:1 target becomes version 1)."""
+    from services.modeling.design import get_design
+
+    try:
+        return invoke_source(db, get_design, run_id)
+    except AssertionError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except Exception as exc:
+        raise _snowflake_error(exc) from exc
+
+
+@app.post("/api/runs/{run_id}/model/design")
+def design_model(run_id: str, body: ModelDesignIn, db: Db = Depends(current_db)):
+    """AI design grounded in the run's profiles, the domain's models and knowledge, and the modeling skills."""
+    from services.modeling.design import design_model as handler
+
+    try:
+        return invoke_source(db, handler, run_id, body.model_dump_json())
+    except AssertionError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except Exception as exc:
+        raise _snowflake_error(exc) from exc
+
+
+@app.put("/api/runs/{run_id}/model")
+def save_model_design(run_id: str, body: ModelDesignSave, db: Db = Depends(current_db)):
+    """The developer's edit, stored as a new version and validated."""
+    from services.modeling.design import save_design
+
+    try:
+        return invoke_source(db, save_design, run_id, body.model_dump_json())
+    except AssertionError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except Exception as exc:
+        raise _snowflake_error(exc) from exc
+
+
+@app.post("/api/runs/{run_id}/model/validate")
+def validate_model_design(run_id: str, body: ModelDesignSave, db: Db = Depends(current_db)):
+    from services.modeling.design import validate_design
+
+    try:
+        return invoke_source(db, validate_design, run_id, body.model_dump_json())
+    except Exception as exc:
+        raise _snowflake_error(exc) from exc
+
+
+@app.post("/api/runs/{run_id}/model/{version}/approve")
+def approve_model_design(run_id: str, version: int, db: Db = Depends(current_db)):
+    """Use this version as the run's target: registered with MODEL_SPEC and kept as MODEL_DEFINITION knowledge.
+    While mapping is in review the run goes back to mapping so candidates are regenerated for the new model."""
+    from services.modeling.design import apply_design
+
+    current = db.query("SELECT CURRENT_STATE FROM CORE.WORKFLOW_RUN WHERE RUN_ID = %s", (run_id,))
+    if not current:
+        raise HTTPException(404, "run not found")
+    state = current[0]["current_state"]
+    if state not in MODEL_APPLY_STATES:
+        raise HTTPException(409, f"The run is at {state}. Reopen mapping before changing the target model; "
+                                 "you can still edit and save versions.")
+    try:
+        result = _source_call(db, "CALL MODELING.APPLY_MODEL_DESIGN(%s, %s)", apply_design, run_id, version)
+    except AssertionError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except Exception as exc:
+        raise _snowflake_error(exc) from exc
+    sent_back = False
+    if state == "MAPPING_REVIEW":
+        try:
+            db.call("CALL CORE.REVIEW_TRANSITION(%s, %s, %s, %s, %s)",
+                    (run_id, "MAPPING_PENDING", "REQUEST_CHANGES", None, f"Target model changed to design v{version}"))
+            sent_back = True
+        except Exception:
+            pass  # the model is applied; the reviewer can send mapping back by hand
+    _drop_run(run_id)
+    return {**result, "mapping_reset": sent_back}
+
+
+@app.get("/api/runs/{run_id}/model/diff")
+def model_design_diff(run_id: str, base: int, compare: int, db: Db = Depends(current_db)):
+    from services.modeling.design import diff
+
+    found = {r["version"]: _json(r["design_json"]) or {} for r in db.query(
+        "SELECT VERSION, DESIGN_JSON FROM MODELING.MODEL_DESIGN WHERE RUN_ID = %s AND VERSION IN (%s, %s)",
+        (run_id, base, compare))}
+    if base not in found or compare not in found:
+        raise HTTPException(404, "version not found")
+    return {"base": base, "compare": compare, "changes": diff(found[base], found[compare])}
+
+
 @app.post("/api/runs/{run_id}/review")
 def review(run_id: str, body: Review, db: Db = Depends(current_db)):
     if str(body.to_state).upper() == "DBT_APPROVED" and str(body.decision).upper() == "APPROVE":
