@@ -237,9 +237,11 @@ function Checks({ data }: { data: TableInsights }) {
   );
 }
 
-export function ProfileDrawer({ database, schema, table, initialTab = "overview", onClose, onReprofile }: {
-  database: string; schema: string; table: string; initialTab?: DrawerTab; onClose: () => void;
-  onReprofile?: (table: string) => void;
+/** The full profile of one stored table (overview, columns, suggested checks), embeddable anywhere: the Sources
+ *  drawer, a run's profile page. `onClose` adds a close button to the header. */
+export function TableProfileView({ database, schema, table, initialTab = "overview", onClose, onReprofile, className }: {
+  database: string; schema: string; table: string; initialTab?: DrawerTab; onClose?: () => void;
+  onReprofile?: (table: string) => void; className?: string;
 }) {
   const [data, setData] = useState<TableInsights | null>(null);
   const [error, setError] = useState("");
@@ -255,67 +257,85 @@ export function ProfileDrawer({ database, schema, table, initialTab = "overview"
       if (r.ok) setData(r.data);
       else setError(r.error);
     });
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
-    window.addEventListener("keydown", onKey);
-    return () => { live = false; window.removeEventListener("keydown", onKey); };
-  }, [database, schema, table, onClose]);
+    return () => { live = false; };
+  }, [database, schema, table]);
 
   const p = data?.profile;
   const columns = (p?.columns ?? []).filter((c) => c.column_name.toLowerCase().includes(query.toLowerCase()));
+
+  return (
+    <div className={cn("flex min-h-0 flex-col", className)}>
+      <header className="flex items-start gap-3 border-b px-5 pt-4">
+        <FileJson className="mt-0.5 h-5 w-5 text-primary" />
+        <div className="min-w-0 pb-3">
+          <h3 className="truncate text-base font-semibold">{table}</h3>
+          <p className="truncate font-mono text-[11px] text-muted-foreground">{database}.{schema}</p>
+          <p className="truncate font-mono text-[11px] text-muted-foreground">
+            @METADATA.PROFILES_STAGE/{data?.entry.profile_stage_path ?? "…"}
+          </p>
+        </div>
+        {onClose && (
+          <button type="button" onClick={onClose} className="ml-auto rounded-md p-1 hover:bg-muted" aria-label="Close">
+            <X className="h-4 w-4" />
+          </button>
+        )}
+      </header>
+      <div className="flex gap-1 border-b px-5" role="tablist">
+        {(["overview", "columns", "checks"] as const).map((t) => (
+          <button key={t} type="button" role="tab" aria-selected={tab === t} onClick={() => setTab(t)}
+                  className={cn("-mb-px border-b-2 px-3 py-2 text-sm capitalize",
+                    tab === t ? "border-primary font-medium text-primary" : "border-transparent text-muted-foreground")}>
+            {t === "checks" ? `Suggested checks${data ? ` (${data.checks.length})` : ""}` : t}
+          </button>
+        ))}
+      </div>
+      <div className="flex-1 space-y-4 overflow-y-auto px-5 py-4">
+        {!data && !error && (
+          <p className="flex items-center gap-2 text-sm text-muted-foreground">
+            <Loader2 className="h-4 w-4 animate-spin" /> Reading the staged profile…
+          </p>
+        )}
+        {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
+        {data && p && tab === "overview" && (
+          <>
+            <Overview data={data} onReprofile={onReprofile ? () => onReprofile(table) : undefined} />
+            <p className="text-xs text-muted-foreground">
+              Profiled {p.profiled_at.slice(0, 16).replace("T", " ")} UTC{data.entry.profiled_by ? ` by ${data.entry.profiled_by}` : ""}
+              {p.approximate ? " · sampled (table over 10M rows)" : " · exact"}
+              {p.model_version ? ` · descriptions by ${p.model_version}` : ""}
+            </p>
+          </>
+        )}
+        {data && p && tab === "columns" && (
+          <>
+            <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Filter columns"
+                   className="h-8 w-full rounded-md border bg-card px-2 text-sm" />
+            <div className="space-y-3">{columns.map((c) => <ColumnCard key={c.column_name} c={c} />)}</div>
+          </>
+        )}
+        {data && tab === "checks" && <Checks data={data} />}
+      </div>
+    </div>
+  );
+}
+
+export function ProfileDrawer({ database, schema, table, initialTab = "overview", onClose, onReprofile }: {
+  database: string; schema: string; table: string; initialTab?: DrawerTab; onClose: () => void;
+  onReprofile?: (table: string) => void;
+}) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
       <button type="button" aria-label="Close profile" className="absolute inset-0 bg-black/30" onClick={onClose} />
       <aside role="dialog" aria-label={`Profile of ${table}`}
              className="relative flex h-full w-[760px] max-w-full flex-col overflow-hidden border-l bg-background shadow-2xl">
-        <header className="flex items-start gap-3 border-b px-5 pt-4">
-          <FileJson className="mt-0.5 h-5 w-5 text-primary" />
-          <div className="min-w-0 pb-3">
-            <h3 className="truncate text-base font-semibold">{table}</h3>
-            <p className="truncate font-mono text-[11px] text-muted-foreground">{database}.{schema}</p>
-            <p className="truncate font-mono text-[11px] text-muted-foreground">
-              @METADATA.PROFILES_STAGE/{data?.entry.profile_stage_path ?? "…"}
-            </p>
-          </div>
-          <button type="button" onClick={onClose} className="ml-auto rounded-md p-1 hover:bg-muted" aria-label="Close">
-            <X className="h-4 w-4" />
-          </button>
-        </header>
-        <div className="flex gap-1 border-b px-5" role="tablist">
-          {(["overview", "columns", "checks"] as const).map((t) => (
-            <button key={t} type="button" role="tab" aria-selected={tab === t} onClick={() => setTab(t)}
-                    className={cn("-mb-px border-b-2 px-3 py-2 text-sm capitalize",
-                      tab === t ? "border-primary font-medium text-primary" : "border-transparent text-muted-foreground")}>
-              {t === "checks" ? `Suggested checks${data ? ` (${data.checks.length})` : ""}` : t}
-            </button>
-          ))}
-        </div>
-        <div className="flex-1 space-y-4 overflow-y-auto px-5 py-4">
-          {!data && !error && (
-            <p className="flex items-center gap-2 text-sm text-muted-foreground">
-              <Loader2 className="h-4 w-4 animate-spin" /> Reading the staged profile…
-            </p>
-          )}
-          {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
-          {data && p && tab === "overview" && (
-            <>
-              <Overview data={data} onReprofile={onReprofile ? () => onReprofile(table) : undefined} />
-              <p className="text-xs text-muted-foreground">
-                Profiled {p.profiled_at.slice(0, 16).replace("T", " ")} UTC{data.entry.profiled_by ? ` by ${data.entry.profiled_by}` : ""}
-                {p.approximate ? " · sampled (table over 10M rows)" : " · exact"}
-                {p.model_version ? ` · descriptions by ${p.model_version}` : ""}
-              </p>
-            </>
-          )}
-          {data && p && tab === "columns" && (
-            <>
-              <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Filter columns"
-                     className="h-8 w-full rounded-md border bg-card px-2 text-sm" />
-              <div className="space-y-3">{columns.map((c) => <ColumnCard key={c.column_name} c={c} />)}</div>
-            </>
-          )}
-          {data && tab === "checks" && <Checks data={data} />}
-        </div>
+        <TableProfileView database={database} schema={schema} table={table} initialTab={initialTab}
+                          onClose={onClose} onReprofile={onReprofile} className="h-full" />
       </aside>
     </div>
   );

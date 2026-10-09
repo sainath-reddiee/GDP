@@ -8,16 +8,13 @@ import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
 import { ModelEr } from "@/components/model-er";
 import type { ModelGraph } from "@/app/onboarding/intent-types";
 import type { ProfileCacheTable } from "@/lib/types";
-import { refreshTableProfile, runProfiling, runProfilingFresh } from "../pipeline-actions";
+import { runProfiling, runProfilingFresh } from "../pipeline-actions";
+import { ProfileWorkspace, type ProfileColumn } from "./profile-workspace";
 
 export default async function ProfilePage({ params }: { params: { runId: string } }) {
   const [state, { columns, tables = [], source = "registry" }, graph] = await Promise.all([
     getRun(params.runId),
-    api<{ columns: {
-      profile_id: string; table_name: string; column_name: string; data_type: string; semantic_type: string;
-      pii_classification: string; row_count: number; null_percentage: number; distinct_percentage: number;
-      cardinality: string | null; potential_key_flag: boolean; generated_description: string | null;
-    }[]; tables?: ProfileCacheTable[]; source?: "registry" | "cache" }>(`/api/runs/${params.runId}/profile`),
+    api<{ columns: ProfileColumn[]; tables?: ProfileCacheTable[]; source?: "registry" | "cache" }>(`/api/runs/${params.runId}/profile`),
     api<ModelGraph>(`/api/runs/${params.runId}/model-graph`).catch(() => null),
   ]);
   const canRun = !state.is_archived && ["LANDING_COMPLETE", "PROFILING_PENDING"].includes(state.current_state);
@@ -65,53 +62,17 @@ export default async function ProfilePage({ params }: { params: { runId: string 
           )}
         </CardContent>
       </Card>
-      {tables.length > 0 && (
+      {(tables.length > 0 || columns.length > 0) && (
         <Card>
           <CardHeader>
-            <CardTitle>Table profiles</CardTitle>
+            <CardTitle>Profiles</CardTitle>
             <CardDescription>
-              Profiles are stored per source table and shared by every run. Re-profile a table when its data
-              changed in a way the row count does not show.
+              Stored per source table and shared by every run.{source === "cache" ? " This run has no profile rows of its own, so the stored profiles are shown." : ""}
+              {" "}Pick a table for its quality grade, column statistics and suggested checks; re-profile when its data changed in a way the row count does not show.
             </CardDescription>
           </CardHeader>
           <CardContent>
-            {source === "cache" && (
-              <p className="mb-3 text-sm text-muted-foreground">
-                This run has no profile rows of its own, so the stored profiles are shown instead.
-              </p>
-            )}
-            <Table>
-              <THead>
-                <TR><TH>Table</TH><TH>Profile</TH><TH>Rows</TH><TH>Columns</TH><TH>Mode</TH><TH>Profiled</TH><TH></TH></TR>
-              </THead>
-              <TBody>
-                {tables.map((t) => (
-                  <TR key={t.table_name}>
-                    <TD className="font-medium">{t.table_name}</TD>
-                    <TD>
-                      {t.status === "CACHED"
-                        ? <Badge variant="success">Profiled (cached)</Badge>
-                        : <Badge variant="outline">Unprofiled</Badge>}
-                    </TD>
-                    <TD>{t.row_count ?? "—"}</TD>
-                    <TD>{t.column_count ?? "—"}</TD>
-                    <TD>{t.status === "CACHED" ? (t.is_approximate ? "Sampled" : "Exact") : "—"}</TD>
-                    <TD className="text-muted-foreground">{t.profiled_at?.slice(0, 16) ?? "—"}</TD>
-                    <TD>
-                      {canRefresh && t.status === "CACHED" && (
-                        <StageAction
-                          size="sm"
-                          variant="outline"
-                          label="Re-profile table"
-                          pendingLabel="Re-profiling…"
-                          action={refreshTableProfile.bind(null, params.runId, t.table_name)}
-                        />
-                      )}
-                    </TD>
-                  </TR>
-                ))}
-              </TBody>
-            </Table>
+            <ProfileWorkspace runId={params.runId} tables={tables} columns={columns} canRefresh={canRefresh} />
           </CardContent>
         </Card>
       )}
@@ -141,33 +102,6 @@ export default async function ProfilePage({ params }: { params: { runId: string 
               </Table>
             )}
             <ModelEr graph={graph} runName={state.run.run_name} />
-          </CardContent>
-        </Card>
-      )}
-      {columns.length > 0 && (
-        <Card>
-          <CardHeader><CardTitle>Current profile</CardTitle></CardHeader>
-          <CardContent>
-            <Table>
-              <THead>
-                <TR><TH>Table</TH><TH>Column</TH><TH>Type</TH><TH>Semantic</TH><TH>PII</TH><TH>Null %</TH><TH>Distinct %</TH><TH>Key</TH><TH>Description</TH></TR>
-              </THead>
-              <TBody>
-                {columns.map((c) => (
-                  <TR key={c.profile_id}>
-                    <TD>{c.table_name}</TD>
-                    <TD className="font-medium">{c.column_name}</TD>
-                    <TD className="font-mono text-xs">{c.data_type}</TD>
-                    <TD><Badge variant="outline">{c.semantic_type}</Badge></TD>
-                    <TD>{c.pii_classification !== "NONE" ? <Badge variant="destructive">{c.pii_classification}</Badge> : "—"}</TD>
-                    <TD>{c.null_percentage?.toFixed?.(1) ?? c.null_percentage}</TD>
-                    <TD>{c.distinct_percentage?.toFixed?.(1) ?? c.distinct_percentage}</TD>
-                    <TD>{c.potential_key_flag ? "yes" : ""}</TD>
-                    <TD className="text-sm text-muted-foreground">{c.generated_description}</TD>
-                  </TR>
-                ))}
-              </TBody>
-            </Table>
           </CardContent>
         </Card>
       )}

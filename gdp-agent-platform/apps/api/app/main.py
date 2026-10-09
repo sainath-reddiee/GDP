@@ -1860,8 +1860,10 @@ def _profile_cache_status(db: Db, run_id: str) -> list[dict]:
     try:
         landed = db.query(
             """
-            SELECT L.SOURCE_TABLE AS TABLE_NAME, P.PROFILED_AT::VARCHAR AS PROFILED_AT, P.ROW_COUNT,
-                   P.COLUMN_COUNT, P.IS_APPROXIMATE, P.PROFILE_STAGE_PATH, P.PROFILED_IN_RUN
+            SELECT L.SOURCE_TABLE AS TABLE_NAME, L.SOURCE_DATABASE AS DATABASE_NAME, L.SOURCE_SCHEMA AS SCHEMA_NAME,
+                   P.PROFILED_AT::VARCHAR AS PROFILED_AT, P.ROW_COUNT,
+                   P.COLUMN_COUNT, P.IS_APPROXIMATE, P.PROFILE_STAGE_PATH, P.PROFILED_IN_RUN,
+                   P.KEY_CANDIDATES, P.PII_COLUMNS, P.AVG_NULL_PERCENTAGE, P.QUALITY_JSON
               FROM SOURCE.LANDING_TABLE_REGISTRY L
               LEFT JOIN SOURCE.SOURCE_REGISTRY S ON S.SOURCE_SYSTEM_ID = L.SOURCE_SYSTEM_ID
               LEFT JOIN METADATA.TABLE_PROFILES P
@@ -1875,7 +1877,14 @@ def _profile_cache_status(db: Db, run_id: str) -> list[dict]:
         )
     except Exception:
         return []
-    return [{**r, "status": "CACHED" if r.get("profile_stage_path") else "UNPROFILED"} for r in landed]
+    from services.profiling.insights import scorecard
+
+    out = []
+    for r in landed:
+        dims = _json(r.pop("quality_json", None))
+        out.append({**r, "quality": scorecard(dims, None) if dims else None,
+                    "status": "CACHED" if r.get("profile_stage_path") else "UNPROFILED"})
+    return out
 
 
 def _cached_profile_columns(db: Db, tables: list[dict]) -> list[dict]:
