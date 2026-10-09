@@ -98,8 +98,10 @@ def pack_rows(pack: Dict[str, Any], database: str, live: Optional[LiveColumns] =
     return {"domains": domains, "tables": tables, "columns": columns, "knowledge": knowledge, "drift": drift}
 
 
-def merge(execute: Callable[..., Any], database: str, data: Dict[str, Any]) -> None:
-    """Idempotent MERGE of pack rows; `execute(sql, params)` uses %s binds (connector cursor or API Db)."""
+def merge(execute: Callable[..., Any], database: str, data: Dict[str, Any], origin: str = "SEED") -> None:
+    """Idempotent MERGE of pack rows; `execute(sql, params)` uses %s binds (connector cursor or API Db).
+    origin SEED (repository packs, locked) or PACK_IMPORT (imported in the UI, editable like any item)."""
+    created_by = "'SEED'" if origin == "SEED" else "CURRENT_USER()"
     for row in data["domains"]:
         execute(
             f"""MERGE INTO {database}.KNOWLEDGE.DOMAIN_REGISTRY t
@@ -162,18 +164,21 @@ def merge(execute: Callable[..., Any], database: str, data: Dict[str, Any]) -> N
                 USING (SELECT %s AS KNOWLEDGE_ID, %s AS DOMAIN_ID, %s AS KNOWLEDGE_TYPE, %s AS TITLE,
                               %s AS CONTENT, PARSE_JSON(NULLIF(%s, '')) AS CONTENT_JSON,
                               PARSE_JSON(%s) AS TAGS, %s AS SOURCE_REFERENCE, %s AS STATUS,
-                              %s AS VERSION, %s AS IS_CURRENT, 'SEED' AS CREATED_BY) s
+                              %s AS VERSION, %s AS IS_CURRENT, {created_by} AS CREATED_BY, %s AS ORIGIN) s
                    ON t.KNOWLEDGE_ID = s.KNOWLEDGE_ID
-                WHEN MATCHED THEN UPDATE SET TITLE = s.TITLE, CONTENT = s.CONTENT, CONTENT_JSON = s.CONTENT_JSON,
-                     TAGS = s.TAGS, STATUS = s.STATUS, VERSION = s.VERSION, IS_CURRENT = s.IS_CURRENT,
+                -- an item a person has since edited (no longer current) keeps their version
+                WHEN MATCHED AND t.IS_CURRENT THEN UPDATE SET TITLE = s.TITLE, CONTENT = s.CONTENT,
+                     CONTENT_JSON = s.CONTENT_JSON, TAGS = s.TAGS, STATUS = s.STATUS, VERSION = s.VERSION,
+                     IS_CURRENT = s.IS_CURRENT, ORIGIN = COALESCE(t.ORIGIN, s.ORIGIN),
+                     LINEAGE_ID = COALESCE(t.LINEAGE_ID, MD5(s.DOMAIN_ID || '|' || s.SOURCE_REFERENCE)),
                      UPDATED_AT = CURRENT_TIMESTAMP()
                 WHEN NOT MATCHED THEN INSERT (KNOWLEDGE_ID, DOMAIN_ID, KNOWLEDGE_TYPE, TITLE, CONTENT,
-                     CONTENT_JSON, TAGS, SOURCE_REFERENCE, STATUS, VERSION, IS_CURRENT, CREATED_BY)
+                     CONTENT_JSON, TAGS, SOURCE_REFERENCE, STATUS, VERSION, IS_CURRENT, CREATED_BY, ORIGIN, LINEAGE_ID)
                      VALUES (s.KNOWLEDGE_ID, s.DOMAIN_ID, s.KNOWLEDGE_TYPE, s.TITLE, s.CONTENT,
                              s.CONTENT_JSON, s.TAGS, s.SOURCE_REFERENCE, s.STATUS, s.VERSION,
-                             s.IS_CURRENT, s.CREATED_BY)""",
+                             s.IS_CURRENT, s.CREATED_BY, s.ORIGIN, MD5(s.DOMAIN_ID || '|' || s.SOURCE_REFERENCE))""",
             (row[0], row[1], row[2], row[3], row[4], _dumps(row[5]), _dumps(row[6]),
-             row[7], row[8], row[9], row[10]),
+             row[7], row[8], row[9], row[10], origin),
         )
 
 
@@ -225,7 +230,7 @@ def import_pack(execute: Callable[..., Any], database: str, pack: Dict[str, Any]
     pack, problems = prepare(pack)
     assert not problems, "PACK_INVALID: " + "; ".join(problems[:12])
     data = pack_rows(pack, database)
-    merge(execute, database, data)
+    merge(execute, database, data, origin="PACK_IMPORT")
     return {"domain_id": domain_id(pack["domain"]["name"]), "domain_name": pack["domain"]["name"],
             "targets": len(data["tables"]), "columns": len(data["columns"]), "knowledge": len(data["knowledge"]),
             "inactive_targets": [t[4] for t in data["tables"] if not t[11]]}

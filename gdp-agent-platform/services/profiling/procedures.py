@@ -394,7 +394,7 @@ def _foreign_keys(session, tables: List[Dict[str, Any]], profiles: Dict[str, Lis
 def _column_rules(session, run_id: str, source_table: str) -> Dict[str, Dict[str, Any]]:
     """Accepted COLUMN_RULE knowledge for this run's source table (same source system), by column name."""
     try:
-        found = rows(session, """SELECT K.CONTENT_JSON FROM KNOWLEDGE.DOMAIN_KNOWLEDGE K
+        found = rows(session, """SELECT K.KNOWLEDGE_ID, K.CONTENT_JSON FROM KNOWLEDGE.DOMAIN_KNOWLEDGE K
                                    JOIN CORE.WORKFLOW_RUN R ON R.RUN_ID = ?
                                   WHERE K.IS_CURRENT AND K.STATUS = 'ACTIVE' AND K.KNOWLEDGE_TYPE = 'COLUMN_RULE'
                                     AND K.CONTENT_JSON:source_system_id::STRING = R.SOURCE_SYSTEM_ID
@@ -407,6 +407,10 @@ def _column_rules(session, run_id: str, source_table: str) -> Dict[str, Dict[str
         content = variant(r["CONTENT_JSON"]) or {}
         if content.get("column_name"):
             out[str(content["column_name"]).upper()] = content
+    if found:
+        from services.knowledge.writer import record_usage
+
+        record_usage(session, run_id, "PROFILING", [r["KNOWLEDGE_ID"] for r in found])
     return out
 
 

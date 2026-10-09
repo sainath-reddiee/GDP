@@ -21,6 +21,7 @@ from services.knowledge.procedures import current_knowledge_version, identify_do
 from services.knowledge.validate import normalize_content
 from services.common.standard import run_standard
 from services.knowledge.usage import assert_safe_transformation, domain_context, use_stage
+from services.knowledge.writer import forget, record_usage, remember
 from services.mapping import features, scoring
 from services.mapping.feedback import pattern as feedback_pattern
 
@@ -95,13 +96,19 @@ def domain_knowledge(session, domain_id: str, run_id: str, target: Optional[Dict
     target table, so a column name approved for one company's table never steers an unrelated table."""
     knowledge: Dict[str, Any] = {"glossary": {}, "rules": {}, "transforms": [], "history": [], "notes": []}
     target_name = str((target or {}).get("TARGET_TABLE") or "").upper()
-    for k in rows(session, """SELECT KNOWLEDGE_TYPE, CONTENT_JSON FROM KNOWLEDGE.DOMAIN_KNOWLEDGE
+    used: List[str] = []
+    for k in rows(session, """SELECT KNOWLEDGE_ID, KNOWLEDGE_TYPE, CONTENT_JSON FROM KNOWLEDGE.DOMAIN_KNOWLEDGE
                               WHERE DOMAIN_ID = ? AND IS_CURRENT AND STATUS = 'ACTIVE' AND CONTENT_JSON IS NOT NULL""",
                   [domain_id]):
         kind = k["KNOWLEDGE_TYPE"]
         content = normalize_content(kind, variant(k["CONTENT_JSON"]))
         if content is None:
             continue
+        if kind == "MAPPING_PATTERN" and target_name and content.get("target_table") \
+                and str(content["target_table"]).upper() != target_name:
+            continue
+        if kind in ("GLOSSARY", "BUSINESS_RULE", "TRANSFORMATION_RULE", "MAPPING_PATTERN"):
+            used.append(k["KNOWLEDGE_ID"])
         if kind == "GLOSSARY" and content.get("target_column"):
             knowledge["glossary"][content["target_column"].upper()] = content
         elif kind == "BUSINESS_RULE" and content.get("target_column"):
@@ -118,6 +125,7 @@ def domain_knowledge(session, domain_id: str, run_id: str, target: Optional[Dict
                     + (f" (model proposed {content['proposed_target']})" if content.get("overridden") else "")
                     + (f": {content['justification']}" if content.get("justification") else "")
                 )
+    record_usage(session, run_id, "MAPPING", used)
     for h in rows(session, """SELECT L.COLUMN_NAME AS SRC, T.COLUMN_NAME AS TGT
                               FROM MAPPING.MAPPING_DECISION D
                               JOIN SOURCE.LANDING_COLUMN_REGISTRY L ON L.LANDING_COLUMN_ID = D.SOURCE_COLUMN_ID
@@ -384,21 +392,12 @@ def _store_feedback(session, run: Dict[str, Any], targets: Dict[str, Dict[str, A
         item = feedback_pattern(src.get("COLUMN_NAME") or source_id, src.get("SOURCE_TABLE") or "SOURCE",
                                 target_name, target_table_name, decision, transformation, justification,
                                 proposed.get(source_id))
-        session.sql("""UPDATE KNOWLEDGE.DOMAIN_KNOWLEDGE SET IS_CURRENT = FALSE, STATUS = 'RETIRED'
-                       WHERE DOMAIN_ID = ? AND SOURCE_REFERENCE = ? AND IS_CURRENT""",
-                    params=[run["DOMAIN_ID"], item["source_reference"]]).collect()
         if not item["active"]:
+            forget(session, run["DOMAIN_ID"], item["source_reference"])
             continue
-        version = (scalar(session, """SELECT MAX(VERSION) FROM KNOWLEDGE.DOMAIN_KNOWLEDGE
-                                      WHERE DOMAIN_ID = ? AND SOURCE_REFERENCE = ?""",
-                          [run["DOMAIN_ID"], item["source_reference"]]) or 0) + 1
-        insert_rows(session, "KNOWLEDGE.DOMAIN_KNOWLEDGE",
-                    ["KNOWLEDGE_ID", "DOMAIN_ID", "KNOWLEDGE_TYPE", "TITLE", "CONTENT", "CONTENT_JSON",
-                     "TAGS", "SOURCE_REFERENCE", "STATUS", "VERSION", "IS_CURRENT", "CREATED_BY"],
-                    ["?", "?", "'MAPPING_PATTERN'", "?", "?", "PARSE_JSON(?)", "PARSE_JSON(?)", "?",
-                     "'ACTIVE'", "?::NUMBER", "TRUE", "CURRENT_USER()"],
-                    [[str(uuid.uuid4()), run["DOMAIN_ID"], item["title"], item["content"], item["content_json"],
-                      ["FEEDBACK", "MAPPING"], item["source_reference"], version]])
+        remember(session, domain_id=run["DOMAIN_ID"], kind="MAPPING_PATTERN", key=item["source_reference"],
+                 title=item["title"], content=item["content"], content_json=item["content_json"],
+                 tags=["FEEDBACK", "MAPPING"], origin="MAPPING", run_id=run["RUN_ID"])
 
 
 def save_mapping_decisions(session, run_id: str, decisions_json: str) -> Dict[str, Any]:

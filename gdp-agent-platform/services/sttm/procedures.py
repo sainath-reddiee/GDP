@@ -151,13 +151,17 @@ def _profile_for(session, run_id: str, table: Optional[str], column: Optional[st
     }
 
 
-def _prior_rules(session, domain_id: Optional[str], target_column: Optional[str]) -> List[str]:
+def _prior_rules(session, domain_id: Optional[str], target_column: Optional[str], run_id: Optional[str] = None) -> List[str]:
     if not domain_id:
         return []
-    found = rows(session, """SELECT TITLE, CONTENT FROM KNOWLEDGE.DOMAIN_KNOWLEDGE
+    found = rows(session, """SELECT KNOWLEDGE_ID, TITLE, CONTENT FROM KNOWLEDGE.DOMAIN_KNOWLEDGE
                              WHERE DOMAIN_ID = ? AND IS_CURRENT AND STATUS = 'ACTIVE'
                                AND KNOWLEDGE_TYPE = 'TRANSFORMATION_RULE'
                              ORDER BY UPDATED_AT DESC NULLS LAST LIMIT 8""", [domain_id])
+    if run_id:
+        from services.knowledge.writer import record_usage
+
+        record_usage(session, run_id, "STTM", [r["KNOWLEDGE_ID"] for r in found])
     out = []
     for r in found:
         if target_column and target_column.upper() in (r.get("TITLE") or "").upper():
@@ -194,7 +198,7 @@ def _line_context(session, run_id: str, payload: Dict[str, Any]) -> Dict[str, An
     context["standard"] = run_standard(run[0] if run else {})
     context["domain_id"] = context["domain_id"] or (run[0]["DOMAIN_ID"] if run else None)
     context["profile"] = _profile_for(session, run_id, context["source_table"], context["source_column"])
-    context["prior_rules"] = _prior_rules(session, context["domain_id"], context["target_column"])
+    context["prior_rules"] = _prior_rules(session, context["domain_id"], context["target_column"], run_id)
     try:
         target = rows(session, "SELECT TARGET_MODEL FROM CORE.WORKFLOW_RUN WHERE RUN_ID = ?", [run_id])
         model = ((target[0]["TARGET_MODEL"] if target else "") or "").split(".")[-1] or None
@@ -270,26 +274,17 @@ def apply_transformation(session, run_id: str, payload_json: str) -> Dict[str, A
             session.sql("UPDATE MAPPING.MAPPING_DECISION SET TRANSFORMATION = ? WHERE DECISION_ID = ?",
                         params=[sql, context["decision_id"]]).collect()
         if context.get("domain_id"):
-            session.sql("""UPDATE KNOWLEDGE.DOMAIN_KNOWLEDGE SET IS_CURRENT = FALSE, STATUS = 'RETIRED'
-                           WHERE DOMAIN_ID = ? AND SOURCE_REFERENCE = ? AND IS_CURRENT""",
-                        params=[context["domain_id"], ref]).collect()
-            version = (scalar(session, """SELECT MAX(VERSION) FROM KNOWLEDGE.DOMAIN_KNOWLEDGE
-                                          WHERE DOMAIN_ID = ? AND SOURCE_REFERENCE = ?""",
-                              [context["domain_id"], ref]) or 0) + 1
-            insert_rows(session, "KNOWLEDGE.DOMAIN_KNOWLEDGE",
-                        ["KNOWLEDGE_ID", "DOMAIN_ID", "KNOWLEDGE_TYPE", "TITLE", "CONTENT", "CONTENT_JSON",
-                         "TAGS", "SOURCE_REFERENCE", "STATUS", "VERSION", "IS_CURRENT", "CREATED_BY"],
-                        ["?", "?", "'TRANSFORMATION_RULE'", "?", "?", "PARSE_JSON(?)", "PARSE_JSON(?)", "?",
-                         "'ACTIVE'", "?::NUMBER", "TRUE", "CURRENT_USER()"],
-                        [[str(uuid.uuid4()), context["domain_id"],
-                          f"Transform {context['target_column']}"[:500], clip(content, 8000),
-                          {"target_column": context["target_column"], "target_table": target_table or None,
-                           "source_column": context.get("source_column"),
-                           "source_table": context.get("source_table"), "expression": expression, "sql": sql,
-                           "prompt": prompt, "rationale": rationale, "soda_checks": soda_checks,
-                           "dbt_notes": payload.get("dbt_notes"), "run_id": run_id,
-                           "profile": context.get("profile")},
-                          ["TRANSFORM", "STTM", "SODA", "DBT"], ref, version]])
+            from services.knowledge.writer import remember
+
+            remember(session, domain_id=context["domain_id"], kind="TRANSFORMATION_RULE", key=ref,
+                     title=f"Transform {context['target_column']}", content=content,
+                     content_json={"target_column": context["target_column"], "target_table": target_table or None,
+                                   "source_column": context.get("source_column"),
+                                   "source_table": context.get("source_table"), "expression": expression, "sql": sql,
+                                   "prompt": prompt, "rationale": rationale, "soda_checks": soda_checks,
+                                   "dbt_notes": payload.get("dbt_notes"), "run_id": run_id,
+                                   "profile": context.get("profile")},
+                     tags=["TRANSFORM", "STTM", "SODA", "DBT"], origin="STTM", run_id=run_id)
         call.summary = f"applied {context['target_column']}"
     return {"target_column": context["target_column"], "transformation": sql, "mapping_type": mapping_type,
             "state": stage.payload()}
@@ -336,21 +331,13 @@ def export_sttm_csv(session, run_id: str) -> Dict[str, Any]:
     _put_text(session, stage_root, filename, csv_text)
     stage_path = f"@{stage_root}/{filename}"
     if sttm.get("DOMAIN_ID"):
-        ref = f"sttm.csv.{run_id}"
-        session.sql("""UPDATE KNOWLEDGE.DOMAIN_KNOWLEDGE SET IS_CURRENT = FALSE, STATUS = 'RETIRED'
-                       WHERE SOURCE_REFERENCE = ? AND IS_CURRENT""", params=[ref]).collect()
-        kv = (scalar(session, "SELECT MAX(VERSION) FROM KNOWLEDGE.DOMAIN_KNOWLEDGE WHERE SOURCE_REFERENCE = ?",
-                     [ref]) or 0) + 1
-        insert_rows(session, "KNOWLEDGE.DOMAIN_KNOWLEDGE",
-                    ["KNOWLEDGE_ID", "DOMAIN_ID", "KNOWLEDGE_TYPE", "TITLE", "CONTENT", "CONTENT_JSON",
-                     "TAGS", "SOURCE_REFERENCE", "STATUS", "VERSION", "IS_CURRENT", "CREATED_BY"],
-                    ["?", "?", "'STTM_TEMPLATE'", "?", "?", "PARSE_JSON(?)", "PARSE_JSON(?)", "?",
-                     "'ACTIVE'", "?::NUMBER", "TRUE", "CURRENT_USER()"],
-                    [[str(uuid.uuid4()), sttm["DOMAIN_ID"], f"STTM CSV v{version}"[:500],
-                      clip(f"Stored at {stage_path}\n{csv_text}", 8000),
-                      {"stage_path": stage_path, "run_id": run_id, "sttm_id": sttm["STTM_ID"],
-                       "sttm_version": version, "rows": len(lines)},
-                      ["STTM", "CSV", "DBT", "SODA"], ref, kv]])
+        from services.knowledge.writer import remember
+
+        remember(session, domain_id=sttm["DOMAIN_ID"], kind="STTM_TEMPLATE", key=f"sttm.csv.{run_id}",
+                 title=f"STTM CSV v{version}", content=f"Stored at {stage_path}\n{csv_text}",
+                 content_json={"stage_path": stage_path, "run_id": run_id, "sttm_id": sttm["STTM_ID"],
+                               "sttm_version": version, "rows": len(lines)},
+                 tags=["STTM", "CSV", "DBT", "SODA"], origin="STTM", run_id=run_id, by_domain=False)
     with tool_call(session, run_id, "export_sttm_csv", {"path": stage_path, "rows": len(lines)}) as call:
         call.summary = f"{len(lines)} lines -> {stage_path}"
     return {"stage_path": stage_path, "csv": csv_text, "rows": len(lines), "sttm_version": version}

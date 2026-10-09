@@ -489,14 +489,11 @@ def _remember_failures(session, run_id: str, sttm: Dict[str, Any], results: List
         key = f"quality.recurring.{run_id[:8]}.{r['expectation_id'][:8]}"
         title = f"Recurring data quality failure: {r.get('target_table')}{'.' + r['target_column'] if r.get('target_column') else ''} ({r.get('kind')})"
         try:
-            session.sql("""MERGE INTO KNOWLEDGE.DOMAIN_KNOWLEDGE K
-                           USING (SELECT ? AS SOURCE_REFERENCE) S ON K.SOURCE_REFERENCE = S.SOURCE_REFERENCE AND K.IS_CURRENT
-                           WHEN MATCHED THEN UPDATE SET CONTENT = ?, UPDATED_AT = CURRENT_TIMESTAMP()
-                           WHEN NOT MATCHED THEN INSERT (KNOWLEDGE_ID, DOMAIN_ID, KNOWLEDGE_TYPE, TITLE, CONTENT, TAGS,
-                                                         SOURCE_REFERENCE, STATUS, VERSION, IS_CURRENT, CREATED_BY)
-                                VALUES (UUID_STRING(), ?, 'EXCEPTION', ?, ?, PARSE_JSON('["QUALITY_SCAN"]'), ?, 'ACTIVE',
-                                        1, TRUE, CURRENT_USER())""",
-                        params=[key, f"{title}. Latest scan: {r.get('detail')}", sttm["DOMAIN_ID"], title,
-                                f"{title}. Latest scan: {r.get('detail')}", key]).collect()
+            from services.knowledge.writer import remember
+
+            remember(session, domain_id=sttm["DOMAIN_ID"], kind="EXCEPTION", key=key, title=title,
+                     content=f"{title}. Latest scan: {r.get('detail')}",
+                     content_json={"run_id": run_id, "expectation_id": r["expectation_id"], "detail": r.get("detail")},
+                     tags=["QUALITY_SCAN"], origin="QUALITY", run_id=run_id, by_domain=False)
         except Exception:
             continue

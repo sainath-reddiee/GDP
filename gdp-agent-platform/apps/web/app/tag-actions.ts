@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { api, attemptValue } from "@/lib/api";
 
-export type TagType = "PROFILE" | "RUN" | "MODEL";
+export type TagType = "PROFILE" | "RUN" | "MODEL" | "KNOWLEDGE";
 export type TagInfo = { tag: string; count: number; color: string; description: string | null };
 
 export async function loadTags(entityType?: TagType) {

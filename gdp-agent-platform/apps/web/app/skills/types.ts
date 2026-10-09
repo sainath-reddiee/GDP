@@ -94,7 +94,7 @@ export type SkillDraft = {
 export type DraftRequest = {
   mode: BuilderMode; goal?: string; answers?: { question: string; answer: string }[]; category_id?: string | null;
   domain_id?: string | null; knowledge_types?: string[]; days?: number; document_text?: string; document_name?: string;
-  skill_name?: string | null; instructions?: string;
+  skill_name?: string | null; instructions?: string; model?: string | null;
 };
 export type DraftResponse = {
   draft: SkillDraft; content: string; issues: BuilderIssue[]; model: string; tokens: number | null; feedback: string[];

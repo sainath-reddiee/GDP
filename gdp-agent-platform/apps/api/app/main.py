@@ -2915,7 +2915,7 @@ def _save_dbt_plan(db: Db, run_id: str, payload: dict) -> None:
         return
     ref = f"dbt.branch.{run_id}"
     db.execute(
-        "UPDATE KNOWLEDGE.DOMAIN_KNOWLEDGE SET IS_CURRENT = FALSE, STATUS = 'RETIRED' "
+        "UPDATE KNOWLEDGE.DOMAIN_KNOWLEDGE SET IS_CURRENT = FALSE, STATUS = 'SUPERSEDED', UPDATED_AT = CURRENT_TIMESTAMP() "
         "WHERE SOURCE_REFERENCE = %s AND IS_CURRENT",
         (ref,),
     )
@@ -2928,9 +2928,9 @@ def _save_dbt_plan(db: Db, run_id: str, payload: dict) -> None:
         """
         INSERT INTO KNOWLEDGE.DOMAIN_KNOWLEDGE
           (KNOWLEDGE_ID, DOMAIN_ID, KNOWLEDGE_TYPE, TITLE, CONTENT, CONTENT_JSON, TAGS,
-           SOURCE_REFERENCE, STATUS, VERSION, IS_CURRENT, CREATED_BY)
+           SOURCE_REFERENCE, STATUS, VERSION, IS_CURRENT, CREATED_BY, LINEAGE_ID, ORIGIN, SOURCE_RUN_ID)
         SELECT UUID_STRING(), %s, 'TRANSFORMATION_RULE', %s, %s, PARSE_JSON(%s),
-               PARSE_JSON('["DBT","BRANCH"]'), %s, 'ACTIVE', %s, TRUE, CURRENT_USER()
+               PARSE_JSON('["DBT","BRANCH"]'), %s, 'ACTIVE', %s, TRUE, CURRENT_USER(), MD5('|' || %s), 'DBT', %s
         """,
         (
             run[0]["domain_id"],
@@ -2939,6 +2939,8 @@ def _save_dbt_plan(db: Db, run_id: str, payload: dict) -> None:
             json.dumps(payload),
             ref,
             version,
+            ref,
+            run_id,
         ),
     )
 
@@ -4883,6 +4885,8 @@ class KnowledgeItemIn(BaseModel):
     title: str = Field(min_length=1, max_length=500)
     content: str = Field(min_length=1, max_length=8000)
     content_json: Any = None
+    origin: Literal["USER", "COPILOT"] = "USER"
+    change_note: Optional[str] = Field(default=None, max_length=2000)
 
 
 class KnowledgeAnswerIn(BaseModel):
@@ -4893,7 +4897,9 @@ class KnowledgeAnswerIn(BaseModel):
 
 _KNOWLEDGE_COLUMNS = """K.KNOWLEDGE_ID, K.DOMAIN_ID, D.DOMAIN_NAME, K.KNOWLEDGE_TYPE, K.TITLE, K.CONTENT, K.CONTENT_JSON,
        K.SOURCE_REFERENCE, K.STATUS, K.VERSION, K.CREATED_BY, K.CREATED_AT::VARCHAR AS CREATED_AT,
-       K.UPDATED_AT::VARCHAR AS UPDATED_AT"""
+       K.UPDATED_AT::VARCHAR AS UPDATED_AT, K.LINEAGE_ID, K.ORIGIN, K.SOURCE_RUN_ID, K.CONFIDENCE, K.CHANGE_NOTE,
+       K.VERIFIED_BY, K.VERIFIED_AT::VARCHAR AS VERIFIED_AT, K.REVIEW_DUE::VARCHAR AS REVIEW_DUE, K.IS_CURRENT,
+       K.REVIEWED_BY, K.REVIEW_NOTE, K.TAGS"""
 
 
 def _knowledge_item(db: Db, knowledge_id: str) -> dict:
@@ -4909,7 +4915,8 @@ def _shape_knowledge(row: dict) -> dict:
     from services.knowledge.manage import editable
 
     row["content_json"] = _json(row.get("content_json"))
-    ok, reason = editable(row.get("created_by"))
+    row["tags"] = _json(row.get("tags")) or []
+    ok, reason = editable(row.get("created_by"), row.get("origin"))
     row["editable"], row["read_only_reason"] = ok, reason
     return row
 
@@ -4946,14 +4953,21 @@ def add_knowledge(body: KnowledgeItemIn, db: Db = Depends(current_db)):
                       (body.domain_id,))
     if not domain:
         raise HTTPException(400, "unknown or deleted domain")
+    from services.knowledge.writer import lineage_id, mode_for
+
     knowledge_id = str(uuid.uuid4())
+    key = new_key(domain[0]["domain_name"], item["knowledge_type"], item["title"])
+    queued = mode_for(_config(db, "KNOWLEDGE_LEARNING_POLICY", {}), item["knowledge_type"], body.origin) == "review"
     db.execute("""INSERT INTO KNOWLEDGE.DOMAIN_KNOWLEDGE (KNOWLEDGE_ID, DOMAIN_ID, KNOWLEDGE_TYPE, TITLE, CONTENT,
-                         CONTENT_JSON, TAGS, SOURCE_REFERENCE, STATUS, VERSION, IS_CURRENT, CREATED_BY)
-                  SELECT %s, %s, %s, %s, %s, PARSE_JSON(NULLIF(%s, '')), PARSE_JSON('["UI"]'), %s, 'ACTIVE', 1, TRUE,
-                         CURRENT_USER()""",
+                         CONTENT_JSON, TAGS, SOURCE_REFERENCE, STATUS, VERSION, IS_CURRENT, CREATED_BY, LINEAGE_ID,
+                         ORIGIN, CHANGE_NOTE)
+                  SELECT %s, %s, %s, %s, %s, PARSE_JSON(NULLIF(%s, '')), PARSE_JSON(%s), %s, %s, 1, %s,
+                         CURRENT_USER(), %s, %s, %s""",
                (knowledge_id, body.domain_id, item["knowledge_type"], item["title"], item["content"],
                 json.dumps(item["content_json"]) if item["content_json"] is not None else "",
-                new_key(domain[0]["domain_name"], item["knowledge_type"], item["title"])))
+                json.dumps(["UI"] if body.origin == "USER" else ["COPILOT"]), key,
+                "PROPOSED" if queued else "ACTIVE", not queued, lineage_id(body.domain_id, key), body.origin,
+                body.change_note or ("Saved from the copilot" if body.origin == "COPILOT" else "Added in Knowledge")))
     _DOMAIN_VOCAB.update(at=0.0, domains=[])
     return _knowledge_item(db, knowledge_id)
 
@@ -4970,18 +4984,38 @@ def edit_knowledge(knowledge_id: str, body: KnowledgeItemIn, db: Db = Depends(cu
                                   body.content_json)
     if problems:
         raise HTTPException(400, "; ".join(problems))
-    new_id = str(uuid.uuid4())
-    db.execute("UPDATE KNOWLEDGE.DOMAIN_KNOWLEDGE SET IS_CURRENT = FALSE, UPDATED_AT = CURRENT_TIMESTAMP() "
-               "WHERE KNOWLEDGE_ID = %s", (knowledge_id,))
-    db.execute("""INSERT INTO KNOWLEDGE.DOMAIN_KNOWLEDGE (KNOWLEDGE_ID, DOMAIN_ID, KNOWLEDGE_TYPE, TITLE, CONTENT,
-                         CONTENT_JSON, TAGS, SOURCE_REFERENCE, STATUS, VERSION, IS_CURRENT, CREATED_BY)
-                  SELECT %s, %s, %s, %s, %s, PARSE_JSON(NULLIF(%s, '')), PARSE_JSON('["UI"]'), %s, %s, %s, TRUE,
-                         CURRENT_USER()""",
-               (new_id, current["domain_id"], item["knowledge_type"], item["title"], item["content"],
-                json.dumps(item["content_json"]) if item["content_json"] is not None else "",
-                current["source_reference"], current["status"], int(current["version"]) + 1))
+    new_id = _new_knowledge_version(db, current, item["knowledge_type"], item["title"], item["content"],
+                                    item["content_json"], body.change_note or "Edited in Knowledge")
     _DOMAIN_VOCAB.update(at=0.0, domains=[])
     return _knowledge_item(db, new_id)
+
+
+def _new_knowledge_version(db: Db, current: dict, kind: str, title: str, content: str, content_json: Any,
+                           note: str, status: Optional[str] = None) -> str:
+    """A person's change: the version in use is superseded, the new one is current (same lineage)."""
+    from services.knowledge.writer import lineage_id
+
+    if not current.get("is_current", True):
+        raise HTTPException(409, "Only the version in use can be changed. Open the current version or roll back to this one.")
+    lineage = current.get("lineage_id") or (lineage_id(current["domain_id"], current["source_reference"])
+                                            if current.get("source_reference") else current["knowledge_id"])
+    top = db.query("SELECT COALESCE(MAX(VERSION), 0) AS V FROM KNOWLEDGE.DOMAIN_KNOWLEDGE WHERE LINEAGE_ID = %s", (lineage,))
+    version = max(int(top[0]["v"] if top else 0), int(current["version"])) + 1
+    new_id = str(uuid.uuid4())
+    db.execute("""UPDATE KNOWLEDGE.DOMAIN_KNOWLEDGE SET IS_CURRENT = FALSE, UPDATED_AT = CURRENT_TIMESTAMP(),
+                         STATUS = IFF(STATUS IN ('ACTIVE', 'RETIRED'), 'SUPERSEDED', STATUS)
+                   WHERE KNOWLEDGE_ID = %s""", (current["knowledge_id"],))
+    db.execute("""INSERT INTO KNOWLEDGE.DOMAIN_KNOWLEDGE (KNOWLEDGE_ID, DOMAIN_ID, KNOWLEDGE_TYPE, TITLE, CONTENT,
+                         CONTENT_JSON, TAGS, SOURCE_REFERENCE, STATUS, VERSION, IS_CURRENT, CREATED_BY, LINEAGE_ID,
+                         ORIGIN, SOURCE_RUN_ID, CHANGE_NOTE)
+                  SELECT %s, %s, %s, %s, %s, PARSE_JSON(NULLIF(%s, '')), PARSE_JSON(%s), %s, %s, %s, TRUE,
+                         CURRENT_USER(), %s, 'USER', %s, %s""",
+               (new_id, current["domain_id"], kind, title, content,
+                json.dumps(content_json) if content_json is not None else "",
+                json.dumps(sorted(set((current.get("tags") or []) + ["UI"]))), current["source_reference"],
+                status or (current["status"] if current["status"] in ("ACTIVE", "DRAFT", "RETIRED") else "ACTIVE"),
+                version, lineage, current.get("source_run_id"), note))
+    return new_id
 
 
 def _set_knowledge_status(db: Db, knowledge_id: str, status: str) -> dict:
@@ -5007,10 +5041,10 @@ def restore_knowledge(knowledge_id: str, db: Db = Depends(current_db)):
 @app.get("/api/knowledge/{knowledge_id}/history")
 def knowledge_history(knowledge_id: str, db: Db = Depends(current_db)):
     current = _knowledge_item(db, knowledge_id)
-    versions = db.query(f"""SELECT {_KNOWLEDGE_COLUMNS}, K.IS_CURRENT FROM KNOWLEDGE.DOMAIN_KNOWLEDGE K
+    versions = db.query(f"""SELECT {_KNOWLEDGE_COLUMNS} FROM KNOWLEDGE.DOMAIN_KNOWLEDGE K
                              JOIN KNOWLEDGE.DOMAIN_REGISTRY D ON D.DOMAIN_ID = K.DOMAIN_ID
-                            WHERE K.DOMAIN_ID = %s AND K.SOURCE_REFERENCE = %s ORDER BY K.VERSION DESC""",
-                        (current["domain_id"], current["source_reference"])) if current["source_reference"] else []
+                            WHERE K.LINEAGE_ID = %s ORDER BY K.VERSION DESC, K.CREATED_AT DESC""",
+                        (current["lineage_id"],)) if current.get("lineage_id") else []
     return {"versions": [_shape_knowledge(v) for v in versions] or [current]}
 
 
@@ -6059,3 +6093,7 @@ app.include_router(skills_router)
 from app.skill_builder_api import router as skill_builder_router  # noqa: E402
 
 app.include_router(skill_builder_router)
+
+from app.knowledge_api import router as knowledge_router  # noqa: E402
+
+app.include_router(knowledge_router)

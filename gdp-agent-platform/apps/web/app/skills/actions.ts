@@ -95,9 +95,13 @@ export async function tryOnRun(runId: string, name: string, skillId: string | nu
 
 // ---------------------------------------------------------------- AI skill builder
 
-export async function builderQuestions(goal: string, categoryId?: string | null) {
+export async function builderModels() {
+  return attemptValue(() => api<{ default: string; models: string[] }>("/api/skills/builder/models"));
+}
+
+export async function builderQuestions(goal: string, categoryId?: string | null, model?: string | null) {
   return attemptValue(() => api<{ questions: BuilderQuestion[]; model: string }>("/api/skills/builder/questions", {
-    method: "POST", body: JSON.stringify({ goal, category_id: categoryId || null }),
+    method: "POST", body: JSON.stringify({ goal, category_id: categoryId || null, model: model || null }),
   }));
 }
 
@@ -111,9 +115,9 @@ export async function builderCheck(draft: SkillDraft, accepted: boolean[], impro
   }));
 }
 
-export async function builderTest(content: string, tests: SkillTest[], skillName?: string | null) {
+export async function builderTest(content: string, tests: SkillTest[], skillName?: string | null, model?: string | null) {
   return attemptValue(() => api<TestSummary>("/api/skills/builder/test", {
-    method: "POST", body: JSON.stringify({ content, tests, skill_name: skillName || null }),
+    method: "POST", body: JSON.stringify({ content, tests, skill_name: skillName || null, model: model || null }),
   }));
 }
 

@@ -13,7 +13,7 @@ import uuid
 from typing import Any, Callable, Dict, List, Tuple
 
 from services.common.ai_suggest import Spec, record_decision, suggest
-from services.common.sql import clip, insert_rows, rows, scalar, variant
+from services.common.sql import clip, rows, scalar, variant
 
 KINDS = ("GLOSSARY", "TABLE_SIGNAL", "COLUMN_SIGNAL", "DEFINITION", "BUSINESS_RULE")
 _STR = {"type": "string"}
@@ -74,17 +74,10 @@ def review(session, domain_id: str, refresh: bool = False, cached_only: bool = F
 
 def _knowledge_row(session, domain_id: str, kind: str, key: str, title: str, content: str,
                    content_json: Dict[str, Any]) -> None:
-    session.sql("""UPDATE KNOWLEDGE.DOMAIN_KNOWLEDGE SET IS_CURRENT = FALSE
-                   WHERE DOMAIN_ID = ? AND SOURCE_REFERENCE = ? AND IS_CURRENT""", params=[domain_id, key]).collect()
-    version = (scalar(session, "SELECT MAX(VERSION) FROM KNOWLEDGE.DOMAIN_KNOWLEDGE WHERE DOMAIN_ID = ? "
-                               "AND SOURCE_REFERENCE = ?", [domain_id, key]) or 0) + 1
-    insert_rows(session, "KNOWLEDGE.DOMAIN_KNOWLEDGE",
-                ["KNOWLEDGE_ID", "DOMAIN_ID", "KNOWLEDGE_TYPE", "TITLE", "CONTENT", "CONTENT_JSON", "TAGS",
-                 "SOURCE_REFERENCE", "STATUS", "VERSION", "IS_CURRENT", "CREATED_BY"],
-                ["?", "?", "?", "?", "?", "PARSE_JSON(?)", "PARSE_JSON(?)", "?", "'ACTIVE'", "?::NUMBER", "TRUE",
-                 "CURRENT_USER()"],
-                [[str(uuid.uuid4()), domain_id, kind, clip(title, 500), clip(content, 8000), content_json,
-                  ["AI", "DOMAIN_REVIEW", "ACCEPTED"], key, version]])
+    from services.knowledge.writer import remember
+
+    remember(session, domain_id=domain_id, kind=kind, key=key, title=title, content=content, content_json=content_json,
+             tags=["AI", "DOMAIN_REVIEW", "ACCEPTED"], origin="DOMAIN_AI")
 
 
 def apply_item(session, domain_id: str, item: Dict[str, Any]) -> str:

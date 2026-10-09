@@ -107,12 +107,16 @@ def _rejected(session, domain_id: str) -> List[Dict[str, Any]]:
     return out
 
 
-def _knowledge(session, domain_id: str) -> List[str]:
-    found = rows(session, """SELECT TITLE, CONTENT FROM KNOWLEDGE.DOMAIN_KNOWLEDGE
+def _knowledge(session, domain_id: str, run_id: Optional[str] = None) -> List[str]:
+    found = rows(session, """SELECT KNOWLEDGE_ID, TITLE, CONTENT FROM KNOWLEDGE.DOMAIN_KNOWLEDGE
                              WHERE IS_CURRENT AND KNOWLEDGE_TYPE IN
                                    ('SODA_PATTERN', 'BUSINESS_RULE', 'EXCEPTION', 'TRANSFORMATION_RULE', 'STTM_TEMPLATE')
                                AND DOMAIN_ID = ?
                              ORDER BY UPDATED_AT DESC NULLS LAST LIMIT 16""", [domain_id])
+    if run_id:
+        from services.knowledge.writer import record_usage
+
+        record_usage(session, run_id, "SODA", [r["KNOWLEDGE_ID"] for r in found])
     return [f"{r['TITLE']}: {r['CONTENT']}" for r in found]
 
 
@@ -141,19 +145,12 @@ def _briefs(session, run_id: str) -> List[str]:
 
 
 def _store_brief(session, run_id: str, domain_id: str, brief: str, filename: str) -> None:
-    ref = f"soda.brief.{run_id}"
-    session.sql("""UPDATE KNOWLEDGE.DOMAIN_KNOWLEDGE SET IS_CURRENT = FALSE, STATUS = 'RETIRED'
-                   WHERE SOURCE_REFERENCE = ? AND IS_CURRENT""", params=[ref]).collect()
-    version = (scalar(session, "SELECT MAX(VERSION) FROM KNOWLEDGE.DOMAIN_KNOWLEDGE WHERE SOURCE_REFERENCE = ?",
-                      [ref]) or 0) + 1
-    insert_rows(session, "KNOWLEDGE.DOMAIN_KNOWLEDGE",
-                ["KNOWLEDGE_ID", "DOMAIN_ID", "KNOWLEDGE_TYPE", "TITLE", "CONTENT", "CONTENT_JSON",
-                 "TAGS", "SOURCE_REFERENCE", "STATUS", "VERSION", "IS_CURRENT", "CREATED_BY"],
-                ["?", "?", "'BUSINESS_RULE'", "?", "?", "PARSE_JSON(?)", "PARSE_JSON(?)", "?",
-                 "'ACTIVE'", "?::NUMBER", "TRUE", "CURRENT_USER()"],
-                [[str(uuid.uuid4()), domain_id, f"Client Soda brief {filename or run_id}"[:500],
-                  clip(brief, 8000), {"run_id": run_id, "filename": filename},
-                  ["CLIENT", "SODA", "BRIEF"], ref, version]])
+    from services.knowledge.writer import remember
+
+    remember(session, domain_id=domain_id, kind="BUSINESS_RULE", key=f"soda.brief.{run_id}",
+             title=f"Client Soda brief {filename or run_id}", content=brief,
+             content_json={"run_id": run_id, "filename": filename}, tags=["CLIENT", "SODA", "BRIEF"],
+             origin="SODA", run_id=run_id, by_domain=False)
 
 
 def _extract(session, brief: str, table: str, columns: List[str], knowledge: List[str],
@@ -205,7 +202,7 @@ def generate_soda(session, run_id: str) -> Dict[str, Any]:
             table = sttm_target_name(session, sttm)
             lines = _lines(session, sttm["STTM_ID"])
             columns = [l["target_column"] for l in lines]
-            knowledge = _knowledge(session, sttm["DOMAIN_ID"])
+            knowledge = _knowledge(session, sttm["DOMAIN_ID"], run_id)
             checks = from_sttm(table, lines, design.get("business_keys") or [])
             stored = _transform_checks(session, sttm["DOMAIN_ID"], table)
             extracted: List[Dict[str, Any]] = []
@@ -318,7 +315,7 @@ def import_client_expectations(session, run_id: str, rows_json: str) -> Dict[str
     imported: List[Dict[str, Any]] = []
     if parsed.get("brief"):
         _store_brief(session, run_id, sttm["DOMAIN_ID"], parsed["brief"], parsed.get("filename") or "")
-        imported = _extract(session, parsed["brief"], table, columns, _knowledge(session, sttm["DOMAIN_ID"]), run_id)
+        imported = _extract(session, parsed["brief"], table, columns, _knowledge(session, sttm["DOMAIN_ID"], run_id), run_id)
     if parsed.get("rows"):
         imported = merge_checks(imported, from_client(table, parsed["rows"]))
     assert imported, "no Soda requirements could be extracted from the client brief"
@@ -336,26 +333,19 @@ def import_client_expectations(session, run_id: str, rows_json: str) -> Dict[str
     return {"imported": len(imported), "version": version, "yaml": render_yaml(table.lower(), imported)}
 
 
-def _store_feedback(session, domain_id: str, item: Dict[str, Any]) -> None:
+def _store_feedback(session, domain_id: str, item: Dict[str, Any], run_id: Optional[str] = None) -> None:
     if not domain_id:
         return
-    session.sql("""UPDATE KNOWLEDGE.DOMAIN_KNOWLEDGE SET IS_CURRENT = FALSE, STATUS = 'RETIRED'
-                   WHERE DOMAIN_ID = ? AND SOURCE_REFERENCE = ? AND IS_CURRENT""",
-                params=[domain_id, item["source_reference"]]).collect()
-    version = (scalar(session, """SELECT MAX(VERSION) FROM KNOWLEDGE.DOMAIN_KNOWLEDGE
-                                  WHERE DOMAIN_ID = ? AND SOURCE_REFERENCE = ?""",
-                      [domain_id, item["source_reference"]]) or 0) + 1
-    insert_rows(session, "KNOWLEDGE.DOMAIN_KNOWLEDGE",
-                ["KNOWLEDGE_ID", "DOMAIN_ID", "KNOWLEDGE_TYPE", "TITLE", "CONTENT", "CONTENT_JSON",
-                 "TAGS", "SOURCE_REFERENCE", "STATUS", "VERSION", "IS_CURRENT", "CREATED_BY"],
-                ["?", "?", "'SODA_PATTERN'", "?", "?", "PARSE_JSON(?)", "PARSE_JSON(?)", "?",
-                 "?", "?::NUMBER", "TRUE", "CURRENT_USER()"],
-                # a rejection stays current (generation reads it to avoid proposing the check again) but is not
-                # ACTIVE, so knowledge search and the copilot never present it as a rule; DRAFT, not RETIRED,
-                # because restoring a domain re-activates its RETIRED rows
-                [[str(uuid.uuid4()), domain_id, item["title"], item["content"], item["content_json"],
-                  ["FEEDBACK", "SODA"] + ([] if item.get("active", True) else ["REJECTED"]), item["source_reference"],
-                  "ACTIVE" if item.get("active", True) else "DRAFT", version]])
+    from services.knowledge.writer import remember
+
+    active = item.get("active", True)
+    # a rejection stays current (generation reads it to avoid proposing the check again) but is not ACTIVE, so
+    # knowledge search and the copilot never present it as a rule; DRAFT, not RETIRED, because restoring a domain
+    # re-activates its RETIRED rows
+    remember(session, domain_id=domain_id, kind="SODA_PATTERN", key=item["source_reference"], title=item["title"],
+             content=item["content"], content_json=item["content_json"],
+             tags=["FEEDBACK", "SODA"] + ([] if active else ["REJECTED"]), origin="SODA",
+             run_id=run_id or (item.get("content_json") or {}).get("run_id"), status=None if active else "DRAFT")
 
 
 def store_approved_set(session, run_id: str) -> None:

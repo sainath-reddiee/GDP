@@ -16,7 +16,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from app.db import Db
-from app.main import _model_for, _record_cost, _snowflake_error, current_db
+from app.main import _account_models, _model_for, _record_cost, _snowflake_error, current_db
 from app.skills_api import STAGES, _categories, _labels, _move, _name
 from services.knowledge import skill_builder as sb
 
@@ -31,8 +31,25 @@ CATEGORY_TYPE = {"profiling": "PROFILING", "mapping": "MAPPING", "sttm": "STTM",
                  "validation": "VALIDATION", "source-onboarding": "SOURCE_ONBOARDING"}
 
 
-def _complete(db: Db, prompt: str, schema: dict, max_tokens: int = 8000) -> tuple[dict, dict, str]:
-    model = _model_for(db, "SKILLS")
+def _allowed_models(db: Db) -> list[str]:
+    try:
+        return [m["name"] for m in _account_models(db).get("models") or [] if m.get("available") is not False]
+    except Exception:
+        return []
+
+
+@router.get("/api/skills/builder/models")
+def builder_models(db: Db = Depends(current_db)):
+    """Models the builder may use: the SKILLS stage default from Admin, and the account's available models."""
+    return {"default": _model_for(db, "SKILLS"), "models": _allowed_models(db)}
+
+
+def _complete(db: Db, prompt: str, schema: dict, max_tokens: int = 8000, model: Optional[str] = None) -> tuple[dict, dict, str]:
+    if model:
+        allowed = _allowed_models(db)
+        if allowed and model not in allowed:
+            raise HTTPException(400, f"Model {model} is not available in this account")
+    model = model or _model_for(db, "SKILLS")
     started = time.time()
     try:
         result, query_id = db.query_with_id(
@@ -73,11 +90,12 @@ def _production(db: Db, skill: str) -> Optional[dict]:
 class Questions(BaseModel):
     goal: str = Field(min_length=10, max_length=4000)
     category_id: Optional[str] = None
+    model: Optional[str] = Field(default=None, max_length=120)
 
 
 @router.post("/api/skills/builder/questions")
 def builder_questions(body: Questions, db: Db = Depends(current_db)):
-    out, usage, model = _complete(db, sb.questions_prompt(body.goal, body.category_id, STAGES), sb.QUESTIONS_SCHEMA, 2000)
+    out, usage, model = _complete(db, sb.questions_prompt(body.goal, body.category_id, STAGES), sb.QUESTIONS_SCHEMA, 2000, body.model)
     questions = [q for q in out.get("questions") or [] if str(q.get("question") or "").strip()][:6]
     return {"questions": questions, "model": model, "tokens": usage.get("total_tokens")}
 
@@ -94,6 +112,7 @@ class Draft(BaseModel):
     document_name: str = Field(default="", max_length=300)
     skill_name: Optional[str] = None
     instructions: str = Field(default="", max_length=2000)
+    model: Optional[str] = Field(default=None, max_length=120)
 
 
 @router.post("/api/skills/builder/draft")
@@ -158,7 +177,7 @@ def builder_draft(body: Draft, db: Db = Depends(current_db)):
                              categories=categories, stages=STAGES)
     if body.category_id:
         prompt += f"\n\nThe user chose the category {body.category_id}."
-    raw, usage, model = _complete(db, prompt, sb.DRAFT_SCHEMA, 12000)
+    raw, usage, model = _complete(db, prompt, sb.DRAFT_SCHEMA, 12000, body.model)
     draft = sb.normalize(raw, categories, STAGES, keep_name=existing["name"] if existing else None)
     if body.category_id and body.category_id in categories:
         draft["category"] = body.category_id
@@ -186,6 +205,7 @@ class Test(BaseModel):
     content: str = Field(min_length=20, max_length=400_000)
     tests: list[dict] = Field(min_length=1, max_length=8)
     skill_name: Optional[str] = None  # compare with this skill's production version; none = with no skill at all
+    model: Optional[str] = Field(default=None, max_length=120)
 
 
 @router.post("/api/skills/builder/test")
@@ -202,11 +222,11 @@ def builder_test(body: Test, db: Db = Depends(current_db)):
         if prod:
             baseline, label = prod["content"] or "", f"production v{str(prod['version']).split('+')[0]}"
     started = time.time()
-    cand, u1, model = _complete(db, sb.answer_prompt(body.content, tests), sb.ANSWER_SCHEMA, 6000)
-    base, u2, _ = _complete(db, sb.answer_prompt(baseline, tests), sb.ANSWER_SCHEMA, 6000)
+    cand, u1, model = _complete(db, sb.answer_prompt(body.content, tests), sb.ANSWER_SCHEMA, 6000, body.model)
+    base, u2, _ = _complete(db, sb.answer_prompt(baseline, tests), sb.ANSWER_SCHEMA, 6000, body.model)
     a = {int(x.get("index", -1)): x.get("answer", "") for x in cand.get("answers") or []}
     b = {int(x.get("index", -1)): x.get("answer", "") for x in base.get("answers") or []}
-    judged, u3, _ = _complete(db, sb.judge_prompt(tests, a, b), sb.JUDGE_SCHEMA, 4000)
+    judged, u3, _ = _complete(db, sb.judge_prompt(tests, a, b), sb.JUDGE_SCHEMA, 4000, body.model)
     summary = sb.score(tests, judged.get("results") or [], label)
     for row in summary["rows"]:
         row["candidate_answer"] = a.get(row["index"], "")

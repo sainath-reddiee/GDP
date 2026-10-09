@@ -9,7 +9,7 @@ from __future__ import annotations
 import re
 from typing import Iterable, List, Optional
 
-ENTITY_TYPES = ("PROFILE", "RUN", "MODEL")
+ENTITY_TYPES = ("PROFILE", "RUN", "MODEL", "KNOWLEDGE")  # KNOWLEDGE keys are lineage ids (stable across versions)
 MAX_TAGS = 20
 TAG = re.compile(r"^[a-z0-9][a-z0-9_.:/-]{0,39}$")
 COLORS = ("slate", "blue", "green", "amber", "red", "violet", "pink", "teal")

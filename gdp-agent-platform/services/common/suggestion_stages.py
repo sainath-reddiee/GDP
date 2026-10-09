@@ -12,11 +12,10 @@ again for that decision:
 from __future__ import annotations
 
 import json
-import uuid
 from typing import Any, Dict, List, Optional, Tuple
 
 from services.common.ai_suggest import Spec, record_decision, suggest
-from services.common.sql import clip, insert_rows, rows, scalar, variant
+from services.common.sql import rows, variant
 
 _STR = {"type": "string"}
 _OPT = {"type": ["string", "null"]}
@@ -195,18 +194,11 @@ def run_suggestions(session, stage: str, run_id: str, refresh: bool = False, cac
 
 
 def _knowledge(session, domain_id: str, kind: str, title: str, content: Dict[str, Any], ref: str,
-               tags: List[str]) -> None:
-    session.sql("""UPDATE KNOWLEDGE.DOMAIN_KNOWLEDGE SET IS_CURRENT = FALSE, STATUS = 'RETIRED'
-                   WHERE DOMAIN_ID = ? AND SOURCE_REFERENCE = ? AND IS_CURRENT""", params=[domain_id, ref]).collect()
-    version = (scalar(session, "SELECT MAX(VERSION) FROM KNOWLEDGE.DOMAIN_KNOWLEDGE WHERE DOMAIN_ID = ? "
-                               "AND SOURCE_REFERENCE = ?", [domain_id, ref]) or 0) + 1
-    insert_rows(session, "KNOWLEDGE.DOMAIN_KNOWLEDGE",
-                ["KNOWLEDGE_ID", "DOMAIN_ID", "KNOWLEDGE_TYPE", "TITLE", "CONTENT", "CONTENT_JSON", "TAGS",
-                 "SOURCE_REFERENCE", "STATUS", "VERSION", "IS_CURRENT", "CREATED_BY"],
-                ["?", "?", "?", "?", "?", "PARSE_JSON(?)", "PARSE_JSON(?)", "?", "'ACTIVE'", "?::NUMBER", "TRUE",
-                 "CURRENT_USER()"],
-                [[str(uuid.uuid4()), domain_id, kind, clip(title, 500), clip(json.dumps(content), 8000), content,
-                  tags, ref, version]])
+               tags: List[str], origin: str = "SUGGESTION", run_id: Optional[str] = None) -> None:
+    from services.knowledge.writer import remember
+
+    remember(session, domain_id=domain_id, kind=kind, key=ref, title=title, content=json.dumps(content),
+             content_json=content, tags=tags, origin=origin, run_id=run_id or content.get("run_id"))
 
 
 def _domain_for(session, run: Dict[str, Any]) -> str:
@@ -224,7 +216,7 @@ def _apply(session, stage: str, run: Dict[str, Any], scope_key: str, item: Dict[
         content = {"source_system_id": run.get("SOURCE_SYSTEM_ID"), "source_table": table,
                    "column_name": item["column"], **fields}
         _knowledge(session, _domain_for(session, run), "COLUMN_RULE", f"{table}.{item['column']}", content,
-                   f"column.{scope_key}.{item['column']}".upper(), ["AI", "PROFILING", "ACCEPTED"])
+                   f"column.{scope_key}.{item['column']}".upper(), ["AI", "PROFILING", "ACCEPTED"], "PROFILING", run_id)
         sets, params = [], []
         if fields.get("semantic_type"):
             sets.append("SEMANTIC_TYPE = ?"); params.append(fields["semantic_type"].upper())
@@ -261,7 +253,7 @@ def _apply(session, stage: str, run: Dict[str, Any], scope_key: str, item: Dict[
         _knowledge(session, _domain_for(session, run), "SODA_PATTERN",
                    f"{item.get('target_column') or 'table'} {item['check_type']}", {**row, "decision": "ACCEPTED"},
                    f"soda.ai.{scope_key}.{item.get('target_column') or '*'}.{item['check_type']}".upper(),
-                   ["AI", "SODA", "ACCEPTED"])
+                   ["AI", "SODA", "ACCEPTED"], "SODA", run_id)
         return {"applied": "check added to the run and stored as a pattern"}
     if stage == "DBT":
         role = str(item["role"]).upper()
