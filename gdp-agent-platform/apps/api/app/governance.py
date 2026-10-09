@@ -85,6 +85,22 @@ def ready(db: Db) -> bool:
 
 
 _seeded = {"done": False}
+_seed_lock = threading.Lock()
+# Snowflake does not enforce primary keys: keep one row per key (cleans up any duplicate from a concurrent start).
+_DEDUPE = {
+    "APP_ROLE": "ROLE_NAME", "ROLE_PRIVILEGE": "ROLE_NAME, PRIVILEGE", "ROLE_GRANT": "ROLE_NAME, GRANTED_ROLE",
+    "USER_ROLE": "USER_NAME, ROLE_NAME", "APPROVAL_POLICY": "PRIVILEGE", "SETTING": "SETTING_KEY",
+}
+
+
+def _merge(db: Db, table: str, keys: dict, extra: Optional[dict] = None) -> None:
+    """Insert the row when its key is not there yet (idempotent under concurrent callers)."""
+    cols = {**keys, **(extra or {})}
+    on = " AND ".join(f"T.{k} = S.{k}" for k in keys)
+    select = ", ".join(f"%s AS {k}" for k in cols)
+    db.execute(f"MERGE INTO GOVERNANCE.{table} T USING (SELECT {select}) S ON {on} "
+               f"WHEN NOT MATCHED THEN INSERT ({', '.join(cols)}) VALUES ({', '.join('S.' + k for k in cols)})",
+               tuple(cols.values()))
 
 
 def bootstrap(db: Db) -> None:
@@ -92,27 +108,32 @@ def bootstrap(db: Db) -> None:
     missing default policies, and make the first user (plus AIP_SUPER_ADMINS) super admin when nobody holds a role."""
     if _seeded["done"]:
         return
-    existing = {r["role_name"] for r in db.query("SELECT ROLE_NAME FROM GOVERNANCE.APP_ROLE")}
-    for name, spec in SYSTEM_ROLES.items():
-        if name in existing:
-            continue
-        db.execute("INSERT INTO GOVERNANCE.APP_ROLE (ROLE_NAME, DESCRIPTION, IS_SYSTEM) SELECT %s, %s, TRUE",
-                   (name, spec["description"]))
-        for p in spec["privileges"]:
-            db.execute("INSERT INTO GOVERNANCE.ROLE_PRIVILEGE (ROLE_NAME, PRIVILEGE) SELECT %s, %s", (name, p))
-        for g in spec["inherits"]:
-            db.execute("INSERT INTO GOVERNANCE.ROLE_GRANT (ROLE_NAME, GRANTED_ROLE) SELECT %s, %s", (name, g))
-    policies = {r["privilege"] for r in db.query("SELECT PRIVILEGE FROM GOVERNANCE.APPROVAL_POLICY")}
-    for priv, role in DEFAULT_POLICIES.items():
-        if priv not in policies:
-            db.execute("INSERT INTO GOVERNANCE.APPROVAL_POLICY (PRIVILEGE, APPROVER_ROLE) SELECT %s, %s", (priv, role))
-    if not db.query("SELECT 1 FROM GOVERNANCE.USER_ROLE LIMIT 1"):
-        admins = {db.user.upper()} | {u.strip().upper() for u in os.environ.get("AIP_SUPER_ADMINS", "").split(",") if u.strip()}
-        for user in admins:
-            db.execute("INSERT INTO GOVERNANCE.USER_ROLE (USER_NAME, ROLE_NAME, GRANTED_BY) SELECT %s, 'SUPER_ADMIN', 'BOOTSTRAP'",
-                       (user,))
-        _event(db, "BOOTSTRAP", ",".join(sorted(admins)), {"role": "SUPER_ADMIN"})
-    _seeded["done"] = True
+    with _seed_lock:
+        if _seeded["done"]:
+            return
+        for table, keys in _DEDUPE.items():
+            try:
+                db.execute(f"INSERT OVERWRITE INTO GOVERNANCE.{table} SELECT * FROM GOVERNANCE.{table} "
+                           f"QUALIFY ROW_NUMBER() OVER (PARTITION BY {keys} ORDER BY {keys}) = 1")
+            except Exception:
+                pass
+        existing = {r["role_name"] for r in db.query("SELECT ROLE_NAME FROM GOVERNANCE.APP_ROLE")}
+        for name, spec in SYSTEM_ROLES.items():
+            if name in existing:
+                continue
+            _merge(db, "APP_ROLE", {"ROLE_NAME": name}, {"DESCRIPTION": spec["description"], "IS_SYSTEM": True})
+            for p in spec["privileges"]:
+                _merge(db, "ROLE_PRIVILEGE", {"ROLE_NAME": name, "PRIVILEGE": p})
+            for g in spec["inherits"]:
+                _merge(db, "ROLE_GRANT", {"ROLE_NAME": name, "GRANTED_ROLE": g})
+        for priv, role in DEFAULT_POLICIES.items():
+            _merge(db, "APPROVAL_POLICY", {"PRIVILEGE": priv}, {"APPROVER_ROLE": role})
+        if not db.query("SELECT 1 FROM GOVERNANCE.USER_ROLE LIMIT 1"):
+            admins = {db.user.upper()} | {u.strip().upper() for u in os.environ.get("AIP_SUPER_ADMINS", "").split(",") if u.strip()}
+            for user in admins:
+                _merge(db, "USER_ROLE", {"USER_NAME": user, "ROLE_NAME": "SUPER_ADMIN"}, {"GRANTED_BY": "BOOTSTRAP"})
+            _event(db, "BOOTSTRAP", ",".join(sorted(admins)), {"role": "SUPER_ADMIN"})
+        _seeded["done"] = True
     invalidate()
 
 
