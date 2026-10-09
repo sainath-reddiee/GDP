@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { Bot, Check, Loader2, RefreshCw, Sparkles, X } from "lucide-react";
+import { Bot, Check, ChevronDown, Loader2, RefreshCw, Sparkles, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import type { SuggestionItem, SuggestionResult } from "@/app/runs/[runId]/pipeline-actions";
@@ -20,12 +20,14 @@ type Result<T> = { ok: true; data: T } | { ok: false; error: string };
 
 /** AI suggestions next to rule results (a run stage, a domain pack). The rules decide; a reviewer accepts or
  *  rejects each item; rejections are remembered. */
-export function SuggestionsPanel({ source, summary, effect, intro, canAct = true }: {
+export function SuggestionsPanel({ source, summary, effect, intro, canAct = true, placement = "inline" }: {
   source: SuggestionSource;
   summary: (item: SuggestionItem) => { title: string; detail: string };
   effect: string;
   intro?: string;
   canAct?: boolean;
+  /** "top": a slim bar at the top of a page that expands into the results */
+  placement?: "inline" | "top";
 }) {
   const router = useRouter();
   const [data, setData] = useState<SuggestionResult | null>(null);
@@ -33,19 +35,23 @@ export function SuggestionsPanel({ source, summary, effect, intro, canAct = true
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
   const [pending, start] = useTransition();
+  const [expanded, setExpanded] = useState(placement === "inline");
 
   useEffect(() => {
     let live = true;
     source.load().then((r) => {
       if (!live) return;
-      if (r.ok) setData(r.data); else setError(r.error);
+      if (r.ok) {
+        setData(r.data);
+        if (r.data.scopes.some((sc) => sc.items.some((i) => !i.review))) setExpanded(true);
+      } else setError(r.error);
     });
     return () => { live = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [source.key]);
 
   const ask = (refresh: boolean) => start(async () => {
-    setError(""); setNotice("");
+    setError(""); setNotice(""); setExpanded(true);
     const r = await source.ask(refresh);
     if (r.ok) setData(r.data); else setError(r.error);
   });
@@ -76,15 +82,45 @@ export function SuggestionsPanel({ source, summary, effect, intro, canAct = true
   const model = data?.scopes.find((s) => s.model)?.model;
   const scopeErrors = data?.scopes.filter((s) => s.error).map((s) => s.error) ?? [];
 
+  const top = placement === "top";
+  const status = !data ? "loading…" : !generated ? "not run yet"
+    : open ? `${open} open suggestion${open === 1 ? "" : "s"}` : "agrees with the rules";
+
   return (
-    <section className="rounded-xl border border-violet-200 bg-violet-50/40 p-4 dark:border-violet-900 dark:bg-violet-950/20">
+    <section className={`rounded-xl border border-violet-200 bg-violet-50/40 dark:border-violet-900 dark:bg-violet-950/20 ${top ? "px-4 py-2.5" : "p-4"}`}>
       <div className="flex flex-wrap items-center gap-2">
-        <Bot className="h-4 w-4 text-violet-600" />
-        <h4 className="text-sm font-semibold">AI review</h4>
-        {generated && <Badge variant="outline">{open} open suggestion{open === 1 ? "" : "s"}</Badge>}
+        {top ? (
+          <button type="button" onClick={() => (generated ? setExpanded((v) => !v) : ask(false))}
+                  disabled={pending || (!generated && !canAct)} aria-expanded={expanded}
+                  className="flex items-center gap-2 rounded-full bg-gradient-to-r from-violet-600 to-primary px-3 py-1 text-sm font-medium text-white shadow-sm transition hover:shadow-md disabled:opacity-60">
+            {pending && !busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
+            AI review
+          </button>
+        ) : (
+          <>
+            <Bot className="h-4 w-4 text-violet-600" />
+            <h4 className="text-sm font-semibold">AI review</h4>
+          </>
+        )}
+        {top ? (
+          <span className={`text-xs ${open ? "font-medium text-violet-700 dark:text-violet-300" : "text-muted-foreground"}`}>{status}</span>
+        ) : generated && <Badge variant="outline">{open} open suggestion{open === 1 ? "" : "s"}</Badge>}
         {model && <span className="text-[11px] text-muted-foreground">{model}</span>}
-        <div className="ml-auto flex gap-2">
-          {!generated ? (
+        <div className="ml-auto flex gap-1">
+          {top ? (
+            <>
+              {generated && (
+                <Button size="sm" variant="ghost" disabled={pending || !canAct} onClick={() => ask(true)} title="Ask again with a fresh answer" aria-label="Re-check">
+                  {pending && !busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+                </Button>
+              )}
+              {generated && (
+                <Button size="sm" variant="ghost" onClick={() => setExpanded((v) => !v)} aria-label={expanded ? "Hide results" : "Show results"}>
+                  <ChevronDown className={`h-4 w-4 transition-transform ${expanded ? "rotate-180" : ""}`} />
+                </Button>
+              )}
+            </>
+          ) : !generated ? (
             <Button size="sm" variant="outline" disabled={pending || !canAct} onClick={() => ask(false)}>
               {pending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
               Ask AI to review
@@ -97,6 +133,7 @@ export function SuggestionsPanel({ source, summary, effect, intro, canAct = true
           )}
         </div>
       </div>
+      {expanded && (<>
       <p className="mt-1 text-xs text-muted-foreground">
         {intro ?? "The rules decide; AI suggests where it disagrees. One call per table, reused until the inputs change."} {effect}
       </p>
@@ -142,6 +179,8 @@ export function SuggestionsPanel({ source, summary, effect, intro, canAct = true
           </div>
         ))}
       </div>
+      </>)}
+      {!expanded && error && <p role="alert" className="mt-1 text-xs text-destructive">{error}</p>}
     </section>
   );
 }

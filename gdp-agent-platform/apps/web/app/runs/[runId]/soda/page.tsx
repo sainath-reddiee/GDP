@@ -1,26 +1,19 @@
 import Link from "next/link";
-import { Activity, FileCode2, History, ListChecks } from "lucide-react";
+import { Activity, FileCode2, ListChecks } from "lucide-react";
 import { api, getRun } from "@/lib/api";
 import { AiSuggestions } from "@/components/ai-suggestions";
 import { StageGate } from "@/components/stage-gate";
 import { StageAction } from "@/components/stage-action";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { generateSoda } from "../pipeline-actions";
-import { SodaBoard } from "./soda-board";
-import { SodaGate } from "./soda-gate";
+import { ColumnChecks, type Check } from "./column-checks";
 import { SodaKit } from "./soda-kit";
-import { QualityOverview, ScanHistory } from "./quality-overview";
+import { QualityOverview, RunScanButton, ScanHistory } from "./quality-overview";
+import { ApproveRemaining, BriefImport, DownloadMenu, PackGate } from "./toolbar";
 import type { ScansPayload } from "./quality-shared";
 import type { SttmLine } from "../sttm/sttm-board";
 
 type SodaPayload = {
-  checks: {
-    expectation_id: string; target_table: string; target_column: string | null; check_type: string;
-    check_definition?: Record<string, unknown> | null; severity: string; origin: string;
-    client_requirement: string | null; status: string; version: number; sodacl?: string;
-    evidence?: string | null;
-    backtest?: { status: "PASS" | "FAIL" | "NOT_EVALUATED"; observed?: number; percent?: number; detail?: string } | null;
-  }[];
+  checks: Check[];
   yaml: string;
   gx_suite?: Record<string, unknown> | null;
   brief: { title: string; content: string } | null;
@@ -28,14 +21,23 @@ type SodaPayload = {
 };
 
 const TABS = [
-  { key: "overview", label: "Overview", icon: Activity },
   { key: "checks", label: "Checks", icon: ListChecks },
-  { key: "scans", label: "Scan history", icon: History },
+  { key: "results", label: "Scan results", icon: Activity },
   { key: "kit", label: "Soda CLI kit", icon: FileCode2 },
 ] as const;
 type Tab = (typeof TABS)[number]["key"];
 
 const EMPTY_SCANS: ScansPayload = { scans: [], latest: [], history: {}, ready: false };
+
+function Kpi({ label, value, tone }: { label: string; value: string | number; tone?: "good" | "warn" | "bad" }) {
+  const color = tone === "good" ? "text-success" : tone === "warn" ? "text-warning" : tone === "bad" ? "text-destructive" : "";
+  return (
+    <div className="min-w-[96px] rounded-lg border bg-card px-3 py-2">
+      <p className={`text-xl font-semibold tabular-nums ${color}`}>{value}</p>
+      <p className="text-[11px] text-muted-foreground">{label}</p>
+    </div>
+  );
+}
 
 export default async function SodaPage({ params, searchParams }: {
   params: { runId: string };
@@ -44,11 +46,11 @@ export default async function SodaPage({ params, searchParams }: {
   const [state, soda, contract, scans] = await Promise.all([
     getRun(params.runId),
     api<SodaPayload>(`/api/runs/${params.runId}/soda`),
-    api<{ lines: SttmLine[] }>(`/api/runs/${params.runId}/sttm`).catch(() => ({ lines: [] })),
+    api<{ lines: SttmLine[] }>(`/api/runs/${params.runId}/sttm`).catch(() => ({ lines: [] as SttmLine[] })),
     api<ScansPayload>(`/api/runs/${params.runId}/soda/scans`).catch(() => EMPTY_SCANS),
   ]);
-  const requested = TABS.find((t) => t.key === searchParams.tab)?.key;
-  const tab: Tab = requested ?? (soda.status.total === 0 || scans.scans.length === 0 ? "checks" : "overview");
+  const legacy: Record<string, Tab> = { overview: "results", scans: "results" };
+  const tab: Tab = TABS.find((t) => t.key === searchParams.tab)?.key ?? legacy[searchParams.tab ?? ""] ?? "checks";
   const kit = tab === "kit" && soda.status.total > 0
     ? await api<{ files: Record<string, string> }>(`/api/runs/${params.runId}/soda/kit`).catch((e: Error) => ({ error: e.message }))
     : null;
@@ -58,89 +60,97 @@ export default async function SodaPage({ params, searchParams }: {
   const canReview = ["SODA_REVIEW", "SODA_PENDING", "STTM_APPROVED", "DBT_PENDING", "DBT_GENERATING", "VALIDATION_PENDING", "VALIDATION_FAILED"].includes(state.current_state);
   const runnable = soda.status.total - soda.status.rejected;
   const last = scans.scans[0];
-  const counts: Partial<Record<Tab, string>> = {
-    overview: last?.health != null ? `${last.health}` : undefined,
-    checks: soda.status.total ? `${soda.status.total}` : undefined,
-    scans: scans.scans.length ? `${scans.scans.length}` : undefined,
-  };
+  const covered = new Set(soda.checks.filter((c) => c.target_column && c.status !== "REJECTED").map((c) => c.target_column!.toUpperCase()));
+  const mapped = Array.from(new Set(contract.lines.filter((l) => l.mapping_type !== "UNMAPPED").map((l) => l.target_column.toUpperCase())));
+  const uncovered = mapped.filter((c) => !covered.has(c)).length;
+  const failing = last ? last.failed + last.errors : 0;
+  const proposedIds = soda.checks.filter((c) => c.status === "PROPOSED").map((c) => c.expectation_id);
 
   return (
     <StageGate state={state} stage="SODA">
-      <Card>
-        <CardHeader>
-          <CardTitle>Data Quality</CardTitle>
-          <CardDescription>
-            Checks come from the approved STTM, the client brief, the data profile and your own custom SQL. Review them,
-            scan them inside Snowflake for rich results with failed-row samples, and take the same checks to your own
-            environment with the Soda CLI kit. Approved check sets and recurring failures are kept in the knowledge base.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-5">
-          <nav role="tablist" aria-label="Data quality views" className="flex flex-wrap gap-1 border-b">
-            {TABS.map((t) => {
-              const Icon = t.icon;
-              const active = t.key === tab;
-              return (
-                <Link key={t.key} href={`/runs/${params.runId}/soda?tab=${t.key}`} role="tab" aria-selected={active} scroll={false}
-                      className={`-mb-px flex items-center gap-2 border-b-2 px-3 py-2 text-sm font-medium transition-colors ${active ? "border-primary text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}>
-                  <Icon className="h-4 w-4" />
-                  {t.label}
-                  {counts[t.key] && <span className="rounded-full bg-muted px-1.5 text-[11px] tabular-nums">{counts[t.key]}</span>}
-                </Link>
-              );
-            })}
-          </nav>
+      <AiSuggestions runId={params.runId} stage="SODA" canAct={canImport} />
 
-          {tab === "overview" && (
-            <QualityOverview runId={params.runId} data={scans} checkCount={runnable} canScan={runnable > 0} />
-          )}
+      <section className="space-y-4 rounded-xl border bg-card p-5">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <h2 className="text-xl font-semibold">Data Quality checks</h2>
+            <p className="text-sm text-muted-foreground">What the data must satisfy, column by column. Review, scan in Snowflake, ship to Soda.</p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            {canGenerate && (
+              <StageAction size="sm" variant={soda.status.total ? "ghost" : "default"}
+                           label={soda.status.total ? "Regenerate" : "Generate checks"}
+                           pendingLabel="Building checks…" action={generateSoda.bind(null, params.runId)} />
+            )}
+            {canImport && <BriefImport runId={params.runId} brief={soda.brief} />}
+            {canReview && <ApproveRemaining runId={params.runId} ids={proposedIds} />}
+            {runnable > 0 && <RunScanButton runId={params.runId} />}
+            <DownloadMenu yaml={soda.yaml} gxSuite={soda.gx_suite} />
+          </div>
+        </div>
 
-          {tab === "checks" && (
-            <>
-              {canGenerate && (
-                <StageAction
-                  label="Generate Data Quality checks"
-                  pendingLabel="Building SodaCL from the STTM, profile and client brief…"
-                  action={generateSoda.bind(null, params.runId)}
-                />
-              )}
-              <SodaGate
-                runId={params.runId}
-                currentState={state.current_state}
-                complete={soda.status.total > 0 && soda.status.proposed === 0}
-                proposed={soda.status.proposed}
-                approved={soda.status.approved}
-                rejected={soda.status.rejected}
-              />
-              <SodaBoard
-                runId={params.runId}
-                checks={soda.checks}
-                yaml={soda.yaml}
-                gxSuite={soda.gx_suite}
-                brief={soda.brief}
-                sttmLines={contract.lines}
-                canImport={canImport}
-                canReview={canReview}
-                latest={scans.latest}
-                history={scans.history}
-              />
-            </>
-          )}
+        {soda.status.total > 0 && (
+          <div className="flex flex-wrap gap-2">
+            <Kpi label="checks" value={soda.status.total} />
+            <Kpi label="to review" value={soda.status.proposed} tone={soda.status.proposed ? "warn" : "good"} />
+            <Kpi label="approved" value={soda.status.approved} tone="good" />
+            {mapped.length > 0 && <Kpi label="columns without checks" value={uncovered} tone={uncovered ? "warn" : "good"} />}
+            <Kpi label="last scan health" value={last?.health ?? "–"}
+                 tone={last?.health == null ? undefined : last.health >= 90 ? "good" : last.health >= 70 ? "warn" : "bad"} />
+            {last && <Kpi label="failing now" value={failing} tone={failing ? "bad" : "good"} />}
+          </div>
+        )}
 
-          {tab === "scans" && <ScanHistory scans={scans.scans} />}
+        <PackGate runId={params.runId} currentState={state.current_state}
+                  complete={soda.status.total > 0 && soda.status.proposed === 0} />
 
-          {tab === "kit" && (
-            soda.status.total === 0 ? (
-              <p className="rounded-md border border-dashed p-6 text-sm text-muted-foreground">Generate checks first; the kit is built from them.</p>
-            ) : kit && "files" in kit ? (
-              <SodaKit runId={params.runId} files={kit.files} />
-            ) : (
-              <p role="alert" className="text-sm text-destructive">{kit && "error" in kit ? kit.error : "The kit could not be built."}</p>
-            )
-          )}
-        </CardContent>
-      </Card>
-      {tab === "checks" && <AiSuggestions runId={params.runId} stage="SODA" canAct={canImport} />}
+        <nav role="tablist" aria-label="Data quality views" className="flex gap-1 border-b">
+          {TABS.map((t) => {
+            const Icon = t.icon;
+            const active = t.key === tab;
+            return (
+              <Link key={t.key} href={`/runs/${params.runId}/soda?tab=${t.key}`} role="tab" aria-selected={active} scroll={false}
+                    className={`-mb-px flex items-center gap-2 border-b-2 px-3 py-2 text-sm font-medium transition-colors ${active ? "border-primary text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}>
+                <Icon className="h-4 w-4" />{t.label}
+                {t.key === "results" && scans.scans.length > 0 && <span className="rounded-full bg-muted px-1.5 text-[11px] tabular-nums">{scans.scans.length}</span>}
+              </Link>
+            );
+          })}
+        </nav>
+
+        {tab === "checks" && (
+          soda.status.total === 0 && contract.lines.length === 0 ? (
+            <p className="rounded-xl border border-dashed p-8 text-center text-sm text-muted-foreground">
+              No checks yet. Generate them from the approved STTM, or import a client brief.
+            </p>
+          ) : (
+            <ColumnChecks runId={params.runId} checks={soda.checks} sttmLines={contract.lines}
+                          latest={scans.latest} history={scans.history} canReview={canReview} />
+          )
+        )}
+
+        {tab === "results" && (
+          <div className="space-y-8">
+            <QualityOverview runId={params.runId} data={scans} checkCount={runnable} canScan={false} />
+            {scans.scans.length > 1 && (
+              <div className="space-y-3">
+                <h3 className="text-sm font-semibold">History</h3>
+                <ScanHistory scans={scans.scans} />
+              </div>
+            )}
+          </div>
+        )}
+
+        {tab === "kit" && (
+          soda.status.total === 0 ? (
+            <p className="rounded-md border border-dashed p-6 text-sm text-muted-foreground">Generate checks first; the kit is built from them.</p>
+          ) : kit && "files" in kit ? (
+            <SodaKit runId={params.runId} files={kit.files} />
+          ) : (
+            <p role="alert" className="text-sm text-destructive">{kit && "error" in kit ? kit.error : "The kit could not be built."}</p>
+          )
+        )}
+      </section>
     </StageGate>
   );
 }

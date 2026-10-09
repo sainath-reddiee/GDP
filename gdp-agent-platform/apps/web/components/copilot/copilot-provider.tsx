@@ -3,7 +3,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { ArrowRight, BookmarkPlus, Bot, Check, Loader2, MessageSquarePlus, Send, Sparkles, X } from "lucide-react";
+import { ArrowRight, BookmarkPlus, Bot, Check, Loader2, Maximize2, MessageSquarePlus, Minimize2, Send, Sparkles, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { copilotAsk, copilotSuggestions, saveCopilotAnswer, type CopilotAnswer, type CopilotPage } from "@/app/copilot-actions";
@@ -77,6 +77,10 @@ function CopilotShell({ children }: { children: ReactNode }) {
   const readQuery = useCallback(() => setQuery(typeof window === "undefined" ? "" : window.location.search), []);
   const [focus, setFocus] = useState<Focus>(null);
   const [show, setShow] = useState(false);
+  const [wide, setWide] = useState(false);
+  const [unread, setUnread] = useState(false);
+  const showRef = useRef(show);
+  showRef.current = show;
   const [messages, setMessages] = useState<Message[]>([]);
   const [conversation, setConversation] = useState<string | null>(null);
   const [input, setInput] = useState("");
@@ -114,7 +118,7 @@ function CopilotShell({ children }: { children: ReactNode }) {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
-  useEffect(() => { if (show) setTimeout(() => inputRef.current?.focus(), 50); }, [show]);
+  useEffect(() => { if (show) { setUnread(false); setTimeout(() => inputRef.current?.focus(), 50); } }, [show]);
   useEffect(() => { listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: "smooth" }); }, [messages, busy]);
 
   const send = useCallback(async (text: string) => {
@@ -130,6 +134,7 @@ function CopilotShell({ children }: { children: ReactNode }) {
     if (r.ok) {
       setConversation(r.data.conversation_id);
       setMessages((m) => [...m, { role: "assistant", content: r.data.answer, data: r.data }]);
+      if (!showRef.current) setUnread(true);
     } else {
       setMessages((m) => [...m, { role: "assistant", content: r.error, error: true }]);
     }
@@ -143,10 +148,21 @@ function CopilotShell({ children }: { children: ReactNode }) {
   return (
     <CopilotCtx.Provider value={{ setFocus, open, shown: show }}>
       {children}
+      <button type="button" onClick={() => setShow((v) => !v)} aria-label={show ? "Close copilot" : "Open copilot"}
+              title="Copilot (Ctrl+J)" aria-expanded={show}
+              className={cn("fixed bottom-5 right-5 z-[71] grid h-14 w-14 place-items-center rounded-full bg-gradient-to-br from-violet-500 to-primary text-white shadow-lg ring-4 ring-background transition hover:scale-105 hover:shadow-xl",
+                            show && "max-sm:hidden")}>
+        {show ? <X className="h-6 w-6" /> : <Sparkles className="h-6 w-6" />}
+        {unread && !show && <span className="absolute right-1 top-1 h-3 w-3 rounded-full bg-destructive ring-2 ring-background" />}
+      </button>
       {show && (
         <aside role="dialog" aria-label="Copilot"
-               className="fixed inset-y-0 right-0 z-[70] flex w-full max-w-[460px] flex-col border-l bg-background shadow-2xl">
-          <header className="flex items-center gap-3 border-b px-4 py-3">
+               className={cn("fixed z-[70] flex flex-col overflow-hidden bg-background shadow-2xl",
+                             "max-sm:inset-0",
+                             wide
+                               ? "sm:inset-y-0 sm:right-0 sm:w-full sm:max-w-[520px] sm:border-l"
+                               : "sm:bottom-24 sm:right-5 sm:h-[min(640px,calc(100vh-8rem))] sm:w-[400px] sm:origin-bottom-right sm:rounded-2xl sm:border sm:animate-[copilot-in_160ms_ease-out]")}>
+          <header className="flex items-center gap-3 border-b bg-gradient-to-r from-violet-500/10 to-primary/5 px-4 py-3">
             <span className="grid h-8 w-8 place-items-center rounded-xl bg-gradient-to-br from-violet-500 to-primary text-white"><Bot className="h-4 w-4" /></span>
             <div className="min-w-0">
               <p className="text-sm font-semibold">Copilot</p>
@@ -155,6 +171,10 @@ function CopilotShell({ children }: { children: ReactNode }) {
             <button type="button" aria-label="New conversation" title="New conversation"
                     onClick={() => { setMessages([]); setConversation(null); }} className="ml-auto rounded-md p-1.5 text-muted-foreground hover:bg-muted">
               <MessageSquarePlus className="h-4 w-4" />
+            </button>
+            <button type="button" aria-label={wide ? "Make smaller" : "Expand"} title={wide ? "Make smaller" : "Expand"}
+                    onClick={() => setWide((v) => !v)} className="rounded-md p-1.5 text-muted-foreground hover:bg-muted max-sm:hidden">
+              {wide ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
             </button>
             <button type="button" aria-label="Close copilot" onClick={() => setShow(false)} className="rounded-md p-1.5 text-muted-foreground hover:bg-muted">
               <X className="h-4 w-4" />
@@ -234,7 +254,7 @@ function CopilotShell({ children }: { children: ReactNode }) {
                         placeholder={`Ask about ${label}…`} className="max-h-40 min-h-[40px] flex-1 resize-none bg-transparent text-sm outline-none" />
               <Button type="submit" size="sm" disabled={busy || !input.trim()} aria-label="Send"><Send className="h-3.5 w-3.5" /></Button>
             </div>
-            <p className="mt-1.5 text-[10px] text-muted-foreground">Enter to send · Shift+Enter for a new line · Ctrl+J to toggle · answers are AI-generated, check before acting</p>
+            <p className="mt-1.5 text-[10px] text-muted-foreground">Enter to send · Ctrl+J to toggle · AI answers, check before acting</p>
           </form>
         </aside>
       )}
@@ -244,17 +264,4 @@ function CopilotShell({ children }: { children: ReactNode }) {
 
 export function CopilotProvider({ children }: { children: ReactNode }) {
   return <CopilotShell>{children}</CopilotShell>;
-}
-
-/** The top-bar button that opens the copilot (Ctrl+J does the same anywhere). */
-export function CopilotButton() {
-  const { open, shown } = useCopilot();
-  return (
-    <button type="button" onClick={() => open()} aria-label="Open copilot" title="Copilot (Ctrl+J)" aria-pressed={shown}
-            className="flex items-center gap-2 rounded-full border bg-card px-3 py-1.5 text-sm font-medium shadow-sm transition hover:border-primary/50 hover:shadow-md">
-      <span className="grid h-6 w-6 place-items-center rounded-full bg-gradient-to-br from-violet-500 to-primary text-white"><Sparkles className="h-3.5 w-3.5" /></span>
-      Copilot
-      <kbd className="hidden rounded border bg-muted px-1 text-[10px] text-muted-foreground sm:inline">Ctrl J</kbd>
-    </button>
-  );
 }

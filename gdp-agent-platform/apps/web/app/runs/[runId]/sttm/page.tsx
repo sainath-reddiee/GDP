@@ -34,6 +34,7 @@ export default async function SttmPage({ params }: { params: { runId: string } }
   ]));
   return (
     <StageGate state={state} stage="STTM">
+      <AiSuggestions runId={params.runId} stage="STTM" canAct={canEdit} />
       <Card>
         <CardHeader>
           <CardTitle>STTM</CardTitle>
@@ -83,7 +84,6 @@ export default async function SttmPage({ params }: { params: { runId: string } }
           canEdit={canEdit}
         />
       )}
-      <AiSuggestions runId={params.runId} stage="STTM" canAct={canEdit} />
     </StageGate>
   );
 }

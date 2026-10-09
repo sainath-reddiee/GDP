@@ -102,3 +102,8 @@
 @media (prefers-reduced-motion: reduce) {
   .animate-scan-ray, .animate-glow, .animate-flow, .animate-stage-in, .animate-progress { animation: none !important; }
 }
+
+@keyframes copilot-in {
+  from { opacity: 0; transform: translateY(8px) scale(0.97); }
+  to { opacity: 1; transform: none; }
+}
