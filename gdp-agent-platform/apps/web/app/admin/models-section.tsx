@@ -32,7 +32,7 @@ const SOURCE_LABEL: Record<string, string> = {
 };
 
 /** Models this account can use, the platform default, a test per model and per-stage overrides. */
-export function ModelsSection({ initial, error }: { initial: ModelsState | null; error?: string }) {
+export function ModelsSection({ initial, error, view = "models" }: { initial: ModelsState | null; error?: string; view?: "models" | "stages" }) {
   const router = useRouter();
   const toast = useToast();
   const [data, setData] = useState<ModelsState | null>(initial);
@@ -94,6 +94,7 @@ export function ModelsSection({ initial, error }: { initial: ModelsState | null;
 
   return (
     <div className="space-y-5">
+      {view === "models" && (
       <Panel
         title="Models in this account"
         description={data.allowlist
@@ -165,7 +166,9 @@ export function ModelsSection({ initial, error }: { initial: ModelsState | null;
           {groups.length === 0 && <p className="text-sm text-muted-foreground">No models match.</p>}
         </div>
       </Panel>
+      )}
 
+      {view === "stages" && (<>
       <Panel title="Model per stage"
              description="Each AI step uses the default unless you pick a model for it. Use a stronger model where judgement matters (mapping, QA) and a faster one for high-volume steps.">
         <div className="divide-y rounded-xl border">
@@ -189,6 +192,7 @@ export function ModelsSection({ initial, error }: { initial: ModelsState | null;
         </div>
       </Panel>
       <DirtyBar count={dirty} pending={pending} onSave={saveStages} onDiscard={() => setStages(saved)} what="stage model" />
+      </>)}
     </div>
   );
 }
