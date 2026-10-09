@@ -2498,6 +2498,7 @@ def qa_suite(run_id: str, db: Db = Depends(current_db)):
 class QaSignoff(BaseModel):
     decision: Literal["APPROVED", "REJECTED"]
     note: Optional[str] = Field(default=None, max_length=4000)
+    override: bool = False
 
 
 @app.get("/api/runs/{run_id}/qa/signoff")
@@ -2517,13 +2518,26 @@ def qa_signoff(run_id: str, body: QaSignoff, db: Db = Depends(current_db)):
         raise HTTPException(409, "QA can be signed off after the STTM is approved and before code review is approved.")
     if body.decision == "REJECTED" and not (body.note or "").strip():
         raise HTTPException(400, "Say what failed when rejecting the QA tests.")
+    note = (body.note or "").strip()
+    if body.decision == "APPROVED":
+        from services.qa.run import blocking, latest
+
+        last, results = latest(db.query, run_id)
+        failing = blocking([{"outcome": r["outcome"], "severity": r["severity"]} for r in results]) if last else []
+        if failing and not body.override:
+            raise HTTPException(409, f"The last QA run has {len(failing)} failing critical or high tests. Fix them and "
+                                     "run again, or approve with an override and a reason.")
+        if failing:
+            if len(note) < 15:
+                raise HTTPException(400, "An override needs a reason of at least 15 characters.")
+            note = f"[override: {len(failing)} critical/high tests failing] {note}"
     sttm = db.query("SELECT STTM_ID FROM CONTRACT.STTM_REGISTRY WHERE RUN_ID = %s ORDER BY STTM_VERSION DESC LIMIT 1",
                     (run_id,))
     if not sttm:
         raise HTTPException(409, "The run has no STTM yet.")
     db.execute("INSERT INTO CONTRACT.QA_SIGNOFF (SIGNOFF_ID, RUN_ID, STTM_ID, DECISION, NOTE) "
                "SELECT %s, %s, %s, %s, NULLIF(%s, '')",
-               (str(uuid.uuid4()), run_id, sttm[0]["sttm_id"], body.decision, (body.note or "").strip()))
+               (str(uuid.uuid4()), run_id, sttm[0]["sttm_id"], body.decision, note))
     _drop_run(run_id)
     return {"signoff": _qa_signoff(db, run_id)}
 
@@ -2545,6 +2559,81 @@ def qa_save(run_id: str, body: QaTest, db: Db = Depends(current_db)):
 
     try:
         return _source_call(db, "CALL CONTRACT.QA_SAVE(%s, %s)", handler, run_id, body.model_dump_json())
+    except Exception as exc:
+        raise _snowflake_error(exc) from exc
+
+
+@app.put("/api/runs/{run_id}/qa/tests/{test_id}")
+def qa_update(run_id: str, test_id: str, body: QaTest, db: Db = Depends(current_db)):
+    """Edit a saved test (SQL, title, expected, severity); checked by the guard and compiled again."""
+    from services.qa.procedures import qa_update as handler
+
+    try:
+        return invoke_source(db, handler, run_id, test_id, body.model_dump_json())
+    except AssertionError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except Exception as exc:
+        raise _snowflake_error(exc) from exc
+
+
+class QaRunIn(BaseModel):
+    test_ids: Optional[list[str]] = Field(default=None, max_length=500)
+
+
+@app.post("/api/runs/{run_id}/qa/run")
+def qa_run(run_id: str, body: QaRunIn, db: Db = Depends(current_db)):
+    """Run all (or the chosen) QA tests in Snowflake with the signed-in role and keep the results."""
+    from services.qa.run import run_tests
+
+    try:
+        result = invoke_source(db, run_tests, run_id, body.test_ids, "UI")
+    except AssertionError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except Exception as exc:
+        raise _snowflake_error(exc) from exc
+    return {k: v for k, v in result.items() if k != "results"}
+
+
+@app.get("/api/runs/{run_id}/qa/results")
+def qa_results(run_id: str, db: Db = Depends(current_db)):
+    """The latest QA run with every test's result, and each test's recent outcomes."""
+    from services.qa.run import latest
+
+    last, results = latest(db.query, run_id)
+    if last is None and not results:
+        try:
+            db.query("SELECT 1 FROM QUALITY.QA_RUN LIMIT 0")
+        except Exception:
+            return {"run": None, "results": [], "history": {}, "runs": [], "ready": False}
+    for r in results:
+        r["sample"] = _json(r.get("sample"))
+        r["columns"] = _json(r.get("columns"))
+    history: dict[str, list] = {}
+    runs: list[dict] = []
+    if last:
+        for r in db.query("""SELECT TEST_ID, OUTCOME, CREATED_AT::VARCHAR AS AT FROM QUALITY.QA_RESULT WHERE RUN_ID = %s
+                             QUALIFY ROW_NUMBER() OVER (PARTITION BY TEST_ID ORDER BY CREATED_AT DESC) <= 10
+                             ORDER BY CREATED_AT""", (run_id,)):
+            history.setdefault(r["test_id"], []).append({"outcome": r["outcome"], "at": r["at"]})
+        runs = db.query("""SELECT QA_RUN_ID, STARTED_AT::VARCHAR AS STARTED_AT, TESTS, PASSED, FAILED, REVIEW, NOT_RUN, ERRORS,
+                                  CREATED_BY FROM QUALITY.QA_RUN WHERE RUN_ID = %s ORDER BY STARTED_AT DESC LIMIT 20""",
+                        (run_id,))
+    return {"run": last, "results": results, "history": history, "runs": runs, "ready": True}
+
+
+class QaPlanIn(BaseModel):
+    focus: Optional[str] = Field(default="", max_length=1000)
+
+
+@app.post("/api/runs/{run_id}/qa/plan")
+def qa_plan(run_id: str, body: QaPlanIn, db: Db = Depends(current_db)):
+    """AI test plan grounded in domain knowledge, the profile and the approved checks (guarded, compiled, not saved)."""
+    from services.qa.procedures import qa_plan as handler
+
+    try:
+        return invoke_source(db, handler, run_id, body.focus or "")
+    except AssertionError as exc:
+        raise HTTPException(409, str(exc)) from exc
     except Exception as exc:
         raise _snowflake_error(exc) from exc
 
