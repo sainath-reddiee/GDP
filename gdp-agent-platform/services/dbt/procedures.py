@@ -17,8 +17,8 @@ from services.common.stage import Stage
 from services.dbt.inputs import assemble, load_inputs, session_query
 from services.dbt.onboard import ENGINE
 from services.dbt.workspace import create_dbt_project, fetch_branch_files, origin_allowed, push_pending
-from services.knowledge.procedures import current_knowledge_version, load_skill
-from services.knowledge.usage import stage_skills, use_skills
+from services.knowledge.procedures import current_knowledge_version, load_skill, load_skill_for
+from services.knowledge.usage import bound_skills, use_stage
 from services.soda.expectations import render_yaml
 from services.soda.procedures import _current_sttm, _lines
 
@@ -155,7 +155,7 @@ def generate_dbt(session, run_id: str, payload_json: str = "{}") -> Dict[str, An
             walked = False
     with tool_call(session, run_id, "generate_dbt", {"run_id": run_id}) as call:
         try:
-            use_skills(session, stage_skills("DBT", run_standard(stage.run)))
+            use_stage(session, "DBT", run_standard(stage.run), run_id)
             sttm = _current_sttm(session, run_id)
             design = variant(sttm["TABLE_DESIGN"]) or {}
             lines = [{
@@ -181,11 +181,11 @@ def generate_dbt(session, run_id: str, payload_json: str = "{}") -> Dict[str, An
 
             soda_yaml = render_yaml(sttm_target_name(session, sttm).lower(), checks)
             plan = _branch_plan(session, run_id, payload, stage.run.get("RUN_NAME") or "")
-            skill_names = stage_skills("DBT", run_standard(stage.run))
+            skill_names = bound_skills(session, "DBT", run_standard(stage.run))
             skill_meta = []
             for name in skill_names:
                 try:
-                    loaded = load_skill(session, name)
+                    loaded = load_skill_for(session, name, run_id)
                     skill_meta.append({"name": loaded.get("skill_name") or name,
                                        "version": loaded.get("version"),
                                        "description": (loaded.get("description") or "")[:240]})

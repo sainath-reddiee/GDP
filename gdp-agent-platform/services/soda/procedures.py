@@ -11,7 +11,7 @@ from services.common.audit import record_cost, tool_call
 from services.common.llm import complete_json
 from services.common.sql import clip, insert_rows, rows, scalar, variant
 from services.common.stage import Stage
-from services.knowledge.usage import STAGE_SKILLS, use_skills
+from services.knowledge.usage import use_skills, use_stage
 from services.knowledge.validate import normalize_content
 from services.sttm.assemble import sttm_target_name
 from services.quality.backtest import evaluate as evaluate_check, plan as backtest_plan
@@ -159,7 +159,7 @@ def _store_brief(session, run_id: str, domain_id: str, brief: str, filename: str
 def _extract(session, brief: str, table: str, columns: List[str], knowledge: List[str],
              run_id: Optional[str] = None) -> List[Dict[str, Any]]:
     try:
-        use_skills(session, ["SODA_SKILL"])
+        use_skills(session, ["SODA_SKILL"], run_id=run_id)
     except Exception:
         pass
     started = time.time()
@@ -197,7 +197,7 @@ def generate_soda(session, run_id: str) -> Dict[str, Any]:
     with tool_call(session, run_id, "generate_soda", {"run_id": run_id}) as call:
         try:
             try:
-                use_skills(session, STAGE_SKILLS["SODA"])
+                use_stage(session, "SODA", run_id=run_id)
             except Exception:
                 pass
             sttm = _current_sttm(session, run_id)

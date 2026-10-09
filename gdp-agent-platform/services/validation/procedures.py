@@ -9,7 +9,7 @@ from services.common.audit import tool_call
 from services.common.sql import clip, insert_rows, rows, scalar, variant
 from services.common.stage import Stage
 from services.soda.expectations import render_yaml
-from services.knowledge.usage import STAGE_SKILLS, use_skills
+from services.knowledge.usage import use_stage
 from services.validation import checks
 
 
@@ -95,7 +95,7 @@ def validate_dbt(session, run_id: str) -> Dict[str, Any]:
     with tool_call(session, run_id, "validate_dbt", {"run_id": run_id}) as call:
         try:
             generation = _current_generation(session, run_id)
-            guidance = use_skills(session, STAGE_SKILLS["VALIDATION"], excerpt=400)
+            guidance = use_stage(session, "VALIDATION", run_id=run_id, excerpt=400)
             files = _files(session, generation["GENERATION_ID"])
             assert files, "generated dbt project has no artifacts"
             soda = files.get("soda/checks.yml") or ""

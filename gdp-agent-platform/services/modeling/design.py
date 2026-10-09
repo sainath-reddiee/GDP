@@ -26,7 +26,6 @@ TYPE = re.compile(
     r"^(NUMBER(\(\d{1,2}(,\s*\d{1,2})?\))?|DECIMAL(\(\d{1,2}(,\s*\d{1,2})?\))?|NUMERIC|INT|INTEGER|BIGINT|SMALLINT|"
     r"FLOAT|DOUBLE|REAL|BOOLEAN|DATE|TIME|TIMESTAMP(_NTZ|_LTZ|_TZ)?(\(\d\))?|VARCHAR(\(\d{1,8}\))?|STRING|TEXT|"
     r"CHAR(\(\d{1,4}\))?|BINARY|VARIANT|OBJECT|ARRAY|GEOGRAPHY)$", re.IGNORECASE)
-SKILLS = ["AI-MODEL-GENERATION", "SEMANTIC-COLUMN-CLUSTERING", "MODEL-JSON-TO-DDL"]
 
 
 # ---------------------------------------------------------------- conventions
@@ -315,7 +314,7 @@ def _run(session, run_id: str) -> Dict[str, Any]:
 
 def context(session, run_id: str) -> Dict[str, Any]:
     """Everything the designer may use: profiled sources, the domain's registered models and knowledge, skills."""
-    from services.knowledge.usage import use_skills
+    from services.knowledge.usage import use_stage
 
     run = _run(session, run_id)
     sources: Dict[str, List[Dict[str, Any]]] = {}
@@ -350,7 +349,7 @@ def context(session, run_id: str) -> Dict[str, Any]:
                          ORDER BY IFF(KNOWLEDGE_TYPE = 'MODEL_DEFINITION', 0, 1), UPDATED_AT DESC NULLS LAST
                          LIMIT 40""", [domain_id])]
     try:
-        skills = use_skills(session, SKILLS, excerpt=1500)
+        skills = use_stage(session, "MODELING", run_id=run_id, excerpt=1500)
     except Exception:
         skills = ""
     return {"run": run, "domain_id": domain_id, "domain": domain, "sources": sources, "models": models,

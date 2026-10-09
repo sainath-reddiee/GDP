@@ -15,7 +15,7 @@ from services.common.sql import clip, insert_rows, rows, scalar, variant
 from services.common.stage import Stage
 from services.knowledge.procedures import current_knowledge_version
 from services.common.standard import run_standard
-from services.knowledge.usage import assert_safe_transformation, domain_context, stage_skills, use_skills
+from services.knowledge.usage import assert_safe_transformation, domain_context, use_stage
 from services.mapping.procedures import target_columns, target_table
 from services.sttm.assemble import assemble
 from services.sttm.join_graph import apply_overrides, build_join_graph, join_logic_by_table
@@ -29,7 +29,7 @@ def generate_sttm(session, run_id: str) -> Dict[str, Any]:
     with tool_call(session, run_id, "generate_sttm", {"run_id": run_id}) as call:
         try:
             run = stage.run
-            use_skills(session, stage_skills("STTM", run_standard(run)))
+            use_stage(session, "STTM", run_standard(run), run_id)
             target = target_table(session, run)
             columns = target_columns(session, target["TARGET_TABLE_ID"])
             source = rows(session, "SELECT SOURCE_SYSTEM_NAME FROM SOURCE.SOURCE_REGISTRY WHERE SOURCE_SYSTEM_ID = ?",
@@ -213,7 +213,7 @@ def refine_transformation(session, run_id: str, payload_json: str) -> Dict[str, 
                    {"target": context["target_column"], "prompt": clip(prompt, 500)}) as call:
         try:
             try:
-                use_skills(session, stage_skills("STTM", context["standard"]))
+                use_stage(session, "STTM", context["standard"], run_id)
             except Exception:
                 pass
             output, usage, model = complete_json(session, refine_prompt(context, prompt), REFINE_SCHEMA, max_tokens=1500, stage="STTM")

@@ -26,7 +26,7 @@ from typing import Dict, List, Tuple
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from infrastructure.seed_knowledge import list_skills, seed_platform  # noqa: E402
+from infrastructure.seed_knowledge import _stage_dir, list_skills, seed_platform  # noqa: E402
 from services.workflow.graph import load_graph  # noqa: E402
 
 MIGRATIONS_DIR = ROOT / "snowflake" / "database" / "migrations"
@@ -48,7 +48,7 @@ def agent_skills_yaml(database: str) -> str:
     """Stage skills attached to the supervisor. Each path is the folder that contains SKILL.md."""
     lines = ["skills:"]
     for skill in list_skills():
-        path = f"@{database}.KNOWLEDGE.SKILL_STAGE/{skill['folder']}/{skill['version']}"
+        path = f"@{database}.KNOWLEDGE.SKILL_STAGE/{skill['folder']}/{_stage_dir(skill)}"
         lines.append(f"  - name: {skill['source_name']}")
         lines.append("    source:")
         lines.append("      type: STAGE")

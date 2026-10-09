@@ -1,0 +1,120 @@
+-- Skills become versioned products: every version is an immutable row, labels pick the version the pipeline uses
+-- (production for every run, candidate to try on a single run), categories group them, and stage bindings replace the
+-- hardcoded stage -> skill map. IS_CURRENT on SKILL_REGISTRY is kept equal to "holds the production label" so older
+-- readers keep working.
+
+ALTER TABLE {{database}}.KNOWLEDGE.SKILL_REGISTRY ADD COLUMN IF NOT EXISTS REVISION NUMBER(6,0);
+ALTER TABLE {{database}}.KNOWLEDGE.SKILL_REGISTRY ADD COLUMN IF NOT EXISTS ORIGIN VARCHAR(16);        -- REPOSITORY | AI | USER
+ALTER TABLE {{database}}.KNOWLEDGE.SKILL_REGISTRY ADD COLUMN IF NOT EXISTS PARENT_SKILL_ID VARCHAR(36); -- version it was derived from
+ALTER TABLE {{database}}.KNOWLEDGE.SKILL_REGISTRY ADD COLUMN IF NOT EXISTS PARENT_SKILL VARCHAR(128);   -- umbrella skill (sub-skills)
+ALTER TABLE {{database}}.KNOWLEDGE.SKILL_REGISTRY ADD COLUMN IF NOT EXISTS CATEGORY_ID VARCHAR(64);
+ALTER TABLE {{database}}.KNOWLEDGE.SKILL_REGISTRY ADD COLUMN IF NOT EXISTS CHANGE_NOTE VARCHAR(2000);
+ALTER TABLE {{database}}.KNOWLEDGE.SKILL_REGISTRY ADD COLUMN IF NOT EXISTS TAGS ARRAY;
+ALTER TABLE {{database}}.KNOWLEDGE.SKILL_REGISTRY ADD COLUMN IF NOT EXISTS EVAL_JSON VARIANT;
+
+UPDATE {{database}}.KNOWLEDGE.SKILL_REGISTRY T
+   SET REVISION = S.REV
+  FROM (SELECT SKILL_ID, ROW_NUMBER() OVER (PARTITION BY SKILL_NAME ORDER BY CREATED_AT, SKILL_ID) AS REV
+          FROM {{database}}.KNOWLEDGE.SKILL_REGISTRY) S
+ WHERE T.SKILL_ID = S.SKILL_ID AND T.REVISION IS NULL;
+UPDATE {{database}}.KNOWLEDGE.SKILL_REGISTRY
+   SET ORIGIN = IFF(CREATED_BY = 'SEED', 'REPOSITORY', 'USER') WHERE ORIGIN IS NULL;
+
+CREATE TABLE IF NOT EXISTS {{database}}.KNOWLEDGE.SKILL_CATEGORY (
+    CATEGORY_ID  VARCHAR(64)   NOT NULL,
+    NAME         VARCHAR(128)  NOT NULL,
+    DESCRIPTION  VARCHAR(1000),
+    ICON         VARCHAR(40),
+    COLOR        VARCHAR(16),
+    POSITION     NUMBER(6,0)   DEFAULT 100,
+    IS_SYSTEM    BOOLEAN       DEFAULT FALSE,
+    CREATED_BY   VARCHAR(256)  DEFAULT CURRENT_USER(),
+    CREATED_AT   TIMESTAMP_LTZ DEFAULT CURRENT_TIMESTAMP(),
+    CONSTRAINT PK_SKILL_CATEGORY PRIMARY KEY (CATEGORY_ID)
+);
+
+-- Per skill (all versions): the category a person chose. Wins over the category the repository suggests.
+CREATE TABLE IF NOT EXISTS {{database}}.KNOWLEDGE.SKILL_SETTING (
+    SKILL_NAME   VARCHAR(128)  NOT NULL,
+    CATEGORY_ID  VARCHAR(64),
+    UPDATED_BY   VARCHAR(256)  DEFAULT CURRENT_USER(),
+    UPDATED_AT   TIMESTAMP_LTZ DEFAULT CURRENT_TIMESTAMP(),
+    CONSTRAINT PK_SKILL_SETTING PRIMARY KEY (SKILL_NAME)
+);
+
+CREATE TABLE IF NOT EXISTS {{database}}.KNOWLEDGE.SKILL_LABEL (
+    SKILL_NAME   VARCHAR(128)  NOT NULL,
+    LABEL        VARCHAR(32)   NOT NULL,   -- production | candidate
+    SKILL_ID     VARCHAR(36)   NOT NULL,
+    MOVED_BY     VARCHAR(256)  DEFAULT CURRENT_USER(),   -- SEED when only deploys ever moved it
+    MOVED_AT     TIMESTAMP_LTZ DEFAULT CURRENT_TIMESTAMP(),
+    NOTE         VARCHAR(2000),
+    CONSTRAINT PK_SKILL_LABEL PRIMARY KEY (SKILL_NAME, LABEL)
+);
+
+CREATE TABLE IF NOT EXISTS {{database}}.KNOWLEDGE.SKILL_LABEL_HISTORY (
+    EVENT_ID       VARCHAR(36)   NOT NULL,
+    SKILL_NAME     VARCHAR(128)  NOT NULL,
+    LABEL          VARCHAR(32)   NOT NULL,
+    FROM_SKILL_ID  VARCHAR(36),
+    TO_SKILL_ID    VARCHAR(36),
+    MOVED_BY       VARCHAR(256)  DEFAULT CURRENT_USER(),
+    MOVED_AT       TIMESTAMP_LTZ DEFAULT CURRENT_TIMESTAMP(),
+    NOTE           VARCHAR(2000),
+    CONSTRAINT PK_SKILL_LABEL_HISTORY PRIMARY KEY (EVENT_ID)
+);
+
+CREATE TABLE IF NOT EXISTS {{database}}.KNOWLEDGE.SKILL_STAGE_BINDING (
+    STAGE        VARCHAR(32)   NOT NULL,
+    SKILL_NAME   VARCHAR(128)  NOT NULL,
+    ENABLED      BOOLEAN       DEFAULT TRUE,
+    POSITION     NUMBER(6,0)   DEFAULT 100,
+    STANDARD     VARCHAR(16)   DEFAULT 'ANY',   -- ANY | GDP (loaded only when the run follows the GDP standard)
+    UPDATED_BY   VARCHAR(256)  DEFAULT CURRENT_USER(),   -- SEED until a person changes it
+    UPDATED_AT   TIMESTAMP_LTZ DEFAULT CURRENT_TIMESTAMP(),
+    CONSTRAINT PK_SKILL_STAGE_BINDING PRIMARY KEY (STAGE, SKILL_NAME)
+);
+
+CREATE TABLE IF NOT EXISTS {{database}}.CORE.RUN_SKILL_OVERRIDE (
+    RUN_ID       VARCHAR(36)   NOT NULL,
+    SKILL_NAME   VARCHAR(128)  NOT NULL,
+    SKILL_ID     VARCHAR(36)   NOT NULL,
+    SET_BY       VARCHAR(256)  DEFAULT CURRENT_USER(),
+    SET_AT       TIMESTAMP_LTZ DEFAULT CURRENT_TIMESTAMP(),
+    CONSTRAINT PK_RUN_SKILL_OVERRIDE PRIMARY KEY (RUN_ID, SKILL_NAME)
+);
+
+MERGE INTO {{database}}.KNOWLEDGE.SKILL_CATEGORY T
+USING (SELECT * FROM VALUES
+    ('source-onboarding', 'Source onboarding', 'Connect, land and extract source schemas', 'plug', '#0ea5e9', 10),
+    ('profiling', 'Profiling', 'Column profiling, descriptions and deep quality analysis', 'scan-search', '#6366f1', 20),
+    ('data-modeling', 'Data modeling', 'Design target models: entities, keys, grain and DDL', 'boxes', '#8b5cf6', 30),
+    ('mapping', 'Mapping', 'Source to target mapping, validation and pattern reuse', 'git-compare', '#14b8a6', 40),
+    ('sttm', 'STTM', 'Source to target transformation specs', 'table-properties', '#f59e0b', 50),
+    ('data-quality', 'Data quality', 'Soda checks and data readiness', 'shield-check', '#22c55e', 60),
+    ('dbt', 'dbt and code', 'dbt models, layers, macros and code generation', 'code-2', '#ef4444', 70),
+    ('validation', 'Validation and QA', 'Validation, readiness checks and QA', 'badge-check', '#0891b2', 80),
+    ('domain-standards', 'Domain standards', 'GDP and company standards that shape every stage', 'landmark', '#a855f7', 90),
+    ('general', 'General', 'Everything else', 'sparkles', '#64748b', 100)
+    AS V(CATEGORY_ID, NAME, DESCRIPTION, ICON, COLOR, POSITION)) S
+ON T.CATEGORY_ID = S.CATEGORY_ID
+WHEN NOT MATCHED THEN INSERT (CATEGORY_ID, NAME, DESCRIPTION, ICON, COLOR, POSITION, IS_SYSTEM, CREATED_BY)
+VALUES (S.CATEGORY_ID, S.NAME, S.DESCRIPTION, S.ICON, S.COLOR, S.POSITION, TRUE, 'SEED');
+
+-- production = today's current version of every skill (deploy-owned until a person moves it)
+MERGE INTO {{database}}.KNOWLEDGE.SKILL_LABEL T
+USING (SELECT SKILL_NAME, SKILL_ID FROM {{database}}.KNOWLEDGE.SKILL_REGISTRY WHERE IS_CURRENT
+       QUALIFY ROW_NUMBER() OVER (PARTITION BY SKILL_NAME ORDER BY CREATED_AT DESC, SKILL_ID) = 1) S
+ON T.SKILL_NAME = S.SKILL_NAME AND T.LABEL = 'production'
+WHEN NOT MATCHED THEN INSERT (SKILL_NAME, LABEL, SKILL_ID, MOVED_BY) VALUES (S.SKILL_NAME, 'production', S.SKILL_ID, 'SEED');
+
+GRANT SELECT, INSERT, UPDATE ON TABLE {{database}}.KNOWLEDGE.SKILL_REGISTRY TO DATABASE ROLE {{database}}.DATA_ENGINEER;
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE {{database}}.KNOWLEDGE.SKILL_CATEGORY TO DATABASE ROLE {{database}}.DATA_ENGINEER;
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE {{database}}.KNOWLEDGE.SKILL_SETTING TO DATABASE ROLE {{database}}.DATA_ENGINEER;
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE {{database}}.KNOWLEDGE.SKILL_LABEL TO DATABASE ROLE {{database}}.DATA_ENGINEER;
+GRANT SELECT, INSERT ON TABLE {{database}}.KNOWLEDGE.SKILL_LABEL_HISTORY TO DATABASE ROLE {{database}}.DATA_ENGINEER;
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE {{database}}.KNOWLEDGE.SKILL_STAGE_BINDING TO DATABASE ROLE {{database}}.DATA_ENGINEER;
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE {{database}}.CORE.RUN_SKILL_OVERRIDE TO DATABASE ROLE {{database}}.DATA_ENGINEER;
+GRANT SELECT ON TABLE {{database}}.KNOWLEDGE.SKILL_LABEL TO DATABASE ROLE {{database}}.SERVICE_AGENT;
+GRANT SELECT ON TABLE {{database}}.KNOWLEDGE.SKILL_STAGE_BINDING TO DATABASE ROLE {{database}}.SERVICE_AGENT;
+GRANT SELECT ON TABLE {{database}}.CORE.RUN_SKILL_OVERRIDE TO DATABASE ROLE {{database}}.SERVICE_AGENT;

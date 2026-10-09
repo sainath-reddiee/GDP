@@ -11,13 +11,13 @@ import re
 from typing import Dict, List
 
 from services.common.sql import rows
-from services.knowledge.procedures import load_skill
+from services.knowledge.procedures import load_skill, load_skill_for
 
 STAGE_SKILLS: Dict[str, List[str]] = {
     "LANDING": ["BRONZE-SCHEMA-DDL-EXTRACTION", "SCHEMA-DDL-EXTRACTION"],
     "PROFILING": ["COLUMN-PROFILING", "AI-COLUMN-DESCRIPTIONS", "AI-DEEP-QUALITY-ANALYSIS"],
     "DOMAIN": ["AI-DATA-MODELING"],
-    "MODELING": ["AI-MODEL-GENERATION", "SEMANTIC-COLUMN-CLUSTERING", "MODEL-JSON-TO-DDL"],
+    "MODELING": ["AI-DATA-MODELING", "AI-MODEL-GENERATION", "SEMANTIC-COLUMN-CLUSTERING", "MODEL-JSON-TO-DDL"],
     "MAPPING": ["AI-SCHEMA-MAPPING", "MAPPING-VALIDATION", "MAPPING-BUSINESS-RULES",
                 "MAPPING-APPROVAL-WORKFLOW", "MAPPING-PATTERN-LIBRARY"],
     "STTM": ["GDP-DBT-ONBOARD-SOURCE"],
@@ -41,13 +41,29 @@ FORBIDDEN_SQL = re.compile(
 )
 
 
-def use_skills(session, names: List[str], excerpt: int = 1200) -> str:
-    """Load each skill (audited) and return a short excerpt for the stage prompt."""
+def use_skills(session, names: List[str], excerpt: int = 1200, run_id: str | None = None) -> str:
+    """Load each skill (audited against the run) and return a short excerpt for the stage prompt. A skill that is not
+    registered is skipped so one missing playbook never blocks a stage."""
     parts = []
     for name in names:
-        skill = load_skill(session, name)
+        try:
+            skill = load_skill_for(session, name, run_id)
+        except AssertionError:
+            continue
         parts.append(f"[{skill['skill_name']} v{skill['version']}]\n{(skill.get('content') or '')[:excerpt]}")
     return "\n\n".join(parts)
+
+
+def bound_skills(session, stage: str, standard: str = "GDP") -> List[str]:
+    """Skills bound to a stage in Admin (enabled, in order); the built-in map until bindings exist."""
+    from services.knowledge.skills import stage_skills as bound
+
+    return bound(session, stage, standard)
+
+
+def use_stage(session, stage: str, standard: str = "GDP", run_id: str | None = None, excerpt: int = 1200) -> str:
+    """use_skills for every skill bound to the stage."""
+    return use_skills(session, bound_skills(session, stage, standard), excerpt, run_id)
 
 
 DBT_SKILL = "GDP-DBT-ONBOARD-SOURCE"

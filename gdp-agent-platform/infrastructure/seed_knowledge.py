@@ -8,6 +8,7 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from services.knowledge.skills import category_for
 from services.knowledge.packs import (GDP_DOMAIN_ID, GDP_TABLE_ID, LiveColumns, _dumps, _stable_id,  # noqa: F401
                                       domain_id, merge, merge_columns, pack_rows)
 
@@ -29,6 +30,8 @@ PLATFORM_CONFIG = [
     ("LLM_MODEL", "claude-sonnet-4-5", "Cortex AI_COMPLETE model"),
     ("EMBED_MODEL", "snowflake-arctic-embed-l-v2.0", "1024-d embedding model matching COLUMN_EMBEDDING"),
     ("MAPPING_TOP_K", 3, "Candidates kept per source column"),
+    ("SKILLS_AUTO_PROMOTE_REPO", True,
+     "A changed repository skill goes straight to production while no person has moved its production label"),
     ("DOMAIN_CONFIDENCE_THRESHOLD", 0.3, "Below this, identify_domain asks for confirmation"),
     ("CREDITS_PER_MILLION_TOKENS", {"default": 0, "claude-sonnet-4-5": 0}, "Cost estimate rates"),
     ("CATALOG_DISPLAY", {"hidden_target_tables": ["COMPLETE_EMPLOYEE_DETAILS"], "hidden_target_databases": ["ALATION_POC"],
@@ -113,15 +116,21 @@ def parse_skill(path: Path) -> Dict[str, Any]:
     raw_name = (meta.get("name") or path.parent.name).strip()
     name = raw_name.upper()
     rel = path.parent.relative_to(SKILLS_DIR).as_posix()
+    checksum = hashlib.sha256(content.encode("utf-8")).hexdigest()
+    parent = (meta.get("parent_skill") or "").strip().upper() or None
+    skill_type = _skill_type(name, meta)
     return {
         "name": name,
         "source_name": raw_name,
-        "type": _skill_type(name, meta),
-        "version": (meta.get("version") or "1.0.0").strip() or "1.0.0",
+        "type": skill_type,
+        # declared version, or a content-derived one so an edited playbook becomes a new version, never an overwrite
+        "version": (meta.get("version") or "").strip() or f"1.0.0+{checksum[:8]}",
+        "category": category_for(rel, meta.get("category"), skill_type, name, parent),
+        "parent": parent,
         "description": re.sub(r"\s+", " ", meta.get("description") or "")[:1000],
         "content": content,
         "config": config,
-        "checksum": hashlib.sha256(content.encode("utf-8")).hexdigest(),
+        "checksum": checksum,
         "domain": meta.get("domain"),
         "folder": rel,
         "path": path,
@@ -174,11 +183,17 @@ def skill_rows() -> List[Tuple]:
     for skill in list_skills():
         skill_domain = GDP_DOMAIN_ID if (skill.get("domain") or "").upper() == "GDP" else None
         out.append((
-            _stable_id("skill", skill["name"], skill["version"]), skill["name"], skill["type"],
-            skill_domain, skill["version"], f"{skill['folder']}/{skill['version']}/SKILL.md",
+            _stable_id("skill", skill["name"], skill["checksum"]), skill["name"], skill["type"],
+            skill_domain, skill["version"], f"{skill['folder']}/{_stage_dir(skill)}/SKILL.md",
             skill["checksum"], "ACTIVE", skill["description"], skill["content"], skill["config"], True,
+            skill["category"], skill["parent"],
         ))
     return out
+
+
+def _stage_dir(skill: Dict[str, Any]) -> str:
+    """Stage folder of one version: version plus content hash, so two contents never share a folder."""
+    return f"{skill['version'].split('+')[0]}-{skill['checksum'][:8]}"
 
 
 def config_rows() -> List[Tuple]:
@@ -187,6 +202,82 @@ def config_rows() -> List[Tuple]:
 
 def scoring_rows() -> List[Tuple]:
     return [(SCORING_CONFIG_ID, None, 1, DEFAULT_WEIGHTS, DEFAULT_THRESHOLDS, True)]
+
+
+def seed_skills(cur, database: str) -> List[str]:
+    """Register repository skills as immutable versions and move labels.
+
+    A repository version is matched on (name, checksum): unchanged files register nothing. A changed file becomes a
+    new revision. production follows the repository only while no person has moved it (MOVED_BY = 'SEED') and
+    SKILLS_AUTO_PROMOTE_REPO is on; otherwise the new version becomes the candidate, for someone to review and promote.
+    """
+    log: List[str] = []
+    reg = f"{database}.KNOWLEDGE.SKILL_REGISTRY"
+    cur.execute(f"""SELECT CONFIG_VALUE FROM {database}.CORE.PLATFORM_CONFIG
+                     WHERE CONFIG_KEY = 'SKILLS_AUTO_PROMOTE_REPO' AND IS_CURRENT ORDER BY VERSION DESC LIMIT 1""")
+    found = cur.fetchall()
+    auto = True if not found else str(found[0][0]).strip().lower() not in ("false", "0", '"false"')
+    for row in skill_rows():
+        skill_id, name, stype, domain, version, path, checksum, status, desc, content, config, _, category, parent = row
+        cur.execute(f"SELECT SKILL_ID FROM {reg} WHERE SKILL_NAME = %s AND CHECKSUM = %s ORDER BY CREATED_AT LIMIT 1",
+                    (name, checksum))
+        hit = cur.fetchall()
+        if hit:
+            skill_id = hit[0][0]
+            # metadata that is not part of the version itself
+            cur.execute(f"""UPDATE {reg} SET CATEGORY_ID = %s, PARENT_SKILL = NULLIF(%s, ''), ORIGIN = COALESCE(ORIGIN, 'REPOSITORY')
+                             WHERE SKILL_ID = %s""", (category, parent or "", skill_id))
+            new = False
+        else:
+            cur.execute(f"""INSERT INTO {reg} (SKILL_ID, SKILL_NAME, SKILL_TYPE, DOMAIN_ID, VERSION, STAGE_PATH, CHECKSUM,
+                                 STATUS, DESCRIPTION, CONTENT, CONFIG, IS_CURRENT, CREATED_BY, REVISION, ORIGIN,
+                                 CATEGORY_ID, PARENT_SKILL, CHANGE_NOTE)
+                             SELECT %s, %s, %s, NULLIF(%s, ''), %s, %s, %s, %s, %s, %s, PARSE_JSON(NULLIF(%s, '')), FALSE, 'SEED',
+                                    COALESCE((SELECT MAX(REVISION) FROM {reg} WHERE SKILL_NAME = %s), 0) + 1, 'REPOSITORY',
+                                    %s, NULLIF(%s, ''), 'Repository version'""",
+                        (skill_id, name, stype, domain or "", version, path, checksum, status, desc, content,
+                         _dumps(config), name, category, parent or ""))
+            new = True
+        cur.execute(f"SELECT LABEL, SKILL_ID, MOVED_BY FROM {database}.KNOWLEDGE.SKILL_LABEL WHERE SKILL_NAME = %s", (name,))
+        labels = {r[0]: (r[1], r[2]) for r in cur.fetchall()}
+        production = labels.get("production")
+        if production is None or (new and auto and production[1] == "SEED"):
+            _move_label(cur, database, name, "production", skill_id, production[0] if production else None)
+            if new and production:
+                log.append(f"skill {name}: production moved to the new repository version {version}")
+        elif new and production[0] != skill_id:
+            _move_label(cur, database, name, "candidate", skill_id, (labels.get("candidate") or (None,))[0])
+            log.append(f"skill {name}: new repository version {version} is the candidate (production was set by a person)")
+    # IS_CURRENT mirrors production so readers that predate labels keep working
+    cur.execute(f"""UPDATE {reg} R SET IS_CURRENT = (R.SKILL_ID IN (SELECT SKILL_ID FROM {database}.KNOWLEDGE.SKILL_LABEL
+                                                                     WHERE LABEL = 'production'))""")
+    # stage bindings: missing rows only, admin edits are never touched
+    from services.knowledge.usage import GDP_ONLY_SKILLS, STAGE_SKILLS
+
+    for stage, names in STAGE_SKILLS.items():
+        for pos, name in enumerate(names):
+            cur.execute(f"""MERGE INTO {database}.KNOWLEDGE.SKILL_STAGE_BINDING T
+                             USING (SELECT %s AS STAGE, %s AS SKILL_NAME) S ON T.STAGE = S.STAGE AND T.SKILL_NAME = S.SKILL_NAME
+                             WHEN NOT MATCHED THEN INSERT (STAGE, SKILL_NAME, ENABLED, POSITION, STANDARD, UPDATED_BY)
+                             VALUES (S.STAGE, S.SKILL_NAME, TRUE, %s, %s, 'SEED')""",
+                        (stage, name, (pos + 1) * 10, "GDP" if name in GDP_ONLY_SKILLS else "ANY"))
+    return log
+
+
+def _move_label(cur, database: str, name: str, label: str, skill_id: str, previous: Optional[str]) -> None:
+    import uuid
+
+    cur.execute(f"""MERGE INTO {database}.KNOWLEDGE.SKILL_LABEL T
+                     USING (SELECT %s AS SKILL_NAME, %s AS LABEL, %s AS SKILL_ID) S
+                        ON T.SKILL_NAME = S.SKILL_NAME AND T.LABEL = S.LABEL
+                     WHEN MATCHED THEN UPDATE SET SKILL_ID = S.SKILL_ID, MOVED_BY = 'SEED', MOVED_AT = CURRENT_TIMESTAMP(),
+                          NOTE = 'Repository deploy'
+                     WHEN NOT MATCHED THEN INSERT (SKILL_NAME, LABEL, SKILL_ID, MOVED_BY, NOTE)
+                          VALUES (S.SKILL_NAME, S.LABEL, S.SKILL_ID, 'SEED', 'Repository deploy')""", (name, label, skill_id))
+    cur.execute(f"""INSERT INTO {database}.KNOWLEDGE.SKILL_LABEL_HISTORY
+                     (EVENT_ID, SKILL_NAME, LABEL, FROM_SKILL_ID, TO_SKILL_ID, MOVED_BY, NOTE)
+                     VALUES (%s, %s, %s, NULLIF(%s, ''), %s, 'SEED', 'Repository deploy')""",
+                (str(uuid.uuid4()), name, label, previous or "", skill_id))
 
 
 def seed_platform(cur, database: str) -> List[str]:
@@ -204,36 +295,13 @@ def seed_platform(cur, database: str) -> List[str]:
 
     for skill in list_skills():
         root = skill["path"].parent
-        dest_root = f"@{database}.KNOWLEDGE.SKILL_STAGE/{skill['folder']}/{skill['version']}"
+        dest_root = f"@{database}.KNOWLEDGE.SKILL_STAGE/{skill['folder']}/{_stage_dir(skill)}"
         for local in skill["files"]:
             rel = local.relative_to(root).as_posix()
             parent = rel.rsplit("/", 1)[0] if "/" in rel else ""
             dest = f"{dest_root}/{parent}" if parent else dest_root
             cur.execute(f"PUT 'file://{local.as_posix()}' {dest} AUTO_COMPRESS = FALSE OVERWRITE = TRUE")
-
-    for row in skill_rows():
-        cur.execute(
-            f"""MERGE INTO {database}.KNOWLEDGE.SKILL_REGISTRY t
-                USING (SELECT %s AS SKILL_ID, %s AS SKILL_NAME, %s AS SKILL_TYPE, NULLIF(%s, '') AS DOMAIN_ID,
-                              %s AS VERSION, %s AS STAGE_PATH, %s AS CHECKSUM, %s AS STATUS,
-                              %s AS DESCRIPTION, %s AS CONTENT, PARSE_JSON(NULLIF(%s, '')) AS CONFIG,
-                              %s AS IS_CURRENT, 'SEED' AS CREATED_BY) s
-                   ON t.SKILL_ID = s.SKILL_ID
-                WHEN MATCHED THEN UPDATE SET SKILL_NAME = s.SKILL_NAME, SKILL_TYPE = s.SKILL_TYPE,
-                     DOMAIN_ID = s.DOMAIN_ID, VERSION = s.VERSION, STAGE_PATH = s.STAGE_PATH,
-                     CHECKSUM = s.CHECKSUM, STATUS = s.STATUS, DESCRIPTION = s.DESCRIPTION,
-                     CONTENT = s.CONTENT, CONFIG = s.CONFIG, IS_CURRENT = s.IS_CURRENT
-                WHEN NOT MATCHED THEN INSERT (SKILL_ID, SKILL_NAME, SKILL_TYPE, DOMAIN_ID, VERSION,
-                     STAGE_PATH, CHECKSUM, STATUS, DESCRIPTION, CONTENT, CONFIG, IS_CURRENT, CREATED_BY)
-                     VALUES (s.SKILL_ID, s.SKILL_NAME, s.SKILL_TYPE, s.DOMAIN_ID, s.VERSION, s.STAGE_PATH,
-                             s.CHECKSUM, s.STATUS, s.DESCRIPTION, s.CONTENT, s.CONFIG, s.IS_CURRENT, s.CREATED_BY)""",
-            (row[0], row[1], row[2], row[3] or "", row[4], row[5], row[6], row[7], row[8], row[9],
-             _dumps(row[10]), row[11]),
-        )
-    current = [row[0] for row in skill_rows()]
-    cur.execute(f"""UPDATE {database}.KNOWLEDGE.SKILL_REGISTRY SET IS_CURRENT = FALSE
-                     WHERE CREATED_BY = 'SEED' AND IS_CURRENT
-                       AND NOT ARRAY_CONTAINS(SKILL_ID::VARIANT, PARSE_JSON(%s)::ARRAY)""", (json.dumps(current),))
+    log.extend(seed_skills(cur, database))
 
     # Settings an admin changed (a version above the seeded one) belong to the admin: the deploy leaves them alone,
     # otherwise re-marking the seeded version as current would leave two current rows.

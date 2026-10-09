@@ -16,6 +16,7 @@ export function useScrollLock(active = true) {
       // keep the layout from jumping sideways when the scrollbar disappears
       const gap = window.innerWidth - root.clientWidth;
       root.style.overflow = "hidden";
+      root.dataset.overlay = "open"; // lets floating launchers (copilot) step aside
       if (gap > 0) root.style.paddingRight = `${gap}px`;
     }
     locks += 1;
@@ -24,6 +25,7 @@ export function useScrollLock(active = true) {
       if (locks === 0) {
         root.style.overflow = saved.overflow;
         root.style.paddingRight = saved.paddingRight;
+        delete root.dataset.overlay;
       }
     };
   }, [active]);
