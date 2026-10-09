@@ -573,6 +573,12 @@ def _remember(session, domain_id: str, run_id: str, design: Dict[str, Any], conv
     from services.common.suggestion_stages import _knowledge
 
     for entity, reg in zip(design.get("entities", []), registered):
+        try:
+            user_tags = [r["TAG"] for r in _rows(session, """SELECT TAG FROM CORE.TAG_ASSIGNMENT
+                                                              WHERE ENTITY_TYPE = 'MODEL' AND ENTITY_KEY = ?""",
+                                                  [reg["fqn"].upper()])]
+        except Exception:
+            user_tags = []
         content = {"target_table": entity["entity_name"].upper(), "fqn": reg["fqn"], "kind": entity["kind"],
                    "purpose": entity.get("purpose"), "grain": entity.get("grain"),
                    "business_keys": entity.get("business_keys"), "conventions": conv, "decision": design.get("decision"),
@@ -582,6 +588,6 @@ def _remember(session, domain_id: str, run_id: str, design: Dict[str, Any], conv
         try:
             _knowledge(session, domain_id, "MODEL_DEFINITION",
                        f"Model {entity['entity_name']}: {entity.get('purpose') or entity['kind'].lower()}",
-                       content, f"model.{reg['fqn'].upper()}", ["MODEL_DESIGN", conv.get("preset") or "NONE"])
+                       content, f"model.{reg['fqn'].upper()}", ["MODEL_DESIGN", conv.get("preset") or "NONE", *user_tags])
         except Exception:
             continue

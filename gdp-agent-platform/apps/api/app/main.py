@@ -60,6 +60,14 @@ def _drop_run(run_id: str) -> None:
 
 
 @app.middleware("http")
+async def governance_guard(request: Request, call_next):
+    """RBAC and approvals (app/governance.py). Registered first, so it runs after the cache middleware below."""
+    from app.governance import middleware as governance_middleware
+
+    return await governance_middleware(request, call_next)
+
+
+@app.middleware("http")
 async def bust_run_cache(request: Request, call_next):
     response = await call_next(request)
     if request.method in {"POST", "PUT", "PATCH"} and response.status_code < 400:
@@ -298,7 +306,13 @@ def logout(x_aip_session: Optional[str] = Header(default=None)):
 
 @app.get("/api/auth/me")
 def me(db: Db = Depends(current_db)):
-    return {"user": db.user, "role": db.role, "auth_mode": AUTH_MODE, "agent": AGENT_NAME}
+    from app.governance import summary
+
+    try:
+        access = summary(db)
+    except Exception:
+        access = {"governance": False, "roles": [], "privileges": ["*"], "pending_for_me": 0}
+    return {"user": db.user, "role": db.role, "auth_mode": AUTH_MODE, "agent": AGENT_NAME, **access}
 
 
 @app.get("/api/auth/roles")
@@ -333,8 +347,10 @@ def _intent_table_counts(db: Db) -> dict[str, int]:
 @app.get("/api/runs")
 def list_runs(include_test: bool = False, status: str = "all", limit: int = 200, offset: int = 0,
               q: Optional[str] = None, domain_id: Optional[str] = None, stage: Optional[str] = None,
-              needs_review: bool = False, sort: str = "newest", db: Db = Depends(current_db)):
-    """Runs with search, domain/stage/needs-review filters, sorting and paging (`total` counts all matches)."""
+              needs_review: bool = False, sort: str = "newest", tag: Optional[str] = None,
+              db: Db = Depends(current_db)):
+    """Runs with search, domain/stage/needs-review/tag filters, sorting and paging (`total` counts all matches)."""
+    from services.common.tags import normalize_tag
     from services.workflow.listing import MAX_RUNS, SORTS, page, runs_where
     from services.workflow.state_machine import lifecycle_filter_sql, lifecycle_status
 
@@ -343,7 +359,8 @@ def list_runs(include_test: bool = False, status: str = "all", limit: int = 200,
     except AssertionError as exc:
         raise HTTPException(400, str(exc)) from exc
     offset, limit = page(offset, limit, max(MAX_RUNS, 500))
-    where, params = runs_where(predicate, include_test, q, domain_id, stage, needs_review)
+    where, params = runs_where(predicate, include_test, q, domain_id, stage, needs_review,
+                               normalize_tag(tag) if tag else None)
     order = SORTS.get(sort, SORTS["newest"])
     total = None
     try:
@@ -387,7 +404,9 @@ def list_runs(include_test: bool = False, status: str = "all", limit: int = 200,
             (include_test, limit),
         )
     intent_counts = _intent_table_counts(db)
+    tags = _tags_for(db, "RUN", [r["run_id"] for r in rows])
     for r in rows:
+        r["tags"] = tags.get(r["run_id"], [])
         r.pop("total_matches", None)
         r["lifecycle"] = lifecycle_status(r["current_state"], bool(r.get("is_archived")))
         r["table_count"] = (r.get("selected_tables") or r.get("landed_tables")
@@ -4257,6 +4276,80 @@ def catalog_table_profile(database: str, schema: str, table: str, db: Db = Depen
             "checks": checks, "checks_yaml": insights.checks_yaml(table, checks), "drift": change}
 
 
+def _tags_for(db: Db, entity_type: str, keys: list[str]) -> dict[str, list[str]]:
+    """Tags per key; empty before V019 is deployed."""
+    keys = [k for k in dict.fromkeys(keys) if k]
+    if not keys:
+        return {}
+    try:
+        found = db.query("""SELECT ENTITY_KEY, ARRAY_AGG(TAG) WITHIN GROUP (ORDER BY TAG) AS TAGS
+                              FROM CORE.TAG_ASSIGNMENT
+                             WHERE ENTITY_TYPE = %s AND ARRAY_CONTAINS(ENTITY_KEY::VARIANT, PARSE_JSON(%s)::ARRAY)
+                             GROUP BY ENTITY_KEY""", (entity_type, json.dumps(keys)))
+    except Exception:
+        return {}
+    return {r["entity_key"]: _json(r["tags"]) or [] for r in found}
+
+
+class TagsIn(BaseModel):
+    tags: list[str] = Field(default_factory=list, max_length=50)
+
+
+@app.get("/api/tags")
+def list_tags(entity_type: Optional[str] = None, db: Db = Depends(current_db)):
+    """Every tag in use (optionally for one entity type) with how often it is used, for autocomplete and filters."""
+    from services.common.tags import color_for
+
+    try:
+        rows = db.query("""SELECT A.TAG, COUNT(*) AS N, MAX(T.COLOR) AS COLOR, MAX(T.DESCRIPTION) AS DESCRIPTION
+                             FROM CORE.TAG_ASSIGNMENT A LEFT JOIN CORE.TAG T ON T.TAG = A.TAG
+                            WHERE (%s IS NULL OR A.ENTITY_TYPE = %s)
+                            GROUP BY A.TAG ORDER BY N DESC, A.TAG LIMIT 500""",
+                        (entity_type.upper() if entity_type else None, entity_type.upper() if entity_type else None))
+    except Exception:
+        return {"tags": [], "ready": False}
+    return {"tags": [{"tag": r["tag"], "count": r["n"], "color": r["color"] or color_for(r["tag"]),
+                      "description": r["description"]} for r in rows], "ready": True}
+
+
+@app.get("/api/tags/{entity_type}/{key}")
+def get_tags(entity_type: str, key: str, db: Db = Depends(current_db)):
+    from services.common.tags import entity_key
+
+    try:
+        canonical = entity_key(entity_type, key)
+    except AssertionError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"entity_type": entity_type.upper(), "key": canonical,
+            "tags": _tags_for(db, entity_type.upper(), [canonical]).get(canonical, [])}
+
+
+@app.put("/api/tags/{entity_type}/{key}")
+def set_tags(entity_type: str, key: str, body: TagsIn, db: Db = Depends(current_db)):
+    """Replace the tags of one profile, run or model."""
+    from services.common.tags import color_for, entity_key, normalize_tag, normalize_tags
+
+    try:
+        canonical = entity_key(entity_type, key)
+    except AssertionError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    kind = entity_type.upper()
+    tags = normalize_tags(body.tags)
+    bad = [t for t in body.tags if t.strip() and normalize_tag(t) is None]
+    if bad:
+        raise HTTPException(400, f"Not a valid tag: {bad[0]}. Use letters, digits, '-', '_', '.', ':' or '/' (40 max).")
+    try:
+        db.execute("DELETE FROM CORE.TAG_ASSIGNMENT WHERE ENTITY_TYPE = %s AND ENTITY_KEY = %s", (kind, canonical))
+        for tag in tags:
+            db.execute("""MERGE INTO CORE.TAG T USING (SELECT %s AS TAG) S ON T.TAG = S.TAG
+                          WHEN NOT MATCHED THEN INSERT (TAG, COLOR) VALUES (S.TAG, %s)""", (tag, color_for(tag)))
+            db.execute("INSERT INTO CORE.TAG_ASSIGNMENT (ENTITY_TYPE, ENTITY_KEY, TAG) SELECT %s, %s, %s",
+                       (kind, canonical, tag))
+    except Exception as exc:
+        raise _snowflake_error(exc) from exc
+    return {"entity_type": kind, "key": canonical, "tags": tags}
+
+
 @app.get("/api/profiles/store")
 def profile_store(db: Db = Depends(current_db)):
     """Every staged profile across all databases, newest first."""
@@ -4265,6 +4358,9 @@ def profile_store(db: Db = Depends(current_db)):
     rows = [r for r in _store_rows(db) if (r.get("source_fingerprint") or r.get("status") == "PROFILING")
             and not str(r.get("source_name") or "").upper().startswith("ORACLE_")]
     rows.sort(key=lambda r: r.get("status_updated_at") or r.get("profiled_at") or "", reverse=True)
+    tags = _tags_for(db, "PROFILE", [f"{r.get('database_name')}.{r.get('schema_name')}.{r.get('table_name')}".upper() for r in rows])
+    for r in rows:
+        r["tags"] = tags.get(f"{r.get('database_name')}.{r.get('schema_name')}.{r.get('table_name')}".upper(), [])
     return {"profiles": rows}
 
 
@@ -5881,3 +5977,8 @@ def _reconcile_if_due(db: Db) -> None:
             pass
 
     threading.Thread(target=run, name="cost-reconcile", daemon=True).start()
+
+
+from app.governance import router as governance_router  # noqa: E402
+
+app.include_router(governance_router)

@@ -1,5 +1,6 @@
 "use client";
 
+import { TagEditor } from "@/components/tag-editor";
 import { useEffect, useState } from "react";
 import {
   CheckCircle2, ClipboardCopy, FileJson, GitCompare, KeyRound, Loader2, RefreshCw, ShieldAlert, X,
@@ -280,6 +281,7 @@ export function TableProfileView({ database, schema, table, initialTab = "overvi
           <p className="truncate font-mono text-[11px] text-muted-foreground">
             @METADATA.PROFILES_STAGE/{data?.entry.profile_stage_path ?? "…"}
           </p>
+          <div className="mt-1.5"><TagEditor entityType="PROFILE" entityKey={`${database}.${schema}.${table}`} /></div>
         </div>
         {onClose && (
           <button type="button" onClick={onClose} className="ml-auto rounded-md p-1 hover:bg-muted" aria-label="Close">

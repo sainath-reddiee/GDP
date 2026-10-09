@@ -51,6 +51,7 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   const text = await res.text();
   if (res.status === 401) redirect("/login");
   if (!res.ok) throw new ApiError(res.status, detail(text));
+  if (res.status === 202 && text.includes("pending_approval")) throw new ApiError(202, detail(text));
   return JSON.parse(text) as T;
 }
 

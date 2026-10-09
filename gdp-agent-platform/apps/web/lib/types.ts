@@ -66,6 +66,7 @@ export type RunSummary = {
   source_system_name?: string | null;
   source_database?: string | null;
   source_schema?: string | null;
+  tags?: string[];
   domain_name?: string | null;
   age_minutes?: number | null;
   table_count: number;
@@ -192,7 +193,17 @@ export type MappingSuggestion = {
   decision: Record<string, unknown>;
 };
 
-export type WhoAmI = { user: string; role: string; auth_mode: "dev" | "pat"; agent: string | null };
+export type WhoAmI = {
+  user: string; role: string; auth_mode: "dev" | "pat"; agent: string | null;
+  governance?: boolean; roles?: string[]; granted_roles?: string[]; privileges?: string[]; pending_for_me?: number;
+};
+
+/** Does the signed-in user hold a privilege? Everything is allowed until governance is deployed. */
+export function can(me: WhoAmI | null | undefined, privilege: string): boolean {
+  if (!me || !me.governance) return true;
+  const p = me.privileges ?? [];
+  return p.includes("*") || p.includes(privilege);
+}
 
 export type AuditEvent = {
   event_id: string;
@@ -277,6 +288,7 @@ export type ProfileStoreRow = {
   is_approximate: boolean | null; profiled_by: string | null; profiled_at: string;
   status: string | null; status_updated_at: string | null; error_message: string | null;
   avg_null_percentage: number | null; key_candidates: number | null; pii_columns: number | null;
+  tags?: string[];
 };
 
 export type Scorecard = {

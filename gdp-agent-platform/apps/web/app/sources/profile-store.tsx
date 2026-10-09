@@ -1,5 +1,6 @@
 "use client";
 
+import { TagChip, TagEditor } from "@/components/tag-editor";
 import { useMemo, useState } from "react";
 import { ArrowRight, Eye, HardDrive, KeyRound, Lock, Search, Snowflake, UploadCloud } from "lucide-react";
 import type { ProfileStoreRow, SourcesOverview } from "@/lib/types";
@@ -46,6 +47,8 @@ export function ProfileStore({ store, overview, onView, onOpenSchema }: {
   const [query, setQuery] = useState("");
   const [origin, setOrigin] = useState<"all" | Origin>("all");
   const [sort, setSort] = useState<Sort>("recent");
+  const [tag, setTag] = useState("");
+  const allTags = useMemo(() => Array.from(new Set(store.flatMap((r) => r.tags ?? []))).sort(), [store]);
 
   const externalSchemas = useMemo(() => new Set((overview?.sources ?? [])
     .filter((s) => s.source_type.startsWith("EXTERNAL_")).map((s) => `${s.database_name}.${s.schema_name}`)), [overview]);
@@ -62,7 +65,8 @@ export function ProfileStore({ store, overview, onView, onOpenSchema }: {
   const q = query.trim().toLowerCase();
   const rows = store
     .filter((r) => (origin === "all" || originOf(r) === origin)
-      && (!q || `${r.database_name}.${r.schema_name}.${r.table_name}`.toLowerCase().includes(q)))
+      && (!tag || (r.tags ?? []).includes(tag))
+      && (!q || `${r.database_name}.${r.schema_name}.${r.table_name} ${(r.tags ?? []).map((t) => `#${t}`).join(" ")}`.toLowerCase().includes(q)))
     .sort((a, b) => sort === "name" ? a.table_name.localeCompare(b.table_name)
       : sort === "rows" ? (b.row_count ?? -1) - (a.row_count ?? -1)
       : sort === "nulls" ? (b.avg_null_percentage ?? -1) - (a.avg_null_percentage ?? -1)
@@ -81,6 +85,11 @@ export function ProfileStore({ store, overview, onView, onOpenSchema }: {
         <Segmented label="Where the data lives" value={origin} onChange={setOrigin}
                    options={[["all", `All · ${counts.all}`], ["snowflake", `Snowflake · ${counts.snowflake}`],
                              ["external", `External · ${counts.external}`], ["oracle", `Oracle in place · ${counts.oracle}`]] as const} />
+        {allTags.length > 0 && (
+          <div className="flex flex-wrap items-center gap-1">
+            {allTags.slice(0, 12).map((t) => <TagChip key={t} tag={t} active={tag === t} onClick={() => setTag(tag === t ? "" : t)} />)}
+          </div>
+        )}
         <label className="ml-auto flex items-center gap-2 text-xs text-muted-foreground">
           Sort
           <select value={sort} onChange={(e) => setSort(e.target.value as Sort)} aria-label="Sort profiles"
@@ -125,6 +134,7 @@ export function ProfileStore({ store, overview, onView, onOpenSchema }: {
                           {r.table_name}
                         </button>
                         <span className="text-[11px] text-muted-foreground">{o.label}{r.is_approximate ? " · sampled" : ""}</span>
+                        <div className="mt-0.5"><TagEditor entityType="PROFILE" entityKey={`${r.database_name}.${r.schema_name}.${r.table_name}`} initial={r.tags ?? []} compact /></div>
                       </div>
                     </div>
                   </td>

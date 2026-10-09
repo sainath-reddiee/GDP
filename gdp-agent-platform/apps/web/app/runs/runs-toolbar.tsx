@@ -10,8 +10,8 @@ const STAGES = [["SOURCE", "Source"], ["PROFILING", "Profiling"], ["DOMAIN", "Do
 const SORTS = [["newest", "Newest first"], ["updated", "Recently updated"], ["oldest", "Oldest first"], ["name", "Name"]];
 
 /** Search, filters, sorting and paging for the run list; everything lives in the URL so views can be shared. */
-export function RunsToolbar({ domains, total, offset, limit }: {
-  domains: { domain_id: string; domain_name: string }[]; total: number; offset: number; limit: number;
+export function RunsToolbar({ domains, tags = [], total, offset, limit }: {
+  domains: { domain_id: string; domain_name: string }[]; tags?: string[]; total: number; offset: number; limit: number;
 }) {
   const router = useRouter();
   const path = usePathname();
@@ -42,6 +42,12 @@ export function RunsToolbar({ domains, total, offset, limit }: {
         <option value="">Any stage</option>
         {STAGES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
       </select>
+      {tags.length > 0 && (
+        <select aria-label="Tag" className={select} value={params.get("tag") ?? ""} onChange={(e) => go({ tag: e.target.value || null })}>
+          <option value="">Any tag</option>
+          {tags.map((t) => <option key={t} value={t}>#{t}</option>)}
+        </select>
+      )}
       <button type="button" onClick={() => go({ needs_review: review ? null : "1" })} aria-pressed={review}
               className={cn("h-8 rounded-md border px-2.5 text-xs font-medium",
                 review ? "border-rose-500/40 bg-rose-500/10 text-rose-600" : "hover:bg-muted")}>

@@ -4,15 +4,16 @@ import { summarize } from "@/lib/run-insights";
 
 export const dynamic = "force-dynamic";
 
-export type NavCounts = { running: number; review: number; drafts: number; staged: number; profiling: number };
+export type NavCounts = { running: number; review: number; drafts: number; staged: number; profiling: number; approvals: number };
 
 /** Sidebar counters as a plain GET (server actions run one at a time and would queue behind page actions).
  *  Uses the fast run list and profile store, never the per-source health check. */
 export async function GET() {
   try {
-    const [metrics, store] = await Promise.all([
+    const [metrics, store, me] = await Promise.all([
       api<{ lifecycle: Record<string, number>; needs_review: number }>("/api/metrics/summary").catch(() => null),
       api<{ profiles: ProfileStoreRow[] }>("/api/profiles/store").catch(() => ({ profiles: [] as ProfileStoreRow[] })),
+      api<{ pending_for_me?: number }>("/api/auth/me").catch(() => ({ pending_for_me: 0 })),
     ]);
     const s = metrics
       ? { running: metrics.lifecycle.RUNNING ?? 0, review: metrics.needs_review, drafts: metrics.lifecycle.DRAFT ?? 0 }
@@ -21,6 +22,7 @@ export async function GET() {
       running: s.running, review: s.review, drafts: s.drafts,
       staged: store.profiles.filter((p) => p.status !== "PROFILING" && p.status !== "FAILED").length,
       profiling: store.profiles.filter((p) => p.status === "PROFILING").length,
+      approvals: me.pending_for_me ?? 0,
     };
     return Response.json(counts, { headers: { "Cache-Control": "private, max-age=30" } });
   } catch {
