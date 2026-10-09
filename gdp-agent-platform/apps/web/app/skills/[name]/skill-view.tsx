@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useMemo, useState, useTransition } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
-  ArrowLeftRight, Check, FileCode2, FileText, FlaskConical, History, Loader2, Pencil, Plus, Rocket, Undo2, X,
+  ArrowLeftRight, Check, FileCode2, FileText, FlaskConical, History, Loader2, Pencil, Plus, Rocket, Sparkles, Undo2, X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input, Select, Textarea } from "@/components/ui/input";
@@ -16,6 +16,7 @@ import { cn } from "@/lib/utils";
 import { CategoryIcon } from "../category-icon";
 import { clearCandidate, loadDiff, moveCategory, moveLabel, saveVersion, setVersionStatus, tryOnRun } from "../actions";
 import { LabelPill, OriginBadge, Sparkline } from "../skills-catalog";
+import { SkillBuilder } from "../skill-builder";
 import {
   ago, pretty, STAGE_LABELS, versionLabel, type SkillCard, type SkillCategory, type SkillDetail, type SkillDiff, type SkillVersion,
 } from "../types";
@@ -40,6 +41,7 @@ export function SkillView({ detail, card, categories, tab }: {
   const [msg, setMsg] = useState<Msg>(null);
   const [pending, start] = useTransition();
   const [editing, setEditing] = useState(false);
+  const [improving, setImproving] = useState(false);
   const versions = detail.versions;
   const byId = useMemo(() => new Map(versions.map((v) => [v.skill_id, v])), [versions]);
   const prod = byId.get(detail.labels.production?.skill_id ?? "");
@@ -94,6 +96,9 @@ export function SkillView({ detail, card, categories, tab }: {
               </Select>
             </label>
             <div className="flex flex-wrap justify-end gap-2">
+              {can("SKILL.EDIT") && can("AI.USE") && (
+                <Button size="sm" variant="outline" onClick={() => setImproving(true)}><Sparkles className="h-3.5 w-3.5 text-violet-500" />Improve with AI</Button>
+              )}
               {can("SKILL.EDIT") && (
                 <Button size="sm" variant="outline" onClick={() => setEditing(true)}><Pencil className="h-3.5 w-3.5" />Edit as new version</Button>
               )}
@@ -142,6 +147,7 @@ export function SkillView({ detail, card, categories, tab }: {
                onClear={(runId) => act(() => tryOnRun(runId, detail.skill_name, null), "The run is back on production")} />
       )}
 
+      {improving && <SkillBuilder categories={categories} skills={[detail.skill_name]} initialSkill={detail.skill_name} onClose={() => setImproving(false)} />}
       {editing && selected && (
         <Editor detail={detail} base={selected} onClose={() => setEditing(false)}
                 onSaved={(text) => { setEditing(false); setMsg({ tone: "ok", text }); go({ version: null, tab: "versions" }); router.refresh(); }} />
@@ -328,7 +334,7 @@ function Versions({ detail, prod, cand, busy, canEdit, canRelease, onView, onPro
             <li key={v.skill_id} className={cn("rounded-xl border bg-card p-4 shadow-sm", isProd && "border-emerald-300 dark:border-emerald-900",
                                                v.status === "RETIRED" && "opacity-60")}>
               <div className="flex flex-wrap items-start gap-3">
-                <div className="min-w-0 flex-1">
+                <div className="min-w-[240px] flex-1">
                   <p className="flex flex-wrap items-center gap-2 text-sm font-semibold">
                     {versionLabel(v)}
                     {isProd && <LabelPill label="production" />}
@@ -342,6 +348,12 @@ function Versions({ detail, prod, cand, busy, canEdit, canRelease, onView, onPro
                     <span className="ml-1 font-mono">#{v.checksum.slice(0, 8)}</span>
                   </p>
                   {v.change_note && <p className="mt-1.5 text-xs">{v.change_note}</p>}
+                  {v.eval_json && (
+                    <p className={cn("mt-1.5 inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px]",
+                                     v.eval_json.verdict === "worse" ? "bg-red-50 text-red-700 dark:bg-red-950/40 dark:text-red-300" : "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300")}>
+                      <Check className="h-3 w-3" />Tested: {v.eval_json.candidate_passed}/{v.eval_json.total} passed, {v.eval_json.baseline_label} {v.eval_json.baseline_passed}/{v.eval_json.total}
+                    </p>
+                  )}
                 </div>
                 <div className="flex flex-wrap justify-end gap-1.5">
                   <Button size="sm" variant="ghost" onClick={() => onView(v)}><FileText className="h-3.5 w-3.5" />View</Button>

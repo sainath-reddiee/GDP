@@ -6055,3 +6055,7 @@ app.include_router(governance_router)
 from app.skills_api import router as skills_router  # noqa: E402
 
 app.include_router(skills_router)
+
+from app.skill_builder_api import router as skill_builder_router  # noqa: E402
+
+app.include_router(skill_builder_router)

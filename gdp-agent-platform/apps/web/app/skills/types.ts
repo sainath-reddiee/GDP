@@ -23,7 +23,7 @@ export type SkillsResponse = {
 export type SkillVersion = VersionBrief & {
   skill_name: string; skill_type: string; category_id: string | null; parent_skill: string | null;
   description: string | null; change_note: string | null; checksum: string; parent_skill_id: string | null;
-  loads_30d: number; labels: string[];
+  loads_30d: number; labels: string[]; eval_json?: TestSummary | null;
 };
 
 export type SkillLabel = { skill_name: string; label: string; skill_id: string; moved_by: string; moved_at: string; note: string | null };
@@ -79,3 +79,34 @@ export function ago(iso: string | null | undefined): string {
   if (s < 86400 * 30) return `${Math.round(s / 86400)} d ago`;
   return iso.slice(0, 10);
 }
+
+// ---------------------------------------------------------------- AI skill builder
+
+export type BuilderMode = "interview" | "knowledge" | "document" | "improve";
+export type BuilderQuestion = { question: string; why: string; options?: string[] };
+export type BuilderIssue = { level: "error" | "warning"; message: string };
+export type SkillTest = { title?: string; input: string; expectation: string };
+export type SkillDraft = {
+  name: string; title: string; description: string; category: string; stages: string[];
+  sections: { heading: string; markdown: string }[]; references: { path: string; markdown: string }[];
+  tests: SkillTest[]; change_note?: string; used_knowledge?: string[];
+};
+export type DraftRequest = {
+  mode: BuilderMode; goal?: string; answers?: { question: string; answer: string }[]; category_id?: string | null;
+  domain_id?: string | null; knowledge_types?: string[]; days?: number; document_text?: string; document_name?: string;
+  skill_name?: string | null; instructions?: string;
+};
+export type DraftResponse = {
+  draft: SkillDraft; content: string; issues: BuilderIssue[]; model: string; tokens: number | null; feedback: string[];
+  provenance: { mode: BuilderMode; base_skill_id?: string; base_version?: string; knowledge_items?: number; evidence?: number;
+                document?: string; truncated?: boolean; used_knowledge?: string[] };
+};
+export type TestSummary = {
+  rows: { index: number; title: string; candidate_pass: boolean; baseline_pass: boolean; candidate_score: number;
+          baseline_score: number; reason: string; candidate_answer?: string; baseline_answer?: string }[];
+  total: number; candidate_passed: number; baseline_passed: number; candidate_rate: number; baseline_rate: number;
+  candidate_avg: number; baseline_avg: number; baseline_label: string; verdict: "better" | "worse" | "same";
+  model?: string; ms?: number; tested_at?: string;
+};
+export const KNOWLEDGE_TYPES = ["MAPPING_PATTERN", "TRANSFORMATION_RULE", "SODA_PATTERN", "MODEL_DEFINITION", "GLOSSARY",
+  "BUSINESS_RULE", "NAMING_STANDARD", "COLUMN_RULE", "DBT_PATTERN", "EXCEPTION"];
