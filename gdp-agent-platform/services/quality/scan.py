@@ -302,26 +302,29 @@ def target_fqn(session, sttm: Dict[str, Any]) -> Optional[str]:
 
 
 def _store(session, scan: Dict[str, Any], results: List[Dict[str, Any]]) -> None:
-    session.sql("""INSERT INTO QUALITY.CHECK_RUN (SCAN_ID, RUN_ID, STTM_ID, TARGET, MODE, STARTED_AT, DURATION_MS,
-                                                 CHECKS, PASSED, WARNED, FAILED, NOT_EVALUATED, ERRORS, HEALTH,
-                                                 ROWS_SCANNED, TRIGGERED_BY)
-                   SELECT ?, ?, ?, ?, ?, CURRENT_TIMESTAMP(), ?, ?, ?, ?, ?, ?, ?, ?::NUMBER, ?::NUMBER, ?""",
-                params=[scan["scan_id"], scan["run_id"], scan.get("sttm_id"), scan["target"], scan["mode"],
-                        scan["duration_ms"], scan["checks"], scan["passed"], scan["warned"], scan["failed"],
-                        scan["not_evaluated"], scan["errors"], scan["health"], scan.get("rows_scanned"),
-                        scan.get("triggered_by") or "UI"]).collect()
-    for r in results:
-        session.sql("""INSERT INTO QUALITY.CHECK_RESULT (RESULT_ID, SCAN_ID, RUN_ID, EXPECTATION_ID, TARGET_TABLE,
-                                                        TARGET_COLUMN, CHECK_TYPE, KIND, DIMENSION, SEVERITY, OUTCOME,
-                                                        MEASURED, THRESHOLD, FAILED_ROWS, DETAIL, SAMPLE, SQL_TEXT,
-                                                        DURATION_MS)
-                       SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::FLOAT, ?, ?::NUMBER, ?, PARSE_JSON(?), ?, ?::NUMBER""",
-                    params=[str(uuid.uuid4()), scan["scan_id"], scan["run_id"], r.get("expectation_id"),
-                            r.get("target_table"), r.get("target_column"), r.get("check_type"), r.get("kind"),
-                            r.get("dimension"), r.get("severity"), r["outcome"], r.get("measured"),
-                            r.get("threshold"), r.get("failed_rows"), str(r.get("detail") or "")[:4000],
-                            json.dumps(r.get("sample")) if r.get("sample") else None,
-                            str(r.get("sql") or "")[:16000], r.get("duration_ms")]).collect()
+    # insert_rows binds None as '' so NULLIF(...) keeps empty values NULL (Snowpark would bind None as 'None')
+    from services.common.sql import insert_rows
+
+    insert_rows(session, "QUALITY.CHECK_RUN",
+                ["SCAN_ID", "RUN_ID", "STTM_ID", "TARGET", "MODE", "DURATION_MS", "CHECKS", "PASSED", "WARNED", "FAILED",
+                 "NOT_EVALUATED", "ERRORS", "HEALTH", "ROWS_SCANNED", "TRIGGERED_BY"],
+                ["?", "?", "NULLIF(?, '')", "?", "?", "?::NUMBER", "?::NUMBER", "?::NUMBER", "?::NUMBER", "?::NUMBER",
+                 "?::NUMBER", "?::NUMBER", "NULLIF(?, '')::NUMBER", "NULLIF(?, '')::NUMBER", "?"],
+                [[scan["scan_id"], scan["run_id"], scan.get("sttm_id"), scan["target"], scan["mode"], scan["duration_ms"],
+                  scan["checks"], scan["passed"], scan["warned"], scan["failed"], scan["not_evaluated"], scan["errors"],
+                  scan["health"], scan.get("rows_scanned"), scan.get("triggered_by") or "UI"]])
+    insert_rows(session, "QUALITY.CHECK_RESULT",
+                ["RESULT_ID", "SCAN_ID", "RUN_ID", "EXPECTATION_ID", "TARGET_TABLE", "TARGET_COLUMN", "CHECK_TYPE", "KIND",
+                 "DIMENSION", "SEVERITY", "OUTCOME", "MEASURED", "THRESHOLD", "FAILED_ROWS", "DETAIL", "SAMPLE", "SQL_TEXT",
+                 "DURATION_MS"],
+                ["?", "?", "?", "NULLIF(?, '')", "NULLIF(?, '')", "NULLIF(?, '')", "NULLIF(?, '')", "NULLIF(?, '')",
+                 "NULLIF(?, '')", "NULLIF(?, '')", "?", "NULLIF(?, '')::FLOAT", "NULLIF(?, '')", "NULLIF(?, '')::NUMBER",
+                 "NULLIF(?, '')", "PARSE_JSON(NULLIF(?, ''))", "NULLIF(?, '')", "NULLIF(?, '')::NUMBER"],
+                [[str(uuid.uuid4()), scan["scan_id"], scan["run_id"], r.get("expectation_id"), r.get("target_table"),
+                  r.get("target_column"), r.get("check_type"), r.get("kind"), r.get("dimension"), r.get("severity"),
+                  r["outcome"], r.get("measured"), r.get("threshold"), r.get("failed_rows"),
+                  str(r.get("detail") or "")[:4000], json.dumps(r.get("sample")) if r.get("sample") else None,
+                  str(r.get("sql") or "")[:16000], r.get("duration_ms")] for r in results])
 
 
 def health(passed: int, warned: int, failed: int) -> Optional[int]:
