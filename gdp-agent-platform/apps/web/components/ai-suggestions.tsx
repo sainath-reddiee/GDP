@@ -35,9 +35,12 @@ function summary(stage: SuggestionStage, item: SuggestionItem): { title: string;
 }
 
 /** AI suggestions next to the rule results of a run stage. */
-export function AiSuggestions({ runId, stage, canAct = true }: { runId: string; stage: SuggestionStage; canAct?: boolean }) {
+export function AiSuggestions({ runId, stage, canAct = true, placement = "top" }: {
+  runId: string; stage: SuggestionStage; canAct?: boolean; placement?: "inline" | "top";
+}) {
   return (
     <SuggestionsPanel
+      placement={placement}
       canAct={canAct}
       effect={ACCEPT_EFFECT[stage]}
       summary={(item) => summary(stage, item)}

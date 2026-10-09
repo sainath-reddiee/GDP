@@ -27,6 +27,7 @@ export default async function DbtPage({ params }: { params: { runId: string } })
   ]);
   return (
     <StageGate state={state} stage="DBT">
+      <AiSuggestions runId={params.runId} stage="DBT" canAct={!state.is_archived} />
       <DbtStudio
         runId={params.runId}
         runName={state.run.run_name}
@@ -43,7 +44,6 @@ export default async function DbtPage({ params }: { params: { runId: string } })
         report={data.report ?? null}
         skeletonBase={data.skeleton_base ?? null}
       />
-      <AiSuggestions runId={params.runId} stage="DBT" canAct={!state.is_archived} />
     </StageGate>
   );
 }

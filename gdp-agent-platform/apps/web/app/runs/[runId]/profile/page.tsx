@@ -22,6 +22,7 @@ export default async function ProfilePage({ params }: { params: { runId: string 
   const cachedCount = tables.filter((t) => t.status === "CACHED").length;
   return (
     <StageGate state={state} stage="PROFILING">
+      <AiSuggestions runId={params.runId} stage="PROFILING" canAct={!state.is_archived} />
       <Card>
         <CardHeader>
           <CardTitle>Profiling</CardTitle>
@@ -105,7 +106,6 @@ export default async function ProfilePage({ params }: { params: { runId: string 
           </CardContent>
         </Card>
       )}
-      <AiSuggestions runId={params.runId} stage="PROFILING" canAct={!state.is_archived} />
     </StageGate>
   );
 }

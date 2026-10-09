@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any, Dict, List
 
 from services.soda.extract import requirement_from_row
@@ -123,6 +124,20 @@ def render_yaml(model: str, checks: List[Dict[str, Any]]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _threshold_text(threshold: Any) -> str:
+    """{"op": "<", "value": 5} -> "< 5"; {"between": [1, 9]} -> "between 1 and 9"."""
+    t = threshold or {}
+    if "between" in t:
+        return f"between {t['between'][0]} and {t['between'][1]}"
+    return f"{t.get('op', '>')} {t.get('value', 0)}"
+
+
+def _negate(condition: str) -> str:
+    op, _, value = condition.partition(" ")
+    flipped = {"<": ">=", "<=": ">", ">": "<=", ">=": "<", "=": "!=", "!=": "="}.get(op, op)
+    return f"{flipped} {value}"
+
+
 def _yq(value: Any) -> str:
     return "'" + str(value).replace("'", "''") + "'"
 
@@ -184,6 +199,9 @@ def _yaml_check(c: Dict[str, Any]) -> List[str]:
         required = ", ".join(d.get("required") or [])
         if required:
             body.append(f"        when required column missing: [{required}]")
+        forbidden = ", ".join(d.get("forbidden") or [])
+        if forbidden:
+            body.append(f"        when forbidden column present: [{forbidden}]")
         types = d.get("types") or {}
         if types:
             body.append("        when wrong column type:")
@@ -191,6 +209,52 @@ def _yaml_check(c: Dict[str, Any]) -> List[str]:
                 body.append(f"          {name_}: {typ}")
         if name:
             body.append(f"      name: {name}")
+        return body
+    elif kind == "failed_rows":
+        body = ["  - failed rows:"]
+        if name:
+            body.append(f"      name: {name}")
+        body.append(f"      samples limit: {int(d.get('samples_limit', 20))}")
+        if d.get("query"):
+            body.append("      fail query: |")
+            body += [f"        {line}" for line in str(d["query"]).strip().splitlines()]
+        else:
+            body.append(f"      fail condition: {d.get('condition')}")
+        limit = d.get("max_failed")
+        if warn:
+            body.append(f"      warn: when > {limit or 0}")
+        elif limit:
+            body.append(f"      fail: when > {limit}")
+        return body
+    elif kind == "metric":
+        metric_name = re.sub(r"[^A-Za-z0-9_]", "_", str(d.get("name") or "custom_metric")).strip("_").lower() or "custom_metric"
+        cond = _threshold_text(d.get("threshold"))
+        body = [f"  - {metric_name}:" if warn else f"  - {metric_name} {cond}:"]
+        if name:
+            body.append(f"      name: {name}")
+        if d.get("query"):
+            body.append(f"      {metric_name} query: |")
+            body += [f"        {line}" for line in str(d["query"]).strip().splitlines()]
+        else:
+            body.append(f"      {metric_name} expression: {d.get('expression')}")
+        if warn:
+            body.append(f"      warn: when not {cond}" if cond.startswith("between") else f"      warn: when {_negate(cond)}")
+        return body
+    elif kind in ("avg", "min", "max", "sum", "stddev") and col:
+        cond = _threshold_text(d.get("threshold"))
+        metric, fail_line = f"{kind}({col})", f"{kind}({col}) {cond}"
+        warn_when = f"not {cond}" if cond.startswith("between") else _negate(cond)
+    elif kind == "duplicate_percent" and col:
+        limit = f"{float(d.get('max_percent', 0)):g}%"
+        metric, fail_line, warn_when = f"duplicate_percent({col})", f"duplicate_percent({col}) < {limit}", f"> {limit}"
+    elif kind == "change_over_time":
+        low, high = float(d.get("max_decrease_percent", 20)), float(d.get("max_increase_percent", 50))
+        cond = f"between -{low:g} and +{high:g}"
+        body = [f"  - change for row_count {cond}:" if not warn else "  - change for row_count:"]
+        if name:
+            body.append(f"      name: {name}")
+        if warn:
+            body.append(f"      warn: when not {cond}")
         return body
     elif kind == "reference" and col:
         ref_t = d.get("reference_table") or "REF"

@@ -2,13 +2,13 @@
 
 import { useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { CircleDashed, KeyRound, Layers, Loader2, Lock, RefreshCw, Rows3, Search, Table2 } from "lucide-react";
+import { ChevronRight, CircleDashed, KeyRound, Layers, Loader2, Lock, RefreshCw, Rows3, Search, Table2 } from "lucide-react";
 import type { ProfileCacheTable } from "@/lib/types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
-import { GradeChip, TableProfileView } from "@/app/sources/profile-drawer";
+import { GradeChip, ProfileDrawer } from "@/app/sources/profile-drawer";
 import { refreshTableProfile } from "../pipeline-actions";
 
 export type ProfileColumn = {
@@ -42,7 +42,7 @@ export function ProfileWorkspace({ runId, tables, columns, canRefresh }: {
   const router = useRouter();
   const profiled = tables.filter((t) => t.status === "CACHED");
   const [tab, setTab] = useState<"tables" | "columns">("tables");
-  const [selected, setSelected] = useState<string | null>(profiled[0]?.table_name ?? null);
+  const [selected, setSelected] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [, start] = useTransition();
@@ -92,52 +92,52 @@ export function ProfileWorkspace({ runId, tables, columns, canRefresh }: {
       {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
 
       {tab === "tables" && (
-        <div className="grid gap-4 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
-          <div className="overflow-hidden rounded-xl border">
-            <ul className="divide-y">
-              {tables.map((t) => {
-                const active = t.table_name === selected;
-                const ready = t.status === "CACHED";
-                return (
-                  <li key={t.table_name}>
-                    <div className={cn("flex items-center gap-3 px-4 py-3 transition", active ? "bg-primary/[0.06]" : "hover:bg-muted/40")}>
-                      <button type="button" disabled={!ready} onClick={() => setSelected(t.table_name)} className="flex min-w-0 flex-1 items-center gap-3 text-left">
-                        <span className={cn("grid h-8 w-8 shrink-0 place-items-center rounded-lg", ready ? "bg-primary/10 text-primary" : "bg-muted text-muted-foreground")}>
-                          {ready ? <Table2 className="h-4 w-4" /> : <CircleDashed className="h-4 w-4" />}
-                        </span>
-                        <span className="min-w-0">
-                          <span className={cn("block truncate font-medium", active && "text-primary")}>{t.table_name}</span>
-                          <span className="block text-[11px] text-muted-foreground">
-                            {ready ? `${fmt(t.row_count)} rows · ${t.column_count ?? "—"} columns · ${t.is_approximate ? "sampled" : "exact"}` : "Not profiled yet"}
-                          </span>
-                        </span>
-                      </button>
-                      {ready && <GradeChip card={t.quality} />}
-                      {(t.pii_columns ?? 0) > 0 && <Badge variant="destructive" className="gap-1 text-[10px]"><Lock className="h-3 w-3" />{t.pii_columns}</Badge>}
-                      {canRefresh && ready && (
-                        <Button size="sm" variant="ghost" disabled={refreshing !== null} onClick={() => reprofile(t.table_name)}
-                                aria-label={`Re-profile ${t.table_name}`} title="Re-profile this table">
-                          {refreshing === t.table_name ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
-                        </Button>
-                      )}
-                    </div>
-                  </li>
-                );
-              })}
-            </ul>
+        <>
+          {!profiled.length && (
+            <p className="rounded-xl border border-dashed p-6 text-center text-sm text-muted-foreground">
+              Profile the run to see each table's quality, columns and suggested checks.
+            </p>
+          )}
+          <div className="grid gap-3 md:grid-cols-2">
+            {tables.map((t) => {
+              const ready = t.status === "CACHED" && !!t.database_name && !!t.schema_name;
+              return (
+                <div key={t.table_name}
+                     className={cn("group flex items-center gap-3 rounded-xl border bg-card px-4 py-3 transition",
+                                   ready ? "cursor-pointer hover:border-primary/40 hover:shadow-sm" : "opacity-70",
+                                   selected === t.table_name && "border-primary/50 ring-1 ring-primary/30")}
+                     role={ready ? "button" : undefined} tabIndex={ready ? 0 : undefined}
+                     onClick={() => ready && setSelected(t.table_name)}
+                     onKeyDown={(e) => { if (ready && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); setSelected(t.table_name); } }}>
+                  <span className={cn("grid h-9 w-9 shrink-0 place-items-center rounded-lg", ready ? "bg-primary/10 text-primary" : "bg-muted text-muted-foreground")}>
+                    {ready ? <Table2 className="h-4 w-4" /> : <CircleDashed className="h-4 w-4" />}
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate font-medium group-hover:text-primary">{t.table_name}</span>
+                    <span className="block text-[11px] text-muted-foreground">
+                      {t.status === "CACHED" ? `${fmt(t.row_count)} rows · ${t.column_count ?? "—"} columns · ${t.is_approximate ? "sampled" : "exact"}` : "Not profiled yet"}
+                      {(t.key_candidates ?? 0) > 0 ? ` · ${t.key_candidates} key${t.key_candidates === 1 ? "" : "s"}` : ""}
+                    </span>
+                  </span>
+                  {t.status === "CACHED" && <GradeChip card={t.quality} />}
+                  {(t.pii_columns ?? 0) > 0 && <Badge variant="destructive" className="gap-1 text-[10px]"><Lock className="h-3 w-3" />{t.pii_columns}</Badge>}
+                  {canRefresh && t.status === "CACHED" && (
+                    <Button size="sm" variant="ghost" disabled={refreshing !== null}
+                            onClick={(e) => { e.stopPropagation(); reprofile(t.table_name); }}
+                            aria-label={`Re-profile ${t.table_name}`} title="Re-profile this table">
+                      {refreshing === t.table_name ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+                    </Button>
+                  )}
+                  {ready && <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground group-hover:text-primary" />}
+                </div>
+              );
+            })}
           </div>
-          <div className="min-h-[420px] overflow-hidden rounded-xl border bg-card">
-            {current?.status === "CACHED" && current.database_name && current.schema_name ? (
-              <TableProfileView key={current.table_name} database={current.database_name} schema={current.schema_name}
-                                table={current.table_name} className="h-[640px]"
-                                onReprofile={canRefresh ? (table) => reprofile(table) : undefined} />
-            ) : (
-              <div className="grid h-full place-items-center p-8 text-center text-sm text-muted-foreground">
-                {profiled.length ? "Choose a table to see its profile." : "Profile the run to see each table's quality, columns and suggested checks."}
-              </div>
-            )}
-          </div>
-        </div>
+          {current?.database_name && current.schema_name && (
+            <ProfileDrawer database={current.database_name} schema={current.schema_name} table={current.table_name}
+                           onClose={() => setSelected(null)} onReprofile={canRefresh ? (table) => reprofile(table) : undefined} />
+          )}
+        </>
       )}
 
       {tab === "columns" && (
@@ -156,7 +156,7 @@ export function ProfileWorkspace({ runId, tables, columns, canRefresh }: {
             <span className="ml-auto text-xs text-muted-foreground">{shownColumns.length} of {columns.length}</span>
           </div>
           <div className="overflow-x-auto rounded-xl border">
-            <table className="w-full min-w-[1000px] text-sm">
+            <table className="w-full min-w-[760px] text-sm">
               <thead className="bg-muted/50 text-left text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
                 <tr>
                   <th className="px-3 py-2.5">Table</th><th className="px-3 py-2.5">Column</th><th className="px-3 py-2.5">Type</th>

@@ -11,7 +11,7 @@ def test_single_object_is_a_batch():
     }))
     assert items == [{
         "expectation_id": "e1", "decision": "APPROVED", "justification": "grain",
-        "requirement": None, "definition": None,
+        "requirement": None, "definition": None, "severity": None,
     }]
 
 
@@ -47,3 +47,11 @@ def test_batch_cap():
 def test_modified_stores_as_approved():
     assert stored_status("MODIFIED") == "APPROVED"
     assert stored_status("REJECTED") == "REJECTED"
+
+
+def test_severity_is_kept_only_when_valid():
+    items = parse_decision_payload(json.dumps([
+        {"expectation_id": "a", "decision": "MODIFIED", "severity": "warn", "definition": {"kind": "avg"}},
+        {"expectation_id": "b", "decision": "MODIFIED", "severity": "LOUD"},
+    ]))
+    assert [i["severity"] for i in items] == ["WARN", None]

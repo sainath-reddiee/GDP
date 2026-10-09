@@ -47,6 +47,7 @@ def parse_decision_payload(raw_json: str) -> List[Dict[str, Any]]:
             "justification": justification,
             "requirement": requirement,
             "definition": raw.get("definition"),
+            "severity": str(raw.get("severity") or "").upper() if str(raw.get("severity") or "").upper() in ("FAIL", "WARN") else None,
         }
     return list(seen.values())
 

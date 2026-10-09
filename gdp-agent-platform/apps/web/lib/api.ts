@@ -99,3 +99,8 @@ export const whoami = cache(async (): Promise<WhoAmI | null> => {
 export function sessionHeaderValue(): string | undefined {
   return cookies().get(SESSION_COOKIE)?.value;
 }
+
+/** Raw response from the backend with the caller's session (binary downloads proxied by route handlers). */
+export async function apiRaw(path: string): Promise<Response> {
+  return fetch(`${API_URL}${path}`, { cache: "no-store", headers: sessionHeaders() });
+}
