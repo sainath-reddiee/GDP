@@ -39,7 +39,7 @@ CREATE TABLE IF NOT EXISTS {{database}}.QUALITY.CHECK_RESULT (
     THRESHOLD       VARCHAR(200),
     FAILED_ROWS     NUMBER(18,0),
     DETAIL          VARCHAR(4000),
-    SAMPLE          VARIANT,                  -- up to 20 failing rows, PII masked
+    SAMPLE_ROWS     VARIANT,                  -- up to 20 failing rows, PII masked
     SQL_TEXT        VARCHAR(16000),
     DURATION_MS     NUMBER(12,0),
     CREATED_AT      TIMESTAMP_LTZ DEFAULT CURRENT_TIMESTAMP(),

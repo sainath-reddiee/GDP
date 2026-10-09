@@ -36,7 +36,7 @@ CREATE TABLE IF NOT EXISTS {{database}}.QUALITY.QA_RESULT (
     EXPECTED       VARCHAR(1000),
     DETAIL         VARCHAR(4000),
     COLUMNS        VARIANT,
-    SAMPLE         VARIANT,                  -- up to 20 result rows, PII masked
+    SAMPLE_ROWS    VARIANT,                  -- up to 20 result rows, PII masked
     SQL_TEXT       VARCHAR(16000),
     DURATION_MS    NUMBER(12,0),
     CREATED_AT     TIMESTAMP_LTZ DEFAULT CURRENT_TIMESTAMP(),

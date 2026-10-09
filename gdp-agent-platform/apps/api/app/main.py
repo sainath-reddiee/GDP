@@ -2414,12 +2414,12 @@ def soda_scans(run_id: str, db: Db = Depends(current_db)):
     history: dict[str, list] = {}
     if scans:
         latest = db.query("""SELECT EXPECTATION_ID, TARGET_TABLE, TARGET_COLUMN, CHECK_TYPE, KIND, DIMENSION, SEVERITY,
-                                    OUTCOME, MEASURED, THRESHOLD, FAILED_ROWS, DETAIL, SAMPLE, SQL_TEXT, DURATION_MS
+                                    OUTCOME, MEASURED, THRESHOLD, FAILED_ROWS, DETAIL, SAMPLE_ROWS, SQL_TEXT, DURATION_MS
                                FROM QUALITY.CHECK_RESULT WHERE SCAN_ID = %s
                               ORDER BY ARRAY_POSITION(OUTCOME::VARIANT, ARRAY_CONSTRUCT('FAIL','ERROR','WARN','NOT_EVALUATED','PASS')),
                                        TARGET_COLUMN""", (scans[0]["scan_id"],))
         for r in latest:
-            r["sample"] = _json(r.get("sample"))
+            r["sample"] = _json(r.pop("sample_rows", None))
         for r in db.query("""SELECT EXPECTATION_ID, OUTCOME, MEASURED, CREATED_AT::VARCHAR AS AT
                                FROM QUALITY.CHECK_RESULT WHERE RUN_ID = %s
                               QUALIFY ROW_NUMBER() OVER (PARTITION BY EXPECTATION_ID ORDER BY CREATED_AT DESC) <= 12
@@ -2606,7 +2606,7 @@ def qa_results(run_id: str, db: Db = Depends(current_db)):
         except Exception:
             return {"run": None, "results": [], "history": {}, "runs": [], "ready": False}
     for r in results:
-        r["sample"] = _json(r.get("sample"))
+        r["sample"] = _json(r.pop("sample_rows", None))
         r["columns"] = _json(r.get("columns"))
     history: dict[str, list] = {}
     runs: list[dict] = []
