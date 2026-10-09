@@ -205,7 +205,7 @@ def _store(session, qa_run: Dict[str, Any], results: List[Dict[str, Any]]) -> No
                   qa_run["failed"], qa_run["review"], qa_run["not_run"], qa_run["errors"], qa_run["triggered_by"]]])
     insert_rows(session, "QUALITY.QA_RESULT",
                 ["RESULT_ID", "QA_RUN_ID", "RUN_ID", "TEST_ID", "CATEGORY", "TITLE", "SEVERITY", "ORIGIN", "OUTCOME",
-                 "ROWS_RETURNED", "MEASURED", "EXPECTED", "DETAIL", "COLUMNS", "SAMPLE", "SQL_TEXT", "DURATION_MS"],
+                 "ROWS_RETURNED", "MEASURED", "EXPECTED", "DETAIL", "COLUMNS", "SAMPLE_ROWS", "SQL_TEXT", "DURATION_MS"],
                 ["?", "?", "?", "?", "?", "?", "?", "?", "?", "NULLIF(?, '')::NUMBER", "NULLIF(?, '')", "NULLIF(?, '')",
                  "NULLIF(?, '')", "PARSE_JSON(NULLIF(?, ''))", "PARSE_JSON(NULLIF(?, ''))", "?", "NULLIF(?, '')::NUMBER"],
                 [[str(uuid.uuid4()), qa_run["qa_run_id"], qa_run["run_id"], r["test_id"], r.get("category") or "",
@@ -252,5 +252,5 @@ def latest(query, run_id: str) -> Tuple[Optional[Dict[str, Any]], List[Dict[str,
     if not found:
         return None, []
     return found[0], query("""SELECT TEST_ID, CATEGORY, TITLE, SEVERITY, ORIGIN, OUTCOME, ROWS_RETURNED, MEASURED, EXPECTED,
-                                     DETAIL, COLUMNS, SAMPLE, SQL_TEXT, DURATION_MS
+                                     DETAIL, COLUMNS, SAMPLE_ROWS, SQL_TEXT, DURATION_MS
                                 FROM QUALITY.QA_RESULT WHERE QA_RUN_ID = %s""", (found[0]["qa_run_id"],))

@@ -315,7 +315,7 @@ def _store(session, scan: Dict[str, Any], results: List[Dict[str, Any]]) -> None
                   scan["health"], scan.get("rows_scanned"), scan.get("triggered_by") or "UI"]])
     insert_rows(session, "QUALITY.CHECK_RESULT",
                 ["RESULT_ID", "SCAN_ID", "RUN_ID", "EXPECTATION_ID", "TARGET_TABLE", "TARGET_COLUMN", "CHECK_TYPE", "KIND",
-                 "DIMENSION", "SEVERITY", "OUTCOME", "MEASURED", "THRESHOLD", "FAILED_ROWS", "DETAIL", "SAMPLE", "SQL_TEXT",
+                 "DIMENSION", "SEVERITY", "OUTCOME", "MEASURED", "THRESHOLD", "FAILED_ROWS", "DETAIL", "SAMPLE_ROWS", "SQL_TEXT",
                  "DURATION_MS"],
                 ["?", "?", "?", "NULLIF(?, '')", "NULLIF(?, '')", "NULLIF(?, '')", "NULLIF(?, '')", "NULLIF(?, '')",
                  "NULLIF(?, '')", "NULLIF(?, '')", "?", "NULLIF(?, '')::FLOAT", "NULLIF(?, '')", "NULLIF(?, '')::NUMBER",
