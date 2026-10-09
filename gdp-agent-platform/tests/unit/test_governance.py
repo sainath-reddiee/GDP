@@ -1,5 +1,5 @@
 from services.governance.policy import (
-    ALL, DEFAULT_POLICIES, PRIVILEGES, SYSTEM_ROLES, can_approve, decide, effective_privileges, privilege_for, summarize,
+    ADDED_PRIVILEGES, ALL, creates_cycle, read_only, DEFAULT_POLICIES, PRIVILEGES, SYSTEM_ROLES, can_approve, decide, effective_privileges, privilege_for, summarize,
 )
 
 ROLE_PRIVS = {name: spec["privileges"] for name, spec in SYSTEM_ROLES.items()}
@@ -23,7 +23,12 @@ def test_route_mapping():
     assert privilege_for("POST", "/api/runs/abc/review", {"to_state": "mapping_approved"})[0] == "MAPPING.APPROVE"
     assert privilege_for("POST", "/api/runs/abc/review", {"to_state": "MAPPING_PENDING"})[0] == "REVIEW.DECIDE"
     assert privilege_for("POST", "/api/runs/abc/model/3/approve")[0] == "MODEL.APPROVE"
-    assert privilege_for("POST", "/api/runs/abc/qa/ask")[0] is None
+    assert privilege_for("POST", "/api/runs/abc/qa/ask")[0] == "AI.USE"
+    assert privilege_for("POST", "/api/copilot/ask")[0] == "AI.USE"
+    assert privilege_for("POST", "/api/runs/abc/suggestions/PROFILING")[0] == "AI.USE"
+    assert privilege_for("POST", "/api/sources/s1/oracle/preview")[0] == "PROFILE.RUN"
+    assert privilege_for("POST", "/api/knowledge/search")[0] is None
+    assert privilege_for("GET", "/api/audit")[0] == "AUDIT.VIEW"
     assert privilege_for("POST", "/api/governance/requests/x/approve")[0] is None
     assert privilege_for("PUT", "/api/governance/users/BOB")[0] == "ROLE.MANAGE"
     unknown = privilege_for("POST", "/api/brand/new")
@@ -68,3 +73,21 @@ def test_who_may_approve():
 def test_summary_line():
     line = summarize("POST", "/api/runs/1234567890/sttm/apply", {"title": "Cast END_DATE"}, "Change an STTM transformation")
     assert line == "Change an STTM transformation · run 12345678 · title Cast END_DATE"
+
+
+def test_viewer_can_only_look():
+    _, viewer = effective_privileges(["VIEWER"], ROLE_PRIVS, GRANTS)
+    assert read_only(viewer)
+    for method, path in [("POST", "/api/copilot/ask"), ("POST", "/api/runs/r/qa/plan"), ("POST", "/api/runs/r/suggestions/SODA"),
+                         ("POST", "/api/runs/r/soda/scan"), ("PUT", "/api/tags/RUN/r"), ("POST", "/api/runs/r/sttm/apply")]:
+        priv = privilege_for(method, path)[0]
+        assert decide(priv, viewer, {"requires_approval": True, "approver_role": "X", "active": True})[0] == "FORBID", path
+    _, engineer = effective_privileges(["DATA_ENGINEER"], ROLE_PRIVS, GRANTS)
+    assert not read_only(engineer) and "AI.USE" in engineer
+    assert all(p in PRIVILEGES for ps in ADDED_PRIVILEGES.values() for p in ps)
+
+
+def test_inheritance_loops_are_refused():
+    grants = {"A": ["B"], "B": ["C"]}
+    assert creates_cycle("C", ["A"], grants)
+    assert not creates_cycle("D", ["A"], grants)

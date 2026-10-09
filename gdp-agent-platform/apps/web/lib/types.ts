@@ -196,6 +196,7 @@ export type MappingSuggestion = {
 export type WhoAmI = {
   user: string; role: string; auth_mode: "dev" | "pat"; agent: string | null;
   governance?: boolean; roles?: string[]; granted_roles?: string[]; privileges?: string[]; pending_for_me?: number;
+  read_only?: boolean;
 };
 
 /** Does the signed-in user hold a privilege? Everything is allowed until governance is deployed. */
@@ -203,6 +204,11 @@ export function can(me: WhoAmI | null | undefined, privilege: string): boolean {
   if (!me || !me.governance) return true;
   const p = me.privileges ?? [];
   return p.includes("*") || p.includes(privilege);
+}
+
+/** May act directly, or raise a change request routed to the approver role. */
+export function canAct(me: WhoAmI | null | undefined, privilege: string): boolean {
+  return can(me, privilege) || can(me, "REQUEST.CHANGES");
 }
 
 export type AuditEvent = {

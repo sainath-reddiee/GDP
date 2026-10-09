@@ -1,5 +1,6 @@
 "use client";
 
+import { useAccess } from "@/components/access";
 import { useEffect, useRef, useState, useTransition } from "react";
 import { Loader2, Plus, Tag, X } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -48,6 +49,8 @@ export function TagEditor({ entityType, entityKey, initial, canEdit = true, comp
   const [error, setError] = useState("");
   const [pending, start] = useTransition();
   const input = useRef<HTMLInputElement>(null);
+  const { can } = useAccess();
+  canEdit = canEdit && can("TAG.MANAGE");
 
   useEffect(() => {
     if (initial !== undefined) { setTags(initial); return; }

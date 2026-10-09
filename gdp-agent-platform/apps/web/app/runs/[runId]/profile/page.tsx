@@ -1,4 +1,5 @@
-import { api, getRun } from "@/lib/api";
+import { can, canAct } from "@/lib/types";
+import { api, getRun, whoami } from "@/lib/api";
 import { AiSuggestions } from "@/components/ai-suggestions";
 import { StageGate } from "@/components/stage-gate";
 import { StageAction } from "@/components/stage-action";
@@ -12,13 +13,14 @@ import { runProfiling, runProfilingFresh } from "../pipeline-actions";
 import { ProfileWorkspace, type ProfileColumn } from "./profile-workspace";
 
 export default async function ProfilePage({ params }: { params: { runId: string } }) {
-  const [state, { columns, tables = [], source = "registry" }, graph] = await Promise.all([
+  const [state, me, { columns, tables = [], source = "registry" }, graph] = await Promise.all([
     getRun(params.runId),
+    whoami(),
     api<{ columns: ProfileColumn[]; tables?: ProfileCacheTable[]; source?: "registry" | "cache" }>(`/api/runs/${params.runId}/profile`),
     api<ModelGraph>(`/api/runs/${params.runId}/model-graph`).catch(() => null),
   ]);
-  const canRun = !state.is_archived && ["LANDING_COMPLETE", "PROFILING_PENDING"].includes(state.current_state);
-  const canRefresh = !state.is_archived && !["PROFILING_RUNNING", "LANDING_RUNNING"].includes(state.current_state);
+  const canRun = can(me, "RUN.OPERATE") && !state.is_archived && ["LANDING_COMPLETE", "PROFILING_PENDING"].includes(state.current_state);
+  const canRefresh = can(me, "PROFILE.RUN") && !state.is_archived && !["PROFILING_RUNNING", "LANDING_RUNNING"].includes(state.current_state);
   const cachedCount = tables.filter((t) => t.status === "CACHED").length;
   return (
     <StageGate state={state} stage="PROFILING">

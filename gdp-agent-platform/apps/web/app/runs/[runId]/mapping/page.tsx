@@ -1,4 +1,5 @@
-import { api, getRun } from "@/lib/api";
+import { can, canAct } from "@/lib/types";
+import { api, getRun, whoami } from "@/lib/api";
 import type { MappingOverview } from "@/lib/types";
 import { StageGate } from "@/components/stage-gate";
 import { StageAction } from "@/components/stage-action";
@@ -10,17 +11,19 @@ import { ModelDesign } from "./model-design";
 import type { ModelPayload } from "./model-actions";
 
 export default async function MappingPage({ params }: { params: { runId: string } }) {
-  const [state, data, model] = await Promise.all([
+  const [state, me, data, model] = await Promise.all([
     getRun(params.runId),
+    whoami(),
     api<MappingOverview>(`/api/runs/${params.runId}/mapping`),
     api<ModelPayload>(`/api/runs/${params.runId}/model`).catch(() => null),
   ]);
-  const canApplyModel = !state.is_archived
+  const canApplyModel = canAct(me, "MODEL.APPROVE") && !state.is_archived
     && ["PROFILING_COMPLETE", "DOMAIN_IDENTIFIED", "MAPPING_PENDING", "MAPPING_REVIEW"].includes(state.current_state);
-  const canGenerate = ["DOMAIN_IDENTIFIED", "MAPPING_PENDING"].includes(state.current_state);
+  const canGenerate = can(me, "RUN.OPERATE") && ["DOMAIN_IDENTIFIED", "MAPPING_PENDING"].includes(state.current_state);
   return (
     <StageGate state={state} stage="MAPPING">
-      {model && <ModelDesign runId={params.runId} data={model} canApply={canApplyModel} state={state.current_state} />}
+      {model && <ModelDesign runId={params.runId} data={model} canApply={canApplyModel} state={state.current_state}
+                               canEdit={canAct(me, "MODEL.EDIT")} canAI={can(me, "AI.USE") && can(me, "MODEL.EDIT")} />}
       {canGenerate && (
         <Card>
           <CardHeader>

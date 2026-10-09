@@ -117,9 +117,9 @@ function ResultPanel({ result }: { result: QaResult }) {
   );
 }
 
-function TestCard({ runId, test, result, history, open, onToggle, selected, onSelect, canRun }: {
+function TestCard({ runId, test, result, history, open, onToggle, selected, onSelect, canRun, canEdit = true }: {
   runId: string; test: QaTest; result?: QaResult; history: { outcome: QaOutcome; at: string }[]; open: boolean;
-  onToggle: () => void; selected: boolean; onSelect: () => void; canRun: boolean;
+  onToggle: () => void; selected: boolean; onSelect: () => void; canRun: boolean; canEdit?: boolean;
 }) {
   const router = useRouter();
   const { copied, copy } = useCopy();
@@ -129,7 +129,7 @@ function TestCard({ runId, test, result, history, open, onToggle, selected, onSe
   const [severity, setSeverity] = useState(test.severity);
   const [error, setError] = useState("");
   const [busy, start] = useTransition();
-  const saved = test.origin !== "GENERATED";
+  const saved = test.origin !== "GENERATED" && canEdit;
   const failing = result && (result.outcome === "FAIL" || result.outcome === "ERROR");
 
   const run = () => start(async () => {
@@ -215,7 +215,7 @@ function TestCard({ runId, test, result, history, open, onToggle, selected, onSe
   );
 }
 
-function Assistant({ runId, onSaved }: { runId: string; onSaved: () => void }) {
+function Assistant({ runId, onSaved, canAI = true }: { runId: string; onSaved: () => void; canAI?: boolean }) {
   const { copied, copy } = useCopy();
   const [question, setQuestion] = useState("");
   const [answer, setAnswer] = useState<QaAnswer | null>(null);
@@ -280,7 +280,7 @@ function Assistant({ runId, onSaved }: { runId: string; onSaved: () => void }) {
         <div className="flex gap-2">
           <Input value={focus} onChange={(e) => setFocus(e.target.value)} placeholder="Optional focus, e.g. money columns, late-arriving data"
                  aria-label="Plan focus" className="flex-1" />
-          <Button disabled={planning} onClick={makePlan} className="bg-gradient-to-r from-violet-600 to-primary text-white">
+          <Button disabled={planning || !canAI} onClick={makePlan} className="bg-gradient-to-r from-violet-600 to-primary text-white">
             {planning ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}{planning ? "Planning…" : "Plan tests"}
           </Button>
         </div>
@@ -325,7 +325,7 @@ function Assistant({ runId, onSaved }: { runId: string; onSaved: () => void }) {
           <Textarea rows={2} value={question} onChange={(e) => setQuestion(e.target.value)} className="flex-1 rounded-xl"
                     onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && question.trim()) ask(question); }}
                     placeholder="Describe what to check in plain English" aria-label="Describe a test" />
-          <Button className="self-stretch" disabled={asking || question.trim().length < 3} onClick={() => ask(question)}>
+          <Button className="self-stretch" disabled={asking || !canAI || question.trim().length < 3} onClick={() => ask(question)}>
             {asking ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}{asking ? "Writing…" : "Generate"}
           </Button>
         </div>
@@ -404,7 +404,9 @@ function RunHistory({ data }: { data: QaResults }) {
   );
 }
 
-export function QaWorkbench({ runId, suite, results, canRun }: { runId: string; suite: QaSuite; results: QaResults; canRun: boolean }) {
+export function QaWorkbench({ runId, suite, results, canRun, canAI = true, canEdit = true }: {
+  runId: string; suite: QaSuite; results: QaResults; canRun: boolean; canAI?: boolean; canEdit?: boolean;
+}) {
   const router = useRouter();
   const { copied, copy } = useCopy();
   const [tab, setTab] = useState<"tests" | "ai" | "history">("tests");
@@ -503,7 +505,7 @@ export function QaWorkbench({ runId, suite, results, canRun }: { runId: string; 
         ))}
       </nav>
 
-      {tab === "ai" && <Assistant runId={runId} onSaved={() => { setTab("tests"); setCategory("ALL"); router.refresh(); }} />}
+      {tab === "ai" && <Assistant runId={runId} canAI={canAI && canEdit} onSaved={() => { setTab("tests"); setCategory("ALL"); router.refresh(); }} />}
       {tab === "history" && <RunHistory data={results} />}
 
       {tab === "tests" && (
@@ -556,7 +558,7 @@ export function QaWorkbench({ runId, suite, results, canRun }: { runId: string; 
             )}
             {visible.map((t) => (
               <TestCard key={t.test_id} runId={runId} test={t} result={byTest.get(t.test_id)} history={results.history[t.test_id] ?? []}
-                        open={open === t.test_id} onToggle={() => setOpen(open === t.test_id ? "" : t.test_id)} canRun={canRun}
+                        open={open === t.test_id} onToggle={() => setOpen(open === t.test_id ? "" : t.test_id)} canRun={canRun} canEdit={canEdit}
                         selected={selected.has(t.test_id)}
                         onSelect={() => setSelected((s) => { const n = new Set(s); if (n.has(t.test_id)) n.delete(t.test_id); else n.add(t.test_id); return n; })} />
             ))}
