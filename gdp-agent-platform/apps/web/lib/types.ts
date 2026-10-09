@@ -193,7 +193,17 @@ export type MappingSuggestion = {
   decision: Record<string, unknown>;
 };
 
-export type WhoAmI = { user: string; role: string; auth_mode: "dev" | "pat"; agent: string | null };
+export type WhoAmI = {
+  user: string; role: string; auth_mode: "dev" | "pat"; agent: string | null;
+  governance?: boolean; roles?: string[]; granted_roles?: string[]; privileges?: string[]; pending_for_me?: number;
+};
+
+/** Does the signed-in user hold a privilege? Everything is allowed until governance is deployed. */
+export function can(me: WhoAmI | null | undefined, privilege: string): boolean {
+  if (!me || !me.governance) return true;
+  const p = me.privileges ?? [];
+  return p.includes("*") || p.includes(privilege);
+}
 
 export type AuditEvent = {
   event_id: string;

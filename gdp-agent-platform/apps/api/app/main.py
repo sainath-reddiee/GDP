@@ -60,6 +60,14 @@ def _drop_run(run_id: str) -> None:
 
 
 @app.middleware("http")
+async def governance_guard(request: Request, call_next):
+    """RBAC and approvals (app/governance.py). Registered first, so it runs after the cache middleware below."""
+    from app.governance import middleware as governance_middleware
+
+    return await governance_middleware(request, call_next)
+
+
+@app.middleware("http")
 async def bust_run_cache(request: Request, call_next):
     response = await call_next(request)
     if request.method in {"POST", "PUT", "PATCH"} and response.status_code < 400:
@@ -298,7 +306,13 @@ def logout(x_aip_session: Optional[str] = Header(default=None)):
 
 @app.get("/api/auth/me")
 def me(db: Db = Depends(current_db)):
-    return {"user": db.user, "role": db.role, "auth_mode": AUTH_MODE, "agent": AGENT_NAME}
+    from app.governance import summary
+
+    try:
+        access = summary(db)
+    except Exception:
+        access = {"governance": False, "roles": [], "privileges": ["*"], "pending_for_me": 0}
+    return {"user": db.user, "role": db.role, "auth_mode": AUTH_MODE, "agent": AGENT_NAME, **access}
 
 
 @app.get("/api/auth/roles")
@@ -5963,3 +5977,8 @@ def _reconcile_if_due(db: Db) -> None:
             pass
 
     threading.Thread(target=run, name="cost-reconcile", daemon=True).start()
+
+
+from app.governance import router as governance_router  # noqa: E402
+
+app.include_router(governance_router)

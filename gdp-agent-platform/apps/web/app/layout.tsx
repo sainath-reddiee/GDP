@@ -30,7 +30,8 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
       <body>
         <NavProgress />
         <div className="flex min-h-screen">
-          <Sidebar user={me?.user ?? null} role={me?.role ?? null} canLogout />
+          <Sidebar user={me?.user ?? null} role={me?.role ?? null} canLogout
+                   privileges={me?.governance ? me.privileges ?? [] : null} appRoles={me?.governance ? me.granted_roles ?? [] : null} />
           <main className="min-w-0 flex-1 bg-background">
             <CopilotProvider>
               <div className="mx-auto w-full max-w-[1600px] px-6 py-7 lg:px-10">

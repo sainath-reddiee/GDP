@@ -1,7 +1,10 @@
 import Link from "next/link";
 import { Suspense } from "react";
-import { Bot, LayoutDashboard, Rocket, Ruler, SlidersHorizontal } from "lucide-react";
+import { Bot, LayoutDashboard, Rocket, Ruler, ShieldCheck, SlidersHorizontal } from "lucide-react";
 import { api, whoami } from "@/lib/api";
+import { can } from "@/lib/types";
+import type { GovEvent, GovPolicy, GovPrivilege, GovRole, GovSettings, GovUser } from "../governance-actions";
+import { AccessSection } from "./access-section";
 import { PageHeader } from "@/components/page-header";
 import { cn } from "@/lib/utils";
 import type { ModelsState, PlatformState, RulesState } from "./actions";
@@ -18,13 +21,23 @@ const SECTIONS = [
   { id: "models", label: "AI models", icon: Bot, hint: "Default and per-stage models, and their credit rates" },
   { id: "rules", label: "Rules", icon: SlidersHorizontal, hint: "Thresholds and hints" },
   { id: "standards", label: "Modeling standards", icon: Ruler, hint: "Naming and conventions" },
+  { id: "access", label: "Access and governance", icon: ShieldCheck, hint: "Users, roles, privileges and approval policies" },
   { id: "deploy", label: "Deploy", icon: Rocket, hint: "Push code to Snowflake" },
 ] as const;
 type SectionId = (typeof SECTIONS)[number]["id"];
 
 const unavailable = <p className="text-sm text-muted-foreground">Not available from the API yet. Restart the API after pulling.</p>;
 
-export default function Admin({ searchParams }: { searchParams?: { section?: string } }) {
+export default async function Admin({ searchParams }: { searchParams?: { section?: string } }) {
+  const me = await whoami();
+  if (!can(me, "ADMIN.VIEW")) {
+    return (
+      <div className="rounded-2xl border bg-card p-10 text-center shadow-sm">
+        <h3 className="text-base font-semibold">Admin is not available to your role</h3>
+        <p className="mt-1 text-sm text-muted-foreground">Ask a governance admin for a role with the ADMIN.VIEW privilege.</p>
+      </div>
+    );
+  }
   const section = (SECTIONS.find((s) => s.id === searchParams?.section)?.id ?? "overview") as SectionId;
   const current = SECTIONS.find((s) => s.id === section)!;
   return (
@@ -98,6 +111,22 @@ async function Section({ id }: { id: SectionId }) {
   if (id === "standards") {
     const platform = await api<PlatformState>("/api/config/platform").catch(() => null);
     return platform ? <StandardsSection platform={platform} /> : unavailable;
+  }
+  if (id === "access") {
+    try {
+      const [users, roles, privileges, policies, settings, events] = await Promise.all([
+        api<{ users: GovUser[] }>("/api/governance/users"),
+        api<{ roles: GovRole[] }>("/api/governance/roles"),
+        api<{ privileges: GovPrivilege[] }>("/api/governance/privileges"),
+        api<{ policies: GovPolicy[] }>("/api/governance/policies"),
+        api<{ settings: GovSettings }>("/api/governance/settings"),
+        api<{ events: GovEvent[] }>("/api/governance/events"),
+      ]);
+      return <AccessSection users={users.users} roles={roles.roles} privileges={privileges.privileges}
+                            policies={policies.policies} settings={settings.settings} events={events.events} />;
+    } catch (e) {
+      return <p className="text-sm text-muted-foreground">{e instanceof Error ? e.message : "Governance is not available."}</p>;
+    }
   }
   if (id === "deploy") {
     const me = await whoami();

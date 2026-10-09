@@ -5,14 +5,15 @@ import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 import {
   BookOpen, Boxes, ChevronsLeft, ChevronsRight, Database, FileClock, LayoutDashboard, ListChecks, LogOut, Settings,
-  Sparkles, Workflow,
+  ShieldCheck, Sparkles, Workflow,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { logout } from "@/app/login/actions";
 import type { NavCounts } from "@/app/bff/nav/route";
 import { RoleSelector } from "@/components/role-selector";
 
-type NavLink = { href: string; label: string; icon: typeof Database; badge?: (c: NavCounts) => { value: number; tone: string; title: string } | null };
+type NavLink = { href: string; label: string; icon: typeof Database; privilege?: string;
+  badge?: (c: NavCounts) => { value: number; tone: string; title: string } | null };
 
 const groups: { label: string; links: NavLink[] }[] = [
   {
@@ -42,8 +43,12 @@ const groups: { label: string; links: NavLink[] }[] = [
   {
     label: "Platform",
     links: [
-      { href: "/audit", label: "Audit", icon: FileClock },
-      { href: "/admin", label: "Admin", icon: Settings },
+      {
+        href: "/approvals", label: "Approvals", icon: ShieldCheck,
+        badge: (c) => c.approvals ? { value: c.approvals, tone: "bg-violet-500 text-white", title: `${c.approvals} waiting for you` } : null,
+      },
+      { href: "/audit", label: "Audit", icon: FileClock, privilege: "AUDIT.VIEW" },
+      { href: "/admin", label: "Admin", icon: Settings, privilege: "ADMIN.VIEW" },
     ],
   },
 ];
@@ -55,7 +60,10 @@ function initials(user: string | null) {
   return (name.split(/\s+/).map((p) => p[0]).join("") || "?").slice(0, 2).toUpperCase();
 }
 
-export function Sidebar({ user, role, canLogout }: { user: string | null; role: string | null; canLogout: boolean }) {
+export function Sidebar({ user, role, canLogout, privileges, appRoles }: {
+  user: string | null; role: string | null; canLogout: boolean; privileges?: string[] | null; appRoles?: string[] | null;
+}) {
+  const allowed = (p?: string) => !p || !privileges || privileges.includes("*") || privileges.includes(p);
   const path = usePathname();
   const [collapsed, setCollapsed] = useState(false);
   const [counts, setCounts] = useState<NavCounts | null>(null);
@@ -100,7 +108,7 @@ export function Sidebar({ user, role, canLogout }: { user: string | null; role: 
           {!collapsed
             ? <p className="mb-1.5 px-2.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-white/30">{group.label}</p>
             : <div className="mx-3 mb-2 h-px bg-white/10" />}
-          {group.links.map(({ href, label, icon: Icon, badge }) => {
+          {group.links.filter((l) => allowed(l.privilege)).map(({ href, label, icon: Icon, badge }) => {
             const active = path === href || path.startsWith(`${href}/`);
             const b = counts && badge ? badge(counts) : null;
             return (
@@ -137,6 +145,11 @@ export function Sidebar({ user, role, canLogout }: { user: string | null; role: 
                 <div className="flex items-center gap-1 text-[10px] text-white/45">
                   <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" /> Connected to Snowflake
                 </div>
+                {appRoles && (
+                  <div className="truncate text-[10px] text-violet-200/80" title={appRoles.join(", ") || "No app role yet"}>
+                    {appRoles.length ? appRoles.map((r) => r.toLowerCase().replace(/_/g, " ")).join(", ") : "no app role"}
+                  </div>
+                )}
               </div>
               {canLogout && (
                 <form action={logout}>
