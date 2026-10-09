@@ -26,9 +26,9 @@ function fmt(n: number | null | undefined) {
 
 function Stat({ icon: Icon, label, value, hint }: { icon: typeof Table2; label: string; value: React.ReactNode; hint?: string }) {
   return (
-    <div className="rounded-xl border bg-card px-4 py-3">
+    <div className="rounded-xl border bg-card px-3 py-2">
       <p className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground"><Icon className="h-3.5 w-3.5" />{label}</p>
-      <p className="mt-1 text-xl font-semibold tabular-nums">{value}</p>
+      <p className="text-lg font-semibold tabular-nums">{value}</p>
       {hint && <p className="text-[11px] text-muted-foreground">{hint}</p>}
     </div>
   );
@@ -129,9 +129,9 @@ export function ProfileWorkspace({ runId, tables, columns, canRefresh }: {
                     </Button>
                   )}
                   {ready ? (
-                    <Button size="sm" variant="outline" className="shrink-0"
+                    <Button size="sm" variant="outline" className="shrink-0" title="View this table's profile"
                             onClick={(e) => { e.stopPropagation(); setSelected(t.table_name); }}>
-                      <Eye className="h-3.5 w-3.5" />View profile
+                      <Eye className="h-3.5 w-3.5" />View
                     </Button>
                   ) : t.status === "CACHED" && (
                     <span className="max-w-[9rem] text-right text-[10px] leading-tight text-muted-foreground"

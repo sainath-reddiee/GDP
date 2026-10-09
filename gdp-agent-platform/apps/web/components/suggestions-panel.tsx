@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useTransition } from "react";
+import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
 import { Bot, Check, ChevronDown, Loader2, RefreshCw, Sparkles, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -36,6 +37,8 @@ export function SuggestionsPanel({ source, summary, effect, intro, canAct = true
   const [busy, setBusy] = useState<string | null>(null);
   const [pending, start] = useTransition();
   const [expanded, setExpanded] = useState(placement === "inline");
+  const [slot, setSlot] = useState<HTMLElement | null>(null);
+  useEffect(() => { if (placement === "top") setSlot(document.getElementById("run-ai-slot")); }, [placement]);
 
   useEffect(() => {
     // the top bar does nothing until the user asks; the inline panel shows earlier answers straight away
@@ -95,8 +98,92 @@ export function SuggestionsPanel({ source, summary, effect, intro, canAct = true
   const scopeErrors = data?.scopes.filter((s) => s.error).map((s) => s.error) ?? [];
 
   const top = placement === "top";
+  const results = <>
+      <p className="mt-1 text-xs text-muted-foreground">
+        {intro ?? "The rules decide; AI suggests where it disagrees. One call per table, reused until the inputs change."} {effect}
+      </p>
+      {error && <p role="alert" className="mt-2 text-xs text-destructive">{error}</p>}
+      {scopeErrors.map((e) => <p key={e} className="mt-2 text-xs text-warning">{e}</p>)}
+      {notice && <p className="mt-2 text-xs text-success">{notice}</p>}
+      {generated && open === 0 && !scopeErrors.length && (
+        <p className="mt-3 text-xs text-muted-foreground">No suggestions: the AI agrees with the rule results.</p>
+      )}
+      <div className="mt-3 space-y-3">
+        {data?.scopes.filter((sc) => sc.items.length).map((sc) => (
+          <div key={sc.scope_key} className="space-y-1.5">
+            {data.scopes.length > 1 && (
+              <p className="font-mono text-[11px] text-muted-foreground">{sc.scope_key.split(".").slice(1).join(".")}</p>
+            )}
+            {sc.items.map((item) => {
+              const { title, detail } = summary(item);
+              return (
+                <div key={item.item_key} className="flex items-start gap-3 rounded-lg border bg-card p-2.5">
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-medium">{title}</p>
+                    {detail && <p className="break-words font-mono text-[11px] text-muted-foreground">{detail}</p>}
+                    <p className="mt-0.5 text-xs text-muted-foreground">{item.reason}</p>
+                  </div>
+                  {item.review?.decision === "ACCEPTED" ? (
+                    <Badge variant="success"><Check className="mr-0.5 h-3 w-3" />Accepted</Badge>
+                  ) : canAct && (
+                    <div className="flex shrink-0 gap-1">
+                      <Button size="sm" variant="outline" disabled={pending}
+                              onClick={() => decide(sc.scope_key, sc.suggestion_id, item, "ACCEPTED")}>
+                        {busy === item.item_key ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
+                        Accept
+                      </Button>
+                      <Button size="sm" variant="ghost" disabled={pending} aria-label="Reject"
+                              onClick={() => decide(sc.scope_key, sc.suggestion_id, item, "REJECTED")}>
+                        <X className="h-3.5 w-3.5" />
+                      </Button>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        ))}
+      </div>
+  </>;
   const status = pending && !data ? "reviewing…" : !data ? "runs only when you click it" : !generated ? "not run yet"
-    : open ? `${open} open suggestion${open === 1 ? "" : "s"}` : "agrees with the rules";
+    : open ? `${open} open suggestion${open === 1 ? "" : "s"}` : "no suggestions; the AI agrees with the rules";
+
+  if (top) {
+    const label = pending && !data ? "Reviewing…" : !data ? "Ask AI to review" : open ? `AI review · ${open} open` : "AI review";
+    const pill = (
+      <button type="button" onClick={() => (data ? setExpanded((v) => !v) : open_())} disabled={pending || (!data && !canAct)}
+              aria-expanded={expanded} aria-label={label} title="Runs only when you click it. Shows the earlier review if there is one."
+              className="flex items-center gap-1.5 rounded-full bg-gradient-to-r from-violet-600 to-primary px-3 py-1 text-xs font-medium text-white shadow-sm transition hover:shadow-md disabled:opacity-60">
+        {pending && !busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
+        {label}
+      </button>
+    );
+    return (
+      <>
+        {slot ? createPortal(pill, slot) : !expanded && <div className="flex justify-end">{pill}</div>}
+        {expanded && (
+          <section className="rounded-xl border border-violet-200 bg-violet-50/40 p-4 dark:border-violet-900 dark:bg-violet-950/20">
+            <div className="flex flex-wrap items-center gap-2">
+              <Bot className="h-4 w-4 text-violet-600" />
+              <h4 className="text-sm font-semibold">AI review</h4>
+              <span className={`text-xs ${open ? "font-medium text-violet-700 dark:text-violet-300" : "text-muted-foreground"}`}>{status}</span>
+              {model && <span className="text-[11px] text-muted-foreground">{model}</span>}
+              <div className="ml-auto flex gap-1">
+                {generated && (
+                  <Button size="sm" variant="ghost" disabled={pending || !canAct} onClick={() => ask(true)} title="Ask again with a fresh answer" aria-label="Re-check">
+                    {pending && !busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+                  </Button>
+                )}
+                <Button size="sm" variant="ghost" onClick={() => setExpanded(false)} aria-label="Close AI review"><X className="h-3.5 w-3.5" /></Button>
+              </div>
+            </div>
+            {results}
+          </section>
+        )}
+        {!expanded && error && <p role="alert" className="text-xs text-destructive">{error}</p>}
+      </>
+    );
+  }
 
   return (
     <section className={`rounded-xl border border-violet-200 bg-violet-50/40 dark:border-violet-900 dark:bg-violet-950/20 ${top ? "px-4 py-2.5" : "p-4"}`}>
@@ -145,53 +232,7 @@ export function SuggestionsPanel({ source, summary, effect, intro, canAct = true
           )}
         </div>
       </div>
-      {expanded && (<>
-      <p className="mt-1 text-xs text-muted-foreground">
-        {intro ?? "The rules decide; AI suggests where it disagrees. One call per table, reused until the inputs change."} {effect}
-      </p>
-      {error && <p role="alert" className="mt-2 text-xs text-destructive">{error}</p>}
-      {scopeErrors.map((e) => <p key={e} className="mt-2 text-xs text-warning">{e}</p>)}
-      {notice && <p className="mt-2 text-xs text-success">{notice}</p>}
-      {generated && open === 0 && !scopeErrors.length && (
-        <p className="mt-3 text-xs text-muted-foreground">No suggestions: the AI agrees with the rule results.</p>
-      )}
-      <div className="mt-3 space-y-3">
-        {data?.scopes.filter((sc) => sc.items.length).map((sc) => (
-          <div key={sc.scope_key} className="space-y-1.5">
-            {data.scopes.length > 1 && (
-              <p className="font-mono text-[11px] text-muted-foreground">{sc.scope_key.split(".").slice(1).join(".")}</p>
-            )}
-            {sc.items.map((item) => {
-              const { title, detail } = summary(item);
-              return (
-                <div key={item.item_key} className="flex items-start gap-3 rounded-lg border bg-card p-2.5">
-                  <div className="min-w-0 flex-1">
-                    <p className="text-sm font-medium">{title}</p>
-                    {detail && <p className="break-words font-mono text-[11px] text-muted-foreground">{detail}</p>}
-                    <p className="mt-0.5 text-xs text-muted-foreground">{item.reason}</p>
-                  </div>
-                  {item.review?.decision === "ACCEPTED" ? (
-                    <Badge variant="success"><Check className="mr-0.5 h-3 w-3" />Accepted</Badge>
-                  ) : canAct && (
-                    <div className="flex shrink-0 gap-1">
-                      <Button size="sm" variant="outline" disabled={pending}
-                              onClick={() => decide(sc.scope_key, sc.suggestion_id, item, "ACCEPTED")}>
-                        {busy === item.item_key ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
-                        Accept
-                      </Button>
-                      <Button size="sm" variant="ghost" disabled={pending} aria-label="Reject"
-                              onClick={() => decide(sc.scope_key, sc.suggestion_id, item, "REJECTED")}>
-                        <X className="h-3.5 w-3.5" />
-                      </Button>
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        ))}
-      </div>
-      </>)}
+      {expanded && results}
       {!expanded && error && <p role="alert" className="mt-1 text-xs text-destructive">{error}</p>}
     </section>
   );
