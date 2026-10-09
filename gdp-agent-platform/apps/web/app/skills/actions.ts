@@ -2,7 +2,10 @@
 
 import { revalidatePath } from "next/cache";
 import { api, attemptValue } from "@/lib/api";
-import type { RunSkills, SkillBinding, SkillCategory, SkillDiff } from "./types";
+import type {
+  BuilderIssue, BuilderQuestion, DraftRequest, DraftResponse, RunSkills, SkillBinding, SkillCategory, SkillDiff, SkillDraft,
+  SkillTest, TestSummary,
+} from "./types";
 
 function done(name?: string) {
   revalidatePath("/skills");
@@ -88,4 +91,50 @@ export async function tryOnRun(runId: string, name: string, skillId: string | nu
   revalidatePath(`/runs/${runId}`, "layout");
   done(name);
   return r;
+}
+
+// ---------------------------------------------------------------- AI skill builder
+
+export async function builderQuestions(goal: string, categoryId?: string | null) {
+  return attemptValue(() => api<{ questions: BuilderQuestion[]; model: string }>("/api/skills/builder/questions", {
+    method: "POST", body: JSON.stringify({ goal, category_id: categoryId || null }),
+  }));
+}
+
+export async function builderDraft(body: DraftRequest) {
+  return attemptValue(() => api<DraftResponse>("/api/skills/builder/draft", { method: "POST", body: JSON.stringify(body) }));
+}
+
+export async function builderCheck(draft: SkillDraft, accepted: boolean[], improving?: string | null) {
+  return attemptValue(() => api<{ content: string; issues: BuilderIssue[] }>("/api/skills/builder/check", {
+    method: "POST", body: JSON.stringify({ draft, accepted, improving: improving || null }),
+  }));
+}
+
+export async function builderTest(content: string, tests: SkillTest[], skillName?: string | null) {
+  return attemptValue(() => api<TestSummary>("/api/skills/builder/test", {
+    method: "POST", body: JSON.stringify({ content, tests, skill_name: skillName || null }),
+  }));
+}
+
+export async function createSkill(body: { name: string; description: string; category_id: string; content: string;
+  change_note: string; origin?: "AI" | "USER"; eval?: TestSummary | null }) {
+  const r = await attemptValue(() => api<{ skill_name: string; skill_id: string; version: string }>("/api/skills", {
+    method: "POST", body: JSON.stringify(body),
+  }));
+  done(body.name);
+  return r;
+}
+
+export async function saveAiVersion(name: string, body: { content: string; base_skill_id?: string; description?: string;
+  change_note: string; eval?: TestSummary | null }) {
+  const r = await attemptValue(() => api<{ skill_id: string; version: string }>(`/api/skills/${encodeURIComponent(name)}/versions`, {
+    method: "POST", body: JSON.stringify({ ...body, status: "DRAFT", set_candidate: true, origin: "AI" }),
+  }));
+  done(name);
+  return r;
+}
+
+export async function listDomains() {
+  return attemptValue(() => api<{ domains: { domain_id: string; domain_name: string; active_flag: boolean; knowledge_items: number }[] }>("/api/domains"));
 }

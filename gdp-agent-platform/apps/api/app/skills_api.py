@@ -25,7 +25,8 @@ router = APIRouter()
 
 STAGES = list(STAGE_SKILLS)
 VERSION_COLS = """SKILL_ID, SKILL_NAME, SKILL_TYPE, VERSION, REVISION, STATUS, ORIGIN, CATEGORY_ID, PARENT_SKILL,
-                  DESCRIPTION, CHANGE_NOTE, CHECKSUM, PARENT_SKILL_ID, CREATED_BY, CREATED_AT::VARCHAR AS CREATED_AT"""
+                  DESCRIPTION, CHANGE_NOTE, CHECKSUM, PARENT_SKILL_ID, CREATED_BY, CREATED_AT::VARCHAR AS CREATED_AT,
+                  EVAL_JSON"""
 
 
 def _ts(value: Any) -> Optional[str]:
@@ -274,6 +275,7 @@ def skill_detail(name: str, version: Optional[str] = None, db: Db = Depends(curr
     category = db.query("SELECT CATEGORY_ID FROM KNOWLEDGE.SKILL_SETTING WHERE SKILL_NAME = %s", (skill,))
     for v in versions:
         v["loads_30d"] = by_version.get(v["skill_id"], 0)
+        v["eval_json"] = _json(v.get("eval_json"))
         v["labels"] = [k for k, lab in labels.items() if lab.get("skill_id") == v["skill_id"]]
     children = [r["skill_name"] for r in db.query(
         "SELECT DISTINCT SKILL_NAME FROM KNOWLEDGE.SKILL_REGISTRY WHERE PARENT_SKILL = %s ORDER BY 1", (skill,))]
@@ -309,6 +311,7 @@ class NewVersion(BaseModel):
     status: Literal["DRAFT", "ACTIVE"] = "ACTIVE"
     set_candidate: bool = True
     origin: Literal["USER", "AI"] = "USER"
+    eval: Optional[dict] = None  # test results from the skill builder, kept with the version
 
 
 def _move(db: Db, skill: str, label: str, skill_id: Optional[str], note: Optional[str]) -> None:
@@ -344,13 +347,13 @@ def create_version(name: str, body: NewVersion, db: Db = Depends(current_db)):
     version = next_version(base["version"], [v["version"] for v in versions])
     db.execute("""INSERT INTO KNOWLEDGE.SKILL_REGISTRY (SKILL_ID, SKILL_NAME, SKILL_TYPE, DOMAIN_ID, VERSION, STAGE_PATH, CHECKSUM,
                          STATUS, DESCRIPTION, CONTENT, CONFIG, IS_CURRENT, CREATED_BY, REVISION, ORIGIN, PARENT_SKILL_ID,
-                         PARENT_SKILL, CATEGORY_ID, CHANGE_NOTE)
+                         PARENT_SKILL, CATEGORY_ID, CHANGE_NOTE, EVAL_JSON)
                   SELECT %s, SKILL_NAME, SKILL_TYPE, DOMAIN_ID, %s, STAGE_PATH, %s, %s, COALESCE(%s, DESCRIPTION), %s, CONFIG, FALSE,
                          CURRENT_USER(), (SELECT MAX(REVISION) FROM KNOWLEDGE.SKILL_REGISTRY WHERE SKILL_NAME = %s) + 1, %s,
-                         SKILL_ID, PARENT_SKILL, CATEGORY_ID, %s
+                         SKILL_ID, PARENT_SKILL, CATEGORY_ID, %s, PARSE_JSON(NULLIF(%s, ''))
                     FROM KNOWLEDGE.SKILL_REGISTRY WHERE SKILL_ID = %s""",
                (skill_id, version, checksum, body.status, body.description, body.content, skill, body.origin,
-                body.change_note, base["skill_id"]))
+                body.change_note, json.dumps(body.eval) if body.eval else "", base["skill_id"]))
     if body.set_candidate:
         _move(db, skill, "candidate", skill_id, body.change_note)
     return {"skill_id": skill_id, "version": version, "skill_name": skill}

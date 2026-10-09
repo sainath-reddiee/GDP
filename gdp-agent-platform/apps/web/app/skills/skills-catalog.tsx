@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useMemo, useState, useTransition } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { ChevronDown, ChevronRight, FlaskConical, LayoutGrid, List, Loader2, Plus, Rocket, Search, Settings2, Trash2, X } from "lucide-react";
+import { ChevronDown, ChevronRight, FlaskConical, LayoutGrid, List, Loader2, Plus, Rocket, Search, Settings2, Sparkles, Trash2, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input, Select } from "@/components/ui/input";
@@ -12,6 +12,7 @@ import { useScrollLock } from "@/components/use-scroll-lock";
 import { cn } from "@/lib/utils";
 import { CATEGORY_COLORS, CategoryIcon, ICON_NAMES } from "./category-icon";
 import { deleteCategory, moveCategory, saveCategory } from "./actions";
+import { SkillBuilder } from "./skill-builder";
 import { ago, pretty, STAGE_LABELS, versionLabel, type SkillCard, type SkillCategory, type SkillsResponse } from "./types";
 
 type Status = "all" | "production" | "candidate" | "unused";
@@ -68,6 +69,7 @@ export function SkillsCatalog({ data }: { data: SkillsResponse }) {
   const [view, setView] = useState<"grid" | "list">("grid");
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [managing, setManaging] = useState(false);
+  const [building, setBuilding] = useState(false);
 
   const cats = data.categories.length ? data.categories
     : [{ category_id: "general", name: "All skills", description: null, icon: "sparkles", color: "#64748b", position: 0, is_system: true }];
@@ -163,6 +165,11 @@ export function SkillsCatalog({ data }: { data: SkillsResponse }) {
               <button type="button" aria-label="List" aria-pressed={view === "list"} onClick={() => setView("list")}
                       className={cn("rounded-md p-1.5", view === "list" ? "bg-muted" : "text-muted-foreground")}><List className="h-3.5 w-3.5" /></button>
             </div>
+            {editable && can("AI.USE") && (
+              <Button size="sm" onClick={() => setBuilding(true)} className="bg-gradient-to-r from-violet-500 to-primary text-white">
+                <Sparkles className="h-3.5 w-3.5" />New skill with AI
+              </Button>
+            )}
             {filtering && (
               <button type="button" onClick={() => { setQuery(""); setStage(""); setOrigin(""); setStatus("all"); }}
                       className="flex items-center gap-1 rounded-md px-2 py-1 text-xs text-muted-foreground hover:text-foreground">
@@ -210,6 +217,7 @@ export function SkillsCatalog({ data }: { data: SkillsResponse }) {
           })}
         </div>
       </div>
+      {building && <SkillBuilder categories={cats} skills={data.skills.map((s) => s.skill_name)} onClose={() => setBuilding(false)} />}
       {managing && <ManageCategories cats={cats} counts={counts} onClose={() => setManaging(false)} />}
     </div>
   );
