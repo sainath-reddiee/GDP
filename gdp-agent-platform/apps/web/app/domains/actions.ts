@@ -77,3 +77,55 @@ export async function askDomain(domainId: string, question: string) {
   return attemptValue(() =>
     api<DomainAnswer>(`/api/domains/${domainId}/ask`, { method: "POST", body: JSON.stringify({ question }) }));
 }
+
+// ---------------------------------------------------------------- versions, people, rules
+
+export type DomainVersion = {
+  version: number; change_kind: string | null; change_note: string | null; created_by: string; created_at: string;
+  summary: string[]; targets: number; columns: number;
+};
+export type DomainDiff = {
+  base: number; head: number; summary: string[]; added: number; removed: number;
+  files: { path: string; status: "changed" | "same"; added: number; removed: number; ops: [string, number | null, number | null, string | number][] }[];
+};
+export type DomainMember = { user_name: string; role: "OWNER" | "STEWARD" | "EXPERT"; added_by: string; added_at: string };
+export type DomainRules = { defaults: Record<string, unknown>; platform: Record<string, unknown>; effective: Record<string, unknown>; overrides: Record<string, unknown> };
+export type TargetModel = { table: string; description: string | null; active: boolean; type: string | null; grain: string | null;
+  columns: { name: string; type: string | null; nullable: boolean; key: boolean; pii: boolean; definition: string | null }[] };
+
+function refreshDomain(domainId: string) {
+  refreshDomains();
+  revalidatePath(`/domains/${domainId}`);
+}
+
+export async function domainDiff(domainId: string, base: number, head: number) {
+  return attemptValue(() => api<DomainDiff>(`/api/domains/${domainId}/diff?base=${base}&head=${head}`));
+}
+
+export async function rollbackDomain(domainId: string, version: number, note?: string) {
+  const r = await attemptValue(() => api<{ version: number | null; changed: boolean }>(`/api/domains/${domainId}/rollback/${version}`, {
+    method: "POST", body: JSON.stringify({ note: note || null }),
+  }));
+  refreshDomain(domainId);
+  return r;
+}
+
+export async function editDomain(domainId: string, body: { description?: string | null; owner?: string | null; note?: string | null }) {
+  const r = await attemptValue(() => api<{ version: number | null }>(`/api/domains/${domainId}`, { method: "PUT", body: JSON.stringify(body) }));
+  refreshDomain(domainId);
+  return r;
+}
+
+export async function saveMembers(domainId: string, members: { user: string; role: string }[]) {
+  const r = await attemptValue(() => api<{ members: DomainMember[] }>(`/api/domains/${domainId}/members`, {
+    method: "PUT", body: JSON.stringify({ members }),
+  }));
+  refreshDomain(domainId);
+  return r;
+}
+
+export async function saveDomainRules(domainId: string, overrides: Record<string, unknown>, note?: string) {
+  const r = await attemptValue(() => api(`/api/domains/${domainId}/rules`, { method: "PUT", body: JSON.stringify({ overrides, note: note || null }) }));
+  refreshDomain(domainId);
+  return r;
+}

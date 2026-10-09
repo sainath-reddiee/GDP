@@ -1,58 +1,37 @@
+import Link from "next/link";
+import { ArrowRight, BadgeCheck, BookOpen, Boxes, Clock, Inbox, Play, TriangleAlert } from "lucide-react";
 import { api } from "@/lib/api";
 import { PageHeader } from "@/components/page-header";
-import { Badge } from "@/components/ui/badge";
-import { Card } from "@/components/ui/card";
-import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
 import { displayDomain } from "@/lib/catalog-display";
-import Link from "next/link";
-import { DomainTools } from "./domain-tools";
+import { ago } from "../skills/types";
+import { Avatars, cleanDescription, DomainMark } from "./domain-ui";
 import { PackEditor } from "./pack-editor";
 
 type Domain = {
-  domain_id: string; domain_name: string; description: string | null; owner: string | null;
+  domain_id: string; domain_name: string; description: string | null; owner: string | null; standard: string | null;
   active_flag: boolean; version: number; knowledge_items: number; target_tables: number;
 };
-
-type DomainTarget = {
-  target_table_id: string; target_database: string; target_schema: string; target_table: string;
-  description: string | null; column_count: number; role: "hub" | "spoke" | null; hub_fk: string | null;
-  hkey_columns: string[]; minimum_mapping: string[]; lookups: string[]; casts: number;
+export type DomainCard = {
+  members?: { user: string; role: string }[]; runs_30d?: number; inbox?: number; stale?: number; verified?: number;
+  last_change?: { version: number; change_kind: string | null; change_note: string | null; created_by: string; created_at: string };
 };
-
-type DomainDetail = {
-  targets: DomainTarget[];
-  signals: { tables?: Record<string, number>; columns?: Record<string, number> };
-  source_systems: { skey: number; name: string; bronze_schema: string }[];
-  contract: string | null;
-  silver: { database: string | null; schema: string | null };
-  knowledge: { knowledge_type: string; n: number }[];
-  deletable?: boolean;
-  not_deletable_reason?: string | null;
-  active_runs?: { run_id: string; run_name: string; current_state: string }[];
-  deleted?: { at: string; by: string } | null;
-};
-
-function topSignals(weights?: Record<string, number>, limit = 10) {
-  return Object.entries(weights ?? {}).sort((a, b) => b[1] - a[1]).slice(0, limit).map(([k]) => k);
-}
-
-function cleanDescription(text: string | null) {
-  return (text || "").replace(/Global Data Platform\s*/i, "").replace(/\bGDP\b/g, "").trim() || null;
-}
 
 export default async function Domains({ searchParams }: { searchParams?: { deleted?: string } }) {
   const showDeleted = searchParams?.deleted === "1";
-  const { domains } = await api<{ domains: Domain[] }>("/api/domains");
+  const [{ domains }, cards] = await Promise.all([
+    api<{ domains: Domain[] }>("/api/domains"),
+    api<{ cards: Record<string, DomainCard> }>("/api/domain-cards").catch(() => ({ cards: {} as Record<string, DomainCard> })),
+  ]);
   const named = domains.filter((d) => displayDomain(d.domain_name));
   const deletedCount = named.filter((d) => !d.active_flag).length;
   const visible = named.filter((d) => (showDeleted ? !d.active_flag : d.active_flag));
-  const details = await Promise.all(visible.map((d) =>
-    api<DomainDetail>(`/api/domains/${d.domain_id}`).catch(() => null)));
 
   return (
     <div className="space-y-5">
       <PageHeader eyebrow="Knowledge" title="Domains"
-                  description="Domain contracts drive source detection on the Sources page and the mapping, STTM and dbt generation for every run." />
+                  description="Each domain is a product: its contract, target models, rules, knowledge and the people who own it. Every change is a version you can compare and roll back." />
+      <PackEditor domains={named.filter((d) => d.active_flag && d.domain_name !== "GDP")
+        .map((d) => ({ domain_id: d.domain_id, domain_name: d.domain_name, label: displayDomain(d.domain_name) ?? d.domain_name }))} />
       {deletedCount > 0 && (
         <div className="flex justify-end text-xs">
           <Link href={showDeleted ? "/domains" : "/domains?deleted=1"} className="text-primary hover:underline">
@@ -60,99 +39,63 @@ export default async function Domains({ searchParams }: { searchParams?: { delet
           </Link>
         </div>
       )}
-      <PackEditor domains={named.filter((d) => d.active_flag && d.domain_name !== "GDP")
-        .map((d) => ({ domain_id: d.domain_id, domain_name: d.domain_name, label: displayDomain(d.domain_name) ?? d.domain_name }))} />
       {visible.length === 0 && (
-        <Card className="p-5 text-sm text-muted-foreground">No domains registered yet. Add a knowledge pack above, or deploy the platform to seed the repository packs.</Card>
+        <p className="rounded-2xl border border-dashed p-8 text-center text-sm text-muted-foreground">No domains registered yet. Add a knowledge pack above, or deploy the platform to seed the repository packs.</p>
       )}
-      {visible.map((d, i) => {
-        const detail = details[i];
-        const tableSignals = topSignals(detail?.signals.tables, 8);
-        const columnSignals = topSignals(detail?.signals.columns, 12);
-        return (
-          <Card key={d.domain_id} className="space-y-4 p-5">
-            <div className="flex flex-wrap items-start gap-3">
-              <div className="min-w-0 flex-1">
-                <h3 className="text-base font-semibold">{displayDomain(d.domain_name)}</h3>
-                <p className="text-sm text-muted-foreground">{cleanDescription(d.description) ?? "No description"}</p>
-                {detail?.silver.database && (
-                  <p className="mt-1 font-mono text-[11px] text-muted-foreground">{detail.silver.database}.{detail.silver.schema}</p>
-                )}
-              </div>
-              <div className="flex gap-4 text-right text-sm">
-                <div><div className="text-lg font-semibold tabular-nums">{d.target_tables}</div><div className="text-xs text-muted-foreground">targets</div></div>
-                <div><div className="text-lg font-semibold tabular-nums">{d.knowledge_items}</div><div className="text-xs text-muted-foreground">knowledge items</div></div>
-                <div><div className="text-lg font-semibold tabular-nums">{detail?.source_systems.length ?? 0}</div><div className="text-xs text-muted-foreground">source systems</div></div>
-              </div>
-            </div>
-
-            {detail && detail.targets.length > 0 && (
-              <Table>
-                <THead>
-                  <TR><TH>Target</TH><TH>Role</TH><TH className="text-right">Columns</TH><TH>HKEY</TH><TH>Reference lookups</TH><TH className="text-right">Casts</TH></TR>
-                </THead>
-                <TBody>
-                  {detail.targets.map((t) => (
-                    <TR key={t.target_table_id}>
-                      <TD>
-                        <div className="font-medium">{t.target_table}</div>
-                        {t.hub_fk && <div className="text-[11px] text-muted-foreground">joins hub on {t.hub_fk}</div>}
-                      </TD>
-                      <TD>{t.role ? <Badge variant={t.role === "hub" ? "default" : "outline"}>{t.role}</Badge> : "—"}</TD>
-                      <TD className="text-right tabular-nums">{t.column_count}</TD>
-                      <TD className="max-w-[260px] text-xs text-muted-foreground">{t.hkey_columns.join(", ") || "—"}</TD>
-                      <TD className="max-w-[260px] text-xs text-muted-foreground">{t.lookups.join(", ") || "—"}</TD>
-                      <TD className="text-right tabular-nums">{t.casts || "—"}</TD>
-                    </TR>
-                  ))}
-                </TBody>
-              </Table>
-            )}
-
-            {detail && (
-              <div className="grid gap-4 md:grid-cols-3">
-                <div>
-                  <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Detection signals</p>
-                  {tableSignals.length + columnSignals.length === 0 ? <p className="text-sm text-muted-foreground">None configured</p> : (
-                    <div className="flex flex-wrap gap-1">
-                      {tableSignals.map((s) => <Badge key={`t-${s}`} variant="secondary">{s}</Badge>)}
-                      {columnSignals.map((s) => <Badge key={`c-${s}`} variant="outline">{s}</Badge>)}
-                    </div>
-                  )}
+      <div className="grid gap-4 md:grid-cols-2 2xl:grid-cols-3">
+        {visible.map((d) => {
+          const c = cards.cards[d.domain_id] ?? {};
+          const name = displayDomain(d.domain_name) ?? d.domain_name;
+          const members = c.members ?? [];
+          const verifiedPct = d.knowledge_items ? Math.round(((c.verified ?? 0) / d.knowledge_items) * 100) : 0;
+          return (
+            <Link key={d.domain_id} href={`/domains/${d.domain_id}`}
+                  className="group flex flex-col rounded-2xl border bg-card p-5 shadow-sm transition hover:-translate-y-0.5 hover:border-primary/40 hover:shadow-md">
+              <div className="flex items-start gap-3">
+                <DomainMark name={d.domain_name} />
+                <div className="min-w-0 flex-1">
+                  <p className="flex items-center gap-2 text-base font-semibold group-hover:text-primary">{name}
+                    {d.standard && <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">{d.standard}</span>}
+                  </p>
+                  <p className="line-clamp-2 text-xs text-muted-foreground">{cleanDescription(d.description) ?? "No description yet."}</p>
                 </div>
-                <div>
-                  <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Source systems</p>
-                  {detail.source_systems.length === 0 ? <p className="text-sm text-muted-foreground">None listed</p> : (
-                    <ul className="space-y-0.5 text-sm">
-                      {detail.source_systems.slice(0, 8).map((s) => (
-                        <li key={s.name} className="flex gap-2">
-                          <span className="font-medium">{s.name}</span>
-                          <span className="ml-auto font-mono text-[11px] text-muted-foreground">{s.bronze_schema} · {s.skey}</span>
-                        </li>
-                      ))}
-                      {detail.source_systems.length > 8 && <li className="text-xs text-muted-foreground">and {detail.source_systems.length - 8} more</li>}
-                    </ul>
-                  )}
-                </div>
-                <div>
-                  <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Knowledge</p>
-                  <ul className="space-y-0.5 text-sm">
-                    {detail.knowledge.map((k) => (
-                      <li key={k.knowledge_type} className="flex"><span>{k.knowledge_type.replace(/_/g, " ").toLowerCase()}</span><span className="ml-auto tabular-nums">{k.n}</span></li>
-                    ))}
-                  </ul>
-                  {detail.contract && <p className="mt-2 font-mono text-[11px] text-muted-foreground">{detail.contract.split("/").pop()}</p>}
-                </div>
+                <ArrowRight className="h-4 w-4 text-muted-foreground transition group-hover:translate-x-0.5 group-hover:text-primary" />
               </div>
-            )}
-            {detail && (
-              <DomainTools domainId={d.domain_id} name={d.domain_name} deletable={!!detail.deletable}
-                           reason={detail.not_deletable_reason ?? null} activeRuns={detail.active_runs ?? []}
-                           deleted={!d.active_flag} />
-            )}
-          </Card>
-        );
-      })}
+              <div className="mt-4 grid grid-cols-3 gap-2 text-center">
+                <Stat icon={<Boxes className="h-3.5 w-3.5" />} value={d.target_tables} label="targets" />
+                <Stat icon={<BookOpen className="h-3.5 w-3.5" />} value={d.knowledge_items} label="knowledge" />
+                <Stat icon={<Play className="h-3.5 w-3.5" />} value={c.runs_30d ?? 0} label="runs, 30 d" />
+              </div>
+              <div className="mt-3 flex flex-wrap gap-1.5 text-[11px]">
+                <Chip tone="success" icon={<BadgeCheck className="h-3 w-3" />}>{verifiedPct}% verified</Chip>
+                {!!c.inbox && <Chip tone="warning" icon={<Inbox className="h-3 w-3" />}>{c.inbox} to review</Chip>}
+                {!!c.stale && <Chip tone="warning" icon={<TriangleAlert className="h-3 w-3" />}>{c.stale} stale</Chip>}
+              </div>
+              <div className="mt-4 flex items-center gap-2 border-t pt-3 text-[11px] text-muted-foreground">
+                {members.length ? <Avatars members={members} /> : <span>No owner yet</span>}
+                <span className="ml-auto flex items-center gap-1"><Clock className="h-3 w-3" />
+                  v{d.version}{c.last_change ? ` · ${(c.last_change.change_kind ?? "change").toLowerCase()} ${ago(c.last_change.created_at)}` : ""}</span>
+              </div>
+            </Link>
+          );
+        })}
+      </div>
     </div>
+  );
+}
+
+function Stat({ icon, value, label }: { icon: React.ReactNode; value: number; label: string }) {
+  return (
+    <div className="rounded-xl bg-muted/40 px-2 py-2">
+      <p className="flex items-center justify-center gap-1 text-lg font-semibold tabular-nums"><span className="text-muted-foreground">{icon}</span>{value}</p>
+      <p className="text-[10px] text-muted-foreground">{label}</p>
+    </div>
+  );
+}
+
+function Chip({ tone, icon, children }: { tone: "success" | "warning"; icon: React.ReactNode; children: React.ReactNode }) {
+  return (
+    <span className={tone === "success" ? "inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300"
+      : "inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300"}>{icon}{children}</span>
   );
 }

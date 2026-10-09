@@ -280,6 +280,38 @@ def _move_label(cur, database: str, name: str, label: str, skill_id: str, previo
                 (str(uuid.uuid4()), name, label, previous or "", skill_id))
 
 
+def snapshot_domains(cur, database: str) -> List[str]:
+    """A domain version for every domain whose content changed (the first deploy records each baseline)."""
+    from services.knowledge.domain_versions import snapshot
+
+    def qualify(sql: str) -> str:
+        return sql.replace("KNOWLEDGE.", f"{database}.KNOWLEDGE.")
+
+    def query(sql: str, params: tuple) -> List[Dict[str, Any]]:
+        cur.execute(qualify(sql), params)
+        names = [d[0] for d in cur.description]
+        return [dict(zip(names, row)) for row in cur.fetchall()]
+
+    def execute(sql: str, params: tuple) -> None:
+        cur.execute(qualify(sql), params)
+
+    log: List[str] = []
+    try:
+        cur.execute(f"SELECT DOMAIN_ID, DOMAIN_NAME FROM {database}.KNOWLEDGE.DOMAIN_REGISTRY")
+        domains = cur.fetchall()
+    except Exception as exc:
+        return [f"domain versions skipped: {exc}"]
+    for did, name in domains:
+        try:
+            version = snapshot(query, execute, did, "DEPLOY", "Recorded by deploy", "DEPLOY")
+        except Exception as exc:
+            log.append(f"domain {name}: version not recorded ({exc})")
+            continue
+        if version:
+            log.append(f"domain {name}: version {version} recorded")
+    return log
+
+
 def seed_platform(cur, database: str) -> List[str]:
     """MERGE domain packs, skills, config and scoring weights; PUT skill files to the stage. Returns log lines."""
     live, log = fetch_live_columns(cur)
@@ -292,6 +324,7 @@ def seed_platform(cur, database: str) -> List[str]:
             log.append(f"{d['domain']}.{d['table']}: no live silver table; {d['columns']} contract columns used"
                        + ("" if d["columns"] else " (registered inactive, knowledge only)"))
     merge(cur.execute, database, data)
+    log.extend(snapshot_domains(cur, database))
 
     for skill in list_skills():
         root = skill["path"].parent
