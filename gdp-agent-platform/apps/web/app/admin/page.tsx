@@ -18,17 +18,23 @@ import { StandardsSection } from "./standards-section";
 
 const SECTIONS = [
   { id: "overview", label: "Overview", icon: LayoutDashboard, hint: "Session and platform at a glance" },
-  { id: "models", label: "AI models", icon: Bot, hint: "Default and per-stage models, and their credit rates" },
+  { id: "models", label: "AI models", icon: Bot, hint: "Models in this account, the model per stage and the rate card" },
+  { id: "access", label: "Access and governance", icon: ShieldCheck, hint: "Users, roles, privileges and approval policies" },
   { id: "rules", label: "Rules", icon: SlidersHorizontal, hint: "Thresholds and hints" },
   { id: "standards", label: "Modeling standards", icon: Ruler, hint: "Naming and conventions" },
-  { id: "access", label: "Access and governance", icon: ShieldCheck, hint: "Users, roles, privileges and approval policies" },
   { id: "deploy", label: "Deploy", icon: Rocket, hint: "Push code to Snowflake" },
 ] as const;
+const MODEL_VIEWS = [
+  { id: "models", label: "Models" },
+  { id: "stages", label: "Model per stage" },
+  { id: "rates", label: "Rate card" },
+] as const;
+type ModelView = (typeof MODEL_VIEWS)[number]["id"];
 type SectionId = (typeof SECTIONS)[number]["id"];
 
 const unavailable = <p className="text-sm text-muted-foreground">Not available from the API yet. Restart the API after pulling.</p>;
 
-export default async function Admin({ searchParams }: { searchParams?: { section?: string } }) {
+export default async function Admin({ searchParams }: { searchParams?: { section?: string; view?: string } }) {
   const me = await whoami();
   if (!can(me, "ADMIN.VIEW")) {
     return (
@@ -40,42 +46,44 @@ export default async function Admin({ searchParams }: { searchParams?: { section
   }
   const section = (SECTIONS.find((s) => s.id === searchParams?.section)?.id ?? "overview") as SectionId;
   const current = SECTIONS.find((s) => s.id === section)!;
+  const view = (MODEL_VIEWS.find((v) => v.id === searchParams?.view)?.id ?? "models") as ModelView;
   return (
     <ToastProvider>
       <div className="space-y-5">
         <PageHeader eyebrow="Platform" title="Admin"
                     description="AI models and cost, rules, modeling standards and deployment. Changes are versioned and survive deploys." />
-        <div className="grid gap-6 lg:grid-cols-[220px_1fr]">
-          <nav aria-label="Admin sections" className="lg:sticky lg:top-4 lg:self-start">
-            <ul className="flex gap-1 overflow-x-auto lg:flex-col">
-              {SECTIONS.map((s) => (
-                <li key={s.id}>
-                  <Link href={`/admin?section=${s.id}`} aria-current={s.id === section ? "page" : undefined}
-                        className={cn("flex items-center gap-2.5 whitespace-nowrap rounded-lg px-3 py-2 text-sm transition-colors",
-                          s.id === section ? "bg-primary/10 font-medium text-primary" : "text-muted-foreground hover:bg-muted hover:text-foreground")}>
-                    <s.icon className="h-4 w-4 shrink-0" />
-                    {s.label}
-                  </Link>
-                </li>
+        <nav aria-label="Admin sections" className="flex gap-1 overflow-x-auto border-b">
+          {SECTIONS.map((s) => (
+            <Link key={s.id} href={`/admin?section=${s.id}`} aria-current={s.id === section ? "page" : undefined} title={s.hint}
+                  className={cn("-mb-px flex items-center gap-2 whitespace-nowrap border-b-2 px-3 py-2.5 text-sm transition-colors",
+                    s.id === section ? "border-primary font-medium text-primary" : "border-transparent text-muted-foreground hover:text-foreground")}>
+              <s.icon className="h-4 w-4 shrink-0" />
+              {s.label}
+            </Link>
+          ))}
+        </nav>
+        <main className="min-w-0 space-y-4">
+          <p className="text-xs text-muted-foreground">{current.hint}</p>
+          {section === "models" && (
+            <div role="tablist" className="inline-flex rounded-lg border bg-muted/40 p-0.5">
+              {MODEL_VIEWS.map((v) => (
+                <Link key={v.id} href={`/admin?section=models&view=${v.id}`} role="tab" aria-selected={v.id === view}
+                      className={cn("rounded-md px-3 py-1 text-xs font-medium", v.id === view ? "bg-card shadow-sm" : "text-muted-foreground hover:text-foreground")}>
+                  {v.label}
+                </Link>
               ))}
-            </ul>
-          </nav>
-          <main className="min-w-0 space-y-4">
-            <div>
-              <h2 className="text-lg font-semibold">{current.label}</h2>
-              <p className="text-xs text-muted-foreground">{current.hint}</p>
             </div>
-            <Suspense key={section} fallback={<SectionSkeleton />}>
-              <Section id={section} />
-            </Suspense>
-          </main>
-        </div>
+          )}
+          <Suspense key={`${section}:${view}`} fallback={<SectionSkeleton />}>
+            <Section id={section} view={view} />
+          </Suspense>
+        </main>
       </div>
     </ToastProvider>
   );
 }
 
-async function Section({ id }: { id: SectionId }) {
+async function Section({ id, view }: { id: SectionId; view: ModelView }) {
   if (id === "overview") return <Overview />;
   if (id === "models") {
     const [models, platform, costs] = await Promise.all([
@@ -88,8 +96,8 @@ async function Section({ id }: { id: SectionId }) {
     const legacy = (settings.CREDITS_PER_MILLION_TOKENS?.value as Record<string, number>) ?? {};
     return (
       <div className="space-y-5">
-        <ModelsSection initial={models.data} error={models.error} />
-        {platform && (
+        {view !== "rates" && <ModelsSection initial={models.data} error={models.error} view={view} />}
+        {view === "rates" && platform && (
           <RateCardEditor
             rateCard={(settings.RATE_CARD?.value as Record<string, { input?: number; output?: number }>) ?? {}}
             fallback={Number(legacy.default ?? 0)} legacy={legacy}
@@ -97,10 +105,10 @@ async function Section({ id }: { id: SectionId }) {
             billed={costs?.calibrated_rates ?? {}}
             modelNames={(models.data?.models ?? []).filter((m) => m.available !== false).map((m) => m.name)} />
         )}
-        <p className="text-xs text-muted-foreground">
+        {view === "rates" && <p className="text-xs text-muted-foreground">
           Spend by stage, model, run and day, and reconciling with Snowflake billing, are on{" "}
           <Link href="/audit?tab=cost" className="text-primary hover:underline">Audit &gt; Cost</Link>.
-        </p>
+        </p>}
       </div>
     );
   }
@@ -169,7 +177,7 @@ async function Overview() {
       </Panel>
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <Stat label="Default AI model" value={<span className="font-mono text-base">{String(s.LLM_MODEL?.value ?? "not set")}</span>}
-              hint={<>{byStage ? `${byStage} stage override(s)` : "No stage overrides"} · {go("models", "Manage")}</>} />
+              hint={<>{byStage ? `${byStage} stage override(s)` : "No stage overrides"} · {go("models&view=stages", "Manage")}</>} />
         <Stat label="AI credits, 30 days" value={cost ? (cost.credits ?? cost.estimated_cost).toFixed(2) : "-"}
               hint={<>{cost?.actual_credits ? `${cost.actual_credits.toFixed(2)} billed` : "Estimated"} · <Link href="/audit?tab=cost" className="text-xs text-primary hover:underline">Details</Link></>} />
         <Stat label="Rules changed" value={rules ? rules.overridden.length : "-"} hint={<>From the platform defaults · {go("rules", "Review")}</>} />
@@ -178,7 +186,7 @@ async function Overview() {
       </div>
       {rateCount === 0 && (
         <Panel title="AI cost uses learned rates" description="No rate card is set, so estimates use the credits per million tokens this account was actually billed for each model, learned from Snowflake's Cortex usage on every reconcile. Set a rate card to use contracted rates instead."
-               actions={<Link href="/admin?section=models" className="rounded-md border px-3 py-1.5 text-xs font-medium hover:bg-muted">Open rate card</Link>} />
+               actions={<Link href="/admin?section=models&view=rates" className="rounded-md border px-3 py-1.5 text-xs font-medium hover:bg-muted">Open rate card</Link>} />
       )}
     </div>
   );
