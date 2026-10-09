@@ -1526,6 +1526,18 @@ class CreateDomain(BaseModel):
     description: Optional[str] = Field(default=None, max_length=4000)
 
 
+def _domain_snapshot(db: Db, domain_id: Optional[str], kind: str, note: Optional[str] = None) -> Optional[int]:
+    """Record a domain version after a change (no-op when nothing changed). Never fails the request."""
+    if not domain_id:
+        return None
+    from services.knowledge.domain_versions import snapshot
+
+    try:
+        return snapshot(lambda sql, params: db.query(sql, params), db.execute, domain_id, kind, note)
+    except Exception:
+        return None
+
+
 @app.post("/api/domains")
 def create_domain(body: CreateDomain, db: Db = Depends(current_db)):
     name = body.domain_name.strip()
@@ -1547,7 +1559,21 @@ def create_domain(body: CreateDomain, db: Db = Depends(current_db)):
         )
     except Exception as exc:
         raise _snowflake_error(exc) from exc
+    if _has_domain_members(db):  # whoever creates a domain owns it
+        db.execute("""MERGE INTO KNOWLEDGE.DOMAIN_MEMBER T USING (SELECT %s AS DOMAIN_ID, CURRENT_USER() AS USER_NAME) S
+                         ON T.DOMAIN_ID = S.DOMAIN_ID AND T.USER_NAME = S.USER_NAME AND T.ROLE = 'OWNER'
+                      WHEN NOT MATCHED THEN INSERT (DOMAIN_ID, USER_NAME, ROLE) VALUES (S.DOMAIN_ID, S.USER_NAME, 'OWNER')""",
+                   (domain_id,))
+    _domain_snapshot(db, domain_id, "CREATE", "Domain created")
     return {"domain": {"domain_id": domain_id, "domain_name": name}, "created": True}
+
+
+def _has_domain_members(db: Db) -> bool:
+    try:
+        db.query("SELECT 1 FROM KNOWLEDGE.DOMAIN_MEMBER LIMIT 1")
+        return True
+    except Exception:
+        return False
 
 
 @app.get("/api/runs/{run_id}/target-suggestions")
@@ -4682,6 +4708,7 @@ def land_external(source_id: str, body: LandRequest, db: Db = Depends(current_db
 
 class RulesUpdate(BaseModel):
     overrides: dict = Field(default_factory=dict)
+    note: Optional[str] = Field(default=None, max_length=2000)
 
 
 def _put_config(db: Db, key: str, value: dict, description: str) -> None:
@@ -4744,6 +4771,7 @@ def put_domain_rules(domain_id: str, body: RulesUpdate, db: Db = Depends(current
         (json.dumps(overrides), domain_id),
     )
     _RULES_CACHE.clear()
+    _domain_snapshot(db, domain_id, "RULES", body.note or "Rules changed")
     return get_rules(domain_id, db)
 
 
@@ -4847,6 +4875,7 @@ def import_domain_pack(body: PackImport, db: Db = Depends(current_db)):
         raise _snowflake_error(exc) from exc
     _DOMAIN_VOCAB.update(at=0.0, domains=[])
     _RULES_CACHE.clear()
+    _domain_snapshot(db, result.get("domain_id"), "IMPORT", "Pack imported")
     return result
 
 
@@ -5183,6 +5212,7 @@ def delete_domain(domain_id: str, force: bool = False, db: Db = Depends(current_
     db.execute("UPDATE KNOWLEDGE.DOMAIN_KNOWLEDGE SET STATUS = 'RETIRED', UPDATED_AT = CURRENT_TIMESTAMP() "
                "WHERE DOMAIN_ID = %s AND IS_CURRENT AND STATUS = 'ACTIVE'", (domain_id,))
     _domain_caches_changed()
+    _domain_snapshot(db, domain_id, "DELETE", "Domain deleted")
     return {"domain_id": domain_id, "deleted": True, "active_runs": len(active)}
 
 
@@ -5202,6 +5232,7 @@ def restore_domain(domain_id: str, db: Db = Depends(current_db)):
     db.execute("UPDATE KNOWLEDGE.DOMAIN_KNOWLEDGE SET STATUS = 'ACTIVE', UPDATED_AT = CURRENT_TIMESTAMP() "
                "WHERE DOMAIN_ID = %s AND IS_CURRENT AND STATUS = 'RETIRED'", (domain_id,))
     _domain_caches_changed()
+    _domain_snapshot(db, domain_id, "RESTORE", "Domain restored")
     return {"domain_id": domain_id, "restored": True}
 
 
@@ -5252,6 +5283,9 @@ def decide_domain_suggestion(domain_id: str, body: DomainDecision, db: Db = Depe
 
     result = _domain_ai(db, decide, domain_id, body.model_dump_json())
     _domain_caches_changed()
+    if body.decision == "ACCEPTED":
+        _domain_snapshot(db, domain_id, "SUGGESTION", f"AI suggestion accepted: {str(body.item.get('kind') or '').lower()} "
+                                                      f"{body.item.get('title') or body.item.get('name') or ''}".strip())
     return result
 
 
@@ -6097,3 +6131,7 @@ app.include_router(skill_builder_router)
 from app.knowledge_api import router as knowledge_router  # noqa: E402
 
 app.include_router(knowledge_router)
+
+from app.domains_api import router as domains_router  # noqa: E402
+
+app.include_router(domains_router)

@@ -1,0 +1,40 @@
+-- Domains as versioned, owned products. Every change to a domain (description, owner, rules, detection signals, source
+-- systems, contract, target models) writes a full snapshot; DOMAIN_REGISTRY.VERSION is the newest snapshot. Deploys
+-- snapshot a domain only when its content changed, so the first deploy after this migration records the baseline.
+CREATE TABLE IF NOT EXISTS {{database}}.KNOWLEDGE.DOMAIN_VERSION (
+    DOMAIN_ID     VARCHAR(36)   NOT NULL,
+    VERSION       NUMBER(6,0)   NOT NULL,
+    DESCRIPTION   VARCHAR(4000),
+    OWNER         VARCHAR(256),
+    ACTIVE_FLAG   BOOLEAN,
+    CONFIG_JSON   VARIANT,
+    TARGETS_JSON  VARIANT,          -- [{table, description, active, columns: [{name, type, nullable, key, pii, definition}]}]
+    CHECKSUM      VARCHAR(64)   NOT NULL,
+    CHANGE_KIND   VARCHAR(32),      -- CREATE | EDIT | RULES | SUGGESTION | IMPORT | DEPLOY | DELETE | RESTORE | ROLLBACK
+    CHANGE_NOTE   VARCHAR(2000),
+    CREATED_BY    VARCHAR(256)  DEFAULT CURRENT_USER(),
+    CREATED_AT    TIMESTAMP_LTZ DEFAULT CURRENT_TIMESTAMP(),
+    CONSTRAINT PK_DOMAIN_VERSION PRIMARY KEY (DOMAIN_ID, VERSION)
+);
+
+-- People responsible for a domain: OWNER (accountable), STEWARD (curates knowledge and rules), EXPERT (asked for advice)
+CREATE TABLE IF NOT EXISTS {{database}}.KNOWLEDGE.DOMAIN_MEMBER (
+    DOMAIN_ID   VARCHAR(36)   NOT NULL,
+    USER_NAME   VARCHAR(256)  NOT NULL,
+    ROLE        VARCHAR(16)   NOT NULL,
+    ADDED_BY    VARCHAR(256)  DEFAULT CURRENT_USER(),
+    ADDED_AT    TIMESTAMP_LTZ DEFAULT CURRENT_TIMESTAMP(),
+    CONSTRAINT PK_DOMAIN_MEMBER PRIMARY KEY (DOMAIN_ID, USER_NAME, ROLE)
+);
+
+-- the registry's single OWNER becomes the first owner member
+MERGE INTO {{database}}.KNOWLEDGE.DOMAIN_MEMBER T
+USING (SELECT DOMAIN_ID, UPPER(OWNER) AS USER_NAME FROM {{database}}.KNOWLEDGE.DOMAIN_REGISTRY
+        WHERE OWNER IS NOT NULL AND TRIM(OWNER) <> '' AND UPPER(OWNER) NOT IN ('SEED', 'GDP', 'PLATFORM')) S
+ON T.DOMAIN_ID = S.DOMAIN_ID AND T.USER_NAME = S.USER_NAME AND T.ROLE = 'OWNER'
+WHEN NOT MATCHED THEN INSERT (DOMAIN_ID, USER_NAME, ROLE, ADDED_BY) VALUES (S.DOMAIN_ID, S.USER_NAME, 'OWNER', 'MIGRATION');
+
+GRANT SELECT, INSERT ON TABLE {{database}}.KNOWLEDGE.DOMAIN_VERSION TO DATABASE ROLE {{database}}.DATA_ENGINEER;
+GRANT SELECT, INSERT, DELETE ON TABLE {{database}}.KNOWLEDGE.DOMAIN_MEMBER TO DATABASE ROLE {{database}}.DATA_ENGINEER;
+GRANT SELECT ON TABLE {{database}}.KNOWLEDGE.DOMAIN_VERSION TO DATABASE ROLE {{database}}.VIEWER;
+GRANT SELECT ON TABLE {{database}}.KNOWLEDGE.DOMAIN_MEMBER TO DATABASE ROLE {{database}}.VIEWER;
