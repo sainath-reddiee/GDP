@@ -76,8 +76,8 @@ def new_key(domain_name: str, knowledge_type: str, title: str) -> str:
     return f"{str(domain_name).lower()}.{knowledge_type.lower()}.{slug(title)}.{uuid.uuid4().hex[:6]}"
 
 
-def editable(created_by: Optional[str]) -> Tuple[bool, Optional[str]]:
-    if str(created_by or "").upper() == "SEED":
+def editable(created_by: Optional[str], origin: Optional[str] = None) -> Tuple[bool, Optional[str]]:
+    if str(origin or "").upper() == "SEED" or (not origin and str(created_by or "").upper() == "SEED"):
         return False, "Comes from a repository pack and is re-applied on every deploy; add your own item instead."
     return True, None
 

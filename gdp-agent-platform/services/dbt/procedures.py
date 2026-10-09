@@ -118,19 +118,11 @@ def _branch_plan(session, run_id: str, payload: Dict[str, Any], run_name: str) -
 def _store_branch(session, run_id: str, domain_id: str, plan: Dict[str, str], instruction: str) -> None:
     if not domain_id:
         return
-    ref = f"dbt.branch.{run_id}"
-    session.sql("""UPDATE KNOWLEDGE.DOMAIN_KNOWLEDGE SET IS_CURRENT = FALSE, STATUS = 'RETIRED'
-                   WHERE SOURCE_REFERENCE = ? AND IS_CURRENT""", params=[ref]).collect()
-    version = (scalar(session, "SELECT MAX(VERSION) FROM KNOWLEDGE.DOMAIN_KNOWLEDGE WHERE SOURCE_REFERENCE = ?",
-                      [ref]) or 0) + 1
-    insert_rows(session, "KNOWLEDGE.DOMAIN_KNOWLEDGE",
-                ["KNOWLEDGE_ID", "DOMAIN_ID", "KNOWLEDGE_TYPE", "TITLE", "CONTENT", "CONTENT_JSON",
-                 "TAGS", "SOURCE_REFERENCE", "STATUS", "VERSION", "IS_CURRENT", "CREATED_BY"],
-                ["?", "?", "'TRANSFORMATION_RULE'", "?", "?", "PARSE_JSON(?)", "PARSE_JSON(?)", "?",
-                 "'ACTIVE'", "?::NUMBER", "TRUE", "CURRENT_USER()"],
-                [[str(uuid.uuid4()), domain_id, f"dbt branch plan {run_id}"[:500],
-                  clip(instruction, 8000), {**plan, "run_id": run_id},
-                  ["DBT", "BRANCH", "RELEASE"], ref, version]])
+    from services.knowledge.writer import remember
+
+    remember(session, domain_id=domain_id, kind="TRANSFORMATION_RULE", key=f"dbt.branch.{run_id}",
+             title=f"dbt branch plan {run_id}", content=instruction, content_json={**plan, "run_id": run_id},
+             tags=["DBT", "BRANCH", "RELEASE"], origin="DBT", run_id=run_id, by_domain=False)
 
 
 def generate_dbt_simple(session, run_id: str) -> Dict[str, Any]:

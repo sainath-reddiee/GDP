@@ -341,13 +341,17 @@ def context(session, run_id: str) -> Dict[str, Any]:
                              WHERE TARGET_TABLE_ID = ? ORDER BY ORDINAL_POSITION""", [t["TARGET_TABLE_ID"]])]
             models.append({"fqn": f"{t['TARGET_DATABASE']}.{t['TARGET_SCHEMA']}.{t['TARGET_TABLE']}".upper(),
                            "description": t["DESCRIPTION"], "columns": cols})
-        knowledge = [f"[{k['KNOWLEDGE_TYPE']}] {k['TITLE']}: {str(k['CONTENT'] or '')[:300]}" for k in _rows(
-            session, """SELECT KNOWLEDGE_TYPE, TITLE, CONTENT FROM KNOWLEDGE.DOMAIN_KNOWLEDGE
+        picked = _rows(
+            session, """SELECT KNOWLEDGE_ID, KNOWLEDGE_TYPE, TITLE, CONTENT FROM KNOWLEDGE.DOMAIN_KNOWLEDGE
                          WHERE DOMAIN_ID = ? AND IS_CURRENT AND COALESCE(STATUS, 'ACTIVE') = 'ACTIVE'
                            AND KNOWLEDGE_TYPE IN ('MODEL_DEFINITION', 'NAMING_STANDARD', 'GLOSSARY', 'MAPPING_PATTERN',
                                                   'BUSINESS_RULE')
                          ORDER BY IFF(KNOWLEDGE_TYPE = 'MODEL_DEFINITION', 0, 1), UPDATED_AT DESC NULLS LAST
-                         LIMIT 40""", [domain_id])]
+                         LIMIT 40""", [domain_id])
+        knowledge = [f"[{k['KNOWLEDGE_TYPE']}] {k['TITLE']}: {str(k['CONTENT'] or '')[:300]}" for k in picked]
+        from services.knowledge.writer import record_usage
+
+        record_usage(session, run_id, "MODELING", [k["KNOWLEDGE_ID"] for k in picked])
     try:
         skills = use_stage(session, "MODELING", run_id=run_id, excerpt=1500)
     except Exception:
@@ -587,6 +591,7 @@ def _remember(session, domain_id: str, run_id: str, design: Dict[str, Any], conv
         try:
             _knowledge(session, domain_id, "MODEL_DEFINITION",
                        f"Model {entity['entity_name']}: {entity.get('purpose') or entity['kind'].lower()}",
-                       content, f"model.{reg['fqn'].upper()}", ["MODEL_DESIGN", conv.get("preset") or "NONE", *user_tags])
+                       content, f"model.{reg['fqn'].upper()}", ["MODEL_DESIGN", conv.get("preset") or "NONE", *user_tags],
+                       "MODELING", run_id)
         except Exception:
             continue

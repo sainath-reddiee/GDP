@@ -222,21 +222,18 @@ def _remember(session, run_id: str, ctx: Dict[str, Any], results: List[Dict[str,
     domain = ctx.get("domain_id")
     if not domain:
         return
+    from services.knowledge.writer import remember
+
     for r in results:
         if r["outcome"] != "PASS" or r.get("origin") not in ("AI", "USER"):
             continue
         key = f"qa.test.{r['test_id']}"
         content = f"{r.get('title')}. Expected: {r.get('expected') or 'see SQL'}.\n\n{r.get('sql')}"
         try:
-            session.sql("""MERGE INTO KNOWLEDGE.DOMAIN_KNOWLEDGE K
-                           USING (SELECT ? AS SOURCE_REFERENCE) S ON K.SOURCE_REFERENCE = S.SOURCE_REFERENCE AND K.IS_CURRENT
-                           WHEN MATCHED THEN UPDATE SET CONTENT = ?, UPDATED_AT = CURRENT_TIMESTAMP()
-                           WHEN NOT MATCHED THEN INSERT (KNOWLEDGE_ID, DOMAIN_ID, KNOWLEDGE_TYPE, TITLE, CONTENT, TAGS,
-                                                         SOURCE_REFERENCE, STATUS, VERSION, IS_CURRENT, CREATED_BY)
-                                VALUES (UUID_STRING(), ?, 'QA_TEST', ?, ?, PARSE_JSON('["QA", "PASSED"]'), ?, 'ACTIVE',
-                                        1, TRUE, CURRENT_USER())""",
-                        params=[key, clip(content, 16000), domain, clip(r.get("title"), 500), clip(content, 16000),
-                                key]).collect()
+            remember(session, domain_id=domain, kind="QA_TEST", key=key, title=r.get("title") or key, content=content,
+                     content_json={"test_id": r["test_id"], "sql": r.get("sql"), "expected": r.get("expected"),
+                                   "origin": r.get("origin"), "run_id": run_id},
+                     tags=["QA", "PASSED"], origin="QA", run_id=run_id, by_domain=False)
         except Exception:
             continue
 

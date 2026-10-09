@@ -22,5 +22,6 @@ export async function copilotAsk(body: {
 }
 
 export async function saveCopilotAnswer(body: { domain_id: string; knowledge_type: string; title: string; content: string }) {
-  return attemptValue(() => api<{ knowledge_id: string }>("/api/knowledge", { method: "POST", body: JSON.stringify(body) }));
+  // copilot answers wait in the Knowledge inbox unless the learning policy says otherwise
+  return attemptValue(() => api<{ knowledge_id: string; status: string }>("/api/knowledge", { method: "POST", body: JSON.stringify({ ...body, origin: "COPILOT" }) }));
 }

@@ -40,9 +40,10 @@ function SaveAnswer({ data, question }: { data: CopilotAnswer; question: string 
   const [open, setOpen] = useState(false);
   const [kind, setKind] = useState("BUSINESS_RULE");
   const [title, setTitle] = useState(question.slice(0, 120));
-  const [state, setState] = useState<"idle" | "saving" | "saved" | string>("idle");
+  const [state, setState] = useState<"idle" | "saving" | "saved" | "queued" | string>("idle");
   if (!data.domain?.id) return null;
   if (state === "saved") return <span className="flex items-center gap-1 text-[11px] text-success"><Check className="h-3 w-3" /> Saved to {data.domain.name} knowledge</span>;
+  if (state === "queued") return <span className="flex items-center gap-1 text-[11px] text-sky-700 dark:text-sky-300"><Check className="h-3 w-3" /> Sent to the Knowledge inbox for a steward to approve</span>;
   return open ? (
     <div className="mt-2 space-y-2 rounded-lg border bg-muted/30 p-2 text-xs">
       <div className="flex gap-2">
@@ -57,7 +58,7 @@ function SaveAnswer({ data, question }: { data: CopilotAnswer; question: string 
         <Button size="sm" disabled={!title.trim() || state === "saving"} onClick={async () => {
           setState("saving");
           const r = await saveCopilotAnswer({ domain_id: data.domain!.id!, knowledge_type: kind, title: title.trim(), content: data.answer.slice(0, 8000) });
-          setState(r.ok ? "saved" : r.error);
+          setState(r.ok ? (r.data.status === "PROPOSED" ? "queued" : "saved") : r.error);
         }}>{state === "saving" ? <Loader2 className="h-3 w-3 animate-spin" /> : null} Save</Button>
         <Button size="sm" variant="ghost" onClick={() => setOpen(false)}>Cancel</Button>
         {state !== "idle" && state !== "saving" && <span className="text-destructive">{state}</span>}

@@ -73,11 +73,15 @@ def knowledge(session, domain_id: Optional[str], run_id: str) -> Dict[str, Any]:
     out: Dict[str, Any] = {"rules": [], "profile": [], "checks": []}
     if domain_id:
         try:
-            out["rules"] = [f"[{r['KNOWLEDGE_TYPE']}] {r['TITLE']}: {clip(r['CONTENT'], 300)}" for r in rows(session, """
-                SELECT KNOWLEDGE_TYPE, TITLE, CONTENT FROM KNOWLEDGE.DOMAIN_KNOWLEDGE
+            found = rows(session, """
+                SELECT KNOWLEDGE_ID, KNOWLEDGE_TYPE, TITLE, CONTENT FROM KNOWLEDGE.DOMAIN_KNOWLEDGE
                  WHERE DOMAIN_ID = ? AND IS_CURRENT AND COALESCE(STATUS, 'ACTIVE') = 'ACTIVE'
                    AND KNOWLEDGE_TYPE IN ('BUSINESS_RULE', 'GLOSSARY', 'TRANSFORMATION_RULE', 'EXCEPTION', 'QA_TEST')
-                 ORDER BY IFF(KNOWLEDGE_TYPE = 'BUSINESS_RULE', 0, 1), UPDATED_AT DESC NULLS LAST LIMIT 30""", [domain_id])]
+                 ORDER BY IFF(KNOWLEDGE_TYPE = 'BUSINESS_RULE', 0, 1), UPDATED_AT DESC NULLS LAST LIMIT 30""", [domain_id])
+            out["rules"] = [f"[{r['KNOWLEDGE_TYPE']}] {r['TITLE']}: {clip(r['CONTENT'], 300)}" for r in found]
+            from services.knowledge.writer import record_usage
+
+            record_usage(session, run_id, "QA", [r["KNOWLEDGE_ID"] for r in found])
         except Exception:
             pass
     try:
