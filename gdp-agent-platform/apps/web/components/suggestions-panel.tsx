@@ -38,6 +38,9 @@ export function SuggestionsPanel({ source, summary, effect, intro, canAct = true
   const [expanded, setExpanded] = useState(placement === "inline");
 
   useEffect(() => {
+    // the top bar does nothing until the user asks; the inline panel shows earlier answers straight away
+    setData(null);
+    if (placement === "top") return;
     let live = true;
     source.load().then((r) => {
       if (!live) return;
@@ -49,6 +52,15 @@ export function SuggestionsPanel({ source, summary, effect, intro, canAct = true
     return () => { live = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [source.key]);
+
+  /** Top bar click: show the earlier review when there is one, otherwise run a new one. */
+  const open_ = () => start(async () => {
+    setError(""); setNotice(""); setExpanded(true);
+    const stored = await source.load();
+    if (stored.ok && stored.data.scopes.some((sc) => sc.generated)) { setData(stored.data); return; }
+    const r = await source.ask(false);
+    if (r.ok) setData(r.data); else setError(r.error);
+  });
 
   const ask = (refresh: boolean) => start(async () => {
     setError(""); setNotice(""); setExpanded(true);
@@ -83,14 +95,14 @@ export function SuggestionsPanel({ source, summary, effect, intro, canAct = true
   const scopeErrors = data?.scopes.filter((s) => s.error).map((s) => s.error) ?? [];
 
   const top = placement === "top";
-  const status = !data ? "loading…" : !generated ? "not run yet"
+  const status = pending && !data ? "reviewing…" : !data ? "runs only when you click it" : !generated ? "not run yet"
     : open ? `${open} open suggestion${open === 1 ? "" : "s"}` : "agrees with the rules";
 
   return (
     <section className={`rounded-xl border border-violet-200 bg-violet-50/40 dark:border-violet-900 dark:bg-violet-950/20 ${top ? "px-4 py-2.5" : "p-4"}`}>
       <div className="flex flex-wrap items-center gap-2">
         {top ? (
-          <button type="button" onClick={() => (generated ? setExpanded((v) => !v) : ask(false))}
+          <button type="button" onClick={() => (generated ? setExpanded((v) => !v) : open_())}
                   disabled={pending || (!generated && !canAct)} aria-expanded={expanded}
                   className="flex items-center gap-2 rounded-full bg-gradient-to-r from-violet-600 to-primary px-3 py-1 text-sm font-medium text-white shadow-sm transition hover:shadow-md disabled:opacity-60">
             {pending && !busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
