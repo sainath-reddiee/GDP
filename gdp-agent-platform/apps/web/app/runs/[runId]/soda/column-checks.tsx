@@ -183,8 +183,8 @@ export function ColumnChecks({ runId, checks, sttmLines, latest, history, canRev
   };
 
   return (
-    <div className="grid min-h-[560px] gap-0 overflow-hidden rounded-xl border lg:grid-cols-[300px_minmax(0,1fr)]">
-      <div className="flex max-h-[75vh] flex-col border-b bg-muted/20 lg:border-b-0 lg:border-r">
+    <div className="grid overflow-hidden rounded-xl border lg:h-[min(76vh,780px)] lg:grid-cols-[300px_minmax(0,1fr)]">
+      <div className="flex min-h-0 flex-col border-b bg-muted/20 lg:border-b-0 lg:border-r">
         <div className="space-y-2 border-b p-3">
           <div className="relative">
             <Search className="pointer-events-none absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
@@ -201,7 +201,7 @@ export function ColumnChecks({ runId, checks, sttmLines, latest, history, canRev
             ))}
           </div>
         </div>
-        <div ref={railRef} role="listbox" aria-label="Columns" tabIndex={0} onKeyDown={onRailKey} className="flex-1 overflow-y-auto p-1.5 outline-none">
+        <div ref={railRef} role="listbox" aria-label="Columns" tabIndex={0} onKeyDown={onRailKey} className="max-h-[50vh] flex-1 overflow-y-auto p-1.5 outline-none lg:max-h-none">
           {visible.length === 0 && <p className="p-3 text-xs text-muted-foreground">No columns match.</p>}
           {visible.map((c) => {
             const active = c.key === current.key;
@@ -283,7 +283,7 @@ function ColumnPane({ runId, column, results, history, canReview, columnNames, o
 
   const line = column.line;
   return (
-    <div className="flex max-h-[75vh] min-w-0 flex-col">
+    <div className="flex min-h-0 min-w-0 flex-col">
       <div className="space-y-2 border-b p-4">
         <div className="flex flex-wrap items-start gap-3">
           <div className="min-w-0 flex-1">
@@ -387,10 +387,11 @@ function CheckCard({ runId, check, result, history, canReview, columnNames }: {
   });
 
   return (
-    <div className={cn("rounded-xl border bg-card transition",
-                       failing ? "border-destructive/40" : proposed ? "border-warning/40" : "",
-                       rejected && "opacity-60")}>
-      <div className="flex flex-wrap items-start gap-3 p-3.5">
+    <div className={cn("overflow-hidden rounded-xl border border-l-4 bg-card shadow-sm transition hover:shadow",
+                       failing ? "border-l-destructive" : result?.outcome === "WARN" ? "border-l-warning"
+                         : proposed ? "border-l-warning/70" : rejected ? "border-l-muted opacity-60"
+                         : result?.outcome === "PASS" ? "border-l-success" : "border-l-primary/40")}>
+      <div className="flex flex-wrap items-start gap-3 px-4 py-3">
         <div className="min-w-0 flex-1 space-y-1">
           <p className={cn("text-[15px] font-medium leading-snug", rejected && "line-through")}>{describeCheck(check)}</p>
           <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
@@ -402,10 +403,12 @@ function CheckCard({ runId, check, result, history, canReview, columnNames }: {
           {check.client_requirement && <p className="truncate text-xs text-muted-foreground" title={check.client_requirement}>{check.client_requirement}</p>}
         </div>
         <div className="flex shrink-0 flex-col items-end gap-1">
-          <span className="flex items-center gap-2">
-            <Spark points={history} />
-            <OutcomeBadge outcome={result?.outcome} />
-          </span>
+          {result ? (
+            <span className="flex items-center gap-2">
+              <Spark points={history} />
+              <OutcomeBadge outcome={result.outcome} />
+            </span>
+          ) : <span className="text-[11px] text-muted-foreground/70">not scanned yet</span>}
           {result && result.measured != null && (
             <span className="font-mono text-[11px] text-muted-foreground">
               {fmtNumber(result.measured)}{result.threshold ? ` vs ${result.threshold}` : ""}{result.failed_rows ? ` · ${fmtNumber(result.failed_rows)} rows` : ""}
@@ -430,7 +433,7 @@ function CheckCard({ runId, check, result, history, canReview, columnNames }: {
         </div>
       )}
 
-      <div className="flex flex-wrap items-center gap-1 border-t px-2.5 py-1.5">
+      <div className="flex flex-wrap items-center gap-1 border-t bg-muted/20 px-2.5 py-1">
         <button type="button" onClick={() => setDetails((v) => !v)} aria-expanded={details}
                 className="flex items-center gap-1 rounded px-1.5 py-1 text-xs text-muted-foreground hover:text-foreground">
           <ChevronDown className={cn("h-3.5 w-3.5 transition-transform", details && "rotate-180")} />Details

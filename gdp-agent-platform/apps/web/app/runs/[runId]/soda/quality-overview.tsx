@@ -76,8 +76,12 @@ export function QualityOverview({ runId, data, checkCount, canScan }: {
 
   if (!data.ready) {
     return (
-      <div className="rounded-lg border border-dashed p-6 text-sm text-muted-foreground">
-        Scan history is not available yet: the QUALITY schema has not been deployed to this environment (migration V016).
+      <div className="flex flex-col items-center gap-2 rounded-xl border border-dashed p-10 text-center">
+        <p className="text-base font-medium">Scan results are not switched on here yet</p>
+        <p className="max-w-lg text-sm text-muted-foreground">
+          This environment is missing the tables that keep scan results. Once the latest release is deployed,
+          Run scan executes every check in Snowflake and the results, failed rows and history appear here.
+        </p>
       </div>
     );
   }
