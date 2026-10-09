@@ -1271,15 +1271,73 @@ def _catalog_profile(db: Db, database: Optional[str], schema: Optional[str], tab
     return profile
 
 
+def _match_knowledge(db: Db, tables: list[str]) -> dict:
+    """What the platform already knows about these source tables: glossary synonyms (synonym -> target column),
+    earlier runs that mapped them, and approved model designs whose lineage lists them."""
+    from services.source.model_match import norm
+
+    names = sorted({str(t).upper() for t in tables})
+    synonyms: dict[str, str] = {}
+    history: list[dict] = []
+    lineage: dict[str, set] = {}
+    try:
+        for k in db.query("SELECT CONTENT_JSON FROM KNOWLEDGE.DOMAIN_KNOWLEDGE WHERE IS_CURRENT AND STATUS = 'ACTIVE' "
+                          "AND KNOWLEDGE_TYPE = 'GLOSSARY'"):
+            content = _json(k.get("content_json")) or {}
+            target = norm(content.get("target_column"))
+            for word in content.get("synonyms") or []:
+                if target and norm(word):
+                    synonyms.setdefault(norm(word), target)
+    except Exception:
+        pass
+    try:
+        history = db.query("""SELECT DISTINCT UPPER(O.OBJECT_NAME) AS SOURCE_TABLE, UPPER(R.TARGET_MODEL) AS TARGET_FQN,
+                                     R.RUN_NAME, R.RUN_ID
+                                FROM CORE.WORKFLOW_RUN R JOIN SOURCE.SOURCE_OBJECT O ON O.RUN_ID = R.RUN_ID AND O.SELECTED_FLAG
+                               WHERE R.TARGET_MODEL IS NOT NULL AND R.DELETED_AT IS NULL
+                                 AND R.CURRENT_STATE NOT IN ('DRAFT', 'SOURCE_PENDING', 'SOURCE_REGISTERED', 'CANCELLED')
+                                 AND ARRAY_CONTAINS(UPPER(O.OBJECT_NAME)::VARIANT, PARSE_JSON(%s)::ARRAY)""",
+                           (json.dumps(names),))
+    except Exception:
+        history = []
+    try:
+        for k in db.query("SELECT CONTENT_JSON FROM KNOWLEDGE.DOMAIN_KNOWLEDGE WHERE IS_CURRENT AND STATUS = 'ACTIVE' "
+                          "AND KNOWLEDGE_TYPE = 'MODEL_DEFINITION' AND CONTENT_JSON:fqn IS NOT NULL"):
+            content = _json(k.get("content_json")) or {}
+            sources = {str(s).split(".")[0].upper() for c in content.get("columns") or [] for s in c.get("source_columns") or []}
+            if sources & set(names):
+                lineage.setdefault(str(content.get("fqn")).upper(), set()).update(sources)
+    except Exception:
+        pass
+    return {"synonyms": synonyms, "history": history, "lineage": lineage}
+
+
 def _suggest_for_catalog(db: Db, database: Optional[str], schema: Optional[str], tables: list[str],
                          domain: Optional[str] = None) -> dict:
     from services.source.catalog_display import display_domain_name, workspace_targets
     from services.source.intent import suggest_models
+    from services.source.model_match import recommend, score_targets
 
     targets = _targets_with_columns(db)
     scoped = workspace_targets(targets, database, schema)
     profile = _catalog_profile(db, database, schema, tables)
     suggestions = suggest_models(profile, targets, tables)
+    # richer evidence from knowledge: glossary synonyms, earlier runs and approved model designs
+    source_cols: dict[str, list[str]] = {}
+    for row in profile:
+        if row.get("column_name"):
+            source_cols.setdefault(str(row["table_name"]).upper(), []).append(str(row["column_name"]))
+    for t in tables:
+        source_cols.setdefault(str(t).upper(), [])
+    knowledge = _match_knowledge(db, tables)
+    matches = score_targets(source_cols, [{**t, "fqn": t.get("fqn") or ".".join(
+        str(t.get(k)) for k in ("target_database", "target_schema", "target_table"))} for t in targets],
+        knowledge["synonyms"], knowledge["history"], knowledge["lineage"], domain)
+    rich = {str(m["fqn"]).upper(): m for m in matches}
+    suggestions = [({**item, **rich[str(item.get("fqn") or "").upper()]} if str(item.get("fqn") or "").upper() in rich else item)
+                   for item in suggestions]
+    listed = {str(i.get("fqn") or "").upper() for i in suggestions}
+    suggestions = [m for m in matches if str(m["fqn"]).upper() not in listed and m["score"] >= 0.3] + suggestions
     scoped_fqns = {str(t.get("fqn") or "").upper() for t in scoped}
     existing = []
     for item in suggestions:
@@ -1318,8 +1376,18 @@ def _suggest_for_catalog(db: Db, database: Optional[str], schema: Optional[str],
         shown = str(display_domain_name(domain) or domain).upper()
         existing.sort(key=lambda i: (str(i.get("domain_name") or "").upper() not in {domain.upper(), shown},
                                      -float(i.get("score") or 0)))
+    for item in existing:
+        hit = rich.get(str(item.get("fqn") or "").upper())
+        if hit and hit["score"] > float(item.get("score") or 0):
+            item.update({**hit, "domain_name": item.get("domain_name")})
+    existing.sort(key=lambda i: -float(i.get("score") or 0))
     related = bool(existing) or bool(scoped)
+    proposed_name = proposed[0]["target_table"] if proposed else "DIM_SOURCE"
+    bands = _ui_bands(db)
     return {
+        "recommendation": recommend([i for i in existing if i.get("coverage_target") is not None] or existing,
+                                    proposed_name, float(bands.get("model_match_strong") or 0.6)),
+        "proposed": proposed[0] if proposed else None,
         "related": related,
         "suggestions": existing if related else existing + proposed,
         "targets": [{**row, "domain_name": display_domain_name(row.get("domain_name"))} for row in scoped],
@@ -4495,8 +4563,22 @@ def catalog_analyze(body: CatalogAnalyzeRequest, db: Db = Depends(current_db)):
         columns = [c for t in tables for c in (meta.get(t) or {}).get("column_names") or []]
     candidates = _infer_domains(db, tables, columns, schema)[:3]
     detected = candidates[0] if candidates and candidates[0]["confidence"] >= _min_confidence(db) else None
+    schema_domains: list = []
+    if meta:
+        try:
+            inferred, schema_domains = _inferred_table_domains(db, list(meta.values()), {}, schema)
+        except Exception:
+            inferred = {}
+    if not detected and meta:
+        # the same rule as the schema view: a table inherits the schema's lead domain when it hits its signals
+        picked = [inferred[t] for t in tables if t in inferred]
+        if picked:
+            best = max(picked, key=lambda d: d["confidence"])
+            detected = {**best, "inherited_from_schema": bool(schema_domains) and best["domain_id"] == schema_domains[0]["domain_id"]}
+            candidates = [detected] + [c for c in candidates if c["domain_id"] != detected["domain_id"]]
     return {"tables": summary, "relationships": relationships, "graph": graph,
-            "domain": {"detected": detected, "candidates": candidates},
+            "domain": {"detected": detected, "candidates": candidates,
+                       "schema": schema_domains[0] if schema_domains else None},
             "bands": _ui_bands(db),
             # The panel always asks "GDP or not"; this is only the preselection.
             "suggested_standard": "GDP" if detected and detected.get("standard") == "GDP" else "GENERIC",
