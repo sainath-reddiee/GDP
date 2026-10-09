@@ -24,35 +24,26 @@ export default async function ProfilePage({ params }: { params: { runId: string 
     <StageGate state={state} stage="PROFILING">
       <AiSuggestions runId={params.runId} stage="PROFILING" canAct={!state.is_archived} />
       <Card>
-        <CardHeader>
-          <CardTitle>Profiling</CardTitle>
-          <CardDescription>
-            Statistics are computed in SQL. The model writes a description per table and only names a semantic type
-            when the deterministic rules cannot. PII samples are masked.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          {graph?.intent?.path === "profile_suggest" && (
-            <p className="mb-3 text-sm text-muted-foreground">
-              This source was marked new. After profiling, suggested existing models and a proposed
-              new table name appear below. Download the graph to keep the recommendation.
-            </p>
-          )}
-          {canRun && tables.length > 0 && (
-            <p className="mb-3 text-sm text-muted-foreground">
-              {cachedCount} of {tables.length} landed table{tables.length === 1 ? "" : "s"} already have a stored
-              profile and will be reused without scanning the data again.
-            </p>
-          )}
+        <CardHeader className="flex flex-row flex-wrap items-start justify-between gap-3 space-y-0">
+          <div className="min-w-0 space-y-1">
+            <CardTitle>Profiles</CardTitle>
+            <CardDescription>
+              Computed in SQL, PII masked, stored per table and reused by every run.
+              {source === "cache" ? " Showing the stored profiles; this run has none of its own." : ""}
+              {canRun && tables.length > 0 ? ` ${cachedCount} of ${tables.length} tables already have a stored profile.` : ""}
+            </CardDescription>
+          </div>
           {canRun && (
-            <div className="flex flex-wrap items-start gap-3">
+            <div className="flex flex-wrap items-start gap-2">
               <StageAction
+                size="sm"
                 label={state.current_state === "PROFILING_PENDING" ? "Retry profiling" : "Start profiling"}
                 pendingLabel="Profiling tables…"
                 action={runProfiling.bind(null, params.runId)}
               />
               {cachedCount > 0 && (
                 <StageAction
+                  size="sm"
                   variant="outline"
                   label="Profile all from scratch"
                   pendingLabel="Profiling every table…"
@@ -61,28 +52,19 @@ export default async function ProfilePage({ params }: { params: { runId: string 
               )}
             </div>
           )}
-        </CardContent>
-      </Card>
-      {(tables.length > 0 || columns.length > 0) && (
-        <Card>
-          <CardHeader>
-            <CardTitle>Profiles</CardTitle>
-            <CardDescription>
-              Stored per source table and shared by every run.{source === "cache" ? " This run has no profile rows of its own, so the stored profiles are shown." : ""}
-              {" "}Pick a table for its quality grade, column statistics and suggested checks; re-profile when its data changed in a way the row count does not show.
-            </CardDescription>
-          </CardHeader>
+        </CardHeader>
+        {(tables.length > 0 || columns.length > 0) && (
           <CardContent>
             <ProfileWorkspace runId={params.runId} tables={tables} columns={columns} canRefresh={canRefresh} />
           </CardContent>
-        </Card>
-      )}
+        )}
+      </Card>
       {graph && (graph.suggestions.length > 0 || graph.targets.length > 0) && (
         <Card>
           <CardHeader>
             <CardTitle>Suggested models</CardTitle>
             <CardDescription>
-              Existing targets scored by column-name overlap. A proposed name is included when the
+              {graph?.intent?.path === "profile_suggest" ? "This source was marked new. " : ""}Existing targets scored by column-name overlap. A proposed name is included when the
               source looks net-new. Nothing is created until you register or map it.
             </CardDescription>
           </CardHeader>

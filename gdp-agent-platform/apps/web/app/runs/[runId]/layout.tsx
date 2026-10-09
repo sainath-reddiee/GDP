@@ -42,7 +42,9 @@ async function RunShell({ runId, children }: { runId: string; children: ReactNod
         <Link href={`/runs/${runId}/domain`} className="text-sm font-medium text-primary hover:underline">
           Knowledge pack{packLabel ? `: ${packLabel}` : ""}
         </Link>
-        <Link href={`/runs/${runId}/audit`} className="ml-auto text-sm font-medium text-primary hover:underline">
+        {/* stage pages put their "Ask AI to review" button here (components/suggestions-panel.tsx) */}
+        <span id="run-ai-slot" className="ml-auto flex items-center" />
+        <Link href={`/runs/${runId}/audit`} className="text-sm font-medium text-primary hover:underline">
           Audit trail
         </Link>
         <ArchiveToggle runId={runId} archived={Boolean(state.is_archived)} />
