@@ -1,5 +1,6 @@
 "use client";
 
+import { TagEditor } from "@/components/tag-editor";
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import Link from "next/link";
 import { Archive, ArchiveRestore, Trash2 } from "lucide-react";
@@ -230,7 +231,10 @@ export function RunTable({
               )}
               <TD>
                 <Link href={`/runs/${r.run_id}`} className="font-medium text-primary hover:underline">{r.run_name}</Link>
-                <div className="font-mono text-[11px] text-muted-foreground">{r.run_id.slice(0, 8)}</div>
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span className="font-mono text-[11px] text-muted-foreground">{r.run_id.slice(0, 8)}</span>
+                  <TagEditor entityType="RUN" entityKey={r.run_id} initial={r.tags ?? []} canEdit={!r.is_archived} compact />
+                </div>
               </TD>
               <TD>{displayDomain(r.domain_name) ?? <span className="text-muted-foreground">—</span>}</TD>
               <TD className="font-mono text-xs">{sourceLabel(r)}</TD>

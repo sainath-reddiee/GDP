@@ -66,6 +66,7 @@ export type RunSummary = {
   source_system_name?: string | null;
   source_database?: string | null;
   source_schema?: string | null;
+  tags?: string[];
   domain_name?: string | null;
   age_minutes?: number | null;
   table_count: number;
@@ -277,6 +278,7 @@ export type ProfileStoreRow = {
   is_approximate: boolean | null; profiled_by: string | null; profiled_at: string;
   status: string | null; status_updated_at: string | null; error_message: string | null;
   avg_null_percentage: number | null; key_candidates: number | null; pii_columns: number | null;
+  tags?: string[];
 };
 
 export type Scorecard = {

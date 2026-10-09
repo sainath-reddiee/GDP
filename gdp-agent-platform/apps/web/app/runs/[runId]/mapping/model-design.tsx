@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input, Textarea } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
+import { TagEditor } from "@/components/tag-editor";
 import {
   approveDesign, checkDesign, diffDesigns, generateDesign, saveDesign,
   type Attribute, type Conventions, type Design, type DesignVersion, type DiffChange, type Entity, type Issue,
@@ -261,6 +262,7 @@ export function ModelDesign({ runId, data, canApply, state }: { runId: string; d
         <h2 className="text-lg font-semibold">Data model</h2>
         {shown && <Badge variant={shown.status === "APPROVED" ? "success" : "outline"}>v{shown.version} · {shown.status.toLowerCase()}{dirty ? " · edited" : ""}</Badge>}
         {data.target_model && <span className="font-mono text-xs text-muted-foreground">target {data.target_model}</span>}
+        {data.target_model && data.target_model.split(".").length === 3 && <TagEditor entityType="MODEL" entityKey={data.target_model} compact />}
         <div className="ml-auto flex flex-wrap items-center gap-2">
           {versions.length > 0 && (
             <label className="flex items-center gap-1 text-xs text-muted-foreground"><History className="h-3.5 w-3.5" />

@@ -23,7 +23,7 @@ SORTS = {"newest": "R.CREATED_AT DESC", "oldest": "R.CREATED_AT ASC", "updated":
 
 
 def runs_where(predicate: str, include_test: bool, q: Optional[str], domain_id: Optional[str],
-               stage: Optional[str], needs_review: bool) -> Tuple[str, List[Any]]:
+               stage: Optional[str], needs_review: bool, tag: Optional[str] = None) -> Tuple[str, List[Any]]:
     where = ["R.DELETED_AT IS NULL", "(R.ENVIRONMENT <> 'TEST' OR %s)", predicate]
     params: List[Any] = [bool(include_test)]
     if q and q.strip():
@@ -37,6 +37,10 @@ def runs_where(predicate: str, include_test: bool, q: Optional[str], domain_id: 
         where.append("R.CURRENT_STAGE = %s"); params.append(stage.upper())
     if needs_review:
         where.append(f"R.CURRENT_STATE IN ({_REVIEW_SQL}) AND NOT COALESCE(R.IS_ARCHIVED, FALSE)")
+    if tag:
+        where.append("EXISTS (SELECT 1 FROM CORE.TAG_ASSIGNMENT T WHERE T.ENTITY_TYPE = 'RUN' "
+                     "AND T.ENTITY_KEY = R.RUN_ID AND T.TAG = %s)")
+        params.append(tag)
     return " AND ".join(where), params
 
 
