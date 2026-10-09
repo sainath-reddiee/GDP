@@ -11,6 +11,7 @@ import {
   HealthRing, OUTCOME_LABEL, OutcomeBadge, Spark, fmtDuration, fmtNumber,
   type CheckResult, type HistoryPoint, type Outcome, type ScanRow, type ScansPayload,
 } from "./quality-shared";
+import { useScrollLock } from "@/components/use-scroll-lock";
 
 const DIMENSIONS = ["completeness", "uniqueness", "validity", "timeliness", "schema", "consistency", "accuracy"];
 const ORDER: Outcome[] = ["FAIL", "ERROR", "WARN", "NOT_EVALUATED", "PASS"];
@@ -219,6 +220,7 @@ function Stat({ color, label, value }: { color: string; label: string; value: nu
 }
 
 export function ResultDrawer({ result, history, onClose }: { result: CheckResult; history: HistoryPoint[]; onClose: () => void }) {
+  useScrollLock();
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
     window.addEventListener("keydown", onKey);
@@ -243,7 +245,7 @@ export function ResultDrawer({ result, history, onClose }: { result: CheckResult
           </div>
           <Button size="sm" variant="ghost" aria-label="Close" onClick={onClose}><X className="h-4 w-4" /></Button>
         </div>
-        <div className="flex-1 space-y-4 overflow-auto p-4 text-sm">
+        <div className="flex-1 space-y-4 overflow-auto overscroll-contain p-4 text-sm">
           <div className="grid grid-cols-3 gap-3">
             <Tile label="Measured" value={fmtNumber(result.measured)} />
             <Tile label="Threshold" value={result.threshold || "–"} />

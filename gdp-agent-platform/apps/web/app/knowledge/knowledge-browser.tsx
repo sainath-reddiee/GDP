@@ -9,6 +9,7 @@ import { cn } from "@/lib/utils";
 import {
   addKnowledge, editKnowledge, knowledgeHistory, setKnowledgeStatus, type ItemInput, type KnowledgeItem,
 } from "./actions";
+import { useScrollLock } from "@/components/use-scroll-lock";
 
 export const TYPES = ["GLOSSARY", "BUSINESS_RULE", "TRANSFORMATION_RULE", "MAPPING_PATTERN", "MODEL_DEFINITION",
   "NAMING_STANDARD", "DBT_PATTERN", "SODA_PATTERN", "EXCEPTION", "STTM_TEMPLATE", "ONBOARDING_GUIDE", "COLUMN_RULE", "QA_TEST"];
@@ -147,6 +148,7 @@ export function KnowledgeBrowser({ items, total, domains, offset, limit }: {
 function ItemEditor({ domains, item, onClose, onSaved }: {
   domains: Domain[]; item: KnowledgeItem | null; onClose: () => void; onSaved: () => void;
 }) {
+  useScrollLock();
   const [domainId, setDomainId] = useState(item?.domain_id ?? domains[0]?.domain_id ?? "");
   const [type, setType] = useState(item?.knowledge_type ?? "GLOSSARY");
   const [title, setTitle] = useState(item?.title ?? "");
@@ -172,7 +174,7 @@ function ItemEditor({ domains, item, onClose, onSaved }: {
     <div className="fixed inset-0 z-50 flex justify-end">
       <button type="button" aria-label="Close" className="absolute inset-0 bg-black/30" onClick={onClose} />
       <aside role="dialog" aria-label={item ? "Edit knowledge" : "Add knowledge"}
-             className="relative flex h-full w-[560px] max-w-full flex-col gap-3 overflow-y-auto border-l bg-background p-5 shadow-2xl">
+             className="relative flex h-full w-[560px] max-w-full flex-col gap-3 overflow-y-auto overscroll-contain border-l bg-background p-5 shadow-2xl">
         <h3 className="text-base font-semibold">{item ? `Edit (saves version ${item.version + 1})` : "Add knowledge"}</h3>
         <label className="text-xs font-medium">Domain
           <select value={domainId} disabled={!!item} onChange={(e) => setDomainId(e.target.value)}

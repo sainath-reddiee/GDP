@@ -15,6 +15,7 @@ import { OracleWizard } from "./oracle-wizard";
 import {
   landExternalFiles, listExternalFiles, loadConnectors, registerExternalSource, uploadExternalFiles,
 } from "./actions";
+import { useScrollLock } from "@/components/use-scroll-lock";
 
 export type ManagedSource = { id: string; name: string; connector: string; database: string; schema: string };
 
@@ -63,6 +64,7 @@ export function ConnectSource({ initial, startAtConnectors, onClose, onSnowflake
   onSnowflake: () => void;
   onOpenSchema: (target: { database: string; schema: string }) => void;
 }) {
+  useScrollLock();
   const [step, setStep] = useState<Step>(initial ? "manage" : startAtConnectors ? "connector" : "choose");
   const [connectors, setConnectors] = useState<Connector[]>([]);
   const [connector, setConnector] = useState<Connector | null>(null);
@@ -142,7 +144,7 @@ export function ConnectSource({ initial, startAtConnectors, onClose, onSnowflake
     && connector.fields.filter((f) => ["url", "storage_integration"].includes(f)).every((f) => config[f]);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/30 p-6">
+    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto overscroll-contain bg-black/30 p-6">
       <div role="dialog" aria-label="Connect source"
            className={cn("relative w-full rounded-2xl border bg-background shadow-2xl",
              step === "manage" && managed?.connector === "oracle" ? "max-w-6xl" : step === "form" && isOracle ? "max-w-5xl" : "max-w-3xl")}>

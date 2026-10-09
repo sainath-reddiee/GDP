@@ -5,6 +5,7 @@ import { Crosshair, Download, KeyRound, Maximize2, Minimize2, Minus, Plus, Searc
 import type { ModelGraph } from "@/app/onboarding/intent-types";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { useScrollLock } from "@/components/use-scroll-lock";
 
 function download(name: string, body: string | Blob, type: string) {
   const blob = body instanceof Blob ? body : new Blob([body], { type });
@@ -43,6 +44,7 @@ export function ModelEr({ graph, runName }: { graph: ModelGraph; runName?: strin
   const [view, setView] = useState<View>({ x: 0, y: 0, k: 1 });
   const [size, setSize] = useState({ w: 800, h: 520 });
   const [full, setFull] = useState(false);
+  useScrollLock(full);
   const [detail, setDetail] = useState<Detail>("keys");
   const [hover, setHover] = useState<string | null>(null);
   const [pinned, setPinned] = useState<string | null>(null);
@@ -447,7 +449,7 @@ export function ModelEr({ graph, runName }: { graph: ModelGraph; runName?: strin
         </div>
 
         {pinnedBox && (
-          <aside className={cn("w-72 shrink-0 overflow-y-auto rounded-lg border bg-card p-3 text-xs", full ? "h-full" : "h-[560px]")}>
+          <aside className={cn("w-72 shrink-0 overflow-y-auto overscroll-contain rounded-lg border bg-card p-3 text-xs", full ? "h-full" : "h-[560px]")}>
             <div className="mb-2 flex items-start gap-2">
               <span className={cn("mt-1 h-2 w-2 shrink-0 rounded-full", pinnedBox.kind === "s" ? "bg-primary" : "bg-success")} />
               <div className="min-w-0">

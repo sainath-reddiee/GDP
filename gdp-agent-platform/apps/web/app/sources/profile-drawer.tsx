@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { useCopilot } from "@/components/copilot/copilot-provider";
 import { loadCatalogProfile } from "./actions";
+import { useScrollLock } from "@/components/use-scroll-lock";
 
 export type DrawerTab = "overview" | "columns" | "checks";
 
@@ -298,7 +299,7 @@ export function TableProfileView({ database, schema, table, initialTab = "overvi
           </button>
         ))}
       </div>
-      <div className="flex-1 space-y-4 overflow-y-auto px-5 py-4">
+      <div className="flex-1 space-y-4 overflow-y-auto overscroll-contain px-5 py-4">
         {!data && !error && (
           <p className="flex items-center gap-2 text-sm text-muted-foreground">
             <Loader2 className="h-4 w-4 animate-spin" /> Reading the staged profile…
@@ -332,6 +333,7 @@ export function ProfileDrawer({ database, schema, table, initialTab = "overview"
   database: string; schema: string; table: string; initialTab?: DrawerTab; onClose: () => void;
   onReprofile?: (table: string) => void;
 }) {
+  useScrollLock();
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
     window.addEventListener("keydown", onKey);

@@ -183,7 +183,7 @@ function CopilotShell({ children }: { children: ReactNode }) {
             </button>
           </header>
 
-          <div ref={listRef} className="flex-1 space-y-4 overflow-y-auto px-4 py-4">
+          <div ref={listRef} className="flex-1 space-y-4 overflow-y-auto overscroll-contain px-4 py-4">
             {messages.length === 0 && (
               <div className="space-y-3">
                 <p className="text-sm text-muted-foreground">

@@ -13,6 +13,7 @@ import { ModelEr } from "@/components/model-er";
 import { cn } from "@/lib/utils";
 import { analyzeTables, catalogModelingRun } from "./actions";
 import { GradeChip } from "./profile-drawer";
+import { useScrollLock } from "@/components/use-scroll-lock";
 
 type Mode = "existing" | "new";
 type Standard = "GDP" | "GENERIC";
@@ -21,6 +22,7 @@ type Standard = "GDP" | "GENERIC";
 export function ModelPanel({ database, schema, tables, domains, onClose }: {
   database: string; schema: string; tables: string[]; domains: DomainRow[]; onClose: () => void;
 }) {
+  useScrollLock();
   const router = useRouter();
   const [data, setData] = useState<AnalyzeResult | null>(null);
   const [error, setError] = useState("");
@@ -119,7 +121,7 @@ export function ModelPanel({ database, schema, tables, domains, onClose }: {
           </button>
         </header>
 
-        <div className="flex-1 space-y-6 overflow-y-auto px-6 py-5">
+        <div className="flex-1 space-y-6 overflow-y-auto overscroll-contain px-6 py-5">
           {!data && !error && (
             <p className="flex items-center gap-2 text-sm text-muted-foreground">
               <Loader2 className="h-4 w-4 animate-spin" /> Reading staged profiles, inferring relationships and matching models…
