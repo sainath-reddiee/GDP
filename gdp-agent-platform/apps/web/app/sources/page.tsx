@@ -9,7 +9,7 @@ const inventoryOf = (t: { database: string; schema: string }) =>
     `/api/catalog/inventory?database=${encodeURIComponent(t.database)}&schema=${encodeURIComponent(t.schema)}`,
   ).catch(() => null);
 
-export default async function SourcesPage({ searchParams }: { searchParams: { db?: string; schema?: string } }) {
+export default async function SourcesPage({ searchParams }: { searchParams: { db?: string; schema?: string; mode?: string } }) {
   // An explicit ?db=&schema= wins and its inventory loads alongside everything else; otherwise reopen the schema
   // profiled most recently. Nothing is preselected when nothing was profiled yet.
   const explicit = searchParams.db && searchParams.schema
@@ -27,6 +27,7 @@ export default async function SourcesPage({ searchParams }: { searchParams: { db
   const inventory = explicit ? explicitInventory : target ? await inventoryOf(target) : null;
   return (
     <SourcesHub initialOverview={overview} initialStore={profiles} databases={databases} domains={domains}
-                initialTarget={target} initialInventory={inventory} />
+                initialTarget={target} initialInventory={inventory}
+                initialMode={searchParams.mode === "external" || searchParams.mode === "store" ? searchParams.mode : "snowflake"} />
   );
 }

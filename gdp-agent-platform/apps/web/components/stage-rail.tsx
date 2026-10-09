@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
@@ -119,10 +120,30 @@ export function StageRail({ runId, stages }: { runId: string; stages: StageStatu
   const qaStatus: NodeStatus = qaLane ? qaLane.status : sttm === "LOCKED" ? "LOCKED" : "AVAILABLE";
   const spine = ["SOURCE", "PROFILING", "MAPPING", "STTM"];
   const overview = path === `/runs/${runId}`;
+  // shrink the whole rail to fit narrower screens instead of scrolling sideways (down to 75%, then scroll)
+  const outer = useRef<HTMLElement>(null);
+  const inner = useRef<HTMLDivElement>(null);
+  const [scale, setScale] = useState(1);
+  useEffect(() => {
+    const o = outer.current, i = inner.current;
+    if (!o || !i) return;
+    const fit = () => {
+      // measure at full size, then apply directly so React's unchanged style prop cannot leave a stale zoom
+      i.style.zoom = "";
+      const s = Math.min(1, (o.clientWidth - 32) / i.scrollWidth);
+      const next = s >= 0.75 ? s : 1;
+      i.style.zoom = next < 1 ? String(next) : "";
+      setScale(next);
+    };
+    fit();
+    const ro = new ResizeObserver(fit);
+    ro.observe(o);
+    return () => ro.disconnect();
+  }, [stages, path]);
 
   return (
-    <nav aria-label="Run lineage" className="surface overflow-x-auto px-4 py-3">
-      <div className="flex min-w-max items-center">
+    <nav ref={outer} aria-label="Run lineage" className="surface overflow-x-auto px-4 py-3">
+      <div ref={inner} className="flex min-w-max items-center" style={scale < 1 ? { zoom: scale } : undefined}>
         <Link href={`/runs/${runId}`} prefetch
               className={cn("flex items-center gap-2 rounded-xl px-2.5 py-2 text-sm font-semibold transition",
                 overview ? "bg-accent ring-1 ring-primary/20" : "hover:bg-muted")}>

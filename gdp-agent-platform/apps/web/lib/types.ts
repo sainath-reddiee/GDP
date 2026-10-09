@@ -85,6 +85,12 @@ export type ArchiveResult = { archived: boolean; changed: string[]; skipped: { r
 
 export type ProfileCacheTable = {
   table_name: string;
+  database_name?: string | null;
+  schema_name?: string | null;
+  key_candidates?: number | null;
+  pii_columns?: number | null;
+  avg_null_percentage?: number | null;
+  quality?: Scorecard | null;
   status: "CACHED" | "UNPROFILED";
   profiled_at: string | null;
   row_count: number | null;

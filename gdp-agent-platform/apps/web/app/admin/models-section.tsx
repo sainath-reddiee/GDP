@@ -20,6 +20,7 @@ const STAGE_INFO: Record<string, string> = {
   DBT: "dbt model review and enhance",
   KNOWLEDGE: "Domain knowledge, packs and answers",
   SUGGESTIONS: "Inline suggestions across stages",
+  COPILOT: "The copilot assistant on every page",
 };
 const FAMILY_LABEL: Record<string, string> = {
   claude: "Anthropic", openai: "OpenAI", llama: "Meta Llama", mistral: "Mistral", deepseek: "DeepSeek",

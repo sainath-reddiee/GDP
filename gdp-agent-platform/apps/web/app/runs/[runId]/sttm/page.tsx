@@ -34,6 +34,7 @@ export default async function SttmPage({ params }: { params: { runId: string } }
   ]));
   return (
     <StageGate state={state} stage="STTM">
+      <AiSuggestions runId={params.runId} stage="STTM" canAct={canEdit} />
       <Card>
         <CardHeader>
           <CardTitle>STTM</CardTitle>
@@ -52,11 +53,19 @@ export default async function SttmPage({ params }: { params: { runId: string } }
             />
           )}
           {contract.sttm && (
-            <div className="mt-4 space-y-1 text-sm">
-              <div>Version {contract.sttm.sttm_version} <Badge variant="outline">{contract.sttm.status}</Badge></div>
-              <div>Grain: {String(design.grain ?? "—")}</div>
-              <div>Business keys: {JSON.stringify(design.business_keys ?? [])}</div>
-              <div>SCD: {String(design.scd_type ?? "—")} · incremental {String(design.incremental_strategy ?? "—")}</div>
+            <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
+              {[
+                ["Version", <span key="v" className="flex items-center gap-2">v{contract.sttm.sttm_version} <Badge variant="outline">{contract.sttm.status}</Badge></span>],
+                ["Lines", `${contract.lines.length}`],
+                ["Grain", String(design.grain ?? "—")],
+                ["Business keys", Array.isArray(design.business_keys) && design.business_keys.length ? (design.business_keys as string[]).join(", ") : "—"],
+                ["Load", `SCD ${String(design.scd_type ?? "—")} · ${String(design.incremental_strategy ?? "—")}`],
+              ].map(([k, v]) => (
+                <div key={String(k)} className="min-w-0 rounded-lg border bg-card px-3 py-2">
+                  <p className="text-[10px] uppercase tracking-wide text-muted-foreground">{k}</p>
+                  <div className="truncate font-mono text-sm font-medium" title={typeof v === "string" ? v : undefined}>{v}</div>
+                </div>
+              ))}
             </div>
           )}
         </CardContent>
@@ -83,7 +92,6 @@ export default async function SttmPage({ params }: { params: { runId: string } }
           canEdit={canEdit}
         />
       )}
-      <AiSuggestions runId={params.runId} stage="STTM" canAct={canEdit} />
     </StageGate>
   );
 }

@@ -315,6 +315,12 @@ def review_transition(session, run_id: str, to_state: str, decision: str,
                 "REVIEWED_AT = CURRENT_TIMESTAMP() WHERE RUN_ID = ? AND IS_CURRENT AND STATUS <> 'REJECTED'",
                 params=[run_id],
             ).collect()
+            try:
+                from services.soda.procedures import store_approved_set
+
+                store_approved_set(session, run_id)
+            except Exception:
+                pass  # knowledge is a by-product; the approval itself must not fail on it
         if from_state == "DBT_REVIEW" and to_state == "DBT_APPROVED":
             session.sql(
                 "UPDATE CODEGEN.DBT_GENERATION_REGISTRY SET GENERATION_STATUS = 'APPROVED' "

@@ -24,6 +24,7 @@ export default async function DomainPage({ params }: { params: { runId: string }
   const packName = state.run.domain_name ?? accepted?.domain_name ?? null;
   return (
     <>
+      <AiSuggestions runId={params.runId} stage="DOMAIN" canAct={canPick} />
       <Card>
         <CardHeader>
           <CardTitle>Knowledge pack</CardTitle>
@@ -116,7 +117,6 @@ export default async function DomainPage({ params }: { params: { runId: string }
           )}
         </CardContent>
       </Card>
-      <AiSuggestions runId={params.runId} stage="DOMAIN" canAct={canPick} />
     </>
   );
 }

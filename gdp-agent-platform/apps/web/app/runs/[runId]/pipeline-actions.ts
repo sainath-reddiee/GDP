@@ -311,3 +311,35 @@ export async function decideSuggestion(runId: string, stage: SuggestionStage, bo
   if (result.ok) revalidatePath(`/runs/${runId}`, "layout");
   return result;
 }
+
+export type CheckDraft = {
+  target_column?: string | null;
+  severity: "FAIL" | "WARN";
+  requirement?: string;
+  definition: Record<string, unknown>;
+};
+
+export async function addSodaCheck(runId: string, check: CheckDraft) {
+  const result = await attemptValue(() =>
+    api<{ expectation_id: string; sodacl: string }>(`/api/runs/${runId}/soda/checks`, {
+      method: "POST",
+      body: JSON.stringify(check),
+    }),
+  );
+  if (result.ok) revalidatePath(`/runs/${runId}`, "layout");
+  return result;
+}
+
+export type ScanSummary = {
+  scan_id: string; target: string; mode: "MODEL" | "SOURCE"; checks: number; passed: number; warned: number;
+  failed: number; not_evaluated: number; errors: number; health: number | null; duration_ms: number;
+  rows_scanned?: number | null;
+};
+
+export async function runQualityScan(runId: string) {
+  const result = await attemptValue(() =>
+    api<ScanSummary>(`/api/runs/${runId}/soda/scan`, { method: "POST" }),
+  );
+  if (result.ok) revalidatePath(`/runs/${runId}`, "layout");
+  return result;
+}
