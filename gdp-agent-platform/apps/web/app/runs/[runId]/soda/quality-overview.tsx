@@ -30,7 +30,7 @@ export function RunScanButton({ runId, disabled, label = "Run scan" }: { runId: 
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
   return (
     <div className="flex flex-col items-end gap-1">
-      <Button type="button" disabled={disabled || pending}
+      <Button type="button" size="sm" disabled={disabled || pending}
               onClick={() => start(async () => {
                 setMessage(null);
                 const r = await runQualityScan(runId);

@@ -139,9 +139,7 @@ export function PackGate({ runId, currentState, complete }: { runId: string; cur
   const [note, setNote] = useState("Data Quality checks match the STTM and the client quality need.");
   const [error, setError] = useState("");
   const [pending, start] = useTransition();
-  if (currentState === "SODA_APPROVED") {
-    return <p className="rounded-lg border border-success/30 bg-success/5 px-3 py-2 text-sm text-success">Data Quality pack approved.</p>;
-  }
+  // the approved state is a pill in the page header; this only asks for the approval itself
   if (currentState !== "SODA_REVIEW" || !complete) return null;
   return (
     <div className="flex flex-wrap items-center gap-2 rounded-lg border border-primary/30 bg-primary/5 px-3 py-2">

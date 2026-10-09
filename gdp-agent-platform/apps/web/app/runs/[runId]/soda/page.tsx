@@ -32,10 +32,10 @@ const EMPTY_SCANS: ScansPayload = { scans: [], latest: [], history: {}, ready: f
 function Kpi({ label, value, tone }: { label: string; value: string | number; tone?: "good" | "warn" | "bad" }) {
   const color = tone === "good" ? "text-success" : tone === "warn" ? "text-warning" : tone === "bad" ? "text-destructive" : "";
   return (
-    <div className="min-w-[96px] rounded-lg border bg-card px-3 py-2">
-      <p className={`text-xl font-semibold tabular-nums ${color}`}>{value}</p>
-      <p className="text-[11px] text-muted-foreground">{label}</p>
-    </div>
+    <span className="whitespace-nowrap text-sm">
+      <span className={`font-semibold tabular-nums ${color}`}>{value}</span>{" "}
+      <span className="text-muted-foreground">{label}</span>
+    </span>
   );
 }
 
@@ -70,13 +70,26 @@ export default async function SodaPage({ params, searchParams }: {
     <StageGate state={state} stage="SODA">
       <AiSuggestions runId={params.runId} stage="SODA" canAct={canImport} />
 
-      <section className="space-y-4 rounded-xl border bg-card p-5">
-        <div className="flex flex-wrap items-start justify-between gap-4">
-          <div>
-            <h2 className="text-xl font-semibold">Data Quality checks</h2>
-            <p className="text-sm text-muted-foreground">What the data must satisfy, column by column. Review, scan in Snowflake, ship to Soda.</p>
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
+      <section className="space-y-3 rounded-xl border bg-card p-4">
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+          <h2 className="text-lg font-semibold" title="What the data must satisfy, column by column. Review, scan in Snowflake, ship to Soda.">
+            Data Quality
+          </h2>
+          {soda.status.total > 0 && (
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+              <Kpi label="checks" value={soda.status.total} />
+              <Kpi label="to review" value={soda.status.proposed} tone={soda.status.proposed ? "warn" : "good"} />
+              <Kpi label="approved" value={soda.status.approved} tone="good" />
+              {mapped.length > 0 && uncovered > 0 && <Kpi label="columns without checks" value={uncovered} tone="warn" />}
+              {last && <Kpi label="health" value={last.health ?? "–"}
+                            tone={last.health == null ? undefined : last.health >= 90 ? "good" : last.health >= 70 ? "warn" : "bad"} />}
+              {last && failing > 0 && <Kpi label="failing" value={failing} tone="bad" />}
+              {state.current_state === "SODA_APPROVED" && (
+                <span className="rounded-full border border-success/30 bg-success/10 px-2 py-0.5 text-xs font-medium text-success">pack approved</span>
+              )}
+            </div>
+          )}
+          <div className="ml-auto flex flex-wrap items-center gap-2">
             {canGenerate && (
               <StageAction size="sm" variant={soda.status.total ? "ghost" : "default"}
                            label={soda.status.total ? "Regenerate" : "Generate checks"}
@@ -88,18 +101,6 @@ export default async function SodaPage({ params, searchParams }: {
             <DownloadMenu yaml={soda.yaml} gxSuite={soda.gx_suite} />
           </div>
         </div>
-
-        {soda.status.total > 0 && (
-          <div className="flex flex-wrap gap-2">
-            <Kpi label="checks" value={soda.status.total} />
-            <Kpi label="to review" value={soda.status.proposed} tone={soda.status.proposed ? "warn" : "good"} />
-            <Kpi label="approved" value={soda.status.approved} tone="good" />
-            {mapped.length > 0 && <Kpi label="columns without checks" value={uncovered} tone={uncovered ? "warn" : "good"} />}
-            <Kpi label="last scan health" value={last?.health ?? "–"}
-                 tone={last?.health == null ? undefined : last.health >= 90 ? "good" : last.health >= 70 ? "warn" : "bad"} />
-            {last && <Kpi label="failing now" value={failing} tone={failing ? "bad" : "good"} />}
-          </div>
-        )}
 
         <PackGate runId={params.runId} currentState={state.current_state}
                   complete={soda.status.total > 0 && soda.status.proposed === 0} />
