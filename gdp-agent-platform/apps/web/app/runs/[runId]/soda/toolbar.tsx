@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input, Label, Textarea } from "@/components/ui/input";
 import { approveStage } from "../actions";
 import { importSoda, saveSodaDecisions } from "../pipeline-actions";
+import { useScrollLock } from "@/components/use-scroll-lock";
 
 function download(content: string, name: string, type: string) {
   const url = URL.createObjectURL(new Blob([content], { type }));
@@ -19,6 +20,7 @@ function download(content: string, name: string, type: string) {
 /** Client quality brief upload, kept behind a button so the checks stay the focus. */
 export function BriefImport({ runId, brief }: { runId: string; brief: { title: string; content: string } | null }) {
   const [open, setOpen] = useState(false);
+  useScrollLock(open);
   const [text, setText] = useState("");
   const [filename, setFilename] = useState("");
   const [error, setError] = useState("");

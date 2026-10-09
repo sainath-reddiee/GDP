@@ -12,6 +12,7 @@ import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { oracleColumns, oracleIngest, type IngestOptions } from "./actions";
 import { fmtBytes, fmtDuration, fmtRows, Segmented } from "./oracle-ui";
+import { useScrollLock } from "@/components/use-scroll-lock";
 
 type Mode = "replace" | "append" | "merge";
 
@@ -29,6 +30,7 @@ export function IngestDialog({ sourceId, tables, landing, onClose, onStarted }: 
   sourceId: string; tables: OracleTable[]; landing: { database: string; schema: string };
   onClose: () => void; onStarted: (jobId: string, tables: string[], profileAfter: boolean) => void;
 }) {
+  useScrollLock();
   const [columns, setColumns] = useState<Record<string, OracleColumn[]> | null>(null);
   const [mode, setMode] = useState<Mode>(() => (tables.every((t) => t.load) && tables.every((t) => t.primary_key.length) ? "merge" : "replace"));
   const [storage, setStorage] = useState<"MANAGED" | "ICEBERG">("MANAGED");
@@ -81,7 +83,7 @@ export function IngestDialog({ sourceId, tables, landing, onClose, onStarted }: 
   });
 
   return (
-    <div className="fixed inset-0 z-[60] flex items-start justify-center overflow-y-auto bg-black/40 p-6">
+    <div className="fixed inset-0 z-[60] flex items-start justify-center overflow-y-auto overscroll-contain bg-black/40 p-6">
       <div role="dialog" aria-label="Extract and land" className="w-full max-w-4xl rounded-2xl border bg-background shadow-2xl">
         <header className="flex items-center gap-3 border-b px-6 py-4">
           <span className="rounded-lg bg-primary/10 p-2 text-primary"><Database className="h-4 w-4" /></span>
