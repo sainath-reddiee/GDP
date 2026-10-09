@@ -12,7 +12,7 @@ import { Markdown } from "@/components/copilot/markdown";
 import { useScrollLock } from "@/components/use-scroll-lock";
 import { cn } from "@/lib/utils";
 import { CategoryIcon } from "./category-icon";
-import { builderCheck, builderDraft, builderQuestions, builderTest, createSkill, listDomains, saveAiVersion } from "./actions";
+import { builderCheck, builderDraft, builderModels, builderQuestions, builderTest, createSkill, listDomains, saveAiVersion } from "./actions";
 import {
   KNOWLEDGE_TYPES, pretty, STAGE_LABELS, type BuilderIssue, type BuilderMode, type BuilderQuestion, type DraftResponse,
   type SkillCategory, type SkillDraft, type SkillTest, type TestSummary,
@@ -57,6 +57,9 @@ export function SkillBuilder({ categories, skills, initialSkill, onClose }: {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState<"" | "questions" | "draft" | "check" | "test" | "save">("");
   const [, start] = useTransition();
+  const [models, setModels] = useState<{ default: string; models: string[] } | null>(null);
+  const [model, setModel] = useState("");
+  useEffect(() => { builderModels().then((r) => { if (r.ok) setModels(r.data); }); }, []);
   const improving = mode === "improve" ? skill : null;
 
   useEffect(() => {
@@ -76,7 +79,7 @@ export function SkillBuilder({ categories, skills, initialSkill, onClose }: {
     mode, goal, category_id: category || null, skill_name: improving,
     answers: questions.map((q, i) => ({ question: q.question, answer: answers[i] ?? "" })).filter((a) => a.answer.trim()),
     domain_id: domain || null, knowledge_types: types, days, document_text: docText, document_name: docName,
-    instructions: [instructions, extra].filter(Boolean).join("\n"),
+    instructions: [instructions, extra].filter(Boolean).join("\n"), model: model || null,
   }), (d) => {
     setResult(d); setDraft(d.draft); setAccepted(d.draft.sections.map(() => true)); setContent(d.content); setIssues(d.issues);
     setTests(d.draft.tests); setSummary(null);
@@ -123,6 +126,12 @@ export function SkillBuilder({ categories, skills, initialSkill, onClose }: {
               <h2 className="text-base font-semibold">{improving ? `Improve ${pretty(improving)} with AI` : "New skill with AI"}</h2>
               <p className="text-xs text-muted-foreground">Drafts are grounded in what you give it, checked, and tested before they are saved as a candidate. Production never changes here.</p>
             </div>
+            <label className="flex items-center gap-1.5 text-[11px] text-muted-foreground" title="Default comes from Admin, AI models, Model per stage (Skills)">Model
+              <Select value={model} onChange={(e) => setModel(e.target.value)} className="h-8 w-52 text-xs" aria-label="Model for this builder session">
+                <option value="">{models ? `Admin default (${models.default})` : "Admin default"}</option>
+                {(models?.models ?? []).filter((m) => m !== models?.default).map((m) => <option key={m} value={m}>{m}</option>)}
+              </Select>
+            </label>
             <button type="button" onClick={onClose} aria-label="Close" className="rounded-md p-1 hover:bg-muted"><X className="h-4 w-4" /></button>
           </div>
           <ol className="mt-4 flex items-center gap-2 text-xs">
@@ -185,7 +194,7 @@ export function SkillBuilder({ categories, skills, initialSkill, onClose }: {
               {mode === "interview" && (
                 <div className="space-y-3">
                   <Button size="sm" variant="outline" disabled={goal.trim().length < 10 || busy === "questions"}
-                          onClick={() => run("questions", () => builderQuestions(goal, category), (d) => { setQuestions(d.questions); setAnswers({}); })}>
+                          onClick={() => run("questions", () => builderQuestions(goal, category, model), (d) => { setQuestions(d.questions); setAnswers({}); })}>
                     {busy === "questions" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <MessageSquareText className="h-3.5 w-3.5" />}
                     {questions.length ? "Ask different questions" : "Ask me clarifying questions"}
                   </Button>
@@ -277,7 +286,7 @@ export function SkillBuilder({ categories, skills, initialSkill, onClose }: {
           {step === 3 && (
             <TestStep tests={tests} setTests={setTests} summary={summary} busy={busy === "test"}
                       baseline={improving ? `production ${pretty(improving)}` : "no skill"}
-                      onRun={() => run("test", () => builderTest(content, tests, improving), setSummary)} />
+                      onRun={() => run("test", () => builderTest(content, tests, improving, model), setSummary)} />
           )}
 
           {step === 4 && draft && (
