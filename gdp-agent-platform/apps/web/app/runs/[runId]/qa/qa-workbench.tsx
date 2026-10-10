@@ -452,7 +452,7 @@ export function QaWorkbench({ runId, suite, results, canRun, canAI = true, canEd
     <div className="space-y-5">
       <div className="space-y-4 rounded-2xl border bg-gradient-to-br from-violet-500/10 via-card to-card p-5 shadow-sm">
         <div className="flex flex-wrap items-start gap-4">
-          <span className="grid h-11 w-11 place-items-center rounded-xl bg-violet-600 text-white shadow-sm"><FlaskConical className="h-5 w-5" /></span>
+          <span className="grid h-11 w-11 place-items-center rounded-xl bg-violet-50 text-violet-600 ring-1 ring-inset ring-violet-100"><FlaskConical className="h-5 w-5" /></span>
           <div className="min-w-0 flex-1">
             <h3 className="text-lg font-semibold tracking-tight">Functional QA tests</h3>
             <p className="text-sm text-muted-foreground">Read-only SQL tests from the STTM, your domain rules and AI. Run them in Snowflake and sign off on the results.</p>

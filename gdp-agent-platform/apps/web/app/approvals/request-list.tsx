@@ -3,7 +3,7 @@
 import { useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Check, ChevronDown, Loader2, ShieldCheck, Undo2, X } from "lucide-react";
+import { CheckCheck, Check, ChevronDown, Loader2, ShieldCheck, Undo2, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/input";
@@ -106,9 +106,16 @@ function Row({ r, me }: { r: ChangeRequest; me: string }) {
 export function RequestList({ requests, scope, me }: { requests: ChangeRequest[]; scope: string; me: string }) {
   if (!requests.length) {
     return (
-      <p className="rounded-xl border border-dashed p-10 text-center text-sm text-muted-foreground">
-        {scope === "inbox" ? "Nothing is waiting for your approval." : "No requests yet."}
-      </p>
+      <div className="surface flex flex-col items-center px-6 py-14 text-center">
+        <span className="grid h-12 w-12 place-items-center rounded-2xl bg-emerald-50 text-emerald-600 ring-1 ring-inset ring-emerald-100">
+          <CheckCheck className="h-6 w-6" />
+        </span>
+        <p className="mt-3 text-sm font-semibold">{scope === "inbox" ? "Inbox zero" : "No requests yet"}</p>
+        <p className="mt-1 max-w-sm text-xs text-muted-foreground">
+          {scope === "inbox" ? "Nothing is waiting for your approval. Changes that need your role show up here."
+            : "Requests appear here when someone asks for a change their role cannot make on its own."}
+        </p>
+      </div>
     );
   }
   return <div className="space-y-2">{requests.map((r) => <Row key={r.request_id} r={r} me={me} />)}</div>;

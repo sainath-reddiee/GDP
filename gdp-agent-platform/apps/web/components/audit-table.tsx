@@ -29,14 +29,15 @@ export function AuditTable({ events, showRun = false }: { events: AuditEvent[]; 
             <TR key={e.event_id}>
               <TD className="whitespace-nowrap text-muted-foreground" title={e.created_at}>{localTime(e.created_at)}</TD>
               {showRun && (
-                <TD><Link href={`/runs/${e.run_id}`} className="text-primary hover:underline">{e.run_name}</Link></TD>
+                <TD className="max-w-[240px]"><Link href={`/runs/${e.run_id}`} title={e.run_name ?? ""} className="block truncate font-medium text-primary hover:underline">{e.run_name}</Link></TD>
               )}
-              <TD className="text-xs" title={e.from_state ?? ""}>{stateLabel(e.from_state)}</TD>
-              <TD className="text-xs" title={e.to_state}>{stateLabel(e.to_state)}</TD>
-              <TD>
-                <Badge variant={e.actor_type === "HUMAN" ? "warning" : "secondary"}>{e.actor_type}</Badge> {e.actor}
+              <TD className="whitespace-nowrap text-xs text-muted-foreground" title={e.from_state ?? ""}>{stateLabel(e.from_state)}</TD>
+              <TD className="whitespace-nowrap text-xs" title={e.to_state}>{stateLabel(e.to_state)}</TD>
+              <TD className="whitespace-nowrap">
+                <Badge variant={e.actor_type === "HUMAN" ? "warning" : "secondary"}>{String(e.actor_type ?? "").toLowerCase()}</Badge>
+                <span className="ml-1.5 text-xs">{e.actor}</span>
               </TD>
-              <TD>{e.reason ?? ""}</TD>
+              <TD className="min-w-[280px] text-xs text-muted-foreground">{e.reason ?? ""}</TD>
             </TR>
           ))}
           {events.length === 0 && (
