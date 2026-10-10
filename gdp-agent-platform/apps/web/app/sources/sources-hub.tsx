@@ -369,7 +369,7 @@ export function SourcesHub({
 
   return (
     <div className="space-y-6 pb-24">
-      <PageHeader eyebrow="Work" title="Sources"
+      <PageHeader eyebrow="Ingest" title="Sources"
                   description="Profile Snowflake tables where they live, land external systems into Snowflake, and reuse every profile in any run. Profiling never copies data."
                   actions={<>
                     <Button variant="outline" size="sm" disabled={refreshing} onClick={() => void refresh()} aria-label="Refresh">

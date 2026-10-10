@@ -49,9 +49,11 @@ PRIVILEGES: Dict[str, Tuple[str, str]] = {
     "CODE.VIEW": ("Integrations", "Search and read indexed client code"),
     "JIRA.READ": ("Jira", "Connect your own Jira account, read issues and triage them against a run"),
     "JIRA.WRITE": ("Jira", "Link issues to runs and tests, comment on and change the status of Jira issues, as yourself"),
+    "OPS.VIEW": ("Operations", "See Airflow pipelines, runs, task logs and incidents"),
+    "OPS.OPERATE": ("Operations", "Poll Airflow now, change DAG settings, and acknowledge, assign, resolve, mute or retry incidents"),
 }
 # Privileges a viewer-style role never needs: holding none of the others means the user can only look.
-READ_ONLY = {"AUDIT.VIEW", "ADMIN.VIEW", "APPROVAL.VIEW", "CODE.VIEW"}
+READ_ONLY = {"AUDIT.VIEW", "ADMIN.VIEW", "APPROVAL.VIEW", "CODE.VIEW", "OPS.VIEW"}
 ALL = "*"
 
 SYSTEM_ROLES: Dict[str, Dict[str, Any]] = {
@@ -71,6 +73,8 @@ SYSTEM_ROLES: Dict[str, Dict[str, Any]] = {
                 "inherits": ["VIEWER"]},
     "QA_ENGINEER": {"description": "Writes and runs QA tests and works Jira issues; no sign-off",
                     "privileges": ["QA.EDIT", "AI.USE", "JIRA.READ", "JIRA.WRITE"], "inherits": ["VIEWER"]},
+    "SUPPORT_ENGINEER": {"description": "Watches Airflow pipelines and works incidents and their Jira tickets",
+                         "privileges": ["OPS.VIEW", "OPS.OPERATE", "AI.USE", "JIRA.READ", "JIRA.WRITE"], "inherits": ["VIEWER"]},
     "CODE_REVIEWER": {"description": "Approves dbt and code review",
                       "privileges": ["REVIEW.APPROVE", "REVIEW.DECIDE", "DBT.EDIT", "AI.USE"], "inherits": ["VIEWER"]},
     "DATA_STEWARD": {"description": "Owns domains and knowledge",
@@ -80,16 +84,17 @@ SYSTEM_ROLES: Dict[str, Dict[str, Any]] = {
     "DATA_ENGINEER": {"description": "Builds runs end to end; approvals go to the owning roles",
                       "privileges": ["SOURCE.CONNECT", "PROFILE.RUN", "RUN.CREATE", "RUN.OPERATE", "RUN.ARCHIVE",
                                      "MODEL.EDIT", "MAPPING.DECIDE", "QA.EDIT", "DBT.EDIT", "TAG.MANAGE", "SKILL.EDIT",
-                                     "REQUEST.CHANGES", "REVIEW.DECIDE", "AI.USE", "JIRA.READ", "JIRA.WRITE"],
+                                     "REQUEST.CHANGES", "REVIEW.DECIDE", "AI.USE", "JIRA.READ", "JIRA.WRITE", "OPS.VIEW",
+                                     "OPS.OPERATE"],
                       "inherits": ["VIEWER"]},
-    "VIEWER": {"description": "Read everything, change nothing (no AI calls, no requests)", "privileges": ["AUDIT.VIEW", "CODE.VIEW"],
+    "VIEWER": {"description": "Read everything, change nothing (no AI calls, no requests)", "privileges": ["AUDIT.VIEW", "CODE.VIEW", "OPS.VIEW"],
                "inherits": []},
 }
 # Privileges added to system roles after their first release: {version: [privilege]}. Bootstrap grants them to the
 # system roles whose spec lists them, once, so existing deployments pick them up without overriding admin edits.
-SYSTEM_VERSION = 5
+SYSTEM_VERSION = 6
 ADDED_PRIVILEGES = {2: ["AI.USE"], 3: ["SKILL.EDIT", "SKILL.RELEASE"], 4: ["INTEGRATION.MANAGE", "CODE.VIEW"],
-                    5: ["JIRA.READ", "JIRA.WRITE"]}
+                    5: ["JIRA.READ", "JIRA.WRITE"], 6: ["OPS.VIEW", "OPS.OPERATE"]}
 
 # Actions routed for approval by default: privilege -> approver role. Everything else is privilege-only.
 DEFAULT_POLICIES: Dict[str, str] = {
@@ -174,6 +179,14 @@ RULES: List[Tuple[str, str, Any, str]] = [
     ("DELETE", r"/api/qa/suites/[^/]+", "QA.EDIT", ""),
     ("POST", r"/api/qa/links", "JIRA.WRITE", "Link a Jira issue to a table or test"),
     ("DELETE", r"/api/qa/links/[^/]+", "JIRA.WRITE", ""),
+    ("POST", r"/api/ops/ingest", None, ""),  # Airflow push: no user session, the HMAC signature is checked by the endpoint
+    ("POST", r"/api/ops/envs", "INTEGRATION.MANAGE", "Add an Airflow environment"),
+    ("PUT", r"/api/ops/envs/[^/]+", "INTEGRATION.MANAGE", "Change an Airflow environment"),
+    ("DELETE", r"/api/ops/envs/[^/]+", "INTEGRATION.MANAGE", "Remove an Airflow environment"),
+    ("POST", r"/api/ops/envs/[^/]+/test", "INTEGRATION.MANAGE", ""),
+    ("POST", r"/api/ops/envs/[^/]+/push-secret", "INTEGRATION.MANAGE", "Rotate an Airflow push secret"),
+    ("POST", r"/api/ops/envs/[^/]+/poll", "OPS.OPERATE", ""),
+    ("PUT", r"/api/ops/dag", "OPS.OPERATE", "Change a DAG's ops settings"),
     ("POST", r"/api/skills/builder/check", None, ""),
     ("POST", r"/api/skills/builder/(questions|draft|test)", "AI.USE", ""),
     ("POST", r"/api/skills", "SKILL.EDIT", "Create a skill"),
@@ -231,6 +244,7 @@ READ_RULES = [(re.compile(r"^/api/(admin/.*|config/(rules|platform|models))$"), 
               (re.compile(r"^/api/runs/[^/]+/jira/.*$"), "JIRA.READ"),
               (re.compile(r"^/api/(audit|costs)(/.*)?$"), "AUDIT.VIEW"),
               (re.compile(r"^/api/code/setup$"), "INTEGRATION.MANAGE"),
+              (re.compile(r"^/api/ops(/.*)?$"), "OPS.VIEW"),
               (re.compile(r"^/api/code/(search|file|lineage|impact|path|neighborhood|usage|summary|repos|repos/[^/]+/(runs|branches|catalog|files))$"), "CODE.VIEW"),
               (re.compile(r"^/api/governance/(roles|users|policies|settings|events|privileges)$"), "ADMIN.VIEW")]
 

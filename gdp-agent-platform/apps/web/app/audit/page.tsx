@@ -27,7 +27,7 @@ export default async function Audit({ searchParams }: { searchParams?: Params })
   const tab = sp.tab === "cost" ? "cost" : "events";
   return (
     <div className="space-y-5">
-      <PageHeader eyebrow="Platform" title="Audit"
+      <PageHeader eyebrow="Govern" title="Audit"
                   description="Every workflow event across runs, and what the AI steps used and cost." />
       <AuditTabs tab={tab} />
       {tab === "events" ? <Events sp={sp} /> : <Cost sp={sp} />}

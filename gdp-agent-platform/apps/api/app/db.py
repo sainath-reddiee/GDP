@@ -4,6 +4,8 @@ AIP_AUTH=dev  one shared session from the named connection in ~/.snowflake/conne
               (browser SSO on this account). Every action is attributed to that user.
 AIP_AUTH=pat  each user signs in with their own programmatic access token; procedures see
               that user as CURRENT_USER(). Tokens are held in memory only, never persisted.
+system_db()   background work (ops worker, Airflow ingest): the dev session in dev mode, otherwise a key-pair
+              service user from AIP_SERVICE_USER and AIP_SERVICE_KEY_PATH.
 
 Windows Credential Manager often rejects Snowflake's OAuth token write (CredWrite 1783).
 That must not abort a successful sign-in, and it must not retry SSO on every HTTP request.
@@ -269,6 +271,58 @@ def close_session(session_id: Optional[str]) -> None:
         db = _sessions.pop(session_id or "", None)
     if db:
         db.conn.close()
+
+
+SERVICE_USER_ENV = "AIP_SERVICE_USER"
+SERVICE_KEY_ENV = "AIP_SERVICE_KEY_PATH"
+_system: Optional[Db] = None
+_system_lock = threading.Lock()
+
+
+def _open_service(user: str, key_path: str):
+    """Key-pair (JWT) session for the service user. The key file path and passphrase come from the environment only."""
+    kwargs: dict[str, Any] = {
+        "account": ACCOUNT, "user": user, "authenticator": "SNOWFLAKE_JWT", "private_key_file": key_path,
+        "warehouse": os.environ.get("AIP_SERVICE_WAREHOUSE") or WAREHOUSE, "database": DATABASE,
+        "client_session_keep_alive": True, "login_timeout": 60,
+    }
+    passphrase = os.environ.get("AIP_SERVICE_KEY_PASSPHRASE")
+    if passphrase:
+        kwargs["private_key_file_pwd"] = passphrase
+    role = os.environ.get("AIP_SERVICE_ROLE") or ROLE
+    if role:
+        kwargs["role"] = role
+    return snowflake.connector.connect(**kwargs)
+
+
+def system_db() -> Db:
+    """The platform's own identity for background work (the ops worker, the Airflow ingest endpoint).
+
+    Dev mode: the shared dev session. PAT mode: a key-pair session for AIP_SERVICE_USER with the private key at
+    AIP_SERVICE_KEY_PATH (optional AIP_SERVICE_ROLE, AIP_SERVICE_WAREHOUSE, AIP_SERVICE_KEY_PASSPHRASE), opened once,
+    shared by every caller and reopened when it dies. Raises SnowflakeSessionError when it is not configured."""
+    global _system
+    if AUTH_MODE == "dev":
+        return dev_db()
+    with _system_lock:
+        if not _dead(_system):
+            return _system
+        user = (os.environ.get(SERVICE_USER_ENV) or "").strip()
+        key_path = (os.environ.get(SERVICE_KEY_ENV) or "").strip()
+        if not user or not key_path:
+            raise SnowflakeSessionError(
+                f"The service identity is not configured: set {SERVICE_USER_ENV} and {SERVICE_KEY_ENV} "
+                "(a key-pair service user with the OPS_SERVICE database role) on this host.")
+        if not os.path.isfile(key_path):
+            raise SnowflakeSessionError(f"{SERVICE_KEY_ENV} does not point to a readable private key file.")
+        try:
+            conn = _open_service(user, key_path)
+            found_user, role = _identity(conn)
+        except Exception as exc:
+            # the connector's message does not carry the key; keep it short anyway
+            raise SnowflakeSessionError(f"The service user could not sign in: {str(exc)[:300]}") from exc
+        _system = Db(conn, found_user, role, shared=True)
+        return _system
 
 
 _ROLE_IDENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_$]{0,254}$")

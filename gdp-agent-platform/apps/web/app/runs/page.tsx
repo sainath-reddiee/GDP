@@ -29,7 +29,7 @@ export default async function Runs({ searchParams }: {
     .map((d) => ({ domain_id: d.domain_id, domain_name: displayDomain(d.domain_name) as string }));
   return (
     <div className="space-y-5">
-      <PageHeader eyebrow="Work" title="Runs"
+      <PageHeader eyebrow="Model and build" title="Runs"
                   description="Every modeling run from source to reviewed code. Archived runs are hidden from the other filters; deleting a run keeps its audit trail and the staged table profiles." />
       <RunsToolbar domains={options} tags={tagList.tags.map((t) => t.tag)} total={total ?? runs.length} offset={offset} limit={LIMIT} />
       <RunTable key={`${filter}:${query.toString()}`} runs={runs} filter={filter} />
