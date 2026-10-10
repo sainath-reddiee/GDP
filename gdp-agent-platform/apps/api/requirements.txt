@@ -8,3 +8,4 @@ oracledb>=2.4
 pyarrow>=14
 boto3>=1.34
 cryptography>=42
+python-dotenv>=1.0
