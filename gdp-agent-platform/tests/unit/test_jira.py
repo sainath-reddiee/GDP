@@ -144,19 +144,34 @@ def test_report_cells_keep_pipes_out_of_the_table():
 
 # --------------------------------------------------------------------------- API: tokens, state, governance
 
+def token_row(**changes):
+    return {"refresh": "refresh-1", "access": None, "ttl": None, "version": 0, "lease": None, **changes}
+
+
 class JiraDb:
+    """One replica's view of JIRA.USER_TOKEN. `row` may be shared between two JiraDb objects to play two replicas."""
+
     user = "ANA"
 
-    def __init__(self, token_rows=None, state_rows=None, config=None):
+    def __init__(self, token_rows=None, state_rows=None, config=None, row=None, legacy=False):
         self.token_rows = token_rows if token_rows is not None else [{"cloud_id": CLOUD, "site_url": "https://team.atlassian.net",
                                                                        "account_id": "acc", "display_name": "Ana"}]
         self.state_rows, self.config, self.executed = state_rows or [], config, []
+        self.row = row if row is not None else token_row()
+        self.legacy = legacy  # V028 not applied: the new columns do not exist
 
     def query(self, sql, params=()):
         if "PLATFORM_CONFIG" in sql:
             return [{"config_value": json.dumps(self.config)}] if self.config else []
         if "FROM JIRA.USER_TOKEN WHERE USER_NAME = %s ORDER BY" in sql:
             return self.token_rows
+        if "DECRYPT(REFRESH_TOKEN" in sql and "TOKEN_VERSION" in sql:
+            if self.legacy:
+                raise RuntimeError("SQL compilation error: error line 2 at position 25 invalid identifier 'ACCESS_TOKEN'")
+            r = self.row
+            if r.get("gone"):
+                return []
+            return [{"t": r["refresh"], "a": r["access"], "ttl": r["ttl"], "v": r["version"], "leased": r["lease"] is not None}]
         if "DECRYPT(REFRESH_TOKEN" in sql:
             return [{"t": "refresh-1"}]
         if "FROM JIRA.OAUTH_STATE" in sql:
@@ -166,6 +181,34 @@ class JiraDb:
     def execute(self, sql, params=()):
         self.executed.append((sql, params))
 
+    def execute_count(self, sql, params=()):
+        self.executed.append((sql, params))
+        r = self.row
+        if r.get("gone"):
+            return 0
+        if "SET LEASE_BY = %s" in sql:   # claim: version unchanged and lease free
+            me, _, _, version = params
+            if r["version"] == version and r["lease"] is None:
+                r["lease"] = me
+                return 1
+            return 0
+        if "ACCESS_TOKEN = ENCRYPT" in sql:   # store under our lease
+            if r["lease"] != params[-1]:
+                return 0
+            r.update(refresh=params[0] or r["refresh"], access=params[2], ttl=params[4], version=r["version"] + 1, lease=None)
+            return 1
+        if "DELETE FROM JIRA.USER_TOKEN" in sql:
+            if r["version"] == params[2] and r["lease"] == params[3]:
+                r["gone"] = True
+                return 1
+            return 0
+        if "LEASE_BY = NULL" in sql:   # release
+            if r["lease"] == params[2]:
+                r["lease"] = None
+                return 1
+            return 0
+        return 0
+
 
 def _api(monkeypatch):
     import app.main  # noqa: F401
@@ -174,8 +217,13 @@ def _api(monkeypatch):
     monkeypatch.setenv("JIRA_CLIENT_SECRET", "secret")
     monkeypatch.setenv("JIRA_TOKEN_KEY", "k" * 32)
     monkeypatch.setenv("JIRA_CLIENT_ID", "client-id-123")
+    monkeypatch.setattr(api, "_sleep", lambda seconds: None)
     api._access.clear()
     return api
+
+
+def _refreshes(http):
+    return len([c for c in http.calls if "oauth/token" in c[1]])
 
 
 def test_refresh_rotates_and_caches_the_access_token(monkeypatch):
@@ -185,10 +233,50 @@ def test_refresh_rotates_and_caches_the_access_token(monkeypatch):
     db = JiraDb()
     client, conn, _ = api._client(db)
     assert client.token == "acc-1" and conn["cloud_id"] == CLOUD
-    stored = [p for s, p in db.executed if "MERGE INTO JIRA.USER_TOKEN" in s]
-    assert stored and stored[0][2] == "refresh-2"  # the rotated refresh token replaced the old one
+    # the winner stored both tokens (the rotated refresh token replaced the old one) as the next version, lease freed
+    assert db.row == token_row(refresh="refresh-2", access="acc-1", ttl=3600, version=1)
     api._client(db)
-    assert len([c for c in http.calls if "oauth/token" in c[1]]) == 1  # second call used the cached access token
+    assert _refreshes(http) == 1  # second call used the cached access token
+
+
+def test_stored_access_token_is_shared_between_replicas(monkeypatch):
+    api = _api(monkeypatch)
+    http = FakeHttp([])
+    monkeypatch.setattr(api, "_http", http)
+    db = JiraDb(row=token_row(access="acc-stored", ttl=1800, version=4))
+    assert api._client(db)[0].token == "acc-stored"
+    assert _refreshes(http) == 0 and not any("LEASE_BY" in s for s, _ in db.executed)
+
+
+def test_lease_winner_and_loser(monkeypatch):
+    """Two replicas find the access token expiring at once: one refreshes, the other waits and uses its token."""
+    api = _api(monkeypatch)
+    http = FakeHttp([("oauth/token", 200, {"access_token": "acc-2", "refresh_token": "refresh-2", "expires_in": 3600})])
+    monkeypatch.setattr(api, "_http", http)
+    shared = token_row(access="acc-old", ttl=10, version=3, lease="other-replica:1")
+    winner, loser = JiraDb(row=shared), JiraDb(row=shared)
+
+    def winner_refreshes_meanwhile(seconds):
+        if shared["lease"] == "other-replica:1":
+            shared["lease"] = None
+            assert api._client(winner)[0].token == "acc-2"
+    monkeypatch.setattr(api, "_sleep", winner_refreshes_meanwhile)
+    token, _ = api._shared_token(loser, api._config(loser), CLOUD)
+    assert token == "acc-2" and shared["version"] == 4 and shared["lease"] is None and shared["refresh"] == "refresh-2"
+    assert _refreshes(http) == 1   # one refresh for both: the rotated refresh token was never presented twice
+    assert not any("ACCESS_TOKEN = ENCRYPT" in s or "DELETE" in s for s, _ in loser.executed)
+
+
+def test_loser_gives_up_with_503_when_no_new_version_arrives(monkeypatch):
+    from fastapi import HTTPException
+
+    api = _api(monkeypatch)
+    http = FakeHttp([])
+    monkeypatch.setattr(api, "_http", http)
+    db = JiraDb(row=token_row(version=2, lease="other-replica:1"))
+    with pytest.raises(HTTPException) as err:
+        api._client(db)
+    assert err.value.status_code == 503 and _refreshes(http) == 0 and not db.row.get("gone")
 
 
 def test_revoked_refresh_token_disconnects(monkeypatch):
@@ -199,7 +287,31 @@ def test_revoked_refresh_token_disconnects(monkeypatch):
     db = JiraDb()
     with pytest.raises(HTTPException) as err:
         api._client(db)
-    assert err.value.status_code == 428 and any("DELETE FROM JIRA.USER_TOKEN" in s for s, _ in db.executed)
+    assert err.value.status_code == 428 and db.row.get("gone")
+    assert any("DELETE FROM JIRA.USER_TOKEN" in s and "TOKEN_VERSION" in s for s, _ in db.executed)
+
+
+def test_no_delete_after_another_replica_rotated_the_token(monkeypatch):
+    """invalid_grant after our lease ran out and another replica stored version 4: the connection is kept."""
+    api = _api(monkeypatch)
+    db = JiraDb(row=token_row(version=3))
+
+    def http(method, url, headers, body):
+        db.row.update(version=4, access="acc-other", ttl=3000, lease="other-replica:2", refresh="refresh-new")
+        return 400, {"error": "invalid_grant"}
+    monkeypatch.setattr(api, "_http", http)
+    assert api._client(db)[0].token == "acc-other"
+    assert not db.row.get("gone") and db.row["refresh"] == "refresh-new"
+
+
+def test_before_v028_the_old_refresh_still_works(monkeypatch):
+    api = _api(monkeypatch)
+    http = FakeHttp([("oauth/token", 200, {"access_token": "acc-1", "refresh_token": "refresh-2", "expires_in": 3600})])
+    monkeypatch.setattr(api, "_http", http)
+    db = JiraDb(legacy=True)
+    assert api._client(db)[0].token == "acc-1"
+    stored = [p for s, p in db.executed if "MERGE INTO JIRA.USER_TOKEN" in s]
+    assert stored and stored[0][2] == "refresh-2"
 
 
 def test_missing_setup_and_foreign_state_are_refused(monkeypatch):

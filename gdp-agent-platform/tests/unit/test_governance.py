@@ -91,3 +91,34 @@ def test_inheritance_loops_are_refused():
     grants = {"A": ["B"], "B": ["C"]}
     assert creates_cycle("C", ["A"], grants)
     assert not creates_cycle("D", ["A"], grants)
+
+
+QA_WRITES = [("POST", "/api/qa/suites", "QA.EDIT"), ("PUT", "/api/qa/suites/s1", "QA.EDIT"), ("DELETE", "/api/qa/suites/s1", "QA.EDIT"),
+             ("POST", "/api/qa/tables/t1/tests", "QA.EDIT"), ("PUT", "/api/qa/tests/x1", "QA.EDIT"),
+             ("DELETE", "/api/qa/tests/x1", "QA.EDIT"), ("POST", "/api/qa/tables/t1/run", "QA.EDIT"),
+             ("POST", "/api/qa/suites/s1/run", "QA.EDIT"), ("POST", "/api/qa/tables/t1/ask", "AI.USE"),
+             ("POST", "/api/qa/tables/t1/plan", "AI.USE"), ("POST", "/api/qa/links", "JIRA.WRITE"),
+             ("DELETE", "/api/qa/links/l1", "JIRA.WRITE")]
+
+
+def test_qa_workspace_routes():
+    for method, path, priv in QA_WRITES:
+        found, _, matched = privilege_for(method, path)
+        assert matched and found == priv, (method, path)
+    for path in ("/api/qa/tables", "/api/qa/tables/t1", "/api/qa/tables/t1/suite", "/api/qa/suites", "/api/qa/results",
+                 "/api/qa/tables/t1/history"):
+        assert privilege_for("GET", path)[0] is None
+
+
+def test_qa_lead_and_qa_engineer_write_without_run_operate():
+    policy = {"requires_approval": True, "approver_role": "X", "active": True}
+    _, viewer = effective_privileges(["VIEWER"], ROLE_PRIVS, GRANTS)
+    roles, engineer = effective_privileges(["QA_ENGINEER"], ROLE_PRIVS, GRANTS)
+    assert "VIEWER" in roles and "QA.SIGNOFF" not in engineer and "RUN.OPERATE" not in engineer
+    for role in ("QA_LEAD", "QA_ENGINEER"):
+        _, privs = effective_privileges([role], ROLE_PRIVS, GRANTS)
+        assert "RUN.OPERATE" not in privs
+        for method, path, _ in QA_WRITES:
+            assert decide(privilege_for(method, path)[0], privs, None)[0] == "ALLOW", (role, method, path)
+    for method, path, _ in QA_WRITES:
+        assert decide(privilege_for(method, path)[0], viewer, policy)[0] == "FORBID", (method, path)
