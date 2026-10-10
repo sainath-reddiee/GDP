@@ -4,8 +4,8 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 import {
-  BookOpen, Boxes, ChevronsLeft, ChevronsRight, Database, FileClock, FlaskConical, FolderGit2, LayoutDashboard, ListChecks, LogOut, Settings,
-  ShieldCheck, Sparkles, Workflow,
+  Activity, BookOpen, Boxes, ChevronsLeft, ChevronsRight, Database, FileClock, FlaskConical, FolderGit2, LayoutDashboard, ListChecks, LogOut, Settings,
+  ShieldCheck, Siren, Sparkles, Workflow,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { logout } from "@/app/login/actions";
@@ -15,35 +15,57 @@ import { RoleSelector } from "@/components/role-selector";
 type NavLink = { href: string; label: string; icon: typeof Database; privilege?: string | string[];
   badge?: (c: NavCounts) => { value: number; tone: string; title: string } | null };
 
+/** Incidents ship with PR O2; until then the entry stays hidden. */
+const SHOW_INCIDENTS = false;
+
+// grouped by the data engineering lifecycle; a group with no visible links is hidden
 const groups: { label: string; links: NavLink[] }[] = [
   {
-    label: "Work",
+    label: "Overview",
+    links: [{ href: "/dashboard", label: "Dashboard", icon: LayoutDashboard }],
+  },
+  {
+    label: "Ingest",
     links: [
-      { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
       {
         href: "/sources", label: "Sources", icon: Database,
         badge: (c) => c.profiling ? { value: c.profiling, tone: "bg-amber-400 text-amber-950", title: `${c.profiling} profiling now` }
           : c.staged ? { value: c.staged, tone: "bg-white/10 text-white/70", title: `${c.staged} tables staged` } : null,
       },
+    ],
+  },
+  {
+    label: "Model and build",
+    links: [
       {
         href: "/runs", label: "Runs", icon: ListChecks,
         badge: (c) => c.review ? { value: c.review, tone: "bg-rose-500 text-white", title: `${c.review} waiting on review` }
           : c.running ? { value: c.running, tone: "bg-white/10 text-white/70", title: `${c.running} running` } : null,
       },
-      { href: "/qa", label: "QA", icon: FlaskConical, privilege: ["QA.EDIT", "JIRA.READ"] },
+      { href: "/domains", label: "Domains", icon: Boxes },
+      { href: "/code", label: "Code", icon: FolderGit2, privilege: "CODE.VIEW" },
+    ],
+  },
+  {
+    label: "Quality",
+    links: [{ href: "/qa", label: "QA", icon: FlaskConical, privilege: ["QA.EDIT", "JIRA.READ"] }],
+  },
+  {
+    label: "Operate",
+    links: [
+      { href: "/ops", label: "Pipelines", icon: Activity, privilege: "OPS.VIEW" },
+      ...(SHOW_INCIDENTS ? [{ href: "/incidents", label: "Incidents", icon: Siren, privilege: "OPS.VIEW" }] : []),
     ],
   },
   {
     label: "Knowledge",
     links: [
       { href: "/knowledge", label: "Knowledge", icon: BookOpen },
-      { href: "/domains", label: "Domains", icon: Boxes },
       { href: "/skills", label: "Skills", icon: Sparkles },
-      { href: "/code", label: "Code", icon: FolderGit2, privilege: "CODE.VIEW" },
     ],
   },
   {
-    label: "Platform",
+    label: "Govern",
     links: [
       {
         href: "/approvals", label: "Approvals", icon: ShieldCheck,
@@ -107,12 +129,14 @@ export function Sidebar({ user, role, canLogout, privileges, appRoles }: {
         )}
       </div>
 
-      {groups.map((group) => (
+      {groups.map((group) => ({ ...group, links: group.links.filter((l) => allowed(l.privilege)) }))
+        .filter((group) => group.links.length > 0)
+        .map((group) => (
         <div key={group.label} className="mb-4">
           {!collapsed
             ? <p className="mb-1.5 px-2.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-white/30">{group.label}</p>
             : <div className="mx-3 mb-2 h-px bg-white/10" />}
-          {group.links.filter((l) => allowed(l.privilege)).map(({ href, label, icon: Icon, badge }) => {
+          {group.links.map(({ href, label, icon: Icon, badge }) => {
             const active = path === href || path.startsWith(`${href}/`);
             const b = counts && badge ? badge(counts) : null;
             return (

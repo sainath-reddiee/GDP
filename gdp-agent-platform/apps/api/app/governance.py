@@ -224,6 +224,8 @@ async def middleware(request: Request, call_next):
     path, method = request.url.path, request.method.upper()
     if not path.startswith("/api/") or method == "OPTIONS" or path.startswith("/api/auth/"):
         return await call_next(request)
+    if path == "/api/ops/ingest":  # Airflow push: no user session; the endpoint checks size and the HMAC signature
+        return await call_next(request)
     body: Any = None
     replayable = True  # only JSON (or empty) bodies can be stored on a request and replayed after approval
     if method in ("POST", "PUT", "PATCH", "DELETE"):

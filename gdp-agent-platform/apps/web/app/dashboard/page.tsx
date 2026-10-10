@@ -110,7 +110,7 @@ export default async function Dashboard() {
 
   return (
     <div className="space-y-6">
-      <PageHeader eyebrow={new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })}
+      <PageHeader eyebrow="Overview"
                   title={`${greeting()}${name ? `, ${name}` : ""}`}
                   description={s.review
                     ? `${s.review} run${s.review === 1 ? " is" : "s are"} waiting on a review. ${s.running} running, ${s.drafts} in draft.`

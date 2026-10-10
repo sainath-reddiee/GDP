@@ -28,7 +28,7 @@ export default async function Domains({ searchParams }: { searchParams?: { delet
 
   return (
     <div className="space-y-5">
-      <PageHeader eyebrow="Knowledge" title="Domains"
+      <PageHeader eyebrow="Model and build" title="Domains"
                   description="Each domain is a product: its contract, target models, rules, knowledge and the people who own it. Every change is a version you can compare and roll back." />
       <PackEditor domains={named.filter((d) => d.active_flag && d.domain_name !== "GDP")
         .map((d) => ({ domain_id: d.domain_id, domain_name: d.domain_name, label: displayDomain(d.domain_name) ?? d.domain_name }))} />

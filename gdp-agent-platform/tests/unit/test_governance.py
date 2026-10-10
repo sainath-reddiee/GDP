@@ -146,3 +146,24 @@ def test_jira_inbox_routes():
             assert decide(privilege_for(method, path)[0], privs, None)[0] == "ALLOW", (role, method, path)
     for method, path, _ in JIRA_INBOX:
         assert decide(privilege_for(method, path)[0], viewer, None)[0] == "FORBID", (method, path)
+
+
+OPS_WRITES = [("POST", "/api/ops/envs", "INTEGRATION.MANAGE"), ("PUT", "/api/ops/envs/prod", "INTEGRATION.MANAGE"),
+              ("DELETE", "/api/ops/envs/prod", "INTEGRATION.MANAGE"), ("POST", "/api/ops/envs/prod/test", "INTEGRATION.MANAGE"),
+              ("POST", "/api/ops/envs/prod/push-secret", "INTEGRATION.MANAGE"),
+              ("POST", "/api/ops/envs/prod/poll", "OPS.OPERATE"), ("PUT", "/api/ops/dag", "OPS.OPERATE")]
+
+
+def test_ops_routes_and_support_engineer():
+    for method, path, priv in OPS_WRITES:
+        found, _, matched = privilege_for(method, path)
+        assert matched and found == priv, (method, path, found)
+    assert privilege_for("POST", "/api/ops/ingest")[0] is None     # signed push, no user session
+    for path in ("/api/ops/summary", "/api/ops/envs", "/api/ops/dags", "/api/ops/dag", "/api/ops/run", "/api/ops/task-log"):
+        assert privilege_for("GET", path)[0] == "OPS.VIEW", path
+    roles, support = effective_privileges(["SUPPORT_ENGINEER"], ROLE_PRIVS, GRANTS)
+    assert "VIEWER" in roles and {"OPS.VIEW", "OPS.OPERATE", "AI.USE", "JIRA.READ", "JIRA.WRITE"} <= support
+    _, viewer = effective_privileges(["VIEWER"], ROLE_PRIVS, GRANTS)
+    assert "OPS.VIEW" in viewer and read_only(viewer)
+    assert decide("OPS.OPERATE", viewer, None)[0] == "FORBID"
+    assert 6 in ADDED_PRIVILEGES and set(ADDED_PRIVILEGES[6]) == {"OPS.VIEW", "OPS.OPERATE"}
