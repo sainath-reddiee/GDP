@@ -285,6 +285,17 @@ def resolve_entry(session, payload_json: str) -> Dict[str, Any]:
 
 # ---------------------------------------------------------------- bug text
 
+# what a QA result's MEASURED holds when it is a count ("3", "12+ rows", "2 values differ", "not 0"); anything else
+# (a value stored by an older version) stays out of Jira
+COUNT_TEXT = re.compile(r"^\s*(?:-?\d+\+?(?:\s+(?:rows?|values differ))?|not 0)\s*$", re.IGNORECASE)
+
+
+def measured_count(measured: Any) -> str:
+    """MEASURED when it is a count, else blank: Jira text never carries a data value."""
+    text = "" if measured is None else str(measured)
+    return text if COUNT_TEXT.match(text) else ""
+
+
 def bug_markdown(test: Dict[str, Any], result: Dict[str, Any], table_fqn: str, url: str) -> str:
     """The description of a Jira bug raised from a failing QA test: counts, expected against measured, severity and
     the table. Sample rows never go in (they can hold personal data); the link leads to them for people allowed."""
@@ -298,7 +309,7 @@ def bug_markdown(test: Dict[str, Any], result: Dict[str, Any], table_fqn: str, u
         f"| Outcome | {cell(result.get('outcome') or 'NOT_RUN', 20)} |",
         f"| Rows returned | {rows_returned if rows_returned is not None else ''} |",
         f"| Expected | {cell(result.get('expected') or test.get('expected'), 200)} |",
-        f"| Measured | {cell(result.get('measured'), 200)} |",
+        f"| Measured | {cell(measured_count(result.get('measured')), 200)} |",
         f"| Last run | {cell(result.get('created_at') or result.get('ran_at'), 40)} |",
         f"| Test | {cell(test.get('test_id'), 64)} |",
     ]

@@ -32,7 +32,7 @@ export function TriageTab({ nav, go, access, jira, me }: { nav: Nav; go: Go; acc
           <Button type="submit" disabled={!KEY.test(key)}>Open</Button>
         </form>
         {text.trim() && !KEY.test(key) && <p className="text-xs text-muted-foreground">An issue key looks like PROJECT-123.</p>}
-        {nav.key ? <IssueTriage issueKey={nav.key} go={go} access={access} me={me} />
+        {nav.key ? <IssueTriage key={nav.key} issueKey={nav.key} go={go} access={access} me={me} />
           : <Empty title="Triage a Jira issue" text="Open an issue by key, or pick one in the Inbox. Find the table it is about, let AI propose tests that reproduce it, then save them into a suite and link the ticket." />}
       </div>
     </JiraGate>

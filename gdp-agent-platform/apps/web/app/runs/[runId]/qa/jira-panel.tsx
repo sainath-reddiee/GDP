@@ -16,6 +16,7 @@ import {
   type JiraIssue, type JiraIssueDetail, type JiraStatus, type RunLink, type Triage, type TriageTest,
 } from "../../../jira/actions";
 import { StatusPill, TransitionControl, when } from "@/components/jira/jira-controls";
+import { useSeq } from "../../../qa/qa-shared";
 import { saveQaTest } from "./qa-actions";
 
 type Scope = "run" | "mine" | "search";
@@ -33,10 +34,13 @@ export function JiraPanel({ runId, savedTests, canWrite, canAI }: {
   const [selected, setSelected] = useState("");
   const [loading, startLoad] = useTransition();
   const [connecting, startConnect] = useTransition();
+  const seq = useSeq();
 
   useEffect(() => { jiraStatus().then((r) => (r.ok ? setStatus(r.data) : setError(r.error))); }, []);
   const load = (s: Scope = scope, text = q) => startLoad(async () => {
+    const n = seq.next();
     const [list, linked] = await Promise.all([jiraIssues(s, { runId, q: text }), runJiraLinks(runId)]);
+    if (!seq.current(n)) return;   // a newer load (another scope or search) has started: its answer wins
     if (linked.ok) setLinks(linked.data.links);
     if (!list.ok) { setError(list.error); setIssues([]); return; }
     setError("");

@@ -359,7 +359,9 @@ def test_deleted_linked_bug_is_skipped(bug_api):
     module = bug_api(client)
     db = ji.bug_db(**{"ORIGIN = 'BUG'": [{"issue_key": "QA-5"}]})
     assert ji.bug(module, db)["key"] == "QA-91"
-    assert db.wrote("SET ISSUE_STATE = 'DELETED'") == [("QA-5",)]
+    # one user's 404 may only mean they cannot see it: skipped for this request, nothing written for everyone
+    assert db.wrote("SET ISSUE_STATE = 'DELETED'") == []
+    assert [a for n, a in client.calls if n == "issue"] == [("QA-5",)]   # asked once, then skipped
 
 
 def test_transitions_keep_the_status_category(bug_api):

@@ -291,7 +291,7 @@ def test_bug_level_3_label_search_finds_an_open_bug_and_links_it(api, results):
     assert label.startswith("gdp-qa-") and len(label) == 15 and f'labels = "{label}"' in client.calls[0][1][0]
     assert "statusCategory != Done" in client.calls[0][1][0]
     assert not any(name == "create_issue" for name, _ in client.calls)
-    link = [s for s, _ in db.executed if "INSERT INTO JIRA.ISSUE_LINK" in s][0]
+    link = [s for s, _ in db.executed if "MERGE INTO JIRA.ISSUE_LINK" in s][0]
     assert "ORIGIN" in link and "SOURCE_RESULT_ID" in link and "TARGET_TABLE_ID" in link and "DOMAIN_ID" in link
     logged = [p for s, p in db.executed if "INTO JIRA.ACTION_LOG" in s and "IDEMPOTENCY_KEY" in s]
     assert logged and logged[0][-1] == "click-0001"
@@ -365,7 +365,7 @@ def test_bulk_link_records_table_links(api):
     db = Db({"FROM KNOWLEDGE.TARGET_TABLE_REGISTRY": [TABLE]})
     out = module.bulk(module.BulkIn(action="link", keys=["QA-1", "QA-2"], link={"target_table_id": "tt1"}), db=db)["results"]
     assert all(r["ok"] for r in out)
-    inserts = db.wrote("INSERT INTO JIRA.ISSUE_LINK")
+    inserts = db.wrote("MERGE INTO JIRA.ISSUE_LINK")
     assert len(inserts) == 2 and "tt1" in inserts[0] and "DB.S.ORDERS" in inserts[0]
 
 

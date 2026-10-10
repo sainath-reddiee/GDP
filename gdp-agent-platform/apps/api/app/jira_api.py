@@ -48,7 +48,9 @@ STATE_MINUTES = 15
 PREVIEW_BYTES = 256 * 1024
 # 428, not 401: the web app treats 401 as "the platform session ended" and signs the user out
 NOT_CONNECTED = 428
-_access: dict[tuple[str, str], tuple[str, float]] = {}   # (user, cloud) -> (access token, expiry)
+# (user, cloud, account id, token version) -> (access token, expiry). The version moves on every refresh and sign-in
+# on any replica, so a token another replica replaced (or a reconnect to another account) is never served from here
+_access: dict[tuple[str, str, str, int], tuple[str, float]] = {}
 _locks: dict[str, threading.Lock] = {}
 _REPLICA = f"{socket.gethostname()[:40]}:{os.getpid()}"
 LEASE_WAIT = 10.0   # seconds a replica waits for another one's refresh
@@ -188,11 +190,20 @@ def _store_refresh(db: Db, user: str, cloud_id: str, refresh_token: str, access_
         _store_access(db, user, cloud_id, access_token, expires_in)
 
 
+_CONNECTION_SQL = """SELECT CLOUD_ID, SITE_URL, ACCOUNT_ID, DISPLAY_NAME, CONNECTED_AT::VARCHAR AS CONNECTED_AT,
+                             UPDATED_AT::VARCHAR AS UPDATED_AT, SCOPES{version}
+                        FROM JIRA.USER_TOKEN WHERE USER_NAME = %s ORDER BY UPDATED_AT DESC"""
+
+
 def _connection(db: Db, cfg: dict) -> Optional[dict]:
-    """The signed-in user's Jira connection for the configured site (the latest one when no site is configured)."""
-    rows = db.query("""SELECT CLOUD_ID, SITE_URL, ACCOUNT_ID, DISPLAY_NAME, CONNECTED_AT::VARCHAR AS CONNECTED_AT,
-                              UPDATED_AT::VARCHAR AS UPDATED_AT, SCOPES
-                         FROM JIRA.USER_TOKEN WHERE USER_NAME = %s ORDER BY UPDATED_AT DESC""", (db.user,))
+    """The signed-in user's Jira connection for the configured site (the latest one when no site is configured), with
+    its token version (0 before V028)."""
+    try:
+        rows = db.query(_CONNECTION_SQL.format(version=", COALESCE(TOKEN_VERSION, 0) AS TOKEN_VERSION"), (db.user,))
+    except Exception as exc:
+        if not _missing_column(exc):
+            raise
+        rows = db.query(_CONNECTION_SQL.format(version=""), (db.user,))
     for r in rows:
         r["scopes"] = [str(s) for s in _json(r.get("scopes")) or []]
     site = (cfg.get("site_url") or "").lower().rstrip("/")
@@ -209,14 +220,63 @@ def _client(db: Db) -> tuple[JiraClient, dict, dict]:
     conn = _connection(db, cfg)
     if not conn:
         raise HTTPException(NOT_CONNECTED, "Connect your Jira account first.")
-    cache_key = (db.user, conn["cloud_id"])
-    lock = _locks.setdefault(db.user, threading.Lock())
-    with lock:   # first tier: one refresh per user inside this process
-        token, expires = _access.get(cache_key, ("", 0.0))
+    cache_key = (db.user, conn["cloud_id"], str(conn.get("account_id") or ""), int(conn.get("token_version") or 0))
+    client = JiraClient(_http, conn["cloud_id"], _cached_token(db, cfg, cache_key))
+    client.http = _reauthorizing_http(db, cfg, client, cache_key)
+    return client, conn, cfg
+
+
+def _cached_token(db: Db, cfg: dict, cache_key: tuple[str, str, str, int], force: bool = False) -> str:
+    """First tier: one refresh per user inside this process; entries of older token versions are dropped."""
+    user, cloud_id = cache_key[0], cache_key[1]
+    with _locks.setdefault(user, threading.Lock()):
+        token, expires = ("", 0.0) if force else _access.get(cache_key, ("", 0.0))
         if not token or expires - time.time() < 60:
-            token, expires = _shared_token(db, cfg, conn["cloud_id"])
+            token, expires = _shared_token(db, cfg, cloud_id)
+            for k in [k for k in _access if k[:2] == (user, cloud_id) and k != cache_key]:
+                _access.pop(k, None)
             _access[cache_key] = (token, expires)
-    return JiraClient(_http, conn["cloud_id"], token), conn, cfg
+    return token
+
+
+RECONNECT_REJECTED = "Jira no longer accepts your sign-in; connect Jira again."
+
+
+def _expire_access(db: Db, cache_key: tuple[str, str, str, int]) -> None:
+    """Jira refused the access token: forget it here and mark the stored one expired (only the version it came from,
+    so a token another replica just stored is kept), so the next read refreshes it."""
+    _access.pop(cache_key, None)
+    try:
+        db.execute("""UPDATE JIRA.USER_TOKEN SET ACCESS_EXPIRES_AT = NULL
+                       WHERE USER_NAME = %s AND CLOUD_ID = %s AND COALESCE(TOKEN_VERSION, 0) = %s""",
+                   (db.user, cache_key[1], cache_key[3]))
+    except Exception:
+        pass   # before V028 there is no stored access token to expire
+
+
+def _reauthorizing_http(db: Db, cfg: dict, client: JiraClient, cache_key: tuple[str, str, str, int]) -> Callable:
+    """The client's transport: on a 401 from Jira the access token is dropped (here and in USER_TOKEN), a fresh one
+    is fetched through the shared token path and the call is made once more. A second 401 in the same request means
+    the sign-in itself is no longer accepted: 428, connect again."""
+    state = {"retried": False}
+
+    def call(method: str, url: str, headers: dict, body: Optional[dict]) -> tuple:
+        answer = _http(method, url, headers, body)   # (status, payload[, headers])
+        if answer[0] != 401:
+            return answer
+        _expire_access(db, cache_key)
+        if state["retried"]:
+            raise HTTPException(NOT_CONNECTED, RECONNECT_REJECTED)
+        state["retried"] = True
+        token = _cached_token(db, cfg, cache_key, force=True)
+        client.token, client.auth = token, f"Bearer {token}"
+        answer = _http(method, url, {**headers, "Authorization": client.auth}, body)
+        if answer[0] == 401:
+            _expire_access(db, cache_key)
+            raise HTTPException(NOT_CONNECTED, RECONNECT_REJECTED)
+        return answer
+
+    return call
 
 
 REVOKED = "Your Jira sign-in has expired or was revoked; connect again."
@@ -459,7 +519,8 @@ def callback(body: CallbackIn, db: Db = Depends(current_db)):
     _store_refresh(db, db.user, site["id"], tokens["refresh_token"], access_token=tokens["access_token"],
                    expires_in=int(tokens.get("expires_in") or 3600), site_url=site.get("url", ""), account_id=me.get("accountId", ""),
                    display_name=me.get("displayName", ""), scopes=json.dumps(str(tokens.get("scope") or "").split()))
-    _access[(db.user, site["id"])] = (tokens["access_token"], time.time() + int(tokens.get("expires_in") or 3600))
+    for k in [k for k in _access if k[:2] == (db.user, site["id"])]:
+        _access.pop(k, None)   # the sign-in stored a new token version; the next request reads it from the row
     _log(db, "-", "CONNECT", "DONE", cloud_id=site["id"], detail_={"site": site.get("url")})
     return {"return_to": found[0]["return_to"] or "/", "display_name": me.get("displayName"), "site_url": site.get("url")}
 
@@ -572,12 +633,68 @@ def attachment(key: str, attachment_id: str, db: Db = Depends(current_db)):
 
 # ---------------------------------------------------------------- links to runs and QA tests
 
+VISIBLE_BATCH = 50
+
+
+def _visible_issues(client: JiraClient, keys: list[str]) -> Optional[dict[str, dict]]:
+    """{key: summary} of the issues the caller can see in Jira, by `key in (...)` searches with their own token.
+    Jira refuses a whole JQL that names a key it does not know or the caller cannot see (400), so such a batch is
+    asked again issue by issue. None when Jira cannot be asked (then nothing beyond keys is shown)."""
+    seen: dict[str, dict] = {}
+    for i in range(0, len(keys), VISIBLE_BATCH):
+        batch = keys[i:i + VISIBLE_BATCH]
+        try:
+            for found in client.search("key in (" + ", ".join(batch) + ")", None, 100, 1):
+                seen[str(found.get("key"))] = summary(found)
+        except JiraError as exc:
+            if exc.status != 400:
+                return None
+            for key in batch:
+                try:
+                    seen[key] = summary(client.issue(key))
+                except JiraError as one:
+                    if one.status not in (403, 404):
+                        return None
+    return seen
+
+
+def visible_links(db: Db, rows: list[dict]) -> list[dict]:
+    """Stored links shown within Jira's permissions. The stored SUMMARY and STATUS were read with whoever made the link,
+    so a caller connected to Jira gets only the links whose issue they can see, with its live summary and status; a
+    caller who is not connected gets keys and the stored status only, never a summary."""
+    if not rows:
+        return rows
+    keys = []
+    for r in rows:
+        try:
+            keys.append(check_key(str(r.get("issue_key") or "")))
+        except ValueError:
+            continue
+    try:
+        client, _, _ = _client(db)
+    except HTTPException as exc:
+        if exc.status_code not in (NOT_CONNECTED, 409):
+            raise
+        return [{**r, "summary": None} for r in rows]
+    seen = _visible_issues(client, list(dict.fromkeys(keys)))
+    if seen is None:
+        return [{**r, "summary": None} for r in rows]
+    out = []
+    for r in rows:
+        live = seen.get(str(r.get("issue_key") or ""))
+        if live:
+            out.append({**r, "summary": live.get("summary"), "status": live.get("status") or r.get("status")})
+    return out
+
+
 @router.get("/api/runs/{run_id}/jira/links")
 def run_links(run_id: str, db: Db = Depends(current_db)):
-    return {"links": db.query("""SELECT L.LINK_ID, L.ISSUE_KEY, L.QA_TEST_ID, T.TITLE AS TEST_TITLE, L.SUMMARY, L.STATUS, L.LINKED_BY,
-                                       L.LINKED_AT::VARCHAR AS LINKED_AT
-                                  FROM JIRA.ISSUE_LINK L LEFT JOIN CONTRACT.QA_TEST_CASE T ON T.TEST_ID = L.QA_TEST_ID
-                                 WHERE L.RUN_ID = %s AND NOT L.IS_DELETED ORDER BY L.LINKED_AT DESC""", (run_id,))}
+    """The run's links, within the caller's Jira permissions (see visible_links)."""
+    return {"links": visible_links(db, db.query(
+        """SELECT L.LINK_ID, L.ISSUE_KEY, L.QA_TEST_ID, T.TITLE AS TEST_TITLE, L.SUMMARY, L.STATUS, L.LINKED_BY,
+                  L.LINKED_AT::VARCHAR AS LINKED_AT
+             FROM JIRA.ISSUE_LINK L LEFT JOIN CONTRACT.QA_TEST_CASE T ON T.TEST_ID = L.QA_TEST_ID
+            WHERE L.RUN_ID = %s AND NOT L.IS_DELETED ORDER BY L.LINKED_AT DESC""", (run_id,)))}
 
 
 class LinkIn(BaseModel):
@@ -591,27 +708,38 @@ LINK_SCOPE = ("target_table_id", "suite_id", "domain_id", "origin", "source_resu
 
 def _save_link(db: Db, key: str, cloud_id: str, issue: dict, run_id: Optional[str] = None, qa_test_id: Optional[str] = None,
                target_table: Optional[str] = None, **scope: Any) -> tuple[str, bool]:
-    """(link id, already linked). Links a run, test, table or suite to an issue once. Run-only links use the columns
-    from V027 only; table, suite, origin and issue id columns (V028) are written when given."""
+    """(link id, already linked). Links a run, test, table or suite to an issue once: one MERGE inserts the link only
+    when no live link with the same issue and scope exists, so two requests at once cannot both insert. Run-only links
+    use the columns from V027 only; table, suite, origin and issue id columns (V028) are written when given."""
     extra = {k: scope[k] for k in LINK_SCOPE if scope.get(k)}
     table_scoped = bool(scope.get("target_table_id") or scope.get("suite_id"))
-    where = "ISSUE_KEY = %s AND NOT IS_DELETED AND COALESCE(RUN_ID, '') = %s AND COALESCE(QA_TEST_ID, '') = %s"
+
+    def same(t: str) -> str:   # the same live link, on columns prefixed with t
+        out = f"{t}ISSUE_KEY = %s AND NOT {t}IS_DELETED AND COALESCE({t}RUN_ID, '') = %s AND COALESCE({t}QA_TEST_ID, '') = %s"
+        if table_scoped:
+            out += f" AND COALESCE({t}TARGET_TABLE_ID, '') = %s AND COALESCE({t}SUITE_ID, '') = %s"
+        return out + (f" AND COALESCE({t}ORIGIN, 'LINK') = %s" if scope.get("origin") else "")
+
+    where, match = same(""), same("T.")
     params: tuple = (key, run_id or "", qa_test_id or "")
     if table_scoped:
-        where += " AND COALESCE(TARGET_TABLE_ID, '') = %s AND COALESCE(SUITE_ID, '') = %s"
         params += (scope.get("target_table_id") or "", scope.get("suite_id") or "")
     if scope.get("origin"):
-        where += " AND COALESCE(ORIGIN, 'LINK') = %s"
         params += (scope["origin"],)
-    exists = db.query(f"SELECT LINK_ID FROM JIRA.ISSUE_LINK WHERE {where} LIMIT 1", params)
-    if exists:
-        return exists[0]["link_id"], True
     link_id = str(uuid.uuid4())
     columns = ["LINK_ID", "ISSUE_KEY", "CLOUD_ID", "RUN_ID", "QA_TEST_ID", "TARGET_TABLE", "SUMMARY", "STATUS"] + [k.upper() for k in extra]
     values = ["%s", "%s", "%s", "NULLIF(%s, '')", "NULLIF(%s, '')", "NULLIF(%s, '')", "%s", "%s"] + ["%s"] * len(extra)
-    db.execute(f"INSERT INTO JIRA.ISSUE_LINK ({', '.join(columns)}) VALUES ({', '.join(values)})",
-               (link_id, key, cloud_id, run_id or "", qa_test_id or "", target_table or "", (issue.get("summary") or "")[:1000],
-                issue.get("status") or "") + tuple(str(v) for v in extra.values()))
+    row = (link_id, key, cloud_id, run_id or "", qa_test_id or "", target_table or "", (issue.get("summary") or "")[:1000],
+           issue.get("status") or "") + tuple(str(v) for v in extra.values())
+    # the match binds the scope values again: S only carries the row to insert
+    inserted = db.execute_count(
+        f"""MERGE INTO JIRA.ISSUE_LINK T
+              USING (SELECT {', '.join(f'{v} AS {c}' for c, v in zip(columns, values))}) S ON {match}
+            WHEN NOT MATCHED THEN INSERT ({', '.join(columns)}) VALUES ({', '.join('S.' + c for c in columns)})""",
+        row + params)
+    if not inserted:
+        exists = db.query(f"SELECT LINK_ID FROM JIRA.ISSUE_LINK WHERE {where} ORDER BY LINKED_AT LIMIT 1", params)
+        return (exists[0]["link_id"] if exists else link_id), True
     _log(db, key, "LINK", "DONE", cloud_id, run_id, {"qa_test_id": qa_test_id, **{k: v for k, v in extra.items() if k != "issue_id"}})
     return link_id, False
 
@@ -1042,24 +1170,12 @@ def create_bug(body: BugIn, db: Db = Depends(current_db)):
     client, conn, cfg = _client(db)
     test_id, table_id = body.test_id, body.target_table_id
     answer = lambda key, created: {"key": key, "url": _browse(conn, key), "created": created, "existing": not created}  # noqa: E731
+    skipped: set[str] = set()   # linked bugs this caller cannot see: skipped for this request only
 
-    # 1. an open bug already linked to this test and table. The stored status category is only a hint (it is set when
-    # the link is made and may be stale or empty): the bug's live status in Jira decides, and a closed one is skipped
-    linked = db.query("""SELECT ISSUE_KEY FROM JIRA.ISSUE_LINK
-                          WHERE ORIGIN = 'BUG' AND QA_TEST_ID = %s AND TARGET_TABLE_ID = %s AND NOT IS_DELETED
-                            AND LOWER(COALESCE(STATUS_CATEGORY, '')) <> 'done' AND COALESCE(ISSUE_STATE, 'OK') <> 'DELETED'
-                          ORDER BY LINKED_AT DESC LIMIT 5""", (test_id, table_id))
-    for key in dict.fromkeys(r["issue_key"] for r in linked):
-        try:
-            live = summary(client.issue(key))
-        except JiraError as exc:
-            if exc.status == 404:   # deleted in Jira, or no longer visible to this user
-                db.execute("UPDATE JIRA.ISSUE_LINK SET ISSUE_STATE = 'DELETED' WHERE ISSUE_KEY = %s AND NOT IS_DELETED", (key,))
-                continue
-            raise _jira_error(exc) from None
-        _set_link_status(db, key, live.get("status"), live.get("status_category"))
-        if str(live.get("status_category") or "").lower() != "done":
-            return answer(key, False)
+    # 1. an open bug already linked to this test and table
+    open_bug = _open_linked_bug(db, client, cfg, test_id, table_id, skipped)
+    if open_bug:
+        return answer(open_bug, False)
     # 2. a repeated request (same idempotency key) gets the first answer
     earlier = db.query("""SELECT ISSUE_KEY, DETAIL FROM JIRA.ACTION_LOG WHERE IDEMPOTENCY_KEY = %s AND ACTION = 'BUG' AND STATUS = 'DONE'
                            ORDER BY ACTED_AT DESC LIMIT 1""", (body.idempotency_key,))
@@ -1096,6 +1212,31 @@ def create_bug(body: BugIn, db: Db = Depends(current_db)):
              idempotency_key=body.idempotency_key)
         return out
 
+    # claim the label before searching and creating, so two requests at once cannot both create a bug
+    claim = _claim_bug(db, label, test_id, table_id)
+    if not claim:
+        pending = _bug_claim(db, label)
+        if pending and pending.get("key"):
+            return answer(pending["key"], False)
+        raise HTTPException(409, "A bug is being created for this test; try again in a moment.")
+    try:
+        # a request that finished just before the claim has linked its bug by now
+        open_bug = _open_linked_bug(db, client, cfg, test_id, table_id, skipped)
+        if open_bug:
+            _finish_bug_claim(db, claim, "DONE", open_bug)
+            return answer(open_bug, False)
+        out = _find_or_create_bug(db, client, cfg, conn, body, test, result, table, label, link_fields, done)
+    except BaseException:
+        _finish_bug_claim(db, claim, "RELEASED")
+        raise
+    _finish_bug_claim(db, claim, "DONE", out["key"])
+    return out
+
+
+def _find_or_create_bug(db: Db, client: JiraClient, cfg: dict, conn: dict, body: BugIn, test: list, result: dict, table: dict,
+                        label: str, link_fields: dict, done: Callable[[str, bool, dict], dict]) -> dict:
+    """Steps 3 and 4 of create_bug, under the label's claim: an open bug with the label in Jira, else a new one."""
+    test_id, table_id = body.test_id, body.target_table_id
     # 3. an open bug in Jira with this test's label (raised by someone else, or linked before the link was recorded)
     try:
         found = client.search_page(f"labels = {jql_string(label)} AND statusCategory != Done ORDER BY created ASC", None, 1)["issues"]
@@ -1104,6 +1245,7 @@ def create_bug(body: BugIn, db: Db = Depends(current_db)):
     if found:
         return done(found[0]["key"], False, summary(found[0]))
 
+    # 4. a new bug
     try:
         project = check_project(body.project_key or cfg.get("default_project") or "")
     except ValueError:
@@ -1128,6 +1270,88 @@ def create_bug(body: BugIn, db: Db = Depends(current_db)):
     key = check_key(created.get("key") or "")
     _remote_link(db, client, conn["cloud_id"], key, url, f"QA test: {title}"[:255], f"gdp:qa:test:{test_id}")
     return done(key, True, {"id": created.get("id"), "summary": body.summary or f"QA test failed: {title}", "status": None})
+
+
+def _gone_for_everyone(cfg: dict, key: str) -> bool:
+    """True only when the issue is confirmed deleted: the Jira bot (an automation account, when configured) cannot find
+    it either. One user's 404 may only mean that user cannot see it."""
+    try:
+        bot = importlib.import_module("services.ops.tickets").bot_client(cfg, _http)
+    except Exception:
+        return False
+    if bot is None:
+        return False
+    try:
+        bot.issue(key)
+    except JiraError as exc:
+        return exc.status == 404
+    except Exception:
+        return False
+    return False
+
+
+def _open_linked_bug(db: Db, client: JiraClient, cfg: dict, test_id: str, table_id: str, skipped: set[str]) -> Optional[str]:
+    """The key of an open bug already linked to this test and table. The stored status category is only a hint (set when
+    the link is made, may be stale or empty): the bug's live status in Jira decides, and a closed one is skipped. A 404
+    is skipped for this request without a write; the link is marked DELETED only when the bot confirms it is gone."""
+    linked = db.query("""SELECT ISSUE_KEY FROM JIRA.ISSUE_LINK
+                          WHERE ORIGIN = 'BUG' AND QA_TEST_ID = %s AND TARGET_TABLE_ID = %s AND NOT IS_DELETED
+                            AND LOWER(COALESCE(STATUS_CATEGORY, '')) <> 'done' AND COALESCE(ISSUE_STATE, 'OK') <> 'DELETED'
+                          ORDER BY LINKED_AT DESC LIMIT 5""", (test_id, table_id))
+    for key in dict.fromkeys(r["issue_key"] for r in linked):
+        if key in skipped:
+            continue
+        try:
+            live = summary(client.issue(key))
+        except JiraError as exc:
+            if exc.status == 404:   # deleted in Jira, or not visible to this user: not this user's call to make
+                skipped.add(key)
+                if _gone_for_everyone(cfg, key):
+                    db.execute("UPDATE JIRA.ISSUE_LINK SET ISSUE_STATE = 'DELETED' WHERE ISSUE_KEY = %s AND NOT IS_DELETED", (key,))
+                continue
+            raise _jira_error(exc) from None
+        _set_link_status(db, key, live.get("status"), live.get("status_category"))
+        if str(live.get("status_category") or "").lower() != "done":
+            return key
+    return None
+
+
+BUG_CLAIM_SECONDS = 120   # a claim older than this is from a request that died; the next request takes it over
+
+
+def _claim_bug(db: Db, label: str, test_id: str, table_id: str) -> Optional[str]:
+    """Claim the bug label (a PENDING BUG_CLAIM row in JIRA.ACTION_LOG keyed by the label). MERGE serialises on the
+    table, so exactly one request inserts the row (or takes over a stale one); the claim id, or None when another
+    request holds it."""
+    claim = str(uuid.uuid4())
+    taken = db.execute_count(
+        f"""MERGE INTO JIRA.ACTION_LOG T USING (SELECT %s AS ISSUE_KEY) S
+              ON T.ISSUE_KEY = S.ISSUE_KEY AND T.ACTION = 'BUG_CLAIM' AND T.STATUS = 'PENDING'
+            WHEN MATCHED AND T.ACTED_AT < DATEADD(second, -{BUG_CLAIM_SECONDS}, CURRENT_TIMESTAMP()) THEN UPDATE
+                 SET ACTION_ID = %s, ACTED_BY = CURRENT_USER(), ACTED_AT = CURRENT_TIMESTAMP()
+            WHEN NOT MATCHED THEN INSERT (ACTION_ID, ISSUE_KEY, ACTION, DETAIL, STATUS)
+                 VALUES (%s, S.ISSUE_KEY, 'BUG_CLAIM', PARSE_JSON(%s), 'PENDING')""",
+        (label, claim, claim, json.dumps({"test_id": test_id, "target_table_id": table_id})))
+    return claim if taken == 1 else None
+
+
+def _bug_claim(db: Db, label: str) -> Optional[dict]:
+    """The latest claim on a label: {"status", "key"} (key once its bug is known)."""
+    found = db.query("""SELECT STATUS, DETAIL FROM JIRA.ACTION_LOG WHERE ISSUE_KEY = %s AND ACTION = 'BUG_CLAIM'
+                         ORDER BY ACTED_AT DESC LIMIT 1""", (label,))
+    if not found:
+        return None
+    return {"status": found[0].get("status"), "key": (_json(found[0].get("detail")) or {}).get("key")}
+
+
+def _finish_bug_claim(db: Db, claim: str, status: str, key: Optional[str] = None) -> None:
+    """DONE with the bug's key, or RELEASED after a failure so the next request can try again."""
+    try:
+        db.execute("""UPDATE JIRA.ACTION_LOG SET STATUS = %s,
+                             DETAIL = IFF(%s = '', DETAIL, OBJECT_INSERT(COALESCE(DETAIL, OBJECT_CONSTRUCT())::OBJECT, 'key', %s, TRUE))
+                       WHERE ACTION_ID = %s AND ACTION = 'BUG_CLAIM'""", (status, key or "", key or "", claim))
+    except Exception:
+        pass   # a claim left PENDING runs out after BUG_CLAIM_SECONDS
 
 
 def _result_id(db: Db, result: dict, test_id: str) -> Optional[str]:
@@ -1155,6 +1379,8 @@ class BulkIn(BaseModel):
     comment: Optional[str] = Field(default=None, max_length=30000)
     transition_name: Optional[str] = Field(default=None, max_length=100)
     link: Optional[BulkLink] = None
+    # one per bulk submit: a retried request skips the issues already commented under it
+    idempotency_key: Optional[str] = Field(default=None, min_length=8, max_length=64, pattern=r"^[A-Za-z0-9_.:\-]+$")
 
 
 @router.post("/api/jira/bulk")
@@ -1173,6 +1399,11 @@ def bulk(body: BulkIn, db: Db = Depends(current_db)):
     wanted = (body.transition_name or "").strip().lower()
     results: list[dict] = []
     limited = False
+    posted_before: set[str] = set()
+    if body.action == "comment" and body.idempotency_key:
+        posted_before = {r["issue_key"] for r in db.query(
+            """SELECT DISTINCT ISSUE_KEY FROM JIRA.ACTION_LOG
+                WHERE IDEMPOTENCY_KEY = %s AND ACTION = 'COMMENT' AND STATUS = 'DONE'""", (body.idempotency_key,))}
     for raw in body.keys:
         if limited:
             results.append({"key": raw, "ok": False, "skipped": True, "error": "rate limited"})
@@ -1184,9 +1415,13 @@ def bulk(body: BulkIn, db: Db = Depends(current_db)):
             continue
         try:
             if body.action == "comment":
+                if key in posted_before:
+                    results.append({"key": key, "ok": True, "already": True})
+                    continue
                 posted = client.add_comment(key, document)
                 _log(db, key, "COMMENT", "DONE", conn["cloud_id"], None, {"comment_id": (posted or {}).get("id"), "bulk": True,
-                                                                         "preview": adf.plain(body.comment, 300)})
+                                                                         "preview": adf.plain(body.comment, 300)},
+                     idempotency_key=body.idempotency_key)
             elif body.action == "transition":
                 options = client.transitions(key)
                 pick = next((t for t in options if str(t.get("name") or "").lower() == wanted), None) \
@@ -1211,6 +1446,8 @@ def bulk(body: BulkIn, db: Db = Depends(current_db)):
             else:
                 results.append({"key": key, "ok": False, "error": _jira_error(exc).detail})
             _log(db, key, body.action.upper(), "FAILED", conn["cloud_id"], None, {"bulk": True}, exc.message)
+        except HTTPException:   # e.g. 428: Jira no longer accepts the sign-in, so the rest would fail the same way
+            raise
         except Exception as exc:   # a failed database write fails this issue only
             results.append({"key": key, "ok": False, "error": str(exc)[:300]})
     return {"results": results}

@@ -2768,11 +2768,18 @@ def qa_signoff(run_id: str, body: QaSignoff, db: Db = Depends(current_db)):
     if body.decision == "REJECTED" and not (body.note or "").strip():
         raise HTTPException(400, "Say what failed when rejecting the QA tests.")
     note = (body.note or "").strip()
+    sttm = db.query("SELECT STTM_ID FROM CONTRACT.STTM_REGISTRY WHERE RUN_ID = %s AND STATUS IN ('APPROVED', 'REVIEW') "
+                    "ORDER BY STTM_VERSION DESC LIMIT 1", (run_id,))
+    if not sttm:
+        raise HTTPException(409, "The run has no STTM in review or approved yet.")
     if body.decision == "APPROVED":
         from services.qa.run import blocking, latest
 
         last, results = latest(db.query, run_id)
-        failing = blocking([{"outcome": r["outcome"], "severity": r["severity"]} for r in results]) if last else []
+        # an approval covers tested work: the latest QA run must be on the STTM version being signed off
+        if not last or str(last.get("sttm_id") or "") != str(sttm[0]["sttm_id"] or ""):
+            raise HTTPException(409, "Run QA on the current STTM version before signing off.")
+        failing = blocking([{"outcome": r["outcome"], "severity": r["severity"]} for r in results])
         if failing and not body.override:
             raise HTTPException(409, f"The last QA run has {len(failing)} failing critical or high tests. Fix them and "
                                      "run again, or approve with an override and a reason.")
@@ -2780,10 +2787,6 @@ def qa_signoff(run_id: str, body: QaSignoff, db: Db = Depends(current_db)):
             if len(note) < 15:
                 raise HTTPException(400, "An override needs a reason of at least 15 characters.")
             note = f"[override: {len(failing)} critical/high tests failing] {note}"
-    sttm = db.query("SELECT STTM_ID FROM CONTRACT.STTM_REGISTRY WHERE RUN_ID = %s AND STATUS IN ('APPROVED', 'REVIEW') "
-                    "ORDER BY STTM_VERSION DESC LIMIT 1", (run_id,))
-    if not sttm:
-        raise HTTPException(409, "The run has no STTM in review or approved yet.")
     db.execute("INSERT INTO CONTRACT.QA_SIGNOFF (SIGNOFF_ID, RUN_ID, STTM_ID, DECISION, NOTE) "
                "SELECT %s, %s, %s, %s, NULLIF(%s, '')",
                (str(uuid.uuid4()), run_id, sttm[0]["sttm_id"], body.decision, note))

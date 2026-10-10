@@ -36,7 +36,7 @@ export type Sprint = { id: number | string; name: string; state: string; start: 
 export type IssueType = { id: string; name: string; subtask: boolean };
 export type BugCreated = { key: string; url: string | null; created: boolean; existing: boolean };
 export type BulkAction = "link" | "comment" | "transition";
-export type BulkResult = { key: string; ok: boolean; error?: string | null; skipped?: boolean | string | null };
+export type BulkResult = { key: string; ok: boolean; error?: string | null; skipped?: boolean | string | null; already?: boolean };
 export type Candidate = { target_table_id: string; fqn: string; domain_id: string | null; /** 0 to 100 */ score: number; reasons: string[];
                           has_sttm: boolean; active: boolean };
 export type Resolved = { key: string; summary: string; model?: string | null; candidates: Candidate[]; runs: { run_id: string; name: string | null; state: string | null }[] };
@@ -124,7 +124,9 @@ export async function sprintIssues(sprintId: string, next?: string | null) {
 }
 
 export async function bulkJira(body: { action: BulkAction; keys: string[]; comment?: string; transition_name?: string;
-                                       link?: { target_table_id: string; suite_id?: string; test_id?: string } }) {
+                                       link?: { target_table_id: string; suite_id?: string; test_id?: string };
+                                       /** one per bulk submit: a retry skips the issues already commented under it */
+                                       idempotency_key?: string }) {
   const r = await call(() => api<{ results: BulkResult[] }>("/api/jira/bulk", { method: "POST", body: json(body) }));
   if (body.action === "link") changed();
   return r;
