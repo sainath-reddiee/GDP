@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 import {
-  BookOpen, Boxes, ChevronsLeft, ChevronsRight, Database, FileClock, FolderGit2, LayoutDashboard, ListChecks, LogOut, Settings,
+  BookOpen, Boxes, ChevronsLeft, ChevronsRight, Database, FileClock, FlaskConical, FolderGit2, LayoutDashboard, ListChecks, LogOut, Settings,
   ShieldCheck, Sparkles, Workflow,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -12,7 +12,7 @@ import { logout } from "@/app/login/actions";
 import type { NavCounts } from "@/app/bff/nav/route";
 import { RoleSelector } from "@/components/role-selector";
 
-type NavLink = { href: string; label: string; icon: typeof Database; privilege?: string;
+type NavLink = { href: string; label: string; icon: typeof Database; privilege?: string | string[];
   badge?: (c: NavCounts) => { value: number; tone: string; title: string } | null };
 
 const groups: { label: string; links: NavLink[] }[] = [
@@ -30,6 +30,7 @@ const groups: { label: string; links: NavLink[] }[] = [
         badge: (c) => c.review ? { value: c.review, tone: "bg-rose-500 text-white", title: `${c.review} waiting on review` }
           : c.running ? { value: c.running, tone: "bg-white/10 text-white/70", title: `${c.running} running` } : null,
       },
+      { href: "/qa", label: "QA", icon: FlaskConical, privilege: ["QA.EDIT", "JIRA.READ"] },
     ],
   },
   {
@@ -64,7 +65,9 @@ function initials(user: string | null) {
 export function Sidebar({ user, role, canLogout, privileges, appRoles }: {
   user: string | null; role: string | null; canLogout: boolean; privileges?: string[] | null; appRoles?: string[] | null;
 }) {
-  const allowed = (p?: string) => !p || !privileges || privileges.includes("*") || privileges.includes(p);
+  // a list of privileges means any of them
+  const allowed = (p?: string | string[]) => !p || !privileges || privileges.includes("*")
+    || (Array.isArray(p) ? p.some((x) => privileges.includes(x)) : privileges.includes(p));
   const path = usePathname();
   const [collapsed, setCollapsed] = useState(false);
   const [counts, setCounts] = useState<NavCounts | null>(null);

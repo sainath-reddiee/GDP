@@ -4,30 +4,21 @@ import Link from "next/link";
 import { useEffect, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import {
-  ArrowRightLeft, Bug, Check, ExternalLink, FileText, Link2, Loader2, MessageSquarePlus, Paperclip, RefreshCw, Search, Send,
+  Bug, Check, ExternalLink, FileText, Link2, Loader2, MessageSquarePlus, Paperclip, RefreshCw, Search, Send,
   Sparkles, Unlink, TriangleAlert, X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input, Select } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import {
-  commentJira, connectJira, jiraAttachment, jiraIssue, jiraIssues, jiraReport, jiraStatus, jiraTransitions, linkJira, runJiraLinks,
-  transitionJira, triageJira, unlinkJira,
+  commentJira, connectJira, jiraAttachment, jiraIssue, jiraIssues, jiraReport, jiraStatus, linkJira, runJiraLinks,
+  triageJira, unlinkJira,
   type JiraIssue, type JiraIssueDetail, type JiraStatus, type RunLink, type Triage, type TriageTest,
 } from "../../../jira/actions";
+import { StatusPill, TransitionControl, when } from "@/components/jira/jira-controls";
 import { saveQaTest } from "./qa-actions";
 
 type Scope = "run" | "mine" | "search";
-const CATEGORY_TONE: Record<string, string> = {
-  done: "bg-emerald-50 text-emerald-700 ring-emerald-100", indeterminate: "bg-sky-50 text-sky-700 ring-sky-100", new: "bg-slate-100 text-slate-700 ring-slate-200",
-};
-
-function StatusPill({ name, category }: { name: string | null; category: string | null }) {
-  if (!name) return null;
-  return <span className={cn("whitespace-nowrap rounded-full px-1.5 py-0.5 text-[10px] font-medium ring-1 ring-inset", CATEGORY_TONE[category ?? "new"] ?? CATEGORY_TONE.new)}>{name}</span>;
-}
-
-const when = (iso: string | null) => (iso ? new Date(iso).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" }) : "");
 
 /** QA workbench, Jira: the engineer's issues, reproduced against this run's data, with results posted back as them. */
 export function JiraPanel({ runId, savedTests, canWrite, canAI }: {
@@ -404,32 +395,5 @@ function PostPane({ issueKey, runId, canWrite, me, hasTests, onPosted }: {
       )}
       {error && <p role="alert" className="text-xs text-destructive">{error}</p>}
     </div>
-  );
-}
-
-function TransitionControl({ issueKey, runId, onDone }: { issueKey: string; runId: string; onDone: (to: string) => void }) {
-  const [options, setOptions] = useState<{ id: string; name: string; to: string | null }[] | null>(null);
-  const [choice, setChoice] = useState("");
-  const [error, setError] = useState("");
-  const [busy, start] = useTransition();
-  const open = () => start(async () => {
-    const r = await jiraTransitions(issueKey);
-    if (r.ok) setOptions(r.data.transitions); else setError(r.error);
-  });
-  const picked = options?.find((o) => o.id === choice);
-  if (!options) return <Button size="sm" variant="ghost" disabled={busy} onClick={open}>{busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ArrowRightLeft className="h-3.5 w-3.5" />}Change status</Button>;
-  return (
-    <span className="inline-flex flex-wrap items-center gap-1.5">
-      <Select value={choice} onChange={(e) => setChoice(e.target.value)} className="h-8 w-auto text-xs" aria-label="New status">
-        <option value="">Move to…</option>
-        {options.map((o) => <option key={o.id} value={o.id}>{o.name}{o.to && o.to !== o.name ? ` (to ${o.to})` : ""}</option>)}
-      </Select>
-      {picked && <Button size="sm" disabled={busy} onClick={() => start(async () => {
-        const r = await transitionJira(issueKey, picked.id, runId);
-        if (r.ok) { setOptions(null); setChoice(""); onDone(r.data.status); } else setError(r.error);
-      })}>{busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}Confirm: {picked.to ?? picked.name}</Button>}
-      <button type="button" onClick={() => { setOptions(null); setChoice(""); }} className="rounded p-0.5 text-muted-foreground hover:bg-muted" aria-label="Cancel"><X className="h-3.5 w-3.5" /></button>
-      {error && <span className="text-xs text-destructive">{error}</span>}
-    </span>
   );
 }

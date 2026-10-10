@@ -157,6 +157,13 @@ RULES: List[Tuple[str, str, Any, str]] = [
     ("DELETE", r"/api/jira/connection", "JIRA.READ", ""),
     ("POST", r"/api/jira/issues/[^/]+/comment", "JIRA.WRITE", "Comment on a Jira issue"),
     ("POST", r"/api/jira/issues/[^/]+/transition", "JIRA.WRITE", "Change a Jira issue's status"),
+    ("POST", r"/api/jira/jql/validate", "JIRA.READ", ""),
+    ("POST", r"/api/jira/filters", "JIRA.READ", ""),
+    ("DELETE", r"/api/jira/filters/[^/]+", "JIRA.READ", ""),
+    ("POST", r"/api/jira/bugs", "JIRA.WRITE", "Create a Jira bug from a QA test"),
+    ("POST", r"/api/jira/bulk", "JIRA.WRITE", "Bulk action on Jira issues"),
+    ("POST", r"/api/qa/triage/resolve", "AI.USE", ""),
+    ("POST", r"/api/qa/tables/[^/]+/triage/[^/]+", "AI.USE", ""),
     ("POST", r"/api/qa/tables/[^/]+/(ask|plan)", "AI.USE", ""),
     ("POST", r"/api/qa/(tables|suites)/[^/]+/run", "QA.EDIT", ""),
     ("POST", r"/api/qa/tables/[^/]+/tests", "QA.EDIT", ""),
@@ -219,7 +226,8 @@ RULES: List[Tuple[str, str, Any, str]] = [
 ]
 _COMPILED = [(m, re.compile(f"^{p}$"), priv, title) for m, p, priv, title in RULES]
 READ_RULES = [(re.compile(r"^/api/(admin/.*|config/(rules|platform|models))$"), "ADMIN.VIEW"),
-              (re.compile(r"^/api/jira/issues(/.*)?$"), "JIRA.READ"),
+              (re.compile(r"^/api/jira/(issues|search|filters|boards|sprints|projects)(/.*)?$"), "JIRA.READ"),
+              (re.compile(r"^/api/qa/links$"), "JIRA.READ"),
               (re.compile(r"^/api/runs/[^/]+/jira/.*$"), "JIRA.READ"),
               (re.compile(r"^/api/(audit|costs)(/.*)?$"), "AUDIT.VIEW"),
               (re.compile(r"^/api/code/setup$"), "INTEGRATION.MANAGE"),

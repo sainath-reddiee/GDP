@@ -12,7 +12,8 @@ export const ROLE_COOKIE = "aip_role";
 export const SIGN_OUT = "/bff/signout";
 
 export class ApiError extends Error {
-  constructor(public status: number, message: string) {
+  /** retryAfter: seconds from a Retry-After header (rate limits), when the backend sent one. */
+  constructor(public status: number, message: string, public retryAfter: number | null = null) {
     super(message);
   }
 }
@@ -69,9 +70,17 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
     );
   }
   if (res.status === 401) redirect(SIGN_OUT);
-  if (!res.ok) throw new ApiError(res.status, detail(text));
+  if (!res.ok) throw new ApiError(res.status, detail(text), retryAfter(res.headers.get("retry-after")));
   if (res.status === 202 && text.includes("pending_approval")) throw new ApiError(202, detail(text));
   return JSON.parse(text) as T;
+}
+
+function retryAfter(header: string | null): number | null {
+  if (!header) return null;
+  const seconds = Number(header);
+  if (Number.isFinite(seconds)) return Math.max(0, Math.ceil(seconds));
+  const at = Date.parse(header);
+  return Number.isNaN(at) ? null : Math.max(0, Math.ceil((at - Date.now()) / 1000));
 }
 
 /** Multipart POST (file uploads) with the caller's session; the browser sets the boundary header. */

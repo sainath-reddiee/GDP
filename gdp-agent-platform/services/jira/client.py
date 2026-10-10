@@ -1,31 +1,60 @@
-"""Jira Cloud REST v3 through OAuth 2.0 (3LO), with HTTP injected so it can be tested without a network.
+"""Jira Cloud REST v3 and the Agile API through OAuth 2.0 (3LO), with HTTP injected so it can be tested without a network.
 
-`http(method, url, headers, body)` -> (status, payload): payload is the parsed JSON body, or text when the response is
-not JSON. Every call acts as the signed-in engineer (their access token), so Jira's own permissions apply.
+`http(method, url, headers, body)` -> (status, payload) or (status, payload, response headers): payload is the parsed
+JSON body, or text when the response is not JSON. Every call acts as the signed-in engineer (their access token), so
+Jira's own permissions apply. A 429 or 503 is retried once when Jira asks to wait RETRY_WAIT seconds or less;
+otherwise the JiraError carries retry_after so the caller can pass it on.
 """
 
 from __future__ import annotations
 
 import re
+import time
 from typing import Any, Callable, Dict, List, Optional, Tuple
 from urllib.parse import quote, urlencode
 
 AUTH = "https://auth.atlassian.com"
 API = "https://api.atlassian.com"
-SCOPES = ["read:jira-work", "write:jira-work", "read:jira-user", "offline_access"]
+# the Agile scopes (boards and sprints) were added after the first release: older connections lack them
+AGILE_SCOPES = ["read:board-scope:jira-software", "read:sprint:jira-software", "read:project:jira"]
+SCOPES = ["read:jira-work", "write:jira-work", "read:jira-user", "offline_access"] + AGILE_SCOPES
 ISSUE_KEY = re.compile(r"^[A-Z][A-Z0-9_]{0,30}-\d{1,9}$")
+PROJECT_KEY = re.compile(r"^[A-Z][A-Z0-9_]{0,30}$")
 LIST_FIELDS = ["summary", "status", "priority", "issuetype", "assignee", "reporter", "updated", "created", "project", "labels"]
 DETAIL_FIELDS = LIST_FIELDS + ["description", "comment", "attachment", "environment"]
 MAX_PAGES = 5
+RETRY_WAIT = 10      # seconds: a longer Retry-After is passed on to the caller instead of waiting here
+DEFAULT_WAIT = 2     # a 429 or 503 without a usable Retry-After
+_sleep = time.sleep
 
-Http = Callable[[str, str, Dict[str, str], Optional[Dict[str, Any]]], Tuple[int, Any]]
+Http = Callable[[str, str, Dict[str, str], Optional[Dict[str, Any]]], Tuple[Any, ...]]
 
 
 class JiraError(Exception):
-    def __init__(self, status: int, message: str):
+    def __init__(self, status: int, message: str, retry_after: Optional[int] = None):
         super().__init__(message)
         self.status = status
         self.message = message
+        self.retry_after = retry_after
+
+
+def _unpack(result: Tuple[Any, ...]) -> Tuple[int, Any, Dict[str, str]]:
+    """(status, payload, lower-case headers) from an http() answer with or without headers."""
+    headers = result[2] if len(result) > 2 and isinstance(result[2], dict) else {}
+    return int(result[0]), result[1], {str(k).lower(): str(v) for k, v in headers.items()}
+
+
+def retry_after(headers: Dict[str, str]) -> Optional[int]:
+    """Seconds from a Retry-After header; None when it is absent or not a number of seconds."""
+    value = (headers.get("retry-after") or "").strip()
+    return int(value) if value.isdigit() else None
+
+
+def check_project(key: str) -> str:
+    value = (key or "").strip().upper()
+    if not PROJECT_KEY.match(value):
+        raise ValueError(f"not a project key: {key}")
+    return value
 
 
 def _message(payload: Any) -> str:
@@ -62,7 +91,7 @@ def authorize_url(client_id: str, redirect_uri: str, state: str, scopes: Optiona
 
 
 def _token(http: Http, body: Dict[str, Any]) -> Dict[str, Any]:
-    status, payload = http("POST", f"{AUTH}/oauth/token", {"Content-Type": "application/json"}, body)
+    status, payload, _ = _unpack(http("POST", f"{AUTH}/oauth/token", {"Content-Type": "application/json"}, body))
     if status != 200 or not isinstance(payload, dict) or not payload.get("access_token"):
         raise JiraError(status, f"Atlassian refused the sign-in: {_message(payload)}")
     return payload
@@ -81,8 +110,8 @@ def refresh_tokens(http: Http, client_id: str, client_secret: str, refresh_token
 
 
 def accessible_resources(http: Http, access_token: str) -> List[Dict[str, Any]]:
-    status, payload = http("GET", f"{API}/oauth/token/accessible-resources", {"Authorization": f"Bearer {access_token}",
-                                                                               "Accept": "application/json"}, None)
+    status, payload, _ = _unpack(http("GET", f"{API}/oauth/token/accessible-resources",
+                                      {"Authorization": f"Bearer {access_token}", "Accept": "application/json"}, None))
     if status != 200 or not isinstance(payload, list):
         raise JiraError(status, f"could not list Jira sites: {_message(payload)}")
     return payload
@@ -117,8 +146,17 @@ class JiraClient:
         self.base = f"{API}/ex/jira/{cloud_id}"
 
     def _call(self, method: str, path: str, body: Optional[Dict[str, Any]] = None, ok: Tuple[int, ...] = (200, 201, 204)) -> Any:
-        status, payload = self.http(method, self.base + path, {"Authorization": f"Bearer {self.token}", "Accept": "application/json",
-                                                              "Content-Type": "application/json"}, body)
+        headers = {"Authorization": f"Bearer {self.token}", "Accept": "application/json", "Content-Type": "application/json"}
+        status, payload, answer = _unpack(self.http(method, self.base + path, headers, body))
+        if status in (429, 503):
+            wait = retry_after(answer)
+            if wait is None or wait <= RETRY_WAIT:   # one retry after a short wait
+                _sleep(DEFAULT_WAIT if wait is None else wait)
+                status, payload, answer = _unpack(self.http(method, self.base + path, headers, body))
+                wait = retry_after(answer)
+            if status in (429, 503):
+                busy = "Jira is limiting requests" if status == 429 else "Jira is unavailable"
+                raise JiraError(status, _message(payload) or busy, wait)
         if status not in ok:
             raise JiraError(status, _message(payload) or f"Jira answered {status}")
         return payload
@@ -141,6 +179,70 @@ class JiraClient:
                 break
             seen.add(token)
         return issues
+
+    def search_page(self, jql: str, next_token: Optional[str] = None, max_results: int = 50,
+                    fields: Optional[List[str]] = None) -> Dict[str, Any]:
+        """One page of issues: {"issues": [...], "next": token for the following page, or None on the last one}."""
+        body: Dict[str, Any] = {"jql": jql, "fields": fields or LIST_FIELDS, "maxResults": max(1, min(int(max_results), 100))}
+        if next_token:
+            body["nextPageToken"] = next_token
+        page = self._call("POST", "/rest/api/3/search/jql", body) or {}
+        token = page.get("nextPageToken")
+        last = page.get("isLast") or not token or token == next_token   # a repeated token would loop the caller
+        return {"issues": page.get("issues") or [], "next": None if last else token}
+
+    def parse_jql(self, jql: str) -> List[str]:
+        """Jira's strict validation of one query: its errors, empty when the query is valid."""
+        payload = self._call("POST", "/rest/api/3/jql/parse?validation=strict", {"queries": [jql]}) or {}
+        return [str(e) for q in payload.get("queries") or [] for e in q.get("errors") or []][:20]
+
+    def boards(self, name_filter: str = "", start: int = 0, max_results: int = 50) -> List[Dict[str, Any]]:
+        """Boards the user can see (Agile API), optionally filtered by name."""
+        query: Dict[str, Any] = {"startAt": max(0, int(start)), "maxResults": max(1, min(int(max_results), 50))}
+        if name_filter.strip():
+            query["name"] = name_filter.strip()[:100]
+        payload = self._call("GET", "/rest/agile/1.0/board?" + urlencode(query)) or {}
+        return [{"id": b.get("id"), "name": b.get("name"), "type": b.get("type"),
+                 "project_key": (b.get("location") or {}).get("projectKey")} for b in payload.get("values") or []]
+
+    def sprints(self, board_id: int, states: Optional[List[str]] = None, max_pages: int = 4) -> List[Dict[str, Any]]:
+        """Sprints of a board (Agile API), optionally only some states (active, future, closed)."""
+        board = int(board_id)
+        wanted = [s for s in states or [] if s in ("active", "future", "closed")]
+        out: List[Dict[str, Any]] = []
+        start = 0
+        for _ in range(max(1, max_pages)):
+            query: Dict[str, Any] = {"startAt": start, "maxResults": 50}
+            if wanted:
+                query["state"] = ",".join(wanted)
+            payload = self._call("GET", f"/rest/agile/1.0/board/{board}/sprint?" + urlencode(query)) or {}
+            values = payload.get("values") or []
+            out += [{"id": s.get("id"), "name": s.get("name"), "state": s.get("state"), "start": s.get("startDate"),
+                     "end": s.get("endDate")} for s in values]
+            if payload.get("isLast", True) or not values:
+                break
+            start += len(values)
+        return out
+
+    def sprint_issues(self, sprint_id: int, next_token: Optional[str] = None, max_results: int = 50) -> Dict[str, Any]:
+        return self.search_page(f"sprint = {int(sprint_id)} ORDER BY Rank ASC", next_token, max_results)
+
+    def issue_types(self, project_key: str) -> List[Dict[str, Any]]:
+        """Issue types the user can create in the project."""
+        payload = self._call("GET", f"/rest/api/3/issue/createmeta/{check_project(project_key)}/issuetypes?maxResults=100") or {}
+        values = payload.get("issueTypes") or payload.get("values") or []
+        return [{"id": str(t.get("id")), "name": t.get("name"), "subtask": bool(t.get("subtask"))} for t in values]
+
+    def create_issue(self, project_key: str, issue_type_id: str, summary_text: str, description_adf: Dict[str, Any],
+                     labels: Optional[List[str]] = None) -> Dict[str, Any]:
+        """{"id", "key", "self"} of the new issue."""
+        if not re.fullmatch(r"\d{1,20}", str(issue_type_id)):
+            raise ValueError("invalid issue type id")
+        fields: Dict[str, Any] = {"project": {"key": check_project(project_key)}, "issuetype": {"id": str(issue_type_id)},
+                                  "summary": " ".join((summary_text or "").split())[:255], "description": description_adf}
+        if labels:
+            fields["labels"] = ["-".join(str(label).split())[:255] for label in labels]   # Jira labels have no spaces
+        return self._call("POST", "/rest/api/3/issue", {"fields": fields}) or {}
 
     def issue(self, key: str) -> Dict[str, Any]:
         return self._call("GET", f"/rest/api/3/issue/{quote(check_key(key))}?fields={','.join(DETAIL_FIELDS)}")
