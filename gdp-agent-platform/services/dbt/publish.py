@@ -112,8 +112,40 @@ def project_from_branch(session, repo_fqn: str, branch: str, project_fqn: str, c
     return {"status": "CREATED", "dbt_project": name, "from": source}
 
 
+def publish_case_patch(session, request: Dict[str, Any]) -> Dict[str, Any]:
+    """A case's accepted DBT_PATCH as a draft pull request (PR Q2). Only ids and the branch come from the caller: the
+    file, its new content and the repository are read here from CASES.CASE_ARTIFACT and CODE.REPO, and the artifact
+    must be an ACCEPTED, publishable DBT_PATCH, so the procedure never pushes content a person did not accept."""
+    artifact_id, case_id = str(request.get("artifact_id") or ""), str(request.get("case_id") or "")
+    head = github.check_branch(str(request.get("head") or ""))
+    assert head.startswith("fix/"), "a case fix branch starts with fix/"
+    found = rows(session, "SELECT TYPE, STATUS, CONTENT FROM CASES.CASE_ARTIFACT WHERE ARTIFACT_ID = ? AND CASE_ID = ?",
+                 [artifact_id, case_id])
+    assert found, "case artifact not found"
+    content = variant(found[0]["CONTENT"]) or {}
+    assert found[0]["TYPE"] == "DBT_PATCH" and found[0]["STATUS"] == "ACCEPTED", "only an accepted dbt patch is published"
+    assert content.get("publishable") and content.get("new_content") and content.get("path"), "this patch cannot be published"
+    repo = rows(session, "SELECT GIT_URL, BRANCH, PROVIDER FROM CODE.REPO WHERE REPO_ID = ? AND ENABLED", [content.get("repo_id")])
+    assert repo and str(repo[0]["PROVIDER"] or "").upper() == "GITHUB", "the patch's repository is not a connected GitHub repository"
+    origin, base = repo[0]["GIT_URL"], str(repo[0]["BRANCH"] or "main")
+    with tool_call(session, None, "publish_case_patch", {"case_id": case_id, "artifact_id": artifact_id, "head": head}) as call:
+        try:
+            result = github.publish(github.urllib_request(_token()), origin, base, head, {content["path"]: content["new_content"]},
+                                    title=clip(request.get("title") or f"Case fix {case_id[:8]}", 200),
+                                    body=clip(request.get("body") or "", 6000),
+                                    message=clip(request.get("title") or "Case fix", 200), draft=True)
+            call.summary = f"{result['status']} {head}: PR {(result.get('pull_request') or {}).get('url') or 'none'}"
+        except Exception as exc:
+            result = {**github.explain(exc, origin), "base_branch": base, "head_branch": head}
+            result["detail"] = clip(result.get("detail"), 1000)
+            call.status, call.error = "FAILED", clip(exc)
+    return result
+
+
 def publish_dbt_pr(session, run_id: str, payload_json: str = "{}") -> Dict[str, Any]:
     payload = json.loads(payload_json or "{}")
+    if not run_id and isinstance(payload.get("case_patch"), dict):
+        return publish_case_patch(session, payload["case_patch"])
     plan = _plan(session, run_id, payload) if run_id else dict(payload)
     if payload.get("check_only"):
         try:

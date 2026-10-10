@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useEffect, useState, useTransition, type ReactNode } from "react";
 import {
-  ArrowRightLeft, Check, ExternalLink, FileCode2, GitMerge, Link2, Loader2, MessageSquarePlus, Pencil, Sparkles, Unlink, UserPlus, X,
+  ArrowRightLeft, Check, ExternalLink, GitMerge, Link2, Loader2, MessageSquarePlus, Pencil, Sparkles, Unlink, UserPlus, X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input, Select, Textarea } from "@/components/ui/input";
@@ -13,16 +13,20 @@ import { When } from "../../../ops/ops-shared";
 import { incidentHref, SeverityPill } from "../../../incidents/incident-shared";
 import {
   assignCase, caseDetail, commentCase, linkCase, listCases, mergeCase, setCaseStatus, unlinkCase, updateCase,
-  type CaseArtifact, type CaseDetail, type CaseLink, type CaseResult,
+  type CaseAi, type CaseDetail, type CaseLink, type CaseResult, type TriageResult,
 } from "../actions";
 import { RESOLVE_ONLY, SIDE, STATUSES, STEPS } from "../case-filters";
 import { caseHref, CaseKindPill, CaseStatusPill, caseStatusLabel, pill, SourceChip, up } from "../case-ui";
+import { CaseAiPanel } from "./case-ai";
+import { acceptedTests, KnowledgePreview, Proposals } from "./case-artifacts";
+import { JiraPost } from "./case-kit";
 
 const OVERRIDE_MIN = 15;
 const JIRA_KEY = /^[A-Z][A-Z0-9_]+-\d+$/;
 const CASE_NUMBER = /^CASE-\d+$/i;
 type Mode = "assign" | "status" | "merge" | "title" | null;
-type Busy = "assign" | "status" | "merge" | "title" | "comment" | "link" | "unlink" | null;
+/** The action in flight: "assign", "status", "merge", ... or "<action>:<artifact or case id>" for one row. */
+type Busy = string | null;
 
 const LINK_KINDS: { id: string; label: string; placeholder: string; valid: (s: string) => boolean; hint: string }[] = [
   { id: "JIRA", label: "Jira issue", placeholder: "QA-123", valid: (s) => JIRA_KEY.test(s.toUpperCase()), hint: "An issue key looks like PROJECT-123." },
@@ -102,10 +106,15 @@ function StatusSteps({ status }: { status: string }) {
 
 /** One case: header with status steps and actions, then description, AI, artifacts and timeline, with links and details
  *  on the side. Every action reloads the case, which replaces what is shown. */
-export function CaseView({ initial, canWork, canResolve, opened }: {
-  initial: CaseDetail; canWork: boolean; canResolve: boolean; opened: "new" | "existing" | null;
+export function CaseView({ initial, canWork, canResolve, canAI, canDbt, canJira, opened }: {
+  initial: CaseDetail; canWork: boolean; canResolve: boolean; canAI: boolean; canDbt: boolean; canJira: boolean; opened: "new" | "existing" | null;
 }) {
   const [data, setData] = useState(initial);
+  // the latest triage answer, shown until a reload brings the stored analysis; `cached` is only known from a triage call
+  const [aiNow, setAiNow] = useState<CaseAi | null>(null);
+  const [cached, setCached] = useState<boolean | null>(null);
+  // last test outcomes seen in this session, by artifact id (runs and verify)
+  const [outcomes, setOutcomes] = useState<Record<string, string>>({});
   const [mode, setMode] = useState<Mode>(null);
   const [busy, setBusy] = useState<Busy>(null);
   const [pending, start] = useTransition();
@@ -141,18 +150,20 @@ export function CaseView({ initial, canWork, canResolve, opened }: {
     const ticket = refreshSeq.next();
     const r = await caseDetail(caseId);
     if (!live.current || !refreshSeq.current(ticket)) return;
-    if (r.ok) setData(r.data);
-    else setError(r.status === 404 ? "This case is no longer visible to you. It may have moved to a domain outside yours." : `Could not reload the case: ${r.error}`);
+    if (r.ok) {
+      setData(r.data);
+      if (r.data.case.ai?.generated_at) setAiNow(null);
+    } else setError(r.status === 404 ? "This case is no longer visible to you. It may have moved to a domain outside yours." : `Could not reload the case: ${r.error}`);
   };
 
-  const run = (what: NonNullable<Busy>, fn: () => Promise<CaseResult<unknown>>, done: string, after?: () => void) =>
+  const run = (what: string, fn: () => Promise<CaseResult<unknown>>, done: string | ((data: unknown) => string), after?: () => void) =>
     start(async () => {
       setBusy(what); setError(""); setNotice("");
       try {
         const r = await fn();
         if (!live.current) return;
-        if (!r.ok) { setError(r.error); return; }
-        setNotice(done);
+        if (!r.ok) { if (r.status === 202) setNotice(r.error); else setError(r.error || "The action failed."); return; }
+        setNotice(typeof done === "function" ? done(r.data) : done);
         after?.();
         await reload();
       } catch (e) {
@@ -194,8 +205,20 @@ export function CaseView({ initial, canWork, canResolve, opened }: {
   const kindDef = LINK_KINDS.find((k) => k.id === linkKind) ?? LINK_KINDS[0];
   const ref = linkKind === "JIRA" ? linkRef.trim().toUpperCase() : linkRef.trim();
   const refOk = !!ref && kindDef.valid(ref);
-  const ai = c.ai;
-  const aiSummary = (typeof ai?.summary === "string" && ai.summary) || c.ai_summary;
+  const ai = aiNow ?? c.ai;
+  const jiraLinks = data.links.filter((l) => up(l.kind) === "JIRA");
+  // table names this page can link to by id: the case's own table and the AI's candidates
+  const tables: Record<string, string> = {};
+  if (c.target_fqn && c.target_table_id) tables[c.target_fqn.toUpperCase()] = c.target_table_id;
+  for (const t of ai?.target_candidates ?? []) if (t?.fqn && t.target_table_id) tables[t.fqn.toUpperCase()] = t.target_table_id;
+  const onTriaged = (r: TriageResult) => {
+    setAiNow(r.ai); setCached(r.cached);
+    setData((d) => ({ ...d, artifacts: Array.isArray(r.artifacts) ? r.artifacts : d.artifacts }));
+    setNotice(r.cached ? "Nothing changed since the last triage; showing the cached analysis." : "Triage done.");
+    void reload();
+  };
+  const setOutcome = (id: string, outcome: string) => setOutcomes((o) => ({ ...o, [id]: outcome }));
+  const tests = acceptedTests(data.artifacts).length;
 
   return (
     <div className="space-y-5">
@@ -280,6 +303,7 @@ export function CaseView({ initial, canWork, canResolve, opened }: {
                 </Select>
                 <Input value={statusNote} onChange={(e) => setStatusNote(e.target.value)} placeholder="Note for the timeline (optional)" className="h-8 min-w-[14rem] flex-1 text-xs" aria-label="Status note" />
               </div>
+              {nextStatus === "RESOLVED" && <KnowledgePreview ai={ai} fallbackSummary={c.ai_summary} artifacts={data.artifacts} outcomes={outcomes} />}
               {needsOverride && (
                 <div className="space-y-1">
                   <p className="text-xs text-amber-800 dark:text-amber-200">This case is not verified. Resolving it anyway needs a reason of at least {OVERRIDE_MIN} characters; it is kept on the timeline.</p>
@@ -333,14 +357,15 @@ export function CaseView({ initial, canWork, canResolve, opened }: {
           </Section>
 
           <Section title="AI analysis" aside={<Sparkles className="h-4 w-4 text-muted-foreground" />}>
-            <AiSlot summary={aiSummary || null} model={typeof ai?.model === "string" ? ai.model : null}
-                    at={typeof ai?.generated_at === "string" ? ai.generated_at : null} />
+            <CaseAiPanel caseId={caseId} caseNumber={c.number} ai={ai} cached={cached} fallbackSummary={c.ai_summary}
+                         canAI={canAI} canWork={canWork} canResolve={canResolve} canJira={canJira} hasJira={jiraLinks.length > 0}
+                         targetTableId={c.target_table_id} tables={tables} busy={busy} pending={pending} act={run}
+                         onTriaged={onTriaged} onNotice={(t) => { setError(""); setNotice(t); void reload(); }} />
           </Section>
 
-          <Section title="Proposals and tests" aside={<span className="text-xs text-muted-foreground">{data.artifacts.length}</span>}>
-            {data.artifacts.length ? (
-              <ul className="space-y-2">{data.artifacts.map((a) => <Artifact key={a.artifact_id} a={a} />)}</ul>
-            ) : <Muted>AI triage and fix proposals arrive in the next release.</Muted>}
+          <Section title="Proposals and tests" aside={<span className="text-xs text-muted-foreground">{data.artifacts.length}{tests ? ` · ${tests} accepted test${tests === 1 ? "" : "s"}` : ""}</span>}>
+            <Proposals caseId={caseId} artifacts={data.artifacts} runId={c.run_id} canWork={canWork} canDbt={canDbt} busy={busy} pending={pending}
+                       act={run} outcomes={outcomes} setOutcome={setOutcome} reload={reload} onNotice={(t) => { setError(""); setNotice(t); }} />
           </Section>
 
           <Section title="Timeline" aside={<span className="text-xs text-muted-foreground">{data.events.length}</span>}>
@@ -408,6 +433,12 @@ export function CaseView({ initial, canWork, canResolve, opened }: {
                 })}
               </ul>
             ) : <Muted>Nothing linked yet.</Muted>}
+            {canJira && jiraLinks.length > 0 && (
+              <div className="mt-3 border-t pt-3">
+                <JiraPost caseId={caseId} label="Post update to Jira" hint={`Goes to ${jiraLinks.map((l) => l.ref).join(", ")}.`}
+                          onPosted={(t) => { setError(""); setNotice(t); void reload(); }} />
+              </div>
+            )}
             {canWork && (
               <form className="mt-3 space-y-1.5 border-t pt-3" onSubmit={(e) => {
                 e.preventDefault();
@@ -439,53 +470,5 @@ export function CaseView({ initial, canWork, canResolve, opened }: {
         </div>
       </div>
     </div>
-  );
-}
-
-/** The AI slot: the stored summary until the triage engine adds hypotheses, evidence and blast radius. */
-function AiSlot({ summary, model, at }: { summary: string | null; model: string | null; at: string | null }) {
-  if (!summary) return <Muted>No AI analysis yet. Automatic triage of new cases arrives in the next release.</Muted>;
-  return (
-    <div className="space-y-2 text-xs">
-      <p className="whitespace-pre-wrap break-words">{summary}</p>
-      <p className="border-t pt-2 text-[11px] text-muted-foreground">
-        {model ? <>By <span className="font-mono">{model}</span></> : "AI generated"}{at && <> · <When iso={at} /></>}. Check it before acting.
-      </p>
-    </div>
-  );
-}
-
-const ARTIFACT_TONE: Record<string, string> = {
-  PROPOSED: "bg-amber-50 text-amber-700 ring-amber-100",
-  ACCEPTED: "bg-sky-50 text-sky-700 ring-sky-100",
-  APPLIED: "bg-emerald-50 text-emerald-700 ring-emerald-100",
-  REJECTED: "bg-slate-100 text-slate-600 ring-slate-200",
-};
-
-function Artifact({ a }: { a: CaseArtifact }) {
-  return (
-    <li className="rounded-lg border">
-      <p className="flex flex-wrap items-center gap-2 border-b px-3 py-2 text-xs">
-        <FileCode2 className="h-3.5 w-3.5 text-muted-foreground" />
-        <span className="rounded bg-muted px-1 text-[10px] text-muted-foreground">{words(a.type)}</span>
-        <span className="min-w-0 flex-1 truncate font-medium">{a.title || words(a.type)}</span>
-        <span className={cn(pill, ARTIFACT_TONE[up(a.status)] ?? ARTIFACT_TONE.REJECTED)}>{words(a.status)}</span>
-      </p>
-      <div className="space-y-2 px-3 py-2 text-xs">
-        {a.content && <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words rounded bg-muted/40 p-2 font-mono text-[11px]">{a.content}</pre>}
-        {a.diff && (
-          <pre className="max-h-80 overflow-auto rounded-lg bg-slate-950 p-3 font-mono text-[11px] leading-relaxed text-slate-200" aria-label="Diff">
-            {a.diff.split("\n").map((line, i) => (
-              <span key={i} className={cn("block", line.startsWith("+") && !line.startsWith("+++") ? "text-emerald-300"
-                : line.startsWith("-") && !line.startsWith("---") ? "text-rose-300" : line.startsWith("@@") ? "text-sky-300" : undefined)}>{line || " "}</span>
-            ))}
-          </pre>
-        )}
-        <p className="text-[11px] text-muted-foreground">
-          <When iso={a.created_at} rel empty="-" />
-          {a.decided_by && <> · {words(a.status)} by {a.decided_by}{a.decided_at && <> <When iso={a.decided_at} rel /></>}</>}
-        </p>
-      </div>
-    </li>
   );
 }

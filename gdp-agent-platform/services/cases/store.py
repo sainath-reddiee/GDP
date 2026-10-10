@@ -162,3 +162,65 @@ class SqlStore:
         for r in rows:
             r["content"] = _json(r.get("content"))
         return rows
+
+    def artifact(self, case_id: str, artifact_id: str) -> Optional[Dict[str, Any]]:
+        found = self.db.query("""SELECT ARTIFACT_ID, CASE_ID, TYPE, TITLE, CONTENT, DIFF, STATUS, PROPOSED_BY, DECIDED_BY,
+                                        DECIDED_AT, CREATED_AT FROM CASES.CASE_ARTIFACT
+                                  WHERE CASE_ID = %s AND ARTIFACT_ID = %s""", (case_id, artifact_id))
+        if not found:
+            return None
+        found[0]["content"] = _json(found[0].get("content"))
+        return found[0]
+
+    def add_artifact(self, case_id: str, kind: str, title: str, content: Dict[str, Any], diff: Optional[str],
+                     proposed_by: str) -> str:
+        artifact_id = str(uuid.uuid4())
+        self.db.execute("""INSERT INTO CASES.CASE_ARTIFACT (ARTIFACT_ID, CASE_ID, TYPE, TITLE, CONTENT, DIFF, STATUS, PROPOSED_BY)
+                           SELECT %s, %s, %s, %s, PARSE_JSON(%s), %s, 'PROPOSED', %s""",
+                        (artifact_id, case_id, kind, (title or kind)[:500], json.dumps(content or {}, default=str),
+                         diff[:100000] if diff else None, proposed_by))
+        return artifact_id
+
+    def set_artifact(self, case_id: str, artifact_id: str, status: Optional[str] = None, actor: Optional[str] = None,
+                     content: Optional[Dict[str, Any]] = None, expect_status: Optional[str] = None) -> int:
+        """Change an artifact's status (with who decided it and when) and/or replace its content."""
+        sets, params = ["UPDATED_AT = CURRENT_TIMESTAMP()"], []
+        if status:
+            sets += ["STATUS = %s", "DECIDED_BY = %s", "DECIDED_AT = CURRENT_TIMESTAMP()"]
+            params += [status, actor or SYSTEM]
+        if content is not None:
+            sets.append("CONTENT = PARSE_JSON(%s)")
+            params.append(json.dumps(content, default=str))
+        where, wparams = "CASE_ID = %s AND ARTIFACT_ID = %s", [case_id, artifact_id]
+        if expect_status:
+            where += " AND STATUS = %s"
+            wparams.append(expect_status)
+        return self.db.execute_count(f"UPDATE CASES.CASE_ARTIFACT SET {', '.join(sets)} WHERE {where}",
+                                     tuple(params + wparams))
+
+    def supersede_ai_artifacts(self, case_id: str, note: str) -> int:
+        """Proposals of an earlier triage that nobody decided: rejected by the system (accepted and applied ones stay)."""
+        return self.db.execute_count(
+            """UPDATE CASES.CASE_ARTIFACT
+                  SET STATUS = 'REJECTED', DECIDED_BY = 'system', DECIDED_AT = CURRENT_TIMESTAMP(),
+                      UPDATED_AT = CURRENT_TIMESTAMP(),
+                      CONTENT = OBJECT_INSERT(COALESCE(CONTENT, OBJECT_CONSTRUCT()), 'decision_note', %s::VARIANT, TRUE)
+                WHERE CASE_ID = %s AND STATUS = 'PROPOSED' AND PROPOSED_BY = 'ai'""", (note, case_id))
+
+    # ---- AI
+    def set_ai(self, case_id: str, ai: Dict[str, Any], summary: str, models: Optional[List[str]] = None) -> None:
+        sets = ["AI = PARSE_JSON(%s)", "AI_SUMMARY = %s", "UPDATED_AT = CURRENT_TIMESTAMP()"]
+        params: List[Any] = [json.dumps(ai, default=str), (summary or "")[:2000]]
+        if models:
+            sets.append("MODELS = PARSE_JSON(%s)::ARRAY")
+            params.append(json.dumps(list(models)[:100]))
+        params.append(case_id)
+        self.db.execute(f"UPDATE CASES.CASE_RECORD SET {', '.join(sets)} WHERE CASE_ID = %s", tuple(params))
+
+    def ai_calls(self, actor: str, minutes: int = 60) -> int:
+        """AI calls (triage and questions; cached answers are not counted) the user made in the last minutes."""
+        found = self.db.query(f"""SELECT COUNT(*) AS N FROM CASES.CASE_EVENT
+                                   WHERE UPPER(ACTOR) = %s AND KIND IN ('triaged', 'ai_question')
+                                     AND CREATED_AT >= DATEADD(minute, -{int(minutes)}, CURRENT_TIMESTAMP())""",
+                              (str(actor or "").upper(),))
+        return int(found[0]["n"] or 0) if found else 0

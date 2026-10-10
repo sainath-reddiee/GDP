@@ -63,9 +63,10 @@ def _same(current: Dict[str, Any], content: str, content_json: Any) -> bool:
 def remember(session, *, domain_id: Optional[str], kind: str, key: str, title: str, content: str,
              content_json: Any = None, tags: Iterable[str] = (), origin: str, run_id: Optional[str] = None,
              confidence: Optional[float] = None, status: Optional[str] = None, change_note: Optional[str] = None,
-             by_domain: bool = True) -> Optional[str]:
+             by_domain: bool = True, mode: Optional[str] = None) -> Optional[str]:
     """Write one version. Returns the new KNOWLEDGE_ID, or None when nothing changed. by_domain=False keys the lineage
-    on the reference alone (references that already contain a run id)."""
+    on the reference alone (references that already contain a run id). mode='review' always queues the version for a
+    steward, whatever the learning policy says (a resolved case's knowledge)."""
     from services.common.sql import insert_rows
 
     content = clip(content, 16000)
@@ -74,7 +75,8 @@ def remember(session, *, domain_id: Optional[str], kind: str, key: str, title: s
                                  WHERE {where} AND IS_CURRENT ORDER BY VERSION DESC LIMIT 1""", params)
     if current and _same(current[0], content, content_json) and (status or "ACTIVE") == current[0].get("STATUS"):
         return None
-    mode = "auto" if status else mode_for(config_value(session, "KNOWLEDGE_LEARNING_POLICY", {}), kind, origin)
+    if mode != "review":
+        mode = "auto" if status else mode_for(config_value(session, "KNOWLEDGE_LEARNING_POLICY", {}), kind, origin)
     version = (scalar(session, f"SELECT MAX(VERSION) FROM KNOWLEDGE.DOMAIN_KNOWLEDGE WHERE {where}", params) or 0) + 1
     if mode == "review":
         # one proposal at a time per lineage: a newer proposal replaces the one still waiting

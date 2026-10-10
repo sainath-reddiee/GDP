@@ -47,7 +47,7 @@ export function RetryBadge({ value }: { value: string | null | undefined }) {
   return <span className={cn(pill, t.cls)}>{t.label}</span>;
 }
 
-function ConfidenceBar({ value }: { value: number | null | undefined }) {
+export function ConfidenceBar({ value }: { value: number | null | undefined }) {
   if (value === null || value === undefined || !Number.isFinite(value)) return <span className="text-muted-foreground">not given</span>;
   const v = Math.min(1, Math.max(0, value));
   const tone = v >= 0.75 ? "bg-emerald-500" : v >= 0.45 ? "bg-amber-500" : "bg-rose-500";
