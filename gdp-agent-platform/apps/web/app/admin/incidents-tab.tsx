@@ -290,6 +290,7 @@ function TeamRow({ team: t, may, onEdit, onMsg, reload }: { team: OpsTeam; may: 
           <Button size="sm" variant="destructive" disabled={pending} onClick={remove}>{pending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}Delete</Button>
         </div>
       )}
+      {t.webhook_detail && <p role="alert" className="text-xs text-amber-700 dark:text-amber-300">{t.webhook_detail}</p>}
       <div className="grid gap-2 md:grid-cols-2">
         <Webhook team={t} kind="alerts" has={t.has_teams_webhook} may={may} onMsg={onMsg} reload={reload} />
         <Webhook team={t} kind="escalation" has={t.has_escalation_webhook} may={may} onMsg={onMsg} reload={reload} />

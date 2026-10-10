@@ -4,8 +4,9 @@ AIP_AUTH=dev  one shared session from the named connection in ~/.snowflake/conne
               (browser SSO on this account). Every action is attributed to that user.
 AIP_AUTH=pat  each user signs in with their own programmatic access token; procedures see
               that user as CURRENT_USER(). Tokens are held in memory only, never persisted.
-system_db()   background work (ops worker, Airflow ingest): the dev session in dev mode, otherwise a key-pair
-              service user from AIP_SERVICE_USER and AIP_SERVICE_KEY_PATH.
+system_db()   background work (Airflow ingest, "poll now"): the dev session in dev mode, otherwise a key-pair
+              service user from AIP_SERVICE_USER and AIP_SERVICE_KEY_PATH. Shared, so never in a transaction.
+worker_db()   the ops worker's own non-shared connection with the same identity, so it can use transactions.
 
 Windows Credential Manager often rejects Snowflake's OAuth token write (CredWrite 1783).
 That must not abort a successful sign-in, and it must not retry SSO on every HTTP request.
@@ -323,6 +324,42 @@ def system_db() -> Db:
             raise SnowflakeSessionError(f"The service user could not sign in: {str(exc)[:300]}") from exc
         _system = Db(conn, found_user, role, shared=True)
         return _system
+
+
+_worker: Optional[Db] = None
+_worker_lock = threading.Lock()
+
+
+def worker_db() -> Db:
+    """A dedicated, non-shared session for the ops worker loop, so its groups of writes can run in transactions
+    (app.db.transaction) without catching statements of other callers.
+
+    Dev mode: a second connection from the same named connection; the connector reuses the SSO token cached by the
+    first sign-in (client_store_temporary_credential, kept in memory by _patch_keyring), so no second browser prompt in
+    a process that already signed in. PAT mode: a second key-pair session for the service user. Opened once per
+    process and reopened when it dies; SnowflakeSessionError when it cannot be opened."""
+    global _worker
+    with _worker_lock:
+        if not _dead(_worker):
+            return _worker
+        if AUTH_MODE == "dev":
+            try:
+                conn = _open_dev()
+                user, role = _identity(conn)
+            except Exception as exc:
+                raise SnowflakeSessionError(_friendly(exc)) from exc
+        else:
+            user_name = (os.environ.get(SERVICE_USER_ENV) or "").strip()
+            key_path = (os.environ.get(SERVICE_KEY_ENV) or "").strip()
+            if not user_name or not key_path or not os.path.isfile(key_path):
+                system_db()   # raises the same configuration error the ingest gets
+            try:
+                conn = _open_service(user_name, key_path)
+                user, role = _identity(conn)
+            except Exception as exc:
+                raise SnowflakeSessionError(f"The service user could not sign in: {str(exc)[:300]}") from exc
+        _worker = Db(conn, user, role, shared=False)
+        return _worker
 
 
 _ROLE_IDENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_$]{0,254}$")

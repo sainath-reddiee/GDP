@@ -9,7 +9,7 @@ export type OpsSummary = { envs: number; dags: number; failing_24h: number; runn
 
 export type AirflowEnv = {
   env_id: string; name: string; kind: string; mwaa_env: string; region: string; airflow_url: string | null; api_version: string | null;
-  enabled: boolean; poll_seconds: number; push_enabled: boolean; has_push_secret: boolean; last_poll_at: string | null;
+  enabled: boolean; poll_seconds: number; push_enabled: boolean; has_push_secret: boolean; push_secret_detail?: string | null; last_poll_at: string | null;
   last_error: string | null; dags: number;
 };
 export type EnvInput = {

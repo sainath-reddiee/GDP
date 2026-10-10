@@ -61,11 +61,17 @@ def on_task_instance_success(previous_state, task_instance):
     _task(task_instance, "success")
 
 
+def _failed(task_instance, error=None) -> None:
+    # Airflow calls the failed hook for a try that will be retried too: report the instance's real state (up_for_retry),
+    # so a retrying task is not alerted as failed
+    core.safe(lambda: core.emit(core.task_payload(task_instance, core.failed_state(task_instance), error)))
+
+
 if _FAILED_HAS_ERROR:
     @hookimpl
     def on_task_instance_failed(previous_state, task_instance, error):
-        _task(task_instance, "failed", error)
+        _failed(task_instance, error)
 else:
     @hookimpl
     def on_task_instance_failed(previous_state, task_instance):
-        _task(task_instance, "failed")
+        _failed(task_instance)

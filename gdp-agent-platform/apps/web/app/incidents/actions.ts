@@ -60,7 +60,7 @@ export type BulkResult = { incident_id: string; ok: boolean; error?: string | nu
 
 export type OpsTeam = {
   team_id: string; name: string; jira_project: string | null; jira_component: string | null; jira_assignee_account_id: string | null;
-  has_teams_webhook: boolean; escalation_minutes: number | null; has_escalation_webhook: boolean; members: string[];
+  has_teams_webhook: boolean; escalation_minutes: number | null; has_escalation_webhook: boolean; webhook_detail?: string | null; members: string[];
 };
 export type TeamInput = {
   name: string; jira_project: string | null; jira_component: string | null; jira_assignee_account_id: string | null;

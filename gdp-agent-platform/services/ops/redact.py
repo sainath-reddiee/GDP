@@ -7,7 +7,7 @@ sent to AI, Jira or Teams. It is deliberately greedy: a false positive hides a h
 from __future__ import annotations
 
 import re
-from typing import Tuple
+from typing import Any, Dict, Tuple
 
 MASK = "[REDACTED]"
 
@@ -51,3 +51,27 @@ def redact_count(text: str) -> Tuple[str, int]:
 
 def redact(text: str) -> str:
     return redact_count(text)[0]
+
+
+LOG_FIELDS = {"error", "log", "logs", "message", "traceback", "exception", "stderr", "stdout", "detail", "note"}
+PAYLOAD_TEXT_MAX = 4000
+
+
+def redact_payload(value: Any, depth: int = 0) -> Any:
+    """A JSON payload fit to store (OPS.EVENT): every string redacted; error text and log-like fields keep their
+    last 4000 characters."""
+    if depth > 8:
+        return None
+    if isinstance(value, dict):
+        out: Dict[str, Any] = {}
+        for k, v in value.items():
+            item = redact_payload(v, depth + 1)
+            if isinstance(item, str) and str(k).lower() in LOG_FIELDS:
+                item = item[-PAYLOAD_TEXT_MAX:]
+            out[k] = item
+        return out
+    if isinstance(value, list):
+        return [redact_payload(v, depth + 1) for v in value[:500]]
+    if isinstance(value, str):
+        return redact(value)
+    return value
