@@ -74,9 +74,12 @@ def test_schema_yml_models_and_sources():
     chunks, _, _ = _repo()
     model = next(c for c in chunks if c["kind"] == "DBT_SCHEMA_YML" and c["name"] == "orders")
     assert model["columns"] == ["ORDER_ID", "STATUS"]
-    assert {"unique", "not_null", "accepted_values"} <= set(model["tests"])
+    # one entry per test definition, with its column
+    assert model["tests"] == ["unique:ORDER_ID", "not_null:ORDER_ID", "accepted_values:STATUS"]
+    assert model["described"] is True
     source = next(c for c in chunks if c["kind"] == "DBT_SOURCE")
     assert source["name"] == "raw" and source["sources"] == ["raw.orders", "raw.customers"]
+    assert source["columns"] == []  # tables are not columns
 
 
 def test_markdown_python_and_plain_sql():
@@ -213,6 +216,7 @@ def _api():
     from pathlib import Path
 
     sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "apps" / "api"))
+    import app.main  # noqa: E402,F401  (loads the routers, so code_api is not imported half-way)
     import app.code_api as code_api  # noqa: E402
 
     return code_api
@@ -293,3 +297,36 @@ def test_credentials_refused_for_reused_clone():
         api.set_credentials("r1", api.CredentialsIn(mode="public"), db=db)
     assert err.value.status_code == 400
     assert api._owns_git_repo({"name": "DEMO", "git_repository": f"{api.DATABASE}.CODE.DEMO", "created_objects": []})
+
+
+def test_schema_tests_on_source_columns_and_model_level():
+    text = """version: 2
+models:
+  - name: fct
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns: [a, b]
+    columns:
+      - name: a
+        description: key
+        data_tests: [not_null]
+      - name: b
+        tests:
+          - relationships:
+              to: ref('dim')
+              field: id
+sources:
+  - name: raw
+    tables:
+      - name: orders
+        columns:
+          - name: id
+            tests:
+              - unique
+"""
+    chunks = dbt_parse._schema_chunks("models/s.yml", text, None)
+    fct = next(c for c in chunks if c["name"] == "fct")
+    assert fct["tests"] == ["dbt_utils.unique_combination_of_columns", "not_null:A", "relationships:B"]
+    assert fct["columns"] == ["A", "B"] and fct["described"] is False
+    raw = next(c for c in chunks if c["name"] == "raw")
+    assert raw["sources"] == ["raw.orders"] and raw["columns"] == ["ID"] and raw["tests"] == ["unique:ORDERS.ID"]

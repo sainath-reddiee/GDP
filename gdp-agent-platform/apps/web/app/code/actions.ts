@@ -157,3 +157,50 @@ export async function dependencyPath(source: string, target: string, repoId?: st
   if (repoId) p.set("repo_id", repoId);
   return attemptValue(() => api<{ source: string; target: string; steps: PathStep[] }>(`/api/code/path?${p}`));
 }
+
+// ---------------------------------------------------------------- catalog, files, AI usage and lineage diagrams
+export type CatalogModel = {
+  name: string; kind: "model" | "snapshot"; path: string; line: number; folder: string; materialized: string | null;
+  columns: number; documented_columns: number; schema_path: string | null; schema_line: number | null; tests: number;
+  test_list: string[]; refs: number; sources: number; macros: string[]; hard_coded: string[]; upstream: number;
+  downstream: number; reach: number;
+};
+export type Catalog = {
+  models: CatalogModel[];
+  sources: { source: string; table: string; path: string; line: number; tests: number; used_by: number }[];
+  macros: { name: string; path: string; line: number; used_by: number }[];
+  totals: { models: number; snapshots: number; source_tables: number; macros: number; tests: number; tested_models: number;
+            documented_models: number; hard_coded_models: number; unused_macros: number };
+};
+export type RepoFile = { path: string; lang: string | null; size: number | null; skipped_reason: string | null; indexed_at: string | null;
+                         chunks: number; kinds: string[] };
+export type CodeUsage = {
+  days: number; citations: number; runs: number; stages: Record<string, { citations: number; runs: number }>;
+  recent: { run_id: string | null; run_name: string | null; stage: string; citations: number; last_used: string; names: string[] }[];
+  top: { name: string | null; kind: string; path: string; start_line: number; repo_id: string; citations: number }[];
+};
+export type Neighborhood = {
+  name: string; known: boolean;
+  nodes: { id: string; name: string; level: number; path: string | null; via?: string }[];
+  edges: { from: string; to: string; via: string }[];
+};
+
+export async function repoCatalog(id: string) {
+  return attemptValue(() => api<Catalog>(`/api/code/repos/${id}/catalog`));
+}
+
+export async function repoFiles(id: string) {
+  return attemptValue(() => api<{ files: RepoFile[] }>(`/api/code/repos/${id}/files`));
+}
+
+export async function codeUsage(repoId?: string, days = 30) {
+  const p = new URLSearchParams({ days: String(days) });
+  if (repoId) p.set("repo_id", repoId);
+  return attemptValue(() => api<CodeUsage>(`/api/code/usage?${p}`));
+}
+
+export async function neighborhood(name: string, repoId?: string, depth = 2) {
+  const p = new URLSearchParams({ name, depth: String(depth) });
+  if (repoId) p.set("repo_id", repoId);
+  return attemptValue(() => api<Neighborhood>(`/api/code/neighborhood?${p}`));
+}

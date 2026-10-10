@@ -73,7 +73,7 @@ def test_architecture_summary():
     g, _ = _graph()
     files = [{"path": p, "lang": p.rsplit(".", 1)[-1]} for p in FILES]
     a = code_graph.architecture(files, {"DBT_MODEL": 3}, g, [{"root": "", "models": ["models"]}])
-    assert a["dbt_layers"] == {"staging": 1, "marts": 2}
+    assert a["dbt_layers"] == {"staging": 1, "marts": 2}  # folder under models/
     assert {"table": "analytics.legacy_rates", "read_by": "fct_orders"} in a["hard_coded_tables"]
     assert "rpt_daily" in a["leaf_models"] and a["languages"]["sql"] >= 5
 
@@ -83,3 +83,40 @@ def test_table_refs_and_module_names():
     assert reads == ["db.s.t"] and writes == []
     assert table_refs("merge into dw.t using stg.t s on 1=1 when matched then update set a = 1") == (["stg.t"], ["dw.t"])
     assert module_name("pkg/sub/__init__.py") == "pkg.sub" and module_name("a/b.py") == "a.b"
+
+
+def test_catalog_counts_tests_docs_and_lineage():
+    import sys
+    from pathlib import Path
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "apps" / "api"))
+    import app.main  # noqa: F401
+    from app.code_api import build_catalog
+
+    files = dict(FILES)
+    files["models/marts/schema.yml"] = """version: 2
+models:
+  - name: fct_orders
+    columns:
+      - name: id
+        tests: [unique, not_null]
+sources:
+  - name: raw
+    tables:
+      - name: orders
+        columns:
+          - name: id
+            tests: [not_null]
+"""
+    chunks, edges, _ = parse_repo(files, "r1")
+    rows = [{**c, "text": c["text"]} for c in chunks]
+    cat = build_catalog(rows, code_graph.Graph(edges))
+    fct = next(m for m in cat["models"] if m["name"] == "fct_orders")
+    assert fct["tests"] == 2 and fct["schema_path"] == "models/marts/schema.yml"
+    assert fct["hard_coded"] == ["analytics.legacy_rates"] and fct["downstream"] == 1
+    stg = next(m for m in cat["models"] if m["name"] == "stg_orders")
+    assert stg["tests"] == 0 and stg["macros"] == ["hash_key"] and stg["reach"] == 2
+    assert cat["sources"][0]["table"] == "raw.orders" and cat["sources"][0]["tests"] == 1 and cat["sources"][0]["used_by"] == 1
+    t = cat["totals"]
+    assert (t["models"], t["tests"], t["tested_models"], t["documented_models"], t["hard_coded_models"]) == (3, 3, 1, 1, 1)
+    assert next(m for m in cat["macros"] if m["name"] == "hash_key")["used_by"] == 1

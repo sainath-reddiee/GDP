@@ -19,7 +19,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 MAX_FILE_BYTES = 400_000
 # bump when chunks or edges change shape: the next refresh of every repository re-parses all its files once
-PARSER_VERSION = 2
+PARSER_VERSION = 3
 MAX_CHUNK_LINES = 160
 TEXT_SUFFIXES = (".sql", ".yml", ".yaml", ".md", ".py", ".txt", ".toml", ".jinja", ".j2")
 
@@ -213,13 +213,25 @@ def _macros(path: str, text: str, project: Optional[str]) -> List[Dict[str, Any]
     return out
 
 
+TEST_NAMES = ("unique", "not_null", "accepted_values", "relationships", r"dbt_utils\.\w+", r"dbt_expectations\.\w+",
+              r"elementary\.\w+")
+TEST_LINE = re.compile(r"^\s*-?\s*(" + "|".join(TEST_NAMES) + r")\b")
+NAME_ITEM = re.compile(r"^(\s*)-\s+name\s*:\s*['\"]?([\w\-.]+)")
+INLINE_TESTS = re.compile(r"^\s*(?:data_)?tests\s*:\s*\[(.*)\]")
+TEST_NAME = re.compile(r"^(" + "|".join(TEST_NAMES) + r")$")
+
+
 def _yaml_entries(text: str) -> List[Dict[str, Any]]:
-    """models:/sources: entries of a schema.yml without a YAML library: name, line span, columns and tests."""
+    """models:/sources: entries of a schema.yml without a YAML library: name, line span, columns, tests (one per
+    definition: 'not_null:ORDER_ID' for a column test, 'unique_combination_of_columns' for a model test) and, for
+    sources, their tables ('raw.orders') kept apart from the tables' columns."""
     lines = text.splitlines()
     out: List[Dict[str, Any]] = []
     section = None
     current: Optional[Dict[str, Any]] = None
     item_indent = None
+    child_indent = None   # first nested "- name" level: columns of a model, tables of a source
+    col, col_indent, table = None, None, None
     for i, raw in enumerate(lines):
         if not raw.strip() or raw.lstrip().startswith("#"):
             continue
@@ -232,23 +244,43 @@ def _yaml_entries(text: str) -> List[Dict[str, Any]]:
                 current = None
             section, item_indent = top.group(1), None
             continue
-        item = re.match(r"^(\s*)-\s+name\s*:\s*['\"]?([\w\-.]+)", raw)
+        item = NAME_ITEM.match(raw)
         if section and item and (item_indent is None or len(item.group(1)) <= item_indent):
             if current:
                 current["end"] = i
                 out.append(current)
             item_indent = len(item.group(1))
             current = {"section": section, "name": item.group(2), "start": i + 1, "end": None, "columns": [], "tests": [],
-                       "tables": []}
+                       "tables": [], "described": False}
+            child_indent, col, col_indent, table = None, None, None, None
             continue
         if current is None:
             continue
-        col = re.match(r"^\s*-\s+name\s*:\s*['\"]?([\w\-.]+)", raw)
-        if col and indent > (item_indent or 0):
-            (current["tables"] if current["section"] == "sources" else current["columns"]).append(col.group(1).upper())
-        for test in ("unique", "not_null", "accepted_values", "relationships", "dbt_utils\\.[\\w]+", "dbt_expectations\\.[\\w]+"):
-            if re.search(rf"^\s*-?\s*{test}\b", raw):
-                current["tests"].append(re.search(rf"{test}", raw).group(0))
+        if col is not None and indent <= (col_indent or 0) and not item:
+            col = None  # left the column's block
+        if item and indent > (item_indent or 0):
+            name = item.group(2).upper()
+            if child_indent is None or indent < child_indent:
+                child_indent = indent
+            if current["section"] == "sources" and indent == child_indent:
+                table, col = name, None
+                current["tables"].append(name)
+            else:
+                col, col_indent = name, indent
+                current["columns"].append(name)
+            continue
+        if re.match(r"^\s*description\s*:", raw) and indent <= (item_indent or 0) + 2:
+            current["described"] = True
+        where = f"{table}.{col}" if (table and col) else (col or table)
+        inline = INLINE_TESTS.match(raw)
+        if inline:  # tests: [unique, not_null]
+            for name in (x.strip().strip("'\"") for x in inline.group(1).split(",")):
+                if TEST_NAME.match(name):
+                    current["tests"].append(f"{name}:{where}" if where else name)
+            continue
+        test = TEST_LINE.match(raw)
+        if test:
+            current["tests"].append(f"{test.group(1)}:{where}" if where else test.group(1))
     if current:
         current["end"] = len(lines)
         out.append(current)
@@ -263,8 +295,8 @@ def _schema_chunks(path: str, text: str, project: Optional[str]) -> List[Dict[st
         kind = "DBT_SOURCE" if e["section"] == "sources" else "DBT_SCHEMA_YML"
         out.append({"path": path, "start_line": e["start"], "end_line": e["end"], "kind": kind, "name": e["name"],
                     "text": body, "refs": [], "sources": [f"{e['name']}.{t.lower()}" for t in e["tables"]] if kind == "DBT_SOURCE" else [],
-                    "columns": e["columns"] + (e["tables"] if kind == "DBT_SOURCE" else []),
-                    "tests": sorted(set(e["tests"])), "project": project})
+                    "columns": list(dict.fromkeys(e["columns"])), "tests": list(dict.fromkeys(e["tests"])), "project": project,
+                    "described": e["described"]})
     return out
 
 
