@@ -186,8 +186,9 @@ def test_run_path_includes_the_targets_table_tests(monkeypatch):
     calls = []
     monkeypatch.setattr(qa_run, "execute", _fake_execute(calls))
     monkeypatch.setattr(qa_run, "_target_built", lambda session, fqn: True)
-    session = Session(_handlers(extra=[("WHERE SCOPE = 'TABLE' AND TARGET_TABLE_ID", [SAVED_TABLE]),
-                                       ("WHERE RUN_ID = ? AND NOT IS_DELETED", [])]))
+    profile = [{"TABLE_NAME": "CUSTOMERS", "COLUMN_NAME": "SEG", "PII_CLASSIFICATION": "NONE"}]
+    session = Session(_handlers(profile=profile, extra=[("WHERE SCOPE = 'TABLE' AND TARGET_TABLE_ID", [SAVED_TABLE]),
+                                                        ("WHERE RUN_ID = ? AND NOT IS_DELETED", [])]))
     out = run_tests(session, "r1", ["tt1"], "UI")
     assert out["scope"] == "RUN" and out["run_id"] == "r1" and out["target_table_id"] == "t1"
     assert [c["test"] for c in calls] == ["tt1"] and calls[0]["conservative"] is False

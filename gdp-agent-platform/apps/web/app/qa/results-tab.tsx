@@ -122,10 +122,14 @@ function Results({ tableId, suiteId, fqn, access, me, go }: { tableId: string; s
   );
 }
 
+// a count ("3", "12+ rows", "2 values differ", "not 0"); anything else may be a data value and stays out of Jira
+const COUNT_TEXT = /^\s*(?:-?\d+\+?(?:\s+(?:rows?|values differ))?|not 0)\s*$/i;
+
 function resultText(r: TableResult, fqn: string) {
+  // counts only: the result detail can name compared values, which must not be copied into Jira
   const lines = [`QA result for "${r.title ?? r.test_id}"${fqn ? ` on ${fqn}` : ""}: ${r.outcome}`];
-  if (r.detail) lines.push(r.detail);
-  if (r.measured || r.expected) lines.push(`Measured: ${r.measured ?? "nothing"}. Expected: ${r.expected ?? "not set"}.`);
+  const measured = r.measured != null && COUNT_TEXT.test(String(r.measured)) ? String(r.measured) : null;
+  if (measured || r.expected) lines.push(`Measured: ${measured ?? "see the QA workspace"}. Expected: ${r.expected ?? "not set"}.`);
   if (r.rows_returned != null) lines.push(`Rows returned: ${r.rows_returned}`);
   if (r.created_at) lines.push(`Checked ${r.created_at.slice(0, 16)}`);
   return lines.join("\n");

@@ -140,7 +140,7 @@ export function QaWorkbench({ runId, suite, results, canRun, canAI = true, canEd
       {tab === "ai" && <QaAssistant canAI={canAI && canEdit} ask={(q) => askQa(runId, q)} plan={(f) => planQa(runId, f)} save={(t) => saveQaTest(runId, t)}
                                     onSaved={() => { setTab("tests"); setCategory("ALL"); router.refresh(); }} />}
       {tab === "history" && <RunHistoryTable runs={results.runs} ready={results.ready} />}
-      {tab === "jira" && <JiraPanel runId={runId} savedTests={suite.tests.filter((t) => t.origin !== "GENERATED").map((t) => ({ test_id: t.test_id, title: t.title }))}
+      {tab === "jira" && <JiraPanel runId={runId} savedTests={suite.tests.filter((t) => t.origin !== "GENERATED" && t.scope !== "TABLE").map((t) => ({ test_id: t.test_id, title: t.title }))}
                                     canWrite={canAct("JIRA.WRITE") && canEdit} canAI={canAI && canAct("AI.USE")} />}
 
       {tab === "tests" && (

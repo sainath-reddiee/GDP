@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useTransition } from "react";
+import { useEffect, useMemo, useState, useTransition } from "react";
 import {
   ArrowRightLeft, Check, CheckCircle2, Filter, KanbanSquare, Link2, ListFilter, Loader2, MessageSquarePlus, Play, RefreshCw,
   Save, Search, Trash2, User, X, XCircle,
@@ -332,6 +332,12 @@ function BoardsPane({ onSprint, activeId }: { onSprint: (s: Sprint, b: Board) =>
   );
 }
 
+function newKey() {
+  // randomUUID needs https or localhost
+  return typeof crypto.randomUUID === "function" ? crypto.randomUUID()
+    : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
+}
+
 function BulkBar({ keys, access, onClear, onApplied }: { keys: string[]; access: Access; onClear: () => void; onApplied: (action: BulkAction) => void }) {
   const [action, setAction] = useState<BulkAction | "">("");
   const [comment, setComment] = useState("");
@@ -346,13 +352,18 @@ function BulkBar({ keys, access, onClear, onApplied }: { keys: string[]; access:
   const { tables, error: tablesError } = useTables("", action === "link");
   const { suites } = useSuites(action === "link" ? tableId : "");
   const tooMany = keys.length > MAX_BULK;
+  // one idempotency key per bulk submit: retrying the same comment on the same issues (after a timeout or a partial
+  // failure) skips the issues it was already posted to; a new comment or selection is a new submit
+  const [submits, setSubmits] = useState(0);
+  const keysId = keys.join(",");
+  const bulkKey = useMemo(() => newKey(), [action, comment, keysId, submits]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const apply = () => start(async () => {
     if (!action) return;
     setError(""); setResults(null);
     const r = await bulkJira({
       action, keys,
-      ...(action === "comment" ? { comment } : {}),
+      ...(action === "comment" ? { comment, idempotency_key: bulkKey } : {}),
       ...(action === "transition" ? { transition_name: transition.trim() } : {}),
       ...(action === "link" ? { link: { target_table_id: tableId, ...(suiteId ? { suite_id: suiteId } : {}) } } : {}),
     });
@@ -360,6 +371,7 @@ function BulkBar({ keys, access, onClear, onApplied }: { keys: string[]; access:
     setConfirming(false);
     if (!r.ok) { setError(jiraProblem(r).text); return; }
     setResults(r.data.results);
+    if (r.data.results.every((x) => x.ok)) setSubmits((n) => n + 1);   // done: the next submit is a new one
     if (r.data.results.some((x) => x.ok)) onApplied(action);
   });
   const ready = !tooMany && (action === "comment" ? !!comment.trim() : action === "transition" ? !!transition.trim() : action === "link" ? !!tableId : false);
@@ -425,7 +437,7 @@ function BulkBar({ keys, access, onClear, onApplied }: { keys: string[]; access:
             <li key={x.key} className={cn("flex items-start gap-1.5", x.ok ? "text-success" : x.skipped ? "text-muted-foreground" : "text-destructive")}>
               {x.ok ? <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0" /> : <XCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />}
               <span className="font-mono">{x.key}</span>
-              <span>{x.ok ? "done" : x.skipped ? (typeof x.skipped === "string" ? `skipped: ${x.skipped}` : `skipped${x.error ? `: ${x.error}` : ""}`) : x.error ?? "failed"}</span>
+              <span>{x.ok ? (x.already ? "already posted" : "done") : x.skipped ? (typeof x.skipped === "string" ? `skipped: ${x.skipped}` : `skipped${x.error ? `: ${x.error}` : ""}`) : x.error ?? "failed"}</span>
             </li>
           ))}
         </ul>

@@ -325,7 +325,8 @@ def link_create(body: QaLinkIn, db: Db = Depends(current_db)):
 
 @router.get("/api/qa/links")
 def links(target_table_id: Optional[str] = None, key: Optional[str] = None, db: Db = Depends(current_db)):
-    """Jira links of a table and/or a ticket."""
+    """Jira links of a table and/or a ticket, within the caller's Jira permissions: only issues they can see (with the
+    live summary and status) when connected, keys and stored status only when not (jira.visible_links)."""
     if not target_table_id and not key:
         raise HTTPException(400, "target_table_id or key is required")
     issue_key = jira._key(key) if key else ""
@@ -334,7 +335,7 @@ def links(target_table_id: Optional[str] = None, key: Optional[str] = None, db: 
                          (target_table_id or "", target_table_id or "", issue_key, issue_key))
     except Exception as exc:
         raise _snowflake_error(exc) from exc
-    return {"links": _with_urls(db, found)}
+    return {"links": _with_urls(db, jira.visible_links(db, found))}
 
 
 @router.delete("/api/qa/links/{link_id}")

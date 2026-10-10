@@ -7,8 +7,8 @@ latest STTM for the target (APPROVED first, else REVIEW, across runs) adds lines
 PII masking for table tests, labelled with its basis:
   profile        the profile of the STTM's run flags PII source columns, mapped to targets through the STTM lines
   heuristic      no profile, but the target columns were curated (PII or semantic flags) and the model has no PII tag
-  conservative   no profile and nothing curated, or the model or a source carries a PII tag: every result column
-                 except the business keys is masked
+  conservative   no profile and nothing curated, the profile cannot be read, or the model or a source carries a
+                 PII tag: every result column except the business keys is masked
 Registry PII flags and column-name hints are added on every basis.
 """
 
@@ -90,13 +90,14 @@ def pii_columns(session, ctx: Dict[str, Any]) -> Tuple[Set[str], str]:
 
     found: Set[str] = set()
     basis = None
+    unreadable = False
     run_id = ctx.get("run_id")
     if run_id:
         try:
             profile = rows(session, """SELECT TABLE_NAME, COLUMN_NAME, PII_CLASSIFICATION FROM PROFILE.PROFILE_REGISTRY
                                         WHERE RUN_ID = ? AND IS_CURRENT""", [run_id])
-        except Exception:
-            profile = []
+        except Exception:  # the profile exists but this role cannot read it: never guess from curation then
+            profile, unreadable = [], True
         if profile:
             basis = "profile"
             flagged = {(str(r["TABLE_NAME"]).upper(), str(r["COLUMN_NAME"]).upper()) for r in profile
@@ -115,7 +116,7 @@ def pii_columns(session, ctx: Dict[str, Any]) -> Tuple[Set[str], str]:
     found |= {n.upper() for n in candidates if n and PII_HINT.search(n)}
     if basis is None:
         curated = any(c.get("is_pii") or c.get("semantic_type") for c in columns)
-        basis = "heuristic" if curated and not _tagged(session, ctx) else "conservative"
+        basis = "heuristic" if curated and not unreadable and not _tagged(session, ctx) else "conservative"
     return found, basis
 
 

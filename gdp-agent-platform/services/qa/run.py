@@ -52,8 +52,13 @@ def _number(value: Any) -> Optional[float]:
         return None
 
 
-def evaluate(expected: Optional[str], columns: Sequence[str], result: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """{outcome, detail, measured, failing}: judge one test's result against its expected text."""
+def evaluate(expected: Optional[str], columns: Sequence[str], result: List[Dict[str, Any]],
+             redact: bool = False, strict: bool = False) -> Dict[str, Any]:
+    """{outcome, detail, measured, failing}: judge one test's result against its expected text.
+
+    detail and measured are stored in QA_RESULT and shown to everyone who can open the run, so with `redact` they
+    hold counts only: no compared values and no non-count "<column> = 0" value. With `strict` (the test reads a PII
+    column) even a numeric "<column> = 0" value is reduced to zero or not zero."""
     text = (expected or "").strip()
     low = text.lower()
     n = len(result)
@@ -71,8 +76,15 @@ def evaluate(expected: Optional[str], columns: Sequence[str], result: List[Dict[
         value = result[0].get(upper[m.group(1).upper()])
         num = _number(value)
         if num is None:
+            if redact or strict:
+                return {"outcome": "REVIEW", "detail": f"{m.group(1)} is not a number (value hidden)", "measured": None,
+                        "failing": None}
             return {"outcome": "REVIEW", "detail": f"{m.group(1)} is {value!r}", "measured": str(value), "failing": None}
         ok = num == 0
+        if strict or (redact and not num.is_integer()):
+            return {"outcome": "PASS" if ok else "FAIL",
+                    "detail": f"{m.group(1)} = 0" if ok else f"{m.group(1)} is not 0 (value hidden)",
+                    "measured": "0" if ok else "not 0", "failing": None}
         return {"outcome": "PASS" if ok else "FAIL", "detail": f"{m.group(1)} = {plain(value)}",
                 "measured": str(plain(value)), "failing": None if ok else abs(int(num))}
     if {"SIDE", "VALUE", "N"} <= set(upper):
@@ -84,8 +96,9 @@ def evaluate(expected: Optional[str], columns: Sequence[str], result: List[Dict[
         if n >= FETCH_ROWS:
             return {"outcome": "REVIEW", "detail": "Too many distinct values to compare here; run it in Snowsight",
                     "measured": None, "failing": None}
+        listed = "" if redact or strict else f": {', '.join(map(str, diff[:5]))}"
         return {"outcome": "PASS" if not diff else "FAIL",
-                "detail": "Counts match for every value" if not diff else f"{len(diff)} values differ: {', '.join(map(str, diff[:5]))}",
+                "detail": "Counts match for every value" if not diff else f"{len(diff)} values differ{listed}",
                 "measured": f"{len(diff)} values differ", "failing": len(diff) or None}
     return {"outcome": "REVIEW", "detail": f"{n}{more} rows returned; compare with: {text or 'the objective'}",
             "measured": f"{n}{more} rows", "failing": None}
@@ -110,16 +123,33 @@ def blocking(results: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return [r for r in results if r["outcome"] in ("FAIL", "ERROR") and str(r.get("severity") or "").upper() in GATING]
 
 
-def _pii(session, run_id: Optional[str]) -> set:
-    if not run_id:
-        return set()
-    try:
-        return {str(r["COLUMN_NAME"]).upper() for r in rows(session, """SELECT DISTINCT COLUMN_NAME FROM PROFILE.PROFILE_REGISTRY
-                                                                         WHERE RUN_ID = ? AND IS_CURRENT
-                                                                           AND COALESCE(PII_CLASSIFICATION, 'NONE') <> 'NONE'""",
-                                                                      [run_id])}
-    except Exception:
-        return set()
+def run_pii(session, ctx: Dict[str, Any]) -> Tuple[set, str]:
+    """(PII column names, basis) for a run's tests: services.qa.scope.pii_columns over the run's STTM plus the target
+    registry's IS_PII and semantic flags. Only a readable profile with rows is a basis; without one (not profiled, or
+    this role cannot read it) every result column except the business keys is masked: basis 'conservative'."""
+    from services.qa.scope import _columns, pii_columns
+
+    columns = ctx.get("columns") or (_columns(session, ctx["target_table_id"]) if ctx.get("target_table_id") else [])
+    pii, basis = pii_columns(session, {**ctx, "columns": columns})
+    return pii, basis if basis == "profile" else "conservative"
+
+
+def mentions_pii(sql: Optional[str], pii: Iterable[str], tables: Iterable[str] = ()) -> bool:
+    """The test SQL names a PII column (profile, registry flag or a PII-like name) anywhere, so its values can come
+    back under any alias. Parts of the allowed table names are not column references and are skipped."""
+    from services.qa.guard import tokenize
+    from services.quality.scan import PII_HINT
+
+    names = {str(p).upper() for p in pii}
+    skip = {part.strip('"').upper() for fqn in tables for part in str(fqn).split(".")}
+    tokens, _ = tokenize(sql or "")
+    for t in tokens:
+        if t.kind not in ("id", "qid"):
+            continue
+        name = t.text.upper()
+        if name not in skip and (name in names or PII_HINT.search(name)):
+            return True
+    return False
 
 
 def _target_built(session, fqn: str) -> bool:
@@ -132,19 +162,31 @@ def _target_built(session, fqn: str) -> bool:
         return False
 
 
+def sensitive_test(test: Dict[str, Any], pii: set, tables: Iterable[str] = ()) -> bool:
+    """The test reads a PII column: its target column, its source column, or any PII column named in its SQL."""
+    from services.quality.scan import PII_HINT
+
+    def sensitive(name: Optional[str]) -> bool:
+        return bool(name) and (str(name).upper() in pii or PII_HINT.search(str(name)) is not None)
+
+    source = str(test.get("source") or "")
+    return (sensitive(test.get("target_column")) or ("." in source and sensitive(source.rsplit(".", 1)[-1]))
+            or mentions_pii(test.get("sql"), pii, tables))
+
+
 def hidden_columns(test: Dict[str, Any], columns: Sequence[str], pii: set, keys: Iterable[str] = (),
-                   conservative: bool = False) -> set:
-    """Result columns to mask in sample rows. A test on a PII column returns its values under aliases
-    (source_value, target_value, value, ...), so then every column except the business keys is masked. Without a
-    profile (conservative), every column except the business keys is always masked."""
+                   conservative: bool = False, tables: Iterable[str] = ()) -> set:
+    """Result columns to mask in sample rows. A test that reads a PII column (its target or source column, or any PII
+    column named in its SQL) can return the values under any alias (source_value, value, x, ...), so then every
+    column except the business keys is masked. Without a profile (conservative), every column except the business
+    keys is always masked."""
     from services.quality.scan import PII_HINT
 
     def sensitive(name: Optional[str]) -> bool:
         return bool(name) and (str(name).upper() in pii or PII_HINT.search(str(name)) is not None)
 
     hidden = {c for c in columns if sensitive(c)}
-    source = str(test.get("source") or "")
-    if conservative or sensitive(test.get("target_column")) or ("." in source and sensitive(source.rsplit(".", 1)[-1])):
+    if conservative or sensitive_test(test, pii, tables):
         key_names = {str(k).upper() for k in keys}
         hidden |= {c for c in columns if c.upper() not in key_names}
     return hidden
@@ -164,10 +206,19 @@ def execute(session, test: Dict[str, Any], allowed: Sequence[str], pii: set,
         columns = [f.name.strip('"') for f in df.schema.fields]
         fetched = [{c: plain(v) for c, v in zip(columns, r)} for r in df.collect()]
     except Exception as exc:
-        return {**base, "outcome": "ERROR", "detail": clip(exc, 600), "sql": sql,
+        detail = clip(exc, 600)
+        if conservative or sensitive_test(test, pii, allowed):  # Snowflake quotes offending values in its errors
+            detail = re.sub(r"'(?:[^']|'')*'", "'...'", detail)
+        return {**base, "outcome": "ERROR", "detail": detail, "sql": sql,
                 "duration_ms": int((time.time() - started) * 1000)}
-    judged = evaluate(test.get("expected"), columns, fetched)
-    hidden = hidden_columns(test, columns, pii, keys, conservative)
+    hidden = hidden_columns(test, columns, pii, keys, conservative, allowed)
+    strict = sensitive_test(test, pii, allowed)
+    # detail and measured are kept in QA_RESULT and copied into Jira: counts only when a judged column is masked
+    upper = {c.upper(): c for c in columns}
+    zero = ZERO.match(str(test.get("expected") or "").strip())
+    judged_columns = {upper.get("VALUE"), upper.get(zero.group(1).upper()) if zero else None} - {None}
+    redact = conservative or strict or bool(judged_columns & hidden)
+    judged = evaluate(test.get("expected"), columns, fetched, redact, strict)
     sample = [{c: (mask(v) if c in hidden else v) for c, v in r.items()} for r in fetched[:SAMPLE_ROWS]]
     return {**base, **judged, "rows_returned": len(fetched), "columns": columns, "sample": sample,
             "masked": sorted(hidden), "sql": sql, "duration_ms": int((time.time() - started) * 1000)}
@@ -211,7 +262,7 @@ def run_scope(session, run_id: Optional[str] = None, target_table_id: Optional[s
             except Exception:
                 pass
             tests += table_tests
-        pii, basis = _pii(session, run_id), "profile"
+        pii, basis = run_pii(session, ctx)
         suite_id = None
     else:
         scope = "TABLE"
