@@ -92,7 +92,7 @@ export function Sidebar({ user, role, canLogout, privileges, appRoles }: {
          className={cn("sticky top-0 flex h-screen shrink-0 flex-col overflow-y-auto overflow-x-hidden border-r border-white/5 bg-sidebar text-sidebar-foreground transition-[width] duration-200",
            collapsed ? "w-[72px] px-2" : "w-[248px] px-3")}>
       <div className={cn("flex items-center gap-3 py-5", collapsed ? "justify-center" : "px-2")}>
-        <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-gradient-to-br from-sky-400 via-blue-500 to-violet-500 text-white shadow-lg shadow-blue-500/30">
+        <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-gradient-to-br from-indigo-400 via-indigo-500 to-violet-500 text-white shadow-lg shadow-indigo-500/30">
           <Workflow className="h-[18px] w-[18px]" />
         </span>
         {!collapsed && (
@@ -116,9 +116,9 @@ export function Sidebar({ user, role, canLogout, privileges, appRoles }: {
                     aria-current={active ? "page" : undefined}
                     className={cn("group relative mb-0.5 flex items-center gap-3 rounded-xl py-2 text-sm transition",
                       collapsed ? "justify-center px-0" : "px-2.5",
-                      active ? "bg-white/10 font-medium text-white" : "text-sidebar-foreground/80 hover:bg-white/5 hover:text-white")}>
-                {active && <span className="absolute -left-3 top-1/2 h-5 w-1 -translate-y-1/2 rounded-r-full bg-sky-400" />}
-                <Icon className={cn("h-[18px] w-[18px] shrink-0", active ? "text-sky-300" : "text-white/50 group-hover:text-white/80")} />
+                      active ? "bg-gradient-to-r from-indigo-500/25 to-indigo-500/5 font-medium text-white ring-1 ring-inset ring-white/10" : "text-sidebar-foreground/75 hover:bg-white/[0.06] hover:text-white")}>
+                {active && <span className="absolute -left-3 top-1/2 h-5 w-1 -translate-y-1/2 rounded-r-full bg-indigo-400" />}
+                <Icon className={cn("h-[18px] w-[18px] shrink-0", active ? "text-indigo-300" : "text-white/45 group-hover:text-white/80")} />
                 {!collapsed && <span className="flex-1 truncate">{label}</span>}
                 {b && (
                   <span title={b.title}
@@ -137,7 +137,7 @@ export function Sidebar({ user, role, canLogout, privileges, appRoles }: {
         {!collapsed ? (
           <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-3">
             <div className="flex items-center gap-2.5">
-              <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-gradient-to-br from-emerald-400 to-sky-500 text-[11px] font-bold text-white">
+              <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-gradient-to-br from-indigo-400 to-violet-500 text-[11px] font-bold text-white">
                 {initials(user)}
               </span>
               <div className="min-w-0 flex-1">

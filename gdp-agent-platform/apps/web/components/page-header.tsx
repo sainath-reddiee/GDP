@@ -6,7 +6,7 @@ export function PageHeader({ eyebrow, title, description, actions, children }: {
 }) {
   return (
     <div className="flex flex-wrap items-end gap-4">
-      <div className="min-w-0 flex-1">
+      <div className="min-w-[min(100%,24rem)] flex-1">
         {eyebrow && <p className="eyebrow">{eyebrow}</p>}
         <h1 className="mt-1">{title}</h1>
         {description && <p className="mt-1 max-w-3xl text-sm text-muted-foreground">{description}</p>}
