@@ -264,6 +264,17 @@ def handle(store: Any, row: Dict[str, Any], client: Optional[JiraClient], settin
         return recurrence(store, incident, client, now)
     if kind == "resolve":
         return resolved(store, incident, client, settings)
+    if kind == "ai":   # the AI diagnosis summary (PR O3), queued by services.ops.diagnose
+        if not incident.get("jira_key"):
+            return "SKIPPED", "no ticket"
+        from services.ops.notify import _payload
+
+        text = str(_payload(row.get("payload")).get("text") or "").strip()
+        if not text:
+            return "SKIPPED", "empty AI summary"
+        client.add_comment(incident["jira_key"], _comment(text))
+        store.event(incident["incident_id"], "jira_commented", SYSTEM, {"key": incident["jira_key"], "ai": True})
+        return "SENT", f"commented the AI diagnosis on {incident['jira_key']}"
     if kind == "reopen":
         if not incident.get("jira_key"):
             return "SKIPPED", "no ticket"

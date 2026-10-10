@@ -189,6 +189,10 @@ RULES: List[Tuple[str, str, Any, str]] = [
     ("PUT", r"/api/ops/dag", "OPS.OPERATE", "Change a DAG's ops settings"),
     ("POST", r"/api/ops/incidents/bulk", "OPS.OPERATE", "Bulk action on incidents"),
     ("POST", r"/api/ops/incidents/[^/]+/(ack|reopen|assign|resolve|mute|comment|ticket)", "OPS.OPERATE", ""),
+    ("POST", r"/api/ops/incidents/[^/]+/(diagnose|ask|postmortem)", "AI.USE", ""),
+    # retrying in Airflow is approvable: a policy on OPS.OPERATE (none by default) queues it for the approver role
+    ("POST", r"/api/ops/incidents/[^/]+/retry", "OPS.OPERATE", "Retry failed tasks in Airflow"),
+    ("POST", r"/api/ops/incidents/[^/]+/retry-safety", "OPS.OPERATE", ""),
     ("POST", r"/api/ops/teams", "INTEGRATION.MANAGE", "Add a support team"),
     ("PUT", r"/api/ops/teams/[^/]+", "INTEGRATION.MANAGE", "Change a support team"),
     ("DELETE", r"/api/ops/teams/[^/]+", "INTEGRATION.MANAGE", "Delete a support team"),

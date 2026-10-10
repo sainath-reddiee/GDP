@@ -27,7 +27,7 @@ export type DagRow = {
 };
 export type DagDetail = DagRow & {
   fileloc: string | null; expected_by_cron: string | null; max_duration_min: number | null; repo_id: string | null; repo_path: string | null;
-  airflow_url: string | null;
+  airflow_url: string | null; /** O3; absent on an older API */ timezone?: string | null; mute_until?: string | null; mute_reason?: string | null;
 };
 export type DagRun = {
   run_id: string; run_type: string | null; state: string | null; logical_date: string | null; start: string | null; end: string | null;
@@ -41,6 +41,14 @@ export type TaskLog = { text: string; truncated: boolean; redacted: boolean; sou
 export type DagSettings = {
   team_id?: string | null; criticality?: Criticality | null; expected_by_cron?: string | null; max_duration_min?: number | null;
   domain_id?: string | null; repo_id?: string | null; repo_path?: string | null;
+  timezone?: string | null; mute_until?: string | null; mute_reason?: string | null;
+};
+export type Reliability = {
+  period: { from: string; to: string; days: number };
+  teams: { team_id: string | null; name: string | null; incidents: number; p1: number; mttr_min: number | null; mtta_min: number | null; repeats: number }[];
+  top_dags: { env_id: string; dag_id: string; failures: number; success_rate: number | null }[];
+  repeats: { fingerprint: string; title: string; count: number }[];
+  ai: { diagnoses: number; cost_usd: number | null };
 };
 export type DagFilters = { env_id: string; q?: string; state?: string; team_id?: string; owner?: string };
 
@@ -84,6 +92,10 @@ export async function taskLog(envId: string, dagId: string, runId: string, taskI
   return attemptValue(() => api<TaskLog>(`/api/ops/task-log?${query({
     env_id: envId, dag_id: dagId, run_id: runId, task_id: taskId, try: tryNumber, map_index: mapIndex,
   })}`));
+}
+
+export async function reliability(days: number, teamId: string) {
+  return attemptValue(() => api<Reliability>(`/api/ops/reliability?${query({ days, team_id: teamId })}`));
 }
 
 // ---------------------------------------------------------------- operate (OPS.OPERATE)

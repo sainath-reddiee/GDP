@@ -291,6 +291,9 @@ def poll_env(db: Any, env: Dict[str, Any], client: Optional[Mwaa] = None, now: O
     upsert_runs(db, rows)
     upsert_tasks(db, tasks)
     excerpts = fill_error_excerpts(db, mw, env_id)
+    from services.ops.deps import refresh_if_due
+
+    dependencies = refresh_if_due(db, mw, env_id)   # at most every 30 minutes; never fails the poll
 
     if later:
         cursor = later[0].get("updated_at") or since
@@ -304,6 +307,8 @@ def poll_env(db: Any, env: Dict[str, Any], client: Optional[Mwaa] = None, now: O
     summary = {"env_id": env_id, "version": info["version"], "api_version": info["api_version"], "dags": len(dags),
                "runs": len(rows), "tasks": len(tasks), "error_excerpts": excerpts, "since": since, "cursor": cursor,
                "complete": paged_all and not later}
+    if dependencies is not None:
+        summary["dependencies"] = dependencies
     try:
         record_event(db, f"poll:{env_id}:{started}", env_id, "POLL", "poll", summary)
     except Exception:

@@ -110,6 +110,9 @@ function SettingsForm({ state, may, onMsg, onSaved }: { state: OpsSettings; may:
   const [done, setDone] = useState(state.done_status ?? "");
   const [rate, setRate] = useState(String(state.rate_limit_per_10min));
   const [base, setBase] = useState(state.public_base_url ?? "");
+  const [aiAuto, setAiAuto] = useState(!!state.ai_auto);
+  const [aiSev, setAiSev] = useState<string[]>(state.ai_severities ?? ["P1", "P2"]);
+  const [digest, setDigest] = useState(!!state.weekly_digest);
   const [origin, setOrigin] = useState("");
   const [error, setError] = useState("");
   const [pending, start] = useTransition();
@@ -120,11 +123,14 @@ function SettingsForm({ state, may, onMsg, onSaved }: { state: OpsSettings; may:
   const badRate = !Number.isInteger(perTen) || perTen < 1 || perTen > 100;
   const badBase = !!base.trim() && !/^https?:\/\/[^\s/]+(\/\S*)?$/i.test(base.trim());
   const badDone = transition && !done.trim();
+  const badSev = aiAuto && !aiSev.length;
+  const toggleSev = (s: string) => setAiSev((v) => (v.includes(s) ? v.filter((x) => x !== s) : SEVERITIES.filter((x) => x === s || v.includes(x))));
   const save = () => start(async () => {
     setError("");
     const r = await saveOpsSettings({
       reopen_hours: hours, alert_on_retry_for_critical: retryCritical, transition_on_resolve: transition,
       done_status: done.trim() || null, rate_limit_per_10min: perTen, public_base_url: base.trim().replace(/\/+$/, "") || null,
+      ai_auto: aiAuto, ai_severities: aiSev, weekly_digest: digest,
     });
     if (!r.ok) { failed(r.error, onMsg, setError); return; }
     onMsg({ tone: "ok", text: "Incident settings saved." });
@@ -171,10 +177,29 @@ function SettingsForm({ state, may, onMsg, onSaved }: { state: OpsSettings; may:
             <Input value={done} onChange={(e) => setDone(e.target.value)} placeholder="Done" className="text-xs" disabled={!transition} aria-invalid={badDone} />
             {badDone && <span role="alert" className="block font-normal text-destructive">Name the status to move tickets to.</span>}
           </label>
+          <label className="flex items-start gap-2 text-xs md:col-span-2">
+            <input type="checkbox" className="mt-0.5" checked={aiAuto} onChange={(e) => setAiAuto(e.target.checked)} />
+            <span>Diagnose new incidents with AI <span className="block text-muted-foreground">The worker runs the AI diagnosis when an incident opens, for the severities below. Each diagnosis is a billed model call.</span></span>
+          </label>
+          <div className="space-y-1 text-xs font-medium md:col-span-2" role="group" aria-label="Severities diagnosed automatically">
+            <span>Severities diagnosed automatically</span>
+            <span className="flex flex-wrap gap-3 font-normal">
+              {SEVERITIES.map((s) => (
+                <label key={s} className="flex items-center gap-1.5">
+                  <input type="checkbox" checked={aiSev.includes(s)} onChange={() => toggleSev(s)} disabled={!aiAuto} />{s}
+                </label>
+              ))}
+            </span>
+            {badSev && <span role="alert" className="block font-normal text-destructive">Pick at least one severity, or turn automatic diagnosis off.</span>}
+          </div>
+          <label className="flex items-start gap-2 text-xs md:col-span-2">
+            <input type="checkbox" className="mt-0.5" checked={digest} onChange={(e) => setDigest(e.target.checked)} />
+            <span>Weekly reliability digest <span className="block text-muted-foreground">Each team with an alerts webhook gets a Teams card with its MTTR, MTTA, top failing DAGs and repeat failures.</span></span>
+          </label>
           {error && <div className="md:col-span-2"><FieldError>{error}</FieldError></div>}
           {may && (
             <div className="flex justify-end md:col-span-2">
-              <Button onClick={save} disabled={pending || badHours || badRate || badBase || badDone}>
+              <Button onClick={save} disabled={pending || badHours || badRate || badBase || badDone || badSev}>
                 {pending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}Save settings</Button>
             </div>
           )}

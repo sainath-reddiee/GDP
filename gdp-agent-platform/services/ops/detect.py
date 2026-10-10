@@ -36,6 +36,8 @@ LOW_PRIORITY_RUNS = {"backfill", "manual"}
 DEFAULT_SETTINGS: Dict[str, Any] = {
     "reopen_hours": 24, "alert_on_retry_for_critical": False, "transition_on_resolve": False, "done_status": "Done",
     "rate_limit_per_10min": 10, "public_base_url": None,
+    # PR O3: automatic AI diagnosis of new incidents of these severities, and the weekly Teams digest per team
+    "ai_auto": True, "ai_severities": ["P1", "P2", "P3"], "weekly_digest": False,
 }
 
 

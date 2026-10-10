@@ -6,8 +6,8 @@ The rules (services.ops.detect produces the candidates):
   - otherwise a new incident opens.
   A sighting is counted once: its occurrence key (run, task, map index, try) is claimed in OPS.INCIDENT_EVENT, so the
   same run read by push and poll, or twice by the poll overlap, changes nothing.
-Storm control: a new failure in a DAG downstream (OPS.DAG_DEPENDENCY) of an OPEN or ACK incident seen in the last 2 hours
-becomes its child (KIND UPSTREAM, PARENT_INCIDENT_ID) with no ticket and no card.
+Storm control: a new failure in a DAG downstream (OPS.DAG_DEPENDENCY, one or two hops, filled by services.ops.deps) of an
+OPEN or ACK incident seen in the last 2 hours becomes its child (KIND UPSTREAM, PARENT_INCIDENT_ID) with no ticket and no card.
 Routing: the first enabled ROUTING_RULE by PRIORITY whose DAG pattern (glob), tag, owner and environment all match
 gives the team (and may override the severity or mute); else the DAG's own team; else the incident is unrouted (still
 created, still ticketed to the Jira default project, no card).
@@ -78,6 +78,12 @@ def settings_from(config: Optional[Dict[str, Any]]) -> Dict[str, Any]:
             out[k] = v
     out["reopen_hours"] = max(0, int(out.get("reopen_hours") or 0))
     out["rate_limit_per_10min"] = max(1, int(out.get("rate_limit_per_10min") or 10))
+    severities = out.get("ai_severities")
+    if isinstance(severities, str):
+        severities = [v.strip() for v in severities.split(",")]
+    out["ai_severities"] = [v for v in detect.SEVERITIES if v in {str(x).upper() for x in (severities or [])}]
+    out["ai_auto"] = bool(out.get("ai_auto"))
+    out["weekly_digest"] = bool(out.get("weekly_digest"))
     return out
 
 
@@ -324,14 +330,22 @@ class SqlStore:
         return self.db.execute_count(f"UPDATE OPS.INCIDENT SET {', '.join(sets)} WHERE {where}", tuple(params))
 
     def storm_parent(self, env_id: str, dag_id: str) -> Optional[str]:
+        """An open incident of a DAG upstream of this one (OPS.DAG_DEPENDENCY: datasets, sensors, triggers, the code
+        graph or set by hand), one or two hops up; the nearest and newest wins."""
         try:
             found = self.db.query(f"""
-                SELECT I.INCIDENT_ID FROM OPS.INCIDENT I
-                  JOIN OPS.DAG_DEPENDENCY D ON D.ENV_ID = I.ENV_ID AND D.UPSTREAM_DAG_ID = I.DAG_ID
-                 WHERE D.ENV_ID = %s AND D.DOWNSTREAM_DAG_ID = %s AND D.UPSTREAM_DAG_ID <> D.DOWNSTREAM_DAG_ID
-                   AND I.STATUS IN ('OPEN', 'ACK') AND I.PARENT_INCIDENT_ID IS NULL
+                WITH UP AS (
+                    SELECT UPSTREAM_DAG_ID AS DAG_ID, 1 AS HOPS FROM OPS.DAG_DEPENDENCY
+                     WHERE ENV_ID = %s AND DOWNSTREAM_DAG_ID = %s AND UPSTREAM_DAG_ID <> DOWNSTREAM_DAG_ID
+                    UNION ALL
+                    SELECT D2.UPSTREAM_DAG_ID, 2 FROM OPS.DAG_DEPENDENCY D1
+                      JOIN OPS.DAG_DEPENDENCY D2 ON D2.ENV_ID = D1.ENV_ID AND D2.DOWNSTREAM_DAG_ID = D1.UPSTREAM_DAG_ID
+                     WHERE D1.ENV_ID = %s AND D1.DOWNSTREAM_DAG_ID = %s AND D1.UPSTREAM_DAG_ID <> D1.DOWNSTREAM_DAG_ID
+                       AND D2.UPSTREAM_DAG_ID NOT IN (D2.DOWNSTREAM_DAG_ID, %s))
+                SELECT I.INCIDENT_ID FROM OPS.INCIDENT I JOIN UP ON UP.DAG_ID = I.DAG_ID
+                 WHERE I.ENV_ID = %s AND I.STATUS IN ('OPEN', 'ACK') AND I.PARENT_INCIDENT_ID IS NULL
                    AND I.LAST_SEEN >= DATEADD(hour, -{STORM_HOURS}, CURRENT_TIMESTAMP())
-                 ORDER BY I.LAST_SEEN DESC LIMIT 1""", (env_id, dag_id))
+                 ORDER BY UP.HOPS, I.LAST_SEEN DESC LIMIT 1""", (env_id, dag_id, env_id, dag_id, dag_id, env_id))
         except Exception:
             return None   # no dependency information: never grouped
         return found[0]["incident_id"] if found else None

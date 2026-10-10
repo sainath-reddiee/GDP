@@ -122,3 +122,56 @@ def task_models(task_id: Optional[str], operator: Optional[str] = None, command:
         model = cosmos_model(task_id)
         return [model] if model else []
     return []
+
+
+_DBT_IN_SOURCE = re.compile(r"""\bdbt\s+(?:run|build|test|seed|snapshot|compile|ls|list)\b[^'"\n]*""")
+_TASK_ID_LITERAL = re.compile(r"""task_id\s*=\s*['"]([^'"]+)['"]""")
+
+
+def dbt_commands_in_source(text: Optional[str]) -> List[str]:
+    """dbt command lines written as string literals in a DAG file (bash_command='dbt run --select x', f-strings)."""
+    return [m.group(0).strip() for m in _DBT_IN_SOURCE.finditer(str(text or ""))]
+
+
+def source_task_models(text: Optional[str], task_id: Optional[str] = None) -> List[str]:
+    """dbt selectors a task runs, read from the DAG source: the stretch from `task_id='<task>'` up to the next task_id
+    (the operator's arguments, with task_id written first as usual), else every dbt command in the file when no task
+    is given."""
+    source = str(text or "")
+    if task_id:
+        found = list(_TASK_ID_LITERAL.finditer(source))
+        for i, m in enumerate(found):
+            if m.group(1) == task_id:
+                end = found[i + 1].start() if i + 1 < len(found) else len(source)
+                source = source[m.start():end]
+                break
+        else:
+            return []
+    out: List[str] = []
+    for command in dbt_commands_in_source(source):
+        for selector in dbt_selectors(command):
+            if selector not in out:
+                out.append(selector)
+    return out
+
+
+def selector_model(selector: Optional[str]) -> Optional[str]:
+    """The model a dbt selector names ('2+stg_orders+' -> stg_orders, 'model:x' -> x, 'models/stg/x.sql' -> x); None for
+    tag:, source:, path to a folder and other methods that do not name one model."""
+    value = str(selector or "").strip().lstrip("@")
+    value = re.sub(r"^\d*\+", "", value)
+    value = re.sub(r"\+\d*$", "", value)
+    if ":" in value:
+        method, _, rest = value.partition(":")
+        if method != "model":
+            return None
+        value = rest
+    if "/" in value:
+        if not value.endswith(".sql"):
+            return None
+        value = posixpath.basename(value)
+    if value.endswith(".sql"):
+        value = value[:-4]
+    if "*" in value or not re.fullmatch(r"[A-Za-z0-9_.]+", value or ""):
+        return None
+    return value.split(".")[-1] or None

@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState, useTransition, type ReactNode } from "react";
 import {
-  BellOff, CheckCheck, CircleCheck, ExternalLink, Loader2, MessageSquarePlus, RotateCcw, Sparkles, Ticket, UserPlus, X,
+  BellOff, CheckCheck, CircleCheck, ExternalLink, Loader2, MessageSquarePlus, RotateCcw, RotateCw, Sparkles, Ticket, UserPlus, X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input, Textarea } from "@/components/ui/input";
@@ -18,6 +18,7 @@ import {
   type IncidentDetail,
 } from "../actions";
 import { dagRunHref, incidentHref, IncidentStatusPill, KindPill, localInput, SeverityPill, up } from "../incident-shared";
+import { AiPanel, ImpactPanel, RetryBadge, RetryDialog } from "./incident-ai";
 
 type Mode = "assign" | "resolve" | "mute" | null;
 type Busy = "ack" | "assign" | "resolve" | "mute" | "reopen" | "ticket" | "note" | null;
@@ -51,8 +52,8 @@ function detailText(d: unknown): string {
 
 /** One incident: header with status actions, then error, diagnosis, impact, timeline, notifications, runs, children,
  *  Jira and the resolution. Every action returns the full detail, which replaces what is shown. */
-export function IncidentView({ initial, envName, askAck, canOperate, jiraComment, jiraMe }: {
-  initial: IncidentDetail; envName: string; askAck: boolean; canOperate: boolean; jiraComment: boolean; jiraMe: string;
+export function IncidentView({ initial, envName, askAck, canOperate, canAI, jiraComment, jiraMe }: {
+  initial: IncidentDetail; envName: string; askAck: boolean; canOperate: boolean; canAI: boolean; jiraComment: boolean; jiraMe: string;
 }) {
   const router = useRouter();
   const [data, setData] = useState(initial);
@@ -68,6 +69,7 @@ export function IncidentView({ initial, envName, askAck, canOperate, jiraComment
   const [muteReason, setMuteReason] = useState("");
   const [note, setNote] = useState("");
   const [composing, setComposing] = useState(false);
+  const [retrying, setRetrying] = useState(false);
   const refreshSeq = useSeq();
   const inc = data.incident;
   const status = up(inc.status);
@@ -182,6 +184,12 @@ export function IncidentView({ initial, envName, askAck, canOperate, jiraComment
               <Button size="sm" variant="outline" disabled={pending} onClick={() => run("reopen", () => reopenIncident(inc.incident_id), "Reopened.")}>
                 {spin("reopen", <RotateCcw className="h-3.5 w-3.5" />)}Reopen</Button>
             )}
+            {inc.run_id && (
+              <Button size="sm" variant="outline" disabled={pending} onClick={() => setRetrying(true)}
+                      title={inc.ai?.safe_to_retry === "no" ? "The diagnosis says this is not safe to retry" : undefined}>
+                <RotateCw className="h-3.5 w-3.5" />Retry task</Button>
+            )}
+            {inc.ai?.safe_to_retry && <RetryBadge value={inc.ai.safe_to_retry} />}
             {(!inc.jira_key || jiraFailed) && (
               <Button size="sm" variant="outline" disabled={pending}
                       onClick={() => run("ticket", () => ticketIncident(inc.incident_id), "Jira ticket requested. The worker raises it with the Jira bot.")}>
@@ -233,6 +241,10 @@ export function IncidentView({ initial, envName, askAck, canOperate, jiraComment
         </div>
       )}
 
+      {retrying && canOperate && (
+        <RetryDialog incidentId={inc.incident_id} safe={inc.ai?.safe_to_retry} onClose={() => setRetrying(false)}
+                     onDone={(text) => { setNotice({ tone: "ok", text }); refresh(); }} />
+      )}
       {error && <Alert onDismiss={() => setError("")}>{error}</Alert>}
       {notice && (notice.tone === "ok"
         ? <Notice onDismiss={() => setNotice(null)}>{notice.text}</Notice>
@@ -250,11 +262,12 @@ export function IncidentView({ initial, envName, askAck, canOperate, jiraComment
           </Section>
 
           <Section title="AI diagnosis" aside={<Sparkles className="h-4 w-4 text-muted-foreground" />}>
-            <Diagnosis ai={inc.ai} summary={inc.ai_summary} />
+            <AiPanel incidentId={inc.incident_id} ai={inc.ai} summary={inc.ai_summary} canAI={canAI}
+                     onAi={(ai) => setData((d) => ({ ...d, incident: { ...d.incident, ai } }))} />
           </Section>
 
           <Section title="Impact">
-            <Muted>Downstream models, tables and domains affected by this DAG arrive in a later release.</Muted>
+            <ImpactPanel incidentId={inc.incident_id} envId={inc.env_id} dagId={inc.dag_id} />
           </Section>
 
           <Section title="Timeline" aside={<span className="text-xs text-muted-foreground">{data.events.length}</span>}>
@@ -376,33 +389,4 @@ function DeliveryPill({ status }: { status: string }) {
     : s === "DEAD" || s === "FAILED" ? "bg-rose-50 text-rose-700 ring-rose-100"
       : "bg-amber-50 text-amber-700 ring-amber-100";
   return <span className={cn("whitespace-nowrap rounded-full px-1.5 py-0.5 text-[10px] font-medium ring-1 ring-inset", tone)}>{status.toLowerCase().replace(/_/g, " ")}</span>;
-}
-
-const AI_FIELDS: [string, string][] = [
-  ["category", "Category"], ["probable_cause", "Probable cause"], ["confidence", "Confidence"], ["safe_to_retry", "Safe to retry"],
-  ["owner_hint", "Owner hint"], ["blast_radius", "Blast radius"],
-];
-
-function Diagnosis({ ai, summary }: { ai: Record<string, unknown> | null; summary: string | null }) {
-  if (!ai && !summary) return <Muted>AI diagnosis arrives in a later release.</Muted>;
-  const fields = AI_FIELDS.filter(([k]) => ai && ai[k] !== null && ai[k] !== undefined && ai[k] !== "");
-  const steps = Array.isArray(ai?.fix_steps) ? (ai!.fix_steps as unknown[]).map(String) : [];
-  return (
-    <div className="space-y-2 text-xs">
-      {summary && <p className="whitespace-pre-wrap">{summary}</p>}
-      {fields.length > 0 && (
-        <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
-          {fields.map(([k, label]) => (
-            <div key={k} className="contents">
-              <dt className="text-muted-foreground">{label}</dt>
-              <dd className="whitespace-pre-wrap break-words">{typeof ai![k] === "object" ? JSON.stringify(ai![k]) : String(ai![k])}</dd>
-            </div>
-          ))}
-        </dl>
-      )}
-      {steps.length > 0 && (
-        <div><p className="font-medium">Fix steps</p><ol className="list-decimal space-y-0.5 pl-4">{steps.map((s, i) => <li key={i}>{s}</li>)}</ol></div>
-      )}
-    </div>
-  );
 }
