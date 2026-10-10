@@ -5,7 +5,7 @@ import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import {
   CalendarClock, Check, ChevronDown, CircleCheck, CircleDashed, ExternalLink, FileCode2, FolderGit2, GitBranch, GitPullRequest,
-  Github, History, KeyRound, Loader2, Plus, RefreshCw, Search, Settings2, SlidersHorizontal, Trash2, TriangleAlert, Unplug, X,
+  Github, History, KeyRound, Loader2, Plus, RefreshCw, Search, Settings2, SlidersHorizontal, Trash2, TriangleAlert, Unplug, Workflow, X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input, Select } from "@/components/ui/input";
@@ -19,10 +19,12 @@ import {
   type CodeRepo, type CodeSetup, type IndexRun, type PublishingStatus, type RepoBranch,
 } from "../code/actions";
 import type { JiraStatus } from "../jira/actions";
+import type { AirflowEnv } from "../ops/actions";
+import { AirflowTab } from "./airflow-tab";
 import { JiraTab } from "./jira-tab";
 
 type Domain = { domain_id: string; domain_name: string };
-export type IntegrationView = "repos" | "jira";
+export type IntegrationView = "repos" | "jira" | "airflow";
 const PRESETS = [
   { label: "Every hour", cron: "0 * * * * UTC" }, { label: "Daily 06:00 UTC", cron: "0 6 * * * UTC" },
   { label: "Weekdays 06:00 UTC", cron: "0 6 * * MON-FRI UTC" }, { label: "Weekly, Monday 06:00 UTC", cron: "0 6 * * MON UTC" },
@@ -61,12 +63,13 @@ function Badge({ tone, children }: { tone: "good" | "warn" | "idle" | "bad"; chi
 }
 
 /** Admin, Integrations: one tab per integration. Code repositories (configured once, used by the dbt workspace and every
- *  AI step), dbt publishing to GitHub, and Jira. */
-export function IntegrationsSection({ repos, domains, publishing, jira, view }: {
-  repos: CodeRepo[]; domains: Domain[]; publishing: PublishingStatus; jira: JiraStatus | null; view: IntegrationView;
+ *  AI step), dbt publishing to GitHub, Jira, and Airflow (Amazon MWAA) for Pipelines. */
+export function IntegrationsSection({ repos, domains, publishing, jira, airflow, airflowError, view }: {
+  repos: CodeRepo[]; domains: Domain[]; publishing: PublishingStatus; jira: JiraStatus | null; airflow: AirflowEnv[] | null;
+  airflowError: string | null; view: IntegrationView;
 }) {
   const router = useRouter();
-  const { canAct } = useAccess();
+  const { can, canAct } = useAccess();
   const [msg, setMsg] = useState<Msg>(null);
   const indexing = repos.some((r) => r.refreshing || r.status === "INDEXING");
   const pollStart = useRef<number | null>(null);
@@ -80,15 +83,20 @@ export function IntegrationsSection({ repos, domains, publishing, jira, view }: 
     return () => clearInterval(t);
   }, [indexing, router]);
   const failing = repos.filter((r) => r.status === "FAILED").length;
+  const airflowFailing = (airflow ?? []).filter((e) => e.enabled && e.last_error).length;
   const tabs: { id: IntegrationView; label: string; icon: typeof FolderGit2; badge: React.ReactNode; hint: string }[] = [
     { id: "repos", label: "Code repositories", icon: FolderGit2, hint: "dbt and SQL repositories, and pull requests to GitHub",
       badge: failing ? <Badge tone="bad">{failing} failing</Badge> : <Badge tone={repos.length ? "good" : "idle"}>{repos.length}</Badge> },
     { id: "jira", label: "Jira", icon: Unplug, hint: "QA issues, reproduction and results posted back",
       badge: <Badge tone={jira?.ready ? "good" : "idle"}>{!jira?.installed ? "not installed" : jira.ready ? `${jira.users_connected ?? 0} connected` : "setup needed"}</Badge> },
+    { id: "airflow", label: "Airflow", icon: Workflow, hint: "Amazon MWAA DAGs, runs and logs for Pipelines",
+      badge: airflow === null ? <Badge tone="idle">not installed</Badge>
+        : airflowFailing ? <Badge tone="bad">{airflowFailing} failing</Badge>
+          : <Badge tone={airflow.length ? "good" : "idle"}>{airflow.length}</Badge> },
   ];
   return (
     <div className="space-y-4">
-      <nav aria-label="Integrations" className="grid gap-2 md:grid-cols-2">
+      <nav aria-label="Integrations" className="grid gap-2 md:grid-cols-3">
         {tabs.map((t) => (
           <Link key={t.id} href={`/admin?section=integrations&view=${t.id}`} aria-current={view === t.id ? "page" : undefined}
                 className={cn("flex items-start gap-3 rounded-xl border p-3 transition",
@@ -112,6 +120,7 @@ export function IntegrationsSection({ repos, domains, publishing, jira, view }: 
       {view === "repos" && <ReposTab repos={repos} domains={domains} may={canAct("INTEGRATION.MANAGE")} onMsg={setMsg}
                                      publishing={<PublishingStrip status={publishing} githubRepos={repos.filter((r) => r.provider === "GITHUB")} may={canAct("ADMIN.DEPLOY")} onMsg={setMsg} />} />}
       {view === "jira" && <JiraTab status={jira} may={canAct("INTEGRATION.MANAGE")} onMsg={setMsg} />}
+      {view === "airflow" && <AirflowTab envs={airflow} error={airflowError} may={canAct("INTEGRATION.MANAGE")} canPoll={can("OPS.OPERATE")} onMsg={setMsg} />}
     </div>
   );
 }

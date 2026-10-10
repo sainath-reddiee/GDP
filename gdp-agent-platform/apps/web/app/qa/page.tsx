@@ -26,7 +26,7 @@ export default async function QaPage({ searchParams }: { searchParams?: Params }
   const tab = TABS.find((t) => t === sp.tab) ?? (sp.key ? "triage" : sp.table ? "suites" : fallback);
   return (
     <div className="space-y-5">
-      <PageHeader eyebrow="Work" title="QA"
+      <PageHeader eyebrow="Quality" title="QA"
                   description="Test a domain's target tables with or without a run: Jira issues in, suites of read-only SQL tests, AI triage of a reported bug, and results that file or update tickets." />
       <QaWorkspace initial={{ tab, table: sp.table ?? "", key: sp.key ?? "", suite: sp.suite ?? "" }} access={access} jira={jira}
                    me={jira?.connected?.display_name ?? me?.user ?? "you"}

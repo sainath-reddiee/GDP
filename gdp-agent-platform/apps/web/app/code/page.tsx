@@ -15,7 +15,7 @@ export default async function Code({ searchParams }: { searchParams?: Params }) 
   ]);
   return (
     <div className="space-y-5">
-      <PageHeader eyebrow="Knowledge" title="Code"
+      <PageHeader eyebrow="Model and build" title="Code"
                   description="The client's dbt, SQL and Python code, indexed from their repositories: models, tests, lineage and what each change affects. AI steps quote it with file and line citations, and the dbt workspace builds on it."
                   actions={
                     <Link href="/admin?section=integrations" className="inline-flex items-center gap-1.5 rounded-lg border bg-card px-3 py-1.5 text-sm font-medium shadow-xs hover:bg-muted">

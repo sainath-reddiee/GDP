@@ -23,6 +23,7 @@ const STAGE_INFO: Record<string, string> = {
   COPILOT: "The copilot assistant on every page",
   MODELING: "Designs the target data model in Mapping",
   SKILLS: "Drafts, improves and tests skills in the AI skill builder",
+  OPS: "Explains pipeline failures and suggests fixes for incidents",
 };
 const FAMILY_LABEL: Record<string, string> = {
   claude: "Anthropic", openai: "OpenAI", llama: "Meta Llama", mistral: "Mistral", deepseek: "DeepSeek",

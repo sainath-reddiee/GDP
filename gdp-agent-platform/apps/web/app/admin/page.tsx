@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { Suspense } from "react";
 import { Bot, LayoutDashboard, Plug, Rocket, Ruler, ShieldCheck, SlidersHorizontal, Sparkles } from "lucide-react";
-import { api, whoami } from "@/lib/api";
+import { api, ApiError, whoami } from "@/lib/api";
 import { can } from "@/lib/types";
 import type { GovEvent, GovPolicy, GovPrivilege, GovRole, GovSettings, GovUser } from "../governance-actions";
 import { AccessSection } from "./access-section";
@@ -16,6 +16,7 @@ import { RulesSection } from "./rules-section";
 import { IntegrationsSection, type IntegrationView } from "./integrations-section";
 import type { CodeRepo, PublishingStatus } from "../code/actions";
 import type { JiraStatus } from "../jira/actions";
+import type { AirflowEnv } from "../ops/actions";
 import { SkillsSection } from "./skills-section";
 import type { SkillBinding } from "../skills/types";
 import { Panel, SectionSkeleton, Stat } from "./section";
@@ -57,7 +58,7 @@ export default async function Admin({ searchParams }: { searchParams?: { section
   return (
     <ToastProvider>
       <div className="space-y-5">
-        <PageHeader eyebrow="Platform" title="Admin"
+        <PageHeader eyebrow="Govern" title="Admin"
                     description="AI models and cost, rules, modeling standards and deployment. Changes are versioned and survive deploys." />
         <nav aria-label="Admin sections" className="flex gap-1 overflow-x-auto border-b">
           {SECTIONS.map((s) => (
@@ -83,7 +84,7 @@ export default async function Admin({ searchParams }: { searchParams?: { section
           )}
           <Suspense key={`${section}:${view}:${searchParams?.view ?? ""}`} fallback={<SectionSkeleton />}>
             <Section id={section} view={view}
-                     integrationView={searchParams?.view === "jira" ? "jira" : "repos"} />
+                     integrationView={searchParams?.view === "jira" || searchParams?.view === "airflow" ? searchParams.view : "repos"} />
           </Suspense>
         </main>
       </div>
@@ -121,15 +122,20 @@ async function Section({ id, view, integrationView }: { id: SectionId; view: Mod
     );
   }
   if (id === "integrations") {
-    const [repos, domains, publishing, jira] = await Promise.all([
+    const [repos, domains, publishing, jira, airflow] = await Promise.all([
       api<{ repos: CodeRepo[]; ready: boolean }>("/api/code/repos").catch(() => null),
       api<{ domains: { domain_id: string; domain_name: string; active_flag: boolean }[] }>("/api/domains").catch(() => ({ domains: [] })),
       api<PublishingStatus>("/api/dbt/github").catch(() => ({ ready: false, config: null })),
       api<JiraStatus>("/api/jira/status").catch(() => null),
+      // 404: the ops API is not deployed yet; other API errors are shown on the Airflow tab
+      api<{ envs: AirflowEnv[] }>("/api/ops/envs").then((r) => ({ envs: r.envs as AirflowEnv[] | null, error: null as string | null }), (e: unknown) => {
+        if (e instanceof ApiError) return { envs: e.status === 404 ? null : [], error: e.status === 404 ? null : e.message };
+        throw e;
+      }),
     ]);
     if (!repos) return unavailable;
     if (!repos.ready) return <p className="text-sm text-muted-foreground">Code repositories need the latest deploy (migration V024).</p>;
-    return <IntegrationsSection repos={repos.repos} publishing={publishing} jira={jira} view={integrationView}
+    return <IntegrationsSection repos={repos.repos} publishing={publishing} jira={jira} airflow={airflow.envs} airflowError={airflow.error} view={integrationView}
                                 domains={domains.domains.filter((d) => d.active_flag).map((d) => ({ domain_id: d.domain_id, domain_name: d.domain_name }))} />;
   }
   if (id === "skills") {

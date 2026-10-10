@@ -25,7 +25,7 @@ export default async function ApprovalsPage({ searchParams }: { searchParams: { 
   }
   return (
     <div className="space-y-5">
-      <PageHeader eyebrow="Governance" title="Approvals"
+      <PageHeader eyebrow="Govern" title="Approvals"
                   description="Changes that need another role's approval. Approving applies the change with your access; every decision is logged." />
       <nav role="tablist" className="flex gap-1 border-b">
         {scopes.map((s) => (
