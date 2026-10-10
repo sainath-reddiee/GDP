@@ -285,6 +285,22 @@ class RepoUpdate(BaseModel):
     exclude_globs: Optional[list[str]] = None
     kind: Optional[Literal["DBT", "SQL", "PYTHON", "MIXED"]] = None
     enabled: Optional[bool] = None
+    # dbt workspace settings (used by every run whose domain this repository serves)
+    use_for_dbt: Optional[bool] = None
+    dbt_project_dir: Optional[str] = Field(default=None, max_length=512)
+    open_pr: Optional[bool] = None
+    draft_pr: Optional[bool] = None
+
+
+def project_roots(repo: dict) -> list[str]:
+    """dbt project folders found by the last index ('' is the repository root)."""
+    return [str(p.get("root") or "") for p in (repo.get("stats") or {}).get("dbt_project_roots") or []]
+
+
+def _flag(value: Optional[bool], current: Any, default: bool) -> bool:
+    if value is not None:
+        return value
+    return default if current is None else bool(current)
 
 
 def _reset_index(db: Db, repo_id: str) -> None:
@@ -319,6 +335,18 @@ def update_repo(repo_id: str, body: RepoUpdate, db: Db = Depends(current_db)):
                (branch, json.dumps(body.domain_ids if body.domain_ids is not None else repo["domain_ids"]),
                 json.dumps(include), json.dumps(exclude), body.kind or repo["kind"],
                 repo["enabled"] if body.enabled is None else body.enabled, repo_id))
+    if any(v is not None for v in (body.use_for_dbt, body.dbt_project_dir, body.open_pr, body.draft_pr)):
+        folder = repo.get("dbt_project_dir") or ""
+        if body.dbt_project_dir is not None:
+            folder = body.dbt_project_dir.replace("\\", "/").strip().strip("/")
+            if folder and not safe_path(folder):
+                raise HTTPException(400, "The project folder has unexpected characters")
+            roots = project_roots(repo)
+            if roots and folder not in roots:
+                raise HTTPException(400, f"No dbt_project.yml in '{folder or '(root)'}'. Found: {', '.join(r or '(root)' for r in roots)}")
+        db.execute("""UPDATE CODE.REPO SET USE_FOR_DBT = %s, DBT_PROJECT_DIR = %s, OPEN_PR = %s, DRAFT_PR = %s WHERE REPO_ID = %s""",
+                   (_flag(body.use_for_dbt, repo.get("use_for_dbt"), True), folder, _flag(body.open_pr, repo.get("open_pr"), True),
+                    _flag(body.draft_pr, repo.get("draft_pr"), False), repo_id))
     if new_files:
         _reset_index(db, repo_id)
         _start_refresh(db, repo_id)

@@ -8,8 +8,9 @@ export type CodeRepo = {
   api_integration: string | null; secret_name: string | null; domain_ids: string[]; include_globs: string[]; exclude_globs: string[];
   kind: string; enabled: boolean; schedule_cron: string | null; last_commit: string | null; last_indexed: string | null;
   status: string; error: string | null; refreshing?: boolean; owns_git_repository?: boolean;
+  use_for_dbt?: boolean | null; dbt_project_dir?: string | null; open_pr?: boolean | null; draft_pr?: boolean | null;
   stats: { files?: number; chunks?: number; edges?: number; languages?: number; by_kind?: Record<string, number>; dbt_projects?: string[];
-           pending_files?: number; skipped_files?: number };
+           pending_files?: number; skipped_files?: number; dbt_project_roots?: { name: string; root: string }[] };
   last_run: { status?: string; started_at?: string; duration_ms?: number; files_changed?: number; error?: string | null };
 };
 export type CodeSetup = {
@@ -52,7 +53,8 @@ export async function connectRepo(body: {
   return r;
 }
 
-export async function updateRepo(id: string, body: Partial<Pick<CodeRepo, "branch" | "domain_ids" | "include_globs" | "exclude_globs" | "kind" | "enabled">>) {
+export async function updateRepo(id: string, body: Partial<Pick<CodeRepo, "branch" | "domain_ids" | "include_globs" | "exclude_globs" | "kind" | "enabled">>
+  & { use_for_dbt?: boolean; dbt_project_dir?: string; open_pr?: boolean; draft_pr?: boolean }) {
   const r = await attemptValue(() => api<CodeRepo & { reindexing?: boolean }>(`/api/code/repos/${id}`, { method: "PUT", body: JSON.stringify(body) }));
   changed();
   return r;

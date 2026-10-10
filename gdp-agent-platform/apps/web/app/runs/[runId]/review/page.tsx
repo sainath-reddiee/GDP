@@ -16,7 +16,7 @@ export default async function ReviewPage({ params }: { params: { runId: string }
     getRun(params.runId),
     api<{ generation: DbtGeneration | null; artifacts: unknown[];
           branch: { base_branch?: string; cut_branch?: string; repo?: string } | null;
-          publication?: { pull_request?: { url?: string | null } | null } | null;
+          publication?: { pr_url?: string | null } | null;
         }>(`/api/runs/${params.runId}/dbt`).catch(() => null),
     api<{ runs: { validation_id: string; validation_type: string; status: string; error_count: number; warning_count?: number }[] }>(
       `/api/runs/${params.runId}/validation`,
@@ -25,7 +25,7 @@ export default async function ReviewPage({ params }: { params: { runId: string }
   const lanes = state.lanes;
   const checks = validation.runs.filter((r) => r.validation_type !== "SUMMARY");
   const failedChecks = checks.filter((r) => r.status === "FAILED");
-  const prUrl = dbt?.publication?.pull_request?.url;
+  const prUrl = dbt?.publication?.pr_url;
   const rows: Row[] = [
     { label: "QA tests", href: `/runs/${params.runId}/qa`, done: !!lanes?.QA.done,
       failed: lanes?.QA.status === "BLOCKED", detail: lanes?.QA.note ?? "sign off on the QA page" },

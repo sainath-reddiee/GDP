@@ -129,15 +129,13 @@ export async function backtestSoda(runId: string) {
   return result;
 }
 
+/** A run's dbt choices. The repository (clone, origin, integration, project folder) is configured in Admin and
+ *  resolved by the server from `code_repo_id`; the browser never sends where the code goes. */
 export type DbtPlanInput = {
+  code_repo_id?: string;
   base_branch?: string;
   cut_branch?: string;
-  repo?: string;
-  origin?: string;
-  git_repository?: string;
-  api_integration?: string;
   dbt_project?: string;
-  allowed_prefixes?: string[];
   push?: boolean;
   fetch_skeleton?: boolean;
   prefix?: string;
@@ -181,35 +179,6 @@ export async function publishDbt(runId: string, body: Record<string, unknown>) {
   }));
   revalidatePath(`/runs/${runId}`, "layout");
   return result;
-}
-
-export async function setupGithubPublishing(runId: string, body: { token?: string; secret?: string; external_access_integration?: string }) {
-  const result = await attemptValue(() => api<{ ready: boolean; detail?: string; log: { sql: string; ok: boolean; error?: string }[] }>(
-    "/api/dbt/github/setup", { method: "POST", body: JSON.stringify(body) },
-  ));
-  revalidatePath(`/runs/${runId}`, "layout");
-  return result;
-}
-
-export async function createGitRepository(runId: string, body: { name: string; origin: string; api_integration: string; git_credentials?: string }) {
-  const result = await attemptValue(() => api<{ git_repository: string; origin: string; api_integration: string }>(
-    "/api/dbt/git-repository", { method: "POST", body: JSON.stringify(body) },
-  ));
-  revalidatePath(`/runs/${runId}`, "layout");
-  return result;
-}
-
-export async function checkGithub(origin: string) {
-  return attemptValue(() => api<{
-    status: string; detail?: string; repository?: string; default_branch?: string; push?: boolean | null;
-    private?: boolean; html_url?: string;
-  }>("/api/dbt/github/check", { method: "POST", body: JSON.stringify({ origin }) }));
-}
-
-export async function rotateGithubToken(token: string) {
-  return attemptValue(() => api<{ rotated: boolean; secret: string }>(
-    "/api/dbt/github/token", { method: "POST", body: JSON.stringify({ token }) },
-  ));
 }
 
 export async function reviewDbtFile(runId: string, filePath: string, model?: string) {

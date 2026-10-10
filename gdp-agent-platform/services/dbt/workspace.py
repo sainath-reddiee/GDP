@@ -336,35 +336,73 @@ def read_repo_text(read: Callable[[str], List[Any]], repo: str, branch: str, rel
     return "\n".join(str(c) for c in chunks if c is not None)
 
 
-def fetch_branch_files(session, repo_fqn: str, branch: str, limit: int = 120) -> Dict[str, str]:
+def branch_segment(branch: str) -> str:
+    """Stage path segment for a branch: names with a slash (feat/x) must be double quoted."""
+    return f'"{branch}"' if "/" in branch else branch
+
+
+def clean_project_dir(project_dir: Optional[str]) -> str:
+    """The dbt project's folder inside the repository ('' for the root)."""
+    value = (project_dir or "").replace("\\", "/").strip().strip("/")
+    assert not value or (re.fullmatch(r"[\w.\-/]+", value) and ".." not in value.split("/")), \
+        f"invalid project folder: {project_dir}"
+    return value
+
+
+def branch_relative(listed_name: str, branch: str) -> str:
+    """Path inside the branch from a LIST name: repo/branches/main/a.sql or repo/branches/"feat/x"/a.sql."""
+    after = listed_name.split("/branches/", 1)[-1]
+    for prefix in (f'"{branch}"/', f"{branch}/"):
+        if after.startswith(prefix):
+            return after[len(prefix):].lstrip("/")
+    return ""
+
+
+def skeleton_from_listing(names: List[str], branch: str, project_dir: str, read: Callable[[str], str],
+                          limit: int = 120) -> Dict[str, str]:
+    """{project-relative path: text} for the text files under the project folder. `read(path from branch root)`."""
+    folder = clean_project_dir(project_dir)
+    files: Dict[str, str] = {}
+    for name in names:
+        rel = branch_relative(name, branch)
+        if folder:
+            if not rel.startswith(folder + "/"):
+                continue
+            inner = rel[len(folder) + 1:]
+        else:
+            inner = rel
+        if not inner or not inner.lower().endswith(TEXT_SUFFIXES):
+            continue
+        if len(files) >= limit:
+            break
+        try:
+            text = read(rel)
+            if text:
+                files[inner] = text
+        except Exception:
+            continue
+    return files
+
+
+def fetch_branch_files(session, repo_fqn: str, branch: str, limit: int = 120, project_dir: str = "") -> Dict[str, str]:
+    """The base branch's text files (the skeleton), relative to the dbt project folder."""
     repo = safe_fqn(repo_fqn)
     branch_name = (branch or "main").strip().strip("/")
     assert re.fullmatch(r"[A-Za-z0-9._/\-]+", branch_name), f"unsafe branch: {branch}"
+    folder = clean_project_dir(project_dir)
     fetch_error = ""
     try:
         session.sql(f"ALTER GIT REPOSITORY {repo} FETCH").collect()
     except Exception as exc:  # a stale clone is still a usable skeleton
         fetch_error = str(exc)[:400]
-    listed = session.sql(f"LIST @{repo}/branches/{branch_name}/").collect()
+    where = f"@{repo}/branches/{branch_segment(branch_name)}/" + (f"{folder}/" if folder else "")
+    listed = session.sql(f"LIST {where}").collect()
     if not listed and fetch_error:
         raise RuntimeError(f"FETCH failed and the clone has no {branch_name} files: {fetch_error}")
     read = lambda sql: [r[0] for r in session.sql(sql).collect()]  # noqa: E731
-    files: Dict[str, str] = {}
-    for row in listed:
-        raw = row.as_dict() if hasattr(row, "as_dict") else {"name": row[0]}
-        name = str(raw.get("name") or raw.get("NAME") or "")
-        rel = name.split(f"/branches/{branch_name}/", 1)[-1].lstrip("/")
-        if not rel or not rel.lower().endswith(TEXT_SUFFIXES):
-            continue
-        if len(files) >= limit:
-            break
-        try:
-            text = read_repo_text(read, repo, branch_name, rel)
-            if text:
-                files[rel] = text
-        except Exception:
-            continue
-    return files
+    names = [str((row.as_dict() if hasattr(row, "as_dict") else {"name": row[0]}).get("name") or "") for row in listed]
+    return skeleton_from_listing(names, branch_name, folder,
+                                 lambda rel: read_repo_text(read, repo, branch_segment(branch_name), rel), limit)
 
 
 def create_dbt_project(session, project_fqn: str, stage_path: str, comment: str) -> Dict[str, Any]:

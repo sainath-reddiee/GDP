@@ -44,13 +44,23 @@ def check_branch(name: str) -> str:
     return value
 
 
-def tree_entries(files: Dict[str, str]) -> List[Dict[str, str]]:
+def clean_root(root: Optional[str]) -> str:
+    """The dbt project's folder inside the repository ('' for the root); refuses anything that could escape it."""
+    value = (root or "").replace("\\", "/").strip().strip("/")
+    if value and (".." in value.split("/") or not re.fullmatch(r"[\w.\-/]+", value)):
+        raise ValueError(f"invalid project folder: {root}")
+    return value
+
+
+def tree_entries(files: Dict[str, str], root: str = "") -> List[Dict[str, str]]:
+    """Git tree entries for project-relative files, placed under the project folder `root` when it is set."""
+    folder = clean_root(root)
     out = []
     for path, content in sorted(files.items()):
         clean = path.replace("\\", "/").lstrip("/")
         if not clean or ".." in clean.split("/") or clean in SKIP_PATHS:
             continue
-        out.append({"path": clean, "mode": "100644", "type": "blob", "content": content})
+        out.append({"path": f"{folder}/{clean}" if folder else clean, "mode": "100644", "type": "blob", "content": content})
     return out
 
 
@@ -118,12 +128,12 @@ def preflight(request: Request, origin: str) -> Dict[str, Any]:
 
 
 def publish(request: Request, origin: str, base: str, head: str, files: Dict[str, str],
-            title: str, body: str, message: str, draft: bool = False) -> Dict[str, Any]:
+            title: str, body: str, message: str, draft: bool = False, *, root: str = "") -> Dict[str, Any]:
     owner, repo = parse_origin(origin)
     base, head = check_branch(base), check_branch(head)
     if base == head:
         raise ValueError("the new branch must differ from the cut-from branch")
-    entries = tree_entries(files)
+    entries = tree_entries(files, root)
     if not entries:
         raise ValueError("no files to publish")
     root = f"/repos/{owner}/{repo}"

@@ -187,8 +187,10 @@ class SodaDecisions(BaseModel):
 
 
 class DbtPlan(BaseModel):
-    base_branch: Optional[str] = "main"
-    cut_branch: Optional[str] = None
+    # the repository comes from Admin, Integrations (CODE.REPO); origin, clone and integration are resolved server-side
+    code_repo_id: Optional[str] = Field(default=None, max_length=36)
+    base_branch: Optional[str] = Field(default=None, max_length=200)
+    cut_branch: Optional[str] = Field(default=None, max_length=200)
     repo: Optional[str] = None
     origin: Optional[str] = None
     git_repository: Optional[str] = None
@@ -2980,9 +2982,95 @@ def _generate_dbt_overlay(db: Db, run_id: str, payload: dict):
     return generate_via_db(db, run_id, payload)
 
 
+# ------------------------------------------------------------------ the run's repository (configured in Admin)
+REPO_LOCATION_KEYS = ("origin", "repo", "git_repository", "api_integration", "allowed_prefixes", "project_dir")
+
+
+def _stored_dbt_plan(db: Db, run_id: str) -> dict:
+    try:
+        found = db.query("SELECT CONTENT_JSON FROM KNOWLEDGE.DOMAIN_KNOWLEDGE WHERE IS_CURRENT AND SOURCE_REFERENCE = %s",
+                         (f"dbt.branch.{run_id}",))
+    except Exception:
+        return {}
+    plan = _json(found[0].get("content_json")) if found else {}
+    return plan if isinstance(plan, dict) else {}
+
+
+def _dbt_repos(db: Db, domain_id: Optional[str]) -> list[dict]:
+    """Repositories offered to the dbt workspace for a domain: enabled, used for dbt, serving the domain (none listed: all)."""
+    try:
+        found = db.query("""SELECT REPO_ID, NAME, GIT_URL, PROVIDER, BRANCH, GIT_REPOSITORY, API_INTEGRATION, STATUS, STATS,
+                                   DOMAIN_IDS, COALESCE(DBT_PROJECT_DIR, '') AS DBT_PROJECT_DIR,
+                                   COALESCE(OPEN_PR, TRUE) AS OPEN_PR, COALESCE(DRAFT_PR, FALSE) AS DRAFT_PR
+                              FROM CODE.REPO WHERE ENABLED AND COALESCE(USE_FOR_DBT, TRUE) ORDER BY NAME""")
+    except Exception:
+        return []
+    out = []
+    for r in found:
+        domains = _json(r.pop("domain_ids", None)) or []
+        if domains and domain_id not in domains:
+            continue
+        stats = _json(r.pop("stats", None)) or {}
+        r["project_roots"] = stats.get("dbt_project_roots") or []
+        r["dbt_projects"] = stats.get("dbt_projects") or []
+        out.append(r)
+    return out
+
+
+def _dbt_repo(db: Db, domain_id: Optional[str], plan: dict) -> tuple[Optional[dict], list[dict], bool]:
+    """(repository the run uses, the candidates, whether the plan is a legacy hand-made setup)."""
+    candidates = _dbt_repos(db, domain_id)
+    wanted = plan.get("code_repo_id")
+    if wanted:
+        return next((c for c in candidates if c["repo_id"] == wanted), None), candidates, False
+    if plan.get("git_repository"):
+        return None, candidates, True  # set up by hand before repositories were configured in Admin
+    return (candidates[0] if len(candidates) == 1 else None), candidates, False
+
+
+def _resolve_dbt_payload(db: Db, run_id: str, payload: dict) -> dict:
+    """Fill the repository location from Admin's configuration; the browser never chooses an origin or a clone."""
+    from app.code_api import _branches, _missing_branch
+    from services.dbt.workspace import safe_fqn
+
+    for key in REPO_LOCATION_KEYS:
+        payload.pop(key, None)
+    run = db.query("SELECT DOMAIN_ID FROM CORE.WORKFLOW_RUN WHERE RUN_ID = %s", (run_id,))
+    if not run:
+        raise HTTPException(404, "run not found")
+    prior = _stored_dbt_plan(db, run_id)
+    repo, candidates, legacy = _dbt_repo(db, run[0].get("domain_id"), {**prior, **payload})
+    if payload.get("code_repo_id") and not repo:
+        raise HTTPException(409, "That repository is no longer offered to this run's domain (disconnected, disabled or "
+                                 "moved to another domain). Pick another one, or ask an admin in Admin, Integrations.")
+    if repo:
+        payload.update(code_repo_id=repo["repo_id"], git_repository=repo["git_repository"], origin=repo["git_url"],
+                       repo=repo["git_url"], api_integration=repo.get("api_integration") or "",
+                       project_dir=repo.get("dbt_project_dir") or "")
+        base = (payload.get("base_branch") or ("" if prior.get("code_repo_id") != repo["repo_id"] else prior.get("base_branch"))
+                or repo["branch"])
+        found, error = _branches(db, safe_fqn(repo["git_repository"]))
+        names = [b["name"] for b in found]
+        if base not in names:
+            if error and not found:
+                raise _snowflake_error(Exception(error))
+            raise _missing_branch(base, names, repo["git_url"])
+        payload["base_branch"] = base
+        if payload.get("cut_branch") and payload["cut_branch"] == base:
+            raise HTTPException(400, "The new branch must differ from the cut-from branch")
+        if (repo.get("provider") or "") != "GITHUB":
+            payload["push"] = False  # pull requests from the platform are GitHub only for now
+    elif len(candidates) > 1 and not legacy:
+        raise HTTPException(409, "Several repositories serve this domain; pick one for this run: "
+                                 + ", ".join(c["name"] for c in candidates))
+    elif not legacy:
+        payload["push"] = False  # no repository: generate to the stage only
+    return payload
+
+
 @app.post("/api/runs/{run_id}/dbt")
 def generate_dbt(run_id: str, body: Optional[DbtPlan] = None, db: Db = Depends(current_db)):
-    payload = _clean_dbt_plan(body)
+    payload = _resolve_dbt_payload(db, run_id, _clean_dbt_plan(body))
     result = _generate_dbt(run_id, payload, db)
     if payload.get("push") and isinstance(result, dict) and not result.get("error"):
         result["publish"] = _publish_dbt(db, run_id, {})
@@ -3033,10 +3121,9 @@ def _publish_dbt(db: Db, run_id: str, payload: dict) -> dict:
 
 
 class DbtPublish(BaseModel):
-    origin: Optional[str] = None
-    base_branch: Optional[str] = None
-    cut_branch: Optional[str] = None
-    git_repository: Optional[str] = None
+    # where to push was fixed at generation from the configured repository; only the branch names may be confirmed
+    base_branch: Optional[str] = Field(default=None, max_length=200)
+    cut_branch: Optional[str] = Field(default=None, max_length=200)
     title: Optional[str] = Field(default=None, max_length=200)
     draft: bool = False
     create_project: bool = True
@@ -3045,6 +3132,18 @@ class DbtPublish(BaseModel):
 @app.post("/api/runs/{run_id}/dbt/publish")
 def publish_dbt(run_id: str, body: DbtPublish, db: Db = Depends(current_db)):
     """Push the latest generation to a new GitHub branch and open a PR (CODEGEN.PUBLISH_DBT_PR)."""
+    plan = _stored_dbt_plan(db, run_id)
+    if plan.get("code_repo_id"):
+        found = db.query("SELECT ENABLED, COALESCE(USE_FOR_DBT, TRUE) AS USE_FOR_DBT, PROVIDER, NAME FROM CODE.REPO WHERE REPO_ID = %s",
+                         (plan["code_repo_id"],))
+        if not found or not found[0]["enabled"] or not found[0]["use_for_dbt"]:
+            raise HTTPException(409, "The repository this run was generated for is no longer connected or used for dbt. "
+                                     "Generate again with a configured repository.")
+        if found[0].get("provider") != "GITHUB":
+            raise HTTPException(409, f"{found[0]['name']} is not on GitHub; pull requests from the platform are GitHub only, "
+                                     "so this run stays stage only.")
+    elif not plan.get("origin"):
+        raise HTTPException(409, "This run has no repository to publish to. Generate with a repository configured in Admin, Integrations.")
     return _publish_dbt(db, run_id, body.model_dump(exclude_none=True))
 
 
@@ -3232,7 +3331,29 @@ def get_dbt(run_id: str, db: Db = Depends(current_db)):
     except Exception:
         publication = []
     return {"generation": gen[0] if gen else None, "artifacts": artifacts, **extras,
-            "publication": publication[0] if publication else None}
+            "publication": publication[0] if publication else None, **_dbt_setup(db, run_id)}
+
+
+def _dbt_setup(db: Db, run_id: str) -> dict:
+    """What the run's dbt workspace needs from Admin's configuration: its repository (or the choices), the default new
+    branch from the modeling standard, and whether GitHub publishing is ready."""
+    from services.common.standard import conventions_for, run_standard
+    from services.dbt.procedures import branch_slug
+
+    run = db.query("SELECT * FROM CORE.WORKFLOW_RUN WHERE RUN_ID = %s", (run_id,))
+    if not run:
+        return {}
+    plan = _stored_dbt_plan(db, run_id)
+    repo, candidates, legacy = _dbt_repo(db, run[0].get("domain_id"), plan)
+    try:
+        prefix = conventions_for(lambda sql, params: db.query(sql.replace("?", "%s"), tuple(params)),
+                                 run_standard(run[0]))["branch_prefix"]
+    except Exception:
+        prefix = "feat/onboard-"
+    return {"repository": repo, "candidates": candidates, "legacy": legacy,
+            "legacy_setup": {k: plan.get(k) for k in ("git_repository", "origin", "base_branch")} if legacy else None,
+            "default_cut_branch": f"{prefix}{branch_slug(run[0].get('run_name') or '', run_id)}",
+            "publishing": {"ready": _github_publisher_ready(db)}}
 
 
 def _quote_fqn(name: str) -> str:
@@ -3312,11 +3433,13 @@ def get_dbt_branches(run_id: str, repo: str, fetch: bool = True, db: Db = Depend
 
 
 @app.get("/api/runs/{run_id}/dbt/workspace")
-def get_dbt_workspace(run_id: str, db: Db = Depends(current_db)):
+def get_dbt_workspace(run_id: str, git: bool = True, db: Db = Depends(current_db)):
+    """Skills and models for the dbt workspace; with git, also the account's Git integrations and clones (slow)."""
     from services.dbt.workspace import discover
     from services.knowledge.usage import STAGE_SKILLS
 
-    workspace = discover(lambda sql: db.query(sql))
+    workspace = discover(lambda sql: db.query(sql)) if git else {"integrations": [], "git_repositories": [],
+                                                                    "dbt_projects": [], "warnings": []}
     try:
         skills = db.query(
             """

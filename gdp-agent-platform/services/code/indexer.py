@@ -289,7 +289,9 @@ def _stats(session, repo_id: str, dbt: List[Dict[str, Any]]) -> Dict[str, Any]:
                                FROM CODE.CODE_FILE WHERE REPO_ID = ?""", [repo_id])[0]
     edges = rows(session, "SELECT COUNT(*) AS N FROM CODE.CODE_EDGE WHERE REPO_ID = ?", [repo_id])[0]
     return {"files": int(files["N"] or 0), "languages": int(files["L"] or 0), "chunks": sum(kinds.values()), "by_kind": kinds,
-            "edges": int(edges["N"] or 0), "dbt_projects": [p["name"] for p in dbt], "_skipped_known": int(files["S"] or 0)}
+            "edges": int(edges["N"] or 0), "dbt_projects": [p["name"] for p in dbt],
+            "dbt_project_roots": [{"name": p["name"], "root": p["root"].rstrip("/")} for p in dbt],
+            "_skipped_known": int(files["S"] or 0)}
 
 
 def _summary(session, repo_id: str, commit: str, dbt: List[Dict[str, Any]]) -> None:
