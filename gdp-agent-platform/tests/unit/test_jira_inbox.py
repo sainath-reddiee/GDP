@@ -266,11 +266,11 @@ def bug(module, db, **changes):
 
 
 def test_bug_level_1_open_linked_bug_is_returned(api, results):
-    client = Jira()
+    client = Jira(issue=lambda key: issue(key))
     module = api(client)
     out = bug(module, bug_db(**{"ORIGIN = 'BUG'": [{"issue_key": "QA-5"}]}))
     assert out == {"key": "QA-5", "url": "https://team.atlassian.net/browse/QA-5", "created": False, "existing": True}
-    assert client.calls == []   # answered from the link, Jira untouched
+    assert [n for n, _ in client.calls] == ["issue"]   # the link's live status is checked, nothing is created
 
 
 def test_bug_level_2_same_idempotency_key_returns_the_first_answer(api, results):

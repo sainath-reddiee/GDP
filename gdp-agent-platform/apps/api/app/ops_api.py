@@ -5,8 +5,11 @@ need OPS.OPERATE (services.governance.policy). MWAA calls (connection test, task
 services.ops.mwaa with the host's AWS credentials.
 
 POST /api/ops/ingest has no user session: it runs as system_db(), and the caller proves itself with an HMAC signature
-made with the environment's push secret (services.ops.signing). The push secret is generated here, stored ENCRYPTed
-with AIP_SECRET_KEY (or JIRA_TOKEN_KEY) and shown once.
+made with the environment's push secret (services.ops.signing). The push secret is generated here, sealed in the API
+(services.common.secretbox, a key derived from AIP_SECRET_KEY, else JIRA_TOKEN_KEY), stored as ciphertext only and shown
+once. The ingest is unauthenticated until the signature is checked, so it validates the environment id before any
+database read, caches secrets in a bounded LRU (unknown environments too, for a minute) and rate limits per client
+address and per environment.
 
 Deleting an environment removes its row and its poll lease; its DAG and run history stays in the OPS tables but is
 hidden, because every read joins to OPS.AIRFLOW_ENV.
@@ -15,11 +18,11 @@ hidden, because every read joins to OPS.AIRFLOW_ENV.
 from __future__ import annotations
 
 import json
-import os
 import re
 import secrets
 import threading
 import time
+from collections import OrderedDict, deque
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import quote
@@ -30,10 +33,11 @@ from pydantic import BaseModel, Field
 
 from app.db import Db, SnowflakeSessionError, system_db
 from app.main import _json, _snowflake_error, current_db
+from services.common import secretbox
 from services.ops.mwaa import Mwaa, MwaaError
 from services.ops.normalize import ts
 from services.ops.redact import redact_count
-from services.ops.signing import HEADER_NAMES, MAX_BODY_BYTES, check_headers, verify
+from services.ops.signing import ENV_ID, HEADER_NAMES, MAX_BODY_BYTES, check_headers, verify
 
 router = APIRouter()
 INGEST_PATH = "/bff/ops/ingest"
@@ -41,8 +45,17 @@ CRITICALITY = ("CRITICAL", "HIGH", "MEDIUM", "LOW")
 RUN_LIMIT = 50
 DAG_LIMIT = 2000
 _SECRET_TTL = 60.0
-_secrets: Dict[str, Tuple[float, Optional[str], bool]] = {}
+_NEGATIVE_TTL = 60.0
+_SECRET_CACHE_MAX = 64
+_secrets: "OrderedDict[str, Tuple[float, Optional[str], bool]]" = OrderedDict()
 _secrets_lock = threading.Lock()
+RATE_WINDOW = 60.0
+RATE_PER_ENV = 300          # requests a minute per environment with a push secret
+RATE_UNKNOWN_ENV = 60       # requests a minute per environment without one (unknown, disabled or unreadable)
+RATE_PER_CLIENT = 600       # requests a minute per client address
+_RATE_KEYS_MAX = 4096
+_rates: "OrderedDict[str, deque]" = OrderedDict()
+_rates_lock = threading.Lock()
 _REGION = re.compile(r"^[a-z]{2}(-gov|-iso[a-z]?)?-[a-z]+-\d$")
 _MWAA_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9_\-]{0,79}$")
 _CRON = re.compile(r"^(@(yearly|annually|monthly|weekly|daily|midnight|hourly)|([0-9A-Za-z*/,\-?LW#]+\s+){4,5}[0-9A-Za-z*/,\-?LW#]+)$")
@@ -117,8 +130,8 @@ def _env(db: Db, env_id: str) -> Dict[str, Any]:
 
 
 def _secret_key() -> str:
-    key = (os.environ.get("AIP_SECRET_KEY") or os.environ.get("JIRA_TOKEN_KEY") or "").strip()
-    if len(key) < 16:
+    key = secretbox.ops_key()
+    if not key:
         raise HTTPException(409, "No encryption key on the API host: set AIP_SECRET_KEY (16+ random characters; "
                                  "JIRA_TOKEN_KEY is used when it is absent) and restart the API.")
     return key
@@ -229,14 +242,17 @@ def _env_out(r: Dict[str, Any]) -> Dict[str, Any]:
             "region": r["region"], "airflow_url": r.get("airflow_url"), "api_version": r.get("api_version"),
             "airflow_version": r.get("airflow_version"), "enabled": bool(r.get("enabled")),
             "poll_seconds": int(r.get("poll_seconds") or 300), "push_enabled": bool(r.get("push_enabled")),
-            "has_push_secret": bool(r.get("has_push_secret")), "last_poll_at": _iso(r.get("last_poll_at")),
+            "has_push_secret": bool(r.get("has_push_secret")),
+            "push_secret_detail": PUSH_SECRET_AGAIN if r.get("push_secret_legacy") else None,
+            "last_poll_at": _iso(r.get("last_poll_at")),
             "last_attempt_at": _iso(r.get("last_attempt_at")), "last_error": r.get("last_error"),
             "dags": int(r.get("dags") or 0)}
 
 
 _ENV_SELECT = """
     SELECT E.ENV_ID, E.NAME, E.KIND, E.MWAA_ENV, E.REGION, E.AIRFLOW_URL, E.API_VERSION, E.AIRFLOW_VERSION, E.ENABLED,
-           E.POLL_SECONDS, E.PUSH_ENABLED, E.PUSH_SECRET IS NOT NULL AS HAS_PUSH_SECRET, E.LAST_POLL_AT, E.LAST_ATTEMPT_AT,
+           E.POLL_SECONDS, E.PUSH_ENABLED, E.PUSH_SECRET IS NOT NULL AS HAS_PUSH_SECRET,
+           COALESCE(LEFT(HEX_ENCODE(E.PUSH_SECRET), 10) <> '676470313A', FALSE) AS PUSH_SECRET_LEGACY, E.LAST_POLL_AT, E.LAST_ATTEMPT_AT,
            E.LAST_ERROR, COALESCE(D.N, 0) AS DAGS
       FROM OPS.AIRFLOW_ENV E
       LEFT JOIN (SELECT ENV_ID, COUNT(*) AS N FROM OPS.DAG WHERE COALESCE(IS_ACTIVE, TRUE) GROUP BY ENV_ID) D
@@ -342,8 +358,8 @@ def rotate_push_secret(env_id: str, db: Db = Depends(current_db), x_aip_replay: 
     key = _secret_key()
     _env(db, env_id)
     secret = secrets.token_hex(32)
-    _x(db, "UPDATE OPS.AIRFLOW_ENV SET PUSH_SECRET = ENCRYPT(%s, %s), UPDATED_AT = CURRENT_TIMESTAMP() WHERE ENV_ID = %s",
-       (secret, key, env_id))
+    _x(db, "UPDATE OPS.AIRFLOW_ENV SET PUSH_SECRET = %s, UPDATED_AT = CURRENT_TIMESTAMP() WHERE ENV_ID = %s",
+       (seal_push_secret(secret, env_id, key), env_id))
     _forget_secret(env_id)
     return {"env_id": env_id, "secret": secret, "header_names": HEADER_NAMES, "url_path": INGEST_PATH}
 
@@ -583,26 +599,86 @@ def task_log(env_id: str, dag_id: str, run_id: str, task_id: str, try_number: Op
 
 # ---------------------------------------------------------------- signed push from the Airflow listener plugin
 
+PUSH_SECRET_AGAIN = "The stored push secret was saved in an older format or with another key: generate a new push secret."
+
+
+def seal_push_secret(secret: str, env_id: str, key: Optional[str] = None) -> bytes:
+    """The sealed push secret for OPS.AIRFLOW_ENV.PUSH_SECRET (bound as bytes: only ciphertext reaches Snowflake)."""
+    return secretbox.seal(secret, key or _secret_key(), secretbox.PUSH_SECRET, env_id)
+
+
+def open_push_secret(value: Any, env_id: str, key: str) -> Optional[str]:
+    """The push secret, or None when there is none or it cannot be opened (an old ENCRYPT() value or another key:
+    PUSH_SECRET_AGAIN, someone must generate a new push secret)."""
+    if value is None or not key:
+        return None
+    try:
+        return secretbox.open_secret(value, key, secretbox.PUSH_SECRET, env_id)
+    except secretbox.SecretError:
+        return None
+
+
 def _push_secret(db: Db, env_id: str) -> Tuple[Optional[str], bool]:
-    """(secret or None, push enabled), cached a minute per environment."""
+    """(secret or None, push enabled), cached a minute per environment in a bounded LRU. An unknown environment or a
+    missing secret is cached too (negative result), so unsigned noise cannot turn every request into a database read."""
     now = time.time()
+    if not ENV_ID.match(env_id or ""):
+        return None, False
     with _secrets_lock:
         hit = _secrets.get(env_id)
         if hit and hit[0] > now:
+            _secrets.move_to_end(env_id)
             return hit[1], hit[2]
-    key = (os.environ.get("AIP_SECRET_KEY") or os.environ.get("JIRA_TOKEN_KEY") or "").strip()
+    key = secretbox.ops_key()
     secret, enabled = None, False
     if key:
         try:
-            found = db.query("""SELECT IFF(PUSH_SECRET IS NULL, NULL, TO_VARCHAR(DECRYPT(PUSH_SECRET, %s), 'UTF-8')) AS S,
-                                       PUSH_ENABLED FROM OPS.AIRFLOW_ENV WHERE ENV_ID = %s""", (key, env_id))
+            found = db.query("SELECT PUSH_SECRET AS S, PUSH_ENABLED FROM OPS.AIRFLOW_ENV WHERE ENV_ID = %s", (env_id,))
         except Exception:
-            found = []  # a key that changed cannot decrypt: the secret must be rotated
+            found = []
         if found:
-            secret, enabled = found[0].get("s"), bool(found[0].get("push_enabled"))
+            secret, enabled = open_push_secret(found[0].get("s"), env_id, key), bool(found[0].get("push_enabled"))
     with _secrets_lock:
-        _secrets[env_id] = (now + _SECRET_TTL, secret, enabled)
+        _secrets[env_id] = (now + (_SECRET_TTL if secret else _NEGATIVE_TTL), secret, enabled)
+        _secrets.move_to_end(env_id)
+        while len(_secrets) > _SECRET_CACHE_MAX:
+            _secrets.popitem(last=False)
     return secret, enabled
+
+
+def _known_env(env_id: str) -> bool:
+    """True when the cache holds a push secret for the environment, expired or not (no database read): a busy
+    environment whose entry just expired keeps its higher limit while the next request refreshes it."""
+    with _secrets_lock:
+        hit = _secrets.get(env_id)
+        return bool(hit and hit[1])
+
+
+def rate_limited(bucket: str, limit: int, now: Optional[float] = None, window: float = RATE_WINDOW) -> bool:
+    """A sliding window per bucket, in this process: True when this request goes over `limit` within `window`."""
+    now = time.time() if now is None else now
+    with _rates_lock:
+        hits = _rates.get(bucket)
+        if hits is None:
+            hits = _rates[bucket] = deque()
+        _rates.move_to_end(bucket)
+        while hits and hits[0] <= now - window:
+            hits.popleft()
+        if len(hits) >= limit:
+            return True
+        hits.append(now)
+        while len(_rates) > _RATE_KEYS_MAX:
+            _rates.popitem(last=False)
+        return False
+
+
+def check_rate(client: str, env_id: str, now: Optional[float] = None) -> None:
+    """429 when the client address or the environment sends too much (before any database read)."""
+    if rate_limited(f"ip:{client}", RATE_PER_CLIENT, now):
+        raise HTTPException(429, "Too many requests from this address; slow down.", headers={"Retry-After": "60"})
+    limit = RATE_PER_ENV if _known_env(env_id) else RATE_UNKNOWN_ENV
+    if rate_limited(f"env:{env_id}", limit, now):
+        raise HTTPException(429, "Too many events for this environment; slow down.", headers={"Retry-After": "60"})
 
 
 def ingest_event(db: Db, env_id: str, timestamp: str, event_id: str, signature: str, raw: bytes) -> Dict[str, Any]:
@@ -610,7 +686,7 @@ def ingest_event(db: Db, env_id: str, timestamp: str, event_id: str, signature: 
     from services.ops.normalize import push_row
 
     secret, enabled = _push_secret(db, env_id)
-    if not secret or not verify(secret, timestamp, raw, signature):
+    if not secret or not verify(secret, timestamp, event_id, raw, signature):
         raise HTTPException(401, "Invalid signature or unknown environment")
     if not enabled:
         raise HTTPException(403, "Push is disabled for this environment")
@@ -659,6 +735,7 @@ async def ingest(request: Request):
     ok, reason = check_headers(env_id, timestamp, event_id, signature)
     if not ok:
         raise HTTPException(400 if reason.startswith("missing") else 401, reason)
+    check_rate(request.client.host if request.client else "unknown", env_id)
 
     def work() -> Dict[str, Any]:
         try:

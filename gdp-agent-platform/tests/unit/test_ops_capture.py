@@ -137,16 +137,17 @@ SECRET = "a" * 64
 def test_signature_valid_invalid_and_skew():
     raw = b'{"kind":"dag_run"}'
     now = 1_700_000_000
-    sig = signing.sign(SECRET, str(now), raw)
-    assert signing.verify(SECRET, str(now), raw, sig)
-    assert not signing.verify(SECRET, str(now), raw + b" ", sig)
-    assert not signing.verify("b" * 64, str(now), raw, sig)
+    sig = signing.sign(SECRET, str(now), "evt-12345678", raw)
+    assert signing.verify(SECRET, str(now), "evt-12345678", raw, sig)
+    assert not signing.verify(SECRET, str(now), "evt-12345678", raw + b" ", sig)
+    assert not signing.verify("b" * 64, str(now), "evt-12345678", raw, sig)
+    assert not signing.verify(SECRET, str(now), "evt-87654321", raw, sig)    # the event id is signed
     assert signing.check_headers("prod", str(now), "evt-12345678", sig, now=now + 299) == (True, "")
     assert signing.check_headers("prod", str(now), "evt-12345678", sig, now=now + 301)[0] is False
     assert signing.check_headers("prod", str(now), "short", sig, now=now)[1] == "invalid event id"
     assert signing.check_headers(None, str(now), "evt-12345678", sig, now=now)[1].startswith("missing")
     # the plugin's copy signs exactly like the platform
-    assert plugin.sign(SECRET, str(now), raw) == sig
+    assert plugin.sign(SECRET, str(now), "evt-12345678", raw) == sig
     headers = plugin.headers("prod", SECRET, raw, now=now, event_id="evt-12345678")
     assert headers["X-GDP-Signature"] == sig and set(signing.HEADER_NAMES) <= set(headers)
 
@@ -186,8 +187,9 @@ def ingest_client(monkeypatch):
 def _signed(body, env="prod", event_id=None, stamp=None, secret=SECRET):
     raw = json.dumps(body).encode()
     stamp = str(int(time.time()) if stamp is None else stamp)
-    return raw, {"X-GDP-Env": env, "X-GDP-Timestamp": stamp, "X-GDP-Event-Id": event_id or f"evt-{time.time_ns()}",
-                 "X-GDP-Signature": signing.sign(secret, stamp, raw), "Content-Type": "application/json"}
+    event_id = event_id or f"evt-{time.time_ns()}"
+    return raw, {"X-GDP-Env": env, "X-GDP-Timestamp": stamp, "X-GDP-Event-Id": event_id,
+                 "X-GDP-Signature": signing.sign(secret, stamp, event_id, raw), "Content-Type": "application/json"}
 
 
 def test_ingest_without_a_session_and_replay(ingest_client):
@@ -471,7 +473,7 @@ def test_plugin_payloads_and_config(monkeypatch):
     monkeypatch.setattr(plugin, "post", lambda url, raw, headers, timeout=3: sent.append((url, raw, headers)) or 200)
     assert plugin.emit(body, background=False)
     url, raw, headers = sent[0]
-    assert signing.verify(SECRET, headers["X-GDP-Timestamp"], raw, headers["X-GDP-Signature"])
+    assert signing.verify(SECRET, headers["X-GDP-Timestamp"], headers["X-GDP-Event-Id"], raw, headers["X-GDP-Signature"])
     monkeypatch.setattr(plugin, "post", lambda *a, **k: (_ for _ in ()).throw(OSError("down")))
     assert plugin.emit(body, background=False)      # a failed send never raises into Airflow
 

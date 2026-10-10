@@ -15,7 +15,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from services.ops.mwaa import Mwaa, MwaaError, supports_updated_at
 from services.ops.normalize import ACTIVE, dag_row, dag_run_row, excerpt, newer, task_row, ts
-from services.ops.redact import redact
+from services.ops.redact import redact, redact_payload
 
 OVERLAP_MINUTES = 15
 FIRST_LOOKBACK_HOURS = 24
@@ -175,11 +175,12 @@ def upsert_tasks(db: Any, rows: List[Dict[str, Any]]) -> int:
 
 
 def record_event(db: Any, event_id: str, env_id: Optional[str], source: str, kind: Optional[str], payload: Any) -> bool:
-    """Insert the event once. False when the id is already there (a replay): the MERGE is the compare-and-set."""
+    """Insert the event once. False when the id is already there (a replay): the MERGE is the compare-and-set. The
+    payload is stored redacted (error text and log-like fields may carry secrets)."""
     count = db.execute_count("""
         MERGE INTO OPS.EVENT T USING (SELECT %s AS EVENT_ID) S ON T.EVENT_ID = S.EVENT_ID
         WHEN NOT MATCHED THEN INSERT (EVENT_ID, ENV_ID, SOURCE, KIND, PAYLOAD) VALUES (S.EVENT_ID, %s, %s, %s, PARSE_JSON(%s))""",
-                             (event_id, env_id, source, kind, json.dumps(payload, default=str)))
+                             (event_id, env_id, source, kind, json.dumps(redact_payload(payload), default=str)))
     return count == 1
 
 
@@ -203,6 +204,36 @@ def _stored_runs(db: Any, env_id: str, keys: List[Tuple[str, str]]) -> Dict[Tupl
           JOIN TABLE(FLATTEN(INPUT => PARSE_JSON(%s))) F ON R.DAG_ID = F.VALUE[0]::VARCHAR AND R.RUN_ID = F.VALUE[1]::VARCHAR
          WHERE R.ENV_ID = %s""", (json.dumps([list(k) for k in keys]), env_id))
     return {(r["dag_id"], r["run_id"]): r for r in found}
+
+
+def last_fetched_at(fetched: List[Dict[str, Any]], field: str) -> Optional[str]:
+    """The filter field (updated_at or start_date) of the last run read: the resume point of a truncated poll."""
+    for raw in reversed(fetched):
+        stamp = ts(raw.get(field))
+        if stamp:
+            return stamp
+    return None
+
+
+def later_than(a: Optional[str], b: Optional[str]) -> bool:
+    """True when ISO time `a` is after `b` (False when either is missing)."""
+    first, second = ts(a), ts(b)
+    return bool(first and second and datetime.fromisoformat(first) > datetime.fromisoformat(second))
+
+
+def mark_removed(db: Any, env_id: str, keys: List[Tuple[str, str]]) -> None:
+    """Runs Airflow no longer has (deleted, or the DAG was removed) leave the active set: the run and its unfinished
+    task runs become 'removed', so the stale re-read stops asking for them."""
+    if not keys:
+        return
+    pairs = json.dumps([list(k) for k in keys])
+    for table in ("OPS.DAG_RUN", "OPS.TASK_RUN"):
+        db.execute(f"""
+            UPDATE {table} T SET STATE = 'removed', UPDATED_AT = CURRENT_TIMESTAMP(), LOADED_AT = CURRENT_TIMESTAMP()
+              FROM (SELECT F.VALUE[0]::VARCHAR AS DAG_ID, F.VALUE[1]::VARCHAR AS RUN_ID
+                      FROM TABLE(FLATTEN(INPUT => PARSE_JSON(%s))) F) S
+             WHERE T.ENV_ID = %s AND T.DAG_ID = S.DAG_ID AND T.RUN_ID = S.RUN_ID AND T.STATE IN {_ACTIVE_SQL}""",
+                   (pairs, env_id))
 
 
 def _fetch_tasks(mw: Mwaa, env_id: str, runs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -258,14 +289,18 @@ def poll_env(db: Any, env: Dict[str, Any], client: Optional[Mwaa] = None, now: O
         if not runs or len(fetched) >= total:
             break
     paged_all = len(fetched) >= total
+    # the runs come oldest first by the filter field: when the pages stop early, the next poll resumes from the last
+    # one read (minus the overlap) instead of the old cursor, which would read the same first pages again forever
+    resume = last_fetched_at(fetched, mw.run_order_field()) if not paged_all else None
     rows = dedupe([dag_run_row(env_id, r) for r in fetched], RUN_KEYS)
 
     # start_date filtering cannot see a run that started before the window and finished inside it: re-read the runs
-    # still stored as active
+    # still stored as active, the least recently loaded first so every one gets its turn
+    removed: List[Tuple[str, str]] = []
     if not supports_updated_at(info["version"]):
         have = {(r["dag_id"], r["run_id"]) for r in rows}
         stale = db.query(f"""SELECT DAG_ID, RUN_ID FROM OPS.DAG_RUN WHERE ENV_ID = %s AND STATE IN {_ACTIVE_SQL}
-                             ORDER BY STARTED_AT LIMIT 100""", (env_id,))
+                             ORDER BY LOADED_AT NULLS FIRST, STARTED_AT LIMIT 100""", (env_id,))
         for r in stale:
             if (r["dag_id"], r["run_id"]) not in have:
                 try:
@@ -273,6 +308,8 @@ def poll_env(db: Any, env: Dict[str, Any], client: Optional[Mwaa] = None, now: O
                 except MwaaError as exc:
                     if exc.kind != "not_found":
                         raise
+                    removed.append((r["dag_id"], r["run_id"]))
+        mark_removed(db, env_id, removed)
 
     rows.sort(key=lambda r: r.get("updated_at") or "")
     stored = _stored_runs(db, env_id, [(r["dag_id"], r["run_id"]) for r in rows])
@@ -300,7 +337,9 @@ def poll_env(db: Any, env: Dict[str, Any], client: Optional[Mwaa] = None, now: O
     elif paged_all:
         cursor = started
     else:
-        cursor = env.get("cursor_value") or since
+        cursor = resume or env.get("cursor_value") or since
+        if later_than(env.get("cursor_value"), cursor):
+            cursor = env.get("cursor_value")   # never move back
     db.execute("""UPDATE OPS.AIRFLOW_ENV SET API_VERSION = %s, AIRFLOW_VERSION = %s, CURSOR_VALUE = %s,
                          LAST_POLL_AT = CURRENT_TIMESTAMP(), LAST_ERROR = NULL WHERE ENV_ID = %s""",
                (info["api_version"], info["version"][:32], cursor, env_id))

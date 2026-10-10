@@ -11,8 +11,8 @@ Jobs, each guarded by an OPS.JOB_LEASE so exactly one holder runs it at a time a
   diagnose       AI diagnosis of new OPEN incidents (settings ai_auto, ai_severities; at most 5 per run; every 60 s)
   digest         the weekly reliability card per team, Mondays from 09:00 UTC (setting weekly_digest; every 15 min)
   retention      purges raw OPS.EVENT rows after 30 days (every 6 hours)
-The worker uses system_db(): the dev session in dev mode, else the key-pair service user (AIP_SERVICE_USER,
-AIP_SERVICE_KEY_PATH). AWS credentials come from the host's default chain (role, AWS_PROFILE). A heartbeat row
+The worker uses worker_db(): its own non-shared connection (the named dev connection in dev mode, else the key-pair
+service user from AIP_SERVICE_USER, AIP_SERVICE_KEY_PATH), so incident writes run in transactions. AWS credentials come from the host's default chain (role, AWS_PROFILE). A heartbeat row
 (JOB_NAME 'worker') shows when a worker last looped. SIGINT or SIGTERM stops it after the current job.
 """
 
@@ -27,13 +27,13 @@ import threading
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 _ROOT = Path(__file__).resolve().parents[3]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from app.db import SnowflakeSessionError, system_db  # noqa: E402
+from app.db import SnowflakeSessionError, system_db, worker_db  # noqa: E402
 from services.ops import lease  # noqa: E402
 from services.ops.mwaa import MwaaError  # noqa: E402
 from services.ops.redact import redact  # noqa: E402
@@ -139,24 +139,39 @@ def _bot(store: Any):
     return bot_client(store.jira_config())
 
 
+EXACT = "|exact"   # cursor suffix: the last read was cut at its limit, resume exactly there (no overlap)
+
+
+def detect_window(cursor: Optional[str]) -> Tuple[Optional[str], bool]:
+    """(since, inclusive) for the next detect read. Normally the cursor minus a small overlap (rows committed late);
+    after a read cut at its limit, exactly from the cursor, rows at it included, so a backlog larger than the overlap
+    window still moves forward."""
+    if not cursor:
+        return None, False
+    exact = cursor.endswith(EXACT)
+    stamp = cursor[:-len(EXACT)] if exact else cursor
+    try:
+        moment = datetime.fromisoformat(stamp)
+    except ValueError:
+        return None, False
+    return (stamp, True) if exact else ((moment - DETECT_OVERLAP).isoformat(), False)
+
+
 def detect(db: Any) -> Dict[str, Any]:
     """Incidents for everything loaded since the cursor (minus a small overlap; applying a run twice changes
-    nothing). The cursor is the newest LOADED_AT processed, kept on the 'detect' lease row."""
+    nothing). The cursor is the newest LOADED_AT processed, kept on the 'detect' lease row; when a read was cut at its
+    limit it stops at the last row read of the cut list, so nothing is skipped."""
     from services.ops.incidents import process
 
     store = _store(db)
     found = db.query("SELECT CURSOR_VALUE FROM OPS.JOB_LEASE WHERE JOB_NAME = 'detect'")
     cursor = found[0].get("cursor_value") if found else None
-    since = None
-    if cursor:
-        try:
-            since = (datetime.fromisoformat(cursor) - DETECT_OVERLAP).isoformat()
-        except ValueError:
-            since = None
-    runs, tasks, newest = store.changed_since(since)
-    summary = process(store, runs, tasks)
-    if newest and newest != cursor:
-        db.execute("UPDATE OPS.JOB_LEASE SET CURSOR_VALUE = %s WHERE JOB_NAME = 'detect'", (newest,))
+    since, inclusive = detect_window(cursor)
+    runs, tasks, newest, truncated = store.changed_since(since, inclusive=inclusive)
+    summary = process(store, runs, tasks)   # never raises for one bad candidate: the cursor moves on
+    value = (newest + EXACT) if newest and truncated else newest
+    if value and value != cursor:
+        db.execute("UPDATE OPS.JOB_LEASE SET CURSOR_VALUE = %s WHERE JOB_NAME = 'detect'", (value,))
     return summary
 
 
@@ -232,7 +247,7 @@ def retention(db: Any) -> None:
 # ---------------------------------------------------------------- loop
 
 class Worker:
-    def __init__(self, db_factory: Callable[[], Any] = system_db, tick: float = TICK_SECONDS):
+    def __init__(self, db_factory: Callable[[], Any] = worker_db, tick: float = TICK_SECONDS):
         self.db_factory = db_factory
         self.tick = tick
         self.stop = threading.Event()

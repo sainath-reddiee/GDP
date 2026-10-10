@@ -727,12 +727,12 @@ class OutboxDb:
         self.marks, self.merges, self.posts = [], [], []
 
     def query(self, sql, params=()):
-        if "WHERE STATUS IN ('PENDING', 'FAILED')" in sql:
+        if "FROM OPS.NOTIFICATION WHERE STATUS IN ('PENDING', 'FAILED', 'SENDING')" in sql:
             return self.rows
         if "COUNT(*) AS N FROM OPS.NOTIFICATION" in sql:
             return [{"team_id": "a", "n": self.sent}] if self.sent else []
-        if "DECRYPT" in sql:
-            return [{"a": WEBHOOK, "e": None}]
+        if "TEAMS_WEBHOOK_SECRET AS A" in sql:   # sealed by the API, never Snowflake ENCRYPT with a bound key
+            return [{"a": notify.seal_webhook(WEBHOOK, params[0], "TEAMS_WEBHOOK_SECRET"), "e": None}]
         if "FROM OPS.INCIDENT I LEFT JOIN OPS.TEAM" in sql:
             return [{**sample_incident(), "team_name": "Data team", "airflow_url": None, "api_version": None}]
         return []

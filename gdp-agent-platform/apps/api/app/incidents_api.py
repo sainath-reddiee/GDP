@@ -5,7 +5,8 @@ Governance (services.governance.policy): reads need OPS.VIEW; incident actions a
 webhooks, test sends, routing rules and settings INTEGRATION.MANAGE. Calls run on the caller's session; the actor on the
 timeline is the signed-in user.
 
-Teams webhook URLs are stored ENCRYPTed with the API host's key (AIP_SECRET_KEY, else JIRA_TOKEN_KEY) and never returned:
+Teams webhook URLs are sealed in the API (services.common.secretbox, a key derived from AIP_SECRET_KEY, else
+JIRA_TOKEN_KEY), stored as ciphertext only (never in SQL text) and never returned:
 teams only say has_teams_webhook and has_escalation_webhook. The request carrying a URL cannot be queued for approval.
 
 PR O3 (AI root cause and support assistant): diagnose, ask and postmortem need AI.USE (services.ops.diagnose); retry and
@@ -478,12 +479,16 @@ def _team_out(r: Dict[str, Any]) -> Dict[str, Any]:
             "has_teams_webhook": bool(r.get("has_teams_webhook")),
             "escalation_minutes": int(r.get("escalation_minutes") or inc.DEFAULT_ESCALATION_MINUTES),
             "has_escalation_webhook": bool(r.get("has_escalation_webhook")),
-            "members": members if isinstance(members, list) else []}
+            "members": members if isinstance(members, list) else [],
+            "webhook_detail": notify.WEBHOOK_AGAIN if r.get("webhook_legacy") else None}
 
 
 _TEAM_SELECT = """SELECT TEAM_ID, NAME, JIRA_PROJECT, JIRA_COMPONENT, JIRA_ASSIGNEE_ACCOUNT_ID,
                          TEAMS_WEBHOOK_SECRET IS NOT NULL AS HAS_TEAMS_WEBHOOK, ESCALATION_MINUTES,
-                         ESCALATION_WEBHOOK_SECRET IS NOT NULL AS HAS_ESCALATION_WEBHOOK, MEMBERS FROM OPS.TEAM"""
+                         ESCALATION_WEBHOOK_SECRET IS NOT NULL AS HAS_ESCALATION_WEBHOOK, MEMBERS,
+                         COALESCE(LEFT(HEX_ENCODE(TEAMS_WEBHOOK_SECRET), 10) <> '676470313A', FALSE)
+                           OR COALESCE(LEFT(HEX_ENCODE(ESCALATION_WEBHOOK_SECRET), 10) <> '676470313A', FALSE) AS WEBHOOK_LEGACY
+                    FROM OPS.TEAM"""
 
 
 def _team(db: Db, team_id: str) -> Dict[str, Any]:
@@ -573,8 +578,8 @@ def set_webhook(team_id: str, body: WebhookIn, db: Db = Depends(current_db),
     key = _key()
     _team(db, team_id)
     column = notify.webhook_column(body.kind)
-    _x(db, f"UPDATE OPS.TEAM SET {column} = ENCRYPT(%s, %s), UPDATED_AT = CURRENT_TIMESTAMP() WHERE TEAM_ID = %s",
-       (url, key, team_id))
+    _x(db, f"UPDATE OPS.TEAM SET {column} = %s, UPDATED_AT = CURRENT_TIMESTAMP() WHERE TEAM_ID = %s",
+       (notify.seal_webhook(url, team_id, column, key), team_id))
     return {"ok": True}
 
 
@@ -596,12 +601,11 @@ def test_webhook(team_id: str, body: TestIn, db: Db = Depends(current_db)):
     team = _team(db, team_id)
     key = _key()
     column = notify.webhook_column(body.kind)
+    found = _q(db, f"SELECT {column} AS U FROM OPS.TEAM WHERE TEAM_ID = %s", (team_id,))
     try:
-        found = db.query(f"""SELECT IFF({column} IS NULL, NULL, TO_VARCHAR(DECRYPT({column}, %s), 'UTF-8')) AS U
-                               FROM OPS.TEAM WHERE TEAM_ID = %s""", (key, team_id))
-    except Exception:
-        return {"ok": False, "detail": "The stored webhook cannot be decrypted with this host's key; set the URL again."}
-    url = found[0].get("u") if found else None
+        url = notify.open_webhook(found[0].get("u"), team_id, column, key) if found else None
+    except RuntimeError:
+        return {"ok": False, "detail": notify.WEBHOOK_AGAIN}
     if not url:
         return {"ok": False, "detail": f"The team has no {body.kind} webhook."}
     settings = _store(db).settings()

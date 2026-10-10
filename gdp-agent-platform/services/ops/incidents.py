@@ -22,8 +22,11 @@ Every database access goes through a store (SqlStore over the API's Db, or an in
 
 from __future__ import annotations
 
+import contextlib
 import fnmatch
+import hashlib
 import json
+import logging
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Iterable, List, Optional, Tuple
@@ -32,7 +35,11 @@ from services.ops import detect
 from services.ops.normalize import ts
 from services.ops.redact import redact
 
+log = logging.getLogger("gdp.ops.incidents")
 ACTIVE = ("OPEN", "ACK", "MITIGATED", "MUTED")
+REOPENED = "REOPENED"   # JIRA_STATE while the Jira reopen action is queued: jira_sync must not mitigate meanwhile
+OCCURRENCE_KEY_MAX = 200
+INCIDENT_NAMESPACE = uuid.UUID("6f1d2c4e-5b7a-4c3e-9a8d-0e1f2a3b4c5d")
 STORM_HOURS = 2
 MAX_ESCALATIONS = 3
 DEFAULT_ESCALATION_MINUTES = 30
@@ -174,6 +181,26 @@ def _row(r: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     return out
 
 
+def detect_cursor(runs: List[Dict[str, Any]], tasks: List[Dict[str, Any]], limit: int,
+                  since: Optional[str]) -> Tuple[Optional[str], bool]:
+    """(cursor, truncated) after reading changed runs and task runs ordered by LOADED_AT. Normally the newest LOADED_AT
+    read. When a list came back with `limit` rows, rows after its last one were not read: the cursor stops at that
+    list's newest LOADED_AT (the smallest such maximum when both were cut), so nothing is skipped."""
+    maxima: List[str] = []
+    capped: List[str] = []
+    for rows in (runs, tasks):
+        stamps = [_iso(r.get("loaded_at")) for r in rows if r.get("loaded_at") is not None]
+        if not stamps:
+            continue
+        top = max(stamps, key=_dt)
+        maxima.append(top)
+        if len(rows) >= limit:
+            capped.append(top)
+    if capped:
+        return min(capped, key=_dt), True
+    return (max(maxima, key=_dt) if maxima else since), False
+
+
 class SqlStore:
     """OPS incident tables over the API's Db (query/execute/execute_count with %s parameters)."""
 
@@ -262,7 +289,20 @@ class SqlStore:
 
     def ticketed_open(self) -> List[Dict[str, Any]]:
         return [_row(r) for r in self.db.query(self._SELECT + " WHERE JIRA_KEY IS NOT NULL AND STATUS IN ('OPEN', 'ACK') "
+                                                             f"AND COALESCE(JIRA_STATE, '') <> '{REOPENED}' "
                                                              "ORDER BY LAST_SEEN DESC LIMIT 500")]
+
+    @contextlib.contextmanager
+    def atomic(self):
+        """One transaction around a group of writes when the session is the caller's own (the worker's dedicated
+        connection); the shared dev or service session gets none (app.db.transaction)."""
+        if getattr(self.db, "shared", True):
+            yield self
+            return
+        from app.db import transaction
+
+        with transaction(self.db):
+            yield self
 
     def claimed_incident(self, key: str) -> Optional[str]:
         found = self.db.query("SELECT INCIDENT_ID FROM OPS.INCIDENT_EVENT WHERE IDEMPOTENCY_KEY = %s LIMIT 1", (key,))
@@ -304,11 +344,15 @@ class SqlStore:
     def children(self, incident_id: str) -> List[Dict[str, Any]]:
         return [_row(r) for r in self.db.query(self._SELECT + " WHERE PARENT_INCIDENT_ID = %s ORDER BY FIRST_SEEN", (incident_id,))]
 
-    def insert(self, incident: Dict[str, Any]) -> None:
+    def insert(self, incident: Dict[str, Any]) -> int:
+        """Insert unless a row with the INCIDENT_ID exists (the id is derived from the sighting's claim, so a retry
+        after a failed attempt never adds a second incident). The number of rows added."""
         cols = [c for c in INCIDENT_COLUMNS if c in incident]
         values = ", ".join("TRY_TO_TIMESTAMP_LTZ(%s::VARCHAR)" if c in TS_COLUMNS else "%s" for c in cols)
-        self.db.execute(f"INSERT INTO OPS.INCIDENT ({', '.join(c.upper() for c in cols)}) SELECT {values}",
-                        tuple(incident[c] for c in cols))
+        return self.db.execute_count(
+            f"MERGE INTO OPS.INCIDENT T USING (SELECT %s AS INCIDENT_ID) S ON T.INCIDENT_ID = S.INCIDENT_ID "
+            f"WHEN NOT MATCHED THEN INSERT ({', '.join(c.upper() for c in cols)}) VALUES ({values})",
+            (incident["incident_id"],) + tuple(incident[c] for c in cols))
 
     def update(self, incident_id: str, fields: Dict[str, Any], add_occurrence: bool = False,
                only_status: Optional[Iterable[str]] = None) -> int:
@@ -376,18 +420,21 @@ class SqlStore:
                AND R.STARTED_AT < DATEADD(minute, -D.MAX_DURATION_MIN, CURRENT_TIMESTAMP())""")
         return [_row(d) for d in dags], [_row(r) for r in runs]
 
-    def changed_since(self, since: Optional[str], limit: int = 5000) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], Optional[str]]:
-        """Runs and task runs loaded after `since` (ISO; the last hour when None), and the newest LOADED_AT seen."""
+    def changed_since(self, since: Optional[str], limit: int = 5000, inclusive: bool = False
+                      ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], Optional[str], bool]:
+        """Runs and task runs loaded after `since` (from it, when inclusive; the last hour when None), the cursor to
+        store and whether a list was cut at `limit` (see detect_cursor)."""
+        op = ">=" if inclusive else ">"
         bound = "TRY_TO_TIMESTAMP_LTZ(%s::VARCHAR)" if since else "DATEADD(hour, -1, CURRENT_TIMESTAMP())"
         params: Tuple[Any, ...] = (since,) if since else ()
         runs = self.db.query(f"""SELECT ENV_ID, DAG_ID, RUN_ID, RUN_TYPE, STATE, STARTED_AT, ENDED_AT, EXTERNAL_TRIGGER,
-                                        UPDATED_AT, LOADED_AT FROM OPS.DAG_RUN WHERE LOADED_AT > {bound}
+                                        UPDATED_AT, LOADED_AT FROM OPS.DAG_RUN WHERE LOADED_AT {op} {bound}
                                   ORDER BY LOADED_AT LIMIT {int(limit)}""", params)
         tasks = self.db.query(f"""SELECT ENV_ID, DAG_ID, RUN_ID, TASK_ID, MAP_INDEX, TRY_NUMBER, STATE, STARTED_AT, ENDED_AT,
-                                         ERROR_EXCERPT, UPDATED_AT, LOADED_AT FROM OPS.TASK_RUN WHERE LOADED_AT > {bound}
+                                         ERROR_EXCERPT, UPDATED_AT, LOADED_AT FROM OPS.TASK_RUN WHERE LOADED_AT {op} {bound}
                                    ORDER BY LOADED_AT LIMIT {int(limit)}""", params)
-        stamps = [_iso(r.get("loaded_at")) for r in list(runs) + list(tasks) if r.get("loaded_at") is not None]
-        return [_row(r) for r in runs], [_row(t) for t in tasks], (max(stamps) if stamps else since)
+        cursor, truncated = detect_cursor(runs, tasks, limit, since)
+        return [_row(r) for r in runs], [_row(t) for t in tasks], cursor, truncated
 
     # ---- outbox
     def enqueue(self, channel: str, kind: str, dedupe_key: str, payload: Optional[Dict[str, Any]] = None,
@@ -401,8 +448,9 @@ class SqlStore:
 # ---------------------------------------------------------------- notifications for incident changes
 
 def _notify(store: Any, incident: Dict[str, Any], kind: str, now: datetime, note: Optional[str] = None,
-            jira_kind: Optional[str] = None, dedupe: Optional[str] = None) -> None:
-    """Queue the Teams card (when the incident has a team) and the Jira action for one change."""
+            jira_kind: Optional[str] = None, dedupe: Optional[str] = None, jira_again: bool = False) -> None:
+    """Queue the Teams card (when the incident has a team) and the Jira action for one change. The first Jira create
+    of an incident is queued once ever; `jira_again` queues another one (a reopened incident that has no ticket)."""
     iid = incident["incident_id"]
     suffix = dedupe or now.isoformat()
     if kind and incident.get("team_id"):
@@ -410,31 +458,51 @@ def _notify(store: Any, incident: Dict[str, Any], kind: str, now: datetime, note
         store.enqueue("TEAMS", kind, f"teams:{kind}:{iid}:{suffix}", {"note": note} if note else {},
                       incident_id=iid, team_id=incident["team_id"], target=target)
     if jira_kind:
-        store.enqueue("JIRA", jira_kind, f"jira:{jira_kind}:{iid}" + ("" if jira_kind == "create" else f":{suffix}"),
+        once = jira_kind == "create" and not jira_again
+        store.enqueue("JIRA", jira_kind, f"jira:{jira_kind}:{iid}" + ("" if once else f":{suffix}"),
                       {"note": note} if note else {}, incident_id=iid, team_id=incident.get("team_id"))
 
 
 # ---------------------------------------------------------------- open or update
 
 def occurrence_key(candidate: Dict[str, Any]) -> str:
-    return f"occ:{candidate['env_id']}:{candidate['dag_id']}:{candidate.get('task_id') or ''}:{candidate['occurrence_key']}"
+    """The idempotency key of one sighting (OPS.INCIDENT_EVENT.IDEMPOTENCY_KEY, VARCHAR(500)). Short keys keep their
+    readable form (claims already stored still match); a key over OCCURRENCE_KEY_MAX characters (long DAG, task or
+    run ids) becomes occ:<env>:<dag prefix>:<sha1 of the full key>, which always fits."""
+    full = f"occ:{candidate['env_id']}:{candidate['dag_id']}:{candidate.get('task_id') or ''}:{candidate['occurrence_key']}"
+    if len(full) <= OCCURRENCE_KEY_MAX:
+        return full
+    digest = hashlib.sha1(full.encode("utf-8")).hexdigest()
+    return f"occ:{str(candidate['env_id'])[:40]}:{str(candidate['dag_id'])[:60]}:{digest}"
+
+
+def incident_id_for(key: str) -> str:
+    """The incident id a sighting opens: derived from its claim key, so a retry after a failed attempt (the claim was
+    released, or taken over when stale) finds the incident the first attempt inserted instead of adding another."""
+    return str(uuid.uuid5(INCIDENT_NAMESPACE, key))
+
+
+def _atomic(store: Any):
+    atomic = getattr(store, "atomic", None)
+    return atomic() if callable(atomic) else contextlib.nullcontext()
 
 
 def open_or_update(store: Any, candidate: Dict[str, Any], settings: Dict[str, Any], dag: Optional[Dict[str, Any]] = None,
                    rules: Optional[List[Dict[str, Any]]] = None, now: Optional[datetime] = None) -> Dict[str, Any]:
     """Apply one candidate. Returns {action, incident_id}: opened | child | muted | occurrence | reopened | duplicate |
-    covered | stale."""
+    covered | stale. The claim and every write it leads to share one transaction where the session allows it."""
     now = now or utcnow()
     dag = dag or {"env_id": candidate["env_id"], "dag_id": candidate["dag_id"]}
     key = occurrence_key(candidate)
-    # a claim left by an attempt that crashed before binding an incident is taken over, never kept forever
-    if not store.claim(key) and not store.reclaim_stale(key, OCCURRENCE_CLAIM_MINUTES):
-        return _duplicate(store, key, candidate)
-    try:
-        return _apply(store, key, candidate, settings, dag, rules, now)
-    except Exception:
-        store.release_claim(key)
-        raise
+    with _atomic(store):
+        # a claim left by an attempt that crashed before binding an incident is taken over, never kept forever
+        if not store.claim(key) and not store.reclaim_stale(key, OCCURRENCE_CLAIM_MINUTES):
+            return _duplicate(store, key, candidate)
+        try:
+            return _apply(store, key, candidate, settings, dag, rules, now)
+        except Exception:
+            store.release_claim(key)
+            raise
 
 
 def _apply(store: Any, key: str, candidate: Dict[str, Any], settings: Dict[str, Any], dag: Dict[str, Any],
@@ -446,6 +514,10 @@ def _apply(store: Any, key: str, candidate: Dict[str, Any], settings: Dict[str, 
             return {"action": "covered", "incident_id": covered["incident_id"]}
 
     existing = store.latest_by_fingerprint(candidate["fingerprint"])
+    if existing and existing.get("incident_id") == incident_id_for(key):
+        # this sighting's own incident, inserted by an attempt that failed before binding it: finish opening it
+        # instead of counting the same sighting again as an occurrence
+        return _open_new(store, key, candidate, settings, dag, rules or [], now)
     action = decide(existing, candidate, settings, now)
     seen = candidate.get("at") or now.isoformat()
 
@@ -462,9 +534,13 @@ def _apply(store: Any, key: str, candidate: Dict[str, Any], settings: Dict[str, 
             fields["error_excerpt"] = candidate["error_excerpt"]
         status = existing["status"]
         reopened = status == "MITIGATED" or (status == "MUTED" and (_dt(existing.get("muted_until")) or now) <= now)
+        # back from Jira Done: the ticket must be reopened too, and jira_sync must not mitigate it again meanwhile
+        jira_reopen = status == "MITIGATED" and bool(existing.get("jira_key"))
         if reopened:
             fields.update({"status": "OPEN", "opened_at": now.isoformat(), "escalations": 0, "last_escalated_at": None,
                            "muted_until": None, "mute_reason": None})
+        if jira_reopen:
+            fields["jira_state"] = REOPENED
         store.update(iid, fields, add_occurrence=True)
         store.bind(key, iid, "occurrence", SYSTEM, {"run_id": candidate.get("run_id"), "at": seen,
                                                     "occurrences": int(existing.get("occurrences") or 1) + 1})
@@ -473,7 +549,8 @@ def _apply(store: Any, key: str, candidate: Dict[str, Any], settings: Dict[str, 
             store.event(iid, "reopened", SYSTEM, {"reason": "failed again" + (" after Jira Done" if status == "MITIGATED" else " after the mute ended")})
         if current["status"] != "MUTED" and not current.get("parent_incident_id"):
             bucket = hour_bucket(now)
-            _notify(store, current, "reoccurred", now, dedupe=bucket, jira_kind="recur" if current.get("jira_key") else None)
+            jira = "reopen" if jira_reopen else ("recur" if current.get("jira_key") else None)
+            _notify(store, current, "reoccurred", now, dedupe=bucket if not jira_reopen else now.isoformat(), jira_kind=jira)
         return {"action": "occurrence", "incident_id": iid}
 
     if action == "reopen":
@@ -483,13 +560,17 @@ def _apply(store: Any, key: str, candidate: Dict[str, Any], settings: Dict[str, 
                   "acked_by": None, "acked_at": None, "escalations": 0, "last_escalated_at": None}
         if candidate.get("error_excerpt"):
             fields["error_excerpt"] = candidate["error_excerpt"]
+        if existing.get("jira_key") and not existing.get("parent_incident_id"):
+            fields["jira_state"] = REOPENED
+        elif not existing.get("parent_incident_id"):
+            fields["jira_state"] = "PENDING"
         store.update(iid, fields, add_occurrence=True)
         store.bind(key, iid, "reopened", SYSTEM, {"run_id": candidate.get("run_id"), "at": seen,
                                                   "previous_resolution": existing.get("resolution")})
         current = {**existing, **fields}
         if not current.get("parent_incident_id"):
             _notify(store, current, "opened", now, note="Reopened: it failed again within the reopen window.",
-                    jira_kind="reopen" if existing.get("jira_key") else "create", dedupe=now.isoformat())
+                    jira_kind="reopen" if existing.get("jira_key") else "create", dedupe=now.isoformat(), jira_again=True)
         return {"action": "reopened", "incident_id": iid}
 
     return _open_new(store, key, candidate, settings, dag, rules or [], now)
@@ -519,7 +600,7 @@ def _open_new(store: Any, key: str, candidate: Dict[str, Any], settings: Dict[st
     until, reason = mute_until(rule, dag, now)
     parent = None if until else store.storm_parent(env_id, dag_id)
     seen = candidate.get("at") or now.isoformat()
-    iid = str(uuid.uuid4())
+    iid = incident_id_for(key)
     status = "MUTED" if until else "OPEN"
     incident = {
         "incident_id": iid, "fingerprint": candidate["fingerprint"], "env_id": env_id, "dag_id": dag_id,
@@ -531,7 +612,8 @@ def _open_new(store: Any, key: str, candidate: Dict[str, Any], settings: Dict[st
         "jira_synced_occurrences": 1, "escalations": 0,
         "muted_until": until.isoformat() if until else None, "mute_reason": reason,
     }
-    store.insert(incident)
+    if store.get(iid) is None:   # a retry of a sighting whose first attempt inserted the incident and then failed
+        store.insert(incident)
     detail = {"kind": candidate["kind"], "severity": severity, "team_id": team_id, "unrouted": team_id is None,
               "rule_id": (rule or {}).get("rule_id"), "run_id": candidate.get("run_id"), "at": seen}
     store.bind(key, iid, "opened", SYSTEM, detail)
@@ -542,7 +624,7 @@ def _open_new(store: Any, key: str, candidate: Dict[str, Any], settings: Dict[st
     if until:
         store.event(iid, "muted", SYSTEM, {"until": until.isoformat(), "reason": reason})
         return {"action": "muted", "incident_id": iid}
-    _notify(store, incident, "opened", now, jira_kind="create", dedupe=now.isoformat())
+    _notify(store, incident, "opened", now, jira_kind="create", dedupe="new")   # once per incident, retries included
     return {"action": "opened", "incident_id": iid}
 
 
@@ -562,11 +644,23 @@ def process(store: Any, runs: List[Dict[str, Any]], tasks: List[Dict[str, Any]],
     found = detect.candidates(runs, tasks, dags, envs, settings)
     found.sort(key=lambda c: (_dt(c.get("at")) or now, 0 if c.get("task_id") else 1))
     actions: Dict[str, int] = {}
+    errors: List[str] = []
     for c in found:
-        result = open_or_update(store, c, settings, dags.get((c["env_id"], c["dag_id"])), rules, now)
+        # one bad candidate (a value the database refuses, a transient error) is logged and skipped; the others are
+        # still applied and the caller's cursor still moves on
+        try:
+            result = open_or_update(store, c, settings, dags.get((c["env_id"], c["dag_id"])), rules, now)
+        except Exception as exc:
+            text = redact(f"{type(exc).__name__}: {exc}")[:300]
+            log.warning("incident candidate %s/%s/%s skipped: %s", c.get("env_id"), c.get("dag_id"), c.get("task_id"), text)
+            errors.append(text)
+            continue
         actions[result["action"]] = actions.get(result["action"], 0) + 1
     resolved = auto_resolve(store, detect.successes(runs, tasks), settings, now)
-    return {"candidates": len(found), "actions": actions, "resolved": len(resolved)}
+    summary: Dict[str, Any] = {"candidates": len(found), "actions": actions, "resolved": len(resolved)}
+    if errors:
+        summary.update({"skipped": len(errors), "errors": errors[:5]})
+    return summary
 
 
 def auto_resolve(store: Any, signals: List[Dict[str, Any]], settings: Dict[str, Any], now: Optional[datetime] = None) -> List[str]:
@@ -608,10 +702,17 @@ def sla_check(store: Any, settings: Optional[Dict[str, Any]] = None, now: Option
             if c:
                 found.append(c)
     actions: Dict[str, int] = {}
+    skipped = 0
     for c in found:
-        result = open_or_update(store, c, settings, by_key.get((c["env_id"], c["dag_id"])), rules, now)
+        try:
+            result = open_or_update(store, c, settings, by_key.get((c["env_id"], c["dag_id"])), rules, now)
+        except Exception as exc:
+            log.warning("SLA candidate %s/%s skipped: %s", c.get("env_id"), c.get("dag_id"),
+                        redact(f"{type(exc).__name__}: {exc}")[:300])
+            skipped += 1
+            continue
         actions[result["action"]] = actions.get(result["action"], 0) + 1
-    return {"candidates": len(found), "actions": actions}
+    return {"candidates": len(found), "actions": actions, **({"skipped": skipped} if skipped else {})}
 
 
 # ---------------------------------------------------------------- escalation and mute expiry
@@ -736,9 +837,12 @@ def reopen(store: Any, incident_id: str, actor: str, now: Optional[datetime] = N
     incident = _get(store, incident_id)
     if incident["status"] in ("OPEN", "ACK"):
         return incident
-    store.update(incident_id, {"status": "OPEN", "opened_at": now.isoformat(), "resolution": None, "resolved_by": None,
-                               "resolved_at": None, "acked_by": None, "acked_at": None, "muted_until": None,
-                               "mute_reason": None, "escalations": 0, "last_escalated_at": None})
+    fields: Dict[str, Any] = {"status": "OPEN", "opened_at": now.isoformat(), "resolution": None, "resolved_by": None,
+                              "resolved_at": None, "acked_by": None, "acked_at": None, "muted_until": None,
+                              "mute_reason": None, "escalations": 0, "last_escalated_at": None}
+    if incident.get("jira_key") and not incident.get("parent_incident_id"):
+        fields["jira_state"] = REOPENED   # until the ticket is reopened, jira_sync leaves the incident open
+    store.update(incident_id, fields)
     store.event(incident_id, "reopened", actor, {"previous_status": incident["status"],
                                                  "previous_resolution": incident.get("resolution")})
     if not incident.get("parent_incident_id"):
