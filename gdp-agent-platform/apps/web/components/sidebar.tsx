@@ -15,8 +15,8 @@ import { RoleSelector } from "@/components/role-selector";
 type NavLink = { href: string; label: string; icon: typeof Database; privilege?: string | string[];
   badge?: (c: NavCounts) => { value: number; tone: string; title: string } | null };
 
-/** Incidents ship with PR O2; until then the entry stays hidden. */
-const SHOW_INCIDENTS = false;
+/** Incidents shipped with PR O2. */
+const SHOW_INCIDENTS = true;
 
 // grouped by the data engineering lifecycle; a group with no visible links is hidden
 const groups: { label: string; links: NavLink[] }[] = [
@@ -54,7 +54,10 @@ const groups: { label: string; links: NavLink[] }[] = [
     label: "Operate",
     links: [
       { href: "/ops", label: "Pipelines", icon: Activity, privilege: "OPS.VIEW" },
-      ...(SHOW_INCIDENTS ? [{ href: "/incidents", label: "Incidents", icon: Siren, privilege: "OPS.VIEW" }] : []),
+      ...(SHOW_INCIDENTS ? [{
+        href: "/incidents", label: "Incidents", icon: Siren, privilege: "OPS.VIEW",
+        badge: (c: NavCounts) => c.incidents ? { value: c.incidents, tone: "bg-rose-500 text-white", title: `${c.incidents} open or acknowledged` } : null,
+      }] : []),
     ],
   },
   {

@@ -4,6 +4,7 @@ import { can } from "@/lib/types";
 import { displayDomain } from "@/lib/catalog-display";
 import type { CodeRepo } from "../../code/actions";
 import type { AirflowEnv, DagDetail, DagRun } from "../actions";
+import type { OpsTeam } from "../../incidents/actions";
 import { DagView } from "./dag-view";
 
 type Params = { env?: string; dag?: string; run?: string };
@@ -38,13 +39,14 @@ export default async function DagPage({ searchParams }: { searchParams?: Params 
   }
   const canOperate = can(me, "OPS.OPERATE");
   const qs = new URLSearchParams({ env_id: sp.env, dag_id: sp.dag });
-  const [detail, envs, domains, repos] = await Promise.all([
+  const [detail, envs, domains, repos, teams] = await Promise.all([
     load(() => api<{ dag: DagDetail; runs: DagRun[] }>(`/api/ops/dag?${qs}`)),
     load(() => api<{ envs: AirflowEnv[] }>("/api/ops/envs")),
     canOperate
       ? load(() => api<{ domains: { domain_id: string; domain_name: string; active_flag: boolean }[] }>("/api/domains"))
       : Promise.resolve(null),
     canOperate && can(me, "CODE.VIEW") ? load(() => api<{ repos: CodeRepo[] }>("/api/code/repos")) : Promise.resolve(null),
+    canOperate ? load(() => api<{ teams: OpsTeam[] }>("/api/ops/teams")) : Promise.resolve(null),
   ]);
   if (detail.error !== null) {
     return (
@@ -64,6 +66,8 @@ export default async function DagPage({ searchParams }: { searchParams?: Params 
              domains={(domains?.data?.domains ?? []).filter((d) => d.active_flag)
                .map((d) => ({ id: d.domain_id, name: displayDomain(d.domain_name) ?? d.domain_name }))}
              repos={(repos?.data?.repos ?? []).map((r) => ({ id: r.repo_id, name: r.name }))}
-             lookupErrors={[domains?.error ? `Domains did not load: ${domains.error}` : "", repos?.error ? `Repositories did not load: ${repos.error}` : ""].filter(Boolean)} />
+             teams={(teams?.data?.teams ?? []).map((t) => ({ id: t.team_id, name: t.name }))}
+             lookupErrors={[domains?.error ? `Domains did not load: ${domains.error}` : "", repos?.error ? `Repositories did not load: ${repos.error}` : "",
+               teams?.error && teams.status !== 404 ? `Teams did not load: ${teams.error}` : ""].filter(Boolean)} />
   );
 }

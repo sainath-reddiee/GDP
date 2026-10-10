@@ -8,6 +8,7 @@ otherwise the JiraError carries retry_after so the caller can pass it on.
 
 from __future__ import annotations
 
+import base64
 import re
 import time
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -144,9 +145,25 @@ class JiraClient:
             raise ValueError("invalid cloud id")
         self.http, self.cloud_id, self.token = http, cloud_id, access_token
         self.base = f"{API}/ex/jira/{cloud_id}"
+        self.auth = f"Bearer {access_token}"
+
+    @classmethod
+    def basic(cls, http: Http, site_url: str, email: str, api_token: str) -> "JiraClient":
+        """A client for an automation account (email and API token, basic auth) talking to the site directly, used by
+        the ops worker's Jira bot. People still act as themselves through OAuth (the constructor)."""
+        site = normal_site(site_url)
+        if not re.fullmatch(r"https://[a-z0-9.\-]+(:\d+)?", site):
+            raise ValueError("the Jira site URL must look like https://yourteam.atlassian.net")
+        if not email or not api_token:
+            raise ValueError("the Jira bot needs an email and an API token")
+        client = cls.__new__(cls)
+        client.http, client.cloud_id, client.token = http, "", api_token
+        client.base = site
+        client.auth = "Basic " + base64.b64encode(f"{email}:{api_token}".encode("utf-8")).decode("ascii")
+        return client
 
     def _call(self, method: str, path: str, body: Optional[Dict[str, Any]] = None, ok: Tuple[int, ...] = (200, 201, 204)) -> Any:
-        headers = {"Authorization": f"Bearer {self.token}", "Accept": "application/json", "Content-Type": "application/json"}
+        headers = {"Authorization": self.auth, "Accept": "application/json", "Content-Type": "application/json"}
         status, payload, answer = _unpack(self.http(method, self.base + path, headers, body))
         if status in (429, 503):
             wait = retry_after(answer)

@@ -187,6 +187,18 @@ RULES: List[Tuple[str, str, Any, str]] = [
     ("POST", r"/api/ops/envs/[^/]+/push-secret", "INTEGRATION.MANAGE", "Rotate an Airflow push secret"),
     ("POST", r"/api/ops/envs/[^/]+/poll", "OPS.OPERATE", ""),
     ("PUT", r"/api/ops/dag", "OPS.OPERATE", "Change a DAG's ops settings"),
+    ("POST", r"/api/ops/incidents/bulk", "OPS.OPERATE", "Bulk action on incidents"),
+    ("POST", r"/api/ops/incidents/[^/]+/(ack|reopen|assign|resolve|mute|comment|ticket)", "OPS.OPERATE", ""),
+    ("POST", r"/api/ops/teams", "INTEGRATION.MANAGE", "Add a support team"),
+    ("PUT", r"/api/ops/teams/[^/]+", "INTEGRATION.MANAGE", "Change a support team"),
+    ("DELETE", r"/api/ops/teams/[^/]+", "INTEGRATION.MANAGE", "Delete a support team"),
+    ("POST", r"/api/ops/teams/[^/]+/webhook", "INTEGRATION.MANAGE", "Set a team's Teams webhook"),
+    ("DELETE", r"/api/ops/teams/[^/]+/webhook", "INTEGRATION.MANAGE", "Remove a team's Teams webhook"),
+    ("POST", r"/api/ops/teams/[^/]+/test", "INTEGRATION.MANAGE", ""),
+    ("POST", r"/api/ops/routing", "INTEGRATION.MANAGE", "Add an incident routing rule"),
+    ("PUT", r"/api/ops/routing/[^/]+", "INTEGRATION.MANAGE", "Change an incident routing rule"),
+    ("DELETE", r"/api/ops/routing/[^/]+", "INTEGRATION.MANAGE", "Delete an incident routing rule"),
+    ("PUT", r"/api/ops/settings", "INTEGRATION.MANAGE", "Change ops incident settings"),
     ("POST", r"/api/skills/builder/check", None, ""),
     ("POST", r"/api/skills/builder/(questions|draft|test)", "AI.USE", ""),
     ("POST", r"/api/skills", "SKILL.EDIT", "Create a skill"),
@@ -238,6 +250,13 @@ RULES: List[Tuple[str, str, Any, str]] = [
     ("POST", rf"{R}/.*", "RUN.OPERATE", ""),
 ]
 _COMPILED = [(m, re.compile(f"^{p}$"), priv, title) for m, p, priv, title in RULES]
+# Calls whose body carries a secret (a webhook URL): never stored on a change request, so never queued for approval.
+SECRET_BODY = [("POST", re.compile(r"^/api/ops/teams/[^/]+/webhook$"))]
+
+
+def carries_secret(method: str, path: str) -> bool:
+    return any(m == method.upper() and pattern.match(path) for m, pattern in SECRET_BODY)
+
 READ_RULES = [(re.compile(r"^/api/(admin/.*|config/(rules|platform|models))$"), "ADMIN.VIEW"),
               (re.compile(r"^/api/jira/(issues|search|filters|boards|sprints|projects)(/.*)?$"), "JIRA.READ"),
               (re.compile(r"^/api/qa/links$"), "JIRA.READ"),

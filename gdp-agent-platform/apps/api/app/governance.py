@@ -27,8 +27,8 @@ from pydantic import BaseModel, Field
 
 from app.db import AUTH_MODE, Db, dev_db, lookup_session
 from services.governance.policy import (
-    ADDED_PRIVILEGES, ALL, DEFAULT_POLICIES, PRIVILEGES, SYSTEM_ROLES, SYSTEM_VERSION, can_approve, creates_cycle, decide,
-    effective_privileges, privilege_for, read_only, summarize,
+    ADDED_PRIVILEGES, ALL, DEFAULT_POLICIES, PRIVILEGES, SYSTEM_ROLES, SYSTEM_VERSION, can_approve, carries_secret, creates_cycle,
+    decide, effective_privileges, privilege_for, read_only, summarize,
 )
 
 router = APIRouter()
@@ -237,6 +237,8 @@ async def middleware(request: Request, call_next):
             replayable = False
         if "multipart/" in (request.headers.get("content-type") or "").lower():
             replayable = False
+        if carries_secret(method, path):
+            replayable = False   # a secret in the body must never be stored on a change request
     privilege, title, _ = privilege_for(method, path, body if isinstance(body, dict) else None)
     if not privilege or _valid_replay(request.headers.get("x-aip-replay")):
         return await call_next(request)
@@ -256,7 +258,7 @@ async def middleware(request: Request, call_next):
         return JSONResponse({"detail": f"Not allowed: this {reason}. Ask a governance admin for a role that has it."},
                             status_code=403)
     if not replayable:
-        return JSONResponse({"detail": f"Not allowed: this action needs {privilege}, and file uploads cannot be queued "
+        return JSONResponse({"detail": f"Not allowed: this action needs {privilege}, and file uploads or secrets cannot be queued "
                                        f"for approval. Ask someone with the {policies(db)[privilege]['approver_role']} "
                                        f"role to do it, or ask a governance admin for the privilege."},
                             status_code=403)
