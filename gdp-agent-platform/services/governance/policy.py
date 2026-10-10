@@ -47,6 +47,8 @@ PRIVILEGES: Dict[str, Tuple[str, str]] = {
     "AI.USE": ("AI", "Use AI: copilot, AI review, ask for tests or checks, AI designs (each call costs credits)"),
     "INTEGRATION.MANAGE": ("Integrations", "Connect code repositories and other external systems, and schedule their refresh"),
     "CODE.VIEW": ("Integrations", "Search and read indexed client code"),
+    "JIRA.READ": ("Jira", "Connect your own Jira account, read issues and triage them against a run"),
+    "JIRA.WRITE": ("Jira", "Link issues to runs and tests, comment on and change the status of Jira issues, as yourself"),
 }
 # Privileges a viewer-style role never needs: holding none of the others means the user can only look.
 READ_ONLY = {"AUDIT.VIEW", "ADMIN.VIEW", "APPROVAL.VIEW", "CODE.VIEW"}
@@ -65,7 +67,8 @@ SYSTEM_ROLES: Dict[str, Dict[str, Any]] = {
                       "privileges": ["STTM.EDIT", "STTM.APPROVE", "AI.USE"], "inherits": ["VIEWER"]},
     "DQ_APPROVER": {"description": "Approves data quality checks and the pack",
                     "privileges": ["SODA.EDIT", "SODA.APPROVE", "AI.USE"], "inherits": ["VIEWER"]},
-    "QA_LEAD": {"description": "Owns QA tests and sign-off", "privileges": ["QA.EDIT", "QA.SIGNOFF", "AI.USE"], "inherits": ["VIEWER"]},
+    "QA_LEAD": {"description": "Owns QA tests and sign-off", "privileges": ["QA.EDIT", "QA.SIGNOFF", "AI.USE", "JIRA.READ", "JIRA.WRITE"],
+                "inherits": ["VIEWER"]},
     "CODE_REVIEWER": {"description": "Approves dbt and code review",
                       "privileges": ["REVIEW.APPROVE", "REVIEW.DECIDE", "DBT.EDIT", "AI.USE"], "inherits": ["VIEWER"]},
     "DATA_STEWARD": {"description": "Owns domains and knowledge",
@@ -75,15 +78,16 @@ SYSTEM_ROLES: Dict[str, Dict[str, Any]] = {
     "DATA_ENGINEER": {"description": "Builds runs end to end; approvals go to the owning roles",
                       "privileges": ["SOURCE.CONNECT", "PROFILE.RUN", "RUN.CREATE", "RUN.OPERATE", "RUN.ARCHIVE",
                                      "MODEL.EDIT", "MAPPING.DECIDE", "QA.EDIT", "DBT.EDIT", "TAG.MANAGE", "SKILL.EDIT",
-                                     "REQUEST.CHANGES", "REVIEW.DECIDE", "AI.USE"],
+                                     "REQUEST.CHANGES", "REVIEW.DECIDE", "AI.USE", "JIRA.READ", "JIRA.WRITE"],
                       "inherits": ["VIEWER"]},
     "VIEWER": {"description": "Read everything, change nothing (no AI calls, no requests)", "privileges": ["AUDIT.VIEW", "CODE.VIEW"],
                "inherits": []},
 }
 # Privileges added to system roles after their first release: {version: [privilege]}. Bootstrap grants them to the
 # system roles whose spec lists them, once, so existing deployments pick them up without overriding admin edits.
-SYSTEM_VERSION = 4
-ADDED_PRIVILEGES = {2: ["AI.USE"], 3: ["SKILL.EDIT", "SKILL.RELEASE"], 4: ["INTEGRATION.MANAGE", "CODE.VIEW"]}
+SYSTEM_VERSION = 5
+ADDED_PRIVILEGES = {2: ["AI.USE"], 3: ["SKILL.EDIT", "SKILL.RELEASE"], 4: ["INTEGRATION.MANAGE", "CODE.VIEW"],
+                    5: ["JIRA.READ", "JIRA.WRITE"]}
 
 # Actions routed for approval by default: privilege -> approver role. Everything else is privilege-only.
 DEFAULT_POLICIES: Dict[str, str] = {
@@ -146,6 +150,11 @@ RULES: List[Tuple[str, str, Any, str]] = [
     ("PUT", r"/api/code/repos/[^/]+/credentials", "INTEGRATION.MANAGE", "Change a code repository's credentials"),
     ("DELETE", r"/api/code/repos/[^/]+/schedule", "INTEGRATION.MANAGE", ""),
     ("POST", r"/api/code/repos/[^/]+/refresh", "RUN.OPERATE", ""),
+    ("PUT", r"/api/jira/config", "INTEGRATION.MANAGE", "Change the Jira connection"),
+    ("POST", r"/api/jira/(connect|callback)", "JIRA.READ", ""),
+    ("DELETE", r"/api/jira/connection", "JIRA.READ", ""),
+    ("POST", r"/api/jira/issues/[^/]+/comment", "JIRA.WRITE", "Comment on a Jira issue"),
+    ("POST", r"/api/jira/issues/[^/]+/transition", "JIRA.WRITE", "Change a Jira issue's status"),
     ("POST", r"/api/skills/builder/check", None, ""),
     ("POST", r"/api/skills/builder/(questions|draft|test)", "AI.USE", ""),
     ("POST", r"/api/skills", "SKILL.EDIT", "Create a skill"),
@@ -189,12 +198,17 @@ RULES: List[Tuple[str, str, Any, str]] = [
     ("PUT", rf"{R}/qa/tests/[^/]+", "QA.EDIT", ""),
     ("DELETE", rf"{R}/qa/tests/[^/]+", "QA.EDIT", ""),
     ("POST", rf"{R}/dbt(/enhance|/publish|/review)?", "DBT.EDIT", ""),
+    ("POST", rf"{R}/jira/links", "JIRA.WRITE", "Link a Jira issue to a run"),
+    ("DELETE", rf"{R}/jira/links/[^/]+", "JIRA.WRITE", ""),
+    ("POST", rf"{R}/jira/[^/]+/triage", "AI.USE", ""),
     ("POST", rf"{R}/suggestions/[^/]+/decision", "RUN.OPERATE", ""),
     ("POST", rf"{R}/suggestions/[^/]+", "AI.USE", ""),
     ("POST", rf"{R}/.*", "RUN.OPERATE", ""),
 ]
 _COMPILED = [(m, re.compile(f"^{p}$"), priv, title) for m, p, priv, title in RULES]
 READ_RULES = [(re.compile(r"^/api/(admin/.*|config/(rules|platform|models))$"), "ADMIN.VIEW"),
+              (re.compile(r"^/api/jira/issues(/.*)?$"), "JIRA.READ"),
+              (re.compile(r"^/api/runs/[^/]+/jira/.*$"), "JIRA.READ"),
               (re.compile(r"^/api/(audit|costs)(/.*)?$"), "AUDIT.VIEW"),
               (re.compile(r"^/api/code/setup$"), "INTEGRATION.MANAGE"),
               (re.compile(r"^/api/code/(search|file|lineage|impact|path|neighborhood|usage|summary|repos|repos/[^/]+/(runs|branches|catalog|files))$"), "CODE.VIEW"),

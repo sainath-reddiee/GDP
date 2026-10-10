@@ -15,6 +15,7 @@ import { RateCardEditor } from "./rate-card";
 import { RulesSection } from "./rules-section";
 import { IntegrationsSection, type IntegrationView } from "./integrations-section";
 import type { CodeRepo, PublishingStatus } from "../code/actions";
+import type { JiraStatus } from "../jira/actions";
 import { SkillsSection } from "./skills-section";
 import type { SkillBinding } from "../skills/types";
 import { Panel, SectionSkeleton, Stat } from "./section";
@@ -82,7 +83,7 @@ export default async function Admin({ searchParams }: { searchParams?: { section
           )}
           <Suspense key={`${section}:${view}:${searchParams?.view ?? ""}`} fallback={<SectionSkeleton />}>
             <Section id={section} view={view}
-                     integrationView={(["repos", "publishing", "jira"] as const).find((v) => v === searchParams?.view) ?? "repos"} />
+                     integrationView={searchParams?.view === "jira" ? "jira" : "repos"} />
           </Suspense>
         </main>
       </div>
@@ -120,14 +121,15 @@ async function Section({ id, view, integrationView }: { id: SectionId; view: Mod
     );
   }
   if (id === "integrations") {
-    const [repos, domains, publishing] = await Promise.all([
+    const [repos, domains, publishing, jira] = await Promise.all([
       api<{ repos: CodeRepo[]; ready: boolean }>("/api/code/repos").catch(() => null),
       api<{ domains: { domain_id: string; domain_name: string; active_flag: boolean }[] }>("/api/domains").catch(() => ({ domains: [] })),
       api<PublishingStatus>("/api/dbt/github").catch(() => ({ ready: false, config: null })),
+      api<JiraStatus>("/api/jira/status").catch(() => null),
     ]);
     if (!repos) return unavailable;
     if (!repos.ready) return <p className="text-sm text-muted-foreground">Code repositories need the latest deploy (migration V024).</p>;
-    return <IntegrationsSection repos={repos.repos} publishing={publishing} view={integrationView}
+    return <IntegrationsSection repos={repos.repos} publishing={publishing} jira={jira} view={integrationView}
                                 domains={domains.domains.filter((d) => d.active_flag).map((d) => ({ domain_id: d.domain_id, domain_name: d.domain_name }))} />;
   }
   if (id === "skills") {
