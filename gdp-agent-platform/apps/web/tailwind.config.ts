@@ -27,6 +27,9 @@ const config: Config = {
         xs: "var(--shadow-xs)",
         card: "var(--shadow-card)",
         hover: "var(--shadow-hover)",
+        // the defaults every page already uses, softened to the same family
+        sm: "var(--shadow-card)",
+        md: "var(--shadow-hover)",
       },
       fontFamily: {
         mono: ['"JetBrains Mono"', '"Cascadia Code"', "ui-monospace", "SFMono-Regular", "Consolas", "monospace"],
