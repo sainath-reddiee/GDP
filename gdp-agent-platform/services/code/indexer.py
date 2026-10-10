@@ -69,7 +69,8 @@ def _branch_files(session, repo_fqn: str, branch: str) -> Dict[str, Tuple[str, i
         if rel:
             # Git stages report sha1 (md5 is empty), so either serves as the change marker
             marker = low.get("sha1") or low.get("md5") or low.get("last_modified") or ""
-            out[rel] = (str(marker), int(low.get("size") or 0))
+            # the parser version is part of the stored hash, so a parser upgrade re-parses each file once (in passes)
+            out[rel] = (f"{marker}#p{dbt_parse.PARSER_VERSION}" if marker else "", int(low.get("size") or 0))
     return out
 
 
