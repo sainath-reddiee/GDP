@@ -5,7 +5,7 @@ import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import {
   CalendarClock, Check, ChevronDown, CircleCheck, CircleDashed, ExternalLink, FileCode2, FolderGit2, GitBranch, GitPullRequest,
-  Github, History, KeyRound, Loader2, Plus, RefreshCw, Search, Settings2, SlidersHorizontal, Trash2, TriangleAlert, Unplug, Workflow, X,
+  Github, History, KeyRound, Loader2, Plus, RefreshCw, Search, Settings2, Siren, SlidersHorizontal, Trash2, TriangleAlert, Unplug, Workflow, X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input, Select } from "@/components/ui/input";
@@ -21,10 +21,11 @@ import {
 import type { JiraStatus } from "../jira/actions";
 import type { AirflowEnv } from "../ops/actions";
 import { AirflowTab } from "./airflow-tab";
+import { IncidentsTab } from "./incidents-tab";
 import { JiraTab } from "./jira-tab";
 
 type Domain = { domain_id: string; domain_name: string };
-export type IntegrationView = "repos" | "jira" | "airflow";
+export type IntegrationView = "repos" | "jira" | "airflow" | "incidents";
 const PRESETS = [
   { label: "Every hour", cron: "0 * * * * UTC" }, { label: "Daily 06:00 UTC", cron: "0 6 * * * UTC" },
   { label: "Weekdays 06:00 UTC", cron: "0 6 * * MON-FRI UTC" }, { label: "Weekly, Monday 06:00 UTC", cron: "0 6 * * MON UTC" },
@@ -93,10 +94,12 @@ export function IntegrationsSection({ repos, domains, publishing, jira, airflow,
       badge: airflow === null ? <Badge tone="idle">not installed</Badge>
         : airflowFailing ? <Badge tone="bad">{airflowFailing} failing</Badge>
           : <Badge tone={airflow.length ? "good" : "idle"}>{airflow.length}</Badge> },
+    { id: "incidents", label: "Incidents", icon: Siren, hint: "Teams, routing rules, Teams channels and escalation",
+      badge: airflow === null ? <Badge tone="idle">not installed</Badge> : null },
   ];
   return (
     <div className="space-y-4">
-      <nav aria-label="Integrations" className="grid gap-2 md:grid-cols-3">
+      <nav aria-label="Integrations" className="grid gap-2 md:grid-cols-2 xl:grid-cols-4">
         {tabs.map((t) => (
           <Link key={t.id} href={`/admin?section=integrations&view=${t.id}`} aria-current={view === t.id ? "page" : undefined}
                 className={cn("flex items-start gap-3 rounded-xl border p-3 transition",
@@ -120,6 +123,7 @@ export function IntegrationsSection({ repos, domains, publishing, jira, airflow,
       {view === "repos" && <ReposTab repos={repos} domains={domains} may={canAct("INTEGRATION.MANAGE")} onMsg={setMsg}
                                      publishing={<PublishingStrip status={publishing} githubRepos={repos.filter((r) => r.provider === "GITHUB")} may={canAct("ADMIN.DEPLOY")} onMsg={setMsg} />} />}
       {view === "jira" && <JiraTab status={jira} may={canAct("INTEGRATION.MANAGE")} onMsg={setMsg} />}
+      {view === "incidents" && <IncidentsTab envs={airflow ?? []} may={canAct("INTEGRATION.MANAGE")} onMsg={setMsg} />}
       {view === "airflow" && <AirflowTab envs={airflow} error={airflowError} may={canAct("INTEGRATION.MANAGE")} canPoll={can("OPS.OPERATE")} onMsg={setMsg} />}
     </div>
   );

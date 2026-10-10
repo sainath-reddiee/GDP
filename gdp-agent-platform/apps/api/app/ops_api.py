@@ -20,7 +20,7 @@ import re
 import secrets
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import quote
 
@@ -31,6 +31,7 @@ from pydantic import BaseModel, Field
 from app.db import Db, SnowflakeSessionError, system_db
 from app.main import _json, _snowflake_error, current_db
 from services.ops.mwaa import Mwaa, MwaaError
+from services.ops.normalize import ts
 from services.ops.redact import redact_count
 from services.ops.signing import HEADER_NAMES, MAX_BODY_BYTES, check_headers, verify
 
@@ -172,6 +173,9 @@ class DagSettings(BaseModel):
     domain_id: Optional[str] = Field(default=None, max_length=36)
     repo_id: Optional[str] = Field(default=None, max_length=36)
     repo_path: Optional[str] = Field(default=None, max_length=2000)
+    timezone: Optional[str] = Field(default=None, max_length=64)        # the expected-by cron's timezone (UTC when empty)
+    mute_until: Optional[str] = Field(default=None, max_length=40)      # ISO time; incidents of the DAG open MUTED until then
+    mute_reason: Optional[str] = Field(default=None, max_length=500)
 
 
 def _check_env_fields(values: Dict[str, Any]) -> Dict[str, Any]:
@@ -430,12 +434,40 @@ def _dags(db: Db, env_id: Optional[str] = None, dag_id: Optional[str] = None, q:
     return _q(db, sql, tuple(run_params) + tuple(run_params) + tuple(dag_params))
 
 
+def open_incident_counts(db: Db, env_id: Optional[str] = None, dag_id: Optional[str] = None) -> Dict[Tuple[str, str], int]:
+    """Open and acknowledged incidents per DAG; empty before V031 is applied."""
+    where, params = ["STATUS IN ('OPEN', 'ACK')"], []
+    if env_id:
+        where.append("ENV_ID = %s")
+        params.append(env_id)
+    if dag_id:
+        where.append("DAG_ID = %s")
+        params.append(dag_id)
+    try:
+        found = db.query(f"SELECT ENV_ID, DAG_ID, COUNT(*) AS N FROM OPS.INCIDENT WHERE {' AND '.join(where)} "
+                         "GROUP BY ENV_ID, DAG_ID", tuple(params))
+    except Exception:
+        return {}
+    return {(r["env_id"], r["dag_id"]): int(r["n"] or 0) for r in found}
+
+
+def _with_counts(db: Db, rows: List[Dict[str, Any]], detail: bool = False, env_id: Optional[str] = None,
+                 dag_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    counts = open_incident_counts(db, env_id, dag_id)
+    out = []
+    for r in rows:
+        item = _dag_out(r, detail)
+        item["open_incidents"] = counts.get((r["env_id"], r["dag_id"]), 0)
+        out.append(item)
+    return out
+
+
 @router.get("/api/ops/dags")
 def list_dags(env_id: Optional[str] = None, q: Optional[str] = Query(default=None, max_length=200),
               state: Optional[str] = Query(default=None, max_length=32), team_id: Optional[str] = None,
               owner: Optional[str] = Query(default=None, max_length=200), db: Db = Depends(current_db)):
-    return {"dags": [_dag_out(r) for r in _dags(db, env_id=env_id or None, q=q or None, state=state or None,
-                                                 team_id=team_id or None, owner=owner or None)]}
+    return {"dags": _with_counts(db, _dags(db, env_id=env_id or None, q=q or None, state=state or None,
+                                           team_id=team_id or None, owner=owner or None), env_id=env_id or None)}
 
 
 def _run_out(r: Dict[str, Any]) -> Dict[str, Any]:
@@ -463,7 +495,7 @@ def get_dag(env_id: str, dag_id: str, db: Db = Depends(current_db)):
     if not found:
         raise HTTPException(404, f"DAG {dag_id} not found in {env_id}")
     runs = _q(db, _RUNS_SQL.format(extra="", limit=RUN_LIMIT), (env_id, dag_id, env_id, dag_id))
-    return {"dag": _dag_out(found[0], detail=True), "runs": [_run_out(r) for r in runs]}
+    return {"dag": _with_counts(db, found[:1], True, env_id, dag_id)[0], "runs": [_run_out(r) for r in runs]}
 
 
 @router.put("/api/ops/dag")
@@ -486,9 +518,24 @@ def update_dag(env_id: str, dag_id: str, body: DagSettings, db: Db = Depends(cur
         raise HTTPException(422, "expected_by_cron must be a cron expression (5 or 6 fields) or @daily, @hourly, ...")
     if values.get("repo_path"):
         values["repo_path"] = values["repo_path"].replace("\\", "/").strip("/")
+    if values.get("timezone"):
+        try:
+            from zoneinfo import ZoneInfo
+
+            ZoneInfo(values["timezone"])
+        except Exception:
+            raise HTTPException(422, "timezone must be an IANA name such as Europe/London") from None
+    if values.get("mute_until"):
+        until = ts(values["mute_until"])
+        if not until:
+            raise HTTPException(422, "mute_until must be an ISO time")
+        if datetime.fromisoformat(until) - datetime.now(timezone.utc) > timedelta(days=30):
+            raise HTTPException(422, "A DAG mute lasts at most 30 days")
+        values["mute_until"] = until
     if values:
         sets = [(k.upper(), v) for k, v in values.items()]
-        _x(db, f"UPDATE OPS.DAG SET {', '.join(c + ' = %s' for c, _ in sets)}, UPDATED_AT = CURRENT_TIMESTAMP() "
+        _x(db, f"UPDATE OPS.DAG SET {', '.join(c + (' = TRY_TO_TIMESTAMP_LTZ(%s::VARCHAR)' if c == 'MUTE_UNTIL' else ' = %s') for c, _ in sets)}, "
+               "UPDATED_AT = CURRENT_TIMESTAMP() "
                "WHERE ENV_ID = %s AND DAG_ID = %s", tuple(v for _, v in sets) + (env_id, dag_id))
     return get_dag(env_id, dag_id, db)
 
@@ -587,6 +634,12 @@ def ingest_event(db: Db, env_id: str, timestamp: str, event_id: str, signature: 
             pass
         raise HTTPException(500, "The event was received but could not be stored; the poller will pick the run up.") from exc
     store.mark_event(db, event_id)
+    try:   # alert in seconds; the worker's detect job sees the row again, so a failure here loses nothing
+        from app.worker import detect_rows
+
+        detect_rows(db, [row] if kind == "dag_run" else [], [row] if kind != "dag_run" else [])
+    except Exception:
+        pass
     return {"ok": True, "event_id": event_id, "kind": kind}
 
 

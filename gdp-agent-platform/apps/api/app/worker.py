@@ -3,8 +3,12 @@ on the API host or in its own container with the same environment).
 
 Jobs, each guarded by an OPS.JOB_LEASE so exactly one holder runs it at a time across processes and replicas:
   poll:<env_id>  incremental capture of one MWAA environment, every POLL_SECONDS (services.ops.store.poll_env)
+  detect         incidents for runs and task runs loaded since its cursor (every tick, after the polls)
+  outbox         Teams cards and Jira bot actions from OPS.NOTIFICATION, with retries (every 30 s)
+  escalate       unacknowledged incidents and ended mutes (every 60 s)
+  sla            LATE and LONG_RUNNING detection (every 120 s)
+  jira_sync      incidents whose ticket is Done in Jira become MITIGATED (every 5 min)
   retention      purges raw OPS.EVENT rows after 30 days (every 6 hours)
-  outbox, escalate, sla  hooks filled in by the incidents work (PR O2); no-ops for now
 The worker uses system_db(): the dev session in dev mode, else the key-pair service user (AIP_SERVICE_USER,
 AIP_SERVICE_KEY_PATH). AWS credentials come from the host's default chain (role, AWS_PROFILE). A heartbeat row
 (JOB_NAME 'worker') shows when a worker last looped. SIGINT or SIGTERM stops it after the current job.
@@ -19,6 +23,7 @@ import socket
 import sys
 import threading
 import time
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
@@ -114,18 +119,88 @@ def poll_now(env_id: str, db_factory: Callable[[], Any] = system_db) -> Dict[str
     return {"started": True, "detail": "Polling started. New runs show up when it finishes (usually under a minute)."}
 
 
-# ---------------------------------------------------------------- hooks for PR O2
+# ---------------------------------------------------------------- incidents (PR O2)
+
+DETECT_OVERLAP = timedelta(minutes=2)
+INTERVALS = {"outbox": 30, "escalate": 60, "sla": 120, "jira_sync": 300}
+
+
+def _store(db: Any):
+    from services.ops.incidents import SqlStore
+
+    return SqlStore(db)
+
+
+def _bot(store: Any):
+    from services.ops.tickets import bot_client
+
+    return bot_client(store.jira_config())
+
+
+def detect(db: Any) -> Dict[str, Any]:
+    """Incidents for everything loaded since the cursor (minus a small overlap; applying a run twice changes
+    nothing). The cursor is the newest LOADED_AT processed, kept on the 'detect' lease row."""
+    from services.ops.incidents import process
+
+    store = _store(db)
+    found = db.query("SELECT CURSOR_VALUE FROM OPS.JOB_LEASE WHERE JOB_NAME = 'detect'")
+    cursor = found[0].get("cursor_value") if found else None
+    since = None
+    if cursor:
+        try:
+            since = (datetime.fromisoformat(cursor) - DETECT_OVERLAP).isoformat()
+        except ValueError:
+            since = None
+    runs, tasks, newest = store.changed_since(since)
+    summary = process(store, runs, tasks)
+    if newest and newest != cursor:
+        db.execute("UPDATE OPS.JOB_LEASE SET CURSOR_VALUE = %s WHERE JOB_NAME = 'detect'", (newest,))
+    return summary
+
+
+def detect_rows(db: Any, runs: List[Dict[str, Any]], tasks: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Incidents for rows just stored (the push ingest): cheap and idempotent, the detect job sees them again."""
+    from services.ops.incidents import process
+
+    return process(_store(db), runs, tasks)
+
 
 def outbox(db: Any) -> None:
-    """Send queued Teams notifications (PR O2)."""
+    """Send queued Teams cards and Jira bot actions."""
+    from services.ops.notify import run_outbox
+    from services.ops.tickets import handle
+
+    store = _store(db)
+    settings = store.settings()
+    bot = _bot(store)
+    counts = run_outbox(db, settings, jira=lambda _db, row: handle(store, row, bot, settings))
+    if any(counts.values()):
+        log.info("outbox: %s", counts)
 
 
 def escalate(db: Any) -> None:
-    """Escalate unacknowledged incidents (PR O2)."""
+    """Escalate unacknowledged incidents and reopen incidents whose mute ended."""
+    from services.ops.incidents import escalate as run
+
+    result = run(_store(db))
+    if any(result.values()):
+        log.info("escalate: %s", result)
 
 
 def sla(db: Any) -> None:
-    """LATE and LONG_RUNNING detection (PR O2)."""
+    """LATE and LONG_RUNNING detection."""
+    from services.ops.incidents import sla_check
+
+    sla_check(_store(db))
+
+
+def jira_sync(db: Any) -> None:
+    from services.ops.tickets import sync_done
+
+    store = _store(db)
+    changed = sync_done(store, _bot(store))
+    if changed:
+        log.info("jira_sync: %s incidents mitigated", changed)
 
 
 def retention(db: Any) -> None:
@@ -150,10 +225,19 @@ class Worker:
             return True
         return False
 
-    def _guarded(self, db: Any, job: str, fn: Callable[[Any], None]) -> None:
+    def _guarded(self, db: Any, job: str, fn: Callable[[Any], Any]) -> None:
         with lease.held(db, job, HOLDER) as got:
             if got:
                 fn(db)
+
+    def _safe(self, db: Any, job: str, fn: Callable[[Any], Any]) -> None:
+        """One job under its lease; a failure (for example V031 not applied yet) is logged and the loop goes on."""
+        try:
+            self._guarded(db, job, fn)
+        except SnowflakeSessionError:
+            raise
+        except Exception as exc:
+            log.warning("%s failed: %s", job, _error_text(exc))
 
     def once(self) -> None:
         db = self.db_factory()
@@ -167,10 +251,12 @@ class Worker:
             result = run_poll(db, env["env_id"])
             if result.get("ran"):
                 log.info("poll %s: %s", env["env_id"], "ok" if result.get("ok") else result.get("error"))
-        for name, fn in (("outbox", outbox), ("escalate", escalate), ("sla", sla)):
+        self._safe(db, "detect", detect)
+        for name, fn in (("outbox", outbox), ("escalate", escalate), ("sla", sla), ("jira_sync", jira_sync)):
             if self.stop.is_set():
                 return
-            self._guarded(db, name, fn)
+            if self._every(name, INTERVALS[name]):
+                self._safe(db, name, fn)
         if self._every("retention", RETENTION_EVERY):
             self._guarded(db, "retention", retention)
 

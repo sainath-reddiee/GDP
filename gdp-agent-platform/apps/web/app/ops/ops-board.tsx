@@ -204,7 +204,11 @@ function DagTable({ dags, filtered }: { dags: DagRow[] | null; filtered: boolean
                   {d.is_paused && <span className="inline-flex items-center gap-0.5 rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-600"><PauseCircle className="h-3 w-3" />paused</span>}
                   {!d.is_active && <span className="rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-500">inactive</span>}
                   {d.criticality && <span className="rounded-full bg-violet-50 px-1.5 py-0.5 text-[10px] text-violet-700">{d.criticality.toLowerCase()}</span>}
-                  {d.open_incidents > 0 && <span className="rounded-full bg-rose-50 px-1.5 py-0.5 text-[10px] text-rose-700">{d.open_incidents} open incident{d.open_incidents === 1 ? "" : "s"}</span>}
+                  {d.open_incidents > 0 && (
+                    <Link href={`/incidents?${new URLSearchParams({ dag: d.dag_id, env: d.env_id, status: "OPEN,ACK" })}`}
+                          className="rounded-full bg-rose-50 px-1.5 py-0.5 text-[10px] font-semibold text-rose-700 ring-1 ring-inset ring-rose-100 hover:bg-rose-100">
+                      {d.open_incidents} open incident{d.open_incidents === 1 ? "" : "s"}</Link>
+                  )}
                   {d.tags?.slice(0, 3).map((t) => <span key={t} className="rounded bg-muted px-1 text-[10px] text-muted-foreground">{t}</span>)}
                 </span>
               </td>

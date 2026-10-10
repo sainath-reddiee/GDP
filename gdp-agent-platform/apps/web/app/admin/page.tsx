@@ -84,7 +84,7 @@ export default async function Admin({ searchParams }: { searchParams?: { section
           )}
           <Suspense key={`${section}:${view}:${searchParams?.view ?? ""}`} fallback={<SectionSkeleton />}>
             <Section id={section} view={view}
-                     integrationView={searchParams?.view === "jira" || searchParams?.view === "airflow" ? searchParams.view : "repos"} />
+                     integrationView={searchParams?.view === "jira" || searchParams?.view === "airflow" || searchParams?.view === "incidents" ? searchParams.view : "repos"} />
           </Suspense>
         </main>
       </div>

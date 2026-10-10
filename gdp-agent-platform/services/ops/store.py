@@ -164,7 +164,8 @@ def upsert_tasks(db: Any, rows: List[Dict[str, Any]]) -> int:
                  HOSTNAME = COALESCE(S.HOSTNAME, T.HOSTNAME), LOG_REF = COALESCE(S.LOG_REF, T.LOG_REF),
                  ERROR_EXCERPT = COALESCE(S.ERROR_EXCERPT, T.ERROR_EXCERPT), SOURCE = S.SOURCE, UPDATED_AT = S.UPDATED_AT,
                  LOADED_AT = CURRENT_TIMESTAMP()
-            WHEN MATCHED AND T.ERROR_EXCERPT IS NULL AND S.ERROR_EXCERPT IS NOT NULL THEN UPDATE SET ERROR_EXCERPT = S.ERROR_EXCERPT
+            WHEN MATCHED AND T.ERROR_EXCERPT IS NULL AND S.ERROR_EXCERPT IS NOT NULL THEN UPDATE SET ERROR_EXCERPT = S.ERROR_EXCERPT,
+                 LOADED_AT = CURRENT_TIMESTAMP()
             WHEN NOT MATCHED THEN INSERT (ENV_ID, DAG_ID, RUN_ID, TASK_ID, MAP_INDEX, TRY_NUMBER, STATE, OPERATOR, STARTED_AT,
                  ENDED_AT, DURATION_S, HOSTNAME, LOG_REF, ERROR_EXCERPT, SOURCE, UPDATED_AT)
                  VALUES (S.ENV_ID, S.DAG_ID, S.RUN_ID, S.TASK_ID, S.MAP_INDEX, S.TRY_NUMBER, S.STATE, S.OPERATOR, S.STARTED_AT,
@@ -227,7 +228,7 @@ def fill_error_excerpts(db: Any, mw: Mwaa, env_id: str, limit: int = MAX_ERROR_L
         except MwaaError:
             continue
         text = excerpt(log.get("text")) or "(the log has no error lines)"
-        db.execute("""UPDATE OPS.TASK_RUN SET ERROR_EXCERPT = %s WHERE ENV_ID = %s AND DAG_ID = %s AND RUN_ID = %s
+        db.execute("""UPDATE OPS.TASK_RUN SET ERROR_EXCERPT = %s, LOADED_AT = CURRENT_TIMESTAMP() WHERE ENV_ID = %s AND DAG_ID = %s AND RUN_ID = %s
                          AND TASK_ID = %s AND MAP_INDEX = %s AND TRY_NUMBER = %s AND ERROR_EXCERPT IS NULL""",
                    (text, env_id, t["dag_id"], t["run_id"], t["task_id"], t["map_index"], t["try_number"]))
         filled += 1

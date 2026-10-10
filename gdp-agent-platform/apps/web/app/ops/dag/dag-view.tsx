@@ -12,7 +12,7 @@ import {
   dagDetail, pollEnv, runDetail, saveDagSettings, taskLog,
   type Criticality, type DagDetail, type DagRun, type TaskLog, type TaskRun,
 } from "../actions";
-import { duration, explain, parseTs, pct, pctTone, StateBadge, stateTone, When } from "../ops-shared";
+import { duration, explain, parseTs, pct, pctTone, RunStrip, StateBadge, When } from "../ops-shared";
 
 type Option = { id: string; name: string };
 const CRITICALITY: Criticality[] = ["CRITICAL", "HIGH", "MEDIUM", "LOW"];
@@ -21,9 +21,9 @@ const ERROR_LINE = /error|exception|traceback|failed/i;
 const time = (r: DagRun) => parseTs(r.start ?? r.logical_date)?.getTime() ?? 0;
 
 /** One DAG's page: header with Airflow link, settings, runs strip and table, a run's tasks and a task's log. */
-export function DagView({ envId, envName, envEnabled, initial, initialRun, canOperate, domains, repos, lookupErrors }: {
+export function DagView({ envId, envName, envEnabled, initial, initialRun, canOperate, domains, repos, teams, lookupErrors }: {
   envId: string; envName: string; envEnabled: boolean; initial: { dag: DagDetail; runs: DagRun[] }; initialRun: string;
-  canOperate: boolean; domains: Option[]; repos: Option[]; lookupErrors: string[];
+  canOperate: boolean; domains: Option[]; repos: Option[]; teams: Option[]; lookupErrors: string[];
 }) {
   const [data, setData] = useState(initial);
   const [runId, setRunId] = useState(initialRun);
@@ -115,7 +115,7 @@ export function DagView({ envId, envName, envEnabled, initial, initialRun, canOp
       {dag.fileloc && <p className="text-xs text-muted-foreground">File <span className="break-all font-mono">{dag.fileloc}</span></p>}
 
       {editing && canOperate && (
-        <SettingsForm dag={dag} envId={envId} domains={domains} repos={repos} onClose={() => setEditing(false)}
+        <SettingsForm dag={dag} envId={envId} domains={domains} repos={repos} teams={teams} onClose={() => setEditing(false)}
                       onSaved={async () => { setEditing(false); setNotice("DAG settings saved."); await refresh(); }} />
       )}
 
@@ -133,31 +133,6 @@ export function DagView({ envId, envName, envEnabled, initial, initialRun, canOp
       </section>
 
       {runId && <RunPanel key={runId} envId={envId} dagId={dag.dag_id} runId={runId} onClose={() => select("")} />}
-    </div>
-  );
-}
-
-/** Oldest to newest, left to right; bar height is the run's duration against the longest one shown. */
-function RunStrip({ runs, selected, onSelect }: { runs: DagRun[]; selected: string; onSelect: (id: string) => void }) {
-  const ordered = useMemo(() => [...runs].sort((a, b) => time(a) - time(b)), [runs]);
-  const max = Math.max(1, ...ordered.map((r) => r.duration_s ?? 0));
-  return (
-    <div className="border-b px-4 py-3">
-      <div className="flex h-16 items-end gap-[3px] overflow-x-auto" role="list" aria-label="Runs timeline">
-        {ordered.map((r) => {
-          const h = r.duration_s ? Math.max(12, Math.round((r.duration_s / max) * 100)) : 12;
-          return (
-            <button key={r.run_id} type="button" role="listitem" onClick={() => onSelect(r.run_id)}
-                    title={`${r.run_id}\n${(r.state ?? "unknown").replace(/_/g, " ")} · ${duration(r.duration_s)}`}
-                    aria-label={`Run ${r.run_id}, ${r.state ?? "unknown"}, ${duration(r.duration_s)}`}
-                    aria-pressed={selected === r.run_id}
-                    className={cn("w-2.5 min-w-[10px] shrink-0 rounded-sm transition hover:opacity-80", stateTone(r.state).bar,
-                      selected === r.run_id && "ring-2 ring-primary ring-offset-1")}
-                    style={{ height: `${h}%` }} />
-          );
-        })}
-      </div>
-      <p className="mt-1 flex justify-between text-[10px] text-muted-foreground"><span>older</span><span>newer</span></p>
     </div>
   );
 }
@@ -336,10 +311,11 @@ function LogViewer({ envId, dagId, runId, task }: { envId: string; dagId: string
   );
 }
 
-function SettingsForm({ dag, envId, domains, repos, onClose, onSaved }: {
-  dag: DagDetail; envId: string; domains: Option[]; repos: Option[]; onClose: () => void; onSaved: () => Promise<void>;
+function SettingsForm({ dag, envId, domains, repos, teams, onClose, onSaved }: {
+  dag: DagDetail; envId: string; domains: Option[]; repos: Option[]; teams: Option[]; onClose: () => void; onSaved: () => Promise<void>;
 }) {
   const [criticality, setCriticality] = useState<string>(dag.criticality ?? "");
+  const [teamId, setTeamId] = useState(dag.team_id ?? "");
   const [cron, setCron] = useState(dag.expected_by_cron ?? "");
   const [maxMin, setMaxMin] = useState(dag.max_duration_min === null || dag.max_duration_min === undefined ? "" : String(dag.max_duration_min));
   const [domainId, setDomainId] = useState(dag.domain_id ?? "");
@@ -352,7 +328,7 @@ function SettingsForm({ dag, envId, domains, repos, onClose, onSaved }: {
   const save = () => start(async () => {
     setError("");
     const r = await saveDagSettings(envId, dag.dag_id, {
-      criticality: (criticality || null) as Criticality | null, expected_by_cron: cron.trim() || null, max_duration_min: minutes,
+      team_id: teamId || null, criticality: (criticality || null) as Criticality | null, expected_by_cron: cron.trim() || null, max_duration_min: minutes,
       domain_id: domainId || null, repo_id: repoId || null, repo_path: repoPath.trim() || null,
     });
     if (r.ok) await onSaved(); else setError(explain(r.error));
@@ -360,6 +336,7 @@ function SettingsForm({ dag, envId, domains, repos, onClose, onSaved }: {
   // a saved id the lists no longer contain still shows, so saving never clears it silently
   const domainOptions = domainId && !domains.some((d) => d.id === domainId) ? [...domains, { id: domainId, name: domainId }] : domains;
   const repoOptions = repoId && !repos.some((r) => r.id === repoId) ? [...repos, { id: repoId, name: repoId }] : repos;
+  const teamOptions = teamId && !teams.some((t) => t.id === teamId) ? [...teams, { id: teamId, name: teamId }] : teams;
   return (
     <section className="surface space-y-3 p-4">
       <h2 className="text-sm font-semibold">DAG settings</h2>
@@ -378,6 +355,13 @@ function SettingsForm({ dag, envId, domains, repos, onClose, onSaved }: {
           <Input value={maxMin} onChange={(e) => setMaxMin(e.target.value)} inputMode="numeric" placeholder="e.g. 90" className="text-xs"
                  aria-invalid={badMinutes} />
           {badMinutes && <span role="alert" className="block font-normal text-destructive">A whole number from 1 to 10080.</span>}
+        </label>
+        <label className="space-y-1 text-xs font-medium">Team
+          <Select value={teamId} onChange={(e) => setTeamId(e.target.value)} className="text-xs">
+            <option value="">Use routing rules</option>
+            {teamOptions.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+          </Select>
+          <span className="block font-normal text-muted-foreground">Incidents of this DAG go to this team.</span>
         </label>
         <label className="space-y-1 text-xs font-medium">Domain
           <Select value={domainId} onChange={(e) => setDomainId(e.target.value)} className="text-xs">

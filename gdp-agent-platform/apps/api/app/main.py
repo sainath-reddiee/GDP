@@ -5441,7 +5441,7 @@ def restore_domain(domain_id: str, db: Db = Depends(current_db)):
         else:  # deleted before the ids were recorded: only items retired at (or after) the delete itself
             db.execute("UPDATE KNOWLEDGE.DOMAIN_KNOWLEDGE SET STATUS = 'ACTIVE', UPDATED_AT = CURRENT_TIMESTAMP() "
                        "WHERE DOMAIN_ID = %s AND IS_CURRENT AND STATUS = 'RETIRED' "
-                       "AND UPDATED_AT >= DATEADD(second, -5, TRY_TO_TIMESTAMP_LTZ(%s))",
+                       "AND UPDATED_AT >= DATEADD(second, -5, TRY_TO_TIMESTAMP_LTZ(%s::VARCHAR))",
                        (domain_id, str(row["config"].get("deleted_at"))))
     _domain_caches_changed()
     _domain_snapshot(db, domain_id, "RESTORE", "Domain restored")
@@ -6363,3 +6363,7 @@ app.include_router(qa_router)
 from app.ops_api import router as ops_router  # noqa: E402
 
 app.include_router(ops_router)
+
+from app.incidents_api import router as incidents_router  # noqa: E402
+
+app.include_router(incidents_router)

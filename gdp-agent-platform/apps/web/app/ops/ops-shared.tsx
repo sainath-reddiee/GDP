@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { cn } from "@/lib/utils";
+import type { DagRun } from "./actions";
 
 /** Airflow states and how they read: badge tone and the bar color in the runs strip. */
 const STATE_TONE: Record<string, { badge: string; bar: string }> = {
@@ -89,4 +90,36 @@ export function explain(error: string): string {
     return `${error}. The API host needs an IAM role (or AWS profile) that can call Amazon MWAA; no keys are entered in the platform.`;
   }
   return error;
+}
+
+const runTime = (r: DagRun) => parseTs(r.start ?? r.logical_date)?.getTime() ?? 0;
+
+/** Runs oldest to newest, left to right; bar height is the run's duration against the longest one shown. Used on the
+ *  DAG page and on an incident. */
+export function RunStrip({ runs, selected, onSelect, highlight }: {
+  runs: DagRun[]; selected?: string; onSelect: (id: string) => void; /** a run to mark, such as the failing one */ highlight?: string | null;
+}) {
+  const ordered = useMemo(() => [...runs].sort((a, b) => runTime(a) - runTime(b)), [runs]);
+  const max = Math.max(1, ...ordered.map((r) => r.duration_s ?? 0));
+  return (
+    <div className="border-b px-4 py-3">
+      <div className="flex h-16 items-end gap-[3px] overflow-x-auto" role="list" aria-label="Runs timeline">
+        {ordered.map((r) => {
+          const h = r.duration_s ? Math.max(12, Math.round((r.duration_s / max) * 100)) : 12;
+          const marked = selected === r.run_id || highlight === r.run_id;
+          return (
+            <button key={r.run_id} type="button" role="listitem" onClick={() => onSelect(r.run_id)}
+                    title={`${r.run_id}
+${(r.state ?? "unknown").replace(/_/g, " ")} · ${duration(r.duration_s)}`}
+                    aria-label={`Run ${r.run_id}, ${r.state ?? "unknown"}, ${duration(r.duration_s)}`}
+                    aria-pressed={selected === undefined ? undefined : selected === r.run_id}
+                    className={cn("w-2.5 min-w-[10px] shrink-0 rounded-sm transition hover:opacity-80", stateTone(r.state).bar,
+                      marked && "ring-2 ring-primary ring-offset-1")}
+                    style={{ height: `${h}%` }} />
+          );
+        })}
+      </div>
+      <p className="mt-1 flex justify-between text-[10px] text-muted-foreground"><span>older</span><span>newer</span></p>
+    </div>
+  );
 }
