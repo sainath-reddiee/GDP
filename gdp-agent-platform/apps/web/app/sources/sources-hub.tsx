@@ -67,20 +67,27 @@ function ago(value: string | null | undefined) {
   return value.slice(0, 10);
 }
 
+// soft tinted chip for a solid tone class (the solid colour stays for the active mode tab)
+const SOFT: Record<string, string> = {
+  "bg-sky-500": "bg-sky-50 text-sky-600 ring-sky-100", "bg-violet-500": "bg-violet-50 text-violet-600 ring-violet-100",
+  "bg-emerald-500": "bg-emerald-50 text-emerald-600 ring-emerald-100", "bg-amber-500": "bg-amber-50 text-amber-600 ring-amber-100",
+};
+const soft = (tone: string) => SOFT[tone] ?? "bg-muted text-muted-foreground ring-border";
+
 function Kpi({ icon: Icon, label, value, hint, tone }: {
   icon: typeof Database; label: string; value: React.ReactNode; hint?: string; tone: string;
 }) {
   return (
-    <div className="group relative overflow-hidden rounded-2xl border bg-card p-4 shadow-sm transition hover:shadow-md">
-      <div className={cn("absolute -right-6 -top-6 h-20 w-20 rounded-full opacity-10", tone)} />
+    <div className="surface group relative overflow-hidden p-4 transition duration-200 hover:shadow-hover">
+      <div className={cn("absolute -right-10 -top-10 h-28 w-28 rounded-full opacity-[0.07] blur-xl", tone)} />
       <div className="flex items-center gap-3">
-        <span className={cn("grid h-9 w-9 place-items-center rounded-xl text-white shadow-sm", tone)}>
+        <span className={cn("grid h-9 w-9 place-items-center rounded-xl ring-1 ring-inset", soft(tone))}>
           <Icon className="h-4 w-4" />
         </span>
         <p className="text-xs font-medium text-muted-foreground">{label}</p>
       </div>
-      <p className="mt-3 text-3xl font-semibold tracking-tight tabular-nums">{value}</p>
-      {hint && <p className="mt-0.5 text-xs text-muted-foreground">{hint}</p>}
+      <p className="mt-3 text-[28px] font-semibold leading-none tracking-tight tabular-nums">{value}</p>
+      {hint && <p className="mt-1.5 text-xs text-muted-foreground">{hint}</p>}
     </div>
   );
 }
@@ -165,8 +172,8 @@ function ModeTab({ active, onClick, icon: Icon, title, body, count, tone }: {
   return (
     <button type="button" role="tab" aria-selected={active} onClick={onClick}
             className={cn("group relative flex items-start gap-3 overflow-hidden rounded-2xl border p-4 text-left transition",
-              active ? "border-primary bg-primary/[0.06] shadow-md ring-2 ring-primary/20" : "bg-card hover:border-primary/40 hover:shadow-sm")}>
-      <span className={cn("grid h-10 w-10 shrink-0 place-items-center rounded-xl text-white shadow-sm", tone, !active && "opacity-80")}>
+              active ? "border-primary/50 bg-gradient-to-br from-accent to-card shadow-card ring-1 ring-primary/15" : "border-border/80 bg-card hover:border-primary/30 hover:shadow-card")}>
+      <span className={cn("grid h-10 w-10 shrink-0 place-items-center rounded-xl", active ? cn(tone, "text-white shadow-sm") : cn("ring-1 ring-inset", soft(tone)))}>
         <Icon className="h-5 w-5" />
       </span>
       <span className="min-w-0 flex-1">

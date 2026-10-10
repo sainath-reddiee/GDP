@@ -2,6 +2,8 @@ import type { Config } from "tailwindcss";
 
 const config: Config = {
   content: ["./app/**/*.{ts,tsx}", "./components/**/*.{ts,tsx}"],
+  // one light theme: dark: variants apply only under a .dark class, never from the OS setting
+  darkMode: "class",
   theme: {
     extend: {
       colors: {
@@ -21,6 +23,11 @@ const config: Config = {
         warning: "hsl(var(--warning))",
       },
       borderRadius: { lg: "var(--radius)", md: "calc(var(--radius) - 2px)", sm: "calc(var(--radius) - 4px)" },
+      boxShadow: {
+        xs: "var(--shadow-xs)",
+        card: "var(--shadow-card)",
+        hover: "var(--shadow-hover)",
+      },
       fontFamily: {
         mono: ['"JetBrains Mono"', '"Cascadia Code"', "ui-monospace", "SFMono-Regular", "Consolas", "monospace"],
       },

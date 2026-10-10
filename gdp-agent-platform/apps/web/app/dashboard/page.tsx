@@ -31,20 +31,31 @@ function greeting() {
   return h < 12 ? "Good morning" : h < 17 ? "Good afternoon" : "Good evening";
 }
 
+// soft tints per state: chip, the faint glow in the corner, and the accent line of a highlighted card
+const TONES = {
+  blue: { chip: "bg-indigo-50 text-indigo-600 ring-indigo-100", glow: "bg-indigo-400", line: "from-indigo-400 to-violet-400" },
+  rose: { chip: "bg-rose-50 text-rose-600 ring-rose-100", glow: "bg-rose-400", line: "from-rose-400 to-pink-400" },
+  slate: { chip: "bg-slate-100 text-slate-600 ring-slate-200", glow: "bg-slate-400", line: "from-slate-300 to-slate-400" },
+  emerald: { chip: "bg-emerald-50 text-emerald-600 ring-emerald-100", glow: "bg-emerald-400", line: "from-emerald-400 to-teal-400" },
+  amber: { chip: "bg-amber-50 text-amber-600 ring-amber-100", glow: "bg-amber-400", line: "from-amber-400 to-orange-400" },
+} as const;
+
 function Kpi({ href, label, value, hint, icon: Icon, tone, highlight }: {
-  href: string; label: string; value: number; hint: string; icon: typeof Activity; tone: string; highlight?: boolean;
+  href: string; label: string; value: number; hint: string; icon: typeof Activity; tone: keyof typeof TONES; highlight?: boolean;
 }) {
+  const t = TONES[tone];
   return (
     <Link href={href}
-          className={cn("surface group relative overflow-hidden p-4 transition hover:-translate-y-0.5 hover:shadow-md",
-            highlight && "ring-2 ring-rose-500/30")}>
-      <div className={cn("absolute -right-8 -top-8 h-24 w-24 rounded-full opacity-[0.08]", tone)} />
+          className={cn("surface group relative overflow-hidden p-4 transition duration-200 hover:border-primary/25 hover:shadow-hover",
+            highlight && "border-rose-200 bg-gradient-to-br from-rose-50/70 via-card to-card")}>
+      {highlight && <div className={cn("absolute inset-x-0 top-0 h-0.5 bg-gradient-to-r", t.line)} />}
+      <div className={cn("absolute -right-10 -top-10 h-28 w-28 rounded-full opacity-[0.07] blur-xl", t.glow)} />
       <div className="flex items-center justify-between">
-        <span className={cn("grid h-9 w-9 place-items-center rounded-xl text-white shadow-sm", tone)}><Icon className="h-4 w-4" /></span>
-        <ArrowUpRight className="h-4 w-4 text-muted-foreground opacity-0 transition group-hover:opacity-100" />
+        <span className={cn("grid h-9 w-9 place-items-center rounded-xl ring-1 ring-inset", t.chip)}><Icon className="h-4 w-4" /></span>
+        <ArrowUpRight className="h-4 w-4 text-muted-foreground/60 opacity-0 transition group-hover:opacity-100" />
       </div>
-      <p className="mt-3 text-3xl font-semibold tracking-tight tabular-nums">{value}</p>
-      <p className="text-sm font-medium">{label}</p>
+      <p className="mt-3 text-[28px] font-semibold leading-none tracking-tight tabular-nums">{value}</p>
+      <p className="mt-1.5 text-sm font-medium">{label}</p>
       <p className="text-xs text-muted-foreground">{hint}</p>
     </Link>
   );
@@ -56,7 +67,7 @@ function Panel({ title, icon: Icon, action, children, className }: {
   return (
     <section className={cn("surface flex flex-col p-5", className)}>
       <div className="mb-4 flex items-center gap-2">
-        <span className="grid h-7 w-7 place-items-center rounded-lg bg-muted text-muted-foreground"><Icon className="h-3.5 w-3.5" /></span>
+        <span className="grid h-7 w-7 place-items-center rounded-lg bg-accent text-accent-foreground ring-1 ring-inset ring-primary/10"><Icon className="h-3.5 w-3.5" /></span>
         <h3 className="text-sm font-semibold">{title}</h3>
         <div className="ml-auto">{action}</div>
       </div>
@@ -110,15 +121,15 @@ export default async function Dashboard() {
                   </>} />
 
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-5">
-        <Kpi href="/runs?status=active" label="Running" value={s.running} hint="Moving through the pipeline" icon={PlayCircle} tone="bg-blue-500" />
-        <Kpi href="/runs?needs_review=1" label="Needs review" value={s.review} hint="Mapping, STTM, checks or code" icon={Eye} tone="bg-rose-500" highlight={s.review > 0} />
-        <Kpi href="/runs?status=draft" label="Drafts" value={s.drafts} hint="Created, source not chosen yet" icon={CircleDashed} tone="bg-slate-500" />
-        <Kpi href="/runs?status=completed" label="Completed" value={s.completed} hint="Approved and delivered" icon={CheckCircle2} tone="bg-emerald-500" />
-        <Kpi href="/runs?status=failed" label="Failed" value={s.failed} hint={`${s.cancelled} more cancelled`} icon={XCircle} tone="bg-amber-500" />
+        <Kpi href="/runs?status=active" label="Running" value={s.running} hint="Moving through the pipeline" icon={PlayCircle} tone="blue" />
+        <Kpi href="/runs?needs_review=1" label="Needs review" value={s.review} hint="Mapping, STTM, checks or code" icon={Eye} tone="rose" highlight={s.review > 0} />
+        <Kpi href="/runs?status=draft" label="Drafts" value={s.drafts} hint="Created, source not chosen yet" icon={CircleDashed} tone="slate" />
+        <Kpi href="/runs?status=completed" label="Completed" value={s.completed} hint="Approved and delivered" icon={CheckCircle2} tone="emerald" />
+        <Kpi href="/runs?status=failed" label="Failed" value={s.failed} hint={`${s.cancelled} more cancelled`} icon={XCircle} tone="amber" />
       </div>
       {cost && (
-        <Link href="/audit?tab=cost" className="flex flex-wrap items-center gap-3 rounded-xl border bg-card px-4 py-3 text-sm shadow-sm hover:bg-muted/40">
-          <Sparkles className="h-4 w-4 text-violet-600" />
+        <Link href="/audit?tab=cost" className="flex flex-wrap items-center gap-3 rounded-xl border border-indigo-100 bg-gradient-to-r from-indigo-50/80 via-card to-card px-4 py-3 text-sm shadow-xs transition hover:border-indigo-200 hover:shadow-card">
+          <span className="grid h-7 w-7 place-items-center rounded-lg bg-indigo-100 text-indigo-600"><Sparkles className="h-3.5 w-3.5" /></span>
           <span className="font-medium">AI usage, last 30 days</span>
           <span className="text-muted-foreground">{cost.calls.toLocaleString()} calls · {cost.tokens.toLocaleString()} tokens · {(cost.credits ?? cost.estimated_cost).toFixed(2)} credits{cost.actual_credits ? ` (${cost.actual_credits.toFixed(2)} billed)` : " estimated"}</span>
           <ArrowRight className="ml-auto h-4 w-4 text-muted-foreground" />
@@ -138,7 +149,7 @@ export default async function Dashboard() {
                     {f.label}
                   </span>
                   <div className="h-2.5 overflow-hidden rounded-full bg-muted">
-                    <div className="h-full rounded-full bg-gradient-to-r from-blue-500 to-violet-500 transition-all"
+                    <div className="h-full rounded-full bg-gradient-to-r from-indigo-500 to-violet-400 transition-all"
                          style={{ width: n ? `${Math.max(6, (100 * n) / funnelMax)}%` : "0%" }} />
                   </div>
                   <span className="text-right font-semibold tabular-nums">{n}</span>
@@ -161,7 +172,7 @@ export default async function Dashboard() {
             <ul className="space-y-2">
               {[...attention, ...failed].map((r) => (
                 <li key={r.run_id}>
-                  <Link href={runHref(r)} className="group flex items-center gap-3 rounded-xl border p-3 transition hover:border-primary/40 hover:bg-accent/40">
+                  <Link href={runHref(r)} className="group flex items-center gap-3 rounded-xl border border-border/80 bg-card p-3 transition hover:border-primary/30 hover:bg-accent/50">
                     <span className={cn("h-2 w-2 shrink-0 rounded-full", needsReview(r) ? "bg-rose-500" : "bg-amber-500")} />
                     <span className="min-w-0 flex-1">
                       <span className="block truncate text-sm font-medium">{r.run_name}</span>
@@ -218,8 +229,8 @@ export default async function Dashboard() {
                action={<Link href="/domains" className="text-xs font-medium text-primary hover:underline">Domains</Link>}>
           <ul className="space-y-2">
             {visibleDomains.map((d) => (
-              <li key={d.domain_id} className="flex items-center gap-3 rounded-xl border px-3 py-2">
-                <span className="grid h-8 w-8 place-items-center rounded-lg bg-violet-500/10 text-xs font-bold text-violet-600">
+              <li key={d.domain_id} className="flex items-center gap-3 rounded-xl border border-border/80 px-3 py-2 transition hover:bg-accent/40">
+                <span className="grid h-8 w-8 place-items-center rounded-lg bg-gradient-to-br from-indigo-50 to-violet-100 text-xs font-bold text-indigo-600 ring-1 ring-inset ring-indigo-100">
                   {d.domain_name.slice(0, 2)}
                 </span>
                 <span className="min-w-0 flex-1">
@@ -239,7 +250,7 @@ export default async function Dashboard() {
             {audit.events.slice(0, 7).map((e) => (
               <li key={e.event_id} className="relative pl-5">
                 <span className={cn("absolute left-0 top-1.5 h-[11px] w-[11px] rounded-full border-2 border-card",
-                  e.actor_type === "HUMAN" ? "bg-blue-500" : "bg-emerald-500")} />
+                  e.actor_type === "HUMAN" ? "bg-indigo-500" : "bg-emerald-500")} />
                 <p className="truncate text-xs">
                   <span className="font-medium">{e.run_name ?? "run"}</span>
                   <span className="text-muted-foreground"> · {e.to_state.replace(/_/g, " ").toLowerCase()}</span>
