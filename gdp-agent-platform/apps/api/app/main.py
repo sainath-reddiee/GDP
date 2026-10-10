@@ -6355,3 +6355,7 @@ app.include_router(code_router)
 from app.jira_api import router as jira_router  # noqa: E402
 
 app.include_router(jira_router)
+
+from app.qa_api import router as qa_router  # noqa: E402
+
+app.include_router(qa_router)

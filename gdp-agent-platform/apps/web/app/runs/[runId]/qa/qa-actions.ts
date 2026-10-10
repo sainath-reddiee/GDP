@@ -6,6 +6,8 @@ import { api, attemptValue } from "@/lib/api";
 export type QaTest = {
   test_id: string; category: string; title: string; objective: string | null; sql: string; expected: string | null;
   severity: string; target_column: string | null; source?: string | null; origin: "GENERATED" | "AI" | "USER";
+  /** TABLE: a domain suite test on this run's target table, edited in the QA workspace, run and counted here. */
+  scope?: "RUN" | "TABLE"; suite_id?: string | null;
   prompt?: string | null; created_by?: string | null; created_at?: string | null; warning?: string | null;
 };
 
