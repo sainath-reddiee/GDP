@@ -3,24 +3,26 @@ webhook request is received"), webhook URL validation, and the outbox that deliv
 retries.
 
 Cards carry redacted text only and Action.OpenUrl buttons (webhook cards cannot submit, so Acknowledge opens the
-platform). Webhook URLs are stored ENCRYPTed on OPS.TEAM and decrypted only here, at send time; they never appear in a
-payload, an error, a log line or an API response.
+platform). Webhook URLs are sealed in the application (services.common.secretbox, AES-GCM) and stored as ciphertext on
+OPS.TEAM; they are opened only at send time and never appear in SQL text, a payload, an error, a log line or an API
+response.
 
 Outbox (OPS.NOTIFICATION): rows are enqueued with a DEDUPE_KEY (the same key is never queued twice). The worker's
-'outbox' job sends due rows (PENDING, or FAILED and due again); a failure is FAILED and retries after 1 min, 5 min, 15 min, then every hour, and the 6th failed attempt
-marks the row DEAD. Per team, at most rate_limit_per_10min cards (opened, re-occurred, resolved) are sent in any 10
+'outbox' job sends due rows (PENDING, or FAILED and due again); each row is first claimed (SENDING, for 5 minutes; a
+claim whose sender died is due again), so two workers never send it twice. A failure is FAILED and retries after 1 min,
+5 min, 15 min, then every hour, and the 6th failed attempt marks the row DEAD. Per team, at most rate_limit_per_10min cards (opened, re-occurred, resolved) are sent in any 10
 minutes; the rest are SUPPRESSED and folded into one storm summary card per team per 10 minute window.
 """
 
 from __future__ import annotations
 
 import json
-import os
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional, Tuple
 from urllib.parse import quote, urlparse
 
+from services.common import secretbox
 from services.ops.redact import redact
 
 TEAMS_HOST_SUFFIXES = (".webhook.office.com", ".logic.azure.com", ".powerautomate.com", ".environment.api.powerplatform.com")
@@ -57,8 +59,10 @@ def validate_webhook_url(url: str) -> str:
 
 def secret_key() -> str:
     """The host key that encrypts webhook URLs (AIP_SECRET_KEY, else JIRA_TOKEN_KEY); empty when it is not set."""
-    key = (os.environ.get("AIP_SECRET_KEY") or os.environ.get("JIRA_TOKEN_KEY") or "").strip()
-    return key if len(key) >= 16 else ""
+    return secretbox.ops_key()
+
+
+WEBHOOK_AGAIN = "The stored Teams webhook was saved in an older format or with another key: set the webhook again."
 
 
 def webhook_column(kind: str) -> str:
@@ -69,20 +73,37 @@ def webhook_column(kind: str) -> str:
     raise ValueError("kind must be alerts or escalation")
 
 
-def webhook_url(db: Any, team_id: str, kind: str, key: Optional[str] = None) -> Optional[str]:
-    """The decrypted webhook of a team (escalation falls back to the alerts webhook); None when there is none."""
+def seal_webhook(url: str, team_id: str, column: str, key: Optional[str] = None) -> bytes:
+    """The sealed webhook URL for OPS.TEAM.<column>; bound as bytes, so only ciphertext reaches Snowflake."""
     key = key or secret_key()
     if not key:
         raise RuntimeError("No encryption key on this host: set AIP_SECRET_KEY (or JIRA_TOKEN_KEY).")
-    found = db.query("""SELECT IFF(TEAMS_WEBHOOK_SECRET IS NULL, NULL, TO_VARCHAR(DECRYPT(TEAMS_WEBHOOK_SECRET, %s), 'UTF-8')) AS A,
-                               IFF(ESCALATION_WEBHOOK_SECRET IS NULL, NULL,
-                                   TO_VARCHAR(DECRYPT(ESCALATION_WEBHOOK_SECRET, %s), 'UTF-8')) AS E
-                          FROM OPS.TEAM WHERE TEAM_ID = %s""", (key, key, team_id))
+    return secretbox.seal(url, key, secretbox.TEAMS_WEBHOOK, f"{team_id}:{column}")
+
+
+def open_webhook(value: Any, team_id: str, column: str, key: Optional[str] = None) -> Optional[str]:
+    """The webhook URL stored in OPS.TEAM.<column>; None when there is none. RuntimeError(WEBHOOK_AGAIN) for a value
+    stored by the old Snowflake ENCRYPT() or with another key."""
+    if value is None:
+        return None
+    key = key or secret_key()
+    if not key:
+        raise RuntimeError("No encryption key on this host: set AIP_SECRET_KEY (or JIRA_TOKEN_KEY).")
+    try:
+        return secretbox.open_secret(value, key, secretbox.TEAMS_WEBHOOK, f"{team_id}:{column}")
+    except secretbox.SecretError:
+        raise RuntimeError(WEBHOOK_AGAIN) from None
+
+
+def webhook_url(db: Any, team_id: str, kind: str, key: Optional[str] = None) -> Optional[str]:
+    """The decrypted webhook of a team (escalation falls back to the alerts webhook); None when there is none."""
+    found = db.query("SELECT TEAMS_WEBHOOK_SECRET AS A, ESCALATION_WEBHOOK_SECRET AS E FROM OPS.TEAM WHERE TEAM_ID = %s",
+                     (team_id,))
     if not found:
         return None
-    if kind == "escalation":
-        return found[0].get("e") or found[0].get("a")
-    return found[0].get("a")
+    if kind == "escalation" and found[0].get("e") is not None:
+        return open_webhook(found[0]["e"], team_id, "ESCALATION_WEBHOOK_SECRET", key)
+    return open_webhook(found[0].get("a"), team_id, "TEAMS_WEBHOOK_SECRET", key)
 
 
 # ---------------------------------------------------------------- cards
@@ -282,16 +303,33 @@ def _storm_payload(db: Any, team_id: str, base: Optional[str]) -> Dict[str, Any]
     return storm_card(team[0]["name"] if team else team_id, max(len(found), 1), titles, base)
 
 
+CLAIM_MINUTES = 5
+
+
+def claim(db: Any, notification_id: str) -> bool:
+    """Take one due row for sending (compare-and-set): it becomes SENDING with NEXT_AT CLAIM_MINUTES ahead, so another
+    worker reading the same due row cannot claim it too. A SENDING row whose claim ran out (its sender died) is due
+    again. True when this caller got it."""
+    return db.execute_count(f"""UPDATE OPS.NOTIFICATION SET STATUS = 'SENDING',
+                                       NEXT_AT = DATEADD(minute, {CLAIM_MINUTES}, CURRENT_TIMESTAMP())
+                                 WHERE NOTIFICATION_ID = %s AND STATUS IN ('PENDING', 'FAILED', 'SENDING')
+                                   AND NEXT_AT <= CURRENT_TIMESTAMP()""", (notification_id,)) == 1
+
+
 def run_outbox(db: Any, settings: Dict[str, Any], http: Optional[Http] = None,
                jira: Optional[Callable[[Any, Dict[str, Any]], Tuple[str, str]]] = None, now: Optional[datetime] = None,
-               limit: int = 50) -> Dict[str, int]:
+               limit: int = 50, keep_going: Optional[Callable[[], bool]] = None) -> Dict[str, int]:
     """Deliver due rows once. `jira(db, row)` handles CHANNEL JIRA rows and returns (status, detail): SENT or SKIPPED;
-    it raises to retry. Returns counts by outcome."""
+    it raises to retry. Each row is claimed before it is sent, so two workers never send it twice. `keep_going` (the
+    job lease by default) is asked before every row: when the lease is lost the run stops. Returns counts by outcome."""
+    from services.ops import lease
+
     now = now or datetime.now(timezone.utc)
+    keep_going = keep_going or lease.still_held
     rows = db.query(f"""SELECT NOTIFICATION_ID, INCIDENT_ID, TEAM_ID, CHANNEL, KIND, TARGET_SECRET, PAYLOAD, ATTEMPTS, DEDUPE_KEY
-                          FROM OPS.NOTIFICATION WHERE STATUS IN ('PENDING', 'FAILED') AND NEXT_AT <= CURRENT_TIMESTAMP()
+                          FROM OPS.NOTIFICATION WHERE STATUS IN ('PENDING', 'FAILED', 'SENDING') AND NEXT_AT <= CURRENT_TIMESTAMP()
                          ORDER BY CREATED_AT LIMIT {int(limit)}""")
-    counts = {"sent": 0, "failed": 0, "dead": 0, "suppressed": 0, "skipped": 0}
+    counts = {"sent": 0, "failed": 0, "dead": 0, "suppressed": 0, "skipped": 0, "busy": 0}
     teams_rows = [r for r in rows if str(r.get("channel")).upper() == "TEAMS"]
     team_ids = sorted({r["team_id"] for r in teams_rows if r.get("team_id")})
     sent_counts: Dict[str, int] = {}
@@ -312,6 +350,11 @@ def run_outbox(db: Any, settings: Dict[str, Any], http: Optional[Http] = None,
         counts["suppressed"] += 1
     ordered = to_send + [r for r in rows if str(r.get("channel")).upper() != "TEAMS"]
     for row in ordered:
+        if not keep_going():
+            break   # the job lease was lost: another worker owns the outbox now
+        if not claim(db, row["notification_id"]):
+            counts["busy"] += 1   # another worker is sending it
+            continue
         attempts = int(row.get("attempts") or 0) + 1
         try:
             if str(row.get("channel")).upper() == "TEAMS":

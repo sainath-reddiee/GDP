@@ -45,29 +45,60 @@ def release(db: Any, job: str, holder: str, cursor: Optional[str] = None) -> Non
                "CURSOR_VALUE = COALESCE(%s, CURSOR_VALUE) WHERE JOB_NAME = %s AND HOLDER = %s", (cursor, job, holder))
 
 
+class Lease:
+    """What `held` yields: true when this holder got the lease. `lost` is set when a renewal fails (another holder took
+    over, or the renewal could not be made); the job stops at its next check (still_held)."""
+
+    def __init__(self, got: bool):
+        self.got = bool(got)
+        self.lost = threading.Event()
+
+    def __bool__(self) -> bool:
+        return self.got
+
+    def held(self) -> bool:
+        return self.got and not self.lost.is_set()
+
+
+_current = threading.local()
+
+
+def still_held() -> bool:
+    """False when the lease of the job running in this thread was lost; True outside a lease."""
+    current: Optional[Lease] = getattr(_current, "lease", None)
+    return current is None or current.held()
+
+
 @contextmanager
-def held(db: Any, job: str, holder: str, seconds: int = LEASE_SECONDS, renew_every: float = RENEW_EVERY) -> Iterator[bool]:
+def held(db: Any, job: str, holder: str, seconds: int = LEASE_SECONDS, renew_every: float = RENEW_EVERY) -> Iterator[Lease]:
     """`with held(db, job, me) as got:` runs the body either way; `got` says whether this holder has the lease. While
-    it does, a timer renews the lease; the lease is released at the end."""
-    got = acquire(db, job, holder, seconds)
+    it does, a timer renews the lease; when a renewal fails (returns False or raises) the lease counts as lost and
+    still_held() turns False, so the body stops at its next check. The lease is released at the end."""
+    handle = Lease(acquire(db, job, holder, seconds))
     stop = threading.Event()
     timer: Optional[threading.Thread] = None
-    if got:
+    if handle:
         def keep() -> None:
             while not stop.wait(renew_every):
                 try:
-                    if not renew(db, job, holder, seconds):
-                        return
+                    ok = renew(db, job, holder, seconds)
                 except Exception:
-                    pass
+                    ok = False   # cannot prove we still hold it: stop rather than risk two holders
+                if not ok:
+                    handle.lost.set()
+                    return
 
         timer = threading.Thread(target=keep, name=f"lease:{job}", daemon=True)
         timer.start()
+    previous = getattr(_current, "lease", None)
+    if handle:
+        _current.lease = handle
     try:
-        yield got
+        yield handle
     finally:
+        _current.lease = previous
         stop.set()
-        if got:
+        if handle:
             try:
                 release(db, job, holder)
             except Exception:

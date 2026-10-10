@@ -148,6 +148,19 @@ def token_row(**changes):
     return {"refresh": "refresh-1", "access": None, "ttl": None, "version": 0, "lease": None, **changes}
 
 
+def _sealed(value, kind, user="ANA"):
+    """What JIRA.USER_TOKEN holds: the token sealed by the API (never Snowflake ENCRYPT with a bound key)."""
+    import app.jira_api as api
+
+    return api._seal_token(value, kind, user, CLOUD) if value is not None else None
+
+
+def _opened(value, kind, user="ANA"):
+    import app.jira_api as api
+
+    return api._open_token(value, kind, user, CLOUD)
+
+
 class JiraDb:
     """One replica's view of JIRA.USER_TOKEN. `row` may be shared between two JiraDb objects to play two replicas."""
 
@@ -165,15 +178,16 @@ class JiraDb:
             return [{"config_value": json.dumps(self.config)}] if self.config else []
         if "FROM JIRA.USER_TOKEN WHERE USER_NAME = %s ORDER BY" in sql:
             return self.token_rows
-        if "DECRYPT(REFRESH_TOKEN" in sql and "TOKEN_VERSION" in sql:
+        if "REFRESH_TOKEN AS T" in sql and "TOKEN_VERSION" in sql:
             if self.legacy:
                 raise RuntimeError("SQL compilation error: error line 2 at position 25 invalid identifier 'ACCESS_TOKEN'")
             r = self.row
             if r.get("gone"):
                 return []
-            return [{"t": r["refresh"], "a": r["access"], "ttl": r["ttl"], "v": r["version"], "leased": r["lease"] is not None}]
-        if "DECRYPT(REFRESH_TOKEN" in sql:
-            return [{"t": "refresh-1"}]
+            return [{"t": _sealed(r["refresh"], "refresh"), "a": _sealed(r["access"], "access"), "ttl": r["ttl"],
+                     "v": r["version"], "leased": r["lease"] is not None}]
+        if "REFRESH_TOKEN AS T" in sql:
+            return [{"t": _sealed("refresh-1", "refresh")}]
         if "FROM JIRA.OAUTH_STATE" in sql:
             return self.state_rows
         return []
@@ -192,10 +206,11 @@ class JiraDb:
                 r["lease"] = me
                 return 1
             return 0
-        if "ACCESS_TOKEN = ENCRYPT" in sql:   # store under our lease
+        if "SET REFRESH_TOKEN = COALESCE(%s" in sql:   # store under our lease
             if r["lease"] != params[-1]:
                 return 0
-            r.update(refresh=params[0] or r["refresh"], access=params[2], ttl=params[4], version=r["version"] + 1, lease=None)
+            r.update(refresh=_opened(params[0], "refresh") or r["refresh"], access=_opened(params[1], "access"), ttl=params[2],
+                     version=r["version"] + 1, lease=None)
             return 1
         if "DELETE FROM JIRA.USER_TOKEN" in sql:
             if r["version"] == params[2] and r["lease"] == params[3]:
@@ -264,7 +279,7 @@ def test_lease_winner_and_loser(monkeypatch):
     token, _ = api._shared_token(loser, api._config(loser), CLOUD)
     assert token == "acc-2" and shared["version"] == 4 and shared["lease"] is None and shared["refresh"] == "refresh-2"
     assert _refreshes(http) == 1   # one refresh for both: the rotated refresh token was never presented twice
-    assert not any("ACCESS_TOKEN = ENCRYPT" in s or "DELETE" in s for s, _ in loser.executed)
+    assert not any("REFRESH_TOKEN = COALESCE" in s or "DELETE" in s for s, _ in loser.executed)
 
 
 def test_loser_gives_up_with_503_when_no_new_version_arrives(monkeypatch):
@@ -311,7 +326,7 @@ def test_before_v028_the_old_refresh_still_works(monkeypatch):
     db = JiraDb(legacy=True)
     assert api._client(db)[0].token == "acc-1"
     stored = [p for s, p in db.executed if "MERGE INTO JIRA.USER_TOKEN" in s]
-    assert stored and stored[0][2] == "refresh-2"
+    assert stored and _opened(stored[0][2], "refresh") == "refresh-2"
 
 
 def test_missing_setup_and_foreign_state_are_refused(monkeypatch):

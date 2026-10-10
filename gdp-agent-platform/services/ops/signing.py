@@ -1,8 +1,10 @@
 """Signed push from the Airflow listener plugin (pure).
 
 Headers: X-GDP-Env, X-GDP-Timestamp (unix seconds), X-GDP-Event-Id, X-GDP-Signature = hex HMAC-SHA256 of
-f"{timestamp}.{raw body}" keyed with the environment's push secret. The plugin (airflow_plugins/gdp_listener) has its
-own copy of `sign` so it can ship without this package; tests keep the two identical.
+f"{timestamp}.{event id}.{raw body}" keyed with the environment's push secret. The event id is signed so a captured
+request cannot be replayed under a fresh event id inside the clock skew window. The plugin
+(airflow_plugins/gdp_listener) has its own copy of `sign` so it can ship without this package; tests keep the two
+identical.
 """
 
 from __future__ import annotations
@@ -20,8 +22,9 @@ EVENT_ID = re.compile(r"^[A-Za-z0-9._:\-]{8,128}$")
 ENV_ID = re.compile(r"^[a-z0-9][a-z0-9\-]{0,62}$")
 
 
-def sign(secret: str, timestamp: str, raw: bytes) -> str:
-    return hmac.new(secret.encode("utf-8"), str(timestamp).encode("ascii") + b"." + raw, hashlib.sha256).hexdigest()
+def sign(secret: str, timestamp: str, event_id: str, raw: bytes) -> str:
+    message = str(timestamp).encode("ascii") + b"." + str(event_id).encode("utf-8") + b"." + raw
+    return hmac.new(secret.encode("utf-8"), message, hashlib.sha256).hexdigest()
 
 
 def check_headers(env_id: Optional[str], timestamp: Optional[str], event_id: Optional[str], signature: Optional[str],
@@ -44,6 +47,6 @@ def check_headers(env_id: Optional[str], timestamp: Optional[str], event_id: Opt
     return True, ""
 
 
-def verify(secret: str, timestamp: str, raw: bytes, signature: str) -> bool:
+def verify(secret: str, timestamp: str, event_id: str, raw: bytes, signature: str) -> bool:
     """Constant-time comparison of the expected and the given signature."""
-    return hmac.compare_digest(sign(secret, timestamp, raw), (signature or "").lower())
+    return hmac.compare_digest(sign(secret, timestamp, event_id, raw), (signature or "").lower())

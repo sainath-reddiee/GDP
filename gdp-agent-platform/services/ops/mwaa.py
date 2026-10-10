@@ -208,14 +208,20 @@ class Mwaa:
     def dag_runs(self, dag_id: str = "~", updated_since: Optional[str] = None, limit: int = PAGE,
                  offset: int = 0) -> Tuple[List[Dict[str, Any]], int]:
         """Runs changed since `updated_since` (ISO time): updated_at_gte where Airflow supports it, else
-        start_date_gte (the caller widens the window and re-reads runs it still has as running)."""
+        start_date_gte (the caller widens the window and re-reads runs it still has as running). Ordered by that same
+        field, oldest first, so a caller that stops paging early can resume from the last row it read."""
         params: Dict[str, Any] = {"limit": int(limit), "offset": int(offset)}
+        field = self.run_order_field()
+        params["order_by"] = field
         if updated_since:
-            key = "updated_at_gte" if supports_updated_at(self.version()["version"]) else "start_date_gte"
-            params[key] = updated_since
+            params[f"{field}_gte"] = updated_since
         found = self.invoke("GET", f"/dags/{_seg(dag_id)}/dagRuns", params) or {}
         runs = list(found.get("dag_runs") or [])
         return runs, int(found.get("total_entries") or len(runs))
+
+    def run_order_field(self) -> str:
+        """updated_at where dagRuns can filter and sort on it (Airflow 2.6+, every v2), else start_date."""
+        return "updated_at" if supports_updated_at(self.version()["version"]) else "start_date"
 
     def dag_run(self, dag_id: str, run_id: str) -> Dict[str, Any]:
         return self.invoke("GET", f"/dags/{_seg(dag_id)}/dagRuns/{_seg(run_id)}") or {}

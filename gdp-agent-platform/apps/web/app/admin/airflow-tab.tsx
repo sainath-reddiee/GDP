@@ -118,6 +118,7 @@ function EnvRow({ env: e, may, canPoll, onEdit, onMsg }: {
             {e.push_enabled && <span className="rounded-full bg-sky-50 px-1.5 py-0.5 text-[10px] font-medium text-sky-700 ring-1 ring-inset ring-sky-100">
               push{e.has_push_secret ? "" : ", no secret yet"}</span>}
           </p>
+          {e.push_secret_detail && <p role="alert" className="text-xs text-amber-700 dark:text-amber-300">{e.push_secret_detail}</p>}
           <p className="text-xs text-muted-foreground">
             <span className="font-mono">{e.mwaa_env}</span> · {e.region} · every {e.poll_seconds} s · {e.dags} DAG{e.dags === 1 ? "" : "s"}
             {e.api_version && <> · API {e.api_version}</>} · last poll <When iso={e.last_poll_at} rel />

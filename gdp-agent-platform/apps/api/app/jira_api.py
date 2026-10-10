@@ -3,7 +3,9 @@ write is made as them and Jira's own permissions apply.
 
 Setup on the API host (never in the database or the browser):
   JIRA_CLIENT_SECRET  the OAuth app's secret
-  JIRA_TOKEN_KEY      a long random value; refresh and access tokens are stored ENCRYPTed with it
+  JIRA_TOKEN_KEY      a long random value; refresh and access tokens are sealed in the API with a key derived from it
+                      (services.common.secretbox, AES-GCM) and stored as ciphertext; neither the key nor a token is
+                      ever part of a SQL statement
   JIRA_CLIENT_ID      optional; can also be set in Admin, Integrations, Jira
 Refresh tokens rotate on every use and the new one replaces the stored one. Several API replicas share one
 USER_TOKEN row, so a refresh is guarded by a lease on that row (compare-and-swap on TOKEN_VERSION): one replica
@@ -32,6 +34,7 @@ from pydantic import BaseModel, Field
 
 from app.db import Db
 from app.main import _json, _set_config, _snowflake_error, _source_call, current_db
+from services.common import secretbox
 from services.jira import adf
 from services.jira.client import (
     AGILE_SCOPES, JiraClient, JiraError, accessible_resources, authorize_url, check_key, check_project, detail, exchange_code,
@@ -81,8 +84,22 @@ def _secret() -> str:
 
 
 def _token_key() -> str:
-    key = (os.environ.get("JIRA_TOKEN_KEY") or "").strip()
-    return key if len(key) >= 16 else ""
+    return secretbox.jira_key()
+
+
+RECONNECT_FORMAT = ("Your Jira connection was stored in an older format (or with another key) and cannot be read; "
+                    "connect Jira again.")
+
+
+def _seal_token(token: str, kind: str, user: str, cloud_id: str) -> bytes:
+    """A refresh or access token sealed for JIRA.USER_TOKEN, bound to its row (kind, user, site)."""
+    return secretbox.seal(token, _token_key(), secretbox.JIRA_TOKEN, f"{kind}:{user}:{cloud_id}")
+
+
+def _open_token(value: Any, kind: str, user: str, cloud_id: str) -> Optional[str]:
+    """The token, None for NULL. secretbox.LegacySecret for a value stored by Snowflake ENCRYPT() before tokens were
+    sealed here, secretbox.SecretError for another key or a changed value: either way the user connects again."""
+    return secretbox.open_secret(value, _token_key(), secretbox.JIRA_TOKEN, f"{kind}:{user}:{cloud_id}")
 
 
 def _missing(cfg: dict) -> list[str]:
@@ -144,10 +161,11 @@ def _missing_column(exc: BaseException) -> bool:
 def _store_access(db: Db, user: str, cloud_id: str, access_token: str, expires_in: int) -> None:
     """Share a fresh access token with the other replicas and start a new token version (after a sign-in)."""
     try:
-        db.execute("""UPDATE JIRA.USER_TOKEN SET ACCESS_TOKEN = ENCRYPT(%s, %s),
+        db.execute("""UPDATE JIRA.USER_TOKEN SET ACCESS_TOKEN = %s,
                              ACCESS_EXPIRES_AT = DATEADD(second, %s, CURRENT_TIMESTAMP()),
                              TOKEN_VERSION = COALESCE(TOKEN_VERSION, 0) + 1, LEASE_BY = NULL, LEASE_UNTIL = NULL
-                       WHERE USER_NAME = %s AND CLOUD_ID = %s""", (access_token, _token_key(), int(expires_in), user, cloud_id))
+                       WHERE USER_NAME = %s AND CLOUD_ID = %s""",
+                   (_seal_token(access_token, "access", user, cloud_id), int(expires_in), user, cloud_id))
     except Exception as exc:
         if not _missing_column(exc):
             raise
@@ -155,17 +173,17 @@ def _store_access(db: Db, user: str, cloud_id: str, access_token: str, expires_i
 
 def _store_refresh(db: Db, user: str, cloud_id: str, refresh_token: str, access_token: str = "", expires_in: int = 3600,
                    **fields: Any) -> None:
-    key = _token_key()
+    sealed = _seal_token(refresh_token, "refresh", user, cloud_id)
     db.execute("""MERGE INTO JIRA.USER_TOKEN T USING (SELECT %s AS USER_NAME, %s AS CLOUD_ID) S
                     ON T.USER_NAME = S.USER_NAME AND T.CLOUD_ID = S.CLOUD_ID
-                  WHEN MATCHED THEN UPDATE SET REFRESH_TOKEN = ENCRYPT(%s, %s), UPDATED_AT = CURRENT_TIMESTAMP(),
+                  WHEN MATCHED THEN UPDATE SET REFRESH_TOKEN = %s, UPDATED_AT = CURRENT_TIMESTAMP(),
                        SITE_URL = COALESCE(NULLIF(%s, ''), T.SITE_URL), ACCOUNT_ID = COALESCE(NULLIF(%s, ''), T.ACCOUNT_ID),
                        DISPLAY_NAME = COALESCE(NULLIF(%s, ''), T.DISPLAY_NAME), SCOPES = COALESCE(PARSE_JSON(NULLIF(%s, '')), T.SCOPES)
                   WHEN NOT MATCHED THEN INSERT (USER_NAME, CLOUD_ID, SITE_URL, ACCOUNT_ID, DISPLAY_NAME, REFRESH_TOKEN, SCOPES)
-                       VALUES (S.USER_NAME, S.CLOUD_ID, NULLIF(%s, ''), NULLIF(%s, ''), NULLIF(%s, ''), ENCRYPT(%s, %s), PARSE_JSON(NULLIF(%s, '')))""",
-               (user, cloud_id, refresh_token, key, fields.get("site_url", ""), fields.get("account_id", ""), fields.get("display_name", ""),
+                       VALUES (S.USER_NAME, S.CLOUD_ID, NULLIF(%s, ''), NULLIF(%s, ''), NULLIF(%s, ''), %s, PARSE_JSON(NULLIF(%s, '')))""",
+               (user, cloud_id, sealed, fields.get("site_url", ""), fields.get("account_id", ""), fields.get("display_name", ""),
                 fields.get("scopes", ""), fields.get("site_url", ""), fields.get("account_id", ""), fields.get("display_name", ""),
-                refresh_token, key, fields.get("scopes", "")))
+                sealed, fields.get("scopes", "")))
     if access_token:
         _store_access(db, user, cloud_id, access_token, expires_in)
 
@@ -202,17 +220,29 @@ def _client(db: Db) -> tuple[JiraClient, dict, dict]:
 
 
 REVOKED = "Your Jira sign-in has expired or was revoked; connect again."
-_ROW_SQL = """SELECT TO_VARCHAR(DECRYPT(REFRESH_TOKEN, %s), 'UTF-8') AS T,
-                     IFF(ACCESS_TOKEN IS NULL, NULL, TO_VARCHAR(DECRYPT(ACCESS_TOKEN, %s), 'UTF-8')) AS A,
+_ROW_SQL = """SELECT REFRESH_TOKEN AS T, ACCESS_TOKEN AS A,
                      DATEDIFF(second, CURRENT_TIMESTAMP(), ACCESS_EXPIRES_AT) AS TTL, COALESCE(TOKEN_VERSION, 0) AS V,
                      (LEASE_UNTIL IS NOT NULL AND LEASE_UNTIL >= CURRENT_TIMESTAMP()) AS LEASED
                 FROM JIRA.USER_TOKEN WHERE USER_NAME = %s AND CLOUD_ID = %s"""
 
 
 def _token_row(db: Db, cloud_id: str) -> Optional[dict]:
-    key = _token_key()
-    rows = db.query(_ROW_SQL, (key, key, db.user, cloud_id))
-    return rows[0] if rows else None
+    """The user's token row with both tokens opened. A refresh token that cannot be opened (stored by the old
+    Snowflake ENCRYPT(), or with another key) means the user must connect again (428); an access token that cannot be
+    opened is only refreshed."""
+    rows = db.query(_ROW_SQL, (db.user, cloud_id))
+    if not rows:
+        return None
+    row = dict(rows[0])
+    try:
+        row["t"] = _open_token(row.get("t"), "refresh", db.user, cloud_id)
+    except secretbox.SecretError:
+        raise HTTPException(NOT_CONNECTED, RECONNECT_FORMAT) from None
+    try:
+        row["a"] = _open_token(row.get("a"), "access", db.user, cloud_id)
+    except secretbox.SecretError:
+        row["a"] = None
+    return row
 
 
 def _usable(row: Optional[dict]) -> Optional[tuple[str, float]]:
@@ -279,13 +309,14 @@ def _refresh_with_lease(db: Db, cfg: dict, cloud_id: str, version: int, me: str)
         _release(db, cloud_id, me)
         raise
     expires_in = int(tokens.get("expires_in") or 3600)
-    key = _token_key()
-    stored = db.execute_count("""UPDATE JIRA.USER_TOKEN SET REFRESH_TOKEN = COALESCE(ENCRYPT(NULLIF(%s, ''), %s), REFRESH_TOKEN),
-                                        ACCESS_TOKEN = ENCRYPT(%s, %s), ACCESS_EXPIRES_AT = DATEADD(second, %s, CURRENT_TIMESTAMP()),
+    rotated = tokens.get("refresh_token") or ""
+    stored = db.execute_count("""UPDATE JIRA.USER_TOKEN SET REFRESH_TOKEN = COALESCE(%s, REFRESH_TOKEN),
+                                        ACCESS_TOKEN = %s, ACCESS_EXPIRES_AT = DATEADD(second, %s, CURRENT_TIMESTAMP()),
                                         TOKEN_VERSION = COALESCE(TOKEN_VERSION, 0) + 1, LEASE_BY = NULL, LEASE_UNTIL = NULL,
                                         UPDATED_AT = CURRENT_TIMESTAMP()
                                   WHERE USER_NAME = %s AND CLOUD_ID = %s AND LEASE_BY = %s""",
-                              (tokens.get("refresh_token") or "", key, tokens["access_token"], key, expires_in, db.user, cloud_id, me))
+                              (_seal_token(rotated, "refresh", db.user, cloud_id) if rotated else None,
+                               _seal_token(tokens["access_token"], "access", db.user, cloud_id), expires_in, db.user, cloud_id, me))
     if not stored:
         _log(db, "-", "TOKEN", "FAILED", cloud_id=cloud_id, error="the token lease ran out before the refreshed token was stored")
     return tokens["access_token"], time.time() + expires_in
@@ -311,12 +342,16 @@ def _wait_for_refresh(db: Db, cloud_id: str, version: int) -> tuple[str, float]:
 
 def _refresh_legacy(db: Db, cfg: dict, cloud_id: str) -> tuple[str, float]:
     """Before V028: refresh under the in-process lock only."""
-    found = db.query("""SELECT TO_VARCHAR(DECRYPT(REFRESH_TOKEN, %s), 'UTF-8') AS T FROM JIRA.USER_TOKEN
-                         WHERE USER_NAME = %s AND CLOUD_ID = %s""", (_token_key(), db.user, cloud_id))
-    if not found or not found[0].get("t"):
+    found = db.query("SELECT REFRESH_TOKEN AS T FROM JIRA.USER_TOKEN WHERE USER_NAME = %s AND CLOUD_ID = %s",
+                     (db.user, cloud_id))
+    try:
+        refresh = _open_token(found[0].get("t"), "refresh", db.user, cloud_id) if found else None
+    except secretbox.SecretError:
+        raise HTTPException(NOT_CONNECTED, RECONNECT_FORMAT) from None
+    if not refresh:
         raise HTTPException(NOT_CONNECTED, "Your Jira connection could not be read; connect again.")
     try:
-        tokens = refresh_tokens(_http, cfg["client_id"], _secret(), found[0]["t"])
+        tokens = refresh_tokens(_http, cfg["client_id"], _secret(), refresh)
     except JiraError as exc:
         if exc.status in (400, 401, 403):
             db.execute("DELETE FROM JIRA.USER_TOKEN WHERE USER_NAME = %s AND CLOUD_ID = %s", (db.user, cloud_id))
@@ -773,6 +808,12 @@ class TransitionIn(BaseModel):
     run_id: Optional[str] = Field(default=None, max_length=36)
 
 
+def _set_link_status(db: Db, key: str, status: Optional[str], category: Optional[str]) -> None:
+    """Keep the stored status and its category together on every link of the issue (create_bug reads the category)."""
+    db.execute("""UPDATE JIRA.ISSUE_LINK SET STATUS = %s, STATUS_CATEGORY = COALESCE(NULLIF(%s, ''), STATUS_CATEGORY)
+                   WHERE ISSUE_KEY = %s AND NOT IS_DELETED""", (status or "", category or "", key))
+
+
 @router.post("/api/jira/issues/{key}/transition")
 def transition(key: str, body: TransitionIn, db: Db = Depends(current_db)):
     """Move the issue to another status (one Jira allows for this user)."""
@@ -787,7 +828,7 @@ def transition(key: str, body: TransitionIn, db: Db = Depends(current_db)):
         _log(db, key, "TRANSITION", "FAILED", conn["cloud_id"], body.run_id, error=exc.message)
         raise _jira_error(exc) from None
     to = allowed[body.transition_id].get("to")
-    db.execute("UPDATE JIRA.ISSUE_LINK SET STATUS = %s WHERE ISSUE_KEY = %s AND NOT IS_DELETED", (to or "", key))
+    _set_link_status(db, key, to, allowed[body.transition_id].get("category"))
     _log(db, key, "TRANSITION", "DONE", conn["cloud_id"], body.run_id, {"to": to, "transition": allowed[body.transition_id].get("name")})
     return {"status": to}
 
@@ -1002,13 +1043,23 @@ def create_bug(body: BugIn, db: Db = Depends(current_db)):
     test_id, table_id = body.test_id, body.target_table_id
     answer = lambda key, created: {"key": key, "url": _browse(conn, key), "created": created, "existing": not created}  # noqa: E731
 
-    # 1. an open bug already linked to this test and table
+    # 1. an open bug already linked to this test and table. The stored status category is only a hint (it is set when
+    # the link is made and may be stale or empty): the bug's live status in Jira decides, and a closed one is skipped
     linked = db.query("""SELECT ISSUE_KEY FROM JIRA.ISSUE_LINK
                           WHERE ORIGIN = 'BUG' AND QA_TEST_ID = %s AND TARGET_TABLE_ID = %s AND NOT IS_DELETED
                             AND LOWER(COALESCE(STATUS_CATEGORY, '')) <> 'done' AND COALESCE(ISSUE_STATE, 'OK') <> 'DELETED'
-                          ORDER BY LINKED_AT DESC LIMIT 1""", (test_id, table_id))
-    if linked:
-        return answer(linked[0]["issue_key"], False)
+                          ORDER BY LINKED_AT DESC LIMIT 5""", (test_id, table_id))
+    for key in dict.fromkeys(r["issue_key"] for r in linked):
+        try:
+            live = summary(client.issue(key))
+        except JiraError as exc:
+            if exc.status == 404:   # deleted in Jira, or no longer visible to this user
+                db.execute("UPDATE JIRA.ISSUE_LINK SET ISSUE_STATE = 'DELETED' WHERE ISSUE_KEY = %s AND NOT IS_DELETED", (key,))
+                continue
+            raise _jira_error(exc) from None
+        _set_link_status(db, key, live.get("status"), live.get("status_category"))
+        if str(live.get("status_category") or "").lower() != "done":
+            return answer(key, False)
     # 2. a repeated request (same idempotency key) gets the first answer
     earlier = db.query("""SELECT ISSUE_KEY, DETAIL FROM JIRA.ACTION_LOG WHERE IDEMPOTENCY_KEY = %s AND ACTION = 'BUG' AND STATUS = 'DONE'
                            ORDER BY ACTED_AT DESC LIMIT 1""", (body.idempotency_key,))
@@ -1144,7 +1195,7 @@ def bulk(body: BulkIn, db: Db = Depends(current_db)):
                     results.append({"key": key, "ok": False, "error": f"'{body.transition_name}' is not available for this issue"})
                     continue
                 client.transition(key, pick["id"])
-                db.execute("UPDATE JIRA.ISSUE_LINK SET STATUS = %s WHERE ISSUE_KEY = %s AND NOT IS_DELETED", (pick.get("to") or "", key))
+                _set_link_status(db, key, pick.get("to"), pick.get("category"))
                 _log(db, key, "TRANSITION", "DONE", conn["cloud_id"], None, {"to": pick.get("to"), "transition": pick.get("name"), "bulk": True})
             else:
                 issue = summary(client.issue(key), conn.get("site_url") or "")

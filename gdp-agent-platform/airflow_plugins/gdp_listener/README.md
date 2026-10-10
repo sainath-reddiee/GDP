@@ -81,7 +81,11 @@ interval to a few seconds.
 | `X-GDP-Env`       | environment id                                                     |
 | `X-GDP-Timestamp` | unix seconds; requests more than 5 minutes off are rejected        |
 | `X-GDP-Event-Id`  | a random id; a repeated id is rejected as a replay                 |
-| `X-GDP-Signature` | hex HMAC-SHA256 of `"<timestamp>.<raw body>"` keyed with the secret |
+| `X-GDP-Signature` | hex HMAC-SHA256 of `"<timestamp>.<event id>.<raw body>"` keyed with the secret |
+
+The event id is part of the signed message, so a captured request cannot be replayed under a new id. Plugins built
+before this change sign `"<timestamp>.<raw body>"` and are rejected (401): upgrade the plugin and the platform together.
 
 Bodies are at most 64 KB. A failed task's error text is cut to its last 2000 characters; the platform redacts secrets
-and personal data before storing it.
+and personal data before storing it. A failed try that Airflow will retry is reported with its real state
+(`up_for_retry`), not as `failed`.

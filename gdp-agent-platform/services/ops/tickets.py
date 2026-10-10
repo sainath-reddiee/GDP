@@ -10,7 +10,11 @@ component and assignee), else the Jira default project. Dedupe, in order:
      a claim nobody finished is taken over after CLAIM_MINUTES.
 Recurrences add at most one comment an hour. A resolve comments and, when the setting transition_on_resolve is on,
 moves the ticket to done_status. Without a bot the incident gets JIRA_STATE NOT_RAISED and a timeline event saying so.
-The worker's jira_sync job marks incidents MITIGATED when their ticket is Done in Jira.
+The worker's jira_sync job marks incidents MITIGATED when their ticket went Done in Jira after they were (re)opened.
+A reopened incident (it failed again after Jira Done, or someone reopened it) has JIRA_STATE REOPENED until the reopen
+action moved its ticket out of Done (or commented when the workflow has no way back), so an old Done never mitigates it
+again. A create that finds the incident resolved, muted or grouped raises nothing (JIRA_STATE SKIPPED); one that races a
+resolve closes the new ticket at once.
 """
 
 from __future__ import annotations
@@ -20,7 +24,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from services.jira.client import JiraClient, JiraError, check_project, jql_string
-from services.ops.incidents import SYSTEM, _dt
+from services.ops.incidents import REOPENED, SYSTEM, _dt
 from services.ops.notify import airflow_link, links
 from services.ops.redact import redact
 
@@ -144,6 +148,12 @@ def raise_ticket(store: Any, incident_id: str, client: Optional[JiraClient], set
         return {"state": "NOT_RAISED", "key": None, "detail": "the incident no longer exists"}
     if incident.get("jira_key"):
         return {"state": "exists", "key": incident["jira_key"], "detail": "the incident already has a ticket"}
+    reason = skip_reason(incident)
+    if reason:
+        # resolved, muted or grouped before the create was sent: no ticket (a reopen or an ended mute queues a new create)
+        store.update(incident_id, {"jira_state": "SKIPPED"})
+        store.event(incident_id, "ticket_skipped", actor, {"reason": reason})
+        return {"state": "SKIPPED", "key": None, "detail": reason}
     if client is None:
         store.update(incident_id, {"jira_state": "NOT_RAISED"})
         store.event(incident_id, "ticket_not_raised", actor, {"reason": NO_BOT})
@@ -191,7 +201,30 @@ def raise_ticket(store: Any, incident_id: str, client: Optional[JiraClient], set
         raise
     store.update(incident_id, {"jira_key": key, "jira_state": "OPEN"})
     store.bind(claim, incident_id, "ticket_raised", actor, {"key": key, "project": project})
-    return {"state": "raised", "key": key, "detail": f"raised {key} in {project}"}
+    detail = f"raised {key} in {project}"
+    # the incident may have been resolved while the ticket was being created: its resolve action found no ticket, so
+    # close the new one now instead of leaving an orphan open in Jira
+    current = store.get(incident_id) or {}
+    if str(current.get("status") or "").upper() == "RESOLVED":
+        try:
+            _, closed = resolved(store, {**current, "jira_key": key}, client, settings)
+            detail += f"; the incident was resolved meanwhile: {closed}"
+        except JiraError as exc:
+            store.event(incident_id, "ticket_failed", actor, {"error": redact(exc.message)[:500], "status": exc.status,
+                                                            "step": "close after resolve"})
+    return {"state": "raised", "key": key, "detail": detail}
+
+
+def skip_reason(incident: Dict[str, Any]) -> Optional[str]:
+    """Why no ticket is raised for the incident as it is now, or None."""
+    status = str(incident.get("status") or "").upper()
+    if status == "RESOLVED":
+        return "ticket not raised: the incident was resolved before the ticket was sent"
+    if status == "MUTED":
+        return "ticket not raised: the incident is muted"
+    if incident.get("parent_incident_id"):
+        return "ticket not raised: the incident is grouped under an upstream incident"
+    return None
 
 
 # ---------------------------------------------------------------- updates
@@ -257,7 +290,7 @@ def handle(store: Any, row: Dict[str, Any], client: Optional[JiraClient], settin
         result = raise_ticket(store, incident["incident_id"], client, settings)
         if result["state"] == "in_progress":
             raise RuntimeError(result["detail"])
-        return ("SKIPPED" if result["state"] == "NOT_RAISED" else "SENT"), result["detail"]
+        return ("SKIPPED" if result["state"] in ("NOT_RAISED", "SKIPPED") else "SENT"), result["detail"]
     if client is None:
         return "SKIPPED", NO_BOT
     if kind == "recur":
@@ -276,29 +309,80 @@ def handle(store: Any, row: Dict[str, Any], client: Optional[JiraClient], settin
         store.event(incident["incident_id"], "jira_commented", SYSTEM, {"key": incident["jira_key"], "ai": True})
         return "SENT", f"commented the AI diagnosis on {incident['jira_key']}"
     if kind == "reopen":
-        if not incident.get("jira_key"):
-            return "SKIPPED", "no ticket"
-        client.add_comment(incident["jira_key"], _comment("Reopened in the data platform: the failure is back."))
-        store.event(incident["incident_id"], "jira_commented", SYSTEM, {"key": incident["jira_key"], "reopened": True})
-        return "SENT", f"commented on {incident['jira_key']}"
+        return reopened(store, incident, client)
     return "SKIPPED", f"unknown Jira action {kind}"
 
 
+REOPEN_NAMES = ("reopen", "reopened", "re-open", "to do", "open", "in progress")
+
+
+def _open_transition(client: JiraClient, key: str) -> Optional[Dict[str, Any]]:
+    """A transition out of Done: one named like a reopen, else any into a To Do ('new') or In Progress
+    ('indeterminate') status; None when the workflow offers none."""
+    options = [t for t in client.transitions(key) if t.get("category") != "done"]
+    for name in REOPEN_NAMES:
+        for t in options:
+            if str(t.get("name") or "").lower() == name or str(t.get("to") or "").lower() == name:
+                return t
+    for category in ("new", "indeterminate"):
+        for t in options:
+            if t.get("category") == category:
+                return t
+    return None
+
+
+def reopened(store: Any, incident: Dict[str, Any], client: JiraClient) -> Tuple[str, str]:
+    """The failure is back: move the ticket out of Done when the workflow allows it, and comment either way. Then
+    JIRA_STATE leaves REOPENED, so jira_sync may mitigate the incident again, but only for a Done that happens after
+    this reopen (sync_done compares the status change time with OPENED_AT)."""
+    key = incident.get("jira_key")
+    if not key:
+        return "SKIPPED", "no ticket"
+    client.add_comment(key, _comment("Reopened in the data platform: the failure is back."))
+    detail = f"commented on {key}"
+    status = ((client.issue(key) or {}).get("fields") or {}).get("status") or {}
+    is_done = (status.get("statusCategory") or {}).get("key") == "done"
+    target = _open_transition(client, key) if is_done else None
+    if not is_done:
+        detail += " (it is not Done in Jira, so its status is kept)"
+    elif target:
+        client.transition(key, str(target["id"]))
+        detail += f" and moved it to {target.get('to') or target.get('name')}"
+    else:
+        detail += "; no transition out of Done is available, the ticket stays as it is"
+    if str(incident.get("status") or "").upper() in ("OPEN", "ACK"):
+        store.update(incident["incident_id"], {"jira_state": "OPEN"})
+    store.event(incident["incident_id"], "jira_commented", SYSTEM, {"key": key, "reopened": True, "detail": detail})
+    return "SENT", detail
+
+
+def done_after_open(issue: Dict[str, Any], incident: Dict[str, Any]) -> bool:
+    """True when the ticket went Done after the incident was (re)opened. A ticket still Done from before a reopen
+    (its workflow had no way back, or the reopen action has not run yet) must not mitigate the incident again. Without
+    a change time from Jira, the Done counts."""
+    fields = issue.get("fields") or {}
+    changed = _dt(fields.get("statuscategorychangedate") or fields.get("updated"))
+    opened = _dt(incident.get("opened_at"))
+    return changed is None or opened is None or changed > opened
+
+
 def sync_done(store: Any, client: Optional[JiraClient]) -> int:
-    """Incidents whose ticket is Done in Jira become MITIGATED. Returns how many changed."""
+    """Incidents whose ticket went Done in Jira after they were (re)opened become MITIGATED; one whose Jira reopen is
+    still queued (JIRA_STATE REOPENED) is left alone. Returns how many changed."""
     if client is None:
         return 0
     changed = 0
-    rows = store.ticketed_open()
+    rows = [r for r in store.ticketed_open() if str(r.get("jira_state") or "").upper() != REOPENED]
     for i in range(0, len(rows), 50):
         chunk = rows[i:i + 50]
         by_key = {r["jira_key"]: r for r in chunk if r.get("jira_key")}
         if not by_key:
             continue
         keys = ", ".join(jql_string(k) for k in by_key)
-        for issue in client.search(f"key in ({keys}) AND statusCategory = Done", fields=["status"], page_size=50, max_pages=1):
+        for issue in client.search(f"key in ({keys}) AND statusCategory = Done",
+                                   fields=["status", "statuscategorychangedate", "updated"], page_size=50, max_pages=1):
             incident = by_key.get(issue.get("key"))
-            if not incident:
+            if not incident or not done_after_open(issue, incident):
                 continue
             if store.update(incident["incident_id"], {"status": "MITIGATED", "jira_state": "DONE"},
                             only_status=("OPEN", "ACK")) >= 1:

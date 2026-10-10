@@ -51,15 +51,27 @@ def config() -> Optional[Dict[str, str]]:
     return {"url": url.strip(), "env_id": env_id.strip(), "secret": secret.strip()}
 
 
-def sign(secret: str, timestamp: str, raw: bytes) -> str:
-    """Hex HMAC-SHA256 of f"{timestamp}.{raw body}"; identical to services.ops.signing.sign on the platform side."""
-    return hmac.new(secret.encode("utf-8"), str(timestamp).encode("ascii") + b"." + raw, hashlib.sha256).hexdigest()
+def sign(secret: str, timestamp: str, event_id: str, raw: bytes) -> str:
+    """Hex HMAC-SHA256 of f"{timestamp}.{event id}.{raw body}"; identical to services.ops.signing.sign on the platform
+    side."""
+    message = str(timestamp).encode("ascii") + b"." + str(event_id).encode("utf-8") + b"." + raw
+    return hmac.new(secret.encode("utf-8"), message, hashlib.sha256).hexdigest()
 
 
 def headers(env_id: str, secret: str, raw: bytes, now: Optional[float] = None, event_id: Optional[str] = None) -> Dict[str, str]:
     stamp = str(int(time.time() if now is None else now))
+    event = event_id or uuid.uuid4().hex
     return {"Content-Type": "application/json", "X-GDP-Env": env_id, "X-GDP-Timestamp": stamp,
-            "X-GDP-Event-Id": event_id or uuid.uuid4().hex, "X-GDP-Signature": sign(secret, stamp, raw)}
+            "X-GDP-Event-Id": event, "X-GDP-Signature": sign(secret, stamp, event, raw)}
+
+
+def failed_state(task_instance: Any) -> str:
+    """The state to report from on_task_instance_failed: the task instance's own state (up_for_retry while retries
+    remain, failed at the last try), 'failed' only when it has none."""
+    try:
+        return _state(getattr(task_instance, "state", None)) or "failed"
+    except Exception:
+        return "failed"
 
 
 def iso(value: Any) -> Optional[str]:
