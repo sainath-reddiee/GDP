@@ -18,6 +18,8 @@ import re
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 MAX_FILE_BYTES = 400_000
+# bump when chunks or edges change shape: the next refresh of every repository re-parses all its files once
+PARSER_VERSION = 2
 MAX_CHUNK_LINES = 160
 TEXT_SUFFIXES = (".sql", ".yml", ".yaml", ".md", ".py", ".txt", ".toml", ".jinja", ".j2")
 
