@@ -86,3 +86,20 @@ export type GithubCheck = {
   status: string; detail?: string; repository?: string; default_branch?: string; push?: boolean | null;
   private?: boolean; html_url?: string;
 };
+
+/** A repository configured in Admin, Integrations, as the run's dbt workspace sees it. */
+export type DbtRunRepo = {
+  repo_id: string; name: string; git_url: string; provider: string; branch: string; git_repository: string;
+  api_integration?: string | null; status: string; dbt_project_dir: string; open_pr: boolean; draft_pr: boolean;
+  project_roots: { name: string; root: string }[]; dbt_projects: string[];
+};
+
+/** What the run takes from Admin: its repository (or the choices), the default new branch, publishing readiness. */
+export type DbtSetup = {
+  repository: DbtRunRepo | null;
+  candidates: DbtRunRepo[];
+  legacy: boolean;
+  legacy_setup: { git_repository?: string | null; origin?: string | null; base_branch?: string | null } | null;
+  default_cut_branch: string;
+  publishing: { ready: boolean };
+};

@@ -75,7 +75,8 @@ def _plan(session, run_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
     stored = rows(session, "SELECT CONTENT_JSON FROM KNOWLEDGE.DOMAIN_KNOWLEDGE WHERE IS_CURRENT AND SOURCE_REFERENCE = ?",
                   [f"dbt.branch.{run_id}"])
     plan = dict(variant(stored[0]["CONTENT_JSON"]) or {}) if stored else {}
-    for key in ("origin", "base_branch", "cut_branch", "git_repository", "title", "draft", "create_project"):
+    # where to push is decided at generation (the configured repository); a publish call may not redirect it
+    for key in ("base_branch", "cut_branch", "title", "draft", "create_project"):
         if payload.get(key) not in (None, ""):
             plan[key] = payload[key]
     return plan
@@ -94,12 +95,16 @@ def _record(session, run_id: str, generation_id: Optional[str], plan: Dict[str, 
                   clip(result.get("detail") or (result.get("dbt_project") or {}).get("detail"), 4000)]])
 
 
-def project_from_branch(session, repo_fqn: str, branch: str, project_fqn: str, comment: str) -> Dict[str, Any]:
+def project_from_branch(session, repo_fqn: str, branch: str, project_fqn: str, comment: str,
+                        project_dir: str = "") -> Dict[str, Any]:
     """FETCH the pushed branch into the Snowflake clone and point a compile-only DBT PROJECT at it."""
+    from services.dbt.workspace import branch_segment
+
     repo, name = safe_fqn(repo_fqn), safe_fqn(project_fqn)
     head = github.check_branch(branch)
+    folder = github.clean_root(project_dir)
     session.sql(f"ALTER GIT REPOSITORY {repo} FETCH").collect()
-    source = f"@{repo}/branches/{head}"
+    source = f"@{repo}/branches/{branch_segment(head)}" + (f"/{folder}" if folder else "")
     session.sql(
         f"CREATE OR REPLACE DBT PROJECT {name} FROM '{source}' "
         f"AUTO_COMPILE = FALSE DEFAULT_WRITEBACK = FALSE COMMENT = '{comment.replace(chr(39), '')[:200]}'"
@@ -138,6 +143,7 @@ def publish_dbt_pr(session, run_id: str, payload_json: str = "{}") -> Dict[str, 
                 body=github.pr_body(name, run_id, sorted(files), gen[0]["STTM_ID"]),
                 message=fill(conv["commit_message"], name=name, version=version),
                 draft=bool(plan.get("draft")),
+                root=plan.get("project_dir") or "",
             )
             if plan.get("git_repository") and plan.get("create_project", True) and result["status"] != "FAILED":
                 project = plan.get("dbt_project") or (
@@ -146,7 +152,8 @@ def publish_dbt_pr(session, run_id: str, payload_json: str = "{}") -> Dict[str, 
                 try:
                     result["dbt_project"] = project_from_branch(
                         session, plan["git_repository"], plan["cut_branch"], project,
-                        f"Agentic pipeline run {run_id} branch {plan['cut_branch']} compile-only")
+                        f"Agentic pipeline run {run_id} branch {plan['cut_branch']} compile-only",
+                        plan.get("project_dir") or "")
                 except Exception as exc:
                     result["dbt_project"] = {"status": "SKIPPED", "detail": clip(exc, 400)}
             call.summary = f"{result['status']} {result.get('repository')} {plan.get('cut_branch')}: " \

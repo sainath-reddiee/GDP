@@ -8,7 +8,7 @@ import shutil
 import tempfile
 import uuid
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from services.common.audit import tool_call
 from services.common.standard import GDP, conventions, conventions_for, default_prefix, run_standard
@@ -67,9 +67,14 @@ POST_STTM = (
 )
 
 
+def branch_slug(run_name: str, run_id: str) -> str:
+    return "".join(c.lower() if c.isalnum() else "-" for c in (run_name or run_id)[:40]).strip("-") or "run"
+
+
 def merge_branch_plan(payload: Dict[str, Any], prior: Dict[str, Any], run_name: str, run_id: str,
-                      standard: str = GDP) -> Dict[str, Any]:
-    """Merge the request body over the last stored plan. Empty/null fields do not wipe prior values."""
+                      standard: str = GDP, branch_prefix: Optional[str] = None) -> Dict[str, Any]:
+    """Merge the request body over the last stored plan. Empty/null fields do not wipe prior values.
+    `branch_prefix` is the organisation's prefix for the standard (PLATFORM_CONFIG), else the preset's."""
     def pick(*keys: str, default: str = "") -> str:
         for src in (payload, prior):
             for key in keys:
@@ -84,11 +89,14 @@ def merge_branch_plan(payload: Dict[str, Any], prior: Dict[str, Any], run_name: 
                 return bool(src[key])
         return default
 
-    slug = "".join(c.lower() if c.isalnum() else "-" for c in (run_name or run_id)[:40]).strip("-") or "run"
+    slug = branch_slug(run_name, run_id)
     origin = pick("origin", "repo")
+    prefix = conventions(standard)["branch_prefix"] if branch_prefix is None else branch_prefix
     return {
         "base_branch": pick("base_branch", default="main") or "main",
-        "cut_branch": pick("cut_branch", default=f"{conventions(standard)['branch_prefix']}{slug}"),
+        "cut_branch": pick("cut_branch", default=f"{prefix}{slug}"),
+        "code_repo_id": pick("code_repo_id"),
+        "project_dir": pick("project_dir"),
         "repo": pick("repo", "origin"),
         "origin": origin,
         "git_repository": pick("git_repository"),
@@ -111,8 +119,9 @@ def _stored_plan(session, run_id: str) -> Dict[str, Any]:
 
 def _branch_plan(session, run_id: str, payload: Dict[str, Any], run_name: str) -> Dict[str, Any]:
     run = rows(session, "SELECT * FROM CORE.WORKFLOW_RUN WHERE RUN_ID = ?", [run_id])
-    return merge_branch_plan(payload or {}, _stored_plan(session, run_id), run_name, run_id,
-                             run_standard(run[0] if run else {}))
+    standard = run_standard(run[0] if run else {})
+    prefix = conventions_for(lambda sql, params: rows(session, sql, params), standard)["branch_prefix"]
+    return merge_branch_plan(payload or {}, _stored_plan(session, run_id), run_name, run_id, standard, prefix)
 
 
 def _store_branch(session, run_id: str, domain_id: str, plan: Dict[str, str], instruction: str) -> None:
@@ -186,7 +195,8 @@ def generate_dbt(session, run_id: str, payload_json: str = "{}") -> Dict[str, An
             skeleton: Dict[str, str] = {}
             if plan.get("fetch_skeleton") and plan.get("git_repository"):
                 try:
-                    skeleton = fetch_branch_files(session, plan["git_repository"], plan["base_branch"])
+                    skeleton = fetch_branch_files(session, plan["git_repository"], plan["base_branch"],
+                                                  project_dir=plan.get("project_dir") or "")
                 except Exception as exc:
                     plan["skeleton_error"] = clip(exc, 400)
             plan["skeleton_files"] = len(skeleton)

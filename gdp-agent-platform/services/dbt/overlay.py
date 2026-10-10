@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import shutil
 import tempfile
 import uuid
@@ -54,33 +55,24 @@ def _put_files(db, stage_root: str, files: Dict[str, str]) -> None:
         shutil.rmtree(tmp, ignore_errors=True)
 
 
-def _fetch_skeleton(db, repo_fqn: str, branch: str, limit: int = 120) -> Dict[str, str]:
+def _fetch_skeleton(db, repo_fqn: str, branch: str, limit: int = 120, project_dir: str = "") -> Dict[str, str]:
+    from services.dbt.workspace import branch_segment, clean_project_dir, skeleton_from_listing
+
     repo = safe_fqn(repo_fqn)
     branch_name = (branch or "main").strip().strip("/")
+    assert re.fullmatch(r"[A-Za-z0-9._/\-]+", branch_name), f"unsafe branch: {branch}"
+    folder = clean_project_dir(project_dir)
     fetch_error = ""
     try:
         db.execute(f"ALTER GIT REPOSITORY {repo} FETCH")
     except Exception as exc:  # a stale clone is still a usable skeleton
         fetch_error = str(exc)[:400]
-    listed = db.query(f"LIST @{repo}/branches/{branch_name}/")
+    listed = db.query(f"LIST @{repo}/branches/{branch_segment(branch_name)}/" + (f"{folder}/" if folder else ""))
     if not listed and fetch_error:
         raise RuntimeError(f"FETCH failed and the clone has no {branch_name} files: {fetch_error}")
     read = lambda sql: [next(iter(r.values()), None) for r in db.query(sql)]  # noqa: E731
-    files: Dict[str, str] = {}
-    for row in listed:
-        name = str(row.get("name") or "")
-        rel = name.split(f"/branches/{branch_name}/", 1)[-1].lstrip("/")
-        if not rel or not rel.lower().endswith(TEXT_SUFFIXES):
-            continue
-        if len(files) >= limit:
-            break
-        try:
-            text = read_repo_text(read, repo, branch_name, rel)
-            if text:
-                files[rel] = text
-        except Exception:
-            continue
-    return files
+    return skeleton_from_listing([str(r.get("name") or "") for r in listed], branch_name, folder,
+                                 lambda rel: read_repo_text(read, repo, branch_segment(branch_name), rel), limit)
 
 
 def _create_project(db, project_fqn: str, stage_path: str, comment: str) -> Dict[str, Any]:
@@ -158,7 +150,7 @@ def generate_via_db(db, run_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
     skeleton: Dict[str, str] = {}
     if plan.get("fetch_skeleton") and plan.get("git_repository"):
         try:
-            skeleton = _fetch_skeleton(db, plan["git_repository"], plan["base_branch"])
+            skeleton = _fetch_skeleton(db, plan["git_repository"], plan["base_branch"], project_dir=plan.get("project_dir") or "")
         except Exception as exc:
             plan["skeleton_error"] = str(exc)[:400]
     plan["skeleton_files"] = len(skeleton)

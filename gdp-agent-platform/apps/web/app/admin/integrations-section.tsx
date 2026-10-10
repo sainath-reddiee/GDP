@@ -116,7 +116,7 @@ export function IntegrationsSection({ repos, domains, publishing }: { repos: Cod
 function RepoCard({ repo: r, domains, may, onMsg }: { repo: CodeRepo; domains: Domain[]; may: boolean; onMsg: (m: Msg) => void }) {
   const router = useRouter();
   const [pending, start] = useTrackedTransition();
-  const [panel, setPanel] = useState<"" | "branch" | "schedule" | "settings" | "runs" | "credentials" | "disconnect">("");
+  const [panel, setPanel] = useState<"" | "branch" | "dbt" | "schedule" | "settings" | "runs" | "credentials" | "disconnect">("");
   const [runs, setRuns] = useState<IndexRun[] | null>(null);
   const [cron, setCron] = useState(r.schedule_cron ?? PRESETS[1].cron);
   const [doms, setDoms] = useState<string[]>(r.domain_ids);
@@ -173,6 +173,10 @@ function RepoCard({ repo: r, domains, may, onMsg }: { repo: CodeRepo; domains: D
       {(kinds.length > 0 || (r.stats?.dbt_projects ?? []).length > 0 || !!r.stats?.skipped_files) && (
         <div className="flex flex-wrap gap-1.5 border-t px-4 py-2 text-[11px]">
           {(r.stats?.dbt_projects ?? []).map((p) => <span key={p} className="rounded-full bg-orange-50 px-2 py-0.5 text-orange-700 ring-1 ring-inset ring-orange-100">dbt: {p}</span>)}
+          {r.use_for_dbt !== false && (r.stats?.dbt_projects ?? []).length > 0 && (
+            <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-emerald-700 ring-1 ring-inset ring-emerald-100">
+              dbt workspace{r.dbt_project_dir ? ` · ${r.dbt_project_dir}/` : ""}{r.open_pr === false ? " · no auto PR" : ""}</span>
+          )}
           {kinds.map(([k, n]) => <span key={k} className="rounded-full bg-muted px-2 py-0.5 text-muted-foreground">{k.toLowerCase().replace(/_/g, " ")} {n}</span>)}
           {!!r.stats?.skipped_files && <span className="rounded-full bg-amber-50 px-2 py-0.5 text-amber-700 ring-1 ring-inset ring-amber-100" title="Unreadable or unsafe file names; retried when they change">{r.stats.skipped_files} skipped</span>}
         </div>
@@ -182,6 +186,7 @@ function RepoCard({ repo: r, domains, may, onMsg }: { repo: CodeRepo; domains: D
           {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}{busy ? "Indexing…" : "Refresh now"}</Button>
         <Link href={`/code?repo=${r.repo_id}`} className="inline-flex h-8 items-center gap-1.5 rounded-lg px-3 text-xs font-medium hover:bg-muted"><FileCode2 className="h-3.5 w-3.5" />Browse</Link>
         <Button size="sm" variant="ghost" onClick={() => { toggle("runs"); indexRuns(r.repo_id).then((x) => x.ok && setRuns(x.data.runs)); }}>History</Button>
+        {may && <Button size="sm" variant="ghost" onClick={() => toggle("dbt")}><GitPullRequest className="h-3.5 w-3.5" />dbt</Button>}
         {may && <Button size="sm" variant="ghost" onClick={() => toggle("schedule")}><CalendarClock className="h-3.5 w-3.5" />Schedule</Button>}
         {may && <Button size="sm" variant="ghost" onClick={() => toggle("settings")}><Settings2 className="h-3.5 w-3.5" />Settings</Button>}
         {may && <Button size="sm" variant="ghost" onClick={() => toggle("credentials")}><KeyRound className="h-3.5 w-3.5" />Credentials</Button>}
@@ -193,6 +198,8 @@ function RepoCard({ repo: r, domains, may, onMsg }: { repo: CodeRepo; domains: D
                       onPick={(b) => act(() => updateRepo(r.repo_id, { branch: b }), `Switched ${r.name} to ${b}. Re-indexing now; AI steps use the new branch when it finishes.`,
                                       () => setPanel(""))} />
       )}
+      {panel === "dbt" && <DbtPanel repo={r} pending={pending}
+                                    onSave={(body) => act(() => updateRepo(r.repo_id, body), "dbt settings saved; runs use them from now on.", () => setPanel(""))} />}
       {panel === "schedule" && (
         <div className="space-y-2 border-t bg-muted/20 px-4 py-3 text-xs">
           <div className="flex flex-wrap gap-1.5">
@@ -267,6 +274,45 @@ function RepoCard({ repo: r, domains, may, onMsg }: { repo: CodeRepo; domains: D
         </div>
       )}
     </article>
+  );
+}
+
+function DbtPanel({ repo, pending, onSave }: {
+  repo: CodeRepo; pending: boolean; onSave: (body: { use_for_dbt: boolean; dbt_project_dir: string; open_pr: boolean; draft_pr: boolean }) => void;
+}) {
+  const roots = repo.stats?.dbt_project_roots ?? [];
+  const [use, setUse] = useState(repo.use_for_dbt !== false);
+  const [dir, setDir] = useState(repo.dbt_project_dir ?? (roots.length === 1 ? roots[0].root : ""));
+  const [openPr, setOpenPr] = useState(repo.open_pr !== false);
+  const [draft, setDraft] = useState(repo.draft_pr === true);
+  const known = roots.some((p) => p.root === dir);
+  return (
+    <div className="space-y-3 border-t bg-muted/20 px-4 py-3 text-xs">
+      <p className="text-muted-foreground">How the dbt workspace of every run in {repo.domain_ids.length ? "these domains" : "every domain"} uses this repository:
+        new branches are cut from <span className="font-mono">{repo.branch}</span> (switch it with the branch button above), generated models are written into the
+        project folder, and the PR goes to {repo.git_url.replace(/^https:\/\//, "")}.</p>
+      <label className="flex items-center gap-1.5"><input type="checkbox" checked={use} onChange={() => setUse(!use)} />Offer this repository to the dbt workspace</label>
+      <div className={cn("grid gap-3 md:grid-cols-2", !use && "pointer-events-none opacity-50")}>
+        <label className="space-y-1">dbt project folder
+          {roots.length ? (
+            <Select value={known ? dir : "__other"} onChange={(e) => setDir(e.target.value === "__other" ? dir : e.target.value)} className="h-8 text-xs">
+              {roots.map((p) => <option key={p.root || "root"} value={p.root}>{p.root ? `${p.root}/` : "repository root"} ({p.name})</option>)}
+              {!known && <option value="__other">{dir || "repository root"} (no dbt_project.yml found)</option>}
+            </Select>
+          ) : (
+            <Input value={dir} onChange={(e) => setDir(e.target.value)} placeholder="empty for the repository root, or analytics" className="h-8 font-mono text-xs" />
+          )}
+          <span className="block text-[11px] text-muted-foreground">{roots.length ? "Found by the last index." : "No dbt_project.yml found yet; refresh the index after connecting."}</span>
+        </label>
+        <div className="space-y-1.5 pt-4">
+          <label className="flex items-center gap-1.5"><input type="checkbox" checked={openPr} onChange={() => setOpenPr(!openPr)} />Open the PR right after generating (runs can untick it)</label>
+          <label className="flex items-center gap-1.5"><input type="checkbox" checked={draft} onChange={() => setDraft(!draft)} />Open PRs as drafts</label>
+          {repo.provider !== "GITHUB" && <p className="text-amber-700">Pull requests from the platform are GitHub only; runs on this repository stay stage only.</p>}
+        </div>
+      </div>
+      <Button size="sm" disabled={pending} onClick={() => onSave({ use_for_dbt: use, dbt_project_dir: dir, open_pr: openPr, draft_pr: draft })}>
+        {pending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}Save dbt settings</Button>
+    </div>
   );
 }
 
