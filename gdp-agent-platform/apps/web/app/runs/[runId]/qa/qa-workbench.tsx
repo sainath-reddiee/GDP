@@ -14,6 +14,7 @@ import {
   askQa, deleteQaTest, planQa, runQa, saveQaTest, updateQaTest,
   type QaAnswer, type QaOutcome, type QaProposal, type QaResult, type QaResults, type QaSuite, type QaTest,
 } from "./qa-actions";
+import { CodeCitations, type CodeCitation } from "@/components/code-citations";
 
 export const CATEGORY_META: Record<string, { label: string; hint: string }> = {
   RECONCILIATION: { label: "Reconciliation", hint: "Row and key counts, source vs target" },
@@ -221,7 +222,8 @@ function Assistant({ runId, onSaved, canAI = true }: { runId: string; onSaved: (
   const [answer, setAnswer] = useState<QaAnswer | null>(null);
   const [draft, setDraft] = useState("");
   const [focus, setFocus] = useState("");
-  const [plan, setPlan] = useState<{ tests: QaProposal[]; grounding: { rules: number; profile_columns: number; checks: number } } | null>(null);
+  const [plan, setPlan] = useState<{ tests: QaProposal[]; code_citations?: CodeCitation[];
+                                     grounding: { rules: number; profile_columns: number; checks: number; code?: number } } | null>(null);
   const [keep, setKeep] = useState<Set<number>>(new Set());
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -287,8 +289,9 @@ function Assistant({ runId, onSaved, canAI = true }: { runId: string; onSaved: (
         {plan && (
           <div className="space-y-2">
             <p className="text-[11px] text-muted-foreground">
-              Grounded in {plan.grounding.rules} knowledge items, {plan.grounding.profile_columns} profiled columns and {plan.grounding.checks} approved checks.
+              Grounded in {plan.grounding.rules} knowledge items, {plan.grounding.profile_columns} profiled columns and {plan.grounding.checks} approved checks{plan.grounding.code ? `, plus ${plan.grounding.code} snippets of client code` : ""}.
             </p>
+            <CodeCitations items={plan.code_citations} />
             {plan.tests.map((t, i) => (
               <label key={i} className={cn("flex cursor-pointer gap-3 rounded-xl border p-3", keep.has(i) ? "border-primary/40 bg-primary/5" : "bg-card", !t.valid && "opacity-70")}>
                 <input type="checkbox" className="mt-1" disabled={!t.valid} checked={keep.has(i)}

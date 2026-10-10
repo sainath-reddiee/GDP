@@ -10,6 +10,7 @@ import { cn } from "@/lib/utils";
 import { applyDbtEnhance, previewDbtEnhance, reviewDbtFile } from "../pipeline-actions";
 import type { CortexModel, DbtArtifact, GenerationReport, ReviewResult } from "./dbt-types";
 import { Callout, CodeView, DiffView, Empty, Stat, StatusPill, type Tone, useToast } from "./studio-ui";
+import { CodeCitations } from "@/components/code-citations";
 
 const CLASS_TONE: Record<string, Tone> = {
   PASSTHROUGH: "done", DERIVED: "active", AUDIT: "idle", COMPOUND_PK: "active", HKEY: "idle", SEQUENCE: "idle",
@@ -250,6 +251,7 @@ export function ReviewPanel({
                           title={review.summary || (review.findings.length ? `${review.findings.length} finding(s)` : "Looks good")}>
                           Reviewed by {review.model}.
                         </Callout>
+                        <CodeCitations items={review.code_citations} label="Compared with client code" />
                         <ul className="space-y-2">
                           {review.findings.map((f, i) => (
                             <li key={i} className="rounded-lg border p-2.5 text-sm">

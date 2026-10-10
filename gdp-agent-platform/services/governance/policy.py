@@ -45,15 +45,17 @@ PRIVILEGES: Dict[str, Tuple[str, str]] = {
     "REQUEST.CHANGES": ("Governance", "Raise change requests for actions you cannot do yourself"),
     "AUDIT.VIEW": ("Governance", "Open the audit trail"),
     "AI.USE": ("AI", "Use AI: copilot, AI review, ask for tests or checks, AI designs (each call costs credits)"),
+    "INTEGRATION.MANAGE": ("Integrations", "Connect code repositories and other external systems, and schedule their refresh"),
+    "CODE.VIEW": ("Integrations", "Search and read indexed client code"),
 }
 # Privileges a viewer-style role never needs: holding none of the others means the user can only look.
-READ_ONLY = {"AUDIT.VIEW", "ADMIN.VIEW", "APPROVAL.VIEW"}
+READ_ONLY = {"AUDIT.VIEW", "ADMIN.VIEW", "APPROVAL.VIEW", "CODE.VIEW"}
 ALL = "*"
 
 SYSTEM_ROLES: Dict[str, Dict[str, Any]] = {
     "SUPER_ADMIN": {"description": "Everything, including governance", "privileges": [ALL], "inherits": []},
     "PLATFORM_ADMIN": {"description": "Platform settings and deployment",
-                       "privileges": ["CONFIG.EDIT", "ADMIN.VIEW", "ADMIN.DEPLOY", "AUDIT.VIEW", "APPROVAL.VIEW"],
+                       "privileges": ["CONFIG.EDIT", "ADMIN.VIEW", "ADMIN.DEPLOY", "AUDIT.VIEW", "APPROVAL.VIEW", "INTEGRATION.MANAGE"],
                        "inherits": ["DATA_ENGINEER"]},
     "GOVERNANCE_ADMIN": {"description": "Users, roles and approval policies",
                          "privileges": ["ROLE.MANAGE", "ADMIN.VIEW", "APPROVAL.VIEW", "AUDIT.VIEW"], "inherits": ["VIEWER"]},
@@ -75,13 +77,13 @@ SYSTEM_ROLES: Dict[str, Dict[str, Any]] = {
                                      "MODEL.EDIT", "MAPPING.DECIDE", "QA.EDIT", "DBT.EDIT", "TAG.MANAGE", "SKILL.EDIT",
                                      "REQUEST.CHANGES", "REVIEW.DECIDE", "AI.USE"],
                       "inherits": ["VIEWER"]},
-    "VIEWER": {"description": "Read everything, change nothing (no AI calls, no requests)", "privileges": ["AUDIT.VIEW"],
+    "VIEWER": {"description": "Read everything, change nothing (no AI calls, no requests)", "privileges": ["AUDIT.VIEW", "CODE.VIEW"],
                "inherits": []},
 }
 # Privileges added to system roles after their first release: {version: [privilege]}. Bootstrap grants them to the
 # system roles whose spec lists them, once, so existing deployments pick them up without overriding admin edits.
-SYSTEM_VERSION = 3
-ADDED_PRIVILEGES = {2: ["AI.USE"], 3: ["SKILL.EDIT", "SKILL.RELEASE"]}
+SYSTEM_VERSION = 4
+ADDED_PRIVILEGES = {2: ["AI.USE"], 3: ["SKILL.EDIT", "SKILL.RELEASE"], 4: ["INTEGRATION.MANAGE", "CODE.VIEW"]}
 
 # Actions routed for approval by default: privilege -> approver role. Everything else is privilege-only.
 DEFAULT_POLICIES: Dict[str, str] = {
@@ -91,7 +93,7 @@ DEFAULT_POLICIES: Dict[str, str] = {
     "QA.SIGNOFF": "QA_LEAD", "REVIEW.APPROVE": "CODE_REVIEWER",
     "KNOWLEDGE.EDIT": "DATA_STEWARD", "DOMAIN.EDIT": "DATA_STEWARD",
     "CONFIG.EDIT": "PLATFORM_ADMIN", "ADMIN.DEPLOY": "PLATFORM_ADMIN", "ROLE.MANAGE": "GOVERNANCE_ADMIN",
-    "SKILL.RELEASE": "SKILL_OWNER",
+    "SKILL.RELEASE": "SKILL_OWNER", "INTEGRATION.MANAGE": "PLATFORM_ADMIN",
 }
 
 REVIEW_TARGETS = {"MAPPING_APPROVED": "MAPPING.APPROVE", "STTM_APPROVED": "STTM.APPROVE",
@@ -137,6 +139,12 @@ RULES: List[Tuple[str, str, Any, str]] = [
     ("POST", r"/api/knowledge/[^/]+/verify", "KNOWLEDGE.EDIT", ""),
     ("PUT", r"/api/config/knowledge-policy", "KNOWLEDGE.EDIT", "Change how knowledge is learned"),
     ("PUT", r"/api/tags/.*", "TAG.MANAGE", ""),
+    ("POST", r"/api/code/repos", "INTEGRATION.MANAGE", "Connect a code repository"),
+    ("PUT", r"/api/code/repos/[^/]+", "INTEGRATION.MANAGE", "Change a code repository"),
+    ("DELETE", r"/api/code/repos/[^/]+", "INTEGRATION.MANAGE", "Disconnect a code repository"),
+    ("PUT", r"/api/code/repos/[^/]+/schedule", "INTEGRATION.MANAGE", "Schedule a code repository refresh"),
+    ("DELETE", r"/api/code/repos/[^/]+/schedule", "INTEGRATION.MANAGE", ""),
+    ("POST", r"/api/code/repos/[^/]+/refresh", "RUN.OPERATE", ""),
     ("POST", r"/api/skills/builder/check", None, ""),
     ("POST", r"/api/skills/builder/(questions|draft|test)", "AI.USE", ""),
     ("POST", r"/api/skills", "SKILL.EDIT", "Create a skill"),
@@ -187,6 +195,8 @@ RULES: List[Tuple[str, str, Any, str]] = [
 _COMPILED = [(m, re.compile(f"^{p}$"), priv, title) for m, p, priv, title in RULES]
 READ_RULES = [(re.compile(r"^/api/(admin/.*|config/(rules|platform|models))$"), "ADMIN.VIEW"),
               (re.compile(r"^/api/(audit|costs)(/.*)?$"), "AUDIT.VIEW"),
+              (re.compile(r"^/api/code/setup$"), "ADMIN.VIEW"),
+              (re.compile(r"^/api/code/(search|file|lineage|summary|repos|repos/[^/]+/runs)$"), "CODE.VIEW"),
               (re.compile(r"^/api/governance/(roles|users|policies|settings|events|privileges)$"), "ADMIN.VIEW")]
 
 

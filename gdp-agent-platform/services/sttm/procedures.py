@@ -205,6 +205,14 @@ def _line_context(session, run_id: str, payload: Dict[str, Any]) -> Dict[str, An
         context["domain_rules"] = domain_context(session, context["domain_id"], model, 3000, context["standard"])
     except Exception:
         context["domain_rules"] = ""
+    from services.code.context import for_session, record_usage
+
+    code = for_session(session, stage="STTM", domain_id=context["domain_id"], target=context["target_column"],
+                       sources=[context["source_table"]] if context.get("source_table") else [],
+                       columns=[c for c in (context["target_column"], context.get("source_column")) if c])
+    context["code"] = code["text"]
+    context["code_citations"] = code["citations"]
+    record_usage(lambda sql, params: rows(session, sql, params), run_id, "STTM", code["citations"])
     return context
 
 

@@ -200,7 +200,20 @@ def _facts(known: Optional[Dict[str, Any]]) -> str:
     if known.get("checks"):
         parts.append("Approved data quality checks (already covered, do not repeat):\n"
                      + "\n".join(f"- {r}" for r in known["checks"]))
+    if known.get("code"):
+        parts.append(known["code"])
     return "\n\n".join(parts) + "\n\n" if parts else ""
+
+
+def _code(session, ctx: Dict[str, Any], run_id: str) -> Dict[str, Any]:
+    """The client's existing tests, schema files and models for this target (empty without connected repositories)."""
+    from services.code.context import for_session, record_usage
+
+    code = for_session(session, stage="QA", domain_id=ctx.get("domain_id"), target=(ctx.get("target") or {}).get("name"),
+                       sources=list((ctx.get("sources") or {}).keys()),
+                       columns=[l["target_column"] for l in ctx.get("lines") or []])
+    record_usage(lambda sql, params: rows(session, sql, params), run_id, "QA", code["citations"])
+    return code
 
 
 def ask_prompt(ctx: Dict[str, Any], question: str, known: Optional[Dict[str, Any]] = None) -> str:
@@ -266,7 +279,10 @@ def qa_ask(session, run_id: str, question: str) -> Dict[str, Any]:
     ctx = context(session, run_id)
     started = time.time()
     with tool_call(session, run_id, "qa_ask", {"question": clip(question, 300)}) as call:
-        prompt = ask_prompt(ctx, question, knowledge(session, ctx.get("domain_id"), run_id))
+        known = knowledge(session, ctx.get("domain_id"), run_id)
+        code = _code(session, ctx, run_id)
+        known["code"] = code["text"]
+        prompt = ask_prompt(ctx, question, known)
         try:
             output, usage, model = complete_json(session, prompt, ASK_SCHEMA, max_tokens=2500, stage="QA")
         except AssertionError:
@@ -276,7 +292,7 @@ def qa_ask(session, run_id: str, question: str) -> Dict[str, Any]:
         compile_error, note = compile_check(session, sql, ctx) if ok else (None, None)
         call.summary = "valid" if ok and not compile_error else "rejected"
     return {**output, "sql": sql, "valid": ok and not compile_error, "problems": problems,
-            "compile_error": compile_error, "note": note, "model": model}
+            "compile_error": compile_error, "note": note, "model": model, "code_citations": code["citations"]}
 
 
 def qa_save(session, run_id: str, payload_json: str) -> Dict[str, Any]:
@@ -338,6 +354,8 @@ def qa_plan(session, run_id: str, focus: str = "") -> Dict[str, Any]:
     checked by the read-only guard and compiled with EXPLAIN; nothing is saved until a tester keeps it."""
     ctx = context(session, run_id)
     known = knowledge(session, ctx.get("domain_id"), run_id)
+    code = _code(session, ctx, run_id)
+    known["code"] = code["text"]
     names = {t: [c.split(" ")[0] for c in cols] for t, cols in ctx["source_columns"].items()}
     generated = build_suite(ctx["target"], ctx["sources"], ctx["lines"], ctx["business_keys"], ctx["graph"], ctx["spec"],
                             names)
@@ -357,6 +375,6 @@ def qa_plan(session, run_id: str, focus: str = "") -> Dict[str, Any]:
             proposals.append({**t, "sql": sql, "valid": ok and not compile_error, "problems": problems,
                               "compile_error": compile_error, "note": note})
         call.summary = f"{sum(p['valid'] for p in proposals)}/{len(proposals)} valid"
-    return {"tests": proposals, "model": model,
+    return {"tests": proposals, "model": model, "code_citations": code["citations"],
             "grounding": {"rules": len(known["rules"]), "profile_columns": len(known["profile"]),
-                          "checks": len(known["checks"])}}
+                          "checks": len(known["checks"]), "code": len(code["citations"])}}

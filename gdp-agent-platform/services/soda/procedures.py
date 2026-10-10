@@ -203,6 +203,12 @@ def generate_soda(session, run_id: str) -> Dict[str, Any]:
             lines = _lines(session, sttm["STTM_ID"])
             columns = [l["target_column"] for l in lines]
             knowledge = _knowledge(session, sttm["DOMAIN_ID"], run_id)
+            from services.code.context import for_session, record_usage
+
+            code = for_session(session, stage="SODA", domain_id=sttm["DOMAIN_ID"], target=table, columns=columns)
+            if code["text"]:
+                knowledge.append(code["text"])
+                record_usage(lambda sql, params: rows(session, sql, params), run_id, "SODA", code["citations"])
             checks = from_sttm(table, lines, design.get("business_keys") or [])
             stored = _transform_checks(session, sttm["DOMAIN_ID"], table)
             extracted: List[Dict[str, Any]] = []

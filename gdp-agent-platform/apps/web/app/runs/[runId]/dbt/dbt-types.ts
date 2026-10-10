@@ -79,7 +79,7 @@ export type ReviewFinding = { severity: "error" | "warning" | "info"; rule: stri
 
 export type ReviewResult = {
   file_path: string; summary: string; findings: ReviewFinding[]; revised_content: string;
-  rejected_revision: string[]; model?: string;
+  rejected_revision: string[]; model?: string; code_citations?: import("@/components/code-citations").CodeCitation[];
 };
 
 export type GithubCheck = {

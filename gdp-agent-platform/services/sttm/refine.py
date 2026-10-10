@@ -72,6 +72,7 @@ def refine_prompt(context: Dict[str, Any], instruction: str) -> str:
         f"Patterns: {profile.get('patterns') or '—'}\n"
         f"Prior accepted rules for this pack:\n{rule_text}\n"
         + (f"Domain rules and contract (follow them):\n{context['domain_rules']}\n" if context.get("domain_rules") else "")
+        + (f"{context['code']}\n" if context.get("code") else "")
         + f"Engineer instruction:\n{(instruction or '').strip()[:2000]}\n"
         "Also propose SodaCL checks implied by the new expression (accepted values, date format, not-null).\n"
         "dbt_notes should say how the mart SQL should use the expression."
