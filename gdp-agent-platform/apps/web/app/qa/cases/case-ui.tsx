@@ -91,7 +91,7 @@ export function OpenCaseButton({ open, label = "Open as case", size = "sm", vari
   );
 }
 
-function ConnectJiraLink() {
+export function ConnectJiraLink() {
   const [busy, start] = useTransition();
   const [error, setError] = useState("");
   const go = () => start(async () => {

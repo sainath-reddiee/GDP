@@ -24,6 +24,7 @@ const STAGE_INFO: Record<string, string> = {
   MODELING: "Designs the target data model in Mapping",
   SKILLS: "Drafts, improves and tests skills in the AI skill builder",
   OPS: "Explains pipeline failures and suggests fixes for incidents",
+  CASES: "Triages cases and drafts fixes in QA",
 };
 const FAMILY_LABEL: Record<string, string> = {
   claude: "Anthropic", openai: "OpenAI", llama: "Meta Llama", mistral: "Mistral", deepseek: "DeepSeek",

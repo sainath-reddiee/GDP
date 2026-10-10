@@ -39,6 +39,7 @@ const MODEL_VIEWS = [
 ] as const;
 type ModelView = (typeof MODEL_VIEWS)[number]["id"];
 type SectionId = (typeof SECTIONS)[number]["id"];
+const INTEGRATION_VIEWS: IntegrationView[] = ["repos", "jira", "airflow", "incidents", "cases"];
 
 const unavailable = <p className="text-sm text-muted-foreground">Not available from the API yet. Restart the API after pulling.</p>;
 
@@ -84,7 +85,7 @@ export default async function Admin({ searchParams }: { searchParams?: { section
           )}
           <Suspense key={`${section}:${view}:${searchParams?.view ?? ""}`} fallback={<SectionSkeleton />}>
             <Section id={section} view={view}
-                     integrationView={searchParams?.view === "jira" || searchParams?.view === "airflow" || searchParams?.view === "incidents" ? searchParams.view : "repos"} />
+                     integrationView={INTEGRATION_VIEWS.find((v) => v === searchParams?.view) ?? "repos"} />
           </Suspense>
         </main>
       </div>

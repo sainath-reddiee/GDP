@@ -218,6 +218,14 @@ RULES: List[Tuple[str, str, Any, str]] = [
     # cases (apps/api/app/cases_api.py): reads are open to everyone signed in and filtered by domain visibility; the
     # status route needs CASE.WORK here and CASE.RESOLVE in the handler for VERIFIED, RESOLVED, CLOSED and DUPLICATE
     ("POST", r"/api/cases/[^/]+/merge", "CASE.RESOLVE", "Merge a case into another as its duplicate"),
+    # PR Q2: settings before the PUT /api/cases/<id> rule; triage and ask spend credits (triage also needs CASE.WORK
+    # in the handler); publishing a dbt patch opens a pull request (DBT.EDIT, previewed with a token first)
+    ("PUT", r"/api/cases/settings", "INTEGRATION.MANAGE", "Change case settings (auto triage, SLA hours)"),
+    ("POST", r"/api/cases/[^/]+/(triage|ask)", "AI.USE", ""),
+    ("POST", r"/api/cases/[^/]+/artifacts/[^/]+/publish", "DBT.EDIT", "Publish a case's dbt patch as a pull request"),
+    ("POST", r"/api/cases/[^/]+/artifacts/[^/]+/(decide|run|applied)", "CASE.WORK", ""),
+    ("POST", r"/api/cases/[^/]+/verify", "CASE.WORK", ""),
+    ("POST", r"/api/cases/[^/]+/jira-comment", "JIRA.WRITE", ""),
     ("POST", r"/api/cases/(from-jira|from-incident|from-result)", "CASE.WORK", ""),
     ("POST", r"/api/cases", "CASE.WORK", ""),
     ("PUT", r"/api/cases/[^/]+", "CASE.WORK", ""),

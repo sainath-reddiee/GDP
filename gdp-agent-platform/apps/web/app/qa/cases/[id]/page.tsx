@@ -28,5 +28,6 @@ export default async function CasePage({ params, searchParams }: { params: { id:
     );
   }
   const opened = searchParams?.opened === "new" ? "new" : searchParams?.opened === "existing" ? "existing" : null;
-  return <CaseView key={id} initial={detail} canWork={can(me, "CASE.WORK")} canResolve={can(me, "CASE.RESOLVE")} opened={opened} />;
+  return <CaseView key={id} initial={detail} canWork={can(me, "CASE.WORK")} canResolve={can(me, "CASE.RESOLVE")}
+                   canAI={can(me, "AI.USE")} canDbt={can(me, "DBT.EDIT")} canJira={can(me, "JIRA.WRITE")} opened={opened} />;
 }

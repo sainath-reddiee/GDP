@@ -205,6 +205,16 @@ def test_admins_see_every_domain():
     assert not domains.can_see(db, "QA", HR, privs("QA_LEAD"), ["QA_LEAD", "VIEWER"])
 
 
+def test_app_admin_without_the_snowflake_role_is_filtered_like_snowflake():
+    domains.invalidate()
+    db = FakeDb(user="SYSUSER").on("IS_DATABASE_ROLE_IN_SESSION", [{"p": False}])
+    # the row policy would hide HR from this session, so the app must not treat it as visible
+    assert domains.visible_domain_ids(db, "SYSUSER", {"*"}) == {GENERAL, OPEN}
+    assert not domains.can_see(db, "SYSUSER", HR, {"*"})
+    assert domains.can_see(db, "SYSUSER", OPEN, {"*"})
+    domains.invalidate()
+
+
 def test_visibility_sql():
     assert domains.visibility_sql("C.DOMAIN_ID", None) == ("TRUE", ())
     assert domains.visibility_sql("C.DOMAIN_ID", set()) == ("C.DOMAIN_ID IS NULL", ())
@@ -664,6 +674,16 @@ CASE_ROUTES = [
     ("GET", "/api/cases/summary", None),
     ("GET", "/api/cases/c1", None),
     ("GET", "/api/governance/my-domains", None),
+    ("GET", "/api/cases/settings", None),
+    ("PUT", "/api/cases/settings", "INTEGRATION.MANAGE"),
+    ("POST", "/api/cases/c1/triage", "AI.USE"),
+    ("POST", "/api/cases/c1/ask", "AI.USE"),
+    ("POST", "/api/cases/c1/artifacts/a1/decide", "CASE.WORK"),
+    ("POST", "/api/cases/c1/artifacts/a1/run", "CASE.WORK"),
+    ("POST", "/api/cases/c1/artifacts/a1/applied", "CASE.WORK"),
+    ("POST", "/api/cases/c1/artifacts/a1/publish", "DBT.EDIT"),
+    ("POST", "/api/cases/c1/verify", "CASE.WORK"),
+    ("POST", "/api/cases/c1/jira-comment", "JIRA.WRITE"),
     ("POST", "/api/knowledge/inbox/decide", "KNOWLEDGE.EDIT"),
     ("GET", "/api/knowledge/inbox", None),
 ]
@@ -679,7 +699,7 @@ def test_every_registered_case_route_is_mapped():
     import re
 
     expected = {(m, p) for m, p, _ in CASE_ROUTES}
-    names = {"case_id": "c1", "link_id": "l1"}
+    names = {"case_id": "c1", "link_id": "l1", "artifact_id": "a1"}
     seen = 0
     for route in api_main.app.routes:
         path = getattr(route, "path", "")

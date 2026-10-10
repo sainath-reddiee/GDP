@@ -92,6 +92,26 @@ def is_admin(privileges: Iterable[str] = (), roles: Iterable[str] = ()) -> bool:
     return ALL in set(privileges or ()) or bool(ADMIN_ROLES & {_up(r) for r in roles or ()})
 
 
+def session_platform_admin(db) -> bool:
+    """Whether the Snowflake session holds the PLATFORM_ADMIN database role, which the CASES.DOMAIN_SCOPE row policy
+    uses for its "see everything" branch. An app admin without it is still filtered by Snowflake, so the app applies
+    the membership rules too instead of creating records the caller cannot read back."""
+    key = f"pa:{getattr(db, 'user', '')}:{getattr(db, 'role', '')}"
+
+    def load() -> bool:
+        try:
+            row = db.query("SELECT IS_DATABASE_ROLE_IN_SESSION('PLATFORM_ADMIN') AS P")
+            return bool(row[0].get("p")) if row else True
+        except Exception:  # a session that cannot evaluate it (tests, older accounts): trust the app roles
+            return True
+    return bool(_cached(key, load))
+
+
+def admin_bypass(db, privileges: Iterable[str] = (), roles: Iterable[str] = ()) -> bool:
+    """Every domain is visible only to an app admin whose session Snowflake also lets through."""
+    return is_admin(privileges, roles) and session_platform_admin(db)
+
+
 def member_domains(db, user: str) -> Dict[str, str]:
     """{domain_id: role} for the domains the user is a member of (the strongest role when there are several)."""
     who = _up(user)
@@ -100,7 +120,7 @@ def member_domains(db, user: str) -> Dict[str, str]:
 
 def visible_domain_ids(db, user: str, privileges: Iterable[str] = (), roles: Iterable[str] = ()) -> Optional[Set[str]]:
     """The domain ids the user may see, or None for every domain (admins)."""
-    if is_admin(privileges, roles):
+    if admin_bypass(db, privileges, roles):
         return None
     model = _model(db)
     who = _up(user)
@@ -115,7 +135,7 @@ def visible_domain_ids(db, user: str, privileges: Iterable[str] = (), roles: Ite
 
 
 def can_see(db, user: str, domain_id: Optional[str], privileges: Iterable[str] = (), roles: Iterable[str] = ()) -> bool:
-    if not domain_id or is_admin(privileges, roles):
+    if not domain_id or admin_bypass(db, privileges, roles):
         return True
     model = _model(db)
     if domain_id in model["general"]:

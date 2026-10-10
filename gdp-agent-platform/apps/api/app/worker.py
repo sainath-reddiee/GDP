@@ -9,6 +9,8 @@ Jobs, each guarded by an OPS.JOB_LEASE so exactly one holder runs it at a time a
   sla            LATE and LONG_RUNNING detection (every 120 s)
   jira_sync      incidents whose ticket is Done in Jira become MITIGATED (every 5 min)
   diagnose       AI diagnosis of new OPEN incidents (settings ai_auto, ai_severities; at most 5 per run; every 60 s)
+  case_triage    AI triage of NEW cases (CORE.PLATFORM_CONFIG CASES: auto_triage, auto_triage_severities, default
+                 P1 to P3); at most 3 per run, skipping cases attempted in the last 30 minutes; every 30 s
   digest         the weekly reliability card per team, Mondays from 09:00 UTC (setting weekly_digest; every 15 min)
   retention      purges raw OPS.EVENT rows after 30 days (every 6 hours)
 The worker uses worker_db(): its own non-shared connection (the named dev connection in dev mode, else the key-pair
@@ -124,7 +126,7 @@ def poll_now(env_id: str, db_factory: Callable[[], Any] = system_db) -> Dict[str
 # ---------------------------------------------------------------- incidents (PR O2)
 
 DETECT_OVERLAP = timedelta(minutes=2)
-INTERVALS = {"outbox": 30, "escalate": 60, "sla": 120, "jira_sync": 300, "diagnose": 60, "digest": 900}
+INTERVALS = {"outbox": 30, "escalate": 60, "sla": 120, "jira_sync": 300, "diagnose": 60, "case_triage": 30, "digest": 900}
 
 
 def _store(db: Any):
@@ -229,6 +231,15 @@ def diagnose(db: Any) -> None:
         log.info("diagnose: %s", result)
 
 
+def case_triage(db: Any) -> None:
+    """AI triage of new cases (PR Q2)."""
+    from services.cases.triage import auto_triage
+
+    result = auto_triage(db)
+    if any(result.values()):
+        log.info("case_triage: %s", result)
+
+
 def digest(db: Any) -> None:
     """The weekly reliability digest per team (idempotent per ISO week)."""
     from services.ops.reliability import run_digest
@@ -288,7 +299,7 @@ class Worker:
                 log.info("poll %s: %s", env["env_id"], "ok" if result.get("ok") else result.get("error"))
         self._safe(db, "detect", detect)
         for name, fn in (("outbox", outbox), ("escalate", escalate), ("sla", sla), ("jira_sync", jira_sync),
-                         ("diagnose", diagnose), ("digest", digest)):
+                         ("diagnose", diagnose), ("case_triage", case_triage), ("digest", digest)):
             if self.stop.is_set():
                 return
             if self._every(name, INTERVALS[name]):

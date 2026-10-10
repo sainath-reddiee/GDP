@@ -15,7 +15,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Literal, Optional, Set
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.db import Db
@@ -206,6 +206,58 @@ def _open(db: Db, who: Dict[str, Any], spec: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
+# ---------------------------------------------------------------- settings (PR Q2), registered before /api/cases/{case_id}
+
+class CaseSettingsIn(BaseModel):
+    auto_triage: Optional[bool] = None
+    auto_triage_severities: Optional[List[Severity]] = Field(default=None, max_length=4)
+    sla_hours: Optional[Dict[str, int]] = None
+
+
+def _settings_out(db: Db) -> Dict[str, Any]:
+    from services.cases.triage import settings_from
+
+    out = settings_from(_cfg(db))
+    try:
+        seen = db.query("SELECT MAX(LAST_RUN_AT) AS AT FROM OPS.JOB_LEASE WHERE JOB_NAME = 'worker'")
+        out["worker_seen_at"] = _iso(seen[0].get("at")) if seen else None
+    except Exception:
+        out["worker_seen_at"] = None
+    return out
+
+
+@router.get("/api/cases/settings")
+def get_case_settings(db: Db = Depends(current_db)):
+    """{auto_triage, auto_triage_severities, sla_hours:{P1..P4}, worker_seen_at} (CORE.PLATFORM_CONFIG key CASES)."""
+    return _settings_out(db)
+
+
+@router.put("/api/cases/settings")
+def put_case_settings(body: CaseSettingsIn, db: Db = Depends(current_db)):
+    """Change the fields given (INTEGRATION.MANAGE). sla_hours: hours per severity, 1 to 8760."""
+    from app.main import _set_config
+
+    current = dict(_cfg(db))
+    given = body.model_dump(exclude_unset=True)
+    if given.get("auto_triage") is not None:
+        current["auto_triage"] = bool(given["auto_triage"])
+    if given.get("auto_triage_severities") is not None:
+        wanted = set(given["auto_triage_severities"])
+        current["auto_triage_severities"] = [s for s in rules.SEVERITIES if s in wanted]
+    if given.get("sla_hours") is not None:
+        hours = {}
+        for key, value in given["sla_hours"].items():
+            key = str(key).upper()
+            if key not in rules.SEVERITIES:
+                raise HTTPException(422, "sla_hours keys must be among P1, P2, P3, P4")
+            if not 1 <= int(value) <= 24 * 365:
+                raise HTTPException(422, "sla_hours values must be between 1 and 8760 hours")
+            hours[key] = int(value)
+        current["sla_hours"] = {**rules.sla_hours(current), **hours}
+    _set_config(db, "CASES", current, "Cases: AI auto triage (on, severities) and SLA hours per severity")
+    return _settings_out(db)
+
+
 # ---------------------------------------------------------------- list, summary, detail
 
 @router.get("/api/cases")
@@ -296,10 +348,9 @@ def case_detail(case_id: str, db: Db = Depends(current_db)):
                "created_at": _iso(e.get("created_at"))} for e in store.events(case_id)]
     links = [{"link_id": link["link_id"], "kind": link.get("kind"), "ref": link.get("ref"), "label": link.get("label"),
               "url": link.get("url"), "state": link.get("state") or "OK"} for link in store.links(case_id)]
-    artifacts = [{"artifact_id": a["artifact_id"], "type": a.get("type"), "title": a.get("title"), "content": a.get("content"),
-                  "diff": a.get("diff"), "status": a.get("status"), "decided_by": a.get("decided_by"),
-                  "decided_at": _iso(a.get("decided_at")), "created_at": _iso(a.get("created_at"))}
-                 for a in store.artifacts(case_id)]
+    from services.cases.triage import artifact_out
+
+    artifacts = [artifact_out(a) for a in store.artifacts(case_id)]
     return {"case": case_detail_out(case), "events": events, "links": links, "artifacts": artifacts}
 
 
@@ -422,7 +473,26 @@ def case_status(case_id: str, body: StatusIn, db: Db = Depends(current_db)):
                                     _redacted(body.note, 4000), _redacted(body.override_reason, 2000))
     except svc.CaseError as exc:
         raise _http(exc) from None
-    return {"case": case_detail_out(updated)}
+    out: Dict[str, Any] = {"case": case_detail_out(updated)}
+    if body.status == "RESOLVED":
+        out["knowledge"] = _propose_knowledge(db, updated, who["user"])
+    return out
+
+
+def _propose_knowledge(db: Db, case: Dict[str, Any], actor: str) -> Optional[Dict[str, Any]]:
+    """CASE_RESOLUTION and QA_TEST knowledge for the domain's stewards; a failure never undoes the resolve."""
+    from services.cases.fixes import on_resolved
+    from services.cases.triage import _ai
+
+    try:
+        return on_resolved(db, {**case, "ai": _ai(case)}, actor)
+    except Exception as exc:
+        try:
+            SqlStore(db).event(case["case_id"], "knowledge_failed", actor,
+                               {"error": redact(f"{type(exc).__name__}: {exc}")[:300]})
+        except Exception:
+            pass
+        return None
 
 
 class CommentIn(BaseModel):
@@ -702,3 +772,191 @@ def my_domains(db: Db = Depends(current_db)):
                          "steward": domains.is_steward(db, who["user"], d, who["roles"])}
                         for d in sorted(ids, key=lambda d: names[d].upper())],
             "all": visible is None}
+
+
+# ---------------------------------------------------------------- triage and fixes (PR Q2)
+
+def _ai_http(fn):
+    """Map the services' errors: TriageError keeps its status (429 with Retry-After), a missing structured answer is
+    502, Snowflake errors keep their usual mapping."""
+    from app.main import _snowflake_error
+    from services.cases.triage import TriageError
+
+    try:
+        return fn()
+    except TriageError as exc:
+        headers = {"Retry-After": str(exc.retry_after)} if exc.retry_after else None
+        raise HTTPException(exc.status, exc.message, headers=headers) from None
+    except HTTPException:
+        raise
+    except AssertionError as exc:
+        raise HTTPException(502, str(exc)[:300]) from exc
+    except Exception as exc:
+        raise _snowflake_error(exc) from exc
+
+
+def _linked_jira(db: Db, who: Dict[str, Any], case_id: str) -> Optional[Dict[str, Any]]:
+    """The first linked Jira issue, read with the caller's own Jira connection; None when there is no link, the caller
+    has no JIRA.READ or no connection, or Jira does not answer."""
+    if not _holds(who, "JIRA.READ"):
+        return None
+    keys = [link["ref"] for link in SqlStore(db).links(case_id) if link.get("kind") == "JIRA"]
+    if not keys:
+        return None
+    try:
+        from app import jira_api as jira
+        from services.jira.client import detail
+
+        client, conn, _ = jira._client(db)
+        info = detail(client.issue(keys[0]), conn.get("site_url") or "")
+        return {k: info.get(k) for k in ("key", "summary", "description", "environment", "comments", "type", "priority",
+                                          "status")}
+    except Exception:
+        return None
+
+
+class TriageIn(BaseModel):
+    force: bool = False
+    note: Optional[str] = Field(default=None, max_length=4000)
+
+
+@router.post("/api/cases/{case_id}/triage")
+def case_triage(case_id: str, body: Optional[TriageIn] = None, db: Db = Depends(current_db)):
+    """{ai, artifacts, cached}: the AI triage (cached per fingerprint and context unless force); AI.USE and CASE.WORK."""
+    from services.cases.triage import triage
+
+    who = _who(db)
+    _need(who, "CASE.WORK", "triaging a case")
+    _visible_case(db, who, case_id)
+    body = body or TriageIn()
+    issue = _linked_jira(db, who, case_id)
+    return _ai_http(lambda: triage(db, case_id, who["user"], force=body.force, note=body.note, jira_issue=issue,
+                                   can_see=lambda d: _can_see(db, who, d)))
+
+
+class CaseAskIn(BaseModel):
+    question: str = Field(min_length=3, max_length=1000)
+
+
+@router.post("/api/cases/{case_id}/ask")
+def case_ask(case_id: str, body: CaseAskIn, db: Db = Depends(current_db)):
+    """{answer, citations:[{kind, ref, url?}]}."""
+    from services.cases.triage import ask
+
+    who = _who(db)
+    _visible_case(db, who, case_id)
+    issue = _linked_jira(db, who, case_id)
+    return _ai_http(lambda: ask(db, case_id, body.question, who["user"], jira_issue=issue,
+                                can_see=lambda d: _can_see(db, who, d)))
+
+
+class DecideIn(BaseModel):
+    decision: Literal["accept", "reject"]
+    note: Optional[str] = Field(default=None, max_length=2000)
+
+
+@router.post("/api/cases/{case_id}/artifacts/{artifact_id}/decide")
+def artifact_decide(case_id: str, artifact_id: str, body: DecideIn, db: Db = Depends(current_db)):
+    """{artifact}: accept or reject a PROPOSED artifact (an invalid reproduction test cannot be accepted)."""
+    from services.cases.fixes import decide
+
+    who = _who(db)
+    case = _visible_case(db, who, case_id)
+    return {"artifact": _ai_http(lambda: decide(db, case, artifact_id, body.decision, who["user"], body.note))}
+
+
+@router.post("/api/cases/{case_id}/artifacts/{artifact_id}/run")
+def artifact_run(case_id: str, artifact_id: str, db: Db = Depends(current_db)):
+    """{outcome, rows_returned, measured, detail, columns, sample, masked}: one reproduction test, read-only and
+    guarded, with the caller's role; PII columns are masked in the sample."""
+    from services.cases.fixes import run_repro
+
+    who = _who(db)
+    case = _visible_case(db, who, case_id)
+    return _ai_http(lambda: run_repro(db, case, artifact_id, who["user"]))
+
+
+class AppliedIn(BaseModel):
+    note: Optional[str] = Field(default=None, max_length=2000)
+
+
+@router.post("/api/cases/{case_id}/artifacts/{artifact_id}/applied")
+def artifact_applied(case_id: str, artifact_id: str, body: Optional[AppliedIn] = None, db: Db = Depends(current_db)):
+    """{artifact, case}: an ACCEPTED fix marked APPLIED by the person who applied it; the case moves to FIX_APPLIED."""
+    from services.cases.fixes import mark_applied
+
+    who = _who(db)
+    case = _visible_case(db, who, case_id)
+    out = _ai_http(lambda: mark_applied(db, case, artifact_id, who["user"], (body or AppliedIn()).note))
+    return {"artifact": out["artifact"], "case": case_detail_out(out["case"])}
+
+
+class PublishIn(BaseModel):
+    dry_run: bool = True
+    preview_token: Optional[str] = Field(default=None, max_length=4000)
+
+
+@router.post("/api/cases/{case_id}/artifacts/{artifact_id}/publish")
+def artifact_publish(case_id: str, artifact_id: str, body: PublishIn, db: Db = Depends(current_db),
+                     x_aip_replay: Optional[str] = Header(default=None)):
+    """A dry run returns {branch, base_branch, repo, path, diff, preview_token}; the real publish ({dry_run: false,
+    preview_token}) opens a draft pull request from branch fix/<case number> and returns {pr_url, branch, status}."""
+    from app.governance import _valid_replay
+    from app.main import _publish_dbt
+    from services.cases.fixes import publish
+
+    who = _who(db)
+    _need(who, "DBT.EDIT", "publishing a pull request")
+    case = _visible_case(db, who, case_id)
+    replay = bool(_valid_replay(x_aip_replay))
+    return _ai_http(lambda: publish(db, case, artifact_id, who["user"], body.dry_run, body.preview_token, replay=replay,
+                                    publisher=lambda payload: _publish_dbt(db, "", payload)))
+
+
+@router.post("/api/cases/{case_id}/verify")
+def case_verify(case_id: str, db: Db = Depends(current_db)):
+    """{results:[{artifact_id, title, outcome}], verified, case}: runs every ACCEPTED reproduction test; all PASS moves
+    the case to VERIFIED, anything else to IN_PROGRESS."""
+    from services.cases.fixes import verify
+
+    who = _who(db)
+    case = _visible_case(db, who, case_id)
+    out = _ai_http(lambda: verify(db, case, who["user"]))
+    return {**out, "case": case_detail_out(out["case"])}
+
+
+class JiraCommentIn(BaseModel):
+    text: Optional[str] = Field(default=None, max_length=8000)
+
+
+@router.post("/api/cases/{case_id}/jira-comment")
+def case_jira_comment(case_id: str, body: Optional[JiraCommentIn] = None, db: Db = Depends(current_db)):
+    """{key, posted, results}: the case summary (counts only, never sample rows) posted as the caller to each linked
+    Jira issue. key is the first issue; posted is true when every comment was posted."""
+    from app import jira_api as jira
+    from services.cases.fixes import jira_text
+    from services.cases.triage import _ai
+    from services.jira import adf
+    from services.jira.client import JiraError
+
+    who = _who(db)
+    case = _visible_case(db, who, case_id)
+    store = SqlStore(db)
+    keys = [link["ref"] for link in store.links(case_id) if link.get("kind") == "JIRA"]
+    if not keys:
+        raise HTTPException(409, "This case has no linked Jira issue.")
+    text = _redacted((body or JiraCommentIn()).text, 8000) or jira_text({**case, "ai": _ai(case)}, store.artifacts(case_id))
+    client, conn, _ = jira._client(db)
+    results = []
+    for key in keys[:10]:
+        try:
+            posted = client.add_comment(key, adf.from_markdown(text))
+            jira._log(db, key, "COMMENT", "DONE", conn.get("cloud_id"), None,
+                      {"comment_id": (posted or {}).get("id"), "case_id": case_id, "preview": adf.plain(text, 300)})
+            results.append({"key": key, "ok": True})
+        except JiraError as exc:
+            jira._log(db, key, "COMMENT", "FAILED", conn.get("cloud_id"), None, error=exc.message)
+            results.append({"key": key, "ok": False, "error": exc.message})
+    store.event(case_id, "jira_commented", who["user"], {"keys": [r["key"] for r in results if r["ok"]],
+                                                         "failed": [r["key"] for r in results if not r["ok"]]})
+    return {"key": keys[0], "posted": all(r["ok"] for r in results), "results": results}
