@@ -143,6 +143,7 @@ RULES: List[Tuple[str, str, Any, str]] = [
     ("PUT", r"/api/code/repos/[^/]+", "INTEGRATION.MANAGE", "Change a code repository"),
     ("DELETE", r"/api/code/repos/[^/]+", "INTEGRATION.MANAGE", "Disconnect a code repository"),
     ("PUT", r"/api/code/repos/[^/]+/schedule", "INTEGRATION.MANAGE", "Schedule a code repository refresh"),
+    ("PUT", r"/api/code/repos/[^/]+/credentials", "INTEGRATION.MANAGE", "Change a code repository's credentials"),
     ("DELETE", r"/api/code/repos/[^/]+/schedule", "INTEGRATION.MANAGE", ""),
     ("POST", r"/api/code/repos/[^/]+/refresh", "RUN.OPERATE", ""),
     ("POST", r"/api/skills/builder/check", None, ""),
@@ -195,8 +196,8 @@ RULES: List[Tuple[str, str, Any, str]] = [
 _COMPILED = [(m, re.compile(f"^{p}$"), priv, title) for m, p, priv, title in RULES]
 READ_RULES = [(re.compile(r"^/api/(admin/.*|config/(rules|platform|models))$"), "ADMIN.VIEW"),
               (re.compile(r"^/api/(audit|costs)(/.*)?$"), "AUDIT.VIEW"),
-              (re.compile(r"^/api/code/setup$"), "ADMIN.VIEW"),
-              (re.compile(r"^/api/code/(search|file|lineage|summary|repos|repos/[^/]+/runs)$"), "CODE.VIEW"),
+              (re.compile(r"^/api/code/setup$"), "INTEGRATION.MANAGE"),
+              (re.compile(r"^/api/code/(search|file|lineage|summary|repos|repos/[^/]+/(runs|branches))$"), "CODE.VIEW"),
               (re.compile(r"^/api/governance/(roles|users|policies|settings|events|privileges)$"), "ADMIN.VIEW")]
 
 

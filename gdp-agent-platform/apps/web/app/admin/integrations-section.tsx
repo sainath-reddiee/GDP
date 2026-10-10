@@ -1,11 +1,11 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState, useTransition } from "react";
+import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import {
-  CalendarClock, Check, ExternalLink, FileCode2, GitBranch, Github, Loader2, Plus, RefreshCw, Settings2, Trash2,
-  TriangleAlert, Unplug, X,
+  CalendarClock, Check, ChevronDown, ExternalLink, FileCode2, GitBranch, GitPullRequest, Github, KeyRound, Loader2, Plus,
+  RefreshCw, Search, Settings2, Trash2, TriangleAlert, Unplug, X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input, Select } from "@/components/ui/input";
@@ -14,35 +14,60 @@ import { useScrollLock } from "@/components/use-scroll-lock";
 import { cn } from "@/lib/utils";
 import { ago } from "../skills/types";
 import {
-  connectRepo, indexRuns, loadSetup, refreshRepo, removeRepo, scheduleRepo, updateRepo,
-  type CodeRepo, type CodeSetup, type IndexRun,
+  checkPublishing, connectRepo, indexRuns, loadSetup, refreshRepo, removeRepo, repoBranches, rotatePublishingToken,
+  scheduleRepo, setCredentials, setupPublishing, updateRepo,
+  type CodeRepo, type CodeSetup, type IndexRun, type PublishingStatus, type RepoBranch,
 } from "../code/actions";
 
 type Domain = { domain_id: string; domain_name: string };
 const PRESETS = [
   { label: "Every hour", cron: "0 * * * * UTC" }, { label: "Daily 06:00 UTC", cron: "0 6 * * * UTC" },
-  { label: "Weekdays 06:00 UTC", cron: "0 6 * * 1-5 UTC" }, { label: "Weekly, Monday 06:00 UTC", cron: "0 6 * * 1 UTC" },
+  { label: "Weekdays 06:00 UTC", cron: "0 6 * * MON-FRI UTC" }, { label: "Weekly, Monday 06:00 UTC", cron: "0 6 * * MON UTC" },
 ];
 const STATUS_TONE: Record<string, string> = {
   READY: "bg-emerald-50 text-emerald-700 ring-emerald-100", INDEXING: "bg-indigo-50 text-indigo-700 ring-indigo-100",
   FAILED: "bg-rose-50 text-rose-700 ring-rose-100", NEW: "bg-slate-100 text-slate-600 ring-slate-200",
+  CANCELLED: "bg-amber-50 text-amber-700 ring-amber-100",
 };
+const POLL_MS = 5000;
+const POLL_LIMIT_MS = 20 * 60 * 1000; // stop polling a run that never reports back; Refresh still works
 type Msg = { tone: "ok" | "info" | "error"; text: string } | null;
 const toneOf = (e: string): "info" | "error" => (/approval|request/i.test(e) ? "info" : "error");
+/** "Branch 'x' is not in ... Available: a, b" from the API, as a list to click. */
+const suggestedBranches = (error: string) => (error.match(/Available: (.+)$/)?.[1] ?? "").split(", ").filter((b) => b && b !== "none");
 
-/** Admin, Integrations: code repositories that feed dbt, QA, Soda, STTM and copilot prompts, and (next) Jira. */
-export function IntegrationsSection({ repos, domains }: { repos: CodeRepo[]; domains: Domain[] }) {
+let inflight = 0; // server actions still waiting; polling holds off so a refresh never aborts one
+
+/** useTransition whose actions the list polling waits for. */
+function useTrackedTransition(): [boolean, (fn: () => Promise<void>) => void] {
+  const [pending, startTransition] = useTransition();
+  return [pending, (fn) => {
+    inflight += 1;
+    startTransition(async () => {
+      try { await fn(); } finally { inflight = Math.max(0, inflight - 1); }
+    });
+  }];
+}
+
+/** Admin, Integrations: repositories configured once and used by dbt and every AI step, dbt publishing, and Jira. */
+export function IntegrationsSection({ repos, domains, publishing }: { repos: CodeRepo[]; domains: Domain[]; publishing: PublishingStatus }) {
   const router = useRouter();
   const { canAct } = useAccess();
   const may = canAct("INTEGRATION.MANAGE");
   const [connecting, setConnecting] = useState(false);
   const [msg, setMsg] = useState<Msg>(null);
-  // while something indexes, refresh the list every few seconds
+  const indexing = repos.some((r) => r.refreshing || r.status === "INDEXING");
+  const pollStart = useRef<number | null>(null);
   useEffect(() => {
-    if (!repos.some((r) => r.refreshing || r.status === "INDEXING")) return;
-    const t = setInterval(() => router.refresh(), 5000);
+    if (!indexing) { pollStart.current = null; return; }
+    pollStart.current ??= Date.now();
+    const t = setInterval(() => {
+      if (Date.now() - (pollStart.current ?? 0) > POLL_LIMIT_MS) { clearInterval(t); return; }
+      if (inflight === 0) router.refresh();
+    }, POLL_MS);
     return () => clearInterval(t);
-  }, [repos, router]);
+  }, [indexing, router]);
+  const github = repos.filter((r) => r.provider === "GITHUB");
   return (
     <div className="space-y-5">
       <section className="surface p-5">
@@ -50,13 +75,19 @@ export function IntegrationsSection({ repos, domains }: { repos: CodeRepo[]; dom
           <span className="grid h-10 w-10 place-items-center rounded-xl bg-indigo-50 text-indigo-600 ring-1 ring-inset ring-indigo-100"><FileCode2 className="h-5 w-5" /></span>
           <div className="min-w-[16rem] flex-1">
             <h3 className="text-base font-semibold">Code repositories</h3>
-            <p className="text-sm text-muted-foreground">Client dbt and SQL repositories, indexed in Snowflake. Their models, macros, tests and schema files are
-              quoted into dbt review, QA tests, data quality checks, STTM and the copilot, with citations. Browse them on <Link href="/code" className="text-primary hover:underline">Code</Link>.</p>
+            <p className="text-sm text-muted-foreground">Configure the client&apos;s dbt and SQL repositories once. The dbt workspace uses them for its clone, origin and
+              base branch, and every AI step (dbt review, QA, data quality, STTM, copilot) quotes their models, macros and tests with citations.
+              Browse them on <Link href="/code" className="text-primary hover:underline">Code</Link>.</p>
           </div>
           {may && <Button onClick={() => setConnecting(true)}><Plus className="h-4 w-4" />Connect repository</Button>}
         </div>
-        {msg && <p role={msg.tone === "error" ? "alert" : "status"} className={cn("mt-3 rounded-lg px-3 py-2 text-xs",
-          msg.tone === "error" ? "bg-destructive/10 text-destructive" : msg.tone === "info" ? "bg-sky-50 text-sky-800" : "bg-success/10 text-success")}>{msg.text}</p>}
+        {msg && (
+          <p role={msg.tone === "error" ? "alert" : "status"} className={cn("mt-3 flex items-start gap-2 rounded-lg px-3 py-2 text-xs",
+            msg.tone === "error" ? "bg-destructive/10 text-destructive" : msg.tone === "info" ? "bg-sky-50 text-sky-800" : "bg-success/10 text-success")}>
+            <span className="flex-1">{msg.text}</span>
+            <button type="button" aria-label="Dismiss" onClick={() => setMsg(null)}><X className="h-3.5 w-3.5" /></button>
+          </p>
+        )}
         <div className="mt-4 space-y-3">
           {repos.map((r) => <RepoCard key={r.repo_id} repo={r} domains={domains} may={may} onMsg={setMsg} />)}
           {!repos.length && (
@@ -68,6 +99,7 @@ export function IntegrationsSection({ repos, domains }: { repos: CodeRepo[]; dom
           )}
         </div>
       </section>
+      <PublishingCard status={publishing} githubRepos={github} may={canAct("ADMIN.DEPLOY")} onMsg={setMsg} />
       <section className="surface flex items-start gap-3 p-5">
         <span className="grid h-10 w-10 place-items-center rounded-xl bg-sky-50 text-sky-600 ring-1 ring-inset ring-sky-100"><Unplug className="h-5 w-5" /></span>
         <div>
@@ -83,22 +115,29 @@ export function IntegrationsSection({ repos, domains }: { repos: CodeRepo[]; dom
 
 function RepoCard({ repo: r, domains, may, onMsg }: { repo: CodeRepo; domains: Domain[]; may: boolean; onMsg: (m: Msg) => void }) {
   const router = useRouter();
-  const [pending, start] = useTransition();
-  const [panel, setPanel] = useState<"" | "schedule" | "settings" | "runs">("");
+  const [pending, start] = useTrackedTransition();
+  const [panel, setPanel] = useState<"" | "branch" | "schedule" | "settings" | "runs" | "credentials" | "disconnect">("");
   const [runs, setRuns] = useState<IndexRun[] | null>(null);
   const [cron, setCron] = useState(r.schedule_cron ?? PRESETS[1].cron);
-  const [branch, setBranch] = useState(r.branch);
   const [doms, setDoms] = useState<string[]>(r.domain_ids);
   const [include, setInclude] = useState(r.include_globs.join(", "));
   const [exclude, setExclude] = useState(r.exclude_globs.join(", "));
+  // the server is the source of truth: re-sync the form whenever the saved repository changes
+  const saved = `${r.domain_ids.join()}|${r.include_globs.join()}|${r.exclude_globs.join()}|${r.schedule_cron}`;
+  useEffect(() => {
+    setDoms(r.domain_ids); setInclude(r.include_globs.join(", ")); setExclude(r.exclude_globs.join(", "));
+    setCron(r.schedule_cron ?? PRESETS[1].cron);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [saved]);
   const busy = r.refreshing || r.status === "INDEXING";
-  const act = (fn: () => Promise<{ ok: boolean; error?: string }>, ok: string) => start(async () => {
+  const act = (fn: () => Promise<{ ok: boolean; error?: string }>, ok: string, after?: () => void) => start(async () => {
     const res = await fn();
     onMsg(res.ok ? { tone: "ok", text: ok } : { tone: toneOf(res.error ?? ""), text: res.error ?? "Failed" });
-    if (res.ok) router.refresh();
+    if (res.ok) { after?.(); router.refresh(); }
   });
   const split = (s: string) => s.split(",").map((x) => x.trim()).filter(Boolean);
   const kinds = Object.entries(r.stats?.by_kind ?? {}).sort((a, b) => b[1] - a[1]).slice(0, 5);
+  const toggle = (p: typeof panel) => setPanel(panel === p ? "" : p);
   return (
     <article className="rounded-xl border border-border/80 bg-card">
       <div className="flex flex-wrap items-start gap-3 p-4">
@@ -111,37 +150,49 @@ function RepoCard({ repo: r, domains, may, onMsg }: { repo: CodeRepo; domains: D
           </p>
           <a href={r.git_url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 font-mono text-[11px] text-muted-foreground hover:text-primary">
             {r.git_url.replace(/^https:\/\//, "")}<ExternalLink className="h-3 w-3" /></a>
-          <p className="mt-1 text-xs text-muted-foreground">
-            branch <span className="font-mono">{r.branch}</span>{r.last_commit ? <> @ <span className="font-mono">{r.last_commit.slice(0, 8)}</span></> : ""}
-            {" · "}{r.last_indexed ? `indexed ${ago(r.last_indexed)}` : "not indexed yet"}
-            {r.schedule_cron ? <> · <CalendarClock className="inline h-3 w-3" /> {r.schedule_cron}</> : ""}
-            {r.domain_ids.length ? ` · ${r.domain_ids.map((d) => domains.find((x) => x.domain_id === d)?.domain_name ?? d).join(", ")}` : " · all domains"}
-          </p>
+          <div className="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-xs text-muted-foreground">
+            <button type="button" disabled={!may} onClick={() => toggle("branch")} title={may ? "Switch branch" : undefined}
+                    className={cn("inline-flex max-w-full items-center gap-1 rounded-md border px-1.5 py-0.5 font-mono text-[11px] text-foreground",
+                                  may && "hover:border-primary/40 hover:bg-primary/5", panel === "branch" && "border-primary/50 bg-primary/5")}>
+              <GitBranch className="h-3 w-3 shrink-0" /><span className="truncate">{r.branch}</span>{may && <ChevronDown className="h-3 w-3 shrink-0" />}
+            </button>
+            {r.last_commit ? <span>@ <span className="font-mono">{r.last_commit.slice(0, 8)}</span></span> : null}
+            <span>· {r.last_indexed ? `indexed ${ago(r.last_indexed)}` : "not indexed yet"}</span>
+            {r.schedule_cron ? <span>· <CalendarClock className="inline h-3 w-3" /> {r.schedule_cron}</span> : null}
+            <span>· {r.domain_ids.length ? r.domain_ids.map((d) => domains.find((x) => x.domain_id === d)?.domain_name ?? d).join(", ") : "all domains"}</span>
+          </div>
           {r.status === "FAILED" && r.error && <p className="mt-1.5 flex items-start gap-1 text-xs text-destructive"><TriangleAlert className="mt-0.5 h-3 w-3 shrink-0" />{r.error.slice(0, 400)}</p>}
+          {!!r.stats?.pending_files && <p className="mt-1 text-xs text-amber-700">{r.stats.pending_files.toLocaleString()} changed files are still waiting; the next refresh reads them.</p>}
         </div>
-        <div className="grid grid-cols-3 gap-2 text-center text-xs">
+        <div className="grid shrink-0 grid-cols-3 gap-2 text-center text-xs">
           {[["files", r.stats?.files], ["chunks", r.stats?.chunks], ["edges", r.stats?.edges]].map(([k, v]) => (
-            <div key={String(k)} className="rounded-lg bg-muted/50 px-3 py-1.5"><p className="text-sm font-semibold tabular-nums">{Number(v ?? 0).toLocaleString()}</p><p className="text-[10px] text-muted-foreground">{k}</p></div>
+            <div key={String(k)} className="min-w-[3.75rem] rounded-lg bg-muted/50 px-2.5 py-1.5"><p className="text-sm font-semibold tabular-nums">{Number(v ?? 0).toLocaleString()}</p><p className="text-[10px] text-muted-foreground">{k}</p></div>
           ))}
         </div>
       </div>
-      {(kinds.length > 0 || (r.stats?.dbt_projects ?? []).length > 0) && (
+      {(kinds.length > 0 || (r.stats?.dbt_projects ?? []).length > 0 || !!r.stats?.skipped_files) && (
         <div className="flex flex-wrap gap-1.5 border-t px-4 py-2 text-[11px]">
           {(r.stats?.dbt_projects ?? []).map((p) => <span key={p} className="rounded-full bg-orange-50 px-2 py-0.5 text-orange-700 ring-1 ring-inset ring-orange-100">dbt: {p}</span>)}
           {kinds.map(([k, n]) => <span key={k} className="rounded-full bg-muted px-2 py-0.5 text-muted-foreground">{k.toLowerCase().replace(/_/g, " ")} {n}</span>)}
+          {!!r.stats?.skipped_files && <span className="rounded-full bg-amber-50 px-2 py-0.5 text-amber-700 ring-1 ring-inset ring-amber-100" title="Unreadable or unsafe file names; retried when they change">{r.stats.skipped_files} skipped</span>}
         </div>
       )}
       <div className="flex flex-wrap items-center gap-1.5 border-t px-3 py-2">
         <Button size="sm" variant="outline" disabled={pending || busy} onClick={() => act(() => refreshRepo(r.repo_id), "Refresh started; only changed files are read.")}>
           {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}{busy ? "Indexing…" : "Refresh now"}</Button>
         <Link href={`/code?repo=${r.repo_id}`} className="inline-flex h-8 items-center gap-1.5 rounded-lg px-3 text-xs font-medium hover:bg-muted"><FileCode2 className="h-3.5 w-3.5" />Browse</Link>
-        <Button size="sm" variant="ghost" onClick={() => { setPanel(panel === "runs" ? "" : "runs"); if (!runs) indexRuns(r.repo_id).then((x) => x.ok && setRuns(x.data.runs)); }}>History</Button>
-        {may && <Button size="sm" variant="ghost" onClick={() => setPanel(panel === "schedule" ? "" : "schedule")}><CalendarClock className="h-3.5 w-3.5" />Schedule</Button>}
-        {may && <Button size="sm" variant="ghost" onClick={() => setPanel(panel === "settings" ? "" : "settings")}><Settings2 className="h-3.5 w-3.5" />Settings</Button>}
-        {may && <Button size="sm" variant="ghost" className="ml-auto text-muted-foreground hover:text-destructive" disabled={pending}
-                        onClick={() => { if (window.confirm(`Disconnect ${r.name}? Its index is removed; the Snowflake Git repository and secret stay.`)) act(() => removeRepo(r.repo_id), `${r.name} disconnected`); }}>
+        <Button size="sm" variant="ghost" onClick={() => { toggle("runs"); indexRuns(r.repo_id).then((x) => x.ok && setRuns(x.data.runs)); }}>History</Button>
+        {may && <Button size="sm" variant="ghost" onClick={() => toggle("schedule")}><CalendarClock className="h-3.5 w-3.5" />Schedule</Button>}
+        {may && <Button size="sm" variant="ghost" onClick={() => toggle("settings")}><Settings2 className="h-3.5 w-3.5" />Settings</Button>}
+        {may && <Button size="sm" variant="ghost" onClick={() => toggle("credentials")}><KeyRound className="h-3.5 w-3.5" />Credentials</Button>}
+        {may && <Button size="sm" variant="ghost" className="ml-auto text-muted-foreground hover:text-destructive" disabled={pending} onClick={() => toggle("disconnect")}>
           <Trash2 className="h-3.5 w-3.5" />Disconnect</Button>}
       </div>
+      {panel === "branch" && (
+        <BranchPicker repo={r} pending={pending} onClose={() => setPanel("")}
+                      onPick={(b) => act(() => updateRepo(r.repo_id, { branch: b }), `Switched ${r.name} to ${b}. Re-indexing now; AI steps use the new branch when it finishes.`,
+                                      () => setPanel(""))} />
+      )}
       {panel === "schedule" && (
         <div className="space-y-2 border-t bg-muted/20 px-4 py-3 text-xs">
           <div className="flex flex-wrap gap-1.5">
@@ -149,17 +200,16 @@ function RepoCard({ repo: r, domains, may, onMsg }: { repo: CodeRepo; domains: D
                                         className={cn("rounded-full border px-2.5 py-1", cron === p.cron ? "border-primary bg-primary/10 text-primary" : "bg-card hover:border-primary/40")}>{p.label}</button>)}
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <Input value={cron} onChange={(e) => setCron(e.target.value)} className="h-8 w-56 font-mono text-xs" aria-label="Cron with time zone" />
+            <Input value={cron} onChange={(e) => setCron(e.target.value)} className="h-8 w-64 font-mono text-xs" aria-label="Cron with time zone" />
             <Button size="sm" disabled={pending} onClick={() => act(() => scheduleRepo(r.repo_id, cron), `Scheduled: ${cron} (a Snowflake task)`)}><Check className="h-3.5 w-3.5" />Save schedule</Button>
             {r.schedule_cron && <Button size="sm" variant="ghost" disabled={pending} onClick={() => act(() => scheduleRepo(r.repo_id, null), "Schedule removed")}>Remove schedule</Button>}
           </div>
-          <p className="text-muted-foreground">Runs as a Snowflake task with the warehouse of this workspace; only files that changed since the last refresh are read.</p>
+          <p className="text-muted-foreground">Five cron fields and a time zone. Runs as a Snowflake task; only files that changed since the last refresh are read, and a run already in progress is never doubled.</p>
         </div>
       )}
       {panel === "settings" && (
         <div className="grid gap-3 border-t bg-muted/20 px-4 py-3 text-xs md:grid-cols-2">
-          <label className="space-y-1">Branch<Input value={branch} onChange={(e) => setBranch(e.target.value)} className="h-8 font-mono text-xs" /></label>
-          <div className="space-y-1">Domains it serves (none means all)
+          <div className="space-y-1 md:col-span-2">Domains it serves (none means all)
             <div className="flex flex-wrap gap-1">{domains.map((d) => {
               const on = doms.includes(d.domain_id);
               return <button key={d.domain_id} type="button" onClick={() => setDoms(on ? doms.filter((x) => x !== d.domain_id) : [...doms, d.domain_id])}
@@ -168,34 +218,51 @@ function RepoCard({ repo: r, domains, may, onMsg }: { repo: CodeRepo; domains: D
           </div>
           <label className="space-y-1">Only these paths (globs, comma separated)<Input value={include} onChange={(e) => setInclude(e.target.value)} placeholder="models/**, macros/**" className="h-8 font-mono text-xs" /></label>
           <label className="space-y-1">Skip these paths<Input value={exclude} onChange={(e) => setExclude(e.target.value)} placeholder="models/legacy/**" className="h-8 font-mono text-xs" /></label>
-          <div className="flex items-center gap-2 md:col-span-2">
-            <label className="flex items-center gap-1.5"><input type="checkbox" checked={r.enabled} onChange={() => act(() => updateRepo(r.repo_id, { enabled: !r.enabled }), r.enabled ? "Disabled: no longer used in prompts" : "Enabled")} />Used in prompts</label>
+          <div className="flex flex-wrap items-center gap-2 md:col-span-2">
+            <label className="flex items-center gap-1.5"><input type="checkbox" checked={r.enabled} disabled={pending}
+                   onChange={() => act(() => updateRepo(r.repo_id, { enabled: !r.enabled }), r.enabled ? "Disabled: no longer used in prompts or offered to dbt" : "Enabled")} />Used in prompts and by dbt</label>
+            <span className="text-[11px] text-muted-foreground">Changing the paths re-indexes; changing domains does not.</span>
             <Button size="sm" className="ml-auto" disabled={pending}
-                    onClick={() => act(() => updateRepo(r.repo_id, { branch, domain_ids: doms, include_globs: split(include), exclude_globs: split(exclude) }),
-                                       "Saved. A changed branch or paths starts a clean index on the next refresh.")}>
+                    onClick={() => start(async () => {
+                      const res = await updateRepo(r.repo_id, { domain_ids: doms, include_globs: split(include), exclude_globs: split(exclude) });
+                      onMsg(res.ok ? { tone: "ok", text: res.data.reindexing ? "Saved. The paths changed, so the index is being rebuilt." : "Saved." }
+                                   : { tone: toneOf(res.error), text: res.error });
+                      if (res.ok) router.refresh();
+                    })}>
               <Check className="h-3.5 w-3.5" />Save settings</Button>
           </div>
         </div>
       )}
+      {panel === "credentials" && <CredentialsPanel repo={r} pending={pending} onSave={(body, ok) => act(() => setCredentials(r.repo_id, body), ok, () => setPanel(""))} />}
+      {panel === "disconnect" && <DisconnectPanel repo={r} pending={pending} onCancel={() => setPanel("")}
+                                                  onConfirm={(drop) => start(async () => {
+                                                    const res = await removeRepo(r.repo_id, drop);
+                                                    onMsg(res.ok ? { tone: "ok", text: `${r.name} disconnected${res.data.dropped.length ? `; dropped ${res.data.dropped.join(", ")}` : ""}${res.data.kept.length ? `; kept ${res.data.kept.join(", ")}` : ""}.` }
+                                                                 : { tone: toneOf(res.error), text: res.error });
+                                                    if (res.ok) router.refresh();
+                                                  })} />}
       {panel === "runs" && (
         <div className="border-t px-4 py-3 text-xs">
           {!runs ? <p className="flex items-center gap-2 text-muted-foreground"><Loader2 className="h-3.5 w-3.5 animate-spin" />Loading…</p> : runs.length ? (
-            <table className="w-full">
-              <thead className="text-left text-[10px] uppercase tracking-wide text-muted-foreground"><tr><th className="py-1">Started</th><th>Status</th><th>Commit</th><th className="text-right">Changed</th><th className="text-right">Chunks</th><th className="text-right">Time</th><th>By</th></tr></thead>
-              <tbody className="divide-y">
-                {runs.map((x) => (
-                  <tr key={x.index_run_id} title={x.error ?? ""}>
-                    <td className="py-1.5">{ago(x.started_at)}</td>
-                    <td><span className={cn("rounded-full px-1.5 py-0.5 text-[10px] ring-1 ring-inset", STATUS_TONE[x.status === "SUCCEEDED" ? "READY" : x.status === "RUNNING" ? "INDEXING" : "FAILED"])}>{x.status.toLowerCase()}</span></td>
-                    <td className="font-mono">{(x.commit_sha ?? "").slice(0, 8)}</td>
-                    <td className="text-right tabular-nums">{x.files_changed ?? 0}{x.files_removed ? ` / -${x.files_removed}` : ""}</td>
-                    <td className="text-right tabular-nums">{x.chunks ?? 0}</td>
-                    <td className="text-right tabular-nums">{x.duration_ms ? `${Math.round(x.duration_ms / 1000)} s` : ""}</td>
-                    <td className="text-muted-foreground">{x.triggered_by}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[560px]">
+                <thead className="text-left text-[10px] uppercase tracking-wide text-muted-foreground"><tr><th className="py-1">Started</th><th>Status</th><th>Commit</th><th className="text-right">Changed</th><th className="text-right">Chunks</th><th className="text-right">Time</th><th className="pl-3">By</th></tr></thead>
+                <tbody className="divide-y">
+                  {runs.map((x) => (
+                    <tr key={x.index_run_id} title={x.error ?? ""}>
+                      <td className="py-1.5">{ago(x.started_at)}</td>
+                      <td><span className={cn("rounded-full px-1.5 py-0.5 text-[10px] ring-1 ring-inset", STATUS_TONE[x.status === "SUCCEEDED" ? "READY" : x.status === "RUNNING" ? "INDEXING" : x.status === "CANCELLED" ? "CANCELLED" : "FAILED"])}>{x.status.toLowerCase()}</span></td>
+                      <td className="font-mono">{(x.commit_sha ?? "").slice(0, 8)}</td>
+                      <td className="text-right tabular-nums">{x.files_changed ?? 0}{x.files_removed ? ` / -${x.files_removed}` : ""}</td>
+                      <td className="text-right tabular-nums">{x.chunks ?? 0}</td>
+                      <td className="text-right tabular-nums">{x.duration_ms ? `${Math.round(x.duration_ms / 1000)} s` : ""}</td>
+                      <td className="pl-3 text-muted-foreground">{x.triggered_by === "SYSTEM" ? "schedule" : x.triggered_by}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {runs.some((x) => x.error) && <p className="mt-2 text-[11px] text-muted-foreground">Hover a row to see its message.</p>}
+            </div>
           ) : <p className="text-muted-foreground">No refreshes yet.</p>}
         </div>
       )}
@@ -203,11 +270,184 @@ function RepoCard({ repo: r, domains, may, onMsg }: { repo: CodeRepo; domains: D
   );
 }
 
+function BranchPicker({ repo, pending, onPick, onClose }: { repo: CodeRepo; pending: boolean; onPick: (b: string) => void; onClose: () => void }) {
+  const [list, setList] = useState<RepoBranch[] | null>(null);
+  const [error, setError] = useState("");
+  const [q, setQ] = useState("");
+  const [loading, startLoad] = useTransition();
+  const load = (fetch: boolean) => startLoad(async () => {
+    const res = await repoBranches(repo.repo_id, fetch);
+    if (!res.ok) { setError(res.error); return; }
+    setList(res.data.branches);
+    setError(res.data.error ? `Could not fetch from the remote, showing the last fetched branches: ${res.data.error}` : "");
+  });
+  useEffect(() => { load(true); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
+  const shown = useMemo(() => (list ?? []).filter((b) => b.name.toLowerCase().includes(q.trim().toLowerCase())), [list, q]);
+  const missing = list && !list.some((b) => b.name === repo.branch);
+  return (
+    <div className="space-y-2 border-t bg-muted/20 px-4 py-3 text-xs">
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="relative min-w-[14rem] flex-1">
+          <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+          <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Find a branch" className="h-8 pl-8 font-mono text-xs" aria-label="Find a branch" autoFocus />
+        </div>
+        <Button size="sm" variant="ghost" disabled={loading} onClick={() => load(true)}>{loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}Fetch</Button>
+        <Button size="sm" variant="ghost" onClick={onClose}>Close</Button>
+      </div>
+      {error && <p className="text-amber-700">{error}</p>}
+      {missing && <p className="flex items-center gap-1 text-destructive"><TriangleAlert className="h-3 w-3" />{repo.branch} is no longer on the remote. Pick another branch.</p>}
+      {!list ? <p className="flex items-center gap-2 text-muted-foreground"><Loader2 className="h-3.5 w-3.5 animate-spin" />Fetching branches…</p> : (
+        <ul className="max-h-64 divide-y overflow-y-auto overscroll-contain rounded-lg border bg-card">
+          {shown.map((b) => {
+            const current = b.name === repo.branch;
+            return (
+              <li key={b.name} className="flex min-w-0 items-center gap-2 px-3 py-1.5">
+                <GitBranch className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                <span className="min-w-0 flex-1 truncate font-mono">{b.name}</span>
+                <span className="hidden shrink-0 font-mono text-[10px] text-muted-foreground sm:inline">{b.commit.slice(0, 8)}</span>
+                {current ? <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-medium text-primary">current</span>
+                  : <Button size="sm" variant="outline" className="h-6 shrink-0 px-2 text-[11px]" disabled={pending} onClick={() => onPick(b.name)}>Switch</Button>}
+              </li>
+            );
+          })}
+          {!shown.length && <li className="px-3 py-3 text-center text-muted-foreground">No branch matches.</li>}
+        </ul>
+      )}
+      <p className="text-[11px] text-muted-foreground">Switching re-indexes the repository from the new branch. A run in progress on the old branch stops without writing.</p>
+    </div>
+  );
+}
+
+function CredentialsPanel({ repo, pending, onSave }: {
+  repo: CodeRepo; pending: boolean;
+  onSave: (body: { mode: "token" | "secret" | "public"; username?: string | null; token?: string | null; secret_name?: string | null }, ok: string) => void;
+}) {
+  const [mode, setMode] = useState<"token" | "secret" | "public">("token");
+  const [username, setUsername] = useState("");
+  const [token, setToken] = useState("");
+  const [secret, setSecret] = useState(repo.secret_name ?? "");
+  if (repo.owns_git_repository === false) {
+    return <p className="border-t bg-muted/20 px-4 py-3 text-xs text-muted-foreground">This repository reuses <span className="font-mono">{repo.git_repository}</span>, which the platform did not create.
+      Change its GIT_CREDENTIALS in Snowflake, or connect the repository again with a new clone.</p>;
+  }
+  return (
+    <div className="space-y-2 border-t bg-muted/20 px-4 py-3 text-xs">
+      <p>Signed in with: <span className="font-mono">{repo.secret_name || "no credentials (public)"}</span></p>
+      <div className="flex max-w-md rounded-lg border bg-card p-0.5">
+        {([["token", "New token"], ["secret", "Existing secret"], ["public", "Public"]] as const).map(([k, l]) => (
+          <button key={k} type="button" onClick={() => setMode(k)} className={cn("flex-1 rounded-md px-2 py-1", mode === k ? "bg-primary text-primary-foreground" : "text-muted-foreground")}>{l}</button>
+        ))}
+      </div>
+      {mode === "token" && (
+        <div className="grid max-w-xl gap-2 sm:grid-cols-2">
+          <Input value={username} onChange={(e) => setUsername(e.target.value)} placeholder="Git username (any value for GitHub)" className="h-8 text-xs" />
+          <Input type="password" autoComplete="off" value={token} onChange={(e) => setToken(e.target.value)} placeholder="New read-only token" className="h-8 text-xs" />
+        </div>
+      )}
+      {mode === "secret" && <Input value={secret} onChange={(e) => setSecret(e.target.value)} placeholder="DB.SCHEMA.SECRET_NAME (TYPE = PASSWORD)" className="h-8 max-w-md font-mono text-xs" />}
+      <div className="flex items-center gap-2">
+        <Button size="sm" disabled={pending || (mode === "token" && !token.trim()) || (mode === "secret" && !secret.trim())}
+                onClick={() => { onSave({ mode, username: username || null, token: mode === "token" ? token : null, secret_name: mode === "secret" ? secret : null },
+                                        "Credentials updated and tested with a fetch."); setToken(""); }}>
+          {pending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}Save and test</Button>
+        <span className="text-[11px] text-muted-foreground">A token goes straight into a Snowflake secret; the platform never keeps it.</span>
+      </div>
+    </div>
+  );
+}
+
+function DisconnectPanel({ repo, pending, onCancel, onConfirm }: { repo: CodeRepo; pending: boolean; onCancel: () => void; onConfirm: (drop: boolean) => void }) {
+  const [drop, setDrop] = useState(false);
+  return (
+    <div className="space-y-2 border-t bg-rose-50/40 px-4 py-3 text-xs">
+      <p className="font-medium">Disconnect {repo.name}?</p>
+      <p className="text-muted-foreground">Its index, refresh history and schedule are removed, and AI steps and the dbt workspace stop using it. Runs that already used it keep their citations.</p>
+      {repo.owns_git_repository !== false ? (
+        <label className="flex items-center gap-1.5"><input type="checkbox" checked={drop} onChange={() => setDrop(!drop)} />
+          Also drop the Snowflake Git repository and secret the platform created for it</label>
+      ) : <p className="text-muted-foreground">The reused Git repository <span className="font-mono">{repo.git_repository}</span> is kept.</p>}
+      <div className="flex gap-2">
+        <Button size="sm" variant="destructive" disabled={pending} onClick={() => onConfirm(drop)}>{pending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}Disconnect</Button>
+        <Button size="sm" variant="ghost" onClick={onCancel}>Cancel</Button>
+      </div>
+    </div>
+  );
+}
+
+function PublishingCard({ status, githubRepos, may, onMsg }: { status: PublishingStatus; githubRepos: CodeRepo[]; may: boolean; onMsg: (m: Msg) => void }) {
+  const router = useRouter();
+  const [pending, start] = useTrackedTransition();
+  const [token, setToken] = useState("");
+  const [rotating, setRotating] = useState(false);
+  const [origin, setOrigin] = useState(githubRepos[0]?.git_url ?? "");
+  const [check, setCheck] = useState<{ status: string; detail?: string; repository?: string; push?: boolean | null } | null>(null);
+  const [log, setLog] = useState<{ sql: string; ok: boolean; error?: string }[]>([]);
+  const test = () => start(async () => {
+    const res = await checkPublishing(origin);
+    if (!res.ok) { onMsg({ tone: toneOf(res.error), text: res.error }); return; }
+    setCheck(res.data);
+  });
+  return (
+    <section className="surface p-5">
+      <div className="flex flex-wrap items-start gap-3">
+        <span className="grid h-10 w-10 place-items-center rounded-xl bg-emerald-50 text-emerald-600 ring-1 ring-inset ring-emerald-100"><GitPullRequest className="h-5 w-5" /></span>
+        <div className="min-w-[16rem] flex-1">
+          <h3 className="flex items-center gap-2 text-base font-semibold">dbt publishing to GitHub
+            <span className={cn("rounded-full px-2 py-0.5 text-[10px] font-medium ring-1 ring-inset", status.ready ? STATUS_TONE.READY : STATUS_TONE.NEW)}>{status.ready ? "ready" : "not set up"}</span></h3>
+          <p className="text-sm text-muted-foreground">Snowflake Git clones are read-only, so the dbt workspace pushes branches and opens pull requests through the GitHub API
+            from a Snowflake procedure. Set it up once here; every run uses it. The token lives in a Snowflake secret.</p>
+          {status.ready && status.config && <p className="mt-1 font-mono text-[11px] text-muted-foreground">secret {status.config.secret} · access {status.config.external_access_integration}</p>}
+        </div>
+      </div>
+      {may && (
+        <div className="mt-4 space-y-3 text-xs">
+          {!status.ready || rotating ? (
+            <div className="flex max-w-xl flex-wrap gap-2">
+              <Input type="password" autoComplete="off" value={token} onChange={(e) => setToken(e.target.value)} placeholder="GitHub token with Contents and Pull requests write" className="h-9 min-w-[16rem] flex-1 text-xs" />
+              <Button disabled={pending || !token.trim()} onClick={() => start(async () => {
+                const res = status.ready ? await rotatePublishingToken(token.trim()) : await setupPublishing(token.trim());
+                setToken("");
+                if (!res.ok) { onMsg({ tone: toneOf(res.error), text: res.error }); return; }
+                if ("log" in res.data) setLog(res.data.log);
+                const ready = !("ready" in res.data) || res.data.ready;
+                onMsg({ tone: ready ? "ok" : "error", text: status.ready ? "Token updated in the Snowflake secret." : ready ? "GitHub publishing is ready." : ("detail" in res.data && res.data.detail) || "Setup did not finish." });
+                setRotating(false);
+                router.refresh();
+              })}>{pending ? <Loader2 className="h-4 w-4 animate-spin" /> : <KeyRound className="h-4 w-4" />}{status.ready ? "Save token" : "Set up"}</Button>
+            </div>
+          ) : (
+            <div className="flex flex-wrap items-center gap-2">
+              {githubRepos.length > 0 ? (
+                <Select value={origin} onChange={(e) => setOrigin(e.target.value)} className="h-8 w-auto max-w-sm text-xs" aria-label="Repository to test">
+                  {githubRepos.map((r) => <option key={r.repo_id} value={r.git_url}>{r.name} ({r.git_url.replace("https://github.com/", "")})</option>)}
+                </Select>
+              ) : <Input value={origin} onChange={(e) => setOrigin(e.target.value)} placeholder="https://github.com/org/repo" className="h-8 max-w-sm text-xs" />}
+              <Button size="sm" variant="outline" disabled={pending || !/github\.com\//.test(origin)} onClick={test}>{pending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}Test access</Button>
+              <Button size="sm" variant="ghost" onClick={() => setRotating(true)}><KeyRound className="h-3.5 w-3.5" />Rotate token</Button>
+            </div>
+          )}
+          {check && (
+            <p className={cn("rounded-lg px-3 py-2", check.status === "OK" && check.push !== false ? "bg-success/10 text-success" : "bg-amber-50 text-amber-800")}>
+              {check.status === "OK" ? `Connected to ${check.repository}; ${check.push === false ? "this token cannot push to it" : "push allowed"}.` : check.detail || check.status}
+            </p>
+          )}
+          {log.length > 0 && (
+            <ol className="space-y-1 text-[11px]">
+              {log.map((s) => <li key={s.sql} className={cn("rounded border px-2 py-1 font-mono", s.ok ? "border-emerald-200 bg-emerald-50" : "border-red-200 bg-red-50")}>
+                <span className="block whitespace-pre-wrap break-all">{s.sql}</span>{s.error && <span className="mt-0.5 block font-sans text-red-700">{s.error}</span>}</li>)}
+            </ol>
+          )}
+        </div>
+      )}
+    </section>
+  );
+}
+
 function ConnectDrawer({ domains, onClose, onDone }: { domains: Domain[]; onClose: () => void; onDone: (text: string) => void }) {
   useScrollLock();
   const [setup, setSetup] = useState<CodeSetup | null>(null);
   const [error, setError] = useState("");
-  const [pending, start] = useTransition();
+  const [pending, start] = useTrackedTransition();
   const [f, setF] = useState({ name: "", git_url: "", branch: "main", api_integration: "", existing_git_repository: "",
                                 auth: "token" as "token" | "secret" | "public", secret_name: "", username: "", token: "",
                                 domain_ids: [] as string[], include: "", exclude: "", kind: "DBT", index_now: true });
@@ -215,22 +455,25 @@ function ConnectDrawer({ domains, onClose, onDone }: { domains: Domain[]; onClos
   const host = (() => { try { return new URL(f.git_url).origin; } catch { return ""; } })();
   const integrations = setup?.integrations.filter((i) => i.usable !== false) ?? [];
   const fits = integrations.filter((i) => !host || !(i.allowed_prefixes ?? []).length || (i.allowed_prefixes ?? []).some((p) => f.git_url.startsWith(p.replace(/\/$/, "")) || host.startsWith(p.replace(/\/$/, ""))));
-  const set = (patch: Partial<typeof f>) => setF({ ...f, ...patch });
+  const set = (patch: Partial<typeof f>) => setF((prev) => ({ ...prev, ...patch }));
   const nameFromUrl = (url: string) => (url.split("/").pop() ?? "").replace(/\.git$/, "").replace(/[^A-Za-z0-9]+/g, "_").toUpperCase().replace(/^_+|_+$/g, "");
-  const submit = () => start(async () => {
+  const submit = (override?: Partial<typeof f>) => start(async () => {
+    const v = { ...f, ...override };
     setError("");
     const r = await connectRepo({
-      name: f.name, git_url: f.git_url, branch: f.branch, api_integration: f.api_integration,
-      existing_git_repository: f.existing_git_repository || null,
-      secret_name: f.auth === "secret" ? f.secret_name : null, username: f.auth === "token" ? f.username || null : null,
-      token: f.auth === "token" ? f.token || null : null, domain_ids: f.domain_ids,
-      include_globs: f.include.split(",").map((s) => s.trim()).filter(Boolean), exclude_globs: f.exclude.split(",").map((s) => s.trim()).filter(Boolean),
-      kind: f.kind, index_now: f.index_now,
+      name: v.name, git_url: v.git_url, branch: v.branch.trim(), api_integration: v.api_integration,
+      existing_git_repository: v.existing_git_repository || null,
+      secret_name: v.auth === "secret" ? v.secret_name : null, username: v.auth === "token" ? v.username || null : null,
+      token: v.auth === "token" ? v.token || null : null, domain_ids: v.domain_ids,
+      include_globs: v.include.split(",").map((s) => s.trim()).filter(Boolean), exclude_globs: v.exclude.split(",").map((s) => s.trim()).filter(Boolean),
+      kind: v.kind, index_now: v.index_now,
     });
-    if (r.ok) onDone(`${r.data.name} connected${f.index_now ? "; indexing started" : ""}.`);
+    if (r.ok) onDone(`${r.data.name} connected on ${r.data.branch}${v.index_now ? "; indexing started" : ""}.`);
     else setError(r.error);
   });
-  const valid = f.name.trim().length >= 2 && /^https:\/\//.test(f.git_url) && f.api_integration && (f.auth !== "token" || f.token.trim()) && (f.auth !== "secret" || f.secret_name);
+  const branchChoices = suggestedBranches(error);
+  const valid = f.name.trim().length >= 2 && /^https:\/\//.test(f.git_url) && f.api_integration && f.branch.trim()
+    && (f.auth !== "token" || f.token.trim()) && (f.auth !== "secret" || f.secret_name);
   return (
     <div className="fixed inset-0 z-50 flex justify-end" role="dialog" aria-modal="true" aria-label="Connect repository">
       <button type="button" aria-label="Close" className="absolute inset-0 bg-black/30" onClick={onClose} />
@@ -238,7 +481,7 @@ function ConnectDrawer({ domains, onClose, onDone }: { domains: Domain[]; onClos
         <header className="flex items-center gap-3 border-b px-5 py-4">
           <span className="grid h-9 w-9 place-items-center rounded-xl bg-indigo-50 text-indigo-600 ring-1 ring-inset ring-indigo-100"><GitBranch className="h-4 w-4" /></span>
           <div className="flex-1"><h3 className="text-base font-semibold">Connect a code repository</h3>
-            <p className="text-xs text-muted-foreground">Snowflake clones it with a Git integration; the token goes straight into a Snowflake secret.</p></div>
+            <p className="text-xs text-muted-foreground">Snowflake clones it with a Git integration; the token goes straight into a Snowflake secret. You can switch branches any time later.</p></div>
           <button type="button" onClick={onClose} aria-label="Close" className="rounded-md p-1 hover:bg-muted"><X className="h-4 w-4" /></button>
         </header>
         <div className="min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain px-5 py-4 text-sm">
@@ -253,6 +496,7 @@ function ConnectDrawer({ domains, onClose, onDone }: { domains: Domain[]; onClos
           <label className="block space-y-1 text-xs font-medium">Snowflake Git integration
             <Select value={f.api_integration} onChange={(e) => set({ api_integration: e.target.value })}>
               <option value="">Choose…</option>
+              {f.api_integration && !fits.some((i) => i.name === f.api_integration) && <option value={f.api_integration}>{f.api_integration}</option>}
               {fits.map((i) => <option key={i.name} value={i.name}>{i.name}{i.allowed_prefixes?.length ? ` (${i.allowed_prefixes.join(", ")})` : ""}</option>)}
             </Select>
           </label>
@@ -272,34 +516,37 @@ function ConnectDrawer({ domains, onClose, onDone }: { domains: Domain[]; onClos
               <Select value={f.existing_git_repository} onChange={(e) => {
                 const repo = setup.repositories.find((x) => x.fqn === e.target.value);
                 set({ existing_git_repository: e.target.value, api_integration: repo?.api_integration ?? f.api_integration, git_url: repo?.origin || f.git_url,
-                      name: f.name || nameFromUrl(repo?.origin ?? "") });
+                      name: f.name || nameFromUrl(repo?.origin ?? ""), auth: e.target.value ? "public" : f.auth });
               }}>
                 <option value="">Create a new one</option>
                 {setup.repositories.map((x) => <option key={x.fqn} value={x.fqn}>{x.fqn}{x.origin ? ` (${x.origin})` : ""}</option>)}
               </Select>
+              {f.existing_git_repository && <span className="block font-normal text-muted-foreground">A reused object keeps its own credentials; the platform never alters or drops it.</span>}
             </label>
           )}
-          <div className="space-y-2">
-            <p className="text-xs font-medium">Credentials</p>
-            <div className="flex rounded-lg border p-0.5 text-xs">
-              {([["token", "New read-only token"], ["secret", "Existing secret"], ["public", "Public repository"]] as const).map(([k, l]) => (
-                <button key={k} type="button" onClick={() => set({ auth: k })} className={cn("flex-1 rounded-md px-2 py-1", f.auth === k ? "bg-primary text-primary-foreground" : "text-muted-foreground")}>{l}</button>
-              ))}
-            </div>
-            {f.auth === "token" && (
-              <div className="grid gap-2 sm:grid-cols-2">
-                <Input value={f.username} onChange={(e) => set({ username: e.target.value })} placeholder="Git username (any value for GitHub tokens)" className="text-xs" />
-                <Input type="password" value={f.token} onChange={(e) => set({ token: e.target.value })} placeholder="Personal access token (read-only)" className="text-xs" autoComplete="off" />
-                <p className="text-[11px] text-muted-foreground sm:col-span-2">Stored only as a Snowflake secret; use a fine-grained, read-only token limited to this repository.</p>
+          {!f.existing_git_repository && (
+            <div className="space-y-2">
+              <p className="text-xs font-medium">Credentials</p>
+              <div className="flex rounded-lg border p-0.5 text-xs">
+                {([["token", "New read-only token"], ["secret", "Existing secret"], ["public", "Public repository"]] as const).map(([k, l]) => (
+                  <button key={k} type="button" onClick={() => set({ auth: k })} className={cn("flex-1 rounded-md px-2 py-1", f.auth === k ? "bg-primary text-primary-foreground" : "text-muted-foreground")}>{l}</button>
+                ))}
               </div>
-            )}
-            {f.auth === "secret" && (
-              <Select value={f.secret_name} onChange={(e) => set({ secret_name: e.target.value })} className="text-xs">
-                <option value="">Choose a PASSWORD secret…</option>
-                {(setup?.secrets ?? []).map((s) => <option key={s.name} value={s.name}>{s.name}</option>)}
-              </Select>
-            )}
-          </div>
+              {f.auth === "token" && (
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <Input value={f.username} onChange={(e) => set({ username: e.target.value })} placeholder="Git username (any value for GitHub tokens)" className="text-xs" />
+                  <Input type="password" value={f.token} onChange={(e) => set({ token: e.target.value })} placeholder="Personal access token (read-only)" className="text-xs" autoComplete="off" />
+                  <p className="text-[11px] text-muted-foreground sm:col-span-2">Stored only as a Snowflake secret; use a fine-grained, read-only token limited to this repository.</p>
+                </div>
+              )}
+              {f.auth === "secret" && (
+                <Select value={f.secret_name} onChange={(e) => set({ secret_name: e.target.value })} className="text-xs">
+                  <option value="">Choose a PASSWORD secret…</option>
+                  {(setup?.secrets ?? []).map((s) => <option key={s.name} value={s.name}>{s.name}</option>)}
+                </Select>
+              )}
+            </div>
+          )}
           <div className="space-y-1.5">
             <p className="text-xs font-medium">Domains it serves <span className="font-normal text-muted-foreground">(none selected means every domain)</span></p>
             <div className="flex flex-wrap gap-1.5">{domains.map((d) => {
@@ -312,14 +559,27 @@ function ConnectDrawer({ domains, onClose, onDone }: { domains: Domain[]; onClos
             <label className="space-y-1 text-xs font-medium">Only these paths<Input value={f.include} onChange={(e) => set({ include: e.target.value })} placeholder="models/**, macros/**, tests/**" className="font-mono text-xs" /></label>
             <label className="space-y-1 text-xs font-medium">Skip these paths<Input value={f.exclude} onChange={(e) => set({ exclude: e.target.value })} placeholder="models/legacy/**" className="font-mono text-xs" /></label>
           </div>
-          <p className="text-[11px] text-muted-foreground">Never indexed: profiles.yml, .env files, keys and certificates, target/, dbt_packages/. Key and token assignments inside files are redacted.</p>
+          <p className="text-[11px] text-muted-foreground">Never indexed: profiles.yml, .env files, keys and certificates, target/, dbt_packages/. Passwords, tokens, keys and credentials in URLs inside files are redacted.</p>
           <label className="flex items-center gap-2 text-xs"><input type="checkbox" checked={f.index_now} onChange={() => set({ index_now: !f.index_now })} />Index now</label>
-          {error && <p role="alert" className="rounded-lg bg-destructive/10 px-3 py-2 text-xs text-destructive">{error}</p>}
+          {error && (
+            <div role="alert" className="space-y-2 rounded-lg bg-destructive/10 px-3 py-2 text-xs text-destructive">
+              <p>{branchChoices.length ? error.split(" Available:")[0] : error}</p>
+              {branchChoices.length > 0 && (
+                <div className="flex flex-wrap items-center gap-1.5 text-foreground">
+                  <span className="text-muted-foreground">Connect with:</span>
+                  {branchChoices.map((b) => (
+                    <button key={b} type="button" disabled={pending} onClick={() => { set({ branch: b }); submit({ branch: b }); }}
+                            className="inline-flex items-center gap-1 rounded-md border bg-card px-2 py-0.5 font-mono hover:border-primary"><GitBranch className="h-3 w-3" />{b}</button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
         </div>
         <footer className="flex items-center gap-2 border-t px-5 py-3">
           <span className="ml-auto" />
           <Button variant="ghost" onClick={onClose}>Cancel</Button>
-          <Button disabled={pending || !valid} onClick={submit}>{pending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}Connect</Button>
+          <Button disabled={pending || !valid} onClick={() => submit()}>{pending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}Connect</Button>
         </footer>
       </aside>
     </div>

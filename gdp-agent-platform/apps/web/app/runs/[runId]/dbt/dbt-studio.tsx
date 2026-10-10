@@ -1,9 +1,10 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useMemo, useState, useTransition } from "react";
 import {
   CheckCircle2, ExternalLink, GitBranch as GitBranchIcon, GitPullRequest, KeyRound, Loader2, Lock, Plus, RefreshCw,
-  Rocket, ShieldCheck, Sparkles,
+  Rocket, Settings2, ShieldCheck, Sparkles,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input, Label, Select } from "@/components/ui/input";
@@ -15,6 +16,7 @@ import type {
   CortexModel, DbtArtifact, DbtGeneration, DbtPublication, DbtRepo, DbtWorkspace, GenerationReport, GitBranch,
   GithubCheck, GithubStatus,
 } from "./dbt-types";
+import type { CodeRepo } from "../../../code/actions";
 import { ReviewPanel } from "./review-panel";
 import { Callout, CopyButton, Section, StatusPill, StepIcon, ToastProvider, type Tone, useToast } from "./studio-ui";
 
@@ -51,6 +53,8 @@ type Props = {
   github?: GithubStatus;
   report?: GenerationReport | null;
   skeletonBase?: Record<string, string> | null;
+  /** Repositories configured once in Admin, Integrations, that serve this run's domain. */
+  configuredRepos?: CodeRepo[];
 };
 
 export function DbtStudio(props: Props) {
@@ -59,7 +63,7 @@ export function DbtStudio(props: Props) {
 
 function Studio({
   runId, runName, domainName, canGenerate, generation, artifacts, branch, workspace, publication, github, report,
-  skeletonBase, lastWorkspace,
+  skeletonBase, lastWorkspace, configuredRepos,
 }: Props) {
   const toast = useToast();
   const slug = runName.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "run";
@@ -80,14 +84,21 @@ function Studio({
     ?? reposForStart.find((r) => r.usable !== false) ?? reposForStart[0];
   const startPrefixes = integrations.find((i) => sameName(i.name, startInt))?.allowed_prefixes ?? [];
   const savedOrigin = String(branch?.origin ?? branch?.repo ?? "");
+  // a repository configured in Admin wins: the saved plan's one if it is configured, else the first configured one
+  // (unless the saved plan used a clone set up by hand, which then stays the manual choice)
+  const configured = configuredRepos ?? [];
+  const savedConfigured = configured.find((c) => sameName(c.git_repository, String(branch?.git_repository ?? "")));
+  const startConfigured = savedConfigured ?? (branch?.git_repository ? undefined : configured[0]);
 
-  const [integration, setIntegration] = useState(startInt);
+  const [repoSource, setRepoSource] = useState<"configured" | "manual">(startConfigured ? "configured" : "manual");
+  const [configuredId, setConfiguredId] = useState(startConfigured?.repo_id ?? "");
+  const [integration, setIntegration] = useState(startConfigured?.api_integration ?? startInt);
   const [showAllRepos, setShowAllRepos] = useState(false);
-  const [gitRepo, setGitRepo] = useState(startRepo?.fqn ?? "");
-  const [origin, setOrigin] = useState(
-    startRepo?.origin || (savedOrigin && originOk(savedOrigin, startPrefixes) ? savedOrigin : startPrefixes[0] || savedOrigin),
+  const [gitRepo, setGitRepo] = useState(startConfigured?.git_repository ?? startRepo?.fqn ?? "");
+  const [origin, setOrigin] = useState(startConfigured?.git_url ??
+    (startRepo?.origin || (savedOrigin && originOk(savedOrigin, startPrefixes) ? savedOrigin : startPrefixes[0] || savedOrigin)),
   );
-  const [baseBranch, setBaseBranch] = useState(String(branch?.base_branch ?? "main"));
+  const [baseBranch, setBaseBranch] = useState(String(branch?.base_branch ?? startConfigured?.branch ?? "main"));
   const [cutBranch, setCutBranch] = useState(String(branch?.cut_branch ?? `feat/onboard-${slug}`));
   const [dbtProject, setDbtProject] = useState(String(branch?.dbt_project ?? ""));
   const [prefix, setPrefix] = useState(String(branch?.prefix ?? report?.prefix ?? ""));
@@ -119,6 +130,7 @@ function Studio({
     [allRepos, integration, showAllRepos],
   );
   const selectedRepo: DbtRepo | undefined = allRepos.find((r) => sameName(r.fqn, gitRepo));
+  const chosenConfigured = repoSource === "configured" ? configured.find((c) => c.repo_id === configuredId) : undefined;
   const selectedInt = integrations.find((i) => sameName(i.name, integration));
   const prefixes = selectedInt?.allowed_prefixes ?? [];
   const originValid = originOk(origin, prefixes);
@@ -161,6 +173,18 @@ function Studio({
     setCheck(null);
   };
 
+  const chooseConfigured = (repo: CodeRepo) => {
+    setRepoSource("configured");
+    setConfiguredId(repo.repo_id);
+    setIntegration(repo.api_integration ?? "");
+    setShowAllRepos(true);
+    setGitRepo(repo.git_repository);
+    setOrigin(repo.git_url);
+    setBaseBranch(repo.branch);
+    setGrantSql(null);
+    setCheck(null);
+  };
+
   const applyRepo = (fqn: string) => {
     setGitRepo(fqn);
     const next = allRepos.find((r) => r.fqn === fqn);
@@ -183,14 +207,16 @@ function Studio({
       setFetchNote(result.data.fetched
         ? `${result.data.branches.length} branch${result.data.branches.length === 1 ? "" : "es"} fetched`
         : result.data.grant_sql ? "FETCH blocked; showing last-fetched branches" : (result.data.fetch_warning || "Listed without a fresh FETCH"));
-      if (preferLatest || !baseBranch.trim() || baseBranch === "main" || !result.data.branches.some((b) => b.name === baseBranch)) {
+      // a configured repository's branch is the admin's choice: keep it while it exists
+      const keep = repoSource === "configured" && result.data.branches.some((b) => b.name === baseBranch);
+      if (!keep && (preferLatest || !baseBranch.trim() || baseBranch === "main" || !result.data.branches.some((b) => b.name === baseBranch))) {
         if (result.data.latest) setBaseBranch(result.data.latest);
       }
     });
   };
 
   useEffect(() => {
-    if (gitRepo.trim()) refreshBranches(gitRepo, !branch?.base_branch);
+    if (gitRepo.trim()) refreshBranches(gitRepo, !branch?.base_branch && repoSource !== "configured");
     // eslint-disable-next-line react-hooks/exhaustive-deps -- reload whenever the selected repository changes
   }, [gitRepo]);
 
@@ -383,80 +409,122 @@ function Studio({
       {/* ------------------------------------------------------------------ 1. connect */}
       <Section id="dbt-connect" n={1} title="Connect" tone={connectTone} open={openStep === "connect"} onToggle={() => toggle("connect")}
         subtitle="Choose the git integration. Its repository clone, allowed origins and branches load automatically."
-        summary={<>{integration || "no integration"} · {selectedRepo?.fqn || gitRepo || "no clone"} · GitHub {publisherReady ? (tokenProblem ? "needs token fix" : "ready") : "not set up"}</>}>
+        summary={<>{chosenConfigured ? `${chosenConfigured.name} (configured)` : `${integration || "no integration"} · ${selectedRepo?.fqn || gitRepo || "no clone"}`} · GitHub {publisherReady ? (tokenProblem ? "needs token fix" : "ready") : "not set up"}</>}>
         <div className="grid gap-4 lg:grid-cols-2">
           <div className="space-y-3 rounded-lg border p-4">
             <p className="flex items-center gap-2 text-sm font-semibold"><GitBranchIcon className="h-4 w-4" /> Snowflake git (read-only skeleton)</p>
-            {!!workspace?.warnings?.length && (
-              <details className="text-[11px] text-muted-foreground">
-                <summary className="cursor-pointer">{workspace.warnings.length} discovery note(s)</summary>
-                <ul className="mt-1 list-inside list-disc">{workspace.warnings.map((w) => <li key={w}>{w}</li>)}</ul>
-              </details>
-            )}
-            <div>
-              <Label htmlFor="git_int" className="mt-0">API integration</Label>
-              <div className="grid gap-1.5">
-                {integrations.map((i) => {
-                  const count = allRepos.filter((r) => sameName(r.api_integration, i.name)).length;
-                  const active = sameName(i.name, integration);
-                  return (
-                    <button key={i.name} type="button" onClick={() => chooseIntegration(i.name)}
-                      className={cn("flex items-center justify-between rounded-md border px-3 py-2 text-left text-xs",
-                        active ? "border-blue-500 bg-blue-50/60 ring-1 ring-blue-200" : "hover:bg-slate-50")}>
-                      <span className="min-w-0">
-                        <span className="block truncate font-mono font-medium">{i.name}</span>
-                        <span className="block truncate text-[11px] text-muted-foreground">{(i.allowed_prefixes ?? []).join(", ") || "no allowed prefixes"}</span>
-                      </span>
-                      <span className="ml-2 flex shrink-0 items-center gap-1.5">
-                        {i.usable === false && <StatusPill tone="warn">no USAGE</StatusPill>}
-                        <StatusPill tone={count ? "done" : "idle"}>{count} clone{count === 1 ? "" : "s"}</StatusPill>
-                      </span>
-                    </button>
-                  );
-                })}
-                {!integrations.length && <p className="text-xs text-muted-foreground">No GIT_HTTPS_API integrations are visible to {role || "this role"}.</p>}
-              </div>
+            <div className="flex rounded-lg border p-0.5 text-xs">
+              {([["configured", `Configured repositories (${configured.length})`], ["manual", "Set up by hand"]] as const).map(([k, l]) => (
+                <button key={k} type="button"
+                        onClick={() => { if (k === "configured" && configured[0] && !configured.some((c) => c.repo_id === configuredId)) chooseConfigured(configured[0]); else setRepoSource(k); }}
+                        className={cn("flex-1 rounded-md px-2 py-1", repoSource === k ? "bg-primary text-primary-foreground" : "text-muted-foreground")}>{l}</button>
+              ))}
             </div>
-            <div>
-              <div className="flex items-center justify-between">
-                <Label htmlFor="git_repo">Repository clone</Label>
-                {integration && allRepos.length > repos.length && (
-                  <button type="button" className="mt-3 text-[11px] text-muted-foreground underline" onClick={() => setShowAllRepos(true)}>show all {allRepos.length}</button>
+            {repoSource === "configured" ? (
+              configured.length ? (
+                <div className="space-y-1.5">
+                  {configured.map((c) => {
+                    const active = c.repo_id === configuredId;
+                    return (
+                      <button key={c.repo_id} type="button" onClick={() => chooseConfigured(c)}
+                        className={cn("flex w-full items-start gap-2 rounded-md border px-3 py-2 text-left text-xs",
+                          active ? "border-blue-500 bg-blue-50/60 ring-1 ring-blue-200" : "hover:bg-slate-50")}>
+                        <GitBranchIcon className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate font-medium">{c.name}</span>
+                          <span className="block truncate font-mono text-[11px] text-muted-foreground">{c.git_url.replace(/^https:\/\//, "")}</span>
+                          <span className="block truncate text-[11px] text-muted-foreground">default branch <span className="font-mono">{c.branch}</span> · clone <span className="font-mono">{c.git_repository}</span></span>
+                        </span>
+                        {c.status === "FAILED" && <StatusPill tone="warn">index failed</StatusPill>}
+                      </button>
+                    );
+                  })}
+                  <p className="text-[11px] text-muted-foreground">The clone, origin and integration come from the configuration; pick the cut-from branch in step 2.
+                    {" "}<Link href="/admin?section=integrations" className="inline-flex items-center gap-0.5 text-primary hover:underline"><Settings2 className="h-3 w-3" />Manage in Admin</Link></p>
+                  {(selectedRepo?.grant_sql || grantSql) && (
+                    <Callout tone="warn" title="Your role can't use this clone's integration" action={<CopyButton text={(grantSql || selectedRepo?.grant_sql) as string} />}>
+                      Ask an admin to run <code className="font-mono">{grantSql || selectedRepo?.grant_sql}</code>
+                    </Callout>
+                  )}
+                </div>
+              ) : (
+                <p className="rounded-md border border-dashed p-3 text-xs text-muted-foreground">No repository serves this domain yet. An admin can configure it once in
+                  {" "}<Link href="/admin?section=integrations" className="text-primary hover:underline">Admin, Integrations</Link>, and every run uses it. Or set it up by hand for this run.</p>
+              )
+            ) : (
+              <>
+              {!!workspace?.warnings?.length && (
+                <details className="text-[11px] text-muted-foreground">
+                  <summary className="cursor-pointer">{workspace.warnings.length} discovery note(s)</summary>
+                  <ul className="mt-1 list-inside list-disc">{workspace.warnings.map((w) => <li key={w}>{w}</li>)}</ul>
+                </details>
+              )}
+              <div>
+                <Label htmlFor="git_int" className="mt-0">API integration</Label>
+                <div className="grid gap-1.5">
+                  {integrations.map((i) => {
+                    const count = allRepos.filter((r) => sameName(r.api_integration, i.name)).length;
+                    const active = sameName(i.name, integration);
+                    return (
+                      <button key={i.name} type="button" onClick={() => chooseIntegration(i.name)}
+                        className={cn("flex items-center justify-between rounded-md border px-3 py-2 text-left text-xs",
+                          active ? "border-blue-500 bg-blue-50/60 ring-1 ring-blue-200" : "hover:bg-slate-50")}>
+                        <span className="min-w-0">
+                          <span className="block truncate font-mono font-medium">{i.name}</span>
+                          <span className="block truncate text-[11px] text-muted-foreground">{(i.allowed_prefixes ?? []).join(", ") || "no allowed prefixes"}</span>
+                        </span>
+                        <span className="ml-2 flex shrink-0 items-center gap-1.5">
+                          {i.usable === false && <StatusPill tone="warn">no USAGE</StatusPill>}
+                          <StatusPill tone={count ? "done" : "idle"}>{count} clone{count === 1 ? "" : "s"}</StatusPill>
+                        </span>
+                      </button>
+                    );
+                  })}
+                  {!integrations.length && <p className="text-xs text-muted-foreground">No GIT_HTTPS_API integrations are visible to {role || "this role"}.</p>}
+                </div>
+              </div>
+              <div>
+                <div className="flex items-center justify-between">
+                  <Label htmlFor="git_repo">Repository clone</Label>
+                  {integration && allRepos.length > repos.length && (
+                    <button type="button" className="mt-3 text-[11px] text-muted-foreground underline" onClick={() => setShowAllRepos(true)}>show all {allRepos.length}</button>
+                  )}
+                </div>
+                {repos.length > 0 ? (
+                  <Select id="git_repo" value={gitRepo} onChange={(e) => applyRepo(e.target.value)}>
+                    <option value="">Select repository</option>
+                    {repos.map((r) => <option key={r.fqn} value={r.fqn}>{r.fqn}{r.usable === false ? " · no access" : ""}</option>)}
+                  </Select>
+                ) : integration ? (
+                  <div className="flex gap-2">
+                    <Input value={newRepoName} onChange={(e) => setNewRepoName(e.target.value.toUpperCase())} placeholder="DBT_DEMO" className="font-mono text-xs" />
+                    <Button type="button" variant="outline" disabled={busy !== null || !(origin.trim() || prefixes[0])} onClick={runCreateRepo}>
+                      {busy === "repo" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />} Create clone
+                    </Button>
+                  </div>
+                ) : <p className="text-xs text-muted-foreground">Pick an integration.</p>}
+              </div>
+              {(selectedRepo?.grant_sql || grantSql) && (
+                <Callout tone="warn" title="Your role can't use this clone's integration" action={<CopyButton text={(grantSql || selectedRepo?.grant_sql) as string} />}>
+                  Ask an admin to run <code className="font-mono">{grantSql || selectedRepo?.grant_sql}</code>
+                </Callout>
+              )}
+              <div>
+                <Label htmlFor="origin">Origin URL</Label>
+                <Input id="origin" value={origin} onChange={(e) => setOrigin(e.target.value)} placeholder={prefixes[0] || "https://github.com/org/repo"}
+                  aria-invalid={!originValid} className={cn(!originValid && "border-red-400")} />
+                {!originValid && <p className="mt-1 text-xs text-red-600">Must start with an allowed prefix of {integration}.</p>}
+                {prefixes.length > 1 && (
+                  <div className="mt-1.5 flex flex-wrap gap-1">
+                    {prefixes.map((p) => (
+                      <button key={p} type="button" onClick={() => setOrigin(p)}
+                        className={cn("rounded-full border px-2 py-0.5 font-mono text-[11px]", origin.startsWith(p) ? "border-blue-500 bg-blue-50" : "hover:bg-slate-50")}>{p}</button>
+                    ))}
+                  </div>
                 )}
               </div>
-              {repos.length > 0 ? (
-                <Select id="git_repo" value={gitRepo} onChange={(e) => applyRepo(e.target.value)}>
-                  <option value="">Select repository</option>
-                  {repos.map((r) => <option key={r.fqn} value={r.fqn}>{r.fqn}{r.usable === false ? " · no access" : ""}</option>)}
-                </Select>
-              ) : integration ? (
-                <div className="flex gap-2">
-                  <Input value={newRepoName} onChange={(e) => setNewRepoName(e.target.value.toUpperCase())} placeholder="DBT_DEMO" className="font-mono text-xs" />
-                  <Button type="button" variant="outline" disabled={busy !== null || !(origin.trim() || prefixes[0])} onClick={runCreateRepo}>
-                    {busy === "repo" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />} Create clone
-                  </Button>
-                </div>
-              ) : <p className="text-xs text-muted-foreground">Pick an integration.</p>}
-            </div>
-            {(selectedRepo?.grant_sql || grantSql) && (
-              <Callout tone="warn" title="Your role can't use this clone's integration" action={<CopyButton text={(grantSql || selectedRepo?.grant_sql) as string} />}>
-                Ask an admin to run <code className="font-mono">{grantSql || selectedRepo?.grant_sql}</code>
-              </Callout>
+              </>
             )}
-            <div>
-              <Label htmlFor="origin">Origin URL</Label>
-              <Input id="origin" value={origin} onChange={(e) => setOrigin(e.target.value)} placeholder={prefixes[0] || "https://github.com/org/repo"}
-                aria-invalid={!originValid} className={cn(!originValid && "border-red-400")} />
-              {!originValid && <p className="mt-1 text-xs text-red-600">Must start with an allowed prefix of {integration}.</p>}
-              {prefixes.length > 1 && (
-                <div className="mt-1.5 flex flex-wrap gap-1">
-                  {prefixes.map((p) => (
-                    <button key={p} type="button" onClick={() => setOrigin(p)}
-                      className={cn("rounded-full border px-2 py-0.5 font-mono text-[11px]", origin.startsWith(p) ? "border-blue-500 bg-blue-50" : "hover:bg-slate-50")}>{p}</button>
-                  ))}
-                </div>
-              )}
-            </div>
           </div>
 
           <div className="space-y-3 rounded-lg border p-4">
