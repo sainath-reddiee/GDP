@@ -211,18 +211,20 @@ def index_repo(session, repo_id: str) -> Dict[str, Any]:
                 skipped[p] = clip(str(exc), 300)
         dbt = dbt_parse.projects({p: texts[p] for p in project_files if p in texts})
         touched = changed + removed
-        before = {r["NAME"] for r in rows(session, "SELECT DISTINCT NAME FROM CODE.CODE_CHUNK WHERE REPO_ID = ? AND KIND = 'DBT_MACRO'",
-                                          [repo_id])}
-        kept = {r["NAME"] for r in rows(session, """SELECT DISTINCT NAME FROM CODE.CODE_CHUNK
-                                                    WHERE REPO_ID = ? AND KIND = 'DBT_MACRO'
-                                                      AND NOT ARRAY_CONTAINS(PATH::VARIANT, PARSE_JSON(?))""",
-                                        [repo_id, json.dumps(touched)])}
+        def names(kind: str, outside: Optional[List[str]] = None) -> set:
+            extra = " AND NOT ARRAY_CONTAINS(PATH::VARIANT, PARSE_JSON(?))" if outside is not None else ""
+            return {r["NAME"] for r in rows(session, f"SELECT DISTINCT NAME FROM CODE.CODE_CHUNK WHERE REPO_ID = ? AND KIND = ?{extra}",
+                                            [repo_id, kind, *([json.dumps(outside)] if outside is not None else [])]) if r["NAME"]}
+
+        before = {"DBT_MACRO": names("DBT_MACRO"), "PY_FUNC": names("PY_FUNC")}
+        kept = {"DBT_MACRO": names("DBT_MACRO", touched), "PY_FUNC": names("PY_FUNC", touched)}
         parse_now = {p: texts[p] for p in changed if p in texts}
-        chunks, edges, _ = dbt_parse.parse_repo(parse_now, repo_id, dbt, kept)
-        macros = kept | {c["name"] for c in chunks if c["kind"] == "DBT_MACRO" and c.get("name")}
-        if macros != before and before | macros:
-            # the macro set changed: unchanged SQL may now call (or stop calling) a macro, so re-link it too
-            relink = [p for p in listed if p.endswith(".sql") and p not in parse_now and safe_path(p)][:max(0, MAX_READS_PER_RUN - len(changed))]
+        chunks, edges, _ = dbt_parse.parse_repo(parse_now, repo_id, dbt, kept["DBT_MACRO"], kept["PY_FUNC"])
+        after = {k: kept[k] | {c["name"] for c in chunks if c["kind"] == k and c.get("name")} for k in kept}
+        # a changed set of macros (or Python functions) changes what unchanged files call: re-link those files too
+        suffixes = tuple(s for k, s in (("DBT_MACRO", ".sql"), ("PY_FUNC", ".py")) if after[k] != before[k] and (after[k] | before[k]))
+        if suffixes:
+            relink = [p for p in listed if p.endswith(suffixes) and p not in parse_now and safe_path(p)][:max(0, MAX_READS_PER_RUN - len(changed))]
             for p in relink:
                 try:
                     parse_now[p] = _read(session, fqn, branch, p)
@@ -230,7 +232,7 @@ def index_repo(session, repo_id: str) -> Dict[str, Any]:
                     skipped[p] = clip(str(exc), 300)
             touched += relink
             changed += relink
-            chunks, edges, _ = dbt_parse.parse_repo(parse_now, repo_id, dbt, macros)
+            chunks, edges, _ = dbt_parse.parse_repo(parse_now, repo_id, dbt, after["DBT_MACRO"], after["PY_FUNC"])
 
         _still_mine(session, repo_id, run_id, branch)
         for table in ("CODE_CHUNK", "CODE_EDGE", "CODE_FILE"):
@@ -302,11 +304,24 @@ def _summary(session, repo_id: str, commit: str, dbt: List[Dict[str, Any]]) -> N
                                ORDER BY 1 LIMIT 100""", [repo_id])
     summary = {"projects": dbt, "top_macros": [{"name": r["TO_NAME"], "uses": int(r["N"])} for r in top],
                "sources": [r["TO_NAME"] for r in sources]}
-    session.sql("""MERGE INTO CODE.REPO_SUMMARY T USING (SELECT ? AS REPO_ID, 'DBT' AS KIND) S
+    _put_summary(session, repo_id, "DBT", summary, commit)
+    # the repository at a glance, from the code graph: languages, folders, dbt layers, hotspots, hard-coded tables
+    from services.code import graph as code_graph
+
+    files = rows(session, "SELECT PATH, LANG FROM CODE.CODE_FILE WHERE REPO_ID = ? AND SKIPPED_REASON IS NULL", [repo_id])
+    kinds = {r["KIND"]: int(r["N"]) for r in rows(session, "SELECT KIND, COUNT(*) AS N FROM CODE.CODE_CHUNK WHERE REPO_ID = ? GROUP BY 1",
+                                                     [repo_id])}
+    g = code_graph.load(lambda sql, params: rows(session, sql, params), [repo_id])
+    _put_summary(session, repo_id, "ARCHITECTURE",
+                 code_graph.architecture([{"path": f["PATH"], "lang": f["LANG"]} for f in files], kinds, g, dbt), commit)
+
+
+def _put_summary(session, repo_id: str, kind: str, summary: Dict[str, Any], commit: str) -> None:
+    session.sql("""MERGE INTO CODE.REPO_SUMMARY T USING (SELECT ? AS REPO_ID, ? AS KIND) S
                      ON T.REPO_ID = S.REPO_ID AND T.KIND = S.KIND
                    WHEN MATCHED THEN UPDATE SET SUMMARY = PARSE_JSON(?), COMMIT_SHA = NULLIF(?, ''), UPDATED_AT = CURRENT_TIMESTAMP()
                    WHEN NOT MATCHED THEN INSERT (REPO_ID, KIND, SUMMARY, COMMIT_SHA) VALUES (S.REPO_ID, S.KIND, PARSE_JSON(?), NULLIF(?, ''))""",
-                params=[repo_id, json.dumps(summary), commit, json.dumps(summary), commit]).collect()
+                params=[repo_id, kind, json.dumps(summary, default=str), commit, json.dumps(summary, default=str), commit]).collect()
 
 
 def index_repo_entry(session, repo_id: str) -> Dict[str, Any]:

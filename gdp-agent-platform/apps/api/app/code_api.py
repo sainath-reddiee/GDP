@@ -632,10 +632,35 @@ def lineage(name: str, repo_id: Optional[str] = None, db: Db = Depends(current_d
     return {"name": name, "upstream": up, "downstream": down}
 
 
+def _graph(db: Db, repo_id: Optional[str]):
+    from services.code import graph as code_graph
+
+    ids = [repo_id] if repo_id else [r["repo_id"] for r in db.query("SELECT REPO_ID FROM CODE.REPO WHERE ENABLED")]
+    return code_graph.load(_rows(db), ids)
+
+
+@router.get("/api/code/impact")
+def impact(name: str, repo_id: Optional[str] = None, depth: int = 3, db: Db = Depends(current_db)):
+    """What `name` depends on and everything that depends on it, transitively: what may break when it changes."""
+    g = _graph(db, repo_id)
+    found = g.impact(name, depth)
+    return {"name": name, "known": g.knows(name), "uses": g.uses(name, 1), "impact": found,
+            "direct": sum(1 for i in found if i["depth"] == 1), "total": len(found)}
+
+
+@router.get("/api/code/path")
+def dependency_path(source: str, target: str, repo_id: Optional[str] = None, db: Db = Depends(current_db)):
+    """How `source` reaches `target` through the code graph (refs, macro calls, function calls, table reads)."""
+    return {"source": source, "target": target, "steps": _graph(db, repo_id).path(source, target)}
+
+
 @router.get("/api/code/summary")
 def summary(db: Db = Depends(current_db)):
-    """Per repository: dbt shape and most-used macros, plus usage by stage in the last 30 days."""
-    out = {r["repo_id"]: {"dbt": _json(r["summary"])} for r in db.query("SELECT REPO_ID, SUMMARY FROM CODE.REPO_SUMMARY WHERE KIND = 'DBT'")}
+    """Per repository: dbt shape and most-used macros, its architecture from the code graph, and usage by stage in the
+    last 30 days."""
+    out: dict = {}
+    for r in db.query("SELECT REPO_ID, KIND, SUMMARY FROM CODE.REPO_SUMMARY WHERE KIND IN ('DBT', 'ARCHITECTURE')"):
+        out.setdefault(r["repo_id"], {})["dbt" if r["kind"] == "DBT" else "architecture"] = _json(r["summary"])
     try:
         for r in db.query("""SELECT REPO_ID, STAGE, COUNT(*) AS N, COUNT(DISTINCT RUN_ID) AS RUNS FROM CODE.CODE_USAGE
                               WHERE USED_AT >= DATEADD(DAY, -30, CURRENT_TIMESTAMP()) GROUP BY 1, 2"""):

@@ -11,7 +11,7 @@ import { Input, Label, Select } from "@/components/ui/input";
 import { useAccess } from "@/components/access";
 import { cn } from "@/lib/utils";
 import { generateDbt, listDbtBranches, publishDbt } from "../pipeline-actions";
-import { repoBranches } from "../../../code/actions";
+import { impactOf, repoBranches, type Impact } from "../../../code/actions";
 import type {
   CortexModel, DbtArtifact, DbtGeneration, DbtPublication, DbtRunRepo, DbtSetup, GenerationReport, GitBranch,
 } from "./dbt-types";
@@ -393,6 +393,7 @@ function Studio({
       <Section id="dbt-review" n={2} title="Generate & review" tone={generateTone} open={openStep === "review"} onToggle={() => toggle("review")}
         subtitle="Every file the skill produced, with the per-column rule report, a diff against the branch, and a Cortex review that compares with the client's code."
         summary={generation ? <>v{generation.generation_version} · {report?.todos ?? 0} TODO · {report?.anomalies?.length ?? 0} notes</> : "not generated"}>
+        {repo && report?.target && <ImpactNote repo={repo} target={report.target} />}
         <ReviewPanel runId={runId} artifacts={artifacts} report={report ?? null} skeletonBase={skeletonBase ?? null}
           models={models} defaultModel={defaultModel} canEdit={canGenerate} />
       </Section>
@@ -454,6 +455,38 @@ function Studio({
           {repo && <StatusPill tone={canPush ? "done" : "idle"}>{canPush ? `pushes to ${repo.name}${folder ? `/${folder}` : ""}` : "stage only"}</StatusPill>}
         </div>
       </Section>
+    </div>
+  );
+}
+
+/** What already depends on the target model in the client's code: the reach of this change once the PR merges. */
+function ImpactNote({ repo, target }: { repo: DbtRunRepo; target: string }) {
+  const [imp, setImp] = useState<Impact | null>(null);
+  const [, start] = useTransition();
+  useEffect(() => {
+    start(async () => {
+      const r = await impactOf(target, repo.repo_id, 4);
+      setImp(r.ok ? r.data : null);
+    });
+  }, [repo.repo_id, target]);
+  if (!imp) return null;
+  const direct = imp.impact.filter((i) => i.depth === 1);
+  return (
+    <div className="mb-4 rounded-lg border bg-slate-50/60 p-3 text-xs">
+      {imp.total ? (
+        <>
+          <p className="font-medium">In {repo.name}, {imp.total} item{imp.total === 1 ? "" : "s"} depend on {target} ({imp.direct} directly). Check them before merging:</p>
+          <div className="mt-1.5 flex flex-wrap gap-1">
+            {direct.map((n) => (
+              <Link key={n.name} href={`/code?repo=${repo.repo_id}&q=${encodeURIComponent(n.name.split(".").pop() ?? n.name)}`}
+                    className="rounded-md border bg-card px-1.5 py-0.5 font-mono hover:border-primary">{n.name}</Link>
+            ))}
+            {imp.total > direct.length && <span className="text-muted-foreground">and {imp.total - direct.length} further downstream</span>}
+          </div>
+        </>
+      ) : (
+        <p className="text-muted-foreground">{imp.known ? `Nothing in ${repo.name} depends on ${target} yet.` : `${target} is new to ${repo.name}: nothing there depends on it yet.`}</p>
+      )}
     </div>
   );
 }

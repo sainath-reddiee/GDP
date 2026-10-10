@@ -135,3 +135,25 @@ export async function checkPublishing(origin: string) {
   return attemptValue(() => api<{ status: string; detail?: string; repository?: string; default_branch?: string; push?: boolean | null; private?: boolean }>(
     "/api/dbt/github/check", { method: "POST", body: JSON.stringify({ origin }) }));
 }
+
+// ---------------------------------------------------------------- code graph (refs, macro and function calls, table reads)
+export type GraphNode = { name: string; depth: number; via: string; from: string; path: string | null; repo_id: string | null };
+export type Impact = { name: string; known: boolean; uses: GraphNode[]; impact: GraphNode[]; direct: number; total: number };
+export type PathStep = { from: string; to: string; via: string; path: string | null };
+export type Architecture = {
+  languages: Record<string, number>; folders: Record<string, number>; chunks: Record<string, number>;
+  dbt_layers: Record<string, number>; hotspots: { name: string; dependents: number; kinds: string[] }[];
+  hard_coded_tables: { table: string; read_by: string }[]; leaf_models: string[]; edges: number;
+};
+
+export async function impactOf(name: string, repoId?: string, depth = 3) {
+  const p = new URLSearchParams({ name, depth: String(depth) });
+  if (repoId) p.set("repo_id", repoId);
+  return attemptValue(() => api<Impact>(`/api/code/impact?${p}`));
+}
+
+export async function dependencyPath(source: string, target: string, repoId?: string) {
+  const p = new URLSearchParams({ source, target });
+  if (repoId) p.set("repo_id", repoId);
+  return attemptValue(() => api<{ source: string; target: string; steps: PathStep[] }>(`/api/code/path?${p}`));
+}

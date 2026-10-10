@@ -3,16 +3,24 @@
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import {
-  ArrowDownRight, ArrowUpRight, Boxes, FileCode2, FolderGit2, GitBranch, Loader2, Network, Search, Sparkles, X,
+  ArrowDownRight, ArrowRight, ArrowUpRight, Boxes, FileCode2, Flame, FolderGit2, GitBranch, Loader2, Network, Route, Search,
+  Sparkles, TriangleAlert, X,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { ago } from "../skills/types";
-import { lineage, readFile, searchCode, type CodeFile, type CodeHit, type CodeRepo, type Edge } from "./actions";
+import {
+  dependencyPath, impactOf, readFile, searchCode, type Architecture, type CodeFile, type CodeHit, type CodeRepo, type GraphNode,
+  type Impact, type PathStep,
+} from "./actions";
 
 export type RepoSummary = {
   dbt?: { projects?: { name: string; root: string }[]; top_macros?: { name: string; uses: number }[]; sources?: string[] } | null;
   usage?: Record<string, { uses: number; runs: number }>;
+  architecture?: Architecture | null;
+};
+const VIA_LABEL: Record<string, string> = {
+  REF: "ref", SOURCE: "source", MACRO_USE: "macro", CALLS: "calls", IMPORTS: "imports", READS: "reads table", WRITES: "writes",
 };
 
 const KINDS = [
@@ -42,7 +50,7 @@ export function CodeExplorer({ repos, summary, initial }: {
   const [hits, setHits] = useState<CodeHit[] | null>(null);
   const [file, setFile] = useState<CodeFile | null>(null);
   const [line, setLine] = useState<number | null>(initial.line ? Number(initial.line) : null);
-  const [lin, setLin] = useState<{ name: string; upstream: Edge[]; downstream: Edge[] } | null>(null);
+  const [imp, setImp] = useState<Impact | null>(null);
   const [error, setError] = useState("");
   const [searching, startSearch] = useTransition();
   const [opening, startOpen] = useTransition();
@@ -74,10 +82,10 @@ export function CodeExplorer({ repos, summary, initial }: {
     setFile(r.data); setLine(at ?? null); setError("");
     syncUrl({ repo, path, line: at ? String(at) : null });
     const chunk = r.data.chunks.find((c) => at && c.start_line <= at && at <= c.end_line) ?? (name ? r.data.chunks.find((c) => c.name === name) : null);
-    if (chunk?.name && ["DBT_MODEL", "DBT_MACRO", "DBT_SOURCE", "DBT_SNAPSHOT", "DBT_SCHEMA_YML"].includes(chunk.kind)) {
-      const l = await lineage(chunk.name, repo);
-      setLin(l.ok ? l.data : null);
-    } else setLin(null);
+    if (chunk?.name && chunk.kind !== "DOC" && chunk.kind !== "CONFIG") {
+      const l = await impactOf(chunk.name, repo);
+      setImp(l.ok && (l.data.uses.length || l.data.impact.length) ? l.data : null);
+    } else setImp(null);
   });
   useEffect(() => {
     if (initial.repo && initial.path) open(initial.repo, initial.path, initial.line ? Number(initial.line) : undefined);
@@ -158,7 +166,7 @@ export function CodeExplorer({ repos, summary, initial }: {
             ) : !file ? (
               <Overview repos={repos} summary={summary} onSearch={(t) => { setQ(t); runSearch(t); }} />
             ) : null}
-            {file && <FileView file={file} line={line} lin={lin} loading={opening} onClose={() => { setFile(null); setLin(null); syncUrl({ path: null, line: null }); }}
+            {file && <FileView file={file} line={line} imp={imp} loading={opening} onClose={() => { setFile(null); setImp(null); syncUrl({ path: null, line: null }); }}
                                onPick={(n) => { setQ(n); runSearch(n); }} />}
           </div>
         </div>
@@ -198,6 +206,7 @@ function Overview({ repos, summary, onSearch }: { repos: CodeRepo[]; summary: Re
                 ))}</div>
               </div>
             )}
+            {s.architecture && <ArchitectureView a={s.architecture} onSearch={onSearch} />}
             <p className="border-t pt-2 text-[11px] text-muted-foreground">
               {Object.entries(s.usage ?? {}).length
                 ? <>Used by AI in the last 30 days: {Object.entries(s.usage ?? {}).map(([st, u]) => `${st.toLowerCase()} ${u.uses}`).join(", ")}</>
@@ -210,8 +219,87 @@ function Overview({ repos, summary, onSearch }: { repos: CodeRepo[]; summary: Re
   );
 }
 
-function FileView({ file, line, lin, loading, onClose, onPick }: {
-  file: CodeFile; line: number | null; lin: { name: string; upstream: Edge[]; downstream: Edge[] } | null; loading: boolean;
+function ArchitectureView({ a, onSearch }: { a: Architecture; onSearch: (t: string) => void }) {
+  const layers = Object.entries(a.dbt_layers ?? {});
+  return (
+    <div className="space-y-2.5">
+      <p className="flex flex-wrap gap-1 text-[11px] text-muted-foreground">
+        {Object.entries(a.languages ?? {}).map(([l, n]) => <span key={l} className="rounded bg-muted px-1.5 py-0.5">{l || "other"} {n}</span>)}
+        <span className="rounded bg-muted px-1.5 py-0.5">{a.edges} graph edges</span>
+      </p>
+      {layers.length > 0 && (
+        <div>
+          <p className="mb-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">dbt layers (models per folder)</p>
+          <div className="flex flex-wrap gap-1">{layers.map(([l, n]) => <span key={l} className="rounded-md bg-orange-50 px-2 py-0.5 font-mono text-[11px] text-orange-700">{l} · {n}</span>)}</div>
+        </div>
+      )}
+      {!!a.hotspots?.length && (
+        <div>
+          <p className="mb-1 flex items-center gap-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground"><Flame className="h-3 w-3" />Most depended on (widest impact)</p>
+          <div className="flex flex-wrap gap-1">{a.hotspots.slice(0, 8).map((h) => (
+            <button key={h.name} type="button" onClick={() => onSearch(h.name.split(".").pop() ?? h.name)} title={h.kinds.join(", ")}
+                    className="rounded-md bg-rose-50 px-2 py-0.5 font-mono text-[11px] text-rose-700 hover:bg-rose-100">{h.name} · {h.dependents}</button>
+          ))}</div>
+        </div>
+      )}
+      {!!a.hard_coded_tables?.length && (
+        <div>
+          <p className="mb-1 flex items-center gap-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground"><TriangleAlert className="h-3 w-3" />Hard-coded tables (not ref or source)</p>
+          <ul className="space-y-0.5 text-[11px]">{a.hard_coded_tables.slice(0, 6).map((h) => (
+            <li key={`${h.table}-${h.read_by}`} className="font-mono"><span className="text-amber-700">{h.table}</span> <span className="text-muted-foreground">read by {h.read_by}</span></li>
+          ))}</ul>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ImpactPanel({ imp, repoId, onPick }: { imp: Impact; repoId: string; onPick: (name: string) => void }) {
+  const [target, setTarget] = useState("");
+  const [steps, setSteps] = useState<PathStep[] | null>(null);
+  const [tracing, startTrace] = useTransition();
+  const direct = imp.impact.filter((i) => i.depth === 1);
+  const further = imp.impact.filter((i) => i.depth > 1);
+  const chip = (n: GraphNode, tone: string) => (
+    <button key={`${n.name}-${n.depth}`} type="button" onClick={() => onPick(n.name.split(".").pop() ?? n.name)} title={`${VIA_LABEL[n.via] ?? n.via} · via ${n.from}${n.path ? ` · ${n.path}` : ""}`}
+            className={cn("inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 font-mono hover:border-primary", tone)}>
+      {n.via === "MACRO_USE" ? <Sparkles className="h-2.5 w-2.5 text-violet-500" /> : n.via === "SOURCE" ? <Boxes className="h-2.5 w-2.5 text-teal-600" />
+        : n.via === "READS" || n.via === "WRITES" ? <Network className="h-2.5 w-2.5 text-indigo-600" /> : <Network className="h-2.5 w-2.5 text-orange-600" />}
+      {n.name}
+    </button>
+  );
+  return (
+    <div className="space-y-2.5 border-b px-4 py-2.5 text-[11px]">
+      <div className="grid gap-3 sm:grid-cols-2">
+        <div>
+          <p className="mb-1 flex items-center gap-1 font-medium"><ArrowUpRight className="h-3 w-3" />{imp.name} depends on</p>
+          <div className="flex flex-wrap gap-1">{imp.uses.map((n) => chip(n, ""))}{!imp.uses.length && <span className="text-muted-foreground">nothing in the indexed code</span>}</div>
+        </div>
+        <div>
+          <p className="mb-1 flex items-center gap-1 font-medium"><ArrowDownRight className="h-3 w-3" />Changing it affects {imp.total ? `${imp.total} (${imp.direct} directly)` : "nothing indexed"}</p>
+          <div className="flex flex-wrap gap-1">{direct.map((n) => chip(n, "border-rose-200 bg-rose-50/50"))}</div>
+          {further.length > 0 && <div className="mt-1 flex flex-wrap gap-1"><span className="text-muted-foreground">then</span>{further.slice(0, 30).map((n) => chip(n, "border-dashed"))}</div>}
+        </div>
+      </div>
+      <form className="flex flex-wrap items-center gap-1.5" onSubmit={(e) => {
+        e.preventDefault();
+        if (!target.trim()) return;
+        startTrace(async () => { const r = await dependencyPath(imp.name, target.trim(), repoId); setSteps(r.ok ? r.data.steps : []); });
+      }}>
+        <Route className="h-3 w-3 text-muted-foreground" />
+        <span className="text-muted-foreground">How does it connect to</span>
+        <Input value={target} onChange={(e) => setTarget(e.target.value)} placeholder="a model, table, macro or function" className="h-7 w-56 font-mono text-[11px]" aria-label="Connect to" />
+        {tracing && <Loader2 className="h-3 w-3 animate-spin" />}
+        {steps && (steps.length
+          ? <span className="flex flex-wrap items-center gap-1 font-mono">{steps[0].from}{steps.map((st, i) => <span key={i} className="inline-flex items-center gap-1"><ArrowRight className="h-3 w-3 text-muted-foreground" /><span className="text-muted-foreground">{VIA_LABEL[st.via] ?? st.via}</span>{st.to}</span>)}</span>
+          : <span className="text-muted-foreground">no dependency path between them</span>)}
+      </form>
+    </div>
+  );
+}
+
+function FileView({ file, line, imp, loading, onClose, onPick }: {
+  file: CodeFile; line: number | null; imp: Impact | null; loading: boolean;
   onClose: () => void; onPick: (name: string) => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -248,24 +336,7 @@ function FileView({ file, line, lin, loading, onClose, onPick }: {
           {active.tests.length > 0 && <p><span className="font-medium">Tests:</span> <span className="font-mono text-muted-foreground">{active.tests.join(", ")}</span></p>}
         </div>
       )}
-      {lin && (lin.upstream.length > 0 || lin.downstream.length > 0) && (
-        <div className="grid gap-3 border-b px-4 py-2.5 text-[11px] sm:grid-cols-2">
-          <div>
-            <p className="mb-1 flex items-center gap-1 font-medium"><ArrowUpRight className="h-3 w-3" />{lin.name} uses</p>
-            <div className="flex flex-wrap gap-1">{dedupe(lin.upstream.map((e) => `${e.kind}:${e.to_name}`)).map((k) => {
-              const [kind, name] = k.split(":");
-              return <button key={k} type="button" onClick={() => onPick(name.split(".").pop() ?? name)} className="inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 font-mono hover:border-primary">
-                {kind === "MACRO_USE" ? <Sparkles className="h-2.5 w-2.5 text-violet-500" /> : kind === "SOURCE" ? <Boxes className="h-2.5 w-2.5 text-teal-600" /> : <Network className="h-2.5 w-2.5 text-orange-600" />}{name}</button>;
-            })}</div>
-          </div>
-          <div>
-            <p className="mb-1 flex items-center gap-1 font-medium"><ArrowDownRight className="h-3 w-3" />Used by</p>
-            <div className="flex flex-wrap gap-1">{dedupe(lin.downstream.map((e) => e.from_name)).map((n) => (
-              <button key={n} type="button" onClick={() => onPick(n)} className="rounded-md border px-1.5 py-0.5 font-mono hover:border-primary">{n}</button>
-            ))}{!lin.downstream.length && <span className="text-muted-foreground">nothing in the indexed code</span>}</div>
-          </div>
-        </div>
-      )}
+      {imp && <ImpactPanel imp={imp} repoId={file.repo.repo_id} onPick={onPick} />}
       <div ref={ref} className="max-h-[70vh] overflow-auto overscroll-contain">
         <table className="w-full border-collapse font-mono text-[12px] leading-5">
           <tbody>
@@ -286,4 +357,3 @@ function FileView({ file, line, lin, loading, onClose, onPick }: {
   );
 }
 
-const dedupe = (xs: string[]) => Array.from(new Set(xs)).slice(0, 40);
