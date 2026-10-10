@@ -15,19 +15,26 @@ import { BAR, CATEGORY_META, RunHistoryTable, useCopy } from "@/components/qa/qa
 import { QaAssistant } from "@/components/qa/qa-assistant";
 import { TestCard, type CardOutcome } from "@/components/qa/test-card";
 import { JiraPanel } from "./jira-panel";
+import { caseFromResult } from "../../../qa/cases/actions";
+import { OpenCaseButton } from "../../../qa/cases/case-ui";
 
 /** The run lane's test card: the shared card wired to this run's QA endpoints. */
-function RunTestCard({ runId, test, canEdit = true, ...rest }: {
+function RunTestCard({ runId, test, canEdit = true, canCase = false, ...rest }: {
   runId: string; test: QaTest; result?: QaResult; history: { outcome: QaOutcome; at: string }[]; open: boolean;
-  onToggle: () => void; selected: boolean; onSelect: () => void; canRun: boolean; canEdit?: boolean;
+  onToggle: () => void; selected: boolean; onSelect: () => void; canRun: boolean; canEdit?: boolean; /** CASE.WORK */ canCase?: boolean;
 }) {
   const router = useRouter();
   const done = (r: { ok: true } | { ok: false; error: string }): CardOutcome => {
     if (r.ok) router.refresh();
     return r.ok ? { ok: true } : { ok: false, error: r.error };
   };
+  const resultId = rest.result?.result_id;
+  const failing = rest.result?.outcome === "FAIL" || rest.result?.outcome === "ERROR";
   return (
-    <TestCard {...rest} test={test} editable={test.origin !== "GENERATED" && test.scope !== "TABLE" && canEdit}
+    <TestCard {...rest} test={test}
+              extra={canCase && resultId && failing
+                ? <div className="flex justify-end"><OpenCaseButton label="Open case" open={() => caseFromResult({ qa_result_id: resultId })} /></div> : undefined}
+              editable={test.origin !== "GENERATED" && test.scope !== "TABLE" && canEdit}
               onRun={async () => done(await runQa(runId, [test.test_id]))}
               onUpdate={async (e) => done(await updateQaTest(runId, test.test_id, { title: e.title, sql: e.sql, expected: e.expected, objective: e.objective, severity: e.severity }))}
               onRemove={async () => done(await deleteQaTest(runId, test.test_id))} />
@@ -40,7 +47,7 @@ export function QaWorkbench({ runId, suite, results, canRun, canAI = true, canEd
   const router = useRouter();
   const { copied, copy } = useCopy();
   const params = useSearchParams();
-  const { canAct } = useAccess();
+  const { can, canAct } = useAccess();
   const [tab, setTab] = useState<"tests" | "ai" | "history" | "jira">(params.get("tab") === "jira" ? "jira" : "tests");
   const [category, setCategory] = useState("ALL");
   const [outcome, setOutcome] = useState<"ALL" | "ISSUES" | QaOutcome>("ALL");
@@ -193,7 +200,7 @@ export function QaWorkbench({ runId, suite, results, canRun, canAI = true, canEd
             )}
             {visible.map((t) => (
               <RunTestCard key={t.test_id} runId={runId} test={t} result={byTest.get(t.test_id)} history={results.history[t.test_id] ?? []}
-                        open={open === t.test_id} onToggle={() => setOpen(open === t.test_id ? "" : t.test_id)} canRun={canRun} canEdit={canEdit}
+                        open={open === t.test_id} onToggle={() => setOpen(open === t.test_id ? "" : t.test_id)} canRun={canRun} canEdit={canEdit} canCase={can("CASE.WORK")}
                         selected={selected.has(t.test_id)}
                         onSelect={() => setSelected((s) => { const n = new Set(s); if (n.has(t.test_id)) n.delete(t.test_id); else n.add(t.test_id); return n; })} />
             ))}

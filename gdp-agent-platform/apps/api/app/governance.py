@@ -27,7 +27,7 @@ from pydantic import BaseModel, Field
 
 from app.db import AUTH_MODE, Db, dev_db, lookup_session
 from services.governance.policy import (
-    ADDED_PRIVILEGES, ALL, DEFAULT_POLICIES, PRIVILEGES, SYSTEM_ROLES, SYSTEM_VERSION, can_approve, carries_secret, creates_cycle,
+    ADDED_PRIVILEGES, ALL, DEFAULT_FOUR_EYES, DEFAULT_POLICIES, PRIVILEGES, SYSTEM_ROLES, SYSTEM_VERSION, can_approve, carries_secret, creates_cycle,
     decide, effective_privileges, privilege_for, read_only, summarize,
 )
 
@@ -128,7 +128,7 @@ def bootstrap(db: Db) -> None:
             for g in spec["inherits"]:
                 _merge(db, "ROLE_GRANT", {"ROLE_NAME": name, "GRANTED_ROLE": g})
         for priv, role in DEFAULT_POLICIES.items():
-            _merge(db, "APPROVAL_POLICY", {"PRIVILEGE": priv}, {"APPROVER_ROLE": role})
+            _merge(db, "APPROVAL_POLICY", {"PRIVILEGE": priv}, {"APPROVER_ROLE": role, "FOUR_EYES": priv in DEFAULT_FOUR_EYES})
         # privileges introduced after a deployment was seeded: granted once to the system roles that list them
         found = db.query("SELECT SETTING_VALUE FROM GOVERNANCE.SETTING WHERE SETTING_KEY = 'SYSTEM_VERSION'")
         stored = int(_json(found[0]["setting_value"]) or 1) if found else 1

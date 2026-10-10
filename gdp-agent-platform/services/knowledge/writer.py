@@ -22,7 +22,7 @@ from typing import Any, Dict, Iterable, List, Optional
 from services.common.sql import clip, config_value, rows, scalar
 
 # what is learned from automatic steps (no person decided it) waits for review by default
-DEFAULT_POLICY: Dict[str, str] = {"QA_TEST": "review", "EXCEPTION": "review"}
+DEFAULT_POLICY: Dict[str, str] = {"QA_TEST": "review", "EXCEPTION": "review", "CASE_RESOLUTION": "review"}
 REVIEW_ORIGINS = {"COPILOT"}
 NEVER_QUEUED = {"USER", "SEED", "PACK_IMPORT"}
 # run records kept in DOMAIN_KNOWLEDGE (dbt branch plan, client Soda brief, STTM CSV export): written as ACTIVE so

@@ -15,6 +15,8 @@ import {
   Alert, ConnectJira, Empty, JiraGate, Notice, Pending, SuiteSelect, TableSelect, jiraProblem, useLive, useSeq, useSuites, useTables,
   type Access, type Go, type JiraProblem, type Nav,
 } from "./qa-shared";
+import { caseFromJira } from "./cases/actions";
+import { OpenCaseButton } from "./cases/case-ui";
 
 const KEY = /^[A-Z][A-Z0-9_]+-\d+$/;
 
@@ -123,6 +125,7 @@ function IssueTriage({ issueKey, go, access, me }: { issueKey: string; go: Go; a
         </p>
         <h3 className="text-base font-semibold">{issue.summary}</h3>
         <p className="text-xs text-muted-foreground">Reported by {issue.reporter ?? "someone"} · assigned to {issue.assignee ?? "nobody"} · updated {when(issue.updated)}</p>
+        {access.canCase && <OpenCaseButton open={() => caseFromJira(issueKey)} />}
         {access.canJiraWrite && (
           <div className="flex flex-wrap items-center gap-2">
             <TransitionControl issueKey={issueKey} onDone={(to) => { setNote(`${issueKey} moved to ${to}.`); void loadIssue(); }} />

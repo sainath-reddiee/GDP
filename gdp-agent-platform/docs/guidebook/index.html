@@ -1,0 +1,1155 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>GDP Agent Platform Guidebook</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@500;700&family=Public+Sans:ital,wght@0,400;0,600;1,400&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: sticky table of contents on the left, one long reference column on the right; stacks on phones. */
+:root {
+  --bg: #f6f7f9; --surface: #ffffff; --ink: #18202b; --muted: #556171; --line: #dde2e9;
+  --accent: #0e6e7a; --accent-soft: #e3f1f2; --code-bg: #eef1f5; --warn: #9a5b00; --warn-soft: #fdf3e2;
+  --ok: #1d7a43; --ok-soft: #e4f4ea; --crit: #b42318; --crit-soft: #fdecea;
+  --display: "Schibsted Grotesk", "Segoe UI", system-ui, sans-serif;
+  --body: "Public Sans", "Segoe UI", system-ui, sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, "Cascadia Code", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #0f141b; --surface: #161d26; --ink: #e5eaf0; --muted: #9aa6b4; --line: #27313d;
+  --accent: #5cc3cf; --accent-soft: #14303a; --code-bg: #1d2631; --warn: #f0b860; --warn-soft: #33270f;
+  --ok: #6fd39a; --ok-soft: #13301f; --crit: #ff8a7f; --crit-soft: #3a1714; color-scheme: dark; } }
+:root[data-theme="dark"] {
+  --bg: #0f141b; --surface: #161d26; --ink: #e5eaf0; --muted: #9aa6b4; --line: #27313d;
+  --accent: #5cc3cf; --accent-soft: #14303a; --code-bg: #1d2631; --warn: #f0b860; --warn-soft: #33270f;
+  --ok: #6fd39a; --ok-soft: #13301f; --crit: #ff8a7f; --crit-soft: #3a1714; color-scheme: dark; }
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+body { background: var(--bg); color: var(--ink); font: 15px/1.6 var(--body); margin: 0; }
+.wrap { display: grid; grid-template-columns: 260px minmax(0, 1fr); gap: 32px; max-width: 1280px; margin: 0 auto; padding-inline: 24px; padding-block: 32px 80px; }
+nav.toc { position: sticky; top: calc(env(safe-area-inset-top, 0px) + 16px); align-self: start; max-height: calc(100vh - 32px); overflow-y: auto; font-size: 13.5px; }
+nav.toc .brand { font-family: var(--display); font-weight: 700; font-size: 15px; margin-bottom: 4px; }
+nav.toc .ver { color: var(--muted); font-size: 12px; margin-bottom: 16px; }
+nav.toc ol { list-style: none; padding: 0; margin: 0; display: grid; gap: 2px; }
+nav.toc li ol { padding-left: 12px; margin-block: 2px 6px; }
+nav.toc a { color: var(--muted); text-decoration: none; display: block; padding: 3px 8px; border-radius: 6px; }
+nav.toc a:hover, nav.toc a:focus-visible { color: var(--ink); background: var(--accent-soft); outline: none; }
+nav.toc .num { font-family: var(--mono); font-size: 11.5px; color: var(--accent); margin-right: 6px; }
+main { min-width: 0; }
+header.hero { padding-bottom: 24px; border-bottom: 1px solid var(--line); margin-bottom: 8px; }
+.eyebrow { font: 600 12px/1 var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--accent); }
+h1 { font: 700 clamp(28px, 4vw, 38px)/1.15 var(--display); margin: 10px 0 12px; text-wrap: balance; }
+h2 { font: 700 24px/1.25 var(--display); margin: 56px 0 12px; padding-top: 8px; text-wrap: balance; scroll-margin-top: 16px; }
+h2 .num { font: 600 14px var(--mono); color: var(--accent); margin-right: 10px; vertical-align: 3px; }
+h3 { font: 700 18px/1.3 var(--display); margin: 32px 0 8px; scroll-margin-top: 16px; }
+h4 { font: 600 15px/1.4 var(--body); margin: 20px 0 6px; }
+p, li { max-width: 78ch; }
+p { margin: 8px 0; }
+ul, ol { padding-left: 22px; margin: 8px 0; }
+li { margin: 3px 0; }
+a { color: var(--accent); }
+code, kbd { font: 13px var(--mono); background: var(--code-bg); padding: 1px 5px; border-radius: 4px; overflow-wrap: anywhere; }
+pre { font: 13px/1.55 var(--mono); background: var(--code-bg); padding: 12px 14px; border-radius: 8px; overflow-x: auto; margin: 10px 0; }
+pre code { background: none; padding: 0; }
+.lede { font-size: 16.5px; color: var(--muted); max-width: 72ch; }
+.tablebox { overflow-x: auto; margin: 12px 0 18px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+table { border-collapse: collapse; width: 100%; font-size: 13.5px; }
+th, td { text-align: left; vertical-align: top; padding: 8px 12px; border-bottom: 1px solid var(--line); }
+th { font: 600 12px/1.3 var(--body); text-transform: uppercase; letter-spacing: .04em; color: var(--muted); background: var(--code-bg); position: sticky; top: 0; }
+tr:last-child td { border-bottom: 0; }
+td code { font-size: 12.5px; }
+.note, .warn, .crit, .ok { border-radius: 10px; padding: 12px 14px; margin: 14px 0; max-width: 82ch; }
+.note { background: var(--accent-soft); }
+.warn { background: var(--warn-soft); }
+.warn strong:first-child { color: var(--warn); }
+.crit { background: var(--crit-soft); }
+.crit strong:first-child { color: var(--crit); }
+.ok { background: var(--ok-soft); }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 16px 18px; margin: 14px 0; }
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; }
+.grid2 > * { min-width: 0; }
+.chip { display: inline-block; font: 600 11.5px/1 var(--mono); padding: 4px 7px; border-radius: 999px; background: var(--code-bg); color: var(--ink); margin: 1px 2px 1px 0; white-space: nowrap; }
+.chip.p { background: var(--accent-soft); color: var(--accent); }
+.feature-meta { display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 4px 14px; font-size: 14px; margin: 10px 0; }
+.feature-meta dt { color: var(--muted); font-weight: 600; }
+.feature-meta dd { margin: 0; min-width: 0; }
+.steps { counter-reset: s; list-style: none; padding-left: 0; }
+.steps > li { counter-increment: s; position: relative; padding-left: 38px; margin: 10px 0; }
+.steps > li::before { content: counter(s); position: absolute; left: 0; top: 0; width: 26px; height: 26px; border-radius: 50%; background: var(--accent); color: var(--surface); font: 700 13px/26px var(--mono); text-align: center; }
+.filter { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 10px 0; }
+.filter input { font: 14px var(--body); padding: 8px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--ink); min-width: 0; width: min(360px, 100%); }
+.filter input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.filter .count { color: var(--muted); font-size: 13px; }
+hr { border: 0; border-top: 1px solid var(--line); margin: 40px 0; }
+footer { color: var(--muted); font-size: 13px; margin-top: 56px; }
+@media (max-width: 900px) {
+  .wrap { grid-template-columns: minmax(0, 1fr); padding-inline: 16px; }
+  nav.toc { position: static; max-height: none; border: 1px solid var(--line); border-radius: 12px; padding: 12px; background: var(--surface); }
+  .feature-meta { grid-template-columns: minmax(0, 1fr); }
+  .feature-meta dt { margin-top: 6px; }
+}
+</style>
+</head>
+<body>
+
+<div class="wrap">
+<nav class="toc" aria-label="Contents">
+  <div class="brand">GDP Agent Platform</div>
+  <div class="ver">Guidebook and runbook for code on main, migrations V001 to V033</div>
+  <ol>
+    <li><a href="#access"><span class="num">01</span>How access works</a></li>
+    <li><a href="#setup"><span class="num">02</span>Setup order</a></li>
+    <li><a href="#roles"><span class="num">03</span>Roles and grants</a>
+      <ol>
+        <li><a href="#app-roles">App roles</a></li>
+        <li><a href="#privileges">Privileges</a></li>
+        <li><a href="#approvals-policy">Approval policies</a></li>
+        <li><a href="#db-roles">Snowflake database roles</a></li>
+        <li><a href="#grants">Grants by schema</a></li>
+        <li><a href="#proc-grants">Procedure grants</a></li>
+        <li><a href="#mapping">Who gets what</a></li>
+        <li><a href="#account">Account-level needs</a></li>
+      </ol></li>
+    <li><a href="#features"><span class="num">04</span>Features</a>
+      <ol>
+        <li><a href="#f-dashboard">Dashboard</a></li>
+        <li><a href="#f-sources">Sources</a></li>
+        <li><a href="#f-runs">Runs and stages</a></li>
+        <li><a href="#f-dbt">dbt publishing</a></li>
+        <li><a href="#f-domains">Domains</a></li>
+        <li><a href="#f-knowledge">Knowledge</a></li>
+        <li><a href="#f-skills">Skills</a></li>
+        <li><a href="#f-code">Code</a></li>
+        <li><a href="#f-qa">QA workspace</a></li>
+        <li><a href="#f-jira">Jira</a></li>
+        <li><a href="#f-ops">Pipelines</a></li>
+        <li><a href="#f-incidents">Incidents</a></li>
+        <li><a href="#f-approvals">Approvals and Audit</a></li>
+        <li><a href="#f-admin">Admin</a></li>
+        <li><a href="#f-copilot">Copilot</a></li>
+      </ol></li>
+    <li><a href="#config"><span class="num">05</span>Configuration</a>
+      <ol>
+        <li><a href="#env">Environment variables</a></li>
+        <li><a href="#cfg-jira">Jira setup</a></li>
+        <li><a href="#cfg-github">GitHub setup</a></li>
+        <li><a href="#cfg-airflow">Airflow and MWAA</a></li>
+        <li><a href="#cfg-teams">Teams alerts</a></li>
+        <li><a href="#cfg-run">Run and deploy</a></li>
+      </ol></li>
+    <li><a href="#deploy"><span class="num">06</span>Deployment runbook</a>
+      <ol>
+        <li><a href="#dep-pre">Prerequisites</a></li>
+        <li><a href="#dep-first">First deployment</a></li>
+        <li><a href="#dep-update">Updating</a></li>
+        <li><a href="#dep-prod">Production</a></li>
+        <li><a href="#dep-rollback">Rollback</a></li>
+      </ol></li>
+    <li><a href="#secrets"><span class="num">07</span>Secrets runbook</a>
+      <ol>
+        <li><a href="#sec-inventory">Secret inventory</a></li>
+        <li><a href="#sec-generate">Generate a key</a></li>
+        <li><a href="#sec-env">Fill the .env file</a></li>
+        <li><a href="#sec-rotate">Rotate or recover</a></li>
+      </ol></li>
+    <li><a href="#verify"><span class="num">08</span>Check that it works</a></li>
+    <li><a href="#data"><span class="num">09</span>Table reference</a>
+      <ol>
+        <li><a href="#schemas">Schemas</a></li>
+        <li><a href="#tables">Tables</a></li>
+        <li><a href="#procs">Procedures</a></li>
+        <li><a href="#runtime">Runtime objects</a></li>
+        <li><a href="#migrations">Migrations</a></li>
+      </ol></li>
+    <li><a href="#routes"><span class="num">10</span>Route to privilege map</a></li>
+    <li><a href="#gaps"><span class="num">11</span>Known gaps</a></li>
+  </ol>
+</nav>
+
+<main>
+<header class="hero">
+  <div class="eyebrow">Operating guide</div>
+  <h1>GDP Agent Platform Guidebook</h1>
+  <p class="lede">Everything needed to run the platform: who can do what, which Snowflake grants back it, how to configure each feature, and what every table holds. Written for data engineers, QA, support engineers and platform admins.</p>
+</header>
+
+<!-- ============================================================ 01 -->
+<h2 id="access"><span class="num">01</span>How access works</h2>
+<p>Every action passes two independent checks. Both must allow it.</p>
+<div class="grid2">
+  <div class="card">
+    <h4 style="margin-top:0">1. App governance</h4>
+    <p>The API maps each call to a <strong>privilege</strong> (for example <code>STTM.APPROVE</code>). A user's privileges are the union of their <strong>app roles</strong>, including inherited roles. Roles live in the <code>GOVERNANCE</code> schema and are managed in Admin, Access and governance.</p>
+    <p>Each call is decided as <strong>Allow</strong>, <strong>Request</strong> (HTTP 202, queued in Approvals) or <strong>Forbid</strong> (HTTP 403).</p>
+  </div>
+  <div class="card">
+    <h4 style="margin-top:0">2. Snowflake grants</h4>
+    <p>The call then runs on a Snowflake session. Snowflake enforces its own object grants on the session's current role. A user can switch that role with the role selector at the bottom of the sidebar; only roles granted to the user are offered.</p>
+    <p>An approved request is replayed under the <strong>approver's</strong> session, so the approver's grants apply.</p>
+  </div>
+</div>
+<h3>Sign-in modes</h3>
+<div class="tablebox"><table>
+<tr><th>Mode</th><th>Set by</th><th>Who Snowflake sees</th><th>Use</th></tr>
+<tr><td><code>dev</code></td><td><code>AIP_AUTH=dev</code> (default)</td><td>One shared session from <code>~/.snowflake/connections.toml</code> (browser SSO). Every action is that one user.</td><td>Local development and demos</td></tr>
+<tr><td><code>pat</code></td><td><code>AIP_AUTH=pat</code> plus <code>AIP_ACCOUNT</code></td><td>Each person signs in with a programmatic access token. Sessions last 8 hours.</td><td>Shared and production environments. Required for the Cortex agent panel.</td></tr>
+</table></div>
+<h3>Decision rules</h3>
+<ul>
+  <li><strong>Allow</strong> when the call needs no privilege, or the user holds it and its approval policy is off (or the user may self-approve).</li>
+  <li><strong>Request</strong> when an approval policy is active and the user holds <code>REQUEST.CHANGES</code> or the privilege itself under a four-eyes policy. The UI shows the action and says it was sent for approval.</li>
+  <li><strong>Forbid</strong> otherwise, with the message "needs the X privilege".</li>
+  <li>A changing call (POST, PUT, DELETE) that no rule names needs <code>RUN.OPERATE</code>. A GET that no rule names is open to every signed-in user.</li>
+  <li>Role changes take effect within about a minute (60 second cache).</li>
+  <li>Until migration V020 is deployed, governance is not enforced.</li>
+</ul>
+<div class="note"><strong>First admin.</strong> When nobody holds any role yet, the first person to sign in, plus everyone listed in <code>AIP_SUPER_ADMINS</code>, becomes <code>SUPER_ADMIN</code>. Everyone else without a role gets the default role, <code>VIEWER</code> unless changed in Admin.</div>
+
+<!-- ============================================================ 02 -->
+<h2 id="setup"><span class="num">02</span>Setup order</h2>
+<p>For a new environment, do these in order. Each later feature depends on the earlier steps.</p>
+<ol class="steps">
+  <li><strong>Deploy Snowflake objects.</strong> Run <code>python infrastructure/deploy_snowflake.py --connection &lt;name&gt; --database DEV_AI_PLATFORM --warehouse DBT_WH</code> with a role that can create schemas, procedures, stages, Cortex Search services and agents. Always pass <code>--database</code>: the script's default (<code>AI_PLATFORM</code>) differs from the API's (<code>DEV_AI_PLATFORM</code>).</li>
+  <li><strong>Grant database roles to account roles.</strong> See <a href="#mapping">Who gets what</a>. Also grant warehouse USAGE and <code>SNOWFLAKE.CORTEX_USER</code>.</li>
+  <li><strong>Configure the API.</strong> Copy <code>apps/api/.env.example</code> to <code>apps/api/.env</code> (gitignored) and fill it in. See <a href="#env">Environment variables</a>.</li>
+  <li><strong>Start the API and web app</strong>, then sign in once with an admin account so governance bootstraps. Set <code>AIP_SUPER_ADMINS</code> first if the first sign-in should not be you.</li>
+  <li><strong>Assign app roles</strong> in Admin, Access and governance.</li>
+  <li><strong>Connect integrations</strong> in Admin, Integrations: code repositories and GitHub publishing, Jira, Airflow, Incidents.</li>
+  <li><strong>Start the worker</strong> (<code>python -m app.worker</code> in <code>apps/api</code>) if you use Pipelines or Incidents.</li>
+</ol>
+
+<!-- ============================================================ 03 -->
+<h2 id="roles"><span class="num">03</span>Roles and grants</h2>
+
+<h3 id="app-roles">App roles</h3>
+<p>Fourteen system roles are created automatically. Admins can create more. System roles cannot be deleted, and the last <code>SUPER_ADMIN</code> cannot be removed.</p>
+<div class="tablebox"><table>
+<tr><th>Role</th><th>Privileges</th><th>Inherits</th><th>Typical person</th></tr>
+<tr><td><code>SUPER_ADMIN</code></td><td>All (<code>*</code>)</td><td></td><td>Platform owner</td></tr>
+<tr><td><code>PLATFORM_ADMIN</code></td><td>CONFIG.EDIT, ADMIN.VIEW, ADMIN.DEPLOY, AUDIT.VIEW, APPROVAL.VIEW, INTEGRATION.MANAGE</td><td>DATA_ENGINEER</td><td>Runs deploys and integrations</td></tr>
+<tr><td><code>GOVERNANCE_ADMIN</code></td><td>ROLE.MANAGE, ADMIN.VIEW, APPROVAL.VIEW, AUDIT.VIEW</td><td>VIEWER</td><td>Manages users and policies</td></tr>
+<tr><td><code>MODEL_APPROVER</code></td><td>MODEL.APPROVE, MAPPING.APPROVE, MODEL.EDIT, MAPPING.DECIDE, AI.USE</td><td>VIEWER</td><td>Data architect</td></tr>
+<tr><td><code>STTM_APPROVER</code></td><td>STTM.EDIT, STTM.APPROVE, AI.USE</td><td>VIEWER</td><td>Lead engineer or analyst</td></tr>
+<tr><td><code>DQ_APPROVER</code></td><td>SODA.EDIT, SODA.APPROVE, AI.USE</td><td>VIEWER</td><td>Data quality owner</td></tr>
+<tr><td><code>QA_LEAD</code></td><td>QA.EDIT, QA.SIGNOFF, AI.USE, JIRA.READ, JIRA.WRITE</td><td>VIEWER</td><td>QA lead</td></tr>
+<tr><td><code>QA_ENGINEER</code></td><td>QA.EDIT, AI.USE, JIRA.READ, JIRA.WRITE</td><td>VIEWER</td><td>QA engineer (no sign-off)</td></tr>
+<tr><td><code>SUPPORT_ENGINEER</code></td><td>OPS.VIEW, OPS.OPERATE, AI.USE, JIRA.READ, JIRA.WRITE</td><td>VIEWER</td><td>Production support</td></tr>
+<tr><td><code>CODE_REVIEWER</code></td><td>REVIEW.APPROVE, REVIEW.DECIDE, DBT.EDIT, AI.USE</td><td>VIEWER</td><td>dbt code reviewer</td></tr>
+<tr><td><code>DATA_STEWARD</code></td><td>KNOWLEDGE.EDIT, DOMAIN.EDIT, TAG.MANAGE, SKILL.EDIT, AI.USE</td><td>VIEWER</td><td>Domain owner</td></tr>
+<tr><td><code>SKILL_OWNER</code></td><td>SKILL.EDIT, SKILL.RELEASE, AI.USE</td><td>VIEWER</td><td>Owns AI skills</td></tr>
+<tr><td><code>DATA_ENGINEER</code></td><td>SOURCE.CONNECT, PROFILE.RUN, RUN.CREATE, RUN.OPERATE, RUN.ARCHIVE, MODEL.EDIT, MAPPING.DECIDE, QA.EDIT, DBT.EDIT, TAG.MANAGE, SKILL.EDIT, REQUEST.CHANGES, REVIEW.DECIDE, AI.USE, JIRA.READ, JIRA.WRITE, OPS.VIEW, OPS.OPERATE</td><td>VIEWER</td><td>Data engineer</td></tr>
+<tr><td><code>VIEWER</code></td><td>AUDIT.VIEW, CODE.VIEW, OPS.VIEW</td><td></td><td>Read only; no AI calls, no requests</td></tr>
+</table></div>
+<p>Only <code>DATA_ENGINEER</code> (and roles that inherit it) holds <code>REQUEST.CHANGES</code>, so only they can raise approval requests for actions they cannot do themselves.</p>
+
+<h3 id="privileges">Privileges</h3>
+<div class="tablebox"><table>
+<tr><th>Privilege</th><th>Area</th><th>Allows</th></tr>
+<tr><td><code>SOURCE.CONNECT</code></td><td>Sources</td><td>Connect and configure sources (Snowflake, Oracle, files)</td></tr>
+<tr><td><code>PROFILE.RUN</code></td><td>Sources</td><td>Profile tables and land data</td></tr>
+<tr><td><code>RUN.CREATE</code></td><td>Runs</td><td>Create runs and modeling runs</td></tr>
+<tr><td><code>RUN.OPERATE</code></td><td>Runs</td><td>Run pipeline steps: generate mapping, STTM, checks, dbt, validation</td></tr>
+<tr><td><code>RUN.ARCHIVE</code></td><td>Runs</td><td>Archive, restore and clean up runs</td></tr>
+<tr><td><code>MODEL.EDIT</code></td><td>Data model</td><td>Design and edit target models</td></tr>
+<tr><td><code>MODEL.APPROVE</code></td><td>Data model</td><td>Approve a model design as the run's target</td></tr>
+<tr><td><code>MAPPING.DECIDE</code></td><td>Mapping</td><td>Accept or reject mapping candidates</td></tr>
+<tr><td><code>MAPPING.APPROVE</code></td><td>Mapping</td><td>Approve the mapping gate</td></tr>
+<tr><td><code>STTM.EDIT</code></td><td>STTM</td><td>Change STTM transformations and joins</td></tr>
+<tr><td><code>STTM.APPROVE</code></td><td>STTM</td><td>Approve the STTM gate</td></tr>
+<tr><td><code>SODA.EDIT</code></td><td>Data quality</td><td>Add, edit and decide data quality checks</td></tr>
+<tr><td><code>SODA.APPROVE</code></td><td>Data quality</td><td>Approve the data quality pack</td></tr>
+<tr><td><code>QA.EDIT</code></td><td>QA</td><td>Write, edit and run QA tests</td></tr>
+<tr><td><code>QA.SIGNOFF</code></td><td>QA</td><td>Sign off QA for a run</td></tr>
+<tr><td><code>DBT.EDIT</code></td><td>dbt</td><td>Generate, enhance and publish dbt</td></tr>
+<tr><td><code>REVIEW.APPROVE</code></td><td>Code review</td><td>Approve code review</td></tr>
+<tr><td><code>REVIEW.DECIDE</code></td><td>Code review</td><td>Send a stage back or request changes</td></tr>
+<tr><td><code>KNOWLEDGE.EDIT</code></td><td>Knowledge</td><td>Add, edit, retire and restore knowledge</td></tr>
+<tr><td><code>DOMAIN.EDIT</code></td><td>Knowledge</td><td>Create, import, edit and delete domains</td></tr>
+<tr><td><code>TAG.MANAGE</code></td><td>Knowledge</td><td>Tag profiles, runs and models</td></tr>
+<tr><td><code>SKILL.EDIT</code></td><td>Skills</td><td>Create skill versions and categories, set a candidate, try a version on a run</td></tr>
+<tr><td><code>SKILL.RELEASE</code></td><td>Skills</td><td>Promote a skill version to production; change which skills each stage loads</td></tr>
+<tr><td><code>CONFIG.EDIT</code></td><td>Admin</td><td>Change platform settings, rules and models</td></tr>
+<tr><td><code>ADMIN.VIEW</code></td><td>Admin</td><td>Open the Admin panel</td></tr>
+<tr><td><code>ADMIN.DEPLOY</code></td><td>Admin</td><td>Redeploy procedures and integrations (GitHub)</td></tr>
+<tr><td><code>ROLE.MANAGE</code></td><td>Governance</td><td>Manage users, roles, privileges and approval policies</td></tr>
+<tr><td><code>APPROVAL.VIEW</code></td><td>Governance</td><td>See every change request</td></tr>
+<tr><td><code>REQUEST.CHANGES</code></td><td>Governance</td><td>Raise change requests for actions you cannot do yourself</td></tr>
+<tr><td><code>AUDIT.VIEW</code></td><td>Governance</td><td>Open the audit trail and AI cost</td></tr>
+<tr><td><code>AI.USE</code></td><td>AI</td><td>Use AI: copilot, AI review, ask for tests or checks, AI designs (each call costs credits)</td></tr>
+<tr><td><code>INTEGRATION.MANAGE</code></td><td>Integrations</td><td>Connect code repositories and other external systems; schedule their refresh</td></tr>
+<tr><td><code>CODE.VIEW</code></td><td>Integrations</td><td>Search and read indexed client code</td></tr>
+<tr><td><code>JIRA.READ</code></td><td>Jira</td><td>Connect your own Jira account, read issues and triage them</td></tr>
+<tr><td><code>JIRA.WRITE</code></td><td>Jira</td><td>Link issues, comment and change issue status, as yourself</td></tr>
+<tr><td><code>OPS.VIEW</code></td><td>Operations</td><td>See Airflow pipelines, runs, task logs and incidents</td></tr>
+<tr><td><code>OPS.OPERATE</code></td><td>Operations</td><td>Poll Airflow now, change DAG settings; acknowledge, assign, resolve, mute or retry incidents</td></tr>
+</table></div>
+<p>A user who holds only <code>AUDIT.VIEW</code>, <code>ADMIN.VIEW</code>, <code>APPROVAL.VIEW</code>, <code>CODE.VIEW</code> and <code>OPS.VIEW</code> is treated as read only and sees a read-only banner.</p>
+
+<h3 id="approvals-policy">Approval policies</h3>
+<p>These privileges need approval by default. Each policy can be edited in Admin, Access and governance: requires approval, approver role, four eyes (even holders must ask), allow self, active.</p>
+<div class="tablebox"><table>
+<tr><th>Privilege</th><th>Approved by</th></tr>
+<tr><td>MODEL.APPROVE, MAPPING.APPROVE</td><td><code>MODEL_APPROVER</code></td></tr>
+<tr><td>STTM.EDIT, STTM.APPROVE</td><td><code>STTM_APPROVER</code></td></tr>
+<tr><td>SODA.EDIT, SODA.APPROVE</td><td><code>DQ_APPROVER</code></td></tr>
+<tr><td>QA.SIGNOFF</td><td><code>QA_LEAD</code></td></tr>
+<tr><td>REVIEW.APPROVE</td><td><code>CODE_REVIEWER</code></td></tr>
+<tr><td>KNOWLEDGE.EDIT, DOMAIN.EDIT</td><td><code>DATA_STEWARD</code></td></tr>
+<tr><td>CONFIG.EDIT, ADMIN.DEPLOY, INTEGRATION.MANAGE</td><td><code>PLATFORM_ADMIN</code></td></tr>
+<tr><td>ROLE.MANAGE</td><td><code>GOVERNANCE_ADMIN</code></td></tr>
+<tr><td>SKILL.RELEASE</td><td><code>SKILL_OWNER</code></td></tr>
+</table></div>
+<ul>
+  <li>Requesters cannot approve their own request unless the policy allows self-approval, or they are <code>SUPER_ADMIN</code> and "Super admins may approve their own requests" is on.</li>
+  <li>Never queued, always refused with 403 for users without the privilege: file uploads and other non-JSON bodies, and setting a Teams webhook (the URL is a secret and must not be stored in the request).</li>
+  <li>Stage approvals on a run use the target state: MAPPING_APPROVED needs MAPPING.APPROVE, STTM_APPROVED needs STTM.APPROVE, SODA_APPROVED needs SODA.APPROVE, DBT_APPROVED needs REVIEW.APPROVE, any other move needs REVIEW.DECIDE.</li>
+</ul>
+
+<h3 id="db-roles">Snowflake database roles</h3>
+<p>Created inside the platform database by the migrations. Grant them to your account roles.</p>
+<div class="tablebox"><table>
+<tr><th>Database role</th><th>Purpose</th><th>Includes</th></tr>
+<tr><td><code>VIEWER</code></td><td>Read platform metadata, use Cortex Search</td><td>OPS_VIEWER</td></tr>
+<tr><td><code>DATA_ENGINEER</code></td><td>Create and drive runs; write most platform tables</td><td>VIEWER, QA_ENGINEER, OPS_SERVICE</td></tr>
+<tr><td><code>REVIEWER</code></td><td>Human review gates (review transitions, mapping decisions, model approval)</td><td>VIEWER</td></tr>
+<tr><td><code>DATA_STEWARD</code></td><td>Reviewer who may read unmasked LANDING data</td><td>REVIEWER</td></tr>
+<tr><td><code>DOMAIN_OWNER</code></td><td>Reviewer and owner of domain knowledge</td><td>REVIEWER</td></tr>
+<tr><td><code>QA_ENGINEER</code></td><td>Write and run QA tests, work Jira issues</td><td>VIEWER</td></tr>
+<tr><td><code>OPS_VIEWER</code></td><td>Read captured Airflow runs and incidents</td><td></td></tr>
+<tr><td><code>OPS_SERVICE</code></td><td>Worker identity: write Airflow runs, incidents, leases; AI diagnosis inputs</td><td>OPS_VIEWER, VIEWER</td></tr>
+<tr><td><code>SERVICE_AGENT</code></td><td>Cortex agent tool execution</td><td>VIEWER</td></tr>
+<tr><td><code>PLATFORM_ADMIN</code></td><td>Platform operations</td><td>DATA_ENGINEER, DATA_STEWARD, DOMAIN_OWNER, SERVICE_AGENT</td></tr>
+</table></div>
+
+<h3 id="grants">Grants by schema</h3>
+<p>Direct grants only; roles also get what their included roles hold. "All" means all current and future tables in the schema unless noted.</p>
+<div class="tablebox"><table>
+<tr><th>Schema or object</th><th>VIEWER</th><th>DATA_ENGINEER</th><th>REVIEWER</th><th>QA_ENGINEER</th><th>OPS roles</th></tr>
+<tr><td>CORE, SOURCE, PROFILE, KNOWLEDGE, MAPPING, CONTRACT, CODEGEN, AUDIT</td><td>Usage, select all</td><td>via VIEWER, plus writes listed below</td><td>via VIEWER</td><td>via VIEWER</td><td>OPS_SERVICE: select CORE.PLATFORM_CONFIG</td></tr>
+<tr><td>CORE.AI_SUGGESTION, AI_SUGGESTION_DECISION, COPILOT_MESSAGE</td><td>Select</td><td>Insert</td><td>Select</td><td></td><td></td></tr>
+<tr><td>CORE.TAG, TAG_ASSIGNMENT, RUN_SKILL_OVERRIDE</td><td>Select</td><td>Insert, update or delete</td><td></td><td></td><td></td></tr>
+<tr><td>METADATA (table profiles, profile stage)</td><td>Select, read stage</td><td>Insert, update, write stage</td><td></td><td></td><td></td></tr>
+<tr><td>LANDING (raw copies, may hold PII)</td><td>None</td><td>None</td><td>None</td><td>None</td><td>DATA_STEWARD only: select</td></tr>
+<tr><td>CONTRACT.QA_TEST_CASE, QA_TEST_SUITE</td><td>Select</td><td>Insert, update</td><td>Select</td><td>Insert, update</td><td></td></tr>
+<tr><td>CONTRACT.QA_SIGNOFF</td><td>Select</td><td>Insert</td><td>Select</td><td>None</td><td></td></tr>
+<tr><td>QUALITY (check runs, QA runs and results)</td><td>Select</td><td>Insert</td><td>Select</td><td>Insert (QA_RUN, QA_RESULT)</td><td></td></tr>
+<tr><td>MODELING.MODEL_DESIGN</td><td>Select</td><td>Insert</td><td>Select</td><td></td><td></td></tr>
+<tr><td>KNOWLEDGE skills tables</td><td>Select</td><td>Insert, update or delete</td><td></td><td></td><td></td></tr>
+<tr><td>KNOWLEDGE.DOMAIN_KNOWLEDGE, DOMAIN_VERSION, DOMAIN_MEMBER</td><td>Select</td><td>Insert, update (delete on members)</td><td></td><td></td><td>OPS_SERVICE: insert, update knowledge; insert DOMAIN_REGISTRY</td></tr>
+<tr><td>AUDIT.AGENT_TOOL_CALL, COST_USAGE</td><td>Select</td><td></td><td></td><td></td><td>OPS_SERVICE: insert</td></tr>
+<tr><td>GOVERNANCE (all tables)</td><td>Select</td><td>Insert, update, delete</td><td>Insert, update</td><td></td><td></td></tr>
+<tr><td>CODE (all tables)</td><td>Select</td><td>Insert, update, delete</td><td></td><td></td><td></td></tr>
+<tr><td>JIRA (all tables)</td><td>Select ISSUE_LINK, ACTION_LOG, SAVED_FILTER</td><td>Insert, update, delete</td><td>Insert, update, delete</td><td>Insert, update, delete</td><td></td></tr>
+<tr><td>OPS (all tables)</td><td>via OPS_VIEWER</td><td>via OPS_SERVICE</td><td></td><td></td><td>OPS_VIEWER select; OPS_SERVICE insert, update, delete</td></tr>
+<tr><td>Cortex Search KNOWLEDGE_SEARCH, CODE_SEARCH</td><td>Usage</td><td>via VIEWER</td><td>via VIEWER</td><td>via VIEWER</td><td>via VIEWER</td></tr>
+<tr><td>Agent CORE.DATA_ENGINEERING_SUPERVISOR</td><td></td><td>Usage</td><td></td><td></td><td>SERVICE_AGENT usage</td></tr>
+</table></div>
+
+<h3 id="proc-grants">Procedure grants</h3>
+<p><strong>Owner's rights</strong> procedures run with the deploying role's privileges, so callers need only USAGE. <strong>Caller's rights</strong> procedures run with the caller's role, so the caller also needs access to the data they touch.</p>
+<div class="tablebox"><table>
+<tr><th>Procedures</th><th>Rights</th><th>Usage granted to</th></tr>
+<tr><td>CORE.GET_WORKFLOW_STATE, KNOWLEDGE.SEARCH_KNOWLEDGE, KNOWLEDGE.LOAD_SKILL</td><td>Owner</td><td>VIEWER</td></tr>
+<tr><td>CORE.CREATE_RUN, SET_RUN_ARCHIVED, SP_CLEANUP_PIPELINE_RUNS; PROFILE.REFRESH_TABLE_PROFILE; KNOWLEDGE.REGISTER_TARGET_TABLE; CONTRACT.QA_SAVE</td><td>Owner</td><td>DATA_ENGINEER</td></tr>
+<tr><td>PROFILE.RUN_PROFILING, KNOWLEDGE.IDENTIFY_DOMAIN, MAPPING.GENERATE_MAPPING_CANDIDATES, CONTRACT.GENERATE_STTM, CONTRACT.GENERATE_SODA, CODEGEN.GENERATE_DBT, CODEGEN.VALIDATE_DBT</td><td>Owner</td><td>DATA_ENGINEER, SERVICE_AGENT</td></tr>
+<tr><td>CORE.REVIEW_TRANSITION, MODELING.APPLY_MODEL_DESIGN, MAPPING.SAVE_MAPPING_DECISIONS</td><td>Owner</td><td>REVIEWER</td></tr>
+<tr><td>CORE.TRANSITION_RUN</td><td>Owner</td><td>PLATFORM_ADMIN</td></tr>
+<tr><td>CONTRACT.UPDATE_JOIN_GRAPH, REFINE_TRANSFORMATION, APPLY_TRANSFORMATION, EXPORT_STTM_CSV, IMPORT_CLIENT_EXPECTATIONS, SAVE_SODA_DECISIONS, QA_SUITE</td><td>Owner</td><td>DATA_ENGINEER, REVIEWER</td></tr>
+<tr><td>CONTRACT.QA_TABLE_SUITE, QA_TABLE_SAVE</td><td>Owner</td><td>DATA_ENGINEER, REVIEWER, QA_ENGINEER</td></tr>
+<tr><td>CONTRACT.BACKTEST_SODA, QA_ASK</td><td>Caller</td><td>DATA_ENGINEER, REVIEWER</td></tr>
+<tr><td>CONTRACT.QA_TABLE_ASK</td><td>Caller</td><td>DATA_ENGINEER, REVIEWER, QA_ENGINEER</td></tr>
+<tr><td>All SOURCE.* procedures (register, access check, landing, catalog, external files)</td><td>Caller</td><td>DATA_ENGINEER</td></tr>
+<tr><td>JIRA.TRIAGE_ISSUE, TRIAGE_TABLE, RESOLVE_TARGETS</td><td>Caller</td><td>DATA_ENGINEER, REVIEWER, QA_ENGINEER</td></tr>
+<tr><td>CODE.INDEX_REPO</td><td>Caller</td><td>No grant in the file (see <a href="#gaps">Known gaps</a>)</td></tr>
+<tr><td>CODEGEN.PUBLISH_DBT_PR, EXT_&lt;SOURCE&gt;.ORACLE_RUN (created at runtime)</td><td>Owner</td><td>No grant; the creating role owns them</td></tr>
+</table></div>
+<p>In dev mode, and whenever <code>AIP_SOURCE_AS_CALLER=1</code>, the API runs source and table-QA handlers in its own process on the user's session instead of calling the procedure, so the session role needs the underlying table grants.</p>
+
+<h3 id="mapping">Who gets what</h3>
+<p>Recommended pairing of app roles with Snowflake database roles. Grant the database role to the person's account role: <code>GRANT DATABASE ROLE DEV_AI_PLATFORM.QA_ENGINEER TO ROLE QA_TEAM;</code></p>
+<div class="tablebox"><table>
+<tr><th>Person or identity</th><th>App role</th><th>Database role on their account role</th></tr>
+<tr><td>Data engineer</td><td>DATA_ENGINEER</td><td>DATA_ENGINEER</td></tr>
+<tr><td>QA engineer</td><td>QA_ENGINEER</td><td>QA_ENGINEER</td></tr>
+<tr><td>QA lead</td><td>QA_LEAD</td><td>QA_ENGINEER plus DATA_ENGINEER (sign-off writes CONTRACT.QA_SIGNOFF, which only DATA_ENGINEER can insert)</td></tr>
+<tr><td>Model, STTM, data quality or code approver</td><td>MODEL_APPROVER, STTM_APPROVER, DQ_APPROVER, CODE_REVIEWER</td><td>REVIEWER (plus DATA_ENGINEER if they also edit)</td></tr>
+<tr><td>Data steward or domain owner</td><td>DATA_STEWARD</td><td>DATA_STEWARD or DOMAIN_OWNER, plus DATA_ENGINEER for knowledge and domain writes</td></tr>
+<tr><td>Support engineer</td><td>SUPPORT_ENGINEER</td><td>OPS_SERVICE to act on incidents and DAG settings; VIEWER to only look</td></tr>
+<tr><td>Viewer</td><td>VIEWER</td><td>VIEWER</td></tr>
+<tr><td>Governance admin</td><td>GOVERNANCE_ADMIN</td><td>DATA_ENGINEER (governance tables need insert, update and delete)</td></tr>
+<tr><td>Platform admin</td><td>PLATFORM_ADMIN or SUPER_ADMIN</td><td>PLATFORM_ADMIN, plus account rights for integrations, secrets and deploys</td></tr>
+<tr><td>Worker service user (PAT mode)</td><td>none</td><td>OPS_SERVICE, warehouse usage, SNOWFLAKE.CORTEX_USER</td></tr>
+<tr><td>Cortex agent tools</td><td>none</td><td>SERVICE_AGENT</td></tr>
+</table></div>
+<div class="warn"><strong>Requests need write access.</strong> Raising an approval request inserts into <code>GOVERNANCE.CHANGE_REQUEST</code> with the requester's own session, so requesters need DATA_ENGINEER or REVIEWER. VIEWER can only read governance tables. The first sign-in also writes governance rows, so make it with a role that can write them.</div>
+
+<h3 id="account">Account-level needs</h3>
+<ul>
+  <li><strong>Warehouse.</strong> USAGE on <code>AIP_WAREHOUSE</code> (default <code>DBT_WH</code>) for every account role, and for the worker's service user (<code>AIP_SERVICE_WAREHOUSE</code>).</li>
+  <li><strong>Cortex AI.</strong> <code>SNOWFLAKE.CORTEX_USER</code> for AI_COMPLETE (granted to PUBLIC by default in most accounts).</li>
+  <li><strong>GitHub publishing.</strong> CREATE INTEGRATION on the account (network rule to api.github.com, a GENERIC_STRING secret, an external access integration).</li>
+  <li><strong>Code repositories.</strong> A git API INTEGRATION that allows the repository host, and USAGE on it: <code>GRANT USAGE ON INTEGRATION GIT_CODE_CONTEXT TO ROLE &lt;role&gt;;</code></li>
+  <li><strong>Oracle (Snowflake runtime).</strong> CREATE SECRET, CREATE NETWORK RULE, CREATE INTEGRATION; Anaconda terms accepted by ORGADMIN for <code>oracledb</code> and <code>pyarrow</code>; CREATE TASK and EXECUTE TASK for schedules; a network path to the listener.</li>
+</ul>
+
+<!-- ============================================================ 04 -->
+<h2 id="features"><span class="num">04</span>Features</h2>
+<p>The sidebar follows the data engineering lifecycle: Overview, Ingest, Model and build, Quality, Operate, Knowledge, Govern. A group disappears when none of its pages are available to the user.</p>
+
+<h3 id="f-dashboard">Dashboard</h3>
+<dl class="feature-meta">
+  <dt>Page</dt><dd><code>/dashboard</code></dd>
+  <dt>What it does</dt><dd>Run counts (running, needs review, drafts, completed, failed), where work sits in the pipeline, what needs your attention, profile store, domain knowledge, recent activity. An Operations card (open incidents, P1, failing DAGs, MTTR) shows for OPS.VIEW holders.</dd>
+  <dt>Access</dt><dd>Everyone signed in; each panel hides itself when its data is not allowed.</dd>
+</dl>
+
+<h3 id="f-sources">Sources</h3>
+<dl class="feature-meta">
+  <dt>Page</dt><dd><code>/sources</code>: Snowflake catalog, External systems, Profile store</dd>
+  <dt>Snowflake catalog</dt><dd>Pick a database and schema, select tables, Profile (only tables without a current profile) or Profile all from scratch. Profiling runs where the data lives and never copies it. "Start modeling" creates a run from the selection.</dd>
+  <dt>External systems</dt><dd>File upload, S3, Azure Blob, GCS: files go through a stage, then INFER_SCHEMA and COPY INTO <code>&lt;db&gt;.EXT_&lt;SOURCE&gt;</code>, then profile like any table. PostgreSQL, SQL Server, MySQL, Salesforce and REST are registered only; they land through a Snowflake connector enabled by an account admin. Uploads: CSV, Parquet or JSON, up to 200 MB per file.</dd>
+  <dt>Oracle</dt><dd>Wizard: Connection, Access, Verify (ten checks), then browse, preview, profile in Oracle and land with full refresh, append or merge. Two runtimes: <strong>snowflake</strong> (procedure with a PASSWORD secret and an external access integration for that host only) and <strong>api_host</strong> (password read from an environment variable named on the source). Incremental schedules (merge or append, preset or cron) are Snowflake tasks and only work in the snowflake runtime.</dd>
+  <dt>Privileges</dt><dd><span class="chip p">SOURCE.CONNECT</span> create and configure sources, Oracle setup and schedules. <span class="chip p">PROFILE.RUN</span> profile, upload, land, preview, ingest. <span class="chip p">RUN.CREATE</span> start modeling.</dd>
+  <dt>Configure first</dt><dd>For buckets: a Snowflake STORAGE INTEGRATION. For Oracle: a read-only Oracle user with CREATE SESSION and SELECT on the owner schema (grant script shown in the wizard). The platform never stores credentials, only the names of Snowflake secrets and integrations.</dd>
+  <dt>Limits</dt><dd>Merge needs a primary key. Tables without a watermark are read in full on every scheduled run.</dd>
+</dl>
+
+<h3 id="f-runs">Runs and pipeline stages</h3>
+<p>A run takes source tables to reviewed dbt code. Each stage page is under <code>/runs/&lt;run id&gt;/</code>.</p>
+<div class="tablebox"><table>
+<tr><th>Stage page</th><th>What happens</th><th>Privileges</th></tr>
+<tr><td>source, access, landing</td><td>Register the source, check read access, land selected objects</td><td>RUN.OPERATE</td></tr>
+<tr><td>profile</td><td>Profile landed tables; refresh one table</td><td>RUN.OPERATE; refresh PROFILE.RUN</td></tr>
+<tr><td>domain</td><td>Domain recommendation; change target, intent or domain</td><td>MODEL.EDIT</td></tr>
+<tr><td>mapping</td><td>Generate candidates; accept or reject; approve the mapping pack; model design (AI design, edit, version, approve as target)</td><td>RUN.OPERATE; MAPPING.DECIDE; MAPPING.APPROVE; MODEL.EDIT; MODEL.APPROVE; AI.USE for AI</td></tr>
+<tr><td>sttm</td><td>Generate the STTM; edit transformations and joins; AI refine; approve</td><td>RUN.OPERATE; STTM.EDIT; STTM.APPROVE</td></tr>
+<tr><td>soda (Data Quality)</td><td>Generate checks, first scan, backtest; import a client brief; decide checks; approve the pack</td><td>RUN.OPERATE; SODA.EDIT; SODA.APPROVE</td></tr>
+<tr><td>qa</td><td>Functional tests from the STTM, ask AI for a test, run, link Jira issues, sign off</td><td>QA.EDIT; AI.USE; JIRA.WRITE; QA.SIGNOFF</td></tr>
+<tr><td>dbt</td><td>Pick a repository, cut a branch, generate the dbt project, enhance or review with AI, publish a PR</td><td>DBT.EDIT</td></tr>
+<tr><td>validation</td><td>Parse, compile, naming and STTM consistency checks</td><td>RUN.OPERATE</td></tr>
+<tr><td>review</td><td>Final code review and sign-off, or send back</td><td>REVIEW.APPROVE; REVIEW.DECIDE</td></tr>
+</table></div>
+<h4>Gates</h4>
+<ul>
+  <li>Human gates: each <code>*_REVIEW</code> state moves to <code>*_APPROVED</code> only by a person with the matching approve privilege, or back to <code>*_PENDING</code>.</li>
+  <li>After the STTM is approved, three lanes run in parallel: <strong>Data Quality</strong> (every check decided, at least one approved), <strong>QA</strong> (signed off on the current STTM version), <strong>Validation</strong> (passed). Code review stays locked until all three are complete.</li>
+  <li>QA sign-off: allowed after STTM approval and before code approval. A rejection needs a note. If critical or high tests fail, approval needs an override with a reason of at least 15 characters.</li>
+  <li>Forcing a state needs ADMIN.DEPLOY.</li>
+</ul>
+
+<h3 id="f-dbt">dbt publishing</h3>
+<dl class="feature-meta">
+  <dt>Where</dt><dd>Run, dbt step; configured in Admin, Integrations, Code repositories</dd>
+  <dt>Configure first</dt><dd>(1) Connect the dbt repository and turn on "Offer this repository to the dbt workspace" with its dbt project folder and PR defaults. (2) Set a fine-grained GitHub token once (Contents and Pull requests: read and write). It is stored only as a Snowflake secret.</dd>
+  <dt>How it works</dt><dd><code>CODEGEN.PUBLISH_DBT_PR</code> runs in Snowflake with an external access integration to api.github.com, pushes the branch, opens the PR, fetches it into the Snowflake git clone and builds a compile-only DBT PROJECT.</dd>
+  <dt>Privileges</dt><dd><span class="chip p">DBT.EDIT</span> generate and publish. <span class="chip p">ADMIN.DEPLOY</span> GitHub token setup. <span class="chip p">INTEGRATION.MANAGE</span> repository settings.</dd>
+</dl>
+
+<h3 id="f-domains">Domains</h3>
+<dl class="feature-meta">
+  <dt>Page</dt><dd><code>/domains</code>, <code>/domains/&lt;id&gt;</code>: Overview, Target models, Knowledge, Rules, Versions</dd>
+  <dt>Actions</dt><dd>Create, import a pack or draft with AI; edit; delete or restore; owners and stewards; domain rules; roll back a version.</dd>
+  <dt>Privileges</dt><dd><span class="chip p">DOMAIN.EDIT</span> all changes (approved by DATA_STEWARD by default). <span class="chip p">AI.USE</span> ask and suggestions.</dd>
+  <dt>Limits</dt><dd>Only domains added in the UI can be deleted. Packs in the repo are re-registered on every deploy; GDP and GENERAL can never be deleted.</dd>
+</dl>
+
+<h3 id="f-knowledge">Knowledge</h3>
+<dl class="feature-meta">
+  <dt>Page</dt><dd><code>/knowledge</code>: Overview, All items, Review inbox, Learning feed, Duplicates and stale</dd>
+  <dt>Actions</dt><dd>Add, edit (new version), retire, restore, roll back, verify with a review date, approve or reject learned items, tag.</dd>
+  <dt>Learning policy</dt><dd>Per knowledge type: <strong>auto</strong> makes AI-learned versions current at once; <strong>review</strong> leaves them in the inbox. People's own edits are never queued.</dd>
+  <dt>Privileges</dt><dd><span class="chip p">KNOWLEDGE.EDIT</span> changes. <span class="chip p">TAG.MANAGE</span> tags. <span class="chip p">AI.USE</span> Answer.</dd>
+  <dt>Limits</dt><dd>Seeded items are read only because each deploy re-applies them. Resolved incident notes are stored here as INCIDENT_RESOLUTION.</dd>
+</dl>
+
+<h3 id="f-skills">Skills</h3>
+<dl class="feature-meta">
+  <dt>Page</dt><dd><code>/skills</code>; Admin, Skills per stage; Admin, AI models</dd>
+  <dt>How versions are chosen</dt><dd>Run override, then the production label, then the newest active version. Versions never change once created.</dd>
+  <dt>Skill builder</dt><dd>Guided interview, from platform knowledge, from a document, or improve a skill. Tests compare side by side with the current version using an AI judge. Output is always saved as the candidate.</dd>
+  <dt>Privileges</dt><dd><span class="chip p">SKILL.EDIT</span> versions, candidate, categories, try on a run. <span class="chip p">SKILL.RELEASE</span> promote to production, stage bindings. <span class="chip p">AI.USE</span> builder.</dd>
+  <dt>Model per stage</dt><dd>PROFILING, MAPPING, STTM, SODA, QA, DBT, KNOWLEDGE, SUGGESTIONS, COPILOT, MODELING, SKILLS, OPS.</dd>
+</dl>
+
+<h3 id="f-code">Code</h3>
+<dl class="feature-meta">
+  <dt>Page</dt><dd><code>/code</code>: Overview, Models, Sources and macros, Files, Lineage, AI usage</dd>
+  <dt>What it does</dt><dd>Indexes client dbt, SQL and Python repositories; search; lineage graph with impact, paths and hotspots. AI steps quote code with file and line citations.</dd>
+  <dt>Privileges</dt><dd><span class="chip p">CODE.VIEW</span> read. <span class="chip p">RUN.OPERATE</span> refresh now. <span class="chip p">INTEGRATION.MANAGE</span> connect, branch, credentials, schedule, disconnect.</dd>
+  <dt>Configure first</dt><dd>A Snowflake git API INTEGRATION allowing the host, and USAGE on it. A read-only token stored only as a Snowflake secret, or reuse an existing GIT REPOSITORY. Schedules are Snowflake tasks (hourly, daily, weekly or cron).</dd>
+  <dt>Behaviour</dt><dd>Indexing is incremental by file hash and locked per repository. A missing branch fails the run instead of wiping the index. Credential files, <code>target/</code> and <code>dbt_packages/</code> are always skipped.</dd>
+</dl>
+
+<h3 id="f-qa">QA workspace</h3>
+<dl class="feature-meta">
+  <dt>Page</dt><dd><code>/qa</code>: Inbox, Suites, Triage, Results</dd>
+  <dt>What it does</dt><dd>Tests on a domain's target tables, with or without a run: suites per table, AI-written tests and test plans, runs and history, Jira inbox, AI triage of a ticket to the right table, bug filing from a failing result.</dd>
+  <dt>Test rules</dt><dd>One read-only SELECT or WITH, reading only allowed tables (the run's sources, its target, the domain hub). Each test runs with a row limit. Zero rows means PASS; a <code>col = 0</code> check reads the first row; anything else goes to REVIEW. Samples hide personal data; with no profile, every non-key column is hidden. Tests are NOT_RUN until the target table is built.</dd>
+  <dt>Privileges</dt><dd><span class="chip p">QA.EDIT</span> suites and tests. <span class="chip p">AI.USE</span> ask, plan, triage. <span class="chip p">JIRA.READ</span> inbox. <span class="chip p">JIRA.WRITE</span> links, bugs, bulk actions.</dd>
+  <dt>Run QA</dt><dd>A run's QA also runs the saved domain tests for its target table; they count toward sign-off and are edited here.</dd>
+</dl>
+
+<h3 id="f-jira">Jira</h3>
+<dl class="feature-meta">
+  <dt>Model</dt><dd>One OAuth 2.0 (3LO) app per organisation, set up once by an admin. Each person connects their own Atlassian account through SSO, so comments and status changes appear as them and Jira's own permissions apply.</dd>
+  <dt>Where</dt><dd>Admin, Integrations, Jira (setup and "Your Jira account"); QA pages; a run's QA tab</dd>
+  <dt>Capabilities</dt><dd>Assigned to me, free JQL with validation, saved filters (own or shared), boards and sprints, paging, bulk link, comment and transition (up to 50), AI triage, bug filing that never duplicates, results posted as comments.</dd>
+  <dt>Privileges</dt><dd><span class="chip p">JIRA.READ</span> connect, read, filters. <span class="chip p">JIRA.WRITE</span> comment, transition, links, bugs, bulk. <span class="chip p">INTEGRATION.MANAGE</span> save the Jira setup.</dd>
+  <dt>Security</dt><dd>Tokens are encrypted in the application with a key derived from <code>JIRA_TOKEN_KEY</code> before they reach Snowflake. Changing that key disconnects every user. Refresh tokens rotate on each use under a shared lease, so several API servers never disconnect each other.</dd>
+  <dt>Bot</dt><dd>Only for automatic incident tickets: <code>JIRA_BOT_EMAIL</code> and <code>JIRA_BOT_TOKEN</code> (an Atlassian API token). Without it, incidents still open and say "ticket not raised".</dd>
+</dl>
+<p>Step-by-step setup is in <a href="#cfg-jira">Jira setup</a>.</p>
+
+<h3 id="f-ops">Pipelines (Airflow)</h3>
+<dl class="feature-meta">
+  <dt>Page</dt><dd><code>/ops</code> (DAGs, Reliability), <code>/ops/dag</code></dd>
+  <dt>What it does</dt><dd>DAG health from Amazon MWAA: success rate over 7 and 30 days, typical and worst duration, last state; runs timeline, task grid, redacted task logs. Reliability shows MTTR, MTTA, top failing DAGs and repeat failures per team.</dd>
+  <dt>DAG settings</dt><dd>Team, criticality (CRITICAL, HIGH, MEDIUM, LOW), expected-by cron with time zone, max duration, domain, repository and path, mute until and reason.</dd>
+  <dt>Privileges</dt><dd><span class="chip p">OPS.VIEW</span> view. <span class="chip p">OPS.OPERATE</span> poll now, DAG settings. <span class="chip p">INTEGRATION.MANAGE</span> environments and push secret.</dd>
+  <dt>Requires</dt><dd>The worker running, and AWS access from an IAM role on the API and worker host. See <a href="#cfg-airflow">Airflow and MWAA</a>.</dd>
+</dl>
+
+<h3 id="f-incidents">Incidents</h3>
+<dl class="feature-meta">
+  <dt>Page</dt><dd><code>/incidents</code>, <code>/incidents/&lt;id&gt;</code>; Admin, Integrations, Incidents</dd>
+  <dt>Detection</dt><dd>FAILED, RETRIES_EXHAUSTED, LATE (expected-by time passed), LONG_RUNNING (over max duration), UPSTREAM (grouped under a failing upstream DAG). Failures that will retry are not alerted unless the DAG is critical and that setting is on.</dd>
+  <dt>Severity</dt><dd>P1 to P4 from criticality (CRITICAL P2, HIGH P3, others P4); long running and upstream one level lower; production environments one level higher; backfills and manual runs one level lower. A routing rule's override wins.</dd>
+  <dt>Lifecycle</dt><dd>Same error again adds an occurrence. A repeat within the reopen window (24 h) reopens. The next successful run resolves automatically. Failures one or two DAGs downstream within 2 hours become children with no ticket and no alert.</dd>
+  <dt>Routing</dt><dd>Rules by priority (DAG pattern, tag, owner, environment) choose the team, then the DAG's own team, otherwise unrouted. Unrouted incidents get a ticket in the default project and no Teams card.</dd>
+  <dt>Notifications</dt><dd>Teams Adaptive Cards with Acknowledge, Open incident, Open Jira and Open log links; at most 10 cards per team per 10 minutes, then a summary. Escalation after the team's minutes (P1 at once), repeating at double the interval, up to 3 times.</dd>
+  <dt>AI</dt><dd>Diagnosis with cause, evidence cited from the context, confidence, safe-to-retry, fix steps and blast radius; automatic for new P1 to P3 incidents. Ask about an incident; postmortem draft. A resolution note of 20 characters or more becomes knowledge for later diagnoses.</dd>
+  <dt>Retry</dt><dd>Always previewed first with a dry run. A retry marked unsafe needs an override reason of at least 15 characters.</dd>
+  <dt>Privileges</dt><dd><span class="chip p">OPS.VIEW</span> view. <span class="chip p">OPS.OPERATE</span> acknowledge, assign, resolve, mute, reopen, ticket, retry, bulk. <span class="chip p">AI.USE</span> diagnose, ask, postmortem. <span class="chip p">INTEGRATION.MANAGE</span> teams, webhooks, routing, settings.</dd>
+</dl>
+
+<h3 id="f-approvals">Approvals and Audit</h3>
+<dl class="feature-meta">
+  <dt>Approvals</dt><dd><code>/approvals</code>: Waiting for me, My requests, All requests (APPROVAL.VIEW). Approving replays the original call under the approver's session. Rejecting needs a note. Only the requester can cancel.</dd>
+  <dt>Audit</dt><dd><code>/audit</code> (AUDIT.VIEW): every workflow event, and AI cost by stage, model, run and day. Reconciling with Snowflake billing needs CONFIG.EDIT.</dd>
+</dl>
+
+<h3 id="f-admin">Admin</h3>
+<p>Requires ADMIN.VIEW to open.</p>
+<div class="tablebox"><table>
+<tr><th>Section</th><th>Contents</th><th>Change needs</th></tr>
+<tr><td>Overview</td><td>Session, default model, AI credits over 30 days, changed rules</td><td></td></tr>
+<tr><td>AI models</td><td>Available models with a test call, model per stage, rate card</td><td>CONFIG.EDIT</td></tr>
+<tr><td>Access and governance</td><td>Users and roles, roles with members, inheritance and privileges, approval policies, enforcement and default role</td><td>ROLE.MANAGE</td></tr>
+<tr><td>Integrations</td><td>Code repositories (with dbt and GitHub publishing), Jira, Airflow, Incidents</td><td>INTEGRATION.MANAGE; GitHub token ADMIN.DEPLOY</td></tr>
+<tr><td>Skills per stage</td><td>Ordered skills for each stage, for all runs or GDP runs only</td><td>SKILL.RELEASE</td></tr>
+<tr><td>Rules</td><td>Quality, profile, joins, mapping, domain and UI rules as JSON; domain overrides</td><td>CONFIG.EDIT</td></tr>
+<tr><td>Modeling standards</td><td>GDP and Generic presets with overrides</td><td>CONFIG.EDIT</td></tr>
+<tr><td>Deploy</td><td>Applies migrations, procedures, skills, search and the agent with your role; safe to repeat</td><td>ADMIN.DEPLOY</td></tr>
+</table></div>
+
+<h3 id="f-copilot">Copilot</h3>
+<p>Side panel on every page (<kbd>Ctrl</kbd>+<kbd>J</kbd> or <kbd>Cmd</kbd>+<kbd>J</kbd>). Answers questions about the current page with citations and can save an answer as knowledge. Needs AI.USE; saving needs KNOWLEDGE.EDIT.</p>
+
+<!-- ============================================================ 05 -->
+<h2 id="config"><span class="num">05</span>Configuration</h2>
+
+<h3 id="env">Environment variables</h3>
+<p>The API and the worker read <code>apps/api/.env</code> at startup (gitignored; copy it from <code>.env.example</code>). A variable already set in the process environment wins, so hosts keep their own settings. Restart the API and worker after any change.</p>
+<div class="tablebox"><table>
+<tr><th>Variable</th><th>Purpose</th><th>Default</th></tr>
+<tr><td><code>AIP_AUTH</code></td><td><code>dev</code> (shared SSO session) or <code>pat</code> (per-user tokens)</td><td>dev</td></tr>
+<tr><td><code>AIP_SNOWFLAKE_CONNECTION</code></td><td>Connection name in connections.toml (dev)</td><td>anblicksorg-anblicksorg_aws</td></tr>
+<tr><td><code>AIP_DATABASE</code>, <code>AIP_WAREHOUSE</code></td><td>Platform database and warehouse</td><td>DEV_AI_PLATFORM, DBT_WH</td></tr>
+<tr><td><code>AIP_ACCOUNT</code>, <code>AIP_ROLE</code></td><td>Account (required for pat) and starting role</td><td></td></tr>
+<tr><td><code>AIP_SUPER_ADMINS</code></td><td>Users made SUPER_ADMIN at first bootstrap (comma separated)</td><td></td></tr>
+<tr><td><code>AIP_SECRET_KEY</code></td><td>Encrypts the Airflow push secret and Teams webhooks. 32 or more random characters, kept stable.</td><td>falls back to JIRA_TOKEN_KEY</td></tr>
+<tr><td><code>AIP_SERVICE_USER</code>, <code>AIP_SERVICE_KEY_PATH</code>, <code>AIP_SERVICE_KEY_PASSPHRASE</code>, <code>AIP_SERVICE_ROLE</code>, <code>AIP_SERVICE_WAREHOUSE</code></td><td>Key-pair service user for the worker and Airflow push in pat mode</td><td></td></tr>
+<tr><td><code>AIP_SOURCE_AS_CALLER</code></td><td>Run source handlers in the API with the caller's session</td><td>1 in dev, 0 in pat</td></tr>
+<tr><td><code>AIP_AGENT_NAME</code>, <code>AIP_AGENT_SCHEMA</code></td><td>Cortex agent target</td><td>DATA_ENGINEERING_SUPERVISOR, CORE</td></tr>
+<tr><td><code>AIP_WORKER_LOG_LEVEL</code></td><td>Worker logging</td><td>INFO</td></tr>
+<tr><td><code>JIRA_CLIENT_ID</code>, <code>JIRA_CLIENT_SECRET</code></td><td>Jira OAuth app (client ID can also be saved in Admin)</td><td></td></tr>
+<tr><td><code>JIRA_TOKEN_KEY</code></td><td>Encrypts stored Jira tokens. 32 or more random characters; changing it disconnects everyone.</td><td></td></tr>
+<tr><td><code>JIRA_REDIRECT_URI</code></td><td>OAuth callback: <code>&lt;web origin&gt;/bff/jira/callback</code></td><td>http://localhost:3000/bff/jira/callback</td></tr>
+<tr><td><code>JIRA_BOT_EMAIL</code>, <code>JIRA_BOT_TOKEN</code></td><td>Bot account for incident tickets</td><td></td></tr>
+<tr><td><code>AWS_PROFILE</code> or an IAM role</td><td>MWAA and CloudWatch access; never stored in the file</td><td>AWS default chain</td></tr>
+<tr><td>Oracle <code>password_env</code></td><td>Name chosen per Oracle source in the api_host runtime</td><td></td></tr>
+</table></div>
+<p>Web app (<code>apps/web/.env.local</code>): <code>AIP_API_URL</code> (default <code>http://127.0.0.1:8001</code>), <code>AIP_AUTH</code> (must match the API), <code>NEXT_PUBLIC_CATALOG_DISPLAY</code>.</p>
+<p>Generate a random key in PowerShell:</p>
+<pre><code>[Convert]::ToBase64String((1..32 | ForEach-Object { Get-Random -Maximum 256 }))</code></pre>
+<div class="crit"><strong>Never paste secrets into chats, tickets or documents.</strong> If a key or secret was shared, generate a new one. Secrets are encrypted in the application before they reach Snowflake, so no key appears in Snowflake query history.</div>
+
+<h3 id="cfg-jira">Jira setup</h3>
+<p>One Atlassian OAuth app serves the whole organisation. An admin sets it up once; then each person connects their own Jira account with SSO, so every comment and status change in Jira shows as that person and Jira's own permissions apply. A separate bot account is used only for automatic incident tickets.</p>
+<div class="tablebox"><table>
+<tr><th>Value</th><th>Where it comes from</th><th>Where it goes</th><th>Secret?</th></tr>
+<tr><td>Site</td><td>Your Jira address, for example <code>https://anblicks.atlassian.net</code></td><td>Admin, Integrations, Jira</td><td>No</td></tr>
+<tr><td>Project key</td><td>The short code of the space, for example <code>GQT</code></td><td>Admin, default project</td><td>No</td></tr>
+<tr><td>Client ID</td><td>Atlassian app, Settings</td><td>Admin, or <code>JIRA_CLIENT_ID</code></td><td>No</td></tr>
+<tr><td>Client secret</td><td>Atlassian app, Settings</td><td><code>JIRA_CLIENT_SECRET</code> on the API host</td><td>Yes</td></tr>
+<tr><td>Token key</td><td>You generate it</td><td><code>JIRA_TOKEN_KEY</code> on the API host</td><td>Yes</td></tr>
+<tr><td>Callback URL</td><td><code>&lt;web origin&gt;/bff/jira/callback</code></td><td>Atlassian app, Authorization; Admin; <code>JIRA_REDIRECT_URI</code></td><td>No</td></tr>
+<tr><td>Bot email and API token</td><td>id.atlassian.com, Security, API tokens</td><td><code>JIRA_BOT_EMAIL</code>, <code>JIRA_BOT_TOKEN</code></td><td>Token: yes</td></tr>
+</table></div>
+
+<h4>Part A. Atlassian side (once per organisation)</h4>
+<ol class="steps">
+  <li><strong>Create a test space.</strong> In the Jira sidebar choose Spaces, then +, pick the <strong>Scrum</strong> template (so boards and sprints exist for the QA inbox) and name it, for example "GDP QA Test". Note its <strong>key</strong>: the short code in every issue ID (<code>GQT-12</code>) and in the backlog URL after <code>/projects/</code>. The key is letters and digits only; the space's name is not the key.</li>
+  <li><strong>Create the OAuth app.</strong> Open <code>https://developer.atlassian.com/console/myapps/</code>, choose Create, then OAuth 2.0 integration. Name it, for example "GDP Platform", and accept the developer terms.</li>
+  <li><strong>Add permissions.</strong> Under Permissions, find Jira API, choose Add, then Configure:
+    <ul>
+      <li>Classic scopes: <code>read:jira-work</code>, <code>write:jira-work</code>, <code>read:jira-user</code>.</li>
+      <li>Granular scopes (boards and sprints): <code>read:board-scope:jira-software</code>, <code>read:sprint:jira-software</code>, <code>read:project:jira</code>.</li>
+    </ul>
+    The platform also asks for <code>offline_access</code> so sign-ins can be refreshed; Atlassian adds it at consent.</li>
+  <li><strong>Add the callback URL.</strong> Under Authorization, choose OAuth 2.0 (3LO), Configure, and add every web address people use, each ending in <code>/bff/jira/callback</code>. For local work: <code>http://localhost:3000/bff/jira/callback</code> and, for a second copy, <code>http://localhost:3011/bff/jira/callback</code>. In production, the public HTTPS address.</li>
+  <li><strong>Copy the client ID and secret</strong> from Settings. The client ID is not secret; treat the secret like a password.</li>
+  <li><strong>Share the app</strong> when ready for colleagues: Distribution, Sharing. Until then only the app's owner can connect.</li>
+</ol>
+
+<h4>Part B. Store the secrets on the API host (choose one way)</h4>
+<p><strong>Option 1, recommended: the <code>.env</code> file.</strong> Follow <a href="#sec-env">Fill the .env file</a> and set:</p>
+<pre><code>JIRA_CLIENT_ID=&lt;client id&gt;
+JIRA_CLIENT_SECRET=&lt;client secret&gt;
+JIRA_TOKEN_KEY=&lt;output of the key command&gt;
+AIP_SECRET_KEY=&lt;a second, different key&gt;
+JIRA_REDIRECT_URI=http://localhost:3000/bff/jira/callback</code></pre>
+<p><strong>Option 2: Windows user environment variables.</strong> Run in PowerShell. The first command prompts for the secret so it never appears on screen or in history; the second generates both keys.</p>
+<pre><code>$s = Read-Host "Jira client secret" -AsSecureString; [Environment]::SetEnvironmentVariable("JIRA_CLIENT_SECRET", [Runtime.InteropServices.Marshal]::PtrToStringAuto([Runtime.InteropServices.Marshal]::SecureStringToBSTR($s)), "User")
+
+[Environment]::SetEnvironmentVariable("JIRA_TOKEN_KEY", [Convert]::ToBase64String((1..32 | ForEach-Object { Get-Random -Maximum 256 })), "User"); [Environment]::SetEnvironmentVariable("AIP_SECRET_KEY", [Convert]::ToBase64String((1..32 | ForEach-Object { Get-Random -Maximum 256 })), "User")</code></pre>
+<p>User variables are only seen by programs started after they are set: open a new terminal before starting the API. Use one option, not both; if both exist, the environment variable wins over the file.</p>
+<div class="note"><code>AIP_SECRET_KEY</code> is not a Jira setting, but set it now: it also protects the Airflow push secret and the Teams webhooks.</div>
+
+<h4>Part C. Bot for incident tickets (optional)</h4>
+<ol class="steps">
+  <li>Sign in to Atlassian as the account that should own incident tickets. For testing your own account is fine (tickets show as created by you); in production use a dedicated service account with access to the support projects.</li>
+  <li>Open <code>https://id.atlassian.com/manage-profile/security/api-tokens</code>, choose Create API token, name it "GDP ops bot", and copy it.</li>
+  <li>Store it in the <code>.env</code> file:
+<pre><code>JIRA_BOT_EMAIL=&lt;bot account email&gt;
+JIRA_BOT_TOKEN=&lt;api token&gt;</code></pre>
+  or as user variables:
+<pre><code>[Environment]::SetEnvironmentVariable("JIRA_BOT_EMAIL", "&lt;bot account email&gt;", "User"); $t = Read-Host "Jira API token" -AsSecureString; [Environment]::SetEnvironmentVariable("JIRA_BOT_TOKEN", [Runtime.InteropServices.Marshal]::PtrToStringAuto([Runtime.InteropServices.Marshal]::SecureStringToBSTR($t)), "User")</code></pre></li>
+</ol>
+
+<h4>Part D. Restart and confirm</h4>
+<ol class="steps">
+  <li>Restart the API (and the worker if it runs). Values are read only at startup.</li>
+  <li>Open Admin, Integrations, Jira. Step 3 must show <code>JIRA_CLIENT_SECRET</code> and <code>JIRA_TOKEN_KEY</code> ticked. If one is not ticked, the API was started before it was set: restart it.</li>
+</ol>
+
+<h4>Part E. Admin settings and connecting</h4>
+<ol class="steps">
+  <li>In Admin, Integrations, Jira enter: site <code>https://anblicks.atlassian.net</code>, the client ID, the callback URL (the same address your browser uses, matching the Atlassian app and <code>JIRA_REDIRECT_URI</code>), and the default project key (for example <code>GQT</code>). Save.</li>
+  <li>Under "Your Jira account", choose <strong>Connect Jira</strong>, sign in through SSO and approve the consent page. You return to the platform connected.</li>
+  <li>Each colleague does the same once, after the app is shared (Part A, step 6) and they have JIRA.READ.</li>
+</ol>
+
+<h4>Part F. Check it works</h4>
+<ul>
+  <li>QA, Inbox shows your assigned issues; a bad JQL shows Jira's own error message.</li>
+  <li>Boards lists the test space's board and its sprints.</li>
+  <li>Triage a ticket: candidate tables appear with reasons.</li>
+  <li>Writing checks (comment, bug, transition): use the test space first.</li>
+</ul>
+
+<h4>Troubleshooting</h4>
+<div class="tablebox"><table>
+<tr><th>Symptom</th><th>Cause and fix</th></tr>
+<tr><td>Step 3 shows a secret as missing after you set it</td><td>The API started before the value existed. Restart it (open a new terminal first if you used user variables).</td></tr>
+<tr><td>"Project key: letters and digits"</td><td>You entered the space's name. Use the short key from an issue ID, for example <code>GQT</code>.</td></tr>
+<tr><td>Connected, but "Assigned to me" is empty</td><td>"Assigned to me" searches only the default project. Check that the default project in Admin is the key shown in your issue IDs (an issue <code>GDPQA-1</code> means key <code>GDPQA</code>), and that the issue is assigned to you and not Done. The JQL mode searches any project.</td></tr>
+<tr><td>Atlassian says the redirect URL is invalid, or you land on the wrong app</td><td>The callback in Admin or <code>JIRA_REDIRECT_URI</code> does not exactly match one in the Atlassian app, or points to another port.</td></tr>
+<tr><td>"Reconnect Jira to read boards and sprints"</td><td>The account connected before the board scopes were added. Add the granular scopes in the app and connect again.</td></tr>
+<tr><td>"Connect Jira again" or HTTP 428</td><td>Not connected, the access was revoked in Atlassian, or <code>JIRA_TOKEN_KEY</code> changed. Connect again.</td></tr>
+<tr><td>Colleagues cannot connect</td><td>The app is not shared yet (Distribution, Sharing), or they lack JIRA.READ.</td></tr>
+<tr><td>Incidents say "ticket not raised"</td><td>The bot email or token is missing on the host that runs the worker, or the bot cannot create issues in the team's project.</td></tr>
+</table></div>
+
+<h3 id="cfg-github">GitHub setup</h3>
+<p>Two separate GitHub connections, each with its own token:</p>
+<div class="grid2">
+  <div class="card"><h4 style="margin-top:0">Code repositories (read)</h4><p>Indexes the client's dbt, SQL and Python code so AI steps can quote it and the Code page can show lineage. Uses a <strong>read-only</strong> token per repository, stored as a Snowflake PASSWORD secret used by a Snowflake Git repository object.</p></div>
+  <div class="card"><h4 style="margin-top:0">dbt publishing (write)</h4><p>Pushes generated dbt to a new branch and opens a pull request. Uses one <strong>write</strong> token, stored as a Snowflake GENERIC_STRING secret, reached through an external access integration to api.github.com.</p></div>
+</div>
+<div class="note">Use two different tokens: the read token can never push, and the write token never reaches the indexing clone. Both are fine-grained personal access tokens created at GitHub, Settings, Developer settings, Fine-grained tokens, limited to the client's repositories.</div>
+
+<h4>Part A. Connect a code repository</h4>
+<ol class="steps">
+  <li><strong>Prerequisites.</strong> The platform is deployed. You hold INTEGRATION.MANAGE. Your Snowflake role can create secrets and git repositories in the <code>CODE</code> schema.</li>
+  <li><strong>Create a read-only token</strong> limited to the repository with <strong>Contents: Read</strong> (Metadata: Read is added automatically). A public repository needs no token.</li>
+  <li><strong>Make sure a git API integration exists.</strong> If none allows the repository's host, the connect drawer says "No usable Git integration allows &lt;host&gt;" and shows the SQL for an account admin:
+<pre><code>CREATE API INTEGRATION GIT_CODE_CONTEXT
+  API_PROVIDER = GIT_HTTPS_API
+  API_ALLOWED_PREFIXES = ('https://github.com/&lt;org&gt;')
+  ALLOWED_AUTHENTICATION_SECRETS = ALL
+  ENABLED = TRUE;
+GRANT USAGE ON INTEGRATION GIT_CODE_CONTEXT TO ROLE &lt;your role&gt;;</code></pre></li>
+  <li><strong>Open Admin, Integrations, Code repositories, Connect repository</strong> and fill in:
+    <ul>
+      <li>Repository URL: the https address (not ssh).</li>
+      <li>Name: filled from the URL (letters, digits and underscores, starting with a letter).</li>
+      <li>Branch: default <code>main</code>.</li>
+      <li>Snowflake Git integration: pick the one that allows the host.</li>
+      <li>Credentials: New read-only token (paste it; any username, default <code>token</code>), an existing PASSWORD secret, or Public repository. You can also reuse a Git repository object that already exists in Snowflake; it keeps its own credentials and is never changed or dropped.</li>
+      <li>Domains it serves (none means all), paths to include or skip, and Index now.</li>
+    </ul></li>
+  <li><strong>Connect.</strong> The platform creates the secret <code>&lt;DB&gt;.CODE.&lt;NAME&gt;_GIT_TOKEN</code> and the Git repository <code>&lt;DB&gt;.CODE.&lt;NAME&gt;</code>, fetches it, checks the branch and starts indexing. If the integration lists specific secrets instead of ALL, add the new secret to its <code>ALLOWED_AUTHENTICATION_SECRETS</code>.</li>
+  <li><strong>Schedule refreshes</strong> in the repository's Schedule tab (hourly, daily 06:00 UTC by default, weekdays, weekly, or a cron with time zone). This creates a Snowflake task <code>CODE.REFRESH_&lt;id&gt;</code>; your role needs CREATE TASK in <code>CODE</code>, warehouse USAGE and the account privilege EXECUTE TASK.</li>
+  <li><strong>Check it.</strong> The repository shows files, models and the last index run; Code search and lineage return results.</li>
+</ol>
+<p>Branch switch: click the branch chip, Fetch, Switch (the index is rebuilt). Rotate credentials in the Credentials tab (Save and test). Disconnect removes the index and schedule; tick "Also drop the Snowflake Git repository and secret" to drop objects the platform created.</p>
+
+<h4>Part B. Set up dbt publishing (pull requests)</h4>
+<ol class="steps">
+  <li><strong>Prerequisites.</strong> You hold ADMIN.DEPLOY. Your Snowflake role can create integrations on the account and secrets and network rules in <code>CODEGEN</code>. The dbt repository is connected as in Part A.</li>
+  <li><strong>Create a write token</strong> limited to the repositories that receive PRs, with <strong>Contents: Read and write</strong> and <strong>Pull requests: Read and write</strong>. A classic token needs the <code>repo</code> scope. The token owner must have write access to the repository.</li>
+  <li><strong>Admin, Integrations, Code repositories,</strong> card "Pull requests to GitHub": paste the token and choose <strong>Set up</strong>. The platform runs and logs:
+<pre><code>CREATE NETWORK RULE IF NOT EXISTS &lt;DB&gt;.CODEGEN.GITHUB_API_EGRESS
+  MODE = EGRESS TYPE = HOST_PORT VALUE_LIST = ('api.github.com');
+CREATE OR REPLACE SECRET &lt;DB&gt;.CODEGEN.GITHUB_TOKEN TYPE = GENERIC_STRING SECRET_STRING = '***';
+CREATE OR REPLACE EXTERNAL ACCESS INTEGRATION GDP_GITHUB_ACCESS
+  ALLOWED_NETWORK_RULES = (&lt;DB&gt;.CODEGEN.GITHUB_API_EGRESS)
+  ALLOWED_AUTHENTICATION_SECRETS = (&lt;DB&gt;.CODEGEN.GITHUB_TOKEN) ENABLED = TRUE;
+CREATE OR REPLACE PROCEDURE &lt;DB&gt;.CODEGEN.PUBLISH_DBT_PR(...) EXTERNAL_ACCESS_INTEGRATIONS = (GDP_GITHUB_ACCESS) ...</code></pre>
+  If a step lacks privileges, the card says so and an account admin can run the logged SQL.</li>
+  <li><strong>Test access</strong> on the card: it reads the repository and reports "push allowed", or that the token cannot push.</li>
+  <li><strong>Repository dbt settings</strong> (repository drawer, dbt workspace tab): Offer this repository to the dbt workspace; dbt project folder (one of the <code>dbt_project.yml</code> folders found by the index); Open the PR right after generating; Open PRs as drafts.</li>
+  <li><strong>Use it in a run</strong> (dbt step): choose Cut from (default the repository branch) and New branch (default <code>feat/onboard-&lt;run&gt;</code>; must differ), then Generate, then Push and open PR. The PR is recorded in <code>CODEGEN.GIT_PUBLICATION</code> and a compile-only DBT PROJECT is created from the branch.</li>
+</ol>
+<p>Rotate the write token with "Rotate token" on the same card. Pull requests are GitHub only; other providers stay stage only.</p>
+
+<h4>GitHub troubleshooting</h4>
+<div class="tablebox"><table>
+<tr><th>Message</th><th>Fix</th></tr>
+<tr><td>No usable Git integration allows &lt;host&gt;</td><td>An account admin creates the API integration and grants USAGE (Part A, step 3)</td></tr>
+<tr><td>This role can see X but cannot use it</td><td><code>GRANT USAGE ON INTEGRATION X TO ROLE &lt;role&gt;;</code></td></tr>
+<tr><td>Give the repository's https URL</td><td>Use the https address, not ssh</td></tr>
+<tr><td>Branch 'x' is not in &lt;url&gt;</td><td>Pick one of the listed branches</td></tr>
+<tr><td>FETCH fails with an authentication or not found error</td><td>Check the token's repository access and expiry, the integration's allowed prefixes and allowed secrets</td></tr>
+<tr><td>That does not look like a GitHub token</td><td>Paste the full token (starts with <code>github_pat_</code> or <code>ghp_</code>)</td></tr>
+<tr><td>A step needs more privileges (CREATE INTEGRATION, CREATE SECRET, CREATE NETWORK RULE)</td><td>An account admin runs the logged SQL or grants those privileges</td></tr>
+<tr><td>GitHub rejected the token (expired or revoked)</td><td>Rotate the token</td></tr>
+<tr><td>GitHub refused the publishing token</td><td>Give the token Contents and Pull requests write on that repository</td></tr>
+<tr><td>Your GitHub account has no write access</td><td>Give the token owner write access to the repository</td></tr>
+<tr><td>NO_CHANGES</td><td>Not an error: the branch matches the base, so no PR was opened</td></tr>
+<tr><td>Deploy the platform first so CODEGEN.GENERATE_DBT exists</td><td>Run the deploy</td></tr>
+</table></div>
+
+<h3 id="cfg-airflow">Airflow and MWAA</h3>
+<ol class="steps">
+  <li><strong>IAM:</strong> give the API and worker host an IAM role (or <code>AWS_PROFILE</code>) allowing <code>airflow:InvokeRestApi</code>, <code>airflow:GetEnvironment</code>, <code>logs:FilterLogEvents</code>, <code>logs:GetLogEvents</code> on the environment.</li>
+  <li><strong>Admin, Integrations, Airflow:</strong> add the environment (name, MWAA environment name, region, Airflow UI URL, poll interval 60 to 3600 seconds) and Test connection.</li>
+  <li><strong>Start the worker:</strong> <code>python -m app.worker</code> in <code>apps/api</code>. Admin shows "Worker last seen".</li>
+  <li><strong>Optional push plugin</strong> for alerts within seconds: turn on push, generate the push secret (shown once), zip <code>airflow_plugins/gdp_listener</code> into the MWAA <code>plugins.zip</code>, and set <code>gdp.ingest_url</code>, <code>gdp.env_id</code>, <code>gdp.push_secret</code> as Airflow configuration options. MWAA needs outbound HTTPS to the web host; private MWAA can rely on polling alone.</li>
+  <li><strong>DAG settings</strong> on each important DAG: team, criticality, expected-by, max duration, repository mapping.</li>
+</ol>
+<p>The plugin signs each event (HMAC over timestamp, event id and body). Requests older than 5 minutes, repeated event ids and bodies over 64 KB are refused. Upgrade the plugin and the platform together.</p>
+
+<h3 id="cfg-teams">Teams alerts</h3>
+<ol class="steps">
+  <li>In Microsoft Teams, create a Workflows flow "Post to a channel when a webhook request is received" for the team's channel, and copy its URL.</li>
+  <li>In Admin, Integrations, Incidents, create the team (Jira project, component, assignee account id, escalation minutes, members) and paste the alerts webhook, and optionally an escalation webhook. The URL is never shown again.</li>
+  <li>Use "Send test card" to check delivery (it posts to that channel).</li>
+  <li>Add routing rules, set the public base URL used in links, and choose AI auto-diagnosis severities and the weekly digest.</li>
+</ol>
+
+<h3 id="cfg-run">Run and deploy</h3>
+<pre><code># API
+cd apps/api
+python -m uvicorn app.main:app --host 127.0.0.1 --port 8001
+
+# Web
+cd apps/web
+npx next dev -p 3000
+
+# Worker (Pipelines and Incidents)
+cd apps/api
+python -m app.worker
+
+# Snowflake objects (idempotent)
+python infrastructure/deploy_snowflake.py --connection &lt;name&gt; --database DEV_AI_PLATFORM --warehouse DBT_WH</code></pre>
+<p>Deploy applies migrations once each (checksums are locked), seeds the workflow graph, uploads <code>services/</code> to <code>CORE.CODE_STAGE</code>, and recreates procedures, views, Cortex Search and the agent. Admin, Deploy does the same with the signed-in role.</p>
+
+<!-- ============================================================ 06 -->
+<h2 id="deploy"><span class="num">06</span>Deployment runbook</h2>
+<p>How to stand up a new environment and how to update an existing one. Commands are shown for Windows PowerShell; they work the same in a bash shell unless noted.</p>
+
+<h3 id="dep-pre">Prerequisites</h3>
+<div class="tablebox"><table>
+<tr><th>Need</th><th>Detail</th><th>Check</th></tr>
+<tr><td>Python 3.11 or newer</td><td>Runs the API, worker and deploy script</td><td><code>python --version</code></td></tr>
+<tr><td>Node.js 20 or newer</td><td>Runs the web app</td><td><code>node --version</code></td></tr>
+<tr><td>Repository</td><td>Latest <code>main</code></td><td><code>git pull origin main</code></td></tr>
+<tr><td>Snowflake connection</td><td>A named entry in <code>~/.snowflake/connections.toml</code> (account, user, <code>authenticator = "externalbrowser"</code> for SSO, role, warehouse)</td><td><code>snow connection test -c &lt;name&gt;</code> or a test sign-in</td></tr>
+<tr><td>Deploy role</td><td>Owns the platform database or can create schemas, tables, stages, procedures, database roles, row access policies, Cortex Search services and agents in it, and grant them. Account level: CREATE INTEGRATION if GitHub publishing or Oracle will be used.</td><td>The deploy prints each step; a missing privilege stops it with the failing statement</td></tr>
+<tr><td>Warehouse</td><td>For deploy, Cortex Search refresh and the app (default <code>DBT_WH</code>)</td><td><code>SHOW WAREHOUSES LIKE 'DBT_WH';</code></td></tr>
+<tr><td>Cortex</td><td><code>SNOWFLAKE.CORTEX_USER</code> on every role that uses AI, and Cortex models available in the region</td><td>Admin, AI models, "Test" on a model</td></tr>
+</table></div>
+
+<h3 id="dep-first">First deployment</h3>
+<ol class="steps">
+  <li><strong>Get the code and dependencies.</strong>
+<pre><code>git pull origin main
+pip install -r apps/api/requirements.txt
+cd apps/web; npm install; cd ../..</code></pre></li>
+  <li><strong>Preview the deploy</strong> without touching Snowflake:
+<pre><code>python infrastructure/deploy_snowflake.py --dry-run --database DEV_AI_PLATFORM</code></pre></li>
+  <li><strong>Deploy.</strong> Approve the SSO prompt in the browser when it opens; it times out after a few minutes.
+<pre><code>python infrastructure/deploy_snowflake.py --connection &lt;name&gt; --database DEV_AI_PLATFORM --warehouse DBT_WH</code></pre>
+  It creates the CORE schema and migration log, applies every migration not yet applied (V001 to V033), seeds the workflow graph, uploads <code>services/</code> to <code>CORE.CODE_STAGE</code>, then recreates procedures, views, Cortex Search services and the agent. Running it again is safe.</li>
+  <li><strong>Confirm it applied.</strong> In a Snowflake worksheet:
+<pre><code>SELECT VERSION, APPLIED_AT FROM DEV_AI_PLATFORM.CORE.SCHEMA_MIGRATION ORDER BY VERSION DESC LIMIT 5;
+SHOW PROCEDURES IN SCHEMA DEV_AI_PLATFORM.CONTRACT;
+SHOW ROW ACCESS POLICIES IN SCHEMA DEV_AI_PLATFORM.JIRA;</code></pre>
+  The newest version should be V033, and <code>OWN_ROWS</code> should be listed.</li>
+  <li><strong>Grant people access</strong> (see <a href="#mapping">Who gets what</a>):
+<pre><code>GRANT DATABASE ROLE DEV_AI_PLATFORM.DATA_ENGINEER TO ROLE &lt;data engineers&gt;;
+GRANT DATABASE ROLE DEV_AI_PLATFORM.QA_ENGINEER   TO ROLE &lt;qa team&gt;;
+GRANT DATABASE ROLE DEV_AI_PLATFORM.VIEWER        TO ROLE &lt;viewers&gt;;
+GRANT USAGE ON WAREHOUSE DBT_WH TO ROLE &lt;each role&gt;;</code></pre></li>
+  <li><strong>Configure secrets and settings</strong> in <code>apps/api/.env</code>. Follow the <a href="#secrets">Secrets runbook</a>.</li>
+  <li><strong>Start the services</strong> (three terminals):
+<pre><code>cd apps/api; python -m uvicorn app.main:app --host 127.0.0.1 --port 8001
+cd apps/web; npx next dev -p 3000
+cd apps/api; python -m app.worker</code></pre>
+  The worker is only needed for Pipelines and Incidents.</li>
+  <li><strong>Sign in once as the admin</strong> so governance creates its roles, then assign roles in Admin, Access and governance.</li>
+  <li><strong>Connect integrations</strong> in Admin, Integrations, then run <a href="#verify">Check that it works</a>.</li>
+</ol>
+
+<h3 id="dep-update">Updating an environment</h3>
+<ol class="steps">
+  <li>Merge the pull request, then <code>git pull origin main</code> and reinstall dependencies if <code>requirements.txt</code> or <code>package.json</code> changed.</li>
+  <li>Run the deploy command again. Only new migrations run; procedures and code are refreshed every time.</li>
+  <li>Restart the API, the web app and the worker so they load the new code and any changed <code>.env</code> values.</li>
+  <li>If the release notes mention the Airflow plugin, update <code>plugins.zip</code> in MWAA at the same time as the API (the event signature must match).</li>
+  <li>Run the checks for the features the release touched.</li>
+</ol>
+<div class="note"><strong>Admin, Deploy</strong> does steps 2 from the browser with the signed-in role (needs ADMIN.DEPLOY). The API and web restart are still needed for code changes.</div>
+<div class="warn"><strong>Never edit an applied migration.</strong> Each migration's checksum is recorded; a changed file stops the deploy. Add a new migration instead.</div>
+
+<h3 id="dep-prod">Production settings</h3>
+<ul>
+  <li><strong>Sign-in:</strong> <code>AIP_AUTH=pat</code> and <code>AIP_ACCOUNT</code>, so each person works under their own Snowflake identity. Set the same <code>AIP_AUTH</code> in the web app.</li>
+  <li><strong>Worker identity:</strong> a key-pair service user with the OPS_SERVICE database role, warehouse usage and CORTEX_USER (<code>AIP_SERVICE_USER</code>, <code>AIP_SERVICE_KEY_PATH</code>, optional passphrase, role and warehouse).</li>
+  <li><strong>Web:</strong> <code>npm run build</code> then <code>npm run start</code>, behind HTTPS. Set <code>AIP_API_URL</code> to the API's internal address.</li>
+  <li><strong>API:</strong> uvicorn behind a reverse proxy on HTTPS; keep it private and let the web app proxy to it.</li>
+  <li><strong>Worker:</strong> run as a service that restarts on failure. Running two copies is safe: leases let only one holder run each job.</li>
+  <li><strong>Public URLs:</strong> the Jira callback, the Airflow ingest URL and the Teams public base URL must use the public HTTPS origin, not localhost.</li>
+  <li><strong>Secrets:</strong> prefer the host's secret manager or service environment over a <code>.env</code> file; values in the environment win over the file.</li>
+</ul>
+
+<h3 id="dep-rollback">Rollback</h3>
+<ul>
+  <li><strong>Code and procedures:</strong> check out the previous release and run the deploy again; procedures and the services package are replaced.</li>
+  <li><strong>Migrations</strong> only move forward. To undo a schema change, write a new migration that reverses it.</li>
+  <li><strong>Secrets:</strong> keep the previous key values until the rollback is confirmed; values sealed with a different key cannot be read.</li>
+</ul>
+
+<!-- ============================================================ 07 -->
+<h2 id="secrets"><span class="num">07</span>Secrets runbook</h2>
+<p>The platform never stores a secret in plain text. Keys live on the API host; everything else is encrypted in the application or stored as a Snowflake secret.</p>
+
+<h3 id="sec-inventory">Secret inventory</h3>
+<div class="tablebox"><table>
+<tr><th>Secret</th><th>Where it lives</th><th>How it is set</th><th>If it changes</th></tr>
+<tr><td><code>AIP_SECRET_KEY</code></td><td>API and worker host (<code>.env</code> or environment)</td><td>Generate a random key</td><td>The Airflow push secret and Teams webhooks must be entered again</td></tr>
+<tr><td><code>JIRA_TOKEN_KEY</code></td><td>API host</td><td>Generate a random key</td><td>Every person must connect Jira again</td></tr>
+<tr><td><code>JIRA_CLIENT_SECRET</code></td><td>API host</td><td>Copied from the Atlassian app's Settings page</td><td>Update after rotating it in Atlassian; restart</td></tr>
+<tr><td><code>JIRA_BOT_TOKEN</code></td><td>Worker and API host</td><td>Atlassian API token (id.atlassian.com, Security)</td><td>Incident tickets stop until replaced</td></tr>
+<tr><td>Service user private key</td><td>File on the worker host (<code>AIP_SERVICE_KEY_PATH</code>)</td><td>Key pair registered on the Snowflake user</td><td>Register the new public key, then swap the file</td></tr>
+<tr><td>Airflow push secret</td><td>Encrypted in <code>OPS.AIRFLOW_ENV</code>; copy in MWAA configuration</td><td>Admin, Integrations, Airflow, Generate push secret (shown once)</td><td>Update <code>gdp.push_secret</code> in MWAA; pushes fail until then, polling continues</td></tr>
+<tr><td>Teams webhook URLs</td><td>Encrypted in <code>OPS.TEAM</code></td><td>Admin, Integrations, Incidents, per team</td><td>Paste the new URL; never shown back</td></tr>
+<tr><td>GitHub token (dbt publishing)</td><td>Snowflake secret</td><td>Admin, Integrations, Code repositories</td><td>Rotate from the same screen</td></tr>
+<tr><td>Git token (code index)</td><td>Snowflake secret <code>CODE.&lt;NAME&gt;_GIT_TOKEN</code></td><td>Repository drawer, Credentials</td><td>Rotate from the drawer</td></tr>
+<tr><td>Oracle password</td><td>Snowflake PASSWORD secret, or an environment variable on the API host (api_host runtime)</td><td>Oracle wizard</td><td>Set it again; api_host needs an API restart</td></tr>
+<tr><td>AWS access (MWAA)</td><td>IAM role or <code>AWS_PROFILE</code> on the host</td><td>Your AWS administrator</td><td>Never put AWS keys in the platform</td></tr>
+</table></div>
+
+<h3 id="sec-generate">Generate a key</h3>
+<p><code>AIP_SECRET_KEY</code> and <code>JIRA_TOKEN_KEY</code> must each be a long random value: at least 32 characters, different from each other, and different in every environment. Generate each one separately.</p>
+<h4>Windows PowerShell</h4>
+<pre><code>[Convert]::ToBase64String((1..32 | ForEach-Object { Get-Random -Maximum 256 }))</code></pre>
+<p>This takes 32 random bytes and prints them as a 44-character Base64 string, for example a value ending in <code>=</code>. The <code>=</code> and any <code>/</code> or <code>+</code> are part of the key; copy the whole line.</p>
+<h4>Any system with Python</h4>
+<pre><code>python -c "import secrets; print(secrets.token_urlsafe(32))"</code></pre>
+<h4>macOS or Linux</h4>
+<pre><code>openssl rand -base64 32</code></pre>
+<div class="warn"><strong>Keep keys stable.</strong> Store them in your team's password manager when you create them. Changing a key makes everything sealed with it unreadable: people reconnect Jira, admins re-enter webhooks and push secrets.</div>
+
+<h3 id="sec-env">Fill the .env file</h3>
+<ol class="steps">
+  <li><strong>Create the file from the template</strong> (it lists every setting, with no values):
+<pre><code>Copy-Item apps/api/.env.example apps/api/.env</code></pre>
+  On macOS or Linux: <code>cp apps/api/.env.example apps/api/.env</code>.</li>
+  <li><strong>Confirm git ignores it</strong> before typing any secret:
+<pre><code>git check-ignore -v apps/api/.env</code></pre>
+  It must print the <code>.gitignore</code> line that matches. <code>git status</code> must not list the file.</li>
+  <li><strong>Fill each line</strong> as <code>NAME=value</code>: no quotes, no spaces around <code>=</code>, one setting per line. Generate the two keys with the command above; copy the Jira client ID and secret from the Atlassian app; set <code>JIRA_REDIRECT_URI</code> to <code>&lt;web origin&gt;/bff/jira/callback</code> for the web address you actually use.</li>
+  <li><strong>Leave unused settings empty.</strong> The service user lines are only for production; AWS stays outside the file.</li>
+  <li><strong>Restart the API and the worker.</strong> The file is read only at startup, so a value added later is not seen until restart.</li>
+  <li><strong>Verify</strong> in Admin, Integrations, Jira: step 3 shows <code>JIRA_CLIENT_SECRET</code> and <code>JIRA_TOKEN_KEY</code> ticked. For <code>AIP_SECRET_KEY</code>, generating an Airflow push secret succeeds.</li>
+</ol>
+<div class="crit"><strong>Never share secret values</strong> in chat, email, tickets, screenshots or documents, and never commit the <code>.env</code> file. If a value was exposed, follow the rotation steps below right away.</div>
+
+<h3 id="sec-rotate">Rotate or recover</h3>
+<div class="tablebox"><table>
+<tr><th>Situation</th><th>Steps</th></tr>
+<tr><td>A key was exposed (AIP_SECRET_KEY or JIRA_TOKEN_KEY)</td><td>Generate a new key, replace it in <code>.env</code>, restart API and worker. Then: for JIRA_TOKEN_KEY, everyone connects Jira again; for AIP_SECRET_KEY, generate a new Airflow push secret (update MWAA) and paste each Teams webhook again.</td></tr>
+<tr><td>Jira client secret exposed</td><td>Rotate it in the Atlassian developer console, update <code>JIRA_CLIENT_SECRET</code>, restart the API.</td></tr>
+<tr><td>Jira bot token exposed</td><td>Revoke it at id.atlassian.com, create a new one, update <code>JIRA_BOT_TOKEN</code>, restart.</td></tr>
+<tr><td>Teams webhook exposed</td><td>Delete and recreate the Workflows flow in Teams, then paste the new URL in Admin.</td></tr>
+<tr><td>Push secret exposed</td><td>Generate a new one in Admin (the old one stops working at once), then update MWAA.</td></tr>
+<tr><td>"Stored in an older format or with another key"</td><td>The value was sealed with a different key or an older version. Enter it again (or connect Jira again); nothing else is needed.</td></tr>
+</table></div>
+
+<!-- ============================================================ 08 -->
+<h2 id="verify"><span class="num">08</span>Check that it works</h2>
+<p>A short acceptance check per feature. Run the platform checks after every deploy, and the feature checks for whatever a release changed. Use a test project in Jira and a test channel in Teams before pointing at real ones.</p>
+<div class="tablebox"><table>
+<tr><th>Area</th><th>Do this</th><th>Expect</th></tr>
+<tr><td>Deploy</td><td>Query <code>CORE.SCHEMA_MIGRATION</code></td><td>Newest version is the latest migration in the repo</td></tr>
+<tr><td>Sign-in and roles</td><td>Sign in; open Admin, Overview; check the role badge at the bottom of the sidebar</td><td>Pages load; your roles are listed in Admin, Access</td></tr>
+<tr><td>Governance</td><td>As a user without a privilege, try the action; as a DATA_ENGINEER, try an approval-gated action</td><td>403 "needs the X privilege"; the gated one appears in Approvals, and approving it applies the change</td></tr>
+<tr><td>Snowflake profiling</td><td>Sources, pick a small table, Profile</td><td>Status goes to Ready with column stats and PII flags</td></tr>
+<tr><td>File landing</td><td>Upload a small CSV to an external source and land it</td><td>Table appears in <code>EXT_&lt;SOURCE&gt;</code> with the right row count</td></tr>
+<tr><td>Oracle</td><td>Run the wizard's Verify step</td><td>All ten checks pass, or each failure names its fix</td></tr>
+<tr><td>Run pipeline</td><td>Start modeling from profiled tables; generate mapping, approve; generate STTM, approve</td><td>Each stage advances; approval buttons only work for approvers</td></tr>
+<tr><td>Parallel lanes</td><td>After STTM approval, complete Data Quality, QA sign-off and Validation</td><td>Code review unlocks only when all three are done</td></tr>
+<tr><td>dbt publishing</td><td>dbt step: cut a branch, generate, publish</td><td>A branch and PR appear in GitHub; the run shows the PR link</td></tr>
+<tr><td>Knowledge and search</td><td>Add a knowledge item, then search for it</td><td>Found within about 10 minutes (search index refresh)</td></tr>
+<tr><td>Skills</td><td>Create a candidate version, try it on a run, promote it</td><td>The stage loads the new version; history shows the move</td></tr>
+<tr><td>Code</td><td>Connect a repository, Refresh now</td><td>Files and models counted; search and lineage return results</td></tr>
+<tr><td>QA workspace</td><td>Suites: run a table test; Ask AI for a test; save a test that writes data</td><td>Results with masked samples; the AI test compiles; the write is refused by the read-only guard</td></tr>
+<tr><td>QA sign-off</td><td>Try to sign off before running QA on the current STTM</td><td>Refused with "Run QA on the current STTM version"</td></tr>
+<tr><td>Jira</td><td>Admin status; Connect Jira; QA Inbox; validate a bad JQL; triage a ticket; file a bug twice from the same failing test</td><td>Status ready; your issues listed; Jira's error message for bad JQL; candidate tables; one bug only</td></tr>
+<tr><td>Pipelines</td><td>Admin, Airflow: Test connection; Poll now</td><td>Version and sample DAGs; DAGs and runs appear; worker last seen under 5 minutes</td></tr>
+<tr><td>Airflow push</td><td>Trigger a small DAG with the plugin installed</td><td>Runs show within seconds; an unsigned request to the ingest URL is refused</td></tr>
+<tr><td>Incidents</td><td>Fail a test DAG; send a Teams test card; acknowledge; rerun the DAG</td><td>One incident, one Teams card, one Jira ticket (with the bot); a repeat failure adds an occurrence; the successful rerun resolves it</td></tr>
+<tr><td>AI diagnosis</td><td>Diagnose an incident; ask a question; draft a postmortem</td><td>Cause with cited evidence; no secrets in the text; cost shows in Audit</td></tr>
+<tr><td>Retry</td><td>Retry task on a failed run</td><td>A dry run lists tasks first; nothing clears until you confirm</td></tr>
+<tr><td>Audit</td><td>Open Audit, Events and Cost</td><td>Recent actions and AI spend by stage</td></tr>
+</table></div>
+
+<!-- ============================================================ 09 -->
+<h2 id="data"><span class="num">09</span>Table reference</h2>
+
+<h3 id="schemas">Schemas</h3>
+<div class="tablebox"><table>
+<tr><th>Schema</th><th>Holds</th></tr>
+<tr><td>CORE</td><td>Workflow graph and runs, reviews, platform config, AI suggestions, copilot, tags, migration log</td></tr>
+<tr><td>SOURCE</td><td>Source registry, access checks, discovered objects, landing registry</td></tr>
+<tr><td>PROFILE</td><td>Run-scoped column profiles</td></tr>
+<tr><td>METADATA</td><td>Persistent table profiles reused across runs, and the profile stage</td></tr>
+<tr><td>KNOWLEDGE</td><td>Domains, knowledge items, target models, skills and releases</td></tr>
+<tr><td>MAPPING</td><td>Embeddings, scoring config, candidates and decisions</td></tr>
+<tr><td>CONTRACT</td><td>STTM, data quality expectations, QA tests, suites and sign-offs</td></tr>
+<tr><td>CODEGEN</td><td>dbt generations, artifacts, validations, git publications</td></tr>
+<tr><td>QUALITY</td><td>Data quality scans and QA executions</td></tr>
+<tr><td>MODELING</td><td>Versioned target model designs</td></tr>
+<tr><td>AUDIT</td><td>Agent tool calls and AI cost</td></tr>
+<tr><td>GOVERNANCE</td><td>App roles, privileges, policies, change requests</td></tr>
+<tr><td>CODE</td><td>Indexed client repositories</td></tr>
+<tr><td>JIRA</td><td>OAuth tokens, issue links, action log, saved filters</td></tr>
+<tr><td>OPS</td><td>Airflow runs, incidents, teams, routing, notifications</td></tr>
+<tr><td>LANDING</td><td>Raw copies of onboarded tables (DATA_STEWARD only)</td></tr>
+<tr><td>GDP_SILVER</td><td>Development target schema for generated dbt (compile only)</td></tr>
+<tr><td>EXT_&lt;SOURCE&gt;</td><td>One per external, file or Oracle source: landed tables, stage, formats</td></tr>
+</table></div>
+
+<h3 id="tables">Tables</h3>
+<p>Type: <strong>Config</strong> is managed by people, <strong>Content</strong> is produced by the pipeline, <strong>Log</strong> is operational or audit history.</p>
+<div class="filter"><label for="tfilter">Filter tables</label><input id="tfilter" type="search" placeholder="Try QA, incident, token, profile" autocomplete="off"><span class="count" id="tcount"></span></div>
+<div class="tablebox"><table id="ttable">
+<thead><tr><th>Table</th><th>Type</th><th>Holds</th><th>Written by</th></tr></thead>
+<tbody>
+<tr><td>CORE.SCHEMA_MIGRATION</td><td>Log</td><td>Applied migrations and checksums</td><td>Deploy</td></tr>
+<tr><td>CORE.WORKFLOW_STATE</td><td>Config</td><td>States of the workflow graph</td><td>Deploy seed</td></tr>
+<tr><td>CORE.WORKFLOW_TRANSITION</td><td>Config</td><td>Allowed transitions and who may make them</td><td>Deploy seed</td></tr>
+<tr><td>CORE.WORKFLOW_RUN</td><td>Content</td><td>One onboarding run and its lifecycle</td><td>Workflow procedures</td></tr>
+<tr><td>CORE.WORKFLOW_EVENT</td><td>Log</td><td>Every state transition with its actor</td><td>Workflow procedures</td></tr>
+<tr><td>CORE.REVIEW_DECISION</td><td>Log</td><td>Human gate decisions with justification</td><td>REVIEW_TRANSITION</td></tr>
+<tr><td>CORE.PLATFORM_CONFIG</td><td>Config</td><td>Versioned settings: models, Jira, Ops, dbt publishing, rules</td><td>Admin, seed</td></tr>
+<tr><td>CORE.AI_SUGGESTION</td><td>Log</td><td>Cached AI suggestions per stage and scope</td><td>AI suggestions</td></tr>
+<tr><td>CORE.AI_SUGGESTION_DECISION</td><td>Log</td><td>Accept or reject per suggested item</td><td>AI suggestions</td></tr>
+<tr><td>CORE.COPILOT_MESSAGE</td><td>Log</td><td>Copilot questions, answers and citations</td><td>Copilot</td></tr>
+<tr><td>CORE.TAG, TAG_ASSIGNMENT</td><td>Config</td><td>Tag catalogue and tags on profiles, runs, models</td><td>Tags API</td></tr>
+<tr><td>CORE.RUN_SKILL_OVERRIDE</td><td>Config</td><td>Candidate skill pinned for one run</td><td>Skills</td></tr>
+<tr><td>SOURCE.SOURCE_REGISTRY</td><td>Config</td><td>Registered sources and connections (never credentials)</td><td>Sources</td></tr>
+<tr><td>SOURCE.SOURCE_ACCESS_CHECK</td><td>Log</td><td>Read-access check results per run</td><td>VALIDATE_SOURCE_ACCESS</td></tr>
+<tr><td>SOURCE.SOURCE_OBJECT</td><td>Content</td><td>Objects discovered in a source, with selection</td><td>REGISTER_SOURCE</td></tr>
+<tr><td>SOURCE.LANDING_TABLE_REGISTRY</td><td>Content</td><td>Each landed table with row-count reconciliation</td><td>EXECUTE_LANDING</td></tr>
+<tr><td>SOURCE.LANDING_COLUMN_REGISTRY</td><td>Content</td><td>Columns of each landed table</td><td>EXECUTE_LANDING</td></tr>
+<tr><td>PROFILE.PROFILE_REGISTRY</td><td>Content</td><td>Run-scoped column profile with PII classification</td><td>RUN_PROFILING</td></tr>
+<tr><td>METADATA.TABLE_PROFILES</td><td>Content</td><td>Persistent per-table profiles reused across runs</td><td>PROFILE_SOURCE_TABLES</td></tr>
+<tr><td>KNOWLEDGE.DOMAIN_REGISTRY</td><td>Config</td><td>Business domains and detection config</td><td>Domains</td></tr>
+<tr><td>KNOWLEDGE.DOMAIN_KNOWLEDGE</td><td>Content</td><td>Versioned knowledge items, source of knowledge search</td><td>Knowledge writer</td></tr>
+<tr><td>KNOWLEDGE.TARGET_TABLE_REGISTRY</td><td>Config</td><td>Target model tables per domain</td><td>Domains, modeling</td></tr>
+<tr><td>KNOWLEDGE.TARGET_COLUMN_REGISTRY</td><td>Config</td><td>Target columns, business keys, PII flags</td><td>Domains, modeling</td></tr>
+<tr><td>KNOWLEDGE.DOMAIN_RECOMMENDATION</td><td>Log</td><td>Domain identification result per run</td><td>IDENTIFY_DOMAIN</td></tr>
+<tr><td>KNOWLEDGE.SKILL_REGISTRY</td><td>Config</td><td>Immutable skill versions</td><td>Skills</td></tr>
+<tr><td>KNOWLEDGE.SKILL_CATEGORY, SKILL_SETTING</td><td>Config</td><td>Skill categories and choices</td><td>Skills</td></tr>
+<tr><td>KNOWLEDGE.SKILL_LABEL, SKILL_LABEL_HISTORY</td><td>Config / Log</td><td>Production and candidate labels and their moves</td><td>Skills</td></tr>
+<tr><td>KNOWLEDGE.SKILL_STAGE_BINDING</td><td>Config</td><td>Which skills each stage loads</td><td>Admin</td></tr>
+<tr><td>KNOWLEDGE.KNOWLEDGE_USAGE</td><td>Log</td><td>Knowledge used by each run stage</td><td>Knowledge writer</td></tr>
+<tr><td>KNOWLEDGE.DOMAIN_VERSION</td><td>Log</td><td>Snapshot of each domain change</td><td>Domains</td></tr>
+<tr><td>KNOWLEDGE.DOMAIN_MEMBER</td><td>Config</td><td>Domain owners, stewards, experts</td><td>Domains</td></tr>
+<tr><td>MAPPING.MAPPING_SCORING_CONFIG</td><td>Config</td><td>Scoring weights and thresholds per domain</td><td>Seed</td></tr>
+<tr><td>MAPPING.COLUMN_EMBEDDING</td><td>Content</td><td>Embeddings of source and target columns</td><td>Mapping</td></tr>
+<tr><td>MAPPING.MAPPING_CANDIDATE</td><td>Content</td><td>Ranked candidates with score components</td><td>Mapping</td></tr>
+<tr><td>MAPPING.MAPPING_DECISION</td><td>Content</td><td>Reviewer decisions</td><td>SAVE_MAPPING_DECISIONS</td></tr>
+<tr><td>CONTRACT.STTM_REGISTRY</td><td>Content</td><td>Versioned STTM per run and target</td><td>STTM</td></tr>
+<tr><td>CONTRACT.STTM_LINE</td><td>Content</td><td>Column mappings and transformations</td><td>STTM</td></tr>
+<tr><td>CONTRACT.SODA_EXPECTATION_REGISTRY</td><td>Content</td><td>Data quality checks and their decisions</td><td>Data quality</td></tr>
+<tr><td>CONTRACT.QA_TEST_CASE</td><td>Content</td><td>Saved QA test SQL for a run or a table</td><td>QA</td></tr>
+<tr><td>CONTRACT.QA_TEST_SUITE</td><td>Config</td><td>Suites of table tests</td><td>QA</td></tr>
+<tr><td>CONTRACT.QA_SIGNOFF</td><td>Log</td><td>QA approval or rejection per STTM version</td><td>QA sign-off</td></tr>
+<tr><td>CODEGEN.DBT_GENERATION_REGISTRY</td><td>Content</td><td>Each dbt generation version</td><td>dbt</td></tr>
+<tr><td>CODEGEN.GENERATED_ARTIFACT</td><td>Content</td><td>Generated file contents</td><td>dbt</td></tr>
+<tr><td>CODEGEN.VALIDATION_RUN</td><td>Log</td><td>Validation results</td><td>VALIDATE_DBT</td></tr>
+<tr><td>CODEGEN.GIT_PUBLICATION</td><td>Log</td><td>Branches and PRs published</td><td>PUBLISH_DBT_PR</td></tr>
+<tr><td>QUALITY.CHECK_RUN, CHECK_RESULT</td><td>Log</td><td>Data quality scans and per-check outcomes (masked samples)</td><td>Quality scan</td></tr>
+<tr><td>QUALITY.QA_RUN, QA_RESULT</td><td>Log</td><td>QA executions and per-test outcomes (masked samples)</td><td>QA run</td></tr>
+<tr><td>MODELING.MODEL_DESIGN</td><td>Content</td><td>Versioned target model design per run</td><td>Model design</td></tr>
+<tr><td>AUDIT.AGENT_TOOL_CALL</td><td>Log</td><td>Each stage action or AI tool call</td><td>All AI stages</td></tr>
+<tr><td>AUDIT.COST_USAGE</td><td>Log</td><td>Tokens and credits per AI call</td><td>All AI stages</td></tr>
+<tr><td>AUDIT.AGENT_RUN</td><td>Log</td><td>Agent run header (not written today)</td><td>None</td></tr>
+<tr><td>GOVERNANCE.APP_ROLE, ROLE_PRIVILEGE, ROLE_GRANT</td><td>Config</td><td>Roles, their privileges and inheritance</td><td>Admin, Access</td></tr>
+<tr><td>GOVERNANCE.USER_ROLE</td><td>Config</td><td>Which user holds which app role</td><td>Admin, Access</td></tr>
+<tr><td>GOVERNANCE.APPROVAL_POLICY, SETTING</td><td>Config</td><td>Approval rules and governance settings</td><td>Admin, Access</td></tr>
+<tr><td>GOVERNANCE.CHANGE_REQUEST</td><td>Log</td><td>Requests waiting for approval and their results</td><td>Governance</td></tr>
+<tr><td>GOVERNANCE.GOVERNANCE_EVENT</td><td>Log</td><td>Governance audit log</td><td>Governance</td></tr>
+<tr><td>CODE.REPO</td><td>Config</td><td>Connected repositories and dbt settings</td><td>Integrations</td></tr>
+<tr><td>CODE.CODE_FILE, CODE_CHUNK, CODE_EDGE</td><td>Content</td><td>Indexed files, code chunks (source of code search), lineage edges</td><td>INDEX_REPO</td></tr>
+<tr><td>CODE.REPO_SUMMARY, INDEX_RUN, CODE_USAGE</td><td>Content / Log</td><td>Summaries, index runs, code quoted into prompts</td><td>Code index</td></tr>
+<tr><td>JIRA.USER_TOKEN</td><td>Config</td><td>Each person's encrypted Jira tokens and refresh lease</td><td>Jira</td></tr>
+<tr><td>JIRA.OAUTH_STATE</td><td>Log</td><td>One-time sign-in state values</td><td>Jira</td></tr>
+<tr><td>JIRA.ISSUE_LINK</td><td>Content</td><td>Issues linked to runs, tests, tables, suites</td><td>Jira, QA</td></tr>
+<tr><td>JIRA.ACTION_LOG</td><td>Log</td><td>Every write made to Jira</td><td>Jira</td></tr>
+<tr><td>JIRA.SAVED_FILTER</td><td>Config</td><td>Saved JQL filters</td><td>Jira</td></tr>
+<tr><td>OPS.AIRFLOW_ENV</td><td>Config</td><td>MWAA environments, poll cursor, encrypted push secret</td><td>Admin, worker</td></tr>
+<tr><td>OPS.DAG</td><td>Config</td><td>DAG metadata plus team, criticality, SLA, mute</td><td>Worker, Pipelines</td></tr>
+<tr><td>OPS.DAG_RUN, TASK_RUN</td><td>Log</td><td>DAG runs and task attempts (redacted error excerpts)</td><td>Worker, push</td></tr>
+<tr><td>OPS.EVENT</td><td>Log</td><td>Raw push and poll payloads, purged after 30 days</td><td>Worker, push</td></tr>
+<tr><td>OPS.JOB_LEASE</td><td>Log</td><td>One-holder leases for worker jobs</td><td>Worker</td></tr>
+<tr><td>OPS.TEAM, ROUTING_RULE</td><td>Config</td><td>Support teams (encrypted webhooks) and routing</td><td>Admin, Incidents</td></tr>
+<tr><td>OPS.INCIDENT</td><td>Content</td><td>Incidents with Jira state and AI diagnosis</td><td>Worker</td></tr>
+<tr><td>OPS.INCIDENT_EVENT</td><td>Log</td><td>Incident timeline and idempotency claims</td><td>Worker, Incidents</td></tr>
+<tr><td>OPS.NOTIFICATION</td><td>Log</td><td>Teams and Jira delivery outbox with retries</td><td>Worker</td></tr>
+<tr><td>OPS.DAG_DEPENDENCY</td><td>Config</td><td>Upstream links between DAGs, for grouping</td><td>Worker</td></tr>
+</tbody></table></div>
+
+<h3 id="procs">Procedures</h3>
+<div class="tablebox"><table>
+<tr><th>Procedure</th><th>Does</th><th>Called from</th></tr>
+<tr><td>CORE.CREATE_RUN / GET_WORKFLOW_STATE</td><td>Create a run; read its state and allowed moves</td><td>Runs</td></tr>
+<tr><td>CORE.TRANSITION_RUN / REVIEW_TRANSITION</td><td>System move / human gate decision</td><td>Runs, review</td></tr>
+<tr><td>CORE.SET_RUN_ARCHIVED / SP_CLEANUP_PIPELINE_RUNS</td><td>Archive or restore; soft-delete and drop sandbox objects</td><td>Runs list</td></tr>
+<tr><td>SOURCE.* (register, validate access, execute landing, catalog, landing target, profile tables, register connection, external source, list and land files)</td><td>Source onboarding</td><td>Sources, run source steps</td></tr>
+<tr><td>PROFILE.RUN_PROFILING / REFRESH_TABLE_PROFILE</td><td>Profile landed tables; re-profile one</td><td>Profile step</td></tr>
+<tr><td>KNOWLEDGE.IDENTIFY_DOMAIN / SEARCH_KNOWLEDGE / REGISTER_TARGET_TABLE / LOAD_SKILL</td><td>Domain scoring; knowledge search; register a target; load a skill</td><td>Domain step, search, agent</td></tr>
+<tr><td>MODELING.APPLY_MODEL_DESIGN</td><td>Approve a design as the run's target</td><td>Model design</td></tr>
+<tr><td>MAPPING.GENERATE_MAPPING_CANDIDATES / SAVE_MAPPING_DECISIONS</td><td>Candidates; reviewer decisions</td><td>Mapping</td></tr>
+<tr><td>CONTRACT.GENERATE_STTM, UPDATE_JOIN_GRAPH, REFINE_TRANSFORMATION, APPLY_TRANSFORMATION, EXPORT_STTM_CSV</td><td>STTM build and edits</td><td>STTM</td></tr>
+<tr><td>CONTRACT.GENERATE_SODA, IMPORT_CLIENT_EXPECTATIONS, SAVE_SODA_DECISIONS, BACKTEST_SODA</td><td>Data quality checks</td><td>Data Quality</td></tr>
+<tr><td>CONTRACT.QA_SUITE, QA_ASK, QA_SAVE, QA_TABLE_SUITE, QA_TABLE_ASK, QA_TABLE_SAVE</td><td>QA tests for runs and tables</td><td>QA</td></tr>
+<tr><td>CODEGEN.GENERATE_DBT / VALIDATE_DBT / PUBLISH_DBT_PR</td><td>Generate, validate, publish dbt</td><td>dbt, validation</td></tr>
+<tr><td>CODE.INDEX_REPO</td><td>Incremental code index refresh</td><td>Code, scheduled task</td></tr>
+<tr><td>JIRA.TRIAGE_ISSUE / TRIAGE_TABLE / RESOLVE_TARGETS</td><td>AI triage of a ticket against a run or table; rank candidate tables</td><td>QA, Jira</td></tr>
+<tr><td>EXT_&lt;SOURCE&gt;.ORACLE_RUN</td><td>Oracle test, catalog, preview, profile, extract</td><td>Oracle pages, schedule task</td></tr>
+</table></div>
+
+<h3 id="runtime">Objects created at runtime</h3>
+<div class="tablebox"><table>
+<tr><th>Object</th><th>Created by</th></tr>
+<tr><td>Task <code>CODE.REFRESH_&lt;id&gt;</code></td><td>A repository refresh schedule</td></tr>
+<tr><td>Task <code>EXT_&lt;SOURCE&gt;.ORACLE_SCHEDULED_LOAD</code></td><td>An Oracle incremental schedule</td></tr>
+<tr><td>Git repository <code>CODE.&lt;NAME&gt;</code> and secret <code>CODE.&lt;NAME&gt;_GIT_TOKEN</code></td><td>Connecting a repository</td></tr>
+<tr><td>Network rule <code>CODEGEN.GITHUB_API_EGRESS</code>, GitHub secret and external access integration</td><td>GitHub publishing setup</td></tr>
+<tr><td>Network rule, PASSWORD secret and integration per Oracle source</td><td>Oracle setup (snowflake runtime)</td></tr>
+<tr><td>DBT PROJECT <code>CODEGEN.&lt;prefix&gt;&lt;run&gt;_V&lt;n&gt;</code></td><td>dbt generate, validate, publish (dropped by cleanup)</td></tr>
+<tr><td>Stages: CORE.CODE_STAGE, KNOWLEDGE.SKILL_STAGE, CODEGEN.DBT_STAGE, METADATA.PROFILES_STAGE, EXT_&lt;SOURCE&gt;.FILES</td><td>Deploy and source setup</td></tr>
+<tr><td>Cortex Search KNOWLEDGE.KNOWLEDGE_SEARCH and CODE.CODE_SEARCH; agent CORE.DATA_ENGINEERING_SUPERVISOR</td><td>Deploy</td></tr>
+</table></div>
+
+<h3 id="migrations">Migrations</h3>
+<div class="tablebox"><table>
+<tr><th>Version</th><th>Adds</th></tr>
+<tr><td>V001</td><td>Core schemas and phase 1 tables</td></tr>
+<tr><td>V002</td><td>Database roles, hierarchy, read grants</td></tr>
+<tr><td>V003</td><td>LANDING schema (DATA_STEWARD only)</td></tr>
+<tr><td>V004 to V005</td><td>Platform config, skill and dbt stages, GDP_SILVER, git publications</td></tr>
+<tr><td>V006 to V008</td><td>METADATA profiles, archive and soft delete, profile quality</td></tr>
+<tr><td>V009 to V011</td><td>Model specs, domain config, QA test cases, modeling standard</td></tr>
+<tr><td>V012 to V015</td><td>AI suggestions, QA sign-off, cost reconciliation, copilot</td></tr>
+<tr><td>V016 to V019</td><td>QUALITY schema, QA results, MODELING, tags</td></tr>
+<tr><td>V020</td><td>GOVERNANCE schema</td></tr>
+<tr><td>V021 to V023</td><td>Skill releases, knowledge hub, domain versions and members</td></tr>
+<tr><td>V024 to V026</td><td>CODE schema, repo hardening, repo dbt settings</td></tr>
+<tr><td>V027 to V029</td><td>JIRA schema, QA workspace and QA_ENGINEER, saved filters</td></tr>
+<tr><td>V030 to V032</td><td>OPS schema, incidents, AI diagnosis grants</td></tr>
+<tr><td>V033</td><td>Row access policy: each person sees only their own Jira token and sign-in rows</td></tr>
+</table></div>
+
+<!-- ============================================================ 07 -->
+<h2 id="routes"><span class="num">10</span>Route to privilege map</h2>
+<p>For admins tracing a 403 or a 202. Paths are under <code>/api</code>; <code>*</code> stands for an id.</p>
+<div class="tablebox"><table>
+<tr><th>Area</th><th>Calls</th><th>Privilege</th></tr>
+<tr><td>AI</td><td>copilot, knowledge answer, mapping assist, QA ask and plan, STTM refine, domain ask and suggestions, triage, incident diagnose, ask, postmortem, skill builder</td><td>AI.USE</td></tr>
+<tr><td>Sources</td><td>create sources, Oracle setup, password, connection, schedule</td><td>SOURCE.CONNECT</td></tr>
+<tr><td>Profiling and landing</td><td>profile tables, upload, land, Oracle test, catalog, preview, ingest</td><td>PROFILE.RUN</td></tr>
+<tr><td>Runs</td><td>create runs and modeling runs / archive, restore, cleanup / any other run step</td><td>RUN.CREATE / RUN.ARCHIVE / RUN.OPERATE</td></tr>
+<tr><td>Model and mapping</td><td>model design, target, intent, domain / approve design / mapping decisions</td><td>MODEL.EDIT / MODEL.APPROVE / MAPPING.DECIDE</td></tr>
+<tr><td>STTM and quality</td><td>STTM apply and joins / Soda checks, decisions, import</td><td>STTM.EDIT / SODA.EDIT</td></tr>
+<tr><td>Stage decisions</td><td>runs/*/review</td><td>Depends on target state</td></tr>
+<tr><td>Forced transition</td><td>runs/*/transition</td><td>ADMIN.DEPLOY</td></tr>
+<tr><td>dbt</td><td>dbt generate, enhance, publish, review / GitHub setup and token</td><td>DBT.EDIT / ADMIN.DEPLOY</td></tr>
+<tr><td>QA</td><td>run and table tests, runs, suites / sign-off</td><td>QA.EDIT / QA.SIGNOFF</td></tr>
+<tr><td>Jira</td><td>connect, read, filters / comment, transition, links, bugs, bulk / setup</td><td>JIRA.READ / JIRA.WRITE / INTEGRATION.MANAGE</td></tr>
+<tr><td>Knowledge and domains</td><td>knowledge changes / domain changes / tags</td><td>KNOWLEDGE.EDIT / DOMAIN.EDIT / TAG.MANAGE</td></tr>
+<tr><td>Skills</td><td>versions, candidate, categories / production label, stage bindings</td><td>SKILL.EDIT / SKILL.RELEASE</td></tr>
+<tr><td>Code</td><td>read and search / connect, schedule, credentials</td><td>CODE.VIEW / INTEGRATION.MANAGE</td></tr>
+<tr><td>Operations</td><td>read / poll, DAG settings, incident actions, retry / environments, teams, webhooks, routing, settings</td><td>OPS.VIEW / OPS.OPERATE / INTEGRATION.MANAGE</td></tr>
+<tr><td>Airflow push</td><td>ops/ingest</td><td>None (signature checked)</td></tr>
+<tr><td>Admin</td><td>read admin / platform config and rules / deploy / governance writes</td><td>ADMIN.VIEW / CONFIG.EDIT / ADMIN.DEPLOY / ROLE.MANAGE</td></tr>
+<tr><td>Audit</td><td>audit events and costs</td><td>AUDIT.VIEW</td></tr>
+</table></div>
+
+<!-- ============================================================ 08 -->
+<h2 id="gaps"><span class="num">11</span>Known gaps</h2>
+<p>Found while writing this guide. Each needs a decision or a fix before a production rollout.</p>
+<div class="warn"><strong>QA lead sign-off grant.</strong> <code>CONTRACT.QA_SIGNOFF</code> accepts inserts only from DATA_ENGINEER. A QA lead holding only the QA_ENGINEER database role cannot sign off until that grant is added (or they also get DATA_ENGINEER).</div>
+<div class="ok"><strong>Fixed: run QA procedures for QA_ENGINEER.</strong> <code>QA_SUITE</code>, <code>QA_ASK</code> and <code>QA_SAVE</code> are now granted to QA_ENGINEER, and <code>QA_SAVE</code> to REVIEWER. Redeploy procedures to apply.</div>
+<div class="warn"><strong>Change requests for viewers.</strong> Raising an approval request writes to <code>GOVERNANCE.CHANGE_REQUEST</code> with the requester's role; VIEWER cannot write there. Only DATA_ENGINEER holds REQUEST.CHANGES, so this matters only if that privilege is given to read-only roles.</div>
+<div class="warn"><strong>Procedures without grants.</strong> <code>CODE.INDEX_REPO</code>, <code>CODEGEN.PUBLISH_DBT_PR</code> and each <code>ORACLE_RUN</code> have no USAGE grants; they work for the owning role only. Grant USAGE to DATA_ENGINEER if others should run them directly.</div>
+<div class="ok"><strong>Fixed: Jira token rows.</strong> Migration V033 adds the row access policy <code>JIRA.OWN_ROWS</code>: each person sees only their own <code>USER_TOKEN</code> and <code>OAUTH_STATE</code> rows; sessions with the PLATFORM_ADMIN database role see all. The Admin count of connected users therefore shows only yourself unless you are a platform admin.</div>
+<div class="note"><strong>Routing text.</strong> Admin says a DAG's own team wins over routing rules; the code applies routing rules first. Treat rules as the deciding source until the text is corrected.</div>
+<div class="note"><strong>Deploy default database.</strong> The deploy script defaults to <code>AI_PLATFORM</code> while the API defaults to <code>DEV_AI_PLATFORM</code>. Always pass <code>--database</code>.</div>
+<div class="note"><strong>Unused table.</strong> <code>AUDIT.AGENT_RUN</code> exists but nothing writes to it yet.</div>
+
+<footer>
+  <p>Generated from the repository source: governance policy, migrations V001 to V033, procedure definitions, API routes and web pages. Where this guide and the code differ, the code is right; report the difference so the guide can be updated.</p>
+</footer>
+</main>
+</div>
+
+<script>
+(function () {
+  var input = document.getElementById('tfilter');
+  var rows = Array.prototype.slice.call(document.querySelectorAll('#ttable tbody tr'));
+  var count = document.getElementById('tcount');
+  function apply() {
+    var q = (input.value || '').trim().toLowerCase();
+    var shown = 0;
+    rows.forEach(function (r) {
+      var hit = !q || r.textContent.toLowerCase().indexOf(q) !== -1;
+      r.hidden = !hit;
+      if (hit) shown++;
+    });
+    count.textContent = shown + ' of ' + rows.length + ' tables';
+  }
+  input.addEventListener('input', apply);
+  apply();
+})();
+</script>
+</body>
+</html>

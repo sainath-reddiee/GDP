@@ -233,6 +233,8 @@ export function FeedPanel({ items }: { items: FeedItem[] }) {
   );
 }
 
+const STEWARD_SCOPE = "You see items for domains you steward.";
+
 export function InboxPanel({ items }: { items: InboxItem[] }) {
   const router = useRouter();
   const { canAct } = useAccess();
@@ -241,14 +243,28 @@ export function InboxPanel({ items }: { items: InboxItem[] }) {
   const [note, setNote] = useState("");
   const [diffs, setDiffs] = useState<Record<string, KDiff>>({});
   const [msg, setMsg] = useState<{ tone: "ok" | "info" | "error"; text: string } | null>(null);
+  const [refused, setRefused] = useState<Record<string, string>>({});
   const [pending, start] = useTransition();
   const decide = (ids: string[], decision: "approve" | "reject") => start(async () => {
     const r = await decideInbox(ids, decision, note);
-    const skipped = r.ok ? ids.length - r.data.decided : 0;
-    setMsg(r.ok ? { tone: skipped ? "info" : "ok", text: `${r.data.decided} ${decision === "approve" ? "approved and now in use" : "rejected"}`
-                    + (skipped ? `; ${skipped} had already been decided by someone else` : "") }
-      : { tone: /approval|request/i.test(r.error) ? "info" : "error", text: r.error });
-    setSelected([]); router.refresh();
+    if (!r.ok) {
+      setMsg({ tone: /approval|request/i.test(r.error) ? "info" : "error", text: r.error });
+      return;
+    }
+    const no = (r.data.refused ?? []).filter((x) => ids.includes(x.knowledge_id));
+    const skipped = Math.max(0, ids.length - r.data.decided - no.length);
+    setRefused((prev) => {
+      const next = { ...prev };
+      for (const id of ids) delete next[id];
+      for (const x of no) next[x.knowledge_id] = x.reason;
+      return next;
+    });
+    setMsg({ tone: skipped || no.length ? "info" : "ok",
+             text: `${r.data.decided} ${decision === "approve" ? "approved and now in use" : "rejected"}`
+               + (no.length ? `; ${no.length} refused, see the reason on each item` : "")
+               + (skipped ? `; ${skipped} had already been decided by someone else` : "") });
+    setSelected((s) => s.filter((id) => no.some((x) => x.knowledge_id === id)));
+    router.refresh();
   });
   const diff = (p: InboxItem) => start(async () => {
     if (!p.current) return;
@@ -261,11 +277,13 @@ export function InboxPanel({ items }: { items: InboxItem[] }) {
         <CheckCheck className="mx-auto h-8 w-8 text-success" />
         <p className="mt-2 text-sm font-medium">Inbox zero</p>
         <p className="text-xs text-muted-foreground">Nothing learned is waiting for review. Choose what waits here in Learning policy.</p>
+        <p className="mt-1 text-xs text-muted-foreground">{STEWARD_SCOPE}</p>
       </div>
     );
   }
   return (
     <div className="space-y-3">
+      <p className="text-xs text-muted-foreground">{STEWARD_SCOPE} You cannot approve an item you proposed.</p>
       <div className="flex flex-wrap items-center gap-2 rounded-xl border bg-card p-2 shadow-sm">
         <label className="flex items-center gap-1.5 px-1 text-xs">
           <input type="checkbox" checked={selected.length === items.length} onChange={() => setSelected(selected.length === items.length ? [] : items.map((i) => i.knowledge_id))} />
@@ -294,6 +312,11 @@ export function InboxPanel({ items }: { items: InboxItem[] }) {
               <Button size="sm" variant="outline" disabled={!may || pending} onClick={() => decide([p.knowledge_id], "reject")}><X className="h-3.5 w-3.5" />Reject</Button>
             </div>
           </div>
+          {refused[p.knowledge_id] && (
+            <p role="alert" className="flex items-start gap-2 border-b bg-destructive/5 px-4 py-2 text-xs text-destructive">
+              <TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" /><span className="min-w-0 flex-1 break-words">Refused: {refused[p.knowledge_id]}</span>
+            </p>
+          )}
           {diffs[p.knowledge_id] ? <div className="p-4"><DiffView files={diffs[p.knowledge_id].files} /></div> : (
             <div className={cn("grid gap-0", p.current && "md:grid-cols-2")}>
               {p.current && (

@@ -68,6 +68,8 @@ export type QaResult = {
   outcome: QaOutcome; rows_returned: number | null; measured: string | null; expected: string | null;
   detail: string | null; columns: string[] | null; sample: Record<string, unknown>[] | null; sql_text: string | null;
   duration_ms: number | null;
+  /** QUALITY.QA_RESULT.RESULT_ID: opens a case from a failing result; absent on an API that does not return it */
+  result_id?: string | null;
 };
 
 export type QaRunRow = {

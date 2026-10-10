@@ -11,6 +11,7 @@ import { cn } from "@/lib/utils";
 import { logout } from "@/app/login/actions";
 import type { NavCounts } from "@/app/bff/nav/route";
 import { RoleSelector } from "@/components/role-selector";
+import { ReportProblemButton } from "@/components/report-problem";
 
 type NavLink = { href: string; label: string; icon: typeof Database; privilege?: string | string[];
   badge?: (c: NavCounts) => { value: number; tone: string; title: string } | null };
@@ -48,7 +49,10 @@ const groups: { label: string; links: NavLink[] }[] = [
   },
   {
     label: "Quality",
-    links: [{ href: "/qa", label: "QA", icon: FlaskConical, privilege: ["QA.EDIT", "JIRA.READ"] }],
+    links: [{
+      href: "/qa", label: "QA", icon: FlaskConical, privilege: ["QA.EDIT", "JIRA.READ", "CASE.WORK"],
+      badge: (c) => c.cases ? { value: c.cases, tone: "bg-sky-500 text-white", title: `${c.cases} open cases` } : null,
+    }],
   },
   {
     label: "Operate",
@@ -199,6 +203,7 @@ export function Sidebar({ user, role, canLogout, privileges, appRoles }: {
             </span>
           </div>
         )}
+        {allowed("CASE.WORK") && <div className="mt-2"><ReportProblemButton collapsed={collapsed} /></div>}
         <button type="button" onClick={toggle} aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
                 className={cn("mt-2 flex w-full items-center gap-2 rounded-xl py-2 text-xs text-white/40 transition hover:bg-white/5 hover:text-white/80",
                   collapsed ? "justify-center" : "px-2.5")}>

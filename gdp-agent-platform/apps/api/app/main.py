@@ -2662,7 +2662,7 @@ def soda_scans(run_id: str, db: Db = Depends(current_db)):
     latest: list[dict] = []
     history: dict[str, list] = {}
     if scans:
-        latest = db.query("""SELECT EXPECTATION_ID, TARGET_TABLE, TARGET_COLUMN, CHECK_TYPE, KIND, DIMENSION, SEVERITY,
+        latest = db.query("""SELECT RESULT_ID AS CHECK_RESULT_ID, EXPECTATION_ID, TARGET_TABLE, TARGET_COLUMN, CHECK_TYPE, KIND, DIMENSION, SEVERITY,
                                     OUTCOME, MEASURED, THRESHOLD, FAILED_ROWS, DETAIL, SAMPLE_ROWS, SQL_TEXT, DURATION_MS
                                FROM QUALITY.CHECK_RESULT WHERE SCAN_ID = %s
                               ORDER BY ARRAY_POSITION(OUTCOME::VARIANT, ARRAY_CONSTRUCT('FAIL','ERROR','WARN','NOT_EVALUATED','PASS')),
@@ -6370,3 +6370,7 @@ app.include_router(ops_router)
 from app.incidents_api import router as incidents_router  # noqa: E402
 
 app.include_router(incidents_router)
+
+from app.cases_api import router as cases_router  # noqa: E402
+
+app.include_router(cases_router)
