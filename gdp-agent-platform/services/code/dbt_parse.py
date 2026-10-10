@@ -4,6 +4,9 @@ dbt-aware: dbt_project.yml locates model, macro, test and snapshot folders; a mo
 ref()/source() targets and output columns; each {% macro %} is its own chunk; schema.yml entries (models, sources)
 become chunks with their columns and tests. Other SQL is split by statement, Python by top-level def/class, Markdown
 by heading. Secrets never get in: credential files are skipped and key/token assignments are redacted.
+
+Edges make the code graph (services/code/graph.py): REF and SOURCE (dbt lineage), MACRO_USE, CALLS and IMPORTS
+(Python), READS and WRITES (tables a SQL statement or a model reads with a hard-coded name, and objects it writes).
 """
 
 from __future__ import annotations
@@ -42,6 +45,16 @@ SQL_OBJECT = re.compile(
     r"(?:table|view|procedure|function|stream|task|stage)\s+(?:if\s+not\s+exists\s+)?"
     r"|merge\s+into\s+|insert\s+(?:overwrite\s+)?into\s+|update\s+)([\w.\"$]+)", re.I)
 JINJA_CALL = re.compile(r"\{\{[^}]*?\b([A-Za-z_]\w*)\s*\(", re.S)
+TABLE_NAME = r"((?:\"[^\"]+\"|[A-Za-z_][\w$]*)(?:\.(?:\"[^\"]+\"|[A-Za-z_][\w$]*)){0,2})"
+READ_FROM = re.compile(rf"\b(?:from|join|using)\s+{TABLE_NAME}", re.I)
+WRITE_TO = re.compile(
+    rf"\b(?:create\s+(?:or\s+replace\s+)?(?:(?:secure|transient|temporary|temp|materialized|dynamic)\s+)*(?:table|view)\s+"
+    rf"(?:if\s+not\s+exists\s+)?|insert\s+(?:overwrite\s+)?into\s+|merge\s+into\s+|update\s+|delete\s+from\s+){TABLE_NAME}", re.I)
+CTE_NAME = re.compile(r"(?:\bwith\s+(?:recursive\s+)?|,\s*)([A-Za-z_][\w$]*)\s+as\s*\(", re.I)
+NOT_TABLES = {"select", "lateral", "table", "values", "unnest", "flatten", "dual", "information_schema", "identifier",
+              "generator", "result_scan", "the", "a", "an", "set", "where", "as", "on", "jinja_expr"}
+SQL_NOISE = re.compile(r"--[^\n]*|/\*.*?\*/|\{%.*?%\}|\{#.*?#\}|'(?:[^']|'')*'", re.S)
+JINJA_EXPR = re.compile(r"\{\{.*?\}\}", re.S)
 
 
 def scrub(text: str) -> str:
@@ -150,6 +163,32 @@ def output_columns(sql: str) -> List[str]:
     return [c.upper() for c in dict.fromkeys(cols)][:200]
 
 
+def table_refs(sql: str) -> Tuple[List[str], List[str]]:
+    """(tables read with a hard-coded name, objects written). Jinja, comments, strings and CTE names are ignored, so a
+    dbt model's ref()/source() never show up here: what remains in a model is a hard-coded table."""
+    # a {{ ref() }} becomes a placeholder table, so its alias is never taken for a table name
+    clean = SQL_NOISE.sub(" ", JINJA_EXPR.sub(" jinja_expr ", sql))
+    ctes = {m.lower() for m in CTE_NAME.findall(clean)}
+    writes = sorted({w.replace('"', "") for w in WRITE_TO.findall(clean) if w.lower() not in NOT_TABLES})
+    reads = set()
+    for name in READ_FROM.findall(clean):
+        bare = name.replace('"', "")
+        last = bare.split(".")[-1].lower()
+        if last in NOT_TABLES or bare.lower() in ctes or bare in writes:
+            continue
+        reads.add(bare)
+    return sorted(reads), writes
+
+
+def module_name(path: str) -> str:
+    """services/code/graph.py -> services.code.graph; pkg/__init__.py -> pkg."""
+    stem = path[:-3] if path.endswith(".py") else path
+    parts = [p for p in stem.split("/") if p]
+    if parts and parts[-1] == "__init__":
+        parts = parts[:-1]
+    return ".".join(parts)
+
+
 def _model_chunk(path: str, text: str, project: Optional[str], kind: str) -> Dict[str, Any]:
     name = path.rsplit("/", 1)[-1].rsplit(".", 1)[0]
     refs = sorted({m.group(2) or m.group(1) for m in REF.finditer(text)})
@@ -159,6 +198,7 @@ def _model_chunk(path: str, text: str, project: Optional[str], kind: str) -> Dic
     return {"path": path, "start_line": 1, "end_line": lines, "kind": "DBT_MODEL" if kind != "snapshot" else "DBT_SNAPSHOT",
             "name": name, "text": text if lines <= MAX_CHUNK_LINES * 2 else "\n".join(text.splitlines()[:MAX_CHUNK_LINES * 2]),
             "refs": refs, "sources": sources, "columns": output_columns(text), "tests": [], "project": project,
+            "reads": table_refs(text)[0],
             "materialized": (re.search(r"materialized\s*=\s*['\"](\w+)", config.group(1)) or [None, None])[1] if config else None}
 
 
@@ -235,9 +275,11 @@ def _sql_statements(path: str, text: str) -> List[Dict[str, Any]]:
         if not stmt.strip():
             continue
         name = (SQL_OBJECT.search(stmt) or [None, None])[1]
-        for s, e, part in _windows(stmt, start):
+        reads, writes = table_refs(stmt)
+        for i, (s, e, part) in enumerate(_windows(stmt, start)):
             out.append({"path": path, "start_line": s, "end_line": e, "kind": "SQL", "name": (name or "").strip('"') or None,
-                        "text": part, "refs": [], "sources": [], "columns": output_columns(part), "tests": [], "project": None})
+                        "text": part, "refs": [], "sources": [], "columns": output_columns(part), "tests": [], "project": None,
+                        "reads": reads if i == 0 else [], "writes": writes if i == 0 else []})
     return out
 
 
@@ -248,14 +290,49 @@ def _python(path: str, text: str) -> List[Dict[str, Any]]:
         return [{"path": path, "start_line": s, "end_line": e, "kind": "PY_FUNC", "name": None, "text": t, "refs": [],
                  "sources": [], "columns": [], "tests": [], "project": None} for s, e, t in _windows(text)]
     lines = text.splitlines()
+    module = module_name(path)
+    imports = sorted(python_imports(tree, module))
     out = []
     for node in tree.body:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
             end = getattr(node, "end_lineno", node.lineno)
-            for s, e, part in _windows("\n".join(lines[node.lineno - 1:end]), node.lineno):
+            calls = sorted(python_calls(node) - {node.name})
+            for i, (s, e, part) in enumerate(_windows("\n".join(lines[node.lineno - 1:end]), node.lineno)):
                 out.append({"path": path, "start_line": s, "end_line": e, "kind": "PY_FUNC", "name": node.name, "text": part,
-                            "refs": [], "sources": [], "columns": [], "tests": [], "project": None})
+                            "refs": [], "sources": [], "columns": [], "tests": [], "project": None, "module": module,
+                            "calls": calls if i == 0 else [], "imports": imports if not out else []})
     return out
+
+
+def python_calls(node: ast.AST) -> set:
+    """Names a function or class calls: f(), obj.f(), module.f()."""
+    found = set()
+    for sub in ast.walk(node):
+        if isinstance(sub, ast.Call):
+            fn = sub.func
+            if isinstance(fn, ast.Name):
+                found.add(fn.id)
+            elif isinstance(fn, ast.Attribute):
+                found.add(fn.attr)
+    return found
+
+
+def python_imports(tree: ast.AST, module: str) -> set:
+    """Modules a file imports, with relative imports resolved against the file's package."""
+    package = module.rsplit(".", 1)[0] if "." in module else ""
+    found = set()
+    for sub in ast.walk(tree):
+        if isinstance(sub, ast.Import):
+            found |= {a.name for a in sub.names}
+        elif isinstance(sub, ast.ImportFrom):
+            base = sub.module or ""
+            if sub.level:
+                parts = package.split(".") if package else []
+                parts = parts[: len(parts) - (sub.level - 1)] if sub.level > 1 else parts
+                base = ".".join([*parts, base] if base else parts)
+            if base:
+                found.add(base)
+    return found
 
 
 def _markdown(path: str, text: str) -> List[Dict[str, Any]]:
@@ -302,13 +379,27 @@ def parse_file(path: str, text: str, dbt: List[Dict[str, Any]]) -> List[Dict[str
              "columns": [], "tests": [], "project": None} for s, e, t in _windows(text)]
 
 
-def edges(chunks: Iterable[Dict[str, Any]], known_macros: Iterable[str] = ()) -> List[Dict[str, str]]:
-    """REF and SOURCE lineage from models, MACRO_USE where a model or macro calls a macro defined in the repository
-    (`known_macros`: macros already indexed from files that did not change)."""
+def edges(chunks: Iterable[Dict[str, Any]], known_macros: Iterable[str] = (),
+          known_defs: Iterable[str] = ()) -> List[Dict[str, str]]:
+    """REF and SOURCE lineage from models, MACRO_USE where a model or macro calls a macro defined in the repository,
+    CALLS between Python functions and classes of the repository and IMPORTS of modules, READS of hard-coded tables and
+    WRITES of objects. `known_macros` / `known_defs`: names already indexed from files that did not change."""
     chunks = list(chunks)
     macros = {c["name"] for c in chunks if c["kind"] == "DBT_MACRO" and c.get("name")} | {m for m in known_macros if m}
+    defs = {c["name"] for c in chunks if c["kind"] == "PY_FUNC" and c.get("name")} | {d for d in known_defs if d}
     out: List[Dict[str, str]] = []
     for c in chunks:
+        if c["kind"] == "PY_FUNC" and c.get("name"):
+            out += [{"from_name": c["name"], "to_name": f, "kind": "CALLS", "path": c["path"], "chunk": c.get("chunk_id")}
+                    for f in c.get("calls") or [] if f in defs]
+            out += [{"from_name": c["module"], "to_name": m, "kind": "IMPORTS", "path": c["path"], "chunk": c.get("chunk_id")}
+                    for m in c.get("imports") or [] if c.get("module") and m != c.get("module")]
+        if c["kind"] in ("SQL", "DBT_MODEL", "DBT_SNAPSHOT"):
+            source = c.get("name") or c["path"].rsplit("/", 1)[-1].rsplit(".", 1)[0]
+            out += [{"from_name": source, "to_name": t, "kind": "READS", "path": c["path"], "chunk": c.get("chunk_id")}
+                    for t in c.get("reads") or [] if t.split(".")[-1].upper() != source.split(".")[-1].upper()]
+            out += [{"from_name": source, "to_name": t, "kind": "WRITES", "path": c["path"], "chunk": c.get("chunk_id")}
+                    for t in c.get("writes") or [] if t.split(".")[-1].upper() != source.split(".")[-1].upper()]
         if c["kind"] in ("DBT_MODEL", "DBT_SNAPSHOT", "DBT_TEST"):
             out += [{"from_name": c["name"], "to_name": r, "kind": "REF", "path": c["path"], "chunk": c.get("chunk_id")}
                     for r in c.get("refs") or []]
@@ -334,7 +425,8 @@ def chunk_id(repo_id: str, c: Dict[str, Any]) -> str:
 
 
 def parse_repo(files: Dict[str, str], repo_id: str = "", dbt: Optional[List[Dict[str, Any]]] = None,
-               known_macros: Iterable[str] = ()) -> Tuple[List[Dict[str, Any]], List[Dict[str, str]], List[Dict[str, Any]]]:
+               known_macros: Iterable[str] = (), known_defs: Iterable[str] = ()
+               ) -> Tuple[List[Dict[str, Any]], List[Dict[str, str]], List[Dict[str, Any]]]:
     """(chunks, edges, dbt projects) for files already filtered with `wanted`. `dbt` may come from the whole repository
     when only changed files are parsed."""
     dbt = dbt if dbt is not None else projects(files)
@@ -346,4 +438,4 @@ def parse_repo(files: Dict[str, str], repo_id: str = "", dbt: Optional[List[Dict
             c["tokens"] = tokens(c["text"])
             c["chunk_id"] = chunk_id(repo_id, c)
             chunks.append(c)
-    return chunks, edges(chunks, known_macros), dbt
+    return chunks, edges(chunks, known_macros, known_defs), dbt

@@ -193,7 +193,29 @@ def code_context(rows: Rows, search: Optional[Callable[[Dict[str, Any]], List[Di
         if c["score"] > 0.5:
             scored.append(c)
     picked = pack(scored, budget or DEFAULT_BUDGET.get(stage, 1500))
-    return {"text": block(picked), "citations": [citation(c) for c in picked], "chunks": picked}
+    structure, nodes = graph_context(rows, repo_ids, stage=stage, target=target, question=question)
+    text = "\n\n".join(t for t in (block(picked), structure) if t)
+    return {"text": text, "citations": [citation(c) for c in picked], "chunks": picked, "graph_nodes": nodes}
+
+
+QUESTION_WORDS = re.compile(r"[A-Za-z_][\w.$]{2,}")
+
+
+def graph_context(rows: Rows, repo_ids: List[str], *, stage: str, target: Optional[str] = None,
+                  question: Optional[str] = None) -> tuple:
+    """(prompt block, node names) describing how the target, or the models/macros/tables/functions a question names,
+    sit in the code graph: what they depend on and what changing them affects. Never raises."""
+    from services.code import graph as code_graph
+
+    try:
+        g = code_graph.load(rows, repo_ids)
+        if stage == "COPILOT" and question:
+            names = g.resolve(QUESTION_WORDS.findall(question))
+        else:
+            names = [target] if target and g.knows(target) else []
+        return (code_graph.describe(g, names) if names else ""), names
+    except Exception:
+        return "", []
 
 
 def snowpark_rows(session) -> Rows:

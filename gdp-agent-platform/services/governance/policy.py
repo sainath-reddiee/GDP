@@ -197,7 +197,7 @@ _COMPILED = [(m, re.compile(f"^{p}$"), priv, title) for m, p, priv, title in RUL
 READ_RULES = [(re.compile(r"^/api/(admin/.*|config/(rules|platform|models))$"), "ADMIN.VIEW"),
               (re.compile(r"^/api/(audit|costs)(/.*)?$"), "AUDIT.VIEW"),
               (re.compile(r"^/api/code/setup$"), "INTEGRATION.MANAGE"),
-              (re.compile(r"^/api/code/(search|file|lineage|summary|repos|repos/[^/]+/(runs|branches))$"), "CODE.VIEW"),
+              (re.compile(r"^/api/code/(search|file|lineage|impact|path|summary|repos|repos/[^/]+/(runs|branches))$"), "CODE.VIEW"),
               (re.compile(r"^/api/governance/(roles|users|policies|settings|events|privileges)$"), "ADMIN.VIEW")]
 
 
