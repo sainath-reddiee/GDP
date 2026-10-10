@@ -1,9 +1,9 @@
 "use client";
 
 import { useMemo, useState, useTransition } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import {
-  AlertTriangle, Check, CheckCircle2, ChevronDown, CircleDashed, Copy, Download, Eye, FlaskConical, History, KeyRound,
+  AlertTriangle, Bug, Check, CheckCircle2, ChevronDown, CircleDashed, Copy, Download, Eye, FlaskConical, History, KeyRound,
   ListChecks, Loader2, Pencil, Play, Search, Send, Sparkles, Table2, Trash2, Wand2, XCircle,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -15,6 +15,8 @@ import {
   type QaAnswer, type QaOutcome, type QaProposal, type QaResult, type QaResults, type QaSuite, type QaTest,
 } from "./qa-actions";
 import { CodeCitations, type CodeCitation } from "@/components/code-citations";
+import { useAccess } from "@/components/access";
+import { JiraPanel } from "./jira-panel";
 
 export const CATEGORY_META: Record<string, { label: string; hint: string }> = {
   RECONCILIATION: { label: "Reconciliation", hint: "Row and key counts, source vs target" },
@@ -412,7 +414,9 @@ export function QaWorkbench({ runId, suite, results, canRun, canAI = true, canEd
 }) {
   const router = useRouter();
   const { copied, copy } = useCopy();
-  const [tab, setTab] = useState<"tests" | "ai" | "history">("tests");
+  const params = useSearchParams();
+  const { canAct } = useAccess();
+  const [tab, setTab] = useState<"tests" | "ai" | "history" | "jira">(params.get("tab") === "jira" ? "jira" : "tests");
   const [category, setCategory] = useState("ALL");
   const [outcome, setOutcome] = useState<"ALL" | "ISSUES" | QaOutcome>("ALL");
   const [query, setQuery] = useState("");
@@ -499,7 +503,7 @@ export function QaWorkbench({ runId, suite, results, canRun, canAI = true, canEd
       </div>
 
       <nav role="tablist" className="flex gap-1 border-b">
-        {([["tests", "Tests", ListChecks], ["ai", "AI assistant", Sparkles], ["history", "Run history", History]] as const).map(([k, label, Icon]) => (
+        {([["tests", "Tests", ListChecks], ["ai", "AI assistant", Sparkles], ["history", "Run history", History], ["jira", "Jira", Bug]] as const).map(([k, label, Icon]) => (
           <button key={k} type="button" role="tab" aria-selected={tab === k} onClick={() => setTab(k)}
                   className={cn("-mb-px flex items-center gap-2 border-b-2 px-3 py-2 text-sm font-medium", tab === k ? "border-primary" : "border-transparent text-muted-foreground hover:text-foreground")}>
             <Icon className="h-4 w-4" />{label}
@@ -510,6 +514,8 @@ export function QaWorkbench({ runId, suite, results, canRun, canAI = true, canEd
 
       {tab === "ai" && <Assistant runId={runId} canAI={canAI && canEdit} onSaved={() => { setTab("tests"); setCategory("ALL"); router.refresh(); }} />}
       {tab === "history" && <RunHistory data={results} />}
+      {tab === "jira" && <JiraPanel runId={runId} savedTests={suite.tests.filter((t) => t.origin !== "GENERATED").map((t) => ({ test_id: t.test_id, title: t.title }))}
+                                    canWrite={canAct("JIRA.WRITE") && canEdit} canAI={canAI && canAct("AI.USE")} />}
 
       {tab === "tests" && (
         <div className="grid gap-5 lg:grid-cols-[250px_minmax(0,1fr)]">

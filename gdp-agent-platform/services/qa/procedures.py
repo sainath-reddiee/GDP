@@ -216,7 +216,8 @@ def _code(session, ctx: Dict[str, Any], run_id: str) -> Dict[str, Any]:
     return code
 
 
-def ask_prompt(ctx: Dict[str, Any], question: str, known: Optional[Dict[str, Any]] = None) -> str:
+def table_context(ctx: Dict[str, Any]) -> str:
+    """The run's target, sources, join plan, STTM and allowed tables, as prompt text (shared by QA ask and Jira triage)."""
     lines = "\n".join(
         f"- {l['target_column']} ({l['target_datatype']}) <- "
         + (f"{l['source_table']}.{l['source_column']}" if l.get("source_column") else "no source")
@@ -226,14 +227,20 @@ def ask_prompt(ctx: Dict[str, Any], question: str, known: Optional[Dict[str, Any
     joins = "\n".join(f"- {j.get('left_table')} {j.get('join_type', 'LEFT')} JOIN {j.get('right_table')} ON {', '.join(j.get('keys') or [])}"
                       for j in ctx["graph"].get("joins") or []) or "- single source table"
     return (
-        "You are a data QA engineer. Write ONE Snowflake SQL query that tests the requirement below.\n"
-        "Rules: a single SELECT (WITH allowed); never modify data; use only these fully qualified tables; quote "
-        "nothing unless needed; list failing rows with LIMIT 100 or return counts that a tester can compare; "
-        f"say in `expected` what a passing result looks like. {EXPECTED_RULE}\n\n"
         f"Target table: {ctx['target']['fqn']}\nBusiness keys: {', '.join(ctx['business_keys']) or 'none recorded'}\n"
         f"Source tables:\n{sources}\nJoin plan (driving table {ctx['graph'].get('driving_table') or 'n/a'}):\n{joins}\n"
         f"STTM (target column <- source):\n{lines}\n\n"
         f"Allowed tables: {', '.join(ctx['allowed'])}\n\n"
+    )
+
+
+def ask_prompt(ctx: Dict[str, Any], question: str, known: Optional[Dict[str, Any]] = None) -> str:
+    return (
+        "You are a data QA engineer. Write ONE Snowflake SQL query that tests the requirement below.\n"
+        "Rules: a single SELECT (WITH allowed); never modify data; use only these fully qualified tables; quote "
+        "nothing unless needed; list failing rows with LIMIT 100 or return counts that a tester can compare; "
+        f"say in `expected` what a passing result looks like. {EXPECTED_RULE}\n\n"
+        + table_context(ctx)
         + _facts(known)
         + f"Tester request: {question.strip()[:2000]}"
     )

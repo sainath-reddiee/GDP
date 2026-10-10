@@ -18,9 +18,11 @@ import {
   scheduleRepo, setCredentials, setupPublishing, updateRepo,
   type CodeRepo, type CodeSetup, type IndexRun, type PublishingStatus, type RepoBranch,
 } from "../code/actions";
+import type { JiraStatus } from "../jira/actions";
+import { JiraTab } from "./jira-tab";
 
 type Domain = { domain_id: string; domain_name: string };
-export type IntegrationView = "repos" | "publishing" | "jira";
+export type IntegrationView = "repos" | "jira";
 const PRESETS = [
   { label: "Every hour", cron: "0 * * * * UTC" }, { label: "Daily 06:00 UTC", cron: "0 6 * * * UTC" },
   { label: "Weekdays 06:00 UTC", cron: "0 6 * * MON-FRI UTC" }, { label: "Weekly, Monday 06:00 UTC", cron: "0 6 * * MON UTC" },
@@ -60,8 +62,8 @@ function Badge({ tone, children }: { tone: "good" | "warn" | "idle" | "bad"; chi
 
 /** Admin, Integrations: one tab per integration. Code repositories (configured once, used by the dbt workspace and every
  *  AI step), dbt publishing to GitHub, and Jira. */
-export function IntegrationsSection({ repos, domains, publishing, view }: {
-  repos: CodeRepo[]; domains: Domain[]; publishing: PublishingStatus; view: IntegrationView;
+export function IntegrationsSection({ repos, domains, publishing, jira, view }: {
+  repos: CodeRepo[]; domains: Domain[]; publishing: PublishingStatus; jira: JiraStatus | null; view: IntegrationView;
 }) {
   const router = useRouter();
   const { canAct } = useAccess();
@@ -79,16 +81,14 @@ export function IntegrationsSection({ repos, domains, publishing, view }: {
   }, [indexing, router]);
   const failing = repos.filter((r) => r.status === "FAILED").length;
   const tabs: { id: IntegrationView; label: string; icon: typeof FolderGit2; badge: React.ReactNode; hint: string }[] = [
-    { id: "repos", label: "Code repositories", icon: FolderGit2, hint: "dbt and SQL repositories for the dbt workspace and AI context",
+    { id: "repos", label: "Code repositories", icon: FolderGit2, hint: "dbt and SQL repositories, and pull requests to GitHub",
       badge: failing ? <Badge tone="bad">{failing} failing</Badge> : <Badge tone={repos.length ? "good" : "idle"}>{repos.length}</Badge> },
-    { id: "publishing", label: "dbt publishing", icon: GitPullRequest, hint: "push branches and open pull requests on GitHub",
-      badge: <Badge tone={publishing.ready ? "good" : "idle"}>{publishing.ready ? "ready" : "not set up"}</Badge> },
     { id: "jira", label: "Jira", icon: Unplug, hint: "QA issues, reproduction and results posted back",
-      badge: <Badge tone="idle">not connected</Badge> },
+      badge: <Badge tone={jira?.ready ? "good" : "idle"}>{!jira?.installed ? "not installed" : jira.ready ? `${jira.users_connected ?? 0} connected` : "setup needed"}</Badge> },
   ];
   return (
     <div className="space-y-4">
-      <nav aria-label="Integrations" className="grid gap-2 lg:grid-cols-3">
+      <nav aria-label="Integrations" className="grid gap-2 md:grid-cols-2">
         {tabs.map((t) => (
           <Link key={t.id} href={`/admin?section=integrations&view=${t.id}`} aria-current={view === t.id ? "page" : undefined}
                 className={cn("flex items-start gap-3 rounded-xl border p-3 transition",
@@ -109,14 +109,16 @@ export function IntegrationsSection({ repos, domains, publishing, view }: {
           <button type="button" aria-label="Dismiss" onClick={() => setMsg(null)}><X className="h-3.5 w-3.5" /></button>
         </p>
       )}
-      {view === "repos" && <ReposTab repos={repos} domains={domains} may={canAct("INTEGRATION.MANAGE")} onMsg={setMsg} />}
-      {view === "publishing" && <PublishingCard status={publishing} githubRepos={repos.filter((r) => r.provider === "GITHUB")} may={canAct("ADMIN.DEPLOY")} onMsg={setMsg} />}
-      {view === "jira" && <JiraTab />}
+      {view === "repos" && <ReposTab repos={repos} domains={domains} may={canAct("INTEGRATION.MANAGE")} onMsg={setMsg}
+                                     publishing={<PublishingStrip status={publishing} githubRepos={repos.filter((r) => r.provider === "GITHUB")} may={canAct("ADMIN.DEPLOY")} onMsg={setMsg} />} />}
+      {view === "jira" && <JiraTab status={jira} may={canAct("INTEGRATION.MANAGE")} onMsg={setMsg} />}
     </div>
   );
 }
 
-function ReposTab({ repos, domains, may, onMsg }: { repos: CodeRepo[]; domains: Domain[]; may: boolean; onMsg: (m: Msg) => void }) {
+function ReposTab({ repos, domains, may, onMsg, publishing }: {
+  repos: CodeRepo[]; domains: Domain[]; may: boolean; onMsg: (m: Msg) => void; publishing: React.ReactNode;
+}) {
   const router = useRouter();
   const [connecting, setConnecting] = useState(false);
   const [open, setOpen] = useState<{ id: string; tab: DrawerTab } | null>(null);
@@ -140,6 +142,7 @@ function ReposTab({ repos, domains, may, onMsg }: { repos: CodeRepo[]; domains: 
         )}
         {may && <Button onClick={() => setConnecting(true)}><Plus className="h-4 w-4" />Connect repository</Button>}
       </header>
+      {publishing}
       {repos.length ? (
         <ul className="divide-y">{shown.map((r) => <RepoRow key={r.repo_id} repo={r} domains={domains} may={may} onMsg={onMsg} onOpen={(tab) => setOpen({ id: r.repo_id, tab })} />)}</ul>
       ) : (
@@ -361,33 +364,6 @@ function RepoDrawer({ repo: r, domains, may, tab, onTab, onClose, onMsg }: {
   );
 }
 
-function JiraTab() {
-  const steps = [
-    { title: "A Jira Cloud site", detail: "The site the QA team works in, for example yourteam.atlassian.net." },
-    { title: "An OAuth 2.0 (3LO) app", detail: "Registered once by a site admin at developer.atlassian.com with the scopes read:jira-work, write:jira-work, read:jira-user and offline_access." },
-    { title: "Each engineer signs in", detail: "Engineers connect their own Jira account, so issues, comments and status changes are made as them and Jira's own permissions apply." },
-  ];
-  return (
-    <section className="surface overflow-hidden">
-      <header className="flex items-start gap-3 border-b px-5 py-4">
-        <span className="grid h-10 w-10 place-items-center rounded-xl bg-sky-50 text-sky-600 ring-1 ring-inset ring-sky-100"><Unplug className="h-5 w-5" /></span>
-        <div><h3 className="text-base font-semibold">Jira</h3>
-          <p className="text-xs text-muted-foreground">QA engineers read the issues assigned to them, reproduce a reported bug with QA tests against the data, and post the
-            results back to the same issue, without leaving the platform.</p></div>
-      </header>
-      <ol className="space-y-3 px-5 py-4">
-        {steps.map((s, i) => (
-          <li key={s.title} className="flex gap-3">
-            <span className="grid h-6 w-6 shrink-0 place-items-center rounded-full bg-muted text-xs font-semibold">{i + 1}</span>
-            <div><p className="text-sm font-medium">{s.title}</p><p className="text-xs text-muted-foreground">{s.detail}</p></div>
-          </li>
-        ))}
-      </ol>
-      <p className="border-t bg-muted/30 px-5 py-3 text-xs text-muted-foreground">Not connected yet. Connecting a site is part of the next release.</p>
-    </section>
-  );
-}
-
 function DbtPanel({ repo, pending, onSave }: {
   repo: CodeRepo; pending: boolean; onSave: (body: { use_for_dbt: boolean; dbt_project_dir: string; open_pr: boolean; draft_pr: boolean }) => void;
 }) {
@@ -531,11 +507,13 @@ function DisconnectPanel({ repo, pending, onCancel, onConfirm }: { repo: CodeRep
   );
 }
 
-function PublishingCard({ status, githubRepos, may, onMsg }: { status: PublishingStatus; githubRepos: CodeRepo[]; may: boolean; onMsg: (m: Msg) => void }) {
+/** Pull requests from the dbt workspace: one GitHub token for every run, kept in a Snowflake secret. A single line of
+ *  status and actions; the token field, access check and setup log open below it only when needed. */
+function PublishingStrip({ status, githubRepos, may, onMsg }: { status: PublishingStatus; githubRepos: CodeRepo[]; may: boolean; onMsg: (m: Msg) => void }) {
   const router = useRouter();
   const [pending, start] = useTrackedTransition();
   const [token, setToken] = useState("");
-  const [rotating, setRotating] = useState(false);
+  const [editing, setEditing] = useState(false);
   const [origin, setOrigin] = useState(githubRepos[0]?.git_url ?? "");
   const [check, setCheck] = useState<{ status: string; detail?: string; repository?: string; push?: boolean | null } | null>(null);
   const [log, setLog] = useState<{ sql: string; ok: boolean; error?: string }[]>([]);
@@ -544,59 +522,63 @@ function PublishingCard({ status, githubRepos, may, onMsg }: { status: Publishin
     if (!res.ok) { onMsg({ tone: toneOf(res.error), text: res.error }); return; }
     setCheck(res.data);
   });
+  const saveToken = () => start(async () => {
+    const res = status.ready ? await rotatePublishingToken(token.trim()) : await setupPublishing(token.trim());
+    setToken("");
+    if (!res.ok) { onMsg({ tone: toneOf(res.error), text: res.error }); return; }
+    if ("log" in res.data) setLog(res.data.log);
+    const ready = !("ready" in res.data) || res.data.ready;
+    onMsg({ tone: ready ? "ok" : "error", text: status.ready ? "GitHub token updated in the Snowflake secret." : ready ? "Pull requests to GitHub are ready." : ("detail" in res.data && res.data.detail) || "Setup did not finish." });
+    setEditing(false);
+    router.refresh();
+  });
+  const showToken = may && (editing || !status.ready);
   return (
-    <section className="surface p-5">
-      <div className="flex flex-wrap items-start gap-3">
-        <span className="grid h-10 w-10 place-items-center rounded-xl bg-emerald-50 text-emerald-600 ring-1 ring-inset ring-emerald-100"><GitPullRequest className="h-5 w-5" /></span>
-        <div className="min-w-[16rem] flex-1">
-          <h3 className="flex items-center gap-2 text-base font-semibold">dbt publishing to GitHub
-            <span className={cn("rounded-full px-2 py-0.5 text-[10px] font-medium ring-1 ring-inset", status.ready ? STATUS_TONE.READY : STATUS_TONE.NEW)}>{status.ready ? "ready" : "not set up"}</span></h3>
-          <p className="text-sm text-muted-foreground">Snowflake Git clones are read-only, so the dbt workspace pushes branches and opens pull requests through the GitHub API
-            from a Snowflake procedure. Set it up once here; every run uses it. The token lives in a Snowflake secret.</p>
-          {status.ready && status.config && <p className="mt-1 font-mono text-[11px] text-muted-foreground">secret {status.config.secret} · access {status.config.external_access_integration}</p>}
-        </div>
+    <div className="border-b bg-muted/20 px-5 py-3 text-xs">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+        <span className="inline-flex items-center gap-2 text-sm font-medium"><GitPullRequest className="h-4 w-4 text-emerald-600" />Pull requests to GitHub</span>
+        <Badge tone={status.ready ? "good" : "idle"}>{status.ready ? "ready" : "not set up"}</Badge>
+        <span className="min-w-[12rem] flex-1 text-muted-foreground">
+          {status.ready ? <>The dbt workspace pushes branches and opens PRs with one token{status.config?.secret ? <> in <span className="font-mono">{status.config.secret}</span></> : ""}.</>
+            : "Set a GitHub token once so runs can push branches and open pull requests. It is stored as a Snowflake secret."}
+        </span>
+        {may && status.ready && !editing && (
+          <span className="flex flex-wrap items-center gap-1.5">
+            {githubRepos.length > 1 && (
+              <Select value={origin} onChange={(e) => setOrigin(e.target.value)} className="h-8 w-auto max-w-[14rem] text-xs" aria-label="Repository to test">
+                {githubRepos.map((r) => <option key={r.repo_id} value={r.git_url}>{r.name}</option>)}
+              </Select>
+            )}
+            <Button size="sm" variant="outline" disabled={pending || !/github\.com\//.test(origin)} onClick={test}
+                    title={githubRepos.length === 1 ? `Check the token can push to ${githubRepos[0].name}` : undefined}>
+              {pending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}Test access</Button>
+            <Button size="sm" variant="ghost" onClick={() => setEditing(true)}><KeyRound className="h-3.5 w-3.5" />Rotate token</Button>
+          </span>
+        )}
       </div>
-      {may && (
-        <div className="mt-4 space-y-3 text-xs">
-          {!status.ready || rotating ? (
-            <div className="flex max-w-xl flex-wrap gap-2">
-              <Input type="password" autoComplete="off" value={token} onChange={(e) => setToken(e.target.value)} placeholder="GitHub token with Contents and Pull requests write" className="h-9 min-w-[16rem] flex-1 text-xs" />
-              <Button disabled={pending || !token.trim()} onClick={() => start(async () => {
-                const res = status.ready ? await rotatePublishingToken(token.trim()) : await setupPublishing(token.trim());
-                setToken("");
-                if (!res.ok) { onMsg({ tone: toneOf(res.error), text: res.error }); return; }
-                if ("log" in res.data) setLog(res.data.log);
-                const ready = !("ready" in res.data) || res.data.ready;
-                onMsg({ tone: ready ? "ok" : "error", text: status.ready ? "Token updated in the Snowflake secret." : ready ? "GitHub publishing is ready." : ("detail" in res.data && res.data.detail) || "Setup did not finish." });
-                setRotating(false);
-                router.refresh();
-              })}>{pending ? <Loader2 className="h-4 w-4 animate-spin" /> : <KeyRound className="h-4 w-4" />}{status.ready ? "Save token" : "Set up"}</Button>
-            </div>
-          ) : (
-            <div className="flex flex-wrap items-center gap-2">
-              {githubRepos.length > 0 ? (
-                <Select value={origin} onChange={(e) => setOrigin(e.target.value)} className="h-8 w-auto max-w-sm text-xs" aria-label="Repository to test">
-                  {githubRepos.map((r) => <option key={r.repo_id} value={r.git_url}>{r.name} ({r.git_url.replace("https://github.com/", "")})</option>)}
-                </Select>
-              ) : <Input value={origin} onChange={(e) => setOrigin(e.target.value)} placeholder="https://github.com/org/repo" className="h-8 max-w-sm text-xs" />}
-              <Button size="sm" variant="outline" disabled={pending || !/github\.com\//.test(origin)} onClick={test}>{pending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}Test access</Button>
-              <Button size="sm" variant="ghost" onClick={() => setRotating(true)}><KeyRound className="h-3.5 w-3.5" />Rotate token</Button>
-            </div>
-          )}
-          {check && (
-            <p className={cn("rounded-lg px-3 py-2", check.status === "OK" && check.push !== false ? "bg-success/10 text-success" : "bg-amber-50 text-amber-800")}>
-              {check.status === "OK" ? `Connected to ${check.repository}; ${check.push === false ? "this token cannot push to it" : "push allowed"}.` : check.detail || check.status}
-            </p>
-          )}
-          {log.length > 0 && (
-            <ol className="space-y-1 text-[11px]">
-              {log.map((s) => <li key={s.sql} className={cn("rounded border px-2 py-1 font-mono", s.ok ? "border-emerald-200 bg-emerald-50" : "border-red-200 bg-red-50")}>
-                <span className="block whitespace-pre-wrap break-all">{s.sql}</span>{s.error && <span className="mt-0.5 block font-sans text-red-700">{s.error}</span>}</li>)}
-            </ol>
-          )}
+      {showToken && (
+        <div className="mt-2.5 flex max-w-2xl flex-wrap items-center gap-2">
+          <Input type="password" autoComplete="off" value={token} onChange={(e) => setToken(e.target.value)} placeholder="GitHub token with Contents and Pull requests write"
+                 className="h-9 min-w-[16rem] flex-1 text-xs" aria-label="GitHub token" />
+          <Button size="sm" disabled={pending || !token.trim()} onClick={saveToken}>{pending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <KeyRound className="h-3.5 w-3.5" />}{status.ready ? "Save token" : "Set up"}</Button>
+          {editing && <Button size="sm" variant="ghost" onClick={() => { setEditing(false); setToken(""); }}>Cancel</Button>}
+          <span className="w-full text-[11px] text-muted-foreground">A fine-grained token limited to the client&apos;s repositories, with Contents and Pull requests: read and write.</span>
         </div>
       )}
-    </section>
+      {!may && !status.ready && <p className="mt-1.5 text-muted-foreground">A platform admin (ADMIN.DEPLOY) sets this up.</p>}
+      {check && (
+        <p className={cn("mt-2 flex items-center gap-2 rounded-md px-2.5 py-1.5", check.status === "OK" && check.push !== false ? "bg-success/10 text-success" : "bg-amber-50 text-amber-800")}>
+          {check.status === "OK" ? `Connected to ${check.repository}; ${check.push === false ? "this token cannot push to it" : "push allowed"}.` : check.detail || check.status}
+          <button type="button" className="ml-auto" aria-label="Dismiss" onClick={() => setCheck(null)}><X className="h-3.5 w-3.5" /></button>
+        </p>
+      )}
+      {log.length > 0 && (
+        <ol className="mt-2 space-y-1 text-[11px]">
+          {log.map((s) => <li key={s.sql} className={cn("rounded border px-2 py-1 font-mono", s.ok ? "border-emerald-200 bg-emerald-50" : "border-red-200 bg-red-50")}>
+            <span className="block whitespace-pre-wrap break-all">{s.sql}</span>{s.error && <span className="mt-0.5 block font-sans text-red-700">{s.error}</span>}</li>)}
+        </ol>
+      )}
+    </div>
   );
 }
 
