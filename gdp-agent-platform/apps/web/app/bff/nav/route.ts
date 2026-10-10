@@ -8,6 +8,8 @@ export type NavCounts = {
   running: number; review: number; drafts: number; staged: number; profiling: number; approvals: number;
   /** open plus acknowledged incidents; 0 without OPS.VIEW or when the incidents API is not there */
   incidents: number;
+  /** open cases in the caller's domains; 0 without CASE.WORK or when the cases API is not there */
+  cases?: number;
 };
 
 /** Sidebar counters as a plain GET (server actions run one at a time and would queue behind page actions).
@@ -15,12 +17,15 @@ export type NavCounts = {
 export async function GET() {
   try {
     const meCall = api<WhoAmI>("/api/auth/me").catch(() => null);
-    const [metrics, store, me, incidents] = await Promise.all([
+    const [metrics, store, me, incidents, cases] = await Promise.all([
       api<{ lifecycle: Record<string, number>; needs_review: number }>("/api/metrics/summary").catch(() => null),
       api<{ profiles: ProfileStoreRow[] }>("/api/profiles/store").catch(() => ({ profiles: [] as ProfileStoreRow[] })),
       meCall,
       meCall.then((who) => (who && can(who, "OPS.VIEW")
         ? api<{ open: number; ack: number }>("/api/ops/incidents/summary").then((r) => (r.open ?? 0) + (r.ack ?? 0), () => 0)
+        : 0)),
+      meCall.then((who) => (who && can(who, "CASE.WORK")
+        ? api<{ open: number }>("/api/cases/summary").then((r) => r.open ?? 0, () => 0)
         : 0)),
     ]);
     const s = metrics
@@ -32,6 +37,7 @@ export async function GET() {
       profiling: store.profiles.filter((p) => p.status === "PROFILING").length,
       approvals: me?.pending_for_me ?? 0,
       incidents,
+      cases,
     };
     return Response.json(counts, { headers: { "Cache-Control": "private, max-age=30" } });
   } catch {

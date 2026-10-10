@@ -18,6 +18,8 @@ import {
   Alert, ConnectJira, JiraGate, Notice, SuiteSelect, TableSelect, jiraProblem, plural, useLive, useSeq, useSuites, useTables,
   type Access, type Go, type JiraProblem,
 } from "./qa-shared";
+import { caseFromJira } from "./cases/actions";
+import { OpenCaseButton } from "./cases/case-ui";
 
 type Mode = "mine" | "jql" | "filters" | "boards";
 type Source = { kind: "jql"; jql: string; label: string } | { kind: "filter"; filterId: string; label: string }
@@ -124,6 +126,7 @@ function Inbox({ access, go, who }: { access: Access; go: Go; who: string }) {
                                                     onChange={() => setSelected(allSelected ? new Set() : new Set(all.map((i) => i.key)))} /></th>
                 <th className="px-2 py-2">Key</th><th className="px-2 py-2">Summary</th><th className="px-2 py-2">Type</th><th className="px-2 py-2">Status</th>
                 <th className="px-2 py-2">Priority</th><th className="px-2 py-2">Assignee</th><th className="px-2 py-2 text-right">Linked</th>
+                {access.canCase && <th className="px-2 py-2"><span className="sr-only">Case</span></th>}
               </tr>
             </thead>
             <tbody>
@@ -139,10 +142,11 @@ function Inbox({ access, go, who }: { access: Access; go: Go; who: string }) {
                   <td className="whitespace-nowrap px-2 py-2 text-xs text-muted-foreground">{i.priority}</td>
                   <td className="whitespace-nowrap px-2 py-2 text-xs text-muted-foreground">{i.assignee ?? "unassigned"}</td>
                   <td className="px-2 py-2 text-right text-xs tabular-nums">{i.linked ? <span className="inline-flex items-center gap-1 text-primary"><Link2 className="h-3 w-3" />{i.linked}</span> : <span className="text-muted-foreground">0</span>}</td>
+                  {access.canCase && <td className="whitespace-nowrap px-2 py-2 text-right"><OpenCaseButton variant="ghost" open={() => caseFromJira(i.key)} /></td>}
                 </tr>
               ))}
-              {loading && !issues && <tr><td colSpan={8} className="px-3 py-8 text-center text-xs text-muted-foreground"><Loader2 className="mr-2 inline h-3.5 w-3.5 animate-spin" />Loading issues…</td></tr>}
-              {issues && !issues.length && !problem && <tr><td colSpan={8} className="px-3 py-8 text-center text-xs text-muted-foreground">No issues here.</td></tr>}
+              {loading && !issues && <tr><td colSpan={access.canCase ? 9 : 8} className="px-3 py-8 text-center text-xs text-muted-foreground"><Loader2 className="mr-2 inline h-3.5 w-3.5 animate-spin" />Loading issues…</td></tr>}
+              {issues && !issues.length && !problem && <tr><td colSpan={access.canCase ? 9 : 8} className="px-3 py-8 text-center text-xs text-muted-foreground">No issues here.</td></tr>}
             </tbody>
           </table>
         </div>

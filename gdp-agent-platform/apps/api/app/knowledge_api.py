@@ -3,6 +3,12 @@
 Items keep one LINEAGE_ID across versions. Automatic writers (services/knowledge/writer.py) either make a new version
 current or, under the review policy, leave it PROPOSED for a steward. People can verify an item (with a review date),
 roll it back to any earlier version, and see which runs and stages used it.
+
+Approval is scoped by domain (services/governance/domains.py): the inbox lists the proposals of the domains the caller
+stewards (OWNER or STEWARD member; a domain without either falls back to the DATA_STEWARD role), and SUPER_ADMIN sees
+and decides everything. Approving is four-eyes: the proposer (CREATED_BY) and, for knowledge learned from a case
+(ORIGIN CASE), the person who resolved the case cannot approve it. The route still needs KNOWLEDGE.EDIT, so the
+KNOWLEDGE.EDIT approval policy applies to people without the privilege.
 """
 
 from __future__ import annotations
@@ -16,6 +22,7 @@ from pydantic import BaseModel, Field
 from app.db import Db
 from app.main import (_DOMAIN_VOCAB, _KNOWLEDGE_COLUMNS, _config, _knowledge_item, _new_knowledge_version, _put_config,
                       _shape_knowledge, current_db)
+from services.governance import domains
 from services.knowledge.skills import compact
 from services.knowledge.writer import DEFAULT_POLICY
 
@@ -84,19 +91,77 @@ def feed(domain_id: Optional[str] = None, origin: Optional[str] = None, limit: i
     return {"items": rows}
 
 
+def _approver(db: Db) -> dict:
+    """The caller's user and app roles. Before governance is deployed (V020) the caller counts as SUPER_ADMIN, as the
+    middleware lets everything through then."""
+    from app.governance import identity, ready
+
+    try:
+        if ready(db):
+            who = identity(db)
+            return {"user": who["user"], "roles": set(who["roles"])}
+    except Exception:
+        pass
+    return {"user": str(db.user or "").upper(), "roles": {"SUPER_ADMIN"}}
+
+
+def may_decide(db: Db, who: dict, domain_id: Optional[str]) -> bool:
+    """SUPER_ADMIN, or a steward of the item's domain (DATA_STEWARD when the domain has no OWNER or STEWARD)."""
+    return "SUPER_ADMIN" in who["roles"] or domains.is_steward(db, who["user"], domain_id, who["roles"])
+
+
+def _case_resolver(db: Db, item: dict) -> Optional[str]:
+    """Who resolved the case a CASE_RESOLUTION item came from: CONTENT_JSON.resolved_by, else the case record."""
+    content = item.get("content_json")
+    if isinstance(content, str):
+        try:
+            content = json.loads(content)
+        except ValueError:
+            content = None
+    content = content if isinstance(content, dict) else {}
+    if content.get("resolved_by"):
+        return str(content["resolved_by"]).upper()
+    if content.get("case_id"):
+        try:
+            found = db.query("SELECT RESOLVED_BY FROM CASES.CASE_RECORD WHERE CASE_ID = %s", (str(content["case_id"]),))
+            if found and found[0].get("resolved_by"):
+                return str(found[0]["resolved_by"]).upper()
+        except Exception:
+            pass
+    return None
+
+
+def refusal(db: Db, who: dict, item: Optional[dict], decision: str) -> Optional[str]:
+    """Why the caller may not decide this item, or None."""
+    if not item or item.get("status") != "PROPOSED":
+        return "not waiting for review"
+    if not may_decide(db, who, item.get("domain_id")):
+        return "only a steward of this domain can decide it"
+    if decision == "approve":
+        if str(item.get("created_by") or "").upper() == who["user"]:
+            return "you proposed it, so someone else must approve it"
+        if str(item.get("origin") or "").upper() == "CASE" and _case_resolver(db, item) == who["user"]:
+            return "you resolved the case it comes from, so someone else must approve it"
+    return None
+
+
 @router.get("/api/knowledge/inbox")
 def inbox(domain_id: Optional[str] = None, db: Db = Depends(current_db)):
-    """Proposed versions waiting for review, each with the version currently in use (if any) to compare."""
+    """Proposed versions waiting for review in the domains the caller stewards (all for SUPER_ADMIN), each with the
+    version currently in use (if any) to compare. own marks the caller's own proposals (they cannot approve them)."""
+    who = _approver(db)
     scope, params = ("AND K.DOMAIN_ID = %s", (domain_id,)) if domain_id else ("", ())
     proposed = db.query(f"""SELECT {_KNOWLEDGE_COLUMNS}, R.RUN_NAME {FROM} LEFT JOIN CORE.WORKFLOW_RUN R ON R.RUN_ID = K.SOURCE_RUN_ID
                              WHERE K.STATUS = 'PROPOSED' {scope} ORDER BY K.CREATED_AT DESC LIMIT 200""", params)
+    proposed = [p for p in proposed if may_decide(db, who, p.get("domain_id"))]
     lineages = [p["lineage_id"] for p in proposed if p.get("lineage_id")]
     current = {}
     if lineages:
         for c in db.query(f"""SELECT {_KNOWLEDGE_COLUMNS} {FROM} WHERE K.IS_CURRENT
                                 AND ARRAY_CONTAINS(K.LINEAGE_ID::VARIANT, PARSE_JSON(%s))""", (json.dumps(lineages),)):
             current[c["lineage_id"]] = _shape_knowledge(c)
-    return {"items": [{**_shape_knowledge(p), "run_name": p.get("run_name"), "current": current.get(p.get("lineage_id"))}
+    return {"items": [{**_shape_knowledge(p), "run_name": p.get("run_name"), "current": current.get(p.get("lineage_id")),
+                       "own": str(p.get("created_by") or "").upper() == who["user"]}
                       for p in proposed]}
 
 
@@ -108,11 +173,17 @@ class Decide(BaseModel):
 
 @router.post("/api/knowledge/inbox/decide")
 def decide(body: Decide, db: Db = Depends(current_db)):
-    """Approve: the proposal becomes the version in use. Reject: it is kept as REJECTED and nothing changes."""
-    done = 0
-    for kid in body.ids:
-        found = db.query("SELECT KNOWLEDGE_ID, LINEAGE_ID, STATUS FROM KNOWLEDGE.DOMAIN_KNOWLEDGE WHERE KNOWLEDGE_ID = %s", (kid,))
-        if not found or found[0]["status"] != "PROPOSED":
+    """Approve: the proposal becomes the version in use. Reject: it is kept as REJECTED and nothing changes.
+    Each item is checked on its own (steward of its domain, four-eyes on approval); refused items are listed with the
+    reason and the others are still decided."""
+    who = _approver(db)
+    done, refused = 0, []
+    for kid in dict.fromkeys(body.ids):
+        found = db.query("""SELECT KNOWLEDGE_ID, LINEAGE_ID, STATUS, DOMAIN_ID, CREATED_BY, ORIGIN, CONTENT_JSON
+                              FROM KNOWLEDGE.DOMAIN_KNOWLEDGE WHERE KNOWLEDGE_ID = %s""", (kid,))
+        reason = refusal(db, who, found[0] if found else None, body.decision)
+        if reason:
+            refused.append({"knowledge_id": kid, "reason": reason})
             continue
         if body.decision == "approve":
             db.execute("""UPDATE KNOWLEDGE.DOMAIN_KNOWLEDGE SET IS_CURRENT = FALSE, UPDATED_AT = CURRENT_TIMESTAMP(),
@@ -125,8 +196,9 @@ def decide(body: Decide, db: Db = Depends(current_db)):
             db.execute("""UPDATE KNOWLEDGE.DOMAIN_KNOWLEDGE SET STATUS = 'REJECTED', REVIEWED_BY = CURRENT_USER(),
                                  REVIEW_NOTE = %s, UPDATED_AT = CURRENT_TIMESTAMP() WHERE KNOWLEDGE_ID = %s""", (body.note, kid))
         done += 1
-    _changed()
-    return {"decided": done, "decision": body.decision}
+    if done:
+        _changed()
+    return {"decided": done, "decision": body.decision, "refused": refused}
 
 
 @router.get("/api/knowledge/{knowledge_id}/versions")

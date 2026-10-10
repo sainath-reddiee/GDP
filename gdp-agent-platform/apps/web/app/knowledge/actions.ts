@@ -37,6 +37,9 @@ export type KUsage = {
 };
 export type Policy = { types: string[]; policy: Record<string, "auto" | "review">; copilot: "auto" | "review"; defaults: Record<string, string> };
 
+/** refused: items this approver may not decide (not a steward of the domain, or their own proposal); absent on an older API */
+export type DecideResult = { decided: number; refused?: { knowledge_id: string; reason: string }[] };
+
 export type ItemInput = {
   domain_id?: string | null; knowledge_type: string; title: string; content: string; content_json?: unknown;
   change_note?: string | null;
@@ -111,7 +114,7 @@ export async function verifyKnowledge(id: string, days = 180) {
 }
 
 export async function decideInbox(ids: string[], decision: "approve" | "reject", note?: string) {
-  const r = await attemptValue(() => api<{ decided: number }>("/api/knowledge/inbox/decide", {
+  const r = await attemptValue(() => api<DecideResult>("/api/knowledge/inbox/decide", {
     method: "POST", body: JSON.stringify({ ids, decision, note: note || null }),
   }));
   changed();

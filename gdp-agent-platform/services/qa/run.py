@@ -381,7 +381,7 @@ def _remember(session, run_id: Optional[str], ctx: Dict[str, Any], results: List
             continue
 
 
-RESULT_FIELDS = """R.TEST_ID, R.CATEGORY, R.TITLE, R.SEVERITY, R.ORIGIN, R.OUTCOME, R.ROWS_RETURNED,
+RESULT_FIELDS = """R.RESULT_ID, R.TEST_ID, R.CATEGORY, R.TITLE, R.SEVERITY, R.ORIGIN, R.OUTCOME, R.ROWS_RETURNED,
                     R.MEASURED, R.EXPECTED, R.DETAIL, R.COLUMNS, R.SAMPLE_ROWS, R.SQL_TEXT, R.DURATION_MS"""
 
 

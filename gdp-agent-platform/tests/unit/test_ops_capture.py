@@ -494,7 +494,7 @@ def test_ops_governance_mapping():
     for method, path, priv in OPS_ROUTES:
         found, _, matched = privilege_for(method, path)
         assert matched and found == priv, (method, path, found)
-    assert SYSTEM_VERSION == 6 and ADDED_PRIVILEGES[6] == ["OPS.VIEW", "OPS.OPERATE"]
+    assert SYSTEM_VERSION >= 6 and ADDED_PRIVILEGES[6] == ["OPS.VIEW", "OPS.OPERATE"]
     roles, support = effective_privileges(["SUPPORT_ENGINEER"], ROLE_PRIVS, GRANTS)
     assert "VIEWER" in roles and {"OPS.VIEW", "OPS.OPERATE", "AI.USE", "JIRA.READ", "JIRA.WRITE"} <= support
     assert "INTEGRATION.MANAGE" not in support and "RUN.OPERATE" not in support

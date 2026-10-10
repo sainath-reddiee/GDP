@@ -14,7 +14,7 @@ import { useScrollLock } from "@/components/use-scroll-lock";
 
 export const TYPES = ["GLOSSARY", "BUSINESS_RULE", "TRANSFORMATION_RULE", "MAPPING_PATTERN", "MODEL_DEFINITION",
   "NAMING_STANDARD", "DBT_PATTERN", "SODA_PATTERN", "EXCEPTION", "STTM_TEMPLATE", "ONBOARDING_GUIDE", "COLUMN_RULE", "QA_TEST",
-  "INCIDENT_RESOLUTION"];
+  "INCIDENT_RESOLUTION", "CASE_RESOLUTION"];
 
 type Domain = { domain_id: string; domain_name: string };
 

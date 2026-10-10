@@ -19,6 +19,8 @@ import {
 } from "../actions";
 import { dagRunHref, incidentHref, IncidentStatusPill, KindPill, localInput, SeverityPill, up } from "../incident-shared";
 import { AiPanel, ImpactPanel, RetryBadge, RetryDialog } from "./incident-ai";
+import { caseFromIncident } from "../../qa/cases/actions";
+import { OpenCaseButton } from "../../qa/cases/case-ui";
 
 type Mode = "assign" | "resolve" | "mute" | null;
 type Busy = "ack" | "assign" | "resolve" | "mute" | "reopen" | "ticket" | "note" | null;
@@ -52,8 +54,9 @@ function detailText(d: unknown): string {
 
 /** One incident: header with status actions, then error, diagnosis, impact, timeline, notifications, runs, children,
  *  Jira and the resolution. Every action returns the full detail, which replaces what is shown. */
-export function IncidentView({ initial, envName, askAck, canOperate, canAI, jiraComment, jiraMe }: {
-  initial: IncidentDetail; envName: string; askAck: boolean; canOperate: boolean; canAI: boolean; jiraComment: boolean; jiraMe: string;
+export function IncidentView({ initial, envName, askAck, canOperate, canAI, canCase = false, jiraComment, jiraMe }: {
+  initial: IncidentDetail; envName: string; askAck: boolean; canOperate: boolean; canAI: boolean; /** CASE.WORK */ canCase?: boolean;
+  jiraComment: boolean; jiraMe: string;
 }) {
   const router = useRouter();
   const [data, setData] = useState(initial);
@@ -170,6 +173,9 @@ export function IncidentView({ initial, envName, askAck, canOperate, canAI, jira
         </div>
       )}
 
+      {canCase && !canOperate && (
+        <div className="flex flex-wrap items-center gap-2"><OpenCaseButton label="Open case" open={() => caseFromIncident(inc.incident_id)} /></div>
+      )}
       {canOperate && (
         <div className="space-y-2">
           <div className="flex flex-wrap items-center gap-2">
@@ -195,6 +201,7 @@ export function IncidentView({ initial, envName, askAck, canOperate, canAI, jira
                       onClick={() => run("ticket", () => ticketIncident(inc.incident_id), "Jira ticket requested. The worker raises it with the Jira bot.")}>
                 {spin("ticket", <Ticket className="h-3.5 w-3.5" />)}{jiraFailed ? "Retry Jira ticket" : "Raise Jira ticket"}</Button>
             )}
+            {canCase && <OpenCaseButton label="Open case" open={() => caseFromIncident(inc.incident_id)} />}
           </div>
           {mode === "assign" && (
             <form className="flex flex-wrap items-center gap-2" onSubmit={(e) => {

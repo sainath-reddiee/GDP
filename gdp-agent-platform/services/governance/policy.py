@@ -51,6 +51,10 @@ PRIVILEGES: Dict[str, Tuple[str, str]] = {
     "JIRA.WRITE": ("Jira", "Link issues to runs and tests, comment on and change the status of Jira issues, as yourself"),
     "OPS.VIEW": ("Operations", "See Airflow pipelines, runs, task logs and incidents"),
     "OPS.OPERATE": ("Operations", "Poll Airflow now, change DAG settings, and acknowledge, assign, resolve, mute or retry incidents"),
+    "CASE.WORK": ("Cases", "Open, assign, triage, comment on and link cases, and propose fixes"),
+    "CASE.RESOLVE": ("Cases", "Verify, resolve, close and mark cases as duplicates"),
+    "PACKAGE.EDIT": ("Cases", "Edit domain test packages"),
+    "PACKAGE.APPROVE": ("Cases", "Approve a domain test package version"),
 }
 # Privileges a viewer-style role never needs: holding none of the others means the user can only look.
 READ_ONLY = {"AUDIT.VIEW", "ADMIN.VIEW", "APPROVAL.VIEW", "CODE.VIEW", "OPS.VIEW"}
@@ -69,12 +73,16 @@ SYSTEM_ROLES: Dict[str, Dict[str, Any]] = {
                       "privileges": ["STTM.EDIT", "STTM.APPROVE", "AI.USE"], "inherits": ["VIEWER"]},
     "DQ_APPROVER": {"description": "Approves data quality checks and the pack",
                     "privileges": ["SODA.EDIT", "SODA.APPROVE", "AI.USE"], "inherits": ["VIEWER"]},
-    "QA_LEAD": {"description": "Owns QA tests and sign-off", "privileges": ["QA.EDIT", "QA.SIGNOFF", "AI.USE", "JIRA.READ", "JIRA.WRITE"],
+    "QA_LEAD": {"description": "Owns QA tests and sign-off", "privileges": ["QA.EDIT", "QA.SIGNOFF", "AI.USE", "JIRA.READ", "JIRA.WRITE",
+                                                                           "CASE.WORK", "CASE.RESOLVE", "PACKAGE.EDIT",
+                                                                           "PACKAGE.APPROVE"],
                 "inherits": ["VIEWER"]},
     "QA_ENGINEER": {"description": "Writes and runs QA tests and works Jira issues; no sign-off",
-                    "privileges": ["QA.EDIT", "AI.USE", "JIRA.READ", "JIRA.WRITE"], "inherits": ["VIEWER"]},
+                    "privileges": ["QA.EDIT", "AI.USE", "JIRA.READ", "JIRA.WRITE", "CASE.WORK", "PACKAGE.EDIT"],
+                    "inherits": ["VIEWER"]},
     "SUPPORT_ENGINEER": {"description": "Watches Airflow pipelines and works incidents and their Jira tickets",
-                         "privileges": ["OPS.VIEW", "OPS.OPERATE", "AI.USE", "JIRA.READ", "JIRA.WRITE"], "inherits": ["VIEWER"]},
+                         "privileges": ["OPS.VIEW", "OPS.OPERATE", "AI.USE", "JIRA.READ", "JIRA.WRITE", "CASE.WORK"],
+                         "inherits": ["VIEWER"]},
     "CODE_REVIEWER": {"description": "Approves dbt and code review",
                       "privileges": ["REVIEW.APPROVE", "REVIEW.DECIDE", "DBT.EDIT", "AI.USE"], "inherits": ["VIEWER"]},
     "DATA_STEWARD": {"description": "Owns domains and knowledge",
@@ -85,16 +93,17 @@ SYSTEM_ROLES: Dict[str, Dict[str, Any]] = {
                       "privileges": ["SOURCE.CONNECT", "PROFILE.RUN", "RUN.CREATE", "RUN.OPERATE", "RUN.ARCHIVE",
                                      "MODEL.EDIT", "MAPPING.DECIDE", "QA.EDIT", "DBT.EDIT", "TAG.MANAGE", "SKILL.EDIT",
                                      "REQUEST.CHANGES", "REVIEW.DECIDE", "AI.USE", "JIRA.READ", "JIRA.WRITE", "OPS.VIEW",
-                                     "OPS.OPERATE"],
+                                     "OPS.OPERATE", "CASE.WORK", "CASE.RESOLVE", "PACKAGE.EDIT"],
                       "inherits": ["VIEWER"]},
     "VIEWER": {"description": "Read everything, change nothing (no AI calls, no requests)", "privileges": ["AUDIT.VIEW", "CODE.VIEW", "OPS.VIEW"],
                "inherits": []},
 }
 # Privileges added to system roles after their first release: {version: [privilege]}. Bootstrap grants them to the
 # system roles whose spec lists them, once, so existing deployments pick them up without overriding admin edits.
-SYSTEM_VERSION = 6
+SYSTEM_VERSION = 7
 ADDED_PRIVILEGES = {2: ["AI.USE"], 3: ["SKILL.EDIT", "SKILL.RELEASE"], 4: ["INTEGRATION.MANAGE", "CODE.VIEW"],
-                    5: ["JIRA.READ", "JIRA.WRITE"], 6: ["OPS.VIEW", "OPS.OPERATE"]}
+                    5: ["JIRA.READ", "JIRA.WRITE"], 6: ["OPS.VIEW", "OPS.OPERATE"],
+                    7: ["CASE.WORK", "CASE.RESOLVE", "PACKAGE.EDIT", "PACKAGE.APPROVE"]}
 
 # Actions routed for approval by default: privilege -> approver role. Everything else is privilege-only.
 DEFAULT_POLICIES: Dict[str, str] = {
@@ -105,7 +114,10 @@ DEFAULT_POLICIES: Dict[str, str] = {
     "KNOWLEDGE.EDIT": "DATA_STEWARD", "DOMAIN.EDIT": "DATA_STEWARD",
     "CONFIG.EDIT": "PLATFORM_ADMIN", "ADMIN.DEPLOY": "PLATFORM_ADMIN", "ROLE.MANAGE": "GOVERNANCE_ADMIN",
     "SKILL.RELEASE": "SKILL_OWNER", "INTEGRATION.MANAGE": "PLATFORM_ADMIN",
+    "PACKAGE.APPROVE": "QA_LEAD",
 }
+# Default policies created with four eyes on: even holders of the privilege go through another person's approval.
+DEFAULT_FOUR_EYES = {"PACKAGE.APPROVE"}
 
 REVIEW_TARGETS = {"MAPPING_APPROVED": "MAPPING.APPROVE", "STTM_APPROVED": "STTM.APPROVE",
                   "SODA_APPROVED": "SODA.APPROVE", "DBT_APPROVED": "REVIEW.APPROVE"}
@@ -203,6 +215,14 @@ RULES: List[Tuple[str, str, Any, str]] = [
     ("PUT", r"/api/ops/routing/[^/]+", "INTEGRATION.MANAGE", "Change an incident routing rule"),
     ("DELETE", r"/api/ops/routing/[^/]+", "INTEGRATION.MANAGE", "Delete an incident routing rule"),
     ("PUT", r"/api/ops/settings", "INTEGRATION.MANAGE", "Change ops incident settings"),
+    # cases (apps/api/app/cases_api.py): reads are open to everyone signed in and filtered by domain visibility; the
+    # status route needs CASE.WORK here and CASE.RESOLVE in the handler for VERIFIED, RESOLVED, CLOSED and DUPLICATE
+    ("POST", r"/api/cases/[^/]+/merge", "CASE.RESOLVE", "Merge a case into another as its duplicate"),
+    ("POST", r"/api/cases/(from-jira|from-incident|from-result)", "CASE.WORK", ""),
+    ("POST", r"/api/cases", "CASE.WORK", ""),
+    ("PUT", r"/api/cases/[^/]+", "CASE.WORK", ""),
+    ("POST", r"/api/cases/[^/]+/(assign|status|comment|links)", "CASE.WORK", ""),
+    ("DELETE", r"/api/cases/[^/]+/links/[^/]+", "CASE.WORK", ""),
     ("POST", r"/api/skills/builder/check", None, ""),
     ("POST", r"/api/skills/builder/(questions|draft|test)", "AI.USE", ""),
     ("POST", r"/api/skills", "SKILL.EDIT", "Create a skill"),

@@ -9,8 +9,9 @@ import { cn } from "@/lib/utils";
 import { connectJira, type JiraStatus } from "../jira/actions";
 import { listSuites, listTables, type Failed, type QaTable, type Suite } from "./actions";
 
-export type QaTab = "inbox" | "suites" | "triage" | "results";
-export type Access = { canEdit: boolean; canAI: boolean; canJiraRead: boolean; canJiraWrite: boolean };
+export type QaTab = "cases" | "inbox" | "suites" | "triage" | "results";
+/** canCase: CASE.WORK (open, assign, comment, link); canResolve: CASE.RESOLVE (verify, resolve, close, duplicate, merge) */
+export type Access = { canEdit: boolean; canAI: boolean; canJiraRead: boolean; canJiraWrite: boolean; canCase: boolean; canResolve: boolean };
 export type Nav = { tab: QaTab; table: string; key: string; suite: string };
 export type Go = (patch: Partial<Nav>) => void;
 

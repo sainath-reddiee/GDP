@@ -16,6 +16,8 @@ import {
   Alert, Empty, Notice, Pending, SuiteSelect, TableSelect, jiraProblem, useLive, useSeq, useSuites, useTables,
   type Access, type Go, type Nav,
 } from "./qa-shared";
+import { caseFromResult } from "./cases/actions";
+import { OpenCaseButton } from "./cases/case-ui";
 
 const failing = (r: TableResult) => r.outcome === "FAIL" || r.outcome === "ERROR";
 
@@ -31,7 +33,7 @@ export function ResultsTab({ nav, go, access, me }: { nav: Nav; go: Go; access: 
       {tablesError && <Alert>{tablesError}</Alert>}
       {nav.table ? <Results key={`${nav.table}:${nav.suite}`} tableId={nav.table} suiteId={nav.suite} access={access} me={me} go={go}
                             fqn={tables?.find((t) => t.target_table_id === nav.table)?.fqn ?? ""} />
-        : <Empty title="Pick a target table" text="The latest result of every test on it shows here. A failing test can be filed as a Jira bug." />}
+        : <Empty title="Pick a target table" text="The latest result of every test on it shows here. A failing test can be opened as a case or filed as a Jira bug." />}
     </div>
   );
 }
@@ -95,6 +97,7 @@ function Results({ tableId, suiteId, fqn, access, me, go }: { tableId: string; s
                   {(r.measured || r.expected) && <span className="mt-0.5 block text-[11px] text-muted-foreground">Measured {r.measured ?? "nothing"} · expected {r.expected ?? "not set"}</span>}
                 </button>
                 <span className="flex shrink-0 items-center gap-2">
+                  {access.canCase && failing(r) && r.result_id && <OpenCaseButton label="Open case" open={() => caseFromResult({ qa_result_id: r.result_id! })} />}
                   {access.canJiraWrite && failing(r) && <Button size="sm" variant="outline" onClick={() => setBugFor(r)}><Bug className="h-3.5 w-3.5" />Create Jira bug</Button>}
                   {access.canJiraWrite && keys.length > 0 && (
                     <Button size="sm" variant="ghost" onClick={() => setCommentFor(commentFor === r.test_id ? "" : r.test_id)}><MessageSquarePlus className="h-3.5 w-3.5" />Comment on linked ticket</Button>

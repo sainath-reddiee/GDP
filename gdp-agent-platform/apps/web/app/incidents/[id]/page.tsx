@@ -46,7 +46,7 @@ export default async function IncidentPage({ params, searchParams }: { params: {
   const env = envs.data?.envs.find((e) => e.env_id === detail.data.incident.env_id) ?? null;
   return (
     <IncidentView key={id} initial={detail.data} envName={env?.name ?? detail.data.incident.env_id}
-                  askAck={searchParams?.ack === "1"} canOperate={can(me, "OPS.OPERATE")} canAI={can(me, "AI.USE")}
+                  askAck={searchParams?.ack === "1"} canOperate={can(me, "OPS.OPERATE")} canAI={can(me, "AI.USE")} canCase={can(me, "CASE.WORK")}
                   jiraComment={canJiraWrite && !!jira?.ready && !!jira.connected}
                   jiraMe={jira?.connected?.display_name ?? me?.user ?? "you"} />
   );
