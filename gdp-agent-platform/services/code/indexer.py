@@ -122,7 +122,8 @@ def _still_mine(session, repo_id: str, run_id: str, branch: str) -> None:
 
 
 def _release(session, repo_id: str, run_id: str, status: str, error: Optional[str] = None, **fields: Any) -> None:
-    sets, params = ["LOCK_RUN_ID = NULL", "LOCKED_AT = NULL", "STATUS = ?", "ERROR = ?"], [status, error]
+    # a None parameter would be bound as the text 'None': send '' and store NULL
+    sets, params = ["LOCK_RUN_ID = NULL", "LOCKED_AT = NULL", "STATUS = ?", "ERROR = NULLIF(?, '')"], [status, error or ""]
     for column, value in fields.items():
         if column == "STATS":
             sets.append("STATS = PARSE_JSON(?)")
@@ -138,10 +139,10 @@ def _release(session, repo_id: str, run_id: str, status: str, error: Optional[st
 
 
 def _finish_run(session, run_id: str, status: str, started: float, error: Optional[str] = None, **counts: Any) -> None:
-    session.sql("""UPDATE CODE.INDEX_RUN SET STATUS = ?, FINISHED_AT = CURRENT_TIMESTAMP(), ERROR = ?, DURATION_MS = ?,
+    session.sql("""UPDATE CODE.INDEX_RUN SET STATUS = ?, FINISHED_AT = CURRENT_TIMESTAMP(), ERROR = NULLIF(?, ''), DURATION_MS = ?,
                           COMMIT_SHA = NULLIF(?, ''), FILES_SEEN = ?, FILES_CHANGED = ?, FILES_REMOVED = ?, CHUNKS = ?, EDGES = ?
                     WHERE INDEX_RUN_ID = ?""",
-                params=[status, error, int((time.time() - started) * 1000), counts.get("commit", ""), counts.get("seen", 0),
+                params=[status, error or "", int((time.time() - started) * 1000), counts.get("commit", ""), counts.get("seen", 0),
                         counts.get("changed", 0), counts.get("removed", 0), counts.get("chunks", 0), counts.get("edges", 0),
                         run_id]).collect()
 

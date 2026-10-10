@@ -147,7 +147,7 @@ def list_repos(db: Db = Depends(current_db)):
         repos = db.query(f"""WITH LAST AS (
                                  SELECT REPO_ID, OBJECT_CONSTRUCT('status', STATUS, 'started_at', STARTED_AT::VARCHAR,
                                                                   'duration_ms', DURATION_MS, 'files_changed', FILES_CHANGED,
-                                                                  'error', ERROR) AS LAST_RUN
+                                                                  'error', NULLIF(NULLIF(ERROR, 'None'), '')) AS LAST_RUN
                                    FROM CODE.INDEX_RUN QUALIFY ROW_NUMBER() OVER (PARTITION BY REPO_ID ORDER BY STARTED_AT DESC) = 1)
                                SELECT R.*, R.LAST_INDEXED_AT::VARCHAR AS LAST_INDEXED, R.CREATED_AT::VARCHAR AS CREATED, L.LAST_RUN,
                                       R.LOCK_RUN_ID IS NOT NULL AND R.LOCKED_AT >= DATEADD(minute, -{LOCK_MINUTES}, CURRENT_TIMESTAMP())
@@ -161,6 +161,8 @@ def list_repos(db: Db = Depends(current_db)):
         for k in ("domain_ids", "include_globs", "exclude_globs", "stats", "last_run", "created_objects"):
             r[k] = _json(r.get(k)) or ([] if k in ("domain_ids", "include_globs", "exclude_globs", "created_objects") else {})
         r["refreshing"] = r["repo_id"] in _refreshing
+        if r.get("error") in ("None", ""):
+            r["error"] = None  # written as text by an earlier indexer
         if r.get("status") == "INDEXING" and not r.get("lock_live"):
             # the run was killed (timeout, cancel) before it could record its end
             r["status"] = "FAILED"
@@ -516,7 +518,7 @@ def clear_schedule(repo_id: str, db: Db = Depends(current_db)):
 def index_runs(repo_id: str, db: Db = Depends(current_db)):
     return {"runs": db.query("""SELECT INDEX_RUN_ID, STATUS, STARTED_AT::VARCHAR AS STARTED_AT, FINISHED_AT::VARCHAR AS FINISHED_AT,
                                        COMMIT_SHA, FILES_SEEN, FILES_CHANGED, FILES_REMOVED, CHUNKS, EDGES, DURATION_MS,
-                                       TRIGGERED_BY, ERROR
+                                       TRIGGERED_BY, NULLIF(NULLIF(ERROR, 'None'), '') AS ERROR
                                   FROM CODE.INDEX_RUN WHERE REPO_ID = %s ORDER BY STARTED_AT DESC LIMIT 30""", (repo_id,))}
 
 
