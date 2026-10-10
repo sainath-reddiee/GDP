@@ -654,6 +654,146 @@ def dependency_path(source: str, target: str, repo_id: Optional[str] = None, db:
     return {"source": source, "target": target, "steps": _graph(db, repo_id).path(source, target)}
 
 
+MATERIALIZED = re.compile(r"materialized\s*=\s*['\"](\w+)", re.I)
+
+
+def build_catalog(chunks: list[dict], graph: Any) -> dict:
+    """dbt models (and snapshots), sources and macros of a repository with test and documentation coverage, from its
+    indexed chunks and code graph. Counts are exact: one test per test definition in schema.yml."""
+    def arr(v: Any) -> list:
+        v = _json(v) if isinstance(v, str) else v
+        return list(v or [])
+
+    schema = {str(c["name"]).upper(): c for c in chunks if c["kind"] == "DBT_SCHEMA_YML" and c.get("name")}
+    models, sources, macros = [], [], []
+    for c in chunks:
+        name = c.get("name") or ""
+        if c["kind"] in ("DBT_MODEL", "DBT_SNAPSHOT") and name:
+            entry = schema.get(name.upper())
+            tests = arr(entry["tests"]) if entry else []
+            columns = arr(c.get("columns"))
+            documented = arr(entry["columns"]) if entry else []
+            uses, impact = graph.uses(name, 1), graph.impact(name, 6)
+            models.append({
+                "name": name, "kind": "snapshot" if c["kind"] == "DBT_SNAPSHOT" else "model", "path": c["path"],
+                "line": c["start_line"], "folder": c["path"].rsplit("/", 1)[0] if "/" in c["path"] else "",
+                "materialized": (MATERIALIZED.search(c.get("text") or "") or [None, None])[1],
+                "columns": len(columns), "documented_columns": len([d for d in documented if d in set(columns)]) if columns else len(documented),
+                "schema_path": entry["path"] if entry else None, "schema_line": entry["start_line"] if entry else None,
+                "tests": len(tests), "test_list": tests[:40],
+                "refs": len(arr(c.get("refs"))), "sources": len(arr(c.get("sources"))),
+                "macros": sorted({u["name"] for u in uses if u["via"] == "MACRO_USE"}),
+                "hard_coded": sorted({u["name"] for u in uses if u["via"] == "READS"}),
+                "upstream": len(uses), "downstream": sum(1 for i in impact if i["depth"] == 1), "reach": len(impact),
+            })
+        elif c["kind"] == "DBT_SOURCE" and name:
+            tests = arr(c.get("tests"))
+            for table in arr(c.get("sources")):
+                short = table.split(".")[-1].upper()
+                sources.append({"source": name, "table": table, "path": c["path"], "line": c["start_line"],
+                                "tests": sum(1 for t in tests if ":" in t and t.split(":", 1)[1].split(".")[0] == short),
+                                "used_by": sum(1 for i in graph.impact(table, 1))})
+        elif c["kind"] == "DBT_MACRO" and name:
+            macros.append({"name": name, "path": c["path"], "line": c["start_line"],
+                           "used_by": sum(1 for i in graph.impact(name, 1))})
+    real = [m for m in models if m["kind"] == "model"]
+    return {
+        "models": sorted(models, key=lambda m: (m["folder"], m["name"])),
+        "sources": sorted(sources, key=lambda x: x["table"]),
+        "macros": sorted(macros, key=lambda m: (-m["used_by"], m["name"])),
+        "totals": {
+            "models": len(real), "snapshots": len(models) - len(real), "source_tables": len(sources), "macros": len(macros),
+            "tests": sum(m["tests"] for m in models) + sum(x["tests"] for x in sources),
+            "tested_models": sum(1 for m in real if m["tests"]), "documented_models": sum(1 for m in real if m["schema_path"]),
+            "hard_coded_models": sum(1 for m in models if m["hard_coded"]),
+            "unused_macros": sum(1 for m in macros if not m["used_by"]),
+        },
+    }
+
+
+@router.get("/api/code/repos/{repo_id}/catalog")
+def repo_catalog(repo_id: str, db: Db = Depends(current_db)):
+    """The repository's dbt catalog: models with materialization, columns, tests, documentation and lineage counts,
+    source tables and macros with usage, and coverage totals."""
+    _repo(db, repo_id)
+    chunks = db.query("""SELECT KIND, NAME, PATH, START_LINE, COLUMNS, TESTS, REFS, SOURCES,
+                                IFF(KIND IN ('DBT_MODEL', 'DBT_SNAPSHOT'), LEFT(TEXT, 2000), NULL) AS TEXT
+                           FROM CODE.CODE_CHUNK
+                          WHERE REPO_ID = %s AND KIND IN ('DBT_MODEL', 'DBT_SNAPSHOT', 'DBT_SCHEMA_YML', 'DBT_SOURCE', 'DBT_MACRO')
+                          ORDER BY PATH, START_LINE""", (repo_id,))
+    seen, unique = set(), []
+    for c in chunks:  # a long model spans several windows: keep its first
+        k = (c["kind"], c.get("name"), c["path"])
+        if k not in seen:
+            seen.add(k)
+            unique.append(c)
+    return build_catalog(unique, _graph(db, repo_id))
+
+
+@router.get("/api/code/repos/{repo_id}/files")
+def repo_files(repo_id: str, db: Db = Depends(current_db)):
+    """Indexed files with language, size, chunks and, for files that could not be read, the reason."""
+    _repo(db, repo_id)
+    files = db.query("""SELECT F.PATH, F.LANG, F.SIZE, F.SKIPPED_REASON, F.INDEXED_AT::VARCHAR AS INDEXED_AT,
+                               COUNT(C.CHUNK_ID) AS CHUNKS, ARRAY_UNIQUE_AGG(C.KIND) AS KINDS
+                          FROM CODE.CODE_FILE F
+                          LEFT JOIN CODE.CODE_CHUNK C ON C.REPO_ID = F.REPO_ID AND C.PATH = F.PATH
+                         WHERE F.REPO_ID = %s GROUP BY 1, 2, 3, 4, 5 ORDER BY F.PATH""", (repo_id,))
+    for f in files:
+        f["kinds"] = _json(f.get("kinds")) or []
+    return {"files": files}
+
+
+@router.get("/api/code/usage")
+def code_usage(repo_id: Optional[str] = None, days: int = 30, db: Db = Depends(current_db)):
+    """Where AI steps used the code: citations per stage and run, and the most cited chunks."""
+    days = max(1, min(days, 365))
+    scope = "AND U.REPO_ID = %s" if repo_id else ""
+    args: tuple = (days, *((repo_id,) if repo_id else ()))
+    recent = db.query(f"""SELECT U.RUN_ID, MAX(R.RUN_NAME) AS RUN_NAME, U.STAGE, COUNT(*) AS CITATIONS,
+                                 MAX(U.USED_AT)::VARCHAR AS LAST_USED, ARRAY_UNIQUE_AGG(C.NAME) AS NAMES
+                            FROM CODE.CODE_USAGE U
+                            LEFT JOIN CODE.CODE_CHUNK C ON C.CHUNK_ID = U.CHUNK_ID
+                            LEFT JOIN CORE.WORKFLOW_RUN R ON R.RUN_ID = U.RUN_ID
+                           WHERE U.USED_AT >= DATEADD(DAY, -%s, CURRENT_TIMESTAMP()) {scope}
+                           GROUP BY U.RUN_ID, U.STAGE ORDER BY LAST_USED DESC LIMIT 60""", args)
+    top = db.query(f"""SELECT C.NAME, C.KIND, C.PATH, C.START_LINE, U.REPO_ID, COUNT(*) AS CITATIONS
+                         FROM CODE.CODE_USAGE U JOIN CODE.CODE_CHUNK C ON C.CHUNK_ID = U.CHUNK_ID
+                        WHERE U.USED_AT >= DATEADD(DAY, -%s, CURRENT_TIMESTAMP()) {scope}
+                        GROUP BY 1, 2, 3, 4, 5 ORDER BY CITATIONS DESC LIMIT 15""", args)
+    for r in recent:
+        r["names"] = [n for n in (_json(r.get("names")) or []) if n][:8]
+    stages: dict = {}
+    for r in recent:
+        s = stages.setdefault(r["stage"], {"citations": 0, "runs": set()})
+        s["citations"] += int(r["citations"])
+        if r.get("run_id"):
+            s["runs"].add(r["run_id"])
+    return {"days": days, "recent": recent, "top": top,
+            "stages": {k: {"citations": v["citations"], "runs": len(v["runs"])} for k, v in stages.items()},
+            "citations": sum(int(r["citations"]) for r in recent), "runs": len({r["run_id"] for r in recent if r.get("run_id")})}
+
+
+@router.get("/api/code/neighborhood")
+def neighborhood(name: str, repo_id: Optional[str] = None, depth: int = 2, db: Db = Depends(current_db)):
+    """A node with what it depends on and what depends on it, `depth` hops each way, as nodes and edges for a
+    lineage diagram (upstream on the left, downstream on the right)."""
+    g = _graph(db, repo_id)
+    depth = max(1, min(depth, 4))
+    up, down = g.uses(name, depth), g.impact(name, depth)
+    nodes = [{"id": name.split(".")[-1].upper(), "name": name, "level": 0, "path": (g.where.get(name.split(".")[-1].upper()) or {}).get("path")}]
+    edges = []
+    for side, items in ((-1, up), (1, down)):
+        for n in items:
+            nid = n["name"].split(".")[-1].upper()
+            if any(x["id"] == nid for x in nodes):
+                continue
+            nodes.append({"id": nid, "name": n["name"], "level": side * n["depth"], "path": n.get("path"), "via": n["via"]})
+            parent = n["from"].split(".")[-1].upper()
+            edges.append({"from": nid, "to": parent, "via": n["via"]} if side < 0 else {"from": parent, "to": nid, "via": n["via"]})
+    return {"name": name, "known": g.knows(name), "nodes": nodes, "edges": edges}
+
+
 @router.get("/api/code/summary")
 def summary(db: Db = Depends(current_db)):
     """Per repository: dbt shape and most-used macros, its architecture from the code graph, and usage by stage in the

@@ -168,7 +168,7 @@ def architecture(files: List[Dict[str, Any]], chunk_kinds: Dict[str, int], graph
             for d in model_dirs:
                 if path.startswith(d):
                     rest = path[len(d):].split("/")
-                    layers[rest[0] if len(rest) > 1 else "(top)"] += 1
+                    layers["/".join(rest[:-1]) if len(rest) > 1 else "(top)"] += 1  # the model's folder, subfolders kept
     hard_coded = sorted({(s["node"], k) for k, steps in graph.deps.items() for s in steps if s["kind"] == "READS"})
     models = {key(n) for n, steps in graph.deps.items() if any(s["kind"] in ("REF", "SOURCE") for s in steps)}
     orphans = sorted(graph.label.get(m, m) for m in models if not graph.users.get(m))
