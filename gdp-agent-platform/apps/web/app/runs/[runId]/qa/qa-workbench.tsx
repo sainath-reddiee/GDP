@@ -132,7 +132,7 @@ function TestCard({ runId, test, result, history, open, onToggle, selected, onSe
   const [severity, setSeverity] = useState(test.severity);
   const [error, setError] = useState("");
   const [busy, start] = useTransition();
-  const saved = test.origin !== "GENERATED" && canEdit;
+  const saved = test.origin !== "GENERATED" && test.scope !== "TABLE" && canEdit;
   const failing = result && (result.outcome === "FAIL" || result.outcome === "ERROR");
 
   const run = () => start(async () => {
@@ -162,6 +162,7 @@ function TestCard({ runId, test, result, history, open, onToggle, selected, onSe
         <button type="button" onClick={onToggle} aria-expanded={open} className="min-w-0 flex-1 text-left">
           <span className="flex flex-wrap items-center gap-2">
             <span className="font-medium">{test.title}</span>
+            {test.scope === "TABLE" && <Badge variant="outline" className="text-[10px]" title="A domain suite test on this table: edit it in the QA workspace">Domain suite</Badge>}
             {test.origin !== "GENERATED" && (
               <Badge variant="outline" className="gap-1 text-[10px]">{test.origin === "AI" && <Sparkles className="h-3 w-3" />}{test.origin === "AI" ? "AI" : "Saved"}</Badge>
             )}

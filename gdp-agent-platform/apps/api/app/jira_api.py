@@ -3,9 +3,12 @@ write is made as them and Jira's own permissions apply.
 
 Setup on the API host (never in the database or the browser):
   JIRA_CLIENT_SECRET  the OAuth app's secret
-  JIRA_TOKEN_KEY      a long random value; refresh tokens are stored ENCRYPTed with it
+  JIRA_TOKEN_KEY      a long random value; refresh and access tokens are stored ENCRYPTed with it
   JIRA_CLIENT_ID      optional; can also be set in Admin, Integrations, Jira
-Refresh tokens rotate on every use and the new one replaces the stored one. Access tokens live in memory only.
+Refresh tokens rotate on every use and the new one replaces the stored one. Several API replicas share one
+USER_TOKEN row, so a refresh is guarded by a lease on that row (compare-and-swap on TOKEN_VERSION): one replica
+refreshes and stores both tokens, the others wait for the new version and use the stored access token. Without that,
+the losing replica would present a refresh token Atlassian just rotated away and disconnect a valid account.
 """
 
 from __future__ import annotations
@@ -14,6 +17,7 @@ import json
 import os
 import re
 import secrets
+import socket
 import threading
 import time
 import uuid
@@ -41,6 +45,10 @@ PREVIEW_BYTES = 256 * 1024
 NOT_CONNECTED = 428
 _access: dict[tuple[str, str], tuple[str, float]] = {}   # (user, cloud) -> (access token, expiry)
 _locks: dict[str, threading.Lock] = {}
+_REPLICA = f"{socket.gethostname()[:40]}:{os.getpid()}"
+LEASE_WAIT = 10.0   # seconds a replica waits for another one's refresh
+LEASE_POLL = 0.5
+_sleep = time.sleep
 
 
 # ---------------------------------------------------------------- plumbing
@@ -114,7 +122,25 @@ def _key(key: str) -> str:
         raise HTTPException(400, str(exc)) from None
 
 
-def _store_refresh(db: Db, user: str, cloud_id: str, refresh_token: str, **fields: Any) -> None:
+def _missing_column(exc: BaseException) -> bool:
+    """True when V028 (stored access token, version and lease columns) is not applied to this database yet."""
+    return "invalid identifier" in str(exc).lower()
+
+
+def _store_access(db: Db, user: str, cloud_id: str, access_token: str, expires_in: int) -> None:
+    """Share a fresh access token with the other replicas and start a new token version (after a sign-in)."""
+    try:
+        db.execute("""UPDATE JIRA.USER_TOKEN SET ACCESS_TOKEN = ENCRYPT(%s, %s),
+                             ACCESS_EXPIRES_AT = DATEADD(second, %s, CURRENT_TIMESTAMP()),
+                             TOKEN_VERSION = COALESCE(TOKEN_VERSION, 0) + 1, LEASE_BY = NULL, LEASE_UNTIL = NULL
+                       WHERE USER_NAME = %s AND CLOUD_ID = %s""", (access_token, _token_key(), int(expires_in), user, cloud_id))
+    except Exception as exc:
+        if not _missing_column(exc):
+            raise
+
+
+def _store_refresh(db: Db, user: str, cloud_id: str, refresh_token: str, access_token: str = "", expires_in: int = 3600,
+                   **fields: Any) -> None:
     key = _token_key()
     db.execute("""MERGE INTO JIRA.USER_TOKEN T USING (SELECT %s AS USER_NAME, %s AS CLOUD_ID) S
                     ON T.USER_NAME = S.USER_NAME AND T.CLOUD_ID = S.CLOUD_ID
@@ -126,6 +152,8 @@ def _store_refresh(db: Db, user: str, cloud_id: str, refresh_token: str, **field
                (user, cloud_id, refresh_token, key, fields.get("site_url", ""), fields.get("account_id", ""), fields.get("display_name", ""),
                 fields.get("scopes", ""), fields.get("site_url", ""), fields.get("account_id", ""), fields.get("display_name", ""),
                 refresh_token, key, fields.get("scopes", "")))
+    if access_token:
+        _store_access(db, user, cloud_id, access_token, expires_in)
 
 
 def _connection(db: Db, cfg: dict) -> Optional[dict]:
@@ -149,25 +177,138 @@ def _client(db: Db) -> tuple[JiraClient, dict, dict]:
         raise HTTPException(NOT_CONNECTED, "Connect your Jira account first.")
     cache_key = (db.user, conn["cloud_id"])
     lock = _locks.setdefault(db.user, threading.Lock())
-    with lock:
+    with lock:   # first tier: one refresh per user inside this process
         token, expires = _access.get(cache_key, ("", 0.0))
         if not token or expires - time.time() < 60:
-            found = db.query("""SELECT TO_VARCHAR(DECRYPT(REFRESH_TOKEN, %s), 'UTF-8') AS T FROM JIRA.USER_TOKEN
-                                 WHERE USER_NAME = %s AND CLOUD_ID = %s""", (_token_key(), db.user, conn["cloud_id"]))
-            if not found or not found[0].get("t"):
-                raise HTTPException(NOT_CONNECTED, "Your Jira connection could not be read; connect again.")
-            try:
-                tokens = refresh_tokens(_http, cfg["client_id"], _secret(), found[0]["t"])
-            except JiraError as exc:
-                if exc.status in (400, 401, 403):
-                    db.execute("DELETE FROM JIRA.USER_TOKEN WHERE USER_NAME = %s AND CLOUD_ID = %s", (db.user, conn["cloud_id"]))
-                    raise HTTPException(NOT_CONNECTED, "Your Jira sign-in has expired or was revoked; connect again.") from None
-                raise _jira_error(exc) from None
-            if tokens.get("refresh_token"):
-                _store_refresh(db, db.user, conn["cloud_id"], tokens["refresh_token"])  # rotated: the old one is now dead
-            token, expires = tokens["access_token"], time.time() + int(tokens.get("expires_in") or 3600)
+            token, expires = _shared_token(db, cfg, conn["cloud_id"])
             _access[cache_key] = (token, expires)
     return JiraClient(_http, conn["cloud_id"], token), conn, cfg
+
+
+REVOKED = "Your Jira sign-in has expired or was revoked; connect again."
+_ROW_SQL = """SELECT TO_VARCHAR(DECRYPT(REFRESH_TOKEN, %s), 'UTF-8') AS T,
+                     IFF(ACCESS_TOKEN IS NULL, NULL, TO_VARCHAR(DECRYPT(ACCESS_TOKEN, %s), 'UTF-8')) AS A,
+                     DATEDIFF(second, CURRENT_TIMESTAMP(), ACCESS_EXPIRES_AT) AS TTL, COALESCE(TOKEN_VERSION, 0) AS V,
+                     (LEASE_UNTIL IS NOT NULL AND LEASE_UNTIL >= CURRENT_TIMESTAMP()) AS LEASED
+                FROM JIRA.USER_TOKEN WHERE USER_NAME = %s AND CLOUD_ID = %s"""
+
+
+def _token_row(db: Db, cloud_id: str) -> Optional[dict]:
+    key = _token_key()
+    rows = db.query(_ROW_SQL, (key, key, db.user, cloud_id))
+    return rows[0] if rows else None
+
+
+def _usable(row: Optional[dict]) -> Optional[tuple[str, float]]:
+    """The stored access token and its expiry, when it is valid for more than a minute."""
+    ttl = int((row or {}).get("ttl") or 0)
+    if row and row.get("a") and ttl > 60:
+        return row["a"], time.time() + ttl
+    return None
+
+
+def _shared_token(db: Db, cfg: dict, cloud_id: str) -> tuple[str, float]:
+    """Second tier, across replicas: use the stored access token while it is valid; otherwise claim the row's lease
+    (compare-and-swap on TOKEN_VERSION) and refresh, or wait for the replica that holds it."""
+    try:
+        row = _token_row(db, cloud_id)
+    except Exception as exc:
+        if _missing_column(exc):
+            return _refresh_legacy(db, cfg, cloud_id)
+        raise
+    if not row or not row.get("t"):
+        raise HTTPException(NOT_CONNECTED, "Your Jira connection could not be read; connect again.")
+    usable = _usable(row)
+    if usable:
+        return usable
+    version = int(row.get("v") or 0)
+    me = f"{_REPLICA}:{uuid.uuid4().hex[:12]}"
+    claimed = db.execute_count("""UPDATE JIRA.USER_TOKEN SET LEASE_BY = %s, LEASE_UNTIL = DATEADD(second, 30, CURRENT_TIMESTAMP())
+                                   WHERE USER_NAME = %s AND CLOUD_ID = %s AND COALESCE(TOKEN_VERSION, 0) = %s
+                                     AND (LEASE_UNTIL IS NULL OR LEASE_UNTIL < CURRENT_TIMESTAMP())""",
+                               (me, db.user, cloud_id, version))
+    if not claimed:
+        return _wait_for_refresh(db, cloud_id, version)
+    return _refresh_with_lease(db, cfg, cloud_id, version, me)
+
+
+def _release(db: Db, cloud_id: str, me: str) -> None:
+    try:
+        db.execute_count("UPDATE JIRA.USER_TOKEN SET LEASE_BY = NULL, LEASE_UNTIL = NULL WHERE USER_NAME = %s AND CLOUD_ID = %s AND LEASE_BY = %s",
+                         (db.user, cloud_id, me))
+    except Exception:
+        pass   # the lease runs out on its own after 30 seconds
+
+
+def _refresh_with_lease(db: Db, cfg: dict, cloud_id: str, version: int, me: str) -> tuple[str, float]:
+    """This replica holds the lease: refresh, store both tokens as the next version and free the lease."""
+    try:
+        row = _token_row(db, cloud_id)   # read again under the lease: a sign-in may have replaced the refresh token
+        if not row or not row.get("t"):
+            raise HTTPException(NOT_CONNECTED, "Your Jira connection could not be read; connect again.")
+        tokens = refresh_tokens(_http, cfg["client_id"], _secret(), row["t"])
+    except JiraError as exc:
+        if exc.status in (400, 401, 403):
+            # revoked, unless another replica rotated the token after our lease ran out: only our own version goes
+            gone = db.execute_count("""DELETE FROM JIRA.USER_TOKEN WHERE USER_NAME = %s AND CLOUD_ID = %s
+                                          AND COALESCE(TOKEN_VERSION, 0) = %s AND LEASE_BY = %s""", (db.user, cloud_id, version, me))
+            if not gone:
+                usable = _usable(_token_row(db, cloud_id))
+                if usable:
+                    return usable
+            raise HTTPException(NOT_CONNECTED, REVOKED) from None
+        _release(db, cloud_id, me)
+        raise _jira_error(exc) from None
+    except BaseException:
+        _release(db, cloud_id, me)
+        raise
+    expires_in = int(tokens.get("expires_in") or 3600)
+    key = _token_key()
+    stored = db.execute_count("""UPDATE JIRA.USER_TOKEN SET REFRESH_TOKEN = COALESCE(ENCRYPT(NULLIF(%s, ''), %s), REFRESH_TOKEN),
+                                        ACCESS_TOKEN = ENCRYPT(%s, %s), ACCESS_EXPIRES_AT = DATEADD(second, %s, CURRENT_TIMESTAMP()),
+                                        TOKEN_VERSION = COALESCE(TOKEN_VERSION, 0) + 1, LEASE_BY = NULL, LEASE_UNTIL = NULL,
+                                        UPDATED_AT = CURRENT_TIMESTAMP()
+                                  WHERE USER_NAME = %s AND CLOUD_ID = %s AND LEASE_BY = %s""",
+                              (tokens.get("refresh_token") or "", key, tokens["access_token"], key, expires_in, db.user, cloud_id, me))
+    if not stored:
+        _log(db, "-", "TOKEN", "FAILED", cloud_id=cloud_id, error="the token lease ran out before the refreshed token was stored")
+    return tokens["access_token"], time.time() + expires_in
+
+
+def _wait_for_refresh(db: Db, cloud_id: str, version: int) -> tuple[str, float]:
+    """Another replica holds the lease: wait for the version it stores, then use its access token."""
+    waited = 0.0
+    while waited < LEASE_WAIT:
+        _sleep(LEASE_POLL)
+        waited += LEASE_POLL
+        row = _token_row(db, cloud_id)
+        if not row:
+            raise HTTPException(NOT_CONNECTED, REVOKED)
+        if int(row.get("v") or 0) > version:
+            usable = _usable(row)
+            if usable:
+                return usable
+        elif not row.get("leased"):
+            break   # the other replica gave up without a new token
+    raise HTTPException(503, "Your Jira sign-in is being refreshed by another request; try again in a moment.")
+
+
+def _refresh_legacy(db: Db, cfg: dict, cloud_id: str) -> tuple[str, float]:
+    """Before V028: refresh under the in-process lock only."""
+    found = db.query("""SELECT TO_VARCHAR(DECRYPT(REFRESH_TOKEN, %s), 'UTF-8') AS T FROM JIRA.USER_TOKEN
+                         WHERE USER_NAME = %s AND CLOUD_ID = %s""", (_token_key(), db.user, cloud_id))
+    if not found or not found[0].get("t"):
+        raise HTTPException(NOT_CONNECTED, "Your Jira connection could not be read; connect again.")
+    try:
+        tokens = refresh_tokens(_http, cfg["client_id"], _secret(), found[0]["t"])
+    except JiraError as exc:
+        if exc.status in (400, 401, 403):
+            db.execute("DELETE FROM JIRA.USER_TOKEN WHERE USER_NAME = %s AND CLOUD_ID = %s", (db.user, cloud_id))
+            raise HTTPException(NOT_CONNECTED, REVOKED) from None
+        raise _jira_error(exc) from None
+    if tokens.get("refresh_token"):
+        _store_refresh(db, db.user, cloud_id, tokens["refresh_token"])  # rotated: the old one is now dead
+    return tokens["access_token"], time.time() + int(tokens.get("expires_in") or 3600)
 
 
 def _web_base(cfg: dict) -> str:
@@ -264,7 +405,8 @@ def callback(body: CallbackIn, db: Db = Depends(current_db)):
         raise HTTPException(400 if exc.status in (400, 401) else 502, exc.message) from None
     if not tokens.get("refresh_token"):
         raise HTTPException(400, "Atlassian did not return a refresh token; the app needs the offline_access scope.")
-    _store_refresh(db, db.user, site["id"], tokens["refresh_token"], site_url=site.get("url", ""), account_id=me.get("accountId", ""),
+    _store_refresh(db, db.user, site["id"], tokens["refresh_token"], access_token=tokens["access_token"],
+                   expires_in=int(tokens.get("expires_in") or 3600), site_url=site.get("url", ""), account_id=me.get("accountId", ""),
                    display_name=me.get("displayName", ""), scopes=json.dumps(str(tokens.get("scope") or "").split()))
     _access[(db.user, site["id"])] = (tokens["access_token"], time.time() + int(tokens.get("expires_in") or 3600))
     _log(db, "-", "CONNECT", "DONE", cloud_id=site["id"], detail_={"site": site.get("url")})
