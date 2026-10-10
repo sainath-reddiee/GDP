@@ -9,15 +9,17 @@ run); this router only validates input, calls it on the caller's session and map
 from __future__ import annotations
 
 import importlib
+import json
 from functools import partial
 from typing import Any, Callable, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
+from app import jira_api as jira
 from app.db import Db
 from app.main import _json, _snowflake_error, current_db
-from app.source_invoke import invoke_source
+from app.source_invoke import USE_CALLER, invoke_source
 
 router = APIRouter()
 # context keys worth showing in the workspace; the rest (STTM lines, prompt text, code context) can be large
@@ -202,3 +204,144 @@ def suite_delete(suite_id: str, db: Db = Depends(current_db)):
 def suite_run(suite_id: str, body: SuiteRunIn, db: Db = Depends(current_db)):
     result = _call(db, _svc("run").run_scope, suite_id=suite_id, test_ids=body.test_ids, triggered_by="UI")
     return {k: v for k, v in (result or {}).items() if k != "results"}
+
+
+# ---------------------------------------------------------------- Jira tickets: which table, triage, links
+
+def _proc(db: Db, proc: str, handler: Callable[..., Any], *args: Any) -> Any:
+    """A JIRA procedure: its Python handler on the caller's session in caller mode, otherwise the procedure."""
+    if USE_CALLER:
+        result = _call(db, handler, *args)
+    else:
+        try:
+            result = db.call(proc, args)
+        except Exception as exc:
+            raise _snowflake_error(exc) from exc
+    return _json(result) if isinstance(result, str) else result
+
+
+class ResolveIn(BaseModel):
+    key: str = Field(min_length=3, max_length=64)
+
+
+def _ticket_links(db: Db, key: str) -> list[dict]:
+    try:
+        return db.query("""SELECT RUN_ID, TARGET_TABLE, TARGET_TABLE_ID, SUITE_ID, QA_TEST_ID FROM JIRA.ISSUE_LINK
+                            WHERE ISSUE_KEY = %s AND NOT IS_DELETED""", (key,))
+    except Exception as exc:
+        if "invalid identifier" not in str(exc).lower():
+            raise _snowflake_error(exc) from exc
+        return db.query("SELECT RUN_ID, TARGET_TABLE, QA_TEST_ID FROM JIRA.ISSUE_LINK WHERE ISSUE_KEY = %s AND NOT IS_DELETED", (key,))
+
+
+@router.post("/api/qa/triage/resolve")
+def triage_resolve(body: ResolveIn, db: Db = Depends(current_db)):
+    """The target tables a ticket is likely about (linked, named in it, then ranked by AI) and every run linked to it.
+    The engineer picks the table; nothing is saved."""
+    from services.jira.triage import resolve_entry
+
+    client, conn, _ = jira._client(db)
+    key = jira._key(body.key)
+    info, payload = jira._issue_payload(client, conn, key)
+    linked = [{k: v for k, v in r.items() if v} for r in _ticket_links(db, key)]
+    result = _proc(db, "CALL JIRA.RESOLVE_TARGETS(%s)", resolve_entry, json.dumps({"issue": payload, "linked": linked}, default=str)) or {}
+    return {"key": key, "summary": info.get("summary") or "", "candidates": result.get("candidates") or [],
+            "runs": result.get("runs") or [], "model": result.get("model")}
+
+
+@router.post("/api/qa/tables/{target_table_id}/triage/{key}")
+def table_triage(target_table_id: str, key: str, db: Db = Depends(current_db)):
+    """Diagnosis of a ticket against a target table, with guarded, compiled tests to reproduce it (not saved)."""
+    from services.jira.triage import triage_table_entry
+
+    client, conn, _ = jira._client(db)
+    info, payload = jira._issue_payload(client, conn, key)
+    try:
+        result = _proc(db, "CALL JIRA.TRIAGE_TABLE(%s, %s)", triage_table_entry, target_table_id, json.dumps(payload, default=str))
+    except HTTPException as exc:
+        jira._log(db, info["key"], "TRIAGE", "FAILED", conn["cloud_id"], None, {"target_table_id": target_table_id}, str(exc.detail)[:500])
+        raise
+    result = result or {}
+    jira._log(db, info["key"], "TRIAGE", "DONE", conn["cloud_id"], None,
+              {"target_table_id": target_table_id, "tests": len(result.get("tests") or []), "reproducible": result.get("reproducible")})
+    return result
+
+
+class QaLinkIn(BaseModel):
+    key: str = Field(min_length=3, max_length=64)
+    target_table_id: Optional[str] = Field(default=None, max_length=36)
+    suite_id: Optional[str] = Field(default=None, max_length=36)
+    test_id: Optional[str] = Field(default=None, max_length=64)
+    run_id: Optional[str] = Field(default=None, max_length=36)
+    remote_link: bool = False
+
+
+LINK_SQL = """SELECT L.LINK_ID, L.ISSUE_KEY, L.RUN_ID, L.TARGET_TABLE_ID, L.SUITE_ID, L.QA_TEST_ID, T.TITLE AS TEST_TITLE,
+                     L.DOMAIN_ID, L.TARGET_TABLE, L.SUMMARY, L.STATUS, L.STATUS_CATEGORY, COALESCE(L.ORIGIN, 'LINK') AS ORIGIN,
+                     COALESCE(L.ISSUE_STATE, 'OK') AS ISSUE_STATE, L.LINKED_BY, L.LINKED_AT::VARCHAR AS LINKED_AT
+                FROM JIRA.ISSUE_LINK L LEFT JOIN CONTRACT.QA_TEST_CASE T ON T.TEST_ID = L.QA_TEST_ID
+               WHERE NOT L.IS_DELETED AND {where}
+               ORDER BY L.LINKED_AT DESC LIMIT 500"""
+
+
+def _with_urls(db: Db, rows: list[dict]) -> list[dict]:
+    site = (jira._config(db).get("site_url") or "").rstrip("/")
+    for r in rows:
+        r["url"] = f"{site}/browse/{r['issue_key']}" if site else None
+    return rows
+
+
+@router.post("/api/qa/links")
+def link_create(body: QaLinkIn, db: Db = Depends(current_db)):
+    """Link a ticket to a table, suite, test or run (once). With remote_link, Jira also gets a link back here."""
+    client, conn, cfg = jira._client(db)
+    key = jira._key(body.key)
+    target = jira._link_target(db, body.target_table_id, body.suite_id, body.test_id, body.run_id)
+    try:
+        issue = jira.summary(client.issue(key), conn.get("site_url") or "")
+    except jira.JiraError as exc:
+        raise jira._jira_error(exc) from None
+    link_id, already = jira._save_link(
+        db, key, conn["cloud_id"], issue, run_id=target["run_id"], qa_test_id=target["qa_test_id"], target_table=target["target_table"],
+        target_table_id=target["target_table_id"], suite_id=target["suite_id"], domain_id=target["domain_id"],
+        issue_id=issue.get("id"), status_category=issue.get("status_category"))
+    remote = None
+    if body.remote_link:
+        if target["target_table_id"]:
+            url = jira._qa_url(cfg, target["target_table_id"], target["suite_id"])
+            kind, ident = next((k, target[f]) for k, f in (("test", "qa_test_id"), ("suite", "suite_id"), ("table", "target_table_id"))
+                               if target[f])
+            title = f"QA {kind}: {target['target_table'] or ident}"
+            remote = jira._remote_link(db, client, conn["cloud_id"], key, url, title, f"gdp:qa:{kind}:{ident}", target["run_id"])
+        elif not target["run_id"]:
+            remote = "not added: nothing in the platform to link back to"
+        else:
+            remote = jira._remote_link(db, client, conn["cloud_id"], key, f"{jira._web_base(cfg)}/runs/{target['run_id']}/qa",
+                                       f"QA run: {target['run_name']}", f"agentic-pipeline:run:{target['run_id']}", target["run_id"])
+    found = db.query(LINK_SQL.format(where="L.LINK_ID = %s"), (link_id,))
+    row = _with_urls(db, found)[0] if found else {"link_id": link_id, "issue_key": key}
+    return {**row, "already": already, "remote_link": remote}
+
+
+@router.get("/api/qa/links")
+def links(target_table_id: Optional[str] = None, key: Optional[str] = None, db: Db = Depends(current_db)):
+    """Jira links of a table and/or a ticket."""
+    if not target_table_id and not key:
+        raise HTTPException(400, "target_table_id or key is required")
+    issue_key = jira._key(key) if key else ""
+    try:
+        found = db.query(LINK_SQL.format(where="(%s = '' OR L.TARGET_TABLE_ID = %s) AND (%s = '' OR L.ISSUE_KEY = %s)"),
+                         (target_table_id or "", target_table_id or "", issue_key, issue_key))
+    except Exception as exc:
+        raise _snowflake_error(exc) from exc
+    return {"links": _with_urls(db, found)}
+
+
+@router.delete("/api/qa/links/{link_id}")
+def link_delete(link_id: str, db: Db = Depends(current_db)):
+    found = db.query("SELECT ISSUE_KEY, CLOUD_ID, RUN_ID FROM JIRA.ISSUE_LINK WHERE LINK_ID = %s AND NOT IS_DELETED", (link_id,))
+    if not found:
+        raise HTTPException(404, "link not found")
+    db.execute("UPDATE JIRA.ISSUE_LINK SET IS_DELETED = TRUE WHERE LINK_ID = %s", (link_id,))
+    jira._log(db, found[0]["issue_key"], "UNLINK", "DONE", found[0].get("cloud_id"), found[0].get("run_id"), {"link_id": link_id})
+    return {"unlinked": link_id}

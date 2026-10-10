@@ -13,6 +13,8 @@ the losing replica would present a refresh token Atlassian just rotated away and
 
 from __future__ import annotations
 
+import hashlib
+import importlib
 import json
 import os
 import re
@@ -21,19 +23,19 @@ import socket
 import threading
 import time
 import uuid
-from typing import Any, Optional
-from urllib.parse import urlparse
+from typing import Any, Callable, Literal, Optional
+from urllib.parse import quote, urlparse
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from app.db import Db
 from app.main import _json, _set_config, _snowflake_error, _source_call, current_db
 from services.jira import adf
 from services.jira.client import (
-    JiraClient, JiraError, accessible_resources, authorize_url, check_key, detail, exchange_code, jql_string, pick_site,
-    refresh_tokens, summary,
+    AGILE_SCOPES, JiraClient, JiraError, accessible_resources, authorize_url, check_key, check_project, detail, exchange_code,
+    jql_string, pick_site, refresh_tokens, summary,
 )
 
 router = APIRouter()
@@ -49,17 +51,21 @@ _REPLICA = f"{socket.gethostname()[:40]}:{os.getpid()}"
 LEASE_WAIT = 10.0   # seconds a replica waits for another one's refresh
 LEASE_POLL = 0.5
 _sleep = time.sleep
+RECONNECT_AGILE = "Reconnect Jira to read boards and sprints"
+TRIAGE_ATTACHMENT_BYTES = 64 * 1024
+BULK_MAX = 50
 
 
 # ---------------------------------------------------------------- plumbing
 
-def _http(method: str, url: str, headers: dict, body: Optional[dict]) -> tuple[int, Any]:
+def _http(method: str, url: str, headers: dict, body: Optional[dict]) -> tuple[int, Any, dict]:
     with httpx.Client(timeout=25, follow_redirects=False) as client:
         r = client.request(method, url, headers=headers, json=body)
+    answer = {k: v for k, v in r.headers.items() if k.lower() == "retry-after"}
     try:
-        return r.status_code, r.json()
+        return r.status_code, r.json(), answer
     except ValueError:
-        return r.status_code, r.text
+        return r.status_code, r.text, answer
 
 
 def _config(db: Db) -> dict:
@@ -97,20 +103,28 @@ def _ready(cfg: dict) -> None:
 
 
 def _log(db: Db, issue_key: str, action: str, status: str, cloud_id: Optional[str] = None, run_id: Optional[str] = None,
-         detail_: Optional[dict] = None, error: Optional[str] = None) -> None:
+         detail_: Optional[dict] = None, error: Optional[str] = None, idempotency_key: Optional[str] = None) -> None:
+    extra, value = (", IDEMPOTENCY_KEY", ", %s") if idempotency_key else ("", "")
+    params = (str(uuid.uuid4()), issue_key, cloud_id or "", run_id or "", action, json.dumps(detail_ or {}), status, (error or "")[:2000])
     try:
-        db.execute("""INSERT INTO JIRA.ACTION_LOG (ACTION_ID, ISSUE_KEY, CLOUD_ID, RUN_ID, ACTION, DETAIL, STATUS, ERROR)
-                      SELECT %s, %s, NULLIF(%s, ''), NULLIF(%s, ''), %s, PARSE_JSON(%s), %s, NULLIF(%s, '')""",
-                   (str(uuid.uuid4()), issue_key, cloud_id or "", run_id or "", action, json.dumps(detail_ or {}), status, (error or "")[:2000]))
+        db.execute(f"""INSERT INTO JIRA.ACTION_LOG (ACTION_ID, ISSUE_KEY, CLOUD_ID, RUN_ID, ACTION, DETAIL, STATUS, ERROR{extra})
+                       SELECT %s, %s, NULLIF(%s, ''), NULLIF(%s, ''), %s, PARSE_JSON(%s), %s, NULLIF(%s, ''){value}""",
+                   params + ((idempotency_key,) if idempotency_key else ()))
     except Exception:
         pass
 
 
 def _jira_error(exc: JiraError) -> HTTPException:
+    if exc.status == 400:   # bad JQL and the like: Jira's own message is the useful part
+        return HTTPException(400, f"Jira: {exc.message}")
     if exc.status in (401, 403):
         return HTTPException(403, f"Jira refused this as your account: {exc.message}")
     if exc.status == 404:
         return HTTPException(404, f"Not found in Jira, or you cannot see it: {exc.message}")
+    if exc.status in (429, 503):
+        wait = exc.retry_after if exc.retry_after is not None else 30
+        what = "Jira is limiting requests" if exc.status == 429 else "Jira is unavailable"
+        return HTTPException(exc.status, f"{what}; try again in {wait} seconds.", headers={"Retry-After": str(wait)})
     return HTTPException(502, f"Jira: {exc.message}")
 
 
@@ -159,8 +173,10 @@ def _store_refresh(db: Db, user: str, cloud_id: str, refresh_token: str, access_
 def _connection(db: Db, cfg: dict) -> Optional[dict]:
     """The signed-in user's Jira connection for the configured site (the latest one when no site is configured)."""
     rows = db.query("""SELECT CLOUD_ID, SITE_URL, ACCOUNT_ID, DISPLAY_NAME, CONNECTED_AT::VARCHAR AS CONNECTED_AT,
-                              UPDATED_AT::VARCHAR AS UPDATED_AT
+                              UPDATED_AT::VARCHAR AS UPDATED_AT, SCOPES
                          FROM JIRA.USER_TOKEN WHERE USER_NAME = %s ORDER BY UPDATED_AT DESC""", (db.user,))
+    for r in rows:
+        r["scopes"] = [str(s) for s in _json(r.get("scopes")) or []]
     site = (cfg.get("site_url") or "").lower().rstrip("/")
     for r in rows:
         if not site or (r.get("site_url") or "").lower().rstrip("/") == site:
@@ -425,6 +441,11 @@ def disconnect(db: Db = Depends(current_db)):
 
 # ---------------------------------------------------------------- issues
 
+def _mine_where(project: str) -> list[str]:
+    """JQL conditions for "open issues assigned to me", optionally in one project."""
+    return ["assignee = currentUser()", "statusCategory != Done"] + ([f"project = {project}"] if project else [])
+
+
 @router.get("/api/jira/issues")
 def issues(scope: str = "mine", q: str = "", project: str = "", run_id: Optional[str] = None, db: Db = Depends(current_db)):
     """Issues for the QA workbench: assigned to me (open), linked to a run, or a search by key or text."""
@@ -452,9 +473,7 @@ def issues(scope: str = "mine", q: str = "", project: str = "", run_id: Optional
             if project:
                 where.append(f"project = {project}")
     else:
-        where += ["assignee = currentUser()", "statusCategory != Done"]
-        if project:
-            where.append(f"project = {project}")
+        where += _mine_where(project)
     jql = " AND ".join(where) + " ORDER BY updated DESC"
     try:
         found = client.search(jql, page_size=50, max_pages=2 if scope != "run" else 3)
@@ -532,6 +551,97 @@ class LinkIn(BaseModel):
     remote_link: bool = False
 
 
+LINK_SCOPE = ("target_table_id", "suite_id", "domain_id", "origin", "source_result_id", "issue_id", "status_category")
+
+
+def _save_link(db: Db, key: str, cloud_id: str, issue: dict, run_id: Optional[str] = None, qa_test_id: Optional[str] = None,
+               target_table: Optional[str] = None, **scope: Any) -> tuple[str, bool]:
+    """(link id, already linked). Links a run, test, table or suite to an issue once. Run-only links use the columns
+    from V027 only; table, suite, origin and issue id columns (V028) are written when given."""
+    extra = {k: scope[k] for k in LINK_SCOPE if scope.get(k)}
+    table_scoped = bool(scope.get("target_table_id") or scope.get("suite_id"))
+    where = "ISSUE_KEY = %s AND NOT IS_DELETED AND COALESCE(RUN_ID, '') = %s AND COALESCE(QA_TEST_ID, '') = %s"
+    params: tuple = (key, run_id or "", qa_test_id or "")
+    if table_scoped:
+        where += " AND COALESCE(TARGET_TABLE_ID, '') = %s AND COALESCE(SUITE_ID, '') = %s"
+        params += (scope.get("target_table_id") or "", scope.get("suite_id") or "")
+    if scope.get("origin"):
+        where += " AND COALESCE(ORIGIN, 'LINK') = %s"
+        params += (scope["origin"],)
+    exists = db.query(f"SELECT LINK_ID FROM JIRA.ISSUE_LINK WHERE {where} LIMIT 1", params)
+    if exists:
+        return exists[0]["link_id"], True
+    link_id = str(uuid.uuid4())
+    columns = ["LINK_ID", "ISSUE_KEY", "CLOUD_ID", "RUN_ID", "QA_TEST_ID", "TARGET_TABLE", "SUMMARY", "STATUS"] + [k.upper() for k in extra]
+    values = ["%s", "%s", "%s", "NULLIF(%s, '')", "NULLIF(%s, '')", "NULLIF(%s, '')", "%s", "%s"] + ["%s"] * len(extra)
+    db.execute(f"INSERT INTO JIRA.ISSUE_LINK ({', '.join(columns)}) VALUES ({', '.join(values)})",
+               (link_id, key, cloud_id, run_id or "", qa_test_id or "", target_table or "", (issue.get("summary") or "")[:1000],
+                issue.get("status") or "") + tuple(str(v) for v in extra.values()))
+    _log(db, key, "LINK", "DONE", cloud_id, run_id, {"qa_test_id": qa_test_id, **{k: v for k, v in extra.items() if k != "issue_id"}})
+    return link_id, False
+
+
+def _remote_link(db: Db, client: JiraClient, cloud_id: str, key: str, url: str, title: str, global_id: str,
+                 run_id: Optional[str] = None) -> str:
+    """A link from the issue back to the platform (Jira keeps one per globalId); a failure is reported, not raised."""
+    try:
+        client.remote_link(key, url, title, global_id)
+    except JiraError as exc:
+        _log(db, key, "REMOTE_LINK", "FAILED", cloud_id, run_id, error=exc.message)
+        return f"not added: {exc.message}"
+    _log(db, key, "REMOTE_LINK", "DONE", cloud_id, run_id, {"url": url})
+    return "added"
+
+
+def _qa_url(cfg: dict, target_table_id: str, suite_id: Optional[str] = None) -> str:
+    url = f"{_web_base(cfg)}/qa?tab=results&table={quote(target_table_id, safe='')}"
+    return url + (f"&suite={quote(suite_id, safe='')}" if suite_id else "")
+
+
+def _link_target(db: Db, target_table_id: Optional[str] = None, suite_id: Optional[str] = None, test_id: Optional[str] = None,
+                 run_id: Optional[str] = None) -> dict:
+    """What a link points at, completed and checked: a test brings its table and suite, a suite its table, a table its
+    domain and name, a run its name and target. 404 when something does not exist, 400 when the parts disagree."""
+    out: dict = {"target_table_id": target_table_id or None, "suite_id": suite_id or None, "qa_test_id": test_id or None,
+                 "run_id": run_id or None, "domain_id": None, "target_table": None, "run_name": None}
+    if not any(out[k] for k in ("target_table_id", "suite_id", "qa_test_id", "run_id")):
+        raise HTTPException(400, "Link the ticket to a table, suite, test or run.")
+
+    def fill(field: str, value: Any, what: str) -> None:
+        if value and out.get(field) and out[field] != value:
+            raise HTTPException(400, f"that {what} belongs to another {field.replace('_id', '').replace('_', ' ')}")
+        out[field] = out.get(field) or value or None
+
+    if test_id:
+        found = db.query("""SELECT TEST_ID, RUN_ID, TARGET_TABLE_ID, SUITE_ID, DOMAIN_ID FROM CONTRACT.QA_TEST_CASE
+                             WHERE TEST_ID = %s AND NOT COALESCE(IS_DELETED, FALSE)""", (test_id,))
+        if not found:
+            raise HTTPException(404, "QA test not found")
+        for field in ("run_id", "target_table_id", "suite_id", "domain_id"):
+            fill(field, found[0].get(field), "test")
+    if out["suite_id"]:
+        found = db.query("""SELECT TARGET_TABLE_ID, DOMAIN_ID FROM CONTRACT.QA_TEST_SUITE
+                             WHERE SUITE_ID = %s AND NOT COALESCE(IS_DELETED, FALSE)""", (out["suite_id"],))
+        if not found:
+            raise HTTPException(404, "suite not found")
+        fill("target_table_id", found[0].get("target_table_id"), "suite")
+        fill("domain_id", found[0].get("domain_id"), "suite")
+    if out["target_table_id"]:
+        found = db.query("""SELECT DOMAIN_ID, TARGET_DATABASE, TARGET_SCHEMA, TARGET_TABLE FROM KNOWLEDGE.TARGET_TABLE_REGISTRY
+                             WHERE TARGET_TABLE_ID = %s""", (out["target_table_id"],))
+        if not found:
+            raise HTTPException(404, "target table not found")
+        out["domain_id"] = out["domain_id"] or found[0].get("domain_id")
+        out["target_table"] = ".".join(str(found[0].get(k) or "") for k in ("target_database", "target_schema", "target_table"))
+    if out["run_id"]:
+        found = db.query("SELECT RUN_NAME, TARGET_MODEL FROM CORE.WORKFLOW_RUN WHERE RUN_ID = %s", (out["run_id"],))
+        if not found:
+            raise HTTPException(404, "run not found")
+        out["run_name"] = found[0].get("run_name")
+        out["target_table"] = out["target_table"] or found[0].get("target_model")
+    return out
+
+
 @router.post("/api/runs/{run_id}/jira/links")
 def link(run_id: str, body: LinkIn, db: Db = Depends(current_db)):
     """Link an issue to the run (and optionally to a QA test). With remote_link, also add a link to the run in Jira."""
@@ -547,25 +657,13 @@ def link(run_id: str, body: LinkIn, db: Db = Depends(current_db)):
         found = summary(client.issue(key), conn.get("site_url") or "")
     except JiraError as exc:
         raise _jira_error(exc) from None
-    exists = db.query("""SELECT LINK_ID FROM JIRA.ISSUE_LINK WHERE ISSUE_KEY = %s AND RUN_ID = %s AND NOT IS_DELETED
-                           AND COALESCE(QA_TEST_ID, '') = %s""", (key, run_id, body.qa_test_id or ""))
-    if not exists:
-        db.execute("""INSERT INTO JIRA.ISSUE_LINK (LINK_ID, ISSUE_KEY, CLOUD_ID, RUN_ID, QA_TEST_ID, TARGET_TABLE, SUMMARY, STATUS)
-                      VALUES (%s, %s, %s, %s, NULLIF(%s, ''), %s, %s, %s)""",
-                   (str(uuid.uuid4()), key, conn["cloud_id"], run_id, body.qa_test_id or "", run[0].get("target_model") or "",
-                    (found["summary"] or "")[:1000], found.get("status") or ""))
-        _log(db, key, "LINK", "DONE", conn["cloud_id"], run_id, {"qa_test_id": body.qa_test_id})
+    _, already = _save_link(db, key, conn["cloud_id"], found, run_id=run_id, qa_test_id=body.qa_test_id,
+                            target_table=run[0].get("target_model"))
     remote = None
     if body.remote_link:
-        url = f"{_web_base(cfg)}/runs/{run_id}/qa"
-        try:
-            client.remote_link(key, url, f"QA run: {run[0]['run_name']}", f"agentic-pipeline:run:{run_id}")
-            remote = "added"
-            _log(db, key, "REMOTE_LINK", "DONE", conn["cloud_id"], run_id, {"url": url})
-        except JiraError as exc:
-            remote = f"not added: {exc.message}"
-            _log(db, key, "REMOTE_LINK", "FAILED", conn["cloud_id"], run_id, error=exc.message)
-    return {"linked": key, "already": bool(exists), "remote_link": remote, "issue": found}
+        remote = _remote_link(db, client, conn["cloud_id"], key, f"{_web_base(cfg)}/runs/{run_id}/qa",
+                              f"QA run: {run[0]['run_name']}", f"agentic-pipeline:run:{run_id}", run_id)
+    return {"linked": key, "already": already, "remote_link": remote, "issue": found}
 
 
 @router.delete("/api/runs/{run_id}/jira/links/{link_id}")
@@ -580,24 +678,37 @@ def unlink(run_id: str, link_id: str, db: Db = Depends(current_db)):
 
 # ---------------------------------------------------------------- AI triage, results report, comment, transition
 
+def _issue_payload(client: JiraClient, conn: dict, key: str) -> tuple[dict, dict]:
+    """(issue detail, what triage reads): the issue text, the first two small text attachments, and the attachments
+    left out (binary, larger than 64 KB, or over the limit) so the prompt can say so."""
+    try:
+        info = detail(client.issue(_key(key)), conn.get("site_url") or "")
+        texts, skipped = [], []
+        for a in info["attachments"]:
+            small = (a.get("size") or 0) <= TRIAGE_ATTACHMENT_BYTES
+            reason = ("binary" if not a["previewable"] else "larger than 64 KB" if not small else
+                      "over the attachment limit" if len(texts) >= 2 else "")
+            if not reason:
+                try:
+                    texts.append({"name": a["name"], "text": _attachment_text(client, a["id"], 8000)[0]})
+                    continue
+                except JiraError:
+                    reason = "could not be downloaded"
+            skipped.append({"name": a["name"], "mime": a.get("mime"), "size": a.get("size"), "reason": reason})
+    except JiraError as exc:
+        raise _jira_error(exc) from None
+    payload = {k: info.get(k) for k in ("key", "summary", "description", "environment", "comments", "type", "priority", "status")}
+    payload["attachments_text"], payload["attachments_skipped"] = texts, skipped
+    return info, payload
+
+
 @router.post("/api/runs/{run_id}/jira/{key}/triage")
 def triage(run_id: str, key: str, db: Db = Depends(current_db)):
     """Diagnosis of the reported bug against this run, with guarded, compiled tests to reproduce it (not saved)."""
     from services.jira.triage import triage_issue
 
     client, conn, _ = _client(db)
-    try:
-        info = detail(client.issue(_key(key)), conn.get("site_url") or "")
-        texts = []
-        for a in [a for a in info["attachments"] if a["previewable"] and (a.get("size") or 0) <= 64 * 1024][:2]:
-            try:
-                texts.append({"name": a["name"], "text": _attachment_text(client, a["id"], 8000)[0]})
-            except JiraError:
-                continue
-    except JiraError as exc:
-        raise _jira_error(exc) from None
-    payload = {k: info.get(k) for k in ("key", "summary", "description", "environment", "comments", "type", "priority", "status")}
-    payload["attachments_text"] = texts
+    info, payload = _issue_payload(client, conn, key)
     try:
         result = _source_call(db, "CALL JIRA.TRIAGE_ISSUE(%s, %s)", triage_issue, run_id, json.dumps(payload))
     except Exception as exc:
@@ -679,3 +790,376 @@ def transition(key: str, body: TransitionIn, db: Db = Depends(current_db)):
     db.execute("UPDATE JIRA.ISSUE_LINK SET STATUS = %s WHERE ISSUE_KEY = %s AND NOT IS_DELETED", (to or "", key))
     _log(db, key, "TRANSITION", "DONE", conn["cloud_id"], body.run_id, {"to": to, "transition": allowed[body.transition_id].get("name")})
     return {"status": to}
+
+
+# ---------------------------------------------------------------- inbox: JQL search, saved filters, boards and sprints
+
+def _linked_counts(db: Db, keys: list[str]) -> dict[str, int]:
+    """ISSUE_LINK rows per issue key."""
+    keys = [k for k in dict.fromkeys(keys) if k][:100]
+    if not keys:
+        return {}
+    found = db.query(f"""SELECT ISSUE_KEY, COUNT(*) AS N FROM JIRA.ISSUE_LINK
+                          WHERE ISSUE_KEY IN ({', '.join(['%s'] * len(keys))}) AND NOT IS_DELETED GROUP BY ISSUE_KEY""", tuple(keys))
+    return {r["issue_key"]: int(r["n"]) for r in found}
+
+
+def _page(db: Db, conn: dict, page: dict) -> dict:
+    site = conn.get("site_url") or ""
+    shaped = [summary(i, site) for i in page.get("issues") or []]
+    linked = _linked_counts(db, [i["key"] for i in shaped])
+    return {"issues": [{**i, "linked": linked.get(i["key"], 0)} for i in shaped], "next": page.get("next")}
+
+
+def _next(token: Optional[str]) -> Optional[str]:
+    token = (token or "").strip()
+    if len(token) > 2000:
+        raise HTTPException(400, "invalid page token")
+    return token or None
+
+
+def _filter(db: Db, filter_id: str) -> dict:
+    """A saved filter the user owns or that is shared; 404 otherwise."""
+    found = db.query("""SELECT FILTER_ID, USER_NAME, NAME, JQL, SHARED FROM JIRA.SAVED_FILTER
+                         WHERE FILTER_ID = %s AND (USER_NAME = %s OR SHARED)""", (filter_id, db.user))
+    if not found:
+        raise HTTPException(404, "filter not found")
+    return _filter_out(db, found[0])
+
+
+def _filter_out(db: Db, r: dict) -> dict:
+    return {"filter_id": r["filter_id"], "name": r["name"], "jql": r["jql"], "shared": bool(r.get("shared")),
+            "owner": r.get("user_name"), "mine": r.get("user_name") == db.user}
+
+
+@router.get("/api/jira/search")
+def search(jql: str = Query(default="", max_length=4000), next_token: Optional[str] = Query(default=None, alias="next"),
+           max_results: int = Query(default=50, alias="max"), filter_id: Optional[str] = None, db: Db = Depends(current_db)):
+    """One page of issues for any JQL (or a saved filter); no JQL means my open issues. Pass `next` for the next page."""
+    client, conn, cfg = _client(db)
+    if filter_id:
+        jql = _filter(db, filter_id)["jql"]
+    jql = jql.strip()
+    if not jql:
+        project = (cfg.get("default_project") or "").strip().upper()
+        jql = " AND ".join(_mine_where(project if re.fullmatch(r"[A-Z][A-Z0-9_]{0,30}", project) else "")) + " ORDER BY updated DESC"
+    try:
+        page = client.search_page(jql, _next(next_token), max(1, min(int(max_results), 100)))
+    except JiraError as exc:
+        raise _jira_error(exc) from None
+    return {**_page(db, conn, page), "jql": jql}
+
+
+class JqlIn(BaseModel):
+    jql: str = Field(min_length=1, max_length=4000)
+
+
+@router.post("/api/jira/jql/validate")
+def validate_jql(body: JqlIn, db: Db = Depends(current_db)):
+    """Jira's strict JQL validation: {"ok", "errors"}."""
+    client, _, _ = _client(db)
+    try:
+        errors = client.parse_jql(body.jql.strip())
+    except JiraError as exc:
+        if exc.status == 400:
+            return {"ok": False, "errors": [exc.message]}
+        raise _jira_error(exc) from None
+    return {"ok": not errors, "errors": errors}
+
+
+@router.get("/api/jira/filters")
+def filters(db: Db = Depends(current_db)):
+    """My saved filters and the ones others shared."""
+    try:
+        found = db.query("""SELECT FILTER_ID, USER_NAME, NAME, JQL, SHARED FROM JIRA.SAVED_FILTER
+                             WHERE USER_NAME = %s OR SHARED ORDER BY IFF(USER_NAME = %s, 0, 1), NAME""", (db.user, db.user))
+    except Exception as exc:
+        if "does not exist" in str(exc):
+            return {"filters": []}   # V029 not applied yet
+        raise _snowflake_error(exc) from exc
+    return {"filters": [_filter_out(db, r) for r in found]}
+
+
+class FilterIn(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    jql: str = Field(min_length=1, max_length=4000)
+    shared: bool = False
+
+
+@router.post("/api/jira/filters")
+def filter_create(body: FilterIn, db: Db = Depends(current_db)):
+    """Save a JQL filter (checked by Jira first); names are unique per user."""
+    name, jql = body.name.strip(), body.jql.strip()
+    if not name or not jql:
+        raise HTTPException(400, "A filter needs a name and JQL.")
+    client, _, _ = _client(db)
+    try:
+        errors = client.parse_jql(jql)
+    except JiraError as exc:
+        raise _jira_error(exc) from None
+    if errors:
+        raise HTTPException(400, "Jira: " + "; ".join(errors))
+    if db.query("SELECT 1 FROM JIRA.SAVED_FILTER WHERE USER_NAME = %s AND UPPER(NAME) = UPPER(%s)", (db.user, name)):
+        raise HTTPException(409, f"You already have a filter named {name}.")
+    filter_id = str(uuid.uuid4())
+    db.execute("INSERT INTO JIRA.SAVED_FILTER (FILTER_ID, USER_NAME, NAME, JQL, SHARED) VALUES (%s, %s, %s, %s, %s)",
+               (filter_id, db.user, name, jql, bool(body.shared)))
+    return {"filter_id": filter_id, "name": name, "jql": jql, "shared": bool(body.shared), "owner": db.user, "mine": True}
+
+
+@router.delete("/api/jira/filters/{filter_id}")
+def filter_delete(filter_id: str, db: Db = Depends(current_db)):
+    """Only the owner deletes a filter; anyone else gets 404, as if it did not exist."""
+    if not db.execute_count("DELETE FROM JIRA.SAVED_FILTER WHERE FILTER_ID = %s AND USER_NAME = %s", (filter_id, db.user)):
+        raise HTTPException(404, "filter not found")
+    return {"deleted": filter_id}
+
+
+def _agile(conn: dict, call: Callable[[], Any]) -> Any:
+    """An Agile API call. Connections made before the Agile scopes were added must sign in again: known from the
+    stored scopes, or, when none were stored, from Jira refusing the call."""
+    scopes = set(conn.get("scopes") or [])
+    if scopes and not set(AGILE_SCOPES) <= scopes:
+        raise HTTPException(NOT_CONNECTED, RECONNECT_AGILE)
+    try:
+        return call()
+    except JiraError as exc:
+        if exc.status in (401, 403) and not scopes:
+            raise HTTPException(NOT_CONNECTED, RECONNECT_AGILE) from None
+        raise _jira_error(exc) from None
+
+
+@router.get("/api/jira/boards")
+def boards(q: str = Query(default="", max_length=100), start: int = 0, db: Db = Depends(current_db)):
+    client, conn, _ = _client(db)
+    return {"boards": _agile(conn, lambda: client.boards(q, max(0, int(start))))}
+
+
+@router.get("/api/jira/boards/{board_id}/sprints")
+def sprints(board_id: int, state: str = "active,future", db: Db = Depends(current_db)):
+    client, conn, _ = _client(db)
+    states = [s.strip().lower() for s in state.split(",") if s.strip()]
+    if any(s not in ("active", "future", "closed") for s in states):
+        raise HTTPException(400, "state: active, future or closed, comma separated")
+    return {"sprints": _agile(conn, lambda: client.sprints(board_id, states))}
+
+
+@router.get("/api/jira/sprints/{sprint_id}/issues")
+def sprint_issues(sprint_id: int, next_token: Optional[str] = Query(default=None, alias="next"),
+                  max_results: int = Query(default=50, alias="max"), db: Db = Depends(current_db)):
+    client, conn, _ = _client(db)
+    page = _agile(conn, lambda: client.sprint_issues(sprint_id, _next(next_token), max(1, min(int(max_results), 100))))
+    return _page(db, conn, page)
+
+
+@router.get("/api/jira/projects/{project_key}/issue-types")
+def issue_types(project_key: str, db: Db = Depends(current_db)):
+    client, _, _ = _client(db)
+    try:
+        return {"types": client.issue_types(project_key)}
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from None
+    except JiraError as exc:
+        raise _jira_error(exc) from None
+
+
+# ---------------------------------------------------------------- bugs from failing QA tests
+
+def bug_label(test_id: str, target_table_id: str) -> str:
+    """The label that marks the one open bug for a test on a table, whoever raised it."""
+    return "gdp-qa-" + hashlib.sha1(f"{test_id}:{target_table_id}".encode()).hexdigest()[:8]
+
+
+class BugIn(BaseModel):
+    test_id: str = Field(min_length=1, max_length=64)
+    target_table_id: str = Field(min_length=1, max_length=36)
+    qa_run_id: Optional[str] = Field(default=None, max_length=36)
+    project_key: Optional[str] = Field(default=None, max_length=40)
+    issue_type_id: Optional[str] = Field(default=None, max_length=20)
+    summary: Optional[str] = Field(default=None, max_length=255)
+    idempotency_key: str = Field(min_length=8, max_length=64, pattern=r"^[A-Za-z0-9_.:\-]+$")
+
+
+def _browse(conn: dict, key: str) -> str:
+    return f"{(conn.get('site_url') or '').rstrip('/')}/browse/{key}"
+
+
+def _latest_result(db: Db, target_table_id: str, test_id: str) -> Optional[dict]:
+    """The test's latest result on the table, without sample rows."""
+    _, found = importlib.import_module("services.qa.run").latest_table(db.query, target_table_id)
+    for r in found or []:
+        if r.get("test_id") == test_id:
+            return {k: v for k, v in r.items() if k not in ("sample_rows", "sample")}
+    return None
+
+
+@router.post("/api/jira/bugs")
+def create_bug(body: BugIn, db: Db = Depends(current_db)):
+    """Raise a Jira bug from a QA test's latest result on a table, once. An open bug for the same test and table is
+    returned instead: one linked here, one found by its label in Jira, or the result of an earlier request with the
+    same idempotency key. The description has counts only, never sample rows."""
+    client, conn, cfg = _client(db)
+    test_id, table_id = body.test_id, body.target_table_id
+    answer = lambda key, created: {"key": key, "url": _browse(conn, key), "created": created, "existing": not created}  # noqa: E731
+
+    # 1. an open bug already linked to this test and table
+    linked = db.query("""SELECT ISSUE_KEY FROM JIRA.ISSUE_LINK
+                          WHERE ORIGIN = 'BUG' AND QA_TEST_ID = %s AND TARGET_TABLE_ID = %s AND NOT IS_DELETED
+                            AND LOWER(COALESCE(STATUS_CATEGORY, '')) <> 'done' AND COALESCE(ISSUE_STATE, 'OK') <> 'DELETED'
+                          ORDER BY LINKED_AT DESC LIMIT 1""", (test_id, table_id))
+    if linked:
+        return answer(linked[0]["issue_key"], False)
+    # 2. a repeated request (same idempotency key) gets the first answer
+    earlier = db.query("""SELECT ISSUE_KEY, DETAIL FROM JIRA.ACTION_LOG WHERE IDEMPOTENCY_KEY = %s AND ACTION = 'BUG' AND STATUS = 'DONE'
+                           ORDER BY ACTED_AT DESC LIMIT 1""", (body.idempotency_key,))
+    if earlier:
+        stored = _json(earlier[0].get("detail")) or {}
+        if stored.get("key"):
+            return {k: stored.get(k) for k in ("key", "url", "created", "existing")}
+        return answer(earlier[0]["issue_key"], False)
+
+    table = _link_target(db, target_table_id=table_id)
+    test = db.query("""SELECT TEST_ID, TITLE, SEVERITY, EXPECTED, OBJECTIVE, TARGET_TABLE_ID, SUITE_ID FROM CONTRACT.QA_TEST_CASE
+                        WHERE TEST_ID = %s AND NOT COALESCE(IS_DELETED, FALSE)""", (test_id,))
+    if test and test[0].get("target_table_id") and test[0]["target_table_id"] != table_id:
+        raise HTTPException(400, "that test belongs to another table")
+    result = _latest_result(db, table_id, test_id)
+    if not result:
+        if not test:
+            raise HTTPException(404, "QA test not found")
+        raise HTTPException(409, "This test has no result on this table yet; run it first.")
+    if not test:
+        # a generated test is not stored as a test case: its latest result carries what the bug needs
+        test = [{k: result.get(k) for k in ("title", "severity", "expected", "objective", "suite_id")}]
+    label = bug_label(test_id, table_id)
+    link_fields = dict(target_table_id=table_id, suite_id=test[0].get("suite_id") or result.get("suite_id"),
+                       domain_id=table["domain_id"], origin="BUG")
+
+    def done(key: str, created: bool, issue: dict) -> dict:
+        source = _result_id(db, result, test_id)
+        _save_link(db, key, conn["cloud_id"], issue, qa_test_id=test_id, target_table=table["target_table"],
+                   source_result_id=source, issue_id=issue.get("id"), status_category=issue.get("status_category"), **link_fields)
+        out = answer(key, created)
+        _log(db, key, "BUG", "DONE", conn["cloud_id"], None, {**out, "test_id": test_id, "target_table_id": table_id,
+                                                               "qa_run_id": body.qa_run_id or result.get("qa_run_id")},
+             idempotency_key=body.idempotency_key)
+        return out
+
+    # 3. an open bug in Jira with this test's label (raised by someone else, or linked before the link was recorded)
+    try:
+        found = client.search_page(f"labels = {jql_string(label)} AND statusCategory != Done ORDER BY created ASC", None, 1)["issues"]
+    except JiraError as exc:
+        raise _jira_error(exc) from None
+    if found:
+        return done(found[0]["key"], False, summary(found[0]))
+
+    try:
+        project = check_project(body.project_key or cfg.get("default_project") or "")
+    except ValueError:
+        raise HTTPException(400, "Pick a Jira project: no default project is set in Admin, Integrations, Jira.") from None
+    title = test[0].get("title") or result.get("title") or test_id
+    url = _qa_url(cfg, table_id, link_fields["suite_id"])
+    from services.jira.triage import bug_markdown
+
+    description = adf.from_markdown(bug_markdown({**test[0], "test_id": test_id}, result, table["target_table"], url))
+    try:
+        type_id = body.issue_type_id or next((t["id"] for t in client.issue_types(project)
+                                              if str(t.get("name") or "").lower() == "bug" and not t.get("subtask")), None)
+        if not type_id:
+            raise HTTPException(400, f"Project {project} has no Bug issue type; pick one.")
+        created = client.create_issue(project, type_id, body.summary or f"QA test failed: {title} on {table['target_table']}",
+                                      description, [label, "gdp-qa"])
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from None
+    except JiraError as exc:
+        _log(db, "-", "BUG", "FAILED", conn["cloud_id"], None, {"test_id": test_id, "target_table_id": table_id}, exc.message)
+        raise _jira_error(exc) from None
+    key = check_key(created.get("key") or "")
+    _remote_link(db, client, conn["cloud_id"], key, url, f"QA test: {title}"[:255], f"gdp:qa:test:{test_id}")
+    return done(key, True, {"id": created.get("id"), "summary": body.summary or f"QA test failed: {title}", "status": None})
+
+
+def _result_id(db: Db, result: dict, test_id: str) -> Optional[str]:
+    if not result.get("qa_run_id"):
+        return None
+    try:
+        found = db.query("""SELECT RESULT_ID FROM QUALITY.QA_RESULT WHERE QA_RUN_ID = %s AND TEST_ID = %s
+                             ORDER BY CREATED_AT DESC LIMIT 1""", (result["qa_run_id"], test_id))
+    except Exception:
+        return None
+    return found[0]["result_id"] if found else None
+
+
+# ---------------------------------------------------------------- bulk actions
+
+class BulkLink(BaseModel):
+    target_table_id: str = Field(min_length=1, max_length=36)
+    suite_id: Optional[str] = Field(default=None, max_length=36)
+    test_id: Optional[str] = Field(default=None, max_length=64)
+
+
+class BulkIn(BaseModel):
+    action: Literal["link", "comment", "transition"]
+    keys: list[str] = Field(min_length=1, max_length=BULK_MAX)
+    comment: Optional[str] = Field(default=None, max_length=30000)
+    transition_name: Optional[str] = Field(default=None, max_length=100)
+    link: Optional[BulkLink] = None
+
+
+@router.post("/api/jira/bulk")
+def bulk(body: BulkIn, db: Db = Depends(current_db)):
+    """Link, comment on or move up to 50 issues, one after another. Each issue reports its own outcome; once Jira
+    rate limits, the remaining issues are skipped rather than hammered."""
+    if body.action == "comment" and not (body.comment or "").strip():
+        raise HTTPException(400, "comment is required")
+    if body.action == "transition" and not (body.transition_name or "").strip():
+        raise HTTPException(400, "transition_name is required")
+    if body.action == "link" and not body.link:
+        raise HTTPException(400, "link is required")
+    client, conn, cfg = _client(db)
+    target = _link_target(db, body.link.target_table_id, body.link.suite_id, body.link.test_id) if body.link and body.action == "link" else None
+    document = adf.from_markdown(body.comment or "") if body.action == "comment" else None
+    wanted = (body.transition_name or "").strip().lower()
+    results: list[dict] = []
+    limited = False
+    for raw in body.keys:
+        if limited:
+            results.append({"key": raw, "ok": False, "skipped": True, "error": "rate limited"})
+            continue
+        try:
+            key = check_key(raw)
+        except ValueError as exc:
+            results.append({"key": raw, "ok": False, "error": str(exc)})
+            continue
+        try:
+            if body.action == "comment":
+                posted = client.add_comment(key, document)
+                _log(db, key, "COMMENT", "DONE", conn["cloud_id"], None, {"comment_id": (posted or {}).get("id"), "bulk": True,
+                                                                         "preview": adf.plain(body.comment, 300)})
+            elif body.action == "transition":
+                options = client.transitions(key)
+                pick = next((t for t in options if str(t.get("name") or "").lower() == wanted), None) \
+                    or next((t for t in options if str(t.get("to") or "").lower() == wanted), None)
+                if not pick:
+                    results.append({"key": key, "ok": False, "error": f"'{body.transition_name}' is not available for this issue"})
+                    continue
+                client.transition(key, pick["id"])
+                db.execute("UPDATE JIRA.ISSUE_LINK SET STATUS = %s WHERE ISSUE_KEY = %s AND NOT IS_DELETED", (pick.get("to") or "", key))
+                _log(db, key, "TRANSITION", "DONE", conn["cloud_id"], None, {"to": pick.get("to"), "transition": pick.get("name"), "bulk": True})
+            else:
+                issue = summary(client.issue(key), conn.get("site_url") or "")
+                _save_link(db, key, conn["cloud_id"], issue, qa_test_id=target["qa_test_id"], target_table=target["target_table"],
+                           target_table_id=target["target_table_id"], suite_id=target["suite_id"], domain_id=target["domain_id"],
+                           issue_id=issue.get("id"), status_category=issue.get("status_category"))
+            results.append({"key": key, "ok": True})
+        except JiraError as exc:
+            if exc.status == 429:
+                limited = True
+                wait = f" (retry after {exc.retry_after} seconds)" if exc.retry_after is not None else ""
+                results.append({"key": key, "ok": False, "error": f"rate limited{wait}"})
+            else:
+                results.append({"key": key, "ok": False, "error": _jira_error(exc).detail})
+            _log(db, key, body.action.upper(), "FAILED", conn["cloud_id"], None, {"bulk": True}, exc.message)
+        except Exception as exc:   # a failed database write fails this issue only
+            results.append({"key": key, "ok": False, "error": str(exc)[:300]})
+    return {"results": results}

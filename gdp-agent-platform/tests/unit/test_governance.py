@@ -122,3 +122,27 @@ def test_qa_lead_and_qa_engineer_write_without_run_operate():
             assert decide(privilege_for(method, path)[0], privs, None)[0] == "ALLOW", (role, method, path)
     for method, path, _ in QA_WRITES:
         assert decide(privilege_for(method, path)[0], viewer, policy)[0] == "FORBID", (method, path)
+
+
+JIRA_INBOX = [("GET", "/api/jira/search", "JIRA.READ"), ("POST", "/api/jira/jql/validate", "JIRA.READ"),
+              ("GET", "/api/jira/filters", "JIRA.READ"), ("POST", "/api/jira/filters", "JIRA.READ"),
+              ("DELETE", "/api/jira/filters/f1", "JIRA.READ"), ("GET", "/api/jira/boards", "JIRA.READ"),
+              ("GET", "/api/jira/boards/7/sprints", "JIRA.READ"), ("GET", "/api/jira/sprints/3/issues", "JIRA.READ"),
+              ("GET", "/api/jira/projects/QA/issue-types", "JIRA.READ"), ("POST", "/api/jira/bugs", "JIRA.WRITE"),
+              ("POST", "/api/jira/bulk", "JIRA.WRITE"), ("POST", "/api/qa/links", "JIRA.WRITE"),
+              ("DELETE", "/api/qa/links/l1", "JIRA.WRITE"), ("GET", "/api/qa/links", "JIRA.READ"),
+              ("POST", "/api/qa/triage/resolve", "AI.USE"), ("POST", "/api/qa/tables/t1/triage/QA-1", "AI.USE")]
+
+
+def test_jira_inbox_routes():
+    for method, path, priv in JIRA_INBOX:
+        found, _, matched = privilege_for(method, path)
+        assert matched and found == priv, (method, path, found)
+    assert privilege_for("GET", "/api/jira/status")[0] is None
+    _, viewer = effective_privileges(["VIEWER"], ROLE_PRIVS, GRANTS)
+    for role in ("QA_LEAD", "QA_ENGINEER", "DATA_ENGINEER"):
+        _, privs = effective_privileges([role], ROLE_PRIVS, GRANTS)
+        for method, path, _ in JIRA_INBOX:
+            assert decide(privilege_for(method, path)[0], privs, None)[0] == "ALLOW", (role, method, path)
+    for method, path, _ in JIRA_INBOX:
+        assert decide(privilege_for(method, path)[0], viewer, None)[0] == "FORBID", (method, path)
