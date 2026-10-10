@@ -369,8 +369,8 @@ WITH LAST_RUN AS (
      GROUP BY ENV_ID, DAG_ID
 )
 SELECT D.ENV_ID, D.DAG_ID, D.OWNERS, D.TAGS, D.SCHEDULE, D.IS_PAUSED, D.IS_ACTIVE, D.CRITICALITY, D.TEAM_ID, D.DOMAIN_ID,
-       D.FILELOC, D.EXPECTED_BY_CRON, D.MAX_DURATION_MIN, D.REPO_ID, D.REPO_PATH, D.DESCRIPTION,
-       E.AIRFLOW_URL AS ENV_AIRFLOW_URL, E.API_VERSION,
+       D.FILELOC, D.EXPECTED_BY_CRON, D.MAX_DURATION_MIN, D.REPO_ID, D.REPO_PATH, D.DESCRIPTION, D.TIMEZONE, D.MUTE_UNTIL,
+       D.MUTE_REASON, E.AIRFLOW_URL AS ENV_AIRFLOW_URL, E.API_VERSION,
        L.LAST_STATE, L.LAST_RUN_AT, L.LAST_DURATION_S, S.RUNS_7D, S.OK_7D, S.FAIL_7D, S.OK_30D, S.FAIL_30D, S.P50_S, S.P95_S
   FROM OPS.DAG D
   JOIN OPS.AIRFLOW_ENV E ON E.ENV_ID = D.ENV_ID
@@ -398,7 +398,8 @@ def _dag_out(r: Dict[str, Any], detail: bool = False) -> Dict[str, Any]:
         out.update({"fileloc": r.get("fileloc"), "expected_by_cron": r.get("expected_by_cron"),
                     "max_duration_min": int(r["max_duration_min"]) if r.get("max_duration_min") is not None else None,
                     "repo_id": r.get("repo_id"), "repo_path": r.get("repo_path"), "description": r.get("description"),
-                    "api_version": r.get("api_version"),
+                    "api_version": r.get("api_version"), "timezone": r.get("timezone"),
+                    "mute_until": _iso(r.get("mute_until")), "mute_reason": r.get("mute_reason"),
                     "airflow_url": links(r.get("env_airflow_url"), r.get("api_version"), r["dag_id"])})
     return out
 

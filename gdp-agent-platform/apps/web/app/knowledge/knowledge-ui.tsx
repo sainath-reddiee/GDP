@@ -11,6 +11,7 @@ const TYPE_ICON: Record<string, LucideIcon> = {
   GLOSSARY: BookOpen, BUSINESS_RULE: Ruler, TRANSFORMATION_RULE: Wand2, MAPPING_PATTERN: GitCompare, MODEL_DEFINITION: Boxes,
   NAMING_STANDARD: TableProperties, DBT_PATTERN: Code2, SODA_PATTERN: ShieldCheck, EXCEPTION: TriangleAlert,
   STTM_TEMPLATE: Layers, ONBOARDING_GUIDE: FileText, COLUMN_RULE: ScanSearch, QA_TEST: ListChecks,
+  INCIDENT_RESOLUTION: BadgeCheck,
 };
 
 export function TypeIcon({ type, className }: { type: string; className?: string }) {

@@ -261,9 +261,35 @@ class Mwaa:
         return {"text": text, "truncated": truncated}
 
     def clear_task_instances(self, dag_id: str, task_ids: List[str], run_id: str, dry_run: bool = True,
-                             only_failed: bool = True) -> Any:
+                             only_failed: bool = True, include_downstream: bool = False) -> Any:
         """Clear (retry) tasks of one run. Dry run by default: it returns what would be cleared."""
         assert task_ids, "task_ids are required"
         body = {"dry_run": bool(dry_run), "task_ids": list(task_ids), "dag_run_id": run_id, "only_failed": bool(only_failed),
-                "reset_dag_runs": True, "include_upstream": False, "include_downstream": False}
+                "reset_dag_runs": True, "include_upstream": False, "include_downstream": bool(include_downstream)}
         return self.invoke("POST", f"/dags/{_seg(dag_id)}/clearTaskInstances", body=body)
+
+    # ------------------------------------------------------------ DAG dependencies (PR O3)
+
+    def datasets(self, page: int = PAGE, max_pages: int = 20) -> Tuple[List[Dict[str, Any]], bool]:
+        """(datasets, complete): Airflow 2 /datasets, Airflow 3 /assets, every page up to max_pages."""
+        path, key = ("/assets", "assets") if self.api_version == "v2" else ("/datasets", "datasets")
+        out: List[Dict[str, Any]] = []
+        for i in range(max_pages):
+            found = self.invoke("GET", path, {"limit": page, "offset": i * page}) or {}
+            items = list(found.get(key) or []) if isinstance(found, dict) else []
+            out.extend(items)
+            if not items or len(out) >= int((found or {}).get("total_entries") or 0):
+                return out, True
+        return out, False
+
+    def dag_tasks(self, dag_id: str) -> List[Dict[str, Any]]:
+        """The DAG's task definitions (operator class, downstream ids; params and extra links where Airflow exposes them)."""
+        found = self.invoke("GET", f"/dags/{_seg(dag_id)}/tasks") or {}
+        return list(found.get("tasks") or []) if isinstance(found, dict) else []
+
+    def task_links(self, dag_id: str, run_id: str, task_id: str, map_index: int = -1) -> Dict[str, Any]:
+        """Resolved operator extra links of one task instance ({name: url}); ExternalTaskSensor and
+        TriggerDagRunOperator link to the other DAG this way."""
+        params = {"map_index": int(map_index)} if map_index is not None and int(map_index) >= 0 else None
+        found = self.invoke("GET", f"/dags/{_seg(dag_id)}/dagRuns/{_seg(run_id)}/taskInstances/{_seg(task_id)}/links", params)
+        return found if isinstance(found, dict) else {}

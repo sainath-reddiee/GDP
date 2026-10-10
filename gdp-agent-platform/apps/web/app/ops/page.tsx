@@ -3,10 +3,15 @@ import { Settings2 } from "lucide-react";
 import { api, ApiError, whoami } from "@/lib/api";
 import { can, canAct } from "@/lib/types";
 import { PageHeader } from "@/components/page-header";
-import type { AirflowEnv, DagRow, OpsSummary } from "./actions";
+import { cn } from "@/lib/utils";
+import type { OpsTeam } from "../incidents/actions";
+import type { AirflowEnv, DagRow, OpsSummary, Reliability } from "./actions";
 import { OpsBoard, type OpsNav } from "./ops-board";
+import { ReliabilityView } from "./reliability";
 
-type Params = { env?: string; q?: string; state?: string; owner?: string; team?: string };
+const PERIODS = [7, 30];
+
+type Params = { env?: string; q?: string; state?: string; owner?: string; team?: string; view?: string; days?: string };
 
 /** Only API errors become messages; anything else (a sign-out redirect included) keeps propagating. */
 async function load<T>(fn: () => Promise<T>): Promise<{ data: T; error: null; status: 0 } | { data: null; error: string; status: number }> {
@@ -16,6 +21,20 @@ async function load<T>(fn: () => Promise<T>): Promise<{ data: T; error: null; st
     if (e instanceof ApiError) return { data: null, error: e.message, status: e.status };
     throw e;
   }
+}
+
+function Tabs({ view, env }: { view: "dags" | "reliability"; env?: string }) {
+  const tab = (id: "dags" | "reliability", label: string, href: string) => (
+    <Link href={href} aria-current={view === id ? "page" : undefined}
+          className={cn("-mb-px border-b-2 px-3 py-2 text-sm font-medium", view === id ? "border-primary text-foreground" : "border-transparent text-muted-foreground hover:text-foreground")}>
+      {label}</Link>
+  );
+  return (
+    <nav className="flex gap-1 border-b" aria-label="Pipelines views">
+      {tab("dags", "DAGs", env ? `/ops?${new URLSearchParams({ env })}` : "/ops")}
+      {tab("reliability", "Reliability", "/ops?view=reliability")}
+    </nav>
+  );
 }
 
 export default async function OpsPage({ searchParams }: { searchParams?: Params }) {
@@ -38,6 +57,23 @@ export default async function OpsPage({ searchParams }: { searchParams?: Params 
       </div>
     );
   }
+  const sp = searchParams ?? {};
+  if (sp.view === "reliability") {
+    const days = PERIODS.find((d) => String(d) === sp.days) ?? 7;
+    const team = sp.team ?? "";
+    const [rel, teams] = await Promise.all([
+      load(() => api<Reliability>(`/api/ops/reliability?${new URLSearchParams({ days: String(days), ...(team ? { team_id: team } : {}) })}`)),
+      load(() => api<{ teams: OpsTeam[] }>("/api/ops/teams")),
+    ]);
+    return (
+      <div className="space-y-5">
+        {header}
+        <Tabs view="reliability" />
+        <ReliabilityView initialDays={days} initialTeam={team} initial={rel.data} initialError={rel.error}
+                         teams={(teams.data?.teams ?? []).map((t) => ({ id: t.team_id, name: t.name }))} />
+      </div>
+    );
+  }
   const [envs, summary] = await Promise.all([
     load(() => api<{ envs: AirflowEnv[] }>("/api/ops/envs")),
     load(() => api<OpsSummary>("/api/ops/summary")),
@@ -52,7 +88,6 @@ export default async function OpsPage({ searchParams }: { searchParams?: Params 
       </div>
     );
   }
-  const sp = searchParams ?? {};
   const list = envs.data.envs;
   const env = list.find((e) => e.env_id === sp.env)?.env_id ?? list.find((e) => e.enabled)?.env_id ?? list[0]?.env_id ?? "";
   const nav: OpsNav = { env, q: sp.q ?? "", state: sp.state ?? "", owner: sp.owner ?? "", team: sp.team ?? "" };
@@ -64,6 +99,7 @@ export default async function OpsPage({ searchParams }: { searchParams?: Params 
   return (
     <div className="space-y-5">
       {header}
+      <Tabs view="dags" env={env} />
       <OpsBoard envs={list} summary={summary.data} summaryError={summary.error} initial={nav}
                 initialDags={dags?.data?.dags ?? null} initialError={dags?.error ?? null} access={access} />
     </div>

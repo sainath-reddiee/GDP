@@ -8,6 +8,8 @@ Jobs, each guarded by an OPS.JOB_LEASE so exactly one holder runs it at a time a
   escalate       unacknowledged incidents and ended mutes (every 60 s)
   sla            LATE and LONG_RUNNING detection (every 120 s)
   jira_sync      incidents whose ticket is Done in Jira become MITIGATED (every 5 min)
+  diagnose       AI diagnosis of new OPEN incidents (settings ai_auto, ai_severities; at most 5 per run; every 60 s)
+  digest         the weekly reliability card per team, Mondays from 09:00 UTC (setting weekly_digest; every 15 min)
   retention      purges raw OPS.EVENT rows after 30 days (every 6 hours)
 The worker uses system_db(): the dev session in dev mode, else the key-pair service user (AIP_SERVICE_USER,
 AIP_SERVICE_KEY_PATH). AWS credentials come from the host's default chain (role, AWS_PROFILE). A heartbeat row
@@ -122,7 +124,7 @@ def poll_now(env_id: str, db_factory: Callable[[], Any] = system_db) -> Dict[str
 # ---------------------------------------------------------------- incidents (PR O2)
 
 DETECT_OVERLAP = timedelta(minutes=2)
-INTERVALS = {"outbox": 30, "escalate": 60, "sla": 120, "jira_sync": 300}
+INTERVALS = {"outbox": 30, "escalate": 60, "sla": 120, "jira_sync": 300, "diagnose": 60, "digest": 900}
 
 
 def _store(db: Any):
@@ -203,6 +205,24 @@ def jira_sync(db: Any) -> None:
         log.info("jira_sync: %s incidents mitigated", changed)
 
 
+def diagnose(db: Any) -> None:
+    """AI diagnosis of new incidents (PR O3)."""
+    from services.ops.diagnose import auto_diagnose
+
+    result = auto_diagnose(db)
+    if any(result.values()):
+        log.info("diagnose: %s", result)
+
+
+def digest(db: Any) -> None:
+    """The weekly reliability digest per team (idempotent per ISO week)."""
+    from services.ops.reliability import run_digest
+
+    result = run_digest(db)
+    if result.get("queued"):
+        log.info("digest: %s", result)
+
+
 def retention(db: Any) -> None:
     from services.ops.store import purge_events
 
@@ -252,7 +272,8 @@ class Worker:
             if result.get("ran"):
                 log.info("poll %s: %s", env["env_id"], "ok" if result.get("ok") else result.get("error"))
         self._safe(db, "detect", detect)
-        for name, fn in (("outbox", outbox), ("escalate", escalate), ("sla", sla), ("jira_sync", jira_sync)):
+        for name, fn in (("outbox", outbox), ("escalate", escalate), ("sla", sla), ("jira_sync", jira_sync),
+                         ("diagnose", diagnose), ("digest", digest)):
             if self.stop.is_set():
                 return
             if self._every(name, INTERVALS[name]):

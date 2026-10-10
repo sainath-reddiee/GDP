@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Optional
 
 KNOWLEDGE_TYPES = {"BUSINESS_RULE", "MODEL_DEFINITION", "NAMING_STANDARD", "DBT_PATTERN", "SODA_PATTERN",
                    "TRANSFORMATION_RULE", "MAPPING_PATTERN", "EXCEPTION", "GLOSSARY", "STTM_TEMPLATE",
-                   "ONBOARDING_GUIDE", "COLUMN_RULE", "QA_TEST"}
+                   "ONBOARDING_GUIDE", "COLUMN_RULE", "QA_TEST", "INCIDENT_RESOLUTION"}
 
 
 def _text(value: Any) -> Optional[str]:

@@ -7,6 +7,11 @@ timeline is the signed-in user.
 
 Teams webhook URLs are stored ENCRYPTed with the API host's key (AIP_SECRET_KEY, else JIRA_TOKEN_KEY) and never returned:
 teams only say has_teams_webhook and has_escalation_webhook. The request carrying a URL cannot be queued for approval.
+
+PR O3 (AI root cause and support assistant): diagnose, ask and postmortem need AI.USE (services.ops.diagnose); retry and
+the safe-to-retry mark need OPS.OPERATE (services.ops.retry; a governance policy on OPS.OPERATE makes them approvable,
+off by default); impact and the reliability report need OPS.VIEW. A person's resolution with a note of 20 characters or
+more is remembered as INCIDENT_RESOLUTION knowledge (services.ops.resolution).
 """
 
 from __future__ import annotations
@@ -20,10 +25,12 @@ from pydantic import BaseModel, Field
 
 from app.db import Db
 from app.main import _json, _set_config, current_db
-from app.ops_api import _RUNS_SQL, _iso, _ops_error, _q, _run_out, _x, links, slug
+from app.ops_api import _RUNS_SQL, _iso, _mwaa_http, _ops_error, _q, _run_out, _x, links, slug
 from services.jira.client import JiraError, check_project
 from services.ops import incidents as inc
 from services.ops import notify, tickets
+from services.ops.diagnose import ai_out
+from services.ops.mwaa import MwaaError
 from services.ops.detect import SEVERITIES, STATUSES
 from services.ops.normalize import ts
 
@@ -146,7 +153,7 @@ def _detail(db: Db, incident_id: str) -> Dict[str, Any]:
         raise HTTPException(404, f"Incident {incident_id} not found")
     r = found[0]
     site = _jira_site(db)
-    incident = {**_list_out(r, site), "map_index": r.get("map_index"), "ai": _json(r.get("ai")),
+    incident = {**_list_out(r, site), "map_index": r.get("map_index"), "ai": ai_out(_json(r.get("ai"))),
                 "resolution": r.get("resolution"), "resolved_by": r.get("resolved_by"), "resolved_at": _iso(r.get("resolved_at")),
                 "acked_by": r.get("acked_by"), "acked_at": _iso(r.get("acked_at")),
                 "airflow_url": links(r.get("airflow_url"), r.get("api_version"), r["dag_id"], r.get("run_id")),
@@ -224,9 +231,25 @@ def assign_incident(incident_id: str, body: AssignIn, db: Db = Depends(current_d
     return _act(db, incident_id, lambda s: inc.assign(s, incident_id, body.assignee, db.user))
 
 
+def _learn(db: Db, incident_id: str) -> None:
+    """Remember a person's resolution as INCIDENT_RESOLUTION knowledge (written by the service identity when there is
+    one, since engineers' roles may not write knowledge; the person is the recorded author); never fails the resolve."""
+    from app.db import SnowflakeSessionError, system_db
+    from services.ops.resolution import remember_resolution
+
+    try:
+        writer = system_db()
+    except SnowflakeSessionError:
+        writer = db
+    if remember_resolution(writer, incident_id, db.user) is None and writer is not db:
+        remember_resolution(db, incident_id, db.user)
+
+
 @router.post("/api/ops/incidents/{incident_id}/resolve")
 def resolve_incident(incident_id: str, body: ResolveIn, db: Db = Depends(current_db)):
-    return _act(db, incident_id, lambda s: inc.resolve(s, incident_id, body.resolution, db.user))
+    out = _act(db, incident_id, lambda s: inc.resolve(s, incident_id, body.resolution, db.user))
+    _learn(db, incident_id)
+    return out
 
 
 @router.post("/api/ops/incidents/{incident_id}/mute")
@@ -254,6 +277,133 @@ def ticket_incident(incident_id: str, db: Db = Depends(current_db)):
     return _act(db, incident_id, work)
 
 
+# ---------------------------------------------------------------- AI root cause, ask, postmortem, impact (PR O3)
+
+class DiagnoseIn(BaseModel):
+    force: bool = False
+
+
+class AskIn(BaseModel):
+    question: str = Field(min_length=3, max_length=1000)
+
+
+def _ai_call(fn):
+    from services.ops.diagnose import DiagnoseError
+
+    try:
+        return fn()
+    except DiagnoseError as exc:
+        raise HTTPException(exc.status, str(exc)) from exc
+    except HTTPException:
+        raise
+    except AssertionError as exc:   # Cortex returned no structured answer
+        raise HTTPException(502, str(exc)[:300]) from exc
+    except Exception as exc:
+        raise _ops_error(exc) from exc
+
+
+@router.post("/api/ops/incidents/{incident_id}/diagnose")
+def diagnose_incident(incident_id: str, body: Optional[DiagnoseIn] = None, db: Db = Depends(current_db)):
+    """The AI diagnosis, reused while the fingerprint is unchanged unless force is set."""
+    from services.ops.diagnose import diagnose
+
+    result = _ai_call(lambda: diagnose(db, incident_id, force=bool(body and body.force), actor=db.user))
+    return {"ai": ai_out(result["ai"])}
+
+
+@router.post("/api/ops/incidents/{incident_id}/ask")
+def ask_incident(incident_id: str, body: AskIn, db: Db = Depends(current_db)):
+    from services.ops.diagnose import ask
+
+    return _ai_call(lambda: ask(db, incident_id, body.question, actor=db.user))
+
+
+@router.post("/api/ops/incidents/{incident_id}/postmortem")
+def postmortem_incident(incident_id: str, db: Db = Depends(current_db)):
+    from services.ops.diagnose import postmortem
+
+    return _ai_call(lambda: postmortem(db, incident_id, actor=db.user))
+
+
+@router.get("/api/ops/incidents/{incident_id}/impact")
+def incident_impact(incident_id: str, db: Db = Depends(current_db)):
+    """Models, tables, domains, STTMs and QA affected by the incident's task (code graph; no AI)."""
+    from services.ops.context import impact, load_incident
+
+    incident = _ai_call(lambda: load_incident(db, incident_id))
+    if not incident:
+        raise HTTPException(404, f"Incident {incident_id} not found")
+    return impact(db, incident)
+
+
+# ---------------------------------------------------------------- retry in Airflow (PR O3)
+
+class RetryIn(BaseModel):
+    dry_run: bool = True
+    downstream: bool = False
+    task_ids: Optional[List[str]] = Field(default=None, max_length=50)
+    preview_token: Optional[str] = Field(default=None, max_length=4000)
+    override_reason: Optional[str] = Field(default=None, max_length=1000)
+
+
+class RetrySafetyIn(BaseModel):
+    safe_to_retry: Literal["yes", "no", "after_fix"]
+    reason: Optional[str] = Field(default=None, max_length=500)
+
+
+def _retry_call(fn):
+    from services.ops.retry import RetryError
+
+    try:
+        return fn()
+    except RetryError as exc:
+        raise HTTPException(exc.status, str(exc)) from exc
+    except MwaaError as exc:
+        raise _mwaa_http(exc) from exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise _ops_error(exc) from exc
+
+
+@router.post("/api/ops/incidents/{incident_id}/retry")
+def retry_incident(incident_id: str, body: RetryIn, db: Db = Depends(current_db),
+                   x_aip_replay: Optional[str] = Header(default=None)):
+    """Clear the failed task instances in Airflow: a dry run returns what would be cleared and a preview_token; the
+    real retry ({dry_run: false, preview_token, override_reason?}) clears exactly what was previewed."""
+    from app.governance import _valid_replay
+    from services.ops.retry import retry
+
+    if body.task_ids is not None and any(not t.strip() or len(t) > 250 for t in body.task_ids):
+        raise HTTPException(422, "task_ids must be Airflow task ids")
+    replay = bool(_valid_replay(x_aip_replay))
+    return _retry_call(lambda: retry(db, incident_id, dry_run=body.dry_run, user=db.user, downstream=body.downstream,
+                                     task_ids=body.task_ids, preview_token=body.preview_token,
+                                     override_reason=body.override_reason, replay=replay))
+
+
+@router.post("/api/ops/incidents/{incident_id}/retry-safety")
+def mark_retry_safety(incident_id: str, body: RetrySafetyIn, db: Db = Depends(current_db)):
+    """A person's own safe-to-retry call; it wins over the AI's."""
+    from services.ops.retry import mark
+
+    _retry_call(lambda: mark(db, incident_id, body.safe_to_retry, body.reason, db.user))
+    return _detail(db, incident_id)
+
+
+# ---------------------------------------------------------------- reliability (PR O3)
+
+@router.get("/api/ops/reliability")
+def reliability(days: int = Query(default=7, ge=1, le=90), team_id: Optional[str] = Query(default=None, max_length=64),
+                db: Db = Depends(current_db)):
+    from services.ops.reliability import report
+
+    try:
+        return report(db, days, team_id or None)
+    except Exception as exc:
+        raise _ops_error(exc) from exc
+
+
 class BulkIn(BaseModel):
     ids: List[str] = Field(min_length=1, max_length=BULK_MAX)
     action: Literal["ack", "assign", "resolve"]
@@ -275,6 +425,7 @@ def bulk_incidents(body: BulkIn, db: Db = Depends(current_db)):
                 inc.assign(store, incident_id, body.assignee, db.user)
             else:
                 inc.resolve(store, incident_id, body.resolution or "", db.user)
+                _learn(db, incident_id)
             results.append({"incident_id": incident_id, "ok": True})
         except inc.ActionError as exc:
             results.append({"incident_id": incident_id, "ok": False, "error": str(exc)})
@@ -577,10 +728,13 @@ class SettingsIn(BaseModel):
     done_status: Optional[str] = Field(default=None, max_length=60)
     rate_limit_per_10min: Optional[int] = Field(default=None, ge=1, le=500)
     public_base_url: Optional[str] = Field(default=None, max_length=500)
+    ai_auto: Optional[bool] = None
+    ai_severities: Optional[List[str]] = Field(default=None, max_length=4)
+    weekly_digest: Optional[bool] = None
 
 
 SETTING_KEYS = ("reopen_hours", "alert_on_retry_for_critical", "transition_on_resolve", "done_status", "rate_limit_per_10min",
-                "public_base_url")
+                "public_base_url", "ai_auto", "ai_severities", "weekly_digest")
 
 
 def _settings_out(db: Db) -> Dict[str, Any]:
@@ -611,11 +765,17 @@ def put_settings(body: SettingsIn, db: Db = Depends(current_db)):
                 raise HTTPException(422, "public_base_url is the web app's address, for example https://gdp.example.com")
         if key == "done_status" and not value:
             value = "Done"
+        if key == "ai_severities" and value is not None:
+            wanted = {str(v).strip().upper() for v in value}
+            if wanted - set(SEVERITIES):
+                raise HTTPException(422, "ai_severities must be among P1, P2, P3, P4")
+            value = [s for s in SEVERITIES if s in wanted]
         if value is None and key != "public_base_url":
             raise HTTPException(422, f"{key} cannot be empty")
         current[key] = value
     try:
-        _set_config(db, inc.CONFIG_KEY, current, "Ops incidents: reopen window, Teams rate limit, Jira transition, public URL")
+        _set_config(db, inc.CONFIG_KEY, current,
+                    "Ops incidents: reopen window, Teams rate limit, Jira transition, public URL, AI diagnosis, weekly digest")
     except Exception as exc:
         raise _ops_error(exc) from exc
     return _settings_out(db)

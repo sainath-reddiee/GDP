@@ -29,7 +29,7 @@ MAX_ATTEMPTS = 6
 WINDOW_SECONDS = 600
 DEFAULT_RATE_LIMIT = 10
 RATE_LIMITED_KINDS = {"opened", "reoccurred", "resolved"}
-CARD_KINDS = ("opened", "escalated", "reoccurred", "resolved", "storm_summary", "test")
+CARD_KINDS = ("opened", "escalated", "reoccurred", "resolved", "storm_summary", "test", "digest")
 EXCERPT_CHARS = 600
 SEND_TIMEOUT = 10.0
 

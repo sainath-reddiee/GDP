@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { api, attemptValue } from "@/lib/api";
+import { api, ApiError, attemptValue } from "@/lib/api";
 import type { DagRun } from "../ops/actions";
 
 // ---------------------------------------------------------------- types (the /api/ops incidents contract)
@@ -16,8 +16,30 @@ export type Incident = {
   jira_key: string | null; jira_url: string | null; jira_state: string | null; title: string; error_excerpt: string | null;
   ai_summary: string | null;
 };
+export type SafeToRetry = "yes" | "no" | "after_fix";
+export type AiEvidence = { kind: string; ref: string; text: string };
+export type AiCitation = { kind: string; ref: string; path?: string | null; line?: number | null; repo_id?: string | null };
+export type AiSimilar = { incident_id: string; title: string; resolution: string | null; resolved_at: string | null; score: number | null };
+export type BlastRadius = { models?: string[]; tables?: string[]; domains?: string[]; sttm?: { run_id: string; target: string }[] };
+export type IncidentAi = {
+  category: string | null; probable_cause: string | null; evidence: AiEvidence[] | null; confidence: number | null;
+  safe_to_retry: SafeToRetry | null; retry_reason: string | null; fix_steps: string[] | null; owner_hint: string | null;
+  blast_radius: BlastRadius | null; citations: AiCitation[] | null; similar: AiSimilar[] | null; model: string | null;
+  generated_at: string | null; context_parts: string[] | null;
+};
+export type AskAnswer = { answer: string; citations: { kind: string; ref: string; url?: string | null }[] };
+export type Impact = {
+  models: string[]; tables: string[]; domains: string[]; sttm: { run_id: string; target: string }[];
+  qa: { target_table_id: string; fqn: string; last_outcome: string | null }[]; source: "code_graph" | "none" | string; detail: string | null;
+};
+export type RetryTask = { dag_id: string; run_id: string; task_id: string; map_index: number; state: string | null };
+export type RetryPreview = { dry_run: true; tasks: RetryTask[]; preview_token: string; detail: string | null };
+export type RetryDone = { dry_run: false; cleared: number; tasks: RetryTask[]; detail: string | null };
+/** A call that may be held for approval (202): `pending` carries the API's message instead of an error. */
+export type Gated<T> = { ok: true; data: T } | { ok: false; error: string; pending?: boolean };
+
 export type IncidentFull = Incident & {
-  ai: Record<string, unknown> | null; resolution: string | null; resolved_by: string | null; resolved_at: string | null;
+  ai: IncidentAi | null; resolution: string | null; resolved_by: string | null; resolved_at: string | null;
   airflow_url: string | null; muted_until: string | null;
 };
 export type IncidentEvent = { event_id: string; kind: string; actor: string | null; detail: unknown; created_at: string | null };
@@ -55,6 +77,7 @@ export type RuleInput = Omit<RoutingRule, "rule_id">;
 export type OpsSettings = {
   jira_bot: boolean; jira_site: string | null; reopen_hours: number; alert_on_retry_for_critical: boolean; transition_on_resolve: boolean;
   done_status: string | null; rate_limit_per_10min: number; public_base_url: string | null; worker_seen_at: string | null;
+  /** O3; absent on an older API */ ai_auto?: boolean; ai_severities?: string[]; weekly_digest?: boolean;
 };
 export type SettingsInput = Partial<Omit<OpsSettings, "jira_bot" | "jira_site" | "worker_seen_at">>;
 
@@ -112,6 +135,47 @@ export async function ticketIncident(id: string) { return act(id, "ticket"); }
 export async function bulkIncidents(body: BulkAction) {
   const r = await attemptValue(() => api<{ results: BulkResult[] }>("/api/ops/incidents/bulk", { method: "POST", body: json(body) }));
   changed();
+  return r;
+}
+
+// ---------------------------------------------------------------- AI (AI.USE), impact (OPS.VIEW), retry (OPS.OPERATE)
+
+export async function diagnoseIncident(id: string, force: boolean) {
+  const r = await attemptValue(() => api<{ ai: IncidentAi }>(`/api/ops/incidents/${enc(id)}/diagnose`, { method: "POST", body: json({ force }) }));
+  changed(id);
+  return r;
+}
+
+export async function askIncident(id: string, question: string) {
+  return attemptValue(() => api<AskAnswer>(`/api/ops/incidents/${enc(id)}/ask`, { method: "POST", body: json({ question }) }));
+}
+
+export async function postmortemIncident(id: string) {
+  return attemptValue(() => api<{ markdown: string }>(`/api/ops/incidents/${enc(id)}/postmortem`, { method: "POST", body: json({}) }));
+}
+
+export async function incidentImpact(id: string) {
+  return attemptValue(() => api<Impact>(`/api/ops/incidents/${enc(id)}/impact`));
+}
+
+async function gated<T>(fn: () => Promise<T>): Promise<Gated<T>> {
+  try {
+    return { ok: true, data: await fn() };
+  } catch (e) {
+    if (e instanceof ApiError) return { ok: false, error: e.message, pending: e.status === 202 };
+    throw e;
+  }
+}
+
+export async function previewRetry(id: string, downstream: boolean) {
+  return gated(() => api<RetryPreview>(`/api/ops/incidents/${enc(id)}/retry`, { method: "POST", body: json({ dry_run: true, downstream }) }));
+}
+
+export async function retryIncident(id: string, previewToken: string, overrideReason?: string) {
+  const r = await gated(() => api<RetryDone>(`/api/ops/incidents/${enc(id)}/retry`, {
+    method: "POST", body: json({ dry_run: false, preview_token: previewToken, ...(overrideReason ? { override_reason: overrideReason } : {}) }),
+  }));
+  changed(id);
   return r;
 }
 

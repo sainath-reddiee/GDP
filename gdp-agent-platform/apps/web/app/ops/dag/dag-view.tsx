@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { Fragment, useEffect, useMemo, useState, useTransition } from "react";
-import { Check, ExternalLink, FileText, Loader2, RefreshCw, Settings2, X } from "lucide-react";
+import { BellOff, Check, ExternalLink, FileText, Globe, Loader2, RefreshCw, Settings2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input, Select } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
@@ -13,10 +13,26 @@ import {
   type Criticality, type DagDetail, type DagRun, type TaskLog, type TaskRun,
 } from "../actions";
 import { duration, explain, parseTs, pct, pctTone, RunStrip, StateBadge, When } from "../ops-shared";
+import { localInput } from "../../incidents/incident-shared";
 
 type Option = { id: string; name: string };
 const CRITICALITY: Criticality[] = ["CRITICAL", "HIGH", "MEDIUM", "LOW"];
 const ERROR_LINE = /error|exception|traceback|failed/i;
+const TIMEZONES = ["UTC", "America/New_York", "America/Chicago", "America/Los_Angeles", "Europe/London", "Europe/Berlin", "Asia/Kolkata", "Asia/Singapore", "Australia/Sydney"];
+const MAX_MUTE_DAYS = 90;
+
+/** A name the browser knows as an IANA time zone. */
+function validZone(tz: string): boolean {
+  try { new Intl.DateTimeFormat("en-US", { timeZone: tz }); return true; } catch { return false; }
+}
+
+/** Muted while the until time is in the future; checked after mount so the first render matches the server. */
+function useMuted(until: string | null | undefined) {
+  const [now, setNow] = useState<number | null>(null);
+  useEffect(() => { setNow(Date.now()); }, []);
+  const at = parseTs(until)?.getTime();
+  return !!at && (now === null || at > now);
+}
 
 const time = (r: DagRun) => parseTs(r.start ?? r.logical_date)?.getTime() ?? 0;
 
@@ -33,6 +49,7 @@ export function DagView({ envId, envName, envEnabled, initial, initialRun, canOp
   const [polling, startPoll] = useTransition();
   const refreshSeq = useSeq();
   const { dag, runs } = data;
+  const muted = useMuted(dag.mute_until);
 
   const select = (id: string) => {
     setRunId(id);
@@ -74,7 +91,14 @@ export function DagView({ envId, envName, envEnabled, initial, initialRun, canOp
             <span>Schedule <span className="font-mono">{dag.schedule || "none"}</span></span>
             <span>· Owners {dag.owners?.join(", ") || "none"}</span>
             {dag.tags?.length > 0 && <span>· Tags {dag.tags.join(", ")}</span>}
+            {dag.timezone && <span className="inline-flex items-center gap-1">· <Globe className="h-3 w-3" /><span className="font-mono">{dag.timezone}</span></span>}
           </div>
+          {muted && (
+            <p className="mt-1.5 inline-flex flex-wrap items-center gap-1.5 rounded-lg bg-slate-100 px-2 py-1 text-xs text-slate-700">
+              <BellOff className="h-3.5 w-3.5" />Alerts muted until <When iso={dag.mute_until} />
+              {dag.mute_reason && <span className="text-slate-500">· {dag.mute_reason}</span>}
+            </p>
+          )}
         </div>
         <div className="flex flex-wrap items-center gap-2">
           {dag.airflow_url && (
@@ -321,15 +345,25 @@ function SettingsForm({ dag, envId, domains, repos, teams, onClose, onSaved }: {
   const [domainId, setDomainId] = useState(dag.domain_id ?? "");
   const [repoId, setRepoId] = useState(dag.repo_id ?? "");
   const [repoPath, setRepoPath] = useState(dag.repo_path ?? "");
+  const [timezone, setTimezone] = useState(dag.timezone ?? "");
+  // an expired mute starts empty, so saving other settings is not blocked by a past time
+  const [muteUntil, setMuteUntil] = useState(() => { const d = parseTs(dag.mute_until); return d && d.getTime() > Date.now() ? localInput(d) : ""; });
+  const [muteReason, setMuteReason] = useState(() => (muteUntil ? dag.mute_reason ?? "" : ""));
   const [error, setError] = useState("");
   const [pending, start] = useTransition();
   const minutes = maxMin.trim() ? Number(maxMin) : null;
   const badMinutes = minutes !== null && (!Number.isInteger(minutes) || minutes < 1 || minutes > 10080);
+  const badZone = !!timezone.trim() && !validZone(timezone.trim());
+  const muteDate = muteUntil ? new Date(muteUntil) : null;
+  const badMute = !!muteDate && (Number.isNaN(muteDate.getTime()) || muteDate.getTime() <= Date.now()
+    || muteDate.getTime() > Date.now() + MAX_MUTE_DAYS * 86400 * 1000);
+  const needReason = !!muteDate && !muteReason.trim();
   const save = () => start(async () => {
     setError("");
     const r = await saveDagSettings(envId, dag.dag_id, {
       team_id: teamId || null, criticality: (criticality || null) as Criticality | null, expected_by_cron: cron.trim() || null, max_duration_min: minutes,
       domain_id: domainId || null, repo_id: repoId || null, repo_path: repoPath.trim() || null,
+      timezone: timezone.trim() || null, mute_until: muteDate ? muteDate.toISOString() : null, mute_reason: muteDate ? muteReason.trim() : null,
     });
     if (r.ok) await onSaved(); else setError(explain(r.error));
   });
@@ -377,12 +411,34 @@ function SettingsForm({ dag, envId, domains, repos, teams, onClose, onSaved }: {
         </label>
         <label className="space-y-1 text-xs font-medium">Path in the repository
           <Input value={repoPath} onChange={(e) => setRepoPath(e.target.value)} placeholder="dags/orders_daily.py" className="font-mono text-xs" />
+          <span className="block font-normal text-muted-foreground">Lets incidents show downstream impact and cite the DAG code.</span>
+        </label>
+        <label className="space-y-1 text-xs font-medium">Time zone
+          <Input value={timezone} onChange={(e) => setTimezone(e.target.value)} placeholder="UTC" list="dag-timezones" className="font-mono text-xs"
+                 aria-invalid={badZone} />
+          <datalist id="dag-timezones">{TIMEZONES.map((z) => <option key={z} value={z} />)}</datalist>
+          <span className="block font-normal text-muted-foreground">IANA name, used for the expected-by time.</span>
+          {badZone && <span role="alert" className="block font-normal text-destructive">Not a known time zone, for example Europe/London.</span>}
+        </label>
+        <label className="space-y-1 text-xs font-medium">Mute alerts until
+          <span className="flex gap-2">
+            <Input type="datetime-local" value={muteUntil} onChange={(e) => setMuteUntil(e.target.value)} className="text-xs" aria-invalid={badMute}
+                   min={localInput(new Date())} max={localInput(new Date(Date.now() + MAX_MUTE_DAYS * 86400 * 1000))} />
+            {muteUntil && <Button type="button" variant="ghost" size="sm" className="h-9" onClick={() => { setMuteUntil(""); setMuteReason(""); }}>Unmute</Button>}
+          </span>
+          <span className="block font-normal text-muted-foreground">Empty means not muted. Runs are still recorded.</span>
+          {badMute && <span role="alert" className="block font-normal text-destructive">Pick a time in the future, at most {MAX_MUTE_DAYS} days ahead.</span>}
+        </label>
+        <label className="space-y-1 text-xs font-medium">Mute reason
+          <Input value={muteReason} onChange={(e) => setMuteReason(e.target.value)} placeholder="Source system migration" className="text-xs"
+                 disabled={!muteUntil} aria-invalid={needReason} />
+          {needReason && <span role="alert" className="block font-normal text-destructive">Say why alerts are muted.</span>}
         </label>
       </div>
       {error && <Alert onDismiss={() => setError("")}>{error}</Alert>}
       <div className="flex justify-end gap-2">
         <Button variant="ghost" onClick={onClose} disabled={pending}>Cancel</Button>
-        <Button onClick={save} disabled={pending || badMinutes}>{pending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}Save settings</Button>
+        <Button onClick={save} disabled={pending || badMinutes || badZone || badMute || needReason}>{pending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}Save settings</Button>
       </div>
     </section>
   );

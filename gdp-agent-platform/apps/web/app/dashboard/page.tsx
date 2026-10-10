@@ -1,10 +1,12 @@
 import Link from "next/link";
 import {
   Activity, AlertTriangle, ArrowRight, ArrowUpRight, Boxes, CheckCircle2, CircleDashed, Clock, Database, Eye,
-  FolderTree, Layers, PlayCircle, Sparkles, XCircle,
+  FolderTree, Layers, PlayCircle, Siren, Sparkles, XCircle,
 } from "lucide-react";
 import { api, whoami } from "@/lib/api";
-import type { AuditEvent, ProfileStoreRow, RunSummary } from "@/lib/types";
+import { can, type AuditEvent, type ProfileStoreRow, type RunSummary, type WhoAmI } from "@/lib/types";
+import type { IncidentSummary } from "../incidents/actions";
+import type { OpsSummary, Reliability } from "../ops/actions";
 import { RunTable } from "@/components/run-table";
 import { PageHeader } from "@/components/page-header";
 import { buttonVariants } from "@/components/ui/button";
@@ -25,6 +27,54 @@ const STATE_LABEL: Record<string, string> = {
   SODA_REVIEW: "Data quality checks to confirm", DBT_REVIEW: "Generated dbt code to review",
   VALIDATION_FAILED: "Validation failed: fix and rerun",
 };
+
+type OpsCard = { incidents: IncidentSummary | null; ops: OpsSummary | null; mttr: number | null };
+
+/** The operations numbers for OPS.VIEW holders; each part fails soft, and nothing shows when all are missing. */
+async function opsCard(me: WhoAmI | null): Promise<OpsCard | null> {
+  if (!can(me, "OPS.VIEW")) return null;
+  const [incidents, ops, rel] = await Promise.all([
+    api<IncidentSummary>("/api/ops/incidents/summary").catch(() => null),
+    api<OpsSummary>("/api/ops/summary").catch(() => null),
+    api<Reliability>("/api/ops/reliability?days=7").catch(() => null),
+  ]);
+  if (!incidents && !ops && !rel) return null;
+  // MTTR over all teams, weighted by each team's incident count
+  const timed = (rel?.teams ?? []).filter((t) => t.mttr_min !== null && t.mttr_min !== undefined && t.incidents > 0);
+  const weight = timed.reduce((n, t) => n + t.incidents, 0);
+  const mttr = weight ? timed.reduce((n, t) => n + (t.mttr_min ?? 0) * t.incidents, 0) / weight : null;
+  return { incidents, ops, mttr };
+}
+
+function mttrText(m: number | null) {
+  if (m === null || !Number.isFinite(m)) return "-";
+  const v = Math.round(m);
+  return v < 60 ? `${v} min` : v < 1440 ? `${Math.floor(v / 60)} h${v % 60 ? ` ${v % 60} min` : ""}` : `${Math.round(v / 144) / 10} d`;
+}
+
+function OperationsCard({ card }: { card: OpsCard }) {
+  const open = card.incidents ? card.incidents.open + card.incidents.ack : null;
+  const p1 = card.incidents?.p1_open ?? null;
+  const failing = card.ops?.failing_24h ?? null;
+  const cell = (href: string, label: string, value: React.ReactNode, tone?: string) => (
+    <Link href={href} className="rounded-xl border border-border/80 px-3 py-2 transition hover:border-primary/30 hover:bg-accent/40">
+      <p className={cn("text-xl font-semibold tabular-nums", tone)}>{value ?? "-"}</p>
+      <p className="text-xs text-muted-foreground">{label}</p>
+    </Link>
+  );
+  return (
+    <Panel title="Operations" icon={Siren}
+           action={<span className="flex gap-3"><Link href="/incidents" className="text-xs font-medium text-primary hover:underline">Incidents</Link>
+             <Link href="/ops" className="text-xs font-medium text-primary hover:underline">Pipelines</Link></span>}>
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+        {cell("/incidents", "Open incidents", open, open ? "text-rose-700" : undefined)}
+        {cell("/incidents?severity=P1", "P1 open", p1, p1 ? "text-rose-700" : undefined)}
+        {cell("/ops?state=failed", "DAGs failing, 24 h", failing, failing ? "text-amber-700" : undefined)}
+        {cell("/ops?view=reliability&days=7", "MTTR, 7 days", mttrText(card.mttr))}
+      </div>
+    </Panel>
+  );
+}
 
 function greeting() {
   const h = new Date().getHours();
@@ -77,7 +127,7 @@ function Panel({ title, icon: Icon, action, children, className }: {
 }
 
 export default async function Dashboard() {
-  const [me, { runs }, metrics, review, failing, overview, store, domains, audit] = await Promise.all([
+  const [me, { runs }, metrics, review, failing, overview, store, domains, audit, ops] = await Promise.all([
     whoami(),
     api<{ runs: RunSummary[] }>("/api/runs?limit=8"),
     api<Metrics>("/api/metrics/summary").catch(() => null),
@@ -87,6 +137,7 @@ export default async function Dashboard() {
     api<{ profiles: ProfileStoreRow[] }>("/api/profiles/store").catch(() => ({ profiles: [] as ProfileStoreRow[] })),
     api<{ domains: DomainRow[] }>("/api/domains").catch(() => ({ domains: [] as DomainRow[] })),
     api<{ events: AuditEvent[] }>("/api/audit?limit=7").catch(() => ({ events: [] as AuditEvent[] })),
+    whoami().then(opsCard).catch(() => null),
   ]);
   // Counts come from the server (correct at any number of runs); the run lists below are small, targeted fetches.
   const s = metrics
@@ -135,6 +186,8 @@ export default async function Dashboard() {
           <ArrowRight className="ml-auto h-4 w-4 text-muted-foreground" />
         </Link>
       )}
+
+      {ops && <OperationsCard card={ops} />}
 
       <div className="grid gap-4 xl:grid-cols-5">
         <Panel title="Pipeline: where running work sits" icon={Activity} className="xl:col-span-3"
