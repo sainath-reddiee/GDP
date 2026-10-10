@@ -158,3 +158,138 @@ def test_branch_paths_handle_slashes():
     assert relative_path('dbt_demo/branches/"feat/x"/models/a.sql', "feat/x") == "models/a.sql"
     assert relative_path("dbt_demo/branches/feat/x/models/a.sql", "feat/x") == "models/a.sql"
     assert relative_path("dbt_demo/branches/other/a.sql", "main") == ""
+
+
+# --------------------------------------------------------------------------- hardening: indexer planning and scrubbing
+
+def test_plan_changes_reads_changed_and_project_folder_first():
+    from services.code.indexer import plan_changes
+
+    listed = {"dbt_project.yml": ("h2", 1), "models/a.sql": ("a", 1), "models/b.sql": ("b", 1), "docs/x.md": ("x", 1)}
+    known = {"dbt_project.yml": "h1", "models/a.sql": "a", "models/b.sql": "b", "docs/x.md": "x", "old.sql": "o"}
+    changed, removed, more = plan_changes(listed, known)
+    assert changed[0] == "dbt_project.yml"  # a changed project re-reads every file under it
+    assert set(changed) == set(listed) and removed == ["old.sql"] and more == 0
+    changed, removed, more = plan_changes({"m/a.sql": ("1", 1), "m/b.sql": ("2", 1)}, {}, budget=1)
+    assert len(changed) == 1 and more == 1
+
+
+def test_plan_changes_nested_project_only_pulls_its_folder():
+    from services.code.indexer import plan_changes
+
+    listed = {"proj/dbt_project.yml": ("new", 1), "proj/models/a.sql": ("a", 1), "other/b.sql": ("b", 1)}
+    known = {"proj/dbt_project.yml": "old", "proj/models/a.sql": "a", "other/b.sql": "b"}
+    changed, _, _ = plan_changes(listed, known)
+    assert set(changed) == {"proj/dbt_project.yml", "proj/models/a.sql"}
+
+
+def test_safe_path_rejects_sql_breaking_names():
+    from services.code.indexer import safe_path
+
+    assert safe_path("models/staging/stg_orders.sql") and safe_path("macros/@utils/x-y+z.sql")
+    for bad in ("docs/My Notes.md", "a'b.sql", "x);drop.sql", "../etc/passwd", "a\"b.sql"):
+        assert not safe_path(bad)
+
+
+def test_scrub_covers_prefixed_keys_json_urls_and_pem():
+    from services.code.dbt_parse import scrub
+
+    assert "hunter2" not in scrub("db_password: hunter2")
+    assert "abcd1234xyz" not in scrub("AWS_SECRET_ACCESS_KEY=abcd1234xyz")
+    assert "my pass word" not in scrub('{"password": "my pass word"}')
+    assert "s3cr3t" not in scrub("postgres://bob:s3cr3t@host/db")
+    pem = "-----BEGIN RSA PRIVATE KEY-----\nMIIEbody\n-----END RSA PRIVATE KEY-----"
+    assert "MIIEbody" not in scrub(pem)
+    assert "ghp_" not in scrub("token = ghp_" + "a" * 36)
+    # references to secrets are kept; ordinary SQL is untouched
+    assert "env_var" in scrub("password: \"{{ env_var('DBT_PW') }}\"")
+    assert scrub("select password_hash from users") == "select password_hash from users"
+
+
+# --------------------------------------------------------------------------- hardening: API helpers
+
+def _api():
+    import sys
+    from pathlib import Path
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "apps" / "api"))
+    import app.code_api as code_api  # noqa: E402
+
+    return code_api
+
+
+def test_cron_accepts_zones_and_day_names_and_rejects_injection():
+    api = _api()
+    for ok in ("0 6 * * * UTC", "0 6 * * MON-FRI Europe/London", "*/15 * * * * America/Argentina/Buenos_Aires", "0 6 * * 1 Etc/GMT+5"):
+        assert api.CRON.match(ok), ok
+    for bad in ("0 6 * * UTC", "0 6 * * * UTC' AS DROP", "0 6 * * * UTC; DROP TASK x"):
+        assert not api.CRON.match(bad), bad
+
+
+def test_like_pattern_is_literal_and_origin_compare():
+    api = _api()
+    assert api.like_pattern("dim_customers") == "%dim!_customers%"
+    assert api.like_pattern("100%") == "%100!%%"
+    assert api.same_origin("https://github.com/a/b.git", "https://GitHub.com/a/b/")
+    assert not api.same_origin("https://github.com/a/b", "https://github.com/a/c")
+
+
+class _RepoDb:
+    def __init__(self, repo):
+        self.repo, self.executed = repo, []
+
+    def query(self, sql, params=()):
+        if "FROM CODE.REPO WHERE REPO_ID" in sql:
+            return [dict(self.repo)]
+        if sql.startswith("SHOW GIT BRANCHES"):
+            return [{"name": "main", "commit_hash": "a" * 40}, {"name": "feat/x", "commit_hash": "b" * 40}]
+        return []
+
+    def execute(self, sql, params=()):
+        self.executed.append(sql)
+
+
+def _repo_row(**kw):
+    import json as _j
+
+    row = {"repo_id": "r1", "name": "DEMO", "branch": "main", "git_repository": "DB.CODE.DEMO", "git_url": "https://github.com/a/b",
+           "domain_ids": "[]", "include_globs": "[]", "exclude_globs": "[]", "kind": "DBT", "enabled": True, "stats": "{}",
+           "created_objects": None}
+    row.update({k: (_j.dumps(v) if isinstance(v, list) else v) for k, v in kw.items()})
+    return row
+
+
+def test_saving_domains_only_keeps_the_index(monkeypatch):
+    api = _api()
+    started = []
+    monkeypatch.setattr(api, "_start_refresh", lambda db, rid: started.append(rid))
+    db = _RepoDb(_repo_row())
+    out = api.update_repo("r1", api.RepoUpdate(domain_ids=["d1"], include_globs=[], exclude_globs=[" "]), db=db)
+    assert not any(s.startswith("DELETE") for s in db.executed) and not started and out["reindexing"] is False
+
+
+def test_branch_switch_rebuilds_and_unknown_branch_is_refused(monkeypatch):
+    import pytest
+    from fastapi import HTTPException
+
+    api = _api()
+    started = []
+    monkeypatch.setattr(api, "_start_refresh", lambda db, rid: started.append(rid))
+    db = _RepoDb(_repo_row())
+    api.update_repo("r1", api.RepoUpdate(branch="feat/x"), db=db)
+    assert any("DELETE FROM CODE.CODE_CHUNK" in s for s in db.executed) and started == ["r1"]
+    with pytest.raises(HTTPException) as err:
+        api.update_repo("r1", api.RepoUpdate(branch="gone"), db=_RepoDb(_repo_row()))
+    assert err.value.status_code == 400 and "main" in err.value.detail
+
+
+def test_credentials_refused_for_reused_clone():
+    import pytest
+    from fastapi import HTTPException
+
+    api = _api()
+    db = _RepoDb(_repo_row(git_repository="OTHER_DB.GIT.SHARED"))
+    with pytest.raises(HTTPException) as err:
+        api.set_credentials("r1", api.CredentialsIn(mode="public"), db=db)
+    assert err.value.status_code == 400
+    assert api._owns_git_repo({"name": "DEMO", "git_repository": f"{api.DATABASE}.CODE.DEMO", "created_objects": []})

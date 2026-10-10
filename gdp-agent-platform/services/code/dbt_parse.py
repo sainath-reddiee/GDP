@@ -21,10 +21,16 @@ TEXT_SUFFIXES = (".sql", ".yml", ".yaml", ".md", ".py", ".txt", ".toml", ".jinja
 SKIP_FILES = re.compile(
     r"(^|/)(profiles\.ya?ml|\.env(\..*)?|.*\.(pem|key|p12|pfx|crt)|id_rsa.*|credentials.*|secrets?\.(ya?ml|json|toml))$", re.I)
 SKIP_DIRS = re.compile(r"(^|/)(\.git|node_modules|target|dbt_packages|dbt_modules|logs|venv|\.venv|__pycache__)/", re.I)
+# key names ending in a credential word (db_password, AWS_SECRET_ACCESS_KEY, "client_secret"), then : or =, then a value
 SECRET_LINE = re.compile(
-    r"""(?ix)(\b(password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key|client[_-]?secret)\b
-         \s*[:=]\s*)(['"]?)([^\s'"]{6,})\3""")
-SECRET_TOKENS = re.compile(r"(AKIA[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9]{30,}|xox[baprs]-[A-Za-z0-9-]{10,}|-----BEGIN [A-Z ]*PRIVATE KEY-----)")
+    r"""(?im)(["']?[\w.\-]*(?:password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key|credentials?)["']?
+         [ 	]*[:=][ 	]*)(["']?)([^\s"'#,}]{3,}|(?<=["'])[^"'
+]{3,}(?=["']))""", re.X)
+SECRET_TOKENS = re.compile(r"(AKIA[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,}|glpat-[A-Za-z0-9_\-]{20,}"
+                           r"|xox[baprs]-[A-Za-z0-9-]{10,}|sk-[A-Za-z0-9_\-]{20,}|eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,})")
+PEM_BLOCK = re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PRIVATE KEY-----|\Z)", re.S)
+URL_CREDENTIALS = re.compile(r"(://)[^/\s:@]+:[^@\s/]+@")
+JINJA_VALUE = re.compile(r"^\{\{|env_var\s*\(|^\$\{|^%\(")
 
 REF = re.compile(r"""ref\(\s*['"]([\w.\-]+)['"](?:\s*,\s*['"]([\w.\-]+)['"])?\s*\)""")
 SOURCE = re.compile(r"""source\(\s*['"]([\w.\-]+)['"]\s*,\s*['"]([\w.\-]+)['"]\s*\)""")
@@ -39,8 +45,17 @@ JINJA_CALL = re.compile(r"\{\{[^}]*?\b([A-Za-z_]\w*)\s*\(", re.S)
 
 
 def scrub(text: str) -> str:
-    """Redact credential assignments and well-known token shapes."""
-    text = SECRET_LINE.sub(lambda m: f"{m.group(1)}{m.group(3)}<redacted>{m.group(3)}", text)
+    """Redact credential assignments, private key blocks, credentials in URLs and well-known token shapes. A value that
+    is a reference rather than a secret ({{ env_var('X') }}, ${X}) is kept, since it tells the model how secrets flow."""
+    text = PEM_BLOCK.sub("<redacted private key>", text)
+    text = URL_CREDENTIALS.sub(lambda m: m.group(1) + "<redacted>@", text)
+
+    def line(m: "re.Match[str]") -> str:
+        value = m.group(3)
+        if JINJA_VALUE.search(value.strip()) or value.strip().lower() in ("none", "null", "true", "false", "<redacted>"):
+            return m.group(0)
+        return f"{m.group(1)}{m.group(2)}<redacted>"
+    text = SECRET_LINE.sub(line, text)
     return SECRET_TOKENS.sub("<redacted>", text)
 
 

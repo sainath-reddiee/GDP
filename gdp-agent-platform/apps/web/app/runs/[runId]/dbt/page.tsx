@@ -1,6 +1,7 @@
 import { api, getRun } from "@/lib/api";
 import { AiSuggestions } from "@/components/ai-suggestions";
 import { StageGate } from "@/components/stage-gate";
+import type { CodeRepo } from "../../../code/actions";
 import { DbtStudio } from "./dbt-studio";
 import type { DbtArtifact, DbtGeneration, DbtPublication, DbtWorkspace, GenerationReport, GithubStatus } from "./dbt-types";
 
@@ -10,7 +11,7 @@ const CAN_GENERATE = new Set([
 ]);
 
 export default async function DbtPage({ params }: { params: { runId: string } }) {
-  const [state, data, workspace, github] = await Promise.all([
+  const [state, data, workspace, github, code] = await Promise.all([
     getRun(params.runId),
     api<{ generation: DbtGeneration | null; artifacts: DbtArtifact[];
           branch: Record<string, unknown> | null;
@@ -24,7 +25,11 @@ export default async function DbtPage({ params }: { params: { runId: string } })
       integrations: [], git_repositories: [], dbt_projects: [], skills: [], models: [], warnings: ["Could not list Snowflake git objects"],
     })),
     api<GithubStatus>("/api/dbt/github").catch(() => ({ ready: false, config: null })),
+    api<{ repos: CodeRepo[] }>("/api/code/repos").catch(() => ({ repos: [] as CodeRepo[] })),
   ]);
+  // repositories configured once in Admin, Integrations: enabled ones that serve this run's domain (none listed means all)
+  const domainId = state.run.domain_id ?? null;
+  const configured = code.repos.filter((r) => r.enabled && (!r.domain_ids.length || (domainId && r.domain_ids.includes(domainId))));
   return (
     <StageGate state={state} stage="DBT">
       <AiSuggestions runId={params.runId} stage="DBT" canAct={!state.is_archived} />
@@ -43,6 +48,7 @@ export default async function DbtPage({ params }: { params: { runId: string } })
         github={github}
         report={data.report ?? null}
         skeletonBase={data.skeleton_base ?? null}
+        configuredRepos={configured}
       />
     </StageGate>
   );
