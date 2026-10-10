@@ -42,7 +42,8 @@ def test_landing_sql_infers_schema_and_copies_by_name():
     assert "PARSE_HEADER = TRUE" in setup[1] and "SNOWFLAKE_SSE" in setup[2]
     cloud = external.setup_sql("AI", "EXT_CRM", "s3", {"file_format": "CSV", "url": "s3://b/", "storage_integration": "S3_INT"})
     assert "URL = 's3://b/' STORAGE_INTEGRATION = S3_INT" in cloud[2]
-    create, copy = external.land_sql("AI", "EXT_CRM", "CSV", "ORDERS", ["o'1.csv", "o2.csv"])
+    landing = external.land_sql("AI", "EXT_CRM", "CSV", "ORDERS", ["o'1.csv", "o2.csv"])
+    copy, create = landing[1], landing[2]
     assert "USING TEMPLATE" in create and "INFER_SCHEMA" in create and "o''1.csv" in create
     assert "UPPER(REGEXP_REPLACE(COLUMN_NAME" in create
     assert "MATCH_BY_COLUMN_NAME = CASE_INSENSITIVE" in copy and "FILES = ('o''1.csv', 'o2.csv')" in copy

@@ -13,7 +13,7 @@ import { cn } from "@/lib/utils";
 import {
   oracleConnection, oracleEnvCheck, oraclePassword, oracleRemove, oracleSchedule, oracleSetup, oracleUnschedule,
 } from "./actions";
-import { ConnectionFields, connectionProblems, fmtDuration, fmtRows, Segmented, timeAgo, type OracleFields } from "./oracle-ui";
+import { ConnectionFields, connectionProblems, CopyButton, fmtDuration, fmtRows, Segmented, timeAgo, type OracleFields } from "./oracle-ui";
 
 const MODE_ICON = { replace: RefreshCcw, append: Plus, merge: GitMerge } as Record<string, typeof Plus>;
 
@@ -218,6 +218,7 @@ export function SettingsTab({ sourceId, overview, onChanged, onRemoved }: {
   const [dropLanded, setDropLanded] = useState(false);
   const [envPresent, setEnvPresent] = useState<boolean | null>(overview.access.password_env_present);
   const [message, setMessage] = useState<{ tone: "ok" | "error"; text: string } | null>(null);
+  const [cleanup, setCleanup] = useState<string[] | null>(null);  // statements left for an admin after a removal
   const [pending, start] = useTransition();
   const dirty = JSON.stringify(fields) !== JSON.stringify(initial);
   const problems = connectionProblems(fields);
@@ -299,14 +300,27 @@ export function SettingsTab({ sourceId, overview, onChanged, onRemoved }: {
         </label>
         <div className="flex flex-wrap items-center gap-2">
           <Input value={confirmName} onChange={(e) => setConfirmName(e.target.value)} placeholder={`Type ${overview.name} to confirm`} className="w-64" />
-          <Button size="sm" variant="destructive" disabled={confirmName !== overview.name || pending} onClick={() => start(async () => {
+          <Button size="sm" variant="destructive" disabled={confirmName !== overview.name || pending || !!cleanup} onClick={() => start(async () => {
             const r = await oracleRemove(sourceId, dropLanded);
             if (!r.ok) { say("error", r.error); return; }
             const failed = r.data.log.filter((l) => !l.ok);
-            if (failed.length) say("error", `Removed, but ${failed.length} cleanup statement(s) need an admin: ${failed.map((f) => f.sql).join("; ")}`);
+            // keep the failures on screen until they are acknowledged; closing now would hide them
+            if (failed.length) { setCleanup(failed.map((f) => f.sql)); return; }
             onRemoved();
           })}><Trash2 className="h-3.5 w-3.5" /> Remove source</Button>
         </div>
+        {cleanup && (
+          <div role="alert" className="space-y-2 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-xs">
+            <p className="font-medium text-destructive">
+              The source was removed, but {cleanup.length} cleanup statement{cleanup.length === 1 ? "" : "s"} failed and need{cleanup.length === 1 ? "s" : ""} an admin:
+            </p>
+            <pre className="whitespace-pre-wrap font-mono text-[11px]">{cleanup.join(";\n")};</pre>
+            <div className="flex flex-wrap items-center gap-2">
+              <CopyButton text={cleanup.join(";\n") + ";"} label="Copy SQL for an admin" />
+              <Button size="sm" onClick={onRemoved}>Done</Button>
+            </div>
+          </div>
+        )}
       </section>
 
       {message && <p role="status" className={cn("text-sm", message.tone === "ok" ? "text-success" : "text-destructive")}>{message.text}</p>}

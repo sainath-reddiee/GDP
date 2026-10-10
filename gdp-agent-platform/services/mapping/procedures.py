@@ -97,8 +97,11 @@ def domain_knowledge(session, domain_id: str, run_id: str, target: Optional[Dict
     knowledge: Dict[str, Any] = {"glossary": {}, "rules": {}, "transforms": [], "history": [], "notes": []}
     target_name = str((target or {}).get("TARGET_TABLE") or "").upper()
     used: List[str] = []
-    for k in rows(session, """SELECT KNOWLEDGE_ID, KNOWLEDGE_TYPE, CONTENT_JSON FROM KNOWLEDGE.DOMAIN_KNOWLEDGE
-                              WHERE DOMAIN_ID = ? AND IS_CURRENT AND STATUS = 'ACTIVE' AND CONTENT_JSON IS NOT NULL""",
+    from services.knowledge.writer import NOT_OPERATIONAL_SQL
+
+    for k in rows(session, f"""SELECT KNOWLEDGE_ID, KNOWLEDGE_TYPE, CONTENT_JSON FROM KNOWLEDGE.DOMAIN_KNOWLEDGE
+                              WHERE DOMAIN_ID = ? AND IS_CURRENT AND STATUS = 'ACTIVE' AND CONTENT_JSON IS NOT NULL
+                                AND {NOT_OPERATIONAL_SQL}""",
                   [domain_id]):
         kind = k["KNOWLEDGE_TYPE"]
         content = normalize_content(kind, variant(k["CONTENT_JSON"]))
@@ -241,7 +244,7 @@ def generate_mapping_candidates(session, run_id: str) -> Dict[str, Any]:
     started = time.time()
     with tool_call(session, run_id, "generate_mapping_candidates", {"run_id": run_id}) as call:
         try:
-            guidance = use_stage(session, "MAPPING", run_id=run_id)
+            guidance = use_stage(session, "MAPPING", run_standard(stage.run), run_id=run_id)
             run = stage.run
             target = target_table(session, run)
             targets = target_columns(session, target["TARGET_TABLE_ID"])
@@ -400,6 +403,12 @@ def _store_feedback(session, run: Dict[str, Any], targets: Dict[str, Dict[str, A
                  tags=["FEEDBACK", "MAPPING"], origin="MAPPING", run_id=run["RUN_ID"])
 
 
+def last_per_source(prepared: List[tuple]) -> List[tuple]:
+    """One decision per source column (the first tuple item); a later decision in the same payload wins."""
+    latest = {p[0]: p for p in prepared}
+    return list(latest.values())
+
+
 def save_mapping_decisions(session, run_id: str, decisions_json: str) -> Dict[str, Any]:
     stage = Stage(session, run_id)
     stage.require("MAPPING_REVIEW")
@@ -446,6 +455,7 @@ def save_mapping_decisions(session, run_id: str, decisions_json: str) -> Dict[st
         prepared.append((source_id, decision, candidate, target_id, transformation, justification,
                          (d.get("comments") or "").strip() or None))
 
+    prepared = last_per_source(prepared)
     claimed: Dict[str, str] = {d["TARGET_COLUMN_ID"]: s for s, d in current.items()
                                if d["DECISION"] != "REJECTED" and d["TARGET_COLUMN_ID"]}
     for source_id, decision, _, target_id, *_ in prepared:

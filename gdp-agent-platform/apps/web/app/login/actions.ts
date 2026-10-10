@@ -2,7 +2,7 @@
 
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
-import { api, attempt, DEV_COOKIE, SESSION_COOKIE, type ActionResult } from "@/lib/api";
+import { api, attempt, DEV_COOKIE, ROLE_COOKIE, SESSION_COOKIE, type ActionResult } from "@/lib/api";
 
 export async function login(_: ActionResult | null, form: FormData): Promise<ActionResult> {
   let sessionId = "";
@@ -14,6 +14,7 @@ export async function login(_: ActionResult | null, form: FormData): Promise<Act
     sessionId = res.session_id;
   });
   if (!result.ok) return result;
+  cookies().delete(ROLE_COOKIE);  // a work role picked by whoever used this browser before
   cookies().set(SESSION_COOKIE, sessionId, { ...cookieOptions, maxAge: 8 * 3600 });
   redirect("/dashboard");
 }
@@ -26,6 +27,7 @@ const cookieOptions = {
 };
 
 export async function continueDev() {
+  cookies().delete(ROLE_COOKIE);
   cookies().set(DEV_COOKIE, "1", { ...cookieOptions, maxAge: 8 * 3600 });
   redirect("/dashboard");
 }
@@ -34,5 +36,6 @@ export async function logout() {
   await attempt(() => api("/api/auth/logout", { method: "POST" }));
   cookies().delete(SESSION_COOKIE);
   cookies().delete(DEV_COOKIE);
+  cookies().delete(ROLE_COOKIE);
   redirect("/login");
 }

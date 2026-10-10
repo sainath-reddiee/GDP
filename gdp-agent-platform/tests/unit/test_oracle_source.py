@@ -102,7 +102,8 @@ def test_landing_creates_once_then_replaces_or_appends():
     assert "ADD COLUMN IF NOT EXISTS _SOURCE_FILE VARCHAR, _INGESTED_AT TIMESTAMP_LTZ" in first[1]
     assert "INCLUDE_METADATA = (_SOURCE_FILE = METADATA$FILENAME" in first[-1] and "TRUNCATE" not in " ".join(first)
     again = land_parquet_sql("DB", "EXT_HR", "EMPLOYEES", "EMPLOYEES/b2", "replace", exists=True)
-    assert again[0] == 'TRUNCATE TABLE "DB"."EXT_HR"."EMPLOYEES"' and again[1].startswith("COPY INTO")
+    assert "TRUNCATE" not in " ".join(again) and again[1].startswith("COPY INTO")
+    assert again[2].startswith('INSERT OVERWRITE INTO "DB"."EXT_HR"."EMPLOYEES"')
     assert len(land_parquet_sql("DB", "EXT_HR", "EMPLOYEES", "EMPLOYEES/b3", "append", exists=True)) == 1
     ice = land_parquet_sql("DB", "EXT_HR", "EMPLOYEES", "EMPLOYEES/b4", "replace", exists=False, external_volume="VOL")
     assert ice[0].startswith("CREATE ICEBERG TABLE IF NOT EXISTS") and "EXTERNAL_VOLUME = 'VOL'" in ice[0]

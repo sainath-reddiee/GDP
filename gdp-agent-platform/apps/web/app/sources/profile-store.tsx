@@ -45,7 +45,8 @@ export function ProfileStore({ store, overview, onView, onOpenSchema }: {
   onView: (row: ProfileStoreRow) => void; onOpenSchema: (target: Target) => void;
 }) {
   const [query, setQuery] = useState("");
-  const [origin, setOrigin] = useState<"all" | Origin>("all");
+  // no "Oracle in place" filter: /api/profiles/store leaves ORACLE_* profiles out (they live in the Oracle panel)
+  const [origin, setOrigin] = useState<"all" | Exclude<Origin, "oracle">>("all");
   const [sort, setSort] = useState<Sort>("recent");
   const [tag, setTag] = useState("");
   const allTags = useMemo(() => Array.from(new Set(store.flatMap((r) => r.tags ?? []))).sort(), [store]);
@@ -84,7 +85,7 @@ export function ProfileStore({ store, overview, onView, onOpenSchema }: {
         </div>
         <Segmented label="Where the data lives" value={origin} onChange={setOrigin}
                    options={[["all", `All · ${counts.all}`], ["snowflake", `Snowflake · ${counts.snowflake}`],
-                             ["external", `External · ${counts.external}`], ["oracle", `Oracle in place · ${counts.oracle}`]] as const} />
+                             ["external", `External · ${counts.external}`]] as const} />
         {allTags.length > 0 && (
           <div className="flex flex-wrap items-center gap-1">
             {allTags.slice(0, 12).map((t) => <TagChip key={t} tag={t} active={tag === t} onClick={() => setTag(tag === t ? "" : t)} />)}

@@ -137,7 +137,8 @@ def decide(session, domain_id: str, payload_json: str) -> Dict[str, Any]:
     recorded = record_decision(session, SPEC, payload.get("suggestion_id") or "", f"domain.{domain_id}", item,
                                decision, None, domain_id, payload.get("note"))
     domain = _domain(session, domain_id)
-    if applied and str(domain["CONFIG"].get("origin") or "repository") == "repository":
+    # the deploy marks repository packs origin=repository; UI-created domains (no CONFIG) are not packs
+    if applied and str(domain["CONFIG"].get("origin") or "").lower() == "repository":
         applied += ". This domain ships as a repository pack: add the change to its domain_pack.json too, or the next deploy resets it."
     return {**recorded, "applied": applied}
 

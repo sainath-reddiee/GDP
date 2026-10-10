@@ -21,27 +21,42 @@ const TABS = ["Content", "Versions", "Provenance", "Usage"] as const;
 type Tab = (typeof TABS)[number];
 
 /** One knowledge item: what it says, every version (diff, restore), where it came from and which runs used it. */
-export function KnowledgeDrawer({ item, onClose, onEdit }: { item: KnowledgeItem; onClose: () => void; onEdit: (i: KnowledgeItem) => void }) {
+export function KnowledgeDrawer({ item: initial, onClose, onEdit, onChange }: {
+  item: KnowledgeItem; onClose: () => void; onEdit: (i: KnowledgeItem) => void; onChange?: (i: KnowledgeItem) => void;
+}) {
   useScrollLock();
+  // the drawer keeps its own copy so restore, verify and rollback show the new state (and Edit gets the current version)
+  const [item, setItem] = useState(initial);
   const router = useRouter();
   const { can, canAct } = useAccess();
   const [tab, setTab] = useState<Tab>("Content");
   const [versions, setVersions] = useState<KnowledgeItem[] | null>(null);
   const [usage, setUsage] = useState<KUsage | null>(null);
+  const [versionsError, setVersionsError] = useState("");
+  const [usageError, setUsageError] = useState("");
   const [diff, setDiff] = useState<KDiff | null>(null);
   const [msg, setMsg] = useState<{ tone: "ok" | "error" | "info"; text: string } | null>(null);
   const [pending, start] = useTransition();
   const editable = item.editable && canAct("KNOWLEDGE.EDIT");
 
   useEffect(() => {
-    if (tab === "Versions" && !versions) knowledgeVersions(item.knowledge_id).then((r) => r.ok ? setVersions(r.data.versions) : setMsg({ tone: "error", text: r.error }));
-    if (tab === "Usage" && !usage) knowledgeUsage(item.knowledge_id).then((r) => r.ok ? setUsage(r.data) : setMsg({ tone: "error", text: r.error }));
-  }, [tab, versions, usage, item.knowledge_id]);
+    if (tab === "Versions" && !versions && !versionsError) knowledgeVersions(item.knowledge_id).then((r) => r.ok ? setVersions(r.data.versions) : setVersionsError(r.error));
+    if (tab === "Usage" && !usage && !usageError) knowledgeUsage(item.knowledge_id).then((r) => r.ok ? setUsage(r.data) : setUsageError(r.error));
+  }, [tab, versions, usage, versionsError, usageError, item.knowledge_id]);
 
   const act = (fn: () => Promise<{ ok: boolean; error?: string }>, ok: string, close = false) => start(async () => {
     const r = await fn();
     setMsg(r.ok ? { tone: "ok", text: ok } : { tone: /approval|request/i.test(r.error ?? "") ? "info" : "error", text: r.error ?? "Failed" });
-    if (r.ok) { setVersions(null); router.refresh(); if (close) onClose(); }
+    if (!r.ok) return;
+    router.refresh();
+    if (close) { onClose(); return; }
+    // reload the lineage: rollback writes a new version, so follow the one now in use
+    const v = await knowledgeVersions(item.knowledge_id);
+    setUsage(null); setUsageError("");
+    if (!v.ok) { setVersions(null); setVersionsError(v.error); return; }
+    setVersions(v.data.versions); setVersionsError("");
+    const fresh = v.data.versions.find((x) => x.is_current) ?? v.data.versions.find((x) => x.knowledge_id === item.knowledge_id);
+    if (fresh) { setItem(fresh); onChange?.(fresh); }
   });
   const compare = (base: KnowledgeItem, head: KnowledgeItem) => start(async () => {
     const r = await knowledgeDiff(head.knowledge_id, base.knowledge_id, head.knowledge_id);
@@ -100,7 +115,8 @@ export function KnowledgeDrawer({ item, onClose, onEdit }: { item: KnowledgeItem
           )}
 
           {tab === "Versions" && (
-            !versions ? <p className="flex items-center gap-2 text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" />Loading versions…</p> : (
+            versionsError ? <TabError text={versionsError} onRetry={() => setVersionsError("")} />
+            : !versions ? <p className="flex items-center gap-2 text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" />Loading versions…</p> : (
               <div className="space-y-3">
                 {diff && (
                   <div className="space-y-2">
@@ -157,7 +173,8 @@ export function KnowledgeDrawer({ item, onClose, onEdit }: { item: KnowledgeItem
           )}
 
           {tab === "Usage" && (
-            !usage ? <p className="flex items-center gap-2 text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" />Loading usage…</p> : (
+            usageError ? <TabError text={usageError} onRetry={() => setUsageError("")} />
+            : !usage ? <p className="flex items-center gap-2 text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" />Loading usage…</p> : (
               <div className="space-y-3">
                 <div className="flex flex-wrap gap-2">
                   {Object.entries(usage.by_stage).map(([stage, n]) => (
@@ -184,6 +201,14 @@ export function KnowledgeDrawer({ item, onClose, onEdit }: { item: KnowledgeItem
         </div>
       </aside>
     </div>
+  );
+}
+
+function TabError({ text, onRetry }: { text: string; onRetry: () => void }) {
+  return (
+    <p role="alert" className="flex flex-wrap items-center gap-2 rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">
+      {text}<button type="button" onClick={onRetry} className="text-xs font-medium underline">Try again</button>
+    </p>
   );
 }
 

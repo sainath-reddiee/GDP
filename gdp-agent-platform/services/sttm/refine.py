@@ -43,6 +43,8 @@ CSV_COLUMNS = [
 THEN_LITERAL = re.compile(r"THEN\s+'([^']*)'", re.IGNORECASE)
 DATE_CAST = re.compile(r"\b(TRY_TO_DATE|TO_DATE|CAST\s*\(.+\s+AS\s+DATE)\b", re.IGNORECASE)
 EMAIL_HINT = re.compile(r"\bEMAIL\b", re.IGNORECASE)
+EMAIL_COLUMN = re.compile(r"(^|_)E_?MAIL(_|$)", re.IGNORECASE)
+EMAIL_DEFINITION = re.compile(r"\bE-?MAIL ADDRESS\b", re.IGNORECASE)
 
 
 def refine_prompt(context: Dict[str, Any], instruction: str) -> str:
@@ -113,7 +115,10 @@ def from_transform(target_table: str, line: Dict[str, Any]) -> List[Dict[str, An
             "severity": "WARN", "origin": "TRANSFORM",
             "requirement": f"{col} is cast to a date; invalid dates should be flagged.",
         })
-    if EMAIL_HINT.search(expr) or EMAIL_HINT.search(str(line.get("business_definition") or "")):
+    # the column itself must carry the email: a CASE over EMAIL yields a flag, and a definition that merely
+    # mentions email ("email was verified") does not make the column an address
+    if (EMAIL_COLUMN.search(str(col)) or EMAIL_DEFINITION.search(str(line.get("business_definition") or ""))
+            or (EMAIL_HINT.search(expr) and not values)):
         checks.append({
             "target_table": table, "target_column": col, "check_type": "CUSTOM",
             "definition": {"kind": "format", "format": "email"},
@@ -121,6 +126,27 @@ def from_transform(target_table: str, line: Dict[str, Any]) -> List[Dict[str, An
             "requirement": f"{col} should look like an email after the transform.",
         })
     return checks
+
+
+def rules_by_column(contents: List[Dict[str, Any]], target_table: Optional[str]) -> Dict[str, Dict[str, Any]]:
+    """Transformation rules keyed by target column for one target table. A rule learned on another table is
+    skipped; one without a table (older rules) applies only where no table-specific rule exists."""
+    table = str(target_table or "").split(".")[-1].strip('"').upper()
+    out: Dict[str, Dict[str, Any]] = {}
+    specific: set = set()
+    for content in contents:
+        column = str(content.get("target_column") or "").upper()
+        if not column:
+            continue
+        rule_table = str(content.get("target_table") or "").upper()
+        if rule_table and table and rule_table != table:
+            continue
+        if rule_table:
+            specific.add(column)
+        elif column in specific:
+            continue
+        out[column] = content
+    return out
 
 
 def render_csv(rows: List[Dict[str, Any]]) -> str:

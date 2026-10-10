@@ -47,15 +47,24 @@ export function TagEditor({ entityType, entityKey, initial, canEdit = true, comp
   const [text, setText] = useState("");
   const [known, setKnown] = useState<TagInfo[]>([]);
   const [error, setError] = useState("");
+  // saving replaces the whole tag list, so it waits until this entity's tags are known
+  const [loaded, setLoaded] = useState(initial !== undefined);
   const [pending, start] = useTransition();
   const input = useRef<HTMLInputElement>(null);
+  const current = useRef(`${entityType}:${entityKey}`);
+  current.current = `${entityType}:${entityKey}`;
   const { can } = useAccess();
-  canEdit = canEdit && can("TAG.MANAGE");
+  canEdit = canEdit && can("TAG.MANAGE") && loaded;
 
   useEffect(() => {
-    if (initial !== undefined) { setTags(initial); return; }
+    setError("");
+    if (initial !== undefined) { setTags(initial); setLoaded(true); return; }
     let live = true;
-    loadEntityTags(entityType, entityKey).then((r) => { if (live && r.ok) setTags(r.data.tags); });
+    setTags([]); setLoaded(false);  // never show or save the previous entity's tags under this one
+    loadEntityTags(entityType, entityKey).then((r) => {
+      if (!live) return;
+      if (r.ok) { setTags(r.data.tags); setLoaded(true); } else setError(`Tags not loaded: ${r.error}`);
+    });
     return () => { live = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [entityType, entityKey]);
@@ -67,7 +76,9 @@ export function TagEditor({ entityType, entityKey, initial, canEdit = true, comp
 
   const save = (next: string[]) => start(async () => {
     setError("");
+    const key = `${entityType}:${entityKey}`;
     const r = await saveEntityTags(entityType, entityKey, next);
+    if (current.current !== key) return;  // the editor moved to another entity meanwhile
     if (!r.ok) { setError(r.error); return; }
     setTags(r.data.tags);
   });

@@ -8,6 +8,7 @@ from typing import Any, Dict, List
 from services.common.audit import tool_call
 from services.common.sql import clip, insert_rows, rows, scalar, variant
 from services.common.stage import Stage
+from services.common.standard import run_standard
 from services.soda.expectations import render_yaml
 from services.knowledge.usage import use_stage
 from services.validation import checks
@@ -89,13 +90,14 @@ def validate_dbt(session, run_id: str) -> Dict[str, Any]:
     stage = Stage(session, run_id)
     stage.require(*POST_STTM_VALIDATE)
     walked = False
-    if stage.state in ("VALIDATION_PENDING", "VALIDATION_RUNNING"):
-        stage.walk(["VALIDATION_PENDING", "VALIDATION_RUNNING"], "validation started")
+    # a re-validation after VALIDATION_FAILED runs again through PENDING -> RUNNING, so a pass moves the run on
+    if stage.state in ("VALIDATION_FAILED", "VALIDATION_PENDING", "VALIDATION_RUNNING"):
+        stage.walk(["VALIDATION_FAILED", "VALIDATION_PENDING", "VALIDATION_RUNNING"], "validation started")
         walked = True
     with tool_call(session, run_id, "validate_dbt", {"run_id": run_id}) as call:
         try:
             generation = _current_generation(session, run_id)
-            guidance = use_stage(session, "VALIDATION", run_id=run_id, excerpt=400)
+            guidance = use_stage(session, "VALIDATION", run_standard(stage.run), run_id=run_id, excerpt=400)
             files = _files(session, generation["GENERATION_ID"])
             assert files, "generated dbt project has no artifacts"
             soda = files.get("soda/checks.yml") or ""

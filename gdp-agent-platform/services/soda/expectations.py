@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from typing import Any, Dict, List
 
@@ -69,10 +70,18 @@ def from_sttm(target_table: str, lines: List[Dict[str, Any]], grain_keys: List[s
 
 
 def without_rejected(checks: List[Dict[str, Any]], rejected: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Drop previously rejected checks unless a new client row reintroduces them."""
-    skip = {(r.get("check_type"), r.get("target_column")) for r in rejected}
-    return [c for c in checks
-            if c.get("origin") == "CLIENT" or (c.get("check_type"), c.get("target_column")) not in skip]
+    """Drop previously rejected checks unless a new client row reintroduces them. A rejection only applies to
+    the target table it was made on; one without a table (older feedback) applies to any table."""
+    def table(value: Any) -> str | None:
+        return str(value).upper() if value else None
+
+    skip = {(r.get("check_type"), r.get("target_column"), table(r.get("target_table"))) for r in rejected}
+
+    def rejected_check(c: Dict[str, Any]) -> bool:
+        key = (c.get("check_type"), c.get("target_column"))
+        return (*key, None) in skip or (*key, table(c.get("target_table"))) in skip
+
+    return [c for c in checks if c.get("origin") == "CLIENT" or not rejected_check(c)]
 
 
 def render_check(check: Dict[str, Any]) -> str:
@@ -80,18 +89,40 @@ def render_check(check: Dict[str, Any]) -> str:
 
 
 def _infer_format(column: str, definition: str) -> str | None:
-    text = f"{column} {definition}".upper()
-    if "EMAIL" in text:
+    """Whole tokens of the column name (HOTEL_ID is not a phone number); the definition only counts when it
+    names the format outright ("email address", "phone number")."""
+    col = str(column or "").upper()
+    text = str(definition or "").upper()
+    if re.search(r"(^|_)E_?MAIL(_|$)", col) or re.search(r"\bE-?MAIL ADDRESS\b", text):
         return "email"
-    if "PHONE" in text or "TEL" in text:
+    if re.search(r"(^|_)(PHONE|TEL|TELEPHONE|MOBILE)(_|$)", col) or re.search(r"\b(TELE)?PHONE NUMBER\b", text):
         return "phone number"
-    if "UUID" in text:
+    if re.search(r"(^|_)UUID(_|$)", col):
         return "uuid"
     return None
 
 
 def from_client(target_table: str, rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return [requirement_from_row(target_table, r) for r in rows]
+
+
+def _check_key(check: Dict[str, Any]) -> tuple:
+    definition = {k: v for k, v in (check.get("definition") or {}).items() if k != "backtest"}
+    return (str(check.get("check_type") or "").upper(), str(check.get("target_column") or "").upper(),
+            json.dumps(definition, sort_keys=True, default=str))
+
+
+def not_yet_current(checks: List[Dict[str, Any]], current: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Checks that are not already current for the run (same type, column and definition), so importing the same
+    brief twice does not add a second copy of every check."""
+    seen = {_check_key(c) for c in current}
+    out = []
+    for check in checks:
+        key = _check_key(check)
+        if key not in seen:
+            seen.add(key)
+            out.append(check)
+    return out
 
 
 def merge_checks(*groups: List[Dict[str, Any]]) -> List[Dict[str, Any]]:

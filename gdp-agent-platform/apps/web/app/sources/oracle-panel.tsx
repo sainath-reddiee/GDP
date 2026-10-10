@@ -12,6 +12,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
+import { useScrollLock } from "@/components/use-scroll-lock";
 import {
   cancelIngestJob, ingestJob, oracleCatalog, oracleCheckIntegration, oracleColumns, oracleIntegrations, oracleOverview,
   oraclePreview, oracleProfile, oracleProfileDoc, oracleSecrets, oracleSetup, oracleTest, type IntegrationCheck,
@@ -53,10 +54,11 @@ function SetupCard({ sourceId, overview, onReady }: { sourceId: string; overview
   useEffect(() => { if (eaiMode === "existing" && !eais) oracleIntegrations().then((r) => r.ok && setEais(r.data.integrations)); }, [eaiMode, eais]);
   useEffect(() => {
     setCheck(null);
-    if (eaiMode === "existing" && eai) {
-      oracleCheckIntegration({ name: eai, host: c.host, port: Number(c.port), secret: secretMode === "existing" ? secret || undefined : undefined })
-        .then((r) => r.ok && setCheck(r.data));
-    }
+    if (eaiMode !== "existing" || !eai) return;
+    let live = true;  // a slower answer for an earlier choice must not overwrite the current one
+    oracleCheckIntegration({ name: eai, host: c.host, port: Number(c.port), secret: secretMode === "existing" ? secret || undefined : undefined })
+      .then((r) => { if (live && r.ok) setCheck(r.data); });
+    return () => { live = false; };
   }, [eaiMode, eai, secret, secretMode, c.host, c.port]);
 
   const ready = (secretMode === "new" ? !!password : !!secret) && (eaiMode === "new" || (!!eai && secretMode === "existing" && check?.usable !== false));
@@ -128,22 +130,35 @@ function TableDrawer({ sourceId, table, onClose, onLoad, onProfile }: {
   const [previewMs, setPreviewMs] = useState<number | null>(null);
   const [doc, setDoc] = useState<OracleProfileDoc | null | "none">(null);
   const [error, setError] = useState("");
+  const [previewError, setPreviewError] = useState("");
+  const [docError, setDocError] = useState("");
+  useScrollLock();
 
+  // answers for a table the user has already left are dropped
   useEffect(() => {
-    setColumns(null); setPreview(null); setDoc(null); setError("");
-    oracleColumns(sourceId, [table.table]).then((r) => (r.ok ? setColumns(r.data.columns[table.table] ?? []) : setError(r.error)));
+    let live = true;
+    setColumns(null); setPreview(null); setDoc(null); setError(""); setPreviewError(""); setDocError("");
+    oracleColumns(sourceId, [table.table]).then((r) => { if (live) (r.ok ? setColumns(r.data.columns[table.table] ?? []) : setError(r.error)); });
+    return () => { live = false; };
   }, [sourceId, table.table]);
   useEffect(() => {
-    if (tab === "preview" && !preview) {
+    let live = true;
+    if (tab === "preview" && !preview && !previewError) {
       const t0 = performance.now();
       oraclePreview(sourceId, table.table).then((r) => {
-        if (r.ok) { setPreview(r.data); setPreviewMs(Math.round(performance.now() - t0)); } else setError(r.error);
+        if (!live) return;
+        if (r.ok) { setPreview(r.data); setPreviewMs(Math.round(performance.now() - t0)); } else setPreviewError(r.error);
       });
     }
-    if (tab === "profile" && doc === null) {
-      oracleProfileDoc(sourceId, table.table).then((r) => setDoc(r.ok ? r.data : "none"));
+    if (tab === "profile" && doc === null && !docError) {
+      oracleProfileDoc(sourceId, table.table).then((r) => {
+        if (!live) return;
+        // a 404 "has not been profiled" means no profile yet; anything else is a real failure to show
+        if (r.ok) setDoc(r.data); else if (/not been profiled/i.test(r.error)) setDoc("none"); else setDocError(r.error);
+      });
     }
-  }, [tab, preview, doc, sourceId, table.table]);
+    return () => { live = false; };
+  }, [tab, preview, previewError, doc, docError, sourceId, table.table]);
 
   return (
     <div className="fixed inset-y-0 right-0 z-[55] flex w-full max-w-2xl flex-col border-l bg-background shadow-2xl">
@@ -198,7 +213,12 @@ function TableDrawer({ sourceId, table, onClose, onLoad, onProfile }: {
             </tbody>
           </table>
         ))}
-        {tab === "preview" && (!preview ? (
+        {tab === "preview" && (previewError ? (
+          <div className="space-y-2">
+            <p role="alert" className="text-sm text-destructive">Could not read a preview: {previewError}</p>
+            <Button size="sm" variant="outline" onClick={() => setPreviewError("")}><RefreshCw className="h-3.5 w-3.5" /> Try again</Button>
+          </div>
+        ) : !preview ? (
           <p className="flex items-center gap-2 text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" /> Reading the first rows from Oracle…</p>
         ) : (
           <div className="space-y-2">
@@ -220,7 +240,12 @@ function TableDrawer({ sourceId, table, onClose, onLoad, onProfile }: {
             {preview.skipped.length > 0 && <p className="text-[11px] text-warning">Not shown: {preview.skipped.map((s) => s.column).join(", ")}</p>}
           </div>
         ))}
-        {tab === "profile" && (doc === null ? <Loader2 className="h-4 w-4 animate-spin" /> : doc === "none" ? (
+        {tab === "profile" && (docError ? (
+          <div className="space-y-2">
+            <p role="alert" className="text-sm text-destructive">Could not read the profile: {docError}</p>
+            <Button size="sm" variant="outline" onClick={() => setDocError("")}><RefreshCw className="h-3.5 w-3.5" /> Try again</Button>
+          </div>
+        ) : doc === null ? <Loader2 className="h-4 w-4 animate-spin" /> : doc === "none" ? (
           <div className="space-y-2 rounded-xl border border-dashed p-6 text-center text-sm text-muted-foreground">
             <p>Not profiled yet. Profiling runs inside Oracle; only statistics leave the database.</p>
             <Button size="sm" variant="outline" onClick={onProfile}><ScanSearch className="h-3.5 w-3.5" /> Profile in Oracle</Button>
@@ -286,9 +311,21 @@ export function OraclePanel({ sourceId, name, onOpenSchema, onRemoved }: {
 
   const poll = useCallback((jobId: string) => {
     if (timer.current) clearInterval(timer.current);
+    const startedAt = Date.now();
+    let busy = false;
     timer.current = setInterval(async () => {
-      const r = await ingestJob(jobId);
-      if (!r.ok) return;
+      if (busy) return;
+      if (Date.now() - startedAt > 60 * 60 * 1000) { if (timer.current) clearInterval(timer.current); return; }
+      busy = true;
+      const r = await ingestJob(jobId).finally(() => { busy = false; });
+      if (!r.ok) {
+        // the API keeps jobs in memory: after a restart the job is gone, so stop asking and show the real state
+        if (timer.current) clearInterval(timer.current);
+        setJob(null);
+        loadOverview();
+        loadCatalog();
+        return;
+      }
       setJob(r.data);
       if (r.data.status !== "RUNNING") {
         if (timer.current) clearInterval(timer.current);
@@ -425,7 +462,14 @@ export function OraclePanel({ sourceId, name, onOpenSchema, onRemoved }: {
 
       {job && (
         <JobCard job={job} profileAfter={profileAfter}
-                 onCancel={() => cancelIngestJob(job.job_id).then(() => setJob({ ...job, cancel_requested: true }))}
+                 onCancel={() => {
+                   const jobId = job.job_id;
+                   cancelIngestJob(jobId).then((r) => {
+                     if (!r.ok) { setError(r.error); return; }
+                     // only mark the job the user cancelled, and only while polling has not already seen it finish
+                     setJob((j) => (j && j.job_id === jobId && j.status === "RUNNING" ? { ...j, cancel_requested: true } : j));
+                   });
+                 }}
                  onRetry={(failed) => setIngestFor(failed.map((t) => byName[t]).filter(Boolean))}
                  onOpenLanded={() => onOpenSchema(overview.landing)} onDismiss={() => setJob(null)} />
       )}
@@ -554,7 +598,7 @@ export function OraclePanel({ sourceId, name, onOpenSchema, onRemoved }: {
       {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
 
       {drawer && (
-        <TableDrawer sourceId={sourceId} table={drawer} onClose={() => setDrawer(null)}
+        <TableDrawer key={drawer.table} sourceId={sourceId} table={drawer} onClose={() => setDrawer(null)}
                      onLoad={() => { setIngestFor([drawer]); setDrawer(null); }}
                      onProfile={() => { profile([drawer.table]); setDrawer(null); }} />
       )}

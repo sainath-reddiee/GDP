@@ -17,6 +17,7 @@ import re
 import secrets
 import threading
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any, Optional
 
@@ -88,6 +89,7 @@ class Db:
     role: str = ""
     token: Optional[str] = None
     expires_at: float = float("inf")
+    shared: bool = False  # the dev session, used by every request at once
 
     @property
     def host(self) -> str:
@@ -97,6 +99,15 @@ class Db:
         cur = self.conn.cursor()
         try:
             cur.execute(sql, params)
+        finally:
+            cur.close()
+
+    def execute_count(self, sql: str, params: tuple = ()) -> int:
+        """Run a DML statement and return the number of rows it changed."""
+        cur = self.conn.cursor()
+        try:
+            cur.execute(sql, params)
+            return int(cur.rowcount or 0)
         finally:
             cur.close()
 
@@ -129,6 +140,29 @@ class Db:
             return [dict(zip(columns, row)) for row in cur.fetchall()]
         finally:
             cur.close()
+
+
+@contextmanager
+def transaction(db: Any):
+    """BEGIN ... COMMIT around a group of statements; ROLLBACK when any of them fails.
+
+    The connection runs in autocommit mode, where an explicit BEGIN opens a transaction in Snowflake.
+    The shared dev session gets no explicit transaction: statements from other requests running at the same time
+    would join it, and a ROLLBACK here would undo their writes too.
+    """
+    if getattr(db, "shared", False):
+        yield db
+        return
+    db.execute("BEGIN")
+    try:
+        yield db
+    except BaseException:
+        try:
+            db.execute("ROLLBACK")
+        except Exception:
+            pass
+        raise
+    db.execute("COMMIT")
 
 
 _lock = threading.Lock()
@@ -195,7 +229,7 @@ def dev_db() -> Db:
         try:
             conn = _open_dev()
             user, role = _identity(conn)
-            _dev = Db(conn, user, role)
+            _dev = Db(conn, user, role, shared=True)
             _last_fail = ""
             return _dev
         except SnowflakeSessionError:

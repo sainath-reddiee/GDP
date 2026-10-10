@@ -19,16 +19,21 @@ export async function setLandingTarget(runId: string, target: {
 
 /** Validate access to the selection, then land it as-is, resuming wherever the last attempt stopped. */
 export async function validateAndLand(runId: string, selected: string[]): Promise<ActionResult> {
+  let failedStep: "access" | "landing" | null = null;
   const result = await attempt(async () => {
     const out = await api<{ passed: boolean; failed_step?: "access" | "landing" }>(
       `/api/runs/${runId}/prepare`, { method: "POST", body: JSON.stringify({ selected }) },
     );
-    if (!out.passed) {
-      throw new Error(out.failed_step === "access"
-        ? "Access check failed. See the checks below, fix the selection or grants, then try again."
-        : "Landing failed for some tables. See the results below, then try again.");
-    }
+    if (!out.passed) failedStep = out.failed_step === "access" ? "access" : "landing";
   });
+  if (result.ok && failedStep) {
+    return after(runId, {
+      ok: false,
+      error: failedStep === "access"
+        ? "Access check failed. See the checks below, fix the selection or grants, then try again."
+        : "Landing failed for some tables. See the results below, then try again.",
+    });
+  }
   return after(runId, result);
 }
 

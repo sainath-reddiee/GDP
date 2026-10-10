@@ -19,14 +19,37 @@ import {
 } from "./actions";
 import { HUB_TABS, type HubTab } from "./hub-tabs";
 import { KnowledgeDrawer } from "./item-drawer";
+import { ItemEditor } from "./knowledge-browser";
 import { ORIGINS, OriginChip, prettyType, StatusPill, TypeIcon } from "./knowledge-ui";
 
 
 function useOpenItem() {
+  const router = useRouter();
   const [open, setOpen] = useState<KnowledgeItem | null>(null);
+  const [editing, setEditing] = useState<KnowledgeItem | null>(null);
+  const [error, setError] = useState("");
   const [, start] = useTransition();
-  const show = (id: string) => start(async () => { const r = await loadKnowledgeItem(id); if (r.ok) setOpen(r.data); });
-  const drawer = open ? <KnowledgeDrawer item={open} onClose={() => setOpen(null)} onEdit={() => setOpen(null)} /> : null;
+  const show = (id: string) => start(async () => {
+    setError("");
+    const r = await loadKnowledgeItem(id);
+    if (r.ok) setOpen(r.data); else setError(r.error);
+  });
+  const drawer = (
+    <>
+      {open && <KnowledgeDrawer item={open} onClose={() => setOpen(null)} onChange={setOpen} onEdit={(i) => { setOpen(null); setEditing(i); }} />}
+      {/* editing an existing item keeps its domain, so the editor only needs that one */}
+      {editing && (
+        <ItemEditor domains={[{ domain_id: editing.domain_id, domain_name: editing.domain_name }]} item={editing}
+                    onClose={() => setEditing(null)} onSaved={() => { setEditing(null); router.refresh(); }} />
+      )}
+      {error && (
+        <p role="alert" className="fixed bottom-4 right-4 z-50 flex items-center gap-2 rounded-lg border bg-background px-3 py-2 text-xs text-destructive shadow-lg">
+          Could not open the item: {error}
+          <button type="button" aria-label="Dismiss" onClick={() => setError("")} className="rounded p-0.5 hover:bg-muted"><X className="h-3.5 w-3.5" /></button>
+        </p>
+      )}
+    </>
+  );
   return { show, drawer };
 }
 
@@ -107,6 +130,8 @@ function Bars({ title, data, label }: { title: string; data: Record<string, numb
 
 export function OverviewPanel({ overview, ask }: { overview: Overview; ask: ReactNode }) {
   const { show, drawer } = useOpenItem();
+  const params = useSearchParams();
+  const domainId = params.get("domain_id");
   return (
     <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
       <div className="space-y-4">
@@ -114,7 +139,7 @@ export function OverviewPanel({ overview, ask }: { overview: Overview; ask: Reac
         <section className="rounded-2xl border bg-card p-4 shadow-sm">
           <div className="mb-3 flex items-center justify-between">
             <h3 className="flex items-center gap-1.5 text-sm font-semibold"><Rss className="h-4 w-4 text-primary" />What the platform learned recently</h3>
-            <Link href="?tab=feed" className="text-xs text-primary hover:underline">Full feed</Link>
+            <Link href={`?tab=feed${domainId ? `&domain_id=${encodeURIComponent(domainId)}` : ""}`} className="text-xs text-primary hover:underline">Full feed</Link>
           </div>
           <Timeline items={overview.feed} onOpen={show} />
         </section>
@@ -219,7 +244,9 @@ export function InboxPanel({ items }: { items: InboxItem[] }) {
   const [pending, start] = useTransition();
   const decide = (ids: string[], decision: "approve" | "reject") => start(async () => {
     const r = await decideInbox(ids, decision, note);
-    setMsg(r.ok ? { tone: "ok", text: `${r.data.decided} ${decision === "approve" ? "approved and now in use" : "rejected"}` }
+    const skipped = r.ok ? ids.length - r.data.decided : 0;
+    setMsg(r.ok ? { tone: skipped ? "info" : "ok", text: `${r.data.decided} ${decision === "approve" ? "approved and now in use" : "rejected"}`
+                    + (skipped ? `; ${skipped} had already been decided by someone else` : "") }
       : { tone: /approval|request/i.test(r.error) ? "info" : "error", text: r.error });
     setSelected([]); router.refresh();
   });

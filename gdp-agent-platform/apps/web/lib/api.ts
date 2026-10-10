@@ -8,6 +8,8 @@ export const AUTH_MODE = process.env.AIP_AUTH ?? "dev";
 export const SESSION_COOKIE = "aip_session";
 export const DEV_COOKIE = "aip_dev";
 export const ROLE_COOKIE = "aip_role";
+/** Where an ended session goes: clears the cookies, then shows the login page. */
+export const SIGN_OUT = "/bff/signout";
 
 export class ApiError extends Error {
   constructor(public status: number, message: string) {
@@ -15,13 +17,23 @@ export class ApiError extends Error {
   }
 }
 
-function sessionHeaders(): Record<string, string> {
+function sessionHeaders(withRole = true): Record<string, string> {
   const session = cookies().get(SESSION_COOKIE)?.value;
-  const role = cookies().get(ROLE_COOKIE)?.value;
+  const role = withRole ? cookies().get(ROLE_COOKIE)?.value : undefined;
   const headers: Record<string, string> = {};
   if (session) headers["X-AIP-Session"] = session;
   if (role) headers["X-AIP-Role"] = role;
   return headers;
+}
+
+/** The work role picked earlier is no longer granted (another user signed in on this browser, or it was revoked). */
+function staleRole(status: number, text: string): boolean {
+  return status === 403 && !!cookies().get(ROLE_COOKIE)?.value && /Role .+ is not available/.test(text);
+}
+
+/** Forget the stale work role where cookies can be written (server actions and route handlers); pages just skip it. */
+function dropRoleCookie() {
+  try { cookies().delete(ROLE_COOKIE); } catch { /* a server component cannot write cookies */ }
 }
 
 function detail(text: string): string {
@@ -35,21 +47,28 @@ function detail(text: string): string {
 
 /** Server-side call to the FastAPI backend with the caller's session. */
 export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const call = (withRole: boolean) => fetch(`${API_URL}${path}`, {
+    ...init,
+    cache: "no-store",
+    headers: { "Content-Type": "application/json", ...sessionHeaders(withRole), ...(init.headers ?? {}) },
+  });
   let res: Response;
+  let text: string;
   try {
-    res = await fetch(`${API_URL}${path}`, {
-      ...init,
-      cache: "no-store",
-      headers: { "Content-Type": "application/json", ...sessionHeaders(), ...(init.headers ?? {}) },
-    });
+    res = await call(true);
+    text = await res.text();
+    if (staleRole(res.status, text)) {
+      dropRoleCookie();
+      res = await call(false);
+      text = await res.text();
+    }
   } catch {
     throw new ApiError(
       503,
       `Cannot reach the API at ${API_URL}. From apps/api run: python -m uvicorn app.main:app --host 127.0.0.1 --port 8001`,
     );
   }
-  const text = await res.text();
-  if (res.status === 401) redirect("/login");
+  if (res.status === 401) redirect(SIGN_OUT);
   if (!res.ok) throw new ApiError(res.status, detail(text));
   if (res.status === 202 && text.includes("pending_approval")) throw new ApiError(202, detail(text));
   return JSON.parse(text) as T;
@@ -59,8 +78,9 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
 export async function apiForm<T>(path: string, form: FormData): Promise<T> {
   const res = await fetch(`${API_URL}${path}`, { method: "POST", body: form, cache: "no-store", headers: sessionHeaders() });
   const text = await res.text();
-  if (res.status === 401) redirect("/login");
+  if (res.status === 401) redirect(SIGN_OUT);
   if (!res.ok) throw new ApiError(res.status, detail(text));
+  if (res.status === 202 && text.includes("pending_approval")) throw new ApiError(202, detail(text));
   return JSON.parse(text) as T;
 }
 
@@ -89,16 +109,27 @@ export async function attemptValue<T>(fn: () => Promise<T>): Promise<{ ok: true;
 export const getRun = cache((runId: string) => api<RunState>(`/api/runs/${runId}`));
 
 export const whoami = cache(async (): Promise<WhoAmI | null> => {
+  let res: Response;
   try {
-    const res = await fetch(`${API_URL}/api/auth/me`, { cache: "no-store", headers: sessionHeaders() });
-    return res.ok ? ((await res.json()) as WhoAmI) : null;
+    res = await fetch(`${API_URL}/api/auth/me`, { cache: "no-store", headers: sessionHeaders() });
+    if (res.status === 403 && cookies().get(ROLE_COOKIE)?.value) {
+      res = await fetch(`${API_URL}/api/auth/me`, { cache: "no-store", headers: sessionHeaders(false) });  // a stale work role
+    }
   } catch {
-    return null;
+    return null;  // API unreachable: pages show their own error
   }
+  // the session is over: leave through sign-out so the cookies go too (a page's .catch can never swallow this)
+  if (res.status === 401) redirect(SIGN_OUT);
+  return res.ok ? ((await res.json()) as WhoAmI) : null;
 });
 
 export function sessionHeaderValue(): string | undefined {
   return cookies().get(SESSION_COOKIE)?.value;
+}
+
+/** Session and work-role headers for route handlers that proxy a stream to the backend. */
+export function proxyHeaders(): Record<string, string> {
+  return sessionHeaders();
 }
 
 /** Raw response from the backend with the caller's session (binary downloads proxied by route handlers). */

@@ -133,7 +133,11 @@ function CopilotShell({ children }: { children: ReactNode }) {
       .map((m) => ({ role: m.role, content: m.content })).slice(-8);
     setMessages((m) => [...m, { role: "user", content: question }]);
     setBusy(true);
-    const r = await copilotAsk({ question, page, history, conversation_id: conversation });
+    // the URL may have changed without a path change (?db=, ?schema=): read it now so the question uses what is on screen
+    const search = new URLSearchParams(window.location.search);
+    const now: CopilotPage = { ...page, database: focus?.database ?? search.get("db") ?? page.database, schema: focus?.schema ?? search.get("schema") ?? page.schema };
+    readQuery();
+    const r = await copilotAsk({ question, page: now, history, conversation_id: conversation });
     setBusy(false);
     if (r.ok) {
       setConversation(r.data.conversation_id);
@@ -142,7 +146,7 @@ function CopilotShell({ children }: { children: ReactNode }) {
     } else {
       setMessages((m) => [...m, { role: "assistant", content: r.error, error: true }]);
     }
-  }, [busy, messages, page, conversation]);
+  }, [busy, messages, page, conversation, focus, readQuery]);
 
   const open = useCallback((question?: string) => {
     setShow(true);
@@ -254,7 +258,7 @@ function CopilotShell({ children }: { children: ReactNode }) {
 
           <form className="border-t p-3" onSubmit={(e) => { e.preventDefault(); void send(input); }}>
             <div className="flex items-end gap-2 rounded-xl border bg-card p-2 focus-within:border-primary/50">
-              <textarea ref={inputRef} value={input} onChange={(e) => setInput(e.target.value)} rows={2} aria-label="Ask the copilot"
+              <textarea ref={inputRef} value={input} onChange={(e) => setInput(e.target.value)} onFocus={readQuery} rows={2} aria-label="Ask the copilot"
                         onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void send(input); } }}
                         placeholder={`Ask about ${label}…`} className="max-h-40 min-h-[40px] flex-1 resize-none bg-transparent text-sm outline-none" />
               <Button type="submit" size="sm" disabled={busy || !input.trim()} aria-label="Send"><Send className="h-3.5 w-3.5" /></Button>

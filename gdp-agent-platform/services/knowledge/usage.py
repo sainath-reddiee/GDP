@@ -39,6 +39,7 @@ FORBIDDEN_SQL = re.compile(
     r"\b(DROP|DELETE|TRUNCATE|ALTER|INSERT|UPDATE|MERGE|COPY|GRANT|REVOKE|CALL|EXECUTE)\b",
     re.IGNORECASE,
 )
+STRING_LITERAL = re.compile(r"'(?:[^']|'')*'")
 
 
 def use_skills(session, names: List[str], excerpt: int = 1200, run_id: str | None = None) -> str:
@@ -133,5 +134,6 @@ def domain_context(session, domain_id: str | None, target: str | None = None, bu
 
 def assert_safe_transformation(expression: str | None) -> None:
     """mapping-validation: transformation SQL may cast and decode, never change objects."""
-    if expression and FORBIDDEN_SQL.search(expression):
+    # keywords inside string literals are data (DECODE(col, 'D', 'DELETE')), not statements
+    if expression and FORBIDDEN_SQL.search(STRING_LITERAL.sub("''", expression)):
         raise ValueError("MAPPING_VALIDATION: transformation contains a statement the mapping skill forbids")

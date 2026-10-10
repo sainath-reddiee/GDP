@@ -42,8 +42,10 @@ async function Events({ sp }: { sp: Params }) {
     const v = sp[key];
     if (v) query.set(key, v);
   }
+  let failure = "";
   const { events, total } = await api<{ events: AuditEvent[]; total?: number }>(`/api/audit?${query.toString()}`)
-    .catch(() => ({ events: [] as AuditEvent[], total: 0 }));
+    .catch((e: Error) => { failure = e.message; return { events: [] as AuditEvent[], total: 0 }; });
+  if (failure) return <p role="alert" className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">The audit trail could not be read: {failure}</p>;
   return (
     <div className="space-y-3">
       <EventFilters rows={events as unknown as Record<string, unknown>[]} total={total ?? events.length} offset={offset} limit={LIMIT} />
@@ -57,8 +59,10 @@ async function Cost({ sp }: { sp: Params }) {
   const query = new URLSearchParams({ group_by: groupBy, limit: "200" });
   if (sp.since) query.set("since", sp.since);
   if (sp.until) query.set("until", sp.until);
+  let failure = "";
   const data = await api<CostData>(`/api/costs?${query.toString()}`)
-    .catch((): CostData => ({ rows: [], totals: {} }));
+    .catch((e: Error): CostData => { failure = e.message; return { rows: [], totals: {} }; });
+  if (failure) return <p role="alert" className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">AI usage could not be read: {failure}</p>;
   const t = data.totals;
   const credits = n(t.credits ?? t.estimated_cost);
   const price = data.credit_price_usd ?? null;

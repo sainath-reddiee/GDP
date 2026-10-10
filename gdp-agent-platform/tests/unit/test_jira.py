@@ -135,6 +135,13 @@ def test_report_verdicts():
     assert adf.from_markdown(failing)["content"]  # posts as valid ADF
 
 
+def test_report_cells_keep_pipes_out_of_the_table():
+    report = report_markdown("QA-1", "Run", "http://x", [{"title": "a | b", "outcome": "FAIL", "rows_returned": 1,
+                                                         "expected": "x|y\nz"}])
+    row = next(ln for ln in report.splitlines() if ln.startswith("| a"))
+    assert row == "| a / b | FAIL | 1 | x/y z |" and row.count("|") == 5
+
+
 # --------------------------------------------------------------------------- API: tokens, state, governance
 
 class JiraDb:

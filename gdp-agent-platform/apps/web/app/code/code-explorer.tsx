@@ -119,7 +119,7 @@ export function CodeExplorer({ repos, summary, usage, initial }: {
     });
   }, [repo, catalogs]);
 
-  const chooseRepo = (id: string) => { setRepoId(id); setFile(null); setHits(null); syncUrl({ repo: id || null, path: null, line: null, q: null }); };
+  const chooseRepo = (id: string) => { setRepoId(id); setFile(null); setHits(null); setNode(""); syncUrl({ repo: id || null, path: null, line: null, q: null, node: null }); };
   const chooseTab = (t: Tab) => { setTab(t); setFile(null); setHits(null); syncUrl({ tab: t === "overview" ? null : t, path: null, line: null }); };
   const runSearch = (text = q, k = kind) => {
     if (!text.trim()) { setHits(null); syncUrl({ q: null }); return; }
@@ -510,8 +510,10 @@ function FilesTab({ repo, onOpen }: { repo: CodeRepo; onOpen: OpenFn }) {
   const [error, setError] = useState("");
   const [closed, setClosed] = useState<Set<string>>(new Set());
   useEffect(() => {
-    setFiles(null);
-    repoFiles(repo.repo_id).then((r) => (r.ok ? setFiles(r.data.files) : setError(r.error)));
+    let live = true;
+    setFiles(null); setError("");
+    repoFiles(repo.repo_id).then((r) => { if (live) (r.ok ? setFiles(r.data.files) : setError(r.error)); });
+    return () => { live = false; };
   }, [repo.repo_id]);
   if (error) return <p className="text-sm text-destructive">{error}</p>;
   if (!files) return <p className="flex items-center gap-2 py-6 text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" />Listing files…</p>;
@@ -557,15 +559,18 @@ function LineageTab({ repo, catalog, node, onNode, onOpen }: {
   const [input, setInput] = useState(node);
   const [depth, setDepth] = useState(2);
   const [data, setData] = useState<Neighborhood | null>(null);
+  const [error, setError] = useState("");
   const [loading, start] = useTransition();
   const fallback = useMemo(() => catalog?.models.slice().sort((a, b) => (b.reach + b.upstream) - (a.reach + a.upstream))[0]?.name ?? "", [catalog]);
   const center = node || fallback;
   useEffect(() => {
     if (!center) return;
     setInput(center);
+    setError("");
     start(async () => {
       const r = await neighborhood(center, repo.repo_id, depth);
       setData(r.ok ? r.data : null);
+      if (!r.ok) setError(r.error);
     });
   }, [center, depth, repo.repo_id]);
   const layout = useMemo(() => {
@@ -637,7 +642,8 @@ function LineageTab({ repo, catalog, node, onNode, onOpen }: {
                 })}
               </svg>
             </div>
-          ) : <p className="flex items-center gap-2 text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" />Drawing the lineage…</p>}
+          ) : error ? <p role="alert" className="text-sm text-destructive">The lineage could not be read: {error}</p>
+            : <p className="flex items-center gap-2 text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" />Drawing the lineage…</p>}
       <p className="text-[11px] text-muted-foreground">Click a box to centre the lineage on it; click the selected box to open its file. Links come from refs, sources, macro and function calls, and hard-coded table reads.</p>
     </section>
   );
@@ -648,8 +654,10 @@ function UsageTab({ repo, onOpen }: { repo: CodeRepo; onOpen: OpenFn }) {
   const [days, setDays] = useState(30);
   const [error, setError] = useState("");
   useEffect(() => {
-    setData(null);
-    codeUsage(repo.repo_id, days).then((r) => (r.ok ? setData(r.data) : setError(r.error)));
+    let live = true;
+    setData(null); setError("");
+    codeUsage(repo.repo_id, days).then((r) => { if (live) (r.ok ? setData(r.data) : setError(r.error)); });
+    return () => { live = false; };
   }, [repo.repo_id, days]);
   if (error) return <p className="text-sm text-destructive">{error}</p>;
   if (!data) return <p className="flex items-center gap-2 py-6 text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" />Reading usage…</p>;

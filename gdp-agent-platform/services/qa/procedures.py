@@ -73,10 +73,13 @@ def knowledge(session, domain_id: Optional[str], run_id: str) -> Dict[str, Any]:
     out: Dict[str, Any] = {"rules": [], "profile": [], "checks": []}
     if domain_id:
         try:
-            found = rows(session, """
+            from services.knowledge.writer import NOT_OPERATIONAL_SQL
+
+            found = rows(session, f"""
                 SELECT KNOWLEDGE_ID, KNOWLEDGE_TYPE, TITLE, CONTENT FROM KNOWLEDGE.DOMAIN_KNOWLEDGE
                  WHERE DOMAIN_ID = ? AND IS_CURRENT AND COALESCE(STATUS, 'ACTIVE') = 'ACTIVE'
                    AND KNOWLEDGE_TYPE IN ('BUSINESS_RULE', 'GLOSSARY', 'TRANSFORMATION_RULE', 'EXCEPTION', 'QA_TEST')
+                   AND {NOT_OPERATIONAL_SQL}
                  ORDER BY IFF(KNOWLEDGE_TYPE = 'BUSINESS_RULE', 0, 1), UPDATED_AT DESC NULLS LAST LIMIT 30""", [domain_id])
             out["rules"] = [f"[{r['KNOWLEDGE_TYPE']}] {r['TITLE']}: {clip(r['CONTENT'], 300)}" for r in found]
             from services.knowledge.writer import record_usage

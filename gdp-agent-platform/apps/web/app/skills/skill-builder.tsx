@@ -55,7 +55,10 @@ export function SkillBuilder({ categories, skills, initialSkill, onClose }: {
   const [summary, setSummary] = useState<TestSummary | null>(null);
   const [note, setNote] = useState("");
   const [error, setError] = useState("");
-  const [busy, setBusy] = useState<"" | "questions" | "draft" | "check" | "test" | "save">("");
+  const [busy, setBusy] = useState<"" | "questions" | "draft" | "test" | "save">("");
+  // background re-check of the edited draft; kept apart from busy/error so it never re-enables user actions
+  const [checking, setChecking] = useState(false);
+  const [checkError, setCheckError] = useState("");
   const [, start] = useTransition();
   const [models, setModels] = useState<{ default: string; models: string[] } | null>(null);
   const [model, setModel] = useState("");
@@ -90,8 +93,15 @@ export function SkillBuilder({ categories, skills, initialSkill, onClose }: {
   // re-assemble and re-check whenever the draft is edited (no AI)
   useEffect(() => {
     if (!draft) return;
-    const t = setTimeout(() => run("check", () => builderCheck(draft, accepted, improving), (d) => { setContent(d.content); setIssues(d.issues); }), 600);
-    return () => clearTimeout(t);
+    let live = true;
+    setChecking(true);
+    const t = setTimeout(async () => {
+      const r = await builderCheck(draft, accepted, improving);
+      if (!live) return;
+      if (r.ok) { setContent(r.data.content); setIssues(r.data.issues); setCheckError(""); } else setCheckError(r.error);
+      setChecking(false);
+    }, 600);
+    return () => { live = false; clearTimeout(t); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [draft, accepted]);
 
@@ -279,7 +289,7 @@ export function SkillBuilder({ categories, skills, initialSkill, onClose }: {
 
           {step === 2 && draft && result && (
             <DraftStep draft={draft} setDraft={setDraft} accepted={accepted} setAccepted={setAccepted} issues={issues}
-                       checking={busy === "check"} result={result} categories={categories} locked={Boolean(improving)}
+                       checking={checking} result={result} categories={categories} locked={Boolean(improving)}
                        onRedraft={(fb) => makeDraft(fb)} redrafting={busy === "draft"} />
           )}
 
@@ -319,10 +329,11 @@ export function SkillBuilder({ categories, skills, initialSkill, onClose }: {
 
         <footer className="flex items-center gap-2 border-t px-6 py-3">
           {error && <p role="alert" className="max-w-[60%] text-xs text-destructive">{error}</p>}
+          {!error && checkError && <p role="alert" className="max-w-[60%] text-xs text-destructive">Checks failed: {checkError}</p>}
           {busy === "test" && <p className="flex items-center gap-1.5 text-xs text-muted-foreground"><Loader2 className="h-3.5 w-3.5 animate-spin" />Running tests: answering each task twice and judging, usually one to two minutes…</p>}
           {busy === "draft" && <p className="flex items-center gap-1.5 text-xs text-muted-foreground"><Loader2 className="h-3.5 w-3.5 animate-spin" />Drafting with AI, usually about a minute…</p>}
           <span className="ml-auto" />
-          {step > 0 && <Button size="sm" variant="ghost" onClick={() => setStep(step - 1)} disabled={Boolean(busy && busy !== "check")}><ArrowLeft className="h-3.5 w-3.5" />Back</Button>}
+          {step > 0 && <Button size="sm" variant="ghost" onClick={() => setStep(step - 1)} disabled={Boolean(busy)}><ArrowLeft className="h-3.5 w-3.5" />Back</Button>}
           {step === 0 && <Button size="sm" disabled={!canInputs} onClick={() => setStep(1)}>Next<ArrowRight className="h-3.5 w-3.5" /></Button>}
           {step === 1 && (
             <Button size="sm" disabled={!canDraft || busy === "draft"} onClick={() => makeDraft()}>
@@ -330,10 +341,10 @@ export function SkillBuilder({ categories, skills, initialSkill, onClose }: {
             </Button>
           )}
           {step === 1 && draft && <Button size="sm" variant="outline" onClick={() => setStep(2)}>Keep current draft<ArrowRight className="h-3.5 w-3.5" /></Button>}
-          {step === 2 && <Button size="sm" disabled={errors.length > 0 || busy === "check"} onClick={() => setStep(3)}>Next: test<ArrowRight className="h-3.5 w-3.5" /></Button>}
+          {step === 2 && <Button size="sm" disabled={errors.length > 0 || checking || Boolean(checkError)} onClick={() => setStep(3)}>Next: test<ArrowRight className="h-3.5 w-3.5" /></Button>}
           {step === 3 && <Button size="sm" disabled={busy === "test"} onClick={() => setStep(4)}>{summary ? "Next: save" : "Skip tests"}<ArrowRight className="h-3.5 w-3.5" /></Button>}
           {step === 4 && (
-            <Button size="sm" disabled={busy === "save" || errors.length > 0 || note.trim().length < 3} onClick={save}>
+            <Button size="sm" disabled={busy === "save" || checking || Boolean(checkError) || errors.length > 0 || note.trim().length < 3} onClick={save}>
               {busy === "save" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}Save as candidate
             </Button>
           )}

@@ -10,7 +10,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input, Label, Select, Textarea } from "@/components/ui/input";
 import { reviewRun, transitionRun } from "./actions";
 
-const DECISIONS = ["APPROVE", "REQUEST_CHANGES", "REJECT", "REOPEN"];
+/** APPROVE only moves a run into an *_APPROVED state; the other decisions only move it back (as the procedure enforces). */
+const decisionsFor = (toState: string) => toState.endsWith("_APPROVED") ? ["APPROVE"] : ["REQUEST_CHANGES", "REJECT", "REOPEN"];
 
 /** States entered only through their stage action (mirrors PROCEDURE_OWNED_STATES in the API). */
 const PROCEDURE_OWNED = new Set([
@@ -46,6 +47,8 @@ export function RunConsole({ state }: { state: RunState }) {
   const [error, setError] = useState("");
   const [pending, start] = useTransition();
   const human = state.allowed_transitions.filter((t) => t.actor === "HUMAN");
+  const [target, setTarget] = useState("");
+  const toState = human.some((t) => t.to_state === target) ? target : (human[0]?.to_state ?? "");
   const system = state.allowed_transitions.filter(
     (t) => t.actor !== "HUMAN" && t.to_state !== "FAILED" &&
       (state.current_state === "FAILED" || !PROCEDURE_OWNED.has(t.to_state)),
@@ -107,12 +110,12 @@ export function RunConsole({ state }: { state: RunState }) {
           <CardContent>
             <form action={(form) => run(() => reviewRun(state.run_id, form))}>
               <Label htmlFor="to_state">Move to</Label>
-              <Select id="to_state" name="to_state">
+              <Select id="to_state" name="to_state" value={toState} onChange={(e) => setTarget(e.target.value)}>
                 {human.map((t) => <option key={t.to_state} value={t.to_state}>{t.to_state}</option>)}
               </Select>
               <Label htmlFor="decision">Decision</Label>
-              <Select id="decision" name="decision">
-                {DECISIONS.map((d) => <option key={d}>{d}</option>)}
+              <Select id="decision" name="decision" key={toState}>
+                {decisionsFor(toState).map((d) => <option key={d}>{d}</option>)}
               </Select>
               <Label htmlFor="justification">Business justification</Label>
               <Textarea id="justification" name="justification" rows={3} />

@@ -130,8 +130,25 @@ def _target_built(session, fqn: str) -> bool:
         return False
 
 
-def execute(session, test: Dict[str, Any], allowed: Sequence[str], pii: set) -> Dict[str, Any]:
-    from services.quality.scan import PII_HINT, mask
+def hidden_columns(test: Dict[str, Any], columns: Sequence[str], pii: set, keys: Iterable[str] = ()) -> set:
+    """Result columns to mask in sample rows. A test on a PII column returns its values under aliases
+    (source_value, target_value, value, ...), so then every column except the business keys is masked."""
+    from services.quality.scan import PII_HINT
+
+    def sensitive(name: Optional[str]) -> bool:
+        return bool(name) and (str(name).upper() in pii or PII_HINT.search(str(name)) is not None)
+
+    hidden = {c for c in columns if sensitive(c)}
+    source = str(test.get("source") or "")
+    if sensitive(test.get("target_column")) or ("." in source and sensitive(source.rsplit(".", 1)[-1])):
+        key_names = {str(k).upper() for k in keys}
+        hidden |= {c for c in columns if c.upper() not in key_names}
+    return hidden
+
+
+def execute(session, test: Dict[str, Any], allowed: Sequence[str], pii: set,
+            keys: Iterable[str] = ()) -> Dict[str, Any]:
+    from services.quality.scan import mask
 
     base = {k: test.get(k) for k in ("test_id", "category", "title", "severity", "origin", "expected", "target_column")}
     ok, problems, sql = check(test.get("sql") or "", allowed)
@@ -146,7 +163,7 @@ def execute(session, test: Dict[str, Any], allowed: Sequence[str], pii: set) -> 
         return {**base, "outcome": "ERROR", "detail": clip(exc, 600), "sql": sql,
                 "duration_ms": int((time.time() - started) * 1000)}
     judged = evaluate(test.get("expected"), columns, fetched)
-    hidden = {c for c in columns if c.upper() in pii or PII_HINT.search(c)}
+    hidden = hidden_columns(test, columns, pii, keys)
     sample = [{c: (mask(v) if c in hidden else v) for c, v in r.items()} for r in fetched[:SAMPLE_ROWS]]
     return {**base, **judged, "rows_returned": len(fetched), "columns": columns, "sample": sample,
             "masked": sorted(hidden), "sql": sql, "duration_ms": int((time.time() - started) * 1000)}
@@ -172,6 +189,10 @@ def run_tests(session, run_id: str, test_ids: Optional[List[str]] = None, trigge
     started = time.time()
     built = _target_built(session, target)
     pii = _pii(session, run_id)
+    # business keys under their target and source names stay readable in masked samples
+    keys = set(ctx["business_keys"]) | {str(l.get("source_column")).upper() for l in ctx["lines"]
+                                        if l.get("source_column")
+                                        and str(l.get("target_column") or "").upper() in ctx["business_keys"]}
     results: List[Dict[str, Any]] = []
     for t in tests:
         if not built and references(t.get("sql") or "", target):
@@ -180,7 +201,7 @@ def run_tests(session, run_id: str, test_ids: Optional[List[str]] = None, trigge
                             "outcome": "NOT_RUN", "detail": "The target model is not built yet; run dbt first.",
                             "sql": t.get("sql"), "duration_ms": 0})
             continue
-        results.append(execute(session, t, ctx["allowed"], pii))
+        results.append(execute(session, t, ctx["allowed"], pii, keys))
     counts = summary(results)
     qa_run = {"qa_run_id": str(uuid.uuid4()), "run_id": run_id, "sttm_id": ctx["sttm_id"], "target": target,
               "target_built": built, "tests": len(results), "passed": counts["PASS"], "failed": counts["FAIL"],
@@ -239,15 +260,28 @@ def _remember(session, run_id: str, ctx: Dict[str, Any], results: List[Dict[str,
 
 
 def latest(query, run_id: str) -> Tuple[Optional[Dict[str, Any]], List[Dict[str, Any]]]:
-    """(latest QA run, its results) through the API's query function; (None, []) before V017 is deployed."""
+    """(latest QA run, the latest result of every test) through the API's query function; (None, []) before V017
+    is deployed. Results span all QA runs on the same STTM: running one test again must not hide an earlier
+    failure of another. Deleted saved tests are left out."""
     try:
-        found = query("""SELECT QA_RUN_ID, TARGET, TARGET_BUILT, STARTED_AT::VARCHAR AS STARTED_AT, DURATION_MS, TESTS,
+        found = query("""SELECT QA_RUN_ID, STTM_ID, TARGET, TARGET_BUILT, STARTED_AT::VARCHAR AS STARTED_AT, DURATION_MS, TESTS,
                                 PASSED, FAILED, REVIEW, NOT_RUN, ERRORS, TRIGGERED_BY, CREATED_BY
                            FROM QUALITY.QA_RUN WHERE RUN_ID = %s ORDER BY STARTED_AT DESC LIMIT 1""", (run_id,))
     except Exception:
         return None, []
     if not found:
         return None, []
-    return found[0], query("""SELECT TEST_ID, CATEGORY, TITLE, SEVERITY, ORIGIN, OUTCOME, ROWS_RETURNED, MEASURED, EXPECTED,
-                                     DETAIL, COLUMNS, SAMPLE_ROWS, SQL_TEXT, DURATION_MS
-                                FROM QUALITY.QA_RESULT WHERE QA_RUN_ID = %s""", (found[0]["qa_run_id"],))
+    last = found[0]
+    sql = """SELECT R.TEST_ID, R.CATEGORY, R.TITLE, R.SEVERITY, R.ORIGIN, R.OUTCOME, R.ROWS_RETURNED,
+                    R.MEASURED, R.EXPECTED, R.DETAIL, R.COLUMNS, R.SAMPLE_ROWS, R.SQL_TEXT, R.DURATION_MS
+               FROM QUALITY.QA_RESULT R
+               JOIN QUALITY.QA_RUN Q ON Q.QA_RUN_ID = R.QA_RUN_ID
+              WHERE R.RUN_ID = %s AND EQUAL_NULL(Q.STTM_ID, %s){deleted}
+            QUALIFY ROW_NUMBER() OVER (PARTITION BY R.TEST_ID ORDER BY R.CREATED_AT DESC) = 1"""
+    deleted = """
+                AND R.TEST_ID NOT IN (SELECT TEST_ID FROM CONTRACT.QA_TEST_CASE
+                                       WHERE RUN_ID = %s AND COALESCE(IS_DELETED, FALSE))"""
+    try:
+        return last, query(sql.format(deleted=deleted), (run_id, last.get("sttm_id"), run_id))
+    except Exception:  # roles without SELECT on CONTRACT.QA_TEST_CASE (VIEWER)
+        return last, query(sql.format(deleted=""), (run_id, last.get("sttm_id")))

@@ -148,9 +148,11 @@ def _finish_run(session, run_id: str, status: str, started: float, error: Option
 
 
 def plan_changes(listed: Dict[str, Tuple[str, int]], known: Dict[str, str], budget: int = MAX_READS_PER_RUN
-                 ) -> Tuple[List[str], List[str], int]:
-    """(paths to read, paths removed, how many changed paths are left for the next pass). A changed dbt_project.yml
-    pulls in every file under its folder, since the project decides what each file means."""
+                 ) -> Tuple[List[str], List[str], int, List[str]]:
+    """(paths to read, paths removed, how many changed paths are left for the next pass, the paths left over). A
+    changed dbt_project.yml pulls in every file under its folder, since the project decides what each file means.
+    The project file's new hash is stored in this pass, so the run marks the left-over paths stale (mark_stale): the
+    next pass then re-reads them even though their own hash did not change."""
     removed = [p for p in known if p not in listed]
     changed = [p for p, (h, _) in listed.items() if known.get(p) != h or not h]
     roots = [p.rsplit("/", 1)[0] if "/" in p else "" for p in changed if p.split("/")[-1] == "dbt_project.yml"]
@@ -159,7 +161,15 @@ def plan_changes(listed: Dict[str, Tuple[str, int]], known: Dict[str, str], budg
         changed = changed + extra
     # project files first, so a capped pass still knows the layout
     changed.sort(key=lambda p: (p.split("/")[-1] != "dbt_project.yml", p))
-    return changed[:budget], removed, max(0, len(changed) - budget)
+    return changed[:budget], removed, max(0, len(changed) - budget), changed[budget:]
+
+
+def mark_stale(session, repo_id: str, paths: List[str]) -> None:
+    """Forget the stored hash of files that still need a re-read (a capped fan-out or re-link), so the next pass
+    picks them up as changed."""
+    if paths:
+        session.sql("UPDATE CODE.CODE_FILE SET FILE_HASH = NULL WHERE REPO_ID = ? AND ARRAY_CONTAINS(PATH::VARIANT, PARSE_JSON(?))",
+                    params=[repo_id, json.dumps(paths)]).collect()
 
 
 def index_repo(session, repo_id: str) -> Dict[str, Any]:
@@ -198,7 +208,7 @@ def index_repo(session, repo_id: str) -> Dict[str, Any]:
         listed = {p: h for p, h in everything.items()
                   if dbt_parse.wanted(p, include or None, exclude or None) and h[1] <= dbt_parse.MAX_FILE_BYTES}
         listed = dict(sorted(listed.items())[:MAX_FILES])
-        changed, removed, more = plan_changes(listed, known)
+        changed, removed, more, left = plan_changes(listed, known)
 
         texts: Dict[str, str] = {}
         skipped: Dict[str, str] = {}
@@ -226,7 +236,13 @@ def index_repo(session, repo_id: str) -> Dict[str, Any]:
         # a changed set of macros (or Python functions) changes what unchanged files call: re-link those files too
         suffixes = tuple(s for k, s in (("DBT_MACRO", ".sql"), ("PY_FUNC", ".py")) if after[k] != before[k] and (after[k] | before[k]))
         if suffixes:
-            relink = [p for p in listed if p.endswith(suffixes) and p not in parse_now and safe_path(p)][:max(0, MAX_READS_PER_RUN - len(changed))]
+            candidates = [p for p in listed if p.endswith(suffixes) and p not in parse_now and safe_path(p)]
+            relink = candidates[:max(0, MAX_READS_PER_RUN - len(changed))]
+            # re-links that do not fit this pass are marked stale below, so the next pass still re-reads them
+            pending = set(left)
+            relink_left = [p for p in candidates[len(relink):] if p not in pending]
+            left += relink_left
+            more += len(relink_left)
             for p in relink:
                 try:
                     parse_now[p] = _read(session, fqn, branch, p)
@@ -237,31 +253,43 @@ def index_repo(session, repo_id: str) -> Dict[str, Any]:
             chunks, edges, _ = dbt_parse.parse_repo(parse_now, repo_id, dbt, after["DBT_MACRO"], after["PY_FUNC"])
 
         _still_mine(session, repo_id, run_id, branch)
-        for table in ("CODE_CHUNK", "CODE_EDGE", "CODE_FILE"):
-            extra = " AND ORIGIN = 'PARSER'" if table == "CODE_EDGE" else ""
-            session.sql(f"DELETE FROM CODE.{table} WHERE REPO_ID = ? AND ARRAY_CONTAINS(PATH::VARIANT, PARSE_JSON(?)){extra}",
-                        params=[repo_id, json.dumps(touched)]).collect()
-        insert_rows(session, "CODE.CODE_CHUNK",
-                    ["CHUNK_ID", "REPO_ID", "PATH", "START_LINE", "END_LINE", "KIND", "NAME", "TEXT", "TOKENS", "REFS",
-                     "SOURCES", "COLUMNS", "TESTS", "PROJECT", "COMMIT_SHA"],
-                    ["?", "?", "?", "?::NUMBER", "?::NUMBER", "?", "NULLIF(?, '')", "?", "?::NUMBER", "PARSE_JSON(?)",
-                     "PARSE_JSON(?)", "PARSE_JSON(?)", "PARSE_JSON(?)", "NULLIF(?, '')", "NULLIF(?, '')"],
-                    [[c["chunk_id"], repo_id, c["path"], c["start_line"], c["end_line"], c["kind"], c.get("name") or "",
-                      c["text"], c["tokens"], c.get("refs") or [], c.get("sources") or [], c.get("columns") or [],
-                      c.get("tests") or [], c.get("project") or "", commit] for c in chunks])
-        insert_rows(session, "CODE.CODE_EDGE",
-                    ["REPO_ID", "FROM_CHUNK_ID", "FROM_NAME", "TO_NAME", "KIND", "PATH", "ORIGIN", "COMMIT_SHA"],
-                    ["?", "NULLIF(?, '')", "?", "?", "?", "?", "'PARSER'", "NULLIF(?, '')"],
-                    [[repo_id, e.get("chunk") or "", e["from_name"], e["to_name"], e["kind"], e["path"], commit] for e in edges])
-        file_rows = [[repo_id, p, p.rsplit(".", 1)[-1].lower() if "." in p else "", listed[p][0], listed[p][1], commit, skipped.get(p, "")]
-                     for p in dict.fromkeys(changed) if p in listed and (p in parse_now or p in skipped)]
-        insert_rows(session, "CODE.CODE_FILE", ["REPO_ID", "PATH", "LANG", "FILE_HASH", "SIZE", "COMMIT_SHA", "SKIPPED_REASON"],
-                    ["?", "?", "?", "?", "?::NUMBER", "NULLIF(?, '')", "NULLIF(?, '')"], file_rows)
-        # unchanged files are identical at the new commit, so citations point at the commit that was indexed
-        for table in ("CODE_CHUNK", "CODE_EDGE", "CODE_FILE"):
-            session.sql(f"UPDATE CODE.{table} SET COMMIT_SHA = NULLIF(?, '') WHERE REPO_ID = ? AND COMMIT_SHA IS DISTINCT FROM NULLIF(?, '')",
-                        params=[commit, repo_id, commit]).collect()
-        _still_mine(session, repo_id, run_id, branch)
+        # one transaction: readers never see a file's old rows deleted and its new rows missing, and a failure (or a
+        # run taken over meanwhile) leaves the previous index as it was
+        session.sql("BEGIN TRANSACTION").collect()
+        try:
+            for table in ("CODE_CHUNK", "CODE_EDGE", "CODE_FILE"):
+                extra = " AND ORIGIN = 'PARSER'" if table == "CODE_EDGE" else ""
+                session.sql(f"DELETE FROM CODE.{table} WHERE REPO_ID = ? AND ARRAY_CONTAINS(PATH::VARIANT, PARSE_JSON(?)){extra}",
+                            params=[repo_id, json.dumps(touched)]).collect()
+            # names are clipped to the column sizes in V024__code_context.sql
+            insert_rows(session, "CODE.CODE_CHUNK",
+                        ["CHUNK_ID", "REPO_ID", "PATH", "START_LINE", "END_LINE", "KIND", "NAME", "TEXT", "TOKENS", "REFS",
+                         "SOURCES", "COLUMNS", "TESTS", "PROJECT", "COMMIT_SHA"],
+                        ["?", "?", "?", "?::NUMBER", "?::NUMBER", "?", "NULLIF(?, '')", "?", "?::NUMBER", "PARSE_JSON(?)",
+                         "PARSE_JSON(?)", "PARSE_JSON(?)", "PARSE_JSON(?)", "NULLIF(?, '')", "NULLIF(?, '')"],
+                        [[c["chunk_id"], repo_id, c["path"], c["start_line"], c["end_line"], c["kind"], clip(c.get("name"), 512),
+                          c["text"], c["tokens"], c.get("refs") or [], c.get("sources") or [], c.get("columns") or [],
+                          c.get("tests") or [], clip(c.get("project"), 256), commit] for c in chunks])
+            insert_rows(session, "CODE.CODE_EDGE",
+                        ["REPO_ID", "FROM_CHUNK_ID", "FROM_NAME", "TO_NAME", "KIND", "PATH", "ORIGIN", "COMMIT_SHA"],
+                        ["?", "NULLIF(?, '')", "?", "?", "?", "?", "'PARSER'", "NULLIF(?, '')"],
+                        [[repo_id, e.get("chunk") or "", clip(e["from_name"], 512), clip(e["to_name"], 512), e["kind"], e["path"],
+                          commit] for e in edges])
+            file_rows = [[repo_id, p, p.rsplit(".", 1)[-1].lower() if "." in p else "", listed[p][0], listed[p][1], commit,
+                          skipped.get(p, "")]
+                         for p in dict.fromkeys(changed) if p in listed and (p in parse_now or p in skipped)]
+            insert_rows(session, "CODE.CODE_FILE", ["REPO_ID", "PATH", "LANG", "FILE_HASH", "SIZE", "COMMIT_SHA", "SKIPPED_REASON"],
+                        ["?", "?", "?", "?", "?::NUMBER", "NULLIF(?, '')", "NULLIF(?, '')"], file_rows)
+            mark_stale(session, repo_id, [p for p in left if p not in parse_now and p not in skipped])
+            # unchanged files are identical at the new commit, so citations point at the commit that was indexed
+            for table in ("CODE_CHUNK", "CODE_EDGE", "CODE_FILE"):
+                session.sql(f"UPDATE CODE.{table} SET COMMIT_SHA = NULLIF(?, '') WHERE REPO_ID = ? AND COMMIT_SHA IS DISTINCT FROM NULLIF(?, '')",
+                            params=[commit, repo_id, commit]).collect()
+            _still_mine(session, repo_id, run_id, branch)
+            session.sql("COMMIT").collect()
+        except Exception:
+            session.sql("ROLLBACK").collect()
+            raise
         stats = _stats(session, repo_id, dbt)
         stats["pending_files"] = more
         stats["skipped_files"] = len(skipped) + int(stats.pop("_skipped_known", 0))

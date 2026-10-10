@@ -13,9 +13,11 @@ export function NavProgress() {
       const link = (event.target as HTMLElement).closest("a");
       if (!link || link.target === "_blank" || event.metaKey || event.ctrlKey) return;
       const href = link.getAttribute("href");
-      if (!href || href.startsWith("#") || href.startsWith("http")) return;
-      if (href === path || href === `${path}/`) return;
+      if (!href || href.startsWith("#") || href.startsWith("http") || link.hasAttribute("download") || href.startsWith("/bff/")) return;
+      const next = new URL(href, window.location.href);
+      if (next.origin !== window.location.origin || next.pathname.replace(/\/$/, "") === path.replace(/\/$/, "")) return;
       setOn(true);
+      window.setTimeout(() => setOn(false), 8000);  // never left on if the navigation is cancelled
     };
     document.addEventListener("click", start);
     return () => document.removeEventListener("click", start);

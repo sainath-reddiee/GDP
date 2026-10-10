@@ -161,9 +161,9 @@ class Members(BaseModel):
 @router.put("/api/domains/{domain_id}/members")
 def set_members(domain_id: str, body: Members, db: Db = Depends(current_db)):
     _domain(db, domain_id)
-    if not any(m.role == "OWNER" for m in body.members):
-        raise HTTPException(400, "A domain needs at least one owner")
     wanted = {(m.user.strip().upper(), m.role) for m in body.members if m.user.strip()}
+    if not any(r == "OWNER" for _, r in wanted):  # checked after blank names are dropped, before anything is written
+        raise HTTPException(400, "A domain needs at least one owner")
     current = {(r["user_name"], r["role"]) for r in db.query(
         "SELECT USER_NAME, ROLE FROM KNOWLEDGE.DOMAIN_MEMBER WHERE DOMAIN_ID = %s", (domain_id,))}
     for user, role in current - wanted:

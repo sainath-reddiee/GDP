@@ -123,6 +123,14 @@ def _target(session, run: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         return None
 
 
+def _target_scope(target: Dict[str, Any], run_id: str) -> str:
+    """Scope of a target table; a run without a resolved target keeps its own scope rather than a shared
+    target.None.None.None that would mix verdicts across unrelated runs."""
+    if not target.get("TARGET_TABLE"):
+        return f"run.{run_id}"
+    return f"target.{target.get('TARGET_DATABASE')}.{target.get('TARGET_SCHEMA')}.{target.get('TARGET_TABLE')}"
+
+
 def contexts(session, stage: str, run_id: str) -> List[Tuple[str, Dict[str, Any]]]:
     """(scope_key, context) pairs: one batched call per scope. Scope keys name what the facts are about
     (a source table, a target table), so a verdict carries over to other runs on the same objects."""
@@ -149,7 +157,7 @@ def contexts(session, stage: str, run_id: str) -> List[Tuple[str, Dict[str, Any]
         lines = _sttm_lines(session, sttm["STTM_ID"])
         profiles = {(t.upper(), c["column"].upper()): c for t, cols in _profiles(session, run_id).items() for c in cols}
         target = _target(session, run) or {}
-        scope = f"target.{target.get('TARGET_DATABASE')}.{target.get('TARGET_SCHEMA')}.{target.get('TARGET_TABLE')}"
+        scope = _target_scope(target, run_id)
         def evidence(line):
             return profiles.get((str(line["SOURCE_TABLE"] or "").upper(), str(line["SOURCE_COLUMN"] or "").upper()))
         if stage == "STTM":

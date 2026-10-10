@@ -106,6 +106,14 @@ def _jira_error(exc: JiraError) -> HTTPException:
     return HTTPException(502, f"Jira: {exc.message}")
 
 
+def _key(key: str) -> str:
+    """An issue key from the request; a malformed one is the caller's mistake (400), not a server error."""
+    try:
+        return check_key(key)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from None
+
+
 def _store_refresh(db: Db, user: str, cloud_id: str, refresh_token: str, **fields: Any) -> None:
     key = _token_key()
     db.execute("""MERGE INTO JIRA.USER_TOKEN T USING (SELECT %s AS USER_NAME, %s AS CLOUD_ID) S
@@ -224,7 +232,7 @@ def connect(body: ConnectIn, db: Db = Depends(current_db)):
     cfg = _config(db)
     _ready(cfg)
     back = body.return_to or "/"
-    if not back.startswith("/") or back.startswith("//"):
+    if not re.fullmatch(r"/(?![/\\])[^\\\s]*", back):  # a same-site path: never //host or /\host
         back = "/"
     state = secrets.token_urlsafe(32)
     db.execute(f"DELETE FROM JIRA.OAUTH_STATE WHERE CREATED_AT < DATEADD(minute, -{STATE_MINUTES}, CURRENT_TIMESTAMP())")
@@ -355,7 +363,7 @@ def attachment(key: str, attachment_id: str, db: Db = Depends(current_db)):
     """A text attachment (CSV, SQL, logs) for preview, capped at 256 KB."""
     client, _, _ = _client(db)
     try:
-        meta = next((a for a in detail(client.issue(check_key(key)))["attachments"] if a["id"] == attachment_id), None)
+        meta = next((a for a in detail(client.issue(_key(key)))["attachments"] if a["id"] == attachment_id), None)
         if not meta:
             raise HTTPException(404, "attachment not on this issue")
         if not meta["previewable"]:
@@ -386,7 +394,7 @@ class LinkIn(BaseModel):
 def link(run_id: str, body: LinkIn, db: Db = Depends(current_db)):
     """Link an issue to the run (and optionally to a QA test). With remote_link, also add a link to the run in Jira."""
     client, conn, cfg = _client(db)
-    key = check_key(body.issue_key)
+    key = _key(body.issue_key)
     run = db.query("SELECT RUN_NAME, TARGET_MODEL FROM CORE.WORKFLOW_RUN WHERE RUN_ID = %s", (run_id,))
     if not run:
         raise HTTPException(404, "run not found")
@@ -437,7 +445,7 @@ def triage(run_id: str, key: str, db: Db = Depends(current_db)):
 
     client, conn, _ = _client(db)
     try:
-        info = detail(client.issue(check_key(key)), conn.get("site_url") or "")
+        info = detail(client.issue(_key(key)), conn.get("site_url") or "")
         texts = []
         for a in [a for a in info["attachments"] if a["previewable"] and (a.get("size") or 0) <= 64 * 1024][:2]:
             try:
@@ -464,7 +472,7 @@ def report(run_id: str, key: str, db: Db = Depends(current_db)):
     """A draft comment from the latest results of the QA tests linked to this issue in this run."""
     from services.jira.triage import report_markdown
 
-    key = check_key(key)
+    key = _key(key)
     cfg = _config(db)
     run = db.query("SELECT RUN_NAME FROM CORE.WORKFLOW_RUN WHERE RUN_ID = %s", (run_id,))
     if not run:
@@ -488,7 +496,7 @@ class CommentIn(BaseModel):
 def comment(key: str, body: CommentIn, db: Db = Depends(current_db)):
     """Post the (previewed and confirmed) comment to the issue as the signed-in user."""
     client, conn, _ = _client(db)
-    key = check_key(key)
+    key = _key(key)
     try:
         posted = client.add_comment(key, adf.from_markdown(body.markdown))
     except JiraError as exc:
@@ -502,7 +510,7 @@ def comment(key: str, body: CommentIn, db: Db = Depends(current_db)):
 def transitions(key: str, db: Db = Depends(current_db)):
     client, _, _ = _client(db)
     try:
-        return {"transitions": client.transitions(check_key(key))}
+        return {"transitions": client.transitions(_key(key))}
     except JiraError as exc:
         raise _jira_error(exc) from None
 
@@ -516,7 +524,7 @@ class TransitionIn(BaseModel):
 def transition(key: str, body: TransitionIn, db: Db = Depends(current_db)):
     """Move the issue to another status (one Jira allows for this user)."""
     client, conn, _ = _client(db)
-    key = check_key(key)
+    key = _key(key)
     try:
         allowed = {t["id"]: t for t in client.transitions(key)}
         if body.transition_id not in allowed:

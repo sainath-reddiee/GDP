@@ -42,7 +42,8 @@ def _matches(keyword: str, name: str) -> bool:
     """Keyword hits on whole name tokens, never inside another word: SITE does not match WEBSITE, LAND does not
     match ISLAND. A keyword of 4+ characters also matches as a token prefix (BUILDING ~ BUILDINGS), a multi-token
     keyword (EFF_STATUS) matches the same token run, and punctuation-only keywords (__C) match as text."""
-    kw, upper = keyword.upper(), name.upper()
+    # a multi-word keyword (PURCHASE ORDER, PURCHASE-ORDER) is the same token run as PURCHASE_ORDER
+    kw, upper = re.sub(r"[\s-]+", "_", keyword.strip().upper()), name.upper()
     if not re.search(r"[A-Z0-9]", kw):
         return kw in upper
     if not kw.replace("_", "").isalnum():

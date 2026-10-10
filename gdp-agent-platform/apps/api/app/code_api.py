@@ -332,20 +332,20 @@ def update_repo(repo_id: str, body: RepoUpdate, db: Db = Depends(current_db)):
             if error and not found:
                 raise _snowflake_error(Exception(error))
             raise _missing_branch(branch, [b["name"] for b in found], repo["git_url"])
+    folder = repo.get("dbt_project_dir") or ""
+    if body.dbt_project_dir is not None:  # validated before anything is written, so a 400 never half-applies
+        folder = body.dbt_project_dir.replace("\\", "/").strip().strip("/")
+        if folder and not safe_path(folder):
+            raise HTTPException(400, "The project folder has unexpected characters")
+        roots = project_roots(repo)
+        if roots and folder not in roots:
+            raise HTTPException(400, f"No dbt_project.yml in '{folder or '(root)'}'. Found: {', '.join(r or '(root)' for r in roots)}")
     db.execute("""UPDATE CODE.REPO SET BRANCH = %s, DOMAIN_IDS = PARSE_JSON(%s), INCLUDE_GLOBS = PARSE_JSON(%s),
                          EXCLUDE_GLOBS = PARSE_JSON(%s), KIND = %s, ENABLED = %s WHERE REPO_ID = %s""",
                (branch, json.dumps(body.domain_ids if body.domain_ids is not None else repo["domain_ids"]),
                 json.dumps(include), json.dumps(exclude), body.kind or repo["kind"],
                 repo["enabled"] if body.enabled is None else body.enabled, repo_id))
     if any(v is not None for v in (body.use_for_dbt, body.dbt_project_dir, body.open_pr, body.draft_pr)):
-        folder = repo.get("dbt_project_dir") or ""
-        if body.dbt_project_dir is not None:
-            folder = body.dbt_project_dir.replace("\\", "/").strip().strip("/")
-            if folder and not safe_path(folder):
-                raise HTTPException(400, "The project folder has unexpected characters")
-            roots = project_roots(repo)
-            if roots and folder not in roots:
-                raise HTTPException(400, f"No dbt_project.yml in '{folder or '(root)'}'. Found: {', '.join(r or '(root)' for r in roots)}")
         db.execute("""UPDATE CODE.REPO SET USE_FOR_DBT = %s, DBT_PROJECT_DIR = %s, OPEN_PR = %s, DRAFT_PR = %s WHERE REPO_ID = %s""",
                    (_flag(body.use_for_dbt, repo.get("use_for_dbt"), True), folder, _flag(body.open_pr, repo.get("open_pr"), True),
                     _flag(body.draft_pr, repo.get("draft_pr"), False), repo_id))

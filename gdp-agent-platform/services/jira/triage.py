@@ -115,9 +115,10 @@ def report_markdown(issue_key: str, run_name: str, run_url: str, results: List[D
     lines = [f"**QA result for {issue_key}** from run [{run_name}]({run_url})", "", verdict, ""]
     if results:
         lines += ["| Test | Outcome | Rows | Expected |", "| --- | --- | --- | --- |"]
+        cell = lambda v, n: clip(v, n).replace("|", "/").replace("\n", " ")  # noqa: E731  a '|' or newline would break the row
         for r in results:
-            lines.append(f"| {clip(r.get('title'), 80)} | {r.get('outcome') or 'NOT_RUN'} | {r.get('rows_returned') if r.get('rows_returned') is not None else ''} "
-                         f"| {clip(r.get('expected'), 60)} |")
+            lines.append(f"| {cell(r.get('title'), 80)} | {r.get('outcome') or 'NOT_RUN'} | {r.get('rows_returned') if r.get('rows_returned') is not None else ''} "
+                         f"| {cell(r.get('expected'), 60)} |")
         lines += ["", f"{passed} passed, {failed} failed{f', {other} other' if other else ''}."]
     else:
         lines.append("No QA tests are linked to this issue yet.")

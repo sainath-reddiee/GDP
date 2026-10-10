@@ -41,13 +41,14 @@ function StepDots({ step }: { step: Step }) {
   );
 }
 
-function Choice({ active, onClick, icon: Icon, title, body, tag }: {
-  active: boolean; onClick: () => void; icon: typeof Snowflake; title: string; body: string; tag?: string;
+function Choice({ active, onClick, icon: Icon, title, body, tag, disabled }: {
+  active: boolean; onClick: () => void; icon: typeof Snowflake; title: string; body: string; tag?: string; disabled?: boolean;
 }) {
   return (
-    <button type="button" aria-pressed={active} onClick={onClick}
-            className={cn("flex items-start gap-3 rounded-xl border p-3 text-left transition-all",
-              active ? "border-primary bg-primary/5 ring-2 ring-primary/20" : "hover:border-primary/40 hover:bg-muted/30")}>
+    <button type="button" aria-pressed={active} onClick={onClick} disabled={disabled}
+            className={cn("flex items-start gap-3 rounded-xl border p-3 text-left transition-all disabled:cursor-not-allowed",
+              active ? "border-primary bg-primary/5 ring-2 ring-primary/20" : "hover:border-primary/40 hover:bg-muted/30",
+              disabled && !active && "opacity-50 hover:border-border hover:bg-transparent")}>
       <span className={cn("rounded-lg p-1.5", active ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground")}>
         <Icon className="h-4 w-4" />
       </span>
@@ -131,9 +132,11 @@ export function OracleWizard({ onDone, onCancel }: {
   useEffect(() => {
     setEaiCheck(null);
     if (integrationMode !== "existing" || !eaiExisting || !fields.host) return;
+    let live = true;  // a slower answer for an earlier choice must not overwrite the current one
     oracleCheckIntegration({ name: eaiExisting, host: fields.host, port: Number(fields.port || 1521),
                              secret: secretMode === "existing" ? secret || undefined : undefined })
-      .then((r) => r.ok && setEaiCheck(r.data));
+      .then((r) => { if (live && r.ok) setEaiCheck(r.data); });
+    return () => { live = false; };
   }, [integrationMode, eaiExisting, fields.host, fields.port, secretMode, secret]);
 
   const accessProblems = useMemo(() => {
@@ -241,10 +244,17 @@ export function OracleWizard({ onDone, onCancel }: {
             <p className="mb-2 text-xs font-medium">Where the extraction runs</p>
             <div className="grid gap-2 sm:grid-cols-2">
               <Choice active={runtime === "snowflake"} onClick={() => setRuntime("snowflake")} icon={Snowflake} tag="Recommended"
+                      disabled={!!registered}
                       title="Inside Snowflake" body={`Snowflake connects to ${target} directly. Needs Oracle reachable from Snowflake: public endpoint, allow-listed Snowflake egress IPs or PrivateLink.`} />
               <Choice active={runtime === "api_host"} onClick={() => setRuntime("api_host")} icon={Server}
+                      disabled={!!registered}
                       title="On this platform's server" body="For an Oracle only your network or VPN reaches. The API server reads Oracle and uploads to Snowflake." />
             </div>
+            {registered && (
+              <p className="mt-1.5 text-[11px] text-muted-foreground">
+                The runtime is fixed once the source is registered. To change it, remove the source and connect it again.
+              </p>
+            )}
           </div>
 
           {runtime === "snowflake" ? (

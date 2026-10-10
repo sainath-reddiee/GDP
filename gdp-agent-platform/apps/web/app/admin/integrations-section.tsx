@@ -524,8 +524,8 @@ function PublishingStrip({ status, githubRepos, may, onMsg }: { status: Publishi
   });
   const saveToken = () => start(async () => {
     const res = status.ready ? await rotatePublishingToken(token.trim()) : await setupPublishing(token.trim());
-    setToken("");
     if (!res.ok) { onMsg({ tone: toneOf(res.error), text: res.error }); return; }
+    setToken("");
     if ("log" in res.data) setLog(res.data.log);
     const ready = !("ready" in res.data) || res.data.ready;
     onMsg({ tone: ready ? "ok" : "error", text: status.ready ? "GitHub token updated in the Snowflake secret." : ready ? "Pull requests to GitHub are ready." : ("detail" in res.data && res.data.detail) || "Setup did not finish." });
