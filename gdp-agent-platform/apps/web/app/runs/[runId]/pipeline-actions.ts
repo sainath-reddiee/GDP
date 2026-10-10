@@ -20,14 +20,31 @@ function after(runId: string, result: ActionResult): ActionResult {
   return result;
 }
 
+type StageResponse = { error?: string | null; state?: { current_state?: string } | null; publish?: { status?: string; detail?: string } | null };
+
+/** A stage procedure that fails records it and still answers 200 with `error` (and may move the run to FAILED):
+ *  that is a failure for the user, not a success. */
+async function attemptStage(fn: () => Promise<StageResponse | null | undefined>): Promise<ActionResult> {
+  const result = await attemptValue(fn);
+  if (!result.ok) return result;
+  const body = result.data ?? {};
+  if (body.error) return { ok: false, error: String(body.error) };
+  if (body.state?.current_state === "FAILED") return { ok: false, error: "The step failed; the run is now FAILED. See the run's activity for the reason." };
+  const pub = body.publish;
+  if (pub && pub.status && !["PUBLISHED", "NO_CHANGES"].includes(pub.status)) {
+    return { ok: false, error: `Generated, but publishing to GitHub did not finish (${pub.status.toLowerCase().replace(/_/g, " ")}): ${pub.detail ?? ""}`.trim() };
+  }
+  return { ok: true };
+}
+
 export async function runProfiling(runId: string): Promise<ActionResult> {
-  return after(runId, await attempt(() => api(`/api/runs/${runId}/profile`, { method: "POST" })));
+  return after(runId, await attemptStage(() => api<StageResponse>(`/api/runs/${runId}/profile`, { method: "POST" })));
 }
 
 /** Profiles every landed table, ignoring the persistent cache. */
 export async function runProfilingFresh(runId: string): Promise<ActionResult> {
-  return after(runId, await attempt(() =>
-    api(`/api/runs/${runId}/profile`, { method: "POST", body: JSON.stringify({ force_refresh: true }) }),
+  return after(runId, await attemptStage(() =>
+    api<StageResponse>(`/api/runs/${runId}/profile`, { method: "POST", body: JSON.stringify({ force_refresh: true }) }),
   ));
 }
 
@@ -48,7 +65,7 @@ export async function confirmDomain(runId: string, domainId: string): Promise<Ac
 }
 
 export async function generateMapping(runId: string): Promise<ActionResult> {
-  return after(runId, await attempt(() => api(`/api/runs/${runId}/mapping`, { method: "POST" })));
+  return after(runId, await attemptStage(() => api<StageResponse>(`/api/runs/${runId}/mapping`, { method: "POST" })));
 }
 
 export async function saveMappingDecisions(runId: string, decisions: Record<string, unknown>[]): Promise<ActionResult> {
@@ -66,7 +83,7 @@ export async function assistMapping(runId: string, sourceColumnIds: string[], in
 }
 
 export async function generateSttm(runId: string): Promise<ActionResult> {
-  return after(runId, await attempt(() => api(`/api/runs/${runId}/sttm`, { method: "POST" })));
+  return after(runId, await attemptStage(() => api<StageResponse>(`/api/runs/${runId}/sttm`, { method: "POST" })));
 }
 
 export async function refineTransformation(runId: string, payload: Record<string, unknown>) {
@@ -88,7 +105,7 @@ export async function exportSttmCsv(runId: string) {
 }
 
 export async function generateSoda(runId: string): Promise<ActionResult> {
-  return after(runId, await attempt(() => api(`/api/runs/${runId}/soda`, { method: "POST" })));
+  return after(runId, await attemptStage(() => api<StageResponse>(`/api/runs/${runId}/soda`, { method: "POST" })));
 }
 
 export async function importSoda(runId: string, payload: { brief?: string; text?: string; filename?: string; rows?: unknown[] }): Promise<ActionResult> {
@@ -195,8 +212,8 @@ export async function listDbtBranches(runId: string, repo: string, fetchRemote =
 }
 
 export async function generateDbt(runId: string, plan?: DbtPlanInput): Promise<ActionResult> {
-  return after(runId, await attempt(() =>
-    api(`/api/runs/${runId}/dbt`, { method: "POST", body: JSON.stringify(plan ?? {}) }),
+  return after(runId, await attemptStage(() =>
+    api<StageResponse>(`/api/runs/${runId}/dbt`, { method: "POST", body: JSON.stringify(plan ?? {}) }),
   ));
 }
 
@@ -234,7 +251,7 @@ export async function applyDbtEnhance(
 }
 
 export async function validateDbt(runId: string): Promise<ActionResult> {
-  return after(runId, await attempt(() => api(`/api/runs/${runId}/validation`, { method: "POST" })));
+  return after(runId, await attemptStage(() => api<StageResponse>(`/api/runs/${runId}/validation`, { method: "POST" })));
 }
 
 export type SuggestionStage = "PROFILING" | "DOMAIN" | "STTM" | "SODA" | "DBT";

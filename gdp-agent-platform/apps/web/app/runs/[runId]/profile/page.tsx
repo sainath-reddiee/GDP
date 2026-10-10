@@ -1,4 +1,4 @@
-import { can, canAct } from "@/lib/types";
+import { can } from "@/lib/types";
 import { api, getRun, whoami } from "@/lib/api";
 import { AiSuggestions } from "@/components/ai-suggestions";
 import { StageGate } from "@/components/stage-gate";

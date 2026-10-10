@@ -225,12 +225,16 @@ async def middleware(request: Request, call_next):
     if not path.startswith("/api/") or method == "OPTIONS" or path.startswith("/api/auth/"):
         return await call_next(request)
     body: Any = None
+    replayable = True  # only JSON (or empty) bodies can be stored on a request and replayed after approval
     if method in ("POST", "PUT", "PATCH", "DELETE"):
         raw = await request.body()
         try:
             body = json.loads(raw) if raw else None
         except ValueError:
             body = None
+            replayable = False
+        if "multipart/" in (request.headers.get("content-type") or "").lower():
+            replayable = False
     privilege, title, _ = privilege_for(method, path, body if isinstance(body, dict) else None)
     if not privilege or _valid_replay(request.headers.get("x-aip-replay")):
         return await call_next(request)
@@ -248,6 +252,11 @@ async def middleware(request: Request, call_next):
         return await call_next(request)
     if verdict == "FORBID":
         return JSONResponse({"detail": f"Not allowed: this {reason}. Ask a governance admin for a role that has it."},
+                            status_code=403)
+    if not replayable:
+        return JSONResponse({"detail": f"Not allowed: this action needs {privilege}, and file uploads cannot be queued "
+                                       f"for approval. Ask someone with the {policies(db)[privilege]['approver_role']} "
+                                       f"role to do it, or ask a governance admin for the privilege."},
                             status_code=403)
     policy = policies(db)[privilege]
     request_id = str(uuid.uuid4())
@@ -349,10 +358,12 @@ async def approve_request(request_id: str, body: Decision, request: Request):
                           bool(settings(db).get("SUPER_SELF_APPROVE", True)))
     if not ok:
         raise HTTPException(403, why)
-    await run_in_threadpool(lambda: db.execute(
+    claimed = await run_in_threadpool(lambda: db.execute_count(
         "UPDATE GOVERNANCE.CHANGE_REQUEST SET STATUS = 'APPROVED', DECIDED_BY = %s, DECISION_NOTE = %s, "
         "DECIDED_AT = CURRENT_TIMESTAMP() WHERE REQUEST_ID = %s AND STATUS = 'PENDING'",
         (who["user"], body.note, request_id)))
+    if not claimed:  # someone else decided (or the requester cancelled) in the meantime: never replay twice
+        raise HTTPException(409, "This request is no longer pending.")
     headers = {"x-aip-replay": _replay_token(request_id), "content-type": "application/json"}
     for h in ("x-aip-session", "x-aip-role"):
         if request.headers.get(h):
@@ -388,9 +399,10 @@ def reject_request(request_id: str, body: Decision, db: Db = Depends(gov_db)):
         raise HTTPException(403, why)
     if not (body.note or "").strip():
         raise HTTPException(400, "Say why the request is rejected.")
-    db.execute("UPDATE GOVERNANCE.CHANGE_REQUEST SET STATUS = 'REJECTED', DECIDED_BY = %s, DECISION_NOTE = %s, "
-               "DECIDED_AT = CURRENT_TIMESTAMP() WHERE REQUEST_ID = %s AND STATUS = 'PENDING'",
-               (who["user"], body.note, request_id))
+    if not db.execute_count("UPDATE GOVERNANCE.CHANGE_REQUEST SET STATUS = 'REJECTED', DECIDED_BY = %s, "
+                            "DECISION_NOTE = %s, DECIDED_AT = CURRENT_TIMESTAMP() WHERE REQUEST_ID = %s "
+                            "AND STATUS = 'PENDING'", (who["user"], body.note, request_id)):
+        raise HTTPException(409, "This request is no longer pending.")
     _event(db, "REJECTED", request_id, {"by": who["user"], "note": body.note})
     return {"request_id": request_id, "status": "REJECTED"}
 
@@ -401,8 +413,9 @@ def cancel_request(request_id: str, db: Db = Depends(gov_db)):
     who = identity(db)
     if req["requested_by"].upper() != who["user"] or req["status"] != "PENDING":
         raise HTTPException(403, "Only the requester can cancel a pending request.")
-    db.execute("UPDATE GOVERNANCE.CHANGE_REQUEST SET STATUS = 'CANCELLED', DECIDED_AT = CURRENT_TIMESTAMP() "
-               "WHERE REQUEST_ID = %s", (request_id,))
+    if not db.execute_count("UPDATE GOVERNANCE.CHANGE_REQUEST SET STATUS = 'CANCELLED', DECIDED_AT = CURRENT_TIMESTAMP() "
+                            "WHERE REQUEST_ID = %s AND STATUS = 'PENDING'", (request_id,)):
+        raise HTTPException(409, "This request is no longer pending.")
     _event(db, "CANCELLED", request_id, {"by": who["user"]})
     return {"request_id": request_id, "status": "CANCELLED"}
 

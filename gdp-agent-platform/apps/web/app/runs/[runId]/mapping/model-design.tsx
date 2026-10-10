@@ -216,6 +216,7 @@ export function ModelDesign({ runId, data, canApply, state, canEdit = true, canA
     if (!r.ok) { setMessage({ ok: false, text: r.error }); return; }
     setMessage({ ok: true, text: `Version ${r.data.version} designed by AI${r.data.issues.length ? ` · ${r.data.issues.length} notes` : ""}.` });
     setInstructions("");
+    setDirty(false);  // the new AI version replaces the local draft, otherwise Save would store the old draft over it
     router.refresh();
     setSelected(r.data.version);
   });

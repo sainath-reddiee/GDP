@@ -79,7 +79,7 @@ export function KnowledgeBrowser({ items, total, domains, offset, limit }: {
         <select aria-label="Status" className={select} value={params.get("status") ?? "ACTIVE"} onChange={(e) => go({ status: e.target.value === "ACTIVE" ? null : e.target.value })}>
           <option value="ACTIVE">In use</option>
           <option value="RETIRED">Retired</option>
-          <option value="DRAFT">Draft or rejected</option>
+          <option value="DRAFT">Draft</option>
           <option value="ALL">Any status</option>
         </select>
         {mayEdit && <Button size="sm" onClick={() => setEditing("new")}><Plus className="h-4 w-4" />Add knowledge</Button>}
@@ -143,7 +143,7 @@ export function KnowledgeBrowser({ items, total, domains, offset, limit }: {
         <Button size="sm" variant="ghost" disabled={offset + limit >= total} onClick={() => go({ offset: String(offset + limit) })}>Next</Button>
       </div>
 
-      {open && <KnowledgeDrawer item={open} onClose={() => setOpen(null)} onEdit={(i) => { setOpen(null); setEditing(i); }} />}
+      {open && <KnowledgeDrawer item={open} onClose={() => setOpen(null)} onChange={setOpen} onEdit={(i) => { setOpen(null); setEditing(i); }} />}
       {editing && (
         <ItemEditor domains={domains} item={editing === "new" ? null : editing}
                     onClose={() => setEditing(null)} onSaved={() => { setEditing(null); router.refresh(); }} />

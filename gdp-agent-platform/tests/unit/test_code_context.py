@@ -170,11 +170,11 @@ def test_plan_changes_reads_changed_and_project_folder_first():
 
     listed = {"dbt_project.yml": ("h2", 1), "models/a.sql": ("a", 1), "models/b.sql": ("b", 1), "docs/x.md": ("x", 1)}
     known = {"dbt_project.yml": "h1", "models/a.sql": "a", "models/b.sql": "b", "docs/x.md": "x", "old.sql": "o"}
-    changed, removed, more = plan_changes(listed, known)
+    changed, removed, more, left = plan_changes(listed, known)
     assert changed[0] == "dbt_project.yml"  # a changed project re-reads every file under it
-    assert set(changed) == set(listed) and removed == ["old.sql"] and more == 0
-    changed, removed, more = plan_changes({"m/a.sql": ("1", 1), "m/b.sql": ("2", 1)}, {}, budget=1)
-    assert len(changed) == 1 and more == 1
+    assert set(changed) == set(listed) and removed == ["old.sql"] and more == 0 and left == []
+    changed, removed, more, left = plan_changes({"m/a.sql": ("1", 1), "m/b.sql": ("2", 1)}, {}, budget=1)
+    assert len(changed) == 1 and more == 1 and left == ["m/b.sql"]
 
 
 def test_plan_changes_nested_project_only_pulls_its_folder():
@@ -182,8 +182,29 @@ def test_plan_changes_nested_project_only_pulls_its_folder():
 
     listed = {"proj/dbt_project.yml": ("new", 1), "proj/models/a.sql": ("a", 1), "other/b.sql": ("b", 1)}
     known = {"proj/dbt_project.yml": "old", "proj/models/a.sql": "a", "other/b.sql": "b"}
-    changed, _, _ = plan_changes(listed, known)
+    changed, _, _, _ = plan_changes(listed, known)
     assert set(changed) == {"proj/dbt_project.yml", "proj/models/a.sql"}
+
+
+def test_capped_project_fan_out_continues_on_the_next_pass():
+    from services.code.indexer import plan_changes
+
+    listed = {"dbt_project.yml": ("new", 1), **{f"models/m{i}.sql": (f"h{i}", 1) for i in range(5)}}
+    known = {"dbt_project.yml": "old", **{f"models/m{i}.sql": f"h{i}" for i in range(5)}}
+    first, _, more, left = plan_changes(listed, known, budget=3)
+    assert first[0] == "dbt_project.yml" and more == 3 and len(left) == 3
+    # pass 1 stores the project file's new hash and marks the left-over files stale (hash NULL)
+    known = {**known, "dbt_project.yml": "new", **{p: None for p in left}}
+    second, _, more, left = plan_changes(listed, known, budget=3)
+    assert set(second) == set(listed) - set(first) and more == 0 and left == []
+
+
+def test_sql_statements_repeated_text_get_their_own_lines_and_ids():
+    text = "select 1;\n\n\n\nselect 1;\nselect 1;\n\n\nselect 1\n"
+    chunks, _, _ = dbt_parse.parse_repo({"scripts/a.sql": text}, "r1")
+    sql = [c for c in chunks if c["kind"] == "SQL"]
+    assert [c["start_line"] for c in sql] == [1, 5, 6, 9]
+    assert len({c["chunk_id"] for c in sql}) == 4
 
 
 def test_safe_path_rejects_sql_breaking_names():

@@ -99,9 +99,26 @@ def parse_run_ids(value: Any) -> List[str]:
     return ids
 
 
+def interrupted_state(run: Dict[str, Any]) -> Optional[str]:
+    """State a FAILED or CANCELLED run stopped in; a run cancelled after failing keeps FAILED_FROM_STATE."""
+    state = run["CURRENT_STATE"]
+    if state == FAILED_STATE or (state == CANCELLED_STATE and run.get("PREVIOUS_STATE") == FAILED_STATE):
+        return run["FAILED_FROM_STATE"]
+    return run["PREVIOUS_STATE"]
+
+
+def review_decision_error(to_state: str, decision: str) -> Optional[str]:
+    """APPROVE only moves a run into an *_APPROVED state; any other decision only moves it back."""
+    if to_state.endswith("_APPROVED") and decision != "APPROVE":
+        return f"{to_state} requires DECISION = APPROVE, got {decision}"
+    if not to_state.endswith("_APPROVED") and decision == "APPROVE":
+        return f"APPROVE cannot move the run to {to_state}; use REJECT, REQUEST_CHANGES or REOPEN"
+    return None
+
+
 def _state_payload(graph, run: Dict[str, Any]) -> Dict[str, Any]:
     state = run["CURRENT_STATE"]
-    interrupted = run["FAILED_FROM_STATE"] if state == FAILED_STATE else run["PREVIOUS_STATE"]
+    interrupted = interrupted_state(run)
     allowed = [
         {"to_state": t.to_state, "actor": t.actor}
         for t in graph.outgoing(state)
@@ -275,6 +292,8 @@ def review_transition(session, run_id: str, to_state: str, decision: str,
     comments = _text(comments, "COMMENTS")
     if decision == "APPROVE":
         assert justification, "BUSINESS_JUSTIFICATION is required to approve"
+    mismatch = review_decision_error(to_state, decision)
+    assert mismatch is None, mismatch
 
     graph = _load_graph(session)
     run = _get_run(session, run_id)
@@ -315,10 +334,14 @@ def review_transition(session, run_id: str, to_state: str, decision: str,
                 "REVIEWED_AT = CURRENT_TIMESTAMP() WHERE RUN_ID = ? AND IS_CURRENT AND STATUS <> 'REJECTED'",
                 params=[run_id],
             ).collect()
-            try:
-                from services.soda.procedures import store_approved_set
+            from services.common.audit import tool_call
 
-                store_approved_set(session, run_id)
+            try:  # tool_call records a FAILED row with the error before re-raising
+                with tool_call(session, run_id, "store_approved_soda_set", {"run_id": run_id}) as call:
+                    from services.soda.procedures import store_approved_set
+
+                    store_approved_set(session, run_id)
+                    call.summary = "approved Soda checks kept as knowledge"
             except Exception:
                 pass  # knowledge is a by-product; the approval itself must not fail on it
         if from_state == "DBT_REVIEW" and to_state == "DBT_APPROVED":

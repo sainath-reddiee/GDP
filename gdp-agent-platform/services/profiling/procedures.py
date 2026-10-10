@@ -25,6 +25,7 @@ from services.common.audit import record_cost, tool_call
 from services.common.llm import complete_json
 from services.common.sql import clip, insert_rows, rows, scalar, variant
 from services.common.stage import Stage
+from services.common.standard import run_standard
 from services.common.rules import ensure_active
 from services.knowledge.usage import use_stage
 from services.profiling import profiler
@@ -461,8 +462,8 @@ def parse_options(options_json: Optional[str]) -> Tuple[ForceRefresh, int]:
 
 
 def _profile_run(session, run_id: str, tables: List[Dict[str, Any]], force: ForceRefresh,
-                 limit: int) -> Tuple[Dict[str, List[Dict[str, Any]]], Dict[TableKey, TableProfile]]:
-    guidance = use_stage(session, "PROFILING", run_id=run_id)
+                 limit: int, standard: str = "GDP") -> Tuple[Dict[str, List[Dict[str, Any]]], Dict[TableKey, TableProfile]]:
+    guidance = use_stage(session, "PROFILING", standard, run_id=run_id)
     results = profile_tables(session, [t["REF"] for t in tables], limit, force, run_id, guidance)
     profiles = {t["LANDING_ID"]: _bind(results[t["REF"].key], t) for t in tables}
     _foreign_keys(session, tables, profiles)
@@ -488,7 +489,7 @@ def run_profiling(session, run_id: str, options_json: Optional[str] = None) -> D
                                                        "concurrency_limit": limit}) as call:
         try:
             assert tables, "no successfully landed tables for this run"
-            profiles, results = _profile_run(session, run_id, tables, force, limit)
+            profiles, results = _profile_run(session, run_id, tables, force, limit, run_standard(stage.run))
             for t in tables:
                 result = results[t["REF"].key]
                 _store(session, run_id, t, profiles[t["LANDING_ID"]], result.model,
@@ -521,7 +522,8 @@ def refresh_table_profile(session, run_id: str, source_table: str) -> Dict[str, 
     target = [t for t in tables if t["SOURCE_TABLE"] == source_table]
     assert target, f"{source_table} has no completed landing in this run"
     with tool_call(session, run_id, "refresh_table_profile", {"table": source_table}) as call:
-        profiles, results = _profile_run(session, run_id, tables, {source_table}, DEFAULT_CONCURRENCY)
+        profiles, results = _profile_run(session, run_id, tables, {source_table}, DEFAULT_CONCURRENCY,
+                                         run_standard(run))
         table = target[0]
         result = results[table["REF"].key]
         profiled = scalar(session, "SELECT COUNT(*) FROM PROFILE.PROFILE_REGISTRY WHERE RUN_ID = ? AND SOURCE_TABLE_ID = ?",

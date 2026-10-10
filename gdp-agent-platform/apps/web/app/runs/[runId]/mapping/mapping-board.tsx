@@ -160,7 +160,8 @@ export function MappingBoard({ runId, data }: { runId: string; data: MappingOver
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const el = e.target as HTMLElement;
-      if (["INPUT", "TEXTAREA", "SELECT"].includes(el.tagName) || el.isContentEditable || pending) return;
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      if (["INPUT", "TEXTAREA", "SELECT"].includes(el.tagName) || el.isContentEditable || pending || confirm) return;
       const index = visible.findIndex((r) => r.id === focus);
       if (e.key === "j" || e.key === "ArrowDown") {
         e.preventDefault();

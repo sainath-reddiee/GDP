@@ -32,11 +32,12 @@ export function RoleSelector({ currentRole }: { currentRole: string | null }) {
         disabled={pending || roles.length === 0}
         onChange={(e) => {
           const next = e.target.value;
+          const previous = value;
           setValue(next);
           setError("");
           start(async () => {
             const result = await setSnowflakeRole(next);
-            if (!result.ok) setError(result.error);
+            if (!result.ok) { setError(result.error); setValue(previous); }  // show the role that is really in use
           });
         }}
       >

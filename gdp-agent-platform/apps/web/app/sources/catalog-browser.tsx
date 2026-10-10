@@ -6,6 +6,7 @@ import type { DatabaseRow, SchemaRow } from "@/app/onboarding/catalog-types";
 import { loadSchemas } from "@/app/onboarding/catalog";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
+import { sfIdent } from "./identifiers";
 
 export type Target = { database: string; schema: string };
 export type RecentTarget = { target: Target; staged: number };
@@ -55,7 +56,7 @@ export function CatalogBrowser({ databases, value, recents, profiledBySchema, op
   useEffect(() => {
     if (!open || !active || schemas[active]) return;
     setLoading(active);
-    loadSchemas(active)
+    loadSchemas(sfIdent(active))
       .then((r) => setSchemas((s) => ({ ...s, [active]: r.schemas })))
       .catch(() => setSchemas((s) => ({ ...s, [active]: "error" })))
       .finally(() => setLoading((l) => (l === active ? null : l)));

@@ -25,7 +25,7 @@ from app.agent import AGENT_NAME, stream_agent
 from app.source_invoke import USE_CALLER, invoke_source
 from app.db import (
     AUTH_MODE, DATABASE, WAREHOUSE, Db, SnowflakeSessionError,
-    apply_work_role, close_session, dev_db, list_grantable_roles, lookup_session, open_pat_session,
+    apply_work_role, close_session, dev_db, list_grantable_roles, lookup_session, open_pat_session, transaction,
 )
 
 app = FastAPI(title="Agentic pipeline API")
@@ -38,25 +38,31 @@ app.add_middleware(
 )
 
 _run_lock = threading.Lock()
-_run_cache: dict[str, tuple[float, dict]] = {}
+_run_cache: dict[tuple[str, str, str], tuple[float, dict]] = {}
 _RUN_TTL = 3.0
 
 
-def _cached_run(run_id: str, loader):
+def _cached_run(db: Db, run_id: str, loader):
+    """Per caller (user and role see different rows) and per run; expired entries are pruned on write."""
+    key = (getattr(db, "user", "") or "", getattr(db, "role", "") or "", run_id)
     now = time.time()
     with _run_lock:
-        hit = _run_cache.get(run_id)
+        hit = _run_cache.get(key)
         if hit and now - hit[0] < _RUN_TTL:
             return hit[1]
     state = loader()
     with _run_lock:
-        _run_cache[run_id] = (time.time(), state)
+        now = time.time()
+        for stale in [k for k, (at, _) in _run_cache.items() if now - at >= _RUN_TTL]:
+            _run_cache.pop(stale, None)
+        _run_cache[key] = (now, state)
     return state
 
 
 def _drop_run(run_id: str) -> None:
     with _run_lock:
-        _run_cache.pop(run_id, None)
+        for key in [k for k in _run_cache if k[2] == run_id]:
+            _run_cache.pop(key, None)
 
 
 @app.middleware("http")
@@ -390,8 +396,10 @@ def list_runs(include_test: bool = False, status: str = "all", limit: int = 200,
             (*params, limit, offset),
         )
         total = int(rows[0]["total_matches"]) if rows else 0
-    except Exception:
+    except Exception as exc:
         # Before V006 is applied there are no lifecycle columns: show the plain list instead of failing.
+        if "invalid identifier" not in str(exc).lower():
+            raise _snowflake_error(exc) from exc
         if status.lower() == "archived":
             return {"runs": [], "status": "archived"}
         rows = db.query(
@@ -502,13 +510,15 @@ def _unlock_parallel_tracks(state: dict) -> dict:
 
 
 def _qa_signoff(db: Db, run_id: str) -> Optional[dict]:
-    """The latest sign-off for the run's current STTM version (an older version's sign-off does not count)."""
+    """The latest sign-off for the run's current STTM version (an older version's sign-off does not count).
+    The current version is the newest one in review or approved; a newer draft or rejected version does not count."""
     try:
         found = db.query(
             """SELECT Q.DECISION, Q.NOTE, Q.DECIDED_BY, Q.DECIDED_AT::VARCHAR AS DECIDED_AT, Q.STTM_ID
                  FROM CONTRACT.QA_SIGNOFF Q
                 WHERE Q.RUN_ID = %s
                   AND Q.STTM_ID IS NOT DISTINCT FROM (SELECT STTM_ID FROM CONTRACT.STTM_REGISTRY WHERE RUN_ID = %s
+                                                       AND STATUS IN ('APPROVED', 'REVIEW')
                                                      ORDER BY STTM_VERSION DESC LIMIT 1)
                 ORDER BY Q.DECIDED_AT DESC LIMIT 1""", (run_id, run_id))
     except Exception:
@@ -560,29 +570,31 @@ def _save_intent(db: Db, run_id: str, intent: dict) -> None:
     from services.source.intent import intent_key
     key = intent_key(run_id)
     payload = {**intent, "run_id": run_id}
-    db.execute(
-        "UPDATE CORE.PLATFORM_CONFIG SET IS_CURRENT = FALSE WHERE CONFIG_KEY = %s AND IS_CURRENT",
-        (key,),
-    )
-    version_rows = db.query(
-        "SELECT COALESCE(MAX(VERSION), 0) + 1 AS V FROM CORE.PLATFORM_CONFIG WHERE CONFIG_KEY = %s",
-        (key,),
-    )
-    version = version_rows[0]["v"] if version_rows else 1
-    db.execute(
-        """
-        INSERT INTO CORE.PLATFORM_CONFIG
-          (CONFIG_KEY, CONFIG_VALUE, DESCRIPTION, VERSION, IS_CURRENT, CREATED_BY)
-        SELECT %s, PARSE_JSON(%s), %s, %s, TRUE, CURRENT_USER()
-        """,
-        (key, json.dumps(payload), "Onboarding source/target intent", version),
-    )
+    with transaction(db):  # supersede and insert together: never zero (or two) current intents
+        db.execute(
+            "UPDATE CORE.PLATFORM_CONFIG SET IS_CURRENT = FALSE WHERE CONFIG_KEY = %s AND IS_CURRENT",
+            (key,),
+        )
+        version_rows = db.query(
+            "SELECT COALESCE(MAX(VERSION), 0) + 1 AS V FROM CORE.PLATFORM_CONFIG WHERE CONFIG_KEY = %s",
+            (key,),
+        )
+        version = version_rows[0]["v"] if version_rows else 1
+        db.execute(
+            """
+            INSERT INTO CORE.PLATFORM_CONFIG
+              (CONFIG_KEY, CONFIG_VALUE, DESCRIPTION, VERSION, IS_CURRENT, CREATED_BY)
+            SELECT %s, PARSE_JSON(%s), %s, %s, TRUE, CURRENT_USER()
+            """,
+            (key, json.dumps(payload), "Onboarding source/target intent", version),
+        )
 
 
 def _load_intent(db: Db, run_id: str) -> Optional[dict]:
     from services.source.intent import intent_key
     rows = db.query(
-        "SELECT CONFIG_VALUE FROM CORE.PLATFORM_CONFIG WHERE CONFIG_KEY = %s AND IS_CURRENT",
+        "SELECT CONFIG_VALUE FROM CORE.PLATFORM_CONFIG WHERE CONFIG_KEY = %s AND IS_CURRENT "
+        "ORDER BY VERSION DESC LIMIT 1",
         (intent_key(run_id),),
     )
     if not rows:
@@ -723,7 +735,7 @@ def get_run(run_id: str, db: Db = Depends(current_db)):
             state["lanes"] = lanes
         return state
 
-    return _cached_run(run_id, load)
+    return _cached_run(db, run_id, load)
 
 
 @app.get("/api/runs/{run_id}/intent")
@@ -1120,7 +1132,8 @@ def landing_targets(db: Db = Depends(current_db)):
         f"""
         SELECT SCHEMA_NAME FROM {DATABASE}.INFORMATION_SCHEMA.SCHEMATA
          WHERE SCHEMA_NAME NOT IN ('INFORMATION_SCHEMA', 'CORE', 'SOURCE', 'PROFILE', 'KNOWLEDGE', 'MAPPING',
-                                   'CONTRACT', 'CODEGEN', 'AUDIT', 'METADATA')
+                                   'CONTRACT', 'CODEGEN', 'AUDIT', 'METADATA', 'MODELING', 'GOVERNANCE', 'CODE',
+                                   'JIRA', 'QUALITY')
          ORDER BY SCHEMA_NAME
         """
     )
@@ -1399,6 +1412,8 @@ def _suggest_for_catalog(db: Db, database: Optional[str], schema: Optional[str],
 
 @app.put("/api/runs/{run_id}/intent")
 def put_run_intent(run_id: str, body: IntentPatch, db: Db = Depends(current_db)):
+    if not db.query("SELECT 1 AS X FROM CORE.WORKFLOW_RUN WHERE RUN_ID = %s", (run_id,)):
+        raise HTTPException(404, "run not found")
     current = _load_intent(db, run_id) or {
         "path": "profile_suggest", "run_name": "", "source": {}, "targets": [],
         "model_existing": False, "created_at": "",
@@ -1544,11 +1559,15 @@ def _domain_snapshot(db: Db, domain_id: Optional[str], kind: str, note: Optional
 def create_domain(body: CreateDomain, db: Db = Depends(current_db)):
     name = body.domain_name.strip()
     existing = db.query(
-        "SELECT DOMAIN_ID, DOMAIN_NAME FROM KNOWLEDGE.DOMAIN_REGISTRY WHERE UPPER(DOMAIN_NAME) = UPPER(%s)",
+        "SELECT DOMAIN_ID, DOMAIN_NAME, ACTIVE_FLAG FROM KNOWLEDGE.DOMAIN_REGISTRY WHERE UPPER(DOMAIN_NAME) = UPPER(%s)",
         (name,),
     )
     if existing:
-        return {"domain": existing[0], "created": False}
+        found = existing[0]
+        if found.get("active_flag") is False:
+            raise HTTPException(409, f"A deleted domain is already named {found['domain_name']}. Restore it from "
+                                     "Domains (show deleted) instead of creating it again.")
+        return {"domain": {"domain_id": found["domain_id"], "domain_name": found["domain_name"]}, "created": False}
     import uuid
     domain_id = str(uuid.uuid4())
     try:
@@ -1793,7 +1812,14 @@ def prepare_source(run_id: str, body: AccessRequest, db: Db = Depends(current_db
         elif step == LANDING:
             result = execute_landing(run_id, db) or {}
             out.update(tables=result.get("tables", []), state=result.get("state"))
-            if any(t.get("status") != "COMPLETE" for t in out["tables"]):
+            state = result.get("state") if isinstance(result.get("state"), dict) else {}
+            selected = db.query("SELECT COUNT(*) AS N FROM SOURCE.SOURCE_OBJECT WHERE RUN_ID = %s AND SELECTED_FLAG",
+                                (run_id,))
+            wanted = int(selected[0]["n"] or 0) if selected else 0
+            landed = sum(1 for t in out["tables"] if t.get("status") == "COMPLETE")
+            # a landing error midway returns only the tables tried so far, all COMPLETE, with the run FAILED
+            if (any(t.get("status") != "COMPLETE" for t in out["tables"]) or state.get("current_state") == "FAILED"
+                    or landed < wanted):
                 out["passed"] = False
                 out["failed_step"] = LANDING
     return out
@@ -1906,9 +1932,13 @@ def costs(group_by: str = "stage", since: Optional[str] = None, until: Optional[
         raise HTTPException(400, str(exc)) from exc
     _reconcile_if_due(db)
     rows = db.query(sql, tuple(params))
-    totals = {k: sum(float(r.get(k) or 0) for r in rows)
-              for k in ("calls", "input_tokens", "output_tokens", "total_tokens", "estimated_cost", "credits",
-                        "actual_credits", "estimated_credits", "actual_calls")}
+    measures = ("calls", "input_tokens", "output_tokens", "total_tokens", "estimated_cost", "credits",
+                "actual_credits", "estimated_credits", "actual_calls")
+    # Totals cover every match, not only the page: the same grouped query without ORDER BY / LIMIT, summed.
+    every = re.sub(r"\s+ORDER BY\s+[^\n]*\s+LIMIT\s+\d+\s*$", "", sql.rstrip())
+    found = db.query(f"SELECT {', '.join(f'COALESCE(SUM({m}), 0) AS {m.upper()}' for m in measures)} FROM ({every})",
+                     tuple(params))
+    totals = {k: float((found[0] if found else {}).get(k) or 0) for k in measures}
     price = _config(db, "CREDIT_PRICE_USD", None)
     try:
         price = float(price) if price not in (None, "", 0) else None
@@ -2552,12 +2582,13 @@ def save_soda(run_id: str, body: SodaDecisions, db: Db = Depends(current_db)):
         if str(d.get("decision") or "").upper() == "MODIFIED" and isinstance(d.get("definition"), dict):
             found = db.query("SELECT TARGET_COLUMN, SEVERITY FROM CONTRACT.SODA_EXPECTATION_REGISTRY "
                              "WHERE EXPECTATION_ID = %s AND RUN_ID = %s AND IS_CURRENT", (d.get("expectation_id"), run_id))
-            if found:
-                cleaned, problems = validate({"target_column": found[0]["target_column"],
-                                              "severity": found[0]["severity"], "definition": d["definition"]})
-                if problems:
-                    raise HTTPException(400, "; ".join(problems))
-                d["definition"] = cleaned["definition"]
+            if not found:  # an unknown id would be stored without validation
+                raise HTTPException(400, f"No current check {d.get('expectation_id')} in this run; reload and try again.")
+            cleaned, problems = validate({"target_column": found[0]["target_column"],
+                                          "severity": found[0]["severity"], "definition": d["definition"]})
+            if problems:
+                raise HTTPException(400, "; ".join(problems))
+            d["definition"] = cleaned["definition"]
     try:
         return db.call("CALL CONTRACT.SAVE_SODA_DECISIONS(%s, %s)",
                        (run_id, json.dumps(body.decisions)))
@@ -2580,20 +2611,26 @@ def add_soda_check(run_id: str, body: SodaCheckIn, db: Db = Depends(current_db))
     check, problems = validate(body.model_dump())
     if problems:
         raise HTTPException(400, "; ".join(problems))
-    current = db.query("""SELECT STTM_ID, DOMAIN_ID, TARGET_TABLE, VERSION FROM CONTRACT.SODA_EXPECTATION_REGISTRY
-                           WHERE RUN_ID = %s AND IS_CURRENT ORDER BY VERSION DESC LIMIT 1""", (run_id,))
+    try:
+        current = db.query("""SELECT STTM_ID, DOMAIN_ID, TARGET_TABLE, VERSION FROM CONTRACT.SODA_EXPECTATION_REGISTRY
+                               WHERE RUN_ID = %s AND IS_CURRENT ORDER BY VERSION DESC LIMIT 1""", (run_id,))
+    except Exception as exc:
+        raise _snowflake_error(exc) from exc
     if not current:
         raise HTTPException(409, "Generate the data quality checks first; custom checks are added to that set.")
     c = current[0]
     expectation_id = str(uuid.uuid4())
-    db.execute("""INSERT INTO CONTRACT.SODA_EXPECTATION_REGISTRY (EXPECTATION_ID, RUN_ID, STTM_ID, DOMAIN_ID, TARGET_TABLE,
-                         TARGET_COLUMN, CHECK_TYPE, CHECK_DEFINITION, SEVERITY, ORIGIN, CLIENT_REQUIREMENT, STATUS, VERSION,
-                         IS_CURRENT, CREATED_BY)
-                  SELECT %s, %s, %s, %s, %s, NULLIF(%s, ''), %s, PARSE_JSON(%s), %s, 'USER', NULLIF(%s, ''), 'PROPOSED',
-                         %s, TRUE, CURRENT_USER()""",
-               (expectation_id, run_id, c["sttm_id"], c["domain_id"], c["target_table"], check["target_column"] or "",
-                check["check_type"], json.dumps(check["definition"]), check["severity"], check["requirement"] or "",
-                c["version"]))
+    try:
+        db.execute("""INSERT INTO CONTRACT.SODA_EXPECTATION_REGISTRY (EXPECTATION_ID, RUN_ID, STTM_ID, DOMAIN_ID, TARGET_TABLE,
+                             TARGET_COLUMN, CHECK_TYPE, CHECK_DEFINITION, SEVERITY, ORIGIN, CLIENT_REQUIREMENT, STATUS, VERSION,
+                             IS_CURRENT, CREATED_BY)
+                      SELECT %s, %s, %s, %s, %s, NULLIF(%s, ''), %s, PARSE_JSON(%s), %s, 'USER', NULLIF(%s, ''), 'PROPOSED',
+                             %s, TRUE, CURRENT_USER()""",
+                   (expectation_id, run_id, c["sttm_id"], c["domain_id"], c["target_table"], check["target_column"] or "",
+                    check["check_type"], json.dumps(check["definition"]), check["severity"], check["requirement"] or "",
+                    c["version"]))
+    except Exception as exc:
+        raise _snowflake_error(exc) from exc
     from services.soda.expectations import render_check
 
     return {"expectation_id": expectation_id, "check": check, "sodacl": render_check({**check, "target_table": c["target_table"]})}
@@ -2743,10 +2780,10 @@ def qa_signoff(run_id: str, body: QaSignoff, db: Db = Depends(current_db)):
             if len(note) < 15:
                 raise HTTPException(400, "An override needs a reason of at least 15 characters.")
             note = f"[override: {len(failing)} critical/high tests failing] {note}"
-    sttm = db.query("SELECT STTM_ID FROM CONTRACT.STTM_REGISTRY WHERE RUN_ID = %s ORDER BY STTM_VERSION DESC LIMIT 1",
-                    (run_id,))
+    sttm = db.query("SELECT STTM_ID FROM CONTRACT.STTM_REGISTRY WHERE RUN_ID = %s AND STATUS IN ('APPROVED', 'REVIEW') "
+                    "ORDER BY STTM_VERSION DESC LIMIT 1", (run_id,))
     if not sttm:
-        raise HTTPException(409, "The run has no STTM yet.")
+        raise HTTPException(409, "The run has no STTM in review or approved yet.")
     db.execute("INSERT INTO CONTRACT.QA_SIGNOFF (SIGNOFF_ID, RUN_ID, STTM_ID, DECISION, NOTE) "
                "SELECT %s, %s, %s, %s, NULLIF(%s, '')",
                (str(uuid.uuid4()), run_id, sttm[0]["sttm_id"], body.decision, note))
@@ -2852,6 +2889,9 @@ def qa_plan(run_id: str, body: QaPlanIn, db: Db = Depends(current_db)):
 
 @app.delete("/api/runs/{run_id}/qa/tests/{test_id}")
 def qa_delete(run_id: str, test_id: str, db: Db = Depends(current_db)):
+    if not db.query("SELECT 1 AS X FROM CONTRACT.QA_TEST_CASE WHERE RUN_ID = %s AND TEST_ID = %s AND NOT IS_DELETED",
+                    (run_id, test_id)):
+        raise HTTPException(404, "That QA test does not exist in this run.")
     db.execute("UPDATE CONTRACT.QA_TEST_CASE SET IS_DELETED = TRUE WHERE RUN_ID = %s AND TEST_ID = %s",
                (run_id, test_id))
     return {"deleted": test_id}
@@ -3060,10 +3100,15 @@ def _resolve_dbt_payload(db: Db, run_id: str, payload: dict) -> dict:
             raise HTTPException(400, "The new branch must differ from the cut-from branch")
         if (repo.get("provider") or "") != "GITHUB":
             payload["push"] = False  # pull requests from the platform are GitHub only for now
-    elif len(candidates) > 1 and not legacy:
+    elif legacy:
+        # A hand-made setup keeps the location stored with the run's plan; the browser still cannot change it.
+        for key in REPO_LOCATION_KEYS:
+            if prior.get(key) not in (None, ""):
+                payload[key] = prior[key]
+    elif len(candidates) > 1:
         raise HTTPException(409, "Several repositories serve this domain; pick one for this run: "
                                  + ", ".join(c["name"] for c in candidates))
-    elif not legacy:
+    else:
         payload["push"] = False  # no repository: generate to the stage only
     return payload
 
@@ -3211,7 +3256,7 @@ def github_publish_setup(body: GithubSetup, db: Db = Depends(current_db)):
             db.execute(run)
             log.append({"sql": shown, "ok": True})
         except Exception as exc:
-            error = str(exc)[:500].replace(token, "***") if token else str(exc)[:500]
+            error = (str(exc).replace(token, "***") if token else str(exc))[:500]  # mask first: a cut never splits the token
             log.append({"sql": shown, "ok": False, "error": error})
             return {"ready": False, "log": log,
                     "detail": "A step needs more privileges (CREATE INTEGRATION / CREATE SECRET / CREATE NETWORK RULE). "
@@ -3255,7 +3300,7 @@ def github_rotate_token(body: GithubToken, db: Db = Depends(current_db)):
     try:
         db.execute(f"ALTER SECRET {secret} SET SECRET_STRING = '{token}'")
     except Exception as exc:
-        raise HTTPException(400, str(exc)[:400].replace(token, "***")) from None
+        raise HTTPException(400, str(exc).replace(token, "***")[:400]) from None
     return {"rotated": True, "secret": secret}
 
 
@@ -3585,7 +3630,7 @@ def enhance_dbt(run_id: str, body: DbtEnhance, db: Db = Depends(current_db)):
 
     gen = db.query(
         """
-        SELECT GENERATION_ID FROM CODEGEN.DBT_GENERATION_REGISTRY
+        SELECT GENERATION_ID, GENERATION_STATUS FROM CODEGEN.DBT_GENERATION_REGISTRY
          WHERE RUN_ID = %s ORDER BY GENERATION_VERSION DESC LIMIT 1
         """,
         (run_id,),
@@ -3598,6 +3643,14 @@ def enhance_dbt(run_id: str, body: DbtEnhance, db: Db = Depends(current_db)):
         if not (body.content or "").strip():
             raise HTTPException(400, "Apply needs the previewed file content.")
         content = body.content
+        if not db.query("SELECT 1 AS X FROM CODEGEN.GENERATED_ARTIFACT WHERE GENERATION_ID = %s AND FILE_PATH = %s",
+                        (generation_id, path)):
+            raise HTTPException(404, f"No generated file {path}")
+        if (gen[0].get("generation_status") or "").upper() == "APPROVED":
+            raise HTTPException(409, "This generation is approved; regenerate dbt to change its files.")
+        if db.query("SELECT 1 AS X FROM CODEGEN.GIT_PUBLICATION WHERE GENERATION_ID = %s AND STATUS = 'PUBLISHED' LIMIT 1",
+                    (generation_id,)):
+            raise HTTPException(409, "This generation is already published to Git; regenerate dbt to change its files.")
         sha = hashlib.sha256(content.encode("utf-8")).hexdigest()
         db.execute(
             "UPDATE CODEGEN.GENERATED_ARTIFACT SET CONTENT = %s, CONTENT_SHA256 = %s "
@@ -4028,9 +4081,6 @@ def profile_source_tables(source_id: str, body: SourceProfileRequest, db: Db = D
             return {"status": "DONE", "result": _profile_source(db, source_id, tables, body.force_refresh)}
         except Exception as exc:
             raise _snowflake_error(exc) from exc
-    busy = {t for j in _active_jobs(source_id) for t in j["tables"]} & set(tables)
-    if busy:
-        raise HTTPException(409, f"already profiling: {', '.join(sorted(busy)[:5])}")
     job = {"job_id": str(uuid.uuid4()), "source_id": source_id, "tables": tables, "force_refresh": body.force_refresh,
            "status": "RUNNING", "started_at": time.time(), "finished_at": None, "result": None, "error": None}
 
@@ -4041,7 +4091,11 @@ def profile_source_tables(source_id: str, body: SourceProfileRequest, db: Db = D
             job.update(status="FAILED", error=str(_snowflake_error(exc).detail))
         job["finished_at"] = time.time()
 
-    with _jobs_lock:
+    with _jobs_lock:  # check and register under one lock, so two requests cannot both start the same tables
+        busy = {t for j in _profile_jobs.values() if j["status"] == "RUNNING" and j["source_id"] == source_id
+                for t in j["tables"]} & set(tables)
+        if busy:
+            raise HTTPException(409, f"already profiling: {', '.join(sorted(busy)[:5])}")
         _profile_jobs[job["job_id"]] = job
     threading.Thread(target=work, name=f"profile-{job['job_id'][:8]}", daemon=True).start()
     return {"status": "QUEUED", "job_id": job["job_id"], "tables": tables}
@@ -4555,12 +4609,13 @@ def set_tags(entity_type: str, key: str, body: TagsIn, db: Db = Depends(current_
     if bad:
         raise HTTPException(400, f"Not a valid tag: {bad[0]}. Use letters, digits, '-', '_', '.', ':' or '/' (40 max).")
     try:
-        db.execute("DELETE FROM CORE.TAG_ASSIGNMENT WHERE ENTITY_TYPE = %s AND ENTITY_KEY = %s", (kind, canonical))
-        for tag in tags:
-            db.execute("""MERGE INTO CORE.TAG T USING (SELECT %s AS TAG) S ON T.TAG = S.TAG
-                          WHEN NOT MATCHED THEN INSERT (TAG, COLOR) VALUES (S.TAG, %s)""", (tag, color_for(tag)))
-            db.execute("INSERT INTO CORE.TAG_ASSIGNMENT (ENTITY_TYPE, ENTITY_KEY, TAG) SELECT %s, %s, %s",
-                       (kind, canonical, tag))
+        with transaction(db):  # replace as one unit: a failure midway keeps the previous tags
+            db.execute("DELETE FROM CORE.TAG_ASSIGNMENT WHERE ENTITY_TYPE = %s AND ENTITY_KEY = %s", (kind, canonical))
+            for tag in tags:
+                db.execute("""MERGE INTO CORE.TAG T USING (SELECT %s AS TAG) S ON T.TAG = S.TAG
+                              WHEN NOT MATCHED THEN INSERT (TAG, COLOR) VALUES (S.TAG, %s)""", (tag, color_for(tag)))
+                db.execute("INSERT INTO CORE.TAG_ASSIGNMENT (ENTITY_TYPE, ENTITY_KEY, TAG) SELECT %s, %s, %s",
+                           (kind, canonical, tag))
     except Exception as exc:
         raise _snowflake_error(exc) from exc
     return {"entity_type": kind, "key": canonical, "tags": tags}
@@ -4785,8 +4840,9 @@ def external_files(source_id: str, db: Db = Depends(current_db)):
 
 
 @app.post("/api/sources/{source_id}/upload")
-async def upload_external_files(source_id: str, files: list[UploadFile] = File(...), db: Db = Depends(current_db)):
-    """Upload files to the source's internal stage (file-upload sources). Nothing is loaded until Land."""
+def upload_external_files(source_id: str, files: list[UploadFile] = File(...), db: Db = Depends(current_db)):
+    """Upload files to the source's internal stage (file-upload sources). Nothing is loaded until Land.
+    A plain def: FastAPI runs it in the threadpool, so the blocking Snowflake PUTs never stall the event loop."""
     import tempfile
 
     src = _external_row(db, source_id)
@@ -4801,7 +4857,7 @@ async def upload_external_files(source_id: str, files: list[UploadFile] = File(.
             name = re.sub(r"[^A-Za-z0-9._-]", "_", Path(f.filename or "file").name)[:200]
             if not re.search(r"\.(csv|tsv|txt|parquet|json|ndjson)(\.gz)?$", name, re.I):
                 raise HTTPException(400, f"{name}: only CSV, Parquet and JSON files are supported")
-            data = await f.read()
+            data = f.file.read(MAX_UPLOAD_BYTES + 1)  # the parsed form's spooled file; sync read in this worker thread
             if len(data) > MAX_UPLOAD_BYTES:
                 raise HTTPException(413, f"{name} is larger than {MAX_UPLOAD_BYTES // (1024 * 1024)} MB")
             local = tmp / name
@@ -4845,16 +4901,17 @@ class RulesUpdate(BaseModel):
 
 
 def _put_config(db: Db, key: str, value: dict, description: str) -> None:
-    db.execute("UPDATE CORE.PLATFORM_CONFIG SET IS_CURRENT = FALSE WHERE CONFIG_KEY = %s AND IS_CURRENT", (key,))
-    db.execute(
-        """
-        INSERT INTO CORE.PLATFORM_CONFIG (CONFIG_KEY, CONFIG_VALUE, DESCRIPTION, VERSION, IS_CURRENT, CREATED_BY)
-        SELECT %s, PARSE_JSON(%s), %s,
-               COALESCE((SELECT MAX(VERSION) FROM CORE.PLATFORM_CONFIG WHERE CONFIG_KEY = %s), 0) + 1,
-               TRUE, CURRENT_USER()
-        """,
-        (key, json.dumps(value), description, key),
-    )
+    with transaction(db):
+        db.execute("UPDATE CORE.PLATFORM_CONFIG SET IS_CURRENT = FALSE WHERE CONFIG_KEY = %s AND IS_CURRENT", (key,))
+        db.execute(
+            """
+            INSERT INTO CORE.PLATFORM_CONFIG (CONFIG_KEY, CONFIG_VALUE, DESCRIPTION, VERSION, IS_CURRENT, CREATED_BY)
+            SELECT %s, PARSE_JSON(%s), %s,
+                   COALESCE((SELECT MAX(VERSION) FROM CORE.PLATFORM_CONFIG WHERE CONFIG_KEY = %s), 0) + 1,
+                   TRUE, CURRENT_USER()
+            """,
+            (key, json.dumps(value), description, key),
+        )
 
 
 def _clean_overrides(overrides: dict) -> dict:
@@ -5161,22 +5218,25 @@ def _new_knowledge_version(db: Db, current: dict, kind: str, title: str, content
         raise HTTPException(409, "Only the version in use can be changed. Open the current version or roll back to this one.")
     lineage = current.get("lineage_id") or (lineage_id(current["domain_id"], current["source_reference"])
                                             if current.get("source_reference") else current["knowledge_id"])
-    top = db.query("SELECT COALESCE(MAX(VERSION), 0) AS V FROM KNOWLEDGE.DOMAIN_KNOWLEDGE WHERE LINEAGE_ID = %s", (lineage,))
-    version = max(int(top[0]["v"] if top else 0), int(current["version"])) + 1
     new_id = str(uuid.uuid4())
-    db.execute("""UPDATE KNOWLEDGE.DOMAIN_KNOWLEDGE SET IS_CURRENT = FALSE, UPDATED_AT = CURRENT_TIMESTAMP(),
-                         STATUS = IFF(STATUS IN ('ACTIVE', 'RETIRED'), 'SUPERSEDED', STATUS)
-                   WHERE KNOWLEDGE_ID = %s""", (current["knowledge_id"],))
-    db.execute("""INSERT INTO KNOWLEDGE.DOMAIN_KNOWLEDGE (KNOWLEDGE_ID, DOMAIN_ID, KNOWLEDGE_TYPE, TITLE, CONTENT,
-                         CONTENT_JSON, TAGS, SOURCE_REFERENCE, STATUS, VERSION, IS_CURRENT, CREATED_BY, LINEAGE_ID,
-                         ORIGIN, SOURCE_RUN_ID, CHANGE_NOTE)
-                  SELECT %s, %s, %s, %s, %s, PARSE_JSON(NULLIF(%s, '')), PARSE_JSON(%s), %s, %s, %s, TRUE,
-                         CURRENT_USER(), %s, 'USER', %s, %s""",
-               (new_id, current["domain_id"], kind, title, content,
-                json.dumps(content_json) if content_json is not None else "",
-                json.dumps(sorted(set((current.get("tags") or []) + ["UI"]))), current["source_reference"],
-                status or (current["status"] if current["status"] in ("ACTIVE", "DRAFT", "RETIRED") else "ACTIVE"),
-                version, lineage, current.get("source_run_id"), note))
+    with transaction(db):  # supersede and insert together; a concurrent edit that got there first wins
+        top = db.query("SELECT COALESCE(MAX(VERSION), 0) AS V FROM KNOWLEDGE.DOMAIN_KNOWLEDGE WHERE LINEAGE_ID = %s",
+                       (lineage,))
+        version = max(int(top[0]["v"] if top else 0), int(current["version"])) + 1
+        if not db.execute_count("""UPDATE KNOWLEDGE.DOMAIN_KNOWLEDGE SET IS_CURRENT = FALSE, UPDATED_AT = CURRENT_TIMESTAMP(),
+                                         STATUS = IFF(STATUS IN ('ACTIVE', 'RETIRED'), 'SUPERSEDED', STATUS)
+                                   WHERE KNOWLEDGE_ID = %s AND IS_CURRENT""", (current["knowledge_id"],)):
+            raise HTTPException(409, "Someone changed this item in the meantime. Reload it and try again.")
+        db.execute("""INSERT INTO KNOWLEDGE.DOMAIN_KNOWLEDGE (KNOWLEDGE_ID, DOMAIN_ID, KNOWLEDGE_TYPE, TITLE, CONTENT,
+                             CONTENT_JSON, TAGS, SOURCE_REFERENCE, STATUS, VERSION, IS_CURRENT, CREATED_BY, LINEAGE_ID,
+                             ORIGIN, SOURCE_RUN_ID, CHANGE_NOTE)
+                      SELECT %s, %s, %s, %s, %s, PARSE_JSON(NULLIF(%s, '')), PARSE_JSON(%s), %s, %s, %s, TRUE,
+                             CURRENT_USER(), %s, 'USER', %s, %s""",
+                   (new_id, current["domain_id"], kind, title, content,
+                    json.dumps(content_json) if content_json is not None else "",
+                    json.dumps(sorted(set((current.get("tags") or []) + ["UI"]))), current["source_reference"],
+                    status or (current["status"] if current["status"] in ("ACTIVE", "DRAFT", "RETIRED") else "ACTIVE"),
+                    version, lineage, current.get("source_run_id"), note))
     return new_id
 
 
@@ -5336,14 +5396,23 @@ def delete_domain(domain_id: str, force: bool = False, db: Db = Depends(current_
         raise HTTPException(409, f"{len(active)} run(s) still use {row['domain_name']}: "
                                  + ", ".join(r["run_name"] for r in active[:5])
                                  + ". Finish or archive them, or delete anyway.")
-    db.execute("""UPDATE KNOWLEDGE.DOMAIN_REGISTRY
-                     SET ACTIVE_FLAG = FALSE, UPDATED_AT = CURRENT_TIMESTAMP(),
-                         CONFIG = OBJECT_INSERT(OBJECT_INSERT(COALESCE(CONFIG, OBJECT_CONSTRUCT()),
-                                  'deleted_at', CURRENT_TIMESTAMP()::VARCHAR, TRUE), 'deleted_by', CURRENT_USER(), TRUE)
-                   WHERE DOMAIN_ID = %s""", (domain_id,))
-    db.execute("UPDATE KNOWLEDGE.TARGET_TABLE_REGISTRY SET ACTIVE_FLAG = FALSE WHERE DOMAIN_ID = %s", (domain_id,))
-    db.execute("UPDATE KNOWLEDGE.DOMAIN_KNOWLEDGE SET STATUS = 'RETIRED', UPDATED_AT = CURRENT_TIMESTAMP() "
-               "WHERE DOMAIN_ID = %s AND IS_CURRENT AND STATUS = 'ACTIVE'", (domain_id,))
+    with transaction(db):
+        # The ids retired by this delete are kept on the domain, so a restore brings back only those (never what a
+        # user retired on purpose before the delete).
+        retired = json.dumps([r["knowledge_id"] for r in db.query(
+            "SELECT KNOWLEDGE_ID FROM KNOWLEDGE.DOMAIN_KNOWLEDGE WHERE DOMAIN_ID = %s AND IS_CURRENT AND STATUS = 'ACTIVE'",
+            (domain_id,))])
+        db.execute("""UPDATE KNOWLEDGE.DOMAIN_REGISTRY
+                         SET ACTIVE_FLAG = FALSE, UPDATED_AT = CURRENT_TIMESTAMP(),
+                             CONFIG = OBJECT_INSERT(OBJECT_INSERT(OBJECT_INSERT(COALESCE(CONFIG, OBJECT_CONSTRUCT()),
+                                      'deleted_at', CURRENT_TIMESTAMP()::VARCHAR, TRUE), 'deleted_by', CURRENT_USER(), TRUE),
+                                      'retired_knowledge', PARSE_JSON(%s), TRUE)
+                       WHERE DOMAIN_ID = %s""", (retired, domain_id))
+        db.execute("UPDATE KNOWLEDGE.TARGET_TABLE_REGISTRY SET ACTIVE_FLAG = FALSE WHERE DOMAIN_ID = %s", (domain_id,))
+        db.execute("UPDATE KNOWLEDGE.DOMAIN_KNOWLEDGE SET STATUS = 'RETIRED', UPDATED_AT = CURRENT_TIMESTAMP() "
+                   "WHERE DOMAIN_ID = %s AND IS_CURRENT AND STATUS = 'ACTIVE' "
+                   "AND KNOWLEDGE_ID IN (SELECT VALUE::VARCHAR FROM TABLE(FLATTEN(INPUT => PARSE_JSON(%s))))",
+                   (domain_id, retired))
     _domain_caches_changed()
     _domain_snapshot(db, domain_id, "DELETE", "Domain deleted")
     return {"domain_id": domain_id, "deleted": True, "active_runs": len(active)}
@@ -5355,15 +5424,25 @@ def restore_domain(domain_id: str, db: Db = Depends(current_db)):
     row = _domain_row(db, domain_id)
     if not row["config"].get("deleted_at"):
         raise HTTPException(409, f"{row['domain_name']} is not deleted.")
-    db.execute("""UPDATE KNOWLEDGE.DOMAIN_REGISTRY
-                     SET ACTIVE_FLAG = TRUE, UPDATED_AT = CURRENT_TIMESTAMP(),
-                         CONFIG = OBJECT_DELETE(CONFIG, 'deleted_at', 'deleted_by')
-                   WHERE DOMAIN_ID = %s""", (domain_id,))
-    db.execute("""UPDATE KNOWLEDGE.TARGET_TABLE_REGISTRY T SET ACTIVE_FLAG = TRUE
-                   WHERE T.DOMAIN_ID = %s AND EXISTS (SELECT 1 FROM KNOWLEDGE.TARGET_COLUMN_REGISTRY C
-                                                       WHERE C.TARGET_TABLE_ID = T.TARGET_TABLE_ID)""", (domain_id,))
-    db.execute("UPDATE KNOWLEDGE.DOMAIN_KNOWLEDGE SET STATUS = 'ACTIVE', UPDATED_AT = CURRENT_TIMESTAMP() "
-               "WHERE DOMAIN_ID = %s AND IS_CURRENT AND STATUS = 'RETIRED'", (domain_id,))
+    retired = row["config"].get("retired_knowledge")
+    with transaction(db):
+        db.execute("""UPDATE KNOWLEDGE.DOMAIN_REGISTRY
+                         SET ACTIVE_FLAG = TRUE, UPDATED_AT = CURRENT_TIMESTAMP(),
+                             CONFIG = OBJECT_DELETE(CONFIG, 'deleted_at', 'deleted_by', 'retired_knowledge')
+                       WHERE DOMAIN_ID = %s""", (domain_id,))
+        db.execute("""UPDATE KNOWLEDGE.TARGET_TABLE_REGISTRY T SET ACTIVE_FLAG = TRUE
+                       WHERE T.DOMAIN_ID = %s AND EXISTS (SELECT 1 FROM KNOWLEDGE.TARGET_COLUMN_REGISTRY C
+                                                           WHERE C.TARGET_TABLE_ID = T.TARGET_TABLE_ID)""", (domain_id,))
+        if isinstance(retired, list):
+            db.execute("UPDATE KNOWLEDGE.DOMAIN_KNOWLEDGE SET STATUS = 'ACTIVE', UPDATED_AT = CURRENT_TIMESTAMP() "
+                       "WHERE DOMAIN_ID = %s AND IS_CURRENT AND STATUS = 'RETIRED' "
+                       "AND KNOWLEDGE_ID IN (SELECT VALUE::VARCHAR FROM TABLE(FLATTEN(INPUT => PARSE_JSON(%s))))",
+                       (domain_id, json.dumps(retired)))
+        else:  # deleted before the ids were recorded: only items retired at (or after) the delete itself
+            db.execute("UPDATE KNOWLEDGE.DOMAIN_KNOWLEDGE SET STATUS = 'ACTIVE', UPDATED_AT = CURRENT_TIMESTAMP() "
+                       "WHERE DOMAIN_ID = %s AND IS_CURRENT AND STATUS = 'RETIRED' "
+                       "AND UPDATED_AT >= DATEADD(second, -5, TRY_TO_TIMESTAMP_LTZ(%s))",
+                       (domain_id, str(row["config"].get("deleted_at"))))
     _domain_caches_changed()
     _domain_snapshot(db, domain_id, "RESTORE", "Domain restored")
     return {"domain_id": domain_id, "restored": True}
@@ -5699,7 +5778,7 @@ def oracle_parse(body: ConnectString):
 
 
 @app.get("/api/oracle/env-check")
-def oracle_env_check(name: str):
+def oracle_env_check(name: str, db: Db = Depends(current_db)):
     """Whether an environment variable is set on the API host (never its value)."""
     if not re.match(r"^[A-Za-z_][A-Za-z0-9_]{0,127}$", name):
         raise HTTPException(400, "not an environment variable name")
@@ -6075,7 +6154,7 @@ def oracle_ingest(source_id: str, body: OracleIngest, db: Db = Depends(current_d
 
 
 @app.get("/api/ingest-jobs/{job_id}")
-def ingest_job(job_id: str):
+def ingest_job(job_id: str, db: Db = Depends(current_db)):
     with _jobs_lock:
         job = _ingest_jobs.get(job_id)
         if not job:
@@ -6084,7 +6163,7 @@ def ingest_job(job_id: str):
 
 
 @app.post("/api/ingest-jobs/{job_id}/cancel")
-def cancel_ingest_job(job_id: str):
+def cancel_ingest_job(job_id: str, db: Db = Depends(current_db)):
     """Stop after the current batch (API host) or cancel the running Snowflake call; later tables are skipped."""
     with _jobs_lock:
         job = _ingest_jobs.get(job_id)

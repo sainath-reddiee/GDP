@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, useTransition } from "react";
+import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { ArrowRight, Check, GitBranch, KeyRound, Layers, Loader2, ShieldAlert, Wand2, X } from "lucide-react";
 import type { AnalyzeResult } from "@/lib/types";
@@ -32,6 +32,7 @@ export function ModelPanel({ database, schema, tables, domains, onClose }: {
   const [runName, setRunName] = useState("");
   const [standard, setStandard] = useState<Standard | null>(null);
   const [pending, start] = useTransition();
+  const panelRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
     let live = true;
@@ -50,7 +51,12 @@ export function ModelPanel({ database, schema, tables, domains, onClose }: {
         if (strongFqns.length) { setMode("existing"); setPicked(strongFqns); }
       }
     });
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || e.defaultPrevented) return;
+      // the ER diagram's fullscreen (native, or its fixed z-[80] overlay) takes Esc to exit itself, not the panel
+      if (document.fullscreenElement || panelRef.current?.querySelector('[class~="z-[80]"]')) return;
+      onClose();
+    };
     window.addEventListener("keydown", onKey);
     return () => { live = false; window.removeEventListener("keydown", onKey); };
   }, [database, schema, tables, domains, onClose]);
@@ -108,7 +114,7 @@ export function ModelPanel({ database, schema, tables, domains, onClose }: {
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
       <button type="button" aria-label="Close" className="absolute inset-0 bg-black/30" onClick={onClose} />
-      <aside role="dialog" aria-label="Start modeling"
+      <aside ref={panelRef} role="dialog" aria-label="Start modeling"
              className="relative flex h-full w-[1040px] max-w-full flex-col overflow-hidden border-l bg-background shadow-2xl">
         <header className="flex items-start gap-3 border-b px-6 py-4">
           <Layers className="mt-0.5 h-5 w-5 text-primary" />

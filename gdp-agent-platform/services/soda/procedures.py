@@ -9,15 +9,18 @@ from typing import Any, Dict, List, Optional
 
 from services.common.audit import record_cost, tool_call
 from services.common.llm import complete_json
-from services.common.sql import clip, insert_rows, rows, scalar, variant
+from services.common.sql import atomic, clip, insert_rows, rows, scalar, variant
 from services.common.stage import Stage
+from services.common.standard import run_standard
 from services.knowledge.usage import use_skills, use_stage
 from services.knowledge.validate import normalize_content
 from services.sttm.assemble import sttm_target_name
 from services.quality.backtest import evaluate as evaluate_check, plan as backtest_plan
 from services.quality.gx import render_suite
 from services.quality.profile_checks import profile_checks
-from services.soda.expectations import from_client, from_sttm, merge_checks, render_yaml, without_rejected
+from services.soda.expectations import (
+    from_client, from_sttm, merge_checks, not_yet_current, render_yaml, without_rejected,
+)
 from services.soda.decisions import DecisionPayloadError, parse_decision_payload, stored_status
 from services.soda.extract import EXTRACT_SCHEMA, extract_prompt, parse_client_document, requirement_from_row
 from services.soda.feedback import pattern as feedback_pattern
@@ -108,10 +111,12 @@ def _rejected(session, domain_id: str) -> List[Dict[str, Any]]:
 
 
 def _knowledge(session, domain_id: str, run_id: Optional[str] = None) -> List[str]:
-    found = rows(session, """SELECT KNOWLEDGE_ID, TITLE, CONTENT FROM KNOWLEDGE.DOMAIN_KNOWLEDGE
+    from services.knowledge.writer import NOT_OPERATIONAL_SQL
+
+    found = rows(session, f"""SELECT KNOWLEDGE_ID, TITLE, CONTENT FROM KNOWLEDGE.DOMAIN_KNOWLEDGE
                              WHERE IS_CURRENT AND KNOWLEDGE_TYPE IN
                                    ('SODA_PATTERN', 'BUSINESS_RULE', 'EXCEPTION', 'TRANSFORMATION_RULE', 'STTM_TEMPLATE')
-                               AND DOMAIN_ID = ?
+                               AND DOMAIN_ID = ? AND {NOT_OPERATIONAL_SQL}
                              ORDER BY UPDATED_AT DESC NULLS LAST LIMIT 16""", [domain_id])
     if run_id:
         from services.knowledge.writer import record_usage
@@ -145,12 +150,12 @@ def _briefs(session, run_id: str) -> List[str]:
 
 
 def _store_brief(session, run_id: str, domain_id: str, brief: str, filename: str) -> None:
-    from services.knowledge.writer import remember
+    from services.knowledge.writer import OPERATIONAL_STATUS, remember
 
     remember(session, domain_id=domain_id, kind="BUSINESS_RULE", key=f"soda.brief.{run_id}",
              title=f"Client Soda brief {filename or run_id}", content=brief,
              content_json={"run_id": run_id, "filename": filename}, tags=["CLIENT", "SODA", "BRIEF"],
-             origin="SODA", run_id=run_id, by_domain=False)
+             origin="SODA", run_id=run_id, by_domain=False, status=OPERATIONAL_STATUS)
 
 
 def _extract(session, brief: str, table: str, columns: List[str], knowledge: List[str],
@@ -194,7 +199,7 @@ def generate_soda(session, run_id: str) -> Dict[str, Any]:
     with tool_call(session, run_id, "generate_soda", {"run_id": run_id}) as call:
         try:
             try:
-                use_stage(session, "SODA", run_id=run_id)
+                use_stage(session, "SODA", run_standard(stage.run), run_id=run_id)
             except Exception:
                 pass
             sttm = _current_sttm(session, run_id)
@@ -247,7 +252,7 @@ def generate_soda(session, run_id: str) -> Dict[str, Any]:
     if stage.state == "SODA_PENDING":
         stage.move("SODA_REVIEW", call.summary, {"count": len(checks)}, in_transaction=write)
     else:
-        write("")
+        atomic(session, lambda: write(""))
     return {"version": version, "count": len(checks), "yaml": yaml_text, "checks": checks,
             "gx_suite": render_suite(table, checks), "state": stage.payload()}
 
@@ -325,6 +330,12 @@ def import_client_expectations(session, run_id: str, rows_json: str) -> Dict[str
     if parsed.get("rows"):
         imported = merge_checks(imported, from_client(table, parsed["rows"]))
     assert imported, "no Soda requirements could be extracted from the client brief"
+    current = rows(session, """SELECT TARGET_COLUMN, CHECK_TYPE, CHECK_DEFINITION FROM CONTRACT.SODA_EXPECTATION_REGISTRY
+                               WHERE RUN_ID = ? AND IS_CURRENT AND STATUS <> 'REJECTED'""", [run_id])
+    imported = not_yet_current(imported, [{"target_column": r["TARGET_COLUMN"], "check_type": r["CHECK_TYPE"],
+                                           "definition": variant(r["CHECK_DEFINITION"]) or {}} for r in current])
+    if not imported:
+        return {"imported": 0, "version": None, "yaml": "", "duplicates": True}
     version = (scalar(session, "SELECT MAX(VERSION) FROM CONTRACT.SODA_EXPECTATION_REGISTRY WHERE RUN_ID = ?",
                       [run_id]) or 0) + 1
     insert_rows(session, "CONTRACT.SODA_EXPECTATION_REGISTRY",

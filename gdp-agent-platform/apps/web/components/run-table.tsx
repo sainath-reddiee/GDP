@@ -3,10 +3,10 @@
 import { TagEditor } from "@/components/tag-editor";
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { Archive, ArchiveRestore, Trash2 } from "lucide-react";
 import type { CleanupResult, Lifecycle, RunStatusFilter, RunSummary } from "@/lib/types";
 import { cleanupRuns, setRunsArchived } from "@/app/runs/actions";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
@@ -83,6 +83,15 @@ export function RunTable({
   const [notice, setNotice] = useState<{ tone: "ok" | "error"; text: string } | null>(null);
   const [pending, start] = useTransition();
   const headerBox = useRef<HTMLInputElement>(null);
+  const params = useSearchParams();
+  // Status links keep the other filters (search, domain, sort...) and restart paging.
+  const statusHref = (status: string) => {
+    const next = new URLSearchParams(params?.toString() ?? "");
+    if (status === "all") next.delete("status"); else next.set("status", status);
+    next.delete("offset");
+    const qs = next.toString();
+    return qs ? `/runs?${qs}` : "/runs";
+  };
 
   const ids = useMemo(() => runs.map((r) => r.run_id), [runs]);
   useEffect(() => {
@@ -142,7 +151,7 @@ export function RunTable({
             {STATUS_FILTERS.map((f) => (
               <Link
                 key={f.value}
-                href={f.value === "all" ? "/runs" : `/runs?status=${f.value}`}
+                href={statusHref(f.value)}
                 aria-current={filter === f.value ? "page" : undefined}
                 className={cn(
                   "rounded-md px-2.5 py-1 text-xs font-medium",

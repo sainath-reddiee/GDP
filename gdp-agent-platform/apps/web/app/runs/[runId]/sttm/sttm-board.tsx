@@ -61,7 +61,7 @@ export function SttmBoard({
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<"all" | "logic" | "pending">("all");
   const [prompt, setPrompt] = useState("");
-  const [proposal, setProposal] = useState<TransformProposal | null>(null);
+  const [proposed, setProposal] = useState<{ lineId: string; data: TransformProposal } | null>(null);
   const [stagePath, setStagePath] = useState("");
   const [error, setError] = useState("");
   const [pending, start] = useTransition();
@@ -73,6 +73,8 @@ export function SttmBoard({
         && (!line.source_table || p.table_name.toUpperCase() === line.source_table.toUpperCase()),
     );
   }, [line, profiles]);
+  // A proposal only belongs to the line it was asked for; switching lines hides it.
+  const proposal = proposed && proposed.lineId === line?.sttm_line_id ? proposed.data : null;
 
   const q = query.trim().toLowerCase();
   const visible = lines.filter((l) => {
@@ -91,6 +93,7 @@ export function SttmBoard({
 
   const propose = () => {
     if (!line) return;
+    const lineId = line.sttm_line_id;
     start(async () => {
       setError("");
       const result = await refineTransformation(runId, {
@@ -99,7 +102,7 @@ export function SttmBoard({
         current_transformation: line.transformation, business_definition: line.business_definition,
       });
       if (!result.ok) { setError(result.error); return; }
-      setProposal(result.data);
+      setProposal({ lineId, data: result.data });
     });
   };
 
@@ -126,7 +129,7 @@ export function SttmBoard({
     a.href = href;
     a.download = `sttm_v${result.data.sttm_version}.csv`;
     a.click();
-    URL.revokeObjectURL(href);
+    { const done = href; setTimeout(() => URL.revokeObjectURL(done), 1000); }
   });
 
   if (!line) return null;

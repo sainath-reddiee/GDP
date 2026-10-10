@@ -14,7 +14,7 @@ const TONE: Record<string, "warning" | "success" | "destructive" | "outline"> = 
   PENDING: "warning", APPLIED: "success", APPROVED: "success", FAILED: "destructive", REJECTED: "destructive", CANCELLED: "outline",
 };
 
-function Row({ r, me }: { r: ChangeRequest; me: string }) {
+function Row({ r, me, onResult }: { r: ChangeRequest; me: string; onResult: (m: { ok: boolean; text: string }) => void }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [note, setNote] = useState("");
@@ -27,8 +27,11 @@ function Row({ r, me }: { r: ChangeRequest; me: string }) {
     if (!res.ok) { setMsg({ ok: false, text: res.error }); return; }
     if (kind === "approve") {
       const d = res.data as { status: string; status_code: number };
-      setMsg({ ok: d.status === "APPLIED", text: d.status === "APPLIED" ? "Approved and applied."
-        : `Approved, but applying failed (${d.status_code}). See the result below.` });
+      // reported at list level: the row leaves the inbox on refresh and would take the message with it
+      onResult({ ok: d.status === "APPLIED", text: d.status === "APPLIED" ? `Approved and applied: ${r.title || r.privilege}.`
+        : `Approved "${r.title || r.privilege}", but applying it failed (${d.status_code}). Open All requests to see the result.` });
+    } else {
+      onResult({ ok: true, text: kind === "reject" ? `Rejected: ${r.title || r.privilege}.` : `Cancelled: ${r.title || r.privilege}.` });
     }
     router.refresh();
   });
@@ -104,8 +107,16 @@ function Row({ r, me }: { r: ChangeRequest; me: string }) {
 }
 
 export function RequestList({ requests, scope, me }: { requests: ChangeRequest[]; scope: string; me: string }) {
+  const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null);
+  const banner = result && (
+    <p role={result.ok ? "status" : "alert"} className={cn("mb-2 flex items-start gap-2 rounded-lg px-3 py-2 text-sm",
+      result.ok ? "bg-success/10 text-success" : "bg-destructive/10 text-destructive")}>
+      <span className="flex-1">{result.text}</span>
+      <button type="button" aria-label="Dismiss" onClick={() => setResult(null)}><X className="h-4 w-4" /></button>
+    </p>
+  );
   if (!requests.length) {
-    return (
+    return (<>{banner}
       <div className="surface flex flex-col items-center px-6 py-14 text-center">
         <span className="grid h-12 w-12 place-items-center rounded-2xl bg-emerald-50 text-emerald-600 ring-1 ring-inset ring-emerald-100">
           <CheckCheck className="h-6 w-6" />
@@ -116,7 +127,7 @@ export function RequestList({ requests, scope, me }: { requests: ChangeRequest[]
             : "Requests appear here when someone asks for a change their role cannot make on its own."}
         </p>
       </div>
-    );
+    </>);
   }
-  return <div className="space-y-2">{requests.map((r) => <Row key={r.request_id} r={r} me={me} />)}</div>;
+  return <div className="space-y-2">{banner}{requests.map((r) => <Row key={r.request_id} r={r} me={me} onResult={setResult} />)}</div>;
 }

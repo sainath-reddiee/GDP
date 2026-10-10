@@ -41,7 +41,7 @@ export function DomainTools({ domainId, name, deletable, reason, activeRuns, del
     a.href = URL.createObjectURL(blob);
     a.download = `${name.toLowerCase()}_domain_pack.json`;
     a.click();
-    URL.revokeObjectURL(a.href);
+    { const done = a.href; setTimeout(() => URL.revokeObjectURL(done), 1000); }
   });
 
   const remove = () => start(async () => {

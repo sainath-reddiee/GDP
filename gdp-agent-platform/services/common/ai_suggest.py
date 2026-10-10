@@ -75,7 +75,7 @@ def suggest(session, spec: Spec, scope_key: str, context: Dict[str, Any], run_id
             refresh: bool = False, cached_only: bool = False) -> Dict[str, Any]:
     """Cached suggestions for one scope (usually a table) of one stage, with each item's review status.
     `cached_only` never calls the model: pages show earlier answers without paying for new ones."""
-    model = model_for(session)
+    model = model_for(session, "SUGGESTIONS")
     fp = fingerprint(context)
     verdicts = decisions(session, spec.stage, scope_key)
     result = None if refresh else _cached(session, spec, scope_key, fp, model)

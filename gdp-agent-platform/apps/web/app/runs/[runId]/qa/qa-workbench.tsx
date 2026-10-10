@@ -258,16 +258,29 @@ function Assistant({ runId, onSaved, canAI = true }: { runId: string; onSaved: (
   });
   const savePlan = () => startSave(async () => {
     if (!plan) return;
-    let n = 0;
+    const saved = new Set<number>();
+    let failed = false;
     for (const i of Array.from(keep)) {
       const t = plan.tests[i];
       const r = await saveQaTest(runId, { title: t.title, sql: t.sql, objective: `${t.objective} (${t.why})`, expected: t.expected,
                                           category: t.category, severity: t.severity, target_column: t.target_column,
                                           prompt: focus || "AI test plan" });
-      if (!r.ok) { setError(`${t.title}: ${r.error}`); break; }
-      n += 1;
+      if (!r.ok) { setError(`${t.title}: ${r.error}`); failed = true; break; }
+      saved.add(i);
     }
-    if (n) { setNotice(`Saved ${n} test${n === 1 ? "" : "s"} from the AI plan.`); setPlan(null); onSaved(); }
+    const n = saved.size;
+    if (!n) return;
+    setNotice(`Saved ${n} test${n === 1 ? "" : "s"} from the AI plan.`);
+    if (failed) {
+      // Drop only what was saved; the unsaved tests (and their selection) stay for another try.
+      const remap = new Map<number, number>();
+      plan.tests.forEach((_, i) => { if (!saved.has(i)) remap.set(i, remap.size); });
+      setPlan({ ...plan, tests: plan.tests.filter((_, i) => !saved.has(i)) });
+      setKeep(new Set(Array.from(keep).filter((i) => remap.has(i)).map((i) => remap.get(i)!)));
+    } else {
+      setPlan(null);
+    }
+    onSaved();
   });
 
   return (
@@ -452,7 +465,7 @@ export function QaWorkbench({ runId, suite, results, canRun, canAI = true, canEd
     a.href = url;
     a.download = `${suite.target.name.toLowerCase()}_qa_tests.sql`;
     a.click();
-    URL.revokeObjectURL(url);
+    { const done = url; setTimeout(() => URL.revokeObjectURL(done), 1000); }
   };
 
   return (

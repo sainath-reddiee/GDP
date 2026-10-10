@@ -302,12 +302,16 @@ def _schema_chunks(path: str, text: str, project: Optional[str]) -> List[Dict[st
 
 def _sql_statements(path: str, text: str) -> List[Dict[str, Any]]:
     out = []
-    offset = 0
-    for stmt in re.split(r";\s*\n", text):
-        start = _line_of(text, text.find(stmt, offset)) if stmt.strip() else 1
-        offset += len(stmt)
+    # walk the separators by position: searching for the statement text could land on an earlier identical statement
+    parts, begin = [], 0
+    for sep in re.finditer(r";\s*\n", text):
+        parts.append((begin, text[begin:sep.start()]))
+        begin = sep.end()
+    parts.append((begin, text[begin:]))
+    for pos, stmt in parts:
         if not stmt.strip():
             continue
+        start = _line_of(text, pos)
         name = (SQL_OBJECT.search(stmt) or [None, None])[1]
         reads, writes = table_refs(stmt)
         for i, (s, e, part) in enumerate(_windows(stmt, start)):

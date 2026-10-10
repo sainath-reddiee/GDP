@@ -63,6 +63,7 @@ export function JiraPanel({ runId, savedTests, canWrite, canAI }: {
   }, [issues]);
 
   if (!status && !error) return <p className="flex items-center gap-2 py-8 text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" />Checking your Jira connection…</p>;
+  if (!status && error) return <Empty title="Jira could not be reached" text={error} />;
   if (!status?.installed) return <Empty title="Jira is not installed" text="It needs the latest deploy (migration V027). Ask a platform admin." />;
   if (!status.ready) {
     return <Empty title="Jira is not set up yet" text="A platform admin connects the Jira site once in Admin, Integrations, Jira; then each engineer signs in with their own account."
@@ -211,6 +212,7 @@ function Details({ issue, links, savedTests, canWrite, testId, setTestId, onLink
   setTestId: (v: string) => void; onLinkTest: () => void; onUnlink: (linkId: string) => void; pending: boolean; runId: string;
 }) {
   const [preview, setPreview] = useState<{ name: string; text: string; truncated: boolean } | null>(null);
+  const [previewError, setPreviewError] = useState("");
   const [opening, startOpen] = useTransition();
   return (
     <div className="space-y-5 text-sm">
@@ -226,11 +228,16 @@ function Details({ issue, links, savedTests, canWrite, testId, setTestId, onLink
           <ul className="flex flex-wrap gap-1.5">{issue.attachments.map((a) => (
             <li key={a.id}>
               <button type="button" disabled={!a.previewable || opening} title={a.previewable ? "Preview" : "Only text files (CSV, SQL, logs) preview here"}
-                      onClick={() => startOpen(async () => { const r = await jiraAttachment(issue.key, a.id); if (r.ok) setPreview(r.data); })}
+                      onClick={() => startOpen(async () => {
+                        setPreviewError("");
+                        const r = await jiraAttachment(issue.key, a.id);
+                        if (r.ok) setPreview(r.data); else { setPreview(null); setPreviewError(`${a.name}: ${r.error}`); }
+                      })}
                       className="inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs enabled:hover:border-primary disabled:opacity-60">
                 <Paperclip className="h-3 w-3" />{a.name}{a.size ? <span className="text-muted-foreground">{Math.max(1, Math.round(a.size / 1024))} KB</span> : null}</button>
             </li>
           ))}</ul>
+          {previewError && <p role="alert" className="mt-2 text-xs text-destructive">{previewError}</p>}
           {preview && (
             <div className="mt-2 rounded-lg border">
               <p className="flex items-center gap-2 border-b px-3 py-1.5 text-xs font-medium">{preview.name}{preview.truncated && <span className="text-muted-foreground">(first 256 KB)</span>}

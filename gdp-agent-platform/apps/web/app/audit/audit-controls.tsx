@@ -55,7 +55,7 @@ export function EventFilters({ rows, total, offset, limit }: { rows: Row[]; tota
     a.href = URL.createObjectURL(blob);
     a.download = "audit-events.csv";
     a.click();
-    URL.revokeObjectURL(a.href);
+    { const done = a.href; setTimeout(() => URL.revokeObjectURL(done), 1000); }
   };
   return (
     <div className="flex flex-wrap items-center gap-2">
@@ -94,7 +94,7 @@ export function CostFilters({ rows }: { rows: Row[] }) {
     a.href = URL.createObjectURL(blob);
     a.download = `ai-cost-by-${params.get("group_by") ?? "stage"}.csv`;
     a.click();
-    URL.revokeObjectURL(a.href);
+    { const done = a.href; setTimeout(() => URL.revokeObjectURL(done), 1000); }
   };
   return (
     <div className="flex flex-wrap items-center gap-2">

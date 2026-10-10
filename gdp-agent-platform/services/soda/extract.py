@@ -105,12 +105,31 @@ def normalize_check_type(value: str) -> str:
     return aliases.get(text, text or "CUSTOM")
 
 
+def _as_list(value: Any) -> List[Any]:
+    """CSV cells carry lists as text, e.g. "ACTIVE|INACTIVE" or "A;B,C"."""
+    if isinstance(value, str):
+        return [v.strip() for v in re.split(r"[|;,]", value) if v.strip()]
+    return list(value or [])
+
+
+def _as_number(value: Any) -> Any:
+    if not isinstance(value, str):
+        return value
+    try:
+        number = float(value.strip())
+    except ValueError:
+        return value.strip()
+    return int(number) if number.is_integer() else number
+
+
 def requirement_from_row(target_table: str, row: Dict[str, Any]) -> Dict[str, Any]:
+    # Blank CSV cells mean "not given", not an empty value.
+    row = {k: v for k, v in row.items() if not (v is None or (isinstance(v, str) and not v.strip()))}
     col = row.get("target_column") or row.get("attribute") or row.get("ATTRIBUTE") or row.get("column")
     kind = normalize_check_type(str(row.get("check_type") or row.get("CHECK_TYPE") or "CUSTOM"))
     definition: Dict[str, Any] = {"kind": _kind(kind, row)}
     if row.get("valid_values") or row.get("accepted_values"):
-        definition["values"] = list(row.get("valid_values") or row.get("accepted_values") or [])
+        definition["values"] = _as_list(row.get("valid_values") or row.get("accepted_values"))
         definition["kind"] = "accepted_values"
         kind = "ACCEPTED_VALUES"
     if row.get("valid_regex") or row.get("pattern"):
@@ -120,8 +139,8 @@ def requirement_from_row(target_table: str, row: Dict[str, Any]) -> Dict[str, An
         definition["format"] = row["valid_format"]
         definition["kind"] = "format"
     if row.get("valid_min") is not None or row.get("valid_max") is not None:
-        definition["min"] = row.get("valid_min")
-        definition["max"] = row.get("valid_max")
+        definition["min"] = _as_number(row.get("valid_min"))
+        definition["max"] = _as_number(row.get("valid_max"))
         definition["kind"] = "range"
         kind = "RANGE"
     if row.get("freshness"):
@@ -129,7 +148,7 @@ def requirement_from_row(target_table: str, row: Dict[str, Any]) -> Dict[str, An
         definition["kind"] = "freshness"
         kind = "FRESHNESS"
     if row.get("missing_values"):
-        definition["missing_values"] = list(row["missing_values"])
+        definition["missing_values"] = _as_list(row["missing_values"])
     if row.get("threshold") and "threshold" not in definition:
         definition["threshold"] = row["threshold"]
     if row.get("reference_table"):

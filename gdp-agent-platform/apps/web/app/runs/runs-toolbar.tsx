@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -17,6 +17,8 @@ export function RunsToolbar({ domains, tags = [], total, offset, limit }: {
   const path = usePathname();
   const params = useSearchParams();
   const [q, setQ] = useState(params.get("q") ?? "");
+  const urlQ = params.get("q") ?? "";
+  useEffect(() => { setQ(urlQ); }, [urlQ]); // back/forward or a link changed the search
 
   const go = (changes: Record<string, string | null>) => {
     const next = new URLSearchParams(params.toString());

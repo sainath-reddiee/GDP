@@ -502,6 +502,41 @@ def spec_for(entity: Dict[str, Any], design: Dict[str, Any], conv: Dict[str, Any
             "lineage": {a["name"]: a["source_columns"] for a in entity["attributes"] if a["source_columns"]}}
 
 
+COLUMN_SOURCE = ("SELECT ? AS TARGET_COLUMN_ID, ? AS TARGET_TABLE_ID, ? AS COLUMN_NAME, ? AS DATA_TYPE, "
+                 "?::NUMBER AS ORDINAL_POSITION, ?::BOOLEAN AS NULLABLE, NULLIF(?, '') AS BUSINESS_DEFINITION, "
+                 "NULLIF(?, '') AS SEMANTIC_TYPE, ?::BOOLEAN AS IS_BUSINESS_KEY")
+
+
+def _set_columns(session, target_id: str, values: List[List[Any]]) -> None:
+    """Columns of a target set exactly to the design, matched by name: a kept column keeps its TARGET_COLUMN_ID (and
+    PII flag, accepted values) so mapping decisions that point at it stay valid; only removed columns are deleted."""
+    from services.common.sql import INSERT_BATCH, _bind
+
+    names = [str(v[2]).upper() for v in values]
+    if names:
+        session.sql(f"""DELETE FROM KNOWLEDGE.TARGET_COLUMN_REGISTRY WHERE TARGET_TABLE_ID = ?
+                          AND UPPER(COLUMN_NAME) NOT IN ({", ".join("?" for _ in names)})""",
+                    params=[target_id, *names]).collect()
+    else:
+        session.sql("DELETE FROM KNOWLEDGE.TARGET_COLUMN_REGISTRY WHERE TARGET_TABLE_ID = ?", params=[target_id]).collect()
+    for start in range(0, len(values), INSERT_BATCH):
+        batch = values[start:start + INSERT_BATCH]
+        session.sql(f"""MERGE INTO KNOWLEDGE.TARGET_COLUMN_REGISTRY t
+                        USING ({" UNION ALL ".join([COLUMN_SOURCE] * len(batch))}) s
+                           ON t.TARGET_TABLE_ID = s.TARGET_TABLE_ID AND UPPER(t.COLUMN_NAME) = UPPER(s.COLUMN_NAME)
+                        WHEN MATCHED THEN UPDATE SET COLUMN_NAME = s.COLUMN_NAME, DATA_TYPE = s.DATA_TYPE,
+                             ORDINAL_POSITION = s.ORDINAL_POSITION, NULLABLE = s.NULLABLE,
+                             BUSINESS_DEFINITION = s.BUSINESS_DEFINITION, SEMANTIC_TYPE = s.SEMANTIC_TYPE,
+                             IS_BUSINESS_KEY = s.IS_BUSINESS_KEY
+                        WHEN NOT MATCHED THEN INSERT (TARGET_COLUMN_ID, TARGET_TABLE_ID, COLUMN_NAME, DATA_TYPE,
+                             ORDINAL_POSITION, NULLABLE, BUSINESS_DEFINITION, SEMANTIC_TYPE, IS_BUSINESS_KEY, IS_PII,
+                             ACCEPTED_VALUES, VERSION)
+                             VALUES (s.TARGET_COLUMN_ID, s.TARGET_TABLE_ID, s.COLUMN_NAME, s.DATA_TYPE,
+                                     s.ORDINAL_POSITION, s.NULLABLE, s.BUSINESS_DEFINITION, s.SEMANTIC_TYPE,
+                                     s.IS_BUSINESS_KEY, FALSE, ARRAY_CONSTRUCT(), 1)""",
+                    params=[_bind(v) for row in batch for v in row]).collect()
+
+
 def apply_design(session, run_id: str, version: int) -> Dict[str, Any]:
     """Approve a version: register every entity as a target (columns set exactly to the design), write MODEL_SPEC,
     point the run at the primary entity and keep the design as MODEL_DEFINITION knowledge. Owner's rights."""
@@ -524,8 +559,9 @@ def apply_design(session, run_id: str, version: int) -> Dict[str, Any]:
     for entity in design.get("entities", []):
         table = entity["entity_name"]
         existing = _rows(session, """SELECT TARGET_TABLE_ID FROM KNOWLEDGE.TARGET_TABLE_REGISTRY WHERE ACTIVE_FLAG
-                                       AND UPPER(TARGET_DATABASE) = UPPER(?) AND UPPER(TARGET_SCHEMA) = UPPER(?)
-                                       AND UPPER(TARGET_TABLE) = UPPER(?) LIMIT 1""", [database, schema, table])
+                                       AND DOMAIN_ID = ? AND UPPER(TARGET_DATABASE) = UPPER(?)
+                                       AND UPPER(TARGET_SCHEMA) = UPPER(?) AND UPPER(TARGET_TABLE) = UPPER(?) LIMIT 1""",
+                         [domain_id, database, schema, table])
         spec = spec_for(entity, design, conv)
         if existing:
             target_id = existing[0]["TARGET_TABLE_ID"]
@@ -534,7 +570,6 @@ def apply_design(session, run_id: str, version: int) -> Dict[str, Any]:
                             WHERE TARGET_TABLE_ID = ?""",
                         params=[json.dumps(spec), entity.get("grain") or "", json.dumps(entity.get("business_keys") or []),
                                 entity.get("purpose") or "", domain_id, target_id]).collect()
-            session.sql("DELETE FROM KNOWLEDGE.TARGET_COLUMN_REGISTRY WHERE TARGET_TABLE_ID = ?", params=[target_id]).collect()
         else:
             target_id = str(uuid.uuid4())
             insert_rows(session, "KNOWLEDGE.TARGET_TABLE_REGISTRY",
@@ -544,17 +579,13 @@ def apply_design(session, run_id: str, version: int) -> Dict[str, Any]:
                         [[target_id, domain_id, database, schema, table, entity.get("grain") or "",
                           entity.get("business_keys") or [], str(conv.get("scd_type") or "1"), entity.get("purpose") or "",
                           spec]])
-        insert_rows(session, "KNOWLEDGE.TARGET_COLUMN_REGISTRY",
-                    ["TARGET_COLUMN_ID", "TARGET_TABLE_ID", "COLUMN_NAME", "DATA_TYPE", "ORDINAL_POSITION", "NULLABLE",
-                     "BUSINESS_DEFINITION", "SEMANTIC_TYPE", "IS_BUSINESS_KEY", "IS_PII", "ACCEPTED_VALUES", "VERSION"],
-                    ["?", "?", "?", "?", "?::NUMBER", "?::BOOLEAN", "NULLIF(?, '')", "NULLIF(?, '')", "?::BOOLEAN",
-                     "FALSE", "PARSE_JSON(?)", "1"],
-                    [[str(uuid.uuid4()), target_id, a["name"], a["datatype"], n + 1, a["nullable"],
-                      a["rationale"] or ("From " + ", ".join(a["source_columns"]) if a["source_columns"] else ""),
-                      "SURROGATE_KEY" if a["derived"] and a["is_pk"] else ("AUDIT_TIMESTAMP" if a["derived"] and a["name"].upper() in
-                                                                           {c.upper() for c in conv.get("audit_columns") or []} else ""),
-                      a["name"].upper() in {k.upper() for k in entity.get("business_keys") or []}, []]
-                     for n, a in enumerate(entity["attributes"])])
+        _set_columns(session, target_id,
+                     [[str(uuid.uuid4()), target_id, a["name"], a["datatype"], n + 1, a["nullable"],
+                       a["rationale"] or ("From " + ", ".join(a["source_columns"]) if a["source_columns"] else ""),
+                       "SURROGATE_KEY" if a["derived"] and a["is_pk"] else ("AUDIT_TIMESTAMP" if a["derived"] and a["name"].upper() in
+                                                                            {c.upper() for c in conv.get("audit_columns") or []} else ""),
+                       a["name"].upper() in {k.upper() for k in entity.get("business_keys") or []}]
+                      for n, a in enumerate(entity["attributes"])])
         registered.append({"entity": table, "fqn": f"{database}.{schema}.{table}", "target_table_id": target_id})
     primary = next((r for r in registered if r["entity"].upper() == str(design.get("primary_entity") or "").upper()),
                    registered[0] if registered else None)

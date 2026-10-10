@@ -166,7 +166,8 @@ def builder_draft(body: Draft, db: Db = Depends(current_db)):
         types = FEEDBACK_TYPES.get(prod.get("category_id") or "", [])
         if types:
             for r in db.query("""SELECT KNOWLEDGE_TYPE, TITLE, CONTENT FROM KNOWLEDGE.DOMAIN_KNOWLEDGE
-                                  WHERE IS_CURRENT AND STATUS IN ('DRAFT', 'RETIRED') AND ARRAY_CONTAINS(KNOWLEDGE_TYPE::VARIANT, PARSE_JSON(%s))
+                                  WHERE ((IS_CURRENT AND STATUS IN ('DRAFT', 'RETIRED')) OR STATUS = 'REJECTED')
+                                    AND ARRAY_CONTAINS(KNOWLEDGE_TYPE::VARIANT, PARSE_JSON(%s))
                                     AND COALESCE(UPDATED_AT, CREATED_AT) >= DATEADD(DAY, -60, CURRENT_TIMESTAMP())
                                   ORDER BY COALESCE(UPDATED_AT, CREATED_AT) DESC LIMIT 15""", (json.dumps(types),)):
                 feedback.append(f"Rejected or retired by a reviewer [{r['knowledge_type']}] {r['title']}: {str(r.get('content') or '')[:300]}")

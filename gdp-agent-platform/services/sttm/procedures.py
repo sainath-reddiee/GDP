@@ -19,7 +19,7 @@ from services.knowledge.usage import assert_safe_transformation, domain_context,
 from services.mapping.procedures import target_columns, target_table
 from services.sttm.assemble import assemble
 from services.sttm.join_graph import apply_overrides, build_join_graph, join_logic_by_table
-from services.sttm.refine import REFINE_SCHEMA, refine_prompt, render_csv, reusable_expression
+from services.sttm.refine import REFINE_SCHEMA, refine_prompt, render_csv, reusable_expression, rules_by_column
 
 
 def generate_sttm(session, run_id: str) -> Dict[str, Any]:
@@ -154,9 +154,11 @@ def _profile_for(session, run_id: str, table: Optional[str], column: Optional[st
 def _prior_rules(session, domain_id: Optional[str], target_column: Optional[str], run_id: Optional[str] = None) -> List[str]:
     if not domain_id:
         return []
-    found = rows(session, """SELECT KNOWLEDGE_ID, TITLE, CONTENT FROM KNOWLEDGE.DOMAIN_KNOWLEDGE
+    from services.knowledge.writer import NOT_OPERATIONAL_SQL
+
+    found = rows(session, f"""SELECT KNOWLEDGE_ID, TITLE, CONTENT FROM KNOWLEDGE.DOMAIN_KNOWLEDGE
                              WHERE DOMAIN_ID = ? AND IS_CURRENT AND STATUS = 'ACTIVE'
-                               AND KNOWLEDGE_TYPE = 'TRANSFORMATION_RULE'
+                               AND KNOWLEDGE_TYPE = 'TRANSFORMATION_RULE' AND {NOT_OPERATIONAL_SQL}
                              ORDER BY UPDATED_AT DESC NULLS LAST LIMIT 8""", [domain_id])
     if run_id:
         from services.knowledge.writer import record_usage
@@ -310,15 +312,17 @@ def _put_text(session, stage_root: str, filename: str, content: str) -> None:
 
 def export_sttm_csv(session, run_id: str) -> Dict[str, Any]:
     sttm = _current_sttm(session, run_id)
-    rules = {}
-    for k in rows(session, """SELECT TITLE, CONTENT, CONTENT_JSON FROM KNOWLEDGE.DOMAIN_KNOWLEDGE
-                              WHERE IS_CURRENT AND KNOWLEDGE_TYPE = 'TRANSFORMATION_RULE'
-                                AND (DOMAIN_ID = ? OR SOURCE_REFERENCE LIKE 'transform.%')""",
-                  [sttm["DOMAIN_ID"]]):
-        content = variant(k["CONTENT_JSON"]) or {}
-        target = (content.get("target_column") or "").upper()
-        if target:
-            rules[target] = content
+    from services.knowledge.writer import NOT_OPERATIONAL_SQL
+
+    model = rows(session, "SELECT TARGET_MODEL FROM CORE.WORKFLOW_RUN WHERE RUN_ID = ?", [run_id])
+    # this domain's rules for this target table only; a column name on another table is a different rule
+    rules = rules_by_column(
+        [variant(k["CONTENT_JSON"]) or {} for k in rows(
+            session, f"""SELECT CONTENT_JSON FROM KNOWLEDGE.DOMAIN_KNOWLEDGE
+                          WHERE IS_CURRENT AND KNOWLEDGE_TYPE = 'TRANSFORMATION_RULE'
+                            AND DOMAIN_ID = ? AND {NOT_OPERATIONAL_SQL}
+                          ORDER BY UPDATED_AT NULLS FIRST""", [sttm["DOMAIN_ID"]])],
+        (model[0]["TARGET_MODEL"] if model else None) or sttm.get("TARGET_TABLE"))
     lines = []
     for r in rows(session, "SELECT * FROM CONTRACT.STTM_LINE WHERE STTM_ID = ? ORDER BY TARGET_COLUMN",
                   [sttm["STTM_ID"]]):
@@ -339,13 +343,14 @@ def export_sttm_csv(session, run_id: str) -> Dict[str, Any]:
     _put_text(session, stage_root, filename, csv_text)
     stage_path = f"@{stage_root}/{filename}"
     if sttm.get("DOMAIN_ID"):
-        from services.knowledge.writer import remember
+        from services.knowledge.writer import OPERATIONAL_STATUS, remember
 
         remember(session, domain_id=sttm["DOMAIN_ID"], kind="STTM_TEMPLATE", key=f"sttm.csv.{run_id}",
                  title=f"STTM CSV v{version}", content=f"Stored at {stage_path}\n{csv_text}",
                  content_json={"stage_path": stage_path, "run_id": run_id, "sttm_id": sttm["STTM_ID"],
                                "sttm_version": version, "rows": len(lines)},
-                 tags=["STTM", "CSV", "DBT", "SODA"], origin="STTM", run_id=run_id, by_domain=False)
+                 tags=["STTM", "CSV", "DBT", "SODA"], origin="STTM", run_id=run_id, by_domain=False,
+                 status=OPERATIONAL_STATUS)
     with tool_call(session, run_id, "export_sttm_csv", {"path": stage_path, "rows": len(lines)}) as call:
         call.summary = f"{len(lines)} lines -> {stage_path}"
     return {"stage_path": stage_path, "csv": csv_text, "rows": len(lines), "sttm_version": version}
@@ -454,6 +459,9 @@ def update_join_graph(session, run_id: str, payload_json: str) -> Dict[str, Any]
     logic = join_logic_by_table(graph)
     session.sql("UPDATE CONTRACT.STTM_REGISTRY SET TABLE_DESIGN = PARSE_JSON(?) WHERE STTM_ID = ?",
                 params=[json.dumps(design), sttm["STTM_ID"]]).collect()
+    # joins removed by the edit must not keep their old JOIN_LOGIC on the lines
+    session.sql("UPDATE CONTRACT.STTM_LINE SET JOIN_LOGIC = NULL WHERE STTM_ID = ?",
+                params=[sttm["STTM_ID"]]).collect()
     for table, text in logic.items():
         session.sql("UPDATE CONTRACT.STTM_LINE SET JOIN_LOGIC = ? WHERE STTM_ID = ? AND UPPER(SOURCE_TABLE) = ?",
                     params=[text, sttm["STTM_ID"], table]).collect()

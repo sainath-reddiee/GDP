@@ -25,6 +25,12 @@ from services.common.sql import clip, config_value, rows, scalar
 DEFAULT_POLICY: Dict[str, str] = {"QA_TEST": "review", "EXCEPTION": "review"}
 REVIEW_ORIGINS = {"COPILOT"}
 NEVER_QUEUED = {"USER", "SEED", "PACK_IMPORT"}
+# run records kept in DOMAIN_KNOWLEDGE (dbt branch plan, client Soda brief, STTM CSV export): written as ACTIVE so
+# their readers find them, and kept out of the rule queries that feed prompts. Constant SQL, never user input.
+OPERATIONAL_STATUS = "ACTIVE"
+NOT_OPERATIONAL_SQL = ("COALESCE(SOURCE_REFERENCE, '') NOT LIKE 'dbt.branch.%' "
+                       "AND COALESCE(SOURCE_REFERENCE, '') NOT LIKE 'soda.brief.%' "
+                       "AND COALESCE(SOURCE_REFERENCE, '') NOT LIKE 'sttm.csv.%'")
 
 
 def lineage_id(domain_id: Optional[str], key: str) -> str:

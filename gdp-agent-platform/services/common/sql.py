@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Callable, Dict, List, Optional, Sequence
 
 MAX_TEXT = 4000
 INSERT_BATCH = 100
@@ -61,6 +61,19 @@ def _bind(value: Any) -> str:
     if isinstance(value, (dict, list)):
         return json.dumps(value, default=str)
     return str(value)
+
+
+def atomic(session, write: Callable[[], Any]) -> Any:
+    """Run `write` in one transaction (supersede then insert must not leave a run with no current rows).
+    Not for use inside a workflow transition: _apply_transition already holds the transaction there."""
+    session.sql("BEGIN TRANSACTION").collect()
+    try:
+        result = write()
+        session.sql("COMMIT").collect()
+    except Exception:
+        session.sql("ROLLBACK").collect()
+        raise
+    return result
 
 
 def config_value(session, key: str, default: Any = None) -> Any:

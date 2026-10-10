@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Optional
 
 from services.common.audit import tool_call
 from services.common.standard import GDP, conventions, conventions_for, default_prefix, run_standard
-from services.common.sql import clip, insert_rows, rows, scalar, variant
+from services.common.sql import atomic, clip, insert_rows, rows, scalar, variant
 from services.common.stage import Stage
 from services.dbt.inputs import assemble, load_inputs, session_query
 from services.dbt.onboard import ENGINE
@@ -127,11 +127,12 @@ def _branch_plan(session, run_id: str, payload: Dict[str, Any], run_name: str) -
 def _store_branch(session, run_id: str, domain_id: str, plan: Dict[str, str], instruction: str) -> None:
     if not domain_id:
         return
-    from services.knowledge.writer import remember
+    from services.knowledge.writer import OPERATIONAL_STATUS, remember
 
     remember(session, domain_id=domain_id, kind="TRANSFORMATION_RULE", key=f"dbt.branch.{run_id}",
              title=f"dbt branch plan {run_id}", content=instruction, content_json={**plan, "run_id": run_id},
-             tags=["DBT", "BRANCH", "RELEASE"], origin="DBT", run_id=run_id, by_domain=False)
+             tags=["DBT", "BRANCH", "RELEASE"], origin="DBT", run_id=run_id, by_domain=False,
+             status=OPERATIONAL_STATUS)
 
 
 def generate_dbt_simple(session, run_id: str) -> Dict[str, Any]:
@@ -144,11 +145,11 @@ def generate_dbt(session, run_id: str, payload_json: str = "{}") -> Dict[str, An
     stage.require(*POST_STTM)
     payload = json.loads(payload_json or "{}")
     walked = False
-    if stage.state in ("STTM_APPROVED", "DBT_PENDING", "SODA_APPROVED"):
+    # DBT_GENERATING (a generation that stopped midway) and VALIDATION_FAILED (fix and regenerate) also go on
+    # to VALIDATION_PENDING once the project is written
+    if stage.state in ("STTM_APPROVED", "DBT_PENDING", "SODA_APPROVED", "DBT_GENERATING", "VALIDATION_FAILED"):
         try:
-            if stage.state == "STTM_APPROVED":
-                stage.move("DBT_PENDING", "dbt generation started")
-            if stage.state == "SODA_APPROVED":
+            if stage.state in ("STTM_APPROVED", "SODA_APPROVED", "VALIDATION_FAILED"):
                 stage.move("DBT_PENDING", "dbt generation started")
             stage.walk(["DBT_PENDING", "DBT_GENERATING"], "dbt generation started")
             walked = True
@@ -303,7 +304,7 @@ def generate_dbt(session, run_id: str, payload_json: str = "{}") -> Dict[str, An
         stage.move("VALIDATION_PENDING", call.summary,
                    {"generation_id": generation_id, "files": list(files), "branch": plan}, in_transaction=write)
     else:
-        write("")
+        atomic(session, lambda: write(""))
     return {"generation_id": generation_id, "version": version, "files": list(files),
             "branch": plan, "workspace": plan.get("workspace"), "state": stage.payload()}
 
@@ -313,14 +314,15 @@ def _artifact_type(path: str) -> str:
         return "DBT_PROJECT"
     if path.startswith("macros/"):
         return "DBT_MACRO"
-    if path.endswith("_sources.yml") or path.startswith("models/bronze/"):
-        return "DBT_SOURCES_YML"
-    if path.endswith(".yml"):
-        return "DBT_SCHEMA_YML"
+    # folder prefixes first: soda/checks.yml is a Soda file, not a dbt schema file
     if path.startswith("soda/"):
         return "SODA_CHECKS"
     if path.startswith("mappings/"):
         return "STTM_EXPORT"
     if path.startswith("release/"):
         return "RELEASE_PLAN"
+    if path.endswith("_sources.yml") or path.startswith("models/bronze/"):
+        return "DBT_SOURCES_YML"
+    if path.endswith(".yml"):
+        return "DBT_SCHEMA_YML"
     return "DBT_MODEL"

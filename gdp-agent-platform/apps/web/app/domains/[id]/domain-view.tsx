@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState, useTransition } from "react";
+import { useEffect, useMemo, useState, useTransition } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
   ArrowLeftRight, BadgeCheck, BookOpen, Boxes, Check, ChevronDown, ChevronRight, Clock, Inbox, KeyRound, Loader2, Pencil,
@@ -63,6 +63,8 @@ export function DomainView({ detail, versions, unrecorded, members, rules, targe
   const [description, setDescription] = useState(detail.domain.description ?? "");
   const [pending, start] = useTransition();
   const d = detail.domain;
+  // follow the saved description after a refresh (only while it is not being edited)
+  useEffect(() => { if (!editing) setDescription(d.description ?? ""); }, [d.description, editing]);
   const name = displayDomain(d.domain_name) ?? d.domain_name;
   const active = TABS.some((t) => t.id === tab) ? tab : "overview";
   const go = (id: string) => {
@@ -153,7 +155,7 @@ export function DomainView({ detail, versions, unrecorded, members, rules, targe
             </Panel>
           </div>
           <aside className="space-y-4">
-            <People domainId={d.domain_id} members={members} may={may} onMsg={setMsg} />
+            <People key={JSON.stringify(members.map((m) => [m.user_name, m.role]))} domainId={d.domain_id} members={members} may={may} onMsg={setMsg} />
             <Panel title="Recent changes" action={<button type="button" onClick={() => go("versions")} className="text-xs text-primary hover:underline">All versions</button>}>
               <ol className="space-y-2 text-xs">
                 {versions.slice(0, 4).map((v) => (
@@ -171,7 +173,7 @@ export function DomainView({ detail, versions, unrecorded, members, rules, targe
 
       {active === "models" && <Models targets={targets} roles={detail.targets} />}
       {active === "knowledge" && <KnowledgeTab domainId={d.domain_id} mix={detail.knowledge} feed={feed} card={card} />}
-      {active === "rules" && <RulesTab domainId={d.domain_id} rules={rules} may={may} onMsg={setMsg} />}
+      {active === "rules" && <RulesTab key={JSON.stringify(rules?.overrides ?? {})} domainId={d.domain_id} rules={rules} may={may} onMsg={setMsg} />}
       {active === "versions" && <Versions domainId={d.domain_id} versions={versions} unrecorded={unrecorded} may={may} onMsg={setMsg} />}
     </div>
   );
@@ -349,11 +351,21 @@ const GROUPS: [string, string][] = [
   ["mapping.", "Mapping"], ["domain.", "Domain detection"], ["ui.", "Confidence bands"], ["hints.", "Name hints"],
 ];
 const toText = (v: unknown) => (v === undefined || v === null ? "" : Array.isArray(v) ? v.join(", ") : typeof v === "object" ? JSON.stringify(v) : String(v));
-function parseLike(sample: unknown, text: string): unknown {
-  if (typeof sample === "number") return Number(text);
-  if (typeof sample === "boolean") return text.trim().toLowerCase() === "true";
+function parseLike(key: string, sample: unknown, text: string): unknown {
+  if (typeof sample === "number") {
+    const n = Number(text.trim());
+    if (!Number.isFinite(n)) throw new Error(`${key} must be a number.`);
+    return n;
+  }
+  if (typeof sample === "boolean") {
+    const b = text.trim().toLowerCase();
+    if (b !== "true" && b !== "false") throw new Error(`${key} must be true or false.`);
+    return b === "true";
+  }
   if (Array.isArray(sample)) return text.split(",").map((s) => s.trim()).filter(Boolean);
-  if (typeof sample === "object" && sample !== null) return JSON.parse(text || "{}");
+  if (typeof sample === "object" && sample !== null) {
+    try { return JSON.parse(text || "{}"); } catch { throw new Error(`${key} must be JSON (for example the abbreviations map).`); }
+  }
   return text;
 }
 
@@ -369,12 +381,12 @@ function RulesTab({ domainId, rules, may, onMsg }: { domainId: string; rules: Do
   const dirty = JSON.stringify(Object.fromEntries(Object.entries(text).filter(([, v]) => v.trim()))) !== JSON.stringify(Object.fromEntries(Object.entries(initial).filter(([, v]) => v.trim())));
   const save = () => start(async () => {
     try {
-      const overrides = Object.fromEntries(Object.entries(text).filter(([, v]) => v.trim()).map(([k, v]) => [k, parseLike(rules.defaults[k], v)]));
+      const overrides = Object.fromEntries(Object.entries(text).filter(([, v]) => v.trim()).map(([k, v]) => [k, parseLike(k, rules.defaults[k], v)]));
       const r = await saveDomainRules(domainId, overrides, note);
       onMsg(r.ok ? { tone: "ok", text: "Rules saved as a new domain version" } : { tone: toneOf(r.error), text: r.error });
       if (r.ok) { setNote(""); router.refresh(); }
-    } catch {
-      onMsg({ tone: "error", text: "A value is not in the right format (JSON for the abbreviations map)." });
+    } catch (e) {
+      onMsg({ tone: "error", text: e instanceof Error ? `Not saved: ${e.message}` : "A value is not in the right format." });
     }
   });
   const keys = Object.keys(rules.defaults).filter((k) => (!q || k.toLowerCase().includes(q.toLowerCase())) && (!onlyOverridden || (text[k] ?? "").trim()));

@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import {
   ExternalLink, FolderGit2, GitPullRequest, Loader2, Lock, RefreshCw, Rocket, Settings2,
   ShieldCheck, Sparkles,
@@ -106,19 +106,23 @@ function Studio({
   const folder = repo?.dbt_project_dir || "";
 
   // ---------------------------------------------------------------- branches of the repository
+  const branchRequest = useRef(0);
   const loadBranches = (fetch = true) => {
+    const request = ++branchRequest.current; // a newer request (another repository) supersedes this one
     const clone = repo ? null : legacy ? String(setup.legacy_setup?.git_repository ?? "") : "";
-    if (!repo && !clone) { setBranches([]); return; }
+    if (!repo && !clone) { setBranches([]); setListing(false); return; }
     setListing(true);
     start(async () => {
       if (repo) {
         const res = await repoBranches(repo.repo_id, fetch);
+        if (request !== branchRequest.current) return;
         setListing(false);
         if (!res.ok) { setBranchNote(res.error); return; }
         setBranches(res.data.branches);
         setBranchNote(res.data.error ? `Could not fetch; showing the last fetched branches (${res.data.error.slice(0, 160)})` : `${res.data.branches.length} branches`);
       } else {
         const res = await listDbtBranches(runId, clone as string, fetch);
+        if (request !== branchRequest.current) return;
         setListing(false);
         if (!res.ok) { setBranchNote(res.error); return; }
         setBranches(res.data.branches);

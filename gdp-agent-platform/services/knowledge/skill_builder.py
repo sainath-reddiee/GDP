@@ -193,9 +193,12 @@ def unsafe_sql(content: str) -> List[str]:
                 negative = bool(NEGATIVE.search(stripped))
                 continue
             if not stripped:
+                negative = False  # a blank line ends the counter-example
                 continue
             if FORBIDDEN.search(stripped) and not negative and not NEGATIVE.search(stripped):
                 found.append(stripped[:120])
+            if stripped.endswith(";"):
+                negative = False  # the comment covers only the statement right after it
     return found
 
 

@@ -3,17 +3,19 @@ import type { CatalogInventory, ProfileStoreRow, SourcesOverview } from "@/lib/t
 import type { DatabaseRow } from "@/app/onboarding/catalog-types";
 import type { DomainRow } from "@/app/onboarding/intent-types";
 import { SourcesHub } from "./sources-hub";
+import { sfIdent } from "./identifiers";
 
 const inventoryOf = (t: { database: string; schema: string }) =>
   api<CatalogInventory>(
-    `/api/catalog/inventory?database=${encodeURIComponent(t.database)}&schema=${encodeURIComponent(t.schema)}`,
+    `/api/catalog/inventory?database=${encodeURIComponent(sfIdent(t.database))}&schema=${encodeURIComponent(sfIdent(t.schema))}`,
   ).catch(() => null);
 
 export default async function SourcesPage({ searchParams }: { searchParams: { db?: string; schema?: string; mode?: string } }) {
   // An explicit ?db=&schema= wins and its inventory loads alongside everything else; otherwise reopen the schema
-  // profiled most recently. Nothing is preselected when nothing was profiled yet.
+  // profiled most recently. Nothing is preselected when nothing was profiled yet. The names are the stored spelling
+  // (lowercase and mixed case kept), so they are not upper-cased here.
   const explicit = searchParams.db && searchParams.schema
-    ? { database: searchParams.db.toUpperCase(), schema: searchParams.schema.toUpperCase() }
+    ? { database: searchParams.db, schema: searchParams.schema }
     : null;
   const [overview, { profiles }, { databases }, { domains }, explicitInventory] = await Promise.all([
     api<SourcesOverview>("/api/sources/overview").catch(() => null),

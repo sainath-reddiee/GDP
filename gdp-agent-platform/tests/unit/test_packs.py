@@ -53,7 +53,7 @@ def test_import_merges_every_registry_with_stable_ids():
     pack = draft_from_answer({"name": "claims", "targets": [{"table": "CLAIM_FACT", "columns": [
         {"name": "CLAIM_ID", "type": "VARCHAR"}]}]})
     first = import_pack(lambda sql, params=None: issued.append((sql, params)), "DB", pack)
-    tables = {sql.split("MERGE INTO ")[1].split()[0] for sql, _ in issued}
+    tables = {sql.split("MERGE INTO ")[1].split()[0] for sql, _ in issued if "MERGE INTO " in sql}
     assert tables == {"DB.KNOWLEDGE.DOMAIN_REGISTRY", "DB.KNOWLEDGE.TARGET_TABLE_REGISTRY",
                       "DB.KNOWLEDGE.TARGET_COLUMN_REGISTRY"}
     again = import_pack(lambda sql, params=None: None, "DB", pack)

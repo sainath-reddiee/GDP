@@ -450,7 +450,9 @@ function Editor({ detail, base, onClose, onSaved }: {
   const [error, setError] = useState("");
   const [pending, start] = useTransition();
   const original = detail.selected.files;
-  const changed = files.some((f, i) => f.content !== original[i]?.content) || files.length !== original.length || description !== (base.description ?? "");
+  // a version is identified by its content checksum, so the description alone cannot make a new version
+  const changed = files.some((f, i) => f.content !== original[i]?.content) || files.length !== original.length;
+  const descriptionOnly = !changed && description !== (base.description ?? "");
   const assemble = () => files[0].content + files.slice(1).map((f) => `\n\n# ${f.path}\n${f.content}`).join("");
   const save = (status: "DRAFT" | "ACTIVE") => start(async () => {
     const r = await saveVersion(detail.skill_name, {
@@ -513,6 +515,7 @@ function Editor({ detail, base, onClose, onSaved }: {
           </div>
           <div className="flex items-center gap-2">
             {error && <p role="alert" className="text-xs text-destructive">{error}</p>}
+            {!error && descriptionOnly && <p className="text-xs text-muted-foreground">Change the content too: a new version needs different content, the description alone is not enough.</p>}
             <span className="ml-auto" />
             <Button size="sm" variant="ghost" onClick={onClose}>Cancel</Button>
             <Button size="sm" variant="outline" disabled={pending || !changed || note.trim().length < 3} onClick={() => save("DRAFT")}>Save as draft</Button>

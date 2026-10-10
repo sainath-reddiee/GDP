@@ -24,6 +24,7 @@ export function RunSkills({ runId, disabled }: { runId: string; disabled?: boole
     return () => document.removeEventListener("mousedown", close);
   }, [open]);
   const load = () => start(async () => {
+    setError("");
     const r = await runSkills(runId);
     if (r.ok) setData(r.data); else setError(r.error);
   });

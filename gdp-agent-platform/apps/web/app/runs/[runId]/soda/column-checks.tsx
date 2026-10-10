@@ -146,14 +146,15 @@ export function ColumnChecks({ runId, checks, sttmLines, latest, history, canRev
     return true;
   });
 
-  const initial = () => {
-    if (typeof window !== "undefined") {
-      const col = new URLSearchParams(window.location.search).get("col");
-      if (col && columns.some((c) => c.key === col)) return col;
-    }
-    return columns.find((c) => c.proposed > 0)?.key ?? columns.find((c) => c.checks.length)?.key ?? DATASET;
-  };
-  const [selected, setSelected] = useState<string>(initial);
+  const [selected, setSelected] = useState<string>(
+    () => columns.find((c) => c.proposed > 0)?.key ?? columns.find((c) => c.checks.length)?.key ?? DATASET,
+  );
+  // Read ?col= after mount so the server and first client render agree.
+  useEffect(() => {
+    const col = new URLSearchParams(window.location.search).get("col");
+    if (col && columns.some((c) => c.key === col)) setSelected(col);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const current = columns.find((c) => c.key === selected) ?? columns[0];
 
   const pick = (key: string) => {

@@ -54,13 +54,15 @@ def _dumps(value: Any) -> str:
     return str(value)
 
 
-def pack_rows(pack: Dict[str, Any], database: str, live: Optional[LiveColumns] = None) -> Dict[str, Any]:
-    """Registry rows for one domain pack (shared by deploy seeding and UI import)."""
+def pack_rows(pack: Dict[str, Any], database: str, live: Optional[LiveColumns] = None,
+              existing_id: Optional[str] = None) -> Dict[str, Any]:
+    """Registry rows for one domain pack (shared by deploy seeding and UI import). `existing_id` is the id of a
+    domain already registered under the pack's name (e.g. created in the UI with a random id), so it is updated."""
     live = live or {}
     domains, tables, columns, knowledge, drift = [], [], [], [], []
     meta = pack["domain"]
     name = meta["name"]
-    did = domain_id(name)
+    did = existing_id or domain_id(name)
     is_gdp = name == "GDP"
     config = {k: meta[k] for k in ("silver_database", "silver_schema", "contract", "signals", "source_systems",
                                    "origin") if k in meta}
@@ -158,6 +160,17 @@ def merge(execute: Callable[..., Any], database: str, data: Dict[str, Any], orig
             (row[0], row[1], row[2], row[3], row[4], row[5], row[6], row[7], row[8], row[9],
              _dumps(row[10]), row[11]),
         )
+    # a re-import replaces each defined table's columns: drop the ones the pack no longer has (tables with no
+    # columns in the pack are left alone, and tables the pack does not define are never touched)
+    kept: Dict[str, List[str]] = {}
+    for row in data["columns"]:
+        kept.setdefault(row[1], []).append(str(row[2]).upper())
+    for tid, names in kept.items():
+        execute(
+            f"""DELETE FROM {database}.KNOWLEDGE.TARGET_COLUMN_REGISTRY WHERE TARGET_TABLE_ID = %s
+                   AND UPPER(COLUMN_NAME) NOT IN ({", ".join(["%s"] * len(names))})""",
+            (tid, *names),
+        )
     for row in data["knowledge"]:
         execute(
             f"""MERGE INTO {database}.KNOWLEDGE.DOMAIN_KNOWLEDGE t
@@ -226,12 +239,29 @@ def prepare(pack: Dict[str, Any]) -> Tuple[Dict[str, Any], List[str]]:
     return pack, validate_pack(pack) + problems  # validated after repair: fixable shapes are not problems
 
 
-def import_pack(execute: Callable[..., Any], database: str, pack: Dict[str, Any]) -> Dict[str, Any]:
+def existing_domain_id(query: Optional[Callable[..., List[Dict[str, Any]]]], database: str, name: str) -> Optional[str]:
+    """DOMAIN_ID already registered under this name (case-insensitive), if any. `query` uses %s binds."""
+    if query is None:
+        return None
+    found = query(f"""SELECT DOMAIN_ID FROM {database}.KNOWLEDGE.DOMAIN_REGISTRY WHERE UPPER(DOMAIN_NAME) = UPPER(%s)
+                      ORDER BY CREATED_AT LIMIT 1""", (name,))
+    if not found:
+        return None
+    row = {str(k).upper(): v for k, v in found[0].items()}
+    return row.get("DOMAIN_ID") or None
+
+
+def import_pack(execute: Callable[..., Any], database: str, pack: Dict[str, Any],
+                query: Optional[Callable[..., List[Dict[str, Any]]]] = None) -> Dict[str, Any]:
+    """`query` (%s binds) finds a domain already registered under the pack's name, so a domain created in the UI
+    with a random id is updated rather than duplicated. Defaults to the query method of execute's owner (API Db)."""
     pack, problems = prepare(pack)
     assert not problems, "PACK_INVALID: " + "; ".join(problems[:12])
-    data = pack_rows(pack, database)
+    query = query or getattr(getattr(execute, "__self__", None), "query", None)
+    did = existing_domain_id(query, database, pack["domain"]["name"]) or domain_id(pack["domain"]["name"])
+    data = pack_rows(pack, database, existing_id=did)
     merge(execute, database, data, origin="PACK_IMPORT")
-    return {"domain_id": domain_id(pack["domain"]["name"]), "domain_name": pack["domain"]["name"],
+    return {"domain_id": did, "domain_name": pack["domain"]["name"],
             "targets": len(data["tables"]), "columns": len(data["columns"]), "knowledge": len(data["knowledge"]),
             "inactive_targets": [t[4] for t in data["tables"] if not t[11]]}
 

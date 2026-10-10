@@ -117,21 +117,23 @@ def list_skills(db: Db = Depends(current_db)):
         vs.sort(key=lambda v: (int(v.get("revision") or 0), version_key(v.get("version"))), reverse=True)
         by_id = {v["skill_id"]: v for v in vs}
         lab = labels.get(name, {})
-        prod = by_id.get((lab.get("production") or {}).get("skill_id")) or next((v for v in vs if v["status"] == "ACTIVE"), vs[0])
+        # production only when the label points at a real version; head is just the source of display metadata
+        prod = by_id.get((lab.get("production") or {}).get("skill_id"))
+        head = prod or next((v for v in vs if v["status"] == "ACTIVE"), vs[0])
         cand = by_id.get((lab.get("candidate") or {}).get("skill_id"))
         u = next((usage[k] for k in [name.upper()] + name_variants(name) if k in usage), {})
         daily = u.get("daily") or {}
         skills.append({
-            "skill_name": name, "description": prod.get("description"), "skill_type": prod.get("skill_type"),
-            "category_id": overrides.get(name) or prod.get("category_id") or "general",
-            "parent_skill": prod.get("parent_skill"), "origin": prod.get("origin") or "REPOSITORY",
-            "production": {**_brief(prod), **{k: (lab.get("production") or {}).get(k) for k in ("moved_by", "moved_at")}},
-            "candidate": _brief(cand) if cand and cand["skill_id"] != prod["skill_id"] else None,
+            "skill_name": name, "description": head.get("description"), "skill_type": head.get("skill_type"),
+            "category_id": overrides.get(name) or head.get("category_id") or "general",
+            "parent_skill": head.get("parent_skill"), "origin": head.get("origin") or "REPOSITORY",
+            "production": {**_brief(prod), **{k: lab["production"].get(k) for k in ("moved_by", "moved_at")}} if prod else None,
+            "candidate": _brief(cand) if cand and (not prod or cand["skill_id"] != prod["skill_id"]) else None,
             "versions": len(vs), "drafts": sum(1 for v in vs if v["status"] == "DRAFT"),
             "stages": stages.get(name, []),
             "loads_30d": u.get("loads_30d", 0), "runs_30d": u.get("runs_30d", 0), "last_used": u.get("last_used"),
             "daily": [daily.get(d, 0) for d in sorted(daily)][-14:],
-            "status": prod.get("status"),
+            "status": head.get("status"),
         })
     skills.sort(key=lambda s: (s["parent_skill"] or s["skill_name"], s["parent_skill"] is not None, s["skill_name"]))
     stats = {"skills": len(skills), "in_production": sum(1 for s in skills if s["production"]),

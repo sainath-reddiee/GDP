@@ -14,7 +14,7 @@ function download(content: string, name: string, type: string) {
   a.href = url;
   a.download = name;
   a.click();
-  URL.revokeObjectURL(url);
+  { const done = url; setTimeout(() => URL.revokeObjectURL(done), 1000); }
 }
 
 /** Client quality brief upload, kept behind a button so the checks stay the focus. */

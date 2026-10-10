@@ -418,7 +418,7 @@ function CategoryRow({ c, count, first, last, busy, onMove, run }: {
   const [description, setDescription] = useState(c.description ?? "");
   const [color, setColor] = useState(c.color ?? "#64748b");
   const [icon, setIcon] = useState(c.icon ?? "folder");
-  const dirty = name !== c.name || description !== (c.description ?? "") || color !== c.color || icon !== c.icon;
+  const dirty = name !== c.name || description !== (c.description ?? "") || color !== (c.color ?? "#64748b") || icon !== (c.icon ?? "folder");
   return (
     <div className="flex flex-wrap items-center gap-2 rounded-xl border bg-card p-2.5">
       <ColorIconPicker color={color} icon={icon} onChange={(co, ic) => { setColor(co); setIcon(ic); }} />

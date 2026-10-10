@@ -18,12 +18,19 @@ export default async function ReviewPage({ params }: { params: { runId: string }
           branch: { base_branch?: string; cut_branch?: string; repo?: string } | null;
           publication?: { pr_url?: string | null } | null;
         }>(`/api/runs/${params.runId}/dbt`).catch(() => null),
-    api<{ runs: { validation_id: string; validation_type: string; status: string; error_count: number; warning_count?: number }[] }>(
+    api<{ runs: { validation_id: string; validation_type: string; status: string; error_count: number; warning_count?: number; started_at?: string | null }[] }>(
       `/api/runs/${params.runId}/validation`,
     ).catch(() => ({ runs: [] })),
   ]);
   const lanes = state.lanes;
-  const checks = validation.runs.filter((r) => r.validation_type !== "SUMMARY");
+  // Only the latest run of each validation type counts; older reruns are history.
+  const latest = new Map<string, (typeof validation.runs)[number]>();
+  for (const r of validation.runs) {
+    if (r.validation_type === "SUMMARY") continue;
+    const prev = latest.get(r.validation_type);
+    if (!prev || (r.started_at ?? "") > (prev.started_at ?? "")) latest.set(r.validation_type, r);
+  }
+  const checks = Array.from(latest.values());
   const failedChecks = checks.filter((r) => r.status === "FAILED");
   const prUrl = dbt?.publication?.pr_url;
   const rows: Row[] = [

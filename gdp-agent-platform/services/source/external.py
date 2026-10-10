@@ -193,22 +193,41 @@ def staged_file(name: str, stage_url_or_prefix: str) -> str:
 
 
 def land_sql(database: str, schema: str, file_format: str, table: str, files: List[str]) -> List[str]:
-    """Replace the table with the files' inferred shape and load them by column name."""
+    """Replace the table with the files' inferred shape and their rows, keeping the previous table if the load fails.
+
+    COPY matches columns by name, so the files load first into a temporary table that keeps the header names exactly
+    ("Order Date", "unit-price"). The published table gets plain upper-case identifiers (ORDER_DATE, UNIT_PRICE) so
+    downstream SQL and dbt never need quoting, and is filled by position: both tables come from the same INFER_SCHEMA
+    in the same column order. It replaces the old table with a SWAP only once it holds every row."""
     stage = stage_name(database, schema)
     fmt = format_name(database, schema, file_format)
     target = fqn(database, schema, table)
+    raw = fqn(database, schema, f"{table[:248]}__RAW")
+    fresh = fqn(database, schema, f"{table[:248]}__NEW")
     file_list = ", ".join("'" + f.replace("'", "''") + "'" for f in files)
     first = files[0].replace("'", "''")
     return [
-        # Header names become plain upper-case identifiers so downstream SQL and dbt never need quoting;
-        # COPY matches them back to the file headers case-insensitively.
-        f"CREATE OR REPLACE TABLE {target} USING TEMPLATE (SELECT ARRAY_AGG(OBJECT_CONSTRUCT("
+        f"CREATE OR REPLACE TEMPORARY TABLE {raw} {_infer_template(f'@{stage}/{first}', fmt)}",
+        f"COPY INTO {raw} FROM @{stage} FILES = ({file_list}) FILE_FORMAT = (FORMAT_NAME = '{fmt}') "
+        "MATCH_BY_COLUMN_NAME = CASE_INSENSITIVE ON_ERROR = ABORT_STATEMENT",
+        f"CREATE OR REPLACE TABLE {fresh} USING TEMPLATE (SELECT ARRAY_AGG(OBJECT_CONSTRUCT("
         f"'COLUMN_NAME', UPPER(REGEXP_REPLACE(COLUMN_NAME, '[^A-Za-z0-9_]', '_')), 'TYPE', TYPE, "
         f"'NULLABLE', NULLABLE)) WITHIN GROUP (ORDER BY ORDER_ID) FROM TABLE(INFER_SCHEMA("
         f"LOCATION => '@{stage}/{first}', FILE_FORMAT => '{fmt}')))",
-        f"COPY INTO {target} FROM @{stage} FILES = ({file_list}) FILE_FORMAT = (FORMAT_NAME = '{fmt}') "
-        "MATCH_BY_COLUMN_NAME = CASE_INSENSITIVE ON_ERROR = ABORT_STATEMENT",
+        f"INSERT INTO {fresh} SELECT * FROM {raw}",
+        f"CREATE TABLE IF NOT EXISTS {target} LIKE {fresh}",
+        f"ALTER TABLE {target} SWAP WITH {fresh}",
+        f"DROP TABLE IF EXISTS {fresh}",
+        f"DROP TABLE IF EXISTS {raw}",
     ]
+
+
+def pattern_clause(pattern: Optional[str]) -> str:
+    """LIST ... PATTERN = '<regex>': a backslash is an escape inside a Snowflake string, so it is doubled to reach the
+    regex as written (\\. stays a literal dot); quotes are doubled too."""
+    if not pattern:
+        return ""
+    return " PATTERN = '" + pattern.replace("\\", "\\\\").replace("'", "''") + "'"
 
 
 def _infer_template(location: str, fmt: str) -> str:
@@ -235,7 +254,7 @@ def land_parquet_sql(database: str, schema: str, table: str, prefix: str, mode: 
     """Land the Parquet parts under @<stage>/<prefix>/ into <table>.
 
     The table is created once from the files' inferred shape (managed, or Iceberg on an external volume) with the
-    two load-lineage columns; later loads keep it (and its history) and either truncate first (replace), append, or
+    two load-lineage columns; later loads keep it (and its history) and either overwrite its rows (replace), append, or
     merge: COPY into a temporary staging table, then MERGE on the key columns (latest row per key wins), so reruns
     and late updates never duplicate rows. COPY records the source file and scan time of every row; the extractor
     already wrote _SOURCE_SYSTEM, _SOURCE_TABLE and _BATCH_ID into the files."""
@@ -259,7 +278,13 @@ def land_parquet_sql(database: str, schema: str, table: str, prefix: str, mode: 
         statements.append(_copy_sql(target, location, fmt))
         return statements
     if mode == "replace":
-        return [f"TRUNCATE TABLE {target}", _copy_sql(target, location, fmt)]
+        # COPY into a staging copy of the table first, then swap the rows in with one INSERT OVERWRITE: a failed COPY
+        # keeps the previous rows (a TRUNCATE before COPY would commit on its own and leave the table empty)
+        staging = fqn(database, schema, f"{table}__REPLACE")
+        return [f"CREATE OR REPLACE TEMPORARY TABLE {staging} AS SELECT * FROM {target} LIMIT 0",
+                _copy_sql(staging, location, fmt),
+                f"INSERT OVERWRITE INTO {target} SELECT * FROM {staging}",
+                f"DROP TABLE IF EXISTS {staging}"]
     if mode == "append":
         return [_copy_sql(target, location, fmt)]
     assert keys, "merge needs key columns (the table's primary key, or columns you choose)"
@@ -345,6 +370,10 @@ def register_external_source(session, payload_json: str) -> Dict[str, Any]:
     stored = {**config, **location, "connector": connector, "landed_tables": [], "last_landed_at": None}
     reference = config.get("secret") or config.get("storage_integration") or ""
     source_id = str(uuid.uuid4())
+    # the landing objects first (idempotent): a failed setup must not leave a registry row that blocks the name
+    if CONNECTORS[connector]["landable"]:
+        for sql in setup_sql(database, location["schema"], connector, config):
+            session.sql(sql).collect()
     insert_rows(session, "SOURCE.SOURCE_REGISTRY",
                 ["SOURCE_SYSTEM_ID", "SOURCE_SYSTEM_NAME", "SOURCE_TYPE", "OWNER", "CONNECTION_TYPE",
                  "SECURITY_CLASSIFICATION", "CONFIGURATION_REFERENCE", "CONFIGURATION_JSON", "CREATED_BY"],
@@ -352,9 +381,6 @@ def register_external_source(session, payload_json: str) -> Dict[str, Any]:
                  "CURRENT_USER()"],
                 [[source_id, name, source_type_for(connector), payload.get("owner"), connector,
                   payload.get("security_classification"), reference, json.dumps(stored)]])
-    if CONNECTORS[connector]["landable"]:
-        for sql in setup_sql(database, location["schema"], connector, config):
-            session.sql(sql).collect()
     return {"source_system_id": source_id, "source_system_name": name, "source_type": source_type_for(connector),
             "landing": location, "landable": CONNECTORS[connector]["landable"],
             "guidance": None if CONNECTORS[connector]["landable"] else LANDING_GUIDANCE[CONNECTORS[connector]["kind"]]}
@@ -377,8 +403,7 @@ def list_external_files(session, source_id: str) -> Dict[str, Any]:
     if not CONNECTORS[src["CONNECTION_TYPE"]]["landable"]:
         return {"files": [], "landable": False}
     stage = stage_name(cfg["database"], cfg["schema"])
-    pattern = cfg.get("pattern")
-    listed = rows(session, f"LIST @{stage}" + (f" PATTERN = '{pattern}'" if pattern else ""))
+    listed = rows(session, f"LIST @{stage}" + pattern_clause(cfg.get("pattern")))
     prefix = cfg.get("url") or ""
     files = [{"path": staged_file(str(r.get("name")), prefix), "size": r.get("size"),
               "last_modified": str(r.get("last_modified") or "")} for r in listed][:MAX_FILES]
@@ -406,14 +431,23 @@ def land_external_files(session, source_id: str, payload_json: str) -> Dict[str,
     results = []
     for name, group in group_files(sorted(files), table).items():
         out: Dict[str, Any] = {"table": name, "files": group, "status": "FAILED", "rows_loaded": 0, "error": None}
+        statements = land_sql(cfg["database"], cfg["schema"], cfg.get("file_format", "CSV"), name, group)
         try:
-            statements = land_sql(cfg["database"], cfg["schema"], cfg.get("file_format", "CSV"), name, group)
-            session.sql(statements[0]).collect()
-            loaded = [r.as_dict() for r in session.sql(statements[1]).collect()]
-            out["rows_loaded"] = sum(int(r.get("rows_loaded") or r.get("ROWS_LOADED") or 0) for r in loaded)
+            for sql in statements:
+                result = session.sql(sql).collect()
+                if sql.startswith("COPY"):
+                    loaded = [r.as_dict() for r in result]
+                    out["rows_loaded"] = sum(int(r.get("rows_loaded") or r.get("ROWS_LOADED") or 0) for r in loaded)
             out["status"] = "LOADED"
         except Exception as exc:
+            # the table keeps its previous rows (the swap never ran); clear the half-built load tables
             out["error"] = str(exc)[:600]
+            out["rows_loaded"] = 0
+            for sql in statements[-2:]:
+                try:
+                    session.sql(sql).collect()
+                except Exception:
+                    pass
         results.append(out)
     landed = sorted({r["table"] for r in results if r["status"] == "LOADED"} | set(cfg.get("landed_tables") or []))
     session.sql(

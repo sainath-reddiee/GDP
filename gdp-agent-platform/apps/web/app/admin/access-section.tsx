@@ -18,11 +18,11 @@ function useAction() {
   const router = useRouter();
   const [busy, start] = useTransition();
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
-  const run = (fn: () => Promise<{ ok: true; data: unknown } | { ok: false; error: string }>, success: string) => start(async () => {
+  const run = (fn: () => Promise<{ ok: true; data: unknown } | { ok: false; error: string }>, success: string, after?: () => void) => start(async () => {
     setMsg(null);
     const r = await fn();
     if (!r.ok) setMsg({ ok: false, text: r.error });
-    else { setMsg({ ok: true, text: success }); router.refresh(); }
+    else { setMsg({ ok: true, text: success }); after?.(); router.refresh(); }
   });
   return { busy, msg, run };
 }
@@ -49,7 +49,14 @@ function Users({ users, roles }: { users: GovUser[]; roles: GovRole[] }) {
           <Input value={newUser} onChange={(e) => setNewUser(e.target.value.toUpperCase())} placeholder="JANE.DOE" className="w-64 font-mono" />
         </label>
         <Button size="sm" variant="outline" disabled={busy || !newUser.trim()}
-                onClick={() => run(() => setUserRoles(newUser.trim(), ["VIEWER"]), `${newUser} added as viewer`)}>
+                onClick={() => {
+                  const name = newUser.trim();
+                  const existing = users.find((u) => u.user.toUpperCase() === name.toUpperCase());
+                  // an existing user keeps their roles; VIEWER is added, never swapped in
+                  const roles = existing ? Array.from(new Set([...existing.roles, "VIEWER"])) : ["VIEWER"];
+                  run(() => setUserRoles(existing?.user ?? name, roles), existing ? `${existing.user} already exists; VIEWER added to their roles` : `${name} added as viewer`,
+                      () => setNewUser(""));
+                }}>
           <UserPlus className="h-3.5 w-3.5" />Add as viewer
         </Button>
         <Message msg={msg} />
@@ -114,7 +121,7 @@ function Roles({ roles, privileges, users }: { roles: GovRole[]; privileges: Gov
     || [...draft.privileges].sort().join() !== [...base.privileges].sort().join()
     || [...draft.inherits].sort().join() !== [...base.inherits].sort().join();
   useEffect(() => {
-    if (!creating) setDraft(roles.find((r) => r.role === selected) ?? blank);
+    if (!creating && !dirty) setDraft(roles.find((r) => r.role === selected) ?? blank);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [roles, selected]);
 
@@ -276,7 +283,8 @@ function Roles({ roles, privileges, users }: { roles: GovRole[]; privileges: Gov
             {dirty ? <span className="text-xs font-medium text-warning">Unsaved changes</span> : <Message msg={msg} />}
             <span className="ml-auto flex gap-2">
               {!creating && !draft.system && !dirty && (
-                <Button size="sm" variant="ghost" disabled={busy} onClick={() => run(() => deleteRole(draft.role), `${draft.role} deleted`)}>
+                <Button size="sm" variant="ghost" disabled={busy} onClick={() => run(() => deleteRole(draft.role), `${draft.role} deleted`,
+                                                                                        () => pick(roles.find((r) => r.role !== draft.role && r.role !== "SUPER_ADMIN")?.role ?? ""))}>
                   <Trash2 className="h-3.5 w-3.5" />Delete role
                 </Button>
               )}
@@ -284,7 +292,8 @@ function Roles({ roles, privileges, users }: { roles: GovRole[]; privileges: Gov
               {dirty && (
                 <Button size="sm" disabled={busy || !draft.role}
                         onClick={() => run(() => saveRole({ role: draft.role, description: draft.description, privileges: draft.privileges, inherits: draft.inherits }, creating),
-                                           creating ? `${draft.role} created` : `${draft.role} saved`)}>
+                                           creating ? `${draft.role} created` : `${draft.role} saved`,
+                                           () => { if (creating) { setCreating(false); setSelected(draft.role); } })}>
                   {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}{creating ? "Create role" : "Save role"}
                 </Button>
               )}
@@ -336,7 +345,8 @@ function Policies({ policies, roles }: { policies: GovPolicy[]; roles: GovRole[]
                     {changed && (
                       <Button size="sm" disabled={busy || !r.approver_role}
                               onClick={() => run(() => savePolicy(p.privilege, { requires_approval: r.requires_approval, approver_role: r.approver_role ?? "SUPER_ADMIN", four_eyes: r.four_eyes, allow_self: r.allow_self, active: r.active }),
-                                                 `${p.privilege} saved`)}>Save</Button>
+                                                 `${p.privilege} saved`,
+                                                 () => setEdits((e) => { const next = { ...e }; delete next[p.privilege]; return next; }))}>Save</Button>
                     )}
                   </td>
                 </tr>
