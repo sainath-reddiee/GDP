@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { copilotAsk, copilotSuggestions, saveCopilotAnswer, type CopilotAnswer, type CopilotPage } from "@/app/copilot-actions";
 import { Markdown } from "./markdown";
+import { CodeCitations } from "@/components/code-citations";
 
 type Focus = { database: string; schema: string; table: string } | null;
 type Message =
@@ -218,6 +219,7 @@ function CopilotShell({ children }: { children: ReactNode }) {
                         })}
                       </div>
                     )}
+                    <CodeCitations items={m.data.code} />
                     {m.data.actions.length > 0 && (
                       <div className="flex flex-wrap gap-2">
                         {m.data.actions.map((a) => (

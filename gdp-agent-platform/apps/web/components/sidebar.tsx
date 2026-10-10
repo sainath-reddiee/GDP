@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 import {
-  BookOpen, Boxes, ChevronsLeft, ChevronsRight, Database, FileClock, LayoutDashboard, ListChecks, LogOut, Settings,
+  BookOpen, Boxes, ChevronsLeft, ChevronsRight, Database, FileClock, FolderGit2, LayoutDashboard, ListChecks, LogOut, Settings,
   ShieldCheck, Sparkles, Workflow,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -38,6 +38,7 @@ const groups: { label: string; links: NavLink[] }[] = [
       { href: "/knowledge", label: "Knowledge", icon: BookOpen },
       { href: "/domains", label: "Domains", icon: Boxes },
       { href: "/skills", label: "Skills", icon: Sparkles },
+      { href: "/code", label: "Code", icon: FolderGit2, privilege: "CODE.VIEW" },
     ],
   },
   {

@@ -8,6 +8,7 @@ export type CopilotAnswer = {
   sources: { key: string; title: string | null; type: string | null }[];
   actions: { kind: string; label: string; href: string }[]; follow_ups: string[];
   domain: { id: string | null; name: string } | null; model: string; duration_ms: number;
+  code?: import("@/components/code-citations").CodeCitation[];
 };
 
 export async function copilotSuggestions(page: CopilotPage) {

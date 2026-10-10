@@ -3438,13 +3438,18 @@ def review_dbt(run_id: str, body: DbtReview, db: Db = Depends(current_db)):
         notes = json.dumps({k: report.get(k) for k in ("source_unique_id", "dedup_order", "anomalies", "hub", "counts")})
     except ValueError:
         pass
+    from app.code_api import run_code_context
+
+    code = run_code_context(db, run_id, "DBT", question=path)
+    skill = _domain_skill(db, run_id) + (f"\n\n{code['text']}" if code["text"] else "")
     started = time.time()
     try:
         fetch, ids = _fetch_with_ids(db)
-        reviewed = review_file(fetch, path, files[path], _domain_skill(db, run_id), _sttm_context(db, run_id), notes,
+        reviewed = review_file(fetch, path, files[path], skill, _sttm_context(db, run_id), notes,
                                model=body.model or _model_for(db, "DBT"))
     except Exception as exc:
         raise _snowflake_error(exc) from exc
+    reviewed["code_citations"] = code["citations"]
     _record_cost(db, run_id, "DBT", reviewed.get("model"),
                  {**(reviewed.get("usage") or {}), "query_id": ids[-1] if ids else None}, started)
     return reviewed
@@ -3510,6 +3515,11 @@ def enhance_dbt(run_id: str, body: DbtEnhance, db: Db = Depends(current_db)):
         skill = ""
     if skill:
         context = f"{context}\n\nFOLLOW THESE GDP-DBT-ONBOARD-SOURCE RULES AND DOMAIN CONTRACT:\n{skill}"
+    from app.code_api import run_code_context
+
+    code = run_code_context(db, run_id, "DBT", question=f"{path} {body.prompt.strip()[:300]}")
+    if code["text"]:
+        context = f"{context}\n\n{code['text']}"
     started = time.time()
     try:
         fetch, ids = _fetch_with_ids(db)
@@ -6135,3 +6145,7 @@ app.include_router(knowledge_router)
 from app.domains_api import router as domains_router  # noqa: E402
 
 app.include_router(domains_router)
+
+from app.code_api import router as code_router  # noqa: E402
+
+app.include_router(code_router)

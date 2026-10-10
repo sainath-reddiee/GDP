@@ -97,7 +97,8 @@ export type QaProposal = {
 
 export async function planQa(runId: string, focus: string) {
   return attemptValue(() =>
-    api<{ tests: QaProposal[]; model: string; grounding: { rules: number; profile_columns: number; checks: number } }>(
+    api<{ tests: QaProposal[]; model: string; code_citations?: import("@/components/code-citations").CodeCitation[];
+          grounding: { rules: number; profile_columns: number; checks: number; code?: number } }>(
       `/api/runs/${runId}/qa/plan`, { method: "POST", body: JSON.stringify({ focus }) }));
 }
 

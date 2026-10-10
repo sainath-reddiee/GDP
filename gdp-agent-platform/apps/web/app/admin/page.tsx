@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { Suspense } from "react";
-import { Bot, LayoutDashboard, Rocket, Ruler, ShieldCheck, SlidersHorizontal, Sparkles } from "lucide-react";
+import { Bot, LayoutDashboard, Plug, Rocket, Ruler, ShieldCheck, SlidersHorizontal, Sparkles } from "lucide-react";
 import { api, whoami } from "@/lib/api";
 import { can } from "@/lib/types";
 import type { GovEvent, GovPolicy, GovPrivilege, GovRole, GovSettings, GovUser } from "../governance-actions";
@@ -13,6 +13,8 @@ import { DeployButton } from "./deploy-button";
 import { ModelsSection } from "./models-section";
 import { RateCardEditor } from "./rate-card";
 import { RulesSection } from "./rules-section";
+import { IntegrationsSection } from "./integrations-section";
+import type { CodeRepo } from "../code/actions";
 import { SkillsSection } from "./skills-section";
 import type { SkillBinding } from "../skills/types";
 import { Panel, SectionSkeleton, Stat } from "./section";
@@ -22,6 +24,7 @@ const SECTIONS = [
   { id: "overview", label: "Overview", icon: LayoutDashboard, hint: "Session and platform at a glance" },
   { id: "models", label: "AI models", icon: Bot, hint: "Models in this account, the model per stage and the rate card" },
   { id: "access", label: "Access and governance", icon: ShieldCheck, hint: "Users, roles, privileges and approval policies" },
+  { id: "integrations", label: "Integrations", icon: Plug, hint: "Code repositories that ground AI steps in the client's own code, and Jira" },
   { id: "skills", label: "Skills per stage", icon: Sparkles, hint: "Which skills each pipeline stage loads, and in what order" },
   { id: "rules", label: "Rules", icon: SlidersHorizontal, hint: "Thresholds and hints" },
   { id: "standards", label: "Modeling standards", icon: Ruler, hint: "Naming and conventions" },
@@ -114,6 +117,16 @@ async function Section({ id, view }: { id: SectionId; view: ModelView }) {
         </p>}
       </div>
     );
+  }
+  if (id === "integrations") {
+    const [repos, domains] = await Promise.all([
+      api<{ repos: CodeRepo[]; ready: boolean }>("/api/code/repos").catch(() => null),
+      api<{ domains: { domain_id: string; domain_name: string; active_flag: boolean }[] }>("/api/domains").catch(() => ({ domains: [] })),
+    ]);
+    if (!repos) return unavailable;
+    if (!repos.ready) return <p className="text-sm text-muted-foreground">Code repositories need the latest deploy (migration V024).</p>;
+    return <IntegrationsSection repos={repos.repos}
+                                domains={domains.domains.filter((d) => d.active_flag).map((d) => ({ domain_id: d.domain_id, domain_name: d.domain_name }))} />;
   }
   if (id === "skills") {
     const data = await api<{ stages: string[]; bindings: SkillBinding[]; skills: string[] }>("/api/skills/bindings").catch(() => null);

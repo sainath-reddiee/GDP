@@ -215,6 +215,7 @@ export async function rotateGithubToken(token: string) {
 export async function reviewDbtFile(runId: string, filePath: string, model?: string) {
   return attemptValue(() => api<{
     file_path: string; summary: string; revised_content: string; rejected_revision: string[]; model?: string;
+    code_citations?: import("@/components/code-citations").CodeCitation[];
     findings: { severity: "error" | "warning" | "info"; rule: string; message: string; line_hint: string }[];
   }>(`/api/runs/${runId}/dbt/review`, { method: "POST", body: JSON.stringify({ file_path: filePath, model }) }));
 }

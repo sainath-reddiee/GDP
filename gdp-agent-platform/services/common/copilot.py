@@ -193,7 +193,7 @@ def allowed_actions(actions: List[Dict[str, Any]], page: Dict[str, Any], ctx: Di
 
 
 def build_prompt(question: str, page: Dict[str, Any], ctx: Dict[str, Any], hits: List[Dict[str, Any]],
-                 history: List[Dict[str, str]]) -> str:
+                 history: List[Dict[str, str]], code: str = "") -> str:
     convo = "\n".join(f"{m['role'].upper()}: {clip(m['content'], 800)}" for m in history[-MAX_HISTORY:])
     knowledge = [{"key": h.get("SOURCE_REFERENCE") or h.get("KNOWLEDGE_ID"), "type": h.get("KNOWLEDGE_TYPE"),
                   "title": h.get("TITLE"), "content": clip(h.get("CONTENT"), 600)} for h in hits]
@@ -209,6 +209,7 @@ def build_prompt(question: str, page: Dict[str, Any], ctx: Dict[str, Any], hits:
         f"PAGE: {json.dumps({k: page.get(k) for k in ('area', 'stage', 'database', 'schema', 'table')})}\n\n"
         f"CONVERSATION SO FAR:\n{convo or '(none)'}\n\nQUESTION: {clip(question, 2000)}\n\n"
         f"CONTEXT:\n{clip(json.dumps(ctx, default=str), 24000)}\n\nKNOWLEDGE:\n{json.dumps(knowledge, default=str)}"
+        + (f"\n\n{code}\nWhen you use this code, name the file and lines in the answer." if code else "")
     )
 
 
@@ -236,9 +237,13 @@ def ask(session, page_json: str, question: str, history_json: str = "[]",
     ctx = page_context(session, page)
     domain = (ctx.get("RUN") or {}).get("domain_name")
     hits = _safe(lambda: search(session, scalar(session, "SELECT CURRENT_DATABASE()"), question, domain=domain, limit=6), [])
+    from services.code.context import for_session
+
+    code = for_session(session, stage="COPILOT", domain_id=(ctx.get("RUN") or {}).get("domain_id"), target=page.get("table"),
+                       question=question)
     started = time.time()
-    output, usage, model = complete_json(session, build_prompt(question, page, ctx, hits, history), ANSWER_SCHEMA,
-                                         max_tokens=2500, stage=STAGE)
+    output, usage, model = complete_json(session, build_prompt(question, page, ctx, hits, history, code["text"]),
+                                         ANSWER_SCHEMA, max_tokens=2500, stage=STAGE)
     keys = context_keys(ctx, hits)
     citations = [c for c in (output.get("citations") or []) if str(c) in keys][:12]
     sources = [{"key": str(h.get("SOURCE_REFERENCE") or h.get("KNOWLEDGE_ID")), "title": h.get("TITLE"),
@@ -250,4 +255,5 @@ def ask(session, page_json: str, question: str, history_json: str = "[]",
             "sources": sources, "actions": allowed_actions(output.get("actions") or [], page, ctx),
             "follow_ups": [clip(f, 120) for f in (output.get("follow_ups") or [])][:3],
             "domain": {"id": (ctx.get("RUN") or {}).get("domain_id"), "name": domain} if domain else None,
+            "code": code["citations"],
             "model": model, "usage": usage, "duration_ms": int((time.time() - started) * 1000)}
