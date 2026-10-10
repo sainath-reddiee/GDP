@@ -4,8 +4,8 @@ import Link from "next/link";
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import {
-  CalendarClock, Check, ChevronDown, ExternalLink, FileCode2, GitBranch, GitPullRequest, Github, KeyRound, Loader2, Plus,
-  RefreshCw, Search, Settings2, Trash2, TriangleAlert, Unplug, X,
+  CalendarClock, Check, ChevronDown, CircleCheck, CircleDashed, ExternalLink, FileCode2, FolderGit2, GitBranch, GitPullRequest,
+  Github, History, KeyRound, Loader2, Plus, RefreshCw, Search, Settings2, SlidersHorizontal, Trash2, TriangleAlert, Unplug, X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input, Select } from "@/components/ui/input";
@@ -20,6 +20,7 @@ import {
 } from "../code/actions";
 
 type Domain = { domain_id: string; domain_name: string };
+export type IntegrationView = "repos" | "publishing" | "jira";
 const PRESETS = [
   { label: "Every hour", cron: "0 * * * * UTC" }, { label: "Daily 06:00 UTC", cron: "0 6 * * * UTC" },
   { label: "Weekdays 06:00 UTC", cron: "0 6 * * MON-FRI UTC" }, { label: "Weekly, Monday 06:00 UTC", cron: "0 6 * * MON UTC" },
@@ -49,12 +50,21 @@ function useTrackedTransition(): [boolean, (fn: () => Promise<void>) => void] {
   }];
 }
 
-/** Admin, Integrations: repositories configured once and used by dbt and every AI step, dbt publishing, and Jira. */
-export function IntegrationsSection({ repos, domains, publishing }: { repos: CodeRepo[]; domains: Domain[]; publishing: PublishingStatus }) {
+function Badge({ tone, children }: { tone: "good" | "warn" | "idle" | "bad"; children: React.ReactNode }) {
+  return (
+    <span className={cn("shrink-0 whitespace-nowrap rounded-full px-1.5 py-0.5 text-[10px] font-medium ring-1 ring-inset",
+      tone === "good" ? "bg-emerald-50 text-emerald-700 ring-emerald-100" : tone === "warn" ? "bg-amber-50 text-amber-700 ring-amber-100"
+        : tone === "bad" ? "bg-rose-50 text-rose-700 ring-rose-100" : "bg-slate-100 text-slate-600 ring-slate-200")}>{children}</span>
+  );
+}
+
+/** Admin, Integrations: one tab per integration. Code repositories (configured once, used by the dbt workspace and every
+ *  AI step), dbt publishing to GitHub, and Jira. */
+export function IntegrationsSection({ repos, domains, publishing, view }: {
+  repos: CodeRepo[]; domains: Domain[]; publishing: PublishingStatus; view: IntegrationView;
+}) {
   const router = useRouter();
   const { canAct } = useAccess();
-  const may = canAct("INTEGRATION.MANAGE");
-  const [connecting, setConnecting] = useState(false);
   const [msg, setMsg] = useState<Msg>(null);
   const indexing = repos.some((r) => r.refreshing || r.status === "INDEXING");
   const pollStart = useRef<number | null>(null);
@@ -67,213 +77,314 @@ export function IntegrationsSection({ repos, domains, publishing }: { repos: Cod
     }, POLL_MS);
     return () => clearInterval(t);
   }, [indexing, router]);
-  const github = repos.filter((r) => r.provider === "GITHUB");
+  const failing = repos.filter((r) => r.status === "FAILED").length;
+  const tabs: { id: IntegrationView; label: string; icon: typeof FolderGit2; badge: React.ReactNode; hint: string }[] = [
+    { id: "repos", label: "Code repositories", icon: FolderGit2, hint: "dbt and SQL repositories for the dbt workspace and AI context",
+      badge: failing ? <Badge tone="bad">{failing} failing</Badge> : <Badge tone={repos.length ? "good" : "idle"}>{repos.length}</Badge> },
+    { id: "publishing", label: "dbt publishing", icon: GitPullRequest, hint: "push branches and open pull requests on GitHub",
+      badge: <Badge tone={publishing.ready ? "good" : "idle"}>{publishing.ready ? "ready" : "not set up"}</Badge> },
+    { id: "jira", label: "Jira", icon: Unplug, hint: "QA issues, reproduction and results posted back",
+      badge: <Badge tone="idle">not connected</Badge> },
+  ];
   return (
-    <div className="space-y-5">
-      <section className="surface p-5">
-        <div className="flex flex-wrap items-start gap-3">
-          <span className="grid h-10 w-10 place-items-center rounded-xl bg-indigo-50 text-indigo-600 ring-1 ring-inset ring-indigo-100"><FileCode2 className="h-5 w-5" /></span>
-          <div className="min-w-[16rem] flex-1">
-            <h3 className="text-base font-semibold">Code repositories</h3>
-            <p className="text-sm text-muted-foreground">Configure the client&apos;s dbt and SQL repositories once. The dbt workspace uses them for its clone, origin and
-              base branch, and every AI step (dbt review, QA, data quality, STTM, copilot) quotes their models, macros and tests with citations.
-              Browse them on <Link href="/code" className="text-primary hover:underline">Code</Link>.</p>
-          </div>
-          {may && <Button onClick={() => setConnecting(true)}><Plus className="h-4 w-4" />Connect repository</Button>}
-        </div>
-        {msg && (
-          <p role={msg.tone === "error" ? "alert" : "status"} className={cn("mt-3 flex items-start gap-2 rounded-lg px-3 py-2 text-xs",
-            msg.tone === "error" ? "bg-destructive/10 text-destructive" : msg.tone === "info" ? "bg-sky-50 text-sky-800" : "bg-success/10 text-success")}>
-            <span className="flex-1">{msg.text}</span>
-            <button type="button" aria-label="Dismiss" onClick={() => setMsg(null)}><X className="h-3.5 w-3.5" /></button>
-          </p>
-        )}
-        <div className="mt-4 space-y-3">
-          {repos.map((r) => <RepoCard key={r.repo_id} repo={r} domains={domains} may={may} onMsg={setMsg} />)}
-          {!repos.length && (
-            <div className="rounded-xl border border-dashed p-8 text-center">
-              <GitBranch className="mx-auto h-7 w-7 text-muted-foreground" />
-              <p className="mt-2 text-sm font-medium">No repositories connected yet</p>
-              <p className="text-xs text-muted-foreground">GitHub, GitLab, Bitbucket and Azure DevOps work through Snowflake&apos;s Git integration. Credentials stay in a Snowflake secret.</p>
-            </div>
-          )}
-        </div>
-      </section>
-      <PublishingCard status={publishing} githubRepos={github} may={canAct("ADMIN.DEPLOY")} onMsg={setMsg} />
-      <section className="surface flex items-start gap-3 p-5">
-        <span className="grid h-10 w-10 place-items-center rounded-xl bg-sky-50 text-sky-600 ring-1 ring-inset ring-sky-100"><Unplug className="h-5 w-5" /></span>
-        <div>
-          <h3 className="text-base font-semibold">Jira</h3>
-          <p className="text-sm text-muted-foreground">QA engineers will read their Jira issues, reproduce reported bugs with QA tests, and post results back. Coming in the next release.</p>
-        </div>
-      </section>
-      {connecting && <ConnectDrawer domains={domains} onClose={() => setConnecting(false)}
-                                    onDone={(text) => { setConnecting(false); setMsg({ tone: "ok", text }); router.refresh(); }} />}
+    <div className="space-y-4">
+      <nav aria-label="Integrations" className="grid gap-2 lg:grid-cols-3">
+        {tabs.map((t) => (
+          <Link key={t.id} href={`/admin?section=integrations&view=${t.id}`} aria-current={view === t.id ? "page" : undefined}
+                className={cn("flex items-start gap-3 rounded-xl border p-3 transition",
+                  view === t.id ? "border-primary/40 bg-primary/5 shadow-card" : "bg-card hover:border-primary/30 hover:shadow-card")}>
+            <span className={cn("grid h-9 w-9 shrink-0 place-items-center rounded-lg", view === t.id ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground")}>
+              <t.icon className="h-4 w-4" /></span>
+            <span className="min-w-0 flex-1">
+              <span className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm font-semibold"><span className="whitespace-nowrap">{t.label}</span>{t.badge}</span>
+              <span className="block truncate text-xs text-muted-foreground">{t.hint}</span>
+            </span>
+          </Link>
+        ))}
+      </nav>
+      {msg && (
+        <p role={msg.tone === "error" ? "alert" : "status"} className={cn("flex items-start gap-2 rounded-lg px-3 py-2 text-xs",
+          msg.tone === "error" ? "bg-destructive/10 text-destructive" : msg.tone === "info" ? "bg-sky-50 text-sky-800" : "bg-success/10 text-success")}>
+          <span className="flex-1">{msg.text}</span>
+          <button type="button" aria-label="Dismiss" onClick={() => setMsg(null)}><X className="h-3.5 w-3.5" /></button>
+        </p>
+      )}
+      {view === "repos" && <ReposTab repos={repos} domains={domains} may={canAct("INTEGRATION.MANAGE")} onMsg={setMsg} />}
+      {view === "publishing" && <PublishingCard status={publishing} githubRepos={repos.filter((r) => r.provider === "GITHUB")} may={canAct("ADMIN.DEPLOY")} onMsg={setMsg} />}
+      {view === "jira" && <JiraTab />}
     </div>
   );
 }
 
-function RepoCard({ repo: r, domains, may, onMsg }: { repo: CodeRepo; domains: Domain[]; may: boolean; onMsg: (m: Msg) => void }) {
+function ReposTab({ repos, domains, may, onMsg }: { repos: CodeRepo[]; domains: Domain[]; may: boolean; onMsg: (m: Msg) => void }) {
+  const router = useRouter();
+  const [connecting, setConnecting] = useState(false);
+  const [open, setOpen] = useState<{ id: string; tab: DrawerTab } | null>(null);
+  const [filter, setFilter] = useState("");
+  const shown = repos.filter((r) => !filter || `${r.name} ${r.git_url} ${r.branch}`.toLowerCase().includes(filter.toLowerCase()));
+  const files = repos.reduce((n, r) => n + (r.stats?.files ?? 0), 0);
+  const selected = repos.find((r) => r.repo_id === open?.id);
+  return (
+    <section className="surface overflow-hidden">
+      <header className="flex flex-wrap items-center gap-3 border-b px-5 py-4">
+        <div className="min-w-[16rem] flex-1">
+          <h3 className="text-base font-semibold">Code repositories</h3>
+          <p className="text-xs text-muted-foreground">{repos.length} connected · {files.toLocaleString()} files indexed · used by the dbt workspace and every AI step.
+            {" "}<Link href="/code" className="text-primary hover:underline">Browse code</Link></p>
+        </div>
+        {repos.length > 3 && (
+          <div className="relative">
+            <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+            <Input value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="Filter" className="h-9 w-48 pl-8 text-xs" aria-label="Filter repositories" />
+          </div>
+        )}
+        {may && <Button onClick={() => setConnecting(true)}><Plus className="h-4 w-4" />Connect repository</Button>}
+      </header>
+      {repos.length ? (
+        <ul className="divide-y">{shown.map((r) => <RepoRow key={r.repo_id} repo={r} domains={domains} may={may} onMsg={onMsg} onOpen={(tab) => setOpen({ id: r.repo_id, tab })} />)}</ul>
+      ) : (
+        <div className="px-6 py-12 text-center">
+          <span className="mx-auto grid h-12 w-12 place-items-center rounded-2xl bg-indigo-50 text-indigo-600 ring-1 ring-inset ring-indigo-100"><FolderGit2 className="h-6 w-6" /></span>
+          <p className="mt-3 text-sm font-semibold">No repositories connected yet</p>
+          <p className="mx-auto mt-1 max-w-md text-xs text-muted-foreground">GitHub, GitLab, Bitbucket and Azure DevOps work through Snowflake&apos;s Git integration.
+            Credentials stay in a Snowflake secret; the platform never keeps a token.</p>
+          {may && <Button className="mt-4" onClick={() => setConnecting(true)}><Plus className="h-4 w-4" />Connect repository</Button>}
+        </div>
+      )}
+      {connecting && <ConnectDrawer domains={domains} onClose={() => setConnecting(false)}
+                                    onDone={(text) => { setConnecting(false); onMsg({ tone: "ok", text }); router.refresh(); }} />}
+      {selected && open && <RepoDrawer repo={selected} domains={domains} may={may} tab={open.tab} onTab={(tab) => setOpen({ id: selected.repo_id, tab })}
+                                       onClose={() => setOpen(null)} onMsg={onMsg} />}
+    </section>
+  );
+}
+
+function RepoRow({ repo: r, domains, may, onMsg, onOpen }: {
+  repo: CodeRepo; domains: Domain[]; may: boolean; onMsg: (m: Msg) => void; onOpen: (tab: DrawerTab) => void;
+}) {
   const router = useRouter();
   const [pending, start] = useTrackedTransition();
-  const [panel, setPanel] = useState<"" | "branch" | "dbt" | "schedule" | "settings" | "runs" | "credentials" | "disconnect">("");
+  const busy = r.refreshing || r.status === "INDEXING";
+  const refresh = () => start(async () => {
+    const res = await refreshRepo(r.repo_id);
+    onMsg(res.ok ? { tone: "ok", text: `${r.name}: refresh started; only changed files are read.` } : { tone: toneOf(res.error), text: res.error });
+    if (res.ok) router.refresh();
+  });
+  const models = r.stats?.by_kind?.DBT_MODEL ?? 0;
+  return (
+    <li className="flex flex-wrap items-center gap-x-4 gap-y-3 px-5 py-4">
+      <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-slate-100 text-slate-700">{r.provider === "GITHUB" ? <Github className="h-5 w-5" /> : <GitBranch className="h-5 w-5" />}</span>
+      <div className="min-w-[16rem] flex-1">
+        <p className="flex flex-wrap items-center gap-2 text-sm font-semibold">{r.name}
+          <span className={cn("rounded-full px-2 py-0.5 text-[10px] font-medium ring-1 ring-inset", STATUS_TONE[busy ? "INDEXING" : r.status] ?? STATUS_TONE.NEW)}>
+            {busy ? "indexing" : r.status.toLowerCase()}</span>
+          {!r.enabled && <Badge tone="idle">disabled</Badge>}
+          {r.use_for_dbt !== false && (r.stats?.dbt_projects ?? []).length > 0 && <Badge tone="good">dbt workspace</Badge>}
+        </p>
+        <a href={r.git_url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 font-mono text-[11px] text-muted-foreground hover:text-primary">
+          {r.git_url.replace(/^https:\/\//, "")}<ExternalLink className="h-3 w-3" /></a>
+        <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+          <button type="button" disabled={!may} onClick={() => onOpen("branch")} title={may ? "Switch branch" : undefined}
+                  className={cn("inline-flex max-w-[22rem] items-center gap-1 rounded-md border bg-card px-1.5 py-0.5 font-mono text-[11px] text-foreground", may && "hover:border-primary/40 hover:bg-primary/5")}>
+            <GitBranch className="h-3 w-3 shrink-0" /><span className="truncate">{r.branch}</span>{may && <ChevronDown className="h-3 w-3 shrink-0" />}
+          </button>
+          {r.last_commit && <span className="font-mono">{r.last_commit.slice(0, 8)}</span>}
+          <span>{r.last_indexed ? `indexed ${ago(r.last_indexed)}` : "not indexed yet"}</span>
+          <span className="inline-flex items-center gap-1"><CalendarClock className="h-3 w-3" />{r.schedule_cron ?? "on demand"}</span>
+          <span>{r.domain_ids.length ? r.domain_ids.map((d) => domains.find((x) => x.domain_id === d)?.domain_name ?? d).join(", ") : "all domains"}</span>
+        </div>
+        {r.status === "FAILED" && r.error && <p className="mt-1.5 flex items-start gap-1 text-xs text-destructive"><TriangleAlert className="mt-0.5 h-3 w-3 shrink-0" />{r.error.slice(0, 300)}</p>}
+        {!!r.stats?.pending_files && <p className="mt-1 text-xs text-amber-700">{r.stats.pending_files.toLocaleString()} changed files wait for the next refresh.</p>}
+      </div>
+      <dl className="grid grid-cols-3 gap-2 text-center text-xs">
+        {[["files", r.stats?.files], ["models", models], ["links", r.stats?.edges]].map(([k, v]) => (
+          <div key={String(k)} className="min-w-[4rem] rounded-lg bg-muted/50 px-2.5 py-1.5"><dd className="text-sm font-semibold tabular-nums">{Number(v ?? 0).toLocaleString()}</dd><dt className="text-[10px] text-muted-foreground">{k}</dt></div>
+        ))}
+      </dl>
+      <div className="flex shrink-0 items-center gap-1.5">
+        <Button size="sm" variant="outline" disabled={pending || busy} onClick={refresh}>
+          {busy || pending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}{busy ? "Indexing" : "Refresh"}</Button>
+        <Link href={`/code?repo=${r.repo_id}`} className="inline-flex h-8 items-center gap-1.5 rounded-lg border bg-card px-3 text-xs font-medium hover:bg-muted"><FileCode2 className="h-3.5 w-3.5" />Browse</Link>
+        <Button size="sm" variant="ghost" onClick={() => onOpen(may ? "indexing" : "history")} aria-label={`Settings for ${r.name}`}><Settings2 className="h-4 w-4" />{may ? "Settings" : "History"}</Button>
+      </div>
+    </li>
+  );
+}
+
+type DrawerTab = "branch" | "indexing" | "schedule" | "dbt" | "credentials" | "history" | "disconnect";
+const DRAWER_TABS: { id: DrawerTab; label: string; icon: typeof GitBranch; manage?: boolean }[] = [
+  { id: "branch", label: "Branch", icon: GitBranch, manage: true }, { id: "indexing", label: "Indexing", icon: SlidersHorizontal, manage: true },
+  { id: "schedule", label: "Schedule", icon: CalendarClock, manage: true }, { id: "dbt", label: "dbt workspace", icon: GitPullRequest, manage: true },
+  { id: "credentials", label: "Credentials", icon: KeyRound, manage: true }, { id: "history", label: "History", icon: History },
+  { id: "disconnect", label: "Disconnect", icon: Trash2, manage: true },
+];
+
+/** Everything about one repository, one tab at a time: branch, what is indexed, schedule, dbt workspace, credentials,
+ *  refresh history and disconnect. */
+function RepoDrawer({ repo: r, domains, may, tab, onTab, onClose, onMsg }: {
+  repo: CodeRepo; domains: Domain[]; may: boolean; tab: DrawerTab; onTab: (t: DrawerTab) => void; onClose: () => void; onMsg: (m: Msg) => void;
+}) {
+  useScrollLock();
+  const router = useRouter();
+  const [pending, start] = useTrackedTransition();
   const [runs, setRuns] = useState<IndexRun[] | null>(null);
   const [cron, setCron] = useState(r.schedule_cron ?? PRESETS[1].cron);
   const [doms, setDoms] = useState<string[]>(r.domain_ids);
   const [include, setInclude] = useState(r.include_globs.join(", "));
   const [exclude, setExclude] = useState(r.exclude_globs.join(", "));
-  // the server is the source of truth: re-sync the form whenever the saved repository changes
   const saved = `${r.domain_ids.join()}|${r.include_globs.join()}|${r.exclude_globs.join()}|${r.schedule_cron}`;
   useEffect(() => {
     setDoms(r.domain_ids); setInclude(r.include_globs.join(", ")); setExclude(r.exclude_globs.join(", "));
     setCron(r.schedule_cron ?? PRESETS[1].cron);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [saved]);
-  const busy = r.refreshing || r.status === "INDEXING";
+  useEffect(() => {
+    if (tab === "history") indexRuns(r.repo_id).then((x) => setRuns(x.ok ? x.data.runs : []));
+  }, [tab, r.repo_id, r.last_indexed]);
   const act = (fn: () => Promise<{ ok: boolean; error?: string }>, ok: string, after?: () => void) => start(async () => {
     const res = await fn();
     onMsg(res.ok ? { tone: "ok", text: ok } : { tone: toneOf(res.error ?? ""), text: res.error ?? "Failed" });
     if (res.ok) { after?.(); router.refresh(); }
   });
   const split = (s: string) => s.split(",").map((x) => x.trim()).filter(Boolean);
-  const kinds = Object.entries(r.stats?.by_kind ?? {}).sort((a, b) => b[1] - a[1]).slice(0, 5);
-  const toggle = (p: typeof panel) => setPanel(panel === p ? "" : p);
+  const tabs = DRAWER_TABS.filter((t) => may || !t.manage);
+  const current = tabs.some((t) => t.id === tab) ? tab : tabs[0].id;
   return (
-    <article className="rounded-xl border border-border/80 bg-card">
-      <div className="flex flex-wrap items-start gap-3 p-4">
-        <span className="grid h-9 w-9 place-items-center rounded-lg bg-slate-100 text-slate-700">{r.provider === "GITHUB" ? <Github className="h-4 w-4" /> : <GitBranch className="h-4 w-4" />}</span>
-        <div className="min-w-[14rem] flex-1">
-          <p className="flex flex-wrap items-center gap-2 text-sm font-semibold">{r.name}
-            <span className={cn("rounded-full px-2 py-0.5 text-[10px] font-medium ring-1 ring-inset", STATUS_TONE[busy ? "INDEXING" : r.status] ?? STATUS_TONE.NEW)}>
-              {busy ? "indexing" : r.status.toLowerCase()}</span>
-            {!r.enabled && <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] text-muted-foreground">disabled</span>}
-          </p>
-          <a href={r.git_url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 font-mono text-[11px] text-muted-foreground hover:text-primary">
-            {r.git_url.replace(/^https:\/\//, "")}<ExternalLink className="h-3 w-3" /></a>
-          <div className="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-xs text-muted-foreground">
-            <button type="button" disabled={!may} onClick={() => toggle("branch")} title={may ? "Switch branch" : undefined}
-                    className={cn("inline-flex max-w-full items-center gap-1 rounded-md border px-1.5 py-0.5 font-mono text-[11px] text-foreground",
-                                  may && "hover:border-primary/40 hover:bg-primary/5", panel === "branch" && "border-primary/50 bg-primary/5")}>
-              <GitBranch className="h-3 w-3 shrink-0" /><span className="truncate">{r.branch}</span>{may && <ChevronDown className="h-3 w-3 shrink-0" />}
+    <div className="fixed inset-0 z-50 flex justify-end" role="dialog" aria-modal="true" aria-label={`${r.name} settings`}>
+      <button type="button" aria-label="Close" className="absolute inset-0 bg-black/30" onClick={onClose} />
+      <aside className="relative flex h-full w-[720px] max-w-full flex-col border-l bg-background shadow-2xl">
+        <header className="flex items-center gap-3 border-b px-5 py-4">
+          <span className="grid h-9 w-9 place-items-center rounded-xl bg-slate-100 text-slate-700">{r.provider === "GITHUB" ? <Github className="h-4 w-4" /> : <GitBranch className="h-4 w-4" />}</span>
+          <div className="min-w-0 flex-1">
+            <h3 className="flex items-center gap-2 text-base font-semibold">{r.name}
+              <span className={cn("rounded-full px-2 py-0.5 text-[10px] font-medium ring-1 ring-inset", STATUS_TONE[r.status] ?? STATUS_TONE.NEW)}>{r.status.toLowerCase()}</span></h3>
+            <p className="truncate font-mono text-[11px] text-muted-foreground">{r.git_url.replace(/^https:\/\//, "")} · {r.branch}</p>
+          </div>
+          <button type="button" onClick={onClose} aria-label="Close" className="rounded-md p-1 hover:bg-muted"><X className="h-4 w-4" /></button>
+        </header>
+        <nav className="flex gap-1 overflow-x-auto border-b px-3" aria-label="Repository settings">
+          {tabs.map((t) => (
+            <button key={t.id} type="button" onClick={() => onTab(t.id)} aria-current={current === t.id ? "page" : undefined}
+                    className={cn("-mb-px inline-flex shrink-0 items-center gap-1.5 border-b-2 px-2.5 py-2.5 text-xs",
+                      current === t.id ? "border-primary font-medium text-primary" : "border-transparent text-muted-foreground hover:text-foreground",
+                      t.id === "disconnect" && current !== t.id && "hover:text-destructive")}>
+              <t.icon className="h-3.5 w-3.5" />{t.label}
             </button>
-            {r.last_commit ? <span>@ <span className="font-mono">{r.last_commit.slice(0, 8)}</span></span> : null}
-            <span>· {r.last_indexed ? `indexed ${ago(r.last_indexed)}` : "not indexed yet"}</span>
-            {r.schedule_cron ? <span>· <CalendarClock className="inline h-3 w-3" /> {r.schedule_cron}</span> : null}
-            <span>· {r.domain_ids.length ? r.domain_ids.map((d) => domains.find((x) => x.domain_id === d)?.domain_name ?? d).join(", ") : "all domains"}</span>
-          </div>
-          {r.status === "FAILED" && r.error && <p className="mt-1.5 flex items-start gap-1 text-xs text-destructive"><TriangleAlert className="mt-0.5 h-3 w-3 shrink-0" />{r.error.slice(0, 400)}</p>}
-          {!!r.stats?.pending_files && <p className="mt-1 text-xs text-amber-700">{r.stats.pending_files.toLocaleString()} changed files are still waiting; the next refresh reads them.</p>}
-        </div>
-        <div className="grid shrink-0 grid-cols-3 gap-2 text-center text-xs">
-          {[["files", r.stats?.files], ["chunks", r.stats?.chunks], ["edges", r.stats?.edges]].map(([k, v]) => (
-            <div key={String(k)} className="min-w-[3.75rem] rounded-lg bg-muted/50 px-2.5 py-1.5"><p className="text-sm font-semibold tabular-nums">{Number(v ?? 0).toLocaleString()}</p><p className="text-[10px] text-muted-foreground">{k}</p></div>
           ))}
-        </div>
-      </div>
-      {(kinds.length > 0 || (r.stats?.dbt_projects ?? []).length > 0 || !!r.stats?.skipped_files) && (
-        <div className="flex flex-wrap gap-1.5 border-t px-4 py-2 text-[11px]">
-          {(r.stats?.dbt_projects ?? []).map((p) => <span key={p} className="rounded-full bg-orange-50 px-2 py-0.5 text-orange-700 ring-1 ring-inset ring-orange-100">dbt: {p}</span>)}
-          {r.use_for_dbt !== false && (r.stats?.dbt_projects ?? []).length > 0 && (
-            <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-emerald-700 ring-1 ring-inset ring-emerald-100">
-              dbt workspace{r.dbt_project_dir ? ` · ${r.dbt_project_dir}/` : ""}{r.open_pr === false ? " · no auto PR" : ""}</span>
+        </nav>
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain [&>div]:border-t-0 [&>div]:bg-transparent [&>div]:px-5 [&>div]:py-4">
+          {current === "branch" && (
+            <BranchPicker repo={r} pending={pending}
+                          onPick={(b) => act(() => updateRepo(r.repo_id, { branch: b }), `Switched ${r.name} to ${b}. Re-indexing now; AI steps use the new branch when it finishes.`)} />
           )}
-          {kinds.map(([k, n]) => <span key={k} className="rounded-full bg-muted px-2 py-0.5 text-muted-foreground">{k.toLowerCase().replace(/_/g, " ")} {n}</span>)}
-          {!!r.stats?.skipped_files && <span className="rounded-full bg-amber-50 px-2 py-0.5 text-amber-700 ring-1 ring-inset ring-amber-100" title="Unreadable or unsafe file names; retried when they change">{r.stats.skipped_files} skipped</span>}
-        </div>
-      )}
-      <div className="flex flex-wrap items-center gap-1.5 border-t px-3 py-2">
-        <Button size="sm" variant="outline" disabled={pending || busy} onClick={() => act(() => refreshRepo(r.repo_id), "Refresh started; only changed files are read.")}>
-          {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}{busy ? "Indexing…" : "Refresh now"}</Button>
-        <Link href={`/code?repo=${r.repo_id}`} className="inline-flex h-8 items-center gap-1.5 rounded-lg px-3 text-xs font-medium hover:bg-muted"><FileCode2 className="h-3.5 w-3.5" />Browse</Link>
-        <Button size="sm" variant="ghost" onClick={() => { toggle("runs"); indexRuns(r.repo_id).then((x) => x.ok && setRuns(x.data.runs)); }}>History</Button>
-        {may && <Button size="sm" variant="ghost" onClick={() => toggle("dbt")}><GitPullRequest className="h-3.5 w-3.5" />dbt</Button>}
-        {may && <Button size="sm" variant="ghost" onClick={() => toggle("schedule")}><CalendarClock className="h-3.5 w-3.5" />Schedule</Button>}
-        {may && <Button size="sm" variant="ghost" onClick={() => toggle("settings")}><Settings2 className="h-3.5 w-3.5" />Settings</Button>}
-        {may && <Button size="sm" variant="ghost" onClick={() => toggle("credentials")}><KeyRound className="h-3.5 w-3.5" />Credentials</Button>}
-        {may && <Button size="sm" variant="ghost" className="ml-auto text-muted-foreground hover:text-destructive" disabled={pending} onClick={() => toggle("disconnect")}>
-          <Trash2 className="h-3.5 w-3.5" />Disconnect</Button>}
-      </div>
-      {panel === "branch" && (
-        <BranchPicker repo={r} pending={pending} onClose={() => setPanel("")}
-                      onPick={(b) => act(() => updateRepo(r.repo_id, { branch: b }), `Switched ${r.name} to ${b}. Re-indexing now; AI steps use the new branch when it finishes.`,
-                                      () => setPanel(""))} />
-      )}
-      {panel === "dbt" && <DbtPanel repo={r} pending={pending}
-                                    onSave={(body) => act(() => updateRepo(r.repo_id, body), "dbt settings saved; runs use them from now on.", () => setPanel(""))} />}
-      {panel === "schedule" && (
-        <div className="space-y-2 border-t bg-muted/20 px-4 py-3 text-xs">
-          <div className="flex flex-wrap gap-1.5">
-            {PRESETS.map((p) => <button key={p.cron} type="button" onClick={() => setCron(p.cron)}
-                                        className={cn("rounded-full border px-2.5 py-1", cron === p.cron ? "border-primary bg-primary/10 text-primary" : "bg-card hover:border-primary/40")}>{p.label}</button>)}
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <Input value={cron} onChange={(e) => setCron(e.target.value)} className="h-8 w-64 font-mono text-xs" aria-label="Cron with time zone" />
-            <Button size="sm" disabled={pending} onClick={() => act(() => scheduleRepo(r.repo_id, cron), `Scheduled: ${cron} (a Snowflake task)`)}><Check className="h-3.5 w-3.5" />Save schedule</Button>
-            {r.schedule_cron && <Button size="sm" variant="ghost" disabled={pending} onClick={() => act(() => scheduleRepo(r.repo_id, null), "Schedule removed")}>Remove schedule</Button>}
-          </div>
-          <p className="text-muted-foreground">Five cron fields and a time zone. Runs as a Snowflake task; only files that changed since the last refresh are read, and a run already in progress is never doubled.</p>
-        </div>
-      )}
-      {panel === "settings" && (
-        <div className="grid gap-3 border-t bg-muted/20 px-4 py-3 text-xs md:grid-cols-2">
-          <div className="space-y-1 md:col-span-2">Domains it serves (none means all)
-            <div className="flex flex-wrap gap-1">{domains.map((d) => {
-              const on = doms.includes(d.domain_id);
-              return <button key={d.domain_id} type="button" onClick={() => setDoms(on ? doms.filter((x) => x !== d.domain_id) : [...doms, d.domain_id])}
-                             className={cn("rounded-full border px-2 py-0.5", on ? "border-primary bg-primary/10 text-primary" : "bg-card")}>{d.domain_name}</button>;
-            })}</div>
-          </div>
-          <label className="space-y-1">Only these paths (globs, comma separated)<Input value={include} onChange={(e) => setInclude(e.target.value)} placeholder="models/**, macros/**" className="h-8 font-mono text-xs" /></label>
-          <label className="space-y-1">Skip these paths<Input value={exclude} onChange={(e) => setExclude(e.target.value)} placeholder="models/legacy/**" className="h-8 font-mono text-xs" /></label>
-          <div className="flex flex-wrap items-center gap-2 md:col-span-2">
-            <label className="flex items-center gap-1.5"><input type="checkbox" checked={r.enabled} disabled={pending}
-                   onChange={() => act(() => updateRepo(r.repo_id, { enabled: !r.enabled }), r.enabled ? "Disabled: no longer used in prompts or offered to dbt" : "Enabled")} />Used in prompts and by dbt</label>
-            <span className="text-[11px] text-muted-foreground">Changing the paths re-indexes; changing domains does not.</span>
-            <Button size="sm" className="ml-auto" disabled={pending}
-                    onClick={() => start(async () => {
-                      const res = await updateRepo(r.repo_id, { domain_ids: doms, include_globs: split(include), exclude_globs: split(exclude) });
-                      onMsg(res.ok ? { tone: "ok", text: res.data.reindexing ? "Saved. The paths changed, so the index is being rebuilt." : "Saved." }
-                                   : { tone: toneOf(res.error), text: res.error });
-                      if (res.ok) router.refresh();
-                    })}>
-              <Check className="h-3.5 w-3.5" />Save settings</Button>
-          </div>
-        </div>
-      )}
-      {panel === "credentials" && <CredentialsPanel repo={r} pending={pending} onSave={(body, ok) => act(() => setCredentials(r.repo_id, body), ok, () => setPanel(""))} />}
-      {panel === "disconnect" && <DisconnectPanel repo={r} pending={pending} onCancel={() => setPanel("")}
-                                                  onConfirm={(drop) => start(async () => {
-                                                    const res = await removeRepo(r.repo_id, drop);
-                                                    onMsg(res.ok ? { tone: "ok", text: `${r.name} disconnected${res.data.dropped.length ? `; dropped ${res.data.dropped.join(", ")}` : ""}${res.data.kept.length ? `; kept ${res.data.kept.join(", ")}` : ""}.` }
-                                                                 : { tone: toneOf(res.error), text: res.error });
-                                                    if (res.ok) router.refresh();
-                                                  })} />}
-      {panel === "runs" && (
-        <div className="border-t px-4 py-3 text-xs">
-          {!runs ? <p className="flex items-center gap-2 text-muted-foreground"><Loader2 className="h-3.5 w-3.5 animate-spin" />Loading…</p> : runs.length ? (
-            <div className="overflow-x-auto">
-              <table className="w-full min-w-[560px]">
-                <thead className="text-left text-[10px] uppercase tracking-wide text-muted-foreground"><tr><th className="py-1">Started</th><th>Status</th><th>Commit</th><th className="text-right">Changed</th><th className="text-right">Chunks</th><th className="text-right">Time</th><th className="pl-3">By</th></tr></thead>
-                <tbody className="divide-y">
-                  {runs.map((x) => (
-                    <tr key={x.index_run_id} title={x.error ?? ""}>
-                      <td className="py-1.5">{ago(x.started_at)}</td>
-                      <td><span className={cn("rounded-full px-1.5 py-0.5 text-[10px] ring-1 ring-inset", STATUS_TONE[x.status === "SUCCEEDED" ? "READY" : x.status === "RUNNING" ? "INDEXING" : x.status === "CANCELLED" ? "CANCELLED" : "FAILED"])}>{x.status.toLowerCase()}</span></td>
-                      <td className="font-mono">{(x.commit_sha ?? "").slice(0, 8)}</td>
-                      <td className="text-right tabular-nums">{x.files_changed ?? 0}{x.files_removed ? ` / -${x.files_removed}` : ""}</td>
-                      <td className="text-right tabular-nums">{x.chunks ?? 0}</td>
-                      <td className="text-right tabular-nums">{x.duration_ms ? `${Math.round(x.duration_ms / 1000)} s` : ""}</td>
-                      <td className="pl-3 text-muted-foreground">{x.triggered_by === "SYSTEM" ? "schedule" : x.triggered_by}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-              {runs.some((x) => x.error) && <p className="mt-2 text-[11px] text-muted-foreground">Hover a row to see its message.</p>}
+          {current === "indexing" && (
+            <div className="space-y-4 text-xs">
+              <div className="space-y-1.5"><p className="font-medium">Domains it serves <span className="font-normal text-muted-foreground">(none selected means every domain)</span></p>
+                <div className="flex flex-wrap gap-1">{domains.map((d) => {
+                  const on = doms.includes(d.domain_id);
+                  return <button key={d.domain_id} type="button" onClick={() => setDoms(on ? doms.filter((x) => x !== d.domain_id) : [...doms, d.domain_id])}
+                                 className={cn("rounded-full border px-2.5 py-0.5", on ? "border-primary bg-primary/10 text-primary" : "bg-card text-muted-foreground")}>{d.domain_name}</button>;
+                })}</div>
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <label className="space-y-1 font-medium">Only these paths<Input value={include} onChange={(e) => setInclude(e.target.value)} placeholder="models/**, macros/**" className="h-9 font-mono text-xs" />
+                  <span className="block font-normal text-muted-foreground">Globs, comma separated. Empty means every file.</span></label>
+                <label className="space-y-1 font-medium">Skip these paths<Input value={exclude} onChange={(e) => setExclude(e.target.value)} placeholder="models/legacy/**" className="h-9 font-mono text-xs" />
+                  <span className="block font-normal text-muted-foreground">Credential files, target/ and dbt_packages/ are always skipped.</span></label>
+              </div>
+              <label className="flex items-center gap-2"><input type="checkbox" checked={r.enabled} disabled={pending}
+                     onChange={() => act(() => updateRepo(r.repo_id, { enabled: !r.enabled }), r.enabled ? `${r.name} disabled: no longer used in prompts or offered to dbt` : `${r.name} enabled`)} />
+                Used in AI prompts and offered to the dbt workspace</label>
+              <div className="flex items-center gap-2 border-t pt-3">
+                <span className="text-muted-foreground">Changing the paths re-indexes; changing domains does not.</span>
+                <Button size="sm" className="ml-auto" disabled={pending}
+                        onClick={() => start(async () => {
+                          const res = await updateRepo(r.repo_id, { domain_ids: doms, include_globs: split(include), exclude_globs: split(exclude) });
+                          onMsg(res.ok ? { tone: "ok", text: res.data.reindexing ? "Saved. The paths changed, so the index is being rebuilt." : "Saved." }
+                                       : { tone: toneOf(res.error), text: res.error });
+                          if (res.ok) router.refresh();
+                        })}>{pending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}Save</Button>
+              </div>
             </div>
-          ) : <p className="text-muted-foreground">No refreshes yet.</p>}
+          )}
+          {current === "schedule" && (
+            <div className="space-y-3 text-xs">
+              <p className="text-muted-foreground">Refreshes run as a Snowflake task; only files that changed since the last refresh are read, and a run already in progress is never doubled.</p>
+              <div className="flex flex-wrap gap-1.5">
+                {PRESETS.map((p) => <button key={p.cron} type="button" onClick={() => setCron(p.cron)}
+                                            className={cn("rounded-full border px-2.5 py-1", cron === p.cron ? "border-primary bg-primary/10 text-primary" : "bg-card hover:border-primary/40")}>{p.label}</button>)}
+              </div>
+              <label className="block space-y-1 font-medium">Cron (five fields and a time zone)
+                <Input value={cron} onChange={(e) => setCron(e.target.value)} className="h-9 w-72 font-mono text-xs" /></label>
+              <div className="flex items-center gap-2">
+                <Button size="sm" disabled={pending} onClick={() => act(() => scheduleRepo(r.repo_id, cron), `Scheduled ${r.name}: ${cron}`)}><Check className="h-3.5 w-3.5" />Save schedule</Button>
+                {r.schedule_cron && <Button size="sm" variant="ghost" disabled={pending} onClick={() => act(() => scheduleRepo(r.repo_id, null), "Schedule removed")}>Remove schedule</Button>}
+                <span className="ml-auto text-muted-foreground">Now: {r.schedule_cron ?? "on demand only"}</span>
+              </div>
+            </div>
+          )}
+          {current === "dbt" && <DbtPanel repo={r} pending={pending} onSave={(body) => act(() => updateRepo(r.repo_id, body), "dbt settings saved; runs use them from now on.")} />}
+          {current === "credentials" && <CredentialsPanel repo={r} pending={pending} onSave={(body, ok) => act(() => setCredentials(r.repo_id, body), ok)} />}
+          {current === "history" && (
+            <div className="text-xs">
+              {!runs ? <p className="flex items-center gap-2 text-muted-foreground"><Loader2 className="h-3.5 w-3.5 animate-spin" />Loading…</p> : runs.length ? (
+                <ol className="space-y-2">
+                  {runs.map((x) => {
+                    const ok = x.status === "SUCCEEDED";
+                    return (
+                      <li key={x.index_run_id} className="flex gap-3 rounded-lg border px-3 py-2">
+                        {ok ? <CircleCheck className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600" /> : x.status === "RUNNING" ? <Loader2 className="mt-0.5 h-4 w-4 shrink-0 animate-spin text-indigo-600" />
+                          : x.status === "CANCELLED" ? <CircleDashed className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" /> : <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0 text-rose-600" />}
+                        <div className="min-w-0 flex-1">
+                          <p className="font-medium">{x.status.toLowerCase()} · {ago(x.started_at)}<span className="font-normal text-muted-foreground"> by {x.triggered_by === "SYSTEM" ? "the schedule" : x.triggered_by}</span></p>
+                          <p className="text-muted-foreground">{x.files_changed ?? 0} changed{x.files_removed ? `, ${x.files_removed} removed` : ""} · {x.chunks ?? 0} chunks
+                            {x.commit_sha ? <> · <span className="font-mono">{x.commit_sha.slice(0, 8)}</span></> : ""}{x.duration_ms ? ` · ${Math.round(x.duration_ms / 1000)} s` : ""}</p>
+                          {x.error && <p className="mt-0.5 break-words text-destructive">{x.error.slice(0, 300)}</p>}
+                        </div>
+                      </li>
+                    );
+                  })}
+                </ol>
+              ) : <p className="text-muted-foreground">No refreshes yet.</p>}
+            </div>
+          )}
+          {current === "disconnect" && <DisconnectPanel repo={r} pending={pending} onCancel={() => onTab("indexing")}
+                                                         onConfirm={(drop) => start(async () => {
+                                                           const res = await removeRepo(r.repo_id, drop);
+                                                           onMsg(res.ok ? { tone: "ok", text: `${r.name} disconnected${res.data.dropped.length ? `; dropped ${res.data.dropped.join(", ")}` : ""}${res.data.kept.length ? `; kept ${res.data.kept.join(", ")}` : ""}.` }
+                                                                        : { tone: toneOf(res.error), text: res.error });
+                                                           if (res.ok) { onClose(); router.refresh(); }
+                                                         })} />}
         </div>
-      )}
-    </article>
+      </aside>
+    </div>
+  );
+}
+
+function JiraTab() {
+  const steps = [
+    { title: "A Jira Cloud site", detail: "The site the QA team works in, for example yourteam.atlassian.net." },
+    { title: "An OAuth 2.0 (3LO) app", detail: "Registered once by a site admin at developer.atlassian.com with the scopes read:jira-work, write:jira-work, read:jira-user and offline_access." },
+    { title: "Each engineer signs in", detail: "Engineers connect their own Jira account, so issues, comments and status changes are made as them and Jira's own permissions apply." },
+  ];
+  return (
+    <section className="surface overflow-hidden">
+      <header className="flex items-start gap-3 border-b px-5 py-4">
+        <span className="grid h-10 w-10 place-items-center rounded-xl bg-sky-50 text-sky-600 ring-1 ring-inset ring-sky-100"><Unplug className="h-5 w-5" /></span>
+        <div><h3 className="text-base font-semibold">Jira</h3>
+          <p className="text-xs text-muted-foreground">QA engineers read the issues assigned to them, reproduce a reported bug with QA tests against the data, and post the
+            results back to the same issue, without leaving the platform.</p></div>
+      </header>
+      <ol className="space-y-3 px-5 py-4">
+        {steps.map((s, i) => (
+          <li key={s.title} className="flex gap-3">
+            <span className="grid h-6 w-6 shrink-0 place-items-center rounded-full bg-muted text-xs font-semibold">{i + 1}</span>
+            <div><p className="text-sm font-medium">{s.title}</p><p className="text-xs text-muted-foreground">{s.detail}</p></div>
+          </li>
+        ))}
+      </ol>
+      <p className="border-t bg-muted/30 px-5 py-3 text-xs text-muted-foreground">Not connected yet. Connecting a site is part of the next release.</p>
+    </section>
   );
 }
 
@@ -289,7 +400,7 @@ function DbtPanel({ repo, pending, onSave }: {
   return (
     <div className="space-y-3 border-t bg-muted/20 px-4 py-3 text-xs">
       <p className="text-muted-foreground">How the dbt workspace of every run in {repo.domain_ids.length ? "these domains" : "every domain"} uses this repository:
-        new branches are cut from <span className="font-mono">{repo.branch}</span> (switch it with the branch button above), generated models are written into the
+        new branches are cut from <span className="font-mono">{repo.branch}</span> (change it on the Branch tab), generated models are written into the
         project folder, and the PR goes to {repo.git_url.replace(/^https:\/\//, "")}.</p>
       <label className="flex items-center gap-1.5"><input type="checkbox" checked={use} onChange={() => setUse(!use)} />Offer this repository to the dbt workspace</label>
       <div className={cn("grid gap-3 md:grid-cols-2", !use && "pointer-events-none opacity-50")}>
@@ -316,7 +427,7 @@ function DbtPanel({ repo, pending, onSave }: {
   );
 }
 
-function BranchPicker({ repo, pending, onPick, onClose }: { repo: CodeRepo; pending: boolean; onPick: (b: string) => void; onClose: () => void }) {
+function BranchPicker({ repo, pending, onPick, onClose }: { repo: CodeRepo; pending: boolean; onPick: (b: string) => void; onClose?: () => void }) {
   const [list, setList] = useState<RepoBranch[] | null>(null);
   const [error, setError] = useState("");
   const [q, setQ] = useState("");
@@ -338,7 +449,7 @@ function BranchPicker({ repo, pending, onPick, onClose }: { repo: CodeRepo; pend
           <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Find a branch" className="h-8 pl-8 font-mono text-xs" aria-label="Find a branch" autoFocus />
         </div>
         <Button size="sm" variant="ghost" disabled={loading} onClick={() => load(true)}>{loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}Fetch</Button>
-        <Button size="sm" variant="ghost" onClick={onClose}>Close</Button>
+        {onClose && <Button size="sm" variant="ghost" onClick={onClose}>Close</Button>}
       </div>
       {error && <p className="text-amber-700">{error}</p>}
       {missing && <p className="flex items-center gap-1 text-destructive"><TriangleAlert className="h-3 w-3" />{repo.branch} is no longer on the remote. Pick another branch.</p>}

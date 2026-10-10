@@ -13,7 +13,7 @@ import { DeployButton } from "./deploy-button";
 import { ModelsSection } from "./models-section";
 import { RateCardEditor } from "./rate-card";
 import { RulesSection } from "./rules-section";
-import { IntegrationsSection } from "./integrations-section";
+import { IntegrationsSection, type IntegrationView } from "./integrations-section";
 import type { CodeRepo, PublishingStatus } from "../code/actions";
 import { SkillsSection } from "./skills-section";
 import type { SkillBinding } from "../skills/types";
@@ -24,7 +24,7 @@ const SECTIONS = [
   { id: "overview", label: "Overview", icon: LayoutDashboard, hint: "Session and platform at a glance" },
   { id: "models", label: "AI models", icon: Bot, hint: "Models in this account, the model per stage and the rate card" },
   { id: "access", label: "Access and governance", icon: ShieldCheck, hint: "Users, roles, privileges and approval policies" },
-  { id: "integrations", label: "Integrations", icon: Plug, hint: "Code repositories (configured once, used by dbt and every AI step), dbt publishing to GitHub, and Jira" },
+  { id: "integrations", label: "Integrations", icon: Plug, hint: "Connections to the client's tools, configured once and used by every run" },
   { id: "skills", label: "Skills per stage", icon: Sparkles, hint: "Which skills each pipeline stage loads, and in what order" },
   { id: "rules", label: "Rules", icon: SlidersHorizontal, hint: "Thresholds and hints" },
   { id: "standards", label: "Modeling standards", icon: Ruler, hint: "Naming and conventions" },
@@ -80,8 +80,9 @@ export default async function Admin({ searchParams }: { searchParams?: { section
               ))}
             </div>
           )}
-          <Suspense key={`${section}:${view}`} fallback={<SectionSkeleton />}>
-            <Section id={section} view={view} />
+          <Suspense key={`${section}:${view}:${searchParams?.view ?? ""}`} fallback={<SectionSkeleton />}>
+            <Section id={section} view={view}
+                     integrationView={(["repos", "publishing", "jira"] as const).find((v) => v === searchParams?.view) ?? "repos"} />
           </Suspense>
         </main>
       </div>
@@ -89,7 +90,7 @@ export default async function Admin({ searchParams }: { searchParams?: { section
   );
 }
 
-async function Section({ id, view }: { id: SectionId; view: ModelView }) {
+async function Section({ id, view, integrationView }: { id: SectionId; view: ModelView; integrationView: IntegrationView }) {
   if (id === "overview") return <Overview />;
   if (id === "models") {
     const [models, platform, costs] = await Promise.all([
@@ -126,7 +127,7 @@ async function Section({ id, view }: { id: SectionId; view: ModelView }) {
     ]);
     if (!repos) return unavailable;
     if (!repos.ready) return <p className="text-sm text-muted-foreground">Code repositories need the latest deploy (migration V024).</p>;
-    return <IntegrationsSection repos={repos.repos} publishing={publishing}
+    return <IntegrationsSection repos={repos.repos} publishing={publishing} view={integrationView}
                                 domains={domains.domains.filter((d) => d.active_flag).map((d) => ({ domain_id: d.domain_id, domain_name: d.domain_name }))} />;
   }
   if (id === "skills") {
