@@ -75,6 +75,10 @@ ASK_SCHEMA: Dict[str, Any] = {
                        "properties": {"kind": {"type": "string", "enum": EVIDENCE_KINDS}, "ref": {"type": "string"}}}}},
 }
 
+ASK_FALLBACK_SCHEMA: Dict[str, Any] = {
+    "type": "object", "required": ["answer"], "additionalProperties": False, "properties": {"answer": {"type": "string"}},
+}
+
 POSTMORTEM_SCHEMA: Dict[str, Any] = {
     "type": "object", "required": ["summary", "impact", "cause", "fix", "follow_ups"], "additionalProperties": False,
     "properties": {"summary": {"type": "string"}, "impact": {"type": "string"}, "cause": {"type": "string"},
@@ -433,7 +437,13 @@ def ask(session: Any, incident_id: str, question: str, actor: str = "system", *,
     inputs = {"incident_id": incident_id, "question_chars": len(text)}
     try:
         ctx = build_context(db, incident, mwaa_factory=mwaa_factory, search=search)
-        output, usage, model = _complete(sess, ask_prompt(ctx, text, incident.get("ai")), ASK_SCHEMA, 1500, complete)
+        prompt = ask_prompt(ctx, text, incident.get("ai"))
+        try:
+            output, usage, model = _complete(sess, prompt, ASK_SCHEMA, 1500, complete)
+        except AssertionError:
+            # Cortex now and then returns no structured output for a free-text answer: retry once with the answer alone
+            output, usage, model = _complete(sess, prompt, ASK_FALLBACK_SCHEMA, 1500, complete)
+            output = {"answer": (output or {}).get("answer"), "citations": []}
     except Exception as exc:
         _audit(sess, "ops_ask", inputs, "", exc)
         raise

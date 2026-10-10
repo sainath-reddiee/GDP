@@ -291,6 +291,19 @@ def incident_db(ai=None, extra=None):
     return db
 
 
+def test_ask_falls_back_to_an_answer_only_schema():
+    schemas = []
+
+    def flaky(session, prompt, schema, max_tokens, stage):
+        schemas.append(schema)
+        if schema is dg.ASK_SCHEMA:
+            raise AssertionError("Cortex (claude-x) returned no structured answer")
+        return {"answer": "Retry after the upstream table lands."}, {"prompt_tokens": 10, "completion_tokens": 5}, "claude-x"
+    out = dg.ask(incident_db(), "i-1", "Is it safe to rerun now?", complete=flaky, search=lambda q: [])
+    assert schemas == [dg.ASK_SCHEMA, dg.ASK_FALLBACK_SCHEMA]
+    assert out["answer"].startswith("Retry after") and out["citations"] == []
+
+
 def test_diagnosis_is_cached_while_the_fingerprint_is_unchanged():
     cached = {"category": "data_issue", "generated_at": "2026-10-12T09:00:00+00:00", "fingerprint": "fp1"}
 
