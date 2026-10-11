@@ -42,7 +42,7 @@ export type ColumnProfile = {
   pii_classification: string | null; row_count: number | null; null_count: number | null; null_pct: number | null;
   distinct_count: number | null; cardinality: string | null; cardinality_ratio: number | null; min_value: string | null;
   max_value: string | null; potential_key: boolean; top_values: { value: unknown; count: number }[];
-  histogram: { low?: number; high?: number; count: number; label?: string }[] | null; description: string | null;
+  histogram: { low?: number; high?: number; lower?: number; upper?: number; count: number }[] | null; description: string | null;
 };
 export type ProfilePass = { profile_id: string; run_id: string | null; row_count: number | null; columns: number; profiled_at: string; profiled_by: string | null };
 export type ColumnDetail = {
