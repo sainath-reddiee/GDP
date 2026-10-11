@@ -8,6 +8,7 @@
     "fast": "next build && next start",
     "typecheck": "tsc --noEmit",
     "theme:compat": "node scripts/theme-compat.mjs",
+    "doctor": "node scripts/doctor.mjs",
     "test:e2e": "playwright test"
   },
   "dependencies": {

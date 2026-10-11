@@ -103,7 +103,7 @@ def record(session, key: Sequence[str], document: Dict[str, Any], run_id: Option
 # ---------------------------------------------------------------- hub queries (API side, %s binds)
 
 SORTS = {"recent": "PROFILED_AT DESC", "table": "TABLE_NAME", "nulls": "AVG_NULL_PCT DESC NULLS LAST",
-         "rows": "ROW_COUNT DESC NULLS LAST"}
+         "rows": "ROW_COUNT DESC NULLS LAST", "drift": "NULL_DRIFT DESC NULLS LAST"}
 
 
 def search_sql(domain: Optional[str] = None, table: Optional[str] = None, run_id: Optional[str] = None,
@@ -144,14 +144,17 @@ def search_sql(domain: Optional[str] = None, table: Optional[str] = None, run_id
               FROM GOVERNANCE.DATA_PROFILES
              GROUP BY PROFILE_ID, SOURCE_NAME, DATABASE_NAME, SCHEMA_NAME, TABLE_NAME
         ), L AS (
-            SELECT P.*, COUNT(*) OVER (PARTITION BY TABLE_FQN) AS PASSES
+            SELECT P.*, COUNT(*) OVER (PARTITION BY TABLE_FQN) AS PASSES,
+                   -- change in the average null rate since the previous pass (null with one pass)
+                   ROUND(ABS(AVG_NULL_PCT - LEAD(AVG_NULL_PCT) OVER (PARTITION BY TABLE_FQN ORDER BY PROFILED_AT DESC)), 2)
+                       AS NULL_DRIFT
               FROM P
            QUALIFY ROW_NUMBER() OVER (PARTITION BY TABLE_FQN ORDER BY PROFILED_AT DESC) = 1
         )
         SELECT L.PROFILE_ID, L.SOURCE_NAME, L.DATABASE_NAME, L.SCHEMA_NAME, L.TABLE_NAME, L.TABLE_FQN, L.RUN_ID,
                L.DOMAIN_ID, D.DOMAIN_NAME, L.ROW_COUNT, L.COLUMN_COUNT, L.AVG_NULL_PCT, L.KEY_CANDIDATES,
                L.PII_COLUMNS, L.PROFILED_AT::VARCHAR AS PROFILED_AT, L.PROFILED_BY, L.SEMANTIC_TYPES, L.PASSES,
-               COUNT(*) OVER () AS TOTAL
+               L.NULL_DRIFT, COUNT(*) OVER () AS TOTAL
           FROM L LEFT JOIN KNOWLEDGE.DOMAIN_REGISTRY D ON D.DOMAIN_ID = L.DOMAIN_ID
           {clause}
          ORDER BY {order}

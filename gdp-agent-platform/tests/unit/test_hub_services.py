@@ -88,6 +88,13 @@ def test_profile_search_filters_are_bound_not_inlined():
     assert "cust" not in sql and params.count("%cust%") == 1 and '["DB.S.T"]' in params and "ANA" in params
 
 
+def test_profile_search_sorts_by_null_drift_since_the_previous_pass():
+    sql, _ = cp.search_sql(sort="drift")
+    assert "LEAD(AVG_NULL_PCT) OVER (PARTITION BY TABLE_FQN ORDER BY PROFILED_AT DESC)" in sql
+    assert "ORDER BY NULL_DRIFT DESC NULLS LAST" in sql and "L.NULL_DRIFT" in sql
+    assert "NULL_DRIFT DESC" not in cp.search_sql(sort="bogus")[0]
+
+
 def test_drift_between_passes():
     before = [{"column_name": "A", "data_type": "NUMBER", "null_pct": 0, "distinct_count": 100},
               {"column_name": "B", "data_type": "VARCHAR", "null_pct": 1, "distinct_count": 10}]

@@ -13,7 +13,7 @@ export default async function ModelingHub({ searchParams }: { searchParams: { de
   ]);
   return (
     <div className="space-y-6">
-      <PageHeader eyebrow="Model" title="Modeling Workspace"
+      <PageHeader eyebrow="Asset store" title="Modeling Store"
                   description="Map onto an existing domain, fork one, or create a new domain model. Design entities and relationships on the canvas, target Snowflake or Iceberg types, and publish the domain pack, DDL and dbt models to a feature branch." />
       {ctx && !ctx.deployed && <NotDeployed what="Model design storage (GOVERNANCE.MODEL_DESIGNS)" />}
       {!ctx ? <p className="text-sm text-destructive">The modeling context could not be loaded.</p> : (

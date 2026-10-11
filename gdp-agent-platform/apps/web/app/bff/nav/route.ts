@@ -10,6 +10,10 @@ export type NavCounts = {
   incidents: number;
   /** open cases in the caller's domains; 0 without CASE.WORK or when the cases API is not there */
   cases?: number;
+  /** asset store badges; 0 when the store is not deployed */
+  qa_pending?: number;
+  dq_failing?: number;
+  sttm_pending?: number;
 };
 
 /** Sidebar counters as a plain GET (server actions run one at a time and would queue behind page actions).
@@ -17,7 +21,7 @@ export type NavCounts = {
 export async function GET() {
   try {
     const meCall = api<WhoAmI>("/api/auth/me").catch(() => null);
-    const [metrics, store, me, incidents, cases] = await Promise.all([
+    const [metrics, store, me, incidents, cases, qa, dq, sttm] = await Promise.all([
       api<{ lifecycle: Record<string, number>; needs_review: number }>("/api/metrics/summary").catch(() => null),
       api<{ profiles: ProfileStoreRow[] }>("/api/profiles/store").catch(() => ({ profiles: [] as ProfileStoreRow[] })),
       meCall,
@@ -27,6 +31,9 @@ export async function GET() {
       meCall.then((who) => (who && can(who, "CASE.WORK")
         ? api<{ open: number }>("/api/cases/summary").then((r) => r.open ?? 0, () => 0)
         : 0)),
+      api<{ pending?: number }>("/api/qa-packs/summary").then((r) => r.pending ?? 0, () => 0),
+      api<{ failed?: number }>("/api/dq/summary").then((r) => r.failed ?? 0, () => 0),
+      api<{ total?: number }>("/api/hub/sttm?status=REVIEW&limit=1").then((r) => r.total ?? 0, () => 0),
     ]);
     const s = metrics
       ? { running: metrics.lifecycle.RUNNING ?? 0, review: metrics.needs_review, drafts: metrics.lifecycle.DRAFT ?? 0 }
@@ -38,6 +45,9 @@ export async function GET() {
       approvals: me?.pending_for_me ?? 0,
       incidents,
       cases,
+      qa_pending: qa,
+      dq_failing: dq,
+      sttm_pending: sttm,
     };
     return Response.json(counts, { headers: { "Cache-Control": "private, max-age=30" } });
   } catch {

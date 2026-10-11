@@ -290,9 +290,24 @@ def _snowflake_error(exc: Exception) -> HTTPException:
     return HTTPException(status, message)
 
 
+def _api_build() -> Optional[str]:
+    """The git commit the API was started from (None outside a checkout); /bff/version compares it with the web."""
+    import subprocess
+
+    try:
+        out = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=Path(__file__).resolve().parent,
+                             capture_output=True, text=True, timeout=5)
+        return out.stdout.strip() or None
+    except Exception:
+        return None
+
+
+API_BUILD = _api_build()
+
+
 @app.get("/api/health")
 def health():
-    return {"status": "ok", "database": DATABASE, "auth_mode": AUTH_MODE}
+    return {"status": "ok", "database": DATABASE, "auth_mode": AUTH_MODE, "build": API_BUILD}
 
 
 @app.post("/api/auth/login")

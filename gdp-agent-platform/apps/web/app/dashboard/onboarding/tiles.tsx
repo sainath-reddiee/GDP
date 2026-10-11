@@ -51,7 +51,7 @@ export function OnboardingTiles() {
         <h2 className="mt-4 text-lg font-semibold text-foreground/80">Application onboarding</h2>
         <p className="mt-1 text-sm text-muted-foreground">
           Connect upstream microservices and applications as first-class sources: their owners, data products and contracts,
-          feeding the Source Hub and the quality gates.
+          feeding the Source Store and the quality gates.
         </p>
         <Button className="mt-5 w-fit" variant="outline" disabled>Not available yet</Button>
       </article>

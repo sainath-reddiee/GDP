@@ -17,7 +17,7 @@ export default async function SourceHub({ searchParams }: { searchParams: { db?:
   const active = pipes.pipelines.filter((p) => p.status === "ACTIVE").length;
   return (
     <div className="space-y-6">
-      <PageHeader eyebrow="Ingest" title="Source Hub"
+      <PageHeader eyebrow="Asset store" title="Source Store"
                   description="Onboard Snowflake shares straight into landing, register external systems for the ingestion pipelines, and explore, profile and model any schema."
                   actions={<>
                     <Link href="/dashboard/sources/new?branch=external" className={buttonVariants({ variant: "outline" })}><CloudCog className="h-4 w-4" /> Register external source</Link>

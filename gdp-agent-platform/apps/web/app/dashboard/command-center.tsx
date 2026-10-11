@@ -69,29 +69,35 @@ const STORE_TONE = {
   rose: "from-rose-500 to-pink-500 shadow-rose-500/25",
 } as const;
 
-/** One asset store: headline metrics, an optional meter, and two quick links. */
-export function StoreCard({ title, subtitle, icon: Icon, tone, metrics, meter, links, missing, testId }: {
-  title: string; subtitle: string; icon: LucideIcon; tone: keyof typeof STORE_TONE;
+/** One asset store: what it holds, what needs action, and one task to start. The whole card opens the store (an
+ *  overlay link, so the action button inside stays a separate, valid link). */
+export function StoreCard({ title, subtitle, icon: Icon, tone, href, metrics, meter, alert, action, missing, testId }: {
+  title: string; subtitle: string; icon: LucideIcon; tone: keyof typeof STORE_TONE; href: string;
   metrics: { label: string; value: ReactNode; tone?: string }[];
   meter?: { label: string; value: number | null | undefined; tone?: "auto" | "primary" };
-  links: { label: string; href: string }[]; missing?: boolean; testId?: string;
+  alert?: { text: string; tone: "amber" | "rose" | "violet" } | null;
+  action: { label: string; href: string; icon: LucideIcon };
+  missing?: boolean; testId?: string;
 }) {
+  const ActionIcon = action.icon;
   return (
-    <section data-testid={testId} className="surface group relative flex flex-col overflow-hidden p-5 transition duration-200 hover:-translate-y-px hover:shadow-hover">
+    <section data-testid={testId} className="surface group relative flex flex-col overflow-hidden p-5 transition duration-200 hover:-translate-y-px hover:border-primary/30 hover:shadow-hover">
+      <Link href={href} aria-label={`Open the ${title}`} className="absolute inset-0 z-0 rounded-2xl focus-visible:ring-2 focus-visible:ring-ring/50" />
       <div className={cn("pointer-events-none absolute -right-12 -top-12 h-32 w-32 rounded-full bg-gradient-to-br opacity-[0.08] blur-2xl transition-opacity group-hover:opacity-[0.16]", STORE_TONE[tone])} />
-      <div className="flex items-start gap-3">
+      <div className="pointer-events-none relative flex items-start gap-3">
         <span className={cn("grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-gradient-to-br text-white shadow-lg", STORE_TONE[tone])}>
           <Icon className="h-5 w-5" />
         </span>
-        <div className="min-w-0">
+        <div className="min-w-0 flex-1">
           <h3 className="text-[15px] font-semibold">{title}</h3>
           <p className="text-xs text-muted-foreground">{subtitle}</p>
         </div>
+        <ArrowRight className="h-4 w-4 text-muted-foreground/0 transition group-hover:translate-x-0.5 group-hover:text-muted-foreground" />
       </div>
       {missing ? (
-        <p className="mt-5 text-sm text-muted-foreground">Not deployed in this environment yet.</p>
+        <p className="pointer-events-none relative mt-5 text-sm text-muted-foreground">Not deployed in this environment yet.</p>
       ) : (
-        <div className="mt-5 grid grid-cols-3 gap-3">
+        <div className="pointer-events-none relative mt-5 grid grid-cols-3 gap-3">
           {metrics.map((m) => (
             <div key={m.label} className="min-w-0">
               <p className={cn("text-2xl font-semibold leading-none tabular-nums", m.tone)}>{m.value}</p>
@@ -101,7 +107,7 @@ export function StoreCard({ title, subtitle, icon: Icon, tone, metrics, meter, l
         </div>
       )}
       {meter && !missing && (
-        <div className="mt-4 space-y-1.5">
+        <div className="pointer-events-none relative mt-4 space-y-1.5">
           <div className="flex justify-between text-xs text-muted-foreground">
             <span>{meter.label}</span><span className="tabular-nums">{meter.value == null ? "-" : `${Math.round(meter.value)}%`}</span>
           </div>
@@ -109,14 +115,20 @@ export function StoreCard({ title, subtitle, icon: Icon, tone, metrics, meter, l
         </div>
       )}
       <div className="min-h-4 flex-1" />
-      <div className="mt-4 flex gap-2 border-t border-border/60 pt-3">
-        {links.map((l, i) => (
-          <Link key={l.href} href={l.href}
-                className={cn("inline-flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-xs font-medium transition",
-                  i === 0 ? "bg-primary/10 text-primary hover:bg-primary/15" : "text-muted-foreground hover:bg-muted hover:text-foreground")}>
-            {l.label}{i === 0 && <ArrowRight className="h-3 w-3" />}
-          </Link>
-        ))}
+      <div className="relative mt-4 flex items-center gap-3 border-t border-border/60 pt-3">
+        {alert && !missing ? (
+          <span className={cn("pointer-events-none flex min-w-0 items-center gap-1.5 text-xs font-medium",
+            alert.tone === "rose" ? "text-rose-600" : alert.tone === "violet" ? "text-violet-600" : "text-amber-700")}>
+            <span className={cn("h-1.5 w-1.5 shrink-0 rounded-full", alert.tone === "rose" ? "bg-rose-500" : alert.tone === "violet" ? "bg-violet-500" : "bg-amber-500")} />
+            <span className="truncate">{alert.text}</span>
+          </span>
+        ) : (
+          <span className="pointer-events-none text-xs text-muted-foreground">{missing ? "" : "Nothing needs action"}</span>
+        )}
+        <Link href={action.href} data-testid={testId ? `${testId}-action` : undefined}
+              className="relative z-10 ml-auto inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-primary/10 px-2.5 py-1.5 text-xs font-medium text-primary transition hover:bg-primary/15">
+          <ActionIcon className="h-3.5 w-3.5" /> {action.label}
+        </Link>
       </div>
     </section>
   );

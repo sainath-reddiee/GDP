@@ -10,53 +10,57 @@ export type NavLink = { href: string; label: string; icon: typeof Database; priv
 /** Incidents shipped with PR O2. */
 const SHOW_INCIDENTS = true;
 
-// grouped by the data engineering lifecycle; a group with no visible links is hidden
+// Overview, then the six asset stores in one place, then the work around them; a group with no visible links is hidden
 export const NAV_GROUPS: { label: string; links: NavLink[] }[] = [
   {
     label: "Overview",
-    links: [{ href: "/dashboard", label: "Dashboard", icon: LayoutDashboard, exact: true }],
+    links: [{ href: "/dashboard", label: "Command Center", icon: LayoutDashboard, exact: true }],
   },
   {
-    label: "Ingest",
+    label: "Asset stores",
     links: [
       {
-        href: "/dashboard/sources", label: "Sources", icon: Database,
+        href: "/dashboard/sources", label: "Source Store", icon: Database,
         badge: (c) => c.profiling ? { value: c.profiling, tone: "bg-amber-400 text-amber-950", title: `${c.profiling} profiling now` }
           : c.staged ? { value: c.staged, tone: "bg-white/10 text-white/70", title: `${c.staged} tables staged` } : null,
       },
-      { href: "/dashboard/onboarding", label: "Onboarding", icon: Rocket },
+      { href: "/dashboard/profiling", label: "Profiling Store", icon: BarChart3 },
+      { href: "/dashboard/modeling", label: "Modeling Store", icon: Network },
+      {
+        href: "/dashboard/sttm", label: "STTM Store", icon: GitCompareArrows,
+        badge: (c) => c.sttm_pending ? { value: c.sttm_pending, tone: "bg-amber-400 text-amber-950", title: `${c.sttm_pending} mappings waiting for review` } : null,
+      },
+      {
+        href: "/dashboard/qa-store", label: "QA Store", icon: SquareTerminal,
+        badge: (c) => c.qa_pending ? { value: c.qa_pending, tone: "bg-violet-500 text-white", title: `${c.qa_pending} packs awaiting approval` } : null,
+      },
+      {
+        href: "/dashboard/dq-store", label: "Data Quality Store", icon: ClipboardCheck,
+        badge: (c) => c.dq_failing ? { value: c.dq_failing, tone: "bg-rose-500 text-white", title: `${c.dq_failing} checks failing` } : null,
+      },
     ],
   },
   {
-    label: "Profile and model",
+    label: "Build",
     links: [
-      { href: "/dashboard/profiling", label: "Profiling", icon: BarChart3 },
-      { href: "/dashboard/modeling", label: "Modeling", icon: Network },
-      { href: "/dashboard/sttm", label: "STTM", icon: GitCompareArrows },
       {
         href: "/runs", label: "Runs", icon: ListChecks,
         badge: (c) => c.review ? { value: c.review, tone: "bg-rose-500 text-white", title: `${c.review} waiting on review` }
           : c.running ? { value: c.running, tone: "bg-white/10 text-white/70", title: `${c.running} running` } : null,
       },
+      { href: "/dashboard/onboarding", label: "Onboarding", icon: Rocket },
       { href: "/domains", label: "Domains", icon: Boxes },
       { href: "/code", label: "Code", icon: FolderGit2, privilege: "CODE.VIEW" },
     ],
   },
   {
-    label: "Quality",
+    label: "Monitor",
     links: [
       { href: "/dashboard/quality", label: "Quality center", icon: BadgeCheck },
-      { href: "/dashboard/qa-store", label: "QA Store", icon: SquareTerminal },
-      { href: "/dashboard/dq-store", label: "DQ Store", icon: ClipboardCheck },
       {
-      href: "/qa", label: "QA", icon: FlaskConical, privilege: ["QA.EDIT", "JIRA.READ", "CASE.WORK"],
-      badge: (c) => c.cases ? { value: c.cases, tone: "bg-sky-500 text-white", title: `${c.cases} open cases` } : null,
+        href: "/qa", label: "QA workspace", icon: FlaskConical, privilege: ["QA.EDIT", "JIRA.READ", "CASE.WORK"],
+        badge: (c) => c.cases ? { value: c.cases, tone: "bg-sky-500 text-white", title: `${c.cases} open cases` } : null,
       },
-    ],
-  },
-  {
-    label: "Operate",
-    links: [
       { href: "/ops", label: "Pipelines", icon: Activity, privilege: "OPS.VIEW" },
       ...(SHOW_INCIDENTS ? [{
         href: "/incidents", label: "Incidents", icon: Siren, privilege: "OPS.VIEW",
@@ -83,7 +87,6 @@ export const NAV_GROUPS: { label: string; links: NavLink[] }[] = [
     ],
   },
 ];
-
 
 /** Every link the caller may open: a list of privileges means any of them, no list means governance is off. */
 export function allowedBy(privileges?: string[] | null) {

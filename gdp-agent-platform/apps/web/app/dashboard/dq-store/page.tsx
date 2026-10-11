@@ -8,7 +8,7 @@ import { Kpi } from "@/components/hub/kpi";
 import { NotDeployed } from "@/components/hub/states";
 import { DqStoreView } from "./dq-store-view";
 
-type Params = { domain?: string; table?: string; status?: string };
+type Params = { domain?: string; table?: string; status?: string; add?: string };
 
 export default async function DqStorePage({ searchParams }: { searchParams: Params }) {
   const domain = scopedDomain(searchParams.domain);
@@ -33,7 +33,7 @@ export default async function DqStorePage({ searchParams }: { searchParams: Para
       </div>
       {catalog && !catalog.deployed && <NotDeployed what="The Data Quality Store (GOVERNANCE.DQ_CHECKS_CATALOG, V037)" />}
       {!catalog ? <p className="text-sm text-destructive">The Data Quality Store could not be loaded{domain ? ` for domain ${domain}` : ""}.</p> : (
-        <DqStoreView tables={catalog.tables} initialTable={searchParams.table ?? ""} status={searchParams.status ?? ""}
+        <DqStoreView tables={catalog.tables} initialTable={searchParams.table ?? ""} status={searchParams.status ?? ""} openAdd={searchParams.add === "1"}
                      canEdit={canAct(me, "SODA.EDIT")} canRun={canAct(me, "PROFILE.RUN")} />
       )}
     </div>
