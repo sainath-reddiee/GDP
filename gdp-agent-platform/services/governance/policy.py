@@ -265,6 +265,14 @@ RULES: List[Tuple[str, str, Any, str]] = [
     ("POST", r"/api/hub/profiles/bookmarks", None, ""),
     ("DELETE", r"/api/hub/profiles/bookmarks", None, ""),
     ("POST", r"/api/hub/profiles/reprofile", "PROFILE.RUN", ""),
+    # Profiling Store governance (V041): schedules are operational (PROFILE.RUN); a column annotation is proposed with
+    # PROFILE.RUN and decided by a data steward (KNOWLEDGE.EDIT, four eyes), which is the approval (never queued)
+    ("PUT", r"/api/hub/profiles/schedules", "PROFILE.RUN", "Schedule profiling"),
+    ("DELETE", r"/api/hub/profiles/schedules", "PROFILE.RUN", "Remove a profiling schedule"),
+    ("POST", r"/api/hub/profiles/schedules/[^/]+/run", "PROFILE.RUN", ""),
+    ("POST", r"/api/hub/profiles/annotations", "PROFILE.RUN", ""),
+    ("POST", r"/api/hub/profiles/annotations/[^/]+/withdraw", "PROFILE.RUN", ""),
+    ("POST", r"/api/hub/profiles/annotations/[^/]+/(approve|reject)", "KNOWLEDGE.EDIT", ""),
     ("POST", r"/api/hub/profiles/expectations", None, ""),
     ("POST", r"/api/hub/sttm/diff", None, ""),
     ("POST", r"/api/hub/sttm/[^/]+/edit", "STTM.EDIT", "Edit a mapping in the STTM catalog"),
@@ -373,13 +381,15 @@ STORE_APPROVERS = {"STTM.EDIT": "STTM_APPROVER", "SODA.EDIT": "DQ_APPROVER", "DB
                    "MAPPING.DECIDE": "MODEL_APPROVER", "MODEL.EDIT": "MODEL_APPROVER"}
 
 
-# Routes whose own workflow is the approval (Model Workbench and Data Quality suite drafts, reviews and decisions):
+# Routes whose own workflow is the approval (Model Workbench and Data Quality suite drafts, reviews and decisions,
+# Profiling Store annotations):
 # never turned into a change request. A caller who would otherwise be queued is refused, so an approval never waits
 # for its own approval.
 NO_QUEUE_ROUTES = [(m, re.compile(p)) for m, p in [
     ("POST", r"^/api/hub/domain-models(/.*)?$"), ("PUT", r"^/api/hub/domain-models/.+$"),
     ("POST", r"^/api/dq/catalog$"), ("POST", r"^/api/dq/catalog/seed$"), ("POST", r"^/api/dq/catalog/[^/]+/status$"),
     ("POST", r"^/api/dq/suites/.+$"), ("PUT", r"^/api/dq/suites/.+$"),
+    ("POST", r"^/api/hub/profiles/annotations(/.*)?$"),
 ]]
 
 

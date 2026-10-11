@@ -102,14 +102,22 @@ def _record(session, model_id: str, base: Optional[int], run_id: str, design_ver
 
 
 def list_changes(session, model_id: str) -> List[Dict[str, Any]]:
+    """Proposals to the model: from runs, and from approved Profiling Store annotations (SOURCE 'ANNOTATION', V041)."""
+    sql = f"""SELECT C.CHANGE_ID, C.BASE_VERSION, C.RUN_ID, C.RUN_DESIGN_VERSION, C.TARGET_ENTITY, C.DIFF,
+                     C.STATUS, C.MERGED_INTO_VERSION, C.NOTE, C.CREATED_BY, C.CREATED_AT, C.DECIDED_BY,
+                     R.RUN_NAME, R.CURRENT_STATE{{extra}}
+                FROM {CHANGES} C LEFT JOIN CORE.WORKFLOW_RUN R ON R.RUN_ID = C.RUN_ID
+               WHERE C.MODEL_ID = ? ORDER BY C.CREATED_AT DESC LIMIT 200"""
+    try:
+        found = rows(session, sql.format(extra=", C.SOURCE, C.ANNOTATION_ID, C.PATCH"), [model_id])
+    except Exception:  # before V041
+        found = rows(session, sql.format(extra=""), [model_id])
     out = []
-    for r in rows(session, f"""SELECT C.CHANGE_ID, C.BASE_VERSION, C.RUN_ID, C.RUN_DESIGN_VERSION, C.TARGET_ENTITY, C.DIFF,
-                                      C.STATUS, C.MERGED_INTO_VERSION, C.NOTE, C.CREATED_BY, C.CREATED_AT, C.DECIDED_BY,
-                                      R.RUN_NAME, R.CURRENT_STATE
-                                 FROM {CHANGES} C LEFT JOIN CORE.WORKFLOW_RUN R ON R.RUN_ID = C.RUN_ID
-                                WHERE C.MODEL_ID = ? ORDER BY C.CREATED_AT DESC LIMIT 200""", [model_id]):
+    for r in found:
         c = {str(k).lower(): v for k, v in r.items()}
         c["diff"] = variant(c.get("diff")) or {}
+        c["patch"] = variant(c.get("patch"))
+        c["source"] = c.get("source") or "RUN"
         c["created_at"] = str(c["created_at"])[:19] if c.get("created_at") else None
         out.append(c)
     return out
@@ -117,8 +125,12 @@ def list_changes(session, model_id: str) -> List[Dict[str, Any]]:
 
 def merge_change(session, model_id: str, change_id: str, user: str) -> Dict[str, Any]:
     """Merge a proposal into the model's open draft (opening one when there is none)."""
-    found = rows(session, f"SELECT STATUS, PROPOSED_ENTITIES FROM {CHANGES} WHERE CHANGE_ID = ? AND MODEL_ID = ?",
-                 [change_id, model_id])
+    try:
+        found = rows(session, f"SELECT STATUS, PROPOSED_ENTITIES, PATCH FROM {CHANGES} WHERE CHANGE_ID = ? AND MODEL_ID = ?",
+                     [change_id, model_id])
+    except Exception:  # before V041
+        found = rows(session, f"SELECT STATUS, PROPOSED_ENTITIES FROM {CHANGES} WHERE CHANGE_ID = ? AND MODEL_ID = ?",
+                     [change_id, model_id])
     assert found, "proposal not found"
     assert found[0]["STATUS"] in ("PROPOSED", "STALE"), f"the proposal is {str(found[0]['STATUS']).lower()}"
     detail = domain_model.get_model(session, model_id)
@@ -126,12 +138,18 @@ def merge_change(session, model_id: str, change_id: str, user: str) -> Dict[str,
     if current and current["status"] == "IN_REVIEW":
         raise AssertionError(f"version {current['version']} is in review; withdraw it or decide it before merging")
     if not current:
-        domain_model.open_draft(session, model_id, user, note="Run proposals")
+        domain_model.open_draft(session, model_id, user, note="Merged proposals")
         detail = domain_model.get_model(session, model_id)
         current = detail["open"]
     draft = domain_model._spec(session, model_id, current["version"])
-    entities = variant(found[0]["PROPOSED_ENTITIES"]) or []
-    merged = importers.merge(draft, {"design": {"entities": entities}}, model_id)
+    patch = variant(found[0].get("PATCH"))
+    if patch:  # an annotation sets a few fields of one column; the rest of the draft is left as it is
+        from services.catalog.profile_ops import apply_patch
+
+        merged = apply_patch(draft, patch["entity"], patch["column"], patch.get("set") or {})
+    else:
+        entities = variant(found[0]["PROPOSED_ENTITIES"]) or []
+        merged = importers.merge(draft, {"design": {"entities": entities}}, model_id)
     saved = domain_model.save_draft(session, model_id, json.dumps({"etag": current["etag"], "spec": merged}, default=str), user)
     session.sql(f"""UPDATE {CHANGES} SET STATUS = 'MERGED', MERGED_INTO_VERSION = ?, DECIDED_BY = ?,
                            DECIDED_AT = CURRENT_TIMESTAMP() WHERE CHANGE_ID = ?""",

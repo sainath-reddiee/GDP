@@ -41,7 +41,7 @@ type Tab = "diagram" | "entities" | "relationships" | "standards" | "versions" |
 const TABS: [Tab, string, typeof Network][] = [
   ["diagram", "Diagram", Network], ["entities", "Entities", Layers3], ["relationships", "Relationships", GitBranch],
   ["standards", "Standards", Ruler], ["versions", "Versions", History], ["review", "Review", MessageSquare],
-  ["publish", "Publish", GitPullRequest], ["changes", "From runs", Workflow],
+  ["publish", "Publish", GitPullRequest], ["changes", "Proposals", Workflow],
 ];
 
 function ImportModal({ modelId, spec, onClose, onLoaded }: { modelId: string; spec: DmSpec; onClose: () => void; onLoaded: (s: DmSpec, note: string) => void }) {

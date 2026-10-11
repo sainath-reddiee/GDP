@@ -20,6 +20,7 @@ from app.db import Db
 from app.main import (CatalogProfileRequest, _json, _snowflake_error, _store_rows, _table_ident, _tags_for,
                       catalog_profile_tables, catalog_table_profile, current_db)
 from app.source_invoke import invoke_source
+from services.catalog import profile_ops
 from services.catalog import profiles as cat_profiles
 from services.catalog import sttm as cat_sttm
 
@@ -132,8 +133,11 @@ COLUMN_SELECT = """SELECT COLUMN_NAME, ORDINAL, DATA_TYPE, FAMILY, SEMANTIC_TYPE
 
 
 @router.get("/api/hub/profiles/columns")
-def profile_columns(fqn: str, profile_id: Optional[str] = None, db: Db = Depends(current_db)):
-    """Columns of one pass (the newest by default), the table's pass history and drift against the previous pass."""
+def profile_columns(fqn: str, profile_id: Optional[str] = None, compare_to: Optional[str] = None,
+                    db: Db = Depends(current_db)):
+    """Columns of one pass (the newest by default), the table's pass history, drift against the previous pass and the
+    column annotations (approved ones override the profiler's guess). With `compare_to` (another pass), the two passes
+    side by side."""
     database, schema, table = _fqn(fqn)
     try:
         passes = db.query("""SELECT PROFILE_ID, MAX(RUN_ID) AS RUN_ID, MAX(ROW_COUNT) AS ROW_COUNT, COUNT(*) AS COLUMNS,
@@ -157,8 +161,176 @@ def profile_columns(fqn: str, profile_id: Optional[str] = None, db: Db = Depends
     if position + 1 < len(ids):
         previous = db.query(COLUMN_SELECT, (ids[position + 1],))
         drift = cat_profiles.drift_between(previous, columns)
+    comparison = None
+    if compare_to and compare_to in ids and compare_to != current:
+        other = db.query(COLUMN_SELECT, (compare_to,))
+        older_first = ids.index(compare_to) > position  # passes are newest first
+        a, b = (other, columns) if older_first else (columns, other)
+        comparison = {"a": compare_to if older_first else current, "b": current if older_first else compare_to,
+                      **profile_ops.compare(a, b)}
+    try:
+        notes = invoke_source(db, profile_ops.effective, fqn)
+    except Exception:
+        notes = {"approved": {}, "pending": {}}
     return {"fqn": fqn.upper(), "profile_id": current, "passes": passes, "columns": columns, "drift": drift,
-            "catalog": True}
+            "comparison": comparison, "annotations": notes, "catalog": True}
+
+
+def _ops(db: Db, fn, *args):
+    try:
+        return invoke_source(db, fn, *args)
+    except AssertionError as exc:
+        message = str(exc) or "request rejected"
+        raise HTTPException(404 if "not found" in message.lower() else 400, message) from exc
+    except Exception as exc:
+        raise _snowflake_error(exc) from exc
+
+
+# ---------------------------------------------------------------- profiling schedules (V041)
+
+
+@router.get("/api/hub/profiles/schedules")
+def profile_schedules(db: Db = Depends(current_db)):
+    try:
+        found = db.query("""SELECT SCHEDULE_ID, SOURCE_SYSTEM_ID, DATABASE_NAME, SCHEMA_NAME, TABLES, CRON, FORCE_REFRESH,
+                                   TASK_NAME, ENABLED, LAST_RUN_AT::VARCHAR AS LAST_RUN_AT, LAST_STATUS, LAST_RESULT,
+                                   CREATED_BY, CREATED_AT::VARCHAR AS CREATED_AT
+                              FROM GOVERNANCE.PROFILE_SCHEDULE ORDER BY DATABASE_NAME, SCHEMA_NAME, CREATED_AT""")
+    except Exception:
+        return {"schedules": [], "deployed": False}
+    for r in found:
+        r["tables"] = _json(r.get("tables")) or []
+        r["last_result"] = _json(r.get("last_result")) or None
+    return {"schedules": found, "deployed": True}
+
+
+class ScheduleIn(BaseModel):
+    schedule_id: Optional[str] = Field(default=None, max_length=36)
+    database: str = Field(min_length=1, max_length=255)
+    schema_name: str = Field(min_length=1, max_length=255, alias="schema")
+    tables: list[str] = Field(default_factory=list, max_length=500)
+    cron: str = Field(min_length=9, max_length=64)
+    force_refresh: bool = False
+
+
+@router.put("/api/hub/profiles/schedules")
+def set_profile_schedule(body: ScheduleIn, db: Db = Depends(current_db)):
+    """Create or change a profiling schedule: a Snowflake task that profiles the schema's tables (all, or the list)
+    on the cron and records the outcome and drift."""
+    import uuid as _uuid
+
+    from app.db import DATABASE, WAREHOUSE
+    from app.main import _ensure_source, _ident
+
+    schedule_id = body.schedule_id or str(_uuid.uuid4())
+    try:
+        task, statements = profile_ops.schedule_sql(DATABASE, schedule_id, body.cron, WAREHOUSE)
+    except (AssertionError, ValueError) as exc:
+        raise HTTPException(400, str(exc) or "invalid schedule") from exc
+    src = _ensure_source(db, _ident(body.database, "database"), _ident(body.schema_name, "schema"))
+    tables = sorted({t.strip() for t in body.tables if t.strip()})
+    try:
+        db.execute("""MERGE INTO GOVERNANCE.PROFILE_SCHEDULE T
+                        USING (SELECT %s AS SCHEDULE_ID, %s AS SOURCE_SYSTEM_ID, %s AS DATABASE_NAME, %s AS SCHEMA_NAME,
+                                      PARSE_JSON(%s)::ARRAY AS TABLES, %s AS CRON, %s AS FORCE_REFRESH, %s AS TASK_NAME) S
+                           ON T.SCHEDULE_ID = S.SCHEDULE_ID
+                         WHEN MATCHED THEN UPDATE SET SOURCE_SYSTEM_ID = S.SOURCE_SYSTEM_ID, DATABASE_NAME = S.DATABASE_NAME,
+                              SCHEMA_NAME = S.SCHEMA_NAME, TABLES = S.TABLES, CRON = S.CRON, FORCE_REFRESH = S.FORCE_REFRESH,
+                              TASK_NAME = S.TASK_NAME, ENABLED = TRUE, UPDATED_AT = CURRENT_TIMESTAMP()
+                         WHEN NOT MATCHED THEN INSERT (SCHEDULE_ID, SOURCE_SYSTEM_ID, DATABASE_NAME, SCHEMA_NAME, TABLES, CRON,
+                              FORCE_REFRESH, TASK_NAME)
+                              VALUES (S.SCHEDULE_ID, S.SOURCE_SYSTEM_ID, S.DATABASE_NAME, S.SCHEMA_NAME, S.TABLES, S.CRON,
+                                      S.FORCE_REFRESH, S.TASK_NAME)""",
+                   (schedule_id, src["source_system_id"], body.database.strip('"'), body.schema_name.strip('"'),
+                    json.dumps(tables), body.cron.strip(), body.force_refresh, task))
+        for statement in statements:
+            db.execute(statement)
+    except Exception as exc:
+        raise _snowflake_error(exc) from exc
+    return {"schedule_id": schedule_id, "task": task, "cron": body.cron.strip(), "tables": tables}
+
+
+def _schedule_task(db: Db, schedule_id: str) -> str:
+    from app.db import DATABASE
+
+    found = db.query("SELECT TASK_NAME FROM GOVERNANCE.PROFILE_SCHEDULE WHERE SCHEDULE_ID = %s", (schedule_id,))
+    if not found:
+        raise HTTPException(404, "schedule not found")
+    task = found[0]["task_name"] or ""
+    if not task.startswith(f"{DATABASE}.PROFILE.PROF_"):
+        raise HTTPException(409, "the stored task name is not a Profiling Store task")
+    return task
+
+
+@router.delete("/api/hub/profiles/schedules")
+def delete_profile_schedule(id: str, db: Db = Depends(current_db)):  # noqa: A002
+    task = _schedule_task(db, id)
+    try:
+        db.execute(f"DROP TASK IF EXISTS {task}")
+        db.execute("DELETE FROM GOVERNANCE.PROFILE_SCHEDULE WHERE SCHEDULE_ID = %s", (id,))
+    except Exception as exc:
+        raise _snowflake_error(exc) from exc
+    return {"schedule_id": id, "deleted": True}
+
+
+@router.post("/api/hub/profiles/schedules/{schedule_id}/run")
+def run_profile_schedule(schedule_id: str, db: Db = Depends(current_db)):
+    """Run a schedule now (the same procedure its task calls)."""
+    _schedule_task(db, schedule_id)
+    try:
+        return db.call("CALL PROFILE.RUN_SCHEDULED_PROFILE(%s)", (schedule_id,)) or {}
+    except Exception as exc:
+        raise _snowflake_error(exc) from exc
+
+
+# ---------------------------------------------------------------- column annotations (V041)
+
+
+@router.get("/api/hub/profiles/annotations")
+def annotations(table: Optional[str] = None, status: Optional[str] = None, db: Db = Depends(current_db)):
+    try:
+        return {"annotations": invoke_source(db, profile_ops.list_annotations, table, status), "deployed": True}
+    except AssertionError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except Exception:
+        return {"annotations": [], "deployed": False}
+
+
+class AnnotationIn(BaseModel):
+    table: str = Field(min_length=5, max_length=800)
+    column: str = Field(min_length=1, max_length=256)
+    description: Optional[str] = Field(default=None, max_length=4000)
+    business_definition: Optional[str] = Field(default=None, max_length=4000)
+    pii_classification: Optional[str] = Field(default=None, max_length=64)
+    semantic_type: Optional[str] = Field(default=None, max_length=64)
+    accepted_values: Optional[list[str]] = Field(default=None, max_length=200)
+    note: Optional[str] = Field(default=None, max_length=2000)
+
+
+@router.post("/api/hub/profiles/annotations")
+def propose_annotation(body: AnnotationIn, db: Db = Depends(current_db)):
+    return _ops(db, profile_ops.propose, body.model_dump_json(), str(db.user or "").upper())
+
+
+class DecisionIn(BaseModel):
+    note: Optional[str] = Field(default=None, max_length=2000)
+
+
+@router.post("/api/hub/profiles/annotations/{annotation_id}/approve")
+def approve_annotation(annotation_id: str, body: DecisionIn, db: Db = Depends(current_db)):
+    """Four eyes. The annotation overrides the profiler's guess, and is proposed to the table's domain model when the
+    table is one of its entities."""
+    return _ops(db, profile_ops.approve, annotation_id, str(db.user or "").upper(), body.note or "")
+
+
+@router.post("/api/hub/profiles/annotations/{annotation_id}/reject")
+def reject_annotation(annotation_id: str, body: DecisionIn, db: Db = Depends(current_db)):
+    return _ops(db, profile_ops.reject, annotation_id, str(db.user or "").upper(), body.note or "")
+
+
+@router.post("/api/hub/profiles/annotations/{annotation_id}/withdraw")
+def withdraw_annotation(annotation_id: str, db: Db = Depends(current_db)):
+    return _ops(db, profile_ops.withdraw, annotation_id, str(db.user or "").upper())
 
 
 class Bookmark(BaseModel):

@@ -99,7 +99,8 @@ export function PublishPanel({ modelId, versions, canPublish }: { modelId: strin
   );
 }
 
-/** Proposals from runs: what a run's model design would change, to merge into the draft or reject. */
+/** Proposals from runs (what a run's model design would change) and from approved Profiling Store annotations (a
+ *  column's documentation, PII or semantic type), to merge into the draft or reject. */
 export function ChangesPanel({ modelId, canEdit, openStatus }: { modelId: string; canEdit: boolean; openStatus: string | null }) {
   const router = useRouter();
   const toast = useToast();
@@ -120,7 +121,7 @@ export function ChangesPanel({ modelId, canEdit, openStatus }: { modelId: string
     if (r.ok) { toast("ok", "Proposal rejected"); setRejecting(null); setNote(""); await reload(); } else toast("error", explain(r.error).message);
   });
   if (!changes) return <p className="text-sm text-muted-foreground"><Loader2 className="mr-1 inline h-3.5 w-3.5 animate-spin" />Loading proposals...</p>;
-  if (!changes.length) return <p className="surface p-6 text-center text-sm text-muted-foreground">No proposals from runs. A run proposes its model design from its mapping step.</p>;
+  if (!changes.length) return <p className="surface p-6 text-center text-sm text-muted-foreground">No proposals. A run proposes its model design from its mapping step; an approved Profiling Store annotation proposes its column fields.</p>;
   return (
     <div className="space-y-2" data-testid="run-changes">
       {openStatus === "IN_REVIEW" && <p className="text-xs text-amber-700">A version is in review; withdraw or decide it before merging proposals.</p>}
@@ -128,10 +129,12 @@ export function ChangesPanel({ modelId, canEdit, openStatus }: { modelId: string
         <article key={c.change_id} className="surface space-y-2 p-3 text-sm">
           <div className="flex flex-wrap items-center gap-2">
             <Workflow className="h-4 w-4 text-muted-foreground" />
-            {c.run_id ? <Link href={`/runs/${c.run_id}/mapping`} className="font-medium text-primary hover:underline">{c.run_name ?? c.run_id.slice(0, 8)}</Link> : <span>run</span>}
+            {c.source === "ANNOTATION"
+              ? <Link href="/dashboard/profiling?section=annotations" className="font-medium text-primary hover:underline">Profiling annotation{c.patch ? ` of ${c.patch.column}` : ""}</Link>
+              : c.run_id ? <Link href={`/runs/${c.run_id}/mapping`} className="font-medium text-primary hover:underline">{c.run_name ?? c.run_id.slice(0, 8)}</Link> : <span>run</span>}
             <span className="font-mono text-xs">{c.target_entity}</span>
             <StatusPill status={c.status === "PROPOSED" ? "PENDING" : c.status} />
-            <span className="text-xs text-muted-foreground">design v{c.run_design_version} · against model v{c.base_version ?? "none"} · {c.created_at?.slice(0, 16)} by {c.created_by}</span>
+            <span className="text-xs text-muted-foreground">{c.source === "ANNOTATION" ? "approved column annotation" : `design v${c.run_design_version}`} · against model v{c.base_version ?? "none"} · {c.created_at?.slice(0, 16)} by {c.created_by}</span>
             {c.merged_into_version && <span className="text-xs text-muted-foreground">merged into v{c.merged_into_version}</span>}
           </div>
           {c.diff.counts && <p className="text-xs">{c.diff.counts.BREAKING ?? 0} breaking · {c.diff.counts.ADDITIVE ?? 0} additive · {c.diff.counts.NON_FUNCTIONAL ?? 0} documentation</p>}
