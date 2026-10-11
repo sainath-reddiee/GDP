@@ -263,10 +263,16 @@ RULES: List[Tuple[str, str, Any, str]] = [
     ("DELETE", r"/api/cases/[^/]+/links/[^/]+", "CASE.WORK", ""),
     # lifecycle hubs (apps/api/app/hub_*.py, /dashboard/*): reads are open to everyone signed in
     ("POST", r"/api/hub/sources/share/preview", "SOURCE.CONNECT", ""),
+    ("POST", r"/api/hub/sources/share/mount", "SOURCE.CONNECT", "Mount a Snowflake share"),
     ("POST", r"/api/hub/sources/share/onboard", "RUN.CREATE", "Onboard tables from a Snowflake share"),
     ("POST", r"/api/hub/pipelines/validate", None, ""),
     ("POST", r"/api/hub/pipelines", "SOURCE.CONNECT", "Register an external ingestion pipeline"),
     ("PATCH", r"/api/hub/pipelines/[^/]+", "SOURCE.CONNECT", "Change an external ingestion pipeline"),
+    # SnapLogic ingestion control (V044): the wizard's rows carry a secret reference, never a secret, so they can be
+    # queued for approval like any SOURCE.CONNECT change
+    ("POST", r"/api/hub/ingestion-control/validate", None, ""),
+    ("POST", r"/api/hub/ingestion-control", "SOURCE.CONNECT", "Onboard an external source for SnapLogic ingestion"),
+    ("PATCH", r"/api/hub/ingestion-control/\d+/\d+", "SOURCE.CONNECT", "Change a SnapLogic ingestion configuration"),
     ("PUT", r"/api/hub/intake-form", "CONFIG.EDIT", "Change the external source intake questions"),
     ("POST", r"/api/hub/profiles/bookmarks", None, ""),
     ("DELETE", r"/api/hub/profiles/bookmarks", None, ""),

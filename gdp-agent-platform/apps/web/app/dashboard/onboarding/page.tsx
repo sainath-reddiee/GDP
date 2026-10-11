@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { AppWindow, Boxes, Database, FileUp, Globe, PlugZap, Rocket, Snowflake } from "lucide-react";
-import { api } from "@/lib/api";
-import type { IntakeForm, ShareList } from "@/lib/hub-types";
+import { api, whoami } from "@/lib/api";
+import type { CatalogDatabase, LandingDefaults, ShareList } from "@/lib/hub-types";
 import { displayDomain } from "@/lib/catalog-display";
 import { cn } from "@/lib/utils";
 import { PageHeader } from "@/components/page-header";
@@ -30,12 +30,14 @@ export default async function Onboarding({ searchParams }: { searchParams: { typ
   const kind: Kind = searchParams.type === "domain" || searchParams.type === "application" ? searchParams.type : "source";
   const { domains } = await api<{ domains: DomainRow[] }>("/api/domains").catch(() => ({ domains: [] as DomainRow[] }));
   const active = domains.filter((d) => d.active_flag !== false);
-  const [form, shares] = kind === "source"
+  const [shares, databases, landing, me] = kind === "source"
     ? await Promise.all([
-        api<{ form: IntakeForm }>("/api/hub/intake-form").then((r) => r.form).catch(() => null),
         api<ShareList>("/api/hub/sources/shares").catch(() => ({ shares: [], mounted: [] } as ShareList)),
+        api<{ databases: CatalogDatabase[] }>("/api/sources/databases").then((r) => r.databases).catch(() => [] as CatalogDatabase[]),
+        api<LandingDefaults>("/api/landing/targets").catch(() => null),
+        whoami(),
       ])
-    : [null, { shares: [], mounted: [] } as ShareList];
+    : [{ shares: [], mounted: [] } as ShareList, [] as CatalogDatabase[], null, null];
 
   return (
     <div className="space-y-6">
@@ -67,7 +69,8 @@ export default async function Onboarding({ searchParams }: { searchParams: { typ
 
       {kind === "source" && (
         <section className="space-y-5" aria-label="Source onboarding">
-          <OnboardWizard initialBranch={searchParams.branch === "external" ? "external" : "share"} form={form} shares={shares}
+          <OnboardWizard initialBranch={searchParams.branch === "external" ? "external" : "share"} shares={shares}
+                         databases={databases} landing={landing} user={me?.user ?? null}
                          domains={active.map((d) => ({ domain_id: d.domain_id, domain_name: d.domain_name }))} />
           <Panel title="Other ways to connect a source" icon={PlugZap}>
             <div className="grid gap-3 md:grid-cols-3">
