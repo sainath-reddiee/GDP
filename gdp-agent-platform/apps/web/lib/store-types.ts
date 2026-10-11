@@ -129,10 +129,6 @@ export type DqScan = {
 
 export type Overview = {
   domain: { domain_id: string; domain_name: string } | null;
-  ingested: {
-    bytes: number; gb: number; tables: number; rows: number; in_place: number; measured: "landed" | "source" | "mixed";
-    last_day: string | null; daily: { day: string; bytes: number; gb: number; tables: number }[];
-  } | null;
   sources: { total: number; shares: number; databases: number; other: number; external: number; external_active: number } | null;
   profiling: {
     tables: number; columns: number; pii: number; catalog_tables: number; high_cardinality: number; drift: number;
@@ -142,6 +138,15 @@ export type Overview = {
   sttm: { mappings: number; verified: number; pending: number } | null;
   qa: (PackSummary & { run_tests: number; executed_tests: number; run_suites: number; run_pass_rate: number | null }) | null;
   dq: (DqSummary & { run_checks: number; store_checks: number }) | null;
+  /** runs over the last 7 days */
+  delivery: { completed: number; failed: number; started: number; active: number; success_rate: number | null; lead_minutes: number | null;
+              daily: { day: string; completed: number; failed: number }[] } | null;
+  /** waiting on a person */
+  waiting: { runs: number; requests: number; versions: number; total: number; oldest_minutes: number | null } | null;
+  /** landed tables */
+  freshness: { tables: number; fresh: number; stale: number; failed_loads: number; idle_pipelines: number; oldest_hours: number | null } | null;
+  /** checks failing now */
+  failing: { dq_checks: number; qa_tests: number; total: number; tables: number } | null;
 };
 
 // ---------------------------------------------------------------- run assets in the stores (hub_runs_api)

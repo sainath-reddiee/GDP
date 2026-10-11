@@ -22,6 +22,12 @@ module.exports = {
     return [
       { source: "/sources", destination: "/dashboard/sources", permanent: false },
       { source: "/onboarding", destination: "/dashboard/onboarding", permanent: false },
+      // the Store hub and short names for its stores (every store keeps its own route)
+      { source: "/store", destination: "/dashboard/store", permanent: false },
+      { source: "/dashboard/stores", destination: "/dashboard/store", permanent: false },
+      { source: "/dashboard/qa", destination: "/dashboard/qa-store", permanent: false },
+      { source: "/dashboard/data-quality", destination: "/dashboard/dq-store", permanent: false },
+      { source: "/dashboard/mapping", destination: "/dashboard/sttm", permanent: false },
     ];
   },
 };

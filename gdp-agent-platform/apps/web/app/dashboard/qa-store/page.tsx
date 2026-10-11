@@ -1,4 +1,5 @@
 import { CheckCircle2, ClipboardList, Clock3, Gauge, SquareTerminal } from "lucide-react";
+import { StoreNav } from "@/components/hub/store-nav";
 import { api, whoami } from "@/lib/api";
 import { canAct } from "@/lib/types";
 import { scopedDomain } from "@/lib/domain-scope";
@@ -29,6 +30,7 @@ export default async function QaStorePage({ searchParams }: { searchParams: Para
     <div className="space-y-6">
       <PageHeader eyebrow="QA Store" title="Domain test packages"
                   description="Deterministic SQL assertions owned by a domain: reconciliations, orphan keys, duplicate business keys and joins that must resolve. Every change is a versioned draft; the approved version runs in pipelines and feeds the AI's QA context." />
+      <StoreNav current="qa" domain={searchParams.domain} />
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <Kpi label="Approved packs" value={summary?.approved_packs ?? 0} hint={`${summary?.packs ?? 0} packs in all`} icon={ClipboardList} tone="blue" />
         <Kpi label="Live rules" value={summary?.rules ?? 0} hint={`across ${summary?.domains ?? 0} domain${summary?.domains === 1 ? "" : "s"} · ${summary?.run_tests ?? 0} tests saved in runs`} icon={SquareTerminal} tone="violet" />

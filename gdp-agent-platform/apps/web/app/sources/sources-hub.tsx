@@ -3,14 +3,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import {
-  AlertTriangle, ArrowRight, CheckCircle2, ChevronRight, CircleDashed, Database, Eye, FolderTree, Globe,
-  Layers, Loader2, Plus, RefreshCw, Search, Snowflake, Sparkles, Table2, X, XCircle,
+  AlertTriangle, ArrowRight, CheckCircle2, ChevronRight, CircleDashed, Database, Eye, Globe,
+  Loader2, Plus, RefreshCw, Search, Snowflake, Sparkles, Table2, X, XCircle,
 } from "lucide-react";
 import type {
   CatalogInventory, InventoryTable, ProfileStatus, ProfileStoreRow, SourcesOverview,
 } from "@/lib/types";
 import type { DatabaseRow } from "@/app/onboarding/catalog-types";
-import { PageHeader } from "@/components/page-header";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -23,7 +22,6 @@ import { ConnectSource, type ManagedSource } from "./connect-source";
 import { ExternalSources } from "./external-sources";
 import { GradeChip, ProfileDrawer, type DrawerTab } from "./profile-drawer";
 import { CatalogBrowser, type Target } from "./catalog-browser";
-import { ProfileStore } from "./profile-store";
 
 const STATUS_META: Record<ProfileStatus, { label: string; dot: string; pill: string; icon: typeof CheckCircle2 }> = {
   UNPROFILED: { label: "Unprofiled", dot: "bg-muted-foreground/40", pill: "bg-muted text-muted-foreground", icon: CircleDashed },
@@ -73,24 +71,6 @@ const SOFT: Record<string, string> = {
   "bg-emerald-500": "bg-emerald-50 text-emerald-600 ring-emerald-100", "bg-amber-500": "bg-amber-50 text-amber-600 ring-amber-100",
 };
 const soft = (tone: string) => SOFT[tone] ?? "bg-muted text-muted-foreground ring-border";
-
-function Kpi({ icon: Icon, label, value, hint, tone }: {
-  icon: typeof Database; label: string; value: React.ReactNode; hint?: string; tone: string;
-}) {
-  return (
-    <div className="surface group relative overflow-hidden p-4 transition duration-200 hover:shadow-hover">
-      <div className={cn("absolute -right-10 -top-10 h-28 w-28 rounded-full opacity-[0.07] blur-xl", tone)} />
-      <div className="flex items-center gap-3">
-        <span className={cn("grid h-9 w-9 place-items-center rounded-xl ring-1 ring-inset", soft(tone))}>
-          <Icon className="h-4 w-4" />
-        </span>
-        <p className="text-xs font-medium text-muted-foreground">{label}</p>
-      </div>
-      <p className="mt-3 text-[28px] font-semibold leading-none tracking-tight tabular-nums">{value}</p>
-      {hint && <p className="mt-1.5 text-xs text-muted-foreground">{hint}</p>}
-    </div>
-  );
-}
 
 function StatusPill({ status, error, stagePath, onOpen }: {
   status: ProfileStatus; error?: string | null; stagePath?: string | null; onOpen?: () => void;
@@ -164,7 +144,7 @@ function SkeletonRows() {
   );
 }
 
-type Mode = "snowflake" | "external" | "store";
+type Mode = "snowflake" | "external";
 
 function ModeTab({ active, onClick, icon: Icon, title, body, count, tone }: {
   active: boolean; onClick: () => void; icon: typeof Database; title: string; body: string; count: React.ReactNode; tone: string;
@@ -191,7 +171,11 @@ function ModeTab({ active, onClick, icon: Icon, title, body, count, tone }: {
 
 export function SourcesHub({
   initialOverview, initialStore, databases, domains = [], initialTarget, initialInventory, initialMode = "snowflake",
+  pipelines = null, pipelineCount = 0,
 }: {
+  /** the external ingestion pipelines (rendered on the server), shown in the External systems tab */
+  pipelines?: React.ReactNode;
+  pipelineCount?: number;
   initialOverview: SourcesOverview | null;
   domains?: DomainRow[];
   initialStore: ProfileStoreRow[];
@@ -342,9 +326,6 @@ export function SourcesHub({
     return out;
   }, [store]);
 
-  const storeSchemas = new Set(store.map((r) => `${r.database_name}.${r.schema_name}`)).size;
-  const stagedTotal = store.filter((r) => r.status !== "PROFILING").length;
-  const profilingTotal = store.filter((r) => r.status === "PROFILING").length;
   const closeDrawer = useCallback(() => setDrawer(null), []);
   const closeModeling = useCallback(() => setModeling(null), []);
   const closeConnect = useCallback(() => {
@@ -370,33 +351,24 @@ export function SourcesHub({
 
   return (
     <div className="space-y-6 pb-24">
-      <PageHeader eyebrow="Ingest" title="Sources"
-                  description="Profile Snowflake tables where they live, land external systems into Snowflake, and reuse every profile in any run. Profiling never copies data."
-                  actions={<>
-                    <Button variant="outline" size="sm" disabled={refreshing} onClick={() => void refresh()} aria-label="Refresh">
-                      <RefreshCw className={cn("h-4 w-4", refreshing && "animate-spin")} /> Refresh
-                    </Button>
-                    <Button onClick={() => setConnect({ managed: null })}><Plus className="h-4 w-4" /> Connect source</Button>
-                  </>} />
-
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-        <Kpi icon={Database} label="Catalogs available" value={databases.length} hint="Databases and shares your role can read" tone="bg-sky-500" />
-        <Kpi icon={FolderTree} label="Schemas profiled" value={storeSchemas} hint="With at least one stored profile" tone="bg-violet-500" />
-        <Kpi icon={Layers} label="Tables staged" value={stagedTotal} hint="Profiles ready to reuse in any run" tone="bg-emerald-500" />
-        <Kpi icon={Sparkles} label="Profiling now" value={profilingTotal}
-             hint={profilingTotal ? "Updates every few seconds" : "Nothing running"} tone="bg-amber-500" />
+      <div className="flex flex-wrap items-end gap-3">
+        <div className="min-w-0 flex-1">
+          <h2 className="text-base font-semibold">Where the data is</h2>
+          <p className="text-xs text-muted-foreground">Snowflake databases and shares are explored and profiled in place; external systems land into Snowflake first.</p>
+        </div>
+        <Button variant="outline" size="sm" disabled={refreshing} onClick={() => void refresh()} aria-label="Refresh">
+          <RefreshCw className={cn("h-4 w-4", refreshing && "animate-spin")} /> Refresh
+        </Button>
+        <Button size="sm" onClick={() => setConnect({ managed: null })}><Plus className="h-4 w-4" /> Connect source</Button>
       </div>
 
-      <div role="tablist" aria-label="Where the data is" className="grid gap-3 md:grid-cols-3">
+      <div role="tablist" aria-label="Where the data is" className="grid gap-3 md:grid-cols-2">
         <ModeTab active={mode === "snowflake"} onClick={() => setMode("snowflake")} icon={Snowflake} tone="bg-sky-500"
                  title="Snowflake catalog" count={databases.length}
                  body="Browse any database or share and profile tables in place." />
         <ModeTab active={mode === "external"} onClick={() => setMode("external")} icon={Globe} tone="bg-violet-500"
-                 title="External systems" count={externalAttention ? `${externals.length} · ${externalAttention} attention` : externals.length}
-                 body="Oracle, files and cloud storage, landed into Snowflake first." />
-        <ModeTab active={mode === "store"} onClick={() => setMode("store")} icon={Layers} tone="bg-emerald-500"
-                 title="Profile store" count={store.length}
-                 body="Every stored profile, from any source, ready for any run." />
+                 title="External systems" count={externalAttention ? `${externals.length + pipelineCount} · ${externalAttention} attention` : externals.length + pipelineCount}
+                 body="Ingestion pipelines, Oracle, files and cloud storage, landed into Snowflake first." />
       </div>
 
       {notice && (
@@ -590,6 +562,8 @@ export function SourcesHub({
         </section>
       )}
 
+      {mode === "external" && pipelines}
+
       {mode === "external" && (
         externals.length > 0 ? (
           <ExternalSources sources={externals} onManage={manage} onAdd={() => setConnect({ managed: null, external: true })}
@@ -604,11 +578,6 @@ export function SourcesHub({
             <Button className="mt-4" onClick={() => setConnect({ managed: null, external: true })}><Plus className="h-4 w-4" /> Connect an external system</Button>
           </div>
         )
-      )}
-
-      {mode === "store" && (
-        <ProfileStore store={store} overview={overview} onOpenSchema={openTarget}
-                      onView={(r) => setDrawer({ database: r.database_name, schema: r.schema_name, table: r.table_name })} />
       )}
 
       {mode === "snowflake" && checked.length > 0 && (

@@ -6,7 +6,6 @@ null and the dashboard shows a dash, so one missing store never blanks the page.
 
 from __future__ import annotations
 
-import re
 from typing import Any, Callable, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -15,25 +14,6 @@ from app.db import Db
 from app.main import current_db
 
 router = APIRouter()
-
-LANDED = """
-WITH L AS (
-    SELECT L.RUN_ID, L.SOURCE_DATABASE, L.SOURCE_SCHEMA, L.SOURCE_TABLE, L.LANDING_DATABASE, L.LANDING_SCHEMA,
-           L.LANDING_TABLE, L.INGESTION_METHOD, L.ROW_COUNT, L.INGESTED_AT,
-           ROW_NUMBER() OVER (PARTITION BY L.LANDING_DATABASE, L.LANDING_SCHEMA, L.LANDING_TABLE
-                              ORDER BY L.INGESTED_AT DESC NULLS LAST) AS RN
-      FROM SOURCE.LANDING_TABLE_REGISTRY L
-      LEFT JOIN CORE.WORKFLOW_RUN R ON R.RUN_ID = L.RUN_ID
-     WHERE L.INGESTION_STATUS = 'COMPLETE' {domain}
-), O AS (
-    SELECT RUN_ID, SOURCE_DATABASE, SOURCE_SCHEMA, OBJECT_NAME, MAX(BYTES) AS BYTES
-      FROM SOURCE.SOURCE_OBJECT GROUP BY 1, 2, 3, 4
-)
-SELECT TO_VARCHAR(L.INGESTED_AT::DATE) AS DAY, L.LANDING_DATABASE, L.LANDING_SCHEMA, L.LANDING_TABLE,
-       L.INGESTION_METHOD, L.ROW_COUNT, O.BYTES AS SOURCE_BYTES
-  FROM L LEFT JOIN O ON O.RUN_ID = L.RUN_ID AND O.SOURCE_DATABASE = L.SOURCE_DATABASE
-                    AND O.SOURCE_SCHEMA = L.SOURCE_SCHEMA AND O.OBJECT_NAME = L.SOURCE_TABLE
- WHERE L.RN = 1"""
 
 PROFILES = """
 WITH P AS (
@@ -152,65 +132,6 @@ def _resolve(db: Db, domain: Optional[str]) -> Optional[dict]:
 
 def _n(row: Optional[dict], key: str) -> int:
     return int((row or {}).get(key) or 0)
-
-
-_IDENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_$]*$")
-
-
-def _quoted(name: str) -> str:
-    """A database name as a safe SQL identifier (plain names stay unquoted so they keep Snowflake's upper-casing)."""
-    return name if _IDENT.match(name) else '"' + name.replace('"', '""') + '"'
-
-
-def _landed_bytes(db: Db, rows: list) -> dict:
-    """{(DB, SCHEMA, TABLE): bytes} read from each landing database's INFORMATION_SCHEMA. A database the role cannot
-    read is skipped; its tables fall back to the source size."""
-    by_db: dict = {}
-    for r in rows:
-        if r.get("landing_database") and r.get("landing_schema"):
-            by_db.setdefault(str(r["landing_database"]).upper(), set()).add(str(r["landing_schema"]).upper())
-    out: dict = {}
-    for database, schemas in by_db.items():
-        schemas = sorted(schemas)
-        try:
-            found = db.query(f"""SELECT TABLE_SCHEMA, TABLE_NAME, BYTES FROM {_quoted(database)}.INFORMATION_SCHEMA.TABLES
-                                  WHERE TABLE_SCHEMA IN ({", ".join(["%s"] * len(schemas))})""", tuple(schemas))
-        except Exception:
-            continue
-        for f in found:
-            if f.get("bytes") is not None:
-                out[(database, str(f["table_schema"]).upper(), str(f["table_name"]).upper())] = int(f["bytes"])
-    return out
-
-
-def ingested(db: Db, domain_id: Optional[str]) -> dict:
-    """Landed tables (latest COMPLETE load per landing table) and their size: the landed table's own bytes where the
-    caller can see the landing schema, else the source table's size at discovery. Tables profiled in place hold no
-    copy and are counted apart."""
-    rows = db.query(LANDED.format(domain="AND R.DOMAIN_ID = %s" if domain_id else ""), (domain_id,) if domain_id else ())
-    copies = [r for r in rows if str(r.get("ingestion_method") or "").upper() != "IN_PLACE"]
-    landed = _landed_bytes(db, copies)
-    total, measured, days = 0, 0, {}
-    for r in copies:
-        key = (str(r.get("landing_database") or "").upper(), str(r.get("landing_schema") or "").upper(),
-               str(r.get("landing_table") or "").upper())
-        size = landed.get(key)
-        if size is not None:
-            measured += 1
-        else:
-            size = int(r.get("source_bytes") or 0)
-        total += size
-        day = days.setdefault(r.get("day") or "", {"day": r.get("day"), "bytes": 0, "tables": 0})
-        day["bytes"] += size
-        day["tables"] += 1
-    series = [d for k, d in sorted(days.items()) if k][-14:]
-    return {"bytes": total, "gb": round(total / 1024 ** 3, 3), "tables": len(copies),
-            "rows": sum(int(r.get("row_count") or 0) for r in copies),
-            "in_place": len(rows) - len(copies),
-            "measured": "landed" if copies and measured == len(copies) else "source" if not measured else "mixed",
-            "last_day": series[-1]["day"] if series else None,
-            "daily": [{"day": d["day"], "bytes": d["bytes"], "gb": round(d["bytes"] / 1024 ** 3, 3), "tables": d["tables"]}
-                      for d in series]}
 
 
 def sources(db: Db, domain_id: Optional[str]) -> dict:
@@ -341,13 +262,139 @@ def dq(db: Db, domain_id: Optional[str], profiled_tables: int = 0) -> Optional[d
             "coverage": round(100 * min(tables, profiled_tables) / profiled_tables, 1) if profiled_tables else None}
 
 
+# ---------------------------------------------------------------- developer stats (the hero ribbon)
+
+DELIVERY = """
+WITH E AS (
+    SELECT E.RUN_ID, E.TO_STATE, E.CREATED_AT FROM CORE.WORKFLOW_EVENT E
+      JOIN CORE.WORKFLOW_RUN R ON R.RUN_ID = E.RUN_ID
+     WHERE E.CREATED_AT >= DATEADD('day', -7, CURRENT_TIMESTAMP()) AND E.TO_STATE IN ('COMPLETED', 'FAILED')
+       AND R.DELETED_AT IS NULL AND COALESCE(R.ENVIRONMENT, '') <> 'TEST' {domain}
+), DONE AS (
+    SELECT E.RUN_ID, E.TO_STATE, E.CREATED_AT, R.CREATED_AT AS STARTED_AT FROM E JOIN CORE.WORKFLOW_RUN R ON R.RUN_ID = E.RUN_ID
+)
+SELECT (SELECT COUNT(DISTINCT RUN_ID) FROM DONE WHERE TO_STATE = 'COMPLETED') AS COMPLETED,
+       (SELECT COUNT(DISTINCT RUN_ID) FROM DONE WHERE TO_STATE = 'FAILED') AS FAILED,
+       (SELECT MEDIAN(DATEDIFF('minute', STARTED_AT, CREATED_AT)) FROM DONE WHERE TO_STATE = 'COMPLETED') AS LEAD_MINUTES,
+       (SELECT COUNT(*) FROM CORE.WORKFLOW_RUN R WHERE R.DELETED_AT IS NULL AND NOT COALESCE(R.IS_ARCHIVED, FALSE)
+           AND COALESCE(R.ENVIRONMENT, '') <> 'TEST' AND R.CURRENT_STATE NOT IN ('CREATED', 'COMPLETED', 'FAILED', 'CANCELLED') {domain}) AS ACTIVE,
+       (SELECT COUNT(*) FROM CORE.WORKFLOW_RUN R WHERE R.DELETED_AT IS NULL AND COALESCE(R.ENVIRONMENT, '') <> 'TEST'
+           AND R.CREATED_AT >= DATEADD('day', -7, CURRENT_TIMESTAMP()) {domain}) AS STARTED"""
+
+DELIVERY_DAILY = """
+SELECT TO_VARCHAR(E.CREATED_AT::DATE) AS DAY, COUNT_IF(E.TO_STATE = 'COMPLETED') AS COMPLETED, COUNT_IF(E.TO_STATE = 'FAILED') AS FAILED
+  FROM CORE.WORKFLOW_EVENT E JOIN CORE.WORKFLOW_RUN R ON R.RUN_ID = E.RUN_ID
+ WHERE E.CREATED_AT >= DATEADD('day', -7, CURRENT_TIMESTAMP()) AND E.TO_STATE IN ('COMPLETED', 'FAILED')
+   AND R.DELETED_AT IS NULL AND COALESCE(R.ENVIRONMENT, '') <> 'TEST' {domain}
+ GROUP BY 1 ORDER BY 1"""
+
+
+def delivery(db: Db, domain_id: Optional[str]) -> dict:
+    """Runs over the last 7 days: completed, failed, success rate and median lead time (start to completion), with
+    the runs active now and a day-by-day series."""
+    clause, params = ("AND R.DOMAIN_ID = %s", (domain_id,)) if domain_id else ("", ())
+    row = db.query(DELIVERY.format(domain=clause), params * 3)[0]
+    daily = db.query(DELIVERY_DAILY.format(domain=clause), params)
+    done, failed = _n(row, "completed"), _n(row, "failed")
+    lead = row.get("lead_minutes")
+    return {"completed": done, "failed": failed, "started": _n(row, "started"), "active": _n(row, "active"),
+            "success_rate": round(100 * done / (done + failed), 1) if done + failed else None,
+            "lead_minutes": int(lead) if lead is not None else None,
+            "daily": [{"day": d["day"], "completed": int(d["completed"] or 0), "failed": int(d["failed"] or 0)} for d in daily]}
+
+
+WAITING = """
+SELECT COUNT(*) AS RUNS, MAX(DATEDIFF('minute', COALESCE(W.AT, R.UPDATED_AT, R.CREATED_AT), CURRENT_TIMESTAMP())) AS OLDEST_MINUTES
+  FROM CORE.WORKFLOW_RUN R
+  LEFT JOIN (SELECT RUN_ID, TO_STATE, MAX(CREATED_AT) AS AT FROM CORE.WORKFLOW_EVENT GROUP BY 1, 2) W
+         ON W.RUN_ID = R.RUN_ID AND W.TO_STATE = R.CURRENT_STATE
+ WHERE R.DELETED_AT IS NULL AND NOT COALESCE(R.IS_ARCHIVED, FALSE) AND R.CURRENT_STATE IN ({review}) {domain}"""
+
+
+def waiting(db: Db, domain_id: Optional[str]) -> dict:
+    """What is waiting on a person: runs at a review step, change requests in Approvals, and asset versions in review
+    (domain models, data quality suites, QA packs), with the oldest wait."""
+    from services.workflow.listing import REVIEW_STATES
+
+    clause, params = ("AND R.DOMAIN_ID = %s", (domain_id,)) if domain_id else ("", ())
+    runs = db.query(WAITING.format(review=", ".join(f"'{s}'" for s in REVIEW_STATES), domain=clause), params)[0]
+    requests = _soft(lambda: db.query("""SELECT COUNT(*) AS N, MAX(DATEDIFF('minute', CREATED_AT, CURRENT_TIMESTAMP())) AS OLDEST
+                                           FROM GOVERNANCE.CHANGE_REQUEST WHERE STATUS = 'PENDING'""")[0]) or {}
+    reviews = 0
+    for sql in ("SELECT COUNT(*) AS N FROM GOVERNANCE.MODEL_DESIGNS WHERE MODEL_ID IS NOT NULL AND STATUS = 'IN_REVIEW'"
+                + (" AND DOMAIN_ID = %s" if domain_id else ""),
+                "SELECT COUNT(*) AS N FROM GOVERNANCE.DQ_SUITE_VERSION V JOIN GOVERNANCE.DQ_SUITE S ON S.SUITE_ID = V.SUITE_ID "
+                "WHERE V.STATUS = 'IN_REVIEW'" + (" AND S.DOMAIN_ID = %s" if domain_id else ""),
+                "SELECT COUNT(*) AS N FROM GOVERNANCE.DOMAIN_QA_PACKS WHERE STATUS = 'PENDING_APPROVAL'"
+                + (" AND DOMAIN_ID = %s" if domain_id else "")):
+        reviews += _n(_soft(lambda: db.query(sql, params)[0]), "n")
+    oldest = [v for v in (runs.get("oldest_minutes"), requests.get("oldest")) if v is not None]
+    return {"runs": _n(runs, "runs"), "requests": _n(requests, "n"), "versions": reviews,
+            "total": _n(runs, "runs") + _n(requests, "n") + reviews,
+            "oldest_minutes": int(max(oldest)) if oldest else None}
+
+
+FRESHNESS = """
+WITH L AS (
+    SELECT L.LANDING_DATABASE, L.LANDING_SCHEMA, L.LANDING_TABLE, MAX(L.INGESTED_AT) AS LAST_LOAD
+      FROM SOURCE.LANDING_TABLE_REGISTRY L LEFT JOIN CORE.WORKFLOW_RUN R ON R.RUN_ID = L.RUN_ID
+     WHERE L.INGESTION_STATUS = 'COMPLETE' AND COALESCE(L.INGESTION_METHOD, '') <> 'IN_PLACE' {domain}
+     GROUP BY 1, 2, 3
+), F AS (
+    SELECT DISTINCT L.LANDING_DATABASE, L.LANDING_SCHEMA, L.LANDING_TABLE
+      FROM SOURCE.LANDING_TABLE_REGISTRY L LEFT JOIN CORE.WORKFLOW_RUN R ON R.RUN_ID = L.RUN_ID
+     WHERE L.INGESTION_STATUS = 'FAILED' AND L.CREATED_AT >= DATEADD('day', -7, CURRENT_TIMESTAMP()) {domain}
+)
+SELECT (SELECT COUNT(*) FROM L) AS TABLES,
+       (SELECT COUNT_IF(LAST_LOAD >= DATEADD('hour', -24, CURRENT_TIMESTAMP())) FROM L) AS FRESH,
+       (SELECT COUNT_IF(LAST_LOAD < DATEADD('day', -7, CURRENT_TIMESTAMP())) FROM L) AS STALE,
+       (SELECT MAX(DATEDIFF('hour', LAST_LOAD, CURRENT_TIMESTAMP())) FROM L) AS OLDEST_HOURS,
+       (SELECT COUNT(*) FROM F) AS FAILED_LOADS"""
+
+
+def freshness(db: Db, domain_id: Optional[str]) -> dict:
+    """Landed tables (copies, not tables profiled in place): loaded in the last 24 hours, not loaded for over 7 days,
+    the oldest load, loads that failed in the last 7 days, and external pipelines registered but not active."""
+    clause, params = ("AND R.DOMAIN_ID = %s", (domain_id,)) if domain_id else ("", ())
+    row = db.query(FRESHNESS.format(domain=clause), params * 2)[0]
+    ext = _soft(lambda: db.query("SELECT COUNT_IF(STATUS IN ('REGISTERED', 'PAUSED')) AS IDLE FROM PLATFORM_CONFIG.INGESTION_PIPELINE_CATALOG "
+                                 "WHERE STATUS <> 'RETIRED'" + (" AND DOMAIN_ID = %s" if domain_id else ""), params)[0]) or {}
+    hours = row.get("oldest_hours")
+    return {"tables": _n(row, "tables"), "fresh": _n(row, "fresh"), "stale": _n(row, "stale"),
+            "failed_loads": _n(row, "failed_loads"), "idle_pipelines": _n(ext, "idle"),
+            "oldest_hours": int(hours) if hours is not None else None}
+
+
+FAILING_QA = """
+WITH R AS (
+    SELECT Q.TEST_ID, Q.OUTCOME, ROW_NUMBER() OVER (PARTITION BY Q.TEST_ID ORDER BY Q.CREATED_AT DESC) AS RN
+      FROM QUALITY.QA_RESULT Q
+)
+SELECT COUNT(*) AS TESTS, COUNT(DISTINCT COALESCE(T.TARGET_FQN, T.RUN_ID)) AS TARGETS
+  FROM R JOIN CONTRACT.QA_TEST_CASE T ON T.TEST_ID = R.TEST_ID
+ WHERE R.RN = 1 AND R.OUTCOME IN ('FAIL', 'ERROR') AND NOT COALESCE(T.IS_DELETED, FALSE) {domain}"""
+
+
+def failing(db: Db, domain_id: Optional[str], dq_block: Optional[dict]) -> dict:
+    """Checks failing now: data quality checks whose latest result failed, QA tests whose latest execution failed or
+    errored, and the tables they cover."""
+    clause, params = ("AND (T.DOMAIN_ID = %s OR T.RUN_ID IN (SELECT RUN_ID FROM CORE.WORKFLOW_RUN WHERE DOMAIN_ID = %s))",
+                      (domain_id, domain_id)) if domain_id else ("", ())
+    qa_row = _soft(lambda: db.query(FAILING_QA.format(domain=clause), params)[0]) or {}
+    dq_tables = _soft(lambda: db.query("SELECT COUNT(DISTINCT TABLE_NAME) AS N FROM GOVERNANCE.DQ_CHECKS_CATALOG "
+                                       "WHERE STATUS = 'ACTIVE' AND LAST_RUN_STATUS = 'FAIL'"
+                                       + (" AND DOMAIN_ID = %s" if domain_id else ""), (domain_id,) if domain_id else ())[0]) or {}
+    dq_failed = int((dq_block or {}).get("failed") or 0)
+    return {"dq_checks": dq_failed, "qa_tests": _n(qa_row, "tests"), "total": dq_failed + _n(qa_row, "tests"),
+            "tables": _n(dq_tables, "n") + _n(qa_row, "targets")}
+
+
 @router.get("/api/hub/overview")
 def overview(domain: Optional[str] = None, db: Db = Depends(current_db)):
     scope = _resolve(db, domain)
     did = scope["domain_id"] if scope else None
     name = scope["domain_name"] if scope else None
     blocks = {
-        "ingested": _soft(lambda: ingested(db, did)),
         "sources": _soft(lambda: sources(db, did)),
         "profiling": _soft(lambda: profiling(db, did)),
         "models": _soft(lambda: models(db, did, name)),
@@ -355,4 +402,8 @@ def overview(domain: Optional[str] = None, db: Db = Depends(current_db)):
         "qa": _soft(lambda: qa(db, did)),
     }
     blocks["dq"] = _soft(lambda: dq(db, did, (blocks["profiling"] or {}).get("tables", 0)))
+    blocks["delivery"] = _soft(lambda: delivery(db, did))
+    blocks["waiting"] = _soft(lambda: waiting(db, did))
+    blocks["freshness"] = _soft(lambda: freshness(db, did))
+    blocks["failing"] = _soft(lambda: failing(db, did, blocks["dq"]))
     return {"domain": scope, **blocks}

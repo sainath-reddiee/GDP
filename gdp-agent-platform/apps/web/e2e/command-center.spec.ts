@@ -19,12 +19,14 @@ for (const theme of ["light", "dark"] as const) {
     test("command center shows the ribbon, six stores and the pipeline table", async ({ page }) => {
       await page.goto("/dashboard");
       await expect(page.locator("html")).toHaveClass(theme === "dark" ? /dark/ : /^(?!.*dark).*$/);
-      await expect(page.getByTestId("hero-ribbon")).toBeVisible();
+      const ribbon = page.getByTestId("hero-ribbon");
+      for (const stat of ["Runs, last 7 days", "Waiting on people", "Stale landed tables", "Failing checks"]) await expect(ribbon).toContainText(stat);
       for (const store of ["source", "profiling", "models", "sttm", "qa", "dq"]) await expect(page.getByTestId(`store-${store}`)).toBeVisible();
       await expect(page.getByTestId("pipeline-table")).toBeVisible();
-      // one place for the stores: the sidebar group, and no duplicate tab row above the page
+      // one place for the stores: Store in the sidebar with the six stores under it, and no duplicate tab row above the page
       const nav = page.getByRole("navigation", { name: "Main" });
       await expect(nav.getByText("Asset stores")).toBeVisible();
+      await expect(nav.getByRole("link", { name: "Store", exact: true })).toHaveAttribute("href", "/dashboard/store");
       for (const store of ["Source Store", "Profiling Store", "Modeling Store", "STTM Store", "QA Store", "Data Quality Store"]) {
         await expect(nav.getByRole("link", { name: store })).toBeVisible();
       }

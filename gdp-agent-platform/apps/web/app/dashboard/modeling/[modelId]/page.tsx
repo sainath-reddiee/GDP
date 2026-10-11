@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { StoreCrumb } from "@/components/hub/store-nav";
 import { notFound } from "next/navigation";
 import { ApiError, api, whoami } from "@/lib/api";
 import { canAct } from "@/lib/types";
@@ -25,7 +26,7 @@ export default async function DomainModelPage({ params, searchParams }: { params
     : current?.spec ?? null;
   return (
     <div className="space-y-5">
-      <p className="eyebrow"><Link href="/dashboard/modeling" className="hover:underline">Modeling Store · Domain models</Link></p>
+      <StoreCrumb store="modeling" trail={[{ label: "Domain models", href: "/dashboard/modeling" }, { label: m.domain_name }]} />
       <PageHeader title={<span className="font-mono">{m.domain_name}</span>}
                   description={<>Canonical model of the {m.domain_name} domain
                     {m.approved_version ? <> · approved v{m.approved_version}</> : <> · not approved yet</>}

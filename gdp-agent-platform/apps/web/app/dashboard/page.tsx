@@ -1,7 +1,6 @@
 import Link from "next/link";
 import {
-  AlertTriangle, ArrowRight, BarChart3, CheckCircle2, ClipboardCheck, Clock, Database, Eye, GitBranchPlus, GitCompareArrows, Network,
-  PlugZap, Plus, Siren, SquareTerminal, TrendingUp, XCircle,
+  AlertTriangle, ArrowRight, BarChart3, CheckCircle2, ClipboardCheck, Clock, Eye, PlugZap, Siren, SquareTerminal, XCircle,
 } from "lucide-react";
 import { api, whoami } from "@/lib/api";
 import { can, type AuditEvent, type RunSummary } from "@/lib/types";
@@ -13,7 +12,15 @@ import { PageHeader } from "@/components/page-header";
 import { Panel } from "@/components/hub/kpi";
 import { buttonVariants } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { bytesParts, fmt, Meter, PipelineTable, RibbonMetric, Sparkline, StoreCard } from "./command-center";
+import { fmt, Meter, PipelineTable, RibbonMetric, Sparkline } from "./command-center";
+import { StoreCards } from "@/components/hub/store-cards";
+
+/** Minutes as "45m", "3h 10m" or "2d 4h". */
+function duration(minutes: number) {
+  if (minutes < 60) return `${Math.max(0, Math.round(minutes))}m`;
+  if (minutes < 1440) return `${Math.floor(minutes / 60)}h${minutes % 60 ? ` ${Math.round(minutes % 60)}m` : ""}`;
+  return `${Math.floor(minutes / 1440)}d${Math.floor((minutes % 1440) / 60) ? ` ${Math.floor((minutes % 1440) / 60)}h` : ""}`;
+}
 
 function greeting() {
   const h = new Date().getHours();
@@ -21,7 +28,6 @@ function greeting() {
 }
 
 const pct = (part: number, whole: number) => (whole ? (100 * part) / whole : null);
-const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : word.endsWith("sh") ? "es" : "s"}`;
 
 /** The Command Center: what the platform holds (six asset stores), how healthy it is, and what is in flight. */
 export default async function Dashboard() {
@@ -53,10 +59,10 @@ export default async function Dashboard() {
     { show: dqFailing > 0, href: "/dashboard/dq-store", icon: ClipboardCheck, text: `${dqFailing} data quality check${dqFailing === 1 ? "" : "s"} failing`, tone: "text-rose-700 bg-rose-50 ring-rose-200" },
     { show: !!o?.profiling?.drift, href: "/dashboard/profiling", icon: BarChart3, text: `${o?.profiling?.drift} drifting column${o?.profiling?.drift === 1 ? "" : "s"}`, tone: "text-amber-800 bg-amber-50 ring-amber-200" },
   ].filter((a) => a.show);
-  const daily = o?.ingested?.daily ?? [];
-  const size = bytesParts(o?.ingested?.bytes);
-  const sizeNote = o?.ingested?.measured === "landed" ? "landed size" : o?.ingested?.measured === "mixed" ? "landed size, source size where landing is not visible" : "source size at discovery";
-  const idle = o?.sources ? o.sources.external - o.sources.external_active : 0;
+  const d = o?.delivery;
+  const w = o?.waiting;
+  const f = o?.freshness;
+  const x = o?.failing;
 
   return (
     <div className="space-y-6">
@@ -72,28 +78,28 @@ export default async function Dashboard() {
       <section className="glass relative overflow-hidden p-1" data-testid="hero-ribbon">
         <div className="pointer-events-none absolute inset-0 bg-gradient-to-r from-indigo-500/[0.07] via-transparent to-cyan-500/[0.07]" />
         <div className="relative grid divide-y divide-border/60 sm:grid-cols-2 sm:divide-y-0 xl:grid-cols-4 xl:divide-x">
-          <RibbonMetric label="Live ingested" value={o?.ingested ? size.value : "-"} unit={o?.ingested ? size.unit : undefined} href="/dashboard/sources"
-                        hint={o?.ingested ? `${fmt(o.ingested.tables)} landed tables · ${fmt(o.ingested.rows)} rows${o.ingested.in_place ? ` · ${fmt(o.ingested.in_place)} profiled in place` : ""}` : "landing registry not available"}>
-            <Sparkline values={daily.map((d) => d.bytes ?? d.gb)} />
-            {o?.ingested && <p className="mt-1.5 text-[11px] text-muted-foreground">{sizeNote}</p>}
+          <RibbonMetric label="Runs, last 7 days" value={d?.success_rate == null ? "-" : Math.round(d.success_rate)} unit={d?.success_rate == null ? undefined : "% succeeded"}
+                        href="/runs" hint={d ? `${fmt(d.completed)} completed · ${fmt(d.failed)} failed · ${fmt(d.active)} running now` : "run history not available"}>
+            <Sparkline values={(d?.daily ?? []).map((x) => x.completed + x.failed)} />
+            <p className="mt-1.5 text-[11px] text-muted-foreground">{d?.lead_minutes == null ? "No run completed this week" : `Median lead time ${duration(d.lead_minutes)}, start to completion`}</p>
           </RibbonMetric>
-          <RibbonMetric label="Profiling health" value={o?.profiling?.health == null ? "-" : Math.round(o.profiling.health)} unit={o?.profiling?.health == null ? undefined : "%"}
-                        href="/dashboard/profiling"
-                        hint={o?.profiling ? `${fmt(o.profiling.tables)} tables · ${fmt(o.profiling.columns)} columns profiled` : "no profiles yet"}>
-            <Meter value={o?.profiling?.health} />
+          <RibbonMetric label="Waiting on people" value={w ? fmt(w.total) : "-"} href={w?.requests ? "/approvals" : "/runs?needs_review=1"}
+                        hint={w ? `${fmt(w.runs)} runs at review · ${fmt(w.requests)} approvals · ${fmt(w.versions)} versions in review` : "not available"}>
+            <p className="text-[11px] text-muted-foreground">{w?.oldest_minutes == null ? "Nothing is waiting" : `Oldest has waited ${duration(w.oldest_minutes)}`}</p>
+          </RibbonMetric>
+          <RibbonMetric label="Stale landed tables" value={f ? fmt(f.stale) : "-"} href="/dashboard/sources"
+                        hint={f ? `of ${fmt(f.tables)} landed · ${fmt(f.fresh)} loaded in the last 24 hours` : "landing registry not available"}>
+            <Meter value={f && f.tables ? pct(f.fresh, f.tables) : null} tone="primary" />
             <p className="mt-1.5 text-[11px] text-muted-foreground">
-              {o?.profiling?.catalog_tables
-                ? `Columns under 20% nulls with no drift, over the ${fmt(o.profiling.catalog_tables)} tables with pass history`
-                : "Shown once tables are profiled again (pass history starts with the next profile)"}
+              {f ? [`${fmt(f.failed_loads)} failed load${f.failed_loads === 1 ? "" : "s"} this week`,
+                    f.idle_pipelines ? `${fmt(f.idle_pipelines)} pipeline${f.idle_pipelines === 1 ? "" : "s"} not active` : "",
+                    f.oldest_hours != null ? `oldest load ${duration(f.oldest_hours * 60)} ago` : ""].filter(Boolean).join(" · ") : ""}
             </p>
           </RibbonMetric>
-          <RibbonMetric label="STTM published" value={o?.sttm ? fmt(o.sttm.verified) : "-"} href="/dashboard/sttm"
-                        hint={o?.sttm ? `of ${fmt(o.sttm.mappings)} mappings · ${fmt(o.sttm.pending)} pending review` : "catalog not available"}>
-            <Meter value={o?.sttm ? pct(o.sttm.verified, o.sttm.mappings) : null} tone="primary" />
-          </RibbonMetric>
-          <RibbonMetric label="Active DQ checks" value={o?.dq ? fmt(o.dq.checks) : "-"} href="/dashboard/dq-store"
-                        hint={o?.dq ? `${fmt(o.dq.run_checks)} from runs · ${fmt(o.dq.store_checks)} in the store · ${o.dq.pass_rate == null ? "no results yet" : `${o.dq.pass_rate}% passing`}` : "no data quality checks readable"}>
+          <RibbonMetric label="Failing checks" value={x ? fmt(x.total) : "-"} href="/dashboard/quality"
+                        hint={x ? `${fmt(x.dq_checks)} data quality · ${fmt(x.qa_tests)} QA tests · ${fmt(x.tables)} tables affected` : "no check results readable"}>
             <Meter value={o?.dq?.pass_rate} />
+            <p className="mt-1.5 text-[11px] text-muted-foreground">{o?.dq?.pass_rate == null ? "No data quality results yet" : `${o.dq.pass_rate}% of data quality checks passing`}</p>
           </RibbonMetric>
         </div>
       </section>
@@ -110,47 +116,7 @@ export default async function Dashboard() {
       )}
 
       {/* six asset stores */}
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-        <StoreCard testId="store-source" title="Source Store" subtitle="Shares, databases and external pipelines" icon={Database} tone="indigo" missing={!o?.sources}
-                   metrics={[{ label: "Shares", value: fmt(o?.sources?.shares) }, { label: "Databases", value: fmt(o?.sources?.databases) },
-                             { label: "Pipelines", value: fmt(o?.sources?.external) }]}
-                   href="/dashboard/sources" action={{ label: "Onboard source", href: "/dashboard/onboarding?type=source", icon: PlugZap }}
-                   alert={idle ? { text: `${plural(idle, "external pipeline")} not active yet`, tone: "amber" } : null} />
-        <StoreCard testId="store-profiling" title="Profiling Store" subtitle="Distributions, nulls, cardinality and drift" icon={BarChart3} tone="sky" missing={!o?.profiling}
-                   metrics={[{ label: "Tables profiled", value: fmt(o?.profiling?.tables) },
-                             { label: "Drift alerts", value: fmt(o?.profiling?.drift), tone: o?.profiling?.drift ? "text-amber-600" : undefined },
-                             { label: "High cardinality", value: fmt(o?.profiling?.high_cardinality) }]}
-                   meter={{ label: "Profiling health", value: o?.profiling?.health }}
-                   href="/dashboard/profiling" action={{ label: "Review drift", href: "/dashboard/profiling?sort=drift", icon: TrendingUp }}
-                   alert={o?.profiling?.drift_tables ? { text: `${plural(o.profiling.drift_tables, "table")} drifted since the last pass`, tone: "amber" } : null} />
-        <StoreCard testId="store-models" title="Modeling Store" subtitle="Domain models published to feature branches" icon={Network} tone="violet" missing={!o?.models}
-                   metrics={[{ label: "Published", value: fmt(o?.models?.published) }, { label: "Branches", value: fmt(o?.models?.branches) },
-                             { label: "In design", value: fmt(o?.models?.in_design) }]}
-                   href="/dashboard/modeling" action={{ label: "New model", href: "/dashboard/modeling", icon: GitBranchPlus }}
-                   alert={o?.models?.failed ? { text: `${plural(o.models.failed, "publish")} failed`, tone: "rose" }
-                     : o?.models?.in_design ? { text: `${plural(o.models.in_design, "design")} in progress`, tone: "violet" } : null} />
-        <StoreCard testId="store-sttm" title="STTM Store" subtitle="Versioned source to target mappings" icon={GitCompareArrows} tone="emerald" missing={!o?.sttm}
-                   metrics={[{ label: "Verified", value: fmt(o?.sttm?.verified), tone: "text-emerald-600" }, { label: "Pending review", value: fmt(o?.sttm?.pending) },
-                             { label: "Mappings", value: fmt(o?.sttm?.mappings) }]}
-                   meter={{ label: "Verified share", value: o?.sttm ? pct(o.sttm.verified, o.sttm.mappings) : null, tone: "primary" }}
-                   href="/dashboard/sttm" action={{ label: "Review pending", href: "/dashboard/sttm?status=REVIEW", icon: Eye }}
-                   alert={o?.sttm?.pending ? { text: `${plural(o.sttm.pending, "mapping")} waiting for review`, tone: "amber" } : null} />
-        <StoreCard testId="store-qa" title="QA Store" subtitle={o?.qa?.top_tags?.length ? o.qa.top_tags.slice(0, 3).map((t) => `#${t}`).join(" ") : "Deterministic domain SQL packs"}
-                   icon={SquareTerminal} tone="amber" missing={!o?.qa}
-                   metrics={[{ label: "Domain packs", value: fmt(o?.qa?.approved_packs) }, { label: "Run tests", value: fmt(o?.qa?.run_tests) },
-                             { label: "Pass rate", value: o?.qa?.pass_rate == null ? "-" : `${Math.round(o.qa.pass_rate)}%` }]}
-                   href="/dashboard/qa-store" action={{ label: "New pack", href: "/dashboard/qa-store?new=1", icon: Plus }}
-                   alert={o?.qa?.pending ? { text: `${plural(o.qa.pending, "pack")} awaiting approval`, tone: "violet" } : null} />
-        <StoreCard testId="store-dq" title="Data Quality Store"
-                   subtitle={o?.dq ? `${fmt(o.dq.run_checks)} approved in runs · ${fmt(o.dq.store_checks)} in the store` : "Soda and Great Expectations attribute checks"} icon={ClipboardCheck} tone="rose" missing={!o?.dq}
-                   metrics={[{ label: "Active checks", value: fmt(o?.dq?.checks) },
-                             { label: "Failing", value: fmt(o?.dq?.failed), tone: o?.dq?.failed ? "text-rose-600" : undefined },
-                             { label: "Scheduled tables", value: fmt(o?.dq?.scheduled_tables) }]}
-                   meter={{ label: "Coverage of profiled tables", value: o?.dq?.coverage, tone: "primary" }}
-                   href="/dashboard/dq-store" action={{ label: "Add check", href: "/dashboard/dq-store?add=1", icon: Plus }}
-                   alert={o?.dq?.failed ? { text: `${plural(o.dq.failed, "check")} failing`, tone: "rose" }
-                     : o?.dq?.never_run ? { text: `${plural(o.dq.never_run, "check")} never run`, tone: "amber" } : null} />
-      </div>
+      <StoreCards o={o} />
 
       <div className="grid gap-4 2xl:grid-cols-3">
         <section className="surface overflow-hidden 2xl:col-span-2" data-testid="pipeline-table">

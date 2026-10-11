@@ -1,4 +1,5 @@
 import { api, whoami } from "@/lib/api";
+import { StoreNav } from "@/components/hub/store-nav";
 import { canAct } from "@/lib/types";
 import type { DmListRow } from "@/lib/model-types";
 import { scopedDomain } from "@/lib/domain-scope";
@@ -32,6 +33,7 @@ export default async function ModelingHub({ searchParams }: { searchParams: { de
     <div className="space-y-6">
       <PageHeader eyebrow="Asset store" title="Modeling Store"
                   description="One governed model per domain: design, version, review and approve it here before anything downstream moves. See every run's model design and the dbt each run generated (read-only, regenerated from the approved model and the STTM)." />
+      <StoreNav current="modeling" domain={searchParams.domain} />
       <StoreTabs base="/dashboard/modeling" current={view} keep={{ domain: searchParams.domain }}
                  tabs={[{ id: "models", label: "Domain models", count: models ? rows.length : null }, { id: "design", label: "Legacy designs" },
                         { id: "runs", label: "Run models", count: runModels?.models.length },

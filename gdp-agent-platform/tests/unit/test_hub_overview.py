@@ -13,7 +13,6 @@ import app.main as main  # noqa: E402
 import app.governance as gov  # noqa: E402
 import app.hub_overview_api as overview  # noqa: E402
 
-GB = 1024 ** 3
 
 
 class FakeDb:
@@ -34,16 +33,18 @@ class FakeDb:
 
 
 ANSWERS = {
+    # developer stats: matched before the store blocks' broader needles
+    "AS LEAD_MINUTES": [{"completed": 9, "failed": 1, "lead_minutes": 190, "active": 4, "started": 12}],
+    "AS DAY, COUNT_IF(E.TO_STATE": [{"day": "2026-10-09", "completed": 4, "failed": 1}, {"day": "2026-10-10", "completed": 5, "failed": 0}],
+    "AS OLDEST_MINUTES": [{"runs": 2, "oldest_minutes": 3000}],
+    "FROM GOVERNANCE.CHANGE_REQUEST": [{"n": 3, "oldest": 600}],
+    "STATUS = 'IN_REVIEW'": [{"n": 1}],
+    "STATUS = 'PENDING_APPROVAL'": [{"n": 2}],
+    "AS FAILED_LOADS": [{"tables": 20, "fresh": 15, "stale": 3, "oldest_hours": 400, "failed_loads": 2}],
+    "AS IDLE FROM PLATFORM_CONFIG": [{"idle": 1}],
+    "FROM QUALITY.QA_RESULT Q": [{"tests": 2, "targets": 1}],
+    "COUNT(DISTINCT TABLE_NAME) AS N": [{"n": 1}],
     "FROM KNOWLEDGE.DOMAIN_REGISTRY": [{"domain_id": "d-1", "domain_name": "COMPANY"}],
-    # landed tables: two copies (one measurable in the landing schema) and one profiled in place
-    "INFORMATION_SCHEMA.TABLES": [{"table_schema": "LANDING", "table_name": "SRC__A", "bytes": 2 * GB}],
-    "FROM SOURCE.LANDING_TABLE_REGISTRY": [
-        {"day": "2026-10-09", "landing_database": "AIP", "landing_schema": "LANDING", "landing_table": "SRC__A",
-         "ingestion_method": "CTAS", "row_count": 100, "source_bytes": 5},
-        {"day": "2026-10-10", "landing_database": "AIP", "landing_schema": "LANDING", "landing_table": "SRC__B",
-         "ingestion_method": "COPY", "row_count": 50, "source_bytes": GB // 2},
-        {"day": "2026-10-10", "landing_database": "RAW", "landing_schema": "CRM", "landing_table": "C",
-         "ingestion_method": "IN_PLACE", "row_count": 7, "source_bytes": 99 * GB}],
     "FROM SOURCE.SOURCE_REGISTRY": [{"source_type": "SNOWFLAKE_SHARE", "n": 2}, {"source_type": "DATABASE", "n": 1},
                                     {"source_type": "SNOWFLAKE_DATABASE", "n": 1}, {"source_type": "FILE", "n": 1}],
     "FROM PLATFORM_CONFIG.INGESTION_PIPELINE_CATALOG": [{"n": 3, "active": 2}],
@@ -83,10 +84,7 @@ def test_overview_counts_runs_and_stores(client):
     c, holder = client
     out = c.get("/api/hub/overview").json()
     assert out["domain"] is None
-    ing = out["ingested"]
-    # the measured landed table counts its own bytes, the other falls back to its source size; in place is apart
-    assert ing["bytes"] == 2 * GB + GB // 2 and ing["tables"] == 2 and ing["in_place"] == 1 and ing["measured"] == "mixed"
-    assert [d["tables"] for d in ing["daily"]] == [1, 1]
+    assert "ingested" not in out  # source size is not a useful number; the ribbon shows delivery, waits, freshness and failures
     assert out["sources"] == {"total": 8, "shares": 2, "databases": 2, "other": 1, "external": 3, "external_active": 2}
     prof = out["profiling"]
     assert prof["tables"] == 34 and prof["columns"] == 450 and prof["pii"] == 15 and prof["catalog_tables"] == 4
@@ -100,9 +98,12 @@ def test_overview_counts_runs_and_stores(client):
     assert d["checks"] == 50 and d["run_checks"] == 40 and d["store_checks"] == 10
     assert d["passed"] == 35 and d["failed"] == 4 and d["pass_rate"] == round(100 * 35 / 41, 1)
     assert d["coverage"] == round(100 * 7 / 34, 1)
-    landing = [s for s, _ in holder["db"].executed if "INFORMATION_SCHEMA.TABLES" in s]
-    assert landing == ["SELECT TABLE_SCHEMA, TABLE_NAME, BYTES FROM AIP.INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA IN (%s)"]
-    assert not any(p for s, p in holder["db"].executed if "INFORMATION_SCHEMA" not in s), "no domain bind without a scope"
+    assert out["delivery"] == {"completed": 9, "failed": 1, "started": 12, "active": 4, "success_rate": 90.0, "lead_minutes": 190,
+                               "daily": [{"day": "2026-10-09", "completed": 4, "failed": 1}, {"day": "2026-10-10", "completed": 5, "failed": 0}]}
+    assert out["waiting"] == {"runs": 2, "requests": 3, "versions": 1 + 1 + 2, "total": 9, "oldest_minutes": 3000}
+    assert out["freshness"] == {"tables": 20, "fresh": 15, "stale": 3, "failed_loads": 2, "idle_pipelines": 1, "oldest_hours": 400}
+    assert out["failing"] == {"dq_checks": 4, "qa_tests": 2, "total": 6, "tables": 2}
+    assert not any(p for s, p in holder["db"].executed), "no domain bind without a scope"
 
 
 def test_overview_scopes_every_block_to_the_domain(client):
@@ -110,7 +111,9 @@ def test_overview_scopes_every_block_to_the_domain(client):
     out = c.get("/api/hub/overview?domain=company").json()
     assert out["domain"] == {"domain_id": "d-1", "domain_name": "COMPANY"}
     executed = holder["db"].executed
-    assert any("R.DOMAIN_ID = %s" in s and "LANDING_TABLE_REGISTRY" in s and p == ("d-1",) for s, p in executed)
+    assert any("R.DOMAIN_ID = %s" in s and "LANDING_TABLE_REGISTRY" in s and p == ("d-1", "d-1") for s, p in executed)
+    assert any("AS LEAD_MINUTES" in s and p == ("d-1",) * 3 for s, p in executed)
+    assert any("AS OLDEST_MINUTES" in s and p == ("d-1",) for s, p in executed)
     assert any("FROM GOVERNANCE.MODEL_DESIGNS" in s and p == ("COMPANY", "COMPANY") for s, p in executed)
     assert any("FROM MODELING.MODEL_DESIGN M JOIN CORE.WORKFLOW_RUN R" in s and p == ("d-1",) for s, p in executed)
     assert any("FROM METADATA.TABLE_PROFILES T JOIN CORE.WORKFLOW_RUN R ON R.RUN_ID = T.PROFILED_IN_RUN" in s
@@ -119,15 +122,14 @@ def test_overview_scopes_every_block_to_the_domain(client):
     assert any("FROM CONTRACT.QA_TEST_CASE" in s and p == ("d-1", "d-1") for s, p in executed)
 
 
-def test_unreadable_landing_schema_falls_back_to_source_sizes(client):
+def test_developer_stats_fail_soft(client):
     c, holder = client
-    holder["db"] = FakeDb(ANSWERS, fail=("INFORMATION_SCHEMA.TABLES",))
-    ing = c.get("/api/hub/overview").json()["ingested"]
-    assert ing["bytes"] == 5 + GB // 2 and ing["measured"] == "source"
-
-
-def test_quoted_identifiers():
-    assert overview._quoted("AIP_DB") == "AIP_DB" and overview._quoted('my db"x') == '"my db""x"'
+    holder["db"] = FakeDb(ANSWERS, fail=("FROM CORE.WORKFLOW_EVENT", "FROM GOVERNANCE.CHANGE_REQUEST", "FROM QUALITY.QA_RESULT"))
+    out = c.get("/api/hub/overview").json()
+    assert out["delivery"] is None and out["waiting"] is None and out["failing"]["qa_tests"] == 0 and out["freshness"]["stale"] == 3
+    holder["db"] = FakeDb({**ANSWERS, "AS LEAD_MINUTES": [{"completed": 0, "failed": 0, "lead_minutes": None, "active": 0, "started": 0}]})
+    d = c.get("/api/hub/overview").json()["delivery"]
+    assert d["success_rate"] is None and d["lead_minutes"] is None
 
 
 def test_overview_unknown_domain_and_missing_blocks(client):
@@ -137,7 +139,7 @@ def test_overview_unknown_domain_and_missing_blocks(client):
     holder["db"] = FakeDb({**ANSWERS}, fail=("FROM GOVERNANCE.DATA_PROFILES", "FROM METADATA.TABLE_PROFILES",
                                              "FROM SOURCE.LANDING_TABLE_REGISTRY"))
     out = c.get("/api/hub/overview").json()
-    assert out["profiling"] is None and out["ingested"] is None and out["sttm"]["verified"] == 3
+    assert out["profiling"] is None and out["freshness"] is None and out["sttm"]["verified"] == 3
     # the catalog missing alone still counts the persistent profile store
     holder["db"] = FakeDb({**ANSWERS}, fail=("FROM GOVERNANCE.DATA_PROFILES",))
     prof = c.get("/api/hub/overview").json()["profiling"]
