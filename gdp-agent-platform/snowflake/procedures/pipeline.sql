@@ -317,6 +317,20 @@ CREATE OR REPLACE PROCEDURE {{database}}.QUALITY.RUN_TABLE_SCAN(TABLE_FQN VARCHA
 
 GRANT USAGE ON PROCEDURE {{database}}.QUALITY.RUN_TABLE_SCAN(VARCHAR) TO DATABASE ROLE {{database}}.DATA_ENGINEER;
 
+-- Profiling Store (V041): one scheduled profiling run (a database.schema, all of its tables or a list). Called by the
+-- schedule's task (PROFILE.PROF_<hash>) and by Run now. Owner's rights: the owner role needs SELECT on the tables.
+CREATE OR REPLACE PROCEDURE {{database}}.PROFILE.RUN_SCHEDULED_PROFILE(SCHEDULE_ID VARCHAR)
+  RETURNS VARIANT
+  LANGUAGE PYTHON
+  RUNTIME_VERSION = '3.11'
+  PACKAGES = ('snowflake-snowpark-python')
+  IMPORTS = ('{{services_import}}')
+  HANDLER = 'services.catalog.profile_ops.run_scheduled'
+  COMMENT = 'Run one Profiling Store schedule and record its outcome and drift'
+  EXECUTE AS OWNER;
+
+GRANT USAGE ON PROCEDURE {{database}}.PROFILE.RUN_SCHEDULED_PROFILE(VARCHAR) TO DATABASE ROLE {{database}}.DATA_ENGINEER;
+
 -- Data Quality suites (V040): put an approved suite version (one table's reviewed checks) into the catalog the scanner
 -- and the schedules read. Owner's rights, so approvers need no write grant on the catalog.
 CREATE OR REPLACE PROCEDURE {{database}}.QUALITY.APPLY_DQ_SUITE(SUITE_ID VARCHAR, SUITE_VERSION NUMBER)

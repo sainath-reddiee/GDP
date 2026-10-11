@@ -48,6 +48,31 @@ export type ProfilePass = { profile_id: string; run_id: string | null; row_count
 export type ColumnDetail = {
   fqn: string; profile_id?: string; passes: ProfilePass[]; columns: ColumnProfile[]; catalog: boolean;
   drift: { changed: boolean; columns: Record<string, string[]>; drifted_columns: number } | null;
+  comparison?: PassComparison | null;
+  annotations?: { approved: Record<string, ColumnAnnotation>; pending: Record<string, ColumnAnnotation> };
+};
+export type PassMetrics = {
+  data_type: string | null; semantic_type: string | null; pii_classification: string | null; null_pct: number | null;
+  distinct_count: number | null; cardinality: string | null; min_value: string | null; max_value: string | null; row_count: number | null;
+};
+export type PassComparison = {
+  a: string; b: string; counts: Record<"added" | "removed" | "changed" | "same", number>;
+  row_count: { a: number | null; b: number | null; delta: number | null };
+  columns: { column_name: string; status: "added" | "removed" | "changed" | "same"; flags: string[]; a: PassMetrics | null; b: PassMetrics | null; null_delta: number | null }[];
+};
+/** A reviewed fact about a column (V041); an approved one overrides the profiler's guess. */
+export type ColumnAnnotation = {
+  annotation_id: string; table_fqn: string; column_name: string; description: string | null; business_definition: string | null;
+  pii_classification: string | null; semantic_type: string | null; accepted_values: string[]; detected: Record<string, unknown>;
+  note: string | null; status: "PROPOSED" | "APPROVED" | "REJECTED" | "SUPERSEDED" | "WITHDRAWN"; proposed_by: string | null;
+  proposed_at: string | null; decided_by: string | null; decided_at: string | null; decision_note: string | null;
+  model_id: string | null; model_change_id: string | null;
+};
+export type ProfileSchedule = {
+  schedule_id: string; source_system_id: string; database_name: string; schema_name: string; tables: string[]; cron: string;
+  force_refresh: boolean; task_name: string | null; enabled: boolean; last_run_at: string | null; last_status: "OK" | "PARTIAL" | "FAILED" | null;
+  last_result: { profiled?: string[]; cached?: string[]; failed?: { table: string; error: string }[]; drifted?: { table: string; columns: Record<string, string[]> }[]; error?: string } | null;
+  created_by: string | null; created_at: string | null;
 };
 export type Expectations = { table: string; checks: { check: string; column: string | null; reason: string }[]; soda_yaml: string; gx_suite: unknown };
 
