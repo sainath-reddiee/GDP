@@ -1,19 +1,21 @@
 "use client";
 
 import { useEffect, useMemo, useState, useTransition } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
-  AlertTriangle, Boxes, Check, ChevronDown, GitCompare, History, Loader2, Plus, Save, Sparkles, Trash2, X,
+  AlertTriangle, Boxes, Check, ChevronDown, GitCompare, GitPullRequestArrow, History, Link2, Loader2, Plus, Save, Sparkles, Trash2, X,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input, Textarea } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { TagEditor } from "@/components/tag-editor";
+import { useToast } from "@/components/ui/toast";
 import {
-  approveDesign, checkDesign, diffDesigns, generateDesign, saveDesign,
+  approveDesign, checkDesign, diffDesigns, generateDesign, proposeDesign, saveDesign,
   type Attribute, type Conventions, type Design, type DesignVersion, type DiffChange, type Entity, type Issue,
-  type ModelPayload,
+  type ModelPayload, type WorkbenchState,
 } from "./model-actions";
 
 const PRESETS: { key: Conventions["preset"]; label: string; hint: string }[] = [
@@ -167,6 +169,41 @@ function EntityCard({ entity, index, issues, editable, onChange, onRemove }: {
   );
 }
 
+function WorkbenchBanner({ wb }: { wb: WorkbenchState }) {
+  const p = wb.proposal;
+  const model = wb.model_id ?? p?.model_id ?? null;
+  const href = (tab: string) => (model ? `/dashboard/modeling/${model}?tab=${tab}` : "/dashboard/modeling");
+  return (
+    <div className="space-y-1.5 rounded-lg border border-violet-300/60 bg-violet-50/50 px-3 py-2 text-xs dark:border-violet-800 dark:bg-violet-950/20" data-testid="run-workbench">
+      <p className="flex flex-wrap items-center gap-2">
+        <GitPullRequestArrow className="h-3.5 w-3.5 text-violet-600" />
+        <span className="font-semibold">The domain model is governed in the Model Workbench.</span>
+        <span className="text-muted-foreground">Design here, then propose it; modelers merge, review and approve it, and the run maps to the approved version.</span>
+      </p>
+      {wb.model_id && wb.model_version != null && (
+        <p className="flex flex-wrap items-center gap-2">
+          <Link2 className="h-3.5 w-3.5 text-success" />
+          <span>Maps to <span className="font-mono font-semibold">{wb.model_entity ?? "?"}</span> of domain model <Badge variant="success">v{wb.model_version}</Badge></span>
+          <Link className="text-primary underline-offset-2 hover:underline" href={href("diagram")}>Open model</Link>
+        </p>
+      )}
+      {p && (
+        <p className="flex flex-wrap items-center gap-2" role="status">
+          <Badge variant={p.status === "STALE" ? "warning" : "outline"}>{({ PROPOSED: "proposal pending", MERGED: "merged into a draft", STALE: "proposal out of date" } as const)[p.status]}</Badge>
+          <span className="text-muted-foreground">
+            {p.status === "PROPOSED" && "Waiting for a modeler to merge it into a draft."}
+            {p.status === "MERGED" && `Merged into draft v${p.merged_into_version ?? "?"}; mapping starts once that version is approved.`}
+            {p.status === "STALE" && "The domain model was approved without it. Propose again, or ask a modeler to merge it into the new draft."}
+          </span>
+          <Link className="text-primary underline-offset-2 hover:underline" href={href(p.status === "MERGED" ? "review" : "changes")}>
+            {p.status === "MERGED" ? "Open review" : "Open proposals"}
+          </Link>
+        </p>
+      )}
+    </div>
+  );
+}
+
 export function ModelDesign({ runId, data, canApply, state, canEdit = true, canAI = true }: {
   runId: string; data: ModelPayload; canApply: boolean; state: string; canEdit?: boolean; canAI?: boolean;
 }) {
@@ -183,6 +220,9 @@ export function ModelDesign({ runId, data, canApply, state, canEdit = true, canA
   const [changes, setChanges] = useState<DiffChange[] | null>(null);
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
   const [busy, start] = useTransition();
+  const toast = useToast();
+  // approving or proposing refreshes the run layout, which can remount this section: the toast outlives it
+  const say = (ok: boolean, text: string) => { setMessage({ ok, text }); toast(ok ? "ok" : "error", text); };
   const [collapsed, setCollapsed] = useState(Boolean(data.approved) && !["DOMAIN_IDENTIFIED", "PROFILING_COMPLETE"].includes(state));
 
   // after a generate/save the page refreshes with the new version: load it unless the user is mid-edit
@@ -244,8 +284,26 @@ export function ModelDesign({ runId, data, canApply, state, canEdit = true, canA
     if (!shown) return;
     setMessage(null);
     const r = await approveDesign(runId, shown.version);
-    if (!r.ok) { setMessage({ ok: false, text: r.error }); return; }
-    setMessage({ ok: true, text: `Version ${shown.version} is the target: ${r.data.target_model}.${r.data.mapping_reset ? " Mapping was sent back so candidates are regenerated for it." : ""} Saved to knowledge.` });
+    if (!r.ok) { say(false, r.error); return; }
+    say(true, `Version ${shown.version} is the target: ${r.data.target_model}.${r.data.mapping_reset ? " Mapping was sent back so candidates are regenerated for it." : ""} Saved to knowledge.`);
+    router.refresh();
+  });
+  const propose = () => start(async () => {
+    if (!shown) return;
+    setMessage(null);
+    const r = await proposeDesign(runId, shown.version);
+    if (!r.ok) { say(false, r.error); return; }
+    const d = r.data;
+    if (d.pinned) {
+      const pin = d.pin;
+      if (pin && !pin.pinned) say(false, `It matches domain model v${d.version}, but the run could not use it: ${pin.detail ?? "reopen mapping"}.`);
+      else say(true, `Nothing new for the domain model: the run maps to ${d.entity} of v${d.version}.${pin?.mapping_reset ? " Mapping was sent back so candidates are regenerated for it." : ""}`);
+    } else if (d.status === "MERGED") {
+      say(true, "The domain had no model yet: this design is now its first draft (v1). Submit it for review in the Model Workbench.");
+    } else {
+      const n = d.counts ? Object.values(d.counts).reduce((a, b) => a + b, 0) : 0;
+      say(true, `Proposed ${n} change${n === 1 ? "" : "s"} to the domain model${d.breaking ? ", including breaking ones" : ""}. A modeler merges and approves it; the run maps once it is approved.`);
+    }
     router.refresh();
   });
   const compare = () => start(async () => {
@@ -255,6 +313,7 @@ export function ModelDesign({ runId, data, canApply, state, canEdit = true, canA
     if (r.ok) setChanges(r.data.changes);
   });
 
+  const wb = data.workbench;
   const decision = draft ? DECISION[draft.decision] ?? DECISION.NEW : null;
   const evidence = useMemo(() => draft?.evidence ?? [], [draft]);
 
@@ -281,6 +340,7 @@ export function ModelDesign({ runId, data, canApply, state, canEdit = true, canA
 
       {!collapsed && (
         <>
+          {wb?.enforced && <WorkbenchBanner wb={wb} />}
           <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
             <div className="space-y-1">
               <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Conventions</p>
@@ -362,13 +422,22 @@ export function ModelDesign({ runId, data, canApply, state, canEdit = true, canA
           {draft && (
             <div className="flex flex-wrap items-center gap-2 border-t pt-3">
               <span className="text-xs text-muted-foreground">
-                {errors ? `${errors} problem${errors === 1 ? "" : "s"} to fix before approving` : issues.length ? `${issues.length} note${issues.length === 1 ? "" : "s"}` : "Grounded in the profiled sources"}
+                {errors ? `${errors} problem${errors === 1 ? "" : "s"} to fix before ${wb?.enforced ? "proposing" : "approving"}` : issues.length ? `${issues.length} note${issues.length === 1 ? "" : "s"}` : "Grounded in the profiled sources"}
               </span>
               <Button size="sm" variant="outline" className="ml-auto" disabled={busy || !dirty || !canEdit} onClick={save}><Save className="h-3.5 w-3.5" />Save as new version</Button>
-              <Button size="sm" disabled={busy || dirty || !canApply || errors > 0 || isApproved} onClick={approve}
-                      title={!canApply ? "The run is past mapping; reopen mapping to change the target" : dirty ? "Save your edits first" : undefined}>
-                {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}{isApproved ? "In use" : "Approve and use for mapping"}
-              </Button>
+              {wb?.enforced ? (
+                <Button size="sm" disabled={busy || dirty || !canApply || errors > 0 || !canEdit} onClick={propose}
+                        title={!canApply ? "The run is past mapping; reopen mapping to change the target" : dirty ? "Save your edits first"
+                          : wb.proposal && wb.proposal.status !== "STALE" ? "Replaces the open proposal of this run" : undefined}>
+                  {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <GitPullRequestArrow className="h-3.5 w-3.5" />}
+                  {wb.proposal && wb.proposal.status === "PROPOSED" ? "Propose again" : "Propose to domain model"}
+                </Button>
+              ) : (
+                <Button size="sm" disabled={busy || dirty || !canApply || errors > 0 || isApproved} onClick={approve}
+                        title={!canApply ? "The run is past mapping; reopen mapping to change the target" : dirty ? "Save your edits first" : undefined}>
+                  {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}{isApproved ? "In use" : "Approve and use for mapping"}
+                </Button>
+              )}
             </div>
           )}
         </>

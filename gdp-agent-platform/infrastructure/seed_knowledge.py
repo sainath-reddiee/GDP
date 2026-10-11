@@ -326,10 +326,58 @@ def seed_domain_models(cur, database: str) -> List[str]:
     return backfill(CursorSession(cur))
 
 
+SEED_CODE = [ROOT / "infrastructure" / "seed_knowledge.py", ROOT / "services" / "knowledge",
+             ROOT / "services" / "qa", ROOT / "services" / "modeling"]
+
+
+def seed_inputs_digest() -> str:
+    """Checksum of everything the seed reads from the repository (domain packs and QA packs, skills, seeded config
+    and weights) and of the code that writes it, so a deploy runs the seed only when one of them changed."""
+    h = hashlib.sha256()
+    files = sorted(p for p in DOMAIN_DIR.rglob("*") if p.is_file()) + sorted(p for p in SKILLS_DIR.rglob("*") if p.is_file())
+    for root in SEED_CODE:
+        files += [root] if root.is_file() else sorted(root.rglob("*.py"))
+    for path in files:
+        if "__pycache__" in path.parts:
+            continue
+        h.update(path.relative_to(ROOT).as_posix().encode())
+        h.update(path.read_bytes())
+    h.update(json.dumps([config_rows(), scoring_rows()], sort_keys=True, default=str).encode())
+    return h.hexdigest()
+
+
+def governed_domains(cur, database: str) -> Dict[str, Any]:
+    """Domains whose registry follows an approved Model Workbench version: {domain id: approved version}."""
+    try:
+        cur.execute(f"SELECT DOMAIN_ID, APPROVED_VERSION FROM {database}.GOVERNANCE.DOMAIN_MODEL "
+                    "WHERE APPROVED_VERSION IS NOT NULL")
+        return {r[0]: r[1] for r in cur.fetchall()}
+    except Exception:
+        return {}  # before V039
+
+
+def drop_governed(data: Dict[str, Any], governed: Dict[str, Any]) -> List[str]:
+    """Leave the target tables and columns of governed domains alone: their approved model version is the source of
+    truth, and re-applying the repository pack would undo approved changes. A pack change reaches such a domain by
+    importing the pack into a draft in the Model Workbench."""
+    if not governed:
+        return []
+    names = {row[0]: row[1] for row in data["domains"]}
+    skipped = {row[0] for row in data["tables"] if row[1] in governed}
+    hit = sorted({row[1] for row in data["tables"] if row[1] in governed})
+    data["tables"] = [row for row in data["tables"] if row[0] not in skipped]
+    data["columns"] = [row for row in data["columns"] if row[1] not in skipped]
+    data["drift"] = [d for d in data["drift"] if d.get("domain") not in {names.get(i) for i in hit}]
+    return [f"domain {names.get(i, i)}: target tables follow its approved model v{governed[i]}; pack tables not "
+            "re-applied (import the pack into a draft in the Model Workbench to change the model)" for i in hit]
+
+
 def seed_platform(cur, database: str) -> List[str]:
-    """MERGE domain packs, skills, config and scoring weights; PUT skill files to the stage. Returns log lines."""
+    """MERGE domain packs, skills, config and scoring weights; PUT skill files to the stage. Returns log lines.
+    Target tables of domains governed by an approved model are not re-applied from the packs."""
     live, log = fetch_live_columns(cur)
     data = domain_rows(database, live)
+    log.extend(drop_governed(data, governed_domains(cur, database)))
     for d in data["drift"]:
         if d["live"] and (d["missing_in_silver"] or d["not_in_contract"]):
             log.append(f"drift {d['domain']}.{d['table']}: contract-only {d['missing_in_silver'][:6]}, "

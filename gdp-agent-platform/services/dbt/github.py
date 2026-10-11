@@ -189,6 +189,21 @@ def publish(request: Request, origin: str, base: str, head: str, files: Dict[str
     }
 
 
+def pull_status(request: Request, origin: str, number: int) -> Dict[str, Any]:
+    """A pull request's state: OPEN, DRAFT, MERGED or CLOSED (closed without merging), with the merge commit."""
+    owner, repo = parse_origin(origin)
+    body = _ok("read pull request", request("GET", f"/repos/{owner}/{repo}/pulls/{int(number)}", None))
+    if body.get("merged") or body.get("merged_at"):
+        state = "MERGED"
+    elif str(body.get("state") or "").lower() == "closed":
+        state = "CLOSED"
+    else:
+        state = "DRAFT" if body.get("draft") else "OPEN"
+    return {"number": body.get("number") or int(number), "state": state, "url": body.get("html_url"),
+            "merge_commit_sha": body.get("merge_commit_sha") if state == "MERGED" else None,
+            "merged_at": body.get("merged_at"), "closed_at": body.get("closed_at")}
+
+
 def urllib_request(token: str, api: str = "https://api.github.com", timeout: int = 30) -> Request:
     """GitHub REST caller using only the standard library (works inside Snowflake Python procedures)."""
     import urllib.error

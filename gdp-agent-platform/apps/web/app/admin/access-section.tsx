@@ -369,9 +369,15 @@ function Settings({ settings, roles }: { settings: GovSettings; roles: GovRole[]
       </label>
       <label className="flex items-center justify-between gap-3">
         <span>Asset store edits always need another person&apos;s approval
-          <span className="block text-xs text-muted-foreground">STTM, data quality and dbt changes made in the stores, even by holders of the privilege</span>
+          <span className="block text-xs text-muted-foreground">STTM and data quality changes made in the stores, even by holders of the privilege</span>
         </span>
         <input type="checkbox" checked={s.STORE_EDITS_REQUIRE_APPROVAL ?? true} onChange={(e) => setS({ ...s, STORE_EDITS_REQUIRE_APPROVAL: e.target.checked })} />
+      </label>
+      <label className="flex items-center justify-between gap-3">
+        <span>Runs propose model changes to the domain model
+          <span className="block text-xs text-muted-foreground">A run&apos;s model design is reviewed and approved in the Model Workbench before mapping uses it; off lets runs approve their own model as before</span>
+        </span>
+        <input type="checkbox" checked={s.MODEL_WORKBENCH_ENFORCED ?? true} onChange={(e) => setS({ ...s, MODEL_WORKBENCH_ENFORCED: e.target.checked })} />
       </label>
       <label className="flex items-center justify-between gap-3">Super admins may approve their own requests
         <input type="checkbox" checked={s.SUPER_SELF_APPROVE} onChange={(e) => setS({ ...s, SUPER_SELF_APPROVE: e.target.checked })} />

@@ -118,6 +118,16 @@ def baseline(body: BaselineIn, db: Db = Depends(current_db)):
     return {"log": _call(db, svc.backfill, _user(db))}
 
 
+@router.get("/api/hub/domain-models/publishing")
+def publishing(db: Db = Depends(current_db)):
+    """Where approved versions can be published: the GitHub repositories connected for dbt, and publisher readiness."""
+    from app.main import _dbt_repos, _github_publisher_ready
+
+    repos = [{k: r.get(k) for k in ("repo_id", "name", "git_url", "provider", "branch")} for r in _dbt_repos(db, None)
+             if (r.get("provider") or "") == "GITHUB"]
+    return {"repos": repos, "publisher_ready": _github_publisher_ready(db)}
+
+
 @router.get("/api/hub/domain-models/{model_id}")
 def get_model(model_id: str, version: Optional[int] = None, db: Db = Depends(current_db)):
     from services.modeling import spec_v2
@@ -195,12 +205,62 @@ class ApproveIn(BaseModel):
     note: Optional[str] = Field(default=None, max_length=2000)
 
 
+def _pin_merged(db: Db, model_id: str, version: int) -> list:
+    """Runs whose proposals this version carries now use it (or are told to reopen mapping)."""
+    from app.main import pin_run_model
+    from services.modeling.run_link import on_approved
+
+    try:
+        merged = invoke_source(db, on_approved, model_id, version)
+    except Exception:
+        return []
+    out = []
+    for m in merged:
+        try:
+            out.append(pin_run_model(db, m["run_id"], model_id, version, m["entity"], m["design_version"]))
+        except Exception as exc:
+            out.append({"run_id": m["run_id"], "pinned": False, "detail": str(exc)[:300]})
+    return out
+
+
 @router.post("/api/hub/domain-models/{model_id}/versions/{version}/approve")
 def approve(model_id: str, version: int, body: ApproveIn, db: Db = Depends(current_db)):
-    """The version becomes the domain's approved model, then the registry is updated from it. If the registry update
-    fails the approval stands and /apply retries it."""
+    """The version becomes the domain's approved model, then the registry is updated from it and the runs whose
+    proposals it carries are pointed at it. If the registry update fails the approval stands and /apply retries it."""
     result = _call(db, _svc().approve, model_id, version, _user(db), body.acknowledge_breaking)
-    return {**result, "registry": _apply(db, model_id, version)}
+    registry = _apply(db, model_id, version)
+    return {**result, "registry": registry, "runs": _pin_merged(db, model_id, version) if registry.get("applied") else []}
+
+
+@router.get("/api/hub/domain-models/{model_id}/changes")
+def list_changes(model_id: str, db: Db = Depends(current_db)):
+    from services.modeling import run_link
+
+    try:
+        return {"changes": invoke_source(db, run_link.list_changes, model_id)}
+    except Exception as exc:
+        if _missing(exc):
+            return {"changes": []}
+        raise _snowflake_error(exc) from exc
+
+
+@router.post("/api/hub/domain-models/{model_id}/changes/{change_id}/merge")
+def merge_change(model_id: str, change_id: str, db: Db = Depends(current_db)):
+    """Merge a run's proposal into the open draft (opening one when there is none)."""
+    from services.modeling import run_link
+
+    return _call(db, run_link.merge_change, model_id, change_id, _user(db))
+
+
+class ChangeRejectIn(BaseModel):
+    note: str = Field(min_length=3, max_length=2000)
+
+
+@router.post("/api/hub/domain-models/{model_id}/changes/{change_id}/reject")
+def reject_change(model_id: str, change_id: str, body: ChangeRejectIn, db: Db = Depends(current_db)):
+    from services.modeling import run_link
+
+    return _call(db, run_link.reject_change, model_id, change_id, _user(db), body.note)
 
 
 @router.post("/api/hub/domain-models/{model_id}/versions/{version}/apply")
@@ -218,6 +278,59 @@ class RejectIn(BaseModel):
 @router.post("/api/hub/domain-models/{model_id}/versions/{version}/reject")
 def reject(model_id: str, version: int, body: RejectIn, db: Db = Depends(current_db)):
     return _call(db, _svc().reject, model_id, version, _user(db), body.reason)
+
+
+class PublishIn(BaseModel):
+    repo_id: str = Field(min_length=1, max_length=36)
+    base: Optional[str] = Field(default=None, max_length=200)
+    title: Optional[str] = Field(default=None, max_length=200)
+
+
+@router.post("/api/hub/domain-models/{model_id}/versions/{version}/publish")
+def publish(model_id: str, version: int, body: PublishIn, db: Db = Depends(current_db)):
+    """Open a pull request with an approved version's files (feature/model-<domain>-v<version>). The version becomes
+    PUBLISHED when the pull request is merged."""
+    import re
+
+    from app.main import _dbt_repos, _github_publisher_ready
+
+    out = _call(db, _svc().get_model, model_id, version)
+    current = out.get("current") or {}
+    if current.get("status") != "APPROVED":
+        raise HTTPException(409, "Only an approved version is published; approve it first.")
+    repo = next((r for r in _dbt_repos(db, None) if r["repo_id"] == body.repo_id), None)
+    if not repo or (repo.get("provider") or "") != "GITHUB":
+        raise HTTPException(409, "Choose a GitHub repository connected in Admin, Integrations.")
+    if not _github_publisher_ready(db):
+        return {"status": "NOT_CONFIGURED", "detail": "GitHub publishing is not set up. An admin can set it up in the GitHub publishing card."}
+    slug = re.sub(r"[^a-z0-9]+", "-", out["model"]["domain_name"].lower()).strip("-") or "model"
+    head = f"feature/model-{slug}-v{int(version)}"
+    request = {"model_id": model_id, "version": int(version), "repo_id": body.repo_id, "head": head,
+               "base": body.base or repo.get("branch"), "title": body.title}
+    try:
+        result = db.call("CALL CODEGEN.PUBLISH_DBT_PR(%s, %s)", ("", json.dumps({"domain_model": request})))
+    except Exception as exc:
+        return {"status": "FAILED", "detail": str(exc)[:1000], "head_branch": head}
+    return {**(result or {}), "head_branch": head}
+
+
+class SyncIn(BaseModel):
+    force: bool = False
+
+
+@router.post("/api/hub/domain-models/{model_id}/pr-sync")
+def pr_sync(model_id: str, body: SyncIn, db: Db = Depends(current_db)):
+    """Read the model's open pull requests from GitHub (merged makes the version PUBLISHED). Throttled to once a
+    minute per version unless `force`."""
+    from app.main import _github_publisher_ready
+
+    if not _github_publisher_ready(db):
+        return {"checked": 0, "merged": [], "closed": [], "errors": [], "detail": "GitHub publishing is not set up"}
+    try:
+        return db.call("CALL CODEGEN.PUBLISH_DBT_PR(%s, %s)",
+                       ("", json.dumps({"sync_model_prs": {"model_id": model_id, "force": body.force}}))) or {}
+    except Exception as exc:
+        raise _snowflake_error(exc) from exc
 
 
 @router.get("/api/hub/domain-models/{model_id}/diff")

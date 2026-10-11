@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import {
   AlertTriangle, CheckCircle2, Download, FileInput, GitBranch, History, Layers3, ListChecks, Loader2, MessageSquare, Network,
-  PencilLine, RotateCcw, Ruler, Save, Send, ShieldCheck, Undo2,
+  GitPullRequest, PencilLine, RotateCcw, Ruler, Save, Send, ShieldCheck, Undo2, Workflow,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { DmComment, DmDetail, DmIssue, DmSpec } from "@/lib/model-types";
@@ -20,11 +20,13 @@ import { importInto, openDraft, saveDraft, saveLayout, submitDraft, validateDraf
 import { EntitiesPanel, RelationshipsPanel } from "./entities-panel";
 import { ReviewPanel } from "./review-panel";
 import { StandardsPanel, VersionsPanel } from "./versions-panel";
+import { ChangesPanel, PublishPanel } from "./publish-panel";
 
-type Tab = "diagram" | "entities" | "relationships" | "standards" | "versions" | "review";
+type Tab = "diagram" | "entities" | "relationships" | "standards" | "versions" | "review" | "publish" | "changes";
 const TABS: [Tab, string, typeof Network][] = [
   ["diagram", "Diagram", Network], ["entities", "Entities", Layers3], ["relationships", "Relationships", GitBranch],
   ["standards", "Standards", Ruler], ["versions", "Versions", History], ["review", "Review", MessageSquare],
+  ["publish", "Publish", GitPullRequest], ["changes", "From runs", Workflow],
 ];
 
 function ImportModal({ modelId, spec, onClose, onLoaded }: { modelId: string; spec: DmSpec; onClose: () => void; onLoaded: (s: DmSpec, note: string) => void }) {
@@ -247,6 +249,9 @@ export function ModelWorkbench({ detail, comments, me, initialTab, canEdit, canA
         <ReviewPanel modelId={modelId} version={current} approvedVersion={detail.model.approved_version} comments={comments} me={me}
                      canComment={canEdit || canApprove} canDecide={canApprove && !own && current.status === "IN_REVIEW"} own={own} dirty={dirty} />
       )}
+
+      {tab === "publish" && <PublishPanel modelId={modelId} versions={detail.versions} canPublish={canEdit} />}
+      {tab === "changes" && <ChangesPanel modelId={modelId} canEdit={canEdit} openStatus={detail.open?.status ?? null} />}
 
       {editable && (
         <div className="sticky bottom-4 z-30 mx-auto flex w-full max-w-4xl flex-wrap items-center gap-2 rounded-2xl border bg-card p-2.5 shadow-pop" data-testid="model-bar">

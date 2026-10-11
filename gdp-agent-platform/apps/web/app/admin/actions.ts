@@ -3,8 +3,9 @@
 import { revalidatePath } from "next/cache";
 import { api, attemptValue } from "@/lib/api";
 
-export async function deployPlatform() {
-  const result = await attemptValue(() => api<{ ok: boolean; log: string[] }>("/api/admin/apply", { method: "POST" }));
+/** Deploy what changed since the last deploy; `force` re-applies every step. */
+export async function deployPlatform(force = false) {
+  const result = await attemptValue(() => api<{ ok: boolean; log: string[] }>(`/api/admin/apply${force ? "?force=true" : ""}`, { method: "POST" }));
   revalidatePath("/", "layout");
   return result;
 }

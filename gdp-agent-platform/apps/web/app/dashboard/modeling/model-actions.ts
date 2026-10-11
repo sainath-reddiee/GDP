@@ -116,3 +116,47 @@ export async function importInto(modelId: string, body: { kind: "ddl" | "pack" |
   return storeAction(() => api<{ spec: DmSpec; issues: DmIssue[]; counts: Record<string, number>; entities: number }>(
     `${BASE}/${enc(modelId)}/import`, send("POST", body)));
 }
+
+// ---------------------------------------------------------------- Git and run proposals
+
+export type Publishing = { repos: { repo_id: string; name: string; git_url: string; branch: string }[]; publisher_ready: boolean };
+export type RunChange = {
+  change_id: string; base_version: number | null; run_id: string | null; run_design_version: number | null; target_entity: string | null;
+  diff: { counts?: Record<string, number>; breaking?: boolean; changes?: { kind: string; class: string; message: string }[] };
+  status: string; merged_into_version: number | null; note: string | null; created_by: string | null; created_at: string | null;
+  decided_by: string | null; run_name: string | null; current_state: string | null;
+};
+
+export async function loadPublishing() {
+  return storeAction(() => api<Publishing>(`${BASE}/publishing`));
+}
+
+export async function publishVersion(modelId: string, version: number, body: { repo_id: string; base?: string | null }) {
+  const r = await storeAction(() => api<{ status: string; detail?: string; head_branch?: string; pull_request?: { url: string | null; number: number | null } }>(
+    `${BASE}/${enc(modelId)}/versions/${version}/publish`, send("POST", body)));
+  touch(modelId);
+  return r;
+}
+
+export async function syncPrs(modelId: string, force = false) {
+  const r = await storeAction(() => api<{ checked: number; merged: unknown[]; closed: unknown[]; errors: unknown[]; detail?: string }>(
+    `${BASE}/${enc(modelId)}/pr-sync`, send("POST", { force })));
+  touch(modelId);
+  return r;
+}
+
+export async function loadChanges(modelId: string) {
+  return storeAction(() => api<{ changes: RunChange[] }>(`${BASE}/${enc(modelId)}/changes`));
+}
+
+export async function mergeChange(modelId: string, changeId: string) {
+  const r = await storeAction(() => api<{ version: number; counts: Record<string, number> }>(`${BASE}/${enc(modelId)}/changes/${enc(changeId)}/merge`, send("POST", {})));
+  touch(modelId);
+  return r;
+}
+
+export async function rejectChange(modelId: string, changeId: string, note: string) {
+  const r = await storeAction(() => api<{ status: string }>(`${BASE}/${enc(modelId)}/changes/${enc(changeId)}/reject`, send("POST", { note })));
+  touch(modelId);
+  return r;
+}

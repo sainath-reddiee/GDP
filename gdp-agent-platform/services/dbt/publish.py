@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import re
 import uuid
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from services.common.audit import tool_call
 from services.common.sql import clip, insert_rows, rows, scalar, variant
@@ -183,12 +183,118 @@ def publish_model_branch(session, request: Dict[str, Any]) -> Dict[str, Any]:
     return result
 
 
+def _repo(session, repo_id: str) -> Dict[str, Any]:
+    repo = rows(session, "SELECT GIT_URL, BRANCH, PROVIDER FROM CODE.REPO WHERE REPO_ID = ? AND ENABLED", [repo_id])
+    assert repo and str(repo[0]["PROVIDER"] or "").upper() == "GITHUB", "the repository is not a connected GitHub repository"
+    return repo[0]
+
+
+def publish_domain_model(session, request: Dict[str, Any]) -> Dict[str, Any]:
+    """An APPROVED domain model version (Model Workbench) as a branch feature/model-<domain>-v<version> with a pull
+    request for the repository's owners to merge. Only ids and the branch come from the caller: the files are rendered
+    here from the approved specification, so nothing that was not approved in the app is ever pushed. The version
+    stays APPROVED until the pull request is merged (sync_model_prs marks it PUBLISHED)."""
+    from services.knowledge.packs import export_pack
+    from services.modeling import render_v2, spec_v2
+
+    model_id, version = str(request.get("model_id") or ""), int(request.get("version") or 0)
+    head = github.check_branch(str(request.get("head") or ""))
+    assert head.startswith("feature/model-"), "a model branch starts with feature/model-"
+    found = rows(session, """SELECT D.STATUS, D.SPEC, M.DOMAIN_ID, M.DOMAIN_NAME FROM GOVERNANCE.MODEL_DESIGNS D
+                              JOIN GOVERNANCE.DOMAIN_MODEL M ON M.MODEL_ID = D.MODEL_ID
+                             WHERE D.MODEL_ID = ? AND D.VERSION = ?""", [model_id, version])
+    assert found, "model version not found"
+    assert found[0]["STATUS"] == "APPROVED", "only an approved model version is published"
+    spec = spec_v2.normalize_v2(variant(found[0]["SPEC"]) or {}, model_id)
+    try:  # keep the domain's knowledge items and settings in the pack; the targets come from the approved model
+        base = export_pack(lambda sql, params: rows(session, sql.replace("%s", "?"), list(params)), found[0]["DOMAIN_ID"])
+    except Exception:
+        base = None
+    files = render_v2.artifacts(spec, base)
+    repo_id = str(request.get("repo_id") or "")
+    repo = _repo(session, repo_id)
+    origin, base_branch = repo["GIT_URL"], str(request.get("base") or repo["BRANCH"] or "main")
+    domain = found[0]["DOMAIN_NAME"]
+    title = clip(request.get("title") or f"Model {domain} v{version} (approved)", 200)
+    body = clip(request.get("body") or (f"Domain model {domain} v{version}, approved in the Model Workbench "
+                                        f"(model {model_id}).\n\nFiles:\n" + "\n".join(f"- {p}" for p in sorted(files))), 6000)
+    with tool_call(session, None, "publish_domain_model", {"model_id": model_id, "version": version, "head": head}) as call:
+        try:
+            result = github.publish(github.urllib_request(_token()), origin, base_branch, head, files, title=title, body=body,
+                                    message=title, draft=False)
+            call.summary = f"{result['status']} {head}: PR {(result.get('pull_request') or {}).get('url') or 'none'}"
+        except Exception as exc:
+            result = {**github.explain(exc, origin), "base_branch": base_branch, "head_branch": head}
+            result["detail"] = clip(result.get("detail"), 1000)
+            call.status, call.error = "FAILED", clip(exc)
+    pr = result.get("pull_request") or {}
+    state = ("OPEN" if pr.get("url") else None) if result.get("status") == "PUBLISHED" else (
+        "NO_CHANGES" if result.get("status") == "NO_CHANGES" else "FAILED")
+    status = "PUBLISHED" if state == "NO_CHANGES" else "APPROVED"  # the repository already holds exactly this model
+    session.sql("""UPDATE GOVERNANCE.MODEL_DESIGNS SET STATUS = ?, REPO_ID = ?, BRANCH = ?, PR_URL = NULLIF(?, ''),
+                          PR_NUMBER = NULLIF(?, '')::NUMBER, PR_STATE = ?, PUBLISH_RESULT = PARSE_JSON(?),
+                          PR_SYNCED_AT = CURRENT_TIMESTAMP(), UPDATED_AT = CURRENT_TIMESTAMP()
+                    WHERE MODEL_ID = ? AND VERSION = ?""",
+                params=[status, repo_id, head, pr.get("url") or "", str(pr.get("number") or ""), state,
+                        json.dumps(result, default=str), model_id, version]).collect()
+    return result
+
+
+def sync_model_prs(session, request: Dict[str, Any]) -> Dict[str, Any]:
+    """Read the state of open domain model pull requests from GitHub: merged marks the version PUBLISHED, closed
+    without merging leaves it APPROVED with PR_STATE CLOSED (to publish again). Versions synced in the last minute are
+    skipped unless `force`. Run on demand from the Publish tab and by the CODEGEN.SYNC_MODEL_PRS_TASK task."""
+    model_id = str(request.get("model_id") or "")
+    where = "D.PR_NUMBER IS NOT NULL AND D.PR_STATE IN ('OPEN', 'DRAFT') AND D.REPO_ID IS NOT NULL"
+    params: List[Any] = []
+    if model_id:
+        where += " AND D.MODEL_ID = ?"
+        params.append(model_id)
+    if not request.get("force"):
+        where += " AND (D.PR_SYNCED_AT IS NULL OR D.PR_SYNCED_AT < DATEADD('second', -60, CURRENT_TIMESTAMP()))"
+    found = rows(session, f"""SELECT D.MODEL_ID, D.VERSION, D.PR_NUMBER, R.GIT_URL FROM GOVERNANCE.MODEL_DESIGNS D
+                               JOIN CODE.REPO R ON R.REPO_ID = D.REPO_ID WHERE {where} LIMIT 200""", params)
+    request_fn = github.urllib_request(_token()) if found else None
+    out: Dict[str, Any] = {"checked": 0, "merged": [], "closed": [], "errors": []}
+    for r in found:
+        try:
+            pr = github.pull_status(request_fn, r["GIT_URL"], int(r["PR_NUMBER"]))
+        except Exception as exc:
+            out["errors"].append({"model_id": r["MODEL_ID"], "version": int(r["VERSION"]), "error": clip(exc, 300)})
+            continue
+        out["checked"] += 1
+        status_sql = ", STATUS = 'PUBLISHED'" if pr["state"] == "MERGED" else ""
+        session.sql(f"""UPDATE GOVERNANCE.MODEL_DESIGNS SET PR_STATE = ?, MERGED_SHA = NULLIF(?, ''),
+                               PR_SYNCED_AT = CURRENT_TIMESTAMP(){status_sql}
+                         WHERE MODEL_ID = ? AND VERSION = ? AND STATUS IN ('APPROVED', 'PUBLISHED')""",
+                    params=[pr["state"], pr.get("merge_commit_sha") or "", r["MODEL_ID"], int(r["VERSION"])]).collect()
+        if pr["state"] == "MERGED":
+            out["merged"].append({"model_id": r["MODEL_ID"], "version": int(r["VERSION"])})
+        elif pr["state"] == "CLOSED":
+            out["closed"].append({"model_id": r["MODEL_ID"], "version": int(r["VERSION"])})
+    return out
+
+
+def sync_task_sql(database: str, warehouse: str) -> List[str]:
+    """A task that syncs domain model pull requests every 30 minutes (created with the publisher)."""
+    for value in (database, warehouse):
+        assert NAME.match(value or ""), f"unsafe identifier: {value}"
+    return [f"CREATE OR REPLACE TASK {database}.CODEGEN.SYNC_MODEL_PRS_TASK WAREHOUSE = {warehouse} "
+            f"SCHEDULE = '30 MINUTE' COMMENT = 'Model Workbench: read the state of domain model pull requests' "
+            f"AS CALL {database}.CODEGEN.PUBLISH_DBT_PR('', '{{\"sync_model_prs\": {{}}}}')",
+            f"ALTER TASK {database}.CODEGEN.SYNC_MODEL_PRS_TASK RESUME"]
+
+
 def publish_dbt_pr(session, run_id: str, payload_json: str = "{}") -> Dict[str, Any]:
     payload = json.loads(payload_json or "{}")
     if not run_id and isinstance(payload.get("case_patch"), dict):
         return publish_case_patch(session, payload["case_patch"])
     if not run_id and isinstance(payload.get("model_branch"), dict):
         return publish_model_branch(session, payload["model_branch"])
+    if not run_id and isinstance(payload.get("domain_model"), dict):
+        return publish_domain_model(session, payload["domain_model"])
+    if not run_id and isinstance(payload.get("sync_model_prs"), dict):
+        return sync_model_prs(session, payload["sync_model_prs"])
     plan = _plan(session, run_id, payload) if run_id else dict(payload)
     if payload.get("check_only"):
         try:
