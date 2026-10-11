@@ -643,3 +643,82 @@ def test_legacy_hub_never_writes_a_canonical_model(monkeypatch):
         assert r.status_code == 409 and "Model Workbench" in r.json()["detail"]
     finally:
         main.app.dependency_overrides.clear()
+
+
+# ---------------------------------------------------------------- importers and impact
+
+DDL = """
+-- dimension
+CREATE OR REPLACE TRANSIENT TABLE SILVER.SALES.DIM_CUSTOMER (
+    CUSTOMER_ID NUMBER(38,0) NOT NULL COMMENT 'Key',
+    EMAIL VARCHAR(200) UNIQUE,
+    COUNTRY VARCHAR(2) DEFAULT 'US',
+    "Created At" TIMESTAMP_NTZ(9),
+    CONSTRAINT PK_DIM_CUSTOMER PRIMARY KEY (CUSTOMER_ID)
+) CLUSTER BY (COUNTRY) COMMENT = 'Customers we sell to';
+create table if not exists sales.fct_order (
+    order_id number not null primary key,
+    customer_id number references dim_customer (customer_id),
+    amount number(12, 2),
+    constraint uq_order unique (order_id, customer_id)
+);
+"""
+
+
+def test_parse_ddl_reads_columns_keys_and_options():
+    raw = spec_v2.normalize_v2({**__import__("services.modeling.importers", fromlist=["x"]).parse_ddl(DDL), "domain": "SALES"}, "m")
+    cust, fct = raw["design"]["entities"]
+    assert cust["entity_name"] == "DIM_CUSTOMER" and cust["database"] == "SILVER" and cust["schema"] == "SALES"
+    assert cust["physical"] == {"cluster_by": ["COUNTRY"], "transient": True, "retention_days": None}
+    assert cust["description"] == "Customers we sell to" and cust["business_keys"] == ["CUSTOMER_ID"]
+    cols = {a["name"]: a for a in cust["attributes"]}
+    assert cols["CUSTOMER_ID"]["is_pk"] and not cols["CUSTOMER_ID"]["nullable"] and cols["CUSTOMER_ID"]["description"] == "Key"
+    assert cols["EMAIL"]["is_unique"] and cols["COUNTRY"]["default"] == "'US'" and cols["CREATED AT"]["datatype"] == "TIMESTAMP_NTZ(9)"
+    assert fct["entity_name"] == "FCT_ORDER" and fct["schema"] == "SALES" and fct["unique_constraints"] == [["ORDER_ID", "CUSTOMER_ID"]]
+    assert {a["name"]: a["datatype"] for a in fct["attributes"]}["AMOUNT"] == "NUMBER(12,2)"
+    rel = raw["relationships"][0]
+    assert (rel["from_entity"], rel["from_column"], rel["to_entity"], rel["to_column"]) == ("FCT_ORDER", "CUSTOMER_ID", "DIM_CUSTOMER", "CUSTOMER_ID")
+    with pytest.raises(AssertionError, match="no CREATE TABLE"):
+        __import__("services.modeling.importers", fromlist=["x"]).parse_ddl("select 1")
+
+
+def test_merge_keeps_ids_and_documentation():
+    from services.modeling import importers
+
+    base = spec_fixture()
+    cust = base["design"]["entities"][0]
+    merged = importers.merge(base, importers.parse_ddl(DDL), "model-1")
+    new_cust = next(e for e in merged["design"]["entities"] if e["entity_name"] == "DIM_CUSTOMER")
+    assert new_cust["id"] == cust["id"] and new_cust["table_type"] == "DIMENSION" and new_cust["scd_type"] == "2"
+    email = next(a for a in new_cust["attributes"] if a["name"] == "EMAIL")
+    assert email["id"] == cust["attributes"][1]["id"] and email["pii"]["flag"]  # documentation the DDL lacks is kept
+    diff = model_diff.diff(base, merged)
+    assert ("ENTITY_REMOVED", "BREAKING") not in _kinds(diff)  # merge never drops
+    replaced = importers.merge(base, importers.parse_ddl(DDL), "model-1", replace=True)
+    assert next(e for e in replaced["design"]["entities"] if e["entity_name"] == "LEGACY_TABLE")["status"] == "RETIRED"
+
+
+def test_impact_finds_downstream_references_and_fails_soft():
+    from services.modeling import impact
+
+    seen = []
+
+    def query(sql, params):
+        seen.append((sql, params))
+        if "CONTRACT.STTM_LINE" in sql and params[0] == "DIM_CUSTOMER":
+            return [{"ENTITY": "DIM_CUSTOMER", "COLUMN_NAME": "EMAIL", "RUN_ID": "r1"}]
+        if "DQ_CHECKS_CATALOG" in sql:
+            raise RuntimeError("Object does not exist")
+        if "QA_TEST_CASE" in sql and params[0] == "DIM_CUSTOMER":
+            return [{"ENTITY": "SILVER.SALES.DIM_CUSTOMER", "RUN_ID": None}]
+        return []
+
+    out = impact.analyze(query, [{"entity": "DIM_CUSTOMER", "column": "EMAIL", "kind": "COLUMN_RENAMED"},
+                                 {"entity": "FCT_ORDER", "column": "", "kind": "ENTITY_RETIRED"}])
+    first = out["items"][0]
+    assert first["total"] == 2 and set(first["refs"]) == {"sttm", "qa_tests"} and out["unavailable"] == ["store_checks"]
+    qa_sql, qa_params = next(x for x in seen if "QA_TEST_CASE" in x[0])
+    assert "SQL_TEXT ILIKE" in qa_sql and qa_params == ["DIM_CUSTOMER", "EMAIL", "EMAIL"]
+    assert any("CORE.WORKFLOW_RUN" in s and p == ["FCT_ORDER"] for s, p in seen)  # open runs for an entity-level change
+    assert not any("CORE.WORKFLOW_RUN" in s and p == ["DIM_CUSTOMER"] for s, p in seen)
+    assert out["totals"]["sttm"] == 1 and out["labels"]["dbt"] == "Generated dbt files"

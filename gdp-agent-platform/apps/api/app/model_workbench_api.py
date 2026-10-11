@@ -232,6 +232,61 @@ def diff(model_id: str, to: int, from_version: Optional[int] = Query(default=Non
     return _call(db, svc.diff_versions, model_id, from_version, to)
 
 
+@router.get("/api/hub/domain-models/{model_id}/impact")
+def impact(model_id: str, to: int, from_version: Optional[int] = Query(default=None, alias="from", ge=1),
+           db: Db = Depends(current_db)):
+    """What already uses the entities and columns a version changes in a breaking way."""
+    from services.modeling import impact as impact_svc
+
+    if from_version is None:
+        approved = _call(db, _svc().get_model, model_id, to)["model"].get("approved_version")
+        from_version = int(approved) if approved and int(approved) != int(to) else None
+    return _call(db, impact_svc.for_versions, model_id, from_version, to)
+
+
+class ImportIn(BaseModel):
+    kind: Literal["ddl", "pack", "schema"]
+    text: Optional[str] = Field(default=None, max_length=2_000_000)
+    pack: Optional[dict] = None
+    database: Optional[str] = Field(default=None, max_length=255)
+    schema_name: Optional[str] = Field(default=None, alias="schema", max_length=255)
+    tables: list[str] = Field(default_factory=list, max_length=500)
+    replace: bool = False
+    spec: dict
+
+
+@router.post("/api/hub/domain-models/{model_id}/import")
+def import_model(model_id: str, body: ImportIn, db: Db = Depends(current_db)):
+    """The draft (`spec`, as the editor holds it) merged with DDL, a domain pack or a live schema. Nothing is saved:
+    the editor shows the result as unsaved changes to review and save."""
+    from services.modeling import importers, spec_v2
+
+    try:
+        if body.kind == "ddl":
+            incoming = importers.parse_ddl(body.text or "")
+        elif body.kind == "pack":
+            if not body.pack:
+                raise HTTPException(400, "attach a domain_pack.json")
+            incoming = spec_v2.spec_from_pack(body.pack, model_id)
+        else:
+            if not (body.database and body.schema_name):
+                raise HTTPException(400, "name the database and schema to read")
+            incoming = invoke_source(db, importers.from_schema, body.database, body.schema_name, body.tables)
+    except AssertionError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise _snowflake_error(exc) from exc
+    base = spec_v2.normalize_v2(body.spec, model_id)
+    merged = importers.merge(base, incoming, model_id, body.replace)
+    from services.modeling import model_diff
+
+    changes = model_diff.diff(base, merged)
+    return {"spec": merged, "issues": spec_v2.validate(merged), "counts": changes["counts"],
+            "entities": len(incoming.get("design", {}).get("entities") or [])}
+
+
 @router.get("/api/hub/domain-models/{model_id}/versions/{version}/comments")
 def list_comments(model_id: str, version: int, db: Db = Depends(current_db)):
     return {"comments": _call(db, _svc().comments, model_id, version)}

@@ -57,12 +57,17 @@ function autoLayout(entities: ModelEntity[], rels: ModelRelationship[]): Pos {
 
 /** Entities as cards with their columns, foreign keys as edges from the referencing column to the referenced one.
  *  Drag a card to move it, drag the background to pan, zoom with the buttons or the wheel; click selects. */
-export function ErCanvas({ entities, relationships, platform, selected, onSelect, className }: {
-  entities: ModelEntity[]; relationships: ModelRelationship[]; platform: "SNOWFLAKE" | "ICEBERG";
+export function ErCanvas({ entities, relationships, platform, selected, onSelect, className, positions, onMoveEnd, muted }: {
+  entities: ModelEntity[]; relationships: (ModelRelationship & { from_optional?: boolean })[]; platform: "SNOWFLAKE" | "ICEBERG";
   selected: string | null; onSelect: (name: string | null) => void; className?: string;
+  /** saved positions by entity name (a saved layout); new entities are placed automatically */
+  positions?: Pos; onMoveEnd?: (positions: Pos) => void;
+  /** entities shown dimmed (retired) */
+  muted?: Set<string>;
 }) {
   const names = entities.map((e) => e.entity_name).join("|");
-  const [pos, setPos] = useState<Pos>(() => autoLayout(entities, relationships));
+  const [pos, setPos] = useState<Pos>(() => ({ ...autoLayout(entities, relationships), ...(positions ?? {}) }));
+  const moved = useRef(false);
   const [view, setView] = useState<View>({ x: 0, y: 0, k: 1 });
   const drag = useRef<{ kind: "node" | "pan"; name?: string; px: number; py: number; ox: number; oy: number } | null>(null);
   const wrap = useRef<HTMLDivElement>(null);
@@ -72,7 +77,7 @@ export function ErCanvas({ entities, relationships, platform, selected, onSelect
     setPos((prev) => {
       const fresh = autoLayout(entities, relationships);
       const next: Pos = {};
-      for (const e of entities) next[e.entity_name] = prev[e.entity_name] ?? fresh[e.entity_name];
+      for (const e of entities) next[e.entity_name] = prev[e.entity_name] ?? positions?.[e.entity_name] ?? fresh[e.entity_name];
       return next;
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -100,12 +105,17 @@ export function ErCanvas({ entities, relationships, platform, selected, onSelect
     const dx = e.clientX - d.px, dy = e.clientY - d.py;
     if (d.kind === "node" && d.name) {
       const name = d.name;
+      if (Math.abs(dx) + Math.abs(dy) > 2) moved.current = true;
       setPos((p) => ({ ...p, [name]: { x: d.ox + dx / view.k, y: d.oy + dy / view.k } }));
     } else {
       setView((v) => ({ ...v, x: d.ox + dx, y: d.oy + dy }));
     }
   };
-  const onUp = () => { drag.current = null; };
+  const onUp = () => {
+    if (drag.current?.kind === "node" && moved.current && onMoveEnd) onMoveEnd(pos);
+    moved.current = false;
+    drag.current = null;
+  };
   const zoom = (f: number) => setView((v) => ({ ...v, k: Math.max(0.3, Math.min(2.5, v.k * f)) }));
   const fit = () => {
     const box = wrap.current?.getBoundingClientRect();
@@ -150,7 +160,8 @@ export function ErCanvas({ entities, relationships, platform, selected, onSelect
             const hot = selected === r.from_entity || selected === r.to_entity;
             return (
               <g key={i}>
-                <path d={d} fill="none" strokeWidth={hot ? 2.5 : 1.5} className={hot ? "stroke-primary" : "stroke-primary/45"} markerEnd="url(#er-arrow)" />
+                <path d={d} fill="none" strokeWidth={hot ? 2.5 : 1.5} className={hot ? "stroke-primary" : "stroke-primary/45"} markerEnd="url(#er-arrow)"
+                      strokeDasharray={r.from_optional ? "5 4" : undefined} />
                 <title>{`${r.from_entity}.${r.from_column} -> ${r.to_entity}.${r.to_column} (${r.cardinality})`}</title>
               </g>
             );
@@ -162,7 +173,8 @@ export function ErCanvas({ entities, relationships, platform, selected, onSelect
             const isSel = selected === e.entity_name;
             const fk = new Set(relationships.filter((r) => r.from_entity === e.entity_name).map((r) => r.from_column));
             return (
-              <g key={e.entity_name} transform={`translate(${p.x},${p.y})`} onPointerDown={(ev) => onDown(ev, e.entity_name)} className="cursor-grab">
+              <g key={e.entity_name} transform={`translate(${p.x},${p.y})`} onPointerDown={(ev) => onDown(ev, e.entity_name)}
+                 className={cn("cursor-grab", muted?.has(e.entity_name) && "opacity-40")} data-testid={`er-${e.entity_name}`}>
                 <rect width={W} height={h} rx="12" className={cn("fill-card", isSel ? "stroke-primary" : "stroke-border")} strokeWidth={isSel ? 2 : 1} />
                 <path d={`M0,12 a12,12 0 0 1 12,-12 h${W - 24} a12,12 0 0 1 12,12 v${HEAD - 12} h-${W} z`} className={isSel ? "fill-primary" : "fill-accent"} />
                 <text x="12" y="21" className={cn("text-[12px] font-semibold", isSel ? "fill-white" : "fill-foreground")}>{e.entity_name}</text>
