@@ -26,7 +26,7 @@ export default async function QaStorePage({ searchParams }: { searchParams: Para
                   description="Deterministic SQL assertions owned by a domain: reconciliations, orphan keys, duplicate business keys and joins that must resolve. Every change is a versioned draft; the approved version runs in pipelines and feeds the AI's QA context." />
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <Kpi label="Approved packs" value={summary?.approved_packs ?? 0} hint={`${summary?.packs ?? 0} packs in all`} icon={ClipboardList} tone="blue" />
-        <Kpi label="Live rules" value={summary?.rules ?? 0} hint={`across ${summary?.domains ?? 0} domain${summary?.domains === 1 ? "" : "s"}`} icon={SquareTerminal} tone="violet" />
+        <Kpi label="Live rules" value={summary?.rules ?? 0} hint={`across ${summary?.domains ?? 0} domain${summary?.domains === 1 ? "" : "s"} · ${summary?.run_tests ?? 0} tests saved in runs`} icon={SquareTerminal} tone="violet" />
         <Kpi label="Waiting for approval" value={summary?.pending ?? 0} hint="submitted versions" icon={Clock3} tone="amber" highlight={!!summary?.pending} />
         <Kpi label="Latest pass rate" value={summary?.pass_rate == null ? "-" : `${summary.pass_rate}%`} hint="last execution of each approved pack" icon={summary?.pass_rate != null && summary.pass_rate >= 95 ? CheckCircle2 : Gauge} tone="emerald" />
       </div>

@@ -20,8 +20,8 @@ export default async function SourceHub({ searchParams }: { searchParams: { db?:
       <PageHeader eyebrow="Asset store" title="Source Store"
                   description="Onboard Snowflake shares straight into landing, register external systems for the ingestion pipelines, and explore, profile and model any schema."
                   actions={<>
-                    <Link href="/dashboard/sources/new?branch=external" className={buttonVariants({ variant: "outline" })}><CloudCog className="h-4 w-4" /> Register external source</Link>
-                    <Link href="/dashboard/sources/new?branch=share" className={buttonVariants()}><Share2 className="h-4 w-4" /> Onboard a share</Link>
+                    <Link href="/dashboard/onboarding?type=source&branch=external" className={buttonVariants({ variant: "outline" })}><CloudCog className="h-4 w-4" /> Register external source</Link>
+                    <Link href="/dashboard/onboarding?type=source&branch=share" className={buttonVariants()}><Share2 className="h-4 w-4" /> Onboard a share</Link>
                   </>} />
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <Kpi label="Mounted shares" value={shares.mounted.length} hint="databases created from a share" icon={Share2} tone="blue" />
@@ -30,7 +30,7 @@ export default async function SourceHub({ searchParams }: { searchParams: { db?:
         <Kpi label="Active pipelines" value={active} hint="loading on schedule" icon={CloudCog} tone="amber" />
       </div>
       <Panel title="External ingestion pipelines" icon={Workflow}
-             action={<Link href="/dashboard/sources/new?branch=external" className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline"><Plus className="h-3.5 w-3.5" /> Register</Link>}>
+             action={<Link href="/dashboard/onboarding?type=source&branch=external" className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline"><Plus className="h-3.5 w-3.5" /> Register</Link>}>
         {!pipes.deployed ? <NotDeployed what="The ingestion pipeline catalog" /> : <PipelineTable pipelines={pipes.pipelines} />}
       </Panel>
       <section className="border-t border-border/70 pt-6">

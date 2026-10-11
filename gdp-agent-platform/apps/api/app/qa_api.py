@@ -406,15 +406,26 @@ def qa_packs(domain: Optional[str] = None, db: Db = Depends(current_db)):
         return {"packs": [], "deployed": False}
 
 
+def _run_tests(db: Db, domain_id: Optional[str]) -> int:
+    """Tests saved in runs and tables (CONTRACT.QA_TEST_CASE), shown beside the domain packs."""
+    clause = "AND (DOMAIN_ID = %s OR RUN_ID IN (SELECT RUN_ID FROM CORE.WORKFLOW_RUN WHERE DOMAIN_ID = %s))" if domain_id else ""
+    try:
+        return int(db.query(f"SELECT COUNT(*) AS N FROM CONTRACT.QA_TEST_CASE WHERE NOT COALESCE(IS_DELETED, FALSE) {clause}",
+                            (domain_id, domain_id) if domain_id else ())[0]["n"])
+    except Exception:
+        return 0
+
+
 @router.get("/api/qa-packs/summary")
 def qa_packs_summary(domain: Optional[str] = None, db: Db = Depends(current_db)):
+    did = _domain_id(db, domain)
     try:
-        return _call(db, _svc("packs").summary, _domain_id(db, domain))
+        return {**_call(db, _svc("packs").summary, did), "run_tests": _run_tests(db, did)}
     except HTTPException as exc:
         if exc.status_code == 404:
             raise
         return {"packs": 0, "approved_packs": 0, "rules": 0, "pending": 0, "domains": 0, "top_tags": [],
-                "pass_rate": None, "deployed": False}
+                "pass_rate": None, "deployed": False, "run_tests": _run_tests(db, did)}
 
 
 @router.get("/api/domains/{domain_id}/qa-packs")

@@ -414,7 +414,7 @@ footer { color: var(--muted); font-size: 13px; margin-top: 56px; }
 <h3 id="f-dashboard">Command Center</h3>
 <dl class="feature-meta">
   <dt>Page</dt><dd><code>/dashboard</code>, data from <code>GET /api/hub/overview?domain=</code></dd>
-  <dt>What it does</dt><dd>A hero ribbon: live ingested GB (latest COMPLETE landing table per target, sized from the source object bytes, with a daily sparkline), profiling health (share of latest-pass columns under 20% nulls with no null-rate drift of 10 points or more since the previous pass), STTM mappings whose latest version is approved, and active DQ checks with their pass rate. An attention strip (runs to review, failed runs, open incidents, QA packs awaiting approval, failing DQ checks, drifting columns), six asset store cards (Source, Profiling, Modeling, STTM, QA, Data Quality) with quick links, and the active pipeline runs with a six-phase stepper (Source, Profile, Model, STTM, QA, Deploy), elapsed time and status.</dd>
+  <dt>What it does</dt><dd>A hero ribbon: live ingested size (latest COMPLETE landing copy per table, measured in the landing database's INFORMATION_SCHEMA, or the source size at discovery where the role cannot see the landing schema; tables profiled in place are counted apart), profiling health (share of latest-pass columns under 20% nulls with no null-rate drift of 10 points or more, over the tables that have pass history), STTM mappings whose latest version is approved, and active DQ checks with their pass rate. Every count includes the run stores as well as the catalogs: profiles from <code>METADATA.TABLE_PROFILES</code> and <code>GOVERNANCE.DATA_PROFILES</code>, model designs from <code>MODELING.MODEL_DESIGN</code> and the Modeling Store, publishes from <code>CODEGEN.GIT_PUBLICATION</code>, approved run checks from <code>CONTRACT.SODA_EXPECTATION_REGISTRY</code> plus the DQ Store, and saved run tests from <code>CONTRACT.QA_TEST_CASE</code> plus the QA packs. An attention strip (runs to review, failed runs, open incidents, QA packs awaiting approval, failing DQ checks, drifting columns), six asset store cards (Source, Profiling, Modeling, STTM, QA, Data Quality) with quick links, and the active pipeline runs with a six-phase stepper (Source, Profile, Model, STTM, QA, Deploy), elapsed time and status.</dd>
   <dt>Access</dt><dd>Everyone signed in. Each block fails soft: a store whose tables are not deployed or not readable shows a dash. Incidents count only for OPS.VIEW holders.</dd>
 </dl>
 
@@ -478,11 +478,11 @@ footer { color: var(--muted); font-size: 13px; margin-top: 56px; }
   <dt>Configure first</dt><dd>The scheduled procedure runs EXECUTE AS OWNER: the platform owner role needs SELECT on every scheduled table and USAGE on the warehouse.</dd>
 </dl>
 
-<h3 id="f-onboarding">Onboarding hub</h3>
+<h3 id="f-onboarding">Onboarding</h3>
 <dl class="feature-meta">
-  <dt>Page</dt><dd><code>/dashboard/onboarding</code></dd>
-  <dt>What it does</dt><dd>Domain onboarding: upload <code>domain_pack.json</code> and its contract (YAML with domain, tables and columns, or the platform's markdown contract). Both are validated as a dry run (<code>POST /api/hub/onboarding/validate</code>); importing uses the existing domain import. Application onboarding is shown as coming soon.</dd>
-  <dt>Privileges</dt><dd><span class="chip p">DOMAIN.EDIT</span> import.</dd>
+  <dt>Page</dt><dd><code>/dashboard/onboarding?type=source|domain|application</code> (<code>/dashboard/sources/new</code> redirects to the Source section)</dd>
+  <dt>What it does</dt><dd>Starts with "What are you onboarding?". <strong>Source</strong>: the Snowflake share wizard and the external system intake, plus links to the database, file and Oracle connectors. <strong>Domain</strong>: upload <code>domain_pack.json</code> and its contract (validated as a dry run with <code>POST /api/hub/onboarding/validate</code>, then the existing domain import), draft a pack from any contract with AI, or design a model in the Modeling Store; the domains on the platform are listed. <strong>Application</strong>: coming soon, with the roadmap.</dd>
+  <dt>Privileges</dt><dd><span class="chip p">RUN.CREATE</span> share onboarding, <span class="chip p">SOURCE.CONNECT</span> external sources, <span class="chip p">DOMAIN.EDIT</span> domain import, <span class="chip p">AI.USE</span> AI draft.</dd>
 </dl>
 
 <h3 id="f-runs">Runs and pipeline stages</h3>

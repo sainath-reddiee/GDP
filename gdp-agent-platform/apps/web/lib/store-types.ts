@@ -28,7 +28,7 @@ export type PackDetail = {
 
 export type PackSummary = {
   packs: number; approved_packs: number; rules: number; pending: number; domains: number; top_tags: string[];
-  pass_rate: number | null; deployed?: boolean;
+  pass_rate: number | null; deployed?: boolean; run_tests?: number;
 };
 
 export type QaOutcome = "PASS" | "FAIL" | "REVIEW" | "NOT_RUN" | "ERROR";
@@ -70,7 +70,7 @@ export type DqHistory = {
 };
 export type DqSummary = {
   deployed: boolean; checks: number; tables: number; passed?: number; warned?: number; failed?: number; never_run?: number;
-  scheduled_tables?: number; pass_rate: number | null; coverage: number | null;
+  scheduled_tables?: number; pass_rate: number | null; coverage: number | null; run_checks?: number;
 };
 export type DqScan = {
   scan_id: string; table: string; checks: number; passed: number; warned: number; failed: number; not_evaluated: number;
@@ -83,11 +83,17 @@ export type DqScan = {
 
 export type Overview = {
   domain: { domain_id: string; domain_name: string } | null;
-  ingested: { bytes: number; gb: number; tables: number; rows: number; last_day: string | null; daily: { day: string; gb: number; tables: number }[] } | null;
+  ingested: {
+    bytes: number; gb: number; tables: number; rows: number; in_place: number; measured: "landed" | "source" | "mixed";
+    last_day: string | null; daily: { day: string; bytes: number; gb: number; tables: number }[];
+  } | null;
   sources: { total: number; shares: number; databases: number; other: number; external: number; external_active: number } | null;
-  profiling: { tables: number; columns: number; high_cardinality: number; pii: number; drift: number; drift_tables: number; health: number | null } | null;
-  models: { designs: number; published: number; branches: number; in_design: number; failed: number } | null;
+  profiling: {
+    tables: number; columns: number; pii: number; catalog_tables: number; high_cardinality: number; drift: number;
+    drift_tables: number; health: number | null;
+  } | null;
+  models: { designs: number; published: number; branches: number; in_design: number; failed: number; run_designs: number; hub_designs: number } | null;
   sttm: { mappings: number; verified: number; pending: number } | null;
-  qa: PackSummary | null;
-  dq: DqSummary | null;
+  qa: (PackSummary & { run_tests: number; executed_tests: number; run_suites: number; run_pass_rate: number | null }) | null;
+  dq: (DqSummary & { run_checks: number; store_checks: number }) | null;
 };

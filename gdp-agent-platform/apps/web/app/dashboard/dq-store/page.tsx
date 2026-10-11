@@ -25,7 +25,8 @@ export default async function DqStorePage({ searchParams }: { searchParams: Para
       <PageHeader eyebrow="Data Quality Store" title="Attribute checks catalog"
                   description="Declarative Soda and Great Expectations checks per table and column, managed outside any run. Seed them from a profile, promote a run's approved checks, backtest now, and schedule each table as a Snowflake task." />
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <Kpi label="Active checks" value={summary?.checks ?? 0} hint={`on ${summary?.tables ?? 0} table${summary?.tables === 1 ? "" : "s"}`} icon={ClipboardCheck} tone="blue" />
+        <Kpi label="Active checks in the store" value={summary?.checks ?? 0}
+             hint={`on ${summary?.tables ?? 0} table${summary?.tables === 1 ? "" : "s"} · ${summary?.run_checks ?? 0} more approved in runs`} icon={ClipboardCheck} tone="blue" />
         <Kpi label="Pass rate" value={summary?.pass_rate == null ? "-" : `${summary.pass_rate}%`}
              hint={summary?.failed ? `${summary.failed} failing now` : "of checks with a last result"} icon={Gauge} tone={summary?.failed ? "rose" : "emerald"} highlight={!!summary?.failed} />
         <Kpi label="Profiled coverage" value={summary?.coverage == null ? "-" : `${summary.coverage}%`} hint="of profiled tables have checks" icon={Radar} tone="violet" />
