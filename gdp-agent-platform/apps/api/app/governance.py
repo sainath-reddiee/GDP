@@ -37,7 +37,7 @@ _lock = threading.Lock()
 _cache: dict[str, tuple[float, Any]] = {}
 TTL = 60.0
 DEFAULT_SETTINGS = {"DEFAULT_ROLE": "VIEWER", "SUPER_SELF_APPROVE": True, "ENFORCE": True,
-                    "STORE_EDITS_REQUIRE_APPROVAL": True}
+                    "STORE_EDITS_REQUIRE_APPROVAL": True, "MODEL_WORKBENCH_ENFORCED": True}
 
 
 def _cached(key: str, loader, ttl: float = TTL):
@@ -667,6 +667,7 @@ class SettingsIn(BaseModel):
     SUPER_SELF_APPROVE: Optional[bool] = None
     ENFORCE: Optional[bool] = None
     STORE_EDITS_REQUIRE_APPROVAL: Optional[bool] = None
+    MODEL_WORKBENCH_ENFORCED: Optional[bool] = None
 
 
 @router.put("/api/governance/settings")

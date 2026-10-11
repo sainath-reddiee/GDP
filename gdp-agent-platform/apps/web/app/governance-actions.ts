@@ -16,7 +16,7 @@ export type GovRole = {
 export type GovPrivilege = { privilege: string; group: string; description: string };
 export type GovPolicy = GovPrivilege & { requires_approval: boolean; approver_role: string | null; four_eyes: boolean; allow_self: boolean; active: boolean };
 export type GovUser = { user: string; roles: string[] };
-export type GovSettings = { DEFAULT_ROLE: string; SUPER_SELF_APPROVE: boolean; ENFORCE: boolean; STORE_EDITS_REQUIRE_APPROVAL?: boolean };
+export type GovSettings = { DEFAULT_ROLE: string; SUPER_SELF_APPROVE: boolean; ENFORCE: boolean; STORE_EDITS_REQUIRE_APPROVAL?: boolean; MODEL_WORKBENCH_ENFORCED?: boolean };
 export type GovEvent = { event_id: string; event_type: string; actor: string; target: string; detail: unknown; created_at: string };
 
 function done() {

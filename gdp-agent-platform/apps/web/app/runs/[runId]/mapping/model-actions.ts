@@ -24,9 +24,23 @@ export type DesignVersion = {
   issues: Issue[]; instructions: string | null; model: string | null; note: string | null; created_by: string;
   created_at: string | null; approved_by: string | null;
 };
+export type RunProposal = {
+  change_id: string; model_id: string; status: "PROPOSED" | "MERGED" | "STALE"; merged_into_version: number | null;
+  created_at: string | null;
+};
+export type WorkbenchState = {
+  enforced: boolean; model_id: string | null; model_version: number | null; model_entity: string | null;
+  proposal: RunProposal | null;
+};
 export type ModelPayload = {
   run_id: string; target_model: string | null; standard: string | null; versions: DesignVersion[];
-  current: DesignVersion | null; approved: DesignVersion | null;
+  current: DesignVersion | null; approved: DesignVersion | null; workbench?: WorkbenchState;
+};
+export type ProposeResult = {
+  model_id: string; pinned: boolean; status?: "PROPOSED" | "MERGED"; change_id?: string; merged_into?: number;
+  version?: number; entity?: string; target_model?: string | null;
+  counts?: Record<string, number>; breaking?: boolean;
+  pin?: { pinned: boolean; mapping_reset?: boolean; detail?: string; target_model?: string };
 };
 export type DiffChange = { entity: string; change: string; column?: string; columns?: string[]; fields?: string[]; from?: unknown; to?: unknown };
 
@@ -56,6 +70,13 @@ export async function checkDesign(runId: string, design: Design, conventions: Co
 export async function approveDesign(runId: string, version: number) {
   const r = await attemptValue(() => api<{ target_model: string; registered: { entity: string; fqn: string }[]; mapping_reset: boolean }>(
     `/api/runs/${runId}/model/${version}/approve`, { method: "POST" }));
+  if (r.ok) revalidatePath(`/runs/${runId}`, "layout");
+  return r;
+}
+
+/** Propose a run design to the domain's governed model (the Model Workbench). */
+export async function proposeDesign(runId: string, version: number) {
+  const r = await attemptValue(() => api<ProposeResult>(`/api/runs/${runId}/model/${version}/propose`, { method: "POST" }));
   if (r.ok) revalidatePath(`/runs/${runId}`, "layout");
   return r;
 }

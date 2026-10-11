@@ -175,3 +175,16 @@ def data_dictionary(spec: Dict[str, Any]) -> str:
                              a.get("semantic_type") or "", "|".join(a.get("accepted_values") or []),
                              a.get("description") or "", a.get("business_definition") or "", a.get("status")])
     return buf.getvalue()
+
+
+def artifacts(spec: Dict[str, Any], base_pack: Optional[Dict[str, Any]] = None) -> Dict[str, str]:
+    """The files of a domain model pull request, all under domain/<domain>/ so the dbt project itself is untouched (dbt
+    models are generated per run from the approved model and the STTM): the domain pack, the DDL, the data dictionary
+    and the dbt schema tests and check tests as reference."""
+    folder = f"domain/{_snake(spec['domain'])}"
+    files = {f"{folder}/domain_pack.json": json.dumps(render_pack(spec, base_pack), indent=2) + "\n",
+             f"{folder}/model.sql": render_ddl(spec),
+             f"{folder}/data_dictionary.csv": data_dictionary(spec)}
+    for path, content in render_dbt_tests(spec).items():
+        files[f"{folder}/dbt/{path}"] = content
+    return files

@@ -582,7 +582,7 @@ def test_api_approve_applies_to_the_registry(api):
     mp.setattr(wb, "_source_call", lambda db, proc, fn, *a: seen.update(proc=proc, args=a) or {"registered": [1]})
     body = c.post("/api/hub/domain-models/m1/versions/3/approve", json={"acknowledge_breaking": True}).json()
     assert seen == {"user": "LEE", "ack": True, "proc": "CALL MODELING.APPLY_DOMAIN_MODEL(%s, %s)", "args": ("m1", 3)}
-    assert body == {"status": "APPROVED", "registry": {"applied": True, "registered": [1]}}
+    assert body == {"status": "APPROVED", "registry": {"applied": True, "registered": [1]}, "runs": []}
 
     def boom(*a):
         raise RuntimeError("warehouse suspended")

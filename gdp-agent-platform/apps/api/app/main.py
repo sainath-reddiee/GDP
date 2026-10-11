@@ -921,17 +921,95 @@ class ModelDesignSave(BaseModel):
 MODEL_APPLY_STATES = {"PROFILING_COMPLETE", "DOMAIN_IDENTIFIED", "MAPPING_PENDING", "MAPPING_REVIEW"}
 
 
+def _workbench_enforced(db: Db) -> bool:
+    """Runs propose model changes to the domain model (Model Workbench) instead of approving their own model."""
+    try:
+        from app.governance import settings
+
+        return bool(settings(db).get("MODEL_WORKBENCH_ENFORCED", True))
+    except Exception:
+        return True
+
+
+def _workbench_state(db: Db, run_id: str) -> dict:
+    from services.modeling.run_link import pending_for_run
+
+    out: dict = {"enforced": _workbench_enforced(db), "model_id": None, "model_version": None, "model_entity": None,
+                 "proposal": None}
+    try:
+        found = db.query("SELECT MODEL_ID, MODEL_VERSION, MODEL_ENTITY FROM CORE.WORKFLOW_RUN WHERE RUN_ID = %s", (run_id,))
+        if found:
+            out.update({k: found[0].get(k) for k in ("model_id", "model_version", "model_entity")})
+        out["proposal"] = invoke_source(db, pending_for_run, run_id)
+    except Exception:
+        pass  # before V039
+    return out
+
+
+def pin_run_model(db: Db, run_id: str, model_id: str, version: int, entity: str, design_version: int = 0) -> dict:
+    """Point a run at an approved domain model entity; while mapping is in review the run goes back to mapping."""
+    from services.modeling.run_link import pin_run
+
+    current = db.query("SELECT CURRENT_STATE FROM CORE.WORKFLOW_RUN WHERE RUN_ID = %s", (run_id,))
+    state = current[0]["current_state"] if current else None
+    if state not in MODEL_APPLY_STATES:
+        return {"run_id": run_id, "pinned": False, "state": state,
+                "detail": f"The run is at {state}; reopen mapping to use the new model"}
+    result = _source_call(db, "CALL MODELING.PIN_RUN_MODEL(%s, %s, %s, %s, %s)", pin_run, run_id, model_id, int(version),
+                          entity, int(design_version or 0))
+    sent_back = False
+    if state == "MAPPING_REVIEW":
+        try:
+            db.call("CALL CORE.REVIEW_TRANSITION(%s, %s, %s, %s, %s)",
+                    (run_id, "MAPPING_PENDING", "REQUEST_CHANGES", None, f"Target model changed to domain model v{version}"))
+            sent_back = True
+        except Exception:
+            pass
+    _drop_run(run_id)
+    return {**(result or {}), "pinned": True, "mapping_reset": sent_back}
+
+
 @app.get("/api/runs/{run_id}/model")
 def get_model_design(run_id: str, db: Db = Depends(current_db)):
-    """Every version of the run's target model design (the registered 1:1 target becomes version 1)."""
+    """Every version of the run's target model design (the registered 1:1 target becomes version 1), and how the run
+    relates to its domain's governed model."""
     from services.modeling.design import get_design
 
     try:
-        return invoke_source(db, get_design, run_id)
+        out = invoke_source(db, get_design, run_id)
     except AssertionError as exc:
         raise HTTPException(404, str(exc)) from exc
     except Exception as exc:
         raise _snowflake_error(exc) from exc
+    return {**out, "workbench": _workbench_state(db, run_id)}
+
+
+@app.post("/api/runs/{run_id}/model/{version}/propose")
+def propose_model_design(run_id: str, version: int, db: Db = Depends(current_db)):
+    """Propose this design to the domain's governed model. When it adds nothing to the approved model the run uses
+    the approved model at once; otherwise modelers merge, review and approve it in the Model Workbench, and the run
+    is pointed at the approved version then."""
+    from services.modeling.run_link import propose
+
+    current = db.query("SELECT CURRENT_STATE FROM CORE.WORKFLOW_RUN WHERE RUN_ID = %s", (run_id,))
+    if not current:
+        raise HTTPException(404, "run not found")
+    if current[0]["current_state"] not in MODEL_APPLY_STATES:
+        raise HTTPException(409, f"The run is at {current[0]['current_state']}. Reopen mapping before changing the target model.")
+    try:
+        result = invoke_source(db, propose, run_id, version, str(db.user or "").upper())
+    except AssertionError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except Exception as exc:
+        raise _snowflake_error(exc) from exc
+    if result.get("pinned"):
+        try:
+            result["pin"] = pin_run_model(db, run_id, result["model_id"], result["version"], result["entity"], version)
+        except AssertionError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        except Exception as exc:
+            raise _snowflake_error(exc) from exc
+    return result
 
 
 @app.post("/api/runs/{run_id}/model/design")
@@ -976,6 +1054,9 @@ def approve_model_design(run_id: str, version: int, db: Db = Depends(current_db)
     While mapping is in review the run goes back to mapping so candidates are regenerated for the new model."""
     from services.modeling.design import apply_design
 
+    if _workbench_enforced(db):
+        raise HTTPException(409, "Models are governed in the Model Workbench: propose this design to the domain model "
+                                 "(it is used here once a model approver approves it).")
     current = db.query("SELECT CURRENT_STATE FROM CORE.WORKFLOW_RUN WHERE RUN_ID = %s", (run_id,))
     if not current:
         raise HTTPException(404, "run not found")
@@ -2247,6 +2328,16 @@ def get_domain(run_id: str, db: Db = Depends(current_db)):
 
 @app.post("/api/runs/{run_id}/mapping")
 def generate_mapping(run_id: str, db: Db = Depends(current_db)):
+    if _workbench_enforced(db):
+        from services.modeling.run_link import pending_for_run
+
+        try:
+            pending = invoke_source(db, pending_for_run, run_id)
+        except Exception:
+            pending = None  # before V039
+        if pending:
+            raise HTTPException(409, "The run's model change is waiting in the Model Workbench; mapping starts once a model "
+                                     "approver approves it (or withdraw the proposal to map to the current target).")
     try:
         return db.call("CALL MAPPING.GENERATE_MAPPING_CANDIDATES(%s)", (run_id,))
     except Exception as exc:
