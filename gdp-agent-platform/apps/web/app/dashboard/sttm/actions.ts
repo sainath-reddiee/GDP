@@ -33,3 +33,8 @@ export async function compare(catalogId: string, fromVersion: number, toVersion:
     method: "POST", body: JSON.stringify({ catalog_id: catalogId, from_version: fromVersion, to_version: toVersion }),
   }));
 }
+
+export async function publishSttm(catalogId: string, version: number, repoId: string) {
+  return attemptValue(() => api<{ status: string; detail?: string; head_branch?: string; files?: string[] }>(
+    `/api/hub/sttm/${encodeURIComponent(catalogId)}/publish`, { method: "POST", body: JSON.stringify({ version, repo_id: repoId }) }));
+}

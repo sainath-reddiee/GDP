@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { approveRequest, cancelRequest, rejectRequest, type ChangeRequest } from "../governance-actions";
+import { RequestPreviewPanel } from "./request-preview";
 
 const TONE: Record<string, "warning" | "success" | "destructive" | "outline"> = {
   PENDING: "warning", APPLIED: "success", APPROVED: "success", FAILED: "destructive", REJECTED: "destructive", CANCELLED: "outline",
@@ -58,23 +59,9 @@ function Row({ r, me, onResult }: { r: ChangeRequest; me: string; onResult: (m: 
       </button>
       {open && (
         <div className="space-y-3 border-t bg-muted/10 px-4 pb-4 pt-3 text-xs">
-          <p>
-            <span className="text-muted-foreground">Call: </span><span className="font-mono">{r.method} {r.path}</span>
-            {r.run_id && <> · <Link href={`/runs/${r.run_id}`} className="text-primary hover:underline">open run</Link></>}
-          </p>
-          <div>
-            <p className="mb-1 font-semibold">What will change</p>
-            <pre className="max-h-64 overflow-auto rounded-lg bg-slate-950 p-3 font-mono text-[11px] text-slate-100">
-              {r.payload == null ? "(no body)" : JSON.stringify(r.payload, null, 2)}
-            </pre>
-          </div>
+          {r.run_id && <p><Link href={`/runs/${r.run_id}`} className="text-primary hover:underline">Open run</Link></p>}
+          <RequestPreviewPanel r={r} />
           {r.decision_note && <p><span className="text-muted-foreground">Note: </span>{r.decision_note}</p>}
-          {r.result && (
-            <div>
-              <p className="mb-1 font-semibold">Result ({r.result.status_code})</p>
-              <pre className="max-h-48 overflow-auto rounded-lg bg-muted p-3 font-mono text-[11px]">{JSON.stringify(r.result.body, null, 2)}</pre>
-            </div>
-          )}
           {r.status === "PENDING" && (r.can_decide || mine) && (
             <div className="space-y-2">
               {r.can_decide && (

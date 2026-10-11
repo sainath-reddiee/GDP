@@ -487,6 +487,40 @@ def edit_sttm(catalog_id: str, body: EditIn, request: Request, db: Db = Depends(
         raise _snowflake_error(exc) from exc
 
 
+class SttmPublishIn(BaseModel):
+    version: int = Field(ge=1)
+    repo_id: str = Field(min_length=1, max_length=36)
+    base: Optional[str] = Field(default=None, max_length=200)
+    title: Optional[str] = Field(default=None, max_length=200)
+
+
+@router.post("/api/hub/sttm/{catalog_id}/publish")
+def publish_sttm(catalog_id: str, body: SttmPublishIn, db: Db = Depends(current_db)):
+    """Open a pull request with an approved mapping version as sttm/<domain>/<target>.csv and its table design
+    (feature/sttm-<target>-v<version>). Tracked on the Source control page (GOVERNANCE.GIT_PR)."""
+    import re
+
+    from app.main import _dbt_repos, _github_publisher_ready
+
+    entry = _version(db, catalog_id, body.version)
+    if str(entry.get("status") or "").upper() != "APPROVED":
+        raise HTTPException(409, "Only an approved mapping version is published; approve it first.")
+    repo = next((r for r in _dbt_repos(db, None) if r["repo_id"] == body.repo_id), None)
+    if not repo or (repo.get("provider") or "") != "GITHUB":
+        raise HTTPException(409, "Choose a GitHub repository connected in Admin, Integrations.")
+    if not _github_publisher_ready(db):
+        return {"status": "NOT_CONFIGURED", "detail": "GitHub publishing is not set up. An admin can set it up in the GitHub publishing card."}
+    slug = re.sub(r"[^a-z0-9]+", "-", str(entry["target_entity"]).split(".")[-1].lower()).strip("-") or "mapping"
+    head = f"feature/sttm-{slug}-v{int(body.version)}"
+    request = {"catalog_id": catalog_id, "version": int(body.version), "repo_id": body.repo_id, "head": head,
+               "base": body.base or repo.get("branch"), "title": body.title}
+    try:
+        result = db.call("CALL CODEGEN.PUBLISH_DBT_PR(%s, %s)", ("", json.dumps({"sttm": request})))
+    except Exception as exc:
+        return {"status": "FAILED", "detail": str(exc)[:1000], "head_branch": head}
+    return {**(result or {}), "head_branch": head}
+
+
 @router.get("/api/hub/sttm/{catalog_id}/preview")
 def preview_sttm(catalog_id: str, version: Optional[int] = None, db: Db = Depends(current_db)):
     """The model SQL a version assembles: driving table, joins and row filters, and every target column."""

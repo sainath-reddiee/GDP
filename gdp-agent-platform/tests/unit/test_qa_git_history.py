@@ -231,7 +231,7 @@ def test_publish_qa_pack_renders_the_file(monkeypatch):
     monkeypatch.setattr(github, "pull_status", lambda req, origin, n: {"state": "MERGED", "merge_commit_sha": "m"})
     sync = Session({"FROM GOVERNANCE.DOMAIN_QA_PACKS P JOIN CODE.REPO": [{"PACK_ID": "p1", "VERSION": 3, "PR_NUMBER": 9, "GIT_URL": "https://github.com/a/b"}]})
     assert publish.sync_qa_prs(sync, {})["merged"] == [{"pack_id": "p1", "version": 3}]
-    assert "qa_packs" in publish.sync_git_prs(Session(), {})
+    assert "source_control" in publish.sync_git_prs(Session(), {})
 
 
 # ---------------------------------------------------------------- test history

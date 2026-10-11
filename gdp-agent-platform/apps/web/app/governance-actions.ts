@@ -19,6 +19,18 @@ export type GovUser = { user: string; roles: string[] };
 export type GovSettings = { DEFAULT_ROLE: string; SUPER_SELF_APPROVE: boolean; ENFORCE: boolean; STORE_EDITS_REQUIRE_APPROVAL?: boolean; MODEL_WORKBENCH_ENFORCED?: boolean };
 export type GovEvent = { event_id: string; event_type: string; actor: string; target: string; detail: unknown; created_at: string };
 
+export type PreviewRow = { label: string; before: string | null; after: string | null; change: "added" | "removed" | "changed" | "set"; note: string | null };
+export type RequestPreview = {
+  request_id: string; kind: "STTM_EDIT" | "DQ_SCHEDULE" | "DQ_SCHEDULE_DELETE" | "RUN_CHECK_DECISIONS" | "GENERIC";
+  headline: string; warnings: string[]; link: { href: string; label: string } | null;
+  sections: { title: string; rows: PreviewRow[] }[]; result: PreviewRow[];
+};
+
+/** What a change request changes, before and after (services/governance/preview.py). */
+export async function requestPreview(id: string) {
+  return attemptValue(() => api<RequestPreview>(`/api/governance/requests/${id}/preview`));
+}
+
 function done() {
   revalidatePath("/approvals");
   revalidatePath("/admin");

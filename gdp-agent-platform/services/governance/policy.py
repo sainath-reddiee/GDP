@@ -282,6 +282,10 @@ RULES: List[Tuple[str, str, Any, str]] = [
     ("POST", r"/api/hub/profiles/expectations", None, ""),
     ("POST", r"/api/hub/sttm/diff", None, ""),
     ("POST", r"/api/hub/sttm/[^/]+/edit", "STTM.EDIT", "Edit a mapping in the STTM catalog"),
+    # Source control (V043): an approved mapping version opened as a pull request (never queued: only approved
+    # versions are published and nothing changes in the app); reading pull request state back is open to anyone
+    ("POST", r"/api/hub/sttm/[^/]+/publish", "STTM.EDIT", "Publish an approved mapping to Git"),
+    ("POST", r"/api/source-control/sync", None, ""),
     # Model Workbench (apps/api/app/model_workbench_api.py): the draft, review and approval are the governance, so
     # these are never queued (NO_QUEUE_ROUTES); four eyes is checked by the service
     ("POST", r"/api/hub/domain-models/[^/]+/draft/validate", None, ""),
@@ -388,7 +392,7 @@ STORE_APPROVERS = {"STTM.EDIT": "STTM_APPROVER", "SODA.EDIT": "DQ_APPROVER", "DB
 
 
 # Routes whose own workflow is the approval (Model Workbench and Data Quality suite drafts, reviews and decisions,
-# Profiling Store annotations):
+# Profiling Store annotations, publishing an approved STTM version):
 # never turned into a change request. A caller who would otherwise be queued is refused, so an approval never waits
 # for its own approval.
 NO_QUEUE_ROUTES = [(m, re.compile(p)) for m, p in [
@@ -396,6 +400,7 @@ NO_QUEUE_ROUTES = [(m, re.compile(p)) for m, p in [
     ("POST", r"^/api/dq/catalog$"), ("POST", r"^/api/dq/catalog/seed$"), ("POST", r"^/api/dq/catalog/[^/]+/status$"),
     ("POST", r"^/api/dq/suites/.+$"), ("PUT", r"^/api/dq/suites/.+$"),
     ("POST", r"^/api/hub/profiles/annotations(/.*)?$"),
+    ("POST", r"^/api/hub/sttm/[^/]+/publish$"),
 ]]
 
 

@@ -6515,3 +6515,6 @@ app.include_router(dq_router)
 from app.hub_overview_api import router as overview_router  # noqa: E402
 
 app.include_router(overview_router)
+from app.source_control_api import router as source_control_router  # noqa: E402
+
+app.include_router(source_control_router)

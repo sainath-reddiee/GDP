@@ -449,6 +449,53 @@ def cancel_request(request_id: str, db: Db = Depends(gov_db)):
     return {"request_id": request_id, "status": "CANCELLED"}
 
 
+class _PreviewLoader:
+    """services.governance.preview.Loader over the API connector."""
+
+    def __init__(self, db: Db):
+        self.db = db
+
+    def sttm_version(self, catalog_id: str, version: Optional[int] = None) -> dict:
+        from app.hub_catalog_api import _version
+
+        return _version(self.db, catalog_id, version)
+
+    def dq_schedule(self, table: str) -> Optional[dict]:
+        found = self.db.query("SELECT CRON, ENABLED FROM GOVERNANCE.DQ_SCHEDULE WHERE TABLE_NAME = %s", (table,))
+        return found[0] if found else None
+
+    def dq_active_checks(self, table: str) -> int:
+        found = self.db.query("SELECT COUNT(*) AS N FROM GOVERNANCE.DQ_CHECKS_CATALOG WHERE TABLE_NAME = %s AND STATUS = 'ACTIVE'",
+                              (table,))
+        return int(found[0]["n"]) if found else 0
+
+    def run_checks(self, run_id: str, ids: list) -> dict:
+        ids = list(ids)[:200]
+        if not ids:
+            return {}
+        found = self.db.query(f"""SELECT EXPECTATION_ID, TARGET_COLUMN, CHECK_TYPE, CHECK_DEFINITION, SEVERITY, STATUS
+                                    FROM CONTRACT.SODA_EXPECTATION_REGISTRY
+                                   WHERE RUN_ID = %s AND EXPECTATION_ID IN ({', '.join(['%s'] * len(ids))})""",
+                              (run_id, *ids))
+        return {r["expectation_id"]: {**r, "check_definition": _json(r.get("check_definition"))} for r in found}
+
+
+@router.get("/api/governance/requests/{request_id}/preview")
+def request_preview(request_id: str, db: Db = Depends(gov_db)):
+    """What the request changes, before and after (services.governance.preview), and the applied result in brief.
+    Visible to whoever may see the request in Approvals: its requester, an approver, or APPROVAL.VIEW."""
+    from services.governance.preview import build, result_summary
+
+    req = _one(db, request_id)
+    who = identity(db)
+    privs = set(who["privileges"])
+    allowed = (str(req.get("requested_by") or "").upper() == who["user"] or "APPROVAL.VIEW" in privs or ALL in privs
+               or can_approve(req, who["user"], set(who["roles"]), privs, bool(settings(db).get("SUPER_SELF_APPROVE", True)))[0])
+    if not allowed:
+        raise HTTPException(403, "Only the requester, an approver or APPROVAL.VIEW can see this request.")
+    return {"request_id": request_id, **build(req, _PreviewLoader(db)), "result": result_summary(req.get("result"))}
+
+
 @router.get("/api/governance/privileges")
 def list_privileges(db: Db = Depends(gov_db)):
     return {"privileges": [{"privilege": k, "group": g, "description": d} for k, (g, d) in PRIVILEGES.items()]}
