@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { StoreCrumb } from "@/components/hub/store-nav";
 import { notFound } from "next/navigation";
 import { ApiError, api, whoami } from "@/lib/api";
 import { canAct } from "@/lib/types";
@@ -33,7 +34,7 @@ export default async function SttmDetail({ params, searchParams }: { params: { c
   const graph: JoinGraph = { driving_table: m.source_entities[0] ?? null, joins: [], ...found, unreachable: found?.unreachable ?? [], ambiguities: found?.ambiguities ?? [] };
   return (
     <div className="space-y-6">
-      <p className="eyebrow"><Link href="/dashboard/sttm" className="hover:underline">STTM Store</Link></p>
+      <StoreCrumb store="sttm" trail={[{ label: m.target_entity.split(".").pop() ?? m.target_entity }]} />
       <PageHeader title={<span className="font-mono">{m.target_entity}</span>}
                   description={<>From {m.source_system ?? "source"} ({m.source_entities.join(", ") || "no source tables"}){m.domain_name ? ` · domain ${m.domain_name}` : ""}{m.run_id ? <> · <Link className="text-primary hover:underline" href={`/runs/${m.run_id}/sttm`}>producing run</Link></> : null} · changes go to STTM_APPROVER for approval</>}
                   actions={<StatusPill status={m.status} />} />

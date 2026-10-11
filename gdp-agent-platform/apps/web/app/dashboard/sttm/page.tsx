@@ -1,4 +1,6 @@
 import Link from "next/link";
+import { StoreNav } from "@/components/hub/store-nav";
+import { scopedDomain } from "@/lib/domain-scope";
 import { GitCompareArrows, History, Layers } from "lucide-react";
 import { api } from "@/lib/api";
 import type { SttmSummary } from "@/lib/hub-types";
@@ -12,8 +14,9 @@ type Params = { q?: string; source?: string; target?: string; domain?: string; s
 
 export default async function SttmCatalog({ searchParams }: { searchParams: Params }) {
   const qs = new URLSearchParams({ limit: "200" });
+  const scoped = { ...searchParams, domain: scopedDomain(searchParams.domain) };  // the top bar's domain unless the URL names one
   for (const k of ["q", "source", "target", "domain", "status"] as const) {
-    const v = searchParams[k];
+    const v = scoped[k];
     if (v) qs.set(k, v);
   }
   const data = await api<{ mappings: SttmSummary[]; total: number; deployed: boolean }>(`/api/hub/sttm?${qs}`)
@@ -23,6 +26,7 @@ export default async function SttmCatalog({ searchParams }: { searchParams: Para
     <div className="space-y-6">
       <PageHeader eyebrow="Asset store" title="STTM Store"
                   description="Every source-to-target mapping with its full version history, independent of the run that produced it. Search, review rules, adjust business transformations inline and re-export as dbt models." />
+      <StoreNav current="sttm" domain={searchParams.domain} />
       <div className="grid gap-3 sm:grid-cols-3">
         <Kpi label="Mappings" value={data.total} hint="source system to target table" icon={GitCompareArrows} tone="blue" />
         <Kpi label="Versions" value={versions} hint="on record for the mappings shown" icon={History} tone="slate" />

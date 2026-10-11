@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { StoreNav } from "@/components/hub/store-nav";
 import { CloudCog, Database, Plus, Share2, Workflow } from "lucide-react";
 import { api } from "@/lib/api";
 import type { Pipeline, ShareList } from "@/lib/hub-types";
@@ -9,7 +10,7 @@ import { buttonVariants } from "@/components/ui/button";
 import { SourcesSection } from "@/app/sources/sources-section";
 import { PipelineTable } from "./pipeline-table";
 
-export default async function SourceHub({ searchParams }: { searchParams: { db?: string; schema?: string; mode?: string } }) {
+export default async function SourceHub({ searchParams }: { searchParams: { db?: string; schema?: string; mode?: string; domain?: string } }) {
   const [pipes, shares] = await Promise.all([
     api<{ pipelines: Pipeline[]; deployed: boolean }>("/api/hub/pipelines").catch(() => ({ pipelines: [] as Pipeline[], deployed: false })),
     api<ShareList>("/api/hub/sources/shares").catch(() => ({ shares: [], mounted: [] } as ShareList)),
@@ -23,6 +24,7 @@ export default async function SourceHub({ searchParams }: { searchParams: { db?:
                     <Link href="/dashboard/onboarding?type=source&branch=external" className={buttonVariants({ variant: "outline" })}><CloudCog className="h-4 w-4" /> Register external source</Link>
                     <Link href="/dashboard/onboarding?type=source&branch=share" className={buttonVariants()}><Share2 className="h-4 w-4" /> Onboard a share</Link>
                   </>} />
+      <StoreNav current="sources" domain={searchParams.domain} />
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <Kpi label="Mounted shares" value={shares.mounted.length} hint="databases created from a share" icon={Share2} tone="blue" />
         <Kpi label="Inbound shares" value={shares.shares.length} hint="visible to your role" icon={Database} tone="slate" />

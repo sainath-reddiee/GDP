@@ -82,7 +82,7 @@ export function CommandPalette({ privileges, domains }: { privileges?: string[] 
       ...QUICK_ACTIONS.filter((a) => allowed(a.privilege)).map((a) => ({
         id: `qa:${a.href}`, group: "Quick actions", label: a.label, detail: a.hint, icon: a.icon, run: () => go(a.href),
       })),
-      ...NAV_GROUPS.flatMap((g) => g.links.filter((l) => allowed(l.privilege)).map((l) => ({
+      ...NAV_GROUPS.flatMap((g) => g.links.flatMap((l) => [l, ...(l.children ?? [])]).filter((l) => allowed(l.privilege)).map((l) => ({
         id: `nav:${l.href}`, group: "Go to", label: l.label, detail: g.label, icon: l.icon, keywords: l.href, run: () => go(l.href),
       }))),
       ...[{ domain_id: "", domain_name: "" }, ...domains].map((d) => ({

@@ -1,4 +1,4 @@
-import Link from "next/link";
+import { StoreCrumb } from "@/components/hub/store-nav";
 import { notFound } from "next/navigation";
 import { ApiError, api, whoami } from "@/lib/api";
 import { canAct } from "@/lib/types";
@@ -18,7 +18,7 @@ export default async function DqSuitePage({ searchParams }: { searchParams: { ta
   const s = data.suite;
   return (
     <div className="space-y-5">
-      <p className="eyebrow"><Link href={`/dashboard/dq-store?table=${encodeURIComponent(table)}`} className="hover:underline">Data Quality Store · Suites</Link></p>
+      <StoreCrumb store="quality" trail={[{ label: "Suites", href: `/dashboard/dq-store?table=${encodeURIComponent(table)}` }, { label: table.split(".").pop() ?? table }]} />
       <PageHeader title={<span className="font-mono">{table.split(".").pop()}</span>}
                   description={<><span className="font-mono">{table}</span>
                     {s?.domain_name ? <> · {s.domain_name}</> : null}

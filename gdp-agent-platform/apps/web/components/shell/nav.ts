@@ -1,14 +1,54 @@
 import {
   Activity, BadgeCheck, BarChart3, BookOpen, Boxes, ClipboardCheck, Database, FileClock, FlaskConical, FolderGit2, GitCompareArrows, GitPullRequest,
-  LayoutDashboard, ListChecks, Network, Rocket, Settings, ShieldCheck, Siren, Sparkles, SquareTerminal,
+  LayoutDashboard, ListChecks, Network, Rocket, Settings, ShieldCheck, Siren, Sparkles, SquareTerminal, Store,
 } from "lucide-react";
 import type { NavCounts } from "@/app/bff/nav/route";
 
+export type NavBadge = { value: number; tone: string; title: string };
 export type NavLink = { href: string; label: string; icon: typeof Database; privilege?: string | string[]; exact?: boolean;
-  badge?: (c: NavCounts) => { value: number; tone: string; title: string } | null };
+  badge?: (c: NavCounts) => NavBadge | null;
+  /** sub-links shown under the item (expanded sidebar) or in a flyout (collapsed); the item is active on any of them */
+  children?: NavLink[] };
 
 /** Incidents shipped with PR O2. */
 const SHOW_INCIDENTS = true;
+
+/** The six asset stores, one entry under Store in the sidebar and one tab of the Store hub (components/hub/store-nav). */
+export const STORES: (NavLink & { id: string; short: string })[] = [
+  {
+    id: "sources", short: "Sources", href: "/dashboard/sources", label: "Source Store", icon: Database,
+    badge: (c) => c.profiling ? { value: c.profiling, tone: "bg-amber-400 text-amber-950", title: `${c.profiling} profiling now` }
+      : c.staged ? { value: c.staged, tone: "bg-white/10 text-white/70", title: `${c.staged} tables staged` } : null,
+  },
+  { id: "profiling", short: "Profiling", href: "/dashboard/profiling", label: "Profiling Store", icon: BarChart3 },
+  { id: "modeling", short: "Modeling", href: "/dashboard/modeling", label: "Modeling Store", icon: Network },
+  {
+    id: "sttm", short: "Mapping (STTM)", href: "/dashboard/sttm", label: "STTM Store", icon: GitCompareArrows,
+    badge: (c) => c.sttm_pending ? { value: c.sttm_pending, tone: "bg-amber-400 text-amber-950", title: `${c.sttm_pending} mappings waiting for review` } : null,
+  },
+  {
+    id: "qa", short: "QA", href: "/dashboard/qa-store", label: "QA Store", icon: SquareTerminal,
+    badge: (c) => c.qa_pending ? { value: c.qa_pending, tone: "bg-violet-500 text-white", title: `${c.qa_pending} packs awaiting approval` } : null,
+  },
+  {
+    id: "quality", short: "Data Quality", href: "/dashboard/dq-store", label: "Data Quality Store", icon: ClipboardCheck,
+    badge: (c) => c.dq_failing ? { value: c.dq_failing, tone: "bg-rose-500 text-white", title: `${c.dq_failing} checks failing` } : null,
+  },
+];
+
+/** The store a path belongs to (a store page or anything under it), or null. */
+export function storeFor(path: string) {
+  return STORES.find((s) => path === s.href || path.startsWith(`${s.href}/`)) ?? null;
+}
+
+/** Store's own badge: the stores that need attention, summed, with each named in the title. */
+function storeBadge(c: NavCounts): NavBadge | null {
+  const parts = STORES.map((s) => ({ s, b: s.badge?.(c) })).filter((x) => x.b && !x.b.tone.includes("white/10"));
+  if (!parts.length) return null;
+  const value = parts.reduce((n, x) => n + (x.b?.value ?? 0), 0);
+  return { value, tone: parts.length === 1 ? parts[0].b!.tone : "bg-amber-400 text-amber-950",
+           title: parts.map((x) => `${x.s.label}: ${x.b!.title}`).join("; ") };
+}
 
 // Overview, then the six asset stores in one place, then the work around them; a group with no visible links is hidden
 export const NAV_GROUPS: { label: string; links: NavLink[] }[] = [
@@ -18,27 +58,7 @@ export const NAV_GROUPS: { label: string; links: NavLink[] }[] = [
   },
   {
     label: "Asset stores",
-    links: [
-      {
-        href: "/dashboard/sources", label: "Source Store", icon: Database,
-        badge: (c) => c.profiling ? { value: c.profiling, tone: "bg-amber-400 text-amber-950", title: `${c.profiling} profiling now` }
-          : c.staged ? { value: c.staged, tone: "bg-white/10 text-white/70", title: `${c.staged} tables staged` } : null,
-      },
-      { href: "/dashboard/profiling", label: "Profiling Store", icon: BarChart3 },
-      { href: "/dashboard/modeling", label: "Modeling Store", icon: Network },
-      {
-        href: "/dashboard/sttm", label: "STTM Store", icon: GitCompareArrows,
-        badge: (c) => c.sttm_pending ? { value: c.sttm_pending, tone: "bg-amber-400 text-amber-950", title: `${c.sttm_pending} mappings waiting for review` } : null,
-      },
-      {
-        href: "/dashboard/qa-store", label: "QA Store", icon: SquareTerminal,
-        badge: (c) => c.qa_pending ? { value: c.qa_pending, tone: "bg-violet-500 text-white", title: `${c.qa_pending} packs awaiting approval` } : null,
-      },
-      {
-        href: "/dashboard/dq-store", label: "Data Quality Store", icon: ClipboardCheck,
-        badge: (c) => c.dq_failing ? { value: c.dq_failing, tone: "bg-rose-500 text-white", title: `${c.dq_failing} checks failing` } : null,
-      },
-    ],
+    links: [{ href: "/dashboard/store", label: "Store", icon: Store, children: STORES, badge: storeBadge }],
   },
   {
     label: "Build",

@@ -1,4 +1,6 @@
 import Link from "next/link";
+import { StoreNav } from "@/components/hub/store-nav";
+import { scopedDomain } from "@/lib/domain-scope";
 import { BarChart3, Bookmark, Fingerprint, ShieldAlert } from "lucide-react";
 import { api, whoami } from "@/lib/api";
 import { canAct } from "@/lib/types";
@@ -18,8 +20,9 @@ const PAGE = 60;
 export default async function ProfilingHub({ searchParams }: { searchParams: Params }) {
   const page = Math.max(0, Number(searchParams.page ?? 0) || 0);
   const qs = new URLSearchParams({ limit: String(PAGE), offset: String(page * PAGE), sort: searchParams.sort ?? "recent" });
+  const scoped = { ...searchParams, domain: scopedDomain(searchParams.domain) };  // the top bar's domain unless the URL names one
   for (const [k, key] of [["domain", "domain"], ["table", "table"], ["run", "run_id"], ["tag", "tag"], ["q", "q"]] as const) {
-    const v = searchParams[k];
+    const v = scoped[k];
     if (v) qs.set(key, v);
   }
   if (searchParams.bookmarked === "1") qs.set("bookmarked", "true");
@@ -38,6 +41,7 @@ export default async function ProfilingHub({ searchParams }: { searchParams: Par
     <div className="space-y-6">
       <PageHeader eyebrow="Asset store" title="Profiling Store"
                   description="Every profiled table across every run: distributions, null rates, cardinality, semantic types and drift between passes. Compare any two passes, profile on a schedule, and annotate columns; approved annotations override the profiler and are proposed to the domain model." />
+      <StoreNav current="profiling" domain={searchParams.domain} />
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <Kpi label="Tables profiled" value={data?.total ?? 0} hint="matching the filters" icon={BarChart3} tone="blue" />
         <Kpi label="Average null rate" value={avgNull == null ? "-" : `${avgNull.toFixed(1)}%`} hint="across the tables shown" icon={Fingerprint} tone="slate" />
