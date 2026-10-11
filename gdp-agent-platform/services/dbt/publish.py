@@ -17,6 +17,7 @@ from services.common.sql import clip, insert_rows, rows, scalar, variant
 from services.common.standard import conventions_for, fill, run_standard
 from services.dbt import github
 from services.dbt.workspace import safe_fqn
+from services.git import roundtrip
 
 SECRET_ALIAS = "github_token"
 NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_$]*(\.[A-Za-z_][A-Za-z0-9_$]*){0,2}$")
@@ -227,9 +228,7 @@ def publish_domain_model(session, request: Dict[str, Any]) -> Dict[str, Any]:
             result = {**github.explain(exc, origin), "base_branch": base_branch, "head_branch": head}
             result["detail"] = clip(result.get("detail"), 1000)
             call.status, call.error = "FAILED", clip(exc)
-    pr = result.get("pull_request") or {}
-    state = ("OPEN" if pr.get("url") else None) if result.get("status") == "PUBLISHED" else (
-        "NO_CHANGES" if result.get("status") == "NO_CHANGES" else "FAILED")
+    state, pr = roundtrip.outcome(result)
     status = "PUBLISHED" if state == "NO_CHANGES" else "APPROVED"  # the repository already holds exactly this model
     session.sql("""UPDATE GOVERNANCE.MODEL_DESIGNS SET STATUS = ?, REPO_ID = ?, BRANCH = ?, PR_URL = NULLIF(?, ''),
                           PR_NUMBER = NULLIF(?, '')::NUMBER, PR_STATE = ?, PUBLISH_RESULT = PARSE_JSON(?),
@@ -237,6 +236,8 @@ def publish_domain_model(session, request: Dict[str, Any]) -> Dict[str, Any]:
                     WHERE MODEL_ID = ? AND VERSION = ?""",
                 params=[status, repo_id, head, pr.get("url") or "", str(pr.get("number") or ""), state,
                         json.dumps(result, default=str), model_id, version]).collect()
+    roundtrip.record(session, "MODEL", model_id, version, result, asset_name=domain, domain_id=found[0]["DOMAIN_ID"],
+                     repo_id=repo_id, branch=head, title=title, files=list(files))
     return result
 
 
@@ -268,6 +269,7 @@ def sync_model_prs(session, request: Dict[str, Any]) -> Dict[str, Any]:
                                PR_SYNCED_AT = CURRENT_TIMESTAMP(){status_sql}
                          WHERE MODEL_ID = ? AND VERSION = ? AND STATUS IN ('APPROVED', 'PUBLISHED')""",
                     params=[pr["state"], pr.get("merge_commit_sha") or "", r["MODEL_ID"], int(r["VERSION"])]).collect()
+        roundtrip.mirror(session, "MODEL", r["MODEL_ID"], int(r["VERSION"]), pr["state"], pr.get("merge_commit_sha"))
         if pr["state"] == "MERGED":
             out["merged"].append({"model_id": r["MODEL_ID"], "version": int(r["VERSION"])})
         elif pr["state"] == "CLOSED":
@@ -307,9 +309,7 @@ def publish_dq_suite(session, request: Dict[str, Any]) -> Dict[str, Any]:
             result = {**github.explain(exc, origin), "base_branch": base_branch, "head_branch": head}
             result["detail"] = clip(result.get("detail"), 1000)
             call.status, call.error = "FAILED", clip(exc)
-    pr = result.get("pull_request") or {}
-    state = ("OPEN" if pr.get("url") else None) if result.get("status") == "PUBLISHED" else (
-        "NO_CHANGES" if result.get("status") == "NO_CHANGES" else "FAILED")
+    state, pr = roundtrip.outcome(result)
     status = "PUBLISHED" if state == "NO_CHANGES" else "APPROVED"
     session.sql("""UPDATE GOVERNANCE.DQ_SUITE_VERSION SET STATUS = ?, REPO_ID = ?, BRANCH = ?, PR_URL = NULLIF(?, ''),
                           PR_NUMBER = NULLIF(?, '')::NUMBER, PR_STATE = ?, PUBLISH_RESULT = PARSE_JSON(?),
@@ -317,6 +317,8 @@ def publish_dq_suite(session, request: Dict[str, Any]) -> Dict[str, Any]:
                     WHERE SUITE_ID = ? AND VERSION = ?""",
                 params=[status, repo_id, head, pr.get("url") or "", str(pr.get("number") or ""), state,
                         json.dumps(result, default=str), suite_id, version]).collect()
+    roundtrip.record(session, "DQ_SUITE", suite_id, version, result, asset_name=table, domain_id=found[0].get("DOMAIN_ID"),
+                     repo_id=repo_id, branch=head, title=title, files=list(files))
     return result
 
 
@@ -350,6 +352,7 @@ def sync_dq_prs(session, request: Dict[str, Any]) -> Dict[str, Any]:
                                PR_SYNCED_AT = CURRENT_TIMESTAMP(){status_sql}
                          WHERE SUITE_ID = ? AND VERSION = ? AND STATUS IN ('APPROVED', 'PUBLISHED')""",
                     params=[pr["state"], pr.get("merge_commit_sha") or "", r["SUITE_ID"], int(r["VERSION"])]).collect()
+        roundtrip.mirror(session, "DQ_SUITE", r["SUITE_ID"], int(r["VERSION"]), pr["state"], pr.get("merge_commit_sha"))
         if pr["state"] in ("MERGED", "CLOSED"):
             out[pr["state"].lower()].append({"suite_id": r["SUITE_ID"], "version": int(r["VERSION"])})
     return out
@@ -386,15 +389,15 @@ def publish_qa_pack(session, request: Dict[str, Any]) -> Dict[str, Any]:
             result = {**github.explain(exc, origin), "base_branch": base_branch, "head_branch": head}
             result["detail"] = clip(result.get("detail"), 1000)
             call.status, call.error = "FAILED", clip(exc)
-    pr = result.get("pull_request") or {}
-    state = ("OPEN" if pr.get("url") else None) if result.get("status") == "PUBLISHED" else (
-        "NO_CHANGES" if result.get("status") == "NO_CHANGES" else "FAILED")
+    state, pr = roundtrip.outcome(result)
     session.sql("""UPDATE GOVERNANCE.DOMAIN_QA_PACKS SET REPO_ID = ?, BRANCH = ?, PR_URL = NULLIF(?, ''),
                           PR_NUMBER = NULLIF(?, '')::NUMBER, PR_STATE = ?, PUBLISH_RESULT = PARSE_JSON(?),
                           REPO_PATH = COALESCE(REPO_PATH, ?), PR_SYNCED_AT = CURRENT_TIMESTAMP()
                     WHERE PACK_ID = ? AND VERSION = ?""",
                 params=[repo_id, head, pr.get("url") or "", str(pr.get("number") or ""), state,
                         json.dumps(result, default=str), path, pack_id, version]).collect()
+    roundtrip.record(session, "QA_PACK", pack_id, version, result, asset_name=pack["name"], domain_id=pack.get("domain_id"),
+                     repo_id=repo_id, branch=head, title=title, files=[path])
     return {**result, "path": path}
 
 
@@ -426,24 +429,91 @@ def sync_qa_prs(session, request: Dict[str, Any]) -> Dict[str, Any]:
         session.sql("""UPDATE GOVERNANCE.DOMAIN_QA_PACKS SET PR_STATE = ?, MERGED_SHA = NULLIF(?, ''),
                               PR_SYNCED_AT = CURRENT_TIMESTAMP() WHERE PACK_ID = ? AND VERSION = ?""",
                     params=[pr["state"], pr.get("merge_commit_sha") or "", r["PACK_ID"], int(r["VERSION"])]).collect()
+        roundtrip.mirror(session, "QA_PACK", r["PACK_ID"], int(r["VERSION"]), pr["state"], pr.get("merge_commit_sha"))
         if pr["state"] in ("MERGED", "CLOSED"):
             out[pr["state"].lower()].append({"pack_id": r["PACK_ID"], "version": int(r["VERSION"])})
     return out
 
 
+STTM_COLUMNS = ("target_column", "target_datatype", "mapping_type", "source_system", "source_table", "source_column",
+                "source_datatype", "transformation", "filter_rule", "business_rule", "business_definition", "join_logic")
+
+
+def sttm_files(entry: Dict[str, Any]) -> Dict[str, str]:
+    """An STTM catalog version as repository files: the mapping as sttm/<domain>/<target>.csv (the STTM Store's CSV
+    export) and its table design (grain, keys, dedup, SCD, strategy, row filters, join plan) beside it."""
+    from services.sttm.refine import render_csv
+
+    domain = re.sub(r"[^a-z0-9_]+", "_", str(entry.get("domain_name") or "domain").lower()).strip("_") or "domain"
+    target = re.sub(r"[^a-z0-9_]+", "_", str(entry.get("target_entity") or "target").split(".")[-1].lower()).strip("_") or "target"
+    lines = sorted(entry.get("lines") or [], key=lambda l: str(l.get("target_column") or ""))
+    design = {"target_entity": entry.get("target_entity"), "source_system": entry.get("source_system"),
+              "catalog_id": entry.get("catalog_id"), "version": entry.get("version"),
+              "table_design": entry.get("table_design") or {}}
+    return {f"sttm/{domain}/{target}.csv": render_csv([{f: l.get(f) for f in STTM_COLUMNS} for l in lines]),
+            f"sttm/{domain}/{target}.design.json": json.dumps(design, indent=2, sort_keys=True, default=str) + "\n"}
+
+
+def publish_sttm(session, request: Dict[str, Any]) -> Dict[str, Any]:
+    """An APPROVED STTM catalog version (STTM Store) as its repository files on a branch feature/sttm-<target>-v<version>
+    with a pull request. Rendered here from the approved version; the pull request lives in GOVERNANCE.GIT_PR only."""
+    catalog_id, version = str(request.get("catalog_id") or ""), int(request.get("version") or 0)
+    head = github.check_branch(str(request.get("head") or ""))
+    assert head.startswith("feature/sttm-"), "an STTM branch starts with feature/sttm-"
+    found = rows(session, """SELECT CATALOG_ID, VERSION, DOMAIN_ID, DOMAIN_NAME, SOURCE_SYSTEM, TARGET_ENTITY, STATUS,
+                                    TABLE_DESIGN, LINES FROM GOVERNANCE.STTM_CATALOG WHERE CATALOG_ID = ? AND VERSION = ?""",
+                 [catalog_id, version])
+    assert found, "mapping version not found"
+    assert str(found[0]["STATUS"]).upper() == "APPROVED", "only an approved mapping version is published"
+    entry = {str(k).lower(): v for k, v in found[0].items()}
+    entry["lines"] = [{str(k).lower(): v for k, v in l.items()} for l in (variant(entry.get("lines")) or [])]
+    entry["table_design"] = variant(entry.get("table_design")) or {}
+    files = sttm_files(entry)
+    repo_id = str(request.get("repo_id") or "")
+    repo = _repo(session, repo_id)
+    origin, base_branch = repo["GIT_URL"], str(request.get("base") or repo["BRANCH"] or "main")
+    target = entry.get("target_entity") or catalog_id
+    title = clip(request.get("title") or f"STTM {target} v{version} (approved)", 200)
+    body = clip(f"Source-to-target mapping of {target} v{version}, approved in the STTM Store.\n\nFiles:\n"
+                + "\n".join(f"- {p}" for p in sorted(files)), 6000)
+    with tool_call(session, None, "publish_sttm", {"catalog_id": catalog_id, "version": version, "head": head}) as call:
+        try:
+            result = github.publish(github.urllib_request(_token()), origin, base_branch, head, files, title=title,
+                                    body=body, message=title, draft=False)
+            call.summary = f"{result['status']} {head}: PR {(result.get('pull_request') or {}).get('url') or 'none'}"
+        except Exception as exc:
+            result = {**github.explain(exc, origin), "base_branch": base_branch, "head_branch": head}
+            result["detail"] = clip(result.get("detail"), 1000)
+            call.status, call.error = "FAILED", clip(exc)
+    result.setdefault("base_branch", base_branch)
+    recorded = roundtrip.record(session, "STTM", catalog_id, version, result, asset_name=target,
+                                domain_id=entry.get("domain_id"), repo_id=repo_id, branch=head, title=title, files=list(files))
+    return {**result, "files": sorted(files), "recorded": recorded}
+
+
 def sync_git_prs(session, request: Dict[str, Any]) -> Dict[str, Any]:
-    """Every governed pull request: domain models, data quality suites and QA packs (the scheduled task)."""
+    """Every governed pull request (the scheduled task and the Source control page): with V043 one pass over
+    GOVERNANCE.GIT_PR, which also updates each asset's own version table; before it, each asset's own sync."""
+    if roundtrip.deployed(session):
+        request_fn: Dict[str, Any] = {}
+
+        def status(git_url: str, number: int) -> Dict[str, Any]:
+            if "fn" not in request_fn:
+                request_fn["fn"] = github.urllib_request(_token())
+            return github.pull_status(request_fn["fn"], git_url, number)
+
+        return {"source_control": True, **roundtrip.sync(session, request, status)}
     return {"models": sync_model_prs(session, request), "dq_suites": sync_dq_prs(session, request),
             "qa_packs": sync_qa_prs(session, request)}
 
 
 def sync_task_sql(database: str, warehouse: str) -> List[str]:
-    """A task that syncs governed pull requests (domain models, data quality suites) every 30 minutes (created with the
-    publisher)."""
+    """A task that syncs every governed pull request (domain models, data quality suites, QA packs, STTM mappings)
+    every 30 minutes (created with the publisher)."""
     for value in (database, warehouse):
         assert NAME.match(value or ""), f"unsafe identifier: {value}"
     return [f"CREATE OR REPLACE TASK {database}.CODEGEN.SYNC_MODEL_PRS_TASK WAREHOUSE = {warehouse} "
-            f"SCHEDULE = '30 MINUTE' COMMENT = 'Read the state of domain model, data quality suite and QA pack pull requests' "
+            f"SCHEDULE = '30 MINUTE' COMMENT = 'Read the state of every governed pull request (GOVERNANCE.GIT_PR)' "
             f"AS CALL {database}.CODEGEN.PUBLISH_DBT_PR('', '{{\"sync_git_prs\": {{}}}}')",
             f"ALTER TASK {database}.CODEGEN.SYNC_MODEL_PRS_TASK RESUME"]
 
@@ -466,6 +536,8 @@ def publish_dbt_pr(session, run_id: str, payload_json: str = "{}") -> Dict[str, 
         return publish_qa_pack(session, payload["qa_pack"])
     if not run_id and isinstance(payload.get("sync_qa_prs"), dict):
         return sync_qa_prs(session, payload["sync_qa_prs"])
+    if not run_id and isinstance(payload.get("sttm"), dict):
+        return publish_sttm(session, payload["sttm"])
     if not run_id and isinstance(payload.get("sync_git_prs"), dict):
         return sync_git_prs(session, payload["sync_git_prs"])
     plan = _plan(session, run_id, payload) if run_id else dict(payload)

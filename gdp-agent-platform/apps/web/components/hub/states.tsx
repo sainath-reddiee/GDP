@@ -34,6 +34,10 @@ const STATUS_TONE: Record<string, string> = {
   SUPERSEDED: "bg-slate-100 text-slate-500 ring-slate-200", WARN: "bg-amber-50 text-amber-800 ring-amber-200",
   ERROR: "bg-rose-50 text-rose-700 ring-rose-200", NEVER_RUN: "bg-slate-100 text-slate-600 ring-slate-200", DRAFT: "bg-slate-100 text-slate-700 ring-slate-200",
   REGISTERED: "bg-indigo-50 text-indigo-700 ring-indigo-200", FINALIZED: "bg-indigo-50 text-indigo-700 ring-indigo-200",
+  // pull request states (Source control)
+  OPEN: "bg-sky-50 text-sky-700 ring-sky-200", MERGED: "bg-violet-50 text-violet-700 ring-violet-200",
+  CLOSED: "bg-amber-50 text-amber-800 ring-amber-200", FAILED: "bg-rose-50 text-rose-700 ring-rose-200",
+  NO_CHANGES: "bg-emerald-50 text-emerald-700 ring-emerald-200",
 };
 
 /** A status as text in a tinted pill: never color alone, the word is always shown. */

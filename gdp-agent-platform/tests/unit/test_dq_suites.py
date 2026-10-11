@@ -314,7 +314,15 @@ def test_publish_dq_suite_and_sync(monkeypatch):
     assert got["merged"] == [{"suite_id": "s1", "version": 2}]
     assert "STATUS = 'PUBLISHED'" in sync.find("UPDATE GOVERNANCE.DQ_SUITE_VERSION SET PR_STATE")[0][0]
     both = publish.publish_dbt_pr(Session(), "", json.dumps({"sync_git_prs": {}}))
-    assert set(both) == {"models", "dq_suites", "qa_packs"}
+    assert both["source_control"] is True and both["checked"] == 0  # V043: one pass over GOVERNANCE.GIT_PR
+
+    class Legacy(Session):
+        def sql(self, sql, params=None):
+            if "FROM GOVERNANCE.GIT_PR LIMIT 1" in " ".join(sql.split()):
+                raise RuntimeError("Object 'GOVERNANCE.GIT_PR' does not exist")
+            return super().sql(sql, params)
+    legacy = publish.publish_dbt_pr(Legacy(), "", json.dumps({"sync_git_prs": {}}))
+    assert set(legacy) == {"models", "dq_suites", "qa_packs"}
 
 
 # ---------------------------------------------------------------- governance and API

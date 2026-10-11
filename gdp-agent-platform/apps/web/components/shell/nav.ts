@@ -1,5 +1,5 @@
 import {
-  Activity, BadgeCheck, BarChart3, BookOpen, Boxes, ClipboardCheck, Database, FileClock, FlaskConical, FolderGit2, GitCompareArrows,
+  Activity, BadgeCheck, BarChart3, BookOpen, Boxes, ClipboardCheck, Database, FileClock, FlaskConical, FolderGit2, GitCompareArrows, GitPullRequest,
   LayoutDashboard, ListChecks, Network, Rocket, Settings, ShieldCheck, Siren, Sparkles, SquareTerminal,
 } from "lucide-react";
 import type { NavCounts } from "@/app/bff/nav/route";
@@ -82,6 +82,7 @@ export const NAV_GROUPS: { label: string; links: NavLink[] }[] = [
         href: "/approvals", label: "Approvals", icon: ShieldCheck,
         badge: (c) => c.approvals ? { value: c.approvals, tone: "bg-violet-500 text-white", title: `${c.approvals} waiting for you` } : null,
       },
+      { href: "/dashboard/source-control", label: "Source control", icon: GitPullRequest },
       { href: "/audit", label: "Audit", icon: FileClock, privilege: "AUDIT.VIEW" },
       { href: "/admin", label: "Admin", icon: Settings, privilege: "ADMIN.VIEW" },
     ],

@@ -8,18 +8,22 @@ import { PageHeader } from "@/components/page-header";
 import { StatusPill } from "@/components/hub/states";
 import { PendingChanges } from "@/components/governance/pending-changes";
 import { SttmWorkbench } from "./workbench";
+import { SttmGit } from "./sttm-git";
+import type { PullRequestRow } from "../../source-control/source-control-view";
 
 const EMPTY_CONTEXT: SttmContext = { run_id: null, tables: [], columns: {}, profiles: {}, candidates: [], decisions: [] };
 
 export default async function SttmDetail({ params, searchParams }: { params: { catalogId: string }; searchParams: { version?: string } }) {
   const id = encodeURIComponent(params.catalogId);
   const qs = searchParams.version && /^\d+$/.test(searchParams.version) ? `?version=${searchParams.version}` : "";
-  const [data, context, preview, me] = await Promise.all([
+  const [data, context, preview, me, git] = await Promise.all([
     api<{ mapping: SttmEntry; versions: SttmVersion[] }>(`/api/hub/sttm/${id}${qs}`)
       .catch((e) => { if (e instanceof ApiError && e.status === 404) notFound(); throw e; }),
     api<SttmContext>(`/api/hub/sttm/${id}/context${qs}`).catch(() => EMPTY_CONTEXT),
     api<{ sql: string; join_graph: JoinGraph }>(`/api/hub/sttm/${id}/preview${qs}`).catch(() => null),
     whoami(),
+    api<{ prs: PullRequestRow[]; deployed: boolean; publisher_ready: boolean; repos: { repo_id: string; name: string; branch: string | null }[] }>(
+      `/api/source-control/prs?kind=STTM&asset=${id}`).catch(() => null),
   ]);
   const m = data.mapping;
   const latest = data.versions[0]?.version ?? m.version;
@@ -36,6 +40,10 @@ export default async function SttmDetail({ params, searchParams }: { params: { c
       <PendingChanges path={`/api/hub/sttm/${params.catalogId}/`} what="mapping change" />
       <SttmWorkbench entry={m} versions={data.versions} latest={latest} context={context ?? EMPTY_CONTEXT} graph={graph}
                      previewSql={preview?.sql ?? ""} canEdit={canAct(me, "STTM.EDIT")} />
+      {git?.deployed && (
+        <SttmGit catalogId={params.catalogId} version={m.version} status={m.status} canEdit={canAct(me, "STTM.EDIT")}
+                 prs={git.prs} repos={git.repos} publisherReady={git.publisher_ready} />
+      )}
     </div>
   );
 }

@@ -127,6 +127,7 @@ footer { color: var(--muted); font-size: 13px; margin-top: 56px; }
         <li><a href="#f-ops">Pipelines</a></li>
         <li><a href="#f-incidents">Incidents</a></li>
         <li><a href="#f-approvals">Approvals and Audit</a></li>
+        <li><a href="#f-source-control">Source control</a></li>
         <li><a href="#f-admin">Admin</a></li>
         <li><a href="#f-copilot">Copilot</a></li>
       </ol></li>
@@ -478,7 +479,8 @@ footer { color: var(--muted); font-size: 13px; margin-top: 56px; }
       <li><strong>Versions</strong>: history, field-level compare, and export as a dbt project zip or CSV.</li>
     </ul>
     Changes are staged in one bar and sent together with a note as one change request. When it is approved, the approver's replay writes a new catalog version (APPROVED, origin CATALOG_EDIT) and writes it back to the producing run: <code>CONTRACT.STTM_LINE</code> rows are updated, added or removed by target column, <code>STTM_REGISTRY.TABLE_DESIGN</code> gets the joins and filters, and the run records "STTM changed in the STTM Store; regenerate dbt". The run's dbt page shows a banner until dbt is regenerated. Row filters reach the generated dbt models as WHERE conditions (table filters) and CASE expressions (column filters).</dd>
-  <dt>Privileges</dt><dd>Reading, comparing and exporting: everyone signed in. <span class="chip p">STTM.EDIT</span> to submit changes, which always wait for STTM_APPROVER (see <a href="#store-queue">store edits</a>). <span class="chip p">AI.USE</span> AI proposals.</dd>
+  <dt>Git</dt><dd>Below the workbench, an approved version is published as a pull request on <code>feature/sttm-&lt;target&gt;-v&lt;version&gt;</code> with <code>sttm/&lt;domain&gt;/&lt;target&gt;.csv</code> (the CSV export) and <code>sttm/&lt;domain&gt;/&lt;target&gt;.design.json</code> (grain, keys, dedup, SCD, strategy, row filters and join plan), rendered from the approved version (<code>POST /api/hub/sttm/&lt;id&gt;/publish</code>, never queued). The card lists the mapping's pull requests and their state; they also appear on the <a href="#f-source-control">Source control</a> page.</dd>
+  <dt>Privileges</dt><dd>Reading, comparing and exporting: everyone signed in. <span class="chip p">STTM.EDIT</span> to submit changes, which always wait for STTM_APPROVER (see <a href="#store-queue">store edits</a>), and to publish an approved version to Git. <span class="chip p">AI.USE</span> AI proposals.</dd>
 </dl>
 
 <h3 id="f-quality-center">QA and Data Quality Center</h3>
@@ -636,7 +638,16 @@ footer { color: var(--muted); font-size: 13px; margin-top: 56px; }
 <h3 id="f-approvals">Approvals and Audit</h3>
 <dl class="feature-meta">
   <dt>Approvals</dt><dd><code>/approvals</code>: Waiting for me, My requests, All requests (APPROVAL.VIEW). Approving replays the original call under the approver's session. Rejecting needs a note. Only the requester can cancel.</dd>
+  <dt>What will change</dt><dd>An opened request shows its change as labelled rows, before and after, read from the current state (<code>GET /api/governance/requests/&lt;id&gt;/preview</code>, visible to the requester, an approver or APPROVAL.VIEW). An STTM Store edit lists each line changed (field by field), added and removed, the table design and join plan changes and the requester's note, against the version it was made on, with a warning when a newer version was saved since (approving it would fail). A DQ Store schedule change shows the current and requested schedule and how many active checks the table has. Run check decisions show each check as it is now beside the decision. Any other call shows its parameters and body fields. An applied request shows its result in brief. The stored call stays available, collapsed.</dd>
   <dt>Audit</dt><dd><code>/audit</code> (AUDIT.VIEW): every workflow event, and AI cost by stage, model, run and day. Reconciling with Snowflake billing needs CONFIG.EDIT.</dd>
+</dl>
+
+<h3 id="f-source-control">Source control</h3>
+<dl class="feature-meta">
+  <dt>Page</dt><dd><code>/dashboard/source-control</code> (Govern, Source control)</dd>
+  <dt>What it does</dt><dd>Every pull request the app opened for an approved asset version, in one list (<code>GOVERNANCE.GIT_PR</code>, V043): domain models, data quality suites, QA packs and STTM mappings. Each row shows the asset and version, its state (open, merged, closed without merging, publish failed, already in the repository), the branch, repository, files, who opened it and when it was last checked, and links to the asset's Store page and the pull request. Filter by asset kind, state, domain or text; the tiles count open, merged and needing attention. Check all now reads every open pull request's state from GitHub (<code>POST /api/source-control/sync</code>); the same sync runs every 30 minutes (<code>CODEGEN.SYNC_MODEL_PRS_TASK</code>).</dd>
+  <dt>Round trip</dt><dd>Publishing renders the files from the approved version and opens the pull request (<code>services/dbt/publish.py</code>); <code>services/git/roundtrip.py</code> records it. The sync applies each outcome to this table and to the asset: a merged model or suite version becomes PUBLISHED, a QA pack records the merge (the next deploy sees it in step), and a pull request closed without merging leaves the version approved so it can be published again. Each Store's own "Check pull requests" button updates this list too.</dd>
+  <dt>Privileges</dt><dd>Reading and checking: everyone signed in. Publishing needs the asset's edit privilege (<span class="chip p">MODEL.EDIT</span>, <span class="chip p">SODA.EDIT</span>, <span class="chip p">PACKAGE.EDIT</span>, <span class="chip p">STTM.EDIT</span>) and GitHub publishing set up (<a href="#cfg-github">GitHub setup</a>).</dd>
 </dl>
 
 <h3 id="f-admin">Admin</h3>
@@ -1227,6 +1238,7 @@ cd apps/api; python -m app.worker</code></pre>
 <tr><td>V040</td><td>Data Quality suites: GOVERNANCE.DQ_SUITE and DQ_SUITE_VERSION (each table's checks versioned, reviewed and approved; pull request columns). The deploy then writes an approved version 1 per catalog table</td></tr>
 <tr><td>V041</td><td>Profiling Store governance: GOVERNANCE.PROFILE_SCHEDULE (scheduled profiling and its last outcome), PROFILE_ANNOTATION (reviewed column annotations); MODEL_CHANGE gains SOURCE, ANNOTATION_ID and PATCH</td></tr>
 <tr><td>V042</td><td>QA packs and Git: DOMAIN_QA_PACKS gains REPO_PATH, REPO_SHA and pull request columns; GOVERNANCE.QA_PACK_SYNC (repository conflicts); CONTRACT.QA_TEST_VERSION (saved test history, backfilled with each test's current state)</td></tr>
+<tr><td>V043</td><td>Source control: GOVERNANCE.GIT_PR, one row per pull request opened for an approved asset version (domain model, data quality suite, QA pack, STTM mapping), backfilled from the model, suite and pack pull request columns</td></tr>
 </table></div>
 
 <!-- ============================================================ 07 -->
