@@ -187,6 +187,7 @@ function SeedModal({ onClose, tables }: { onClose: () => void; tables: string[] 
              onChange={(e) => setValue(mode === "table" ? e.target.value.toUpperCase() : e.target.value)}
              placeholder={mode === "table" ? "DATABASE.SCHEMA.TABLE" : "00000000-0000-0000-0000-000000000000"} />
       <datalist id="seed-tables">{tables.map((t) => <option key={t} value={t} />)}</datalist>
+      {mode === "run" && <p className="mt-2 text-xs text-muted-foreground">Or pick the run from a list: <a className="font-medium text-primary hover:underline" href="/dashboard/dq-store?view=runs">Run checks</a>, then &quot;Promote approved to the store&quot;.</p>}
     </Modal>
   );
 }
@@ -296,7 +297,8 @@ function TableBlock({ table, defaultOpen, canEdit, canRun, onAdd, onEdit, onSche
                   ck.status !== "ACTIVE" && "opacity-60")}>
                   <div className="min-w-0">
                     <code className="block truncate font-mono text-[12.5px]" title={ck.soda_dsl}>{ck.headline || ck.soda_dsl}</code>
-                    <span className="text-[11px] text-muted-foreground">{ck.check_type.toLowerCase().replace(/_/g, " ")} · from {ORIGIN[ck.origin]}{ck.status !== "ACTIVE" ? ` · ${ck.status.toLowerCase()}` : ""}</span>
+                    <span className="text-[11px] text-muted-foreground">{ck.check_type.toLowerCase().replace(/_/g, " ")} · from {ORIGIN[ck.origin]}{ck.source_run_id ? <> (<a className="text-primary hover:underline" href={`/runs/${ck.source_run_id}/soda`}>run</a>)</> : null}{ck.status !== "ACTIVE" ? ` · ${ck.status.toLowerCase()}` : ""}</span>
+                    {ck.requirement && <span className="block truncate text-[11px] text-muted-foreground" title={ck.requirement}>Why: {ck.requirement}</span>}
                   </div>
                   <span className={cn("hidden text-xs font-medium md:block", ck.severity === "FAIL" ? "text-rose-600" : "text-amber-600")}>{ck.severity === "FAIL" ? "blocks" : "alerts"}</span>
                   <span className="hidden md:block">{history?.checks[ck.check_id] ? <Spark points={history.checks[ck.check_id]} /> : null}</span>

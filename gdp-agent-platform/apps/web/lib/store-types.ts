@@ -55,6 +55,7 @@ export type DqCheck = {
   status: "ACTIVE" | "PAUSED" | "RETIRED"; origin: "PROFILE" | "RUN" | "USER"; domain_id: string | null;
   schedule_cron: string | null; last_run_status: DqOutcome | null; last_run_at: string | null; last_measured: number | null;
   created_by: string; created_at: string; updated_at: string | null;
+  requirement?: string | null; source_run_id?: string | null;  // V038
 };
 export type DqTable = {
   table: string; domain_id: string | null; schedule_cron: string | null; checks: number; counts: Record<string, number>;
@@ -97,3 +98,51 @@ export type Overview = {
   qa: (PackSummary & { run_tests: number; executed_tests: number; run_suites: number; run_pass_rate: number | null }) | null;
   dq: (DqSummary & { run_checks: number; store_checks: number }) | null;
 };
+
+// ---------------------------------------------------------------- run assets in the stores (hub_runs_api)
+
+export type RunModel = {
+  design_id: string; run_id: string; run_name: string | null; current_state: string | null; domain_id: string | null;
+  domain_name: string | null; version: number; status: string; origin: string | null; decision: string | null;
+  created_by: string | null; created_at: string; approved_by: string | null; publication_status: string | null;
+  head_branch: string | null; pr_url: string | null; pr_number: number | null;
+  entities: { name: string | null; kind: string | null; columns: number }[]; entity_count: number;
+};
+export type DbtGeneration = {
+  generation_id: string; run_id: string; run_name: string | null; current_state: string | null; domain: string | null;
+  target_model: string | null; generation_version: number; generation_status: string; files_generated: number | null;
+  parent_generation_id: string | null; created_by: string | null; created_at: string; publication_status: string | null;
+  published_generation_id: string | null; head_branch: string | null; pr_url: string | null; pr_number: number | null;
+  sttm_changed: boolean;
+};
+export type DbtFile = { artifact_id: string; artifact_type: string; file_path: string; content_sha256: string; content: string };
+export type DbtGenerationDetail = {
+  generation: { generation_id: string; run_id: string; parent_generation_id: string | null; domain: string | null; target_model: string | null;
+                sttm_version: number | null; generation_version: number; generation_status: string; created_by: string | null; created_at: string };
+  run: { run_name: string | null; current_state: string | null; domain_id: string | null } | null;
+  files: DbtFile[];
+  versions: { generation_id: string; generation_version: number; generation_status: string; parent_generation_id: string | null; created_by: string | null; created_at: string }[];
+  publication: { status: string; head_branch: string | null; base_branch: string | null; pr_url: string | null; pr_number: number | null; generation_id: string | null; created_at: string } | null;
+  latest: boolean; published: boolean; edit_makes_version: boolean;
+};
+export type RunCheck = {
+  expectation_id: string; run_id: string; run_name: string | null; current_state: string | null; domain_name: string | null;
+  target_table: string; target_column: string | null; check_type: string; definition: Record<string, unknown>;
+  evidence: unknown; backtest: { status?: string; detail?: string } | null; severity: "FAIL" | "WARN"; origin: string | null;
+  client_requirement: string | null; status: "PROPOSED" | "APPROVED" | "REJECTED"; version: number; reviewed_by: string | null;
+  sodacl: string | null; result_id: string | null; outcome: DqOutcome | null; measured: number | null; failed_rows: number | null;
+  detail: string | null; sample_rows: Record<string, unknown>[] | null; sql_text: string | null; checked_at: string | null;
+};
+export type RunCheckRun = { run_id: string; run_name: string | null; domain_name: string | null; current_state: string | null;
+  checks: number; proposed: number; approved: number; rejected: number; failing: number };
+export type RunCheckCoverage = { run_id: string; columns: number; covered: number; coverage: number | null;
+  missing: { target_column: string; mapping_type: string | null }[] };
+export type RunTest = {
+  test_id: string; run_id: string | null; run_name: string | null; domain_id: string | null; domain_name: string | null;
+  target_table_id: string | null; scope: string | null; target_fqn: string | null; category: string | null; title: string;
+  objective: string | null; sql_text: string; expected: string | null; severity: string | null; target_column: string | null;
+  origin: string | null; created_by: string | null; created_at: string; history: { outcome: string; ran_at: string }[];
+  result_id: string | null; outcome: string | null; rows_returned: number | null; detail: string | null;
+  sample_rows: Record<string, unknown>[] | null; ran_at: string | null;
+};
+export type RunTestSummary = { tests: number; executed: number; passed: number; failed: number; pass_rate: number | null };

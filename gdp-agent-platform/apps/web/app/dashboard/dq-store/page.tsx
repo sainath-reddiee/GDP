@@ -3,23 +3,27 @@ import { api, whoami } from "@/lib/api";
 import { PendingChanges } from "@/components/governance/pending-changes";
 import { canAct } from "@/lib/types";
 import { scopedDomain } from "@/lib/domain-scope";
-import type { DqCatalog, DqSummary } from "@/lib/store-types";
+import type { DqCatalog, DqSummary, RunCheck, RunCheckRun } from "@/lib/store-types";
+import { StoreTabs } from "@/components/hub/store-tabs";
+import { RunChecksView } from "./run-checks";
 import { PageHeader } from "@/components/page-header";
 import { Kpi } from "@/components/hub/kpi";
 import { NotDeployed } from "@/components/hub/states";
 import { DqStoreView } from "./dq-store-view";
 
-type Params = { domain?: string; table?: string; status?: string; add?: string };
+type Params = { domain?: string; table?: string; status?: string; add?: string; view?: string; run?: string };
 
 export default async function DqStorePage({ searchParams }: { searchParams: Params }) {
   const domain = scopedDomain(searchParams.domain);
   const qs = new URLSearchParams();
   if (domain) qs.set("domain", domain);
   if (searchParams.status) qs.set("status", searchParams.status);
-  const [catalog, summary, me] = await Promise.all([
-    api<DqCatalog>(`/api/dq/catalog?${qs}`).catch(() => null),
+  const view = searchParams.view === "runs" ? "runs" : "catalog";
+  const [catalog, summary, me, runChecks] = await Promise.all([
+    view === "catalog" ? api<DqCatalog>(`/api/dq/catalog?${qs}`).catch(() => null) : Promise.resolve(null),
     api<DqSummary>(`/api/dq/summary${domain ? `?domain=${encodeURIComponent(domain)}` : ""}`).catch(() => null),
     whoami(),
+    view === "runs" ? api<{ checks: RunCheck[]; runs: RunCheckRun[]; deployed: boolean }>(`/api/dq/run-checks${domain ? `?domain=${encodeURIComponent(domain)}` : ""}`).catch(() => null) : Promise.resolve(null),
   ]);
   return (
     <div className="space-y-6">
@@ -34,11 +38,16 @@ export default async function DqStorePage({ searchParams }: { searchParams: Para
         <Kpi label="Scheduled tables" value={summary?.scheduled_tables ?? 0} hint="each one a Snowflake task" icon={CalendarClock} tone="sky" />
       </div>
       <PendingChanges path="/api/dq/" what="data quality change" />
-      {catalog && !catalog.deployed && <NotDeployed what="The Data Quality Store (GOVERNANCE.DQ_CHECKS_CATALOG, V037)" />}
-      {!catalog ? <p className="text-sm text-destructive">The Data Quality Store could not be loaded{domain ? ` for domain ${domain}` : ""}.</p> : (
+      <StoreTabs base="/dashboard/dq-store" current={view} keep={{ domain: searchParams.domain }}
+                 tabs={[{ id: "catalog", label: "Store catalog", count: summary?.checks ?? null }, { id: "runs", label: "Run checks" }]} />
+      {view === "runs" && (!runChecks ? <p className="text-sm text-destructive">Run checks could not be loaded{domain ? ` for domain ${domain}` : ""}.</p>
+        : !runChecks.deployed ? <NotDeployed what="Run data quality checks (CONTRACT.SODA_EXPECTATION_REGISTRY)" />
+        : <RunChecksView checks={runChecks.checks} runs={runChecks.runs} initialRun={searchParams.run ?? ""} canEdit={canAct(me, "SODA.EDIT")} canCase={canAct(me, "CASE.WORK")} />)}
+      {view === "catalog" && catalog && !catalog.deployed && <NotDeployed what="The Data Quality Store (GOVERNANCE.DQ_CHECKS_CATALOG, V037)" />}
+      {view === "catalog" && (!catalog ? <p className="text-sm text-destructive">The Data Quality Store could not be loaded{domain ? ` for domain ${domain}` : ""}.</p> : (
         <DqStoreView tables={catalog.tables} initialTable={searchParams.table ?? ""} status={searchParams.status ?? ""} openAdd={searchParams.add === "1"}
                      canEdit={canAct(me, "SODA.EDIT")} canRun={canAct(me, "PROFILE.RUN")} />
-      )}
+      ))}
     </div>
   );
 }

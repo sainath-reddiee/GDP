@@ -100,3 +100,49 @@ test("an STTM Store edit is staged and sent for approval", async ({ page, contex
   await expect(page.getByText("Sent to STTM_APPROVER for approval")).toBeVisible();
   await expect(page.getByTestId("change-bar")).toHaveCount(0);
 });
+
+test("the Modeling Store shows run models and a dbt edit goes for approval", async ({ page, context }) => {
+  await devSession(context, "light");
+  await page.goto("/dashboard/modeling?view=runs");
+  await expect(page.getByTestId("run-models")).toContainText("CRM customers to silver");
+  await page.getByTestId("store-tab-dbt").click();
+  await expect(page.getByTestId("dbt-generations")).toContainText("STTM changed since; regenerate");
+  await page.getByTestId("dbt-g1").click();
+  await page.waitForURL(/\/dashboard\/modeling\/dbt\/g1/);
+  await expect(page.getByText("This generation is published, so an approved change becomes generation v3")).toBeVisible();
+  await page.getByLabel("File content").fill("select customer_id from {{ ref('stg_crm__customers') }}\n");
+  await expect(page.getByTestId("change-bar")).toContainText("1 file changed");
+  await page.getByLabel("Change note").fill("Only the key for now");
+  await page.getByTestId("submit-change").click();
+  await expect(page.getByText("Sent to CODE_REVIEWER for approval")).toBeVisible();
+});
+
+test("the DQ Store decides run checks through approval", async ({ page, context }) => {
+  await devSession(context, "light");
+  await page.goto("/dashboard/dq-store?view=runs&run=r1");
+  await expect(page.getByTestId("run-checks")).toContainText("2 approved · 2 proposed");
+  await page.getByRole("button", { name: "Coverage" }).click();
+  await expect(page.getByTestId("coverage")).toContainText("80% of 5 STTM columns");
+  await page.getByTestId("check-e1").click();
+  await expect(page.getByText("4100 rows with a null EMAIL")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await page.getByLabel("Select COUNTRY_CODE ACCEPTED_VALUES").check();
+  await page.getByTestId("approve-checks").click();
+  await page.getByLabel("Justification").fill("Agreed with the client");
+  await page.getByTestId("confirm-decision").click();
+  await expect(page.getByText("Sent to DQ_APPROVER for approval")).toBeVisible();
+});
+
+test("the QA Store promotes run tests into a pack draft", async ({ page, context }) => {
+  await devSession(context, "light");
+  await page.goto("/dashboard/qa-store?view=tests");
+  await expect(page.getByTestId("run-tests")).toContainText("Every order has a customer");
+  await page.getByTestId("test-t0").click();
+  await expect(page.getByText("2 rows returned; expected 0")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await page.getByLabel("Select Every order has a customer").check();
+  await page.getByTestId("promote-tests").click();
+  await page.getByLabel("New pack name").fill("Customer integrity");
+  await page.getByTestId("confirm-promote").click();
+  await expect(page.getByText("1 test added to a pack draft")).toBeVisible();
+});
