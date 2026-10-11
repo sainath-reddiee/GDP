@@ -24,6 +24,7 @@ router = APIRouter()
 CATALOG_FIELDS = """CHECK_ID, TABLE_NAME, COLUMN_NAME, CHECK_TYPE, CHECK_DEFINITION, SODA_DSL, SEVERITY, STATUS, ORIGIN,
                     DOMAIN_ID, SCHEDULE_CRON, LAST_RUN_STATUS, LAST_RUN_AT::VARCHAR AS LAST_RUN_AT, LAST_MEASURED,
                     CREATED_BY, CREATED_AT::VARCHAR AS CREATED_AT, UPDATED_AT::VARCHAR AS UPDATED_AT"""
+LINEAGE_FIELDS = "REQUIREMENT, SOURCE_RUN_ID"  # V038
 
 
 def _call(db: Db, fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
@@ -78,11 +79,15 @@ def catalog(domain: Optional[str] = None, table: Optional[str] = None, column: O
     if q:
         where.append("(TABLE_NAME ILIKE %s OR COLUMN_NAME ILIKE %s OR SODA_DSL ILIKE %s)")
         params += [f"%{q}%"] * 3
+    sql = (f"SELECT {{fields}} FROM GOVERNANCE.DQ_CHECKS_CATALOG WHERE {' AND '.join(where)} "
+           "ORDER BY TABLE_NAME, COLUMN_NAME NULLS FIRST, CHECK_TYPE LIMIT 5000")
     try:
-        found = db.query(f"SELECT {CATALOG_FIELDS} FROM GOVERNANCE.DQ_CHECKS_CATALOG WHERE {' AND '.join(where)} "
-                         "ORDER BY TABLE_NAME, COLUMN_NAME NULLS FIRST, CHECK_TYPE LIMIT 5000", tuple(params))
+        found = db.query(sql.format(fields=f"{CATALOG_FIELDS}, {LINEAGE_FIELDS}"), tuple(params))
     except Exception:
-        return {"tables": [], "deployed": False}
+        try:  # before V038: no requirement or source run
+            found = db.query(sql.format(fields=CATALOG_FIELDS), tuple(params))
+        except Exception:
+            return {"tables": [], "deployed": False}
     rows = [_row(r) for r in found]
     try:
         schedules = {r["table_name"]: r for r in db.query(

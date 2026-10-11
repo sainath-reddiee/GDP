@@ -54,3 +54,23 @@ export async function setSchedule(table: string, cron: string | null) {
   revalidatePath(PATH);
   return r;
 }
+
+// ---------------------------------------------------------------- run checks (store decisions queue for DQ_APPROVER)
+
+export type RunCheckDecision = { expectation_id: string; decision: "APPROVED" | "REJECTED" | "MODIFIED"; justification?: string;
+  requirement?: string; severity?: "FAIL" | "WARN"; definition?: Record<string, unknown> };
+
+export async function decideRunChecks(runId: string, decisions: RunCheckDecision[]) {
+  const r = await storeAction(() => api<{ decided: number; skipped: { expectation_id: string; reason: string }[] }>(
+    "/api/dq/run-checks/decisions", post({ run_id: runId, decisions })));
+  revalidatePath(PATH);
+  return r;
+}
+
+export async function runCoverage(runId: string) {
+  return storeAction(() => api<import("@/lib/store-types").RunCheckCoverage>(`/api/dq/run-checks/coverage?run=${encodeURIComponent(runId)}`));
+}
+
+export async function openCase(ref: { qa_result_id?: string; check_result_id?: string }) {
+  return storeAction(() => api<{ case: { case_id: string; number: number } }>("/api/cases/from-result", post(ref)));
+}

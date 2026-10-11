@@ -123,6 +123,25 @@ def test_upsert_from_dsl_and_duplicates():
         dq.upsert(Session(), json.dumps({"table": "ORDERS", "dsl": "row_count > 0"}))
 
 
+def test_upsert_keeps_requirement_and_source_run():
+    session = Session()
+    out = dq.upsert(session, json.dumps({"table": "DB.S.ORDERS", "dsl": "row_count > 0", "requirement": "Orders land daily",
+                                         "source_run_id": "r1"}))
+    lineage = [c for c in session.calls if "SET REQUIREMENT" in c[0]]
+    assert lineage and lineage[0][1] == ["Orders land daily", "r1", out["check_id"]]
+
+
+def test_upsert_works_before_v038():
+    class OldSession(Session):
+        def sql(self, sql, params=None):
+            if "SET REQUIREMENT" in sql:
+                raise RuntimeError("invalid identifier 'REQUIREMENT'")
+            return super().sql(sql, params)
+
+    out = dq.upsert(OldSession(), json.dumps({"table": "DB.S.ORDERS", "dsl": "row_count > 0", "requirement": "x"}))
+    assert out["check_type"]
+
+
 def test_run_table_stores_a_table_scan(monkeypatch):
     import services.quality.scan as scan
 

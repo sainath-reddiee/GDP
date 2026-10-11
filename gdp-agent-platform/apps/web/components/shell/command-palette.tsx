@@ -4,7 +4,7 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { createPortal } from "react-dom";
 import {
-  ArrowRight, BarChart3, Boxes, ClipboardCheck, CornerDownLeft, GitCompareArrows, ListChecks, Loader2, Monitor, Moon, Search,
+  ArrowRight, BarChart3, Boxes, ClipboardCheck, CornerDownLeft, FileCode2, FlaskConical, GitCompareArrows, ListChecks, Loader2, Monitor, Moon, Search,
   SquareTerminal, Sun, type LucideIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -18,7 +18,7 @@ import type { DomainOption } from "./top-bar";
 type Item = { id: string; group: string; label: string; detail?: string; icon: LucideIcon; keywords?: string; run: () => void };
 
 const HIT_ICON: Record<SearchHit["kind"], LucideIcon> = {
-  run: ListChecks, table: BarChart3, sttm: GitCompareArrows, qa: SquareTerminal, dq: ClipboardCheck,
+  run: ListChecks, table: BarChart3, sttm: GitCompareArrows, qa: SquareTerminal, dq: ClipboardCheck, dbt: FileCode2, test: FlaskConical,
 };
 
 function score(item: Item, q: string) {

@@ -47,3 +47,15 @@ export async function executeQa(body: { domain_id: string; pack_id?: string; ver
   if (body.pack_id && !body.sql) revalidatePath(PATH);
   return r;
 }
+
+// ---------------------------------------------------------------- run tests
+
+export async function promoteTests(body: { test_ids: string[]; domain: string; pack_id?: string | null; name?: string | null; note?: string | null }) {
+  const r = await storeAction(() => api<{ pack_id: string | null; added: number; skipped: number }>("/api/qa/run-tests/promote", json(body)));
+  revalidatePath(PATH);
+  return r;
+}
+
+export async function openTestCase(qaResultId: string) {
+  return storeAction(() => api<{ case: { case_id: string; number: number } }>("/api/cases/from-result", json({ qa_result_id: qaResultId })));
+}

@@ -196,6 +196,8 @@ RULES: List[Tuple[str, str, Any, str]] = [
     ("POST", r"/api/qa-packs/[^/]+/approve", "PACKAGE.APPROVE", "Approve a domain QA pack version"),
     ("POST", r"/api/qa-packs/[^/]+/retire", "PACKAGE.APPROVE", "Retire a domain QA pack"),
     ("POST", r"/api/qa/execute", "QA.EDIT", ""),
+    # QA Store: run tests copied into a pack draft (not live until the pack is submitted and approved)
+    ("POST", r"/api/qa/run-tests/promote", "PACKAGE.EDIT", "Add run tests to a domain QA pack draft"),
     # Data Quality Store (apps/api/app/quality_api.py): catalog edits go through SODA.EDIT (routed to DQ_APPROVER by the
     # default policy); a scan is read-only
     ("POST", r"/api/dq/parse", None, ""),

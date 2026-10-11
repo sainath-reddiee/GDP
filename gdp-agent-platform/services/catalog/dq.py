@@ -218,6 +218,15 @@ def _existing(session, table_fqn: str) -> List[Dict[str, Any]]:
                                         WHERE TABLE_NAME = ? AND STATUS <> 'RETIRED'""", [table_fqn])]
 
 
+def _lineage(session, check_id: str, requirement: Optional[str], source_run_id: Optional[str]) -> None:
+    """Why the check exists and the run it came from (V038 columns; skipped before V038 is applied)."""
+    try:
+        session.sql(f"""UPDATE {CATALOG} SET REQUIREMENT = NULLIF(?, ''), SOURCE_RUN_ID = COALESCE(NULLIF(?, ''), SOURCE_RUN_ID)
+                         WHERE CHECK_ID = ?""", params=[clip(requirement or "", 4000), source_run_id or "", check_id]).collect()
+    except Exception:
+        pass
+
+
 def upsert(session, payload_json: str) -> Dict[str, Any]:
     """Create or update one check. The payload carries either `definition` (neutral form) or `dsl` (one-line SodaCL)."""
     payload = json.loads(payload_json or "{}")
@@ -256,6 +265,7 @@ def upsert(session, payload_json: str) -> Dict[str, Any]:
                      "DOMAIN_ID", "ORIGIN", "STATUS"],
                     ["?", "?", "NULLIF(?, '')", "?", "PARSE_JSON(?)", "?", "?", "NULLIF(?, '')", "?", "'ACTIVE'"],
                     [[check_id] + values + [origin]])
+    _lineage(session, check_id, cleaned.get("requirement"), payload.get("source_run_id"))
     return {"check_id": check_id, "table": table, "column": cleaned["target_column"], "check_type": cleaned["check_type"],
             "soda_dsl": cleaned["soda_dsl"], "headline": cleaned["headline"], "definition": cleaned["definition"],
             "severity": cleaned["severity"]}
@@ -271,7 +281,8 @@ def set_status(session, check_id: str, status: str) -> Dict[str, Any]:
     return {"check_id": check_id, "status": status}
 
 
-def _add_many(session, table: str, checks: List[Dict[str, Any]], origin: str, domain: Optional[str]) -> Dict[str, Any]:
+def _add_many(session, table: str, checks: List[Dict[str, Any]], origin: str, domain: Optional[str],
+              source_run_id: Optional[str] = None) -> Dict[str, Any]:
     existing = _existing(session, table)
     added, skipped, problems = 0, 0, []
     for c in checks:
@@ -284,7 +295,7 @@ def _add_many(session, table: str, checks: List[Dict[str, Any]], origin: str, do
             continue
         upsert(session, json.dumps({"table": table, "column": cleaned["target_column"], "severity": cleaned["severity"],
                                     "requirement": cleaned.get("requirement"), "definition": cleaned["definition"],
-                                    "origin": origin, "domain_id": domain}))
+                                    "origin": origin, "domain_id": domain, "source_run_id": source_run_id}))
         existing.append(cleaned)
         added += 1
     return {"table": table, "added": added, "skipped": skipped, "problems": problems[:20]}
@@ -327,7 +338,7 @@ def promote_from_run(session, run_id: str) -> Dict[str, Any]:
     checks = [{"target_column": r["TARGET_COLUMN"], "severity": r["SEVERITY"], "requirement": r["CLIENT_REQUIREMENT"],
                "definition": {k: v for k, v in (variant(r["CHECK_DEFINITION"]) or {}).items()
                               if k not in ("backtest", "evidence")}} for r in stored]
-    return _add_many(session, _fqn(fqn), checks, "RUN", sttm.get("DOMAIN_ID"))
+    return _add_many(session, _fqn(fqn), checks, "RUN", sttm.get("DOMAIN_ID"), run_id)
 
 
 # ---------------------------------------------------------------- Snowpark: scans
