@@ -231,6 +231,25 @@ RULES: List[Tuple[str, str, Any, str]] = [
     ("PUT", r"/api/cases/[^/]+", "CASE.WORK", ""),
     ("POST", r"/api/cases/[^/]+/(assign|status|comment|links)", "CASE.WORK", ""),
     ("DELETE", r"/api/cases/[^/]+/links/[^/]+", "CASE.WORK", ""),
+    # lifecycle hubs (apps/api/app/hub_*.py, /dashboard/*): reads are open to everyone signed in
+    ("POST", r"/api/hub/sources/share/preview", "SOURCE.CONNECT", ""),
+    ("POST", r"/api/hub/sources/share/onboard", "RUN.CREATE", "Onboard tables from a Snowflake share"),
+    ("POST", r"/api/hub/pipelines/validate", None, ""),
+    ("POST", r"/api/hub/pipelines", "SOURCE.CONNECT", "Register an external ingestion pipeline"),
+    ("PATCH", r"/api/hub/pipelines/[^/]+", "SOURCE.CONNECT", "Change an external ingestion pipeline"),
+    ("PUT", r"/api/hub/intake-form", "CONFIG.EDIT", "Change the external source intake questions"),
+    ("POST", r"/api/hub/profiles/bookmarks", None, ""),
+    ("DELETE", r"/api/hub/profiles/bookmarks", None, ""),
+    ("POST", r"/api/hub/profiles/reprofile", "PROFILE.RUN", ""),
+    ("POST", r"/api/hub/profiles/expectations", None, ""),
+    ("POST", r"/api/hub/sttm/diff", None, ""),
+    ("POST", r"/api/hub/sttm/[^/]+/export", None, ""),
+    ("POST", r"/api/hub/sttm/[^/]+/edit", "STTM.EDIT", "Edit a mapping in the STTM catalog"),
+    ("POST", r"/api/hub/models/propose", "AI.USE", ""),
+    ("POST", r"/api/hub/models/(validate|render)", None, ""),
+    ("POST", r"/api/hub/models/[^/]+/publish", "DBT.EDIT", "Publish a model design as a Git branch and pull request"),
+    ("POST", r"/api/hub/models(/[^/]+/finalize)?", "MODEL.EDIT", ""),
+    ("POST", r"/api/hub/onboarding/validate", None, ""),
     ("POST", r"/api/skills/builder/check", None, ""),
     ("POST", r"/api/skills/builder/(questions|draft|test)", "AI.USE", ""),
     ("POST", r"/api/skills", "SKILL.EDIT", "Create a skill"),
@@ -283,7 +302,8 @@ RULES: List[Tuple[str, str, Any, str]] = [
 ]
 _COMPILED = [(m, re.compile(f"^{p}$"), priv, title) for m, p, priv, title in RULES]
 # Calls whose body carries a secret (a webhook URL): never stored on a change request, so never queued for approval.
-SECRET_BODY = [("POST", re.compile(r"^/api/ops/teams/[^/]+/webhook$"))]
+SECRET_BODY = [("POST", re.compile(r"^/api/ops/teams/[^/]+/webhook$")),
+               ("POST", re.compile(r"^/api/hub/pipelines$")), ("PATCH", re.compile(r"^/api/hub/pipelines/[^/]+$"))]
 
 
 def carries_secret(method: str, path: str) -> bool:
