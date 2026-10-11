@@ -890,7 +890,7 @@ cd apps/web; npm install; cd ../..</code></pre></li>
 <pre><code>python infrastructure/deploy_snowflake.py --dry-run --database DEV_AI_PLATFORM</code></pre></li>
   <li><strong>Deploy.</strong> Approve the SSO prompt in the browser when it opens; it times out after a few minutes.
 <pre><code>python infrastructure/deploy_snowflake.py --connection &lt;name&gt; --database DEV_AI_PLATFORM --warehouse DBT_WH</code></pre>
-  It creates the CORE schema and migration log, applies every migration not yet applied (V001 to V033), seeds the workflow graph, uploads <code>services/</code> to <code>CORE.CODE_STAGE</code>, then recreates procedures, views, Cortex Search services and the agent. Running it again is safe.</li>
+  It creates the CORE schema, migration log and deploy state, applies every migration not yet applied, seeds the workflow graph, uploads <code>services/</code> to <code>CORE.CODE_STAGE</code>, then creates procedures, views, Cortex Search services and the agent. Running it again is safe and applies only what changed.</li>
   <li><strong>Confirm it applied.</strong> In a Snowflake worksheet:
 <pre><code>SELECT VERSION, APPLIED_AT FROM DEV_AI_PLATFORM.CORE.SCHEMA_MIGRATION ORDER BY VERSION DESC LIMIT 5;
 SHOW PROCEDURES IN SCHEMA DEV_AI_PLATFORM.CONTRACT;
@@ -914,12 +914,13 @@ cd apps/api; python -m app.worker</code></pre>
 <h3 id="dep-update">Updating an environment</h3>
 <ol class="steps">
   <li>Merge the pull request, then <code>git pull origin main</code> and reinstall dependencies if <code>requirements.txt</code> or <code>package.json</code> changed.</li>
-  <li>Run the deploy command again. Only new migrations run; procedures and code are refreshed every time.</li>
+  <li>Run the deploy command again. Only what changed is applied: new migrations, procedure, view, Cortex Search and agent files whose SQL changed, the code package when <code>services/</code> changed (and the procedures that import it), and the seed when a domain pack, QA pack, skill or seeded setting changed. Everything else is listed as unchanged (skipped).</li>
   <li>Restart the API, the web app and the worker so they load the new code and any changed <code>.env</code> values.</li>
   <li>If the release notes mention the Airflow plugin, update <code>plugins.zip</code> in MWAA at the same time as the API (the event signature must match).</li>
   <li>Run the checks for the features the release touched.</li>
 </ol>
 <div class="note"><strong>Admin, Deploy</strong> does steps 2 from the browser with the signed-in role (needs ADMIN.DEPLOY). The API and web restart are still needed for code changes.</div>
+<div class="note"><strong>How the deploy knows what changed.</strong> <code>CORE.DEPLOY_STATE</code> holds a checksum of each step's rendered SQL (procedure, view, Cortex Search, agent and demo files), the code package name, the seed inputs and the GitHub publisher and Oracle refreshes, written only after the step succeeded, so a failed step runs again next time. When a migration is applied, views, Cortex Search, agents and the seed run again so they see the new tables. If an object was changed or dropped in Snowflake by hand, or silver tables were created since the last seed, re-apply everything with <code>--force</code> (or "Re-apply everything" in Admin, Deploy). The seed leaves the target tables of domains that have an approved Model Workbench version alone: the approved model is their source of truth; to bring a changed repository pack into such a domain, import it into a draft in the Model Workbench.</div>
 <div class="warn"><strong>Never edit an applied migration.</strong> Each migration's checksum is recorded; a changed file stops the deploy. Add a new migration instead.</div>
 
 <h3 id="dep-prod">Production settings</h3>

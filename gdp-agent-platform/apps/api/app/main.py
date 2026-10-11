@@ -2137,8 +2137,9 @@ def domains(db: Db = Depends(current_db)):
 
 
 @app.post("/api/admin/apply")
-def apply_platform(db: Db = Depends(current_db)):
-    """Re-apply procedures, skills and the supervisor using the signed-in Snowflake session."""
+def apply_platform(force: bool = False, db: Db = Depends(current_db)):
+    """Apply what changed since the last deploy (migrations, procedures, views, skills, the supervisor) using the
+    signed-in Snowflake session; `force` re-applies every step."""
     import sys
     from pathlib import Path
     root = Path(__file__).resolve().parents[3]
@@ -2147,7 +2148,7 @@ def apply_platform(db: Db = Depends(current_db)):
     from infrastructure.deploy_snowflake import apply_from_session
     _graph_cache.update(at=0.0, graph=None)
     try:
-        return {"ok": True, "log": apply_from_session(db.conn, DATABASE, WAREHOUSE)}
+        return {"ok": True, "log": apply_from_session(db.conn, DATABASE, WAREHOUSE, force=force)}
     except Exception as exc:
         raise _snowflake_error(exc) from exc
 

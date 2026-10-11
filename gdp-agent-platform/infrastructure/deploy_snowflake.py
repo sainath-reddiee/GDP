@@ -3,12 +3,18 @@
     python infrastructure/deploy_snowflake.py --connection <name> [--database AI_PLATFORM] [--dry-run]
 
 Steps (idempotent):
-  1. bootstrap   CREATE DATABASE/SCHEMA CORE IF NOT EXISTS + CORE.SCHEMA_MIGRATION
+  1. bootstrap   CREATE DATABASE/SCHEMA CORE IF NOT EXISTS + CORE.SCHEMA_MIGRATION + CORE.DEPLOY_STATE
   2. migrations  snowflake/database/migrations/V###__*.sql, each applied once; checksum must not change
   3. seed        workflow graph JSON -> CORE.WORKFLOW_STATE / CORE.WORKFLOW_TRANSITION (MERGE)
   4. package     services/ -> content-addressed zip -> PUT @CORE.CODE_STAGE
   5. procedures  snowflake/procedures/*.sql (CREATE OR REPLACE PROCEDURE + grants)
   6. demo        optional, --demo-source <DB>: snowflake/demo/*.sql (demo CRM source system)
+
+Only what changed is applied. CORE.DEPLOY_STATE keeps a checksum of every step's rendered SQL (procedures, views,
+Cortex Search, agents, demo files), of the code package, of the seed inputs and of the publisher refreshes; a step
+whose checksum matches the last successful apply is skipped. A procedure file changes when its SQL or the code
+package changes. When a migration is applied, views, Cortex Search, agents and the seed run again so they pick up the
+new tables. --force (or "Re-apply everything" in Admin) applies every step regardless.
 """
 
 from __future__ import annotations
@@ -26,7 +32,7 @@ from typing import Dict, List, Tuple
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from infrastructure.seed_knowledge import _stage_dir, list_skills, seed_platform  # noqa: E402
+from infrastructure.seed_knowledge import _stage_dir, list_skills, seed_inputs_digest, seed_platform  # noqa: E402
 from services.workflow.graph import load_graph  # noqa: E402
 
 MIGRATIONS_DIR = ROOT / "snowflake" / "database" / "migrations"
@@ -108,7 +114,54 @@ CREATE TABLE IF NOT EXISTS {database}.CORE.SCHEMA_MIGRATION (
     APPLIED_AT   TIMESTAMP_LTZ DEFAULT CURRENT_TIMESTAMP(),
     CONSTRAINT PK_SCHEMA_MIGRATION PRIMARY KEY (VERSION)
 );
+CREATE TABLE IF NOT EXISTS {database}.CORE.DEPLOY_STATE (
+    OBJECT_KEY   VARCHAR(512) NOT NULL,
+    CHECKSUM     VARCHAR(64)  NOT NULL,
+    APPLIED_BY   VARCHAR(256) NOT NULL,
+    APPLIED_AT   TIMESTAMP_LTZ DEFAULT CURRENT_TIMESTAMP(),
+    CONSTRAINT PK_DEPLOY_STATE PRIMARY KEY (OBJECT_KEY)
+);
 """
+
+
+class DeployState:
+    """Checksums of the last successful apply of each deploy step (CORE.DEPLOY_STATE). `changed` says whether a
+    step must run; `record` stores its checksum once it succeeded, so a failed step runs again next time."""
+
+    def __init__(self, cur, database: str, force: bool = False):
+        self.cur, self.database, self.force = cur, database, force
+        self.skipped: Dict[str, int] = {}
+        try:
+            cur.execute(f"SELECT OBJECT_KEY, CHECKSUM FROM {database}.CORE.DEPLOY_STATE")
+            self.applied = dict(cur.fetchall())
+        except Exception:
+            self.applied = {}
+
+    def changed(self, key: str, digest: str) -> bool:
+        if self.force or self.applied.get(key) != digest:
+            return True
+        group = key.split("/", 1)[0]
+        self.skipped[group] = self.skipped.get(group, 0) + 1
+        return False
+
+    def record(self, key: str, digest: str) -> None:
+        self.cur.execute(
+            f"""MERGE INTO {self.database}.CORE.DEPLOY_STATE t
+                USING (SELECT %s AS OBJECT_KEY, %s AS CHECKSUM) s ON t.OBJECT_KEY = s.OBJECT_KEY
+                WHEN MATCHED THEN UPDATE SET CHECKSUM = s.CHECKSUM, APPLIED_BY = CURRENT_USER(),
+                     APPLIED_AT = CURRENT_TIMESTAMP()
+                WHEN NOT MATCHED THEN INSERT (OBJECT_KEY, CHECKSUM, APPLIED_BY)
+                     VALUES (s.OBJECT_KEY, s.CHECKSUM, CURRENT_USER())""",
+            (key, digest),
+        )
+        self.applied[key] = digest
+
+    def summary(self) -> List[str]:
+        return [f"{group}: {n} unchanged (skipped)" for group, n in sorted(self.skipped.items())]
+
+
+def seed_digest(state_rows, transition_rows) -> str:
+    return checksum(repr((state_rows, transition_rows)))
 
 
 def seed_rows(database: str):
@@ -202,16 +255,18 @@ def deploy(args) -> None:
     try:
         log = apply_to_connection(con, database, warehouse, variables, zip_name, zip_bytes,
                                   migrations, procedures, extra_sql, graph_version,
-                                  state_rows, transition_rows, demo_files)
+                                  state_rows, transition_rows, demo_files, force=args.force)
         for line in log:
             print(line)
     finally:
         con.close()
 
 
-def refresh_github_publisher(cur, database: str, services_import: str, warehouse: str = "") -> str:
+def refresh_github_publisher(cur, database: str, services_import: str, warehouse: str = "",
+                             state: "DeployState | None" = None) -> str:
     """Re-point CODEGEN.PUBLISH_DBT_PR at the new code package once GitHub publishing has been set up, and keep the
-    task that syncs domain model pull requests (Model Workbench) running."""
+    task that syncs domain model pull requests (Model Workbench) running. Skipped when neither the package, the
+    publisher setup nor the warehouse changed since the last refresh."""
     import json as _json
     from services.dbt.publish import procedure_sql, sync_task_sql
 
@@ -221,22 +276,30 @@ def refresh_github_publisher(cur, database: str, services_import: str, warehouse
     if not row:
         return "github publisher: not set up (skipped)"
     config = _json.loads(row[0]) if isinstance(row[0], str) else row[0]
+    digest = checksum(_json.dumps([config, services_import, warehouse], sort_keys=True, default=str))
+    if state and not state.changed("github_publisher", digest):
+        return "github publisher: unchanged (skipped)"
     try:
         cur.execute(procedure_sql(database, services_import, config["external_access_integration"], config["secret"]))
     except Exception as exc:
         return f"github publisher: skipped ({exc})"
     if not warehouse:
+        if state:
+            state.record("github_publisher", digest)
         return "github publisher: refreshed"
     try:
         for statement in sync_task_sql(database, warehouse):
             cur.execute(statement)
-        return "github publisher: refreshed; model pull request sync every 30 minutes"
     except Exception as exc:
         return f"github publisher: refreshed; model pull request sync task skipped ({exc})"
+    if state:
+        state.record("github_publisher", digest)
+    return "github publisher: refreshed; model pull request sync every 30 minutes"
 
 
-def refresh_oracle_sources(cur, database: str, services_import: str) -> str:
-    """Re-point each Oracle source's procedure (Snowflake runtime, already set up) at the new code package."""
+def refresh_oracle_sources(cur, database: str, services_import: str, state: "DeployState | None" = None) -> str:
+    """Re-point each Oracle source's procedure (Snowflake runtime, already set up) at the new code package. Skipped
+    when neither the package nor the sources changed since the last refresh."""
     import json as _json
     from services.source.oracle.procedures import procedure_sql
 
@@ -246,6 +309,9 @@ def refresh_oracle_sources(cur, database: str, services_import: str) -> str:
         configs = [_json.loads(r[0]) if isinstance(r[0], str) else r[0] for r in cur.fetchall()]
     except Exception as exc:
         return f"oracle sources: skipped ({exc})"
+    digest = checksum(_json.dumps([configs, services_import], sort_keys=True, default=str))
+    if state and not state.changed("oracle_sources", digest):
+        return "oracle sources: unchanged (skipped)"
     done, failed = 0, []
     for cfg in configs:
         if cfg.get("runtime", "snowflake") != "snowflake" or not cfg.get("oracle_procedure"):
@@ -256,13 +322,16 @@ def refresh_oracle_sources(cur, database: str, services_import: str) -> str:
             done += 1
         except Exception as exc:
             failed.append(f"{cfg.get('schema')}: {str(exc)[:120]}")
+    if state and not failed:
+        state.record("oracle_sources", digest)
     return f"oracle sources: {done} procedure(s) refreshed" + (f"; failed {failed}" if failed else "")
 
 
 def apply_to_connection(con, database: str, warehouse: str, variables: Dict[str, str],
                         zip_name: str, zip_bytes: bytes, migrations, procedures, extra_sql,
-                        graph_version, state_rows, transition_rows, demo_files) -> List[str]:
-    """Apply migrations, seed, package, procedures and extras on an open connection."""
+                        graph_version, state_rows, transition_rows, demo_files, force: bool = False) -> List[str]:
+    """Apply migrations, seed, package, procedures and extras on an open connection; steps that did not change
+    since their last successful apply are skipped unless `force`."""
     log: List[str] = []
     cur = con.cursor()
     cur.execute("SELECT CURRENT_USER(), CURRENT_ROLE(), CURRENT_WAREHOUSE()")
@@ -273,16 +342,20 @@ def apply_to_connection(con, database: str, warehouse: str, variables: Dict[str,
     assert current_wh or warehouse, "no warehouse in session; pass --warehouse"
 
     con.execute_string(bootstrap_sql(database))
+    state = DeployState(cur, database, force)
+    if force:
+        log.append("force: every step is applied")
 
     cur.execute(f"SELECT VERSION, CHECKSUM FROM {database}.CORE.SCHEMA_MIGRATION")
     applied = dict(cur.fetchall())
+    migrated = False
     for version, name, path in migrations:
         raw = path.read_text(encoding="utf-8")
         digest = checksum(raw)
         if version in applied:
             assert applied[version] == digest, \
                 f"V{version} was modified after being applied (checksum mismatch); add a new migration instead"
-            log.append(f"migration V{version} {name}: already applied")
+            state.skipped["migrations"] = state.skipped.get("migrations", 0) + 1
             continue
         con.execute_string(render(raw, variables))
         cur.execute(
@@ -291,7 +364,72 @@ def apply_to_connection(con, database: str, warehouse: str, variables: Dict[str,
             (version, name, digest),
         )
         log.append(f"migration V{version} {name}: applied")
+        migrated = True
+    if migrated:
+        log.append("migrations applied: views, Cortex Search, agents and the seed run again")
 
+    graph_digest = seed_digest(state_rows, transition_rows)
+    if migrated or state.changed("seed/workflow_graph", graph_digest):
+        _seed_graph(cur, database, graph_version, state_rows, transition_rows)
+        state.record("seed/workflow_graph", graph_digest)
+        log.append(f"seed graph {graph_version}: {len(state_rows)} states, {len(transition_rows)} transitions")
+
+    if state.changed("package/services", zip_name):
+        with tempfile.TemporaryDirectory() as tmp:
+            local = Path(tmp) / zip_name
+            local.write_bytes(zip_bytes)
+            cur.execute(
+                f"PUT 'file://{local.as_posix()}' @{database}.CORE.CODE_STAGE "
+                f"AUTO_COMPRESS = FALSE OVERWRITE = FALSE"
+            )
+        state.record("package/services", zip_name)
+        log.append(f"package {zip_name} uploaded")
+
+    for path in procedures:
+        sql = render(path.read_text(encoding="utf-8"), variables)
+        key, digest = f"procedures/{path.name}", checksum(sql)
+        if not state.changed(key, digest):
+            continue
+        con.execute_string(sql)
+        state.record(key, digest)
+        log.append(f"procedures {path.name}: applied")
+    log.append(refresh_github_publisher(cur, database, variables["services_import"],
+                                        variables.get("warehouse") or warehouse, state))
+    log.append(refresh_oracle_sources(cur, database, variables["services_import"], state))
+
+    inputs = seed_inputs_digest()
+    if migrated or state.changed("seed/platform", inputs):
+        log.extend(seed_platform(cur, database) or [])
+        state.record("seed/platform", inputs)
+        log.append("seed domain packs, skills, platform config")
+
+    for path in extra_sql:
+        sql = render(path.read_text(encoding="utf-8"), variables)
+        key, digest = f"{path.parent.name}/{path.name}", checksum(sql)
+        if not migrated and not state.changed(key, digest):
+            continue
+        try:
+            con.execute_string(sql)
+            state.record(key, digest)
+            log.append(f"{path.parent.name} {path.name}: applied")
+        except Exception as exc:
+            if path.parent.name == "agents":
+                raise
+            log.append(f"{path.parent.name} {path.name}: skipped ({exc})")
+
+    for path in demo_files:
+        sql = render(path.read_text(encoding="utf-8"), variables)
+        key, digest = f"demo/{variables['demo_database']}/{path.name}", checksum(sql)
+        if not state.changed(key, digest):
+            continue
+        con.execute_string(sql)
+        state.record(key, digest)
+        log.append(f"demo {path.name}: applied to {variables['demo_database']}")
+    log.extend(state.summary())
+    return log
+
+
+def _seed_graph(cur, database: str, graph_version, state_rows, transition_rows) -> None:
     cur.execute(
         merge_statement(f"{database}.CORE.WORKFLOW_STATE", STATE_COLUMNS, ["STATE"], len(state_rows)),
         [v for row in state_rows for v in row],
@@ -311,43 +449,11 @@ def apply_to_connection(con, database: str, warehouse: str, variables: Dict[str,
         f"UPDATED_AT = CURRENT_TIMESTAMP() WHERE GRAPH_VERSION <> %s",
         (graph_version, graph_version),
     )
-    log.append(f"seed graph {graph_version}: {len(state_rows)} states, {len(transition_rows)} transitions")
-
-    with tempfile.TemporaryDirectory() as tmp:
-        local = Path(tmp) / zip_name
-        local.write_bytes(zip_bytes)
-        cur.execute(
-            f"PUT 'file://{local.as_posix()}' @{database}.CORE.CODE_STAGE "
-            f"AUTO_COMPRESS = FALSE OVERWRITE = FALSE"
-        )
-    log.append(f"package {zip_name} uploaded")
-
-    for path in procedures:
-        con.execute_string(render(path.read_text(encoding="utf-8"), variables))
-        log.append(f"procedures {path.name}: applied")
-    log.append(refresh_github_publisher(cur, database, variables["services_import"], variables.get("warehouse") or warehouse))
-    log.append(refresh_oracle_sources(cur, database, variables["services_import"]))
-
-    log.extend(seed_platform(cur, database) or [])
-    log.append("seed domain packs, skills, platform config")
-
-    for path in extra_sql:
-        try:
-            con.execute_string(render(path.read_text(encoding="utf-8"), variables))
-            log.append(f"{path.parent.name} {path.name}: applied")
-        except Exception as exc:
-            if path.parent.name == "agents":
-                raise
-            log.append(f"{path.parent.name} {path.name}: skipped ({exc})")
-
-    for path in demo_files:
-        con.execute_string(render(path.read_text(encoding="utf-8"), variables))
-        log.append(f"demo {path.name}: applied to {variables['demo_database']}")
-    return log
 
 
-def apply_from_session(con, database: str, warehouse: str, demo_source: str | None = None) -> List[str]:
-    """Deploy using an already-authenticated Snowflake connection (no new SSO)."""
+def apply_from_session(con, database: str, warehouse: str, demo_source: str | None = None,
+                       force: bool = False) -> List[str]:
+    """Deploy using an already-authenticated Snowflake connection (no new SSO); only changed steps unless `force`."""
     zip_name, zip_bytes = build_services_zip()
     variables = {
         "database": database.upper(),
@@ -364,7 +470,7 @@ def apply_from_session(con, database: str, warehouse: str, demo_source: str | No
         con, database.upper(), warehouse.upper(), variables, zip_name, zip_bytes,
         list_migrations(), sorted(PROCEDURES_DIR.glob("*.sql")),
         sorted(VIEWS_DIR.glob("*.sql")) + sorted(SEARCH_DIR.glob("*.sql")) + sorted(AGENTS_DIR.glob("*.sql")),
-        graph_version, state_rows, transition_rows, demo_files,
+        graph_version, state_rows, transition_rows, demo_files, force=force,
     )
 
 
@@ -376,6 +482,8 @@ def main() -> None:
     parser.add_argument("--warehouse")
     parser.add_argument("--dry-run", action="store_true", help="render SQL without connecting")
     parser.add_argument("--demo-source", help="also create the demo CRM source in this (separate) database")
+    parser.add_argument("--force", action="store_true",
+                        help="apply every step, even the ones that did not change since the last deploy")
     args = parser.parse_args()
     if not args.dry_run and not args.connection:
         parser.error("--connection is required unless --dry-run")

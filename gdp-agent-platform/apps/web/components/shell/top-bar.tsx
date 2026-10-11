@@ -161,7 +161,7 @@ export function TopBar({ user, role, canLogout, appRoles, privileges, domains, s
   const [mac, setMac] = useState(false);
   useEffect(() => { setMac(/Mac|iPhone|iPad/.test(navigator.platform)); }, []);
   return (
-    <header className="sticky top-0 z-40 border-b border-border/60 bg-background/70 backdrop-blur-xl backdrop-saturate-150">
+    <header className="sticky top-0 z-40 border-b border-border/60 bg-background/95 backdrop-blur-xl backdrop-saturate-150">
       <div className="mx-auto flex h-14 w-full max-w-[1600px] items-center gap-2 px-6 lg:px-10">
         <DomainSwitcher domains={domains} scope={scope} />
         <button type="button" onClick={openPalette} data-testid="open-palette"
