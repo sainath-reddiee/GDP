@@ -274,6 +274,7 @@ RULES: List[Tuple[str, str, Any, str]] = [
     ("POST", r"/api/hub/domain-models/[^/]+/versions/\d+/comments", "MODEL.EDIT", ""),
     ("POST", r"/api/hub/domain-models/[^/]+/comments/[^/]+/resolve", "MODEL.EDIT", ""),
     ("PUT", r"/api/hub/domain-models/[^/]+/(layout|standard)", "MODEL.EDIT", ""),
+    ("POST", r"/api/hub/domain-models/[^/]+/import", "MODEL.EDIT", ""),
     ("POST", r"/api/hub/models/propose", "AI.USE", ""),
     ("POST", r"/api/hub/models/(validate|render)", None, ""),
     ("POST", r"/api/hub/models/[^/]+/publish", "DBT.EDIT", "Publish a model design as a Git branch and pull request"),
