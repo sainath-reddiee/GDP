@@ -97,7 +97,7 @@ footer { color: var(--muted); font-size: 13px; margin-top: 56px; }
 <div class="wrap">
 <nav class="toc" aria-label="Contents">
   <div class="brand">GDP Agent Platform</div>
-  <div class="ver">Guidebook and runbook for code on main, migrations V001 to V033</div>
+  <div class="ver">Guidebook and runbook for code on main, migrations V001 to V044</div>
   <ol>
     <li><a href="#access"><span class="num">01</span>How access works</a></li>
     <li><a href="#setup"><span class="num">02</span>Setup order</a></li>
@@ -159,7 +159,8 @@ footer { color: var(--muted); font-size: 13px; margin-top: 56px; }
     <li><a href="#data"><span class="num">09</span>Table reference</a>
       <ol>
         <li><a href="#schemas">Schemas</a></li>
-        <li><a href="#tables">Tables</a></li>
+        <li><a href="#table-map">Tables by feature</a></li>
+        <li><a href="#tables">All tables</a></li>
         <li><a href="#procs">Procedures</a></li>
         <li><a href="#runtime">Runtime objects</a></li>
         <li><a href="#migrations">Migrations</a></li>
@@ -1069,113 +1070,173 @@ cd apps/api; python -m app.worker</code></pre>
 
 <h3 id="schemas">Schemas</h3>
 <div class="tablebox"><table>
-<tr><th>Schema</th><th>Holds</th></tr>
-<tr><td>CORE</td><td>Workflow graph and runs, reviews, platform config, AI suggestions, copilot, tags, migration log</td></tr>
-<tr><td>SOURCE</td><td>Source registry, access checks, discovered objects, landing registry</td></tr>
-<tr><td>PROFILE</td><td>Run-scoped column profiles</td></tr>
-<tr><td>METADATA</td><td>Persistent table profiles reused across runs, and the profile stage</td></tr>
-<tr><td>KNOWLEDGE</td><td>Domains, knowledge items, target models, skills and releases</td></tr>
-<tr><td>MAPPING</td><td>Embeddings, scoring config, candidates and decisions</td></tr>
-<tr><td>CONTRACT</td><td>STTM, data quality expectations, QA tests, suites and sign-offs</td></tr>
-<tr><td>CODEGEN</td><td>dbt generations, artifacts, validations, git publications</td></tr>
-<tr><td>QUALITY</td><td>Data quality scans and QA executions</td></tr>
-<tr><td>MODELING</td><td>Versioned target model designs</td></tr>
-<tr><td>AUDIT</td><td>Agent tool calls and AI cost</td></tr>
-<tr><td>GOVERNANCE</td><td>App roles, privileges, policies, change requests; tenant-wide profile, STTM and model design catalogs</td></tr>
-<tr><td>PLATFORM_CONFIG</td><td>Catalogs maintained by the app and read by external tools: the ingestion pipeline catalog</td></tr>
-<tr><td>CODE</td><td>Indexed client repositories</td></tr>
-<tr><td>JIRA</td><td>OAuth tokens, issue links, action log, saved filters</td></tr>
-<tr><td>OPS</td><td>Airflow runs, incidents, teams, routing, notifications</td></tr>
-<tr><td>LANDING</td><td>Raw copies of onboarded tables (DATA_STEWARD only)</td></tr>
-<tr><td>GDP_SILVER</td><td>Development target schema for generated dbt (compile only)</td></tr>
-<tr><td>EXT_&lt;SOURCE&gt;</td><td>One per external, file or Oracle source: landed tables, stage, formats</td></tr>
+<tr><th>Schema</th><th>Tables</th><th>Holds</th></tr>
+<tr><td>CORE</td><td>14</td><td>Onboarding workflow graph and runs, review decisions, platform settings, AI suggestions, copilot, tags, migration and deploy state</td></tr>
+<tr><td>SOURCE</td><td>5</td><td>Source registry, access checks, discovered objects, landing registry</td></tr>
+<tr><td>PLATFORM_CONFIG</td><td>3</td><td>Tables the app writes and external tools read: the ingestion pipeline catalog and the SnapLogic ingestion control table with its history</td></tr>
+<tr><td>PROFILE</td><td>1</td><td>Run-scoped column profiles</td></tr>
+<tr><td>METADATA</td><td>1</td><td>Persistent table profiles reused across runs, and the profile stage</td></tr>
+<tr><td>KNOWLEDGE</td><td>14</td><td>Domains and members, knowledge items, target tables and columns, skills and releases</td></tr>
+<tr><td>MAPPING</td><td>4</td><td>Embeddings, scoring config, candidates and decisions</td></tr>
+<tr><td>CONTRACT</td><td>7</td><td>Run STTM, data quality expectations, QA tests, suites, test history and sign-offs</td></tr>
+<tr><td>MODELING</td><td>1</td><td>Model designs proposed inside a run</td></tr>
+<tr><td>CODEGEN</td><td>4</td><td>dbt generations, files, validations, dbt pull requests</td></tr>
+<tr><td>QUALITY</td><td>4</td><td>Data quality scans and QA executions with their results</td></tr>
+<tr><td>GOVERNANCE</td><td>25</td><td>App roles, privileges, approvals and audit; and the tenant-wide stores: profiles, profile schedules and annotations, STTM catalog, domain models and their reviews and changes, DQ checks, schedules and suites, QA packs and queries, Git pull requests</td></tr>
+<tr><td>CASES</td><td>4</td><td>Reported problems (cases), their timeline, links and fix artifacts, with a domain row access policy</td></tr>
+<tr><td>CODE</td><td>7</td><td>Connected and indexed client repositories</td></tr>
+<tr><td>JIRA</td><td>5</td><td>Personal Jira tokens, issue links, action log, saved filters</td></tr>
+<tr><td>OPS</td><td>12</td><td>Airflow environments, DAG and task runs, incidents, teams, routing, notifications</td></tr>
+<tr><td>AUDIT</td><td>3</td><td>AI tool calls and AI cost</td></tr>
+<tr><td>LANDING</td><td></td><td>Raw copies of onboarded tables (DATA_STEWARD only); tables are created at landing time</td></tr>
+<tr><td>GDP_SILVER</td><td></td><td>Development target schema for generated dbt (compile only)</td></tr>
+<tr><td>EXT_&lt;SOURCE&gt;</td><td></td><td>One per external, file or Oracle source: landed tables, stage, formats</td></tr>
+</table></div>
+<p>The 17 platform schemas hold 114 tables. LANDING, GDP_SILVER and EXT_ schemas hold client data, not platform state, so their tables are not listed below.</p>
+
+<h3 id="table-map">Which tables each feature uses</h3>
+<p>Start here to find where a page keeps its data. The full list with every table follows.</p>
+<div class="tablebox"><table>
+<tr><th>Feature (page)</th><th>Main tables</th></tr>
+<tr><td>Onboarding runs (/runs)</td><td>CORE.WORKFLOW_RUN, WORKFLOW_EVENT, REVIEW_DECISION; then per step: SOURCE.*, PROFILE.PROFILE_REGISTRY, KNOWLEDGE.DOMAIN_RECOMMENDATION, MODELING.MODEL_DESIGN, MAPPING.*, CONTRACT.STTM_*, CONTRACT.SODA_EXPECTATION_REGISTRY, CONTRACT.QA_*, CODEGEN.*</td></tr>
+<tr><td>Source Store (/dashboard/sources)</td><td>SOURCE.SOURCE_REGISTRY, SOURCE.LANDING_TABLE_REGISTRY, PLATFORM_CONFIG.INGESTION_PIPELINE_CATALOG, INGESTION_CONTROL_CONFIG, INGESTION_CONTROL_HISTORY</td></tr>
+<tr><td>Profiling Store (/dashboard/profiling)</td><td>GOVERNANCE.DATA_PROFILES, PROFILE_BOOKMARK, PROFILE_SCHEDULE, PROFILE_ANNOTATION; METADATA.TABLE_PROFILES</td></tr>
+<tr><td>Modeling Store and Model Workbench (/dashboard/modeling)</td><td>GOVERNANCE.DOMAIN_MODEL, MODEL_DESIGNS, MODEL_REVIEW_COMMENT, MODEL_CHANGE; KNOWLEDGE.TARGET_TABLE_REGISTRY, TARGET_COLUMN_REGISTRY</td></tr>
+<tr><td>STTM Store (/dashboard/sttm)</td><td>GOVERNANCE.STTM_CATALOG (run STTMs live in CONTRACT.STTM_REGISTRY and STTM_LINE)</td></tr>
+<tr><td>QA Store (/dashboard/qa-store)</td><td>GOVERNANCE.DOMAIN_QA_PACKS, DOMAIN_QA_QUERIES, QA_PACK_SYNC; QUALITY.QA_RUN, QA_RESULT</td></tr>
+<tr><td>Data Quality Store (/dashboard/dq-store)</td><td>GOVERNANCE.DQ_CHECKS_CATALOG, DQ_SCHEDULE, DQ_SUITE, DQ_SUITE_VERSION; QUALITY.CHECK_RUN, CHECK_RESULT</td></tr>
+<tr><td>QA workspace and cases (/qa)</td><td>CONTRACT.QA_TEST_CASE, QA_TEST_SUITE, QA_TEST_VERSION; QUALITY.QA_RUN, QA_RESULT; JIRA.*; CASES.*</td></tr>
+<tr><td>Source control (/dashboard/source-control)</td><td>GOVERNANCE.GIT_PR; CODE.REPO; CODEGEN.GIT_PUBLICATION for run dbt</td></tr>
+<tr><td>Approvals (/approvals) and Admin</td><td>GOVERNANCE.CHANGE_REQUEST, APPROVAL_POLICY, SETTING, APP_ROLE, ROLE_PRIVILEGE, ROLE_GRANT, USER_ROLE, GOVERNANCE_EVENT; CORE.PLATFORM_CONFIG</td></tr>
+<tr><td>Domains and Knowledge (/domains, /knowledge)</td><td>KNOWLEDGE.DOMAIN_REGISTRY, DOMAIN_MEMBER, DOMAIN_VERSION, DOMAIN_KNOWLEDGE, KNOWLEDGE_USAGE</td></tr>
+<tr><td>Skills (/skills)</td><td>KNOWLEDGE.SKILL_*; CORE.RUN_SKILL_OVERRIDE</td></tr>
+<tr><td>Code (/code)</td><td>CODE.*</td></tr>
+<tr><td>Ops and Incidents (/ops, /incidents)</td><td>OPS.*</td></tr>
+<tr><td>Command Center (/dashboard)</td><td>Reads counts from the stores above, CORE.WORKFLOW_RUN and GOVERNANCE.CHANGE_REQUEST; writes nothing</td></tr>
+<tr><td>Audit and cost (/audit)</td><td>AUDIT.AGENT_TOOL_CALL, COST_USAGE</td></tr>
+<tr><td>Deploy (infrastructure/deploy_snowflake.py)</td><td>CORE.SCHEMA_MIGRATION, DEPLOY_STATE; seeds WORKFLOW_STATE, WORKFLOW_TRANSITION, skills, QA packs, scoring config</td></tr>
 </table></div>
 
-<h3 id="tables">Tables</h3>
-<p>Type: <strong>Config</strong> is managed by people, <strong>Content</strong> is produced by the pipeline, <strong>Log</strong> is operational or audit history.</p>
-<div class="filter"><label for="tfilter">Filter tables</label><input id="tfilter" type="search" placeholder="Try QA, incident, token, profile" autocomplete="off"><span class="count" id="tcount"></span></div>
+<h3 id="tables">All tables</h3>
+<p>Every table the platform creates, grouped by schema. Type: <strong>Config</strong> is set by people or the deploy, <strong>Content</strong> is produced by the platform's features, <strong>Log</strong> is history, audit or operational state kept for traceability. "Created in" names the migration in <code>snowflake/database/migrations</code> (a second version means a later migration added columns).</p>
+<div class="filter"><label for="tfilter">Filter tables</label><input id="tfilter" type="search" placeholder="Try QA, SnapLogic, incident, profile, V044" autocomplete="off"><span class="count" id="tcount"></span></div>
 <div class="tablebox"><table id="ttable">
-<thead><tr><th>Table</th><th>Type</th><th>Holds</th><th>Written by</th></tr></thead>
+<thead><tr><th>Table</th><th>Type</th><th>What it is for</th><th>Written by</th><th>Used on</th><th>Created in</th></tr></thead>
 <tbody>
-<tr><td>CORE.SCHEMA_MIGRATION</td><td>Log</td><td>Applied migrations and checksums</td><td>Deploy</td></tr>
-<tr><td>CORE.WORKFLOW_STATE</td><td>Config</td><td>States of the workflow graph</td><td>Deploy seed</td></tr>
-<tr><td>CORE.WORKFLOW_TRANSITION</td><td>Config</td><td>Allowed transitions and who may make them</td><td>Deploy seed</td></tr>
-<tr><td>CORE.WORKFLOW_RUN</td><td>Content</td><td>One onboarding run and its lifecycle</td><td>Workflow procedures</td></tr>
-<tr><td>CORE.WORKFLOW_EVENT</td><td>Log</td><td>Every state transition with its actor</td><td>Workflow procedures</td></tr>
-<tr><td>CORE.REVIEW_DECISION</td><td>Log</td><td>Human gate decisions with justification</td><td>REVIEW_TRANSITION</td></tr>
-<tr><td>CORE.PLATFORM_CONFIG</td><td>Config</td><td>Versioned settings: models, Jira, Ops, dbt publishing, rules</td><td>Admin, seed</td></tr>
-<tr><td>CORE.AI_SUGGESTION</td><td>Log</td><td>Cached AI suggestions per stage and scope</td><td>AI suggestions</td></tr>
-<tr><td>CORE.AI_SUGGESTION_DECISION</td><td>Log</td><td>Accept or reject per suggested item</td><td>AI suggestions</td></tr>
-<tr><td>CORE.COPILOT_MESSAGE</td><td>Log</td><td>Copilot questions, answers and citations</td><td>Copilot</td></tr>
-<tr><td>CORE.TAG, TAG_ASSIGNMENT</td><td>Config</td><td>Tag catalogue and tags on profiles, runs, models</td><td>Tags API</td></tr>
-<tr><td>CORE.RUN_SKILL_OVERRIDE</td><td>Config</td><td>Candidate skill pinned for one run</td><td>Skills</td></tr>
-<tr><td>SOURCE.SOURCE_REGISTRY</td><td>Config</td><td>Registered sources and connections (never credentials)</td><td>Sources</td></tr>
-<tr><td>SOURCE.SOURCE_ACCESS_CHECK</td><td>Log</td><td>Read-access check results per run</td><td>VALIDATE_SOURCE_ACCESS</td></tr>
-<tr><td>SOURCE.SOURCE_OBJECT</td><td>Content</td><td>Objects discovered in a source, with selection</td><td>REGISTER_SOURCE</td></tr>
-<tr><td>SOURCE.LANDING_TABLE_REGISTRY</td><td>Content</td><td>Each landed table with row-count reconciliation</td><td>EXECUTE_LANDING</td></tr>
-<tr><td>SOURCE.LANDING_COLUMN_REGISTRY</td><td>Content</td><td>Columns of each landed table</td><td>EXECUTE_LANDING</td></tr>
-<tr><td>PROFILE.PROFILE_REGISTRY</td><td>Content</td><td>Run-scoped column profile with PII classification</td><td>RUN_PROFILING</td></tr>
-<tr><td>METADATA.TABLE_PROFILES</td><td>Content</td><td>Persistent per-table profiles reused across runs</td><td>PROFILE_SOURCE_TABLES</td></tr>
-<tr><td>KNOWLEDGE.DOMAIN_REGISTRY</td><td>Config</td><td>Business domains and detection config</td><td>Domains</td></tr>
-<tr><td>KNOWLEDGE.DOMAIN_KNOWLEDGE</td><td>Content</td><td>Versioned knowledge items, source of knowledge search</td><td>Knowledge writer</td></tr>
-<tr><td>KNOWLEDGE.TARGET_TABLE_REGISTRY</td><td>Config</td><td>Target model tables per domain</td><td>Domains, modeling</td></tr>
-<tr><td>KNOWLEDGE.TARGET_COLUMN_REGISTRY</td><td>Config</td><td>Target columns, business keys, PII flags</td><td>Domains, modeling</td></tr>
-<tr><td>KNOWLEDGE.DOMAIN_RECOMMENDATION</td><td>Log</td><td>Domain identification result per run</td><td>IDENTIFY_DOMAIN</td></tr>
-<tr><td>KNOWLEDGE.SKILL_REGISTRY</td><td>Config</td><td>Immutable skill versions</td><td>Skills</td></tr>
-<tr><td>KNOWLEDGE.SKILL_CATEGORY, SKILL_SETTING</td><td>Config</td><td>Skill categories and choices</td><td>Skills</td></tr>
-<tr><td>KNOWLEDGE.SKILL_LABEL, SKILL_LABEL_HISTORY</td><td>Config / Log</td><td>Production and candidate labels and their moves</td><td>Skills</td></tr>
-<tr><td>KNOWLEDGE.SKILL_STAGE_BINDING</td><td>Config</td><td>Which skills each stage loads</td><td>Admin</td></tr>
-<tr><td>KNOWLEDGE.KNOWLEDGE_USAGE</td><td>Log</td><td>Knowledge used by each run stage</td><td>Knowledge writer</td></tr>
-<tr><td>KNOWLEDGE.DOMAIN_VERSION</td><td>Log</td><td>Snapshot of each domain change</td><td>Domains</td></tr>
-<tr><td>KNOWLEDGE.DOMAIN_MEMBER</td><td>Config</td><td>Domain owners, stewards, experts</td><td>Domains</td></tr>
-<tr><td>MAPPING.MAPPING_SCORING_CONFIG</td><td>Config</td><td>Scoring weights and thresholds per domain</td><td>Seed</td></tr>
-<tr><td>MAPPING.COLUMN_EMBEDDING</td><td>Content</td><td>Embeddings of source and target columns</td><td>Mapping</td></tr>
-<tr><td>MAPPING.MAPPING_CANDIDATE</td><td>Content</td><td>Ranked candidates with score components</td><td>Mapping</td></tr>
-<tr><td>MAPPING.MAPPING_DECISION</td><td>Content</td><td>Reviewer decisions</td><td>SAVE_MAPPING_DECISIONS</td></tr>
-<tr><td>CONTRACT.STTM_REGISTRY</td><td>Content</td><td>Versioned STTM per run and target</td><td>STTM</td></tr>
-<tr><td>CONTRACT.STTM_LINE</td><td>Content</td><td>Column mappings and transformations</td><td>STTM</td></tr>
-<tr><td>CONTRACT.SODA_EXPECTATION_REGISTRY</td><td>Content</td><td>Data quality checks and their decisions</td><td>Data quality</td></tr>
-<tr><td>CONTRACT.QA_TEST_CASE</td><td>Content</td><td>Saved QA test SQL for a run or a table</td><td>QA</td></tr>
-<tr><td>CONTRACT.QA_TEST_SUITE</td><td>Config</td><td>Suites of table tests</td><td>QA</td></tr>
-<tr><td>CONTRACT.QA_SIGNOFF</td><td>Log</td><td>QA approval or rejection per STTM version</td><td>QA sign-off</td></tr>
-<tr><td>CODEGEN.DBT_GENERATION_REGISTRY</td><td>Content</td><td>Each dbt generation version</td><td>dbt</td></tr>
-<tr><td>CODEGEN.GENERATED_ARTIFACT</td><td>Content</td><td>Generated file contents</td><td>dbt</td></tr>
-<tr><td>CODEGEN.VALIDATION_RUN</td><td>Log</td><td>Validation results</td><td>VALIDATE_DBT</td></tr>
-<tr><td>CODEGEN.GIT_PUBLICATION</td><td>Log</td><td>Branches and PRs published</td><td>PUBLISH_DBT_PR</td></tr>
-<tr><td>QUALITY.CHECK_RUN, CHECK_RESULT</td><td>Log</td><td>Data quality scans and per-check outcomes (masked samples)</td><td>Quality scan</td></tr>
-<tr><td>QUALITY.QA_RUN, QA_RESULT</td><td>Log</td><td>QA executions and per-test outcomes (masked samples)</td><td>QA run</td></tr>
-<tr><td>MODELING.MODEL_DESIGN</td><td>Content</td><td>Versioned target model design per run</td><td>Model design</td></tr>
-<tr><td>AUDIT.AGENT_TOOL_CALL</td><td>Log</td><td>Each stage action or AI tool call</td><td>All AI stages</td></tr>
-<tr><td>AUDIT.COST_USAGE</td><td>Log</td><td>Tokens and credits per AI call</td><td>All AI stages</td></tr>
-<tr><td>AUDIT.AGENT_RUN</td><td>Log</td><td>Agent run header (not written today)</td><td>None</td></tr>
-<tr><td>GOVERNANCE.APP_ROLE, ROLE_PRIVILEGE, ROLE_GRANT</td><td>Config</td><td>Roles, their privileges and inheritance</td><td>Admin, Access</td></tr>
-<tr><td>GOVERNANCE.USER_ROLE</td><td>Config</td><td>Which user holds which app role</td><td>Admin, Access</td></tr>
-<tr><td>GOVERNANCE.APPROVAL_POLICY, SETTING</td><td>Config</td><td>Approval rules and governance settings</td><td>Admin, Access</td></tr>
-<tr><td>GOVERNANCE.CHANGE_REQUEST</td><td>Log</td><td>Requests waiting for approval and their results</td><td>Governance</td></tr>
-<tr><td>GOVERNANCE.GOVERNANCE_EVENT</td><td>Log</td><td>Governance audit log</td><td>Governance</td></tr>
-<tr><td>GOVERNANCE.DATA_PROFILES (view PERSISTENT_PROFILES)</td><td>Content</td><td>Column profile per profiling pass, across runs</td><td>Profiling (copied from each pass)</td></tr>
-<tr><td>GOVERNANCE.PROFILE_BOOKMARK</td><td>Config</td><td>Tables a person bookmarked</td><td>Profiling hub</td></tr>
-<tr><td>GOVERNANCE.STTM_CATALOG</td><td>Content</td><td>Every version of every mapping with its full line set</td><td>STTM steps, STTM catalog edits</td></tr>
-<tr><td>GOVERNANCE.MODEL_DESIGNS</td><td>Content</td><td>Modeling hub designs, rendered files and their branch and pull request</td><td>Modeling hub, GitHub publisher</td></tr>
-<tr><td>PLATFORM_CONFIG.INGESTION_PIPELINE_CATALOG</td><td>Config</td><td>External sources for the ingestion tool: intake answers, sealed secrets, schedule, landing table, pipeline name</td><td>Source Hub</td></tr>
-<tr><td>CODE.REPO</td><td>Config</td><td>Connected repositories and dbt settings</td><td>Integrations</td></tr>
-<tr><td>CODE.CODE_FILE, CODE_CHUNK, CODE_EDGE</td><td>Content</td><td>Indexed files, code chunks (source of code search), lineage edges</td><td>INDEX_REPO</td></tr>
-<tr><td>CODE.REPO_SUMMARY, INDEX_RUN, CODE_USAGE</td><td>Content / Log</td><td>Summaries, index runs, code quoted into prompts</td><td>Code index</td></tr>
-<tr><td>JIRA.USER_TOKEN</td><td>Config</td><td>Each person's encrypted Jira tokens and refresh lease</td><td>Jira</td></tr>
-<tr><td>JIRA.OAUTH_STATE</td><td>Log</td><td>One-time sign-in state values</td><td>Jira</td></tr>
-<tr><td>JIRA.ISSUE_LINK</td><td>Content</td><td>Issues linked to runs, tests, tables, suites</td><td>Jira, QA</td></tr>
-<tr><td>JIRA.ACTION_LOG</td><td>Log</td><td>Every write made to Jira</td><td>Jira</td></tr>
-<tr><td>JIRA.SAVED_FILTER</td><td>Config</td><td>Saved JQL filters</td><td>Jira</td></tr>
-<tr><td>OPS.AIRFLOW_ENV</td><td>Config</td><td>MWAA environments, poll cursor, encrypted push secret</td><td>Admin, worker</td></tr>
-<tr><td>OPS.DAG</td><td>Config</td><td>DAG metadata plus team, criticality, SLA, mute</td><td>Worker, Pipelines</td></tr>
-<tr><td>OPS.DAG_RUN, TASK_RUN</td><td>Log</td><td>DAG runs and task attempts (redacted error excerpts)</td><td>Worker, push</td></tr>
-<tr><td>OPS.EVENT</td><td>Log</td><td>Raw push and poll payloads, purged after 30 days</td><td>Worker, push</td></tr>
-<tr><td>OPS.JOB_LEASE</td><td>Log</td><td>One-holder leases for worker jobs</td><td>Worker</td></tr>
-<tr><td>OPS.TEAM, ROUTING_RULE</td><td>Config</td><td>Support teams (encrypted webhooks) and routing</td><td>Admin, Incidents</td></tr>
-<tr><td>OPS.INCIDENT</td><td>Content</td><td>Incidents with Jira state and AI diagnosis</td><td>Worker</td></tr>
-<tr><td>OPS.INCIDENT_EVENT</td><td>Log</td><td>Incident timeline and idempotency claims</td><td>Worker, Incidents</td></tr>
-<tr><td>OPS.NOTIFICATION</td><td>Log</td><td>Teams and Jira delivery outbox with retries</td><td>Worker</td></tr>
-<tr><td>OPS.DAG_DEPENDENCY</td><td>Config</td><td>Upstream links between DAGs, for grouping</td><td>Worker</td></tr>
+<tr><td>CORE.AI_SUGGESTION</td><td>Log</td><td>Cached AI suggestions per stage and scope</td><td>services/common/ai_suggest.py</td><td>AI suggestion panels on run steps</td><td>V012</td></tr>
+<tr><td>CORE.AI_SUGGESTION_DECISION</td><td>Log</td><td>Accept or reject for each suggested item</td><td>services/common/ai_suggest.py</td><td>AI suggestion panels</td><td>V012</td></tr>
+<tr><td>CORE.COPILOT_MESSAGE</td><td>Log</td><td>Copilot questions, answers and citations</td><td>Copilot</td><td>Copilot panel</td><td>V015</td></tr>
+<tr><td>CORE.DEPLOY_STATE</td><td>Log</td><td>Checksum of each rendered deploy step, so a re-deploy skips unchanged steps</td><td>infrastructure/deploy_snowflake.py</td><td>Deploy only</td><td>Deploy script</td></tr>
+<tr><td>CORE.PLATFORM_CONFIG</td><td>Config</td><td>Versioned platform settings: AI models, Jira, Ops, dbt publishing, rules</td><td>Admin, deploy seed</td><td>Read across the API and worker</td><td>V004</td></tr>
+<tr><td>CORE.REVIEW_DECISION</td><td>Log</td><td>Human gate decisions with justification</td><td>CORE.REVIEW_TRANSITION</td><td>Run review step (/runs/&lt;id&gt;/review)</td><td>V001</td></tr>
+<tr><td>CORE.RUN_SKILL_OVERRIDE</td><td>Config</td><td>A candidate skill version pinned for one run</td><td>Skills API</td><td>Skills, run stages</td><td>V021</td></tr>
+<tr><td>CORE.SCHEMA_MIGRATION</td><td>Log</td><td>Which migrations (V###) are applied, with checksums</td><td>infrastructure/deploy_snowflake.py</td><td>Deploy only</td><td>Deploy script</td></tr>
+<tr><td>CORE.TAG</td><td>Config</td><td>Tag catalogue</td><td>Tags API</td><td>Tag pickers</td><td>V019</td></tr>
+<tr><td>CORE.TAG_ASSIGNMENT</td><td>Config</td><td>Tags placed on profiles, runs and models</td><td>Tags API</td><td>Profiling Store, runs, models</td><td>V019</td></tr>
+<tr><td>CORE.WORKFLOW_EVENT</td><td>Log</td><td>Every state transition of a run, with who made it</td><td>Workflow procedures</td><td>Run timeline, Command Center activity</td><td>V001</td></tr>
+<tr><td>CORE.WORKFLOW_RUN</td><td>Content</td><td>One onboarding run: source, domain, state, owner, linked model version. The spine most features join to</td><td>Workflow procedures, API</td><td>Runs list (/runs), every run step, Command Center</td><td>V001</td></tr>
+<tr><td>CORE.WORKFLOW_STATE</td><td>Config</td><td>The states of the onboarding workflow graph</td><td>Deploy seed</td><td>Run pages, workflow procedures</td><td>V001</td></tr>
+<tr><td>CORE.WORKFLOW_TRANSITION</td><td>Config</td><td>Allowed moves between states and which role may make them</td><td>Deploy seed</td><td>Run pages, workflow procedures</td><td>V001</td></tr>
+<tr><td>SOURCE.LANDING_COLUMN_REGISTRY</td><td>Content</td><td>Columns of each landed table</td><td>SOURCE.EXECUTE_LANDING</td><td>Run landing step, Profiling</td><td>V001</td></tr>
+<tr><td>SOURCE.LANDING_TABLE_REGISTRY</td><td>Content</td><td>Each landed table with its row-count reconciliation</td><td>SOURCE.EXECUTE_LANDING, EXECUTE_STAGED_LANDING</td><td>Run landing step, Profiling, Source Store</td><td>V001</td></tr>
+<tr><td>SOURCE.SOURCE_ACCESS_CHECK</td><td>Log</td><td>Read-access check results per run</td><td>SOURCE.VALIDATE_SOURCE_ACCESS</td><td>Run access step</td><td>V001</td></tr>
+<tr><td>SOURCE.SOURCE_OBJECT</td><td>Content</td><td>Objects discovered in a source and which were selected</td><td>SOURCE.REGISTER_SOURCE</td><td>Run source step</td><td>V001</td></tr>
+<tr><td>SOURCE.SOURCE_REGISTRY</td><td>Config</td><td>Registered sources and connection details (never credentials)</td><td>Source procedures, API</td><td>Source Store, run source step</td><td>V001</td></tr>
+<tr><td>PLATFORM_CONFIG.INGESTION_CONTROL_CONFIG</td><td>Config</td><td>SnapLogic control table: one row per table an external source loads (MASTER_ID per source, CHILD_ID per table). SnapLogic reads it and updates TARGET_PREVIOUS_LOAD_TIME, LAST_RUN_TIMESTAMP and COMPLETION_FLAG. API_KEY holds a secret reference only</td><td>External onboarding wizard (services/source/ingestion_control.py, /api/hub/ingestion-control); SnapLogic</td><td>Source Store ingestion configurations, SnapLogic pipelines</td><td>V044</td></tr>
+<tr><td>PLATFORM_CONFIG.INGESTION_CONTROL_HISTORY</td><td>Log</td><td>Every create, edit, activation and deactivation of a control row: who, when, and the row after the change. Append only</td><td>services/source/ingestion_control.py</td><td>Source Store configuration drawer</td><td>V044</td></tr>
+<tr><td>PLATFORM_CONFIG.INGESTION_PIPELINE_CATALOG</td><td>Config</td><td>One row per external source for the ingestion tool: intake answers, sealed secret references, schedule, landing table, pipeline name</td><td>Source Store onboarding (services/source/pipelines.py)</td><td>Source Store (/dashboard/sources), Command Center</td><td>V035</td></tr>
+<tr><td>PROFILE.PROFILE_REGISTRY</td><td>Content</td><td>Run-scoped column profile with PII classification</td><td>PROFILE.RUN_PROFILING</td><td>Run profile step</td><td>V001</td></tr>
+<tr><td>METADATA.TABLE_PROFILES</td><td>Content</td><td>Persistent per-table profile reused across runs</td><td>SOURCE.PROFILE_SOURCE_TABLES</td><td>Profiling, DQ, models</td><td>V006</td></tr>
+<tr><td>KNOWLEDGE.DOMAIN_KNOWLEDGE</td><td>Content</td><td>Versioned knowledge items; the source of Cortex Search KNOWLEDGE_SEARCH</td><td>Knowledge writer, Knowledge API, deploy seed</td><td>Knowledge page (/knowledge), AI prompts</td><td>V001</td></tr>
+<tr><td>KNOWLEDGE.DOMAIN_MEMBER</td><td>Config</td><td>Domain owners, stewards and experts; drives domain scoping</td><td>Domains API</td><td>Domains, cases visibility, copilot</td><td>V023</td></tr>
+<tr><td>KNOWLEDGE.DOMAIN_RECOMMENDATION</td><td>Log</td><td>Domain identification result per run</td><td>KNOWLEDGE.IDENTIFY_DOMAIN</td><td>Run domain step</td><td>V001</td></tr>
+<tr><td>KNOWLEDGE.DOMAIN_REGISTRY</td><td>Config</td><td>Business domains and their detection settings</td><td>Domains API</td><td>Domains (/domains), domain filter everywhere</td><td>V001</td></tr>
+<tr><td>KNOWLEDGE.DOMAIN_VERSION</td><td>Log</td><td>Snapshot of each domain change</td><td>services/knowledge/domain_versions.py</td><td>Domain history</td><td>V023</td></tr>
+<tr><td>KNOWLEDGE.KNOWLEDGE_USAGE</td><td>Log</td><td>Which knowledge each run stage used</td><td>Knowledge writer</td><td>Knowledge page</td><td>V022</td></tr>
+<tr><td>KNOWLEDGE.SKILL_CATEGORY</td><td>Config</td><td>Skill categories</td><td>Skills API</td><td>Skills</td><td>V021</td></tr>
+<tr><td>KNOWLEDGE.SKILL_LABEL</td><td>Config</td><td>Production and candidate labels on skill versions</td><td>Skills API, deploy seed</td><td>Skills, AI stages</td><td>V021</td></tr>
+<tr><td>KNOWLEDGE.SKILL_LABEL_HISTORY</td><td>Log</td><td>Every label move</td><td>Skills API, deploy seed</td><td>Skills</td><td>V021</td></tr>
+<tr><td>KNOWLEDGE.SKILL_REGISTRY</td><td>Config</td><td>Immutable skill versions</td><td>Skills API, skill builder</td><td>Skills (/skills), AI stages</td><td>V001</td></tr>
+<tr><td>KNOWLEDGE.SKILL_SETTING</td><td>Config</td><td>Skill choices and settings</td><td>Skills API</td><td>Skills</td><td>V021</td></tr>
+<tr><td>KNOWLEDGE.SKILL_STAGE_BINDING</td><td>Config</td><td>Which skills each stage loads</td><td>Admin, deploy seed</td><td>AI stages</td><td>V021</td></tr>
+<tr><td>KNOWLEDGE.TARGET_COLUMN_REGISTRY</td><td>Config</td><td>Target columns, business keys and PII flags</td><td>Domain model sync, modeling</td><td>Mapping, STTM</td><td>V001</td></tr>
+<tr><td>KNOWLEDGE.TARGET_TABLE_REGISTRY</td><td>Config</td><td>Target tables per domain, linked to the approved model version</td><td>Domain model sync, modeling</td><td>Mapping, STTM, QA, DQ, runs</td><td>V001, V039</td></tr>
+<tr><td>MAPPING.COLUMN_EMBEDDING</td><td>Content</td><td>Embeddings of source and target columns</td><td>Mapping procedures</td><td>Mapping</td><td>V001</td></tr>
+<tr><td>MAPPING.MAPPING_CANDIDATE</td><td>Content</td><td>Ranked source-to-target candidates with score components</td><td>MAPPING.GENERATE_MAPPING_CANDIDATES</td><td>Run mapping step</td><td>V001</td></tr>
+<tr><td>MAPPING.MAPPING_DECISION</td><td>Content</td><td>Reviewer decisions on candidates</td><td>MAPPING.SAVE_MAPPING_DECISIONS</td><td>Run mapping step, STTM</td><td>V001</td></tr>
+<tr><td>MAPPING.MAPPING_SCORING_CONFIG</td><td>Config</td><td>Scoring weights and thresholds per domain</td><td>Deploy seed</td><td>Mapping</td><td>V001</td></tr>
+<tr><td>CONTRACT.QA_SIGNOFF</td><td>Log</td><td>QA approval or rejection per STTM version</td><td>API (QA sign-off)</td><td>Run QA step, Quality center</td><td>V013</td></tr>
+<tr><td>CONTRACT.QA_TEST_CASE</td><td>Content</td><td>Saved QA test SQL for a run or for a table</td><td>QA procedures, API</td><td>Run QA step, QA workspace (/qa), QA runs</td><td>V010</td></tr>
+<tr><td>CONTRACT.QA_TEST_SUITE</td><td>Config</td><td>Named suites of table tests</td><td>CONTRACT.QA_TABLE_SUITE</td><td>QA workspace</td><td>V028</td></tr>
+<tr><td>CONTRACT.QA_TEST_VERSION</td><td>Log</td><td>History of every saved QA test (each save is a new version)</td><td>services/qa/test_versions.py</td><td>QA workspace test history</td><td>V042</td></tr>
+<tr><td>CONTRACT.SODA_EXPECTATION_REGISTRY</td><td>Content</td><td>Data quality checks proposed for a run and the reviewer's decision</td><td>CONTRACT.GENERATE_SODA and SAVE_SODA_DECISIONS</td><td>Run Soda step, promotion to the DQ Store</td><td>V001</td></tr>
+<tr><td>CONTRACT.STTM_LINE</td><td>Content</td><td>The column lines of each STTM version: source, target, transformation, join</td><td>STTM procedures, services/catalog/sttm.py</td><td>Run STTM step, dbt generation</td><td>V001</td></tr>
+<tr><td>CONTRACT.STTM_REGISTRY</td><td>Content</td><td>Versioned source-to-target mapping (STTM) per run and target table</td><td>STTM procedures, services/catalog/sttm.py</td><td>Run STTM step, dbt generation, triage</td><td>V001</td></tr>
+<tr><td>MODELING.MODEL_DESIGN</td><td>Content</td><td>Target model design proposed inside a run, versioned</td><td>services/modeling/design.py, run_link.py</td><td>Run model step, proposals to the Model Workbench</td><td>V018</td></tr>
+<tr><td>CODEGEN.DBT_GENERATION_REGISTRY</td><td>Content</td><td>Each dbt generation version for a run</td><td>CODEGEN.GENERATE_DBT, dbt overlay</td><td>Run dbt step, Modeling Store dbt view (/dashboard/modeling/dbt/&lt;id&gt;)</td><td>V001</td></tr>
+<tr><td>CODEGEN.GENERATED_ARTIFACT</td><td>Content</td><td>The generated dbt files (models, schema.yml, tests)</td><td>CODEGEN.GENERATE_DBT, API edits</td><td>Run dbt step, publish</td><td>V001</td></tr>
+<tr><td>CODEGEN.GIT_PUBLICATION</td><td>Log</td><td>Branches and pull requests published for a run's dbt code</td><td>CODEGEN.PUBLISH_DBT_PR (services/dbt/publish.py)</td><td>Run dbt step, Command Center</td><td>V005</td></tr>
+<tr><td>CODEGEN.VALIDATION_RUN</td><td>Log</td><td>dbt and Soda validation results per run</td><td>CODEGEN.VALIDATE_DBT, validation procedures</td><td>Run validation step</td><td>V001</td></tr>
+<tr><td>QUALITY.CHECK_RESULT</td><td>Log</td><td>Per-check outcome of a scan (masked samples)</td><td>services/quality/scan.py, QUALITY.RUN_TABLE_SCAN</td><td>DQ Store, Quality center, cases</td><td>V016, V037</td></tr>
+<tr><td>QUALITY.CHECK_RUN</td><td>Log</td><td>One data quality scan, for a run or for a table</td><td>services/quality/scan.py, QUALITY.RUN_TABLE_SCAN</td><td>DQ Store, run Soda step, Quality center</td><td>V016, V037</td></tr>
+<tr><td>QUALITY.QA_RESULT</td><td>Log</td><td>Per-test outcome of a QA run (masked samples)</td><td>services/qa/run.py</td><td>QA workspace, Jira links, cases</td><td>V017</td></tr>
+<tr><td>QUALITY.QA_RUN</td><td>Log</td><td>One QA execution of tests or a pack</td><td>services/qa/run.py</td><td>QA workspace, QA Store, Quality center</td><td>V017</td></tr>
+<tr><td>GOVERNANCE.APPROVAL_POLICY</td><td>Config</td><td>Which changes need an approval and by whom</td><td>Admin</td><td>Approvals</td><td>V020</td></tr>
+<tr><td>GOVERNANCE.APP_ROLE</td><td>Config</td><td>App roles</td><td>Admin, Access</td><td>Admin, every privilege check</td><td>V020</td></tr>
+<tr><td>GOVERNANCE.CHANGE_REQUEST</td><td>Log</td><td>Changes queued for approval and their outcome</td><td>services/governance</td><td>Approvals page (/approvals), Command Center</td><td>V020</td></tr>
+<tr><td>GOVERNANCE.DATA_PROFILES</td><td>Content</td><td>Column profile for every profiling pass across runs (view PERSISTENT_PROFILES)</td><td>Profiling procedures (copied from each pass)</td><td>Profiling Store (/dashboard/profiling), DQ suggestions, models, QA packs</td><td>V036</td></tr>
+<tr><td>GOVERNANCE.DOMAIN_MODEL</td><td>Config</td><td>One row per domain model: approved and open version, naming standard, default repository, diagram layout</td><td>services/modeling/domain_model.py</td><td>Modeling Store Model Workbench (/dashboard/modeling/&lt;id&gt;)</td><td>V039</td></tr>
+<tr><td>GOVERNANCE.DOMAIN_QA_PACKS</td><td>Content</td><td>QA Store packs per domain, versioned, with repository path, commit and pull request</td><td>services/qa/packs.py, pack_git.py, deploy seed</td><td>QA Store (/dashboard/qa-store)</td><td>V037, V042</td></tr>
+<tr><td>GOVERNANCE.DOMAIN_QA_QUERIES</td><td>Content</td><td>The queries inside each QA pack</td><td>services/qa/packs.py, deploy seed</td><td>QA Store, QA runs</td><td>V037</td></tr>
+<tr><td>GOVERNANCE.DQ_CHECKS_CATALOG</td><td>Content</td><td>The DQ Store's live checks per table and column, with why each exists</td><td>Quality API</td><td>DQ Store (/dashboard/dq-store), QUALITY.RUN_TABLE_SCAN</td><td>V037, V038</td></tr>
+<tr><td>GOVERNANCE.DQ_SCHEDULE</td><td>Config</td><td>A table's scan schedule (cron) and its QUALITY.DQ_ task</td><td>Quality API</td><td>DQ Store schedules</td><td>V037</td></tr>
+<tr><td>GOVERNANCE.DQ_SUITE</td><td>Config</td><td>One suite per table: approved and open version of its checks</td><td>services/catalog/dq_suite.py</td><td>DQ Store suite page (/dashboard/dq-store/suite)</td><td>V040</td></tr>
+<tr><td>GOVERNANCE.DQ_SUITE_VERSION</td><td>Content</td><td>Each version of a suite (draft, review, approved) with its checks and pull request</td><td>services/catalog/dq_suite.py, publish</td><td>DQ Store suite page, Source control</td><td>V040</td></tr>
+<tr><td>GOVERNANCE.GIT_PR</td><td>Log</td><td>Every pull request opened for an approved asset version (model, DQ suite, QA pack, STTM) and its state</td><td>services/git/roundtrip.py, services/dbt/publish.py, CODEGEN.SYNC_MODEL_PRS_TASK</td><td>Source control page (/dashboard/source-control), Approvals preview</td><td>V043</td></tr>
+<tr><td>GOVERNANCE.GOVERNANCE_EVENT</td><td>Log</td><td>Governance audit log (grants, approvals, policy edits)</td><td>services/governance</td><td>Admin, Audit</td><td>V020</td></tr>
+<tr><td>GOVERNANCE.MODEL_CHANGE</td><td>Content</td><td>Proposed changes to a model from runs and from profile annotations, with status (proposed, merged, approved, rejected, stale, withdrawn)</td><td>services/modeling/run_link.py, services/catalog/profile_ops.py</td><td>Model Workbench proposals</td><td>V039, V041</td></tr>
+<tr><td>GOVERNANCE.MODEL_DESIGNS</td><td>Content</td><td>Every version of every domain model (draft, in review, approved) with its spec, rendered files and pull request, plus older hub designs</td><td>Hub models API, services/modeling, publish</td><td>Model Workbench, Modeling Store, runs (target model)</td><td>V036, V039</td></tr>
+<tr><td>GOVERNANCE.MODEL_REVIEW_COMMENT</td><td>Content</td><td>Threaded review comments on a model version (comment, suggestion, blocker)</td><td>services/modeling/domain_model.py</td><td>Model Workbench review</td><td>V039</td></tr>
+<tr><td>GOVERNANCE.PROFILE_ANNOTATION</td><td>Content</td><td>Reviewed column descriptions, PII and semantic overrides; proposed to the domain model as a change</td><td>services/catalog/profile_ops.py</td><td>Profiling Store column review</td><td>V041</td></tr>
+<tr><td>GOVERNANCE.PROFILE_BOOKMARK</td><td>Config</td><td>Tables a person bookmarked</td><td>Hub catalog API</td><td>Profiling Store</td><td>V036</td></tr>
+<tr><td>GOVERNANCE.PROFILE_SCHEDULE</td><td>Config</td><td>Scheduled profiling per table (its PROFILE.PROF_ task) and the last outcome</td><td>Hub catalog API</td><td>Profiling Store schedules</td><td>V041</td></tr>
+<tr><td>GOVERNANCE.QA_PACK_SYNC</td><td>Log</td><td>Conflicts between a pack in the repository and the pack in the store, found at deploy</td><td>infrastructure/seed_knowledge.py, pack_git.py</td><td>QA Store (sync warnings)</td><td>V042</td></tr>
+<tr><td>GOVERNANCE.ROLE_GRANT</td><td>Config</td><td>Role inheritance (role includes role)</td><td>Admin, Access</td><td>Every privilege check</td><td>V020</td></tr>
+<tr><td>GOVERNANCE.ROLE_PRIVILEGE</td><td>Config</td><td>Privileges each app role holds</td><td>Admin, Access</td><td>Every privilege check</td><td>V020</td></tr>
+<tr><td>GOVERNANCE.SETTING</td><td>Config</td><td>Governance settings (key and value)</td><td>Admin</td><td>Approvals, governance</td><td>V020</td></tr>
+<tr><td>GOVERNANCE.STTM_CATALOG</td><td>Content</td><td>Every version of every mapping with its full line set, tenant wide</td><td>STTM steps, services/catalog/sttm.py</td><td>STTM Store (/dashboard/sttm), dbt publish</td><td>V036</td></tr>
+<tr><td>GOVERNANCE.USER_ROLE</td><td>Config</td><td>Which person holds which app role</td><td>Admin, Access</td><td>Every privilege check, domain scoping</td><td>V020</td></tr>
+<tr><td>CASES.CASE_ARTIFACT</td><td>Content</td><td>Fix material attached to a case: repro test, STTM change, correction SQL, dbt patch, knowledge draft</td><td>services/cases/store.py</td><td>Case page; dbt patches are published as pull requests (services/dbt/publish.py)</td><td>V034</td></tr>
+<tr><td>CASES.CASE_EVENT</td><td>Log</td><td>Timeline of a case (comments, status moves) and idempotency claims that stop a case being opened twice</td><td>services/cases/store.py</td><td>Case timeline, triage</td><td>V034</td></tr>
+<tr><td>CASES.CASE_LINK</td><td>Content</td><td>Links from a case to a Jira issue, incident, QA or DQ result, run, pull request, knowledge item or another case</td><td>services/cases/store.py</td><td>Case page</td><td>V034</td></tr>
+<tr><td>CASES.CASE_RECORD</td><td>Content</td><td>One reported problem (data bug, code bug, data quality, pipeline, question), its status, owner and domain (CASE-&lt;n&gt;). Row access policy limits it to the case's domain</td><td>services/cases/store.py</td><td>QA workspace cases (/qa/cases/&lt;id&gt;), copilot, triage, knowledge</td><td>V034</td></tr>
+<tr><td>CODE.CODE_CHUNK</td><td>Content</td><td>Code chunks; the source of Cortex Search CODE.CODE_SEARCH</td><td>services/code/indexer.py</td><td>Code search, copilot and triage context, Ops dependency hints</td><td>V024</td></tr>
+<tr><td>CODE.CODE_EDGE</td><td>Content</td><td>Lineage edges between files and models</td><td>services/code/indexer.py</td><td>Code graph, impact</td><td>V024</td></tr>
+<tr><td>CODE.CODE_FILE</td><td>Content</td><td>Files indexed from a repository</td><td>services/code/indexer.py (CODE.INDEX_REPO)</td><td>Code search, triage</td><td>V024</td></tr>
+<tr><td>CODE.CODE_USAGE</td><td>Log</td><td>Code quoted into AI prompts, for traceability</td><td>services/code/context.py</td><td>Code page</td><td>V024</td></tr>
+<tr><td>CODE.INDEX_RUN</td><td>Log</td><td>Each index refresh and its outcome</td><td>services/code/indexer.py</td><td>Code page (refresh history)</td><td>V024</td></tr>
+<tr><td>CODE.REPO</td><td>Config</td><td>Connected client repositories, branch, Git secret name and dbt settings</td><td>Code API, services/code/indexer.py</td><td>Code page, Admin integrations, every Git publish (models, suites, packs, STTM, dbt)</td><td>V024</td></tr>
+<tr><td>CODE.REPO_SUMMARY</td><td>Content</td><td>AI summary of each repository</td><td>services/code/indexer.py</td><td>Code page</td><td>V024</td></tr>
+<tr><td>JIRA.ACTION_LOG</td><td>Log</td><td>Every write the platform made to Jira</td><td>Jira API</td><td>Jira audit</td><td>V027</td></tr>
+<tr><td>JIRA.ISSUE_LINK</td><td>Content</td><td>Jira issues linked to runs, tests, tables and suites</td><td>Jira API, QA API</td><td>QA workspace, cases, Quality center</td><td>V027</td></tr>
+<tr><td>JIRA.OAUTH_STATE</td><td>Log</td><td>One-time Jira sign-in state values</td><td>Jira API</td><td>Jira sign-in</td><td>V027, V033</td></tr>
+<tr><td>JIRA.SAVED_FILTER</td><td>Config</td><td>Saved JQL filters</td><td>Jira API</td><td>QA workspace Jira inbox</td><td>V029</td></tr>
+<tr><td>JIRA.USER_TOKEN</td><td>Config</td><td>Each person's encrypted Jira tokens and refresh lease (row access policy: own rows only)</td><td>Jira API</td><td>Jira connection</td><td>V027, V033</td></tr>
+<tr><td>OPS.AIRFLOW_ENV</td><td>Config</td><td>Airflow (MWAA) environments, poll cursor, encrypted push secret</td><td>Admin, Ops worker</td><td>Ops (/ops)</td><td>V030</td></tr>
+<tr><td>OPS.DAG</td><td>Config</td><td>DAG metadata plus team, criticality, SLA, mute</td><td>Ops worker, Ops API</td><td>Ops, DAG page (/ops/dag)</td><td>V030</td></tr>
+<tr><td>OPS.DAG_DEPENDENCY</td><td>Config</td><td>Upstream links between DAGs, used to group incidents</td><td>services/ops/deps.py</td><td>Incidents</td><td>V031</td></tr>
+<tr><td>OPS.DAG_RUN</td><td>Log</td><td>DAG runs</td><td>Ops worker, push endpoint</td><td>Ops, incidents</td><td>V030</td></tr>
+<tr><td>OPS.EVENT</td><td>Log</td><td>Raw push and poll payloads, purged after 30 days</td><td>Ops worker, push endpoint</td><td>Ops troubleshooting</td><td>V030</td></tr>
+<tr><td>OPS.INCIDENT</td><td>Content</td><td>Incidents with Jira state and AI diagnosis</td><td>Ops worker, diagnosis</td><td>Incidents (/incidents), cases</td><td>V031</td></tr>
+<tr><td>OPS.INCIDENT_EVENT</td><td>Log</td><td>Incident timeline and idempotency claims</td><td>Ops worker, Incidents API</td><td>Incident page</td><td>V031</td></tr>
+<tr><td>OPS.JOB_LEASE</td><td>Log</td><td>One-holder leases so only one worker runs a job</td><td>Ops worker</td><td>Background jobs</td><td>V030</td></tr>
+<tr><td>OPS.NOTIFICATION</td><td>Log</td><td>Teams and Jira delivery outbox with retries</td><td>services/ops/notify.py</td><td>Incidents</td><td>V031</td></tr>
+<tr><td>OPS.ROUTING_RULE</td><td>Config</td><td>Which team gets which incident</td><td>Incidents API</td><td>Incidents</td><td>V031</td></tr>
+<tr><td>OPS.TASK_RUN</td><td>Log</td><td>Task attempts with redacted error excerpts</td><td>Ops worker, push endpoint</td><td>Ops, incidents</td><td>V030</td></tr>
+<tr><td>OPS.TEAM</td><td>Config</td><td>Support teams and their encrypted Teams webhooks</td><td>Admin, Incidents API</td><td>Incidents, notifications</td><td>V031</td></tr>
+<tr><td>AUDIT.AGENT_RUN</td><td>Log</td><td>Header row for an agent run. Reserved: nothing writes it today; tool calls are logged on their own in AGENT_TOOL_CALL</td><td>None</td><td>None</td><td>V001</td></tr>
+<tr><td>AUDIT.AGENT_TOOL_CALL</td><td>Log</td><td>One row per stage action or AI tool call: stage, tool, input and output summary, status</td><td>services/common/audit.py (every AI stage, triage, diagnosis, skill builder)</td><td>Run audit tab (/runs/&lt;id&gt;/audit), Audit page, skills</td><td>V001</td></tr>
+<tr><td>AUDIT.COST_USAGE</td><td>Log</td><td>Tokens and credits per AI call, for cost reporting and reconciliation</td><td>services/common/cost.py, API</td><td>Audit page, cost panels, reliability</td><td>V001</td></tr>
 </tbody></table></div>
 
 <h3 id="procs">Procedures</h3>
@@ -1209,9 +1270,10 @@ cd apps/api; python -m app.worker</code></pre>
 <tr><td>Task <code>EXT_&lt;SOURCE&gt;.ORACLE_SCHEDULED_LOAD</code></td><td>An Oracle incremental schedule</td></tr>
 <tr><td>Git repository <code>CODE.&lt;NAME&gt;</code> and secret <code>CODE.&lt;NAME&gt;_GIT_TOKEN</code></td><td>Connecting a repository</td></tr>
 <tr><td>Network rule <code>CODEGEN.GITHUB_API_EGRESS</code>, GitHub secret and external access integration</td><td>GitHub publishing setup</td></tr>
-<tr><td>Task <code>CODEGEN.SYNC_MODEL_PRS_TASK</code> (every 30 minutes)</td><td>GitHub publishing setup: reads domain model pull request states</td></tr>
+<tr><td>Task <code>CODEGEN.SYNC_MODEL_PRS_TASK</code> (every 30 minutes)</td><td>GitHub publishing setup: reads the state of every governed pull request in GOVERNANCE.GIT_PR (models, DQ suites, QA packs, STTM)</td></tr>
 <tr><td>Network rule, PASSWORD secret and integration per Oracle source</td><td>Oracle setup (snowflake runtime)</td></tr>
 <tr><td>DBT PROJECT <code>CODEGEN.&lt;prefix&gt;&lt;run&gt;_V&lt;n&gt;</code></td><td>dbt generate, validate, publish (dropped by cleanup)</td></tr>
+<tr><td>Sequences PLATFORM_CONFIG.SEQ_INGESTION_MASTER_ID and SEQ_INGESTION_CHILD_ID; CASES.CASE_SEQ</td><td>Deploy (V044, V034): master and child ids of ingestion control rows; case numbers</td></tr>
 <tr><td>Stages: CORE.CODE_STAGE, KNOWLEDGE.SKILL_STAGE, CODEGEN.DBT_STAGE, METADATA.PROFILES_STAGE, EXT_&lt;SOURCE&gt;.FILES</td><td>Deploy and source setup</td></tr>
 <tr><td>Cortex Search KNOWLEDGE.KNOWLEDGE_SEARCH and CODE.CODE_SEARCH; agent CORE.DATA_ENGINEERING_SUPERVISOR</td><td>Deploy</td></tr>
 </table></div>
@@ -1291,7 +1353,7 @@ cd apps/api; python -m app.worker</code></pre>
 <div class="note"><strong>Unused table.</strong> <code>AUDIT.AGENT_RUN</code> exists but nothing writes to it yet.</div>
 
 <footer>
-  <p>Generated from the repository source: governance policy, migrations V001 to V033, procedure definitions, API routes and web pages. Where this guide and the code differ, the code is right; report the difference so the guide can be updated.</p>
+  <p>Generated from the repository source: governance policy, migrations V001 to V044, procedure definitions, API routes and web pages. Where this guide and the code differ, the code is right; report the difference so the guide can be updated.</p>
 </footer>
 </main>
 </div>
