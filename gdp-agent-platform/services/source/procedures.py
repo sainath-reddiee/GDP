@@ -30,6 +30,7 @@ from services.source.adapters import (
     checks_passed,
 )
 from services.source.identifiers import SOURCE_SYSTEM_NAME, fqn, format_data_type, landing_table_name, quote
+from services.source import staged
 from services.workflow.procedures import (
     MAX_TEXT,
     _apply_transition,
@@ -254,7 +255,7 @@ def validate_source_access(session, run_id: str, selected_json: str) -> Dict[str
 
 
 def _land_object(session, run_id: str, source: Dict[str, Any], adapter: SourceAdapter, spec: TargetSpec,
-                 object_name: str, columns: List[Dict[str, Any]]) -> Dict[str, Any]:
+                 object_name: str, columns: List[Dict[str, Any]], method: str = "CTAS") -> Dict[str, Any]:
     if spec.copies:
         landing_name = landing_table_name(source["SOURCE_SYSTEM_NAME"], object_name)
         database, schema = spec.landing_database, spec.landing_schema
@@ -274,7 +275,13 @@ def _land_object(session, run_id: str, source: Dict[str, Any], adapter: SourceAd
         else:
             result["source_rows"] = _rows(session, adapter.count_sql(object_name))[0]["N"]
             comment = f"As-is landing of {adapter.database}.{adapter.schema}.{object_name} by run {run_id}"
-            session.sql(spec.create_sql(landing_name, adapter.select_sql(object_name), comment)).collect()
+            if method == staged.METHOD:
+                for statement in staged.landing_statements(
+                        _platform_database(session), run_id, fqn(adapter.database, adapter.schema, object_name),
+                        target, landing_name, comment):
+                    session.sql(statement).collect()
+            else:
+                session.sql(spec.create_sql(landing_name, adapter.select_sql(object_name), comment)).collect()
             result["query_id"] = _rows(session, "SELECT LAST_QUERY_ID() AS Q")[0]["Q"]
             result["landed_rows"] = _rows(session, f"SELECT COUNT(*) AS N FROM {target}")[0]["N"]
             if result["landed_rows"] == result["source_rows"]:
@@ -293,7 +300,8 @@ def _land_object(session, run_id: str, source: Dict[str, Any], adapter: SourceAd
              "NULLIF(?, '')::NUMBER", "IFF(? = 'COMPLETE', CURRENT_TIMESTAMP(), NULL)", "NULLIF(?, '')",
              "CURRENT_USER()", "NULLIF(?, '')"],
             [[landing_id, run_id, source["SOURCE_SYSTEM_ID"], adapter.database, adapter.schema, object_name,
-              database, schema, landing_name, "CTAS" if spec.copies else "IN_PLACE", result["status"],
+              database, schema, landing_name, ("COPY" if method == staged.METHOD else "CTAS") if spec.copies else "IN_PLACE",
+              result["status"],
               result["landed_rows"], result["source_rows"],
               result["status"], result["query_id"], result["error"]]])
     if result["status"] == "COMPLETE" and columns:
@@ -309,8 +317,12 @@ def _land_object(session, run_id: str, source: Dict[str, Any], adapter: SourceAd
     return result
 
 
-def execute_landing(session, run_id: str) -> Dict[str, Any]:
+def execute_landing(session, run_id: str, method: str = "CTAS") -> Dict[str, Any]:
+    """Land the selected objects as-is. CTAS copies with CREATE TABLE AS SELECT; STAGED_PARQUET (Source Hub share
+    onboarding) unloads each object to SOURCE.LANDING_STAGE as Snappy Parquet and loads it with COPY INTO
+    (services/source/staged.py). STAGED_PARQUET applies to MANAGED targets only; others keep CTAS."""
     run_id = _text(run_id, "RUN_ID", required=True)
+    assert method in ("CTAS", staged.METHOD), f"landing method must be CTAS or {staged.METHOD}"
     graph = _load_graph(session)
     run = _get_run(session, run_id)
     _require_state(run, "ACCESS_APPROVED", "LANDING_PENDING")
@@ -328,12 +340,14 @@ def execute_landing(session, run_id: str) -> Dict[str, Any]:
     results: List[Dict[str, Any]] = []
     try:
         spec = _target_spec(session, run)
+        if spec.storage_type != "MANAGED":
+            method = "CTAS"
         columns_by_table: Dict[str, List[Dict[str, Any]]] = {}
         for row in _rows(session, adapter.columns_sql(), [adapter.schema]):
             columns_by_table.setdefault(row["TABLE_NAME"], []).append(row)
         for name in selected:
             results.append(_land_object(session, run_id, source, adapter, spec, name,
-                                        columns_by_table.get(name, [])))
+                                        columns_by_table.get(name, []), method))
     except Exception as exc:
         _apply_transition(session, graph, _get_run(session, run_id), "FAILED", "SYSTEM",
                           _clip(f"landing error: {exc}"), {"tables": results})
@@ -347,6 +361,11 @@ def execute_landing(session, run_id: str) -> Dict[str, Any]:
         _apply_transition(session, graph, _get_run(session, run_id), "LANDING_COMPLETE", "SYSTEM",
                           f"{len(results)} objects landed, row counts reconciled", {"tables": results})
     return {"tables": results, "state": _state_payload(graph, _get_run(session, run_id))}
+
+
+def execute_staged_landing(session, run_id: str) -> Dict[str, Any]:
+    """SOURCE.EXECUTE_STAGED_LANDING: execute_landing through SOURCE.LANDING_STAGE (compressed Parquet + COPY)."""
+    return execute_landing(session, run_id, staged.METHOD)
 
 
 def set_landing_target(session, run_id: str, payload_json: str) -> Dict[str, Any]:
