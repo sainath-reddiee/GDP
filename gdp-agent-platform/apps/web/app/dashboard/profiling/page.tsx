@@ -23,7 +23,7 @@ export default async function ProfilingHub({ searchParams }: { searchParams: Par
   const avgNull = nulls.length ? nulls.reduce((n, r) => n + Number(r.avg_null_pct), 0) / nulls.length : null;
   return (
     <div className="space-y-6">
-      <PageHeader eyebrow="Profile" title="Profiling Hub"
+      <PageHeader eyebrow="Asset store" title="Profiling Store"
                   description="Every profiled table across every run: distributions, null rates, cardinality, semantic types and drift between passes. Bookmark, re-profile, or take a table straight to STTM or modeling." />
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <Kpi label="Tables profiled" value={data?.total ?? 0} hint="matching the filters" icon={BarChart3} tone="blue" />

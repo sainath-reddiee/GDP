@@ -69,6 +69,7 @@ export function ProfileBrowser({ rows, total, facets, filters, view, page, pageS
         <Select aria-label="Sort" className="w-36" value={filters.sort} onChange={(e) => push({ sort: e.target.value })}>
           <option value="recent">Newest</option><option value="table">Name</option>
           <option value="nulls">Most nulls</option><option value="rows">Most rows</option>
+          <option value="drift">Most drift</option>
         </Select>
         <Button variant={filters.bookmarked ? "default" : "outline"} size="sm" onClick={() => push({ bookmarked: filters.bookmarked ? null : "1" })}>
           <Bookmark className="h-3.5 w-3.5" /> Bookmarked
@@ -84,7 +85,7 @@ export function ProfileBrowser({ rows, total, facets, filters, view, page, pageS
       </div>
 
       {!rows.length ? (
-        <EmptyState title="No profiles match">Profile tables from the Source Hub or a run, or clear the filters.</EmptyState>
+        <EmptyState title="No profiles match">Profile tables from the Source Store or a run, or clear the filters.</EmptyState>
       ) : view === "cards" ? (
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
           {rows.map((r) => (

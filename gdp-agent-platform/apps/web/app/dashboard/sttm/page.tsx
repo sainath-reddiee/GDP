@@ -21,7 +21,7 @@ export default async function SttmCatalog({ searchParams }: { searchParams: Para
   const versions = data.mappings.reduce((n, m) => n + Number(m.versions || 0), 0);
   return (
     <div className="space-y-6">
-      <PageHeader eyebrow="Map" title="STTM Catalog"
+      <PageHeader eyebrow="Asset store" title="STTM Store"
                   description="Every source-to-target mapping with its full version history, independent of the run that produced it. Search, review rules, adjust business transformations inline and re-export as dbt models." />
       <div className="grid gap-3 sm:grid-cols-3">
         <Kpi label="Mappings" value={data.total} hint="source system to target table" icon={GitCompareArrows} tone="blue" />

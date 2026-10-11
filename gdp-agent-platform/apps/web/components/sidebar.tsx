@@ -8,6 +8,7 @@ import { cn } from "@/lib/utils";
 import type { NavCounts } from "@/app/bff/nav/route";
 import { ReportProblemButton } from "@/components/report-problem";
 import { allowedBy, NAV_GROUPS } from "@/components/shell/nav";
+import { BUILD_SHA, buildLabel } from "@/lib/build";
 
 const COLLAPSE_KEY = "aip.sidebar.collapsed";
 
@@ -93,6 +94,10 @@ export function Sidebar({ privileges }: { privileges?: string[] | null }) {
                   collapsed ? "justify-center" : "px-2.5")}>
           {collapsed ? <ChevronsRight className="h-4 w-4" /> : <><ChevronsLeft className="h-4 w-4" /> Collapse</>}
         </button>
+        <p data-testid="build-stamp" title={buildLabel()}
+           className={cn("mt-1 truncate font-mono text-[10px] text-white/25", collapsed ? "text-center" : "px-2.5")}>
+          {collapsed ? BUILD_SHA.slice(0, 7) : buildLabel()}
+        </p>
       </div>
     </nav>
   );

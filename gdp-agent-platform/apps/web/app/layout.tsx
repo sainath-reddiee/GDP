@@ -15,8 +15,9 @@ import { CommandPalette } from "@/components/shell/command-palette";
 import { TopBar, type DomainOption } from "@/components/shell/top-bar";
 import { THEME_SCRIPT, ThemeProvider } from "@/components/theme/theme-provider";
 import { ToastProvider } from "@/components/ui/toast";
+import { BUILD_SHA } from "@/lib/build";
 
-export const metadata = { title: "Agentic pipeline" };
+export const metadata = { title: "Agentic pipeline", other: { "aip-build": BUILD_SHA } };
 
 export default async function RootLayout({ children }: { children: ReactNode }) {
   const jar = cookies();

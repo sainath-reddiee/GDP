@@ -9,6 +9,7 @@ import { logout } from "@/app/login/actions";
 import { setDomainScope } from "@/app/scope-actions";
 import { RoleSelector } from "@/components/role-selector";
 import { ThemeSegmented, ThemeToggle } from "@/components/theme/theme-toggle";
+import { buildLabel } from "@/lib/build";
 import { allowedBy } from "./nav";
 import { QUICK_ACTIONS } from "./quick-actions";
 import { useDismiss } from "./use-dismiss";
@@ -145,6 +146,7 @@ function AccountMenu({ user, role, canLogout, appRoles }: {
               </button>
             </form>
           )}
+          <p className="border-t border-border/70 pt-2 font-mono text-[10px] text-muted-foreground">{buildLabel()}</p>
         </div>
       )}
     </div>

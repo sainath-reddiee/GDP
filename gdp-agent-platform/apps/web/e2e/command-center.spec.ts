@@ -22,6 +22,24 @@ for (const theme of ["light", "dark"] as const) {
       await expect(page.getByTestId("hero-ribbon")).toBeVisible();
       for (const store of ["source", "profiling", "models", "sttm", "qa", "dq"]) await expect(page.getByTestId(`store-${store}`)).toBeVisible();
       await expect(page.getByTestId("pipeline-table")).toBeVisible();
+      // one place for the stores: the sidebar group, and no duplicate tab row above the page
+      const nav = page.getByRole("navigation", { name: "Main" });
+      await expect(nav.getByText("Asset stores")).toBeVisible();
+      for (const store of ["Source Store", "Profiling Store", "Modeling Store", "STTM Store", "QA Store", "Data Quality Store"]) {
+        await expect(nav.getByRole("link", { name: store })).toBeVisible();
+      }
+      await expect(page.getByRole("navigation", { name: "Lifecycle hubs" })).toHaveCount(0);
+      await expect(page.getByTestId("build-stamp")).toContainText("Build");
+    });
+
+    test("a store card's action starts the task, the card opens the store", async ({ page }) => {
+      await page.goto("/dashboard");
+      await page.getByTestId("store-qa-action").click();
+      await page.waitForURL(/\/dashboard\/qa-store\?new=1/);
+      await expect(page.getByRole("dialog").getByText("New QA pack")).toBeVisible();
+      await page.goto("/dashboard");
+      await page.getByRole("link", { name: "Open the STTM Store" }).click();
+      await page.waitForURL(/\/dashboard\/sttm$/);
     });
 
     test("ctrl+k opens the palette and jumps to a page", async ({ page }) => {

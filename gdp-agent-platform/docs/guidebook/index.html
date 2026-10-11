@@ -401,7 +401,7 @@ footer { color: var(--muted); font-size: 13px; margin-top: 56px; }
 
 <!-- ============================================================ 04 -->
 <h2 id="features"><span class="num">04</span>Features</h2>
-<p>The sidebar follows the data engineering lifecycle: Overview, Ingest, Profile and model, Quality, Operate, Knowledge, Govern. A group disappears when none of its pages are available to the user. The lifecycle hubs live under <code>/dashboard</code> (Sources, Profiling, Modeling, STTM, QA Store, DQ Store, Quality, Onboarding) and share one tab row; <code>/sources</code> and <code>/onboarding</code> redirect there, and run pages under <code>/runs/&lt;run id&gt;</code> are unchanged.</p>
+<p>The sidebar is the one place to move around: Overview (the Command Center), <strong>Asset stores</strong> (Source, Profiling, Modeling, STTM, QA and Data Quality stores, under <code>/dashboard</code>), Build (runs, onboarding, domains, code), Monitor (Quality center, QA workspace, pipelines, incidents), Knowledge and Govern. A group disappears when none of its pages are available to the user; store items carry live badges (tables profiling or staged, mappings waiting for review, QA packs awaiting approval, DQ checks failing). <code>/sources</code> and <code>/onboarding</code> redirect into <code>/dashboard</code>, and run pages under <code>/runs/&lt;run id&gt;</code> are unchanged.</p>
 
 <h3 id="f-shell">Workspace shell</h3>
 <dl class="feature-meta">
@@ -914,6 +914,16 @@ cd apps/api; python -m app.worker</code></pre>
 </ul>
 
 <!-- ============================================================ 07 -->
+<h3 id="local-update">Updating your local app</h3>
+<p>The Snowflake deploy updates Snowflake objects only; it never changes what <code>localhost:3000</code> serves. After pulling new code:</p>
+<ol>
+  <li><code>git checkout main</code> and <code>git pull origin main</code> in the folder you run the app from.</li>
+  <li>In <code>apps/web</code>: <code>npm install</code>, then <code>npm run build</code> before <code>npm run start</code> (<code>next start</code> serves the last build, not the current code). With <code>npm run dev</code>, delete <code>.next</code> and restart instead.</li>
+  <li>Stop the old web server first: if port 3000 is still taken, a new server quietly starts on 3001 and the browser keeps showing the old one.</li>
+  <li>Restart the API (uvicorn) so new routes load, then hard refresh the browser (Ctrl+Shift+R).</li>
+</ol>
+<p><code>npm run doctor</code> in <code>apps/web</code> checks all of this and says what to run. The running build is shown at the bottom of the sidebar and the account menu (<code>Build &lt;commit&gt;</code>), and <code>/bff/version</code> reports the web and API commits.</p>
+
 <h2 id="secrets"><span class="num">07</span>Secrets runbook</h2>
 <p>The platform never stores a secret in plain text. Keys live on the API host; everything else is encrypted in the application or stored as a Snowflake secret.</p>
 

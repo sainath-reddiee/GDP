@@ -286,7 +286,7 @@ function StartPanel({ ctx, initialTables, pending, start, onStart, onError, erro
                                 target_database: spec.target_database || undefined, target_schema: spec.target_schema || undefined });
       if (!r.ok) return onError(r.error);
       spec = mergeSpecs(spec, r.data.spec);
-      if (r.data.grounding.missing_profiles.length) onError(`No profile yet for ${r.data.grounding.missing_profiles.join(", ")}; profile them in the Profiling hub to include them.`);
+      if (r.data.grounding.missing_profiles.length) onError(`No profile yet for ${r.data.grounding.missing_profiles.join(", ")}; profile them in the Profiling Store to include them.`);
       return onStart(spec, pack, r.data.issues);
     }
     onStart(spec, pack);

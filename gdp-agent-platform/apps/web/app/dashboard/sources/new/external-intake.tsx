@@ -48,7 +48,7 @@ export function ExternalIntake({ form, domains }: { form: IntakeForm | null; dom
           It is in PLATFORM_CONFIG.INGESTION_PIPELINE_CATALOG with status registered. Set it active once its pipeline is assigned.
         </p>
         <div className="mt-4 flex gap-2">
-          <Link href="/dashboard/sources" className={buttonVariants()}>Back to the Source Hub</Link>
+          <Link href="/dashboard/sources" className={buttonVariants()}>Back to the Source Store</Link>
           <Button variant="outline" onClick={() => { setAnswers({}); setDone(null); }}>Register another</Button>
         </div>
       </div>
