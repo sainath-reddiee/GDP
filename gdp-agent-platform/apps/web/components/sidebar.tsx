@@ -3,104 +3,17 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
-import {
-  Activity, BadgeCheck, BarChart3, BookOpen, Boxes, ChevronsLeft, ChevronsRight, Database, FileClock, FlaskConical, FolderGit2, GitCompareArrows,
-  LayoutDashboard, ListChecks, LogOut, Network, Rocket, Settings, ShieldCheck, Siren, Sparkles, Workflow,
-} from "lucide-react";
+import { ChevronsLeft, ChevronsRight, Workflow } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { logout } from "@/app/login/actions";
 import type { NavCounts } from "@/app/bff/nav/route";
-import { RoleSelector } from "@/components/role-selector";
 import { ReportProblemButton } from "@/components/report-problem";
-
-type NavLink = { href: string; label: string; icon: typeof Database; privilege?: string | string[]; exact?: boolean;
-  badge?: (c: NavCounts) => { value: number; tone: string; title: string } | null };
-
-/** Incidents shipped with PR O2. */
-const SHOW_INCIDENTS = true;
-
-// grouped by the data engineering lifecycle; a group with no visible links is hidden
-const groups: { label: string; links: NavLink[] }[] = [
-  {
-    label: "Overview",
-    links: [{ href: "/dashboard", label: "Dashboard", icon: LayoutDashboard, exact: true }],
-  },
-  {
-    label: "Ingest",
-    links: [
-      {
-        href: "/dashboard/sources", label: "Sources", icon: Database,
-        badge: (c) => c.profiling ? { value: c.profiling, tone: "bg-amber-400 text-amber-950", title: `${c.profiling} profiling now` }
-          : c.staged ? { value: c.staged, tone: "bg-white/10 text-white/70", title: `${c.staged} tables staged` } : null,
-      },
-      { href: "/dashboard/onboarding", label: "Onboarding", icon: Rocket },
-    ],
-  },
-  {
-    label: "Profile and model",
-    links: [
-      { href: "/dashboard/profiling", label: "Profiling", icon: BarChart3 },
-      { href: "/dashboard/modeling", label: "Modeling", icon: Network },
-      { href: "/dashboard/sttm", label: "STTM", icon: GitCompareArrows },
-      {
-        href: "/runs", label: "Runs", icon: ListChecks,
-        badge: (c) => c.review ? { value: c.review, tone: "bg-rose-500 text-white", title: `${c.review} waiting on review` }
-          : c.running ? { value: c.running, tone: "bg-white/10 text-white/70", title: `${c.running} running` } : null,
-      },
-      { href: "/domains", label: "Domains", icon: Boxes },
-      { href: "/code", label: "Code", icon: FolderGit2, privilege: "CODE.VIEW" },
-    ],
-  },
-  {
-    label: "Quality",
-    links: [{ href: "/dashboard/quality", label: "Quality center", icon: BadgeCheck }, {
-      href: "/qa", label: "QA", icon: FlaskConical, privilege: ["QA.EDIT", "JIRA.READ", "CASE.WORK"],
-      badge: (c) => c.cases ? { value: c.cases, tone: "bg-sky-500 text-white", title: `${c.cases} open cases` } : null,
-    }],
-  },
-  {
-    label: "Operate",
-    links: [
-      { href: "/ops", label: "Pipelines", icon: Activity, privilege: "OPS.VIEW" },
-      ...(SHOW_INCIDENTS ? [{
-        href: "/incidents", label: "Incidents", icon: Siren, privilege: "OPS.VIEW",
-        badge: (c: NavCounts) => c.incidents ? { value: c.incidents, tone: "bg-rose-500 text-white", title: `${c.incidents} open or acknowledged` } : null,
-      }] : []),
-    ],
-  },
-  {
-    label: "Knowledge",
-    links: [
-      { href: "/knowledge", label: "Knowledge", icon: BookOpen },
-      { href: "/skills", label: "Skills", icon: Sparkles },
-    ],
-  },
-  {
-    label: "Govern",
-    links: [
-      {
-        href: "/approvals", label: "Approvals", icon: ShieldCheck,
-        badge: (c) => c.approvals ? { value: c.approvals, tone: "bg-violet-500 text-white", title: `${c.approvals} waiting for you` } : null,
-      },
-      { href: "/audit", label: "Audit", icon: FileClock, privilege: "AUDIT.VIEW" },
-      { href: "/admin", label: "Admin", icon: Settings, privilege: "ADMIN.VIEW" },
-    ],
-  },
-];
+import { allowedBy, NAV_GROUPS } from "@/components/shell/nav";
 
 const COLLAPSE_KEY = "aip.sidebar.collapsed";
 
-function initials(user: string | null) {
-  const name = (user ?? "?").replace(/[^A-Za-z ]/g, " ").trim();
-  return (name.split(/\s+/).map((p) => p[0]).join("") || "?").slice(0, 2).toUpperCase();
-}
-
-export function Sidebar({ user, role, canLogout, privileges, appRoles }: {
-  user: string | null; role: string | null; canLogout: boolean; privileges?: string[] | null; appRoles?: string[] | null;
-}) {
-  // a list of privileges means any of them
-  const allowed = (p?: string | string[]) => !p || !privileges || privileges.includes("*")
-    || (Array.isArray(p) ? p.some((x) => privileges.includes(x)) : privileges.includes(p));
+/** Lifecycle navigation. The account, role and theme live in the top bar (components/shell/top-bar). */
+export function Sidebar({ privileges }: { privileges?: string[] | null }) {
+  const allowed = allowedBy(privileges);
   const path = usePathname();
   const [collapsed, setCollapsed] = useState(false);
   const [counts, setCounts] = useState<NavCounts | null>(null);
@@ -126,21 +39,22 @@ export function Sidebar({ user, role, canLogout, privileges, appRoles }: {
 
   return (
     <nav aria-label="Main"
-         className={cn("sticky top-0 flex h-screen shrink-0 flex-col overflow-y-auto overflow-x-hidden border-r border-white/5 bg-sidebar text-sidebar-foreground transition-[width] duration-200",
-           collapsed ? "w-[72px] px-2" : "w-[248px] px-3")}>
-      <div className={cn("flex items-center gap-3 py-5", collapsed ? "justify-center" : "px-2")}>
-        <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-gradient-to-br from-indigo-400 via-indigo-500 to-violet-500 text-white shadow-lg shadow-indigo-500/30">
+         className={cn("sticky top-0 flex h-screen shrink-0 flex-col overflow-y-auto overflow-x-hidden border-r border-white/[0.06] bg-sidebar text-sidebar-foreground transition-[width] duration-200",
+           collapsed ? "w-[72px] px-2" : "w-[244px] px-3")}>
+      <Link href="/dashboard" className={cn("flex items-center gap-3 py-5", collapsed ? "justify-center" : "px-2")}>
+        <span className="relative grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-gradient-to-br from-indigo-400 via-indigo-500 to-violet-500 text-white shadow-lg shadow-indigo-500/30">
           <Workflow className="h-[18px] w-[18px]" />
+          <span className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full border-2 border-sidebar bg-emerald-400" />
         </span>
         {!collapsed && (
           <div className="min-w-0">
-            <div className="truncate text-sm font-semibold text-white">Agentic pipeline</div>
-            <div className="text-[10px] font-medium uppercase tracking-[0.14em] text-white/40">Snowflake workspace</div>
+            <div className="truncate text-sm font-semibold tracking-tight text-white">Agentic pipeline</div>
+            <div className="text-[10px] font-medium uppercase tracking-[0.14em] text-white/40">Data command center</div>
           </div>
         )}
-      </div>
+      </Link>
 
-      {groups.map((group) => ({ ...group, links: group.links.filter((l) => allowed(l.privilege)) }))
+      {NAV_GROUPS.map((group) => ({ ...group, links: group.links.filter((l) => allowed(l.privilege)) }))
         .filter((group) => group.links.length > 0)
         .map((group) => (
         <div key={group.label} className="mb-4">
@@ -153,11 +67,11 @@ export function Sidebar({ user, role, canLogout, privileges, appRoles }: {
             return (
               <Link key={href} href={href} prefetch title={collapsed ? label : undefined}
                     aria-current={active ? "page" : undefined}
-                    className={cn("group relative mb-0.5 flex items-center gap-3 rounded-xl py-2 text-sm transition",
+                    className={cn("group relative mb-0.5 flex items-center gap-3 rounded-xl py-[7px] text-[13px] transition",
                       collapsed ? "justify-center px-0" : "px-2.5",
-                      active ? "bg-gradient-to-r from-indigo-500/25 to-indigo-500/5 font-medium text-white ring-1 ring-inset ring-white/10" : "text-sidebar-foreground/75 hover:bg-white/[0.06] hover:text-white")}>
-                {active && <span className="absolute -left-3 top-1/2 h-5 w-1 -translate-y-1/2 rounded-r-full bg-indigo-400" />}
-                <Icon className={cn("h-[18px] w-[18px] shrink-0", active ? "text-indigo-300" : "text-white/45 group-hover:text-white/80")} />
+                      active ? "bg-white/[0.08] font-medium text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]" : "text-sidebar-foreground/70 hover:bg-white/[0.05] hover:text-white")}>
+                {active && <span className="absolute -left-3 top-1/2 h-5 w-1 -translate-y-1/2 rounded-r-full bg-gradient-to-b from-indigo-300 to-violet-400" />}
+                <Icon className={cn("h-[17px] w-[17px] shrink-0", active ? "text-indigo-300" : "text-white/40 group-hover:text-white/80")} />
                 {!collapsed && <span className="flex-1 truncate">{label}</span>}
                 {b && (
                   <span title={b.title}
@@ -173,41 +87,7 @@ export function Sidebar({ user, role, canLogout, privileges, appRoles }: {
       ))}
 
       <div className="mt-auto pb-3">
-        {!collapsed ? (
-          <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-3">
-            <div className="flex items-center gap-2.5">
-              <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-gradient-to-br from-indigo-400 to-violet-500 text-[11px] font-bold text-white">
-                {initials(user)}
-              </span>
-              <div className="min-w-0 flex-1">
-                <div className="truncate text-xs font-semibold text-white">{user ?? "Not signed in"}</div>
-                <div className="flex items-center gap-1 text-[10px] text-white/45">
-                  <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" /> Connected to Snowflake
-                </div>
-                {appRoles && (
-                  <div className="truncate text-[10px] text-violet-200/80" title={appRoles.join(", ") || "No app role yet"}>
-                    {appRoles.length ? appRoles.map((r) => r.toLowerCase().replace(/_/g, " ")).join(", ") : "no app role"}
-                  </div>
-                )}
-              </div>
-              {canLogout && (
-                <form action={logout}>
-                  <button title="Sign out" aria-label="Sign out" className="rounded-lg p-1.5 text-white/50 hover:bg-white/10 hover:text-white">
-                    <LogOut className="h-3.5 w-3.5" />
-                  </button>
-                </form>
-              )}
-            </div>
-            <RoleSelector currentRole={role} />
-          </div>
-        ) : (
-          <div className="flex justify-center" title={`${user ?? ""} · ${role ?? ""}`}>
-            <span className="grid h-8 w-8 place-items-center rounded-full bg-gradient-to-br from-emerald-400 to-sky-500 text-[11px] font-bold text-white">
-              {initials(user)}
-            </span>
-          </div>
-        )}
-        {allowed("CASE.WORK") && <div className="mt-2"><ReportProblemButton collapsed={collapsed} /></div>}
+        {allowed("CASE.WORK") && <ReportProblemButton collapsed={collapsed} />}
         <button type="button" onClick={toggle} aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
                 className={cn("mt-2 flex w-full items-center gap-2 rounded-xl py-2 text-xs text-white/40 transition hover:bg-white/5 hover:text-white/80",
                   collapsed ? "justify-center" : "px-2.5")}>

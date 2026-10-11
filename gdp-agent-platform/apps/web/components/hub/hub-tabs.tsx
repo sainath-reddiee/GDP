@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { BadgeCheck, BarChart3, Database, GitCompareArrows, LayoutDashboard, Network, Rocket } from "lucide-react";
+import { BadgeCheck, BarChart3, ClipboardCheck, Database, GitCompareArrows, LayoutDashboard, Network, Rocket, SquareTerminal } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 export const HUBS = [
@@ -11,6 +11,8 @@ export const HUBS = [
   { href: "/dashboard/profiling", label: "Profiling", icon: BarChart3 },
   { href: "/dashboard/modeling", label: "Modeling", icon: Network },
   { href: "/dashboard/sttm", label: "STTM", icon: GitCompareArrows },
+  { href: "/dashboard/qa-store", label: "QA Store", icon: SquareTerminal },
+  { href: "/dashboard/dq-store", label: "DQ Store", icon: ClipboardCheck },
   { href: "/dashboard/quality", label: "Quality", icon: BadgeCheck },
   { href: "/dashboard/onboarding", label: "Onboarding", icon: Rocket },
 ] as const;

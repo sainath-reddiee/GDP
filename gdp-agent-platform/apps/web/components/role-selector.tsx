@@ -21,13 +21,13 @@ export function RoleSelector({ currentRole }: { currentRole: string | null }) {
   }, []);
 
   return (
-    <div className="mt-3 border-t border-white/10 pt-2.5">
-      <label htmlFor="snowflake_role" className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-white/45">
+    <div>
+      <label htmlFor="snowflake_role" className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
         Snowflake role
       </label>
       <select
         id="snowflake_role"
-        className="w-full rounded-lg border border-white/10 bg-white/[0.06] px-2 py-1.5 text-xs text-white outline-none transition hover:border-white/25 focus:border-sky-400/60 [&>option]:text-slate-900"
+        className="w-full rounded-lg border border-input bg-card px-2 py-1.5 text-xs text-foreground outline-none transition hover:border-primary/40 focus:border-primary/60 focus:ring-4 focus:ring-primary/10"
         value={value}
         disabled={pending || roles.length === 0}
         onChange={(e) => {
@@ -42,15 +42,15 @@ export function RoleSelector({ currentRole }: { currentRole: string | null }) {
         }}
       >
         {roles.map((role) => (
-          <option key={role} value={role} className="text-black">
+          <option key={role} value={role}>
             {role}
           </option>
         ))}
       </select>
-      <p className="mt-1 text-[10px] leading-snug text-white/45">
+      <p className="mt-1 text-[10px] leading-snug text-muted-foreground">
         Catalog browse and source register use this role. Pick one that can see your bronze/silver objects.
       </p>
-      {error && <p className="mt-1 text-[10px] text-red-300">{error}</p>}
+      {error && <p className="mt-1 text-[10px] text-destructive">{error}</p>}
     </div>
   );
 }

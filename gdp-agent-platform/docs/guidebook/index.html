@@ -339,6 +339,8 @@ footer { color: var(--muted); font-size: 13px; margin-top: 56px; }
 <tr><td>PLATFORM_CONFIG.INGESTION_PIPELINE_CATALOG</td><td>Select</td><td>Insert, update</td><td></td><td></td><td></td></tr>
 <tr><td>SOURCE.LANDING_STAGE, SOURCE.PARQUET_SNAPPY</td><td></td><td>Read, write stage; use format</td><td></td><td></td><td></td></tr>
 <tr><td>GOVERNANCE.DATA_PROFILES, PROFILE_BOOKMARK, STTM_CATALOG, MODEL_DESIGNS (V036)</td><td>Select</td><td>Insert (profiles), insert and delete (bookmarks), insert and update (STTM, models)</td><td>Select; insert bookmarks</td><td></td><td></td></tr>
+<tr><td>GOVERNANCE.DOMAIN_QA_PACKS, DOMAIN_QA_QUERIES (V037)</td><td>Select</td><td>Select, insert, update, delete</td><td>Select; update packs (approval)</td><td>Select, insert, update, delete</td><td></td></tr>
+<tr><td>GOVERNANCE.DQ_CHECKS_CATALOG, DQ_SCHEDULE (V037)</td><td>Select</td><td>Insert, update (catalog); insert, update, delete (schedules)</td><td>Select (catalog)</td><td></td><td></td></tr>
 <tr><td>KNOWLEDGE skills tables</td><td>Select</td><td>Insert, update or delete</td><td></td><td></td><td></td></tr>
 <tr><td>KNOWLEDGE.DOMAIN_KNOWLEDGE, DOMAIN_VERSION, DOMAIN_MEMBER</td><td>Select</td><td>Insert, update (delete on members)</td><td></td><td></td><td>OPS_SERVICE: insert, update knowledge; insert DOMAIN_REGISTRY</td></tr>
 <tr><td>AUDIT.AGENT_TOOL_CALL, COST_USAGE</td><td>Select</td><td></td><td></td><td></td><td>OPS_SERVICE: insert</td></tr>
@@ -399,13 +401,21 @@ footer { color: var(--muted); font-size: 13px; margin-top: 56px; }
 
 <!-- ============================================================ 04 -->
 <h2 id="features"><span class="num">04</span>Features</h2>
-<p>The sidebar follows the data engineering lifecycle: Overview, Ingest, Profile and model, Quality, Operate, Knowledge, Govern. A group disappears when none of its pages are available to the user. The lifecycle hubs live under <code>/dashboard</code> (Sources, Profiling, Modeling, STTM, Quality, Onboarding) and share one tab row; <code>/sources</code> and <code>/onboarding</code> redirect there, and run pages under <code>/runs/&lt;run id&gt;</code> are unchanged.</p>
+<p>The sidebar follows the data engineering lifecycle: Overview, Ingest, Profile and model, Quality, Operate, Knowledge, Govern. A group disappears when none of its pages are available to the user. The lifecycle hubs live under <code>/dashboard</code> (Sources, Profiling, Modeling, STTM, QA Store, DQ Store, Quality, Onboarding) and share one tab row; <code>/sources</code> and <code>/onboarding</code> redirect there, and run pages under <code>/runs/&lt;run id&gt;</code> are unchanged.</p>
 
-<h3 id="f-dashboard">Dashboard</h3>
+<h3 id="f-shell">Workspace shell</h3>
 <dl class="feature-meta">
-  <dt>Page</dt><dd><code>/dashboard</code></dd>
-  <dt>What it does</dt><dd>Run counts (running, needs review, drafts, completed, failed), where work sits in the pipeline, what needs your attention, profile store, domain knowledge, recent activity. An Operations card (open incidents, P1, failing DAGs, MTTR) shows for OPS.VIEW holders.</dd>
-  <dt>Access</dt><dd>Everyone signed in; each panel hides itself when its data is not allowed.</dd>
+  <dt>Top bar</dt><dd>On every signed-in page: the domain scope, search, quick actions (onboard a source, add a QA query, new model branch), the theme and the account menu (user, app roles, Snowflake role picker, sign out).</dd>
+  <dt>Domain scope</dt><dd>Picking a domain stores it in the <code>aip_domain</code> cookie; the Command Center, the QA Store and the DQ Store filter to it, and a page's own <code>?domain=</code> wins. "All domains" clears it.</dd>
+  <dt>Search</dt><dd>Ctrl+K (Cmd+K on a Mac) opens a command palette over pages, quick actions, domains and themes, and searches runs, profiled tables, STTM mappings, QA packs and DQ tables (<code>/bff/search</code>). Ctrl+J still opens the copilot.</dd>
+  <dt>Theme</dt><dd>Light, dark or follow the system, remembered per browser. Pages that use Tailwind tints directly are mapped to dark equivalents by the generated <code>app/theme-compat.css</code>; run <code>npm run theme:compat</code> in <code>apps/web</code> after adding a new opacity or hover variant of a palette tint.</dd>
+</dl>
+
+<h3 id="f-dashboard">Command Center</h3>
+<dl class="feature-meta">
+  <dt>Page</dt><dd><code>/dashboard</code>, data from <code>GET /api/hub/overview?domain=</code></dd>
+  <dt>What it does</dt><dd>A hero ribbon: live ingested GB (latest COMPLETE landing table per target, sized from the source object bytes, with a daily sparkline), profiling health (share of latest-pass columns under 20% nulls with no null-rate drift of 10 points or more since the previous pass), STTM mappings whose latest version is approved, and active DQ checks with their pass rate. An attention strip (runs to review, failed runs, open incidents, QA packs awaiting approval, failing DQ checks, drifting columns), six asset store cards (Source, Profiling, Modeling, STTM, QA, Data Quality) with quick links, and the active pipeline runs with a six-phase stepper (Source, Profile, Model, STTM, QA, Deploy), elapsed time and status.</dd>
+  <dt>Access</dt><dd>Everyone signed in. Each block fails soft: a store whose tables are not deployed or not readable shows a dash. Incidents count only for OPS.VIEW holders.</dd>
 </dl>
 
 <h3 id="f-sources">Sources</h3>
@@ -448,6 +458,24 @@ footer { color: var(--muted); font-size: 13px; margin-top: 56px; }
   <dt>Page</dt><dd><code>/dashboard/quality</code></dd>
   <dt>What it does</dt><dd>Read-only monitoring: Soda scans and QA runs in one timeline with their results, readiness gates per run (data quality health of at least 90 with no failed checks, QA tests without failures, QA signed off, no open linked Jira issue), QA suites and data quality check packs with the Soda kit and the Great Expectations suite, and open Jira incidents. Fixes and sign-offs stay on the run pages and in the QA workspace.</dd>
   <dt>Access</dt><dd>Everyone signed in; Jira links follow the row access policy on <code>JIRA.ISSUE_LINK</code>.</dd>
+</dl>
+
+<h3 id="f-qa-store">QA Store</h3>
+<dl class="feature-meta">
+  <dt>Page</dt><dd><code>/dashboard/qa-store</code></dd>
+  <dt>What it does</dt><dd>Domain test packages: deterministic SQL assertions a domain owns (reconciliations, orphan keys, duplicate business keys, joins that must resolve). A query returns the rows that break the rule and passes on 0 rows (or its own expectation). Queries are read-only and may only read the domain's active target tables and the landing tables of its runs (the QA guard).</dd>
+  <dt>Versions and approval</dt><dd>Packs live in <code>GOVERNANCE.DOMAIN_QA_PACKS</code> (one row per version) and <code>DOMAIN_QA_QUERIES</code>. Saving edits the newest draft in place or starts a new draft on top of a submitted or approved version; approved versions never change. Submit, then approve: the approved version runs by default and its queries become ACTIVE <code>QA_TEST</code> knowledge (key <code>qa.pack.&lt;pack&gt;.&lt;query&gt;</code>), which Cortex Search and the QA prompts read. Retiring a pack removes that knowledge. Executions are stored in <code>QUALITY.QA_RUN</code> and <code>QA_RESULT</code> with SCOPE <code>DOMAIN</code>; an ad-hoc test of one query is not stored.</dd>
+  <dt>Packs in Git</dt><dd><code>domain/&lt;name&gt;/qa/&lt;pack&gt;.sql</code>: a <code>-- @pack</code> header (with <code>@description</code> and <code>@tags</code>), then one <code>-- @query &lt;name&gt;</code> block per query (<code>@severity</code>, <code>@description</code>, <code>@expect</code>, <code>@tags</code>). Deploy seeds a new or changed file as an approved REPO version and leaves a pack alone once someone has versioned it in the UI. Export a version from the pack drawer in the same format to commit it.</dd>
+  <dt>Privileges</dt><dd><span class="chip p">PACKAGE.EDIT</span> create, save, submit, send back. <span class="chip p">PACKAGE.APPROVE</span> approve and retire (default policy: QA_LEAD, four eyes, so approval goes through Approvals). <span class="chip p">QA.EDIT</span> run packs and test queries.</dd>
+</dl>
+
+<h3 id="f-dq-store">Data Quality Store</h3>
+<dl class="feature-meta">
+  <dt>Page</dt><dd><code>/dashboard/dq-store</code></dd>
+  <dt>What it does</dt><dd>Soda and Great Expectations checks per table and column, outside any run, in <code>GOVERNANCE.DQ_CHECKS_CATALOG</code>. The neutral definition (<code>CHECK_DEFINITION</code>) is authoritative and is what the scanner runs; <code>SODA_DSL</code> is rendered from it. Add a check in one line of SodaCL (row_count, missing_count and percent, duplicate_count and percent, invalid_count and percent, freshness, min, max, avg, sum and others) or with the guided editor, seed a table from its latest profile, or promote a run's approved checks onto its built target.</dd>
+  <dt>Scans and schedules</dt><dd>Run now scans a table with your role and stores it in <code>QUALITY.CHECK_RUN</code> and <code>CHECK_RESULT</code> with SCOPE <code>TABLE</code>; each check keeps its last outcome and measurement for the sparklines. A schedule is one Snowflake task per table, <code>QUALITY.DQ_&lt;hash&gt;</code>, that calls <code>QUALITY.RUN_TABLE_SCAN</code> on a cron (five fields and an optional time zone) and is listed in <code>GOVERNANCE.DQ_SCHEDULE</code>.</dd>
+  <dt>Privileges</dt><dd><span class="chip p">SODA.EDIT</span> add, edit, pause, retire, seed and schedule (default policy sends these to DQ_APPROVER; an admin can turn that off). <span class="chip p">PROFILE.RUN</span> run now.</dd>
+  <dt>Configure first</dt><dd>The scheduled procedure runs EXECUTE AS OWNER: the platform owner role needs SELECT on every scheduled table and USAGE on the warehouse.</dd>
 </dl>
 
 <h3 id="f-onboarding">Onboarding hub</h3>
@@ -1099,6 +1127,7 @@ cd apps/api; python -m app.worker</code></pre>
 <tr><td>CONTRACT.GENERATE_SODA, IMPORT_CLIENT_EXPECTATIONS, SAVE_SODA_DECISIONS, BACKTEST_SODA</td><td>Data quality checks</td><td>Data Quality</td></tr>
 <tr><td>CONTRACT.QA_SUITE, QA_ASK, QA_SAVE, QA_TABLE_SUITE, QA_TABLE_ASK, QA_TABLE_SAVE</td><td>QA tests for runs and tables</td><td>QA</td></tr>
 <tr><td>CODEGEN.GENERATE_DBT / VALIDATE_DBT / PUBLISH_DBT_PR</td><td>Generate, validate, publish dbt; also publishes finalized model designs to <code>feature/model-*</code> branches</td><td>dbt, validation, Modeling hub</td></tr>
+<tr><td>QUALITY.RUN_TABLE_SCAN(TABLE_FQN)</td><td>Scan one table's active DQ Store checks and store the results (EXECUTE AS OWNER)</td><td>DQ Store schedules</td></tr>
 <tr><td>SOURCE.EXECUTE_STAGED_LANDING</td><td>Land selected share objects through SOURCE.LANDING_STAGE (Parquet unload, COPY INTO)</td><td>Source Hub share onboarding</td></tr>
 <tr><td>CODE.INDEX_REPO</td><td>Incremental code index refresh</td><td>Code, scheduled task</td></tr>
 <tr><td>JIRA.TRIAGE_ISSUE / TRIAGE_TABLE / RESOLVE_TARGETS</td><td>AI triage of a ticket against a run or table; rank candidate tables</td><td>QA, Jira</td></tr>
@@ -1109,6 +1138,7 @@ cd apps/api; python -m app.worker</code></pre>
 <div class="tablebox"><table>
 <tr><th>Object</th><th>Created by</th></tr>
 <tr><td>Task <code>CODE.REFRESH_&lt;id&gt;</code></td><td>A repository refresh schedule</td></tr>
+<tr><td>Task <code>QUALITY.DQ_&lt;hash&gt;</code></td><td>A DQ Store table schedule (dropped when the schedule is removed)</td></tr>
 <tr><td>Task <code>EXT_&lt;SOURCE&gt;.ORACLE_SCHEDULED_LOAD</code></td><td>An Oracle incremental schedule</td></tr>
 <tr><td>Git repository <code>CODE.&lt;NAME&gt;</code> and secret <code>CODE.&lt;NAME&gt;_GIT_TOKEN</code></td><td>Connecting a repository</td></tr>
 <tr><td>Network rule <code>CODEGEN.GITHUB_API_EGRESS</code>, GitHub secret and external access integration</td><td>GitHub publishing setup</td></tr>
@@ -1138,6 +1168,7 @@ cd apps/api; python -m app.worker</code></pre>
 <tr><td>V034</td><td>CASES schema with the domain row access policy</td></tr>
 <tr><td>V035</td><td>PLATFORM_CONFIG.INGESTION_PIPELINE_CATALOG, SOURCE.LANDING_STAGE and the Parquet format</td></tr>
 <tr><td>V036</td><td>GOVERNANCE catalogs: DATA_PROFILES, PROFILE_BOOKMARK, STTM_CATALOG (backfilled from existing STTMs), MODEL_DESIGNS</td></tr>
+<tr><td>V037</td><td>QA Store (DOMAIN_QA_PACKS, DOMAIN_QA_QUERIES) and Data Quality Store (DQ_CHECKS_CATALOG, DQ_SCHEDULE); CHECK_RUN and CHECK_RESULT accept table scans (RUN_ID nullable, SCOPE, TABLE_FQN, DOMAIN_ID, CATALOG_CHECK_ID)</td></tr>
 </table></div>
 
 <!-- ============================================================ 07 -->
@@ -1166,6 +1197,9 @@ cd apps/api; python -m app.worker</code></pre>
 <tr><td>Source Hub</td><td>hub/sources/share/onboard / hub/pipelines create and change / hub/intake-form</td><td>RUN.CREATE / SOURCE.CONNECT (never queued: carries secrets) / CONFIG.EDIT</td></tr>
 <tr><td>Catalogs</td><td>hub/profiles/reprofile / hub/sttm/*/edit / bookmarks, diffs, exports, expectations</td><td>PROFILE.RUN / STTM.EDIT / None</td></tr>
 <tr><td>Modeling hub</td><td>hub/models/propose / save and finalize / publish / validate and render</td><td>AI.USE / MODEL.EDIT / DBT.EDIT / None</td></tr>
+<tr><td>QA Store</td><td>domains/*/qa-packs (create), qa-packs/* (save), submit, reject / qa-packs/*/approve, retire / qa/execute</td><td>PACKAGE.EDIT / PACKAGE.APPROVE / QA.EDIT</td></tr>
+<tr><td>DQ Store</td><td>dq/catalog, dq/catalog/*/status, dq/catalog/seed, dq/schedules / dq/run / dq/parse</td><td>SODA.EDIT / PROFILE.RUN / None</td></tr>
+<tr><td>Command Center</td><td>hub/overview</td><td>None (read)</td></tr>
 </table></div>
 
 <!-- ============================================================ 08 -->
@@ -1174,6 +1208,7 @@ cd apps/api; python -m app.worker</code></pre>
 <div class="warn"><strong>QA lead sign-off grant.</strong> <code>CONTRACT.QA_SIGNOFF</code> accepts inserts only from DATA_ENGINEER. A QA lead holding only the QA_ENGINEER database role cannot sign off until that grant is added (or they also get DATA_ENGINEER).</div>
 <div class="ok"><strong>Fixed: run QA procedures for QA_ENGINEER.</strong> <code>QA_SUITE</code>, <code>QA_ASK</code> and <code>QA_SAVE</code> are now granted to QA_ENGINEER, and <code>QA_SAVE</code> to REVIEWER. Redeploy procedures to apply.</div>
 <div class="warn"><strong>Change requests for viewers.</strong> Raising an approval request writes to <code>GOVERNANCE.CHANGE_REQUEST</code> with the requester's role; VIEWER cannot write there. Only DATA_ENGINEER holds REQUEST.CHANGES, so this matters only if that privilege is given to read-only roles.</div>
+<div class="warn"><strong>DQ Store writes go through approval by default.</strong> SODA.EDIT is routed to DQ_APPROVER, so every catalog edit and schedule from the DQ Store becomes a change request until an admin turns approval off for SODA.EDIT or the editor holds DQ_APPROVER. Decide which before rollout.</div>
 <div class="warn"><strong>Procedures without grants.</strong> <code>CODE.INDEX_REPO</code>, <code>CODEGEN.PUBLISH_DBT_PR</code> and each <code>ORACLE_RUN</code> have no USAGE grants; they work for the owning role only. Grant USAGE to DATA_ENGINEER if others should run them directly.</div>
 <div class="ok"><strong>Fixed: Jira token rows.</strong> Migration V033 adds the row access policy <code>JIRA.OWN_ROWS</code>: each person sees only their own <code>USER_TOKEN</code> and <code>OAUTH_STATE</code> rows; sessions with the PLATFORM_ADMIN database role see all. The Admin count of connected users therefore shows only yourself unless you are a platform admin.</div>
 <div class="note"><strong>Routing text.</strong> Admin says a DAG's own team wins over routing rules; the code applies routing rules first. Treat rules as the deciding source until the text is corrected.</div>

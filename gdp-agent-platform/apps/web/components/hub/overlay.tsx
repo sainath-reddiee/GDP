@@ -40,8 +40,9 @@ export function Modal({ open, onClose, title, description, children, footer, wid
 }
 
 /** Right-hand drawer for details. */
-export function Drawer({ open, onClose, title, subtitle, children, actions }: {
+export function Drawer({ open, onClose, title, subtitle, children, actions, wide, footer }: {
   open: boolean; onClose: () => void; title: ReactNode; subtitle?: ReactNode; children: ReactNode; actions?: ReactNode;
+  wide?: boolean; footer?: ReactNode;
 }) {
   useScrollLock(open);
   useEscape(open, onClose);
@@ -49,7 +50,7 @@ export function Drawer({ open, onClose, title, subtitle, children, actions }: {
   return (
     <div className="fixed inset-0 z-50" role="dialog" aria-modal="true">
       <button aria-label="Close" className="absolute inset-0 bg-slate-950/30" onClick={onClose} />
-      <aside className="absolute inset-y-0 right-0 flex w-full max-w-3xl flex-col border-l border-border bg-card shadow-2xl animate-stage-in">
+      <aside className={cn("absolute inset-y-0 right-0 flex w-full flex-col border-l border-border bg-card shadow-2xl animate-stage-in", wide ? "max-w-6xl" : "max-w-3xl")}>
         <div className="flex items-start gap-3 border-b border-border/70 p-5">
           <div className="min-w-0 flex-1">
             <h2 className="truncate text-base font-semibold">{title}</h2>
@@ -59,6 +60,7 @@ export function Drawer({ open, onClose, title, subtitle, children, actions }: {
           <button onClick={onClose} aria-label="Close" className="rounded-lg p-1.5 text-muted-foreground hover:bg-muted"><X className="h-4 w-4" /></button>
         </div>
         <div className="flex-1 overflow-y-auto p-5">{children}</div>
+        {footer && <div className="flex flex-wrap items-center justify-end gap-2 border-t border-border/70 bg-muted/30 px-5 py-3">{footer}</div>}
       </aside>
     </div>
   );

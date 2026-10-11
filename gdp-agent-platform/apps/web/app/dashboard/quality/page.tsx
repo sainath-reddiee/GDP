@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { Activity, BadgeCheck, FlaskConical, Siren } from "lucide-react";
+import { Activity, BadgeCheck, ClipboardCheck, FlaskConical, Siren, SquareTerminal } from "lucide-react";
 import { api } from "@/lib/api";
 import type { Execution, GateRun, Incident, QualitySummary, Suites } from "@/lib/hub-types";
 import { PageHeader } from "@/components/page-header";
@@ -39,8 +39,12 @@ export default async function QualityCenter({ searchParams }: { searchParams: { 
   return (
     <div className="space-y-6">
       <PageHeader eyebrow="Quality" title="QA and Data Quality Center"
-                  description="Soda scans, Great Expectations suites, QA test runs, readiness gates and Jira incidents in one place. Fix and sign off from the run or the QA workspace."
-                  actions={<Link href="/qa" className={buttonVariants({ variant: "outline" })}><FlaskConical className="h-4 w-4" /> Open the QA workspace</Link>} />
+                  description="Monitoring for every Soda scan, Great Expectations suite, QA test run, readiness gate and Jira incident. Manage domain SQL packs in the QA Store and attribute checks in the DQ Store."
+                  actions={<>
+                    <Link href="/dashboard/qa-store" className={buttonVariants({ variant: "outline" })}><SquareTerminal className="h-4 w-4" /> QA Store</Link>
+                    <Link href="/dashboard/dq-store" className={buttonVariants({ variant: "outline" })}><ClipboardCheck className="h-4 w-4" /> DQ Store</Link>
+                    <Link href="/qa" className={buttonVariants({ variant: "outline" })}><FlaskConical className="h-4 w-4" /> QA workspace</Link>
+                  </>} />
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <Kpi label="Data quality health" value={s?.data_quality.avg_health == null ? "-" : `${Math.round(Number(s.data_quality.avg_health))}`}
              hint={`${s?.data_quality.scans ?? 0} scans, last 30 days`} icon={Activity} tone="emerald" />

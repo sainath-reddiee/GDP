@@ -317,7 +317,13 @@ def _land_object(session, run_id: str, source: Dict[str, Any], adapter: SourceAd
     return result
 
 
-def execute_landing(session, run_id: str, method: str = "CTAS") -> Dict[str, Any]:
+def execute_landing(session, run_id: str) -> Dict[str, Any]:
+    """SOURCE.EXECUTE_LANDING: land the selected objects with CREATE TABLE AS SELECT. Snowflake matches a handler's
+    parameter count exactly, so the landing method is not a parameter here (see execute_staged_landing)."""
+    return _execute_landing(session, run_id, "CTAS")
+
+
+def _execute_landing(session, run_id: str, method: str) -> Dict[str, Any]:
     """Land the selected objects as-is. CTAS copies with CREATE TABLE AS SELECT; STAGED_PARQUET (Source Hub share
     onboarding) unloads each object to SOURCE.LANDING_STAGE as Snappy Parquet and loads it with COPY INTO
     (services/source/staged.py). STAGED_PARQUET applies to MANAGED targets only; others keep CTAS."""
@@ -365,7 +371,7 @@ def execute_landing(session, run_id: str, method: str = "CTAS") -> Dict[str, Any
 
 def execute_staged_landing(session, run_id: str) -> Dict[str, Any]:
     """SOURCE.EXECUTE_STAGED_LANDING: execute_landing through SOURCE.LANDING_STAGE (compressed Parquet + COPY)."""
-    return execute_landing(session, run_id, staged.METHOD)
+    return _execute_landing(session, run_id, staged.METHOD)
 
 
 def set_landing_target(session, run_id: str, payload_json: str) -> Dict[str, Any]:

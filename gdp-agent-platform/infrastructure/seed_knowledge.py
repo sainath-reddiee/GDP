@@ -328,6 +328,7 @@ def seed_platform(cur, database: str) -> List[str]:
                        + ("" if d["columns"] else " (registered inactive, knowledge only)"))
     merge(cur.execute, database, data)
     log.extend(snapshot_domains(cur, database))
+    log.extend(seed_qa_packs(cur, database))
 
     for skill in list_skills():
         root = skill["path"].parent
@@ -369,4 +370,93 @@ def seed_platform(cur, database: str) -> List[str]:
                  VALUES (s.CONFIG_ID, s.DOMAIN_ID, s.VERSION, s.WEIGHTS, s.THRESHOLDS, s.ACTIVE_FLAG, s.CREATED_BY)""",
         (SCORING_CONFIG_ID, 1, json.dumps(DEFAULT_WEIGHTS), json.dumps(DEFAULT_THRESHOLDS)),
     )
+    return log
+
+
+# ---------------------------------------------------------------- QA Store: domain/<name>/qa/<pack>.sql
+
+
+def load_qa_packs() -> List[Tuple[str, Dict[str, Any], Path]]:
+    """(domain name, parsed pack, file) for every domain/<dir>/qa/*.sql; the domain name comes from the folder's
+    domain_pack.json."""
+    from services.qa.pack_files import parse
+
+    out = []
+    for path in sorted(DOMAIN_DIR.glob("*/qa/*.sql")):
+        pack_file = path.parent.parent / "domain_pack.json"
+        name = (json.loads(pack_file.read_text(encoding="utf-8"))["domain"]["name"] if pack_file.exists()
+                else path.parent.parent.name.upper())
+        try:
+            parsed = parse(path.read_text(encoding="utf-8"), default_name=path.stem.replace("_", " ").title())
+        except ValueError as exc:
+            raise AssertionError(f"{path.relative_to(ROOT)}: {exc}") from exc
+        out.append((name, parsed, path))
+    return out
+
+
+def _qa_signature(queries: List[Dict[str, Any]]) -> List[Tuple[str, str, str, str]]:
+    return [(str(q["query_name"]).lower(), " ".join(str(q["sql_expression"]).split()), str(q.get("severity") or "ERROR"),
+             str(q.get("expectation") or "0 rows")) for q in queries]
+
+
+def seed_qa_packs(cur, database: str) -> List[str]:
+    """Repository packs become APPROVED versions (SOURCE REPO) and their queries ACTIVE QA_TEST knowledge. A pack
+    whose newest version was made in the UI belongs to the people who edited it: the deploy leaves it alone."""
+    from services.qa.packs import knowledge_key, query_id_for, seed_rows
+
+    try:
+        cur.execute(f"SELECT 1 FROM {database}.GOVERNANCE.DOMAIN_QA_PACKS LIMIT 1")
+    except Exception:
+        return ["qa packs: V037 not deployed (skipped)"]
+    log: List[str] = []
+    knowledge = []
+    for domain_name, parsed, path in load_qa_packs():
+        did = domain_id(domain_name)
+        data = seed_rows(did, parsed)
+        pid, meta, queries = data["pack_id"], data["meta"], data["queries"]
+        cur.execute(f"SELECT VERSION, STATUS, SOURCE FROM {database}.GOVERNANCE.DOMAIN_QA_PACKS "
+                    f"WHERE PACK_ID = %s ORDER BY VERSION DESC", (pid,))
+        versions = cur.fetchall()
+        if versions and versions[0][2] != "REPO":
+            log.append(f"qa pack {domain_name}/{meta['name']}: edited in the app, kept")
+            continue
+        if versions:
+            cur.execute(f"SELECT QUERY_NAME, SQL_EXPRESSION, SEVERITY, EXPECTATION FROM {database}.GOVERNANCE.DOMAIN_QA_QUERIES "
+                        f"WHERE PACK_ID = %s AND PACK_VERSION = %s ORDER BY ORDINAL", (pid, versions[0][0]))
+            current = [{"query_name": r[0], "sql_expression": r[1], "severity": r[2], "expectation": r[3]}
+                       for r in cur.fetchall()]
+            if _qa_signature(current) == _qa_signature(queries):
+                log.append(f"qa pack {domain_name}/{meta['name']}: unchanged")
+                continue
+            dropped = {q["query_name"].lower() for q in current} - {q["query_name"].lower() for q in queries}
+            for name in dropped:
+                cur.execute(f"UPDATE {database}.KNOWLEDGE.DOMAIN_KNOWLEDGE SET IS_CURRENT = FALSE, STATUS = 'RETIRED' "
+                            f"WHERE DOMAIN_ID = %s AND SOURCE_REFERENCE = %s AND IS_CURRENT",
+                            (did, knowledge_key(pid, name)))
+        version = (versions[0][0] + 1) if versions else 1
+        cur.execute(f"UPDATE {database}.GOVERNANCE.DOMAIN_QA_PACKS SET STATUS = 'SUPERSEDED' "
+                    f"WHERE PACK_ID = %s AND STATUS = 'APPROVED'", (pid,))
+        cur.execute(
+            f"""INSERT INTO {database}.GOVERNANCE.DOMAIN_QA_PACKS (PACK_ID, VERSION, DOMAIN_ID, NAME, DESCRIPTION, TAGS,
+                       STATUS, SOURCE, CHANGE_NOTE, CREATED_BY, APPROVED_BY, APPROVED_AT)
+                SELECT %s, %s, %s, %s, %s, PARSE_JSON(%s)::ARRAY, 'APPROVED', 'REPO', %s, 'SEED', 'SEED', CURRENT_TIMESTAMP()""",
+            (pid, version, did, meta["name"], meta["description"], json.dumps(meta["tags"]),
+             f"Seeded from {path.relative_to(ROOT).as_posix()}"))
+        for q in queries:
+            cur.execute(
+                f"""INSERT INTO {database}.GOVERNANCE.DOMAIN_QA_QUERIES (QUERY_ID, PACK_ID, PACK_VERSION, QUERY_NAME,
+                           DESCRIPTION, SQL_EXPRESSION, SEVERITY, EXPECTATION, TAGS, ORDINAL, CREATED_BY)
+                    SELECT %s, %s, %s, %s, %s, %s, %s, %s, PARSE_JSON(%s)::ARRAY, %s, 'SEED'""",
+                (query_id_for(pid, q["query_name"]), pid, version, q["query_name"], q.get("description") or None,
+                 q["sql_expression"], q["severity"], q["expectation"], json.dumps(q["tags"]), q["ordinal"]))
+            key = knowledge_key(pid, q["query_name"])
+            content = (f"{meta['name']}: {q['query_name']}. {q.get('description') or ''} "
+                       f"Passes when: {q['expectation']}. Severity {q['severity']}.\n\n{q['sql_expression']}")
+            knowledge.append((_stable_id("k", key), did, "QA_TEST", f"{meta['name']}: {q['query_name']}", content,
+                              {"pack_id": pid, "pack": meta["name"], "version": version, "sql": q["sql_expression"],
+                               "expected": q["expectation"], "severity": q["severity"], "tags": q["tags"]},
+                              ["QA", "PACK", *q["tags"]][:20], key, "ACTIVE", version, True))
+        log.append(f"qa pack {domain_name}/{meta['name']}: version {version} ({len(queries)} queries)")
+    if knowledge:
+        merge(cur.execute, database, {"domains": [], "tables": [], "columns": [], "knowledge": knowledge})
     return log

@@ -13,3 +13,18 @@ export const STAGES: { slug: string; stage: string; label: string; phase: number
 
 export const bySlug = (slug: string) => STAGES.find((s) => s.slug === slug);
 export const byStage = (stage: string) => STAGES.find((s) => s.stage === stage);
+
+/** The six lifecycle phases the Command Center shows for a run, and the workflow stages each one covers. */
+export const PHASES = [
+  { label: "Source", stages: ["SOURCE"] },
+  { label: "Profile", stages: ["PROFILING", "DOMAIN"] },
+  { label: "Model", stages: ["MAPPING"] },
+  { label: "STTM", stages: ["STTM"] },
+  { label: "QA", stages: ["SODA"] },
+  { label: "Deploy", stages: ["DBT", "VALIDATION", "REVIEW"] },
+] as const;
+
+/** Index into PHASES for a run's current stage; -1 before the source is chosen. */
+export function phaseIndex(stage: string | null | undefined): number {
+  return stage ? PHASES.findIndex((p) => (p.stages as readonly string[]).includes(stage)) : -1;
+}

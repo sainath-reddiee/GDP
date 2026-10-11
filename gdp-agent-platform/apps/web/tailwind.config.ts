@@ -2,7 +2,7 @@ import type { Config } from "tailwindcss";
 
 const config: Config = {
   content: ["./app/**/*.{ts,tsx}", "./components/**/*.{ts,tsx}"],
-  // one light theme: dark: variants apply only under a .dark class, never from the OS setting
+  // dark: variants apply under the .dark class that components/theme sets (from the saved choice or the OS setting)
   darkMode: "class",
   theme: {
     extend: {
@@ -27,11 +27,13 @@ const config: Config = {
         xs: "var(--shadow-xs)",
         card: "var(--shadow-card)",
         hover: "var(--shadow-hover)",
+        pop: "var(--shadow-pop)",
         // the defaults every page already uses, softened to the same family
         sm: "var(--shadow-card)",
         md: "var(--shadow-hover)",
       },
       fontFamily: {
+        sans: ['"Inter Variable"', "Inter", '"Segoe UI"', "ui-sans-serif", "system-ui", "sans-serif"],
         mono: ['"JetBrains Mono"', '"Cascadia Code"', "ui-monospace", "SFMono-Regular", "Consolas", "monospace"],
       },
     },

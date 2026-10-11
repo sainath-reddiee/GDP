@@ -7,9 +7,11 @@
     "start": "next start",
     "fast": "next build && next start",
     "typecheck": "tsc --noEmit",
+    "theme:compat": "node scripts/theme-compat.mjs",
     "test:e2e": "playwright test"
   },
   "dependencies": {
+    "@fontsource-variable/inter": "^5.1.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "lucide-react": "^0.453.0",

@@ -189,6 +189,21 @@ RULES: List[Tuple[str, str, Any, str]] = [
     ("POST", r"/api/qa/suites", "QA.EDIT", ""),
     ("PUT", r"/api/qa/suites/[^/]+", "QA.EDIT", ""),
     ("DELETE", r"/api/qa/suites/[^/]+", "QA.EDIT", ""),
+    # QA Store: domain test packages (services/qa/packs.py); approving a version is four eyes by default policy
+    ("POST", r"/api/domains/[^/]+/qa-packs", "PACKAGE.EDIT", "Create a domain QA pack"),
+    ("PUT", r"/api/qa-packs/[^/]+", "PACKAGE.EDIT", "Edit a domain QA pack"),
+    ("POST", r"/api/qa-packs/[^/]+/(submit|reject)", "PACKAGE.EDIT", ""),
+    ("POST", r"/api/qa-packs/[^/]+/approve", "PACKAGE.APPROVE", "Approve a domain QA pack version"),
+    ("POST", r"/api/qa-packs/[^/]+/retire", "PACKAGE.APPROVE", "Retire a domain QA pack"),
+    ("POST", r"/api/qa/execute", "QA.EDIT", ""),
+    # Data Quality Store (apps/api/app/quality_api.py): catalog edits go through SODA.EDIT (routed to DQ_APPROVER by the
+    # default policy); a scan is read-only
+    ("POST", r"/api/dq/parse", None, ""),
+    ("POST", r"/api/dq/catalog(/seed)?", "SODA.EDIT", "Change the data quality checks catalog"),
+    ("POST", r"/api/dq/catalog/[^/]+/status", "SODA.EDIT", "Pause, resume or retire a data quality check"),
+    ("POST", r"/api/dq/run", "PROFILE.RUN", ""),
+    ("PUT", r"/api/dq/schedules", "SODA.EDIT", "Schedule data quality checks"),
+    ("DELETE", r"/api/dq/schedules", "SODA.EDIT", "Remove a data quality schedule"),
     ("POST", r"/api/qa/links", "JIRA.WRITE", "Link a Jira issue to a table or test"),
     ("DELETE", r"/api/qa/links/[^/]+", "JIRA.WRITE", ""),
     ("POST", r"/api/ops/ingest", None, ""),  # Airflow push: no user session, the HMAC signature is checked by the endpoint

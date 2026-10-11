@@ -282,3 +282,17 @@ GRANT USAGE ON PROCEDURE {{database}}.CODEGEN.GENERATE_DBT(VARCHAR, VARCHAR) TO 
 GRANT USAGE ON PROCEDURE {{database}}.CODEGEN.GENERATE_DBT(VARCHAR, VARCHAR) TO DATABASE ROLE {{database}}.SERVICE_AGENT;
 GRANT USAGE ON PROCEDURE {{database}}.CODEGEN.VALIDATE_DBT(VARCHAR) TO DATABASE ROLE {{database}}.DATA_ENGINEER;
 GRANT USAGE ON PROCEDURE {{database}}.CODEGEN.VALIDATE_DBT(VARCHAR) TO DATABASE ROLE {{database}}.SERVICE_AGENT;
+
+-- Data Quality Store (V037): scan one table's ACTIVE catalog checks. Called by the per-table Snowflake tasks the DQ
+-- Store schedules create (QUALITY.DQ_<hash>). Owner's rights: the owner role needs SELECT on scheduled tables.
+CREATE OR REPLACE PROCEDURE {{database}}.QUALITY.RUN_TABLE_SCAN(TABLE_FQN VARCHAR)
+  RETURNS VARIANT
+  LANGUAGE PYTHON
+  RUNTIME_VERSION = '3.11'
+  PACKAGES = ('snowflake-snowpark-python')
+  IMPORTS = ('{{services_import}}')
+  HANDLER = 'services.catalog.dq.run_table_scan'
+  COMMENT = 'Run the Data Quality Store checks of one table and record the scan'
+  EXECUTE AS OWNER;
+
+GRANT USAGE ON PROCEDURE {{database}}.QUALITY.RUN_TABLE_SCAN(VARCHAR) TO DATABASE ROLE {{database}}.DATA_ENGINEER;
