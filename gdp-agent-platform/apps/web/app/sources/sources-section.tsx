@@ -10,8 +10,11 @@ const inventoryOf = (t: { database: string; schema: string }) =>
     `/api/catalog/inventory?database=${encodeURIComponent(sfIdent(t.database))}&schema=${encodeURIComponent(sfIdent(t.schema))}`,
   ).catch(() => null);
 
-/** The Sources workspace (catalog browser, profile store, external files), rendered inside /dashboard/sources. */
-export async function SourcesSection({ searchParams }: { searchParams: { db?: string; schema?: string; mode?: string } }) {
+/** The Sources workspace (Snowflake catalog browser, external systems and ingestion pipelines), rendered inside /dashboard/sources.
+ * Stored profiles live in the Profiling Store. */
+export async function SourcesSection({ searchParams, pipelines = null, pipelineCount = 0 }: {
+  searchParams: { db?: string; schema?: string; mode?: string }; pipelines?: React.ReactNode; pipelineCount?: number;
+}) {
   // An explicit ?db=&schema= wins and its inventory loads alongside everything else; otherwise reopen the schema
   // profiled most recently. Nothing is preselected when nothing was profiled yet. The names are the stored spelling
   // (lowercase and mixed case kept), so they are not upper-cased here.
@@ -31,6 +34,7 @@ export async function SourcesSection({ searchParams }: { searchParams: { db?: st
   return (
     <SourcesHub initialOverview={overview} initialStore={profiles} databases={databases} domains={domains}
                 initialTarget={target} initialInventory={inventory}
-                initialMode={searchParams.mode === "external" || searchParams.mode === "store" ? searchParams.mode : "snowflake"} />
+                pipelines={pipelines} pipelineCount={pipelineCount}
+                initialMode={searchParams.mode === "external" ? "external" : "snowflake"} />
   );
 }

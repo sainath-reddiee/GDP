@@ -61,3 +61,13 @@ test("run pages are unchanged", async ({ page }) => {
   await expect(page).toHaveURL(new RegExp(`/runs/${RUN}/source$`));
   await expect(page.getByRole("navigation", { name: "Main" }).getByRole("link", { name: "Store", exact: true })).not.toHaveAttribute("aria-current", "page");
 });
+
+test("the Source Store shows source-only figures and keeps profiles in the Profiling Store", async ({ page }) => {
+  await page.goto("/dashboard/sources");
+  const kpis = page.getByTestId("source-kpis");
+  for (const label of ["Sources connected", "Ingestion pipelines", "Landed tables", "Ingestion issues"]) await expect(kpis).toContainText(label);
+  await expect(page.getByRole("tab", { name: /Profile store/ })).toHaveCount(0);
+  await expect(page.getByText("Schemas profiled")).toHaveCount(0);
+  await page.getByRole("tab", { name: /External systems/ }).click();
+  await expect(page.getByText("Ingestion pipelines").last()).toBeVisible();
+});
