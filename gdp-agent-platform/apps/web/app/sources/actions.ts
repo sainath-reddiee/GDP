@@ -72,7 +72,7 @@ export async function registerExternalSource(body: {
     api<{ source_system_id: string; source_system_name: string; landing: { database: string; schema: string };
       landable: boolean; guidance: string | null }>("/api/sources/external", { method: "POST", body: JSON.stringify(body) }),
   );
-  revalidatePath("/sources");
+  revalidatePath("/dashboard/sources");
   return result;
 }
 
@@ -91,7 +91,7 @@ export async function landExternalFiles(sourceId: string, files: string[], table
       body: JSON.stringify({ files, table: table || null }),
     }),
   );
-  revalidatePath("/sources");
+  revalidatePath("/dashboard/sources");
   return result;
 }
 
@@ -160,7 +160,7 @@ export async function oracleTest(sourceId: string) {
 export async function oracleRemove(sourceId: string, dropLanded: boolean) {
   const result = await attemptValue(() => api<{ removed: string; log: { sql: string; ok: boolean; error?: string }[] }>(
     `/api/sources/${sourceId}/oracle?drop_landed=${dropLanded}`, { method: "DELETE" }));
-  if (result.ok) revalidatePath("/sources");
+  if (result.ok) revalidatePath("/dashboard/sources");
   return result;
 }
 
@@ -198,7 +198,7 @@ export async function oracleIngest(sourceId: string, body: IngestOptions) {
   const result = await attemptValue(() => api<{ job_id: string }>(`/api/sources/${sourceId}/oracle/ingest`, {
     method: "POST", body: JSON.stringify(body),
   }));
-  if (result.ok) revalidatePath("/sources");
+  if (result.ok) revalidatePath("/dashboard/sources");
   return result;
 }
 

@@ -142,10 +142,53 @@ def publish_case_patch(session, request: Dict[str, Any]) -> Dict[str, Any]:
     return result
 
 
+def publish_model_branch(session, request: Dict[str, Any]) -> Dict[str, Any]:
+    """A model finalized in the Modeling hub as a branch feature/model-<domain>-<timestamp> with a draft pull request.
+    Only ids and the branch come from the caller: the files are read here from GOVERNANCE.MODEL_DESIGNS (a FINALIZED or
+    PUBLISH_FAILED version) and the repository from CODE.REPO, so the procedure never pushes content nobody finalized."""
+    design_id, version = str(request.get("design_id") or ""), int(request.get("version") or 0)
+    head = github.check_branch(str(request.get("head") or ""))
+    assert head.startswith("feature/model-"), "a model branch starts with feature/model-"
+    found = rows(session, """SELECT DOMAIN_NAME, MODE, STATUS, ARTIFACTS FROM GOVERNANCE.MODEL_DESIGNS
+                              WHERE DESIGN_ID = ? AND VERSION = ?""", [design_id, version])
+    assert found, "model design not found"
+    assert found[0]["STATUS"] in ("FINALIZED", "PUBLISH_FAILED"), "only a finalized model design is published"
+    files = variant(found[0]["ARTIFACTS"]) or {}
+    assert isinstance(files, dict) and files, "the model design has no rendered files"
+    repo = rows(session, "SELECT GIT_URL, BRANCH, PROVIDER FROM CODE.REPO WHERE REPO_ID = ? AND ENABLED",
+                [str(request.get("repo_id") or "")])
+    assert repo and str(repo[0]["PROVIDER"] or "").upper() == "GITHUB", "the repository is not a connected GitHub repository"
+    origin = repo[0]["GIT_URL"]
+    base = str(request.get("base") or repo[0]["BRANCH"] or "main")
+    domain = found[0]["DOMAIN_NAME"]
+    title = clip(request.get("title") or f"Model {domain} ({found[0]['MODE'].lower()}) v{version}", 200)
+    body = clip(request.get("body") or (f"Model design {design_id} v{version} for domain {domain}, finalized in the "
+                                        f"Modeling hub.\n\nFiles:\n" + "\n".join(f"- {p}" for p in sorted(files))), 6000)
+    with tool_call(session, None, "publish_model_branch", {"design_id": design_id, "version": version, "head": head}) as call:
+        try:
+            result = github.publish(github.urllib_request(_token()), origin, base, head, files, title=title, body=body,
+                                    message=title, draft=True)
+            call.summary = f"{result['status']} {head}: PR {(result.get('pull_request') or {}).get('url') or 'none'}"
+        except Exception as exc:
+            result = {**github.explain(exc, origin), "base_branch": base, "head_branch": head}
+            result["detail"] = clip(result.get("detail"), 1000)
+            call.status, call.error = "FAILED", clip(exc)
+    ok = result.get("status") in ("PUBLISHED", "NO_CHANGES")
+    session.sql("""UPDATE GOVERNANCE.MODEL_DESIGNS SET STATUS = ?, REPO_ID = ?, BRANCH = ?, PR_URL = NULLIF(?, ''),
+                          PUBLISH_RESULT = PARSE_JSON(?), UPDATED_AT = CURRENT_TIMESTAMP()
+                    WHERE DESIGN_ID = ? AND VERSION = ?""",
+                params=["PUBLISHED" if ok else "PUBLISH_FAILED", str(request.get("repo_id") or ""), head,
+                        (result.get("pull_request") or {}).get("url") or "", json.dumps(result, default=str),
+                        design_id, version]).collect()
+    return result
+
+
 def publish_dbt_pr(session, run_id: str, payload_json: str = "{}") -> Dict[str, Any]:
     payload = json.loads(payload_json or "{}")
     if not run_id and isinstance(payload.get("case_patch"), dict):
         return publish_case_patch(session, payload["case_patch"])
+    if not run_id and isinstance(payload.get("model_branch"), dict):
+        return publish_model_branch(session, payload["model_branch"])
     plan = _plan(session, run_id, payload) if run_id else dict(payload)
     if payload.get("check_only"):
         try:

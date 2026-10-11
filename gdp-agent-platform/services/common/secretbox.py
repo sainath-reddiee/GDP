@@ -33,6 +33,7 @@ _SALT = b"gdp-secretbox-v1"
 JIRA_TOKEN = "jira-token"
 PUSH_SECRET = "push-secret"
 TEAMS_WEBHOOK = "teams-webhook"
+INGESTION_SECRET = "ingestion-secret"  # Source Hub: secret intake answers of an external pipeline
 
 
 class SecretError(Exception):

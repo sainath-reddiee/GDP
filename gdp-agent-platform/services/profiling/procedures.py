@@ -21,6 +21,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Collection, Dict, List, Optional, Sequence, Tuple, Union
 
+from services.catalog import profiles as catalog_profiles
 from services.common.audit import record_cost, tool_call
 from services.common.llm import complete_json
 from services.common.sql import clip, insert_rows, rows, scalar, variant
@@ -323,6 +324,7 @@ def profile_tables(session, tables: List[TableRef], concurrency_limit: int = DEF
                 _write_document(session, ref.stage_path, doc)
                 _upsert_index(session, ref, doc, run_id)
                 result.persisted = True
+                catalog_profiles.record(session, ref.key, doc, run_id)  # GOVERNANCE.DATA_PROFILES; never raises
             except Exception as exc:
                 result.persist_error = clip(exc, 300)
         out[ref.key] = result

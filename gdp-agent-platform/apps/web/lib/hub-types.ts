@@ -1,0 +1,129 @@
+// Types of the lifecycle hub APIs (/api/hub/*, apps/api/app/hub_*.py).
+
+// ---------------------------------------------------------------- sources
+
+export type IntakeField = {
+  key: string; label?: string; type: "text" | "textarea" | "number" | "select" | "password" | "boolean" | "cron";
+  required?: boolean; secret?: boolean; options?: string[]; help?: string; placeholder?: string; pattern?: string;
+  show_if?: { key: string; in: string[] };
+};
+export type IntakeForm = { version?: number; sections: { title: string; fields: IntakeField[] }[] };
+
+export type Pipeline = {
+  source_id: string; source_name: string; source_type: string; connection_type: string | null;
+  connection_metadata: Record<string, unknown> | null; schedule: { frequency?: string; cron?: string; timezone?: string } | null;
+  target_landing_table: string | null; snaplogic_pipeline_name: string | null; domain_id: string | null;
+  status: "REGISTERED" | "ACTIVE" | "PAUSED" | "RETIRED"; notes: string | null; has_secret: boolean;
+  created_by?: string; created_at?: string; updated_at?: string | null;
+};
+
+export type ShareList = { shares: { name: string; owner_account: string; database_name: string | null; comment?: string }[]; mounted: string[] };
+export type ShareTable = { table_name: string; table_type?: string; row_count?: number | null; bytes?: number | null; last_altered?: string | null };
+export type OnboardStep = { step: string; ok: boolean; detail: string };
+export type OnboardResult = { run_id: string; ok: boolean; steps: OnboardStep[]; continue_at: string; tables?: unknown[] };
+
+// ---------------------------------------------------------------- profiles
+
+export type ProfileRow = {
+  profile_id: string | null; source_name: string; database_name: string; schema_name: string; table_name: string;
+  table_fqn: string; run_id: string | null; domain_id: string | null; domain_name: string | null;
+  row_count: number | null; column_count: number | null; avg_null_pct: number | null; key_candidates: number | null;
+  pii_columns: number | null; profiled_at: string | null; profiled_by: string | null; semantic_types: string[];
+  passes: number; catalog: boolean; tags: string[]; bookmarked: boolean;
+};
+export type ProfileFacets = {
+  domains: { domain_id: string; domain_name: string }[]; tags: string[];
+  runs: { run_id: string; run_name: string | null; profiled_at: string }[];
+};
+export type ProfileSearch = { profiles: ProfileRow[]; total: number; deployed: boolean; facets: ProfileFacets };
+
+export type ColumnProfile = {
+  column_name: string; ordinal: number; data_type: string | null; family: string | null; semantic_type: string | null;
+  pii_classification: string | null; row_count: number | null; null_count: number | null; null_pct: number | null;
+  distinct_count: number | null; cardinality: string | null; cardinality_ratio: number | null; min_value: string | null;
+  max_value: string | null; potential_key: boolean; top_values: { value: unknown; count: number }[];
+  histogram: { low?: number; high?: number; lower?: number; upper?: number; count: number }[] | null; description: string | null;
+};
+export type ProfilePass = { profile_id: string; run_id: string | null; row_count: number | null; columns: number; profiled_at: string; profiled_by: string | null };
+export type ColumnDetail = {
+  fqn: string; profile_id?: string; passes: ProfilePass[]; columns: ColumnProfile[]; catalog: boolean;
+  drift: { changed: boolean; columns: Record<string, string[]>; drifted_columns: number } | null;
+};
+export type Expectations = { table: string; checks: { check: string; column: string | null; reason: string }[]; soda_yaml: string; gx_suite: unknown };
+
+// ---------------------------------------------------------------- STTM
+
+export type SttmLine = {
+  source_system?: string | null; source_table: string | null; source_column: string | null; source_datatype?: string | null;
+  target_column: string; target_datatype: string | null; mapping_type: string | null; transformation: string | null;
+  business_rule: string | null; business_definition: string | null; join_logic?: string | null;
+};
+export type SttmSummary = {
+  catalog_id: string; version: number; versions: number; sttm_id: string | null; run_id: string | null; domain_id: string | null;
+  domain_name: string | null; source_system: string | null; source_entities: string[]; target_entity: string; status: string;
+  origin: string; line_count: number; created_by: string; created_at: string;
+};
+export type SttmVersion = { version: number; origin: string; status: string; change_note: string | null; line_count: number; sttm_id: string | null; run_id: string | null; created_by: string; created_at: string };
+export type SttmEntry = SttmSummary & { lines: SttmLine[]; table_design: Record<string, unknown>; change_note: string | null; target_table_id: string | null };
+export type SttmDiff = {
+  from: number; to: number; summary: string; added: SttmLine[]; removed: SttmLine[];
+  changed: { target_column: string; fields: string[]; from: Record<string, unknown>; to: Record<string, unknown> }[];
+};
+
+// ---------------------------------------------------------------- modeling
+
+export type ModelAttribute = {
+  name: string; datatype: string; nullable: boolean; is_pk: boolean; source_columns: string[]; derived: boolean;
+  transformation_hint?: string; rationale?: string;
+};
+export type ModelEntity = { entity_name: string; kind: string; purpose: string; grain: string; business_keys: string[]; attributes: ModelAttribute[] };
+export type ModelRelationship = { from_entity: string; from_column: string; to_entity: string; to_column: string; cardinality: string };
+export type ModelSpec = {
+  domain: string; mode: "MAP" | "FORK" | "NEW"; parent_domain: string | null; description: string;
+  target_platform: "SNOWFLAKE" | "ICEBERG"; target_database: string; target_schema: string; external_volume: string | null;
+  source_tables: string[]; design: { entities: ModelEntity[]; decision?: string; primary_entity?: string }; relationships: ModelRelationship[];
+};
+export type ModelIssue = { path: string; severity: "ERROR" | "WARN"; message: string };
+export type ModelDesignRow = {
+  design_id: string; version: number; domain_name: string; mode: string; parent_domain: string | null; status: string;
+  branch: string | null; pr_url: string | null; created_by: string; created_at: string;
+};
+export type ModelContext = {
+  domains: { domain_id: string; domain_name: string; description?: string | null }[]; designs: ModelDesignRow[];
+  repos: { repo_id: string; name: string; git_url: string; provider: string; branch: string; dbt_project_dir: string }[];
+  deployed: boolean; publisher_ready: boolean;
+};
+export type ModelRender = {
+  spec: ModelSpec; issues: ModelIssue[]; ddl: string; domain_pack: Record<string, unknown>; pack_problems: string[];
+  dbt: Record<string, string>; branch: string;
+};
+
+// ---------------------------------------------------------------- quality
+
+export type QualitySummary = {
+  days: number;
+  data_quality: { scans: number; avg_health: number | null; failed_checks: number; warned_checks: number; checks: number };
+  qa: { runs: number; tests: number; failed: number; errors: number; pass_rate: number | null };
+  incidents: { open: number }; suites: number;
+};
+export type Execution = {
+  id: string; kind: "SODA" | "QA"; run_id: string | null; run_name: string | null; target: string | null; mode: string | null;
+  total: number | null; passed: number | null; warned: number | null; failed: number | null; errors: number | null;
+  health: number | null; triggered_by: string | null; started_at: string; duration_ms: number | null;
+};
+export type Gate = { gate: string; status: "PASS" | "FAIL" | "PENDING"; detail: string };
+export type GateRun = { run_id: string; run_name: string; current_state: string; target_model: string | null; updated_at: string; status: "READY" | "BLOCKED" | "PENDING"; gates: Gate[]; score: number };
+export type Incident = {
+  link_id: string; issue_key: string; summary: string | null; status: string | null; status_category: string | null;
+  origin: string | null; run_id: string | null; run_name: string | null; target_table: string | null; linked_at: string;
+};
+export type Suites = {
+  qa_suites: { suite_id: string; name: string; description: string | null; is_default: boolean; target_table: string | null; tests: number }[];
+  check_packs: { run_id: string; run_name: string | null; target_table: string | null; checks: number; approved: number; proposed: number }[];
+};
+
+export type OnboardingCheck = {
+  ok: boolean;
+  pack?: { ok: boolean; problems: string[]; domain: string; exists: boolean; summary: { targets: number; columns: number; knowledge: number } };
+  contract?: { ok: boolean; kind: "yaml" | "markdown"; problems: string[]; summary: Record<string, unknown> };
+};

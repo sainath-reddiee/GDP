@@ -336,6 +336,9 @@ footer { color: var(--muted); font-size: 13px; margin-top: 56px; }
 <tr><td>CONTRACT.QA_SIGNOFF</td><td>Select</td><td>Insert</td><td>Select</td><td>None</td><td></td></tr>
 <tr><td>QUALITY (check runs, QA runs and results)</td><td>Select</td><td>Insert</td><td>Select</td><td>Insert (QA_RUN, QA_RESULT)</td><td></td></tr>
 <tr><td>MODELING.MODEL_DESIGN</td><td>Select</td><td>Insert</td><td>Select</td><td></td><td></td></tr>
+<tr><td>PLATFORM_CONFIG.INGESTION_PIPELINE_CATALOG</td><td>Select</td><td>Insert, update</td><td></td><td></td><td></td></tr>
+<tr><td>SOURCE.LANDING_STAGE, SOURCE.PARQUET_SNAPPY</td><td></td><td>Read, write stage; use format</td><td></td><td></td><td></td></tr>
+<tr><td>GOVERNANCE.DATA_PROFILES, PROFILE_BOOKMARK, STTM_CATALOG, MODEL_DESIGNS (V036)</td><td>Select</td><td>Insert (profiles), insert and delete (bookmarks), insert and update (STTM, models)</td><td>Select; insert bookmarks</td><td></td><td></td></tr>
 <tr><td>KNOWLEDGE skills tables</td><td>Select</td><td>Insert, update or delete</td><td></td><td></td><td></td></tr>
 <tr><td>KNOWLEDGE.DOMAIN_KNOWLEDGE, DOMAIN_VERSION, DOMAIN_MEMBER</td><td>Select</td><td>Insert, update (delete on members)</td><td></td><td></td><td>OPS_SERVICE: insert, update knowledge; insert DOMAIN_REGISTRY</td></tr>
 <tr><td>AUDIT.AGENT_TOOL_CALL, COST_USAGE</td><td>Select</td><td></td><td></td><td></td><td>OPS_SERVICE: insert</td></tr>
@@ -396,7 +399,7 @@ footer { color: var(--muted); font-size: 13px; margin-top: 56px; }
 
 <!-- ============================================================ 04 -->
 <h2 id="features"><span class="num">04</span>Features</h2>
-<p>The sidebar follows the data engineering lifecycle: Overview, Ingest, Model and build, Quality, Operate, Knowledge, Govern. A group disappears when none of its pages are available to the user.</p>
+<p>The sidebar follows the data engineering lifecycle: Overview, Ingest, Profile and model, Quality, Operate, Knowledge, Govern. A group disappears when none of its pages are available to the user. The lifecycle hubs live under <code>/dashboard</code> (Sources, Profiling, Modeling, STTM, Quality, Onboarding) and share one tab row; <code>/sources</code> and <code>/onboarding</code> redirect there, and run pages under <code>/runs/&lt;run id&gt;</code> are unchanged.</p>
 
 <h3 id="f-dashboard">Dashboard</h3>
 <dl class="feature-meta">
@@ -407,13 +410,51 @@ footer { color: var(--muted); font-size: 13px; margin-top: 56px; }
 
 <h3 id="f-sources">Sources</h3>
 <dl class="feature-meta">
-  <dt>Page</dt><dd><code>/sources</code>: Snowflake catalog, External systems, Profile store</dd>
+  <dt>Page</dt><dd><code>/dashboard/sources</code> (old links to <code>/sources</code> redirect): Snowflake catalog, External systems, Profile store, external ingestion pipelines. <code>/dashboard/sources/new</code> onboards a source.</dd>
+  <dt>Share onboarding</dt><dd>Pick a mounted share database (or mount one with the provider account and share name, which needs IMPORT SHARE), a schema and tables. One action creates a run and takes it through register, access and landing: each table is unloaded once to Snappy Parquet on <code>SOURCE.LANDING_STAGE</code>, the landing table is created with the source's exact types and filled with <code>COPY INTO ... MATCH_BY_COLUMN_NAME = CASE_INSENSITIVE</code> (procedure <code>SOURCE.EXECUTE_STAGED_LANDING</code>). The run then continues on its own pages.</dd>
+  <dt>External pipelines</dt><dd>For systems loaded by the ingestion tool (SnapLogic): the intake questions are the platform setting <code>INGESTION_INTAKE_FORM</code> (sections of fields; editable through <code>PUT /api/hub/intake-form</code>). Answers become one row of <code>PLATFORM_CONFIG.INGESTION_PIPELINE_CATALOG</code>; password and other secret answers are encrypted with <code>AIP_SECRET_KEY</code> before they are stored. The platform never calls the ingestion tool.</dd>
   <dt>Snowflake catalog</dt><dd>Pick a database and schema, select tables, Profile (only tables without a current profile) or Profile all from scratch. Profiling runs where the data lives and never copies it. "Start modeling" creates a run from the selection.</dd>
   <dt>External systems</dt><dd>File upload, S3, Azure Blob, GCS: files go through a stage, then INFER_SCHEMA and COPY INTO <code>&lt;db&gt;.EXT_&lt;SOURCE&gt;</code>, then profile like any table. PostgreSQL, SQL Server, MySQL, Salesforce and REST are registered only; they land through a Snowflake connector enabled by an account admin. Uploads: CSV, Parquet or JSON, up to 200 MB per file.</dd>
   <dt>Oracle</dt><dd>Wizard: Connection, Access, Verify (ten checks), then browse, preview, profile in Oracle and land with full refresh, append or merge. Two runtimes: <strong>snowflake</strong> (procedure with a PASSWORD secret and an external access integration for that host only) and <strong>api_host</strong> (password read from an environment variable named on the source). Incremental schedules (merge or append, preset or cron) are Snowflake tasks and only work in the snowflake runtime.</dd>
   <dt>Privileges</dt><dd><span class="chip p">SOURCE.CONNECT</span> create and configure sources, Oracle setup and schedules. <span class="chip p">PROFILE.RUN</span> profile, upload, land, preview, ingest. <span class="chip p">RUN.CREATE</span> start modeling.</dd>
   <dt>Configure first</dt><dd>For buckets: a Snowflake STORAGE INTEGRATION. For Oracle: a read-only Oracle user with CREATE SESSION and SELECT on the owner schema (grant script shown in the wizard). The platform never stores credentials, only the names of Snowflake secrets and integrations.</dd>
   <dt>Limits</dt><dd>Merge needs a primary key. Tables without a watermark are read in full on every scheduled run.</dd>
+</dl>
+
+<h3 id="f-profiling">Profiling hub</h3>
+<dl class="feature-meta">
+  <dt>Page</dt><dd><code>/dashboard/profiling</code></dd>
+  <dt>What it does</dt><dd>Every profiled table across every run, from <code>GOVERNANCE.DATA_PROFILES</code> (one row per column per profiling pass; tables profiled before V036 show from the profile store until they are profiled again). Filter by domain, table, run, tag and your bookmarks; cards or grid. The table drawer shows the scorecard, drift against the live table and against the previous pass, per-column null and distinct ratios and distributions, and actions: bookmark, re-profile, Soda and Great Expectations checks, mappings, start a model.</dd>
+  <dt>Privileges</dt><dd>Reading and bookmarks: everyone signed in. <span class="chip p">PROFILE.RUN</span> re-profile.</dd>
+</dl>
+
+<h3 id="f-modeling">Modeling workspace</h3>
+<dl class="feature-meta">
+  <dt>Page</dt><dd><code>/dashboard/modeling</code></dd>
+  <dt>What it does</dt><dd>Map onto an existing domain, fork one under a new name, or create a new domain. Entities can be seeded from profiled tables (keys and foreign keys from the profiles, or the AI designer with the MODELING stage skills). The ER canvas edits entities, columns, keys and relationships and shows Snowflake or Iceberg target types. Preview renders <code>domain_pack.json</code>, DDL and dbt staging and mart models. Designs are versioned in <code>GOVERNANCE.MODEL_DESIGNS</code>.</dd>
+  <dt>Git branches</dt><dd>Finalize stores the rendered files; Publish calls <code>CODEGEN.PUBLISH_DBT_PR</code>, which reads the finalized files from the table and pushes <code>feature/model-&lt;domain&gt;-&lt;timestamp&gt;</code> to a connected GitHub repository with a draft pull request. Needs the GitHub publishing setup.</dd>
+  <dt>Privileges</dt><dd><span class="chip p">MODEL.EDIT</span> save and finalize. <span class="chip p">AI.USE</span> propose with AI. <span class="chip p">DBT.EDIT</span> publish.</dd>
+</dl>
+
+<h3 id="f-sttm-catalog">STTM catalog</h3>
+<dl class="feature-meta">
+  <dt>Page</dt><dd><code>/dashboard/sttm</code></dd>
+  <dt>What it does</dt><dd>Every version of every source-to-target mapping in <code>GOVERNANCE.STTM_CATALOG</code>, kept after the run is archived. STTM generation, transformation edits and join edits in a run add versions automatically. Search by source or target entity, edit mapping type, transformation and business rule inline (each save is a new version), compare two versions, and export a version as a dbt project zip. Catalog edits do not change the run's own STTM.</dd>
+  <dt>Privileges</dt><dd>Reading, comparing and exporting: everyone signed in. <span class="chip p">STTM.EDIT</span> edits (routed to STTM_APPROVER by the default policy).</dd>
+</dl>
+
+<h3 id="f-quality-center">QA and Data Quality Center</h3>
+<dl class="feature-meta">
+  <dt>Page</dt><dd><code>/dashboard/quality</code></dd>
+  <dt>What it does</dt><dd>Read-only monitoring: Soda scans and QA runs in one timeline with their results, readiness gates per run (data quality health of at least 90 with no failed checks, QA tests without failures, QA signed off, no open linked Jira issue), QA suites and data quality check packs with the Soda kit and the Great Expectations suite, and open Jira incidents. Fixes and sign-offs stay on the run pages and in the QA workspace.</dd>
+  <dt>Access</dt><dd>Everyone signed in; Jira links follow the row access policy on <code>JIRA.ISSUE_LINK</code>.</dd>
+</dl>
+
+<h3 id="f-onboarding">Onboarding hub</h3>
+<dl class="feature-meta">
+  <dt>Page</dt><dd><code>/dashboard/onboarding</code></dd>
+  <dt>What it does</dt><dd>Domain onboarding: upload <code>domain_pack.json</code> and its contract (YAML with domain, tables and columns, or the platform's markdown contract). Both are validated as a dry run (<code>POST /api/hub/onboarding/validate</code>); importing uses the existing domain import. Application onboarding is shown as coming soon.</dd>
+  <dt>Privileges</dt><dd><span class="chip p">DOMAIN.EDIT</span> import.</dd>
 </dl>
 
 <h3 id="f-runs">Runs and pipeline stages</h3>
@@ -851,7 +892,7 @@ cd apps/api; python -m app.worker</code></pre>
 <h3 id="sec-inventory">Secret inventory</h3>
 <div class="tablebox"><table>
 <tr><th>Secret</th><th>Where it lives</th><th>How it is set</th><th>If it changes</th></tr>
-<tr><td><code>AIP_SECRET_KEY</code></td><td>API and worker host (<code>.env</code> or environment)</td><td>Generate a random key</td><td>The Airflow push secret and Teams webhooks must be entered again</td></tr>
+<tr><td><code>AIP_SECRET_KEY</code></td><td>API and worker host (<code>.env</code> or environment)</td><td>Generate a random key</td><td>The Airflow push secret, Teams webhooks and the secret answers of external ingestion pipelines must be entered again</td></tr>
 <tr><td><code>JIRA_TOKEN_KEY</code></td><td>API host</td><td>Generate a random key</td><td>Every person must connect Jira again</td></tr>
 <tr><td><code>JIRA_CLIENT_SECRET</code></td><td>API host</td><td>Copied from the Atlassian app's Settings page</td><td>Update after rotating it in Atlassian; restart</td></tr>
 <tr><td><code>JIRA_BOT_TOKEN</code></td><td>Worker and API host</td><td>Atlassian API token (id.atlassian.com, Security)</td><td>Incident tickets stop until replaced</td></tr>
@@ -946,7 +987,8 @@ cd apps/api; python -m app.worker</code></pre>
 <tr><td>QUALITY</td><td>Data quality scans and QA executions</td></tr>
 <tr><td>MODELING</td><td>Versioned target model designs</td></tr>
 <tr><td>AUDIT</td><td>Agent tool calls and AI cost</td></tr>
-<tr><td>GOVERNANCE</td><td>App roles, privileges, policies, change requests</td></tr>
+<tr><td>GOVERNANCE</td><td>App roles, privileges, policies, change requests; tenant-wide profile, STTM and model design catalogs</td></tr>
+<tr><td>PLATFORM_CONFIG</td><td>Catalogs maintained by the app and read by external tools: the ingestion pipeline catalog</td></tr>
 <tr><td>CODE</td><td>Indexed client repositories</td></tr>
 <tr><td>JIRA</td><td>OAuth tokens, issue links, action log, saved filters</td></tr>
 <tr><td>OPS</td><td>Airflow runs, incidents, teams, routing, notifications</td></tr>
@@ -1017,6 +1059,11 @@ cd apps/api; python -m app.worker</code></pre>
 <tr><td>GOVERNANCE.APPROVAL_POLICY, SETTING</td><td>Config</td><td>Approval rules and governance settings</td><td>Admin, Access</td></tr>
 <tr><td>GOVERNANCE.CHANGE_REQUEST</td><td>Log</td><td>Requests waiting for approval and their results</td><td>Governance</td></tr>
 <tr><td>GOVERNANCE.GOVERNANCE_EVENT</td><td>Log</td><td>Governance audit log</td><td>Governance</td></tr>
+<tr><td>GOVERNANCE.DATA_PROFILES (view PERSISTENT_PROFILES)</td><td>Content</td><td>Column profile per profiling pass, across runs</td><td>Profiling (copied from each pass)</td></tr>
+<tr><td>GOVERNANCE.PROFILE_BOOKMARK</td><td>Config</td><td>Tables a person bookmarked</td><td>Profiling hub</td></tr>
+<tr><td>GOVERNANCE.STTM_CATALOG</td><td>Content</td><td>Every version of every mapping with its full line set</td><td>STTM steps, STTM catalog edits</td></tr>
+<tr><td>GOVERNANCE.MODEL_DESIGNS</td><td>Content</td><td>Modeling hub designs, rendered files and their branch and pull request</td><td>Modeling hub, GitHub publisher</td></tr>
+<tr><td>PLATFORM_CONFIG.INGESTION_PIPELINE_CATALOG</td><td>Config</td><td>External sources for the ingestion tool: intake answers, sealed secrets, schedule, landing table, pipeline name</td><td>Source Hub</td></tr>
 <tr><td>CODE.REPO</td><td>Config</td><td>Connected repositories and dbt settings</td><td>Integrations</td></tr>
 <tr><td>CODE.CODE_FILE, CODE_CHUNK, CODE_EDGE</td><td>Content</td><td>Indexed files, code chunks (source of code search), lineage edges</td><td>INDEX_REPO</td></tr>
 <tr><td>CODE.REPO_SUMMARY, INDEX_RUN, CODE_USAGE</td><td>Content / Log</td><td>Summaries, index runs, code quoted into prompts</td><td>Code index</td></tr>
@@ -1051,7 +1098,8 @@ cd apps/api; python -m app.worker</code></pre>
 <tr><td>CONTRACT.GENERATE_STTM, UPDATE_JOIN_GRAPH, REFINE_TRANSFORMATION, APPLY_TRANSFORMATION, EXPORT_STTM_CSV</td><td>STTM build and edits</td><td>STTM</td></tr>
 <tr><td>CONTRACT.GENERATE_SODA, IMPORT_CLIENT_EXPECTATIONS, SAVE_SODA_DECISIONS, BACKTEST_SODA</td><td>Data quality checks</td><td>Data Quality</td></tr>
 <tr><td>CONTRACT.QA_SUITE, QA_ASK, QA_SAVE, QA_TABLE_SUITE, QA_TABLE_ASK, QA_TABLE_SAVE</td><td>QA tests for runs and tables</td><td>QA</td></tr>
-<tr><td>CODEGEN.GENERATE_DBT / VALIDATE_DBT / PUBLISH_DBT_PR</td><td>Generate, validate, publish dbt</td><td>dbt, validation</td></tr>
+<tr><td>CODEGEN.GENERATE_DBT / VALIDATE_DBT / PUBLISH_DBT_PR</td><td>Generate, validate, publish dbt; also publishes finalized model designs to <code>feature/model-*</code> branches</td><td>dbt, validation, Modeling hub</td></tr>
+<tr><td>SOURCE.EXECUTE_STAGED_LANDING</td><td>Land selected share objects through SOURCE.LANDING_STAGE (Parquet unload, COPY INTO)</td><td>Source Hub share onboarding</td></tr>
 <tr><td>CODE.INDEX_REPO</td><td>Incremental code index refresh</td><td>Code, scheduled task</td></tr>
 <tr><td>JIRA.TRIAGE_ISSUE / TRIAGE_TABLE / RESOLVE_TARGETS</td><td>AI triage of a ticket against a run or table; rank candidate tables</td><td>QA, Jira</td></tr>
 <tr><td>EXT_&lt;SOURCE&gt;.ORACLE_RUN</td><td>Oracle test, catalog, preview, profile, extract</td><td>Oracle pages, schedule task</td></tr>
@@ -1087,6 +1135,9 @@ cd apps/api; python -m app.worker</code></pre>
 <tr><td>V027 to V029</td><td>JIRA schema, QA workspace and QA_ENGINEER, saved filters</td></tr>
 <tr><td>V030 to V032</td><td>OPS schema, incidents, AI diagnosis grants</td></tr>
 <tr><td>V033</td><td>Row access policy: each person sees only their own Jira token and sign-in rows</td></tr>
+<tr><td>V034</td><td>CASES schema with the domain row access policy</td></tr>
+<tr><td>V035</td><td>PLATFORM_CONFIG.INGESTION_PIPELINE_CATALOG, SOURCE.LANDING_STAGE and the Parquet format</td></tr>
+<tr><td>V036</td><td>GOVERNANCE catalogs: DATA_PROFILES, PROFILE_BOOKMARK, STTM_CATALOG (backfilled from existing STTMs), MODEL_DESIGNS</td></tr>
 </table></div>
 
 <!-- ============================================================ 07 -->
@@ -1112,6 +1163,9 @@ cd apps/api; python -m app.worker</code></pre>
 <tr><td>Airflow push</td><td>ops/ingest</td><td>None (signature checked)</td></tr>
 <tr><td>Admin</td><td>read admin / platform config and rules / deploy / governance writes</td><td>ADMIN.VIEW / CONFIG.EDIT / ADMIN.DEPLOY / ROLE.MANAGE</td></tr>
 <tr><td>Audit</td><td>audit events and costs</td><td>AUDIT.VIEW</td></tr>
+<tr><td>Source Hub</td><td>hub/sources/share/onboard / hub/pipelines create and change / hub/intake-form</td><td>RUN.CREATE / SOURCE.CONNECT (never queued: carries secrets) / CONFIG.EDIT</td></tr>
+<tr><td>Catalogs</td><td>hub/profiles/reprofile / hub/sttm/*/edit / bookmarks, diffs, exports, expectations</td><td>PROFILE.RUN / STTM.EDIT / None</td></tr>
+<tr><td>Modeling hub</td><td>hub/models/propose / save and finalize / publish / validate and render</td><td>AI.USE / MODEL.EDIT / DBT.EDIT / None</td></tr>
 </table></div>
 
 <!-- ============================================================ 08 -->

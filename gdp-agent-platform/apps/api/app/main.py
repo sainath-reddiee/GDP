@@ -6374,3 +6374,14 @@ app.include_router(incidents_router)
 from app.cases_api import router as cases_router  # noqa: E402
 
 app.include_router(cases_router)
+
+# lifecycle hubs (/dashboard/*): sources, profiling and STTM catalogs, modeling, quality and onboarding
+from app.hub_sources_api import router as hub_sources_router  # noqa: E402
+from app.hub_catalog_api import router as hub_catalog_router  # noqa: E402
+from app.hub_models_api import router as hub_models_router  # noqa: E402
+from app.hub_quality_api import router as hub_quality_router  # noqa: E402
+
+app.include_router(hub_sources_router)
+app.include_router(hub_catalog_router)
+app.include_router(hub_models_router)
+app.include_router(hub_quality_router)

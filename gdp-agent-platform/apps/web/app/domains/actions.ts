@@ -26,7 +26,7 @@ export async function importPack(pack: Pack) {
   );
   if (result.ok) {
     revalidatePath("/domains");
-    revalidatePath("/sources");
+    revalidatePath("/dashboard/sources");
   }
   return result;
 }
@@ -34,7 +34,7 @@ export async function importPack(pack: Pack) {
 
 function refreshDomains() {
   revalidatePath("/domains");
-  revalidatePath("/sources");
+  revalidatePath("/dashboard/sources");
 }
 
 /** Soft delete of a UI-added domain; `force` also deletes it when runs are still in flight. */

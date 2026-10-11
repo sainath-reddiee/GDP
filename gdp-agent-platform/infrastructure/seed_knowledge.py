@@ -8,6 +8,7 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from services.source.pipelines import DEFAULT_FORM as INTAKE_FORM
 from services.knowledge.skills import category_for
 from services.knowledge.packs import (GDP_DOMAIN_ID, GDP_TABLE_ID, LiveColumns, _dumps, _stable_id,  # noqa: F401
                                       domain_id, merge, merge_columns, pack_rows)
@@ -38,6 +39,8 @@ PLATFORM_CONFIG = [
       "hidden_target_schemas": ["GDP_SILVER"], "hidden_target_ids": ["00000000-0000-4000-a000-000000000002"],
       "hidden_domain_names": ["GDP"], "strip_tokens": ["GDP"]},
      "Catalog objects hidden from task screens and product tokens stripped from suggested names (editable in Admin)"),
+    ("INGESTION_INTAKE_FORM", INTAKE_FORM,
+     "Questions the Source Hub asks for an external pipeline; answers go to PLATFORM_CONFIG.INGESTION_PIPELINE_CATALOG"),
 ]
 
 

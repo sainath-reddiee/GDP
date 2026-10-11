@@ -19,7 +19,7 @@ export async function saveEntityTags(entityType: TagType, key: string, tags: str
     method: "PUT", body: JSON.stringify({ tags }),
   }));
   if (r.ok) {
-    revalidatePath(entityType === "RUN" ? "/runs" : "/sources");
+    revalidatePath(entityType === "RUN" ? "/runs" : "/dashboard/sources");
   }
   return r;
 }
