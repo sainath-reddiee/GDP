@@ -33,8 +33,7 @@ export default async function SourceHub({ searchParams }: { searchParams: { db?:
              action={<Link href="/dashboard/sources/new?branch=external" className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline"><Plus className="h-3.5 w-3.5" /> Register</Link>}>
         {!pipes.deployed ? <NotDeployed what="The ingestion pipeline catalog" /> : <PipelineTable pipelines={pipes.pipelines} />}
       </Panel>
-      <section>
-        <h2 className="mb-3 text-sm font-semibold text-muted-foreground">Snowflake catalog</h2>
+      <section className="border-t border-border/70 pt-6">
         <SourcesSection searchParams={searchParams} />
       </section>
     </div>

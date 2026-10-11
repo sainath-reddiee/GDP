@@ -48,8 +48,8 @@ export function SttmEditor({ entry, versions, latest }: { entry: SttmEntry; vers
   });
 
   return (
-    <div className="grid gap-5 xl:grid-cols-[1fr_20rem]">
-      <div className="space-y-3">
+    <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_20rem]">
+      <div className="min-w-0 space-y-3">
         {error && <ErrorNote>{error}</ErrorNote>}
         {!editable && (
           <p className="rounded-lg bg-muted px-3 py-2 text-sm text-muted-foreground">
@@ -87,11 +87,11 @@ export function SttmEditor({ entry, versions, latest }: { entry: SttmEntry; vers
                         </Select>
                       ) : <span className="text-xs">{String(value(l, "mapping_type")).toLowerCase()}</span>}
                     </td>
-                    <td className="min-w-[16rem] px-3 py-2">
+                    <td className="min-w-[13rem] px-3 py-2">
                       {open ? <Textarea aria-label="Transformation" className="min-h-16 font-mono text-xs" value={String(value(l, "transformation"))} onChange={(e) => set(l, "transformation", e.target.value)} />
                         : <code className="whitespace-pre-wrap break-all text-[11px]">{String(value(l, "transformation")) || <span className="text-muted-foreground">as is</span>}</code>}
                     </td>
-                    <td className="min-w-[12rem] px-3 py-2">
+                    <td className="min-w-[9rem] px-3 py-2">
                       {open ? <Input aria-label="Business rule" className="text-xs" value={String(value(l, "business_rule"))} onChange={(e) => set(l, "business_rule", e.target.value)} />
                         : <span className="text-xs text-muted-foreground">{String(value(l, "business_rule")) || "-"}</span>}
                     </td>

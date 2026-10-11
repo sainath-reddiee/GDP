@@ -154,8 +154,8 @@ export function ModelingWorkspace({ ctx, initialTables, initialDesign }: { ctx: 
       {error && <ErrorNote>{error}</ErrorNote>}
       {notice && <p className="rounded-lg bg-accent px-3 py-2 text-sm text-accent-foreground">{notice}</p>}
 
-      <div className="grid gap-4 xl:grid-cols-[1fr_24rem]">
-        <div className="space-y-3">
+      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_24rem]">
+        <div className="min-w-0 space-y-3">
           <ErCanvas entities={spec.design.entities} relationships={spec.relationships} platform={spec.target_platform}
                     selected={selected} onSelect={setSelected} className="h-[560px]" />
           <div className="flex flex-wrap items-center gap-2">

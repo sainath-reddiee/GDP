@@ -12,6 +12,7 @@ const MAX_ROWS = 14;
 const GAP_X = 90;
 const GAP_Y = 46;
 const PAD = 30;
+const TOP = 56; // room for the legend chip in the top-left corner
 
 /** The Snowflake-managed Iceberg type for a Snowflake type; mirrors services/catalog/models.py iceberg_type. */
 export function icebergType(datatype: string): string {
@@ -44,7 +45,7 @@ function autoLayout(entities: ModelEntity[], rels: ModelRelationship[]): Pos {
   const referenced = new Set(rels.map((r) => r.to_entity));
   const ordered = [...entities].sort((a, b) => Number(referenced.has(b.entity_name)) - Number(referenced.has(a.entity_name)));
   const cols = Math.max(1, Math.ceil(Math.sqrt(ordered.length)));
-  const colY = Array.from({ length: cols }, () => PAD);
+  const colY = Array.from({ length: cols }, () => TOP);
   const pos: Pos = {};
   ordered.forEach((e, i) => {
     const c = i % cols;

@@ -77,7 +77,7 @@ def search_profiles(domain: Optional[str] = None, table: Optional[str] = None, r
         rows = db.query(sql, params)
     except Exception:
         rows, deployed = [], False
-    total = int(rows[0]["total"]) if rows else 0
+    total = int(rows[0].get("total") or len(rows)) if rows else 0
     for r in rows:
         r.pop("total", None)
         r["semantic_types"] = [t for t in (_json(r.get("semantic_types")) or []) if t]
@@ -224,7 +224,7 @@ def search_sttm(q: Optional[str] = None, source: Optional[str] = None, target: O
         rows = db.query(sql, params)
     except Exception:
         return {"mappings": [], "total": 0, "deployed": False}
-    total = int(rows[0]["total"]) if rows else 0
+    total = int(rows[0].get("total") or len(rows)) if rows else 0
     for r in rows:
         r.pop("total", None)
         r["source_entities"] = _json(r.get("source_entities")) or []
