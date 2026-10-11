@@ -275,13 +275,99 @@ def sync_model_prs(session, request: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
+def publish_dq_suite(session, request: Dict[str, Any]) -> Dict[str, Any]:
+    """An APPROVED data quality suite version (one table's checks) as a branch feature/dq-<table>-v<version> with a pull
+    request: the SodaCL file and the Great Expectations suite under dq/<domain>/. The files are rendered here from the
+    approved checks; the version stays APPROVED until the pull request is merged (sync_dq_prs marks it PUBLISHED)."""
+    from services.catalog import dq_suite
+
+    suite_id, version = str(request.get("suite_id") or ""), int(request.get("version") or 0)
+    head = github.check_branch(str(request.get("head") or ""))
+    assert head.startswith("feature/dq-"), "a data quality branch starts with feature/dq-"
+    found = rows(session, """SELECT V.STATUS, V.CHECKS, S.TABLE_NAME, S.DOMAIN_ID, D.DOMAIN_NAME
+                              FROM GOVERNANCE.DQ_SUITE_VERSION V JOIN GOVERNANCE.DQ_SUITE S ON S.SUITE_ID = V.SUITE_ID
+                              LEFT JOIN KNOWLEDGE.DOMAIN_REGISTRY D ON D.DOMAIN_ID = S.DOMAIN_ID
+                             WHERE V.SUITE_ID = ? AND V.VERSION = ?""", [suite_id, version])
+    assert found, "suite version not found"
+    assert found[0]["STATUS"] == "APPROVED", "only an approved data quality suite version is published"
+    table = found[0]["TABLE_NAME"]
+    files = dq_suite.artifacts(table, found[0].get("DOMAIN_NAME"), list(variant(found[0]["CHECKS"]) or []))
+    repo_id = str(request.get("repo_id") or "")
+    repo = _repo(session, repo_id)
+    origin, base_branch = repo["GIT_URL"], str(request.get("base") or repo["BRANCH"] or "main")
+    title = clip(request.get("title") or f"Data quality checks {table} v{version} (approved)", 200)
+    body = clip(f"Data quality suite of {table} v{version}, approved in the Data Quality Store.\n\nFiles:\n"
+                + "\n".join(f"- {p}" for p in sorted(files)), 6000)
+    with tool_call(session, None, "publish_dq_suite", {"suite_id": suite_id, "version": version, "head": head}) as call:
+        try:
+            result = github.publish(github.urllib_request(_token()), origin, base_branch, head, files, title=title,
+                                    body=body, message=title, draft=False)
+            call.summary = f"{result['status']} {head}: PR {(result.get('pull_request') or {}).get('url') or 'none'}"
+        except Exception as exc:
+            result = {**github.explain(exc, origin), "base_branch": base_branch, "head_branch": head}
+            result["detail"] = clip(result.get("detail"), 1000)
+            call.status, call.error = "FAILED", clip(exc)
+    pr = result.get("pull_request") or {}
+    state = ("OPEN" if pr.get("url") else None) if result.get("status") == "PUBLISHED" else (
+        "NO_CHANGES" if result.get("status") == "NO_CHANGES" else "FAILED")
+    status = "PUBLISHED" if state == "NO_CHANGES" else "APPROVED"
+    session.sql("""UPDATE GOVERNANCE.DQ_SUITE_VERSION SET STATUS = ?, REPO_ID = ?, BRANCH = ?, PR_URL = NULLIF(?, ''),
+                          PR_NUMBER = NULLIF(?, '')::NUMBER, PR_STATE = ?, PUBLISH_RESULT = PARSE_JSON(?),
+                          PR_SYNCED_AT = CURRENT_TIMESTAMP(), UPDATED_AT = CURRENT_TIMESTAMP()
+                    WHERE SUITE_ID = ? AND VERSION = ?""",
+                params=[status, repo_id, head, pr.get("url") or "", str(pr.get("number") or ""), state,
+                        json.dumps(result, default=str), suite_id, version]).collect()
+    return result
+
+
+def sync_dq_prs(session, request: Dict[str, Any]) -> Dict[str, Any]:
+    """The data quality suite counterpart of sync_model_prs: merged marks the version PUBLISHED, closed leaves it
+    APPROVED with PR_STATE CLOSED. Versions synced in the last minute are skipped unless `force`."""
+    suite_id = str(request.get("suite_id") or "")
+    where = "V.PR_NUMBER IS NOT NULL AND V.PR_STATE IN ('OPEN', 'DRAFT') AND V.REPO_ID IS NOT NULL"
+    params: List[Any] = []
+    if suite_id:
+        where += " AND V.SUITE_ID = ?"
+        params.append(suite_id)
+    if not request.get("force"):
+        where += " AND (V.PR_SYNCED_AT IS NULL OR V.PR_SYNCED_AT < DATEADD('second', -60, CURRENT_TIMESTAMP()))"
+    try:
+        found = rows(session, f"""SELECT V.SUITE_ID, V.VERSION, V.PR_NUMBER, R.GIT_URL FROM GOVERNANCE.DQ_SUITE_VERSION V
+                                   JOIN CODE.REPO R ON R.REPO_ID = V.REPO_ID WHERE {where} LIMIT 200""", params)
+    except Exception as exc:  # before V040
+        return {"checked": 0, "merged": [], "closed": [], "errors": [{"error": clip(exc, 300)}]}
+    request_fn = github.urllib_request(_token()) if found else None
+    out: Dict[str, Any] = {"checked": 0, "merged": [], "closed": [], "errors": []}
+    for r in found:
+        try:
+            pr = github.pull_status(request_fn, r["GIT_URL"], int(r["PR_NUMBER"]))
+        except Exception as exc:
+            out["errors"].append({"suite_id": r["SUITE_ID"], "version": int(r["VERSION"]), "error": clip(exc, 300)})
+            continue
+        out["checked"] += 1
+        status_sql = ", STATUS = 'PUBLISHED'" if pr["state"] == "MERGED" else ""
+        session.sql(f"""UPDATE GOVERNANCE.DQ_SUITE_VERSION SET PR_STATE = ?, MERGED_SHA = NULLIF(?, ''),
+                               PR_SYNCED_AT = CURRENT_TIMESTAMP(){status_sql}
+                         WHERE SUITE_ID = ? AND VERSION = ? AND STATUS IN ('APPROVED', 'PUBLISHED')""",
+                    params=[pr["state"], pr.get("merge_commit_sha") or "", r["SUITE_ID"], int(r["VERSION"])]).collect()
+        if pr["state"] in ("MERGED", "CLOSED"):
+            out[pr["state"].lower()].append({"suite_id": r["SUITE_ID"], "version": int(r["VERSION"])})
+    return out
+
+
+def sync_git_prs(session, request: Dict[str, Any]) -> Dict[str, Any]:
+    """Every governed pull request: domain models and data quality suites (the scheduled task)."""
+    return {"models": sync_model_prs(session, request), "dq_suites": sync_dq_prs(session, request)}
+
+
 def sync_task_sql(database: str, warehouse: str) -> List[str]:
-    """A task that syncs domain model pull requests every 30 minutes (created with the publisher)."""
+    """A task that syncs governed pull requests (domain models, data quality suites) every 30 minutes (created with the
+    publisher)."""
     for value in (database, warehouse):
         assert NAME.match(value or ""), f"unsafe identifier: {value}"
     return [f"CREATE OR REPLACE TASK {database}.CODEGEN.SYNC_MODEL_PRS_TASK WAREHOUSE = {warehouse} "
-            f"SCHEDULE = '30 MINUTE' COMMENT = 'Model Workbench: read the state of domain model pull requests' "
-            f"AS CALL {database}.CODEGEN.PUBLISH_DBT_PR('', '{{\"sync_model_prs\": {{}}}}')",
+            f"SCHEDULE = '30 MINUTE' COMMENT = 'Read the state of domain model and data quality suite pull requests' "
+            f"AS CALL {database}.CODEGEN.PUBLISH_DBT_PR('', '{{\"sync_git_prs\": {{}}}}')",
             f"ALTER TASK {database}.CODEGEN.SYNC_MODEL_PRS_TASK RESUME"]
 
 
@@ -295,6 +381,12 @@ def publish_dbt_pr(session, run_id: str, payload_json: str = "{}") -> Dict[str, 
         return publish_domain_model(session, payload["domain_model"])
     if not run_id and isinstance(payload.get("sync_model_prs"), dict):
         return sync_model_prs(session, payload["sync_model_prs"])
+    if not run_id and isinstance(payload.get("dq_suite"), dict):
+        return publish_dq_suite(session, payload["dq_suite"])
+    if not run_id and isinstance(payload.get("sync_dq_prs"), dict):
+        return sync_dq_prs(session, payload["sync_dq_prs"])
+    if not run_id and isinstance(payload.get("sync_git_prs"), dict):
+        return sync_git_prs(session, payload["sync_git_prs"])
     plan = _plan(session, run_id, payload) if run_id else dict(payload)
     if payload.get("check_only"):
         try:

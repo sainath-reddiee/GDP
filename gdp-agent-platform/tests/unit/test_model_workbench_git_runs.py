@@ -138,7 +138,7 @@ def test_sync_model_prs_marks_merged_and_closed(monkeypatch):
 
 def test_sync_task_sql():
     stmts = publish.sync_task_sql("AIP", "COMPUTE_WH")
-    assert "SCHEDULE = '30 MINUTE'" in stmts[0] and '{"sync_model_prs": {}}' in stmts[0] and stmts[1].endswith("RESUME")
+    assert "SCHEDULE = '30 MINUTE'" in stmts[0] and '{"sync_git_prs": {}}' in stmts[0] and stmts[1].endswith("RESUME")
     with pytest.raises(AssertionError):
         publish.sync_task_sql("AIP;DROP", "WH")
 

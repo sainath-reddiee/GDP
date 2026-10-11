@@ -316,3 +316,18 @@ CREATE OR REPLACE PROCEDURE {{database}}.QUALITY.RUN_TABLE_SCAN(TABLE_FQN VARCHA
   EXECUTE AS OWNER;
 
 GRANT USAGE ON PROCEDURE {{database}}.QUALITY.RUN_TABLE_SCAN(VARCHAR) TO DATABASE ROLE {{database}}.DATA_ENGINEER;
+
+-- Data Quality suites (V040): put an approved suite version (one table's reviewed checks) into the catalog the scanner
+-- and the schedules read. Owner's rights, so approvers need no write grant on the catalog.
+CREATE OR REPLACE PROCEDURE {{database}}.QUALITY.APPLY_DQ_SUITE(SUITE_ID VARCHAR, SUITE_VERSION NUMBER)
+  RETURNS VARIANT
+  LANGUAGE PYTHON
+  RUNTIME_VERSION = '3.11'
+  PACKAGES = ('snowflake-snowpark-python')
+  IMPORTS = ('{{services_import}}')
+  HANDLER = 'services.catalog.dq_suite.apply_suite_version'
+  COMMENT = 'Put an approved data quality suite version into the checks catalog'
+  EXECUTE AS OWNER;
+
+GRANT USAGE ON PROCEDURE {{database}}.QUALITY.APPLY_DQ_SUITE(VARCHAR, NUMBER) TO DATABASE ROLE {{database}}.DATA_ENGINEER;
+GRANT USAGE ON PROCEDURE {{database}}.QUALITY.APPLY_DQ_SUITE(VARCHAR, NUMBER) TO DATABASE ROLE {{database}}.REVIEWER;

@@ -1,13 +1,14 @@
 "use client";
 
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState, useTransition } from "react";
 import {
-  CalendarClock, ChevronRight, ClipboardCheck, Columns3, Loader2, MoreHorizontal, Pause, Pencil, Play, Plus, Search, Sparkles,
-  Table2, Trash2, Wand2,
+  CalendarClock, ChevronRight, ClipboardCheck, Columns3, GitPullRequestDraft, History, Loader2, MoreHorizontal, Pause, Pencil, Play,
+  Plus, Search, Sparkles, Table2, Trash2, Wand2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import type { DqCheck, DqHistory, DqTable } from "@/lib/store-types";
+import type { DqCheck, DqHistory, DqSuiteState, DqTable } from "@/lib/store-types";
 import { Button } from "@/components/ui/button";
 import { Input, Label, Select } from "@/components/ui/input";
 import { Modal } from "@/components/hub/overlay";
@@ -16,7 +17,7 @@ import { CheckEditor, cleanDefinition, type Draft } from "@/components/quality/c
 import { Spark } from "@/components/quality/quality-shared";
 import { useDismiss } from "@/components/shell/use-dismiss";
 import { useToast } from "@/components/ui/toast";
-import { loadHistory, previewCheck, runTable, saveCheck, seedChecks, setCheckStatus, setSchedule, type Parsed } from "./actions";
+import { loadHistory, previewCheck, runTable, saveCheck, seedChecks, setCheckStatus, setSchedule, type Parsed, type Staged } from "./actions";
 
 const ORIGIN: Record<DqCheck["origin"], string> = { PROFILE: "profile", RUN: "run", USER: "user" };
 const PRESETS = [
@@ -28,15 +29,25 @@ function describeCron(cron: string) {
   return PRESETS.find((p) => p.cron === cron.trim())?.label ?? cron;
 }
 
+export const suiteHref = (table: string, tab?: string) =>
+  `/dashboard/dq-store/suite?table=${encodeURIComponent(table)}${tab ? `&tab=${tab}` : ""}`;
+
+/** The toast for an edit that landed in a suite draft. */
+export function stagedMessage(d: Staged, what: string) {
+  return `${what} in draft v${d.version} of ${d.table.split(".").pop()}${d.draft_opened ? " (draft opened)" : ""}. Submit it for review to put it live.`;
+}
+
 // ---------------------------------------------------------------- add / edit a check
 
-function CheckModal({ table, check, columns, onClose }: { table: string; check?: DqCheck; columns: string[]; onClose: () => void }) {
+export type EditableCheck = Pick<DqCheck, "check_id" | "column_name" | "severity" | "check_definition"> & { requirement?: string | null };
+
+export function CheckModal({ table, check, columns, onClose }: { table: string; check?: EditableCheck; columns: string[]; onClose: () => void }) {
   const toast = useToast();
   const [tableName, setTableName] = useState(table);
   const [mode, setMode] = useState<"dsl" | "guided">(check ? "guided" : "dsl");
   const [dsl, setDsl] = useState("");
   const [draft, setDraft] = useState<Draft>(check
-    ? { target_column: check.column_name ?? "", severity: check.severity, requirement: "", definition: { ...check.check_definition } }
+    ? { target_column: check.column_name ?? "", severity: check.severity, requirement: check.requirement ?? "", definition: { ...check.check_definition } }
     : { target_column: "", severity: "WARN", requirement: "", definition: { kind: "not_null" } });
   const [preview, setPreview] = useState<Parsed | null>(null);
   const [pending, start] = useTransition();
@@ -56,18 +67,18 @@ function CheckModal({ table, check, columns, onClose }: { table: string; check?:
 
   const save = () => start(async () => {
     const r = await saveCheck(body());
-    if (r.ok) { toast("ok", check ? "Check updated" : `Check added to ${tableName}`); onClose(); }
+    if (r.ok) { toast("ok", stagedMessage(r.data, check ? "Check changed" : "Check added")); onClose(); }
     else if (r.pending) { toast("info", r.error); onClose(); }
     else toast("error", explain(r.error).message);
   });
 
   return (
     <Modal open onClose={onClose} wide title={check ? "Edit check" : "Add a data quality check"}
-           description="Type one line of SodaCL, or build the check with the guided editor. The neutral definition is stored and run; SodaCL is rendered from it."
+           description="Type one line of SodaCL, or build the check with the guided editor. It goes into the table's draft; the checks that run change when the draft is approved."
            footer={<>
              <Button variant="ghost" onClick={onClose}>Cancel</Button>
              <Button onClick={save} disabled={pending || tableName.split(".").length !== 3 || (preview != null && !preview.ok)} data-testid="save-check">
-               {pending && <Loader2 className="h-4 w-4 animate-spin" />} {check ? "Save check" : "Add check"}
+               {pending && <Loader2 className="h-4 w-4 animate-spin" />} {check ? "Save to draft" : "Add to draft"}
              </Button>
            </>}>
       <div className="space-y-4">
@@ -161,7 +172,7 @@ function SeedModal({ onClose, tables }: { onClose: () => void; tables: string[] 
   const [pending, start] = useTransition();
   const seed = () => start(async () => {
     const r = await seedChecks(mode === "table" ? { table: value.trim() } : { run_id: value.trim() });
-    if (r.ok) { toast("ok", `${r.data.added} check${r.data.added === 1 ? "" : "s"} added to ${r.data.table}${r.data.skipped ? `, ${r.data.skipped} already there` : ""}`); onClose(); }
+    if (r.ok) { toast("ok", stagedMessage(r.data, `${r.data.added ?? 0} check${r.data.added === 1 ? "" : "s"} added${r.data.skipped ? ` (${r.data.skipped} already there)` : ""}`)); onClose(); }
     else if (r.pending) { toast("info", r.error); onClose(); }
     else toast("error", explain(r.error).message);
   });
@@ -194,17 +205,18 @@ function SeedModal({ onClose, tables }: { onClose: () => void; tables: string[] 
 
 // ---------------------------------------------------------------- tree
 
-function CheckMenu({ check, onEdit, canEdit }: { check: DqCheck; onEdit: () => void; canEdit: boolean }) {
+function CheckMenu({ check, onEdit, canEdit, locked }: { check: DqCheck; onEdit: () => void; canEdit: boolean; locked?: boolean }) {
   const { open, setOpen, ref } = useDismiss();
   const toast = useToast();
   const [pending, start] = useTransition();
   const status = (s: "ACTIVE" | "PAUSED" | "RETIRED") => start(async () => {
     setOpen(false);
-    const r = await setCheckStatus(check.check_id, s);
-    if (r.ok) toast("ok", s === "ACTIVE" ? "Check resumed" : s === "PAUSED" ? "Check paused" : "Check retired");
+    const r = await setCheckStatus(check.check_id, s, check.table_name);
+    if (r.ok) toast("ok", stagedMessage(r.data, s === "ACTIVE" ? "Check resumed" : s === "PAUSED" ? "Check paused" : "Check removed"));
     else toast(r.pending ? "info" : "error", r.pending ? r.error : explain(r.error).message);
   });
   if (!canEdit) return null;
+  if (locked) return <span className="w-7" title="A version of this table is in review; withdraw it or have it decided to change checks" />;
   return (
     <div ref={ref} className="relative">
       <button type="button" aria-label="Check actions" onClick={() => setOpen(!open)} className="grid h-7 w-7 place-items-center rounded-lg text-muted-foreground hover:bg-muted">
@@ -221,6 +233,32 @@ function CheckMenu({ check, onEdit, canEdit }: { check: DqCheck; onEdit: () => v
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+/** Where the table's checks stand in review: the approved version that runs, and the open draft or review. */
+function SuiteStrip({ table, suite }: { table: string; suite?: DqSuiteState | null }) {
+  if (!suite) return null;
+  const open = suite.open_version != null;
+  return (
+    <div className={cn("flex flex-wrap items-center gap-2 border-t border-border/60 px-4 py-2 pl-12 text-xs",
+      suite.open_status === "IN_REVIEW" ? "bg-amber-50/60 dark:bg-amber-950/20" : open ? "bg-violet-50/50 dark:bg-violet-950/20" : "bg-muted/20")}
+         data-testid={`suite-${table.split(".").pop()}`}>
+      <History className="h-3.5 w-3.5 text-muted-foreground" />
+      <span>{suite.approved_version ? <>Running approved <strong>v{suite.approved_version}</strong>{suite.model_version ? <> · reviewed against domain model v{suite.model_version}</> : null}</> : "No approved version yet"}</span>
+      {open && (
+        <span className="flex items-center gap-1.5">
+          <GitPullRequestDraft className="h-3.5 w-3.5 text-violet-600" />
+          {suite.open_status === "IN_REVIEW"
+            ? <>v{suite.open_version} in review{suite.submitted_by ? ` (${suite.submitted_by})` : ""}</>
+            : <>Draft v{suite.open_version}{suite.open_authors.length ? ` by ${suite.open_authors.join(", ")}` : ""}</>}
+        </span>
+      )}
+      {suite.pr_state && <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-semibold">PR {suite.pr_state.toLowerCase()}</span>}
+      <Link href={suiteHref(table, open ? "review" : "versions")} className="ml-auto font-medium text-primary hover:underline">
+        {open ? (suite.open_status === "IN_REVIEW" ? "Review" : "Open draft") : "Versions"}
+      </Link>
     </div>
   );
 }
@@ -247,6 +285,8 @@ function TableBlock({ table, defaultOpen, canEdit, canRun, onAdd, onEdit, onSche
   });
   const c = table.counts;
   const failing = (c.FAIL ?? 0) + (c.ERROR ?? 0);
+  const suite = table.suite;
+  const inReview = suite?.open_status === "IN_REVIEW";
   const [db, schema, name] = table.table.split(".");
   return (
     <section className="surface overflow-hidden" data-testid={`dq-table-${name}`}>
@@ -281,9 +321,10 @@ function TableBlock({ table, defaultOpen, canEdit, canRun, onAdd, onEdit, onSche
           {canRun && <Button size="sm" variant="outline" onClick={run} disabled={pending} data-testid="run-table">
             {pending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />} Run now
           </Button>}
-          {canEdit && <Button size="sm" variant="ghost" onClick={onAdd} aria-label={`Add a check to ${table.table}`}><Plus className="h-4 w-4" /></Button>}
+          {canEdit && !inReview && <Button size="sm" variant="ghost" onClick={onAdd} aria-label={`Add a check to ${table.table}`}><Plus className="h-4 w-4" /></Button>}
         </div>
       </div>
+      <SuiteStrip table={table.table} suite={suite} />
       {open && (
         <div className="border-t border-border/70">
           {table.columns.map((col) => (
@@ -306,7 +347,7 @@ function TableBlock({ table, defaultOpen, canEdit, canRun, onAdd, onEdit, onSche
                   <span className="hidden text-right text-xs tabular-nums text-muted-foreground md:block" title={ck.last_run_at ?? undefined}>
                     {ck.last_measured != null ? Number(ck.last_measured).toLocaleString() : ""}{ck.last_run_at ? <span className="block">{ck.last_run_at.slice(5, 16)}</span> : null}
                   </span>
-                  <CheckMenu check={ck} canEdit={canEdit} onEdit={() => onEdit(ck)} />
+                  <CheckMenu check={ck} canEdit={canEdit} locked={inReview} onEdit={() => onEdit(ck)} />
                 </div>
               ))}
             </div>

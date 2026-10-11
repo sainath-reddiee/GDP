@@ -255,7 +255,7 @@ def test_dq_writes_call_the_service(client, monkeypatch):
     c.post("/api/dq/run", json={"table": "DB.S.T"})
     c.post("/api/dq/catalog/seed", json={"table": "DB.S.T"})
     assert c.post("/api/dq/catalog/seed", json={}).status_code == 400
-    assert [x[0] for x in calls] == ["upsert", "run_table", "seed_from_profile"]
+    assert [x[0] for x in calls] == ["stage_check", "run_table", "seed_profile"]
 
 
 def test_dq_schedule_requires_active_checks_and_valid_cron(client):
