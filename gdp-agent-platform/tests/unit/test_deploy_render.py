@@ -73,3 +73,35 @@ def test_merge_statement_placeholder_count():
     sql = merge_statement("DB.CORE.T", ["A", "B", "C"], ["A"], 2)
     assert sql.count("%s") == 6
     assert "ON t.A = s.A" in sql and "B = s.B" in sql
+
+
+def test_procedure_handlers_match_declared_arguments():
+    """Snowflake matches a Python handler's parameter count exactly (defaults do not count): the handler takes the
+    declared arguments, optionally after `session`."""
+    import importlib
+    import inspect
+    import re
+
+    pattern = re.compile(r"CREATE OR REPLACE PROCEDURE\s+[\w{}.]+\((?P<args>[^)]*)\)(?P<body>.*?)HANDLER = '(?P<handler>[\w.]+)'",
+                         re.S)
+    checked = 0
+    for path in PROCEDURES_DIR.glob("*.sql"):
+        for m in pattern.finditer(path.read_text(encoding="utf-8")):
+            declared = len([a for a in m["args"].split(",") if a.strip()])
+            module, func = m["handler"].rsplit(".", 1)
+            params = list(inspect.signature(getattr(importlib.import_module(module), func)).parameters)
+            ok = len(params) == declared or (params[:1] == ["session"] and len(params) - 1 == declared)
+            assert ok, f"{path.name}: {m['handler']} takes {params}, the procedure declares {declared} arguments"
+            checked += 1
+    assert checked > 10
+
+
+def test_github_publisher_handler_matches_its_ddl():
+    import inspect
+    import re
+
+    from services.dbt.publish import procedure_sql, publish_dbt_pr
+
+    ddl = procedure_sql("DB", "@DB.CORE.CODE_STAGE/services-x.zip", "EAI", "DB.CODEGEN.SECRET")
+    declared = len(re.search(r"PUBLISH_DBT_PR\(([^)]*)\)", ddl).group(1).split(","))
+    assert len(inspect.signature(publish_dbt_pr).parameters) - 1 == declared

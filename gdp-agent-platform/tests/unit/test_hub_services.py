@@ -363,10 +363,10 @@ def test_staged_landing_statements():
 
 
 def test_execute_landing_rejects_unknown_method():
-    from services.source.procedures import execute_landing
+    from services.source.procedures import _execute_landing
 
     with pytest.raises(AssertionError, match="landing method"):
-        execute_landing(Session(), "r1", "MAGIC")
+        _execute_landing(Session(), "r1", "MAGIC")
 
 
 # ---------------------------------------------------------------- readiness and contracts
