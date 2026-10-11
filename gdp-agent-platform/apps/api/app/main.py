@@ -3004,6 +3004,9 @@ def qa_delete(run_id: str, test_id: str, db: Db = Depends(current_db)):
         raise HTTPException(404, "That QA test does not exist in this run.")
     db.execute("UPDATE CONTRACT.QA_TEST_CASE SET IS_DELETED = TRUE WHERE RUN_ID = %s AND TEST_ID = %s",
                (run_id, test_id))
+    from services.qa.test_versions import record_db
+
+    record_db(db, test_id, "DELETED")
     return {"deleted": test_id}
 
 

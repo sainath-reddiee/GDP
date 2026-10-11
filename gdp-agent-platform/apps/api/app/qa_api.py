@@ -399,7 +399,14 @@ class ExecuteIn(BaseModel):
 @router.get("/api/qa-packs")
 def qa_packs(domain: Optional[str] = None, db: Db = Depends(current_db)):
     try:
-        return {"packs": _call(db, _svc("packs").list_packs, _domain_id(db, domain)), "deployed": True}
+        found = _call(db, _svc("packs").list_packs, _domain_id(db, domain))
+        try:  # repository conflicts waiting to be resolved (V042)
+            open_ids = {c["pack_id"] for c in invoke_source(db, _svc("pack_git").open_conflicts)}
+        except Exception:
+            open_ids = set()
+        for p in found:
+            p["repo_conflict"] = p.get("pack_id") in open_ids
+        return {"packs": found, "deployed": True}
     except HTTPException as exc:
         if exc.status_code == 404:
             raise
@@ -497,3 +504,97 @@ def execute_qa(body: ExecuteIn, db: Db = Depends(current_db)):
         raise HTTPException(400, "send a pack_id or a sql query")
     return _call(db, _svc("packs").execute, _domain_id(db, body.domain_id), body.pack_id, body.version, body.query_ids,
                  body.sql)
+
+
+# ---------------------------------------------------------------- QA packs and Git (V042)
+
+
+@router.get("/api/qa-packs/{pack_id}/sync")
+def qa_pack_sync(pack_id: str, db: Db = Depends(current_db)):
+    """The pack's open repository conflict (the repository file changed since the pack was edited in the app)."""
+    return {"conflict": _call(db, _svc("pack_git").conflict, pack_id)}
+
+
+@router.post("/api/qa-packs/{pack_id}/sync/{sync_id}/take-repo")
+def qa_pack_take_repo(pack_id: str, sync_id: str, db: Db = Depends(current_db)):
+    """The repository version becomes the pack's newest draft, to submit and approve like any change."""
+    return _call(db, _svc("pack_git").take_repo, pack_id, sync_id, str(db.user or "").upper())
+
+
+@router.post("/api/qa-packs/{pack_id}/sync/{sync_id}/keep-app")
+def qa_pack_keep_app(pack_id: str, sync_id: str, db: Db = Depends(current_db)):
+    return _call(db, _svc("pack_git").keep_app, pack_id, sync_id, str(db.user or "").upper())
+
+
+class PackPublishIn(BaseModel):
+    version: Optional[int] = Field(default=None, ge=1)
+    repo_id: str = Field(min_length=1, max_length=64)
+    base: Optional[str] = Field(default=None, max_length=200)
+
+
+@router.post("/api/qa-packs/{pack_id}/publish")
+def qa_pack_publish(pack_id: str, body: PackPublishIn, db: Db = Depends(current_db)):
+    """A pull request with the approved version's pack file (feature/qa-<pack>-v<version>)."""
+    from app.main import _dbt_repos, _github_publisher_ready
+
+    detail = _call(db, _svc("packs").get_pack, pack_id, body.version)
+    version = body.version or detail.get("approved_version")
+    if not version:
+        raise HTTPException(409, "The pack has no approved version to publish.")
+    if body.version:
+        if detail["pack"]["status"] != "APPROVED":
+            raise HTTPException(409, "Only an approved version is published.")
+    repo = next((r for r in _dbt_repos(db, None) if r["repo_id"] == body.repo_id), None)
+    if not repo or (repo.get("provider") or "") != "GITHUB":
+        raise HTTPException(409, "Choose a GitHub repository connected in Admin, Integrations.")
+    if not _github_publisher_ready(db):
+        return {"status": "NOT_CONFIGURED", "detail": "GitHub publishing is not set up. An admin can set it up in the GitHub publishing card."}
+    slug = re.sub(r"[^a-z0-9]+", "-", str(detail["pack"]["name"]).lower()).strip("-") or "pack"
+    head = f"feature/qa-{slug}-v{int(version)}"
+    request = {"pack_id": pack_id, "version": int(version), "repo_id": body.repo_id, "head": head,
+               "base": body.base or repo.get("branch")}
+    try:
+        result = db.call("CALL CODEGEN.PUBLISH_DBT_PR(%s, %s)", ("", json.dumps({"qa_pack": request})))
+    except Exception as exc:
+        return {"status": "FAILED", "detail": str(exc)[:1000], "head_branch": head}
+    return {**(result or {}), "head_branch": head}
+
+
+class PackSyncIn(BaseModel):
+    force: bool = False
+
+
+@router.post("/api/qa-packs/{pack_id}/pr-sync")
+def qa_pack_pr_sync(pack_id: str, body: PackSyncIn = PackSyncIn(), db: Db = Depends(current_db)):
+    from app.main import _github_publisher_ready
+
+    if not _github_publisher_ready(db):
+        return {"checked": 0, "merged": [], "closed": [], "errors": [], "detail": "GitHub publishing is not set up"}
+    try:
+        return db.call("CALL CODEGEN.PUBLISH_DBT_PR(%s, %s)",
+                       ("", json.dumps({"sync_qa_prs": {"pack_id": pack_id, "force": body.force}}))) or {}
+    except Exception as exc:
+        raise _snowflake_error(exc) from exc
+
+
+# ---------------------------------------------------------------- test history (V042)
+
+
+@router.get("/api/qa/tests/{test_id}/versions")
+def qa_test_versions(test_id: str, db: Db = Depends(current_db)):
+    try:
+        return _call(db, _svc("test_versions").history, test_id)
+    except HTTPException as exc:
+        if exc.status_code >= 500:
+            return {"test_id": test_id, "versions": [], "deployed": False}
+        raise
+
+
+class RestoreIn(BaseModel):
+    version: int = Field(ge=1)
+
+
+@router.post("/api/qa/tests/{test_id}/restore")
+def qa_test_restore(test_id: str, body: RestoreIn, db: Db = Depends(current_db)):
+    """Put an older version of a saved test back; its SQL is checked again as if typed now."""
+    return _call(db, _svc("test_versions").restore, test_id, body.version)

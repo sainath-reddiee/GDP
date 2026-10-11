@@ -1,0 +1,72 @@
+-- V042 QA Store and QA workspace: packs to Git, repository sync with conflict detection, test version history.
+-- Applied once; never edit after it has been applied. Add a new V### instead.
+--
+-- GOVERNANCE.DOMAIN_QA_PACKS  gains REPO_PATH and REPO_SHA (the repository file a version came from, or the one the
+--                             app edits descend from: carried from version to version) and pull request columns
+--                             (an approved version can be published as domain/<domain>/qa/<pack>.sql).
+-- GOVERNANCE.QA_PACK_SYNC     a repository change the deploy could not apply because the pack was edited in the app
+--                             since: the repository file, the app version it conflicts with, and how it was resolved
+--                             (take the repository version as a new draft, or keep the app version).
+-- CONTRACT.QA_TEST_VERSION    every saved QA test's history: each create, edit, delete and restore keeps the test as
+--                             it was after the change. Existing tests get version 1 from their current state.
+-- Every statement is safe to run again (IF NOT EXISTS, INSERT ... WHERE NOT EXISTS).
+
+ALTER TABLE {{database}}.GOVERNANCE.DOMAIN_QA_PACKS ADD COLUMN IF NOT EXISTS REPO_PATH VARCHAR(512);
+ALTER TABLE {{database}}.GOVERNANCE.DOMAIN_QA_PACKS ADD COLUMN IF NOT EXISTS REPO_SHA VARCHAR(64);
+ALTER TABLE {{database}}.GOVERNANCE.DOMAIN_QA_PACKS ADD COLUMN IF NOT EXISTS REPO_ID VARCHAR(36);
+ALTER TABLE {{database}}.GOVERNANCE.DOMAIN_QA_PACKS ADD COLUMN IF NOT EXISTS BRANCH VARCHAR(256);
+ALTER TABLE {{database}}.GOVERNANCE.DOMAIN_QA_PACKS ADD COLUMN IF NOT EXISTS PR_URL VARCHAR(1000);
+ALTER TABLE {{database}}.GOVERNANCE.DOMAIN_QA_PACKS ADD COLUMN IF NOT EXISTS PR_NUMBER NUMBER(10,0);
+ALTER TABLE {{database}}.GOVERNANCE.DOMAIN_QA_PACKS ADD COLUMN IF NOT EXISTS PR_STATE VARCHAR(16);
+ALTER TABLE {{database}}.GOVERNANCE.DOMAIN_QA_PACKS ADD COLUMN IF NOT EXISTS MERGED_SHA VARCHAR(64);
+ALTER TABLE {{database}}.GOVERNANCE.DOMAIN_QA_PACKS ADD COLUMN IF NOT EXISTS PR_SYNCED_AT TIMESTAMP_LTZ;
+ALTER TABLE {{database}}.GOVERNANCE.DOMAIN_QA_PACKS ADD COLUMN IF NOT EXISTS PUBLISH_RESULT VARIANT;
+
+CREATE TABLE IF NOT EXISTS {{database}}.GOVERNANCE.QA_PACK_SYNC (
+    SYNC_ID         VARCHAR(36)    NOT NULL,
+    PACK_ID         VARCHAR(36)    NOT NULL,
+    DOMAIN_ID       VARCHAR(36),
+    REPO_PATH       VARCHAR(512),
+    REPO_SHA        VARCHAR(64)    NOT NULL,
+    REPO_CONTENT    VARCHAR(16777216),
+    APP_VERSION     NUMBER(6,0),
+    BASE_REPO_SHA   VARCHAR(64),
+    STATUS          VARCHAR(16)    NOT NULL,   -- OPEN | RESOLVED
+    RESOLUTION      VARCHAR(16),               -- TAKE_REPO | KEEP_APP | IN_SYNC | SUPERSEDED
+    DRAFT_VERSION   NUMBER(6,0),
+    DETECTED_AT     TIMESTAMP_LTZ  DEFAULT CURRENT_TIMESTAMP(),
+    RESOLVED_BY     VARCHAR(256),
+    RESOLVED_AT     TIMESTAMP_LTZ,
+    CONSTRAINT PK_QA_PACK_SYNC PRIMARY KEY (SYNC_ID)
+);
+
+CREATE TABLE IF NOT EXISTS {{database}}.CONTRACT.QA_TEST_VERSION (
+    TEST_ID      VARCHAR(36)    NOT NULL,
+    VERSION      NUMBER(6,0)    NOT NULL,
+    CHANGE       VARCHAR(16)    NOT NULL,   -- CREATED | EDITED | DELETED | RESTORED | BASELINE
+    TITLE        VARCHAR(500),
+    OBJECTIVE    VARCHAR(4000),
+    SQL_TEXT     VARCHAR(16000),
+    EXPECTED     VARCHAR(1000),
+    SEVERITY     VARCHAR(16),
+    SUITE_ID     VARCHAR(36),
+    IS_DELETED   BOOLEAN        DEFAULT FALSE,
+    CHANGED_BY   VARCHAR(256)   DEFAULT CURRENT_USER(),
+    CHANGED_AT   TIMESTAMP_LTZ  DEFAULT CURRENT_TIMESTAMP(),
+    CONSTRAINT PK_QA_TEST_VERSION PRIMARY KEY (TEST_ID, VERSION)
+);
+
+INSERT INTO {{database}}.CONTRACT.QA_TEST_VERSION (TEST_ID, VERSION, CHANGE, TITLE, OBJECTIVE, SQL_TEXT, EXPECTED, SEVERITY,
+                                                   SUITE_ID, IS_DELETED, CHANGED_BY, CHANGED_AT)
+SELECT T.TEST_ID, 1, 'BASELINE', T.TITLE, T.OBJECTIVE, T.SQL_TEXT, T.EXPECTED, T.SEVERITY, T.SUITE_ID,
+       COALESCE(T.IS_DELETED, FALSE), COALESCE(T.CREATED_BY, 'SYSTEM'), COALESCE(T.CREATED_AT, CURRENT_TIMESTAMP())
+  FROM {{database}}.CONTRACT.QA_TEST_CASE T
+ WHERE NOT EXISTS (SELECT 1 FROM {{database}}.CONTRACT.QA_TEST_VERSION V WHERE V.TEST_ID = T.TEST_ID);
+
+GRANT SELECT ON TABLE {{database}}.GOVERNANCE.QA_PACK_SYNC TO DATABASE ROLE {{database}}.VIEWER;
+GRANT SELECT, INSERT, UPDATE ON TABLE {{database}}.GOVERNANCE.QA_PACK_SYNC TO DATABASE ROLE {{database}}.DATA_ENGINEER;
+GRANT SELECT, INSERT, UPDATE ON TABLE {{database}}.GOVERNANCE.QA_PACK_SYNC TO DATABASE ROLE {{database}}.REVIEWER;
+GRANT SELECT, INSERT ON TABLE {{database}}.CONTRACT.QA_TEST_VERSION TO DATABASE ROLE {{database}}.DATA_ENGINEER;
+GRANT SELECT ON TABLE {{database}}.CONTRACT.QA_TEST_VERSION TO DATABASE ROLE {{database}}.REVIEWER;
+GRANT SELECT ON TABLE {{database}}.CONTRACT.QA_TEST_VERSION TO DATABASE ROLE {{database}}.VIEWER;
+GRANT SELECT, INSERT ON TABLE {{database}}.CONTRACT.QA_TEST_VERSION TO DATABASE ROLE {{database}}.QA_ENGINEER;

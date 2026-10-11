@@ -200,6 +200,8 @@ def test_seed_inserts_new_repo_packs_and_keeps_ui_edits(monkeypatch):
             self.newest, self.result = newest, []
 
         def execute(self, sql, params=()):
+            if sql.startswith("SELECT REPO_SHA FROM"):  # before V042: no repository tracking
+                raise RuntimeError("invalid identifier REPO_SHA")
             executed.append((" ".join(sql.split()), params))
             if "SELECT VERSION, STATUS, SOURCE" in sql:
                 self.result = [self.newest] if self.newest else []

@@ -195,6 +195,12 @@ RULES: List[Tuple[str, str, Any, str]] = [
     ("POST", r"/api/qa-packs/[^/]+/(submit|reject)", "PACKAGE.EDIT", ""),
     ("POST", r"/api/qa-packs/[^/]+/approve", "PACKAGE.APPROVE", "Approve a domain QA pack version"),
     ("POST", r"/api/qa-packs/[^/]+/retire", "PACKAGE.APPROVE", "Retire a domain QA pack"),
+    # QA packs and Git (V042): resolving a repository conflict makes a draft or keeps the app version; publishing
+    # opens a pull request with an approved version
+    ("POST", r"/api/qa-packs/[^/]+/sync/[^/]+/(take-repo|keep-app)", "PACKAGE.EDIT", "Resolve a QA pack repository conflict"),
+    ("POST", r"/api/qa-packs/[^/]+/publish", "PACKAGE.EDIT", "Publish a QA pack to Git"),
+    ("POST", r"/api/qa-packs/[^/]+/pr-sync", None, ""),
+    ("POST", r"/api/qa/tests/[^/]+/restore", "QA.EDIT", "Restore an older version of a QA test"),
     ("POST", r"/api/qa/execute", "QA.EDIT", ""),
     # QA Store: run tests copied into a pack draft (not live until the pack is submitted and approved)
     ("POST", r"/api/qa/run-tests/promote", "PACKAGE.EDIT", "Add run tests to a domain QA pack draft"),

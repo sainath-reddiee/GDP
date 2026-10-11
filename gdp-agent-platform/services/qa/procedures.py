@@ -19,6 +19,7 @@ from services.common.llm import complete_json
 from services.common.sql import clip, insert_rows, rows, variant
 from services.qa.guard import check
 from services.qa.tests import CATEGORIES, build_suite, ident, script
+from services.qa.test_versions import record as record_version
 
 # categories the AI may add on top of the generated suite
 AI_CATEGORIES = ("BUSINESS_RULE", "EDGE_CASE")
@@ -404,10 +405,11 @@ def qa_save(session, run_id: str, payload_json: str) -> Dict[str, Any]:
                   clip(payload.get("objective"), 4000), sql + ";", clip(payload.get("expected"), 1000),
                   severity, payload.get("target_column"),
                   "AI" if payload.get("prompt") else "USER", clip(payload.get("prompt"), 4000)]])
+    record_version(session, test_id, "CREATED")
     return {"test_id": test_id, "saved": True}
 
 
-def qa_update(session, run_id: str, test_id: str, payload_json: str) -> Dict[str, Any]:
+def qa_update(session, run_id: str, test_id: str, payload_json: str, change: str = "EDITED") -> Dict[str, Any]:
     """Edit a saved test in place (SQL, title, expected, severity); the guard checks the new SQL again."""
     payload = json.loads(payload_json or "{}")
     ctx = context(session, run_id)
@@ -422,6 +424,7 @@ def qa_update(session, run_id: str, test_id: str, payload_json: str) -> Dict[str
                     WHERE RUN_ID = ? AND TEST_ID = ? AND NOT IS_DELETED""",
                 params=[sql + ";", clip(payload.get("title") or "Custom test", 500), clip(payload.get("expected"), 1000),
                         clip(payload.get("objective"), 4000), severity, run_id, test_id]).collect()
+    record_version(session, test_id, change)
     return {"test_id": test_id, "updated": True, "note": note}
 
 
@@ -565,6 +568,7 @@ def table_save(session, target_table_id: str, payload_json: str) -> Dict[str, An
                   severity, payload.get("target_column"), "AI" if payload.get("prompt") else "USER",
                   clip(payload.get("prompt"), 4000), ctx.get("domain_id"), target_table_id, suite_id,
                   ctx["target"]["fqn"]]])
+    record_version(session, test_id, "CREATED")
     return {"test_id": test_id, "suite_id": suite_id, "saved": True}
 
 
@@ -576,7 +580,7 @@ def _table_test(session, test_id: str) -> Dict[str, Any]:
     return found[0]
 
 
-def update_table_test(session, test_id: str, payload_json: str) -> Dict[str, Any]:
+def update_table_test(session, test_id: str, payload_json: str, change: str = "EDITED") -> Dict[str, Any]:
     """Edit a saved TABLE test (SQL, title, expected, objective, severity, suite); guarded and compiled again."""
     payload = json.loads(payload_json or "{}")
     test = _table_test(session, test_id)
@@ -595,6 +599,7 @@ def update_table_test(session, test_id: str, payload_json: str) -> Dict[str, Any
                     WHERE TEST_ID = ? AND SCOPE = 'TABLE' AND NOT COALESCE(IS_DELETED, FALSE)""",
                 params=[sql + ";", clip(payload.get("title") or "Custom test", 500), clip(payload.get("expected"), 1000),
                         clip(payload.get("objective"), 4000), severity, suite_id, test_id]).collect()
+    record_version(session, test_id, change)
     return {"test_id": test_id, "suite_id": suite_id or None, "updated": True, "note": note}
 
 
@@ -602,6 +607,7 @@ def delete_table_test(session, test_id: str) -> Dict[str, Any]:
     _table_test(session, test_id)
     session.sql("UPDATE CONTRACT.QA_TEST_CASE SET IS_DELETED = TRUE WHERE TEST_ID = ? AND SCOPE = 'TABLE'",
                 params=[test_id]).collect()
+    record_version(session, test_id, "DELETED")
     return {"test_id": test_id, "deleted": True}
 
 
