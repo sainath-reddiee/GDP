@@ -9,6 +9,7 @@ export type PackRow = {
   pack_id: string; version: number; domain_id: string; domain_name: string | null; name: string; description: string | null;
   tags: string[]; status: PackStatus; source: "UI" | "REPO"; approved_version: number | null; created_by: string;
   created_at: string; queries: number; last_run: PackLastRun;
+  repo_conflict?: boolean; repo_path?: string | null; repo_sha?: string | null;  // V042
 };
 
 export type PackQuery = {
@@ -19,6 +20,14 @@ export type PackQuery = {
 export type PackVersion = {
   version: number; status: PackStatus; change_note: string | null; created_by: string; created_at: string;
   approved_by: string | null; approved_at: string | null;
+  source?: "UI" | "REPO"; repo_path?: string | null; pr_state?: string | null; pr_url?: string | null; pr_number?: number | null; branch?: string | null;
+};
+/** A repository change the deploy could not apply because the pack was edited in the app since (V042). */
+export type PackConflict = {
+  sync: { sync_id: string; pack_id: string; repo_path: string | null; repo_sha: string; app_version: number; base_repo_sha: string | null; detected_at: string | null };
+  repo: { name: string; description: string; tags: string[]; queries: PackQuery[] };
+  app: { version: number; status: PackStatus; queries: PackQuery[] };
+  diff: { added: string[]; removed: string[]; changed: { query_name: string; fields: string[] }[] };
 };
 
 export type PackDetail = {

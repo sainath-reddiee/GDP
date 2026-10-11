@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input, Select } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
+import { TestHistoryButton } from "@/components/qa/test-history";
 import { QaAssistant } from "@/components/qa/qa-assistant";
 import { RunHistoryTable } from "@/components/qa/qa-ui";
 import { TestCard, type CardOutcome } from "@/components/qa/test-card";
@@ -204,9 +205,14 @@ function TableView({ tableId, suiteId, go, access, onChanged }: { tableId: strin
                           onRun={async () => done(await runTable(tableId, { test_ids: [t.test_id] }))}
                           onUpdate={async (e) => done(await updateTableTest(t.test_id, e))}
                           onRemove={async () => done(await deleteTableTest(t.test_id))}
-                          extra={keysByTest.get(t.test_id)?.length ? (
-                            <p className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">Jira:
-                              {keysByTest.get(t.test_id)!.map((k) => <button key={k} type="button" onClick={() => go({ tab: "triage", key: k })} className="font-mono text-primary hover:underline">{k}</button>)}</p>
+                          extra={(keysByTest.get(t.test_id)?.length || t.origin !== "GENERATED") ? (
+                            <div className="flex flex-wrap items-center gap-3">
+                              {keysByTest.get(t.test_id)?.length ? (
+                                <p className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">Jira:
+                                  {keysByTest.get(t.test_id)!.map((k) => <button key={k} type="button" onClick={() => go({ tab: "triage", key: k })} className="font-mono text-primary hover:underline">{k}</button>)}</p>
+                              ) : null}
+                              {t.origin !== "GENERATED" && <TestHistoryButton testId={t.test_id} title={t.title} canRestore={canWrite} />}
+                            </div>
                           ) : undefined} />
               ))}
               {!g.tests.length && <p className="rounded-xl border border-dashed p-4 text-center text-xs text-muted-foreground">No tests in this suite yet. Ask AI to add some.</p>}

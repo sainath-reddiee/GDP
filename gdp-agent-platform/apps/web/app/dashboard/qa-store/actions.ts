@@ -59,3 +59,31 @@ export async function promoteTests(body: { test_ids: string[]; domain: string; p
 export async function openTestCase(qaResultId: string) {
   return storeAction(() => api<{ case: { case_id: string; number: number } }>("/api/cases/from-result", json({ qa_result_id: qaResultId })));
 }
+
+// ---------------------------------------------------------------- Git: repository conflicts and publishing (V042)
+
+export async function loadPackSync(packId: string) {
+  return storeAction(() => api<{ conflict: import("@/lib/store-types").PackConflict | null }>(`/api/qa-packs/${encodeURIComponent(packId)}/sync`));
+}
+
+export async function resolvePackSync(packId: string, syncId: string, how: "take-repo" | "keep-app") {
+  const r = await storeAction(() => api<{ resolution: string; draft_version?: number }>(
+    `/api/qa-packs/${encodeURIComponent(packId)}/sync/${encodeURIComponent(syncId)}/${how}`, { method: "POST" }));
+  revalidatePath("/dashboard/qa-store");
+  return r;
+}
+
+export async function loadGitRepos() {
+  return storeAction(() => api<{ repos: { repo_id: string; name: string; branch: string }[]; publisher_ready: boolean }>("/api/hub/domain-models/publishing"));
+}
+
+export async function publishPack(packId: string, version: number, repoId: string) {
+  const r = await storeAction(() => api<{ status: string; detail?: string; head_branch?: string; path?: string }>(
+    `/api/qa-packs/${encodeURIComponent(packId)}/publish`, { method: "POST", body: JSON.stringify({ version, repo_id: repoId }) }));
+  return r;  // the drawer updates its own version list; the pack list does not show pull requests
+}
+
+export async function syncPackPrs(packId: string, force = false) {
+  return storeAction(() => api<{ checked: number; merged: unknown[]; closed: unknown[]; detail?: string }>(
+    `/api/qa-packs/${encodeURIComponent(packId)}/pr-sync`, { method: "POST", body: JSON.stringify({ force }) }));
+}

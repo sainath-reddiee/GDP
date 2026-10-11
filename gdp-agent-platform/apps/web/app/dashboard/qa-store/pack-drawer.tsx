@@ -3,10 +3,10 @@
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState, useTransition } from "react";
 import {
-  Archive, BrainCircuit, Check, Download, FlaskConical, GitCompare, History, Loader2, Play, Plus, Save, Send, Trash2, Undo2,
+  Archive, BrainCircuit, Check, Download, FlaskConical, GitCompare, GitPullRequest, History, Loader2, Play, Plus, Save, Send, Trash2, Undo2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import type { PackDetail, PackQuery, PackRun, PackSeverity, QaExecution, QaResult } from "@/lib/store-types";
+import type { PackConflict, PackDetail, PackQuery, PackRun, PackSeverity, QaExecution, QaResult } from "@/lib/store-types";
 import { Button } from "@/components/ui/button";
 import { Input, Label, Select, Textarea } from "@/components/ui/input";
 import { Drawer } from "@/components/hub/overlay";
@@ -14,11 +14,12 @@ import { StatusPill, explain } from "@/components/hub/states";
 import { QaOutcomePill, QaResultCard } from "@/components/quality/qa-result";
 import { SqlEditor, TagChip } from "@/components/quality/sql-editor";
 import { useToast } from "@/components/ui/toast";
-import { executeQa, loadPack, loadPackRuns, savePack, transitionPack, type PackPayload } from "./actions";
+import { executeQa, loadPack, loadPackRuns, loadPackSync, savePack, transitionPack, type PackPayload } from "./actions";
+import { ConflictBanner, GitTab } from "./pack-git";
 import { splitTags } from "./qa-store-view";
 
 type Working = { name: string; description: string; tags: string; queries: PackQuery[] };
-type Tab = "queries" | "versions" | "runs";
+type Tab = "queries" | "versions" | "runs" | "git";
 
 const SEVERITY_DOT: Record<PackSeverity, string> = { ERROR: "bg-rose-500", WARN: "bg-amber-500", INFO: "bg-sky-500" };
 const blankQuery = (n: number): PackQuery => ({
@@ -169,6 +170,7 @@ export function PackDrawer({ packId, onClose, canEdit, canApprove, canRun }: {
   const [runs, setRuns] = useState<PackRun[] | null>(null);
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState("");
+  const [conflict, setConflict] = useState<PackConflict | null>(null);
   const [, start] = useTransition();
 
   const load = useCallback(async (version?: number | null) => {
@@ -177,6 +179,8 @@ export function PackDrawer({ packId, onClose, canEdit, canApprove, canRun }: {
     setDetail(r.data); setWorking(toWorking(r.data)); setDirty(false); setSelected(0); setError("");
   }, [packId]);
   useEffect(() => { void load(); }, [load]);
+  const loadConflict = useCallback(() => { void loadPackSync(packId).then((r) => setConflict(r.ok ? r.data.conflict : null)); }, [packId]);
+  useEffect(() => { loadConflict(); }, [loadConflict]);
   useEffect(() => {
     if (tab === "runs" && runs == null) void loadPackRuns(packId).then((r) => setRuns(r.ok ? r.data : []));
   }, [tab, runs, packId]);
@@ -298,7 +302,7 @@ export function PackDrawer({ packId, onClose, canEdit, canApprove, canRun }: {
             </p>
           )}
           <nav className="flex gap-1 border-b border-border/70" aria-label="Pack sections">
-            {([["queries", `Queries (${working.queries.length})`, FlaskConical], ["versions", `Versions (${detail.versions.length})`, GitCompare], ["runs", "Runs", History]] as const).map(([id, label, Icon]) => (
+            {([["queries", `Queries (${working.queries.length})`, FlaskConical], ["versions", `Versions (${detail.versions.length})`, GitCompare], ["runs", "Runs", History], ["git", "Git", GitPullRequest]] as const).map(([id, label, Icon]) => (
               <button key={id} type="button" onClick={() => setTab(id)} aria-current={tab === id ? "page" : undefined}
                       className={cn("relative flex items-center gap-1.5 px-3 pb-2 pt-1 text-sm transition", tab === id ? "font-medium text-foreground" : "text-muted-foreground hover:text-foreground")}>
                 <Icon className="h-4 w-4" /> {label}
@@ -307,6 +311,9 @@ export function PackDrawer({ packId, onClose, canEdit, canApprove, canRun }: {
             ))}
           </nav>
 
+          {conflict && <ConflictBanner packId={packId} conflict={conflict} canEdit={canEdit}
+                                       onResolved={(msg) => { toast("ok", msg); setConflict(null); void load(); router.refresh(); }} />}
+          {tab === "git" && <GitTab packId={packId} detail={detail} canEdit={canEdit} />}
           {tab === "versions" && <VersionsTab detail={detail} packId={packId} onView={(v) => { setTab("queries"); void load(v); }} />}
           {tab === "runs" && <RunsTab runs={runs} />}
           {tab === "queries" && (

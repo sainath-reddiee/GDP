@@ -51,6 +51,7 @@ function PackCard({ pack, onOpen }: { pack: PackRow; onOpen: () => void }) {
         </div>
         <StatusPill status={pack.status} />
       </div>
+      {pack.repo_conflict && <p className="mt-2 rounded-md bg-amber-50 px-2 py-1 text-xs font-medium text-amber-800 dark:bg-amber-950/40 dark:text-amber-200">The repository file changed since the app edits; open to resolve</p>}
       {pack.description && <p className="mt-3 line-clamp-2 text-sm text-muted-foreground">{pack.description}</p>}
       {pack.tags.length > 0 && <div className="mt-3 flex flex-wrap gap-1">{pack.tags.slice(0, 5).map((t) => <TagChip key={t} tag={t} />)}</div>}
       <div className="min-h-3 flex-1" />

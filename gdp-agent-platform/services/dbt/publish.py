@@ -355,9 +355,86 @@ def sync_dq_prs(session, request: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
+def publish_qa_pack(session, request: Dict[str, Any]) -> Dict[str, Any]:
+    """An APPROVED QA pack version as its repository file (domain/<domain>/qa/<pack>.sql, or the file it was seeded
+    from) on a branch feature/qa-<pack>-v<version> with a pull request. The file is rendered here from the approved
+    queries (services/qa/pack_files.render), the format the deploy seeds from."""
+    from services.qa import pack_git, packs
+    from services.qa.pack_files import render
+
+    pack_id, version = str(request.get("pack_id") or ""), int(request.get("version") or 0)
+    head = github.check_branch(str(request.get("head") or ""))
+    assert head.startswith("feature/qa-"), "a QA pack branch starts with feature/qa-"
+    detail = packs.get_pack(session, pack_id, version)
+    pack = detail["pack"]
+    assert pack["status"] == "APPROVED", "only an approved QA pack version is published"
+    domain = rows(session, "SELECT DOMAIN_NAME FROM KNOWLEDGE.DOMAIN_REGISTRY WHERE DOMAIN_ID = ?", [pack["domain_id"]])
+    path = pack.get("repo_path") or pack_git.pack_path(domain[0]["DOMAIN_NAME"] if domain else "domain", pack["name"])
+    text = render({"name": pack["name"], "description": pack.get("description"), "tags": pack.get("tags") or [],
+                   "queries": detail["queries"]})
+    repo_id = str(request.get("repo_id") or "")
+    repo = _repo(session, repo_id)
+    origin, base_branch = repo["GIT_URL"], str(request.get("base") or repo["BRANCH"] or "main")
+    title = clip(request.get("title") or f"QA pack {pack['name']} v{version} (approved)", 200)
+    body = clip(f"QA pack {pack['name']} v{version}, approved in the QA Store.\n\nFile: {path}", 6000)
+    with tool_call(session, None, "publish_qa_pack", {"pack_id": pack_id, "version": version, "head": head}) as call:
+        try:
+            result = github.publish(github.urllib_request(_token()), origin, base_branch, head, {path: text}, title=title,
+                                    body=body, message=title, draft=False)
+            call.summary = f"{result['status']} {head}: PR {(result.get('pull_request') or {}).get('url') or 'none'}"
+        except Exception as exc:
+            result = {**github.explain(exc, origin), "base_branch": base_branch, "head_branch": head}
+            result["detail"] = clip(result.get("detail"), 1000)
+            call.status, call.error = "FAILED", clip(exc)
+    pr = result.get("pull_request") or {}
+    state = ("OPEN" if pr.get("url") else None) if result.get("status") == "PUBLISHED" else (
+        "NO_CHANGES" if result.get("status") == "NO_CHANGES" else "FAILED")
+    session.sql("""UPDATE GOVERNANCE.DOMAIN_QA_PACKS SET REPO_ID = ?, BRANCH = ?, PR_URL = NULLIF(?, ''),
+                          PR_NUMBER = NULLIF(?, '')::NUMBER, PR_STATE = ?, PUBLISH_RESULT = PARSE_JSON(?),
+                          REPO_PATH = COALESCE(REPO_PATH, ?), PR_SYNCED_AT = CURRENT_TIMESTAMP()
+                    WHERE PACK_ID = ? AND VERSION = ?""",
+                params=[repo_id, head, pr.get("url") or "", str(pr.get("number") or ""), state,
+                        json.dumps(result, default=str), path, pack_id, version]).collect()
+    return {**result, "path": path}
+
+
+def sync_qa_prs(session, request: Dict[str, Any]) -> Dict[str, Any]:
+    """QA pack pull requests: merged or closed is recorded in PR_STATE (the pack version stays APPROVED; once the
+    repository is deployed the pack is in step with its file)."""
+    pack_id = str(request.get("pack_id") or "")
+    where = "P.PR_NUMBER IS NOT NULL AND P.PR_STATE IN ('OPEN', 'DRAFT') AND P.REPO_ID IS NOT NULL"
+    params: List[Any] = []
+    if pack_id:
+        where += " AND P.PACK_ID = ?"
+        params.append(pack_id)
+    if not request.get("force"):
+        where += " AND (P.PR_SYNCED_AT IS NULL OR P.PR_SYNCED_AT < DATEADD('second', -60, CURRENT_TIMESTAMP()))"
+    try:
+        found = rows(session, f"""SELECT P.PACK_ID, P.VERSION, P.PR_NUMBER, R.GIT_URL FROM GOVERNANCE.DOMAIN_QA_PACKS P
+                                   JOIN CODE.REPO R ON R.REPO_ID = P.REPO_ID WHERE {where} LIMIT 200""", params)
+    except Exception as exc:  # before V042
+        return {"checked": 0, "merged": [], "closed": [], "errors": [{"error": clip(exc, 300)}]}
+    request_fn = github.urllib_request(_token()) if found else None
+    out: Dict[str, Any] = {"checked": 0, "merged": [], "closed": [], "errors": []}
+    for r in found:
+        try:
+            pr = github.pull_status(request_fn, r["GIT_URL"], int(r["PR_NUMBER"]))
+        except Exception as exc:
+            out["errors"].append({"pack_id": r["PACK_ID"], "version": int(r["VERSION"]), "error": clip(exc, 300)})
+            continue
+        out["checked"] += 1
+        session.sql("""UPDATE GOVERNANCE.DOMAIN_QA_PACKS SET PR_STATE = ?, MERGED_SHA = NULLIF(?, ''),
+                              PR_SYNCED_AT = CURRENT_TIMESTAMP() WHERE PACK_ID = ? AND VERSION = ?""",
+                    params=[pr["state"], pr.get("merge_commit_sha") or "", r["PACK_ID"], int(r["VERSION"])]).collect()
+        if pr["state"] in ("MERGED", "CLOSED"):
+            out[pr["state"].lower()].append({"pack_id": r["PACK_ID"], "version": int(r["VERSION"])})
+    return out
+
+
 def sync_git_prs(session, request: Dict[str, Any]) -> Dict[str, Any]:
-    """Every governed pull request: domain models and data quality suites (the scheduled task)."""
-    return {"models": sync_model_prs(session, request), "dq_suites": sync_dq_prs(session, request)}
+    """Every governed pull request: domain models, data quality suites and QA packs (the scheduled task)."""
+    return {"models": sync_model_prs(session, request), "dq_suites": sync_dq_prs(session, request),
+            "qa_packs": sync_qa_prs(session, request)}
 
 
 def sync_task_sql(database: str, warehouse: str) -> List[str]:
@@ -366,7 +443,7 @@ def sync_task_sql(database: str, warehouse: str) -> List[str]:
     for value in (database, warehouse):
         assert NAME.match(value or ""), f"unsafe identifier: {value}"
     return [f"CREATE OR REPLACE TASK {database}.CODEGEN.SYNC_MODEL_PRS_TASK WAREHOUSE = {warehouse} "
-            f"SCHEDULE = '30 MINUTE' COMMENT = 'Read the state of domain model and data quality suite pull requests' "
+            f"SCHEDULE = '30 MINUTE' COMMENT = 'Read the state of domain model, data quality suite and QA pack pull requests' "
             f"AS CALL {database}.CODEGEN.PUBLISH_DBT_PR('', '{{\"sync_git_prs\": {{}}}}')",
             f"ALTER TASK {database}.CODEGEN.SYNC_MODEL_PRS_TASK RESUME"]
 
@@ -385,6 +462,10 @@ def publish_dbt_pr(session, run_id: str, payload_json: str = "{}") -> Dict[str, 
         return publish_dq_suite(session, payload["dq_suite"])
     if not run_id and isinstance(payload.get("sync_dq_prs"), dict):
         return sync_dq_prs(session, payload["sync_dq_prs"])
+    if not run_id and isinstance(payload.get("qa_pack"), dict):
+        return publish_qa_pack(session, payload["qa_pack"])
+    if not run_id and isinstance(payload.get("sync_qa_prs"), dict):
+        return sync_qa_prs(session, payload["sync_qa_prs"])
     if not run_id and isinstance(payload.get("sync_git_prs"), dict):
         return sync_git_prs(session, payload["sync_git_prs"])
     plan = _plan(session, run_id, payload) if run_id else dict(payload)

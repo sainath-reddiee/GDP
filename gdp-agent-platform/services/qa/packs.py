@@ -160,8 +160,9 @@ def get_pack(session, pack_id: str, version: Optional[int] = None) -> Dict[str, 
     approved = next((v for v in versions if v["status"] == "APPROVED"), None)
     return {"pack": chosen, "queries": _query_rows(session, pack_id, chosen["version"]),
             "approved_version": approved["version"] if approved else None,
-            "versions": [{k: v.get(k) for k in ("version", "status", "change_note", "created_by", "created_at",
-                                            "approved_by", "approved_at")} for v in versions]}
+            "versions": [{k: v.get(k) for k in ("version", "status", "source", "change_note", "created_by", "created_at",
+                                            "approved_by", "approved_at", "repo_path", "pr_state", "pr_url",
+                                            "pr_number", "branch")} for v in versions]}
 
 
 def list_packs(session, domain_id: Optional[str] = None) -> List[Dict[str, Any]]:
@@ -232,14 +233,21 @@ def summary(session, domain_id: Optional[str] = None) -> Dict[str, Any]:
 
 
 def _insert_version(session, pack_id: str, version: int, domain_id: str, meta: Dict[str, Any],
-                    queries: List[Dict[str, Any]], status: str, source: str, note: str) -> None:
-    insert_rows(session, PACKS,
-                ["PACK_ID", "VERSION", "DOMAIN_ID", "NAME", "DESCRIPTION", "TAGS", "STATUS", "SOURCE", "CHANGE_NOTE",
-                 "APPROVED_BY", "APPROVED_AT"],
-                ["?", "?::NUMBER", "?", "?", "NULLIF(?, '')", "PARSE_JSON(?)::ARRAY", "?", "?", "NULLIF(?, '')",
-                 "IFF(? = 'APPROVED', CURRENT_USER(), NULL)", "IFF(? = 'APPROVED', CURRENT_TIMESTAMP(), NULL)"],
-                [[pack_id, version, domain_id, clip(meta["name"], 128), meta.get("description") or "",
-                  json.dumps(meta.get("tags") or []), status, source, clip(note, 2000), status, status]])
+                    queries: List[Dict[str, Any]], status: str, source: str, note: str,
+                    repo: Optional[Dict[str, Any]] = None) -> None:
+    """`repo` ({repo_sha, repo_path}, V042) is the repository file the version descends from, carried forward so the
+    deploy can tell an app edit that is ahead of the repository from one the repository has since overtaken."""
+    columns = ["PACK_ID", "VERSION", "DOMAIN_ID", "NAME", "DESCRIPTION", "TAGS", "STATUS", "SOURCE", "CHANGE_NOTE",
+               "APPROVED_BY", "APPROVED_AT"]
+    exprs = ["?", "?::NUMBER", "?", "?", "NULLIF(?, '')", "PARSE_JSON(?)::ARRAY", "?", "?", "NULLIF(?, '')",
+             "IFF(? = 'APPROVED', CURRENT_USER(), NULL)", "IFF(? = 'APPROVED', CURRENT_TIMESTAMP(), NULL)"]
+    values = [pack_id, version, domain_id, clip(meta["name"], 128), meta.get("description") or "",
+              json.dumps(meta.get("tags") or []), status, source, clip(note, 2000), status, status]
+    if repo and repo.get("repo_sha"):
+        columns += ["REPO_SHA", "REPO_PATH"]
+        exprs += ["?", "NULLIF(?, '')"]
+        values += [repo["repo_sha"], clip(repo.get("repo_path") or "", 512)]
+    insert_rows(session, PACKS, columns, exprs, [values])
     insert_rows(session, QUERIES,
                 ["QUERY_ID", "PACK_ID", "PACK_VERSION", "QUERY_NAME", "DESCRIPTION", "SQL_EXPRESSION", "SEVERITY",
                  "EXPECTATION", "TAGS", "ORDINAL"],
@@ -287,6 +295,8 @@ def save_draft(session, pack_id: str, payload_json: str) -> Dict[str, Any]:
     from services.common.sql import atomic
 
     note = payload.get("change_note") or ""
+    repo = {"repo_sha": payload.get("repo_sha") or newest.get("repo_sha"),
+            "repo_path": payload.get("repo_path") or newest.get("repo_path")}
     replace = newest["status"] == "DRAFT"
     version = int(newest["version"]) if replace else int(newest["version"]) + 1
 
@@ -295,7 +305,7 @@ def save_draft(session, pack_id: str, payload_json: str) -> Dict[str, Any]:
             session.sql(f"DELETE FROM {QUERIES} WHERE PACK_ID = ? AND PACK_VERSION = ?", params=[pack_id, version]).collect()
             session.sql(f"DELETE FROM {PACKS} WHERE PACK_ID = ? AND VERSION = ?", params=[pack_id, version]).collect()
         _insert_version(session, pack_id, version, newest["domain_id"], meta, queries, "DRAFT", "UI",
-                        note or f"Edited from version {newest['version']}")
+                        note or f"Edited from version {newest['version']}", **({"repo": repo} if repo["repo_sha"] else {}))
 
     atomic(session, write)
     previous = next((v for v in versions if v["status"] == "APPROVED"), None)

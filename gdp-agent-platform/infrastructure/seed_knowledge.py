@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import uuid
 import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -467,54 +468,101 @@ def load_qa_packs() -> List[Tuple[str, Dict[str, Any], Path]]:
     return out
 
 
-def _qa_signature(queries: List[Dict[str, Any]]) -> List[Tuple[str, str, str, str]]:
-    return [(str(q["query_name"]).lower(), " ".join(str(q["sql_expression"]).split()), str(q.get("severity") or "ERROR"),
-             str(q.get("expectation") or "0 rows")) for q in queries]
-
-
 def seed_qa_packs(cur, database: str) -> List[str]:
-    """Repository packs become APPROVED versions (SOURCE REPO) and their queries ACTIVE QA_TEST knowledge. A pack
-    whose newest version was made in the UI belongs to the people who edited it: the deploy leaves it alone."""
+    """Repository packs become APPROVED versions (SOURCE REPO) and their queries ACTIVE QA_TEST knowledge. A pack the
+    app edited is never overwritten: when the repository file changed since those edits, the deploy records a conflict
+    (GOVERNANCE.QA_PACK_SYNC) for someone to resolve in the QA Store (services/qa/pack_git.sync_decision)."""
+    from services.qa.pack_git import repo_sha, signature, sync_decision
     from services.qa.packs import knowledge_key, query_id_for, seed_rows
 
     try:
         cur.execute(f"SELECT 1 FROM {database}.GOVERNANCE.DOMAIN_QA_PACKS LIMIT 1")
     except Exception:
         return ["qa packs: V037 not deployed (skipped)"]
+    try:
+        cur.execute(f"SELECT REPO_SHA FROM {database}.GOVERNANCE.DOMAIN_QA_PACKS LIMIT 1")
+        tracked = True
+    except Exception:  # before V042: no repository tracking, app edits are kept as before
+        tracked = False
     log: List[str] = []
     knowledge = []
     for domain_name, parsed, path in load_qa_packs():
         did = domain_id(domain_name)
         data = seed_rows(did, parsed)
         pid, meta, queries = data["pack_id"], data["meta"], data["queries"]
-        cur.execute(f"SELECT VERSION, STATUS, SOURCE FROM {database}.GOVERNANCE.DOMAIN_QA_PACKS "
-                    f"WHERE PACK_ID = %s ORDER BY VERSION DESC", (pid,))
+        rel = path.relative_to(ROOT).as_posix()
+        text = path.read_text(encoding="utf-8")
+        sha = repo_sha(text)
+        cols = "VERSION, STATUS, SOURCE" + (", REPO_SHA" if tracked else "")
+        cur.execute(f"SELECT {cols} FROM {database}.GOVERNANCE.DOMAIN_QA_PACKS WHERE PACK_ID = %s ORDER BY VERSION DESC",
+                    (pid,))
         versions = cur.fetchall()
-        if versions and versions[0][2] != "REPO":
-            log.append(f"qa pack {domain_name}/{meta['name']}: edited in the app, kept")
-            continue
-        if versions:
+        newest = ({"version": versions[0][0], "status": versions[0][1], "source": versions[0][2],
+                   "repo_sha": versions[0][3] if tracked else None} if versions else None)
+        current: List[Dict[str, Any]] = []
+        if newest:
             cur.execute(f"SELECT QUERY_NAME, SQL_EXPRESSION, SEVERITY, EXPECTATION FROM {database}.GOVERNANCE.DOMAIN_QA_QUERIES "
-                        f"WHERE PACK_ID = %s AND PACK_VERSION = %s ORDER BY ORDINAL", (pid, versions[0][0]))
+                        f"WHERE PACK_ID = %s AND PACK_VERSION = %s ORDER BY ORDINAL", (pid, newest["version"]))
             current = [{"query_name": r[0], "sql_expression": r[1], "severity": r[2], "expectation": r[3]}
                        for r in cur.fetchall()]
-            if _qa_signature(current) == _qa_signature(queries):
-                log.append(f"qa pack {domain_name}/{meta['name']}: unchanged")
-                continue
+        decision = sync_decision(newest, current, sha, queries)
+        if decision == "CONFLICT" and tracked and not newest.get("repo_sha"):
+            # app edits made before V042 carry no repository hash: when the file still matches the pack's last seeded
+            # version, the repository did not change since, so the app version is ahead (record the lineage)
+            cur.execute(f"""SELECT Q.QUERY_NAME, Q.SQL_EXPRESSION, Q.SEVERITY, Q.EXPECTATION
+                              FROM {database}.GOVERNANCE.DOMAIN_QA_QUERIES Q
+                             WHERE Q.PACK_ID = %s AND Q.PACK_VERSION = (SELECT MAX(VERSION) FROM {database}.GOVERNANCE.DOMAIN_QA_PACKS
+                                                                         WHERE PACK_ID = %s AND SOURCE = 'REPO')
+                             ORDER BY Q.ORDINAL""", (pid, pid))
+            seeded = [{"query_name": r[0], "sql_expression": r[1], "severity": r[2], "expectation": r[3]} for r in cur.fetchall()]
+            if seeded and signature(seeded) == signature(queries):
+                cur.execute(f"UPDATE {database}.GOVERNANCE.DOMAIN_QA_PACKS SET REPO_SHA = %s, REPO_PATH = %s "
+                            f"WHERE PACK_ID = %s AND VERSION = %s", (sha, rel, pid, newest["version"]))
+                decision = "AHEAD"
+        label = f"qa pack {domain_name}/{meta['name']}"
+        if decision in ("UNCHANGED", "IN_SYNC", "AHEAD", "CONFLICT") and not tracked:
+            log.append(f"{label}: {'unchanged' if decision in ('UNCHANGED', 'IN_SYNC') else 'edited in the app, kept'}")
+            continue
+        if decision in ("UNCHANGED", "IN_SYNC"):
+            cur.execute(f"UPDATE {database}.GOVERNANCE.DOMAIN_QA_PACKS SET REPO_SHA = %s, REPO_PATH = %s "
+                        f"WHERE PACK_ID = %s AND VERSION = %s", (sha, rel, pid, newest["version"]))
+            cur.execute(f"UPDATE {database}.GOVERNANCE.QA_PACK_SYNC SET STATUS = 'RESOLVED', RESOLUTION = 'IN_SYNC', "
+                        f"RESOLVED_BY = 'DEPLOY', RESOLVED_AT = CURRENT_TIMESTAMP() WHERE PACK_ID = %s AND STATUS = 'OPEN'",
+                        (pid,))
+            log.append(f"{label}: {'unchanged' if decision == 'UNCHANGED' else 'in step with the repository'}")
+            continue
+        if decision == "AHEAD":
+            log.append(f"{label}: edited in the app since {rel}; kept (publish it to Git to update the file)")
+            continue
+        if decision == "CONFLICT":
+            cur.execute(f"SELECT COUNT(*) FROM {database}.GOVERNANCE.QA_PACK_SYNC WHERE PACK_ID = %s AND STATUS = 'OPEN' "
+                        f"AND REPO_SHA = %s", (pid, sha))
+            if not cur.fetchone()[0]:
+                cur.execute(f"UPDATE {database}.GOVERNANCE.QA_PACK_SYNC SET STATUS = 'RESOLVED', RESOLUTION = 'SUPERSEDED', "
+                            f"RESOLVED_BY = 'DEPLOY', RESOLVED_AT = CURRENT_TIMESTAMP() WHERE PACK_ID = %s AND STATUS = 'OPEN'",
+                            (pid,))
+                cur.execute(f"""INSERT INTO {database}.GOVERNANCE.QA_PACK_SYNC (SYNC_ID, PACK_ID, DOMAIN_ID, REPO_PATH, REPO_SHA,
+                                       REPO_CONTENT, APP_VERSION, BASE_REPO_SHA, STATUS)
+                                SELECT %s, %s, %s, %s, %s, %s, %s, %s, 'OPEN'""",
+                            (str(uuid.uuid4()), pid, did, rel, sha, text, newest["version"], newest.get("repo_sha")))
+            log.append(f"{label}: CONFLICT, {rel} changed since the app edits; resolve it in the QA Store")
+            continue
+        if newest:  # UPDATE: the repository owns the pack and the file changed
             dropped = {q["query_name"].lower() for q in current} - {q["query_name"].lower() for q in queries}
             for name in dropped:
                 cur.execute(f"UPDATE {database}.KNOWLEDGE.DOMAIN_KNOWLEDGE SET IS_CURRENT = FALSE, STATUS = 'RETIRED' "
                             f"WHERE DOMAIN_ID = %s AND SOURCE_REFERENCE = %s AND IS_CURRENT",
                             (did, knowledge_key(pid, name)))
-        version = (versions[0][0] + 1) if versions else 1
+        version = (newest["version"] + 1) if newest else 1
         cur.execute(f"UPDATE {database}.GOVERNANCE.DOMAIN_QA_PACKS SET STATUS = 'SUPERSEDED' "
                     f"WHERE PACK_ID = %s AND STATUS = 'APPROVED'", (pid,))
+        repo_cols, repo_vals = (", REPO_SHA, REPO_PATH", ", %s, %s") if tracked else ("", "")
         cur.execute(
             f"""INSERT INTO {database}.GOVERNANCE.DOMAIN_QA_PACKS (PACK_ID, VERSION, DOMAIN_ID, NAME, DESCRIPTION, TAGS,
-                       STATUS, SOURCE, CHANGE_NOTE, CREATED_BY, APPROVED_BY, APPROVED_AT)
-                SELECT %s, %s, %s, %s, %s, PARSE_JSON(%s)::ARRAY, 'APPROVED', 'REPO', %s, 'SEED', 'SEED', CURRENT_TIMESTAMP()""",
+                       STATUS, SOURCE, CHANGE_NOTE, CREATED_BY, APPROVED_BY, APPROVED_AT{repo_cols})
+                SELECT %s, %s, %s, %s, %s, PARSE_JSON(%s)::ARRAY, 'APPROVED', 'REPO', %s, 'SEED', 'SEED', CURRENT_TIMESTAMP(){repo_vals}""",
             (pid, version, did, meta["name"], meta["description"], json.dumps(meta["tags"]),
-             f"Seeded from {path.relative_to(ROOT).as_posix()}"))
+             f"Seeded from {rel}", *((sha, rel) if tracked else ())))
         for q in queries:
             cur.execute(
                 f"""INSERT INTO {database}.GOVERNANCE.DOMAIN_QA_QUERIES (QUERY_ID, PACK_ID, PACK_VERSION, QUERY_NAME,
@@ -529,7 +577,7 @@ def seed_qa_packs(cur, database: str) -> List[str]:
                               {"pack_id": pid, "pack": meta["name"], "version": version, "sql": q["sql_expression"],
                                "expected": q["expectation"], "severity": q["severity"], "tags": q["tags"]},
                               ["QA", "PACK", *q["tags"]][:20], key, "ACTIVE", version, True))
-        log.append(f"qa pack {domain_name}/{meta['name']}: version {version} ({len(queries)} queries)")
+        log.append(f"{label}: version {version} ({len(queries)} queries)")
     if knowledge:
         merge(cur.execute, database, {"domains": [], "tables": [], "columns": [], "knowledge": knowledge})
     return log

@@ -272,3 +272,23 @@ export async function tableResults(targetTableId: string, suiteId?: string) {
   if (suiteId) p.set("suite_id", suiteId);
   return attemptValue(() => api<TableResults>(`/api/qa/results?${p}`));
 }
+
+// ---------------------------------------------------------------- test history (V042)
+
+export type TestVersion = {
+  version: number; change: "CREATED" | "EDITED" | "DELETED" | "RESTORED" | "BASELINE"; title: string | null; objective: string | null;
+  sql_text: string | null; expected: string | null; severity: string | null; suite_id: string | null; is_deleted: boolean;
+  changed_by: string | null; changed_at: string | null;
+  diff: { from: number; to: number; fields: string[]; changes: Record<string, { from: unknown; to: unknown }>; sql_diff: string[] } | null;
+};
+
+export async function loadTestVersions(testId: string) {
+  return attemptValue(() => api<{ test_id: string; versions: TestVersion[] }>(`/api/qa/tests/${enc(testId)}/versions`));
+}
+
+export async function restoreTestVersion(testId: string, version: number) {
+  const r = await attemptValue(() => api<{ restored: number; note?: string | null }>(`/api/qa/tests/${enc(testId)}/restore`,
+    { method: "POST", body: JSON.stringify({ version }) }));
+  if (r.ok) revalidatePath("/qa");
+  return r;
+}
