@@ -1,6 +1,6 @@
 "use client";
 
-import { useTransition } from "react";
+import { useEffect, useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ExternalLink, FileText, GitBranch, Loader2, RefreshCw, Search } from "lucide-react";
@@ -40,15 +40,22 @@ function next(row: PullRequestRow): string | null {
   return null;
 }
 
-export function SourceControlView({ prs, kinds, publisherReady, filters }: {
+export function SourceControlView({ prs, kinds, publisherReady, filters: fromUrl }: {
   prs: PullRequestRow[]; kinds: Record<string, string>; publisherReady: boolean;
   filters: { kind: string; state: string; q: string; domain: string };
 }) {
   const router = useRouter();
   const toast = useToast();
   const [busy, start] = useTransition();
+  // the filters as last chosen here, so a second change made before the first navigation finishes builds on it
+  const [filters, setFilters] = useState(fromUrl);
+  const urlKey = `${fromUrl.kind}|${fromUrl.state}|${fromUrl.q}|${fromUrl.domain}`;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => setFilters(fromUrl), [urlKey]);
   const go = (patch: Partial<typeof filters>) => {
-    const p = new URLSearchParams(Object.entries({ ...filters, ...patch }).filter(([, v]) => !!v) as [string, string][]);
+    const nextFilters = { ...filters, ...patch };
+    setFilters(nextFilters);
+    const p = new URLSearchParams(Object.entries(nextFilters).filter(([, v]) => !!v) as [string, string][]);
     router.push(`/dashboard/source-control${p.size ? `?${p}` : ""}`);
   };
   const check = () => start(async () => {

@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { CloudCog, Database, Plus, Share2, TableProperties, TriangleAlert, Workflow } from "lucide-react";
 import { api } from "@/lib/api";
-import type { Pipeline } from "@/lib/hub-types";
+import type { IngestionControl, Pipeline } from "@/lib/hub-types";
 import type { Overview } from "@/lib/store-types";
 import { scopedDomain } from "@/lib/domain-scope";
 import { PageHeader } from "@/components/page-header";
@@ -11,15 +11,17 @@ import { StoreNav } from "@/components/hub/store-nav";
 import { buttonVariants } from "@/components/ui/button";
 import { SourcesSection } from "@/app/sources/sources-section";
 import { PipelineTable } from "./pipeline-table";
+import { IngestionTable } from "./ingestion-table";
 
 const n = (v: number | null | undefined) => (v == null ? "-" : v.toLocaleString());
 
 /** The Source Store: what is connected, what has landed and whether it is fresh. Profiles live in the Profiling Store. */
 export default async function SourceHub({ searchParams }: { searchParams: { db?: string; schema?: string; mode?: string; domain?: string } }) {
   const domain = scopedDomain(searchParams.domain);
-  const [pipes, overview] = await Promise.all([
+  const [pipes, overview, control] = await Promise.all([
     api<{ pipelines: Pipeline[]; deployed: boolean }>("/api/hub/pipelines").catch(() => ({ pipelines: [] as Pipeline[], deployed: false })),
     api<Overview>(`/api/hub/overview${domain ? `?domain=${encodeURIComponent(domain)}` : ""}`).catch(() => null),
+    api<{ controls: IngestionControl[]; deployed: boolean }>("/api/hub/ingestion-control").catch(() => ({ controls: [] as IngestionControl[], deployed: false })),
   ]);
   const src = overview?.sources;
   const fresh = overview?.freshness;
@@ -47,12 +49,16 @@ export default async function SourceHub({ searchParams }: { searchParams: { db?:
       </div>
       <section className="border-t border-border/70 pt-6">
         <SourcesSection searchParams={searchParams} pipelineCount={registered.length}
-          pipelines={
+          pipelines={<>
+            <Panel title="SnapLogic ingestion" icon={CloudCog}>
+              {!control.deployed ? <NotDeployed what="The SnapLogic ingestion control table (PLATFORM_CONFIG.INGESTION_CONTROL_CONFIG, V044)" />
+                : <IngestionTable controls={control.controls} />}
+            </Panel>
             <Panel title="Ingestion pipelines" icon={Workflow}
                    action={<Link href="/dashboard/onboarding?type=source&branch=external" className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline"><Plus className="h-3.5 w-3.5" /> Register</Link>}>
               {!pipes.deployed ? <NotDeployed what="The ingestion pipeline catalog" /> : <PipelineTable pipelines={pipes.pipelines} />}
             </Panel>
-          } />
+          </>} />
       </section>
     </div>
   );

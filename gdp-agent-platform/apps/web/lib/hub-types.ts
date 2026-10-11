@@ -17,6 +17,27 @@ export type Pipeline = {
   created_by?: string; created_at?: string; updated_at?: string | null;
 };
 
+/** One table's SnapLogic ingestion control row (PLATFORM_CONFIG.INGESTION_CONTROL_CONFIG, V044). */
+export type IngestionControl = {
+  master_id: number; child_id: number; parent_pipeline_name: string; child_pipeline_name: string; snaplogic_project_name: string;
+  source_id: string | null; domain_id: string | null; domain_name?: string | null; source_name?: string | null; source_type?: string | null;
+  source_account: string | null; source_database_path: string | null; source_schema_file: string | null; source_table_sql: string;
+  source_file_type: string | null; source_sheet_name: string | null; source_delta_key: string | null; source_primary_keys: string | null;
+  source_where_clause: string | null; source_audit_columns: string | null; target_account: string | null;
+  landing_database: string; landing_schema: string; landing_table: string; bronze_schema: string; bronze_table: string;
+  external_stage: string | null; external_volume: string | null; base_location: string | null; config_table: string | null;
+  load_type: string; bronze_load_type: string; load_frequency: string; job_trigger_time: string | null;
+  target_previous_load_time: string | null; last_run_timestamp: string | null; landing_to_bronze_flag: boolean; is_active: boolean;
+  completion_flag: boolean; source_delete_action: string; source_delete_key: string | null; source_delete_key_value: string | null;
+  source_delete_query: string | null; api_url: string | null; api_key: string | null; created_by: string; created_at: string | null;
+  updated_by: string | null; updated_at: string | null; comments: string | null;
+};
+export type IngestionHistory = { child_id: number; action: string; is_active: boolean | null; changed_by: string; changed_at: string };
+
+export type CatalogDatabase = { database_name: string; type: "STANDARD" | "IMPORTED DATABASE" | string; comment?: string | null };
+/** Where runs can land by default (GET /api/landing/targets). */
+export type LandingDefaults = { default: { landing_database: string; landing_schema: string; storage_type: string }; database: string; schemas: string[] };
+
 export type ShareList = { shares: { name: string; owner_account: string; database_name: string | null; comment?: string }[]; mounted: string[] };
 export type ShareTable = { table_name: string; table_type?: string; row_count?: number | null; bytes?: number | null; last_altered?: string | null };
 export type OnboardStep = { step: string; ok: boolean; detail: string };

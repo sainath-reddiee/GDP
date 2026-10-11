@@ -4,7 +4,8 @@
 Share onboarding creates an ordinary run and walks it through the existing source procedures (register, access,
 landing), landing through SOURCE.LANDING_STAGE as compressed Parquet (services/source/staged.py), so the run then
 continues on /runs/<id> exactly like any other. External sources are intake only: the platform stores the answers
-(secrets sealed with services/common/secretbox.py) and never calls the ingestion tool.
+(secrets sealed with services/common/secretbox.py) and never calls the ingestion tool. SnapLogic onboarding writes one
+row per table to PLATFORM_CONFIG.INGESTION_CONTROL_CONFIG (V044), which the SnapLogic parent and child pipelines read.
 """
 
 from __future__ import annotations
@@ -20,7 +21,7 @@ from pydantic import BaseModel, Field
 from app.db import Db
 from app.main import _config, _ident, _put_config, _snowflake_error, _source_call, _table_ident, current_db
 from services.common import secretbox
-from services.source import pipelines
+from services.source import ingestion_control, pipelines
 
 router = APIRouter()
 CATALOG = "PLATFORM_CONFIG.INGESTION_PIPELINE_CATALOG"
@@ -193,6 +194,166 @@ def _secret_keys(db: Db) -> set:
     return {f["key"] for f in pipelines.fields(_form(db)) if f.get("secret") or f.get("type") == "password"}
 
 
+# ---------------------------------------------------------------- SnapLogic ingestion control (V044)
+
+
+class ControlIn(BaseModel):
+    source: dict = Field(default_factory=dict)
+    target: dict = Field(default_factory=dict)
+    load: dict = Field(default_factory=dict)
+    snaplogic: dict = Field(default_factory=dict)
+    tables: list[dict] = Field(default_factory=list, max_length=200)
+    comments: Optional[str] = Field(default=None, max_length=4000)
+
+
+CONTROL_SELECT = f"""SELECT C.*, C.CREATED_AT::VARCHAR AS CREATED_AT_TEXT, C.UPDATED_AT::VARCHAR AS UPDATED_AT_TEXT,
+                            C.LAST_RUN_TIMESTAMP::VARCHAR AS LAST_RUN_TEXT, P.SOURCE_NAME, P.SOURCE_TYPE, D.DOMAIN_NAME
+                       FROM {ingestion_control.TABLE} C
+                       LEFT JOIN {CATALOG} P ON P.SOURCE_ID = C.SOURCE_ID
+                       LEFT JOIN KNOWLEDGE.DOMAIN_REGISTRY D ON D.DOMAIN_ID = C.DOMAIN_ID"""
+
+
+def _control(r: dict) -> dict:
+    out = {k: v for k, v in r.items() if not k.endswith("_text")}
+    for k in ("created_at", "updated_at", "last_run_timestamp"):
+        out[k] = r.get({"created_at": "created_at_text", "updated_at": "updated_at_text",
+                        "last_run_timestamp": "last_run_text"}[k])
+    out["target_previous_load_time"] = str(r["target_previous_load_time"])[:19] if r.get("target_previous_load_time") else None
+    for k in ("master_id", "child_id"):
+        out[k] = int(out[k]) if out.get(k) is not None else None
+    return out
+
+
+def _history(db: Db, master_id: int, child_id: int, action: str, row: dict) -> None:
+    db.execute(f"""INSERT INTO {ingestion_control.HISTORY} (MASTER_ID, CHILD_ID, ACTION, IS_ACTIVE, CHANGED_BY, SNAPSHOT)
+                   SELECT %s, %s, %s, %s, CURRENT_USER(), PARSE_JSON(%s)""",
+               (int(master_id), int(child_id), action, bool(row.get("is_active")), json.dumps(row, default=str)))
+
+
+@router.post("/api/hub/ingestion-control/validate")
+def validate_control(body: ControlIn):
+    header, rows, errors = ingestion_control.validate(body.model_dump())
+    return {"valid": not errors, "errors": errors, "rows": rows, "source": header}
+
+
+@router.post("/api/hub/ingestion-control")
+def create_control(body: ControlIn, db: Db = Depends(current_db)):
+    """Onboard an external source for SnapLogic: one catalog row for the source and one control row per table under
+    one MASTER_ID, with a history row each, all in one transaction. Nothing is sent to SnapLogic; it reads the table."""
+    from app.db import transaction
+
+    header, rows, errors = ingestion_control.validate(body.model_dump())
+    if errors:
+        raise HTTPException(422, {"message": "Some answers need attention", "errors": errors})
+    try:
+        clash = db.query(f"""SELECT LANDING_TABLE FROM {ingestion_control.TABLE}
+                              WHERE IS_ACTIVE AND PARENT_PIPELINE_NAME = %s AND LANDING_DATABASE = %s AND LANDING_SCHEMA = %s
+                                AND LANDING_TABLE IN ({", ".join(["%s"] * len(rows))})""",
+                         (header["parent_pipeline_name"], header["landing_database"], header["landing_schema"],
+                          *[r["landing_table"] for r in rows]))
+    except Exception as exc:
+        raise HTTPException(409, "The ingestion control table is not deployed yet (migration V044).") from exc
+    if clash:
+        names = ", ".join(sorted({c["landing_table"] for c in clash}))
+        raise HTTPException(409, f"{header['parent_pipeline_name']} already loads {names}; deactivate those rows or choose other landing tables")
+    who = (db.query("SELECT CURRENT_USER() AS U") or [{"u": "UNKNOWN"}])[0]["u"]
+    source_id = str(uuid.uuid4())
+    try:
+        with transaction(db):
+            schedule = {"frequency": header["load_frequency"], **({"cron": header["job_trigger_time"]} if header["job_trigger_time"] else {})}
+            db.execute(f"""INSERT INTO {CATALOG} (SOURCE_ID, SOURCE_NAME, SOURCE_TYPE, CONNECTION_TYPE, CONNECTION_METADATA,
+                                                  SCHEDULE, TARGET_LANDING_TABLE, SNAPLOGIC_PIPELINE_NAME, DOMAIN_ID, STATUS, NOTES)
+                           SELECT %s, %s, %s, NULL, PARSE_JSON(%s), PARSE_JSON(%s), %s, %s, %s, %s, %s""",
+                       (source_id, header["source_name"], header["source_type"],
+                        json.dumps({"tables": len(rows), "control": "PLATFORM_CONFIG.INGESTION_CONTROL_CONFIG"}),
+                        json.dumps(schedule), f"{header['landing_database']}.{header['landing_schema']}.{rows[0]['landing_table']}",
+                        header["parent_pipeline_name"], header["domain_id"],
+                        "ACTIVE" if header["is_active"] else "REGISTERED", header["comments"]))
+            master_id = int(db.query("SELECT PLATFORM_CONFIG.SEQ_INGESTION_MASTER_ID.NEXTVAL AS N")[0]["n"])
+            db.execute(ingestion_control.insert_sql(len(rows)),
+                       tuple(ingestion_control.insert_params(master_id, source_id, header, rows, who)))
+            children = db.query(f"SELECT CHILD_ID, LANDING_TABLE FROM {ingestion_control.TABLE} WHERE MASTER_ID = %s ORDER BY CHILD_ID",
+                                (master_id,))
+            by_table = {r["landing_table"]: r for r in rows}
+            for c in children:
+                _history(db, master_id, int(c["child_id"]), "CREATED", by_table.get(c["landing_table"], {}))
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise _snowflake_error(exc) from exc
+    return {"master_id": master_id, "source_id": source_id, "source_name": header["source_name"],
+            "parent_pipeline_name": header["parent_pipeline_name"],
+            "children": [{"child_id": int(c["child_id"]), "landing_table": c["landing_table"]} for c in children]}
+
+
+@router.get("/api/hub/ingestion-control")
+def list_controls(source_id: Optional[str] = None, q: Optional[str] = None, active: Optional[bool] = None,
+                  db: Db = Depends(current_db)):
+    where, params = [], []
+    if source_id:
+        where.append("C.SOURCE_ID = %s")
+        params.append(source_id)
+    if active is not None:
+        where.append("C.IS_ACTIVE = %s")
+        params.append(bool(active))
+    if q and q.strip():
+        like = f"%{q.strip()[:100]}%"
+        where.append("(C.PARENT_PIPELINE_NAME ILIKE %s OR C.LANDING_TABLE ILIKE %s OR P.SOURCE_NAME ILIKE %s OR C.SOURCE_TABLE_SQL ILIKE %s)")
+        params += [like] * 4
+    clause = ("WHERE " + " AND ".join(where)) if where else ""
+    try:
+        found = db.query(f"{CONTROL_SELECT} {clause} ORDER BY C.MASTER_ID DESC, C.CHILD_ID LIMIT 1000", tuple(params))
+    except Exception:
+        return {"controls": [], "deployed": False}
+    return {"controls": [_control(r) for r in found], "deployed": True}
+
+
+@router.get("/api/hub/ingestion-control/{master_id}")
+def get_control(master_id: int, db: Db = Depends(current_db)):
+    found = db.query(f"{CONTROL_SELECT} WHERE C.MASTER_ID = %s ORDER BY C.CHILD_ID", (int(master_id),))
+    if not found:
+        raise HTTPException(404, "ingestion configuration not found")
+    history = db.query(f"""SELECT CHILD_ID, ACTION, IS_ACTIVE, CHANGED_BY, CHANGED_AT::VARCHAR AS CHANGED_AT
+                             FROM {ingestion_control.HISTORY} WHERE MASTER_ID = %s ORDER BY CHANGED_AT DESC LIMIT 500""",
+                       (int(master_id),))
+    return {"master_id": int(master_id), "controls": [_control(r) for r in found],
+            "history": [{**h, "child_id": int(h["child_id"])} for h in history]}
+
+
+class ControlEdit(BaseModel):
+    changes: dict = Field(default_factory=dict)
+
+
+@router.patch("/api/hub/ingestion-control/{master_id}/{child_id}")
+def edit_control(master_id: int, child_id: int, body: ControlEdit, db: Db = Depends(current_db)):
+    """Edit a table's control row or switch it on or off; the change is validated as the wizard would and kept in the
+    history."""
+    from app.db import transaction
+
+    found = db.query(f"SELECT * FROM {ingestion_control.TABLE} WHERE MASTER_ID = %s AND CHILD_ID = %s", (int(master_id), int(child_id)))
+    if not found:
+        raise HTTPException(404, "ingestion configuration not found")
+    current = found[0]
+    row, errors = ingestion_control.edit_row(current, body.changes)
+    if errors:
+        raise HTTPException(422, {"message": "Some answers need attention", "errors": errors})
+    fields = [c for c in (*ingestion_control.EDITABLE, "is_active") if c in body.changes]
+    if not fields:
+        raise HTTPException(400, "nothing to change")
+    action = ingestion_control.action_for(current, row)
+    try:
+        with transaction(db):
+            db.execute(f"""UPDATE {ingestion_control.TABLE} SET {", ".join(f"{c.upper()} = %s" for c in fields)},
+                                  UPDATED_BY = CURRENT_USER(), UPDATED_AT = CURRENT_TIMESTAMP()
+                            WHERE MASTER_ID = %s AND CHILD_ID = %s""",
+                       (*[row.get(c) for c in fields], int(master_id), int(child_id)))
+            _history(db, master_id, child_id, action, {**{k: current.get(k) for k in ingestion_control.COLUMNS}, **{c: row.get(c) for c in fields}})
+    except Exception as exc:
+        raise _snowflake_error(exc) from exc
+    return {"master_id": int(master_id), "child_id": int(child_id), "action": action, "is_active": bool(row.get("is_active")),
+            "changed": fields}
+
+
 # ---------------------------------------------------------------- Snowflake shares
 
 
@@ -258,6 +419,49 @@ def mount_sql(database: str, provider_account: str, share_name: str) -> str:
     assert ACCOUNT.match(provider_account or ""), "provider account must be an account locator or ORG.ACCOUNT name"
     assert SHARE.match(share_name or ""), "share name must be a Snowflake identifier"
     return f"CREATE DATABASE IF NOT EXISTS {quote(database)} FROM SHARE {provider_account}.{share_name}"
+
+class ShareMount(BaseModel):
+    provider_account: str = Field(min_length=1, max_length=255)
+    share_name: str = Field(min_length=1, max_length=255)
+    database: str = Field(min_length=1, max_length=255)
+
+
+@router.post("/api/hub/sources/share/mount")
+def mount_share(body: ShareMount, db: Db = Depends(current_db)):
+    """Create the database from an inbound share now (IMPORT SHARE), so its schemas and tables can be picked."""
+    database = _ident(body.database, "database")
+    try:
+        db.execute(mount_sql(database, body.provider_account, body.share_name))
+    except AssertionError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(403, f"Could not mount the share: {str(exc)[:300]}. Mounting needs the IMPORT SHARE privilege; "
+                                 "an admin can mount it once and you can pick the database here.") from exc
+    return {"database": database, "schemas": _share_schemas(db, database)}
+
+
+def _share_schemas(db: Db, database: str) -> list[dict]:
+    from services.source.identifiers import quote
+
+    return db.query(f"""SELECT TABLE_SCHEMA AS SCHEMA_NAME, COUNT(*) AS TABLES, SUM(ROW_COUNT) AS ROW_COUNT
+                          FROM {quote(database)}.INFORMATION_SCHEMA.TABLES
+                         WHERE TABLE_SCHEMA <> 'INFORMATION_SCHEMA'
+                         GROUP BY 1 ORDER BY 1""")
+
+
+@router.get("/api/hub/sources/share/schemas")
+def share_schemas(database: str, db: Db = Depends(current_db)):
+    """The schemas of a mounted share with their table counts, for picking what to onboard."""
+    database = _ident(database, "database")
+    kind = db.query("SELECT TYPE FROM INFORMATION_SCHEMA.DATABASES WHERE DATABASE_NAME = %s", (database,))
+    if not kind:
+        raise HTTPException(404, f"{database} is not visible to your role. Mount the share first or ask an admin "
+                                 "for IMPORTED PRIVILEGES.")
+    try:
+        return {"database": database, "schemas": _share_schemas(db, database)}
+    except Exception as exc:
+        raise _snowflake_error(exc) from exc
+
 
 
 @router.post("/api/hub/sources/share/onboard")

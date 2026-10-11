@@ -2,15 +2,16 @@
 
 import { useState } from "react";
 import { CloudCog, Share2 } from "lucide-react";
-import type { IntakeForm, ShareList } from "@/lib/hub-types";
+import type { CatalogDatabase, LandingDefaults, ShareList } from "@/lib/hub-types";
 import { cn } from "@/lib/utils";
 import { ShareWizard } from "./share-wizard";
-import { ExternalIntake } from "./external-intake";
+import { IngestionWizard } from "./ingestion-wizard";
 
 export type DomainOption = { domain_id: string; domain_name: string };
 
-export function OnboardWizard({ initialBranch, form, shares, domains }: {
-  initialBranch: "share" | "external"; form: IntakeForm | null; shares: ShareList; domains: DomainOption[];
+export function OnboardWizard({ initialBranch, shares, domains, databases, landing, user }: {
+  initialBranch: "share" | "external"; shares: ShareList; domains: DomainOption[]; databases: CatalogDatabase[];
+  landing: LandingDefaults | null; user: string | null;
 }) {
   const [branch, setBranch] = useState(initialBranch);
   const choice = (key: "share" | "external", title: string, text: string, Icon: typeof Share2) => (
@@ -30,9 +31,10 @@ export function OnboardWizard({ initialBranch, form, shares, domains }: {
     <div className="space-y-5">
       <div className="flex flex-col gap-3 md:flex-row">
         {choice("share", "Native Snowflake share", "Provider account, share, database, schema and tables. Unloaded to a Parquet stage and copied into landing.", Share2)}
-        {choice("external", "External system", "Oracle, SQL Server, Postgres, Salesforce, REST, files. Registered for the ingestion pipelines.", CloudCog)}
+        {choice("external", "External system", "Oracle, SQL Server, Postgres, Salesforce, REST, files. Configured for the SnapLogic ingestion pipelines.", CloudCog)}
       </div>
-      {branch === "share" ? <ShareWizard shares={shares} domains={domains} /> : <ExternalIntake form={form} domains={domains} />}
+      {branch === "share" ? <ShareWizard shares={shares} domains={domains} databases={databases} landing={landing} />
+        : <IngestionWizard domains={domains} user={user} />}
     </div>
   );
 }
