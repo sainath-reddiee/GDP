@@ -18,11 +18,20 @@ from services.common.sql import rows, scalar, variant
 TABLE = "GOVERNANCE.STTM_CATALOG"
 ORIGINS = ("GENERATED", "TRANSFORM_EDIT", "JOIN_EDIT", "CATALOG_EDIT", "BACKFILL")
 LINE_FIELDS = ("source_system", "source_table", "source_column", "source_datatype", "target_column", "target_datatype",
-               "mapping_type", "transformation", "business_rule", "business_definition", "join_logic")
-EDITABLE = ("transformation", "mapping_type", "business_rule", "business_definition", "source_table", "source_column")
+               "mapping_type", "transformation", "business_rule", "business_definition", "join_logic", "filter_rule")
+# every field of a line except the target column (its key) and join_logic (derived from the join plan)
+EDITABLE = ("source_system", "source_table", "source_column", "source_datatype", "target_datatype", "mapping_type",
+            "transformation", "business_rule", "business_definition", "filter_rule")
+TEXT_FIELDS = ("business_rule", "business_definition")
+NAME_FIELDS = ("source_system", "source_table", "source_column")
+DESIGN_FIELDS = ("grain", "business_keys", "dedup", "scd_type", "incremental_strategy", "filters")
+SCD_TYPES = ("0", "1", "2")
+STRATEGIES = ("merge", "append", "delete+insert", "insert_overwrite", "full_refresh")
+NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_$]{0,255}$")
+DATATYPE = re.compile(r"^[A-Za-z][A-Za-z0-9_ ]{0,60}(\(\s*\d+(\s*,\s*\d+)?\s*\))?$")
 MAPPING_TYPES = ("DIRECT", "TRANSFORM", "DERIVED", "LOOKUP", "CONSTANT", "UNMAPPED")
-COMPARED = ("source_table", "source_column", "target_datatype", "mapping_type", "transformation", "business_rule",
-            "business_definition", "join_logic")
+COMPARED = ("source_system", "source_table", "source_column", "source_datatype", "target_datatype", "mapping_type",
+            "transformation", "business_rule", "business_definition", "join_logic", "filter_rule")
 STRING_LITERAL = re.compile(r"'(?:[^']|'')*'")
 
 
@@ -73,9 +82,32 @@ def check_expression(expression: Optional[str]) -> None:
     assert_safe_transformation(text)
 
 
+def _set_field(line: Dict[str, Any], field: str, value: Any) -> None:
+    """One validated field change on a line."""
+    if field == "mapping_type":
+        v = str(value or "").upper()
+        assert v in MAPPING_TYPES, f"mapping_type must be one of {list(MAPPING_TYPES)}"
+        line[field] = v
+    elif field in ("transformation", "filter_rule"):
+        check_expression(value)
+        line[field] = (value or "").strip() or None
+    elif field in NAME_FIELDS:
+        v = str(value or "").strip()
+        assert not v or NAME.match(v), f"{field} must be a plain Snowflake name, not {v!r}"
+        line[field] = v.upper() or None
+    elif field in ("source_datatype", "target_datatype"):
+        v = str(value or "").strip()
+        assert not v or DATATYPE.match(v), f"{field} {v!r} is not a data type"
+        line[field] = v.upper() or None
+    elif field in TEXT_FIELDS:
+        line[field] = (str(value).strip()[:4000] or None) if value is not None else None
+    else:
+        raise AssertionError(f"cannot edit {field}; editable fields are {list(EDITABLE)}")
+
+
 def apply_edits(lines: List[Dict[str, Any]], edits: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], List[str]]:
     """New line set with `edits` applied (each {target_column, field: value, ...}); returns (lines, edited columns).
-    Only EDITABLE fields change; an unknown target column is an error."""
+    Any EDITABLE field of any line can change, approved or not; an unknown target column is an error."""
     out = [_line(l) for l in lines]
     index = {_key(l): l for l in out}
     touched: List[str] = []
@@ -85,18 +117,135 @@ def apply_edits(lines: List[Dict[str, Any]], edits: List[Dict[str, Any]]) -> Tup
         line = index[key]
         unknown = set(k for k in edit if k != "target_column") - set(EDITABLE)
         assert not unknown, f"cannot edit {sorted(unknown)}; editable fields are {list(EDITABLE)}"
-        if "mapping_type" in edit:
-            value = str(edit["mapping_type"] or "").upper()
-            assert value in MAPPING_TYPES, f"mapping_type must be one of {list(MAPPING_TYPES)}"
-            line["mapping_type"] = value
-        if "transformation" in edit:
-            check_expression(edit["transformation"])
-            line["transformation"] = (edit["transformation"] or "").strip() or None
-        for field in ("business_rule", "business_definition", "source_table", "source_column"):
-            if field in edit:
-                line[field] = (str(edit[field]).strip()[:4000] or None) if edit[field] is not None else None
+        for field, value in edit.items():
+            if field != "target_column":
+                _set_field(line, field, value)
         touched.append(line["target_column"])
     return out, touched
+
+
+def add_lines(lines: List[Dict[str, Any]], new: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], List[str]]:
+    """Lines for new target columns; each needs a target column name, a target data type and a mapping type."""
+    out = [_line(l) for l in lines]
+    taken = {_key(l) for l in out}
+    added: List[str] = []
+    for raw in new or []:
+        name = str(raw.get("target_column") or "").strip().upper()
+        assert NAME.match(name), f"target column {raw.get('target_column')!r} must be a plain Snowflake name"
+        assert name not in taken, f"{name} is already a target column of this mapping"
+        line = {k: None for k in LINE_FIELDS}
+        line.update(target_column=name, target_datatype="VARCHAR", mapping_type="DIRECT" if raw.get("source_column") else "UNMAPPED")
+        for field, value in raw.items():
+            if field in EDITABLE:
+                _set_field(line, field, value)
+        out.append(line)
+        taken.add(name)
+        added.append(name)
+    return out, added
+
+
+def remove_lines(lines: List[Dict[str, Any]], columns: List[str]) -> Tuple[List[Dict[str, Any]], List[str]]:
+    drop = {str(c).upper() for c in columns or []}
+    missing = drop - {_key(l) for l in lines}
+    assert not missing, f"{sorted(missing)} are not target columns of this mapping"
+    out = [_line(l) for l in lines if _key(l) not in drop]
+    assert out, "a mapping keeps at least one target column"
+    return out, sorted(drop)
+
+
+def apply_design(design: Dict[str, Any], patch: Dict[str, Any], lines: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Grain, business keys, dedup, SCD type, incremental strategy and row filters ({table, condition, reason})."""
+    out = dict(design or {})
+    unknown = set(patch or {}) - set(DESIGN_FIELDS)
+    assert not unknown, f"cannot edit {sorted(unknown)}; design fields are {list(DESIGN_FIELDS)}"
+    targets = {_key(l) for l in lines}
+    for field, value in (patch or {}).items():
+        if field in ("grain", "dedup"):
+            out[field] = (str(value or "").strip()[:1000]) or None
+        elif field == "business_keys":
+            keys = [str(k).strip().upper() for k in value or [] if str(k).strip()]
+            missing = set(keys) - targets
+            assert not missing, f"business keys {sorted(missing)} are not target columns"
+            out[field] = keys
+        elif field == "scd_type":
+            v = str(value or "1")
+            assert v in SCD_TYPES, f"scd_type must be one of {list(SCD_TYPES)}"
+            out[field] = v
+        elif field == "incremental_strategy":
+            v = str(value or "merge").lower()
+            assert v in STRATEGIES, f"incremental_strategy must be one of {list(STRATEGIES)}"
+            out[field] = v
+        elif field == "filters":
+            filters = []
+            for f in value or []:
+                condition = str(f.get("condition") or "").strip()
+                assert condition, "a filter needs a condition"
+                check_expression(condition)
+                table = str(f.get("table") or "").strip().upper()
+                assert not table or NAME.match(table), f"filter table {table!r} must be a plain Snowflake name"
+                filters.append({"table": table or None, "condition": condition,
+                                "reason": (str(f.get("reason") or "").strip()[:1000]) or None})
+            out[field] = filters
+    return out
+
+
+def apply_joins(design: Dict[str, Any], joins: Dict[str, Any], columns: Dict[str, List[str]],
+                lines: List[Dict[str, Any]]) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
+    """The run join-plan editor's rules (services.sttm.join_graph.apply_overrides) on a catalog version; returns the
+    new design and the lines with their JOIN_LOGIC recomputed."""
+    from services.sttm.join_graph import apply_overrides, join_logic_by_table
+
+    out = dict(design or {})
+    graph = apply_overrides(out.get("join_graph") or {"joins": []}, joins.get("driving_table"), joins.get("joins") or [],
+                            columns)
+    out.update(join_graph=graph, driving_table=graph["driving_table"], join_paths=[j["condition"] for j in graph["joins"]])
+    return out, with_join_logic(lines, graph, join_logic_by_table)
+
+
+def with_join_logic(lines: List[Dict[str, Any]], graph: Dict[str, Any], logic_fn=None) -> List[Dict[str, Any]]:
+    if logic_fn is None:
+        from services.sttm.join_graph import join_logic_by_table as logic_fn
+    logic = logic_fn(graph) if graph.get("driving_table") else {}
+    return [{**_line(l), "join_logic": logic.get(str(l.get("source_table") or "").upper())} for l in lines]
+
+
+def columns_from_lines(lines: List[Dict[str, Any]]) -> Dict[str, List[str]]:
+    out: Dict[str, List[str]] = {}
+    for l in lines:
+        if l.get("source_table") and l.get("source_column"):
+            cols = out.setdefault(str(l["source_table"]).upper(), [])
+            if str(l["source_column"]).upper() not in cols:
+                cols.append(str(l["source_column"]).upper())
+    return out
+
+
+def plan_edit(entry: Dict[str, Any], payload: Dict[str, Any], columns: Dict[str, List[str]]) -> Dict[str, Any]:
+    """Every change of one store edit applied to the latest version, validated together: line edits, added and
+    removed lines, design (grain, keys, dedup, SCD, strategy, filters) and the join plan. Pure; returns the new
+    lines, design, a summary and the diff."""
+    lines = [_line(l) for l in entry.get("lines") or []]
+    design = dict(entry.get("table_design") or {})
+    lines, edited = apply_edits(lines, payload.get("edits") or [])
+    lines, added = add_lines(lines, payload.get("add_lines") or [])
+    lines, removed = remove_lines(lines, payload.get("remove_lines") or []) if payload.get("remove_lines") else (lines, [])
+    if payload.get("design"):
+        design = apply_design(design, payload["design"], lines)
+    joined = bool(payload.get("joins"))
+    if joined:
+        merged = {t: list(c) for t, c in columns_from_lines(lines).items()}
+        for t, cs in (columns or {}).items():
+            merged.setdefault(t.upper(), [])
+            merged[t.upper()] += [c.upper() for c in cs if c.upper() not in merged[t.upper()]]
+        design, lines = apply_joins(design, payload["joins"], merged, lines)
+    elif design.get("join_graph"):
+        lines = with_join_logic(lines, design["join_graph"])
+    assert edited or added or removed or payload.get("design") or joined, "nothing to change"
+    parts = [f"edited {', '.join(edited[:6])}" if edited else "", f"added {', '.join(added[:6])}" if added else "",
+             f"removed {', '.join(removed[:6])}" if removed else "",
+             "design" if payload.get("design") else "", "join plan" if joined else ""]
+    summary = "; ".join(p for p in parts if p)
+    return {"lines": lines, "design": design, "summary": summary, "edited": edited, "added": added, "removed": removed,
+            "diff": diff(entry.get("lines") or [], lines)}
 
 
 def export_files(entry: Dict[str, Any], landing_tables: Optional[List[Dict[str, str]]] = None) -> Dict[str, str]:
@@ -120,7 +269,7 @@ def export_files(entry: Dict[str, Any], landing_tables: Optional[List[Dict[str, 
 def _lines_for(session, sttm_id: str) -> List[Dict[str, Any]]:
     return [_line(r) for r in rows(session, """SELECT SOURCE_SYSTEM, SOURCE_TABLE, SOURCE_COLUMN, SOURCE_DATATYPE,
                                                      TARGET_COLUMN, TARGET_DATATYPE, MAPPING_TYPE, TRANSFORMATION,
-                                                     BUSINESS_RULE, BUSINESS_DEFINITION, JOIN_LOGIC
+                                                     BUSINESS_RULE, BUSINESS_DEFINITION, JOIN_LOGIC, FILTER_RULE
                                                 FROM CONTRACT.STTM_LINE WHERE STTM_ID = ? ORDER BY TARGET_COLUMN""",
                                        [sttm_id])]
 
@@ -221,3 +370,98 @@ def search_sql(q: Optional[str] = None, source: Optional[str] = None, target: Op
          ORDER BY CREATED_AT DESC
          LIMIT {int(max(1, min(limit, 200)))} OFFSET {int(max(0, offset))}"""
     return sql, tuple(params)
+
+
+# ---------------------------------------------------------------- Snowpark: store edits (applied after approval)
+
+LINE_COLUMNS = {"source_system": "SOURCE_SYSTEM", "source_table": "SOURCE_TABLE", "source_column": "SOURCE_COLUMN",
+                "source_datatype": "SOURCE_DATATYPE", "target_datatype": "TARGET_DATATYPE", "mapping_type": "MAPPING_TYPE",
+                "transformation": "TRANSFORMATION", "business_rule": "BUSINESS_RULE",
+                "business_definition": "BUSINESS_DEFINITION", "join_logic": "JOIN_LOGIC", "filter_rule": "FILTER_RULE"}
+
+
+def _latest(session, cid: str) -> Dict[str, Any]:
+    found = rows(session, f"""SELECT CATALOG_ID, VERSION, STTM_ID, RUN_ID, DOMAIN_ID, DOMAIN_NAME, SOURCE_SYSTEM,
+                                     TARGET_TABLE_ID, TARGET_ENTITY, TABLE_DESIGN, LINES
+                                FROM {TABLE} WHERE CATALOG_ID = ? ORDER BY VERSION DESC LIMIT 1""", [cid])
+    assert found, "mapping not found"
+    r = {k.lower(): v for k, v in found[0].items()}
+    r["table_design"] = variant(r.get("table_design")) or {}
+    r["lines"] = variant(r.get("lines")) or []
+    r["version"] = int(r["version"])
+    return r
+
+
+def edit_version(session, cid: str, payload_json: str, approved: bool = False) -> Dict[str, Any]:
+    """Apply one store edit: a new catalog version (APPROVED when it came through an approval, else REVIEW) and the
+    same change written back to the run that produced the mapping, so the next dbt generation uses it."""
+    payload = json.loads(payload_json or "{}")
+    latest = _latest(session, cid)
+    base = payload.get("base_version")
+    assert base is None or int(base) == latest["version"], \
+        f"version {latest['version']} was saved since you opened v{base}; reload and apply your change again"
+    columns: Dict[str, List[str]] = {}
+    if latest.get("run_id") and payload.get("joins"):
+        try:
+            from services.sttm.procedures import _run_columns
+
+            columns = {t: [c["column_name"] for c in cs] for t, cs in _run_columns(session, latest["run_id"]).items()}
+        except Exception:
+            columns = {}
+    plan = plan_edit(latest, payload, columns)
+    note = (str(payload.get("note") or "").strip() or plan["summary"])[:2000]
+    written = write_version(session, cid, plan["lines"], "CATALOG_EDIT", note, sttm_id=latest.get("sttm_id"),
+                            run_id=latest.get("run_id"), domain_id=latest.get("domain_id"),
+                            domain_name=latest.get("domain_name"), source_system=latest.get("source_system"),
+                            target_table_id=latest.get("target_table_id"), target_entity=latest.get("target_entity") or "",
+                            status="APPROVED" if approved else "REVIEW", table_design=plan["design"])
+    synced = sync_to_run(session, latest.get("sttm_id"), latest.get("run_id"), plan, written["version"], note)
+    return {**written, "status": "APPROVED" if approved else "REVIEW", "summary": plan["summary"],
+            "diff": plan["diff"], "run_updated": synced}
+
+
+def sync_to_run(session, sttm_id: Optional[str], run_id: Optional[str], plan: Dict[str, Any], version: int,
+                note: str) -> bool:
+    """Write the catalog edit back to the run's STTM (lines, design, joins, filters) and note on the run that dbt
+    should be regenerated. Archived or deleted runs, and mappings without a run, are left alone."""
+    if not sttm_id:
+        return False
+    reg = rows(session, """SELECT S.STTM_ID, R.RUN_ID, COALESCE(R.IS_ARCHIVED, FALSE) AS ARCHIVED, R.DELETED_AT
+                             FROM CONTRACT.STTM_REGISTRY S JOIN CORE.WORKFLOW_RUN R ON R.RUN_ID = S.RUN_ID
+                            WHERE S.STTM_ID = ?""", [sttm_id])
+    if not reg or reg[0].get("ARCHIVED") or reg[0].get("DELETED_AT"):
+        return False
+    existing = rows(session, """SELECT STTM_LINE_ID, TARGET_COLUMN, TARGET_DOMAIN, TARGET_DATABASE, TARGET_SCHEMA, TARGET_TABLE
+                                  FROM CONTRACT.STTM_LINE WHERE STTM_ID = ?""", [sttm_id])
+    by_col = {str(r["TARGET_COLUMN"]).upper(): r for r in existing}
+    target = existing[0] if existing else None
+    wanted = {_key(l): l for l in plan["lines"]}
+    for col in sorted(set(by_col) - set(wanted)):
+        session.sql("DELETE FROM CONTRACT.STTM_LINE WHERE STTM_LINE_ID = ?", params=[by_col[col]["STTM_LINE_ID"]]).collect()
+    for col, line in wanted.items():
+        values = [line.get(f) for f in LINE_COLUMNS]
+        if col in by_col:
+            sets = ", ".join(f"{c} = ?" for c in LINE_COLUMNS.values())
+            session.sql(f"UPDATE CONTRACT.STTM_LINE SET {sets}, HUMAN_APPROVED = TRUE, REVIEWER = CURRENT_USER() "
+                        f"WHERE STTM_LINE_ID = ?", params=[*values, by_col[col]["STTM_LINE_ID"]]).collect()
+        elif target is not None:
+            cols = ", ".join(LINE_COLUMNS.values())
+            session.sql(f"""INSERT INTO CONTRACT.STTM_LINE (STTM_LINE_ID, STTM_ID, TARGET_DOMAIN, TARGET_DATABASE,
+                                   TARGET_SCHEMA, TARGET_TABLE, TARGET_COLUMN, {cols}, HUMAN_APPROVED, REVIEWER)
+                            SELECT ?, ?, ?, ?, ?, ?, ?, {", ".join(["?"] * len(LINE_COLUMNS))}, TRUE, CURRENT_USER()""",
+                        params=[str(uuid.uuid4()), sttm_id, target["TARGET_DOMAIN"], target["TARGET_DATABASE"],
+                                target["TARGET_SCHEMA"], target["TARGET_TABLE"], col,
+                                *[v if v is not None or f not in ("target_datatype", "mapping_type")
+                                  else ("VARCHAR" if f == "target_datatype" else "UNMAPPED")
+                                  for f, v in zip(LINE_COLUMNS, values)]]).collect()
+    session.sql("UPDATE CONTRACT.STTM_REGISTRY SET TABLE_DESIGN = PARSE_JSON(?) WHERE STTM_ID = ?",
+                params=[json.dumps(plan["design"], default=str), sttm_id]).collect()
+    try:
+        from services.workflow.procedures import _get_run, _record_run_event
+
+        _record_run_event(session, _get_run(session, run_id or reg[0]["RUN_ID"]), "HUMAN",
+                          "STTM changed in the STTM Store; regenerate dbt",
+                          {"catalog_version": version, "summary": note[:500]})
+    except Exception:
+        pass
+    return True

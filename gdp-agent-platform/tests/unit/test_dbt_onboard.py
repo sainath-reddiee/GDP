@@ -153,6 +153,15 @@ def test_unjoined_table_columns_become_todo():
     assert any("no join path" in a for a in out["report"]["anomalies"])
 
 
+def test_sttm_row_filters_land_in_the_extraction_and_column_filters_are_reported():
+    lines = inputs()["lines"][:-1] + [dict(inputs()["lines"][-1], filter_rule="ZIP IS NOT NULL")]
+    out = generate(inputs(lines=lines, filters=[{"table": "ADDRESSES", "condition": "ADDRESSES.IS_PRIMARY_ADDRESS = 1"},
+                                                {"table": "BUILDINGS", "condition": "BUILDINGS.HEIGHT > 0", "reason": "no stubs"}]))
+    eph = out["files"]["models/silver/property/lightbox/lightbox_addresses.sql"]
+    assert "\n      and (o.IS_PRIMARY_ADDRESS = 1)" in eph and "and (j1.HEIGHT > 0)  -- no stubs" in eph
+    assert any("column filter" in a and "GEOCODE_STD" in a for a in out["report"]["anomalies"])
+
+
 @pytest.mark.parametrize("bad", ['a"b', ""])
 def test_quote_rejects_unsafe(bad):
     with pytest.raises(AssertionError):

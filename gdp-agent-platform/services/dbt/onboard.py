@@ -9,6 +9,7 @@ hub model from the cut-from branch. Pure: no Snowflake or LLM calls; `inputs` ar
 
 from __future__ import annotations
 
+
 import json
 import re
 from typing import Any, Dict, Iterable, List, Optional, Tuple
@@ -16,6 +17,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 from services.common.standard import GDP, conventions, fill
 from services.knowledge.contracts import ref_lookup
 from services.common.rules import ends_with_hint, rule
+from services.sttm.join_graph import filter_conditions
 
 ENGINE = "dbt-onboard-source/engine-v1"
 SIMPLE = re.compile(r"^[A-Z_][A-Z0-9_$]*$")
@@ -500,6 +502,10 @@ def generate(inputs: Dict[str, Any], skeleton: Optional[Dict[str, str]] = None) 
         sources.setdefault(primary, {"name": primary, "identifier": primary, "columns": {}, "database": "", "schema": ""})
     for table in unjoined:
         anomalies.append(f"no join path from {primary} to {table}; its columns load as null with a TODO")
+    for line in inputs.get("lines") or []:
+        if str(line.get("filter_rule") or "").strip():
+            anomalies.append(f"{line.get('target_column')} has a column filter in the STTM ({line['filter_rule']}); "
+                             "apply it where the column is used downstream")
 
     explicit = next((str(c.get("transformation")).strip() for c in cols
                      if str(c["target_column"]).upper() == "SOURCE_UNIQUE_ID" and not c.get("source_column")
@@ -658,6 +664,7 @@ def generate(inputs: Dict[str, Any], skeleton: Optional[Dict[str, str]] = None) 
     order = f"{pref(updated_src)} desc" if updated_src else "source_unique_id"
     sp = (f"with sp_{target} as (\n    select\n        " + ",\n        ".join(sp_select) + "\n" + sp_from
           + f"\n    where nullif({uid}, '') is not null"
+          + "".join(f"\n      and {cond}" for cond in filter_conditions(inputs.get("filters") or [], alias_of))
           + f"\n    qualify row_number() over (partition by {uid} order by {order}) = 1\n)")
     ref_cte = ""
     ref_join = ""

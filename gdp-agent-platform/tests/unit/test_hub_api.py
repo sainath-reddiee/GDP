@@ -220,7 +220,30 @@ def test_sttm_edit_versions_and_conflicts(client, monkeypatch):
     ok = c.post("/api/hub/sttm/c1/edit", json={"base_version": 2, "edits": [{"target_column": "ID",
                                                                                "transformation": "CAST(ID AS NUMBER)"}]})
     assert ok.status_code == 200 and ok.json()["version"] == 3
-    assert written["args"][2] == "CATALOG_EDIT" and written["args"][1][0]["transformation"] == "CAST(ID AS NUMBER)"
+    handler_args = written["args"]
+    assert handler_args[0] == "c1" and handler_args[2] is False  # not an approved replay
+    payload = json.loads(handler_args[1])
+    assert payload["base_version"] == 2 and payload["edits"][0]["transformation"] == "CAST(ID AS NUMBER)"
+    empty = c.post("/api/hub/sttm/c1/edit", json={"base_version": 2})
+    assert empty.status_code == 400 and "nothing to change" in empty.json()["detail"]
+    full = c.post("/api/hub/sttm/c1/edit", json={
+        "base_version": 2, "add_lines": [{"target_column": "NAME", "source_column": "NAME"}],
+        "design": {"filters": [{"condition": "ACTIVE"}]},
+        "joins": {"driving_table": "A", "joins": []}, "note": "n"})
+    assert full.status_code == 200 and json.loads(written["args"][1])["joins"] == {"driving_table": "A", "joins": []}
+
+
+def test_sttm_preview_context_refine_and_csv(client, monkeypatch):
+    c, holder = client
+    holder["db"] = _sttm_db()
+    preview = c.get("/api/hub/sttm/c1/preview").json()
+    assert "DB.S.DIM_X" in preview["sql"] and preview["filters"] == []
+    ctx = c.get("/api/hub/sttm/c1/context").json()
+    assert ctx["run_id"] is None and ctx["candidates"] == [] and isinstance(ctx["columns"], dict)
+    refine = c.post("/api/hub/sttm/c1/refine", json={"target_column": "ID", "prompt": "trim it"})
+    assert refine.status_code == 400 and "run" in refine.json()["detail"]
+    csv = c.get("/api/hub/sttm/c1/export.csv")
+    assert csv.status_code == 200 and csv.headers["content-type"].startswith("text/csv") and "target_column" in csv.text
 
 
 def test_sttm_export_zip(client):

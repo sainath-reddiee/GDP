@@ -56,7 +56,7 @@ export type Expectations = { table: string; checks: { check: string; column: str
 export type SttmLine = {
   source_system?: string | null; source_table: string | null; source_column: string | null; source_datatype?: string | null;
   target_column: string; target_datatype: string | null; mapping_type: string | null; transformation: string | null;
-  business_rule: string | null; business_definition: string | null; join_logic?: string | null;
+  business_rule: string | null; business_definition: string | null; join_logic?: string | null; filter_rule?: string | null;
 };
 export type SttmSummary = {
   catalog_id: string; version: number; versions: number; sttm_id: string | null; run_id: string | null; domain_id: string | null;
@@ -126,4 +126,17 @@ export type OnboardingCheck = {
   ok: boolean;
   pack?: { ok: boolean; problems: string[]; domain: string; exists: boolean; summary: { targets: number; columns: number; knowledge: number } };
   contract?: { ok: boolean; kind: "yaml" | "markdown"; problems: string[]; summary: Record<string, unknown> };
+};
+
+export type SttmFilter = { table: string | null; condition: string; reason: string | null };
+export type SttmContext = {
+  run_id: string | null; tables: string[];
+  columns: Record<string, { column: string; data_type: string | null }[]>;
+  profiles: Record<string, { data_type: string | null; semantic_type: string | null; pii_classification: string | null; null_pct: number | null;
+    distinct_count: number | null; cardinality: string | null; min_value: string | null; max_value: string | null; potential_key: boolean;
+    top_values: { value: unknown; count: number }[] | null; row_count: number | null }>;
+  candidates: { source_table: string; source_column: string; source_datatype: string | null; target_column: string; final_score: number;
+    confidence: number | null; rank: number; recommendation: string; generated_reason: string | null; transformation: string | null }[];
+  decisions: { target_column: string; decision: string; transformation: string | null; business_justification: string | null;
+    reviewer: string | null; decided_at: string | null }[];
 };

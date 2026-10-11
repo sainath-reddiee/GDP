@@ -55,3 +55,33 @@ def test_replay_tokens_are_signed():
     token = gov._replay_token("abc")
     assert gov._valid_replay(token) == "abc"
     assert gov._valid_replay("abc.deadbeef") is None and gov._valid_replay(None) is None
+
+
+def test_store_edits_queue_even_for_holders_and_are_never_self_approved(monkeypatch):
+    db = install(monkeypatch, ["STTM.EDIT", "RUN.OPERATE"])
+    res = TestClient(app).post("/api/hub/sttm/c1/edit", json={"base_version": 1, "edits": [{"target_column": "A", "transformation": "X"}]})
+    assert res.status_code == 202 and res.json()["approver_role"] == "STTM_APPROVER"
+    insert = next(p for sql, p in db.executed if "CHANGE_REQUEST" in sql)
+    assert insert[1] == "STTM.EDIT" and insert[10] is False  # ALLOW_SELF
+
+
+def test_store_edit_without_a_policy_uses_the_store_approver(monkeypatch):
+    db = install(monkeypatch, ["DBT.EDIT", "RUN.OPERATE"])
+    res = TestClient(app).post("/api/hub/dbt/g1/files", json={"files": []})
+    assert res.status_code == 202 and res.json()["approver_role"] == "CODE_REVIEWER"
+    assert any("CHANGE_REQUEST" in sql for sql, _ in db.executed)
+
+
+def test_store_queue_can_be_switched_off(monkeypatch):
+    install(monkeypatch, ["STTM.EDIT", "RUN.OPERATE"])
+    monkeypatch.setattr(gov, "settings", lambda d: {**gov.DEFAULT_SETTINGS, "STORE_EDITS_REQUIRE_APPROVAL": False})
+    # passes the middleware (the handler itself then answers, here with a 4xx/5xx for the fake database)
+    res = TestClient(app, raise_server_exceptions=False).post("/api/hub/sttm/c1/edit", json={"base_version": 1, "edits": []})
+    assert res.status_code != 202
+
+
+def test_run_pages_keep_the_normal_rules(monkeypatch):
+    install(monkeypatch, ["STTM.EDIT", "RUN.OPERATE"])
+    res = TestClient(app, raise_server_exceptions=False).post(
+        "/api/runs/run-1/sttm/apply", json={"sttm_line_id": "L1", "transformation": "UPPER(X)"})
+    assert res.status_code != 202

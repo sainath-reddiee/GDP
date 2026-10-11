@@ -248,9 +248,16 @@ def _apply(session, stage: str, run: Dict[str, Any], scope_key: str, item: Dict[
     if stage == "STTM":
         from services.sttm.procedures import apply_transformation
 
+        # apply_transformation edits one STTM line: find the line of this target column in the run's current STTM
+        found = rows(session, """SELECT L.STTM_LINE_ID FROM CONTRACT.STTM_LINE L
+                                  JOIN CONTRACT.STTM_REGISTRY S ON S.STTM_ID = L.STTM_ID
+                                 WHERE S.RUN_ID = ? AND UPPER(L.TARGET_COLUMN) = UPPER(?)
+                                   AND S.STATUS IN ('REVIEW', 'DRAFT', 'APPROVED')
+                                 ORDER BY S.STTM_VERSION DESC LIMIT 1""", [run_id, item["target_column"]])
+        assert found, f"{item['target_column']} is not a column of this run's STTM"
         apply_transformation(session, run_id, json.dumps({
-            "target_column": item["target_column"], "transformation": item["transformation"],
-            "rationale": f"AI suggestion accepted: {item['reason']}"}))
+            "sttm_line_id": found[0]["STTM_LINE_ID"], "target_column": item["target_column"],
+            "transformation": item["transformation"], "rationale": f"AI suggestion accepted: {item['reason']}"}))
         return {"applied": "transformation applied and stored as a rule"}
     if stage == "SODA":
         from services.soda.procedures import import_client_expectations

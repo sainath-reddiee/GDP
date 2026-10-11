@@ -82,3 +82,21 @@ test("onboarding separates source, domain and application", async ({ page, conte
   await page.getByTestId("onboard-application").click();
   await expect(page.getByRole("region", { name: "Application onboarding" }).getByText("Not available yet")).toBeVisible();
 });
+
+test("an STTM Store edit is staged and sent for approval", async ({ page, context }) => {
+  await devSession(context, "light");
+  await page.goto("/dashboard/sttm/c1");
+  await expect(page.getByTestId("pending-changes")).toContainText("1 mapping change waiting for approval");
+  await page.getByTestId("line-FULL_NAME").click();
+  await page.getByLabel("Target type").fill("VARCHAR(300)");
+  await page.getByTestId("stage-line").click();
+  await expect(page.getByTestId("change-bar")).toContainText("1 change staged");
+  await page.getByTestId("sttm-tab-joins").click();
+  await expect(page.getByTestId("filters-editor").getByLabel("Filter condition")).toHaveValue("IS_DELETED = FALSE");
+  await page.getByTestId("sttm-tab-sql").click();
+  await expect(page.getByLabel("Model SQL")).toHaveValue(/WHERE \(IS_DELETED = FALSE\)/);
+  await page.getByLabel("Change note").fill("Wider names for the new CRM");
+  await page.getByTestId("submit-change").click();
+  await expect(page.getByText("Sent to STTM_APPROVER for approval")).toBeVisible();
+  await expect(page.getByTestId("change-bar")).toHaveCount(0);
+});

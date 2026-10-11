@@ -8,10 +8,11 @@ STTM: GOVERNANCE.STTM_CATALOG versions, edited inline (each edit a new version),
 from __future__ import annotations
 
 import io
+import json
 import zipfile
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -270,35 +271,171 @@ def diff_sttm(body: DiffIn, db: Db = Depends(current_db)):
     return {"from": body.from_version, "to": body.to_version, **cat_sttm.diff(a["lines"], b["lines"])}
 
 
+class JoinsIn(BaseModel):
+    driving_table: Optional[str] = Field(default=None, max_length=256)
+    joins: list[dict] = Field(default_factory=list, max_length=50)
+
+
 class EditIn(BaseModel):
+    """One store edit: any mix of line edits, added and removed lines, design (grain, keys, dedup, SCD, strategy,
+    row filters) and the join plan. Applied as a whole after approval."""
     base_version: int = Field(ge=1)
-    edits: list[dict] = Field(min_length=1, max_length=500)
+    edits: list[dict] = Field(default_factory=list, max_length=500)
+    add_lines: list[dict] = Field(default_factory=list, max_length=200)
+    remove_lines: list[str] = Field(default_factory=list, max_length=500)
+    design: Optional[dict] = None
+    joins: Optional[JoinsIn] = None
     note: Optional[str] = Field(default=None, max_length=2000)
 
 
 @router.post("/api/hub/sttm/{catalog_id}/edit")
-def edit_sttm(catalog_id: str, body: EditIn, db: Db = Depends(current_db)):
-    """Inline business-transformation edits become a new catalog version. The run's own STTM is not changed: the
-    catalog version is what the hub re-exports to dbt."""
+def edit_sttm(catalog_id: str, body: EditIn, request: Request, db: Db = Depends(current_db)):
+    """A store edit. Governance queues it for the STTM approver (every store edit waits for another person); the
+    approved replay lands here, writes a new APPROVED catalog version and writes the change back to the run's STTM
+    so the next dbt generation uses it."""
+    from app.governance import _valid_replay
+
+    payload = body.model_dump(exclude_none=True)
+    if body.joins is not None:
+        payload["joins"] = body.joins.model_dump()
     latest = _version(db, catalog_id)
     if latest["version"] != body.base_version:
         raise HTTPException(409, f"Version {latest['version']} was saved since you opened v{body.base_version}; "
                                  "reload and apply your change again")
-    try:
-        lines, touched = cat_sttm.apply_edits(latest["lines"], body.edits)
+    try:  # validate before touching Snowflake (the replay validates again against the then-latest version)
+        cat_sttm.plan_edit(latest, {k: v for k, v in payload.items() if k != "joins"}, {}) if not body.joins else None
     except (AssertionError, ValueError) as exc:
         raise HTTPException(400, str(exc)) from exc
-    note = body.note or f"Edited {', '.join(touched[:8])}"
+    approved = bool(_valid_replay(request.headers.get("x-aip-replay")))
     try:
-        written = invoke_source(db, cat_sttm.write_version, catalog_id, lines, "CATALOG_EDIT", note,
-                                **{"run_id": latest.get("run_id"), "domain_id": latest.get("domain_id"),
-                                   "domain_name": latest.get("domain_name"), "source_system": latest.get("source_system"),
-                                   "target_table_id": latest.get("target_table_id"),
-                                   "target_entity": latest["target_entity"], "status": "DRAFT",
-                                   "table_design": latest.get("table_design")})
+        return invoke_source(db, cat_sttm.edit_version, catalog_id, json.dumps(payload, default=str), approved)
+    except AssertionError as exc:
+        raise HTTPException(409 if "reload" in str(exc) else 400, str(exc)) from exc
     except Exception as exc:
         raise _snowflake_error(exc) from exc
-    return {**written, "edited": touched, "diff": cat_sttm.diff(latest["lines"], lines)}
+
+
+@router.get("/api/hub/sttm/{catalog_id}/preview")
+def preview_sttm(catalog_id: str, version: Optional[int] = None, db: Db = Depends(current_db)):
+    """The model SQL a version assembles: driving table, joins and row filters, and every target column."""
+    from services.sttm.join_graph import preview_sql
+
+    entry = _version(db, catalog_id, version)
+    design = entry.get("table_design") or {}
+    graph = dict(design.get("join_graph") or {})
+    if not graph.get("driving_table"):
+        tables = sorted({str(l.get("source_table")).upper() for l in entry["lines"] if l.get("source_table")})
+        graph = {"driving_table": design.get("driving_table") or (tables[0] if tables else None), "joins": [],
+                 "unreachable": [], "ambiguities": []}
+    return {"sql": preview_sql(graph, entry["lines"], entry["target_entity"], design.get("filters") or []),
+            "join_graph": graph, "filters": design.get("filters") or []}
+
+
+@router.get("/api/hub/sttm/{catalog_id}/context")
+def sttm_context(catalog_id: str, version: Optional[int] = None, db: Db = Depends(current_db)):
+    """What a reviewer needs beside the lines: each source column's profile, the source tables and their columns
+    (for re-picking a source or a join key), and the run's mapping candidates and decisions."""
+    entry = _version(db, catalog_id, version)
+    run_id = entry.get("run_id")
+    tables = sorted({str(l.get("source_table")).upper() for l in entry["lines"] if l.get("source_table")})
+    columns: dict = {}
+    if run_id:
+        try:
+            for r in db.query("""SELECT T.SOURCE_TABLE, C.COLUMN_NAME, C.DATA_TYPE
+                                   FROM SOURCE.LANDING_TABLE_REGISTRY T
+                                   JOIN SOURCE.LANDING_COLUMN_REGISTRY C ON C.LANDING_ID = T.LANDING_ID
+                                  WHERE T.RUN_ID = %s AND T.INGESTION_STATUS = 'COMPLETE'
+                                QUALIFY DENSE_RANK() OVER (PARTITION BY T.SOURCE_TABLE ORDER BY T.CREATED_AT DESC) = 1
+                                  ORDER BY T.SOURCE_TABLE, C.ORDINAL_POSITION""", (run_id,)):
+                columns.setdefault(str(r["source_table"]).upper(), []).append(
+                    {"column": str(r["column_name"]).upper(), "data_type": r.get("data_type")})
+        except Exception:
+            columns = {}
+    for t, cs in cat_sttm.columns_from_lines(entry["lines"]).items():
+        known = {c["column"] for c in columns.setdefault(t, [])}
+        columns[t] += [{"column": c, "data_type": None} for c in cs if c not in known]
+    profiles: dict = {}
+    if tables:
+        try:
+            for r in db.query(f"""SELECT UPPER(TABLE_NAME) AS T, UPPER(COLUMN_NAME) AS C, DATA_TYPE, SEMANTIC_TYPE,
+                                         PII_CLASSIFICATION, NULL_PCT, DISTINCT_COUNT, CARDINALITY, MIN_VALUE, MAX_VALUE,
+                                         POTENTIAL_KEY, TOP_VALUES, ROW_COUNT
+                                    FROM GOVERNANCE.DATA_PROFILES
+                                   WHERE UPPER(TABLE_NAME) IN ({", ".join(["%s"] * len(tables))})
+                                 QUALIFY ROW_NUMBER() OVER (PARTITION BY UPPER(TABLE_NAME), UPPER(COLUMN_NAME)
+                                                            ORDER BY PROFILED_AT DESC) = 1""", tuple(tables)):
+                r["top_values"] = _json(r.get("top_values"))
+                profiles[f"{r['t']}.{r['c']}"] = r
+        except Exception:
+            profiles = {}
+    candidates: list = []
+    decisions: list = []
+    if run_id:
+        try:
+            candidates = db.query("""SELECT UPPER(TBL.SOURCE_TABLE) AS SOURCE_TABLE, UPPER(L.COLUMN_NAME) AS SOURCE_COLUMN,
+                                            L.DATA_TYPE AS SOURCE_DATATYPE, UPPER(TC.COLUMN_NAME) AS TARGET_COLUMN,
+                                            C.FINAL_SCORE, C.CONFIDENCE, C.RANK, C.RECOMMENDATION, C.GENERATED_REASON,
+                                            C.TRANSFORMATION
+                                       FROM MAPPING.MAPPING_CANDIDATE C
+                                       JOIN SOURCE.LANDING_COLUMN_REGISTRY L ON L.LANDING_COLUMN_ID = C.SOURCE_COLUMN_ID
+                                       JOIN SOURCE.LANDING_TABLE_REGISTRY TBL ON TBL.LANDING_ID = L.LANDING_ID
+                                       JOIN KNOWLEDGE.TARGET_COLUMN_REGISTRY TC ON TC.TARGET_COLUMN_ID = C.TARGET_COLUMN_ID
+                                      WHERE C.RUN_ID = %s AND C.IS_CURRENT AND C.RANK <= 5
+                                      ORDER BY TC.COLUMN_NAME, C.RANK LIMIT 3000""", (run_id,))
+        except Exception:
+            candidates = []
+        try:
+            decisions = db.query("""SELECT UPPER(TC.COLUMN_NAME) AS TARGET_COLUMN, D.DECISION, D.TRANSFORMATION,
+                                           D.BUSINESS_JUSTIFICATION, D.REVIEWER, D.CREATED_AT::VARCHAR AS DECIDED_AT
+                                      FROM MAPPING.MAPPING_DECISION D
+                                      LEFT JOIN KNOWLEDGE.TARGET_COLUMN_REGISTRY TC ON TC.TARGET_COLUMN_ID = D.TARGET_COLUMN_ID
+                                     WHERE D.RUN_ID = %s AND D.IS_CURRENT""", (run_id,))
+        except Exception:
+            decisions = []
+    return {"run_id": run_id, "tables": tables, "columns": columns, "profiles": profiles,
+            "candidates": candidates, "decisions": decisions}
+
+
+class RefineIn(BaseModel):
+    target_column: str = Field(min_length=1, max_length=256)
+    prompt: str = Field(min_length=3, max_length=2000)
+    source_table: Optional[str] = Field(default=None, max_length=256)
+    source_column: Optional[str] = Field(default=None, max_length=256)
+    source_datatype: Optional[str] = Field(default=None, max_length=256)
+    target_datatype: Optional[str] = Field(default=None, max_length=256)
+    current_transformation: Optional[str] = Field(default=None, max_length=4000)
+    business_definition: Optional[str] = Field(default=None, max_length=4000)
+
+
+@router.post("/api/hub/sttm/{catalog_id}/refine")
+def refine_sttm(catalog_id: str, body: RefineIn, db: Db = Depends(current_db)):
+    """AI proposal for one line's transformation (read-only; applying it is a store edit, so it goes for approval).
+    Uses the producing run's profile, rules and code context."""
+    from services.sttm.procedures import refine_transformation
+
+    entry = _version(db, catalog_id)
+    if not entry.get("run_id"):
+        raise HTTPException(400, "AI suggestions need the run that produced this mapping; this version has none")
+    try:
+        return invoke_source(db, refine_transformation, entry["run_id"], json.dumps(body.model_dump()))
+    except AssertionError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except Exception as exc:
+        raise _snowflake_error(exc) from exc
+
+
+@router.get("/api/hub/sttm/{catalog_id}/export.csv")
+def export_sttm_csv(catalog_id: str, version: Optional[int] = None, db: Db = Depends(current_db)):
+    from services.sttm.refine import render_csv
+
+    entry = _version(db, catalog_id, version)
+    text = render_csv([{f: l.get(f) for f in ("target_column", "target_datatype", "mapping_type", "source_system",
+                                               "source_table", "source_column", "source_datatype", "transformation",
+                                               "filter_rule", "business_rule", "business_definition", "join_logic")}
+                       for l in entry["lines"]])
+    name = f"sttm_{entry['target_entity'].split('.')[-1].lower()}_v{entry['version']}.csv"
+    return StreamingResponse(io.BytesIO(text.encode("utf-8")), media_type="text/csv",
+                             headers={"Content-Disposition": f'attachment; filename="{name}"'})
 
 
 @router.get("/api/hub/sttm/{catalog_id}/export")

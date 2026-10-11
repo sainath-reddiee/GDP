@@ -167,3 +167,13 @@ def test_ops_routes_and_support_engineer():
     assert "OPS.VIEW" in viewer and read_only(viewer)
     assert decide("OPS.OPERATE", viewer, None)[0] == "FORBID"
     assert 6 in ADDED_PRIVILEGES and set(ADDED_PRIVILEGES[6]) == {"OPS.VIEW", "OPS.OPERATE"}
+
+
+def test_store_routes_and_policy():
+    from services.governance.policy import store_policy, store_queue
+
+    assert store_queue("POST", "/api/hub/sttm/abc/edit") and store_queue("PUT", "/api/dq/schedules")
+    assert not store_queue("GET", "/api/hub/sttm/abc") and not store_queue("POST", "/api/runs/r/sttm/apply")
+    assert store_policy("STTM.EDIT", {"approver_role": "X", "allow_self": True})["approver_role"] == "X"
+    assert store_policy("STTM.EDIT", {"approver_role": "X", "allow_self": True})["allow_self"] is False
+    assert store_policy("DBT.EDIT", None)["approver_role"] == "CODE_REVIEWER"
