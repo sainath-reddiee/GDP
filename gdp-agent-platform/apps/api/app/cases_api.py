@@ -20,6 +20,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.db import Db
 from app.main import _config, current_db
+from app.perf import cached
 from services.cases import rules
 from services.cases import service as svc
 from services.cases.store import CASE_SELECT, SqlStore
@@ -315,6 +316,7 @@ def list_cases(status: Optional[str] = Query(default=None, max_length=200), seve
 
 
 @router.get("/api/cases/summary")
+@cached("cases-summary", 20)
 def cases_summary(db: Db = Depends(current_db)):
     """{open, mine, p1_open, sla_breached, by_status} over the cases the caller may see."""
     who = _who(db)

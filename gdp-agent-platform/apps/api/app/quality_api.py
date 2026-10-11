@@ -22,6 +22,7 @@ from pydantic import BaseModel, Field
 
 from app.db import DATABASE, WAREHOUSE, Db
 from app.main import _json, _snowflake_error, _source_call, current_db
+from app.perf import cached
 from app.source_invoke import invoke_source
 from services.catalog import dq, dq_suite
 
@@ -291,6 +292,7 @@ def delete_schedule(table: str, db: Db = Depends(current_db)):
 
 
 @router.get("/api/dq/summary")
+@cached("dq-summary", 20)
 def summary(domain: Optional[str] = None, db: Db = Depends(current_db)):
     """For the dashboard: active checks, pass and fail of their last runs, and the share of profiled tables covered."""
     domain_id = _domain_filter(db, domain)

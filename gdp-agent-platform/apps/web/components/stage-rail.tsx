@@ -62,7 +62,7 @@ function Node({ id, label, status, href, current, note }: {
   const cls = cn("flex items-center gap-2 rounded-xl px-1.5 py-1.5 transition",
     current ? "bg-accent shadow-sm ring-1 ring-primary/20" : href ? "hover:bg-muted" : "cursor-not-allowed opacity-70");
   return href && status !== "LOCKED"
-    ? <Link href={href} prefetch className={cls} aria-current={current ? "page" : undefined}>{body}</Link>
+    ? <Link href={href} className={cls} aria-current={current ? "page" : undefined}>{body}</Link>
     : <div className={cls} title="Locked until earlier stages are approved">{body}</div>;
 }
 
@@ -144,7 +144,7 @@ export function StageRail({ runId, stages }: { runId: string; stages: StageStatu
   return (
     <nav ref={outer} aria-label="Run lineage" className="surface overflow-x-auto px-4 py-3">
       <div ref={inner} className="flex min-w-max items-center" style={scale < 1 ? { zoom: scale } : undefined}>
-        <Link href={`/runs/${runId}`} prefetch
+        <Link href={`/runs/${runId}`}
               className={cn("flex items-center gap-2 rounded-xl px-2.5 py-2 text-sm font-semibold transition",
                 overview ? "bg-accent ring-1 ring-primary/20" : "hover:bg-muted")}>
           <LayoutGrid className="h-4 w-4 text-muted-foreground" /> Overview

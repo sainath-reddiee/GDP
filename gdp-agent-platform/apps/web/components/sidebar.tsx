@@ -39,7 +39,7 @@ function Item({ link, active, counts, collapsed, nested }: {
 }) {
   const { href, label, icon: Icon, badge } = link;
   return (
-    <Link href={href} prefetch title={collapsed ? label : undefined} aria-label={collapsed ? label : undefined} aria-current={active ? "page" : undefined}
+    <Link href={href} title={collapsed ? label : undefined} aria-label={collapsed ? label : undefined} aria-current={active ? "page" : undefined}
           className={cn(ROW, collapsed ? "justify-center px-0" : nested ? "py-[6px] pl-9 pr-2.5 text-[12.5px]" : "px-2.5", active ? ON : OFF)}>
       {active && !nested && <span className="absolute -left-3 top-1/2 h-5 w-1 -translate-y-1/2 rounded-r-full bg-gradient-to-b from-indigo-300 to-violet-400" />}
       <Icon className={cn("shrink-0", nested ? "h-[15px] w-[15px]" : "h-[17px] w-[17px]", active ? "text-indigo-300" : "text-white/40 group-hover:text-white/80")} />
@@ -103,7 +103,7 @@ function ParentItem({ link, kids, path, counts, collapsed }: {
   if (collapsed) {
     return (
       <div ref={root} className="relative" onMouseEnter={show} onMouseLeave={hide} onFocus={show} onBlur={hide} onKeyDown={keys}>
-        <Link href={link.href} prefetch aria-current={path === link.href ? "page" : undefined} aria-haspopup="menu"
+        <Link href={link.href} aria-current={path === link.href ? "page" : undefined} aria-haspopup="menu"
               aria-expanded={!!fly} title={link.label} aria-label={link.label} className={cn(ROW, "justify-center px-0", active ? ON : OFF)}>
           {active && <span className="absolute -left-3 top-1/2 h-5 w-1 -translate-y-1/2 rounded-r-full bg-gradient-to-b from-indigo-300 to-violet-400" />}
           <Icon className={cn("h-[17px] w-[17px] shrink-0", active ? "text-indigo-300" : "text-white/40 group-hover:text-white/80")} />
@@ -140,7 +140,7 @@ function ParentItem({ link, kids, path, counts, collapsed }: {
     <div>
       <div className={cn(ROW, "pl-0 pr-1", path === link.href || (inside && !open) ? ON : inside ? "font-medium text-white" : OFF)}>
         {active && <span className="absolute -left-3 top-1/2 h-5 w-1 -translate-y-1/2 rounded-r-full bg-gradient-to-b from-indigo-300 to-violet-400" />}
-        <Link href={link.href} prefetch aria-current={path === link.href ? "page" : undefined} className="flex flex-1 items-center gap-3 self-stretch pl-2.5">
+        <Link href={link.href} aria-current={path === link.href ? "page" : undefined} className="flex flex-1 items-center gap-3 self-stretch pl-2.5">
           <Icon className={cn("h-[17px] w-[17px] shrink-0", active ? "text-indigo-300" : "text-white/40 group-hover:text-white/80")} />
           <span className="flex-1 truncate">{link.label}</span>
           {!open && <Badge b={b} collapsed={false} />}

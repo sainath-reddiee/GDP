@@ -27,6 +27,7 @@ from pydantic import BaseModel, Field
 from app.db import Db
 from app.main import _json, _set_config, current_db
 from app.ops_api import _RUNS_SQL, _iso, _mwaa_http, _ops_error, _q, _run_out, _x, links, slug
+from app.perf import cached
 from services.jira.client import JiraError, check_project
 from services.ops import incidents as inc
 from services.ops import notify, tickets
@@ -135,6 +136,7 @@ def list_incidents(status: Optional[str] = Query(default=None, max_length=200),
 
 
 @router.get("/api/ops/incidents/summary")
+@cached("incidents-summary", 20)
 def incidents_summary(db: Db = Depends(current_db)):
     found = _q(db, """
         SELECT COUNT_IF(I.STATUS = 'OPEN') AS OPEN_N, COUNT_IF(I.STATUS = 'ACK') AS ACK_N,

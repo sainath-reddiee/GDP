@@ -20,6 +20,7 @@ from pydantic import BaseModel, Field
 from app import jira_api as jira
 from app.db import Db
 from app.main import _json, _snowflake_error, current_db
+from app.perf import cached
 from app.source_invoke import USE_CALLER, invoke_source
 
 router = APIRouter()
@@ -424,6 +425,7 @@ def _run_tests(db: Db, domain_id: Optional[str]) -> int:
 
 
 @router.get("/api/qa-packs/summary")
+@cached("qa-packs-summary", 20)
 def qa_packs_summary(domain: Optional[str] = None, db: Db = Depends(current_db)):
     did = _domain_id(db, domain)
     try:
