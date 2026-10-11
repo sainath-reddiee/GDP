@@ -58,12 +58,16 @@ def _source_index(db: Db, tables: list[str]) -> Optional[dict]:
 
 @router.get("/api/hub/models/context")
 def context(db: Db = Depends(current_db)):
+    sql = """SELECT DESIGN_ID, VERSION, DOMAIN_NAME, MODE, PARENT_DOMAIN, STATUS, BRANCH, PR_URL,
+                    CREATED_BY, CREATED_AT::VARCHAR AS CREATED_AT
+               FROM GOVERNANCE.MODEL_DESIGNS {where}
+            QUALIFY ROW_NUMBER() OVER (PARTITION BY DESIGN_ID ORDER BY VERSION DESC) = 1
+              ORDER BY CREATED_AT DESC LIMIT 50"""
     try:
-        designs = db.query("""SELECT DESIGN_ID, VERSION, DOMAIN_NAME, MODE, PARENT_DOMAIN, STATUS, BRANCH, PR_URL,
-                                     CREATED_BY, CREATED_AT::VARCHAR AS CREATED_AT
-                                FROM GOVERNANCE.MODEL_DESIGNS
-                             QUALIFY ROW_NUMBER() OVER (PARTITION BY DESIGN_ID ORDER BY VERSION DESC) = 1
-                               ORDER BY CREATED_AT DESC LIMIT 50""")
+        try:  # canonical domain models (V039) live in the Model Workbench, not in this list
+            designs = db.query(sql.format(where="WHERE MODEL_ID IS NULL"))
+        except Exception:
+            designs = db.query(sql.format(where=""))
         deployed = True
     except Exception:
         designs, deployed = [], False
@@ -167,6 +171,16 @@ class SaveIn(SpecIn):
     design_id: Optional[str] = None
 
 
+def _not_canonical(db: Db, design_id: str) -> None:
+    """A domain's canonical model is changed through the Model Workbench (draft, review, approval), never here."""
+    try:
+        found = db.query("SELECT 1 AS X FROM GOVERNANCE.DOMAIN_MODEL WHERE MODEL_ID = %s", (design_id,))
+    except Exception:
+        return  # before V039 there are no canonical models
+    if found:
+        raise HTTPException(409, "This is a domain's canonical model; change it in the Model Workbench (open a draft).")
+
+
 def _next_version(db: Db, design_id: str) -> int:
     found = db.query("SELECT COALESCE(MAX(VERSION), 0) AS V FROM GOVERNANCE.MODEL_DESIGNS WHERE DESIGN_ID = %s",
                      (design_id,))
@@ -193,6 +207,7 @@ def save(body: SaveIn, db: Db = Depends(current_db)):
     if not spec["domain"]:
         raise HTTPException(400, "name the domain first")
     design_id = body.design_id or str(uuid.uuid4())
+    _not_canonical(db, design_id)
     version = _next_version(db, design_id)
     try:
         _insert(db, design_id, version, spec, issues, "DRAFT")
@@ -228,6 +243,7 @@ class FinalizeIn(SpecIn):
 @router.post("/api/hub/models/{design_id}/finalize")
 def finalize(design_id: str, body: FinalizeIn, db: Db = Depends(current_db)):
     """Freeze a version: no blocking issues, a valid domain pack, files rendered and stored for publishing."""
+    _not_canonical(db, design_id)
     spec, issues = _checked(db, body.spec)
     blocking = cat_models.blocking(issues)
     if blocking:
@@ -256,6 +272,7 @@ class PublishIn(BaseModel):
 @router.post("/api/hub/models/{design_id}/publish")
 def publish(design_id: str, body: PublishIn, db: Db = Depends(current_db)):
     """Cut feature/model-<domain>-<timestamp>, commit the finalized files and open a draft pull request."""
+    _not_canonical(db, design_id)
     found = db.query("SELECT DOMAIN_NAME, STATUS FROM GOVERNANCE.MODEL_DESIGNS WHERE DESIGN_ID = %s AND VERSION = %s",
                      (design_id, body.version))
     if not found:

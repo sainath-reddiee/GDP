@@ -24,7 +24,7 @@ export default async function ModelingHub({ searchParams }: { searchParams: { de
   return (
     <div className="space-y-6">
       <PageHeader eyebrow="Asset store" title="Modeling Store"
-                  description="Design domain models on the canvas, see every run's model design, and review the dbt project each run generated. dbt edits made here go for approval and become the run's next generation once it was approved or published." />
+                  description="Design domain models on the canvas, see every run's model design, and review the dbt project each run generated. dbt is read-only here: it is regenerated from the approved model and the STTM." />
       <StoreTabs base="/dashboard/modeling" current={view} keep={{ domain: searchParams.domain }}
                  tabs={[{ id: "design", label: "Design a model" }, { id: "runs", label: "Run models", count: runModels?.models.length },
                         { id: "dbt", label: "dbt projects", count: dbt?.generations.length }]} />

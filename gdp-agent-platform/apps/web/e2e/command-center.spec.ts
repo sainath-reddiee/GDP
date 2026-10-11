@@ -101,7 +101,7 @@ test("an STTM Store edit is staged and sent for approval", async ({ page, contex
   await expect(page.getByTestId("change-bar")).toHaveCount(0);
 });
 
-test("the Modeling Store shows run models and a dbt edit goes for approval", async ({ page, context }) => {
+test("the Modeling Store shows run models and dbt read-only with its changes", async ({ page, context }) => {
   await devSession(context, "light");
   await page.goto("/dashboard/modeling?view=runs");
   await expect(page.getByTestId("run-models")).toContainText("CRM customers to silver");
@@ -109,12 +109,11 @@ test("the Modeling Store shows run models and a dbt edit goes for approval", asy
   await expect(page.getByTestId("dbt-generations")).toContainText("STTM changed since; regenerate");
   await page.getByTestId("dbt-g1").click();
   await page.waitForURL(/\/dashboard\/modeling\/dbt\/g1/);
-  await expect(page.getByText("This generation is published, so an approved change becomes generation v3")).toBeVisible();
-  await page.getByLabel("File content").fill("select customer_id from {{ ref('stg_crm__customers') }}\n");
-  await expect(page.getByTestId("change-bar")).toContainText("1 file changed");
-  await page.getByLabel("Change note").fill("Only the key for now");
-  await page.getByTestId("submit-change").click();
-  await expect(page.getByText("Sent to CODE_REVIEWER for approval")).toBeVisible();
+  await expect(page.getByTestId("dbt-readonly")).toBeVisible();
+  await expect(page.getByLabel("File content")).toHaveAttribute("readonly", "");
+  await expect(page.getByTestId("change-bar")).toHaveCount(0);
+  await page.getByTestId("dbt-changes").click();
+  await expect(page.getByTestId("dbt-diff")).toContainText("Compared with generation v1");
 });
 
 test("the DQ Store decides run checks through approval", async ({ page, context }) => {

@@ -1,8 +1,7 @@
 "use client";
 
-import { useRouter } from "next/navigation";
 import { useMemo, useState, useTransition } from "react";
-import { FileCode2, Folder, Loader2, RotateCcw, Search, Send, Sparkles } from "lucide-react";
+import { FileCode2, Folder, GitCompareArrows, Info, Loader2, Search, Sparkles } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { DbtGenerationDetail } from "@/lib/store-types";
 import { Button } from "@/components/ui/button";
@@ -10,26 +9,37 @@ import { Input } from "@/components/ui/input";
 import { SqlEditor } from "@/components/quality/sql-editor";
 import { explain } from "@/components/hub/states";
 import { useToast } from "@/components/ui/toast";
-import { reviewDbtFile, saveDbtFile } from "../../actions";
+import { dbtDiff, reviewDbtFile } from "../../actions";
 
 type Review = Awaited<ReturnType<typeof reviewDbtFile>>;
+type Diff = Awaited<ReturnType<typeof dbtDiff>>;
 const RELEASE = /^release\//;
 
-export function DbtViewer({ detail, initialFile, canEdit, canReview }: {
-  detail: DbtGenerationDetail; initialFile: string | null; canEdit: boolean; canReview: boolean;
-}) {
-  const router = useRouter();
+function Patch({ text }: { text: string }) {
+  return (
+    <pre className="max-h-[520px] overflow-auto rounded-lg border bg-muted/40 p-2 font-mono text-[11px] leading-5">
+      {text.split("\n").map((line, i) => (
+        <div key={i} className={cn(line.startsWith("+") && !line.startsWith("+++") ? "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
+          : line.startsWith("-") && !line.startsWith("---") ? "bg-rose-500/10 text-rose-700 dark:text-rose-300"
+          : line.startsWith("@@") ? "text-sky-700 dark:text-sky-300" : "")}>{line || " "}</div>
+      ))}
+    </pre>
+  );
+}
+
+/** A run's generated dbt project, read-only: dbt is regenerated from the approved model and the STTM, so changes are
+ *  made there. Shows each file, the changes since the run's previous generation, and an AI review (advice only). */
+export function DbtViewer({ detail, initialFile, canReview }: { detail: DbtGenerationDetail; initialFile: string | null; canReview: boolean }) {
   const toast = useToast();
   const files = useMemo(() => detail.files.filter((f) => !RELEASE.test(f.file_path)), [detail.files]);
   const [path, setPath] = useState(initialFile && files.some((f) => f.file_path === initialFile) ? initialFile : (files.find((f) => f.file_path.startsWith("models/"))?.file_path ?? files[0]?.file_path ?? ""));
   const [q, setQ] = useState("");
-  const [drafts, setDrafts] = useState<Record<string, string>>({});
-  const [note, setNote] = useState("");
+  const [mode, setMode] = useState<"code" | "changes">("code");
   const [review, setReview] = useState<Review | null>(null);
+  const [diff, setDiff] = useState<Diff | null>(null);
   const [pending, start] = useTransition();
   const file = files.find((f) => f.file_path === path);
-  const value = drafts[path] ?? file?.content ?? "";
-  const changed = Object.entries(drafts).filter(([p, c]) => c !== files.find((f) => f.file_path === p)?.content);
+  const changed = diff && diff.ok ? new Map(diff.data.files.map((f) => [f.file_path, f])) : null;
   const groups = useMemo(() => {
     const out = new Map<string, typeof files>();
     for (const f of files.filter((f) => !q || f.file_path.toLowerCase().includes(q.toLowerCase()))) {
@@ -39,17 +49,13 @@ export function DbtViewer({ detail, initialFile, canEdit, canReview }: {
     return [...out.entries()].sort(([a], [b]) => a.localeCompare(b));
   }, [files, q]);
 
-  const submit = () => start(async () => {
-    let queued = 0;
-    for (const [p, content] of changed) {
-      const base = files.find((f) => f.file_path === p)!;
-      const r = await saveDbtFile(detail.generation.generation_id, { file_path: p, content, base_sha: base.content_sha256, note: note.trim() });
-      if (r.ok) toast("ok", r.data.new_version ? `Saved as generation v${r.data.generation_version}` : `${p} saved`);
-      else if (r.pending) queued += 1;
-      else { toast("error", `${p}: ${explain(r.error).message}`); return; }
+  const showChanges = () => start(async () => {
+    setMode("changes");
+    if (!diff) {
+      const r = await dbtDiff(detail.generation.generation_id);
+      setDiff(r);
+      if (!r.ok) toast("error", explain(r.error).message);
     }
-    if (queued) toast("info", `Sent to CODE_REVIEWER for approval (${queued} file${queued === 1 ? "" : "s"}).`);
-    setDrafts({}); setNote(""); router.refresh();
   });
   const runReview = () => start(async () => {
     setReview(null);
@@ -59,8 +65,13 @@ export function DbtViewer({ detail, initialFile, canEdit, canReview }: {
   });
 
   if (!files.length) return <p className="text-sm text-muted-foreground">This generation has no files.</p>;
+  const filePatch = changed?.get(path);
   return (
     <div className="space-y-4">
+      <p className="flex items-start gap-2 rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-sm text-sky-900 dark:border-sky-500/30 dark:bg-sky-500/10 dark:text-sky-100" data-testid="dbt-readonly">
+        <Info className="mt-0.5 h-4 w-4 shrink-0" />
+        <span>dbt is generated from the approved domain model and the STTM, so it is read-only here. Change the model in the Model Workbench or the mapping in the STTM Store, then regenerate dbt on the run.</span>
+      </p>
       <div className="grid gap-4 lg:grid-cols-[280px_minmax(0,1fr)]">
         <aside className="surface space-y-2 p-3" aria-label="Files">
           <div className="relative">
@@ -72,13 +83,13 @@ export function DbtViewer({ detail, initialFile, canEdit, canReview }: {
               <div key={dir}>
                 <p className="flex items-center gap-1 px-1 text-[11px] font-medium text-muted-foreground"><Folder className="h-3 w-3" /> {dir}</p>
                 {fs.map((f) => {
-                  const dirty = drafts[f.file_path] !== undefined && drafts[f.file_path] !== f.content;
+                  const c = changed?.get(f.file_path);
                   return (
                     <button key={f.file_path} type="button" onClick={() => { setPath(f.file_path); setReview(null); }} data-testid={`file-${f.file_path}`}
                             className={cn("flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-left font-mono text-[11px] transition",
                               f.file_path === path ? "bg-primary/10 text-foreground" : "text-muted-foreground hover:bg-muted")}>
                       <FileCode2 className="h-3 w-3 shrink-0" /><span className="truncate">{f.file_path.split("/").pop()}</span>
-                      {dirty && <span className="ml-auto h-1.5 w-1.5 rounded-full bg-warning" aria-label="changed" />}
+                      {c && <span className={cn("ml-auto rounded px-1 text-[9px] font-semibold uppercase", c.status === "added" ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-800")}>{c.status}</span>}
                     </button>
                   );
                 })}
@@ -91,17 +102,25 @@ export function DbtViewer({ detail, initialFile, canEdit, canReview }: {
             <p className="font-mono text-sm font-medium">{path}</p>
             <span className="text-[11px] text-muted-foreground">{file?.artifact_type.toLowerCase().replace(/_/g, " ")}</span>
             <span className="ml-auto flex gap-2">
-              {drafts[path] !== undefined && <Button size="sm" variant="ghost" onClick={() => setDrafts(({ [path]: _, ...rest }) => rest)}><RotateCcw className="h-3.5 w-3.5" /> Revert file</Button>}
+              <div className="flex rounded-xl bg-muted p-1 text-xs">
+                <button type="button" onClick={() => setMode("code")} className={cn("rounded-lg px-2.5 py-1 font-medium", mode === "code" ? "bg-card shadow-xs" : "text-muted-foreground")}>Code</button>
+                <button type="button" onClick={showChanges} data-testid="dbt-changes" className={cn("flex items-center gap-1 rounded-lg px-2.5 py-1 font-medium", mode === "changes" ? "bg-card shadow-xs" : "text-muted-foreground")}>
+                  <GitCompareArrows className="h-3 w-3" /> Changes</button>
+              </div>
               {canReview && <Button size="sm" variant="outline" onClick={runReview} disabled={pending}>{pending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />} Review with AI</Button>}
             </span>
           </div>
-          <SqlEditor value={value} readOnly={!canEdit} rows={Math.min(34, Math.max(12, value.split("\n").length + 1))} label="File content"
-                     onChange={(v) => setDrafts((d) => ({ ...d, [path]: v }))} />
-          {!canEdit && <p className="text-xs text-muted-foreground">Read-only: {detail.latest ? "you need the DBT.EDIT privilege to propose changes" : "a newer generation exists"}.</p>}
-          {canEdit && detail.edit_makes_version && <p className="text-xs text-muted-foreground">This generation is {detail.published ? "published" : "approved"}, so an approved change becomes generation v{detail.generation.generation_version + 1}; the run publishes the latest version.</p>}
+          {mode === "code" && <SqlEditor value={file?.content ?? ""} readOnly rows={Math.min(34, Math.max(12, (file?.content ?? "").split("\n").length + 1))} label="File content" />}
+          {mode === "changes" && (pending && !diff ? <p className="text-sm text-muted-foreground"><Loader2 className="mr-1 inline h-3.5 w-3.5 animate-spin" />Comparing with the previous generation...</p>
+            : diff && diff.ok ? (
+              <div className="space-y-2" data-testid="dbt-diff">
+                <p className="text-xs text-muted-foreground">{diff.data.base ? `Compared with generation v${diff.data.base.generation_version}: ${diff.data.files.length} file${diff.data.files.length === 1 ? "" : "s"} changed.` : "This is the run's first generation."}</p>
+                {filePatch ? <Patch text={filePatch.patch} /> : <p className="text-sm text-muted-foreground">{path} did not change.</p>}
+              </div>
+            ) : null)}
           {review && review.ok && (
             <div className="surface space-y-2 p-3" data-testid="dbt-review">
-              <p className="flex items-center gap-1.5 text-sm font-semibold"><Sparkles className="h-4 w-4 text-violet-600" /> AI review</p>
+              <p className="flex items-center gap-1.5 text-sm font-semibold"><Sparkles className="h-4 w-4 text-violet-600" /> AI review (advice)</p>
               <p className="text-sm">{review.data.summary}</p>
               <ul className="space-y-1 text-xs">
                 {review.data.findings.map((f, i) => (
@@ -109,23 +128,11 @@ export function DbtViewer({ detail, initialFile, canEdit, canReview }: {
                     {f.message}{f.line_hint ? <span className="text-muted-foreground"> ({f.line_hint})</span> : null}</li>
                 ))}
               </ul>
-              {canEdit && review.data.revised_content && review.data.revised_content !== value && (
-                <Button size="sm" variant="outline" onClick={() => setDrafts((d) => ({ ...d, [path]: review.data.revised_content }))}>Use the revised file</Button>
-              )}
+              <p className="text-xs text-muted-foreground">To act on a finding, change the model or the STTM and regenerate dbt.</p>
             </div>
           )}
         </section>
       </div>
-      {canEdit && changed.length > 0 && (
-        <div className="sticky bottom-4 z-30 mx-auto flex w-full max-w-3xl flex-wrap items-center gap-2 rounded-2xl border bg-card p-2.5 shadow-pop" data-testid="change-bar">
-          <span className="flex items-center gap-2 pl-2 text-sm font-medium"><span className="h-2 w-2 rounded-full bg-warning" />{changed.length} file{changed.length === 1 ? "" : "s"} changed</span>
-          <Input value={note} onChange={(e) => setNote(e.target.value)} placeholder="What and why (shown to the reviewer)" className="h-8 min-w-[200px] flex-1 text-xs" aria-label="Change note" />
-          <Button size="sm" variant="ghost" onClick={() => setDrafts({})}><RotateCcw className="h-3.5 w-3.5" /> Discard</Button>
-          <Button size="sm" onClick={submit} disabled={pending || note.trim().length < 3} data-testid="submit-change">
-            {pending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />} Submit for approval
-          </Button>
-        </div>
-      )}
     </div>
   );
 }

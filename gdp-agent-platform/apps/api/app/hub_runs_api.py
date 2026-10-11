@@ -8,7 +8,8 @@ a QA pack draft: a draft is not live, and the pack's own submit and approve gate
   GET  /api/hub/models/runs                latest MODELING.MODEL_DESIGN per run, with its publication
   GET  /api/hub/dbt                        latest CODEGEN.DBT_GENERATION_REGISTRY row per run
   GET  /api/hub/dbt/{generation_id}        one generation: files, versions, publication
-  POST /api/hub/dbt/{generation_id}/files  edit one file (queued; a published or approved generation gets a new version)
+  GET  /api/hub/dbt/{generation_id}/diff   what changed since the run's previous generation (dbt is read-only here:
+                                           it is regenerated from the approved model and the STTM)
   GET  /api/dq/run-checks                  CONTRACT.SODA_EXPECTATION_REGISTRY current checks with their latest result
   GET  /api/dq/run-checks/coverage         a run's STTM target columns without a check
   POST /api/dq/run-checks/decisions        approve, reject or modify a run's checks (queued)
@@ -18,10 +19,8 @@ a QA pack draft: a draft is not live, and the pack's own submit and approve gate
 
 from __future__ import annotations
 
-import hashlib
 import json
 import re
-import uuid
 from typing import Any, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -189,77 +188,45 @@ def dbt_generation(generation_id: str, db: Db = Depends(current_db)):
     latest = bool(versions) and versions[0]["generation_id"] == generation_id
     published = _published(db, generation_id)
     return {"generation": gen, "run": run[0] if run else None, "files": files, "versions": versions,
-            "publication": publication[0] if publication else None, "latest": latest, "published": published,
-            # an approved or published generation is never changed in place: an edit makes the next version
-            "edit_makes_version": published or str(gen.get("generation_status") or "").upper() == "APPROVED"}
+            "publication": publication[0] if publication else None, "latest": latest, "published": published}
 
 
-class DbtFileEdit(BaseModel):
-    file_path: str = Field(min_length=1, max_length=1024)
-    content: str = Field(min_length=1, max_length=2_000_000)
-    base_sha: Optional[str] = Field(default=None, max_length=64)
-    note: str = Field(min_length=3, max_length=2000)
+@router.get("/api/hub/dbt/{generation_id}/diff")
+def dbt_generation_diff(generation_id: str, against: Optional[str] = None, db: Db = Depends(current_db)):
+    """What changed in a generation's files since the run's previous generation (or `against`): dbt is regenerated
+    from the model and STTM, so this is how a reviewer sees the effect of a model or mapping change."""
+    import difflib
 
-
-def _new_version(db: Db, gen: dict) -> dict:
-    """Copy a generation into the next version for its run (PARENT_GENERATION_ID links them); the old one is
-    superseded. The run's publish step pushes the latest version."""
-    new_id = str(uuid.uuid4())
-    db.execute("""INSERT INTO CODEGEN.DBT_GENERATION_REGISTRY (GENERATION_ID, RUN_ID, PARENT_GENERATION_ID, DOMAIN, TARGET_MODEL,
-                         STTM_ID, STTM_VERSION, FILES_GENERATED, SKILL_VERSION, KNOWLEDGE_VERSION, MODEL_VERSION,
-                         GENERATION_VERSION, GENERATION_STATUS, STAGE_PATH, CREATED_BY)
-                  SELECT %s, RUN_ID, GENERATION_ID, DOMAIN, TARGET_MODEL, STTM_ID, STTM_VERSION, FILES_GENERATED,
-                         SKILL_VERSION, KNOWLEDGE_VERSION, MODEL_VERSION, GENERATION_VERSION + 1, 'GENERATED', STAGE_PATH,
-                         CURRENT_USER()
-                    FROM CODEGEN.DBT_GENERATION_REGISTRY WHERE GENERATION_ID = %s""", (new_id, gen["generation_id"]))
-    db.execute("""INSERT INTO CODEGEN.GENERATED_ARTIFACT (ARTIFACT_ID, GENERATION_ID, RUN_ID, ARTIFACT_TYPE, FILE_PATH, CONTENT,
-                         CONTENT_SHA256)
-                  SELECT UUID_STRING(), %s, RUN_ID, ARTIFACT_TYPE, FILE_PATH, CONTENT, CONTENT_SHA256
-                    FROM CODEGEN.GENERATED_ARTIFACT WHERE GENERATION_ID = %s""", (new_id, gen["generation_id"]))
-    db.execute("UPDATE CODEGEN.DBT_GENERATION_REGISTRY SET GENERATION_STATUS = 'SUPERSEDED' WHERE GENERATION_ID = %s",
-               (gen["generation_id"],))
-    return {"generation_id": new_id, "generation_version": int(gen["generation_version"]) + 1}
-
-
-@router.post("/api/hub/dbt/{generation_id}/files")
-def edit_dbt_file(generation_id: str, body: DbtFileEdit, db: Db = Depends(current_db)):
-    """Applied after approval. Edits the run's latest generation; when it is approved or already published the edit
-    becomes the next generation version instead, so what was reviewed or pushed stays as it was."""
     gen = _generation(db, generation_id)
-    latest = db.query("SELECT GENERATION_ID FROM CODEGEN.DBT_GENERATION_REGISTRY WHERE RUN_ID = %s "
-                      "ORDER BY GENERATION_VERSION DESC LIMIT 1", (gen["run_id"],))
-    if latest and latest[0]["generation_id"] != generation_id:
-        raise HTTPException(409, "A newer dbt generation exists for this run; open it and make the change there.")
-    path = body.file_path.strip()
-    current = db.query("SELECT CONTENT_SHA256 FROM CODEGEN.GENERATED_ARTIFACT WHERE GENERATION_ID = %s AND FILE_PATH = %s",
-                       (generation_id, path))
-    if not current:
-        raise HTTPException(404, f"No generated file {path}")
-    if body.base_sha and current[0]["content_sha256"] != body.base_sha:
-        raise HTTPException(409, f"{path} changed since you opened it; reload and make the change again.")
-    sha = hashlib.sha256(body.content.encode("utf-8")).hexdigest()
-    if sha == current[0]["content_sha256"]:
-        raise HTTPException(400, "The file is unchanged.")
-    target = {"generation_id": generation_id, "generation_version": int(gen["generation_version"])}
-    versioned = _published(db, generation_id) or str(gen.get("generation_status") or "").upper() == "APPROVED"
-    try:
-        if versioned:
-            target = _new_version(db, gen)
-        db.execute("UPDATE CODEGEN.GENERATED_ARTIFACT SET CONTENT = %s, CONTENT_SHA256 = %s WHERE GENERATION_ID = %s "
-                   "AND FILE_PATH = %s", (body.content, sha, target["generation_id"], path))
-        db.execute("""INSERT INTO CORE.WORKFLOW_EVENT (EVENT_ID, RUN_ID, FROM_STATE, TO_STATE, ACTOR_TYPE, ACTOR, REASON,
-                                                       DETAILS, GRAPH_VERSION)
-                      SELECT %s, RUN_ID, CURRENT_STATE, CURRENT_STATE, 'HUMAN', CURRENT_USER(), %s, PARSE_JSON(%s), GRAPH_VERSION
-                        FROM CORE.WORKFLOW_RUN WHERE RUN_ID = %s""",
-                   (str(uuid.uuid4()), f"dbt {path} edited in the Modeling Store (v{target['generation_version']}): "
-                                       f"{body.note.strip()}"[:2000],
-                    json.dumps({"generation_id": target["generation_id"], "file_path": path, "new_version": versioned}),
-                    gen["run_id"]))
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise _snowflake_error(exc) from exc
-    return {**target, "file_path": path, "content_sha256": sha, "new_version": versioned, "run_id": gen["run_id"]}
+    if against:
+        base = _generation(db, against)
+    else:
+        found = db.query("""SELECT GENERATION_ID, GENERATION_VERSION FROM CODEGEN.DBT_GENERATION_REGISTRY
+                             WHERE RUN_ID = %s AND GENERATION_VERSION < %s ORDER BY GENERATION_VERSION DESC LIMIT 1""",
+                         (gen["run_id"], int(gen["generation_version"])))
+        base = found[0] if found else None
+    def files(gid: Optional[str]) -> dict:
+        if not gid:
+            return {}
+        return {r["file_path"]: r.get("content") or "" for r in db.query(
+            "SELECT FILE_PATH, CONTENT FROM CODEGEN.GENERATED_ARTIFACT WHERE GENERATION_ID = %s", (gid,))}
+
+    old, new = files((base or {}).get("generation_id")), files(generation_id)
+    out = []
+    for path in sorted(set(old) | set(new)):
+        if path.startswith("release/"):
+            continue
+        a, b = old.get(path), new.get(path)
+        if a == b:
+            continue
+        status = "added" if a is None else "removed" if b is None else "changed"
+        patch = "".join(difflib.unified_diff((a or "").splitlines(True), (b or "").splitlines(True),
+                                             fromfile=f"v{(base or {}).get('generation_version', 0)}/{path}",
+                                             tofile=f"v{gen['generation_version']}/{path}", n=3))
+        out.append({"file_path": path, "status": status, "patch": patch[:200_000]})
+    return {"generation_id": generation_id, "generation_version": gen["generation_version"],
+            "base": {"generation_id": base["generation_id"], "generation_version": base["generation_version"]} if base else None,
+            "files": out}
 
 
 # ---------------------------------------------------------------- Data Quality Store: run checks

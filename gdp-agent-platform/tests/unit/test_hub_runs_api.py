@@ -78,9 +78,7 @@ def test_run_models_route_wins_over_design_id(client):
 
 
 def test_store_write_routes_always_queue():
-    assert store_queue("POST", "/api/hub/dbt/g1/files")
     assert store_queue("POST", "/api/dq/run-checks/decisions")
-    assert privilege_for("POST", "/api/hub/dbt/g1/files")[0] == "DBT.EDIT"
     assert privilege_for("POST", "/api/dq/run-checks/decisions")[0] == "SODA.EDIT"
     # a pack draft is not live: promoting tests needs PACKAGE.EDIT but is not a store queue
     assert privilege_for("POST", "/api/qa/run-tests/promote")[0] == "PACKAGE.EDIT"
@@ -113,68 +111,43 @@ def test_dbt_list_falls_back_before_the_sttm_catalog(client):
     assert body == {"generations": [{"generation_id": "g1", "run_id": "r1"}], "deployed": True}
 
 
-def _dbt_db(status="GENERATED", published=False, latest="g1", sha="old"):
+def test_dbt_is_read_only_in_the_store(client):
+    c, _ = client
+    assert c.post("/api/hub/dbt/g1/files", json={"file_path": "x.sql", "content": "select 1", "note": "abc"}).status_code in (404, 405)
+    assert not store_queue("POST", "/api/hub/dbt/g1/files")
+
+
+def _gen_db(previous=True):
+    files = {"g1": {"models/a.sql": "select 1 as id\n", "models/b.sql": "select 2\n", "release/report.json": "{}"},
+             "g0": {"models/a.sql": "select id\n", "models/old.sql": "select 0\n", "release/report.json": "[]"}}
     return FakeDb({
-        "SELECT 1 AS X FROM CODEGEN.GIT_PUBLICATION": [{"x": 1}] if published else [],
-        "ORDER BY GENERATION_VERSION DESC LIMIT 1": [{"generation_id": latest}],
-        "FROM CODEGEN.DBT_GENERATION_REGISTRY WHERE GENERATION_ID = %s": [
-            {"generation_id": "g1", "run_id": "r1", "generation_version": 3, "generation_status": status}],
-        "SELECT CONTENT_SHA256 FROM CODEGEN.GENERATED_ARTIFACT": [{"content_sha256": sha}],
+        "FROM CODEGEN.DBT_GENERATION_REGISTRY WHERE GENERATION_ID = %s": lambda p: [
+            {"generation_id": p[0], "run_id": "r1", "generation_version": 2 if p[0] == "g1" else 1, "generation_status": "GENERATED"}],
+        "AND GENERATION_VERSION < %s": [{"generation_id": "g0", "generation_version": 1}] if previous else [],
+        "SELECT FILE_PATH, CONTENT FROM CODEGEN.GENERATED_ARTIFACT": lambda p: [
+            {"file_path": k, "content": v} for k, v in files[p[0]].items()],
     })
 
 
-EDIT = {"file_path": "models/marts/dim_customer.sql", "content": "select 1 as id", "note": "simpler select"}
-
-
-def test_dbt_edit_in_place_while_not_approved(client):
+def test_dbt_diff_against_the_previous_generation(client):
     c, holder = client
-    holder["db"] = _dbt_db()
-    body = c.post("/api/hub/dbt/g1/files", json=EDIT).json()
-    assert body["new_version"] is False and body["generation_id"] == "g1"
-    update = sqls(holder["db"], "UPDATE CODEGEN.GENERATED_ARTIFACT")
-    assert update and update[0][1][2:] == ("g1", "models/marts/dim_customer.sql")
-    assert not sqls(holder["db"], "INSERT INTO CODEGEN.DBT_GENERATION_REGISTRY")
-    event = sqls(holder["db"], "INSERT INTO CORE.WORKFLOW_EVENT")
-    assert event and "edited in the Modeling Store" in event[0][1][1] and "GRAPH_VERSION" in event[0][0]
+    holder["db"] = _gen_db()
+    body = c.get("/api/hub/dbt/g1/diff").json()
+    assert body["base"] == {"generation_id": "g0", "generation_version": 1}
+    by = {f["file_path"]: f for f in body["files"]}
+    assert set(by) == {"models/a.sql", "models/b.sql", "models/old.sql"}  # release files are not shown
+    assert by["models/a.sql"]["status"] == "changed" and "+select 1 as id" in by["models/a.sql"]["patch"]
+    assert by["models/b.sql"]["status"] == "added" and by["models/old.sql"]["status"] == "removed"
 
 
-@pytest.mark.parametrize("status,published", [("APPROVED", False), ("GENERATED", True)])
-def test_dbt_edit_of_approved_or_published_makes_next_version(client, status, published):
+def test_dbt_diff_of_a_first_generation(client):
     c, holder = client
-    holder["db"] = _dbt_db(status=status, published=published)
-    body = c.post("/api/hub/dbt/g1/files", json=EDIT).json()
-    assert body["new_version"] is True and body["generation_version"] == 4 and body["generation_id"] != "g1"
-    new_id = body["generation_id"]
-    copy = sqls(holder["db"], "INSERT INTO CODEGEN.DBT_GENERATION_REGISTRY")[0]
-    assert copy[1] == (new_id, "g1") and "GENERATION_VERSION + 1" in copy[0] and "PARENT_GENERATION_ID" in copy[0]
-    assert sqls(holder["db"], "INSERT INTO CODEGEN.GENERATED_ARTIFACT")[0][1] == (new_id, "g1")
-    assert sqls(holder["db"], "SET GENERATION_STATUS = 'SUPERSEDED'")[0][1] == ("g1",)
-    # the edit lands in the new version, never in the reviewed or pushed one
-    assert sqls(holder["db"], "UPDATE CODEGEN.GENERATED_ARTIFACT")[0][1][2] == new_id
+    holder["db"] = _gen_db(previous=False)
+    body = c.get("/api/hub/dbt/g1/diff").json()
+    assert body["base"] is None and {f["status"] for f in body["files"]} == {"added"}
 
 
-def test_dbt_edit_rejects_stale_and_superseded(client):
-    c, holder = client
-    holder["db"] = _dbt_db(latest="g2")
-    r = c.post("/api/hub/dbt/g1/files", json=EDIT)
-    assert r.status_code == 409 and "newer dbt generation" in r.json()["detail"]
-    holder["db"] = _dbt_db(sha="current")
-    r = c.post("/api/hub/dbt/g1/files", json={**EDIT, "base_sha": "opened"})
-    assert r.status_code == 409 and "changed since you opened it" in r.json()["detail"]
-    assert not sqls(holder["db"], "UPDATE CODEGEN.GENERATED_ARTIFACT")
-
-
-def test_dbt_edit_needs_a_note_and_a_change(client):
-    c, holder = client
-    holder["db"] = _dbt_db()
-    assert c.post("/api/hub/dbt/g1/files", json={**EDIT, "note": ""}).status_code == 422
-    import hashlib
-    same = hashlib.sha256(EDIT["content"].encode()).hexdigest()
-    holder["db"] = _dbt_db(sha=same)
-    assert c.post("/api/hub/dbt/g1/files", json=EDIT).status_code == 400
-
-
-def test_dbt_detail_says_when_an_edit_makes_a_version(client):
+def test_dbt_detail(client):
     c, holder = client
     holder["db"] = FakeDb({
         "FROM CODEGEN.DBT_GENERATION_REGISTRY WHERE GENERATION_ID = %s": [
@@ -183,7 +156,7 @@ def test_dbt_detail_says_when_an_edit_makes_a_version(client):
         "FROM CODEGEN.GENERATED_ARTIFACT": [{"file_path": "dbt_project.yml", "content": "name: x"}],
     })
     body = c.get("/api/hub/dbt/g1").json()
-    assert body["latest"] is True and body["edit_makes_version"] is True and body["files"][0]["file_path"] == "dbt_project.yml"
+    assert body["latest"] is True and "edit_makes_version" not in body and body["files"][0]["file_path"] == "dbt_project.yml"
 
 
 # ---------------------------------------------------------------- run checks

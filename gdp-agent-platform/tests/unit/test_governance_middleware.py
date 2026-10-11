@@ -66,10 +66,27 @@ def test_store_edits_queue_even_for_holders_and_are_never_self_approved(monkeypa
 
 
 def test_store_edit_without_a_policy_uses_the_store_approver(monkeypatch):
-    db = install(monkeypatch, ["DBT.EDIT", "RUN.OPERATE"])
-    res = TestClient(app).post("/api/hub/dbt/g1/files", json={"files": []})
-    assert res.status_code == 202 and res.json()["approver_role"] == "CODE_REVIEWER"
+    db = install(monkeypatch, ["SODA.EDIT", "RUN.OPERATE"])
+    monkeypatch.setattr(gov, "policies", lambda d: {})
+    res = TestClient(app).post("/api/dq/run-checks/decisions", json={"run_id": "r1", "decisions": []})
+    assert res.status_code == 202 and res.json()["approver_role"] == "DQ_APPROVER"
     assert any("CHANGE_REQUEST" in sql for sql, _ in db.executed)
+
+
+def test_workbench_routes_are_never_queued(monkeypatch):
+    """MODEL.APPROVE has an approval policy, but deciding a model version is itself the review: a holder passes,
+    anyone else is refused instead of being queued."""
+    policy = {"MODEL.APPROVE": {"approver_role": "MODEL_APPROVER", "active": True, "requires_approval": True,
+                                "four_eyes": True}}
+    install(monkeypatch, ["MODEL.APPROVE", "MODEL.EDIT", "RUN.OPERATE"])
+    monkeypatch.setattr(gov, "policies", lambda d: policy)
+    res = TestClient(app, raise_server_exceptions=False).post("/api/hub/domain-models/m1/versions/2/approve", json={})
+    assert res.status_code != 202
+    db = install(monkeypatch, ["REQUEST.CHANGES", "RUN.OPERATE"])
+    monkeypatch.setattr(gov, "policies", lambda d: policy)
+    res = TestClient(app).post("/api/hub/domain-models/m1/versions/2/approve", json={})
+    assert res.status_code == 403 and "never queued" in res.json()["detail"]
+    assert not any("CHANGE_REQUEST" in sql for sql, _ in db.executed)
 
 
 def test_store_queue_can_be_switched_off(monkeypatch):

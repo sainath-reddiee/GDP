@@ -123,7 +123,7 @@ export type DbtGenerationDetail = {
   files: DbtFile[];
   versions: { generation_id: string; generation_version: number; generation_status: string; parent_generation_id: string | null; created_by: string | null; created_at: string }[];
   publication: { status: string; head_branch: string | null; base_branch: string | null; pr_url: string | null; pr_number: number | null; generation_id: string | null; created_at: string } | null;
-  latest: boolean; published: boolean; edit_makes_version: boolean;
+  latest: boolean; published: boolean;
 };
 export type RunCheck = {
   expectation_id: string; run_id: string; run_name: string | null; current_state: string | null; domain_name: string | null;
