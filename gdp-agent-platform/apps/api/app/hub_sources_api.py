@@ -127,7 +127,7 @@ def register_pipeline(body: Answers, db: Db = Depends(current_db)):
     if errors:
         raise HTTPException(422, {"message": "Some answers need attention", "errors": errors})
     source_id = str(uuid.uuid4())
-    row = pipelines.catalog_row(source_id, public)
+    row = pipelines.catalog_row(source_id, _with_domain(public, body.answers))
     taken = db.query(f"SELECT SOURCE_ID FROM {CATALOG} WHERE SOURCE_NAME = %s AND STATUS <> 'RETIRED'",
                      (row["source_name"],))
     if taken:
@@ -168,7 +168,7 @@ def update_pipeline(source_id: str, body: PipelineUpdate, db: Db = Depends(curre
     errors = {k: v for k, v in errors.items() if not (k in _secret_keys(db) and found[0].get("secret_sealed"))}
     if errors:
         raise HTTPException(422, {"message": "Some answers need attention", "errors": errors})
-    row = pipelines.catalog_row(source_id, public, status)
+    row = pipelines.catalog_row(source_id, _with_domain(public, body.answers), status)
     sealed = _seal(secrets, source_id) if secrets else found[0].get("secret_sealed")
     db.execute(
         f"""UPDATE {CATALOG} SET SOURCE_NAME = %s, SOURCE_TYPE = %s, CONNECTION_TYPE = %s,
@@ -181,6 +181,12 @@ def update_pipeline(source_id: str, body: PipelineUpdate, db: Db = Depends(curre
          row["snaplogic_pipeline_name"], row["domain_id"], status, row["notes"], source_id),
     )
     return {"source_id": source_id, "pipeline": {**pipelines.mask(row), "has_secret": bool(sealed)}}
+
+
+def _with_domain(public: dict, answers: dict) -> dict:
+    """The domain is picked beside the intake questions (not one of them), so it is carried over here."""
+    domain_id = str((answers or {}).get("domain_id") or "").strip()
+    return {**public, "domain_id": domain_id[:36]} if domain_id else public
 
 
 def _secret_keys(db: Db) -> set:

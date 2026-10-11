@@ -1,6 +1,6 @@
 import Link from "next/link";
 import {
-  Activity, AlertTriangle, ArrowRight, ArrowUpRight, Boxes, CheckCircle2, CircleDashed, Clock, Database, Eye,
+  Activity, AlertTriangle, ArrowRight, Boxes, CheckCircle2, CircleDashed, Clock, Database, Eye,
   FolderTree, Layers, PlayCircle, Siren, Sparkles, XCircle,
 } from "lucide-react";
 import { api, whoami } from "@/lib/api";
@@ -9,6 +9,7 @@ import type { IncidentSummary } from "../incidents/actions";
 import type { OpsSummary, Reliability } from "../ops/actions";
 import { RunTable } from "@/components/run-table";
 import { PageHeader } from "@/components/page-header";
+import { Kpi, Panel } from "@/components/hub/kpi";
 import { buttonVariants } from "@/components/ui/button";
 import { displayDomain } from "@/lib/catalog-display";
 import { FUNNEL, ago, isCancelled, needsReview, runHref, summarize } from "@/lib/run-insights";
@@ -81,51 +82,6 @@ function greeting() {
   return h < 12 ? "Good morning" : h < 17 ? "Good afternoon" : "Good evening";
 }
 
-// soft tints per state: chip, the faint glow in the corner, and the accent line of a highlighted card
-const TONES = {
-  blue: { chip: "bg-indigo-50 text-indigo-600 ring-indigo-100", glow: "bg-indigo-400", line: "from-indigo-400 to-violet-400" },
-  rose: { chip: "bg-rose-50 text-rose-600 ring-rose-100", glow: "bg-rose-400", line: "from-rose-400 to-pink-400" },
-  slate: { chip: "bg-slate-100 text-slate-600 ring-slate-200", glow: "bg-slate-400", line: "from-slate-300 to-slate-400" },
-  emerald: { chip: "bg-emerald-50 text-emerald-600 ring-emerald-100", glow: "bg-emerald-400", line: "from-emerald-400 to-teal-400" },
-  amber: { chip: "bg-amber-50 text-amber-600 ring-amber-100", glow: "bg-amber-400", line: "from-amber-400 to-orange-400" },
-} as const;
-
-function Kpi({ href, label, value, hint, icon: Icon, tone, highlight }: {
-  href: string; label: string; value: number; hint: string; icon: typeof Activity; tone: keyof typeof TONES; highlight?: boolean;
-}) {
-  const t = TONES[tone];
-  return (
-    <Link href={href}
-          className={cn("surface group relative overflow-hidden p-4 transition duration-200 hover:border-primary/25 hover:shadow-hover",
-            highlight && "border-rose-200 bg-gradient-to-br from-rose-50/70 via-card to-card")}>
-      {highlight && <div className={cn("absolute inset-x-0 top-0 h-0.5 bg-gradient-to-r", t.line)} />}
-      <div className={cn("absolute -right-10 -top-10 h-28 w-28 rounded-full opacity-[0.07] blur-xl", t.glow)} />
-      <div className="flex items-center justify-between">
-        <span className={cn("grid h-9 w-9 place-items-center rounded-xl ring-1 ring-inset", t.chip)}><Icon className="h-4 w-4" /></span>
-        <ArrowUpRight className="h-4 w-4 text-muted-foreground/60 opacity-0 transition group-hover:opacity-100" />
-      </div>
-      <p className="mt-3 text-[28px] font-semibold leading-none tracking-tight tabular-nums">{value}</p>
-      <p className="mt-1.5 text-sm font-medium">{label}</p>
-      <p className="text-xs text-muted-foreground">{hint}</p>
-    </Link>
-  );
-}
-
-function Panel({ title, icon: Icon, action, children, className }: {
-  title: string; icon: typeof Activity; action?: React.ReactNode; children: React.ReactNode; className?: string;
-}) {
-  return (
-    <section className={cn("surface flex flex-col p-5", className)}>
-      <div className="mb-4 flex items-center gap-2">
-        <span className="grid h-7 w-7 place-items-center rounded-lg bg-accent text-accent-foreground ring-1 ring-inset ring-primary/10"><Icon className="h-3.5 w-3.5" /></span>
-        <h3 className="text-sm font-semibold">{title}</h3>
-        <div className="ml-auto">{action}</div>
-      </div>
-      {children}
-    </section>
-  );
-}
-
 export default async function Dashboard() {
   const [me, { runs }, metrics, review, failing, overview, store, domains, audit, ops] = await Promise.all([
     whoami(),
@@ -168,7 +124,7 @@ export default async function Dashboard() {
                     : `${s.running} run${s.running === 1 ? "" : "s"} in flight and nothing waiting on you.`}
                   actions={<>
                     <Link href="/runs" className={buttonVariants({ variant: "outline" })}>All runs</Link>
-                    <Link href="/sources" className={buttonVariants()}><Sparkles className="h-4 w-4" /> Profile & model a source</Link>
+                    <Link href="/dashboard/sources" className={buttonVariants()}><Sparkles className="h-4 w-4" /> Profile & model a source</Link>
                   </>} />
 
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-5">
@@ -245,7 +201,7 @@ export default async function Dashboard() {
 
       <div className="grid gap-4 lg:grid-cols-3">
         <Panel title="Profile store" icon={Layers}
-               action={<Link href="/sources" className="text-xs font-medium text-primary hover:underline">Open Sources</Link>}>
+               action={<Link href="/dashboard/sources" className="text-xs font-medium text-primary hover:underline">Open Sources</Link>}>
           <div className="flex items-end gap-6">
             <div>
               <p className="text-3xl font-semibold tabular-nums">{staged}</p>

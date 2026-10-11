@@ -4,8 +4,8 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 import {
-  Activity, BookOpen, Boxes, ChevronsLeft, ChevronsRight, Database, FileClock, FlaskConical, FolderGit2, LayoutDashboard, ListChecks, LogOut, Settings,
-  ShieldCheck, Siren, Sparkles, Workflow,
+  Activity, BadgeCheck, BarChart3, BookOpen, Boxes, ChevronsLeft, ChevronsRight, Database, FileClock, FlaskConical, FolderGit2, GitCompareArrows,
+  LayoutDashboard, ListChecks, LogOut, Network, Rocket, Settings, ShieldCheck, Siren, Sparkles, Workflow,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { logout } from "@/app/login/actions";
@@ -13,7 +13,7 @@ import type { NavCounts } from "@/app/bff/nav/route";
 import { RoleSelector } from "@/components/role-selector";
 import { ReportProblemButton } from "@/components/report-problem";
 
-type NavLink = { href: string; label: string; icon: typeof Database; privilege?: string | string[];
+type NavLink = { href: string; label: string; icon: typeof Database; privilege?: string | string[]; exact?: boolean;
   badge?: (c: NavCounts) => { value: number; tone: string; title: string } | null };
 
 /** Incidents shipped with PR O2. */
@@ -23,21 +23,25 @@ const SHOW_INCIDENTS = true;
 const groups: { label: string; links: NavLink[] }[] = [
   {
     label: "Overview",
-    links: [{ href: "/dashboard", label: "Dashboard", icon: LayoutDashboard }],
+    links: [{ href: "/dashboard", label: "Dashboard", icon: LayoutDashboard, exact: true }],
   },
   {
     label: "Ingest",
     links: [
       {
-        href: "/sources", label: "Sources", icon: Database,
+        href: "/dashboard/sources", label: "Sources", icon: Database,
         badge: (c) => c.profiling ? { value: c.profiling, tone: "bg-amber-400 text-amber-950", title: `${c.profiling} profiling now` }
           : c.staged ? { value: c.staged, tone: "bg-white/10 text-white/70", title: `${c.staged} tables staged` } : null,
       },
+      { href: "/dashboard/onboarding", label: "Onboarding", icon: Rocket },
     ],
   },
   {
-    label: "Model and build",
+    label: "Profile and model",
     links: [
+      { href: "/dashboard/profiling", label: "Profiling", icon: BarChart3 },
+      { href: "/dashboard/modeling", label: "Modeling", icon: Network },
+      { href: "/dashboard/sttm", label: "STTM", icon: GitCompareArrows },
       {
         href: "/runs", label: "Runs", icon: ListChecks,
         badge: (c) => c.review ? { value: c.review, tone: "bg-rose-500 text-white", title: `${c.review} waiting on review` }
@@ -49,7 +53,7 @@ const groups: { label: string; links: NavLink[] }[] = [
   },
   {
     label: "Quality",
-    links: [{
+    links: [{ href: "/dashboard/quality", label: "Quality center", icon: BadgeCheck }, {
       href: "/qa", label: "QA", icon: FlaskConical, privilege: ["QA.EDIT", "JIRA.READ", "CASE.WORK"],
       badge: (c) => c.cases ? { value: c.cases, tone: "bg-sky-500 text-white", title: `${c.cases} open cases` } : null,
     }],
@@ -143,8 +147,8 @@ export function Sidebar({ user, role, canLogout, privileges, appRoles }: {
           {!collapsed
             ? <p className="mb-1.5 px-2.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-white/30">{group.label}</p>
             : <div className="mx-3 mb-2 h-px bg-white/10" />}
-          {group.links.map(({ href, label, icon: Icon, badge }) => {
-            const active = path === href || path.startsWith(`${href}/`);
+          {group.links.map(({ href, label, icon: Icon, badge, exact }) => {
+            const active = exact ? path === href : path === href || path.startsWith(`${href}/`);
             const b = counts && badge ? badge(counts) : null;
             return (
               <Link key={href} href={href} prefetch title={collapsed ? label : undefined}

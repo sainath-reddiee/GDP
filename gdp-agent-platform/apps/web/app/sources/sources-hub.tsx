@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import {
   AlertTriangle, ArrowRight, CheckCircle2, ChevronRight, CircleDashed, Database, Eye, FolderTree, Globe,
   Layers, Loader2, Plus, RefreshCw, Search, Snowflake, Sparkles, Table2, X, XCircle,
@@ -201,6 +201,7 @@ export function SourcesHub({
   initialMode?: Mode;
 }) {
   const router = useRouter();
+  const pathname = usePathname();
   const [overview, setOverview] = useState(initialOverview);
   const [store, setStore] = useState(initialStore);
   const [mode, setModeState] = useState<Mode>(initialMode);
@@ -226,8 +227,8 @@ export function SourcesHub({
   const syncUrl = useCallback((next: Mode, t: Target | null) => {
     const params = new URLSearchParams({ mode: next });
     if (t?.database && t.schema) { params.set("db", t.database); params.set("schema", t.schema); }
-    router.replace(`/sources?${params.toString()}`, { scroll: false });
-  }, [router]);
+    router.replace(`${pathname}?${params.toString()}`, { scroll: false });
+  }, [router, pathname]);
 
   const setMode = (next: Mode) => {
     setModeState(next);

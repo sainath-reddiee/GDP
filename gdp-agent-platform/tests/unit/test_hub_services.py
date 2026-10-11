@@ -413,7 +413,7 @@ def test_contract_markdown_uses_the_platform_parser():
     ("POST", "/api/hub/profiles/reprofile", "PROFILE.RUN"),
     ("POST", "/api/hub/profiles/bookmarks", None),
     ("POST", "/api/hub/sttm/abc/edit", "STTM.EDIT"),
-    ("POST", "/api/hub/sttm/abc/export", None),
+    ("GET", "/api/hub/sttm/abc/export", None),
     ("POST", "/api/hub/models/propose", "AI.USE"),
     ("POST", "/api/hub/models/render", None),
     ("POST", "/api/hub/models", "MODEL.EDIT"),

@@ -301,7 +301,7 @@ def edit_sttm(catalog_id: str, body: EditIn, db: Db = Depends(current_db)):
     return {**written, "edited": touched, "diff": cat_sttm.diff(latest["lines"], lines)}
 
 
-@router.post("/api/hub/sttm/{catalog_id}/export")
+@router.get("/api/hub/sttm/{catalog_id}/export")
 def export_sttm(catalog_id: str, version: Optional[int] = None, format: str = "zip", db: Db = Depends(current_db)):
     entry = _version(db, catalog_id, version)
     landing = []

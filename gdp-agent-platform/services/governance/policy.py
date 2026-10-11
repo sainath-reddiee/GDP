@@ -243,7 +243,6 @@ RULES: List[Tuple[str, str, Any, str]] = [
     ("POST", r"/api/hub/profiles/reprofile", "PROFILE.RUN", ""),
     ("POST", r"/api/hub/profiles/expectations", None, ""),
     ("POST", r"/api/hub/sttm/diff", None, ""),
-    ("POST", r"/api/hub/sttm/[^/]+/export", None, ""),
     ("POST", r"/api/hub/sttm/[^/]+/edit", "STTM.EDIT", "Edit a mapping in the STTM catalog"),
     ("POST", r"/api/hub/models/propose", "AI.USE", ""),
     ("POST", r"/api/hub/models/(validate|render)", None, ""),

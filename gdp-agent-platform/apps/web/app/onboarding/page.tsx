@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 
-/** Onboarding now starts in the Sources hub: explore, profile in place, then start modeling. */
+/** Onboarding is a lifecycle hub now. */
 export default function Onboarding() {
-  redirect("/sources");
+  redirect("/dashboard/onboarding");
 }

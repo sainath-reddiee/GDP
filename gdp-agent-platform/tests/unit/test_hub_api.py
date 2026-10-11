@@ -78,8 +78,9 @@ def test_intake_form_defaults(client):
 def test_register_pipeline_seals_secrets(client, monkeypatch):
     c, holder = client
     monkeypatch.setenv("AIP_SECRET_KEY", "k" * 32)
-    res = c.post("/api/hub/pipelines", json={"answers": ANSWERS})
+    res = c.post("/api/hub/pipelines", json={"answers": {**ANSWERS, "domain_id": "d-1"}})
     assert res.status_code == 200, res.text
+    assert res.json()["pipeline"]["domain_id"] == "d-1"
     assert res.json()["pipeline"]["has_secret"] is True and "secret_sealed" not in res.json()["pipeline"]
     insert = [p for sql, p in holder["db"].executed if "INSERT INTO PLATFORM_CONFIG.INGESTION_PIPELINE_CATALOG" in sql][0]
     assert isinstance(insert[5], bytes) and insert[5].startswith(b"gdp1:")
@@ -225,7 +226,7 @@ def test_sttm_edit_versions_and_conflicts(client, monkeypatch):
 def test_sttm_export_zip(client):
     c, holder = client
     holder["db"] = _sttm_db()
-    res = c.post("/api/hub/sttm/c1/export")
+    res = c.get("/api/hub/sttm/c1/export")
     assert res.status_code == 200 and res.headers["content-type"] == "application/zip"
     names = zipfile.ZipFile(io.BytesIO(res.content)).namelist()
     assert "dbt_project.yml" in names and "models/marts/gdp/dim_x.sql" in names

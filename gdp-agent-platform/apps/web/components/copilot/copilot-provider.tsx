@@ -33,7 +33,7 @@ function describe(page: CopilotPage): string {
   if (page.table) return `${page.database}.${page.schema}.${page.table}`;
   const run = page.path.match(/^\/runs\/[0-9a-f-]{36}(?:\/([a-z]+))?/);
   if (run) return `Run · ${run[1] ? STAGE_LABEL[run[1]] ?? run[1] : "Overview"}`;
-  if (page.path.startsWith("/sources")) return page.schema ? `Sources · ${page.database}.${page.schema}` : "Sources";
+  if (page.path.startsWith("/sources") || page.path.startsWith("/dashboard/sources")) return page.schema ? `Sources · ${page.database}.${page.schema}` : "Sources";
   return (page.path.split("/")[1] || "dashboard").replace(/^\w/, (c) => c.toUpperCase());
 }
 
