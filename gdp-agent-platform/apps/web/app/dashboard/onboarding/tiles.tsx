@@ -16,47 +16,48 @@ const ROADMAP = [
   "Track application SLAs alongside data quality gates",
 ];
 
-export function OnboardingTiles() {
+/** Domain onboarding from files: a domain_pack.json and its data contract, validated before anything is registered. */
+export function DomainImportCard() {
   const [open, setOpen] = useState(false);
   return (
-    <div className="grid gap-4 lg:grid-cols-2">
-      <article className="surface relative flex flex-col overflow-hidden p-6">
-        <div className="absolute -right-12 -top-12 h-40 w-40 rounded-full bg-indigo-400/10 blur-2xl" />
-        <span className="grid h-11 w-11 place-items-center rounded-2xl bg-primary text-primary-foreground"><Rocket className="h-5 w-5" /></span>
-        <h2 className="mt-4 text-lg font-semibold">Domain onboarding</h2>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Upload a domain_pack.json and its data contract (YAML or the platform&apos;s markdown contract). Both are validated before
-          anything is registered; importing registers targets, columns and knowledge exactly as a deploy would.
-        </p>
-        <div className="mt-5 flex gap-2">
-          <Button onClick={() => setOpen(true)}><Upload className="h-4 w-4" /> Import a domain</Button>
-          <Link href="/dashboard/modeling" className={buttonVariants({ variant: "outline" })}>Design one instead</Link>
-        </div>
-      </article>
-      <article className="surface relative flex flex-col overflow-hidden border-dashed p-6">
-        <div className="flex items-start justify-between">
-          <span className="grid h-11 w-11 place-items-center rounded-2xl bg-slate-100 text-slate-500"><AppWindow className="h-5 w-5" /></span>
-          <span className="group relative">
-            <span tabIndex={0} className="inline-flex cursor-help items-center rounded-full bg-gradient-to-r from-violet-500 to-indigo-500 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide text-white shadow-sm outline-none ring-violet-300 focus-visible:ring-2">
-              Coming soon
-            </span>
-            <span role="tooltip" className="pointer-events-none absolute right-0 top-full z-20 mt-2 w-72 rounded-xl border border-border bg-card p-3 text-left text-xs opacity-0 shadow-hover transition group-hover:opacity-100 group-focus-within:opacity-100">
-              <span className="mb-1.5 block font-semibold text-foreground">On the roadmap</span>
-              <span className="block space-y-1 text-muted-foreground">
-                {ROADMAP.map((r) => <span key={r} className="block">• {r}</span>)}
-              </span>
-            </span>
-          </span>
-        </div>
-        <h2 className="mt-4 text-lg font-semibold text-foreground/80">Application onboarding</h2>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Connect upstream microservices and applications as first-class sources: their owners, data products and contracts,
-          feeding the Source Store and the quality gates.
-        </p>
-        <Button className="mt-5 w-fit" variant="outline" disabled>Not available yet</Button>
-      </article>
+    <article className="surface relative flex flex-col overflow-hidden p-6">
+      <div className="absolute -right-12 -top-12 h-40 w-40 rounded-full bg-indigo-400/10 blur-2xl" />
+      <span className="grid h-11 w-11 place-items-center rounded-2xl bg-primary text-primary-foreground"><Rocket className="h-5 w-5" /></span>
+      <h2 className="mt-4 text-lg font-semibold">Import a domain pack</h2>
+      <p className="mt-1 text-sm text-muted-foreground">
+        Upload a domain_pack.json and its data contract (YAML or the platform&apos;s markdown contract). Both are validated before
+        anything is registered; importing registers targets, columns and knowledge exactly as a deploy would.
+      </p>
+      <div className="mt-5 flex flex-wrap gap-2">
+        <Button onClick={() => setOpen(true)} data-testid="import-domain"><Upload className="h-4 w-4" /> Import a domain</Button>
+        <Link href="/dashboard/modeling" className={buttonVariants({ variant: "outline" })}>Design a new model instead</Link>
+      </div>
       <ImportModal open={open} onClose={() => setOpen(false)} />
-    </div>
+    </article>
+  );
+}
+
+/** Application onboarding: not available yet; shows what is coming. */
+export function ApplicationCard() {
+  return (
+    <article className="surface relative flex flex-col overflow-hidden border-dashed p-6">
+      <div className="flex items-start justify-between">
+        <span className="grid h-11 w-11 place-items-center rounded-2xl bg-slate-100 text-slate-500"><AppWindow className="h-5 w-5" /></span>
+        <span className="inline-flex items-center rounded-full bg-gradient-to-r from-violet-500 to-indigo-500 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide text-white shadow-sm">
+          Coming soon
+        </span>
+      </div>
+      <h2 className="mt-4 text-lg font-semibold text-foreground/80">Application onboarding</h2>
+      <p className="mt-1 text-sm text-muted-foreground">
+        Connect upstream microservices and applications as first-class sources: their owners, data products and contracts,
+        feeding the Source Store and the quality gates.
+      </p>
+      <p className="mt-4 text-xs font-semibold uppercase tracking-wide text-muted-foreground">On the roadmap</p>
+      <ul className="mt-2 space-y-1.5 text-sm text-muted-foreground">
+        {ROADMAP.map((r) => <li key={r} className="flex gap-2"><span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-violet-400" />{r}</li>)}
+      </ul>
+      <Button className="mt-5 w-fit" variant="outline" disabled>Not available yet</Button>
+    </article>
   );
 }
 

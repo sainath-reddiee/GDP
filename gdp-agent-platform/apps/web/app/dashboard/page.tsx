@@ -13,7 +13,7 @@ import { PageHeader } from "@/components/page-header";
 import { Panel } from "@/components/hub/kpi";
 import { buttonVariants } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { fmt, Meter, PipelineTable, RibbonMetric, Sparkline, StoreCard } from "./command-center";
+import { bytesParts, fmt, Meter, PipelineTable, RibbonMetric, Sparkline, StoreCard } from "./command-center";
 
 function greeting() {
   const h = new Date().getHours();
@@ -54,6 +54,8 @@ export default async function Dashboard() {
     { show: !!o?.profiling?.drift, href: "/dashboard/profiling", icon: BarChart3, text: `${o?.profiling?.drift} drifting column${o?.profiling?.drift === 1 ? "" : "s"}`, tone: "text-amber-800 bg-amber-50 ring-amber-200" },
   ].filter((a) => a.show);
   const daily = o?.ingested?.daily ?? [];
+  const size = bytesParts(o?.ingested?.bytes);
+  const sizeNote = o?.ingested?.measured === "landed" ? "landed size" : o?.ingested?.measured === "mixed" ? "landed size, source size where landing is not visible" : "source size at discovery";
   const idle = o?.sources ? o.sources.external - o.sources.external_active : 0;
 
   return (
@@ -63,29 +65,34 @@ export default async function Dashboard() {
                   description={`${inFlight.length} run${inFlight.length === 1 ? "" : "s"} in flight${reviewCount ? `, ${reviewCount} waiting on review` : ", nothing waiting on you"}. Your data estate at a glance.`}
                   actions={<>
                     <Link href="/runs" className={buttonVariants({ variant: "outline" })}>All runs</Link>
-                    <Link href="/dashboard/sources/new" className={buttonVariants()}><PlugZap className="h-4 w-4" /> Onboard source</Link>
+                    <Link href="/dashboard/onboarding?type=source" className={buttonVariants()}><PlugZap className="h-4 w-4" /> Onboard source</Link>
                   </>} />
 
       {/* hero ribbon */}
       <section className="glass relative overflow-hidden p-1" data-testid="hero-ribbon">
         <div className="pointer-events-none absolute inset-0 bg-gradient-to-r from-indigo-500/[0.07] via-transparent to-cyan-500/[0.07]" />
         <div className="relative grid divide-y divide-border/60 sm:grid-cols-2 sm:divide-y-0 xl:grid-cols-4 xl:divide-x">
-          <RibbonMetric label="Live ingested" value={o?.ingested ? fmt(o.ingested.gb) : "-"} unit="GB" href="/dashboard/sources"
-                        hint={o?.ingested ? `${fmt(o.ingested.tables)} landed tables · ${fmt(o.ingested.rows)} rows` : "landing registry not available"}>
-            <Sparkline values={daily.map((d) => d.gb)} />
+          <RibbonMetric label="Live ingested" value={o?.ingested ? size.value : "-"} unit={o?.ingested ? size.unit : undefined} href="/dashboard/sources"
+                        hint={o?.ingested ? `${fmt(o.ingested.tables)} landed tables · ${fmt(o.ingested.rows)} rows${o.ingested.in_place ? ` · ${fmt(o.ingested.in_place)} profiled in place` : ""}` : "landing registry not available"}>
+            <Sparkline values={daily.map((d) => d.bytes ?? d.gb)} />
+            {o?.ingested && <p className="mt-1.5 text-[11px] text-muted-foreground">{sizeNote}</p>}
           </RibbonMetric>
           <RibbonMetric label="Profiling health" value={o?.profiling?.health == null ? "-" : Math.round(o.profiling.health)} unit={o?.profiling?.health == null ? undefined : "%"}
                         href="/dashboard/profiling"
                         hint={o?.profiling ? `${fmt(o.profiling.tables)} tables · ${fmt(o.profiling.columns)} columns profiled` : "no profiles yet"}>
             <Meter value={o?.profiling?.health} />
-            <p className="mt-1.5 text-[11px] text-muted-foreground">Columns under 20% nulls with no drift since the previous pass</p>
+            <p className="mt-1.5 text-[11px] text-muted-foreground">
+              {o?.profiling?.catalog_tables
+                ? `Columns under 20% nulls with no drift, over the ${fmt(o.profiling.catalog_tables)} tables with pass history`
+                : "Shown once tables are profiled again (pass history starts with the next profile)"}
+            </p>
           </RibbonMetric>
           <RibbonMetric label="STTM published" value={o?.sttm ? fmt(o.sttm.verified) : "-"} href="/dashboard/sttm"
                         hint={o?.sttm ? `of ${fmt(o.sttm.mappings)} mappings · ${fmt(o.sttm.pending)} pending review` : "catalog not available"}>
             <Meter value={o?.sttm ? pct(o.sttm.verified, o.sttm.mappings) : null} tone="primary" />
           </RibbonMetric>
           <RibbonMetric label="Active DQ checks" value={o?.dq ? fmt(o.dq.checks) : "-"} href="/dashboard/dq-store"
-                        hint={o?.dq ? `${o.dq.pass_rate == null ? "no results yet" : `${o.dq.pass_rate}% passing`} · ${o.dq.coverage == null ? "-" : `${o.dq.coverage}%`} coverage` : "DQ Store not deployed"}>
+                        hint={o?.dq ? `${fmt(o.dq.run_checks)} from runs · ${fmt(o.dq.store_checks)} in the store · ${o.dq.pass_rate == null ? "no results yet" : `${o.dq.pass_rate}% passing`}` : "no data quality checks readable"}>
             <Meter value={o?.dq?.pass_rate} />
           </RibbonMetric>
         </div>
@@ -107,7 +114,7 @@ export default async function Dashboard() {
         <StoreCard testId="store-source" title="Source Store" subtitle="Shares, databases and external pipelines" icon={Database} tone="indigo" missing={!o?.sources}
                    metrics={[{ label: "Shares", value: fmt(o?.sources?.shares) }, { label: "Databases", value: fmt(o?.sources?.databases) },
                              { label: "Pipelines", value: fmt(o?.sources?.external) }]}
-                   href="/dashboard/sources" action={{ label: "Onboard source", href: "/dashboard/sources/new", icon: PlugZap }}
+                   href="/dashboard/sources" action={{ label: "Onboard source", href: "/dashboard/onboarding?type=source", icon: PlugZap }}
                    alert={idle ? { text: `${plural(idle, "external pipeline")} not active yet`, tone: "amber" } : null} />
         <StoreCard testId="store-profiling" title="Profiling Store" subtitle="Distributions, nulls, cardinality and drift" icon={BarChart3} tone="sky" missing={!o?.profiling}
                    metrics={[{ label: "Tables profiled", value: fmt(o?.profiling?.tables) },
@@ -130,11 +137,12 @@ export default async function Dashboard() {
                    alert={o?.sttm?.pending ? { text: `${plural(o.sttm.pending, "mapping")} waiting for review`, tone: "amber" } : null} />
         <StoreCard testId="store-qa" title="QA Store" subtitle={o?.qa?.top_tags?.length ? o.qa.top_tags.slice(0, 3).map((t) => `#${t}`).join(" ") : "Deterministic domain SQL packs"}
                    icon={SquareTerminal} tone="amber" missing={!o?.qa}
-                   metrics={[{ label: "Approved suites", value: fmt(o?.qa?.approved_packs) }, { label: "Live rules", value: fmt(o?.qa?.rules) },
+                   metrics={[{ label: "Domain packs", value: fmt(o?.qa?.approved_packs) }, { label: "Run tests", value: fmt(o?.qa?.run_tests) },
                              { label: "Pass rate", value: o?.qa?.pass_rate == null ? "-" : `${Math.round(o.qa.pass_rate)}%` }]}
                    href="/dashboard/qa-store" action={{ label: "New pack", href: "/dashboard/qa-store?new=1", icon: Plus }}
                    alert={o?.qa?.pending ? { text: `${plural(o.qa.pending, "pack")} awaiting approval`, tone: "violet" } : null} />
-        <StoreCard testId="store-dq" title="Data Quality Store" subtitle="Soda and Great Expectations attribute checks" icon={ClipboardCheck} tone="rose" missing={!o?.dq}
+        <StoreCard testId="store-dq" title="Data Quality Store"
+                   subtitle={o?.dq ? `${fmt(o.dq.run_checks)} approved in runs · ${fmt(o.dq.store_checks)} in the store` : "Soda and Great Expectations attribute checks"} icon={ClipboardCheck} tone="rose" missing={!o?.dq}
                    metrics={[{ label: "Active checks", value: fmt(o?.dq?.checks) },
                              { label: "Failing", value: fmt(o?.dq?.failed), tone: o?.dq?.failed ? "text-rose-600" : undefined },
                              { label: "Scheduled tables", value: fmt(o?.dq?.scheduled_tables) }]}

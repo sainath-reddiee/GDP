@@ -69,3 +69,16 @@ test("the theme toggle switches and remembers the theme", async ({ page, context
   await page.reload();
   await expect(page.locator("html")).toHaveClass(/dark/);
 });
+
+test("onboarding separates source, domain and application", async ({ page, context }) => {
+  await devSession(context, "light");
+  await page.goto("/dashboard/sources/new?branch=external");
+  await page.waitForURL(/\/dashboard\/onboarding\?type=source&branch=external/);
+  await expect(page.getByRole("heading", { name: "What are you onboarding?" })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Source onboarding" })).toBeVisible();
+  await page.getByTestId("onboard-domain").click();
+  await expect(page.getByRole("region", { name: "Domain onboarding" })).toBeVisible();
+  await expect(page.getByTestId("import-domain")).toBeVisible();
+  await page.getByTestId("onboard-application").click();
+  await expect(page.getByRole("region", { name: "Application onboarding" }).getByText("Not available yet")).toBeVisible();
+});

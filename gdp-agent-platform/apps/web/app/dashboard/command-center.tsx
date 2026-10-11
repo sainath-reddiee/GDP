@@ -9,6 +9,16 @@ import { formatAge, statusPill } from "@/lib/run-status";
 
 const n = (v: number | null | undefined) => (v == null ? "-" : v.toLocaleString());
 
+/** Bytes as a value and unit that never rounds a small total to zero: 0 B, 812 KB, 41.2 MB, 3.06 GB, 1.2 TB. */
+export function bytesParts(bytes: number | null | undefined): { value: string; unit: string } {
+  if (bytes == null) return { value: "-", unit: "" };
+  const units = ["B", "KB", "MB", "GB", "TB", "PB"];
+  let v = bytes;
+  let i = 0;
+  while (v >= 1024 && i < units.length - 1) { v /= 1024; i += 1; }
+  return { value: i === 0 ? String(Math.round(v)) : v >= 100 ? v.toFixed(0) : v >= 10 ? v.toFixed(1) : v.toFixed(2), unit: units[i] };
+}
+
 /** Area sparkline for a short series (newest on the right). */
 export function Sparkline({ values, className }: { values: number[]; className?: string }) {
   if (values.length < 2) return <div className={cn("h-10", className)} />;

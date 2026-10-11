@@ -257,10 +257,17 @@ def summary(domain: Optional[str] = None, db: Db = Depends(current_db)):
                                   FROM GOVERNANCE.DATA_PROFILES WHERE TRUE {clause}""", params)[0]["n"]
     except Exception:
         profiled = 0
+    try:  # approved checks that live in runs (not promoted to the store); shown beside the store's own count
+        run_clause, run_params = ("AND DOMAIN_ID = %s", (domain_id,)) if domain_id else ("", ())
+        run_checks = int(db.query(f"""SELECT COUNT(*) AS N FROM CONTRACT.SODA_EXPECTATION_REGISTRY
+                                        WHERE IS_CURRENT AND STATUS = 'APPROVED' {run_clause}""", run_params)[0]["n"])
+    except Exception:
+        run_checks = 0
     evaluated = int(s.get("passed") or 0) + int(s.get("warned") or 0) + int(s.get("failed") or 0)
     tables = int(s.get("tables") or 0)
     return {"deployed": True, "checks": int(s.get("checks") or 0), "tables": tables,
             "passed": int(s.get("passed") or 0), "warned": int(s.get("warned") or 0), "failed": int(s.get("failed") or 0),
             "never_run": int(s.get("never_run") or 0), "scheduled_tables": int(s.get("scheduled") or 0),
+            "run_checks": run_checks,
             "pass_rate": round(100 * int(s.get("passed") or 0) / evaluated, 1) if evaluated else None,
             "coverage": round(100 * min(tables, int(profiled)) / int(profiled), 1) if profiled else None}
