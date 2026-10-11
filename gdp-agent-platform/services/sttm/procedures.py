@@ -9,6 +9,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from services.catalog import sttm as catalog_sttm
 from services.common.audit import record_cost, tool_call
 from services.common.llm import complete_json
 from services.common.sql import clip, insert_rows, rows, scalar, variant
@@ -113,6 +114,7 @@ def generate_sttm(session, run_id: str) -> Dict[str, Any]:
             stage.fail(exc)
             return {"state": stage.payload()}
     stage.move("STTM_REVIEW", call.summary, {"sttm_id": sttm_id, "version": version}, in_transaction=write)
+    catalog_sttm.snapshot(session, sttm_id, "GENERATED", call.summary)  # GOVERNANCE.STTM_CATALOG; never raises
     return {"sttm_id": sttm_id, "version": version, "table_design": contract["table_design"],
             "lines": contract["lines"], "state": stage.payload()}
 
@@ -296,6 +298,7 @@ def apply_transformation(session, run_id: str, payload_json: str) -> Dict[str, A
                                    "profile": context.get("profile")},
                      tags=["TRANSFORM", "STTM", "SODA", "DBT"], origin="STTM", run_id=run_id)
         call.summary = f"applied {context['target_column']}"
+    catalog_sttm.snapshot_run(session, run_id, "TRANSFORM_EDIT", f"{context['target_column']}: {clip(sql, 300)}")
     return {"target_column": context["target_column"], "transformation": sql, "mapping_type": mapping_type,
             "state": stage.payload()}
 
@@ -468,4 +471,5 @@ def update_join_graph(session, run_id: str, payload_json: str) -> Dict[str, Any]
     _record_run_event(session, run, "HUMAN", "join plan edited",
                       {"driving_table": graph["driving_table"], "joins": len(graph["joins"]),
                        "unreachable": graph["unreachable"]})
+    catalog_sttm.snapshot(session, sttm["STTM_ID"], "JOIN_EDIT", f"join plan: driving table {graph['driving_table']}")
     return {"sttm_id": sttm["STTM_ID"], "join_graph": graph}
