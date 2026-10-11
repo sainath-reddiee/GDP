@@ -205,7 +205,6 @@ RULES: List[Tuple[str, str, Any, str]] = [
     ("POST", r"/api/dq/catalog/[^/]+/status", "SODA.EDIT", "Pause, resume or retire a data quality check"),
     ("POST", r"/api/dq/run", "PROFILE.RUN", ""),
     ("POST", r"/api/dq/run-checks/decisions", "SODA.EDIT", "Decide run data quality checks from the DQ Store"),
-    ("POST", r"/api/hub/dbt/[^/]+/files", "DBT.EDIT", "Edit generated dbt files from the Modeling Store"),
     ("PUT", r"/api/dq/schedules", "SODA.EDIT", "Schedule data quality checks"),
     ("DELETE", r"/api/dq/schedules", "SODA.EDIT", "Remove a data quality schedule"),
     ("POST", r"/api/qa/links", "JIRA.WRITE", "Link a Jira issue to a table or test"),
@@ -263,6 +262,18 @@ RULES: List[Tuple[str, str, Any, str]] = [
     ("POST", r"/api/hub/profiles/expectations", None, ""),
     ("POST", r"/api/hub/sttm/diff", None, ""),
     ("POST", r"/api/hub/sttm/[^/]+/edit", "STTM.EDIT", "Edit a mapping in the STTM catalog"),
+    # Model Workbench (apps/api/app/model_workbench_api.py): the draft, review and approval are the governance, so
+    # these are never queued (NO_QUEUE_ROUTES); four eyes is checked by the service
+    ("POST", r"/api/hub/domain-models/[^/]+/draft/validate", None, ""),
+    ("POST", r"/api/hub/domain-models(/baseline)?", "MODEL.EDIT", "Create, fork or baseline a domain model"),
+    ("POST", r"/api/hub/domain-models/[^/]+/draft", "MODEL.EDIT", "Open a draft of a domain model"),
+    ("PUT", r"/api/hub/domain-models/[^/]+/draft", "MODEL.EDIT", "Edit a domain model draft"),
+    ("POST", r"/api/hub/domain-models/[^/]+/(submit|withdraw)", "MODEL.EDIT", "Send a domain model version for review"),
+    ("POST", r"/api/hub/domain-models/[^/]+/versions/\d+/(approve|reject|apply)", "MODEL.APPROVE",
+     "Decide a domain model version"),
+    ("POST", r"/api/hub/domain-models/[^/]+/versions/\d+/comments", "MODEL.EDIT", ""),
+    ("POST", r"/api/hub/domain-models/[^/]+/comments/[^/]+/resolve", "MODEL.EDIT", ""),
+    ("PUT", r"/api/hub/domain-models/[^/]+/(layout|standard)", "MODEL.EDIT", ""),
     ("POST", r"/api/hub/models/propose", "AI.USE", ""),
     ("POST", r"/api/hub/models/(validate|render)", None, ""),
     ("POST", r"/api/hub/models/[^/]+/publish", "DBT.EDIT", "Publish a model design as a Git branch and pull request"),
@@ -345,12 +356,23 @@ STORE_ROUTES = [(m, re.compile(p)) for m, p in [
     ("POST", r"^/api/hub/sttm/[^/]+/edit$"),
     ("POST", r"^/api/dq/catalog$"), ("POST", r"^/api/dq/catalog/seed$"), ("POST", r"^/api/dq/catalog/[^/]+/status$"),
     ("PUT", r"^/api/dq/schedules$"), ("DELETE", r"^/api/dq/schedules$"),
-    ("POST", r"^/api/hub/dbt/[^/]+/files$"),
     ("POST", r"^/api/dq/run-checks/decisions$"),
 ]]
 # approver when a privilege has no approval policy of its own
 STORE_APPROVERS = {"STTM.EDIT": "STTM_APPROVER", "SODA.EDIT": "DQ_APPROVER", "DBT.EDIT": "CODE_REVIEWER",
                    "MAPPING.DECIDE": "MODEL_APPROVER", "MODEL.EDIT": "MODEL_APPROVER"}
+
+
+# Routes whose own workflow is the approval (Model Workbench drafts, reviews and decisions): never turned into a change
+# request. A caller who would otherwise be queued is refused, so an approval never waits for its own approval.
+NO_QUEUE_ROUTES = [(m, re.compile(p)) for m, p in [
+    ("POST", r"^/api/hub/domain-models(/.*)?$"), ("PUT", r"^/api/hub/domain-models/.+$"),
+]]
+
+
+def no_queue(method: str, path: str) -> bool:
+    method = method.upper()
+    return any(m == method and pattern.match(path) for m, pattern in NO_QUEUE_ROUTES)
 
 
 def store_queue(method: str, path: str) -> bool:

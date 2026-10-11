@@ -28,7 +28,7 @@ from pydantic import BaseModel, Field
 from app.db import AUTH_MODE, Db, dev_db, lookup_session
 from services.governance.policy import (
     ADDED_PRIVILEGES, ALL, DEFAULT_FOUR_EYES, DEFAULT_POLICIES, PRIVILEGES, SYSTEM_ROLES, SYSTEM_VERSION, can_approve, carries_secret, creates_cycle,
-    decide, effective_privileges, privilege_for, read_only, store_policy, store_queue, summarize,
+    decide, effective_privileges, no_queue, privilege_for, read_only, store_policy, store_queue, summarize,
 )
 
 router = APIRouter()
@@ -255,6 +255,10 @@ async def middleware(request: Request, call_next):
         if store:
             policy = store_policy(privilege, policy)
         verdict, reason = decide(privilege, set(who["privileges"]), policy)
+        if verdict == "REQUEST" and no_queue(method, path):
+            holds = privilege in who["privileges"] or "*" in who["privileges"]
+            verdict, reason = ("ALLOW", "") if holds else ("FORBID", f"needs the {privilege} privilege; this action "
+                                                                         "has its own review and is never queued")
     except Exception:
         return await call_next(request)
     if verdict == "ALLOW":

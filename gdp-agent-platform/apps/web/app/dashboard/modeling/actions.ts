@@ -52,14 +52,12 @@ export async function publish(designId: string, version: number, repoId: string)
   return r;
 }
 
-// ---------------------------------------------------------------- dbt generations from runs (store edits queue)
+// ---------------------------------------------------------------- dbt generations from runs (read-only: regenerated from the model and STTM)
 
-export async function saveDbtFile(generationId: string, body: { file_path: string; content: string; base_sha: string; note: string }) {
-  const { storeAction } = await import("@/lib/store-action");
-  const r = await storeAction(() => api<{ generation_id: string; generation_version: number; new_version: boolean }>(
-    `/api/hub/dbt/${encodeURIComponent(generationId)}/files`, post(body)));
-  revalidatePath(`/dashboard/modeling/dbt/${generationId}`);
-  return r;
+export async function dbtDiff(generationId: string) {
+  return attemptValue(() => api<{ base: { generation_id: string; generation_version: number } | null;
+    files: { file_path: string; status: "added" | "removed" | "changed"; patch: string }[] }>(
+    `/api/hub/dbt/${encodeURIComponent(generationId)}/diff`));
 }
 
 export async function reviewDbtFile(runId: string, filePath: string) {

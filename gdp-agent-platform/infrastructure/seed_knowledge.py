@@ -315,6 +315,17 @@ def snapshot_domains(cur, database: str) -> List[str]:
     return log
 
 
+def seed_domain_models(cur, database: str) -> List[str]:
+    """Model Workbench baselines (V039): an APPROVED version 1 per domain that registers tables and has no model."""
+    from services.modeling.domain_model import CursorSession, backfill
+
+    try:
+        cur.execute(f"USE DATABASE {database}")
+    except Exception as exc:
+        return [f"domain models: skipped ({str(exc)[:120]})"]
+    return backfill(CursorSession(cur))
+
+
 def seed_platform(cur, database: str) -> List[str]:
     """MERGE domain packs, skills, config and scoring weights; PUT skill files to the stage. Returns log lines."""
     live, log = fetch_live_columns(cur)
@@ -329,6 +340,7 @@ def seed_platform(cur, database: str) -> List[str]:
     merge(cur.execute, database, data)
     log.extend(snapshot_domains(cur, database))
     log.extend(seed_qa_packs(cur, database))
+    log.extend(seed_domain_models(cur, database))
 
     for skill in list_skills():
         root = skill["path"].parent
