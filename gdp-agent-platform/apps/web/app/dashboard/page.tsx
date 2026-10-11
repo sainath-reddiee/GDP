@@ -1,284 +1,165 @@
 import Link from "next/link";
 import {
-  Activity, AlertTriangle, ArrowRight, Boxes, CheckCircle2, CircleDashed, Clock, Database, Eye,
-  FolderTree, Layers, PlayCircle, Siren, Sparkles, XCircle,
+  AlertTriangle, ArrowRight, BarChart3, CheckCircle2, ClipboardCheck, Clock, Database, Eye, GitCompareArrows, Network, PlugZap,
+  Siren, SquareTerminal, XCircle,
 } from "lucide-react";
 import { api, whoami } from "@/lib/api";
-import { can, type AuditEvent, type ProfileStoreRow, type RunSummary, type WhoAmI } from "@/lib/types";
+import { can, type AuditEvent, type RunSummary } from "@/lib/types";
+import type { Overview } from "@/lib/store-types";
+import { getDomainScope } from "@/lib/domain-scope";
+import { isCancelled, needsReview, ago } from "@/lib/run-insights";
 import type { IncidentSummary } from "../incidents/actions";
-import type { OpsSummary, Reliability } from "../ops/actions";
-import { RunTable } from "@/components/run-table";
 import { PageHeader } from "@/components/page-header";
-import { Kpi, Panel } from "@/components/hub/kpi";
+import { Panel } from "@/components/hub/kpi";
 import { buttonVariants } from "@/components/ui/button";
-import { displayDomain } from "@/lib/catalog-display";
-import { FUNNEL, ago, isCancelled, needsReview, runHref, summarize } from "@/lib/run-insights";
 import { cn } from "@/lib/utils";
-
-type DomainRow = { domain_id: string; domain_name: string; knowledge_items: number; target_tables: number };
-
-type Metrics = {
-  total: number; lifecycle: Record<string, number>; by_stage: Record<string, number>; needs_review: number;
-  failed: number; cancelled: number; archived: number;
-  cost_30d: { calls: number; tokens: number; estimated_cost: number; credits?: number; actual_credits?: number; estimated_credits?: number } | null;
-};
-
-const STATE_LABEL: Record<string, string> = {
-  MAPPING_REVIEW: "Mapping waits for approval", STTM_REVIEW: "STTM waits for approval",
-  SODA_REVIEW: "Data quality checks to confirm", DBT_REVIEW: "Generated dbt code to review",
-  VALIDATION_FAILED: "Validation failed: fix and rerun",
-};
-
-type OpsCard = { incidents: IncidentSummary | null; ops: OpsSummary | null; mttr: number | null };
-
-/** The operations numbers for OPS.VIEW holders; each part fails soft, and nothing shows when all are missing. */
-async function opsCard(me: WhoAmI | null): Promise<OpsCard | null> {
-  if (!can(me, "OPS.VIEW")) return null;
-  const [incidents, ops, rel] = await Promise.all([
-    api<IncidentSummary>("/api/ops/incidents/summary").catch(() => null),
-    api<OpsSummary>("/api/ops/summary").catch(() => null),
-    api<Reliability>("/api/ops/reliability?days=7").catch(() => null),
-  ]);
-  if (!incidents && !ops && !rel) return null;
-  // MTTR over all teams, weighted by each team's incident count
-  const timed = (rel?.teams ?? []).filter((t) => t.mttr_min !== null && t.mttr_min !== undefined && t.incidents > 0);
-  const weight = timed.reduce((n, t) => n + t.incidents, 0);
-  const mttr = weight ? timed.reduce((n, t) => n + (t.mttr_min ?? 0) * t.incidents, 0) / weight : null;
-  return { incidents, ops, mttr };
-}
-
-function mttrText(m: number | null) {
-  if (m === null || !Number.isFinite(m)) return "-";
-  const v = Math.round(m);
-  return v < 60 ? `${v} min` : v < 1440 ? `${Math.floor(v / 60)} h${v % 60 ? ` ${v % 60} min` : ""}` : `${Math.round(v / 144) / 10} d`;
-}
-
-function OperationsCard({ card }: { card: OpsCard }) {
-  const open = card.incidents ? card.incidents.open + card.incidents.ack : null;
-  const p1 = card.incidents?.p1_open ?? null;
-  const failing = card.ops?.failing_24h ?? null;
-  const cell = (href: string, label: string, value: React.ReactNode, tone?: string) => (
-    <Link href={href} className="rounded-xl border border-border/80 px-3 py-2 transition hover:border-primary/30 hover:bg-accent/40">
-      <p className={cn("text-xl font-semibold tabular-nums", tone)}>{value ?? "-"}</p>
-      <p className="text-xs text-muted-foreground">{label}</p>
-    </Link>
-  );
-  return (
-    <Panel title="Operations" icon={Siren}
-           action={<span className="flex gap-3"><Link href="/incidents" className="text-xs font-medium text-primary hover:underline">Incidents</Link>
-             <Link href="/ops" className="text-xs font-medium text-primary hover:underline">Pipelines</Link></span>}>
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-        {cell("/incidents", "Open incidents", open, open ? "text-rose-700" : undefined)}
-        {cell("/incidents?severity=P1", "P1 open", p1, p1 ? "text-rose-700" : undefined)}
-        {cell("/ops?state=failed", "DAGs failing, 24 h", failing, failing ? "text-amber-700" : undefined)}
-        {cell("/ops?view=reliability&days=7", "MTTR, 7 days", mttrText(card.mttr))}
-      </div>
-    </Panel>
-  );
-}
+import { fmt, Meter, PipelineTable, RibbonMetric, Sparkline, StoreCard } from "./command-center";
 
 function greeting() {
   const h = new Date().getHours();
   return h < 12 ? "Good morning" : h < 17 ? "Good afternoon" : "Good evening";
 }
 
+const pct = (part: number, whole: number) => (whole ? (100 * part) / whole : null);
+
+/** The Command Center: what the platform holds (six asset stores), how healthy it is, and what is in flight. */
 export default async function Dashboard() {
-  const [me, { runs }, metrics, review, failing, overview, store, domains, audit, ops] = await Promise.all([
-    whoami(),
-    api<{ runs: RunSummary[] }>("/api/runs?limit=8"),
-    api<Metrics>("/api/metrics/summary").catch(() => null),
-    api<{ runs: RunSummary[] }>("/api/runs?needs_review=true&limit=6&sort=updated").catch(() => ({ runs: [] as RunSummary[] })),
-    api<{ runs: RunSummary[] }>("/api/runs?status=failed&limit=10&sort=updated").catch(() => ({ runs: [] as RunSummary[] })),
-    api<{ sources: unknown[] }>("/api/sources").catch(() => null),
-    api<{ profiles: ProfileStoreRow[] }>("/api/profiles/store").catch(() => ({ profiles: [] as ProfileStoreRow[] })),
-    api<{ domains: DomainRow[] }>("/api/domains").catch(() => ({ domains: [] as DomainRow[] })),
-    api<{ events: AuditEvent[] }>("/api/audit?limit=7").catch(() => ({ events: [] as AuditEvent[] })),
-    whoami().then(opsCard).catch(() => null),
+  const scope = getDomainScope();
+  const me = await whoami();
+  const overview = await api<Overview>(`/api/hub/overview${scope ? `?domain=${encodeURIComponent(scope)}` : ""}`).catch(() => null);
+  const domainId = overview?.domain?.domain_id;
+  const runQs = (extra: string) => `/api/runs?${extra}${domainId ? `&domain_id=${domainId}` : ""}`;
+  const [active, review, failing, audit, incidents] = await Promise.all([
+    api<{ runs: RunSummary[] }>(runQs("status=active&limit=10&sort=updated")).catch(() => ({ runs: [] as RunSummary[] })),
+    api<{ runs: RunSummary[]; total?: number }>(runQs("needs_review=true&limit=1")).catch(() => null),
+    api<{ runs: RunSummary[]; total?: number }>(runQs("status=failed&limit=20&sort=updated")).catch(() => null),
+    api<{ events: AuditEvent[] }>("/api/audit?limit=6").catch(() => ({ events: [] as AuditEvent[] })),
+    can(me, "OPS.VIEW") ? api<IncidentSummary>("/api/ops/incidents/summary").catch(() => null) : Promise.resolve(null),
   ]);
-  // Counts come from the server (correct at any number of runs); the run lists below are small, targeted fetches.
-  const s = metrics
-    ? { total: metrics.total, running: metrics.lifecycle.RUNNING ?? 0, drafts: metrics.lifecycle.DRAFT ?? 0,
-        review: metrics.needs_review, completed: metrics.lifecycle.COMPLETED ?? 0, failed: metrics.failed,
-        cancelled: metrics.cancelled, stages: metrics.by_stage }
-    : summarize(runs);
-  const attention = review.runs.filter((r) => needsReview(r)).slice(0, 6);
-  const failed = failing.runs.filter((r) => !r.is_archived && !isCancelled(r)).slice(0, 3);
-  const cost = metrics?.cost_30d;
-  const funnelMax = Math.max(1, ...FUNNEL.map((f) => s.stages[f.stage] ?? 0));
-  const profiles = store.profiles;
-  const staged = profiles.filter((p) => p.status !== "PROFILING" && p.status !== "FAILED").length;
-  const profilingNow = profiles.filter((p) => p.status === "PROFILING").length;
-  const bySchema = new Map<string, number>();
-  for (const p of profiles) bySchema.set(`${p.database_name}.${p.schema_name}`, (bySchema.get(`${p.database_name}.${p.schema_name}`) ?? 0) + 1);
-  const topSchemas = Array.from(bySchema.entries()).sort((a, b) => b[1] - a[1]).slice(0, 4);
-  const visibleDomains = domains.domains.filter((d) => displayDomain(d.domain_name));
+  const o = overview;
   const user = (me?.user ?? "").split(/[._@ ]/)[0];
   const name = user ? user.charAt(0) + user.slice(1).toLowerCase() : "";
+  const inFlight = active.runs.filter((r) => !r.is_archived);
+  const reviewCount = review?.total ?? inFlight.filter(needsReview).length;
+  const failedCount = (failing?.runs ?? []).filter((r) => !r.is_archived && !isCancelled(r)).length;
+  const openIncidents = incidents ? incidents.open + incidents.ack : null;
+  const dqFailing = o?.dq?.failed ?? 0;
+  const attention = [
+    { show: reviewCount > 0, href: "/runs?needs_review=1", icon: Eye, text: `${reviewCount} run${reviewCount === 1 ? "" : "s"} need review`, tone: "text-rose-700 bg-rose-50 ring-rose-200" },
+    { show: failedCount > 0, href: "/runs?status=failed", icon: XCircle, text: `${failedCount} failed run${failedCount === 1 ? "" : "s"}`, tone: "text-amber-800 bg-amber-50 ring-amber-200" },
+    { show: !!openIncidents, href: "/incidents", icon: Siren, text: `${openIncidents} open incident${openIncidents === 1 ? "" : "s"}`, tone: "text-rose-700 bg-rose-50 ring-rose-200" },
+    { show: !!o?.qa?.pending, href: "/dashboard/qa-store", icon: SquareTerminal, text: `${o?.qa?.pending} QA pack${o?.qa?.pending === 1 ? "" : "s"} awaiting approval`, tone: "text-violet-700 bg-violet-50 ring-violet-200" },
+    { show: dqFailing > 0, href: "/dashboard/dq-store", icon: ClipboardCheck, text: `${dqFailing} data quality check${dqFailing === 1 ? "" : "s"} failing`, tone: "text-rose-700 bg-rose-50 ring-rose-200" },
+    { show: !!o?.profiling?.drift, href: "/dashboard/profiling", icon: BarChart3, text: `${o?.profiling?.drift} drifting column${o?.profiling?.drift === 1 ? "" : "s"}`, tone: "text-amber-800 bg-amber-50 ring-amber-200" },
+  ].filter((a) => a.show);
+  const daily = o?.ingested?.daily ?? [];
 
   return (
     <div className="space-y-6">
-      <PageHeader eyebrow="Overview"
+      <PageHeader eyebrow={o?.domain ? `${o.domain.domain_name} domain` : "All domains"}
                   title={`${greeting()}${name ? `, ${name}` : ""}`}
-                  description={s.review
-                    ? `${s.review} run${s.review === 1 ? " is" : "s are"} waiting on a review. ${s.running} running, ${s.drafts} in draft.`
-                    : `${s.running} run${s.running === 1 ? "" : "s"} in flight and nothing waiting on you.`}
+                  description={`${inFlight.length} run${inFlight.length === 1 ? "" : "s"} in flight${reviewCount ? `, ${reviewCount} waiting on review` : ", nothing waiting on you"}. Your data estate at a glance.`}
                   actions={<>
                     <Link href="/runs" className={buttonVariants({ variant: "outline" })}>All runs</Link>
-                    <Link href="/dashboard/sources" className={buttonVariants()}><Sparkles className="h-4 w-4" /> Profile & model a source</Link>
+                    <Link href="/dashboard/sources/new" className={buttonVariants()}><PlugZap className="h-4 w-4" /> Onboard source</Link>
                   </>} />
 
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-5">
-        <Kpi href="/runs?status=active" label="Running" value={s.running} hint="Moving through the pipeline" icon={PlayCircle} tone="blue" />
-        <Kpi href="/runs?needs_review=1" label="Needs review" value={s.review} hint="Mapping, STTM, checks or code" icon={Eye} tone="rose" highlight={s.review > 0} />
-        <Kpi href="/runs?status=draft" label="Drafts" value={s.drafts} hint="Created, source not chosen yet" icon={CircleDashed} tone="slate" />
-        <Kpi href="/runs?status=completed" label="Completed" value={s.completed} hint="Approved and delivered" icon={CheckCircle2} tone="emerald" />
-        <Kpi href="/runs?status=failed" label="Failed" value={s.failed} hint={`${s.cancelled} more cancelled`} icon={XCircle} tone="amber" />
-      </div>
-      {cost && (
-        <Link href="/audit?tab=cost" className="flex flex-wrap items-center gap-3 rounded-xl border border-indigo-100 bg-gradient-to-r from-indigo-50/80 via-card to-card px-4 py-3 text-sm shadow-xs transition hover:border-indigo-200 hover:shadow-card">
-          <span className="grid h-7 w-7 place-items-center rounded-lg bg-indigo-100 text-indigo-600"><Sparkles className="h-3.5 w-3.5" /></span>
-          <span className="font-medium">AI usage, last 30 days</span>
-          <span className="text-muted-foreground">{cost.calls.toLocaleString()} calls · {cost.tokens.toLocaleString()} tokens · {(cost.credits ?? cost.estimated_cost).toFixed(2)} credits{cost.actual_credits ? ` (${cost.actual_credits.toFixed(2)} billed)` : " estimated"}</span>
-          <ArrowRight className="ml-auto h-4 w-4 text-muted-foreground" />
-        </Link>
+      {/* hero ribbon */}
+      <section className="glass relative overflow-hidden p-1" data-testid="hero-ribbon">
+        <div className="pointer-events-none absolute inset-0 bg-gradient-to-r from-indigo-500/[0.07] via-transparent to-cyan-500/[0.07]" />
+        <div className="relative grid divide-y divide-border/60 sm:grid-cols-2 sm:divide-y-0 xl:grid-cols-4 xl:divide-x">
+          <RibbonMetric label="Live ingested" value={o?.ingested ? fmt(o.ingested.gb) : "-"} unit="GB" href="/dashboard/sources"
+                        hint={o?.ingested ? `${fmt(o.ingested.tables)} landed tables · ${fmt(o.ingested.rows)} rows` : "landing registry not available"}>
+            <Sparkline values={daily.map((d) => d.gb)} />
+          </RibbonMetric>
+          <RibbonMetric label="Profiling health" value={o?.profiling?.health == null ? "-" : Math.round(o.profiling.health)} unit={o?.profiling?.health == null ? undefined : "%"}
+                        href="/dashboard/profiling"
+                        hint={o?.profiling ? `${fmt(o.profiling.tables)} tables · ${fmt(o.profiling.columns)} columns profiled` : "no profiles yet"}>
+            <Meter value={o?.profiling?.health} />
+            <p className="mt-1.5 text-[11px] text-muted-foreground">Columns under 20% nulls with no drift since the previous pass</p>
+          </RibbonMetric>
+          <RibbonMetric label="STTM published" value={o?.sttm ? fmt(o.sttm.verified) : "-"} href="/dashboard/sttm"
+                        hint={o?.sttm ? `of ${fmt(o.sttm.mappings)} mappings · ${fmt(o.sttm.pending)} pending review` : "catalog not available"}>
+            <Meter value={o?.sttm ? pct(o.sttm.verified, o.sttm.mappings) : null} tone="primary" />
+          </RibbonMetric>
+          <RibbonMetric label="Active DQ checks" value={o?.dq ? fmt(o.dq.checks) : "-"} href="/dashboard/dq-store"
+                        hint={o?.dq ? `${o.dq.pass_rate == null ? "no results yet" : `${o.dq.pass_rate}% passing`} · ${o.dq.coverage == null ? "-" : `${o.dq.coverage}%`} coverage` : "DQ Store not deployed"}>
+            <Meter value={o?.dq?.pass_rate} />
+          </RibbonMetric>
+        </div>
+      </section>
+
+      {attention.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2" data-testid="attention">
+          <span className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-[0.1em] text-muted-foreground"><AlertTriangle className="h-3.5 w-3.5" /> Attention</span>
+          {attention.map(({ href, icon: Icon, text, tone }) => (
+            <Link key={href} href={href} className={cn("inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium ring-1 ring-inset transition hover:brightness-95", tone)}>
+              <Icon className="h-3.5 w-3.5" /> {text} <ArrowRight className="h-3 w-3" />
+            </Link>
+          ))}
+        </div>
       )}
 
-      {ops && <OperationsCard card={ops} />}
-
-      <div className="grid gap-4 xl:grid-cols-5">
-        <Panel title="Pipeline: where running work sits" icon={Activity} className="xl:col-span-3"
-               action={<span className="text-xs text-muted-foreground">{s.running} running</span>}>
-          <div className="space-y-2.5">
-            {FUNNEL.map((f, i) => {
-              const n = s.stages[f.stage] ?? 0;
-              return (
-                <div key={f.stage} className="grid grid-cols-[110px_1fr_32px] items-center gap-3 text-sm">
-                  <span className="flex items-center gap-2 text-muted-foreground">
-                    <span className="grid h-5 w-5 place-items-center rounded-full bg-muted text-[10px] font-semibold">{i + 1}</span>
-                    {f.label}
-                  </span>
-                  <div className="h-2.5 overflow-hidden rounded-full bg-muted">
-                    <div className="h-full rounded-full bg-gradient-to-r from-indigo-500 to-violet-400 transition-all"
-                         style={{ width: n ? `${Math.max(6, (100 * n) / funnelMax)}%` : "0%" }} />
-                  </div>
-                  <span className="text-right font-semibold tabular-nums">{n}</span>
-                </div>
-              );
-            })}
-          </div>
-          {s.running === 0 && <p className="mt-3 text-xs text-muted-foreground">No runs in progress.</p>}
-        </Panel>
-
-        <Panel title="Needs your attention" icon={AlertTriangle} className="xl:col-span-2"
-               action={<Link href="/runs?status=active" className="text-xs font-medium text-primary hover:underline">View runs</Link>}>
-          {attention.length === 0 && failed.length === 0 ? (
-            <div className="grid flex-1 place-items-center py-6 text-center">
-              <CheckCircle2 className="h-8 w-8 text-success" />
-              <p className="mt-2 text-sm font-medium">You are all caught up</p>
-              <p className="text-xs text-muted-foreground">No mapping, STTM, check or code review is waiting.</p>
-            </div>
-          ) : (
-            <ul className="space-y-2">
-              {[...attention, ...failed].map((r) => (
-                <li key={r.run_id}>
-                  <Link href={runHref(r)} className="group flex items-center gap-3 rounded-xl border border-border/80 bg-card p-3 transition hover:border-primary/30 hover:bg-accent/50">
-                    <span className={cn("h-2 w-2 shrink-0 rounded-full", needsReview(r) ? "bg-rose-500" : "bg-amber-500")} />
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate text-sm font-medium">{r.run_name}</span>
-                      <span className="block truncate text-xs text-muted-foreground">
-                        {STATE_LABEL[r.current_state] ?? `Failed at ${r.current_state.replace(/_/g, " ").toLowerCase()}`}
-                        {r.updated_at ? ` · ${ago(r.updated_at)}` : ""}
-                      </span>
-                    </span>
-                    <ArrowRight className="h-4 w-4 text-muted-foreground transition group-hover:translate-x-0.5 group-hover:text-primary" />
-                  </Link>
-                </li>
-              ))}
-            </ul>
-          )}
-        </Panel>
+      {/* six asset stores */}
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+        <StoreCard testId="store-source" title="Source Store" subtitle="Shares, databases and external pipelines" icon={Database} tone="indigo" missing={!o?.sources}
+                   metrics={[{ label: "Shares", value: fmt(o?.sources?.shares) }, { label: "Databases", value: fmt(o?.sources?.databases) },
+                             { label: "Pipelines", value: fmt(o?.sources?.external) }]}
+                   links={[{ label: "Onboard source", href: "/dashboard/sources/new" }, { label: "All sources", href: "/dashboard/sources" }]} />
+        <StoreCard testId="store-profiling" title="Profiling Store" subtitle="Distributions, nulls, cardinality and drift" icon={BarChart3} tone="sky" missing={!o?.profiling}
+                   metrics={[{ label: "Tables profiled", value: fmt(o?.profiling?.tables) },
+                             { label: "Drift alerts", value: fmt(o?.profiling?.drift), tone: o?.profiling?.drift ? "text-amber-600" : undefined },
+                             { label: "High cardinality", value: fmt(o?.profiling?.high_cardinality) }]}
+                   meter={{ label: "Profiling health", value: o?.profiling?.health }}
+                   links={[{ label: "Browse profiles", href: "/dashboard/profiling" }, { label: "Profile a source", href: "/dashboard/sources" }]} />
+        <StoreCard testId="store-models" title="Modeling Store" subtitle="Domain models published to feature branches" icon={Network} tone="violet" missing={!o?.models}
+                   metrics={[{ label: "Published", value: fmt(o?.models?.published) }, { label: "Branches", value: fmt(o?.models?.branches) },
+                             { label: "In design", value: fmt(o?.models?.in_design) }]}
+                   links={[{ label: "New model branch", href: "/dashboard/modeling" }, { label: "Domains", href: "/domains" }]} />
+        <StoreCard testId="store-sttm" title="STTM Store" subtitle="Versioned source to target mappings" icon={GitCompareArrows} tone="emerald" missing={!o?.sttm}
+                   metrics={[{ label: "Verified", value: fmt(o?.sttm?.verified), tone: "text-emerald-600" }, { label: "Pending review", value: fmt(o?.sttm?.pending) },
+                             { label: "Mappings", value: fmt(o?.sttm?.mappings) }]}
+                   meter={{ label: "Verified share", value: o?.sttm ? pct(o.sttm.verified, o.sttm.mappings) : null, tone: "primary" }}
+                   links={[{ label: "Open catalog", href: "/dashboard/sttm" }, { label: "Pending review", href: "/dashboard/sttm?status=REVIEW" }]} />
+        <StoreCard testId="store-qa" title="QA Store" subtitle={o?.qa?.top_tags?.length ? o.qa.top_tags.slice(0, 3).map((t) => `#${t}`).join(" ") : "Deterministic domain SQL packs"}
+                   icon={SquareTerminal} tone="amber" missing={!o?.qa}
+                   metrics={[{ label: "Approved suites", value: fmt(o?.qa?.approved_packs) }, { label: "Live rules", value: fmt(o?.qa?.rules) },
+                             { label: "Pass rate", value: o?.qa?.pass_rate == null ? "-" : `${Math.round(o.qa.pass_rate)}%` }]}
+                   links={[{ label: "Add QA query", href: "/dashboard/qa-store?new=1" }, { label: "Open QA Store", href: "/dashboard/qa-store" }]} />
+        <StoreCard testId="store-dq" title="Data Quality Store" subtitle="Soda and Great Expectations attribute checks" icon={ClipboardCheck} tone="rose" missing={!o?.dq}
+                   metrics={[{ label: "Active checks", value: fmt(o?.dq?.checks) },
+                             { label: "Failing", value: fmt(o?.dq?.failed), tone: o?.dq?.failed ? "text-rose-600" : undefined },
+                             { label: "Scheduled tables", value: fmt(o?.dq?.scheduled_tables) }]}
+                   meter={{ label: "Coverage of profiled tables", value: o?.dq?.coverage, tone: "primary" }}
+                   links={[{ label: "Open DQ Store", href: "/dashboard/dq-store" }, { label: "Seed from profiles", href: "/dashboard/dq-store" }]} />
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-3">
-        <Panel title="Profile store" icon={Layers}
-               action={<Link href="/dashboard/sources" className="text-xs font-medium text-primary hover:underline">Open Sources</Link>}>
-          <div className="flex items-end gap-6">
-            <div>
-              <p className="text-3xl font-semibold tabular-nums">{staged}</p>
-              <p className="text-xs text-muted-foreground">tables staged for reuse</p>
-            </div>
-            <div>
-              <p className="text-xl font-semibold tabular-nums">{bySchema.size}</p>
-              <p className="text-xs text-muted-foreground">schemas</p>
-            </div>
-            <div>
-              <p className={cn("text-xl font-semibold tabular-nums", profilingNow && "text-amber-600")}>{profilingNow}</p>
-              <p className="text-xs text-muted-foreground">profiling now</p>
-            </div>
+      <div className="grid gap-4 2xl:grid-cols-3">
+        <section className="surface overflow-hidden 2xl:col-span-2" data-testid="pipeline-table">
+          <div className="flex items-center gap-2 px-5 pb-3 pt-4">
+            <h3 className="text-sm font-semibold">Active pipeline runs and SLA</h3>
+            <span className="rounded-full bg-muted px-2 py-0.5 text-xs tabular-nums text-muted-foreground">{inFlight.length}</span>
+            <Link href="/runs?status=active" className="ml-auto text-xs font-medium text-primary hover:underline">All active runs</Link>
           </div>
-          <ul className="mt-4 space-y-1.5">
-            {topSchemas.map(([schema, n]) => (
-              <li key={schema} className="flex items-center gap-2 text-xs">
-                <FolderTree className="h-3.5 w-3.5 text-muted-foreground" />
-                <span className="truncate font-mono">{schema}</span>
-                <span className="ml-auto tabular-nums text-muted-foreground">{n}</span>
-              </li>
-            ))}
-            {topSchemas.length === 0 && <li className="text-xs text-muted-foreground">Nothing profiled yet.</li>}
-          </ul>
-          {overview && (
-            <p className="mt-3 border-t pt-3 text-xs text-muted-foreground">
-              <Database className="mr-1 inline h-3.5 w-3.5" />
-              {overview.sources.length} registered source{overview.sources.length === 1 ? "" : "s"}
-            </p>
-          )}
-        </Panel>
+          <PipelineTable runs={inFlight.slice(0, 8)} />
+        </section>
 
-        <Panel title="Domain knowledge" icon={Boxes}
-               action={<Link href="/domains" className="text-xs font-medium text-primary hover:underline">Domains</Link>}>
-          <ul className="space-y-2">
-            {visibleDomains.map((d) => (
-              <li key={d.domain_id} className="flex items-center gap-3 rounded-xl border border-border/80 px-3 py-2 transition hover:bg-accent/40">
-                <span className="grid h-8 w-8 place-items-center rounded-lg bg-gradient-to-br from-indigo-50 to-violet-100 text-xs font-bold text-indigo-600 ring-1 ring-inset ring-indigo-100">
-                  {d.domain_name.slice(0, 2)}
-                </span>
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate text-sm font-medium">{d.domain_name}</span>
-                  <span className="text-xs text-muted-foreground">{d.target_tables} target model{d.target_tables === 1 ? "" : "s"}</span>
-                </span>
-                <span className="text-xs tabular-nums text-muted-foreground">{d.knowledge_items} items</span>
-              </li>
-            ))}
-            {visibleDomains.length === 0 && <li className="text-xs text-muted-foreground">No domain packs registered.</li>}
-          </ul>
-        </Panel>
-
-        <Panel title="Recent activity" icon={Clock}
-               action={<Link href="/audit" className="text-xs font-medium text-primary hover:underline">Audit</Link>}>
+        <Panel title="Recent activity" icon={Clock} action={<Link href="/audit" className="text-xs font-medium text-primary hover:underline">Audit</Link>}>
           <ol className="relative space-y-3 before:absolute before:left-[5px] before:top-1 before:h-[calc(100%-8px)] before:w-px before:bg-border">
-            {audit.events.slice(0, 7).map((e) => (
+            {audit.events.map((e) => (
               <li key={e.event_id} className="relative pl-5">
-                <span className={cn("absolute left-0 top-1.5 h-[11px] w-[11px] rounded-full border-2 border-card",
-                  e.actor_type === "HUMAN" ? "bg-indigo-500" : "bg-emerald-500")} />
-                <p className="truncate text-xs">
-                  <span className="font-medium">{e.run_name ?? "run"}</span>
-                  <span className="text-muted-foreground"> · {e.to_state.replace(/_/g, " ").toLowerCase()}</span>
-                </p>
+                <span className={cn("absolute left-0 top-1.5 h-[11px] w-[11px] rounded-full border-2 border-card", e.actor_type === "HUMAN" ? "bg-indigo-500" : "bg-emerald-500")} />
+                <p className="truncate text-xs"><span className="font-medium">{e.run_name ?? "run"}</span>
+                  <span className="text-muted-foreground"> · {(e.to_state ?? "").replace(/_/g, " ").toLowerCase()}</span></p>
                 <p className="truncate text-[11px] text-muted-foreground">{e.actor} · {ago(e.created_at)}</p>
               </li>
             ))}
-            {audit.events.length === 0 && <li className="text-xs text-muted-foreground">No activity yet.</li>}
+            {audit.events.length === 0 && (
+              <li className="flex items-center gap-2 text-xs text-muted-foreground"><CheckCircle2 className="h-4 w-4 text-success" /> No activity yet.</li>
+            )}
           </ol>
         </Panel>
       </div>
-
-      <section className="space-y-3">
-        <div className="flex items-center">
-          <h3>Latest runs</h3>
-          <Link href="/runs" className="ml-auto text-sm font-medium text-primary hover:underline">See all runs</Link>
-        </div>
-        <RunTable runs={runs.filter((r) => !r.is_archived).slice(0, 8)} selectable={false} />
-      </section>
     </div>
   );
 }

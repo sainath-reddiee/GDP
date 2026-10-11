@@ -78,3 +78,16 @@ export type DqScan = {
   results: { catalog_check_id: string; target_column: string | null; check_type: string | null; outcome: DqOutcome;
              measured: number | null; threshold: string | null; failed_rows: number | null; detail: string | null }[];
 };
+
+// ---------------------------------------------------------------- command center
+
+export type Overview = {
+  domain: { domain_id: string; domain_name: string } | null;
+  ingested: { bytes: number; gb: number; tables: number; rows: number; last_day: string | null; daily: { day: string; gb: number; tables: number }[] } | null;
+  sources: { total: number; shares: number; databases: number; other: number; external: number; external_active: number } | null;
+  profiling: { tables: number; columns: number; high_cardinality: number; pii: number; drift: number; drift_tables: number; health: number | null } | null;
+  models: { designs: number; published: number; branches: number; in_design: number; failed: number } | null;
+  sttm: { mappings: number; verified: number; pending: number } | null;
+  qa: PackSummary | null;
+  dq: DqSummary | null;
+};

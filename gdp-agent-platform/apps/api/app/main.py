@@ -6387,3 +6387,6 @@ app.include_router(hub_catalog_router)
 app.include_router(hub_models_router)
 app.include_router(hub_quality_router)
 app.include_router(dq_router)
+from app.hub_overview_api import router as overview_router  # noqa: E402
+
+app.include_router(overview_router)
