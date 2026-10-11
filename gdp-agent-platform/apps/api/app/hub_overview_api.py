@@ -391,19 +391,35 @@ def failing(db: Db, domain_id: Optional[str], dq_block: Optional[dict]) -> dict:
 
 @router.get("/api/hub/overview")
 def overview(domain: Optional[str] = None, db: Db = Depends(current_db)):
+    """Every block at once: the independent blocks run in parallel (each is a few small queries), and the answer is
+    kept 20 seconds per user, role and domain (dropped by any write, app/perf.py)."""
+    from app.perf import read_cache
+
+    return read_cache(db, ("overview", (domain or "").upper()), 20, lambda: _overview(db, domain))
+
+
+def _overview(db: Db, domain: Optional[str]) -> dict:
+    import contextvars
+    from concurrent.futures import ThreadPoolExecutor
+
     scope = _resolve(db, domain)
     did = scope["domain_id"] if scope else None
     name = scope["domain_name"] if scope else None
-    blocks = {
-        "sources": _soft(lambda: sources(db, did)),
-        "profiling": _soft(lambda: profiling(db, did)),
-        "models": _soft(lambda: models(db, did, name)),
-        "sttm": _soft(lambda: sttm(db, did)),
-        "qa": _soft(lambda: qa(db, did)),
+    jobs = {
+        "sources": lambda: sources(db, did),
+        "profiling": lambda: profiling(db, did),
+        "models": lambda: models(db, did, name),
+        "sttm": lambda: sttm(db, did),
+        "qa": lambda: qa(db, did),
+        "delivery": lambda: delivery(db, did),
+        "waiting": lambda: waiting(db, did),
+        "freshness": lambda: freshness(db, did),
     }
+    with ThreadPoolExecutor(max_workers=len(jobs)) as pool:
+        # each job runs in a copy of this request's context, so its statements count in the request's timing
+        futures = {k: pool.submit(contextvars.copy_context().run, _soft, fn) for k, fn in jobs.items()}
+        blocks = {k: f.result() for k, f in futures.items()}
     blocks["dq"] = _soft(lambda: dq(db, did, (blocks["profiling"] or {}).get("tables", 0)))
-    blocks["delivery"] = _soft(lambda: delivery(db, did))
-    blocks["waiting"] = _soft(lambda: waiting(db, did))
-    blocks["freshness"] = _soft(lambda: freshness(db, did))
     blocks["failing"] = _soft(lambda: failing(db, did, blocks["dq"]))
-    return {"domain": scope, **blocks}
+    return {"domain": scope, **{k: blocks[k] for k in ("sources", "profiling", "models", "sttm", "qa", "dq",
+                                                       "delivery", "waiting", "freshness", "failing")}}

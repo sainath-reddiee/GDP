@@ -85,6 +85,18 @@ async def bust_run_cache(request: Request, call_next):
     return response
 
 
+from app import perf as _perf  # noqa: E402
+
+_perf.instrument(Db)
+
+
+@app.middleware("http")
+async def request_timing(request: Request, call_next):
+    """Server-Timing on every response, slow requests logged, read caches reset after writes (app/perf.py).
+    Registered last, so it runs first and times the whole request."""
+    return await _perf.middleware(request, call_next)
+
+
 _CATALOG_DISPLAY_AT = {"at": 0.0}
 
 
@@ -2045,6 +2057,7 @@ def costs(group_by: str = "stage", since: Optional[str] = None, until: Optional[
 
 
 @app.get("/api/metrics/summary")
+@_perf.cached("metrics-summary", 20)
 def metrics_summary(db: Db = Depends(current_db)):
     """Server-side counts for the dashboard and sidebar (correct at any number of runs) plus 30-day AI cost."""
     from services.workflow.listing import summarise
@@ -2122,6 +2135,11 @@ def domain_detail(domain_id: str, db: Db = Depends(current_db)):
 
 @app.get("/api/domains")
 def domains(db: Db = Depends(current_db)):
+    # read on every page (the top bar's domain picker): kept 30 seconds, dropped by any write
+    return _perf.read_cache(db, "domains", 30, lambda: _domains(db))
+
+
+def _domains(db: Db) -> dict:
     return {"domains": db.query(
         """
         SELECT D.DOMAIN_ID, D.DOMAIN_NAME, D.DESCRIPTION, D.OWNER, D.ACTIVE_FLAG, D.VERSION,
@@ -5467,12 +5485,14 @@ def get_catalog_display(db: Db = Depends(current_db)):
     """The hidden-catalog lists the web app applies (single source with the API's own filtering)."""
     from services.common.platform_config import DEFAULTS
 
-    try:
-        found = db.query("SELECT CONFIG_VALUE FROM CORE.PLATFORM_CONFIG WHERE CONFIG_KEY = 'CATALOG_DISPLAY' "
-                         "AND IS_CURRENT ORDER BY VERSION DESC LIMIT 1")
-    except Exception:
-        found = []
-    return (_json(found[0]["config_value"]) if found else None) or DEFAULTS["CATALOG_DISPLAY"]
+    def load():
+        try:
+            found = db.query("SELECT CONFIG_VALUE FROM CORE.PLATFORM_CONFIG WHERE CONFIG_KEY = 'CATALOG_DISPLAY' "
+                             "AND IS_CURRENT ORDER BY VERSION DESC LIMIT 1")
+        except Exception:
+            found = []
+        return (_json(found[0]["config_value"]) if found else None) or DEFAULTS["CATALOG_DISPLAY"]
+    return _perf.read_cache(db, "catalog-display", 60, load)  # read on every page; dropped by any write
 
 
 # ---------------------------------------------------------------- Domains: soft delete and restore

@@ -46,8 +46,11 @@ for (const theme of ["light", "dark"] as const) {
 
     test("ctrl+k opens the palette and jumps to a page", async ({ page }) => {
       await page.goto("/dashboard");
-      await page.keyboard.press("Control+k");
-      await expect(page.getByTestId("command-palette")).toBeVisible();
+      // the shortcut works once the page has hydrated; press until it does instead of racing the scripts
+      await expect(async () => {
+        await page.keyboard.press("Control+k");
+        await expect(page.getByTestId("command-palette")).toBeVisible({ timeout: 3000 });
+      }).toPass({ timeout: 20_000 });
       await page.keyboard.type("DQ Store");
       await page.keyboard.press("Enter");
       await page.waitForURL(/\/dashboard\/dq-store/);
