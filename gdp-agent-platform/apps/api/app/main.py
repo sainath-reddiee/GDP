@@ -3393,8 +3393,19 @@ def get_dbt(run_id: str, db: Db = Depends(current_db)):
         )
     except Exception:
         publication = []
+    store_change = None
+    try:  # an STTM edited in the STTM Store after this generation: dbt should be regenerated
+        changed = db.query("""SELECT VERSION, CHANGE_NOTE, CREATED_BY, CREATED_AT::VARCHAR AS CREATED_AT
+                                FROM GOVERNANCE.STTM_CATALOG
+                               WHERE RUN_ID = %s AND ORIGIN = 'CATALOG_EDIT'
+                               ORDER BY CREATED_AT DESC LIMIT 1""", (run_id,))
+        if changed and (not gen or str(changed[0]["created_at"]) > str(gen[0].get("created_at") or "")):
+            store_change = changed[0]
+    except Exception:
+        store_change = None
     return {"generation": gen[0] if gen else None, "artifacts": artifacts, **extras,
-            "publication": publication[0] if publication else None, **_dbt_setup(db, run_id)}
+            "publication": publication[0] if publication else None, "sttm_store_change": store_change,
+            **_dbt_setup(db, run_id)}
 
 
 def _dbt_setup(db: Db, run_id: str) -> dict:

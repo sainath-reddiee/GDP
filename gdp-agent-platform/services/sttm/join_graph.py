@@ -16,6 +16,8 @@ path and the generated SQL never joins a table twice.
 
 from __future__ import annotations
 
+import re
+
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from services.common.rules import rule
@@ -207,8 +209,34 @@ def to_dbt_joins(graph: Dict[str, Any]) -> List[Dict[str, Any]]:
              "join_type": j["join_type"], "confidence": j["confidence"]} for j in graph.get("joins") or []]
 
 
-def preview_sql(graph: Dict[str, Any], lines: Sequence[Dict[str, Any]], target_table: str) -> str:
-    """Readable SELECT showing how the confirmed joins and mappings assemble the target."""
+def aliased(expression: str, aliases: Dict[str, str]) -> str:
+    """`TABLE.COLUMN` references rewritten to the model's aliases (`o.COLUMN`, `j1.COLUMN`); unqualified columns
+    are left as written."""
+    out = expression
+    for table in sorted(aliases, key=len, reverse=True):
+        out = re.sub(rf"(?<![\w.\"]){re.escape(table)}\.", f"{aliases[table]}.", out, flags=re.IGNORECASE)
+    return out
+
+
+def filter_conditions(filters: Sequence[Dict[str, Any]], aliases: Dict[str, str]) -> List[str]:
+    """Row filters of the mapping ({table, condition, reason}) as WHERE conditions on the model's aliases."""
+    out = []
+    for f in filters or []:
+        condition = str(f.get("condition") or "").strip()
+        if condition:
+            out.append(f"({aliased(condition, aliases)})" + (f"  -- {f['reason']}" if f.get("reason") else ""))
+    return out
+
+
+def column_expression(line: Dict[str, Any], expr: str, aliases: Dict[str, str]) -> str:
+    """A column's value, kept only where its own filter holds (STTM_LINE.FILTER_RULE), else NULL."""
+    rule = str(line.get("filter_rule") or "").strip()
+    return f"CASE WHEN {aliased(rule, aliases)} THEN {expr} END" if rule else expr
+
+
+def preview_sql(graph: Dict[str, Any], lines: Sequence[Dict[str, Any]], target_table: str,
+                filters: Sequence[Dict[str, Any]] = ()) -> str:
+    """Readable SELECT showing how the confirmed joins, row filters and mappings assemble the target."""
     driving = graph.get("driving_table")
     if not driving:
         return f"-- {target_table}: no source tables mapped yet\n"
@@ -219,11 +247,12 @@ def preview_sql(graph: Dict[str, Any], lines: Sequence[Dict[str, Any]], target_t
         table = str(line.get("source_table") or "").upper()
         col = line.get("source_column")
         if line.get("transformation"):
-            expr = str(line["transformation"])
+            expr = aliased(str(line["transformation"]), aliases)
         elif table and col:
             expr = f"{aliases.get(table, table.lower())}.{col}"
         else:
             expr = "NULL"
+        expr = column_expression(line, expr, aliases)
         note = "  -- no join path" if table and table not in aliases else ""
         selects.append(f"    {expr} AS {target}{note}")
     body = ",\n".join(selects) or "    *"
@@ -232,4 +261,6 @@ def preview_sql(graph: Dict[str, Any], lines: Sequence[Dict[str, Any]], target_t
         + " AND ".join(f"{aliases[j['left_table']]}.{l} = {aliases[j['right_table']]}.{r}" for l, r in _pairs(j["keys"]))
         + (f"  -- fan-out: one row per {j['right_table']} row" if j.get("fan_out") else "")
         for j in graph.get("joins") or [])
-    return f"-- {target_table}\nSELECT\n{body}\nFROM {driving} AS o{joins}\n"
+    where = filter_conditions(filters, aliases)
+    clause = ("\nWHERE " + "\n  AND ".join(where)) if where else ""
+    return f"-- {target_table}\nSELECT\n{body}\nFROM {driving} AS o{joins}{clause}\n"

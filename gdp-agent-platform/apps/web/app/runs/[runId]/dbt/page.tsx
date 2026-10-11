@@ -20,6 +20,7 @@ export default async function DbtPage({ params }: { params: { runId: string } })
           publication: DbtPublication | null;
           report: GenerationReport | null;
           skeleton_base: Record<string, string> | null;
+          sttm_store_change?: { version: number; change_note: string | null; created_by: string; created_at: string } | null;
         } & Partial<DbtSetup>>(`/api/runs/${params.runId}/dbt`),
     // models for the Cortex review only; the repository and publishing come from Admin's configuration above
     api<DbtWorkspace>(`/api/runs/${params.runId}/dbt/workspace?git=false`).catch(() => ({ models: [], default_model: "" } as DbtWorkspace)),
@@ -33,6 +34,13 @@ export default async function DbtPage({ params }: { params: { runId: string } })
   const models = workspace.models ?? [];
   return (
     <StageGate state={state} stage="DBT">
+      {data.sttm_store_change && (
+        <div className="mb-4 flex flex-wrap items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900" role="status">
+          <b>The STTM changed in the STTM Store</b>
+          <span>(v{data.sttm_store_change.version} by {data.sttm_store_change.created_by}, {data.sttm_store_change.created_at.slice(0, 16)}
+            {data.sttm_store_change.change_note ? `: ${data.sttm_store_change.change_note}` : ""}) after this dbt was generated. Regenerate dbt to pick it up.</span>
+        </div>
+      )}
       <AiSuggestions runId={params.runId} stage="DBT" canAct={!state.is_archived} />
       <DbtStudio
         runId={params.runId}

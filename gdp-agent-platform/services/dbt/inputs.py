@@ -123,6 +123,7 @@ def load_inputs(query: Query, run_id: str, plan: Dict[str, Any], sttm: Dict[str,
         "target_columns": target_columns,
         "lines": lines,
         "joins": _planned_joins(design) or (infer_joins(tables) if len(tables) > 1 else []),
+        "filters": design.get("filters") or [],
         "primary": (design.get("join_graph") or {}).get("driving_table") or design.get("driving_table"),
         "model_spec": model_spec or {},
     }

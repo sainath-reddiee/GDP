@@ -86,3 +86,17 @@ def test_accepted_column_rule_overrides_and_remasks():
     p = profiles[0]
     assert p["pii_classification"] == "SSN" and p["sample_values"][0]["value"] == "***6789"
     assert p["statistics"]["min"] is None and p["rule_source"] == "accepted column rule"
+
+
+def test_accepting_an_sttm_suggestion_targets_the_line(monkeypatch):
+    import services.common.suggestion_stages as stages
+    import services.sttm.procedures as sp
+
+    applied = []
+    monkeypatch.setattr(stages, "rows", lambda s, sql, params=None: [{"STTM_LINE_ID": "L9"}] if "STTM_LINE" in sql else [])
+    monkeypatch.setattr(sp, "apply_transformation", lambda s, run_id, payload: applied.append((run_id, json.loads(payload))))
+    out = stages._apply(None, "STTM", {"RUN_ID": "r1"}, "scope",
+                        {"target_column": "FULL_NAME", "transformation": "INITCAP(NAME)", "reason": "names"})
+    assert out["applied"].startswith("transformation applied")
+    assert applied == [("r1", {"sttm_line_id": "L9", "target_column": "FULL_NAME", "transformation": "INITCAP(NAME)",
+                               "rationale": "AI suggestion accepted: names"})]

@@ -304,6 +304,7 @@ footer { color: var(--muted); font-size: 13px; margin-top: 56px; }
 <ul>
   <li>Requesters cannot approve their own request unless the policy allows self-approval, or they are <code>SUPER_ADMIN</code> and "Super admins may approve their own requests" is on.</li>
   <li>Never queued, always refused with 403 for users without the privilege: file uploads and other non-JSON bodies, and setting a Teams webhook (the URL is a secret and must not be stored in the request).</li>
+  <li id="store-queue"><strong>Store edits always queue.</strong> While "Store edits require approval" is on (Admin, Governance settings, setting <code>STORE_EDITS_REQUIRE_APPROVAL</code>, on by default), edits made from the asset stores become change requests even when the editor holds the privilege, and nobody approves their own: STTM Store edits go to STTM_APPROVER, DQ Store catalog and schedule changes to DQ_APPROVER, store dbt file edits to CODE_REVIEWER. The privilege's own approval policy names the approver when it has one. Run pages keep the rules above. Each store page lists what is waiting (<code>GET /api/governance/requests/pending?path=</code>).</li>
   <li>Stage approvals on a run use the target state: MAPPING_APPROVED needs MAPPING.APPROVE, STTM_APPROVED needs STTM.APPROVE, SODA_APPROVED needs SODA.APPROVE, DBT_APPROVED needs REVIEW.APPROVE, any other move needs REVIEW.DECIDE.</li>
 </ul>
 
@@ -446,11 +447,19 @@ footer { color: var(--muted); font-size: 13px; margin-top: 56px; }
   <dt>Privileges</dt><dd><span class="chip p">MODEL.EDIT</span> save and finalize. <span class="chip p">AI.USE</span> propose with AI. <span class="chip p">DBT.EDIT</span> publish.</dd>
 </dl>
 
-<h3 id="f-sttm-catalog">STTM catalog</h3>
+<h3 id="f-sttm-catalog">STTM Store (mapping workbench)</h3>
 <dl class="feature-meta">
-  <dt>Page</dt><dd><code>/dashboard/sttm</code></dd>
-  <dt>What it does</dt><dd>Every version of every source-to-target mapping in <code>GOVERNANCE.STTM_CATALOG</code>, kept after the run is archived. STTM generation, transformation edits and join edits in a run add versions automatically. Search by source or target entity, edit mapping type, transformation and business rule inline (each save is a new version), compare two versions, and export a version as a dbt project zip. Catalog edits do not change the run's own STTM.</dd>
-  <dt>Privileges</dt><dd>Reading, comparing and exporting: everyone signed in. <span class="chip p">STTM.EDIT</span> edits (routed to STTM_APPROVER by the default policy).</dd>
+  <dt>Page</dt><dd><code>/dashboard/sttm</code>, one mapping at <code>/dashboard/sttm/&lt;catalog id&gt;</code></dd>
+  <dt>What it does</dt><dd>Every version of every source-to-target mapping in <code>GOVERNANCE.STTM_CATALOG</code>, kept after the run is archived. STTM generation, transformation edits and join edits in a run add versions automatically. A mapping opens as a workbench with five tabs:
+    <ul>
+      <li><strong>Columns</strong>: search and filter (all, with logic, unmapped, changed, filtered); a row opens a drawer where every field can change, even on an approved mapping: source system, table, column and type, target type, mapping type, transformation, row filter, business rule and definition. The drawer shows the source column's profile, proposes SQL with AI (<code>POST /api/hub/sttm/&lt;id&gt;/refine</code>, read-only) and offers the run's ranked mapping candidates to re-pick the source. Columns can be added and removed.</li>
+      <li><strong>Joins and filters</strong>: the same join plan editor as the run page, row filters per table (<code>table_design.filters</code>, each with a condition and a reason), grain, business keys, dedup, SCD type and incremental strategy.</li>
+      <li><strong>SQL preview</strong>: the model SQL with joins and filters (<code>GET /api/hub/sttm/&lt;id&gt;/preview</code>).</li>
+      <li><strong>Mapping evidence</strong>: the run's candidates with scores and the decisions with their justification (<code>GET /api/hub/sttm/&lt;id&gt;/context</code>).</li>
+      <li><strong>Versions</strong>: history, field-level compare, and export as a dbt project zip or CSV.</li>
+    </ul>
+    Changes are staged in one bar and sent together with a note as one change request. When it is approved, the approver's replay writes a new catalog version (APPROVED, origin CATALOG_EDIT) and writes it back to the producing run: <code>CONTRACT.STTM_LINE</code> rows are updated, added or removed by target column, <code>STTM_REGISTRY.TABLE_DESIGN</code> gets the joins and filters, and the run records "STTM changed in the STTM Store; regenerate dbt". The run's dbt page shows a banner until dbt is regenerated. Row filters reach the generated dbt models as WHERE conditions (table filters) and CASE expressions (column filters).</dd>
+  <dt>Privileges</dt><dd>Reading, comparing and exporting: everyone signed in. <span class="chip p">STTM.EDIT</span> to submit changes, which always wait for STTM_APPROVER (see <a href="#store-queue">store edits</a>). <span class="chip p">AI.USE</span> AI proposals.</dd>
 </dl>
 
 <h3 id="f-quality-center">QA and Data Quality Center</h3>
@@ -1218,7 +1227,7 @@ cd apps/api; python -m app.worker</code></pre>
 <div class="warn"><strong>QA lead sign-off grant.</strong> <code>CONTRACT.QA_SIGNOFF</code> accepts inserts only from DATA_ENGINEER. A QA lead holding only the QA_ENGINEER database role cannot sign off until that grant is added (or they also get DATA_ENGINEER).</div>
 <div class="ok"><strong>Fixed: run QA procedures for QA_ENGINEER.</strong> <code>QA_SUITE</code>, <code>QA_ASK</code> and <code>QA_SAVE</code> are now granted to QA_ENGINEER, and <code>QA_SAVE</code> to REVIEWER. Redeploy procedures to apply.</div>
 <div class="warn"><strong>Change requests for viewers.</strong> Raising an approval request writes to <code>GOVERNANCE.CHANGE_REQUEST</code> with the requester's role; VIEWER cannot write there. Only DATA_ENGINEER holds REQUEST.CHANGES, so this matters only if that privilege is given to read-only roles.</div>
-<div class="warn"><strong>DQ Store writes go through approval by default.</strong> SODA.EDIT is routed to DQ_APPROVER, so every catalog edit and schedule from the DQ Store becomes a change request until an admin turns approval off for SODA.EDIT or the editor holds DQ_APPROVER. Decide which before rollout.</div>
+<div class="warn"><strong>Store edits wait for a second person.</strong> With "Store edits require approval" on (the default), every STTM Store edit and every DQ Store catalog or schedule change is a change request that the editor cannot approve, so each team needs at least one STTM_APPROVER and DQ_APPROVER other than its editors. Turn the setting off in Admin only if the stores should follow the run-page rules.</div>
 <div class="warn"><strong>Procedures without grants.</strong> <code>CODE.INDEX_REPO</code>, <code>CODEGEN.PUBLISH_DBT_PR</code> and each <code>ORACLE_RUN</code> have no USAGE grants; they work for the owning role only. Grant USAGE to DATA_ENGINEER if others should run them directly.</div>
 <div class="ok"><strong>Fixed: Jira token rows.</strong> Migration V033 adds the row access policy <code>JIRA.OWN_ROWS</code>: each person sees only their own <code>USER_TOKEN</code> and <code>OAUTH_STATE</code> rows; sessions with the PLATFORM_ADMIN database role see all. The Admin count of connected users therefore shows only yourself unless you are a platform admin.</div>
 <div class="note"><strong>Routing text.</strong> Admin says a DAG's own team wins over routing rules; the code applies routing rules first. Treat rules as the deciding source until the text is corrected.</div>

@@ -53,14 +53,35 @@ def staging_sql(source_name: str, table: str, columns: List[str], landing_ref: s
     )
 
 
-def intermediate_sql(stg_model: str, keys: List[str], order_col: Optional[str]) -> str:
+def intermediate_sql(stg_model: str, keys: List[str], order_col: Optional[str], where: Optional[List[str]] = None,
+                     notes: Optional[List[str]] = None) -> str:
     partition = ", ".join(_col(k) for k in keys) or "1"
     order = _col(order_col) if order_col else "1"
+    head = "".join(f"-- {n}\n" for n in notes or [])
+    clause = ("where " + "\n  and ".join(where) + "\n") if where else ""
     return (
-        f"-- keep the latest row per business key\n"
-        f"select *\nfrom {{{{ ref('{stg_model}') }}}}\n"
+        f"{head}-- keep the latest row per business key\n"
+        f"select *\nfrom {{{{ ref('{stg_model}') }}}}\n{clause}"
         f"qualify row_number() over (partition by {partition} order by {order} desc) = 1\n"
     )
+
+
+def split_filters(filters: List[Dict[str, Any]], primary: str) -> tuple:
+    """Row filters this single-source project can apply (on the primary table or unqualified) as WHERE conditions,
+    and the rest as notes: they apply after joins, which the run's dbt generation builds."""
+    import re as _re
+
+    where, notes = [], []
+    for f in filters or []:
+        cond = str(f.get("condition") or "").strip()
+        table = str(f.get("table") or "").upper()
+        if not cond:
+            continue
+        if not table or table == primary.upper():
+            where.append("(" + _re.sub(rf"(?<![\w.]){_re.escape(primary)}\.", "", cond, flags=_re.IGNORECASE) + ")")
+        else:
+            notes.append(f"row filter on {table} (applies after its join): {cond}")
+    return where, notes
 
 
 def mart_sql(int_model: str, lines: List[Dict[str, Any]], keys: List[str],
@@ -188,7 +209,9 @@ def build(sttm: Dict[str, Any], macros: List[Dict[str, str]], soda_yaml: str,
         "dbt_project.yml": project_yml(project),
         f"models/staging/_sources.yml": sources_yml(src, landing_db, landing_schema, landing_idents),
         f"models/staging/{stg}.sql": staging_sql(src, primary, stg_cols, source_rel),
-        f"models/intermediate/{intermediate}.sql": intermediate_sql(stg, keys, keys[0] if keys else None),
+        f"models/intermediate/{intermediate}.sql": intermediate_sql(stg, keys, keys[0] if keys else None,
+                                                                    *split_filters(design.get("filters") or [],
+                                                                                   source_tables[0] if source_tables else "")),
         f"models/marts/gdp/{mart}.sql": mart_sql(intermediate, lines, design.get("business_keys") or [],
                                                  contract_id=str(sttm.get("sttm_id") or "")),
         f"models/marts/gdp/_schema.yml": schema_yml(mart, lines, design.get("grain") or ""),

@@ -1,5 +1,6 @@
 import { CalendarClock, ClipboardCheck, Gauge, Radar } from "lucide-react";
 import { api, whoami } from "@/lib/api";
+import { PendingChanges } from "@/components/governance/pending-changes";
 import { canAct } from "@/lib/types";
 import { scopedDomain } from "@/lib/domain-scope";
 import type { DqCatalog, DqSummary } from "@/lib/store-types";
@@ -32,6 +33,7 @@ export default async function DqStorePage({ searchParams }: { searchParams: Para
         <Kpi label="Profiled coverage" value={summary?.coverage == null ? "-" : `${summary.coverage}%`} hint="of profiled tables have checks" icon={Radar} tone="violet" />
         <Kpi label="Scheduled tables" value={summary?.scheduled_tables ?? 0} hint="each one a Snowflake task" icon={CalendarClock} tone="sky" />
       </div>
+      <PendingChanges path="/api/dq/" what="data quality change" />
       {catalog && !catalog.deployed && <NotDeployed what="The Data Quality Store (GOVERNANCE.DQ_CHECKS_CATALOG, V037)" />}
       {!catalog ? <p className="text-sm text-destructive">The Data Quality Store could not be loaded{domain ? ` for domain ${domain}` : ""}.</p> : (
         <DqStoreView tables={catalog.tables} initialTable={searchParams.table ?? ""} status={searchParams.status ?? ""} openAdd={searchParams.add === "1"}

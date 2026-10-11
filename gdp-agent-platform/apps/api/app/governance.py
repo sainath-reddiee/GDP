@@ -28,7 +28,7 @@ from pydantic import BaseModel, Field
 from app.db import AUTH_MODE, Db, dev_db, lookup_session
 from services.governance.policy import (
     ADDED_PRIVILEGES, ALL, DEFAULT_FOUR_EYES, DEFAULT_POLICIES, PRIVILEGES, SYSTEM_ROLES, SYSTEM_VERSION, can_approve, carries_secret, creates_cycle,
-    decide, effective_privileges, privilege_for, read_only, summarize,
+    decide, effective_privileges, privilege_for, read_only, store_policy, store_queue, summarize,
 )
 
 router = APIRouter()
@@ -36,7 +36,8 @@ _SECRET = secrets.token_bytes(32)
 _lock = threading.Lock()
 _cache: dict[str, tuple[float, Any]] = {}
 TTL = 60.0
-DEFAULT_SETTINGS = {"DEFAULT_ROLE": "VIEWER", "SUPER_SELF_APPROVE": True, "ENFORCE": True}
+DEFAULT_SETTINGS = {"DEFAULT_ROLE": "VIEWER", "SUPER_SELF_APPROVE": True, "ENFORCE": True,
+                    "STORE_EDITS_REQUIRE_APPROVAL": True}
 
 
 def _cached(key: str, loader, ttl: float = TTL):
@@ -249,7 +250,11 @@ async def middleware(request: Request, call_next):
         who = await run_in_threadpool(identity, db)
         if not settings(db).get("ENFORCE", True):
             return await call_next(request)
-        verdict, reason = decide(privilege, set(who["privileges"]), policies(db).get(privilege))
+        policy = policies(db).get(privilege)
+        store = store_queue(method, path) and bool(settings(db).get("STORE_EDITS_REQUIRE_APPROVAL", True))
+        if store:
+            policy = store_policy(privilege, policy)
+        verdict, reason = decide(privilege, set(who["privileges"]), policy)
     except Exception:
         return await call_next(request)
     if verdict == "ALLOW":
@@ -259,10 +264,9 @@ async def middleware(request: Request, call_next):
                             status_code=403)
     if not replayable:
         return JSONResponse({"detail": f"Not allowed: this action needs {privilege}, and file uploads or secrets cannot be queued "
-                                       f"for approval. Ask someone with the {policies(db)[privilege]['approver_role']} "
+                                       f"for approval. Ask someone with the {policy['approver_role']} "
                                        f"role to do it, or ask a governance admin for the privilege."},
                             status_code=403)
-    policy = policies(db)[privilege]
     request_id = str(uuid.uuid4())
     parts = path.strip("/").split("/")
     run_id = parts[2] if len(parts) > 2 and parts[1] == "runs" else None
@@ -317,6 +321,23 @@ def _requests(db: Db, where: str = "1 = 1", params: tuple = ()) -> list[dict]:
         r["payload"] = _json(r.get("payload"))
         r["result"] = _json(r.get("result"))
     return rows
+
+
+@router.get("/api/governance/requests/pending")
+def pending_for(path: str, db: Db = Depends(gov_db)):
+    """Pending change requests for one asset (`path` is a prefix such as /api/hub/sttm/<id>/), for the store page's
+    "waiting for approval" strip. Any signed-in user may see what is pending on a shared asset; the payload stays
+    in Approvals."""
+    if not path.startswith("/api/") or len(path) > 300:
+        raise HTTPException(400, "path must be an /api/ prefix")
+    who = identity(db)
+    roles, privs = set(who["roles"]), set(who["privileges"])
+    found = _requests(db, "STATUS = 'PENDING' AND STARTSWITH(PATH, %s)", (path,))
+    keep = ("request_id", "privilege", "title", "summary", "requested_by", "approver_role", "created_at")
+    return {"requests": [{**{k: r.get(k) for k in keep},
+                          "can_decide": can_approve(r, who["user"], roles, privs,
+                                                    bool(settings(db).get("SUPER_SELF_APPROVE", True)))[0]}
+                         for r in found[:20]]}
 
 
 @router.get("/api/governance/requests")
@@ -641,6 +662,7 @@ class SettingsIn(BaseModel):
     DEFAULT_ROLE: Optional[str] = None
     SUPER_SELF_APPROVE: Optional[bool] = None
     ENFORCE: Optional[bool] = None
+    STORE_EDITS_REQUIRE_APPROVAL: Optional[bool] = None
 
 
 @router.put("/api/governance/settings")

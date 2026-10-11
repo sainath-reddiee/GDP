@@ -2,16 +2,30 @@
 
 import { revalidatePath } from "next/cache";
 import { api, attemptValue } from "@/lib/api";
-import type { SttmDiff } from "@/lib/hub-types";
+import { storeAction } from "@/lib/store-action";
+import type { SttmDiff, SttmFilter, SttmLine } from "@/lib/hub-types";
 
-export type SttmEdit = { target_column: string; transformation?: string | null; mapping_type?: string; business_rule?: string | null; business_definition?: string | null };
+export type SttmEdit = { target_column: string } & Partial<Omit<SttmLine, "target_column" | "join_logic">>;
+export type SttmChange = {
+  base_version: number; note?: string;
+  edits?: SttmEdit[]; add_lines?: SttmEdit[]; remove_lines?: string[];
+  design?: { grain?: string | null; business_keys?: string[]; dedup?: string | null; scd_type?: string; incremental_strategy?: string; filters?: SttmFilter[] };
+  joins?: { driving_table: string | null; joins: { left_table: string; right_table: string; keys: string[]; join_type: "LEFT" | "INNER"; cardinality: string | null; remove: boolean }[] };
+};
 
-export async function saveEdits(catalogId: string, baseVersion: number, edits: SttmEdit[], note?: string) {
-  const r = await attemptValue(() => api<{ catalog_id: string; version: number; edited: string[] }>(
-    `/api/hub/sttm/${encodeURIComponent(catalogId)}/edit`,
-    { method: "POST", body: JSON.stringify({ base_version: baseVersion, edits, note: note || undefined }) }));
-  if (r.ok) revalidatePath(`/dashboard/sttm/${catalogId}`);
+/** One store edit; governance queues it for the STTM approver (202, "sent for approval"). */
+export async function submitChange(catalogId: string, change: SttmChange) {
+  const r = await storeAction(() => api<{ version: number; status: string; summary: string; run_updated: boolean }>(
+    `/api/hub/sttm/${encodeURIComponent(catalogId)}/edit`, { method: "POST", body: JSON.stringify(change) }));
+  revalidatePath(`/dashboard/sttm/${catalogId}`);
   return r;
+}
+
+export async function refineLine(catalogId: string, body: { target_column: string; prompt: string; source_table?: string | null;
+  source_column?: string | null; source_datatype?: string | null; target_datatype?: string | null; current_transformation?: string | null;
+  business_definition?: string | null }) {
+  return storeAction(() => api<{ transformation: string; rationale: string | null; dbt_notes: string | null }>(
+    `/api/hub/sttm/${encodeURIComponent(catalogId)}/refine`, { method: "POST", body: JSON.stringify(body) }));
 }
 
 export async function compare(catalogId: string, fromVersion: number, toVersion: number) {

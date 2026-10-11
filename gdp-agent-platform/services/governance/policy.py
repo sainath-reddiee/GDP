@@ -202,6 +202,8 @@ RULES: List[Tuple[str, str, Any, str]] = [
     ("POST", r"/api/dq/catalog(/seed)?", "SODA.EDIT", "Change the data quality checks catalog"),
     ("POST", r"/api/dq/catalog/[^/]+/status", "SODA.EDIT", "Pause, resume or retire a data quality check"),
     ("POST", r"/api/dq/run", "PROFILE.RUN", ""),
+    ("POST", r"/api/dq/run-checks/decisions", "SODA.EDIT", "Decide run data quality checks from the DQ Store"),
+    ("POST", r"/api/hub/dbt/[^/]+/files", "DBT.EDIT", "Edit generated dbt files from the Modeling Store"),
     ("PUT", r"/api/dq/schedules", "SODA.EDIT", "Schedule data quality checks"),
     ("DELETE", r"/api/dq/schedules", "SODA.EDIT", "Remove a data quality schedule"),
     ("POST", r"/api/qa/links", "JIRA.WRITE", "Link a Jira issue to a table or test"),
@@ -332,6 +334,34 @@ READ_RULES = [(re.compile(r"^/api/(admin/.*|config/(rules|platform|models))$"), 
               (re.compile(r"^/api/ops(/.*)?$"), "OPS.VIEW"),
               (re.compile(r"^/api/code/(search|file|lineage|impact|path|neighborhood|usage|summary|repos|repos/[^/]+/(runs|branches|catalog|files))$"), "CODE.VIEW"),
               (re.compile(r"^/api/governance/(roles|users|policies|settings|events|privileges)$"), "ADMIN.VIEW")]
+
+
+# Store edits (the tenant-wide asset stores under /dashboard) always go through approval, even for holders of the
+# privilege, and are never self-approved: the store is shared by every run. Run pages keep the normal rules.
+# Setting STORE_EDITS_REQUIRE_APPROVAL (Admin, Governance) turns this off.
+STORE_ROUTES = [(m, re.compile(p)) for m, p in [
+    ("POST", r"^/api/hub/sttm/[^/]+/edit$"),
+    ("POST", r"^/api/dq/catalog$"), ("POST", r"^/api/dq/catalog/seed$"), ("POST", r"^/api/dq/catalog/[^/]+/status$"),
+    ("PUT", r"^/api/dq/schedules$"), ("DELETE", r"^/api/dq/schedules$"),
+    ("POST", r"^/api/hub/dbt/[^/]+/files$"),
+    ("POST", r"^/api/dq/run-checks/decisions$"),
+]]
+# approver when a privilege has no approval policy of its own
+STORE_APPROVERS = {"STTM.EDIT": "STTM_APPROVER", "SODA.EDIT": "DQ_APPROVER", "DBT.EDIT": "CODE_REVIEWER",
+                   "MAPPING.DECIDE": "MODEL_APPROVER", "MODEL.EDIT": "MODEL_APPROVER"}
+
+
+def store_queue(method: str, path: str) -> bool:
+    """Is this a store edit that always waits for another person's approval?"""
+    method = method.upper()
+    return any(m == method and pattern.match(path) for m, pattern in STORE_ROUTES)
+
+
+def store_policy(privilege: str, policy: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """The policy a store edit is queued under: the privilege's own approver (even when an admin switched the
+    policy off for run pages) or the store default, never self-approved."""
+    approver = (policy or {}).get("approver_role") or STORE_APPROVERS.get(privilege) or "PLATFORM_ADMIN"
+    return {"approver_role": approver, "allow_self": False, "active": True, "requires_approval": True, "four_eyes": True}
 
 
 def privilege_for(method: str, path: str, body: Optional[Dict[str, Any]] = None) -> Tuple[Optional[str], str, bool]:

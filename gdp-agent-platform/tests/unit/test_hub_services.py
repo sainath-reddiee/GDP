@@ -148,12 +148,66 @@ def test_sttm_edits_and_diff():
     ({"target_column": "NOPE", "transformation": "X"}, "not a target column"),
     ({"target_column": "ID", "transformation": "1; DROP TABLE X"}, "one expression"),
     ({"target_column": "ID", "transformation": "(DELETE FROM X)"}, "MAPPING_VALIDATION"),
-    ({"target_column": "ID", "target_datatype": "X"}, "cannot edit"),
+    ({"target_column": "ID", "join_logic": "X"}, "cannot edit"),
+    ({"target_column": "ID", "target_datatype": "VARCHAR; DROP"}, "not a data type"),
+    ({"target_column": "ID", "source_table": "A B"}, "plain Snowflake name"),
+    ({"target_column": "ID", "filter_rule": "1; DELETE"}, "one expression"),
     ({"target_column": "ID", "mapping_type": "MAGIC"}, "mapping_type"),
 ])
 def test_sttm_edits_are_checked(edit, message):
     with pytest.raises((AssertionError, ValueError), match=message):
         cs.apply_edits(LINES, [edit])
+
+
+def test_every_line_field_is_editable_and_names_are_upper_cased():
+    lines, touched = cs.apply_edits(LINES, [{"target_column": "id", "source_system": "crm", "source_table": "accounts",
+                                             "source_column": "acct_id", "source_datatype": "number(38,0)",
+                                             "target_datatype": "number(38, 0)", "mapping_type": "transform",
+                                             "transformation": "TRY_TO_NUMBER(ACCT_ID)", "business_rule": "r",
+                                             "business_definition": "d", "filter_rule": "ACCT_ID IS NOT NULL"}])
+    line = lines[0]
+    assert touched == ["ID"] and line["source_table"] == "ACCOUNTS" and line["source_column"] == "ACCT_ID"
+    assert line["target_datatype"] == "NUMBER(38, 0)" and line["mapping_type"] == "TRANSFORM"
+    assert line["filter_rule"] == "ACCT_ID IS NOT NULL"
+
+
+def test_plan_edit_adds_removes_and_sets_design_filters_and_joins():
+    entry = {"lines": [{"target_column": "ID", "source_table": "A", "source_column": "ID"},
+                       {"target_column": "NAME", "source_table": "B", "source_column": "NAME"},
+                       {"target_column": "OLD", "source_table": "A", "source_column": "X"}],
+             "table_design": {"grain": "one row per id"}}
+    plan = cs.plan_edit(entry, {
+        "add_lines": [{"target_column": "region", "target_datatype": "varchar(20)", "source_table": "B", "source_column": "REGION",
+                       "mapping_type": "DIRECT"}],
+        "remove_lines": ["OLD"],
+        "design": {"business_keys": ["id"], "scd_type": "2", "incremental_strategy": "MERGE",
+                   "filters": [{"table": "a", "condition": "A.STATUS <> 'DELETED'", "reason": "soft deletes"}]},
+        "joins": {"driving_table": "A", "joins": [{"left_table": "A", "right_table": "B", "keys": ["ID=A_ID"], "join_type": "LEFT"}]},
+    }, {"A": ["ID", "X", "STATUS"], "B": ["A_ID", "NAME", "REGION"]})
+    cols = [l["target_column"] for l in plan["lines"]]
+    assert cols == ["ID", "NAME", "REGION"] and plan["added"] == ["REGION"] and plan["removed"] == ["OLD"]
+    d = plan["design"]
+    assert d["business_keys"] == ["ID"] and d["scd_type"] == "2" and d["incremental_strategy"] == "merge"
+    assert d["filters"] == [{"table": "A", "condition": "A.STATUS <> 'DELETED'", "reason": "soft deletes"}]
+    assert d["join_graph"]["driving_table"] == "A" and d["join_graph"]["joins"][0]["condition"] == "A.ID = B.A_ID"
+    by = {l["target_column"]: l for l in plan["lines"]}
+    assert by["NAME"]["join_logic"] == "FROM A LEFT JOIN B ON A.ID = B.A_ID" and by["ID"]["join_logic"] == "FROM A"
+    assert "added REGION" in plan["summary"] and "join plan" in plan["summary"]
+
+
+@pytest.mark.parametrize("payload, message", [
+    ({}, "nothing to change"),
+    ({"add_lines": [{"target_column": "ID"}]}, "already a target column"),
+    ({"remove_lines": ["ID"]}, "at least one target column"),
+    ({"design": {"business_keys": ["NOPE"]}}, "not target columns"),
+    ({"design": {"filters": [{"condition": "1; DROP TABLE X"}]}}, "one expression"),
+    ({"design": {"owner": "x"}}, "cannot edit"),
+    ({"joins": {"driving_table": "A", "joins": [{"left_table": "A", "right_table": "Z", "keys": ["ID=ID"]}]}}, "unknown table"),
+])
+def test_plan_edit_rejects(payload, message):
+    entry = {"lines": [{"target_column": "ID", "source_table": "A", "source_column": "ID"}], "table_design": {}}
+    with pytest.raises(AssertionError, match=message):
+        cs.plan_edit(entry, payload, {"A": ["ID"]})
 
 
 def test_semicolon_inside_a_literal_is_data():
@@ -437,3 +491,50 @@ def test_hub_routes_are_governed(method, path, privilege):
 def test_pipeline_secrets_are_never_queued():
     assert carries_secret("POST", "/api/hub/pipelines") and carries_secret("PATCH", "/api/hub/pipelines/x")
     assert not carries_secret("POST", "/api/hub/pipelines/validate")
+
+
+def test_edit_version_writes_an_approved_version_and_syncs_the_run(monkeypatch):
+    import services.workflow.procedures as wp
+
+    events = []
+    monkeypatch.setattr(wp, "_get_run", lambda s, r: {"RUN_ID": r})
+    monkeypatch.setattr(wp, "_record_run_event", lambda s, run, actor, text, detail: events.append((run["RUN_ID"], text, detail)))
+    latest = {"CATALOG_ID": "c1", "VERSION": 3, "STTM_ID": "s1", "RUN_ID": "r1", "DOMAIN_ID": "d1", "DOMAIN_NAME": "COMPANY",
+              "SOURCE_SYSTEM": "CRM", "TARGET_TABLE_ID": "t1", "TARGET_ENTITY": "DB.S.DIM", "TABLE_DESIGN": "{}",
+              "LINES": json.dumps([{"target_column": "ID", "source_table": "A", "source_column": "ID", "mapping_type": "DIRECT"},
+                                   {"target_column": "OLD", "source_table": "A", "source_column": "X", "mapping_type": "DIRECT"}])}
+    session = Session({
+        "FROM GOVERNANCE.STTM_CATALOG WHERE CATALOG_ID = ? ORDER BY VERSION DESC LIMIT 1": [latest],
+        "COALESCE(MAX(VERSION), 0)": [{"V": 3}],
+        "FROM CONTRACT.STTM_REGISTRY S JOIN CORE.WORKFLOW_RUN": [{"STTM_ID": "s1", "RUN_ID": "r1", "ARCHIVED": False, "DELETED_AT": None}],
+        "FROM CONTRACT.STTM_LINE WHERE STTM_ID": [
+            {"STTM_LINE_ID": "L1", "TARGET_COLUMN": "ID", "TARGET_DOMAIN": "COMPANY", "TARGET_DATABASE": "DB", "TARGET_SCHEMA": "S", "TARGET_TABLE": "DIM"},
+            {"STTM_LINE_ID": "L2", "TARGET_COLUMN": "OLD", "TARGET_DOMAIN": "COMPANY", "TARGET_DATABASE": "DB", "TARGET_SCHEMA": "S", "TARGET_TABLE": "DIM"}],
+    })
+    out = cs.edit_version(session, "c1", json.dumps({
+        "base_version": 3, "note": "fix id", "edits": [{"target_column": "ID", "transformation": "TRIM(ID)", "mapping_type": "TRANSFORM"}],
+        "add_lines": [{"target_column": "NEW_COL", "source_table": "A", "source_column": "Y"}], "remove_lines": ["OLD"],
+        "design": {"filters": [{"table": "A", "condition": "A.ACTIVE"}]}}), approved=True)
+    assert out["version"] == 4 and out["status"] == "APPROVED" and out["run_updated"] is True
+    sql = [c[0] for c in session.calls]
+    insert = next(c for c in session.calls if "INSERT INTO GOVERNANCE.STTM_CATALOG" in c[0])
+    assert "APPROVED" in insert[1] and "CATALOG_EDIT" in insert[1] and "fix id" in insert[1]
+    assert any(s.startswith("DELETE FROM CONTRACT.STTM_LINE") for s in sql)
+    update = next(c for c in session.calls if c[0].startswith("UPDATE CONTRACT.STTM_LINE SET"))
+    assert "TRIM(ID)" in update[1] and update[1][-1] == "L1" and "FILTER_RULE = ?" in update[0]
+    added = next(c for c in session.calls if "INSERT INTO CONTRACT.STTM_LINE" in c[0])
+    assert "NEW_COL" in added[1] and "DIM" in added[1] and "VARCHAR" in added[1]
+    design = next(c for c in session.calls if "UPDATE CONTRACT.STTM_REGISTRY SET TABLE_DESIGN" in c[0])
+    assert '"condition": "A.ACTIVE"' in design[1][0]
+    assert events and events[0][0] == "r1" and "regenerate dbt" in events[0][1]
+
+
+def test_edit_version_refuses_a_stale_base_and_skips_archived_runs():
+    latest = {"CATALOG_ID": "c1", "VERSION": 5, "STTM_ID": "s1", "RUN_ID": "r1", "TABLE_DESIGN": "{}",
+              "LINES": json.dumps([{"target_column": "ID", "source_table": "A", "source_column": "ID"}])}
+    session = Session({"ORDER BY VERSION DESC LIMIT 1": [latest]})
+    with pytest.raises(AssertionError, match="reload"):
+        cs.edit_version(session, "c1", json.dumps({"base_version": 4, "edits": [{"target_column": "ID", "business_rule": "x"}]}))
+    archived = Session({"FROM CONTRACT.STTM_REGISTRY S JOIN": [{"STTM_ID": "s1", "RUN_ID": "r1", "ARCHIVED": True, "DELETED_AT": None}]})
+    assert cs.sync_to_run(archived, "s1", "r1", {"lines": [], "design": {}}, 2, "n") is False
+    assert cs.sync_to_run(archived, None, None, {"lines": [], "design": {}}, 2, "n") is False
