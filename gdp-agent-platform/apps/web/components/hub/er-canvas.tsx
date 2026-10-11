@@ -164,19 +164,19 @@ export function ErCanvas({ entities, relationships, platform, selected, onSelect
             return (
               <g key={e.entity_name} transform={`translate(${p.x},${p.y})`} onPointerDown={(ev) => onDown(ev, e.entity_name)} className="cursor-grab">
                 <rect width={W} height={h} rx="12" className={cn("fill-card", isSel ? "stroke-primary" : "stroke-border")} strokeWidth={isSel ? 2 : 1} />
-                <path d={`M0,12 a12,12 0 0 1 12,-12 h${W - 24} a12,12 0 0 1 12,12 v${HEAD - 12} h-${W} z`} className={isSel ? "fill-primary" : "fill-indigo-50"} />
-                <text x="12" y="21" className={cn("text-[12px] font-semibold", isSel ? "fill-white" : "fill-slate-800")}>{e.entity_name}</text>
-                <text x={W - 10} y="21" textAnchor="end" className={cn("text-[9px] uppercase", isSel ? "fill-white/80" : "fill-slate-500")}>{e.kind.toLowerCase()}</text>
+                <path d={`M0,12 a12,12 0 0 1 12,-12 h${W - 24} a12,12 0 0 1 12,12 v${HEAD - 12} h-${W} z`} className={isSel ? "fill-primary" : "fill-accent"} />
+                <text x="12" y="21" className={cn("text-[12px] font-semibold", isSel ? "fill-white" : "fill-foreground")}>{e.entity_name}</text>
+                <text x={W - 10} y="21" textAnchor="end" className={cn("text-[9px] uppercase", isSel ? "fill-white/80" : "fill-muted-foreground")}>{e.kind.toLowerCase()}</text>
                 {e.attributes.slice(0, MAX_ROWS).map((a, i) => (
                   <g key={a.name} transform={`translate(0,${HEAD + i * ROW + 4})`}>
-                    {a.is_pk && <text x="10" y="13" className="fill-amber-600 text-[10px]">PK</text>}
+                    {a.is_pk && <text x="10" y="13" className="fill-warning text-[10px]">PK</text>}
                     {!a.is_pk && fk.has(a.name) && <text x="10" y="13" className="fill-primary text-[10px]">FK</text>}
-                    <text x="30" y="13" className="fill-slate-800 font-mono text-[10.5px]">{a.name.length > 20 ? `${a.name.slice(0, 19)}…` : a.name}</text>
-                    <text x={W - 10} y="13" textAnchor="end" className="fill-slate-500 font-mono text-[9.5px]">{type(a.datatype)}</text>
+                    <text x="30" y="13" className="fill-foreground font-mono text-[10.5px]">{a.name.length > 20 ? `${a.name.slice(0, 19)}…` : a.name}</text>
+                    <text x={W - 10} y="13" textAnchor="end" className="fill-muted-foreground font-mono text-[9.5px]">{type(a.datatype)}</text>
                   </g>
                 ))}
                 {e.attributes.length > MAX_ROWS && (
-                  <text x="30" y={HEAD + MAX_ROWS * ROW + 17} className="fill-slate-500 text-[10px]">+{e.attributes.length - MAX_ROWS} more columns</text>
+                  <text x="30" y={HEAD + MAX_ROWS * ROW + 17} className="fill-muted-foreground text-[10px]">+{e.attributes.length - MAX_ROWS} more columns</text>
                 )}
               </g>
             );

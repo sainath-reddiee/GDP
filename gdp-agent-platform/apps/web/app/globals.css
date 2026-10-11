@@ -27,17 +27,57 @@
     --sidebar: 236 36% 11%;
     --sidebar-foreground: 230 22% 80%;
     --radius: 0.75rem;
-    --font-sans: "Inter var", "Inter";
+    --font-sans: "Inter Variable", "Inter";
     --shadow-xs: 0 1px 2px rgba(17, 24, 54, 0.05);
     --shadow-card: 0 1px 2px rgba(17, 24, 54, 0.04), 0 2px 6px -1px rgba(17, 24, 54, 0.05);
     --shadow-hover: 0 2px 4px rgba(17, 24, 54, 0.05), 0 10px 24px -8px rgba(17, 24, 54, 0.12);
+    --shadow-pop: 0 12px 40px -12px rgba(17, 24, 54, 0.28), 0 2px 6px rgba(17, 24, 54, 0.06);
+    --glass: 0 0% 100% / 0.72;
+    --glass-border: 226 20% 88% / 0.7;
+    --wash: 243 100% 96% / 0.7;
+    --wash-2: 190 90% 94% / 0.45;
+    color-scheme: light;
+  }
+  /* Dark theme: deep navy surfaces, the same indigo accent lifted for contrast (components/theme). */
+  .dark {
+    --background: 228 32% 7%;
+    --foreground: 226 30% 93%;
+    --card: 228 28% 10.5%;
+    --card-foreground: 226 30% 93%;
+    --primary: 243 85% 68%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 228 22% 15%;
+    --secondary-foreground: 226 26% 88%;
+    --muted: 228 22% 14%;
+    --muted-foreground: 226 14% 62%;
+    --accent: 243 40% 18%;
+    --accent-foreground: 243 90% 84%;
+    --destructive: 356 78% 62%;
+    --destructive-foreground: 0 0% 100%;
+    --success: 156 58% 50%;
+    --warning: 36 92% 58%;
+    --border: 228 20% 18%;
+    --input: 228 18% 24%;
+    --ring: 243 85% 68%;
+    --sidebar: 230 36% 5.5%;
+    --sidebar-foreground: 230 22% 78%;
+    --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.4);
+    --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.35), 0 0 0 1px rgba(255, 255, 255, 0.015);
+    --shadow-hover: 0 2px 6px rgba(0, 0, 0, 0.4), 0 14px 32px -10px rgba(0, 0, 0, 0.6);
+    --shadow-pop: 0 20px 50px -12px rgba(0, 0, 0, 0.7), 0 0 0 1px rgba(255, 255, 255, 0.04);
+    --glass: 228 28% 11% / 0.66;
+    --glass-border: 226 30% 80% / 0.08;
+    --wash: 243 80% 40% / 0.22;
+    --wash-2: 190 90% 40% / 0.1;
+    color-scheme: dark;
   }
   * { @apply border-border; }
   html { -webkit-text-size-adjust: 100%; }
   body {
     @apply bg-background text-foreground antialiased;
-    /* a faint indigo wash behind the top of every page */
-    background-image: radial-gradient(1200px 320px at 30% -120px, hsl(243 100% 96% / 0.7), transparent 70%);
+    /* a faint indigo and cyan wash behind the top of every page */
+    background-image: radial-gradient(1100px 340px at 25% -140px, hsl(var(--wash)), transparent 70%),
+      radial-gradient(800px 280px at 90% -160px, hsl(var(--wash-2)), transparent 70%);
     background-repeat: no-repeat;
     font-family: var(--font-sans), "Segoe UI", ui-sans-serif, system-ui, sans-serif;
     font-feature-settings: "cv11", "ss01";
@@ -57,7 +97,24 @@
 @layer components {
   /* Soft elevated surface used by cards and panels. */
   .surface { @apply rounded-2xl border border-border/80 bg-card; box-shadow: var(--shadow-card); }
+  /* Frosted surface for bands that sit over the page wash: the top bar, hero ribbons, palettes. */
+  .glass {
+    @apply rounded-2xl border;
+    background-color: hsl(var(--glass));
+    border-color: hsl(var(--glass-border));
+    box-shadow: var(--shadow-card);
+    backdrop-filter: blur(14px) saturate(1.4);
+    -webkit-backdrop-filter: blur(14px) saturate(1.4);
+  }
+  /* Menus and popovers: solid, since a backdrop blur does not apply inside the already blurred top bar. */
+  .popover { @apply rounded-2xl border border-border bg-card text-card-foreground; box-shadow: var(--shadow-pop); }
+  .hairline { @apply border-border/70; }
+  .glow-ring { box-shadow: 0 0 0 1px hsl(var(--primary) / 0.25), 0 8px 30px -10px hsl(var(--primary) / 0.45); }
   .eyebrow { @apply text-[11px] font-semibold uppercase tracking-[0.14em] text-primary/90; }
+  .display { @apply text-[30px] font-semibold leading-[1.1] tracking-[-0.025em]; }
+  .kbd {
+    @apply inline-flex h-5 min-w-5 items-center justify-center rounded-md border border-border bg-muted px-1 font-sans text-[10px] font-medium text-muted-foreground;
+  }
 }
 
 @keyframes nav-progress {
@@ -110,6 +167,15 @@
 @media (prefers-reduced-motion: reduce) {
   .animate-scan-ray, .animate-glow, .animate-flow, .animate-stage-in, .animate-progress { animation: none !important; }
 }
+
+@keyframes pop-in {
+  from { opacity: 0; transform: translateY(-6px) scale(0.98); }
+  to { opacity: 1; transform: none; }
+}
+.animate-pop-in { animation: pop-in 0.16s cubic-bezier(0.2, 0.8, 0.2, 1) both; }
+
+/* the theme switch itself should not animate every color on the page */
+html.theme-switching *, html.theme-switching *::before, html.theme-switching *::after { transition: none !important; }
 
 @keyframes copilot-in {
   from { opacity: 0; transform: translateY(8px) scale(0.97); }
