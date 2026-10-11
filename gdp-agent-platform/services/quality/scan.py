@@ -384,8 +384,10 @@ def _base(c: Dict[str, Any]) -> Dict[str, Any]:
             "dimension": dimension(kind), "severity": c.get("severity")}
 
 
-def _scan_model(session, run_id: str, checks: List[Dict[str, Any]], lines: List[Dict[str, Any]], fqn: str,
-                guard) -> Tuple[List[Dict[str, Any]], Optional[int]]:
+def _scan_model(session, run_id: Optional[str], checks: List[Dict[str, Any]], lines: List[Dict[str, Any]], fqn: str,
+                guard, previous_rows: Optional[float] = None) -> Tuple[List[Dict[str, Any]], Optional[int]]:
+    """Evaluate checks against any DB.SCHEMA.TABLE. With a run, change_over_time compares to the run's previous scan;
+    without one (Data Quality Store table scans) the caller passes `previous_rows`."""
     from services.source.identifiers import sql_ident
 
     aggregate, reads, standalone = plan(checks, fqn)
@@ -421,11 +423,13 @@ def _scan_model(session, run_id: str, checks: List[Dict[str, Any]], lines: List[
                 raw = row.get(reads[i]["alias"])
                 value = None if raw is None else float(raw)
                 previous = None
-                if d.get("kind") == "change_over_time":
+                if d.get("kind") == "change_over_time" and run_id:
                     prior = _rows(session, """SELECT ROWS_SCANNED FROM QUALITY.CHECK_RUN
                                                WHERE RUN_ID = ? AND MODE = 'MODEL' AND ROWS_SCANNED IS NOT NULL
                                                ORDER BY STARTED_AT DESC LIMIT 1""", [run_id])
                     previous = float(prior[0]["ROWS_SCANNED"]) if prior else None
+                elif d.get("kind") == "change_over_time":
+                    previous = previous_rows
                 result = evaluate(c, value, total, previous)
             elif i in standalone:
                 kind = d.get("kind")

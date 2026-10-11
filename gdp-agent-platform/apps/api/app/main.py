@@ -6380,8 +6380,10 @@ from app.hub_sources_api import router as hub_sources_router  # noqa: E402
 from app.hub_catalog_api import router as hub_catalog_router  # noqa: E402
 from app.hub_models_api import router as hub_models_router  # noqa: E402
 from app.hub_quality_api import router as hub_quality_router  # noqa: E402
+from app.quality_api import router as dq_router  # noqa: E402
 
 app.include_router(hub_sources_router)
 app.include_router(hub_catalog_router)
 app.include_router(hub_models_router)
 app.include_router(hub_quality_router)
+app.include_router(dq_router)
