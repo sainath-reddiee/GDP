@@ -28,7 +28,7 @@ export default async function DqStorePage({ searchParams }: { searchParams: Para
   return (
     <div className="space-y-6">
       <PageHeader eyebrow="Data Quality Store" title="Attribute checks catalog"
-                  description="Declarative Soda and Great Expectations checks per table and column, managed outside any run. Seed them from a profile, promote a run's approved checks, backtest now, and schedule each table as a Snowflake task." />
+                  description="Declarative Soda and Great Expectations checks per table and column, managed outside any run. Each table's checks are versioned: additions and changes go into a draft that another person reviews and approves before they run. Backtest now, schedule each table as a Snowflake task, and publish approved checks to Git." />
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <Kpi label="Active checks in the store" value={summary?.checks ?? 0}
              hint={`on ${summary?.tables ?? 0} table${summary?.tables === 1 ? "" : "s"} · ${summary?.run_checks ?? 0} more approved in runs`} icon={ClipboardCheck} tone="blue" />

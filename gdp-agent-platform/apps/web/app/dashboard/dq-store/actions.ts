@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { api } from "@/lib/api";
 import { storeAction } from "@/lib/store-action";
-import type { DqHistory, DqScan } from "@/lib/store-types";
+import type { DqHistory, DqScan, DqSuiteDetail, DqSuiteDiff } from "@/lib/store-types";
 
 const PATH = "/dashboard/dq-store";
 const post = (body: unknown) => ({ method: "POST", body: JSON.stringify(body) });
@@ -19,23 +19,72 @@ export async function previewCheck(body: CheckPayload) {
   return storeAction(() => api<Parsed>("/api/dq/parse", post(body)));
 }
 
+/** What a check edit returns: it lands in the table's suite draft (opened when there was none). */
+export type Staged = {
+  table: string; version: number; status: "DRAFT"; draft_opened: boolean; staged: true; check_id?: string; headline?: string;
+  action?: "added" | "changed" | "removed" | "paused" | "resumed"; counts: Record<string, number>; loosened: boolean; changed: number;
+  added?: number; skipped?: number; problems?: string[];
+};
+
 export async function saveCheck(body: CheckPayload) {
-  const r = await storeAction(() => api<{ check_id: string; table: string; created?: boolean }>("/api/dq/catalog", post(body)));
-  revalidatePath(PATH);
+  const r = await storeAction(() => api<Staged>("/api/dq/catalog", post(body)));
+  revalidatePath(PATH, "layout");
   return r;
 }
 
-export async function setCheckStatus(checkId: string, status: "ACTIVE" | "PAUSED" | "RETIRED") {
-  const r = await storeAction(() => api<{ status: string }>(`/api/dq/catalog/${encodeURIComponent(checkId)}/status`, post({ status })));
-  revalidatePath(PATH);
+export async function setCheckStatus(checkId: string, status: "ACTIVE" | "PAUSED" | "RETIRED", table?: string) {
+  const r = await storeAction(() => api<Staged>(`/api/dq/catalog/${encodeURIComponent(checkId)}/status`, post({ status, table: table ?? null })));
+  revalidatePath(PATH, "layout");
   return r;
 }
 
 export async function seedChecks(body: { table?: string; run_id?: string }) {
-  const r = await storeAction(() => api<{ table: string; added: number; skipped: number; problems: string[] }>("/api/dq/catalog/seed", post(body)));
-  revalidatePath(PATH);
+  const r = await storeAction(() => api<Staged>("/api/dq/catalog/seed", post(body)));
+  revalidatePath(PATH, "layout");
   return r;
 }
+
+// ---------------------------------------------------------------- suites: versions, review, Git (V040)
+
+const SUITE = "/api/dq/suites";
+
+export async function loadSuite(table: string, version?: number) {
+  const qs = new URLSearchParams({ table, ...(version ? { version: String(version) } : {}) });
+  return storeAction(() => api<DqSuiteDetail>(`${SUITE}/one?${qs}`));
+}
+
+async function suiteWrite<T>(path: string, body: unknown, method = "POST") {
+  const r = await storeAction(() => api<T>(`${SUITE}/${path}`, { method, body: JSON.stringify(body) }));
+  revalidatePath(PATH, "layout");
+  return r;
+}
+
+export const openSuiteDraft = async (table: string, fromVersion?: number, note?: string) =>
+  suiteWrite<{ version: number; etag: string }>("draft", { table, from_version: fromVersion ?? null, note: note ?? null });
+export const submitSuite = async (table: string, note?: string) =>
+  suiteWrite<{ version: number; counts: Record<string, number>; loosened: boolean }>("submit", { table, note: note ?? null });
+export const withdrawSuite = async (table: string) => suiteWrite<{ version: number }>("withdraw", { table });
+export const approveSuite = async (table: string, version: number, acknowledgeLoosened: boolean) =>
+  suiteWrite<{ version: number; model_version: number | null; catalog: { applied: boolean; error?: string; checks?: number } }>(
+    "approve", { table, version, acknowledge_loosened: acknowledgeLoosened });
+export const applySuite = async (table: string, version: number) =>
+  suiteWrite<{ applied: boolean; error?: string; checks?: number }>("apply", { table, version });
+export const rejectSuite = async (table: string, version: number, reason: string) =>
+  suiteWrite<{ version: number }>("reject", { table, version, reason });
+
+export async function diffSuite(table: string, from: number | null, to: number) {
+  const qs = new URLSearchParams({ table, to: String(to), ...(from ? { from: String(from) } : {}) });
+  return storeAction(() => api<DqSuiteDiff & { from: number | null; to: number }>(`${SUITE}/diff?${qs}`));
+}
+
+export type SuitePublishing = { repos: { repo_id: string; name: string; branch: string }[]; publisher_ready: boolean };
+export async function loadSuitePublishing() {
+  return storeAction(() => api<SuitePublishing>(`${SUITE}/publishing`));
+}
+export const publishSuite = async (table: string, version: number, repoId: string) =>
+  suiteWrite<{ status: string; detail?: string; head_branch?: string }>("publish", { table, version, repo_id: repoId });
+export const syncSuitePrs = async (table: string, force = false) =>
+  suiteWrite<{ checked: number; merged: unknown[]; closed: unknown[]; detail?: string }>("pr-sync", { table, force });
 
 export async function runTable(table: string, checkIds?: string[]) {
   const r = await storeAction(() => api<DqScan>("/api/dq/run", post({ table, check_ids: checkIds ?? null })));

@@ -107,7 +107,7 @@ export function RunChecksView({ checks, runs, initialRun, canEdit, canCase }: { 
   });
   const promote = () => start(async () => {
     const r = await seedChecks({ run_id: run });
-    if (r.ok) toast("ok", `${r.data.added} check${r.data.added === 1 ? "" : "s"} added to ${r.data.table}${r.data.skipped ? `, ${r.data.skipped} already there` : ""}`);
+    if (r.ok) toast("ok", `${r.data.added ?? 0} check${r.data.added === 1 ? "" : "s"} added to draft v${r.data.version} of ${r.data.table}${r.data.skipped ? `, ${r.data.skipped} already there` : ""}; submit it for review in the store catalog`);
     else if (r.pending) toast("info", r.error);
     else toast("error", explain(r.error).message);
   });

@@ -327,7 +327,7 @@ def seed_domain_models(cur, database: str) -> List[str]:
 
 
 SEED_CODE = [ROOT / "infrastructure" / "seed_knowledge.py", ROOT / "services" / "knowledge",
-             ROOT / "services" / "qa", ROOT / "services" / "modeling"]
+             ROOT / "services" / "qa", ROOT / "services" / "modeling", ROOT / "services" / "catalog" / "dq_suite.py"]
 
 
 def seed_inputs_digest() -> str:
@@ -372,6 +372,18 @@ def drop_governed(data: Dict[str, Any], governed: Dict[str, Any]) -> List[str]:
             "re-applied (import the pack into a draft in the Model Workbench to change the model)" for i in hit]
 
 
+def seed_dq_suites(cur, database: str) -> List[str]:
+    """An approved version 1 for every Data Quality Store table without a suite (V040)."""
+    from services.catalog.dq_suite import backfill
+    from services.modeling.domain_model import CursorSession
+
+    try:
+        cur.execute(f"USE DATABASE {database}")
+    except Exception as exc:
+        return [f"dq suites: skipped ({str(exc)[:120]})"]
+    return backfill(CursorSession(cur))
+
+
 def seed_platform(cur, database: str) -> List[str]:
     """MERGE domain packs, skills, config and scoring weights; PUT skill files to the stage. Returns log lines.
     Target tables of domains governed by an approved model are not re-applied from the packs."""
@@ -389,6 +401,7 @@ def seed_platform(cur, database: str) -> List[str]:
     log.extend(snapshot_domains(cur, database))
     log.extend(seed_qa_packs(cur, database))
     log.extend(seed_domain_models(cur, database))
+    log.extend(seed_dq_suites(cur, database))
 
     for skill in list_skills():
         root = skill["path"].parent

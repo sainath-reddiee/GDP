@@ -61,6 +61,42 @@ export type DqTable = {
   table: string; domain_id: string | null; schedule_cron: string | null; checks: number; counts: Record<string, number>;
   pass_rate: number | null; columns: { column: string | null; checks: DqCheck[] }[];
   schedule: { cron: string; enabled: boolean } | null;
+  suite?: DqSuiteState | null;  // V040
+};
+/** A table's suite state on the catalog page (V040). */
+export type DqSuiteState = {
+  table_name: string; domain_id: string | null; approved_version: number | null; open_version: number | null;
+  open_status: "DRAFT" | "IN_REVIEW" | null; open_authors: string[]; submitted_by: string | null; pr_state: string | null;
+  model_version: number | null;
+};
+export type DqSuiteCheck = {
+  check_id: string; target_column: string | null; check_type: string; severity: "WARN" | "FAIL"; requirement: string | null;
+  definition: Record<string, unknown>; soda_dsl: string; headline: string; status: "ACTIVE" | "PAUSED";
+  origin: "PROFILE" | "RUN" | "USER"; source_run_id: string | null;
+};
+export type DqSuiteChange = {
+  check_id: string; kind: "ADDED" | "REMOVED" | "CHANGED"; class: "TIGHTENED" | "LOOSENED" | "CHANGED" | "DOCUMENTATION";
+  column: string | null; headline: string | null; from_headline?: string | null; fields?: string[]; message: string;
+};
+export type DqSuiteDiff = { changes: DqSuiteChange[]; counts: Record<DqSuiteChange["class"], number>; loosened: boolean };
+export type DqSuiteIssue = { check_id: string | null; severity: "ERROR" | "WARN"; message: string };
+export type DqSuiteVersion = {
+  version: number; status: "DRAFT" | "IN_REVIEW" | "APPROVED" | "PUBLISHED" | "SUPERSEDED" | "REJECTED"; base_version: number | null;
+  etag: string | null; authors: string[]; origin: string | null; change_note: string | null; model_id: string | null;
+  model_version: number | null; submitted_by: string | null; submitted_at: string | null; approved_by: string | null;
+  approved_at: string | null; rejected_by: string | null; rejected_at: string | null; reject_reason: string | null;
+  review_summary: Record<string, unknown> | null; catalog_synced_at: string | null; repo_id: string | null; branch: string | null;
+  pr_url: string | null; pr_number: number | null; pr_state: string | null; merged_sha: string | null; pr_synced_at: string | null;
+  created_by: string | null; created_at: string | null;
+};
+export type DqSuiteModel = {
+  model_id: string; model_version: number; entity: string | null; entity_status?: string; columns: Record<string, string> | null; note?: string;
+};
+export type DqSuiteDetail = {
+  suite: { suite_id: string; table_name: string; domain_id: string | null; domain_name: string | null; model_id: string | null;
+           approved_version: number | null; open_version: number | null } | null;
+  table?: string; versions: DqSuiteVersion[]; open: DqSuiteVersion | null;
+  current: (DqSuiteVersion & { checks: DqSuiteCheck[]; issues: DqSuiteIssue[]; model: DqSuiteModel | null; changes: DqSuiteDiff }) | null;
 };
 export type DqCatalog = { tables: DqTable[]; deployed: boolean; checks?: number };
 export type DqPoint = { outcome: DqOutcome; measured: number | null; failed_rows: number | null; detail: string | null; at: string };

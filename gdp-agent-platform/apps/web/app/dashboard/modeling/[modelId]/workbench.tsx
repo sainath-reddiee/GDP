@@ -22,6 +22,21 @@ import { ReviewPanel } from "./review-panel";
 import { StandardsPanel, VersionsPanel } from "./versions-panel";
 import { ChangesPanel, PublishPanel } from "./publish-panel";
 
+/** The tab in the address: after an action the page can remount with the props of the address it was loaded with,
+ *  so the tab the user is on is read back from the address itself (on the server there is none). */
+function rememberedTab(): string | null {
+  try { return typeof window === "undefined" ? null : new URL(window.location.href).searchParams.get("tab"); } catch { return null; }
+}
+
+/** Keep the open tab in the address, so a refresh after an action (which can remount the page) stays on it. */
+function rememberTab(tab: string) {
+  try {
+    const url = new URL(window.location.href);
+    url.searchParams.set("tab", tab);
+    window.history.replaceState(window.history.state, "", url);
+  } catch { /* the tab still switches */ }
+}
+
 type Tab = "diagram" | "entities" | "relationships" | "standards" | "versions" | "review" | "publish" | "changes";
 const TABS: [Tab, string, typeof Network][] = [
   ["diagram", "Diagram", Network], ["entities", "Entities", Layers3], ["relationships", "Relationships", GitBranch],
@@ -89,7 +104,8 @@ export function ModelWorkbench({ detail, comments, me, initialTab, canEdit, canA
   const [spec, setSpec] = useState<DmSpec | null>(current?.spec ?? null);
   const [etag, setEtag] = useState(current?.etag ?? "");
   const [issues, setIssues] = useState<DmIssue[]>(current?.issues ?? []);
-  const [tab, setTab] = useState<Tab>((TABS.find(([t]) => t === initialTab)?.[0]) ?? (current?.status === "IN_REVIEW" ? "review" : "diagram"));
+  const [tab, setTab] = useState<Tab>(() => (TABS.find(([t]) => t === (rememberedTab() ?? initialTab))?.[0]) ?? (current?.status === "IN_REVIEW" ? "review" : "diagram"));
+  useEffect(() => rememberTab(tab), [tab]);
   const [selected, setSelected] = useState<string | null>(null);
   const [note, setNote] = useState("");
   const [conflict, setConflict] = useState("");

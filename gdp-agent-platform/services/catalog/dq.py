@@ -301,8 +301,9 @@ def _add_many(session, table: str, checks: List[Dict[str, Any]], origin: str, do
     return {"table": table, "added": added, "skipped": skipped, "problems": problems[:20]}
 
 
-def seed_from_profile(session, table: str, domain_id: Optional[str] = None) -> Dict[str, Any]:
-    """Checks that the table's latest profile shows to be true today (services/profiling/insights.suggested_checks)."""
+def profile_suggestions(session, table: str, domain_id: Optional[str] = None) -> Tuple[str, List[Dict[str, Any]], Optional[str]]:
+    """(table, checks, domain) that the table's latest profile shows to be true today
+    (services/profiling/insights.suggested_checks)."""
     from services.catalog.profiles import gx_checks
     from services.profiling.insights import suggested_checks
     from services.profiling.procedures import read_document
@@ -320,11 +321,11 @@ def seed_from_profile(session, table: str, domain_id: Optional[str] = None) -> D
                "requirement": (c.get("definition") or {}).get("evidence"),
                "definition": {k: v for k, v in (c.get("definition") or {}).items() if k != "evidence"}}
               for c in gx_checks(suggested_checks(doc))]
-    return _add_many(session, fqn, checks, "PROFILE", _domain_for(session, fqn, domain_id))
+    return fqn, checks, _domain_for(session, fqn, domain_id)
 
 
-def promote_from_run(session, run_id: str) -> Dict[str, Any]:
-    """A run's approved data quality checks, onto the run's built target table."""
+def run_suggestions(session, run_id: str) -> Tuple[str, List[Dict[str, Any]], Optional[str]]:
+    """(table, checks, domain): a run's approved data quality checks, for the run's built target table."""
     from services.quality.scan import target_fqn
     from services.soda.procedures import _current_sttm
 
@@ -338,7 +339,19 @@ def promote_from_run(session, run_id: str) -> Dict[str, Any]:
     checks = [{"target_column": r["TARGET_COLUMN"], "severity": r["SEVERITY"], "requirement": r["CLIENT_REQUIREMENT"],
                "definition": {k: v for k, v in (variant(r["CHECK_DEFINITION"]) or {}).items()
                               if k not in ("backtest", "evidence")}} for r in stored]
-    return _add_many(session, _fqn(fqn), checks, "RUN", sttm.get("DOMAIN_ID"), run_id)
+    return _fqn(fqn), checks, sttm.get("DOMAIN_ID")
+
+
+def seed_from_profile(session, table: str, domain_id: Optional[str] = None) -> Dict[str, Any]:
+    """Straight into the catalog (kept for scripts; the Data Quality Store stages into the suite draft instead)."""
+    fqn, checks, domain = profile_suggestions(session, table, domain_id)
+    return _add_many(session, fqn, checks, "PROFILE", domain)
+
+
+def promote_from_run(session, run_id: str) -> Dict[str, Any]:
+    """Straight into the catalog (kept for scripts; the Data Quality Store stages into the suite draft instead)."""
+    fqn, checks, domain = run_suggestions(session, run_id)
+    return _add_many(session, fqn, checks, "RUN", domain, run_id)
 
 
 # ---------------------------------------------------------------- Snowpark: scans

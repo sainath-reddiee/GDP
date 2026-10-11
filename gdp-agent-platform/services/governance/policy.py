@@ -198,11 +198,17 @@ RULES: List[Tuple[str, str, Any, str]] = [
     ("POST", r"/api/qa/execute", "QA.EDIT", ""),
     # QA Store: run tests copied into a pack draft (not live until the pack is submitted and approved)
     ("POST", r"/api/qa/run-tests/promote", "PACKAGE.EDIT", "Add run tests to a domain QA pack draft"),
-    # Data Quality Store (apps/api/app/quality_api.py): catalog edits go through SODA.EDIT (routed to DQ_APPROVER by the
-    # default policy); a scan is read-only
+    # Data Quality Store (apps/api/app/quality_api.py): check edits land in the table's suite draft (SODA.EDIT); the
+    # suite version is then submitted and approved by a DQ_APPROVER (SODA.APPROVE, four eyes), which is the approval,
+    # so these routes are never queued (NO_QUEUE_ROUTES); a scan is read-only
     ("POST", r"/api/dq/parse", None, ""),
-    ("POST", r"/api/dq/catalog(/seed)?", "SODA.EDIT", "Change the data quality checks catalog"),
-    ("POST", r"/api/dq/catalog/[^/]+/status", "SODA.EDIT", "Pause, resume or retire a data quality check"),
+    ("POST", r"/api/dq/catalog(/seed)?", "SODA.EDIT", "Change a data quality suite draft"),
+    ("POST", r"/api/dq/catalog/[^/]+/status", "SODA.EDIT", "Pause, resume or retire a check in a suite draft"),
+    ("POST", r"/api/dq/suites/(draft|submit|withdraw)", "SODA.EDIT", ""),
+    ("PUT", r"/api/dq/suites/draft", "SODA.EDIT", ""),
+    ("POST", r"/api/dq/suites/(approve|reject|apply)", "SODA.APPROVE", ""),
+    ("POST", r"/api/dq/suites/publish", "SODA.EDIT", ""),
+    ("POST", r"/api/dq/suites/pr-sync", None, ""),
     ("POST", r"/api/dq/run", "PROFILE.RUN", ""),
     ("POST", r"/api/dq/run-checks/decisions", "SODA.EDIT", "Decide run data quality checks from the DQ Store"),
     ("PUT", r"/api/dq/schedules", "SODA.EDIT", "Schedule data quality checks"),
@@ -359,7 +365,6 @@ READ_RULES = [(re.compile(r"^/api/(admin/.*|config/(rules|platform|models))$"), 
 # Setting STORE_EDITS_REQUIRE_APPROVAL (Admin, Governance) turns this off.
 STORE_ROUTES = [(m, re.compile(p)) for m, p in [
     ("POST", r"^/api/hub/sttm/[^/]+/edit$"),
-    ("POST", r"^/api/dq/catalog$"), ("POST", r"^/api/dq/catalog/seed$"), ("POST", r"^/api/dq/catalog/[^/]+/status$"),
     ("PUT", r"^/api/dq/schedules$"), ("DELETE", r"^/api/dq/schedules$"),
     ("POST", r"^/api/dq/run-checks/decisions$"),
 ]]
@@ -368,10 +373,13 @@ STORE_APPROVERS = {"STTM.EDIT": "STTM_APPROVER", "SODA.EDIT": "DQ_APPROVER", "DB
                    "MAPPING.DECIDE": "MODEL_APPROVER", "MODEL.EDIT": "MODEL_APPROVER"}
 
 
-# Routes whose own workflow is the approval (Model Workbench drafts, reviews and decisions): never turned into a change
-# request. A caller who would otherwise be queued is refused, so an approval never waits for its own approval.
+# Routes whose own workflow is the approval (Model Workbench and Data Quality suite drafts, reviews and decisions):
+# never turned into a change request. A caller who would otherwise be queued is refused, so an approval never waits
+# for its own approval.
 NO_QUEUE_ROUTES = [(m, re.compile(p)) for m, p in [
     ("POST", r"^/api/hub/domain-models(/.*)?$"), ("PUT", r"^/api/hub/domain-models/.+$"),
+    ("POST", r"^/api/dq/catalog$"), ("POST", r"^/api/dq/catalog/seed$"), ("POST", r"^/api/dq/catalog/[^/]+/status$"),
+    ("POST", r"^/api/dq/suites/.+$"), ("PUT", r"^/api/dq/suites/.+$"),
 ]]
 
 

@@ -1,9 +1,13 @@
 """Data Quality Store (/dashboard/dq-store): Soda / Great Expectations checks per table and column, without a run.
 
 The catalog (GOVERNANCE.DQ_CHECKS_CATALOG, V037) keeps each check in the platform's neutral form, which the scanner
-runs, with the rendered SodaCL beside it. Checks are added from a one-line SodaCL string, the structured editor,
-a table's profile or a run's approved checks; a table is scanned now or on a schedule (a Snowflake task that calls
-QUALITY.RUN_TABLE_SCAN). The logic lives in services/catalog/dq.py; this router validates input and maps errors.
+runs, with the rendered SodaCL beside it; a table is scanned now or on a schedule (a Snowflake task that calls
+QUALITY.RUN_TABLE_SCAN). Each table's checks are versioned as a suite (V040): additions and changes from the one-line
+SodaCL editor, the structured editor, a table's profile or a run's approved checks land in the table's draft, which
+is submitted, reviewed (changes, validation against the approved domain model) and approved by another person; the
+approved version is then written to the catalog (QUALITY.APPLY_DQ_SUITE) and can be published to Git as SodaCL and a
+Great Expectations suite. The logic lives in services/catalog/dq.py and dq_suite.py; this router validates input and
+maps errors.
 """
 
 from __future__ import annotations
@@ -12,13 +16,14 @@ import json
 from functools import partial
 from typing import Any, Callable, Literal, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 from app.db import DATABASE, WAREHOUSE, Db
-from app.main import _json, _snowflake_error, current_db
+from app.main import _json, _snowflake_error, _source_call, current_db
 from app.source_invoke import invoke_source
-from services.catalog import dq
+from services.catalog import dq, dq_suite
 
 router = APIRouter()
 CATALOG_FIELDS = """CHECK_ID, TABLE_NAME, COLUMN_NAME, CHECK_TYPE, CHECK_DEFINITION, SODA_DSL, SEVERITY, STATUS, ORIGIN,
@@ -32,11 +37,17 @@ def _call(db: Db, fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
         return invoke_source(db, partial(fn, **kwargs) if kwargs else fn, *args)
     except HTTPException:
         raise
+    except dq_suite.Conflict as exc:
+        raise HTTPException(409, str(exc)) from exc
     except AssertionError as exc:
         message = str(exc) or "request rejected"
         raise HTTPException(404 if "not found" in message.lower() else 400, message) from exc
     except Exception as exc:
         raise _snowflake_error(exc) from exc
+
+
+def _user(db: Db) -> str:
+    return str(db.user or "").upper()
 
 
 def _domain_filter(db: Db, domain: Optional[str]) -> Optional[str]:
@@ -95,10 +106,37 @@ def catalog(domain: Optional[str] = None, table: Optional[str] = None, column: O
     except Exception:
         schedules = {}
     tree = dq.build_tree(rows)
+    suites = _suites(db, domain_id)
     for t in tree:
         s = schedules.get(t["table"])
         t["schedule"] = {"cron": s["cron"], "enabled": bool(s.get("enabled"))} if s else None
+        t["suite"] = suites.pop(t["table"], None)
+    # tables whose first checks are still a draft: not in the catalog yet, listed so the draft can be found
+    term = (table or q or "").lower()
+    for name, suite in sorted(suites.items()):
+        if suite.get("open_version") and (not term or term in name.lower()):
+            tree.append({"table": name, "domain_id": suite.get("domain_id"), "schedule_cron": None, "checks": 0,
+                         "counts": {}, "pass_rate": None, "columns": [], "schedule": None, "suite": suite})
     return {"tables": tree, "deployed": True, "checks": len(rows)}
+
+
+def _suites(db: Db, domain_id: Optional[str]) -> dict:
+    """Suite state per table (V040): approved and open version, review state, pull request."""
+    clause, params = ("WHERE S.DOMAIN_ID = %s", (domain_id,)) if domain_id else ("", ())
+    try:
+        found = db.query(f"""SELECT S.TABLE_NAME, S.DOMAIN_ID, S.APPROVED_VERSION, S.OPEN_VERSION, O.STATUS AS OPEN_STATUS,
+                                    O.AUTHORS AS OPEN_AUTHORS, O.SUBMITTED_BY, A.PR_STATE, A.MODEL_VERSION
+                               FROM GOVERNANCE.DQ_SUITE S
+                               LEFT JOIN GOVERNANCE.DQ_SUITE_VERSION O ON O.SUITE_ID = S.SUITE_ID AND O.VERSION = S.OPEN_VERSION
+                               LEFT JOIN GOVERNANCE.DQ_SUITE_VERSION A ON A.SUITE_ID = S.SUITE_ID AND A.VERSION = S.APPROVED_VERSION
+                               {clause}""", params)
+    except Exception:
+        return {}
+    out = {}
+    for r in found:
+        r["open_authors"] = _json(r.get("open_authors")) or []
+        out[r["table_name"]] = r
+    return out
 
 
 class CheckIn(BaseModel):
@@ -130,18 +168,27 @@ def parse(body: CheckIn):
 
 @router.post("/api/dq/catalog")
 def save_check(body: CheckIn, db: Db = Depends(current_db)):
+    """Add a check to the table's suite draft, or change one (`check_id`); a draft is opened when there is none."""
     if not body.definition and not body.dsl:
         raise HTTPException(400, "send a definition or a one-line SodaCL check")
-    return _call(db, dq.upsert, json.dumps(body.model_dump()))
+    return _call(db, dq_suite.stage_check, json.dumps(body.model_dump()), _user(db))
 
 
 class StatusIn(BaseModel):
     status: Literal["ACTIVE", "PAUSED", "RETIRED"]
+    table: Optional[str] = Field(default=None, max_length=800)
 
 
 @router.post("/api/dq/catalog/{check_id}/status")
 def check_status(check_id: str, body: StatusIn, db: Db = Depends(current_db)):
-    return _call(db, dq.set_status, check_id, body.status)
+    """Pause, resume or retire (remove) a check in the table's suite draft."""
+    table = body.table
+    if not table:
+        found = db.query("SELECT TABLE_NAME FROM GOVERNANCE.DQ_CHECKS_CATALOG WHERE CHECK_ID = %s", (check_id,))
+        if not found:
+            raise HTTPException(404, "check not found; pass its table")
+        table = found[0]["table_name"]
+    return _call(db, dq_suite.stage_status, table, check_id, body.status, _user(db))
 
 
 class SeedIn(BaseModel):
@@ -152,12 +199,13 @@ class SeedIn(BaseModel):
 
 @router.post("/api/dq/catalog/seed")
 def seed(body: SeedIn, db: Db = Depends(current_db)):
-    """Add the checks a table's profile suggests, or a run's approved checks (onto its built target)."""
+    """Add the checks a table's profile suggests, or a run's approved checks (onto its built target), to the table's
+    suite draft."""
     if bool(body.table) == bool(body.run_id):
         raise HTTPException(400, "send a table or a run_id")
     if body.table:
-        return _call(db, dq.seed_from_profile, body.table, body.domain_id)
-    return _call(db, dq.promote_from_run, body.run_id)
+        return _call(db, dq_suite.seed_profile, body.table, _user(db), body.domain_id)
+    return _call(db, dq_suite.seed_run, body.run_id, _user(db))
 
 
 class RunIn(BaseModel):
@@ -276,3 +324,176 @@ def summary(domain: Optional[str] = None, db: Db = Depends(current_db)):
             "run_checks": run_checks,
             "pass_rate": round(100 * int(s.get("passed") or 0) / evaluated, 1) if evaluated else None,
             "coverage": round(100 * min(tables, int(profiled)) / int(profiled), 1) if profiled else None}
+
+
+# ---------------------------------------------------------------- suites: versions, review, export, Git (V040)
+
+
+@router.get("/api/dq/suites")
+def suites(db: Db = Depends(current_db)):
+    try:
+        return {"suites": invoke_source(db, dq_suite.list_suites), "deployed": True}
+    except Exception:
+        return {"suites": [], "deployed": False}
+
+
+@router.get("/api/dq/suites/one")
+def suite(table: str = Query(min_length=5, max_length=800), version: Optional[int] = Query(default=None, ge=1),
+          db: Db = Depends(current_db)):
+    return _call(db, dq_suite.get_suite, table, version)
+
+
+@router.get("/api/dq/suites/diff")
+def suite_diff(table: str = Query(min_length=5, max_length=800), to: int = Query(ge=1),
+               from_version: Optional[int] = Query(default=None, alias="from", ge=1), db: Db = Depends(current_db)):
+    return _call(db, dq_suite.diff_versions, table, from_version, to)
+
+
+@router.get("/api/dq/suites/export")
+def suite_export(table: str = Query(min_length=5, max_length=800), version: Optional[int] = Query(default=None, ge=1),
+                 format: Literal["soda", "gx"] = "soda", db: Db = Depends(current_db)):  # noqa: A002
+    name, media, content = _call(db, dq_suite.export_version, table, version, format)
+    return Response(content, media_type=media, headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
+
+class SuiteIn(BaseModel):
+    table: str = Field(min_length=5, max_length=800)
+    note: Optional[str] = Field(default=None, max_length=2000)
+
+
+class OpenIn(SuiteIn):
+    from_version: Optional[int] = Field(default=None, ge=1)
+
+
+@router.post("/api/dq/suites/draft")
+def suite_open(body: OpenIn, db: Db = Depends(current_db)):
+    """Open the next version from the approved one, or from an older version (a rollback)."""
+    return _call(db, dq_suite.open_draft, body.table, _user(db), body.from_version, body.note or "")
+
+
+class DraftIn(BaseModel):
+    table: str = Field(min_length=5, max_length=800)
+    etag: str = Field(min_length=1, max_length=64)
+    checks: list[dict] = Field(max_length=500)
+    change_note: Optional[str] = Field(default=None, max_length=2000)
+
+
+@router.put("/api/dq/suites/draft")
+def suite_save(body: DraftIn, db: Db = Depends(current_db)):
+    return _call(db, dq_suite.save_draft, body.table, json.dumps(body.model_dump()), _user(db))
+
+
+@router.post("/api/dq/suites/submit")
+def suite_submit(body: SuiteIn, db: Db = Depends(current_db)):
+    return _call(db, dq_suite.submit, body.table, _user(db), body.note or "")
+
+
+@router.post("/api/dq/suites/withdraw")
+def suite_withdraw(body: SuiteIn, db: Db = Depends(current_db)):
+    return _call(db, dq_suite.withdraw, body.table, _user(db))
+
+
+class DecideIn(BaseModel):
+    table: str = Field(min_length=5, max_length=800)
+    version: int = Field(ge=1)
+    acknowledge_loosened: bool = False
+    reason: Optional[str] = Field(default=None, max_length=2000)
+
+
+def _apply(db: Db, suite_id: str, version: int) -> dict:
+    try:
+        return {"applied": True, **_source_call(db, "CALL QUALITY.APPLY_DQ_SUITE(%s, %s)", dq_suite.apply_suite_version,
+                                                suite_id, version)}
+    except AssertionError as exc:
+        return {"applied": False, "error": str(exc)}
+    except Exception as exc:
+        return {"applied": False, "error": str(exc)[:500]}
+
+
+@router.post("/api/dq/suites/approve")
+def suite_approve(body: DecideIn, db: Db = Depends(current_db)):
+    """Four eyes. The approved version is then written to the catalog the scanner reads; if that fails the approval
+    stands and the version can be applied again."""
+    out = _call(db, dq_suite.approve, body.table, body.version, _user(db), body.acknowledge_loosened)
+    return {**out, "catalog": _apply(db, out["suite_id"], body.version)}
+
+
+@router.post("/api/dq/suites/apply")
+def suite_apply(body: DecideIn, db: Db = Depends(current_db)):
+    found = _call(db, dq_suite.get_suite, body.table, body.version)
+    current = found.get("current") or {}
+    if current.get("status") not in ("APPROVED", "PUBLISHED"):
+        raise HTTPException(409, "only an approved version is applied to the catalog")
+    return _apply(db, found["suite"]["suite_id"], body.version)
+
+
+@router.post("/api/dq/suites/reject")
+def suite_reject(body: DecideIn, db: Db = Depends(current_db)):
+    return _call(db, dq_suite.reject, body.table, body.version, _user(db), body.reason or "")
+
+
+class PublishIn(BaseModel):
+    table: str = Field(min_length=5, max_length=800)
+    version: int = Field(ge=1)
+    repo_id: str = Field(min_length=1, max_length=64)
+    base: Optional[str] = Field(default=None, max_length=200)
+    title: Optional[str] = Field(default=None, max_length=200)
+
+
+@router.get("/api/dq/suites/publishing")
+def suite_publishing(db: Db = Depends(current_db)):
+    from app.main import _dbt_repos, _github_publisher_ready
+
+    repos = [{k: r.get(k) for k in ("repo_id", "name", "git_url", "provider", "branch")} for r in _dbt_repos(db, None)
+             if (r.get("provider") or "") == "GITHUB"]
+    return {"repos": repos, "publisher_ready": _github_publisher_ready(db)}
+
+
+@router.post("/api/dq/suites/publish")
+def suite_publish(body: PublishIn, db: Db = Depends(current_db)):
+    """Open a pull request with an approved version's SodaCL and Great Expectations files
+    (feature/dq-<table>-v<version>). The version becomes PUBLISHED when the pull request is merged."""
+    import re
+
+    from app.main import _dbt_repos, _github_publisher_ready
+
+    found = _call(db, dq_suite.get_suite, body.table, body.version)
+    current = found.get("current") or {}
+    if current.get("status") != "APPROVED":
+        raise HTTPException(409, "Only an approved version is published; approve it first.")
+    repo = next((r for r in _dbt_repos(db, None) if r["repo_id"] == body.repo_id), None)
+    if not repo or (repo.get("provider") or "") != "GITHUB":
+        raise HTTPException(409, "Choose a GitHub repository connected in Admin, Integrations.")
+    if not _github_publisher_ready(db):
+        return {"status": "NOT_CONFIGURED", "detail": "GitHub publishing is not set up. An admin can set it up in the GitHub publishing card."}
+    slug = re.sub(r"[^a-z0-9]+", "-", found["suite"]["table_name"].split(".")[-1].lower()).strip("-") or "table"
+    head = f"feature/dq-{slug}-v{int(body.version)}"
+    request = {"suite_id": found["suite"]["suite_id"], "version": int(body.version), "repo_id": body.repo_id,
+               "head": head, "base": body.base or repo.get("branch"), "title": body.title}
+    try:
+        result = db.call("CALL CODEGEN.PUBLISH_DBT_PR(%s, %s)", ("", json.dumps({"dq_suite": request})))
+    except Exception as exc:
+        return {"status": "FAILED", "detail": str(exc)[:1000], "head_branch": head}
+    return {**(result or {}), "head_branch": head}
+
+
+class SyncIn(BaseModel):
+    table: Optional[str] = Field(default=None, max_length=800)
+    force: bool = False
+
+
+@router.post("/api/dq/suites/pr-sync")
+def suite_pr_sync(body: SyncIn, db: Db = Depends(current_db)):
+    from app.main import _github_publisher_ready
+
+    if not _github_publisher_ready(db):
+        return {"checked": 0, "merged": [], "closed": [], "errors": [], "detail": "GitHub publishing is not set up"}
+    try:
+        suite_id = dq_suite.suite_id_for(dq._fqn(body.table)) if body.table else ""
+    except AssertionError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    try:
+        return db.call("CALL CODEGEN.PUBLISH_DBT_PR(%s, %s)",
+                       ("", json.dumps({"sync_dq_prs": {"suite_id": suite_id, "force": body.force}}))) or {}
+    except Exception as exc:
+        raise _snowflake_error(exc) from exc
