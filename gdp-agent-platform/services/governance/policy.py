@@ -189,6 +189,13 @@ RULES: List[Tuple[str, str, Any, str]] = [
     ("POST", r"/api/qa/suites", "QA.EDIT", ""),
     ("PUT", r"/api/qa/suites/[^/]+", "QA.EDIT", ""),
     ("DELETE", r"/api/qa/suites/[^/]+", "QA.EDIT", ""),
+    # QA Store: domain test packages (services/qa/packs.py); approving a version is four eyes by default policy
+    ("POST", r"/api/domains/[^/]+/qa-packs", "PACKAGE.EDIT", "Create a domain QA pack"),
+    ("PUT", r"/api/qa-packs/[^/]+", "PACKAGE.EDIT", "Edit a domain QA pack"),
+    ("POST", r"/api/qa-packs/[^/]+/(submit|reject)", "PACKAGE.EDIT", ""),
+    ("POST", r"/api/qa-packs/[^/]+/approve", "PACKAGE.APPROVE", "Approve a domain QA pack version"),
+    ("POST", r"/api/qa-packs/[^/]+/retire", "PACKAGE.APPROVE", "Retire a domain QA pack"),
+    ("POST", r"/api/qa/execute", "QA.EDIT", ""),
     ("POST", r"/api/qa/links", "JIRA.WRITE", "Link a Jira issue to a table or test"),
     ("DELETE", r"/api/qa/links/[^/]+", "JIRA.WRITE", ""),
     ("POST", r"/api/ops/ingest", None, ""),  # Airflow push: no user session, the HMAC signature is checked by the endpoint

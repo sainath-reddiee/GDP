@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import importlib
 import json
+import re
 from functools import partial
 from typing import Any, Callable, Optional
 
@@ -346,3 +347,142 @@ def link_delete(link_id: str, db: Db = Depends(current_db)):
     db.execute("UPDATE JIRA.ISSUE_LINK SET IS_DELETED = TRUE WHERE LINK_ID = %s", (link_id,))
     jira._log(db, found[0]["issue_key"], "UNLINK", "DONE", found[0].get("cloud_id"), found[0].get("run_id"), {"link_id": link_id})
     return {"unlinked": link_id}
+
+
+# ---------------------------------------------------------------- QA Store: domain test packages (services/qa/packs.py)
+
+UUID_LIKE = re.compile(r"^[0-9a-fA-F-]{36}$")
+
+
+def _domain_id(db: Db, value: Optional[str]) -> Optional[str]:
+    """A domain id, or a domain name resolved to its id (the dashboard's domain switcher sends either)."""
+    if not value:
+        return None
+    if UUID_LIKE.match(value):
+        return value
+    found = db.query("SELECT DOMAIN_ID FROM KNOWLEDGE.DOMAIN_REGISTRY WHERE UPPER(DOMAIN_NAME) = UPPER(%s) LIMIT 1", (value,))
+    if not found:
+        raise HTTPException(404, f"domain {value} not found")
+    return found[0]["domain_id"]
+
+
+class PackQuery(BaseModel):
+    query_name: str = Field(min_length=1, max_length=128)
+    sql_expression: str = Field(min_length=6, max_length=16000)
+    description: Optional[str] = Field(default=None, max_length=4000)
+    severity: str = Field(default="ERROR", max_length=16)
+    expectation: Optional[str] = Field(default="0 rows", max_length=1000)
+    tags: list[str] = Field(default_factory=list, max_length=20)
+
+
+class PackIn(BaseModel):
+    name: str = Field(min_length=1, max_length=128)
+    description: Optional[str] = Field(default=None, max_length=4000)
+    tags: list[str] = Field(default_factory=list, max_length=20)
+    queries: list[PackQuery] = Field(min_length=1, max_length=200)
+    change_note: Optional[str] = Field(default=None, max_length=2000)
+    base_version: Optional[int] = Field(default=None, ge=1)
+
+
+class PackNote(BaseModel):
+    note: Optional[str] = Field(default=None, max_length=2000)
+
+
+class ExecuteIn(BaseModel):
+    domain_id: str = Field(min_length=1, max_length=128)
+    pack_id: Optional[str] = Field(default=None, max_length=36)
+    version: Optional[int] = Field(default=None, ge=1)
+    query_ids: Optional[list[str]] = Field(default=None, max_length=200)
+    sql: Optional[str] = Field(default=None, min_length=6, max_length=16000)
+
+
+@router.get("/api/qa-packs")
+def qa_packs(domain: Optional[str] = None, db: Db = Depends(current_db)):
+    try:
+        return {"packs": _call(db, _svc("packs").list_packs, _domain_id(db, domain)), "deployed": True}
+    except HTTPException as exc:
+        if exc.status_code == 404:
+            raise
+        return {"packs": [], "deployed": False}
+
+
+@router.get("/api/qa-packs/summary")
+def qa_packs_summary(domain: Optional[str] = None, db: Db = Depends(current_db)):
+    try:
+        return _call(db, _svc("packs").summary, _domain_id(db, domain))
+    except HTTPException as exc:
+        if exc.status_code == 404:
+            raise
+        return {"packs": 0, "approved_packs": 0, "rules": 0, "pending": 0, "domains": 0, "top_tags": [],
+                "pass_rate": None, "deployed": False}
+
+
+@router.get("/api/domains/{domain_id}/qa-packs")
+def domain_qa_packs(domain_id: str, db: Db = Depends(current_db)):
+    return {"packs": _call(db, _svc("packs").list_packs, _domain_id(db, domain_id))}
+
+
+@router.post("/api/domains/{domain_id}/qa-packs")
+def create_qa_pack(domain_id: str, body: PackIn, db: Db = Depends(current_db)):
+    return _call(db, _svc("packs").create_pack, _domain_id(db, domain_id), json.dumps(body.model_dump()))
+
+
+@router.get("/api/qa-packs/{pack_id}")
+def get_qa_pack(pack_id: str, version: Optional[int] = None, db: Db = Depends(current_db)):
+    return _call(db, _svc("packs").get_pack, pack_id, version)
+
+
+@router.put("/api/qa-packs/{pack_id}")
+def save_qa_pack(pack_id: str, body: PackIn, db: Db = Depends(current_db)):
+    return _call(db, _svc("packs").save_draft, pack_id, json.dumps(body.model_dump()))
+
+
+@router.post("/api/qa-packs/{pack_id}/submit")
+def submit_qa_pack(pack_id: str, body: PackNote = PackNote(), db: Db = Depends(current_db)):
+    return _call(db, _svc("packs").submit, pack_id, body.note or "")
+
+
+@router.post("/api/qa-packs/{pack_id}/reject")
+def reject_qa_pack(pack_id: str, body: PackNote = PackNote(), db: Db = Depends(current_db)):
+    return _call(db, _svc("packs").reject, pack_id, body.note or "")
+
+
+@router.post("/api/qa-packs/{pack_id}/approve")
+def approve_qa_pack(pack_id: str, db: Db = Depends(current_db)):
+    """PACKAGE.APPROVE; by default policy four eyes, so the governance middleware turns the call into a change request
+    that another QA lead approves (and replays)."""
+    return _call(db, _svc("packs").approve, pack_id)
+
+
+@router.post("/api/qa-packs/{pack_id}/retire")
+def retire_qa_pack(pack_id: str, db: Db = Depends(current_db)):
+    return _call(db, _svc("packs").retire, pack_id)
+
+
+@router.get("/api/qa-packs/{pack_id}/runs")
+def qa_pack_runs(pack_id: str, limit: int = 20, db: Db = Depends(current_db)):
+    return {"runs": _call(db, _svc("packs").runs, pack_id, limit)}
+
+
+@router.get("/api/qa-packs/{pack_id}/file")
+def qa_pack_file(pack_id: str, version: Optional[int] = None, db: Db = Depends(current_db)):
+    """The version as a domain/<name>/qa/<pack>.sql file, ready to commit."""
+    from fastapi.responses import PlainTextResponse
+    from services.qa.pack_files import render
+
+    detail = _call(db, _svc("packs").get_pack, pack_id, version)
+    pack = detail["pack"]
+    text = render({"name": pack["name"], "description": pack.get("description"), "tags": pack.get("tags") or [],
+                   "queries": detail["queries"]})
+    name = re.sub(r"[^a-z0-9]+", "_", pack["name"].lower()).strip("_") or "pack"
+    return PlainTextResponse(text, headers={"Content-Disposition": f'attachment; filename="{name}.sql"'})
+
+
+@router.post("/api/qa/execute")
+def execute_qa(body: ExecuteIn, db: Db = Depends(current_db)):
+    """Run a pack version (the approved one by default), some of its queries, or one ad-hoc query against Snowflake
+    with the caller's role. Pack runs are stored in QUALITY.QA_RUN / QA_RESULT (SCOPE 'DOMAIN')."""
+    if not body.pack_id and not body.sql:
+        raise HTTPException(400, "send a pack_id or a sql query")
+    return _call(db, _svc("packs").execute, _domain_id(db, body.domain_id), body.pack_id, body.version, body.query_ids,
+                 body.sql)
