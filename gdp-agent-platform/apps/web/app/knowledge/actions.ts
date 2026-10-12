@@ -34,6 +34,9 @@ export type KDiff = {
 export type KUsage = {
   runs: { run_id: string | null; run_name: string | null; current_state: string | null; stage: string; version: number; uses: number; last_used: string }[];
   by_stage: Record<string, number>; total: number;
+  /** V047: what reviewers decided on the proposals this item fed, per stage (absent on an older API) */
+  outcomes?: { stage: string; uses: number; runs: number; observed: number; accepted: number; corrected: number;
+    rejected: number; helpfulness: number; computed_at: string | null }[];
 };
 export type Policy = { types: string[]; policy: Record<string, "auto" | "review">; copilot: "auto" | "review"; defaults: Record<string, string> };
 

@@ -10,6 +10,9 @@ import { TagEditor } from "@/components/tag-editor";
 import { useAccess } from "@/components/access";
 import { useScrollLock } from "@/components/use-scroll-lock";
 import { cn } from "@/lib/utils";
+
+/** Outcome counts can be fractional (a general item counts a run as one observation). */
+const fmt = (v: number | string | null | undefined) => { const n = Number(v) || 0; return Number.isInteger(n) ? String(n) : n.toFixed(1); };
 import { ago } from "../skills/types";
 import {
   knowledgeDiff, knowledgeUsage, knowledgeVersions, rollbackKnowledge, setKnowledgeStatus, verifyKnowledge,
@@ -182,6 +185,32 @@ export function KnowledgeDrawer({ item: initial, onClose, onEdit, onChange }: {
                   ))}
                   {!usage.total && <p className="text-sm text-muted-foreground">No stage has used this item yet (usage is recorded from this release on).</p>}
                 </div>
+                {(usage.outcomes ?? []).length > 0 && (
+                  <div className="space-y-1.5 rounded-xl border p-3" data-testid="knowledge-outcomes">
+                    <p className="text-xs font-semibold">Track record</p>
+                    {(usage.outcomes ?? []).map((o) => {
+                      const observed = Number(o.observed) || 0;
+                      const pct = Math.round(Number(o.helpfulness) * 100);
+                      return (
+                        <div key={o.stage} className="flex flex-wrap items-center gap-2 text-xs">
+                          <span className="w-16 font-medium">{o.stage.toLowerCase()}</span>
+                          {observed > 0 ? (
+                            <>
+                              <span className="h-1.5 w-28 overflow-hidden rounded-full bg-muted" aria-hidden>
+                                <span className={cn("block h-full rounded-full", pct >= 70 ? "bg-success" : pct >= 40 ? "bg-warning" : "bg-destructive")} style={{ width: `${pct}%` }} />
+                              </span>
+                              <span className="tabular-nums">{pct}% helpful</span>
+                              <span className="text-muted-foreground tabular-nums">
+                                {fmt(o.accepted)} kept, {fmt(o.corrected)} corrected, {fmt(o.rejected)} rejected of {fmt(observed)} decision{observed === 1 ? "" : "s"}
+                              </span>
+                            </>
+                          ) : <span className="text-muted-foreground">used in {o.runs} run{o.runs === 1 ? "" : "s"}; no reviewed decisions yet</span>}
+                        </div>
+                      );
+                    })}
+                    <p className="text-[11px] text-muted-foreground">How often reviewers kept what a stage proposed with this item in its prompt. After 3 decisions it moves the item up or down when knowledge is picked.</p>
+                  </div>
+                )}
                 {usage.runs.length > 0 && (
                   <table className="w-full text-xs">
                     <thead className="text-left text-[10px] uppercase tracking-wide text-muted-foreground"><tr><th className="py-1">Run</th><th>Stage</th><th>Version</th><th className="text-right">Uses</th><th className="text-right">Last</th></tr></thead>

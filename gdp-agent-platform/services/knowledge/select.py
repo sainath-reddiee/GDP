@@ -27,7 +27,9 @@ def score(item: Dict[str, Any], target_table: Optional[str] = None, columns: Ite
       +4    its target_column is one of the columns
       +2    its target_table is the target table          -3 when it names another target table
       +1    a column is mentioned in its title
-      +1    its source_column or source_table is one of the sources"""
+      +1    its source_column or source_table is one of the sources
+      -1..+1  its track record (KNOWLEDGE_OUTCOME, V047) once it has MIN_OBSERVED decisions: items whose proposals
+            reviewers keep rank higher, items they keep overruling lower; relevance still comes first"""
     cols = {_name(c) for c in columns if c}
     srcs = {_name(s) for s in sources if s}
     content = variant(item.get("CONTENT_JSON")) or {}
@@ -43,6 +45,10 @@ def score(item: Dict[str, Any], target_table: Optional[str] = None, columns: Ite
         points += 1
     if srcs and ({_name(content.get("source_column")), _name(content.get("source_table"))} & srcs):
         points += 1
+    from services.knowledge.outcomes import MIN_OBSERVED
+
+    if item.get("HELPFULNESS") is not None and float(item.get("OBSERVED") or 0) >= MIN_OBSERVED:
+        points += (float(item["HELPFULNESS"]) - 0.5) * 2
     return points
 
 
@@ -70,11 +76,20 @@ def relevant(session, domain_id: Optional[str], types: Sequence[str], *, target_
         return []
     from services.knowledge.writer import NOT_OPERATIONAL_SQL, record_usage
 
-    found = rows(session, f"""SELECT KNOWLEDGE_ID, KNOWLEDGE_TYPE, TITLE, CONTENT, CONTENT_JSON
-                                FROM KNOWLEDGE.DOMAIN_KNOWLEDGE
-                               WHERE DOMAIN_ID = ? AND IS_CURRENT AND COALESCE(STATUS, 'ACTIVE') = 'ACTIVE'
-                                 AND KNOWLEDGE_TYPE IN ({', '.join(['?'] * len(types))}) AND {NOT_OPERATIONAL_SQL}
-                               ORDER BY UPDATED_AT DESC NULLS LAST LIMIT {int(scan)}""", [domain_id, *types])
+    sql = f"""SELECT K.KNOWLEDGE_ID, K.KNOWLEDGE_TYPE, K.TITLE, K.CONTENT, K.CONTENT_JSON{{outcome}}
+                FROM KNOWLEDGE.DOMAIN_KNOWLEDGE K{{join}}
+               WHERE K.DOMAIN_ID = ? AND K.IS_CURRENT AND COALESCE(K.STATUS, 'ACTIVE') = 'ACTIVE'
+                 AND K.KNOWLEDGE_TYPE IN ({', '.join(['?'] * len(types))}) AND {NOT_OPERATIONAL_SQL.replace("SOURCE_REFERENCE", "K.SOURCE_REFERENCE")}
+               ORDER BY K.UPDATED_AT DESC NULLS LAST LIMIT {int(scan)}"""
+    try:  # V047: each item's track record, in this stage when one is given
+        found = rows(session, sql.format(
+            outcome=", O.HELPFULNESS, O.OBSERVED",
+            join=f""" LEFT JOIN (SELECT LINEAGE_ID, SUM(OBSERVED) AS OBSERVED,
+                                       (SUM(ACCEPTED) + SUM(CORRECTED) / 2 + 1) / (SUM(OBSERVED) + 2) AS HELPFULNESS
+                                  FROM KNOWLEDGE.KNOWLEDGE_OUTCOME {"WHERE STAGE = ?" if stage else ""} GROUP BY 1) O
+                             ON O.LINEAGE_ID = K.LINEAGE_ID"""), [*([stage] if stage else []), domain_id, *types])
+    except Exception:
+        found = rows(session, sql.format(outcome="", join=""), [domain_id, *types])
     picked = rank(found, target_table, columns, sources, limit, type_order)
     if run_id and stage and picked:
         record_usage(session, run_id, stage, [r["KNOWLEDGE_ID"] for r in picked])

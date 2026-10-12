@@ -158,6 +158,7 @@ RULES: List[Tuple[str, str, Any, str]] = [
     ("PUT", r"/api/knowledge/[^/]+", "KNOWLEDGE.EDIT", "Edit knowledge"),
     ("POST", r"/api/knowledge/[^/]+/(retire|restore)", "KNOWLEDGE.EDIT", "Retire or restore knowledge"),
     ("POST", r"/api/knowledge/inbox/decide", "KNOWLEDGE.EDIT", "Approve or reject learned knowledge"),
+    ("POST", r"/api/knowledge/outcomes/refresh", "KNOWLEDGE.EDIT", ""),
     ("POST", r"/api/knowledge/[^/]+/rollback", "KNOWLEDGE.EDIT", "Roll knowledge back to an earlier version"),
     ("POST", r"/api/knowledge/[^/]+/verify", "KNOWLEDGE.EDIT", ""),
     ("PUT", r"/api/config/knowledge-policy", "KNOWLEDGE.EDIT", "Change how knowledge is learned"),

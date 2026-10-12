@@ -454,5 +454,9 @@ def save_soda_decisions(session, run_id: str, decisions_json: str) -> Dict[str, 
         applied += 1
     remaining = rows(session, """SELECT EXPECTATION_ID FROM CONTRACT.SODA_EXPECTATION_REGISTRY
                                  WHERE RUN_ID = ? AND IS_CURRENT AND STATUS = 'PROPOSED'""", [run_id])
+    if applied:
+        from services.knowledge.outcomes import refresh_run
+
+        refresh_run(session, run_id, "SODA")  # did the knowledge this run used lead to kept checks; never raises
     return {"decided": applied, "skipped": skipped,
             "remaining": [r["EXPECTATION_ID"] for r in remaining], "complete": not remaining}

@@ -293,7 +293,49 @@ def usage(knowledge_id: str, db: Db = Depends(current_db)):
     by_stage: dict[str, int] = {}
     for r in rows:
         by_stage[r["stage"]] = by_stage.get(r["stage"], 0) + int(r["uses"])
-    return {"runs": rows, "by_stage": by_stage, "total": sum(by_stage.values())}
+    try:  # V047: what reviewers decided on the proposals this item fed
+        outcomes = db.query("""SELECT STAGE, USES, RUNS, OBSERVED, ACCEPTED, CORRECTED, REJECTED, HELPFULNESS,
+                                      COMPUTED_AT::VARCHAR AS COMPUTED_AT
+                                 FROM KNOWLEDGE.KNOWLEDGE_OUTCOME WHERE LINEAGE_ID = %s ORDER BY STAGE""",
+                            (item.get("lineage_id") or knowledge_id,))
+    except Exception:
+        outcomes = []
+    return {"runs": rows, "by_stage": by_stage, "total": sum(by_stage.values()), "outcomes": outcomes}
+
+
+@router.get("/api/knowledge/outcomes")
+def outcomes(domain_id: Optional[str] = None, order: Literal["low", "high"] = "low", db: Db = Depends(current_db)):
+    """Items with a track record (at least MIN_OBSERVED decisions): the ones reviewers keep overruling first (low),
+    or the most trusted first (high)."""
+    from services.knowledge.outcomes import MIN_OBSERVED
+
+    scope, params = ("AND K.DOMAIN_ID = %s", [domain_id]) if domain_id else ("", [])
+    try:
+        found = db.query(f"""
+            SELECT K.KNOWLEDGE_ID, K.TITLE, K.KNOWLEDGE_TYPE, D.DOMAIN_NAME, O.STAGE, O.USES, O.RUNS, O.OBSERVED,
+                   O.ACCEPTED, O.CORRECTED, O.REJECTED, O.HELPFULNESS
+              FROM KNOWLEDGE.KNOWLEDGE_OUTCOME O
+              JOIN KNOWLEDGE.DOMAIN_KNOWLEDGE K ON K.LINEAGE_ID = O.LINEAGE_ID AND K.IS_CURRENT
+              LEFT JOIN KNOWLEDGE.DOMAIN_REGISTRY D ON D.DOMAIN_ID = K.DOMAIN_ID
+             WHERE O.OBSERVED >= %s {scope}
+             ORDER BY O.HELPFULNESS {"ASC" if order == "low" else "DESC"}, O.OBSERVED DESC LIMIT 50""",
+                         (MIN_OBSERVED, *params))
+    except Exception:
+        return {"items": [], "deployed": False, "min_observed": MIN_OBSERVED}
+    return {"items": found, "deployed": True, "min_observed": MIN_OBSERVED}
+
+
+@router.post("/api/knowledge/outcomes/refresh")
+def refresh_outcomes(db: Db = Depends(current_db)):
+    """Rebuild every item's track record from all usage and decisions (it is also refreshed per run as reviewers
+    save mapping and data quality decisions)."""
+    from app.source_invoke import invoke_source
+    from services.knowledge.outcomes import refresh
+
+    try:
+        return invoke_source(db, refresh, None)
+    except Exception as exc:
+        raise HTTPException(409, f"Could not rebuild knowledge outcomes: {str(exc)[:300]}") from exc
 
 
 @router.get("/api/knowledge/duplicates")
