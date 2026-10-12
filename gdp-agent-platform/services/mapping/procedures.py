@@ -99,7 +99,8 @@ def domain_knowledge(session, domain_id: str, run_id: str, target: Optional[Dict
     used: List[str] = []
     from services.knowledge.writer import NOT_OPERATIONAL_SQL
 
-    for k in rows(session, f"""SELECT KNOWLEDGE_ID, KNOWLEDGE_TYPE, CONTENT_JSON FROM KNOWLEDGE.DOMAIN_KNOWLEDGE
+    patterns: List[Tuple[str, str, Optional[str]]] = []  # reviewer patterns, weighted by their track record below
+    for k in rows(session, f"""SELECT KNOWLEDGE_ID, KNOWLEDGE_TYPE, CONTENT_JSON, LINEAGE_ID FROM KNOWLEDGE.DOMAIN_KNOWLEDGE
                               WHERE DOMAIN_ID = ? AND IS_CURRENT AND STATUS = 'ACTIVE' AND CONTENT_JSON IS NOT NULL
                                 AND {NOT_OPERATIONAL_SQL}""",
                   [domain_id]):
@@ -130,7 +131,7 @@ def domain_knowledge(session, domain_id: str, run_id: str, target: Optional[Dict
         elif kind == "MAPPING_PATTERN" and content.get("source_column") and content.get("target_column"):
             if target_name and content.get("target_table") and str(content["target_table"]).upper() != target_name:
                 continue
-            knowledge["history"].append((content["source_column"], content["target_column"], 1.0))
+            patterns.append((content["source_column"], content["target_column"], k.get("LINEAGE_ID")))
             if content.get("justification") or content.get("overridden"):
                 knowledge["notes"].append(
                     f"{content['source_column']} -> {content['target_column']}"
@@ -138,6 +139,13 @@ def domain_knowledge(session, domain_id: str, run_id: str, target: Optional[Dict
                     + (f": {content['justification']}" if content.get("justification") else "")
                 )
     record_usage(session, run_id, "MAPPING", used)
+    # a pattern reviewers keep overruling counts less as evidence (services/knowledge/outcomes, V047); a new one or
+    # one they keep counts fully
+    from services.knowledge.outcomes import for_lineages, weight
+
+    track = for_lineages(session, [l for _, _, l in patterns if l], "MAPPING")
+    for src, tgt, lineage in patterns:
+        knowledge["history"].append((src, tgt, min(1.0, weight(track.get(lineage)))))
     for h in rows(session, """SELECT L.COLUMN_NAME AS SRC, T.COLUMN_NAME AS TGT
                               FROM MAPPING.MAPPING_DECISION D
                               JOIN SOURCE.LANDING_COLUMN_REGISTRY L ON L.LANDING_COLUMN_ID = D.SOURCE_COLUMN_ID
@@ -526,4 +534,7 @@ def save_mapping_decisions(session, run_id: str, decisions_json: str) -> Dict[st
         raise
     with tool_call(session, run_id, "save_mapping_decision", {"decisions": len(prepared)}) as call:
         call.summary = ", ".join(f"{p[1]}" for p in prepared)
+    from services.knowledge.outcomes import refresh_run
+
+    refresh_run(session, run_id, "MAPPING")  # did the knowledge this run used lead to kept proposals; never raises
     return {"saved": len(prepared), "status": mapping_status(session, run_id)}
