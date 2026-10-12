@@ -144,6 +144,45 @@ def dbt_review_item(target: Optional[str], path: str, findings: List[Dict[str, A
             "tags": ["DBT", "REVIEW"]}
 
 
+def pr_closed(kind: str, asset_id: str, asset_name: Optional[str], version: int, branch: Optional[str],
+              url: Optional[str]) -> Optional[Dict[str, Any]]:
+    """A pull request the platform opened that was closed without merging: the repository's reviewers did not take
+    the version. Kept so the next publish of the asset, and the people preparing it, know (one item per asset)."""
+    if not asset_id:
+        return None
+    label = {"MODEL": "domain model", "DQ_SUITE": "data quality suite", "QA_PACK": "QA pack", "STTM": "STTM mapping",
+             "TABLE_MODEL": "table model"}.get(str(kind).upper(), str(kind).lower())
+    name = asset_name or asset_id
+    return {"kind": "BUSINESS_RULE", "key": f"git.closed.{str(kind).upper()}.{asset_id}",
+            "title": f"Pull request for {label} {name} v{int(version)} closed without merging",
+            "content": f"The pull request publishing {label} {name} v{int(version)}"
+                       f"{f' (branch {branch})' if branch else ''} was closed without merging, so the repository did "
+                       f"not take that version. Read the discussion before publishing it again"
+                       f"{f': {url}' if url else ''}.",
+            "content_json": {"kind": str(kind).upper(), "asset_id": asset_id, "asset_name": name,
+                             "version": int(version), "branch": branch, "url": url,
+                             "target_table": _name(name) if str(kind).upper() in ("TABLE_MODEL", "DQ_SUITE", "STTM") else None},
+            "tags": ["GIT", "PULL_REQUEST", "CLOSED"]}
+
+
+def validation_fixed(target: Optional[str], findings: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """dbt validation errors that a later regeneration or edit of the same run fixed: what the generator tends to get
+    wrong for this target, for the next generation and review. One item per target (the latest lesson wins)."""
+    errors = [f for f in findings or [] if str(f.get("severity") or "").upper() == "ERROR"][:20]
+    if not errors:
+        return None
+    table = _name(target)
+    lines = [f"- {f.get('check') or f.get('validation_type') or 'check'}: {clip(f.get('message'), 400)}" for f in errors]
+    return {"kind": "DBT_PATTERN", "key": f"dbt.validation.{table or 'RUN'}",
+            "title": f"dbt validation errors fixed for {table or 'this target'}",
+            "content": f"Generated dbt for {table or 'this target'} first failed validation with these errors, which a "
+                       f"later version fixed:\n" + "\n".join(lines),
+            "content_json": {"target_table": table or None,
+                             "errors": [{k: f.get(k) for k in ("check", "validation_type", "message", "file")}
+                                        for f in errors]},
+            "tags": ["DBT", "VALIDATION", "FIXED"]}
+
+
 def keep(session, domain_id: Optional[str], item: Optional[Dict[str, Any]], origin: str,
          run_id: Optional[str] = None, mode: Optional[str] = None) -> Optional[str]:
     """Write one item through the learning policy; the KNOWLEDGE_ID, or None (nothing to keep, or it failed)."""

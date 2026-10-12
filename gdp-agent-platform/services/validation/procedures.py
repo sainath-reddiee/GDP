@@ -86,6 +86,36 @@ POST_STTM_VALIDATE = (
 )
 
 
+def fixed_findings(summary_json: Any) -> List[Dict[str, Any]]:
+    """The findings of a stored SUMMARY validation (RESULT_JSON {results}), each with its check type. Pure."""
+    from services.common.sql import variant
+
+    out = []
+    for r in (variant(summary_json) or {}).get("results") or []:
+        for f in r.get("findings") or []:
+            out.append({**f, "validation_type": r.get("validation_type")})
+    return out
+
+
+def _remember_fixed(session, run: Dict[str, Any], run_id: str) -> None:
+    """A pass after a failed validation of the same run: what failed was fixed, so keep it as DBT_PATTERN knowledge
+    for this target's next generation and review. Never fails the validation."""
+    if not run.get("DOMAIN_ID"):
+        return
+    try:
+        found = rows(session, """SELECT RESULT_JSON FROM CODEGEN.VALIDATION_RUN
+                                  WHERE RUN_ID = ? AND VALIDATION_TYPE = 'SUMMARY' AND STATUS = 'FAILED'
+                                  ORDER BY COMPLETED_AT DESC LIMIT 1""", [run_id])
+        if not found:
+            return
+        from services.knowledge.signals import keep, validation_fixed
+
+        keep(session, run["DOMAIN_ID"], validation_fixed((run.get("TARGET_MODEL") or "").split(".")[-1] or None,
+                                                         fixed_findings(found[0]["RESULT_JSON"])), "DBT", run_id)
+    except Exception:
+        pass
+
+
 def validate_dbt(session, run_id: str) -> Dict[str, Any]:
     stage = Stage(session, run_id)
     stage.require(*POST_STTM_VALIDATE)
@@ -127,6 +157,8 @@ def validate_dbt(session, run_id: str) -> Dict[str, Any]:
             stage.fail(exc)
             return {"state": stage.payload()}
     next_state = "VALIDATION_PASSED" if status == "PASSED" else "VALIDATION_FAILED"
+    if status == "PASSED":
+        _remember_fixed(session, stage.run, run_id)
     if walked:
         stage.move(next_state, call.summary, {"errors": errors, "warnings": warnings}, in_transaction=write)
         if next_state == "VALIDATION_PASSED":

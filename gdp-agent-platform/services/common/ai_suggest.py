@@ -37,8 +37,11 @@ class Spec:
         return {"type": "object", "properties": {"items": {"type": "array", "items": self.item_schema}},
                 "required": ["items"]}
 
-    def prompt(self, context: Dict[str, Any], rejected: List[str]) -> str:
+    def prompt(self, context: Dict[str, Any], rejected: List[str], elsewhere: Optional[List[str]] = None) -> str:
         avoid = ("\nDo not suggest these again (a reviewer rejected them): " + "; ".join(rejected[:40])) if rejected else ""
+        if elsewhere:
+            avoid += ("\nReviewers rejected these suggestions for the same columns elsewhere; do not repeat them "
+                      "without new evidence: " + "; ".join(elsewhere[:20]))
         return (f"{self.instructions}\n\nOnly suggest where you disagree with or add to the RULE RESULT shown. "
                 f"known_rules and accepted_column_rules in the context are what reviewers already accepted for this "
                 f"domain and these objects: follow them, never suggest the opposite. "
@@ -73,6 +76,35 @@ def decisions(session, stage: str, scope_key: str) -> Dict[str, Dict[str, Any]]:
     return out
 
 
+def mentioned(item_key: str, context_text: str) -> bool:
+    """Whether a decision's subject (the first part of its item key, usually a column) appears in a context. Pure."""
+    import re
+
+    subject = str(item_key or "").split("|")[0].strip().upper()
+    return bool(subject) and re.search(rf"(?<![A-Z0-9_]){re.escape(subject)}(?![A-Z0-9_])", context_text.upper()) is not None
+
+
+def rejected_elsewhere(session, stage: str, scope_key: str, context: Dict[str, Any]) -> List[str]:
+    """Suggestions of this stage reviewers rejected in other scopes (other source tables, other targets) for subjects
+    this context also has, with their reasons: a rejected PII flag on CUSTOMER.EMAIL is evidence for VENDOR.EMAIL."""
+    try:
+        found = rows(session, """SELECT SCOPE_KEY, ITEM_KEY, NOTE FROM CORE.AI_SUGGESTION_DECISION
+                                  WHERE STAGE = ? AND SCOPE_KEY <> ?
+                                QUALIFY ROW_NUMBER() OVER (PARTITION BY SCOPE_KEY, ITEM_KEY ORDER BY DECIDED_AT DESC) = 1
+                                    AND DECISION = 'REJECTED'
+                                  ORDER BY DECIDED_AT DESC LIMIT 300""", [stage, scope_key])
+    except Exception:
+        return []
+    text = json.dumps(context, default=str)
+    out = []
+    for r in found:
+        if mentioned(r["ITEM_KEY"], text):
+            out.append(f"{r['ITEM_KEY']} in {r['SCOPE_KEY']}" + (f" (reason: {clip(r['NOTE'], 200)})" if r.get("NOTE") else ""))
+        if len(out) >= 20:
+            break
+    return out
+
+
 def suggest(session, spec: Spec, scope_key: str, context: Dict[str, Any], run_id: Optional[str] = None,
             refresh: bool = False, cached_only: bool = False) -> Dict[str, Any]:
     """Cached suggestions for one scope (usually a table) of one stage, with each item's review status.
@@ -86,9 +118,13 @@ def suggest(session, spec: Spec, scope_key: str, context: Dict[str, Any], run_id
                 "error": None}
     if result is None:
         started = time.time()
-        rejected = [k for k, v in verdicts.items() if v["decision"] == "REJECTED"]
+        rejected = [k + (f" (reason: {clip(v['note'], 200)})" if v.get("note") else "")
+                    for k, v in verdicts.items() if v["decision"] == "REJECTED"]
         try:
-            output, usage, used = complete_json(session, spec.prompt(context, rejected), spec.schema, max_tokens=4000, stage="SUGGESTIONS")
+            output, usage, used = complete_json(session, spec.prompt(context, rejected,
+                                                                     rejected_elsewhere(session, spec.stage, scope_key,
+                                                                                        context)),
+                                                spec.schema, max_tokens=4000, stage="SUGGESTIONS")
         except Exception as exc:
             return {"suggestion_id": None, "items": [], "model": model, "cached": False,
                     "error": f"AI suggestions unavailable: {clip(exc, 300)}"}
