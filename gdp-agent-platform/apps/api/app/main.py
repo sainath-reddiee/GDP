@@ -3798,9 +3798,26 @@ def review_dbt(run_id: str, body: DbtReview, db: Db = Depends(current_db)):
     except Exception as exc:
         raise _snowflake_error(exc) from exc
     reviewed["code_citations"] = code["citations"]
+    _keep_dbt_findings(db, run_id, path, reviewed.get("findings") or [])
     _record_cost(db, run_id, "DBT", reviewed.get("model"),
                  {**(reviewed.get("usage") or {}), "query_id": ids[-1] if ids else None}, started)
     return reviewed
+
+
+def _keep_dbt_findings(db: Db, run_id: str, path: str, findings: list) -> None:
+    """Errors and warnings an AI review found, as DBT_PATTERN knowledge for this target's next generation and
+    review. Never fails the review."""
+    from services.knowledge.signals import dbt_review_item, keep
+
+    try:
+        run = db.query("SELECT DOMAIN_ID, TARGET_MODEL FROM CORE.WORKFLOW_RUN WHERE RUN_ID = %s", (run_id,))
+        if not run or not run[0].get("domain_id"):
+            return
+        item = dbt_review_item(run[0].get("target_model"), path, findings)
+        if item:
+            invoke_source(db, lambda session: keep(session, run[0]["domain_id"], item, "DBT", run_id))
+    except Exception:
+        pass
 
 
 @app.post("/api/runs/{run_id}/dbt/enhance")

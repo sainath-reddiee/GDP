@@ -352,6 +352,12 @@ def reject(session, model_id: str, version: int, user: str, reason: str) -> Dict
                 params=[user.upper(), clip(reason, 2000), model_id, int(version)]).collect()
     session.sql(f"UPDATE {MODELS} SET OPEN_VERSION = NULL, UPDATED_AT = CURRENT_TIMESTAMP() WHERE MODEL_ID = ?",
                 params=[model_id]).collect()
+    from services.knowledge.signals import keep, model_rejection
+
+    header = _header(session, model_id)
+    touched = list((found.get("review_summary") or {}).get("entities_touched") or [])
+    keep(session, header.get("domain_id"), model_rejection(header["domain_name"], int(version), reason, touched),
+         "MODELING")
     return {"model_id": model_id, "version": int(version), "status": "REJECTED"}
 
 

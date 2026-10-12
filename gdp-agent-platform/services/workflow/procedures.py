@@ -353,6 +353,13 @@ def review_transition(session, run_id: str, to_state: str, decision: str,
 
     result = _apply_transition(session, graph, run, to_state, "HUMAN", f"review: {decision}",
                                details, in_transaction=record_review)
+    if decision != "APPROVE" and run.get("DOMAIN_ID"):  # the reason is knowledge for this stage's next runs
+        from services.knowledge.signals import gate_feedback, keep
+
+        keep(session, run["DOMAIN_ID"], gate_feedback(run, graph.states[from_state].stage, from_state, decision,
+                                                      justification, comments,
+                                                      (run.get("TARGET_MODEL") or "").split(".")[-1] or None),
+             "REVIEW", run_id)
     if from_state == "DBT_REVIEW" and to_state == "DBT_APPROVED" and decision == "APPROVE":
         _apply_transition(session, graph, _get_run(session, run_id), "COMPLETED", "SYSTEM",
                           "phase 1 complete after dbt approval", {})

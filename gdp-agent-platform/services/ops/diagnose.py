@@ -509,8 +509,18 @@ def postmortem(session: Any, incident_id: str, actor: str = "system", *,
         raise
     _cost(sess, model, usage, started)
     markdown = postmortem_markdown(incident, output if isinstance(output, dict) else {}, timeline, ctx.get("impact") or {})
-    try:
-        SqlStore(db).event(incident_id, "postmortem_drafted", actor, {"model": model, "chars": len(markdown)})
+    try:  # the draft is kept on the incident (it used to be returned and lost)
+        SqlStore(db).event(incident_id, "postmortem_drafted", actor,
+                           {"model": model, "chars": len(markdown), "markdown": markdown[:16000]})
+    except Exception:
+        pass
+    try:  # the cause and follow-ups, keyed by the incident's fingerprint, for a steward to approve
+        from services.knowledge.signals import keep, postmortem_item
+        from services.ops.resolution import domain_for
+
+        item = postmortem_item(incident, output if isinstance(output, dict) else {})
+        if item:
+            keep(sess, domain_for(db, sess, incident), item, "OPS", mode="review")
     except Exception:
         pass
     _audit(sess, "ops_postmortem", inputs, f"{len(markdown)} chars")
