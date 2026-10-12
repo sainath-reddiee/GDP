@@ -56,19 +56,30 @@ def propose(session, run_id: str, design_version: int, user: str) -> Dict[str, A
     assert not errors, f"fix {len(errors)} problem(s) before proposing: {errors[0]['message']}"
     assert design.get("entities"), "the design has no entities"
     primary = str(design.get("primary_entity") or design["entities"][0]["entity_name"]).upper()
-    incoming = run_entities(design)
-    model = _model_for(session, run["DOMAIN_ID"])
+    return propose_entities(session, run["DOMAIN_ID"], run_entities(design), primary, user, run_id=run_id,
+                            design_version=design_version, label=f"run {run.get('RUN_NAME') or run_id}")
+
+
+def propose_entities(session, domain_id: str, incoming: Dict[str, Any], primary: str, user: str, *,
+                     run_id: Optional[str] = None, design_version: int = 0, table_model_id: Optional[str] = None,
+                     table_model_version: Optional[int] = None, label: str = "") -> Dict[str, Any]:
+    """Raw v2 entities (`incoming`) proposed to the domain's model, from a run's design or from a table model of the
+    Model Store. No change means the proposer can use the approved model now (pinned); otherwise a MODEL_CHANGE is
+    recorded for the modelers (an earlier undecided proposal from the same run or table model is withdrawn)."""
+    model = _model_for(session, domain_id)
     if not model:
-        domain_model.baseline(session, run["DOMAIN_ID"], user)
-        model = _model_for(session, run["DOMAIN_ID"])
+        domain_model.baseline(session, domain_id, user)
+        model = _model_for(session, domain_id)
+    source = {"run_id": run_id, "design_version": design_version, "table_model_id": table_model_id,
+              "table_model_version": table_model_version}
     if not model:  # the domain registers nothing yet: the proposal becomes the model's first draft
-        domain = rows(session, "SELECT DOMAIN_NAME FROM KNOWLEDGE.DOMAIN_REGISTRY WHERE DOMAIN_ID = ?", [run["DOMAIN_ID"]])
+        domain = rows(session, "SELECT DOMAIN_NAME FROM KNOWLEDGE.DOMAIN_REGISTRY WHERE DOMAIN_ID = ?", [domain_id])
         spec = spec_v2.normalize_v2({**incoming, "domain": domain[0]["DOMAIN_NAME"] if domain else ""},
-                                    domain_model.model_id_for(run["DOMAIN_ID"]))
-        created = domain_model.create_model(session, run["DOMAIN_ID"], json.dumps({"spec": spec, "origin": "RUN",
-                                            "change_note": f"First draft, proposed by run {run.get('RUN_NAME') or run_id}"}), user)
-        change_id = _record(session, created["model_id"], None, run_id, design_version, primary, spec, model_diff.diff(None, spec),
-                            "MERGED", 1)
+                                    domain_model.model_id_for(domain_id))
+        created = domain_model.create_model(session, domain_id, json.dumps({"spec": spec, "origin": "RUN",
+                                            "change_note": f"First draft, proposed by {label or 'a run'}"}), user)
+        change_id = _record(session, created["model_id"], None, primary, spec, model_diff.diff(None, spec), "MERGED", 1,
+                            **source)
         return {"model_id": created["model_id"], "change_id": change_id, "status": "MERGED", "merged_into": 1, "pinned": False}
     model_id, approved = model["MODEL_ID"], model.get("APPROVED_VERSION")
     base = domain_model._spec(session, model_id, int(approved)) if approved else None
@@ -79,25 +90,36 @@ def propose(session, run_id: str, design_version: int, user: str) -> Dict[str, A
         entity = next((e for e in proposed["design"]["entities"] if e["entity_name"] == primary), None)
         return {"model_id": model_id, "pinned": True, "version": int(approved), "entity": primary,
                 "target_model": ".".join(p for p in (*spec_v2.placement(proposed, entity), primary) if p) if entity else None}
-    session.sql(f"""UPDATE {CHANGES} SET STATUS = 'WITHDRAWN', DECIDED_BY = ?, DECIDED_AT = CURRENT_TIMESTAMP()
-                     WHERE RUN_ID = ? AND STATUS = 'PROPOSED'""", params=[user.upper(), run_id]).collect()
-    change_id = _record(session, model_id, approved, run_id, design_version, primary, proposed, changes, "PROPOSED", None)
+    if table_model_id:
+        session.sql(f"""UPDATE {CHANGES} SET STATUS = 'WITHDRAWN', DECIDED_BY = ?, DECIDED_AT = CURRENT_TIMESTAMP()
+                         WHERE TABLE_MODEL_ID = ? AND STATUS = 'PROPOSED'""", params=[user.upper(), table_model_id]).collect()
+    else:
+        session.sql(f"""UPDATE {CHANGES} SET STATUS = 'WITHDRAWN', DECIDED_BY = ?, DECIDED_AT = CURRENT_TIMESTAMP()
+                         WHERE RUN_ID = ? AND STATUS = 'PROPOSED'""", params=[user.upper(), run_id]).collect()
+    change_id = _record(session, model_id, approved, primary, proposed, changes, "PROPOSED", None, **source)
     return {"model_id": model_id, "change_id": change_id, "status": "PROPOSED", "pinned": False,
             "counts": changes["counts"], "breaking": changes["breaking"]}
 
 
-def _record(session, model_id: str, base: Optional[int], run_id: str, design_version: int, primary: str,
-            spec: Dict[str, Any], changes: Dict[str, Any], status: str, merged_into: Optional[int]) -> str:
+def _record(session, model_id: str, base: Optional[int], primary: str, spec: Dict[str, Any], changes: Dict[str, Any],
+            status: str, merged_into: Optional[int], *, run_id: Optional[str] = None, design_version: int = 0,
+            table_model_id: Optional[str] = None, table_model_version: Optional[int] = None) -> str:
     touched = set(changes.get("entities_touched") or []) | {primary}
     entities = [e for e in spec["design"]["entities"] if e["entity_name"] in touched]
     change_id = str(uuid.uuid4())
-    insert_rows(session, CHANGES, ["CHANGE_ID", "MODEL_ID", "BASE_VERSION", "RUN_ID", "RUN_DESIGN_VERSION", "TARGET_ENTITY",
-                                   "PROPOSED_ENTITIES", "DIFF", "STATUS", "MERGED_INTO_VERSION"],
-                ["?", "?", "NULLIF(?, '')::NUMBER", "?", "?::NUMBER", "?", "PARSE_JSON(?)", "PARSE_JSON(?)", "?",
-                 "NULLIF(?, '')::NUMBER"],
-                [[change_id, model_id, base if base else "", run_id, int(design_version), primary, entities,
-                  {"counts": changes["counts"], "breaking": changes["breaking"], "changes": changes["changes"][:200]},
-                  status, merged_into if merged_into else ""]])
+    columns = ["CHANGE_ID", "MODEL_ID", "BASE_VERSION", "RUN_ID", "RUN_DESIGN_VERSION", "TARGET_ENTITY",
+               "PROPOSED_ENTITIES", "DIFF", "STATUS", "MERGED_INTO_VERSION"]
+    exprs = ["?", "?", "NULLIF(?, '')::NUMBER", "NULLIF(?, '')", "NULLIF(?, '')::NUMBER", "?", "PARSE_JSON(?)",
+             "PARSE_JSON(?)", "?", "NULLIF(?, '')::NUMBER"]
+    values = [change_id, model_id, base if base else "", run_id or "", int(design_version) if design_version else "",
+              primary, entities, {"counts": changes["counts"], "breaking": changes["breaking"],
+                                  "changes": changes["changes"][:200]},
+              status, merged_into if merged_into else ""]
+    if table_model_id:  # V044
+        columns += ["SOURCE", "TABLE_MODEL_ID", "TABLE_MODEL_VERSION"]
+        exprs += ["'TABLE_MODEL'", "?", "NULLIF(?, '')::NUMBER"]
+        values += [table_model_id, int(table_model_version) if table_model_version else ""]
+    insert_rows(session, CHANGES, columns, exprs, [values])
     return change_id
 
 
@@ -108,16 +130,21 @@ def list_changes(session, model_id: str) -> List[Dict[str, Any]]:
                      R.RUN_NAME, R.CURRENT_STATE{{extra}}
                 FROM {CHANGES} C LEFT JOIN CORE.WORKFLOW_RUN R ON R.RUN_ID = C.RUN_ID
                WHERE C.MODEL_ID = ? ORDER BY C.CREATED_AT DESC LIMIT 200"""
-    try:
-        found = rows(session, sql.format(extra=", C.SOURCE, C.ANNOTATION_ID, C.PATCH"), [model_id])
-    except Exception:  # before V041
-        found = rows(session, sql.format(extra=""), [model_id])
+    found = None
+    for extra in (", C.SOURCE, C.ANNOTATION_ID, C.PATCH, C.TABLE_MODEL_ID, C.TABLE_MODEL_VERSION",
+                  ", C.SOURCE, C.ANNOTATION_ID, C.PATCH", ""):  # V044, V041, before
+        try:
+            found = rows(session, sql.format(extra=extra), [model_id])
+            break
+        except Exception:
+            if not extra:
+                raise
     out = []
     for r in found:
         c = {str(k).lower(): v for k, v in r.items()}
         c["diff"] = variant(c.get("diff")) or {}
         c["patch"] = variant(c.get("patch"))
-        c["source"] = c.get("source") or "RUN"
+        c["source"] = c.get("source") or ("TABLE_MODEL" if c.get("table_model_id") else "RUN")
         c["created_at"] = str(c["created_at"])[:19] if c.get("created_at") else None
         out.append(c)
     return out

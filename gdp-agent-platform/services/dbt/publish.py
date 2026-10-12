@@ -491,6 +491,50 @@ def publish_sttm(session, request: Dict[str, Any]) -> Dict[str, Any]:
     return {**result, "files": sorted(files), "recorded": recorded}
 
 
+def publish_table_model(session, request: Dict[str, Any]) -> Dict[str, Any]:
+    """A table model version (Model Store) as its DDL and dbt files on a branch feature/model-<table>-v<version> with a
+    pull request. The files are rendered here from the stored version, so only what was saved in the app is pushed;
+    the version becomes PUBLISHED when the pull request is merged (GOVERNANCE.GIT_PR sync)."""
+    from services.modeling import table_model
+
+    model_id, version = str(request.get("table_model_id") or ""), int(request.get("version") or 0)
+    head = github.check_branch(str(request.get("head") or ""))
+    assert head.startswith("feature/model-"), "a model branch starts with feature/model-"
+    header = table_model._header(session, model_id)
+    spec = table_model._spec(session, model_id, version, header)
+    problems = [i for i in table_model.validate(spec) if i.get("severity") == "ERROR"]
+    assert not problems, f"fix {len(problems)} problem(s) before publishing: {problems[0]['message']}"
+    files = table_model.files(spec, header.get("model_layer") or "SILVER")
+    repo_id = str(request.get("repo_id") or "")
+    repo = _repo(session, repo_id)
+    origin, base_branch = repo["GIT_URL"], str(request.get("base") or repo["BRANCH"] or "main")
+    name = f"{header['source_name']}.{header['table_name']}"
+    title = clip(request.get("title") or f"Table model {name} v{version}", 200)
+    body = clip(f"Table model {name} v{version} ({header.get('model_layer')}, {header.get('table_type')}), saved in the "
+                f"Model Store (table model {model_id}).\n\nFiles:\n" + "\n".join(f"- {p}" for p in sorted(files)), 6000)
+    with tool_call(session, None, "publish_table_model", {"table_model_id": model_id, "version": version, "head": head}) as call:
+        try:
+            result = github.publish(github.urllib_request(_token()), origin, base_branch, head, files, title=title,
+                                    body=body, message=title, draft=False)
+            call.summary = f"{result['status']} {head}: PR {(result.get('pull_request') or {}).get('url') or 'none'}"
+        except Exception as exc:
+            result = {**github.explain(exc, origin), "base_branch": base_branch, "head_branch": head}
+            result["detail"] = clip(result.get("detail"), 1000)
+            call.status, call.error = "FAILED", clip(exc)
+    result.setdefault("base_branch", base_branch)
+    state, pr = roundtrip.outcome(result)
+    session.sql(f"""UPDATE {table_model.VERSIONS} SET STATUS = IFF(? = 'NO_CHANGES', 'PUBLISHED', STATUS), REPO_ID = ?,
+                           BRANCH = ?, PR_URL = NULLIF(?, ''), PR_NUMBER = NULLIF(?, '')::NUMBER, PR_STATE = ?,
+                           PR_SYNCED_AT = CURRENT_TIMESTAMP()
+                     WHERE TABLE_MODEL_ID = ? AND VERSION = ?""",
+                params=[state or "", repo_id, head, pr.get("url") or "", str(pr.get("number") or ""), state,
+                        model_id, version]).collect()
+    recorded = roundtrip.record(session, "TABLE_MODEL", model_id, version, result, asset_name=name,
+                                domain_id=header.get("domain_id"), repo_id=repo_id, branch=head, title=title,
+                                files=list(files))
+    return {**result, "files": sorted(files), "recorded": recorded}
+
+
 def sync_git_prs(session, request: Dict[str, Any]) -> Dict[str, Any]:
     """Every governed pull request (the scheduled task and the Source control page): with V043 one pass over
     GOVERNANCE.GIT_PR, which also updates each asset's own version table; before it, each asset's own sync."""
@@ -538,6 +582,8 @@ def publish_dbt_pr(session, run_id: str, payload_json: str = "{}") -> Dict[str, 
         return sync_qa_prs(session, payload["sync_qa_prs"])
     if not run_id and isinstance(payload.get("sttm"), dict):
         return publish_sttm(session, payload["sttm"])
+    if not run_id and isinstance(payload.get("table_model"), dict):
+        return publish_table_model(session, payload["table_model"])
     if not run_id and isinstance(payload.get("sync_git_prs"), dict):
         return sync_git_prs(session, payload["sync_git_prs"])
     plan = _plan(session, run_id, payload) if run_id else dict(payload)

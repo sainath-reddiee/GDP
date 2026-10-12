@@ -15,7 +15,7 @@ export function RunModels({ models }: { models: RunModel[] }) {
   return (
     <section className="surface overflow-hidden" data-testid="run-models">
       <Table>
-        <THead><TR><TH>Run</TH><TH>Design</TH><TH>Entities</TH><TH>Domain</TH><TH>Published</TH><TH>Saved</TH></TR></THead>
+        <THead><TR><TH>Run</TH><TH>Design</TH><TH>Entities</TH><TH>Domain</TH><TH>Published</TH><TH>Saved</TH><TH /></TR></THead>
         <TBody>
           {models.map((m) => (
             <TR key={m.design_id} className="align-top">
@@ -29,6 +29,7 @@ export function RunModels({ models }: { models: RunModel[] }) {
               <TD>{m.domain_name ?? "-"}</TD>
               <TD>{m.publication_status ? <span className="flex items-center gap-2"><StatusPill status={m.publication_status} /><Pr url={m.pr_url} number={m.pr_number} branch={m.head_branch} /></span> : <span className="text-muted-foreground">not yet</span>}</TD>
               <TD className="whitespace-nowrap text-xs text-muted-foreground">{m.created_at.slice(0, 16)}<br />{m.approved_by ? `approved by ${m.approved_by}` : m.created_by}</TD>
+              <TD className="whitespace-nowrap text-xs"><Link href={`/dashboard/modeling?view=tables&run=${encodeURIComponent(m.run_id)}`} className="text-primary hover:underline">Table models</Link></TD>
             </TR>
           ))}
         </TBody>

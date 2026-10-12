@@ -31,6 +31,9 @@ KINDS: Dict[str, Dict[str, Any]] = {
     "DQ_SUITE": {"label": "Data quality suite", "table": "GOVERNANCE.DQ_SUITE_VERSION", "key": "SUITE_ID", "publishes": True},
     "QA_PACK": {"label": "QA pack", "table": "GOVERNANCE.DOMAIN_QA_PACKS", "key": "PACK_ID", "publishes": False},
     "STTM": {"label": "STTM mapping", "table": None, "key": None, "publishes": False},
+    # table model versions are published without an approval of their own (the domain model is the governed asset)
+    "TABLE_MODEL": {"label": "Table model", "table": "GOVERNANCE.TABLE_MODEL_VERSION", "key": "TABLE_MODEL_ID",
+                    "publishes": True, "from": ("DRAFT", "PUBLISHED")},
 }
 
 
@@ -84,7 +87,7 @@ def apply_state(session, kind: str, asset_id: str, version: int, state: str, mer
     publish = k["publishes"] and state == "MERGED"
     session.sql(f"""UPDATE {k['table']} SET PR_STATE = ?, MERGED_SHA = NULLIF(?, ''), PR_SYNCED_AT = CURRENT_TIMESTAMP()
                            {", STATUS = 'PUBLISHED'" if publish else ""}
-                     WHERE {k['key']} = ? AND VERSION = ?{" AND STATUS IN ('APPROVED', 'PUBLISHED')" if k['publishes'] else ""}""",
+                     WHERE {k['key']} = ? AND VERSION = ?{f" AND STATUS IN {k.get('from', ('APPROVED', 'PUBLISHED'))}" if k['publishes'] else ""}""",
                 params=[state, merged_sha or "", asset_id, int(version)]).collect()
 
 
@@ -160,7 +163,8 @@ def link(kind: str, asset_id: str, version: int) -> str:
     return {"MODEL": f"/dashboard/modeling/{asset_id}?tab=publish",
             "DQ_SUITE": f"/dashboard/dq-store/suite?suite={asset_id}",
             "QA_PACK": "/dashboard/qa-store",
-            "STTM": f"/dashboard/sttm/{asset_id}?version={version}"}.get(kind, "/dashboard")
+            "STTM": f"/dashboard/sttm/{asset_id}?version={version}",
+            "TABLE_MODEL": f"/dashboard/modeling/tables/{asset_id}?version={version}"}.get(kind, "/dashboard")
 
 
 def list_sql(kind: Optional[str] = None, state: Optional[str] = None, domain_id: Optional[str] = None,

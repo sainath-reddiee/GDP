@@ -302,6 +302,12 @@ RULES: List[Tuple[str, str, Any, str]] = [
     ("POST", r"/api/hub/domain-models/[^/]+/versions/\d+/publish", "MODEL.EDIT", "Open a pull request for an approved domain model"),
     ("POST", r"/api/hub/domain-models/[^/]+/pr-sync", None, ""),
     ("POST", r"/api/hub/domain-models/[^/]+/changes/[^/]+/(merge|reject)", "MODEL.EDIT", "Decide a run's model proposal"),
+    ("POST", r"/api/hub/table-models/[^/]+/render", None, ""),
+    ("POST", r"/api/hub/table-models/[^/]+/suggest", "AI.USE", ""),
+    ("POST", r"/api/hub/table-models", "MODEL.EDIT", "Create a table model"),
+    ("PUT", r"/api/hub/table-models/[^/]+(/layout|/domain)?", "MODEL.EDIT", "Edit a table model"),
+    ("POST", r"/api/hub/table-models/[^/]+/versions/\d+/propose", "MODEL.EDIT", "Propose a table model to its domain model"),
+    ("POST", r"/api/hub/table-models/[^/]+/versions/\d+/publish", "MODEL.EDIT", "Open a pull request for a table model"),
     ("POST", r"/api/hub/models/propose", "AI.USE", ""),
     ("POST", r"/api/hub/models/(validate|render)", None, ""),
     ("POST", r"/api/hub/models/[^/]+/publish", "DBT.EDIT", "Publish a model design as a Git branch and pull request"),
@@ -397,6 +403,7 @@ STORE_APPROVERS = {"STTM.EDIT": "STTM_APPROVER", "SODA.EDIT": "DQ_APPROVER", "DB
 # for its own approval.
 NO_QUEUE_ROUTES = [(m, re.compile(p)) for m, p in [
     ("POST", r"^/api/hub/domain-models(/.*)?$"), ("PUT", r"^/api/hub/domain-models/.+$"),
+    ("POST", r"^/api/hub/table-models(/.*)?$"), ("PUT", r"^/api/hub/table-models/.+$"),
     ("POST", r"^/api/dq/catalog$"), ("POST", r"^/api/dq/catalog/seed$"), ("POST", r"^/api/dq/catalog/[^/]+/status$"),
     ("POST", r"^/api/dq/suites/.+$"), ("PUT", r"^/api/dq/suites/.+$"),
     ("POST", r"^/api/hub/profiles/annotations(/.*)?$"),

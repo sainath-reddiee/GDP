@@ -42,7 +42,7 @@ def list_prs(kind: Optional[str] = None, state: Optional[str] = None, domain: Op
 
 
 class SyncIn(BaseModel):
-    kind: Optional[Literal["MODEL", "DQ_SUITE", "QA_PACK", "STTM"]] = None
+    kind: Optional[Literal["MODEL", "DQ_SUITE", "QA_PACK", "STTM", "TABLE_MODEL"]] = None
     force: bool = True
 
 

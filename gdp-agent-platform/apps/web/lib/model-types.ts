@@ -67,3 +67,38 @@ export type DmImpact = {
   items: { entity: string; column: string | null; kind: string; refs: Record<string, Record<string, unknown>[]>; total: number }[];
   totals: Record<string, number>; unavailable: string[]; labels: Record<string, string>;
 };
+
+// Table Model Store (services/modeling/table_model.py, V044): one versioned single-table model per source system and table.
+
+export type TmLayer = "LANDING" | "BRONZE" | "SILVER" | "GOLD";
+export type TmTableType = "ICEBERG" | "STANDARD" | "DYNAMIC_TABLE";
+export const TM_CLASSIFICATIONS = ["BUSINESS_KEY", "SURROGATE_KEY", "ATTRIBUTE", "AUDIT_TIMESTAMP", "MEASURE", "RECORD_SOURCE"] as const;
+export type TmHeader = {
+  table_model_id: string; table_name: string; source_id: string | null; source_name: string; source_tables: string[];
+  domain_id: string | null; domain_name: string | null; origin: "RUN" | "ADHOC" | "IMPORT"; origin_run_id: string | null;
+  origin_run_name: string | null; last_run_id: string | null; model_layer: TmLayer; table_type: TmTableType;
+  current_version: number | null; etag: string | null; diagram_layout: Record<string, { x: number; y: number }>;
+  linked_model_id: string | null; linked_entity: string | null; last_change_id: string | null;
+  created_by: string | null; created_at: string | null; updated_by: string | null; updated_at: string | null;
+};
+export type TmListRow = Omit<TmHeader, "diagram_layout" | "etag"> & {
+  status: "DRAFT" | "PUBLISHED" | null; branch: string | null; pr_url: string | null; pr_state: string | null;
+  version_at: string | null; columns: number; primary_keys: string[]; errors: number;
+};
+export type TmVersion = {
+  version: number; status: "DRAFT" | "PUBLISHED"; checksum: string | null; issues: DmIssue[]; change_note: string | null;
+  change_summary: { counts: Record<ChangeClass, number>; breaking: boolean } | null; origin: string | null;
+  origin_run_id: string | null; run_design_version: number | null; repo_id: string | null; branch: string | null;
+  pr_url: string | null; pr_number: number | null; pr_state: string | null; created_by: string | null; created_at: string | null;
+};
+export type TmRendered = { ddl: string; dbt: Record<string, string> };
+export type TmDetail = {
+  model: TmHeader; versions: TmVersion[];
+  current: (TmVersion & TmRendered & { spec: DmSpec; issues: DmIssue[]; summary: { entities: number; columns: number; relationships: number; retired: number } }) | null;
+};
+export type TmRelated = { model_id: string | null; version?: number; entities: DmEntity[]; relationships: DmRelationship[]; in_domain_model?: boolean };
+export type TmSourceTable = {
+  landing_id: string; run_id: string; source_system_id: string; source_name: string; domain_id: string | null; source_database: string;
+  source_schema: string; source_table: string; row_count: number | null; ingested_at: string | null; table_model_id: string; exists: boolean;
+};
+export type TmSuggestion = { column: string; classification: string | null; description: string | null; reason: string; item_key: string };
