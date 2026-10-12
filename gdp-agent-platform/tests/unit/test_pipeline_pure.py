@@ -185,8 +185,11 @@ def test_reviewer_feedback_becomes_a_pattern():
                             "MODIFIED", "TRIM(cust_id)", "enterprise key", "CUSTOMER_NAME")
     assert item["active"] and item["content_json"]["overridden"]
     assert item["source_reference"] == "feedback.DIM_CUSTOMER.CRM_CUSTOMER.CUST_ID"
+    # a rejected proposal is kept as an anti-pattern; a rejection with nothing proposed retires the old pattern
     rejected = feedback_pattern("PHONE_NO", "CRM_CUSTOMER", None, "DIM_CUSTOMER", "REJECTED", None, None, "PHONE")
-    assert rejected["active"] is False
+    assert rejected["active"] is True and rejected["content_json"]["rejected_target"] == "PHONE"
+    nothing = feedback_pattern("PHONE_NO", "CRM_CUSTOMER", None, "DIM_CUSTOMER", "REJECTED", None, None, None)
+    assert nothing["active"] is False
 
 
 def test_mapping_skill_blocks_destructive_sql():

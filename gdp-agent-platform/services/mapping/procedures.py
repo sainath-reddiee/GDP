@@ -23,7 +23,7 @@ from services.common.standard import run_standard
 from services.knowledge.usage import assert_safe_transformation, domain_context, use_stage
 from services.knowledge.writer import forget, record_usage, remember
 from services.mapping import features, scoring
-from services.mapping.feedback import pattern as feedback_pattern
+from services.mapping.feedback import anti_pattern, pattern as feedback_pattern
 
 DECISIONS = {"APPROVED", "REJECTED", "MODIFIED", "ALTERNATIVE_TARGET"}
 EMBED_MODEL_DEFAULT = "snowflake-arctic-embed-l-v2.0"
@@ -94,7 +94,8 @@ def source_columns(session, run_id: str) -> List[Dict[str, Any]]:
 def domain_knowledge(session, domain_id: str, run_id: str, target: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Knowledge for one run. Learned evidence (reviewer patterns, past decisions) is scoped to the run's domain and
     target table, so a column name approved for one company's table never steers an unrelated table."""
-    knowledge: Dict[str, Any] = {"glossary": {}, "rules": {}, "transforms": [], "history": [], "notes": []}
+    knowledge: Dict[str, Any] = {"glossary": {}, "rules": {}, "transforms": [], "history": [], "notes": [],
+                                 "avoid": set()}
     target_name = str((target or {}).get("TARGET_TABLE") or "").upper()
     used: List[str] = []
     from services.knowledge.writer import NOT_OPERATIONAL_SQL
@@ -128,6 +129,12 @@ def domain_knowledge(session, domain_id: str, run_id: str, target: Optional[Dict
                 bucket[column] = content
         elif kind == "TRANSFORMATION_RULE":
             knowledge["transforms"].append(content)
+        elif kind == "MAPPING_PATTERN" and anti_pattern(content):
+            src, rejected = anti_pattern(content)
+            knowledge["avoid"].add((src.upper(), rejected.upper()))
+            knowledge["notes"].append(f"{src} is not {rejected} (a reviewer rejected that proposal"
+                                      + (f": {content.get('comments') or content.get('justification')}"
+                                         if content.get("comments") or content.get("justification") else "") + ")")
         elif kind == "MAPPING_PATTERN" and content.get("source_column") and content.get("target_column"):
             if target_name and content.get("target_table") and str(content["target_table"]).upper() != target_name:
                 continue
@@ -437,12 +444,12 @@ def _store_feedback(session, run: Dict[str, Any], targets: Dict[str, Dict[str, A
         proposed[r["SOURCE_COLUMN_ID"]] = r["COLUMN_NAME"]
     target_table_name = (next(iter(targets.values()), {}).get("table_name")
                          or (run.get("TARGET_MODEL") or "").split(".")[-1] or "TARGET")
-    for source_id, decision, _candidate, target_id, transformation, justification, _comments in prepared:
+    for source_id, decision, _candidate, target_id, transformation, justification, comments in prepared:
         src = names.get(source_id) or {}
         target_name = targets.get(target_id, {}).get("column_name") if target_id else None
         item = feedback_pattern(src.get("COLUMN_NAME") or source_id, src.get("SOURCE_TABLE") or "SOURCE",
                                 target_name, target_table_name, decision, transformation, justification,
-                                proposed.get(source_id))
+                                proposed.get(source_id), comments)
         if not item["active"]:
             forget(session, run["DOMAIN_ID"], item["source_reference"])
             continue

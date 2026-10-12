@@ -63,6 +63,39 @@ def _identified_payload(session, run_id: str, stage: Stage) -> Dict[str, Any]:
     return {"domain": domain, "state": stage.payload()}
 
 
+CONFIRMED_BOOST = 0.3  # confidence added per domain a person confirmed for this source system before (at most once)
+
+
+def apply_confirmations(ranked: List[Dict[str, Any]], confirmed: Dict[str, int]) -> List[Dict[str, Any]]:
+    """Domains a reviewer confirmed for this source system in earlier runs move up: their confidence gains
+    CONFIRMED_BOOST (capped at 1) and the evidence says why. Detection still has to find the domain; a confirmation
+    alone never adds a domain. Pure; returns the list re-sorted."""
+    for d in ranked:
+        n = int(confirmed.get(d["domain_id"]) or 0)
+        if n:
+            d["confidence"] = round(min(1.0, float(d["confidence"]) + CONFIRMED_BOOST), 4)
+            d["evidence"] = {**d.get("evidence", {}), "confirmed_before": n}
+            d["evidence"]["signals"] = [f"confirmed by a reviewer for this source in {n} earlier run(s)",
+                                        *(d["evidence"].get("signals") or [])]
+    return sorted(ranked, key=lambda x: (-x["confidence"], x["domain_name"]))
+
+
+def _confirmed(session, run: Dict[str, Any]) -> Dict[str, int]:
+    """Domain -> earlier runs of the same source system where a person (not detection) chose it."""
+    if not run.get("SOURCE_SYSTEM_ID"):
+        return {}
+    try:
+        found = rows(session, """SELECT R.DOMAIN_ID, COUNT(DISTINCT R.RUN_ID) AS N
+                                   FROM KNOWLEDGE.DOMAIN_RECOMMENDATION R
+                                   JOIN CORE.WORKFLOW_RUN W ON W.RUN_ID = R.RUN_ID
+                                  WHERE W.SOURCE_SYSTEM_ID = ? AND R.RUN_ID <> ? AND R.STATUS = 'ACCEPTED'
+                                    AND COALESCE(R.DECIDED_BY, 'SYSTEM') <> 'SYSTEM'
+                                  GROUP BY 1""", [run["SOURCE_SYSTEM_ID"], run["RUN_ID"]])
+    except Exception:
+        return {}
+    return {r["DOMAIN_ID"]: int(r["N"]) for r in found}
+
+
 def identify_domain(session, run_id: str) -> Dict[str, Any]:
     stage = Stage(session, run_id)
     if stage.state != "PROFILING_COMPLETE":
@@ -94,6 +127,7 @@ def identify_domain(session, run_id: str) -> Dict[str, Any]:
                 vocab = [d for d in vocab if d.get("signals") or d["domain_id"] == stamped]
             ranked = infer_domain(sorted({p["TABLE_NAME"] for p in profile}), [p["COLUMN_NAME"] for p in profile],
                                   vocab, hits)
+            ranked = apply_confirmations(ranked, _confirmed(session, stage.run))
             assert ranked, ("NO_DOMAIN_PACK: no knowledge pack applies to this run; map without a pack or create "
                             "one on the Domains page")
             threshold = float(config_value(session, "DOMAIN_CONFIDENCE_THRESHOLD", 0.3))

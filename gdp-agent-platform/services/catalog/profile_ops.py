@@ -406,8 +406,60 @@ def approve(session, annotation_id: str, user: str, note: str = "") -> Dict[str,
     if model and model.get("change_id"):
         session.sql(f"UPDATE {ANNOTATIONS} SET MODEL_ID = ?, MODEL_CHANGE_ID = ? WHERE ANNOTATION_ID = ?",
                     params=[model["model_id"], model["change_id"], annotation_id]).collect()
+    rules = learn_column_rule(session, a, user)
     return {"annotation_id": annotation_id, "status": "APPROVED", "table": a["table_fqn"], "column": a["column_name"],
-            "model": model}
+            "model": model, "column_rules": rules}
+
+
+def column_rule(annotation: Dict[str, Any], source_system_id: str) -> Optional[Dict[str, Any]]:
+    """An approved annotation as the COLUMN_RULE profiling applies (pure): semantic type and PII class override the
+    profiler for this source system's column; description and definition ride along for prompts. None when it sets
+    nothing profiling uses. The key matches accepted AI profiling suggestions, so the newest decision wins."""
+    table = _parts(annotation["table_fqn"])[-1].upper()
+    column = str(annotation["column_name"]).upper()
+    fields = {k: annotation.get(k) for k in ("semantic_type", "pii_classification") if annotation.get(k)}
+    if not fields:
+        return None
+    content = {"source_system_id": source_system_id, "source_table": table, "column_name": column, **fields,
+               **{k: annotation[k] for k in ("description", "business_definition") if annotation.get(k)},
+               "annotation_id": annotation.get("annotation_id")}
+    return {"key": f"column.{source_system_id}.{table}.{column}".upper(), "title": f"{table}.{column}",
+            "content": json.dumps(content), "content_json": content}
+
+
+def learn_column_rule(session, a: Dict[str, Any], user: str) -> int:
+    """Teach profiling the approved annotation: one COLUMN_RULE per source system that lands or reads this table.
+    Never fails the approval, which is already saved."""
+    from services.knowledge.procedures import GENERAL_DOMAIN, ensure_domain
+    from services.knowledge.writer import remember
+
+    db, schema, table = (_parts(a["table_fqn"]) + ["", "", ""])[:3]
+    try:
+        systems = rows(session, """SELECT DISTINCT L.SOURCE_SYSTEM_ID, S.DOMAIN_ID
+                                     FROM SOURCE.LANDING_TABLE_REGISTRY L
+                                     LEFT JOIN SOURCE.SOURCE_REGISTRY S ON S.SOURCE_SYSTEM_ID = L.SOURCE_SYSTEM_ID
+                                    WHERE UPPER(L.SOURCE_DATABASE) = UPPER(?) AND UPPER(L.SOURCE_SCHEMA) = UPPER(?)
+                                      AND UPPER(L.SOURCE_TABLE) = UPPER(?)
+                                   UNION
+                                   SELECT SOURCE_SYSTEM_ID, DOMAIN_ID FROM SOURCE.SOURCE_REGISTRY
+                                    WHERE UPPER(CONFIGURATION_JSON:database::VARCHAR) = UPPER(?)
+                                      AND UPPER(CONFIGURATION_JSON:schema::VARCHAR) = UPPER(?)""",
+                       [db, schema, table, db, schema])
+    except Exception:
+        return 0
+    learned = 0
+    for s in systems:
+        rule = column_rule(a, s["SOURCE_SYSTEM_ID"])
+        if not rule:
+            return 0
+        try:
+            remember(session, domain_id=s.get("DOMAIN_ID") or ensure_domain(session, GENERAL_DOMAIN), kind="COLUMN_RULE",
+                     key=rule["key"], title=rule["title"], content=rule["content"], content_json=rule["content_json"],
+                     tags=["PROFILING", "ANNOTATION", "APPROVED"], origin="PROFILING")
+            learned += 1
+        except Exception:
+            continue
+    return learned
 
 
 def effective(session, table: str) -> Dict[str, Any]:
