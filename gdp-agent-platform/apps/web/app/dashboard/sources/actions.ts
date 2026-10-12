@@ -10,12 +10,6 @@ export async function validatePipeline(answers: Record<string, unknown>) {
   return attemptValue(() => api<{ valid: boolean; errors: Record<string, string> }>("/api/hub/pipelines/validate", post({ answers })));
 }
 
-export async function registerPipeline(answers: Record<string, unknown>) {
-  const r = await attemptValue(() => api<{ source_id: string; pipeline: Pipeline }>("/api/hub/pipelines", post({ answers })));
-  if (r.ok) revalidatePath("/dashboard/sources");
-  return r;
-}
-
 export async function setPipelineStatus(sourceId: string, status: Pipeline["status"]) {
   const r = await attemptValue(() => api<{ source_id: string; status: string }>(
     `/api/hub/pipelines/${encodeURIComponent(sourceId)}`, post({ status }, "PATCH")));

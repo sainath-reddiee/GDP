@@ -18,7 +18,7 @@ import { displayDomain } from "@/lib/catalog-display";
 import type { DomainRow } from "@/app/onboarding/intent-types";
 import { loadCatalogInventory, loadOverview, loadProfileStore, profileCatalogTables } from "./actions";
 import { ModelPanel } from "./model-panel";
-import { ConnectSource, type ManagedSource } from "./connect-source";
+import { ConnectSource, type ConnectFocus, type ManagedSource } from "./connect-source";
 import { ExternalSources } from "./external-sources";
 import { GradeChip, ProfileDrawer, type DrawerTab } from "./profile-drawer";
 import { CatalogBrowser, type Target } from "./catalog-browser";
@@ -171,8 +171,10 @@ function ModeTab({ active, onClick, icon: Icon, title, body, count, tone }: {
 
 export function SourcesHub({
   initialOverview, initialStore, databases, domains = [], initialTarget, initialInventory, initialMode = "snowflake",
-  pipelines = null, pipelineCount = 0,
+  pipelines = null, pipelineCount = 0, initialConnect = null,
 }: {
+  /** open the Connect dialog on these connectors (?connect=files|database, from "+ New") */
+  initialConnect?: ConnectFocus | null;
   /** the external ingestion pipelines (rendered on the server), shown in the External systems tab */
   pipelines?: React.ReactNode;
   pipelineCount?: number;
@@ -200,7 +202,12 @@ export function SourcesHub({
   const [drawer, setDrawer] = useState<Drawer | null>(null);
   const [notice, setNotice] = useState<{ tone: "ok" | "error"; text: string } | null>(null);
   const [modeling, setModeling] = useState<string[] | null>(null);
-  const [connect, setConnect] = useState<{ managed: ManagedSource | null; external?: boolean } | null>(null);
+  const [connect, setConnect] = useState<{ managed: ManagedSource | null; external?: boolean; focus?: ConnectFocus } | null>(
+    initialConnect ? { managed: null, external: true, focus: initialConnect } : null);
+  // "+ New" while already on this page changes only the query, so follow it after mount too
+  useEffect(() => {
+    if (initialConnect) { setModeState("external"); setConnect({ managed: null, external: true, focus: initialConnect }); }
+  }, [initialConnect]);
   // Separate busy flags: a background refresh must never block selection actions.
   const [submitting, setSubmitting] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -330,8 +337,10 @@ export function SourcesHub({
   const closeModeling = useCallback(() => setModeling(null), []);
   const closeConnect = useCallback(() => {
     setConnect(null);
+    // drop ?connect= so a reload does not reopen the dialog
+    if (initialConnect) syncUrl(mode, targetRef.current.database && targetRef.current.schema ? targetRef.current : null);
     loadOverview().then((r) => r.ok && setOverview(r.data));
-  }, []);
+  }, [initialConnect, mode, syncUrl]);
   const externals = (overview?.sources ?? []).filter((x) => x.source_type.startsWith("EXTERNAL_"));
   const externalAttention = externals.filter((x) => x.failed_tables > 0 || (x.oracle && (!x.oracle.ready || x.oracle.health?.status === "fail"))).length;
   const currentExternal = externals.find((x) => x.database_name === database && x.schema_name === schema);
@@ -359,7 +368,7 @@ export function SourcesHub({
         <Button variant="outline" size="sm" disabled={refreshing} onClick={() => void refresh()} aria-label="Refresh">
           <RefreshCw className={cn("h-4 w-4", refreshing && "animate-spin")} /> Refresh
         </Button>
-        <Button size="sm" onClick={() => setConnect({ managed: null })}><Plus className="h-4 w-4" /> Connect source</Button>
+        <Button size="sm" onClick={() => setConnect({ managed: null })}><Plus className="h-4 w-4" /> Onboard source</Button>
       </div>
 
       <div role="tablist" aria-label="Where the data is" className="grid gap-3 md:grid-cols-2">
@@ -575,7 +584,7 @@ export function SourcesHub({
             <p className="mt-1 max-w-md text-sm text-muted-foreground">
               Connect Oracle, upload files or point at cloud storage. Data lands in Snowflake first, then it is profiled and modeled like any table.
             </p>
-            <Button className="mt-4" onClick={() => setConnect({ managed: null, external: true })}><Plus className="h-4 w-4" /> Connect an external system</Button>
+            <Button className="mt-4" onClick={() => setConnect({ managed: null, external: true })}><Plus className="h-4 w-4" /> Onboard an external system</Button>
           </div>
         )
       )}
@@ -623,7 +632,7 @@ export function SourcesHub({
                          ? (table) => { setDrawer(null); void runProfile([table], true); } : undefined} />
       )}
       {connect && (
-        <ConnectSource initial={connect.managed} startAtConnectors={connect.external} onClose={closeConnect}
+        <ConnectSource initial={connect.managed} startAtConnectors={connect.external} focus={connect.focus} onClose={closeConnect}
                        onSnowflake={() => { setModeState("snowflake"); syncUrl("snowflake", hasSchema ? { database, schema } : null); setBrowserOpen(true); }}
                        onOpenSchema={(t) => openTarget(t)} />
       )}

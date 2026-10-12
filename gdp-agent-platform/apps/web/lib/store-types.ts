@@ -134,17 +134,24 @@ export type Overview = {
     tables: number; columns: number; pii: number; catalog_tables: number; high_cardinality: number; drift: number;
     drift_tables: number; health: number | null;
   } | null;
-  models: { designs: number; published: number; branches: number; in_design: number; failed: number; run_designs: number; hub_designs: number } | null;
-  sttm: { mappings: number; verified: number; pending: number } | null;
-  qa: (PackSummary & { run_tests: number; executed_tests: number; run_suites: number; run_pass_rate: number | null }) | null;
-  dq: (DqSummary & { run_checks: number; store_checks: number }) | null;
-  /** runs over the last 7 days */
+  /** domain models (Model Workbench), table models (Table Model Store) and their pull requests */
+  models: { domain_models: number; approved: number; published: number; drafts: number; in_review: number; table_models: number;
+            tables_published: number; prs_open: number; failed: number; run_designs: number; legacy_designs: number } | null;
+  /** approved follows the run STTM a catalog version came from; pending is REVIEW only */
+  sttm: { mappings: number; approved: number; pending: number; drafts: number } | null;
+  /** saved tests, tests executed in the last 7 days, and passed over executed (PASS, FAIL, ERROR) of each test's latest result */
+  qa: (PackSummary & { saved_tests: number; tests_7d: number; executed_tests: number; failed_tests: number; test_pass_rate: number | null }) | null;
+  /** coverage: registered target tables with at least one check */
+  dq: (DqSummary & { run_checks: number; store_checks: number; targets: number; covered_targets: number }) | null;
+  /** exact counts over the run list's population (not TEST, archived or deleted) */
+  runs: { in_flight: number; drafts: number; needs_review: number; failed_7d: number | null } | null;
+  /** runs over the last 7 days, by each run's latest outcome; daily has all 7 days */
   delivery: { completed: number; failed: number; started: number; active: number; success_rate: number | null; lead_minutes: number | null;
               daily: { day: string; completed: number; failed: number }[] } | null;
   /** waiting on a person */
   waiting: { runs: number; requests: number; versions: number; total: number; oldest_minutes: number | null } | null;
   /** landed tables */
-  freshness: { tables: number; fresh: number; stale: number; failed_loads: number; idle_pipelines: number; oldest_hours: number | null } | null;
+  freshness: { tables: number; fresh: number; aging: number; stale: number; failed_loads: number; idle_pipelines: number; oldest_hours: number | null } | null;
   /** checks failing now */
   failing: { dq_checks: number; qa_tests: number; total: number; tables: number } | null;
 };

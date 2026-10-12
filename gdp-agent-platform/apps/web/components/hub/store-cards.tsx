@@ -1,4 +1,4 @@
-import { BarChart3, ClipboardCheck, Database, Eye, GitBranchPlus, GitCompareArrows, Network, PlugZap, Plus, SquareTerminal, TrendingUp } from "lucide-react";
+import { BarChart3, ClipboardCheck, Database, Eye, GitCompareArrows, Network, PlugZap, Plus, SquareTerminal, TableProperties, TrendingUp } from "lucide-react";
 import type { Overview } from "@/lib/store-types";
 import { fmt, StoreCard } from "@/app/dashboard/command-center";
 
@@ -12,9 +12,9 @@ export function StoreCards({ o, domain }: { o: Overview | null; domain?: string 
   const h = (href: string) => (domain ? `${href}${href.includes("?") ? "&" : "?"}domain=${encodeURIComponent(domain)}` : href);
   return (
     <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-          <StoreCard testId="store-source" title="Source Store" subtitle="Shares, databases and external pipelines" icon={Database} tone="indigo" missing={!o?.sources}
+          <StoreCard testId="store-source" title="Source Store" subtitle="Shares, databases, files and external pipelines" icon={Database} tone="indigo" missing={!o?.sources}
                      metrics={[{ label: "Shares", value: fmt(o?.sources?.shares) }, { label: "Databases", value: fmt(o?.sources?.databases) },
-                               { label: "Pipelines", value: fmt(o?.sources?.external) }]}
+                               { label: "Files, other", value: fmt(o?.sources?.other) }, { label: "Pipelines", value: fmt(o?.sources?.external) }]}
                      href={h("/dashboard/sources")} action={{ label: "Onboard source", href: "/dashboard/onboarding?type=source", icon: PlugZap }}
                      alert={idle ? { text: `${plural(idle, "external pipeline")} not active yet`, tone: "amber" } : null} />
           <StoreCard testId="store-profiling" title="Profiling Store" subtitle="Distributions, nulls, cardinality and drift" icon={BarChart3} tone="sky" missing={!o?.profiling}
@@ -24,31 +24,36 @@ export function StoreCards({ o, domain }: { o: Overview | null; domain?: string 
                      meter={{ label: "Profiling health", value: o?.profiling?.health }}
                      href={h("/dashboard/profiling")} action={{ label: "Review drift", href: "/dashboard/profiling?sort=drift", icon: TrendingUp }}
                      alert={o?.profiling?.drift_tables ? { text: `${plural(o.profiling.drift_tables, "table")} drifted since the last pass`, tone: "amber" } : null} />
-          <StoreCard testId="store-models" title="Modeling Store" subtitle="Domain models published to feature branches" icon={Network} tone="violet" missing={!o?.models}
-                     metrics={[{ label: "Published", value: fmt(o?.models?.published) }, { label: "Branches", value: fmt(o?.models?.branches) },
-                               { label: "In design", value: fmt(o?.models?.in_design) }]}
-                     href={h("/dashboard/modeling")} action={{ label: "New model", href: "/dashboard/modeling", icon: GitBranchPlus }}
+          <StoreCard testId="store-models" title="Modeling Store" subtitle="Domain and table models, versioned and reviewed" icon={Network} tone="violet" missing={!o?.models}
+                     metrics={[{ label: "Domain models", value: fmt(o?.models?.approved) }, { label: "Table models", value: fmt(o?.models?.table_models) },
+                               { label: "Open PRs", value: fmt(o?.models?.prs_open) }]}
+                     href={h("/dashboard/modeling")} action={{ label: "New table model", href: "/dashboard/modeling?view=tables&new=1", icon: TableProperties }}
                      alert={o?.models?.failed ? { text: `${plural(o.models.failed, "publish")} failed`, tone: "rose" }
-                       : o?.models?.in_design ? { text: `${plural(o.models.in_design, "design")} in progress`, tone: "violet" } : null} />
+                       : o?.models?.in_review ? { text: `${plural(o.models.in_review, "domain model")} in review`, tone: "violet" }
+                       : o?.models?.drafts ? { text: `${plural(o.models.drafts, "domain model draft")} open`, tone: "violet" } : null}
+                     note={o?.models ? [`${fmt(o.models.tables_published)} table model${o.models.tables_published === 1 ? "" : "s"} published`,
+                                        o.models.legacy_designs ? `${fmt(o.models.legacy_designs)} legacy design${o.models.legacy_designs === 1 ? "" : "s"}` : ""]
+                                        .filter(Boolean).join(" · ") : undefined} />
           <StoreCard testId="store-sttm" title="STTM Store" subtitle="Versioned source to target mappings" icon={GitCompareArrows} tone="emerald" missing={!o?.sttm}
-                     metrics={[{ label: "Verified", value: fmt(o?.sttm?.verified), tone: "text-emerald-600" }, { label: "Pending review", value: fmt(o?.sttm?.pending) },
+                     metrics={[{ label: "Approved", value: fmt(o?.sttm?.approved), tone: "text-emerald-600" }, { label: "In review", value: fmt(o?.sttm?.pending) },
                                { label: "Mappings", value: fmt(o?.sttm?.mappings) }]}
-                     meter={{ label: "Verified share", value: o?.sttm ? pct(o.sttm.verified, o.sttm.mappings) : null, tone: "primary" }}
+                     meter={{ label: "Approved share", value: o?.sttm ? pct(o.sttm.approved, o.sttm.mappings) : null, tone: "primary" }}
                      href={h("/dashboard/sttm")} action={{ label: "Review pending", href: "/dashboard/sttm?status=REVIEW", icon: Eye }}
                      alert={o?.sttm?.pending ? { text: `${plural(o.sttm.pending, "mapping")} waiting for review`, tone: "amber" } : null} />
           <StoreCard testId="store-qa" title="QA Store" subtitle={o?.qa?.top_tags?.length ? o.qa.top_tags.slice(0, 3).map((t) => `#${t}`).join(" ") : "Deterministic domain SQL packs"}
                      icon={SquareTerminal} tone="amber" missing={!o?.qa}
-                     metrics={[{ label: "Domain packs", value: fmt(o?.qa?.approved_packs) }, { label: "Run tests", value: fmt(o?.qa?.run_tests) },
-                               { label: "Pass rate", value: o?.qa?.pass_rate == null ? "-" : `${Math.round(o.qa.pass_rate)}%` }]}
-                     href={h("/dashboard/qa-store")} action={{ label: "New pack", href: "/dashboard/qa-store?new=1", icon: Plus }}
+                     metrics={[{ label: "Domain packs", value: fmt(o?.qa?.approved_packs) }, { label: "Saved tests", value: fmt(o?.qa?.saved_tests) },
+                               { label: "Tests run (7 days)", value: fmt(o?.qa?.tests_7d) }]}
+                     meter={{ label: "Test pass rate (latest result, passed of executed)", value: o?.qa?.test_pass_rate }}
+                     href={h("/dashboard/qa-store")} action={{ label: "New QA pack", href: "/dashboard/qa-store?new=1", icon: Plus }}
                      alert={o?.qa?.pending ? { text: `${plural(o.qa.pending, "pack")} awaiting approval`, tone: "violet" } : null} />
           <StoreCard testId="store-dq" title="Data Quality Store"
-                     subtitle={o?.dq ? `${fmt(o.dq.run_checks)} approved in runs · ${fmt(o.dq.store_checks)} in the store` : "Soda and Great Expectations attribute checks"} icon={ClipboardCheck} tone="rose" missing={!o?.dq}
-                     metrics={[{ label: "Active checks", value: fmt(o?.dq?.checks) },
-                               { label: "Failing", value: fmt(o?.dq?.failed), tone: o?.dq?.failed ? "text-rose-600" : undefined },
-                               { label: "Scheduled tables", value: fmt(o?.dq?.scheduled_tables) }]}
-                     meter={{ label: "Coverage of profiled tables", value: o?.dq?.coverage, tone: "primary" }}
-                     href={h("/dashboard/dq-store")} action={{ label: "Add check", href: "/dashboard/dq-store?add=1", icon: Plus }}
+                     subtitle="Soda checks approved in runs and kept in the store" icon={ClipboardCheck} tone="rose" missing={!o?.dq}
+                     metrics={[{ label: "Run checks", value: fmt(o?.dq?.run_checks) }, { label: "Store checks", value: fmt(o?.dq?.store_checks) },
+                               { label: "Failing", value: fmt(o?.dq?.failed), tone: o?.dq?.failed ? "text-rose-600" : undefined }]}
+                     meter={{ label: o?.dq?.targets ? `Target tables with checks (${fmt(o.dq.covered_targets)} of ${fmt(o.dq.targets)})` : "Target tables with checks",
+                              value: o?.dq?.coverage, tone: "primary" }}
+                     href={h("/dashboard/dq-store")} action={{ label: "Add a check", href: "/dashboard/dq-store?add=1", icon: Plus }}
                      alert={o?.dq?.failed ? { text: `${plural(o.dq.failed, "check")} failing`, tone: "rose" }
                        : o?.dq?.never_run ? { text: `${plural(o.dq.never_run, "check")} never run`, tone: "amber" } : null} />
         </div>

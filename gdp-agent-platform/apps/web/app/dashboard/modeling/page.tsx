@@ -15,7 +15,7 @@ import { TableModelsList } from "./table-models-list";
 
 type Design = { design: { design_id: string; version: number; status: string; spec: ModelSpec; issues: ModelIssue[] | null; branch: string | null; pr_url: string | null; repo_id: string | null } };
 type View = "models" | "tables" | "design" | "runs" | "dbt";
-type Search = { design?: string; tables?: string; view?: string; domain?: string; q?: string; source?: string; layer?: string; run?: string };
+type Search = { design?: string; tables?: string; view?: string; domain?: string; q?: string; source?: string; layer?: string; run?: string; new?: string };
 
 export default async function ModelingHub({ searchParams }: { searchParams: Search }) {
   const view: View = searchParams.view === "runs" || searchParams.view === "dbt" || searchParams.view === "design" || searchParams.view === "tables" ? searchParams.view
@@ -50,7 +50,7 @@ export default async function ModelingHub({ searchParams }: { searchParams: Sear
         : <ModelsList rows={rows} canEdit={canAct(me, "MODEL.EDIT")} />)}
       {view === "tables" && (!tableModels ? <p className="text-sm text-destructive">Table models could not be loaded.</p>
         : !tableModels.deployed ? <NotDeployed what="The Table Model Store (GOVERNANCE.TABLE_MODEL, V044)" />
-        : <TableModelsList rows={tableRows} canEdit={canAct(me, "MODEL.EDIT")}
+        : <TableModelsList rows={tableRows} canEdit={canAct(me, "MODEL.EDIT")} openNew={searchParams.new === "1"}
                            filters={{ search: searchParams.q ?? "", source: searchParams.source ?? "", layer: searchParams.layer ?? "", run: searchParams.run ?? "", domain: domain ?? "" }} />)}
       {view === "design" && <>
         <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-100">

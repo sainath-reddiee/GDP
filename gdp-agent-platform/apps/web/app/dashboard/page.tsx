@@ -6,7 +6,7 @@ import { api, whoami } from "@/lib/api";
 import { can, type AuditEvent, type RunSummary } from "@/lib/types";
 import type { Overview } from "@/lib/store-types";
 import { getDomainScope } from "@/lib/domain-scope";
-import { isCancelled, needsReview, ago } from "@/lib/run-insights";
+import { ago } from "@/lib/run-insights";
 import type { IncidentSummary } from "../incidents/actions";
 import { PageHeader } from "@/components/page-header";
 import { Panel } from "@/components/hub/kpi";
@@ -28,6 +28,7 @@ function greeting() {
 }
 
 const pct = (part: number, whole: number) => (whole ? (100 * part) / whole : null);
+const count = (n: number, word: string) => `${fmt(n)} ${word}${n === 1 ? "" : "s"}`;
 
 /** The Command Center: what the platform holds (six asset stores), how healthy it is, and what is in flight. */
 export default async function Dashboard() {
@@ -36,24 +37,25 @@ export default async function Dashboard() {
   const overview = await api<Overview>(`/api/hub/overview${scope ? `?domain=${encodeURIComponent(scope)}` : ""}`).catch(() => null);
   const domainId = overview?.domain?.domain_id;
   const runQs = (extra: string) => `/api/runs?${extra}${domainId ? `&domain_id=${domainId}` : ""}`;
-  const [active, review, failing, audit, incidents] = await Promise.all([
-    api<{ runs: RunSummary[] }>(runQs("status=active&limit=10&sort=updated")).catch(() => ({ runs: [] as RunSummary[] })),
-    api<{ runs: RunSummary[]; total?: number }>(runQs("needs_review=true&limit=1")).catch(() => null),
-    api<{ runs: RunSummary[]; total?: number }>(runQs("status=failed&limit=20&sort=updated")).catch(() => null),
+  // the table lists the 8 most recently updated runs in flight; every count comes from the overview (exact, not a
+  // list length) so the greeting, the chips, the tiles and the table header agree
+  const [active, audit, incidents] = await Promise.all([
+    api<{ runs: RunSummary[]; total?: number }>(runQs("status=running&limit=8&sort=updated")).catch(() => ({ runs: [] as RunSummary[], total: undefined })),
     api<{ events: AuditEvent[] }>("/api/audit?limit=6").catch(() => ({ events: [] as AuditEvent[] })),
     can(me, "OPS.VIEW") ? api<IncidentSummary>("/api/ops/incidents/summary").catch(() => null) : Promise.resolve(null),
   ]);
   const o = overview;
   const user = (me?.user ?? "").split(/[._@ ]/)[0];
   const name = user ? user.charAt(0) + user.slice(1).toLowerCase() : "";
-  const inFlight = active.runs.filter((r) => !r.is_archived);
-  const reviewCount = review?.total ?? inFlight.filter(needsReview).length;
-  const failedCount = (failing?.runs ?? []).filter((r) => !r.is_archived && !isCancelled(r)).length;
+  const inFlight = active.runs;
+  const inFlightCount = o?.runs?.in_flight ?? active.total ?? inFlight.length;
+  const reviewCount = o?.runs?.needs_review ?? 0;
+  const failedCount = o?.runs?.failed_7d ?? 0;
   const openIncidents = incidents ? incidents.open + incidents.ack : null;
   const dqFailing = o?.dq?.failed ?? 0;
   const attention = [
     { show: reviewCount > 0, href: "/runs?needs_review=1", icon: Eye, text: `${reviewCount} run${reviewCount === 1 ? "" : "s"} need review`, tone: "text-rose-700 bg-rose-50 ring-rose-200" },
-    { show: failedCount > 0, href: "/runs?status=failed", icon: XCircle, text: `${failedCount} failed run${failedCount === 1 ? "" : "s"}`, tone: "text-amber-800 bg-amber-50 ring-amber-200" },
+    { show: failedCount > 0, href: "/runs?status=failed", icon: XCircle, text: `${failedCount} run${failedCount === 1 ? "" : "s"} failed this week`, tone: "text-amber-800 bg-amber-50 ring-amber-200" },
     { show: !!openIncidents, href: "/incidents", icon: Siren, text: `${openIncidents} open incident${openIncidents === 1 ? "" : "s"}`, tone: "text-rose-700 bg-rose-50 ring-rose-200" },
     { show: !!o?.qa?.pending, href: "/dashboard/qa-store", icon: SquareTerminal, text: `${o?.qa?.pending} QA pack${o?.qa?.pending === 1 ? "" : "s"} awaiting approval`, tone: "text-violet-700 bg-violet-50 ring-violet-200" },
     { show: dqFailing > 0, href: "/dashboard/dq-store", icon: ClipboardCheck, text: `${dqFailing} data quality check${dqFailing === 1 ? "" : "s"} failing`, tone: "text-rose-700 bg-rose-50 ring-rose-200" },
@@ -68,7 +70,7 @@ export default async function Dashboard() {
     <div className="space-y-6">
       <PageHeader eyebrow={o?.domain ? `${o.domain.domain_name} domain` : "All domains"}
                   title={`${greeting()}${name ? `, ${name}` : ""}`}
-                  description={`${inFlight.length} run${inFlight.length === 1 ? "" : "s"} in flight${reviewCount ? `, ${reviewCount} waiting on review` : ", nothing waiting on you"}. Your data estate at a glance.`}
+                  description={`${inFlightCount} run${inFlightCount === 1 ? "" : "s"} in flight${reviewCount ? `, ${reviewCount} at a review step` : ", none at a review step"}. Your data estate at a glance.`}
                   actions={<>
                     <Link href="/runs" className={buttonVariants({ variant: "outline" })}>All runs</Link>
                     <Link href="/dashboard/onboarding?type=source" className={buttonVariants()}><PlugZap className="h-4 w-4" /> Onboard source</Link>
@@ -79,25 +81,28 @@ export default async function Dashboard() {
         <div className="pointer-events-none absolute inset-0 bg-gradient-to-r from-indigo-500/[0.07] via-transparent to-cyan-500/[0.07]" />
         <div className="relative grid divide-y divide-border/60 sm:grid-cols-2 sm:divide-y-0 xl:grid-cols-4 xl:divide-x">
           <RibbonMetric label="Runs, last 7 days" value={d?.success_rate == null ? "-" : Math.round(d.success_rate)} unit={d?.success_rate == null ? undefined : "% succeeded"}
-                        href="/runs" hint={d ? `${fmt(d.completed)} completed · ${fmt(d.failed)} failed · ${fmt(d.active)} running now` : "run history not available"}>
+                        href="/runs" hint={d ? `${fmt(d.completed)} completed · ${fmt(d.failed)} failed · ${fmt(inFlightCount)} in flight now` : "run history not available"}>
             <Sparkline values={(d?.daily ?? []).map((x) => x.completed + x.failed)} />
-            <p className="mt-1.5 text-[11px] text-muted-foreground">{d?.lead_minutes == null ? "No run completed this week" : `Median lead time ${duration(d.lead_minutes)}, start to completion`}</p>
+            <p className="mt-1.5 text-[11px] text-muted-foreground">
+              {d?.lead_minutes == null ? "No run completed this week" : `Median lead time ${duration(d.lead_minutes)}, start to completion`}
+              {o?.runs?.drafts ? ` · ${fmt(o.runs.drafts)} draft${o.runs.drafts === 1 ? "" : "s"} not started` : ""}
+            </p>
           </RibbonMetric>
           <RibbonMetric label="Waiting on people" value={w ? fmt(w.total) : "-"} href={w?.requests ? "/approvals" : "/runs?needs_review=1"}
-                        hint={w ? `${fmt(w.runs)} runs at review · ${fmt(w.requests)} approvals · ${fmt(w.versions)} versions in review` : "not available"}>
+                        hint={w ? `${count(w.runs, "run")} at review · ${count(w.requests, "approval")} · ${count(w.versions, "version")} in review` : "not available"}>
             <p className="text-[11px] text-muted-foreground">{w?.oldest_minutes == null ? "Nothing is waiting" : `Oldest has waited ${duration(w.oldest_minutes)}`}</p>
           </RibbonMetric>
           <RibbonMetric label="Stale landed tables" value={f ? fmt(f.stale) : "-"} href="/dashboard/sources"
-                        hint={f ? `of ${fmt(f.tables)} landed · ${fmt(f.fresh)} loaded in the last 24 hours` : "landing registry not available"}>
+                        hint={f ? `of ${fmt(f.tables)} landed · ${fmt(f.fresh)} in the last 24 hours · ${fmt(f.aging)} from 1 to 7 days ago` : "landing registry not available"}>
             <Meter value={f && f.tables ? pct(f.fresh, f.tables) : null} tone="primary" />
             <p className="mt-1.5 text-[11px] text-muted-foreground">
-              {f ? [`${fmt(f.failed_loads)} failed load${f.failed_loads === 1 ? "" : "s"} this week`,
+              {f ? [`${fmt(f.failed_loads)} table${f.failed_loads === 1 ? "" : "s"} whose last load failed this week`,
                     f.idle_pipelines ? `${fmt(f.idle_pipelines)} pipeline${f.idle_pipelines === 1 ? "" : "s"} not active` : "",
                     f.oldest_hours != null ? `oldest load ${duration(f.oldest_hours * 60)} ago` : ""].filter(Boolean).join(" · ") : ""}
             </p>
           </RibbonMetric>
           <RibbonMetric label="Failing checks" value={x ? fmt(x.total) : "-"} href="/dashboard/quality"
-                        hint={x ? `${fmt(x.dq_checks)} data quality · ${fmt(x.qa_tests)} QA tests · ${fmt(x.tables)} tables affected` : "no check results readable"}>
+                        hint={x ? `${fmt(x.dq_checks)} data quality · ${count(x.qa_tests, "QA test")} · ${count(x.tables, "table")} affected` : "no check results readable"}>
             <Meter value={o?.dq?.pass_rate} />
             <p className="mt-1.5 text-[11px] text-muted-foreground">{o?.dq?.pass_rate == null ? "No data quality results yet" : `${o.dq.pass_rate}% of data quality checks passing`}</p>
           </RibbonMetric>
@@ -122,8 +127,9 @@ export default async function Dashboard() {
         <section className="surface overflow-hidden 2xl:col-span-2" data-testid="pipeline-table">
           <div className="flex items-center gap-2 px-5 pb-3 pt-4">
             <h3 className="text-sm font-semibold">Active pipeline runs and SLA</h3>
-            <span className="rounded-full bg-muted px-2 py-0.5 text-xs tabular-nums text-muted-foreground">{inFlight.length}</span>
-            <Link href="/runs?status=active" className="ml-auto text-xs font-medium text-primary hover:underline">All active runs</Link>
+            <span className="rounded-full bg-muted px-2 py-0.5 text-xs tabular-nums text-muted-foreground">{inFlightCount}</span>
+            {inFlightCount > inFlight.length && <span className="text-xs text-muted-foreground">latest {inFlight.length} shown</span>}
+            <Link href="/runs?status=running" className="ml-auto text-xs font-medium text-primary hover:underline">All runs in flight</Link>
           </div>
           <PipelineTable runs={inFlight.slice(0, 8)} />
         </section>

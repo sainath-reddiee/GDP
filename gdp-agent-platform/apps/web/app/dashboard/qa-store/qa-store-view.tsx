@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useMemo, useState, useTransition } from "react";
+import { useEffect, useMemo, useState, useTransition } from "react";
 import { BrainCircuit, FolderGit2, Loader2, Plus, Search, SquareTerminal } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { PackRow, PackSeverity } from "@/lib/store-types";
@@ -142,6 +142,7 @@ export function QaStoreView({ packs, domains, scope, initialPack, openNew, canEd
   const [tag, setTag] = useState("");
   const [open, setOpen] = useState<string | null>(initialPack);
   const [creating, setCreating] = useState(openNew && canEdit);
+  useEffect(() => { if (openNew && canEdit) setCreating(true); }, [openNew, canEdit]);
 
   const tags = useMemo(() => {
     const n: Record<string, number> = {};
