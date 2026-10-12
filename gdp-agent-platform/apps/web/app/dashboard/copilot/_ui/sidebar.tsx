@@ -8,7 +8,7 @@ import type { SessionRow } from "@/lib/copilot-types";
 
 function bucket(updated?: string): string {
   if (!updated) return "Earlier";
-  const then = new Date(updated.replace(" ", "T"));
+  const then = new Date(updated);
   const days = (Date.now() - then.getTime()) / 86_400_000;
   if (Number.isNaN(days)) return "Earlier";
   if (days < 1) return "Today";

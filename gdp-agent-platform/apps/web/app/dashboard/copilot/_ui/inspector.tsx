@@ -18,9 +18,9 @@ export function Inspector({ plan, changes, attachments, jiraKey, onReview, onPub
   const done = plan.filter((s) => s.status === "DONE" || s.status === "SKIPPED").length;
   return (
     <aside aria-label="Plan and changes" className="flex h-full min-h-0 flex-col">
-      <div className="flex items-center gap-1 border-b px-2 pt-2">
+      <div role="tablist" aria-label="Panel" className="flex items-center gap-1 border-b px-2 pt-2">
         {([["plan", "Plan"], ["changes", `Changes${open.length ? ` · ${open.length}` : ""}`], ["context", "Context"]] as [Tab, string][]).map(([k, label]) => (
-          <button key={k} type="button" role="tab" aria-selected={tab === k} onClick={() => setTab(k)}
+          <button key={k} type="button" role="tab" id={`copilot-tab-${k}`} aria-controls={`copilot-panel-${k}`} aria-selected={tab === k} onClick={() => setTab(k)}
                   className={cn("-mb-px border-b-2 px-3 py-2 text-xs font-medium transition",
                     tab === k ? "border-primary text-foreground" : "border-transparent text-muted-foreground hover:text-foreground")}>{label}</button>
         ))}
@@ -29,7 +29,7 @@ export function Inspector({ plan, changes, attachments, jiraKey, onReview, onPub
         </button>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto p-4 pb-24">
+      <div role="tabpanel" id={`copilot-panel-${tab}`} aria-labelledby={`copilot-tab-${tab}`} className="min-h-0 flex-1 overflow-y-auto p-4 pb-24">
         {tab === "plan" && (
           <div className="space-y-4">
             <div>
@@ -114,7 +114,7 @@ function StepDot({ status, gate, busy }: { status: PlanStep["status"]; gate: boo
   const base = "relative z-10 grid h-6 w-6 shrink-0 place-items-center rounded-full border text-[10px]";
   if (status === "DONE") return <span className={cn(base, "border-primary bg-primary text-primary-foreground")}><Check className="h-3.5 w-3.5" /></span>;
   if (status === "RUNNING") return (
-    <span className={cn(base, gate ? "border-amber-500 bg-amber-500/10 text-amber-600" : "border-primary bg-primary/10 text-primary")}>
+    <span className={cn(base, gate ? "border-amber-500 bg-amber-500/10 text-amber-600 dark:text-amber-300" : "border-primary bg-primary/10 text-primary")}>
       {gate ? <ShieldCheck className="h-3.5 w-3.5" /> : busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <span className="h-2 w-2 rounded-full bg-primary" />}
     </span>
   );

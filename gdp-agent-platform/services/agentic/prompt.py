@@ -50,8 +50,11 @@ Work autonomously, with the person in the loop where it matters:
   schedule, target layer, which of several matches, business rules. Use ask_user with a short form: at most six
   fields, select or multiselect for known choices, a default with your best guess, a one-line help. Then stop and
   wait. Ask again in later turns for whatever is still missing; keep going until you have everything.
+- Every default you offer and every name you use must come from a tool result (landing_targets, inspect_source,
+  list_domains, the models and mappings you read) or from the person. Never make up database, schema, table, column,
+  pipeline or project names; when you have nothing real to suggest, leave the default empty.
 - Questions about the platform or the domain: answer them (answer_question and the read tools), with no drafting.
-- Onboarding a source: call onboarding_requirements first, fill what you can from attachments and Jira, ask for the
+- Onboarding a source: call onboarding_requirements and landing_targets first, fill what you can from attachments and Jira, ask for the
   rest in groups (source, target, load, SnapLogic, tables), then call onboard_source_config and fix what it reports.
   Never ask for a password or token: SnapLogic api_key is the name of a vault secret.
 - Draft tools never change anything. They draft a change the person reviews and publishes with Approve and Publish;
@@ -73,6 +76,14 @@ def _events(events: List[Dict[str, Any]], limit: int = 30) -> List[Dict[str, Any
     return out
 
 
+def _data(value: Any, limit: int) -> str:
+    """JSON for a <data> block: clipped, with any closing tag inside it neutralized so content cannot end the block."""
+    text = json.dumps(value, indent=1, default=str)
+    if len(text) > limit:
+        text = text[:limit] + "\n... (cut to fit)"
+    return text.replace("</", "<\\/")
+
+
 def build(state: Dict[str, Any], scratch: List[Dict[str, Any]]) -> str:
     """state: {title, jira_key, plan, changes, events, ctx}; scratch: this turn's tool calls and results so far."""
     ctx = state.get("ctx") or {}
@@ -86,7 +97,7 @@ def build(state: Dict[str, Any], scratch: List[Dict[str, Any]]) -> str:
         RULES,
         "Tools (call them in tool_calls with args_json):\n" + json.dumps(tools.describe(), indent=1),
         "Session:\n" + json.dumps(context, indent=1, default=str),
-        "Conversation so far:\n<data>\n" + json.dumps(_events(state.get("events") or []), indent=1, default=str) + "\n</data>",
-        "This turn's tool results:\n<data>\n" + json.dumps(scratch, indent=1, default=str)[:80000] + "\n</data>",
+        "Conversation so far:\n<data>\n" + _data(_events(state.get("events") or []), 50000) + "\n</data>",
+        "This turn's tool results:\n<data>\n" + _data(scratch, 60000) + "\n</data>",
         "Decide the next step. Return JSON matching the schema.",
     ])

@@ -24,8 +24,8 @@ const ROW: Record<string, string> = {
 };
 
 /** Review every drafted change, choose what to publish, then approve. */
-export function ReviewDrawer({ open, onClose, changes, workbench, focus, onDiscard, onPublish, publishing, progress }: {
-  open: boolean; onClose: () => void; changes: Change[]; workbench: Workbench; focus?: string | null;
+export function ReviewDrawer({ open, onClose, changes, workbench, focus, onDiscard, onPublish, publishing, progress, busy }: {
+  open: boolean; busy: boolean; onClose: () => void; changes: Change[]; workbench: Workbench; focus?: string | null;
   onDiscard: (id: string) => void; onPublish: (ids: string[]) => void; publishing: boolean; progress: Record<string, string>;
 }) {
   const shown = changes.filter((c) => c.status !== "DISCARDED");
@@ -55,16 +55,18 @@ export function ReviewDrawer({ open, onClose, changes, workbench, focus, onDisca
               Publishing runs {calls} API call{calls === 1 ? "" : "s"} as you. Anything your approval rules route to an approver waits for them in Approvals.
             </p>
             <button type="button" onClick={() => setConfirm(false)} disabled={publishing} className="rounded-lg px-3 py-2 text-sm hover:bg-muted">Back</button>
-            <button type="button" disabled={publishing || !chosen.length} onClick={() => onPublish(chosen.map((c) => c.change_id))}
+            <button type="button" disabled={publishing || busy || !chosen.length} onClick={() => onPublish(chosen.map((c) => c.change_id))}
                     className="inline-flex h-9 items-center gap-2 rounded-lg bg-primary px-4 text-sm font-medium text-primary-foreground disabled:opacity-50">
               {publishing ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShieldCheck className="h-4 w-4" />} Approve and publish
             </button>
           </>
         ) : (
           <>
-            <p className="min-w-0 flex-1 text-xs text-muted-foreground">{chosen.length} of {drafts.length} drafted change{drafts.length === 1 ? "" : "s"} selected</p>
+            <p className="min-w-0 flex-1 text-xs text-muted-foreground">
+              {busy ? "The copilot is still working. Publish when it has finished." : `${chosen.length} of ${drafts.length} drafted change${drafts.length === 1 ? "" : "s"} selected`}
+            </p>
             <button type="button" onClick={onClose} className="rounded-lg px-3 py-2 text-sm hover:bg-muted">Close</button>
-            <button type="button" disabled={!chosen.length || publishing} onClick={() => setConfirm(true)}
+            <button type="button" disabled={!chosen.length || publishing || busy} onClick={() => setConfirm(true)}
                     className="inline-flex h-9 items-center gap-2 rounded-lg bg-primary px-4 text-sm font-medium text-primary-foreground disabled:opacity-50">
               <ShieldCheck className="h-4 w-4" /> Publish {chosen.length || ""}
             </button>
@@ -109,7 +111,7 @@ export function ReviewDrawer({ open, onClose, changes, workbench, focus, onDisca
                   <h3 className="text-base font-semibold">{current.title}</h3>
                   {current.result?.detail && <p className="mt-1 text-xs text-muted-foreground">{current.result.detail}</p>}
                 </div>
-                {current.status === "PROPOSED" && !publishing && (
+                {current.status === "PROPOSED" && !publishing && !busy && (
                   <button type="button" onClick={() => onDiscard(current.change_id)}
                           className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs text-muted-foreground hover:bg-destructive/10 hover:text-destructive">
                     <Trash2 className="h-3.5 w-3.5" /> Discard

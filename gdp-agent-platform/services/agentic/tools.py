@@ -2,7 +2,8 @@
 
 Each tool gets `call(method, path, body=None, params=None) -> (status, data)`, an in-process request to the API made
 with the signed-in person's own session, so the API's privilege checks apply to everything a tool reads or tries, and
-`ctx`: the conversation's attachments ({"attachments": [...], "read_attachment": async (id) -> text}).
+`ctx`: the conversation's attachments ({"attachments": [...], "read_attachment": async (id) -> text}) and its drafted
+changes ({"changes": [...]}), so a revision builds on the open draft for the same asset.
 Read and draft tools run during a conversation; they only read, render or dry-run. A draft tool returns a *change*:
 the exact calls that would apply it, kept for review and replayed only by Approve and Publish.
 """
@@ -20,7 +21,7 @@ from services.agentic import changeset, preview
 
 Call = Callable[..., Awaitable[Tuple[int, Any]]]
 
-ID = re.compile(r"^[A-Za-z0-9_.\-]{1,128}$")
+ID = re.compile(r"^[A-Za-z0-9_\-][A-Za-z0-9_.\-]{0,127}$")
 JIRA_KEY = re.compile(r"^[A-Z][A-Z0-9_]{0,30}-\d{1,9}$")
 NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_$]{0,254}$")
 FQN = re.compile(r"^[A-Za-z0-9_$\".]{3,800}$")
@@ -167,29 +168,47 @@ async def get_table_model(call: Call, a: Dict[str, Any], ctx: Optional[Dict[str,
             "steps": [("context", "DONE", "")]}
 
 
+def _open_change(ctx: Optional[Dict[str, Any]], key: str) -> Optional[Dict[str, Any]]:
+    """The open (unpublished) draft for an asset in this conversation, so a revision builds on it instead of
+    starting again from the saved version and silently dropping what was drafted before."""
+    for c in (ctx or {}).get("changes") or []:
+        if c.get("change_key") == key and c.get("status") == "PROPOSED":
+            return c
+    return None
+
+
 def _apply_columns(spec: Dict[str, Any], operations: List[Dict[str, Any]]) -> Dict[str, Any]:
+    if not operations:
+        raise ToolError("operations is empty: say which columns to add, modify or drop")
     spec = copy.deepcopy(spec)
     entity = _entity(spec)
     attrs = entity.setdefault("attributes", [])
-    index = {str(c.get("name") or "").upper(): c for c in attrs}
     for op in operations:
         if not isinstance(op, dict):
             raise ToolError("each operation must be an object")
+        index = {str(c.get("name") or "").upper(): c for c in attrs}
         kind, name = str(op.get("op") or "").lower(), str(op.get("column") or "").strip()
         if not NAME.match(name):
             raise ToolError(f"{name!r} is not a column name")
         fields = {k: op[k] for k in ("datatype", "nullable", "is_pk", "description", "business_definition")
                   if op.get(k) is not None}
+        for flag in ("nullable", "is_pk"):
+            if flag in fields and not isinstance(fields[flag], bool):
+                fields[flag] = str(fields[flag]).strip().lower() in ("true", "yes", "1", "y")
+        if fields.get("is_pk") and "nullable" not in fields:
+            fields["nullable"] = False   # a key column cannot be nullable (spec_v2.validate refuses it)
         existing = index.get(name.upper())
         if kind == "add":
             if existing:
-                raise ToolError(f"{name} already exists; use modify")
+                raise ToolError(f"{name} already exists in {entity.get('entity_name')}; use modify")
             if not fields.get("datatype"):
                 raise ToolError(f"adding {name} needs a datatype")
             attrs.append({"name": name.upper(), "nullable": True, **fields})
         elif kind == "modify":
             if not existing:
                 raise ToolError(f"{name} is not a column of {entity.get('entity_name')}")
+            if not fields:
+                raise ToolError(f"modify {name}: say what changes (datatype, nullable, is_pk, description)")
             existing.update(fields)
         elif kind == "drop":
             if not existing:
@@ -204,7 +223,10 @@ async def update_table_model(call: Call, a: Dict[str, Any], ctx: Optional[Dict[s
     data = await _table_model(call, a["table_model_id"])
     header, current = data["model"], data["current"]
     model_id = _id(a["table_model_id"], "table_model_id")
-    draft = _apply_columns(current["spec"], a["operations"])
+    key = f"TABLE_MODEL:{a['table_model_id']}"
+    prior = _open_change(ctx, key)
+    base = ((prior or {}).get("operations") or [{}])[0].get("body", {}).get("spec") or current["spec"]
+    draft = _apply_columns(base, a["operations"])
     rendered = _ok(*await call("POST", f"/api/hub/table-models/{model_id}/render",
                                {"spec": draft, "table_type": header.get("table_type") or "STANDARD",
                                 "domain": header.get("domain_name") or None}), what="Rendering the model")
@@ -212,25 +234,28 @@ async def update_table_model(call: Call, a: Dict[str, Any], ctx: Optional[Dict[s
     if errors:
         raise ToolError("the changed model does not validate: " + "; ".join(f"{i.get('path')}: {i.get('message')}" for i in errors[:8]))
     note = a.get("change_note") or "Copilot draft"
+    counts = preview.columns(current["spec"], rendered["spec"])["counts"]
+    parts = [f"{n} column{'s' if n != 1 else ''} {k}" for k, n in counts.items() if n]
     change = changeset.make(
-        f"TABLE_MODEL:{a['table_model_id']}", "MODEL", f"Table model {header.get('table_name') or a['table_model_id']}: {note}"[:512],
+        key, "MODEL", f"Table model {header.get('table_name') or a['table_model_id']}: {', '.join(parts) or note}"[:512],
         [{"method": "PUT", "path": f"/api/hub/table-models/{model_id}",
           "body": {"spec": rendered["spec"], "etag": header.get("etag"), "change_note": note[:2000]}}],
+        # the preview is always against the saved version, so it shows everything this draft would change
         {"model": preview.columns(current["spec"], rendered["spec"]),
          "files": preview.files_diff(preview.rendered_files(current), preview.rendered_files(rendered))})
     counts = change["preview"]["model"]["counts"]
     warnings = [f"{i.get('path')}: {i.get('message')}" for i in rendered.get("issues") or [] if i.get("severity") != "ERROR"][:8]
-    return {"summary": {"drafted": change["title"], "columns": counts, "warnings": warnings,
-                        "ddl_and_dbt_rendered": True},
-            "change": change, "steps": [("model", "DONE", f"{counts}"), ("dryrun", "DONE", "DDL and dbt rendered")]}
+    return {"summary": {"drafted": change["title"], "columns_vs_saved_version": counts, "warnings": warnings,
+                        "built_on_earlier_draft": bool(prior), "ddl_and_dbt_rendered": True},
+            "change": change, "steps": [("model", "DONE", f"{counts['added']} added, {counts['changed']} changed, {counts['removed']} removed"),
+                                        ("dryrun", "DONE", "DDL and dbt rendered")]}
 
 
 async def generate_dbt_models(call: Call, a: Dict[str, Any], ctx: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     data = await _table_model(call, a["table_model_id"])
     files = preview.rendered_files(data["current"])
     return {"summary": {"files": {p: _clip(t, 1500) for p, t in list(files.items())[:8]},
-                        "note": "dbt and DDL are rendered from the table model; change the model to change them"},
-            "steps": [("model", "DONE", "")]}
+                        "note": "dbt and DDL are rendered from the table model; change the model to change them"}}
 
 
 async def find_sttm_mappings(call: Call, a: Dict[str, Any], ctx: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -253,8 +278,15 @@ async def get_sttm_mapping(call: Call, a: Dict[str, Any], ctx: Optional[Dict[str
     entry = await _mapping(call, a["catalog_id"])
     return {"summary": {"catalog_id": entry.get("catalog_id"), "version": entry.get("version"),
                         "target_entity": entry.get("target_entity"), "status": entry.get("status"),
-                        "lines": [_pick(l, LINE_KEYS) for l in entry.get("lines") or []][:150]},
-            "steps": [("context", "DONE", "")]}
+                        "lines": [_pick(l, LINE_KEYS) for l in entry.get("lines") or []][:150]}}
+
+
+def _merge_by_column(earlier: List[Dict[str, Any]], later: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    out: Dict[str, Dict[str, Any]] = {}
+    for item in list(earlier) + list(later):
+        col = str(item.get("target_column") or "").upper()
+        out[col] = {**out.get(col, {}), **item}
+    return list(out.values())
 
 
 async def generate_sttm_mapping(call: Call, a: Dict[str, Any], ctx: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -262,12 +294,15 @@ async def generate_sttm_mapping(call: Call, a: Dict[str, Any], ctx: Optional[Dic
 
     entry = await _mapping(call, a["catalog_id"])
     cid = _id(a["catalog_id"], "catalog_id")
+    key = f"STTM:{a['catalog_id']}"
     current = {str(l.get("target_column") or "").upper(): l for l in entry.get("lines") or []}
     edits, notes = [], []
     for e in a.get("edits") or []:
         if not isinstance(e, dict) or not e.get("target_column"):
             raise ToolError("each edit needs a target_column")
         col = str(e["target_column"])
+        if col.upper() not in current:
+            raise ToolError(f"{col} is not a target column of this mapping; add it with add_lines")
         edit = {"target_column": col, **{k: v for k, v in e.items() if k in cat_sttm.EDITABLE and v is not None}}
         if e.get("instruction") and not e.get("transformation"):
             line = current.get(col.upper()) or {}
@@ -276,14 +311,23 @@ async def generate_sttm_mapping(call: Call, a: Dict[str, Any], ctx: Optional[Dic
                 "current_transformation": line.get("transformation"), "source_table": line.get("source_table"),
                 "source_column": line.get("source_column")})
             if status >= 400 or not isinstance(proposal, dict) or not proposal.get("transformation"):
-                raise ToolError(f"No AI proposal for {col}: {(proposal or {}).get('detail') if isinstance(proposal, dict) else proposal}")
+                detail = proposal.get("detail") if isinstance(proposal, dict) else proposal
+                raise ToolError(f"No AI proposal for {col}: {_clip(detail, 300)}. Give the transformation yourself instead.")
             edit["transformation"] = proposal["transformation"]
             notes.append({"target_column": col, "rationale": _clip(proposal.get("rationale") or "", 400)})
         if len(edit) > 1:
             edits.append(edit)
-    add = [l for l in a.get("add_lines") or [] if isinstance(l, dict)]
+    add = [{k: v for k, v in l.items() if v is not None} for l in a.get("add_lines") or [] if isinstance(l, dict)]
+    for l in add:
+        if not l.get("target_column") or not l.get("target_datatype") or not l.get("mapping_type"):
+            raise ToolError("each added line needs target_column, target_datatype and mapping_type")
     if not edits and not add:
         raise ToolError("nothing to change in the mapping")
+    prior = _open_change(ctx, key)
+    if prior:  # build on the open draft for this mapping
+        body = prior["operations"][0]["body"]
+        edits = _merge_by_column(body.get("edits") or [], edits)
+        add = _merge_by_column(body.get("add_lines") or [], add)
     try:
         lines, _ = cat_sttm.apply_edits(entry.get("lines") or [], edits)
         lines, _ = cat_sttm.add_lines(lines, add) if add else (lines, [])
@@ -291,32 +335,52 @@ async def generate_sttm_mapping(call: Call, a: Dict[str, Any], ctx: Optional[Dic
         raise ToolError(str(exc)) from None
     note = a.get("note") or "Copilot draft"
     change = changeset.make(
-        f"STTM:{a['catalog_id']}", "STTM", f"Mapping {entry.get('target_entity') or a['catalog_id']}: {note}"[:512],
+        key, "STTM", f"Mapping {entry.get('target_entity') or a['catalog_id']}: {note}"[:512],
         [{"method": "POST", "path": f"/api/hub/sttm/{cid}/edit",
           "body": {"base_version": int(entry.get("version") or 1), "edits": edits, "add_lines": add, "note": note[:2000]}}],
         {"sttm": preview.sttm_lines(entry.get("lines") or [], lines)})
     return {"summary": {"drafted": change["title"], "edited": [e["target_column"] for e in edits],
                         "added": [l.get("target_column") for l in add], "ai_rationale": notes,
+                        "built_on_earlier_draft": bool(prior),
                         "publishing": "a mapping edit always goes to an STTM approver"},
             "change": change, "steps": [("sttm", "DONE", f"{len(edits)} edited, {len(add)} added")]}
 
 
 async def register_qa_sql_pack(call: Call, a: Dict[str, Any], ctx: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    from services.qa.pack_files import NAME as QUERY_NAME, SEVERITIES
+
     domain = _id(a["domain_id"], "domain_id")
+    if not a["queries"]:
+        raise ToolError("queries is empty: a QA pack needs at least one query")
     queries = []
     for q in a["queries"]:
         if not isinstance(q, dict) or not q.get("query_name") or not q.get("sql"):
             raise ToolError("each query needs query_name and sql")
-        queries.append({"query_name": str(q["query_name"])[:128], "sql_expression": str(q["sql"])[:16000],
-                        "description": q.get("description"), "severity": str(q.get("severity") or "ERROR")[:16],
-                        "expectation": q.get("expectation") or "0 rows"})
+        name = str(q["query_name"]).strip()
+        if not QUERY_NAME.match(name):
+            raise ToolError(f"{name!r}: a query name starts with a letter and has only letters, digits and _")
+        severity = str(q.get("severity") or "ERROR").upper()
+        if severity not in SEVERITIES:
+            raise ToolError(f"{name}: severity must be one of {list(SEVERITIES)}")
+        queries.append({"query_name": name, "sql_expression": str(q["sql"]).strip().rstrip(";")[:16000],
+                        "description": str(q["description"])[:4000] if q.get("description") else None,
+                        "severity": severity, "expectation": str(q.get("expectation") or "0 rows")[:1000]})
     dry = []
     for q in queries:  # each query once, read-only, with the caller's role; nothing is stored
         status, data = await call("POST", "/api/qa/execute", {"domain_id": a["domain_id"], "sql": q["sql_expression"]})
-        result = ((data or {}).get("results") or [{}])[0] if isinstance(data, dict) and status < 400 else {}
-        dry.append({"query_name": q["query_name"], "ok": status < 400,
-                    "outcome": _pick(result, ("status", "row_count", "error", "message")) if status < 400
-                    else _clip((data or {}).get("detail") if isinstance(data, dict) else data, 400)})
+        if status >= 400 or not isinstance(data, dict):
+            dry.append({"query_name": q["query_name"], "ok": False,
+                        "detail": _clip((data or {}).get("detail") if isinstance(data, dict) else data, 400)})
+            continue
+        result = (data.get("results") or [{}])[0]
+        outcome = str(result.get("outcome") or "").upper()
+        dry.append({"query_name": q["query_name"], "ok": outcome not in ("ERROR", ""),
+                    **_pick(result, ("outcome", "detail", "rows_returned", "failing"))})
+    prior_key = f"QA_PACK:{a['pack_id']}" if a.get("pack_id") else f"QA_PACK:new:{domain}:{str(a.get('name') or 'Copilot QA pack').strip().lower()}"
+    prior = _open_change(ctx, prior_key)
+    if prior:  # keep the queries drafted earlier for this pack
+        earlier = {q["query_name"]: q for q in prior["operations"][0]["body"].get("queries") or []}
+        queries = list({**earlier, **{q["query_name"]: q for q in queries}}.values())
     old: Dict[str, str] = {}
     body: Dict[str, Any] = {"name": str(a.get("name") or "Copilot QA pack")[:128], "queries": queries,
                             "change_note": (a.get("change_note") or "Copilot draft")[:2000]}
@@ -326,54 +390,72 @@ async def register_qa_sql_pack(call: Call, a: Dict[str, Any], ctx: Optional[Dict
         pack = found.get("pack") or {}
         existing = {str(q.get("query_name")): q for q in found.get("queries") or []}
         old = {f"{n}.sql": str(q.get("sql_expression") or "") for n, q in existing.items()}
-        merged = {**{n: {k: q.get(k) for k in ("query_name", "sql_expression", "description", "severity", "expectation")}
-                     for n, q in existing.items()}, **{q["query_name"]: q for q in queries}}
+        keep = ("query_name", "sql_expression", "description", "severity", "expectation", "tags")
+        merged = {**{n: {k: q.get(k) for k in keep} for n, q in existing.items()},
+                  **{q["query_name"]: {**{k: existing.get(q["query_name"], {}).get(k) for k in ("tags",)}, **q} for q in queries}}
+        # the pack's own description and tags are kept (an explicit null would erase them)
         body.update({"name": pack.get("name") or body["name"], "queries": list(merged.values()),
-                     "base_version": pack.get("version")})
+                     "base_version": pack.get("version"), "description": pack.get("description"),
+                     "tags": pack.get("tags") or []})
         ops = [{"method": "PUT", "path": f"/api/qa-packs/{pack_id}", "body": body},
                {"method": "POST", "path": f"/api/qa-packs/{pack_id}/submit", "body": {"note": body["change_note"]}}]
-        key = f"QA_PACK:{a['pack_id']}"
     else:
         ops = [{"method": "POST", "path": f"/api/domains/{domain}/qa-packs", "body": body},
                {"method": "POST", "path": "/api/qa-packs/{op0.pack_id}/submit", "body": {"note": body["change_note"]}}]
-        key = f"QA_PACK:new:{domain}:{body['name']}"
     new = {**old, **{f"{q['query_name']}.sql": q["sql_expression"] for q in queries}}
-    change = changeset.make(key, "QA", f"QA pack {body['name']}: {len(queries)} quer{'y' if len(queries) == 1 else 'ies'}",
+    change = changeset.make(prior_key, "QA", f"QA pack {body['name']}: {len(queries)} quer{'y' if len(queries) == 1 else 'ies'}",
                             ops, {"files": preview.files_diff(old, new)})
     failed = [d for d in dry if not d["ok"]]
     return {"summary": {"drafted": change["title"], "dry_run": dry,
-                        "publishing": "submitted for approval by a QA lead (four eyes)"},
+                        "publishing": "submitted for approval by a QA lead (four eyes)",
+                        "next": "fix the failed queries and draft again" if failed else ""},
             "change": change, "steps": [("quality", "DONE", f"{len(queries)} QA queries"),
-                                        ("dryrun", "BLOCKED" if failed else "DONE", f"{len(failed)} QA queries failed to run" if failed else "QA queries ran")]}
+                                        ("dryrun", "BLOCKED" if failed else "DONE",
+                                         f"{len(failed)} QA quer{'y' if len(failed) == 1 else 'ies'} failed to run" if failed else "QA queries ran")]}
+
+
+SODA_SEVERITY = {"WARN": "WARN", "WARNING": "WARN", "FAIL": "FAIL", "ERROR": "FAIL", "CRITICAL": "FAIL"}
 
 
 async def register_soda_checks(call: Call, a: Dict[str, Any], ctx: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    table = str(a["table"])
+    table = str(a["table"]).strip()
     if not FQN.match(table) or table.count(".") != 2:
         raise ToolError("table must be DATABASE.SCHEMA.TABLE")
-    ok, problems, lines = [], [], []
+    if not a["checks"]:
+        raise ToolError("checks is empty")
+    ok, problems = [], []
     for c in a["checks"]:
         if not isinstance(c, dict) or not c.get("dsl"):
             raise ToolError("each check needs a one-line SodaCL check in dsl")
-        body = {"table": table, "column": c.get("column"), "severity": c.get("severity") if c.get("severity") in ("WARN", "FAIL") else "WARN",
-                "dsl": str(c["dsl"])[:2000], "requirement": c.get("requirement"),
-                **({"domain_id": a["domain_id"]} if a.get("domain_id") else {})}
+        severity = SODA_SEVERITY.get(str(c.get("severity") or "WARN").upper())
+        if not severity:
+            raise ToolError(f"severity must be WARN or FAIL, not {c.get('severity')!r}")
+        body = {"table": table, "column": str(c["column"]) if c.get("column") else None, "severity": severity,
+                "dsl": str(c["dsl"])[:2000], "requirement": str(c["requirement"])[:4000] if c.get("requirement") else None,
+                **({"domain_id": str(a["domain_id"])} if a.get("domain_id") else {})}
         data = _ok(*await call("POST", "/api/dq/parse", body), what="Checking a SodaCL check")
         if not data.get("ok"):
             problems.append({"dsl": body["dsl"], "problems": data.get("problems")})
             continue
-        ok.append(body)
-        lines.append(f"- {body['dsl']}    # {body['column'] or 'table'}, {body['severity']}: {data.get('headline') or ''}")
+        ok.append({**body, "_headline": data.get("headline") or ""})
     if not ok:
         raise ToolError(f"no check parsed: {_clip(problems, 800)}")
+    key = f"DQ:{table.upper()}"
+    prior = _open_change(ctx, key)
+    if prior:  # keep the checks drafted earlier for this table (same column and check: the newer one wins)
+        earlier = [op["body"] for op in prior["operations"]]
+        seen = {(str(b.get("column") or "").upper(), b["dsl"]) for b in ok}
+        ok = [b for b in earlier if (str(b.get("column") or "").upper(), b["dsl"]) not in seen] + ok
+    lines = [f"- {b['dsl']}    # {b.get('column') or 'table'}, {b['severity']}{': ' + b['_headline'] if b.get('_headline') else ''}" for b in ok]
+    bodies = [{k: v for k, v in b.items() if k != "_headline"} for b in ok]
     name = table.split(".")[-1].lower()
     change = changeset.make(
-        f"DQ:{table.upper()}", "DQ", f"Data quality checks on {table}: {len(ok)} added",
-        [{"method": "POST", "path": "/api/dq/catalog", "body": b} for b in ok],
+        key, "DQ", f"Data quality checks on {table}: {len(bodies)} added",
+        [{"method": "POST", "path": "/api/dq/catalog", "body": b} for b in bodies],
         {"files": [preview.file_diff(f"checks/{name}.yml", None, f"checks for {table}:\n" + "\n".join(lines) + "\n")]})
-    return {"summary": {"drafted": change["title"], "rejected": problems,
+    return {"summary": {"drafted": change["title"], "rejected": problems, "built_on_earlier_draft": bool(prior),
                         "publishing": "added to the table's suite draft; a DQ approver approves the suite"},
-            "change": change, "steps": [("quality", "DONE", f"{len(ok)} checks"), ("dryrun", "DONE", "SodaCL parsed")]}
+            "change": change, "steps": [("quality", "DONE", f"{len(bodies)} checks"), ("dryrun", "DONE", "SodaCL parsed")]}
 
 
 async def onboard_source_config(call: Call, a: Dict[str, Any], ctx: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -381,8 +463,8 @@ async def onboard_source_config(call: Call, a: Dict[str, Any], ctx: Optional[Dic
     data = _ok(*await call("POST", "/api/hub/ingestion-control/validate", config), what="Validating the source")
     if not data.get("valid"):
         return {"summary": {"valid": False, "errors": data.get("errors"),
-                            "next": "ask the user for the missing or wrong fields, then call this tool again"},
-                "steps": [("intake", "RUNNING", "source configuration incomplete")]}
+                            "next": "ask the person for the missing or wrong fields (only those), then call this tool again with everything"},
+                "steps": [("intake", "RUNNING", f"{len(data.get('errors') or {})} source details still needed")]}
     source = data.get("source") or {}
     name = str(source.get("source_name") or (a.get("source") or {}).get("source_name") or "source")
     change = changeset.make(f"INGESTION:{name.upper()}", "INGESTION",
@@ -398,6 +480,8 @@ async def sync_jira_status(call: Call, a: Dict[str, Any], ctx: Optional[Dict[str
     key = str(a["key"]).strip().upper()
     if not JIRA_KEY.match(key):
         raise ToolError(f"{key} is not a Jira issue key")
+    if not str(a["comment_markdown"]).strip():
+        raise ToolError("comment_markdown is empty")
     ops = [{"method": "POST", "path": f"/api/jira/issues/{key}/comment", "body": {"markdown": str(a["comment_markdown"])[:30000]}}]
     moved = None
     if a.get("transition"):
@@ -407,12 +491,12 @@ async def sync_jira_status(call: Call, a: Dict[str, Any], ctx: Optional[Dict[str
         pick = next((t for t in options if want in (str(t.get("name") or "").lower(), str(t.get("to") or "").lower())), None)
         if not pick:
             raise ToolError(f"{key} cannot move to {a['transition']!r}; it can move to: "
-                            + ", ".join(str(t.get("to") or t.get("name")) for t in options))
+                            + (", ".join(str(t.get("to") or t.get("name")) for t in options) or "nothing right now"))
         ops.append({"method": "POST", "path": f"/api/jira/issues/{key}/transition", "body": {"transition_id": str(pick["id"])}})
         moved = pick.get("to") or pick.get("name")
     change = changeset.make(f"JIRA:{key}", "JIRA", f"Jira {key}: comment" + (f" and move to {moved}" if moved else ""), ops,
                             {"files": [preview.file_diff(f"jira/{key}-comment.md", None, str(a["comment_markdown"]))]})
-    return {"summary": {"drafted": change["title"]}, "change": change}
+    return {"summary": {"drafted": change["title"], "publishing": "posted after you approve, as you"}, "change": change}
 
 
 # ---------------------------------------------------------------- conversation context, questions and lookups
@@ -509,6 +593,12 @@ def onboarding_catalog() -> Dict[str, Any]:
     }
 
 
+async def landing_targets(call: Call, a: Dict[str, Any], ctx: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    data = _ok(*await call("GET", "/api/landing/targets"), what="Reading landing targets")
+    return {"summary": {"default": data.get("default"), "database": data.get("database"),
+                        "schemas": (data.get("schemas") or [])[:100], "iceberg_available": data.get("iceberg_available")}}
+
+
 async def onboarding_requirements(call: Call, a: Dict[str, Any], ctx: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     return {"summary": onboarding_catalog(), "steps": [("intake", "RUNNING", "collecting source details")]}
 
@@ -539,6 +629,8 @@ TOOLS: Dict[str, Tool] = {t.name: t for t in [
     Tool("list_runs", "List recent pipeline runs, optionally filtered by text.", "context", {"q": _s(False, 100)}, list_runs),
     Tool("list_ingestion_sources", "List the SnapLogic ingestion configurations already onboarded.", "context",
          {"q": _s(False, 100)}, list_ingestion_sources),
+    Tool("landing_targets", "The platform's real landing database, its schemas and the default landing schema. Use them "
+         "as defaults when onboarding a source.", "context", {}, landing_targets),
     Tool("onboarding_requirements", "Every field a SnapLogic source onboarding needs, with the allowed choices. Call it "
          "before asking the person about a new source.", "intake", {}, onboarding_requirements),
     Tool("fetch_jira_issue", "Read a Jira issue (summary, description, recent comments).", "intake",

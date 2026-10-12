@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
 import { ArrowUp, FileText, Link2, Loader2, Paperclip, Search, Ticket, TriangleAlert, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { Attachment } from "@/lib/copilot-types";
@@ -9,6 +9,13 @@ import { connectJira, jiraIssues, jiraStatus, type JiraIssue, type JiraStatus } 
 export const ACCEPT = ".txt,.md,.csv,.tsv,.json,.jsonl,.yaml,.yml,.sql,.ddl,.xml,.avsc,.docx,.xlsx,.xlsm,.log";
 
 export type Uploading = { key: string; name: string };
+
+/** The same limits the API applies (services/agentic/attachments.py, copilot_agent_api.py). */
+export const MAX_FILE_BYTES = 10 * 1024 * 1024;
+export const MAX_FILES = 20;
+export const MAX_JIRA = 10;
+/** The draft survives the round trip to Atlassian when the person connects Jira from the picker. */
+export const DRAFT_KEY = "aip.copilot.draft";
 
 function size(bytes: number) {
   return bytes > 1048576 ? `${(bytes / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`;
@@ -25,6 +32,8 @@ export function Composer({ value, onChange, onSend, busy, disabled, files, uploa
   const box = useRef<HTMLTextAreaElement>(null);
   const picker = useRef<HTMLInputElement>(null);
   const [jiraOpen, setJiraOpen] = useState(false);
+  const jiraRoot = useRef<HTMLDivElement>(null);
+  const closeJira = useCallback(() => setJiraOpen(false), []);
   const canSend = !busy && !disabled && !uploading.length && (value.trim().length > 0 || files.length > 0 || jiraKeys.length > 0);
 
   useEffect(() => {  // grow with the text, up to a limit
@@ -81,11 +90,11 @@ export function Composer({ value, onChange, onSend, busy, disabled, files, uploa
         <input ref={picker} type="file" multiple accept={ACCEPT} className="hidden"
                onChange={(e) => { const list = Array.from(e.target.files ?? []); e.target.value = ""; if (list.length) onAttach(list); }} />
         <ToolButton label="Attach files" onClick={() => picker.current?.click()} disabled={!!disabled}><Paperclip className="h-4 w-4" /></ToolButton>
-        <div className="relative">
-          <ToolButton label="Add a Jira issue" onClick={() => setJiraOpen(!jiraOpen)} disabled={!!disabled} active={jiraOpen}>
+        <div className="relative" ref={jiraRoot}>
+          <ToolButton label="Add a Jira issue" onClick={() => setJiraOpen(!jiraOpen)} disabled={!!disabled || jiraKeys.length >= MAX_JIRA} active={jiraOpen}>
             <Ticket className="h-4 w-4" />
           </ToolButton>
-          {jiraOpen && <JiraPicker onPick={(k) => { onAddJira(k); setJiraOpen(false); }} onClose={() => setJiraOpen(false)} taken={jiraKeys} />}
+          {jiraOpen && <JiraPicker root={jiraRoot} draft={value} onPick={(k) => { onAddJira(k); setJiraOpen(false); }} onClose={closeJira} taken={jiraKeys} />}
         </div>
         <span className="ml-2 hidden text-[11px] text-muted-foreground sm:inline">Enter to send · Shift+Enter for a new line</span>
         <button type="button" onClick={onSend} disabled={!canSend} aria-label="Send"
@@ -110,31 +119,34 @@ function ToolButton({ label, onClick, disabled, active, children }: {
 }
 
 /** Pick a Jira issue: the person's open issues, or a search. Offers to connect when the person is not connected. */
-function JiraPicker({ onPick, onClose, taken }: { onPick: (key: string) => void; onClose: () => void; taken: string[] }) {
+function JiraPicker({ root, draft, onPick, onClose, taken }: {
+  root: RefObject<HTMLDivElement>; draft: string; onPick: (key: string) => void; onClose: () => void; taken: string[];
+}) {
   const [status, setStatus] = useState<JiraStatus | null | "error">(null);
   const [issues, setIssues] = useState<JiraIssue[] | null>(null);
   const [q, setQ] = useState("");
   const [error, setError] = useState("");
   const [connecting, setConnecting] = useState(false);
-  const root = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
-    void jiraStatus().then((r) => setStatus(r.ok ? r.data : "error"));
+  useEffect(() => {  // once per opening
+    void jiraStatus().then((r) => setStatus(r.ok ? r.data : "error"), () => setStatus("error"));
+  }, []);
+  useEffect(() => {  // the wrapper holds the toggle button too, so clicking it toggles instead of close-then-reopen
     const away = (e: MouseEvent) => { if (!root.current?.contains(e.target as Node)) onClose(); };
     const esc = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
     document.addEventListener("mousedown", away);
     document.addEventListener("keydown", esc);
     return () => { document.removeEventListener("mousedown", away); document.removeEventListener("keydown", esc); };
-  }, [onClose]);
+  }, [root, onClose]);
 
-  const connected = status && status !== "error" && status.connected;
+  const connected = !!(status && status !== "error" && status.connected);
   useEffect(() => {
     if (!connected) return;
     const t = setTimeout(() => {
       const query = q.trim();
       void (query ? jiraIssues("search", { q: query }) : jiraIssues("mine")).then((r) => {
         if (r.ok) { setIssues(r.data.issues); setError(""); } else setError(r.error);
-      });
+      }, () => setError("Jira could not be reached."));
     }, q ? 300 : 0);
     return () => clearTimeout(t);
   }, [connected, q]);
@@ -143,7 +155,7 @@ function JiraPicker({ onPick, onClose, taken }: { onPick: (key: string) => void;
   const typedKey = /^[A-Z][A-Z0-9_]*-\d+$/.test(key) ? key : null;
 
   return (
-    <div ref={root} role="dialog" aria-label="Add a Jira issue"
+    <div role="dialog" aria-label="Add a Jira issue"
          className="popover absolute bottom-full left-0 z-30 mb-2 w-[360px] max-w-[85vw] animate-fade-up overflow-hidden p-0">
       <div className="border-b px-3 py-2 text-xs font-semibold">Jira issue</div>
       {status === null && <p className="flex items-center gap-2 p-4 text-xs text-muted-foreground"><Loader2 className="h-3.5 w-3.5 animate-spin" /> Checking your Jira connection…</p>}
@@ -157,6 +169,7 @@ function JiraPicker({ onPick, onClose, taken }: { onPick: (key: string) => void;
           <button type="button" disabled={connecting}
                   onClick={async () => {
                     setConnecting(true);
+                    try { if (draft) sessionStorage.setItem(DRAFT_KEY, draft); } catch { /* storage unavailable */ }
                     const r = await connectJira(window.location.pathname);
                     if (r.ok) window.location.href = r.data.url; else { setError(r.error); setConnecting(false); }
                   }}

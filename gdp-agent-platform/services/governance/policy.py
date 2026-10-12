@@ -132,6 +132,8 @@ RULES: List[Tuple[str, str, Any, str]] = [
     # Copilot workspace (V048): the conversation itself needs AI.USE; every call its tools make is checked again,
     # under the person's own session, by this same middleware.
     ("POST", r"/api/copilot/sessions(/.*)?", "AI.USE", ""),
+    # an AI proposal for one STTM Store line: read only (applying it is a store edit, which goes for approval)
+    ("POST", r"/api/hub/sttm/[^/]+/refine", "AI.USE", ""),
     ("POST", r"/api/oracle/integrations/check", "SOURCE.CONNECT", ""),
     ("POST", rf"{R}/model/validate", None, ""),
     ("POST", rf"{R}/(mapping/assist|qa/ask|qa/plan|sttm/refine)", "AI.USE", ""),

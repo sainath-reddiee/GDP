@@ -12,6 +12,6 @@ export async function POST(req: Request, { params }: { params: { sessionId: stri
   });
   return new Response(upstream.body, {
     status: upstream.status,
-    headers: { "Content-Type": upstream.headers.get("content-type") ?? "text/event-stream", "Cache-Control": "no-cache, no-transform" },
+    headers: { "Content-Type": upstream.headers.get("content-type") ?? "text/event-stream", "Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "no" },
   });
 }

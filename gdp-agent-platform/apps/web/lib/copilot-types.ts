@@ -11,7 +11,7 @@ export type FormField = {
 };
 
 export type ChangeKind = "INGESTION" | "MODEL" | "STTM" | "DBT" | "QA" | "DQ" | "GIT" | "JIRA";
-export type ChangeStatus = "PROPOSED" | "APPLIED" | "PENDING_APPROVAL" | "FAILED" | "DISCARDED";
+export type ChangeStatus = "PROPOSED" | "PUBLISHING" | "APPLIED" | "PENDING_APPROVAL" | "FAILED" | "DISCARDED";
 export type Change = {
   change_id: string; seq: number; change_key: string; kind: ChangeKind; title: string; status: ChangeStatus;
   request_id?: string | null; result?: { detail?: string } | null; operations?: { method: string; path: string }[];
@@ -89,20 +89,25 @@ export async function readStream(res: Response, on: (e: Record<string, any>) => 
   if (!reader) return;
   const decoder = new TextDecoder();
   let buffer = "";
+  const emit = (block: string) => {
+    const data = block.split("\n").filter((l) => l.startsWith("data:")).map((l) => l.slice(5).trim()).join("\n");
+    if (!data) return;
+    let parsed: Record<string, any>;
+    try { parsed = JSON.parse(data); } catch { return; /* a partial or foreign event: skip it */ }
+    on(parsed);   // outside the try: a bug in the handler must not vanish silently
+  };
   for (;;) {
     const { value, done } = await reader.read();
     if (done) break;
-    buffer += decoder.decode(value, { stream: true });
+    buffer = (buffer + decoder.decode(value, { stream: true })).replace(/\r\n?/g, "\n");
     let cut: number;
     while ((cut = buffer.indexOf("\n\n")) >= 0) {
-      const block = buffer.slice(0, cut);
+      emit(buffer.slice(0, cut));
       buffer = buffer.slice(cut + 2);
-      const data = block.split("\n").filter((l) => l.startsWith("data:")).map((l) => l.slice(5).trim()).join("\n");
-      if (data) {
-        try { on(JSON.parse(data)); } catch { /* a partial or foreign event: skip it */ }
-      }
     }
   }
+  buffer = (buffer + decoder.decode()).replace(/\r\n?/g, "\n");
+  if (buffer.trim()) emit(buffer);
 }
 
 export const KIND_LABEL: Record<ChangeKind, string> = {
