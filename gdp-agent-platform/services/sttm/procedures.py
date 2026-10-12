@@ -61,6 +61,13 @@ def generate_sttm(session, run_id: str) -> Dict[str, Any]:
                  "target_table": target["TARGET_TABLE"], "table_name": target["TARGET_TABLE"]},
                 columns, decisions, source_name, run["SOURCE_DATABASE"], run["SOURCE_SCHEMA"],
             )
+            # changes made in the STTM Store since the last generation are applied again, not dropped
+            carried = None
+            edits = catalog_sttm.store_edits_for_run(session, run_id, target["TARGET_TABLE_ID"])
+            if edits:
+                carried = catalog_sttm.carry_store_edits(edits[0], edits[1], contract["lines"], contract["table_design"])
+                contract["unmapped_required"] = [l["target_column"] for l in contract["lines"]
+                                                 if l.get("mapping_type") == "UNMAPPED" and l.get("required")]
             graph = plan_joins(session, run_id, contract["lines"])
             contract["table_design"].update(join_graph=graph, driving_table=graph["driving_table"],
                                             join_paths=[j["condition"] for j in graph["joins"]])
@@ -89,12 +96,13 @@ def generate_sttm(session, run_id: str) -> Dict[str, Any]:
                              "TARGET_DOMAIN", "TARGET_DATABASE", "TARGET_SCHEMA", "TARGET_TABLE", "TARGET_COLUMN",
                              "TARGET_DATATYPE", "MAPPING_TYPE", "TRANSFORMATION", "BUSINESS_RULE",
                              "BUSINESS_DEFINITION", "NULLABLE_RULE", "UNIQUENESS_RULE", "ACCEPTED_VALUES",
-                             "SCD_BEHAVIOR", "MAPPING_CONFIDENCE", "HUMAN_APPROVED", "REVIEWER", "JOIN_LOGIC"],
+                             "SCD_BEHAVIOR", "MAPPING_CONFIDENCE", "HUMAN_APPROVED", "REVIEWER", "JOIN_LOGIC",
+                             "FILTER_RULE"],
                             ["?", "?", "NULLIF(?, '')", "NULLIF(?, '')", "NULLIF(?, '')", "NULLIF(?, '')",
                              "NULLIF(?, '')", "NULLIF(?, '')", "NULLIF(?, '')", "?", "?", "?", "?", "?", "?",
                              "?", "NULLIF(?, '')", "NULLIF(?, '')", "NULLIF(?, '')", "?::BOOLEAN", "?::BOOLEAN",
                              "PARSE_JSON(?)", "NULLIF(?, '')", "NULLIF(?, '')::FLOAT", "?::BOOLEAN", "NULLIF(?, '')",
-                             "NULLIF(?, '')"],
+                             "NULLIF(?, '')", "NULLIF(?, '')"],
                             [[str(uuid.uuid4()), sttm_id, l.get("decision_id"), l.get("source_system"),
                               l.get("source_database"), l.get("source_schema"), l.get("source_table"),
                               l.get("source_column"), l.get("source_datatype"),
@@ -105,10 +113,16 @@ def generate_sttm(session, run_id: str) -> Dict[str, Any]:
                               l.get("business_rule"), l.get("business_definition"), l["nullable_rule"],
                               l["uniqueness_rule"], l.get("accepted_values") or [], l.get("scd_behavior"),
                               l.get("mapping_confidence"), l["human_approved"], l.get("reviewer"),
-                              join_logic.get(str(l.get("source_table") or "").upper())]
+                              join_logic.get(str(l.get("source_table") or "").upper()), l.get("filter_rule")]
                              for l in contract["lines"]])
 
             call.summary = f"STTM v{version}: {len(contract['lines'])} lines, grain {contract['table_design']['grain']}"
+            if carried:
+                call.summary += (f"; kept {len(carried['applied'])} STTM Store edit(s), {len(carried['added'])} added and "
+                                 f"{len(carried['removed'])} removed line(s)"
+                                 + (f"; {len(carried['conflicts'])} conflict(s) where the new mapping won: "
+                                    + ", ".join(f"{c['target_column'] or ''} {c['field']}".strip()
+                                                for c in carried['conflicts'][:6]) if carried["conflicts"] else ""))
         except Exception as exc:
             call.status, call.error = "FAILED", clip(exc)
             stage.fail(exc)
@@ -116,7 +130,7 @@ def generate_sttm(session, run_id: str) -> Dict[str, Any]:
     stage.move("STTM_REVIEW", call.summary, {"sttm_id": sttm_id, "version": version}, in_transaction=write)
     catalog_sttm.snapshot(session, sttm_id, "GENERATED", call.summary)  # GOVERNANCE.STTM_CATALOG; never raises
     return {"sttm_id": sttm_id, "version": version, "table_design": contract["table_design"],
-            "lines": contract["lines"], "state": stage.payload()}
+            "lines": contract["lines"], "store_edits": carried, "state": stage.payload()}
 
 
 def _current_sttm(session, run_id: str) -> Dict[str, Any]:

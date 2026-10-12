@@ -21,7 +21,7 @@ from services.quality.profile_checks import profile_checks
 from services.soda.expectations import (
     from_client, from_sttm, merge_checks, not_yet_current, render_yaml, without_rejected,
 )
-from services.soda.decisions import DecisionPayloadError, parse_decision_payload, stored_status
+from services.soda.decisions import DecisionPayloadError, carry_decisions, parse_decision_payload, stored_status
 from services.soda.extract import EXTRACT_SCHEMA, extract_prompt, parse_client_document, requirement_from_row
 from services.soda.feedback import pattern as feedback_pattern
 
@@ -171,20 +171,45 @@ def _extract(session, brief: str, table: str, columns: List[str], knowledge: Lis
     return [requirement_from_row(table, {**r, "origin": "AI"}) for r in output.get("requirements") or []]
 
 
+PRIOR_SQL = """SELECT TARGET_TABLE, TARGET_COLUMN, CHECK_TYPE, CHECK_DEFINITION, SEVERITY, CLIENT_REQUIREMENT, STATUS,
+                      REVIEWED_BY, REVIEWED_AT{extra}
+                 FROM CONTRACT.SODA_EXPECTATION_REGISTRY WHERE RUN_ID = ? AND IS_CURRENT"""
+
+
+def _prior(session, run_id: str) -> List[Dict[str, Any]]:
+    """The run's current checks with their decisions (and, from V045, what the generator had proposed)."""
+    try:
+        return rows(session, PRIOR_SQL.format(extra=", GENERATED_DEFINITION"), [run_id])
+    except Exception:  # before V045
+        return rows(session, PRIOR_SQL.format(extra=""), [run_id])
+
+
 def _store(session, run_id: str, sttm: Dict[str, Any], checks: List[Dict[str, Any]]) -> int:
+    """A new version of the run's checks. Each check keeps the status and reviewer carry_decisions gave it
+    (PROPOSED otherwise) and, from V045, the definition the generator proposed."""
     version = (scalar(session, "SELECT MAX(VERSION) FROM CONTRACT.SODA_EXPECTATION_REGISTRY WHERE RUN_ID = ?",
                       [run_id]) or 0) + 1
     session.sql("UPDATE CONTRACT.SODA_EXPECTATION_REGISTRY SET IS_CURRENT = FALSE, STATUS = 'SUPERSEDED' "
                 "WHERE RUN_ID = ? AND IS_CURRENT", params=[run_id]).collect()
-    insert_rows(session, "CONTRACT.SODA_EXPECTATION_REGISTRY",
-                ["EXPECTATION_ID", "RUN_ID", "STTM_ID", "DOMAIN_ID", "TARGET_TABLE", "TARGET_COLUMN", "CHECK_TYPE",
-                 "CHECK_DEFINITION", "SEVERITY", "ORIGIN", "CLIENT_REQUIREMENT", "STATUS", "VERSION", "IS_CURRENT",
-                 "CREATED_BY"],
-                ["?", "?", "?", "?", "?", "NULLIF(?, '')", "?", "PARSE_JSON(?)", "?", "?", "NULLIF(?, '')",
-                 "'PROPOSED'", "?::NUMBER", "TRUE", "CURRENT_USER()"],
-                [[str(uuid.uuid4()), run_id, sttm["STTM_ID"], sttm["DOMAIN_ID"], c["target_table"],
-                  c.get("target_column"), c["check_type"], c["definition"], c["severity"], c["origin"],
-                  clip(c.get("requirement")), version] for c in checks])
+    columns = ["EXPECTATION_ID", "RUN_ID", "STTM_ID", "DOMAIN_ID", "TARGET_TABLE", "TARGET_COLUMN", "CHECK_TYPE",
+               "CHECK_DEFINITION", "SEVERITY", "ORIGIN", "CLIENT_REQUIREMENT", "STATUS", "VERSION", "IS_CURRENT",
+               "CREATED_BY", "REVIEWED_BY", "REVIEWED_AT"]
+    exprs = ["?", "?", "?", "?", "?", "NULLIF(?, '')", "?", "PARSE_JSON(?)", "?", "?", "NULLIF(?, '')",
+             "?", "?::NUMBER", "TRUE", "CURRENT_USER()", "NULLIF(?, '')", "TRY_TO_TIMESTAMP_LTZ(NULLIF(?, ''))"]
+    values = [[str(uuid.uuid4()), run_id, sttm["STTM_ID"], sttm["DOMAIN_ID"], c["target_table"],
+               c.get("target_column"), c["check_type"], c["definition"], c["severity"], c["origin"],
+               clip(c.get("requirement")), c.get("status") or "PROPOSED", version, c.get("reviewed_by") or "",
+               str(c.get("reviewed_at") or "")] for c in checks]
+    try:  # V045
+        insert_rows(session, "CONTRACT.SODA_EXPECTATION_REGISTRY", columns + ["GENERATED_DEFINITION"],
+                    exprs + ["PARSE_JSON(NULLIF(?, ''))"],
+                    [v + [json.dumps(c["generated_definition"]) if c.get("generated_definition") is not None else ""]
+                     for v, c in zip(values, checks)])
+        return version
+    except Exception as exc:
+        if "GENERATED_DEFINITION" not in str(exc).upper():
+            raise
+    insert_rows(session, "CONTRACT.SODA_EXPECTATION_REGISTRY", columns, exprs, values)
     return version
 
 
@@ -238,13 +263,15 @@ def generate_soda(session, run_id: str) -> Dict[str, Any]:
                 profiled = []
             checks = without_rejected(merge_checks(checks, stored, extracted, imported, profiled),
                                      _rejected(session, sttm["DOMAIN_ID"]))
+            carried = carry_decisions(checks, _prior(session, run_id))  # reviewed decisions survive regeneration
             yaml_text = render_yaml(table.lower(), checks)
 
             def write(_event_id: str) -> None:
                 nonlocal version
                 version = _store(session, run_id, sttm, checks)
 
-            call.summary = f"{len(checks)} Soda expectations"
+            call.summary = (f"{len(checks)} Soda expectations; {carried['kept'] + carried['rejected']} kept their review"
+                            + (f", {carried['review_again']} to review again (input changed)" if carried["review_again"] else ""))
         except Exception as exc:
             call.status, call.error = "FAILED", clip(exc)
             stage.fail(exc)

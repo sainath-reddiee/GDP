@@ -248,6 +248,89 @@ def plan_edit(entry: Dict[str, Any], payload: Dict[str, Any], columns: Dict[str,
             "diff": diff(entry.get("lines") or [], lines)}
 
 
+def _norm(value: Any) -> Any:
+    if value in (None, "", []):
+        return None
+    if isinstance(value, (list, dict)):
+        return json.dumps(value, sort_keys=True, default=str)
+    return value.strip() if isinstance(value, str) else value
+
+
+def carry_store_edits(baseline: Dict[str, Any], latest: Dict[str, Any], lines: List[Dict[str, Any]],
+                      design: Dict[str, Any]) -> Dict[str, Any]:
+    """Re-apply to a regenerated STTM the changes made in the STTM Store since the run's last generation. Pure.
+
+    `baseline` is the catalog version the last generation wrote and `latest` the run's newest version (lines and
+    table_design each); `lines` and `design` are what generation just assembled and are updated in place. A field
+    changed in the store takes the store's value while the regenerated value still equals the baseline (the new
+    mapping did not touch it); when both changed, the regenerated value stays and the field is reported as a
+    conflict. Lines added in the store are added back unless the mapping now produces that column; lines removed in
+    the store are removed. Returns {applied, added, removed, conflicts}."""
+    report: Dict[str, List[Any]] = {"applied": [], "added": [], "removed": [], "conflicts": []}
+    base = {_key(l): l for l in baseline.get("lines") or []}
+    late = {_key(l): l for l in latest.get("lines") or []}
+    index = {_key(l): l for l in lines}
+    for col in sorted(set(base) & set(late)):
+        line = index.get(col)
+        if line is None:
+            continue
+        for field in EDITABLE:
+            before, after, now = base[col].get(field), late[col].get(field), line.get(field)
+            if _norm(before) == _norm(after) or _norm(now) == _norm(after):
+                continue
+            if _norm(now) == _norm(before):
+                line[field] = after
+                line["human_approved"] = True
+                report["applied"].append(f"{col}.{field}")
+            else:
+                report["conflicts"].append({"target_column": col, "field": field, "store": after, "regenerated": now})
+    for col in sorted(set(late) - set(base)):
+        if col in index:
+            report["conflicts"].append({"target_column": col, "field": "line", "store": "added in the STTM Store",
+                                        "regenerated": "mapped by the run"})
+            continue
+        added = {**{k: None for k in LINE_FIELDS}, **_line(late[col])}
+        added.update(target_column=late[col].get("target_column") or col,
+                     target_datatype=added.get("target_datatype") or "VARCHAR",
+                     mapping_type=added.get("mapping_type") or "UNMAPPED", nullable_rule=True, uniqueness_rule=False,
+                     accepted_values=[], human_approved=True, required=False)
+        lines.append(added)
+        report["added"].append(added["target_column"])
+    for col in sorted(set(base) - set(late)):
+        if col in index:
+            lines.remove(index[col])
+            report["removed"].append(col)
+    base_design, late_design = baseline.get("table_design") or {}, latest.get("table_design") or {}
+    for field in DESIGN_FIELDS:
+        before, after, now = base_design.get(field), late_design.get(field), design.get(field)
+        if _norm(before) == _norm(after) or _norm(now) == _norm(after):
+            continue
+        if _norm(now) == _norm(before):
+            design[field] = after
+            report["applied"].append(f"design.{field}")
+        else:
+            report["conflicts"].append({"target_column": None, "field": f"design.{field}", "store": after, "regenerated": now})
+    return report
+
+
+def store_edits_for_run(session, run_id: str, target_table_id: str) -> Optional[Tuple[Dict[str, Any], Dict[str, Any]]]:
+    """(baseline, latest) catalog versions of this run's mapping when the STTM Store changed it after the last
+    generation, else None. Never raises (before V036 there is no catalog)."""
+    try:
+        found = rows(session, f"""SELECT VERSION, ORIGIN, LINES, TABLE_DESIGN FROM {TABLE}
+                                   WHERE RUN_ID = ? AND TARGET_TABLE_ID = ? ORDER BY VERSION DESC LIMIT 50""",
+                     [run_id, target_table_id])
+    except Exception:
+        return None
+    versions = [{"version": int(r["VERSION"]), "origin": r["ORIGIN"], "lines": variant(r["LINES"]) or [],
+                 "table_design": variant(r["TABLE_DESIGN"]) or {}} for r in found]
+    baseline = next((v for v in versions if v["origin"] in ("GENERATED", "BACKFILL")), None)
+    if not baseline or not versions:
+        return None
+    edited = [v for v in versions if v["version"] > baseline["version"] and v["origin"] == "CATALOG_EDIT"]
+    return (baseline, versions[0]) if edited else None
+
+
 def export_files(entry: Dict[str, Any], landing_tables: Optional[List[Dict[str, str]]] = None) -> Dict[str, str]:
     """A catalog version as a compile-ready dbt project (services/dbt/project.build)."""
     from services.dbt.project import build
