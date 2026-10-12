@@ -139,7 +139,7 @@ def decide(session, domain_id: str, payload_json: str) -> Dict[str, Any]:
     domain = _domain(session, domain_id)
     # the deploy marks repository packs origin=repository; UI-created domains (no CONFIG) are not packs
     if applied and str(domain["CONFIG"].get("origin") or "").lower() == "repository":
-        applied += ". This domain ships as a repository pack: add the change to its domain_pack.json too, or the next deploy resets it."
+        applied += ". This domain ships as a repository pack: deploys keep the change; add it to its domain_pack.json too so new environments get it."
     return {**recorded, "applied": applied}
 
 

@@ -125,7 +125,8 @@ export type RunChange = {
   diff: { counts?: Record<string, number>; breaking?: boolean; changes?: { kind: string; class: string; message: string }[] };
   status: string; merged_into_version: number | null; note: string | null; created_by: string | null; created_at: string | null;
   decided_by: string | null; run_name: string | null; current_state: string | null;
-  source?: "RUN" | "ANNOTATION"; annotation_id?: string | null;
+  source?: "RUN" | "ANNOTATION" | "TABLE_MODEL"; annotation_id?: string | null;
+  table_model_id?: string | null; table_model_version?: number | null;
   patch?: { entity: string; column: string; set: Record<string, unknown> } | null;
 };
 

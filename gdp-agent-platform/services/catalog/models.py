@@ -291,8 +291,10 @@ def _snake(name: str) -> str:
     return re.sub(r"[^a-z0-9_]+", "_", str(name or "").lower()).strip("_") or "model"
 
 
-def render_dbt(spec: Dict[str, Any], project_dir: str = "") -> Dict[str, str]:
-    """dbt sources, one staging view per source table and one mart per entity, with key and relationship tests."""
+def render_dbt(spec: Dict[str, Any], project_dir: str = "", expressions: bool = False) -> Dict[str, str]:
+    """dbt sources, one staging view per source table and one mart per entity, with key and relationship tests.
+    With `expressions`, a derived column's transformation_hint is SQL and wins over its source column (table models,
+    where the hint is an expression the modeler wrote); otherwise it is used only for columns without a source."""
     root = (project_dir.strip("/") + "/") if project_dir.strip("/") else ""
     domain = _snake(spec["domain"])
     used: Dict[str, List[str]] = {}
@@ -336,7 +338,8 @@ def render_dbt(spec: Dict[str, Any], project_dir: str = "") -> Dict[str, str]:
         for a in e["attributes"]:
             src = next((s.rpartition(".")[2] for s in a.get("source_columns") or [] if s.rpartition(".")[0] == driving), None)
             expr = (a.get("transformation_hint") or "").strip() if a.get("derived") else ""
-            value = src.lower() if src else (expr if expr and ";" not in expr else "null")
+            usable = expr if expr and ";" not in expr else ""
+            value = usable if (expressions and usable) else src.lower() if src else (usable or "null")
             cols.append(f"    cast({value} as {target_type(a['datatype'], spec['target_platform']).lower()}) "
                         f"as {a['name'].lower()}")
         source = f"{{{{ ref('stg_{domain}__{_snake(driving)}') }}}}" if driving else "(select 1 as _placeholder)"

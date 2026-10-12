@@ -150,11 +150,11 @@ def render_dbt_tests(spec: Dict[str, Any], project_dir: str = "") -> Dict[str, s
     return files
 
 
-def render_dbt(spec: Dict[str, Any], project_dir: str = "") -> Dict[str, str]:
+def render_dbt(spec: Dict[str, Any], project_dir: str = "", expressions: bool = False) -> Dict[str, str]:
     """Sources, staging and mart models (the Modeling hub renderer on the active model) with the v2 tests."""
     from services.catalog.models import render_dbt as v1_dbt
 
-    files = v1_dbt(spec_v2.active(spec), project_dir)
+    files = v1_dbt(spec_v2.active(spec), project_dir, expressions)
     files.update(render_dbt_tests(spec, project_dir))
     return files
 

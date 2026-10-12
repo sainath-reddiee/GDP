@@ -1030,11 +1030,28 @@ def design_model(run_id: str, body: ModelDesignIn, db: Db = Depends(current_db))
     from services.modeling.design import design_model as handler
 
     try:
-        return invoke_source(db, handler, run_id, body.model_dump_json())
+        out = invoke_source(db, handler, run_id, body.model_dump_json())
     except AssertionError as exc:
         raise HTTPException(409, str(exc)) from exc
     except Exception as exc:
         raise _snowflake_error(exc) from exc
+    return {**out, "table_models": _register_table_models(db, run_id, out.get("version"))}
+
+
+def _register_table_models(db: Db, run_id: str, version: Optional[int]) -> list:
+    """A saved run design's tables kept in the Model Store (V044). Never fails the save, but a failure is returned
+    (status FAILED) so the page can say the Model Store was not updated; before V044 nothing is registered."""
+    from services.modeling.table_model_sync import register_from_run
+
+    if not version:
+        return []
+    try:
+        return invoke_source(db, register_from_run, run_id, int(version), str(db.user or "").upper())
+    except Exception as exc:
+        text = str(exc)
+        if "does not exist" in text.lower() and "TABLE_MODEL" in text.upper():
+            return []
+        return [{"table_model_id": None, "table_name": None, "status": "FAILED", "version": None, "error": text[:300]}]
 
 
 @app.put("/api/runs/{run_id}/model")
@@ -1043,11 +1060,12 @@ def save_model_design(run_id: str, body: ModelDesignSave, db: Db = Depends(curre
     from services.modeling.design import save_design
 
     try:
-        return invoke_source(db, save_design, run_id, body.model_dump_json())
+        out = invoke_source(db, save_design, run_id, body.model_dump_json())
     except AssertionError as exc:
         raise HTTPException(409, str(exc)) from exc
     except Exception as exc:
         raise _snowflake_error(exc) from exc
+    return {**out, "table_models": _register_table_models(db, run_id, out.get("version"))}
 
 
 @app.post("/api/runs/{run_id}/model/validate")
@@ -6521,6 +6539,7 @@ from app.hub_sources_api import router as hub_sources_router  # noqa: E402
 from app.hub_catalog_api import router as hub_catalog_router  # noqa: E402
 from app.hub_runs_api import router as hub_runs_router  # noqa: E402
 from app.model_workbench_api import router as model_workbench_router  # noqa: E402
+from app.table_models_api import router as table_models_router  # noqa: E402
 from app.hub_models_api import router as hub_models_router  # noqa: E402
 from app.hub_quality_api import router as hub_quality_router  # noqa: E402
 from app.quality_api import router as dq_router  # noqa: E402
@@ -6529,6 +6548,7 @@ app.include_router(hub_sources_router)
 app.include_router(hub_catalog_router)
 app.include_router(hub_runs_router)  # before the Modeling hub: /api/hub/models/runs is not a design id
 app.include_router(model_workbench_router)
+app.include_router(table_models_router)
 app.include_router(hub_models_router)
 app.include_router(hub_quality_router)
 app.include_router(dq_router)

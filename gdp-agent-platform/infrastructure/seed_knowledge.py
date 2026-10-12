@@ -385,6 +385,17 @@ def seed_dq_suites(cur, database: str) -> List[str]:
     return backfill(CursorSession(cur))
 
 
+def _cursor_query(cur):
+    """A %s-bind query function over a connector cursor, returning rows as dicts."""
+
+    def query(sql: str, params: tuple) -> List[Dict[str, Any]]:
+        cur.execute(sql, params)
+        names = [d[0] for d in cur.description]
+        return [dict(zip(names, row)) for row in cur.fetchall()]
+
+    return query
+
+
 def seed_platform(cur, database: str) -> List[str]:
     """MERGE domain packs, skills, config and scoring weights; PUT skill files to the stage. Returns log lines.
     Target tables of domains governed by an approved model are not re-applied from the packs."""
@@ -398,7 +409,7 @@ def seed_platform(cur, database: str) -> List[str]:
         elif not d["live"]:
             log.append(f"{d['domain']}.{d['table']}: no live silver table; {d['columns']} contract columns used"
                        + ("" if d["columns"] else " (registered inactive, knowledge only)"))
-    merge(cur.execute, database, data)
+    merge(cur.execute, database, data, query=_cursor_query(cur))  # keeps domain edits made in the app
     log.extend(snapshot_domains(cur, database))
     log.extend(seed_qa_packs(cur, database))
     log.extend(seed_domain_models(cur, database))

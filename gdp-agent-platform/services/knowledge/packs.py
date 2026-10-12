@@ -100,11 +100,110 @@ def pack_rows(pack: Dict[str, Any], database: str, live: Optional[LiveColumns] =
     return {"domains": domains, "tables": tables, "columns": columns, "knowledge": knowledge, "drift": drift}
 
 
-def merge(execute: Callable[..., Any], database: str, data: Dict[str, Any], origin: str = "SEED") -> None:
+# Domain config keys a pack owns. Every other key (rules, deletion markers, ...) is the app's and never touched.
+PACK_CONFIG_KEYS = ("silver_database", "silver_schema", "contract", "signals", "source_systems", "origin", "standard")
+SEEDED = "seeded"  # CONFIG.seeded: what the last deploy wrote, so a later deploy can tell edits from pack values
+
+
+def _js(value: Any) -> Any:
+    if isinstance(value, str) and value[:1] in "[{":
+        try:
+            return json.loads(value)
+        except ValueError:
+            return value
+    return value
+
+
+def _new_terms(pack_value: Any, seeded_value: Any, current_value: Any) -> Any:
+    """Detection signals someone edited: theirs, plus the terms the pack added since the last deploy (a term removed
+    on purpose stays removed)."""
+    if not isinstance(pack_value, dict) or not isinstance(current_value, dict):
+        return current_value
+    seeded_value = seeded_value if isinstance(seeded_value, dict) else {}
+    out = json.loads(json.dumps(current_value))
+    for bucket, terms in pack_value.items():
+        if not isinstance(terms, dict):
+            continue
+        before = seeded_value.get(bucket) if isinstance(seeded_value.get(bucket), dict) else {}
+        mine = out.setdefault(bucket, {})
+        if isinstance(mine, dict):
+            for term, weight in terms.items():
+                if term not in before and term not in mine:
+                    mine[term] = weight
+    return out
+
+
+def domain_values(current: Optional[Dict[str, Any]], row: Tuple, origin: str = "SEED") -> Dict[str, Any]:
+    """The DOMAIN_REGISTRY values to write for one pack row (id, name, description, owner, active, version, config)
+    given the row as it is now (None when new). Pure.
+
+    SEED (every deploy) is a three-way merge against CONFIG.seeded, what the previous deploy wrote: a description,
+    owner or pack config key follows the pack only while nobody changed it in the app; edited values stay, and new
+    detection signals from the pack are added to edited ones. Keys a pack does not own (rules, deletion markers) are
+    kept, the version is the app's, and a deleted domain stays deleted. The first deploy that finds no record keeps
+    the current values (they may hold edits) and records the pack's, so pack changes apply from then on.
+    PACK_IMPORT (a person importing a pack) takes the pack's description, owner and config keys, keeping the rest."""
+    _id, _name, description, owner, active, version, pack_config = row
+    pack_config = dict(pack_config or {})
+    seeded_now = {"description": description, "owner": owner, "config": dict(pack_config)}
+    if not current:
+        config = dict(pack_config)
+        if origin == "SEED":
+            config[SEEDED] = seeded_now
+        return {"description": description, "owner": owner, "active": active, "version": version, "config": config}
+    cur = {str(k).lower(): v for k, v in current.items()}
+    config = _js(cur.get("config")) or {}
+    config = dict(config) if isinstance(config, dict) else {}
+    deleted = bool(config.get("deleted_at"))
+    kept_version = cur.get("version") if cur.get("version") is not None else version
+    kept_active = bool(cur.get("active_flag")) if deleted else active
+    if origin != "SEED":
+        config.update(pack_config)
+        return {"description": description, "owner": owner, "active": kept_active, "version": kept_version,
+                "config": config}
+    seeded = config.get(SEEDED) if isinstance(config.get(SEEDED), dict) else None
+    before_config = (seeded or {}).get("config") or {}
+
+    def pick(now: Any, before: Any, pack: Any, present: bool = True) -> Any:
+        if seeded is None:
+            return now if present else pack
+        return pack if now == before else now
+
+    out_description = pick(cur.get("description"), (seeded or {}).get("description"), description)
+    out_owner = pick(cur.get("owner"), (seeded or {}).get("owner"), owner)
+    for key in PACK_CONFIG_KEYS:
+        now, before, pack = config.get(key), before_config.get(key), pack_config.get(key)
+        if key == "signals" and seeded is not None and now != before:
+            value = _new_terms(pack, before, now)
+        else:
+            value = pick(now, before, pack, key in config)
+        if value is None:
+            config.pop(key, None)
+        else:
+            config[key] = value
+    config[SEEDED] = seeded_now
+    return {"description": out_description, "owner": out_owner, "active": kept_active, "version": kept_version,
+            "config": config}
+
+
+def merge(execute: Callable[..., Any], database: str, data: Dict[str, Any], origin: str = "SEED",
+          query: Optional[Callable[..., List[Dict[str, Any]]]] = None) -> None:
     """Idempotent MERGE of pack rows; `execute(sql, params)` uses %s binds (connector cursor or API Db).
-    origin SEED (repository packs, locked) or PACK_IMPORT (imported in the UI, editable like any item)."""
+    origin SEED (repository packs, locked) or PACK_IMPORT (imported in the UI, editable like any item).
+    `query` (%s binds) reads the domains as they are now, so edits made in the app survive a deploy
+    (domain_values); without it every domain row is written as the pack has it."""
     created_by = "'SEED'" if origin == "SEED" else "CURRENT_USER()"
+    current: Dict[str, Dict[str, Any]] = {}
+    if query and data["domains"]:
+        ids = [row[0] for row in data["domains"]]
+        found = query(f"SELECT DOMAIN_ID, DESCRIPTION, OWNER, ACTIVE_FLAG, VERSION, CONFIG "
+                      f"FROM {database}.KNOWLEDGE.DOMAIN_REGISTRY WHERE DOMAIN_ID IN ({', '.join(['%s'] * len(ids))})",
+                      tuple(ids)) or []
+        for r in found:
+            upper = {str(k).upper(): v for k, v in r.items()}
+            current[str(upper["DOMAIN_ID"])] = upper
     for row in data["domains"]:
+        values = domain_values(current.get(row[0]), row, origin)
         execute(
             f"""MERGE INTO {database}.KNOWLEDGE.DOMAIN_REGISTRY t
                 USING (SELECT %s AS DOMAIN_ID, %s AS DOMAIN_NAME, %s AS DESCRIPTION, %s AS OWNER,
@@ -115,7 +214,8 @@ def merge(execute: Callable[..., Any], database: str, data: Dict[str, Any], orig
                      UPDATED_AT = CURRENT_TIMESTAMP()
                 WHEN NOT MATCHED THEN INSERT (DOMAIN_ID, DOMAIN_NAME, DESCRIPTION, OWNER, ACTIVE_FLAG, VERSION, CONFIG)
                      VALUES (s.DOMAIN_ID, s.DOMAIN_NAME, s.DESCRIPTION, s.OWNER, s.ACTIVE_FLAG, s.VERSION, s.CONFIG)""",
-            (*row[:6], json.dumps(row[6] or {})),
+            (row[0], row[1], values["description"], values["owner"], values["active"], values["version"],
+             json.dumps(values["config"] or {}, default=str)),
         )
     for row in data["tables"]:
         execute(
@@ -260,7 +360,7 @@ def import_pack(execute: Callable[..., Any], database: str, pack: Dict[str, Any]
     query = query or getattr(getattr(execute, "__self__", None), "query", None)
     did = existing_domain_id(query, database, pack["domain"]["name"]) or domain_id(pack["domain"]["name"])
     data = pack_rows(pack, database, existing_id=did)
-    merge(execute, database, data, origin="PACK_IMPORT")
+    merge(execute, database, data, origin="PACK_IMPORT", query=query)
     return {"domain_id": did, "domain_name": pack["domain"]["name"],
             "targets": len(data["tables"]), "columns": len(data["columns"]), "knowledge": len(data["knowledge"]),
             "inactive_targets": [t[4] for t in data["tables"] if not t[11]]}
@@ -277,7 +377,7 @@ def export_pack(query: Callable[..., List[Dict[str, Any]]], domain: str) -> Dict
     found = [low(r) for r in query("SELECT * FROM KNOWLEDGE.DOMAIN_REGISTRY WHERE DOMAIN_ID = %s", (domain,))]
     assert found, "domain not found"
     d = found[0]
-    config = js(d.get("config")) or {}
+    config = {k: v for k, v in (js(d.get("config")) or {}).items() if k != SEEDED}  # the deploy's record is not pack data
     pack: Dict[str, Any] = {"domain": {"name": d["domain_name"], "description": d.get("description") or "",
                                        "owner": d.get("owner") or "", **config}, "targets": [], "knowledge": []}
     tables = [low(r) for r in query("SELECT * FROM KNOWLEDGE.TARGET_TABLE_REGISTRY WHERE DOMAIN_ID = %s "

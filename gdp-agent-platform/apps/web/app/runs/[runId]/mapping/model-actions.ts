@@ -44,18 +44,21 @@ export type ProposeResult = {
 };
 export type DiffChange = { entity: string; change: string; column?: string; columns?: string[]; fields?: string[]; from?: unknown; to?: unknown };
 
+/** A table of the design as kept in the Model Store (table models, V044). */
+export type StoredTable = { table_model_id: string | null; table_name: string | null; status: "CREATED" | "VERSIONED" | "UNCHANGED" | "FAILED"; version: number | null; error?: string };
+
 export async function generateDesign(runId: string, body: {
   preset: Conventions["preset"]; custom?: Partial<Conventions>; instructions?: string; base_version?: number;
   target_database?: string; target_schema?: string;
 }) {
-  const r = await attemptValue(() => api<{ version: number; issues: Issue[]; grounding: Record<string, unknown> }>(
+  const r = await attemptValue(() => api<{ version: number; issues: Issue[]; grounding: Record<string, unknown>; table_models?: StoredTable[] }>(
     `/api/runs/${runId}/model/design`, { method: "POST", body: JSON.stringify(body) }));
   if (r.ok) revalidatePath(`/runs/${runId}/mapping`);
   return r;
 }
 
 export async function saveDesign(runId: string, design: Design, conventions: Conventions, note?: string) {
-  const r = await attemptValue(() => api<{ version: number; issues: Issue[] }>(`/api/runs/${runId}/model`, {
+  const r = await attemptValue(() => api<{ version: number; issues: Issue[]; table_models?: StoredTable[] }>(`/api/runs/${runId}/model`, {
     method: "PUT", body: JSON.stringify({ design, conventions, note }),
   }));
   if (r.ok) revalidatePath(`/runs/${runId}/mapping`);

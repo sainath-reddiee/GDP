@@ -61,7 +61,9 @@ def state(query: Query, domain_id: str) -> Optional[Dict[str, Any]]:
                        "type": t.get("table_type"), "grain": t.get("grain"),
                        "columns": by_table.get(t["target_table_id"], [])} for t in tables), key=lambda t: t["table"])
     return {"domain_name": d["domain_name"], "description": d.get("description"), "owner": d.get("owner"),
-            "active": bool(d.get("active_flag")), "config": _json(d.get("config")) or {}, "targets": targets}
+            "active": bool(d.get("active_flag")), "targets": targets,
+            # CONFIG.seeded is the deploy's own record (services/knowledge/packs.domain_values), not domain content
+            "config": {k: v for k, v in (_json(d.get("config")) or {}).items() if k != "seeded"}}
 
 
 def checksum(snap: Dict[str, Any]) -> str:

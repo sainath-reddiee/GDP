@@ -15,7 +15,7 @@ import { useToast } from "@/components/ui/toast";
 import {
   approveDesign, checkDesign, diffDesigns, generateDesign, proposeDesign, saveDesign,
   type Attribute, type Conventions, type Design, type DesignVersion, type DiffChange, type Entity, type Issue,
-  type ModelPayload, type WorkbenchState,
+  type ModelPayload, type StoredTable, type WorkbenchState,
 } from "./model-actions";
 
 const PRESETS: { key: Conventions["preset"]; label: string; hint: string }[] = [
@@ -34,6 +34,14 @@ const EMPTY_CUSTOM: Conventions = {
   preset: "CUSTOM", audit_columns: ["LOAD_TS"], surrogate_key: "none", key_pattern: "{TABLE}_SK", naming_case: "upper",
   table_prefix: "", scd_type: null, soft_delete: false,
 };
+
+/** What a save did to the Model Store, for the confirmation line. */
+function stored(tables?: StoredTable[]): string {
+  const failed = (tables ?? []).find((t) => t.status === "FAILED");
+  if (failed) return ` The Model Store was not updated (${failed.error ?? "unknown error"}); save again to retry.`;
+  const changed = (tables ?? []).filter((t) => t.status !== "UNCHANGED");
+  return changed.length ? ` ${changed.length} table model(s) updated in the Model Store.` : "";
+}
 
 function issuesFor(issues: Issue[], path: string) {
   return issues.filter((i) => i.path === path || i.path.startsWith(`${path}.`));
@@ -254,7 +262,7 @@ export function ModelDesign({ runId, data, canApply, state, canEdit = true, canA
       target_database: draft?.target_database, target_schema: draft?.target_schema,
     });
     if (!r.ok) { setMessage({ ok: false, text: r.error }); return; }
-    setMessage({ ok: true, text: `Version ${r.data.version} designed by AI${r.data.issues.length ? ` · ${r.data.issues.length} notes` : ""}.` });
+    setMessage({ ok: true, text: `Version ${r.data.version} designed by AI${r.data.issues.length ? ` · ${r.data.issues.length} notes` : ""}.${stored(r.data.table_models)}` });
     setInstructions("");
     setDirty(false);  // the new AI version replaces the local draft, otherwise Save would store the old draft over it
     router.refresh();
@@ -267,7 +275,7 @@ export function ModelDesign({ runId, data, canApply, state, canEdit = true, canA
     if (!r.ok) { setMessage({ ok: false, text: r.error }); return; }
     setIssues(r.data.issues);
     setDirty(false);
-    setMessage({ ok: true, text: `Saved as version ${r.data.version}.` });
+    setMessage({ ok: true, text: `Saved as version ${r.data.version}.${stored(r.data.table_models)}` });
     router.refresh();
     setSelected(r.data.version);
   });
@@ -341,6 +349,12 @@ export function ModelDesign({ runId, data, canApply, state, canEdit = true, canA
       {!collapsed && (
         <>
           {wb?.enforced && <WorkbenchBanner wb={wb} />}
+          {versions.length > 0 && (
+            <p className="text-xs text-muted-foreground">
+              Every saved version keeps its tables in the Model Store, where they can be reopened and edited after this run moves on.{" "}
+              <Link href={`/dashboard/modeling?view=tables&run=${encodeURIComponent(runId)}`} className="font-medium text-primary hover:underline" data-testid="run-table-models">Open this run&apos;s table models</Link>
+            </p>
+          )}
           <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
             <div className="space-y-1">
               <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Conventions</p>
