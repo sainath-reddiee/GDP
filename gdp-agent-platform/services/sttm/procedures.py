@@ -167,26 +167,16 @@ def _profile_for(session, run_id: str, table: Optional[str], column: Optional[st
     }
 
 
-def _prior_rules(session, domain_id: Optional[str], target_column: Optional[str], run_id: Optional[str] = None) -> List[str]:
-    if not domain_id:
-        return []
-    from services.knowledge.writer import NOT_OPERATIONAL_SQL
+def _prior_rules(session, domain_id: Optional[str], target_column: Optional[str], run_id: Optional[str] = None,
+                 target_table: Optional[str] = None, sources: Optional[List[str]] = None) -> List[str]:
+    """Transformation rules for this line: the target column's own rules first, then the target table's and the
+    source column's (services/knowledge/select.relevant), not just the domain's newest."""
+    from services.knowledge.select import relevant
 
-    found = rows(session, f"""SELECT KNOWLEDGE_ID, TITLE, CONTENT FROM KNOWLEDGE.DOMAIN_KNOWLEDGE
-                             WHERE DOMAIN_ID = ? AND IS_CURRENT AND STATUS = 'ACTIVE'
-                               AND KNOWLEDGE_TYPE = 'TRANSFORMATION_RULE' AND {NOT_OPERATIONAL_SQL}
-                             ORDER BY UPDATED_AT DESC NULLS LAST LIMIT 8""", [domain_id])
-    if run_id:
-        from services.knowledge.writer import record_usage
-
-        record_usage(session, run_id, "STTM", [r["KNOWLEDGE_ID"] for r in found])
-    out = []
-    for r in found:
-        if target_column and target_column.upper() in (r.get("TITLE") or "").upper():
-            out.insert(0, f"{r['TITLE']}: {r['CONTENT']}")
-        else:
-            out.append(f"{r['TITLE']}: {r['CONTENT']}")
-    return out[:8]
+    found = relevant(session, domain_id, ["TRANSFORMATION_RULE"], target_table=target_table,
+                     columns=[target_column] if target_column else [], sources=sources or [], limit=8,
+                     run_id=run_id, stage="STTM")
+    return [f"{r['TITLE']}: {r['CONTENT']}" for r in found]
 
 
 def _line_context(session, run_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -216,10 +206,10 @@ def _line_context(session, run_id: str, payload: Dict[str, Any]) -> Dict[str, An
     context["standard"] = run_standard(run[0] if run else {})
     context["domain_id"] = context["domain_id"] or (run[0]["DOMAIN_ID"] if run else None)
     context["profile"] = _profile_for(session, run_id, context["source_table"], context["source_column"])
-    context["prior_rules"] = _prior_rules(session, context["domain_id"], context["target_column"], run_id)
+    model = ((run[0].get("TARGET_MODEL") if run else "") or "").split(".")[-1] or None
+    context["prior_rules"] = _prior_rules(session, context["domain_id"], context["target_column"], run_id, model,
+                                          [c for c in (context.get("source_column"), context.get("source_table")) if c])
     try:
-        target = rows(session, "SELECT TARGET_MODEL FROM CORE.WORKFLOW_RUN WHERE RUN_ID = ?", [run_id])
-        model = ((target[0]["TARGET_MODEL"] if target else "") or "").split(".")[-1] or None
         context["domain_rules"] = domain_context(session, context["domain_id"], model, 3000, context["standard"])
     except Exception:
         context["domain_rules"] = ""
@@ -243,9 +233,9 @@ def refine_transformation(session, run_id: str, payload_json: str) -> Dict[str, 
                    {"target": context["target_column"], "prompt": clip(prompt, 500)}) as call:
         try:
             try:
-                use_stage(session, "STTM", context["standard"], run_id)
+                context["skills"] = use_stage(session, "STTM", context["standard"], run_id)
             except Exception:
-                pass
+                context["skills"] = ""
             output, usage, model = complete_json(session, refine_prompt(context, prompt), REFINE_SCHEMA, max_tokens=1500, stage="STTM")
             record_cost(session, run_id, "STTM", model, usage, 0, tool_calls=1)
             sql = (output.get("transformation") or "").strip()

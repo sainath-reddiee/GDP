@@ -40,6 +40,8 @@ class Spec:
     def prompt(self, context: Dict[str, Any], rejected: List[str]) -> str:
         avoid = ("\nDo not suggest these again (a reviewer rejected them): " + "; ".join(rejected[:40])) if rejected else ""
         return (f"{self.instructions}\n\nOnly suggest where you disagree with or add to the RULE RESULT shown. "
+                f"known_rules and accepted_column_rules in the context are what reviewers already accepted for this "
+                f"domain and these objects: follow them, never suggest the opposite. "
                 f"Give a short reason grounded in the evidence shown. Return an empty list when the rules are right."
                 f"{avoid}\n\nCONTEXT (JSON):\n{clip(json.dumps(context, default=str), 24000)}")
 

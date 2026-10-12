@@ -14,7 +14,10 @@ import type { DomainOption } from "./wizard";
 const STEPS = ["Share", "Schema", "Tables", "Landing", "Load"] as const;
 const NAME = /^[A-Za-z][A-Za-z0-9_]{0,63}$/;
 
-type ShareEntry = { key: string; share: string | null; provider: string | null; database: string | null; comment?: string | null };
+/** readable: the database the share is mounted as is one this role can read (listed in INFORMATION_SCHEMA); a share
+ *  can be mounted in the account while the role lacks IMPORTED PRIVILEGES on it. */
+type ShareEntry = { key: string; share: string | null; provider: string | null; database: string | null; comment?: string | null;
+  readable: boolean };
 
 const slug = (s: string) => s.toUpperCase().replace(/[^A-Z0-9_]/g, "_").replace(/^([^A-Z])/, "S_$1").slice(0, 64);
 const landingName = (source: string, table: string) => `${source.toUpperCase()}__${table.toUpperCase().replace(/[^A-Z0-9_]/g, "_")}`;
@@ -28,12 +31,14 @@ export function ShareWizard({ shares, domains, databases, landing }: {
 }) {
   const entries = useMemo<ShareEntry[]>(() => {
     const seen = new Set<string>();
+    const readable = new Set(shares.mounted.map((d) => d.toUpperCase()));
     const out: ShareEntry[] = shares.shares.map((s) => {
       if (s.database_name) seen.add(s.database_name.toUpperCase());
-      return { key: `${s.owner_account}.${s.name}`, share: s.name, provider: s.owner_account, database: s.database_name, comment: s.comment };
+      return { key: `${s.owner_account}.${s.name}`, share: s.name, provider: s.owner_account, database: s.database_name, comment: s.comment,
+               readable: !!s.database_name && readable.has(s.database_name.toUpperCase()) };
     });
     for (const d of shares.mounted) {
-      if (!seen.has(d.toUpperCase())) out.push({ key: `db:${d}`, share: null, provider: null, database: d });
+      if (!seen.has(d.toUpperCase())) out.push({ key: `db:${d}`, share: null, provider: null, database: d, readable: true });
     }
     return out;
   }, [shares]);
@@ -111,7 +116,8 @@ export function ShareWizard({ shares, domains, databases, landing }: {
   });
 
   const unmounted = entry && !entry.database;
-  const canNext = [!!entry?.database, !!schema, picked.size > 0, NAME.test(sourceName) && !!landingDb && !!landingSchema, true][step];
+  const noAccess = entry && entry.database && !entry.readable;
+  const canNext = [!!entry?.database && !!entry?.readable, !!schema, picked.size > 0, NAME.test(sourceName) && !!landingDb && !!landingSchema, true][step];
   const next = () => {
     if (step === 0) openSchemas(database);
     else if (step === 1) openTables();
@@ -156,8 +162,9 @@ export function ShareWizard({ shares, domains, databases, landing }: {
                     </span>
                   </span>
                   <span className={cn("shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold",
-                    e.database ? "bg-success/10 text-success" : "bg-warning/10 text-warning")}>
-                    {e.database ? `mounted as ${e.database}` : "not mounted"}
+                    e.database && e.readable ? "bg-success/10 text-success" : "bg-warning/10 text-warning")}
+                        title={e.database && !e.readable ? "Mounted in the account, but your role cannot read it" : undefined}>
+                    {!e.database ? "not mounted" : e.readable ? `mounted as ${e.database}` : `${e.database} · no access`}
                   </span>
                 </button>
               ))}
@@ -166,6 +173,13 @@ export function ShareWizard({ shares, domains, databases, landing }: {
             <p className="rounded-xl border border-dashed p-6 text-center text-sm text-muted-foreground">
               {entries.length ? "No share matches the search." : "No inbound shares are visible to your role. Enter one below or ask the provider to share it with this account."}
             </p>
+          )}
+          {noAccess && entry && (
+            <div className="space-y-1 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-100" data-testid="share-no-access">
+              <p><span className="font-mono font-medium">{entry.database}</span> is mounted in this account, but your current role cannot read it, so its schemas and tables cannot be listed.</p>
+              <p className="text-xs">Switch to a role that can read it (account menu), or ask an admin to run:</p>
+              <code className="block rounded bg-background/70 px-2 py-1 font-mono text-xs">GRANT IMPORTED PRIVILEGES ON DATABASE {entry.database} TO ROLE &lt;your role&gt;;</code>
+            </div>
           )}
           {unmounted && entry && (
             <div className="flex flex-wrap items-end gap-3 rounded-xl border p-3" data-testid="mount-share">

@@ -19,7 +19,7 @@ from services.common.audit import record_cost, tool_call
 from services.common.llm import complete_json
 from services.common.sql import clip, rows
 from services.qa.guard import check
-from services.qa.procedures import ALL_CATEGORIES, EXPECTED_RULE, SEVERITIES, _code, _facts, compile_check, context, knowledge, table_context
+from services.qa.procedures import ALL_CATEGORIES, EXPECTED_RULE, SEVERITIES, _code, _facts, compile_check, context, focus, knowledge, table_context
 
 MAX_ISSUE_CHARS = 12_000
 MAX_TESTS = 3
@@ -112,7 +112,7 @@ def _triage(session, ctx: Dict[str, Any], run_id: Optional[str], issue: Dict[str
     started = time.time()
     inputs = {"issue": issue.get("key"), **({} if run_id else {"target_table_id": ctx.get("target_table_id")})}
     with tool_call(session, run_id, "jira_triage", inputs) as call:
-        known = knowledge(session, ctx.get("domain_id"), run_id, None if run_id else ctx.get("run_id"))
+        known = knowledge(session, ctx.get("domain_id"), run_id, None if run_id else ctx.get("run_id"), **focus(ctx))
         code = _code(session, ctx, run_id)
         known["code"] = code["text"]
         output, usage, model = complete_json(session, triage_prompt(ctx, issue, known, subject), TRIAGE_SCHEMA,

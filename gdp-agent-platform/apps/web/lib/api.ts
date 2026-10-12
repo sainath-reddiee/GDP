@@ -70,7 +70,15 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
     );
   }
   if (res.status === 401) redirect(SIGN_OUT);
-  if (!res.ok) throw new ApiError(res.status, detail(text), retryAfter(res.headers.get("retry-after")));
+  if (!res.ok) {
+    const message = detail(text);
+    // FastAPI's own reply for a route it does not have (the API's 404s name what is missing): the API process is
+    // older than this web app, which happens when the code was updated but the API was not restarted
+    const stale = res.status === 404 && message === "Not Found";
+    throw new ApiError(res.status, stale
+      ? `The API at ${API_URL} does not have ${path.split("?")[0]} yet. It is older than this page: restart it from apps/api (python -m uvicorn app.main:app --host 127.0.0.1 --port 8001).`
+      : message, retryAfter(res.headers.get("retry-after")));
+  }
   if (res.status === 202 && text.includes("pending_approval")) throw new ApiError(202, detail(text));
   return JSON.parse(text) as T;
 }

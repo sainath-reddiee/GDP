@@ -19,7 +19,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Collection, Dict, List, Optional, Sequence, Tuple, Union
+from typing import Any, Callable, Collection, Dict, List, Optional, Sequence, Tuple, Union
 
 from services.catalog import profiles as catalog_profiles
 from services.common.audit import record_cost, tool_call
@@ -290,9 +290,13 @@ def _forced(force_refresh: ForceRefresh, ref: TableRef) -> bool:
 
 def profile_tables(session, tables: List[TableRef], concurrency_limit: int = DEFAULT_CONCURRENCY,
                    force_refresh: ForceRefresh = False, run_id: Optional[str] = None,
-                   guidance: str = "") -> Dict[TableKey, TableProfile]:
+                   guidance: str = "",
+                   column_rules: Optional[Callable[[TableRef], Dict[str, Dict[str, Any]]]] = None,
+                   ) -> Dict[TableKey, TableProfile]:
     """Profile N tables: fresh cached documents are reused, the rest are computed `concurrency_limit`
-    tables at a time, enriched, written to @METADATA.PROFILES_STAGE and upserted into the index."""
+    tables at a time, enriched, written to @METADATA.PROFILES_STAGE and upserted into the index. `column_rules`
+    gives the reviewer-accepted COLUMN_RULEs of a table (by column name); they override the rule result before the
+    document is written, so the shared profile documents agree with what reviewers decided."""
     ensure_active(session)
     limit = max(1, min(int(concurrency_limit or DEFAULT_CONCURRENCY), MAX_CONCURRENCY))
     index = _load_index(session, tables)
@@ -316,6 +320,11 @@ def profile_tables(session, tables: List[TableRef], concurrency_limit: int = DEF
     for ref in misses:
         columns, row_count = computed[ref.key]
         model = _enrich(session, run_id, ref.table, columns, guidance)
+        if column_rules is not None:
+            try:
+                profiler.apply_column_rules(columns, column_rules(ref))
+            except Exception:
+                pass  # rules refine a profile; a failure to read them never fails profiling
         result = TableProfile(ref, columns, model, False, ref.approximate, row_count)
         if index is not None:
             try:
@@ -414,6 +423,24 @@ def _column_rules(session, run_id: str, source_table: str) -> Dict[str, Dict[str
         from services.knowledge.writer import record_usage
 
         record_usage(session, run_id, "PROFILING", [r["KNOWLEDGE_ID"] for r in found])
+    return out
+
+
+def _source_column_rules(session, source_system_id: str, source_table: str) -> Dict[str, Dict[str, Any]]:
+    """Accepted COLUMN_RULE knowledge for one source system's table, by column name (no run needed)."""
+    try:
+        found = rows(session, """SELECT CONTENT_JSON FROM KNOWLEDGE.DOMAIN_KNOWLEDGE
+                                  WHERE IS_CURRENT AND STATUS = 'ACTIVE' AND KNOWLEDGE_TYPE = 'COLUMN_RULE'
+                                    AND CONTENT_JSON:source_system_id::STRING = ?
+                                    AND UPPER(CONTENT_JSON:source_table::STRING) = UPPER(?)""",
+                     [source_system_id, source_table])
+    except Exception:
+        return {}
+    out = {}
+    for r in found:
+        content = variant(r["CONTENT_JSON"]) or {}
+        if content.get("column_name"):
+            out[str(content["column_name"]).upper()] = content
     return out
 
 
@@ -595,7 +622,9 @@ def profile_source_tables(session, source_id: str, payload_json: str) -> Dict[st
     out: Dict[str, Any] = {**source, "profiled": [], "cached": [], "failed": []}
 
     def settle(chunk: List[TableRef]) -> None:
-        results = profile_tables(session, chunk, limit, force, None, guidance)
+        results = profile_tables(session, chunk, limit, force, None, guidance,
+                                 column_rules=lambda ref: _source_column_rules(session, source["source_system_id"],
+                                                                               ref.table))
         for ref in chunk:
             r = results[ref.key]
             if r.cached:

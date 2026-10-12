@@ -42,16 +42,34 @@ FORBIDDEN_SQL = re.compile(
 STRING_LITERAL = re.compile(r"'(?:[^']|'')*'")
 
 
-def use_skills(session, names: List[str], excerpt: int = 1200, run_id: str | None = None) -> str:
-    """Load each skill (audited against the run) and return a short excerpt for the stage prompt. A skill that is not
-    registered is skipped so one missing playbook never blocks a stage."""
+FRONT_MATTER = re.compile(r"\A\s*---\n.*?\n---\s*\n", re.DOTALL)
+EXCERPT = 2000  # characters of each skill's guidance in a stage prompt
+
+
+def prompt_excerpt(content: str, limit: int = EXCERPT) -> str:
+    """The part of a skill worth a prompt's space: without the YAML front matter (metadata, not guidance) and the
+    bundled reference files appended after the SKILL.md body, cut at a paragraph boundary near `limit`."""
+    text = FRONT_MATTER.sub("", content or "", count=1)
+    bundled = FILE_HEADER.search(text)
+    if bundled:
+        text = text[:bundled.start()]
+    text = text.strip()
+    if len(text) <= limit:
+        return text
+    cut = text.rfind("\n\n", 0, limit)
+    return text[:cut if cut > limit // 2 else limit].rstrip() + "\n..."
+
+
+def use_skills(session, names: List[str], excerpt: int = EXCERPT, run_id: str | None = None) -> str:
+    """Load each skill (audited against the run) and return its guidance for the stage prompt (prompt_excerpt). A
+    skill that is not registered is skipped so one missing playbook never blocks a stage."""
     parts = []
     for name in names:
         try:
             skill = load_skill_for(session, name, run_id)
         except AssertionError:
             continue
-        parts.append(f"[{skill['skill_name']} v{skill['version']}]\n{(skill.get('content') or '')[:excerpt]}")
+        parts.append(f"[{skill['skill_name']} v{skill['version']}]\n{prompt_excerpt(skill.get('content') or '', excerpt)}")
     return "\n\n".join(parts)
 
 
@@ -62,7 +80,7 @@ def bound_skills(session, stage: str, standard: str = "GDP") -> List[str]:
     return bound(session, stage, standard)
 
 
-def use_stage(session, stage: str, standard: str = "GDP", run_id: str | None = None, excerpt: int = 1200) -> str:
+def use_stage(session, stage: str, standard: str = "GDP", run_id: str | None = None, excerpt: int = EXCERPT) -> str:
     """use_skills for every skill bound to the stage."""
     return use_skills(session, bound_skills(session, stage, standard), excerpt, run_id)
 

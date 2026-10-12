@@ -59,7 +59,9 @@ def skill_excerpt(content: str, limit: int = 9000) -> str:
     return body[:limit]
 
 
-def review_prompt(path: str, content: str, skill: str, context: str, generation_notes: str) -> str:
+def review_prompt(path: str, content: str, skill: str, context: str, generation_notes: str, code: str = "") -> str:
+    """`code` (the existing code the platform knows for this target) has its own section, so a long skill excerpt
+    never cuts it off."""
     return (
         "You review dbt code generated for Snowflake by the DBT-ONBOARD-SOURCE skill. Check the file ONLY "
         "against the skill rules below and the approved STTM context. Report concrete violations (wrong cast, "
@@ -70,7 +72,8 @@ def review_prompt(path: str, content: str, skill: str, context: str, generation_
         f"=== SKILL RULES ({SKILL}) ===\n{skill}\n\n"
         f"=== STTM CONTEXT ===\n{context[:4000]}\n\n"
         f"=== GENERATOR NOTES ===\n{generation_notes[:2000]}\n\n"
-        f"=== FILE: {path} ===\n{content[:10000]}\n"
+        + (f"=== EXISTING CODE FOR THIS TARGET (follow its conventions) ===\n{code[:6000]}\n\n" if code else "")
+        + f"=== FILE: {path} ===\n{content[:10000]}\n"
     )
 
 
@@ -100,9 +103,10 @@ def validate_revision(original: str, revised: str) -> List[str]:
 
 
 def review_file(fetch_rows: Rows, path: str, content: str, skill_content: str, context: str = "",
-                generation_notes: str = "", model: Optional[str] = None, max_tokens: int = 8000) -> Dict[str, Any]:
+                generation_notes: str = "", model: Optional[str] = None, max_tokens: int = 8000,
+                code: str = "") -> Dict[str, Any]:
     chosen = (model or DEFAULT_MODEL).strip() or DEFAULT_MODEL
-    prompt = review_prompt(path, content, skill_excerpt(skill_content), context, generation_notes)
+    prompt = review_prompt(path, content, skill_excerpt(skill_content), context, generation_notes, code)
     rows = fetch_rows(
         "SELECT AI_COMPLETE(model => %s, prompt => %s, model_parameters => PARSE_JSON(%s), "
         "response_format => PARSE_JSON(%s), show_details => TRUE) AS R",

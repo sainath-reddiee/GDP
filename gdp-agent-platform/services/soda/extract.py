@@ -78,14 +78,20 @@ def _looks_csv(text: str) -> bool:
     return bool(re.search(r"attribute|target_column|check_type|requirement", header))
 
 
-def extract_prompt(brief: str, table: str, columns: List[str], knowledge: List[str]) -> str:
+def extract_prompt(brief: str, table: str, columns: List[str], knowledge: List[str], skills: str = "",
+                   code: str = "") -> str:
+    """knowledge is ranked most relevant first (services/soda/procedures._knowledge); skills and the code context
+    have their own sections so a long knowledge list never pushes them out."""
     known = ", ".join(columns) if columns else "(no STTM columns yet)"
-    memory = "\n".join(f"- {k}" for k in knowledge[:8]) or "- none"
+    memory = "\n".join(f"- {k}" for k in knowledge[:12]) or "- none"
     return (
         f"You extract data-quality requirements for Soda checks on {table}.\n"
         f"STTM columns: {known}\n"
-        f"Learned Soda patterns:\n{memory}\n"
-        f"{SODACL_HINT}\n"
+        f"What the domain already knows (learned patterns, business rules, exceptions, transformations), most "
+        f"relevant first:\n{memory}\n"
+        + (f"Soda skill (follow its rules):\n{skills[:3000]}\n" if skills else "")
+        + (f"{code[:3000]}\n" if code else "")
+        + f"{SODACL_HINT}\n"
         f"Client brief:\n{brief[:12000]}\n"
         "Return only requirements the brief or domain patterns actually justify."
     )

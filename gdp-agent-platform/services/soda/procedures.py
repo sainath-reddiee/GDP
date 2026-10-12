@@ -110,18 +110,17 @@ def _rejected(session, domain_id: str) -> List[Dict[str, Any]]:
     return out
 
 
-def _knowledge(session, domain_id: str, run_id: Optional[str] = None) -> List[str]:
-    from services.knowledge.writer import NOT_OPERATIONAL_SQL
+KNOWLEDGE_TYPES = ("SODA_PATTERN", "BUSINESS_RULE", "EXCEPTION", "TRANSFORMATION_RULE", "STTM_TEMPLATE")
 
-    found = rows(session, f"""SELECT KNOWLEDGE_ID, TITLE, CONTENT FROM KNOWLEDGE.DOMAIN_KNOWLEDGE
-                             WHERE IS_CURRENT AND KNOWLEDGE_TYPE IN
-                                   ('SODA_PATTERN', 'BUSINESS_RULE', 'EXCEPTION', 'TRANSFORMATION_RULE', 'STTM_TEMPLATE')
-                               AND DOMAIN_ID = ? AND {NOT_OPERATIONAL_SQL}
-                             ORDER BY UPDATED_AT DESC NULLS LAST LIMIT 16""", [domain_id])
-    if run_id:
-        from services.knowledge.writer import record_usage
 
-        record_usage(session, run_id, "SODA", [r["KNOWLEDGE_ID"] for r in found])
+def _knowledge(session, domain_id: str, run_id: Optional[str] = None, table: Optional[str] = None,
+               columns: Optional[List[str]] = None) -> List[str]:
+    """What the domain knows about this table's quality, the target table's and columns' own items first
+    (services/knowledge/select.relevant): learned Soda patterns, business rules, exceptions and transformations."""
+    from services.knowledge.select import relevant
+
+    found = relevant(session, domain_id, KNOWLEDGE_TYPES, target_table=table, columns=columns or [], limit=12,
+                     type_order=KNOWLEDGE_TYPES, run_id=run_id, stage="SODA")
     return [f"{r['TITLE']}: {r['CONTENT']}" for r in found]
 
 
@@ -159,13 +158,14 @@ def _store_brief(session, run_id: str, domain_id: str, brief: str, filename: str
 
 
 def _extract(session, brief: str, table: str, columns: List[str], knowledge: List[str],
-             run_id: Optional[str] = None) -> List[Dict[str, Any]]:
+             run_id: Optional[str] = None, code: str = "") -> List[Dict[str, Any]]:
     try:
-        use_skills(session, ["SODA_SKILL"], run_id=run_id)
+        skills = use_skills(session, ["SODA_SKILL"], run_id=run_id)
     except Exception:
-        pass
+        skills = ""
     started = time.time()
-    output, usage, model = complete_json(session, extract_prompt(brief, table, columns, knowledge), EXTRACT_SCHEMA, stage="SODA")
+    output, usage, model = complete_json(session, extract_prompt(brief, table, columns, knowledge, skills, code),
+                                         EXTRACT_SCHEMA, stage="SODA")
     if run_id:
         record_cost(session, run_id, "SODA", model, usage, int((time.time() - started) * 1000), tool_calls=1)
     return [requirement_from_row(table, {**r, "origin": "AI"}) for r in output.get("requirements") or []]
@@ -232,19 +232,18 @@ def generate_soda(session, run_id: str) -> Dict[str, Any]:
             table = sttm_target_name(session, sttm)
             lines = _lines(session, sttm["STTM_ID"])
             columns = [l["target_column"] for l in lines]
-            knowledge = _knowledge(session, sttm["DOMAIN_ID"], run_id)
+            knowledge = _knowledge(session, sttm["DOMAIN_ID"], run_id, table, columns)
             from services.code.context import for_session, record_usage
 
             code = for_session(session, stage="SODA", domain_id=sttm["DOMAIN_ID"], target=table, columns=columns)
             if code["text"]:
-                knowledge.append(code["text"])
                 record_usage(lambda sql, params: rows(session, sql, params), run_id, "SODA", code["citations"])
             checks = from_sttm(table, lines, design.get("business_keys") or [])
             stored = _transform_checks(session, sttm["DOMAIN_ID"], table)
             extracted: List[Dict[str, Any]] = []
             for brief in _briefs(session, run_id):
                 try:
-                    extracted.extend(_extract(session, brief, table, columns, knowledge, run_id))
+                    extracted.extend(_extract(session, brief, table, columns, knowledge, run_id, code["text"]))
                 except Exception:
                     continue
             existing_client = rows(session, """SELECT TARGET_TABLE, TARGET_COLUMN, CHECK_TYPE, CHECK_DEFINITION,
@@ -353,7 +352,8 @@ def import_client_expectations(session, run_id: str, rows_json: str) -> Dict[str
     imported: List[Dict[str, Any]] = []
     if parsed.get("brief"):
         _store_brief(session, run_id, sttm["DOMAIN_ID"], parsed["brief"], parsed.get("filename") or "")
-        imported = _extract(session, parsed["brief"], table, columns, _knowledge(session, sttm["DOMAIN_ID"], run_id), run_id)
+        imported = _extract(session, parsed["brief"], table, columns,
+                            _knowledge(session, sttm["DOMAIN_ID"], run_id, table, columns), run_id)
     if parsed.get("rows"):
         imported = merge_checks(imported, from_client(table, parsed["rows"]))
     assert imported, "no Soda requirements could be extracted from the client brief"

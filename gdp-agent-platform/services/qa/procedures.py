@@ -71,8 +71,19 @@ PLAN_SCHEMA = {
 }
 
 
+QA_TYPES = ("BUSINESS_RULE", "GLOSSARY", "TRANSFORMATION_RULE", "EXCEPTION", "QA_TEST")
+
+
+def focus(ctx: Dict[str, Any]) -> Dict[str, Any]:
+    """The target table and its columns a QA context is about, for picking knowledge."""
+    columns = [str(l.get("target_column") or l.get("TARGET_COLUMN") or "") for l in ctx.get("lines") or []]
+    columns += [str(c.get("name") or "") for c in ctx.get("columns") or [] if isinstance(c, dict)]
+    return {"target": (ctx.get("target") or {}).get("name"), "columns": [c for c in dict.fromkeys(columns) if c]}
+
+
 def knowledge(session, domain_id: Optional[str], run_id: Optional[str],
-              profile_run_id: Optional[str] = None) -> Dict[str, Any]:
+              profile_run_id: Optional[str] = None, target: Optional[str] = None,
+              columns: Optional[List[str]] = None) -> Dict[str, Any]:
     """What the domain already knows, for AI-written tests: rules, glossary, exceptions and proven tests; the
     profile facts of the source columns; and the approved data quality checks. Usage is recorded against run_id;
     the profile and checks come from profile_run_id (the run of a table's STTM), else run_id, else are skipped."""
@@ -80,18 +91,12 @@ def knowledge(session, domain_id: Optional[str], run_id: Optional[str],
     facts_run = profile_run_id or run_id
     if domain_id:
         try:
-            from services.knowledge.writer import NOT_OPERATIONAL_SQL
+            from services.knowledge.select import relevant
 
-            found = rows(session, f"""
-                SELECT KNOWLEDGE_ID, KNOWLEDGE_TYPE, TITLE, CONTENT FROM KNOWLEDGE.DOMAIN_KNOWLEDGE
-                 WHERE DOMAIN_ID = ? AND IS_CURRENT AND COALESCE(STATUS, 'ACTIVE') = 'ACTIVE'
-                   AND KNOWLEDGE_TYPE IN ('BUSINESS_RULE', 'GLOSSARY', 'TRANSFORMATION_RULE', 'EXCEPTION', 'QA_TEST')
-                   AND {NOT_OPERATIONAL_SQL}
-                 ORDER BY IFF(KNOWLEDGE_TYPE = 'BUSINESS_RULE', 0, 1), UPDATED_AT DESC NULLS LAST LIMIT 30""", [domain_id])
+            # the target table's and columns' own items first, business rules before other types on a tie
+            found = relevant(session, domain_id, QA_TYPES, target_table=target, columns=columns or [], limit=30,
+                             type_order=QA_TYPES, run_id=run_id, stage="QA")
             out["rules"] = [f"[{r['KNOWLEDGE_TYPE']}] {r['TITLE']}: {clip(r['CONTENT'], 300)}" for r in found]
-            from services.knowledge.writer import record_usage
-
-            record_usage(session, run_id, "QA", [r["KNOWLEDGE_ID"] for r in found])
         except Exception:
             pass
     if not facts_run:
@@ -360,7 +365,7 @@ def _ask(session, ctx: Dict[str, Any], run_id: Optional[str], question: str) -> 
     started = time.time()
     with tool_call(session, run_id, "qa_ask", {"question": clip(question, 300),
                                                **({} if run_id else {"target_table_id": ctx.get("target_table_id")})}) as call:
-        known = knowledge(session, ctx.get("domain_id"), run_id, ctx.get("run_id"))
+        known = knowledge(session, ctx.get("domain_id"), run_id, ctx.get("run_id"), **focus(ctx))
         code = _code(session, ctx, run_id)
         known["code"] = code["text"]
         prompt = ask_prompt(ctx, question, known)
@@ -445,7 +450,7 @@ def plan_prompt(ctx: Dict[str, Any], known: Dict[str, Any], existing: List[str],
 
 def _plan(session, ctx: Dict[str, Any], run_id: Optional[str], existing: List[Dict[str, Any]],
           focus: str) -> Dict[str, Any]:
-    known = knowledge(session, ctx.get("domain_id"), run_id, ctx.get("run_id"))
+    known = knowledge(session, ctx.get("domain_id"), run_id, ctx.get("run_id"), **focus(ctx))
     code = _code(session, ctx, run_id)
     known["code"] = code["text"]
     started = time.time()

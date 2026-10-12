@@ -131,6 +131,46 @@ def _target_scope(target: Dict[str, Any], run_id: str) -> str:
     return f"target.{target.get('TARGET_DATABASE')}.{target.get('TARGET_SCHEMA')}.{target.get('TARGET_TABLE')}"
 
 
+# what the domain already knows, shown to the model next to the rule result, per stage
+KNOWN_TYPES = {
+    "STTM": ("TRANSFORMATION_RULE", "BUSINESS_RULE", "GLOSSARY"),
+    "SODA": ("SODA_PATTERN", "BUSINESS_RULE", "EXCEPTION", "TRANSFORMATION_RULE"),
+    "DBT": ("MODEL_DEFINITION", "GLOSSARY", "BUSINESS_RULE"),
+}
+
+
+def _known(session, run: Dict[str, Any], stage: str, target: Optional[str], columns: List[str]) -> List[str]:
+    """The domain's knowledge most relevant to this target table and these columns (services/knowledge/select), so
+    the model does not suggest what an accepted rule already settled. Empty when there is nothing or it fails."""
+    if not run.get("DOMAIN_ID") or stage not in KNOWN_TYPES:
+        return []
+    try:
+        from services.knowledge.select import relevant
+
+        found = relevant(session, run["DOMAIN_ID"], KNOWN_TYPES[stage], target_table=target, columns=columns,
+                         limit=12, type_order=KNOWN_TYPES[stage])
+    except Exception:
+        return []
+    return [f"[{r['KNOWLEDGE_TYPE']}] {r['TITLE']}: {str(r.get('CONTENT') or '')[:300]}" for r in found]
+
+
+def _accepted_column_rules(session, run: Dict[str, Any], table: str) -> List[Dict[str, Any]]:
+    """Column rules a reviewer already accepted for this source table (they override the rule result)."""
+    try:
+        found = rows(session, """SELECT CONTENT_JSON FROM KNOWLEDGE.DOMAIN_KNOWLEDGE
+                                  WHERE IS_CURRENT AND STATUS = 'ACTIVE' AND KNOWLEDGE_TYPE = 'COLUMN_RULE'
+                                    AND CONTENT_JSON:source_system_id::STRING = ?
+                                    AND UPPER(CONTENT_JSON:source_table::STRING) = UPPER(?)""",
+                     [run.get("SOURCE_SYSTEM_ID") or "", table])
+    except Exception:
+        return []
+    out = []
+    for r in found:
+        c = variant(r["CONTENT_JSON"]) or {}
+        out.append({k: c.get(k) for k in ("column_name", "semantic_type", "pii_classification", "date_format") if c.get(k)})
+    return out
+
+
 def contexts(session, stage: str, run_id: str) -> List[Tuple[str, Dict[str, Any]]]:
     """(scope_key, context) pairs: one batched call per scope. Scope keys name what the facts are about
     (a source table, a target table), so a verdict carries over to other runs on the same objects."""
@@ -139,7 +179,11 @@ def contexts(session, stage: str, run_id: str) -> List[Tuple[str, Dict[str, Any]
         out = []
         for table, cols in _profiles(session, run_id).items():
             scope = f"{run.get('SOURCE_SYSTEM_ID') or 'source'}.{table}"
-            out.append((scope, {"table": table, "columns": cols}))
+            context = {"table": table, "columns": cols}
+            accepted = _accepted_column_rules(session, run, table)
+            if accepted:
+                context["accepted_column_rules"] = accepted
+            out.append((scope, context))
         return out
     if stage == "DOMAIN":
         recs = rows(session, """SELECT D.DOMAIN_NAME, R.CONFIDENCE FROM KNOWLEDGE.DOMAIN_RECOMMENDATION R
@@ -160,8 +204,9 @@ def contexts(session, stage: str, run_id: str) -> List[Tuple[str, Dict[str, Any]
         scope = _target_scope(target, run_id)
         def evidence(line):
             return profiles.get((str(line["SOURCE_TABLE"] or "").upper(), str(line["SOURCE_COLUMN"] or "").upper()))
+        known = _known(session, run, stage, target.get("TARGET_TABLE"), [l["TARGET_COLUMN"] for l in lines])
         if stage == "STTM":
-            return [(scope, {"lines": [{
+            return [(scope, {"known_rules": known, "lines": [{
                 "target_column": l["TARGET_COLUMN"], "target_type": l["TARGET_DATATYPE"],
                 "source": f"{l['SOURCE_TABLE']}.{l['SOURCE_COLUMN']}" if l["SOURCE_COLUMN"] else None,
                 "source_column": l["SOURCE_COLUMN"], "source_type": l["SOURCE_DATATYPE"],
@@ -174,7 +219,7 @@ def contexts(session, stage: str, run_id: str) -> List[Tuple[str, Dict[str, Any]
                                                    WHERE RUN_ID = ? AND IS_CURRENT""", [run_id])]
             return [(scope, {"columns": [{"target_column": l["TARGET_COLUMN"], "type": l["TARGET_DATATYPE"],
                                           "nullable": l["NULLABLE_RULE"], "profile": evidence(l)} for l in lines],
-                             "rule_result": existing})]
+                             "rule_result": existing, "known_rules": known})]
         registry = {r["COLUMN_NAME"].upper(): r for r in rows(
             session, """SELECT COLUMN_NAME, IS_BUSINESS_KEY, SEMANTIC_TYPE FROM KNOWLEDGE.TARGET_COLUMN_REGISTRY
                          WHERE TARGET_TABLE_ID = ?""", [target.get("TARGET_TABLE_ID")])} if target else {}
@@ -185,6 +230,7 @@ def contexts(session, stage: str, run_id: str) -> List[Tuple[str, Dict[str, Any]
             return r.get("SEMANTIC_TYPE") if r.get("SEMANTIC_TYPE") in DBT_ROLES else "ATTRIBUTE"
         design = variant(sttm.get("TABLE_DESIGN")) or {}
         return [(scope, {"grain": design.get("grain"), "business_keys_in_sttm": design.get("business_keys"),
+                         "known_rules": known,
                          "columns": [{"target_column": l["TARGET_COLUMN"], "rule_result": role(l["TARGET_COLUMN"]),
                                       "source": l["SOURCE_COLUMN"], "profile": evidence(l)} for l in lines]})]
     raise AssertionError(f"no suggestions for stage {stage}")

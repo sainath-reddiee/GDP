@@ -34,14 +34,18 @@ def _pct(value: Any) -> str:
 
 def build_prompt(sources: List[Dict[str, Any]], candidates: Dict[str, List[Dict[str, Any]]],
                  targets: List[Dict[str, Any]], target_table: str, taken: Dict[str, str],
-                 instructions: str = "", notes: Iterable[str] = ()) -> str:
-    """sources: profile rows; candidates: source_column_id -> ranked candidates; taken: target_column_id -> source_column_id."""
+                 instructions: str = "", notes: Iterable[str] = (),
+                 target_notes: Optional[Dict[str, str]] = None) -> str:
+    """sources: profile rows; candidates: source_column_id -> ranked candidates; taken: target_column_id -> source_column_id;
+    notes: prior reviewer decisions in the domain; target_notes: target column -> its glossary and business rules."""
+    target_notes = target_notes or {}
     target_lines = [
         f"- {t['column_name']} {t.get('data_type') or ''}"
         + (" REQUIRED" if not t.get("nullable") else "")
         + (" BUSINESS_KEY" if t.get("is_business_key") else "")
         + (" (already mapped by the reviewer)" if t["target_column_id"] in taken else "")
         + (f": {t['definition']}" if t.get("definition") else "")
+        + (f" [{target_notes[t['column_name']]}]" if target_notes.get(t["column_name"]) else "")
         for t in targets
     ]
     blocks = []
