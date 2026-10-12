@@ -68,6 +68,7 @@ test("the Source Store shows source-only figures and keeps profiles in the Profi
   for (const label of ["Sources connected", "Ingestion pipelines", "Landed tables", "Ingestion issues"]) await expect(kpis).toContainText(label);
   await expect(page.getByRole("tab", { name: /Profile store/ })).toHaveCount(0);
   await expect(page.getByText("Schemas profiled")).toHaveCount(0);
-  await page.getByRole("tab", { name: /External systems/ }).click();
-  await expect(page.getByText("Ingestion pipelines").last()).toBeVisible();
+  // one Source Store: the catalog, and an External sources panel only once something is onboarded externally
+  await expect(page.getByRole("tab", { name: /External systems/ })).toHaveCount(0);
+  await expect(page.getByText("SnapLogic ingestion")).toHaveCount(0);
 });

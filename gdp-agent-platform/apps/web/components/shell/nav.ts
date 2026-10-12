@@ -7,6 +7,8 @@ import type { NavCounts } from "@/app/bff/nav/route";
 export type NavBadge = { value: number; tone: string; title: string };
 export type NavLink = { href: string; label: string; icon: typeof Database; privilege?: string | string[]; exact?: boolean;
   badge?: (c: NavCounts) => NavBadge | null;
+  /** a second line under the label, shown on a featured entry */
+  hint?: string;
   /** sub-links shown under the item (expanded sidebar) or in a flyout (collapsed); the item is active on any of them */
   children?: NavLink[] };
 
@@ -46,25 +48,32 @@ const storeBadge = (c: NavCounts) => groupBadge(STORES, c);
 
 /** A sidebar section. Primary sections (the onboard, store and build path) always show their links; the others can be
  * folded to their header, which then carries the summed badge of its links so nothing waiting is hidden. */
-export type NavGroup = { label: string; links: NavLink[]; secondary?: boolean; defaultOpen?: boolean };
+export type NavGroup = { label: string; links: NavLink[]; secondary?: boolean; defaultOpen?: boolean;
+  /** a single call to action, drawn as a highlighted entry with no section heading */
+  feature?: boolean };
 
-// The lifecycle first: onboard what comes in, the six asset stores it fills, then the runs that build on them. Monitor,
-// Knowledge and Govern follow as foldable sections. A group with no visible links is hidden.
+// The lifecycle first: onboard what comes in, the six asset stores it fills, the domains and knowledge that give it
+// meaning, then the runs that build on them. Monitor and Govern follow as foldable sections. A group with no visible links is hidden.
 export const NAV_GROUPS: NavGroup[] = [
   {
     label: "Overview",
     links: [{ href: "/dashboard", label: "Command Center", icon: LayoutDashboard, exact: true }],
   },
   {
-    label: "Onboard",
-    links: [
-      { href: "/dashboard/onboarding", label: "Onboarding", icon: Rocket },
-      { href: "/domains", label: "Domains", icon: Boxes },
-    ],
+    label: "Onboard", feature: true,
+    links: [{ href: "/dashboard/onboarding", label: "Onboarding", icon: Rocket, hint: "Sources, domains, applications" }],
   },
   {
     label: "Asset stores",
     links: [{ href: "/dashboard/store", label: "Store", icon: Store, children: STORES, badge: storeBadge }],
+  },
+  {
+    label: "Knowledge",
+    links: [
+      { href: "/domains", label: "Domains", icon: Boxes },
+      { href: "/knowledge", label: "Knowledge", icon: BookOpen },
+      { href: "/skills", label: "Skills", icon: Sparkles },
+    ],
   },
   {
     label: "Build",
@@ -90,13 +99,6 @@ export const NAV_GROUPS: NavGroup[] = [
         href: "/incidents", label: "Incidents", icon: Siren, privilege: "OPS.VIEW",
         badge: (c: NavCounts) => c.incidents ? { value: c.incidents, tone: "bg-rose-500 text-white", title: `${c.incidents} open or acknowledged` } : null,
       }] : []),
-    ],
-  },
-  {
-    label: "Knowledge", secondary: true,
-    links: [
-      { href: "/knowledge", label: "Knowledge", icon: BookOpen },
-      { href: "/skills", label: "Skills", icon: Sparkles },
     ],
   },
   {

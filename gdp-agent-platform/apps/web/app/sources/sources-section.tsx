@@ -10,10 +10,10 @@ const inventoryOf = (t: { database: string; schema: string }) =>
     `/api/catalog/inventory?database=${encodeURIComponent(sfIdent(t.database))}&schema=${encodeURIComponent(sfIdent(t.schema))}`,
   ).catch(() => null);
 
-/** The Sources workspace (Snowflake catalog browser, external systems and ingestion pipelines), rendered inside /dashboard/sources.
+/** The Sources workspace (Snowflake catalog browser, then the SnapLogic ingestion panels), rendered inside /dashboard/sources.
  * Stored profiles live in the Profiling Store. */
-export async function SourcesSection({ searchParams, pipelines = null, pipelineCount = 0 }: {
-  searchParams: { db?: string; schema?: string; mode?: string; connect?: string }; pipelines?: React.ReactNode; pipelineCount?: number;
+export async function SourcesSection({ searchParams, pipelines = null }: {
+  searchParams: { db?: string; schema?: string }; pipelines?: React.ReactNode;
 }) {
   // An explicit ?db=&schema= wins and its inventory loads alongside everything else; otherwise reopen the schema
   // profiled most recently. Nothing is preselected when nothing was profiled yet. The names are the stored spelling
@@ -28,14 +28,12 @@ export async function SourcesSection({ searchParams, pipelines = null, pipelineC
     api<{ domains: DomainRow[] }>("/api/domains").catch(() => ({ domains: [] as DomainRow[] })),
     explicit ? inventoryOf(explicit) : Promise.resolve(null),
   ]);
-  const connect = searchParams.connect === "files" ? "files" as const : null;
   const target = explicit
     ?? (profiles[0] ? { database: profiles[0].database_name, schema: profiles[0].schema_name } : null);
   const inventory = explicit ? explicitInventory : target ? await inventoryOf(target) : null;
   return (
     <SourcesHub initialOverview={overview} initialStore={profiles} databases={databases} domains={domains}
                 initialTarget={target} initialInventory={inventory}
-                pipelines={pipelines} pipelineCount={pipelineCount}
-                initialMode={searchParams.mode === "external" || connect ? "external" : "snowflake"} initialConnect={connect} />
+                pipelines={pipelines} />
   );
 }

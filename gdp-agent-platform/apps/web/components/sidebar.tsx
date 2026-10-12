@@ -162,6 +162,29 @@ function ParentItem({ link, kids, path, counts, collapsed }: {
   );
 }
 
+/** The onboarding entry: tinted and outlined so the start of the lifecycle stands apart from the sections below it. */
+function Feature({ link, active, collapsed }: { link: NavLink; active: boolean; collapsed: boolean }) {
+  const { href, label, icon: Icon, hint } = link;
+  return (
+    <Link href={href} title={collapsed ? label : undefined} aria-label={collapsed ? label : undefined} aria-current={active ? "page" : undefined}
+          className={cn("group relative flex items-center gap-3 rounded-xl border py-2 text-[13px] font-medium transition",
+            collapsed ? "justify-center px-0" : "px-2.5",
+            active ? "border-indigo-300/40 bg-gradient-to-r from-indigo-500/30 to-violet-500/20 text-white"
+              : "border-indigo-300/20 bg-gradient-to-r from-indigo-500/15 to-violet-500/10 text-white/90 hover:border-indigo-300/40 hover:from-indigo-500/25")}>
+      {active && <span className="absolute -left-3 top-1/2 h-5 w-1 -translate-y-1/2 rounded-r-full bg-gradient-to-b from-indigo-300 to-violet-400" />}
+      <span className="grid h-6 w-6 shrink-0 place-items-center rounded-lg bg-gradient-to-br from-indigo-400 to-violet-500 text-white shadow-sm shadow-indigo-500/30">
+        <Icon className="h-3.5 w-3.5" />
+      </span>
+      {!collapsed && (
+        <span className="min-w-0 flex-1">
+          <span className="block truncate">{label}</span>
+          {hint && <span className="block truncate text-[10.5px] font-normal text-white/45">{hint}</span>}
+        </span>
+      )}
+    </Link>
+  );
+}
+
 function Links({ links, path, counts, collapsed, allowed }: {
   links: NavLink[]; path: string; counts: NavCounts | null; collapsed: boolean; allowed: (p?: string | string[]) => boolean;
 }) {
@@ -194,6 +217,13 @@ function Group({ group, path, counts, collapsed, allowed, divider }: {
   });
   const listId = `nav-group-${group.label.replace(/\W+/g, "-").toLowerCase()}`;
   const folded = !!group.secondary && !open && !collapsed;
+  if (group.feature) {
+    return (
+      <div className="mb-4">
+        {group.links.map((link) => <Feature key={link.href} link={link} active={isActive(link, path)} collapsed={collapsed} />)}
+      </div>
+    );
+  }
   return (
     <div className="mb-4">
       {divider && !collapsed && <div className="mx-2.5 mb-4 h-px bg-white/[0.07]" aria-hidden />}
