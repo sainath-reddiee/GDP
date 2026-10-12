@@ -499,8 +499,65 @@ def edit_version(session, cid: str, payload_json: str, approved: bool = False) -
                             target_table_id=latest.get("target_table_id"), target_entity=latest.get("target_entity") or "",
                             status="APPROVED" if approved else "REVIEW", table_design=plan["design"])
     synced = sync_to_run(session, latest.get("sttm_id"), latest.get("run_id"), plan, written["version"], note)
+    learned = learn_from_edit(session, latest, plan, note)
     return {**written, "status": "APPROVED" if approved else "REVIEW", "summary": plan["summary"],
-            "diff": plan["diff"], "run_updated": synced}
+            "diff": plan["diff"], "run_updated": synced, "learned": learned}
+
+
+def edit_knowledge(entry: Dict[str, Any], diff: Dict[str, Any], note: str,
+                   lines: Optional[List[Dict[str, Any]]] = None) -> List[Dict[str, Any]]:
+    """The knowledge items a store edit teaches (pure): a changed transformation as the target column's
+    TRANSFORMATION_RULE (the same key the run's transform apply writes, so the newest decision wins), and a changed
+    business rule as the column's BUSINESS_RULE. Cleared values teach nothing."""
+    from services.sttm.refine import reusable_expression
+
+    table = str(entry.get("target_entity") or "").split(".")[-1].strip('"').upper()
+    full = {_key(l): l for l in lines or []}  # the edited version's lines: the diff holds only changed fields
+    out: List[Dict[str, Any]] = []
+    for change in diff.get("changed") or []:
+        column = str(change.get("target_column") or "").upper()
+        after = change.get("to") or {}
+        line = {**(change.get("from") or {}), **full.get(str(change.get("target_column") or "").upper(), {}), **after}
+        if not column:
+            continue
+        if "transformation" in change.get("fields", []) and after.get("transformation"):
+            sql = str(after["transformation"])
+            source = line.get("source_column")
+            out.append({"kind": "TRANSFORMATION_RULE",
+                        "key": f"transform.{table}.{column}" if table else f"transform.{column}",
+                        "title": f"Transform {column}",
+                        "content": f"{line.get('source_table')}.{source} -> {column}: {sql}. {note}".strip(),
+                        "content_json": {"target_column": column, "target_table": table or None,
+                                         "source_column": source, "source_table": line.get("source_table"),
+                                         "expression": reusable_expression(sql, source), "sql": sql,
+                                         "rationale": note, "catalog_id": entry.get("catalog_id")},
+                        "tags": ["TRANSFORM", "STTM", "STORE_EDIT"]})
+        if "business_rule" in change.get("fields", []) and after.get("business_rule"):
+            out.append({"kind": "BUSINESS_RULE", "key": f"sttm.rule.{table}.{column}",
+                        "title": f"{column} rule", "content": str(after["business_rule"]),
+                        "content_json": {"target_column": column, "target_table": table or None,
+                                         "rule": str(after["business_rule"]), "catalog_id": entry.get("catalog_id")},
+                        "tags": ["STTM", "STORE_EDIT"]})
+    return out
+
+
+def learn_from_edit(session, entry: Dict[str, Any], plan: Dict[str, Any], note: str) -> int:
+    """Store edit -> domain knowledge, so the next mapping, STTM and Soda runs use what the reviewer settled. Through
+    the learning policy (services/knowledge/writer.remember); never fails the edit, which is already saved."""
+    if not entry.get("domain_id"):
+        return 0
+    from services.knowledge.writer import remember
+
+    learned = 0
+    for item in edit_knowledge(entry, plan.get("diff") or {}, note, plan.get("lines")):
+        try:
+            remember(session, domain_id=entry["domain_id"], kind=item["kind"], key=item["key"], title=item["title"],
+                     content=item["content"], content_json=item["content_json"], tags=item["tags"], origin="STTM",
+                     run_id=entry.get("run_id"))
+            learned += 1
+        except Exception:
+            continue
+    return learned
 
 
 def sync_to_run(session, sttm_id: Optional[str], run_id: Optional[str], plan: Dict[str, Any], version: int,

@@ -453,10 +453,28 @@ def set_standard(session, model_id: str, standard_json: str, user: str) -> Dict[
 
     raw = json.loads(standard_json or "{}")
     std = conventions(raw.get("preset") or "NONE", raw)
-    _header(session, model_id)
+    header = _header(session, model_id)
     session.sql(f"UPDATE {MODELS} SET NAMING_STANDARD = PARSE_JSON(?), UPDATED_BY = ?, UPDATED_AT = CURRENT_TIMESTAMP() "
                 "WHERE MODEL_ID = ?", params=[json.dumps(std), user.upper(), model_id]).collect()
+    _remember_standard(session, header, std)
     return {"model_id": model_id, "naming_standard": std}
+
+
+def _remember_standard(session, header: Dict[str, Any], std: Dict[str, Any]) -> None:
+    """The domain's naming standard as NAMING_STANDARD knowledge, which run model designs and the Modeling hub put in
+    their prompts (services/modeling/design.context). Never fails the save."""
+    from services.modeling.design import describe_conventions
+    from services.knowledge.writer import remember
+
+    try:
+        remember(session, domain_id=header["domain_id"], kind="NAMING_STANDARD",
+                 key=f"model.naming_standard.{str(header['domain_name']).upper()}",
+                 title=f"{header['domain_name']} naming standard",
+                 content=f"Naming standard of the {header['domain_name']} domain model: {describe_conventions(std)}",
+                 content_json={**std, "model_id": header.get("model_id")}, tags=["MODEL", "NAMING", "WORKBENCH"],
+                 origin="MODELING")
+    except Exception:
+        pass
 
 
 # ---------------------------------------------------------------- baseline

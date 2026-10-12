@@ -192,6 +192,9 @@ def all_features(source: Dict[str, Any], target: Dict[str, Any], knowledge: Dict
     dm, dm_ev = domain_score(source, target, knowledge)
     cx, cx_ev = context_score(source, target)
     hs, hs_ev = historical_score(source, target, knowledge)
+    rejected = (str(source["column_name"]).upper(), str(target["column_name"]).upper()) in (knowledge.get("avoid") or set())
+    if rejected:
+        hs_ev = {**hs_ev, "rejected_before": f"a reviewer rejected {source['column_name']} -> {target['column_name']}"}
     return {
         "scores": {"semantic": semantic_score(cosine), "keyword": kw, "datatype": dt, "statistical": st,
                    "domain": dm, "context": cx, "historical": hs},
@@ -199,6 +202,7 @@ def all_features(source: Dict[str, Any], target: Dict[str, Any], knowledge: Dict
                      "datatype": dt_ev, "statistical": st_ev, "domain": dm_ev, "context": cx_ev,
                      "historical": hs_ev, "transformation_rule": rule},
         "transformation": transformation,
+        "rejected_before": rejected,
     }
 
 

@@ -28,11 +28,16 @@ def recommendation(score: float, thresholds: Dict[str, float]) -> str:
     return "MANUAL"
 
 
+REJECTED_PENALTY = 0.5  # a candidate a reviewer rejected for this source column before keeps half its score
+
+
 def rank_candidates(candidates: List[Dict[str, Any]], weights: Dict[str, float], thresholds: Dict[str, float],
                     top_k: int) -> List[Dict[str, Any]]:
     """candidates: one source column against all targets, each with "scores". Returns top_k ranked with confidence."""
     for c in candidates:
         c["final_score"] = final_score(c["scores"], weights)
+        if c.get("rejected_before"):  # a reviewer already said this source is not this target
+            c["final_score"] = round(c["final_score"] * REJECTED_PENALTY, 4)
     ranked = sorted(candidates, key=lambda c: (-c["final_score"], c["target"]["column_name"]))[:top_k]
     for i, c in enumerate(ranked):
         c["rank"] = i + 1
@@ -50,6 +55,8 @@ def explain(candidate: Dict[str, Any]) -> str:
     """Deterministic reason built from the strongest evidence."""
     s, e = candidate["scores"], candidate["evidence"]
     parts = []
+    if (e.get("historical") or {}).get("rejected_before"):
+        parts.append(f"{e['historical']['rejected_before']} before (score halved)")
     if s["domain"] >= 0.8:
         parts.append(next(iter(e["domain"].values())))
     if s["keyword"] >= 0.6:
