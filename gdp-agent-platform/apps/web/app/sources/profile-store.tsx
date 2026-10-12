@@ -7,7 +7,7 @@ import type { ProfileStoreRow, SourcesOverview } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
-import { Segmented } from "./oracle-ui";
+import { Segmented } from "@/components/ui/segmented";
 import type { Target } from "./catalog-browser";
 
 type Origin = "snowflake" | "external" | "oracle";
