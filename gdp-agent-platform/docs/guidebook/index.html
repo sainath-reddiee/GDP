@@ -97,7 +97,7 @@ footer { color: var(--muted); font-size: 13px; margin-top: 56px; }
 <div class="wrap">
 <nav class="toc" aria-label="Contents">
   <div class="brand">GDP Agent Platform</div>
-  <div class="ver">Guidebook and runbook for code on main, migrations V001 to V044</div>
+  <div class="ver">Guidebook and runbook for code on main, migrations V001 to V047</div>
   <ol>
     <li><a href="#access"><span class="num">01</span>How access works</a></li>
     <li><a href="#setup"><span class="num">02</span>Setup order</a></li>
@@ -144,6 +144,7 @@ footer { color: var(--muted); font-size: 13px; margin-top: 56px; }
       <ol>
         <li><a href="#dep-pre">Prerequisites</a></li>
         <li><a href="#dep-first">First deployment</a></li>
+        <li><a href="#dep-docker">Deploy with Docker</a></li>
         <li><a href="#dep-update">Updating</a></li>
         <li><a href="#dep-prod">Production</a></li>
         <li><a href="#dep-rollback">Rollback</a></li>
@@ -215,11 +216,11 @@ footer { color: var(--muted); font-size: 13px; margin-top: 56px; }
 <ol class="steps">
   <li><strong>Deploy Snowflake objects.</strong> Run <code>python infrastructure/deploy_snowflake.py --connection &lt;name&gt; --database DEV_AI_PLATFORM --warehouse DBT_WH</code> with a role that can create schemas, procedures, stages, Cortex Search services and agents. Always pass <code>--database</code>: the script's default (<code>AI_PLATFORM</code>) differs from the API's (<code>DEV_AI_PLATFORM</code>).</li>
   <li><strong>Grant database roles to account roles.</strong> See <a href="#mapping">Who gets what</a>. Also grant warehouse USAGE and <code>SNOWFLAKE.CORTEX_USER</code>.</li>
-  <li><strong>Configure the API.</strong> Copy <code>apps/api/.env.example</code> to <code>apps/api/.env</code> (gitignored) and fill it in. See <a href="#env">Environment variables</a>.</li>
+  <li><strong>Configure the API.</strong> Copy <code>apps/api/.env.example</code> to <code>apps/api/.env</code> (gitignored) and fill it in, or, with Docker, <code>docker/api.env.example</code> to <code>docker/api.env</code>. See <a href="#env">Environment variables</a>.</li>
   <li><strong>Start the API and web app</strong>, then sign in once with an admin account so governance bootstraps. Set <code>AIP_SUPER_ADMINS</code> first if the first sign-in should not be you.</li>
   <li><strong>Assign app roles</strong> in Admin, Access and governance.</li>
   <li><strong>Connect integrations</strong> in Admin, Integrations: code repositories and GitHub publishing, Jira, Airflow, Incidents.</li>
-  <li><strong>Start the worker</strong> (<code>python -m app.worker</code> in <code>apps/api</code>) if you use Pipelines or Incidents.</li>
+  <li><strong>Start the worker</strong> (<code>python -m app.worker</code> in <code>apps/api</code>) if you use Pipelines or Incidents. With Docker the <code>worker</code> container starts with the others.</li>
 </ol>
 
 <!-- ============================================================ 03 -->
@@ -249,7 +250,7 @@ footer { color: var(--muted); font-size: 13px; margin-top: 56px; }
 <h3 id="privileges">Privileges</h3>
 <div class="tablebox"><table>
 <tr><th>Privilege</th><th>Area</th><th>Allows</th></tr>
-<tr><td><code>SOURCE.CONNECT</code></td><td>Sources</td><td>Connect and configure sources (Snowflake, Oracle, files)</td></tr>
+<tr><td><code>SOURCE.CONNECT</code></td><td>Sources</td><td>Onboard and configure sources (Snowflake shares, SnapLogic external sources)</td></tr>
 <tr><td><code>PROFILE.RUN</code></td><td>Sources</td><td>Profile tables and land data</td></tr>
 <tr><td><code>RUN.CREATE</code></td><td>Runs</td><td>Create runs and modeling runs</td></tr>
 <tr><td><code>RUN.OPERATE</code></td><td>Runs</td><td>Run pipeline steps: generate mapping, STTM, checks, dbt, validation</td></tr>
@@ -399,12 +400,12 @@ footer { color: var(--muted); font-size: 13px; margin-top: 56px; }
   <li><strong>Cortex AI.</strong> <code>SNOWFLAKE.CORTEX_USER</code> for AI_COMPLETE (granted to PUBLIC by default in most accounts).</li>
   <li><strong>GitHub publishing.</strong> CREATE INTEGRATION on the account (network rule to api.github.com, a GENERIC_STRING secret, an external access integration).</li>
   <li><strong>Code repositories.</strong> A git API INTEGRATION that allows the repository host, and USAGE on it: <code>GRANT USAGE ON INTEGRATION GIT_CODE_CONTEXT TO ROLE &lt;role&gt;;</code></li>
-  <li><strong>Oracle (Snowflake runtime).</strong> CREATE SECRET, CREATE NETWORK RULE, CREATE INTEGRATION; Anaconda terms accepted by ORGADMIN for <code>oracledb</code> and <code>pyarrow</code>; CREATE TASK and EXECUTE TASK for schedules; a network path to the listener.</li>
+  <li><strong>Oracle (legacy, existing sources only).</strong> New external databases come through SnapLogic. CREATE SECRET, CREATE NETWORK RULE, CREATE INTEGRATION; Anaconda terms accepted by ORGADMIN for <code>oracledb</code> and <code>pyarrow</code>; CREATE TASK and EXECUTE TASK for schedules; a network path to the listener.</li>
 </ul>
 
 <!-- ============================================================ 04 -->
 <h2 id="features"><span class="num">04</span>Features</h2>
-<p>The sidebar is the one place to move around: Overview (the Command Center), <strong>Store</strong> (one item over the six asset stores: Source, Profiling, Modeling, Mapping (STTM), QA and Data Quality), Build (runs, onboarding, domains, code), Monitor (Quality center, QA workspace, pipelines, incidents), Knowledge and Govern. Clicking Store opens the Store hub (<code>/dashboard/store</code>): one card per store with what it holds and what needs action. Its chevron shows the six stores underneath, opened by itself while you are in one of them; with the sidebar collapsed, hovering or focusing the Store icon opens a menu of the stores. Store stays highlighted inside any store, and its badge sums the stores that need attention (each store keeps its own badge). Every store page has a bar to switch stores that keeps an explicit <code>?domain=</code>; the domain picked in the top bar applies everywhere. <code>/dashboard/store?tab=sources|profiling|modeling|sttm|qa|quality</code> opens that store, and <code>/store</code>, <code>/dashboard/qa</code>, <code>/dashboard/data-quality</code>, <code>/dashboard/mapping</code>, <code>/sources</code> and <code>/onboarding</code> redirect to their pages. Run pages under <code>/runs/&lt;run id&gt;</code> are unchanged. A group disappears when none of its pages are available to the user.</p>
+<p>The sidebar is the one place to move around, in lifecycle order: Overview (the Command Center), <strong>Onboarding</strong> (a highlighted entry of its own: sources, domains, applications), Asset stores (<strong>Store</strong>, one item over the six asset stores: Source, Profiling, Modeling, Mapping (STTM), QA and Data Quality), Knowledge (domains, knowledge, skills), Build (runs, code), then Monitor (Quality center, QA workspace, pipelines, incidents) and Govern (approvals, source control, audit, admin). Monitor and Govern can be folded to their heading; the choice is remembered per browser, a section opens by itself while you are on one of its pages, and a folded heading shows the summed badge of its links (pending approvals, for example). Clicking Store opens the Store hub (<code>/dashboard/store</code>): one card per store with what it holds and what needs action. Its chevron shows the six stores underneath, opened by itself while you are in one of them; with the sidebar collapsed, hovering or focusing the Store icon opens a menu of the stores. Store stays highlighted inside any store, and its badge sums the stores that need attention (each store keeps its own badge). Every store page has a bar to switch stores that keeps an explicit <code>?domain=</code>; the domain picked in the top bar applies everywhere. <code>/dashboard/store?tab=sources|profiling|modeling|sttm|qa|quality</code> opens that store, and <code>/store</code>, <code>/dashboard/qa</code>, <code>/dashboard/data-quality</code>, <code>/dashboard/mapping</code>, <code>/sources</code> and <code>/onboarding</code> redirect to their pages. Run pages under <code>/runs/&lt;run id&gt;</code> are unchanged. A group disappears when none of its pages are available to the user.</p>
 
 <h3 id="f-shell">Workspace shell</h3>
 <dl class="feature-meta">
@@ -423,15 +424,12 @@ footer { color: var(--muted); font-size: 13px; margin-top: 56px; }
 
 <h3 id="f-sources">Sources</h3>
 <dl class="feature-meta">
-  <dt>Page</dt><dd><code>/dashboard/sources</code> (old links to <code>/sources</code> redirect): source-only figures (sources connected, ingestion pipelines active of registered, landed tables and their freshness, ingestion issues), then the Snowflake catalog (explore and profile tables in place, send them to modeling) and External systems (the ingestion pipelines, Oracle, files and cloud storage). Stored profiles are in the Profiling Store. <code>/dashboard/sources/new</code> onboards a source.</dd>
+  <dt>Page</dt><dd><code>/dashboard/sources</code> (old links to <code>/sources</code> redirect): source-only figures (sources connected, ingestion pipelines active of registered, landed tables and their freshness, ingestion issues), then the Snowflake catalog (explore and profile tables in place, send them to modeling) and, once anything has been onboarded externally, one <strong>External sources</strong> panel. Stored profiles are in the Profiling Store. Sources are onboarded from <a href="#f-onboarding">Onboarding</a>; the Source Store has no onboarding button of its own.</dd>
   <dt>Share onboarding</dt><dd>Pick a mounted share database (or mount one with the provider account and share name, which needs IMPORT SHARE), a schema and tables. One action creates a run and takes it through register, access and landing: each table is unloaded once to Snappy Parquet on <code>SOURCE.LANDING_STAGE</code>, the landing table is created with the source's exact types and filled with <code>COPY INTO ... MATCH_BY_COLUMN_NAME = CASE_INSENSITIVE</code> (procedure <code>SOURCE.EXECUTE_STAGED_LANDING</code>). The run then continues on its own pages.</dd>
-  <dt>External pipelines</dt><dd>For systems loaded by the ingestion tool (SnapLogic): the intake questions are the platform setting <code>INGESTION_INTAKE_FORM</code> (sections of fields; editable through <code>PUT /api/hub/intake-form</code>). Answers become one row of <code>PLATFORM_CONFIG.INGESTION_PIPELINE_CATALOG</code>; password and other secret answers are encrypted with <code>AIP_SECRET_KEY</code> before they are stored. New external sources are onboarded with the SnapLogic wizard (<a href="#f-onboarding">Onboarding</a>), which writes <code>PLATFORM_CONFIG.INGESTION_CONTROL_CONFIG</code>. The platform never calls the ingestion tool.</dd>
+  <dt>External sources</dt><dd>Every system outside Snowflake (Oracle and other databases, Salesforce, REST, files and cloud storage) is landed by SnapLogic. The SnapLogic wizard in <a href="#f-onboarding">Onboarding</a> writes <code>PLATFORM_CONFIG.INGESTION_CONTROL_CONFIG</code>; intake answers become a row of <code>PLATFORM_CONFIG.INGESTION_PIPELINE_CATALOG</code> (questions from the platform setting <code>INGESTION_INTAKE_FORM</code>, editable through <code>PUT /api/hub/intake-form</code>; secret answers are encrypted with <code>AIP_SECRET_KEY</code>). The External sources panel appears only when a configuration or a pipeline exists. It lists the ingestion configurations by master ID (open a row for its history, switch a table on or off; every change is kept in <code>INGESTION_CONTROL_HISTORY</code>) and the registered pipelines with their status. The platform never calls SnapLogic.</dd>
   <dt>Snowflake catalog</dt><dd>Pick a database and schema, select tables, Profile (only tables without a current profile) or Profile all from scratch. Profiling runs where the data lives and never copies it. "Start modeling" creates a run from the selection.</dd>
-  <dt>External systems</dt><dd>File upload, S3, Azure Blob, GCS: files go through a stage, then INFER_SCHEMA and COPY INTO <code>&lt;db&gt;.EXT_&lt;SOURCE&gt;</code>, then profile like any table. PostgreSQL, SQL Server, MySQL, Salesforce and REST are registered only; they land through a Snowflake connector enabled by an account admin. Uploads: CSV, Parquet or JSON, up to 200 MB per file.</dd>
-  <dt>Oracle</dt><dd>Wizard: Connection, Access, Verify (ten checks), then browse, preview, profile in Oracle and land with full refresh, append or merge. Two runtimes: <strong>snowflake</strong> (procedure with a PASSWORD secret and an external access integration for that host only) and <strong>api_host</strong> (password read from an environment variable named on the source). Incremental schedules (merge or append, preset or cron) are Snowflake tasks and only work in the snowflake runtime.</dd>
-  <dt>Privileges</dt><dd><span class="chip p">SOURCE.CONNECT</span> create and configure sources, Oracle setup and schedules. <span class="chip p">PROFILE.RUN</span> profile, upload, land, preview, ingest. <span class="chip p">RUN.CREATE</span> start modeling.</dd>
-  <dt>Configure first</dt><dd>For buckets: a Snowflake STORAGE INTEGRATION. For Oracle: a read-only Oracle user with CREATE SESSION and SELECT on the owner schema (grant script shown in the wizard). The platform never stores credentials, only the names of Snowflake secrets and integrations.</dd>
-  <dt>Limits</dt><dd>Merge needs a primary key. Tables without a watermark are read in full on every scheduled run.</dd>
+  <dt>Earlier connectors</dt><dd>The in-app file upload, cloud storage and Oracle connectors were removed. Tables they already landed stay in <code>&lt;db&gt;.EXT_&lt;SOURCE&gt;</code> and can be browsed and profiled in the catalog; their Snowflake objects (stages, secrets, integrations, Oracle procedures and tasks) and API endpoints remain until an admin drops them.</dd>
+  <dt>Privileges</dt><dd><span class="chip p">SOURCE.CONNECT</span> SnapLogic configurations, pipeline status and mounting a share. <span class="chip p">PROFILE.RUN</span> profile tables. <span class="chip p">RUN.CREATE</span> share onboarding and start modeling.</dd>
 </dl>
 
 <h3 id="f-profiling">Profiling hub</h3>
@@ -523,10 +521,10 @@ footer { color: var(--muted); font-size: 13px; margin-top: 56px; }
 <h3 id="f-onboarding">Onboarding</h3>
 <dl class="feature-meta">
   <dt>Page</dt><dd><code>/dashboard/onboarding?type=source|domain|application</code> (<code>/dashboard/sources/new</code> redirects to the Source section)</dd>
-  <dt>What it does</dt><dd>Starts with "What are you onboarding?". <strong>Source</strong>: the Snowflake share wizard and the SnapLogic external system wizard, plus links to the database, file and Oracle connectors.
+  <dt>What it does</dt><dd>Starts with "What are you onboarding?". The page reads as numbered steps: 1, what you are onboarding (Source, Domain, Application); 2, the source type; 3, the wizard for it. <strong>Source</strong> has two types, each a wizard on this page: <em>Snowflake share</em> and <em>External source</em> (SnapLogic). Snowflake databases need no onboarding: they are browsed and profiled in place in the Source Store's catalog.
     <ul>
       <li><strong>Native Snowflake share</strong>, five steps: <em>Share</em> lists the inbound shares visible to your role and the databases already mounted from a share, with a search; a share that is not mounted can be mounted on the spot (<code>POST /api/hub/sources/share/mount</code>, needs IMPORT SHARE), or entered by provider and name when it is not listed. <em>Schema</em> lists the share's schemas with table and row counts (<code>GET /api/hub/sources/share/schemas</code>). <em>Tables</em> lists its tables with row counts, with a filter and select all. <em>Landing</em> picks the landing database and schema from lists and shows the landing table names (SOURCE__TABLE). <em>Load</em> registers the source, checks access, unloads each table once to Parquet on SOURCE.LANDING_STAGE and copies it into landing with its exact column types, then the run continues to profiling. Choosing an earlier step again clears every choice made after it.</li>
-      <li><strong>External system</strong> (SnapLogic), six steps: Source, Tables (one or more), Target, Load, SnapLogic and Review. Every column of <code>PLATFORM_CONFIG.INGESTION_CONTROL_CONFIG</code> (V044) is asked, each field labelled with its column: the source account, database or path, schema or file, format (the sheet name only for Excel), and per table the source table or query, delta key, primary keys, filter, audit columns, landing and bronze tables, the previous load time it starts from and the delete handling (key, value and query shown only when the source deletes rows); the target account, landing and bronze schemas, external stage, Iceberg volume and base location, config table; landing and bronze load types, frequency, trigger cron (not for on demand), landing to bronze, active, the last run time and completion flag; the SnapLogic project, parent and child pipelines, API URL and API key secret reference (a token is refused: only the name of the secret in the vault is stored); and comments. Each step is checked by the API before the next. MASTER_ID and CHILD_ID come from their sequences on save (one master per source, one child per table), CREATED_BY is the signed-in user and CREATED_AT and UPDATED_AT the time of saving; the Review step lists them. Saving writes the source's catalog row, one control row per table and one history row each, in one transaction, and confirms "Configuration saved: master ID n". The Source Store's External systems tab lists the configurations by master ID, opens each row with its history, and switches a table on or off (every change is kept in <code>PLATFORM_CONFIG.INGESTION_CONTROL_HISTORY</code>). SnapLogic reads the table; the platform never calls it.</li>
+      <li><strong>External source</strong> (SnapLogic), six steps: Source, Tables (one or more), Target, Load, SnapLogic and Review. Every column of <code>PLATFORM_CONFIG.INGESTION_CONTROL_CONFIG</code> (V046) is asked, each field labelled with its column: the source account, database or path, schema or file, format (the sheet name only for Excel), and per table the source table or query, delta key, primary keys, filter, audit columns, landing and bronze tables, the previous load time it starts from and the delete handling (key, value and query shown only when the source deletes rows); the target account, landing and bronze schemas, external stage, Iceberg volume and base location, config table; landing and bronze load types, frequency, trigger cron (not for on demand), landing to bronze, active, the last run time and completion flag; the SnapLogic project, parent and child pipelines, API URL and API key secret reference (a token is refused: only the name of the secret in the vault is stored); and comments. Each step is checked by the API before the next. MASTER_ID and CHILD_ID come from their sequences on save (one master per source, one child per table), CREATED_BY is the signed-in user and CREATED_AT and UPDATED_AT the time of saving; the Review step lists them. Saving writes the source's catalog row, one control row per table and one history row each, in one transaction, and confirms "Configuration saved: master ID n". The Source Store's External sources panel lists the configurations by master ID, opens each row with its history, and switches a table on or off (every change is kept in <code>PLATFORM_CONFIG.INGESTION_CONTROL_HISTORY</code>). SnapLogic reads the table; the platform never calls it.</li>
     </ul> <strong>Domain</strong>: upload <code>domain_pack.json</code> and its contract (validated as a dry run with <code>POST /api/hub/onboarding/validate</code>, then the existing domain import), draft a pack from any contract with AI, or design a model in the Modeling Store; the domains on the platform are listed. <strong>Application</strong>: coming soon, with the roadmap.</dd>
   <dt>Privileges</dt><dd><span class="chip p">RUN.CREATE</span> share onboarding, <span class="chip p">SOURCE.CONNECT</span> external sources, SnapLogic configurations and mounting a share, <span class="chip p">DOMAIN.EDIT</span> domain import, <span class="chip p">AI.USE</span> AI draft.</dd>
 </dl>
@@ -689,14 +687,17 @@ footer { color: var(--muted); font-size: 13px; margin-top: 56px; }
 <tr><td><code>AIP_SOURCE_AS_CALLER</code></td><td>Run source handlers in the API with the caller's session</td><td>1 in dev, 0 in pat</td></tr>
 <tr><td><code>AIP_AGENT_NAME</code>, <code>AIP_AGENT_SCHEMA</code></td><td>Cortex agent target</td><td>DATA_ENGINEERING_SUPERVISOR, CORE</td></tr>
 <tr><td><code>AIP_WORKER_LOG_LEVEL</code></td><td>Worker logging</td><td>INFO</td></tr>
+<tr><td><code>AIP_SLOW_MS</code>, <code>AIP_TIMING_LOG</code></td><td>Log API requests slower than this many milliseconds; log every request's timing when set</td><td>800, off</td></tr>
+<tr><td><code>AIP_BUILD_SHA</code></td><td>Build reported by <code>/api/health</code> when there is no git checkout (set by the Docker image)</td><td>from <code>git rev-parse</code></td></tr>
 <tr><td><code>JIRA_CLIENT_ID</code>, <code>JIRA_CLIENT_SECRET</code></td><td>Jira OAuth app (client ID can also be saved in Admin)</td><td></td></tr>
 <tr><td><code>JIRA_TOKEN_KEY</code></td><td>Encrypts stored Jira tokens. 32 or more random characters; changing it disconnects everyone.</td><td></td></tr>
 <tr><td><code>JIRA_REDIRECT_URI</code></td><td>OAuth callback: <code>&lt;web origin&gt;/bff/jira/callback</code></td><td>http://localhost:3000/bff/jira/callback</td></tr>
 <tr><td><code>JIRA_BOT_EMAIL</code>, <code>JIRA_BOT_TOKEN</code></td><td>Bot account for incident tickets</td><td></td></tr>
 <tr><td><code>AWS_PROFILE</code> or an IAM role</td><td>MWAA and CloudWatch access; never stored in the file</td><td>AWS default chain</td></tr>
-<tr><td>Oracle <code>password_env</code></td><td>Name chosen per Oracle source in the api_host runtime</td><td></td></tr>
+<tr><td>Oracle <code>password_env</code></td><td>Legacy: name chosen per Oracle source in the api_host runtime, for Oracle sources registered before external databases moved to SnapLogic</td><td></td></tr>
 </table></div>
 <p>Web app (<code>apps/web/.env.local</code>): <code>AIP_API_URL</code> (default <code>http://127.0.0.1:8001</code>), <code>AIP_AUTH</code> (must match the API), <code>NEXT_PUBLIC_CATALOG_DISPLAY</code>.</p>
+<p>With Docker the same variables come from <code>docker/api.env</code> (API and worker) and <code>docker/.env</code> (image tag, build commit, <code>AIP_AUTH</code>, web port); compose sets <code>AIP_API_URL</code> and <code>AIP_SERVICE_KEY_PATH</code> itself. See <a href="#dep-docker">Deploy with Docker</a>.</p>
 <p>Generate a random key in PowerShell:</p>
 <pre><code>[Convert]::ToBase64String((1..32 | ForEach-Object { Get-Random -Maximum 256 }))</code></pre>
 <div class="crit"><strong>Never paste secrets into chats, tickets or documents.</strong> If a key or secret was shared, generate a new one. Secrets are encrypted in the application before they reach Snowflake, so no key appears in Snowflake query history.</div>
@@ -892,6 +893,9 @@ python -m app.worker
 # Snowflake objects (idempotent)
 python infrastructure/deploy_snowflake.py --connection &lt;name&gt; --database DEV_AI_PLATFORM --warehouse DBT_WH</code></pre>
 <p>Deploy applies migrations once each (checksums are locked), seeds the workflow graph, uploads <code>services/</code> to <code>CORE.CODE_STAGE</code>, and recreates procedures, views, Cortex Search and the agent. Admin, Deploy does the same with the signed-in role.</p>
+<p>Shared and client environments run the three processes as containers instead:</p>
+<pre><code>docker compose -f docker/docker-compose.yml --env-file docker/.env up -d --build</code></pre>
+<p>See <a href="#dep-docker">Deploy with Docker</a>.</p>
 
 <!-- ============================================================ 06 -->
 <h2 id="deploy"><span class="num">06</span>Deployment runbook</h2>
@@ -902,6 +906,7 @@ python infrastructure/deploy_snowflake.py --connection &lt;name&gt; --database D
 <tr><th>Need</th><th>Detail</th><th>Check</th></tr>
 <tr><td>Python 3.11 or newer</td><td>Runs the API, worker and deploy script</td><td><code>python --version</code></td></tr>
 <tr><td>Node.js 20 or newer</td><td>Runs the web app</td><td><code>node --version</code></td></tr>
+<tr><td>Docker (shared and client environments)</td><td>Docker Engine 24 or newer with Compose v2 on the host. The images carry Python and Node, so the host needs neither; the deploy script still needs Python where it runs</td><td><code>docker compose version</code></td></tr>
 <tr><td>Repository</td><td>Latest <code>main</code></td><td><code>git pull origin main</code></td></tr>
 <tr><td>Snowflake connection</td><td>A named entry in <code>~/.snowflake/connections.toml</code> (account, user, <code>authenticator = "externalbrowser"</code> for SSO, role, warehouse)</td><td><code>snow connection test -c &lt;name&gt;</code> or a test sign-in</td></tr>
 <tr><td>Deploy role</td><td>Owns the platform database or can create schemas, tables, stages, procedures, database roles, row access policies, Cortex Search services and agents in it, and grant them. Account level: CREATE INTEGRATION if GitHub publishing or Oracle will be used.</td><td>The deploy prints each step; a missing privilege stops it with the failing statement</td></tr>
@@ -924,7 +929,7 @@ cd apps/web; npm install; cd ../..</code></pre></li>
 <pre><code>SELECT VERSION, APPLIED_AT FROM DEV_AI_PLATFORM.CORE.SCHEMA_MIGRATION ORDER BY VERSION DESC LIMIT 5;
 SHOW PROCEDURES IN SCHEMA DEV_AI_PLATFORM.CONTRACT;
 SHOW ROW ACCESS POLICIES IN SCHEMA DEV_AI_PLATFORM.JIRA;</code></pre>
-  The newest version should be V033, and <code>OWN_ROWS</code> should be listed.</li>
+  The newest version should be V047, and <code>OWN_ROWS</code> should be listed.</li>
   <li><strong>Grant people access</strong> (see <a href="#mapping">Who gets what</a>):
 <pre><code>GRANT DATABASE ROLE DEV_AI_PLATFORM.DATA_ENGINEER TO ROLE &lt;data engineers&gt;;
 GRANT DATABASE ROLE DEV_AI_PLATFORM.QA_ENGINEER   TO ROLE &lt;qa team&gt;;
@@ -940,6 +945,42 @@ cd apps/api; python -m app.worker</code></pre>
   <li><strong>Connect integrations</strong> in Admin, Integrations, then run <a href="#verify">Check that it works</a>.</li>
 </ol>
 
+<h3 id="dep-docker">Deploy with Docker</h3>
+<p>Shared, test and client environments run as three containers from two images, defined in <code>docker/</code>: <code>web</code> (Next.js), <code>api</code> (FastAPI) and <code>worker</code> (the API image running <code>python -m app.worker</code>). Only <code>web</code> publishes a port, on the host loopback, for an HTTPS reverse proxy; the API stays on the compose network. Run every command from <code>gdp-agent-platform/</code>.</p>
+<div class="tablebox"><table>
+<tr><th>File</th><th>What it holds</th><th>In git</th></tr>
+<tr><td><code>docker/api.Dockerfile</code></td><td>Python 3.11 image with <code>apps/api</code>, <code>services/</code>, <code>infrastructure/</code>, <code>snowflake/</code> and <code>domain/</code>; runs as a non-root user; health check on <code>/api/health</code></td><td>yes</td></tr>
+<tr><td><code>docker/web.Dockerfile</code></td><td>Node 20 multi-stage build of <code>apps/web</code>; <code>AIP_AUTH</code> is a build argument because the sign-in middleware is compiled into the build</td><td>yes</td></tr>
+<tr><td><code>docker/docker-compose.yml</code></td><td>The three services, the internal network, the service-key secret and restart policies</td><td>yes</td></tr>
+<tr><td><code>docker/.env</code></td><td>Image tag and registry, build commit, <code>AIP_AUTH</code>, web port (from <code>docker/.env.example</code>)</td><td>no</td></tr>
+<tr><td><code>docker/api.env</code></td><td>API and worker settings (from <code>docker/api.env.example</code>); one value per line, no quotes, no comment after a value</td><td>no</td></tr>
+<tr><td><code>docker/secrets/aip_service_key.p8</code></td><td>The worker service user's private key, mounted read-only at <code>/run/secrets/aip_service_key</code></td><td>no</td></tr>
+</table></div>
+<ol class="steps">
+  <li><strong>Fill the settings.</strong>
+<pre><code>cp docker/.env.example docker/.env
+cp docker/api.env.example docker/api.env
+mkdir -p docker/secrets
+cp &lt;path&gt;/aip_service_key.p8 docker/secrets/aip_service_key.p8
+docker compose -f docker/docker-compose.yml --env-file docker/.env config --quiet</code></pre>
+  Set <code>GDP_BUILD_SHA</code> in <code>docker/.env</code> to <code>git rev-parse --short HEAD</code> so the app and <code>/bff/version</code> show the release.</li>
+  <li><strong>Build or pull the images.</strong>
+<pre><code>docker compose -f docker/docker-compose.yml --env-file docker/.env build
+docker compose -f docker/docker-compose.yml --env-file docker/.env push   # with GDP_REGISTRY set
+docker compose -f docker/docker-compose.yml --env-file docker/.env pull   # on the target host</code></pre></li>
+  <li><strong>Deploy the Snowflake objects</strong> as in <a href="#dep-first">First deployment</a>, from a workstation. To run it from the API image instead, mount a key-pair connection (a container cannot open a browser for SSO):
+<pre><code>docker compose -f docker/docker-compose.yml --env-file docker/.env run --rm --no-deps \
+  -v ~/.snowflake:/home/gdp/.snowflake:ro api \
+  python /srv/gdp/infrastructure/deploy_snowflake.py --connection &lt;name&gt; --database &lt;DB&gt; --warehouse &lt;WH&gt;</code></pre></li>
+  <li><strong>Start and check.</strong> <code>api</code> and <code>web</code> report healthy; <code>worker</code> reports running.
+<pre><code>docker compose -f docker/docker-compose.yml --env-file docker/.env up -d
+docker compose -f docker/docker-compose.yml --env-file docker/.env ps
+docker compose -f docker/docker-compose.yml --env-file docker/.env logs -f --tail=100 api worker</code></pre></li>
+  <li><strong>Put HTTPS in front</strong>: a reverse proxy on the public hostname forwarding to <code>127.0.0.1:3000</code>, allowing request bodies up to 200 MB.</li>
+</ol>
+<div class="warn"><strong>Run one API container.</strong> Signed-in sessions and the approval replay key live in the API's memory: do not scale the <code>api</code> service, and expect everyone to sign in again after it is recreated. The worker may run two copies.</div>
+<div class="note"><strong>Changing AIP_AUTH</strong> needs a rebuild of the web image, not only a restart, because the value is compiled into the sign-in middleware.</div>
+
 <h3 id="dep-update">Updating an environment</h3>
 <ol class="steps">
   <li>Merge the pull request, then <code>git pull origin main</code> and reinstall dependencies if <code>requirements.txt</code> or <code>package.json</code> changed.</li>
@@ -948,6 +989,7 @@ cd apps/api; python -m app.worker</code></pre>
   <li>If the release notes mention the Airflow plugin, update <code>plugins.zip</code> in MWAA at the same time as the API (the event signature must match).</li>
   <li>Run the checks for the features the release touched.</li>
 </ol>
+<p>With Docker, steps 1 and 3 become: set the new <code>GDP_TAG</code> and <code>GDP_BUILD_SHA</code> in <code>docker/.env</code>, <code>pull</code> (or <code>build</code>) the images, run the Snowflake deploy, then <code>docker compose ... up -d</code>, which recreates only the containers whose image changed.</p>
 <div class="note"><strong>Admin, Deploy</strong> does steps 2 from the browser with the signed-in role (needs ADMIN.DEPLOY). The API and web restart are still needed for code changes.</div>
 <div class="note"><strong>How the deploy knows what changed.</strong> <code>CORE.DEPLOY_STATE</code> holds a checksum of each step's rendered SQL (procedure, view, Cortex Search, agent and demo files), the code package name, the seed inputs and the GitHub publisher and Oracle refreshes, written only after the step succeeded, so a failed step runs again next time. When a migration is applied, views, Cortex Search, agents and the seed run again so they see the new tables. If an object was changed or dropped in Snowflake by hand, or silver tables were created since the last seed, re-apply everything with <code>--force</code> (or "Re-apply everything" in Admin, Deploy). The seed leaves the target tables of domains that have an approved Model Workbench version alone: the approved model is their source of truth; to bring a changed repository pack into such a domain, import it into a draft in the Model Workbench.</div>
 <div class="warn"><strong>Never edit an applied migration.</strong> Each migration's checksum is recorded; a changed file stops the deploy. Add a new migration instead.</div>
@@ -956,16 +998,17 @@ cd apps/api; python -m app.worker</code></pre>
 <ul>
   <li><strong>Sign-in:</strong> <code>AIP_AUTH=pat</code> and <code>AIP_ACCOUNT</code>, so each person works under their own Snowflake identity. Set the same <code>AIP_AUTH</code> in the web app.</li>
   <li><strong>Worker identity:</strong> a key-pair service user with the OPS_SERVICE database role, warehouse usage and CORTEX_USER (<code>AIP_SERVICE_USER</code>, <code>AIP_SERVICE_KEY_PATH</code>, optional passphrase, role and warehouse).</li>
-  <li><strong>Web:</strong> <code>npm run build</code> then <code>npm run start</code>, behind HTTPS. Set <code>AIP_API_URL</code> to the API's internal address.</li>
-  <li><strong>API:</strong> uvicorn behind a reverse proxy on HTTPS; keep it private and let the web app proxy to it.</li>
-  <li><strong>Worker:</strong> run as a service that restarts on failure. Running two copies is safe: leases let only one holder run each job.</li>
+  <li><strong>Containers:</strong> run web, API and worker with <code>docker/docker-compose.yml</code> (<a href="#dep-docker">Deploy with Docker</a>). Compose keeps the API unpublished, restarts each container on failure and starts web and worker once the API is healthy.</li>
+  <li><strong>Web:</strong> behind HTTPS on the public hostname. Without Docker: <code>npm run build</code> then <code>npm run start</code>, with <code>AIP_API_URL</code> set to the API's internal address.</li>
+  <li><strong>API:</strong> private; only the web app talks to it. Without Docker: uvicorn bound to localhost or a private network.</li>
+  <li><strong>Worker:</strong> restarts on failure. Running two copies is safe: leases let only one holder run each job.</li>
   <li><strong>Public URLs:</strong> the Jira callback, the Airflow ingest URL and the Teams public base URL must use the public HTTPS origin, not localhost.</li>
   <li><strong>Secrets:</strong> prefer the host's secret manager or service environment over a <code>.env</code> file; values in the environment win over the file.</li>
 </ul>
 
 <h3 id="dep-rollback">Rollback</h3>
 <ul>
-  <li><strong>Code and procedures:</strong> check out the previous release and run the deploy again; procedures and the services package are replaced.</li>
+  <li><strong>Code and procedures:</strong> check out the previous release and run the deploy again; procedures and the services package are replaced. With Docker, set <code>GDP_TAG</code> back to the previous release and run <code>up -d</code>.</li>
   <li><strong>Migrations</strong> only move forward. To undo a schema change, write a new migration that reverses it.</li>
   <li><strong>Secrets:</strong> keep the previous key values until the rollback is confirmed; values sealed with a different key cannot be read.</li>
 </ul>
@@ -996,7 +1039,7 @@ cd apps/api; python -m app.worker</code></pre>
 <tr><td>Teams webhook URLs</td><td>Encrypted in <code>OPS.TEAM</code></td><td>Admin, Integrations, Incidents, per team</td><td>Paste the new URL; never shown back</td></tr>
 <tr><td>GitHub token (dbt publishing)</td><td>Snowflake secret</td><td>Admin, Integrations, Code repositories</td><td>Rotate from the same screen</td></tr>
 <tr><td>Git token (code index)</td><td>Snowflake secret <code>CODE.&lt;NAME&gt;_GIT_TOKEN</code></td><td>Repository drawer, Credentials</td><td>Rotate from the drawer</td></tr>
-<tr><td>Oracle password</td><td>Snowflake PASSWORD secret, or an environment variable on the API host (api_host runtime)</td><td>Oracle wizard</td><td>Set it again; api_host needs an API restart</td></tr>
+<tr><td>Oracle password</td><td>Snowflake PASSWORD secret, or an environment variable on the API host (api_host runtime)</td><td>Oracle sources registered before the move to SnapLogic (legacy)</td><td>Set it again; api_host needs an API restart</td></tr>
 <tr><td>AWS access (MWAA)</td><td>IAM role or <code>AWS_PROFILE</code> on the host</td><td>Your AWS administrator</td><td>Never put AWS keys in the platform</td></tr>
 </table></div>
 
@@ -1047,7 +1090,6 @@ cd apps/api; python -m app.worker</code></pre>
 <tr><td>Governance</td><td>As a user without a privilege, try the action; as a DATA_ENGINEER, try an approval-gated action</td><td>403 "needs the X privilege"; the gated one appears in Approvals, and approving it applies the change</td></tr>
 <tr><td>Snowflake profiling</td><td>Sources, pick a small table, Profile</td><td>Status goes to Ready with column stats and PII flags</td></tr>
 <tr><td>File landing</td><td>Upload a small CSV to an external source and land it</td><td>Table appears in <code>EXT_&lt;SOURCE&gt;</code> with the right row count</td></tr>
-<tr><td>Oracle</td><td>Run the wizard's Verify step</td><td>All ten checks pass, or each failure names its fix</td></tr>
 <tr><td>Run pipeline</td><td>Start modeling from profiled tables; generate mapping, approve; generate STTM, approve</td><td>Each stage advances; approval buttons only work for approvers</td></tr>
 <tr><td>Parallel lanes</td><td>After STTM approval, complete Data Quality, QA sign-off and Validation</td><td>Code review unlocks only when all three are done</td></tr>
 <tr><td>dbt publishing</td><td>dbt step: cut a branch, generate, publish</td><td>A branch and PR appear in GitHub; the run shows the PR link</td></tr>
@@ -1119,7 +1161,7 @@ cd apps/api; python -m app.worker</code></pre>
 
 <h3 id="tables">All tables</h3>
 <p>Every table the platform creates, grouped by schema. Type: <strong>Config</strong> is set by people or the deploy, <strong>Content</strong> is produced by the platform's features, <strong>Log</strong> is history, audit or operational state kept for traceability. "Created in" names the migration in <code>snowflake/database/migrations</code> (a second version means a later migration added columns).</p>
-<div class="filter"><label for="tfilter">Filter tables</label><input id="tfilter" type="search" placeholder="Try QA, SnapLogic, incident, profile, V044" autocomplete="off"><span class="count" id="tcount"></span></div>
+<div class="filter"><label for="tfilter">Filter tables</label><input id="tfilter" type="search" placeholder="Try QA, SnapLogic, incident, profile, V046" autocomplete="off"><span class="count" id="tcount"></span></div>
 <div class="tablebox"><table id="ttable">
 <thead><tr><th>Table</th><th>Type</th><th>What it is for</th><th>Written by</th><th>Used on</th><th>Created in</th></tr></thead>
 <tbody>
@@ -1142,8 +1184,8 @@ cd apps/api; python -m app.worker</code></pre>
 <tr><td>SOURCE.SOURCE_ACCESS_CHECK</td><td>Log</td><td>Read-access check results per run</td><td>SOURCE.VALIDATE_SOURCE_ACCESS</td><td>Run access step</td><td>V001</td></tr>
 <tr><td>SOURCE.SOURCE_OBJECT</td><td>Content</td><td>Objects discovered in a source and which were selected</td><td>SOURCE.REGISTER_SOURCE</td><td>Run source step</td><td>V001</td></tr>
 <tr><td>SOURCE.SOURCE_REGISTRY</td><td>Config</td><td>Registered sources and connection details (never credentials)</td><td>Source procedures, API</td><td>Source Store, run source step</td><td>V001</td></tr>
-<tr><td>PLATFORM_CONFIG.INGESTION_CONTROL_CONFIG</td><td>Config</td><td>SnapLogic control table: one row per table an external source loads (MASTER_ID per source, CHILD_ID per table). SnapLogic reads it and updates TARGET_PREVIOUS_LOAD_TIME, LAST_RUN_TIMESTAMP and COMPLETION_FLAG. API_KEY holds a secret reference only</td><td>External onboarding wizard (services/source/ingestion_control.py, /api/hub/ingestion-control); SnapLogic</td><td>Source Store ingestion configurations, SnapLogic pipelines</td><td>V044</td></tr>
-<tr><td>PLATFORM_CONFIG.INGESTION_CONTROL_HISTORY</td><td>Log</td><td>Every create, edit, activation and deactivation of a control row: who, when, and the row after the change. Append only</td><td>services/source/ingestion_control.py</td><td>Source Store configuration drawer</td><td>V044</td></tr>
+<tr><td>PLATFORM_CONFIG.INGESTION_CONTROL_CONFIG</td><td>Config</td><td>SnapLogic control table: one row per table an external source loads (MASTER_ID per source, CHILD_ID per table). SnapLogic reads it and updates TARGET_PREVIOUS_LOAD_TIME, LAST_RUN_TIMESTAMP and COMPLETION_FLAG. API_KEY holds a secret reference only</td><td>External onboarding wizard (services/source/ingestion_control.py, /api/hub/ingestion-control); SnapLogic</td><td>Source Store ingestion configurations, SnapLogic pipelines</td><td>V046</td></tr>
+<tr><td>PLATFORM_CONFIG.INGESTION_CONTROL_HISTORY</td><td>Log</td><td>Every create, edit, activation and deactivation of a control row: who, when, and the row after the change. Append only</td><td>services/source/ingestion_control.py</td><td>Source Store configuration drawer</td><td>V046</td></tr>
 <tr><td>PLATFORM_CONFIG.INGESTION_PIPELINE_CATALOG</td><td>Config</td><td>One row per external source for the ingestion tool: intake answers, sealed secret references, schedule, landing table, pipeline name</td><td>Source Store onboarding (services/source/pipelines.py)</td><td>Source Store (/dashboard/sources), Command Center</td><td>V035</td></tr>
 <tr><td>PROFILE.PROFILE_REGISTRY</td><td>Content</td><td>Run-scoped column profile with PII classification</td><td>PROFILE.RUN_PROFILING</td><td>Run profile step</td><td>V001</td></tr>
 <tr><td>METADATA.TABLE_PROFILES</td><td>Content</td><td>Persistent per-table profile reused across runs</td><td>SOURCE.PROFILE_SOURCE_TABLES</td><td>Profiling, DQ, models</td><td>V006</td></tr>
@@ -1152,6 +1194,7 @@ cd apps/api; python -m app.worker</code></pre>
 <tr><td>KNOWLEDGE.DOMAIN_RECOMMENDATION</td><td>Log</td><td>Domain identification result per run</td><td>KNOWLEDGE.IDENTIFY_DOMAIN</td><td>Run domain step</td><td>V001</td></tr>
 <tr><td>KNOWLEDGE.DOMAIN_REGISTRY</td><td>Config</td><td>Business domains and their detection settings</td><td>Domains API</td><td>Domains (/domains), domain filter everywhere</td><td>V001</td></tr>
 <tr><td>KNOWLEDGE.DOMAIN_VERSION</td><td>Log</td><td>Snapshot of each domain change</td><td>services/knowledge/domain_versions.py</td><td>Domain history</td><td>V023</td></tr>
+<tr><td>KNOWLEDGE.KNOWLEDGE_OUTCOME</td><td>Content</td><td>Helpfulness of each knowledge item per stage, from reviewer decisions on mapping and Soda output</td><td>services/knowledge/outcomes.py</td><td>Knowledge ranking, Knowledge page</td><td>V047</td></tr>
 <tr><td>KNOWLEDGE.KNOWLEDGE_USAGE</td><td>Log</td><td>Which knowledge each run stage used</td><td>Knowledge writer</td><td>Knowledge page</td><td>V022</td></tr>
 <tr><td>KNOWLEDGE.SKILL_CATEGORY</td><td>Config</td><td>Skill categories</td><td>Skills API</td><td>Skills</td><td>V021</td></tr>
 <tr><td>KNOWLEDGE.SKILL_LABEL</td><td>Config</td><td>Production and candidate labels on skill versions</td><td>Skills API, deploy seed</td><td>Skills, AI stages</td><td>V021</td></tr>
@@ -1169,7 +1212,7 @@ cd apps/api; python -m app.worker</code></pre>
 <tr><td>CONTRACT.QA_TEST_CASE</td><td>Content</td><td>Saved QA test SQL for a run or for a table</td><td>QA procedures, API</td><td>Run QA step, QA workspace (/qa), QA runs</td><td>V010</td></tr>
 <tr><td>CONTRACT.QA_TEST_SUITE</td><td>Config</td><td>Named suites of table tests</td><td>CONTRACT.QA_TABLE_SUITE</td><td>QA workspace</td><td>V028</td></tr>
 <tr><td>CONTRACT.QA_TEST_VERSION</td><td>Log</td><td>History of every saved QA test (each save is a new version)</td><td>services/qa/test_versions.py</td><td>QA workspace test history</td><td>V042</td></tr>
-<tr><td>CONTRACT.SODA_EXPECTATION_REGISTRY</td><td>Content</td><td>Data quality checks proposed for a run and the reviewer's decision</td><td>CONTRACT.GENERATE_SODA and SAVE_SODA_DECISIONS</td><td>Run Soda step, promotion to the DQ Store</td><td>V001</td></tr>
+<tr><td>CONTRACT.SODA_EXPECTATION_REGISTRY</td><td>Content</td><td>Data quality checks proposed for a run and the reviewer's decision</td><td>CONTRACT.GENERATE_SODA and SAVE_SODA_DECISIONS</td><td>Run Soda step, promotion to the DQ Store</td><td>V001, V045</td></tr>
 <tr><td>CONTRACT.STTM_LINE</td><td>Content</td><td>The column lines of each STTM version: source, target, transformation, join</td><td>STTM procedures, services/catalog/sttm.py</td><td>Run STTM step, dbt generation</td><td>V001</td></tr>
 <tr><td>CONTRACT.STTM_REGISTRY</td><td>Content</td><td>Versioned source-to-target mapping (STTM) per run and target table</td><td>STTM procedures, services/catalog/sttm.py</td><td>Run STTM step, dbt generation, triage</td><td>V001</td></tr>
 <tr><td>MODELING.MODEL_DESIGN</td><td>Content</td><td>Target model design proposed inside a run, versioned</td><td>services/modeling/design.py, run_link.py</td><td>Run model step, proposals to the Model Workbench</td><td>V018</td></tr>
@@ -1205,6 +1248,8 @@ cd apps/api; python -m app.worker</code></pre>
 <tr><td>GOVERNANCE.ROLE_PRIVILEGE</td><td>Config</td><td>Privileges each app role holds</td><td>Admin, Access</td><td>Every privilege check</td><td>V020</td></tr>
 <tr><td>GOVERNANCE.SETTING</td><td>Config</td><td>Governance settings (key and value)</td><td>Admin</td><td>Approvals, governance</td><td>V020</td></tr>
 <tr><td>GOVERNANCE.STTM_CATALOG</td><td>Content</td><td>Every version of every mapping with its full line set, tenant wide</td><td>STTM steps, services/catalog/sttm.py</td><td>STTM Store (/dashboard/sttm), dbt publish</td><td>V036</td></tr>
+<tr><td>GOVERNANCE.TABLE_MODEL</td><td>Content</td><td>One persistent model per modeled table: origin, layer, latest version, diagram layout and the domain entity it feeds</td><td>Modeling Store</td><td>Modeling Store table models</td><td>V044</td></tr>
+<tr><td>GOVERNANCE.TABLE_MODEL_VERSION</td><td>Content</td><td>Every saved version of a table model with its issues, change summary, DDL, dbt files and pull request</td><td>Modeling Store</td><td>Modeling Store, source control</td><td>V044</td></tr>
 <tr><td>GOVERNANCE.USER_ROLE</td><td>Config</td><td>Which person holds which app role</td><td>Admin, Access</td><td>Every privilege check, domain scoping</td><td>V020</td></tr>
 <tr><td>CASES.CASE_ARTIFACT</td><td>Content</td><td>Fix material attached to a case: repro test, STTM change, correction SQL, dbt patch, knowledge draft</td><td>services/cases/store.py</td><td>Case page; dbt patches are published as pull requests (services/dbt/publish.py)</td><td>V034</td></tr>
 <tr><td>CASES.CASE_EVENT</td><td>Log</td><td>Timeline of a case (comments, status moves) and idempotency claims that stop a case being opened twice</td><td>services/cases/store.py</td><td>Case timeline, triage</td><td>V034</td></tr>
@@ -1258,7 +1303,7 @@ cd apps/api; python -m app.worker</code></pre>
 <tr><td>SOURCE.EXECUTE_STAGED_LANDING</td><td>Land selected share objects through SOURCE.LANDING_STAGE (Parquet unload, COPY INTO)</td><td>Source Hub share onboarding</td></tr>
 <tr><td>CODE.INDEX_REPO</td><td>Incremental code index refresh</td><td>Code, scheduled task</td></tr>
 <tr><td>JIRA.TRIAGE_ISSUE / TRIAGE_TABLE / RESOLVE_TARGETS</td><td>AI triage of a ticket against a run or table; rank candidate tables</td><td>QA, Jira</td></tr>
-<tr><td>EXT_&lt;SOURCE&gt;.ORACLE_RUN</td><td>Oracle test, catalog, preview, profile, extract</td><td>Oracle pages, schedule task</td></tr>
+<tr><td>EXT_&lt;SOURCE&gt;.ORACLE_RUN</td><td>Oracle test, catalog, preview, profile, extract</td><td>Oracle API endpoints and schedule task (legacy, no screen)</td></tr>
 </table></div>
 
 <h3 id="runtime">Objects created at runtime</h3>
@@ -1273,7 +1318,7 @@ cd apps/api; python -m app.worker</code></pre>
 <tr><td>Task <code>CODEGEN.SYNC_MODEL_PRS_TASK</code> (every 30 minutes)</td><td>GitHub publishing setup: reads the state of every governed pull request in GOVERNANCE.GIT_PR (models, DQ suites, QA packs, STTM)</td></tr>
 <tr><td>Network rule, PASSWORD secret and integration per Oracle source</td><td>Oracle setup (snowflake runtime)</td></tr>
 <tr><td>DBT PROJECT <code>CODEGEN.&lt;prefix&gt;&lt;run&gt;_V&lt;n&gt;</code></td><td>dbt generate, validate, publish (dropped by cleanup)</td></tr>
-<tr><td>Sequences PLATFORM_CONFIG.SEQ_INGESTION_MASTER_ID and SEQ_INGESTION_CHILD_ID; CASES.CASE_SEQ</td><td>Deploy (V044, V034): master and child ids of ingestion control rows; case numbers</td></tr>
+<tr><td>Sequences PLATFORM_CONFIG.SEQ_INGESTION_MASTER_ID and SEQ_INGESTION_CHILD_ID; CASES.CASE_SEQ</td><td>Deploy (V046, V034): master and child ids of ingestion control rows; case numbers</td></tr>
 <tr><td>Stages: CORE.CODE_STAGE, KNOWLEDGE.SKILL_STAGE, CODEGEN.DBT_STAGE, METADATA.PROFILES_STAGE, EXT_&lt;SOURCE&gt;.FILES</td><td>Deploy and source setup</td></tr>
 <tr><td>Cortex Search KNOWLEDGE.KNOWLEDGE_SEARCH and CODE.CODE_SEARCH; agent CORE.DATA_ENGINEERING_SUPERVISOR</td><td>Deploy</td></tr>
 </table></div>
@@ -1305,7 +1350,10 @@ cd apps/api; python -m app.worker</code></pre>
 <tr><td>V041</td><td>Profiling Store governance: GOVERNANCE.PROFILE_SCHEDULE (scheduled profiling and its last outcome), PROFILE_ANNOTATION (reviewed column annotations); MODEL_CHANGE gains SOURCE, ANNOTATION_ID and PATCH</td></tr>
 <tr><td>V042</td><td>QA packs and Git: DOMAIN_QA_PACKS gains REPO_PATH, REPO_SHA and pull request columns; GOVERNANCE.QA_PACK_SYNC (repository conflicts); CONTRACT.QA_TEST_VERSION (saved test history, backfilled with each test's current state)</td></tr>
 <tr><td>V043</td><td>Source control: GOVERNANCE.GIT_PR, one row per pull request opened for an approved asset version (domain model, data quality suite, QA pack, STTM mapping), backfilled from the model, suite and pack pull request columns</td></tr>
-<tr><td>V044</td><td>SnapLogic ingestion control: PLATFORM_CONFIG.INGESTION_CONTROL_CONFIG (one row per table an external source loads, master and child ids from sequences) and PLATFORM_CONFIG.INGESTION_CONTROL_HISTORY (every create, edit, activation and deactivation)</td></tr>
+<tr><td>V044</td><td>Table Model Store: GOVERNANCE.TABLE_MODEL (one persistent model per modeled table, from a run's design or ad hoc from a landed table) and GOVERNANCE.TABLE_MODEL_VERSION (every save as an immutable version with its DDL, dbt files and pull request)</td></tr>
+<tr><td>V045</td><td>CONTRACT.SODA_EXPECTATION_REGISTRY gains GENERATED_DEFINITION, so regenerating Soda checks keeps reviewed decisions</td></tr>
+<tr><td>V046</td><td>SnapLogic ingestion control: PLATFORM_CONFIG.INGESTION_CONTROL_CONFIG (one row per table an external source loads, master and child ids from sequences) and PLATFORM_CONFIG.INGESTION_CONTROL_HISTORY (every create, edit, activation and deactivation)</td></tr>
+<tr><td>V047</td><td>KNOWLEDGE.KNOWLEDGE_OUTCOME: whether knowledge used in a prompt led to output a reviewer accepted, per knowledge lineage and stage; feeds knowledge ranking</td></tr>
 </table></div>
 
 <!-- ============================================================ 07 -->
@@ -1353,7 +1401,7 @@ cd apps/api; python -m app.worker</code></pre>
 <div class="note"><strong>Unused table.</strong> <code>AUDIT.AGENT_RUN</code> exists but nothing writes to it yet.</div>
 
 <footer>
-  <p>Generated from the repository source: governance policy, migrations V001 to V044, procedure definitions, API routes and web pages. Where this guide and the code differ, the code is right; report the difference so the guide can be updated.</p>
+  <p>Generated from the repository source: governance policy, migrations V001 to V047, procedure definitions, API routes and web pages. Where this guide and the code differ, the code is right; report the difference so the guide can be updated.</p>
 </footer>
 </main>
 </div>
