@@ -359,24 +359,30 @@ def _store(session, qa_run: Dict[str, Any], results: List[Dict[str, Any]]) -> No
 
 
 def _remember(session, run_id: Optional[str], ctx: Dict[str, Any], results: List[Dict[str, Any]]) -> None:
-    """A tester's or the AI's saved test that passes is a proven check for this domain: keep it as QA_TEST
-    knowledge so later runs, the AI test plan and the copilot can reuse it."""
+    """A tester's or the AI's saved test is a check for this domain: one that passes is proven, one that fails found
+    a defect in the data. Keep either as QA_TEST knowledge (with its last outcome) so later runs, the AI test plan and
+    the copilot can reuse it; QA_TEST goes to a steward under the default learning policy."""
     domain = ctx.get("domain_id")
     if not domain:
         return
     from services.knowledge.writer import remember
 
     for r in results:
-        if r["outcome"] != "PASS" or r.get("origin") not in ("AI", "USER"):
+        if r["outcome"] not in ("PASS", "FAIL") or r.get("origin") not in ("AI", "USER"):
             continue
         key = f"qa.test.{r['test_id']}"
-        content = f"{r.get('title')}. Expected: {r.get('expected') or 'see SQL'}.\n\n{r.get('sql')}"
+        found = (f" Last run FAILED: {r.get('rows_returned')} row(s) broke it ({clip(r.get('detail'), 300)})."
+                 if r["outcome"] == "FAIL" else "")
+        content = f"{r.get('title')}. Expected: {r.get('expected') or 'see SQL'}.{found}\n\n{r.get('sql')}"
         try:
             remember(session, domain_id=domain, kind="QA_TEST", key=key, title=r.get("title") or key, content=content,
                      content_json={"test_id": r["test_id"], "sql": r.get("sql"), "expected": r.get("expected"),
-                                   "origin": r.get("origin"), "run_id": run_id,
-                                   "target_table_id": ctx.get("target_table_id")},
-                     tags=["QA", "PASSED"], origin="QA", run_id=run_id, by_domain=False)
+                                   "origin": r.get("origin"), "run_id": run_id, "last_outcome": r["outcome"],
+                                   "rows_returned": r.get("rows_returned"),
+                                   "target_table_id": ctx.get("target_table_id"),
+                                   "target_table": (ctx.get("target") or {}).get("name")},
+                     tags=["QA", "PASSED" if r["outcome"] == "PASS" else "FAILED"], origin="QA", run_id=run_id,
+                     by_domain=False)
         except Exception:
             continue
 

@@ -685,6 +685,9 @@ def reject(session, table: str, version: int, user: str, reason: str) -> Dict[st
                 params=[user.upper(), clip(reason, 2000), header["suite_id"], int(version)]).collect()
     session.sql(f"UPDATE {SUITES} SET OPEN_VERSION = NULL, UPDATED_AT = CURRENT_TIMESTAMP() WHERE SUITE_ID = ?",
                 params=[header["suite_id"]]).collect()
+    from services.knowledge.signals import keep, suite_decision
+
+    keep(session, header.get("domain_id"), suite_decision(table, int(version), "REJECTED", [], reason), "QUALITY")
     return {"table": table, "version": int(version), "status": "REJECTED"}
 
 
@@ -728,6 +731,9 @@ def approve(session, table: str, version: int, user: str, acknowledge_loosened: 
                     params=[int(version), model_id, user.upper(), header["suite_id"]]).collect()
 
     atomic(session, write)
+    from services.knowledge.signals import keep, suite_decision
+
+    keep(session, header.get("domain_id"), suite_decision(table, int(version), "APPROVED", checks), "QUALITY")
     return {"table": table, "suite_id": header["suite_id"], "version": int(version), "status": "APPROVED",
             "model_version": model_version or None, **summary}
 

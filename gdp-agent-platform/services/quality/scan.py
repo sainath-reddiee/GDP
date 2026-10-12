@@ -490,14 +490,18 @@ def _remember_failures(session, run_id: str, sttm: Dict[str, Any], results: List
     for r in failing:
         if r["expectation_id"] not in before:
             continue
-        key = f"quality.recurring.{run_id[:8]}.{r['expectation_id'][:8]}"
+        # keyed by what fails, not by the run: the same failure on a later run updates the same item
+        key = (f"quality.recurring.{str(r.get('target_table') or '').upper()}."
+               f"{str(r.get('target_column') or 'TABLE').upper()}.{str(r.get('kind') or 'check').upper()}")
         title = f"Recurring data quality failure: {r.get('target_table')}{'.' + r['target_column'] if r.get('target_column') else ''} ({r.get('kind')})"
         try:
             from services.knowledge.writer import remember
 
             remember(session, domain_id=sttm["DOMAIN_ID"], kind="EXCEPTION", key=key, title=title,
                      content=f"{title}. Latest scan: {r.get('detail')}",
-                     content_json={"run_id": run_id, "expectation_id": r["expectation_id"], "detail": r.get("detail")},
-                     tags=["QUALITY_SCAN"], origin="QUALITY", run_id=run_id, by_domain=False)
+                     content_json={"run_id": run_id, "expectation_id": r["expectation_id"], "detail": r.get("detail"),
+                                   "target_table": str(r.get("target_table") or "").split(".")[-1].upper() or None,
+                                   "target_column": r.get("target_column"), "kind": r.get("kind")},
+                     tags=["QUALITY_SCAN"], origin="QUALITY", run_id=run_id)
         except Exception:
             continue

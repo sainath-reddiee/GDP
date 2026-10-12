@@ -186,12 +186,23 @@ def merge_change(session, model_id: str, change_id: str, user: str) -> Dict[str,
 
 
 def reject_change(session, model_id: str, change_id: str, user: str, note: str) -> Dict[str, Any]:
-    found = rows(session, f"SELECT STATUS FROM {CHANGES} WHERE CHANGE_ID = ? AND MODEL_ID = ?", [change_id, model_id])
+    found = rows(session, f"SELECT STATUS, TARGET_ENTITY FROM {CHANGES} WHERE CHANGE_ID = ? AND MODEL_ID = ?",
+                 [change_id, model_id])
     assert found, "proposal not found"
     assert found[0]["STATUS"] in ("PROPOSED", "STALE"), f"the proposal is {str(found[0]['STATUS']).lower()}"
     assert len((note or "").strip()) >= 3, "say why the proposal is rejected"
     session.sql(f"""UPDATE {CHANGES} SET STATUS = 'REJECTED', NOTE = ?, DECIDED_BY = ?, DECIDED_AT = CURRENT_TIMESTAMP()
                      WHERE CHANGE_ID = ?""", params=[clip(note, 2000), user.upper(), change_id]).collect()
+    from services.knowledge.signals import change_rejection, keep
+
+    model = rows(session, "SELECT DOMAIN_ID, DOMAIN_NAME FROM GOVERNANCE.DOMAIN_MODEL WHERE MODEL_ID = ?", [model_id])
+    if model:
+        try:
+            source = rows(session, f"SELECT SOURCE FROM {CHANGES} WHERE CHANGE_ID = ?", [change_id])[0].get("SOURCE")
+        except Exception:  # before V041
+            source = None
+        keep(session, model[0]["DOMAIN_ID"], change_rejection(model[0]["DOMAIN_NAME"], found[0].get("TARGET_ENTITY"),
+                                                              source or "RUN", note), "MODELING")
     return {"change_id": change_id, "status": "REJECTED"}
 
 

@@ -25,7 +25,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 from services.common.sql import rows, variant
 
 TABLE = "KNOWLEDGE.KNOWLEDGE_OUTCOME"
-STAGES = ("MAPPING", "SODA")
+STAGES = ("MAPPING", "SODA", "QA")
 OUTCOMES = ("ACCEPTED", "CORRECTED", "REJECTED")
 MIN_OBSERVED = 3  # decisions before helpfulness moves a ranking
 
@@ -104,10 +104,25 @@ SELECT RUN_ID, 'SODA' AS STAGE, TARGET_TABLE AS TBL, TARGET_COLUMN AS COL,
    AND ARRAY_CONTAINS(RUN_ID::VARIANT, PARSE_JSON(?))"""
 
 
+QA_OUTCOMES = """
+SELECT T.RUN_ID, 'QA' AS STAGE, SPLIT_PART(COALESCE(T.TARGET_FQN, ''), '.', -1) AS TBL, T.TARGET_COLUMN AS COL,
+       CASE WHEN T.IS_DELETED THEN 'REJECTED'
+            WHEN EXISTS (SELECT 1 FROM CONTRACT.QA_TEST_VERSION V WHERE V.TEST_ID = T.TEST_ID AND V.CHANGE = 'EDITED')
+                 THEN 'CORRECTED'
+            ELSE 'ACCEPTED' END AS OUTCOME
+  FROM CONTRACT.QA_TEST_CASE T
+ WHERE T.ORIGIN = 'AI' AND ARRAY_CONTAINS(T.RUN_ID::VARIANT, PARSE_JSON(?))
+   AND (T.IS_DELETED OR EXISTS (SELECT 1 FROM QUALITY.QA_RESULT R WHERE R.TEST_ID = T.TEST_ID))"""
+
+
 def _outcomes(session, runs: List[str]) -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
     try:
         out += rows(session, MAPPING_OUTCOMES, [_in(runs)])
+    except Exception:
+        pass
+    try:  # QA: an AI test kept and run is accepted, edited is corrected, deleted is rejected
+        out += rows(session, QA_OUTCOMES, [_in(runs)])
     except Exception:
         pass
     try:  # V045 keeps what the generator proposed; before it an approval counts as accepted
