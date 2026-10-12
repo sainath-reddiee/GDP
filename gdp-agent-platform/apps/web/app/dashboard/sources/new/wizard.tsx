@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useState } from "react";
-import { ArrowUpRight, CloudCog, FileUp, Globe, Share2, Snowflake } from "lucide-react";
+import { ArrowUpRight, CloudCog, FileUp, Share2, Snowflake } from "lucide-react";
 import type { CatalogDatabase, LandingDefaults, ShareList } from "@/lib/hub-types";
 import { cn } from "@/lib/utils";
 import { ShareWizard } from "./share-wizard";
@@ -40,12 +40,11 @@ export function OnboardWizard({ initialBranch, shares, domains, databases, landi
   );
   return (
     <div className="space-y-5">
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5" aria-label="Source kind">
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4" aria-label="Source kind">
         {choice("share", "Snowflake share", "An inbound share: unloaded to a Parquet stage and copied into landing.", Share2)}
         {link("/dashboard/sources?mode=snowflake", "Snowflake database", "Any database your role can read, profiled in place.", Snowflake, "database")}
         {link("/dashboard/sources?mode=external&connect=files", "Files and cloud storage", "CSV, Parquet or JSON uploads, S3, Azure Blob or GCS.", FileUp, "files")}
-        {link("/dashboard/sources?mode=external&connect=database", "Oracle and other databases", "Oracle extracted by the platform, or PostgreSQL, SQL Server, MySQL.", Globe, "oracle")}
-        {choice("external", "External pipeline (SnapLogic)", "A SnapLogic pipeline that lands Oracle, Salesforce, REST or files.", CloudCog)}
+        {choice("external", "External source", "A SnapLogic pipeline that lands Oracle, Salesforce, REST or files.", CloudCog)}
       </div>
       {branch === "share" ? <ShareWizard shares={shares} domains={domains} databases={databases} landing={landing} />
         : <IngestionWizard domains={domains} user={user} />}

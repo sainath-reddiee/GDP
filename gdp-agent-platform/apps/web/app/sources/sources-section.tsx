@@ -28,7 +28,7 @@ export async function SourcesSection({ searchParams, pipelines = null, pipelineC
     api<{ domains: DomainRow[] }>("/api/domains").catch(() => ({ domains: [] as DomainRow[] })),
     explicit ? inventoryOf(explicit) : Promise.resolve(null),
   ]);
-  const connect = searchParams.connect === "files" || searchParams.connect === "database" ? searchParams.connect : null;
+  const connect = searchParams.connect === "files" ? "files" as const : null;
   const target = explicit
     ?? (profiles[0] ? { database: profiles[0].database_name, schema: profiles[0].schema_name } : null);
   const inventory = explicit ? explicitInventory : target ? await inventoryOf(target) : null;

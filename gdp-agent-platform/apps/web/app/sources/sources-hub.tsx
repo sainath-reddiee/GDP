@@ -173,7 +173,7 @@ export function SourcesHub({
   initialOverview, initialStore, databases, domains = [], initialTarget, initialInventory, initialMode = "snowflake",
   pipelines = null, pipelineCount = 0, initialConnect = null,
 }: {
-  /** open the Connect dialog on these connectors (?connect=files|database, from "+ New") */
+  /** open the Connect dialog on these connectors (?connect=files, from "+ New") */
   initialConnect?: ConnectFocus | null;
   /** the external ingestion pipelines (rendered on the server), shown in the External systems tab */
   pipelines?: React.ReactNode;
@@ -368,7 +368,6 @@ export function SourcesHub({
         <Button variant="outline" size="sm" disabled={refreshing} onClick={() => void refresh()} aria-label="Refresh">
           <RefreshCw className={cn("h-4 w-4", refreshing && "animate-spin")} /> Refresh
         </Button>
-        <Button size="sm" onClick={() => setConnect({ managed: null })}><Plus className="h-4 w-4" /> Onboard source</Button>
       </div>
 
       <div role="tablist" aria-label="Where the data is" className="grid gap-3 md:grid-cols-2">
@@ -377,7 +376,7 @@ export function SourcesHub({
                  body="Browse any database or share and profile tables in place." />
         <ModeTab active={mode === "external"} onClick={() => setMode("external")} icon={Globe} tone="bg-violet-500"
                  title="External systems" count={externalAttention ? `${externals.length + pipelineCount} · ${externalAttention} attention` : externals.length + pipelineCount}
-                 body="Ingestion pipelines, Oracle, files and cloud storage, landed into Snowflake first." />
+                 body="SnapLogic ingestion, files and cloud storage, landed into Snowflake first." />
       </div>
 
       {notice && (

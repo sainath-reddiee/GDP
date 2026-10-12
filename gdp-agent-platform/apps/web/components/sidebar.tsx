@@ -8,11 +8,12 @@ import { ChevronDown, ChevronsLeft, ChevronsRight, Workflow } from "lucide-react
 import { cn } from "@/lib/utils";
 import type { NavCounts } from "@/app/bff/nav/route";
 import { ReportProblemButton } from "@/components/report-problem";
-import { allowedBy, NAV_GROUPS, type NavLink } from "@/components/shell/nav";
+import { allowedBy, groupBadge, NAV_GROUPS, type NavGroup, type NavLink } from "@/components/shell/nav";
 import { BUILD_SHA, buildLabel } from "@/lib/build";
 
 const COLLAPSE_KEY = "aip.sidebar.collapsed";
 const OPEN_KEY = "aip.sidebar.open";
+const GROUP_KEY = "aip.sidebar.group";
 
 function isActive(link: NavLink, path: string): boolean {
   if (link.exact) return path === link.href;
@@ -161,6 +162,59 @@ function ParentItem({ link, kids, path, counts, collapsed }: {
   );
 }
 
+function Links({ links, path, counts, collapsed, allowed }: {
+  links: NavLink[]; path: string; counts: NavCounts | null; collapsed: boolean; allowed: (p?: string | string[]) => boolean;
+}) {
+  return (
+    <>
+      {links.map((link) => link.children?.length
+        ? <ParentItem key={link.href} link={link} kids={link.children.filter((c) => allowed(c.privilege))} path={path} counts={counts} collapsed={collapsed} />
+        : <Item key={link.href} link={link} active={isActive(link, path)} counts={counts} collapsed={collapsed} />)}
+    </>
+  );
+}
+
+/** One section. Primary sections always list their links; a secondary one folds to its header (remembered per browser),
+ * opens by itself while you are on one of its pages, and folded shows its links' summed badge. Collapsed, every
+ * section shows its icons. */
+function Group({ group, path, counts, collapsed, allowed, divider }: {
+  group: NavGroup; path: string; counts: NavCounts | null; collapsed: boolean;
+  allowed: (p?: string | string[]) => boolean; divider: boolean;
+}) {
+  const inside = group.links.some((l) => isActive(l, path));
+  const [open, setOpen] = useState(!group.secondary || !!group.defaultOpen);
+  useEffect(() => {
+    if (!group.secondary) return;
+    try { const v = localStorage.getItem(`${GROUP_KEY}.${group.label}`); if (v !== null) setOpen(v === "1"); } catch { /* storage unavailable */ }
+  }, [group.label, group.secondary]);
+  useEffect(() => { if (inside) setOpen(true); }, [inside, path]);
+  const flip = () => setOpen((v) => {
+    try { localStorage.setItem(`${GROUP_KEY}.${group.label}`, v ? "0" : "1"); } catch { /* storage unavailable */ }
+    return !v;
+  });
+  const listId = `nav-group-${group.label.replace(/\W+/g, "-").toLowerCase()}`;
+  const folded = !!group.secondary && !open && !collapsed;
+  return (
+    <div className="mb-4">
+      {divider && !collapsed && <div className="mx-2.5 mb-4 h-px bg-white/[0.07]" aria-hidden />}
+      {collapsed ? <div className="mx-3 mb-2 h-px bg-white/10" />
+        : group.secondary ? (
+          <button type="button" onClick={flip} aria-expanded={open} aria-controls={listId}
+                  className="group/h mb-1.5 flex w-full items-center gap-1.5 rounded-md px-2.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-white/30 hover:text-white/60">
+            <span className="flex-1 text-left">{group.label}</span>
+            {folded && <Badge b={counts ? groupBadge(group.links, counts) : null} collapsed={false} />}
+            <ChevronDown className={cn("h-3 w-3 opacity-0 transition group-hover/h:opacity-100 group-focus-visible/h:opacity-100", !open && "-rotate-90 opacity-100")} />
+          </button>
+        ) : <p className="mb-1.5 px-2.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-white/40">{group.label}</p>}
+      {!folded && (
+        <div id={listId}>
+          <Links links={group.links} path={path} counts={counts} collapsed={collapsed} allowed={allowed} />
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** Lifecycle navigation. The account, role and theme live in the top bar (components/shell/top-bar). */
 export function Sidebar({ privileges }: { privileges?: string[] | null }) {
   const allowed = allowedBy(privileges);
@@ -206,16 +260,10 @@ export function Sidebar({ privileges }: { privileges?: string[] | null }) {
 
       {NAV_GROUPS.map((group) => ({ ...group, links: group.links.filter((l) => allowed(l.privilege)) }))
         .filter((group) => group.links.length > 0)
-        .map((group) => (
-        <div key={group.label} className="mb-4">
-          {!collapsed
-            ? <p className="mb-1.5 px-2.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-white/30">{group.label}</p>
-            : <div className="mx-3 mb-2 h-px bg-white/10" />}
-          {group.links.map((link) => link.children?.length
-            ? <ParentItem key={link.href} link={link} kids={link.children.filter((c) => allowed(c.privilege))} path={path} counts={counts} collapsed={collapsed} />
-            : <Item key={link.href} link={link} active={isActive(link, path)} counts={counts} collapsed={collapsed} />)}
-        </div>
-      ))}
+        .map((group, i, all) => (
+          <Group key={group.label} group={group} path={path} counts={counts} collapsed={collapsed} allowed={allowed}
+                 divider={!!group.secondary && !all[i - 1]?.secondary} />
+        ))}
 
       <div className="mt-auto pb-3">
         {allowed("CASE.WORK") && <ReportProblemButton collapsed={collapsed} />}

@@ -51,8 +51,7 @@ export default async function SourceHub({ searchParams }: { searchParams: { db?:
               {!control.deployed ? <NotDeployed what="The SnapLogic ingestion control table (PLATFORM_CONFIG.INGESTION_CONTROL_CONFIG, V046)" />
                 : <IngestionTable controls={control.controls} />}
             </Panel>
-            <Panel title="Ingestion pipelines" icon={Workflow}
-                   action={<Link href="/dashboard/onboarding?type=source&branch=external" className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline"><Plus className="h-3.5 w-3.5" /> External pipeline</Link>}>
+            <Panel title="Ingestion pipelines" icon={Workflow}>
               {!pipes.deployed ? <NotDeployed what="The ingestion pipeline catalog" /> : <PipelineTable pipelines={pipes.pipelines} />}
             </Panel>
           </>} />

@@ -14,7 +14,7 @@ type DomainRow = { domain_id: string; domain_name: string; active_flag?: boolean
 type Kind = "source" | "domain" | "application";
 
 const KINDS: { kind: Kind; title: string; text: string; icon: typeof Database; soon?: boolean }[] = [
-  { kind: "source", title: "Source", text: "A Snowflake share or database, files, Oracle and other databases, or an external pipeline.", icon: Database },
+  { kind: "source", title: "Source", text: "A Snowflake share or database, files and cloud storage, or an external source landed by SnapLogic.", icon: Database },
   { kind: "domain", title: "Domain", text: "A business domain: its pack, contract, target models and knowledge.", icon: Boxes },
   { kind: "application", title: "Application", text: "An upstream application and its data products.", icon: AppWindow, soon: true },
 ];
