@@ -110,12 +110,21 @@ def domain_knowledge(session, domain_id: str, run_id: str, target: Optional[Dict
         if kind == "MAPPING_PATTERN" and target_name and content.get("target_table") \
                 and str(content["target_table"]).upper() != target_name:
             continue
+        # glossary terms and business rules written for another target table never apply here: two tables can share a
+        # column name with different meanings
+        item_table = str(content.get("target_table") or "").upper().split(".")[-1]
+        if kind in ("GLOSSARY", "BUSINESS_RULE") and item_table and target_name and item_table != target_name:
+            continue
         if kind in ("GLOSSARY", "BUSINESS_RULE", "TRANSFORMATION_RULE", "MAPPING_PATTERN"):
             used.append(k["KNOWLEDGE_ID"])
-        if kind == "GLOSSARY" and content.get("target_column"):
-            knowledge["glossary"][content["target_column"].upper()] = content
-        elif kind == "BUSINESS_RULE" and content.get("target_column"):
-            knowledge["rules"][content["target_column"].upper()] = content
+        if kind in ("GLOSSARY", "BUSINESS_RULE") and content.get("target_column"):
+            # keyed by column name; an item for this target table wins over a domain-wide one
+            bucket = knowledge["glossary" if kind == "GLOSSARY" else "rules"]
+            column = content["target_column"].upper()
+            held = bucket.get(column)
+            held_table = str((held or {}).get("target_table") or "").upper().split(".")[-1]
+            if held is None or not held_table or item_table:
+                bucket[column] = content
         elif kind == "TRANSFORMATION_RULE":
             knowledge["transforms"].append(content)
         elif kind == "MAPPING_PATTERN" and content.get("source_column") and content.get("target_column"):
@@ -190,18 +199,47 @@ ADJUDICATION_SCHEMA = {
 }
 
 
+def target_knowledge(column: str, knowledge: Optional[Dict[str, Any]]) -> str:
+    """What the domain's glossary and business rules say about one target column, for the adjudication prompt. Pure."""
+    if not knowledge:
+        return ""
+    parts = []
+    term = (knowledge.get("glossary") or {}).get(str(column).upper()) or {}
+    if term.get("definition") or term.get("description"):
+        parts.append(f"glossary: {str(term.get('definition') or term.get('description'))[:160]}")
+    if term.get("synonyms"):
+        parts.append("synonyms: " + ", ".join(map(str, term["synonyms"][:8])))
+    rule = (knowledge.get("rules") or {}).get(str(column).upper()) or {}
+    text = rule.get("rule") or rule.get("description") or rule.get("expression")
+    if text:
+        parts.append(f"rule: {str(text)[:160]}")
+    values = rule.get("source_values")
+    if isinstance(values, dict) and values:
+        parts.append("codes: " + ", ".join(f"{k}={v}" for k, v in list(values.items())[:6]))
+    return "; ".join(parts)
+
+
 def _adjudicate(session, run_id: str, ambiguous: List[Tuple[Dict[str, Any], List[Dict[str, Any]]]],
-                skill_excerpt: str = "", reviewer_notes: Optional[List[str]] = None) -> Dict[str, Dict]:
-    """One LLM call for ambiguous columns only. It explains; it never re-ranks."""
+                skill_excerpt: str = "", reviewer_notes: Optional[List[str]] = None,
+                knowledge: Optional[Dict[str, Any]] = None,
+                hits: Optional[Dict[str, List[Dict[str, Any]]]] = None) -> Dict[str, Dict]:
+    """One LLM call for ambiguous columns only. It explains; it never re-ranks. Each candidate carries what the
+    domain's glossary and business rules say about it, and each source column the knowledge search found for it."""
     if not ambiguous:
         return {}
     blocks = []
     for source, ranked in ambiguous:
-        options = "; ".join(f"{c['target']['column_name']} (score {c['final_score']}: {c['target'].get('definition')})"
-                            for c in ranked)
+        options = []
+        for c in ranked:
+            extra = target_knowledge(c["target"]["column_name"], knowledge)
+            options.append(f"{c['target']['column_name']} (score {c['final_score']}: {c['target'].get('definition')}"
+                           + (f" [{extra}]" if extra else "") + ")")
+        related = [f"{h.get('TITLE')}: {str(h.get('CONTENT') or '')[:200]}"
+                   for h in (hits or {}).get(str(source["column_name"]).upper(), [])[:3] if h.get("TITLE")]
         blocks.append(f"- {source['column_name']} ({source['data_type']}, {source['semantic_type']}, null "
                       f"{source['null_percentage']}%, distinct {source['distinct_percentage']}%): "
-                      f"{source.get('description') or ''}\n  candidates: {options}")
+                      f"{source.get('description') or ''}\n  candidates: {'; '.join(options)}"
+                      + (f"\n  related domain knowledge: {' | '.join(related)}" if related else ""))
     prior = ""
     if reviewer_notes:
         prior = "Prior reviewer decisions on this domain:\n- " + "\n- ".join(reviewer_notes[:12]) + "\n"
@@ -270,6 +308,7 @@ def generate_mapping_candidates(session, run_id: str) -> Dict[str, Any]:
                                  [run["DOMAIN_ID"]])
 
             ranked_by_source: List[Tuple[Dict[str, Any], List[Dict[str, Any]]]] = []
+            hits_by_source: Dict[str, List[Dict[str, Any]]] = {}
             search_calls = 0
             for s in sources:
                 cands = []
@@ -285,10 +324,11 @@ def generate_mapping_candidates(session, run_id: str) -> Dict[str, Any]:
                     hits = []
                 for c in ranked:
                     c["evidence"]["knowledge"] = [h.get("TITLE") for h in hits]
+                hits_by_source[str(s["column_name"]).upper()] = hits
                 ranked_by_source.append((s, ranked))
 
             ambiguous = [(s, r) for s, r in ranked_by_source if r and r[0]["ambiguous"]]
-            llm = _adjudicate(session, run_id, ambiguous, guidance, knowledge["notes"])
+            llm = _adjudicate(session, run_id, ambiguous, guidance, knowledge["notes"], knowledge, hits_by_source)
             version = (scalar(session, "SELECT MAX(CANDIDATE_VERSION) FROM MAPPING.MAPPING_CANDIDATE WHERE RUN_ID = ?",
                               [run_id]) or 0) + 1
             knowledge_version = current_knowledge_version(session, run["DOMAIN_ID"])

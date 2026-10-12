@@ -55,7 +55,7 @@ def refine_prompt(context: Dict[str, Any], instruction: str) -> str:
     else:
         sample_text = str(samples)[:400]
     rules = context.get("prior_rules") or []
-    rule_text = "\n".join(f"- {r}" for r in rules[:6]) or "- none"
+    rule_text = "\n".join(f"- {r}" for r in rules[:8]) or "- none"
     source = context.get("source_column") or "src_col"
     return (
         "You write one Snowflake SQL scalar expression that maps a source column onto a target column.\n"
@@ -72,9 +72,10 @@ def refine_prompt(context: Dict[str, Any], instruction: str) -> str:
         f"Profile description: {profile.get('description') or '—'}\n"
         f"Sample values: {sample_text}\n"
         f"Patterns: {profile.get('patterns') or '—'}\n"
-        f"Prior accepted rules for this pack:\n{rule_text}\n"
+        f"Prior accepted rules, most relevant first (reuse one written for this target column):\n{rule_text}\n"
         + (f"Domain rules and contract (follow them):\n{context['domain_rules']}\n" if context.get("domain_rules") else "")
         + (f"{context['code']}\n" if context.get("code") else "")
+        + (f"Stage skills (follow their rules):\n{context['skills']}\n" if context.get("skills") else "")
         + f"Engineer instruction:\n{(instruction or '').strip()[:2000]}\n"
         "Also propose SodaCL checks implied by the new expression (accepted values, date format, not-null).\n"
         "dbt_notes should say how the mart SQL should use the expression."

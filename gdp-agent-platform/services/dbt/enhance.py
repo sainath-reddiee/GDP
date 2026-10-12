@@ -21,15 +21,19 @@ ENHANCE_SCHEMA = {
 }
 
 
-def enhance_prompt(path: str, content: str, request: str, context: str = "") -> str:
+def enhance_prompt(path: str, content: str, request: str, context: str = "", rules: str = "", code: str = "") -> str:
+    """The STTM context, the skill rules and the existing code each have their own budget, so a long STTM never
+    cuts off the rules or the code the rewrite should follow."""
     return (
         "You are a senior analytics engineer. Rewrite this dbt file for Snowflake. "
         "Keep valid dbt Jinja/SQL or YAML. Do not invent source tables that are not in context. "
         "Return the full file plus a short rationale.\n\n"
         f"FILE: {path}\n\n"
         f"ENGINEER REQUEST:\n{request.strip()[:2000]}\n\n"
-        f"CONTEXT:\n{(context or 'Approved STTM generated this file.')[:7000]}\n\n"
-        f"CURRENT FILE:\n{content[:8000]}\n"
+        f"CONTEXT:\n{(context or 'Approved STTM generated this file.')[:4000]}\n\n"
+        + (f"FOLLOW THESE RULES AND DOMAIN CONTRACT:\n{rules[:5000]}\n\n" if rules else "")
+        + (f"EXISTING CODE FOR THIS TARGET (follow its conventions):\n{code[:4000]}\n\n" if code else "")
+        + f"CURRENT FILE:\n{content[:8000]}\n"
     )
 
 
@@ -66,10 +70,12 @@ def enhance_file(
     model: Optional[str] = None,
     context: str = "",
     max_tokens: int = 4096,
+    rules: str = "",
+    code: str = "",
 ) -> Dict[str, Any]:
     chosen = (model or DEFAULT_MODEL).strip() or DEFAULT_MODEL
     assert 1 <= int(max_tokens) <= 16384
-    prompt = enhance_prompt(path, content, request, context)
+    prompt = enhance_prompt(path, content, request, context, rules, code)
     rows = fetch_rows(
         "SELECT AI_COMPLETE(model => %s, prompt => %s, "
         "model_parameters => PARSE_JSON(%s), response_format => PARSE_JSON(%s), "

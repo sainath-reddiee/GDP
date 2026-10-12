@@ -2541,6 +2541,24 @@ class MappingAssist(BaseModel):
     instructions: str = Field(default="", max_length=2000)
 
 
+def _mapping_assist_knowledge(db: Db, run_id: str, table: dict, targets: list) -> tuple:
+    """(prior reviewer decisions, {target column: glossary and rule notes}) of the run's domain and target table, the
+    same knowledge mapping generation scores with. Empty when the run has no domain or the knowledge cannot be read."""
+    from services.mapping.procedures import domain_knowledge, target_knowledge
+
+    try:
+        found = db.query("SELECT DOMAIN_ID FROM CORE.WORKFLOW_RUN WHERE RUN_ID = %s", (run_id,))
+        domain_id = found[0].get("domain_id") if found else None
+        if not domain_id:
+            return [], {}
+        known = invoke_source(db, domain_knowledge, domain_id, run_id,
+                              {"TARGET_TABLE": table.get("target_table"), "TARGET_TABLE_ID": table.get("target_table_id")})
+    except Exception:
+        return [], {}
+    notes = {t["column_name"]: target_knowledge(t["column_name"], known) for t in targets}
+    return known.get("notes") or [], {k: v for k, v in notes.items() if v}
+
+
 @app.post("/api/runs/{run_id}/mapping/assist")
 def mapping_assist(run_id: str, body: MappingAssist, db: Db = Depends(current_db)):
     """AI copilot: proposes a decision per column. Read-only — nothing is saved until the reviewer accepts."""
@@ -2569,7 +2587,9 @@ def mapping_assist(run_id: str, body: MappingAssist, db: Db = Depends(current_db
         return {"suggestions": [], "model": None, "skipped": 0}
     taken = {d["target_column_id"]: d["source_column_id"] for d in data["decisions"]
              if d["decision"] != "REJECTED" and d["target_column_id"] and d["source_column_id"] not in wanted}
-    prompt = assist.build_prompt(sources, by_source, data["targets"], table["target_table"], taken, body.instructions)
+    notes, target_notes = _mapping_assist_knowledge(db, run_id, table, data["targets"])
+    prompt = assist.build_prompt(sources, by_source, data["targets"], table["target_table"], taken, body.instructions,
+                                 notes, target_notes)
     model = _model_for(db, "MAPPING")
     started = time.time()
     try:
@@ -3769,12 +3789,12 @@ def review_dbt(run_id: str, body: DbtReview, db: Db = Depends(current_db)):
     from app.code_api import run_code_context
 
     code = run_code_context(db, run_id, "DBT", question=path)
-    skill = _domain_skill(db, run_id) + (f"\n\n{code['text']}" if code["text"] else "")
+    skill = _domain_skill(db, run_id)
     started = time.time()
     try:
         fetch, ids = _fetch_with_ids(db)
         reviewed = review_file(fetch, path, files[path], skill, _sttm_context(db, run_id), notes,
-                               model=body.model or _model_for(db, "DBT"))
+                               model=body.model or _model_for(db, "DBT"), code=code["text"] or "")
     except Exception as exc:
         raise _snowflake_error(exc) from exc
     reviewed["code_citations"] = code["citations"]
@@ -3849,13 +3869,9 @@ def enhance_dbt(run_id: str, body: DbtEnhance, db: Db = Depends(current_db)):
         skill = skill_excerpt(_domain_skill(db, run_id, 5000), 5000)
     except Exception:
         skill = ""
-    if skill:
-        context = f"{context}\n\nFOLLOW THESE GDP-DBT-ONBOARD-SOURCE RULES AND DOMAIN CONTRACT:\n{skill}"
     from app.code_api import run_code_context
 
     code = run_code_context(db, run_id, "DBT", question=f"{path} {body.prompt.strip()[:300]}")
-    if code["text"]:
-        context = f"{context}\n\n{code['text']}"
     started = time.time()
     try:
         fetch, ids = _fetch_with_ids(db)
@@ -3866,6 +3882,8 @@ def enhance_dbt(run_id: str, body: DbtEnhance, db: Db = Depends(current_db)):
             body.prompt.strip(),
             model=body.model or _model_for(db, "DBT"),
             context=context,
+            rules=skill,
+            code=code["text"] or "",
         )
     except Exception as exc:
         raise _snowflake_error(exc) from exc
