@@ -122,7 +122,8 @@ def sync(session, request: Dict[str, Any], status_fn: Callable[[str, int], Dict[
         params.append(str(request["asset_id"]))
     if not request.get("force"):
         where.append("(G.SYNCED_AT IS NULL OR G.SYNCED_AT < DATEADD('second', -60, CURRENT_TIMESTAMP()))")
-    found = rows(session, f"""SELECT G.KIND, G.ASSET_ID, G.VERSION, G.ASSET_NAME, G.PR_NUMBER, R.GIT_URL FROM {TABLE} G
+    found = rows(session, f"""SELECT G.KIND, G.ASSET_ID, G.VERSION, G.ASSET_NAME, G.PR_NUMBER, R.GIT_URL, G.DOMAIN_ID,
+                                     G.BRANCH, G.PR_URL FROM {TABLE} G
                                JOIN CODE.REPO R ON R.REPO_ID = G.REPO_ID WHERE {' AND '.join(where)}
                               ORDER BY G.OPENED_AT LIMIT 300""", params)
     out: Dict[str, Any] = {"checked": 0, "merged": [], "closed": [], "open": 0, "errors": []}
@@ -140,6 +141,11 @@ def sync(session, request: Dict[str, Any], status_fn: Callable[[str, int], Dict[
                     params=[state, pr.get("merge_commit_sha") or "", r["KIND"], r["ASSET_ID"], int(r["VERSION"])]).collect()
         if r["KIND"] in KINDS:
             apply_state(session, r["KIND"], r["ASSET_ID"], int(r["VERSION"]), state, pr.get("merge_commit_sha"))
+        if state == "CLOSED" and r.get("DOMAIN_ID"):  # the repository did not take the version: remember why to look
+            from services.knowledge.signals import keep, pr_closed
+
+            keep(session, r["DOMAIN_ID"], pr_closed(r["KIND"], r["ASSET_ID"], r.get("ASSET_NAME"), int(r["VERSION"]),
+                                                    r.get("BRANCH"), r.get("PR_URL")), "GIT")
         if state in ("MERGED", "CLOSED"):
             out[state.lower()].append(ref)
         else:
