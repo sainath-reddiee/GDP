@@ -1,0 +1,57 @@
+# GDP Agent Platform: web, API and ops worker. Run from gdp-agent-platform/:
+#   docker compose -f docker/docker-compose.yml --env-file docker/.env up -d --build
+# Only the web port is published, on the host loopback, for the HTTPS reverse proxy in front of it.
+# The API stays on the internal network. Run ONE api replica: signed-in sessions live in its memory.
+name: gdp
+
+x-api-image: &api-image
+  build:
+    context: ..
+    dockerfile: docker/api.Dockerfile
+    args:
+      AIP_BUILD_SHA: ${GDP_BUILD_SHA:-}
+  image: ${GDP_REGISTRY:-gdp}/gdp-api:${GDP_TAG:-latest}
+  env_file: api.env
+  environment:
+    AIP_SERVICE_KEY_PATH: /run/secrets/aip_service_key
+  secrets:
+    - aip_service_key
+  restart: unless-stopped
+
+services:
+  api:
+    <<: *api-image
+    expose:
+      - "8001"
+
+  worker:
+    <<: *api-image
+    command: ["python", "-m", "app.worker"]
+    healthcheck:
+      disable: true
+    depends_on:
+      api:
+        condition: service_healthy
+
+  web:
+    build:
+      context: ..
+      dockerfile: docker/web.Dockerfile
+      args:
+        AIP_AUTH: ${AIP_AUTH:-pat}
+        NEXT_PUBLIC_BUILD_SHA: ${GDP_BUILD_SHA:-unknown}
+        NEXT_PUBLIC_CATALOG_DISPLAY: ${NEXT_PUBLIC_CATALOG_DISPLAY:-}
+    image: ${GDP_REGISTRY:-gdp}/gdp-web:${GDP_TAG:-latest}
+    environment:
+      AIP_API_URL: http://api:8001
+      AIP_AUTH: ${AIP_AUTH:-pat}
+    ports:
+      - "127.0.0.1:${WEB_PORT:-3000}:3000"
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+secrets:
+  aip_service_key:
+    file: ./secrets/aip_service_key.p8
