@@ -1,9 +1,10 @@
 """Turn a reviewer decision into a knowledge pattern the next mapping run can see.
 
 The pattern is evidence for the historical score and for Cortex Search. It never
-approves a mapping by itself. A rejection of what the model proposed is kept too, as
-an anti-pattern ("this source column is not that target"), so the same wrong
-candidate is demoted next time instead of being proposed again with full confidence.
+approves a mapping by itself. A rejection of what the model proposed that the reviewer
+explains is kept too, as an anti-pattern ("this source column is not that target"), so
+the same wrong candidate is demoted next time. A bare rejection only means the column is
+not loaded, so it retires the column's pattern and teaches nothing else.
 """
 
 from __future__ import annotations
@@ -16,7 +17,10 @@ def pattern(source_column: str, source_table: str, target_column: Optional[str],
             proposed_target: Optional[str], comments: Optional[str] = None) -> Dict[str, Any]:
     decision = decision.upper()
     overridden = bool(proposed_target and target_column and proposed_target.upper() != target_column.upper())
-    rejected_target = proposed_target if decision == "REJECTED" else None
+    # a bare rejection usually means "do not load this column", not "the proposal is wrong": only a rejection the
+    # reviewer explains says the proposed target is wrong, so only that one becomes an anti-pattern
+    explained = bool((justification or "").strip() or (comments or "").strip())
+    rejected_target = proposed_target if decision == "REJECTED" and explained else None
     title = f"Reviewer {decision.lower()} {source_column}"
     if target_column:
         title += f" as {target_column}"

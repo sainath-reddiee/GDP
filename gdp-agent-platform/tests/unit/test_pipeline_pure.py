@@ -186,8 +186,11 @@ def test_reviewer_feedback_becomes_a_pattern():
     assert item["active"] and item["content_json"]["overridden"]
     assert item["source_reference"] == "feedback.DIM_CUSTOMER.CRM_CUSTOMER.CUST_ID"
     # a rejected proposal is kept as an anti-pattern; a rejection with nothing proposed retires the old pattern
-    rejected = feedback_pattern("PHONE_NO", "CRM_CUSTOMER", None, "DIM_CUSTOMER", "REJECTED", None, None, "PHONE")
+    rejected = feedback_pattern("PHONE_NO", "CRM_CUSTOMER", None, "DIM_CUSTOMER", "REJECTED", None, None, "PHONE",
+                                "this is the fax line")
     assert rejected["active"] is True and rejected["content_json"]["rejected_target"] == "PHONE"
+    bare = feedback_pattern("PHONE_NO", "CRM_CUSTOMER", None, "DIM_CUSTOMER", "REJECTED", None, None, "PHONE")
+    assert bare["active"] is False  # not loaded is not "the proposal is wrong"
     nothing = feedback_pattern("PHONE_NO", "CRM_CUSTOMER", None, "DIM_CUSTOMER", "REJECTED", None, None, None)
     assert nothing["active"] is False
 
