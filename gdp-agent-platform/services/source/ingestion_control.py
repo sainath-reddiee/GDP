@@ -1,4 +1,4 @@
-"""SnapLogic ingestion control (V044, PLATFORM_CONFIG.INGESTION_CONTROL_CONFIG): the external onboarding wizard's
+"""SnapLogic ingestion control (V046, PLATFORM_CONFIG.INGESTION_CONTROL_CONFIG): the external onboarding wizard's
 answers, validated and turned into one control row per table (pure; the API writes them).
 
 One onboarding is one source: a source block, a target block, a load block, a SnapLogic block and one or more

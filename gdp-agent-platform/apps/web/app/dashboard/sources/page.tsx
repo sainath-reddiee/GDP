@@ -51,7 +51,7 @@ export default async function SourceHub({ searchParams }: { searchParams: { db?:
         <SourcesSection searchParams={searchParams} pipelineCount={registered.length}
           pipelines={<>
             <Panel title="SnapLogic ingestion" icon={CloudCog}>
-              {!control.deployed ? <NotDeployed what="The SnapLogic ingestion control table (PLATFORM_CONFIG.INGESTION_CONTROL_CONFIG, V044)" />
+              {!control.deployed ? <NotDeployed what="The SnapLogic ingestion control table (PLATFORM_CONFIG.INGESTION_CONTROL_CONFIG, V046)" />
                 : <IngestionTable controls={control.controls} />}
             </Panel>
             <Panel title="Ingestion pipelines" icon={Workflow}
