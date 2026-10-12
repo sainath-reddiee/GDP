@@ -5,7 +5,7 @@ Share onboarding creates an ordinary run and walks it through the existing sourc
 landing), landing through SOURCE.LANDING_STAGE as compressed Parquet (services/source/staged.py), so the run then
 continues on /runs/<id> exactly like any other. External sources are intake only: the platform stores the answers
 (secrets sealed with services/common/secretbox.py) and never calls the ingestion tool. SnapLogic onboarding writes one
-row per table to PLATFORM_CONFIG.INGESTION_CONTROL_CONFIG (V044), which the SnapLogic parent and child pipelines read.
+row per table to PLATFORM_CONFIG.INGESTION_CONTROL_CONFIG (V046), which the SnapLogic parent and child pipelines read.
 """
 
 from __future__ import annotations
@@ -194,7 +194,7 @@ def _secret_keys(db: Db) -> set:
     return {f["key"] for f in pipelines.fields(_form(db)) if f.get("secret") or f.get("type") == "password"}
 
 
-# ---------------------------------------------------------------- SnapLogic ingestion control (V044)
+# ---------------------------------------------------------------- SnapLogic ingestion control (V046)
 
 
 class ControlIn(BaseModel):
@@ -252,7 +252,7 @@ def create_control(body: ControlIn, db: Db = Depends(current_db)):
                          (header["parent_pipeline_name"], header["landing_database"], header["landing_schema"],
                           *[r["landing_table"] for r in rows]))
     except Exception as exc:
-        raise HTTPException(409, "The ingestion control table is not deployed yet (migration V044).") from exc
+        raise HTTPException(409, "The ingestion control table is not deployed yet (migration V046).") from exc
     if clash:
         names = ", ".join(sorted({c["landing_table"] for c in clash}))
         raise HTTPException(409, f"{header['parent_pipeline_name']} already loads {names}; deactivate those rows or choose other landing tables")

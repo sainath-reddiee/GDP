@@ -268,7 +268,7 @@ RULES: List[Tuple[str, str, Any, str]] = [
     ("POST", r"/api/hub/pipelines/validate", None, ""),
     ("POST", r"/api/hub/pipelines", "SOURCE.CONNECT", "Register an external ingestion pipeline"),
     ("PATCH", r"/api/hub/pipelines/[^/]+", "SOURCE.CONNECT", "Change an external ingestion pipeline"),
-    # SnapLogic ingestion control (V044): the wizard's rows carry a secret reference, never a secret, so they can be
+    # SnapLogic ingestion control (V046): the wizard's rows carry a secret reference, never a secret, so they can be
     # queued for approval like any SOURCE.CONNECT change
     ("POST", r"/api/hub/ingestion-control/validate", None, ""),
     ("POST", r"/api/hub/ingestion-control", "SOURCE.CONNECT", "Onboard an external source for SnapLogic ingestion"),

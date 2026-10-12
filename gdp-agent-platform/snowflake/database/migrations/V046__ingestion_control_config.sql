@@ -1,4 +1,4 @@
--- V044 SnapLogic ingestion control: one row per table an external source loads, read by the SnapLogic parent and
+-- V046 SnapLogic ingestion control: one row per table an external source loads, read by the SnapLogic parent and
 -- child pipelines. Applied once; never edit after it has been applied. Add a new V### instead.
 --
 -- PLATFORM_CONFIG.INGESTION_CONTROL_CONFIG   written by the Source Store's external onboarding wizard

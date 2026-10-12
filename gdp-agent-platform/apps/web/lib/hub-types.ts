@@ -17,7 +17,7 @@ export type Pipeline = {
   created_by?: string; created_at?: string; updated_at?: string | null;
 };
 
-/** One table's SnapLogic ingestion control row (PLATFORM_CONFIG.INGESTION_CONTROL_CONFIG, V044). */
+/** One table's SnapLogic ingestion control row (PLATFORM_CONFIG.INGESTION_CONTROL_CONFIG, V046). */
 export type IngestionControl = {
   master_id: number; child_id: number; parent_pipeline_name: string; child_pipeline_name: string; snaplogic_project_name: string;
   source_id: string | null; domain_id: string | null; domain_name?: string | null; source_name?: string | null; source_type?: string | null;
