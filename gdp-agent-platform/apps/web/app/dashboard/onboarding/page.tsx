@@ -9,12 +9,13 @@ import { Panel } from "@/components/hub/kpi";
 import { PackEditor } from "@/app/domains/pack-editor";
 import { OnboardWizard } from "../sources/new/wizard";
 import { ApplicationCard, DomainImportCard } from "./tiles";
+import { StepLabel } from "./step-label";
 
 type DomainRow = { domain_id: string; domain_name: string; active_flag?: boolean; target_tables?: number; knowledge_items?: number };
 type Kind = "source" | "domain" | "application";
 
 const KINDS: { kind: Kind; title: string; text: string; icon: typeof Database; soon?: boolean }[] = [
-  { kind: "source", title: "Source", text: "A Snowflake share or database, files and cloud storage, or an external source landed by SnapLogic.", icon: Database },
+  { kind: "source", title: "Source", text: "A Snowflake share, or an external system landed into Snowflake by SnapLogic.", icon: Database },
   { kind: "domain", title: "Domain", text: "A business domain: its pack, contract, target models and knowledge.", icon: Boxes },
   { kind: "application", title: "Application", text: "An upstream application and its data products.", icon: AppWindow, soon: true },
 ];
@@ -38,7 +39,8 @@ export default async function Onboarding({ searchParams }: { searchParams: { typ
       <PageHeader eyebrow="Onboarding" title="What are you onboarding?"
                   description="Choose what you are bringing onto the platform. Sources land and profile data; domains register the business model the data maps to." />
 
-      <nav aria-label="Onboarding type" className="grid gap-3 md:grid-cols-3">
+      <StepLabel n={1} title="What you are onboarding" />
+      <nav aria-label="Onboarding type" className="!mt-3 grid gap-3 md:grid-cols-3">
         {KINDS.map(({ kind: k, title, text, icon: Icon, soon }) => {
           const on = k === kind;
           return (
@@ -71,6 +73,7 @@ export default async function Onboarding({ searchParams }: { searchParams: { typ
 
       {kind === "domain" && (
         <section className="space-y-5" aria-label="Domain onboarding">
+          <StepLabel n={2} title="Import or draft the domain pack" />
           <div className="grid gap-4 lg:grid-cols-2">
             <DomainImportCard openImport={searchParams.import === "1"} />
             <article className="surface flex flex-col p-6">

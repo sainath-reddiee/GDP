@@ -1,5 +1,5 @@
 import {
-  Boxes, CloudCog, FileUp, PackagePlus, Share2, ShieldCheck, Snowflake, TableProperties, type LucideIcon,
+  Boxes, CloudCog, PackagePlus, Share2, ShieldCheck, TableProperties, type LucideIcon,
 } from "lucide-react";
 
 export type QuickActionGroup = "Onboard" | "Model" | "Quality";
@@ -21,10 +21,6 @@ export const QUICK_ACTION_GROUPS: QuickActionGroup[] = ["Onboard", "Model", "Qua
 export const QUICK_ACTIONS: QuickAction[] = [
   { group: "Onboard", label: "Snowflake share", hint: "Mount an inbound share and profile it in place",
     href: "/dashboard/onboarding?type=source&branch=share", icon: Share2, privilege: "SOURCE.CONNECT" },
-  { group: "Onboard", label: "Snowflake database", hint: "Browse a database your role can read and profile in place",
-    href: "/dashboard/sources?mode=snowflake", icon: Snowflake, privilege: "SOURCE.CONNECT" },
-  { group: "Onboard", label: "Files and cloud storage", hint: "Upload CSV, Parquet or JSON, or read S3, Azure Blob or GCS",
-    href: "/dashboard/sources?mode=external&connect=files", icon: FileUp, privilege: "SOURCE.CONNECT" },
   { group: "Onboard", label: "External source", hint: "Onboard a source that SnapLogic lands into Snowflake",
     href: "/dashboard/onboarding?type=source&branch=external", icon: CloudCog, privilege: "SOURCE.CONNECT" },
   { group: "Model", label: "Import a domain pack", hint: "Register a domain from domain_pack.json and its contract",

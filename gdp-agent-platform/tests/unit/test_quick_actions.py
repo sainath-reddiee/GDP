@@ -14,8 +14,7 @@ ITEMS = re.findall(r'label: "([^"]+)".*?href: "([^"]+)".*?privilege: "([^"]+)"',
 
 def test_the_menu_offers_every_create_action():
     labels = [label for label, _, _ in ITEMS]
-    assert labels == ["Snowflake share", "Snowflake database", "Files and cloud storage",
-                      "External source", "Import a domain pack", "New table model", "New QA pack",
+    assert labels == ["Snowflake share", "External source", "Import a domain pack", "New table model", "New QA pack",
                       "Add a data quality check"]
 
 
@@ -36,7 +35,6 @@ def test_deep_links_are_read_by_their_pages():
     readers = {
         "branch": WEB / "app" / "dashboard" / "onboarding" / "page.tsx",
         "import": WEB / "app" / "dashboard" / "onboarding" / "page.tsx",
-        "connect": WEB / "app" / "sources" / "sources-section.tsx",
         "new": None,  # QA Store and Modeling, checked below
         "add": WEB / "app" / "dashboard" / "dq-store" / "page.tsx",
     }
