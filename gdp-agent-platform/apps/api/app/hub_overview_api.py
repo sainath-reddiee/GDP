@@ -6,12 +6,14 @@ null and the dashboard shows a dash, so one missing store never blanks the page.
 
 from __future__ import annotations
 
-from typing import Any, Callable, Optional
+from datetime import date, timedelta
+from typing import Any, Callable, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 
 from app.db import Db
 from app.main import current_db
+from services.workflow.listing import IN_FLIGHT_SQL, REVIEW_SQL, RUN_POPULATION
 
 router = APIRouter()
 
@@ -80,37 +82,71 @@ SELECT (SELECT COUNT(*) FROM C) AS CHECKS, (SELECT COUNT(DISTINCT UPPER(TARGET_T
        COUNT_IF(OUTCOME IN ('FAIL', 'ERROR')) AS FAILED, COUNT_IF(OUTCOME <> 'NOT_EVALUATED') AS EVALUATED FROM R"""
 
 RUN_TESTS = """
-SELECT COUNT(*) AS TESTS FROM CONTRACT.QA_TEST_CASE
- WHERE NOT COALESCE(IS_DELETED, FALSE) {domain}"""
+SELECT COUNT(*) AS TESTS FROM CONTRACT.QA_TEST_CASE T
+ WHERE NOT COALESCE(T.IS_DELETED, FALSE)
+   AND (T.RUN_ID IS NULL OR T.RUN_ID IN (SELECT R.RUN_ID FROM CORE.WORKFLOW_RUN R WHERE {population})) {domain}"""
 
-# the latest execution of each run's (or table's) suite; domain packs are counted by the QA Store summary
+# every QA result: saved tests (not deleted) and the generated suites' tests (no saved case), in runs of the population
+# or on tables (no run). Generated test ids repeat across runs, so a test is (RUN_ID, TEST_ID).
+QA_RESULTS = """
+    SELECT Q.RUN_ID, Q.TEST_ID, Q.OUTCOME, Q.CREATED_AT, T.TARGET_FQN
+      FROM QUALITY.QA_RESULT Q
+      LEFT JOIN CONTRACT.QA_TEST_CASE T ON T.TEST_ID = Q.TEST_ID
+      LEFT JOIN CORE.WORKFLOW_RUN R ON R.RUN_ID = Q.RUN_ID
+     WHERE NOT COALESCE(T.IS_DELETED, FALSE) AND (R.RUN_ID IS NULL OR ({population})) {domain}"""
+
+# each test's latest result; the pass rate is passed over executed (PASS, FAIL, ERROR), never NOT_RUN or REVIEW
 RUN_QA = """
-WITH Q AS (
-    SELECT TESTS, PASSED, FAILED, ERRORS,
-           ROW_NUMBER() OVER (PARTITION BY COALESCE(RUN_ID, TARGET) ORDER BY STARTED_AT DESC) AS RN
-      FROM QUALITY.QA_RUN WHERE COALESCE(SCOPE, 'RUN') <> 'DOMAIN' {domain}
+WITH B AS ({results}), L AS (
+    SELECT * FROM B QUALIFY ROW_NUMBER() OVER (PARTITION BY RUN_ID, TEST_ID ORDER BY CREATED_AT DESC) = 1
 )
-SELECT SUM(TESTS) AS TESTS, SUM(PASSED) AS PASSED, SUM(FAILED) AS FAILED, SUM(ERRORS) AS ERRORS, COUNT(*) AS SUITES
-  FROM Q WHERE RN = 1"""
+SELECT COUNT_IF(OUTCOME IN ('PASS', 'FAIL', 'ERROR')) AS EXECUTED, COUNT_IF(OUTCOME = 'PASS') AS PASSED,
+       COUNT_IF(OUTCOME IN ('FAIL', 'ERROR')) AS FAILED,
+       COUNT(DISTINCT IFF(OUTCOME IN ('FAIL', 'ERROR'), COALESCE(TARGET_FQN, RUN_ID), NULL)) AS FAILED_TARGETS,
+       (SELECT COUNT(*) FROM B WHERE CREATED_AT >= DATEADD('day', -7, CURRENT_TIMESTAMP())
+           AND OUTCOME IN ('PASS', 'FAIL', 'ERROR')) AS RUN_7D
+  FROM L"""
 
 STTM = """
 WITH L AS (
-    SELECT CATALOG_ID, STATUS, ROW_NUMBER() OVER (PARTITION BY CATALOG_ID ORDER BY VERSION DESC) AS RN
-      FROM GOVERNANCE.STTM_CATALOG WHERE TRUE {domain}
+    SELECT C.CATALOG_ID, C.STATUS, S.STATUS AS RUN_STATUS,
+           ROW_NUMBER() OVER (PARTITION BY C.CATALOG_ID ORDER BY C.VERSION DESC) AS RN
+      FROM GOVERNANCE.STTM_CATALOG C LEFT JOIN CONTRACT.STTM_REGISTRY S ON S.STTM_ID = C.STTM_ID
+     WHERE TRUE {domain}
+), E AS (
+    SELECT IFF(STATUS IN ('DRAFT', 'REVIEW') AND RUN_STATUS IN ('APPROVED', 'REJECTED'), RUN_STATUS, STATUS) AS STATUS
+      FROM L WHERE RN = 1
 )
-SELECT COUNT_IF(RN = 1) AS MAPPINGS, COUNT_IF(RN = 1 AND STATUS = 'APPROVED') AS VERIFIED,
-       COUNT_IF(RN = 1 AND STATUS IN ('DRAFT', 'REVIEW')) AS PENDING FROM L"""
+SELECT COUNT(*) AS MAPPINGS, COUNT_IF(STATUS = 'APPROVED') AS APPROVED, COUNT_IF(STATUS = 'REVIEW') AS PENDING,
+       COUNT_IF(STATUS = 'DRAFT') AS DRAFTS FROM E"""
 
-MODELS = """
-WITH M AS (
-    SELECT DESIGN_ID, STATUS, BRANCH, ROW_NUMBER() OVER (PARTITION BY DESIGN_ID ORDER BY VERSION DESC) AS RN
-      FROM GOVERNANCE.MODEL_DESIGNS WHERE TRUE {domain}
+DOMAIN_MODELS = """
+SELECT COUNT(*) AS MODELS, COUNT_IF(D.APPROVED_VERSION IS NOT NULL) AS APPROVED,
+       COUNT_IF(A.STATUS = 'PUBLISHED') AS PUBLISHED,
+       COUNT_IF(O.STATUS = 'DRAFT') AS DRAFTS, COUNT_IF(O.STATUS = 'IN_REVIEW') AS IN_REVIEW
+  FROM GOVERNANCE.DOMAIN_MODEL D
+  LEFT JOIN GOVERNANCE.MODEL_DESIGNS A ON A.DESIGN_ID = D.MODEL_ID AND A.VERSION = D.APPROVED_VERSION
+  LEFT JOIN GOVERNANCE.MODEL_DESIGNS O ON O.DESIGN_ID = D.MODEL_ID AND O.VERSION = D.OPEN_VERSION
+ WHERE TRUE {domain}"""
+
+TABLE_MODELS = """
+SELECT COUNT(*) AS TABLES, COUNT_IF(P.TABLE_MODEL_ID IS NOT NULL) AS PUBLISHED
+  FROM GOVERNANCE.TABLE_MODEL T
+  LEFT JOIN (SELECT DISTINCT TABLE_MODEL_ID FROM GOVERNANCE.TABLE_MODEL_VERSION WHERE STATUS = 'PUBLISHED') P
+         ON P.TABLE_MODEL_ID = T.TABLE_MODEL_ID
+ WHERE TRUE {domain}"""
+
+# pull requests of model versions: every one still open, and assets whose latest attempt failed
+MODEL_PRS = """
+WITH G AS (
+    SELECT STATE, ROW_NUMBER() OVER (PARTITION BY KIND, ASSET_ID ORDER BY VERSION DESC, UPDATED_AT DESC) AS RN
+      FROM GOVERNANCE.GIT_PR WHERE KIND IN ('MODEL', 'TABLE_MODEL') {domain}
 )
-SELECT COUNT_IF(RN = 1) AS DESIGNS, COUNT_IF(RN = 1 AND STATUS = 'PUBLISHED') AS PUBLISHED,
-       COUNT_IF(RN = 1 AND BRANCH IS NOT NULL) AS BRANCHES,
-       COUNT_IF(RN = 1 AND STATUS IN ('DRAFT', 'FINALIZED')) AS IN_DESIGN,
-       COUNT_IF(RN = 1 AND STATUS = 'PUBLISH_FAILED') AS FAILED FROM M"""
+SELECT COUNT_IF(STATE IN ('OPEN', 'DRAFT')) AS OPEN, COUNT_IF(RN = 1 AND STATE = 'FAILED') AS FAILED FROM G"""
 
+# designs from before the Model Workbench (read-only)
+LEGACY_MODELS = """
+SELECT COUNT(DISTINCT DESIGN_ID) AS DESIGNS FROM GOVERNANCE.MODEL_DESIGNS WHERE MODEL_ID IS NULL {domain}"""
 
 def _soft(fn: Callable[[], Any]) -> Any:
     """A block's value, or None when its tables are missing or unreadable (HTTP errors from a store included)."""
@@ -179,8 +215,9 @@ def profiling(db: Db, domain_id: Optional[str]) -> dict:
 
 
 def sttm(db: Db, domain_id: Optional[str]) -> dict:
-    row = db.query(STTM.format(domain="AND DOMAIN_ID = %s" if domain_id else ""), (domain_id,) if domain_id else ())[0]
-    return {"mappings": _n(row, "mappings"), "verified": _n(row, "verified"), "pending": _n(row, "pending")}
+    row = db.query(STTM.format(domain="AND C.DOMAIN_ID = %s" if domain_id else ""), (domain_id,) if domain_id else ())[0]
+    return {"mappings": _n(row, "mappings"), "approved": _n(row, "approved"), "pending": _n(row, "pending"),
+            "drafts": _n(row, "drafts")}
 
 
 def _first(db: Db, sql: str, params: tuple) -> dict:
@@ -197,47 +234,75 @@ def _run_join(alias: str, domain_id: Optional[str]) -> tuple:
 
 
 def models(db: Db, domain_id: Optional[str], domain_name: Optional[str]) -> dict:
-    """Run model designs and dbt publications plus the Modeling Store's own designs."""
-    clause = "AND (UPPER(DOMAIN_NAME) = UPPER(%s) OR UPPER(PARENT_DOMAIN) = UPPER(%s))" if domain_name else ""
-    hub = _first(db, MODELS.format(domain=clause), (domain_name, domain_name) if domain_name else ())
-    join, params = _run_join("M", domain_id)
-    runs = _first(db, RUN_DESIGNS.format(join=join), params)
-    join, params = _run_join("G", domain_id)
-    pubs = _first(db, RUN_PUBLICATIONS.format(join=join), params)
-    if not (hub or runs or pubs):
+    """The Model Workbench's domain models, the Table Model Store's table models and their pull requests; the run
+    model designs and legacy hub designs only as counts on the side."""
+    clause, params = ("AND D.DOMAIN_ID = %s", (domain_id,)) if domain_id else ("", ())
+    domain = _first(db, DOMAIN_MODELS.format(domain=clause), params)
+    tables = _first(db, TABLE_MODELS.format(domain=clause.replace("D.", "T.")), params)
+    prs = _first(db, MODEL_PRS.format(domain=clause.replace("D.", "")), params)
+    if not (domain or tables):
         raise LookupError("no model store is readable")
-    return {"designs": _n(hub, "designs") + _n(runs, "designs"), "published": _n(hub, "published") + _n(pubs, "published"),
-            "branches": _n(hub, "branches") + _n(pubs, "branches"), "in_design": _n(hub, "in_design") + _n(runs, "in_design"),
-            "failed": _n(hub, "failed") + _n(pubs, "failed"), "run_designs": _n(runs, "designs"),
-            "hub_designs": _n(hub, "designs")}
+    legacy_clause = "AND (UPPER(DOMAIN_NAME) = UPPER(%s) OR UPPER(PARENT_DOMAIN) = UPPER(%s))" if domain_name else ""
+    legacy = _first(db, LEGACY_MODELS.format(domain=legacy_clause), (domain_name, domain_name) if domain_name else ())
+    join, run_params = _run_join("M", domain_id)
+    runs = _first(db, RUN_DESIGNS.format(join=join), run_params)
+    join, run_params = _run_join("G", domain_id)
+    pubs = _first(db, RUN_PUBLICATIONS.format(join=join), run_params)
+    return {"domain_models": _n(domain, "models"), "approved": _n(domain, "approved"), "published": _n(domain, "published"),
+            "drafts": _n(domain, "drafts"), "in_review": _n(domain, "in_review"),
+            "table_models": _n(tables, "tables"), "tables_published": _n(tables, "published"),
+            "prs_open": _n(prs, "open"), "failed": _n(prs, "failed") + _n(pubs, "failed"),
+            "run_designs": _n(runs, "designs"), "legacy_designs": _n(legacy, "designs")}
 
 
 def qa(db: Db, domain_id: Optional[str]) -> Optional[dict]:
-    """Domain packs (QA Store) plus the tests saved in runs and tables and their latest executions."""
+    """Domain packs (QA Store) plus the tests saved in runs and tables: how many, how many ran in the last 7 days and
+    the pass rate of each test's latest result (passed over executed)."""
     from app.qa_api import _call, _svc
 
     try:
         packs = _call(db, _svc("packs").summary, domain_id)
     except Exception:
         packs = None
-    clause = "AND (DOMAIN_ID = %s OR RUN_ID IN (SELECT RUN_ID FROM CORE.WORKFLOW_RUN WHERE DOMAIN_ID = %s))" if domain_id else ""
-    params = (domain_id, domain_id) if domain_id else ()
-    saved = _first(db, RUN_TESTS.format(domain=clause), params)
-    runs = _first(db, RUN_QA.format(domain=clause), params)
+    clause = "AND (R.DOMAIN_ID = %s OR T.DOMAIN_ID = %s)" if domain_id else ""
+    saved_clause = ("AND (T.DOMAIN_ID = %s OR T.RUN_ID IN (SELECT RUN_ID FROM CORE.WORKFLOW_RUN WHERE DOMAIN_ID = %s))"
+                    if domain_id else "")
+    saved = _first(db, RUN_TESTS.format(population=RUN_POPULATION, domain=saved_clause),
+                   (domain_id, domain_id) if domain_id else ())
+    runs = _first(db, RUN_QA.format(results=QA_RESULTS.format(population=RUN_POPULATION, domain=clause)),
+                  (domain_id,) * 2 if domain_id else ())
     if packs is None and not saved and not runs:
         raise LookupError("no QA store is readable")
     out = dict(packs or {"packs": 0, "approved_packs": 0, "rules": 0, "pending": 0, "domains": 0, "top_tags": [],
                          "pass_rate": None})
-    tests, passed = _n(runs, "tests"), _n(runs, "passed")
-    out.update({"run_tests": _n(saved, "tests"), "executed_tests": tests, "run_suites": _n(runs, "suites"),
-                "run_pass_rate": round(100 * passed / tests, 1) if tests else None})
-    if out.get("pass_rate") is None:
-        out["pass_rate"] = out["run_pass_rate"]
+    executed, passed = _n(runs, "executed"), _n(runs, "passed")
+    out.update({"saved_tests": _n(saved, "tests"), "tests_7d": _n(runs, "run_7d"), "executed_tests": executed,
+                "failed_tests": _n(runs, "failed"), "failed_targets": _n(runs, "failed_targets"),
+                "test_pass_rate": rate(passed, executed)})
     return out
 
 
-def dq(db: Db, domain_id: Optional[str], profiled_tables: int = 0) -> Optional[dict]:
-    """Approved checks in runs plus the Data Quality Store's catalog, with the pass rate of each check's latest result."""
+def rate(part: int, whole: int) -> Optional[float]:
+    """part over whole as a percentage with one decimal, None when there is nothing to divide by. Pure."""
+    return round(100 * part / whole, 1) if whole else None
+
+
+DQ_COVERAGE = """
+WITH T AS (
+    SELECT DISTINCT UPPER(TARGET_TABLE) AS NAME FROM KNOWLEDGE.TARGET_TABLE_REGISTRY
+     WHERE COALESCE(ACTIVE_FLAG, TRUE) {domain}
+), C AS (
+    SELECT UPPER(SPLIT_PART(TARGET_TABLE, '.', -1)) AS NAME FROM CONTRACT.SODA_EXPECTATION_REGISTRY
+     WHERE IS_CURRENT AND STATUS = 'APPROVED' {domain}
+    UNION
+    SELECT UPPER(SPLIT_PART(TABLE_NAME, '.', -1)) FROM GOVERNANCE.DQ_CHECKS_CATALOG WHERE STATUS = 'ACTIVE' {domain}
+)
+SELECT COUNT(*) AS TARGETS, COUNT_IF(NAME IN (SELECT NAME FROM C)) AS COVERED FROM T"""
+
+
+def dq(db: Db, domain_id: Optional[str]) -> Optional[dict]:
+    """Approved checks in runs and the Data Quality Store's own checks (kept apart), the pass rate of each check's
+    latest result, and coverage: registered target tables with at least one check."""
     from app.quality_api import summary
 
     try:
@@ -255,52 +320,80 @@ def dq(db: Db, domain_id: Optional[str], profiled_tables: int = 0) -> Optional[d
     evaluated = _n(runs, "evaluated") + (s.get("passed", 0) + s.get("warned", 0) + s.get("failed", 0))
     checks = _n(runs, "checks") + s.get("checks", 0)
     tables = _n(runs, "tables") + s.get("tables", 0)
+    cover = _first(db, DQ_COVERAGE.format(domain="AND DOMAIN_ID = %s" if domain_id else ""), (domain_id,) * 3 if domain_id else ())
     return {"deployed": True, "checks": checks, "run_checks": _n(runs, "checks"), "store_checks": s.get("checks", 0),
             "tables": tables, "passed": passed, "warned": warned, "failed": failed,
             "never_run": max(0, checks - evaluated), "scheduled_tables": s.get("scheduled_tables", 0),
-            "pass_rate": round(100 * passed / evaluated, 1) if evaluated else None,
-            "coverage": round(100 * min(tables, profiled_tables) / profiled_tables, 1) if profiled_tables else None}
+            "pass_rate": rate(passed, evaluated), "targets": _n(cover, "targets"), "covered_targets": _n(cover, "covered"),
+            "coverage": rate(_n(cover, "covered"), _n(cover, "targets"))}
 
 
 # ---------------------------------------------------------------- developer stats (the hero ribbon)
 
-DELIVERY = """
-WITH E AS (
-    SELECT E.RUN_ID, E.TO_STATE, E.CREATED_AT FROM CORE.WORKFLOW_EVENT E
-      JOIN CORE.WORKFLOW_RUN R ON R.RUN_ID = E.RUN_ID
-     WHERE E.CREATED_AT >= DATEADD('day', -7, CURRENT_TIMESTAMP()) AND E.TO_STATE IN ('COMPLETED', 'FAILED')
-       AND R.DELETED_AT IS NULL AND COALESCE(R.ENVIRONMENT, '') <> 'TEST' {domain}
-), DONE AS (
-    SELECT E.RUN_ID, E.TO_STATE, E.CREATED_AT, R.CREATED_AT AS STARTED_AT FROM E JOIN CORE.WORKFLOW_RUN R ON R.RUN_ID = E.RUN_ID
-)
-SELECT (SELECT COUNT(DISTINCT RUN_ID) FROM DONE WHERE TO_STATE = 'COMPLETED') AS COMPLETED,
-       (SELECT COUNT(DISTINCT RUN_ID) FROM DONE WHERE TO_STATE = 'FAILED') AS FAILED,
-       (SELECT MEDIAN(DATEDIFF('minute', STARTED_AT, CREATED_AT)) FROM DONE WHERE TO_STATE = 'COMPLETED') AS LEAD_MINUTES,
-       (SELECT COUNT(*) FROM CORE.WORKFLOW_RUN R WHERE R.DELETED_AT IS NULL AND NOT COALESCE(R.IS_ARCHIVED, FALSE)
-           AND COALESCE(R.ENVIRONMENT, '') <> 'TEST' AND R.CURRENT_STATE NOT IN ('CREATED', 'COMPLETED', 'FAILED', 'CANCELLED') {domain}) AS ACTIVE,
-       (SELECT COUNT(*) FROM CORE.WORKFLOW_RUN R WHERE R.DELETED_AT IS NULL AND COALESCE(R.ENVIRONMENT, '') <> 'TEST'
-           AND R.CREATED_AT >= DATEADD('day', -7, CURRENT_TIMESTAMP()) {domain}) AS STARTED"""
+RUNS = """
+SELECT COUNT_IF({in_flight}) AS IN_FLIGHT, COUNT_IF(R.CURRENT_STATE = 'CREATED') AS DRAFTS,
+       COUNT_IF({review}) AS NEEDS_REVIEW
+  FROM CORE.WORKFLOW_RUN R WHERE {population} {domain}"""
 
-DELIVERY_DAILY = """
-SELECT TO_VARCHAR(E.CREATED_AT::DATE) AS DAY, COUNT_IF(E.TO_STATE = 'COMPLETED') AS COMPLETED, COUNT_IF(E.TO_STATE = 'FAILED') AS FAILED
+
+def runs(db: Db, domain_id: Optional[str]) -> dict:
+    """Exact run counts over the run list's population (not TEST, archived or deleted): in flight (started, not
+    finished), drafts, and at a review step. The greeting, the chips and the tiles all read these."""
+    clause, params = ("AND R.DOMAIN_ID = %s", (domain_id,)) if domain_id else ("", ())
+    row = db.query(RUNS.format(in_flight=IN_FLIGHT_SQL, review=REVIEW_SQL, population=RUN_POPULATION, domain=clause), params)[0]
+    return {"in_flight": _n(row, "in_flight"), "drafts": _n(row, "drafts"), "needs_review": _n(row, "needs_review")}
+
+
+# each run's latest outcome in the last 7 days: a run that failed and then completed counts once, as completed
+OUTCOMES = """
+SELECT E.RUN_ID, E.TO_STATE, E.CREATED_AT, R.CREATED_AT AS STARTED_AT
   FROM CORE.WORKFLOW_EVENT E JOIN CORE.WORKFLOW_RUN R ON R.RUN_ID = E.RUN_ID
  WHERE E.CREATED_AT >= DATEADD('day', -7, CURRENT_TIMESTAMP()) AND E.TO_STATE IN ('COMPLETED', 'FAILED')
-   AND R.DELETED_AT IS NULL AND COALESCE(R.ENVIRONMENT, '') <> 'TEST' {domain}
- GROUP BY 1 ORDER BY 1"""
+   AND {population} {domain}
+QUALIFY ROW_NUMBER() OVER (PARTITION BY E.RUN_ID ORDER BY E.CREATED_AT DESC) = 1"""
+
+DELIVERY = """
+WITH O AS ({outcomes})
+SELECT COUNT_IF(TO_STATE = 'COMPLETED') AS COMPLETED, COUNT_IF(TO_STATE = 'FAILED') AS FAILED,
+       MEDIAN(IFF(TO_STATE = 'COMPLETED', DATEDIFF('minute', STARTED_AT, CREATED_AT), NULL)) AS LEAD_MINUTES,
+       (SELECT COUNT(*) FROM CORE.WORKFLOW_RUN R WHERE {population} AND {in_flight} {domain}) AS ACTIVE,
+       (SELECT COUNT(*) FROM CORE.WORKFLOW_RUN R WHERE {population}
+           AND R.CREATED_AT >= DATEADD('day', -7, CURRENT_TIMESTAMP()) {domain}) AS STARTED
+  FROM O"""
+
+DELIVERY_DAILY = """
+WITH O AS ({outcomes})
+SELECT TO_VARCHAR(CREATED_AT::DATE) AS DAY, COUNT_IF(TO_STATE = 'COMPLETED') AS COMPLETED, COUNT_IF(TO_STATE = 'FAILED') AS FAILED
+  FROM O GROUP BY 1 ORDER BY 1"""
+
+
+def fill_days(rows: List[Dict[str, Any]], end: date, days: int = 7) -> List[Dict[str, Any]]:
+    """One entry per day ending at `end` (or the latest day in `rows`, if later), days without outcomes as zeros, so
+    the sparkline's spacing is real time. Pure."""
+    by_day = {str(r["day"]): r for r in rows}
+    last = max([end] + [date.fromisoformat(d) for d in by_day])
+    out = []
+    for back in range(days - 1, -1, -1):
+        day = (last - timedelta(days=back)).isoformat()
+        r = by_day.get(day) or {}
+        out.append({"day": day, "completed": int(r.get("completed") or 0), "failed": int(r.get("failed") or 0)})
+    return out
 
 
 def delivery(db: Db, domain_id: Optional[str]) -> dict:
-    """Runs over the last 7 days: completed, failed, success rate and median lead time (start to completion), with
-    the runs active now and a day-by-day series."""
+    """Runs over the last 7 days by their latest outcome: completed, failed, success rate and median lead time (start
+    to completion), with the runs in flight now and a day-by-day series (every day present)."""
     clause, params = ("AND R.DOMAIN_ID = %s", (domain_id,)) if domain_id else ("", ())
-    row = db.query(DELIVERY.format(domain=clause), params * 3)[0]
-    daily = db.query(DELIVERY_DAILY.format(domain=clause), params)
+    outcomes = OUTCOMES.format(population=RUN_POPULATION, domain=clause)
+    row = db.query(DELIVERY.format(outcomes=outcomes, population=RUN_POPULATION, in_flight=IN_FLIGHT_SQL, domain=clause),
+                   params * 3)[0]
+    daily = db.query(DELIVERY_DAILY.format(outcomes=outcomes), params)
     done, failed = _n(row, "completed"), _n(row, "failed")
     lead = row.get("lead_minutes")
     return {"completed": done, "failed": failed, "started": _n(row, "started"), "active": _n(row, "active"),
-            "success_rate": round(100 * done / (done + failed), 1) if done + failed else None,
+            "success_rate": rate(done, done + failed),
             "lead_minutes": int(lead) if lead is not None else None,
-            "daily": [{"day": d["day"], "completed": int(d["completed"] or 0), "failed": int(d["failed"] or 0)} for d in daily]}
+            "daily": fill_days(daily, date.today())}
 
 
 WAITING = """
@@ -308,30 +401,37 @@ SELECT COUNT(*) AS RUNS, MAX(DATEDIFF('minute', COALESCE(W.AT, R.UPDATED_AT, R.C
   FROM CORE.WORKFLOW_RUN R
   LEFT JOIN (SELECT RUN_ID, TO_STATE, MAX(CREATED_AT) AS AT FROM CORE.WORKFLOW_EVENT GROUP BY 1, 2) W
          ON W.RUN_ID = R.RUN_ID AND W.TO_STATE = R.CURRENT_STATE
- WHERE R.DELETED_AT IS NULL AND NOT COALESCE(R.IS_ARCHIVED, FALSE) AND R.CURRENT_STATE IN ({review}) {domain}"""
+ WHERE {population} AND {review} {domain}"""
+
+# versions waiting on a reviewer, each with how long (minutes) since it was submitted
+WAITING_VERSIONS = (
+    "SELECT COUNT(*) AS N, MAX(DATEDIFF('minute', COALESCE(SUBMITTED_AT, CREATED_AT), CURRENT_TIMESTAMP())) AS OLDEST "
+    "FROM GOVERNANCE.MODEL_DESIGNS WHERE MODEL_ID IS NOT NULL AND STATUS = 'IN_REVIEW'{domain}",
+    "SELECT COUNT(*) AS N, MAX(DATEDIFF('minute', COALESCE(V.SUBMITTED_AT, V.CREATED_AT), CURRENT_TIMESTAMP())) AS OLDEST "
+    "FROM GOVERNANCE.DQ_SUITE_VERSION V JOIN GOVERNANCE.DQ_SUITE S ON S.SUITE_ID = V.SUITE_ID WHERE V.STATUS = 'IN_REVIEW'{s_domain}",
+    # a pack counts once, however many of its versions are pending
+    "SELECT COUNT(DISTINCT PACK_ID) AS N, MAX(DATEDIFF('minute', COALESCE(SUBMITTED_AT, CREATED_AT), CURRENT_TIMESTAMP())) AS OLDEST "
+    "FROM GOVERNANCE.DOMAIN_QA_PACKS WHERE STATUS = 'PENDING_APPROVAL'{domain}",
+)
 
 
 def waiting(db: Db, domain_id: Optional[str]) -> dict:
-    """What is waiting on a person: runs at a review step, change requests in Approvals, and asset versions in review
-    (domain models, data quality suites, QA packs), with the oldest wait."""
-    from services.workflow.listing import REVIEW_STATES
-
+    """What is waiting on a person: runs at a review step, change requests in Approvals, and versions in review
+    (domain models, data quality suites, QA packs), with the oldest wait of any of them."""
     clause, params = ("AND R.DOMAIN_ID = %s", (domain_id,)) if domain_id else ("", ())
-    runs = db.query(WAITING.format(review=", ".join(f"'{s}'" for s in REVIEW_STATES), domain=clause), params)[0]
+    runs_row = db.query(WAITING.format(population=RUN_POPULATION, review=REVIEW_SQL, domain=clause), params)[0]
     requests = _soft(lambda: db.query("""SELECT COUNT(*) AS N, MAX(DATEDIFF('minute', CREATED_AT, CURRENT_TIMESTAMP())) AS OLDEST
                                            FROM GOVERNANCE.CHANGE_REQUEST WHERE STATUS = 'PENDING'""")[0]) or {}
-    reviews = 0
-    for sql in ("SELECT COUNT(*) AS N FROM GOVERNANCE.MODEL_DESIGNS WHERE MODEL_ID IS NOT NULL AND STATUS = 'IN_REVIEW'"
-                + (" AND DOMAIN_ID = %s" if domain_id else ""),
-                "SELECT COUNT(*) AS N FROM GOVERNANCE.DQ_SUITE_VERSION V JOIN GOVERNANCE.DQ_SUITE S ON S.SUITE_ID = V.SUITE_ID "
-                "WHERE V.STATUS = 'IN_REVIEW'" + (" AND S.DOMAIN_ID = %s" if domain_id else ""),
-                "SELECT COUNT(*) AS N FROM GOVERNANCE.DOMAIN_QA_PACKS WHERE STATUS = 'PENDING_APPROVAL'"
-                + (" AND DOMAIN_ID = %s" if domain_id else "")):
-        reviews += _n(_soft(lambda: db.query(sql, params)[0]), "n")
-    oldest = [v for v in (runs.get("oldest_minutes"), requests.get("oldest")) if v is not None]
-    return {"runs": _n(runs, "runs"), "requests": _n(requests, "n"), "versions": reviews,
-            "total": _n(runs, "runs") + _n(requests, "n") + reviews,
-            "oldest_minutes": int(max(oldest)) if oldest else None}
+    reviews, oldest = 0, [runs_row.get("oldest_minutes"), requests.get("oldest")]
+    for sql in WAITING_VERSIONS:
+        q = sql.format(domain=" AND DOMAIN_ID = %s" if domain_id else "", s_domain=" AND S.DOMAIN_ID = %s" if domain_id else "")
+        row = _soft(lambda: db.query(q, params)[0]) or {}
+        reviews += _n(row, "n")
+        oldest.append(row.get("oldest") if _n(row, "n") else None)
+    known = [v for v in oldest if v is not None]
+    return {"runs": _n(runs_row, "runs"), "requests": _n(requests, "n"), "versions": reviews,
+            "total": _n(runs_row, "runs") + _n(requests, "n") + reviews,
+            "oldest_minutes": int(max(known)) if known else None}
 
 
 FRESHNESS = """
@@ -341,52 +441,59 @@ WITH L AS (
      WHERE L.INGESTION_STATUS = 'COMPLETE' AND COALESCE(L.INGESTION_METHOD, '') <> 'IN_PLACE' {domain}
      GROUP BY 1, 2, 3
 ), F AS (
-    SELECT DISTINCT L.LANDING_DATABASE, L.LANDING_SCHEMA, L.LANDING_TABLE
+    SELECT L.INGESTION_STATUS, L.CREATED_AT
       FROM SOURCE.LANDING_TABLE_REGISTRY L LEFT JOIN CORE.WORKFLOW_RUN R ON R.RUN_ID = L.RUN_ID
-     WHERE L.INGESTION_STATUS = 'FAILED' AND L.CREATED_AT >= DATEADD('day', -7, CURRENT_TIMESTAMP()) {domain}
+     WHERE L.INGESTION_STATUS IN ('COMPLETE', 'FAILED') AND COALESCE(L.INGESTION_METHOD, '') <> 'IN_PLACE' {domain}
+   QUALIFY ROW_NUMBER() OVER (PARTITION BY L.LANDING_DATABASE, L.LANDING_SCHEMA, L.LANDING_TABLE ORDER BY L.CREATED_AT DESC) = 1
 )
 SELECT (SELECT COUNT(*) FROM L) AS TABLES,
        (SELECT COUNT_IF(LAST_LOAD >= DATEADD('hour', -24, CURRENT_TIMESTAMP())) FROM L) AS FRESH,
        (SELECT COUNT_IF(LAST_LOAD < DATEADD('day', -7, CURRENT_TIMESTAMP())) FROM L) AS STALE,
        (SELECT MAX(DATEDIFF('hour', LAST_LOAD, CURRENT_TIMESTAMP())) FROM L) AS OLDEST_HOURS,
-       (SELECT COUNT(*) FROM F) AS FAILED_LOADS"""
+       (SELECT COUNT_IF(INGESTION_STATUS = 'FAILED' AND CREATED_AT >= DATEADD('day', -7, CURRENT_TIMESTAMP())) FROM F) AS FAILED_LOADS"""
 
 
 def freshness(db: Db, domain_id: Optional[str]) -> dict:
-    """Landed tables (copies, not tables profiled in place): loaded in the last 24 hours, not loaded for over 7 days,
-    the oldest load, loads that failed in the last 7 days, and external pipelines registered but not active."""
+    """Landed tables (copies, not tables profiled in place): loaded in the last 24 hours, between 1 and 7 days ago and
+    not for over 7 days (the three add up), the oldest load, tables whose latest load failed this week, and external
+    pipelines registered but not active."""
     clause, params = ("AND R.DOMAIN_ID = %s", (domain_id,)) if domain_id else ("", ())
     row = db.query(FRESHNESS.format(domain=clause), params * 2)[0]
     ext = _soft(lambda: db.query("SELECT COUNT_IF(STATUS IN ('REGISTERED', 'PAUSED')) AS IDLE FROM PLATFORM_CONFIG.INGESTION_PIPELINE_CATALOG "
                                  "WHERE STATUS <> 'RETIRED'" + (" AND DOMAIN_ID = %s" if domain_id else ""), params)[0]) or {}
     hours = row.get("oldest_hours")
-    return {"tables": _n(row, "tables"), "fresh": _n(row, "fresh"), "stale": _n(row, "stale"),
+    tables, fresh, stale = _n(row, "tables"), _n(row, "fresh"), _n(row, "stale")
+    return {"tables": tables, "fresh": fresh, "aging": max(0, tables - fresh - stale), "stale": stale,
             "failed_loads": _n(row, "failed_loads"), "idle_pipelines": _n(ext, "idle"),
             "oldest_hours": int(hours) if hours is not None else None}
 
 
-FAILING_QA = """
-WITH R AS (
-    SELECT Q.TEST_ID, Q.OUTCOME, ROW_NUMBER() OVER (PARTITION BY Q.TEST_ID ORDER BY Q.CREATED_AT DESC) AS RN
-      FROM QUALITY.QA_RESULT Q
+# tables with a failing data quality check (FAIL or ERROR), in the store or approved in a run, each counted once
+FAILING_DQ_TABLES = """
+WITH S AS (
+    SELECT UPPER(SPLIT_PART(TABLE_NAME, '.', -1)) AS NAME FROM GOVERNANCE.DQ_CHECKS_CATALOG
+     WHERE STATUS = 'ACTIVE' AND LAST_RUN_STATUS IN ('FAIL', 'ERROR') {domain}
+), C AS (
+    SELECT EXPECTATION_ID, TARGET_TABLE FROM CONTRACT.SODA_EXPECTATION_REGISTRY WHERE IS_CURRENT AND STATUS = 'APPROVED' {domain}
+), R AS (
+    SELECT EXPECTATION_ID, OUTCOME FROM QUALITY.CHECK_RESULT WHERE EXPECTATION_ID IN (SELECT EXPECTATION_ID FROM C)
+   QUALIFY ROW_NUMBER() OVER (PARTITION BY EXPECTATION_ID ORDER BY CREATED_AT DESC) = 1
 )
-SELECT COUNT(*) AS TESTS, COUNT(DISTINCT COALESCE(T.TARGET_FQN, T.RUN_ID)) AS TARGETS
-  FROM R JOIN CONTRACT.QA_TEST_CASE T ON T.TEST_ID = R.TEST_ID
- WHERE R.RN = 1 AND R.OUTCOME IN ('FAIL', 'ERROR') AND NOT COALESCE(T.IS_DELETED, FALSE) {domain}"""
+SELECT COUNT(DISTINCT NAME) AS N FROM (
+    SELECT NAME FROM S
+    UNION ALL
+    SELECT UPPER(SPLIT_PART(C.TARGET_TABLE, '.', -1)) FROM C JOIN R ON R.EXPECTATION_ID = C.EXPECTATION_ID
+     WHERE R.OUTCOME IN ('FAIL', 'ERROR'))"""
 
 
-def failing(db: Db, domain_id: Optional[str], dq_block: Optional[dict]) -> dict:
-    """Checks failing now: data quality checks whose latest result failed, QA tests whose latest execution failed or
-    errored, and the tables they cover."""
-    clause, params = ("AND (T.DOMAIN_ID = %s OR T.RUN_ID IN (SELECT RUN_ID FROM CORE.WORKFLOW_RUN WHERE DOMAIN_ID = %s))",
-                      (domain_id, domain_id)) if domain_id else ("", ())
-    qa_row = _soft(lambda: db.query(FAILING_QA.format(domain=clause), params)[0]) or {}
-    dq_tables = _soft(lambda: db.query("SELECT COUNT(DISTINCT TABLE_NAME) AS N FROM GOVERNANCE.DQ_CHECKS_CATALOG "
-                                       "WHERE STATUS = 'ACTIVE' AND LAST_RUN_STATUS = 'FAIL'"
-                                       + (" AND DOMAIN_ID = %s" if domain_id else ""), (domain_id,) if domain_id else ())[0]) or {}
-    dq_failed = int((dq_block or {}).get("failed") or 0)
-    return {"dq_checks": dq_failed, "qa_tests": _n(qa_row, "tests"), "total": dq_failed + _n(qa_row, "tests"),
-            "tables": _n(dq_tables, "n") + _n(qa_row, "targets")}
+def failing(db: Db, domain_id: Optional[str], dq_block: Optional[dict], qa_block: Optional[dict]) -> dict:
+    """Checks failing now (FAIL or ERROR): data quality checks whose latest result failed, QA tests whose latest
+    execution failed (the QA block's own count, so the tile and the QA card agree), and the tables they cover."""
+    dq_tables = _soft(lambda: db.query(FAILING_DQ_TABLES.format(domain="AND DOMAIN_ID = %s" if domain_id else ""),
+                                       (domain_id,) * 2 if domain_id else ())[0]) or {}
+    dq_failed, qa_failed = _n(dq_block, "failed"), _n(qa_block, "failed_tests")
+    return {"dq_checks": dq_failed, "qa_tests": qa_failed, "total": dq_failed + qa_failed,
+            "tables": _n(dq_tables, "n") + _n(qa_block, "failed_targets")}
 
 
 @router.get("/api/hub/overview")
@@ -411,6 +518,8 @@ def _overview(db: Db, domain: Optional[str]) -> dict:
         "models": lambda: models(db, did, name),
         "sttm": lambda: sttm(db, did),
         "qa": lambda: qa(db, did),
+        "dq": lambda: dq(db, did),
+        "runs": lambda: runs(db, did),
         "delivery": lambda: delivery(db, did),
         "waiting": lambda: waiting(db, did),
         "freshness": lambda: freshness(db, did),
@@ -419,7 +528,8 @@ def _overview(db: Db, domain: Optional[str]) -> dict:
         # each job runs in a copy of this request's context, so its statements count in the request's timing
         futures = {k: pool.submit(contextvars.copy_context().run, _soft, fn) for k, fn in jobs.items()}
         blocks = {k: f.result() for k, f in futures.items()}
-    blocks["dq"] = _soft(lambda: dq(db, did, (blocks["profiling"] or {}).get("tables", 0)))
-    blocks["failing"] = _soft(lambda: failing(db, did, blocks["dq"]))
-    return {"domain": scope, **{k: blocks[k] for k in ("sources", "profiling", "models", "sttm", "qa", "dq",
+    blocks["failing"] = _soft(lambda: failing(db, did, blocks["dq"], blocks["qa"]))
+    if blocks["runs"] is not None:  # failed this week: the same latest-outcome count as the Runs tile
+        blocks["runs"]["failed_7d"] = (blocks["delivery"] or {}).get("failed")
+    return {"domain": scope, **{k: blocks[k] for k in ("sources", "profiling", "models", "sttm", "qa", "dq", "runs",
                                                        "delivery", "waiting", "freshness", "failing")}}

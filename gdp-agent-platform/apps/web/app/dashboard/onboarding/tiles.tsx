@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useRef, useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import { AppWindow, CheckCircle2, FileJson, FileText, Loader2, Rocket, Upload, XCircle } from "lucide-react";
 import type { OnboardingCheck } from "@/lib/hub-types";
 import { Modal } from "@/components/hub/overlay";
@@ -17,8 +17,10 @@ const ROADMAP = [
 ];
 
 /** Domain onboarding from files: a domain_pack.json and its data contract, validated before anything is registered. */
-export function DomainImportCard() {
-  const [open, setOpen] = useState(false);
+export function DomainImportCard({ openImport = false }: { openImport?: boolean }) {
+  const [open, setOpen] = useState(openImport);
+  // "+ New" while already on this page changes only the query, so follow it after mount too
+  useEffect(() => { if (openImport) setOpen(true); }, [openImport]);
   return (
     <article className="surface relative flex flex-col overflow-hidden p-6">
       <div className="absolute -right-12 -top-12 h-40 w-40 rounded-full bg-indigo-400/10 blur-2xl" />
@@ -29,8 +31,8 @@ export function DomainImportCard() {
         anything is registered; importing registers targets, columns and knowledge exactly as a deploy would.
       </p>
       <div className="mt-5 flex flex-wrap gap-2">
-        <Button onClick={() => setOpen(true)} data-testid="import-domain"><Upload className="h-4 w-4" /> Import a domain</Button>
-        <Link href="/dashboard/modeling" className={buttonVariants({ variant: "outline" })}>Design a new model instead</Link>
+        <Button onClick={() => setOpen(true)} data-testid="import-domain"><Upload className="h-4 w-4" /> Import a domain pack</Button>
+        <Link href="/dashboard/modeling?view=tables&new=1" className={buttonVariants({ variant: "outline" })}>Design a table model instead</Link>
       </div>
       <ImportModal open={open} onClose={() => setOpen(false)} />
     </article>

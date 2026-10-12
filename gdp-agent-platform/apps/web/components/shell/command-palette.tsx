@@ -12,7 +12,7 @@ import { setDomainScope } from "@/app/scope-actions";
 import type { SearchHit } from "@/app/bff/search/route";
 import { useTheme } from "@/components/theme/theme-provider";
 import { allowedBy, NAV_GROUPS } from "./nav";
-import { QUICK_ACTIONS } from "./quick-actions";
+import { actableBy, QUICK_ACTIONS } from "./quick-actions";
 import type { DomainOption } from "./top-bar";
 
 type Item = { id: string; group: string; label: string; detail?: string; icon: LucideIcon; keywords?: string; run: () => void };
@@ -79,8 +79,8 @@ export function CommandPalette({ privileges, domains }: { privileges?: string[] 
   const items = useMemo(() => {
     const allowed = allowedBy(privileges);
     const base: Item[] = [
-      ...QUICK_ACTIONS.filter((a) => allowed(a.privilege)).map((a) => ({
-        id: `qa:${a.href}`, group: "Quick actions", label: a.label, detail: a.hint, icon: a.icon, run: () => go(a.href),
+      ...QUICK_ACTIONS.filter((a) => actableBy(privileges)(a.privilege)).map((a) => ({
+        id: `qa:${a.href}`, group: "Quick actions", label: `New: ${a.label}`, detail: a.hint, keywords: `new create ${a.group}`, icon: a.icon, run: () => go(a.href),
       })),
       ...NAV_GROUPS.flatMap((g) => g.links.flatMap((l) => [l, ...(l.children ?? [])]).filter((l) => allowed(l.privilege)).map((l) => ({
         id: `nav:${l.href}`, group: "Go to", label: l.label, detail: g.label, icon: l.icon, keywords: l.href, run: () => go(l.href),

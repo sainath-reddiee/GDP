@@ -25,16 +25,20 @@ export function GitState({ row }: { row: Pick<TmListRow, "status" | "branch" | "
 }
 
 /** Every table model: search by table, source or column; filter by domain, source, layer and run. */
-export function TableModelsList({ rows, canEdit, filters }: {
+export function TableModelsList({ rows, canEdit, filters, openNew = false }: {
   rows: TmListRow[]; canEdit: boolean;
   filters: { search: string; source: string; layer: string; run: string; domain: string };
+  /** open the New table model modal (?new=1, from "+ New") */
+  openNew?: boolean;
 }) {
   const router = useRouter();
   const pathname = usePathname();
   const params = useSearchParams();
   const toast = useToast();
   const [q, setQ] = useState(filters.search);
-  const [creating, setCreating] = useState(false);
+  const [creating, setCreating] = useState(openNew && canEdit);
+  // "+ New" while already on this tab changes only the query, so follow it after mount too
+  useEffect(() => { if (openNew && canEdit) setCreating(true); }, [openNew, canEdit]);
   const sources = useMemo(() => [...new Set(rows.map((r) => r.source_name))].sort(), [rows]);
   const runName = rows.find((r) => r.origin_run_id === filters.run)?.origin_run_name;
 

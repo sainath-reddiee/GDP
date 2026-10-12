@@ -371,6 +371,9 @@ export function DqStoreView({ tables, initialTable, status, openAdd, canEdit, ca
   const [q, setQ] = useState(initialTable);
   const [modal, setModal] = useState<{ kind: "check"; table: string; check?: DqCheck } | { kind: "schedule"; table: string; cron: string | null } | { kind: "seed" } | null>(
     openAdd && canEdit ? { kind: "check", table: initialTable.split(".").length === 3 ? initialTable.toUpperCase() : "" } : null);
+  useEffect(() => {
+    if (openAdd && canEdit) setModal({ kind: "check", table: initialTable.split(".").length === 3 ? initialTable.toUpperCase() : "" });
+  }, [openAdd, canEdit, initialTable]);
   const term = q.trim().toLowerCase();
   const shown = useMemo(() => tables.filter((t) => !term || t.table.toLowerCase().includes(term)
     || t.columns.some((c) => (c.column ?? "").toLowerCase().includes(term) || c.checks.some((k) => k.soda_dsl.toLowerCase().includes(term)))), [tables, term]);

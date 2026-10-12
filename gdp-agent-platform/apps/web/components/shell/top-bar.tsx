@@ -10,8 +10,7 @@ import { setDomainScope } from "@/app/scope-actions";
 import { RoleSelector } from "@/components/role-selector";
 import { ThemeSegmented, ThemeToggle } from "@/components/theme/theme-toggle";
 import { buildLabel } from "@/lib/build";
-import { allowedBy } from "./nav";
-import { QUICK_ACTIONS } from "./quick-actions";
+import { actableBy, QUICK_ACTION_GROUPS, QUICK_ACTIONS } from "./quick-actions";
 import { useDismiss } from "./use-dismiss";
 
 export type DomainOption = { domain_id: string; domain_name: string };
@@ -74,24 +73,32 @@ function DomainSwitcher({ domains, scope }: { domains: DomainOption[]; scope: st
 
 function NewMenu({ privileges }: { privileges?: string[] | null }) {
   const { open, setOpen, ref } = useDismiss();
-  const allowed = allowedBy(privileges);
+  const allowed = actableBy(privileges);
+  const groups = QUICK_ACTION_GROUPS.map((g) => ({ g, items: QUICK_ACTIONS.filter((a) => a.group === g && allowed(a.privilege)) }))
+    .filter((x) => x.items.length);
+  if (!groups.length) return null;
   return (
     <div ref={ref} className="relative">
-      <button type="button" onClick={() => setOpen(!open)} aria-haspopup="menu" aria-expanded={open}
+      <button type="button" onClick={() => setOpen(!open)} aria-haspopup="menu" aria-expanded={open} data-testid="new-menu"
               className="flex h-9 items-center gap-1.5 rounded-xl bg-primary px-3 text-sm font-medium text-primary-foreground shadow-[0_1px_2px_rgba(17,24,54,0.15),inset_0_1px_0_rgba(255,255,255,0.16)] transition hover:bg-primary/90">
         <Plus className="h-4 w-4" /> <span className="hidden sm:inline">New</span>
       </button>
       {open && (
-        <div role="menu" className="popover absolute right-0 top-11 z-50 w-80 animate-pop-in p-1.5 shadow-pop">
-          {QUICK_ACTIONS.filter((a) => allowed(a.privilege)).map(({ label, hint, href, icon: Icon }) => (
-            <Link key={href} href={href} role="menuitem" onClick={() => setOpen(false)}
-                  className="flex items-start gap-3 rounded-lg p-2.5 transition hover:bg-muted">
-              <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-primary/10 text-primary"><Icon className="h-4 w-4" /></span>
-              <span className="min-w-0">
-                <span className="block text-sm font-medium">{label}</span>
-                <span className="block text-xs text-muted-foreground">{hint}</span>
-              </span>
-            </Link>
+        <div role="menu" className="popover absolute right-0 top-11 z-50 max-h-[calc(100vh-5rem)] w-[340px] animate-pop-in overflow-y-auto p-1.5 shadow-pop">
+          {groups.map(({ g, items }, n) => (
+            <div key={g} role="group" aria-label={g} className={cn(n > 0 && "mt-1 border-t border-border/70 pt-1")}>
+              <p className="px-2.5 pb-0.5 pt-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">{g}</p>
+              {items.map(({ label, hint, href, icon: Icon }) => (
+                <Link key={href} href={href} role="menuitem" onClick={() => setOpen(false)}
+                      className="flex items-start gap-3 rounded-lg px-2.5 py-2 transition hover:bg-muted">
+                  <span className="grid h-7 w-7 shrink-0 place-items-center rounded-lg bg-primary/10 text-primary"><Icon className="h-3.5 w-3.5" /></span>
+                  <span className="min-w-0">
+                    <span className="block text-sm font-medium">{label}</span>
+                    <span className="block text-xs text-muted-foreground">{hint}</span>
+                  </span>
+                </Link>
+              ))}
+            </div>
           ))}
         </div>
       )}

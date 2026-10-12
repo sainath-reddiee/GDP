@@ -71,13 +71,15 @@ const STORE_TONE = {
 
 /** One asset store: what it holds, what needs action, and one task to start. The whole card opens the store (an
  *  overlay link, so the action button inside stays a separate, valid link). */
-export function StoreCard({ title, subtitle, icon: Icon, tone, href, metrics, meter, alert, action, missing, testId }: {
+export function StoreCard({ title, subtitle, icon: Icon, tone, href, metrics, meter, alert, action, missing, testId, note }: {
   title: string; subtitle: string; icon: LucideIcon; tone: keyof typeof STORE_TONE; href: string;
   metrics: { label: string; value: ReactNode; tone?: string }[];
   meter?: { label: string; value: number | null | undefined; tone?: "auto" | "primary" };
   alert?: { text: string; tone: "amber" | "rose" | "violet" } | null;
   action: { label: string; href: string; icon: LucideIcon };
   missing?: boolean; testId?: string;
+  /** one quiet line under the metrics (secondary counts) */
+  note?: string;
 }) {
   const ActionIcon = action.icon;
   return (
@@ -97,7 +99,7 @@ export function StoreCard({ title, subtitle, icon: Icon, tone, href, metrics, me
       {missing ? (
         <p className="pointer-events-none relative mt-5 text-sm text-muted-foreground">Not deployed in this environment yet.</p>
       ) : (
-        <div className="pointer-events-none relative mt-5 grid grid-cols-3 gap-3">
+        <div className={cn("pointer-events-none relative mt-5 grid gap-3", metrics.length === 4 ? "grid-cols-4" : "grid-cols-3")}>
           {metrics.map((m) => (
             <div key={m.label} className="min-w-0">
               <p className={cn("text-2xl font-semibold leading-none tabular-nums", m.tone)}>{m.value}</p>
@@ -106,6 +108,7 @@ export function StoreCard({ title, subtitle, icon: Icon, tone, href, metrics, me
           ))}
         </div>
       )}
+      {note && !missing && <p className="pointer-events-none relative mt-3 text-[11px] text-muted-foreground">{note}</p>}
       {meter && !missing && (
         <div className="pointer-events-none relative mt-4 space-y-1.5">
           <div className="flex justify-between text-xs text-muted-foreground">

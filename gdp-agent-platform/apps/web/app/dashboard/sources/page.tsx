@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { CloudCog, Database, Plus, Share2, TableProperties, TriangleAlert, Workflow } from "lucide-react";
+import { CloudCog, Database, Plus, TableProperties, TriangleAlert, Workflow } from "lucide-react";
 import { api } from "@/lib/api";
 import type { IngestionControl, Pipeline } from "@/lib/hub-types";
 import type { Overview } from "@/lib/store-types";
@@ -16,7 +16,7 @@ import { IngestionTable } from "./ingestion-table";
 const n = (v: number | null | undefined) => (v == null ? "-" : v.toLocaleString());
 
 /** The Source Store: what is connected, what has landed and whether it is fresh. Profiles live in the Profiling Store. */
-export default async function SourceHub({ searchParams }: { searchParams: { db?: string; schema?: string; mode?: string; domain?: string } }) {
+export default async function SourceHub({ searchParams }: { searchParams: { db?: string; schema?: string; mode?: string; connect?: string; domain?: string } }) {
   const domain = scopedDomain(searchParams.domain);
   const [pipes, overview, control] = await Promise.all([
     api<{ pipelines: Pipeline[]; deployed: boolean }>("/api/hub/pipelines").catch(() => ({ pipelines: [] as Pipeline[], deployed: false })),
@@ -32,14 +32,11 @@ export default async function SourceHub({ searchParams }: { searchParams: { db?:
     <div className="space-y-6">
       <PageHeader eyebrow="Asset store" title="Source Store"
                   description="Every source the platform reads: Snowflake shares and databases explored in place, and external systems landed into Snowflake through ingestion pipelines. See what is connected, what has landed and whether it is fresh."
-                  actions={<>
-                    <Link href="/dashboard/onboarding?type=source&branch=external" className={buttonVariants({ variant: "outline" })}><CloudCog className="h-4 w-4" /> Register external source</Link>
-                    <Link href="/dashboard/onboarding?type=source&branch=share" className={buttonVariants()}><Share2 className="h-4 w-4" /> Onboard a share</Link>
-                  </>} />
+                  actions={<Link href="/dashboard/onboarding?type=source" className={buttonVariants()}><Plus className="h-4 w-4" /> Onboard source</Link>} />
       <StoreNav current="sources" domain={searchParams.domain} />
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4" data-testid="source-kpis">
         <Kpi label="Sources connected" value={n(src?.total)} icon={Database} tone="blue"
-             hint={src ? `${n(src.shares)} shares · ${n(src.databases)} databases · ${n(src.external)} external` : "source registry not available"} />
+             hint={src ? [`${n(src.shares)} shares`, `${n(src.databases)} databases`, src.other ? `${n(src.other)} files and other systems` : null, `${n(src.external)} pipelines`].filter(Boolean).join(" · ") : "source registry not available"} />
         <Kpi label="Ingestion pipelines" value={`${active} / ${registered.length}`} icon={Workflow} tone="emerald"
              hint={registered.length ? `active of registered${registered.length - active ? ` · ${registered.length - active} not loading yet` : ""}` : "none registered yet"} />
         <Kpi label="Landed tables" value={n(fresh?.tables)} icon={TableProperties} tone="violet"
@@ -55,7 +52,7 @@ export default async function SourceHub({ searchParams }: { searchParams: { db?:
                 : <IngestionTable controls={control.controls} />}
             </Panel>
             <Panel title="Ingestion pipelines" icon={Workflow}
-                   action={<Link href="/dashboard/onboarding?type=source&branch=external" className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline"><Plus className="h-3.5 w-3.5" /> Register</Link>}>
+                   action={<Link href="/dashboard/onboarding?type=source&branch=external" className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline"><Plus className="h-3.5 w-3.5" /> External pipeline</Link>}>
               {!pipes.deployed ? <NotDeployed what="The ingestion pipeline catalog" /> : <PipelineTable pipelines={pipes.pipelines} />}
             </Panel>
           </>} />

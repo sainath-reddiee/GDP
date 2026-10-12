@@ -11,6 +11,12 @@ MAX_RUNS = 200
 # Same set the run pages treat as "needs review" (apps/web/lib/run-insights.ts REVIEW_STATES).
 REVIEW_STATES = ("MAPPING_REVIEW", "STTM_REVIEW", "SODA_REVIEW", "DBT_REVIEW", "VALIDATION_FAILED")
 _REVIEW_SQL = ", ".join(f"'{s}'" for s in REVIEW_STATES)
+# The runs every dashboard count is over (alias R = CORE.WORKFLOW_RUN): the run list's default population, so a count
+# on the Command Center equals the length of the list its link opens.
+RUN_POPULATION = "R.DELETED_AT IS NULL AND NOT COALESCE(R.IS_ARCHIVED, FALSE) AND R.ENVIRONMENT <> 'TEST'"
+# "In flight" (the run list's ?status=running): started and not finished; drafts (CREATED) are counted apart.
+IN_FLIGHT_SQL = "R.CURRENT_STATE NOT IN ('CREATED', 'COMPLETED', 'FAILED', 'CANCELLED')"
+REVIEW_SQL = f"R.CURRENT_STATE IN ({_REVIEW_SQL})"
 MAX_AUDIT = 500
 COST_GROUPS = {
     "stage": "C.STAGE",

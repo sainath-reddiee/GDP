@@ -56,16 +56,21 @@ function Tile({ icon: Icon, title, body, tag, onClick }: {
   );
 }
 
-export function ConnectSource({ initial, startAtConnectors, onClose, onSnowflake, onOpenSchema }: {
+export type ConnectFocus = "files" | "database";
+
+export function ConnectSource({ initial, startAtConnectors, focus, onClose, onSnowflake, onOpenSchema }: {
   initial?: ManagedSource | null;
   /** open on the list of external connectors instead of "where does the data live?" */
   startAtConnectors?: boolean;
+  /** show only these connectors first (a deep link from "+ New"); the rest stay one click away */
+  focus?: ConnectFocus;
   onClose: () => void;
   onSnowflake: () => void;
   onOpenSchema: (target: { database: string; schema: string }) => void;
 }) {
   useScrollLock();
-  const [step, setStep] = useState<Step>(initial ? "manage" : startAtConnectors ? "connector" : "choose");
+  const [step, setStep] = useState<Step>(initial ? "manage" : startAtConnectors || focus ? "connector" : "choose");
+  const [only, setOnly] = useState<ConnectFocus | null>(focus ?? null);
   const [connectors, setConnectors] = useState<Connector[]>([]);
   const [connector, setConnector] = useState<Connector | null>(null);
   const [name, setName] = useState("");
@@ -186,9 +191,9 @@ export function ConnectSource({ initial, startAtConnectors, onClose, onSnowflake
 
           {step === "connector" && (
             <div className="space-y-4">
-              {[["Files (landed by the platform)", fileConnectors],
-                ["Databases extracted and landed by the platform", extractedConnectors],
-                ["Databases, SaaS and APIs (landed by a Snowflake connector)", otherConnectors]].filter(([, list]) => (list as Connector[]).length).map(
+              {[["Files (landed by the platform)", only === "database" ? [] : fileConnectors],
+                ["Databases extracted and landed by the platform", only === "files" ? [] : extractedConnectors],
+                ["Databases, SaaS and APIs (landed by a Snowflake connector)", only === "files" ? [] : otherConnectors]].filter(([, list]) => (list as Connector[]).length).map(
                 ([title, list]) => (
                   <div key={title as string}>
                     <p className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">{title as string}</p>
@@ -206,6 +211,11 @@ export function ConnectSource({ initial, startAtConnectors, onClose, onSnowflake
                     </div>
                   </div>
                 ),
+              )}
+              {only && (
+                <button type="button" onClick={() => setOnly(null)} className="text-xs font-medium text-primary hover:underline">
+                  Show every connector
+                </button>
               )}
             </div>
           )}

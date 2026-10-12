@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { AppWindow, Boxes, Database, FileUp, Globe, PlugZap, Rocket, Snowflake } from "lucide-react";
+import { AppWindow, Boxes, Database, Rocket } from "lucide-react";
 import { api, whoami } from "@/lib/api";
 import type { CatalogDatabase, LandingDefaults, ShareList } from "@/lib/hub-types";
 import { displayDomain } from "@/lib/catalog-display";
@@ -14,19 +14,13 @@ type DomainRow = { domain_id: string; domain_name: string; active_flag?: boolean
 type Kind = "source" | "domain" | "application";
 
 const KINDS: { kind: Kind; title: string; text: string; icon: typeof Database; soon?: boolean }[] = [
-  { kind: "source", title: "Source", text: "A Snowflake share, a database, files or an external system to land and profile.", icon: Database },
+  { kind: "source", title: "Source", text: "A Snowflake share or database, files, Oracle and other databases, or an external pipeline.", icon: Database },
   { kind: "domain", title: "Domain", text: "A business domain: its pack, contract, target models and knowledge.", icon: Boxes },
   { kind: "application", title: "Application", text: "An upstream application and its data products.", icon: AppWindow, soon: true },
 ];
 
-const CONNECTORS = [
-  { title: "Snowflake database", text: "Browse any database your role can read, profile in place.", icon: Snowflake, href: "/dashboard/sources?mode=snowflake" },
-  { title: "Files and cloud storage", text: "CSV, Parquet or JSON uploads, S3, Azure Blob or GCS.", icon: FileUp, href: "/dashboard/sources?mode=external" },
-  { title: "Oracle and other databases", text: "Guided Oracle connection, or register PostgreSQL, SQL Server, MySQL.", icon: Globe, href: "/dashboard/sources?mode=external" },
-];
-
 /** One place to bring something onto the platform: a source, a domain, or (soon) an application. */
-export default async function Onboarding({ searchParams }: { searchParams: { type?: string; branch?: string } }) {
+export default async function Onboarding({ searchParams }: { searchParams: { type?: string; branch?: string; import?: string } }) {
   const kind: Kind = searchParams.type === "domain" || searchParams.type === "application" ? searchParams.type : "source";
   const { domains } = await api<{ domains: DomainRow[] }>("/api/domains").catch(() => ({ domains: [] as DomainRow[] }));
   const active = domains.filter((d) => d.active_flag !== false);
@@ -48,7 +42,7 @@ export default async function Onboarding({ searchParams }: { searchParams: { typ
         {KINDS.map(({ kind: k, title, text, icon: Icon, soon }) => {
           const on = k === kind;
           return (
-            <Link key={k} href={`/dashboard/onboarding?type=${k}`} aria-current={on ? "page" : undefined} data-testid={`onboard-${k}`}
+            <Link key={k} href={`/dashboard/onboarding?type=${k}`} scroll={false} aria-current={on ? "page" : undefined} data-testid={`onboard-${k}`}
                   className={cn("surface relative flex items-start gap-3 p-4 transition", on ? "border-primary/40 ring-2 ring-primary/15" : "hover:border-primary/25",
                     soon && !on && "border-dashed")}>
               <span className={cn("grid h-10 w-10 shrink-0 place-items-center rounded-xl",
@@ -69,26 +63,16 @@ export default async function Onboarding({ searchParams }: { searchParams: { typ
 
       {kind === "source" && (
         <section className="space-y-5" aria-label="Source onboarding">
-          <OnboardWizard initialBranch={searchParams.branch === "external" ? "external" : "share"} shares={shares}
+          <OnboardWizard key={searchParams.branch ?? "share"} initialBranch={searchParams.branch === "external" ? "external" : "share"} shares={shares}
                          databases={databases} landing={landing} user={me?.user ?? null}
                          domains={active.map((d) => ({ domain_id: d.domain_id, domain_name: d.domain_name }))} />
-          <Panel title="Other ways to connect a source" icon={PlugZap}>
-            <div className="grid gap-3 md:grid-cols-3">
-              {CONNECTORS.map(({ title, text, icon: Icon, href }) => (
-                <Link key={title} href={href} className="flex items-start gap-3 rounded-xl border border-border/80 p-3 transition hover:border-primary/30 hover:bg-accent/40">
-                  <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-muted text-muted-foreground"><Icon className="h-4 w-4" /></span>
-                  <span><span className="block text-sm font-medium">{title}</span><span className="block text-xs text-muted-foreground">{text}</span></span>
-                </Link>
-              ))}
-            </div>
-          </Panel>
         </section>
       )}
 
       {kind === "domain" && (
         <section className="space-y-5" aria-label="Domain onboarding">
           <div className="grid gap-4 lg:grid-cols-2">
-            <DomainImportCard />
+            <DomainImportCard openImport={searchParams.import === "1"} />
             <article className="surface flex flex-col p-6">
               <span className="grid h-11 w-11 place-items-center rounded-2xl bg-violet-100 text-violet-700"><Rocket className="h-5 w-5" /></span>
               <h2 className="mt-4 text-lg font-semibold">No pack yet?</h2>
