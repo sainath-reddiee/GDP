@@ -42,19 +42,25 @@ export function storeFor(path: string) {
 }
 
 /** Store's own badge: the stores that need attention, summed, with each named in the title. */
-function storeBadge(c: NavCounts): NavBadge | null {
-  const parts = STORES.map((s) => ({ s, b: s.badge?.(c) })).filter((x) => x.b && !x.b.tone.includes("white/10"));
-  if (!parts.length) return null;
-  const value = parts.reduce((n, x) => n + (x.b?.value ?? 0), 0);
-  return { value, tone: parts.length === 1 ? parts[0].b!.tone : "bg-amber-400 text-amber-950",
-           title: parts.map((x) => `${x.s.label}: ${x.b!.title}`).join("; ") };
-}
+const storeBadge = (c: NavCounts) => groupBadge(STORES, c);
 
-// Overview, then the six asset stores in one place, then the work around them; a group with no visible links is hidden
-export const NAV_GROUPS: { label: string; links: NavLink[] }[] = [
+/** A sidebar section. Primary sections (the onboard, store and build path) always show their links; the others can be
+ * folded to their header, which then carries the summed badge of its links so nothing waiting is hidden. */
+export type NavGroup = { label: string; links: NavLink[]; secondary?: boolean; defaultOpen?: boolean };
+
+// The lifecycle first: onboard what comes in, the six asset stores it fills, then the runs that build on them. Monitor,
+// Knowledge and Govern follow as foldable sections. A group with no visible links is hidden.
+export const NAV_GROUPS: NavGroup[] = [
   {
     label: "Overview",
     links: [{ href: "/dashboard", label: "Command Center", icon: LayoutDashboard, exact: true }],
+  },
+  {
+    label: "Onboard",
+    links: [
+      { href: "/dashboard/onboarding", label: "Onboarding", icon: Rocket },
+      { href: "/domains", label: "Domains", icon: Boxes },
+    ],
   },
   {
     label: "Asset stores",
@@ -68,13 +74,11 @@ export const NAV_GROUPS: { label: string; links: NavLink[] }[] = [
         badge: (c) => c.review ? { value: c.review, tone: "bg-rose-500 text-white", title: `${c.review} waiting on review` }
           : c.running ? { value: c.running, tone: "bg-white/10 text-white/70", title: `${c.running} running` } : null,
       },
-      { href: "/dashboard/onboarding", label: "Onboarding", icon: Rocket },
-      { href: "/domains", label: "Domains", icon: Boxes },
       { href: "/code", label: "Code", icon: FolderGit2, privilege: "CODE.VIEW" },
     ],
   },
   {
-    label: "Monitor",
+    label: "Monitor", secondary: true, defaultOpen: true,
     links: [
       { href: "/dashboard/quality", label: "Quality center", icon: BadgeCheck },
       {
@@ -89,14 +93,14 @@ export const NAV_GROUPS: { label: string; links: NavLink[] }[] = [
     ],
   },
   {
-    label: "Knowledge",
+    label: "Knowledge", secondary: true,
     links: [
       { href: "/knowledge", label: "Knowledge", icon: BookOpen },
       { href: "/skills", label: "Skills", icon: Sparkles },
     ],
   },
   {
-    label: "Govern",
+    label: "Govern", secondary: true,
     links: [
       {
         href: "/approvals", label: "Approvals", icon: ShieldCheck,
@@ -108,6 +112,15 @@ export const NAV_GROUPS: { label: string; links: NavLink[] }[] = [
     ],
   },
 ];
+
+/** A folded section's badge: its links' badges that need attention (not the grey "in progress" ones), summed. */
+export function groupBadge(links: NavLink[], c: NavCounts): NavBadge | null {
+  const parts = links.map((l) => ({ l, b: l.badge?.(c) })).filter((x) => x.b && !x.b.tone.includes("white/10"));
+  if (!parts.length) return null;
+  return { value: parts.reduce((n, x) => n + (x.b?.value ?? 0), 0),
+           tone: parts.length === 1 ? parts[0].b!.tone : "bg-amber-400 text-amber-950",
+           title: parts.map((x) => `${x.l.label}: ${x.b!.title}`).join("; ") };
+}
 
 /** Every link the caller may open: a list of privileges means any of them, no list means governance is off. */
 export function allowedBy(privileges?: string[] | null) {
