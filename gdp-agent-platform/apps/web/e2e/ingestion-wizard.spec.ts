@@ -75,7 +75,8 @@ test("the wizard checks each step, hides optional fields until asked, and saves 
 });
 
 test("configurations are listed by source in the Source Store, with their history, and can be switched off", async ({ page }) => {
-  await page.goto("/dashboard/sources?mode=external");
+  await page.goto("/dashboard/sources");
+  await expect(page.getByTestId("external-sources")).toBeVisible();
   const table = page.getByTestId("ingestion-table");
   await expect(table.getByTestId("master-1")).toContainText("ERP_ORACLE");
   await expect(table.getByTestId("master-1")).toContainText("2 tables · 2 active");

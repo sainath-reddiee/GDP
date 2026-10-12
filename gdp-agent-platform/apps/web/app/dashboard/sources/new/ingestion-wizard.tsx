@@ -133,7 +133,7 @@ export function IngestionWizard({ domains, user }: { domains: DomainOption[]; us
           {" "}{saved.parent} picks it up on its next run{load.is_active ? "" : " once the rows are switched on"}.
         </p>
         <div className="flex gap-2">
-          <Link href="/dashboard/sources?mode=external" className={buttonVariants()}>Open in the Source Store</Link>
+          <Link href="/dashboard/sources" className={buttonVariants()}>Open in the Source Store</Link>
           <Button variant="outline" onClick={() => { setSaved(null); setStep(0); setTables([{ ...EMPTY_TABLE }]); setPreview([]); }}>Onboard another</Button>
         </div>
       </div>

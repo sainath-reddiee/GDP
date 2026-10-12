@@ -1,14 +1,11 @@
-import Link from "next/link";
-import { CloudCog, Database, Plus, TableProperties, TriangleAlert, Workflow } from "lucide-react";
+import { CloudCog, Database, TableProperties, TriangleAlert, Workflow } from "lucide-react";
 import { api } from "@/lib/api";
 import type { IngestionControl, Pipeline } from "@/lib/hub-types";
 import type { Overview } from "@/lib/store-types";
 import { scopedDomain } from "@/lib/domain-scope";
 import { PageHeader } from "@/components/page-header";
 import { Kpi, Panel } from "@/components/hub/kpi";
-import { NotDeployed } from "@/components/hub/states";
 import { StoreNav } from "@/components/hub/store-nav";
-import { buttonVariants } from "@/components/ui/button";
 import { SourcesSection } from "@/app/sources/sources-section";
 import { PipelineTable } from "./pipeline-table";
 import { IngestionTable } from "./ingestion-table";
@@ -16,7 +13,7 @@ import { IngestionTable } from "./ingestion-table";
 const n = (v: number | null | undefined) => (v == null ? "-" : v.toLocaleString());
 
 /** The Source Store: what is connected, what has landed and whether it is fresh. Profiles live in the Profiling Store. */
-export default async function SourceHub({ searchParams }: { searchParams: { db?: string; schema?: string; mode?: string; connect?: string; domain?: string } }) {
+export default async function SourceHub({ searchParams }: { searchParams: { db?: string; schema?: string; domain?: string } }) {
   const domain = scopedDomain(searchParams.domain);
   const [pipes, overview, control] = await Promise.all([
     api<{ pipelines: Pipeline[]; deployed: boolean }>("/api/hub/pipelines").catch(() => ({ pipelines: [] as Pipeline[], deployed: false })),
@@ -28,11 +25,14 @@ export default async function SourceHub({ searchParams }: { searchParams: { db?:
   const registered = pipes.pipelines.filter((p) => p.status !== "RETIRED");
   const active = registered.filter((p) => p.status === "ACTIVE").length;
   const issues = fresh ? fresh.failed_loads + fresh.stale : null;
+  // External sources appear only once something has been onboarded externally (a SnapLogic configuration or a pipeline)
+  const hasIngestion = control.deployed && control.controls.length > 0;
+  const hasPipelines = pipes.deployed && pipes.pipelines.length > 0;
+  const external = hasIngestion || hasPipelines;
   return (
     <div className="space-y-6">
       <PageHeader eyebrow="Asset store" title="Source Store"
-                  description="Every source the platform reads: Snowflake shares and databases explored in place, and external systems landed into Snowflake through ingestion pipelines. See what is connected, what has landed and whether it is fresh."
-                  actions={<Link href="/dashboard/onboarding?type=source" className={buttonVariants()}><Plus className="h-4 w-4" /> Onboard source</Link>} />
+                  description="Every source the platform reads: Snowflake shares and databases explored in place, and external systems landed into Snowflake through ingestion pipelines. See what is connected, what has landed and whether it is fresh." />
       <StoreNav current="sources" domain={searchParams.domain} />
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4" data-testid="source-kpis">
         <Kpi label="Sources connected" value={n(src?.total)} icon={Database} tone="blue"
@@ -45,16 +45,25 @@ export default async function SourceHub({ searchParams }: { searchParams: { db?:
              hint={fresh ? `${n(fresh.failed_loads)} failed load${fresh.failed_loads === 1 ? "" : "s"} this week · ${n(fresh.stale)} table${fresh.stale === 1 ? "" : "s"} not loaded for 7 days` : "not available"} />
       </div>
       <section className="border-t border-border/70 pt-6">
-        <SourcesSection searchParams={searchParams} pipelineCount={registered.length}
-          pipelines={<>
-            <Panel title="SnapLogic ingestion" icon={CloudCog}>
-              {!control.deployed ? <NotDeployed what="The SnapLogic ingestion control table (PLATFORM_CONFIG.INGESTION_CONTROL_CONFIG, V046)" />
-                : <IngestionTable controls={control.controls} />}
+        <SourcesSection searchParams={searchParams}
+          pipelines={external ? (
+            <Panel title="External sources" icon={CloudCog}>
+              <div className="space-y-6" data-testid="external-sources">
+                {hasIngestion && (
+                  <div className="space-y-2">
+                    <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Ingestion configurations · SnapLogic</p>
+                    <IngestionTable controls={control.controls} />
+                  </div>
+                )}
+                {hasPipelines && (
+                  <div className="space-y-2">
+                    <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Registered pipelines</p>
+                    <PipelineTable pipelines={pipes.pipelines} />
+                  </div>
+                )}
+              </div>
             </Panel>
-            <Panel title="Ingestion pipelines" icon={Workflow}>
-              {!pipes.deployed ? <NotDeployed what="The ingestion pipeline catalog" /> : <PipelineTable pipelines={pipes.pipelines} />}
-            </Panel>
-          </>} />
+          ) : null} />
       </section>
     </div>
   );
