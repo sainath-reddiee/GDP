@@ -1,0 +1,3 @@
+# Docker files are read on Linux; Windows line endings break env values and shell lines
+docker/** text eol=lf
+.dockerignore text eol=lf

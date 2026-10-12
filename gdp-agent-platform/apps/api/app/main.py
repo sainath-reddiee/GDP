@@ -303,9 +303,12 @@ def _snowflake_error(exc: Exception) -> HTTPException:
 
 
 def _api_build() -> Optional[str]:
-    """The git commit the API was started from (None outside a checkout); /bff/version compares it with the web."""
+    """The git commit the API was started from (None outside a checkout); /bff/version compares it with the web.
+    A container image has no checkout, so its build passes the commit in AIP_BUILD_SHA."""
     import subprocess
 
+    if os.environ.get("AIP_BUILD_SHA"):
+        return os.environ["AIP_BUILD_SHA"]
     try:
         out = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=Path(__file__).resolve().parent,
                              capture_output=True, text=True, timeout=5)

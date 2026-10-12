@@ -9,3 +9,8 @@ next-env.d.ts
 test-results/
 playwright-report/
 *.tsbuildinfo
+# Docker deployment: filled settings and the service key never go to git
+docker/.env
+docker/api.env
+docker/secrets/
+apps/web/.env*.local
