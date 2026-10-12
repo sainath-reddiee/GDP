@@ -56,7 +56,7 @@ function Tile({ icon: Icon, title, body, tag, onClick }: {
   );
 }
 
-export type ConnectFocus = "files" | "database";
+export type ConnectFocus = "files";
 
 export function ConnectSource({ initial, startAtConnectors, focus, onClose, onSnowflake, onOpenSchema }: {
   initial?: ManagedSource | null;
@@ -191,7 +191,7 @@ export function ConnectSource({ initial, startAtConnectors, focus, onClose, onSn
 
           {step === "connector" && (
             <div className="space-y-4">
-              {[["Files (landed by the platform)", only === "database" ? [] : fileConnectors],
+              {[["Files (landed by the platform)", fileConnectors],
                 ["Databases extracted and landed by the platform", only === "files" ? [] : extractedConnectors],
                 ["Databases, SaaS and APIs (landed by a Snowflake connector)", only === "files" ? [] : otherConnectors]].filter(([, list]) => (list as Connector[]).length).map(
                 ([title, list]) => (
