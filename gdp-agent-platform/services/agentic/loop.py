@@ -75,7 +75,7 @@ async def run_turn(complete: Complete, call: Call, state: Dict[str, Any]) -> Asy
                 args = validate(tool, _args(c.get("args_json")))
                 if rail.merge(plan, tool.step, "RUNNING"):
                     yield {"type": "plan", "plan": plan}
-                result = await tool.run(call, args)
+                result = await tool.run(call, args, state.get("ctx"))
             except ToolError as exc:
                 scratch.append({"tool": name, "error": str(exc)})
                 yield {"type": "tool", "tool": name, "ok": False, "error": str(exc)}
@@ -102,7 +102,8 @@ async def run_turn(complete: Complete, call: Call, state: Dict[str, Any]) -> Asy
             if out.get("reply"):
                 yield {"type": "reply", "text": str(out["reply"])[:8000]}
             yield {"type": "ask", "question": str(ask["question"])[:1000],
-                   "fields": [f for f in (ask.get("fields") or []) if isinstance(f, dict) and f.get("name")][:8]}
+                   "fields": [f for f in (ask.get("fields") or []) if isinstance(f, dict) and f.get("name")][:8],
+                   "ask_id": f"ask-{len(state.get('events') or [])}"}
             replied = True
             break
         if out.get("reply") and (out.get("done") or not calls):

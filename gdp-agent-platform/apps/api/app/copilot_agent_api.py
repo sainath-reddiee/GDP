@@ -16,7 +16,7 @@ import time
 import uuid
 from typing import Any, AsyncIterator, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
@@ -25,7 +25,7 @@ from app.db import Db
 from app.internal_call import caller
 from app.main import _record_cost, _snowflake_error, current_db
 from app.source_invoke import invoke_source
-from services.agentic import changeset, loop, plan as rail
+from services.agentic import attachments as files, changeset, loop, plan as rail, publish as publisher
 
 router = APIRouter()
 
@@ -33,8 +33,11 @@ SESSIONS = "CORE.COPILOT_SESSION"
 EVENTS = "CORE.COPILOT_EVENT"
 STEPS = "CORE.COPILOT_PLAN_STEP"
 CHANGES = "CORE.COPILOT_CHANGE"
+ATTACHMENTS = "CORE.COPILOT_ATTACHMENT"
+MAX_FILES = 20        # per conversation
 HISTORY = 40          # events read back into the prompt
 STORED_KINDS = {"thought": "THOUGHT", "tool": "TOOL", "ask": "ASK", "reply": "REPLY", "error": "ERROR", "change": "CHANGE"}
+PUBLISH_STATUSES = ("APPLIED", "PENDING_APPROVAL", "FAILED")
 
 
 def _json(value: Any) -> Any:
@@ -136,6 +139,22 @@ def _touch(db: Db, session_id: str, jira_key: Optional[str]) -> None:
                "WHERE SESSION_ID = %s AND CREATED_BY = CURRENT_USER()", (jira_key, session_id))
 
 
+def _attachments(db: Db, session_id: str) -> List[Dict[str, Any]]:
+    rows = db.query(f"""SELECT ATTACHMENT_ID, FILE_NAME, MIME_TYPE, SIZE_BYTES, LENGTH(TEXT_CONTENT) AS CHARS, NOTE,
+                               CREATED_AT::VARCHAR AS CREATED_AT
+                          FROM {ATTACHMENTS} WHERE SESSION_ID = %s AND NOT IS_DELETED AND CREATED_BY = CURRENT_USER()
+                         ORDER BY CREATED_AT""", (session_id,))
+    for r in rows:
+        r["chars"], r["size_bytes"] = int(r.get("chars") or 0), int(r.get("size_bytes") or 0)
+    return rows
+
+
+def _attachment_text(db: Db, session_id: str, attachment_id: str) -> str:
+    found = db.query(f"SELECT TEXT_CONTENT FROM {ATTACHMENTS} WHERE ATTACHMENT_ID = %s AND SESSION_ID = %s "
+                     "AND NOT IS_DELETED AND CREATED_BY = CURRENT_USER()", (attachment_id, session_id))
+    return (found[0].get("text_content") or "") if found else ""
+
+
 def _public_change(c: Dict[str, Any]) -> Dict[str, Any]:
     return {k: c.get(k) for k in ("change_id", "seq", "change_key", "kind", "title", "status", "request_id", "result",
                                   "operations", "updated_at")}
@@ -183,7 +202,8 @@ def get_session(session_id: str, db: Db = Depends(current_db)):
         session = _session(db, session_id)
         changes = _changes(db, session_id)
         return {"session": session, "plan": _plan(db, session_id), "events": _events(db, session_id),
-                "changes": [_public_change(c) for c in changes], "workbench": changeset.tabs(changes)}
+                "changes": [_public_change(c) for c in changes], "workbench": changeset.tabs(changes),
+                "attachments": _attachments(db, session_id)}
     except HTTPException:
         raise
     except Exception as exc:
@@ -201,10 +221,43 @@ def discard_change(session_id: str, change_id: str, db: Db = Depends(current_db)
     return {"change_id": change_id, "status": "DISCARDED"}
 
 
+@router.post("/api/copilot/sessions/{session_id}/attachments")
+async def upload_attachments(session_id: str, files_in: List[UploadFile] = File(..., alias="files"),
+                             db: Db = Depends(current_db)):
+    """Attach files to the conversation. Their text is read now and kept; the files themselves are not stored."""
+    await run_in_threadpool(_session, db, session_id)
+    existing = await run_in_threadpool(_attachments, db, session_id)
+    if len(existing) + len(files_in) > MAX_FILES:
+        raise HTTPException(400, f"A conversation holds at most {MAX_FILES} files.")
+    out = []
+    for f in files_in:
+        data = await f.read(files.MAX_BYTES + 1)
+        text, note = files.extract(f.filename or "file", data)
+        attachment_id = str(uuid.uuid4())
+        await run_in_threadpool(db.execute, f"""INSERT INTO {ATTACHMENTS} (ATTACHMENT_ID, SESSION_ID, FILE_NAME, MIME_TYPE,
+                                                    SIZE_BYTES, TEXT_CONTENT, NOTE) SELECT %s, %s, %s, %s, %s, %s, %s""",
+                                (attachment_id, session_id, (f.filename or "file")[:512], (f.content_type or "")[:256],
+                                 len(data), text, note or None))
+        out.append({"attachment_id": attachment_id, "file_name": f.filename, "size_bytes": len(data),
+                    "chars": len(text), "note": note})
+    return {"attachments": out}
+
+
+@router.post("/api/copilot/sessions/{session_id}/attachments/{attachment_id}/remove")
+def remove_attachment(session_id: str, attachment_id: str, db: Db = Depends(current_db)):
+    _session(db, session_id)
+    if not db.execute_count(f"UPDATE {ATTACHMENTS} SET IS_DELETED = TRUE WHERE ATTACHMENT_ID = %s AND SESSION_ID = %s "
+                            "AND CREATED_BY = CURRENT_USER()", (attachment_id, session_id)):
+        raise HTTPException(404, "attachment not found")
+    return {"attachment_id": attachment_id, "removed": True}
+
+
 class TurnIn(BaseModel):
     message: Optional[str] = Field(default=None, max_length=8000)
     form_answers: Optional[Dict[str, Any]] = None
     change_id: Optional[str] = Field(default=None, max_length=36)   # "Ask revision" scoped to one drafted change
+    jira_keys: List[str] = Field(default_factory=list, max_length=10)
+    attachment_ids: List[str] = Field(default_factory=list, max_length=MAX_FILES)
 
 
 def _sse(event: Dict[str, Any]) -> str:
@@ -221,7 +274,7 @@ async def turn(session_id: str, body: TurnIn, request: Request, db: Db = Depends
         session = _session(db, session_id)
         return {"session": session, "title": session.get("title"), "jira_key": session.get("jira_key"),
                 "plan": _plan(db, session_id), "changes": _changes(db, session_id),
-                "events": _events(db, session_id, HISTORY)}
+                "events": _events(db, session_id, HISTORY), "attachments": _attachments(db, session_id)}
 
     try:
         state = await run_in_threadpool(load)
@@ -238,6 +291,19 @@ async def turn(session_id: str, body: TurnIn, request: Request, db: Db = Depends
         if not target:
             raise HTTPException(404, "drafted change not found")
         user_content["revise"] = {"change_id": target["change_id"], "change_key": target["change_key"], "title": target["title"]}
+    keys = [k.strip().upper() for k in body.jira_keys if k.strip()]
+    if keys:
+        user_content["jira_keys"] = keys
+        state["jira_key"] = state.get("jira_key") or keys[0]
+    named = {a["attachment_id"]: a["file_name"] for a in state["attachments"]}
+    if body.attachment_ids:
+        user_content["attachments"] = [{"attachment_id": a, "file_name": named.get(a)} for a in body.attachment_ids if a in named]
+
+    async def read_attachment(attachment_id: str) -> str:
+        return await run_in_threadpool(_attachment_text, db, session_id, attachment_id)
+
+    state["ctx"] = {"attachments": [{k: a.get(k) for k in ("attachment_id", "file_name", "size_bytes", "chars", "note")}
+                                    for a in state["attachments"]], "read_attachment": read_attachment}
     await run_in_threadpool(_add_event, db, session_id, seq["next"], user_kind, user_content)
     state["events"].append({"kind": user_kind, "content": user_content})
     seq["next"] += 1
@@ -275,6 +341,67 @@ async def turn(session_id: str, body: TurnIn, request: Request, db: Db = Depends
             await run_in_threadpool(_touch, db, session_id, state.get("jira_key"))
         except Exception as exc:  # never leave the browser waiting on a broken stream
             yield _sse({"type": "error", "text": f"The turn stopped: {str(exc)[:500]}"})
+            yield _sse({"type": "done"})
+
+    return StreamingResponse(stream(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "no"})
+
+
+class PublishIn(BaseModel):
+    change_ids: List[str] = Field(default_factory=list, max_length=100)   # empty: every drafted change
+
+
+def _save_result(db: Db, session_id: str, change: Dict[str, Any]) -> None:
+    db.execute(f"""UPDATE {CHANGES} SET STATUS = %s, REQUEST_ID = %s, RESULT = PARSE_JSON(%s), UPDATED_AT = CURRENT_TIMESTAMP()
+                    WHERE CHANGE_ID = %s AND SESSION_ID = %s AND STATUS = 'PROPOSED' AND CREATED_BY = CURRENT_USER()""",
+               (change["status"], change.get("request_id"), json.dumps(change.get("result") or {}, default=str)[:900000],
+                change["change_id"], session_id))
+
+
+@router.post("/api/copilot/sessions/{session_id}/publish")
+async def publish(session_id: str, body: PublishIn, request: Request, db: Db = Depends(current_db)):
+    """Approve and Publish, as a server-sent event stream: each drafted change replayed through the API as the person
+    (start, result, stopped, done). The API decides what applies, what goes to an approver and what is refused."""
+    def load():
+        _session(db, session_id)
+        return _changes(db, session_id), _plan(db, session_id), _events(db, session_id, 1)
+
+    try:
+        changes, plan, last = await run_in_threadpool(load)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise _deployed_or_503(exc) from exc
+    if not [c for c in changes if c["status"] == "PROPOSED" and (not body.change_ids or c["change_id"] in body.change_ids)]:
+        raise HTTPException(409, "There is nothing drafted to publish.")
+    seq = {"next": (last[-1]["seq"] + 1) if last else 1}
+    call = caller(request.headers)
+
+    async def stream() -> AsyncIterator[str]:
+        outcome: List[Dict[str, Any]] = []
+        try:
+            rail.merge(plan, "approval", "DONE", "approved by you", force=True)
+            rail.merge(plan, "publish", "RUNNING", "", force=True)
+            await run_in_threadpool(_save_plan, db, session_id, plan)
+            yield _sse({"type": "plan", "plan": plan})
+            async for event in publisher.run(call, changes, body.change_ids or None):
+                if event["type"] == "result":
+                    change = next(c for c in changes if c["change_id"] == event["change_id"])
+                    await run_in_threadpool(_save_result, db, session_id, change)
+                    outcome.append({k: event.get(k) for k in ("change_id", "title", "kind", "status", "request_id", "detail")})
+                if event["type"] == "done":
+                    failed = any(o["status"] == "FAILED" for o in outcome)
+                    waiting = sum(1 for o in outcome if o["status"] == "PENDING_APPROVAL")
+                    note = "stopped on a failure" if failed else f"{waiting} waiting for approval" if waiting else "published"
+                    rail.merge(plan, "publish", "BLOCKED" if failed else "DONE", note, force=True)
+                    await run_in_threadpool(_save_plan, db, session_id, plan)
+                    await run_in_threadpool(_add_event, db, session_id, seq["next"], "PUBLISH", {"results": outcome})
+                    await run_in_threadpool(_touch, db, session_id, None)
+                    yield _sse({"type": "plan", "plan": plan})
+                    yield _sse({"type": "published", "results": outcome})
+                yield _sse(event)
+        except Exception as exc:
+            yield _sse({"type": "error", "text": f"Publishing stopped: {str(exc)[:500]}"})
             yield _sse({"type": "done"})
 
     return StreamingResponse(stream(), media_type="text/event-stream",

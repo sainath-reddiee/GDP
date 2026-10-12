@@ -5,13 +5,21 @@ import type { DiffFile } from "@/components/diff-view";
 export type StepStatus = "PENDING" | "RUNNING" | "DONE" | "BLOCKED" | "SKIPPED";
 export type PlanStep = { no: number; key: string; title: string; status: StepStatus; note: string };
 
-export type FormField = { name: string; label: string; type: "select" | "text" | "confirm"; options?: string[] };
+export type FormField = {
+  name: string; label: string; type: "select" | "multiselect" | "text" | "textarea" | "number" | "confirm";
+  options?: string[]; default?: string; required?: boolean; help?: string;
+};
 
 export type ChangeKind = "INGESTION" | "MODEL" | "STTM" | "DBT" | "QA" | "DQ" | "GIT" | "JIRA";
 export type ChangeStatus = "PROPOSED" | "APPLIED" | "PENDING_APPROVAL" | "FAILED" | "DISCARDED";
 export type Change = {
   change_id: string; seq: number; change_key: string; kind: ChangeKind; title: string; status: ChangeStatus;
-  request_id?: string | null; result?: unknown; operations?: { method: string; path: string }[]; updated_at?: string;
+  request_id?: string | null; result?: { detail?: string } | null; operations?: { method: string; path: string }[];
+  updated_at?: string;
+};
+
+export type Attachment = {
+  attachment_id: string; file_name: string; size_bytes: number; chars: number; note?: string | null; mime_type?: string;
 };
 
 export type ColumnRow = {
@@ -30,22 +38,25 @@ export type Workbench = {
   quality: (TabBase & { files: DiffFile[] })[];
 };
 
+export type PublishResult = { change_id: string; title: string; kind: ChangeKind; status: ChangeStatus; request_id?: string | null; detail?: string };
+
 /** One stored or streamed chat item. */
 export type ChatItem =
-  | { id: string; kind: "USER"; text: string; revise?: { title: string } }
+  | { id: string; kind: "USER"; text: string; revise?: { title: string }; jira_keys?: string[]; attachments?: { file_name: string }[] }
   | { id: string; kind: "ANSWER"; answers: Record<string, unknown> }
   | { id: string; kind: "THOUGHT"; text: string }
   | { id: string; kind: "TOOL"; tool: string; ok: boolean; error?: string; summary?: unknown }
-  | { id: string; kind: "CHANGE"; title: string; change_kind: ChangeKind }
+  | { id: string; kind: "CHANGE"; title: string; change_kind: ChangeKind; change_id?: string }
   | { id: string; kind: "ASK"; question: string; fields: FormField[] }
   | { id: string; kind: "REPLY"; text: string }
+  | { id: string; kind: "PUBLISH"; results: PublishResult[] }
   | { id: string; kind: "ERROR"; text: string };
 
 export type StoredEvent = { event_id: string; seq: number; kind: string; content: Record<string, unknown> };
 
 export type CopilotSession = {
   session: { session_id: string; title: string; status: string; jira_key?: string | null; updated_at?: string };
-  plan: PlanStep[]; events: StoredEvent[]; changes: Change[]; workbench: Workbench;
+  plan: PlanStep[]; events: StoredEvent[]; changes: Change[]; workbench: Workbench; attachments: Attachment[];
 };
 
 export type SessionRow = {
@@ -59,14 +70,53 @@ export function toItems(events: StoredEvent[]): ChatItem[] {
     const c = (e.content ?? {}) as Record<string, any>;
     const id = e.event_id;
     switch (e.kind) {
-      case "USER": return { id, kind: "USER", text: String(c.text ?? ""), revise: c.revise };
+      case "USER": return { id, kind: "USER", text: String(c.text ?? ""), revise: c.revise, jira_keys: c.jira_keys, attachments: c.attachments };
       case "ANSWER": return { id, kind: "ANSWER", answers: c.answers ?? {} };
       case "THOUGHT": return { id, kind: "THOUGHT", text: String(c.text ?? "") };
       case "TOOL": return { id, kind: "TOOL", tool: String(c.tool ?? ""), ok: !!c.ok, error: c.error, summary: c.summary };
-      case "CHANGE": return { id, kind: "CHANGE", title: String(c.title ?? ""), change_kind: c.kind };
+      case "CHANGE": return { id, kind: "CHANGE", title: String(c.title ?? ""), change_kind: c.kind, change_id: c.change_id };
       case "ASK": return { id, kind: "ASK", question: String(c.question ?? ""), fields: c.fields ?? [] };
+      case "PUBLISH": return { id, kind: "PUBLISH", results: c.results ?? [] };
       case "ERROR": return { id, kind: "ERROR", text: String(c.text ?? "") };
       default: return { id, kind: "REPLY", text: String(c.text ?? "") };
     }
   });
 }
+
+/** Reads one server-sent event stream, calling `on` for each event's JSON payload. */
+export async function readStream(res: Response, on: (e: Record<string, any>) => void) {
+  const reader = res.body?.getReader();
+  if (!reader) return;
+  const decoder = new TextDecoder();
+  let buffer = "";
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let cut: number;
+    while ((cut = buffer.indexOf("\n\n")) >= 0) {
+      const block = buffer.slice(0, cut);
+      buffer = buffer.slice(cut + 2);
+      const data = block.split("\n").filter((l) => l.startsWith("data:")).map((l) => l.slice(5).trim()).join("\n");
+      if (data) {
+        try { on(JSON.parse(data)); } catch { /* a partial or foreign event: skip it */ }
+      }
+    }
+  }
+}
+
+export const KIND_LABEL: Record<ChangeKind, string> = {
+  INGESTION: "Source onboarding", MODEL: "Table model", STTM: "Mapping", DBT: "dbt", QA: "QA pack", DQ: "Data quality",
+  GIT: "Pull request", JIRA: "Jira",
+};
+
+export const TOOL_LABEL: Record<string, string> = {
+  fetch_jira_issue: "Read Jira issue", search_jira: "Searched Jira", list_domains: "Listed domains",
+  fetch_domain_context: "Searched domain knowledge", answer_question: "Asked domain knowledge",
+  inspect_source: "Inspected source schema", find_table_models: "Found table models", get_table_model: "Read table model",
+  update_table_model: "Drafted model change", generate_dbt_models: "Rendered dbt", find_sttm_mappings: "Found mappings",
+  get_sttm_mapping: "Read mapping", generate_sttm_mapping: "Drafted mapping change", register_qa_sql_pack: "Drafted QA queries",
+  register_soda_checks: "Drafted data quality checks", onboard_source_config: "Validated source onboarding",
+  sync_jira_status: "Drafted Jira update", list_attachments: "Listed attachments", read_attachment: "Read attachment",
+  list_runs: "Listed runs", list_ingestion_sources: "Listed ingestion sources", onboarding_requirements: "Loaded onboarding checklist",
+};

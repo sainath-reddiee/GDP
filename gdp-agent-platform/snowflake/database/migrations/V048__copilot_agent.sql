@@ -9,6 +9,9 @@
 --                         Publish under the user's own session, so every privilege and approval rule still applies),
 --                         what it changes (PREVIEW: model, STTM, dbt and QA/DQ diffs) and, once published, the outcome.
 --                         CHANGE_KEY identifies the asset, so a revision replaces the draft for that asset.
+-- CORE.COPILOT_ATTACHMENT a file the person attached to the conversation (requirements, schema files, samples): its
+--                         name, type and size, and the text read from it, which the agent reads with a tool. The file
+--                         itself is not kept.
 --
 -- Rows belong to the person who created them: the row access policy CORE.COPILOT_OWN_ROWS limits every table to the
 -- caller's own rows (platform admins see all), as JIRA.OWN_ROWS does for Jira tokens (V033).
@@ -31,7 +34,7 @@ CREATE TABLE IF NOT EXISTS {{database}}.CORE.COPILOT_EVENT (
     EVENT_ID     VARCHAR(36)   NOT NULL,
     SESSION_ID   VARCHAR(36)   NOT NULL,
     SEQ          NUMBER(10,0)  NOT NULL,
-    KIND         VARCHAR(16)   NOT NULL,                -- USER | ANSWER | THOUGHT | TOOL | CHANGE | ASK | REPLY | ERROR
+    KIND         VARCHAR(16)   NOT NULL,                -- USER | ANSWER | THOUGHT | TOOL | CHANGE | ASK | REPLY | PUBLISH | ERROR
     CONTENT      VARIANT,
     CREATED_BY   VARCHAR(256)  DEFAULT CURRENT_USER(),
     CREATED_AT   TIMESTAMP_LTZ DEFAULT CURRENT_TIMESTAMP(),
@@ -67,22 +70,39 @@ CREATE TABLE IF NOT EXISTS {{database}}.CORE.COPILOT_CHANGE (
     CONSTRAINT PK_COPILOT_CHANGE PRIMARY KEY (CHANGE_ID)
 );
 
+CREATE TABLE IF NOT EXISTS {{database}}.CORE.COPILOT_ATTACHMENT (
+    ATTACHMENT_ID VARCHAR(36)   NOT NULL,
+    SESSION_ID    VARCHAR(36)   NOT NULL,
+    FILE_NAME     VARCHAR(512)  NOT NULL,
+    MIME_TYPE     VARCHAR(256),
+    SIZE_BYTES    NUMBER(12,0),
+    TEXT_CONTENT  VARCHAR(16777216),                    -- extracted text, or empty when the file type cannot be read
+    NOTE          VARCHAR(1000),                        -- why no text was read, or that it was truncated
+    IS_DELETED    BOOLEAN       DEFAULT FALSE,
+    CREATED_BY    VARCHAR(256)  DEFAULT CURRENT_USER(),
+    CREATED_AT    TIMESTAMP_LTZ DEFAULT CURRENT_TIMESTAMP(),
+    CONSTRAINT PK_COPILOT_ATTACHMENT PRIMARY KEY (ATTACHMENT_ID)
+);
+
 GRANT SELECT, INSERT, UPDATE ON TABLE {{database}}.CORE.COPILOT_SESSION TO DATABASE ROLE {{database}}.DATA_ENGINEER;
 GRANT SELECT, INSERT ON TABLE {{database}}.CORE.COPILOT_EVENT TO DATABASE ROLE {{database}}.DATA_ENGINEER;
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE {{database}}.CORE.COPILOT_PLAN_STEP TO DATABASE ROLE {{database}}.DATA_ENGINEER;
 GRANT SELECT, INSERT, UPDATE ON TABLE {{database}}.CORE.COPILOT_CHANGE TO DATABASE ROLE {{database}}.DATA_ENGINEER;
+GRANT SELECT, INSERT, UPDATE ON TABLE {{database}}.CORE.COPILOT_ATTACHMENT TO DATABASE ROLE {{database}}.DATA_ENGINEER;
 GRANT SELECT, INSERT, UPDATE ON TABLE {{database}}.CORE.COPILOT_SESSION TO DATABASE ROLE {{database}}.QA_ENGINEER;
 GRANT SELECT, INSERT ON TABLE {{database}}.CORE.COPILOT_EVENT TO DATABASE ROLE {{database}}.QA_ENGINEER;
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE {{database}}.CORE.COPILOT_PLAN_STEP TO DATABASE ROLE {{database}}.QA_ENGINEER;
 GRANT SELECT, INSERT, UPDATE ON TABLE {{database}}.CORE.COPILOT_CHANGE TO DATABASE ROLE {{database}}.QA_ENGINEER;
+GRANT SELECT, INSERT, UPDATE ON TABLE {{database}}.CORE.COPILOT_ATTACHMENT TO DATABASE ROLE {{database}}.QA_ENGINEER;
 GRANT SELECT ON TABLE {{database}}.CORE.COPILOT_SESSION TO DATABASE ROLE {{database}}.REVIEWER;
 GRANT SELECT ON TABLE {{database}}.CORE.COPILOT_EVENT TO DATABASE ROLE {{database}}.REVIEWER;
 GRANT SELECT ON TABLE {{database}}.CORE.COPILOT_PLAN_STEP TO DATABASE ROLE {{database}}.REVIEWER;
 GRANT SELECT ON TABLE {{database}}.CORE.COPILOT_CHANGE TO DATABASE ROLE {{database}}.REVIEWER;
+GRANT SELECT ON TABLE {{database}}.CORE.COPILOT_ATTACHMENT TO DATABASE ROLE {{database}}.REVIEWER;
 
 CREATE ROW ACCESS POLICY IF NOT EXISTS {{database}}.CORE.COPILOT_OWN_ROWS AS (ROW_USER VARCHAR) RETURNS BOOLEAN ->
     ROW_USER = CURRENT_USER() OR IS_DATABASE_ROLE_IN_SESSION('PLATFORM_ADMIN')
-  COMMENT = 'Copilot sessions, events, plan steps and drafted changes are visible only to the person who created them (and platform admins)';
+  COMMENT = 'Copilot sessions, events, plan steps, drafted changes and attachments are visible only to the person who created them (and platform admins)';
 
 ALTER TABLE {{database}}.CORE.COPILOT_SESSION DROP ALL ROW ACCESS POLICIES;
 ALTER TABLE {{database}}.CORE.COPILOT_SESSION ADD ROW ACCESS POLICY {{database}}.CORE.COPILOT_OWN_ROWS ON (CREATED_BY);
@@ -92,3 +112,5 @@ ALTER TABLE {{database}}.CORE.COPILOT_PLAN_STEP DROP ALL ROW ACCESS POLICIES;
 ALTER TABLE {{database}}.CORE.COPILOT_PLAN_STEP ADD ROW ACCESS POLICY {{database}}.CORE.COPILOT_OWN_ROWS ON (CREATED_BY);
 ALTER TABLE {{database}}.CORE.COPILOT_CHANGE DROP ALL ROW ACCESS POLICIES;
 ALTER TABLE {{database}}.CORE.COPILOT_CHANGE ADD ROW ACCESS POLICY {{database}}.CORE.COPILOT_OWN_ROWS ON (CREATED_BY);
+ALTER TABLE {{database}}.CORE.COPILOT_ATTACHMENT DROP ALL ROW ACCESS POLICIES;
+ALTER TABLE {{database}}.CORE.COPILOT_ATTACHMENT ADD ROW ACCESS POLICY {{database}}.CORE.COPILOT_OWN_ROWS ON (CREATED_BY);

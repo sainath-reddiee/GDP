@@ -1,7 +1,8 @@
 """The copilot's tools: thin adapters over the platform's existing API routes.
 
 Each tool gets `call(method, path, body=None, params=None) -> (status, data)`, an in-process request to the API made
-with the signed-in person's own session, so the API's privilege checks apply to everything a tool reads or tries.
+with the signed-in person's own session, so the API's privilege checks apply to everything a tool reads or tries, and
+`ctx`: the conversation's attachments ({"attachments": [...], "read_attachment": async (id) -> text}).
 Read and draft tools run during a conversation; they only read, render or dry-run. A draft tool returns a *change*:
 the exact calls that would apply it, kept for review and replayed only by Approve and Publish.
 """
@@ -35,7 +36,7 @@ class Tool:
     description: str
     step: str                                   # plan rail step it advances
     args: Dict[str, Dict[str, Any]]             # field -> {type, required, max, desc}
-    run: Callable[[Call, Dict[str, Any]], Awaitable[Dict[str, Any]]] = field(repr=False)
+    run: Callable[..., Awaitable[Dict[str, Any]]] = field(repr=False)   # (call, args, ctx) -> result
     drafts: bool = False                        # produces a change for review
 
 
@@ -94,7 +95,7 @@ def _clip(value: Any, n: int) -> str:
 
 # ---------------------------------------------------------------- read tools
 
-async def fetch_jira_issue(call: Call, a: Dict[str, Any]) -> Dict[str, Any]:
+async def fetch_jira_issue(call: Call, a: Dict[str, Any], ctx: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     key = str(a["key"]).strip().upper()
     if not JIRA_KEY.match(key):
         raise ToolError(f"{key} is not a Jira issue key")
@@ -105,13 +106,13 @@ async def fetch_jira_issue(call: Call, a: Dict[str, Any]) -> Dict[str, Any]:
     return {"summary": {"issue": issue}, "steps": [("intake", "DONE", f"Read {key}")], "jira_key": key}
 
 
-async def list_domains(call: Call, a: Dict[str, Any]) -> Dict[str, Any]:
+async def list_domains(call: Call, a: Dict[str, Any], ctx: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     data = _ok(*await call("GET", "/api/domains"), what="Listing domains")
     rows = data.get("domains") if isinstance(data, dict) else data
     return {"summary": {"domains": [_pick(r, ("domain_id", "domain_name", "description", "active_flag")) for r in (rows or [])][:50]}}
 
 
-async def fetch_domain_context(call: Call, a: Dict[str, Any]) -> Dict[str, Any]:
+async def fetch_domain_context(call: Call, a: Dict[str, Any], ctx: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     body = {"query": a["query"][:2000], "limit": 6, **({"domain": a["domain"]} if a.get("domain") else {})}
     data = _ok(*await call("POST", "/api/knowledge/search", body), what="Knowledge search")
     rows = (data or {}).get("results") if isinstance(data, dict) else data
@@ -120,7 +121,7 @@ async def fetch_domain_context(call: Call, a: Dict[str, Any]) -> Dict[str, Any]:
     return {"summary": {"knowledge": hits}, "steps": [("context", "DONE", f"{len(hits)} knowledge items")]}
 
 
-async def inspect_source(call: Call, a: Dict[str, Any]) -> Dict[str, Any]:
+async def inspect_source(call: Call, a: Dict[str, Any], ctx: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     db, schema = str(a["database"]), str(a["schema"])
     if not (NAME.match(db.strip('"')) and NAME.match(schema.strip('"'))):
         raise ToolError("database and schema must be identifiers")
@@ -133,7 +134,7 @@ async def inspect_source(call: Call, a: Dict[str, Any]) -> Dict[str, Any]:
             "steps": [("context", "DONE", f"{db}.{schema}: {len(tables)} tables")]}
 
 
-async def find_table_models(call: Call, a: Dict[str, Any]) -> Dict[str, Any]:
+async def find_table_models(call: Call, a: Dict[str, Any], ctx: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     params = {k: str(a[k])[:100] for k in ("search", "domain_id") if a.get(k)}
     data = _ok(*await call("GET", "/api/hub/table-models", params=params), what="Listing table models")
     models = [_pick(m, ("table_model_id", "table_name", "source_name", "domain_name", "model_layer", "table_type",
@@ -155,7 +156,7 @@ async def _table_model(call: Call, model_id: str) -> Dict[str, Any]:
     return data
 
 
-async def get_table_model(call: Call, a: Dict[str, Any]) -> Dict[str, Any]:
+async def get_table_model(call: Call, a: Dict[str, Any], ctx: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     data = await _table_model(call, a["table_model_id"])
     entity = _entity(data["current"]["spec"])
     return {"summary": {"model": _pick(data["model"], ("table_model_id", "table_name", "domain_name", "model_layer",
@@ -199,7 +200,7 @@ def _apply_columns(spec: Dict[str, Any], operations: List[Dict[str, Any]]) -> Di
     return spec
 
 
-async def update_table_model(call: Call, a: Dict[str, Any]) -> Dict[str, Any]:
+async def update_table_model(call: Call, a: Dict[str, Any], ctx: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     data = await _table_model(call, a["table_model_id"])
     header, current = data["model"], data["current"]
     model_id = _id(a["table_model_id"], "table_model_id")
@@ -224,7 +225,7 @@ async def update_table_model(call: Call, a: Dict[str, Any]) -> Dict[str, Any]:
             "change": change, "steps": [("model", "DONE", f"{counts}"), ("dryrun", "DONE", "DDL and dbt rendered")]}
 
 
-async def generate_dbt_models(call: Call, a: Dict[str, Any]) -> Dict[str, Any]:
+async def generate_dbt_models(call: Call, a: Dict[str, Any], ctx: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     data = await _table_model(call, a["table_model_id"])
     files = preview.rendered_files(data["current"])
     return {"summary": {"files": {p: _clip(t, 1500) for p, t in list(files.items())[:8]},
@@ -232,7 +233,7 @@ async def generate_dbt_models(call: Call, a: Dict[str, Any]) -> Dict[str, Any]:
             "steps": [("model", "DONE", "")]}
 
 
-async def find_sttm_mappings(call: Call, a: Dict[str, Any]) -> Dict[str, Any]:
+async def find_sttm_mappings(call: Call, a: Dict[str, Any], ctx: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     params = {k: str(a[k])[:200] for k in ("q", "target", "domain") if a.get(k)}
     data = _ok(*await call("GET", "/api/hub/sttm", params=params), what="Listing mappings")
     rows = [_pick(m, ("catalog_id", "version", "target_entity", "source_system", "domain_name", "status", "line_count"))
@@ -248,7 +249,7 @@ async def _mapping(call: Call, catalog_id: str) -> Dict[str, Any]:
 LINE_KEYS = ("target_column", "target_datatype", "mapping_type", "source_table", "source_column", "transformation")
 
 
-async def get_sttm_mapping(call: Call, a: Dict[str, Any]) -> Dict[str, Any]:
+async def get_sttm_mapping(call: Call, a: Dict[str, Any], ctx: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     entry = await _mapping(call, a["catalog_id"])
     return {"summary": {"catalog_id": entry.get("catalog_id"), "version": entry.get("version"),
                         "target_entity": entry.get("target_entity"), "status": entry.get("status"),
@@ -256,7 +257,7 @@ async def get_sttm_mapping(call: Call, a: Dict[str, Any]) -> Dict[str, Any]:
             "steps": [("context", "DONE", "")]}
 
 
-async def generate_sttm_mapping(call: Call, a: Dict[str, Any]) -> Dict[str, Any]:
+async def generate_sttm_mapping(call: Call, a: Dict[str, Any], ctx: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     from services.catalog import sttm as cat_sttm
 
     entry = await _mapping(call, a["catalog_id"])
@@ -300,7 +301,7 @@ async def generate_sttm_mapping(call: Call, a: Dict[str, Any]) -> Dict[str, Any]
             "change": change, "steps": [("sttm", "DONE", f"{len(edits)} edited, {len(add)} added")]}
 
 
-async def register_qa_sql_pack(call: Call, a: Dict[str, Any]) -> Dict[str, Any]:
+async def register_qa_sql_pack(call: Call, a: Dict[str, Any], ctx: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     domain = _id(a["domain_id"], "domain_id")
     queries = []
     for q in a["queries"]:
@@ -346,7 +347,7 @@ async def register_qa_sql_pack(call: Call, a: Dict[str, Any]) -> Dict[str, Any]:
                                         ("dryrun", "BLOCKED" if failed else "DONE", f"{len(failed)} QA queries failed to run" if failed else "QA queries ran")]}
 
 
-async def register_soda_checks(call: Call, a: Dict[str, Any]) -> Dict[str, Any]:
+async def register_soda_checks(call: Call, a: Dict[str, Any], ctx: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     table = str(a["table"])
     if not FQN.match(table) or table.count(".") != 2:
         raise ToolError("table must be DATABASE.SCHEMA.TABLE")
@@ -375,7 +376,7 @@ async def register_soda_checks(call: Call, a: Dict[str, Any]) -> Dict[str, Any]:
             "change": change, "steps": [("quality", "DONE", f"{len(ok)} checks"), ("dryrun", "DONE", "SodaCL parsed")]}
 
 
-async def onboard_source_config(call: Call, a: Dict[str, Any]) -> Dict[str, Any]:
+async def onboard_source_config(call: Call, a: Dict[str, Any], ctx: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     config = {k: a[k] for k in ("source", "target", "load", "snaplogic", "tables", "comments") if a.get(k) is not None}
     data = _ok(*await call("POST", "/api/hub/ingestion-control/validate", config), what="Validating the source")
     if not data.get("valid"):
@@ -393,7 +394,7 @@ async def onboard_source_config(call: Call, a: Dict[str, Any]) -> Dict[str, Any]
             "steps": [("intake", "DONE", f"{name} validated"), ("dryrun", "DONE", "ingestion config validated")]}
 
 
-async def sync_jira_status(call: Call, a: Dict[str, Any]) -> Dict[str, Any]:
+async def sync_jira_status(call: Call, a: Dict[str, Any], ctx: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     key = str(a["key"]).strip().upper()
     if not JIRA_KEY.match(key):
         raise ToolError(f"{key} is not a Jira issue key")
@@ -414,6 +415,104 @@ async def sync_jira_status(call: Call, a: Dict[str, Any]) -> Dict[str, Any]:
     return {"summary": {"drafted": change["title"]}, "change": change}
 
 
+# ---------------------------------------------------------------- conversation context, questions and lookups
+
+async def list_attachments(call: Call, a: Dict[str, Any], ctx: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    return {"summary": {"attachments": (ctx or {}).get("attachments") or []}}
+
+
+async def read_attachment(call: Call, a: Dict[str, Any], ctx: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    files = {f["attachment_id"]: f for f in (ctx or {}).get("attachments") or []}
+    meta = files.get(a["attachment_id"])
+    if not meta or not (ctx or {}).get("read_attachment"):
+        raise ToolError(f"no attachment {a['attachment_id']!r} in this conversation")
+    text = await ctx["read_attachment"](a["attachment_id"])
+    if not text:
+        return {"summary": {"file_name": meta.get("file_name"), "text": "", "note": meta.get("note") or "no text could be read"}}
+    start = max(0, int(a.get("offset") or 0))
+    chunk = text[start:start + 15000]
+    nxt = start + len(chunk)
+    return {"summary": {"file_name": meta.get("file_name"), "offset": start, "text": chunk, "total_chars": len(text),
+                        "next_offset": nxt if nxt < len(text) else None},
+            "steps": [("intake", "DONE", f"read {meta.get('file_name')}")]}
+
+
+async def answer_question(call: Call, a: Dict[str, Any], ctx: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    body = {"question": a["question"][:2000], **({"domain": a["domain"]} if a.get("domain") else {})}
+    data = _ok(*await call("POST", "/api/knowledge/answer", body), what="Answering from domain knowledge")
+    cites = [_pick(c, ("title", "knowledge_id", "domain_name")) if isinstance(c, dict) else c for c in (data.get("citations") or [])]
+    return {"summary": {"answer": _clip(data.get("answer") or "", 6000), "citations": cites[:8]},
+            "steps": [("context", "DONE", "")]}
+
+
+async def search_jira(call: Call, a: Dict[str, Any], ctx: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    params = {"scope": "search", "q": a["q"][:200]} if a.get("q") else {"scope": "mine"}
+    data = _ok(*await call("GET", "/api/jira/issues", params=params), what="Searching Jira")
+    return {"summary": {"issues": [_pick(i, ("key", "summary", "status", "priority", "issue_type", "assignee"))
+                                   for i in (data.get("issues") or [])][:25]}}
+
+
+async def list_runs(call: Call, a: Dict[str, Any], ctx: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    params = {"limit": "20", **({"q": a["q"][:100]} if a.get("q") else {})}
+    data = _ok(*await call("GET", "/api/runs", params=params), what="Listing runs")
+    rows = data.get("runs") if isinstance(data, dict) else data
+    return {"summary": {"runs": [_pick(r, ("run_id", "run_name", "current_state", "domain_name", "updated_at", "status"))
+                                 for r in (rows or [])][:20]}}
+
+
+async def list_ingestion_sources(call: Call, a: Dict[str, Any], ctx: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    params = {"q": a["q"][:100]} if a.get("q") else {}
+    data = _ok(*await call("GET", "/api/hub/ingestion-control", params=params), what="Listing SnapLogic configurations")
+    rows = [_pick(r, ("master_id", "child_id", "source_name", "source_type", "landing_table", "load_frequency", "is_active"))
+            for r in (data.get("controls") or [])][:40]
+    return {"summary": {"configurations": rows, "deployed": data.get("deployed", True)}}
+
+
+def onboarding_catalog() -> Dict[str, Any]:
+    from services.source import ingestion_control as ic
+
+    req, opt = "required", "optional"
+    return {
+        "source": {"source_name": f"{req}: letters, digits and _, starts with a letter",
+                   "source_type": f"{req}: one of {list(ic.SOURCE_TYPES)}",
+                   "source_file_type": f"{opt}: one of {list(ic.FILE_TYPES)} (TABLE for a database)",
+                   "source_sheet_name": "required when source_file_type is XLSX",
+                   "source_account": f"{opt}: the SnapLogic account that connects to the source",
+                   "source_database_path": f"{opt}: database, service name or folder path",
+                   "source_schema_file": f"{opt}: schema name or file pattern"},
+        "target": {"landing_database": f"{req}: Snowflake database", "landing_schema": f"{req}: Snowflake schema",
+                   "bronze_schema": f"{req}: Snowflake schema", "external_stage": f"{opt}: such as @DB.SCHEMA.STAGE/path",
+                   "iceberg": f"{opt}: true for Iceberg landing tables", "external_volume": "required when iceberg is true",
+                   "base_location": f"{opt}: storage path", "config_table": f"{opt}: DB.SCHEMA.TABLE", "target_account": opt},
+        "load": {"load_type": f"{req}: one of {list(ic.LOAD_TYPES)}",
+                 "bronze_load_type": f"{req}: one of {list(ic.BRONZE_LOAD_TYPES)}",
+                 "load_frequency": f"{req}: one of {list(ic.FREQUENCIES)}",
+                 "job_trigger_time": "required unless ON_DEMAND: five cron fields and an optional time zone, such as 0 2 * * * UTC",
+                 "landing_to_bronze_flag": f"{opt}: default true", "is_active": f"{opt}: default true",
+                 "last_run_timestamp": f"{opt}: such as 2026-10-01 02:00"},
+        "snaplogic": {"snaplogic_project_name": req, "parent_pipeline_name": req, "child_pipeline_name": req,
+                      "api_url": f"{opt}: https URL",
+                      "api_key": f"{opt}: the NAME of the secret in the vault, such as vault:snaplogic/ingestion; never a token"},
+        "tables": {"each": {"source_table_sql": f"{req}: a table name or one read-only SELECT",
+                            "source_primary_keys": "required when load_type is SCD2 or bronze_load_type is SCD2 or MERGE: comma separated",
+                            "source_delta_key": f"{opt}: the column incremental loads filter on",
+                            "source_where_clause": f"{opt}: one condition", "source_audit_columns": f"{opt}: comma separated",
+                            "landing_table": f"{opt}: derived from the source name and table when empty",
+                            "bronze_table": f"{opt}: defaults to the landing table",
+                            "target_previous_load_time": f"{opt}: where the first delta load starts",
+                            "source_delete_action": f"{opt}: one of {list(ic.DELETE_ACTIONS)}",
+                            "source_delete_key, source_delete_key_value, source_delete_query": "when deletes are REQUIRED"},
+                   "max": ic.MAX_TABLES},
+        "how_to_ask": "Fill what you can from attachments, Jira and inspect_source; ask the person for the rest in short "
+                      "forms (select fields for the fixed choices above), then call onboard_source_config. Repeat with "
+                      "its errors until it validates.",
+    }
+
+
+async def onboarding_requirements(call: Call, a: Dict[str, Any], ctx: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    return {"summary": onboarding_catalog(), "steps": [("intake", "RUNNING", "collecting source details")]}
+
+
 # ---------------------------------------------------------------- catalog
 
 def _s(required: bool = False, max: int = 0, desc: str = "") -> Dict[str, Any]:
@@ -429,6 +528,19 @@ def _d(desc: str) -> Dict[str, Any]:
 
 
 TOOLS: Dict[str, Tool] = {t.name: t for t in [
+    Tool("list_attachments", "List the files the person attached to this conversation.", "intake", {}, list_attachments),
+    Tool("read_attachment", "Read an attached file's text (15,000 characters at a time; pass next_offset to continue).",
+         "intake", {"attachment_id": _s(True, 36), "offset": {"type": "int", "required": False, "desc": "start character"}},
+         read_attachment),
+    Tool("answer_question", "Answer a question from the platform's domain knowledge, with citations.", "context",
+         {"question": _s(True, 2000), "domain": _s(False, 128)}, answer_question),
+    Tool("search_jira", "Search Jira issues by key or text (empty q lists the person's open issues).", "intake",
+         {"q": _s(False, 200)}, search_jira),
+    Tool("list_runs", "List recent pipeline runs, optionally filtered by text.", "context", {"q": _s(False, 100)}, list_runs),
+    Tool("list_ingestion_sources", "List the SnapLogic ingestion configurations already onboarded.", "context",
+         {"q": _s(False, 100)}, list_ingestion_sources),
+    Tool("onboarding_requirements", "Every field a SnapLogic source onboarding needs, with the allowed choices. Call it "
+         "before asking the person about a new source.", "intake", {}, onboarding_requirements),
     Tool("fetch_jira_issue", "Read a Jira issue (summary, description, recent comments).", "intake",
          {"key": _s(True, 40, "issue key such as GDP-123")}, fetch_jira_issue),
     Tool("list_domains", "List the business domains registered on the platform.", "context", {}, list_domains),
