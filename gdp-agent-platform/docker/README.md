@@ -23,3 +23,27 @@ docker compose -f docker/docker-compose.yml --env-file docker/.env run --rm --no
 
 `AIP_AUTH` is a build argument of the web image as well as a runtime variable, because the sign-in middleware is
 compiled into the build. Rebuild the web image after changing it.
+
+## HTTPS reverse proxy
+
+Put a reverse proxy on the public host name in front of `127.0.0.1:3000`. `docker/nginx.conf.example` is a working
+nginx configuration. Whatever the proxy (nginx, an AWS ALB, Azure Application Gateway, IIS), it needs:
+
+- request bodies up to 200 MB (source files, Copilot attachments, imports);
+- for `/bff/copilot/*`: response buffering off and an idle or read timeout of at least 15 minutes, because the Copilot
+  streams each turn and each publish as server-sent events and a turn can run several minutes (the app already sends
+  `X-Accel-Buffering: no` and `Cache-Control: no-transform`);
+- HTTPS end to end for people: the image runs in production mode, where the sign-in cookie is marked secure, so
+  signing in over plain HTTP does not work.
+
+## Before the first sign-in
+
+1. Deploy the Snowflake objects (above): migrations up to V050, including the Copilot workspace (V048, V049) and the
+   Tickets page's saved views (V050).
+2. In Admin, AI models, pick a model for the COPILOT stage that Cortex offers in the client's region.
+3. Jira (if in scope): the Atlassian OAuth app needs the scopes `read:jira-work`, `write:jira-work`, `read:jira-user`,
+   `offline_access`, `read:board-scope:jira-software`, `read:sprint:jira-software` and `read:project:jira`; set
+   `JIRA_REDIRECT_URI` to `https://<web host>/bff/jira/callback`. Tickets and the Copilot create issues and set sprints
+   with these scopes (the sprint is set through the issue's Sprint field), so no further Jira consent is needed.
+4. Give people the app roles they need: AI.USE for the Copilot, JIRA.READ or CASE.WORK for Tickets, JIRA.WRITE to
+   create tickets and move them to sprints.

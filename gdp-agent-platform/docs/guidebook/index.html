@@ -1009,7 +1009,7 @@ docker compose -f docker/docker-compose.yml --env-file docker/.env pull   # on t
 <pre><code>docker compose -f docker/docker-compose.yml --env-file docker/.env up -d
 docker compose -f docker/docker-compose.yml --env-file docker/.env ps
 docker compose -f docker/docker-compose.yml --env-file docker/.env logs -f --tail=100 api worker</code></pre></li>
-  <li><strong>Put HTTPS in front</strong>: a reverse proxy on the public hostname forwarding to <code>127.0.0.1:3000</code>, allowing request bodies up to 200 MB.</li>
+  <li><strong>Put HTTPS in front</strong>: a reverse proxy on the public hostname forwarding to <code>127.0.0.1:3000</code>, allowing request bodies up to 200 MB. For <code>/bff/copilot/*</code> turn response buffering off and allow at least 15 minutes of idle time: the Copilot streams each turn and publish as server-sent events. <code>docker/nginx.conf.example</code> is a working nginx configuration; any other proxy needs the same settings. Sign-in needs HTTPS (the cookie is secure in production).</li>
 </ol>
 <div class="warn"><strong>Run one API container.</strong> Signed-in sessions and the approval replay key live in the API's memory: do not scale the <code>api</code> service, and expect everyone to sign in again after it is recreated. The worker may run two copies.</div>
 <div class="note"><strong>Changing AIP_AUTH</strong> needs a rebuild of the web image, not only a restart, because the value is compiled into the sign-in middleware.</div>
