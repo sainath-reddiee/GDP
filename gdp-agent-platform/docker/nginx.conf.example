@@ -1,0 +1,42 @@
+# HTTPS reverse proxy in front of the web container (published on 127.0.0.1:3000). Copy into the host's nginx
+# (for example /etc/nginx/conf.d/gdp.conf), set the host name and certificate paths, then: nginx -t && systemctl reload nginx
+
+server {
+    listen 443 ssl http2;
+    server_name <web host>;
+
+    ssl_certificate     /etc/ssl/certs/<web host>.crt;
+    ssl_certificate_key /etc/ssl/private/<web host>.key;
+
+    # uploads: source files, Copilot attachments (10 MB each) and imports
+    client_max_body_size 200m;
+
+    # The Copilot streams each turn and each publish as server-sent events, and a turn can run several minutes.
+    # Buffering would hold the whole reply back until the end, and a short timeout would cut it off.
+    location ~ ^/bff/copilot/ {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 900s;
+        proxy_send_timeout 900s;
+    }
+
+    location / {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_read_timeout 300s;   # long API calls: profiling, deploys, AI suggestions
+    }
+}
+
+server {
+    listen 80;
+    server_name <web host>;
+    return 301 https://$host$request_uri;
+}

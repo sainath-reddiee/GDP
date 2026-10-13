@@ -68,6 +68,11 @@ def clean(f: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
+def as_query(f: Dict[str, Any]) -> Dict[str, Any]:
+    """Checked filters in the page's URL shape (lists as comma text), as saved views store them."""
+    return {k: ",".join(v) if isinstance(v, list) else v for k, v in f.items() if v not in (None, "", [], False)}
+
+
 def _jql_text(value: str) -> str:
     return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
