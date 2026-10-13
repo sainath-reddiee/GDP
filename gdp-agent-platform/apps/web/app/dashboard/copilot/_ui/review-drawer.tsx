@@ -3,12 +3,13 @@
 import { useEffect, useMemo, useState } from "react";
 import { Database, KeyRound, Loader2, ShieldCheck, Trash2 } from "lucide-react";
 import { Drawer } from "@/components/hub/overlay";
+import { ErCanvas } from "@/components/hub/er-canvas";
 import { DiffView, type DiffFile } from "@/components/diff-view";
 import { cn } from "@/lib/utils";
-import { KIND_LABEL, type Change, type ColumnRow, type SttmRow, type Workbench } from "@/lib/copilot-types";
+import { KIND_LABEL, type Change, type ColumnRow, type ModelDiagram, type SttmRow, type Workbench } from "@/lib/copilot-types";
 import { StatusPill } from "./thread";
 
-type Preview = { model?: { entity: string; columns: ColumnRow[]; counts: Record<string, number> }; sttm?: { lines: SttmRow[] }; files: DiffFile[] };
+type Preview = { model?: { entity: string; columns: ColumnRow[]; counts: Record<string, number>; diagram?: ModelDiagram }; sttm?: { lines: SttmRow[] }; files: DiffFile[] };
 
 function previews(workbench: Workbench): Record<string, Preview> {
   const out: Record<string, Preview> = {};
@@ -118,6 +119,7 @@ export function ReviewDrawer({ open, onClose, changes, workbench, focus, onDisca
                   </button>
                 )}
               </div>
+              {p?.model?.diagram && !!p.model.diagram.entities.length && <ModelDiagramView diagram={p.model.diagram} />}
               {p?.model && <ModelPreview entity={p.model.entity} columns={p.model.columns} />}
               {p?.sttm && <SttmPreview lines={p.sttm.lines} />}
               {!!p?.files.length && <DiffView files={p.files} />}
@@ -136,6 +138,24 @@ export function ReviewDrawer({ open, onClose, changes, workbench, focus, onDisca
       </div>
 
     </Drawer>
+  );
+}
+
+/** The change as an ER diagram: added in green, changed in amber, removed struck through. */
+function ModelDiagramView({ diagram }: { diagram: ModelDiagram }) {
+  const [selected, setSelected] = useState<string | null>(null);
+  const removed = useMemo(() => new Set(Object.entries(diagram.highlight.entities).filter(([, m]) => m === "removed").map(([n]) => n)), [diagram]);
+  return (
+    <div className="space-y-1.5" data-testid="copilot-model-diagram">
+      <ErCanvas className="h-[340px]" platform="SNOWFLAKE" entities={diagram.entities} relationships={diagram.relationships}
+                selected={selected} onSelect={setSelected} muted={removed} highlight={diagram.highlight} />
+      <p className="flex flex-wrap items-center gap-3 text-[11px] text-muted-foreground">
+        <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-sm bg-emerald-500/40" /> added</span>
+        <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-sm bg-amber-500/40" /> changed</span>
+        <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-sm bg-red-500/30" /> removed</span>
+        {diagram.hidden > 0 && <span>{diagram.hidden} unchanged entit{diagram.hidden === 1 ? "y" : "ies"} not drawn</span>}
+      </p>
+    </div>
   );
 }
 

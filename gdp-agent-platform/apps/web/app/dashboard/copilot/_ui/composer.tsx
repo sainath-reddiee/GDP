@@ -97,7 +97,7 @@ export function Composer({ value, onChange, onSend, busy, disabled, files, uploa
           {jiraOpen && <JiraPicker root={jiraRoot} draft={value} onPick={(k) => { onAddJira(k); setJiraOpen(false); }} onClose={closeJira} taken={jiraKeys} />}
         </div>
         <span className="ml-2 hidden text-[11px] text-muted-foreground sm:inline">Enter to send · Shift+Enter for a new line</span>
-        <button type="button" onClick={onSend} disabled={!canSend} aria-label="Send"
+        <button type="button" onClick={onSend} disabled={!canSend} aria-label={busy ? "Working" : "Send"} aria-busy={busy}
                 className="ml-auto grid h-8 w-8 place-items-center rounded-full bg-primary text-primary-foreground shadow-sm transition hover:opacity-90 disabled:bg-muted disabled:text-muted-foreground">
           {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowUp className="h-4 w-4" />}
         </button>

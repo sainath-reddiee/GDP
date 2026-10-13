@@ -4,6 +4,7 @@ import { expect, test, type BrowserContext, type Page } from "@playwright/test";
 // The first group needs no AI and writes only the signed-in person's own copilot rows (CORE.COPILOT_*).
 // The "live AI" group calls Cortex and is skipped unless AIP_E2E_LIVE_AI=1; it drafts but never publishes.
 const BASE = process.env.AIP_WEB_URL ?? "http://localhost:3000";
+const API = process.env.AIP_API_URL ?? "http://127.0.0.1:8001";
 const LIVE_AI = process.env.AIP_E2E_LIVE_AI === "1";
 const DQ_TABLE = process.env.AIP_E2E_DQ_TABLE ?? "SNOWFLAKE_SAMPLE_DATA.TPCH_SF1.NATION";
 
@@ -12,13 +13,32 @@ async function devSession(context: BrowserContext) {
 }
 
 test.use({ viewport: { width: 1440, height: 900 } });
-test.beforeEach(async ({ context }) => devSession(context));
+
+// every conversation a test opens is deleted afterwards (its drafts are discarded; nothing was published), so test
+// runs do not fill the person's conversation list. Dev sign-in only: with PAT sign-in the API refuses, and that is ignored.
+const opened = new Set<string>();
+test.beforeEach(async ({ context, page }) => {
+  await devSession(context);
+  opened.clear();
+  page.on("framenavigated", (frame) => {
+    const id = frame.url().match(/\/dashboard\/copilot\/([0-9a-f-]{36})/)?.[1];
+    if (id) opened.add(id);
+  });
+});
+test.afterEach(async ({ request }) => {
+  for (const id of opened) await request.post(`${API}/api/copilot/sessions/${id}/delete`).catch(() => undefined);
+});
 
 async function openHome(page: Page) {
   await page.goto("/dashboard/copilot");
   await expect(page.getByRole("heading", { name: "What should we build?" })).toBeVisible();
   const notReady = page.getByText(/not deployed yet|cannot be reached|needs the AI\.USE privilege/);
   test.skip(await notReady.isVisible(), "the copilot is not usable for this user or environment (see the page message)");
+}
+
+/** Wait until the copilot has finished its turn (the send button stops working). */
+async function turnEnds(page: Page, timeout = 300_000) {
+  await expect(page.getByRole("button", { name: "Working" })).toHaveCount(0, { timeout });
 }
 
 const file = (name: string, text: string, mimeType = "text/plain") => ({ name, mimeType, buffer: Buffer.from(text) });
@@ -158,5 +178,54 @@ test.describe("live AI", () => {
     await page.keyboard.press("Escape");                                             // closes the drawer
     await expect(drawer).toHaveCount(0);
     await expect(thread.getByText("Drafted").first()).toBeVisible();                // still a draft: nothing published
+    await turnEnds(page);
+  });
+
+  test("a question form is answered in place and the conversation carries on", async ({ page }) => {
+    test.setTimeout(480_000);
+    await openHome(page);
+    await page.getByLabel("Message the copilot").fill(
+      "Onboard a new source through SnapLogic. Ask me for the source details in a short form before drafting anything.");
+    await page.getByRole("button", { name: "Send" }).click();
+    const form = page.getByRole("form", { name: "Question from the copilot" }).last();
+    await expect(form).toBeVisible({ timeout: 300_000 });
+    for (const group of await form.getByRole("radiogroup").all()) await group.getByRole("radio").first().click();
+    for (const box of await form.locator("input[type=text], input:not([type]), textarea").all()) {
+      if (!(await box.inputValue())) await box.fill("E2E_TEST");
+    }
+    for (const box of await form.locator("input[type=number]").all()) {
+      if (!(await box.inputValue())) await box.fill("1");
+    }
+    const send = form.getByRole("button", { name: "Send answers" });
+    await expect(send).toBeEnabled();
+    await send.click();
+    await expect(send).toHaveCount(0);                                                 // answered: the form is done
+    await expect(page.getByRole("button", { name: "Working" })).toBeVisible();        // the answers started a turn
+    const thread = page.getByRole("log", { name: "Conversation" });
+    await expect(thread.getByText(/E2E_TEST/).first()).toBeVisible();                  // the answers are in the thread
+    await turnEnds(page);
+    await expect(thread.getByRole("alert")).toHaveCount(0);                            // and it ended without an error
+  });
+
+  test("a domain model change is drawn on the ER diagram in review", async ({ page }) => {
+    test.setTimeout(480_000);
+    await openHome(page);
+    await page.getByLabel("Message the copilot").fill(
+      "List the domain models. For the first one with an approved version, draft adding a nullable VARCHAR column " +
+      "E2E_TIER to its first entity, saved without submitting. Do not ask me anything; draft it.");
+    await page.getByRole("button", { name: "Send" }).click();
+    const thread = page.getByRole("log", { name: "Conversation" });
+    await expect(thread.getByText("Data model", { exact: true }).first()).toBeVisible({ timeout: 360_000 });
+    await page.getByRole("button", { name: /^Review \d+$/ }).click();
+    const drawer = page.getByRole("dialog").filter({ hasText: "Review changes" });
+    const diagram = drawer.getByTestId("copilot-model-diagram");
+    await expect(diagram).toBeVisible();
+    await expect(diagram.locator('[data-mark="added"]').first()).toBeAttached();        // the new column is highlighted
+    await expect(drawer.getByText(/E2E_TIER/).first()).toBeVisible();
+    await drawer.getByText(/What publishing does/).click();
+    await expect(drawer.getByText(/\/api\/hub\/domain-models\/[^/]+\/draft/).first()).toBeVisible();
+    await expect(drawer.getByText(/\/approve/)).toHaveCount(0);                        // the copilot never approves
+    await page.keyboard.press("Escape");
+    await turnEnds(page);
   });
 });

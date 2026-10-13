@@ -1,3 +1,4 @@
+import type { ModelEntity, ModelRelationship } from "@/lib/hub-types";
 import type { DiffFile } from "@/components/diff-view";
 
 /** Copilot workspace (/dashboard/copilot), as served by apps/api/app/copilot_agent_api.py. */
@@ -31,8 +32,14 @@ export type SttmRow = {
   before: Record<string, string | null> | null; after: Record<string, string | null> | null;
 };
 type TabBase = { change_id: string; title: string; kind: ChangeKind };
+export type ChangeMark = "added" | "changed" | "removed";
+/** The model tab's ER diagram: entities after the change (removed columns kept) and what to highlight. */
+export type ModelDiagram = {
+  entities: ModelEntity[]; relationships: ModelRelationship[]; hidden: number;
+  highlight: { entities: Record<string, ChangeMark>; columns: Record<string, ChangeMark> };
+};
 export type Workbench = {
-  model: (TabBase & { entity: string; columns: ColumnRow[]; counts: Record<string, number> })[];
+  model: (TabBase & { entity: string; columns: ColumnRow[]; counts: Record<string, number>; diagram?: ModelDiagram })[];
   sttm: (TabBase & { lines: SttmRow[] })[];
   dbt: (TabBase & { files: DiffFile[] })[];
   quality: (TabBase & { files: DiffFile[] })[];
@@ -111,7 +118,7 @@ export async function readStream(res: Response, on: (e: Record<string, any>) => 
 }
 
 export const KIND_LABEL: Record<ChangeKind, string> = {
-  INGESTION: "Source onboarding", MODEL: "Table model", STTM: "Mapping", DBT: "dbt", QA: "QA pack", DQ: "Data quality",
+  INGESTION: "Source onboarding", MODEL: "Data model", STTM: "Mapping", DBT: "dbt", QA: "QA pack", DQ: "Data quality",
   GIT: "Pull request", JIRA: "Jira",
 };
 
@@ -124,4 +131,7 @@ export const TOOL_LABEL: Record<string, string> = {
   register_soda_checks: "Drafted data quality checks", onboard_source_config: "Validated source onboarding",
   sync_jira_status: "Drafted Jira update", list_attachments: "Listed attachments", read_attachment: "Read attachment",
   list_runs: "Listed runs", list_ingestion_sources: "Listed ingestion sources", onboarding_requirements: "Loaded onboarding checklist",
+  landing_targets: "Read landing targets", find_domain_models: "Found domain models", get_domain_model: "Read domain model",
+  update_domain_model: "Drafted domain model change", create_git_pr: "Drafted pull request", search_code: "Searched the code",
+  code_impact: "Checked code impact",
 };
