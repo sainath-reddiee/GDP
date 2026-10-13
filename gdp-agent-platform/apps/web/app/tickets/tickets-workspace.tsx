@@ -77,7 +77,7 @@ export function TicketsWorkspace({ initial, filters, openNew, access, jira, me, 
               <Plus className="h-3.5 w-3.5" /> New ticket <ChevronDown className="h-3 w-3" />
             </button>
             {menu && (
-              <div role="menu" className="absolute right-0 z-20 mt-1 w-64 rounded-xl border bg-popover p-1 shadow-lg">
+              <div role="menu" className="popover absolute right-0 top-10 z-50 w-72 animate-pop-in p-1.5 shadow-pop">
                 <button type="button" role="menuitem" disabled={!canCreateJira} onClick={() => { setMenu(false); setCreating("jira"); }}
                         title={!canCreateJira ? (connected ? "Needs the JIRA.WRITE privilege" : "Connect your Jira account first") : undefined}
                         className="flex w-full items-start gap-2 rounded-lg px-2.5 py-2 text-left text-sm hover:bg-muted disabled:opacity-50">
