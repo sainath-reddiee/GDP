@@ -98,7 +98,9 @@ def test_dq_checks_accumulate_and_map_severities():
     first = run(tools.register_soda_checks(api, {"table": "DB.S.T", "checks": [{"column": "A", "dsl": "missing_count(A) = 0", "severity": "ERROR"}]}, ctx))
     ctx["changes"].append(first["change"])
     second = run(tools.register_soda_checks(api, {"table": "DB.S.T", "checks": [{"column": "B", "dsl": "missing_count(B) = 0"}]}, ctx))
-    bodies = [op["body"] for op in second["change"]["operations"]]
+    ops = second["change"]["operations"]
+    assert ops[-1]["path"] == "/api/dq/suites/submit" and sum(o["path"] == "/api/dq/suites/submit" for o in ops) == 1
+    bodies = [op["body"] for op in ops if op["path"] == "/api/dq/catalog"]
     assert [b["column"] for b in bodies] == ["A", "B"] and bodies[0]["severity"] == "FAIL"
     assert all("_headline" not in b for b in bodies)
 

@@ -203,6 +203,34 @@ def identity(db: Db) -> dict:
 
 # ---------------------------------------------------------------- middleware
 
+def decide_call(db: Db, who: dict, method: str, path: str, privilege: str) -> tuple:
+    """(verdict ALLOW | REQUEST | FORBID, reason, policy) for one call by `who`, exactly as the middleware decides it."""
+    if not settings(db).get("ENFORCE", True):
+        return "ALLOW", "", None
+    policy = policies(db).get(privilege)
+    store = store_queue(method, path) and bool(settings(db).get("STORE_EDITS_REQUIRE_APPROVAL", True))
+    if store:
+        policy = store_policy(privilege, policy)
+    verdict, reason = decide(privilege, set(who["privileges"]), policy)
+    if verdict == "REQUEST" and no_queue(method, path):
+        holds = privilege in who["privileges"] or "*" in who["privileges"]
+        verdict, reason = ("ALLOW", "") if holds else ("FORBID", f"needs the {privilege} privilege; this action "
+                                                                     "has its own review and is never queued")
+    return verdict, reason, policy
+
+
+def preview_call(db: Db, method: str, path: str, body: Any = None) -> dict:
+    """What would happen to this call for the signed-in person, without making it: {verdict, reason, privilege,
+    approver_role}. Read only; ALLOW when governance is not deployed (as the middleware lets it through)."""
+    privilege, _, _ = privilege_for(method, path, body if isinstance(body, dict) else None)
+    out = {"verdict": "ALLOW", "reason": "", "privilege": privilege, "approver_role": None}
+    if not privilege or not ready(db):
+        return out
+    verdict, reason, policy = decide_call(db, identity(db), method, path, privilege)
+    out.update(verdict=verdict, reason=reason, approver_role=(policy or {}).get("approver_role") if verdict == "REQUEST" else None)
+    return out
+
+
 def _db_for(headers) -> Optional[Db]:
     try:
         return dev_db() if AUTH_MODE == "dev" else lookup_session(headers.get("x-aip-session"))
@@ -248,17 +276,7 @@ async def middleware(request: Request, call_next):
         return await call_next(request)  # signed-out callers get the handler's own 401; before V020 nothing is enforced
     try:
         who = await run_in_threadpool(identity, db)
-        if not settings(db).get("ENFORCE", True):
-            return await call_next(request)
-        policy = policies(db).get(privilege)
-        store = store_queue(method, path) and bool(settings(db).get("STORE_EDITS_REQUIRE_APPROVAL", True))
-        if store:
-            policy = store_policy(privilege, policy)
-        verdict, reason = decide(privilege, set(who["privileges"]), policy)
-        if verdict == "REQUEST" and no_queue(method, path):
-            holds = privilege in who["privileges"] or "*" in who["privileges"]
-            verdict, reason = ("ALLOW", "") if holds else ("FORBID", f"needs the {privilege} privilege; this action "
-                                                                         "has its own review and is never queued")
+        verdict, reason, policy = await run_in_threadpool(decide_call, db, who, method, path, privilege)
     except Exception:
         return await call_next(request)
     if verdict == "ALLOW":

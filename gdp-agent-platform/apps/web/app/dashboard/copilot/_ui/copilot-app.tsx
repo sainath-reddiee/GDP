@@ -378,7 +378,7 @@ export function CopilotApp({ sessions: initialSessions, initial, disabled }: {
         <div className="-m-5 h-[calc(100%+2.5rem)]">{inspector}</div>
       </Drawer>
 
-      <ReviewDrawer open={review.open} focus={review.focus} onClose={() => !publishing && setReview({ open: false })}
+      <ReviewDrawer sessionId={sessionId} open={review.open} focus={review.focus} onClose={() => !publishing && setReview({ open: false })}
                     changes={changes} workbench={workbench} onDiscard={(id) => void discard(id)} busy={busy}
                     onPublish={(ids) => void publish(ids)} publishing={publishing} progress={progress} />
     </div>

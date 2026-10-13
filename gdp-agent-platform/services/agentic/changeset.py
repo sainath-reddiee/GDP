@@ -68,7 +68,7 @@ def tabs(changes: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
             out["model"].append({**base, **p["model"]})
         if p.get("sttm"):
             out["sttm"].append({**base, **p["sttm"]})
-        if p.get("files"):
+        if p.get("files") or p.get("queries"):
             tab = "quality" if c["kind"] in ("QA", "DQ") else "dbt"
-            out[tab].append({**base, "files": p["files"]})
+            out[tab].append({**base, "files": p.get("files") or [], **({"queries": p["queries"]} if p.get("queries") else {})})
     return out

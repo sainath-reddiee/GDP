@@ -53,8 +53,8 @@ def test_soda_checks_are_parsed_and_drafted_per_check():
         {"column": "LOYALTY_TIER", "dsl": "missing_count(LOYALTY_TIER) = 0", "severity": "FAIL"},
         {"column": "X", "dsl": "bad check"}]}))
     change = out["change"]
-    assert change["kind"] == "DQ" and len(change["operations"]) == 1
-    assert change["operations"][0]["path"] == "/api/dq/catalog"
+    assert change["kind"] == "DQ" and [o["path"] for o in change["operations"]] == ["/api/dq/catalog", "/api/dq/suites/submit"]
+    assert change["operations"][1]["body"]["table"] == "DB.SILVER.DIM_CUSTOMER"   # then the suite goes to a DQ approver
     assert out["summary"]["rejected"][0]["problems"] == ["unknown check"]
     assert all(m == "POST" and p == "/api/dq/parse" for m, p, _ in api.calls)   # nothing was saved
 

@@ -130,9 +130,40 @@ async def inspect_source(call: Call, a: Dict[str, Any], ctx: Optional[Dict[str, 
                what=f"Reading {db}.{schema}")
     tables = [_pick(t, ("table_name", "name", "row_count", "status", "column_count", "pii_columns"))
               for t in (data.get("tables") or [])][:60]
-    return {"summary": {"database": db, "schema": schema, "tables": tables,
-                        "domain_candidates": (data.get("domain_candidates") or [])[:3]},
-            "steps": [("context", "DONE", f"{db}.{schema}: {len(tables)} tables")]}
+    out: Dict[str, Any] = {"database": db, "schema": schema, "tables": tables,
+                           "domain_candidates": (data.get("domain_candidates") or [])[:3]}
+    if a.get("table"):
+        table = str(a["table"]).strip()
+        if not NAME.match(table.strip('"')):
+            raise ToolError(f"{table!r} is not a table name")
+        out["profile"] = await _column_profile(call, db, schema, table)
+    return {"summary": out, "steps": [("context", "DONE", f"{db}.{schema}: {len(tables)} tables"
+                                                       + (f", {a['table']} profiled" if a.get("table") else ""))]}
+
+
+PROFILE_STATS = ("null_count", "null_percentage", "distinct_count", "distinct_percentage", "min", "max", "mean",
+                 "min_length", "max_length", "row_count")
+
+
+async def _column_profile(call: Call, db: str, schema: str, table: str) -> Dict[str, Any]:
+    """One table's staged profile: per column its type, nulls, distinct values and range, with the suggested checks
+    and the scorecard. A table that was never profiled says so (profile it from the Profiling store)."""
+    status, data = await call("GET", "/api/catalog/profile", params={"database": db, "schema": schema, "table": table})
+    if status == 404:
+        return {"table": table, "profiled": False,
+                "note": _clip((data or {}).get("detail") if isinstance(data, dict) else data, 300)}
+    data = _ok(status, data, f"Reading the profile of {table}")
+    doc = data.get("profile") or {}
+    columns = []
+    for c in (doc.get("columns") or [])[:150]:
+        stats = c.get("statistics") or {}
+        columns.append({"name": c.get("name") or c.get("column_name"), "datatype": c.get("data_type") or c.get("datatype"),
+                        **{k: stats[k] for k in PROFILE_STATS if stats.get(k) not in (None, "")},
+                        **({"semantic_type": c["semantic_type"]} if c.get("semantic_type") else {})})
+    return {"table": table, "profiled": True, "row_count": doc.get("row_count"), "columns": columns,
+            "scorecard": _pick(data.get("scorecard") or {}, ("score", "grade", "dimensions")),
+            "suggested_checks": [_pick(k, ("check", "column", "reason")) for k in (data.get("checks") or [])][:30],
+            "drift": (data.get("drift") or {}).get("summary") if isinstance(data.get("drift"), dict) else None}
 
 
 async def find_table_models(call: Call, a: Dict[str, Any], ctx: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -392,7 +423,8 @@ async def register_qa_sql_pack(call: Call, a: Dict[str, Any], ctx: Optional[Dict
     if prior:  # keep the queries drafted earlier for this pack
         earlier = {q["query_name"]: q for q in prior["operations"][0]["body"].get("queries") or []}
         queries = list({**earlier, **{q["query_name"]: q for q in queries}}.values())
-    old: Dict[str, str] = {}
+    old_names: Dict[str, bool] = {}
+    existing: Dict[str, Dict[str, Any]] = {}
     body: Dict[str, Any] = {"name": str(a.get("name") or "Copilot QA pack")[:128], "queries": queries,
                             "change_note": (a.get("change_note") or "Copilot draft")[:2000]}
     if a.get("pack_id"):
@@ -400,7 +432,7 @@ async def register_qa_sql_pack(call: Call, a: Dict[str, Any], ctx: Optional[Dict
         found = _ok(*await call("GET", f"/api/qa-packs/{pack_id}"), what="Reading the QA pack")
         pack = found.get("pack") or {}
         existing = {str(q.get("query_name")): q for q in found.get("queries") or []}
-        old = {f"{n}.sql": str(q.get("sql_expression") or "") for n, q in existing.items()}
+        old_names = {n: True for n in existing}
         keep = ("query_name", "sql_expression", "description", "severity", "expectation", "tags")
         merged = {**{n: {k: q.get(k) for k in keep} for n, q in existing.items()},
                   **{q["query_name"]: {**{k: existing.get(q["query_name"], {}).get(k) for k in ("tags",)}, **q} for q in queries}}
@@ -413,9 +445,25 @@ async def register_qa_sql_pack(call: Call, a: Dict[str, Any], ctx: Optional[Dict
     else:
         ops = [{"method": "POST", "path": f"/api/domains/{domain}/qa-packs", "body": body},
                {"method": "POST", "path": "/api/qa-packs/{op0.pack_id}/submit", "body": {"note": body["change_note"]}}]
-    new = {**old, **{f"{q['query_name']}.sql": q["sql_expression"] for q in queries}}
+    from services.qa.pack_files import render as render_pack
+
+    keep = ("query_name", "sql_expression", "description", "severity", "expectation", "tags")
+    after = {str(q["query_name"]): {k: q.get(k) for k in keep} for q in body["queries"]}
+    before_pack = {"name": body["name"], "description": body.get("description"), "tags": body.get("tags") or [],
+                   "queries": [{k: q.get(k) for k in keep} for q in existing.values()]} if a.get("pack_id") else None
+    after_pack = {"name": body["name"], "description": body.get("description"), "tags": body.get("tags") or [],
+                  "queries": list(after.values())}
+    file_name = f"qa/{re.sub(r'[^a-z0-9]+', '_', body['name'].lower()).strip('_') or 'pack'}.sql"
+    ran = {d["query_name"]: d for d in dry}
+    shown = [{"query_name": n, "sql": q["sql_expression"], "severity": q.get("severity"),
+              "description": q.get("description"), "expectation": q.get("expectation"),
+              "dry_run": {k: v for k, v in ran.get(n, {}).items() if k != "query_name"} or None,
+              "state": "added" if n not in {**old_names} else "changed"}
+             for n, q in after.items() if n in {q2["query_name"] for q2 in queries}]
     change = changeset.make(prior_key, "QA", f"QA pack {body['name']}: {len(queries)} quer{'y' if len(queries) == 1 else 'ies'}",
-                            ops, {"files": preview.files_diff(old, new)})
+                            ops, {"files": [preview.file_diff(file_name, render_pack(before_pack) if before_pack else None,
+                                                              render_pack(after_pack))],
+                                  "queries": shown})
     failed = [d for d in dry if not d["ok"]]
     return {"summary": {"drafted": change["title"], "dry_run": dry,
                         "publishing": "submitted for approval by a QA lead (four eyes)",
@@ -458,18 +506,25 @@ async def register_soda_checks(call: Call, a: Dict[str, Any], ctx: Optional[Dict
     key = f"DQ:{table.upper()}"
     prior = _open_change(ctx, key)
     if prior:  # keep the checks drafted earlier for this table (same column and check: the newer one wins)
-        earlier = [op["body"] for op in prior["operations"]]
+        earlier = [op["body"] for op in prior["operations"] if op.get("path") == "/api/dq/catalog"]
         seen = {(str(b.get("column") or "").upper(), b["dsl"]) for b in ok}
         ok = [b for b in earlier if (str(b.get("column") or "").upper(), b["dsl"]) not in seen] + ok
     lines = [f"- {b['dsl']}    # {b.get('column') or 'table'}, {b['severity']}{': ' + b['_headline'] if b.get('_headline') else ''}" for b in ok]
     bodies = [{k: v for k, v in b.items() if k != "_headline"} for b in ok]
     name = table.split(".")[-1].lower()
+    submit = a.get("submit", True)
+    ops = [{"method": "POST", "path": "/api/dq/catalog", "body": b} for b in bodies]
+    if submit:   # then the suite draft goes to a DQ approver, as Submit does in the Quality center
+        ops.append({"method": "POST", "path": "/api/dq/suites/submit",
+                    "body": {"table": table, "note": str(a.get("note") or "Copilot draft")[:2000]}})
     change = changeset.make(
-        key, "DQ", f"Data quality checks on {table}: {len(bodies)} added",
-        [{"method": "POST", "path": "/api/dq/catalog", "body": b} for b in bodies],
+        key, "DQ", f"Data quality checks on {table}: {len(bodies)} added" + ("" if submit else " (not submitted)"),
+        ops,
         {"files": [preview.file_diff(f"checks/{name}.yml", None, f"checks for {table}:\n" + "\n".join(lines) + "\n")]})
     return {"summary": {"drafted": change["title"], "rejected": problems, "built_on_earlier_draft": bool(prior),
-                        "publishing": "added to the table's suite draft; a DQ approver approves the suite"},
+                        "saved_now": False,
+                        "on_approve_and_publish": "added to the table's suite draft, then the suite is submitted to a DQ approver"
+                                                  if submit else "added to the table's suite draft, not submitted"},
             "change": change, "steps": [("quality", "DONE", f"{len(bodies)} checks"), ("dryrun", "DONE", "SodaCL parsed")]}
 
 
@@ -848,8 +903,10 @@ TOOLS: Dict[str, Tool] = {t.name: t for t in [
     Tool("list_domains", "List the business domains registered on the platform.", "context", {}, list_domains),
     Tool("fetch_domain_context", "Search domain knowledge (rules, definitions, patterns, decisions).", "context",
          {"query": _s(True, 2000), "domain": _s(False, 128, "domain name to filter on")}, fetch_domain_context),
-    Tool("inspect_source", "List the tables of a Snowflake schema with row counts and profile status.", "context",
-         {"database": _s(True, 255), "schema": _s(True, 255)}, inspect_source),
+    Tool("inspect_source", "List the tables of a Snowflake schema with row counts and profile status. With table, also "
+         "that table's column profile (types, nulls, distinct values, ranges, suggested checks): use it before choosing "
+         "keys or writing checks.", "context",
+         {"database": _s(True, 255), "schema": _s(True, 255), "table": _s(False, 255)}, inspect_source),
     Tool("find_table_models", "Find table models (one modeled table each) by name or domain.", "context",
          {"search": _s(False, 100), "domain_id": _s(False, 36)}, find_table_models),
     Tool("get_table_model", "Read a table model's columns, keys and grain.", "context",
@@ -897,7 +954,9 @@ TOOLS: Dict[str, Tool] = {t.name: t for t in [
     Tool("register_soda_checks", "Draft data quality checks for a table, each a one-line SodaCL check (checked now). "
          "checks: [{column?, dsl, severity: WARN|FAIL, requirement?}]. dsl is exactly one of: " + DSL_FORMS + ".", "quality",
          {"table": _s(True, 800, "DATABASE.SCHEMA.TABLE"), "domain_id": _s(False, 36),
-          "checks": _l("checks", max=50)}, register_soda_checks, drafts=True),
+          "checks": _l("checks", max=50), "note": _s(False, 2000),
+          "submit": {"type": "bool", "required": False, "desc": "default true: submit the suite to a DQ approver"}},
+         register_soda_checks, drafts=True),
     Tool("onboard_source_config", "Validate and draft a SnapLogic external source onboarding (same fields as the "
          "Onboarding wizard: source, target, load, snaplogic, tables, comments).", "intake",
          {"source": _d("source"), "target": _d("target"), "load": _d("load"), "snaplogic": _d("snaplogic"),
