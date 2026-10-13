@@ -97,7 +97,7 @@ footer { color: var(--muted); font-size: 13px; margin-top: 56px; }
 <div class="wrap">
 <nav class="toc" aria-label="Contents">
   <div class="brand">GDP Agent Platform</div>
-  <div class="ver">Guidebook and runbook for code on main, migrations V001 to V049</div>
+  <div class="ver">Guidebook and runbook for code on main, migrations V001 to V050</div>
   <ol>
     <li><a href="#access"><span class="num">01</span>How access works</a></li>
     <li><a href="#setup"><span class="num">02</span>Setup order</a></li>
@@ -122,7 +122,8 @@ footer { color: var(--muted); font-size: 13px; margin-top: 56px; }
         <li><a href="#f-knowledge">Knowledge</a></li>
         <li><a href="#f-skills">Skills</a></li>
         <li><a href="#f-code">Code</a></li>
-        <li><a href="#f-qa">QA workspace</a></li>
+        <li><a href="#f-tickets">Tickets</a></li>
+        <li><a href="#f-qa">QA testing</a></li>
         <li><a href="#f-jira">Jira</a></li>
         <li><a href="#f-ops">Pipelines</a></li>
         <li><a href="#f-incidents">Incidents</a></li>
@@ -406,7 +407,7 @@ footer { color: var(--muted); font-size: 13px; margin-top: 56px; }
 
 <!-- ============================================================ 04 -->
 <h2 id="features"><span class="num">04</span>Features</h2>
-<p>The sidebar is the one place to move around, in lifecycle order: Overview (the Command Center and the Copilot workspace), <strong>Onboarding</strong> (a highlighted entry of its own: sources, domains, applications), Asset stores (<strong>Store</strong>, one item over the six asset stores: Source, Profiling, Modeling, Mapping (STTM), QA and Data Quality), Knowledge (domains, knowledge, skills), Build (runs, code), then Monitor (Quality center, QA workspace, pipelines, incidents) and Govern (approvals, source control, audit, admin). Monitor and Govern can be folded to their heading; the choice is remembered per browser, a section opens by itself while you are on one of its pages, and a folded heading shows the summed badge of its links (pending approvals, for example). Clicking Store opens the Store hub (<code>/dashboard/store</code>): one card per store with what it holds and what needs action. Its chevron shows the six stores underneath, opened by itself while you are in one of them; with the sidebar collapsed, hovering or focusing the Store icon opens a menu of the stores. Store stays highlighted inside any store, and its badge sums the stores that need attention (each store keeps its own badge). Every store page has a bar to switch stores that keeps an explicit <code>?domain=</code>; the domain picked in the top bar applies everywhere. <code>/dashboard/store?tab=sources|profiling|modeling|sttm|qa|quality</code> opens that store, and <code>/store</code>, <code>/dashboard/qa</code>, <code>/dashboard/data-quality</code>, <code>/dashboard/mapping</code>, <code>/sources</code> and <code>/onboarding</code> redirect to their pages. Run pages under <code>/runs/&lt;run id&gt;</code> are unchanged. A group disappears when none of its pages are available to the user.</p>
+<p>The sidebar is the one place to move around, in lifecycle order: Overview (the Command Center, the Copilot workspace and Tickets), <strong>Onboarding</strong> (a highlighted entry of its own: sources, domains, applications), Asset stores (<strong>Store</strong>, one item over the six asset stores: Source, Profiling, Modeling, Mapping (STTM), QA and Data Quality), Knowledge (domains, knowledge, skills), Build (runs, code), then Monitor (Quality center, QA testing, pipelines, incidents) and Govern (approvals, source control, audit, admin). Monitor and Govern can be folded to their heading; the choice is remembered per browser, a section opens by itself while you are on one of its pages, and a folded heading shows the summed badge of its links (pending approvals, for example). Clicking Store opens the Store hub (<code>/dashboard/store</code>): one card per store with what it holds and what needs action. Its chevron shows the six stores underneath, opened by itself while you are in one of them; with the sidebar collapsed, hovering or focusing the Store icon opens a menu of the stores. Store stays highlighted inside any store, and its badge sums the stores that need attention (each store keeps its own badge). Every store page has a bar to switch stores that keeps an explicit <code>?domain=</code>; the domain picked in the top bar applies everywhere. <code>/dashboard/store?tab=sources|profiling|modeling|sttm|qa|quality</code> opens that store, and <code>/store</code>, <code>/dashboard/qa</code>, <code>/dashboard/data-quality</code>, <code>/dashboard/mapping</code>, <code>/sources</code> and <code>/onboarding</code> redirect to their pages. Run pages under <code>/runs/&lt;run id&gt;</code> are unchanged. A group disappears when none of its pages are available to the user.</p>
 
 <h3 id="f-shell">Workspace shell</h3>
 <dl class="feature-meta">
@@ -486,7 +487,7 @@ footer { color: var(--muted); font-size: 13px; margin-top: 56px; }
 <h3 id="f-quality-center">QA and Data Quality Center</h3>
 <dl class="feature-meta">
   <dt>Page</dt><dd><code>/dashboard/quality</code></dd>
-  <dt>What it does</dt><dd>Read-only monitoring: Soda scans and QA runs in one timeline with their results, readiness gates per run (data quality health of at least 90 with no failed checks, QA tests without failures, QA signed off, no open linked Jira issue), QA suites and data quality check packs with the Soda kit and the Great Expectations suite, and open Jira incidents. Fixes and sign-offs stay on the run pages and in the QA workspace.</dd>
+  <dt>What it does</dt><dd>Read-only monitoring: Soda scans and QA runs in one timeline with their results, readiness gates per run (data quality health of at least 90 with no failed checks, QA tests without failures, QA signed off, no open linked Jira issue), QA suites and data quality check packs with the Soda kit and the Great Expectations suite, and open Jira incidents. Fixes and sign-offs stay on the run pages and in QA testing.</dd>
   <dt>Access</dt><dd>Everyone signed in; Jira links follow the row access policy on <code>JIRA.ISSUE_LINK</code>.</dd>
 </dl>
 
@@ -596,12 +597,24 @@ footer { color: var(--muted); font-size: 13px; margin-top: 56px; }
   <dt>Behaviour</dt><dd>Indexing is incremental by file hash and locked per repository. A missing branch fails the run instead of wiping the index. Credential files, <code>target/</code> and <code>dbt_packages/</code> are always skipped.</dd>
 </dl>
 
-<h3 id="f-qa">QA workspace</h3>
+<h3 id="f-tickets">Tickets</h3>
 <dl class="feature-meta">
-  <dt>Page</dt><dd><code>/qa</code>: Inbox, Suites, Triage, Results</dd>
-  <dt>What it does</dt><dd>Tests on a domain's target tables, with or without a run: suites per table, AI-written tests and test plans, runs and history, Jira inbox, AI triage of a ticket to the right table, bug filing from a failing result.</dd>
+  <dt>Page</dt><dd><code>/tickets</code> (sidebar, Overview, right under Copilot; a ticket button in the top bar; "My tickets" on the Command Center; ticket keys and case numbers in search, <kbd>Ctrl</kbd>+<kbd>K</kbd>). Tabs: All tickets, Jira search and boards, Ticket.</dd>
+  <dt>What it does</dt><dd>Every ticket in one list: your Jira issues (read live, as you, through your own Jira account) and the platform's cases (one per reported problem, with an SLA). A case opened from a Jira issue is one row with both badges. Each Jira row hands the ticket to the Copilot ("Work on it in the Copilot", or its open conversation and drafts).</dd>
+  <dt>Filters</dt><dd>Search by key or text; source (all, Jira, cases); status (open, done, any); assignee (anyone, me, unassigned); priority P1 to P4 (Jira priorities map onto them: Highest, Blocker and Critical are P1, High and Major P2, Medium P3, the rest P4). More filters: sprint (active, future, none, or one sprint), Jira project and issue types, case kind, domain, updated between two dates, SLA breached, linked to data (runs, tests, tables), in the Copilot. Jira-only filters list Jira issues only and case-only filters list cases only. Filters are kept in the URL, so a filtered list can be shared as a link; Jira shows the first 100 matches.</dd>
+  <dt>Saved views</dt><dd>Save the current filters as a named view, private or shared (<code>CORE.TICKET_VIEW</code>, V050); "All open" and "Assigned to me" are always there. Jira's own JQL filters stay under Jira search and boards.</dd>
+  <dt>Sprints</dt><dd>Pick a sprint when creating a Jira ticket; select Jira tickets in the list and Move to sprint (active or future sprints of the project's scrum boards, or the backlog), or move one from its Ticket view. The sprint is set through Jira's Sprint field with your edit permission, so no extra Jira consent is needed; a project whose edit screen hides the field says so per ticket.</dd>
+  <dt>New ticket</dt><dd>Jira ticket (project, type, summary, markdown description, labels, sprint; created once even on a double click) or platform case (as "Report a problem").</dd>
+  <dt>Privileges</dt><dd><span class="chip p">JIRA.READ</span> or <span class="chip p">CASE.WORK</span> to open it; Jira rows need JIRA.READ and a connected account, case rows follow domain visibility. <span class="chip p">JIRA.WRITE</span> create tickets and move them to sprints. Saved views need no privilege.</dd>
+  <dt>Old links</dt><dd><code>/jira</code> and the QA workspace's <code>?tab=cases|inbox|triage</code> open the matching Tickets view.</dd>
+</dl>
+
+<h3 id="f-qa">QA testing</h3>
+<dl class="feature-meta">
+  <dt>Page</dt><dd><code>/qa</code>: Suites, Results (cases, the Jira inbox and ticket triage are on <a href="#f-tickets">Tickets</a>)</dd>
+  <dt>What it does</dt><dd>Tests on a domain's target tables, with or without a run: suites per table, AI-written tests and test plans, runs and history, and bug filing from a failing result.</dd>
   <dt>Test rules</dt><dd>One read-only SELECT or WITH, reading only allowed tables (the run's sources, its target, the domain hub). Each test runs with a row limit. Zero rows means PASS; a <code>col = 0</code> check reads the first row; anything else goes to REVIEW. Samples hide personal data; with no profile, every non-key column is hidden. Tests are NOT_RUN until the target table is built.</dd>
-  <dt>Privileges</dt><dd><span class="chip p">QA.EDIT</span> suites and tests. <span class="chip p">AI.USE</span> ask, plan, triage. <span class="chip p">JIRA.READ</span> inbox. <span class="chip p">JIRA.WRITE</span> links, bugs, bulk actions.</dd>
+  <dt>Privileges</dt><dd><span class="chip p">QA.EDIT</span> suites and tests. <span class="chip p">AI.USE</span> ask, plan. <span class="chip p">JIRA.WRITE</span> bugs from a failing result.</dd>
   <dt>Run QA</dt><dd>A run's QA also runs the saved domain tests for its target table; they count toward sign-off and are edited here.</dd>
   <dt>Test history</dt><dd>Every create, edit, delete and restore of a saved test (a run's test or a table test) is kept in <code>CONTRACT.QA_TEST_VERSION</code> (V042; existing tests start with their current state). History on a saved test shows who changed what, the field changes and a line diff of the SQL; Restore puts an older version back (a deleted test too), checking its SQL with the guard and the compiler as if typed now (<span class="chip p">QA.EDIT</span>).</dd>
 </dl>
@@ -609,8 +622,8 @@ footer { color: var(--muted); font-size: 13px; margin-top: 56px; }
 <h3 id="f-jira">Jira</h3>
 <dl class="feature-meta">
   <dt>Model</dt><dd>One OAuth 2.0 (3LO) app per organisation, set up once by an admin. Each person connects their own Atlassian account through SSO, so comments and status changes appear as them and Jira's own permissions apply.</dd>
-  <dt>Where</dt><dd>Admin, Integrations, Jira (setup and "Your Jira account"); QA pages; a run's QA tab</dd>
-  <dt>Capabilities</dt><dd>Assigned to me, free JQL with validation, saved filters (own or shared), boards and sprints, paging, bulk link, comment and transition (up to 50), AI triage, bug filing that never duplicates, results posted as comments.</dd>
+  <dt>Where</dt><dd>Admin, Integrations, Jira (setup and "Your Jira account"); <a href="#f-tickets">Tickets</a>; a run's QA tab; the Copilot</dd>
+  <dt>Capabilities</dt><dd>Assigned to me, free JQL with validation, saved filters (own or shared), boards and sprints, paging, bulk link, comment and transition (up to 50), AI triage, bug filing that never duplicates, results posted as comments, creating tickets and moving them to sprints.</dd>
   <dt>Privileges</dt><dd><span class="chip p">JIRA.READ</span> connect, read, filters. <span class="chip p">JIRA.WRITE</span> comment, transition, links, bugs, bulk. <span class="chip p">INTEGRATION.MANAGE</span> save the Jira setup.</dd>
   <dt>Security</dt><dd>Tokens are encrypted in the application with a key derived from <code>JIRA_TOKEN_KEY</code> before they reach Snowflake. Changing that key disconnects every user. Refresh tokens rotate on each use under a shared lease, so several API servers never disconnect each other.</dd>
   <dt>Bot</dt><dd>Only for automatic incident tickets: <code>JIRA_BOT_EMAIL</code> and <code>JIRA_BOT_TOKEN</code> (an Atlassian API token). Without it, incidents still open and say "ticket not raised".</dd>
@@ -678,7 +691,7 @@ footer { color: var(--muted); font-size: 13px; margin-top: 56px; }
   <dt>Layout</dt><dd>Conversations on the left (grouped by age, with a filter); the thread in the middle, where each turn's tool work is folded into one line ("Worked through N steps", open it to see every step), drafted changes appear as cards and questions as small forms; a panel on the right with the <strong>Plan</strong> (eight steps: Jira ingestion and scoping, domain pack and code context, data model and DDL, STTM and transforms, Soda DQ and QA SQL, Snowflake dry run, human approval gate, Git commit and Jira sync), the <strong>Changes</strong> and the <strong>Context</strong> (Jira issue, files). On small screens both side panels open from the header.</dd>
   <dt>Questions</dt><dd>When the agent needs a decision (a source connection, primary keys, a load schedule, a target layer, which of several matches) it asks with a form: choices as chips, a default filled in from what the tools found, a line of help. Answer in the form or in your own words. It asks again in later turns for whatever is still missing, for example over several rounds until a SnapLogic onboarding validates. It never asks for passwords, tokens or keys; a SnapLogic API key is the name of a vault secret.</dd>
   <dt>Attachments</dt><dd>Paperclip, drag and drop, or paste. Text and code files (CSV, JSON, YAML, SQL, Markdown and others), Word (.docx) and Excel (.xlsx, each sheet as CSV-like rows) are read as text; the text is kept with the conversation (up to 200,000 characters per file) and the agent reads it with a tool. A PDF is attached by name only, with a note. At most 10 MB per file and 20 files per conversation; the file itself is not stored.</dd>
-  <dt>Jira</dt><dd>The ticket button lists your open issues or searches by key or text. When you are not connected yet it offers Connect Jira (your Atlassian account, as in the QA workspace; the message you were typing is kept). The agent reads the issue and can draft a comment and a status move, posted only when you publish.</dd>
+  <dt>Jira</dt><dd>The ticket button lists your open issues or searches by key or text. When you are not connected yet it offers Connect Jira (your Atlassian account, as on Tickets; the message you were typing is kept). The agent reads the issue and can draft a comment and a status move, a new ticket (project, type, labels, sprint) and moving tickets to a sprint, all done as you only when you publish. A comment drafted alongside other changes ends with what publishing actually did (each change applied, sent for approval with its request, or failed; pull request and new ticket links). From any ticket, Work on it in the Copilot opens the workspace with the ticket attached and a first message ready.</dd>
   <dt>Tools</dt><dd>Every tool calls the platform's own API route, in process and as you, so it can never read or do more than you can. Reads: Jira issue and search, domains, domain knowledge (search and answer), source schema inventory (and one table's column profile: types, nulls, distinct values, ranges, suggested checks), landing targets, table models, domain models, STTM mappings, rendered dbt and DDL, runs, existing SnapLogic configurations, the onboarding checklist, attachments, and the connected code repositories (code search, and code impact: what a model or macro depends on and what depends on it). Drafts (dry run only): table model columns (DDL and dbt rendered), domain model entities and columns (validated; publishing saves the Model Workbench draft, opening one from the approved version when none is open, and submits it for a modeler's review, never approves it), STTM line edits and new lines (AI proposals through the STTM refine), QA queries (each run once read-only, nothing stored; publishing saves the pack and submits it), SodaCL checks (parsed; publishing adds them to the table's suite draft and submits the suite to a DQ approver, unless asked not to submit), a SnapLogic onboarding (validated), a GitHub pull request with a table model's DDL and dbt files, and a Jira comment and transition. A second request about the same asset builds on its open draft.</dd>
   <dt>Pull requests</dt><dd>Ask for a pull request for a table model. With a model change drafted in the same conversation, the pull request is for the version that change saves (the save and the pull request publish together, in that order); otherwise for the saved version. The agent lists the connected GitHub repositories and asks which one when there are several. It needs GitHub publishing set up in Admin, Integrations. Domain models, QA packs, DQ suites and mappings are published to Git from their own stores after approval, so the agent does not draft those pull requests. A GitHub refusal (an expired token, missing scope, publishing not set up) is a failed change, not a success.</dd>
   <dt>Code context</dt><dd>Each turn adds the client code most relevant to the request (the stage COPILOT code context: exact name and lineage matches, Cortex Search and the code graph, within a token budget) to the agent's prompt as reference data. It reuses the client's names and patterns and says what depends on a model before changing it; the live model and catalog win when they differ. Nothing is added when no repository is indexed.</dd>
@@ -949,7 +962,7 @@ cd apps/web; npm install; cd ../..</code></pre></li>
 <pre><code>SELECT VERSION, APPLIED_AT FROM DEV_AI_PLATFORM.CORE.SCHEMA_MIGRATION ORDER BY VERSION DESC LIMIT 5;
 SHOW PROCEDURES IN SCHEMA DEV_AI_PLATFORM.CONTRACT;
 SHOW ROW ACCESS POLICIES IN SCHEMA DEV_AI_PLATFORM.JIRA;</code></pre>
-  The newest version should be V049, and <code>OWN_ROWS</code> should be listed.</li>
+  The newest version should be V050, and <code>OWN_ROWS</code> should be listed.</li>
   <li><strong>Grant people access</strong> (see <a href="#mapping">Who gets what</a>):
 <pre><code>GRANT DATABASE ROLE DEV_AI_PLATFORM.DATA_ENGINEER TO ROLE &lt;data engineers&gt;;
 GRANT DATABASE ROLE DEV_AI_PLATFORM.QA_ENGINEER   TO ROLE &lt;qa team&gt;;
@@ -1118,7 +1131,7 @@ docker compose -f docker/docker-compose.yml --env-file docker/.env logs -f --tai
 <tr><td>Knowledge and search</td><td>Add a knowledge item, then search for it</td><td>Found within about 10 minutes (search index refresh)</td></tr>
 <tr><td>Skills</td><td>Create a candidate version, try it on a run, promote it</td><td>The stage loads the new version; history shows the move</td></tr>
 <tr><td>Code</td><td>Connect a repository, Refresh now</td><td>Files and models counted; search and lineage return results</td></tr>
-<tr><td>QA workspace</td><td>Suites: run a table test; Ask AI for a test; save a test that writes data</td><td>Results with masked samples; the AI test compiles; the write is refused by the read-only guard</td></tr>
+<tr><td>QA testing</td><td>Suites: run a table test; Ask AI for a test; save a test that writes data</td><td>Results with masked samples; the AI test compiles; the write is refused by the read-only guard</td></tr>
 <tr><td>QA sign-off</td><td>Try to sign off before running QA on the current STTM</td><td>Refused with "Run QA on the current STTM version"</td></tr>
 <tr><td>Jira</td><td>Admin status; Connect Jira; QA Inbox; validate a bad JQL; triage a ticket; file a bug twice from the same failing test</td><td>Status ready; your issues listed; Jira's error message for bad JQL; candidate tables; one bug only</td></tr>
 <tr><td>Pipelines</td><td>Admin, Airflow: Test connection; Poll now</td><td>Version and sample DAGs; DAGs and runs appear; worker last seen under 5 minutes</td></tr>
@@ -1169,7 +1182,7 @@ docker compose -f docker/docker-compose.yml --env-file docker/.env logs -f --tai
 <tr><td>STTM Store (/dashboard/sttm)</td><td>GOVERNANCE.STTM_CATALOG (run STTMs live in CONTRACT.STTM_REGISTRY and STTM_LINE)</td></tr>
 <tr><td>QA Store (/dashboard/qa-store)</td><td>GOVERNANCE.DOMAIN_QA_PACKS, DOMAIN_QA_QUERIES, QA_PACK_SYNC; QUALITY.QA_RUN, QA_RESULT</td></tr>
 <tr><td>Data Quality Store (/dashboard/dq-store)</td><td>GOVERNANCE.DQ_CHECKS_CATALOG, DQ_SCHEDULE, DQ_SUITE, DQ_SUITE_VERSION; QUALITY.CHECK_RUN, CHECK_RESULT</td></tr>
-<tr><td>QA workspace and cases (/qa)</td><td>CONTRACT.QA_TEST_CASE, QA_TEST_SUITE, QA_TEST_VERSION; QUALITY.QA_RUN, QA_RESULT; JIRA.*; CASES.*</td></tr>
+<tr><td>Tickets (/tickets) and QA testing (/qa)</td><td>CONTRACT.QA_TEST_CASE, QA_TEST_SUITE, QA_TEST_VERSION; QUALITY.QA_RUN, QA_RESULT; JIRA.*; CASES.*</td></tr>
 <tr><td>Source control (/dashboard/source-control)</td><td>GOVERNANCE.GIT_PR; CODE.REPO; CODEGEN.GIT_PUBLICATION for run dbt</td></tr>
 <tr><td>Approvals (/approvals) and Admin</td><td>GOVERNANCE.CHANGE_REQUEST, APPROVAL_POLICY, SETTING, APP_ROLE, ROLE_PRIVILEGE, ROLE_GRANT, USER_ROLE, GOVERNANCE_EVENT; CORE.PLATFORM_CONFIG</td></tr>
 <tr><td>Domains and Knowledge (/domains, /knowledge)</td><td>KNOWLEDGE.DOMAIN_REGISTRY, DOMAIN_MEMBER, DOMAIN_VERSION, DOMAIN_KNOWLEDGE, KNOWLEDGE_USAGE</td></tr>
@@ -1194,6 +1207,7 @@ docker compose -f docker/docker-compose.yml --env-file docker/.env logs -f --tai
 <tr><td>CORE.COPILOT_EVENT</td><td>Log</td><td>Everything shown in a copilot conversation: messages, answers, thoughts, tool calls, questions, replies, publish results (own rows)</td><td>Copilot workspace</td><td>Copilot workspace</td><td>V048</td></tr>
 <tr><td>CORE.COPILOT_MESSAGE</td><td>Log</td><td>Copilot questions, answers and citations</td><td>Copilot</td><td>Copilot panel</td><td>V015</td></tr>
 <tr><td>CORE.COPILOT_PLAN_STEP</td><td>Content</td><td>The eight plan steps of each copilot conversation and their state (own rows)</td><td>Copilot workspace</td><td>Copilot workspace plan</td><td>V048</td></tr>
+<tr><td>CORE.TICKET_VIEW</td><td>Config</td><td>Saved views of the Tickets page: a name, the filters, private or shared</td><td>Tickets API</td><td>Tickets</td><td>V050</td></tr>
 <tr><td>CORE.COPILOT_SESSION</td><td>Content</td><td>One row per copilot conversation: title, Jira issue, state (own rows)</td><td>Copilot workspace</td><td>Copilot workspace</td><td>V048</td></tr>
 <tr><td>CORE.DEPLOY_STATE</td><td>Log</td><td>Checksum of each rendered deploy step, so a re-deploy skips unchanged steps</td><td>infrastructure/deploy_snowflake.py</td><td>Deploy only</td><td>Deploy script</td></tr>
 <tr><td>CORE.PLATFORM_CONFIG</td><td>Config</td><td>Versioned platform settings: AI models, Jira, Ops, dbt publishing, rules</td><td>Admin, deploy seed</td><td>Read across the API and worker</td><td>V004</td></tr>
@@ -1281,7 +1295,7 @@ docker compose -f docker/docker-compose.yml --env-file docker/.env logs -f --tai
 <tr><td>CASES.CASE_ARTIFACT</td><td>Content</td><td>Fix material attached to a case: repro test, STTM change, correction SQL, dbt patch, knowledge draft</td><td>services/cases/store.py</td><td>Case page; dbt patches are published as pull requests (services/dbt/publish.py)</td><td>V034</td></tr>
 <tr><td>CASES.CASE_EVENT</td><td>Log</td><td>Timeline of a case (comments, status moves) and idempotency claims that stop a case being opened twice</td><td>services/cases/store.py</td><td>Case timeline, triage</td><td>V034</td></tr>
 <tr><td>CASES.CASE_LINK</td><td>Content</td><td>Links from a case to a Jira issue, incident, QA or DQ result, run, pull request, knowledge item or another case</td><td>services/cases/store.py</td><td>Case page</td><td>V034</td></tr>
-<tr><td>CASES.CASE_RECORD</td><td>Content</td><td>One reported problem (data bug, code bug, data quality, pipeline, question), its status, owner and domain (CASE-&lt;n&gt;). Row access policy limits it to the case's domain</td><td>services/cases/store.py</td><td>QA workspace cases (/qa/cases/&lt;id&gt;), copilot, triage, knowledge</td><td>V034</td></tr>
+<tr><td>CASES.CASE_RECORD</td><td>Content</td><td>One reported problem (data bug, code bug, data quality, pipeline, question), its status, owner and domain (CASE-&lt;n&gt;). Row access policy limits it to the case's domain</td><td>services/cases/store.py</td><td>Tickets, case pages (/qa/cases/&lt;id&gt;), copilot, triage, knowledge</td><td>V034</td></tr>
 <tr><td>CODE.CODE_CHUNK</td><td>Content</td><td>Code chunks; the source of Cortex Search CODE.CODE_SEARCH</td><td>services/code/indexer.py</td><td>Code search, copilot and triage context, Ops dependency hints</td><td>V024</td></tr>
 <tr><td>CODE.CODE_EDGE</td><td>Content</td><td>Lineage edges between files and models</td><td>services/code/indexer.py</td><td>Code graph, impact</td><td>V024</td></tr>
 <tr><td>CODE.CODE_FILE</td><td>Content</td><td>Files indexed from a repository</td><td>services/code/indexer.py (CODE.INDEX_REPO)</td><td>Code search, triage</td><td>V024</td></tr>
@@ -1292,7 +1306,7 @@ docker compose -f docker/docker-compose.yml --env-file docker/.env logs -f --tai
 <tr><td>JIRA.ACTION_LOG</td><td>Log</td><td>Every write the platform made to Jira</td><td>Jira API</td><td>Jira audit</td><td>V027</td></tr>
 <tr><td>JIRA.ISSUE_LINK</td><td>Content</td><td>Jira issues linked to runs, tests, tables and suites</td><td>Jira API, QA API</td><td>QA workspace, cases, Quality center</td><td>V027</td></tr>
 <tr><td>JIRA.OAUTH_STATE</td><td>Log</td><td>One-time Jira sign-in state values</td><td>Jira API</td><td>Jira sign-in</td><td>V027, V033</td></tr>
-<tr><td>JIRA.SAVED_FILTER</td><td>Config</td><td>Saved JQL filters</td><td>Jira API</td><td>QA workspace Jira inbox</td><td>V029</td></tr>
+<tr><td>JIRA.SAVED_FILTER</td><td>Config</td><td>Saved JQL filters</td><td>Jira API</td><td>Tickets, Jira search and boards</td><td>V029</td></tr>
 <tr><td>JIRA.USER_TOKEN</td><td>Config</td><td>Each person's encrypted Jira tokens and refresh lease (row access policy: own rows only)</td><td>Jira API</td><td>Jira connection</td><td>V027, V033</td></tr>
 <tr><td>OPS.AIRFLOW_ENV</td><td>Config</td><td>Airflow (MWAA) environments, poll cursor, encrypted push secret</td><td>Admin, Ops worker</td><td>Ops (/ops)</td><td>V030</td></tr>
 <tr><td>OPS.DAG</td><td>Config</td><td>DAG metadata plus team, criticality, SLA, mute</td><td>Ops worker, Ops API</td><td>Ops, DAG page (/ops/dag)</td><td>V030</td></tr>
@@ -1383,6 +1397,7 @@ docker compose -f docker/docker-compose.yml --env-file docker/.env logs -f --tai
 <tr><td>V047</td><td>KNOWLEDGE.KNOWLEDGE_OUTCOME: whether knowledge used in a prompt led to output a reviewer accepted, per knowledge lineage and stage; feeds knowledge ranking</td></tr>
 <tr><td>V048</td><td>Copilot workspace: CORE.COPILOT_SESSION, COPILOT_EVENT, COPILOT_PLAN_STEP, COPILOT_CHANGE and COPILOT_ATTACHMENT, with the row access policy CORE.COPILOT_OWN_ROWS (each person sees only their own conversations)</td></tr>
 <tr><td>V049</td><td>Copilot workspace for REVIEWER, DATA_STEWARD and DOMAIN_OWNER (V048 granted it to DATA_ENGINEER and QA_ENGINEER)</td></tr>
+<tr><td>V050</td><td>Saved views of the Tickets page (CORE.TICKET_VIEW)</td></tr>
 </table></div>
 
 <!-- ============================================================ 07 -->
@@ -1431,7 +1446,7 @@ docker compose -f docker/docker-compose.yml --env-file docker/.env logs -f --tai
 <div class="note"><strong>Unused table.</strong> <code>AUDIT.AGENT_RUN</code> exists but nothing writes to it yet.</div>
 
 <footer>
-  <p>Generated from the repository source: governance policy, migrations V001 to V049, procedure definitions, API routes and web pages. Where this guide and the code differ, the code is right; report the difference so the guide can be updated.</p>
+  <p>Generated from the repository source: governance policy, migrations V001 to V050, procedure definitions, API routes and web pages. Where this guide and the code differ, the code is right; report the difference so the guide can be updated.</p>
 </footer>
 </main>
 </div>

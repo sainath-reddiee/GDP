@@ -2,11 +2,12 @@
 
 import Link from "next/link";
 import { useEffect, useState, useTransition } from "react";
-import { Check, ExternalLink, Link2, Loader2, MessageSquarePlus, Search, Sparkles, Table2, TriangleAlert, Unlink } from "lucide-react";
+import { Bot, Check, ExternalLink, Link2, Loader2, MessageSquarePlus, Search, Sparkles, Table2, TriangleAlert, Unlink } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { CommentComposer, StatusPill, TransitionControl, when } from "@/components/jira/jira-controls";
+import { SprintControl } from "../tickets/sprint-control";
 import type { JiraIssueDetail, JiraStatus, Triage, TriageTest } from "../jira/actions";
 import {
   createLink, deleteLink, issueDetail, listLinks, resolveTriage, saveTableTest, triageTable, type QaLink, type Resolved,
@@ -24,7 +25,7 @@ export function TriageTab({ nav, go, access, jira, me }: { nav: Nav; go: Go; acc
   const [text, setText] = useState(nav.key);
   const key = text.trim().toUpperCase();
   return (
-    <JiraGate jira={jira} returnTo={`/qa?tab=triage${nav.key ? `&key=${encodeURIComponent(nav.key)}` : ""}`}>
+    <JiraGate jira={jira} returnTo={`/tickets?tab=${nav.key ? `ticket&key=${encodeURIComponent(nav.key)}` : "jira"}`}>
       <div className="space-y-4">
         <form className="flex max-w-lg gap-2" onSubmit={(e) => { e.preventDefault(); if (KEY.test(key)) go({ key }); }}>
           <div className="relative flex-1">
@@ -100,7 +101,7 @@ function IssueTriage({ issueKey, go, access, me }: { issueKey: string; go: Go; a
     await loadLinks();
   });
 
-  if (problem?.connect) return <ConnectJira returnTo={`/qa?tab=triage&key=${encodeURIComponent(issueKey)}`} text={problem.text} />;
+  if (problem?.connect) return <ConnectJira returnTo={`/tickets?tab=ticket&key=${encodeURIComponent(issueKey)}`} text={problem.text} />;
   if (problem && !issue) return <Empty title={`Could not open ${issueKey}`} text={<span role="alert">{problem.text}</span>} />;
   if (!issue) return <Pending text={`Opening ${issueKey}…`} />;
 
@@ -124,6 +125,11 @@ function IssueTriage({ issueKey, go, access, me }: { issueKey: string; go: Go; a
           {issue.url && <a href={issue.url} target="_blank" rel="noreferrer" className="ml-auto inline-flex items-center gap-1 text-primary hover:underline">Open in Jira<ExternalLink className="h-3 w-3" /></a>}
         </p>
         <h3 className="text-base font-semibold">{issue.summary}</h3>
+        <Link href={`/dashboard/copilot?jira=${encodeURIComponent(issue.key)}`} data-testid="work-in-copilot"
+              className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-primary px-3 text-xs font-medium text-primary-foreground hover:opacity-90">
+          <Bot className="h-3.5 w-3.5" /> Work on it in the Copilot
+        </Link>
+        {access.canJiraWrite && <SprintControl issueKey={issue.key} />}
         <p className="text-xs text-muted-foreground">Reported by {issue.reporter ?? "someone"} · assigned to {issue.assignee ?? "nobody"} · updated {when(issue.updated)}</p>
         {access.canCase && <OpenCaseButton open={() => caseFromJira(issueKey)} />}
         {access.canJiraWrite && (

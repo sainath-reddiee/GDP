@@ -5,7 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from
 import { createPortal } from "react-dom";
 import {
   ArrowRight, BarChart3, Boxes, ClipboardCheck, CornerDownLeft, FileCode2, FlaskConical, GitCompareArrows, ListChecks, Loader2, Monitor, Moon, Search,
-  SquareTerminal, Sun, type LucideIcon,
+  SquareTerminal, Sun, Ticket, type LucideIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { setDomainScope } from "@/app/scope-actions";
@@ -19,6 +19,7 @@ type Item = { id: string; group: string; label: string; detail?: string; icon: L
 
 const HIT_ICON: Record<SearchHit["kind"], LucideIcon> = {
   run: ListChecks, table: BarChart3, sttm: GitCompareArrows, qa: SquareTerminal, dq: ClipboardCheck, dbt: FileCode2, test: FlaskConical,
+  jira: Ticket, case: Ticket,
 };
 
 function score(item: Item, q: string) {

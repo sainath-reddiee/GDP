@@ -5,7 +5,7 @@ import type { CaseDetail } from "../actions";
 import { CaseView } from "./case-view";
 
 function Crumb() {
-  return <p className="eyebrow"><Link href="/qa?tab=cases" className="hover:underline">QA cases</Link></p>;
+  return <p className="eyebrow"><Link href="/tickets?source=case" className="hover:underline">Tickets</Link></p>;
 }
 
 /** One case. `?opened=new|existing` (set by the intake buttons) repeats what opening it did. */

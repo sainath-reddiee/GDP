@@ -43,7 +43,7 @@ export default async function QualityCenter({ searchParams }: { searchParams: { 
                   actions={<>
                     <Link href="/dashboard/qa-store" className={buttonVariants({ variant: "outline" })}><SquareTerminal className="h-4 w-4" /> QA Store</Link>
                     <Link href="/dashboard/dq-store" className={buttonVariants({ variant: "outline" })}><ClipboardCheck className="h-4 w-4" /> DQ Store</Link>
-                    <Link href="/qa" className={buttonVariants({ variant: "outline" })}><FlaskConical className="h-4 w-4" /> QA workspace</Link>
+                    <Link href="/qa" className={buttonVariants({ variant: "outline" })}><FlaskConical className="h-4 w-4" /> QA testing</Link>
                   </>} />
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <Kpi label="Data quality health" value={s?.data_quality.avg_health == null ? "-" : `${Math.round(Number(s.data_quality.avg_health))}`}

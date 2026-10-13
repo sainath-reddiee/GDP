@@ -34,8 +34,10 @@ async function failure(res: Response, what: string): Promise<string> {
 const isStream = (res: Response) => (res.headers.get("content-type") ?? "").includes("text/event-stream");
 
 /** The copilot workspace: conversations, the thread with its composer, and the plan and changes panel. */
-export function CopilotApp({ sessions: initialSessions, initial, disabled }: {
+export function CopilotApp({ sessions: initialSessions, initial, disabled, initialJira }: {
   sessions: SessionRow[]; initial: CopilotSession | null; disabled?: string;
+  /** a Jira key to start from (Work on it in the Copilot): attached, with a first message ready to send */
+  initialJira?: string | null;
 }) {
   const router = useRouter();
   const [sessions, setSessions] = useState(initialSessions);
@@ -50,8 +52,10 @@ export function CopilotApp({ sessions: initialSessions, initial, disabled }: {
   // files attached before the first message are still waiting to be sent with it
   const [pendingFiles, setPendingFiles] = useState<Attachment[]>(() => initial && !initial.events.length ? initial.attachments : []);
   const [uploading, setUploading] = useState<Uploading[]>([]);
-  const [jiraKeys, setJiraKeys] = useState<string[]>([]);
-  const [draft, setDraft] = useState("");
+  const [jiraKeys, setJiraKeys] = useState<string[]>(initialJira ? [initialJira] : []);
+  const [draft, setDraft] = useState(initialJira
+    ? `Work on ${initialJira}: read it, tell me what it needs, ask me what is missing, and draft the changes. When the drafts are ready, draft a comment on ${initialJira} too.`
+    : "");
   const [busy, setBusy] = useState(false);
   const [publishing, setPublishing] = useState(false);
   const [progress, setProgress] = useState<Record<string, string>>({});

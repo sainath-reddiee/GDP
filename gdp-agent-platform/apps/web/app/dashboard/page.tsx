@@ -14,6 +14,7 @@ import { buttonVariants } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { fmt, Meter, PipelineTable, RibbonMetric, Sparkline } from "./command-center";
 import { StoreCards } from "@/components/hub/store-cards";
+import { TicketsCard, type TicketsCardData } from "./tickets-card";
 
 /** Minutes as "45m", "3h 10m" or "2d 4h". */
 function duration(minutes: number) {
@@ -39,10 +40,11 @@ export default async function Dashboard() {
   const runQs = (extra: string) => `/api/runs?${extra}${domainId ? `&domain_id=${domainId}` : ""}`;
   // the table lists the 8 most recently updated runs in flight; every count comes from the overview (exact, not a
   // list length) so the greeting, the chips, the tiles and the table header agree
-  const [active, audit, incidents] = await Promise.all([
+  const [active, audit, incidents, jira] = await Promise.all([
     api<{ runs: RunSummary[]; total?: number }>(runQs("status=running&limit=8&sort=updated")).catch(() => ({ runs: [] as RunSummary[], total: undefined })),
     api<{ events: AuditEvent[] }>("/api/audit?limit=6").catch(() => ({ events: [] as AuditEvent[] })),
     can(me, "OPS.VIEW") ? api<IncidentSummary>("/api/ops/incidents/summary").catch(() => null) : Promise.resolve(null),
+    can(me, "JIRA.READ") || can(me, "CASE.WORK") ? ticketsCard() : Promise.resolve(null),
   ]);
   const o = overview;
   const user = (me?.user ?? "").split(/[._@ ]/)[0];
@@ -123,6 +125,8 @@ export default async function Dashboard() {
       {/* six asset stores */}
       <StoreCards o={o} />
 
+      {jira && <TicketsCard data={jira} />}
+
       <div className="grid gap-4 2xl:grid-cols-3">
         <section className="surface overflow-hidden 2xl:col-span-2" data-testid="pipeline-table">
           <div className="flex items-center gap-2 px-5 pb-3 pt-4">
@@ -152,4 +156,14 @@ export default async function Dashboard() {
       </div>
     </div>
   );
+}
+
+/** The caller's open tickets (Jira issues and cases) for the Command Center card; never fails the page. */
+async function ticketsCard(): Promise<TicketsCardData> {
+  try {
+    const r = await api<{ tickets: TicketsCardData["tickets"]; jira: { connected?: boolean; connect?: boolean } }>("/api/tickets?assignee=me");
+    return { tickets: r.tickets ?? [], jiraConnect: !!r.jira?.connect };
+  } catch {
+    return { tickets: [], error: true };
+  }
 }

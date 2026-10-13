@@ -1,6 +1,6 @@
 import {
   Activity, BadgeCheck, Bot, BarChart3, BookOpen, Boxes, ClipboardCheck, Database, FileClock, FlaskConical, FolderGit2, GitCompareArrows, GitPullRequest,
-  LayoutDashboard, ListChecks, Network, Rocket, Settings, ShieldCheck, Siren, Sparkles, SquareTerminal, Store,
+  LayoutDashboard, ListChecks, Network, Rocket, Settings, ShieldCheck, Siren, Sparkles, SquareTerminal, Store, Ticket,
 } from "lucide-react";
 import type { NavCounts } from "@/app/bff/nav/route";
 
@@ -60,6 +60,13 @@ export const NAV_GROUPS: NavGroup[] = [
     links: [
       { href: "/dashboard", label: "Command Center", icon: LayoutDashboard, exact: true },
       { href: "/dashboard/copilot", label: "Copilot", icon: Bot, privilege: "AI.USE" },
+      {
+        href: "/tickets", label: "Tickets", icon: Ticket, privilege: ["JIRA.READ", "CASE.WORK"],
+        badge: (c) => {
+          const n = (c.jira_open ?? 0) + (c.cases_mine ?? 0);
+          return n ? { value: n, tone: "bg-sky-500 text-white", title: `${n} open tickets assigned to you (Jira and cases)` } : null;
+        },
+      },
     ],
   },
   {
@@ -94,8 +101,7 @@ export const NAV_GROUPS: NavGroup[] = [
     links: [
       { href: "/dashboard/quality", label: "Quality center", icon: BadgeCheck },
       {
-        href: "/qa", label: "QA workspace", icon: FlaskConical, privilege: ["QA.EDIT", "JIRA.READ", "CASE.WORK"],
-        badge: (c) => c.cases ? { value: c.cases, tone: "bg-sky-500 text-white", title: `${c.cases} open cases` } : null,
+        href: "/qa", label: "QA testing", icon: FlaskConical, privilege: "QA.EDIT",
       },
       { href: "/ops", label: "Pipelines", icon: Activity, privilege: "OPS.VIEW" },
       ...(SHOW_INCIDENTS ? [{

@@ -1132,6 +1132,169 @@ def issue_types(project_key: str, db: Db = Depends(current_db)):
         raise _jira_error(exc) from None
 
 
+@router.get("/api/jira/projects")
+def projects(q: str = "", db: Db = Depends(current_db)):
+    """Projects the signed-in person can create issues in, and the platform's default project."""
+    client, _, cfg = _client(db)
+    try:
+        return {"projects": client.projects(q.strip()), "default": cfg.get("default_project") or None}
+    except JiraError as exc:
+        raise _jira_error(exc) from None
+
+
+_sprint_fields: dict[str, tuple[float, Optional[str]]] = {}
+
+
+def sprint_field(client: JiraClient, cloud_id: str) -> Optional[str]:
+    """The site's Sprint field id, cached an hour per site (None: no Jira Software, or it could not be read)."""
+    hit = _sprint_fields.get(cloud_id)
+    if hit and time.time() - hit[0] < 3600:
+        return hit[1]
+    try:
+        found = client.sprint_field()
+    except JiraError:
+        found = None
+    _sprint_fields[cloud_id] = (time.time(), found)
+    return found
+
+
+class IssueIn(BaseModel):
+    project_key: str = Field(min_length=1, max_length=40)
+    issue_type: str = Field(min_length=1, max_length=64, description="issue type id or name, such as Task or Story")
+    summary: str = Field(min_length=1, max_length=255)
+    description_markdown: str = Field(default="", max_length=30000)
+    labels: list[str] = Field(default_factory=list, max_length=10)
+    idempotency_key: Optional[str] = Field(default=None, max_length=64)
+    sprint_id: Optional[int] = Field(default=None, ge=1, description="put the new issue in this sprint")
+
+
+@router.post("/api/jira/issues")
+def create_issue(body: IssueIn, db: Db = Depends(current_db)):
+    """Create a Jira issue as the signed-in person (their own Jira account). A repeated request with the same
+    idempotency key returns the issue created the first time."""
+    client, conn, _ = _client(db)
+    if body.idempotency_key:
+        earlier = db.query("""SELECT ISSUE_KEY, DETAIL FROM JIRA.ACTION_LOG WHERE IDEMPOTENCY_KEY = %s AND ACTION = 'CREATE'
+                               AND STATUS = 'DONE' ORDER BY ACTED_AT DESC LIMIT 1""", (body.idempotency_key,))
+        if earlier:
+            stored = _json(earlier[0].get("detail")) or {}
+            key = earlier[0]["issue_key"]
+            return {"key": key, "url": stored.get("url") or _browse(conn, key), "created": False, "existing": True,
+                    "summary": stored.get("summary"), "project": stored.get("project")}
+    try:
+        project = check_project(body.project_key.strip().upper())
+        wanted = body.issue_type.strip()
+        types = [t for t in client.issue_types(project) if not t.get("subtask")]
+        pick = next((t for t in types if t["id"] == wanted or str(t.get("name") or "").lower() == wanted.lower()), None)
+        if not pick:
+            raise HTTPException(400, f"{project} has no issue type {wanted!r}; it has: "
+                                     + (", ".join(str(t.get("name")) for t in types) or "none you can create"))
+        labels = [str(label).strip() for label in body.labels if str(label).strip()]
+        extra = {}
+        if body.sprint_id:
+            field = sprint_field(client, conn["cloud_id"])
+            if not field:
+                raise HTTPException(400, "This Jira site has no Sprint field (Jira Software); create it without a sprint.")
+            extra[field] = int(body.sprint_id)
+        created = client.create_issue(project, pick["id"], body.summary, adf.from_markdown(body.description_markdown or " "),
+                                      labels or None, extra or None)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from None
+    except JiraError as exc:
+        _log(db, "-", "CREATE", "FAILED", conn["cloud_id"], None, {"project": body.project_key, "summary": body.summary[:200]},
+             exc.message, body.idempotency_key)
+        raise _jira_error(exc) from None
+    key = check_key(created.get("key") or "")
+    url = _browse(conn, key)
+    _log(db, key, "CREATE", "DONE", conn["cloud_id"], None,
+         {"key": key, "url": url, "project": project, "type": pick.get("name"), "summary": body.summary[:255],
+          "sprint_id": body.sprint_id},
+         None, body.idempotency_key)
+    _summary_cache.pop(str(db.user).upper(), None)
+    return {"key": key, "url": url, "created": True, "existing": False, "summary": body.summary, "project": project,
+            "type": pick.get("name")}
+
+
+@router.get("/api/jira/sprint-choices")
+def sprint_choices(project: str = Query(default="", max_length=40), db: Db = Depends(current_db)):
+    """The active and future sprints of a project's boards (the default project when none is given), for the sprint
+    pickers: [{id, name, state, board}]."""
+    client, conn, cfg = _client(db)
+    key = (project or cfg.get("default_project") or "").strip().upper()
+    if not key or not re.fullmatch(r"[A-Z][A-Z0-9_]{0,30}", key):
+        raise HTTPException(400, "Pick a Jira project.")
+    boards = [b for b in _agile(conn, lambda: client.boards("")) if (b.get("project_key") or "").upper() == key][:5]
+    out, seen = [], set()
+    for b in boards:
+        if str(b.get("type") or "").lower() == "kanban":
+            continue   # kanban boards have no sprints
+        for s in _agile(conn, lambda b=b: client.sprints(int(b["id"]), ["active", "future"])):
+            if s.get("id") in seen:
+                continue
+            seen.add(s.get("id"))
+            out.append({"id": s.get("id"), "name": s.get("name"), "state": s.get("state"), "board": b.get("name")})
+    return {"project": key, "sprints": out, "sprint_field": sprint_field(client, conn["cloud_id"])}
+
+
+class SprintMoveIn(BaseModel):
+    keys: list[str] = Field(min_length=1, max_length=50)
+    sprint_id: Optional[int] = Field(default=None, ge=1, description="None moves the issues to the backlog (no sprint)")
+
+
+@router.post("/api/jira/sprint-moves")
+def sprint_moves(body: SprintMoveIn, db: Db = Depends(current_db)):
+    """Put issues in a sprint (or take them out of one) as the signed-in person, one result per issue."""
+    client, conn, _ = _client(db)
+    field = sprint_field(client, conn["cloud_id"])
+    if not field:
+        raise HTTPException(400, "This Jira site has no Sprint field (Jira Software).")
+    results = []
+    for raw in dict.fromkeys(k.strip().upper() for k in body.keys):
+        try:
+            key = check_key(raw)
+            client.edit_issue(key, {field: int(body.sprint_id) if body.sprint_id else None})
+            results.append({"key": key, "ok": True})
+            _log(db, key, "SPRINT", "DONE", conn["cloud_id"], None, {"sprint_id": body.sprint_id})
+        except ValueError as exc:
+            results.append({"key": raw, "ok": False, "error": str(exc)})
+        except JiraError as exc:
+            hint = " (the Sprint field is not on this issue's edit screen)" if exc.status == 400 else ""
+            results.append({"key": raw, "ok": False, "error": exc.message + hint})
+            _log(db, raw, "SPRINT", "FAILED", conn["cloud_id"], None, {"sprint_id": body.sprint_id}, exc.message)
+    failed = [r for r in results if not r["ok"]]
+    if failed and len(failed) == len(results):
+        raise HTTPException(400, "No issue was moved: " + "; ".join(f"{r['key']}: {r['error']}" for r in failed[:5]))
+    _summary_cache.pop(str(db.user).upper(), None)
+    return {"moved": [r["key"] for r in results if r["ok"]], "failed": failed, "sprint_id": body.sprint_id}
+
+
+_summary_cache: dict[str, tuple[float, dict]] = {}
+SUMMARY_TTL = 60.0
+
+
+@router.get("/api/jira/summary")
+def jira_summary(db: Db = Depends(current_db)):
+    """For the sidebar, top bar and Command Center: whether the person is connected, and how many open issues are
+    assigned to them (cached a minute per person). Never fails: not set up or not connected is {connected: false}."""
+    user = str(db.user).upper()
+    hit = _summary_cache.get(user)
+    if hit and time.time() - hit[0] < SUMMARY_TTL:
+        return hit[1]
+    try:
+        client, conn, cfg = _client(db)
+    except HTTPException as exc:
+        return {"connected": False, "open_mine": 0, "reason": exc.detail}
+    project = (cfg.get("default_project") or "").strip().upper()
+    try:
+        found = client.search(" AND ".join(_mine_where(project)) + " ORDER BY updated DESC", page_size=50, max_pages=2)
+    except JiraError as exc:
+        return {"connected": True, "open_mine": 0, "reason": exc.message}
+    out = {"connected": True, "open_mine": len(found), "more": len(found) >= 100, "project": project or None,
+           "site_url": conn.get("site_url")}
+    _summary_cache[user] = (time.time(), out)
+    return out
+
+
 # ---------------------------------------------------------------- bugs from failing QA tests
 
 def bug_label(test_id: str, target_table_id: str) -> str:

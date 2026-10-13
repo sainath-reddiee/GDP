@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState, useTransition } from "react";
-import { Boxes, Check, ChevronDown, Loader2, LogOut, Plus, Search } from "lucide-react";
+import { Boxes, Check, ChevronDown, Loader2, LogOut, Plus, Search, Ticket } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { logout } from "@/app/login/actions";
 import { setDomainScope } from "@/app/scope-actions";
@@ -160,6 +160,34 @@ function AccountMenu({ user, role, canLogout, appRoles }: {
   );
 }
 
+/** Tickets, one click from any page: the caller's open Jira issues and cases (from the sidebar counters, cached 30 s). */
+function TicketsShortcut({ privileges }: { privileges?: string[] | null }) {
+  const allowed = !privileges || privileges.includes("*") || privileges.includes("JIRA.READ") || privileges.includes("CASE.WORK");
+  const [open, setOpen] = useState<number | null>(null);
+  useEffect(() => {
+    if (!allowed) return;
+    let live = true;
+    const load = () => fetch("/bff/nav").then((r) => (r.ok ? r.json() : null))
+      .then((c: { jira_open?: number; cases_mine?: number } | null) => { if (live && c) setOpen((c.jira_open ?? 0) + (c.cases_mine ?? 0)); }, () => undefined);
+    void load();
+    const t = setInterval(load, 60_000);
+    return () => { live = false; clearInterval(t); };
+  }, [allowed]);
+  if (!allowed) return null;
+  const label = open ? `Tickets: ${open} open ticket${open === 1 ? "" : "s"} assigned to you` : "Tickets";
+  return (
+    <Link href="/tickets" aria-label={label} title={label} data-testid="tickets-shortcut"
+          className="relative grid h-9 w-9 place-items-center rounded-xl border border-border/80 bg-card/70 text-muted-foreground shadow-xs transition hover:border-primary/40 hover:text-foreground">
+      <Ticket className="h-4 w-4" />
+      {!!open && (
+        <span className="absolute -right-1 -top-1 grid h-4 min-w-4 place-items-center rounded-full bg-sky-500 px-1 text-[10px] font-semibold tabular-nums text-white">
+          {open > 99 ? "99+" : open}
+        </span>
+      )}
+    </Link>
+  );
+}
+
 /** Sticky frosted bar above every signed-in page: domain scope, search (Ctrl/Cmd+K), quick actions, theme, account. */
 export function TopBar({ user, role, canLogout, appRoles, privileges, domains, scope }: {
   user: string | null; role: string | null; canLogout: boolean; appRoles?: string[] | null; privileges?: string[] | null;
@@ -178,6 +206,7 @@ export function TopBar({ user, role, canLogout, appRoles, privileges, domains, s
           <span className="ml-auto hidden items-center gap-0.5 sm:flex"><kbd className="kbd">{mac ? "⌘" : "Ctrl"}</kbd><kbd className="kbd">K</kbd></span>
         </button>
         <div className="ml-auto flex items-center gap-1.5">
+          <TicketsShortcut privileges={privileges} />
           <NewMenu privileges={privileges} />
           <ThemeToggle />
           <AccountMenu user={user} role={role} canLogout={canLogout} appRoles={appRoles} />

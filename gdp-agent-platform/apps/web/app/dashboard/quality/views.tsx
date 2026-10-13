@@ -170,7 +170,7 @@ export function IncidentsTable({ rows }: { rows: Incident[] }) {
         <TBody>
           {rows.map((i) => (
             <TR key={i.link_id}>
-              <TD><Link href={`/qa?tab=triage&key=${encodeURIComponent(i.issue_key)}`} className="inline-flex items-center gap-1 font-mono text-xs font-medium text-primary hover:underline">{i.issue_key}<ExternalLink className="h-3 w-3" /></Link></TD>
+              <TD><Link href={`/tickets?tab=ticket&key=${encodeURIComponent(i.issue_key)}`} className="inline-flex items-center gap-1 font-mono text-xs font-medium text-primary hover:underline">{i.issue_key}<ExternalLink className="h-3 w-3" /></Link></TD>
               <TD className="max-w-md truncate text-sm">{i.summary ?? "-"}</TD>
               <TD className="text-xs">{i.status ?? "-"}</TD>
               <TD className="text-xs">{i.run_id ? <Link href={`/runs/${i.run_id}/qa?tab=jira`} className="text-primary hover:underline">{i.run_name ?? i.run_id.slice(0, 8)}</Link> : <span className="font-mono">{i.target_table ?? "-"}</span>}</TD>
