@@ -147,7 +147,7 @@ def _view(r: Dict[str, Any], user: str) -> Dict[str, Any]:
     filters = r.get("filters")
     return {"view_id": r["view_id"], "name": r["name"], "shared": bool(r.get("shared")), "owner": r.get("created_by"),
             "mine": str(r.get("created_by") or "").upper() == user.upper(),
-            "filters": json.loads(filters) if isinstance(filters, str) else (filters or {})}
+            "filters": tk.as_query(json.loads(filters) if isinstance(filters, str) else (filters or {}))}
 
 
 @router.get("/api/tickets/views")
@@ -167,7 +167,7 @@ def list_views(db: Db = Depends(current_db)):
 def save_view(body: ViewIn, db: Db = Depends(current_db)):
     """Save the current filters as a named view (replaces my view of the same name)."""
     try:
-        f = tk.clean(body.filters)
+        f = tk.as_query(tk.clean(body.filters))   # checked, then stored the way the page reads it (lists as comma text)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from None
     view_id = str(uuid.uuid4())

@@ -73,3 +73,11 @@ def test_which_sources_a_filter_searches():
     assert not tk.jira_wanted(tk.clean({"source": "case"})) and not tk.cases_wanted(tk.clean({"source": "jira"}))
     assert not tk.jira_wanted(tk.clean({"kind": "DATA_BUG"})) and not tk.jira_wanted(tk.clean({"sla_breached": "1"}))
     assert not tk.cases_wanted(tk.clean({"sprint": "active"})) and not tk.cases_wanted(tk.clean({"project": "A"}))
+
+
+def test_saved_views_keep_the_page_url_shape():
+    f = tk.as_query(tk.clean({"priority": "P2,P1", "type": "Bug,Story", "kind": "data_bug", "assignee": "me", "linked": "1"}))
+    assert f == {"source": "all", "status": "open", "assignee": "me", "priority": "P2,P1", "type": "Bug,Story",
+                 "kind": "DATA_BUG", "linked": True}
+    assert tk.as_query({"priority": ["P1", "P2"], "copilot": False}) == {"priority": "P1,P2"}   # an older stored view
+    assert tk.clean(f) == tk.clean({"priority": "P2,P1", "type": "Bug,Story", "kind": "data_bug", "assignee": "me", "linked": "1"})
