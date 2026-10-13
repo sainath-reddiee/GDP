@@ -64,7 +64,7 @@ def test_file_and_column_previews():
 
 
 def test_copilot_routes_need_ai_use_and_are_never_queued():
-    for path in ("/api/copilot/sessions", "/api/copilot/sessions/abc/turn",
+    for path in ("/api/copilot/sessions", "/api/copilot/sessions/abc/turn", "/api/copilot/sessions/abc/delete",
                  "/api/copilot/sessions/abc/changes/def/discard"):
         assert policy.privilege_for("POST", path)[0] == "AI.USE"
         assert policy.no_queue("POST", path)

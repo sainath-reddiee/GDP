@@ -95,6 +95,34 @@ test("a conversation is kept: reopening it shows its files and plan", async ({ p
   await expect(page.getByRole("navigation", { name: "Conversations" }).getByRole("link").first()).toBeVisible();
 });
 
+test("a conversation can be deleted from the list, after confirming, and stays gone", async ({ page }) => {
+  await openHome(page);
+  await page.locator('input[type="file"]').setInputFiles(file("delete-me.txt", "scratch"));
+  await page.waitForURL(/\/dashboard\/copilot\/[0-9a-f-]{36}$/);
+  const url = page.url();
+  const id = url.split("/").pop()!;
+  const list = page.getByRole("navigation", { name: "Conversations" });
+  const row = list.locator(`a[href="/dashboard/copilot/${id}"]`);
+  const group = list.locator("div.group").filter({ has: page.locator(`a[href="/dashboard/copilot/${id}"]`) });
+  await expect(row).toBeVisible();
+
+  // asking first: Cancel keeps it
+  await row.hover();
+  await group.getByRole("button", { name: /^Delete conversation / }).click();
+  await expect(list.getByText(/Delete this conversation\?/)).toBeVisible();
+  await list.getByRole("button", { name: "Cancel" }).click();
+  await expect(row).toBeVisible();
+
+  // deleting the open conversation leaves it for a fresh page
+  await row.hover();
+  await group.getByRole("button", { name: /^Delete conversation / }).click();
+  await list.getByRole("button", { name: "Delete", exact: true }).click();
+  await page.waitForURL(/\/dashboard\/copilot$/);
+  await expect(page.getByRole("navigation", { name: "Conversations" }).locator(`a[href="/dashboard/copilot/${id}"]`)).toHaveCount(0);
+  await page.goto(url);   // the shell streams first, so the status is 200; the page itself says it is gone
+  await expect(page.getByText("This page could not be found")).toBeVisible();
+});
+
 test.describe("live AI", () => {
   test.skip(!LIVE_AI, "set AIP_E2E_LIVE_AI=1 to run the conversations that call Cortex");
 
