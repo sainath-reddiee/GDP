@@ -88,6 +88,15 @@ async def run_turn(complete: Complete, call: Call, state: Dict[str, Any]) -> Asy
     scratch: List[Dict[str, Any]] = []
     used = 0
     replied = False
+    failed_drafts: Dict[str, str] = {}   # drafting tool -> last error, cleared when a later call of it succeeds
+
+    def truthful(text: str) -> str:
+        """The model's reply, with every draft that failed this turn stated plainly (it may have written the reply
+        expecting success)."""
+        if not failed_drafts:
+            return text
+        lines = "\n".join(f"- {name}: {error}" for name, error in failed_drafts.items())
+        return f"{text}\n\n**Not drafted** (these steps failed; nothing was drafted for them):\n{lines}"
     for _ in range(MAX_STEPS):
         try:
             out, usage, model = await complete(prompt.build(state, scratch), prompt.TURN_SCHEMA)
@@ -133,15 +142,20 @@ async def run_turn(complete: Complete, call: Call, state: Dict[str, Any]) -> Asy
             except ToolError as exc:
                 scratch.append({"tool": name, "error": str(exc)})
                 yield {"type": "tool", "tool": name, "ok": False, "error": str(exc)}
+                if tool and tool.drafts:
+                    failed_drafts[name] = str(exc)[:400]
                 if tool and before is not None and rail.merge(plan, tool.step, before, force=True):
                     yield {"type": "plan", "plan": plan}
                 continue
             except Exception as exc:  # a bug or an unexpected response: report it, keep the turn alive
                 scratch.append({"tool": name, "error": f"unexpected error: {str(exc)[:300]}"})
                 yield {"type": "tool", "tool": name, "ok": False, "error": "The tool failed unexpectedly; try another way."}
+                if tool and tool.drafts:
+                    failed_drafts[name] = "the tool failed unexpectedly"
                 if tool and before is not None and rail.merge(plan, tool.step, before, force=True):
                     yield {"type": "plan", "plan": plan}
                 continue
+            failed_drafts.pop(name, None)
             if result.get("jira_key") and not state.get("jira_key"):
                 state["jira_key"] = result["jira_key"]
             scratch.append({"tool": name, "args": args, "result": result.get("summary")})
@@ -157,6 +171,9 @@ async def run_turn(complete: Complete, call: Call, state: Dict[str, Any]) -> Asy
             if moved:
                 yield {"type": "plan", "plan": plan}
 
+        if calls:
+            continue   # the model wrote this step's reply before seeing the results: let it look at them first
+
         ask = out.get("ask_user") if isinstance(out.get("ask_user"), dict) else {}
         if ask.get("question"):
             fields, refused = clean_fields(ask.get("fields"))
@@ -164,19 +181,17 @@ async def run_turn(complete: Complete, call: Call, state: Dict[str, Any]) -> Asy
                 scratch.append({"note": f"Fields {refused} were removed: never ask for passwords, tokens or keys. "
                                         "Ask for the name of the vault secret instead."})
             if out.get("reply"):
-                yield {"type": "reply", "text": str(out["reply"])[:8000]}
+                yield {"type": "reply", "text": truthful(str(out["reply"])[:8000])}
             yield {"type": "ask", "question": str(ask["question"])[:1000], "fields": fields}
             replied = True
             break
-        if out.get("reply") and (out.get("done") or not calls):
-            yield {"type": "reply", "text": str(out["reply"])[:8000]}
+        if out.get("reply"):
+            yield {"type": "reply", "text": truthful(str(out["reply"])[:8000])}
             replied = True
-            break
-        if out.get("done") or not calls:
-            break
+        break
     if not replied and scratch:
-        yield {"type": "reply", "text": "I stopped here to keep this turn short. Say continue and I will pick up "
-                                        "where I left off, or review what is drafted so far."}
+        yield {"type": "reply", "text": truthful("I stopped here to keep this turn short. Say continue and I will pick "
+                                                 "up where I left off, or review what is drafted so far.")}
     elif not replied:
         yield {"type": "reply", "text": "I could not work out a next step. Could you rephrase or add detail?"}
     approval = rail.by_key(plan)["approval"]

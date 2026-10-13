@@ -414,6 +414,10 @@ async def register_qa_sql_pack(call: Call, a: Dict[str, Any], ctx: Optional[Dict
                                          f"{len(failed)} QA quer{'y' if len(failed) == 1 else 'ies'} failed to run" if failed else "QA queries ran")]}
 
 
+DSL_FORMS = ("missing_count(COL) = 0 | missing_percent(COL) < 5% | duplicate_count(COL) = 0 | duplicate_count(A, B) = 0 | "
+             "duplicate_percent(COL) < 1% | row_count > 0 | row_count between 1 and 1000 | freshness(COL) < 1d | "
+             "min(COL) >= 0 | max(COL) <= 100 | avg(COL) between 1 and 10 (COL is the column name)")
+
 SODA_SEVERITY = {"WARN": "WARN", "WARNING": "WARN", "FAIL": "FAIL", "ERROR": "FAIL", "CRITICAL": "FAIL"}
 
 
@@ -439,7 +443,7 @@ async def register_soda_checks(call: Call, a: Dict[str, Any], ctx: Optional[Dict
             continue
         ok.append({**body, "_headline": data.get("headline") or ""})
     if not ok:
-        raise ToolError(f"no check parsed: {_clip(problems, 800)}")
+        raise ToolError(f"no check parsed: {_clip(problems, 600)}. Write each dsl as one of: {DSL_FORMS}")
     key = f"DQ:{table.upper()}"
     prior = _open_change(ctx, key)
     if prior:  # keep the checks drafted earlier for this table (same column and check: the newer one wins)
@@ -664,7 +668,7 @@ TOOLS: Dict[str, Tool] = {t.name: t for t in [
          {"domain_id": _s(True, 64), "name": _s(False, 128), "pack_id": _s(False, 36),
           "queries": _l("QA queries", max=50), "change_note": _s(False, 2000)}, register_qa_sql_pack, drafts=True),
     Tool("register_soda_checks", "Draft data quality checks for a table, each a one-line SodaCL check (checked now). "
-         "checks: [{column?, dsl, severity: WARN|FAIL, requirement?}].", "quality",
+         "checks: [{column?, dsl, severity: WARN|FAIL, requirement?}]. dsl is exactly one of: " + DSL_FORMS + ".", "quality",
          {"table": _s(True, 800, "DATABASE.SCHEMA.TABLE"), "domain_id": _s(False, 36),
           "checks": _l("checks", max=50)}, register_soda_checks, drafts=True),
     Tool("onboard_source_config", "Validate and draft a SnapLogic external source onboarding (same fields as the "
