@@ -236,17 +236,28 @@ async def update_table_model(call: Call, a: Dict[str, Any], ctx: Optional[Dict[s
     note = a.get("change_note") or "Copilot draft"
     counts = preview.columns(current["spec"], rendered["spec"])["counts"]
     parts = [f"{n} column{'s' if n != 1 else ''} {k}" for k, n in counts.items() if n]
+    pr_ops = [op for op in ((prior or {}).get("operations") or [])[1:] if str(op.get("path") or "").endswith("/publish")]
+    # a pull request drafted earlier for the saved version moves onto this draft: one pull request, for the new version
+    standalone = _open_change(ctx, f"GIT:TABLE_MODEL:{a['table_model_id']}")
+    if standalone and not pr_ops:
+        body = (standalone.get("operations") or [{}])[0].get("body") or {}
+        pr_ops = [{"method": "POST", "path": f"/api/hub/table-models/{model_id}/versions/{{op0.version}}/publish", "body": body}]
     change = changeset.make(
-        key, "MODEL", f"Table model {header.get('table_name') or a['table_model_id']}: {', '.join(parts) or note}"[:512],
+        key, "MODEL", (f"Table model {header.get('table_name') or a['table_model_id']}: {', '.join(parts) or note}"
+                       + (", with a pull request" if pr_ops else ""))[:512],
         [{"method": "PUT", "path": f"/api/hub/table-models/{model_id}",
-          "body": {"spec": rendered["spec"], "etag": header.get("etag"), "change_note": note[:2000]}}],
+          "body": {"spec": rendered["spec"], "etag": header.get("etag"), "change_note": note[:2000]}}, *pr_ops],
         # the preview is always against the saved version, so it shows everything this draft would change
-        {"model": preview.columns(current["spec"], rendered["spec"]),
+        {"model": {**preview.columns(current["spec"], rendered["spec"]),
+                   "diagram": preview.diagram(current["spec"], rendered["spec"])},
          "files": preview.files_diff(preview.rendered_files(current), preview.rendered_files(rendered))})
     counts = change["preview"]["model"]["counts"]
     warnings = [f"{i.get('path')}: {i.get('message')}" for i in rendered.get("issues") or [] if i.get("severity") != "ERROR"][:8]
     return {"summary": {"drafted": change["title"], "columns_vs_saved_version": counts, "warnings": warnings,
-                        "built_on_earlier_draft": bool(prior), "ddl_and_dbt_rendered": True},
+                        "built_on_earlier_draft": bool(prior), "ddl_and_dbt_rendered": True,
+                        **({"pull_request": "the pull request drafted for the saved version now opens for this draft's version"}
+                           if standalone else {})},
+            "supersedes": [standalone["change_key"]] if standalone else [],
             "change": change, "steps": [("model", "DONE", f"{counts['added']} added, {counts['changed']} changed, {counts['removed']} removed"),
                                         ("dryrun", "DONE", "DDL and dbt rendered")]}
 
@@ -503,6 +514,201 @@ async def sync_jira_status(call: Call, a: Dict[str, Any], ctx: Optional[Dict[str
     return {"summary": {"drafted": change["title"], "publishing": "posted after you approve, as you"}, "change": change}
 
 
+async def create_git_pr(call: Call, a: Dict[str, Any], ctx: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """A pull request with a table model's DDL and dbt files, opened when the person publishes. With an open model
+    draft in this conversation, the pull request is for the version that draft saves; otherwise for the saved version."""
+    model_id = _id(a["table_model_id"], "table_model_id")
+    found = _ok(*await call("GET", "/api/source-control/prs", params={"asset": a["table_model_id"]}),
+                what="Reading source control")
+    if not found.get("deployed", True):
+        raise ToolError("source control is not deployed yet (migration V043)")
+    if not found.get("publisher_ready"):
+        raise ToolError("GitHub publishing is not set up. An admin sets it up in Admin, Integrations (GitHub publishing).")
+    repos = [r for r in found.get("repos") or [] if r.get("repo_id")]
+    if not repos:
+        raise ToolError("no GitHub repository is connected for dbt. An admin connects one in Admin, Integrations.")
+    open_prs = [_pick(p, ("version", "state", "pr_url", "branch")) for p in found.get("prs") or []
+                if str(p.get("state") or "").upper() == "OPEN"][:5]
+    wanted = str(a.get("repo_id") or "").strip()
+    repo = next((r for r in repos if r["repo_id"] == wanted), None) if wanted else (repos[0] if len(repos) == 1 else None)
+    if not repo:
+        return {"summary": {"repositories": [_pick(r, ("repo_id", "name", "git_url", "branch")) for r in repos],
+                            "open_pull_requests": open_prs,
+                            "next": ("that repository is not connected; " if wanted else "")
+                                    + "ask the person which repository (a select field with these names), then call again with repo_id"}}
+    body = {"repo_id": repo["repo_id"], **{k: str(a[k])[:200] for k in ("base", "title") if a.get(k)}}
+    key = f"TABLE_MODEL:{a['table_model_id']}"
+    draft = _open_change(ctx, key)
+    if draft:   # publish the version the model draft saves: its PUT returns the version number
+        publish_op = {"method": "POST", "path": f"/api/hub/table-models/{model_id}/versions/{{op0.version}}/publish", "body": body}
+        change = dict(draft)
+        change["operations"] = [draft["operations"][0], publish_op]
+        if ", with a pull request" not in change["title"]:
+            change["title"] = (change["title"] + ", with a pull request")[:512]
+        version_note = "the version the model draft saves"
+        superseded = _open_change(ctx, f"GIT:TABLE_MODEL:{a['table_model_id']}")
+    else:
+        data = await _table_model(call, a["table_model_id"])
+        version = int(data["model"].get("current_version") or data["current"].get("version") or 0)
+        if not version:
+            raise ToolError("the table model has no saved version to publish")
+        name = data["model"].get("table_name") or a["table_model_id"]
+        change = changeset.make(f"GIT:TABLE_MODEL:{a['table_model_id']}", "GIT",
+                                f"Pull request for table model {name} v{version} to {repo.get('name')}",
+                                [{"method": "POST", "path": f"/api/hub/table-models/{model_id}/versions/{version}/publish", "body": body}],
+                                {"files": preview.files_diff({}, preview.rendered_files(data["current"]))})
+        version_note = f"version {version}"
+        superseded = None
+    return {"supersedes": [superseded["change_key"]] if superseded else [],
+            "summary": {"drafted": change["title"], "repository": repo.get("name"), "base": body.get("base") or repo.get("branch"),
+                        "version": version_note, "open_pull_requests": open_prs,
+                        "publishing": "opened as you when you publish; the version becomes PUBLISHED when the pull request merges"},
+            "change": change, "steps": [("publish", "RUNNING", f"pull request to {repo.get('name')} drafted")]}
+
+
+async def find_domain_models(call: Call, a: Dict[str, Any], ctx: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    data = _ok(*await call("GET", "/api/hub/domain-models"), what="Listing domain models")
+    want = str(a.get("q") or "").strip().lower()
+    rows = [_pick(m, ("model_id", "domain_id", "domain_name", "approved_version", "open_version", "open_status", "counts"))
+            for m in data.get("models") or [] if not want or want in str(m.get("domain_name") or "").lower()]
+    return {"summary": {"domain_models": rows[:40], "note": "a domain without model_id has no canonical model yet"}}
+
+
+async def _domain_model(call: Call, model_id: str) -> Dict[str, Any]:
+    data = _ok(*await call("GET", f"/api/hub/domain-models/{_id(model_id, 'model_id')}"), what="Reading the domain model")
+    if not data.get("current"):
+        raise ToolError("the domain model has no version yet")
+    return data
+
+
+async def get_domain_model(call: Call, a: Dict[str, Any], ctx: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    data = await _domain_model(call, a["model_id"])
+    spec = data["current"]["spec"]
+    want = str(a.get("entity") or "").upper()
+    entities = ((spec.get("design") or {}).get("entities")) or []
+    shown = [e for e in entities if not want or str(e.get("entity_name") or "").upper() == want]
+    if want and not shown:
+        raise ToolError(f"{a['entity']} is not an entity of this model; it has: "
+                        + ", ".join(str(e.get("entity_name")) for e in entities[:60]))
+    out = [{"entity_name": e.get("entity_name"), "kind": e.get("kind"), "grain": e.get("grain"),
+            "columns": [_pick(c, ("name", "datatype", "nullable", "is_pk")) for c in e.get("attributes") or []][:120 if want else 40]}
+           for e in shown[:60]]
+    opened = data.get("open") or {}
+    return {"summary": {"model": _pick(data["model"], ("model_id", "domain_name", "approved_version")),
+                        "showing_version": data["current"].get("version"), "showing_status": data["current"].get("status"),
+                        "open_version": _pick(opened, ("version", "status")), "entities": out,
+                        "relationships": len(spec.get("relationships") or [])},
+            "steps": [("context", "DONE", "")]}
+
+
+def _apply_entities(spec: Dict[str, Any], operations: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Column and entity operations on a domain model specification (each names its entity)."""
+    if not operations:
+        raise ToolError("operations is empty: say which entities or columns to add, modify or drop")
+    spec = copy.deepcopy(spec)
+    entities = spec.setdefault("design", {}).setdefault("entities", [])
+    by_entity: Dict[str, List[Dict[str, Any]]] = {}
+    for op in operations:
+        if not isinstance(op, dict):
+            raise ToolError("each operation must be an object")
+        name = str(op.get("entity") or "").strip()
+        if not NAME.match(name):
+            raise ToolError(f"{name!r} is not an entity name")
+        kind = str(op.get("op") or "").lower()
+        index = {str(e.get("entity_name") or "").upper(): e for e in entities}
+        if kind == "add_entity":
+            if name.upper() in index:
+                raise ToolError(f"{name} already exists; add columns to it instead")
+            entities.append({"entity_name": name.upper(), "kind": str(op.get("kind") or "TABLE").upper(),
+                             "purpose": str(op.get("purpose") or op.get("description") or "")[:2000],
+                             "grain": str(op.get("grain") or "")[:2000], "business_keys": [], "attributes": []})
+            continue
+        if name.upper() not in index:
+            raise ToolError(f"{name} is not an entity of this model; add it with add_entity first")
+        by_entity.setdefault(name.upper(), []).append(op)
+    for key, ops in by_entity.items():
+        entity = next(e for e in entities if str(e.get("entity_name") or "").upper() == key)
+        single = {"design": {"entities": [entity]}}
+        changed = _apply_columns(single, [{k: v for k, v in op.items() if k != "entity"} for op in ops])
+        entity.clear()
+        entity.update(changed["design"]["entities"][0])
+    return spec
+
+
+async def update_domain_model(call: Call, a: Dict[str, Any], ctx: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Draft a change to a domain's canonical model: validated now; publishing saves it as the open draft (opening one
+    from the approved version when there is none) and submits it for review. A modeler approves it; the copilot never does."""
+    data = await _domain_model(call, a["model_id"])
+    model_id = _id(a["model_id"], "model_id")
+    header, opened = data["model"], data.get("open") or {}
+    if str(opened.get("status") or "") == "IN_REVIEW":
+        raise ToolError(f"version {opened.get('version')} of this model is in review; it must be decided (or withdrawn "
+                        "in the Model Workbench) before another change can be drafted")
+    approved = int(header.get("approved_version") or 0)
+    if not opened and not approved:
+        raise ToolError("the model has neither an approved version nor a draft")
+    key = f"DOMAIN_MODEL:{a['model_id']}"
+    prior = _open_change(ctx, key)
+    base_spec = data["current"]["spec"]
+    start = next((op.get("body", {}).get("spec") for op in (prior or {}).get("operations") or []
+                  if op.get("method") == "PUT"), None) or base_spec
+    draft = _apply_entities(start, a["operations"])
+    checked = _ok(*await call("POST", f"/api/hub/domain-models/{model_id}/draft/validate", {"spec": draft}),
+                  what="Validating the model")
+    errors = [i for i in checked.get("issues") or [] if i.get("severity") == "ERROR"]
+    if errors:
+        raise ToolError("the changed model does not validate: " + "; ".join(f"{i.get('path')}: {i.get('message')}" for i in errors[:8]))
+    note = str(a.get("change_note") or "Copilot draft")[:2000]
+    save = {"spec": checked["spec"], "change_note": note}
+    if opened:   # edit the open draft (its etag guards against someone else's save in between)
+        ops = [{"method": "PUT", "path": f"/api/hub/domain-models/{model_id}/draft", "body": {**save, "etag": opened.get("etag")}}]
+    else:        # open the next version from the approved one, then save into it
+        ops = [{"method": "POST", "path": f"/api/hub/domain-models/{model_id}/draft", "body": {"note": note}},
+               {"method": "PUT", "path": f"/api/hub/domain-models/{model_id}/draft", "body": {**save, "etag": "{op0.etag}"}}]
+    if a.get("submit", True):
+        ops.append({"method": "POST", "path": f"/api/hub/domain-models/{model_id}/submit", "body": {"note": note}})
+    # always compared with the approved version, which is what the reviewer sees
+    old = base_spec if not opened else None
+    if opened and approved:
+        got = _ok(*await call("GET", f"/api/hub/domain-models/{model_id}", params={"version": str(approved)}),
+                  what="Reading the approved version")
+        old = (got.get("current") or {}).get("spec")
+    shown = preview.model_changes(old, checked["spec"], f"{header.get('domain_name') or a['model_id']} domain model")
+    counts = shown["counts"]
+    parts = [f"{n} {k}" for k, n in counts.items() if n]
+    change = changeset.make(key, "MODEL", f"Domain model {header.get('domain_name') or a['model_id']}: {', '.join(parts) or note}"[:512],
+                            ops, {"model": shown})
+    warnings = [f"{i.get('path')}: {i.get('message')}" for i in checked.get("issues") or [] if i.get("severity") != "ERROR"][:8]
+    return {"summary": {"drafted": change["title"], "changes_vs_approved": counts, "warnings": warnings,
+                        "built_on_earlier_draft": bool(prior),
+                        "saves_into": f"open draft v{opened.get('version')}" if opened else f"a new draft from approved v{approved}",
+                        "saved_now": False,
+                        "on_approve_and_publish": "saved into the Model Workbench draft and submitted for a modeler's review"
+                                                  if a.get("submit", True) else "saved into the Model Workbench draft, not submitted"},
+            "change": change, "steps": [("model", "DONE", ", ".join(parts) or "drafted"), ("dryrun", "DONE", "model validated")]}
+
+
+async def search_code(call: Call, a: Dict[str, Any], ctx: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    params = {"q": a["q"][:500], "limit": "10", **({"kind": str(a["kind"]).upper()[:40]} if a.get("kind") else {})}
+    data = _ok(*await call("GET", "/api/code/search", params=params), what="Searching the code")
+    hits = [{**_pick(h, ("repo_name", "path", "start_line", "end_line", "kind", "name")),
+             "text": _clip(h.get("text") or "", 600)} for h in data.get("hits") or []][:10]
+    return {"summary": {"hits": hits, "note": "" if hits else "no connected repository has matching code"},
+            "steps": [("context", "DONE", f"{len(hits)} code matches")]}
+
+
+async def code_impact(call: Call, a: Dict[str, Any], ctx: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    name = str(a["name"]).strip()
+    if not FQN.match(name) and not NAME.match(name):
+        raise ToolError(f"{name!r} is not a model, table or macro name")
+    data = _ok(*await call("GET", "/api/code/impact", params={"name": name, "depth": "3"}), what="Reading code impact")
+    impact = [_pick(i, ("name", "kind", "depth", "path", "repo_name")) for i in data.get("impact") or []][:40]
+    return {"summary": {"name": name, "known": data.get("known"), "it_depends_on": (data.get("uses") or [])[:20],
+                        "depends_on_it_directly": data.get("direct"), "depends_on_it_total": data.get("total"),
+                        "impact": impact},
+            "steps": [("context", "DONE", f"{data.get('total') or 0} code objects depend on {name}")]}
+
+
 # ---------------------------------------------------------------- conversation context, questions and lookups
 
 async def list_attachments(call: Call, a: Dict[str, Any], ctx: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -652,6 +858,27 @@ TOOLS: Dict[str, Tool] = {t.name: t for t in [
          "operations: [{op: add|modify|drop, column, datatype?, nullable?, is_pk?, description?, business_definition?}].",
          "model", {"table_model_id": _s(True, 64), "operations": _l("column operations", max=100),
                    "change_note": _s(False, 2000)}, update_table_model, drafts=True),
+    Tool("find_domain_models", "List the domains' canonical models (Model Workbench), optionally filtered by domain name.",
+         "context", {"q": _s(False, 100)}, find_domain_models),
+    Tool("get_domain_model", "Read a domain model: its entities with their columns (pass entity for one entity in full).",
+         "context", {"model_id": _s(True, 64), "entity": _s(False, 255)}, get_domain_model),
+    Tool("update_domain_model", "Draft a change to a domain's canonical model; validated now. operations: [{op: "
+         "add_entity|add|modify|drop, entity, column?, datatype?, nullable?, is_pk?, description?, kind?, grain?, purpose?}] "
+         "(add_entity creates an entity; add, modify and drop change one of its columns). Publishing saves the draft and "
+         "submits it for a modeler's review (submit false only saves it).", "model",
+         {"model_id": _s(True, 64), "operations": _l("entity and column operations", max=100),
+          "change_note": _s(False, 2000), "submit": {"type": "bool", "required": False, "desc": "default true"}},
+         update_domain_model, drafts=True),
+    Tool("create_git_pr", "Draft a GitHub pull request with a table model's DDL and dbt files (for the version the open "
+         "model draft saves, else the saved version). Without repo_id it lists the connected repositories to choose from. "
+         "Domain models, QA packs, DQ suites and mappings are published to Git from their stores after approval.",
+         "publish", {"table_model_id": _s(True, 64), "repo_id": _s(False, 36), "base": _s(False, 200),
+                     "title": _s(False, 200)}, create_git_pr, drafts=True),
+    Tool("search_code", "Search the client's connected code repositories (dbt models, macros, tests, SQL) by name or meaning.",
+         "context", {"q": _s(True, 500), "kind": _s(False, 40, "DBT_MODEL, DBT_MACRO, DBT_TEST, DBT_SCHEMA_YML, SQL ...")},
+         search_code),
+    Tool("code_impact", "What a dbt model, table or macro depends on and everything that depends on it in the code: what "
+         "may break when it changes.", "context", {"name": _s(True, 255)}, code_impact),
     Tool("generate_dbt_models", "Show the dbt and DDL files rendered from a table model.", "model",
          {"table_model_id": _s(True, 64)}, generate_dbt_models),
     Tool("find_sttm_mappings", "Find source-to-target mappings in the STTM Store.", "context",

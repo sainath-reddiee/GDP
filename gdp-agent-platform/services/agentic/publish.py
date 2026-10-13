@@ -19,6 +19,8 @@ from typing import Any, AsyncIterator, Dict, List
 from services.agentic import changeset
 
 REF = re.compile(r"\{op(\d+)\.([A-Za-z0-9_]+)\}")
+# some routes answer 200 with the outcome in the body (the pull request publishers): these statuses are failures
+FAILED_BODY = ("FAILED", "AUTH", "TOKEN_SCOPE", "NOT_CONFIGURED", "ERROR")
 
 
 class Unresolved(Exception):
@@ -69,6 +71,9 @@ async def run(call, changes: List[Dict[str, Any]], only: List[str] | None = None
                 break
             if code >= 400:
                 status, detail = "FAILED", f"{op['method']} {path}: {_detail(data)}"
+                break
+            if isinstance(data, dict) and str(data.get("status") or "").upper() in FAILED_BODY:
+                status, detail = "FAILED", f"{op['method']} {path}: {data.get('status')}: {_detail(data)}"
                 break
         change["status"], change["request_id"] = status, request_id
         change["result"] = {"detail": detail, "results": results[-5:]}

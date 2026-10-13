@@ -5,8 +5,9 @@ the step budget runs out. It yields events the API stores and streams to the cha
 
   thought  {text}                              the model's short reasoning for this step
   plan     {plan}                              the whole rail after a change
-  tool     {tool, args, ok, summary|error}     one tool call and its outcome
-  change   {change}                            a drafted change (kept for review, never applied here)
+  tool     {tool, args, ms, ok, summary|error} one tool call and its outcome (args redacted, for the audit trail)
+  change   {change}                            a drafted change (kept for review, never applied here), or one a newer
+                                               draft replaced (status DISCARDED)
   ask      {question, fields}                  a question for the person; the turn ends
   reply    {text}                              the model's message to the person
   error    {text}                              the turn stopped on an error
@@ -21,6 +22,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from typing import Any, AsyncIterator, Awaitable, Callable, Dict, List, Tuple
 
 from services.agentic import changeset, plan as rail, prompt
@@ -45,6 +47,27 @@ def _args(raw: Any) -> Any:
         return json.loads(raw or "{}")
     except (TypeError, ValueError):
         raise ToolError("args_json is not valid JSON") from None
+
+
+def redact(args: Any) -> Dict[str, Any]:
+    """A tool call's arguments for the audit trail: identifiers and short values kept, long text clipped, lists and
+    objects reduced to their size and keys, anything that looks like a credential masked."""
+    if not isinstance(args, dict):
+        return {}
+    out: Dict[str, Any] = {}
+    for k, v in list(args.items())[:30]:
+        key = str(k)[:64]
+        if SECRET_FIELD.search(key):
+            out[key] = "***"
+        elif isinstance(v, str):
+            out[key] = v if len(v) <= 120 else v[:120] + "…"
+        elif isinstance(v, list):
+            out[key] = f"{len(v)} item{'' if len(v) == 1 else 's'}"
+        elif isinstance(v, dict):
+            out[key] = {"keys": sorted(str(x) for x in v)[:20]}
+        else:
+            out[key] = v
+    return out
 
 
 def clean_fields(fields: Any) -> Tuple[List[Dict[str, Any]], List[str]]:
@@ -130,6 +153,8 @@ async def run_turn(complete: Complete, call: Call, state: Dict[str, Any]) -> Asy
             name = str(c.get("tool") or "")
             tool = TOOLS.get(name)
             before = None
+            args: Dict[str, Any] = {}
+            started = time.monotonic()
             try:
                 if tool is None:
                     raise ToolError(f"there is no tool named {name!r}")
@@ -141,7 +166,8 @@ async def run_turn(complete: Complete, call: Call, state: Dict[str, Any]) -> Asy
                 result = await tool.run(call, args, ctx)
             except ToolError as exc:
                 scratch.append({"tool": name, "error": str(exc)})
-                yield {"type": "tool", "tool": name, "ok": False, "error": str(exc)}
+                yield {"type": "tool", "tool": name, "ok": False, "error": str(exc), "args": redact(args),
+                       "ms": int((time.monotonic() - started) * 1000)}
                 if tool and tool.drafts:
                     failed_drafts[name] = str(exc)[:400]
                 if tool and before is not None and rail.merge(plan, tool.step, before, force=True):
@@ -149,7 +175,8 @@ async def run_turn(complete: Complete, call: Call, state: Dict[str, Any]) -> Asy
                 continue
             except Exception as exc:  # a bug or an unexpected response: report it, keep the turn alive
                 scratch.append({"tool": name, "error": f"unexpected error: {str(exc)[:300]}"})
-                yield {"type": "tool", "tool": name, "ok": False, "error": "The tool failed unexpectedly; try another way."}
+                yield {"type": "tool", "tool": name, "ok": False, "error": "The tool failed unexpectedly; try another way.",
+                       "args": redact(args), "ms": int((time.monotonic() - started) * 1000), "detail": str(exc)[:300]}
                 if tool and tool.drafts:
                     failed_drafts[name] = "the tool failed unexpectedly"
                 if tool and before is not None and rail.merge(plan, tool.step, before, force=True):
@@ -159,7 +186,13 @@ async def run_turn(complete: Complete, call: Call, state: Dict[str, Any]) -> Asy
             if result.get("jira_key") and not state.get("jira_key"):
                 state["jira_key"] = result["jira_key"]
             scratch.append({"tool": name, "args": args, "result": result.get("summary")})
-            yield {"type": "tool", "tool": name, "ok": True, "summary": result.get("summary")}
+            yield {"type": "tool", "tool": name, "ok": True, "summary": result.get("summary"), "args": redact(args),
+                   "ms": int((time.monotonic() - started) * 1000)}
+            for key in result.get("supersedes") or []:   # an older draft the new one absorbed: dropped, never published
+                for old in changes:
+                    if old.get("change_key") == key and old.get("status") == "PROPOSED":
+                        old["status"] = "DISCARDED"
+                        yield {"type": "change", "change": old}
             if result.get("change"):
                 saved = changeset.upsert(changes, result["change"])
                 yield {"type": "change", "change": saved}

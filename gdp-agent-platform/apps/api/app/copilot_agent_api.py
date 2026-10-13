@@ -12,6 +12,7 @@ CORE.COPILOT_OWN_ROWS enforces the same in Snowflake.
 from __future__ import annotations
 
 import json
+import logging
 import time
 import uuid
 from typing import Any, AsyncIterator, Dict, List, Optional
@@ -29,6 +30,8 @@ from services.agentic import attachments as files, changeset, loop, plan as rail
 from services.agentic.tools import JIRA_KEY
 
 router = APIRouter()
+log = logging.getLogger(__name__)
+_audit_warned = False
 
 SESSIONS = "CORE.COPILOT_SESSION"
 EVENTS = "CORE.COPILOT_EVENT"
@@ -140,6 +143,12 @@ def _save_plan(db: Db, session_id: str, plan: List[Dict[str, Any]]) -> None:
 def _save_change(db: Db, session_id: str, change: Dict[str, Any]) -> None:
     """Store a drafted change. A revision updates the open draft in place; when that draft was published or discarded
     meanwhile (another tab, or during this turn), the revision becomes a new draft instead of reviving it."""
+    if change.get("status") == "DISCARDED":   # replaced by a newer draft in this turn
+        if change.get("change_id"):
+            db.execute(f"UPDATE {CHANGES} SET STATUS = 'DISCARDED', UPDATED_AT = CURRENT_TIMESTAMP() WHERE CHANGE_ID = %s "
+                       "AND SESSION_ID = %s AND STATUS = 'PROPOSED' AND CREATED_BY = CURRENT_USER()",
+                       (change["change_id"], session_id))
+        return
     ops, prev = _dump(change["operations"], 2_000_000), _dump(change.get("preview") or {})
     if change.get("change_id"):
         updated = db.execute_count(
@@ -179,6 +188,44 @@ def _attachment_text(db: Db, session_id: str, attachment_id: str) -> str:
     found = db.query(f"SELECT TEXT_CONTENT FROM {ATTACHMENTS} WHERE ATTACHMENT_ID = %s AND SESSION_ID = %s "
                      "AND NOT IS_DELETED AND CREATED_BY = CURRENT_USER()", (attachment_id, session_id))
     return (found[0].get("text_content") or "") if found else ""
+
+
+def _audit_tool(db: Db, session_id: str, event: Dict[str, Any]) -> None:
+    """AUDIT.AGENT_TOOL_CALL row for one copilot tool call, like the platform's other agents record theirs (redacted
+    arguments, outcome, duration, the person). Never fails the turn: a role that cannot write the audit table still
+    has the call in the conversation's own events."""
+    summary = event.get("summary")
+    text = json.dumps(summary, default=str)[:3900] if summary is not None else ""
+    try:
+        db.execute("""INSERT INTO AUDIT.AGENT_TOOL_CALL (TOOL_CALL_ID, AGENT_RUN_ID, TOOL_NAME, INPUT_JSON, OUTPUT_SUMMARY,
+                          STATUS, DURATION_MS, ERROR, CALLED_BY)
+                      SELECT %s, %s, %s, PARSE_JSON(%s), NULLIF(%s, ''), %s, %s, NULLIF(%s, ''), CURRENT_USER()""",
+                   (str(uuid.uuid4()), session_id, f"copilot.{str(event.get('tool') or '')[:100]}",
+                    _dump({"session_id": session_id, "args": event.get("args") or {}}, 50_000), text,
+                    "SUCCEEDED" if event.get("ok") else "FAILED", int(event.get("ms") or 0),
+                    str(event.get("detail") or event.get("error") or "")[:3900]))
+    except Exception as exc:
+        global _audit_warned
+        if not _audit_warned:   # once per process: the role cannot write the audit table (or it is missing)
+            _audit_warned = True
+            log.warning("copilot tool calls are not written to AUDIT.AGENT_TOOL_CALL: %s", str(exc)[:300])
+
+
+def _code_context(db: Db, domain_id: Optional[str], question: str) -> str:
+    """The connected repositories' code most relevant to the request (services/code/context.py, stage COPILOT):
+    exact name and lineage matches, Cortex Search and the code graph. Empty when no repository is indexed."""
+    if not question.strip():
+        return ""
+    try:
+        from app.code_api import _rows, _search
+        from services.code import context as code_ctx
+
+        out = code_ctx.code_context(_rows(db), _search(db), stage="COPILOT", domain_id=domain_id, question=question[:2000])
+        code_ctx.record_usage(lambda sql, params: db.execute(sql.replace("?", "%s"), tuple(params)), None, "COPILOT",
+                              out.get("citations") or [])
+        return out.get("text") or ""
+    except Exception:
+        return ""
 
 
 def _public_change(c: Dict[str, Any]) -> Dict[str, Any]:
@@ -363,6 +410,9 @@ async def turn(session_id: str, body: TurnIn, request: Request, db: Db = Depends
 
     state["ctx"] = {"attachments": [{k: a.get(k) for k in ("attachment_id", "file_name", "size_bytes", "chars", "note")}
                                     for a in state["attachments"]], "read_attachment": read_attachment}
+    asked = body.message or next((str((e.get("content") or {}).get("text") or "") for e in reversed(state["events"])
+                                  if e.get("kind") == "USER" and isinstance(e.get("content"), dict)), "")
+    state["code_context"] = await run_in_threadpool(_code_context, db, state["session"].get("domain_id"), asked)
     await run_in_threadpool(_add_event, db, session_id, seq["next"], user_kind, user_content)
     state["events"].append({"kind": user_kind, "content": user_content})
     seq["next"] += 1
@@ -385,6 +435,9 @@ async def turn(session_id: str, body: TurnIn, request: Request, db: Db = Depends
                     continue
                 if kind == "plan":
                     await run_in_threadpool(_save_plan, db, session_id, event["plan"])
+                if kind == "tool":
+                    await run_in_threadpool(_audit_tool, db, session_id, event)
+                    event = {k: v for k, v in event.items() if k != "detail"}   # internal error text stays in the audit row
                 if kind == "change":
                     await run_in_threadpool(_save_change, db, session_id, event["change"])
                     event = {"type": "change", "change": _public_change(event["change"]),
