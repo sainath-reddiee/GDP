@@ -1,7 +1,7 @@
 "use server";
 
 import { api, apiForm, attemptValue } from "@/lib/api";
-import type { Attachment, CopilotSession, SessionRow } from "@/lib/copilot-types";
+import type { Attachment, CopilotSession, PublishCheck, SessionRow } from "@/lib/copilot-types";
 
 export async function createCopilotSession(body: { title: string; jira_key?: string | null }) {
   return attemptValue(() => api<{ session_id: string }>("/api/copilot/sessions", { method: "POST", body: JSON.stringify(body) }));
@@ -29,6 +29,12 @@ export async function uploadCopilotFiles(sessionId: string, form: FormData) {
 export async function removeCopilotFile(sessionId: string, attachmentId: string) {
   return attemptValue(() => api<{ removed: boolean }>(
     `/api/copilot/sessions/${encodeURIComponent(sessionId)}/attachments/${encodeURIComponent(attachmentId)}/remove`, { method: "POST" }));
+}
+
+/** What publishing each open draft would meet for you now: applied, sent to an approver, or refused (and why). */
+export async function checkCopilotPublish(sessionId: string) {
+  return attemptValue(() => api<{ checks: Record<string, PublishCheck> }>(
+    `/api/copilot/sessions/${encodeURIComponent(sessionId)}/publish-check`));
 }
 
 /** Remove a conversation: its unpublished drafts are discarded; anything already published stays published. */

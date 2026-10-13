@@ -32,6 +32,16 @@ export type SttmRow = {
   before: Record<string, string | null> | null; after: Record<string, string | null> | null;
 };
 type TabBase = { change_id: string; title: string; kind: ChangeKind };
+/** A drafted QA query with the outcome of its read-only dry run. */
+export type QaQueryPreview = {
+  query_name: string; sql: string; severity?: string | null; description?: string | null; expectation?: string | null;
+  state: "added" | "changed";
+  dry_run?: { ok?: boolean; outcome?: string; detail?: string; rows_returned?: number; failing?: number } | null;
+};
+/** What publishing a draft would meet now, for the signed-in person (GET .../publish-check). */
+export type PublishCheck = {
+  status: "ok" | "approval" | "forbidden" | "unknown"; reason: string; approver_role: string | null; privileges: string[];
+};
 export type ChangeMark = "added" | "changed" | "removed";
 /** The model tab's ER diagram: entities after the change (removed columns kept) and what to highlight. */
 export type ModelDiagram = {
@@ -42,7 +52,7 @@ export type Workbench = {
   model: (TabBase & { entity: string; columns: ColumnRow[]; counts: Record<string, number>; diagram?: ModelDiagram })[];
   sttm: (TabBase & { lines: SttmRow[] })[];
   dbt: (TabBase & { files: DiffFile[] })[];
-  quality: (TabBase & { files: DiffFile[] })[];
+  quality: (TabBase & { files: DiffFile[]; queries?: QaQueryPreview[] })[];
 };
 
 export type PublishResult = { change_id: string; title: string; kind: ChangeKind; status: ChangeStatus; request_id?: string | null; detail?: string };

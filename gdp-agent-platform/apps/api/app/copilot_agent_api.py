@@ -459,6 +459,44 @@ async def turn(session_id: str, body: TurnIn, request: Request, db: Db = Depends
                              headers={"Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "no"})
 
 
+def _check_change(db: Db, change: Dict[str, Any]) -> Dict[str, Any]:
+    """What publishing this change would meet, call by call, for the signed-in person: refused (with why), sent to an
+    approver, or applied. References to earlier results ({op0.version}) are stood in for, since only the route matters."""
+    from app.governance import preview_call
+
+    out: Dict[str, Any] = {"status": "ok", "reason": "", "approver_role": None, "privileges": []}
+    for op in change.get("operations") or []:
+        path = publisher.REF.sub("0", str(op.get("path") or ""))
+        seen = preview_call(db, str(op.get("method") or "POST"), path, op.get("body"))
+        if seen.get("privilege") and seen["privilege"] not in out["privileges"]:
+            out["privileges"].append(seen["privilege"])
+        if seen["verdict"] == "FORBID":
+            return {**out, "status": "forbidden", "reason": seen.get("reason") or "not allowed"}
+        if seen["verdict"] == "REQUEST" and out["status"] == "ok":
+            out.update(status="approval", approver_role=seen.get("approver_role"), reason=seen.get("reason") or "")
+    return out
+
+
+@router.get("/api/copilot/sessions/{session_id}/publish-check")
+def publish_check(session_id: str, db: Db = Depends(current_db)):
+    """For the review drawer: each open draft's outcome if published now (ok, approval or forbidden, with the reason),
+    from the same governance rules the publish will meet. Nothing is called."""
+    try:
+        _session(db, session_id)
+        changes = [c for c in _changes(db, session_id) if c.get("status") == "PROPOSED"]
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise _deployed_or_503(exc) from exc
+    out = {}
+    for c in changes:
+        try:
+            out[c["change_id"]] = _check_change(db, c)
+        except Exception:   # an unknown answer never blocks publishing: the API still decides each call
+            out[c["change_id"]] = {"status": "unknown", "reason": "", "approver_role": None, "privileges": []}
+    return {"checks": out}
+
+
 class PublishIn(BaseModel):
     change_ids: List[str] = Field(min_length=1, max_length=100)   # the drafts the person chose in the review drawer
 

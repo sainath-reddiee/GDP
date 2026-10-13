@@ -272,3 +272,79 @@ def test_a_model_draft_absorbs_a_pull_request_drafted_for_the_saved_version():
     assert [e["change"]["change_key"] for e in events if e["type"] == "change"] == [
         "GIT:TABLE_MODEL:tm1", "GIT:TABLE_MODEL:tm1", "TABLE_MODEL:tm1"]
     assert changeset.ordered(state["changes"]) == [model]   # one pull request gets published
+
+
+# ---------------------------------------------------------------- column profiles and the QA pack preview
+
+def test_inspect_source_reads_one_tables_column_profile():
+    profile = {"entry": {}, "scorecard": {"score": 91, "grade": "A", "other": 1},
+               "checks": [{"check": "missing_count(N_NAME) = 0", "column": "N_NAME", "reason": "no nulls seen", "x": 1}],
+               "profile": {"row_count": 25, "columns": [{"name": "N_NAME", "data_type": "VARCHAR", "statistics": {
+                   "null_count": 0, "distinct_count": 25, "distinct_percentage": 100, "histogram": [1, 2]}}]}}
+    api = Api({("GET", "/api/catalog/inventory"): (200, {"tables": [{"table_name": "NATION", "row_count": 25}]}),
+               ("GET", "/api/catalog/profile"): (200, profile)})
+    out = run(tools.inspect_source(api, {"database": "DB", "schema": "TPCH", "table": "NATION"}))["summary"]["profile"]
+    assert out["profiled"] and out["row_count"] == 25 and out["scorecard"] == {"score": 91, "grade": "A"}
+    assert out["columns"] == [{"name": "N_NAME", "datatype": "VARCHAR", "null_count": 0, "distinct_count": 25,
+                               "distinct_percentage": 100}]   # statistics only, never sample values or histograms
+    assert out["suggested_checks"][0] == {"check": "missing_count(N_NAME) = 0", "column": "N_NAME", "reason": "no nulls seen"}
+    api.routes[("GET", "/api/catalog/profile")] = (404, {"detail": "NATION has no staged profile yet"})
+    missing = run(tools.inspect_source(api, {"database": "DB", "schema": "TPCH", "table": "NATION"}))["summary"]["profile"]
+    assert missing["profiled"] is False and "no staged profile" in missing["note"]
+    with pytest.raises(ToolError):
+        run(tools.inspect_source(api, {"database": "DB", "schema": "TPCH", "table": "x; drop"}))
+
+
+def test_qa_pack_preview_is_the_pack_file_with_each_query_and_its_dry_run():
+    def execute(body, _):
+        return 200, {"results": [{"outcome": "PASS", "rows_returned": 0}]}
+    existing = {"pack": {"name": "Sales checks", "version": 2, "description": "d", "tags": ["t"]},
+                "queries": [{"query_name": "no_orphans", "sql_expression": "select 1 where false", "severity": "ERROR"}]}
+    api = Api({("POST", "/api/qa/execute"): execute, ("GET", "/api/qa-packs/p1"): (200, existing)})
+    out = run(tools.register_qa_sql_pack(api, {"domain_id": "d1", "pack_id": "p1", "queries": [
+        {"query_name": "no_orphans", "sql": "select * from o where c is null", "severity": "ERROR"},
+        {"query_name": "positive_amount", "sql": "select * from o where amount < 0"}]}))
+    preview = out["change"]["preview"]
+    file = preview["files"][0]
+    assert file["path"] == "qa/sales_checks.sql" and file["status"] == "changed"
+    text = "\n".join(op[3] for op in file["ops"] if isinstance(op, list) and op[0] == "+")
+    assert "-- @query positive_amount" in text
+    assert {q["query_name"]: q["state"] for q in preview["queries"]} == {"no_orphans": "changed", "positive_amount": "added"}
+    assert preview["queries"][0]["dry_run"]["outcome"] == "PASS"
+    tab = changeset.tabs([{**out["change"], "change_id": "c1"}])["quality"][0]
+    assert tab["queries"] and tab["files"]
+
+
+# ---------------------------------------------------------------- what the agent may claim
+
+def _turn(outputs, api):
+    async def complete(text, schema):
+        return outputs.pop(0), {}, "m"
+    state = {"title": "t", "plan": rail.initial(), "changes": [], "events": [{"kind": "USER", "content": {"text": "x"}}]}
+    return collect(loop.run_turn(complete, api, state)), state
+
+
+def test_the_model_cannot_mark_dry_run_approval_or_publish_done():
+    events, state = _turn([{"thought": "", "tool_calls": [], "done": True, "reply": "Done.", "plan_updates": [
+        {"step": "dryrun", "status": "DONE", "note": "all good"}, {"step": "approval", "status": "DONE", "note": "submitted"},
+        {"step": "publish", "status": "SKIPPED", "note": "no Jira"}, {"step": "context", "status": "DONE", "note": "read"}]}],
+        Api({}))
+    steps = rail.by_key(state["plan"])
+    assert steps["dryrun"]["status"] == "PENDING" and steps["approval"]["status"] == "PENDING"
+    assert steps["publish"]["status"] == "SKIPPED" and steps["context"]["status"] == "DONE"   # skipping is allowed
+
+
+def test_a_failed_dry_run_is_stated_under_the_reply_and_drafts_are_marked_draft_only():
+    def execute(body, _):
+        return 400, {"detail": "X.Y.NATION is not one of this domain's tables"}
+    call = {"tool": "register_qa_sql_pack", "args_json": json.dumps({"domain_id": "d1", "queries": [
+        {"query_name": "nation_name_present", "sql": "select * from x.y.nation where n_name is null"}]})}
+    events, state = _turn([{"thought": "", "tool_calls": [call], "reply": "", "done": False},
+                           {"thought": "", "tool_calls": [], "reply": "The query is valid and was submitted.", "done": True}],
+                          Api({("POST", "/api/qa/execute"): execute}))
+    tool = next(e for e in events if e["type"] == "tool")
+    assert tool["summary"]["status"].startswith("DRAFT ONLY")
+    reply = next(e for e in events if e["type"] == "reply")["text"]
+    assert "**Check before publishing:**" in reply and "nation_name_present did not run" in reply
+    assert "not one of this domain's tables" in reply
+    assert rail.by_key(state["plan"])["dryrun"]["status"] == "BLOCKED"
