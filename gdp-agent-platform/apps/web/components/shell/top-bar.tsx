@@ -153,7 +153,7 @@ function AccountMenu({ user, role, canLogout, appRoles }: {
               </button>
             </form>
           )}
-          <p className="border-t border-border/70 pt-2 font-mono text-[10px] text-muted-foreground">{buildLabel()}</p>
+          <p className="border-t border-border/70 pt-2 font-mono text-[10px] text-muted-foreground" suppressHydrationWarning>{buildLabel()}</p>
         </div>
       )}
     </div>

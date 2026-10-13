@@ -302,7 +302,9 @@ export function Sidebar({ privileges }: { privileges?: string[] | null }) {
                   collapsed ? "justify-center" : "px-2.5")}>
           {collapsed ? <ChevronsRight className="h-4 w-4" /> : <><ChevronsLeft className="h-4 w-4" /> Collapse</>}
         </button>
-        <p data-testid="build-stamp" title={buildLabel()}
+        {/* the build is inlined per bundle: after a pull, a dev server can serve server and browser bundles of different
+            commits for a moment, which must not break the page (npm run doctor reports the mismatch instead) */}
+        <p data-testid="build-stamp" title={buildLabel()} suppressHydrationWarning
            className={cn("mt-1 truncate font-mono text-[10px] text-white/25", collapsed ? "text-center" : "px-2.5")}>
           {collapsed ? BUILD_SHA.slice(0, 7) : buildLabel()}
         </p>

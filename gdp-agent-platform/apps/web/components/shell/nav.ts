@@ -1,5 +1,5 @@
 import {
-  Activity, BadgeCheck, BarChart3, BookOpen, Boxes, ClipboardCheck, Database, FileClock, FlaskConical, FolderGit2, GitCompareArrows, GitPullRequest,
+  Activity, BadgeCheck, Bot, BarChart3, BookOpen, Boxes, ClipboardCheck, Database, FileClock, FlaskConical, FolderGit2, GitCompareArrows, GitPullRequest,
   LayoutDashboard, ListChecks, Network, Rocket, Settings, ShieldCheck, Siren, Sparkles, SquareTerminal, Store,
 } from "lucide-react";
 import type { NavCounts } from "@/app/bff/nav/route";
@@ -57,7 +57,10 @@ export type NavGroup = { label: string; links: NavLink[]; secondary?: boolean; d
 export const NAV_GROUPS: NavGroup[] = [
   {
     label: "Overview",
-    links: [{ href: "/dashboard", label: "Command Center", icon: LayoutDashboard, exact: true }],
+    links: [
+      { href: "/dashboard", label: "Command Center", icon: LayoutDashboard, exact: true },
+      { href: "/dashboard/copilot", label: "Copilot", icon: Bot, privilege: "AI.USE" },
+    ],
   },
   {
     label: "Onboard", feature: true,

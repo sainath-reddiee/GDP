@@ -129,6 +129,11 @@ RULES: List[Tuple[str, str, Any, str]] = [
     ("PUT", r"/api/auth/role", None, ""),
     ("POST", r"/api/(knowledge/search|catalog/analyze|catalog/preview-graph|oracle/parse)", None, ""),
     ("POST", r"/api/(agent/stream|copilot/ask|knowledge/answer)", "AI.USE", ""),
+    # Copilot workspace (V048): the conversation itself needs AI.USE; every call its tools make is checked again,
+    # under the person's own session, by this same middleware.
+    ("POST", r"/api/copilot/sessions(/.*)?", "AI.USE", ""),
+    # an AI proposal for one STTM Store line: read only (applying it is a store edit, which goes for approval)
+    ("POST", r"/api/hub/sttm/[^/]+/refine", "AI.USE", ""),
     ("POST", r"/api/oracle/integrations/check", "SOURCE.CONNECT", ""),
     ("POST", rf"{R}/model/validate", None, ""),
     ("POST", rf"{R}/(mapping/assist|qa/ask|qa/plan|sttm/refine)", "AI.USE", ""),
@@ -415,6 +420,7 @@ NO_QUEUE_ROUTES = [(m, re.compile(p)) for m, p in [
     ("POST", r"^/api/dq/suites/.+$"), ("PUT", r"^/api/dq/suites/.+$"),
     ("POST", r"^/api/hub/profiles/annotations(/.*)?$"),
     ("POST", r"^/api/hub/sttm/[^/]+/publish$"),
+    ("POST", r"^/api/copilot/sessions(/.*)?$"),
 ]]
 
 
