@@ -384,7 +384,7 @@ async def generate_sttm_mapping(call: Call, a: Dict[str, Any], ctx: Optional[Dic
     return {"summary": {"drafted": change["title"], "edited": [e["target_column"] for e in edits],
                         "added": [l.get("target_column") for l in add], "ai_rationale": notes,
                         "built_on_earlier_draft": bool(prior),
-                        "publishing": "a mapping edit always goes to an STTM approver"},
+                        "on_approve_and_publish": "the mapping edit goes to an STTM approver"},
             "change": change, "steps": [("sttm", "DONE", f"{len(edits)} edited, {len(add)} added")]}
 
 
@@ -466,8 +466,10 @@ async def register_qa_sql_pack(call: Call, a: Dict[str, Any], ctx: Optional[Dict
                                   "queries": shown})
     failed = [d for d in dry if not d["ok"]]
     return {"summary": {"drafted": change["title"], "dry_run": dry,
-                        "publishing": "submitted for approval by a QA lead (four eyes)",
+                        "on_approve_and_publish": "the pack is saved and submitted to a QA lead for approval (four eyes)",
                         "next": "fix the failed queries and draft again" if failed else ""},
+            "cautions": [f"QA query {d['query_name']} did not run in the dry run ({_clip(d.get('detail') or d.get('outcome') or 'error', 300)}); "
+                         "it was not checked and fails the same way when the pack runs" for d in failed],
             "change": change, "steps": [("quality", "DONE", f"{len(queries)} QA queries"),
                                         ("dryrun", "BLOCKED" if failed else "DONE",
                                          f"{len(failed)} QA quer{'y' if len(failed) == 1 else 'ies'} failed to run" if failed else "QA queries ran")]}
@@ -566,7 +568,7 @@ async def sync_jira_status(call: Call, a: Dict[str, Any], ctx: Optional[Dict[str
         moved = pick.get("to") or pick.get("name")
     change = changeset.make(f"JIRA:{key}", "JIRA", f"Jira {key}: comment" + (f" and move to {moved}" if moved else ""), ops,
                             {"files": [preview.file_diff(f"jira/{key}-comment.md", None, str(a["comment_markdown"]))]})
-    return {"summary": {"drafted": change["title"], "publishing": "posted after you approve, as you"}, "change": change}
+    return {"summary": {"drafted": change["title"], "on_approve_and_publish": "the comment (and move) is posted as the person"}, "change": change}
 
 
 async def create_git_pr(call: Call, a: Dict[str, Any], ctx: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -617,7 +619,7 @@ async def create_git_pr(call: Call, a: Dict[str, Any], ctx: Optional[Dict[str, A
     return {"supersedes": [superseded["change_key"]] if superseded else [],
             "summary": {"drafted": change["title"], "repository": repo.get("name"), "base": body.get("base") or repo.get("branch"),
                         "version": version_note, "open_pull_requests": open_prs,
-                        "publishing": "opened as you when you publish; the version becomes PUBLISHED when the pull request merges"},
+                        "on_approve_and_publish": "the pull request is opened as the person; the version becomes PUBLISHED when it merges"},
             "change": change, "steps": [("publish", "RUNNING", f"pull request to {repo.get('name')} drafted")]}
 
 

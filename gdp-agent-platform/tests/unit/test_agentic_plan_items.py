@@ -313,3 +313,38 @@ def test_qa_pack_preview_is_the_pack_file_with_each_query_and_its_dry_run():
     assert preview["queries"][0]["dry_run"]["outcome"] == "PASS"
     tab = changeset.tabs([{**out["change"], "change_id": "c1"}])["quality"][0]
     assert tab["queries"] and tab["files"]
+
+
+# ---------------------------------------------------------------- what the agent may claim
+
+def _turn(outputs, api):
+    async def complete(text, schema):
+        return outputs.pop(0), {}, "m"
+    state = {"title": "t", "plan": rail.initial(), "changes": [], "events": [{"kind": "USER", "content": {"text": "x"}}]}
+    return collect(loop.run_turn(complete, api, state)), state
+
+
+def test_the_model_cannot_mark_dry_run_approval_or_publish_done():
+    events, state = _turn([{"thought": "", "tool_calls": [], "done": True, "reply": "Done.", "plan_updates": [
+        {"step": "dryrun", "status": "DONE", "note": "all good"}, {"step": "approval", "status": "DONE", "note": "submitted"},
+        {"step": "publish", "status": "SKIPPED", "note": "no Jira"}, {"step": "context", "status": "DONE", "note": "read"}]}],
+        Api({}))
+    steps = rail.by_key(state["plan"])
+    assert steps["dryrun"]["status"] == "PENDING" and steps["approval"]["status"] == "PENDING"
+    assert steps["publish"]["status"] == "SKIPPED" and steps["context"]["status"] == "DONE"   # skipping is allowed
+
+
+def test_a_failed_dry_run_is_stated_under_the_reply_and_drafts_are_marked_draft_only():
+    def execute(body, _):
+        return 400, {"detail": "X.Y.NATION is not one of this domain's tables"}
+    call = {"tool": "register_qa_sql_pack", "args_json": json.dumps({"domain_id": "d1", "queries": [
+        {"query_name": "nation_name_present", "sql": "select * from x.y.nation where n_name is null"}]})}
+    events, state = _turn([{"thought": "", "tool_calls": [call], "reply": "", "done": False},
+                           {"thought": "", "tool_calls": [], "reply": "The query is valid and was submitted.", "done": True}],
+                          Api({("POST", "/api/qa/execute"): execute}))
+    tool = next(e for e in events if e["type"] == "tool")
+    assert tool["summary"]["status"].startswith("DRAFT ONLY")
+    reply = next(e for e in events if e["type"] == "reply")["text"]
+    assert "**Check before publishing:**" in reply and "nation_name_present did not run" in reply
+    assert "not one of this domain's tables" in reply
+    assert rail.by_key(state["plan"])["dryrun"]["status"] == "BLOCKED"

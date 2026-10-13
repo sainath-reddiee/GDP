@@ -37,7 +37,11 @@ MAX_FIELDS = 8         # fields in one question
 FIELD_TYPES = ("select", "multiselect", "text", "textarea", "number", "confirm")
 # never ask a person to type a credential into the chat
 SECRET_FIELD = re.compile(r"pass(word|wd)?|secret|token|api[_ ]?key|private[_ ]?key|credential", re.I)
-BUDGET_NOTE = "The tool budget for this turn is used up. Do not call more tools: reply now with what you have, or ask."
+# steps a tool result or Approve and Publish moves, never the model: the model may only skip them while still pending
+TOOL_OWNED = ("dryrun", "approval", "publish")
+DRAFT_ONLY = ("DRAFT ONLY: nothing was saved, submitted or sent. It happens only when the person clicks Approve and "
+              "Publish; describe it in the future tense.")
+BUDGET_NOTE ="The tool budget for this turn is used up. Do not call more tools: reply now with what you have, or ask."
 
 
 def _args(raw: Any) -> Any:
@@ -112,14 +116,18 @@ async def run_turn(complete: Complete, call: Call, state: Dict[str, Any]) -> Asy
     used = 0
     replied = False
     failed_drafts: Dict[str, str] = {}   # drafting tool -> last error, cleared when a later call of it succeeds
+    cautions: Dict[str, List[str]] = {}  # drafting tool -> what its latest draft could not check (failed dry runs)
 
     def truthful(text: str) -> str:
-        """The model's reply, with every draft that failed this turn stated plainly (it may have written the reply
-        expecting success)."""
-        if not failed_drafts:
-            return text
-        lines = "\n".join(f"- {name}: {error}" for name, error in failed_drafts.items())
-        return f"{text}\n\n**Not drafted** (these steps failed; nothing was drafted for them):\n{lines}"
+        """The model's reply, with every draft that failed this turn, and everything a draft could not check, stated
+        plainly (the model may have written the reply expecting success)."""
+        if failed_drafts:
+            lines = "\n".join(f"- {name}: {error}" for name, error in failed_drafts.items())
+            text = f"{text}\n\n**Not drafted** (these steps failed; nothing was drafted for them):\n{lines}"
+        notes = [n for items in cautions.values() for n in items]
+        if notes:
+            text = f"{text}\n\n**Check before publishing:**\n" + "\n".join(f"- {n}" for n in notes)
+        return text
     for _ in range(MAX_STEPS):
         try:
             out, usage, model = await complete(prompt.build(state, scratch), prompt.TURN_SCHEMA)
@@ -135,7 +143,10 @@ async def run_turn(complete: Complete, call: Call, state: Dict[str, Any]) -> Asy
         moved = False
         for u in out.get("plan_updates") or []:
             if isinstance(u, dict):
-                moved |= rail.merge(plan, str(u.get("step")), str(u.get("status")), str(u.get("note") or ""), force=True)
+                key, status = str(u.get("step")), str(u.get("status"))
+                if key in TOOL_OWNED and not (status == "SKIPPED" and rail.by_key(plan).get(key, {}).get("status") == "PENDING"):
+                    continue   # dry runs, approval and publishing are reported by tools and the publish, not claimed
+                moved |= rail.merge(plan, key, status, str(u.get("note") or ""), force=True)
         if moved:
             yield {"type": "plan", "plan": plan}
 
@@ -183,6 +194,10 @@ async def run_turn(complete: Complete, call: Call, state: Dict[str, Any]) -> Asy
                     yield {"type": "plan", "plan": plan}
                 continue
             failed_drafts.pop(name, None)
+            if tool.drafts:
+                cautions[name] = [str(c)[:500] for c in result.get("cautions") or []][:10]
+                if result.get("change") and isinstance(result.get("summary"), dict):
+                    result["summary"] = {"status": DRAFT_ONLY, **result["summary"]}
             if result.get("jira_key") and not state.get("jira_key"):
                 state["jira_key"] = result["jira_key"]
             scratch.append({"tool": name, "args": args, "result": result.get("summary")})
