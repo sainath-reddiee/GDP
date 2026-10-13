@@ -9,7 +9,7 @@ import {
   type Workbench,
 } from "@/lib/copilot-types";
 import {
-  createCopilotSession, discardCopilotChange, loadCopilotSession, removeCopilotFile, uploadCopilotFiles,
+  createCopilotSession, deleteCopilotSession, discardCopilotChange, loadCopilotSession, removeCopilotFile, uploadCopilotFiles,
 } from "../actions";
 import { Composer, DRAFT_KEY, MAX_FILE_BYTES, MAX_FILES, MAX_JIRA, type Uploading } from "./composer";
 import { Home } from "./home";
@@ -297,9 +297,17 @@ export function CopilotApp({ sessions: initialSessions, initial, disabled }: {
                onPublish={() => { setMobilePanel(null); setReview({ open: true }); }}
                publishing={publishing} onRemoveFile={(id) => void removeFile(id)} onHide={() => { setShowRight(false); setMobilePanel(null); }} />
   );
+  /** Delete a conversation; leaving it when it is the one open. True when it was deleted. */
+  const deleteConversation = async (id: string): Promise<boolean> => {
+    const r = await deleteCopilotSession(id).catch(() => null);
+    if (!r?.ok) { sayError(r ? r.error : "The conversation could not be deleted."); return false; }
+    setSessions((xs) => xs.filter((s) => s.session_id !== id));
+    if (id === sessionId) window.location.assign("/dashboard/copilot");
+    return true;
+  };
   const list = (
     <ConversationList sessions={sessions} current={sessionId} onHide={() => { setShowLeft(false); setMobilePanel(null); }}
-                      onNew={newConversation} />
+                      onNew={newConversation} onDelete={deleteConversation} />
   );
 
   return (

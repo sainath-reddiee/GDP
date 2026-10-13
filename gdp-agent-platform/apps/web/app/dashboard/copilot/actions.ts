@@ -30,3 +30,9 @@ export async function removeCopilotFile(sessionId: string, attachmentId: string)
   return attemptValue(() => api<{ removed: boolean }>(
     `/api/copilot/sessions/${encodeURIComponent(sessionId)}/attachments/${encodeURIComponent(attachmentId)}/remove`, { method: "POST" }));
 }
+
+/** Remove a conversation: its unpublished drafts are discarded; anything already published stays published. */
+export async function deleteCopilotSession(sessionId: string) {
+  return attemptValue(() => api<{ session_id: string; deleted: boolean }>(
+    `/api/copilot/sessions/${encodeURIComponent(sessionId)}/delete`, { method: "POST" }));
+}

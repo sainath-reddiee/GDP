@@ -84,7 +84,8 @@ def _dump(value: Any, limit: int = MAX_JSON) -> str:
 def _session(db: Db, session_id: str) -> Dict[str, Any]:
     found = db.query(f"""SELECT SESSION_ID, TITLE, STATUS, JIRA_KEY, DOMAIN_ID, MODEL, CREATED_BY,
                                 TO_VARCHAR(CREATED_AT, 'YYYY-MM-DD"T"HH24:MI:SS.FF3TZH:TZM') AS CREATED_AT, TO_VARCHAR(UPDATED_AT, 'YYYY-MM-DD"T"HH24:MI:SS.FF3TZH:TZM') AS UPDATED_AT
-                           FROM {SESSIONS} WHERE SESSION_ID = %s AND CREATED_BY = CURRENT_USER()""", (session_id,))
+                           FROM {SESSIONS} WHERE SESSION_ID = %s AND STATUS <> 'DELETED' AND CREATED_BY = CURRENT_USER()""",
+                       (session_id,))
     if not found:
         raise HTTPException(404, "conversation not found")
     return found[0]
@@ -214,7 +215,7 @@ def list_sessions(db: Db = Depends(current_db)):
                                    TO_VARCHAR(MAX(S.UPDATED_AT), 'YYYY-MM-DD"T"HH24:MI:SS.FF3TZH:TZM') AS UPDATED_AT,
                                    COUNT_IF(C.STATUS = 'PROPOSED') AS PROPOSED, COUNT(C.CHANGE_ID) AS CHANGES
                               FROM {SESSIONS} S LEFT JOIN {CHANGES} C ON C.SESSION_ID = S.SESSION_ID
-                             WHERE S.CREATED_BY = CURRENT_USER() AND S.STATUS <> 'ARCHIVED'
+                             WHERE S.CREATED_BY = CURRENT_USER() AND S.STATUS NOT IN ('ARCHIVED', 'DELETED')
                              GROUP BY S.SESSION_ID ORDER BY MAX(S.UPDATED_AT) DESC LIMIT 100""")
     except Exception as exc:
         if _missing(exc):
@@ -235,6 +236,25 @@ def get_session(session_id: str, db: Db = Depends(current_db)):
         raise
     except Exception as exc:
         raise _deployed_or_503(exc) from exc
+
+
+@router.post("/api/copilot/sessions/{session_id}/delete")
+def delete_session(session_id: str, db: Db = Depends(current_db)):
+    """Remove a conversation from the workspace. Its unpublished drafts are discarded (they were never applied);
+    anything already published stays published. The rows are kept, marked deleted, for audit."""
+    try:
+        _session(db, session_id)
+    except Exception as exc:
+        raise _deployed_or_503(exc) from exc
+    if db.query(f"SELECT 1 AS X FROM {CHANGES} WHERE SESSION_ID = %s AND STATUS = 'PUBLISHING' AND CREATED_BY = CURRENT_USER() LIMIT 1",
+                (session_id,)):
+        raise HTTPException(409, "This conversation is publishing right now. Delete it when publishing has finished.")
+    db.execute(f"UPDATE {CHANGES} SET STATUS = 'DISCARDED', UPDATED_AT = CURRENT_TIMESTAMP() "
+               "WHERE SESSION_ID = %s AND STATUS = 'PROPOSED' AND CREATED_BY = CURRENT_USER()", (session_id,))
+    db.execute(f"UPDATE {ATTACHMENTS} SET IS_DELETED = TRUE WHERE SESSION_ID = %s AND CREATED_BY = CURRENT_USER()", (session_id,))
+    db.execute(f"UPDATE {SESSIONS} SET STATUS = 'DELETED', UPDATED_AT = CURRENT_TIMESTAMP() "
+               "WHERE SESSION_ID = %s AND CREATED_BY = CURRENT_USER()", (session_id,))
+    return {"session_id": session_id, "deleted": True}
 
 
 @router.post("/api/copilot/sessions/{session_id}/changes/{change_id}/discard")
