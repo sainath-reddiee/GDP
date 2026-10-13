@@ -107,3 +107,28 @@ export async function transitionJira(key: string, transitionId: string, runId?: 
   return attemptValue(() => api<{ status: string }>(`/api/jira/issues/${encodeURIComponent(key)}/transition`,
     { method: "POST", body: JSON.stringify({ transition_id: transitionId, run_id: runId }) }));
 }
+
+export type JiraProject = { id: string; key: string; name: string };
+export type JiraSummary = { connected: boolean; open_mine: number; more?: boolean; project?: string | null; reason?: string };
+
+/** Projects the signed-in person can create issues in, and the platform's default project. */
+export async function jiraProjects(q = "") {
+  return attemptValue(() => api<{ projects: JiraProject[]; default: string | null }>(`/api/jira/projects?q=${encodeURIComponent(q)}`));
+}
+
+/** The issue types a project offers (sub-tasks left out). */
+export async function jiraIssueTypes(project: string) {
+  return attemptValue(() => api<{ types: { id: string; name: string; subtask: boolean }[] }>(
+    `/api/jira/projects/${encodeURIComponent(project)}/issue-types`));
+}
+
+/** Create an issue in the person's own Jira account; the idempotency key makes a double submit create it once. */
+export async function createJiraIssue(body: {
+  project_key: string; issue_type: string; summary: string; description_markdown: string; labels: string[]; idempotency_key: string;
+  sprint_id?: number | null;
+}) {
+  const out = await attemptValue(() => api<{ key: string; url: string; created: boolean; existing: boolean; summary: string }>(
+    "/api/jira/issues", { method: "POST", body: JSON.stringify(body) }));
+  revalidatePath("/tickets");
+  return out;
+}

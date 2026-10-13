@@ -14,6 +14,10 @@ export type NavCounts = {
   qa_pending?: number;
   dq_failing?: number;
   sttm_pending?: number;
+  /** open Jira issues assigned to the caller; 0 without JIRA.READ or a connected Jira account */
+  jira_open?: number;
+  /** open cases assigned to the caller; 0 without CASE.WORK */
+  cases_mine?: number;
 };
 
 /** Sidebar counters as a plain GET (server actions run one at a time and would queue behind page actions).
@@ -21,7 +25,7 @@ export type NavCounts = {
 export async function GET() {
   try {
     const meCall = api<WhoAmI>("/api/auth/me").catch(() => null);
-    const [metrics, store, me, incidents, cases, qa, dq, sttm] = await Promise.all([
+    const [metrics, store, me, incidents, cases, qa, dq, sttm, jira] = await Promise.all([
       api<{ lifecycle: Record<string, number>; needs_review: number }>("/api/metrics/summary").catch(() => null),
       api<{ profiles: ProfileStoreRow[] }>("/api/profiles/store").catch(() => ({ profiles: [] as ProfileStoreRow[] })),
       meCall,
@@ -29,11 +33,14 @@ export async function GET() {
         ? api<{ open: number; ack: number }>("/api/ops/incidents/summary").then((r) => (r.open ?? 0) + (r.ack ?? 0), () => 0)
         : 0)),
       meCall.then((who) => (who && can(who, "CASE.WORK")
-        ? api<{ open: number }>("/api/cases/summary").then((r) => r.open ?? 0, () => 0)
-        : 0)),
+        ? api<{ open: number; mine?: number }>("/api/cases/summary").then((r) => ({ open: r.open ?? 0, mine: r.mine ?? 0 }), () => ({ open: 0, mine: 0 }))
+        : { open: 0, mine: 0 })),
       api<{ pending?: number }>("/api/qa-packs/summary").then((r) => r.pending ?? 0, () => 0),
       api<{ failed?: number }>("/api/dq/summary").then((r) => r.failed ?? 0, () => 0),
       api<{ total?: number }>("/api/hub/sttm?status=REVIEW&limit=1").then((r) => r.total ?? 0, () => 0),
+      meCall.then((who) => (who && can(who, "JIRA.READ")
+        ? api<{ open_mine?: number }>("/api/jira/summary").then((r) => r.open_mine ?? 0, () => 0)
+        : 0)),
     ]);
     const s = metrics
       ? { running: metrics.lifecycle.RUNNING ?? 0, review: metrics.needs_review, drafts: metrics.lifecycle.DRAFT ?? 0 }
@@ -44,10 +51,12 @@ export async function GET() {
       profiling: store.profiles.filter((p) => p.status === "PROFILING").length,
       approvals: me?.pending_for_me ?? 0,
       incidents,
-      cases,
+      cases: cases.open,
+      cases_mine: cases.mine,
       qa_pending: qa,
       dq_failing: dq,
       sttm_pending: sttm,
+      jira_open: jira,
     };
     return Response.json(counts, { headers: { "Cache-Control": "private, max-age=30" } });
   } catch {

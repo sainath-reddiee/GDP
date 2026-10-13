@@ -6599,3 +6599,6 @@ app.include_router(source_control_router)
 from app.copilot_agent_api import router as copilot_agent_router  # noqa: E402
 
 app.include_router(copilot_agent_router)
+from app.tickets_api import router as tickets_router  # noqa: E402
+
+app.include_router(tickets_router)

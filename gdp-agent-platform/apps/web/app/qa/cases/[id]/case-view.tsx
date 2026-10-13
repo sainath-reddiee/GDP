@@ -71,7 +71,7 @@ function linkHref(l: CaseLink): string | null {
     case "INCIDENT": return incidentHref(l.ref);
     case "RUN": return `/runs/${encodeURIComponent(l.ref)}`;
     case "CASE": return caseHref(l.ref);
-    case "JIRA": return `/qa?tab=triage&key=${encodeURIComponent(l.ref)}`;
+    case "JIRA": return `/tickets?tab=ticket&key=${encodeURIComponent(l.ref)}`;
     default: return null;
   }
 }
@@ -224,7 +224,7 @@ export function CaseView({ initial, canWork, canResolve, canAI, canDbt, canJira,
     <div className="space-y-5">
       <div className="space-y-2">
         <p className="eyebrow">
-          <Link href="/qa?tab=cases" className="hover:underline">QA cases</Link>
+          <Link href="/tickets?source=case" className="hover:underline">Tickets</Link>
           <span className="mx-1.5 text-muted-foreground">/</span>
           <span className="font-mono normal-case tracking-normal text-muted-foreground">{c.number}</span>
         </p>

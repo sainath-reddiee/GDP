@@ -2,9 +2,10 @@
 
 import { useEffect, useMemo, useState, useTransition } from "react";
 import {
-  ArrowRightLeft, Check, CheckCircle2, Filter, KanbanSquare, Link2, ListFilter, Loader2, MessageSquarePlus, Play, RefreshCw,
+  ArrowRightLeft, Bot, Check, CheckCircle2, Filter, KanbanSquare, Link2, ListFilter, Loader2, MessageSquarePlus, Play, RefreshCw,
   Save, Search, Trash2, User, X, XCircle,
 } from "lucide-react";
+import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Input, Textarea } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
@@ -29,7 +30,7 @@ type Source = { kind: "jql"; jql: string; label: string } | { kind: "filter"; fi
 const MINE_JQL = "";
 const MAX_BULK = 50;
 const COMMON_TRANSITIONS = ["To Do", "In Progress", "In Review", "Ready for QA", "In QA", "QA Passed", "QA Failed", "Reopened", "Done"];
-const RETURN_TO = "/qa?tab=inbox";
+const RETURN_TO = "/tickets?tab=jira";
 
 export function InboxTab({ jira, access, go }: { jira: JiraStatus | null; access: Access; go: Go }) {
   return (
@@ -127,6 +128,7 @@ function Inbox({ access, go, who }: { access: Access; go: Go; who: string }) {
                 <th className="px-2 py-2">Key</th><th className="px-2 py-2">Summary</th><th className="px-2 py-2">Type</th><th className="px-2 py-2">Status</th>
                 <th className="px-2 py-2">Priority</th><th className="px-2 py-2">Assignee</th><th className="px-2 py-2 text-right">Linked</th>
                 {access.canCase && <th className="px-2 py-2"><span className="sr-only">Case</span></th>}
+                <th className="px-2 py-2"><span className="sr-only">Copilot</span></th>
               </tr>
             </thead>
             <tbody>
@@ -143,10 +145,17 @@ function Inbox({ access, go, who }: { access: Access; go: Go; who: string }) {
                   <td className="whitespace-nowrap px-2 py-2 text-xs text-muted-foreground">{i.assignee ?? "unassigned"}</td>
                   <td className="px-2 py-2 text-right text-xs tabular-nums">{i.linked ? <span className="inline-flex items-center gap-1 text-primary"><Link2 className="h-3 w-3" />{i.linked}</span> : <span className="text-muted-foreground">0</span>}</td>
                   {access.canCase && <td className="whitespace-nowrap px-2 py-2 text-right"><OpenCaseButton variant="ghost" open={() => caseFromJira(i.key)} /></td>}
+                  <td className="whitespace-nowrap px-2 py-2 text-right">
+                    <Link href={`/dashboard/copilot?jira=${encodeURIComponent(i.key)}`} title="Work on it in the Copilot"
+                          aria-label={`Work on ${i.key} in the Copilot`}
+                          className="inline-flex h-7 items-center gap-1 rounded-md px-2 text-xs font-medium text-primary hover:bg-primary/10">
+                      <Bot className="h-3.5 w-3.5" /> Copilot
+                    </Link>
+                  </td>
                 </tr>
               ))}
-              {loading && !issues && <tr><td colSpan={access.canCase ? 9 : 8} className="px-3 py-8 text-center text-xs text-muted-foreground"><Loader2 className="mr-2 inline h-3.5 w-3.5 animate-spin" />Loading issues…</td></tr>}
-              {issues && !issues.length && !problem && <tr><td colSpan={access.canCase ? 9 : 8} className="px-3 py-8 text-center text-xs text-muted-foreground">No issues here.</td></tr>}
+              {loading && !issues && <tr><td colSpan={access.canCase ? 10 : 9} className="px-3 py-8 text-center text-xs text-muted-foreground"><Loader2 className="mr-2 inline h-3.5 w-3.5 animate-spin" />Loading issues…</td></tr>}
+              {issues && !issues.length && !problem && <tr><td colSpan={access.canCase ? 10 : 9} className="px-3 py-8 text-center text-xs text-muted-foreground">No issues here.</td></tr>}
             </tbody>
           </table>
         </div>

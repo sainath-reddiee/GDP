@@ -184,6 +184,10 @@ RULES: List[Tuple[str, str, Any, str]] = [
     ("POST", r"/api/jira/filters", "JIRA.READ", ""),
     ("DELETE", r"/api/jira/filters/[^/]+", "JIRA.READ", ""),
     ("POST", r"/api/jira/bugs", "JIRA.WRITE", "Create a Jira bug from a QA test"),
+    ("POST", r"/api/jira/issues", "JIRA.WRITE", "Create a Jira issue"),
+    ("POST", r"/api/jira/sprint-moves", "JIRA.WRITE", "Move Jira issues to a sprint"),
+    ("POST", r"/api/tickets/views", None, ""),
+    ("DELETE", r"/api/tickets/views/[^/]+", None, ""),
     ("POST", r"/api/jira/bulk", "JIRA.WRITE", "Bulk action on Jira issues"),
     ("POST", r"/api/qa/triage/resolve", "AI.USE", ""),
     ("POST", r"/api/qa/tables/[^/]+/triage/[^/]+", "AI.USE", ""),
@@ -386,7 +390,7 @@ def carries_secret(method: str, path: str) -> bool:
     return any(m == method.upper() and pattern.match(path) for m, pattern in SECRET_BODY)
 
 READ_RULES = [(re.compile(r"^/api/(admin/.*|config/(rules|platform|models))$"), "ADMIN.VIEW"),
-              (re.compile(r"^/api/jira/(issues|search|filters|boards|sprints|projects)(/.*)?$"), "JIRA.READ"),
+              (re.compile(r"^/api/jira/(issues|search|filters|boards|sprints|projects|summary|sprint-choices)(/.*)?$"), "JIRA.READ"),
               (re.compile(r"^/api/qa/links$"), "JIRA.READ"),
               (re.compile(r"^/api/runs/[^/]+/jira/.*$"), "JIRA.READ"),
               (re.compile(r"^/api/(audit|costs)(/.*)?$"), "AUDIT.VIEW"),

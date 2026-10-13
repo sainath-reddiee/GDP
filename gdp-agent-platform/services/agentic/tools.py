@@ -13,6 +13,7 @@ from __future__ import annotations
 import copy
 import json
 import re
+import uuid
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 from urllib.parse import quote
@@ -23,6 +24,7 @@ Call = Callable[..., Awaitable[Tuple[int, Any]]]
 
 ID = re.compile(r"^[A-Za-z0-9_\-][A-Za-z0-9_.\-]{0,127}$")
 JIRA_KEY = re.compile(r"^[A-Z][A-Z0-9_]{0,30}-\d{1,9}$")
+JIRA_PROJECT = re.compile(r"^[A-Z][A-Z0-9_]{0,30}$")
 NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_$]{0,254}$")
 FQN = re.compile(r"^[A-Za-z0-9_$\".]{3,800}$")
 
@@ -554,7 +556,12 @@ async def sync_jira_status(call: Call, a: Dict[str, Any], ctx: Optional[Dict[str
         raise ToolError(f"{key} is not a Jira issue key")
     if not str(a["comment_markdown"]).strip():
         raise ToolError("comment_markdown is empty")
-    ops = [{"method": "POST", "path": f"/api/jira/issues/{key}/comment", "body": {"markdown": str(a["comment_markdown"])[:30000]}}]
+    markdown = str(a["comment_markdown"])[:28000]
+    report = a.get("report_publish", True) and any(c.get("status") == "PROPOSED" and c.get("kind") != "JIRA"
+                                                   for c in (ctx or {}).get("changes") or [])
+    if report and PUBLISH_SUMMARY not in markdown:   # filled in at publish time with what actually happened
+        markdown += "\n\n" + PUBLISH_SUMMARY
+    ops = [{"method": "POST", "path": f"/api/jira/issues/{key}/comment", "body": {"markdown": markdown}}]
     moved = None
     if a.get("transition"):
         data = _ok(*await call("GET", f"/api/jira/issues/{key}/transitions"), what=f"Reading {key} transitions")
@@ -566,8 +573,10 @@ async def sync_jira_status(call: Call, a: Dict[str, Any], ctx: Optional[Dict[str
                             + (", ".join(str(t.get("to") or t.get("name")) for t in options) or "nothing right now"))
         ops.append({"method": "POST", "path": f"/api/jira/issues/{key}/transition", "body": {"transition_id": str(pick["id"])}})
         moved = pick.get("to") or pick.get("name")
+    shown = markdown.replace(PUBLISH_SUMMARY, "_(what publishing did is added here: each change applied, sent for approval "
+                                                "or failed, with request ids and pull request links)_")
     change = changeset.make(f"JIRA:{key}", "JIRA", f"Jira {key}: comment" + (f" and move to {moved}" if moved else ""), ops,
-                            {"files": [preview.file_diff(f"jira/{key}-comment.md", None, str(a["comment_markdown"]))]})
+                            {"files": [preview.file_diff(f"jira/{key}-comment.md", None, shown)]})
     return {"summary": {"drafted": change["title"], "on_approve_and_publish": "the comment (and move) is posted as the person"}, "change": change}
 
 
@@ -764,6 +773,97 @@ async def code_impact(call: Call, a: Dict[str, Any], ctx: Optional[Dict[str, Any
                         "depends_on_it_directly": data.get("direct"), "depends_on_it_total": data.get("total"),
                         "impact": impact},
             "steps": [("context", "DONE", f"{data.get('total') or 0} code objects depend on {name}")]}
+
+
+PUBLISH_SUMMARY = "{publish_summary}"
+
+
+async def jira_projects(call: Call, a: Dict[str, Any], ctx: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    data = _ok(*await call("GET", "/api/jira/projects", params={"q": str(a.get("q") or "")[:100]}), what="Listing Jira projects")
+    out: Dict[str, Any] = {"projects": [_pick(p, ("key", "name")) for p in data.get("projects") or []][:50],
+                           "default_project": data.get("default")}
+    if a.get("project"):
+        project = str(a["project"]).strip().upper()
+        if not JIRA_PROJECT.match(project):
+            raise ToolError(f"{project!r} is not a Jira project key")
+        types = _ok(*await call("GET", f"/api/jira/projects/{project}/issue-types"), what=f"Reading {project} issue types")
+        out["issue_types"] = [t.get("name") for t in types.get("types") or [] if not t.get("subtask")]
+    return {"summary": out}
+
+
+async def _sprint(call: Call, project: str, wanted: Any) -> Dict[str, Any]:
+    """An active or future sprint of the project's boards, by id or by name (case-insensitive)."""
+    data = _ok(*await call("GET", "/api/jira/sprint-choices", params={"project": project}), what=f"Reading {project} sprints")
+    if not data.get("sprint_field"):
+        raise ToolError("this Jira site has no Sprint field (Jira Software), so issues cannot be put in a sprint")
+    sprints = data.get("sprints") or []
+    text = str(wanted).strip().lower()
+    pick = next((s for s in sprints if str(s.get("id")) == text or str(s.get("name") or "").lower() == text), None)
+    if not pick:
+        raise ToolError(f"{project} has no active or future sprint {wanted!r}; it has: "
+                        + (", ".join(f"{s.get('name')} ({s.get('state')})" for s in sprints) or "none"))
+    return pick
+
+
+async def jira_sprints(call: Call, a: Dict[str, Any], ctx: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    project = str(a.get("project") or "").strip().upper()
+    if project and not JIRA_PROJECT.match(project):
+        raise ToolError(f"{project!r} is not a Jira project key")
+    data = _ok(*await call("GET", "/api/jira/sprint-choices", params={"project": project}), what="Reading sprints")
+    return {"summary": {"project": data.get("project"), "can_set_sprint": bool(data.get("sprint_field")),
+                        "sprints": [_pick(s, ("id", "name", "state", "board")) for s in data.get("sprints") or []][:30]}}
+
+
+async def move_to_sprint(call: Call, a: Dict[str, Any], ctx: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Draft moving issues into a sprint (or to the backlog); done as the person when they publish."""
+    keys = list(dict.fromkeys(str(k).strip().upper() for k in a["keys"] if str(k).strip()))
+    bad = [k for k in keys if not JIRA_KEY.match(k)]
+    if not keys or bad:
+        raise ToolError(f"keys must be Jira issue keys{': ' + ', '.join(bad[:5]) if bad else ''}")
+    if len(keys) > 50:
+        raise ToolError("at most 50 issues at a time")
+    backlog = str(a.get("sprint") or "").strip().lower() in ("", "backlog", "none")
+    project = keys[0].split("-")[0]
+    pick = None if backlog else await _sprint(call, project, a["sprint"])
+    where = "the backlog" if backlog else f"sprint {pick['name']} ({pick['state']})"
+    change = changeset.make(
+        f"JIRA_SPRINT:{','.join(sorted(keys))[:400]}", "JIRA", f"Move {len(keys)} Jira issue{'s' if len(keys) != 1 else ''} to {where}"[:512],
+        [{"method": "POST", "path": "/api/jira/sprint-moves", "body": {"keys": keys, "sprint_id": None if backlog else int(pick["id"])}}],
+        {"files": [preview.file_diff("jira/sprint-move.md", None, f"Move to {where}:\n" + "\n".join(f"- {k}" for k in keys) + "\n")]})
+    return {"summary": {"drafted": change["title"], "on_approve_and_publish": "moved as the person, one result per issue"},
+            "change": change}
+
+
+async def create_jira_issue(call: Call, a: Dict[str, Any], ctx: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Draft a new Jira issue; it is created in the person's own Jira account when they publish."""
+    project = str(a["project"]).strip().upper()
+    if not JIRA_PROJECT.match(project):
+        raise ToolError(f"{project!r} is not a Jira project key")
+    summary_text = " ".join(str(a["summary"]).split())
+    if not summary_text:
+        raise ToolError("summary is empty")
+    types = _ok(*await call("GET", f"/api/jira/projects/{project}/issue-types"), what=f"Reading {project} issue types")
+    names = [str(t.get("name")) for t in types.get("types") or [] if not t.get("subtask")]
+    wanted = str(a.get("issue_type") or "Task").strip()
+    pick = next((n for n in names if n.lower() == wanted.lower()), None)
+    if not pick:
+        raise ToolError(f"{project} has no issue type {wanted!r}; it has: {', '.join(names) or 'none you can create'}")
+    labels = [str(x).strip() for x in a.get("labels") or [] if str(x).strip()][:10]
+    description = str(a.get("description_markdown") or "")[:30000]
+    sprint = await _sprint(call, project, a["sprint"]) if a.get("sprint") else None
+    slug = re.sub(r"[^a-z0-9]+", "-", summary_text.lower()).strip("-")[:60] or "issue"
+    change = changeset.make(
+        f"JIRA_NEW:{project}:{slug}", "JIRA", f"New Jira {pick} in {project}: {summary_text}"[:512],
+        [{"method": "POST", "path": "/api/jira/issues",
+          "body": {"project_key": project, "issue_type": pick, "summary": summary_text[:255], "description_markdown": description,
+                   "labels": labels, "idempotency_key": str(uuid.uuid4()),
+                   **({"sprint_id": int(sprint["id"])} if sprint else {})}}],
+        {"files": [preview.file_diff(f"jira/new-{project.lower()}-{slug[:40]}.md", None,
+                                     f"# {summary_text}\n\n{pick} in {project}" + (f", labels: {', '.join(labels)}" if labels else "")
+                                     + (f", sprint: {sprint['name']}" if sprint else "")
+                                     + f"\n\n{description}\n")]})
+    return {"summary": {"drafted": change["title"], "on_approve_and_publish": "created in the person's own Jira account"},
+            "change": change, "steps": [("intake", "DONE", f"{pick} for {project} drafted")]}
 
 
 # ---------------------------------------------------------------- conversation context, questions and lookups
@@ -963,9 +1063,25 @@ TOOLS: Dict[str, Tool] = {t.name: t for t in [
          "Onboarding wizard: source, target, load, snaplogic, tables, comments).", "intake",
          {"source": _d("source"), "target": _d("target"), "load": _d("load"), "snaplogic": _d("snaplogic"),
           "tables": _l("tables", False, 200), "comments": _s(False, 4000)}, onboard_source_config, drafts=True),
-    Tool("sync_jira_status", "Draft a Jira comment (markdown) and, optionally, a status transition by name.", "publish",
-         {"key": _s(True, 40), "comment_markdown": _s(True, 30000), "transition": _s(False, 128)},
+    Tool("sync_jira_status", "Draft a Jira comment (markdown) and, optionally, a status transition by name. When other "
+         "changes are drafted, the comment ends with what publishing actually did (applied, sent for approval with the "
+         "request, failed; pull request links), filled in at publish time; report_publish false leaves it out.", "publish",
+         {"key": _s(True, 40), "comment_markdown": _s(True, 30000), "transition": _s(False, 128),
+          "report_publish": {"type": "bool", "required": False, "desc": "default true"}},
          sync_jira_status, drafts=True),
+    Tool("jira_projects", "The Jira projects the person can create issues in, and the default project; with project, "
+         "also its issue types. Call it before create_jira_issue.", "intake",
+         {"q": _s(False, 100), "project": _s(False, 40)}, jira_projects),
+    Tool("create_jira_issue", "Draft a new Jira issue (created in the person's own Jira account when they publish). "
+         "issue_type is a name the project has, such as Task, Story or Bug.", "intake",
+         {"project": _s(True, 40), "issue_type": _s(False, 64), "summary": _s(True, 255),
+          "description_markdown": _s(False, 30000), "labels": _l("labels", False, 10),
+          "sprint": _s(False, 120, "an active or future sprint, by name or id (see jira_sprints)")}, create_jira_issue, drafts=True),
+    Tool("jira_sprints", "The active and future sprints of a Jira project's boards (the default project when none is "
+         "given), and whether issues can be put in a sprint.", "intake", {"project": _s(False, 40)}, jira_sprints),
+    Tool("move_to_sprint", "Draft moving Jira issues (one project, at most 50) into an active or future sprint by name or "
+         "id, or to the backlog with sprint 'backlog'. Done as the person when they publish.", "publish",
+         {"keys": _l("issue keys", True, 50), "sprint": _s(True, 120)}, move_to_sprint, drafts=True),
 ]}
 
 

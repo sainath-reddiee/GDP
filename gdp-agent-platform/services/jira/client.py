@@ -250,15 +250,33 @@ class JiraClient:
         values = payload.get("issueTypes") or payload.get("values") or []
         return [{"id": str(t.get("id")), "name": t.get("name"), "subtask": bool(t.get("subtask"))} for t in values]
 
+    def projects(self, query: str = "") -> List[Dict[str, Any]]:
+        """Projects the user can create issues in (first 50, by name)."""
+        q = f"&query={quote(query[:100])}" if query else ""
+        payload = self._call("GET", f"/rest/api/3/project/search?action=create&maxResults=50&orderBy=name{q}") or {}
+        return [{"id": str(p.get("id")), "key": p.get("key"), "name": p.get("name")} for p in payload.get("values") or []]
+
+    def sprint_field(self) -> Optional[str]:
+        """The site's Sprint field id (a custom field, such as customfield_10020), or None without Jira Software."""
+        for f in self._call("GET", "/rest/api/3/field") or []:
+            if ((f.get("schema") or {}).get("custom") or "") == "com.pyxis.greenhopper.jira:gh-sprint":
+                return str(f.get("id"))
+        return None
+
+    def edit_issue(self, key: str, fields: Dict[str, Any]) -> None:
+        """Set fields on an issue (with write:jira-work; the field must be on the issue's edit screen)."""
+        self._call("PUT", f"/rest/api/3/issue/{quote(check_key(key))}", {"fields": fields})
+
     def create_issue(self, project_key: str, issue_type_id: str, summary_text: str, description_adf: Dict[str, Any],
-                     labels: Optional[List[str]] = None) -> Dict[str, Any]:
-        """{"id", "key", "self"} of the new issue."""
+                     labels: Optional[List[str]] = None, extra: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """{"id", "key", "self"} of the new issue. `extra` adds fields, such as the sprint."""
         if not re.fullmatch(r"\d{1,20}", str(issue_type_id)):
             raise ValueError("invalid issue type id")
         fields: Dict[str, Any] = {"project": {"key": check_project(project_key)}, "issuetype": {"id": str(issue_type_id)},
                                   "summary": " ".join((summary_text or "").split())[:255], "description": description_adf}
         if labels:
             fields["labels"] = ["-".join(str(label).split())[:255] for label in labels]   # Jira labels have no spaces
+        fields.update(extra or {})
         return self._call("POST", "/rest/api/3/issue", {"fields": fields}) or {}
 
     def issue(self, key: str) -> Dict[str, Any]:
