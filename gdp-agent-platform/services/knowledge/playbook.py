@@ -66,6 +66,11 @@ def layer_readiness(layer: str, facts: Dict[str, Any]) -> List[Dict[str, Any]]:
         ]
     if str(layer).upper() != "GOLD":
         return []
+    if role == "MASTERED":   # its gold is the conformed dimension (gdp-dbt, from Reltio's golden records)
+        return [item("conformed", "Conformed dimension", True,
+                     "Built in gdp-dbt from Reltio's golden records; consumers reference it, Gold runs never rebuild it"),
+                item("consumers", "Consumers", bool(facts.get("consumers")),
+                     ", ".join(facts.get("consumers") or []) or "no domain consumes it yet")]
     consumes = facts.get("consumes") or []
     tables = facts.get("gold_tables") or []
     columns = {c for t in tables for c in t.get("columns") or []}

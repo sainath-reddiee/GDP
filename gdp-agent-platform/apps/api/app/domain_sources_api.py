@@ -107,7 +107,8 @@ def domain_skills(domain_id: str, pipeline: Literal["SILVER", "GOLD"] = "SILVER"
     for stage in STAGES:
         base = bound(bindings, stage, std, built_in(stage, std, pipeline), pipeline)
         mine = [r for r in own if str(r["stage"]).upper() == stage and in_pipeline(r.get("pipeline"), pipeline)]
-        mdm = [r for r in from_mdm if r["stage"] == stage]
+        # what the MDM role adds beyond the platform's bindings (the post-MDM skill is also a Gold binding)
+        mdm = [r for r in from_mdm if r["stage"] == stage and r["skill_name"].upper() not in {b.upper() for b in base}]
         stages.append({"stage": stage, "standard_skills": base, "domain_skills": mine, "mdm_skills": mdm,
                        "effective": with_domain(base, mine + mdm, stage, pipeline)})
     other = [r for r in own if not in_pipeline(r.get("pipeline"), pipeline)]

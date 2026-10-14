@@ -32,8 +32,10 @@ def _stage_of() -> dict:
 
 def _scope(alias: str = "R") -> str:
     # top-level runs of the pipeline (a Gold run's table runs fold into it), live ones only
+    # the same runs the pipeline's list shows by default: test-environment runs are left out
     return (f"COALESCE({alias}.PIPELINE, 'SILVER') = %s AND {alias}.PARENT_RUN_ID IS NULL "
-            f"AND {alias}.DELETED_AT IS NULL AND NOT COALESCE({alias}.IS_ARCHIVED, FALSE)")
+            f"AND {alias}.DELETED_AT IS NULL AND NOT COALESCE({alias}.IS_ARCHIVED, FALSE) "
+            f"AND COALESCE({alias}.ENVIRONMENT, '') <> 'TEST'")
 
 
 @router.get("/api/pipelines/{pipeline}/summary")

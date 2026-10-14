@@ -30,7 +30,8 @@ STAGE_SKILLS: Dict[str, List[str]] = {
 GDP_ONLY_SKILLS = {"GDP-DBT-ONBOARD-SOURCE", "GDP_DOMAIN_SKILL", "GOLD-MODEL"}
 # each pipeline's own playbooks: bronze to silver hub code is never in front of a Gold run, the gold model never in
 # front of a Silver run (the Admin bindings carry the same scope, V055)
-SILVER_ONLY_SKILLS = {"GDP-DBT-ONBOARD-SOURCE", "SILVER-MODEL", "BRONZE-SCHEMA-DDL-EXTRACTION", "SCHEMA-DDL-EXTRACTION"}
+SILVER_ONLY_SKILLS = {"GDP-DBT-ONBOARD-SOURCE", "SILVER-MODEL", "BRONZE-SCHEMA-DDL-EXTRACTION", "SCHEMA-DDL-EXTRACTION",
+                      "GDP_DOMAIN_SKILL"}
 GOLD_ONLY_SKILLS = {"GOLD-MODEL"}
 
 

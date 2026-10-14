@@ -43,3 +43,15 @@ def test_domain_skills_keep_their_layer():
     assert with_domain(["GOLD-MODEL"], rows, "DBT", "GOLD") == ["GOLD-MODEL", "MY-GOLD", "SHARED"]
     assert with_domain(["GDP-DBT-ONBOARD-SOURCE"], rows, "DBT", "SILVER") == ["GDP-DBT-ONBOARD-SOURCE", "SHARED"]
     assert in_pipeline("ANY", "GOLD") and not in_pipeline("GOLD", "SILVER")
+
+
+def test_mastered_gold_layer_is_the_conformed_dimension():
+    items = {i["id"]: i for i in playbook.layer_readiness("GOLD", {"role": "MASTERED", "consumers": ["OPPORTUNITY"]})}
+    assert set(items) == {"conformed", "consumers"} and all(i["met"] for i in items.values())
+
+
+def test_silver_dbt_layering_never_reaches_gold_runs():
+    from services.knowledge.usage import stage_skills
+
+    assert "GDP_DOMAIN_SKILL" in stage_skills("DBT", "GDP", "SILVER")
+    assert "GDP_DOMAIN_SKILL" not in stage_skills("DBT", "GDP", "GOLD")
