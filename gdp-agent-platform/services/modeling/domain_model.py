@@ -190,11 +190,11 @@ def _domain(session, domain_id: str) -> Dict[str, Any]:
 
 
 def _registry_spec(session, domain: Dict[str, Any]) -> Dict[str, Any]:
-    tables = [_low(r) for r in rows(session, "SELECT * FROM KNOWLEDGE.TARGET_TABLE_REGISTRY WHERE DOMAIN_ID = ?",
+    tables = [_low(r) for r in rows(session, "SELECT * FROM KNOWLEDGE.TARGET_TABLE_REGISTRY WHERE DOMAIN_ID = ? AND COALESCE(LAYER, 'SILVER') = 'SILVER'",
                                     [domain["domain_id"]])]
     columns = [_low(r) for r in rows(session, """SELECT C.* FROM KNOWLEDGE.TARGET_COLUMN_REGISTRY C
                                                    JOIN KNOWLEDGE.TARGET_TABLE_REGISTRY T ON T.TARGET_TABLE_ID = C.TARGET_TABLE_ID
-                                                  WHERE T.DOMAIN_ID = ?""", [domain["domain_id"]])]
+                                                  WHERE T.DOMAIN_ID = ? AND COALESCE(T.LAYER, 'SILVER') = 'SILVER'""", [domain["domain_id"]])]
     return spec_v2.spec_from_registry(domain, tables, columns)
 
 
@@ -513,7 +513,7 @@ def baseline(session, domain_id: str, user: str = "SYSTEM_BACKFILL") -> Optional
                     "Baseline: the domain's registered targets when the Model Workbench was introduced")
     session.sql(f"""UPDATE {DESIGNS} SET APPROVED_BY = ?, APPROVED_AT = CURRENT_TIMESTAMP(), REGISTRY_SYNCED_AT = CURRENT_TIMESTAMP()
                      WHERE MODEL_ID = ? AND VERSION = 1""", params=[user, model_id]).collect()
-    session.sql("UPDATE KNOWLEDGE.TARGET_TABLE_REGISTRY SET MODEL_ID = ?, MODEL_VERSION = 1 WHERE DOMAIN_ID = ?",
+    session.sql("UPDATE KNOWLEDGE.TARGET_TABLE_REGISTRY SET MODEL_ID = ?, MODEL_VERSION = 1 WHERE DOMAIN_ID = ? AND COALESCE(LAYER, 'SILVER') = 'SILVER'",
                 params=[model_id, domain_id]).collect()
     return {"model_id": model_id, "domain": domain["domain_name"], **spec_v2.summary(spec)}
 
@@ -524,7 +524,7 @@ def backfill(session, user: str = "SYSTEM_BACKFILL") -> List[str]:
         found = rows(session, f"""SELECT DISTINCT T.DOMAIN_ID FROM KNOWLEDGE.TARGET_TABLE_REGISTRY T
                                    JOIN KNOWLEDGE.DOMAIN_REGISTRY R ON R.DOMAIN_ID = T.DOMAIN_ID
                                    LEFT JOIN {MODELS} M ON M.DOMAIN_ID = T.DOMAIN_ID AND COALESCE(M.LAYER, 'SILVER') = 'SILVER'
-                                  WHERE M.MODEL_ID IS NULL""")
+                                  WHERE M.MODEL_ID IS NULL AND COALESCE(T.LAYER, 'SILVER') = 'SILVER'""")
     except Exception as exc:
         return [f"domain models: skipped ({str(exc)[:120]})"]
     log = []

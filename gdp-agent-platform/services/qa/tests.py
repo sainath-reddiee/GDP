@@ -165,6 +165,7 @@ def build_suite(target: Dict[str, Any], sources: Dict[str, str], lines: List[Dic
 
     # SOURCE_TO_TARGET and TRANSFORMATION
     direct = [l for l in mapped if l.get("source_column") and not l.get("transformation")
+              and str(l.get("mapping_type") or "").upper() != "LOOKUP"   # a lookup's value is not the source's
               and str(l.get("source_table") or "").upper() == driving
               and str(l["target_column"]).upper() not in {k.upper() for k in business_keys}]
     if src and direct and keys:
@@ -227,9 +228,13 @@ def build_suite(target: Dict[str, Any], sources: Dict[str, str], lines: List[Dic
         col = str(l["target_column"]).upper()
         kind = str(l.get("mapping_type") or "").upper()
         if kind == "LOOKUP" or (col.endswith("_SKEY") and col != str(spec.get("hub_fk") or "").upper()):
+            # a gold lookup writes -1 when nothing resolves (GDP gold rule); count those as unresolved too
+            minus_one = "-1" in str(l.get("lookup_logic") or "")
             suite.add("LOOKUP", f"{col} resolves for every row",
-                      "A lookup that finds nothing leaves the surrogate key empty; those rows need a reference fix.",
-                      f"SELECT COUNT(*) AS unresolved\nFROM {tgt}\nWHERE {ident(col)} IS NULL",
+                      "A lookup that finds nothing leaves the surrogate key empty; those rows need a reference fix."
+                      + (" In gold an unresolved key is -1." if minus_one else ""),
+                      f"SELECT COUNT(*) AS unresolved\nFROM {tgt}\nWHERE {ident(col)} IS NULL"
+                      + (f" OR {ident(col)} = -1" if minus_one else ""),
                       "unresolved = 0, or only rows whose source code is blank", "MEDIUM", col)
     fk, hub = spec.get("hub_fk"), spec.get("hub")
     if spec.get("role") == "spoke" and fk and hub and "." in tgt:

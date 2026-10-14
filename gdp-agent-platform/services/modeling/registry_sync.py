@@ -7,6 +7,9 @@ before the model existed are matched by name), so mapping decisions and STTM lin
 column stay valid. Retired entities are deactivated, never deleted; columns a version drops or retires are removed
 from the registry (approving such a version needs the breaking change acknowledged). Every application writes a
 KNOWLEDGE.DOMAIN_VERSION snapshot, so the Domains page compare and rollback stay current.
+A GOLD model registers its own facts, dimensions and bridges with LAYER = 'GOLD' (V054), so a Gold run maps into them
+like a Silver run maps into silver tables; conformed dimensions (DIM_COMPANY, DIM_PROPERTY) belong to their mastered
+domain and are not registered by a consumer. Readers that list a domain's silver targets filter on the layer.
 """
 
 from __future__ import annotations
@@ -56,7 +59,7 @@ def model_spec_for(spec: Dict[str, Any], entity: Dict[str, Any], model_id: str, 
     return out
 
 
-def column_rows(entity: Dict[str, Any], table_id: str, existing: List[Dict[str, Any]]) -> List[List[Any]]:
+def column_rows(entity: Dict[str, Any], table_id: str, existing: List[Dict[str, Any]], layer: str = "SILVER") -> List[List[Any]]:
     """Registry column values for the entity's active columns, each with the id it is stored under: the existing
     registry id when the column is matched (by id, then by name), else the column's own id."""
     by_id = {str(c["TARGET_COLUMN_ID"]): c for c in existing}
@@ -64,6 +67,10 @@ def column_rows(entity: Dict[str, Any], table_id: str, existing: List[Dict[str, 
     keys = {k.upper() for k in entity.get("business_keys") or []}
     out, used = [], set()
     live = [a for a in entity["attributes"] if a.get("status") != "RETIRED"]
+    if layer == "GOLD":
+        from services.gold.propose import semantic_type
+
+        live = [a if a.get("semantic_type") else {**a, "semantic_type": semantic_type(entity, a["name"])} for a in live]
     for n, a in enumerate(live, start=1):
         found = by_id.get(str(a["id"])) or by_name.get(a["name"].upper())
         cid = str(found["TARGET_COLUMN_ID"]) if found and str(found["TARGET_COLUMN_ID"]) not in used else str(a["id"])
@@ -112,28 +119,33 @@ def _write_columns(session, table_id: str, values: List[List[Any]]) -> int:
     return len(values)
 
 
-def _find_table(session, entity: Dict[str, Any], domain_id: str, database: str, schema: str) -> Optional[Dict[str, Any]]:
+def _find_table(session, entity: Dict[str, Any], domain_id: str, database: str, schema: str,
+                layer: str = "SILVER") -> Optional[Dict[str, Any]]:
     found = _rows(session, "SELECT TARGET_TABLE_ID, TARGET_TABLE FROM KNOWLEDGE.TARGET_TABLE_REGISTRY WHERE TARGET_TABLE_ID = ?",
                   [entity["id"]])
     if found:
         return found[0]
     found = _rows(session, """SELECT TARGET_TABLE_ID, TARGET_TABLE FROM KNOWLEDGE.TARGET_TABLE_REGISTRY
                                WHERE DOMAIN_ID = ? AND UPPER(TARGET_DATABASE) = UPPER(?) AND UPPER(TARGET_SCHEMA) = UPPER(?)
-                                 AND UPPER(TARGET_TABLE) = UPPER(?)
-                               ORDER BY ACTIVE_FLAG DESC LIMIT 1""", [domain_id, database, schema, entity["entity_name"]])
+                                 AND UPPER(TARGET_TABLE) = UPPER(?) AND COALESCE(LAYER, 'SILVER') = ?
+                               ORDER BY ACTIVE_FLAG DESC LIMIT 1""", [domain_id, database, schema, entity["entity_name"], layer])
     return found[0] if found else None
 
 
-def apply_spec(session, spec: Dict[str, Any], domain_id: str, model_id: str, version: int) -> Dict[str, Any]:
-    """Register every entity of a v2 specification for the domain. Returns what was registered and deactivated."""
+def apply_spec(session, spec: Dict[str, Any], domain_id: str, model_id: str, version: int,
+               layer: str = "SILVER") -> Dict[str, Any]:
+    """Register every entity of a v2 specification for the domain (a gold model's own entities, with its layer).
+    Returns what was registered and deactivated."""
     from services.common.sql import insert_rows
 
     registered, deactivated, columns = [], [], 0
     applied_ids = []
     for entity in spec["design"]["entities"]:
+        if layer == "GOLD" and entity.get("conformed_from"):
+            continue   # a conformed dimension is the mastered domain's table, referenced, never registered here
         database, schema = spec_v2.placement(spec, entity)
         assert database and schema, f"set the target database and schema for {entity['entity_name']}"
-        existing = _find_table(session, entity, domain_id, database, schema)
+        existing = _find_table(session, entity, domain_id, database, schema, layer)
         if entity.get("status") == "RETIRED":
             if existing:
                 session.sql("""UPDATE KNOWLEDGE.TARGET_TABLE_REGISTRY SET ACTIVE_FLAG = FALSE, MODEL_ID = ?, MODEL_VERSION = ?
@@ -146,27 +158,27 @@ def apply_spec(session, spec: Dict[str, Any], domain_id: str, model_id: str, ver
         values = [database, schema, entity["entity_name"], entity["table_type"], entity.get("grain") or "",
                   json.dumps(entity.get("business_keys") or []), entity.get("scd_type") or "1",
                   entity.get("description") or entity.get("purpose") or "", json.dumps(model_spec, default=str),
-                  model_id, int(version)]
+                  model_id, int(version), layer]
         if existing:
             table_id = existing["TARGET_TABLE_ID"]
             session.sql("""UPDATE KNOWLEDGE.TARGET_TABLE_REGISTRY SET TARGET_DATABASE = ?, TARGET_SCHEMA = ?, TARGET_TABLE = ?,
                                   TABLE_TYPE = ?, GRAIN = ?, BUSINESS_KEYS = PARSE_JSON(?), SCD_TYPE = ?, DESCRIPTION = ?,
-                                  MODEL_SPEC = PARSE_JSON(?), MODEL_ID = ?, MODEL_VERSION = ?, ACTIVE_FLAG = TRUE,
-                                  DOMAIN_ID = ?
+                                  MODEL_SPEC = PARSE_JSON(?), MODEL_ID = ?, MODEL_VERSION = ?, LAYER = ?,
+                                  ACTIVE_FLAG = TRUE, DOMAIN_ID = ?
                             WHERE TARGET_TABLE_ID = ?""", params=values + [domain_id, table_id]).collect()
         else:
             table_id = str(entity["id"])
             insert_rows(session, "KNOWLEDGE.TARGET_TABLE_REGISTRY",
                         ["TARGET_TABLE_ID", "DOMAIN_ID", "TARGET_DATABASE", "TARGET_SCHEMA", "TARGET_TABLE", "TABLE_TYPE",
                          "GRAIN", "BUSINESS_KEYS", "SCD_TYPE", "DESCRIPTION", "MODEL_SPEC", "MODEL_ID", "MODEL_VERSION",
-                         "VERSION", "ACTIVE_FLAG"],
+                         "LAYER", "VERSION", "ACTIVE_FLAG"],
                         ["?", "?", "?", "?", "?", "?", "?", "PARSE_JSON(?)", "?", "?", "PARSE_JSON(?)", "?", "?::NUMBER",
-                         "1", "TRUE"],
+                         "?", "1", "TRUE"],
                         [[table_id, domain_id] + values])
         applied_ids.append(table_id)
         current = _rows(session, "SELECT TARGET_COLUMN_ID, COLUMN_NAME FROM KNOWLEDGE.TARGET_COLUMN_REGISTRY "
                                  "WHERE TARGET_TABLE_ID = ?", [table_id])
-        columns += _write_columns(session, table_id, column_rows(entity, table_id, current))
+        columns += _write_columns(session, table_id, column_rows(entity, table_id, current, layer))
         registered.append({"entity": entity["entity_name"], "entity_id": entity["id"], "target_table_id": table_id,
                            "fqn": f"{database}.{schema}.{entity['entity_name']}"})
     # tables the model registered before but no longer has stop being live (never deleted)
@@ -210,22 +222,13 @@ def apply_model_version(session, model_id: str, version: int) -> Dict[str, Any]:
     row = found[0]
     assert row["STATUS"] in ("APPROVED", "PUBLISHED"), f"only an approved version is applied (this one is {row['STATUS'].lower()})"
     spec = spec_v2.normalize_v2(variant(row["SPEC"]) or {}, model_id)
-    if row["LAYER"] != "SILVER":
-        # the target registry is what runs map into (silver); a gold model is only recorded as knowledge, so runs, the
-        # Copilot and search cite its tables
-        session.sql("UPDATE GOVERNANCE.MODEL_DESIGNS SET REGISTRY_SYNCED_AT = CURRENT_TIMESTAMP() WHERE MODEL_ID = ? AND VERSION = ?",
-                    params=[model_id, int(version)]).collect()
-        phys = spec.get("physical_defaults") or {}
-        registered = [{"entity": e["entity_name"], "fqn": f"{e.get('database') or phys.get('database')}.{e.get('schema') or phys.get('schema')}.{e['entity_name']}"}
-                      for e in spec_v2.active(spec)["design"]["entities"] if not e.get("conformed_from")]
-        _remember(session, row["DOMAIN_ID"], spec, registered, model_id, int(version))
-        return {"model_id": model_id, "version": int(version), "layer": row["LAYER"], "registered": registered}
-    result = apply_spec(session, spec, row["DOMAIN_ID"], model_id, int(version))
+    layer = "GOLD" if row["LAYER"] == "GOLD" else "SILVER"
+    result = apply_spec(session, spec, row["DOMAIN_ID"], model_id, int(version), layer)
     session.sql("UPDATE GOVERNANCE.MODEL_DESIGNS SET REGISTRY_SYNCED_AT = CURRENT_TIMESTAMP() WHERE MODEL_ID = ? AND VERSION = ?",
                 params=[model_id, int(version)]).collect()
     result["domain_version"] = _snapshot(session, row["DOMAIN_ID"], f"{row['DOMAIN_NAME']} model v{version} approved")
     _remember(session, row["DOMAIN_ID"], spec, result["registered"], model_id, int(version))
-    return {"model_id": model_id, "version": int(version), **result}
+    return {"model_id": model_id, "version": int(version), "layer": layer, **result}
 
 
 def _remember(session, domain_id: str, spec: Dict[str, Any], registered: List[Dict[str, Any]], model_id: str,

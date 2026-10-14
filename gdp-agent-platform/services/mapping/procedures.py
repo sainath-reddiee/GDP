@@ -19,7 +19,7 @@ from services.common.stage import Stage
 from services.knowledge import search as ks
 from services.knowledge.procedures import current_knowledge_version, identify_domain
 from services.knowledge.validate import normalize_content
-from services.common.standard import run_standard
+from services.common.standard import run_pipeline, run_standard
 from services.knowledge.usage import assert_safe_transformation, domain_context, use_stage
 from services.knowledge.writer import forget, record_usage, remember
 from services.mapping import features, scoring
@@ -56,7 +56,8 @@ def target_table(session, run: Dict[str, Any]) -> Dict[str, Any]:
                                       f"so the target {model} can be found.")
         found = rows(session, """SELECT * FROM KNOWLEDGE.TARGET_TABLE_REGISTRY
                                  WHERE ACTIVE_FLAG AND DOMAIN_ID = ? AND UPPER(TARGET_TABLE) = UPPER(?)
-                                 ORDER BY CREATED_AT LIMIT 1""", [run["DOMAIN_ID"], parts[-1]])
+                                   AND COALESCE(LAYER, 'SILVER') = ?
+                                 ORDER BY CREATED_AT LIMIT 1""", [run["DOMAIN_ID"], parts[-1], run_pipeline(run)])
     assert found, (f"TARGET_NOT_REGISTERED: target model {model} is not registered. Register it from Sources "
                    "(modeling panel) and retry.")
     return found[0]
@@ -286,6 +287,39 @@ def _scoring_config(session, domain_id: str) -> Dict[str, Any]:
     return cfg
 
 
+def _gold_rules(session, run: Dict[str, Any], sources: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    """A Gold run's rules by source column (services/gold/rules.py): mastered keys, the data source and proposed
+    dimension keys, which name matching cannot see. Empty for a Silver run or a run not pinned to a gold model."""
+    from services.gold import context, rules
+
+    ctx = context.for_run(session, run)
+    if not ctx:
+        return {}
+    by_target = rules.rules(ctx["entity"], [s["column_name"] for s in sources], ctx["consumes"], ctx["mastered"],
+                            ctx["spec"].get("relationships"))
+    return {r["source_column"].upper(): {**r, "target_column": t} for t, r in by_target.items()}
+
+
+def promote(cands: List[Dict[str, Any]], ranked: List[Dict[str, Any]], rule: Dict[str, Any], top_k: int) -> List[Dict[str, Any]]:
+    """Put the rule's target first with full confidence; the scored alternatives follow (pure)."""
+    chosen = next((c for c in cands if str(c["target"]["column_name"]).upper() == rule["target_column"].upper()), None)
+    if not chosen:
+        return ranked
+    chosen["final_score"] = max(float(chosen.get("final_score") or 0), 0.97)
+    chosen["evidence"] = {**(chosen.get("evidence") or {}), "gold_rule": {"kind": rule["kind"], "expression": rule["expression"]}}
+    if rule["kind"] != "DIMENSION_KEY" or not chosen.get("transformation"):
+        chosen["transformation"] = None   # the lookup is the gold model's, written by the STTM, not a column expression
+    rest = [c for c in ranked if c is not chosen][: max(top_k - 1, 0)]
+    out = [chosen] + rest
+    for i, c in enumerate(out):
+        c["rank"] = i + 1
+        c["margin"] = round(c["final_score"] - (out[1]["final_score"] if len(out) > 1 else 0.0), 4) if i == 0 else 0.0
+        c["confidence"] = round(c["final_score"], 4) if i == 0 else round(c["final_score"] * 0.85, 4)
+        c["recommendation"] = "AUTO_SUGGEST" if i == 0 else "MANUAL"
+        c["ambiguous"] = False
+    return out
+
+
 def generate_mapping_candidates(session, run_id: str) -> Dict[str, Any]:
     stage = Stage(session, run_id)
     if stage.state == "PROFILING_COMPLETE":
@@ -321,6 +355,7 @@ def generate_mapping_candidates(session, run_id: str) -> Dict[str, Any]:
             cosines = cosine_matrix(session, src_emb, tgt_emb)
             domain_name = scalar(session, "SELECT DOMAIN_NAME FROM KNOWLEDGE.DOMAIN_REGISTRY WHERE DOMAIN_ID = ?",
                                  [run["DOMAIN_ID"]])
+            gold_rules = _gold_rules(session, run, sources)
 
             ranked_by_source: List[Tuple[Dict[str, Any], List[Dict[str, Any]]]] = []
             hits_by_source: Dict[str, List[Dict[str, Any]]] = {}
@@ -331,6 +366,9 @@ def generate_mapping_candidates(session, run_id: str) -> Dict[str, Any]:
                     f = features.all_features(s, t, knowledge, cosines.get((s["source_column_id"], t["target_column_id"])))
                     cands.append({"target": t, **f})
                 ranked = scoring.rank_candidates(cands, cfg["weights"], cfg["thresholds"], top_k)
+                rule = gold_rules.get(str(s["column_name"]).upper())
+                if rule:
+                    ranked = promote(cands, ranked, rule, top_k)
                 try:
                     hits = ks.search(session, database, f"{s['column_name']} {s.get('description') or ''}",
                                      domain=domain_name, limit=3)
@@ -352,6 +390,9 @@ def generate_mapping_candidates(session, run_id: str) -> Dict[str, Any]:
                 verdict = llm.get(s["column_name"].upper())
                 for c in ranked:
                     reason = scoring.explain(c)
+                    gr = (c.get("evidence") or {}).get("gold_rule")
+                    if gr and c["rank"] == 1:
+                        reason = f"Gold model rule ({gr['kind'].lower().replace('_', ' ')}): {gr['expression']}"
                     if verdict and c["rank"] == 1:
                         agrees = verdict["preferred_target"].upper() == c["target"]["column_name"].upper()
                         c["evidence"]["llm"] = {"preferred_target": verdict["preferred_target"], "agrees": agrees,

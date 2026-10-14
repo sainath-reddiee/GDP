@@ -29,6 +29,15 @@ def run_standard(run: Dict[str, Any]) -> str:
     return normalize_standard(run.get("MODELING_STANDARD") or run.get("modeling_standard")) or GDP
 
 
+SILVER, GOLD = "SILVER", "GOLD"
+
+
+def run_pipeline(run: Dict[str, Any]) -> str:
+    """SILVER (source to silver, every run before V054) or GOLD (silver, read in place, to gold)."""
+    value = str(run.get("PIPELINE") or run.get("pipeline") or "").strip().upper()
+    return GOLD if value == GOLD else SILVER
+
+
 def default_prefix(standard: str) -> str:
     """Column/object prefix the dbt generator uses when the run does not set one."""
     return "GDP" if standard == GDP else ""

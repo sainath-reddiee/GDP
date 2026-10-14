@@ -23,6 +23,22 @@ from services.sttm.join_graph import apply_overrides, build_join_graph, join_log
 from services.sttm.refine import REFINE_SCHEMA, refine_prompt, render_csv, reusable_expression, rules_by_column
 
 
+def _gold_shape(session, run: Dict[str, Any], contract: Dict[str, Any]) -> bool:
+    """A Gold run's STTM in gold terms (services/gold/rules.py): mastered keys, the data source and dimension keys
+    become lookups spelled out from the contracts; the table design records the gold table type. False for Silver."""
+    from services.gold import context, rules
+
+    ctx = context.for_run(session, run)
+    if not ctx:
+        return False
+    sources = [str(l.get("source_column")) for l in contract["lines"] if l.get("source_column")]
+    by_target = rules.rules(ctx["entity"], sources, ctx["consumes"], ctx["mastered"], ctx["spec"].get("relationships"))
+    contract["lines"] = rules.shape_sttm(contract["lines"], ctx["entity"], by_target)
+    contract["table_design"].update(pipeline="GOLD", table_type=ctx["entity"].get("table_type"),
+                                    gold_model={"model_id": run.get("MODEL_ID"), "version": run.get("MODEL_VERSION")})
+    return True
+
+
 def generate_sttm(session, run_id: str) -> Dict[str, Any]:
     stage = Stage(session, run_id)
     stage.require("MAPPING_APPROVED", "STTM_PENDING")
@@ -68,6 +84,7 @@ def generate_sttm(session, run_id: str) -> Dict[str, Any]:
                 carried = catalog_sttm.carry_store_edits(edits[0], edits[1], contract["lines"], contract["table_design"])
                 contract["unmapped_required"] = [l["target_column"] for l in contract["lines"]
                                                  if l.get("mapping_type") == "UNMAPPED" and l.get("required")]
+            _gold_shape(session, run, contract)   # a Gold run: lookups and the gold model's own columns
             graph = plan_joins(session, run_id, contract["lines"])
             contract["table_design"].update(join_graph=graph, driving_table=graph["driving_table"],
                                             join_paths=[j["condition"] for j in graph["joins"]])
@@ -97,12 +114,12 @@ def generate_sttm(session, run_id: str) -> Dict[str, Any]:
                              "TARGET_DATATYPE", "MAPPING_TYPE", "TRANSFORMATION", "BUSINESS_RULE",
                              "BUSINESS_DEFINITION", "NULLABLE_RULE", "UNIQUENESS_RULE", "ACCEPTED_VALUES",
                              "SCD_BEHAVIOR", "MAPPING_CONFIDENCE", "HUMAN_APPROVED", "REVIEWER", "JOIN_LOGIC",
-                             "FILTER_RULE"],
+                             "FILTER_RULE", "LOOKUP_LOGIC"],
                             ["?", "?", "NULLIF(?, '')", "NULLIF(?, '')", "NULLIF(?, '')", "NULLIF(?, '')",
                              "NULLIF(?, '')", "NULLIF(?, '')", "NULLIF(?, '')", "?", "?", "?", "?", "?", "?",
                              "?", "NULLIF(?, '')", "NULLIF(?, '')", "NULLIF(?, '')", "?::BOOLEAN", "?::BOOLEAN",
                              "PARSE_JSON(?)", "NULLIF(?, '')", "NULLIF(?, '')::FLOAT", "?::BOOLEAN", "NULLIF(?, '')",
-                             "NULLIF(?, '')", "NULLIF(?, '')"],
+                             "NULLIF(?, '')", "NULLIF(?, '')", "NULLIF(?, '')"],
                             [[str(uuid.uuid4()), sttm_id, l.get("decision_id"), l.get("source_system"),
                               l.get("source_database"), l.get("source_schema"), l.get("source_table"),
                               l.get("source_column"), l.get("source_datatype"),
@@ -113,7 +130,8 @@ def generate_sttm(session, run_id: str) -> Dict[str, Any]:
                               l.get("business_rule"), l.get("business_definition"), l["nullable_rule"],
                               l["uniqueness_rule"], l.get("accepted_values") or [], l.get("scd_behavior"),
                               l.get("mapping_confidence"), l["human_approved"], l.get("reviewer"),
-                              join_logic.get(str(l.get("source_table") or "").upper()), l.get("filter_rule")]
+                              join_logic.get(str(l.get("source_table") or "").upper()), l.get("filter_rule"),
+                              l.get("lookup_logic")]
                              for l in contract["lines"]])
 
             call.summary = f"STTM v{version}: {len(contract['lines'])} lines, grain {contract['table_design']['grain']}"

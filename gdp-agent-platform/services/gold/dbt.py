@@ -78,8 +78,11 @@ def model_sql(entity: Dict[str, Any], lines: List[Dict[str, Any]], spec: Dict[st
     business = [a["name"] for a in entity["attributes"]
                 if not a.get("is_pk") and a["name"] != f"{table}_HKEY" and a["name"] not in {n for n, _ in AUDIT}]
     ctes, joins, select = [], [], []
+    # a reviewer's transformation (STTM) is computed on the silver row itself, before any dimension is joined
+    tx = [(l["gold_column"], l["sql"]) for l in mine if l["kind"] == "COLUMN" and l.get("sql")]
+    extra = "".join(f",\n           {sql} as {_q('tx_' + col)}" for col, sql in tx)
     # every silver row, active or not, so a deactivation in silver reaches gold
-    ctes.append(f"src as (\n    select * from {_source_ref(driving, conventions)}\n)")
+    ctes.append(f"src as (\n    select *{extra}\n    from {_source_ref(driving, conventions)}\n)")
     consumed = {str(c["domain"]).upper(): c for c in consumes}
     resolved_domains = set()
     # the approved table's columns drive the SELECT (a reviewer may have changed the model after the proposal)
@@ -97,6 +100,9 @@ def model_sql(entity: Dict[str, Any], lines: List[Dict[str, Any]], spec: Dict[st
         col = l["gold_column"]
         if l["kind"] == "NULL":
             select.append(f"null::{l['datatype'].replace('LONG', 'NUMBER(38,0)')} as {_q(col)}")
+            continue
+        if l["kind"] == "COLUMN" and l.get("sql"):
+            select.append(f"src.{_q('tx_' + col)} as {_q(col)}")
             continue
         if l["kind"] == "COLUMN":
             expr = _q(l["source_column"])
@@ -273,11 +279,13 @@ def schema_yml(domain: str, entities: List[Dict[str, Any]], spec: Dict[str, Any]
 
 def generate(spec: Dict[str, Any], lines: List[Dict[str, Any]], *, mastered: Dict[str, Dict[str, Any]],
              consumes: List[Dict[str, Any]], conventions: Optional[Dict[str, Any]] = None, env: str = "DEV",
-             build: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """{files: {path: text}, report, lineage: [edges]} for the gold tables of an approved gold model."""
+             build: Optional[Dict[str, Any]] = None, only: Optional[List[str]] = None) -> Dict[str, Any]:
+    """{files: {path: text}, report, lineage: [edges]} for the gold tables of an approved gold model (or only the
+    named ones: a Gold run builds its target table and the proposed dimensions it references)."""
     conventions = conventions or {}
     domain = spec["domain"].lower()
-    own = [e for e in spec["design"]["entities"] if not e.get("conformed_from") and e.get("status", "ACTIVE") != "RETIRED"]
+    own = [e for e in spec["design"]["entities"] if not e.get("conformed_from") and e.get("status", "ACTIVE") != "RETIRED"
+           and (only is None or e["entity_name"] in only)]
     by_name = {e["entity_name"]: e for e in spec["design"]["entities"]}
     files: Dict[str, str] = {}
     assumptions: List[str] = []

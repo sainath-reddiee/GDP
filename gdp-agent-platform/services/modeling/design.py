@@ -335,6 +335,7 @@ def context(session, run_id: str) -> Dict[str, Any]:
         domain = found[0]["DOMAIN_NAME"] if found else None
         for t in _rows(session, """SELECT TARGET_TABLE_ID, TARGET_DATABASE, TARGET_SCHEMA, TARGET_TABLE, DESCRIPTION
                                      FROM KNOWLEDGE.TARGET_TABLE_REGISTRY WHERE DOMAIN_ID = ? AND ACTIVE_FLAG
+                                      AND COALESCE(LAYER, 'SILVER') = 'SILVER'
                                     ORDER BY TARGET_TABLE LIMIT 40""", [domain_id]):
             cols = [f"{c['COLUMN_NAME']} {c['DATA_TYPE']}" for c in _rows(
                 session, """SELECT COLUMN_NAME, DATA_TYPE FROM KNOWLEDGE.TARGET_COLUMN_REGISTRY

@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from services.common.audit import tool_call
-from services.common.standard import GDP, conventions, conventions_for, default_prefix, run_standard
+from services.common.standard import GDP, GOLD, conventions, conventions_for, default_prefix, run_pipeline, run_standard
 from services.common.sql import atomic, clip, insert_rows, rows, scalar, variant
 from services.common.stage import Stage
 from services.dbt.inputs import assemble, load_inputs, session_query
@@ -201,10 +201,19 @@ def generate_dbt(session, run_id: str, payload_json: str = "{}") -> Dict[str, An
                 except Exception as exc:
                     plan["skeleton_error"] = clip(exc, 400)
             plan["skeleton_files"] = len(skeleton)
-            # dbt-onboard-source engine: generated/patched files only; the stage gets skeleton + generated.
-            inputs = load_inputs(session_query(session, rows), run_id, plan,
-                                 {"sttm_id": sttm["STTM_ID"], "table_design": design}, lines)
-            built = assemble(inputs, {"sttm_id": sttm["STTM_ID"], "table_design": design}, soda_yaml, skeleton)
+            gold = run_pipeline(stage.run) == GOLD
+            if gold:
+                # Gold Pipeline: the gold engine on the approved STTM and gold model; same storage, checks and publishing
+                from services.gold import run_codegen
+
+                built = run_codegen.assemble_for_run(session, stage.run, sttm, design, soda_yaml, skeleton)
+                engine_name, skill_version = run_codegen.ENGINE, run_codegen.SKILL_VERSION
+            else:
+                # dbt-onboard-source engine: generated/patched files only; the stage gets skeleton + generated.
+                inputs = load_inputs(session_query(session, rows), run_id, plan,
+                                     {"sttm_id": sttm["STTM_ID"], "table_design": design}, lines)
+                built = assemble(inputs, {"sttm_id": sttm["STTM_ID"], "table_design": design}, soda_yaml, skeleton)
+                engine_name, skill_version = ENGINE, "DBT-ONBOARD-SOURCE:1.0.0"
             files, stage_files = built["generated"], built["files"]
             plan["generation_report"] = {k: built["report"].get(k) for k in ("counts", "todos", "casts", "hub")}
             prefixes = payload.get("allowed_prefixes") or []
@@ -215,7 +224,8 @@ def generate_dbt(session, run_id: str, payload_json: str = "{}") -> Dict[str, An
             instruction = (
                 f"Cut `{plan['cut_branch']}` from `{plan['base_branch']}`"
                 + (f" in {plan.get('origin') or plan['repo']}" if (plan.get("origin") or plan["repo"]) else "")
-                + " using DBT-ONBOARD-SOURCE on the approved STTM. "
+                + (" using the GDP gold engine on the approved STTM and gold model. " if gold
+                   else " using DBT-ONBOARD-SOURCE on the approved STTM. ")
                 + "Review the models, then publish the branch and pull request to GitHub."
             )
             files["release/branch.json"] = json.dumps({**plan, "instruction": instruction}, indent=2, default=str)
@@ -223,7 +233,9 @@ def generate_dbt(session, run_id: str, payload_json: str = "{}") -> Dict[str, An
                 "applied": skill_meta,
                 "engine": built["report"].get("engine"),
                 "domain_id": stage.run.get("DOMAIN_ID"),
-                "source": "DBT-ONBOARD-SOURCE rules engine (bronze -> ephemeral silver staging -> silver hub)",
+                "source": ("GDP gold engine (silver, read in place -> gold fact, dimension or bridge; mastered keys "
+                           "through the full cross-reference)") if gold else
+                          "DBT-ONBOARD-SOURCE rules engine (bronze -> ephemeral silver staging -> silver hub)",
             }, indent=2)
             stage_files.update({k: files[k] for k in ("release/branch.json", "release/skills.json")})
             version = (scalar(session, "SELECT MAX(GENERATION_VERSION) FROM CODEGEN.DBT_GENERATION_REGISTRY WHERE RUN_ID = ?",
@@ -278,13 +290,14 @@ def generate_dbt(session, run_id: str, payload_json: str = "{}") -> Dict[str, An
                             ["GENERATION_ID", "RUN_ID", "DOMAIN", "TARGET_MODEL", "STTM_ID", "STTM_VERSION",
                              "FILES_GENERATED", "SKILL_VERSION", "KNOWLEDGE_VERSION", "MODEL_VERSION",
                              "GENERATION_VERSION", "GENERATION_STATUS", "STAGE_PATH", "CREATED_BY"],
-                            ["?", "?", "?", "?", "?", "?::NUMBER", "?::NUMBER", "'DBT-ONBOARD-SOURCE:1.0.0'",
-                             "?", f"'{ENGINE}'", "?::NUMBER", "'GENERATED'", "?", "CURRENT_USER()"],
+                            ["?", "?", "?", "?", "?", "?::NUMBER", "?::NUMBER", "?",
+                             "?", "?", "?::NUMBER", "'GENERATED'", "?", "CURRENT_USER()"],
                             [[generation_id, run_id,
                               scalar(session, "SELECT DOMAIN_NAME FROM KNOWLEDGE.DOMAIN_REGISTRY WHERE DOMAIN_ID = ?",
                                      [stage.run["DOMAIN_ID"]]) or conventions(run_standard(stage.run))["default_domain"].upper(),
                               stage.run.get("TARGET_MODEL") or design.get("target_table"),
-                              sttm["STTM_ID"], sttm["STTM_VERSION"], len(files), kv, version, f"@{stage_path}"]])
+                              sttm["STTM_ID"], sttm["STTM_VERSION"], len(files), skill_version, kv, engine_name,
+                              version, f"@{stage_path}"]])
                 insert_rows(session, "CODEGEN.GENERATED_ARTIFACT",
                             ["ARTIFACT_ID", "GENERATION_ID", "RUN_ID", "ARTIFACT_TYPE", "FILE_PATH", "CONTENT",
                              "CONTENT_SHA256"],

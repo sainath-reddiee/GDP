@@ -47,15 +47,23 @@ def edges(db: Db) -> List[Dict[str, Any]]:
         out.append(lt.edge("SOURCE", f"{r['source_database']}.{r['source_schema']}.{r['source_table']}", None,
                            "BRONZE", f"{r['landing_database']}.{r['landing_schema']}.{r['landing_table']}", None, "INGEST", "landed", "SILVER_RUN"))
     for r in _soft(db, """SELECT L.SOURCE_DATABASE, L.SOURCE_SCHEMA, L.SOURCE_TABLE, L.SOURCE_COLUMN, L.TARGET_DATABASE, L.TARGET_SCHEMA,
-                                 L.TARGET_TABLE, L.TARGET_COLUMN, L.TRANSFORMATION
+                                 L.TARGET_TABLE, L.TARGET_COLUMN, L.TRANSFORMATION, L.MAPPING_TYPE, L.LOOKUP_LOGIC,
+                                 COALESCE(W.PIPELINE, 'SILVER') AS PIPELINE
                             FROM CONTRACT.STTM_LINE L JOIN CONTRACT.STTM_REGISTRY S ON S.STTM_ID = L.STTM_ID
+                            LEFT JOIN CORE.WORKFLOW_RUN W ON W.RUN_ID = S.RUN_ID
                            WHERE S.STATUS = 'APPROVED' AND L.SOURCE_TABLE IS NOT NULL
                          QUALIFY DENSE_RANK() OVER (PARTITION BY S.TARGET_TABLE_ID ORDER BY S.CREATED_AT DESC) = 1
                            LIMIT 20000"""):
         src = ".".join(str(r.get(k) or "") for k in ("source_database", "source_schema", "source_table")).strip(".")
         tgt = ".".join(str(r.get(k) or "") for k in ("target_database", "target_schema", "target_table")).strip(".")
-        out.append(lt.edge("BRONZE", src, r.get("source_column"), "SILVER_PRE_MDM", tgt, r.get("target_column"), "MAP",
-                           r.get("transformation"), "SILVER_RUN"))
+        if str(r.get("pipeline") or "").upper() == "GOLD":
+            # a Gold run: silver (read in place) to gold; a key lookup names its resolution
+            lookup = str(r.get("mapping_type") or "").upper() == "LOOKUP"
+            out.append(lt.edge("SILVER_PRE_MDM", src, r.get("source_column"), "GOLD", tgt, r.get("target_column"),
+                               "RESOLVE" if lookup else "BUILD", r.get("lookup_logic") or r.get("transformation"), "GOLD_RUN"))
+        else:
+            out.append(lt.edge("BRONZE", src, r.get("source_column"), "SILVER_PRE_MDM", tgt, r.get("target_column"), "MAP",
+                               r.get("transformation"), "SILVER_RUN"))
     reg = _soft(db, """SELECT DOMAIN_ID, DOMAIN_NAME, CONFIG:mdm AS MDM, CONFIG:silver_database::STRING AS SILVER_DATABASE
                          FROM KNOWLEDGE.DOMAIN_REGISTRY WHERE ACTIVE_FLAG AND CONFIG:mdm IS NOT NULL""")
     mastered = {}
@@ -73,7 +81,7 @@ def edges(db: Db) -> List[Dict[str, Any]]:
             continue
         cols = _soft(db, """SELECT T.TARGET_DATABASE, T.TARGET_SCHEMA, T.TARGET_TABLE, C.COLUMN_NAME
                               FROM KNOWLEDGE.TARGET_TABLE_REGISTRY T JOIN KNOWLEDGE.TARGET_COLUMN_REGISTRY C ON C.TARGET_TABLE_ID = T.TARGET_TABLE_ID
-                             WHERE T.DOMAIN_ID = %s AND T.ACTIVE_FLAG""", (r["domain_id"],))
+                             WHERE T.DOMAIN_ID = %s AND T.ACTIVE_FLAG AND COALESCE(T.LAYER, 'SILVER') = 'SILVER'""", (r["domain_id"],))
         tables: Dict[str, List[str]] = {}
         for c in cols:
             tables.setdefault(f"{c['target_database']}.{c['target_schema']}.{c['target_table']}", []).append(c["column_name"])

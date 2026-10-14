@@ -154,6 +154,7 @@ class CreateRun(BaseModel):
     environment: str = "DEV"
     intent: Optional[dict] = None
     modeling_standard: Optional[Literal["GDP", "GENERIC"]] = None
+    pipeline: Literal["SILVER", "GOLD"] = "SILVER"
 
 
 class Transition(BaseModel):
@@ -386,8 +387,9 @@ def _intent_table_counts(db: Db) -> dict[str, int]:
 def list_runs(include_test: bool = False, status: str = "all", limit: int = 200, offset: int = 0,
               q: Optional[str] = None, domain_id: Optional[str] = None, stage: Optional[str] = None,
               needs_review: bool = False, sort: str = "newest", tag: Optional[str] = None,
-              db: Db = Depends(current_db)):
-    """Runs with search, domain/stage/needs-review/tag filters, sorting and paging (`total` counts all matches)."""
+              pipeline: Literal["ALL", "SILVER", "GOLD"] = "ALL", db: Db = Depends(current_db)):
+    """Runs with search, domain/stage/needs-review/tag/pipeline filters, sorting and paging (`total` counts all
+    matches). pipeline: SILVER (source to silver) or GOLD (silver to gold) runs; ALL by default."""
     from services.common.tags import normalize_tag
     from services.workflow.listing import MAX_RUNS, SORTS, page, runs_where
     from services.workflow.state_machine import lifecycle_filter_sql, lifecycle_status
@@ -401,6 +403,9 @@ def list_runs(include_test: bool = False, status: str = "all", limit: int = 200,
                                normalize_tag(tag) if tag else None)
     order = SORTS.get(sort, SORTS["newest"])
     total = None
+    filtered_where, filtered_params = where, params
+    if pipeline != "ALL":
+        filtered_where, filtered_params = f"({where}) AND COALESCE(R.PIPELINE, 'SILVER') = %s", (*params, pipeline)
     try:
         rows = db.query(
             f"""
@@ -413,17 +418,17 @@ def list_runs(include_test: bool = False, status: str = "all", limit: int = 200,
                    S.SOURCE_SYSTEM_NAME, D.DOMAIN_NAME,
                    DATEDIFF('minute', R.CREATED_AT, CURRENT_TIMESTAMP()) AS AGE_MINUTES,
                    COALESCE(SEL.N, 0) AS SELECTED_TABLES, COALESCE(LAND.N, 0) AS LANDED_TABLES,
-                   COUNT(*) OVER () AS TOTAL_MATCHES
+                   COALESCE(R.PIPELINE, 'SILVER') AS PIPELINE, COUNT(*) OVER () AS TOTAL_MATCHES
               FROM CORE.WORKFLOW_RUN R
               LEFT JOIN SOURCE.SOURCE_REGISTRY S ON S.SOURCE_SYSTEM_ID = R.SOURCE_SYSTEM_ID
               LEFT JOIN KNOWLEDGE.DOMAIN_REGISTRY D ON D.DOMAIN_ID = R.DOMAIN_ID
               LEFT JOIN SEL ON SEL.RUN_ID = R.RUN_ID
               LEFT JOIN LAND ON LAND.RUN_ID = R.RUN_ID
-             WHERE {where}
+             WHERE {filtered_where}
              ORDER BY {order}
              LIMIT %s OFFSET %s
             """,
-            (*params, limit, offset),
+            (*filtered_params, limit, offset),
         )
         total = int(rows[0]["total_matches"]) if rows else 0
     except Exception as exc:
@@ -651,6 +656,8 @@ def create_run(body: CreateRun, db: Db = Depends(current_db)):
     }
     if body.modeling_standard:
         payload["MODELING_STANDARD"] = body.modeling_standard
+    if body.pipeline == "GOLD":
+        payload["PIPELINE"] = "GOLD"
     try:
         created = db.call("CALL CORE.CREATE_RUN(%s)", (json.dumps(payload),))
     except Exception as exc:
@@ -752,7 +759,8 @@ def get_run(run_id: str, db: Db = Depends(current_db)):
             """
         try:
             state["run"] = db.query(base.format(extra=", R.LANDING_DATABASE, R.LANDING_SCHEMA, R.STORAGE_TYPE, "
-                                                      "R.ARCHIVED_AT::VARCHAR AS ARCHIVED_AT, R.ARCHIVED_BY"),
+                                                      "R.ARCHIVED_AT::VARCHAR AS ARCHIVED_AT, R.ARCHIVED_BY, "
+                                                      "COALESCE(R.PIPELINE, 'SILVER') AS PIPELINE"),
                                     (run_id,))[0]
         except Exception:
             state["run"] = db.query(base.format(extra=""), (run_id,))[0]
@@ -779,10 +787,12 @@ def get_model_graph(run_id: str, db: Db = Depends(current_db)):
 
     intent = _load_intent(db, run_id) or {}
     run_rows = db.query(
-        "SELECT TARGET_MODEL, DOMAIN_ID, SOURCE_DATABASE, SOURCE_SCHEMA FROM CORE.WORKFLOW_RUN WHERE RUN_ID = %s",
+        "SELECT TARGET_MODEL, DOMAIN_ID, SOURCE_DATABASE, SOURCE_SCHEMA, COALESCE(PIPELINE, 'SILVER') AS PIPELINE "
+        "FROM CORE.WORKFLOW_RUN WHERE RUN_ID = %s",
         (run_id,),
     )
     run = run_rows[0] if run_rows else {}
+    layer = "GOLD" if str(run.get("pipeline") or "").upper() == "GOLD" else "SILVER"
     sources = db.query(
         """
         SELECT OBJECT_NAME, OBJECT_TYPE, ROW_COUNT_ESTIMATE, SELECTED_FLAG
@@ -812,9 +822,9 @@ def get_model_graph(run_id: str, db: Db = Depends(current_db)):
                T.TARGET_TABLE, T.TABLE_TYPE, T.GRAIN
           FROM KNOWLEDGE.TARGET_TABLE_REGISTRY T
           JOIN KNOWLEDGE.DOMAIN_REGISTRY D ON D.DOMAIN_ID = T.DOMAIN_ID
-         WHERE T.ACTIVE_FLAG
+         WHERE T.ACTIVE_FLAG AND COALESCE(T.LAYER, 'SILVER') = %s
          ORDER BY T.TARGET_TABLE
-        """
+        """, (layer,)
     )
     columns_by_table: dict[str, list[str]] = {}
     for col in db.query(
@@ -822,8 +832,8 @@ def get_model_graph(run_id: str, db: Db = Depends(current_db)):
         SELECT T.TARGET_TABLE, C.COLUMN_NAME
           FROM KNOWLEDGE.TARGET_COLUMN_REGISTRY C
           JOIN KNOWLEDGE.TARGET_TABLE_REGISTRY T ON T.TARGET_TABLE_ID = C.TARGET_TABLE_ID
-         WHERE T.ACTIVE_FLAG
-        """
+         WHERE T.ACTIVE_FLAG AND COALESCE(T.LAYER, 'SILVER') = %s
+        """, (layer,)
     ):
         columns_by_table.setdefault(col["target_table"], []).append(col["column_name"])
     selected_fqns = {
@@ -1365,7 +1375,7 @@ def _targets_with_columns(db: Db) -> list[dict]:
                T.TARGET_TABLE, T.TABLE_TYPE, T.GRAIN
           FROM KNOWLEDGE.TARGET_TABLE_REGISTRY T
           JOIN KNOWLEDGE.DOMAIN_REGISTRY D ON D.DOMAIN_ID = T.DOMAIN_ID
-         WHERE T.ACTIVE_FLAG
+         WHERE T.ACTIVE_FLAG AND COALESCE(T.LAYER, 'SILVER') = 'SILVER'
          ORDER BY T.TARGET_TABLE
         """
     )
@@ -1374,7 +1384,7 @@ def _targets_with_columns(db: Db) -> list[dict]:
         SELECT T.TARGET_TABLE, C.COLUMN_NAME
           FROM KNOWLEDGE.TARGET_COLUMN_REGISTRY C
           JOIN KNOWLEDGE.TARGET_TABLE_REGISTRY T ON T.TARGET_TABLE_ID = C.TARGET_TABLE_ID
-         WHERE T.ACTIVE_FLAG
+         WHERE T.ACTIVE_FLAG AND COALESCE(T.LAYER, 'SILVER') = 'SILVER'
         """
     )
     by_table: dict[str, list[str]] = {}
@@ -1747,7 +1757,7 @@ def list_targets(db: Db = Depends(current_db)):
                  WHERE C.TARGET_TABLE_ID = T.TARGET_TABLE_ID) AS COLUMNS
           FROM KNOWLEDGE.TARGET_TABLE_REGISTRY T
           JOIN KNOWLEDGE.DOMAIN_REGISTRY D ON D.DOMAIN_ID = T.DOMAIN_ID
-         WHERE T.ACTIVE_FLAG
+         WHERE T.ACTIVE_FLAG AND COALESCE(T.LAYER, 'SILVER') = 'SILVER'
          ORDER BY T.TARGET_TABLE
         """
     )
@@ -2108,7 +2118,7 @@ _DOMAIN_TARGETS_SQL = """
     SELECT T.TARGET_TABLE_ID, T.TARGET_DATABASE, T.TARGET_SCHEMA, T.TARGET_TABLE, T.DESCRIPTION, {spec} AS MODEL_SPEC,
            (SELECT COUNT(*) FROM KNOWLEDGE.TARGET_COLUMN_REGISTRY C WHERE C.TARGET_TABLE_ID = T.TARGET_TABLE_ID) AS COLUMN_COUNT
       FROM KNOWLEDGE.TARGET_TABLE_REGISTRY T
-     WHERE T.DOMAIN_ID = %s AND T.ACTIVE_FLAG
+     WHERE T.DOMAIN_ID = %s AND T.ACTIVE_FLAG AND COALESCE(T.LAYER, 'SILVER') = 'SILVER'
      ORDER BY T.TARGET_TABLE
 """
 
@@ -3206,6 +3216,12 @@ def _is_transition_rejected(exc: Exception) -> bool:
 
 def _generate_dbt_overlay(db: Db, run_id: str, payload: dict):
     from services.dbt.overlay import generate_via_db
+
+    found = db.query("SELECT COALESCE(PIPELINE, 'SILVER') AS PIPELINE FROM CORE.WORKFLOW_RUN WHERE RUN_ID = %s", (run_id,))
+    if found and str(found[0].get("pipeline")).upper() == "GOLD":
+        # the overlay regenerates Silver code only; a Gold run regenerates through its stage (CODEGEN.GENERATE_DBT)
+        raise HTTPException(409, "Regenerate this Gold run's code from its Gold Code Generation step (fix and "
+                                 "regenerate after a failed validation)")
     return generate_via_db(db, run_id, payload)
 
 

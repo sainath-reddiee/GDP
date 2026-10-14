@@ -82,14 +82,14 @@ def load_inputs(query: Query, run_id: str, plan: Dict[str, Any], sttm: Dict[str,
                                    C.BUSINESS_DEFINITION, C.ACCEPTED_VALUES
                               FROM KNOWLEDGE.TARGET_TABLE_REGISTRY T
                               JOIN KNOWLEDGE.TARGET_COLUMN_REGISTRY C ON C.TARGET_TABLE_ID = T.TARGET_TABLE_ID
-                             WHERE T.ACTIVE_FLAG AND T.DOMAIN_ID = ? AND UPPER(T.TARGET_TABLE) = UPPER(?)
+                             WHERE T.ACTIVE_FLAG AND T.DOMAIN_ID = ? AND UPPER(T.TARGET_TABLE) = UPPER(?) AND COALESCE(T.LAYER, 'SILVER') = 'SILVER'
                              ORDER BY C.ORDINAL_POSITION""", [run.get("DOMAIN_ID"), target])]
     except Exception:
         target_columns = []
     model_spec: Dict[str, Any] = {}
     try:
         found = query("""SELECT MODEL_SPEC FROM KNOWLEDGE.TARGET_TABLE_REGISTRY
-                          WHERE ACTIVE_FLAG AND DOMAIN_ID = ? AND UPPER(TARGET_TABLE) = UPPER(?)
+                          WHERE ACTIVE_FLAG AND DOMAIN_ID = ? AND UPPER(TARGET_TABLE) = UPPER(?) AND COALESCE(LAYER, 'SILVER') = 'SILVER'
                           ORDER BY TARGET_TABLE LIMIT 1""", [run.get("DOMAIN_ID"), target])
         model_spec = _json(found[0].get("MODEL_SPEC")) if found else {}
     except Exception:

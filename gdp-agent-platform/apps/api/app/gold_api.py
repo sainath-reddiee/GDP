@@ -1,63 +1,50 @@
-"""Pipeline 2, Silver (post-MDM) to Gold: gold builds of a domain (V053).
+"""Gold Pipeline: Gold runs on the run engine (V054), Silver (read in place) to Gold.
 
-GET  /api/gold/builds                          every build, newest first
-POST /api/gold/builds                          start one for a domain (MODEL.EDIT)
-GET  /api/gold/builds/{id}                     the build, its inputs, the proposal, the mapping lines, the gold model
-GET  /api/gold/builds/{id}/candidates          tables it can start from: the domain's silver hubs (consumer domains)
-                                               or its post-MDM golden tables (mastered domains), read from the catalog
-PUT  /api/gold/builds/{id}/inputs              choose the input tables
-POST /api/gold/builds/{id}/propose             read the inputs' columns (and approximate distinct counts of descriptor
-                                               columns, read only) and propose the gold model (services/gold/propose.py)
-POST /api/gold/builds/{id}/workbench           put the proposal into the domain's GOLD model as a draft, to review and
-                                               approve in the Model Workbench (four eyes)
-POST /api/gold/builds/{id}/cancel
-Nothing here writes to silver, MDM or gold data; generation (dbt) comes after approval.
+A Gold run is a run with PIPELINE = 'GOLD'. It goes through the same stages, gates and approvals as a Silver run:
+Silver Selection (register and validate the silver tables, read in place, no copy), Profiling, Modeling (the gold
+model and the field mapping, then the transformations: the STTM), QA tests, Data Quality, Gold Code Generation,
+Validation and Code review. What differs is here and in services/gold:
+
+GET  /api/gold/inputs?domain_id=        silver tables a domain's Gold run can start from: a consumer domain's silver
+                                        schemas (its registered hubs suggested), with row counts, read from the catalog
+POST /api/gold/runs                     start a Gold run on chosen silver tables (RUN.CREATE): created, registered in
+                                        place, access validated and profiled, like a catalog run
+GET  /api/runs/{id}/gold                the run's gold modeling: the domain's MDM role, its GOLD model (approved and
+                                        open versions, the approved tables to map into) and the table the run uses
+POST /api/runs/{id}/gold/propose        propose the gold model from the run's profile (facts, dimensions, bridges;
+                                        services/gold/propose.py) into a draft of the domain's GOLD model, reviewed and
+                                        approved in the Model Workbench (MODEL.EDIT)
+POST /api/runs/{id}/gold/target         use one table of the approved gold model as the run's target (MODEL.EDIT)
+Nothing here writes to silver, MDM or gold data.
 """
 
 from __future__ import annotations
 
 import json
 import re
-import uuid
+import time
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
-from app.db import Db, transaction
-from app.main import _quote_ident, _snowflake_error, current_db, domain_detail
+from app.db import Db
+from app.main import (MODEL_APPLY_STATES, AccessRequest, CreateRun, _quote_ident, _snowflake_error, create_run,
+                      current_db, pin_run_model, prepare_source, run_profiling)
 from app.source_invoke import invoke_source
 from services.gold import propose as gold
 
 router = APIRouter()
 IDENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_$]*$")
-LAYERS = ("SILVER_PRE_MDM", "SILVER_POST_MDM")
 
 
 def _js(v: Any) -> Any:
     return json.loads(v) if isinstance(v, str) else v
 
 
-def _deployed(exc: Exception) -> HTTPException:
-    if "does not exist" in str(exc).lower() or "invalid identifier" in str(exc).lower():
-        return HTTPException(503, "Gold builds need migration V053. An admin applies it in Admin, Deploy.")
-    return _snowflake_error(exc)
-
-
-def _build(db: Db, build_id: str) -> Dict[str, Any]:
-    try:
-        found = db.query("""SELECT BUILD_ID, DOMAIN_ID, DOMAIN_NAME, NAME, STEP, STATUS, INPUTS, PROPOSAL, MODEL_ID, MODEL_VERSION,
-                                   GENERATION, NOTE, CREATED_BY, TO_VARCHAR(CREATED_AT, 'YYYY-MM-DD HH24:MI') AS CREATED_AT,
-                                   UPDATED_BY, TO_VARCHAR(UPDATED_AT, 'YYYY-MM-DD HH24:MI') AS UPDATED_AT
-                              FROM CORE.GOLD_BUILD WHERE BUILD_ID = %s""", (build_id,))
-    except Exception as exc:
-        raise _deployed(exc) from exc
-    if not found:
-        raise HTTPException(404, "gold build not found")
-    b = found[0]
-    for k in ("inputs", "proposal", "generation"):
-        b[k] = _js(b.get(k))
-    return b
+def _env(database: Optional[str]) -> str:
+    m = re.match(r"^([A-Z]+)_", str(database or "").upper())
+    return m.group(1) if m else "DEV"
 
 
 def _contracts(db: Db) -> Dict[str, Dict[str, Any]]:
@@ -67,229 +54,200 @@ def _contracts(db: Db) -> Dict[str, Dict[str, Any]]:
     return {r["domain_name"]: {**r, "mdm": _js(r.get("mdm")) or {}} for r in rows}
 
 
-def _env(silver_database: Optional[str]) -> str:
-    m = re.match(r"^([A-Z]+)_", str(silver_database or "").upper())
-    return m.group(1) if m else "DEV"
+def _domain(db: Db, domain_id: str) -> Dict[str, Any]:
+    found = next((c for c in _contracts(db).values() if c["domain_id"] == domain_id), None)
+    if not found:
+        raise HTTPException(404, "domain not found")
+    return found
 
 
-def _set(db: Db, build_id: str, **fields: Any) -> None:
-    sets, params = [], []
-    for k, v in fields.items():
-        if isinstance(v, (dict, list)):
-            sets.append(f"{k.upper()} = PARSE_JSON(%s)")
-            params.append(json.dumps(v, default=str))
-        else:
-            sets.append(f"{k.upper()} = %s")
-            params.append(v)
-    db.execute(f"UPDATE CORE.GOLD_BUILD SET {', '.join(sets)}, UPDATED_BY = CURRENT_USER(), UPDATED_AT = CURRENT_TIMESTAMP() "
-               "WHERE BUILD_ID = %s", (*params, build_id))
+def _mastered(reg: Dict[str, Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    return {n: r["mdm"] for n, r in reg.items() if str(r["mdm"].get("role") or "").upper() == "MASTERED"}
 
 
-@router.get("/api/gold/builds")
-def list_builds(domain_id: Optional[str] = None, db: Db = Depends(current_db)):
-    where, params = ("WHERE DOMAIN_ID = %s", (domain_id,)) if domain_id else ("", ())
-    try:
-        rows = db.query(f"""SELECT BUILD_ID, DOMAIN_ID, DOMAIN_NAME, NAME, STEP, STATUS, MODEL_ID, MODEL_VERSION,
-                                   ARRAY_SIZE(COALESCE(INPUTS, ARRAY_CONSTRUCT())) AS INPUTS,
-                                   ARRAY_SIZE(COALESCE(PROPOSAL:spec:design:entities, ARRAY_CONSTRUCT())) AS TABLES,
-                                   CREATED_BY, TO_VARCHAR(CREATED_AT, 'YYYY-MM-DD HH24:MI') AS CREATED_AT,
-                                   TO_VARCHAR(UPDATED_AT, 'YYYY-MM-DD HH24:MI') AS UPDATED_AT
-                              FROM CORE.GOLD_BUILD {where} ORDER BY COALESCE(UPDATED_AT, CREATED_AT) DESC LIMIT 200""", params)
-    except Exception as exc:
-        if "does not exist" in str(exc).lower():
-            return {"builds": [], "deployed": False}
-        raise _snowflake_error(exc) from exc
-    return {"builds": rows, "deployed": True}
+def _require_consumer(d: Dict[str, Any]) -> None:
+    role = str(d["mdm"].get("role") or "").upper()
+    if role == "MASTERED":
+        raise HTTPException(400, f"{d['domain_name']} is mastered by Reltio; its gold (the conformed dimension) exists in "
+                                 "gdp-dbt and is referenced by consumers, not regenerated")
+    if role != "CONSUMER":
+        raise HTTPException(400, f"{d['domain_name']} is not linked to MDM: on the domain's Lineage tab, mark which mastered "
+                                 "domains (Company, Property) it consumes, then start the Gold run")
 
 
-class BuildIn(BaseModel):
-    domain_id: str = Field(min_length=1, max_length=36)
-    name: Optional[str] = Field(default=None, max_length=256)
+# ---------------------------------------------------------------- starting a Gold run
 
-
-@router.post("/api/gold/builds")
-def create_build(body: BuildIn, db: Db = Depends(current_db)):
-    detail = domain_detail(body.domain_id, db)
-    name = detail["domain"]["domain_name"]
-    build_id = str(uuid.uuid4())
-    try:
-        db.execute("""INSERT INTO CORE.GOLD_BUILD (BUILD_ID, DOMAIN_ID, DOMAIN_NAME, NAME, INPUTS)
-                      SELECT %s, %s, %s, %s, ARRAY_CONSTRUCT()""",
-                   (build_id, body.domain_id, name, (body.name or f"{name} gold").strip()[:256]))
-    except Exception as exc:
-        raise _deployed(exc) from exc
-    return get_build(build_id, db)
-
-
-@router.get("/api/gold/builds/{build_id}")
-def get_build(build_id: str, db: Db = Depends(current_db)):
-    b = _build(db, build_id)
-    lines = db.query("""SELECT GOLD_TABLE, GOLD_COLUMN, KIND, SOURCE_LAYER, SOURCE_TABLE, SOURCE_COLUMN, EXPRESSION, NOTE
-                          FROM GOVERNANCE.GOLD_MAPPING_LINE WHERE BUILD_ID = %s ORDER BY POSITION""", (build_id,))
-    reg = _contracts(db)
-    mdm = (reg.get(b["domain_name"]) or {}).get("mdm") or {}
-    model = None
-    if b.get("model_id"):
-        found = db.query("SELECT MODEL_ID, APPROVED_VERSION, OPEN_VERSION FROM GOVERNANCE.DOMAIN_MODEL WHERE MODEL_ID = %s", (b["model_id"],))
-        model = found[0] if found else None
-    gen = b.get("generation") or None
-    if gen:   # the summary; the files themselves come from /generation
-        gen = {k: v for k, v in gen.items() if k != "files"} | {"paths": sorted((gen.get("files") or {}).keys())}
-    return {**b, "generation": gen, "lines": lines, "role": str(mdm.get("role") or "").upper() or None,
-            "consumes": mdm.get("consumes") or [], "model": model}
-
-
-@router.get("/api/gold/builds/{build_id}/candidates")
-def candidates(build_id: str, db: Db = Depends(current_db)):
-    """Input tables a build can start from, with row counts: a consumer domain's silver hubs (its registered target
-    tables), or a mastered domain's post-MDM golden and cross-reference tables."""
-    b = _build(db, build_id)
-    reg = _contracts(db).get(b["domain_name"]) or {}
-    mdm = reg.get("mdm") or {}
-    out: List[Dict[str, Any]] = []
-    if str(mdm.get("role") or "").upper() == "MASTERED":
-        env = _env(reg.get("silver_database"))
-        for part, layer in (("golden", "SILVER_POST_MDM"), ("cross_reference", "SILVER_POST_MDM")):
-            sec = mdm.get(part) or {}
-            if sec:
-                out.append({"database": str(sec["database"]).replace("{ENV}", env), "schema": sec["schema"], "table": sec["table"],
-                            "layer": layer, "role": part})
-    else:
-        tables = db.query("""SELECT TARGET_DATABASE, TARGET_SCHEMA, TARGET_TABLE FROM KNOWLEDGE.TARGET_TABLE_REGISTRY
-                              WHERE DOMAIN_ID = %s AND ACTIVE_FLAG ORDER BY TARGET_TABLE""", (b["domain_id"],))
-        out = [{"database": t["target_database"], "schema": t["target_schema"], "table": t["target_table"],
-                "layer": "SILVER_PRE_MDM", "role": "hub"} for t in tables]
-    # what exists, with row counts (read only); a table the role cannot read is listed as unreadable
-    by_loc: Dict[tuple, List[Dict[str, Any]]] = {}
-    for t in out:
-        by_loc.setdefault((t["database"], t["schema"]), []).append(t)
-    for (database, schema), items in by_loc.items():
+@router.get("/api/gold/inputs")
+def gold_inputs(domain_id: str, db: Db = Depends(current_db)):
+    d = _domain(db, domain_id)
+    role = str(d["mdm"].get("role") or "").upper() or None
+    hubs = db.query("""SELECT TARGET_DATABASE, TARGET_SCHEMA, TARGET_TABLE FROM KNOWLEDGE.TARGET_TABLE_REGISTRY
+                        WHERE DOMAIN_ID = %s AND ACTIVE_FLAG AND COALESCE(LAYER, 'SILVER') = 'SILVER'""", (domain_id,))
+    schemas: Dict[tuple, set] = {}
+    for h in hubs:
+        schemas.setdefault((h["target_database"].upper(), h["target_schema"].upper()), set()).add(h["target_table"].upper())
+    if d.get("silver_database") and d.get("silver_schema"):
+        schemas.setdefault((d["silver_database"].upper(), d["silver_schema"].upper()), set())
+    out = []
+    for (database, schema), suggested in sorted(schemas.items()):
+        item: Dict[str, Any] = {"database": database, "schema": schema, "tables": []}
         try:
-            found = {r["table_name"]: r for r in db.query(
-                f"SELECT TABLE_NAME, ROW_COUNT, LAST_ALTERED::VARCHAR AS LAST_ALTERED FROM {_quote_ident(database)}.INFORMATION_SCHEMA.TABLES "
-                f"WHERE TABLE_SCHEMA = %s AND TABLE_NAME IN ({', '.join(['%s'] * len(items))})", (schema, *[i["table"] for i in items]))}
+            for t in db.query(f"""SELECT TABLE_NAME, TABLE_TYPE, ROW_COUNT, LAST_ALTERED::VARCHAR AS LAST_ALTERED
+                                    FROM {_quote_ident(database)}.INFORMATION_SCHEMA.TABLES
+                                   WHERE TABLE_SCHEMA = %s ORDER BY TABLE_NAME LIMIT 500""", (schema,)):
+                item["tables"].append({"table": t["table_name"], "type": t["table_type"], "row_count": t.get("row_count"),
+                                       "last_altered": t.get("last_altered"), "suggested": t["table_name"].upper() in suggested})
+            item["missing"] = sorted(suggested - {t["table"].upper() for t in item["tables"]})
         except Exception as exc:
-            found, err = {}, str(exc).splitlines()[0][:200]
-            for i in items:
-                i["error"] = err
-        for i in items:
-            meta = found.get(i["table"])
-            i["exists"] = bool(meta)
-            i["row_count"] = meta.get("row_count") if meta else None
-            i["last_altered"] = meta.get("last_altered") if meta else None
-    return {"role": str(mdm.get("role") or "").upper() or None, "tables": out}
+            item["error"] = str(exc).splitlines()[0][:200]
+        out.append(item)
+    return {"domain_id": domain_id, "domain_name": d["domain_name"], "role": role, "consumes": d["mdm"].get("consumes") or [],
+            "schemas": out}
 
 
-class InputIn(BaseModel):
+class GoldRunIn(BaseModel):
+    domain_id: str = Field(min_length=1, max_length=36)
     database: str = Field(min_length=1, max_length=255)
     schema_name: str = Field(alias="schema", min_length=1, max_length=255)
-    table: str = Field(min_length=1, max_length=255)
-    layer: str = Field(default="SILVER_PRE_MDM", max_length=32)
+    tables: List[str] = Field(min_length=1, max_length=50)
+    run_name: Optional[str] = Field(default=None, max_length=256)
 
 
-class InputsIn(BaseModel):
-    tables: List[InputIn] = Field(max_length=20)
-
-
-@router.put("/api/gold/builds/{build_id}/inputs")
-def set_inputs(build_id: str, body: InputsIn, db: Db = Depends(current_db)):
-    b = _build(db, build_id)
-    if b["status"] in ("APPROVED", "GENERATED", "CANCELLED"):
-        raise HTTPException(409, f"the build is {b['status'].lower()}; start a new one")
-    tables = []
-    for t in body.tables:
-        if not all(IDENT.match(x) for x in (t.database, t.schema_name, t.table)):
-            raise HTTPException(400, f"{t.database}.{t.schema_name}.{t.table} is not a table name")
-        if t.layer not in LAYERS:
-            raise HTTPException(400, f"layer must be one of {', '.join(LAYERS)}")
-        tables.append({"database": t.database.upper(), "schema": t.schema_name.upper(), "table": t.table.upper(), "layer": t.layer})
-    _set(db, build_id, inputs=tables, step="INPUTS", status="DRAFT")
-    return get_build(build_id, db)
-
-
-def _columns(db: Db, t: Dict[str, Any]) -> Dict[str, Any]:
-    cols = db.query(f"""SELECT COLUMN_NAME AS NAME, DATA_TYPE, IS_NULLABLE, COMMENT, NUMERIC_PRECISION, NUMERIC_SCALE
-                          FROM {_quote_ident(t['database'])}.INFORMATION_SCHEMA.COLUMNS
-                         WHERE TABLE_SCHEMA = %s AND TABLE_NAME = %s ORDER BY ORDINAL_POSITION""", (t["schema"], t["table"]))
-    if not cols:
-        raise HTTPException(404, f"{t['database']}.{t['schema']}.{t['table']} has no readable columns")
-    out = []
-    for c in cols:
-        dt = str(c["data_type"]).upper()
-        if dt in ("NUMBER", "DECIMAL", "NUMERIC") and c.get("numeric_precision") is not None:
-            dt = f"NUMBER({int(c['numeric_precision'])},{int(c.get('numeric_scale') or 0)})"
-        out.append({"name": c["name"], "data_type": dt, "nullable": str(c.get("is_nullable")).upper() == "YES", "comment": c.get("comment")})
-    # approximate distinct counts of descriptor-like text columns: the only read of data (one scan, read only)
-    desc = [c for c in out if gold.is_descriptor(c["name"], c["data_type"])]
-    if desc:
-        try:
-            row = db.query("SELECT " + ", ".join(f"APPROX_COUNT_DISTINCT({_quote_ident(c['name'])}) AS D{i}" for i, c in enumerate(desc))
-                           + f" FROM {_quote_ident(t['database'])}.{_quote_ident(t['schema'])}.{_quote_ident(t['table'])}")[0]
-            for i, c in enumerate(desc):
-                c["distinct_count"] = row.get(f"d{i}")
-        except Exception:
-            pass   # without counts, descriptors stay attributes
-    return {**t, "columns": out}
-
-
-@router.post("/api/gold/builds/{build_id}/propose")
-def propose_build(build_id: str, db: Db = Depends(current_db)):
-    b = _build(db, build_id)
-    if not b.get("inputs"):
-        raise HTTPException(400, "choose the input tables first")
-    if b["status"] in ("APPROVED", "GENERATED", "CANCELLED"):
-        raise HTTPException(409, f"the build is {b['status'].lower()}; start a new one")
-    reg = _contracts(db)
-    me = reg.get(b["domain_name"]) or {}
-    mdm = me.get("mdm") or {}
-    role = str(mdm.get("role") or "").upper()
-    if role != "CONSUMER":
-        raise HTTPException(400, f"{b['domain_name']} is " + ("mastered by Reltio; its gold (the conformed dimension) exists in gdp-dbt "
-                             "and is registered, not regenerated" if role == "MASTERED" else
-                             "not linked to MDM; mark which mastered domains it consumes on its Lineage tab first"))
-    mastered = {n: r["mdm"] for n, r in reg.items() if str(r["mdm"].get("role") or "").upper() == "MASTERED"}
-    inputs = [_columns(db, t) for t in b["inputs"]]
-    out = gold.propose(b["domain_name"], inputs, consumes=mdm.get("consumes") or [], mastered=mastered, env=_env(me.get("silver_database")))
+@router.post("/api/gold/runs")
+def start_gold_run(body: GoldRunIn, db: Db = Depends(current_db)):
+    """Create a Gold run on silver tables read in place, validate access and profile them (the run then waits on
+    Modeling: the gold model and its target table)."""
+    d = _domain(db, body.domain_id)
+    _require_consumer(d)
+    names = [body.database, body.schema_name, *body.tables]
+    if not all(IDENT.match(x) for x in names):
+        raise HTTPException(400, "database, schema and table names must be plain identifiers")
+    database, schema = body.database.upper(), body.schema_name.upper()
+    tables = sorted({t.upper() for t in body.tables})
+    run_name = body.run_name or f"{d['domain_name']} gold {time.strftime('%Y-%m-%d %H:%M')}"
+    intent = {
+        "path": "profile_suggest", "pipeline": "GOLD", "run_name": run_name, "model_existing": False, "targets": [],
+        "created_at": time.strftime("%Y-%m-%dT%H:%M:%S"), "domain_id": body.domain_id,
+        "source": {"origin": "snowflake", "database": database, "schema": schema,
+                   "source_system_name": f"SILVER_{database}_{schema}"[:120], "source_type": "SNOWFLAKE_DATABASE",
+                   "tables": tables},
+        "target": {"storage_type": "IN_PLACE"},
+    }
+    created = create_run(CreateRun(run_name=run_name, domain_id=body.domain_id, intent=intent, pipeline="GOLD"), db)
+    run_id = created.get("run_id")
+    if created.get("registration_error"):
+        return {"run_id": run_id, "stage": "SOURCE", "error": created["registration_error"]}
+    prepared = prepare_source(run_id, AccessRequest(selected=tables), db)
+    if not prepared.get("passed"):
+        return {"run_id": run_id, "stage": "SOURCE", "error": "access check failed; open the run to see which table"}
     try:
-        with transaction(db):
-            db.execute("DELETE FROM GOVERNANCE.GOLD_MAPPING_LINE WHERE BUILD_ID = %s", (build_id,))
-            for i, l in enumerate(out["lines"]):
-                db.execute("""INSERT INTO GOVERNANCE.GOLD_MAPPING_LINE (BUILD_ID, POSITION, GOLD_TABLE, GOLD_COLUMN, KIND, SOURCE_LAYER,
-                                                                      SOURCE_TABLE, SOURCE_COLUMN, EXPRESSION, NOTE)
-                              SELECT %s, %s, %s, %s, %s, %s, %s, %s, %s, NULLIF(%s, '')""",
-                           (build_id, i, l["gold_table"], l["gold_column"], l["kind"], l.get("source_layer"), l.get("source_table"),
-                            l.get("source_column"), l.get("expression"), l.get("note") or ""))
-            _set(db, build_id, proposal={"spec": out["spec"], "notes": out["notes"]}, step="MODELING", status="PROPOSED")
-    except Exception as exc:
-        raise _deployed(exc) from exc
-    return get_build(build_id, db)
+        profiled = run_profiling(run_id, None, db)
+    except HTTPException as exc:
+        return {"run_id": run_id, "stage": "PROFILING", "error": exc.detail}
+    return {"run_id": run_id, "stage": "MODELING", "state": (profiled or {}).get("state")}
 
 
-@router.post("/api/gold/builds/{build_id}/workbench")
-def to_workbench(build_id: str, db: Db = Depends(current_db)):
-    """The proposal becomes a draft of the domain's GOLD model (created on first use), reviewed and approved in the
-    Model Workbench like any model change."""
+# ---------------------------------------------------------------- the Gold run's modeling
+
+def _run(db: Db, run_id: str) -> Dict[str, Any]:
+    found = db.query("""SELECT RUN_ID, RUN_NAME, DOMAIN_ID, COALESCE(PIPELINE, 'SILVER') AS PIPELINE, CURRENT_STATE, TARGET_MODEL,
+                               MODEL_ID, MODEL_VERSION, MODEL_ENTITY FROM CORE.WORKFLOW_RUN WHERE RUN_ID = %s""", (run_id,))
+    if not found:
+        raise HTTPException(404, "run not found")
+    if str(found[0]["pipeline"]).upper() != "GOLD":
+        raise HTTPException(400, "this is a Silver run; gold modeling is for Gold runs")
+    return found[0]
+
+
+def _gold_model(db: Db, domain_id: str) -> Optional[Dict[str, Any]]:
+    from services.modeling.domain_model import model_id_for
+
+    found = db.query("SELECT MODEL_ID, APPROVED_VERSION, OPEN_VERSION FROM GOVERNANCE.DOMAIN_MODEL WHERE MODEL_ID = %s",
+                     (model_id_for(domain_id, "GOLD"),))
+    return found[0] if found else None
+
+
+def _approved_tables(db: Db, model: Dict[str, Any]) -> List[Dict[str, Any]]:
+    from services.modeling import spec_v2
+
+    if not model or not model.get("approved_version"):
+        return []
+    found = db.query("SELECT SPEC FROM GOVERNANCE.MODEL_DESIGNS WHERE MODEL_ID = %s AND VERSION = %s",
+                     (model["model_id"], int(model["approved_version"])))
+    if not found:
+        return []
+    spec = spec_v2.active(spec_v2.normalize_v2(_js(found[0]["spec"]) or {}, model["model_id"]))
+    phys = spec.get("physical_defaults") or {}
+    return [{"entity": e["entity_name"], "table_type": e["table_type"], "grain": e.get("grain"),
+             "description": e.get("description"), "columns": len(e.get("attributes") or []),
+             "fqn": f"{e.get('database') or phys.get('database')}.{e.get('schema') or phys.get('schema')}.{e['entity_name']}"}
+            for e in spec["design"]["entities"] if not e.get("conformed_from")]
+
+
+def _profiled_inputs(db: Db, run_id: str) -> List[Dict[str, Any]]:
+    """The run's silver tables with their profiled columns (distinct counts decide which descriptors become
+    dimensions)."""
+    rows = db.query("""SELECT L.LANDING_DATABASE, L.LANDING_SCHEMA, L.LANDING_TABLE, P.COLUMN_NAME, P.DATA_TYPE, P.DISTINCT_COUNT,
+                              P.NULL_COUNT, P.ROW_COUNT
+                         FROM PROFILE.PROFILE_REGISTRY P
+                         JOIN SOURCE.LANDING_TABLE_REGISTRY L ON L.LANDING_ID = P.SOURCE_TABLE_ID
+                        WHERE P.RUN_ID = %s AND P.IS_CURRENT
+                        ORDER BY L.LANDING_TABLE, P.COLUMN_NAME""", (run_id,))
+    tables: Dict[tuple, Dict[str, Any]] = {}
+    for r in rows:
+        key = (r["landing_database"], r["landing_schema"], r["landing_table"])
+        t = tables.setdefault(key, {"database": key[0], "schema": key[1], "table": key[2], "layer": "SILVER_PRE_MDM",
+                                    "row_count": r.get("row_count"), "columns": []})
+        t["columns"].append({"name": r["column_name"], "data_type": str(r.get("data_type") or "VARCHAR").upper(),
+                             "nullable": bool(r.get("null_count")), "distinct_count": r.get("distinct_count")})
+    return list(tables.values())
+
+
+@router.get("/api/runs/{run_id}/gold")
+def run_gold(run_id: str, db: Db = Depends(current_db)):
+    run = _run(db, run_id)
+    d = _domain(db, run["domain_id"])
+    model = _gold_model(db, run["domain_id"])
+    return {"run_id": run_id, "domain_id": run["domain_id"], "domain_name": d["domain_name"],
+            "role": str(d["mdm"].get("role") or "").upper() or None, "consumes": d["mdm"].get("consumes") or [],
+            "model": model, "tables": _approved_tables(db, model) if model else [],
+            "target": {"model_id": run.get("model_id"), "version": run.get("model_version"), "entity": run.get("model_entity"),
+                       "fqn": run.get("target_model")} if run.get("model_entity") else None,
+            "inputs": [{k: t[k] for k in ("database", "schema", "table", "row_count")} | {"columns": len(t["columns"])}
+                       for t in _profiled_inputs(db, run_id)],
+            "can_choose_target": run["current_state"] in MODEL_APPLY_STATES}
+
+
+@router.post("/api/runs/{run_id}/gold/propose")
+def propose_gold(run_id: str, db: Db = Depends(current_db)):
+    """The run's profiled silver tables as a proposed gold model, saved as a draft of the domain's GOLD model."""
     from services.modeling import domain_model
 
-    b = _build(db, build_id)
-    spec = (b.get("proposal") or {}).get("spec")
-    if not spec:
-        raise HTTPException(400, "propose the gold model first")
+    run = _run(db, run_id)
+    reg = _contracts(db)
+    d = next(c for c in reg.values() if c["domain_id"] == run["domain_id"])
+    _require_consumer(d)
+    inputs = _profiled_inputs(db, run_id)
+    if not inputs:
+        raise HTTPException(409, "profile the run's silver tables first")
+    out = gold.propose(d["domain_name"], inputs, consumes=d["mdm"].get("consumes") or [], mastered=_mastered(reg),
+                       env=_env(d.get("silver_database") or inputs[0]["database"]))
+    spec = out["spec"]
     user = str(db.user or "").upper()
-    model_id = domain_model.model_id_for(b["domain_id"], "GOLD")
+    model_id = domain_model.model_id_for(run["domain_id"], "GOLD")
+    note = f"Proposed by Gold run {run['run_name']}"
 
     def work(session):
         from services.common.sql import rows
 
         exists = rows(session, "SELECT OPEN_VERSION, APPROVED_VERSION FROM GOVERNANCE.DOMAIN_MODEL WHERE MODEL_ID = ?", [model_id])
         if not exists:
-            return domain_model.create_model(session, b["domain_id"], json.dumps(
-                {"layer": "GOLD", "spec": spec, "origin": "GOLD_BUILD", "change_note": f"Proposed by gold build {b['name']}"}), user)
+            return domain_model.create_model(session, run["domain_id"], json.dumps(
+                {"layer": "GOLD", "spec": spec, "origin": "GOLD_RUN", "change_note": note}), user)
         if not exists[0].get("OPEN_VERSION"):
-            domain_model.open_draft(session, model_id, user, None, f"Gold build {b['name']}")
+            domain_model.open_draft(session, model_id, user, None, note)
         draft = domain_model.get_model(session, model_id)["current"]
-        return domain_model.save_draft(session, model_id, json.dumps({"spec": spec, "etag": draft["etag"],
-                                                                      "change_note": f"Proposed by gold build {b['name']}"}), user)
+        return domain_model.save_draft(session, model_id, json.dumps({"spec": spec, "etag": draft["etag"], "change_note": note}), user)
 
     try:
         made = invoke_source(db, work)
@@ -298,112 +256,31 @@ def to_workbench(build_id: str, db: Db = Depends(current_db)):
     except AssertionError as exc:
         raise HTTPException(409, str(exc)) from None
     except Exception as exc:
-        raise _deployed(exc) from exc
-    _set(db, build_id, model_id=model_id, model_version=int(made.get("version") or 0) or None, step="REVIEW", status="IN_REVIEW")
-    return get_build(build_id, db)
+        raise _snowflake_error(exc) from exc
+    return {"model_id": model_id, "version": made.get("version"), "notes": out["notes"],
+            "tables": [{"entity": e["entity_name"], "table_type": e["table_type"], "conformed": bool(e.get("conformed_from"))}
+                       for e in spec["design"]["entities"]]}
 
 
-@router.post("/api/gold/builds/{build_id}/cancel")
-def cancel_build(build_id: str, db: Db = Depends(current_db)):
-    _build(db, build_id)
-    _set(db, build_id, status="CANCELLED")
-    return get_build(build_id, db)
+class TargetIn(BaseModel):
+    entity: str = Field(min_length=1, max_length=255)
 
 
-# ---------------------------------------------------------------- gold code generation (after approval)
-
-def _approved_gold(db: Db, b: Dict[str, Any]) -> Dict[str, Any]:
-    from services.modeling import spec_v2
-
-    if not b.get("model_id"):
-        raise HTTPException(409, "send the proposal to the Model Workbench and have the gold model approved first")
-    found = db.query("""SELECT M.APPROVED_VERSION, D.SPEC FROM GOVERNANCE.DOMAIN_MODEL M
-                          JOIN GOVERNANCE.MODEL_DESIGNS D ON D.MODEL_ID = M.MODEL_ID AND D.VERSION = M.APPROVED_VERSION
-                         WHERE M.MODEL_ID = %s""", (b["model_id"],))
-    if not found or not found[0].get("approved_version"):
-        raise HTTPException(409, "the gold model is not approved yet; approve it in the Model Workbench (four eyes)")
-    spec = spec_v2.active(spec_v2.normalize_v2(_js(found[0]["spec"]) or {}, b["model_id"]))
-    return {"version": int(found[0]["approved_version"]), "spec": spec}
-
-
-def _conventions(db: Db) -> tuple:
-    from services.gold.conventions import learn
-
+@router.post("/api/runs/{run_id}/gold/target")
+def choose_gold_target(run_id: str, body: TargetIn, db: Db = Depends(current_db)):
+    run = _run(db, run_id)
+    model = _gold_model(db, run["domain_id"])
+    if not model or not model.get("approved_version"):
+        raise HTTPException(409, "the domain's gold model is not approved yet; approve it in the Model Workbench (four eyes)")
+    tables = {t["entity"]: t for t in _approved_tables(db, model)}
+    entity = body.entity.upper()
+    if entity not in tables:
+        raise HTTPException(400, f"{entity} is not a table of the approved gold model")
+    if run["current_state"] not in MODEL_APPLY_STATES:
+        raise HTTPException(409, f"the run is at {run['current_state']}; reopen mapping to change its gold table")
     try:
-        chunks = db.query("""SELECT C.PATH, C.KIND, C.NAME, C.TEXT, C.COLUMNS FROM CODE.CODE_CHUNK C
-                              JOIN CODE.REPO R ON R.REPO_ID = C.REPO_ID
-                             WHERE R.ENABLED AND (C.TEXT ILIKE '%m_insert_history_gold(%' OR LOWER(C.NAME) = 'dim_data_source')
-                             LIMIT 200""")
-    except Exception:
-        return {}, ["the code index could not be read; plain SQL is generated"]
-    for c in chunks:
-        c["columns"] = _js(c.get("columns")) or []
-    return learn(chunks)
-
-
-@router.post("/api/gold/builds/{build_id}/generate")
-def generate_gold(build_id: str, db: Db = Depends(current_db)):
-    """dbt models, Iceberg DDL and a report for the approved gold model; lineage edges silver/MDM to gold."""
-    import hashlib
-
-    from services.gold import dbt as gold_dbt
-
-    b = _build(db, build_id)
-    if b["status"] == "CANCELLED":
-        raise HTTPException(409, "the build is cancelled")
-    approved = _approved_gold(db, b)
-    reg = _contracts(db)
-    me = reg.get(b["domain_name"]) or {}
-    mdm = me.get("mdm") or {}
-    mastered = {n: r["mdm"] for n, r in reg.items() if str(r["mdm"].get("role") or "").upper() == "MASTERED"}
-    lines = db.query("""SELECT GOLD_TABLE, GOLD_COLUMN, KIND, SOURCE_LAYER, SOURCE_TABLE, SOURCE_COLUMN, EXPRESSION, NOTE
-                          FROM GOVERNANCE.GOLD_MAPPING_LINE WHERE BUILD_ID = %s ORDER BY POSITION""", (build_id,))
-    conventions, notes = _conventions(db)
-    try:
-        out = gold_dbt.generate(approved["spec"], lines, mastered=mastered, consumes=mdm.get("consumes") or [],
-                                conventions=conventions, env=_env(me.get("silver_database")),
-                                build={"build_id": build_id, "name": b["name"], "model_id": b["model_id"], "model_version": approved["version"]})
-    except (ValueError, KeyError, StopIteration) as exc:
-        raise HTTPException(400, f"the approved gold model cannot be generated: {exc}") from None
-    out["report"]["notes"] = notes
-    version = int((b.get("generation") or {}).get("version") or 0) + 1
-    generation = {"version": version, "model_version": approved["version"], "report": out["report"], "files": out["files"]}
-    try:
-        with transaction(db):
-            db.execute("UPDATE GOVERNANCE.LINEAGE_EDGE SET IS_CURRENT = FALSE WHERE PRODUCER = 'GOLD_BUILD' AND PRODUCER_ID = %s", (build_id,))
-            for e in out["lineage"]:
-                eid = hashlib.md5(json.dumps([e["from_object"], e.get("from_column"), e["to_object"], e["to_column"], build_id, version]).encode()).hexdigest()
-                db.execute("""INSERT INTO GOVERNANCE.LINEAGE_EDGE (EDGE_ID, FROM_LAYER, FROM_OBJECT, FROM_COLUMN, TO_LAYER, TO_OBJECT, TO_COLUMN,
-                                                                   KIND, EXPRESSION, PRODUCER, PRODUCER_ID, GENERATION, DOMAIN_ID)
-                              SELECT %s, %s, %s, %s, %s, %s, %s, %s, %s, 'GOLD_BUILD', %s, %s, %s""",
-                           (eid, e["from_layer"], e["from_object"], e.get("from_column"), e["to_layer"], e["to_object"], e["to_column"],
-                            e["kind"], (e.get("expression") or "")[:8000], build_id, version, b["domain_id"]))
-            _set(db, build_id, generation=generation, step="DONE", status="GENERATED")
+        return pin_run_model(db, run_id, model["model_id"], int(model["approved_version"]), entity)
+    except HTTPException:
+        raise
     except Exception as exc:
-        raise _deployed(exc) from exc
-    return get_build(build_id, db)
-
-
-@router.get("/api/gold/builds/{build_id}/generation")
-def gold_generation(build_id: str, db: Db = Depends(current_db)):
-    b = _build(db, build_id)
-    if not b.get("generation"):
-        raise HTTPException(404, "nothing generated yet")
-    return b["generation"]
-
-
-@router.get("/api/gold/builds/{build_id}/generation.zip")
-def gold_generation_zip(build_id: str, db: Db = Depends(current_db)):
-    import io
-    import zipfile
-
-    from fastapi.responses import Response
-
-    gen = gold_generation(build_id, db)
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
-        for path, text in sorted((gen.get("files") or {}).items()):
-            z.writestr(path, text)
-    name = re.sub(r"[^A-Za-z0-9_-]+", "_", f"gold_{build_id[:8]}_v{gen.get('version')}")
-    return Response(content=buf.getvalue(), media_type="application/zip",
-                    headers={"Content-Disposition": f'attachment; filename="{name}.zip"'})
+        raise _snowflake_error(exc) from exc

@@ -36,6 +36,21 @@ SUFFIXES = ("_CORE", "_HUB", "_MAIN", "_BASE")
 
 # ---------------------------------------------------------------- names and types
 
+def semantic_type(entity: Dict[str, Any], column: str) -> Optional[str]:
+    """What a gold column is when nothing maps into it: the table's own surrogate key, its HKEY and the audit columns
+    are produced by the gold model itself (SURROGATE_KEY, DERIVED_KEY, AUDIT_TIMESTAMP), so mapping and the STTM do not
+    ask for a source. GDP_IS_ACTIVE is carried from silver and is mapped like any column."""
+    name, table = column.upper(), str(entity.get("entity_name") or "").upper()
+    if name == f"{table}_SKEY" or (name.endswith("_SKEY") and any(a.get("is_pk") and a["name"].upper() == name
+                                                                   for a in entity.get("attributes") or [])):
+        return "SURROGATE_KEY"
+    if name == f"{table}_HKEY":
+        return "DERIVED_KEY"
+    if name in ("GDP_INSERTED_TS", "GDP_INSERTED_BY", "GDP_UPDATED_TS", "GDP_UPDATED_BY"):
+        return "AUDIT_TIMESTAMP"
+    return None
+
+
 def is_descriptor(name: str, data_type: str) -> bool:
     """A text column that names a category (status, stage, type, ...): a dimension candidate. Keys, ids and silver
     technical columns never are."""
