@@ -29,6 +29,7 @@ export function GoldModelPanel({ runId }: { runId: string }) {
     if (!r.ok) { setError(r.error); return; }
     const aligned = r.data.alignment?.filter((a) => a.proposed && a.reference) ?? [];
     setNotes([...(r.data.reference ? [`Aligned to your reference model ${r.data.reference.title ?? ""}: ${aligned.length} table(s) take its names, columns and types`] : []),
+              ...(r.data.score ? [`Before alignment the platform's own proposal had ${r.data.score.matched} of the reference's ${r.data.score.total} columns (${r.data.score.pct}%)`] : []),
               ...(r.data.notes ?? [])]);
     load();
   });

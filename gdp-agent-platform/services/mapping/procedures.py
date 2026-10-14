@@ -301,16 +301,32 @@ def _gold_rules(session, run: Dict[str, Any], sources: List[Dict[str, Any]]) -> 
     return {r["source_column"].upper(): {**r, "target_column": t} for t, r in by_target.items()}
 
 
-def _reference_rules(session, run: Dict[str, Any], target: Dict[str, Any], sources: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
-    """Rules from the STTM a person gave for the run's layer (a reference input, V057), by source column: the
-    reference's target first and its transformation pre-filled. Empty when no STTM reference covers the target."""
+def _reference_sttm(session, run: Dict[str, Any], target: Dict[str, Any], sources: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """The STTM a person gave for the run's layer (a reference input, V057): {rules by source column (the reference's
+    target first, its transformation pre-filled), lines of the target by target column, reference}. Empty rules when
+    no STTM reference covers the target."""
     from services.reference import store, sttm_import
 
     ref = store.latest(lambda sql, params: rows(session, sql, params), run["DOMAIN_ID"], run_pipeline(run), "STTM")
     if not ref:
-        return {}
-    return sttm_import.rules_for((ref["parsed"] or {}).get("lines") or [], target["TARGET_TABLE"], sources,
-                                 f"your STTM ({ref.get('title') or 'reference'})")
+        return {"rules": {}, "lines": {}, "reference": None}
+    lines = (ref["parsed"] or {}).get("lines") or []
+    return {"rules": sttm_import.rules_for(lines, target["TARGET_TABLE"], sources, f"your STTM ({ref.get('title') or 'reference'})"),
+            "lines": sttm_import.for_target(lines, target["TARGET_TABLE"]), "reference": ref}
+
+
+def _score_mapping(session, run_id: str, run: Dict[str, Any], reference: Dict[str, Any], engine_first: Dict[str, str],
+                   sources: List[Dict[str, Any]]) -> None:
+    """How close the engine's own first choices (before the reference promoted anything) came to the person's STTM."""
+    from services.reference import score, store
+
+    if not reference.get("reference") or not reference.get("lines"):
+        return
+    result = score.mapping(engine_first.items(), reference["lines"], [s["column_name"] for s in sources])
+    if result["total"]:
+        store.record(lambda sql, params: session.sql(sql, params=params).collect(), domain_id=run["DOMAIN_ID"],
+                     layer=run_pipeline(run), kind="STTM", reference_id=reference["reference"]["reference_id"],
+                     run_id=run_id, stage="MAPPING", score=result)
 
 
 def promote(cands: List[Dict[str, Any]], ranked: List[Dict[str, Any]], rule: Dict[str, Any], top_k: int) -> List[Dict[str, Any]]:
@@ -381,9 +397,11 @@ def generate_mapping_candidates(session, run_id: str) -> Dict[str, Any]:
                                  [run["DOMAIN_ID"]])
             gold_rules = _gold_rules(session, run, sources)
             try:   # the person's own STTM for this layer ranks first (a reference input); gold model rules fill the rest
-                reference_rules = _reference_rules(session, run, target, sources)
+                reference = _reference_sttm(session, run, target, sources)
             except Exception:
-                reference_rules = {}
+                reference = {"rules": {}, "lines": {}, "reference": None}
+            reference_rules = reference["rules"]
+            engine_first: Dict[str, str] = {}
 
             ranked_by_source: List[Tuple[Dict[str, Any], List[Dict[str, Any]]]] = []
             hits_by_source: Dict[str, List[Dict[str, Any]]] = {}
@@ -394,6 +412,8 @@ def generate_mapping_candidates(session, run_id: str) -> Dict[str, Any]:
                     f = features.all_features(s, t, knowledge, cosines.get((s["source_column_id"], t["target_column_id"])))
                     cands.append({"target": t, **f})
                 ranked = scoring.rank_candidates(cands, cfg["weights"], cfg["thresholds"], top_k)
+                if ranked:
+                    engine_first[str(s["column_name"]).upper()] = str(ranked[0]["target"]["column_name"]).upper()
                 rule = reference_rules.get(str(s["column_name"]).upper()) or gold_rules.get(str(s["column_name"]).upper())
                 if rule:
                     ranked = promote(cands, ranked, rule, top_k)
@@ -408,6 +428,10 @@ def generate_mapping_candidates(session, run_id: str) -> Dict[str, Any]:
                 hits_by_source[str(s["column_name"]).upper()] = hits
                 ranked_by_source.append((s, ranked))
 
+            try:
+                _score_mapping(session, run_id, run, reference, engine_first, sources)
+            except Exception:
+                pass
             ambiguous = [(s, r) for s, r in ranked_by_source if r and r[0]["ambiguous"]]
             llm = _adjudicate(session, run_id, ambiguous, guidance, knowledge["notes"], knowledge, hits_by_source)
             version = (scalar(session, "SELECT MAX(CANDIDATE_VERSION) FROM MAPPING.MAPPING_CANDIDATE WHERE RUN_ID = ?",

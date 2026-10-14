@@ -26,3 +26,16 @@ def latest(query: Query, domain_id: str, layer: str, kind: str) -> Optional[Dict
     parsed = _get(found[0], "PARSED")
     return {"reference_id": _get(found[0], "REFERENCE_ID"), "title": _get(found[0], "TITLE"),
             "parsed": json.loads(parsed) if isinstance(parsed, str) else (parsed or {})}
+
+
+def record(execute: Callable[[str, list], Any], *, domain_id: str, layer: str, kind: str, reference_id: Optional[str],
+           run_id: Optional[str], stage: str, score: Dict[str, Any]) -> None:
+    """Keep one measurement (KNOWLEDGE.REFERENCE_SCORE); silently nothing before V057."""
+    import uuid
+
+    try:
+        execute("""INSERT INTO KNOWLEDGE.REFERENCE_SCORE (SCORE_ID, DOMAIN_ID, LAYER, KIND, REFERENCE_ID, RUN_ID, STAGE, SCORE)
+                   SELECT ?, ?, ?, ?, ?, ?, ?, PARSE_JSON(?)""",
+                [str(uuid.uuid4()), domain_id, layer, kind, reference_id, run_id, stage, json.dumps(score, default=str)])
+    except Exception:
+        pass

@@ -7,8 +7,8 @@ import { useAccess } from "@/components/access";
 import { LAYER_META, type Layer } from "@/lib/layers";
 import { cn } from "@/lib/utils";
 import {
-  addSchemaReference, domainReferences, setReferenceKind, uploadReferences, useReferenceAsModel, withdrawReference,
-  type ReferenceKind, type ReferenceRow, type References,
+  addSchemaReference, domainReferences, rescoreReferences, setReferenceKind, uploadReferences, useReferenceAsModel, withdrawReference,
+  type ReferenceKind, type ReferenceRow, type ReferenceScore, type References,
 } from "../actions";
 
 const KIND: Record<ReferenceKind, { label: string; use: string }> = {
@@ -156,16 +156,69 @@ export function ReferencesTab({ domainId, layer }: { domainId: string; layer: La
         </table>
       </section>
 
-      <section className="surface p-4">
-        <h3 className="text-sm font-semibold">How close the platform comes to your references</h3>
-        {data.scores.length ? (
-          <ul className="mt-2 space-y-1 text-xs">{data.scores.filter((s) => s.layer === layer).slice(0, 12).map((s, i) => (
-            <li key={i} className="flex flex-wrap items-center gap-2"><span className="w-28 font-medium">{KIND[s.kind as ReferenceKind]?.label ?? s.kind}</span>
-              <span className="w-14 tabular-nums font-semibold">{s.score.pct}%</span>
-              <span className="text-muted-foreground">{s.score.matched} matched{s.score.missing?.length ? `, missing ${s.score.missing.slice(0, 4).join(", ")}` : ""}{s.stage ? ` · ${s.stage.toLowerCase()}` : ""} · {s.scored_at}</span></li>
-          ))}</ul>
-        ) : <p className="mt-1 text-xs text-muted-foreground">Scores appear once this layer has a reference model or STTM and a proposal, mapping or code generation has run.</p>}
-      </section>
+      <Accuracy domainId={domainId} layer={layer} scores={data.scores} onScored={load} detailed />
     </div>
+  );
+}
+
+const STAGE: Record<string, string> = { MODEL: "Gold proposal", RESCORE: "Gold proposal", MAPPING: "Mapping", CODE: "Generated code" };
+
+/** How close the platform's own output (before it saw the reference) came to the layer's references, newest first,
+ *  with the change since the previous measurement of the same kind: whether skills, knowledge, rules and conventions
+ *  are making decisions better. */
+export function Accuracy({ domainId, layer, scores, onScored, detailed = false }: {
+  domainId: string; layer: Layer; scores?: ReferenceScore[]; onScored?: () => void; detailed?: boolean;
+}) {
+  const { canAct } = useAccess();
+  const [own, setOwn] = useState<ReferenceScore[] | null>(scores ?? null);
+  const [msg, setMsg] = useState("");
+  const [pending, start] = useTransition();
+  const load = () => void domainReferences(domainId, layer).then((r) => setOwn(r.ok ? r.data.scores : []));
+  useEffect(() => { if (scores) setOwn(scores); else load(); }, [domainId, layer, scores]);   // eslint-disable-line react-hooks/exhaustive-deps
+  const rows = (own ?? []).filter((s) => s.layer === layer);
+  const latest = new Map<string, { now: ReferenceScore; before?: ReferenceScore }>();
+  for (const s of rows) {
+    const key = `${s.kind}:${s.stage === "RESCORE" ? "MODEL" : s.stage}`;
+    const seen = latest.get(key);
+    if (!seen) latest.set(key, { now: s });
+    else if (!seen.before) seen.before = s;
+  }
+  const rescore = () => start(async () => {
+    setMsg("");
+    const r = await rescoreReferences(domainId);
+    if (!r.ok) { setMsg(r.error); return; }
+    setMsg(r.data.score ? `${r.data.score.pct}% of the reference model, replayed on the latest Gold run` : "Measured");
+    if (onScored) onScored(); else load();
+  });
+  return (
+    <section className="surface p-4" data-testid="accuracy">
+      <div className="flex items-center gap-2">
+        <h3 className="text-sm font-semibold">Accuracy against your references</h3>
+        {layer === "GOLD" && canAct("KNOWLEDGE.EDIT") && (
+          <button type="button" onClick={rescore} disabled={pending} title="Replay the gold proposal on the latest profiled Gold run and measure it, writing nothing else"
+                  className="ml-auto inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline disabled:opacity-50">
+            {pending && <Loader2 className="h-3 w-3 animate-spin" />}Re-score</button>)}
+      </div>
+      {own === null ? <p className="mt-1 text-xs text-muted-foreground"><Loader2 className="mr-1 inline h-3 w-3 animate-spin" />Reading…</p>
+        : latest.size ? (
+          <ul className="mt-2 space-y-1.5 text-xs">{[...latest.values()].map(({ now, before }) => {
+            const delta = before ? Math.round((now.score.pct - before.score.pct) * 10) / 10 : null;
+            return (
+              <li key={`${now.kind}${now.stage}`}>
+                <div className="flex items-center gap-2">
+                  <span className="font-medium">{STAGE[now.stage ?? ""] ?? now.stage} vs {(KIND[now.kind as ReferenceKind]?.label ?? now.kind).toLowerCase()}</span>
+                  <span className="ml-auto tabular-nums font-semibold">{now.score.pct}%</span>
+                  {delta !== null && delta !== 0 && (
+                    <span className={cn("tabular-nums", delta > 0 ? "text-emerald-600 dark:text-emerald-400" : "text-destructive")}>{delta > 0 ? "+" : ""}{delta}</span>)}
+                </div>
+                <p className="text-[10px] text-muted-foreground">
+                  {now.score.matched}{now.score.total ? ` of ${now.score.total}` : ""} matched · {now.scored_at}
+                  {detailed && now.score.missing?.length ? ` · missing ${now.score.missing.slice(0, 4).join(", ")}${now.score.missing.length > 4 ? " ..." : ""}` : ""}</p>
+              </li>);
+          })}</ul>
+        ) : <p className="mt-1 text-xs text-muted-foreground">Give this layer a reference model or STTM: each proposal and mapping is then measured against it.</p>}
+      {msg && <p role="status" className="mt-2 text-xs text-muted-foreground">{msg}</p>}
+      {!detailed && <Link href={`/domains/${domainId}?tab=references&layer=${layer}`} className="mt-2 inline-block text-xs text-primary hover:underline">References</Link>}
+    </section>
   );
 }

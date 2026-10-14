@@ -253,10 +253,22 @@ def _proposal(db: Db, d: Dict[str, Any], reg: Dict[str, Any], inputs: List[Dict[
     ref = _reference_model(db, d["domain_id"])
     if ref:
         from services.gold import align
+        from services.reference import score
 
+        measured = score.model(out["spec"], ref["parsed"]["spec"])   # the engine's own proposal, before alignment
         out = align.align(out, ref["parsed"]["spec"], f"your reference model ({ref.get('title') or 'gold'})")
         out["reference"] = {"reference_id": ref["reference_id"], "title": ref.get("title")}
+        out["score"] = measured
     return out
+
+
+def _record_model_score(db: Db, domain_id: str, run_id: Optional[str], out: Dict[str, Any], stage: str) -> None:
+    from services.reference import store
+
+    if out.get("score") and out.get("reference"):
+        store.record(lambda sql, params: db.execute(sql.replace("?", "%s"), tuple(params)), domain_id=domain_id,
+                     layer="GOLD", kind="DATA_MODEL", reference_id=out["reference"]["reference_id"], run_id=run_id,
+                     stage=stage, score=out["score"])
 
 
 @router.post("/api/runs/{run_id}/gold/propose")
@@ -299,10 +311,33 @@ def propose_gold(run_id: str, db: Db = Depends(current_db)):
         raise HTTPException(409, str(exc)) from None
     except Exception as exc:
         raise _snowflake_error(exc) from exc
+    _record_model_score(db, run["domain_id"], run_id, out, "MODEL")
     return {"model_id": model_id, "version": made.get("version"), "notes": out["notes"],
-            "reference": out.get("reference"), "alignment": out.get("alignment") or [],
+            "reference": out.get("reference"), "alignment": out.get("alignment") or [], "score": out.get("score"),
             "tables": [{"entity": e["entity_name"], "table_type": e.get("table_type"), "conformed": bool(e.get("conformed_from"))}
                        for e in spec["design"]["entities"]]}
+
+
+@router.post("/api/domains/{domain_id}/references/rescore")
+def rescore_gold_reference(domain_id: str, db: Db = Depends(current_db)):
+    """Replay the gold proposal on the latest profiled Gold run and measure it against the gold reference model,
+    writing nothing but the score: after a change to skills, knowledge, rules or conventions, did output get closer?"""
+    reg = _contracts(db)
+    d = next((c for c in reg.values() if c["domain_id"] == domain_id), None)
+    if not d:
+        raise HTTPException(404, "domain not found")
+    _require_consumer(d)
+    if not _reference_model(db, domain_id):
+        raise HTTPException(409, "give the Gold layer a data model reference first (References tab)")
+    runs = db.query("""SELECT RUN_ID FROM CORE.WORKFLOW_RUN WHERE DOMAIN_ID = %s AND PIPELINE = 'GOLD' AND PARENT_RUN_ID IS NULL
+                         AND DELETED_AT IS NULL ORDER BY CREATED_AT DESC LIMIT 5""", (domain_id,))
+    for r in runs:
+        inputs = _profiled_inputs(db, r["run_id"])
+        if inputs:
+            out = _proposal(db, d, reg, inputs)
+            _record_model_score(db, domain_id, r["run_id"], out, "RESCORE")
+            return {"run_id": r["run_id"], "score": out.get("score"), "reference": out.get("reference")}
+    raise HTTPException(409, "profile a Gold run's silver tables first: the proposal is replayed on its profile")
 
 
 class TargetIn(BaseModel):

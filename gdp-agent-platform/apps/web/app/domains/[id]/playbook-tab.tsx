@@ -7,6 +7,7 @@ import { useAccess } from "@/components/access";
 import { LAYER_META } from "@/lib/layers";
 import { cn } from "@/lib/utils";
 import { prettyType } from "../../knowledge/knowledge-ui";
+import { Accuracy } from "./references-tab";
 import {
   domainPlaybook, playbookPreview, saveDomainConventions, saveDomainSkills,
   type DomainSkillRow, type Playbook,
@@ -43,6 +44,7 @@ export function PlaybookTab({ domainId, domainName, layer }: { domainId: string;
         </div>
         <aside className="space-y-4">
           <Coverage domainId={domainId} layer={layer} data={data} />
+          <Accuracy domainId={domainId} layer={layer} />
           <section className="surface p-4">
             <h3 className="text-sm font-semibold">Rules this domain changes</h3>
             {data.rules.changed.length ? (

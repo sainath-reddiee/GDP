@@ -374,7 +374,7 @@ export type ReferenceRow = {
   created_by: string; created_at: string;
 };
 export type ReferenceScore = { layer: string; kind: string; stage: string | null; run_id: string | null; scored_at: string;
-  score: { pct: number; matched: number; missing: string[]; extra: string[]; details?: unknown } };
+  score: { pct: number; matched: number; total?: number; missing: string[]; extra: string[]; details?: unknown } };
 export type References = { references: ReferenceRow[]; scores: ReferenceScore[]; deployed: boolean; kinds?: ReferenceKind[] };
 
 export async function domainReferences(domainId: string, layer: string) {
@@ -401,6 +401,10 @@ export async function useReferenceAsModel(domainId: string, rid: string, replace
     { method: "POST", body: JSON.stringify({ replace }) }));
   revalidatePath(`/domains/${domainId}`);
   return r;
+}
+export async function rescoreReferences(domainId: string) {
+  return attemptValue(() => api<{ run_id: string; score: ReferenceScore["score"] | null; reference: { title: string | null } | null }>(
+    `/api/domains/${encodeURIComponent(domainId)}/references/rescore`, { method: "POST" }));
 }
 export async function withdrawReference(domainId: string, rid: string) {
   return attemptValue(() => api<ReferenceRow>(`/api/domains/${encodeURIComponent(domainId)}/references/${encodeURIComponent(rid)}/withdraw`,

@@ -47,6 +47,7 @@ export async function proposeGold(runId: string) {
   return attemptValue(async () => {
     const r = await api<{ model_id: string; version: number; notes: string[]; tables: { entity: string; table_type: string; conformed: boolean }[];
       reference: { reference_id: string; title: string | null } | null;
+      score: { pct: number; matched: number; total: number; details?: { types_agree_pct?: number } } | null;
       alignment: { proposed: string | null; reference: string | null; how: string; added_columns?: string[] }[] }>(
       `/api/runs/${encodeURIComponent(runId)}/gold/propose`, { method: "POST" });
     revalidatePath(`/runs/${runId}/modeling`);
