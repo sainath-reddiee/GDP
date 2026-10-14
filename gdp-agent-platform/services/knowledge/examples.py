@@ -121,7 +121,7 @@ def reference(table: str) -> str:
     return f"example.{table.lower()}"
 
 
-def write(session, *, domain_id: str, checked: Dict[str, Any], file_name: str) -> Optional[str]:
+def write(session, *, domain_id: str, checked: Dict[str, Any], file_name: str, layer: str = "ANY") -> Optional[str]:
     """Write the examples as a proposal (EXAMPLE, origin DOCUMENT). Returns the knowledge id, None when unchanged."""
     from services.knowledge.writer import remember
 
@@ -131,7 +131,7 @@ def write(session, *, domain_id: str, checked: Dict[str, Any], file_name: str) -
                     content_json={"target_table": table, "columns": checked["columns"], "rows": checked["rows"],
                                   "row_count": checked["row_count"], "file": file_name[:300],
                                   "unknown_columns": checked["unknown_columns"], "warnings": checked["warnings"]},
-                    origin="DOCUMENT", mode="review",
+                    origin="DOCUMENT", mode="review", layer=layer,
                     change_note=f"{checked['row_count']} example rows from {file_name[:200]}")
 
 

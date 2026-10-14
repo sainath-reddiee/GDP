@@ -154,6 +154,8 @@ RULES: List[Tuple[str, str, Any, str]] = [
     ("PUT", r"/api/domains/[^/]+/skills", "SKILL.RELEASE", "Change the skills a domain's runs load"),
     ("PUT", r"/api/domains/[^/]+/mdm", "DOMAIN.EDIT", "Change which mastered domains a domain consumes"),
     ("PUT", r"/api/domains/[^/]+/conventions", "DOMAIN.EDIT", "Change how a domain's code is built in a layer"),
+    ("POST", r"/api/domains/[^/]+/references(/schema)?", "KNOWLEDGE.EDIT", "Give the platform a reference input for a domain"),
+    ("POST", r"/api/domains/[^/]+/references/[^/]+/(kind|withdraw)", "KNOWLEDGE.EDIT", "Correct or withdraw a reference input"),
     ("POST", r"/api/gold/runs", "RUN.CREATE", "Start a Gold run on silver tables"),
     ("POST", rf"{R}/gold/propose", "MODEL.EDIT", "Propose a Gold run's gold model to the Model Workbench"),
     ("POST", rf"{R}/gold/target", "MODEL.EDIT", "Use a table of the approved gold model as a Gold run's target"),
@@ -440,6 +442,8 @@ NO_QUEUE_ROUTES = [(m, re.compile(p)) for m, p in [
     # what a document proposes is reviewed in the knowledge inbox; uploads cannot be queued anyway
     ("POST", r"^/api/domains/[^/]+/documents/.+$"),
     ("POST", r"^/api/domains/[^/]+/examples/[^/]+$"),
+    # a reference input is read, not applied: what it proposes goes through the inbox, the Workbench or a run's gates
+    ("POST", r"^/api/domains/[^/]+/references(/.*)?$"),
     # a Gold run's gold model proposal is a draft, reviewed and approved in the Model Workbench (four eyes)
     ("POST", r"^/api/runs/[^/]+/gold/propose$"),
 ]]

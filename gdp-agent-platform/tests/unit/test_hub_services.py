@@ -456,7 +456,7 @@ def test_contract_yaml():
 def test_contract_markdown_uses_the_platform_parser():
     from pathlib import Path
 
-    text = (Path(__file__).resolve().parents[2] / "snowflake/skills/gdp/dbt-onboard-source/references/company-contract.md").read_text()
+    text = (Path(__file__).resolve().parents[2] / "snowflake/skills/gdp/dbt-onboard-source/references/company-contract.md").read_text(encoding="utf-8")
     out = cq.validate_contract("company-contract.md", text)
     assert out["kind"] == "markdown" and out["ok"] and out["summary"]["columns"] > 0
     assert not cq.validate_contract("empty.md", "# nothing here")["ok"]

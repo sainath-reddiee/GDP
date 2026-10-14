@@ -363,3 +363,39 @@ export async function saveDomainMdm(domainId: string, consumes: { domain: string
   revalidatePath(`/domains/${domainId}`);
   return r;
 }
+
+/** Reference inputs (V057): anything given to the platform for a domain and layer, read for what it is. */
+export type ReferenceKind = "DATA_MODEL" | "MDM_SCHEMA" | "STTM" | "DBT_CODE" | "SAMPLE_ROWS" | "DOCUMENT";
+export type ReferenceRow = {
+  reference_id: string; layer: "SILVER" | "MDM" | "GOLD" | "ANY"; kind: ReferenceKind; title: string | null;
+  origin: "UPLOAD" | "SCHEMA" | "GIT" | "CONFLUENCE"; source_pointer: string | null;
+  status: "QUEUED" | "READING" | "READY" | "FAILED" | "WITHDRAWN"; note: string | null;
+  applied: Record<string, unknown> | null; entities: number | null; lines: number | null; detected_why: string | null;
+  created_by: string; created_at: string;
+};
+export type ReferenceScore = { layer: string; kind: string; stage: string | null; run_id: string | null; scored_at: string;
+  score: { pct: number; matched: number; missing: string[]; extra: string[]; details?: unknown } };
+export type References = { references: ReferenceRow[]; scores: ReferenceScore[]; deployed: boolean; kinds?: ReferenceKind[] };
+
+export async function domainReferences(domainId: string, layer: string) {
+  return attemptValue(() => api<References>(`/api/domains/${encodeURIComponent(domainId)}/references?layer=${layer}`));
+}
+export async function uploadReferences(domainId: string, form: FormData) {
+  const r = await attemptValue(() => apiForm<{ references: { file_name: string; reference_id?: string; kind?: ReferenceKind;
+    duplicate?: boolean; error?: string; detected?: { kind: string; why: string } }[]; skipped: number }>(
+    `/api/domains/${encodeURIComponent(domainId)}/references`, form));
+  revalidatePath(`/domains/${domainId}`);
+  return r;
+}
+export async function addSchemaReference(domainId: string, body: { database: string; schema: string; layer: string; kind: "DATA_MODEL" | "MDM_SCHEMA" }) {
+  return attemptValue(() => api<ReferenceRow>(`/api/domains/${encodeURIComponent(domainId)}/references/schema`,
+    { method: "POST", body: JSON.stringify(body) }));
+}
+export async function setReferenceKind(domainId: string, rid: string, body: { kind: ReferenceKind; layer: string; table?: string | null }) {
+  return attemptValue(() => api<ReferenceRow>(`/api/domains/${encodeURIComponent(domainId)}/references/${encodeURIComponent(rid)}/kind`,
+    { method: "POST", body: JSON.stringify(body) }));
+}
+export async function withdrawReference(domainId: string, rid: string) {
+  return attemptValue(() => api<ReferenceRow>(`/api/domains/${encodeURIComponent(domainId)}/references/${encodeURIComponent(rid)}/withdraw`,
+    { method: "POST" }));
+}

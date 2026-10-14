@@ -107,7 +107,7 @@ def reference(origin: str, source_id: str, page_id: str, kind: str, title: str) 
 
 def propose(session, *, domain_id: str, domain_name: str, tables: Iterable[str], source_id: str, page_id: str,
             title: str, text: str, version: Optional[int], url: Optional[str], origin: str,
-            progress: Optional[Callable[[int, int], None]] = None) -> Dict[str, Any]:
+            progress: Optional[Callable[[int, int], None]] = None, layer: str = "ANY") -> Dict[str, Any]:
     """Read one document page and write its knowledge as proposals. Returns {proposed, unchanged, items, parts,
     chars_read, chars_total}; `progress(part, parts)` is called before each part is read."""
     from services.common.audit import record_cost
@@ -131,7 +131,7 @@ def propose(session, *, domain_id: str, domain_name: str, tables: Iterable[str],
             body = item["content"] + f"\n\nSource: {title}" + (f" (version {version})" if version else "") + (f", {url}" if url else "")
             written = remember(session, domain_id=domain_id, kind=item["kind"],
                                key=reference(origin, source_id, page_id, item["kind"], item["title"]),
-                               title=item["title"], content=body, origin=origin, mode="review",
+                               title=item["title"], content=body, origin=origin, mode="review", layer=layer,
                                confidence=item["confidence"],
                                content_json={"target_table": item["target_table"], "target_column": item["target_column"],
                                              "quote": item["quote"], "source": {"kind": origin, "source_id": source_id,

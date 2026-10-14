@@ -6716,3 +6716,6 @@ app.include_router(autopilot_router)
 from app.domain_playbook_api import router as domain_playbook_router  # noqa: E402
 
 app.include_router(domain_playbook_router)
+from app.reference_api import router as reference_router  # noqa: E402
+
+app.include_router(reference_router)

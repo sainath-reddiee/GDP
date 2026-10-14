@@ -25,6 +25,7 @@ import { LAYER_META, layersFor, mdmBadge, type Layer, type MdmRole } from "@/lib
 import { BuiltFromCard, LineageTab } from "./lineage-tab";
 import { MdmPanel } from "./mdm-panel";
 import { PlaybookTab } from "./playbook-tab";
+import { ReferencesTab } from "./references-tab";
 import { MdmRules } from "./mdm-rules";
 import { SourcesTab } from "./sources-tab";
 import { Avatar, cleanDescription, DomainMark } from "../domain-ui";
@@ -43,7 +44,7 @@ export type DomainDetail = {
 };
 
 const TABS = [
-  { id: "overview", label: "Overview" }, { id: "playbook", label: "Playbook" }, { id: "models", label: "Models" }, { id: "knowledge", label: "Knowledge" },
+  { id: "overview", label: "Overview" }, { id: "playbook", label: "Playbook" }, { id: "references", label: "References" }, { id: "models", label: "Models" }, { id: "knowledge", label: "Knowledge" },
   { id: "rules", label: "Rules" }, { id: "sources", label: "Sources" }, { id: "lineage", label: "Lineage" }, { id: "versions", label: "Versions" },
 ] as const;
 const KIND_TONE: Record<string, string> = {
@@ -222,6 +223,7 @@ export function DomainView({ detail, versions, unrecorded, members, rules, targe
       {active === "playbook" && (layer === "MDM"
         ? <MdmRules domainId={d.domain_id} />
         : <PlaybookTab key={pipeline} domainId={d.domain_id} domainName={name} layer={pipeline} />)}
+      {active === "references" && <ReferencesTab key={layer} domainId={d.domain_id} layer={layer} />}
       {active === "models" && (layer === "MDM"
         ? <MdmPanel domainId={d.domain_id} />
         : <Models layer={pipeline} mastered={String(meta.mdm_role ?? "").toUpperCase() === "MASTERED"} name={name}

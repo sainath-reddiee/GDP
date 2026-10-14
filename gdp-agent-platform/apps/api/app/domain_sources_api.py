@@ -261,7 +261,8 @@ def _store_page(db: Db, source_id: str, page: Dict[str, Any], proposed: int) -> 
                 page.get("text") or "", page.get("url"), proposed))
 
 
-def _propose(db: Db, domain_id: str, source_id: str, page: Dict[str, Any], origin: str, progress=None) -> Dict[str, Any]:
+def _propose(db: Db, domain_id: str, source_id: str, page: Dict[str, Any], origin: str, progress=None,
+             layer: str = "ANY") -> Dict[str, Any]:
     detail = domain_detail(domain_id, db)
     tables = [t.get("target_table") for t in detail.get("targets") or []]
 
@@ -269,7 +270,7 @@ def _propose(db: Db, domain_id: str, source_id: str, page: Dict[str, Any], origi
         return documents.propose(session, domain_id=domain_id, domain_name=detail["domain"]["domain_name"], tables=tables,
                                  source_id=source_id, page_id=page["id"], title=page.get("title") or "document",
                                  text=page.get("text") or "", version=page.get("version"), url=page.get("url"), origin=origin,
-                                 progress=progress)
+                                 progress=progress, layer=layer)
     return invoke_source(db, run)
 
 
@@ -486,7 +487,12 @@ def _read_upload(db: Db, domain_id: str, source_id: str, data: Optional[bytes] =
         except Exception:
             pass
 
-    result = _propose(db, domain_id, source_id, page, "DOCUMENT", progress)
+    try:   # a document given for one layer proposes its knowledge for that layer (V057)
+        layer = (db.query("SELECT COALESCE(LAYER, 'ANY') AS LAYER FROM CONFLUENCE.SOURCE WHERE SOURCE_ID = %s", (source_id,))
+                 or [{"layer": "ANY"}])[0]["layer"]
+    except Exception:
+        layer = "ANY"
+    result = _propose(db, domain_id, source_id, page, "DOCUMENT", progress, layer)
     db.execute("DELETE FROM CONFLUENCE.PAGE WHERE SOURCE_ID = %s", (source_id,))   # one text per upload, the latest read
     _store_page(db, source_id, page, result.get("proposed", 0))
     unread = int(result.get("chars_unread") or 0)
@@ -642,14 +648,16 @@ def remove_document(domain_id: str, source_id: str, db: Db = Depends(current_db)
 
 # ---------------------------------------------------------------- correct-output examples
 
-def _approved_entities(db: Db, domain_id: str) -> Dict[str, Dict[str, Any]]:
-    """The tables of the domain's approved data model, by name (empty before a model is approved)."""
+def _approved_entities(db: Db, domain_id: str, layer: str = "SILVER") -> Dict[str, Dict[str, Any]]:
+    """The tables of the domain's approved data model of a layer (SILVER or GOLD), by name (empty before one is
+    approved)."""
     from services.common.sql import variant
     from services.modeling import spec_v2
 
     found = db.query("""SELECT D.SPEC, M.MODEL_ID FROM GOVERNANCE.DOMAIN_MODEL M
                           JOIN GOVERNANCE.MODEL_DESIGNS D ON D.MODEL_ID = M.MODEL_ID AND D.VERSION = M.APPROVED_VERSION
-                         WHERE M.DOMAIN_ID = %s AND COALESCE(M.LAYER, 'SILVER') = 'SILVER'""", (domain_id,))
+                         WHERE M.DOMAIN_ID = %s AND COALESCE(M.LAYER, 'SILVER') = %s""",
+                     (domain_id, "GOLD" if str(layer).upper() == "GOLD" else "SILVER"))
     if not found:
         return {}
     spec = spec_v2.active(spec_v2.normalize_v2(variant(found[0]["spec"]) or {}, found[0]["model_id"]))
@@ -684,7 +692,8 @@ def domain_examples(domain_id: str, db: Db = Depends(current_db)):
 
 
 @router.post("/api/domains/{domain_id}/examples/{table}")
-async def upload_examples(domain_id: str, table: str, file: UploadFile = File(...), db: Db = Depends(current_db)):
+async def upload_examples(domain_id: str, table: str, file: UploadFile = File(...), layer: str = "SILVER",
+                          db: Db = Depends(current_db)):
     """Correct output rows of one table (CSV or Excel), checked against the approved data model and proposed for
     review as the table's examples (a new upload replaces the waiting proposal)."""
     from services.knowledge import examples
@@ -699,10 +708,11 @@ async def upload_examples(domain_id: str, table: str, file: UploadFile = File(..
         domain_detail(domain_id, db)
         try:
             header, rows = examples.read_rows(name, data)
-            checked = examples.check(table, header, rows, _approved_entities(db, domain_id).get(table))
+            checked = examples.check(table, header, rows, _approved_entities(db, domain_id, layer).get(table))
         except examples.ExampleError as exc:
             raise HTTPException(400, str(exc)) from None
-        written = invoke_source(db, lambda session: examples.write(session, domain_id=domain_id, checked=checked, file_name=name))
+        written = invoke_source(db, lambda session: examples.write(session, domain_id=domain_id, checked=checked, file_name=name,
+                                                                   layer="GOLD" if str(layer).upper() == "GOLD" else "SILVER"))
         return {**{k: checked[k] for k in ("table", "columns", "row_count", "unknown_columns", "absent_columns", "missing_keys",
                                          "warnings")}, "knowledge_id": written, "unchanged": written is None}
 
