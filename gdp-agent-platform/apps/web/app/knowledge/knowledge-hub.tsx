@@ -17,6 +17,7 @@ import {
   decideInbox, knowledgeDiff, loadKnowledgeItem, loadPolicy, savePolicy, verifyKnowledge,
   type FeedItem, type InboxItem, type KDiff, type KnowledgeItem, type Overview, type Policy,
 } from "./actions";
+import { DocumentReview } from "../domains/document-review";
 import { HUB_TABS, type HubTab } from "./hub-tabs";
 import { KnowledgeDrawer } from "./item-drawer";
 import { ItemEditor } from "./knowledge-browser";
@@ -244,6 +245,7 @@ export function InboxPanel({ items }: { items: InboxItem[] }) {
   const [diffs, setDiffs] = useState<Record<string, KDiff>>({});
   const [msg, setMsg] = useState<{ tone: "ok" | "info" | "error"; text: string } | null>(null);
   const [refused, setRefused] = useState<Record<string, string>>({});
+  const [reading, setReading] = useState<{ domainId: string; sourceId: string; focus: string } | null>(null);
   const [pending, start] = useTransition();
   const decide = (ids: string[], decision: "approve" | "reject") => start(async () => {
     const r = await decideInbox(ids, decision, note);
@@ -331,8 +333,33 @@ export function InboxPanel({ items }: { items: InboxItem[] }) {
               </div>
             </div>
           )}
+          <SourceStrip item={p} onOpen={(sourceId) => setReading({ domainId: p.domain_id, sourceId, focus: p.knowledge_id })} />
         </article>
       ))}
+      <DocumentReview domainId={reading?.domainId ?? ""} sourceId={reading?.sourceId ?? null} focus={reading?.focus} open={!!reading}
+                      onClose={() => setReading(null)} onDecided={() => router.refresh()} />
+    </div>
+  );
+}
+
+/** Where a proposed item comes from: the document or Confluence page (with its version), the exact passage it was
+ *  read from, and the table and column it is about; "View in document" shows the passage in place. */
+function SourceStrip({ item, onOpen }: { item: InboxItem; onOpen: (sourceId: string) => void }) {
+  const cj = (item.content_json ?? {}) as { quote?: string; target_table?: string | null; target_column?: string | null;
+    source?: { kind?: string; source_id?: string; title?: string; version?: number | null; url?: string | null } };
+  const src = cj.source;
+  if (!src?.source_id && !cj.quote) return null;
+  return (
+    <div className="space-y-1.5 border-t bg-muted/20 px-4 py-2.5 text-xs" data-testid="inbox-source">
+      <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-muted-foreground">
+        <span className="font-medium text-foreground">From {src?.kind === "CONFLUENCE" ? "Confluence" : "document"}:</span>
+        <span>{src?.title ?? "unknown"}{src?.version ? ` (version ${src.version})` : ""}</span>
+        {cj.target_table && <span>· about <span className="font-mono">{cj.target_table}{cj.target_column ? `.${cj.target_column}` : ""}</span></span>}
+        {item.confidence != null && <span>· confidence {Math.round(Number(item.confidence) * 100)}%</span>}
+        {src?.url && <a href={src.url} target="_blank" rel="noreferrer" className="text-primary hover:underline">open in Confluence</a>}
+        {src?.source_id && <button type="button" onClick={() => onOpen(src.source_id!)} className="ml-auto inline-flex items-center gap-1 rounded-md border bg-card px-2 py-0.5 font-medium text-primary hover:bg-primary/10">View in document</button>}
+      </p>
+      {cj.quote && <blockquote className="border-l-2 border-amber-400 pl-2 italic text-muted-foreground">&ldquo;{cj.quote}&rdquo;</blockquote>}
     </div>
   );
 }

@@ -213,8 +213,15 @@ export type DomainDocument = {
   url: string | null; file_name: string | null; created_by: string; created_at: string; last_refreshed_at: string | null;
   last_result: { read?: number; unchanged?: number; proposed?: number; errors?: { page_id: string; error: string }[] } | null;
   pages: { page_id: string; title: string; version: number | null; url: string | null; proposed: number; chars: number; fetched_at: string }[];
+  /** V052: the kept original and how it was read */
+  stage_path?: string | null; file_size?: number | null; content_type?: string | null; file_sha256?: string | null;
+  file_kind?: "text" | "excel" | "document" | "image" | "binary" | null;
+  read_status?: "QUEUED" | "READING" | "READY" | "PARTIAL" | "NOT_READABLE" | "FAILED" | "INTERRUPTED" | null;
+  read_method?: string | null; read_note?: string | null; pages_count?: number | null; chars_total?: number | null; chars_read?: number | null;
+  read_finished_at?: string | null;
 };
-export type DomainDocuments = { sources: DomainDocument[]; deployed: boolean; confluence: { enabled: boolean; granted: boolean; connected: boolean } };
+export type DomainDocuments = { sources: DomainDocument[]; deployed: boolean; files?: boolean;
+  limits?: { max_mb: number; max_files: number }; confluence: { enabled: boolean; granted: boolean; connected: boolean } };
 export async function domainDocuments(domainId: string) {
   return attemptValue(() => api<DomainDocuments>(`/api/domains/${encodeURIComponent(domainId)}/documents`));
 }
@@ -224,14 +231,16 @@ export async function linkConfluence(domainId: string, url: string) {
   revalidatePath(`/domains/${domainId}`);
   return r;
 }
+export type UploadedDocument = { file_name: string; source_id?: string; kind?: string; size?: number; read_status?: string;
+  duplicate?: boolean; proposed?: number; error?: string; note?: string | null };
 export async function uploadDomainDocuments(domainId: string, form: FormData) {
-  const r = await attemptValue(() => apiForm<{ documents: { file_name: string; proposed?: number; error?: string; note?: string }[] }>(
+  const r = await attemptValue(() => apiForm<{ documents: UploadedDocument[]; skipped?: number }>(
     `/api/domains/${encodeURIComponent(domainId)}/documents/upload`, form));
   revalidatePath(`/domains/${domainId}`);
   return r;
 }
 export async function refreshDocument(domainId: string, sourceId: string) {
-  return attemptValue(() => api<{ read: number; unchanged: number; proposed: number; errors: { page_id: string; error: string }[] }>(
+  return attemptValue(() => api<{ read?: number; unchanged?: number; proposed?: number; errors?: { page_id: string; error: string }[]; read_status?: string }>(
     `/api/domains/${encodeURIComponent(domainId)}/documents/${encodeURIComponent(sourceId)}/refresh`, { method: "POST" }));
 }
 export async function removeDocument(domainId: string, sourceId: string) {
@@ -273,4 +282,19 @@ export async function domainExamples(domainId: string) {
 }
 export async function uploadExamples(domainId: string, table: string, form: FormData) {
   return attemptValue(() => apiForm<ExampleUpload>(`/api/domains/${encodeURIComponent(domainId)}/examples/${encodeURIComponent(table)}`, form));
+}
+
+/** A document as it was read, and every item proposed from it, for review side by side. */
+export type ReviewItem = {
+  knowledge_id: string; knowledge_type: string; title: string; content: string; status: "PROPOSED" | "ACTIVE" | "REJECTED";
+  confidence: number | null; quote: string; page_id: string; found: boolean; page: number | null; target_table: string | null;
+  target_column: string | null; created_by: string | null; created_at: string | null; reviewed_by: string | null; review_note: string | null;
+};
+export type DocumentReview = {
+  source: DomainDocument & { status: string };
+  pages: { page_id: string; title: string | null; version: number | null; url: string | null; fetched_at: string | null; text: string; truncated: boolean }[];
+  items: ReviewItem[]; counts: { PROPOSED: number; ACTIVE: number; REJECTED: number };
+};
+export async function documentReview(domainId: string, sourceId: string) {
+  return attemptValue(() => api<DocumentReview>(`/api/domains/${encodeURIComponent(domainId)}/documents/${encodeURIComponent(sourceId)}/review`));
 }

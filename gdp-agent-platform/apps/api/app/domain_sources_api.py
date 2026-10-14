@@ -7,23 +7,33 @@ Documents: Confluence pages or spaces linked to the domain (read as the signed-i
 sign-in) and uploaded files. Each page's text is kept with its version; the AI proposes knowledge from it
 (services/knowledge/documents.py), and every proposal waits for a steward in the review inbox. A refresh re-reads only
 pages whose version changed.
+
+Uploads (V052): any file is accepted and kept as it is in @CONFLUENCE.DOCUMENT_FILES; it is read in the background
+(services/knowledge/document_files.py: text, Excel, Cortex document parsing for PDF, Word, PowerPoint and HTML, OCR
+and an image model for images), and the outcome is recorded on the document. GET .../file returns the original;
+GET .../review returns the text read with every item proposed from it, for review side by side.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+import shutil
+import tempfile
+import threading
 import uuid
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi.responses import Response
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
 from app.db import Db, transaction
 from app.main import _snowflake_error, current_db, domain_detail
 from app.source_invoke import invoke_source
-from services.knowledge import documents
+from services.knowledge import document_files, documents
 
 router = APIRouter()
 STAGES = ("LANDING", "PROFILING", "DOMAIN", "MODELING", "MAPPING", "STTM", "DBT", "SODA", "QA", "VALIDATION")
@@ -123,12 +133,29 @@ def set_domain_skills(domain_id: str, body: DomainSkillsIn, db: Db = Depends(cur
 
 # ---------------------------------------------------------------- documents
 
+FILE_COLUMNS = """S.STAGE_PATH, S.FILE_SIZE, S.CONTENT_TYPE, S.FILE_SHA256, S.FILE_KIND,
+       IFF(S.READ_STATUS IN ('QUEUED', 'READING') AND S.READ_STARTED_AT < DATEADD(MINUTE, -%d, CURRENT_TIMESTAMP()),
+           'INTERRUPTED', S.READ_STATUS) AS READ_STATUS,
+       S.READ_METHOD, S.READ_NOTE, S.PAGES AS PAGES_COUNT, S.CHARS_TOTAL, S.CHARS_READ,
+       TO_VARCHAR(S.READ_FINISHED_AT, 'YYYY-MM-DD HH24:MI') AS READ_FINISHED_AT""" % document_files.STALE_MINUTES
+
+
+def _files_deployed(exc: Exception) -> bool:
+    """False when V052 is not applied yet (the file columns are unknown)."""
+    return "invalid identifier" not in str(exc).lower()
+
+
 def _sources(db: Db, domain_id: str) -> List[Dict[str, Any]]:
-    rows = db.query("""SELECT S.SOURCE_ID, S.KIND, S.SPACE_KEY, S.PAGE_ID, S.TITLE, S.URL, S.FILE_NAME, S.STATUS, S.CREATED_BY,
-                              TO_VARCHAR(S.CREATED_AT, 'YYYY-MM-DD HH24:MI') AS CREATED_AT,
-                              TO_VARCHAR(S.LAST_REFRESHED_AT, 'YYYY-MM-DD HH24:MI') AS LAST_REFRESHED_AT, S.LAST_RESULT
-                         FROM CONFLUENCE.SOURCE S WHERE S.DOMAIN_ID = %s AND S.STATUS = 'ACTIVE' ORDER BY S.CREATED_AT DESC""",
-                    (domain_id,))
+    base = """SELECT S.SOURCE_ID, S.KIND, S.SPACE_KEY, S.PAGE_ID, S.TITLE, S.URL, S.FILE_NAME, S.STATUS, S.CREATED_BY,
+                     TO_VARCHAR(S.CREATED_AT, 'YYYY-MM-DD HH24:MI') AS CREATED_AT,
+                     TO_VARCHAR(S.LAST_REFRESHED_AT, 'YYYY-MM-DD HH24:MI') AS LAST_REFRESHED_AT, S.LAST_RESULT{files}
+                FROM CONFLUENCE.SOURCE S WHERE S.DOMAIN_ID = %s AND S.STATUS = 'ACTIVE' ORDER BY S.CREATED_AT DESC"""
+    try:
+        rows = db.query(base.format(files=", " + FILE_COLUMNS), (domain_id,))
+    except Exception as exc:
+        if _files_deployed(exc):
+            raise
+        rows = db.query(base.format(files=""), (domain_id,))
     pages = db.query("""SELECT P.SOURCE_ID, P.PAGE_ID, P.TITLE, P.VERSION, P.URL, P.PROPOSED, LENGTH(P.TEXT) AS CHARS,
                                TO_VARCHAR(P.FETCHED_AT, 'YYYY-MM-DD HH24:MI') AS FETCHED_AT
                           FROM CONFLUENCE.PAGE P JOIN CONFLUENCE.SOURCE S ON S.SOURCE_ID = P.SOURCE_ID
@@ -150,9 +177,19 @@ def domain_documents(domain_id: str, db: Db = Depends(current_db)):
         sources = _sources(db, domain_id)
     except Exception as exc:
         if _missing(exc):
-            return {"sources": [], "deployed": False, "confluence": _confluence_state(db)}
+            return {"sources": [], "deployed": False, "files": False, "confluence": _confluence_state(db)}
         raise _snowflake_error(exc) from exc
-    return {"sources": sources, "deployed": True, "confluence": _confluence_state(db)}
+    return {"sources": sources, "deployed": True, "files": _files_ready(db), "confluence": _confluence_state(db),
+            "limits": {"max_mb": document_files.MAX_FILE_BYTES // (1024 * 1024), "max_files": document_files.MAX_FILES}}
+
+
+def _files_ready(db: Db) -> bool:
+    """True once V052 is applied (originals are kept and any file type is read)."""
+    try:
+        db.query("SELECT STAGE_PATH FROM CONFLUENCE.SOURCE LIMIT 0")
+        return True
+    except Exception:
+        return False
 
 
 def _confluence_state(db: Db) -> Dict[str, Any]:
@@ -173,14 +210,15 @@ def _store_page(db: Db, source_id: str, page: Dict[str, Any], proposed: int) -> 
                 page.get("text") or "", page.get("url"), proposed))
 
 
-def _propose(db: Db, domain_id: str, source_id: str, page: Dict[str, Any], origin: str) -> Dict[str, Any]:
+def _propose(db: Db, domain_id: str, source_id: str, page: Dict[str, Any], origin: str, progress=None) -> Dict[str, Any]:
     detail = domain_detail(domain_id, db)
     tables = [t.get("target_table") for t in detail.get("targets") or []]
 
     def run(session):
         return documents.propose(session, domain_id=domain_id, domain_name=detail["domain"]["domain_name"], tables=tables,
                                  source_id=source_id, page_id=page["id"], title=page.get("title") or "document",
-                                 text=page.get("text") or "", version=page.get("version"), url=page.get("url"), origin=origin)
+                                 text=page.get("text") or "", version=page.get("version"), url=page.get("url"), origin=origin,
+                                 progress=progress)
     return invoke_source(db, run)
 
 
@@ -275,7 +313,13 @@ async def refresh_document(domain_id: str, source_id: str, db: Db = Depends(curr
         if not found:
             raise HTTPException(404, "document not found")
         if found[0]["kind"] == "UPLOAD":
-            raise HTTPException(400, "An uploaded document is not refreshed; upload the new version instead.")
+            row = _upload_row(db, domain_id, source_id)
+            if not row.get("stage_path"):
+                raise HTTPException(400, "This document was uploaded before originals were kept; upload it again to read it again.")
+            if row.get("read_status") in ("QUEUED", "READING"):
+                raise HTTPException(409, "The document is being read now.")
+            _start_reading(db, domain_id, source_id)
+            return {"source_id": source_id, "read_status": "QUEUED"}
         return _refresh(db, domain_id, found[0])
 
     try:
@@ -288,44 +332,247 @@ async def refresh_document(domain_id: str, source_id: str, db: Db = Depends(curr
         raise _deployed(exc) from exc
 
 
+def _upload_row(db: Db, domain_id: str, source_id: str) -> Dict[str, Any]:
+    found = db.query("""SELECT SOURCE_ID, FILE_NAME, TITLE, STAGE_PATH, CONTENT_TYPE, FILE_SIZE, FILE_KIND, READ_STATUS
+                          FROM CONFLUENCE.SOURCE WHERE SOURCE_ID = %s AND DOMAIN_ID = %s AND KIND = 'UPLOAD'""",
+                     (source_id, domain_id))
+    if not found:
+        raise HTTPException(404, "document not found")
+    return found[0]
+
+
+def _put(db: Db, path: str, data: bytes) -> None:
+    """Keep the original file at @CONFLUENCE.DOCUMENT_FILES/<path>."""
+    folder, name = path.rsplit("/", 1)
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        local = tmp / name
+        local.write_bytes(data)
+        db.execute(f"PUT 'file://{local.as_posix()}' '@{document_files.STAGE}/{folder}/' AUTO_COMPRESS = FALSE OVERWRITE = TRUE")
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def _get(db: Db, path: str) -> bytes:
+    """The original file kept at @CONFLUENCE.DOCUMENT_FILES/<path>."""
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        db.execute(f"GET '@{document_files.STAGE}/{path}' 'file://{tmp.as_posix()}/'")
+        found = [f for f in tmp.rglob("*") if f.is_file()]
+        if not found:
+            raise HTTPException(404, "The original file is no longer in the document stage.")
+        return found[0].read_bytes()
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def _set(db: Db, source_id: str, **fields: Any) -> None:
+    cols = ", ".join(f"{k.upper()} = %s" for k in fields)
+    db.execute(f"UPDATE CONFLUENCE.SOURCE SET {cols} WHERE SOURCE_ID = %s", (*fields.values(), source_id))
+
+
+_reading: set = set()
+_reading_lock = threading.Lock()
+
+
+def _start_reading(db: Db, domain_id: str, source_id: str, data: Optional[bytes] = None) -> None:
+    """Read the document in the background (a long PDF read by Cortex takes minutes); its status is kept on the row,
+    so the page shows progress and an interrupted read can be started again from the kept file."""
+    with _reading_lock:
+        if source_id in _reading:
+            return
+        _reading.add(source_id)
+    _set(db, source_id, read_status="QUEUED", read_note="Waiting to be read")
+    db.execute("UPDATE CONFLUENCE.SOURCE SET READ_STARTED_AT = CURRENT_TIMESTAMP(), READ_FINISHED_AT = NULL WHERE SOURCE_ID = %s",
+               (source_id,))
+
+    def run() -> None:
+        try:
+            _read_upload(db, domain_id, source_id, data)
+        except Exception as exc:
+            try:
+                _set(db, source_id, read_status="FAILED", read_note=str(getattr(exc, "detail", exc))[:3900])
+                db.execute("UPDATE CONFLUENCE.SOURCE SET READ_FINISHED_AT = CURRENT_TIMESTAMP() WHERE SOURCE_ID = %s", (source_id,))
+            except Exception:
+                pass
+        finally:
+            with _reading_lock:
+                _reading.discard(source_id)
+
+    threading.Thread(target=run, name=f"document-{source_id[:8]}", daemon=True).start()
+
+
+def _read_upload(db: Db, domain_id: str, source_id: str, data: Optional[bytes] = None) -> Dict[str, Any]:
+    """Read one kept file, store its text, propose its knowledge, and record the outcome on the document."""
+    row = _upload_row(db, domain_id, source_id)
+    name = row.get("file_name") or row.get("title") or "document"
+    path = row["stage_path"]
+    _set(db, source_id, read_status="READING", read_note="Reading the file")
+    if data is None:
+        data = _get(db, path)
+    detail = domain_detail(domain_id, db)
+    out = document_files.read(lambda sql, params: db.query(sql, params), name, data, path, detail["domain"]["domain_name"])
+    text = (out["text"] or "").replace("\r\n", "\n").strip()
+    notes = [n for n in [out["note"]] if n]
+    if out["attempts"] and text:
+        notes.append("Also tried: " + "; ".join(out["attempts"][:4]))
+    elif out["attempts"]:
+        notes.append("; ".join(out["attempts"][:6]))
+    if not text:
+        _set(db, source_id, read_status="NOT_READABLE", file_kind=out["kind"], read_method=out["method"] or None,
+             read_note=(" ".join(notes) or "No text could be read from it; the file is kept.")[:3900], chars_total=0, chars_read=0)
+        db.execute("""UPDATE CONFLUENCE.SOURCE SET READ_FINISHED_AT = CURRENT_TIMESTAMP(), LAST_REFRESHED_AT = CURRENT_TIMESTAMP(),
+                             LAST_RESULT = PARSE_JSON('{"read": 0, "proposed": 0}') WHERE SOURCE_ID = %s""", (source_id,))
+        return {"read_status": "NOT_READABLE"}
+    _set(db, source_id, file_kind=out["kind"], read_method=out["method"], pages=out.get("pages"), chars_total=len(text),
+         read_note="Proposing knowledge")
+    page = {"id": hashlib.sha256(data).hexdigest()[:16],
+            "title": name, "version": 1, "url": None, "text": text}
+
+    def progress(part: int, parts: int) -> None:
+        try:
+            _set(db, source_id, read_note=f"Proposing knowledge: part {part} of {parts}")
+        except Exception:
+            pass
+
+    result = _propose(db, domain_id, source_id, page, "DOCUMENT", progress)
+    db.execute("DELETE FROM CONFLUENCE.PAGE WHERE SOURCE_ID = %s", (source_id,))   # one text per upload, the latest read
+    _store_page(db, source_id, page, result.get("proposed", 0))
+    unread = int(result.get("chars_unread") or 0)
+    if unread:
+        notes.append(f"Only the first {result.get('chars_read', 0):,} of {len(text):,} characters were read for knowledge "
+                     f"({result.get('parts')} parts); split the document to have the rest read.")
+    _set(db, source_id, read_status="PARTIAL" if unread else "READY", chars_read=int(result.get("chars_read") or len(text)),
+         read_note=" ".join(notes)[:3900] or None)
+    db.execute("""UPDATE CONFLUENCE.SOURCE SET READ_FINISHED_AT = CURRENT_TIMESTAMP(), LAST_REFRESHED_AT = CURRENT_TIMESTAMP(),
+                         LAST_RESULT = PARSE_JSON(%s) WHERE SOURCE_ID = %s""",
+               (json.dumps({"read": 1, "proposed": result.get("proposed", 0), "unchanged": result.get("unchanged", 0)}), source_id))
+    return {"read_status": "PARTIAL" if unread else "READY", **result}
+
+
 @router.post("/api/domains/{domain_id}/documents/upload")
 async def upload_documents(domain_id: str, files_in: List[UploadFile] = File(..., alias="files"), db: Db = Depends(current_db)):
-    """Upload documents (an exported Confluence page, Word, Excel, Markdown, text): their text is read and their
-    knowledge proposed for review. The files themselves are not kept."""
-    from services.agentic import attachments
+    """Upload documents of any type (up to 10 files of 50 MB). Each original is kept in @CONFLUENCE.DOCUMENT_FILES and
+    read in the background; the knowledge it states is proposed for review. The same file uploaded again to the same
+    domain is not stored twice."""
+    files = []
+    for f in files_in[: document_files.MAX_FILES]:
+        data = await f.read(document_files.MAX_FILE_BYTES + 1)
+        files.append(((f.filename or "document")[:512], data))
+    skipped = len(files_in) - len(files)
 
-    out = []
-    for f in files_in[:10]:
-        data = await f.read(MAX_FILE_BYTES + 1)
-        name = (f.filename or "document")[:512]
-        if len(data) > MAX_FILE_BYTES:
-            out.append({"file_name": name, "error": "larger than 10 MB"})
-            continue
-        text, note = attachments.extract(name, data)
-        if not text.strip():
-            out.append({"file_name": name, "error": note or "no text could be read from it"})
-            continue
-        digest = hashlib.sha256(data).hexdigest()
-
-        def store(name=name, text=text, digest=digest):
-            domain_detail(domain_id, db)
+    def store() -> List[Dict[str, Any]]:
+        domain_detail(domain_id, db)
+        if not _files_ready(db):
+            raise HTTPException(503, "Keeping uploaded files needs migration V052. An admin applies it in Admin, Deploy.")
+        out = []
+        for name, data in files:
+            if len(data) > document_files.MAX_FILE_BYTES:
+                out.append({"file_name": name, "error": f"larger than {document_files.MAX_FILE_BYTES // (1024 * 1024)} MB"})
+                continue
+            if not data:
+                out.append({"file_name": name, "error": "the file is empty"})
+                continue
+            digest = document_files.sha256(data)
+            dup = db.query("""SELECT SOURCE_ID, FILE_NAME FROM CONFLUENCE.SOURCE WHERE DOMAIN_ID = %s AND KIND = 'UPLOAD'
+                               AND STATUS = 'ACTIVE' AND FILE_SHA256 = %s""", (domain_id, digest))
+            if dup:
+                out.append({"file_name": name, "source_id": dup[0]["source_id"], "duplicate": True,
+                            "note": f"Already uploaded as {dup[0]['file_name']}; not stored twice."})
+                continue
             source_id = str(uuid.uuid4())
-            db.execute("""INSERT INTO CONFLUENCE.SOURCE (SOURCE_ID, DOMAIN_ID, KIND, TITLE, FILE_NAME, LAST_REFRESHED_AT)
-                          SELECT %s, %s, 'UPLOAD', %s, %s, CURRENT_TIMESTAMP()""", (source_id, domain_id, name, name))
-            page = {"id": digest[:16], "title": name, "version": 1, "url": None, "text": text}
-            result = _propose(db, domain_id, source_id, page, "DOCUMENT")
-            _store_page(db, source_id, page, result.get("proposed", 0))
-            db.execute("UPDATE CONFLUENCE.SOURCE SET LAST_RESULT = PARSE_JSON(%s) WHERE SOURCE_ID = %s",
-                       (json.dumps({"read": 1, "proposed": result.get("proposed", 0)}), source_id))
-            return {"file_name": name, "source_id": source_id, "chars": len(text), "note": note, **result}
+            path = document_files.stage_path(domain_id, source_id, name)
+            kind, note = document_files.classify(name, data)
+            _put(db, path, data)
+            db.execute("""INSERT INTO CONFLUENCE.SOURCE (SOURCE_ID, DOMAIN_ID, KIND, TITLE, FILE_NAME, STAGE_PATH, FILE_SIZE,
+                                                         CONTENT_TYPE, FILE_SHA256, FILE_KIND, READ_STATUS)
+                          SELECT %s, %s, 'UPLOAD', %s, %s, %s, %s, %s, %s, %s, 'QUEUED'""",
+                       (source_id, domain_id, name[:1024], name, path, len(data), document_files.content_type(name), digest, kind))
+            _start_reading(db, domain_id, source_id, data)
+            out.append({"file_name": name, "source_id": source_id, "kind": kind, "size": len(data), "read_status": "QUEUED",
+                        "note": note or None})
+        return out
 
-        try:
-            out.append(await run_in_threadpool(store))
-        except HTTPException:
-            raise
-        except Exception as exc:
-            raise _deployed(exc) from exc
-    return {"documents": out}
+    try:
+        out = await run_in_threadpool(store)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise _deployed(exc) from exc
+    return {"documents": out, "skipped": skipped}
+
+
+@router.get("/api/domains/{domain_id}/documents/{source_id}/file")
+def document_file(domain_id: str, source_id: str, inline: bool = False, db: Db = Depends(current_db)):
+    """The original uploaded file. Shown in the browser only for PDF and common images; anything else downloads."""
+    try:
+        row = _upload_row(db, domain_id, source_id)
+        if not row.get("stage_path"):
+            raise HTTPException(404, "This document was uploaded before originals were kept.")
+        data = _get(db, row["stage_path"])
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise _deployed(exc) from exc
+    ctype = row.get("content_type") or document_files.content_type(row.get("file_name") or "")
+    show = inline and ctype in document_files.INLINE
+    name = document_files.safe_name(row.get("file_name") or "document")
+    return Response(content=data, media_type=ctype if show else "application/octet-stream",
+                    headers={"Content-Disposition": f'{"inline" if show else "attachment"}; filename="{name}"',
+                             "X-Content-Type-Options": "nosniff", "Cache-Control": "private, no-store",
+                             "Content-Security-Policy": "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; sandbox"})
+
+
+@router.get("/api/domains/{domain_id}/documents/{source_id}/review")
+def document_review(domain_id: str, source_id: str, db: Db = Depends(current_db)):
+    """The document as read (its text per page, with [Page N] markers) and every item proposed from it, with its
+    quote, page and decision, so each item can be checked against the passage it comes from."""
+    from services.common.sql import variant
+
+    domain_detail(domain_id, db)
+    found = db.query("""SELECT SOURCE_ID, KIND, TITLE, FILE_NAME, URL, STATUS FROM CONFLUENCE.SOURCE
+                         WHERE SOURCE_ID = %s AND DOMAIN_ID = %s""", (source_id, domain_id))
+    if not found:
+        raise HTTPException(404, "document not found")
+    source = found[0]
+    try:
+        extra = db.query(f"SELECT {FILE_COLUMNS} FROM CONFLUENCE.SOURCE S WHERE S.SOURCE_ID = %s", (source_id,))
+        source.update(extra[0] if extra else {})
+    except Exception:
+        pass
+    pages = db.query("""SELECT PAGE_ID, TITLE, VERSION, URL, TEXT, TO_VARCHAR(FETCHED_AT, 'YYYY-MM-DD HH24:MI') AS FETCHED_AT
+                          FROM CONFLUENCE.PAGE WHERE SOURCE_ID = %s ORDER BY TITLE""", (source_id,))
+    items = db.query("""SELECT KNOWLEDGE_ID, KNOWLEDGE_TYPE, TITLE, CONTENT, CONTENT_JSON, STATUS, IS_CURRENT, LINEAGE_ID,
+                               CONFIDENCE, CREATED_BY, REVIEWED_BY, REVIEW_NOTE,
+                               TO_VARCHAR(CREATED_AT, 'YYYY-MM-DD HH24:MI') AS CREATED_AT
+                          FROM KNOWLEDGE.DOMAIN_KNOWLEDGE
+                         WHERE DOMAIN_ID = %s AND CONTENT_JSON:source:source_id::STRING = %s
+                           AND STATUS IN ('PROPOSED', 'ACTIVE', 'REJECTED')
+                         ORDER BY CREATED_AT DESC LIMIT 1000""", (domain_id, source_id))
+    text_of = {p["page_id"]: p.get("text") or "" for p in pages}
+    seen, out = set(), []
+    for it in items:   # the newest decision per item (lineage)
+        key = it.get("lineage_id") or it["knowledge_id"]
+        if key in seen:
+            continue
+        seen.add(key)
+        cj = variant(it.get("content_json")) or {}
+        page_id = str((cj.get("source") or {}).get("page_id") or "")
+        quote = cj.get("quote") or ""
+        text = text_of.get(page_id, "")
+        out.append({"knowledge_id": it["knowledge_id"], "knowledge_type": it["knowledge_type"], "title": it["title"],
+                    "content": it["content"], "status": it["status"], "confidence": it.get("confidence"),
+                    "quote": quote, "page_id": page_id, "found": document_files.find(text, quote) is not None,
+                    "page": document_files.page_of(text, quote), "target_table": cj.get("target_table"),
+                    "target_column": cj.get("target_column"), "created_by": it.get("created_by"),
+                    "created_at": it.get("created_at"), "reviewed_by": it.get("reviewed_by"), "review_note": it.get("review_note")})
+    order = {"PROPOSED": 0, "ACTIVE": 1, "REJECTED": 2}
+    out.sort(key=lambda i: (order.get(i["status"], 3), i["page"] or 0, i["title"] or ""))
+    limit = 400_000
+    return {"source": source,
+            "pages": [{**{k: p.get(k) for k in ("page_id", "title", "version", "url", "fetched_at")},
+                       "text": (p.get("text") or "")[:limit], "truncated": len(p.get("text") or "") > limit} for p in pages],
+            "items": out, "counts": {s_: sum(1 for i in out if i["status"] == s_) for s_ in ("PROPOSED", "ACTIVE", "REJECTED")}}
 
 
 @router.post("/api/domains/{domain_id}/documents/{source_id}/remove")

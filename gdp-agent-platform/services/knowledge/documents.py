@@ -9,11 +9,11 @@ from __future__ import annotations
 import hashlib
 import re
 import time
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Callable, Dict, Iterable, List, Optional
 
 KINDS = ("GLOSSARY", "BUSINESS_RULE", "MODEL_DEFINITION", "TRANSFORMATION_RULE", "EXCEPTION", "NAMING_STANDARD")
 CHUNK = 24_000          # characters of text per AI call
-MAX_CHUNKS = 6          # per document and refresh
+MAX_CHUNKS = 40         # per document and refresh (about 960,000 characters)
 MAX_ITEMS = 40          # proposals per call
 
 SCHEMA: Dict[str, Any] = {
@@ -34,19 +34,26 @@ def text_hash(text: str) -> str:
     return hashlib.sha256((text or "").encode("utf-8")).hexdigest()
 
 
-def chunks(text: str, size: int = CHUNK, limit: int = MAX_CHUNKS) -> List[str]:
-    """The text in pieces of about `size` characters, cut at paragraph ends where possible."""
+def split(text: str, size: int = CHUNK, limit: int = MAX_CHUNKS) -> tuple:
+    """(pieces of about `size` characters cut at paragraph ends where possible, characters left unread after
+    `limit` pieces)."""
     text = (text or "").strip()
     out: List[str] = []
     while text and len(out) < limit:
         if len(text) <= size:
             out.append(text)
+            text = ""
             break
         cut = text.rfind("\n\n", size // 2, size)
         cut = cut if cut > 0 else size
         out.append(text[:cut].strip())
         text = text[cut:].strip()
-    return out
+    return out, len(text)
+
+
+def chunks(text: str, size: int = CHUNK, limit: int = MAX_CHUNKS) -> List[str]:
+    """The text in pieces of about `size` characters, cut at paragraph ends where possible."""
+    return split(text, size, limit)[0]
 
 
 def slug(value: str) -> str:
@@ -99,8 +106,10 @@ def reference(origin: str, source_id: str, page_id: str, kind: str, title: str) 
 
 
 def propose(session, *, domain_id: str, domain_name: str, tables: Iterable[str], source_id: str, page_id: str,
-            title: str, text: str, version: Optional[int], url: Optional[str], origin: str) -> Dict[str, Any]:
-    """Read one document page and write its knowledge as proposals. Returns {proposed, unchanged, items}."""
+            title: str, text: str, version: Optional[int], url: Optional[str], origin: str,
+            progress: Optional[Callable[[int, int], None]] = None) -> Dict[str, Any]:
+    """Read one document page and write its knowledge as proposals. Returns {proposed, unchanged, items, parts,
+    chars_read, chars_total}; `progress(part, parts)` is called before each part is read."""
     from services.common.audit import record_cost
     from services.common.llm import complete_json
     from services.knowledge.writer import remember
@@ -108,7 +117,10 @@ def propose(session, *, domain_id: str, domain_name: str, tables: Iterable[str],
     proposed = unchanged = 0
     shown: List[Dict[str, Any]] = []
     tables = list(tables)
-    for part in chunks(text):
+    parts, unread = split(text)
+    for n, part in enumerate(parts, start=1):
+        if progress:
+            progress(n, len(parts))
         started = time.time()
         out, usage, model = complete_json(session, prompt(domain_name, tables, title, part), SCHEMA, 4096, None, "KNOWLEDGE")
         try:
@@ -131,4 +143,6 @@ def propose(session, *, domain_id: str, domain_name: str, tables: Iterable[str],
                 shown.append({"kind": item["kind"], "title": item["title"]})
             else:
                 unchanged += 1
-    return {"proposed": proposed, "unchanged": unchanged, "items": shown[:50]}
+    return {"proposed": proposed, "unchanged": unchanged, "items": shown[:50], "parts": len(parts),
+            "chars_total": len((text or "").strip()), "chars_unread": unread,
+            "chars_read": len((text or "").strip()) - unread}
