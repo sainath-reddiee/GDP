@@ -134,3 +134,46 @@ def timeline(rows: List[Dict[str, Any]], versions: Iterable[Dict[str, Any]] = ()
     for (day, label), n in days.items():
         events.append({"at": day, "kind": "knowledge", "label": f"{label}: {n} item{'s' if n != 1 else ''}", "detail": "", "by": None})
     return sorted(events, key=lambda e: e["at"], reverse=True)[:30]
+
+
+def manifest(domain: Dict[str, Any], *, standard: Optional[str] = None, bindings: Iterable[Dict[str, Any]] = (),
+             loaded: Iterable[Dict[str, Any]] = (), repos: Iterable[Dict[str, Any]] = (), files: Iterable[Dict[str, Any]] = (),
+             runs: Iterable[Dict[str, Any]] = (), rows: Iterable[Dict[str, Any]] = ()) -> Dict[str, Any]:
+    """Exactly what the domain is built with, for a developer: the skill and contract it was generated from, the pack
+    file, the skills each stage loads for it (and the versions its runs actually loaded), the code repositories and
+    files that define its tables, the runs that taught it, and the people who wrote or verified it."""
+    name = str((domain.get("domain") or {}).get("domain_name") or "").lower()
+    contract = str(domain.get("contract") or "")
+    parts = contract.split("/")
+    skill = None
+    if len(parts) >= 4 and parts[0] == "snowflake" and parts[1] == "skills":   # snowflake/skills/<standard>/<skill>/...
+        skill = {"standard": parts[2].upper(), "name": parts[3], "path": "/".join(parts[:4]), "contract": contract}
+    rows = [_low(r) for r in rows]
+    std = str(standard or "").upper()
+    stage_skills: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+    for b in (_low(b) for b in bindings):
+        if b.get("enabled") is False or str(b.get("standard") or "ANY").upper() not in ("ANY", std):
+            continue
+        stage_skills[str(b.get("stage"))].append({"skill": b.get("skill_name"), "position": b.get("position")})
+    used = defaultdict(list)
+    for l in (_low(l) for l in loaded):
+        used[str(l.get("skill"))].append({"version": l.get("version"), "loads": int(l.get("n") or 0),
+                                          "runs": int(l.get("runs") or 0), "last": str(l.get("last") or "")[:19]})
+    stages = [{"stage": s, "skills": [{**k, "loaded": used.get(str(k["skill"]), [])} for k in sorted(v, key=lambda x: x.get("position") or 0)]}
+              for s, v in sorted(stage_skills.items())]
+    files_by_repo: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+    for f in (_low(f) for f in files):
+        files_by_repo[str(f.get("repo_id"))].append({"path": f.get("path"), "name": f.get("name"), "kind": f.get("kind")})
+    out_repos = [{**{k: r.get(k) for k in ("name", "git_url", "branch", "last_commit", "last_indexed_at")},
+                  "files": files_by_repo.get(str(r.get("repo_id")), [])[:25]} for r in (_low(r) for r in repos)]
+    people = sorted({str(r["created_by"]) for r in rows if str(r.get("origin") or "").upper() == "USER" and r.get("created_by")}
+                    | {str(r["verified_by"]) for r in rows if r.get("verified_by")})
+    pack_items = sum(1 for r in rows if str(r.get("origin") or "").upper() in ("SEED", "PACK_IMPORT"))
+    return {
+        "skill": skill,
+        "pack": {"file": f"domain/{name}/domain_pack.json", "generator": "infrastructure/contracts_to_packs.py" if skill else None,
+                 "items": pack_items, "shipped": domain.get("origin") == "repository"} if pack_items or domain.get("origin") == "repository" else None,
+        "standard": std or None, "stages": stages, "repos": out_repos,
+        "runs": [{k: _low(r).get(k) for k in ("run_id", "run_name", "items", "kinds", "current_state")} for r in runs][:20],
+        "people": people,
+    }

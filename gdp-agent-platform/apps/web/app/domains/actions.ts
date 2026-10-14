@@ -136,7 +136,18 @@ export type ProvenanceSource = {
   types: Record<string, number>; people: string[]; files?: string[]; repos?: { name: string; matched: number }[];
   items: { knowledge_id: string; title: string; type: string; ref: string | null; verified: boolean; uses: number; status: string }[];
 };
+export type DomainManifest = {
+  skill: { standard: string; name: string; path: string; contract: string } | null;
+  pack: { file: string; generator: string | null; items: number; shipped: boolean } | null;
+  standard: string | null;
+  stages: { stage: string; skills: { skill: string; position: number | null; loaded: { version: string; loads: number; runs: number; last: string }[] }[] }[];
+  repos: { name: string; git_url: string; branch: string; last_commit: string | null; last_indexed_at: string | null;
+           files: { path: string; name: string; kind: string | null }[] }[];
+  runs: { run_id: string; run_name: string | null; items: number; kinds: string[]; current_state: string | null }[];
+  people: string[];
+};
 export type DomainProvenance = {
+  manifest: DomainManifest;
   provenance: {
     sources: ProvenanceSource[]; upstream: { id: string; label: string; file: string; feeds: string; meaning: string }[];
     parts: { id: string; label: string; count: number }[]; edges: { source: string; part: string; count: number }[];

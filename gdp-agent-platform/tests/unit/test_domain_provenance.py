@@ -58,3 +58,28 @@ def test_an_empty_domain_scores_zero_without_errors():
     out = coverage.score("NEW", [], [], set(), set(), [])
     assert out["score"] == 0 and out["targets"] == [] and out["actions"] == []
     assert provenance.build({"domain": {"domain_name": "NEW"}}, [])["sources"] == []
+
+
+def test_manifest_names_the_skill_pack_stage_skills_repos_and_runs():
+    m = provenance.manifest(
+        DOMAIN, standard="gdp",
+        bindings=[{"STAGE": "DBT", "SKILL_NAME": "dbt-onboard-source", "ENABLED": True, "POSITION": 1, "STANDARD": "GDP"},
+                  {"STAGE": "DBT", "SKILL_NAME": "generic-dbt", "ENABLED": True, "POSITION": 2, "STANDARD": "ANY"},
+                  {"STAGE": "QA", "SKILL_NAME": "other-standard", "ENABLED": True, "POSITION": 1, "STANDARD": "ACME"},
+                  {"STAGE": "QA", "SKILL_NAME": "switched-off", "ENABLED": False, "POSITION": 1, "STANDARD": "ANY"}],
+        loaded=[{"SKILL": "dbt-onboard-source", "VERSION": "3", "N": 5, "RUNS": 2, "LAST": "2026-10-10 09:00"}],
+        repos=[{"REPO_ID": "r1", "NAME": "DBT_DEMO", "GIT_URL": "https://github.com/x/dbt_demo", "BRANCH": "main",
+                "LAST_COMMIT": "abc123", "LAST_INDEXED_AT": "2026-10-12 10:00"}],
+        files=[{"REPO_ID": "r1", "PATH": "models/company/company_core.sql", "NAME": "company_core", "KIND": "DBT_MODEL"}],
+        runs=[{"RUN_ID": "run1", "RUN_NAME": "RAW modeling", "ITEMS": 28, "KINDS": ["MAPPING_PATTERN"], "CURRENT_STATE": "DONE"}],
+        rows=ROWS)
+    assert m["skill"] == {"standard": "GDP", "name": "dbt-onboard-source", "path": "snowflake/skills/gdp/dbt-onboard-source",
+                          "contract": DOMAIN["contract"]}
+    assert m["pack"] == {"file": "domain/company/domain_pack.json", "generator": "infrastructure/contracts_to_packs.py",
+                         "items": 2, "shipped": True}
+    dbt = next(s for s in m["stages"] if s["stage"] == "DBT")
+    assert [k["skill"] for k in dbt["skills"]] == ["dbt-onboard-source", "generic-dbt"]
+    assert dbt["skills"][0]["loaded"] == [{"version": "3", "loads": 5, "runs": 2, "last": "2026-10-10 09:00"}]
+    assert all(s["stage"] != "QA" for s in m["stages"])   # another standard's skill and a switched-off one are left out
+    assert m["repos"][0]["last_commit"] == "abc123" and m["repos"][0]["files"][0]["path"] == "models/company/company_core.sql"
+    assert m["runs"][0]["run_name"] == "RAW modeling" and m["people"] == ["ANA"]

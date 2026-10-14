@@ -74,6 +74,29 @@ def domain_provenance(domain_id: str, db: Db = Depends(current_db)):
                                                          JOIN GOVERNANCE.DOMAIN_QA_PACKS P ON P.PACK_ID = Q.PACK_ID
                                                         WHERE P.DOMAIN_ID = %s AND P.STATUS NOT IN ('RETIRED', 'SUPERSEDED')
                                                         LIMIT 2000""", (domain_id,))]
+    standard = next((r.get("standard") for r in _soft(db, "SELECT CONFIG:standard::STRING AS STANDARD FROM KNOWLEDGE.DOMAIN_REGISTRY "
+                                                        "WHERE DOMAIN_ID = %s", (domain_id,))), None)
+    bindings = _soft(db, "SELECT STAGE, SKILL_NAME, ENABLED, POSITION, STANDARD FROM KNOWLEDGE.SKILL_STAGE_BINDING")
+    loaded = _soft(db, """SELECT C.INPUT_JSON:skill::STRING AS SKILL, C.INPUT_JSON:version::STRING AS VERSION, COUNT(*) AS N,
+                                 COUNT(DISTINCT C.RUN_ID) AS RUNS, TO_VARCHAR(MAX(C.CREATED_AT), 'YYYY-MM-DD HH24:MI') AS LAST
+                            FROM AUDIT.AGENT_TOOL_CALL C JOIN CORE.WORKFLOW_RUN R ON R.RUN_ID = C.RUN_ID
+                           WHERE C.TOOL_NAME = 'load_skill' AND R.DOMAIN_ID = %s GROUP BY 1, 2""", (domain_id,))
+    repo_rows = [r for r in _soft(db, """SELECT REPO_ID, NAME, GIT_URL, BRANCH, LAST_COMMIT, DOMAIN_IDS,
+                                                TO_VARCHAR(LAST_INDEXED_AT, 'YYYY-MM-DD HH24:MI') AS LAST_INDEXED_AT
+                                           FROM CODE.REPO WHERE ENABLED""")
+                 if not _arr(r.get("domain_ids")) or domain_id in _arr(r.get("domain_ids"))]
+    files = _soft(db, f"""SELECT DISTINCT REPO_ID, PATH, NAME, KIND FROM CODE.CODE_CHUNK
+                           WHERE UPPER(NAME) IN ({', '.join(['%s'] * len(tables))}) ORDER BY PATH LIMIT 200""",
+                  tuple(tables)) if tables else []
+    runs = _soft(db, """SELECT K.SOURCE_RUN_ID AS RUN_ID, ANY_VALUE(R.RUN_NAME) AS RUN_NAME, ANY_VALUE(R.CURRENT_STATE) AS CURRENT_STATE,
+                               COUNT(*) AS ITEMS, ARRAY_AGG(DISTINCT K.KNOWLEDGE_TYPE) AS KINDS
+                          FROM KNOWLEDGE.DOMAIN_KNOWLEDGE K LEFT JOIN CORE.WORKFLOW_RUN R ON R.RUN_ID = K.SOURCE_RUN_ID
+                         WHERE K.DOMAIN_ID = %s AND K.IS_CURRENT AND K.SOURCE_RUN_ID IS NOT NULL
+                         GROUP BY 1 ORDER BY ITEMS DESC LIMIT 20""", (domain_id,))
+    for r in runs:
+        r["kinds"] = _arr(r.get("kinds"))
     return {"domain": detail["domain"],
+            "manifest": provenance.manifest(detail, standard=standard, bindings=bindings, loaded=loaded, repos=repo_rows,
+                                            files=files, runs=runs, rows=rows),
             "provenance": provenance.build(detail, rows, usage, repos, versions),
             "coverage": coverage.score(name, detail.get("targets") or [], rows, sttm, dq, qa_sql, usage)}

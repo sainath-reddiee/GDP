@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
-import { BadgeCheck, Bot, Check, FileCode2, GitBranch, Loader2, ShieldAlert, Sparkles, X } from "lucide-react";
+import { BadgeCheck, Bot, FileCode2, GitBranch, Loader2, ShieldAlert, Sparkles, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { prettyType } from "../../knowledge/knowledge-ui";
 import { domainProvenance, type DomainProvenance, type ProvenanceSource } from "../actions";
@@ -29,55 +29,29 @@ export function useProvenance(domainId: string) {
   return { data, error };
 }
 
-function Ring({ value, size = 56 }: { value: number; size?: number }) {
-  const r = size / 2 - 5, c = 2 * Math.PI * r;
-  const tone = value >= 80 ? "stroke-emerald-500" : value >= 50 ? "stroke-amber-500" : "stroke-rose-500";
-  return (
-    <svg width={size} height={size} role="img" aria-label={`${value} out of 100`}>
-      <circle cx={size / 2} cy={size / 2} r={r} className="fill-none stroke-muted" strokeWidth="6" />
-      <circle cx={size / 2} cy={size / 2} r={r} className={cn("fill-none", tone)} strokeWidth="6" strokeLinecap="round"
-              strokeDasharray={`${(value / 100) * c} ${c}`} transform={`rotate(-90 ${size / 2} ${size / 2})`} />
-      <text x="50%" y="50%" dominantBaseline="central" textAnchor="middle" className="fill-foreground text-[13px] font-semibold">{value}</text>
-    </svg>
-  );
-}
-
-/** The Overview card: the score and where the domain's knowledge comes from, with a way into the Lineage tab. */
+/** The Overview card: exactly what the domain is built with, and a way into the Lineage tab. */
 export function BuiltFromCard({ domainId, onOpen }: { domainId: string; onOpen: () => void }) {
   const { data, error } = useProvenance(domainId);
+  const m = data?.manifest;
   return (
     <section className="surface space-y-3 p-4" data-testid="built-from-card">
       <div className="flex items-start gap-2">
         <div className="min-w-0 flex-1">
           <h3 className="text-sm font-semibold">How this domain is built</h3>
-          <p className="text-xs text-muted-foreground">Where its knowledge comes from, and how complete it is.</p>
+          <p className="text-xs text-muted-foreground">The skill, files, code and runs behind it.</p>
         </div>
         <button type="button" onClick={onOpen} className="text-xs text-primary hover:underline">Open lineage</button>
       </div>
       {error && <p className="text-xs text-destructive">{error}</p>}
       {!data && !error && <p className="text-xs text-muted-foreground"><Loader2 className="mr-1 inline h-3 w-3 animate-spin" />Tracing its sources…</p>}
-      {data && (
-        <>
-          <div className="flex items-center gap-3">
-            <Ring value={data.coverage.score} />
-            <dl className="grid flex-1 grid-cols-2 gap-x-3 gap-y-0.5 text-xs">
-              <dt className="text-muted-foreground">Completeness</dt><dd className="text-right font-medium">{data.coverage.tables_score}</dd>
-              <dt className="text-muted-foreground">Trust</dt><dd className="text-right font-medium">{data.coverage.trust_score}</dd>
-              <dt className="text-muted-foreground">Verified</dt><dd className="text-right">{data.coverage.knowledge.verified} of {data.coverage.knowledge.items}</dd>
-              <dt className="text-muted-foreground">Gaps</dt><dd className="text-right">{data.coverage.actions.length}</dd>
-            </dl>
-          </div>
-          <ul className="flex flex-wrap gap-1.5">
-            {data.provenance.upstream.map((u) => (
-              <li key={u.id} className="rounded-full px-2 py-0.5 text-[11px] text-white" style={{ background: TONE.contract }} title={u.file}>{u.label}</li>
-            ))}
-            {data.provenance.sources.map((s) => (
-              <li key={s.id} className="rounded-full px-2 py-0.5 text-[11px] text-white" style={{ background: TONE[s.id] ?? TONE.other }}>
-                {s.label} · {s.count}
-              </li>
-            ))}
-          </ul>
-        </>
+      {m && (
+        <dl className="space-y-1.5 text-xs">
+          {m.skill && <div><dt className="text-muted-foreground">Skill</dt><dd className="font-mono">{m.skill.standard.toLowerCase()}/{m.skill.name}</dd></div>}
+          {m.skill && <div><dt className="text-muted-foreground">Contract</dt><dd className="truncate font-mono" title={m.skill.contract}>{m.skill.contract.split("/").pop()}</dd></div>}
+          {m.pack && <div><dt className="text-muted-foreground">Domain pack</dt><dd className="truncate font-mono" title={m.pack.file}>{m.pack.file}</dd></div>}
+          <div><dt className="text-muted-foreground">Code</dt><dd>{m.repos.length ? m.repos.map((r) => `${r.name} (${r.files.length} files)`).join(", ") : "No connected repository names its tables"}</dd></div>
+          <div><dt className="text-muted-foreground">Learned from</dt><dd>{m.runs.length ? `${m.runs.length} run${m.runs.length === 1 ? "" : "s"}` : "No runs yet"}</dd></div>
+        </dl>
       )}
     </section>
   );
@@ -183,7 +157,88 @@ function SourcePanel({ source, onClose, domainId }: { source: ProvenanceSource; 
   );
 }
 
-/** The Lineage tab: the source map, the coverage scorecard with gaps to close, and the build timeline. */
+function Section({ title, hint, children }: { title: string; hint?: string; children: React.ReactNode }) {
+  return (
+    <section className="surface space-y-2 p-4">
+      <div><h3 className="text-sm font-semibold">{title}</h3>{hint && <p className="text-xs text-muted-foreground">{hint}</p>}</div>
+      {children}
+    </section>
+  );
+}
+
+/** Exactly what the domain is built with: skill and contract, pack, the skills each stage loads, code, runs, people. */
+function BuiltWith({ m }: { m: DomainProvenance["manifest"] }) {
+  return (
+    <div className="grid gap-4 lg:grid-cols-2" data-testid="built-with">
+      <Section title="Skill and contract" hint="The dbt skill whose domain contract defines this domain; the domain pack is generated from it.">
+        {m.skill ? (
+          <dl className="space-y-1 text-xs">
+            <div className="flex gap-2"><dt className="w-24 text-muted-foreground">Skill</dt><dd className="font-mono">{m.skill.standard.toLowerCase()}/{m.skill.name}</dd></div>
+            <div className="flex gap-2"><dt className="w-24 text-muted-foreground">Folder</dt><dd className="font-mono">{m.skill.path}</dd></div>
+            <div className="flex gap-2"><dt className="w-24 text-muted-foreground">Contract</dt><dd className="break-all font-mono">{m.skill.contract}</dd></div>
+            {m.pack && <div className="flex gap-2"><dt className="w-24 text-muted-foreground">Domain pack</dt><dd className="break-all font-mono">{m.pack.file}{m.pack.generator ? ` (generated by ${m.pack.generator})` : ""}</dd></div>}
+            {m.pack && <div className="flex gap-2"><dt className="w-24 text-muted-foreground">From the pack</dt><dd>{m.pack.items} knowledge items{m.pack.shipped ? ", re-registered on every deploy" : ""}</dd></div>}
+          </dl>
+        ) : <p className="text-xs text-muted-foreground">Not generated from a skill contract{m.pack ? `; built from ${m.pack.file}` : ": created in the app"}.</p>}
+      </Section>
+
+      <Section title="Skills each stage loads" hint={`For the ${m.standard ?? "domain's"} standard, in order; with the versions this domain's runs actually loaded.`}>
+        {!m.stages.length ? <p className="text-xs text-muted-foreground">No stage skills are bound.</p> : (
+          <ul className="space-y-1.5 text-xs">
+            {m.stages.map((st) => (
+              <li key={st.stage} className="flex gap-2">
+                <span className="w-24 shrink-0 font-medium">{st.stage.replace(/_/g, " ").toLowerCase()}</span>
+                <span className="flex flex-wrap gap-1">
+                  {st.skills.map((k) => (
+                    <Link key={k.skill} href={`/skills/${encodeURIComponent(k.skill)}`} className="rounded bg-muted px-1.5 py-0.5 font-mono hover:text-primary"
+                          title={k.loaded.length ? k.loaded.map((l) => `v${l.version}: ${l.loads} loads in ${l.runs} runs, last ${l.last}`).join("; ") : "not loaded by this domain's runs yet"}>
+                      {k.skill}{k.loaded.length ? ` · v${k.loaded.map((l) => l.version).join(", v")}` : ""}
+                    </Link>
+                  ))}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </Section>
+
+      <Section title="Code repositories" hint="Connected repositories serving this domain, and the files that name its tables.">
+        {!m.repos.length ? <p className="text-xs text-muted-foreground">No connected repository serves this domain. Connect one in Code.</p> : (
+          <ul className="space-y-3 text-xs">
+            {m.repos.map((r) => (
+              <li key={r.name} className="space-y-1">
+                <p className="flex flex-wrap items-center gap-1.5"><GitBranch className="h-3.5 w-3.5" /><b>{r.name}</b>
+                  <span className="text-muted-foreground">{r.branch}{r.last_commit ? ` @ ${String(r.last_commit).slice(0, 10)}` : ""}{r.last_indexed_at ? ` · indexed ${r.last_indexed_at}` : ""}</span></p>
+                <p className="break-all text-muted-foreground">{r.git_url}</p>
+                {r.files.length ? (
+                  <ul className="space-y-0.5 pl-5">
+                    {r.files.map((f) => <li key={`${f.path}-${f.name}`} className="font-mono"><FileCode2 className="mr-1 inline h-3 w-3" />{f.path}<span className="text-muted-foreground"> · {String(f.kind ?? "").toLowerCase().replace(/_/g, " ")}</span></li>)}
+                  </ul>
+                ) : <p className="pl-5 text-muted-foreground">No file names this domain&apos;s tables.</p>}
+              </li>
+            ))}
+          </ul>
+        )}
+      </Section>
+
+      <Section title="Runs it learned from" hint="Approved runs whose mappings, dbt, checks and tests added knowledge to this domain.">
+        {!m.runs.length ? <p className="text-xs text-muted-foreground">No run has added knowledge yet.</p> : (
+          <ul className="divide-y divide-border/60 text-xs">
+            {m.runs.map((r) => (
+              <li key={r.run_id} className="flex items-center gap-2 py-1.5">
+                <Link href={`/runs/${r.run_id}`} className="min-w-0 flex-1 truncate font-medium hover:text-primary">{r.run_name ?? r.run_id.slice(0, 8)}</Link>
+                <span className="text-muted-foreground">{r.items} items · {r.kinds.map((k) => prettyType(k)).join(", ")}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+        {!!m.people.length && <p className="pt-1 text-xs text-muted-foreground">Written or verified by {m.people.join(", ")}</p>}
+      </Section>
+    </div>
+  );
+}
+
+/** The Lineage tab: the source map, exactly what the domain is built with, gaps to close and the build timeline. */
 export function LineageTab({ domainId, domainName }: { domainId: string; domainName: string }) {
   const { data, error } = useProvenance(domainId);
   const [selected, setSelected] = useState<string | null>(null);
@@ -192,73 +247,32 @@ export function LineageTab({ domainId, domainName }: { domainId: string; domainN
   if (error) return <p role="alert" className="rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">{error}</p>;
   if (!data) return <p className="py-8 text-center text-sm text-muted-foreground"><Loader2 className="mr-2 inline h-4 w-4 animate-spin" />Tracing where {domainName} comes from…</p>;
   const cov = data.coverage;
-  const CHECK_IDS = cov.checks.map((c) => c.id);
   return (
     <div className="space-y-4" data-testid="lineage-tab">
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
-        <div className="space-y-2">
-          <div className="flex items-baseline gap-2">
-            <h3 className="text-sm font-semibold">Where {domainName} comes from</h3>
-            <p className="text-xs text-muted-foreground">Sources on the left feed what the domain holds on the right; line width is the number of items. Click a source to see its items.</p>
-          </div>
-          <SourceMap data={data.provenance} selected={selected} onSelect={setSelected} />
+      <div className="space-y-2">
+        <div className="flex items-baseline gap-2">
+          <h3 className="text-sm font-semibold">Where {domainName} comes from</h3>
+          <p className="text-xs text-muted-foreground">Sources on the left feed what the domain holds on the right; line width is the number of items. Click a source to see its items.</p>
         </div>
-        <aside className="space-y-4">
+        <div className={cn("grid gap-4", (source || upstream) && "xl:grid-cols-[minmax(0,1fr)_360px]")}>
+          <SourceMap data={data.provenance} selected={selected} onSelect={setSelected} />
           {source && <SourcePanel source={source} domainId={domainId} onClose={() => setSelected(null)} />}
           {upstream && (
             <section className="surface space-y-1.5 p-4">
               <h3 className="text-sm font-semibold">{upstream.label}</h3>
               <p className="text-xs text-muted-foreground">{upstream.meaning}</p>
-              <p className="font-mono text-xs">{upstream.file}</p>
+              <p className="break-all font-mono text-xs">{upstream.file}</p>
             </section>
           )}
-          <section className="surface space-y-3 p-4" aria-label="Coverage">
-            <div className="flex items-center gap-3">
-              <Ring value={cov.score} size={64} />
-              <div className="text-xs">
-                <p className="text-sm font-semibold">Domain strength</p>
-                <p className="text-muted-foreground">Completeness {cov.tables_score} · Trust {cov.trust_score}</p>
-                <p className="text-muted-foreground">{cov.knowledge.verified} of {cov.knowledge.items} verified · {cov.knowledge.used_90d} used in 90 days{cov.knowledge.awaiting_review ? ` · ${cov.knowledge.awaiting_review} waiting for review` : ""}</p>
-              </div>
-            </div>
-            <ul className="space-y-1.5">
-              {cov.checks.map((c) => (
-                <li key={c.id} className="text-xs">
-                  <div className="flex"><span>{c.label}</span><span className="ml-auto tabular-nums text-muted-foreground">{c.done} of {c.of}</span></div>
-                  <div className="mt-0.5 h-1.5 rounded-full bg-muted"><div className="h-1.5 rounded-full bg-primary" style={{ width: `${c.of ? (100 * c.done) / c.of : 0}%` }} /></div>
-                </li>
-              ))}
-            </ul>
-          </section>
-        </aside>
+        </div>
       </div>
 
-      <section className="surface overflow-x-auto p-0" aria-label="Target tables coverage">
-        <table className="w-full text-xs">
-          <thead className="bg-muted/50 text-left text-[11px] uppercase tracking-wide text-muted-foreground">
-            <tr><th className="px-3 py-2">Target table</th>{cov.checks.map((c) => <th key={c.id} className="px-2 py-2 text-center">{c.label}</th>)}<th className="px-3 py-2 text-right">Score</th></tr>
-          </thead>
-          <tbody>
-            {cov.targets.map((t) => (
-              <tr key={t.fqn} className="border-t">
-                <td className="px-3 py-1.5 font-mono font-medium">{t.table}</td>
-                {CHECK_IDS.map((id) => (
-                  <td key={id} className="px-2 py-1.5 text-center">
-                    {t.checks[id] ? <Check className="mx-auto h-3.5 w-3.5 text-emerald-600" aria-label="done" />
-                      : <X className="mx-auto h-3.5 w-3.5 text-rose-500" aria-label={id === "glossary" && t.glossary_missing.length ? `missing for ${t.glossary_missing.join(", ")}` : "missing"} />}
-                  </td>
-                ))}
-                <td className="px-3 py-1.5 text-right font-semibold tabular-nums">{t.score}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </section>
+      <BuiltWith m={data.manifest} />
 
       <div className="grid gap-4 lg:grid-cols-2">
         <section className="surface space-y-2 p-4" aria-label="Gaps">
           <h3 className="flex items-center gap-1.5 text-sm font-semibold"><ShieldAlert className="h-4 w-4 text-amber-500" /> Gaps to close</h3>
-          <p className="text-xs text-muted-foreground">Each one opens the Copilot with the request ready; it drafts from the code, mappings and profiles, and you review before anything is saved.</p>
+          <p className="text-xs text-muted-foreground">What the domain is missing for its tables. Each one opens the Copilot with the request ready; it drafts from the code, mappings and profiles, and you review before anything is saved.</p>
           {!cov.actions.length ? <p className="text-xs text-muted-foreground"><Sparkles className="mr-1 inline h-3.5 w-3.5" />No gaps found.</p> : (
             <ul className="divide-y divide-border/60">
               {cov.actions.slice(0, 15).map((a, i) => (
