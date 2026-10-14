@@ -44,3 +44,53 @@ def least_advanced(states: List[str], ordinal: Dict[str, int]) -> str:
     """The state of the table run that is furthest behind (what a Gold run's list row shows)."""
     live = [s for s in states if s not in ("CANCELLED",)]
     return min(live or states, key=lambda s: ordinal.get(s, 10_000)) if states else ""
+
+
+SKIP = ("release/branch.json", "release/skills.json", "release/workspace.json")
+
+
+def _model_blocks(body: str) -> List[str]:
+    """The `  - name: x` entries of a dbt schema file's models list, each with its lines."""
+    blocks: List[str] = []
+    for line in body.strip("\n").split("\n"):
+        if line.startswith("  - name:"):
+            blocks.append(line)
+        elif blocks:
+            blocks[-1] += "\n" + line
+    return blocks
+
+
+def merge_files(children: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """{"files", "conflicts"}: every table run's generated files as one pull request (pure). Models, DDL and macros
+    keep their paths; a dimension two tables add is the same file and is kept once; the schema YAML of the domain's
+    gold folder lists every table's models; each table's Soda checks, STTM export and generation report get their
+    own path. children: [{"entity", "files": {path: text}}]."""
+    out: Dict[str, str] = {}
+    conflicts: List[str] = []
+    schema: Dict[str, List[str]] = {}
+    for child in children:
+        entity = str(child.get("entity") or "table").lower()
+        for path, text in (child.get("files") or {}).items():
+            if path in SKIP or text is None:
+                continue
+            if path == "soda/checks.yml":
+                path = f"soda/gold/{entity}.yml"
+            elif path == "mappings/sttm.json":
+                path = f"mappings/gold/{entity}.sttm.json"
+            elif path == "release/gold-generation-report.json":
+                path = f"release/gold/{entity}.report.json"
+            elif path.startswith("models/") and path.endswith(".yml") and "\nmodels:" in f"\n{text}":
+                blocks = schema.setdefault(path, [])
+                for block in _model_blocks(text.split("models:", 1)[1]):
+                    name = block.split("\n", 1)[0]
+                    if not any(b.split("\n", 1)[0] == name for b in blocks):   # a shared dimension is listed once
+                        blocks.append(block)
+                continue
+            if path in out and out[path] != text:
+                if path != "dbt_project.yml":
+                    conflicts.append(path)
+                continue
+            out[path] = text
+    for path, bodies in schema.items():
+        out[path] = "version: 2\n\nmodels:\n" + "\n".join(bodies) + "\n"
+    return {"files": out, "conflicts": sorted(set(conflicts))}

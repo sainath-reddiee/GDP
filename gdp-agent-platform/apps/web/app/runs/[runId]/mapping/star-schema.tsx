@@ -6,7 +6,7 @@ import { useRouter } from "next/navigation";
 import { Check, Eye, Loader2, Network } from "lucide-react";
 import { useAccess } from "@/components/access";
 import { cn } from "@/lib/utils";
-import { buildStarSchema, type GoldChild } from "../../../gold/actions";
+import { buildStarSchema, publishStarSchema, type GoldChild } from "../../../gold/actions";
 import { approveStage } from "../actions";
 import { startAutopilot } from "../autopilot-actions";
 
@@ -49,6 +49,13 @@ export function StarSchema({ runId, approved, items }: { runId: string; approved
     setNotes(out);
     router.refresh();
   });
+  const publish = () => start(async () => {
+    const r = await publishStarSchema(runId);
+    if (!r.ok) { setNotes([r.error]); return; }
+    const pr = r.data.pull_request?.url;
+    setNotes([pr ? `Pull request opened: ${pr}` : `${r.data.status}: ${r.data.detail ?? "see the run's audit trail"}`,
+      ...(r.data.conflicts?.length ? [`Kept once (differing copies): ${r.data.conflicts.join(", ")}`] : [])]);
+  });
   const runAll = () => start(async () => {
     const r = await startAutopilot(runId);
     setNotes([r.ok ? "Autopilot is taking every table run to its next review." : r.error]);
@@ -83,6 +90,10 @@ export function StarSchema({ runId, approved, items }: { runId: string; approved
         {waiting("STTM_REVIEW") > 0 && canAct("STTM.APPROVE") && (
           <button type="button" onClick={() => approveAll("STTM_REVIEW", "STTM_APPROVED", "STTM")} disabled={pending}
                   className="h-7 rounded-md border px-2.5 text-[11px] font-medium hover:bg-muted">Approve {waiting("STTM_REVIEW")} STTM(s)</button>
+        )}
+        {items.every((c) => (AT[c.current_state] ?? -1) >= 4) && canAct("DBT.EDIT") && (
+          <button type="button" onClick={publish} disabled={pending}
+                  className="h-7 rounded-md bg-amber-500 px-2.5 text-[11px] font-semibold text-white disabled:opacity-50">Publish one pull request</button>
         )}
         {pending && <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />}
       </div>

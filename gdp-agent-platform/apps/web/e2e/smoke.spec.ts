@@ -178,8 +178,12 @@ test("pipelines and lineage: both pipelines list runs, and the lineage explorer 
   await signIn(page);
   await page.goto("/runs");
   await expect(page.getByRole("link", { name: /New Silver run/ })).toHaveAttribute("href", "/dashboard/onboarding");
+  await expect(page.getByRole("heading", { name: "Silver Pipeline" })).toBeVisible();
+  await expect(page.getByRole("list", { name: "Silver Pipeline steps" })).toContainText("Source Ingestion");
   await page.goto("/gold");
-  await expect(page.getByRole("navigation", { name: "Pipelines" }).getByRole("link", { name: /Gold Pipeline/ })).toHaveAttribute("aria-current", "page");
+  await expect(page.getByRole("heading", { name: "Gold Pipeline" })).toBeVisible();
+  await expect(page.getByRole("list", { name: "Gold Pipeline steps" })).toContainText("Silver Selection");
+  await expect(page.getByRole("list", { name: "Gold Pipeline steps" })).toContainText("Gold code");
   await page.getByTestId("new-gold-run").click();
   await expect(page.getByRole("dialog")).toContainText("New Gold run");
   await page.keyboard.press("Escape");

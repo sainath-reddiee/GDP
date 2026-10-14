@@ -586,6 +586,8 @@ def publish_dbt_pr(session, run_id: str, payload_json: str = "{}") -> Dict[str, 
         return publish_table_model(session, payload["table_model"])
     if not run_id and isinstance(payload.get("sync_git_prs"), dict):
         return sync_git_prs(session, payload["sync_git_prs"])
+    if run_id and payload.get("star_schema"):
+        return publish_star_schema(session, run_id, payload)
     plan = _plan(session, run_id, payload) if run_id else dict(payload)
     if payload.get("check_only"):
         try:
@@ -638,3 +640,61 @@ def publish_dbt_pr(session, run_id: str, payload_json: str = "{}") -> Dict[str, 
             call.status, call.error = "FAILED", clip(exc)
     _record(session, run_id, generation_id, plan, result)
     return result
+
+
+def publish_star_schema(session, run_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    """A Gold run's star schema as one branch and one pull request: the latest generation of every table run, merged
+    (services/gold/star.merge_files). Pushed to the repository the table runs were generated for."""
+    from services.dbt.procedures import branch_slug
+    from services.gold.star import merge_files
+
+    run = rows(session, "SELECT * FROM CORE.WORKFLOW_RUN WHERE RUN_ID = ?", [run_id])
+    assert run, f"run not found: {run_id}"
+    children = rows(session, """SELECT R.RUN_ID, R.MODEL_ENTITY,
+                                       (SELECT G.GENERATION_ID FROM CODEGEN.DBT_GENERATION_REGISTRY G WHERE G.RUN_ID = R.RUN_ID
+                                         AND G.GENERATION_STATUS IN ('GENERATED', 'APPROVED')
+                                         ORDER BY G.GENERATION_VERSION DESC LIMIT 1) AS GENERATION_ID
+                                  FROM CORE.WORKFLOW_RUN R WHERE R.PARENT_RUN_ID = ? AND R.DELETED_AT IS NULL
+                                 ORDER BY R.CREATED_AT""", [run_id])
+    assert children, "build the star schema first: this Gold run has no table runs"
+    missing = [c["MODEL_ENTITY"] for c in children if not c["GENERATION_ID"]]
+    assert not missing, "generate the code of every table first: " + ", ".join(str(m) for m in missing)
+    conv = conventions_for(lambda sql, params: rows(session, sql, params), run_standard(run[0]), run_pipeline(run[0]))
+    parts = []
+    for c in children:
+        files = {r["FILE_PATH"]: r["CONTENT"] for r in rows(
+            session, "SELECT FILE_PATH, CONTENT FROM CODEGEN.GENERATED_ARTIFACT WHERE GENERATION_ID = ?", [c["GENERATION_ID"]])}
+        parts.append({"entity": c["MODEL_ENTITY"], "files": files})
+    merged = merge_files(parts)
+    plan = _plan(session, children[0]["RUN_ID"], {})   # the repository the table runs were generated for
+    name = run[0]["RUN_NAME"] or run_id
+    plan["cut_branch"] = payload.get("cut_branch") or f"{conv['branch_prefix']}{branch_slug(name, run_id)}"
+    for key in ("base_branch", "title", "draft"):
+        if payload.get(key) not in (None, ""):
+            plan[key] = payload[key]
+    tables = ", ".join(str(c["MODEL_ENTITY"]) for c in children)
+    with tool_call(session, run_id, "publish_star_schema", {"cut_branch": plan.get("cut_branch"), "tables": tables}) as call:
+        try:
+            assert plan.get("origin") or plan.get("git_repository"), "the table runs were generated without a repository"
+            result = github.publish(
+                github.urllib_request(_token()),
+                plan.get("origin") or "", plan.get("base_branch") or "main", plan["cut_branch"], merged["files"],
+                title=plan.get("title") or f"{fill(conv['pr_title'], name=name, version=len(children))}: star schema",
+                body=github.pr_body(name, run_id, sorted(merged["files"]), None)
+                     + f"\n\nStar schema: {tables}."
+                     + (f"\nDiffering copies kept once: {', '.join(merged['conflicts'])}." if merged["conflicts"] else ""),
+                message=f"{name}: gold star schema ({tables})",
+                draft=bool(plan.get("draft")),
+                root=plan.get("project_dir") or "",
+            )
+            result["tables"] = [c["MODEL_ENTITY"] for c in children]
+            result["conflicts"] = merged["conflicts"]
+            call.summary = f"{result['status']} {plan.get('cut_branch')}: PR {(result.get('pull_request') or {}).get('url') or 'none'}"
+        except Exception as exc:
+            result = {**github.explain(exc, plan.get("origin") or ""), "base_branch": plan.get("base_branch"),
+                      "head_branch": plan.get("cut_branch")}
+            result["detail"] = clip(result.get("detail"), 1000)
+            call.status, call.error = "FAILED", clip(exc)
+    _record(session, run_id, None, plan, result)
+    return result
+

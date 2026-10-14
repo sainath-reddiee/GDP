@@ -70,3 +70,8 @@ export async function buildStarSchema(runId: string) {
     return r;
   });
 }
+
+export async function publishStarSchema(runId: string) {
+  return attemptValue(() => api<{ status: string; detail?: string; pull_request?: { url?: string; number?: number } | null; tables?: string[]; conflicts?: string[] }>(
+    `/api/runs/${encodeURIComponent(runId)}/gold/publish`, { method: "POST", body: JSON.stringify({}) }));
+}

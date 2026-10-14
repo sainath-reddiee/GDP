@@ -362,3 +362,23 @@ def build_star_schema(run_id: str, db: Db = Depends(current_db)):
     return {"created": created, "errors": errors, "unsourced": layout["unsourced"], "dimensions": layout["dimensions"],
             "children": _children(db, run_id)}
 
+
+class StarPublishIn(BaseModel):
+    base_branch: Optional[str] = Field(default=None, max_length=200)
+    cut_branch: Optional[str] = Field(default=None, max_length=200)
+    draft: bool = False
+
+
+@router.post("/api/runs/{run_id}/gold/publish")
+def publish_star_schema(run_id: str, body: StarPublishIn, db: Db = Depends(current_db)):
+    """The Gold run's star schema (every table run's latest code) as one branch and one pull request."""
+    from app.main import _publish_dbt
+
+    run = _run(db, run_id)
+    if run.get("parent_run_id"):
+        raise HTTPException(400, "this is a table run; publish the star schema from its Gold run")
+    children = _children(db, run_id)
+    if not children:
+        raise HTTPException(409, "build the star schema first")
+    return _publish_dbt(db, run_id, {"star_schema": True, **body.model_dump(exclude_none=True)})
+

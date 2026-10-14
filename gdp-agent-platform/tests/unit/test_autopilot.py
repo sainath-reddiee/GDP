@@ -88,3 +88,23 @@ def test_acceleration_evidence():
     assert stages["SOURCE"]["minutes"] == 5.0 and stages["MAPPING"]["human_gate"]
     gates = acc.gates(events)
     assert gates == [{"gate": "Mapping", "state": "MAPPING_REVIEW", "passed": True, "sent_back": 1, "first_time_right": False}]
+
+
+def test_star_schema_publishes_as_one_pull_request():
+    schema_fact = "version: 2\n\nmodels:\n  - name: fact_a\n    columns:\n      - name: x\n  - name: dim_s\n    columns:\n      - name: s\n"
+    schema_bridge = "version: 2\n\nmodels:\n  - name: bridge_b\n    columns:\n      - name: y\n  - name: dim_s\n    columns:\n      - name: s\n"
+    out = star.merge_files([
+        {"entity": "FACT_A", "files": {"models/gold/d/fact_a.sql": "a", "models/gold/d/dim_s.sql": "s", "models/gold/d/_d__gold.yml": schema_fact,
+                                       "soda/checks.yml": "checks for fact_a:", "mappings/sttm.json": "{}", "dbt_project.yml": "p1",
+                                       "release/branch.json": "{}"}},
+        {"entity": "BRIDGE_B", "files": {"models/gold/d/bridge_b.sql": "b", "models/gold/d/dim_s.sql": "s", "models/gold/d/_d__gold.yml": schema_bridge,
+                                         "soda/checks.yml": "checks for bridge_b:", "dbt_project.yml": "p2"}},
+    ])
+    files = out["files"]
+    assert {"models/gold/d/fact_a.sql", "models/gold/d/bridge_b.sql", "models/gold/d/dim_s.sql", "soda/gold/fact_a.yml",
+            "soda/gold/bridge_b.yml", "mappings/gold/fact_a.sttm.json", "dbt_project.yml"} <= set(files)
+    assert "release/branch.json" not in files and files["dbt_project.yml"] == "p1" and out["conflicts"] == []
+    yml = files["models/gold/d/_d__gold.yml"]
+    assert yml.count("- name: dim_s") == 1 and "- name: fact_a" in yml and "- name: bridge_b" in yml
+    clash = star.merge_files([{"entity": "A", "files": {"models/x.sql": "1"}}, {"entity": "B", "files": {"models/x.sql": "2"}}])
+    assert clash["conflicts"] == ["models/x.sql"] and clash["files"]["models/x.sql"] == "1"
