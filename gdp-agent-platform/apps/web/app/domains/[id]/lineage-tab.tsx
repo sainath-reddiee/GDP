@@ -86,7 +86,7 @@ export function BuiltFromCard({ domainId, onOpen }: { domainId: string; onOpen: 
 /** The source map: what the domain was built from (left) feeding what it holds (right). */
 function SourceMap({ data, selected, onSelect }: { data: DomainProvenance["provenance"]; selected: string | null; onSelect: (id: string | null) => void }) {
   const left = [...data.upstream.map((u) => ({ id: u.id, label: u.label, sub: u.file.split("/").pop() ?? u.file, count: null as number | null })),
-                ...data.sources.map((s) => ({ id: s.id, label: s.label, sub: `${s.count} ${s.id === "code" ? "matches" : "items"}`, count: s.count }))];
+                ...data.sources.map((s) => ({ id: s.id, label: s.label, sub: `${s.count} ${s.id === "code" ? (s.count === 1 ? "match" : "matches") : (s.count === 1 ? "item" : "items")}`, count: s.count }))];
   const right = data.parts;
   const ROW = 52, W = 760, NODE_W = 210, top = 20;
   const height = Math.max(left.length, right.length) * ROW + top * 2;
@@ -136,7 +136,7 @@ function SourceMap({ data, selected, onSelect }: { data: DomainProvenance["prove
           <g key={p.id} transform={`translate(${W - NODE_W - 12},${ry(i) - 20})`}>
             <rect width={NODE_W} height={40} rx={10} className="fill-muted/40 stroke-border" />
             <text x={14} y={17} className="fill-foreground text-[12px] font-semibold">{p.label}</text>
-            <text x={14} y={31} className="fill-muted-foreground text-[10px]">{p.count} {p.id === "targets" ? "tables" : "items"}</text>
+            <text x={14} y={31} className="fill-muted-foreground text-[10px]">{p.count} {p.id === "targets" ? (p.count === 1 ? "table" : "tables") : (p.count === 1 ? "item" : "items")}</text>
           </g>
         ))}
       </svg>
