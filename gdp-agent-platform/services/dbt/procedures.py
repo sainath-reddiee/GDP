@@ -121,7 +121,7 @@ def _branch_plan(session, run_id: str, payload: Dict[str, Any], run_name: str) -
     run = rows(session, "SELECT * FROM CORE.WORKFLOW_RUN WHERE RUN_ID = ?", [run_id])
     standard = run_standard(run[0] if run else {})
     prefix = conventions_for(lambda sql, params: rows(session, sql, params), standard,
-                             run_pipeline(run[0] if run else {}))["branch_prefix"]
+                             run_pipeline(run[0] if run else {}), (run[0] if run else {}).get("DOMAIN_ID"))["branch_prefix"]
     return merge_branch_plan(payload or {}, _stored_plan(session, run_id), run_name, run_id, standard, prefix)
 
 
@@ -253,7 +253,7 @@ def generate_dbt(session, run_id: str, payload_json: str = "{}") -> Dict[str, An
                 },
             }
             conv = conventions_for(lambda sql, params: rows(session, sql, params), run_standard(stage.run),
-                                   run_pipeline(stage.run))
+                                   run_pipeline(stage.run), stage.run.get("DOMAIN_ID"))
             project_name = plan.get("dbt_project") or (
                 f"{scalar(session, 'SELECT CURRENT_DATABASE()')}.CODEGEN.{conv['codegen_prefix']}"
                 f"{run_id.replace('-', '')[:18]}_V{version}"

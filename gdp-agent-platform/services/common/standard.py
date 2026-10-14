@@ -158,15 +158,18 @@ def _overlay(preset: Dict[str, Any], overrides: Optional[Dict[str, Any]]) -> Non
 
 
 def conventions(standard: str, overrides: Optional[Dict[str, Any]] = None, pipeline: str = SILVER,
-                pipeline_overrides: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+                pipeline_overrides: Optional[Dict[str, Any]] = None,
+                domain_overrides: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """The standard's preset with the organisation's overrides (unknown keys ignored); for the Gold Pipeline, the gold
-    preset and its overrides on top."""
+    preset and its overrides on top; then the domain's own overrides for this layer (CONFIG.conventions for Silver,
+    CONFIG.conventions_gold for Gold), so one domain can build its code differently without changing the others."""
     std = standard if standard in PRESETS else GDP
     preset = dict(PRESETS[std])
     _overlay(preset, overrides)
     if str(pipeline or "").upper() == GOLD:
         preset.update(PIPELINE_PRESETS.get(std, {}).get(GOLD, {}))
         _overlay(preset, pipeline_overrides)
+    _overlay(preset, domain_overrides)
     preset["standard"] = std
     preset["pipeline"] = GOLD if str(pipeline or "").upper() == GOLD else SILVER
     return preset
@@ -185,12 +188,29 @@ def _config(query, key: str) -> Optional[Dict[str, Any]]:
     return value if isinstance(value, dict) else None
 
 
-def conventions_for(query, standard: str, pipeline: str = SILVER) -> Dict[str, Any]:
-    """`query(sql, params)` -> rows; reads PLATFORM_CONFIG overrides for this standard, and for the Gold Pipeline its
-    gold overrides (missing -> preset)."""
+def domain_conventions(query, domain_id: Optional[str], pipeline: str = SILVER) -> Optional[Dict[str, Any]]:
+    """A domain's own convention overrides for a layer (DOMAIN_REGISTRY.CONFIG.conventions / conventions_gold)."""
+    import json
+
+    if not domain_id:
+        return None
+    key = "conventions_gold" if str(pipeline or "").upper() == GOLD else "conventions"
+    try:
+        found = query(f"SELECT CONFIG:{key} AS V FROM KNOWLEDGE.DOMAIN_REGISTRY WHERE DOMAIN_ID = ?", [domain_id])
+        value = (found[0].get("V") if "V" in found[0] else found[0].get("v")) if found else None
+        value = json.loads(value) if isinstance(value, str) else value
+    except Exception:
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def conventions_for(query, standard: str, pipeline: str = SILVER, domain_id: Optional[str] = None) -> Dict[str, Any]:
+    """`query(sql, params)` -> rows; reads PLATFORM_CONFIG overrides for this standard, for the Gold Pipeline its gold
+    overrides, then the domain's own overrides for the layer (missing -> preset)."""
     gold = str(pipeline or "").upper() == GOLD
     return conventions(standard, _config(query, f"MODELING_STANDARD.{standard}"), pipeline,
-                       _config(query, f"MODELING_STANDARD.{standard}.GOLD") if gold else None)
+                       _config(query, f"MODELING_STANDARD.{standard}.GOLD") if gold else None,
+                       domain_conventions(query, domain_id, pipeline))
 
 
 def fill(template: str, **values: Any) -> str:

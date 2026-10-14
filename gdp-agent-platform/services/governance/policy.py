@@ -153,6 +153,7 @@ RULES: List[Tuple[str, str, Any, str]] = [
     ("POST", r"/api/(domains|domains/draft|domains/import)", "DOMAIN.EDIT", "Create or import a domain"),
     ("PUT", r"/api/domains/[^/]+/skills", "SKILL.RELEASE", "Change the skills a domain's runs load"),
     ("PUT", r"/api/domains/[^/]+/mdm", "DOMAIN.EDIT", "Change which mastered domains a domain consumes"),
+    ("PUT", r"/api/domains/[^/]+/conventions", "DOMAIN.EDIT", "Change how a domain's code is built in a layer"),
     ("POST", r"/api/gold/runs", "RUN.CREATE", "Start a Gold run on silver tables"),
     ("POST", rf"{R}/gold/propose", "MODEL.EDIT", "Propose a Gold run's gold model to the Model Workbench"),
     ("POST", rf"{R}/gold/target", "MODEL.EDIT", "Use a table of the approved gold model as a Gold run's target"),

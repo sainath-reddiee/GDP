@@ -23,7 +23,7 @@ import tempfile
 import threading
 import uuid
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import Response
@@ -55,35 +55,64 @@ def _deployed(exc: Exception) -> HTTPException:
 
 # ---------------------------------------------------------------- skills
 
+def _bindings(db: Db) -> List[dict]:
+    try:
+        return db.query("SELECT STAGE, SKILL_NAME, ENABLED, POSITION, STANDARD, COALESCE(PIPELINE, 'ANY') AS PIPELINE "
+                        "FROM KNOWLEDGE.SKILL_STAGE_BINDING")
+    except Exception:   # before V055: the built-in pipeline split
+        from services.knowledge.usage import pipeline_of_skill
+
+        return [{**b, "pipeline": pipeline_of_skill(b["skill_name"])} for b in db.query(
+            "SELECT STAGE, SKILL_NAME, ENABLED, POSITION, STANDARD FROM KNOWLEDGE.SKILL_STAGE_BINDING")]
+
+
+def _own_skills(db: Db, domain_id: str) -> List[dict]:
+    try:
+        return db.query("""SELECT STAGE, SKILL_NAME, MODE, REPLACES, POSITION, ENABLED, NOTE, COALESCE(PIPELINE, 'ANY') AS PIPELINE,
+                                  UPDATED_BY, TO_VARCHAR(UPDATED_AT, 'YYYY-MM-DD HH24:MI') AS UPDATED_AT
+                             FROM KNOWLEDGE.DOMAIN_SKILL WHERE DOMAIN_ID = %s ORDER BY STAGE, POSITION""", (domain_id,))
+    except Exception as exc:
+        if "invalid identifier" not in str(exc).lower():
+            raise
+        return [{**r, "pipeline": "ANY"} for r in db.query(
+            """SELECT STAGE, SKILL_NAME, MODE, REPLACES, POSITION, ENABLED, NOTE, UPDATED_BY,
+                      TO_VARCHAR(UPDATED_AT, 'YYYY-MM-DD HH24:MI') AS UPDATED_AT
+                 FROM KNOWLEDGE.DOMAIN_SKILL WHERE DOMAIN_ID = %s ORDER BY STAGE, POSITION""", (domain_id,))]
+
+
 @router.get("/api/domains/{domain_id}/skills")
-def domain_skills(domain_id: str, db: Db = Depends(current_db)):
-    """Per stage: the skills the standard binds, the domain's own, and what the domain's runs load."""
-    from services.knowledge.skills import bound, with_domain
-    from services.knowledge.usage import GDP_ONLY_SKILLS, STAGE_SKILLS
+def domain_skills(domain_id: str, pipeline: Literal["SILVER", "GOLD"] = "SILVER", db: Db = Depends(current_db)):
+    """Per stage, for one pipeline (layer): the skills the platform binds, the domain's own (shared, or this layer's
+    only), the post-MDM skill its MDM role adds, and what the domain's runs of this layer load."""
+    from services.knowledge.skills import bound, domain_mdm_role, in_pipeline, mdm_rows, with_domain
+    from services.knowledge.usage import stage_skills as built_in
 
     detail = domain_detail(domain_id, db)
     standard = next((r.get("standard") for r in db.query("SELECT CONFIG:standard::STRING AS STANDARD FROM KNOWLEDGE.DOMAIN_REGISTRY "
                                                        "WHERE DOMAIN_ID = %s", (domain_id,))), None) or "GENERIC"
-    bindings = db.query("SELECT STAGE, SKILL_NAME, ENABLED, POSITION, STANDARD FROM KNOWLEDGE.SKILL_STAGE_BINDING")
+    bindings = _bindings(db)
     deployed = True
     try:
-        own = db.query("""SELECT STAGE, SKILL_NAME, MODE, REPLACES, POSITION, ENABLED, NOTE, UPDATED_BY,
-                                 TO_VARCHAR(UPDATED_AT, 'YYYY-MM-DD HH24:MI') AS UPDATED_AT
-                            FROM KNOWLEDGE.DOMAIN_SKILL WHERE DOMAIN_ID = %s ORDER BY STAGE, POSITION""", (domain_id,))
+        own = _own_skills(db, domain_id)
     except Exception as exc:
         if not _missing(exc):
             raise _snowflake_error(exc) from exc
         own, deployed = [], False
+    role = invoke_source(db, domain_mdm_role, domain_id) if deployed else None
     available = db.query("""SELECT SKILL_NAME, ANY_VALUE(DESCRIPTION) AS DESCRIPTION, MAX(VERSION) AS VERSION
                               FROM KNOWLEDGE.SKILL_REGISTRY WHERE STATUS = 'ACTIVE' GROUP BY 1 ORDER BY 1""")
     std = str(standard).upper()
+    from_mdm = mdm_rows(role, std, pipeline)
     stages = []
     for stage in STAGES:
-        fallback = [n for n in STAGE_SKILLS.get(stage, []) if std == "GDP" or n not in GDP_ONLY_SKILLS]
-        base = bound(bindings, stage, std, fallback)
-        mine = [r for r in own if str(r["stage"]).upper() == stage]
-        stages.append({"stage": stage, "standard_skills": base, "domain_skills": mine, "effective": with_domain(base, mine, stage)})
-    return {"domain": detail["domain"], "standard": std, "stages": stages, "deployed": deployed,
+        base = bound(bindings, stage, std, built_in(stage, std, pipeline), pipeline)
+        mine = [r for r in own if str(r["stage"]).upper() == stage and in_pipeline(r.get("pipeline"), pipeline)]
+        mdm = [r for r in from_mdm if r["stage"] == stage]
+        stages.append({"stage": stage, "standard_skills": base, "domain_skills": mine, "mdm_skills": mdm,
+                       "effective": with_domain(base, mine + mdm, stage, pipeline)})
+    other = [r for r in own if not in_pipeline(r.get("pipeline"), pipeline)]
+    return {"domain": detail["domain"], "standard": std, "pipeline": pipeline, "mdm_role": role, "stages": stages,
+            "deployed": deployed, "other_layer": len(other),
             "available": [{"name": a["skill_name"], "description": (a.get("description") or "")[:300], "version": a.get("version")}
                           for a in available]}
 
@@ -96,6 +125,7 @@ class DomainSkillIn(BaseModel):
     position: int = Field(default=100, ge=0, le=10000)
     enabled: bool = True
     note: Optional[str] = Field(default=None, max_length=2000)
+    pipeline: Literal["ANY", "SILVER", "GOLD"] = "ANY"   # both layers, or this layer's runs only
 
 
 class DomainSkillsIn(BaseModel):
@@ -103,9 +133,18 @@ class DomainSkillsIn(BaseModel):
 
 
 @router.put("/api/domains/{domain_id}/skills")
-def set_domain_skills(domain_id: str, body: DomainSkillsIn, db: Db = Depends(current_db)):
-    """Replace the domain's skills (what its runs load at each stage, on top of the stage's bound skills)."""
+def set_domain_skills(domain_id: str, body: DomainSkillsIn, pipeline: Literal["SILVER", "GOLD"] = "SILVER",
+                      db: Db = Depends(current_db)):
+    """Replace the domain's skills as one layer sees them (what its runs load at each stage, on top of the stage's
+    bound skills): the shared rows and this layer's rows; the other layer's own rows are kept as they are."""
+    from app.main import _domain_snapshot
+
     domain_detail(domain_id, db)
+    try:
+        kept = [r for r in _own_skills(db, domain_id) if str(r.get("pipeline") or "ANY").upper() not in ("ANY", pipeline)]
+    except Exception:
+        kept = []
+    kept_keys = {(str(r["stage"]).upper(), str(r["skill_name"]).upper()) for r in kept}
     known = {str(r["skill_name"]).upper() for r in db.query("SELECT DISTINCT SKILL_NAME FROM KNOWLEDGE.SKILL_REGISTRY WHERE STATUS <> 'RETIRED'")}
     seen = set()
     for s in body.skills:
@@ -118,17 +157,28 @@ def set_domain_skills(domain_id: str, body: DomainSkillsIn, db: Db = Depends(cur
             raise HTTPException(400, f"{s.skill_name}: say which stage skill it replaces")
         if (stage, s.skill_name.upper()) in seen:
             raise HTTPException(400, f"{s.skill_name} is listed twice for {stage}")
+        if (stage, s.skill_name.upper()) in kept_keys:
+            raise HTTPException(409, f"{s.skill_name} is already set for {stage} in the other layer; change it there")
+        if s.pipeline not in ("ANY", pipeline):
+            raise HTTPException(400, f"{s.skill_name}: from the {pipeline.title()} view a skill is for both layers or this one")
         seen.add((stage, s.skill_name.upper()))
     try:
         with transaction(db):   # replace the set together: never half of it
-            db.execute("DELETE FROM KNOWLEDGE.DOMAIN_SKILL WHERE DOMAIN_ID = %s", (domain_id,))
+            db.execute("DELETE FROM KNOWLEDGE.DOMAIN_SKILL WHERE DOMAIN_ID = %s AND COALESCE(PIPELINE, 'ANY') IN ('ANY', %s)",
+                       (domain_id, pipeline))
             for s in body.skills:
-                db.execute("""INSERT INTO KNOWLEDGE.DOMAIN_SKILL (DOMAIN_ID, STAGE, SKILL_NAME, MODE, REPLACES, POSITION, ENABLED, NOTE)
-                              SELECT %s, %s, %s, %s, NULLIF(%s, ''), %s, %s, NULLIF(%s, '')""",
-                           (domain_id, s.stage.upper(), s.skill_name, s.mode, s.replaces or "", s.position, s.enabled, s.note or ""))
+                db.execute("""INSERT INTO KNOWLEDGE.DOMAIN_SKILL (DOMAIN_ID, STAGE, SKILL_NAME, MODE, REPLACES, POSITION, ENABLED, NOTE,
+                                                                  PIPELINE)
+                              SELECT %s, %s, %s, %s, NULLIF(%s, ''), %s, %s, NULLIF(%s, ''), %s""",
+                           (domain_id, s.stage.upper(), s.skill_name, s.mode, s.replaces or "", s.position, s.enabled, s.note or "",
+                            s.pipeline))
     except Exception as exc:
         raise _deployed(exc) from exc
-    return domain_skills(domain_id, db)
+    try:
+        _domain_snapshot(db, domain_id, "SKILLS", f"{pipeline.title()} layer skills changed")
+    except Exception:
+        pass   # the skills are saved; the version entry is a convenience
+    return domain_skills(domain_id, pipeline, db)
 
 
 # ---------------------------------------------------------------- documents

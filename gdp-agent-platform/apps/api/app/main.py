@@ -2206,18 +2206,28 @@ def domains(db: Db = Depends(current_db)):
 
 
 def _domains(db: Db) -> dict:
-    return {"domains": db.query(
-        """
+    base = """
         SELECT D.DOMAIN_ID, D.DOMAIN_NAME, D.DESCRIPTION, D.OWNER, D.ACTIVE_FLAG, D.VERSION,
                D.CONFIG:standard::VARCHAR AS STANDARD,
                (SELECT COUNT(*) FROM KNOWLEDGE.DOMAIN_KNOWLEDGE K
-                 WHERE K.DOMAIN_ID = D.DOMAIN_ID AND K.IS_CURRENT) AS KNOWLEDGE_ITEMS,
-               (SELECT COUNT(*) FROM KNOWLEDGE.TARGET_TABLE_REGISTRY T
-                 WHERE T.DOMAIN_ID = D.DOMAIN_ID AND T.ACTIVE_FLAG) AS TARGET_TABLES
+                 WHERE K.DOMAIN_ID = D.DOMAIN_ID AND K.IS_CURRENT) AS KNOWLEDGE_ITEMS{extra}
           FROM KNOWLEDGE.DOMAIN_REGISTRY D
          ORDER BY D.DOMAIN_NAME
         """
-    )}
+    try:   # each layer counted on its own, and the domain's place in MDM (mastered by Reltio, or consuming)
+        return {"domains": db.query(base.format(extra=""",
+               (SELECT COUNT(*) FROM KNOWLEDGE.TARGET_TABLE_REGISTRY T
+                 WHERE T.DOMAIN_ID = D.DOMAIN_ID AND T.ACTIVE_FLAG AND COALESCE(T.LAYER, 'SILVER') = 'SILVER') AS TARGET_TABLES,
+               (SELECT COUNT(*) FROM KNOWLEDGE.TARGET_TABLE_REGISTRY T
+                 WHERE T.DOMAIN_ID = D.DOMAIN_ID AND T.ACTIVE_FLAG AND T.LAYER = 'GOLD') AS GOLD_TABLES,
+               D.CONFIG:mdm:role::VARCHAR AS MDM_ROLE,
+               ARRAY_TO_STRING(TRANSFORM(COALESCE(D.CONFIG:mdm:consumes, ARRAY_CONSTRUCT()), c -> c:domain::VARCHAR), ',') AS CONSUMES,
+               (SELECT MAX(M.APPROVED_VERSION) FROM GOVERNANCE.DOMAIN_MODEL M
+                 WHERE M.DOMAIN_ID = D.DOMAIN_ID AND M.LAYER = 'GOLD') AS GOLD_MODEL_VERSION"""))}
+    except Exception:   # before V054
+        return {"domains": db.query(base.format(extra=""",
+               (SELECT COUNT(*) FROM KNOWLEDGE.TARGET_TABLE_REGISTRY T
+                 WHERE T.DOMAIN_ID = D.DOMAIN_ID AND T.ACTIVE_FLAG) AS TARGET_TABLES"""))}
 
 
 @app.post("/api/admin/apply")
@@ -3641,7 +3651,7 @@ def _dbt_setup(db: Db, run_id: str) -> dict:
     repo, candidates, legacy = _dbt_repo(db, run[0].get("domain_id"), plan)
     try:
         prefix = conventions_for(lambda sql, params: db.query(sql.replace("?", "%s"), tuple(params)),
-                                 run_standard(run[0]), run_pipeline(run[0]))["branch_prefix"]
+                                 run_standard(run[0]), run_pipeline(run[0]), run[0].get("domain_id"))["branch_prefix"]
     except Exception:
         prefix = "feat/onboard-"
     return {"repository": repo, "candidates": candidates, "legacy": legacy,
@@ -6703,3 +6713,6 @@ app.include_router(pipelines_router)
 from app.autopilot_api import router as autopilot_router  # noqa: E402
 
 app.include_router(autopilot_router)
+from app.domain_playbook_api import router as domain_playbook_router  # noqa: E402
+
+app.include_router(domain_playbook_router)

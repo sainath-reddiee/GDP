@@ -31,7 +31,7 @@ router = APIRouter()
 FROM = "FROM KNOWLEDGE.DOMAIN_KNOWLEDGE K JOIN KNOWLEDGE.DOMAIN_REGISTRY D ON D.DOMAIN_ID = K.DOMAIN_ID"
 FEED_COLS = """K.KNOWLEDGE_ID, K.LINEAGE_ID, K.TITLE, K.KNOWLEDGE_TYPE, K.ORIGIN, K.SOURCE_RUN_ID, R.RUN_NAME, K.VERSION,
                K.STATUS, K.IS_CURRENT, K.CREATED_BY, K.CREATED_AT::VARCHAR AS CREATED_AT, D.DOMAIN_NAME, K.CHANGE_NOTE,
-               K.SOURCE_REFERENCE"""
+               K.SOURCE_REFERENCE, COALESCE(K.LAYER, 'ANY') AS LAYER"""
 STALE_DAYS = 180
 
 
@@ -78,9 +78,12 @@ def overview(domain_id: Optional[str] = None, db: Db = Depends(current_db)):
 
 @router.get("/api/knowledge/feed")
 def feed(domain_id: Optional[str] = None, origin: Optional[str] = None, limit: int = 50, offset: int = 0,
-         db: Db = Depends(current_db)):
-    """Every version written, newest first: what was learned, from which run, and whether it is in use."""
+         layer: Optional[str] = None, db: Db = Depends(current_db)):
+    """Every version written, newest first: what was learned, from which run, whether it is in use, and which
+    pipeline's runs use it (layer: SILVER or GOLD shows that layer's and the shared items)."""
     where, params = ["TRUE"], []
+    if layer and str(layer).upper() in ("SILVER", "GOLD"):
+        where.append("COALESCE(K.LAYER, 'ANY') IN ('ANY', %s)"); params.append(str(layer).upper())
     if domain_id:
         where.append("K.DOMAIN_ID = %s"); params.append(domain_id)
     if origin:

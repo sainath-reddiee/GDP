@@ -46,7 +46,7 @@ def load_inputs(query: Query, run_id: str, plan: Dict[str, Any], sttm: Dict[str,
                      WHERE R.RUN_ID = ?""", [run_id]) or [{}])[0]
     design = sttm.get("table_design") or {}
     standard = run_standard(run)
-    conv = conventions_for(query, standard)
+    conv = conventions_for(query, standard, "SILVER", run.get("DOMAIN_ID"))
     target = design.get("target_table") or str(run.get("TARGET_MODEL") or "target").split(".")[-1]
     landed = query("""SELECT SOURCE_TABLE, LANDING_TABLE, LANDING_DATABASE, LANDING_SCHEMA
                         FROM SOURCE.LANDING_TABLE_REGISTRY

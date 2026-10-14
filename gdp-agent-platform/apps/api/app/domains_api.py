@@ -5,7 +5,7 @@ stewards, the domain's own rules, and what the domain cards show. Snapshots come
 from __future__ import annotations
 
 import json
-from typing import Literal, Optional
+from typing import Any, Dict, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -177,14 +177,20 @@ def set_members(domain_id: str, body: Members, db: Db = Depends(current_db)):
 
 
 @router.get("/api/domains/{domain_id}/rules")
-def domain_rules(domain_id: str, db: Db = Depends(current_db)):
-    """What a domain overrides, and the platform value it overrides (readable by anyone who can see the domain)."""
+def domain_rules(domain_id: str, pipeline: str = "SILVER", db: Db = Depends(current_db)):
+    """What a domain overrides for a layer, and the value it overrides (readable by anyone who can see the domain).
+    For the Gold layer: the gold overrides (rules_gold) over the domain's Silver values."""
     from services.common.rules import DEFAULTS
 
+    gold = str(pipeline).upper() == "GOLD"
     row = _domain(db, domain_id)
+    if gold:
+        return {"defaults": DEFAULTS, "pipeline": "GOLD", "platform": _rules(db, None, "GOLD"),
+                "base": _rules(db, domain_id, "SILVER"), "effective": _rules(db, domain_id, "GOLD"),
+                "overrides": (row["config"].get("rules_gold") or {})}
     platform = _rules(db, None)
     effective = _rules(db, domain_id)
-    return {"defaults": DEFAULTS, "platform": platform, "effective": effective,
+    return {"defaults": DEFAULTS, "pipeline": "SILVER", "platform": platform, "base": platform, "effective": effective,
             "overrides": (row["config"].get("rules") or {})}
 
 
@@ -195,3 +201,51 @@ def target_columns(domain_id: str, db: Db = Depends(current_db)):
     if snap is None:
         raise HTTPException(404, "domain not found")
     return {"targets": snap["targets"]}
+
+
+# ---------------------------------------------------------------- conventions per layer (how the code is built)
+
+def _conv_query(db: Db):
+    return lambda sql, params: db.query(sql.replace("?", "%s"), tuple(params))
+
+
+@router.get("/api/domains/{domain_id}/conventions")
+def domain_conventions_get(domain_id: str, pipeline: str = "SILVER", db: Db = Depends(current_db)):
+    """How this domain's code is built in a layer: the platform's conventions for its standard and layer (Admin,
+    Standards), the domain's own overrides, and the result its runs use."""
+    from services.common.standard import conventions_for, normalize_standard
+
+    gold = str(pipeline).upper() == "GOLD"
+    row = _domain(db, domain_id)
+    standard = normalize_standard(row["config"].get("standard")) or "GDP"
+    platform = conventions_for(_conv_query(db), standard, "GOLD" if gold else "SILVER")
+    overrides = row["config"].get("conventions_gold" if gold else "conventions") or {}
+    return {"pipeline": "GOLD" if gold else "SILVER", "standard": standard, "platform": platform, "overrides": overrides,
+            "effective": conventions_for(_conv_query(db), standard, "GOLD" if gold else "SILVER", domain_id)}
+
+
+class ConventionsIn(BaseModel):
+    overrides: Dict[str, Any] = Field(default_factory=dict)
+    note: Optional[str] = Field(default=None, max_length=500)
+
+
+@router.put("/api/domains/{domain_id}/conventions")
+def domain_conventions_put(domain_id: str, body: ConventionsIn, pipeline: str = "SILVER", db: Db = Depends(current_db)):
+    """Set the domain's convention overrides for a layer (known keys of the right type only); versioned."""
+    gold = str(pipeline).upper() == "GOLD"
+    current = domain_conventions_get(domain_id, "GOLD" if gold else "SILVER", db)
+    preset = current["platform"]
+    problems = [f"unknown convention {k}" for k in body.overrides if k not in preset or k in ("standard", "pipeline")]
+    problems += [f"{k} must be a {type(preset[k]).__name__}" for k, v in body.overrides.items()
+                 if k in preset and v is not None and not isinstance(v, type(preset[k]))]
+    if problems:
+        raise HTTPException(400, "; ".join(problems))
+    clean = {k: v for k, v in body.overrides.items() if v is not None and v != preset.get(k)}
+    key = "conventions_gold" if gold else "conventions"
+    db.execute("""UPDATE KNOWLEDGE.DOMAIN_REGISTRY
+                     SET CONFIG = OBJECT_INSERT(COALESCE(CONFIG, OBJECT_CONSTRUCT()), %s, PARSE_JSON(%s), TRUE)
+                   WHERE DOMAIN_ID = %s""", (key, json.dumps(clean), domain_id))
+    _domain_caches_changed()
+    _domain_snapshot(db, domain_id, "EDIT", body.note or f"{'Gold' if gold else 'Silver'} layer conventions changed")
+    return domain_conventions_get(domain_id, "GOLD" if gold else "SILVER", db)
+

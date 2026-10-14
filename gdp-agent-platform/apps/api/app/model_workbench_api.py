@@ -71,9 +71,11 @@ def _missing(exc: Exception) -> bool:
 
 
 @router.get("/api/hub/domain-models")
-def list_models(db: Db = Depends(current_db)):
+def list_models(layer: str = "SILVER", db: Db = Depends(current_db)):
+    """The domains' models of one layer: SILVER (what Silver runs map into) or GOLD (the star schemas Gold runs build)."""
+    layer = "GOLD" if str(layer).upper() == "GOLD" else "SILVER"
     try:
-        return {"models": invoke_source(db, _svc().list_models), "deployed": True}
+        return {"models": invoke_source(db, _svc().list_models, layer), "deployed": True, "layer": layer}
     except Exception as exc:
         if _missing(exc):
             return {"models": [], "deployed": False}
