@@ -65,7 +65,7 @@ def pack_rows(pack: Dict[str, Any], database: str, live: Optional[LiveColumns] =
     did = existing_id or domain_id(name)
     is_gdp = name == "GDP"
     config = {k: meta[k] for k in ("silver_database", "silver_schema", "contract", "signals", "source_systems",
-                                   "origin") if k in meta}
+                                   "origin", "mdm") if k in meta}
     standard = normalize_standard(meta.get("standard")) or GENERIC
     config["standard"] = standard
     domains.append((did, name, meta["description"], meta["owner"], True, 1, config))
@@ -101,7 +101,7 @@ def pack_rows(pack: Dict[str, Any], database: str, live: Optional[LiveColumns] =
 
 
 # Domain config keys a pack owns. Every other key (rules, deletion markers, ...) is the app's and never touched.
-PACK_CONFIG_KEYS = ("silver_database", "silver_schema", "contract", "signals", "source_systems", "origin", "standard")
+PACK_CONFIG_KEYS = ("silver_database", "silver_schema", "contract", "signals", "source_systems", "origin", "standard", "mdm")
 SEEDED = "seeded"  # CONFIG.seeded: what the last deploy wrote, so a later deploy can tell edits from pack values
 
 

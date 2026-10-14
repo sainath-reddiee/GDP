@@ -152,6 +152,7 @@ RULES: List[Tuple[str, str, Any, str]] = [
     ("POST", r"/api/costs/reconcile", "CONFIG.EDIT", "Reconcile AI cost"),
     ("POST", r"/api/(domains|domains/draft|domains/import)", "DOMAIN.EDIT", "Create or import a domain"),
     ("PUT", r"/api/domains/[^/]+/skills", "SKILL.RELEASE", "Change the skills a domain's runs load"),
+    ("PUT", r"/api/domains/[^/]+/mdm", "DOMAIN.EDIT", "Change which mastered domains a domain consumes"),
     ("POST", r"/api/domains/[^/]+/documents/(confluence|upload|[^/]+/refresh|[^/]+/remove)", "KNOWLEDGE.EDIT",
      "Link, upload or refresh a domain document"),
     ("POST", r"/api/domains/[^/]+/examples/[^/]+", "KNOWLEDGE.EDIT", "Upload correct-output examples of a table"),

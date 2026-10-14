@@ -239,10 +239,37 @@ def domain_skill_rows(session, domain_id: Optional[str]) -> List[Dict[str, Any]]
     return [{k.lower(): v for k, v in r.items()} for r in found]
 
 
+MDM_SKILL = "GDP-POST-MDM-DATA-MODEL"
+MDM_STAGES = ("MAPPING", "STTM", "DBT")
+
+
+def mdm_rows(role: Optional[str], standard: str = "GDP") -> List[Dict[str, Any]]:
+    """Domain skill rows a domain gets from its MDM contract (pure): a GDP domain that Reltio masters, or that consumes
+    a mastered domain, loads the post-MDM skill when its runs map, write the STTM and generate code, so the pre-MDM
+    skey lookups and the resolution rules are in front of the model."""
+    if str(role or "").upper() not in ("MASTERED", "CONSUMER") or str(standard or "").upper() != "GDP":
+        return []
+    return [{"stage": s, "skill_name": MDM_SKILL, "mode": "ADD", "replaces": None, "position": 900, "enabled": True,
+             "origin": "MDM"} for s in MDM_STAGES]
+
+
+def domain_mdm_role(session, domain_id: Optional[str]) -> Optional[str]:
+    """MASTERED, CONSUMER or None, from the domain's MDM contract (CONFIG.mdm)."""
+    from services.common.sql import scalar
+
+    if not domain_id:
+        return None
+    try:
+        return scalar(session, "SELECT CONFIG:mdm:role::STRING FROM KNOWLEDGE.DOMAIN_REGISTRY WHERE DOMAIN_ID = ?", [domain_id])
+    except Exception:
+        return None
+
+
 def stage_skills(session, stage: str, standard: str = "GDP", domain_id: Optional[str] = None) -> List[str]:
     """Bound skills for a stage (falls back to the built-in map before any binding exists), with the domain's own
-    skills applied when the run has a domain."""
-    return with_domain(_stage_bound(session, stage, standard), domain_skill_rows(session, domain_id), stage)
+    skills applied when the run has a domain, and the post-MDM skill when the domain has an MDM contract."""
+    rows_ = domain_skill_rows(session, domain_id) + mdm_rows(domain_mdm_role(session, domain_id), standard)
+    return with_domain(_stage_bound(session, stage, standard), rows_, stage)
 
 
 def _stage_bound(session, stage: str, standard: str = "GDP") -> List[str]:

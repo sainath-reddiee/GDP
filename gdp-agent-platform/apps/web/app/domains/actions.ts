@@ -298,3 +298,29 @@ export type DocumentReview = {
 export async function documentReview(domainId: string, sourceId: string) {
   return attemptValue(() => api<DocumentReview>(`/api/domains/${encodeURIComponent(domainId)}/documents/${encodeURIComponent(sourceId)}/review`));
 }
+
+/** Where the domain sits in the medallion: mastered by Reltio, a consumer of mastered domains, or not linked. */
+export type MdmHop = { layer: "SILVER_PRE_MDM" | "MDM" | "SILVER_POST_MDM" | "GOLD"; object: string; key: string[]; kind?: string; cardinality?: string; skey?: string };
+export type DomainMdm = {
+  domain: { domain_id: string; domain_name: string }; role: "MASTERED" | "CONSUMER" | null; env: string; rules: number;
+  mastered_domains: { domain_id: string; domain_name: string; silver_column: string | null; gold_column: string | null }[];
+  contract?: Record<string, unknown>; chain?: MdmHop[];
+  sql?: { resolution: string; coverage: string };
+  consumers?: { domain_id: string; domain_name: string; via: { silver_column: string; gold_column: string }[] }[];
+  consumes?: { domain: string; silver_column: string; gold_column: string; domain_id: string | null; known: boolean; chain?: MdmHop[];
+               gold?: { schema: string; dimension: string; skey: string; mastered_id: string } }[];
+};
+export type MdmCoverage = { sources: { source_system: string; records: number; matched: number; matched_pct: number | null }[];
+  records: number; matched: number; matched_pct: number | null; sql: string };
+export async function domainMdm(domainId: string) {
+  return attemptValue(() => api<DomainMdm>(`/api/domains/${encodeURIComponent(domainId)}/mdm`));
+}
+export async function domainMdmCoverage(domainId: string) {
+  return attemptValue(() => api<MdmCoverage>(`/api/domains/${encodeURIComponent(domainId)}/mdm/coverage`));
+}
+export async function saveDomainMdm(domainId: string, consumes: { domain: string; silver_column: string; gold_column: string }[]) {
+  const r = await attemptValue(() => api<DomainMdm>(`/api/domains/${encodeURIComponent(domainId)}/mdm`,
+    { method: "PUT", body: JSON.stringify({ consumes }) }));
+  revalidatePath(`/domains/${domainId}`);
+  return r;
+}

@@ -1,0 +1,7 @@
+{
+  "role": "CONSUMER",
+  "reference": "snowflake/skills/gdp/post-mdm-data-model/references/consumers-and-repoint.md (opportunity: tnt_opportunity_core carries COMPANY_CORE_SKEY; fact_opportunity resolves DIM_COMPANY_SKEY with pattern A)",
+  "consumes": [
+    {"domain": "COMPANY", "silver_column": "COMPANY_CORE_SKEY", "gold_column": "DIM_COMPANY_SKEY"}
+  ]
+}

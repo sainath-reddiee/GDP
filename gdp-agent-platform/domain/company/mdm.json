@@ -1,0 +1,97 @@
+{
+  "role": "MASTERED",
+  "mastered_by": "Reltio",
+  "reference": "snowflake/skills/gdp/post-mdm-data-model (SKILL.md section 2, references/company-mdm.md, references/canonical-sql.md section 1)",
+  "pre_mdm": {
+    "database": "{ENV}_GDP_SILVER_DB",
+    "schema": "COMPANY",
+    "table": "COMPANY_CORE",
+    "skey": "COMPANY_CORE_SKEY",
+    "source_key": "SOURCE_UNIQUE_ID",
+    "source_system_skey": "REF_GDP_SOURCE_SYSTEM_SKEY",
+    "active_column": "GDP_IS_ACTIVE"
+  },
+  "source_systems": {
+    "database": "{ENV}_GDP_SILVER_DB",
+    "schema": "SHARED",
+    "table": "REF_GDP_SOURCE_SYSTEM",
+    "skey": "GDP_SOURCE_SYSTEM_SKEY",
+    "name": "GDP_SOURCE_SYSTEM_NAME"
+  },
+  "cross_reference": {
+    "database": "{ENV}_GDP_SILVER_DB",
+    "schema": "COMPANY_MDM",
+    "table": "COMPANY_CROSS_REFERENCE",
+    "source_key": "SOURCE_UNIQUE_ID",
+    "system_name": "SOURCE_SYSTEM_NAME",
+    "mastered_id": "CBRE_ENTERPRISE_COMPANY_ID",
+    "entity_id": "MDM_ENTITY_ID",
+    "active_column": "GDP_IS_ACTIVE",
+    "deleted_column": "MDM_DELETED_DATE",
+    "status_column": "MDM_STATUS",
+    "exclude_systems": ["Reltio", "ReltioGrouping"],
+    "latest_order": ["GDP_UPDATED_TS DESC NULLS LAST", "CBRE_ENTERPRISE_COMPANY_ID"],
+    "cardinality": "N:1"
+  },
+  "golden": {
+    "database": "{ENV}_GDP_SILVER_DB",
+    "schema": "COMPANY_MDM",
+    "table": "COMPANY_CORE",
+    "mastered_id": "CBRE_ENTERPRISE_COMPANY_ID",
+    "entity_id": "MDM_ENTITY_ID",
+    "version_order": ["MDM_POST_MDM_LUD DESC NULLS LAST", "MDM_UPDATED_TS DESC NULLS LAST"],
+    "related": ["COMPANY_HIERARCHY", "COMPANY_INDUSTRY", "COMPANY_ADDRESS_REL", "COMPANY_ENTITY_EVENTS_AUDIT", "COMPANY_MERGE"]
+  },
+  "gold": {
+    "database": "{ENV}_GDP_GOLD_COMPANY_DB",
+    "schema": "COMPANY",
+    "dimension": "DIM_COMPANY",
+    "skey": "DIM_COMPANY_SKEY",
+    "mastered_id": "CBRE_ENTERPRISE_COMPANY_ID",
+    "sequence": "SEQ_DIM_COMPANY_SKEY",
+    "active_column": "GDP_IS_ACTIVE",
+    "children": ["DIM_COMPANY_INDUSTRY", "DIM_COMPANY_ALTERNATE_ADDRESS"],
+    "dbt_ref": "dim_company",
+    "unresolved": -1
+  },
+  "dbt_sources": {
+    "cross_reference": ["company_mdm_source", "company_cross_reference"],
+    "pre_mdm": "company_core",
+    "source_systems": ["silver_shared", "ref_gdp_source_system"]
+  },
+  "watermark": {
+    "table": "{ENV}_GDP_UTIL_DB.CONFIG.GDP_DBT_WATERMARK_TBL",
+    "source_system": "RELTIO",
+    "source_model": "COMPANY_CORE_MDM",
+    "target_model": "DIM_COMPANY"
+  },
+  "knowledge": [
+    {"key": "company.mdm.rule.match_id_and_system", "type": "EXCEPTION", "title": "Match a company source record to its mastered id on id and source system",
+     "content": "Resolve COMPANY_CORE to COMPANY_CROSS_REFERENCE on SOURCE_UNIQUE_ID and UPPER(REF_GDP_SOURCE_SYSTEM.GDP_SOURCE_SYSTEM_NAME) = UPPER(SOURCE_SYSTEM_NAME). Matching on SOURCE_UNIQUE_ID alone attaches records to the wrong company, because ids collide across sources.",
+     "content_json": {"target_table": "COMPANY_CROSS_REFERENCE"}},
+    {"key": "company.mdm.rule.full_xref", "type": "EXCEPTION", "title": "Resolve companies through the full cross-reference, never the delta",
+     "content": "Use COMPANY_MDM.COMPANY_CROSS_REFERENCE for resolution. STAGE.COMPANY_CROSS_REFERENCE_ENTITY_ID holds only the companies changed in the current run, so resolving through it sets DIM_COMPANY_SKEY to -1 for every record whose company did not change.",
+     "content_json": {"target_table": "COMPANY_CROSS_REFERENCE"}},
+    {"key": "company.mdm.rule.exclude_internal", "type": "EXCEPTION", "title": "Exclude Reltio-internal cross-reference rows",
+     "content": "Cross-reference rows with SOURCE_SYSTEM_NAME 'Reltio' or 'ReltioGrouping' are internal to MDM (about 40M of 61M rows). Exclude them from lineage, coverage and resolution.",
+     "content_json": {"target_table": "COMPANY_CROSS_REFERENCE"}},
+    {"key": "company.mdm.rule.active_and_latest", "type": "EXCEPTION", "title": "Use active, latest cross-reference rows and active dimension rows",
+     "content": "Filter COMPANY_CROSS_REFERENCE on GDP_IS_ACTIVE (deleted rows have MDM_DELETED_DATE set or MDM_STATUS 'INACTIVE'), keep the latest row per SOURCE_UNIQUE_ID and SOURCE_SYSTEM_NAME, and read DIM_COMPANY where GDP_IS_ACTIVE with the lowest DIM_COMPANY_SKEY per CBRE_ENTERPRISE_COMPANY_ID. Reading DIM_COMPANY without the active filter attaches records to merged-away companies.",
+     "content_json": {"target_table": "DIM_COMPANY"}},
+    {"key": "company.mdm.rule.unresolved", "type": "EXCEPTION", "title": "-1 means unresolved, at two different layers",
+     "content": "A silver COMPANY_CORE_SKEY of -1 means no pre-MDM match; a gold DIM_COMPANY_SKEY of -1 means no MDM or dimension match. Diagnose layer by layer: silver, cross-reference, gold dimension, consumer.",
+     "content_json": {"target_table": "DIM_COMPANY"}},
+    {"key": "company.mdm.rule.pdl", "type": "EXCEPTION", "title": "PDL companies resolve through a name crosswalk, not MDM",
+     "content": "PDL company records do not reach Reltio (0% match); they resolve through SILVER.COMPANY.PDL_COMPANY_DIM_XREF on name and alias.",
+     "content_json": {"target_table": "DIM_COMPANY"}},
+    {"key": "company.mdm.rule.record_types", "type": "EXCEPTION", "title": "DIM_COMPANY holds parent records too",
+     "content": "DIM_COMPANY includes Immediate Parent, Domestic Parent and Global Ultimate records besides companies. Filter COMPANY_TYPE_DESC = 'Company' for organisation-level counts and facts.",
+     "content_json": {"target_table": "DIM_COMPANY"}},
+    {"key": "company.mdm.rule.merges", "type": "EXCEPTION", "title": "Company merges reach gold only through the cross-reference",
+     "content": "dbt does not read COMPANY_MERGE. A merge shows up as the cross-reference pointing the source record at the surviving CBRE id; the losing DIM_COMPANY row stays active until all its cross-reference rows are deleted. Facts keep their old skey until a repoint covers them.",
+     "content_json": {"target_table": "DIM_COMPANY"}},
+    {"key": "company.mdm.rule.version_dedupe", "type": "EXCEPTION", "title": "MDM tables are versioned",
+     "content": "Deduplicate MDM tables to the latest version with ORDER BY MDM_POST_MDM_LUD DESC NULLS LAST, MDM_UPDATED_TS DESC NULLS LAST.",
+     "content_json": {"target_table": "COMPANY_CORE"}}
+  ]
+}

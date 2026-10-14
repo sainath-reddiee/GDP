@@ -50,16 +50,35 @@ def load_domain_pack() -> Dict[str, Any]:
 
 
 def load_domain_packs() -> List[Dict[str, Any]]:
-    """Every domain/<name>/domain_pack.json; GDP first so its fixed IDs are assigned before the others."""
+    """Every domain/<name>/domain_pack.json; GDP first so its fixed IDs are assigned before the others. A domain's
+    mdm.json (its MDM contract, kept apart so regenerating the pack never drops it) is merged in: the contract into
+    the domain's config as `mdm`, its knowledge items into the pack's knowledge."""
     from services.knowledge.validate import validate_pack
+    from services.mdm import contract as mdm
 
     packs = []
     for path in sorted(DOMAIN_DIR.glob("*/domain_pack.json")):
         pack = json.loads(path.read_text(encoding="utf-8"))
+        extra = path.parent / "mdm.json"
+        if extra.exists():
+            pack = with_mdm(pack, json.loads(extra.read_text(encoding="utf-8")))
         problems = validate_pack(pack)
         assert not problems, f"{path.parent.name} domain pack is invalid: " + "; ".join(problems[:10])
         packs.append(pack)
+    mastered = [p["domain"]["name"] for p in packs if (p["domain"].get("mdm") or {}).get("role") == "MASTERED"]
+    for p in packs:
+        problems = mdm.validate(p["domain"]["name"], p["domain"].get("mdm"), mastered)
+        assert not problems, "; ".join(problems[:10])
     return sorted(packs, key=lambda pk: (pk["domain"]["name"] != "GDP", pk["domain"]["name"]))
+
+
+def with_mdm(pack: Dict[str, Any], contract: Dict[str, Any]) -> Dict[str, Any]:
+    """The pack with its MDM contract: knowledge items appended (not duplicated), the rest as domain config `mdm`."""
+    out = {**pack, "domain": dict(pack["domain"]), "knowledge": list(pack.get("knowledge") or [])}
+    known = {k.get("key") for k in out["knowledge"]}
+    out["knowledge"] += [k for k in contract.get("knowledge") or [] if k.get("key") not in known]
+    out["domain"]["mdm"] = {k: v for k, v in contract.items() if k != "knowledge"}
+    return out
 
 
 def _frontmatter_meta(raw: str) -> Dict[str, str]:

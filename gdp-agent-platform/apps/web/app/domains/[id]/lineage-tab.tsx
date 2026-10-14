@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { BadgeCheck, Bot, FileCode2, GitBranch, Loader2, ShieldAlert, Sparkles, X } from "lucide-react";
+import { MdmPanel } from "./mdm-panel";
 import { DataModel } from "./data-model";
 import { cn } from "@/lib/utils";
 import { prettyType } from "../../knowledge/knowledge-ui";
@@ -257,6 +258,7 @@ export function LineageTab({ domainId, domainName }: { domainId: string; domainN
       {data.readiness && <Readiness readiness={data.readiness} />}
       <LifecycleFlow flow={data.flow} domainName={domainName} onContract={() => setContract(true)} />
       <ContractDrawer domainId={domainId} open={contract} onClose={() => setContract(false)} />
+      <MdmPanel domainId={domainId} />
       <DataModel domainId={domainId} domainName={domainName} />
 
       <BuiltWith m={data.manifest} onContract={() => setContract(true)} />

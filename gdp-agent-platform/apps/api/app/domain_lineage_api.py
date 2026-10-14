@@ -90,11 +90,15 @@ def domain_provenance(domain_id: str, db: Db = Depends(current_db)):
                                                          JOIN GOVERNANCE.DOMAIN_QA_PACKS P ON P.PACK_ID = Q.PACK_ID
                                                         WHERE P.DOMAIN_ID = %s AND P.STATUS NOT IN ('RETIRED', 'SUPERSEDED')
                                                         LIMIT 2000""", (domain_id,))]
-    standard = next((r.get("standard") for r in _soft(db, "SELECT CONFIG:standard::STRING AS STANDARD FROM KNOWLEDGE.DOMAIN_REGISTRY "
-                                                        "WHERE DOMAIN_ID = %s", (domain_id,))), None)
+    reg = next(iter(_soft(db, "SELECT CONFIG:standard::STRING AS STANDARD, CONFIG:mdm:role::STRING AS MDM_ROLE "
+                              "FROM KNOWLEDGE.DOMAIN_REGISTRY WHERE DOMAIN_ID = %s", (domain_id,))), {})
+    standard = reg.get("standard")
     bindings = _soft(db, "SELECT STAGE, SKILL_NAME, ENABLED, POSITION, STANDARD FROM KNOWLEDGE.SKILL_STAGE_BINDING")
     own_skills = _soft(db, "SELECT STAGE, SKILL_NAME, MODE, REPLACES, POSITION, ENABLED FROM KNOWLEDGE.DOMAIN_SKILL "
                            "WHERE DOMAIN_ID = %s", (domain_id,))
+    from services.knowledge.skills import mdm_rows
+
+    own_skills = list(own_skills) + mdm_rows(reg.get("mdm_role"), str(standard or "GDP").upper())   # from the MDM contract
     loaded = _soft(db, """SELECT C.INPUT_JSON:skill::STRING AS SKILL, C.INPUT_JSON:version::STRING AS VERSION, COUNT(*) AS N,
                                  COUNT(DISTINCT C.RUN_ID) AS RUNS, TO_VARCHAR(MAX(C.CREATED_AT), 'YYYY-MM-DD HH24:MI') AS LAST
                             FROM AUDIT.AGENT_TOOL_CALL C JOIN CORE.WORKFLOW_RUN R ON R.RUN_ID = C.RUN_ID
