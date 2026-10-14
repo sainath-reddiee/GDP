@@ -95,8 +95,64 @@ def domain_provenance(domain_id: str, db: Db = Depends(current_db)):
                          GROUP BY 1 ORDER BY ITEMS DESC LIMIT 20""", (domain_id,))
     for r in runs:
         r["kinds"] = _arr(r.get("kinds"))
+    manifest = provenance.manifest(detail, standard=standard, bindings=bindings, loaded=loaded, repos=repo_rows,
+                                   files=files, runs=runs, rows=rows)
+    domain_model = next(iter(_soft(db, """SELECT MODEL_ID, APPROVED_VERSION, OPEN_VERSION FROM GOVERNANCE.DOMAIN_MODEL
+                                           WHERE DOMAIN_ID = %s""", (domain_id,))), None)
+    table_models = _soft(db, """SELECT TABLE_MODEL_ID, TABLE_NAME, CURRENT_VERSION FROM GOVERNANCE.TABLE_MODEL
+                                 WHERE DOMAIN_ID = %s AND COALESCE(MODEL_LAYER, 'SILVER') = 'SILVER' ORDER BY TABLE_NAME LIMIT 100""",
+                         (domain_id,))
+    sttm_rows = _soft(db, f"""SELECT CATALOG_ID, VERSION, TARGET_ENTITY, STATUS FROM GOVERNANCE.STTM_CATALOG
+                               WHERE UPPER(TARGET_ENTITY) IN ({', '.join(['%s'] * len(fqns))})
+                               QUALIFY ROW_NUMBER() OVER (PARTITION BY CATALOG_ID ORDER BY VERSION DESC) = 1""",
+                      tuple(fqns)) if fqns else []
+    ingestion = _soft(db, """SELECT LANDING_DATABASE, LANDING_SCHEMA, LANDING_TABLE, IS_ACTIVE
+                               FROM PLATFORM_CONFIG.INGESTION_CONTROL_CONFIG WHERE DOMAIN_ID = %s LIMIT 200""", (domain_id,))
+    jira = _soft(db, """SELECT DISTINCT L.ISSUE_KEY FROM JIRA.ISSUE_LINK L
+                         WHERE NOT COALESCE(L.IS_DELETED, FALSE)
+                           AND (L.DOMAIN_ID = %s OR L.RUN_ID IN (SELECT RUN_ID FROM CORE.WORKFLOW_RUN WHERE DOMAIN_ID = %s))
+                         LIMIT 100""", (domain_id, domain_id))
+    proposed = next(iter(_soft(db, "SELECT COUNT(*) AS N FROM KNOWLEDGE.DOMAIN_KNOWLEDGE WHERE DOMAIN_ID = %s AND STATUS = 'PROPOSED'",
+                               (domain_id,))), {}).get("n") or 0
+    stale = next(iter(_soft(db, """SELECT COUNT(*) AS N FROM KNOWLEDGE.DOMAIN_KNOWLEDGE
+                                    WHERE DOMAIN_ID = %s AND IS_CURRENT AND STATUS = 'ACTIVE'
+                                      AND (REVIEW_DUE < CURRENT_DATE() OR VERIFIED_BY IS NULL)""", (domain_id,))), {}).get("n") or 0
     return {"domain": detail["domain"],
-            "manifest": provenance.manifest(detail, standard=standard, bindings=bindings, loaded=loaded, repos=repo_rows,
-                                            files=files, runs=runs, rows=rows),
+            "manifest": manifest,
+            "flow": provenance.flow(detail, manifest, rows, domain_model=domain_model, table_models=table_models, sttm=sttm_rows,
+                                    ingestion=ingestion, jira=jira, documents=[], proposed=int(proposed), stale=int(stale)),
+            "needs_verification": provenance.needs_verification(rows, usage), "proposed": int(proposed),
             "provenance": provenance.build(detail, rows, usage, repos, versions),
             "coverage": coverage.score(name, detail.get("targets") or [], rows, sttm, dq, qa_sql, usage)}
+
+
+@router.get("/api/domains/{domain_id}/contract")
+def domain_contract(domain_id: str, db: Db = Depends(current_db)):
+    """The domain's contract as the platform reads it: the Markdown file bundled in the dbt skill (the version in use),
+    and what is extracted from it (hub, tables, columns, business keys, required mapping keys)."""
+    from services.knowledge import contracts, usage as skill_usage
+
+    detail = domain_detail(domain_id, db)
+    path = str(detail.get("contract") or "")
+    if not path:
+        return {"path": None, "text": "", "detail": "This domain has no contract; it was created in the app."}
+    parts = path.split("/")
+    rel = "/".join(parts[4:]) if len(parts) > 4 else parts[-1]          # path inside the skill folder
+    skill = next(iter(_soft(db, """SELECT SKILL_NAME, VERSION, REVISION, CONTENT FROM KNOWLEDGE.SKILL_REGISTRY
+                                    WHERE UPPER(SKILL_NAME) = %s AND IS_CURRENT ORDER BY VERSION DESC LIMIT 1""",
+                            (skill_usage.DBT_SKILL,))), None)
+    text = skill_usage.skill_file(skill.get("content") or "", rel) if skill else ""
+    where = "skill registry"
+    if not text:   # before the skill is seeded: the file shipped with the platform
+        from pathlib import Path as _P
+        f = _P(__file__).resolve().parents[3] / path
+        if f.is_file():
+            text, where = f.read_text(encoding="utf-8"), "repository file"
+    parsed = contracts.parse_contract(text) if text else {}
+    targets = [{"table": t.get("table"), "columns": len(t.get("columns") or []), "hkey_columns": t.get("hkey_columns") or [],
+                "reference_ctes": sorted((t.get("reference_ctes") or {}).keys())} for t in parsed.get("targets") or []]
+    return {"path": path, "file": parts[-1], "format": "Markdown (.md)", "where": where,
+            "skill": {"name": skill.get("skill_name"), "version": skill.get("version"), "revision": skill.get("revision")} if skill else None,
+            "text": text, "chars": len(text),
+            "extracted": {"database": parsed.get("database"), "schema": parsed.get("schema"), "hub": parsed.get("hub"),
+                          "targets": targets, "required": parsed.get("required_mapping") or []}}

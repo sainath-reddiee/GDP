@@ -83,3 +83,34 @@ def test_manifest_names_the_skill_pack_stage_skills_repos_and_runs():
     assert all(s["stage"] != "QA" for s in m["stages"])   # another standard's skill and a switched-off one are left out
     assert m["repos"][0]["last_commit"] == "abc123" and m["repos"][0]["files"][0]["path"] == "models/company/company_core.sql"
     assert m["runs"][0]["run_name"] == "RAW modeling" and m["people"] == ["ANA"]
+
+
+def test_flow_lanes_follow_the_lifecycle_with_trust_states():
+    detail = {**DOMAIN, "silver": {"database": "DB", "schema": "COMPANY"}}
+    m = provenance.manifest(detail, rows=ROWS, repos=[{"REPO_ID": "r1", "NAME": "DBT_DEMO"}],
+                            files=[{"REPO_ID": "r1", "PATH": "models/company/company_core.sql", "NAME": "company_core"}])
+    out = provenance.flow(detail, m, ROWS, domain_model={"MODEL_ID": "dm1", "APPROVED_VERSION": 1, "OPEN_VERSION": 2},
+                          table_models=[{"TABLE_MODEL_ID": "t1", "TABLE_NAME": "COMPANY_CORE", "CURRENT_VERSION": 3}],
+                          sttm=[{"CATALOG_ID": "c1", "VERSION": 2, "TARGET_ENTITY": "DB.COMPANY.COMPANY_CORE", "STATUS": "APPROVED"},
+                                {"CATALOG_ID": "c2", "VERSION": 1, "TARGET_ENTITY": "DB.COMPANY.COMPANY_ADDRESS", "STATUS": "REVIEW"}],
+                          ingestion=[{"LANDING_DATABASE": "L", "LANDING_SCHEMA": "S", "LANDING_TABLE": "T", "IS_ACTIVE": True}],
+                          jira=[{"ISSUE_KEY": "GDPQA-1"}, {"ISSUE_KEY": "GDPQA-1"}], proposed=3, stale=4)
+    existing, ingest = out["lanes"]
+    steps = {s["id"]: s for s in existing["steps"]}
+    assert [s["id"] for s in existing["steps"]] == ["model", "knowledge", "modeling", "mapping", "code"]
+    assert steps["model"]["items"][0]["label"] == "Contract: company-contract.md"
+    assert steps["model"]["items"][1]["label"] == "Domain model v1 (approved), v2 open" and steps["model"]["state"] == "ok"
+    assert "No Erwin model or Confluence page linked" in steps["model"]["facts"]
+    assert steps["knowledge"]["facts"] == ["5 items, 1 verified by a person", "3 proposed, waiting for review", "4 due for review or never verified"]
+    assert steps["knowledge"]["state"] == "partial"
+    assert steps["mapping"]["facts"] == ["2 mappings, 1 approved"] and steps["mapping"]["state"] == "partial"
+    assert steps["code"]["state"] == "partial" and steps["modeling"]["state"] == "partial"
+    req = {s["id"]: s for s in ingest["steps"]}
+    assert [i["label"] for i in req["requests"]["items"]] == ["GDPQA-1"]   # one issue, once
+    assert ingest["items"][0]["label"] == "L.S.T" and req["snaplogic"]["state"] == "ok"
+
+
+def test_needs_verification_lists_unverified_active_items_most_used_first():
+    out = provenance.needs_verification(ROWS, {"k3": 9, "k1": 2})
+    assert [i["knowledge_id"] for i in out] == ["k3", "k1", "k5"]   # k2 verified, k4 a draft
+    assert out[0]["source"] == "Learned in data quality" and out[0]["uses"] == 9

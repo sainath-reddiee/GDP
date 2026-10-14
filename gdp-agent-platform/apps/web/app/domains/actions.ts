@@ -146,8 +146,19 @@ export type DomainManifest = {
   runs: { run_id: string; run_name: string | null; items: number; kinds: string[]; current_state: string | null }[];
   people: string[];
 };
+export type FlowItem = { label: string; kind: string; href?: string | null; state?: string };
+export type FlowStep = { id: string; title: string; role: string; facts: string[]; items: FlowItem[]; state: string };
+export type DomainContract = {
+  path: string | null; file?: string; format?: string; where?: string; detail?: string; text: string; chars?: number;
+  skill: { name: string; version: string; revision: number | null } | null;
+  extracted: { database: string | null; schema: string | null; hub: string | null; required: string[];
+               targets: { table: string; columns: number; hkey_columns: string[]; reference_ctes: string[] }[] };
+};
 export type DomainProvenance = {
   manifest: DomainManifest;
+  flow: { lanes: (FlowStep & { steps: FlowStep[] })[] };
+  proposed: number;
+  needs_verification: { knowledge_id: string; title: string; type: string; source: string; source_id: string; ref: string | null; uses: number; created_at: string | null }[];
   provenance: {
     sources: ProvenanceSource[]; upstream: { id: string; label: string; file: string; feeds: string; meaning: string }[];
     parts: { id: string; label: string; count: number }[]; edges: { source: string; part: string; count: number }[];
@@ -165,4 +176,9 @@ export type DomainProvenance = {
 
 export async function domainProvenance(domainId: string) {
   return attemptValue(() => api<DomainProvenance>(`/api/domains/${encodeURIComponent(domainId)}/provenance`));
+}
+
+/** The domain's contract file (Markdown in the dbt skill) and what the platform extracts from it. */
+export async function domainContract(domainId: string) {
+  return attemptValue(() => api<DomainContract>(`/api/domains/${encodeURIComponent(domainId)}/contract`));
 }

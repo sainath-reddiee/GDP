@@ -177,3 +177,111 @@ def manifest(domain: Dict[str, Any], *, standard: Optional[str] = None, bindings
         "runs": [{k: _low(r).get(k) for k in ("run_id", "run_name", "items", "kinds", "current_state")} for r in runs][:20],
         "people": people,
     }
+
+
+def _state(ok: int, total: int) -> str:
+    """ok: everything is there and trusted; partial: some of it; missing: none of it; none: nothing expected."""
+    if total <= 0:
+        return "none"
+    return "ok" if ok >= total else "partial" if ok > 0 else "missing"
+
+
+def flow(domain: Dict[str, Any], manifest_: Dict[str, Any], rows: Iterable[Dict[str, Any]], *,
+         domain_model: Optional[Dict[str, Any]] = None, table_models: Iterable[Dict[str, Any]] = (),
+         sttm: Iterable[Dict[str, Any]] = (), ingestion: Iterable[Dict[str, Any]] = (), jira: Iterable[Dict[str, Any]] = (),
+         documents: Iterable[Dict[str, Any]] = (), proposed: int = 0, stale: int = 0) -> Dict[str, Any]:
+    """The domain's development lifecycle as two lanes, each step with what it holds and how far it can be trusted:
+    existing tables (in Silver) go through the data model and the knowledge base to Silver modeling, mapping and code;
+    tables still to ingest come from Jira stories or spreadsheets through SnapLogic ingestion."""
+    rows = [_low(r) for r in rows]
+    targets = domain.get("targets") or []
+    silver = domain.get("silver") or {}
+    tm = [_low(t) for t in table_models]
+    st = [_low(s) for s in sttm]
+    ing = [_low(i) for i in ingestion]
+    jr = [_low(j) for j in jira]
+    docs = [_low(d) for d in documents]
+    dm = _low(domain_model or {})
+    verified = sum(1 for r in rows if r.get("verified_by"))
+    approved_sttm = sum(1 for s in st if str(s.get("status") or "").upper() == "APPROVED")
+    code_files = sum(len(r.get("files") or []) for r in manifest_.get("repos") or [])
+    skill = manifest_.get("skill") or {}
+    model_items: List[Dict[str, Any]] = []
+    if skill:
+        model_items.append({"label": "Contract: " + str(skill.get("contract") or "").split("/")[-1], "kind": "contract", "state": "ok"})
+    if dm.get("model_id"):
+        label = "Domain model v%s (approved)" % (dm.get("approved_version") or "?")
+        if dm.get("open_version"):
+            label += ", v%s open" % dm.get("open_version")
+        model_items.append({"label": label, "kind": "domain_model", "href": "/dashboard/modeling/" + str(dm["model_id"]),
+                            "state": "ok" if dm.get("approved_version") else "partial"})
+    for d in docs:
+        model_items.append({"label": "%s: %s" % (d.get("kind_label") or "Document", d.get("title")), "kind": d.get("kind") or "document",
+                            "href": d.get("url"), "state": "ok" if d.get("current") else "partial"})
+    existing = {
+        "id": "existing", "title": "Existing tables in Silver", "role": "Domain",
+        "facts": ["%d tables in %s.%s" % (len(targets), silver.get("database") or "?", silver.get("schema") or "?")],
+        "items": [{"label": t.get("target_table"), "kind": "table"} for t in targets][:20],
+        "state": "ok" if targets else "missing",
+        "steps": [
+            {"id": "model", "title": "Data model", "role": "Contract, domain model, Confluence, Erwin",
+             "facts": ["%d source%s" % (len(model_items), "" if len(model_items) == 1 else "s"),
+                       "%d documents linked" % len(docs) if docs else "No Erwin model or Confluence page linked"],
+             "items": model_items, "state": "ok" if dm.get("approved_version") and model_items else "partial" if model_items else "missing"},
+            {"id": "knowledge", "title": "Knowledge base", "role": "Data steward",
+             "facts": ["%d items, %d verified by a person" % (len(rows), verified), "%d proposed, waiting for review" % proposed,
+                       "%d due for review or never verified" % stale],
+             "items": [], "state": _state(verified, len(rows)) if rows else "missing"},
+            {"id": "modeling", "title": "Extend modeling in Silver", "role": "Data modeler",
+             "facts": ["%d table models" % len(tm)],
+             "items": [{"label": "%s v%s" % (t.get("table_name"), t.get("current_version") or 1), "kind": "table_model",
+                        "href": "/dashboard/modeling/tables/" + str(t.get("table_model_id"))} for t in tm][:15],
+             "state": _state(len(tm), len(targets)) if targets else "none"},
+            {"id": "mapping", "title": "Mapping (STTM)", "role": "Data analyst",
+             "facts": ["%d mappings, %d approved" % (len(st), approved_sttm)],
+             "items": [{"label": "%s v%s (%s)" % (s.get("target_entity"), s.get("version"), str(s.get("status") or "").lower()), "kind": "sttm",
+                        "href": "/dashboard/sttm/" + str(s.get("catalog_id")),
+                        "state": "ok" if str(s.get("status") or "").upper() == "APPROVED" else "partial"} for s in st][:15],
+             "state": _state(approved_sttm, len(targets)) if targets else "none"},
+            {"id": "code", "title": "Code", "role": "Engineering",
+             "facts": ["%d repositories, %d files name the domain's tables" % (len(manifest_.get("repos") or []), code_files)],
+             "items": [{"label": "%s: %s" % (r.get("name"), f.get("path")), "kind": "file"}
+                       for r in manifest_.get("repos") or [] for f in r.get("files") or []][:15],
+             "state": "ok" if targets and code_files >= len(targets) else "partial" if code_files else "missing"},
+        ],
+    }
+    keys = sorted({str(j.get("issue_key")) for j in jr if j.get("issue_key")})
+    sheets = [d for d in docs if str(d.get("kind") or "") in ("excel", "spreadsheet")]
+    active = sum(1 for i in ing if i.get("is_active"))
+    ingest = {
+        "id": "ingest", "title": "Tables to ingest from source", "role": "Onboarding",
+        "facts": ["%d SnapLogic configurations land data for this domain" % len(ing)],
+        "items": [{"label": "%s.%s.%s" % (i.get("landing_database"), i.get("landing_schema"), i.get("landing_table")), "kind": "landing",
+                   "state": "ok" if i.get("is_active") else "partial"} for i in ing][:15],
+        "state": "ok" if ing else "none",
+        "steps": [
+            {"id": "requests", "title": "Jira stories and spreadsheets", "role": "Requests",
+             "facts": ["%d Jira issues linked" % len(keys), "%d spreadsheets attached" % len(sheets)],
+             "items": [{"label": k, "kind": "jira", "href": "/tickets?tab=ticket&key=" + k} for k in keys][:15]
+                      + [{"label": d.get("title"), "kind": "excel", "href": d.get("url")} for d in sheets][:5],
+             "state": "ok" if keys or sheets else "none"},
+            {"id": "snaplogic", "title": "Data ingestion (SnapLogic)", "role": "Engineering",
+             "facts": ["%d active of %d" % (active, len(ing))], "items": [],
+             "state": "ok" if ing and active == len(ing) else "partial" if ing else "none"},
+        ],
+    }
+    return {"lanes": [existing, ingest]}
+
+
+def needs_verification(rows: Iterable[Dict[str, Any]], usage: Optional[Dict[str, int]] = None, limit: int = 50) -> List[Dict[str, Any]]:
+    """Active items no person has verified, most used first: what stages rely on without anyone having checked it."""
+    usage = usage or {}
+    out = []
+    for r in (_low(r) for r in rows):
+        if r.get("verified_by") or str(r.get("status") or "").upper() != "ACTIVE":
+            continue
+        sid, label, _ = source_of(r.get("origin"))
+        out.append({"knowledge_id": r.get("knowledge_id"), "title": r.get("title"), "type": r.get("knowledge_type"),
+                    "source": label, "source_id": sid, "ref": r.get("source_reference"),
+                    "uses": int(usage.get(str(r.get("knowledge_id"))) or 0), "created_at": r.get("created_at")})
+    return sorted(out, key=lambda i: (-i["uses"], str(i["title"] or "")))[:limit]
