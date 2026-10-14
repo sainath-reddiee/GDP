@@ -157,6 +157,7 @@ RULES: List[Tuple[str, str, Any, str]] = [
     ("POST", r"/api/domains/[^/]+/references(/schema)?", "KNOWLEDGE.EDIT", "Give the platform a reference input for a domain"),
     ("POST", r"/api/domains/[^/]+/references/[^/]+/(kind|withdraw)", "KNOWLEDGE.EDIT", "Correct or withdraw a reference input"),
     ("POST", r"/api/domains/[^/]+/references/rescore", "KNOWLEDGE.EDIT", "Measure the platform's output against the references"),
+    ("POST", r"/api/domains/[^/]+/references/[^/]+/use-as-mdm", "DOMAIN.EDIT", "Make a derived contract the domain's MDM (Reltio) contract"),
     ("POST", r"/api/domains/[^/]+/references/[^/]+/use-as-model", "MODEL.EDIT", "Start a domain model draft from a reference model"),
     ("POST", r"/api/gold/runs", "RUN.CREATE", "Start a Gold run on silver tables"),
     ("POST", rf"{R}/gold/propose", "MODEL.EDIT", "Propose a Gold run's gold model to the Model Workbench"),
@@ -445,7 +446,7 @@ NO_QUEUE_ROUTES = [(m, re.compile(p)) for m, p in [
     ("POST", r"^/api/domains/[^/]+/documents/.+$"),
     ("POST", r"^/api/domains/[^/]+/examples/[^/]+$"),
     # a reference input is read, not applied: what it proposes goes through the inbox, the Workbench or a run's gates
-    ("POST", r"^/api/domains/[^/]+/references(/.*)?$"),
+    ("POST", r"^/api/domains/[^/]+/references(?!/[^/]+/use-as-mdm$)(/.*)?$"),   # the MDM contract is governed
     # a Gold run's gold model proposal is a draft, reviewed and approved in the Model Workbench (four eyes)
     ("POST", r"^/api/runs/[^/]+/gold/propose$"),
 ]]

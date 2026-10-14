@@ -7,7 +7,8 @@ import { useAccess } from "@/components/access";
 import { LAYER_META, type Layer } from "@/lib/layers";
 import { cn } from "@/lib/utils";
 import {
-  addSchemaReference, domainReferences, rescoreReferences, setReferenceKind, uploadReferences, useReferenceAsModel, withdrawReference,
+  addSchemaReference, domainReferences, rescoreReferences, setReferenceKind, uploadReferences, useReferenceAsMdm, useReferenceAsModel,
+  withdrawReference,
   type ReferenceKind, type ReferenceRow, type ReferenceScore, type References,
 } from "../actions";
 
@@ -137,7 +138,17 @@ export function ReferencesTab({ domainId, layer }: { domainId: string; layer: La
                   ) : <span className="font-medium">{KIND[r.kind]?.label ?? r.kind}</span>}
                   {r.detected_why && <p className="mt-0.5 text-[10px] text-muted-foreground">{r.detected_why}</p>}
                 </td>
-                <td className="max-w-md px-3 py-2 text-muted-foreground">{KIND[r.kind]?.use}<p className="mt-0.5 text-foreground">{r.note}</p></td>
+                <td className="max-w-md px-3 py-2 text-muted-foreground">{KIND[r.kind]?.use}<p className="mt-0.5 text-foreground">{r.note}</p>
+                  {r.kind === "MDM_SCHEMA" && r.status === "READY" && (
+                    <details className="mt-1">
+                      <summary className="cursor-pointer text-[11px] font-medium text-foreground">
+                        {r.mdm_derived ? "MDM contract derived" : "No MDM contract derived"}: {r.mdm_found?.length ?? 0} found, {r.mdm_questions?.length ?? 0} question(s)</summary>
+                      <ul className="mt-1 list-disc space-y-0.5 pl-4 text-[11px]">
+                        {(r.mdm_found ?? []).map((f) => <li key={f}>{f}</li>)}
+                        {(r.mdm_questions ?? []).map((q) => <li key={q} className="text-amber-700 dark:text-amber-300">{q}</li>)}
+                      </ul>
+                    </details>
+                  )}</td>
                 <td className="px-3 py-2"><span className={cn("inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium", STATUS[r.status])}>
                   {r.status === "READY" ? <Check className="h-3 w-3" /> : r.status === "FAILED" ? <CircleAlert className="h-3 w-3" /> : (r.status === "QUEUED" || r.status === "READING") ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
                   {r.status.toLowerCase()}</span></td>
@@ -148,6 +159,10 @@ export function ReferencesTab({ domainId, layer }: { domainId: string; layer: La
                       : canAct("MODEL.EDIT") && <button type="button" disabled={pending} title="Start the layer's domain model from it, or merge it into the open draft (reviewed in the Model Workbench)"
                                                         onClick={() => act(() => useReferenceAsModel(domainId, r.reference_id))}
                                                         className="block w-full text-right text-[11px] font-medium text-primary hover:underline">Use as the model</button>)}
+                  {r.kind === "MDM_SCHEMA" && r.status === "READY" && r.mdm_derived && !r.applied?.mdm_contract && canAct("DOMAIN.EDIT") && (
+                    <button type="button" disabled={pending} title="Make the derived contract the domain's MDM (Reltio) contract, after answering its questions"
+                            onClick={() => act(() => useReferenceAsMdm(domainId, r.reference_id))}
+                            className="block w-full text-right text-[11px] font-medium text-primary hover:underline">Use as the MDM contract</button>)}
                   {may && <button type="button" disabled={pending} onClick={() => act(() => withdrawReference(domainId, r.reference_id))} className="block w-full text-right text-[11px] text-muted-foreground hover:text-destructive">Withdraw</button>}</td>
               </tr>
             ))}

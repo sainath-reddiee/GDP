@@ -97,6 +97,15 @@ def _model_layer(layer: str) -> str:
     return "GOLD" if layer == "GOLD" else "SILVER"
 
 
+def _with_mdm(db: Db, domain_id: str, parsed: Dict[str, Any]) -> Dict[str, Any]:
+    """A post-MDM schema read as the MASTERED contract it implies, with the questions for the domain owner."""
+    from services.mdm.derive import derive
+
+    name = (db.query("SELECT DOMAIN_NAME FROM KNOWLEDGE.DOMAIN_REGISTRY WHERE DOMAIN_ID = %s", (domain_id,)) or [{}])[0].get("domain_name")
+    out = derive(str(name or ""), parsed.get("spec") or {})
+    return {**parsed, "mdm_contract": out["contract"], "mdm_questions": out["questions"], "mdm_found": out["found"]}
+
+
 def _read(db: Db, domain_id: str, rid: str, name: str, data: bytes, table: Optional[str]) -> None:
     """Read one kept input as its kind, and record what it was read as and what it changed."""
     r = _row(db, domain_id, rid)
@@ -109,6 +118,8 @@ def _read(db: Db, domain_id: str, rid: str, name: str, data: bytes, table: Optio
             out = parse_file(name, data)
         except ModelFileError as exc:
             _set(db, rid, status="FAILED", note=str(exc)[:3900]); return
+        if kind == "MDM_SCHEMA":
+            out = _with_mdm(db, domain_id, out)
         _set(db, rid, status="READY", parsed=out,
              note=f"{out['format']}: {out['entities']} table(s), {out['columns']} column(s), {out['relationships']} relationship(s)"
                   + (f". {'; '.join(out['notes'][:3])}" if out["notes"] else ""))
@@ -257,6 +268,8 @@ def add_schema_reference(domain_id: str, body: SchemaIn, db: Db = Depends(curren
     entities = (spec.get("design") or {}).get("entities") or []
     parsed = {"spec": spec, "format": "Live schema", "notes": [], "entities": len(entities),
               "columns": sum(len(e.get("attributes") or []) for e in entities), "relationships": len(spec.get("relationships") or [])}
+    if body.kind == "MDM_SCHEMA":
+        parsed = _with_mdm(db, domain_id, parsed)
     rid = str(uuid.uuid4())
     pointer = f"{body.database.upper()}.{body.schema_name.upper()}"
     try:
@@ -278,7 +291,9 @@ def list_references(domain_id: str, layer: Optional[str] = None, db: Db = Depend
     try:
         rows = db.query(f"""SELECT REFERENCE_ID, LAYER, KIND, TITLE, ORIGIN, SOURCE_POINTER, STATUS, NOTE, APPLIED,
                                    PARSED:entities::NUMBER AS ENTITIES, ARRAY_SIZE(PARSED:lines) AS LINES,
-                                   PARSED:detected:why::STRING AS DETECTED_WHY, CREATED_BY,
+                                   PARSED:detected:why::STRING AS DETECTED_WHY, PARSED:mdm_found AS MDM_FOUND,
+                                   PARSED:mdm_questions AS MDM_QUESTIONS, PARSED:mdm_contract IS NOT NULL AND
+                                   NOT IS_NULL_VALUE(PARSED:mdm_contract) AS MDM_DERIVED, CREATED_BY,
                                    TO_VARCHAR(CREATED_AT, 'YYYY-MM-DD HH24:MI') AS CREATED_AT
                               FROM KNOWLEDGE.REFERENCE_INPUT WHERE {' AND '.join(where)} ORDER BY CREATED_AT DESC LIMIT 200""",
                         tuple(params))
@@ -290,6 +305,7 @@ def list_references(domain_id: str, layer: Optional[str] = None, db: Db = Depend
         raise _snowflake_error(exc) from exc
     for r in rows:
         r["applied"] = _js(r.get("applied"))
+        r["mdm_found"], r["mdm_questions"] = _js(r.get("mdm_found")), _js(r.get("mdm_questions"))
     for s in scores:
         s["score"] = _js(s.get("score"))
     return {"references": rows, "scores": scores, "deployed": True, "kinds": list(detect.KINDS)}
@@ -370,3 +386,47 @@ def use_reference_as_model(domain_id: str, rid: str, body: UseModelIn, db: Db = 
     applied = {**(r.get("applied") or {}), "model_id": model_id, "version": made.get("version")}
     _set(db, rid, applied=applied, note=f"{r.get('note') or ''} Draft v{made.get('version')} of the {layer.lower()} model.".strip()[:3900])
     return {"model_id": model_id, "version": made.get("version"), "layer": layer}
+
+
+class UseMdmIn(BaseModel):
+    contract: Optional[Dict[str, Any]] = None   # the derived contract as the owner corrected it
+
+
+@router.post("/api/domains/{domain_id}/references/{rid}/use-as-mdm")
+def use_reference_as_mdm(domain_id: str, rid: str, body: UseMdmIn, db: Db = Depends(current_db)):
+    """The MASTERED contract derived from a post-MDM schema (or the owner's correction of it) as the domain's MDM
+    contract: validated, versioned as a domain change, and governed like any domain edit. A repository domain keeps its
+    contract in domain/<name>/mdm.json, so it gets the JSON to commit instead."""
+    from app.domains_api import _baseline, _domain_caches_changed, _domain_snapshot
+    from services.mdm import contract as mdm
+
+    r = _row(db, domain_id, rid)
+    derived = (r.get("parsed") or {}).get("mdm_contract")
+    contract = body.contract or derived
+    if r["kind"] != "MDM_SCHEMA" or r["status"] != "READY" or not contract:
+        raise HTTPException(409, "only a post-MDM schema reference with a derived contract can become the MDM contract")
+    found = db.query("SELECT DOMAIN_NAME, CONFIG:mdm AS MDM FROM KNOWLEDGE.DOMAIN_REGISTRY "
+                     "WHERE DOMAIN_ID = %s", (domain_id,))
+    if not found:
+        raise HTTPException(404, "domain not found")
+    name, current = found[0]["domain_name"], _js(found[0].get("mdm")) or {}
+    contract = {**contract, "role": "MASTERED"}
+    problems = mdm.validate(name, contract)
+    if problems:
+        raise HTTPException(400, "; ".join(problems))
+    role = str(current.get("role") or "").upper()
+    if role == "CONSUMER":
+        raise HTTPException(409, f"{name} consumes mastered domains; unlink it on the Lineage tab before it is mastered itself")
+    if role == "MASTERED":
+        raise HTTPException(409, f"{name}'s contract comes from the repository: commit this as domain/{name.lower()}/mdm.json "
+                                 f"(it is re-registered on deploy). {json.dumps(contract)[:3000]}")
+    try:
+        _baseline(db, domain_id)
+        db.execute("UPDATE KNOWLEDGE.DOMAIN_REGISTRY SET CONFIG = OBJECT_INSERT(COALESCE(CONFIG, OBJECT_CONSTRUCT()), 'mdm', PARSE_JSON(%s), TRUE), "
+                   "UPDATED_AT = CURRENT_TIMESTAMP() WHERE DOMAIN_ID = %s", (json.dumps(contract), domain_id))
+    except Exception as exc:
+        raise _snowflake_error(exc) from exc
+    _domain_caches_changed()
+    _domain_snapshot(db, domain_id, "EDIT", f"Mastered by Reltio: contract from {r.get('title') or 'a post-MDM schema'}")
+    _set(db, rid, applied={**(r.get("applied") or {}), "mdm_contract": True})
+    return {"domain_id": domain_id, "role": "MASTERED", "contract": contract}

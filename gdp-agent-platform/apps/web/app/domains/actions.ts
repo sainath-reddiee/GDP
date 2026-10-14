@@ -371,6 +371,7 @@ export type ReferenceRow = {
   origin: "UPLOAD" | "SCHEMA" | "GIT" | "CONFLUENCE"; source_pointer: string | null;
   status: "QUEUED" | "READING" | "READY" | "FAILED" | "WITHDRAWN"; note: string | null;
   applied: Record<string, unknown> | null; entities: number | null; lines: number | null; detected_why: string | null;
+  mdm_derived?: boolean | null; mdm_found?: string[] | null; mdm_questions?: string[] | null;
   created_by: string; created_at: string;
 };
 export type ReferenceScore = { layer: string; kind: string; stage: string | null; run_id: string | null; scored_at: string;
@@ -405,6 +406,13 @@ export async function useReferenceAsModel(domainId: string, rid: string, replace
 export async function rescoreReferences(domainId: string) {
   return attemptValue(() => api<{ run_id: string; score: ReferenceScore["score"] | null; reference: { title: string | null } | null }>(
     `/api/domains/${encodeURIComponent(domainId)}/references/rescore`, { method: "POST" }));
+}
+export async function useReferenceAsMdm(domainId: string, rid: string) {
+  const r = await attemptValue(() => api<{ domain_id: string; role: string }>(
+    `/api/domains/${encodeURIComponent(domainId)}/references/${encodeURIComponent(rid)}/use-as-mdm`,
+    { method: "POST", body: JSON.stringify({}) }));
+  revalidatePath(`/domains/${domainId}`);
+  return r;
 }
 export async function withdrawReference(domainId: string, rid: string) {
   return attemptValue(() => api<ReferenceRow>(`/api/domains/${encodeURIComponent(domainId)}/references/${encodeURIComponent(rid)}/withdraw`,
