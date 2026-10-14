@@ -1,13 +1,10 @@
+import Link from "next/link";
 import { can } from "@/lib/types";
 import { api, getRun, whoami } from "@/lib/api";
 import { AiSuggestions } from "@/components/ai-suggestions";
 import { StageGate } from "@/components/stage-gate";
 import { StageAction } from "@/components/stage-action";
-import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
-import { ModelEr } from "@/components/model-er";
-import type { ModelGraph } from "@/app/onboarding/intent-types";
 import type { ProfileCacheTable } from "@/lib/types";
 import { runProfiling, runProfilingFresh } from "../pipeline-actions";
 import { ProfileWorkspace, type ProfileColumn } from "./profile-workspace";
@@ -17,7 +14,7 @@ export default async function ProfilePage({ params }: { params: { runId: string 
     getRun(params.runId),
     whoami(),
     api<{ columns: ProfileColumn[]; tables?: ProfileCacheTable[]; source?: "registry" | "cache" }>(`/api/runs/${params.runId}/profile`),
-    api<ModelGraph>(`/api/runs/${params.runId}/model-graph`).catch(() => null),
+    api<{ suggestions: { target_table: string }[] }>(`/api/runs/${params.runId}/model-graph`).catch(() => null),
   ]);
   const canRun = can(me, "RUN.OPERATE") && !state.is_archived && ["LANDING_COMPLETE", "PROFILING_PENDING"].includes(state.current_state);
   const canRefresh = can(me, "PROFILE.RUN") && !state.is_archived && !["PROFILING_RUNNING", "LANDING_RUNNING"].includes(state.current_state);
@@ -61,34 +58,14 @@ export default async function ProfilePage({ params }: { params: { runId: string 
           </CardContent>
         )}
       </Card>
-      {graph && (graph.suggestions.length > 0 || graph.targets.length > 0) && (
-        <Card>
-          <CardHeader>
-            <CardTitle>Suggested models</CardTitle>
-            <CardDescription>
-              {graph?.intent?.path === "profile_suggest" ? "This source was marked new. " : ""}Existing targets scored by column-name overlap. A proposed name is included when the
-              source looks net-new. Nothing is created until you register or map it.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            {graph.suggestions.length > 0 && (
-              <Table>
-                <THead><TR><TH>Model</TH><TH>Kind</TH><TH>Score</TH><TH>Why</TH></TR></THead>
-                <TBody>
-                  {graph.suggestions.map((s) => (
-                    <TR key={`${s.kind}-${s.fqn}`}>
-                      <TD className="font-medium">{s.target_table}</TD>
-                      <TD><Badge variant={s.kind === "existing" ? "outline" : "secondary"}>{s.kind}</Badge></TD>
-                      <TD>{s.score.toFixed(2)}</TD>
-                      <TD className="text-sm text-muted-foreground">{s.reason}</TD>
-                    </TR>
-                  ))}
-                </TBody>
-              </Table>
-            )}
-            <ModelEr graph={graph} runName={state.run.run_name} />
-          </CardContent>
-        </Card>
+      {cachedCount > 0 && (
+        <Link href={`/runs/${params.runId}/domain`} className="flex items-center gap-2 rounded-xl border bg-card px-4 py-3 text-sm hover:border-primary/40">
+          <span className="font-medium">Next: choose the target model</span>
+          <span className="text-muted-foreground">
+            {graph?.suggestions.length ? `${graph.suggestions.length} model${graph.suggestions.length === 1 ? "" : "s"} suggested from this profile (${graph.suggestions.slice(0, 2).map((x) => x.target_table).join(", ")})` : "the knowledge pack and the models it maps to"}
+          </span>
+          <span className="ml-auto text-primary">Open →</span>
+        </Link>
       )}
     </StageGate>
   );

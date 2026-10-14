@@ -10,11 +10,11 @@ import { prettyType } from "../../knowledge/knowledge-ui";
 import { verifyKnowledge } from "../../knowledge/actions";
 import { domainContract, type DomainContract, type DomainReadiness, type FlowStep, type DomainProvenance } from "../actions";
 
-const STATE: Record<string, { label: string; bar: string; chip: string }> = {
-  ok: { label: "Trusted", bar: "bg-emerald-500", chip: "bg-emerald-500/10 text-emerald-700 dark:text-emerald-400" },
-  partial: { label: "Partly", bar: "bg-amber-500", chip: "bg-amber-500/10 text-amber-700 dark:text-amber-400" },
-  missing: { label: "Missing", bar: "bg-rose-500", chip: "bg-rose-500/10 text-rose-700 dark:text-rose-400" },
-  none: { label: "Not used", bar: "bg-muted-foreground/30", chip: "bg-muted text-muted-foreground" },
+const STATE: Record<string, { label: string; bar: string; chip: string; hint: string }> = {
+  ok: { label: "Trusted", bar: "bg-emerald-500", chip: "bg-emerald-500/10 text-emerald-700 dark:text-emerald-400", hint: "Everything this step needs is there" },
+  partial: { label: "Partly", bar: "bg-amber-500", chip: "bg-amber-500/10 text-amber-700 dark:text-amber-400", hint: "Some of what this step needs is there" },
+  missing: { label: "Missing", bar: "bg-rose-500", chip: "bg-rose-500/10 text-rose-700 dark:text-rose-400", hint: "This step is expected but nothing is there yet" },
+  none: { label: "Not started", bar: "bg-muted-foreground/30", chip: "bg-muted text-muted-foreground", hint: "Nothing has gone through this step for this domain yet; it is not an error" },
 };
 
 function Card({ step, onContract, emphasis }: { step: FlowStep; onContract?: () => void; emphasis?: boolean }) {
@@ -29,7 +29,7 @@ function Card({ step, onContract, emphasis }: { step: FlowStep; onContract?: () 
           <h4 className="text-sm font-semibold leading-tight">{step.title}</h4>
           <p className="text-[11px] text-muted-foreground">{step.role}</p>
         </div>
-        <span className={cn("rounded-full px-1.5 py-0.5 text-[10px] font-medium", s.chip)}>{s.label}</span>
+        <span title={s.hint} className={cn("rounded-full px-1.5 py-0.5 text-[10px] font-medium", s.chip)}>{s.label}</span>
       </div>
       <ul className="mt-2 space-y-0.5 text-[11px] text-muted-foreground">{step.facts.map((f) => <li key={f}>{f}</li>)}</ul>
       {!!items.length && (
@@ -127,7 +127,7 @@ export function LifecycleFlow({ flow, domainName, onContract }: { flow: DomainPr
       <div className="flex flex-wrap items-baseline gap-2">
         <h3 className="text-sm font-semibold">How {domainName} is developed</h3>
         <p className="text-xs text-muted-foreground">Each step shows what it holds and how far it can be trusted. Wrong knowledge upstream means wrong models, mappings and code downstream.</p>
-        <span className="ml-auto flex gap-2 text-[11px]">{["ok", "partial", "missing", "none"].map((k) => <span key={k} className="inline-flex items-center gap-1"><span className={cn("h-2 w-2 rounded-full", STATE[k].bar)} />{STATE[k].label}</span>)}</span>
+        <span className="ml-auto flex gap-2 text-[11px]">{["ok", "partial", "missing", "none"].map((k) => <span key={k} title={STATE[k].hint} className="inline-flex items-center gap-1"><span className={cn("h-2 w-2 rounded-full", STATE[k].bar)} />{STATE[k].label}</span>)}</span>
       </div>
       {flow.lanes.map((lane) => (
         <div key={lane.id} className="overflow-x-auto pb-2">

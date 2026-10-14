@@ -64,7 +64,7 @@ export default async function DomainPage({ params }: { params: { runId: string }
           )}
         </CardContent>
       </Card>
-      {graph && (graph.sources.length > 0 || graph.targets.length > 0) && (
+      {graph && (graph.sources.length > 0 || graph.targets.length > 0 || graph.suggestions.length > 0) && (
         <Card>
           <CardHeader>
             <CardTitle>How the mapping looks</CardTitle>
@@ -73,7 +73,27 @@ export default async function DomainPage({ params }: { params: { runId: string }
               Solid lines are approved mappings; dashed lines are the plan from onboarding.
             </CardDescription>
           </CardHeader>
-          <CardContent>
+          <CardContent className="space-y-4">
+            {graph.suggestions.length > 0 && (
+              <div className="space-y-1">
+                <p className="text-sm font-medium">Suggested models</p>
+                <p className="text-xs text-muted-foreground">Existing targets scored by column-name overlap with the profiled source; a proposed name is
+                  included when the source looks net-new. Nothing is created until you register or map it.</p>
+                <Table>
+                  <THead><TR><TH>Model</TH><TH>Kind</TH><TH>Score</TH><TH>Why</TH></TR></THead>
+                  <TBody>
+                    {graph.suggestions.map((s) => (
+                      <TR key={`${s.kind}-${s.fqn}`}>
+                        <TD className="font-medium">{s.target_table}</TD>
+                        <TD><Badge variant={s.kind === "existing" ? "outline" : "secondary"}>{s.kind}</Badge></TD>
+                        <TD>{s.score.toFixed(2)}</TD>
+                        <TD className="text-sm text-muted-foreground">{s.reason}</TD>
+                      </TR>
+                    ))}
+                  </TBody>
+                </Table>
+              </div>
+            )}
             <ModelEr graph={graph} runName={state.run.run_name} />
           </CardContent>
         </Card>
