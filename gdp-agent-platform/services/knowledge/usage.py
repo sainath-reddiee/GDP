@@ -125,11 +125,16 @@ def skill_section(content: str, heading: str) -> str:
 
 
 def compose_domain_context(skill_content: str, domain: str | None = None, target: str | None = None,
-                           definitions: List[str] | None = None, budget: int = 6000) -> str:
-    """Skill rules, the domain contract (target section first) and the target's model definition, within budget."""
+                           definitions: List[str] | None = None, budget: int = 6000,
+                           examples: List[str] | None = None) -> str:
+    """Skill rules, the domain contract (target section first), the target's model definition and its accepted
+    correct-output examples, within budget."""
     parts: List[str] = []
     if definitions:
         parts.append("TARGET MODEL:\n" + "\n".join(definitions))
+    if examples:
+        parts.append("CORRECT OUTPUT EXAMPLES (rows exactly as the target must hold them; match their formats):\n"
+                     + "\n\n".join(examples)[: budget // 3])
     contract = skill_file(skill_content, f"references/{(domain or '').lower()}-contract.md") if domain else ""
     if contract:
         picked = [skill_section(contract, "## Required Mapping Keys")]
@@ -152,15 +157,19 @@ def domain_context(session, domain_id: str | None, target: str | None = None, bu
     skill = load_skill(session, DBT_SKILL) if standard == "GDP" else {}
     domain = None
     definitions: List[str] = []
+    examples: List[str] = []
     if domain_id:
         found = rows(session, "SELECT DOMAIN_NAME FROM KNOWLEDGE.DOMAIN_REGISTRY WHERE DOMAIN_ID = ?", [domain_id])
         domain = found[0]["DOMAIN_NAME"] if found else None
         if target:
-            definitions = [f"{r['TITLE']}: {r['CONTENT']}" for r in rows(
-                session, """SELECT TITLE, CONTENT FROM KNOWLEDGE.DOMAIN_KNOWLEDGE
-                            WHERE DOMAIN_ID = ? AND IS_CURRENT AND KNOWLEDGE_TYPE = 'MODEL_DEFINITION'
-                              AND CONTENT_JSON:target_table::STRING = ?""", [domain_id, target.upper()])]
-    return compose_domain_context(skill.get("content") or "", domain, target, definitions, budget)
+            items = rows(session, """SELECT KNOWLEDGE_TYPE, TITLE, CONTENT, CONTENT_JSON FROM KNOWLEDGE.DOMAIN_KNOWLEDGE
+                                     WHERE DOMAIN_ID = ? AND IS_CURRENT AND KNOWLEDGE_TYPE IN ('MODEL_DEFINITION', 'EXAMPLE')
+                                       AND CONTENT_JSON:target_table::STRING = ?""", [domain_id, target.upper()])
+            definitions = [f"{r['TITLE']}: {r['CONTENT']}" for r in items if r["KNOWLEDGE_TYPE"] == "MODEL_DEFINITION"]
+            from services.knowledge.examples import as_context
+
+            examples = as_context([r for r in items if r["KNOWLEDGE_TYPE"] == "EXAMPLE"])
+    return compose_domain_context(skill.get("content") or "", domain, target, definitions, budget, examples)
 
 
 def assert_safe_transformation(expression: str | None) -> None:

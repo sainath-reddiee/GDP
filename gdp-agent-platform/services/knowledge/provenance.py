@@ -36,6 +36,7 @@ PARTS: Dict[str, tuple] = {
     "NAMING_STANDARD": ("standards", "Standards and guides"), "ONBOARDING_GUIDE": ("standards", "Standards and guides"),
     "DBT_PATTERN": ("patterns", "Build patterns"), "MAPPING_PATTERN": ("patterns", "Build patterns"),
     "SODA_PATTERN": ("tests", "Tests and checks"), "QA_TEST": ("tests", "Tests and checks"),
+    "EXAMPLE": ("tests", "Tests and checks"),
 }
 PART_ORDER = ["model", "rules", "glossary", "standards", "patterns", "tests", "other"]
 
@@ -298,3 +299,98 @@ def needs_verification(rows: Iterable[Dict[str, Any]], usage: Optional[Dict[str,
                     "source": label, "source_id": sid, "ref": r.get("source_reference"),
                     "uses": int(usage.get(str(r.get("knowledge_id"))) or 0), "created_at": r.get("created_at")})
     return sorted(out, key=lambda i: (-i["uses"], str(i["title"] or "")))[:limit]
+
+
+LEVELS = (("minimum", "Minimum", "Enough to start a run"),
+          ("recommended", "Recommended", "Mappings and code need little rework"),
+          ("best", "Best", "Output can be checked against what is known to be right"))
+
+
+def readiness(domain: Dict[str, Any], *, members: Iterable[Dict[str, Any]] = (), entities: Optional[List[Dict[str, Any]]] = None,
+              knowledge_types: Optional[Dict[str, int]] = None, verified: int = 0, total: int = 0,
+              example_tables: Iterable[str] = (), dq_tables: int = 0, documents: int = 0) -> Dict[str, Any]:
+    """How ready the domain is for development, in three levels; each item met or not, with what is missing and where
+    it is fixed. `entities` are the approved model's tables (None without an approved model); the level reached is
+    the highest whose items, and those of every level below, are all met."""
+    info = domain.get("domain") or {}
+    did = str(info.get("domain_id") or "")
+    page = f"/domains/{did}"
+    roles = {str(_low(m).get("role") or "").upper() for m in members}
+    kinds = {str(k).upper(): int(v or 0) for k, v in (knowledge_types or {}).items()}
+    model = entities is not None
+    ents = entities or []
+    no_keys = [e["entity_name"] for e in ents if not e.get("business_keys")]
+    no_grain = [e["entity_name"] for e in ents if not str(e.get("grain") or "").strip()]
+    cols = [a for e in ents for a in e.get("attributes") or [] if str(a.get("status") or "").upper() != "RETIRED"]
+    described = sum(1 for a in cols if str(a.get("description") or a.get("business_definition") or "").strip())
+    examples = {str(t).upper() for t in example_tables}
+    without_examples = [e["entity_name"] for e in ents if e["entity_name"] not in examples]
+    targets = len(domain.get("targets") or [])
+    sources = len(domain.get("source_systems") or [])
+    knowledge = f"/knowledge?tab=items&domain_id={did}"
+    rules = kinds.get("BUSINESS_RULE", 0) + kinds.get("TRANSFORMATION_RULE", 0)
+
+    def item(iid: str, label: str, met: bool, detail: str, href: str, action: str) -> Dict[str, Any]:
+        return {"id": iid, "label": label, "met": bool(met), "detail": detail, "href": href, "action": action}
+
+    def few(names: List[str]) -> str:
+        return ", ".join(names[:4]) + (f" and {len(names) - 4} more" if len(names) > 4 else "")
+
+    if not model:
+        keys_detail = "Needs the approved model"
+    elif no_keys or no_grain:
+        keys_detail = "Missing on " + few(sorted(set(no_keys + no_grain)))
+    else:
+        keys_detail = f"{len(ents)} table(s) defined"
+    if not model:
+        examples_detail = "Needs the approved model"
+    else:
+        examples_detail = f"{len(ents) - len(without_examples)} of {len(ents)} tables"
+        if without_examples:
+            examples_detail += "; missing: " + few(without_examples)
+    levels = {
+        "minimum": [
+            item("described", "Description and owner",
+                 bool(str(info.get("description") or "").strip()) and (bool(str(info.get("owner") or "").strip()) or "OWNER" in roles),
+                 "What the domain covers, and who is accountable for it", f"{page}?tab=overview", "Edit the domain"),
+            item("sources", "Source systems", sources > 0, f"{sources} source system(s) named", "/dashboard/sources", "Onboard a source"),
+            item("model", "Approved data model", model,
+                 "The tables every run maps into, approved by a modeler" if model else "No approved data model yet",
+                 f"{page}?tab=sources", "Import a model file"),
+            item("keys", "Grain and business keys for every table", model and not no_keys and not no_grain, keys_detail,
+                 f"{page}?tab=lineage", "Open the data model"),
+        ],
+        "recommended": [
+            item("glossary", "Glossary", kinds.get("GLOSSARY", 0) > 0, f"{kinds.get('GLOSSARY', 0)} term(s)",
+                 f"{knowledge}&type=GLOSSARY", "Add terms or link a document"),
+            item("rules", "Business and transformation rules", rules > 0,
+                 f"{kinds.get('BUSINESS_RULE', 0)} business, {kinds.get('TRANSFORMATION_RULE', 0)} transformation rule(s)",
+                 f"{knowledge}&type=BUSINESS_RULE", "Add rules or link a document"),
+            item("definitions", "Column definitions", bool(cols) and described >= 0.8 * len(cols),
+                 f"{described} of {len(cols)} columns described (80% needed)" if cols else "Needs the approved model",
+                 f"{page}?tab=sources", "Import a data dictionary"),
+            item("steward", "A data steward", "STEWARD" in roles, "Reviews proposed knowledge and keeps it current",
+                 f"{page}?tab=overview", "Add a steward under People"),
+        ],
+        "best": [
+            item("examples", "Correct-output examples for every table", model and bool(ents) and not without_examples,
+                 examples_detail, f"{page}?tab=lineage", "Add examples on the data model"),
+            item("dq", "Data quality checks", targets > 0 and dq_tables >= targets,
+                 f"{dq_tables} of {targets} tables have active checks", "/dashboard/dq-store", "Open the DQ store"),
+            item("documents", "Linked documents", documents > 0, f"{documents} Confluence page(s) or document(s)",
+                 f"{page}?tab=sources", "Link Confluence or upload"),
+            item("verified", "Verified knowledge", total > 0 and verified * 2 >= total,
+                 f"{verified} of {total} items verified by a person (half needed)", f"{page}?tab=lineage", "Verify items"),
+        ],
+    }
+    out, reached, blocked = [], "none", False
+    for lid, title, meaning in LEVELS:
+        items = levels[lid]
+        met = all(i["met"] for i in items)
+        if met and not blocked:
+            reached = lid
+        blocked = blocked or not met
+        out.append({"id": lid, "title": title, "meaning": meaning, "met": met,
+                    "done": sum(1 for i in items if i["met"]), "items": items})
+    nxt = next((i for lvl in out for i in lvl["items"] if not i["met"]), None)
+    return {"level": reached, "levels": out, "next": nxt}

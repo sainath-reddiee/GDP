@@ -340,3 +340,77 @@ def remove_document(domain_id: str, source_id: str, db: Db = Depends(current_db)
     if not changed:
         raise HTTPException(404, "document not found")
     return {"source_id": source_id, "removed": True}
+
+
+# ---------------------------------------------------------------- correct-output examples
+
+def _approved_entities(db: Db, domain_id: str) -> Dict[str, Dict[str, Any]]:
+    """The tables of the domain's approved data model, by name (empty before a model is approved)."""
+    from services.common.sql import variant
+    from services.modeling import spec_v2
+
+    found = db.query("""SELECT D.SPEC, M.MODEL_ID FROM GOVERNANCE.DOMAIN_MODEL M
+                          JOIN GOVERNANCE.MODEL_DESIGNS D ON D.MODEL_ID = M.MODEL_ID AND D.VERSION = M.APPROVED_VERSION
+                         WHERE M.DOMAIN_ID = %s""", (domain_id,))
+    if not found:
+        return {}
+    spec = spec_v2.active(spec_v2.normalize_v2(variant(found[0]["spec"]) or {}, found[0]["model_id"]))
+    return {e["entity_name"]: e for e in spec["design"]["entities"]}
+
+
+@router.get("/api/domains/{domain_id}/examples")
+def domain_examples(domain_id: str, db: Db = Depends(current_db)):
+    """The correct-output examples per table: the accepted ones and the ones waiting for review."""
+    from services.common.sql import variant
+
+    domain_detail(domain_id, db)
+    rows = db.query("""SELECT KNOWLEDGE_ID, STATUS, IS_CURRENT, CONTENT_JSON, CREATED_BY, VERIFIED_BY,
+                              TO_VARCHAR(CREATED_AT, 'YYYY-MM-DD HH24:MI') AS CREATED_AT
+                         FROM KNOWLEDGE.DOMAIN_KNOWLEDGE
+                        WHERE DOMAIN_ID = %s AND KNOWLEDGE_TYPE = 'EXAMPLE'
+                          AND (IS_CURRENT AND STATUS = 'ACTIVE' OR STATUS = 'PROPOSED')
+                        ORDER BY CREATED_AT DESC""", (domain_id,))
+    out: Dict[str, Dict[str, Any]] = {}
+    for r in rows:
+        cj = variant(r.get("content_json")) or {}
+        table = str(cj.get("target_table") or "").upper()
+        if not table:
+            continue
+        slot = out.setdefault(table, {"table": table, "active": None, "proposed": None})
+        key = "active" if r["status"] == "ACTIVE" else "proposed"
+        if slot[key] is None:
+            slot[key] = {"knowledge_id": r["knowledge_id"], "columns": cj.get("columns") or [], "rows": (cj.get("rows") or [])[:10],
+                         "row_count": cj.get("row_count") or 0, "file": cj.get("file"), "warnings": cj.get("warnings") or [],
+                         "created_by": r.get("created_by"), "created_at": r.get("created_at"), "verified_by": r.get("verified_by")}
+    return {"tables": out}
+
+
+@router.post("/api/domains/{domain_id}/examples/{table}")
+async def upload_examples(domain_id: str, table: str, file: UploadFile = File(...), db: Db = Depends(current_db)):
+    """Correct output rows of one table (CSV or Excel), checked against the approved data model and proposed for
+    review as the table's examples (a new upload replaces the waiting proposal)."""
+    from services.knowledge import examples
+
+    data = await file.read(MAX_FILE_BYTES + 1)
+    if len(data) > MAX_FILE_BYTES:
+        raise HTTPException(400, "The file is larger than 10 MB; examples need only a few rows.")
+    name = (file.filename or "examples.csv")[:300]
+    table = table.strip().upper()
+
+    def work():
+        domain_detail(domain_id, db)
+        try:
+            header, rows = examples.read_rows(name, data)
+            checked = examples.check(table, header, rows, _approved_entities(db, domain_id).get(table))
+        except examples.ExampleError as exc:
+            raise HTTPException(400, str(exc)) from None
+        written = invoke_source(db, lambda session: examples.write(session, domain_id=domain_id, checked=checked, file_name=name))
+        return {**{k: checked[k] for k in ("table", "columns", "row_count", "unknown_columns", "absent_columns", "missing_keys",
+                                         "warnings")}, "knowledge_id": written, "unchanged": written is None}
+
+    try:
+        return await run_in_threadpool(work)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise _snowflake_error(exc) from exc

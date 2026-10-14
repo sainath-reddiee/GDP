@@ -9,7 +9,7 @@ Every source query fails soft: a schema that is not deployed only drops its part
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, List, Set
+from typing import Any, Dict, List, Optional, Set
 
 from fastapi import APIRouter, Depends
 
@@ -34,6 +34,21 @@ def _arr(value: Any) -> List[str]:
         except ValueError:
             return []
     return [str(v) for v in value or []]
+
+
+def _approved_entities(db: Db, domain_model: Optional[Dict[str, Any]]) -> Optional[List[Dict[str, Any]]]:
+    """The approved model's tables (retired ones left out), or None without an approved version."""
+    if not domain_model or not domain_model.get("approved_version"):
+        return None
+    from services.common.sql import variant
+    from services.modeling import spec_v2
+
+    found = _soft(db, "SELECT SPEC FROM GOVERNANCE.MODEL_DESIGNS WHERE MODEL_ID = %s AND VERSION = %s",
+                  (domain_model["model_id"], int(domain_model["approved_version"])))
+    if not found:
+        return None
+    spec = spec_v2.normalize_v2(variant(found[0]["spec"]) or {}, domain_model["model_id"])
+    return spec_v2.active(spec)["design"]["entities"]
 
 
 @router.get("/api/domains/{domain_id}/provenance")
@@ -125,7 +140,19 @@ def domain_provenance(domain_id: str, db: Db = Depends(current_db)):
     stale = next(iter(_soft(db, """SELECT COUNT(*) AS N FROM KNOWLEDGE.DOMAIN_KNOWLEDGE
                                     WHERE DOMAIN_ID = %s AND IS_CURRENT AND STATUS = 'ACTIVE'
                                       AND (REVIEW_DUE < CURRENT_DATE() OR VERIFIED_BY IS NULL)""", (domain_id,))), {}).get("n") or 0
-    return {"domain": detail["domain"],
+    members = _soft(db, "SELECT USER_NAME, ROLE FROM KNOWLEDGE.DOMAIN_MEMBER WHERE DOMAIN_ID = %s", (domain_id,))
+    example_tables = [r["t"] for r in _soft(db, """SELECT DISTINCT UPPER(CONTENT_JSON:target_table::STRING) AS T
+                                                    FROM KNOWLEDGE.DOMAIN_KNOWLEDGE
+                                                   WHERE DOMAIN_ID = %s AND KNOWLEDGE_TYPE = 'EXAMPLE' AND IS_CURRENT
+                                                     AND STATUS = 'ACTIVE'""", (domain_id,)) if r.get("t")]
+    kinds: Dict[str, int] = {}
+    for r in rows:
+        if r.get("status") == "ACTIVE":
+            kinds[r["knowledge_type"]] = kinds.get(r["knowledge_type"], 0) + 1
+    ready = provenance.readiness(detail, members=members, entities=_approved_entities(db, domain_model), knowledge_types=kinds,
+                                 verified=sum(1 for r in rows if r.get("verified_by")), total=len(rows),
+                                 example_tables=example_tables, dq_tables=len(dq), documents=len(documents))
+    return {"domain": detail["domain"], "readiness": ready,
             "manifest": manifest,
             "flow": provenance.flow(detail, manifest, rows, domain_model=domain_model, table_models=table_models, sttm=sttm_rows,
                                     ingestion=ingestion, jira=jira, documents=documents, proposed=int(proposed), stale=int(stale)),

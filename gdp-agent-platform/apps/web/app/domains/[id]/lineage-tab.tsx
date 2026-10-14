@@ -7,7 +7,7 @@ import { DataModel } from "./data-model";
 import { cn } from "@/lib/utils";
 import { prettyType } from "../../knowledge/knowledge-ui";
 import { domainProvenance, type DomainProvenance, type ProvenanceSource } from "../actions";
-import { ContractDrawer, LifecycleFlow, NeedsVerification } from "./lifecycle";
+import { ContractDrawer, LifecycleFlow, NeedsVerification, Readiness } from "./lifecycle";
 
 const TONE: Record<string, string> = {
   pack: "#6366f1", contract: "#8b5cf6", people: "#0ea5e9", copilot: "#a855f7", ai: "#d946ef", mapping: "#14b8a6",
@@ -254,6 +254,7 @@ export function LineageTab({ domainId, domainName }: { domainId: string; domainN
   const cov = data.coverage;
   return (
     <div className="space-y-5" data-testid="lineage-tab">
+      {data.readiness && <Readiness readiness={data.readiness} />}
       <LifecycleFlow flow={data.flow} domainName={domainName} onContract={() => setContract(true)} />
       <ContractDrawer domainId={domainId} open={contract} onClose={() => setContract(false)} />
       <DataModel domainId={domainId} domainName={domainName} />

@@ -154,7 +154,14 @@ export type DomainContract = {
   extracted: { database: string | null; schema: string | null; hub: string | null; required: string[];
                targets: { table: string; columns: number; hkey_columns: string[]; reference_ctes: string[] }[] };
 };
+export type ReadinessItem = { id: string; label: string; met: boolean; detail: string; href: string; action: string };
+export type DomainReadiness = {
+  level: "none" | "minimum" | "recommended" | "best";
+  levels: { id: string; title: string; meaning: string; met: boolean; done: number; items: ReadinessItem[] }[];
+  next: ReadinessItem | null;
+};
 export type DomainProvenance = {
+  readiness?: DomainReadiness;
   manifest: DomainManifest;
   flow: { lanes: (FlowStep & { steps: FlowStep[] })[] };
   proposed: number;
@@ -253,4 +260,17 @@ export type DomainDataModel = {
 };
 export async function domainDataModel(domainId: string, view: "approved" | "draft" = "approved") {
   return attemptValue(() => api<DomainDataModel>(`/api/domains/${encodeURIComponent(domainId)}/data-model?view=${view}`));
+}
+
+/** Correct-output examples per table: the accepted ones and the ones waiting for review. */
+export type TableExamples = { knowledge_id: string; columns: string[]; rows: string[][]; row_count: number; file: string | null;
+  warnings: string[]; created_by: string | null; created_at: string | null; verified_by: string | null };
+export type DomainExamples = { tables: Record<string, { table: string; active: TableExamples | null; proposed: TableExamples | null }> };
+export type ExampleUpload = { table: string; columns: string[]; row_count: number; unknown_columns: string[]; absent_columns: string[];
+  missing_keys: string[]; warnings: string[]; knowledge_id: string | null; unchanged: boolean };
+export async function domainExamples(domainId: string) {
+  return attemptValue(() => api<DomainExamples>(`/api/domains/${encodeURIComponent(domainId)}/examples`));
+}
+export async function uploadExamples(domainId: string, table: string, form: FormData) {
+  return attemptValue(() => apiForm<ExampleUpload>(`/api/domains/${encodeURIComponent(domainId)}/examples/${encodeURIComponent(table)}`, form));
 }

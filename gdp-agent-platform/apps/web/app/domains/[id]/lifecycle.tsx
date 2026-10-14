@@ -2,13 +2,13 @@
 
 import Link from "next/link";
 import { Fragment, useEffect, useState } from "react";
-import { ArrowRight, BadgeCheck, ChevronDown, FileText, Loader2 } from "lucide-react";
+import { ArrowRight, BadgeCheck, ChevronDown, CircleCheck, CircleDashed, FileText, Gauge, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Drawer } from "@/components/hub/overlay";
 import { MarkdownDoc } from "@/components/markdown-doc";
 import { prettyType } from "../../knowledge/knowledge-ui";
 import { verifyKnowledge } from "../../knowledge/actions";
-import { domainContract, type DomainContract, type FlowStep, type DomainProvenance } from "../actions";
+import { domainContract, type DomainContract, type DomainReadiness, type FlowStep, type DomainProvenance } from "../actions";
 
 const STATE: Record<string, { label: string; bar: string; chip: string }> = {
   ok: { label: "Trusted", bar: "bg-emerald-500", chip: "bg-emerald-500/10 text-emerald-700 dark:text-emerald-400" },
@@ -60,6 +60,63 @@ function Card({ step, onContract, emphasis }: { step: FlowStep; onContract?: () 
 }
 
 const Arrow = () => <ArrowRight className="mx-1 h-4 w-4 shrink-0 self-center text-muted-foreground" aria-hidden />;
+
+const LEVEL_NAME: Record<DomainReadiness["level"], string> = { none: "Not ready", minimum: "Minimum", recommended: "Recommended", best: "Best" };
+
+/** How ready the domain is for development: three levels, each item met or missing, with where it is fixed. The
+ *  better the context a domain brings, the less rework every run needs. */
+export function Readiness({ readiness }: { readiness: DomainReadiness }) {
+  const [open, setOpen] = useState(readiness.level !== "best");
+  const n = readiness.next;
+  return (
+    <section className="surface p-4" data-testid="domain-readiness">
+      <div className="flex flex-wrap items-center gap-3">
+        <Gauge className="h-5 w-5 text-primary" />
+        <div className="min-w-0 flex-1">
+          <h3 className="text-sm font-semibold">Readiness: <span className={cn(readiness.level === "none" ? "text-amber-600" : "text-emerald-600")}>{LEVEL_NAME[readiness.level]}</span></h3>
+          <p className="text-xs text-muted-foreground">
+            {n ? <>Next: <Link href={n.href} className="font-medium text-primary hover:underline">{n.label}</Link> ({n.detail})</> : "Every item is met."}
+          </p>
+        </div>
+        <ol className="flex items-center gap-1.5 text-[11px]">
+          {readiness.levels.map((l, i) => (
+            <Fragment key={l.id}>
+              {i > 0 && <span aria-hidden className="h-px w-4 bg-border" />}
+              <li className={cn("rounded-full px-2 py-0.5 font-medium ring-1 ring-inset",
+                l.met ? "bg-emerald-500/10 text-emerald-700 ring-emerald-500/20 dark:text-emerald-300" : "bg-muted text-muted-foreground ring-border")}
+                  title={l.meaning}>{l.title} {l.done}/{l.items.length}</li>
+            </Fragment>
+          ))}
+        </ol>
+        <button type="button" onClick={() => setOpen(!open)} aria-expanded={open} className="rounded-md p-1 text-muted-foreground hover:bg-muted" aria-label="Show the checklist">
+          <ChevronDown className={cn("h-4 w-4 transition", open && "rotate-180")} />
+        </button>
+      </div>
+      {open && (
+        <div className="mt-3 grid gap-3 md:grid-cols-3">
+          {readiness.levels.map((l) => (
+            <div key={l.id} className="rounded-xl border p-3">
+              <p className="text-xs font-semibold">{l.title}</p>
+              <p className="mb-2 text-[11px] text-muted-foreground">{l.meaning}</p>
+              <ul className="space-y-1.5">
+                {l.items.map((i) => (
+                  <li key={i.id} className="flex gap-2 text-xs">
+                    {i.met ? <CircleCheck className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-600" /> : <CircleDashed className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />}
+                    <span className="min-w-0">
+                      <span className={cn("font-medium", i.met && "text-muted-foreground")}>{i.label}</span>
+                      <span className="block text-[11px] text-muted-foreground">{i.detail}</span>
+                      {!i.met && <Link href={i.href} className="text-[11px] text-primary hover:underline">{i.action}</Link>}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
 
 /** The domain's development lifecycle (as in the team's process diagram): existing tables flow through the data model
  *  and knowledge base to Silver modeling, mapping and code; new tables come from Jira stories or spreadsheets through

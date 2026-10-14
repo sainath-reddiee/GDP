@@ -1,12 +1,12 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
-import { ArrowRight, BookOpen, Check, FileInput, GitBranch, KeyRound, Loader2, Network, TableProperties, X } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { ArrowRight, BookOpen, Check, FileInput, GitBranch, KeyRound, Loader2, Network, TableProperties, Upload, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAccess } from "@/components/access";
 import { ErCanvas } from "@/components/hub/er-canvas";
-import { domainDataModel, type DomainDataModel } from "../actions";
+import { domainDataModel, domainExamples, uploadExamples, type DomainDataModel, type DomainExamples, type TableExamples } from "../actions";
 
 const MARK = { added: "text-emerald-600", changed: "text-amber-600", removed: "text-red-600 line-through" } as const;
 
@@ -19,6 +19,72 @@ function Chip({ ok, label, title }: { ok: boolean; label: string; title: string 
   );
 }
 
+function Preview({ ex }: { ex: TableExamples }) {
+  return (
+    <div className="overflow-auto rounded-lg border">
+      <table className="w-full text-[10px]">
+        <thead className="bg-muted/60"><tr>{ex.columns.map((c) => <th key={c} className="whitespace-nowrap px-1.5 py-1 text-left font-mono font-medium">{c}</th>)}</tr></thead>
+        <tbody>{ex.rows.slice(0, 5).map((r, i) => (
+          <tr key={i} className="border-t">{r.map((v, j) => <td key={j} className="max-w-[10rem] truncate whitespace-nowrap px-1.5 py-0.5 font-mono" title={v}>{v}</td>)}</tr>
+        ))}</tbody>
+      </table>
+    </div>
+  );
+}
+
+/** A table's correct-output examples: the accepted rows, the ones waiting for review, and an upload. */
+function Examples({ domainId, table, data, may, onChange }: {
+  domainId: string; table: string; data: DomainExamples["tables"][string] | undefined; may: boolean; onChange: () => void;
+}) {
+  const file = useRef<HTMLInputElement>(null);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ tone: "ok" | "error"; text: string } | null>(null);
+  const upload = async (files: FileList | null) => {
+    const f = files?.[0];
+    if (!f) return;
+    const form = new FormData();
+    form.append("file", f);
+    setBusy(true); setMsg(null);
+    const r = await uploadExamples(domainId, table, form).catch(() => null);
+    setBusy(false);
+    if (file.current) file.current.value = "";
+    if (!r?.ok) { setMsg({ tone: "error", text: r && !r.ok ? r.error : "Could not upload the examples." }); return; }
+    const u = r.data;
+    setMsg({ tone: "ok", text: u.unchanged ? "These examples are already the ones on file."
+      : `${u.row_count} row${u.row_count === 1 ? "" : "s"} of ${u.columns.length} columns proposed; a steward accepts them in the review inbox.`
+        + (u.warnings.length ? ` ${u.warnings.join("; ")}.` : "") });
+    onChange();
+  };
+  const active = data?.active;
+  const proposed = data?.proposed;
+  return (
+    <div className="space-y-1.5" data-testid="table-examples">
+      <p className="font-medium">Correct-output examples</p>
+      {active ? (
+        <>
+          <p className="text-muted-foreground">{active.row_count} accepted row{active.row_count === 1 ? "" : "s"}{active.file ? ` from ${active.file}` : ""}{active.verified_by ? ` · verified by ${active.verified_by}` : ""}</p>
+          <Preview ex={active} />
+        </>
+      ) : !proposed && <p className="text-muted-foreground">None yet. A few rows exactly as this table should hold them are the strongest context a run gets: STTM and code generation follow their formats.</p>}
+      {proposed && (
+        <p className="text-amber-600">{proposed.row_count} row{proposed.row_count === 1 ? "" : "s"} waiting for review{proposed.file ? ` (${proposed.file})` : ""}:{" "}
+          <Link href={`/knowledge?tab=inbox&domain_id=${encodeURIComponent(domainId)}`} className="underline">review inbox</Link></p>
+      )}
+      {msg && <p role={msg.tone === "error" ? "alert" : "status"} className={msg.tone === "error" ? "text-destructive" : "text-emerald-700 dark:text-emerald-300"}>{msg.text}</p>}
+      {may && (
+        <>
+          <input ref={file} type="file" accept=".csv,.tsv,.txt,.xlsx,.xlsm" hidden onChange={(e) => void upload(e.target.files)} />
+          <button type="button" disabled={busy} onClick={() => file.current?.click()}
+                  className="inline-flex items-center gap-1 rounded-md border px-2 py-1 font-medium hover:bg-muted disabled:opacity-50">
+            {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <Upload className="h-3 w-3" />}{active || proposed ? "Replace examples" : "Add examples"} (.csv or .xlsx)
+          </button>
+          <p className="text-[10px] text-muted-foreground">First row: the table&apos;s column names. Up to 50 rows.</p>
+        </>
+      )}
+    </div>
+  );
+}
+
 /** The domain's data model: the tables every run maps into, drawn from the approved model (or the open draft, with its
  *  changes marked), and what each table already has: knowledge, STTM, a table model. */
 export function DataModel({ domainId, domainName }: { domainId: string; domainName: string }) {
@@ -28,6 +94,9 @@ export function DataModel({ domainId, domainName }: { domainId: string; domainNa
   const [error, setError] = useState("");
   const [selected, setSelected] = useState<string | null>(null);
   const [area, setArea] = useState("");
+  const [examples, setExamples] = useState<DomainExamples["tables"]>({});
+  const loadExamples = () => void domainExamples(domainId).then((r) => { if (r.ok) setExamples(r.data.tables); });
+  useEffect(loadExamples, [domainId]);   // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     let live = true;
     setData(null); setError("");
@@ -44,6 +113,7 @@ export function DataModel({ domainId, domainName }: { domainId: string; domainNa
   const m = data.model;
   const workbench = m ? `/dashboard/modeling/${encodeURIComponent(m.model_id)}` : "/dashboard/modeling";
   const mayImport = canAct("MODEL.EDIT");
+  const mayExamples = canAct("KNOWLEDGE.EDIT");
   const draft = view === "draft";
   const changes = d?.highlight.changes ?? [];
 
@@ -123,7 +193,9 @@ export function DataModel({ domainId, domainName }: { domainId: string; domainNa
                     <Chip ok={(d.coverage[entity.entity_name]?.knowledge ?? 0) > 0} label={`${d.coverage[entity.entity_name]?.knowledge ?? 0} knowledge`} title="Active knowledge items about this table" />
                     <Chip ok={!!d.coverage[entity.entity_name]?.sttm} label="STTM" title="A source-to-target mapping exists for this table" />
                     <Chip ok={!!d.coverage[entity.entity_name]?.table_model} label="Table model" title="A table model exists in the Model Workbench" />
+                    <Chip ok={!!examples[entity.entity_name]?.active} label="Examples" title="Accepted correct-output examples" />
                   </div>
+                  {!draft && <Examples domainId={domainId} table={entity.entity_name} data={examples[entity.entity_name]} may={mayExamples} onChange={loadExamples} />}
                   <div>
                     <p className="mb-1 font-medium">Columns ({entity.attributes.length})</p>
                     <ul className="space-y-0.5">
