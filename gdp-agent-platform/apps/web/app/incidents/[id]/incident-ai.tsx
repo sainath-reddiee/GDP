@@ -366,7 +366,7 @@ export function ImpactPanel({ incidentId, envId, dagId }: { incidentId: string; 
           <ul className="mt-1 space-y-0.5">
             {impact.sttm.map((s) => (
               <li key={`${s.run_id}:${s.target}`}>
-                <Link href={`/runs/${encodeURIComponent(s.run_id)}/sttm`} className="font-mono text-primary hover:underline">{s.target || s.run_id}</Link>
+                <Link href={`/runs/${encodeURIComponent(s.run_id)}/modeling?tab=transformations`} className="font-mono text-primary hover:underline">{s.target || s.run_id}</Link>
               </li>
             ))}
           </ul>

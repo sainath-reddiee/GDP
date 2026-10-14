@@ -53,7 +53,7 @@ export async function generateDesign(runId: string, body: {
 }) {
   const r = await attemptValue(() => api<{ version: number; issues: Issue[]; grounding: Record<string, unknown>; table_models?: StoredTable[] }>(
     `/api/runs/${runId}/model/design`, { method: "POST", body: JSON.stringify(body) }));
-  if (r.ok) revalidatePath(`/runs/${runId}/mapping`);
+  if (r.ok) revalidatePath(`/runs/${runId}/modeling`);
   return r;
 }
 
@@ -61,7 +61,7 @@ export async function saveDesign(runId: string, design: Design, conventions: Con
   const r = await attemptValue(() => api<{ version: number; issues: Issue[]; table_models?: StoredTable[] }>(`/api/runs/${runId}/model`, {
     method: "PUT", body: JSON.stringify({ design, conventions, note }),
   }));
-  if (r.ok) revalidatePath(`/runs/${runId}/mapping`);
+  if (r.ok) revalidatePath(`/runs/${runId}/modeling`);
   return r;
 }
 

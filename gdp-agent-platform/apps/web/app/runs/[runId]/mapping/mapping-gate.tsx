@@ -81,7 +81,7 @@ export function MappingGate({
               setError(result.error);
               return;
             }
-            router.push(`/runs/${runId}/sttm`);
+            router.push(`/runs/${runId}/modeling?tab=transformations`);
           })}
         >
           {pending && <Loader2 className="h-4 w-4 animate-spin" />}

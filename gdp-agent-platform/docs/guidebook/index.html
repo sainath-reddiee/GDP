@@ -532,19 +532,23 @@ footer { color: var(--muted); font-size: 13px; margin-top: 56px; }
 </dl>
 
 <h3 id="f-runs">Runs and pipeline stages</h3>
-<p>A run takes source tables to reviewed dbt code. Each stage page is under <code>/runs/&lt;run id&gt;/</code>.</p>
+<p>A run is pipeline 1, Source to Silver (pre-MDM): it takes source tables to reviewed Silver dbt code. Its steps are
+<strong>Source Ingestion</strong>, <strong>Profiling</strong>, <strong>Modeling</strong> (step 1 field mapping, step 2
+transformations and joins, which is the STTM) and <strong>Silver Code Generation</strong>, with QA tests, Data Quality,
+Validation and Code review. Each step page is under <code>/runs/&lt;run id&gt;/</code>; the internal stage ids (MAPPING,
+STTM, DBT) are unchanged, and the old <code>mapping</code> and <code>sttm</code> addresses open the matching Modeling tab.</p>
 <div class="tablebox"><table>
-<tr><th>Stage page</th><th>What happens</th><th>Privileges</th></tr>
-<tr><td>source, access, landing</td><td>Register the source, check read access, land selected objects</td><td>RUN.OPERATE</td></tr>
-<tr><td>profile</td><td>Profile landed tables; refresh one table</td><td>RUN.OPERATE; refresh PROFILE.RUN</td></tr>
-<tr><td>domain</td><td>Domain recommendation; change target, intent or domain</td><td>MODEL.EDIT</td></tr>
-<tr><td>mapping</td><td>Generate candidates; accept or reject; approve the mapping pack; model design (AI design, edit, version, propose to the domain model, or approve as target when proposals are off)</td><td>RUN.OPERATE; MAPPING.DECIDE; MAPPING.APPROVE; MODEL.EDIT; MODEL.APPROVE; AI.USE for AI</td></tr>
-<tr><td>sttm</td><td>Generate the STTM; edit transformations and joins; AI refine; approve</td><td>RUN.OPERATE; STTM.EDIT; STTM.APPROVE</td></tr>
-<tr><td>soda (Data Quality)</td><td>Generate checks, first scan, backtest; import a client brief; decide checks; approve the pack</td><td>RUN.OPERATE; SODA.EDIT; SODA.APPROVE</td></tr>
-<tr><td>qa</td><td>Functional tests from the STTM, ask AI for a test, run, link Jira issues, sign off</td><td>QA.EDIT; AI.USE; JIRA.WRITE; QA.SIGNOFF</td></tr>
-<tr><td>dbt</td><td>Pick a repository, cut a branch, generate the dbt project, enhance or review with AI, publish a PR</td><td>DBT.EDIT</td></tr>
-<tr><td>validation</td><td>Parse, compile, naming and STTM consistency checks</td><td>RUN.OPERATE</td></tr>
-<tr><td>review</td><td>Final code review and sign-off, or send back</td><td>REVIEW.APPROVE; REVIEW.DECIDE</td></tr>
+<tr><th>Step (page)</th><th>What happens</th><th>Privileges</th></tr>
+<tr><td>Source Ingestion (source, access, landing)</td><td>Register the source, check read access, land selected objects</td><td>RUN.OPERATE</td></tr>
+<tr><td>Profiling (profile)</td><td>Profile landed tables; refresh one table</td><td>RUN.OPERATE; refresh PROFILE.RUN</td></tr>
+<tr><td>Knowledge pack (domain)</td><td>Domain recommendation and suggested models; change target, intent or domain</td><td>MODEL.EDIT</td></tr>
+<tr><td>Modeling, step 1: field mapping (modeling?tab=mapping)</td><td>Generate candidates; accept or reject; approve the mapping pack; model design (AI design, edit, version, propose to the domain model, or approve as target when proposals are off)</td><td>RUN.OPERATE; MAPPING.DECIDE; MAPPING.APPROVE; MODEL.EDIT; MODEL.APPROVE; AI.USE for AI</td></tr>
+<tr><td>Modeling, step 2: transformations and joins (modeling?tab=transformations)</td><td>Generate the STTM; edit transformations and joins; AI refine; approve</td><td>RUN.OPERATE; STTM.EDIT; STTM.APPROVE</td></tr>
+<tr><td>Data Quality (soda)</td><td>Generate checks, first scan, backtest; import a client brief; decide checks; approve the pack</td><td>RUN.OPERATE; SODA.EDIT; SODA.APPROVE</td></tr>
+<tr><td>QA tests (qa)</td><td>Functional tests from the STTM, ask AI for a test, run, link Jira issues, sign off</td><td>QA.EDIT; AI.USE; JIRA.WRITE; QA.SIGNOFF</td></tr>
+<tr><td>Silver Code Generation (dbt)</td><td>Pick a repository, cut a branch, generate the Silver dbt project, enhance or review with AI, publish a PR</td><td>DBT.EDIT</td></tr>
+<tr><td>Validation (validation)</td><td>Parse, compile, naming and STTM consistency checks</td><td>RUN.OPERATE</td></tr>
+<tr><td>Code review (review)</td><td>Final code review and sign-off, or send back</td><td>REVIEW.APPROVE; REVIEW.DECIDE</td></tr>
 </table></div>
 <h4>Gates</h4>
 <ul>

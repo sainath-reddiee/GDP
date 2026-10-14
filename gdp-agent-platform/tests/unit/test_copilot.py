@@ -43,3 +43,11 @@ def test_prompt_carries_context_history_and_rules():
                           [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "hello"}])
     assert "RAW_EVENTS" in prompt and "events are append only" in prompt and "USER: hi" in prompt
     assert "Never invent tables" in prompt and "open_stage" in prompt
+
+
+def test_modeling_page_tells_which_step():
+    run = "0b793880-c4d7-4cc7-9162-cb147b7cd456"
+    assert parse_page({"path": f"/runs/{run}/modeling"})["stage"] == "MAPPING"
+    assert parse_page({"path": f"/runs/{run}/modeling?tab=mapping"})["stage"] == "MAPPING"
+    assert parse_page({"path": f"/runs/{run}/modeling?tab=transformations"})["stage"] == "STTM"
+    assert parse_page({"path": f"/runs/{run}/sttm"})["stage"] == "STTM"   # old links still resolve

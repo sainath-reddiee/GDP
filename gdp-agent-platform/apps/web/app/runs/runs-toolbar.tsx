@@ -5,8 +5,8 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
-const STAGES = [["SOURCE", "Source"], ["PROFILING", "Profiling"], ["DOMAIN", "Domain"], ["MAPPING", "Mapping"],
-  ["STTM", "STTM"], ["SODA", "Data quality"], ["DBT", "dbt"], ["VALIDATION", "Validation"], ["REVIEW", "Code review"]];
+const STAGES = [["SOURCE", "Source Ingestion"], ["PROFILING", "Profiling"], ["DOMAIN", "Domain"], ["MAPPING", "Modeling: field mapping"],
+  ["STTM", "Modeling: transformations"], ["SODA", "Data Quality"], ["DBT", "Silver Code Generation"], ["VALIDATION", "Validation"], ["REVIEW", "Code review"]];
 const SORTS = [["newest", "Newest first"], ["updated", "Recently updated"], ["oldest", "Oldest first"], ["name", "Name"]];
 
 /** Search, filters, sorting and paging for the run list; everything lives in the URL so views can be shared. */

@@ -6,12 +6,12 @@ export const REVIEW_STATES = new Set(["MAPPING_REVIEW", "STTM_REVIEW", "SODA_REV
 
 /** Pipeline order used for the stage funnel; DOMAIN shows under Profiling (it is identified right after). */
 export const FUNNEL = [
-  { stage: "SOURCE", label: "Source" },
+  { stage: "SOURCE", label: "Source Ingestion" },
   { stage: "PROFILING", label: "Profiling" },
-  { stage: "MAPPING", label: "Mapping" },
-  { stage: "STTM", label: "STTM" },
+  { stage: "MAPPING", label: "Modeling: field mapping" },
+  { stage: "STTM", label: "Modeling: transformations" },
   { stage: "SODA", label: "Data Quality" },
-  { stage: "DBT", label: "dbt" },
+  { stage: "DBT", label: "Silver Code Generation" },
   { stage: "VALIDATION", label: "Validation" },
   { stage: "REVIEW", label: "Code review" },
 ] as const;

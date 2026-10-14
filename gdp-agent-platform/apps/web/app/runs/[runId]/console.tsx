@@ -28,16 +28,16 @@ const NEXT_STEP: Record<string, { slug: string; label: string }> = {
   ACCESS_APPROVED: { slug: "source", label: "Resume landing" },
   LANDING_PENDING: { slug: "source", label: "Resume landing" },
   LANDING_COMPLETE: { slug: "profile", label: "Start profiling" },
-  PROFILING_COMPLETE: { slug: "mapping", label: "Generate mapping candidates" },
-  DOMAIN_IDENTIFIED: { slug: "mapping", label: "Generate mapping candidates" },
-  MAPPING_REVIEW: { slug: "mapping", label: "Approve the mapping pack" },
-  MAPPING_APPROVED: { slug: "sttm", label: "Generate the STTM" },
-  STTM_REVIEW: { slug: "sttm", label: "Approve the STTM" },
-  STTM_APPROVED: { slug: "soda", label: "Start Data Quality or dbt" },
+  PROFILING_COMPLETE: { slug: "modeling?tab=mapping", label: "Modeling: generate the field mapping" },
+  DOMAIN_IDENTIFIED: { slug: "modeling?tab=mapping", label: "Modeling: generate the field mapping" },
+  MAPPING_REVIEW: { slug: "modeling?tab=mapping", label: "Modeling: approve the field mapping" },
+  MAPPING_APPROVED: { slug: "modeling?tab=transformations", label: "Modeling: generate transformations and joins" },
+  STTM_REVIEW: { slug: "modeling?tab=transformations", label: "Modeling: approve transformations and joins" },
+  STTM_APPROVED: { slug: "soda", label: "Start Data Quality or Silver code generation" },
   SODA_REVIEW: { slug: "soda", label: "Approve the Data Quality pack" },
-  SODA_APPROVED: { slug: "dbt", label: "Generate or review dbt" },
-  DBT_PENDING: { slug: "dbt", label: "Generate dbt" },
-  DBT_GENERATING: { slug: "dbt", label: "Review generated dbt" },
+  SODA_APPROVED: { slug: "dbt", label: "Generate or review the Silver code" },
+  DBT_PENDING: { slug: "dbt", label: "Generate the Silver code" },
+  DBT_GENERATING: { slug: "dbt", label: "Review the generated Silver code" },
   VALIDATION_PENDING: { slug: "validation", label: "Run validation" },
   VALIDATION_FAILED: { slug: "validation", label: "Inspect validation" },
   DBT_REVIEW: { slug: "review", label: "Review generated code" },
@@ -75,7 +75,7 @@ export function RunConsole({ state }: { state: RunState }) {
           {["STTM_APPROVED", "SODA_PENDING", "SODA_REVIEW"].includes(state.current_state) ? (
             <div className="mb-3 flex flex-wrap gap-2">
               <Link href={`/runs/${state.run_id}/soda`} className={buttonVariants()}>Open Data Quality</Link>
-              <Link href={`/runs/${state.run_id}/dbt`} className={buttonVariants({ variant: "outline" })}>Open dbt</Link>
+              <Link href={`/runs/${state.run_id}/dbt`} className={buttonVariants({ variant: "outline" })}>Open Silver Code Generation</Link>
             </div>
           ) : next && (
             <Link href={`/runs/${state.run_id}/${next.slug}`} className={buttonVariants({ className: "mb-3" })}>

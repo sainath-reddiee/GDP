@@ -10,10 +10,12 @@ export function StageGate({ state, stage, children }: { state: RunState; stage: 
   if (status !== "LOCKED") return <>{children}</>;
   const index = STAGES.findIndex((s) => s.stage === stage);
   const previous = stage === "SODA" || stage === "DBT"
-    ? "the approved STTM"
+    ? "the approved model (Modeling: transformations and joins)"
     : stage === "VALIDATION"
-      ? "Data Quality or dbt generation"
-      : index > 0 ? STAGES[index - 1].label : "the previous stage";
+      ? "Data Quality or Silver code generation"
+      : stage === "STTM"
+        ? "the approved field mapping (Modeling, step 1)"
+        : index > 0 ? STAGES[index - 1].label : "the previous stage";
   return (
     <Card>
       <CardHeader>

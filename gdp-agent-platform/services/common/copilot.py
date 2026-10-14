@@ -32,7 +32,7 @@ ANSWER_SCHEMA = {
     },
     "required": ["answer"],
 }
-STAGE_PAGES = {"profile": "PROFILING", "domain": "DOMAIN", "mapping": "MAPPING", "sttm": "STTM", "soda": "SODA",
+STAGE_PAGES = {"profile": "PROFILING", "domain": "DOMAIN", "modeling": "MAPPING", "mapping": "MAPPING", "sttm": "STTM", "soda": "SODA",
                "qa": "QA", "dbt": "DBT", "validation": "VALIDATION", "review": "REVIEW", "source": "SOURCE"}
 UUID = re.compile(r"^[0-9a-f-]{36}$")
 IDENT = re.compile(r"^[A-Za-z0-9_$.\-]{1,255}$")
@@ -46,6 +46,8 @@ def parse_page(page: Dict[str, Any]) -> Dict[str, Any]:
     if found:
         out["run_id"] = found.group(1)
         out["stage"] = STAGE_PAGES.get(found.group(2) or "", "OVERVIEW" if not found.group(2) else found.group(2).upper())
+        if found.group(2) == "modeling" and "tab=transformations" in path:   # Modeling, step 2
+            out["stage"] = "STTM"
     for key in ("database", "schema", "table"):
         value = str(page.get(key) or "").strip()
         if value and IDENT.match(value):

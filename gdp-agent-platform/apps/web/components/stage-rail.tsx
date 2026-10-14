@@ -11,11 +11,13 @@ import type { StageStatus, StageStatusValue } from "@/lib/types";
 import { byStage } from "@/lib/stages";
 import { cn } from "@/lib/utils";
 
-/** Lineage of a run: a linear spine to the STTM, three parallel lanes built from it (QA tests, Data Quality,
- *  dbt then Validation), merging into Code review. Connectors turn green as the stage on their left completes. */
+/** Lineage of a run (pipeline 1, Source to Silver): Source Ingestion, Profiling and Modeling (field mapping plus
+ *  transformations and joins), then three parallel lanes built from the approved model (QA tests, Data Quality,
+ *  Silver Code Generation then Validation), merging into Code review. Connectors turn green as the stage on their
+ *  left completes. */
 
 const ICON: Record<string, typeof Database> = {
-  SOURCE: Database, PROFILING: ScanSearch, MAPPING: GitCompareArrows, STTM: FileSpreadsheet, QA: FlaskConical,
+  SOURCE: Database, PROFILING: ScanSearch, MAPPING: GitCompareArrows, STTM: FileSpreadsheet, MODELING: GitCompareArrows, QA: FlaskConical,
   SODA: ShieldCheck, DBT: Code2, VALIDATION: BadgeCheck, REVIEW: GitPullRequest,
 };
 
@@ -118,7 +120,17 @@ export function StageRail({ runId, stages }: { runId: string; stages: StageStatu
   // QA is a lane once the STTM is approved (status from its sign-off); before that it only previews tests.
   const qaLane = stages.find((s) => s.stage === "QA");
   const qaStatus: NodeStatus = qaLane ? qaLane.status : sttm === "LOCKED" ? "LOCKED" : "AVAILABLE";
-  const spine = ["SOURCE", "PROFILING", "MAPPING", "STTM"];
+  // Modeling is one node for MAPPING and STTM: approved once the STTM is, else the more urgent of the two
+  const modeling = ((): { status: NodeStatus; note: string } => {
+    const m = status("MAPPING"), t = status("STTM");
+    if (t === "COMPLETE") return { status: "COMPLETE", note: "approved" };
+    if (m === "LOCKED") return { status: "LOCKED", note: "locked" };
+    for (const bad of ["FAILED", "BLOCKED", "CANCELLED"] as const) if (m === bad || t === bad) return { status: bad, note: TONE[bad].label };
+    if (m === "REVIEW_REQUIRED") return { status: "REVIEW_REQUIRED", note: "review mapping" };
+    if (t === "REVIEW_REQUIRED") return { status: "REVIEW_REQUIRED", note: "review STTM" };
+    return { status: "ACTIVE", note: m === "COMPLETE" ? "transformations" : "field mapping" };
+  })();
+  const spine = ["SOURCE", "PROFILING", "MODELING"];
   const overview = path === `/runs/${runId}`;
   // shrink the whole rail to fit narrower screens instead of scrolling sideways (down to 75%, then scroll)
   const outer = useRef<HTMLElement>(null);
@@ -153,18 +165,21 @@ export function StageRail({ runId, stages }: { runId: string; stages: StageStatu
 
         {spine.map((stage, i) => (
           <div key={stage} className="flex items-center">
-            {i > 0 && <Edge done={done(spine[i - 1])} active={done(spine[i - 1]) && live(stage)} />}
-            {node(stage)}
+            {i > 0 && <Edge done={done(spine[i - 1])} active={done(spine[i - 1]) && (stage === "MODELING" ? ["ACTIVE", "REVIEW_REQUIRED"].includes(modeling.status) : live(stage))} />}
+            {stage === "MODELING"
+              ? <Node id="MODELING" label="Modeling" status={modeling.status} note={modeling.note} href={`/runs/${runId}/modeling`}
+                      current={path === `/runs/${runId}/modeling` || path === `/runs/${runId}/mapping` || path === `/runs/${runId}/sttm`} />
+              : node(stage)}
           </div>
         ))}
 
         <Branches lanes={3} direction="fork" done={[sttm !== "LOCKED", done("STTM"), done("STTM")]} />
 
         <div className="flex flex-col" style={{ gap: GAP }} role="group"
-             aria-label="Built in parallel from the approved STTM: QA tests, Data Quality, and dbt then Validation">
+             aria-label="Built in parallel from the approved model: QA tests, Data Quality, and Silver Code Generation then Validation">
           <div className="flex items-center" style={{ height: LANE_H }}>
             {node("QA", { status: qaStatus, href: qaStatus === "LOCKED" ? undefined : `/runs/${runId}/qa`, label: "QA tests",
-                          note: qaStatus === "AVAILABLE" ? "from the STTM" : qaLane?.note })}
+                          note: qaStatus === "AVAILABLE" ? "from the model" : qaLane?.note })}
             <Edge done={qaStatus === "COMPLETE"} grow />
           </div>
           <div className="flex items-center" style={{ height: LANE_H }}>

@@ -74,7 +74,7 @@ export function TableModelsList({ rows, canEdit, filters, openNew = false }: {
       </div>
       {filters.run && (
         <p className="flex items-center gap-2 text-xs text-muted-foreground">
-          <Workflow className="h-3.5 w-3.5" /> Tables from run <Link href={`/runs/${filters.run}/mapping`} className="font-medium text-primary hover:underline">{runName ?? filters.run.slice(0, 8)}</Link>
+          <Workflow className="h-3.5 w-3.5" /> Tables from run <Link href={`/runs/${filters.run}/modeling?tab=mapping`} className="font-medium text-primary hover:underline">{runName ?? filters.run.slice(0, 8)}</Link>
           <button type="button" onClick={() => go({ run: "" })} className="underline">show all</button>
         </p>
       )}
