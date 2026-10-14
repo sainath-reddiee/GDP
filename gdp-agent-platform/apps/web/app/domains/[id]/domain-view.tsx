@@ -151,12 +151,12 @@ export function DomainView({ detail, versions, unrecorded, members, rules, targe
                 </dl>
               </Panel>
             </div>
+          </div>
+          <aside className="space-y-4">
             <Panel title="Tools" hint="Ask the domain, run an AI review of its pack, export it, or delete it.">
               <DomainTools domainId={d.domain_id} name={d.domain_name} deletable={!!detail.deletable} reason={detail.not_deletable_reason ?? null}
                            activeRuns={detail.active_runs ?? []} deleted={!meta.active} />
             </Panel>
-          </div>
-          <aside className="space-y-4">
             <BuiltFromCard domainId={d.domain_id} onOpen={() => go("lineage")} />
             <People key={JSON.stringify(members.map((m) => [m.user_name, m.role]))} domainId={d.domain_id} members={members} may={may} onMsg={setMsg} />
             <Panel title="Recent changes" action={<button type="button" onClick={() => go("versions")} className="text-xs text-primary hover:underline">All versions</button>}>
