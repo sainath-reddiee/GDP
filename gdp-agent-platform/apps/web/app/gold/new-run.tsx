@@ -53,7 +53,7 @@ export function NewGoldRun({ domains }: { domains: { domain_id: string; domain_n
   return (
     <>
       <button type="button" onClick={() => setOpen(true)} data-testid="new-gold-run"
-              className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-primary px-3 text-sm font-medium text-primary-foreground">
+              className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-amber-500 px-3 text-sm font-medium text-white hover:bg-amber-600">
         <Plus className="h-4 w-4" />New Gold run</button>
       <Modal open={open} onClose={() => setOpen(false)} wide title="New Gold run"
              description="Pick a domain and its Silver tables. They are read in place (nothing is copied), profiled, then modeled into facts, dimensions and bridges, mapped, tested and generated as gold dbt, with the same gates as a Silver run."

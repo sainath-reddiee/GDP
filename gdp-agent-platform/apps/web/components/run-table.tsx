@@ -47,8 +47,9 @@ function cleanupMessage(result: CleanupResult): string {
 }
 
 export function RunTable({
-  runs, filter = "all", selectable = true,
-}: { runs: RunSummary[]; filter?: RunStatusFilter; selectable?: boolean }) {
+  runs, filter = "all", selectable = true, pipeline = "SILVER",
+}: { runs: RunSummary[]; filter?: RunStatusFilter; selectable?: boolean; pipeline?: "SILVER" | "GOLD" }) {
+  const gold = pipeline === "GOLD";
   const [selected, setSelected] = useState<string[]>([]);
   const [confirming, setConfirming] = useState(false);
   const [dropLanding, setDropLanding] = useState(true);
@@ -200,7 +201,8 @@ export function RunTable({
                 />
               </TH>
             )}
-            <TH>Run</TH><TH>Domain</TH><TH>Source</TH><TH>Tables</TH><TH>Current stage</TH><TH>Status</TH><TH>Owner</TH><TH>Age</TH>
+            <TH>Run</TH><TH>Domain</TH><TH>{gold ? "Silver inputs" : "Source"}</TH><TH>{gold ? "Gold tables" : "Tables"}</TH>
+            <TH>Current stage</TH><TH>Status</TH><TH>Owner</TH><TH>Age</TH>
           </TR>
         </THead>
         <TBody>
@@ -220,8 +222,9 @@ export function RunTable({
                 </div>
               </TD>
               <TD>{displayDomain(r.domain_name) ?? <span className="text-muted-foreground">—</span>}</TD>
-              <TD className="font-mono text-xs">{sourceLabel(r)}</TD>
-              <TD>{r.table_count || "—"}</TD>
+              <TD className="font-mono text-xs">{gold ? (r.source_database ? `${r.source_database}.${r.source_schema ?? ""}` : "not set")
+                : sourceLabel(r)}{gold && r.table_count ? <span className="ml-1 font-sans text-muted-foreground">({r.table_count})</span> : null}</TD>
+              <TD className={gold ? "font-mono text-xs" : undefined}>{gold ? (r.target_model?.split(".").pop() ?? "Gold model pending") : (r.table_count || "—")}</TD>
               <TD>
                 {(() => {
                   const info = stageInfo(r);

@@ -405,7 +405,9 @@ def list_runs(include_test: bool = False, status: str = "all", limit: int = 200,
     total = None
     filtered_where, filtered_params = where, params
     if pipeline != "ALL":
-        filtered_where, filtered_params = f"({where}) AND COALESCE(R.PIPELINE, 'SILVER') = %s", (*params, pipeline)
+        # a pipeline's list shows its top-level runs; a Gold run's table runs fold into it
+        filtered_where, filtered_params = (f"({where}) AND COALESCE(R.PIPELINE, 'SILVER') = %s AND R.PARENT_RUN_ID IS NULL",
+                                           (*params, pipeline))
     try:
         rows = db.query(
             f"""
@@ -6648,3 +6650,7 @@ app.include_router(copilot_agent_router)
 from app.tickets_api import router as tickets_router  # noqa: E402
 
 app.include_router(tickets_router)
+
+from app.pipelines_api import router as pipelines_router  # noqa: E402
+
+app.include_router(pipelines_router)

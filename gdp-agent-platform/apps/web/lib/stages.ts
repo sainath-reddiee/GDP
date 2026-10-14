@@ -18,12 +18,23 @@ export const STAGES: { slug: string; stage: string; label: string; step?: string
 
 export type Pipeline = "SILVER" | "GOLD";
 
-/** The two pipelines: names, what they take and produce, the list page and what an item is called. */
-export const PIPELINES: Record<Pipeline, { n: number; name: string; from: string; to: string; href: string; run: string; hint: string }> = {
-  SILVER: { n: 1, name: "Silver Pipeline", from: "Source", to: "Silver (pre-MDM)", href: "/runs", run: "Silver run",
-            hint: "Ingest, profile, model and map, QA, Data Quality, Silver code, validate, review" },
-  GOLD: { n: 2, name: "Gold Pipeline", from: "Silver", to: "Gold", href: "/gold", run: "Gold run",
-          hint: "Select (read in place), profile, model and map, QA, Data Quality, Gold code, validate, review" },
+/** The two pipelines: identity (name, accent, tagline), their own step flow, the list page and what a run is called. */
+export const PIPELINES: Record<Pipeline, {
+  n: number; name: string; from: string; to: string; href: string; run: string; tagline: string; flow: string[];
+  accent: { text: string; bg: string; border: string; solid: string };
+}> = {
+  SILVER: {
+    n: 1, name: "Silver Pipeline", from: "Source", to: "Silver (pre-MDM)", href: "/runs", run: "Silver run",
+    tagline: "Source systems to governed Silver (pre-MDM) dbt, one hub per run.",
+    flow: ["Source Ingestion", "Profiling", "Mapping", "STTM", "QA and DQ", "Silver code", "Validation", "Review"],
+    accent: { text: "text-slate-600 dark:text-slate-300", bg: "bg-slate-500/10", border: "border-slate-400/40", solid: "bg-slate-600 text-white" },
+  },
+  GOLD: {
+    n: 2, name: "Gold Pipeline", from: "Silver", to: "Gold", href: "/gold", run: "Gold run",
+    tagline: "Mastered Silver to the governed Gold star schema, one domain slice per run.",
+    flow: ["Silver Selection", "Profiling", "Gold model", "Mapping", "STTM", "QA and DQ", "Gold code", "Validation", "Review"],
+    accent: { text: "text-amber-600 dark:text-amber-300", bg: "bg-amber-500/10", border: "border-amber-500/40", solid: "bg-amber-500 text-white" },
+  },
 };
 
 /** Where a Gold run's step is named differently (same stage, same gates). */

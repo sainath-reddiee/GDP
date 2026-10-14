@@ -1,5 +1,5 @@
 import type { RunSummary } from "@/lib/types";
-import { stageLabel } from "@/lib/stages";
+import { stageLabel, pipelineOf } from "@/lib/stages";
 import { REVIEW_STATES } from "@/lib/run-insights";
 
 // Run status helpers shared by the run table (client) and the Command Center (server).
@@ -11,7 +11,7 @@ export function stageInfo(r: RunSummary) {
   const raw = r.current_stage === "DOMAIN" ? "PROFILING" : r.current_stage;
   const stage = raw === "MAPPING" || raw === "STTM" ? "MODELING" : raw;
   const index = stage ? STAGE_ORDER.indexOf(stage) : -1;
-  const label = raw ? stageLabel(raw) : "Not started";
+  const label = raw ? stageLabel(raw, pipelineOf(r.pipeline)) : "Not started";
   const state = (r.current_state || "").replace(/_/g, " ").toLowerCase();
   return { index, label, state };
 }

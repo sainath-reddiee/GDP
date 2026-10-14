@@ -8,6 +8,7 @@ import { RunSkills } from "@/components/run-skills";
 import { Badge } from "@/components/ui/badge";
 import { displayDomain, isHiddenTarget } from "@/lib/catalog-display";
 import { PIPELINES, pipelineOf } from "@/lib/stages";
+import { cn } from "@/lib/utils";
 import RunLoading from "./loading";
 
 function runTargetLabel(model: string | null | undefined) {
@@ -38,7 +39,8 @@ async function RunShell({ runId, children }: { runId: string; children: ReactNod
       </p>
       <div className="mb-5 flex flex-wrap items-center gap-2.5">
         <h1>{state.run.run_name}</h1>
-        {pipeline === "GOLD" && <Badge variant="outline" className="border-amber-500/50 text-amber-600">Gold run</Badge>}
+        <span className={cn("rounded-full border px-2 py-0.5 text-xs font-semibold", PIPELINES[pipeline].accent.border,
+          PIPELINES[pipeline].accent.bg, PIPELINES[pipeline].accent.text)} title={PIPELINES[pipeline].tagline}>{PIPELINES[pipeline].run}</span>
         <Badge variant={tone}>{state.status}</Badge>
         <Badge variant="outline">{state.current_state}</Badge>
         <span className="text-sm text-muted-foreground">
