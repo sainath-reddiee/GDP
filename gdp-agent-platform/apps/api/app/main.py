@@ -6571,6 +6571,9 @@ app.include_router(domain_sources_router)
 from app.mdm_api import router as mdm_router  # noqa: E402
 
 app.include_router(mdm_router)
+from app.gold_api import router as gold_router  # noqa: E402
+
+app.include_router(gold_router)
 
 from app.code_api import router as code_router  # noqa: E402
 

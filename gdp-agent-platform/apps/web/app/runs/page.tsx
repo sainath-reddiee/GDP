@@ -1,5 +1,6 @@
 import { api } from "@/lib/api";
 import { PageHeader } from "@/components/page-header";
+import { PipelineTabs } from "@/components/pipeline-tabs";
 import type { RunSummary } from "@/lib/types";
 import { RunTable } from "@/components/run-table";
 import { displayDomain } from "@/lib/catalog-display";
@@ -29,8 +30,9 @@ export default async function Runs({ searchParams }: {
     .map((d) => ({ domain_id: d.domain_id, domain_name: displayDomain(d.domain_name) as string }));
   return (
     <div className="space-y-5">
-      <PageHeader eyebrow="Model and build" title="Runs"
-                  description="Every modeling run from source to reviewed code. Archived runs are hidden from the other filters; deleting a run keeps its audit trail and the staged table profiles." />
+      <PageHeader eyebrow="Model and build" title="Pipelines"
+                  description="Pipeline 1 takes a source to reviewed Silver (pre-MDM) code: Source Ingestion, Profiling, Modeling, Silver Code Generation. Archived runs are hidden from the other filters; deleting a run keeps its audit trail and the staged table profiles." />
+      <PipelineTabs active="silver" />
       <RunsToolbar domains={options} tags={tagList.tags.map((t) => t.tag)} total={total ?? runs.length} offset={offset} limit={LIMIT} />
       <RunTable key={`${filter}:${query.toString()}`} runs={runs} filter={filter} />
     </div>

@@ -370,7 +370,7 @@ def governed_domains(cur, database: str) -> Dict[str, Any]:
     """Domains whose registry follows an approved Model Workbench version: {domain id: approved version}."""
     try:
         cur.execute(f"SELECT DOMAIN_ID, APPROVED_VERSION FROM {database}.GOVERNANCE.DOMAIN_MODEL "
-                    "WHERE APPROVED_VERSION IS NOT NULL")
+                    "WHERE APPROVED_VERSION IS NOT NULL AND COALESCE(LAYER, 'SILVER') = 'SILVER'")
         return {r[0]: r[1] for r in cur.fetchall()}
     except Exception:
         return {}  # before V039

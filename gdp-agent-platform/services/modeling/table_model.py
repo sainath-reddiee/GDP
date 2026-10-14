@@ -414,7 +414,8 @@ def propose(session, model_id: str, version: int, user: str) -> Dict[str, Any]:
 def linked_entities(session, header: Dict[str, Any]) -> Dict[str, Any]:
     """The approved domain model's entities related to this table (for the diagram): the table itself as the domain
     knows it, the entities it references or is referenced by, and those relationships."""
-    model = rows(session, "SELECT MODEL_ID, APPROVED_VERSION FROM GOVERNANCE.DOMAIN_MODEL WHERE DOMAIN_ID = ?",
+    model = rows(session, "SELECT MODEL_ID, APPROVED_VERSION FROM GOVERNANCE.DOMAIN_MODEL WHERE DOMAIN_ID = ? "
+                         "AND COALESCE(LAYER, 'SILVER') = 'SILVER'",
                  [header.get("domain_id") or ""]) if header.get("domain_id") else []
     if not model or not model[0].get("APPROVED_VERSION"):
         return {"entities": [], "relationships": [], "model_id": None}

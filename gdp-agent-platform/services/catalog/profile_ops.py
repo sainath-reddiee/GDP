@@ -345,7 +345,7 @@ def _model_entity(session, table: str) -> Optional[Dict[str, Any]]:
     try:
         found = rows(session, """SELECT M.MODEL_ID, M.APPROVED_VERSION, D.SPEC FROM GOVERNANCE.DOMAIN_MODEL M
                                    JOIN GOVERNANCE.MODEL_DESIGNS D ON D.MODEL_ID = M.MODEL_ID AND D.VERSION = M.APPROVED_VERSION
-                                  WHERE M.DOMAIN_ID = ? AND M.APPROVED_VERSION IS NOT NULL""", [domain])
+                                  WHERE M.DOMAIN_ID = ? AND M.APPROVED_VERSION IS NOT NULL AND COALESCE(M.LAYER, 'SILVER') = 'SILVER'""", [domain])
     except Exception:
         return None
     if not found:

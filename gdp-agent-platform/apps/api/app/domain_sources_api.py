@@ -598,7 +598,7 @@ def _approved_entities(db: Db, domain_id: str) -> Dict[str, Dict[str, Any]]:
 
     found = db.query("""SELECT D.SPEC, M.MODEL_ID FROM GOVERNANCE.DOMAIN_MODEL M
                           JOIN GOVERNANCE.MODEL_DESIGNS D ON D.MODEL_ID = M.MODEL_ID AND D.VERSION = M.APPROVED_VERSION
-                         WHERE M.DOMAIN_ID = %s""", (domain_id,))
+                         WHERE M.DOMAIN_ID = %s AND COALESCE(M.LAYER, 'SILVER') = 'SILVER'""", (domain_id,))
     if not found:
         return {}
     spec = spec_v2.active(spec_v2.normalize_v2(variant(found[0]["spec"]) or {}, found[0]["model_id"]))

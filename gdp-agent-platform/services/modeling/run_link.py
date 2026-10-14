@@ -30,7 +30,8 @@ def _run(session, run_id: str) -> Dict[str, Any]:
 
 
 def _model_for(session, domain_id: str) -> Optional[Dict[str, Any]]:
-    found = rows(session, "SELECT MODEL_ID, APPROVED_VERSION, DOMAIN_NAME FROM GOVERNANCE.DOMAIN_MODEL WHERE DOMAIN_ID = ?",
+    found = rows(session, "SELECT MODEL_ID, APPROVED_VERSION, DOMAIN_NAME FROM GOVERNANCE.DOMAIN_MODEL WHERE DOMAIN_ID = ? "
+                         "AND COALESCE(LAYER, 'SILVER') = 'SILVER'",
                  [domain_id])
     return found[0] if found else None
 

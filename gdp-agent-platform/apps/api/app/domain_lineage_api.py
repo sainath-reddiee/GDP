@@ -125,7 +125,7 @@ def domain_provenance(domain_id: str, db: Db = Depends(current_db)):
                  for d in _soft(db, """SELECT KIND, TITLE, URL, FILE_NAME FROM CONFLUENCE.SOURCE
                                         WHERE DOMAIN_ID = %s AND STATUS = 'ACTIVE' ORDER BY CREATED_AT""", (domain_id,))]
     domain_model = next(iter(_soft(db, """SELECT MODEL_ID, APPROVED_VERSION, OPEN_VERSION FROM GOVERNANCE.DOMAIN_MODEL
-                                           WHERE DOMAIN_ID = %s""", (domain_id,))), None)
+                                           WHERE DOMAIN_ID = %s AND COALESCE(LAYER, 'SILVER') = 'SILVER'""", (domain_id,))), None)
     table_models = _soft(db, """SELECT TABLE_MODEL_ID, TABLE_NAME, CURRENT_VERSION FROM GOVERNANCE.TABLE_MODEL
                                  WHERE DOMAIN_ID = %s AND COALESCE(MODEL_LAYER, 'SILVER') = 'SILVER' ORDER BY TABLE_NAME LIMIT 100""",
                          (domain_id,))
@@ -198,7 +198,7 @@ def domain_contract(domain_id: str, db: Db = Depends(current_db)):
 
 
 @router.get("/api/domains/{domain_id}/data-model")
-def domain_data_model(domain_id: str, view: str = "approved", db: Db = Depends(current_db)):
+def domain_data_model(domain_id: str, view: str = "approved", layer: str = "SILVER", db: Db = Depends(current_db)):
     """The domain's data model for the Lineage tab: the approved version, or the open draft with what it changes.
     Each table carries what it already has downstream (active knowledge items, STTM, a table model)."""
     from services.common.sql import variant
@@ -206,7 +206,7 @@ def domain_data_model(domain_id: str, view: str = "approved", db: Db = Depends(c
 
     domain_detail(domain_id, db)
     model = next(iter(_soft(db, """SELECT MODEL_ID, APPROVED_VERSION, OPEN_VERSION, DIAGRAM_LAYOUT FROM GOVERNANCE.DOMAIN_MODEL
-                                    WHERE DOMAIN_ID = %s""", (domain_id,))), None)
+                                    WHERE DOMAIN_ID = %s AND COALESCE(LAYER, 'SILVER') = %s""", (domain_id, layer.upper()))), None)
     if not model:
         return {"model": None}
     model_id, approved_v, open_v = model["model_id"], model.get("approved_version"), model.get("open_version")

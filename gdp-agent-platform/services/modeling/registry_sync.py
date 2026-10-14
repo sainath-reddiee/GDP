@@ -202,7 +202,7 @@ def apply_model_version(session, model_id: str, version: int) -> Dict[str, Any]:
     """MODELING.APPLY_DOMAIN_MODEL: put an APPROVED (or PUBLISHED) version of a domain model into the registry."""
     from services.common.sql import variant
 
-    found = _rows(session, """SELECT D.SPEC, D.STATUS, D.VERSION, M.DOMAIN_ID, M.DOMAIN_NAME
+    found = _rows(session, """SELECT D.SPEC, D.STATUS, D.VERSION, M.DOMAIN_ID, M.DOMAIN_NAME, COALESCE(M.LAYER, 'SILVER') AS LAYER
                                 FROM GOVERNANCE.MODEL_DESIGNS D
                                 JOIN GOVERNANCE.DOMAIN_MODEL M ON M.MODEL_ID = D.MODEL_ID
                                WHERE D.MODEL_ID = ? AND D.VERSION = ?""", [model_id, int(version)])
@@ -210,6 +210,16 @@ def apply_model_version(session, model_id: str, version: int) -> Dict[str, Any]:
     row = found[0]
     assert row["STATUS"] in ("APPROVED", "PUBLISHED"), f"only an approved version is applied (this one is {row['STATUS'].lower()})"
     spec = spec_v2.normalize_v2(variant(row["SPEC"]) or {}, model_id)
+    if row["LAYER"] != "SILVER":
+        # the target registry is what runs map into (silver); a gold model is only recorded as knowledge, so runs, the
+        # Copilot and search cite its tables
+        session.sql("UPDATE GOVERNANCE.MODEL_DESIGNS SET REGISTRY_SYNCED_AT = CURRENT_TIMESTAMP() WHERE MODEL_ID = ? AND VERSION = ?",
+                    params=[model_id, int(version)]).collect()
+        phys = spec.get("physical_defaults") or {}
+        registered = [{"entity": e["entity_name"], "fqn": f"{e.get('database') or phys.get('database')}.{e.get('schema') or phys.get('schema')}.{e['entity_name']}"}
+                      for e in spec_v2.active(spec)["design"]["entities"] if not e.get("conformed_from")]
+        _remember(session, row["DOMAIN_ID"], spec, registered, model_id, int(version))
+        return {"model_id": model_id, "version": int(version), "layer": row["LAYER"], "registered": registered}
     result = apply_spec(session, spec, row["DOMAIN_ID"], model_id, int(version))
     session.sql("UPDATE GOVERNANCE.MODEL_DESIGNS SET REGISTRY_SYNCED_AT = CURRENT_TIMESTAMP() WHERE MODEL_ID = ? AND VERSION = ?",
                 params=[model_id, int(version)]).collect()

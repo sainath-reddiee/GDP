@@ -333,7 +333,7 @@ def model_context(session, table: str, domain_id: Optional[str]) -> Optional[Dic
     try:
         found = rows(session, """SELECT M.MODEL_ID, M.APPROVED_VERSION, D.SPEC FROM GOVERNANCE.DOMAIN_MODEL M
                                    JOIN GOVERNANCE.MODEL_DESIGNS D ON D.MODEL_ID = M.MODEL_ID AND D.VERSION = M.APPROVED_VERSION
-                                  WHERE M.DOMAIN_ID = ? AND M.APPROVED_VERSION IS NOT NULL""", [domain_id])
+                                  WHERE M.DOMAIN_ID = ? AND M.APPROVED_VERSION IS NOT NULL AND COALESCE(M.LAYER, 'SILVER') = 'SILVER'""", [domain_id])
     except Exception:  # before V039
         return None
     if not found:
