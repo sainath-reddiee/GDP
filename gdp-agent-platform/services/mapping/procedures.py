@@ -301,15 +301,38 @@ def _gold_rules(session, run: Dict[str, Any], sources: List[Dict[str, Any]]) -> 
     return {r["source_column"].upper(): {**r, "target_column": t} for t, r in by_target.items()}
 
 
+def _reference_rules(session, run: Dict[str, Any], target: Dict[str, Any], sources: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    """Rules from the STTM a person gave for the run's layer (a reference input, V057), by source column: the
+    reference's target first and its transformation pre-filled. Empty when no STTM reference covers the target."""
+    from services.reference import store, sttm_import
+
+    ref = store.latest(lambda sql, params: rows(session, sql, params), run["DOMAIN_ID"], run_pipeline(run), "STTM")
+    if not ref:
+        return {}
+    return sttm_import.rules_for((ref["parsed"] or {}).get("lines") or [], target["TARGET_TABLE"], sources,
+                                 f"your STTM ({ref.get('title') or 'reference'})")
+
+
 def promote(cands: List[Dict[str, Any]], ranked: List[Dict[str, Any]], rule: Dict[str, Any], top_k: int) -> List[Dict[str, Any]]:
-    """Put the rule's target first with full confidence; the scored alternatives follow (pure)."""
+    """Put the rule's target first with full confidence; the scored alternatives follow (pure). A gold model rule's
+    lookup is written by the STTM; a reference STTM's own transformation is carried when it is an expression."""
     chosen = next((c for c in cands if str(c["target"]["column_name"]).upper() == rule["target_column"].upper()), None)
     if not chosen:
         return ranked
     chosen["final_score"] = max(float(chosen.get("final_score") or 0), 0.97)
-    chosen["evidence"] = {**(chosen.get("evidence") or {}), "gold_rule": {"kind": rule["kind"], "expression": rule["expression"]}}
-    if rule["kind"] != "DIMENSION_KEY" or not chosen.get("transformation"):
-        chosen["transformation"] = None   # the lookup is the gold model's, written by the STTM, not a column expression
+    if rule.get("origin") == "REFERENCE":
+        chosen["evidence"] = {**(chosen.get("evidence") or {}),
+                              "reference_sttm": {"reference": rule.get("reference"), "expression": rule["expression"]}}
+        if rule.get("transformation"):
+            try:
+                assert_safe_transformation(rule["transformation"])
+                chosen["transformation"] = rule["transformation"]
+            except ValueError:
+                pass
+    else:
+        chosen["evidence"] = {**(chosen.get("evidence") or {}), "gold_rule": {"kind": rule["kind"], "expression": rule["expression"]}}
+        if rule["kind"] != "DIMENSION_KEY" or not chosen.get("transformation"):
+            chosen["transformation"] = None   # the lookup is the gold model's, written by the STTM, not a column expression
     rest = [c for c in ranked if c is not chosen][: max(top_k - 1, 0)]
     out = [chosen] + rest
     for i, c in enumerate(out):
@@ -357,6 +380,10 @@ def generate_mapping_candidates(session, run_id: str) -> Dict[str, Any]:
             domain_name = scalar(session, "SELECT DOMAIN_NAME FROM KNOWLEDGE.DOMAIN_REGISTRY WHERE DOMAIN_ID = ?",
                                  [run["DOMAIN_ID"]])
             gold_rules = _gold_rules(session, run, sources)
+            try:   # the person's own STTM for this layer ranks first (a reference input); gold model rules fill the rest
+                reference_rules = _reference_rules(session, run, target, sources)
+            except Exception:
+                reference_rules = {}
 
             ranked_by_source: List[Tuple[Dict[str, Any], List[Dict[str, Any]]]] = []
             hits_by_source: Dict[str, List[Dict[str, Any]]] = {}
@@ -367,7 +394,7 @@ def generate_mapping_candidates(session, run_id: str) -> Dict[str, Any]:
                     f = features.all_features(s, t, knowledge, cosines.get((s["source_column_id"], t["target_column_id"])))
                     cands.append({"target": t, **f})
                 ranked = scoring.rank_candidates(cands, cfg["weights"], cfg["thresholds"], top_k)
-                rule = gold_rules.get(str(s["column_name"]).upper())
+                rule = reference_rules.get(str(s["column_name"]).upper()) or gold_rules.get(str(s["column_name"]).upper())
                 if rule:
                     ranked = promote(cands, ranked, rule, top_k)
                 try:
@@ -392,8 +419,11 @@ def generate_mapping_candidates(session, run_id: str) -> Dict[str, Any]:
                 for c in ranked:
                     reason = scoring.explain(c)
                     gr = (c.get("evidence") or {}).get("gold_rule")
+                    rs = (c.get("evidence") or {}).get("reference_sttm")
                     if gr and c["rank"] == 1:
                         reason = f"Gold model rule ({gr['kind'].lower().replace('_', ' ')}): {gr['expression']}"
+                    if rs and c["rank"] == 1:
+                        reason = f"From {rs['reference']}: {rs['expression']}"
                     if verdict and c["rank"] == 1:
                         agrees = verdict["preferred_target"].upper() == c["target"]["column_name"].upper()
                         c["evidence"]["llm"] = {"preferred_target": verdict["preferred_target"], "agrees": agrees,

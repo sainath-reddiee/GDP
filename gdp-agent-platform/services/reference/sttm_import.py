@@ -90,3 +90,45 @@ def for_target(lines: List[Dict[str, Any]], target_table: str) -> Dict[str, Dict
     """The reference lines of one target table, by target column."""
     t = str(target_table or "").upper().split(".")[-1]
     return {l["target_column"]: l for l in lines if l["target_table"] == t}
+
+
+SQL_CALL = re.compile(r"\b(CASE|CAST|TRY_CAST|COALESCE|NVL|NVL2|IFF|DECODE|TRIM|LTRIM|RTRIM|UPPER|LOWER|INITCAP|SUBSTR|SUBSTRING|"
+                      r"LEFT|RIGHT|CONCAT|REPLACE|REGEXP_\w+|TO_\w+|TRY_TO_\w+|DATE_TRUNC|DATEADD|DATEDIFF|ROUND|ABS|NULLIF|"
+                      r"SPLIT_PART|LPAD|RPAD|CURRENT_\w+|SHA2|MD5|HASH)\b\s*\(?", re.I)
+SQL_CHARS = re.compile(r"^[\w\s.,()'\"|+\-*/<>=:%!]+$")
+
+
+def as_expression(text: Optional[str], source_column: Optional[str]) -> Optional[str]:
+    """A transformation cell as a column expression the STTM can carry, or None when it is the column itself or prose
+    ("take the latest value"), which stays evidence for the reviewer instead of becoming SQL."""
+    t = (text or "").strip().rstrip(";")
+    if not t or t.upper() == (source_column or "").upper() or t.upper() in ("DIRECT", "DIRECT MOVE", "AS IS", "1:1", "STRAIGHT"):
+        return None
+    if not SQL_CHARS.match(t) or len(t) > 2000:
+        return None
+    if SQL_CALL.search(t) or "||" in t or re.fullmatch(r"'[^']*'|-?\d+(\.\d+)?|NULL", t, re.I):
+        return t
+    return None
+
+
+def rules_for(lines: List[Dict[str, Any]], target_table: str, source_columns: List[Dict[str, Any]],
+              title: str = "your STTM") -> Dict[str, Dict[str, Any]]:
+    """Mapping rules from a reference STTM for one target table, by source column (pure): each line whose source
+    column is among the run's (and whose source table, when it names one, is the run's) puts its target first, with
+    the reference's transformation pre-filled when it is an expression. UNMAPPED lines and lines without a source
+    column are not rules."""
+    names = {str(s["column_name"]).upper(): str(s.get("table_name") or "").upper().split(".")[-1] for s in source_columns}
+    out: Dict[str, Dict[str, Any]] = {}
+    for target_column, line in for_target(lines, target_table).items():
+        src = (line.get("source_column") or "").upper().split(".")[-1]
+        if not src or src not in names or line.get("mapping_type") == "UNMAPPED":
+            continue
+        if line.get("source_table") and names[src] and line["source_table"] != names[src]:
+            continue
+        if src in out:   # one source column feeding two targets: the first line wins, the reviewer sees the rest
+            continue
+        expression = as_expression(line.get("transformation"), src)
+        out[src] = {"source_column": src, "target_column": target_column, "kind": "REFERENCE_STTM", "origin": "REFERENCE",
+                    "reference": title, "transformation": expression,
+                    "expression": line.get("transformation") or f"{src} as is"}
+    return out

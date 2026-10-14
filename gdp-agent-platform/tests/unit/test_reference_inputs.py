@@ -66,3 +66,42 @@ from {{ ref('opportunity_core') }} s left join {{ ref('dim_data_source') }} d on
     assert out["surrogate_keys"][0]["value"] == "sequence" and out["hash_functions"][0]["value"] == "sha2"
     assert out["data_source"] and any(m["value"] == "gdp_audit_columns" for m in out["macros"])
     assert out["macro_files"] == 1
+
+
+def test_sttm_transformation_becomes_an_expression_only_when_it_is_one():
+    assert sttm_import.as_expression("UPPER(TRIM(STAGE))", "STAGE") == "UPPER(TRIM(STAGE))"
+    assert sttm_import.as_expression("CASE WHEN X = 'Y' THEN 1 ELSE 0 END", "X") == "CASE WHEN X = 'Y' THEN 1 ELSE 0 END"
+    assert sttm_import.as_expression("FIRST_NAME || ' ' || LAST_NAME", "FIRST_NAME") == "FIRST_NAME || ' ' || LAST_NAME"
+    assert sttm_import.as_expression("'N/A'", None) == "'N/A'"
+    for not_sql in ("STAGE", "Direct", "take the latest value for the account", "lookup in the CRM; see note #4", ""):
+        assert sttm_import.as_expression(not_sql, "STAGE") is None, not_sql
+
+
+def test_reference_sttm_rules_for_a_run_and_mapping_promotes_them():
+    from services.mapping.procedures import promote
+
+    lines = sttm_import.parse([("FACT_OPPORTUNITY", [
+        ["Target Table", "Target Column", "Source Table", "Source Column", "Transformation"],
+        ["FACT_OPPORTUNITY", "OPPORTUNITY_STAGE", "OPPORTUNITY_CORE", "STAGE", "UPPER(TRIM(STAGE))"],
+        ["FACT_OPPORTUNITY", "DEAL_VALUE", "OPPORTUNITY_CORE", "DEAL_AMOUNT", "Direct"],
+        ["FACT_OPPORTUNITY", "OWNER", "ACCOUNT", "OWNER_NAME", ""],          # another source table
+        ["FACT_OPPORTUNITY", "NEXT_STEP", "", "", ""],                       # unmapped
+        ["DIM_OTHER", "X", "OPPORTUNITY_CORE", "CLOSE_DATE", ""],             # another target
+    ])], None)["lines"]
+    sources = [{"column_name": n, "table_name": "DEV_GDP_SILVER_DB.OPPORTUNITY.OPPORTUNITY_CORE"}
+               for n in ("STAGE", "DEAL_AMOUNT", "OWNER_NAME", "CLOSE_DATE")]
+    rules = sttm_import.rules_for(lines, "DEV_GDP_GOLD_OPPORTUNITY_DB.OPPORTUNITY.FACT_OPPORTUNITY", sources, "your STTM (q3.xlsx)")
+    assert set(rules) == {"STAGE", "DEAL_AMOUNT"}
+    assert rules["STAGE"]["target_column"] == "OPPORTUNITY_STAGE" and rules["STAGE"]["transformation"] == "UPPER(TRIM(STAGE))"
+    assert rules["DEAL_AMOUNT"]["target_column"] == "DEAL_VALUE" and rules["DEAL_AMOUNT"]["transformation"] is None
+
+    def cand(name, score):
+        return {"target": {"column_name": name}, "final_score": score, "evidence": {}, "transformation": None}
+    cands = [cand("STAGE_NAME", 0.9), cand("OPPORTUNITY_STAGE", 0.4), cand("DEAL_VALUE", 0.2)]
+    out = promote(cands, sorted(cands, key=lambda c: -c["final_score"])[:2], rules["STAGE"], 3)
+    assert out[0]["target"]["column_name"] == "OPPORTUNITY_STAGE" and out[0]["final_score"] >= 0.97
+    assert out[0]["transformation"] == "UPPER(TRIM(STAGE))" and out[0]["evidence"]["reference_sttm"]["reference"] == "your STTM (q3.xlsx)"
+    assert "gold_rule" not in out[0]["evidence"] and out[0]["recommendation"] == "AUTO_SUGGEST"
+    unsafe = dict(rules["STAGE"], transformation="DROP TABLE X")
+    again = promote([cand("OPPORTUNITY_STAGE", 0.4)], [], unsafe, 3)
+    assert again[0]["transformation"] is None                   # an unsafe expression is never carried
