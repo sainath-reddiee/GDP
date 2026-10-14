@@ -46,7 +46,7 @@ def test_hub_becomes_a_fact_with_mastered_keys_and_gold_columns():
     assert cols[0] == "FACT_OPPORTUNITY_SKEY" and fact["attributes"][0]["is_pk"]
     assert cols[-6:] == ["FACT_OPPORTUNITY_HKEY", "GDP_IS_ACTIVE", "GDP_INSERTED_TS", "GDP_INSERTED_BY", "GDP_UPDATED_TS", "GDP_UPDATED_BY"]
     for kept in ("SOURCE_UNIQUE_ID", "DIM_DATA_SOURCE_SKEY", "DIM_COMPANY_SKEY", "LANDLORD_DIM_COMPANY_SKEY", "DIM_PROPERTY_SKEY",
-                 "OPPORTUNITY_NAME", "DESCRIPTION", "DEAL_AMOUNT", "CLOSE_DATE", "WIN_RATE", "IS_WON", "SENT_FLAG", "STAGE_DIM_SKEY"):
+                 "OPPORTUNITY_NAME", "DESCRIPTION", "DEAL_AMOUNT", "CLOSE_DATE", "WIN_RATE", "IS_WON", "SENT_FLAG", "DIM_OPPORTUNITY_STAGE_SKEY"):
         assert kept in cols, kept
     for dropped in ("OPPORTUNITY_CORE_SKEY", "REF_GDP_SOURCE_SYSTEM_SKEY", "COMPANY_CORE_SKEY", "OPPORTUNITY_CORE_HKEY", "STAGE", "SENT_F"):
         assert dropped not in cols, dropped
@@ -65,7 +65,7 @@ def test_mastered_keys_resolve_through_the_full_cross_reference_to_conformed_dim
     assert dim["conformed_from"] == "COMPANY" and dim["database"] == "DEV_GDP_GOLD_COMPANY_DB"
     rels = {(r["from_column"], r["to_entity"]) for r in spec["relationships"]}
     assert {("DIM_COMPANY_SKEY", "DIM_COMPANY"), ("LANDLORD_DIM_COMPANY_SKEY", "DIM_COMPANY"),
-            ("DIM_PROPERTY_SKEY", "DIM_PROPERTY"), ("STAGE_DIM_SKEY", "DIM_OPPORTUNITY_STAGE")} <= rels
+            ("DIM_PROPERTY_SKEY", "DIM_PROPERTY"), ("DIM_OPPORTUNITY_STAGE_SKEY", "DIM_OPPORTUNITY_STAGE")} <= rels
     resolve = [l for l in out["lines"] if l["gold_column"] == "DIM_PROPERTY_SKEY"][0]
     assert resolve["kind"] == "RESOLVE" and resolve["source_column"] == "PROPERTY_CORE_SKEY"
     assert "PROPERTY_CROSS_REFERENCE on SOURCE_SYSTEM_ID" in resolve["expression"] and "never the STAGE delta" in resolve["note"]
@@ -80,7 +80,7 @@ def test_many_to_many_link_becomes_a_bridge_with_two_n_to_one_relationships():
     names = [e["entity_name"] for e in spec["design"]["entities"]]
     assert names[:2] == ["FACT_OPPORTUNITY", "FACT_OPPORTUNITY_COMPANY_ROLE"]
     bridge = _ent(spec, "FACT_OPPORTUNITY_COMPANY_ROLE")
-    assert bridge["table_type"] == "BRIDGE" and "ROLE_TYPE" in _cols(bridge) and "ROLE_TYPE_DIM_SKEY" not in _cols(bridge)
+    assert bridge["table_type"] == "BRIDGE" and "ROLE_TYPE" in _cols(bridge) and not any(c.endswith("_ROLE_TYPE_SKEY") for c in _cols(bridge))
     links = [(r["from_column"], r["to_entity"], r["cardinality"]) for r in spec["relationships"] if r["from_entity"] == "FACT_OPPORTUNITY_COMPANY_ROLE"]
     assert ("FACT_OPPORTUNITY_SKEY", "FACT_OPPORTUNITY", "N:1") in links and ("DIM_COMPANY_SKEY", "DIM_COMPANY", "N:1") in links
     no_role = {**ROLE, "columns": [c for c in ROLE["columns"] if c["name"] != "ROLE_TYPE"]}

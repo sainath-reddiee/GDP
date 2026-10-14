@@ -12,7 +12,7 @@ Rules (gold-model skill + gdp-post-mdm-data-model skill + decisions of 2026-10-1
   many-to-many: a BRIDGE table (FACT_<HUB>_<MASTERED>_ROLE when it has a role column, else BRIDGE_<HUB>_<MASTERED>)
   with two N:1 relationships.
 - A low-cardinality descriptor (profile: at most DIM_MAX_DISTINCT distinct values) becomes a proposed dimension
-  DIM_<STEM>_<COLUMN> and the fact carries <COLUMN>_DIM_SKEY.
+  DIM_<STEM>_<COLUMN> and the fact carries its key, DIM_<STEM>_<COLUMN>_SKEY (GDP: a foreign key is named as the dimension's key).
 - Silver technical columns are not gold columns: the hub skey, the silver HKEY, REF_GDP_SOURCE_SYSTEM_SKEY (becomes
   DIM_DATA_SOURCE_SKEY) and the GDP_* audit columns (gold injects its own). Every gold table gets its own
   <TABLE>_SKEY (sequence), <TABLE>_HKEY (hash of the business columns) and the five GDP_* audit columns last.
@@ -232,7 +232,7 @@ def propose(domain: str, inputs: List[Dict[str, Any]], *, consumes: List[Dict[st
             distinct = c.get("distinct_count")
             if kind == "FACT" and is_descriptor(n, c.get("data_type", "")) and distinct is not None and 0 < int(distinct) <= DIM_MAX_DISTINCT:
                 dname = f"DIM_{stem(table)}_{n}"
-                fk = f"{n}_DIM_SKEY"
+                fk = f"{dname}_SKEY"
                 if not any(e["entity_name"] == dname for e in entities):
                     entities.append({
                         "entity_name": dname, "table_type": "DIMENSION", "database": loc["database"], "schema": loc["schema"],

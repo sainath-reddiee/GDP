@@ -218,7 +218,7 @@ function GoldCode({ build, approved, may }: { build: GoldBuild; approved: boolea
   const gen = build.generation;
   useEffect(() => {
     if (!gen) return;
-    void goldFiles(build.build_id).then((r) => { if (r.ok) { setFiles(r.data.files); setOpen((o) => o ?? r.data.files && Object.keys(r.data.files).find((p) => p.startsWith("models/")) ?? null); } });
+    void goldFiles(build.build_id).then((r) => { if (r.ok) { setFiles(r.data.files); setOpen((o) => o ?? Object.keys(r.data.files ?? {}).find((p) => p.startsWith("models/")) ?? null); } });
   }, [build.build_id, gen?.version]);   // eslint-disable-line react-hooks/exhaustive-deps
   const run = () => start(async () => {
     setError("");
