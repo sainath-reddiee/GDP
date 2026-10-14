@@ -28,7 +28,7 @@ export type Overview = {
   top_used: { knowledge_id: string; title: string; knowledge_type: string; domain_name: string; uses: number; runs: number }[];
   feed: FeedItem[];
 };
-export type InboxItem = KnowledgeItem & { current: KnowledgeItem | null };
+export type InboxItem = KnowledgeItem & { current: KnowledgeItem | null; replay?: import("../learning/actions").Replay | null };
 export type KDiff = {
   base: { knowledge_id: string; version: number }; head: { knowledge_id: string; version: number };
   files: { path: string; status: "changed" | "same"; added: number; removed: number; ops: [string, number | null, number | null, string | number][] }[];

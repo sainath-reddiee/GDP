@@ -8,6 +8,7 @@ import { generateMapping } from "../pipeline-actions";
 import { MappingBoard } from "./mapping-board";
 import { MappingGate } from "./mapping-gate";
 import { GoldModelPanel } from "./gold-model";
+import { QuestionsPanel } from "@/components/learning/questions-panel";
 import { ModelDesign } from "./model-design";
 import type { ModelPayload } from "./model-actions";
 
@@ -49,6 +50,7 @@ export async function MappingStep({ runId }: { runId: string }) {
           </CardContent>
         </Card>
       )}
+      <QuestionsPanel runId={params.runId} title="The engine asks" />
       {state.current_state === "MAPPING_REVIEW" && data.candidates.length > 0 && (
         <MappingGate
           runId={params.runId}

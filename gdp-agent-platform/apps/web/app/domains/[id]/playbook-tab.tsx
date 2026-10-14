@@ -8,6 +8,7 @@ import { LAYER_META } from "@/lib/layers";
 import { cn } from "@/lib/utils";
 import { prettyType } from "../../knowledge/knowledge-ui";
 import { Accuracy } from "./references-tab";
+import { LearningPanel } from "./learning-panel";
 import {
   domainPlaybook, playbookPreview, saveDomainConventions, saveDomainSkills,
   type DomainSkillRow, type Playbook,
@@ -56,6 +57,7 @@ export function PlaybookTab({ domainId, domainName, layer }: { domainId: string;
           </section>
         </aside>
       </div>
+      <LearningPanel domainId={domainId} layer={layer} />
       <Preview domainId={domainId} layer={layer} />
     </div>
   );

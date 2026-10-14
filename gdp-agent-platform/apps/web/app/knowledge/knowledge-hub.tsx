@@ -18,6 +18,8 @@ import {
   type FeedItem, type InboxItem, type KDiff, type KnowledgeItem, type Overview, type Policy,
 } from "./actions";
 import { DocumentReview } from "../domains/document-review";
+import { ReplayStrip } from "@/components/learning/replay-strip";
+import { replayKnowledge, type Replay } from "../learning/actions";
 import { HUB_TABS, type HubTab } from "./hub-tabs";
 import { KnowledgeDrawer } from "./item-drawer";
 import { ItemEditor } from "./knowledge-browser";
@@ -236,6 +238,9 @@ export function FeedPanel({ items }: { items: FeedItem[] }) {
 
 const STEWARD_SCOPE = "You see items for domains you steward.";
 
+/** Knowledge kinds that change how mapping ranks or transforms, so a replay can measure them. */
+const REPLAYABLE = ["MAPPING_PATTERN", "TRANSFORMATION_RULE", "GLOSSARY", "BUSINESS_RULE"];
+
 export function InboxPanel({ items }: { items: InboxItem[] }) {
   const router = useRouter();
   const { canAct } = useAccess();
@@ -246,7 +251,13 @@ export function InboxPanel({ items }: { items: InboxItem[] }) {
   const [msg, setMsg] = useState<{ tone: "ok" | "info" | "error"; text: string } | null>(null);
   const [refused, setRefused] = useState<Record<string, string>>({});
   const [reading, setReading] = useState<{ domainId: string; sourceId: string; focus: string } | null>(null);
+  const [replays, setReplays] = useState<Record<string, Replay>>({});
   const [pending, start] = useTransition();
+  const replay = (p: InboxItem) => start(async () => {
+    const r = await replayKnowledge(p.knowledge_id);
+    if (r.ok) setReplays({ ...replays, [p.knowledge_id]: r.data });
+    else setRefused({ ...refused, [p.knowledge_id]: r.error });
+  });
   const decide = (ids: string[], decision: "approve" | "reject") => start(async () => {
     const r = await decideInbox(ids, decision, note);
     if (!r.ok) {
@@ -310,6 +321,9 @@ export function InboxPanel({ items }: { items: InboxItem[] }) {
             </div>
             <div className="flex gap-1.5">
               {p.current && <Button size="sm" variant="ghost" disabled={pending} onClick={() => diff(p)}><ArrowLeftRight className="h-3.5 w-3.5" />Diff</Button>}
+              {REPLAYABLE.includes(p.knowledge_type) && may && (
+                <Button size="sm" variant="ghost" disabled={pending} onClick={() => replay(p)}
+                        title="Rank the domain's past runs again with this item and compare with what reviewers approved">Replay</Button>)}
               <Button size="sm" disabled={!may || pending} onClick={() => decide([p.knowledge_id], "approve")}><Check className="h-3.5 w-3.5" />Approve</Button>
               <Button size="sm" variant="outline" disabled={!may || pending} onClick={() => decide([p.knowledge_id], "reject")}><X className="h-3.5 w-3.5" />Reject</Button>
             </div>
@@ -332,6 +346,9 @@ export function InboxPanel({ items }: { items: InboxItem[] }) {
                 <p className="line-clamp-6 whitespace-pre-wrap text-xs">{p.content}</p>
               </div>
             </div>
+          )}
+          {(replays[p.knowledge_id] ?? p.replay) && (
+            <div className="border-t bg-muted/20 px-4 py-2.5"><ReplayStrip replay={(replays[p.knowledge_id] ?? p.replay) as Replay} /></div>
           )}
           <SourceStrip item={p} onOpen={(sourceId) => setReading({ domainId: p.domain_id, sourceId, focus: p.knowledge_id })} />
         </article>
