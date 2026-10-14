@@ -93,8 +93,8 @@ export const NAV_GROUPS: NavGroup[] = [
         badge: (c) => c.review ? { value: c.review, tone: "bg-rose-500 text-white", title: `${c.review} waiting on review` }
           : c.running ? { value: c.running, tone: "bg-white/10 text-white/70", title: `${c.running} running` } : null,
         children: [
-          { href: "/runs", label: "Source to Silver", icon: ListChecks },
-          { href: "/gold", label: "Silver to Gold", icon: Crown },
+          { href: "/runs", label: "Silver Pipeline", icon: ListChecks },
+          { href: "/gold", label: "Gold Pipeline", icon: Crown },
         ],
       },
       { href: "/lineage", label: "Lineage", icon: Network },

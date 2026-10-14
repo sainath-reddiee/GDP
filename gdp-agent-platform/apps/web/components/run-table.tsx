@@ -5,7 +5,7 @@ import { STAGE_ORDER, formatAge, stageInfo, statusPill } from "@/lib/run-status"
 import { TagEditor } from "@/components/tag-editor";
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import Link from "next/link";
-import { useSearchParams } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
 import { Archive, ArchiveRestore, Trash2 } from "lucide-react";
 import type { CleanupResult, Lifecycle, RunStatusFilter, RunSummary } from "@/lib/types";
 import { cleanupRuns, setRunsArchived } from "@/app/runs/actions";
@@ -57,13 +57,14 @@ export function RunTable({
   const [pending, start] = useTransition();
   const headerBox = useRef<HTMLInputElement>(null);
   const params = useSearchParams();
+  const listPath = usePathname() || "/runs";   // /runs (Silver Pipeline) or /gold (Gold Pipeline)
   // Status links keep the other filters (search, domain, sort...) and restart paging.
   const statusHref = (status: string) => {
     const next = new URLSearchParams(params?.toString() ?? "");
     if (status === "all") next.delete("status"); else next.set("status", status);
     next.delete("offset");
     const qs = next.toString();
-    return qs ? `/runs?${qs}` : "/runs";
+    return qs ? `${listPath}?${qs}` : listPath;
   };
 
   const ids = useMemo(() => runs.map((r) => r.run_id), [runs]);

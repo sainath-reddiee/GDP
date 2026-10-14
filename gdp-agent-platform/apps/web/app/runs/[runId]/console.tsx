@@ -9,6 +9,7 @@ import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input, Label, Select, Textarea } from "@/components/ui/input";
 import { reviewRun, transitionRun } from "./actions";
+import { labelFor, pipelineOf } from "@/lib/stages";
 
 /** APPROVE only moves a run into an *_APPROVED state; the other decisions only move it back (as the procedure enforces). */
 const decisionsFor = (toState: string) => toState.endsWith("_APPROVED") ? ["APPROVE"] : ["REQUEST_CHANGES", "REJECT", "REOPEN"];
@@ -53,7 +54,14 @@ export function RunConsole({ state }: { state: RunState }) {
     (t) => t.actor !== "HUMAN" && t.to_state !== "FAILED" &&
       (state.current_state === "FAILED" || !PROCEDURE_OWNED.has(t.to_state)),
   );
-  const next = NEXT_STEP[state.current_state];
+  const gold = pipelineOf(state.run?.pipeline) === "GOLD";
+  const step = NEXT_STEP[state.current_state];
+  // a Gold run: the code is gold, and it picks its gold table before mapping
+  const next = step && gold ? {
+    ...step,
+    label: ["PROFILING_COMPLETE", "DOMAIN_IDENTIFIED"].includes(state.current_state) && !state.run?.target_model
+      ? "Modeling: design the gold model and pick the table to build" : step.label.replace(/Silver code/g, "Gold code"),
+  } : step;
 
   const run = (fn: () => Promise<ActionResult>) =>
     start(async () => {
@@ -75,7 +83,7 @@ export function RunConsole({ state }: { state: RunState }) {
           {["STTM_APPROVED", "SODA_PENDING", "SODA_REVIEW"].includes(state.current_state) ? (
             <div className="mb-3 flex flex-wrap gap-2">
               <Link href={`/runs/${state.run_id}/soda`} className={buttonVariants()}>Open Data Quality</Link>
-              <Link href={`/runs/${state.run_id}/dbt`} className={buttonVariants({ variant: "outline" })}>Open Silver Code Generation</Link>
+              <Link href={`/runs/${state.run_id}/dbt`} className={buttonVariants({ variant: "outline" })}>Open {labelFor("DBT", pipelineOf(state.run?.pipeline))}</Link>
             </div>
           ) : next && (
             <Link href={`/runs/${state.run_id}/${next.slug}`} className={buttonVariants({ className: "mb-3" })}>

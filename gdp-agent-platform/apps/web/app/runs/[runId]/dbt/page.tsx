@@ -62,6 +62,7 @@ export default async function DbtPage({ params }: { params: { runId: string } })
         models={models}
         defaultModel={workspace.default_model || models[0]?.name || "claude-sonnet-4-5"}
         setup={setup}
+        pipeline={state.run.pipeline ?? "SILVER"}
       />
     </StageGate>
   );

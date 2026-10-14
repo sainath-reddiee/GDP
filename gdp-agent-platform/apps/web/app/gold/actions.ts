@@ -3,64 +3,54 @@
 import { revalidatePath } from "next/cache";
 import { api, attemptValue } from "@/lib/api";
 
-export type GoldInput = { database: string; schema: string; table: string; layer: "SILVER_PRE_MDM" | "SILVER_POST_MDM" };
-export type GoldLine = { gold_table: string; gold_column: string; kind: "KEY" | "COLUMN" | "RESOLVE" | "DERIVED" | "AUDIT";
-  source_layer: string | null; source_table: string | null; source_column: string | null; expression: string | null; note: string | null };
-export type GoldAttr = { name: string; datatype: string; nullable: boolean; is_pk: boolean; description?: string };
-export type GoldEntity = { entity_name: string; table_type: string; conformed_from?: string | null; database?: string; schema?: string;
-  grain?: string; business_keys: string[]; description?: string; attributes: GoldAttr[] };
-export type GoldSpec = { domain: string; layer: "GOLD"; physical_defaults: { database: string; schema: string; platform: string };
-  design: { entities: GoldEntity[] };
-  relationships: { from_entity: string; from_column: string; to_entity: string; to_column: string; cardinality: string }[] };
-export type GoldBuild = {
-  build_id: string; domain_id: string; domain_name: string; name: string; step: "INPUTS" | "MODELING" | "REVIEW" | "CODE" | "DONE";
-  status: "DRAFT" | "PROPOSED" | "IN_REVIEW" | "APPROVED" | "GENERATED" | "CANCELLED"; inputs: GoldInput[] | null;
-  proposal: { spec: GoldSpec; notes: string[] } | null; model_id: string | null; model_version: number | null;
-  model: { model_id: string; approved_version: number | null; open_version: number | null } | null;
-  lines: GoldLine[]; role: "MASTERED" | "CONSUMER" | null; consumes: { domain: string; silver_column: string; gold_column: string }[];
-  created_by: string; created_at: string; updated_at: string | null;
-  generation: { version: number; model_version: number; paths: string[];
-    report: { engine: string; tables: string[]; conformed: string[]; conventions: unknown; assumptions: string[]; notes?: string[] } } | null;
+export type GoldInputs = {
+  domain_id: string; domain_name: string; role: "MASTERED" | "CONSUMER" | null;
+  consumes: { domain: string; silver_column: string; gold_column: string }[];
+  schemas: { database: string; schema: string; error?: string; missing?: string[];
+    tables: { table: string; type: string; row_count: number | null; last_altered: string | null; suggested: boolean }[] }[];
 };
-export type GoldBuildRow = { build_id: string; domain_id: string; domain_name: string; name: string; step: string; status: string;
-  inputs: number; tables: number; model_id: string | null; created_by: string; created_at: string; updated_at: string | null };
-export type GoldCandidate = GoldInput & { role: string; exists?: boolean; row_count?: number | null; last_altered?: string | null; error?: string };
+export type GoldTable = { entity: string; table_type: "FACT" | "DIMENSION" | "BRIDGE" | string; grain: string | null;
+  description: string | null; columns: number; fqn: string };
+export type RunGold = {
+  run_id: string; domain_id: string; domain_name: string; role: "MASTERED" | "CONSUMER" | null;
+  consumes: { domain: string; silver_column: string; gold_column: string }[];
+  model: { model_id: string; approved_version: number | null; open_version: number | null } | null;
+  tables: GoldTable[];
+  target: { model_id: string; version: number; entity: string; fqn: string | null } | null;
+  inputs: { database: string; schema: string; table: string; row_count: number | null; columns: number }[];
+  can_choose_target: boolean;
+};
 
-const B = (id: string) => `/api/gold/builds/${encodeURIComponent(id)}`;
+export async function goldInputs(domainId: string) {
+  return attemptValue(() => api<GoldInputs>(`/api/gold/inputs?domain_id=${encodeURIComponent(domainId)}`));
+}
 
-export async function createGoldBuild(domainId: string, name?: string) {
-  const r = await attemptValue(() => api<GoldBuild>("/api/gold/builds", { method: "POST", body: JSON.stringify({ domain_id: domainId, name }) }));
-  revalidatePath("/gold");
-  return r;
+export async function startGoldRun(body: { domain_id: string; database: string; schema: string; tables: string[]; run_name?: string }) {
+  return attemptValue(async () => {
+    const r = await api<{ run_id: string; stage: string; error?: string }>("/api/gold/runs", { method: "POST", body: JSON.stringify(body) });
+    revalidatePath("/gold");
+    return r;
+  });
 }
-export async function goldCandidates(buildId: string) {
-  return attemptValue(() => api<{ role: string | null; tables: GoldCandidate[] }>(`${B(buildId)}/candidates`));
+
+export async function runGold(runId: string) {
+  return attemptValue(() => api<RunGold>(`/api/runs/${encodeURIComponent(runId)}/gold`));
 }
-export async function setGoldInputs(buildId: string, tables: GoldInput[]) {
-  const r = await attemptValue(() => api<GoldBuild>(`${B(buildId)}/inputs`, { method: "PUT", body: JSON.stringify({ tables }) }));
-  revalidatePath(`/gold/${buildId}`);
-  return r;
+
+export async function proposeGold(runId: string) {
+  return attemptValue(async () => {
+    const r = await api<{ model_id: string; version: number; notes: string[]; tables: { entity: string; table_type: string; conformed: boolean }[] }>(
+      `/api/runs/${encodeURIComponent(runId)}/gold/propose`, { method: "POST" });
+    revalidatePath(`/runs/${runId}/modeling`);
+    return r;
+  });
 }
-export async function proposeGold(buildId: string) {
-  const r = await attemptValue(() => api<GoldBuild>(`${B(buildId)}/propose`, { method: "POST" }));
-  revalidatePath(`/gold/${buildId}`);
-  return r;
-}
-export async function goldToWorkbench(buildId: string) {
-  const r = await attemptValue(() => api<GoldBuild>(`${B(buildId)}/workbench`, { method: "POST" }));
-  revalidatePath(`/gold/${buildId}`);
-  return r;
-}
-export async function cancelGold(buildId: string) {
-  const r = await attemptValue(() => api<GoldBuild>(`${B(buildId)}/cancel`, { method: "POST" }));
-  revalidatePath("/gold");
-  return r;
-}
-export async function generateGold(buildId: string) {
-  const r = await attemptValue(() => api<GoldBuild>(`${B(buildId)}/generate`, { method: "POST" }));
-  revalidatePath(`/gold/${buildId}`);
-  return r;
-}
-export async function goldFiles(buildId: string) {
-  return attemptValue(() => api<{ version: number; files: Record<string, string> }>(`${B(buildId)}/generation`));
+
+export async function chooseGoldTarget(runId: string, entity: string) {
+  return attemptValue(async () => {
+    const r = await api<{ target_model: string; mapping_reset?: boolean }>(`/api/runs/${encodeURIComponent(runId)}/gold/target`,
+      { method: "POST", body: JSON.stringify({ entity }) });
+    revalidatePath(`/runs/${runId}`, "layout");
+    return r;
+  });
 }

@@ -26,6 +26,7 @@ export type RunInfo = {
   storage_type?: StorageType | null;
   archived_at?: string | null;
   archived_by?: string | null;
+  pipeline?: "SILVER" | "GOLD" | null;
 };
 
 export type Lifecycle = "DRAFT" | "RUNNING" | "COMPLETED" | "FAILED" | "ARCHIVED";
@@ -53,6 +54,7 @@ export type RunState = {
 
 export type RunSummary = {
   run_id: string;
+  pipeline?: "SILVER" | "GOLD" | null;
   run_name: string;
   current_state: string;
   current_stage: string | null;

@@ -40,8 +40,9 @@ export default async function ModelingPage({ params, searchParams }: {
       <section className="surface p-4" aria-label="Modeling steps">
         <div className="mb-3">
           <h2 className="text-base font-semibold">Modeling</h2>
-          <p className="text-xs text-muted-foreground">Map the profiled source to the target model, then define how every target column is
-            computed. Silver code generation, QA tests and Data Quality are built from the approved result.</p>
+          <p className="text-xs text-muted-foreground">{state.run.pipeline === "GOLD"
+            ? "Design the gold model and pick the gold table this run builds, map the profiled Silver columns to it, then define how every gold column is computed. Gold code generation, QA tests and Data Quality are built from the approved result."
+            : "Map the profiled source to the target model, then define how every target column is computed. Silver code generation, QA tests and Data Quality are built from the approved result."}</p>
         </div>
         <ol className="grid gap-2 sm:grid-cols-2" role="tablist">
           {STEPS.map((s) => {

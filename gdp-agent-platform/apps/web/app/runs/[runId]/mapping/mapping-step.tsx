@@ -7,10 +7,12 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { generateMapping } from "../pipeline-actions";
 import { MappingBoard } from "./mapping-board";
 import { MappingGate } from "./mapping-gate";
+import { GoldModelPanel } from "./gold-model";
 import { ModelDesign } from "./model-design";
 import type { ModelPayload } from "./model-actions";
 
-/** Modeling, step 1: the field mapping (target model design, scored candidates, the mapping gate). */
+/** Modeling, step 1: the field mapping (target model design, scored candidates, the mapping gate). A Gold run designs
+ *  the domain's gold model and picks the gold table it builds instead of a silver target design. */
 export async function MappingStep({ runId }: { runId: string }) {
   const params = { runId };
   const [state, me, data, model] = await Promise.all([
@@ -19,20 +21,23 @@ export async function MappingStep({ runId }: { runId: string }) {
     api<MappingOverview>(`/api/runs/${params.runId}/mapping`),
     api<ModelPayload>(`/api/runs/${params.runId}/model`).catch(() => null),
   ]);
+  const gold = state.run.pipeline === "GOLD";
   const canApplyModel = canAct(me, "MODEL.APPROVE") && !state.is_archived
     && ["PROFILING_COMPLETE", "DOMAIN_IDENTIFIED", "MAPPING_PENDING", "MAPPING_REVIEW"].includes(state.current_state);
-  const canGenerate = can(me, "RUN.OPERATE") && ["DOMAIN_IDENTIFIED", "MAPPING_PENDING"].includes(state.current_state);
+  const canGenerate = can(me, "RUN.OPERATE") && ["DOMAIN_IDENTIFIED", "MAPPING_PENDING"].includes(state.current_state)
+    && (!gold || Boolean(state.run.target_model));
   return (
     <StageGate state={state} stage="MAPPING">
-      {model && <ModelDesign runId={params.runId} data={model} canApply={canApplyModel} state={state.current_state}
-                               canEdit={canAct(me, "MODEL.EDIT")} canAI={can(me, "AI.USE") && can(me, "MODEL.EDIT")} />}
+      {gold ? <GoldModelPanel runId={params.runId} />
+        : model && <ModelDesign runId={params.runId} data={model} canApply={canApplyModel} state={state.current_state}
+                                canEdit={canAct(me, "MODEL.EDIT")} canAI={can(me, "AI.USE") && can(me, "MODEL.EDIT")} />}
       {canGenerate && (
         <Card>
           <CardHeader>
             <CardTitle>Hybrid mapping</CardTitle>
             <CardDescription>
               Seven scored signals (semantic, name, type, statistics, domain, context, history) plus Cortex Search and an
-              AI adjudicator rank target candidates for every source column.
+              AI adjudicator rank target candidates for every source column.{gold && " For gold, the mastered keys, the data source and dimension keys come from the gold model's rules (resolved through the cross-reference)."}
             </CardDescription>
           </CardHeader>
           <CardContent>

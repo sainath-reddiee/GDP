@@ -7,6 +7,7 @@ import { TagEditor } from "@/components/tag-editor";
 import { RunSkills } from "@/components/run-skills";
 import { Badge } from "@/components/ui/badge";
 import { displayDomain, isHiddenTarget } from "@/lib/catalog-display";
+import { PIPELINES, pipelineOf } from "@/lib/stages";
 import RunLoading from "./loading";
 
 function runTargetLabel(model: string | null | undefined) {
@@ -27,15 +28,17 @@ async function RunShell({ runId, children }: { runId: string; children: ReactNod
   const tone = state.status === "FAILED" ? "destructive" : state.status === "COMPLETED" ? "success" : "secondary";
   const targetLabel = runTargetLabel(state.run.target_model);
   const packLabel = displayDomain(state.run.domain_name);
+  const pipeline = pipelineOf(state.run.pipeline);
   return (
     <div>
       <p className="eyebrow mb-1">
-        <Link href="/runs" className="hover:underline">Runs</Link>
+        <Link href={PIPELINES[pipeline].href} className="hover:underline">{PIPELINES[pipeline].name}</Link>
         <span className="mx-1.5 text-muted-foreground">/</span>
         <span className="font-mono normal-case tracking-normal text-muted-foreground">{runId.slice(0, 8)}</span>
       </p>
       <div className="mb-5 flex flex-wrap items-center gap-2.5">
         <h1>{state.run.run_name}</h1>
+        {pipeline === "GOLD" && <Badge variant="outline" className="border-amber-500/50 text-amber-600">Gold run</Badge>}
         <Badge variant={tone}>{state.status}</Badge>
         <Badge variant="outline">{state.current_state}</Badge>
         <span className="text-sm text-muted-foreground">
@@ -60,7 +63,7 @@ async function RunShell({ runId, children }: { runId: string; children: ReactNod
         </p>
       )}
       <div className="space-y-5">
-        <StageRail runId={runId} stages={state.stages} />
+        <StageRail runId={runId} stages={state.stages} pipeline={pipeline} />
         <section className="min-w-0 space-y-5">{children}</section>
       </div>
     </div>

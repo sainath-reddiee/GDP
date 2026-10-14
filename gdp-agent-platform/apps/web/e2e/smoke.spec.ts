@@ -173,11 +173,16 @@ test("runs page: filters and bulk archive, restore, delete", async ({ page }) =>
   expect(errors).toEqual([]);
 });
 
-test("pipelines and lineage: Silver to Gold list and the lineage explorer render without errors", async ({ page }) => {
+test("pipelines and lineage: both pipelines list runs, and the lineage explorer renders without errors", async ({ page }) => {
   const errors = watchHydration(page);
   await signIn(page);
+  await page.goto("/runs");
+  await expect(page.getByRole("link", { name: /New Silver run/ })).toHaveAttribute("href", "/dashboard/onboarding");
   await page.goto("/gold");
-  await expect(page.getByRole("link", { name: "Silver to Gold" }).first()).toBeVisible();
+  await expect(page.getByRole("navigation", { name: "Pipelines" }).getByRole("link", { name: /Gold Pipeline/ })).toHaveAttribute("aria-current", "page");
+  await page.getByTestId("new-gold-run").click();
+  await expect(page.getByRole("dialog")).toContainText("New Gold run");
+  await page.keyboard.press("Escape");
   await page.goto("/lineage");
   await expect(page.getByRole("heading", { name: "Lineage" })).toBeVisible();
   await expect(page.getByLabel("Find a table")).toBeVisible();
