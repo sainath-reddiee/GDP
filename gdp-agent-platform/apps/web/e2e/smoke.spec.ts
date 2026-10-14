@@ -195,3 +195,20 @@ test("pipelines and lineage: both pipelines list runs, and the lineage explorer 
   await expect(page.getByText(/No lineage found for/)).toBeVisible({ timeout: 30_000 });
   expect(errors).toEqual([]);
 });
+
+test("domain layers: the layer switch drives every tab and the playbook is per layer", async ({ page }) => {
+  const errors = watchHydration(page);
+  await signIn(page);
+  await page.goto("/domains");
+  await page.locator('a[href^="/domains/"]').first().click();
+  const layers = page.getByRole("group", { name: "Layer" });
+  await expect(layers).toContainText("Silver");
+  await expect(layers).toContainText("Gold");
+  await layers.getByRole("button", { name: /Gold/ }).click();
+  await expect(page).toHaveURL(/layer=GOLD/);
+  await page.getByRole("button", { name: "Playbook" }).click();
+  await expect(page.getByTestId("playbook")).toContainText("Gold runs model and code", { timeout: 30_000 });
+  await page.getByRole("button", { name: "Models" }).click();
+  await expect(page).toHaveURL(/layer=GOLD/);
+  expect(errors).toEqual([]);
+});

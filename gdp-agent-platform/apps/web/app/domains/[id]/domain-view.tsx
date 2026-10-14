@@ -21,7 +21,11 @@ import {
   type DomainDiff, type DomainMember, type DomainRules, type DomainVersion, type TargetModel,
 } from "../actions";
 import { DomainTools } from "../domain-tools";
+import { LAYER_META, layersFor, mdmBadge, type Layer, type MdmRole } from "@/lib/layers";
 import { BuiltFromCard, LineageTab } from "./lineage-tab";
+import { MdmPanel } from "./mdm-panel";
+import { PlaybookTab } from "./playbook-tab";
+import { MdmRules } from "./mdm-rules";
 import { SourcesTab } from "./sources-tab";
 import { Avatar, cleanDescription, DomainMark } from "../domain-ui";
 import type { DomainCard } from "../page";
@@ -39,8 +43,8 @@ export type DomainDetail = {
 };
 
 const TABS = [
-  { id: "overview", label: "Overview" }, { id: "lineage", label: "Lineage" }, { id: "sources", label: "Sources" }, { id: "models", label: "Target models" }, { id: "knowledge", label: "Knowledge" },
-  { id: "rules", label: "Rules" }, { id: "versions", label: "Versions" },
+  { id: "overview", label: "Overview" }, { id: "playbook", label: "Playbook" }, { id: "models", label: "Models" }, { id: "knowledge", label: "Knowledge" },
+  { id: "rules", label: "Rules" }, { id: "sources", label: "Sources" }, { id: "lineage", label: "Lineage" }, { id: "versions", label: "Versions" },
 ] as const;
 const KIND_TONE: Record<string, string> = {
   ROLLBACK: "bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300", DELETE: "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300",
@@ -50,10 +54,11 @@ const KIND_TONE: Record<string, string> = {
 type Msg = { tone: "ok" | "info" | "error"; text: string } | null;
 const toneOf = (e: string): "info" | "error" => (/approval|request/i.test(e) ? "info" : "error");
 
-export function DomainView({ detail, versions, unrecorded, members, rules, targets, feed, card, meta, tab }: {
+export function DomainView({ detail, versions, unrecorded, members, rules, targets, feed, card, meta, tab, layer }: {
   detail: DomainDetail; versions: DomainVersion[]; unrecorded: boolean; members: DomainMember[]; rules: DomainRules | null;
   targets: TargetModel[]; feed: FeedItem[]; card: DomainCard;
-  meta: { version: number; standard: string | null; knowledge: number; targets: number; active: boolean }; tab: string;
+  meta: { version: number; standard: string | null; knowledge: number; targets: number; active: boolean;
+          gold_tables?: number; mdm_role?: MdmRole; consumes?: string | null; gold_model_version?: number | null }; tab: string; layer: Layer;
 }) {
   const router = useRouter();
   const pathname = usePathname();
@@ -74,6 +79,16 @@ export function DomainView({ detail, versions, unrecorded, members, rules, targe
     next.set("tab", id);
     router.replace(`${pathname}?${next}`, { scroll: false });
   };
+  const goLayer = (l: Layer) => {
+    const next = new URLSearchParams(params.toString());
+    next.set("layer", l);
+    router.replace(`${pathname}?${next}`, { scroll: false });
+  };
+  const layers = layersFor(meta.mdm_role);
+  const badge = mdmBadge(meta.mdm_role, meta.consumes);
+  const pipeline: "SILVER" | "GOLD" = layer === "GOLD" ? "GOLD" : "SILVER";
+  const env = (detail.silver.database ?? "DEV_").split("_")[0] || "DEV";
+  const goldLocation = `${env}_GDP_GOLD_${d.domain_name.toUpperCase()}_DB.${d.domain_name.toUpperCase()}`;
   const act = (fn: () => Promise<{ ok: boolean; error?: string }>, ok: string, after?: () => void) => start(async () => {
     const r = await fn();
     setMsg(r.ok ? { tone: "ok", text: ok } : { tone: toneOf(r.error ?? ""), text: r.error ?? "Failed" });
@@ -90,6 +105,7 @@ export function DomainView({ detail, versions, unrecorded, members, rules, targe
             <h1 className="flex flex-wrap items-center gap-2 text-xl font-semibold">{name}
               {meta.standard && <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground">{meta.standard}</span>}
               {!meta.active && <span className="rounded-full bg-red-100 px-2 py-0.5 text-[11px] text-red-700 dark:bg-red-950 dark:text-red-300">deleted</span>}
+              {badge && <span className={cn("rounded-full px-2 py-0.5 text-[11px] font-medium", badge.cls)}>{badge.text}</span>}
               <span className="rounded-full border px-2 py-0.5 text-[11px] font-medium text-muted-foreground">v{meta.version}</span>
             </h1>
             {editing ? (
@@ -106,7 +122,7 @@ export function DomainView({ detail, versions, unrecorded, members, rules, targe
                 {may && <button type="button" onClick={() => setEditing(true)} className="ml-2 inline-flex items-center gap-1 text-xs text-primary hover:underline"><Pencil className="h-3 w-3" />Edit</button>}</p>
             )}
             <div className="mt-3 flex flex-wrap gap-2 text-xs">
-              <Pill icon={<Boxes className="h-3.5 w-3.5" />}>{meta.targets} target models</Pill>
+              <Pill icon={<Boxes className="h-3.5 w-3.5" />}>{meta.targets} Silver · {meta.gold_tables ?? 0} Gold tables</Pill>
               <Pill icon={<BookOpen className="h-3.5 w-3.5" />}>{meta.knowledge} knowledge items</Pill>
               <Pill icon={<Play className="h-3.5 w-3.5" />}>{card.runs_30d ?? 0} runs in 30 days</Pill>
               <Pill icon={<BadgeCheck className="h-3.5 w-3.5 text-emerald-600" />}>{verifiedPct}% verified</Pill>
@@ -120,6 +136,20 @@ export function DomainView({ detail, versions, unrecorded, members, rules, targe
           msg.tone === "error" ? "bg-destructive/10 text-destructive" : msg.tone === "info" ? "bg-sky-50 text-sky-800 dark:bg-sky-950/40 dark:text-sky-200" : "bg-success/10 text-success")}>{msg.text}</p>}
       </header>
 
+      <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Layer">
+        {layers.map((l, i) => (
+          <span key={l} className="flex items-center gap-2">
+            {i > 0 && <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />}
+            <button type="button" onClick={() => goLayer(l)} aria-pressed={layer === l}
+                    className={cn("rounded-xl border px-3 py-1.5 text-left transition", layer === l ? cn(LAYER_META[l].solid, "border-transparent shadow-sm") : cn("bg-card hover:bg-muted", LAYER_META[l].ring))}>
+              <span className="block text-sm font-semibold">{LAYER_META[l].label}</span>
+              <span className={cn("block text-[10px]", layer === l ? "opacity-90" : "text-muted-foreground")}>{LAYER_META[l].sub}</span>
+            </button>
+          </span>
+        ))}
+        <span className="ml-auto text-xs text-muted-foreground">Every tab below shows the {LAYER_META[layer].label} layer.</span>
+      </div>
+
       <nav className="flex gap-1 border-b" aria-label="Domain sections">
         {TABS.map((t) => (
           <button key={t.id} type="button" onClick={() => go(t.id)} aria-current={active === t.id ? "page" : undefined}
@@ -129,6 +159,19 @@ export function DomainView({ detail, versions, unrecorded, members, rules, targe
         ))}
       </nav>
 
+      {active === "overview" && layer === "MDM" && <MdmPanel domainId={d.domain_id} />}
+      {active === "overview" && layer === "GOLD" && (
+        <Panel title="Gold layer" hint="The star schema Gold runs build from this domain's Silver tables, in its own gold database.">
+          <dl className="grid gap-2 text-sm sm:grid-cols-3">
+            <div><dt className="text-xs text-muted-foreground">Location</dt><dd className="font-mono text-xs">{goldLocation}</dd></div>
+            <div><dt className="text-xs text-muted-foreground">Gold model</dt><dd className="text-xs">{meta.gold_model_version ? `v${meta.gold_model_version} approved, ${meta.gold_tables ?? 0} table(s)` : "Not approved yet: start a Gold run"}</dd></div>
+            <div><dt className="text-xs text-muted-foreground">Mastered keys</dt><dd className="text-xs">{String(meta.mdm_role ?? "").toUpperCase() === "MASTERED"
+              ? "Its gold is the conformed dimension in gdp-dbt" : meta.consumes ? `Resolves ${meta.consumes.toLowerCase().replace(",", " and ")} through Reltio's cross-reference` : "Not linked to MDM"}</dd></div>
+          </dl>
+          <div className="mt-3 flex gap-3 text-xs"><Link href="/gold" className="text-primary hover:underline">Gold Pipeline</Link>
+            <button type="button" onClick={() => go("playbook")} className="text-primary hover:underline">Gold playbook</button></div>
+        </Panel>
+      )}
       {active === "overview" && (
         <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
           <div className="space-y-4">
@@ -176,9 +219,19 @@ export function DomainView({ detail, versions, unrecorded, members, rules, targe
 
       {active === "lineage" && <LineageTab domainId={d.domain_id} domainName={name} />}
       {active === "sources" && <SourcesTab domainId={d.domain_id} />}
-      {active === "models" && <Models targets={targets} roles={detail.targets} />}
-      {active === "knowledge" && <KnowledgeTab domainId={d.domain_id} mix={detail.knowledge} feed={feed} card={card} />}
-      {active === "rules" && <RulesTab key={JSON.stringify(rules?.overrides ?? {})} domainId={d.domain_id} rules={rules} may={may} onMsg={setMsg} />}
+      {active === "playbook" && (layer === "MDM"
+        ? <MdmRules domainId={d.domain_id} />
+        : <PlaybookTab key={pipeline} domainId={d.domain_id} domainName={name} layer={pipeline} />)}
+      {active === "models" && (layer === "MDM"
+        ? <MdmPanel domainId={d.domain_id} />
+        : <Models layer={pipeline} mastered={String(meta.mdm_role ?? "").toUpperCase() === "MASTERED"} name={name}
+                  targets={targets.filter((t) => (t.layer === "GOLD") === (pipeline === "GOLD"))} roles={detail.targets} />)}
+      {active === "knowledge" && (layer === "MDM"
+        ? <MdmRules domainId={d.domain_id} />
+        : <KnowledgeTab domainId={d.domain_id} mix={detail.knowledge} feed={feed} card={card} layer={pipeline} />)}
+      {active === "rules" && (layer === "MDM"
+        ? <p className="rounded-2xl border border-dashed p-6 text-center text-sm text-muted-foreground">Reltio&apos;s matching is configured in Reltio. What the platform must respect when it reads the MDM layer is kept as MDM rules: see the Knowledge tab of this layer.</p>
+        : <RulesTab key={`${pipeline}:${JSON.stringify(rules?.overrides ?? {})}`} domainId={d.domain_id} rules={rules} may={may} onMsg={setMsg} pipeline={pipeline} />)}
       {active === "versions" && <Versions domainId={d.domain_id} versions={versions} unrecorded={unrecorded} may={may} onMsg={setMsg} />}
     </div>
   );
@@ -258,12 +311,17 @@ function People({ domainId, members, may, onMsg }: { domainId: string; members: 
   );
 }
 
-function Models({ targets, roles }: { targets: TargetModel[]; roles: DomainDetail["targets"] }) {
+function Models({ targets, roles, layer, mastered, name }: { targets: TargetModel[]; roles: DomainDetail["targets"]; layer: "SILVER" | "GOLD";
+  mastered?: boolean; name?: string }) {
   const [open, setOpen] = useState<Record<string, boolean>>({});
   const [q, setQ] = useState("");
   const byName = useMemo(() => new Map(roles.map((r) => [r.target_table.toUpperCase(), r])), [roles]);
   const shown = targets.filter((t) => !q || `${t.table} ${t.columns.map((c) => c.name).join(" ")}`.toLowerCase().includes(q.toLowerCase()));
-  if (!targets.length) return <p className="rounded-2xl border border-dashed p-8 text-center text-sm text-muted-foreground">No target models registered for this domain.</p>;
+  if (!targets.length) return <p className="rounded-2xl border border-dashed p-8 text-center text-sm text-muted-foreground">{layer === "GOLD" && mastered
+    ? `${name}'s gold is the conformed dimension built from Reltio's golden records in gdp-dbt (see the MDM layer); consumer domains reference it, and Gold runs do not rebuild it.`
+    : layer === "GOLD"
+    ? "No gold tables yet: they are registered when a Gold run's gold model is approved in the Model Workbench."
+    : "No Silver target models registered for this domain."}</p>;
   return (
     <div className="space-y-3">
       <div className="relative max-w-sm">
@@ -280,6 +338,7 @@ function Models({ targets, roles }: { targets: TargetModel[]; roles: DomainDetai
               {isOpen ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
               <span className="min-w-0 flex-1">
                 <span className="flex flex-wrap items-center gap-2 text-sm font-semibold">{short}
+                  {layer === "GOLD" && t.type && <span className={cn("rounded-full px-1.5 py-0.5 text-[10px]", LAYER_META.GOLD.chip)}>{t.type.toLowerCase()}</span>}
                   {meta?.role && <span className={cn("rounded-full px-1.5 py-0.5 text-[10px]", meta.role === "hub" ? "bg-primary text-primary-foreground" : "border")}>{meta.role}</span>}
                   {!t.active && <span className="text-[10px] text-muted-foreground">inactive</span>}
                 </span>
@@ -312,16 +371,19 @@ function Models({ targets, roles }: { targets: TargetModel[]; roles: DomainDetai
   );
 }
 
-function KnowledgeTab({ domainId, mix, feed, card }: { domainId: string; mix: DomainDetail["knowledge"]; feed: FeedItem[]; card: DomainCard }) {
+function KnowledgeTab({ domainId, mix, feed, card, layer }: { domainId: string; mix: DomainDetail["knowledge"]; feed: FeedItem[]; card: DomainCard; layer: "SILVER" | "GOLD" }) {
   const max = Math.max(1, ...mix.map((m) => Number(m.n)));
+  const scope = `&layer=${layer}`;
   return (
     <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_340px]">
-      <Panel title="Recently learned" action={<Link href={`/knowledge?tab=feed&domain_id=${domainId}`} className="text-xs text-primary hover:underline">Full feed</Link>}>
+      <Panel title={`Recently learned for the ${layer === "GOLD" ? "Gold" : "Silver"} layer`} hint="This layer's items and the shared ones (glossary, business terms)."
+             action={<Link href={`/knowledge?tab=feed&domain_id=${domainId}${scope}`} className="text-xs text-primary hover:underline">Full feed</Link>}>
         <ol className="space-y-2">
           {feed.map((f) => (
             <li key={f.knowledge_id} className="text-xs">
               <p className="flex flex-wrap items-center gap-1.5"><OriginChip origin={f.origin} short /><span className="font-medium">{f.title}</span>
-                <span className="text-muted-foreground">{prettyType(f.knowledge_type)} · v{f.version}</span>{f.status !== "ACTIVE" && <StatusPill status={f.status} />}</p>
+                <span className="text-muted-foreground">{prettyType(f.knowledge_type)} · v{f.version}</span>{f.status !== "ACTIVE" && <StatusPill status={f.status} />}
+                {(f.layer === "SILVER" || f.layer === "GOLD") && <span className={cn("rounded px-1 py-0.5 text-[9px] font-semibold", LAYER_META[f.layer].chip)}>{LAYER_META[f.layer].label}</span>}</p>
               <p className="text-muted-foreground">{f.created_by} · {ago(f.created_at)}{f.source_run_id && <> · run <Link className="text-primary hover:underline" href={`/runs/${f.source_run_id}`}>{f.run_name ?? f.source_run_id.slice(0, 8)}</Link></>}</p>
             </li>
           ))}
@@ -331,7 +393,7 @@ function KnowledgeTab({ domainId, mix, feed, card }: { domainId: string; mix: Do
       <aside className="space-y-4">
         <Panel title="Open in the Knowledge hub">
           <div className="grid gap-2 text-sm">
-            <Link href={`/knowledge?tab=items&domain_id=${domainId}`} className="flex items-center gap-2 rounded-lg border px-3 py-2 hover:border-primary hover:text-primary"><BookOpen className="h-4 w-4" />All items</Link>
+            <Link href={`/knowledge?tab=items&domain_id=${domainId}${scope}`} className="flex items-center gap-2 rounded-lg border px-3 py-2 hover:border-primary hover:text-primary"><BookOpen className="h-4 w-4" />{layer === "GOLD" ? "Gold" : "Silver"} and shared items</Link>
             <Link href={`/knowledge?tab=inbox&domain_id=${domainId}`} className="flex items-center gap-2 rounded-lg border px-3 py-2 hover:border-primary hover:text-primary"><Inbox className="h-4 w-4" />Review inbox{card.inbox ? ` (${card.inbox})` : ""}</Link>
             <Link href={`/knowledge?tab=health&domain_id=${domainId}`} className="flex items-center gap-2 rounded-lg border px-3 py-2 hover:border-primary hover:text-primary"><TriangleAlert className="h-4 w-4" />Duplicates and stale{card.stale ? ` (${card.stale})` : ""}</Link>
           </div>
@@ -374,7 +436,7 @@ function parseLike(key: string, sample: unknown, text: string): unknown {
   return text;
 }
 
-function RulesTab({ domainId, rules, may, onMsg }: { domainId: string; rules: DomainRules | null; may: boolean; onMsg: (m: Msg) => void }) {
+function RulesTab({ domainId, rules, may, onMsg, pipeline }: { domainId: string; rules: DomainRules | null; may: boolean; onMsg: (m: Msg) => void; pipeline: "SILVER" | "GOLD" }) {
   const router = useRouter();
   const initial = useMemo(() => Object.fromEntries(Object.entries(rules?.overrides ?? {}).map(([k, v]) => [k, toText(v)])), [rules]);
   const [text, setText] = useState<Record<string, string>>(initial);
@@ -387,7 +449,7 @@ function RulesTab({ domainId, rules, may, onMsg }: { domainId: string; rules: Do
   const save = () => start(async () => {
     try {
       const overrides = Object.fromEntries(Object.entries(text).filter(([, v]) => v.trim()).map(([k, v]) => [k, parseLike(k, rules.defaults[k], v)]));
-      const r = await saveDomainRules(domainId, overrides, note);
+      const r = await saveDomainRules(domainId, overrides, note, pipeline);
       onMsg(r.ok ? { tone: "ok", text: "Rules saved as a new domain version" } : { tone: toneOf(r.error), text: r.error });
       if (r.ok) { setNote(""); router.refresh(); }
     } catch (e) {
@@ -403,7 +465,9 @@ function RulesTab({ domainId, rules, may, onMsg }: { domainId: string; rules: Do
           <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search rules" className="border-0 pl-8 shadow-none focus-visible:ring-0" aria-label="Search rules" />
         </div>
         <label className="flex items-center gap-1.5 text-xs text-muted-foreground"><input type="checkbox" checked={onlyOverridden} onChange={() => setOnly(!onlyOverridden)} />Only this domain&apos;s overrides</label>
-        <p className="text-xs text-muted-foreground">Empty means the domain uses the platform value (Admin, Rules).</p>
+        <p className="text-xs text-muted-foreground">{pipeline === "GOLD"
+          ? "Gold rules: used by this domain's Gold runs only, on top of its Silver values. Empty means the Silver value."
+          : "Empty means the domain uses the platform value (Admin, Rules)."}</p>
       </div>
       {GROUPS.map(([prefix, title]) => {
         const items = keys.filter((k) => k.startsWith(prefix));
@@ -412,14 +476,14 @@ function RulesTab({ domainId, rules, may, onMsg }: { domainId: string; rules: Do
           <section key={prefix} className="overflow-hidden rounded-2xl border bg-card shadow-sm">
             <h3 className="border-b bg-muted/30 px-4 py-2 text-sm font-semibold">{title}</h3>
             <table className="w-full text-xs">
-              <thead className="text-left text-[10px] uppercase tracking-wide text-muted-foreground"><tr><th className="px-4 py-1.5">Rule</th><th>Platform</th><th>This domain</th><th className="px-4" /></tr></thead>
+              <thead className="text-left text-[10px] uppercase tracking-wide text-muted-foreground"><tr><th className="px-4 py-1.5">Rule</th><th>{pipeline === "GOLD" ? "Silver" : "Platform"}</th><th>{pipeline === "GOLD" ? "Gold, this domain" : "This domain"}</th><th className="px-4" /></tr></thead>
               <tbody className="divide-y">
                 {items.map((k) => {
                   const own = (text[k] ?? "").trim();
                   return (
                     <tr key={k} className={cn(own && "bg-primary/5")}>
                       <td className="px-4 py-1.5"><span className="capitalize">{k.split(".").slice(1).join(" ").replace(/_/g, " ")}</span><span className="block font-mono text-[10px] text-muted-foreground">{k}</span></td>
-                      <td className="max-w-[220px] truncate font-mono text-muted-foreground" title={toText(rules.platform[k])}>{toText(rules.platform[k])}</td>
+                      <td className="max-w-[220px] truncate font-mono text-muted-foreground" title={toText((rules.base ?? rules.platform)[k])}>{toText((rules.base ?? rules.platform)[k])}</td>
                       <td className="py-1"><Input value={text[k] ?? ""} disabled={!may} onChange={(e) => setText({ ...text, [k]: e.target.value })}
                                                   placeholder="inherit" className="h-7 w-56 font-mono text-[11px]" aria-label={k} /></td>
                       <td className="px-4 text-right">{own && may && <button type="button" title="Back to the platform value" onClick={() => setText({ ...text, [k]: "" })} className="text-primary"><RotateCcw className="h-3.5 w-3.5" /></button>}</td>

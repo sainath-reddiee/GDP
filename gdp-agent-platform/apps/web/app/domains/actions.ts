@@ -89,8 +89,12 @@ export type DomainDiff = {
   files: { path: string; status: "changed" | "same"; added: number; removed: number; ops: [string, number | null, number | null, string | number][] }[];
 };
 export type DomainMember = { user_name: string; role: "OWNER" | "STEWARD" | "EXPERT"; added_by: string; added_at: string };
-export type DomainRules = { defaults: Record<string, unknown>; platform: Record<string, unknown>; effective: Record<string, unknown>; overrides: Record<string, unknown> };
+export type DomainRules = { defaults: Record<string, unknown>; platform: Record<string, unknown>; effective: Record<string, unknown>; overrides: Record<string, unknown>;
+  /** SILVER or GOLD; for Gold, base is the domain's Silver values the Gold overrides sit on */
+  pipeline?: "SILVER" | "GOLD"; base?: Record<string, unknown> };
 export type TargetModel = { table: string; description: string | null; active: boolean; type: string | null; grain: string | null;
+  /** set to GOLD on gold tables (facts, dimensions, bridges); silver tables carry none */
+  layer?: "GOLD";
   columns: { name: string; type: string | null; nullable: boolean; key: boolean; pii: boolean; definition: string | null }[] };
 
 function refreshDomain(domainId: string) {
@@ -124,8 +128,8 @@ export async function saveMembers(domainId: string, members: { user: string; rol
   return r;
 }
 
-export async function saveDomainRules(domainId: string, overrides: Record<string, unknown>, note?: string) {
-  const r = await attemptValue(() => api(`/api/domains/${domainId}/rules`, { method: "PUT", body: JSON.stringify({ overrides, note: note || null }) }));
+export async function saveDomainRules(domainId: string, overrides: Record<string, unknown>, note?: string, pipeline: "SILVER" | "GOLD" = "SILVER") {
+  const r = await attemptValue(() => api(`/api/domains/${domainId}/rules?pipeline=${pipeline}`, { method: "PUT", body: JSON.stringify({ overrides, note: note || null }) }));
   refreshDomain(domainId);
   return r;
 }
@@ -192,19 +196,54 @@ export async function domainContract(domainId: string) {
 
 /** The domain's own skills per stage (V051) and what its runs load. */
 export type DomainSkillRow = { stage: string; skill_name: string; mode: "ADD" | "REPLACE"; replaces: string | null; position: number;
-                               enabled: boolean; note: string | null; updated_by?: string; updated_at?: string };
+                               enabled: boolean; note: string | null; updated_by?: string; updated_at?: string;
+                               /** ANY: both layers; SILVER or GOLD: that layer's runs only */
+                               pipeline?: "ANY" | "SILVER" | "GOLD" };
 export type DomainSkills = {
   standard: string; deployed: boolean; available: { name: string; description: string; version: string | null }[];
-  stages: { stage: string; standard_skills: string[]; domain_skills: DomainSkillRow[]; effective: string[] }[];
+  pipeline?: "SILVER" | "GOLD"; mdm_role?: string | null; other_layer?: number;
+  stages: { stage: string; standard_skills: string[]; domain_skills: DomainSkillRow[]; effective: string[];
+            mdm_skills?: { skill_name: string; stage: string }[] }[];
 };
-export async function domainSkills(domainId: string) {
-  return attemptValue(() => api<DomainSkills>(`/api/domains/${encodeURIComponent(domainId)}/skills`));
+export async function domainSkills(domainId: string, pipeline: "SILVER" | "GOLD" = "SILVER") {
+  return attemptValue(() => api<DomainSkills>(`/api/domains/${encodeURIComponent(domainId)}/skills?pipeline=${pipeline}`));
 }
-export async function saveDomainSkills(domainId: string, skills: Omit<DomainSkillRow, "updated_by" | "updated_at">[]) {
-  const r = await attemptValue(() => api<DomainSkills>(`/api/domains/${encodeURIComponent(domainId)}/skills`,
+export async function saveDomainSkills(domainId: string, skills: Omit<DomainSkillRow, "updated_by" | "updated_at">[],
+                                       pipeline: "SILVER" | "GOLD" = "SILVER") {
+  const r = await attemptValue(() => api<DomainSkills>(`/api/domains/${encodeURIComponent(domainId)}/skills?pipeline=${pipeline}`,
     { method: "PUT", body: JSON.stringify({ skills }) }));
   revalidatePath(`/domains/${domainId}`);
   return r;
+}
+
+/** A domain's playbook for one layer: how its runs model and code (skills, conventions, rules, knowledge, readiness). */
+export type Conventions = { pipeline: "SILVER" | "GOLD"; standard: string; platform: Record<string, unknown>;
+  overrides: Record<string, unknown>; effective: Record<string, unknown> };
+export type Playbook = {
+  domain_id: string; pipeline: "SILVER" | "GOLD"; mdm_role: string | null;
+  skills: Pick<DomainSkills, "standard" | "stages" | "available" | "deployed" | "other_layer">;
+  conventions: Conventions;
+  rules: { changed: { key: string; value: unknown; base: unknown }[] };
+  knowledge: { type: string; why: string; stages: string[]; layer_items: number; shared_items: number; gap: boolean }[];
+  model: { model_id: string; approved_version: number | null; open_version: number | null } | null;
+  readiness: { id: string; label: string; met: boolean; detail: string }[];
+};
+export async function domainPlaybook(domainId: string, pipeline: "SILVER" | "GOLD") {
+  return attemptValue(() => api<Playbook>(`/api/domains/${encodeURIComponent(domainId)}/playbook?pipeline=${pipeline}`));
+}
+export async function playbookPreview(domainId: string, pipeline: "SILVER" | "GOLD", stage: string, target?: string) {
+  const qs = new URLSearchParams({ pipeline, stage, ...(target ? { target } : {}) });
+  return attemptValue(() => api<{ skills: string[]; context: string; stage: string }>(`/api/domains/${encodeURIComponent(domainId)}/playbook/preview?${qs}`));
+}
+export async function saveDomainConventions(domainId: string, pipeline: "SILVER" | "GOLD", overrides: Record<string, unknown>, note?: string) {
+  const r = await attemptValue(() => api<Conventions>(`/api/domains/${encodeURIComponent(domainId)}/conventions?pipeline=${pipeline}`,
+    { method: "PUT", body: JSON.stringify({ overrides, note: note || null }) }));
+  revalidatePath(`/domains/${domainId}`);
+  return r;
+}
+export async function mdmLayer(domainId: string) {
+  return attemptValue(() => api<{ readiness: Playbook["readiness"]; rules: { knowledge_id: string; title: string; content: string }[] }>(
+    `/api/domains/${encodeURIComponent(domainId)}/mdm-layer`));
 }
 
 /** Confluence pages, spaces and uploaded documents linked to the domain (V051). */

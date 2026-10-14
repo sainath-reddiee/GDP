@@ -17,6 +17,7 @@ export type KnowledgeItem = {
 };
 
 export type FeedItem = {
+  layer?: "ANY" | "SILVER" | "GOLD" | null;
   knowledge_id: string; lineage_id: string | null; title: string; knowledge_type: string; origin: string | null;
   source_run_id: string | null; run_name: string | null; version: number; status: string; is_current: boolean;
   created_by: string; created_at: string; domain_name: string; change_note: string | null; source_reference: string | null;

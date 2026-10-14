@@ -154,6 +154,8 @@ export function KnowledgeBrowser({ items, total, domains, offset, limit }: {
       {open && <KnowledgeDrawer item={open} onClose={() => setOpen(null)} onChange={setOpen} onEdit={(i) => { setOpen(null); setEditing(i); }} />}
       {editing && (
         <ItemEditor domains={domains} item={editing === "new" ? null : editing}
+                    defaultLayer={(["SILVER", "GOLD"].includes(params.get("layer") ?? "") ? params.get("layer") : "ANY") as "ANY" | "SILVER" | "GOLD"}
+                    defaultDomain={params.get("domain_id") ?? undefined} defaultType={params.get("type") ?? undefined}
                     onClose={() => setEditing(null)} onSaved={() => { setEditing(null); router.refresh(); }} />
       )}
     </div>
@@ -168,18 +170,20 @@ function LayerChip({ layer }: { layer?: string | null }) {
     {layer === "GOLD" ? "Gold" : "Silver"}</span>;
 }
 
-export function ItemEditor({ domains, item, onClose, onSaved }: {
+export function ItemEditor({ domains, item, onClose, onSaved, defaultLayer = "ANY", defaultDomain, defaultType }: {
   domains: Domain[]; item: KnowledgeItem | null; onClose: () => void; onSaved: () => void;
+  /** a new item opened from a layer's page (domain Playbook or Knowledge tab) starts on that layer, domain and type */
+  defaultLayer?: "ANY" | "SILVER" | "GOLD"; defaultDomain?: string; defaultType?: string;
 }) {
   useScrollLock();
-  const [domainId, setDomainId] = useState(item?.domain_id ?? domains[0]?.domain_id ?? "");
-  const [type, setType] = useState(item?.knowledge_type ?? "GLOSSARY");
+  const [domainId, setDomainId] = useState(item?.domain_id ?? (domains.some((d) => d.domain_id === defaultDomain) ? defaultDomain! : domains[0]?.domain_id ?? ""));
+  const [type, setType] = useState(item?.knowledge_type ?? (defaultType && TYPES.includes(defaultType) ? defaultType : "GLOSSARY"));
   const [title, setTitle] = useState(item?.title ?? "");
   const [content, setContent] = useState(item?.content ?? "");
   const [note, setNote] = useState("");
-  const [layer, setLayer] = useState<"ANY" | "SILVER" | "GOLD">(item?.layer ?? "ANY");
+  const [layer, setLayer] = useState<"ANY" | "SILVER" | "GOLD">(item?.layer ?? defaultLayer);
   const [structured, setStructured] = useState(
-    item?.content_json ? JSON.stringify(item.content_json, null, 2) : JSON.stringify(TEMPLATE[item?.knowledge_type ?? "GLOSSARY"] ?? {}, null, 2));
+    item?.content_json ? JSON.stringify(item.content_json, null, 2) : JSON.stringify(TEMPLATE[item?.knowledge_type ?? (defaultType && TYPES.includes(defaultType) ? defaultType : "GLOSSARY")] ?? {}, null, 2));
   const [error, setError] = useState("");
   const [pending, start] = useTransition();
 

@@ -11,9 +11,12 @@ import { Modal } from "@/components/hub/overlay";
 import { EmptyState, StatusPill, explain } from "@/components/hub/states";
 import { useToast } from "@/components/ui/toast";
 import { baselineAll, createModel, forkModel } from "./model-actions";
+import { LAYER_META } from "@/lib/layers";
+import { cn } from "@/lib/utils";
 
 /** Every domain and the state of its canonical model: approved version, open draft or review, pull request. */
-export function ModelsList({ rows, canEdit }: { rows: DmListRow[]; canEdit: boolean }) {
+export function ModelsList({ rows, canEdit, layer = "SILVER" }: { rows: DmListRow[]; canEdit: boolean; layer?: "SILVER" | "GOLD" }) {
+  const gold = layer === "GOLD";
   const router = useRouter();
   const toast = useToast();
   const [q, setQ] = useState("");
@@ -21,7 +24,7 @@ export function ModelsList({ rows, canEdit }: { rows: DmListRow[]; canEdit: bool
   const [name, setName] = useState("");
   const [pending, start] = useTransition();
   const shown = useMemo(() => rows.filter((r) => !q || `${r.domain_name} ${r.description ?? ""}`.toLowerCase().includes(q.toLowerCase())), [rows, q]);
-  const missing = rows.filter((r) => !r.model_id);
+  const missing = gold ? [] : rows.filter((r) => !r.model_id);
 
   const create = (r: DmListRow) => start(async () => {
     const res = await createModel(r.domain_id);
@@ -43,6 +46,13 @@ export function ModelsList({ rows, canEdit }: { rows: DmListRow[]; canEdit: bool
   return (
     <div className="space-y-3" data-testid="domain-models">
       <div className="flex flex-wrap items-center gap-2">
+        <div className="flex rounded-lg border p-0.5 text-xs" role="group" aria-label="Layer">
+          {(["SILVER", "GOLD"] as const).map((l) => (
+            <Link key={l} href={`/dashboard/modeling?layer=${l}`} aria-pressed={layer === l}
+                  className={cn("rounded-md px-2.5 py-1", layer === l ? LAYER_META[l].solid : "text-muted-foreground hover:bg-muted")}>
+              {LAYER_META[l].label} models</Link>
+          ))}
+        </div>
         <div className="relative min-w-[220px] flex-1">
           <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
           <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Filter domains" className="pl-9" aria-label="Filter domains" />
@@ -80,7 +90,8 @@ export function ModelsList({ rows, canEdit }: { rows: DmListRow[]; canEdit: bool
               ) : (
                 <div className="mt-auto flex items-center gap-2 pt-1">
                   <span className="text-xs text-muted-foreground">No model yet</span>
-                  {canEdit && <Button size="sm" variant="outline" className="ml-auto" onClick={() => create(r)} disabled={pending}><Plus className="h-3.5 w-3.5" /> Create model</Button>}
+                  {canEdit && !gold && <Button size="sm" variant="outline" className="ml-auto" onClick={() => create(r)} disabled={pending}><Plus className="h-3.5 w-3.5" /> Create model</Button>}
+                  {gold && <span className="ml-auto text-[11px] text-muted-foreground">Proposed by a Gold run</span>}
                 </div>
               )}
             </article>

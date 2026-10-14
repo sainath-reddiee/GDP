@@ -29,7 +29,7 @@ export default async function ModelingHub({ searchParams }: { searchParams: Sear
     view === "design" && searchParams.design ? api<Design>(`/api/hub/models/${encodeURIComponent(searchParams.design)}`).catch(() => null) : Promise.resolve(null),
     view === "runs" ? api<{ models: RunModel[]; deployed: boolean }>(`/api/hub/models/runs${qs}`).catch(() => null) : Promise.resolve(null),
     view === "dbt" ? api<{ generations: DbtGeneration[]; deployed: boolean }>(`/api/hub/dbt${qs}`).catch(() => null) : Promise.resolve(null),
-    view === "models" ? api<{ models: DmListRow[]; deployed: boolean }>("/api/hub/domain-models").catch(() => null) : Promise.resolve(null),
+    view === "models" ? api<{ models: DmListRow[]; deployed: boolean }>(`/api/hub/domain-models?layer=${searchParams.layer === "GOLD" ? "GOLD" : "SILVER"}`).catch(() => null) : Promise.resolve(null),
     view === "tables" ? api<{ models: TmListRow[]; deployed: boolean }>(`/api/hub/table-models${tq ? `?${tq}` : ""}`).catch(() => null) : Promise.resolve(null),
     whoami(),
   ]);
@@ -47,7 +47,7 @@ export default async function ModelingHub({ searchParams }: { searchParams: Sear
                         { id: "dbt", label: "dbt projects", count: dbt?.generations.length }]} />
       {view === "models" && (!models ? <p className="text-sm text-destructive">Domain models could not be loaded.</p>
         : !models.deployed ? <NotDeployed what="The Model Workbench (GOVERNANCE.DOMAIN_MODEL, V039)" />
-        : <ModelsList rows={rows} canEdit={canAct(me, "MODEL.EDIT")} />)}
+        : <ModelsList rows={rows} canEdit={canAct(me, "MODEL.EDIT")} layer={searchParams.layer === "GOLD" ? "GOLD" : "SILVER"} />)}
       {view === "tables" && (!tableModels ? <p className="text-sm text-destructive">Table models could not be loaded.</p>
         : !tableModels.deployed ? <NotDeployed what="The Table Model Store (GOVERNANCE.TABLE_MODEL, V044)" />
         : <TableModelsList rows={tableRows} canEdit={canAct(me, "MODEL.EDIT")} openNew={searchParams.new === "1"}
