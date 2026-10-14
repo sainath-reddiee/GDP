@@ -41,7 +41,7 @@ export function RulesSection({ rules, gold }: { rules: RulesState; gold?: RulesS
     <div className="flex rounded-lg border p-0.5 text-xs" role="group" aria-label="Pipeline">
       {(["SILVER", "GOLD"] as const).map((p) => (
         <button key={p} type="button" aria-pressed={pipeline === p} onClick={() => setPipeline(p)} disabled={p === "GOLD" && !gold}
-                className={cn("rounded-md px-2.5 py-1", pipeline === p ? (p === "GOLD" ? "bg-amber-500 text-white" : "bg-slate-600 text-white") : "text-muted-foreground")}>
+                className={cn("rounded-md px-2.5 py-1", pipeline === p ? "bg-slate-600 text-white" : "text-muted-foreground")}>
           {p === "GOLD" ? "Gold Pipeline" : "Silver Pipeline"}</button>
       ))}
     </div>

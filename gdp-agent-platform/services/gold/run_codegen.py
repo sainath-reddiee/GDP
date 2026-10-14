@@ -83,7 +83,8 @@ def gold_lines(entity: Dict[str, Any], sttm_lines: List[Dict[str, Any]], spec: D
     # the proposed dimensions the table references, from the same silver rows
     for l in [x for x in lines if x["kind"] == "RESOLVE"]:
         dim = by_name.get(rels.get(l["gold_column"], ""))
-        if not dim or dim.get("conformed_from") or dim.get("table_type") != "DIMENSION" or not dim.get("business_keys"):
+        if (not dim or dim.get("conformed_from") or dim.get("table_type") != "DIMENSION" or not dim.get("business_keys")
+                or (dim.get("gold_source") or {}).get("mastered")):   # a mastered dimension is built by its own table run
             continue
         d = dim["entity_name"]
         lines += [{"gold_table": d, "gold_column": f"{d}_SKEY", "kind": "KEY"},
@@ -109,7 +110,8 @@ def build(spec: Dict[str, Any], entity: Dict[str, Any], sttm_lines: List[Dict[st
           env: str, soda_yaml: str, skeleton: Optional[Dict[str, str]] = None, run_id: Optional[str] = None) -> Dict[str, Any]:
     """{generated, files (skeleton + generated), report, lineage} for a Gold run (pure)."""
     source_columns = [str(l["source_column"]) for l in sttm_lines if l.get("source_column")]
-    by_rule = gold_rules.rules(entity, source_columns, consumes, mastered, spec.get("relationships"))
+    by_rule = gold_rules.rules(entity, source_columns, consumes, mastered, spec.get("relationships"),
+                               spec["design"]["entities"])
     lines, notes = gold_lines(entity, sttm_lines, spec, by_rule, design.get("driving_table"))
     tables = [entity["entity_name"]] + sorted({l["gold_table"] for l in lines} - {entity["entity_name"]})
     out = gold_dbt.generate(spec, lines, mastered=mastered, consumes=consumes, conventions=conventions, env=env,

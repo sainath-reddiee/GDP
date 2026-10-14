@@ -28,14 +28,14 @@ def plan(spec: Dict[str, Any], proposal_lines: List[Dict[str, Any]], inputs: Lis
         if e.get("conformed_from") or e.get("status") == "RETIRED":
             continue
         name = str(e["entity_name"]).upper()
-        if e.get("table_type") not in BUILT_BY_RUN:
+        if e.get("table_type") not in BUILT_BY_RUN and not (e.get("gold_source") or {}).get("mastered"):
             dims.append(name)
             continue
         if name in source_of:
             tables.append({"entity": name, "table_type": e["table_type"], "source_table": source_of[name]})
         else:
             unsourced.append(name)
-    order = {"FACT": 0, "BRIDGE": 1}
+    order = {"DIMENSION": -1, "FACT": 0, "BRIDGE": 1}   # a mastered domain's dimensions come first
     tables.sort(key=lambda t: (order.get(t["table_type"], 2), t["entity"]))
     return {"tables": tables, "unsourced": sorted(unsourced), "dimensions": sorted(dims)}
 

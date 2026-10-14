@@ -36,7 +36,7 @@ export function GoldModelPanel({ runId }: { runId: string }) {
   if (data.parent_run_id) {
     return (
       <section className="surface flex flex-wrap items-center gap-3 p-4" data-testid="gold-table-run">
-        <Crown className="h-4 w-4 text-amber-500" />
+        <Crown className="h-4 w-4 text-primary" />
         <p className="min-w-0 flex-1 text-sm">A table run of the <Link href={`/runs/${data.parent_run_id}/modeling`} className="font-medium text-primary hover:underline">Gold run</Link>:
           it builds <span className="font-mono font-semibold">{data.target?.entity ?? "its gold table"}</span>
           {" "}(and the dimensions the table adds) from the approved gold model v{data.target?.version}.</p>
@@ -49,7 +49,7 @@ export function GoldModelPanel({ runId }: { runId: string }) {
     <section className="surface space-y-4 p-4" data-testid="gold-model">
       <div className="flex flex-wrap items-start gap-3">
         <div className="min-w-0 flex-1">
-          <h3 className="flex items-center gap-2 text-sm font-semibold"><Crown className="h-4 w-4 text-amber-500" />Gold model of {data.domain_name}</h3>
+          <h3 className="flex items-center gap-2 text-sm font-semibold"><Crown className="h-4 w-4 text-primary" />Gold model of {data.domain_name}</h3>
           <p className="text-xs text-muted-foreground">Facts at the grain of each Silver hub, conformed Company and Property dimensions resolved through
             Reltio&apos;s cross-reference, new dimensions for low-cardinality descriptors (from this run&apos;s profile) and bridges for many-to-many.
             It is the domain&apos;s GOLD model, reviewed and approved in the Model Workbench by a second person, then built as a star schema.</p>

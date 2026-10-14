@@ -288,3 +288,128 @@ def propose(domain: str, inputs: List[Dict[str, Any]], *, consumes: List[Dict[st
                      "design": {"entities": entities, "primary_entity": entities[0]["entity_name"] if entities else None},
                      "relationships": [dict(r, enforce="NONE") for r in rels]},
             "lines": lines, "notes": notes}
+
+
+# ---------------------------------------------------------------- a mastered domain's own gold
+
+MDM_TECH = re.compile(r"^(MDM_(ENTITY_ID|STATUS|DELETED?_DATE|POST_MDM_LUD|CREATED_TS|UPDATED_TS|CROSSWALK.*)|RELTIO_.*)$")
+
+
+def _child_stem(domain: str, table: str) -> str:
+    """COMPANY_INDUSTRY -> INDUSTRY, COMPANY_ADDRESS_REL -> ADDRESS (the child's own subject)."""
+    t = table.upper()
+    t = t[len(domain) + 1:] if t.startswith(domain + "_") else t
+    return re.sub(r"_(REL|LINK|MAP)$", "", t) or t
+
+
+def propose_mastered(domain: str, inputs: List[Dict[str, Any]], contract: Dict[str, Any], *, env: str = "DEV") -> Dict[str, Any]:
+    """The gold of a domain Reltio masters (pure): the conformed dimension (DIM_<DOMAIN>) from the post-MDM golden record,
+    one row per mastered id, and a child dimension per related post-MDM table the run selected (DIM_<DOMAIN>_<SUBJECT>),
+    each keyed to the conformed dimension through the mastered id. Consumers' facts reference these; a new source that
+    Reltio now masters reaches them through this run. The cross-reference is how consumers resolve keys, not a gold table.
+
+    inputs: the run's profiled post-MDM tables (as for propose); contract: the domain's MASTERED MDM contract.
+    """
+    domain = domain.upper()
+    loc = gold_location(domain, env)
+    golden, gold = contract.get("golden") or {}, contract.get("gold") or {}
+    xref = contract.get("cross_reference") or {}
+    xref_table = str(xref.get("table") or "").upper()
+    mastered_id = str(gold.get("mastered_id") or golden.get("mastered_id") or "").upper()
+    dim = str(gold.get("dimension") or f"DIM_{domain}").upper()
+    dim_skey = str(gold.get("skey") or f"{dim}_SKEY").upper()
+    source_name = ((contract.get("dbt_sources") or {}).get("cross_reference") or [f"{domain.lower()}_mdm_source"])[0]
+    order = [str(o) for o in golden.get("version_order") or []]
+    entities: List[Dict[str, Any]] = []
+    rels: List[Dict[str, Any]] = []
+    lines: List[Dict[str, Any]] = []
+    notes: List[str] = []
+
+    def src_of(t: Dict[str, Any]) -> str:
+        return f"{t['database']}.{t['schema']}.{t['table']}".upper()
+
+    def line(table: str, column: str, kind: str, t: Optional[Dict[str, Any]] = None, col: Optional[str] = None,
+             expression: Optional[str] = None, note: str = "") -> None:
+        lines.append({"gold_table": table, "gold_column": column, "kind": kind, "source_layer": "SILVER_POST_MDM" if t else None,
+                      "source_table": src_of(t) if t else None, "source_column": col, "expression": expression, "note": note})
+
+    def own_columns(table: str, t: Dict[str, Any], skip: set) -> Tuple[List[Dict[str, Any]], List[str]]:
+        attrs, business = [], []
+        for c in t.get("columns") or []:
+            n = str(c["name"]).upper()
+            if n in skip or SILVER_TECH.match(n) or MDM_TECH.match(n):
+                continue
+            gt = gold_type(n, c.get("data_type", ""))
+            attrs.append(_attr(n, gt, nullable=bool(c.get("nullable", True)), description=c.get("comment") or ""))
+            line(table, n, "COLUMN", t, n, expression=None if gt == "STRING" else f"cast to {gt}")
+            business.append(n)
+        return attrs, business
+
+    def closing(table: str, business: List[str]) -> List[Dict[str, Any]]:
+        line(table, f"{table}_HKEY", "DERIVED", expression=f"SHA2 of {', '.join(business[:6])}{' ...' if len(business) > 6 else ''}")
+        for a, _ in AUDIT:
+            line(table, a, "AUDIT", expression="set by the gold load")
+        return _closing(table, business)
+
+    def has(t: Dict[str, Any], name: str) -> bool:
+        return any(str(c["name"]).upper() == name for c in t.get("columns") or [])
+
+    by_table = {str(t["table"]).upper(): t for t in inputs}
+    golden_input = by_table.get(str(golden.get("table") or "").upper()) if golden.get("table") else next(
+        (t for t in inputs if has(t, mastered_id) and str(t["table"]).upper() != xref_table), None)
+    if xref_table in by_table:
+        notes.append(f"{xref_table} is the cross-reference consumers resolve keys through, not a gold table; it was left out")
+    if not golden_input:
+        notes.append(f"Select the golden record ({golden.get('table') or domain + '_CORE'}): {dim} is built from it")
+    else:
+        attrs = [_attr(dim_skey, "LONG", pk=True, description=f"Surrogate key, from sequence {gold.get('sequence') or 'SEQ_' + dim + '_SKEY'}")]
+        line(dim, dim_skey, "KEY", expression=f"SEQ_{dim}_SKEY.NEXTVAL (kept for an existing mastered id)", note="own surrogate key")
+        cols, business = own_columns(dim, golden_input, {dim_skey})
+        if not has(golden_input, mastered_id):
+            notes.append(f"{golden_input['table']} has no {mastered_id}: confirm the golden-record table")
+        attrs += cols
+        entities.append({
+            "entity_name": dim, "table_type": "DIMENSION", "database": loc["database"],
+            "schema": loc["schema"], "grain": f"one row per {mastered_id}", "business_keys": [mastered_id],
+            "description": f"Conformed {domain.lower()} dimension: the golden record Reltio masters, one row per {mastered_id}. "
+                           "Consumers' facts reference it.",
+            "gold_source": {"mastered": True,
+                            "relation": "{{ source('" + source_name + "', '" + str(golden_input["table"]).lower() + "') }}",
+                            "dedupe": {"partition": [mastered_id], "order": order} if order else None,
+                            "active": "GDP_IS_ACTIVE" if has(golden_input, "GDP_IS_ACTIVE") else None},
+            "attributes": attrs + closing(dim, business)})
+    for t in inputs:
+        table = str(t["table"]).upper()
+        if t is golden_input or table == xref_table or re.search(r"(STAGE|STG|_DELTA)$", table):
+            continue
+        names = {str(c["name"]).upper() for c in t.get("columns") or []}
+        if mastered_id not in names:
+            notes.append(f"{table} does not carry {mastered_id}, so it cannot hang off {dim}; left out")
+            continue
+        subject = _child_stem(domain, table)
+        child = f"{dim}_{subject}"
+        skey = f"{child}_SKEY"
+        attrs = [_attr(skey, "LONG", pk=True, description=f"Surrogate key, from sequence SEQ_{child}_SKEY")]
+        line(child, skey, "KEY", expression=f"SEQ_{child}_SKEY.NEXTVAL (kept for an existing row)", note="own surrogate key")
+        attrs.append(_attr(dim_skey, "LONG", nullable=False, description=f"The {domain.lower()} this row belongs to, -1 when unresolved"))
+        line(child, dim_skey, "RESOLVE", t, mastered_id, expression=f"{dim} on {mastered_id}; -1 when unresolved")
+        rels.append({"from_entity": child, "from_column": dim_skey, "to_entity": dim, "to_column": dim_skey, "cardinality": "N:1"})
+        cols, business = own_columns(child, t, {skey, dim_skey})
+        second = next((n for n in sorted(names) if n != mastered_id and re.search(r"(_ID|_CODE|_KEY)$", n)
+                       and not n.endswith("_SKEY") and not MDM_TECH.match(n)), None)
+        keys = [mastered_id] + ([second] if second else [])
+        if not second:
+            notes.append(f"{child}: the business key is assumed to be {mastered_id} alone; confirm what makes a row unique")
+        attrs += cols
+        entities.append({
+            "entity_name": child, "table_type": "DIMENSION", "database": loc["database"],
+            "schema": loc["schema"], "grain": f"one row per {' and '.join(k.lower() for k in keys)}", "business_keys": keys,
+            "description": f"{subject.replace('_', ' ').title()} of the mastered {domain.lower()}, from {table}.",
+            "gold_source": {"mastered": True, "relation": "{{ source('" + source_name + "', '" + table.lower() + "') }}",
+                            "active": "GDP_IS_ACTIVE" if "GDP_IS_ACTIVE" in names else None},
+            "attributes": attrs + closing(child, [dim_skey] + business)})
+    return {"spec": {"domain": domain, "layer": "GOLD", "mode": "NEW", "description": f"Gold model of {domain} (mastered by Reltio)",
+                     "physical_defaults": loc, "naming_standard": {"preset": "NONE"},
+                     "design": {"entities": entities, "primary_entity": entities[0]["entity_name"] if entities else None},
+                     "relationships": [dict(r, enforce="NONE") for r in rels]},
+            "lines": lines, "notes": notes}

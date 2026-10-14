@@ -6,6 +6,7 @@ import { api, attemptValue } from "@/lib/api";
 export type GoldInputs = {
   domain_id: string; domain_name: string; role: "MASTERED" | "CONSUMER" | null;
   consumes: { domain: string; silver_column: string; gold_column: string }[];
+  mastered: { dimension: string; mastered_id: string; golden: string; children: string[] } | null;
   schemas: { database: string; schema: string; error?: string; missing?: string[];
     tables: { table: string; type: string; row_count: number | null; last_altered: string | null; suggested: boolean }[] }[];
 };

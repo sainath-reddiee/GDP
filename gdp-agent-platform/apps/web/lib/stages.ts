@@ -33,7 +33,7 @@ export const PIPELINES: Record<Pipeline, {
     n: 2, name: "Gold Pipeline", from: "Silver", to: "Gold", href: "/gold", run: "Gold run",
     tagline: "Mastered Silver to the governed Gold star schema, one domain slice per run.",
     flow: ["Silver Selection", "Profiling", "Gold model", "Mapping", "STTM", "QA and DQ", "Gold code", "Validation", "Review"],
-    accent: { text: "text-amber-600 dark:text-amber-300", bg: "bg-amber-500/10", border: "border-amber-500/40", solid: "bg-amber-500 text-white" },
+    accent: { text: "text-slate-600 dark:text-slate-300", bg: "bg-slate-500/10", border: "border-slate-400/40", solid: "bg-slate-600 text-white" },
   },
 };
 

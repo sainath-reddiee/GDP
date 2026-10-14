@@ -86,8 +86,8 @@ export async function RunsList({ pipeline, searchParams }: { pipeline: Pipeline;
                    limit={LIMIT} pipeline={pipeline} />
       {!runs.length && pipeline === "GOLD" && !searchParams.q && (
         <p className="rounded-xl border border-dashed p-6 text-center text-sm text-muted-foreground">
-          No Gold runs yet. Start one for a domain that consumes Company or Property: pick its Silver tables, and autopilot takes
-          them to the first review.</p>
+          No Gold runs yet. Start one for a domain: a consumer&apos;s Silver tables become its facts, and a domain Reltio masters
+          (Company, Property) rebuilds its conformed dimension from the post-MDM golden record. Autopilot takes either to the first review.</p>
       )}
       <RunTable key={`${pipeline}:${filter}:${query.toString()}`} runs={runs} filter={filter} pipeline={pipeline} />
     </div>

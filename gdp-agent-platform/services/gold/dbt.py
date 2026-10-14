@@ -82,7 +82,15 @@ def model_sql(entity: Dict[str, Any], lines: List[Dict[str, Any]], spec: Dict[st
     tx = [(l["gold_column"], l["sql"]) for l in mine if l["kind"] == "COLUMN" and l.get("sql")]
     extra = "".join(f",\n           {sql} as {_q('tx_' + col)}" for col, sql in tx)
     # every silver row, active or not, so a deactivation in silver reaches gold
-    ctes.append(f"src as (\n    select *{extra}\n    from {_source_ref(driving, conventions)}\n)")
+    # a mastered domain's own dimension reads its post-MDM table (a dbt source), the latest version per mastered id
+    gs = entity.get("gold_source") or {}
+    relation = gs.get("relation") or _source_ref(driving, conventions)
+    dedupe = gs.get("dedupe") or {}
+    qualify = (f"\n    qualify row_number() over (partition by {', '.join(_q(c) for c in dedupe['partition'])} "
+               f"order by {', '.join(str(o).lower() for o in dedupe['order'])}) = 1"
+               if dedupe.get("partition") and dedupe.get("order") else "")
+    ctes.append(f"src as (\n    select *{extra}\n    from {relation}{qualify}\n)")
+    active = f"src.{_q(gs['active'])}" if gs.get("active") else ("true" if gs else "src.gdp_is_active")
     consumed = {str(c["domain"]).upper(): c for c in consumes}
     resolved_domains = set()
     # the approved table's columns drive the SELECT (a reviewer may have changed the model after the proposal)
@@ -189,7 +197,7 @@ with {with_ctes},
 shaped as (
     select
         {body},
-        src.gdp_is_active as gdp_is_active
+        {active} as gdp_is_active
     from src
     {join_text}
 ),
@@ -295,7 +303,7 @@ def generate(spec: Dict[str, Any], lines: List[Dict[str, Any]], *, mastered: Dic
                            "to_column": r["to_column"]}
                           for r in spec.get("relationships") or [] if r["from_entity"] == e["entity_name"] and r["to_entity"] in by_name])
         files[f"ddl/gold/{domain}/{e['entity_name'].lower()}.sql"] = ddl(e, env)
-        if e["table_type"] == "DIMENSION":
+        if e["table_type"] == "DIMENSION" and not (e.get("gold_source") or {}).get("mastered"):
             files[f"models/gold/{domain}/{e['entity_name'].lower()}.sql"] = dimension_sql(e, lines, spec, conventions)
         else:
             files[f"models/gold/{domain}/{e['entity_name'].lower()}.sql"] = model_sql(

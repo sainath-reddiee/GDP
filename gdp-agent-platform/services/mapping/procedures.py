@@ -297,7 +297,7 @@ def _gold_rules(session, run: Dict[str, Any], sources: List[Dict[str, Any]]) -> 
     if not ctx:
         return {}
     by_target = rules.rules(ctx["entity"], [s["column_name"] for s in sources], ctx["consumes"], ctx["mastered"],
-                            ctx["spec"].get("relationships"))
+                            ctx["spec"].get("relationships"), ctx["spec"]["design"]["entities"])
     return {r["source_column"].upper(): {**r, "target_column": t} for t, r in by_target.items()}
 
 

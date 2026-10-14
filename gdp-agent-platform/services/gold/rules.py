@@ -44,7 +44,8 @@ def resolution_text(entry: Dict[str, Any], source_column: str, target_column: st
 
 def rule_for(target_column: str, target_entity: Dict[str, Any], source_columns: List[str],
              consumes: List[Dict[str, Any]], mastered: Dict[str, Dict[str, Any]],
-             relationships: Optional[List[Dict[str, Any]]] = None) -> Optional[Dict[str, Any]]:
+             relationships: Optional[List[Dict[str, Any]]] = None,
+             entities: Optional[List[Dict[str, Any]]] = None) -> Optional[Dict[str, Any]]:
     """{source_column, kind RESOLVE_MDM | DATA_SOURCE | DIMENSION_KEY, domain?, dimension?, expression} or None."""
     col = target_column.upper()
     sources = {s.upper() for s in source_columns}
@@ -70,17 +71,24 @@ def rule_for(target_column: str, target_entity: Dict[str, Any], source_columns: 
         if value:
             return {"source_column": value, "kind": "DIMENSION_KEY", "dimension": dim,
                     "expression": f"{dim} on {value}; -1 when the value is not in the dimension"}
+        # a mastered domain's child dimension: the parent dimension's business key (the mastered id) is in the row
+        parent = next((e for e in entities or [] if str(e.get("entity_name") or "").upper() == dim.upper()), None)
+        key = next((k.upper() for k in (parent or {}).get("business_keys") or [] if k.upper() in sources), None)
+        if key:
+            return {"source_column": key, "kind": "DIMENSION_KEY", "dimension": dim,
+                    "expression": f"{dim} on {key}; -1 when unresolved"}
     return None
 
 
 def rules(target_entity: Dict[str, Any], source_columns: List[str], consumes: List[Dict[str, Any]],
-          mastered: Dict[str, Dict[str, Any]], relationships: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Dict[str, Any]]:
+          mastered: Dict[str, Dict[str, Any]], relationships: Optional[List[Dict[str, Any]]] = None,
+          entities: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Dict[str, Any]]:
     """The rule of every gold column of the target that has one, keyed by gold column."""
     out = {}
     for a in target_entity.get("attributes") or []:
         if a.get("status") == "RETIRED":
             continue
-        r = rule_for(a["name"], target_entity, source_columns, consumes, mastered, relationships)
+        r = rule_for(a["name"], target_entity, source_columns, consumes, mastered, relationships, entities)
         if r:
             out[a["name"].upper()] = r
     return out

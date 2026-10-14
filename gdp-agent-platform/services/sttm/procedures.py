@@ -32,7 +32,8 @@ def _gold_shape(session, run: Dict[str, Any], contract: Dict[str, Any]) -> bool:
     if not ctx:
         return False
     sources = [str(l.get("source_column")) for l in contract["lines"] if l.get("source_column")]
-    by_target = rules.rules(ctx["entity"], sources, ctx["consumes"], ctx["mastered"], ctx["spec"].get("relationships"))
+    by_target = rules.rules(ctx["entity"], sources, ctx["consumes"], ctx["mastered"], ctx["spec"].get("relationships"),
+                            ctx["spec"]["design"]["entities"])
     contract["lines"] = rules.shape_sttm(contract["lines"], ctx["entity"], by_target)
     contract["table_design"].update(pipeline="GOLD", table_type=ctx["entity"].get("table_type"),
                                     gold_model={"model_id": run.get("MODEL_ID"), "version": run.get("MODEL_VERSION")})

@@ -69,11 +69,19 @@ def _mastered(reg: Dict[str, Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
     return {n: r["mdm"] for n, r in reg.items() if str(r["mdm"].get("role") or "").upper() == "MASTERED"}
 
 
-def _require_consumer(d: Dict[str, Any]) -> None:
-    role = str(d["mdm"].get("role") or "").upper()
+def _role(d: Dict[str, Any]) -> str:
+    return str(d["mdm"].get("role") or "").upper()
+
+
+def _require_gold(d: Dict[str, Any]) -> None:
+    """A Gold run needs the domain's place in MDM: a consumer builds its facts on the mastered keys; a mastered domain
+    builds its conformed dimension from the post-MDM golden record (its contract says where that is)."""
+    role = _role(d)
     if role == "MASTERED":
-        raise HTTPException(400, f"{d['domain_name']} is mastered by Reltio; its gold (the conformed dimension) exists in "
-                                 "gdp-dbt and is referenced by consumers, not regenerated")
+        if not (d["mdm"].get("golden") or {}).get("table") or not (d["mdm"].get("gold") or {}).get("dimension"):
+            raise HTTPException(400, f"{d['domain_name']}'s MDM contract has no golden record or gold dimension; derive it "
+                                     "from the post-MDM schema on the domain's References tab")
+        return
     if role != "CONSUMER":
         raise HTTPException(400, f"{d['domain_name']} is not linked to MDM: on the domain's Lineage tab, mark which mastered "
                                  "domains (Company, Property) it consumes, then start the Gold run")
@@ -88,9 +96,17 @@ def gold_inputs(domain_id: str, db: Db = Depends(current_db)):
     hubs = db.query("""SELECT TARGET_DATABASE, TARGET_SCHEMA, TARGET_TABLE FROM KNOWLEDGE.TARGET_TABLE_REGISTRY
                         WHERE DOMAIN_ID = %s AND ACTIVE_FLAG AND COALESCE(LAYER, 'SILVER') = 'SILVER'""", (domain_id,))
     schemas: Dict[tuple, set] = {}
+    if role == "MASTERED":   # its gold comes from the post-MDM golden record and related tables Reltio writes
+        env = _env(d.get("silver_database"))
+        golden, xref = d["mdm"].get("golden") or {}, d["mdm"].get("cross_reference") or {}
+        for part, suggested in ((golden, [golden.get("table"), *(golden.get("related") or [])]), (xref, [])):
+            if part.get("database") and part.get("schema"):
+                key = (str(part["database"]).replace("{ENV}", env).upper(), str(part["schema"]).upper())
+                schemas.setdefault(key, set()).update(str(t).upper() for t in suggested if t)
+        hubs = []
     for h in hubs:
         schemas.setdefault((h["target_database"].upper(), h["target_schema"].upper()), set()).add(h["target_table"].upper())
-    if d.get("silver_database") and d.get("silver_schema"):
+    if role != "MASTERED" and d.get("silver_database") and d.get("silver_schema"):
         schemas.setdefault((d["silver_database"].upper(), d["silver_schema"].upper()), set())
     out = []
     for (database, schema), suggested in sorted(schemas.items()):
@@ -105,8 +121,13 @@ def gold_inputs(domain_id: str, db: Db = Depends(current_db)):
         except Exception as exc:
             item["error"] = str(exc).splitlines()[0][:200]
         out.append(item)
+    mastered = None
+    if role == "MASTERED":
+        gold = d["mdm"].get("gold") or {}
+        mastered = {"dimension": gold.get("dimension"), "mastered_id": gold.get("mastered_id"),
+                    "golden": (d["mdm"].get("golden") or {}).get("table"), "children": gold.get("children") or []}
     return {"domain_id": domain_id, "domain_name": d["domain_name"], "role": role, "consumes": d["mdm"].get("consumes") or [],
-            "schemas": out}
+            "mastered": mastered, "schemas": out}
 
 
 class GoldRunIn(BaseModel):
@@ -122,7 +143,7 @@ def start_gold_run(body: GoldRunIn, db: Db = Depends(current_db)):
     """Create a Gold run on silver tables read in place, validate access and profile them (the run then waits on
     Modeling: the gold model and its target table)."""
     d = _domain(db, body.domain_id)
-    _require_consumer(d)
+    _require_gold(d)
     names = [body.database, body.schema_name, *body.tables]
     if not all(IDENT.match(x) for x in names):
         raise HTTPException(400, "database, schema and table names must be plain identifiers")
@@ -248,8 +269,11 @@ def _reference_model(db: Db, domain_id: str) -> Optional[Dict[str, Any]]:
 def _proposal(db: Db, d: Dict[str, Any], reg: Dict[str, Any], inputs: List[Dict[str, Any]]) -> Dict[str, Any]:
     """The gold proposal for the profiled silver tables, aligned to the domain's gold reference model when there is
     one (its tables, columns and keys kept exactly; only what it lacks proposed)."""
-    out = gold.propose(d["domain_name"], inputs, consumes=d["mdm"].get("consumes") or [], mastered=_mastered(reg),
-                       env=_env(d.get("silver_database") or inputs[0]["database"]))
+    env = _env(d.get("silver_database") or inputs[0]["database"])
+    if _role(d) == "MASTERED":
+        out = gold.propose_mastered(d["domain_name"], inputs, d["mdm"], env=env)
+    else:
+        out = gold.propose(d["domain_name"], inputs, consumes=d["mdm"].get("consumes") or [], mastered=_mastered(reg), env=env)
     ref = _reference_model(db, d["domain_id"])
     if ref:
         from services.gold import align
@@ -280,7 +304,7 @@ def propose_gold(run_id: str, db: Db = Depends(current_db)):
     run = _run(db, run_id)
     reg = _contracts(db)
     d = next(c for c in reg.values() if c["domain_id"] == run["domain_id"])
-    _require_consumer(d)
+    _require_gold(d)
     inputs = _profiled_inputs(db, run_id)
     if not inputs:
         raise HTTPException(409, "profile the run's silver tables first")
@@ -326,7 +350,7 @@ def rescore_gold_reference(domain_id: str, db: Db = Depends(current_db)):
     d = next((c for c in reg.values() if c["domain_id"] == domain_id), None)
     if not d:
         raise HTTPException(404, "domain not found")
-    _require_consumer(d)
+    _require_gold(d)
     if not _reference_model(db, domain_id):
         raise HTTPException(409, "give the Gold layer a data model reference first (References tab)")
     runs = db.query("""SELECT RUN_ID FROM CORE.WORKFLOW_RUN WHERE DOMAIN_ID = %s AND PIPELINE = 'GOLD' AND PARENT_RUN_ID IS NULL
@@ -375,7 +399,7 @@ def build_star_schema(run_id: str, db: Db = Depends(current_db)):
         raise HTTPException(400, "this is a table run; build the star schema from its Gold run")
     reg = _contracts(db)
     d = next(c for c in reg.values() if c["domain_id"] == run["domain_id"])
-    _require_consumer(d)
+    _require_gold(d)
     model = _gold_model(db, run["domain_id"])
     if not model or not model.get("approved_version"):
         raise HTTPException(409, "the domain's gold model is not approved yet; approve it in the Model Workbench (four eyes)")

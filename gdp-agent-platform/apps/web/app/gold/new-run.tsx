@@ -6,9 +6,13 @@ import { useRouter } from "next/navigation";
 import { Loader2, Plus } from "lucide-react";
 import { useAccess } from "@/components/access";
 import { Modal } from "@/components/hub/overlay";
+import { PIPELINES } from "@/lib/stages";
+import { cn } from "@/lib/utils";
 import { goldInputs, startGoldRun, type GoldInputs } from "./actions";
 
-/** Start a Gold run: a consumer domain's Silver tables, read in place, through the same steps as a Silver run. */
+/** Start a Gold run, through the same steps as a Silver run: a consumer domain's Silver tables (read in place) become
+ *  its facts, bridges and dimensions; a domain Reltio masters rebuilds its conformed dimension from the post-MDM golden
+ *  record and related tables (a new source Reltio now masters reaches gold this way). */
 export function NewGoldRun({ domains }: { domains: { domain_id: string; domain_name: string }[] }) {
   const { canAct } = useAccess();
   const router = useRouter();
@@ -40,7 +44,9 @@ export function NewGoldRun({ domains }: { domains: { domain_id: string; domain_n
 
   if (!canAct("RUN.CREATE")) return null;
   const schema = inputs?.schemas.find((s) => `${s.database}.${s.schema}` === schemaKey);
-  const consumer = inputs?.role === "CONSUMER";
+  const mastered = inputs?.role === "MASTERED";
+  const ready = inputs?.role === "CONSUMER" || mastered;
+  const golden = inputs?.mastered?.golden?.toUpperCase();
   const go = () => start(async () => {
     if (!schema) return;
     setError("");
@@ -53,13 +59,13 @@ export function NewGoldRun({ domains }: { domains: { domain_id: string; domain_n
   return (
     <>
       <button type="button" onClick={() => setOpen(true)} data-testid="new-gold-run"
-              className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-amber-500 px-3 text-sm font-medium text-white hover:bg-amber-600">
+              className={cn("inline-flex h-9 items-center gap-1.5 rounded-lg px-3 text-sm font-medium hover:opacity-90", PIPELINES.GOLD.accent.solid)}>
         <Plus className="h-4 w-4" />New Gold run</button>
       <Modal open={open} onClose={() => setOpen(false)} wide title="New Gold run"
-             description="Pick a domain and its Silver tables. They are read in place (nothing is copied), profiled, then modeled into facts, dimensions and bridges, mapped, tested and generated as gold dbt, with the same gates as a Silver run."
+             description="Pick a domain and its tables. They are read in place (nothing is copied), profiled, modeled, mapped, tested and generated as gold dbt, with the same gates as a Silver run."
              footer={<>
                <button type="button" onClick={() => setOpen(false)} className="h-9 rounded-lg px-3 text-sm hover:bg-muted">Cancel</button>
-               <button type="button" onClick={go} disabled={!consumer || !picked.length || pending}
+               <button type="button" onClick={go} disabled={!ready || !picked.length || pending}
                        className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-primary px-3 text-sm font-medium text-primary-foreground disabled:opacity-50">
                  {pending && <Loader2 className="h-4 w-4 animate-spin" />}{pending ? "Selecting and profiling…" : `Start Gold run (${picked.length} table${picked.length === 1 ? "" : "s"})`}</button>
              </>}>
@@ -77,19 +83,24 @@ export function NewGoldRun({ domains }: { domains: { domain_id: string; domain_n
             </label>
           </div>
           {loading && <p className="text-sm text-muted-foreground"><Loader2 className="mr-1 inline h-4 w-4 animate-spin" />Reading the domain&apos;s Silver tables…</p>}
-          {inputs && !consumer && (
-            <p role="status" className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-200">
-              {inputs.role === "MASTERED"
-                ? <>{inputs.domain_name} is mastered by Reltio: its gold (the conformed dimension) already exists in gdp-dbt and is referenced by the domains that consume it.</>
-                : <>{inputs.domain_name} is not linked to MDM yet. On its <Link className="font-medium underline" href={`/domains/${inputs.domain_id}?tab=lineage`}>Lineage tab</Link>, mark which mastered domains (Company, Property) it consumes, then start the Gold run.</>}
+          {inputs && !ready && (
+            <p role="status" className="rounded-lg border bg-muted/50 px-3 py-2 text-sm">
+              {inputs.domain_name} is not linked to MDM yet. On its <Link className="font-medium underline" href={`/domains/${inputs.domain_id}?tab=lineage`}>Lineage tab</Link>, mark which mastered domains (Company, Property) it consumes, then start the Gold run.
             </p>
           )}
-          {inputs && consumer && (
+          {inputs && ready && (
             <>
-              <p className="text-xs text-muted-foreground">Consumes {inputs.consumes.map((c) => `${c.domain} (${c.silver_column} to ${c.gold_column})`).join(", ") || "nothing yet"}.</p>
-              {!inputs.schemas.length && <p className="text-sm text-muted-foreground">No Silver schema is known for {inputs.domain_name}: run its Silver Pipeline first, or set its silver database and schema on the domain.</p>}
+              {mastered && inputs.mastered ? (
+                <p className="rounded-lg border bg-muted/50 px-3 py-2 text-xs text-muted-foreground">
+                  {inputs.domain_name} is mastered by Reltio. This run rebuilds its conformed dimension <span className="font-mono">{inputs.mastered.dimension}</span> (one
+                  row per <span className="font-mono">{inputs.mastered.mastered_id}</span>) from the post-MDM golden record <span className="font-mono">{inputs.mastered.golden}</span>,
+                  plus a child dimension for each related table you pick. Use it when a new source reaches gold through Reltio. Consumers&apos; facts keep referencing it.</p>
+              ) : (
+                <p className="text-xs text-muted-foreground">Consumes {inputs.consumes.map((c) => `${c.domain} (${c.silver_column} to ${c.gold_column})`).join(", ") || "nothing yet"}.</p>
+              )}
+              {!inputs.schemas.length && <p className="text-sm text-muted-foreground">No {mastered ? "post-MDM" : "Silver"} schema is known for {inputs.domain_name}: {mastered ? "derive its MDM contract from the post-MDM schema on the domain's References tab" : "run its Silver Pipeline first, or set its silver database and schema on the domain"}.</p>}
               {!!inputs.schemas.length && (
-                <label className="block space-y-1 text-xs font-medium">Silver schema
+                <label className="block space-y-1 text-xs font-medium">{mastered ? "Post-MDM schema" : "Silver schema"}
                   <select aria-label="Silver schema" value={schemaKey} onChange={(e) => { setSchemaKey(e.target.value); setPicked([]); }}
                           className="h-9 w-full rounded-lg border bg-background px-2 text-sm font-normal">
                     {inputs.schemas.map((s) => <option key={`${s.database}.${s.schema}`} value={`${s.database}.${s.schema}`}>{s.database}.{s.schema}</option>)}
@@ -97,7 +108,7 @@ export function NewGoldRun({ domains }: { domains: { domain_id: string; domain_n
                 </label>
               )}
               {schema?.error && <p role="alert" className="text-sm text-destructive">{schema.error}</p>}
-              {!!schema?.missing?.length && <p className="text-xs text-amber-700 dark:text-amber-300">Registered but not in Snowflake yet: {schema.missing.join(", ")} (load them with the Silver Pipeline first).</p>}
+              {!!schema?.missing?.length && <p className="text-xs text-muted-foreground">{mastered ? "In the MDM contract but not in Snowflake yet" : "Registered but not in Snowflake yet"}: {schema.missing.join(", ")}{mastered ? " (Reltio has not written them in this environment)" : " (load them with the Silver Pipeline first)"}.</p>}
               {schema && !schema.error && (
                 <div className="max-h-72 overflow-y-auto rounded-xl border">
                   <table className="w-full text-sm">
@@ -109,7 +120,7 @@ export function NewGoldRun({ domains }: { domains: { domain_id: string; domain_n
                         <tr key={t.table} className="border-t">
                           <td className="px-3 py-1.5"><input type="checkbox" aria-label={`use ${t.table}`} checked={picked.includes(t.table)}
                                                             onChange={(e) => setPicked((p) => e.target.checked ? [...p, t.table] : p.filter((x) => x !== t.table))} /></td>
-                          <td className="px-3 py-1.5 font-mono text-xs">{t.table}{t.suggested && <span className="ml-2 rounded bg-primary/10 px-1.5 py-0.5 font-sans text-[10px] font-medium text-primary">silver hub</span>}</td>
+                          <td className="px-3 py-1.5 font-mono text-xs">{t.table}{t.suggested && <span className="ml-2 rounded bg-primary/10 px-1.5 py-0.5 font-sans text-[10px] font-medium text-primary">{!mastered ? "silver hub" : t.table.toUpperCase() === golden ? "golden record" : "related"}</span>}</td>
                           <td className="px-3 py-1.5 text-right tabular-nums text-xs">{t.row_count ?? "?"}</td>
                           <td className="px-3 py-1.5 text-xs text-muted-foreground">{t.last_altered?.slice(0, 16) ?? ""}</td>
                         </tr>

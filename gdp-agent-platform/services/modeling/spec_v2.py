@@ -167,6 +167,8 @@ def _entity(raw: Dict[str, Any], model_key: str) -> Dict[str, Any]:
                    for i, c in enumerate(_list(raw.get("checks"))) if isinstance(c, dict) and _text(c.get("expression"), 1)],
         # gold: a conformed dimension owned by another domain's gold model (referenced, never generated here)
         "conformed_from": _upper(raw.get("conformed_from")) or None,
+        # gold: how a mastered domain's own dimension reads its post-MDM table (relation, latest version, active column)
+        "gold_source": copy.deepcopy(raw["gold_source"]) if isinstance(raw.get("gold_source"), dict) else None,
         "physical": {"cluster_by": [_upper(c) for c in _list(physical.get("cluster_by")) if _upper(c)][:4],
                      "transient": _bool(physical.get("transient")),
                      "retention_days": int(physical["retention_days"]) if str(physical.get("retention_days") or "").isdigit() else None},
