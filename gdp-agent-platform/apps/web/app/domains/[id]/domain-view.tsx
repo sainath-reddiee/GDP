@@ -21,6 +21,7 @@ import {
   type DomainDiff, type DomainMember, type DomainRules, type DomainVersion, type TargetModel,
 } from "../actions";
 import { DomainTools } from "../domain-tools";
+import { BuiltFromCard, LineageTab } from "./lineage-tab";
 import { Avatar, cleanDescription, DomainMark } from "../domain-ui";
 import type { DomainCard } from "../page";
 
@@ -37,7 +38,7 @@ export type DomainDetail = {
 };
 
 const TABS = [
-  { id: "overview", label: "Overview" }, { id: "models", label: "Target models" }, { id: "knowledge", label: "Knowledge" },
+  { id: "overview", label: "Overview" }, { id: "lineage", label: "Lineage" }, { id: "models", label: "Target models" }, { id: "knowledge", label: "Knowledge" },
   { id: "rules", label: "Rules" }, { id: "versions", label: "Versions" },
 ] as const;
 const KIND_TONE: Record<string, string> = {
@@ -155,6 +156,7 @@ export function DomainView({ detail, versions, unrecorded, members, rules, targe
             </Panel>
           </div>
           <aside className="space-y-4">
+            <BuiltFromCard domainId={d.domain_id} onOpen={() => go("lineage")} />
             <People key={JSON.stringify(members.map((m) => [m.user_name, m.role]))} domainId={d.domain_id} members={members} may={may} onMsg={setMsg} />
             <Panel title="Recent changes" action={<button type="button" onClick={() => go("versions")} className="text-xs text-primary hover:underline">All versions</button>}>
               <ol className="space-y-2 text-xs">
@@ -171,6 +173,7 @@ export function DomainView({ detail, versions, unrecorded, members, rules, targe
         </div>
       )}
 
+      {active === "lineage" && <LineageTab domainId={d.domain_id} domainName={name} />}
       {active === "models" && <Models targets={targets} roles={detail.targets} />}
       {active === "knowledge" && <KnowledgeTab domainId={d.domain_id} mix={detail.knowledge} feed={feed} card={card} />}
       {active === "rules" && <RulesTab key={JSON.stringify(rules?.overrides ?? {})} domainId={d.domain_id} rules={rules} may={may} onMsg={setMsg} />}

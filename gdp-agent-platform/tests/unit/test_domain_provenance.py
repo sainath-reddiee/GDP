@@ -1,0 +1,60 @@
+"""How a domain is built (services/knowledge/provenance.py) and how complete it is (coverage.py)."""
+
+from services.knowledge import coverage, provenance
+
+DOMAIN = {"domain": {"domain_name": "COMPANY"}, "origin": "repository",
+          "contract": "snowflake/skills/gdp/dbt-onboard-source/references/company-contract.md",
+          "targets": [{"target_database": "DB", "target_schema": "COMPANY", "target_table": "COMPANY_CORE",
+                       "hkey_columns": ["DUNS_NUMBER", "COMPANY_NAME"]},
+                      {"target_database": "DB", "target_schema": "COMPANY", "target_table": "COMPANY_ADDRESS", "hkey_columns": []}]}
+
+
+def row(kid, origin, kind, title, ref="", verified=None, status="ACTIVE", by="SEED", at="2026-10-01 10:00:00"):
+    return {"KNOWLEDGE_ID": kid, "ORIGIN": origin, "KNOWLEDGE_TYPE": kind, "TITLE": title, "SOURCE_REFERENCE": ref,
+            "VERIFIED_BY": verified, "STATUS": status, "CREATED_BY": by, "CREATED_AT": at}
+
+
+ROWS = [row("k1", "SEED", "MODEL_DEFINITION", "COMPANY_CORE (hub)", "company.model.company_core"),
+        row("k2", "SEED", "GLOSSARY", "DUNS_NUMBER", "company.glossary.duns_number", verified="ANA"),
+        row("k3", "SODA", "SODA_PATTERN", "missing keys", "soda.x", at="2026-10-05 09:00:00"),
+        row("k4", "USER", "BUSINESS_RULE", "Active companies only", "company.rule.active", by="ANA", status="DRAFT"),
+        row("k5", "NEW_THING", "MYSTERY", "odd", "x")]
+
+
+def test_sources_feed_parts_with_counts_and_samples():
+    out = provenance.build(DOMAIN, ROWS, {"k1": 3, "k3": 1}, [{"name": "analytics", "matched": 4}, {"name": "empty", "matched": 0}],
+                           [{"VERSION": 1, "CHANGE_KIND": "DEPLOY", "CHANGE_NOTE": "Recorded by deploy", "CREATED_AT": "2026-10-09 12:00:00"}])
+    sources = {s["id"]: s for s in out["sources"]}
+    assert sources["pack"]["count"] == 2 and sources["pack"]["verified"] == 1 and sources["pack"]["used"] == 1
+    assert sources["pack"]["files"] == ["domain/company/domain_pack.json"]
+    assert sources["people"]["people"] == ["ANA"] and sources["people"]["draft"] == 1
+    assert sources["code"]["repos"] == [{"name": "analytics", "matched": 4}]   # a repository with no match is left out
+    assert sources["other"]["label"] == "Other"                                # an unknown origin still shows
+    assert out["upstream"][0]["file"].endswith("company-contract.md") and out["upstream"][0]["feeds"] == "pack"
+    edges = {(e["source"], e["part"]): e["count"] for e in out["edges"]}
+    assert edges[("pack", "model")] == 1 and edges[("pack", "targets")] == 2 and edges[("code", "targets")] == 4
+    assert [p["id"] for p in out["parts"]][0] == "targets"
+    assert out["totals"] == {"items": 5, "verified": 1, "used": 2, "draft": 1}
+    assert sources["pack"]["items"][0]["knowledge_id"] == "k1"                 # most used first
+    assert out["timeline"][0]["label"].startswith("Version 1") and any(e["label"] == "Learned in data quality: 1 item" for e in out["timeline"])
+
+
+def test_coverage_finds_gaps_and_proposes_copilot_requests():
+    fqn = "DB.COMPANY.COMPANY_CORE"
+    out = coverage.score("COMPANY", DOMAIN["targets"], ROWS, sttm={fqn}, dq=set(),
+                         qa_sql=["select * from DB.COMPANY.COMPANY_CORE group by 1 having count(*) > 1"], usage={"k1": 1})
+    core, address = out["targets"]
+    assert core["checks"] == {"model": True, "keys": True, "glossary": False, "sttm": True, "qa": True, "dq": False}
+    assert core["glossary_missing"] == ["COMPANY_NAME"] and core["score"] == 67
+    assert address["checks"]["keys"] is False and address["checks"]["glossary"] is False
+    gloss = next(a for a in out["actions"] if a["table"] == "COMPANY_CORE" and a["check"] == "glossary")
+    assert "COMPANY_NAME" in gloss["prompt"] and "DUNS_NUMBER" not in gloss["prompt"]
+    assert out["knowledge"] == {"items": 5, "verified": 1, "used_90d": 1, "unused_90d": 4, "awaiting_review": 1}
+    assert {c["id"]: (c["done"], c["of"]) for c in out["checks"]}["sttm"] == (1, 2)
+    assert 0 <= out["score"] <= 100
+
+
+def test_an_empty_domain_scores_zero_without_errors():
+    out = coverage.score("NEW", [], [], set(), set(), [])
+    assert out["score"] == 0 and out["targets"] == [] and out["actions"] == []
+    assert provenance.build({"domain": {"domain_name": "NEW"}}, [])["sources"] == []

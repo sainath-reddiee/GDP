@@ -129,3 +129,29 @@ export async function saveDomainRules(domainId: string, overrides: Record<string
   refreshDomain(domainId);
   return r;
 }
+
+/** How a domain is built (sources, parts, timeline) and how complete it is (coverage, trust, gaps). */
+export type ProvenanceSource = {
+  id: string; label: string; meaning: string; count: number; verified: number; used: number; draft: number;
+  types: Record<string, number>; people: string[]; files?: string[]; repos?: { name: string; matched: number }[];
+  items: { knowledge_id: string; title: string; type: string; ref: string | null; verified: boolean; uses: number; status: string }[];
+};
+export type DomainProvenance = {
+  provenance: {
+    sources: ProvenanceSource[]; upstream: { id: string; label: string; file: string; feeds: string; meaning: string }[];
+    parts: { id: string; label: string; count: number }[]; edges: { source: string; part: string; count: number }[];
+    totals: { items: number; verified: number; used: number; draft: number };
+    timeline: { at: string; kind: string; label: string; detail: string; by: string | null }[];
+  };
+  coverage: {
+    score: number; tables_score: number; trust_score: number;
+    knowledge: { items: number; verified: number; used_90d: number; unused_90d: number; awaiting_review: number };
+    checks: { id: string; label: string; done: number; of: number }[];
+    targets: { table: string; fqn: string; checks: Record<string, boolean>; score: number; keys: string[]; glossary_missing: string[] }[];
+    actions: { table: string; check: string; label: string; prompt: string }[];
+  };
+};
+
+export async function domainProvenance(domainId: string) {
+  return attemptValue(() => api<DomainProvenance>(`/api/domains/${encodeURIComponent(domainId)}/provenance`));
+}

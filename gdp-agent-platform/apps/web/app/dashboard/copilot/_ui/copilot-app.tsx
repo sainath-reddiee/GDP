@@ -34,10 +34,12 @@ async function failure(res: Response, what: string): Promise<string> {
 const isStream = (res: Response) => (res.headers.get("content-type") ?? "").includes("text/event-stream");
 
 /** The copilot workspace: conversations, the thread with its composer, and the plan and changes panel. */
-export function CopilotApp({ sessions: initialSessions, initial, disabled, initialJira }: {
+export function CopilotApp({ sessions: initialSessions, initial, disabled, initialJira, initialMessage }: {
   sessions: SessionRow[]; initial: CopilotSession | null; disabled?: string;
   /** a Jira key to start from (Work on it in the Copilot): attached, with a first message ready to send */
   initialJira?: string | null;
+  /** a request prepared elsewhere (a domain gap to close): put in the message box, not sent */
+  initialMessage?: string | null;
 }) {
   const router = useRouter();
   const [sessions, setSessions] = useState(initialSessions);
@@ -55,7 +57,7 @@ export function CopilotApp({ sessions: initialSessions, initial, disabled, initi
   const [jiraKeys, setJiraKeys] = useState<string[]>(initialJira ? [initialJira] : []);
   const [draft, setDraft] = useState(initialJira
     ? `Work on ${initialJira}: read it, tell me what it needs, ask me what is missing, and draft the changes. When the drafts are ready, draft a comment on ${initialJira} too.`
-    : "");
+    : initialMessage ?? "");
   const [busy, setBusy] = useState(false);
   const [publishing, setPublishing] = useState(false);
   const [progress, setProgress] = useState<Record<string, string>>({});
