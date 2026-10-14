@@ -169,11 +169,17 @@ def propose_transformation(source: Dict[str, Any], target: Dict[str, Any], knowl
     for t in transforms:
         if t.get("source_pattern") and source.get("pattern") == t["source_pattern"] \
                 and type_family(target["data_type"]) in ("DATE", "TIMESTAMP"):
-            return apply_col(rule_expression(t), col), "transformation rule"
+            return apply_col(rule_expression(t), col), "learned transformation rule" if t.get("learned") else "transformation rule"
     for t in transforms:
         if t.get("semantic_type") and t["semantic_type"] == target.get("semantic_type"):
             return apply_col(rule_expression(t), col), "transformation rule"
     sf, tf = type_family(source["data_type"]), type_family(target["data_type"])
+    # a rule learned from reviewers' decisions (services/learning/patterns.py): the type families, and the source
+    # values' pattern when the rule was learned from one
+    for t in transforms:
+        if t.get("source_family") == sf and t.get("target_family") == tf and (
+                not t.get("source_pattern") or t["source_pattern"] in (source.get("pattern"), source.get("date_format"))):
+            return apply_col(rule_expression(t), col), "learned transformation rule"
     if sf == "TIMESTAMP" and tf == "DATE":
         return f"CAST({col} AS DATE)", "type conversion"
     if sf == "TEXT" and tf == "DATE" and source.get("date_format"):
@@ -187,6 +193,13 @@ def all_features(source: Dict[str, Any], target: Dict[str, Any], knowledge: Dict
                  cosine: Optional[float]) -> Dict[str, Any]:
     transformation, rule = propose_transformation(source, target, knowledge)
     kw, kw_ev = keyword_score(source, target)
+    # a learned rename (SENT_F to SENT_FLAG): the source name with its suffix renamed is compared too
+    name = str(source["column_name"]).upper()
+    for s_suf, t_suf in knowledge.get("renames") or []:
+        if name.endswith(s_suf) and len(name) > len(s_suf):
+            renamed, ev = keyword_score({**source, "column_name": name[: -len(s_suf)] + t_suf}, target)
+            if renamed > kw:
+                kw, kw_ev = renamed, {**ev, "learned_rename": f"{s_suf} -> {t_suf}"}
     dt, dt_ev = datatype_score(source, target, transformation)
     st, st_ev = statistical_score(source, target, knowledge)
     dm, dm_ev = domain_score(source, target, knowledge)

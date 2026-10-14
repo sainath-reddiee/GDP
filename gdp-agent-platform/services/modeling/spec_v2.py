@@ -30,6 +30,7 @@ import uuid
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 SPEC_VERSION = 2
+LAYERS = ("SILVER", "GOLD")
 TABLE_TYPES = ("DIMENSION", "FACT", "BRIDGE", "REFERENCE", "TABLE", "HUB", "SPOKE", "LINK", "SAT")
 V1_KINDS = ("DIMENSION", "FACT", "BRIDGE", "REFERENCE", "TABLE")
 STATUSES = ("ACTIVE", "RETIRED")
@@ -164,6 +165,10 @@ def _entity(raw: Dict[str, Any], model_key: str) -> Dict[str, Any]:
                                if _list(u)],
         "checks": [{"name": _upper(c.get("name")) or f"CK_{name}_{i + 1}", "expression": _text(c.get("expression"), 1000)}
                    for i, c in enumerate(_list(raw.get("checks"))) if isinstance(c, dict) and _text(c.get("expression"), 1)],
+        # gold: a conformed dimension owned by another domain's gold model (referenced, never generated here)
+        "conformed_from": _upper(raw.get("conformed_from")) or None,
+        # gold: how a mastered domain's own dimension reads its post-MDM table (relation, latest version, active column)
+        "gold_source": copy.deepcopy(raw["gold_source"]) if isinstance(raw.get("gold_source"), dict) else None,
         "physical": {"cluster_by": [_upper(c) for c in _list(physical.get("cluster_by")) if _upper(c)][:4],
                      "transient": _bool(physical.get("transient")),
                      "retention_days": int(physical["retention_days"]) if str(physical.get("retention_days") or "").isdigit() else None},
@@ -228,6 +233,7 @@ def normalize_v2(raw: Dict[str, Any], model_key: str = "") -> Dict[str, Any]:
     return {
         "spec_version": SPEC_VERSION,
         "domain": _upper(raw.get("domain")),
+        "layer": _upper(raw.get("layer")) if _upper(raw.get("layer")) in LAYERS else "SILVER",
         "mode": _upper(raw.get("mode")) or "MAP",
         "parent_domain": _upper(raw.get("parent_domain")) or None,
         "description": _text(raw.get("description"), 4000),
@@ -294,6 +300,8 @@ def validate(spec: Dict[str, Any], existing_domains: Iterable[str] = (), check_n
     Paths use names (ENTITY, ENTITY.COLUMN, rel:<id>, model) so the workbench can point at the field."""
     from services.modeling.design import TYPE
 
+    iceberg = (spec.get("physical_defaults") or {}).get("platform") == "ICEBERG"
+
     issues: List[Dict[str, str]] = []
 
     def add(path: str, message: str, severity: str = "ERROR") -> None:
@@ -345,7 +353,8 @@ def validate(spec: Dict[str, Any], existing_domains: Iterable[str] = (), check_n
             apath = f"{path}.{a['name']}"
             if check_names:
                 ident(apath, a["name"], "column")
-            if not TYPE.match(a["datatype"]):
+            # Iceberg tables also take LONG (the gold-model skill's key type)
+            if not TYPE.match(a["datatype"]) and not (iceberg and a["datatype"].upper() == "LONG"):
                 add(apath, f"{a['datatype']} is not a Snowflake type")
             if a.get("is_pk") and a.get("nullable"):
                 add(apath, f"{a['name']} is part of the primary key, so it cannot be nullable")

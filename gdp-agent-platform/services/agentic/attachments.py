@@ -60,7 +60,10 @@ def _col(ref: str) -> int:
     return n - 1
 
 
-def _xlsx(data: bytes, max_rows: int = 2000) -> str:
+def xlsx_rows(data: bytes, max_rows: int = 2000) -> List[Tuple[str, List[List[str]]]]:
+    """Each sheet of a workbook as (title, rows of cell text), in workbook order; empty rows are skipped and at most
+    `max_rows` rows are read per sheet."""
+    out: List[Tuple[str, List[List[str]]]] = []
     with zipfile.ZipFile(io.BytesIO(data)) as z:
         names = set(z.namelist())
         shared: List[str] = []
@@ -71,13 +74,11 @@ def _xlsx(data: bytes, max_rows: int = 2000) -> str:
         if "xl/workbook.xml" in names:
             for i, sheet in enumerate(ElementTree.fromstring(_read(z, "xl/workbook.xml")).iter(f"{_S}sheet"), start=1):
                 titles[f"xl/worksheets/sheet{i}.xml"] = sheet.get("name") or f"Sheet{i}"
-        out: List[str] = []
         sheets = [n for n in names if re.match(r"xl/worksheets/sheet\d+\.xml$", n)]
         for path in sorted(sheets, key=lambda n: int(re.search(r"(\d+)\.xml$", n).group(1))):  # sheet2 before sheet10
-            out.append(f"# sheet: {titles.get(path, path.rsplit('/', 1)[-1])}")
-            for count, row in enumerate(ElementTree.fromstring(_read(z, path)).iter(f"{_S}row")):
-                if count >= max_rows:
-                    out.append(f"... more rows not shown (first {max_rows} kept)")
+            rows_: List[List[str]] = []
+            for row in ElementTree.fromstring(_read(z, path)).iter(f"{_S}row"):
+                if len(rows_) >= max_rows:
                     break
                 cells: Dict[int, str] = {}
                 for c in row.iter(f"{_S}c"):
@@ -89,7 +90,20 @@ def _xlsx(data: bytes, max_rows: int = 2000) -> str:
                     if c.get("r"):
                         cells[_col(c.get("r"))] = str(value or "")
                 if cells:
-                    out.append(",".join(cells.get(i, "") for i in range(max(cells) + 1)))
+                    rows_.append([cells.get(i, "") for i in range(max(cells) + 1)])
+            out.append((titles.get(path, path.rsplit("/", 1)[-1]), rows_))
+    return out
+
+
+def _xlsx(data: bytes, max_rows: int = 2000) -> str:
+    out: List[str] = []
+    for title, rows_ in xlsx_rows(data, max_rows + 1):
+        out.append(f"# sheet: {title}")
+        for count, cells in enumerate(rows_):
+            if count >= max_rows:
+                out.append(f"... more rows not shown (first {max_rows} kept)")
+                break
+            out.append(",".join(cells))
     return "\n".join(out)
 
 

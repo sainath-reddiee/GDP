@@ -97,7 +97,7 @@ footer { color: var(--muted); font-size: 13px; margin-top: 56px; }
 <div class="wrap">
 <nav class="toc" aria-label="Contents">
   <div class="brand">GDP Agent Platform</div>
-  <div class="ver">Guidebook and runbook for code on main, migrations V001 to V050</div>
+  <div class="ver">Guidebook and runbook for code on main, migrations V001 to V055</div>
   <ol>
     <li><a href="#access"><span class="num">01</span>How access works</a></li>
     <li><a href="#setup"><span class="num">02</span>Setup order</a></li>
@@ -117,6 +117,10 @@ footer { color: var(--muted); font-size: 13px; margin-top: 56px; }
         <li><a href="#f-dashboard">Dashboard</a></li>
         <li><a href="#f-sources">Sources</a></li>
         <li><a href="#f-runs">Runs and stages</a></li>
+        <li><a href="#f-pipelines">The two pipelines</a></li>
+        <li><a href="#f-gold">Gold Pipeline</a></li>
+        <li><a href="#f-lineage">Lineage</a></li>
+        <li><a href="#f-consumer-domain">Onboarding a consumer domain</a></li>
         <li><a href="#f-dbt">dbt publishing</a></li>
         <li><a href="#f-domains">Domains</a></li>
         <li><a href="#f-knowledge">Knowledge</a></li>
@@ -532,19 +536,25 @@ footer { color: var(--muted); font-size: 13px; margin-top: 56px; }
 </dl>
 
 <h3 id="f-runs">Runs and pipeline stages</h3>
-<p>A run takes source tables to reviewed dbt code. Each stage page is under <code>/runs/&lt;run id&gt;/</code>.</p>
+<p>Runs belong to one of two pipelines on the same engine, under Pipelines in the sidebar. A <strong>Silver run</strong>
+(the Silver Pipeline, <code>/runs</code>) takes source tables to reviewed Silver (pre-MDM) dbt code. A <strong>Gold
+run</strong> (the Gold Pipeline, <code>/gold</code>) takes Silver tables, read in place, to reviewed Gold dbt code; see
+<a href="#f-gold">Gold Pipeline</a>. A Silver run's steps are <strong>Source Ingestion</strong>, <strong>Profiling</strong>,
+<strong>Modeling</strong> (step 1 field mapping, step 2 transformations and joins, which is the STTM) and <strong>Silver
+Code Generation</strong>, with QA tests, Data Quality, Validation and Code review. "New Silver run" opens Onboarding. Each step page is under <code>/runs/&lt;run id&gt;/</code>; the internal stage ids (MAPPING,
+STTM, DBT) are unchanged, and the old <code>mapping</code> and <code>sttm</code> addresses open the matching Modeling tab.</p>
 <div class="tablebox"><table>
-<tr><th>Stage page</th><th>What happens</th><th>Privileges</th></tr>
-<tr><td>source, access, landing</td><td>Register the source, check read access, land selected objects</td><td>RUN.OPERATE</td></tr>
-<tr><td>profile</td><td>Profile landed tables; refresh one table</td><td>RUN.OPERATE; refresh PROFILE.RUN</td></tr>
-<tr><td>domain</td><td>Domain recommendation; change target, intent or domain</td><td>MODEL.EDIT</td></tr>
-<tr><td>mapping</td><td>Generate candidates; accept or reject; approve the mapping pack; model design (AI design, edit, version, propose to the domain model, or approve as target when proposals are off)</td><td>RUN.OPERATE; MAPPING.DECIDE; MAPPING.APPROVE; MODEL.EDIT; MODEL.APPROVE; AI.USE for AI</td></tr>
-<tr><td>sttm</td><td>Generate the STTM; edit transformations and joins; AI refine; approve</td><td>RUN.OPERATE; STTM.EDIT; STTM.APPROVE</td></tr>
-<tr><td>soda (Data Quality)</td><td>Generate checks, first scan, backtest; import a client brief; decide checks; approve the pack</td><td>RUN.OPERATE; SODA.EDIT; SODA.APPROVE</td></tr>
-<tr><td>qa</td><td>Functional tests from the STTM, ask AI for a test, run, link Jira issues, sign off</td><td>QA.EDIT; AI.USE; JIRA.WRITE; QA.SIGNOFF</td></tr>
-<tr><td>dbt</td><td>Pick a repository, cut a branch, generate the dbt project, enhance or review with AI, publish a PR</td><td>DBT.EDIT</td></tr>
-<tr><td>validation</td><td>Parse, compile, naming and STTM consistency checks</td><td>RUN.OPERATE</td></tr>
-<tr><td>review</td><td>Final code review and sign-off, or send back</td><td>REVIEW.APPROVE; REVIEW.DECIDE</td></tr>
+<tr><th>Step (page)</th><th>What happens</th><th>Privileges</th></tr>
+<tr><td>Source Ingestion (source, access, landing)</td><td>Register the source, check read access, land selected objects</td><td>RUN.OPERATE</td></tr>
+<tr><td>Profiling (profile)</td><td>Profile landed tables; refresh one table</td><td>RUN.OPERATE; refresh PROFILE.RUN</td></tr>
+<tr><td>Knowledge pack (domain)</td><td>Domain recommendation and suggested models; change target, intent or domain</td><td>MODEL.EDIT</td></tr>
+<tr><td>Modeling, step 1: field mapping (modeling?tab=mapping)</td><td>Generate candidates; accept or reject; approve the mapping pack; model design (AI design, edit, version, propose to the domain model, or approve as target when proposals are off)</td><td>RUN.OPERATE; MAPPING.DECIDE; MAPPING.APPROVE; MODEL.EDIT; MODEL.APPROVE; AI.USE for AI</td></tr>
+<tr><td>Modeling, step 2: transformations and joins (modeling?tab=transformations)</td><td>Generate the STTM; edit transformations and joins; AI refine; approve</td><td>RUN.OPERATE; STTM.EDIT; STTM.APPROVE</td></tr>
+<tr><td>Data Quality (soda)</td><td>Generate checks, first scan, backtest; import a client brief; decide checks; approve the pack</td><td>RUN.OPERATE; SODA.EDIT; SODA.APPROVE</td></tr>
+<tr><td>QA tests (qa)</td><td>Functional tests from the STTM, ask AI for a test, run, link Jira issues, sign off</td><td>QA.EDIT; AI.USE; JIRA.WRITE; QA.SIGNOFF</td></tr>
+<tr><td>Silver Code Generation (dbt)</td><td>Pick a repository, cut a branch, generate the Silver dbt project, enhance or review with AI, publish a PR</td><td>DBT.EDIT</td></tr>
+<tr><td>Validation (validation)</td><td>Parse, compile, naming and STTM consistency checks</td><td>RUN.OPERATE</td></tr>
+<tr><td>Code review (review)</td><td>Final code review and sign-off, or send back</td><td>REVIEW.APPROVE; REVIEW.DECIDE</td></tr>
 </table></div>
 <h4>Gates</h4>
 <ul>
@@ -553,6 +563,94 @@ footer { color: var(--muted); font-size: 13px; margin-top: 56px; }
   <li>QA sign-off: allowed after STTM approval and before code approval. A rejection needs a note. If critical or high tests fail, approval needs an override with a reason of at least 15 characters.</li>
   <li>Forcing a state needs ADMIN.DEPLOY.</li>
 </ul>
+
+<h3 id="f-pipelines">The two pipelines</h3>
+<p>Each pipeline has its own page under Pipelines (the sidebar switches between them), with its own accent, a one-line
+purpose, its own step flow and five figures: runs in flight, runs waiting on a person, completed in 30 days, the median
+cycle time and the share of mappings accepted as the platform generated them
+(<code>GET /api/pipelines/{SILVER|GOLD}/summary</code>).</p>
+<div class="tablebox"><table>
+<tr><th></th><th>Silver Pipeline (<code>/runs</code>)</th><th>Gold Pipeline (<code>/gold</code>)</th></tr>
+<tr><td>Purpose</td><td>Source systems to governed Silver (pre-MDM) dbt, one hub per run</td><td>Mastered Silver to the governed Gold star schema, one domain slice per run</td></tr>
+<tr><td>Steps</td><td>Source Ingestion, Profiling, Mapping, STTM, QA and DQ, Silver code, Validation, Review</td><td>Silver Selection, Profiling, Gold model, Mapping, STTM, QA and DQ, Gold code, Validation, Review</td></tr>
+<tr><td>Skills</td><td>GDP-DBT-ONBOARD-SOURCE, SILVER-MODEL, and the post-MDM model at mapping (pre-MDM key lookups)</td><td>GOLD-MODEL and the post-MDM model (resolution through the cross-reference)</td></tr>
+<tr><td>Knowledge</td><td>Items for the Silver Pipeline plus shared items</td><td>Items for the Gold Pipeline plus shared items</td></tr>
+<tr><td>Conventions</td><td><code>MODELING_STANDARD.&lt;STD&gt;</code></td><td>The same, with <code>MODELING_STANDARD.&lt;STD&gt;.GOLD</code> on top</td></tr>
+<tr><td>Rules</td><td><code>RULES</code>, a domain's <code>rules</code></td><td>The same, with <code>RULES.GOLD</code> and a domain's <code>rules_gold</code> on top</td></tr>
+</table></div>
+<p><strong>Separate context.</strong> Skill bindings, a domain's own skills and knowledge items carry a pipeline scope
+(ANY, SILVER or GOLD; V055). A run loads only what is shared or scoped to its pipeline, and what a run learns is scoped
+to its pipeline. Admin, Skills sets each binding's scope; Admin, Standards and Admin, Rules have Silver and Gold
+values; the Knowledge page filters by pipeline and its editor sets which pipeline uses an item.</p>
+<p><strong>Autopilot to each gate.</strong> "Run to next gate" on every run runs each automatic step in order (source,
+profiling, domain, the gold model proposal, mapping, STTM, Data Quality checks, code, validation) and stops at the next
+human gate: the gold model approval, the mapping, the STTM, the checks, the QA sign-off or the code review. Before each
+step it checks the person's own privileges for that step, so it never does what the person could not do. Each run's
+"What the platform did" card shows the mappings accepted as generated, the automatic steps and their time, the time at
+reviews and the gates passed first time.</p>
+
+<h3 id="f-gold">Gold Pipeline</h3>
+<p>The Gold Pipeline builds Gold from Silver after Reltio has mastered Company and Property. A <strong>Gold run</strong>
+is a run like any other (<code>CORE.WORKFLOW_RUN.PIPELINE = 'GOLD'</code>, V054): the same stages, gates, approvals,
+audit trail and publishing as a Silver run. It never copies or changes Silver or the Reltio schemas. Start one from
+<strong>Pipelines, Gold Pipeline, New Gold run</strong>: pick a domain that consumes Company or Property and its Silver
+tables.</p>
+<div class="tablebox"><table>
+<tr><th>Step</th><th>What happens in a Gold run</th><th>Privileges</th></tr>
+<tr><td>Silver Selection (source)</td><td>The chosen Silver tables are registered and their access validated; they are read in place, nothing is landed or copied</td><td>RUN.CREATE</td></tr>
+<tr><td>Profiling (profile)</td><td>The Silver tables are profiled; distinct counts decide which descriptors become dimensions</td><td>RUN.OPERATE</td></tr>
+<tr><td>Modeling, step 1: gold model and field mapping</td><td>a. Propose the gold model from the profile: a FACT at the grain of each hub, the conformed DIM_COMPANY and DIM_PROPERTY reused (never copied), new DIMs for low-cardinality descriptors, a BRIDGE for each many-to-many. It becomes a draft of the domain's GOLD model, approved in the Model Workbench by a second person. b. Pick the gold table this run builds. c. Generate and approve the field mapping: same-name columns are scored as usual; mastered keys, the data source and dimension keys come from the gold model's rules</td><td>MODEL.EDIT; MODEL.APPROVE; MAPPING.DECIDE; MAPPING.APPROVE</td></tr>
+<tr><td>Modeling, step 2: transformations (STTM)</td><td>The STTM in gold terms: a mastered key is a LOOKUP whose resolution through the full cross-reference is written out; the table's sequence key, HKEY and audit columns follow the gold rules</td><td>STTM.EDIT; STTM.APPROVE</td></tr>
+<tr><td>QA tests, Data Quality</td><td>Built from the approved STTM like a Silver run; a lookup counts <code>-1</code> as unresolved</td><td>QA.EDIT; QA.SIGNOFF; SODA.EDIT; SODA.APPROVE</td></tr>
+<tr><td>Gold Code Generation (dbt)</td><td>The gold engine (<code>gdp-gold/engine-v1</code>) on the approved STTM and gold model: the target table and the proposed dimensions it references, Iceberg DDL with a sequence, keys and FKs, an incremental merge on SOURCE_UNIQUE_ID and DIM_DATA_SOURCE_SKEY with a stable surrogate key, HKEY, schema tests and the Soda checks. Anything the engine cannot know is listed as an assumption</td><td>DBT.EDIT</td></tr>
+<tr><td>Validation, Code review</td><td>The same checks as Silver code. Without the gdp-dbt branch skeleton the models cannot compile on their own (they ref the Silver hubs and conformed dimensions), which is a warning, not a failure</td><td>RUN.OPERATE; REVIEW.APPROVE</td></tr>
+</table></div>
+<ul>
+  <li>A Gold run builds the domain's star schema. Once its gold model is approved, "Build the star schema" creates a
+  table run per fact and bridge (<code>PARENT_RUN_ID</code>, V055), each on the silver table that feeds it; each builds its
+  table and the dimensions it adds. The Gold run shows every table run's progress, runs them all to their next gate,
+  approves their mappings or STTMs together (each through its own gate and governance), and publishes the whole star
+  schema as one pull request once every table's code is generated.</li>
+  <li>Gold lives in one database per domain: <code>&lt;ENV&gt;_GDP_GOLD_&lt;DOMAIN&gt;_DB.&lt;DOMAIN&gt;</code>.</li>
+  <li>Mastered keys are resolved through the <strong>full</strong> cross-reference (never the STAGE delta), matching on the source key and the upper-cased source-system name; an unresolved record gets <code>-1</code>.</li>
+  <li>A domain has one Silver model and one Gold model in the Model Workbench (<code>GOVERNANCE.DOMAIN_MODEL.LAYER</code>, V053). Approving the Gold model registers its own tables in the target registry with <code>LAYER = 'GOLD'</code> (V054), so Gold runs can map into them; Silver runs and the domain pages keep seeing only Silver targets.</li>
+  <li>Domains Reltio masters (Company, Property) have their gold in gdp-dbt already; their dimensions are referenced by consumers, not rebuilt.</li>
+</ul>
+
+<h3 id="f-lineage">Lineage</h3>
+<p><code>/lineage</code> traces a table or a column from Source to Gold, in either direction, and shows each layer as a
+swimlane: Source, Bronze (landed), Silver pre-MDM, MDM cross-reference, Silver post-MDM and Gold. Each hop lists how it
+happens: landed, mapped (the approved STTM expression), MDM match, golden record, resolved key, or built (gold
+generation). Edges come from <code>SOURCE.LANDING_TABLE_REGISTRY</code>, approved <code>CONTRACT.STTM_LINE</code> rows,
+the mastered-domain contracts and consumer target columns; a Gold run's approved STTM gives the Silver to Gold hops.
+It is linked from a run's code generation step and the domain's Medallion and MDM panel.
+Read only, for everyone signed in (<code>GET /api/lineage/trace</code>, <code>GET /api/lineage/objects</code>).</p>
+
+<h3 id="f-consumer-domain">Onboarding a consumer domain (example: Availability)</h3>
+<p>Only Company and Property are mastered by Reltio. A new domain whose records refer to companies or properties, such
+as Availability, is a <strong>consumer</strong>: its Silver keeps the pre-MDM keys, and its Gold resolves them to the
+mastered dimensions. The pattern is the same for any consumer.</p>
+<ol>
+  <li><strong>Domain intake.</strong> Create the domain, add its sources, data model file and examples on the Sources
+  tab. On the Lineage tab, in <strong>Medallion and MDM</strong>, choose <em>Link to MDM</em> and add Property
+  (PROPERTY_CORE_SKEY to DIM_PROPERTY_SKEY) and Company (COMPANY_CORE_SKEY to DIM_COMPANY_SKEY). This needs DOMAIN.EDIT
+  and is versioned with the domain.</li>
+  <li><strong>Silver Pipeline.</strong> Start a Silver run: Source Ingestion, Profiling, then Modeling. Because the
+  domain is a consumer, field mapping and the STTM use the post-MDM skill, so the Silver hub carries the
+  PROPERTY_CORE_SKEY and COMPANY_CORE_SKEY lookups next to the availability columns. Finish with Silver Code Generation
+  and the quality lane.</li>
+  <li><strong>Gold Pipeline.</strong> After the Silver hub is loaded and Reltio has mastered the related companies and
+  properties, start a Gold run for the domain and select the hub. On Modeling, propose the gold model: FACT_AVAILABILITY
+  with DIM_PROPERTY_SKEY and DIM_COMPANY_SKEY resolved through the cross-reference, new dimensions for descriptors, and a
+  bridge where an availability relates to several companies in different roles. Once it is approved in the Model
+  Workbench, pick FACT_AVAILABILITY, approve the mapping and the STTM, then QA tests, Data Quality, Gold Code Generation,
+  Validation and Code review. Start another Gold run for the bridge.</li>
+  <li><strong>Lineage.</strong> In <code>/lineage</code>, trace FACT_AVAILABILITY.DIM_PROPERTY_SKEY upstream: source
+  record, landed table, Silver hub, the property's cross-reference row, the golden record and DIM_PROPERTY.</li>
+</ol>
+<p>Check before you start: the domain's source systems exist in <code>SHARED.REF_GDP_SOURCE_SYSTEM</code> (the match
+uses the upper-cased system name), and the match rate on the Company and Property Medallion panels is acceptable for
+those systems. A low match rate means many gold rows will carry <code>-1</code>.</p>
 
 <h3 id="f-dbt">dbt publishing</h3>
 <dl class="feature-meta">
@@ -962,7 +1060,7 @@ cd apps/web; npm install; cd ../..</code></pre></li>
 <pre><code>SELECT VERSION, APPLIED_AT FROM DEV_AI_PLATFORM.CORE.SCHEMA_MIGRATION ORDER BY VERSION DESC LIMIT 5;
 SHOW PROCEDURES IN SCHEMA DEV_AI_PLATFORM.CONTRACT;
 SHOW ROW ACCESS POLICIES IN SCHEMA DEV_AI_PLATFORM.JIRA;</code></pre>
-  The newest version should be V050, and <code>OWN_ROWS</code> should be listed.</li>
+  The newest version should be V055, and <code>OWN_ROWS</code> should be listed.</li>
   <li><strong>Grant people access</strong> (see <a href="#mapping">Who gets what</a>):
 <pre><code>GRANT DATABASE ROLE DEV_AI_PLATFORM.DATA_ENGINEER TO ROLE &lt;data engineers&gt;;
 GRANT DATABASE ROLE DEV_AI_PLATFORM.QA_ENGINEER   TO ROLE &lt;qa team&gt;;
@@ -1208,6 +1306,9 @@ docker compose -f docker/docker-compose.yml --env-file docker/.env logs -f --tai
 <tr><td>CORE.COPILOT_MESSAGE</td><td>Log</td><td>Copilot questions, answers and citations</td><td>Copilot</td><td>Copilot panel</td><td>V015</td></tr>
 <tr><td>CORE.COPILOT_PLAN_STEP</td><td>Content</td><td>The eight plan steps of each copilot conversation and their state (own rows)</td><td>Copilot workspace</td><td>Copilot workspace plan</td><td>V048</td></tr>
 <tr><td>CORE.TICKET_VIEW</td><td>Config</td><td>Saved views of the Tickets page: a name, the filters, private or shared</td><td>Tickets API</td><td>Tickets</td><td>V050</td></tr>
+<tr><td>CORE.GOLD_BUILD</td><td>Content</td><td>Gold builds from before Gold runs (V054); no longer written</td><td>None</td><td>None</td><td>V053</td></tr>
+<tr><td>GOVERNANCE.GOLD_MAPPING_LINE</td><td>Content</td><td>Gold build mapping lines from before Gold runs; a Gold run's mapping is its STTM</td><td>None</td><td>None</td><td>V053</td></tr>
+<tr><td>GOVERNANCE.LINEAGE_EDGE</td><td>Content</td><td>Column and table lineage edges between layers, written by gold generation; the current generation is flagged</td><td>Gold API</td><td>Lineage</td><td>V053</td></tr>
 <tr><td>CORE.COPILOT_SESSION</td><td>Content</td><td>One row per copilot conversation: title, Jira issue, state (own rows)</td><td>Copilot workspace</td><td>Copilot workspace</td><td>V048</td></tr>
 <tr><td>CORE.DEPLOY_STATE</td><td>Log</td><td>Checksum of each rendered deploy step, so a re-deploy skips unchanged steps</td><td>infrastructure/deploy_snowflake.py</td><td>Deploy only</td><td>Deploy script</td></tr>
 <tr><td>CORE.PLATFORM_CONFIG</td><td>Config</td><td>Versioned platform settings: AI models, Jira, Ops, dbt publishing, rules</td><td>Admin, deploy seed</td><td>Read across the API and worker</td><td>V004</td></tr>
@@ -1398,6 +1499,11 @@ docker compose -f docker/docker-compose.yml --env-file docker/.env logs -f --tai
 <tr><td>V048</td><td>Copilot workspace: CORE.COPILOT_SESSION, COPILOT_EVENT, COPILOT_PLAN_STEP, COPILOT_CHANGE and COPILOT_ATTACHMENT, with the row access policy CORE.COPILOT_OWN_ROWS (each person sees only their own conversations)</td></tr>
 <tr><td>V049</td><td>Copilot workspace for REVIEWER, DATA_STEWARD and DOMAIN_OWNER (V048 granted it to DATA_ENGINEER and QA_ENGINEER)</td></tr>
 <tr><td>V050</td><td>Saved views of the Tickets page (CORE.TICKET_VIEW)</td></tr>
+<tr><td>V051</td><td>Domain skills and domain documents (Confluence among the document sources)</td></tr>
+<tr><td>V052</td><td>Uploaded domain documents are kept on a stage, with how each was read</td></tr>
+<tr><td>V053</td><td>Gold and lineage: GOVERNANCE.DOMAIN_MODEL.LAYER (one Silver and one Gold model per domain), CORE.GOLD_BUILD, GOVERNANCE.GOLD_MAPPING_LINE and GOVERNANCE.LINEAGE_EDGE</td></tr>
+<tr><td>V054</td><td>Gold runs: CORE.WORKFLOW_RUN.PIPELINE (SILVER or GOLD) and KNOWLEDGE.TARGET_TABLE_REGISTRY.LAYER (SILVER or GOLD)</td></tr>
+<tr><td>V055</td><td>Pipeline context: PIPELINE on KNOWLEDGE.SKILL_STAGE_BINDING and KNOWLEDGE.DOMAIN_SKILL, LAYER on KNOWLEDGE.DOMAIN_KNOWLEDGE, the gold skill bindings, and CORE.WORKFLOW_RUN.PARENT_RUN_ID (a Gold run's table runs)</td></tr>
 </table></div>
 
 <!-- ============================================================ 07 -->
@@ -1446,7 +1552,7 @@ docker compose -f docker/docker-compose.yml --env-file docker/.env logs -f --tai
 <div class="note"><strong>Unused table.</strong> <code>AUDIT.AGENT_RUN</code> exists but nothing writes to it yet.</div>
 
 <footer>
-  <p>Generated from the repository source: governance policy, migrations V001 to V050, procedure definitions, API routes and web pages. Where this guide and the code differ, the code is right; report the difference so the guide can be updated.</p>
+  <p>Generated from the repository source: governance policy, migrations V001 to V055, procedure definitions, API routes and web pages. Where this guide and the code differ, the code is right; report the difference so the guide can be updated.</p>
 </footer>
 </main>
 </div>

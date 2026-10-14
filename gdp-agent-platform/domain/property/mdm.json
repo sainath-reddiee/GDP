@@ -1,0 +1,94 @@
+{
+  "role": "MASTERED",
+  "mastered_by": "Reltio",
+  "reference": "snowflake/skills/gdp/post-mdm-data-model (SKILL.md section 2, references/property-mdm.md, references/canonical-sql.md section 2)",
+  "pre_mdm": {
+    "database": "{ENV}_GDP_SILVER_DB",
+    "schema": "PROPERTY",
+    "table": "PROPERTY_CORE",
+    "skey": "PROPERTY_CORE_SKEY",
+    "source_key": "SOURCE_UNIQUE_ID",
+    "source_system_skey": "REF_GDP_SOURCE_SYSTEM_SKEY",
+    "active_column": "GDP_IS_ACTIVE"
+  },
+  "source_systems": {
+    "database": "{ENV}_GDP_SILVER_DB",
+    "schema": "SHARED",
+    "table": "REF_GDP_SOURCE_SYSTEM",
+    "skey": "GDP_SOURCE_SYSTEM_SKEY",
+    "name": "GDP_SOURCE_SYSTEM_NAME"
+  },
+  "cross_reference": {
+    "database": "{ENV}_GDP_SILVER_DB",
+    "schema": "PROPERTY_MDM",
+    "table": "PROPERTY_CROSS_REFERENCE",
+    "source_key": "SOURCE_SYSTEM_ID",
+    "system_name": "SOURCE_SYSTEM_NAME",
+    "mastered_id": "CBRE_ENTERPRISE_PROPERTY_ID",
+    "entity_id": "MDM_ENTITY_ID",
+    "active_column": "GDP_IS_ACTIVE",
+    "deleted_column": "MDM_DELETE_DATE",
+    "status_column": "MDM_STATUS",
+    "exclude_systems": [],
+    "latest_order": ["MDM_POST_MDM_LUD DESC NULLS LAST", "MDM_UPDATED_TS DESC NULLS LAST"],
+    "cardinality": "N:1"
+  },
+  "golden": {
+    "database": "{ENV}_GDP_SILVER_DB",
+    "schema": "PROPERTY_MDM",
+    "table": "PROPERTY_CORE",
+    "mastered_id": "CBRE_ENTERPRISE_PROPERTY_ID",
+    "entity_id": "MDM_ENTITY_ID",
+    "version_order": ["MDM_POST_MDM_LUD DESC NULLS LAST", "MDM_UPDATED_TS DESC NULLS LAST"],
+    "related": ["PROPERTY_TYPE", "PROPERTY_ADDRESS_REL", "PROPERTY_ENTITY_EVENTS_AUDIT", "PROPERTY_MERGE", "PRE_MDM_UPDATED_RECORDS"]
+  },
+  "gold": {
+    "database": "{ENV}_GDP_GOLD_PROPERTY_DB",
+    "schema": "PROPERTY",
+    "dimension": "DIM_PROPERTY",
+    "skey": "DIM_PROPERTY_SKEY",
+    "mastered_id": "CBRE_ENTERPRISE_PROPERTY_ID",
+    "sequence": "SEQ_DIM_PROPERTY_SKEY",
+    "active_column": "GDP_IS_ACTIVE",
+    "children": ["DIM_PROPERTY_USAGE", "DIM_PROPERTY_ALTERNATE_ADDRESS"],
+    "dbt_ref": "dim_property",
+    "unresolved": -1
+  },
+  "dbt_sources": {
+    "cross_reference": ["property_mdm_source", "property_cross_reference"],
+    "pre_mdm": "property_core",
+    "source_systems": ["silver_shared", "ref_gdp_source_system"]
+  },
+  "watermark": {
+    "table": "{ENV}_GDP_UTIL_DB.CONFIG.GDP_DBT_WATERMARK_TBL",
+    "source_system": "RELTIO",
+    "source_model": "PROPERTY_CORE_MDM",
+    "target_model": "DIM_PROPERTY"
+  },
+  "knowledge": [
+    {"key": "property.mdm.rule.source_system_id", "type": "EXCEPTION", "title": "The property cross-reference keys on SOURCE_SYSTEM_ID",
+     "content": "Join PROPERTY_CORE.SOURCE_UNIQUE_ID to PROPERTY_CROSS_REFERENCE.SOURCE_SYSTEM_ID (not SOURCE_UNIQUE_ID), together with UPPER(REF_GDP_SOURCE_SYSTEM.GDP_SOURCE_SYSTEM_NAME) = UPPER(SOURCE_SYSTEM_NAME).",
+     "content_json": {"target_table": "PROPERTY_CROSS_REFERENCE"}},
+    {"key": "property.mdm.rule.full_xref", "type": "EXCEPTION", "title": "Resolve properties through the full cross-reference, never the delta",
+     "content": "Use PROPERTY_MDM.PROPERTY_CROSS_REFERENCE for resolution. STAGE.PROPERTY_CROSS_REFERENCE_ENTITY_ID holds only the properties changed in the current run; FACT_LEASE and FACT_SALE resolve through it today and lose DIM_PROPERTY_SKEY for unchanged properties.",
+     "content_json": {"target_table": "PROPERTY_CROSS_REFERENCE"}},
+    {"key": "property.mdm.rule.delete_column", "type": "EXCEPTION", "title": "Property cross-reference deletes are MDM_DELETE_DATE",
+     "content": "A deleted property cross-reference row has MDM_DELETE_DATE set (company uses MDM_DELETED_DATE) or MDM_STATUS 'INACTIVE'. Filter GDP_IS_ACTIVE and MDM_DELETE_DATE IS NULL, and keep the latest row per SOURCE_SYSTEM_ID and SOURCE_SYSTEM_NAME by MDM_POST_MDM_LUD then MDM_UPDATED_TS.",
+     "content_json": {"target_table": "PROPERTY_CROSS_REFERENCE"}},
+    {"key": "property.mdm.rule.many_to_one", "type": "EXCEPTION", "title": "Many source properties master to one Lightbox building",
+     "content": "Lightbox is the property spine (about one cross-reference row per building); EDP, MTA and DIQ records merge onto Lightbox buildings, so many source records share one CBRE_ENTERPRISE_PROPERTY_ID (EDP: 3.1M active rows to 880K ids). Aggregate facts at the mastered id, not the source record, when the business asks per property.",
+     "content_json": {"target_table": "DIM_PROPERTY"}},
+    {"key": "property.mdm.rule.view_shortcut", "type": "EXCEPTION", "title": "VW_PROPERTY_CROSS_REFERENCE maps source records to gold skeys",
+     "content": "For read-only analysis, GOLD_PROPERTY_DB.PROPERTY.VW_PROPERTY_CROSS_REFERENCE gives SOURCE_SYSTEM_NAME, SOURCE_SYSTEM_ID, CBRE_ENTERPRISE_PROPERTY_ID and DIM_PROPERTY_SKEY; check its active semantics before relying on it in models.",
+     "content_json": {"target_table": "DIM_PROPERTY"}},
+    {"key": "property.mdm.rule.no_xref_reason", "type": "EXCEPTION", "title": "Why a pre-MDM property has no cross-reference",
+     "content": "PROPERTY_MDM.PRE_MDM_UPDATED_RECORDS records each pre-MDM property's DQ_STATUS and POST_MDM_STATUS; use it to explain a missing cross-reference (filtered by DQ, or not processed yet) instead of guessing.",
+     "content_json": {"target_table": "PROPERTY_CROSS_REFERENCE"}},
+    {"key": "property.mdm.rule.unresolved", "type": "EXCEPTION", "title": "-1 means unresolved, at two different layers",
+     "content": "A silver PROPERTY_CORE_SKEY of -1 means no pre-MDM match; a gold DIM_PROPERTY_SKEY of -1 means no MDM or dimension match. Diagnose layer by layer.",
+     "content_json": {"target_table": "DIM_PROPERTY"}},
+    {"key": "property.mdm.rule.version_dedupe", "type": "EXCEPTION", "title": "MDM tables are versioned",
+     "content": "Deduplicate MDM tables to the latest version with ORDER BY MDM_POST_MDM_LUD DESC NULLS LAST, MDM_UPDATED_TS DESC NULLS LAST.",
+     "content_json": {"target_table": "PROPERTY_CORE"}}
+  ]
+}

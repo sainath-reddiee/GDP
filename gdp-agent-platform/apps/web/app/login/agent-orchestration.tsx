@@ -31,14 +31,14 @@ const SCENARIOS: Scenario[] = [
 type NodeDef = { id: string; label: string; agent: string; icon: LucideIcon; x: number; y: number; step: number; gate?: boolean };
 
 const NODES: NodeDef[] = [
-  { id: "source", label: "Source", agent: "Supervisor", icon: Database, x: 44, y: 150, step: 0 },
-  { id: "profile", label: "Profile", agent: "Profiler", icon: ScanSearch, x: 132, y: 150, step: 1 },
+  { id: "source", label: "Ingestion", agent: "Supervisor", icon: Database, x: 44, y: 150, step: 0 },
+  { id: "profile", label: "Profiling", agent: "Profiler", icon: ScanSearch, x: 132, y: 150, step: 1 },
   { id: "domain", label: "Domain", agent: "Domain", icon: Sparkles, x: 220, y: 150, step: 2 },
-  { id: "mapping", label: "Mapping", agent: "Mapper", icon: GitCompareArrows, x: 308, y: 150, step: 3, gate: true },
-  { id: "sttm", label: "STTM", agent: "Contract", icon: FileSpreadsheet, x: 396, y: 150, step: 4, gate: true },
+  { id: "mapping", label: "Field mapping", agent: "Mapper", icon: GitCompareArrows, x: 308, y: 150, step: 3, gate: true },
+  { id: "sttm", label: "Transforms", agent: "Contract", icon: FileSpreadsheet, x: 396, y: 150, step: 4, gate: true },
   { id: "qa", label: "QA tests", agent: "QA", icon: FlaskConical, x: 512, y: 58, step: 5 },
   { id: "dq", label: "Data Quality", agent: "Quality", icon: ShieldCheck, x: 512, y: 150, step: 5 },
-  { id: "dbt", label: "dbt", agent: "dbt", icon: Code2, x: 512, y: 242, step: 5 },
+  { id: "dbt", label: "Silver code", agent: "dbt", icon: Code2, x: 512, y: 242, step: 5 },
   { id: "validate", label: "Validate", agent: "Validator", icon: ShieldCheck, x: 610, y: 242, step: 6 },
   { id: "review", label: "Code review", agent: "Reviewer", icon: GitPullRequest, x: 716, y: 150, step: 7, gate: true },
 ];
@@ -62,9 +62,9 @@ function script(s: Scenario): Line[][] {
     [{ agent: "Profiler", tone: "bg-cyan-500", text: `Profiled ${s.columns} columns in place. Nothing copied; profile staged for reuse` }],
     [{ agent: "Domain", tone: "bg-violet-500", text: `Matched the ${s.domain} contract (${s.confidence}%), target ${s.target}` }],
     [{ agent: "Mapper", tone: "bg-indigo-500", text: `Proposed ${s.mappings} column mappings with evidence; ${s.open} need a decision` },
-     { agent: "Reviewer", tone: "bg-amber-500", text: "Approved the mapping", human: true }],
-    [{ agent: "Contract", tone: "bg-blue-500", text: `STTM built. Join plan: ${s.join}` },
-     { agent: "Reviewer", tone: "bg-amber-500", text: "Approved the STTM", human: true }],
+     { agent: "Reviewer", tone: "bg-amber-500", text: "Approved the field mapping", human: true }],
+    [{ agent: "Contract", tone: "bg-blue-500", text: `Transformations and joins built (STTM). Join plan: ${s.join}` },
+     { agent: "Reviewer", tone: "bg-amber-500", text: "Approved the transformations", human: true }],
     [{ agent: "QA", tone: "bg-fuchsia-500", text: `Wrote ${s.tests} functional test queries` },
      { agent: "Quality", tone: "bg-emerald-500", text: `Backtested ${s.checks} Soda checks on today's data` },
      { agent: "dbt", tone: "bg-orange-500", text: `Generated ${s.model} with hub and history` }],
@@ -77,11 +77,11 @@ function script(s: Scenario): Line[][] {
 function deliverables(s: Scenario): { step: number; icon: LucideIcon; title: string; detail: string; tone: string }[] {
   return [
     { step: 1, icon: ScanSearch, title: "Column profiles", detail: `${s.columns} columns, staged`, tone: "text-cyan-300" },
-    { step: 3, icon: GitCompareArrows, title: "Mappings", detail: `${s.mappings} with evidence`, tone: "text-indigo-300" },
+    { step: 3, icon: GitCompareArrows, title: "Field mapping", detail: `${s.mappings} with evidence`, tone: "text-indigo-300" },
     { step: 4, icon: FileSpreadsheet, title: "STTM contract", detail: `into ${s.target}`, tone: "text-blue-300" },
     { step: 5, icon: FlaskConical, title: "QA suite", detail: `${s.tests} SQL tests`, tone: "text-fuchsia-300" },
     { step: 5, icon: ShieldCheck, title: "Soda + GX checks", detail: `${s.checks} backtested`, tone: "text-emerald-300" },
-    { step: 5, icon: Code2, title: "dbt model", detail: s.model, tone: "text-orange-300" },
+    { step: 5, icon: Code2, title: "Silver dbt model", detail: s.model, tone: "text-orange-300" },
   ];
 }
 
@@ -172,7 +172,7 @@ export function AgentOrchestration() {
       <div className="flex flex-wrap items-end gap-3 px-5 pt-4">
         <div className="min-w-0 flex-1">
           <p className="text-base font-semibold text-white">Agents do the work. People approve the gates.</p>
-          <p className="text-xs text-slate-400">Every stage is an agent on Snowflake Cortex; after the STTM three agents work in parallel.</p>
+          <p className="text-xs text-slate-400">Every stage is an agent on Snowflake Cortex; once the model is approved three agents work in parallel.</p>
         </div>
         <div className="flex gap-1.5" role="group" aria-label="Example source">
           {SCENARIOS.map(({ key, label, icon: Icon }) => (
@@ -187,7 +187,7 @@ export function AgentOrchestration() {
 
       <div className="flex min-h-0 flex-1 items-center px-3 pt-2">
         <svg viewBox="0 0 760 300" className="h-auto max-h-full w-full" role="img"
-             aria-label="Source, profile, domain, mapping and STTM run in sequence; QA tests, data quality and dbt then validation run in parallel; all merge into code review. Mapping, STTM and code review wait for a person.">
+             aria-label="Source ingestion, profiling, domain and modeling (field mapping, then transformations) run in sequence; QA tests, data quality and Silver code generation then validation run in parallel; all merge into code review. Field mapping, transformations and code review wait for a person.">
           <defs>
             <linearGradient id="edge-done" x1="0" x2="1">
               <stop offset="0%" stopColor="#22D3EE" />

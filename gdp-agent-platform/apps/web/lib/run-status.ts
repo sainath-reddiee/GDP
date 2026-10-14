@@ -1,15 +1,17 @@
 import type { RunSummary } from "@/lib/types";
-import { byStage } from "@/lib/stages";
+import { stageLabel, pipelineOf } from "@/lib/stages";
 import { REVIEW_STATES } from "@/lib/run-insights";
 
 // Run status helpers shared by the run table (client) and the Command Center (server).
 
-export const STAGE_ORDER = ["SOURCE", "PROFILING", "MAPPING", "STTM", "SODA", "DBT", "VALIDATION", "REVIEW"];
+/** Pipeline 1 steps as the run table's progress dots; Modeling covers the MAPPING and STTM stages. */
+export const STAGE_ORDER = ["SOURCE", "PROFILING", "MODELING", "SODA", "DBT", "VALIDATION", "REVIEW"];
 
 export function stageInfo(r: RunSummary) {
-  const stage = r.current_stage === "DOMAIN" ? "PROFILING" : r.current_stage;
+  const raw = r.current_stage === "DOMAIN" ? "PROFILING" : r.current_stage;
+  const stage = raw === "MAPPING" || raw === "STTM" ? "MODELING" : raw;
   const index = stage ? STAGE_ORDER.indexOf(stage) : -1;
-  const label = stage ? byStage(stage)?.label ?? stage : "Not started";
+  const label = raw ? stageLabel(raw, pipelineOf(r.pipeline)) : "Not started";
   const state = (r.current_state || "").replace(/_/g, " ").toLowerCase();
   return { index, label, state };
 }

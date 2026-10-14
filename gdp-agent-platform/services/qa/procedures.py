@@ -132,6 +132,7 @@ def _lines(session, sttm_id: str) -> List[Dict[str, Any]]:
         "transformation": r["TRANSFORMATION"], "nullable_rule": r["NULLABLE_RULE"],
         "accepted_values": variant(r["ACCEPTED_VALUES"]) or [], "default_value": r["DEFAULT_VALUE"],
         "business_definition": r["BUSINESS_DEFINITION"], "target_fqn": _fqn(r, "TARGET"), "source_fqn": _fqn(r, "SOURCE"),
+        "lookup_logic": r.get("LOOKUP_LOGIC"),
     } for r in rows(session, """SELECT * FROM CONTRACT.STTM_LINE WHERE STTM_ID = ? ORDER BY TARGET_COLUMN""", [sttm_id])]
 
 

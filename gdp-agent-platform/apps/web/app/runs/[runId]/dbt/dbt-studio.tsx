@@ -45,6 +45,8 @@ type Props = {
   defaultModel: string;
   /** Repository, defaults and publishing readiness, all configured once in Admin, Integrations. */
   setup: DbtSetup;
+  /** SILVER (dbt-onboard-source engine) or GOLD (GDP gold engine: facts, dimensions, bridges from silver read in place). */
+  pipeline?: "SILVER" | "GOLD" | null;
 };
 
 export function DbtStudio(props: Props) {
@@ -55,7 +57,7 @@ export function DbtStudio(props: Props) {
  *  Where the code goes (repository, clone, origin, credentials, publishing) is configured in Admin, never here. */
 function Studio({
   runId, runName, domainName, canGenerate, generation, artifacts, branch, publication, report, skeletonBase, lastWorkspace,
-  models, defaultModel, setup,
+  models, defaultModel, setup, pipeline,
 }: Props) {
   const toast = useToast();
   const { canAct } = useAccess();
@@ -199,8 +201,10 @@ function Studio({
   ];
 
   const where = folder ? `${baseBranch}/${folder}` : baseBranch;
+  const gold = pipeline === "GOLD";
+  const engine = gold ? "GDP gold engine" : "DBT-ONBOARD-SOURCE";
   const timeline: { title: string; detail: string; tone: Tone; href?: string }[] = [
-    { title: "Read approved STTM", detail: "DBT-ONBOARD-SOURCE rules engine", tone: generation ? "done" : "idle" },
+    { title: "Read approved STTM", detail: `${engine} rules engine`, tone: generation ? "done" : "idle" },
     {
       title: `Read skeleton from ${where}`,
       detail: !generation ? (fetchSkeleton ? "Every file on the cut-from branch is kept as is" : "Off: models only")
@@ -244,7 +248,7 @@ function Studio({
               ) : (
                 <span className="inline-flex items-center gap-1 rounded-full bg-white/10 px-2 py-0.5"><FolderGit2 className="h-3.5 w-3.5" />no repository: stage only</span>
               )}
-              <span className="inline-flex items-center gap-1 rounded-full bg-white/10 px-2 py-0.5"><ShieldCheck className="h-3.5 w-3.5" /> DBT-ONBOARD-SOURCE</span>
+              <span className="inline-flex items-center gap-1 rounded-full bg-white/10 px-2 py-0.5"><ShieldCheck className="h-3.5 w-3.5" /> {engine}</span>
               {generation && <span className="rounded-full bg-white/10 px-2 py-0.5">v{generation.generation_version} · {generation.files_generated} files</span>}
               {domainName && <span className="rounded-full bg-white/10 px-2 py-0.5">Domain {domainName}</span>}
               <span className="text-slate-400">{adminHint("Managed in Admin")}</span>
@@ -371,10 +375,21 @@ function Studio({
             </div>
             <div className="mt-3 rounded-lg bg-slate-50 p-3 font-mono text-[11px] leading-5 text-slate-600">
               {folder && <p className="text-slate-400">inside {folder}/</p>}
-              <p>models/bronze/{report?.target || "<target>"}_{sourceKey || "<source>"}_source.yml</p>
-              <p className="text-slate-900">{pathPreview}</p>
-              <p>models/silver/{domainFolder || "<domain>"}/{report?.target || "<target>"}.sql <span className="text-slate-400">(hub; patched if on the branch)</span></p>
-              <p>macros/{domainFolder || "<domain>"}_utils.sql</p>
+              {gold ? (
+                <>
+                  <p className="text-slate-900">models/gold/{domainFolder || "<domain>"}/{(report?.target || "<gold table>").toLowerCase()}.sql <span className="text-slate-400">(incremental merge; mastered keys through the cross-reference)</span></p>
+                  <p>models/gold/{domainFolder || "<domain>"}/dim_*.sql <span className="text-slate-400">(the proposed dimensions it references)</span></p>
+                  <p>models/gold/{domainFolder || "<domain>"}/_{domainFolder || "<domain>"}__gold.yml</p>
+                  <p>ddl/gold/{domainFolder || "<domain>"}/*.sql <span className="text-slate-400">(sequence and Iceberg table, run first)</span></p>
+                </>
+              ) : (
+                <>
+                  <p>models/bronze/{report?.target || "<target>"}_{sourceKey || "<source>"}_source.yml</p>
+                  <p className="text-slate-900">{pathPreview}</p>
+                  <p>models/silver/{domainFolder || "<domain>"}/{report?.target || "<target>"}.sql <span className="text-slate-400">(hub; patched if on the branch)</span></p>
+                  <p>macros/{domainFolder || "<domain>"}_utils.sql</p>
+                </>
+              )}
               <p className="mt-1 text-slate-400">audit: {prefix ? `${prefix}_IS_ACTIVE, ${prefix}_INSERTED_TS, ${prefix}_UPDATED_TS …` : "no prefix"}</p>
             </div>
             <label className="mt-3 flex items-center gap-2"><input type="checkbox" checked={fetchSkeleton} onChange={(e) => setFetchSkeleton(e.target.checked)} /> Build on the branch skeleton (keep every file already on {baseBranch})</label>

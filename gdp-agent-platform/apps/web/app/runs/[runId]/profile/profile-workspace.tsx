@@ -8,7 +8,8 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
-import { GradeChip, ProfileDrawer } from "@/app/sources/profile-drawer";
+import { GradeChip } from "@/app/sources/profile-drawer";
+import { TableProfile } from "./table-profile";
 import { refreshTableProfile } from "../pipeline-actions";
 
 export type ProfileColumn = {
@@ -34,15 +35,15 @@ function Stat({ icon: Icon, label, value, hint }: { icon: typeof Table2; label: 
   );
 }
 
-/** The run's profiles: headline numbers, every table with its grade and the full stored profile beside it, and a
- *  searchable list of all columns. */
+/** The run's profiles, and only them: headline numbers, every table with its grade, the selected table's full
+ *  profile (every statistic, per column), and a searchable list of all columns. */
 export function ProfileWorkspace({ runId, tables, columns, canRefresh }: {
   runId: string; tables: ProfileCacheTable[]; columns: ProfileColumn[]; canRefresh: boolean;
 }) {
   const router = useRouter();
   const profiled = tables.filter((t) => t.status === "CACHED");
   const [tab, setTab] = useState<"tables" | "columns">("tables");
-  const [selected, setSelected] = useState<string | null>(null);
+  const [selected, setSelected] = useState<string | null>(() => tables.find((t) => t.status === "CACHED" && t.database_name && t.schema_name)?.table_name ?? null);
   const [refreshing, setRefreshing] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [, start] = useTransition();
@@ -95,7 +96,7 @@ export function ProfileWorkspace({ runId, tables, columns, canRefresh }: {
         <>
           {!profiled.length && (
             <p className="rounded-xl border border-dashed p-6 text-center text-sm text-muted-foreground">
-              Profile the run to see each table's quality, columns and suggested checks.
+              Profile the run to see each table's statistics: completeness, uniqueness, value ranges, distributions and shapes.
             </p>
           )}
           <div className="grid gap-3 md:grid-cols-2">
@@ -143,9 +144,10 @@ export function ProfileWorkspace({ runId, tables, columns, canRefresh }: {
               );
             })}
           </div>
-          {current?.database_name && current.schema_name && (
-            <ProfileDrawer database={current.database_name} schema={current.schema_name} table={current.table_name}
-                           onClose={() => setSelected(null)} onReprofile={canRefresh ? (table) => reprofile(table) : undefined} />
+          {current?.database_name && current.schema_name && current.status === "CACHED" && (
+            <TableProfile key={`${current.table_name}-${current.profiled_at}`} database={current.database_name} schema={current.schema_name}
+                          table={current.table_name} reprofiling={refreshing === current.table_name}
+                          onReprofile={canRefresh ? () => reprofile(current.table_name) : undefined} />
           )}
         </>
       )}

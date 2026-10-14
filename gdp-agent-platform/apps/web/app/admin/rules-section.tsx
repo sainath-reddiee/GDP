@@ -33,8 +33,27 @@ function parseLike(sample: unknown, text: string): unknown {
 
 const label = (k: string) => k.split(".").slice(1).join(" ").replace(/_/g, " ");
 
-/** Platform-wide rules and thresholds, grouped, searchable, with per-value reset and one save. */
-export function RulesSection({ rules }: { rules: RulesState }) {
+/** Platform-wide rules and thresholds per pipeline: the Silver Pipeline's (the base every run starts from) and the
+ *  Gold Pipeline's, which only Gold runs use on top of the Silver values. */
+export function RulesSection({ rules, gold }: { rules: RulesState; gold?: RulesState | null }) {
+  const [pipeline, setPipeline] = useState<"SILVER" | "GOLD">("SILVER");
+  const switcher = (
+    <div className="flex rounded-lg border p-0.5 text-xs" role="group" aria-label="Pipeline">
+      {(["SILVER", "GOLD"] as const).map((p) => (
+        <button key={p} type="button" aria-pressed={pipeline === p} onClick={() => setPipeline(p)} disabled={p === "GOLD" && !gold}
+                className={cn("rounded-md px-2.5 py-1", pipeline === p ? "bg-slate-600 text-white" : "text-muted-foreground")}>
+          {p === "GOLD" ? "Gold Pipeline" : "Silver Pipeline"}</button>
+      ))}
+    </div>
+  );
+  return pipeline === "GOLD" && gold
+    ? <RulesEditor key="GOLD" rules={gold} base={rules.rules} pipeline="GOLD" switcher={switcher} />
+    : <RulesEditor key="SILVER" rules={rules} base={rules.defaults} pipeline="SILVER" switcher={switcher} />;
+}
+
+function RulesEditor({ rules, base, pipeline, switcher }: {
+  rules: RulesState; base: Record<string, unknown>; pipeline: "SILVER" | "GOLD"; switcher: React.ReactNode;
+}) {
   const router = useRouter();
   const toast = useToast();
   const [pending, start] = useTransition();
@@ -46,7 +65,8 @@ export function RulesSection({ rules }: { rules: RulesState }) {
 
   const keys = Object.keys(rules.defaults);
   const dirty = keys.filter((k) => (text[k] ?? "") !== (saved[k] ?? "")).length;
-  const custom = keys.filter((k) => (text[k] ?? "") !== toText(rules.defaults[k]));
+  // Silver: what differs from the defaults; Gold: what differs from the Silver values it starts from
+  const custom = keys.filter((k) => (text[k] ?? "") !== toText(base[k]));
   const match = (k: string) => (!query || k.toLowerCase().includes(query.toLowerCase()))
     && (!onlyChanged || custom.includes(k));
 
@@ -57,7 +77,7 @@ export function RulesSection({ rules }: { rules: RulesState }) {
     } catch {
       toast("error", "A value is not valid JSON."); return;
     }
-    const r = await saveRules(out);
+    const r = await saveRules(out, pipeline);
     if (!r.ok) { toast("error", r.error); return; }
     setSaved(text);
     toast("ok", `Saved. ${r.data.overridden.length} rule(s) differ from the defaults; stages pick them up within a minute.`);
@@ -73,16 +93,19 @@ export function RulesSection({ rules }: { rules: RulesState }) {
   return (
     <div className="space-y-5">
       <div className="flex flex-wrap items-center gap-3">
+        {switcher}
         <div className="relative w-full max-w-sm">
           <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
           <Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search rules" className="pl-8" aria-label="Search rules" />
         </div>
         <label className="flex items-center gap-2 text-xs text-muted-foreground">
           <input type="checkbox" checked={onlyChanged} onChange={(e) => setOnlyChanged(e.target.checked)} />
-          Only values that differ from the default ({custom.length})
+          Only values that differ from {pipeline === "GOLD" ? "the Silver Pipeline" : "the default"} ({custom.length})
         </label>
       </div>
-      <p className="text-xs text-muted-foreground">Platform-wide values; a domain can override them again for its own runs. Lists are comma-separated.</p>
+      <p className="text-xs text-muted-foreground">{pipeline === "GOLD"
+        ? "Gold Pipeline values, used by Gold runs only, on top of the Silver Pipeline's (for example the share of rows a mastered key may leave unresolved). A domain can override them again for its own Gold runs."
+        : "Platform-wide values every run starts from; a domain can override them again for its own runs. Lists are comma-separated."}</p>
       {groups.map(([prefix, title, description, all]) => {
         const shown = all.filter(match);
         if (!shown.length) return null;
@@ -94,7 +117,7 @@ export function RulesSection({ rules }: { rules: RulesState }) {
               {shown.map((k) => {
                 const isDirty = (text[k] ?? "") !== (saved[k] ?? "");
                 const isCustom = custom.includes(k);
-                const def = toText(rules.defaults[k]);
+                const def = toText(base[k]);
                 const isBool = typeof rules.defaults[k] === "boolean";
                 return (
                   <div key={k} className="grid items-center gap-2 py-2.5 sm:grid-cols-[minmax(180px,280px)_1fr_auto]">
@@ -112,7 +135,7 @@ export function RulesSection({ rules }: { rules: RulesState }) {
                              className={cn("h-8 font-mono text-xs", isDirty && "border-primary ring-2 ring-primary/20")} />
                     )}
                     <span className="flex items-center gap-2 text-[11px] text-muted-foreground">
-                      <span className="max-w-[200px] truncate" title={def}>default {def || "none"}</span>
+                      <span className="max-w-[200px] truncate" title={def}>{pipeline === "GOLD" ? "Silver" : "default"} {def || "none"}</span>
                       {isCustom && (
                         <button type="button" title="Back to the default" aria-label={`Reset ${k}`} className="text-primary"
                                 onClick={() => setText((t) => ({ ...t, [k]: def }))}>

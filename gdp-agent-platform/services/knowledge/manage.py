@@ -19,10 +19,21 @@ STATUSES = ("ACTIVE", "RETIRED", "DRAFT")
 MAX_LIMIT = 200
 
 
+LAYERS = ("ANY", "SILVER", "GOLD")
+
+
 def list_query(domain_id: Optional[str], knowledge_type: Optional[str], status: Optional[str], q: Optional[str],
-               offset: int, limit: int) -> Tuple[str, List[Any]]:
-    """WHERE clause and binds (%s style) for the current version of each item."""
+               offset: int, limit: int, layer: Optional[str] = None) -> Tuple[str, List[Any]]:
+    """WHERE clause and binds (%s style) for the current version of each item. layer: the items of one pipeline
+    (SILVER or GOLD: its own plus the shared ANY items), or ANY for the shared ones only."""
     where, params = ["K.IS_CURRENT"], []
+    if layer:
+        layer = str(layer).upper()
+        assert layer in LAYERS, f"layer must be one of {LAYERS}"
+        if layer == "ANY":
+            where.append("COALESCE(K.LAYER, 'ANY') = 'ANY'")
+        else:
+            where.append("COALESCE(K.LAYER, 'ANY') IN ('ANY', %s)"); params.append(layer)
     if domain_id:
         where.append("K.DOMAIN_ID = %s"); params.append(domain_id)
     if knowledge_type:

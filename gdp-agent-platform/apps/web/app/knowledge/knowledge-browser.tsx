@@ -14,7 +14,7 @@ import { useScrollLock } from "@/components/use-scroll-lock";
 
 export const TYPES = ["GLOSSARY", "BUSINESS_RULE", "TRANSFORMATION_RULE", "MAPPING_PATTERN", "MODEL_DEFINITION",
   "NAMING_STANDARD", "DBT_PATTERN", "SODA_PATTERN", "EXCEPTION", "STTM_TEMPLATE", "ONBOARDING_GUIDE", "COLUMN_RULE", "QA_TEST",
-  "INCIDENT_RESOLUTION", "CASE_RESOLUTION"];
+  "INCIDENT_RESOLUTION", "CASE_RESOLUTION", "EXAMPLE"];
 
 type Domain = { domain_id: string; domain_name: string };
 
@@ -77,6 +77,12 @@ export function KnowledgeBrowser({ items, total, domains, offset, limit }: {
           <option value="">All types</option>
           {TYPES.map((t) => <option key={t} value={t}>{prettyType(t)}</option>)}
         </select>
+        <select aria-label="Pipeline" className={select} value={params.get("layer") ?? ""} onChange={(e) => go({ layer: e.target.value || null })}>
+          <option value="">Both pipelines</option>
+          <option value="SILVER">Silver Pipeline</option>
+          <option value="GOLD">Gold Pipeline</option>
+          <option value="ANY">Shared only</option>
+        </select>
         <select aria-label="Status" className={select} value={params.get("status") ?? "ACTIVE"} onChange={(e) => go({ status: e.target.value === "ACTIVE" ? null : e.target.value })}>
           <option value="ACTIVE">In use</option>
           <option value="RETIRED">Retired</option>
@@ -122,6 +128,7 @@ export function KnowledgeBrowser({ items, total, domains, offset, limit }: {
                       <div className="min-w-0">
                         <p className="flex flex-wrap items-center gap-1.5 font-medium">{item.title}<Verified by={item.verified_by} at={item.verified_at} />
                           {item.status !== "ACTIVE" && <StatusPill status={item.status} />}
+                          <LayerChip layer={item.layer} />
                           {!item.editable && <span title={item.read_only_reason ?? ""}><Lock className="h-3 w-3 text-muted-foreground" /></span>}</p>
                         <p className="line-clamp-1 text-xs text-muted-foreground">{prettyType(item.knowledge_type)} · {item.content}</p>
                       </div>
@@ -147,23 +154,36 @@ export function KnowledgeBrowser({ items, total, domains, offset, limit }: {
       {open && <KnowledgeDrawer item={open} onClose={() => setOpen(null)} onChange={setOpen} onEdit={(i) => { setOpen(null); setEditing(i); }} />}
       {editing && (
         <ItemEditor domains={domains} item={editing === "new" ? null : editing}
+                    defaultLayer={(["SILVER", "GOLD"].includes(params.get("layer") ?? "") ? params.get("layer") : "ANY") as "ANY" | "SILVER" | "GOLD"}
+                    defaultDomain={params.get("domain_id") ?? undefined} defaultType={params.get("type") ?? undefined}
                     onClose={() => setEditing(null)} onSaved={() => { setEditing(null); router.refresh(); }} />
       )}
     </div>
   );
 }
 
-export function ItemEditor({ domains, item, onClose, onSaved }: {
+/** Which pipeline's runs use an item; shared items show nothing. */
+function LayerChip({ layer }: { layer?: string | null }) {
+  if (layer !== "SILVER" && layer !== "GOLD") return null;
+  return <span className={cn("rounded px-1.5 py-0.5 text-[10px] font-semibold",
+    layer === "GOLD" ? "bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300" : "bg-slate-200 text-slate-700 dark:bg-slate-800 dark:text-slate-200")}>
+    {layer === "GOLD" ? "Gold" : "Silver"}</span>;
+}
+
+export function ItemEditor({ domains, item, onClose, onSaved, defaultLayer = "ANY", defaultDomain, defaultType }: {
   domains: Domain[]; item: KnowledgeItem | null; onClose: () => void; onSaved: () => void;
+  /** a new item opened from a layer's page (domain Playbook or Knowledge tab) starts on that layer, domain and type */
+  defaultLayer?: "ANY" | "SILVER" | "GOLD"; defaultDomain?: string; defaultType?: string;
 }) {
   useScrollLock();
-  const [domainId, setDomainId] = useState(item?.domain_id ?? domains[0]?.domain_id ?? "");
-  const [type, setType] = useState(item?.knowledge_type ?? "GLOSSARY");
+  const [domainId, setDomainId] = useState(item?.domain_id ?? (domains.some((d) => d.domain_id === defaultDomain) ? defaultDomain! : domains[0]?.domain_id ?? ""));
+  const [type, setType] = useState(item?.knowledge_type ?? (defaultType && TYPES.includes(defaultType) ? defaultType : "GLOSSARY"));
   const [title, setTitle] = useState(item?.title ?? "");
   const [content, setContent] = useState(item?.content ?? "");
   const [note, setNote] = useState("");
+  const [layer, setLayer] = useState<"ANY" | "SILVER" | "GOLD">(item?.layer ?? defaultLayer);
   const [structured, setStructured] = useState(
-    item?.content_json ? JSON.stringify(item.content_json, null, 2) : JSON.stringify(TEMPLATE[item?.knowledge_type ?? "GLOSSARY"] ?? {}, null, 2));
+    item?.content_json ? JSON.stringify(item.content_json, null, 2) : JSON.stringify(TEMPLATE[item?.knowledge_type ?? (defaultType && TYPES.includes(defaultType) ? defaultType : "GLOSSARY")] ?? {}, null, 2));
   const [error, setError] = useState("");
   const [pending, start] = useTransition();
 
@@ -173,7 +193,7 @@ export function ItemEditor({ domains, item, onClose, onSaved }: {
     if (structured.trim() && structured.trim() !== "{}") {
       try { contentJson = JSON.parse(structured); } catch { setError("Structured content is not valid JSON."); return; }
     }
-    const input: ItemInput = { domain_id: domainId, knowledge_type: type, title, content, content_json: contentJson, change_note: note.trim() || null };
+    const input: ItemInput = { domain_id: domainId, knowledge_type: type, title, content, content_json: contentJson, change_note: note.trim() || null, layer };
     const r = item ? await editKnowledge(item.knowledge_id, input) : await addKnowledge(input);
     if (!r.ok) { setError(r.error); return; }
     onSaved();
@@ -195,6 +215,14 @@ export function ItemEditor({ domains, item, onClose, onSaved }: {
           <select value={type} onChange={(e) => { setType(e.target.value); if (!item) setStructured(JSON.stringify(TEMPLATE[e.target.value] ?? {}, null, 2)); }}
                   className="mt-1 h-9 w-full rounded-md border bg-card px-2 text-sm">
             {TYPES.map((t) => <option key={t} value={t}>{prettyType(t)}</option>)}
+          </select>
+        </label>
+        <label className="text-xs font-medium">Used by
+          <select value={layer} onChange={(e) => setLayer(e.target.value as "ANY" | "SILVER" | "GOLD")}
+                  className="mt-1 h-9 w-full rounded-md border bg-card px-2 text-sm">
+            <option value="ANY">Both pipelines (shared, e.g. glossary)</option>
+            <option value="SILVER">Silver Pipeline only (source to Silver rules)</option>
+            <option value="GOLD">Gold Pipeline only (gold model, MDM resolution rules)</option>
           </select>
         </label>
         <label className="text-xs font-medium">Title

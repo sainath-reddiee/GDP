@@ -13,10 +13,13 @@ export type SkillCard = {
   origin: string; production: VersionBrief | null; candidate: VersionBrief | null; versions: number; drafts?: number;
   stages: { stage: string; enabled: boolean }[]; loads_30d: number; runs_30d: number; last_used: string | null;
   daily: number[]; status?: string;
+  /** Domains whose runs load this skill at a stage, added or in place of a standard skill. */
+  domains?: { domain_id: string; domain_name: string; stage: string; mode: "ADD" | "REPLACE"; replaces: string | null }[];
 };
 
 export type SkillsResponse = {
   categories: SkillCategory[]; skills: SkillCard[]; stages?: string[]; upgraded?: boolean;
+  domains?: { domain_id: string; domain_name: string; skills: number }[];
   stats: { skills?: number; in_production?: number; candidates?: number; loads_30d?: number; unused_30d?: number };
 };
 
@@ -28,7 +31,9 @@ export type SkillVersion = VersionBrief & {
 
 export type SkillLabel = { skill_name: string; label: string; skill_id: string; moved_by: string; moved_at: string; note: string | null };
 
-export type SkillBinding = { stage: string; skill_name: string; enabled: boolean; position: number; standard: "ANY" | "GDP" };
+export type SkillBinding = { stage: string; skill_name: string; enabled: boolean; position: number; standard: "ANY" | "GDP";
+  /** which pipeline's runs load it (V055): both, Silver runs only, or Gold runs only */
+  pipeline?: "ANY" | "SILVER" | "GOLD" };
 
 export type SkillDetail = {
   skill_name: string; versions: SkillVersion[]; labels: Record<string, SkillLabel>;

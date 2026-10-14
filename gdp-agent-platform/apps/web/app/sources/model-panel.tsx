@@ -94,7 +94,7 @@ export function ModelPanel({ database, schema, tables, domains, onClose }: {
       ...(mode === "new" ? { proposed_name: proposedName.trim() || null, proposed_schema: proposedSchema.trim() || null } : {}),
     });
     if (!r.ok) { setError(r.error); return; }
-    router.push(r.data.error ? `/runs/${r.data.run_id}/source` : `/runs/${r.data.run_id}/mapping`);
+    router.push(r.data.error ? `/runs/${r.data.run_id}/source` : `/runs/${r.data.run_id}/modeling?tab=mapping`);
   });
 
   const rec = data?.models.recommendation;

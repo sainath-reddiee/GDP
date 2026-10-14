@@ -38,9 +38,11 @@ class Conflict(AssertionError):
     """Someone else changed the draft (or opened one) since the caller read it."""
 
 
-def model_id_for(domain_id: str) -> str:
-    """md5('model:' || DOMAIN_ID) as a UUID: the same rule as the V039 backfill."""
-    h = hashlib.md5(f"model:{domain_id}".encode("utf-8")).hexdigest()
+def model_id_for(domain_id: str, layer: str = "SILVER") -> str:
+    """md5('model:' || DOMAIN_ID) as a UUID for the SILVER model (the same rule as the V039 backfill), and
+    md5('model:gold:' || DOMAIN_ID) for the domain's GOLD model."""
+    key = f"model:{domain_id}" if str(layer).upper() == "SILVER" else f"model:{str(layer).lower()}:{domain_id}"
+    h = hashlib.md5(key.encode("utf-8")).hexdigest()
     return f"{h[:8]}-{h[8:12]}-{h[12:16]}-{h[16:20]}-{h[20:32]}"
 
 
@@ -55,7 +57,7 @@ def _ts(value: Any) -> Optional[str]:
 def _header(session, model_id: str) -> Dict[str, Any]:
     found = rows(session, f"""SELECT MODEL_ID, DOMAIN_ID, DOMAIN_NAME, FORKED_FROM_MODEL_ID, FORKED_FROM_VERSION,
                                      APPROVED_VERSION, OPEN_VERSION, NAMING_STANDARD, DEFAULT_REPO_ID, DIAGRAM_LAYOUT,
-                                     CREATED_BY, CREATED_AT, UPDATED_BY, UPDATED_AT
+                                     CREATED_BY, CREATED_AT, UPDATED_BY, UPDATED_AT, COALESCE(LAYER, 'SILVER') AS LAYER
                                 FROM {MODELS} WHERE MODEL_ID = ?""", [model_id])
     assert found, "model not found"
     h = _low(found[0])
@@ -108,18 +110,19 @@ def _domains(session) -> List[str]:
 # ---------------------------------------------------------------- reads
 
 
-def list_models(session) -> List[Dict[str, Any]]:
-    """Every domain with its model state, including active domains that have no model yet (model_id None)."""
+def list_models(session, layer: str = "SILVER") -> List[Dict[str, Any]]:
+    """Every domain with its model state in a layer (SILVER: the runs' targets; GOLD: facts and dimensions), including
+    active domains that have no model in that layer yet (model_id None)."""
     found = rows(session, f"""SELECT R.DOMAIN_ID, R.DOMAIN_NAME, R.DESCRIPTION, R.ACTIVE_FLAG, M.MODEL_ID,
                                      M.APPROVED_VERSION, M.OPEN_VERSION, M.UPDATED_AT,
                                      O.STATUS AS OPEN_STATUS, O.SUBMITTED_BY, O.AUTHORS AS OPEN_AUTHORS,
                                      A.PR_STATE, A.PR_URL, A.APPROVED_AT, A.APPROVED_BY, A.SPEC AS APPROVED_SPEC
                                 FROM KNOWLEDGE.DOMAIN_REGISTRY R
-                                LEFT JOIN {MODELS} M ON M.DOMAIN_ID = R.DOMAIN_ID
+                                LEFT JOIN {MODELS} M ON M.DOMAIN_ID = R.DOMAIN_ID AND COALESCE(M.LAYER, 'SILVER') = ?
                                 LEFT JOIN {DESIGNS} O ON O.MODEL_ID = M.MODEL_ID AND O.VERSION = M.OPEN_VERSION
                                 LEFT JOIN {DESIGNS} A ON A.MODEL_ID = M.MODEL_ID AND A.VERSION = M.APPROVED_VERSION
                                WHERE R.ACTIVE_FLAG OR M.MODEL_ID IS NOT NULL
-                               ORDER BY R.DOMAIN_NAME""")
+                               ORDER BY R.DOMAIN_NAME""", [str(layer).upper()])
     out = []
     for r in found:
         r = _low(r)
@@ -187,11 +190,11 @@ def _domain(session, domain_id: str) -> Dict[str, Any]:
 
 
 def _registry_spec(session, domain: Dict[str, Any]) -> Dict[str, Any]:
-    tables = [_low(r) for r in rows(session, "SELECT * FROM KNOWLEDGE.TARGET_TABLE_REGISTRY WHERE DOMAIN_ID = ?",
+    tables = [_low(r) for r in rows(session, "SELECT * FROM KNOWLEDGE.TARGET_TABLE_REGISTRY WHERE DOMAIN_ID = ? AND COALESCE(LAYER, 'SILVER') = 'SILVER'",
                                     [domain["domain_id"]])]
     columns = [_low(r) for r in rows(session, """SELECT C.* FROM KNOWLEDGE.TARGET_COLUMN_REGISTRY C
                                                    JOIN KNOWLEDGE.TARGET_TABLE_REGISTRY T ON T.TARGET_TABLE_ID = C.TARGET_TABLE_ID
-                                                  WHERE T.DOMAIN_ID = ?""", [domain["domain_id"]])]
+                                                  WHERE T.DOMAIN_ID = ? AND COALESCE(T.LAYER, 'SILVER') = 'SILVER'""", [domain["domain_id"]])]
     return spec_v2.spec_from_registry(domain, tables, columns)
 
 
@@ -200,16 +203,22 @@ def create_model(session, domain_id: str, payload_json: str, user: str) -> Dict[
     (or the given specification), to review and approve like any change."""
     payload = json.loads(payload_json or "{}")
     domain = _domain(session, domain_id)
-    model_id = model_id_for(domain_id)
-    assert not scalar(session, f"SELECT COUNT(*) FROM {MODELS} WHERE DOMAIN_ID = ?", [domain_id]), \
-        f"{domain['domain_name']} already has a model; open a draft on it instead"
+    layer = str(payload.get("layer") or "SILVER").upper()
+    assert layer in spec_v2.LAYERS, f"layer must be one of {', '.join(spec_v2.LAYERS)}"
+    model_id = model_id_for(domain_id, layer)
+    assert not scalar(session, f"SELECT COUNT(*) FROM {MODELS} WHERE DOMAIN_ID = ? AND COALESCE(LAYER, 'SILVER') = ?",
+                      [domain_id, layer]), \
+        f"{domain['domain_name']} already has a {layer.lower()} model; open a draft on it instead"
+    assert layer == "SILVER" or payload.get("spec"), "a gold model starts from a specification (a gold build proposes one)"
     spec = (spec_v2.normalize_v2(payload["spec"], model_id) if payload.get("spec")
             else _registry_spec(session, domain))
     spec["domain"] = str(domain["domain_name"]).upper()
+    spec["layer"] = layer
     standard = payload.get("naming_standard") or spec.get("naming_standard") or {"preset": "NONE"}
     spec["naming_standard"] = standard
-    insert_rows(session, MODELS, ["MODEL_ID", "DOMAIN_ID", "DOMAIN_NAME", "NAMING_STANDARD", "CREATED_BY"],
-                ["?", "?", "?", "PARSE_JSON(?)", "?"], [[model_id, domain_id, domain["domain_name"], standard, user.upper()]])
+    insert_rows(session, MODELS, ["MODEL_ID", "DOMAIN_ID", "DOMAIN_NAME", "NAMING_STANDARD", "CREATED_BY", "LAYER"],
+                ["?", "?", "?", "PARSE_JSON(?)", "?", "?"],
+                [[model_id, domain_id, domain["domain_name"], standard, user.upper(), layer]])
     etag = _insert_version(session, model_id, 1, domain, spec, "DRAFT", payload.get("origin") or "WORKBENCH", None, user,
                            payload.get("change_note") or "Model created")
     _claim_open(session, model_id, 1)
@@ -489,7 +498,7 @@ def _remember_standard(session, header: Dict[str, Any], std: Dict[str, Any]) -> 
 def baseline(session, domain_id: str, user: str = "SYSTEM_BACKFILL") -> Optional[Dict[str, Any]]:
     """An APPROVED version 1 that is exactly what the domain's registry holds today, so the first change is reviewed
     against the real current model. Skipped when the domain already has a model or registers no tables."""
-    if scalar(session, f"SELECT COUNT(*) FROM {MODELS} WHERE DOMAIN_ID = ?", [domain_id]):
+    if scalar(session, f"SELECT COUNT(*) FROM {MODELS} WHERE DOMAIN_ID = ? AND COALESCE(LAYER, 'SILVER') = 'SILVER'", [domain_id]):
         return None
     domain = _domain(session, domain_id)
     spec = _registry_spec(session, domain)
@@ -504,7 +513,7 @@ def baseline(session, domain_id: str, user: str = "SYSTEM_BACKFILL") -> Optional
                     "Baseline: the domain's registered targets when the Model Workbench was introduced")
     session.sql(f"""UPDATE {DESIGNS} SET APPROVED_BY = ?, APPROVED_AT = CURRENT_TIMESTAMP(), REGISTRY_SYNCED_AT = CURRENT_TIMESTAMP()
                      WHERE MODEL_ID = ? AND VERSION = 1""", params=[user, model_id]).collect()
-    session.sql("UPDATE KNOWLEDGE.TARGET_TABLE_REGISTRY SET MODEL_ID = ?, MODEL_VERSION = 1 WHERE DOMAIN_ID = ?",
+    session.sql("UPDATE KNOWLEDGE.TARGET_TABLE_REGISTRY SET MODEL_ID = ?, MODEL_VERSION = 1 WHERE DOMAIN_ID = ? AND COALESCE(LAYER, 'SILVER') = 'SILVER'",
                 params=[model_id, domain_id]).collect()
     return {"model_id": model_id, "domain": domain["domain_name"], **spec_v2.summary(spec)}
 
@@ -514,8 +523,8 @@ def backfill(session, user: str = "SYSTEM_BACKFILL") -> List[str]:
     try:
         found = rows(session, f"""SELECT DISTINCT T.DOMAIN_ID FROM KNOWLEDGE.TARGET_TABLE_REGISTRY T
                                    JOIN KNOWLEDGE.DOMAIN_REGISTRY R ON R.DOMAIN_ID = T.DOMAIN_ID
-                                   LEFT JOIN {MODELS} M ON M.DOMAIN_ID = T.DOMAIN_ID
-                                  WHERE M.MODEL_ID IS NULL""")
+                                   LEFT JOIN {MODELS} M ON M.DOMAIN_ID = T.DOMAIN_ID AND COALESCE(M.LAYER, 'SILVER') = 'SILVER'
+                                  WHERE M.MODEL_ID IS NULL AND COALESCE(T.LAYER, 'SILVER') = 'SILVER'""")
     except Exception as exc:
         return [f"domain models: skipped ({str(exc)[:120]})"]
     log = []

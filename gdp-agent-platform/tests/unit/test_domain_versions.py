@@ -30,7 +30,7 @@ def test_diff_has_one_section_per_area_and_marks_changes():
     files = {f["path"]: f for f in dv.diff(a, b)}
     assert set(files) == set(dv.SECTIONS.values())
     assert files["Description and owner"]["status"] == "changed"
-    assert files["Rules"]["status"] == "same"
+    assert files["Rules (Silver)"]["status"] == "same" and files["Rules (Gold)"]["status"] == "same"
 
 
 def test_rollback_restores_rules_but_keeps_deletion_and_origin():
@@ -40,6 +40,20 @@ def test_rollback_restores_rules_but_keeps_deletion_and_origin():
     assert out["rules"] == {"x": 1} and out["contract"] == "old.md"
     assert "signals" not in out and "standard" not in out
     assert out["origin"] == "imported"
+    # the MDM contract comes from the pack: a version from before it existed does not remove it
+    assert dv.rollback_config({**current, "mdm": {"role": "MASTERED"}}, old)["mdm"] == {"role": "MASTERED"}
+
+
+def test_layer_changes_are_versioned():
+    a = _snap()
+    b = _snap()
+    b["config"] = {**(b.get("config") or {}), "rules_gold": {"quality.gold_unresolved_key_max_pct": 2.0},
+                   "conventions_gold": {"branch_prefix": "feat/gold-x-"}}
+    b["skills"] = ["DBT:MY-GOLD-SKILL:ADD::GOLD"]
+    s = dv.summary(a, b)
+    assert "Gold rule quality.gold_unresolved_key_max_pct: default -> 2.0" in s
+    assert "Gold convention branch_prefix: default -> feat/gold-x-" in s
+    assert "Skill added: MY-GOLD-SKILL at DBT (gold)" in s
 
 
 class FakeDb:

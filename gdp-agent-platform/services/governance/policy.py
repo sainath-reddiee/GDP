@@ -151,6 +151,23 @@ RULES: List[Tuple[str, str, Any, str]] = [
     ("POST", r"/api/config/models/test", "ADMIN.VIEW", ""),
     ("POST", r"/api/costs/reconcile", "CONFIG.EDIT", "Reconcile AI cost"),
     ("POST", r"/api/(domains|domains/draft|domains/import)", "DOMAIN.EDIT", "Create or import a domain"),
+    ("PUT", r"/api/domains/[^/]+/skills", "SKILL.RELEASE", "Change the skills a domain's runs load"),
+    ("PUT", r"/api/domains/[^/]+/mdm", "DOMAIN.EDIT", "Change which mastered domains a domain consumes"),
+    ("PUT", r"/api/domains/[^/]+/conventions", "DOMAIN.EDIT", "Change how a domain's code is built in a layer"),
+    ("POST", r"/api/domains/[^/]+/references(/schema)?", "KNOWLEDGE.EDIT", "Give the platform a reference input for a domain"),
+    ("POST", r"/api/domains/[^/]+/references/[^/]+/(kind|withdraw)", "KNOWLEDGE.EDIT", "Correct or withdraw a reference input"),
+    ("POST", r"/api/domains/[^/]+/references/rescore", "KNOWLEDGE.EDIT", "Measure the platform's output against the references"),
+    ("POST", r"/api/domains/[^/]+/references/[^/]+/use-as-mdm", "DOMAIN.EDIT", "Make a derived contract the domain's MDM (Reltio) contract"),
+    ("POST", r"/api/domains/[^/]+/references/[^/]+/use-as-model", "MODEL.EDIT", "Start a domain model draft from a reference model"),
+    ("POST", r"/api/gold/runs", "RUN.CREATE", "Start a Gold run on silver tables"),
+    ("POST", rf"{R}/gold/propose", "MODEL.EDIT", "Propose a Gold run's gold model to the Model Workbench"),
+    ("POST", rf"{R}/gold/target", "MODEL.EDIT", "Use a table of the approved gold model as a Gold run's target"),
+    ("POST", rf"{R}/gold/star-schema", "RUN.CREATE", "Build a Gold run's star schema: a table run per fact and bridge"),
+    ("POST", rf"{R}/gold/publish", "DBT.EDIT", "Publish a Gold run's star schema as one pull request"),
+    ("POST", rf"{R}/autopilot", "RUN.OPERATE", "Run a run's automatic steps to its next review"),
+    ("POST", r"/api/domains/[^/]+/documents/(confluence|upload|[^/]+/refresh|[^/]+/remove)", "KNOWLEDGE.EDIT",
+     "Link, upload or refresh a domain document"),
+    ("POST", r"/api/domains/[^/]+/examples/[^/]+", "KNOWLEDGE.EDIT", "Upload correct-output examples of a table"),
     ("DELETE", r"/api/domains/[^/]+", "DOMAIN.EDIT", "Delete a domain"),
     ("POST", r"/api/domains/[^/]+/restore", "DOMAIN.EDIT", "Restore a domain"),
     ("PUT", r"/api/domains/[^/]+/rules", "DOMAIN.EDIT", "Change domain rules"),
@@ -163,6 +180,9 @@ RULES: List[Tuple[str, str, Any, str]] = [
     ("PUT", r"/api/knowledge/[^/]+", "KNOWLEDGE.EDIT", "Edit knowledge"),
     ("POST", r"/api/knowledge/[^/]+/(retire|restore)", "KNOWLEDGE.EDIT", "Retire or restore knowledge"),
     ("POST", r"/api/knowledge/inbox/decide", "KNOWLEDGE.EDIT", "Approve or reject learned knowledge"),
+    ("POST", r"/api/domains/[^/]+/learning/learn", "KNOWLEDGE.EDIT", "Learn rules from a domain's reviewer decisions"),
+    ("POST", r"/api/knowledge/[^/]+/replay", "KNOWLEDGE.EDIT", "Replay a knowledge change on past runs"),
+    ("POST", r"/api/questions/[^/]+/(answer|dismiss)", "KNOWLEDGE.EDIT", "Answer a question the engine asked"),
     ("POST", r"/api/knowledge/outcomes/refresh", "KNOWLEDGE.EDIT", ""),
     ("POST", r"/api/knowledge/[^/]+/rollback", "KNOWLEDGE.EDIT", "Roll knowledge back to an earlier version"),
     ("POST", r"/api/knowledge/[^/]+/verify", "KNOWLEDGE.EDIT", ""),
@@ -314,7 +334,7 @@ RULES: List[Tuple[str, str, Any, str]] = [
     ("POST", r"/api/hub/domain-models/[^/]+/versions/\d+/comments", "MODEL.EDIT", ""),
     ("POST", r"/api/hub/domain-models/[^/]+/comments/[^/]+/resolve", "MODEL.EDIT", ""),
     ("PUT", r"/api/hub/domain-models/[^/]+/(layout|standard)", "MODEL.EDIT", ""),
-    ("POST", r"/api/hub/domain-models/[^/]+/import", "MODEL.EDIT", ""),
+    ("POST", r"/api/hub/domain-models/[^/]+/import(-file)?", "MODEL.EDIT", ""),
     ("POST", r"/api/hub/domain-models/[^/]+/versions/\d+/publish", "MODEL.EDIT", "Open a pull request for an approved domain model"),
     ("POST", r"/api/hub/domain-models/[^/]+/pr-sync", None, ""),
     ("POST", r"/api/hub/domain-models/[^/]+/changes/[^/]+/(merge|reject)", "MODEL.EDIT", "Decide a run's model proposal"),
@@ -425,6 +445,16 @@ NO_QUEUE_ROUTES = [(m, re.compile(p)) for m, p in [
     ("POST", r"^/api/hub/profiles/annotations(/.*)?$"),
     ("POST", r"^/api/hub/sttm/[^/]+/publish$"),
     ("POST", r"^/api/copilot/sessions(/.*)?$"),
+    # what a document proposes is reviewed in the knowledge inbox; uploads cannot be queued anyway
+    ("POST", r"^/api/domains/[^/]+/documents/.+$"),
+    ("POST", r"^/api/domains/[^/]+/examples/[^/]+$"),
+    # a reference input is read, not applied: what it proposes goes through the inbox, the Workbench or a run's gates
+    ("POST", r"^/api/domains/[^/]+/references(?!/[^/]+/use-as-mdm$)(/.*)?$"),   # the MDM contract is governed
+    # learning proposes to the inbox and a replay only measures; an answer is the owner's own knowledge
+    ("POST", r"^/api/domains/[^/]+/learning/learn$"), ("POST", r"^/api/knowledge/[^/]+/replay$"),
+    ("POST", r"^/api/questions/[^/]+/(answer|dismiss)$"),
+    # a Gold run's gold model proposal is a draft, reviewed and approved in the Model Workbench (four eyes)
+    ("POST", r"^/api/runs/[^/]+/gold/propose$"),
 ]]
 
 

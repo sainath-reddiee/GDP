@@ -3,16 +3,19 @@
 import { useEffect, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
+import { labelFor, type Pipeline } from "@/lib/stages";
 import { cn } from "@/lib/utils";
 
-const STAGES = [["SOURCE", "Source"], ["PROFILING", "Profiling"], ["DOMAIN", "Domain"], ["MAPPING", "Mapping"],
-  ["STTM", "STTM"], ["SODA", "Data quality"], ["DBT", "dbt"], ["VALIDATION", "Validation"], ["REVIEW", "Code review"]];
+const STAGE_IDS = ["SOURCE", "PROFILING", "DOMAIN", "MAPPING", "STTM", "SODA", "DBT", "VALIDATION", "REVIEW"];
+const STEP: Record<string, string> = { DOMAIN: "Domain", MAPPING: "Modeling: field mapping", STTM: "Modeling: transformations" };
 const SORTS = [["newest", "Newest first"], ["updated", "Recently updated"], ["oldest", "Oldest first"], ["name", "Name"]];
 
 /** Search, filters, sorting and paging for the run list; everything lives in the URL so views can be shared. */
-export function RunsToolbar({ domains, tags = [], total, offset, limit }: {
+export function RunsToolbar({ domains, tags = [], total, offset, limit, pipeline = "SILVER" }: {
   domains: { domain_id: string; domain_name: string }[]; tags?: string[]; total: number; offset: number; limit: number;
+  pipeline?: Pipeline;
 }) {
+  const STAGES = STAGE_IDS.map((id) => [id, STEP[id] ?? labelFor(id, pipeline)]);
   const router = useRouter();
   const path = usePathname();
   const params = useSearchParams();

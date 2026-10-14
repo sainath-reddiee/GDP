@@ -29,8 +29,15 @@ test("onboard a source: register, validate access, land, with later stages locke
   await expect(page.getByRole("heading", { name: "SOURCE — CREATED" })).toBeVisible();
   await expect(page.getByRole("button", { name: "SOURCE_REGISTERED" })).toHaveCount(0);
 
+  // Modeling: the old mapping and STTM addresses open the two steps of one screen
   await page.goto(`${runUrl}/mapping`);
+  await expect(page).toHaveURL(new RegExp(`${runUrl}/modeling\\?tab=mapping$`));
+  await expect(page.getByRole("tab", { name: /1\. Field mapping/ })).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("tab", { name: /2\. Transformations and joins/ })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Stage locked" })).toBeVisible();
+  await page.goto(`${runUrl}/sttm`);
+  await expect(page).toHaveURL(new RegExp(`${runUrl}/modeling\\?tab=transformations$`));
+  await expect(page.getByRole("link", { name: /Modeling/ }).first()).toBeVisible();
 
   await page.goto(runUrl);
   await page.getByRole("link", { name: /Register the source/ }).click();
@@ -163,5 +170,45 @@ test("runs page: filters and bulk archive, restore, delete", async ({ page }) =>
 
   await page.getByRole("link", { name: "Active", exact: true }).click();
   await expect(page).toHaveURL(/status=active/);
+  expect(errors).toEqual([]);
+});
+
+test("pipelines and lineage: both pipelines list runs, and the lineage explorer renders without errors", async ({ page }) => {
+  const errors = watchHydration(page);
+  await signIn(page);
+  await page.goto("/runs");
+  await expect(page.getByRole("link", { name: /New Silver run/ })).toHaveAttribute("href", "/dashboard/onboarding");
+  await expect(page.getByRole("heading", { name: "Silver Pipeline" })).toBeVisible();
+  await expect(page.getByRole("list", { name: "Silver Pipeline steps" })).toContainText("Source Ingestion");
+  await page.goto("/gold");
+  await expect(page.getByRole("heading", { name: "Gold Pipeline" })).toBeVisible();
+  await expect(page.getByRole("list", { name: "Gold Pipeline steps" })).toContainText("Silver Selection");
+  await expect(page.getByRole("list", { name: "Gold Pipeline steps" })).toContainText("Gold code");
+  await page.getByTestId("new-gold-run").click();
+  await expect(page.getByRole("dialog")).toContainText("New Gold run");
+  await page.keyboard.press("Escape");
+  await page.goto("/lineage");
+  await expect(page.getByRole("heading", { name: "Lineage" })).toBeVisible();
+  await expect(page.getByLabel("Find a table")).toBeVisible();
+  await expect(page.getByRole("group", { name: "Direction" })).toBeVisible();
+  await page.goto("/lineage?object=NO_SUCH_DB.NO_SCHEMA.NO_TABLE");
+  await expect(page.getByText(/No lineage found for/)).toBeVisible({ timeout: 30_000 });
+  expect(errors).toEqual([]);
+});
+
+test("domain layers: the layer switch drives every tab and the playbook is per layer", async ({ page }) => {
+  const errors = watchHydration(page);
+  await signIn(page);
+  await page.goto("/domains");
+  await page.locator('a[href^="/domains/"]').first().click();
+  const layers = page.getByRole("group", { name: "Layer" });
+  await expect(layers).toContainText("Silver");
+  await expect(layers).toContainText("Gold");
+  await layers.getByRole("button", { name: /Gold/ }).click();
+  await expect(page).toHaveURL(/layer=GOLD/);
+  await page.getByRole("button", { name: "Playbook" }).click();
+  await expect(page.getByTestId("playbook")).toContainText("Gold runs model and code", { timeout: 30_000 });
+  await page.getByRole("button", { name: "Models" }).click();
+  await expect(page).toHaveURL(/layer=GOLD/);
   expect(errors).toEqual([]);
 });

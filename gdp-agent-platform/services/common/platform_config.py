@@ -10,7 +10,7 @@ from __future__ import annotations
 import re
 from typing import Any, Dict, List, Tuple
 
-from services.common.standard import PRESETS
+from services.common.standard import GOLD, PIPELINE_PRESETS, PRESETS
 
 KNOWN_MODELS = [
     "claude-sonnet-4-5", "claude-4-sonnet", "claude-3-7-sonnet", "claude-4-opus", "openai-gpt-4.1",
@@ -20,7 +20,8 @@ MODEL_NAME = re.compile(r"^[a-z0-9][a-z0-9.\-]{1,62}$")
 CATALOG_KEYS = ("hidden_target_tables", "hidden_target_databases", "hidden_target_schemas", "hidden_target_ids",
                 "hidden_domain_names", "strip_tokens")
 SETTINGS = ("LLM_MODEL", "LLM_MODEL_BY_STAGE", "RATE_CARD", "CREDIT_PRICE_USD", "CREDITS_PER_MILLION_TOKENS",
-            "CATALOG_DISPLAY", "MODELING_STANDARD.GDP", "MODELING_STANDARD.GENERIC")
+            "CATALOG_DISPLAY", "MODELING_STANDARD.GDP", "MODELING_STANDARD.GENERIC",
+            "MODELING_STANDARD.GDP.GOLD", "MODELING_STANDARD.GENERIC.GOLD")
 # What the Admin page lists; CATALOG_DISPLAY is still read by the app but no longer edited there.
 ADMIN_SETTINGS = tuple(k for k in SETTINGS if k != "CATALOG_DISPLAY")
 DEFAULTS: Dict[str, Any] = {
@@ -33,7 +34,19 @@ DEFAULTS: Dict[str, Any] = {
                         "hidden_target_ids": [], "hidden_domain_names": ["GDP"], "strip_tokens": ["GDP"]},
     "MODELING_STANDARD.GDP": {},
     "MODELING_STANDARD.GENERIC": {},
+    "MODELING_STANDARD.GDP.GOLD": {},
+    "MODELING_STANDARD.GENERIC.GOLD": {},
 }
+
+
+def preset_for(key: str) -> dict:
+    """The conventions a MODELING_STANDARD.<STD>[.GOLD] setting overrides: the standard's, with the Gold Pipeline's
+    gold overlay for a .GOLD key."""
+    parts = key.split(".")
+    preset = dict(PRESETS[parts[1]])
+    if len(parts) > 2 and parts[2] == GOLD:
+        preset.update(PIPELINE_PRESETS.get(parts[1], {}).get(GOLD, {}))
+    return preset
 
 
 def validate(key: str, value: Any) -> Tuple[Any, List[str]]:
@@ -123,7 +136,7 @@ def validate(key: str, value: Any) -> Tuple[Any, List[str]]:
                 return None, [f"{k} must be a list"]
             out[k] = [str(v).strip() for v in items if str(v).strip()]
         return out, [f"unknown list {u}" for u in unknown]
-    preset = PRESETS[key.split(".", 1)[1]]
+    preset = preset_for(key)
     if not isinstance(value, dict):
         return None, ["overrides must be an object"]
     problems = [f"unknown convention {k}" for k in value if k not in preset]

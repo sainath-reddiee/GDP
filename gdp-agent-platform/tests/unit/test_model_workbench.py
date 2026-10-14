@@ -568,7 +568,7 @@ def test_api_maps_conflicts_and_missing_tables(api):
     r = c.put("/api/hub/domain-models/m1/draft", json={"spec": {}, "etag": "x"})
     assert r.status_code == 409 and "saved by ANA" in r.json()["detail"]
 
-    def gone(session):
+    def gone(session, layer="SILVER"):
         raise RuntimeError("Object 'GOVERNANCE.DOMAIN_MODEL' does not exist or not authorized")
 
     mp.setattr(dm, "list_models", gone)

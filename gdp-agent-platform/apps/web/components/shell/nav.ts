@@ -1,5 +1,5 @@
 import {
-  Activity, BadgeCheck, Bot, BarChart3, BookOpen, Boxes, ClipboardCheck, Database, FileClock, FlaskConical, FolderGit2, GitCompareArrows, GitPullRequest,
+  Activity, Crown, BadgeCheck, Bot, BarChart3, BookOpen, Boxes, ClipboardCheck, Database, FileClock, FlaskConical, FolderGit2, GitCompareArrows, GitPullRequest,
   LayoutDashboard, ListChecks, Network, Rocket, Settings, ShieldCheck, Siren, Sparkles, SquareTerminal, Store, Ticket,
 } from "lucide-react";
 import type { NavCounts } from "@/app/bff/nav/route";
@@ -89,10 +89,15 @@ export const NAV_GROUPS: NavGroup[] = [
     label: "Build",
     links: [
       {
-        href: "/runs", label: "Runs", icon: ListChecks,
+        href: "/runs", label: "Pipelines", icon: ListChecks,
         badge: (c) => c.review ? { value: c.review, tone: "bg-rose-500 text-white", title: `${c.review} waiting on review` }
           : c.running ? { value: c.running, tone: "bg-white/10 text-white/70", title: `${c.running} running` } : null,
+        children: [
+          { href: "/runs", label: "Silver Pipeline", icon: ListChecks },
+          { href: "/gold", label: "Gold Pipeline", icon: Crown },
+        ],
       },
+      { href: "/lineage", label: "Lineage", icon: Network },
       { href: "/code", label: "Code", icon: FolderGit2, privilege: "CODE.VIEW" },
     ],
   },

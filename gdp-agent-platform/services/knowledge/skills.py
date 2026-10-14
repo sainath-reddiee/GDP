@@ -158,14 +158,47 @@ def pick(versions: List[Dict[str, Any]], override_id: Optional[str], production_
     return max(active, key=lambda v: (int(v.get("revision") or 0), version_key(v.get("version")))) if active else None
 
 
-def bound(bindings: Iterable[Dict[str, Any]], stage: str, standard: str, fallback: List[str]) -> List[str]:
-    """Skill names a stage loads, in order: enabled bindings for the stage, GDP-only ones only for GDP runs."""
+def in_pipeline(value: Any, pipeline: str) -> bool:
+    """A binding, domain skill or knowledge item scoped ANY (or not scoped) applies to both pipelines; SILVER or GOLD
+    only to runs of that pipeline (V055)."""
+    return str(value or "ANY").upper() in ("ANY", str(pipeline or "SILVER").upper())
+
+
+def bound(bindings: Iterable[Dict[str, Any]], stage: str, standard: str, fallback: List[str],
+          pipeline: str = "SILVER") -> List[str]:
+    """Skill names a stage loads, in order: enabled bindings for the stage, GDP-only ones only for GDP runs, and only
+    the ones scoped to the run's pipeline (Silver or Gold)."""
     rows = [b for b in bindings if str(b.get("stage") or "").upper() == stage.upper()]
     if not rows:
         return list(fallback)
     rows.sort(key=lambda b: (int(b.get("position") or 100), str(b.get("skill_name"))))
     return [str(b["skill_name"]) for b in rows
-            if b.get("enabled") is not False and (str(b.get("standard") or "ANY").upper() != "GDP" or standard == "GDP")]
+            if b.get("enabled") is not False and (str(b.get("standard") or "ANY").upper() != "GDP" or standard == "GDP")
+            and in_pipeline(b.get("pipeline"), pipeline)]
+
+
+def with_domain(base: List[str], domain_rows: Iterable[Dict[str, Any]], stage: str, pipeline: str = "SILVER") -> List[str]:
+    """A stage's skills with its domain's own on top (pure): a REPLACE row stands in for the skill it names, in that
+    skill's place (appended when the stage does not load it); ADD rows follow, by position. No name appears twice."""
+    rows = sorted([r for r in domain_rows if str(r.get("stage") or "").upper() == stage.upper() and r.get("enabled") is not False
+                   and in_pipeline(r.get("pipeline"), pipeline)],
+                  key=lambda r: (int(r.get("position") or 100), str(r.get("skill_name"))))
+    out = list(base)
+    upper = lambda n: str(n or "").upper()   # noqa: E731
+    for r in rows:
+        name = str(r.get("skill_name"))
+        if str(r.get("mode") or "ADD").upper() == "REPLACE" and r.get("replaces"):
+            at = next((i for i, n in enumerate(out) if upper(n) == upper(r["replaces"])), None)
+            if at is not None:
+                out[at] = name
+                continue
+        out.append(name)
+    seen, unique = set(), []
+    for n in out:
+        if upper(n) not in seen:
+            seen.add(upper(n))
+            unique.append(n)
+    return unique
 
 
 # ---------------------------------------------------------------- Snowpark side (procedures)
@@ -202,15 +235,72 @@ def resolve(session, name: str, run_id: Optional[str] = None) -> Optional[Dict[s
     return found[0] if found else None
 
 
-def stage_skills(session, stage: str, standard: str = "GDP") -> List[str]:
-    """Bound skills for a stage (falls back to the built-in map before any binding exists)."""
+def domain_skill_rows(session, domain_id: Optional[str]) -> List[Dict[str, Any]]:
+    """The skills attached to a domain (V051); none before it is deployed or without a domain."""
     from services.common.sql import rows
-    from services.knowledge.usage import GDP_ONLY_SKILLS, STAGE_SKILLS
 
-    fallback = [n for n in STAGE_SKILLS.get(stage, []) if standard == "GDP" or n not in GDP_ONLY_SKILLS]
+    if not domain_id:
+        return []
     try:
-        bindings = rows(session, "SELECT STAGE, SKILL_NAME, ENABLED, POSITION, STANDARD FROM KNOWLEDGE.SKILL_STAGE_BINDING "
-                                 "WHERE STAGE = ?", [stage.upper()])
+        found = rows(session, "SELECT STAGE, SKILL_NAME, MODE, REPLACES, POSITION, ENABLED, PIPELINE FROM KNOWLEDGE.DOMAIN_SKILL "
+                              "WHERE DOMAIN_ID = ?", [domain_id])
     except Exception:
-        return fallback
-    return bound([{k.lower(): v for k, v in b.items()} for b in bindings], stage, standard, fallback)
+        try:   # before V055
+            found = rows(session, "SELECT STAGE, SKILL_NAME, MODE, REPLACES, POSITION, ENABLED FROM KNOWLEDGE.DOMAIN_SKILL "
+                                  "WHERE DOMAIN_ID = ?", [domain_id])
+        except Exception:
+            return []
+    return [{k.lower(): v for k, v in r.items()} for r in found]
+
+
+MDM_SKILL = "GDP-POST-MDM-DATA-MODEL"
+MDM_STAGES = ("MAPPING", "STTM", "DBT")
+
+
+def mdm_rows(role: Optional[str], standard: str = "GDP", pipeline: str = "SILVER") -> List[Dict[str, Any]]:
+    """Domain skill rows a domain gets from its MDM contract (pure). A GDP domain that Reltio masters, or that consumes
+    a mastered domain, loads the post-MDM skill: in the Silver Pipeline when mapping (the pre-MDM key lookups), in the
+    Gold Pipeline when mapping, writing the STTM and generating code (the resolution through the cross-reference)."""
+    if str(role or "").upper() not in ("MASTERED", "CONSUMER") or str(standard or "").upper() != "GDP":
+        return []
+    gold = str(pipeline or "").upper() == "GOLD"
+    return [{"stage": s, "skill_name": MDM_SKILL, "mode": "ADD", "replaces": None, "position": 900, "enabled": True,
+             "origin": "MDM", "pipeline": "GOLD" if gold else "SILVER"} for s in (MDM_STAGES if gold else ("MAPPING",))]
+
+
+def domain_mdm_role(session, domain_id: Optional[str]) -> Optional[str]:
+    """MASTERED, CONSUMER or None, from the domain's MDM contract (CONFIG.mdm)."""
+    from services.common.sql import scalar
+
+    if not domain_id:
+        return None
+    try:
+        return scalar(session, "SELECT CONFIG:mdm:role::STRING FROM KNOWLEDGE.DOMAIN_REGISTRY WHERE DOMAIN_ID = ?", [domain_id])
+    except Exception:
+        return None
+
+
+def stage_skills(session, stage: str, standard: str = "GDP", domain_id: Optional[str] = None,
+                 pipeline: str = "SILVER") -> List[str]:
+    """Bound skills for a stage and pipeline (falls back to the built-in map before any binding exists), with the
+    domain's own skills applied when the run has a domain, and the post-MDM skill when the domain has an MDM contract."""
+    rows_ = domain_skill_rows(session, domain_id) + mdm_rows(domain_mdm_role(session, domain_id), standard, pipeline)
+    return with_domain(_stage_bound(session, stage, standard, pipeline), rows_, stage, pipeline)
+
+
+def _stage_bound(session, stage: str, standard: str = "GDP", pipeline: str = "SILVER") -> List[str]:
+    from services.common.sql import rows
+    from services.knowledge.usage import pipeline_of_skill, stage_skills as built_in
+
+    fallback = built_in(stage, standard, pipeline)
+    try:
+        bindings = rows(session, "SELECT STAGE, SKILL_NAME, ENABLED, POSITION, STANDARD, PIPELINE "
+                                 "FROM KNOWLEDGE.SKILL_STAGE_BINDING WHERE STAGE = ?", [stage.upper()])
+    except Exception:
+        try:   # before V055: no pipeline column, so the built-in pipeline split applies
+            bindings = rows(session, "SELECT STAGE, SKILL_NAME, ENABLED, POSITION, STANDARD FROM KNOWLEDGE.SKILL_STAGE_BINDING "
+                                     "WHERE STAGE = ?", [stage.upper()])
+            bindings = [{**b, "PIPELINE": pipeline_of_skill(b["SKILL_NAME"])} for b in bindings]
+        except Exception:
+            return fallback
+    return bound([{k.lower(): v for k, v in b.items()} for b in bindings], stage, standard, fallback, pipeline)

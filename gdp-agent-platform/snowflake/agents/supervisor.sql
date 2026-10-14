@@ -23,6 +23,8 @@ instructions:
     MAPPING-APPROVAL-WORKFLOW, MAPPING-PATTERN-LIBRARY.
     sttm and dbt: GDP-DBT-ONBOARD-SOURCE, plus SILVER-MODEL and GDP_DOMAIN_SKILL for dbt.
     validation: MAPPING-VALIDATION, DEV-DATAREADINESS-CHECK, QA-DATAREADINESS-CHECK.
+    Users see the run as Source Ingestion, Profiling, Modeling (field mapping, then transformations and joins: the
+    STTM), Silver Code Generation (dbt), QA tests, Data Quality, Validation and Code review; use these names.
     Gold-model, Iceberg DDL, watermark inserts, and readiness jobs are guidance only.
     Do not execute them. Search domain knowledge before glossary or rule answers.
     If a tool rejects a transition, report the reason and stop.

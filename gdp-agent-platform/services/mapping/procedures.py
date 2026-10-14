@@ -19,7 +19,7 @@ from services.common.stage import Stage
 from services.knowledge import search as ks
 from services.knowledge.procedures import current_knowledge_version, identify_domain
 from services.knowledge.validate import normalize_content
-from services.common.standard import run_standard
+from services.common.standard import run_pipeline, run_standard
 from services.knowledge.usage import assert_safe_transformation, domain_context, use_stage
 from services.knowledge.writer import forget, record_usage, remember
 from services.mapping import features, scoring
@@ -56,7 +56,8 @@ def target_table(session, run: Dict[str, Any]) -> Dict[str, Any]:
                                       f"so the target {model} can be found.")
         found = rows(session, """SELECT * FROM KNOWLEDGE.TARGET_TABLE_REGISTRY
                                  WHERE ACTIVE_FLAG AND DOMAIN_ID = ? AND UPPER(TARGET_TABLE) = UPPER(?)
-                                 ORDER BY CREATED_AT LIMIT 1""", [run["DOMAIN_ID"], parts[-1]])
+                                   AND COALESCE(LAYER, 'SILVER') = ?
+                                 ORDER BY CREATED_AT LIMIT 1""", [run["DOMAIN_ID"], parts[-1], run_pipeline(run)])
     assert found, (f"TARGET_NOT_REGISTERED: target model {model} is not registered. Register it from Sources "
                    "(modeling panel) and retry.")
     return found[0]
@@ -91,20 +92,23 @@ def source_columns(session, run_id: str) -> List[Dict[str, Any]]:
     return out
 
 
-def domain_knowledge(session, domain_id: str, run_id: str, target: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+def domain_knowledge(session, domain_id: str, run_id: str, target: Optional[Dict[str, Any]] = None,
+                     holdout: bool = False) -> Dict[str, Any]:
     """Knowledge for one run. Learned evidence (reviewer patterns, past decisions) is scoped to the run's domain and
-    target table, so a column name approved for one company's table never steers an unrelated table."""
+    target table, so a column name approved for one company's table never steers an unrelated table. holdout (a
+    replay): nothing learned from this run's own decisions, and no usage recorded."""
     knowledge: Dict[str, Any] = {"glossary": {}, "rules": {}, "transforms": [], "history": [], "notes": [],
-                                 "avoid": set()}
+                                 "avoid": set(), "renames": []}
     target_name = str((target or {}).get("TARGET_TABLE") or "").upper()
     used: List[str] = []
-    from services.knowledge.writer import NOT_OPERATIONAL_SQL
+    from services.knowledge.writer import NOT_OPERATIONAL_SQL, layer_sql, run_layer
 
+    layer = run_layer(session, run_id)   # a Gold run learns from gold patterns, a Silver run from silver ones
     patterns: List[Tuple[str, str, Optional[str]]] = []  # reviewer patterns, weighted by their track record below
     for k in rows(session, f"""SELECT KNOWLEDGE_ID, KNOWLEDGE_TYPE, CONTENT_JSON, LINEAGE_ID FROM KNOWLEDGE.DOMAIN_KNOWLEDGE
                               WHERE DOMAIN_ID = ? AND IS_CURRENT AND STATUS = 'ACTIVE' AND CONTENT_JSON IS NOT NULL
-                                AND {NOT_OPERATIONAL_SQL}""",
-                  [domain_id]):
+                                AND {NOT_OPERATIONAL_SQL} AND {layer_sql()} AND COALESCE(SOURCE_RUN_ID, '') <> ?""",
+                  [domain_id, "SILVER" if layer == "ANY" else layer, run_id if holdout else ""]):
         kind = k["KNOWLEDGE_TYPE"]
         content = normalize_content(kind, variant(k["CONTENT_JSON"]))
         if content is None:
@@ -129,6 +133,8 @@ def domain_knowledge(session, domain_id: str, run_id: str, target: Optional[Dict
                 bucket[column] = content
         elif kind == "TRANSFORMATION_RULE":
             knowledge["transforms"].append(content)
+        elif kind == "MAPPING_PATTERN" and content.get("source_suffix") and content.get("target_suffix"):
+            knowledge["renames"].append((str(content["source_suffix"]).upper(), str(content["target_suffix"]).upper()))
         elif kind == "MAPPING_PATTERN" and anti_pattern(content):
             src, rejected = anti_pattern(content)
             knowledge["avoid"].add((src.upper(), rejected.upper()))
@@ -145,7 +151,8 @@ def domain_knowledge(session, domain_id: str, run_id: str, target: Optional[Dict
                     + (f" (model proposed {content['proposed_target']})" if content.get("overridden") else "")
                     + (f": {content['justification']}" if content.get("justification") else "")
                 )
-    record_usage(session, run_id, "MAPPING", used)
+    if not holdout:
+        record_usage(session, run_id, "MAPPING", used)
     # a pattern reviewers keep overruling counts less as evidence (services/knowledge/outcomes, V047); a new one or
     # one they keep counts fully
     from services.knowledge.outcomes import for_lineages, weight
@@ -286,6 +293,78 @@ def _scoring_config(session, domain_id: str) -> Dict[str, Any]:
     return cfg
 
 
+def _gold_rules(session, run: Dict[str, Any], sources: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    """A Gold run's rules by source column (services/gold/rules.py): mastered keys, the data source and proposed
+    dimension keys, which name matching cannot see. Empty for a Silver run or a run not pinned to a gold model."""
+    from services.gold import context, rules
+
+    ctx = context.for_run(session, run)
+    if not ctx:
+        return {}
+    by_target = rules.rules(ctx["entity"], [s["column_name"] for s in sources], ctx["consumes"], ctx["mastered"],
+                            ctx["spec"].get("relationships"), ctx["spec"]["design"]["entities"])
+    return {r["source_column"].upper(): {**r, "target_column": t} for t, r in by_target.items()}
+
+
+def _reference_sttm(session, run: Dict[str, Any], target: Dict[str, Any], sources: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """The STTM a person gave for the run's layer (a reference input, V057): {rules by source column (the reference's
+    target first, its transformation pre-filled), lines of the target by target column, reference}. Empty rules when
+    no STTM reference covers the target."""
+    from services.reference import store, sttm_import
+
+    ref = store.latest(lambda sql, params: rows(session, sql, params), run["DOMAIN_ID"], run_pipeline(run), "STTM")
+    if not ref:
+        return {"rules": {}, "lines": {}, "reference": None}
+    lines = (ref["parsed"] or {}).get("lines") or []
+    return {"rules": sttm_import.rules_for(lines, target["TARGET_TABLE"], sources, f"your STTM ({ref.get('title') or 'reference'})"),
+            "lines": sttm_import.for_target(lines, target["TARGET_TABLE"]), "reference": ref}
+
+
+def _score_mapping(session, run_id: str, run: Dict[str, Any], reference: Dict[str, Any], engine_first: Dict[str, str],
+                   sources: List[Dict[str, Any]]) -> None:
+    """How close the engine's own first choices (before the reference promoted anything) came to the person's STTM."""
+    from services.reference import score, store
+
+    if not reference.get("reference") or not reference.get("lines"):
+        return
+    result = score.mapping(engine_first.items(), reference["lines"], [s["column_name"] for s in sources])
+    if result["total"]:
+        store.record(lambda sql, params: session.sql(sql, params=params).collect(), domain_id=run["DOMAIN_ID"],
+                     layer=run_pipeline(run), kind="STTM", reference_id=reference["reference"]["reference_id"],
+                     run_id=run_id, stage="MAPPING", score=result)
+
+
+def promote(cands: List[Dict[str, Any]], ranked: List[Dict[str, Any]], rule: Dict[str, Any], top_k: int) -> List[Dict[str, Any]]:
+    """Put the rule's target first with full confidence; the scored alternatives follow (pure). A gold model rule's
+    lookup is written by the STTM; a reference STTM's own transformation is carried when it is an expression."""
+    chosen = next((c for c in cands if str(c["target"]["column_name"]).upper() == rule["target_column"].upper()), None)
+    if not chosen:
+        return ranked
+    chosen["final_score"] = max(float(chosen.get("final_score") or 0), 0.97)
+    if rule.get("origin") == "REFERENCE":
+        chosen["evidence"] = {**(chosen.get("evidence") or {}),
+                              "reference_sttm": {"reference": rule.get("reference"), "expression": rule["expression"]}}
+        if rule.get("transformation"):
+            try:
+                assert_safe_transformation(rule["transformation"])
+                chosen["transformation"] = rule["transformation"]
+            except ValueError:
+                pass
+    else:
+        chosen["evidence"] = {**(chosen.get("evidence") or {}), "gold_rule": {"kind": rule["kind"], "expression": rule["expression"]}}
+        if rule["kind"] != "DIMENSION_KEY" or not chosen.get("transformation"):
+            chosen["transformation"] = None   # the lookup is the gold model's, written by the STTM, not a column expression
+    rest = [c for c in ranked if c is not chosen][: max(top_k - 1, 0)]
+    out = [chosen] + rest
+    for i, c in enumerate(out):
+        c["rank"] = i + 1
+        c["margin"] = round(c["final_score"] - (out[1]["final_score"] if len(out) > 1 else 0.0), 4) if i == 0 else 0.0
+        c["confidence"] = round(c["final_score"], 4) if i == 0 else round(c["final_score"] * 0.85, 4)
+        c["recommendation"] = "AUTO_SUGGEST" if i == 0 else "MANUAL"
+        c["ambiguous"] = False
+    return out
+
+
 def generate_mapping_candidates(session, run_id: str) -> Dict[str, Any]:
     stage = Stage(session, run_id)
     if stage.state == "PROFILING_COMPLETE":
@@ -306,7 +385,7 @@ def generate_mapping_candidates(session, run_id: str) -> Dict[str, Any]:
                              "Sources so its columns are captured, or pick another target.")
             try:
                 guidance += "\n\n" + domain_context(session, run["DOMAIN_ID"], target["TARGET_TABLE"], 4000,
-                                                     run_standard(run))
+                                                     run_standard(run), run_pipeline(run))
             except Exception:
                 pass
             mappable = features.mappable_targets(targets)
@@ -321,6 +400,13 @@ def generate_mapping_candidates(session, run_id: str) -> Dict[str, Any]:
             cosines = cosine_matrix(session, src_emb, tgt_emb)
             domain_name = scalar(session, "SELECT DOMAIN_NAME FROM KNOWLEDGE.DOMAIN_REGISTRY WHERE DOMAIN_ID = ?",
                                  [run["DOMAIN_ID"]])
+            gold_rules = _gold_rules(session, run, sources)
+            try:   # the person's own STTM for this layer ranks first (a reference input); gold model rules fill the rest
+                reference = _reference_sttm(session, run, target, sources)
+            except Exception:
+                reference = {"rules": {}, "lines": {}, "reference": None}
+            reference_rules = reference["rules"]
+            engine_first: Dict[str, str] = {}
 
             ranked_by_source: List[Tuple[Dict[str, Any], List[Dict[str, Any]]]] = []
             hits_by_source: Dict[str, List[Dict[str, Any]]] = {}
@@ -331,6 +417,11 @@ def generate_mapping_candidates(session, run_id: str) -> Dict[str, Any]:
                     f = features.all_features(s, t, knowledge, cosines.get((s["source_column_id"], t["target_column_id"])))
                     cands.append({"target": t, **f})
                 ranked = scoring.rank_candidates(cands, cfg["weights"], cfg["thresholds"], top_k)
+                if ranked:
+                    engine_first[str(s["column_name"]).upper()] = str(ranked[0]["target"]["column_name"]).upper()
+                rule = reference_rules.get(str(s["column_name"]).upper()) or gold_rules.get(str(s["column_name"]).upper())
+                if rule:
+                    ranked = promote(cands, ranked, rule, top_k)
                 try:
                     hits = ks.search(session, database, f"{s['column_name']} {s.get('description') or ''}",
                                      domain=domain_name, limit=3)
@@ -342,6 +433,17 @@ def generate_mapping_candidates(session, run_id: str) -> Dict[str, Any]:
                 hits_by_source[str(s["column_name"]).upper()] = hits
                 ranked_by_source.append((s, ranked))
 
+            try:
+                _score_mapping(session, run_id, run, reference, engine_first, sources)
+            except Exception:
+                pass
+            try:   # ask the domain owner where the engine is unsure (services/learning/questions.py)
+                from services.learning import questions
+
+                questions.ask(session, run["DOMAIN_ID"], run_pipeline(run), run_id, "MAPPING",
+                              questions.mapping_questions(ranked_by_source, target["TARGET_TABLE"]))
+            except Exception:
+                pass
             ambiguous = [(s, r) for s, r in ranked_by_source if r and r[0]["ambiguous"]]
             llm = _adjudicate(session, run_id, ambiguous, guidance, knowledge["notes"], knowledge, hits_by_source)
             version = (scalar(session, "SELECT MAX(CANDIDATE_VERSION) FROM MAPPING.MAPPING_CANDIDATE WHERE RUN_ID = ?",
@@ -352,6 +454,12 @@ def generate_mapping_candidates(session, run_id: str) -> Dict[str, Any]:
                 verdict = llm.get(s["column_name"].upper())
                 for c in ranked:
                     reason = scoring.explain(c)
+                    gr = (c.get("evidence") or {}).get("gold_rule")
+                    rs = (c.get("evidence") or {}).get("reference_sttm")
+                    if gr and c["rank"] == 1:
+                        reason = f"Gold model rule ({gr['kind'].lower().replace('_', ' ')}): {gr['expression']}"
+                    if rs and c["rank"] == 1:
+                        reason = f"From {rs['reference']}: {rs['expression']}"
                     if verdict and c["rank"] == 1:
                         agrees = verdict["preferred_target"].upper() == c["target"]["column_name"].upper()
                         c["evidence"]["llm"] = {"preferred_target": verdict["preferred_target"], "agrees": agrees,

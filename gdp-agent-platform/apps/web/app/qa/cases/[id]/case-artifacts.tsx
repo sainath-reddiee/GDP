@@ -177,7 +177,7 @@ function ArtifactCard(p: Common & { a: CaseArtifact }) {
               </form>
             )}
             {type === "STTM_CHANGE" && accepted && (p.runId
-              ? <Link href={`/runs/${encodeURIComponent(p.runId)}/sttm`} className="inline-flex h-8 items-center gap-1 rounded-md border px-3 text-xs font-medium hover:bg-muted">
+              ? <Link href={`/runs/${encodeURIComponent(p.runId)}/modeling?tab=transformations`} className="inline-flex h-8 items-center gap-1 rounded-md border px-3 text-xs font-medium hover:bg-muted">
                   <ExternalLink className="h-3.5 w-3.5" />Open in STTM editor</Link>
               : <span className="text-[11px] text-muted-foreground">Link the run to open its STTM editor.</span>)}
             {type === "DBT_PATCH" && !prUrl && status !== "REJECTED" && status !== "APPLIED" && p.canDbt && (

@@ -12,9 +12,12 @@ export type KnowledgeItem = {
   is_current?: boolean; lineage_id?: string | null; origin?: string | null; source_run_id?: string | null;
   confidence?: number | null; change_note?: string | null; verified_by?: string | null; verified_at?: string | null;
   review_due?: string | null; reviewed_by?: string | null; review_note?: string | null; tags?: string[]; run_name?: string | null;
+  /** which pipeline's runs use it: ANY (both), SILVER or GOLD */
+  layer?: "ANY" | "SILVER" | "GOLD" | null;
 };
 
 export type FeedItem = {
+  layer?: "ANY" | "SILVER" | "GOLD" | null;
   knowledge_id: string; lineage_id: string | null; title: string; knowledge_type: string; origin: string | null;
   source_run_id: string | null; run_name: string | null; version: number; status: string; is_current: boolean;
   created_by: string; created_at: string; domain_name: string; change_note: string | null; source_reference: string | null;
@@ -25,7 +28,7 @@ export type Overview = {
   top_used: { knowledge_id: string; title: string; knowledge_type: string; domain_name: string; uses: number; runs: number }[];
   feed: FeedItem[];
 };
-export type InboxItem = KnowledgeItem & { current: KnowledgeItem | null };
+export type InboxItem = KnowledgeItem & { current: KnowledgeItem | null; replay?: import("../learning/actions").Replay | null };
 export type KDiff = {
   base: { knowledge_id: string; version: number }; head: { knowledge_id: string; version: number };
   files: { path: string; status: "changed" | "same"; added: number; removed: number; ops: [string, number | null, number | null, string | number][] }[];
@@ -45,7 +48,7 @@ export type DecideResult = { decided: number; refused?: { knowledge_id: string; 
 
 export type ItemInput = {
   domain_id?: string | null; knowledge_type: string; title: string; content: string; content_json?: unknown;
-  change_note?: string | null;
+  change_note?: string | null; layer?: "ANY" | "SILVER" | "GOLD";
 };
 
 export async function searchKnowledge(query: string, domain?: string | null, knowledgeType?: string | null) {

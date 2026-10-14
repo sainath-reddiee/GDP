@@ -42,7 +42,7 @@ def _domain_terms(session) -> List[Dict[str, Any]]:
                 terms |= token_set(s)
         for c in rows(session, """SELECT C.COLUMN_NAME, T.TARGET_TABLE FROM KNOWLEDGE.TARGET_COLUMN_REGISTRY C
                                   JOIN KNOWLEDGE.TARGET_TABLE_REGISTRY T ON T.TARGET_TABLE_ID = C.TARGET_TABLE_ID
-                                  WHERE T.DOMAIN_ID = ? AND T.ACTIVE_FLAG""", [d["DOMAIN_ID"]]):
+                                  WHERE T.DOMAIN_ID = ? AND T.ACTIVE_FLAG AND COALESCE(T.LAYER, 'SILVER') = 'SILVER'""", [d["DOMAIN_ID"]]):
             terms |= token_set(c["COLUMN_NAME"]) | entity_tokens(c["TARGET_TABLE"])
         config = variant(d.get("CONFIG")) or {}
         out.append({"domain_id": d["DOMAIN_ID"], "name": d["DOMAIN_NAME"], "terms": terms,

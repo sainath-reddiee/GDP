@@ -43,7 +43,8 @@ def test_large_tables_use_approximate_distinct_and_sampling():
     exact = profiler.stats_sql('"D"."S"."T"', cols)
     approx = profiler.stats_sql('"D"."S"."T"', cols, approximate=True)
     assert "COUNT(DISTINCT" in exact and "APPROX_COUNT_DISTINCT" not in exact
-    assert "COUNT(DISTINCT" not in approx and approx.count("APPROX_COUNT_DISTINCT") == 2
+    # one per column and one for whole rows (duplicate rows)
+    assert "COUNT(DISTINCT" not in approx and approx.count("APPROX_COUNT_DISTINCT") == 3
     freq = profiler.frequencies_sql('"D"."S"."T"', cols, approximate=True)
     assert freq.count(f"SAMPLE ({profiler.SAMPLE_ROWS} ROWS)") == 2 and freq.count("UNION ALL") == 1
     assert "SAMPLE" not in profiler.frequencies_sql('"D"."S"."T"', cols)
@@ -199,3 +200,35 @@ def test_profiling_works_before_metadata_is_deployed(computed):
     result = profile_tables(session, _refs(2))
     assert computed == [["T0", "T1"]]
     assert all(not r.persisted and not r.cached for r in result.values()) and not session.stage
+
+
+def test_rich_statistics_from_the_single_scan():
+    cols = [("AMOUNT", "NUMBER(10,2)"), ("CODE", "VARCHAR")]
+    sql = profiler.stats_sql('"D"."S"."T"', cols)
+    for part in ("COUNT(DISTINCT HASH(*)) AS DISTINCT_ROWS", "STDDEV(\"AMOUNT\")", "APPROX_PERCENTILE(\"AMOUNT\", 0.5)",
+                 "COUNT_IF(\"AMOUNT\" = 0) AS ZERO0", "COUNT_IF(\"AMOUNT\" < 0) AS NEG0", "AS BLANK1", "AS PAD1",
+                 "AS NUMLIKE1", "TRY_TO_NUMBER(TRIM(\"CODE\")) IS NULL AND TRY_TO_DATE"):
+        assert part in sql, part
+    assert "AS ZERO1" not in sql and "AS BLANK0" not in sql
+    row = {"ROW_COUNT": 10, "DISTINCT_ROWS": 8, "N0": 10, "V0": 10, "D0": 7, "MIN0": "-5", "MAX0": "90", "AVG0": 12.5,
+           "SD0": 3.25, "P250": 1.0, "P500": 4.0, "P750": 9.0, "ZERO0": 2, "NEG0": 1,
+           "N1": 9, "V1": 8, "D1": 6, "MIN1": "001", "MAX1": "120", "LMIN1": 0, "LMAX1": 3, "LAVG1": 2.1,
+           "BLANK1": 1, "PAD1": 2, "NUMLIKE1": 7, "DATELIKE1": 0}
+    num = profiler.column_stats(row, 0, 10)
+    assert (num["stddev"], num["p25"], num["median"], num["p75"], num["zero_count"], num["negative_count"]) == (3.25, 1.0, 4.0, 9.0, 2, 1)
+    text = profiler.column_stats(row, 1, 10)
+    assert (text["blank_count"], text["padded_count"], text["numeric_like_count"], text["date_like_count"]) == (1, 2, 7, 0)
+    assert profiler.inferred_type("TEXT", text) == "NUMBER"       # 7 of the 7 values present (10 - 2 null - 1 blank)
+    assert profiler.inferred_type("NUMBER", num) is None
+    assert profiler.inferred_type("TEXT", {**text, "numeric_like_count": 3}) is None
+    assert profiler.table_stats(row) == {"row_count": 10, "distinct_rows": 8, "duplicate_rows": 2, "duplicates_estimated": False}
+    assert profiler.table_stats({"ROW_COUNT": 5}) == {"row_count": 5}
+
+
+def test_personal_data_never_shows_values_even_as_quartiles():
+    stats = {"row_count": 4, "null_count": 0, "physical_null_count": 0, "distinct_count": 4, "min": "a", "max": "z",
+             "p25": 1.0, "median": 2.0, "p75": 3.0}
+    out = profiler.build_profile("EMAIL", "VARCHAR", stats, [{"value": "a@b.com", "count": 1}], [{"pattern": "a@a.aaa", "count": 4}])
+    s = out["statistics"]
+    assert out["pii_classification"] != "NONE"
+    assert (s["min"], s["max"], s["p25"], s["median"], s["p75"]) == (None, None, None, None, None)

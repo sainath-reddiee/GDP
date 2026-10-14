@@ -40,7 +40,7 @@ export function SttmFork({
       </figcaption>
       <div className="flex flex-col items-center">
         <Link
-          href={`/runs/${runId}/sttm`}
+          href={`/runs/${runId}/modeling?tab=transformations`}
           className={cn("w-full max-w-xs rounded-lg border px-4 py-3 text-center", tone(unlocked ? "done" : "active"))}
         >
           <p className="text-sm font-semibold">STTM</p>

@@ -9,6 +9,7 @@ import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input, Label, Select, Textarea } from "@/components/ui/input";
 import { reviewRun, transitionRun } from "./actions";
+import { labelFor, pipelineOf } from "@/lib/stages";
 
 /** APPROVE only moves a run into an *_APPROVED state; the other decisions only move it back (as the procedure enforces). */
 const decisionsFor = (toState: string) => toState.endsWith("_APPROVED") ? ["APPROVE"] : ["REQUEST_CHANGES", "REJECT", "REOPEN"];
@@ -28,16 +29,16 @@ const NEXT_STEP: Record<string, { slug: string; label: string }> = {
   ACCESS_APPROVED: { slug: "source", label: "Resume landing" },
   LANDING_PENDING: { slug: "source", label: "Resume landing" },
   LANDING_COMPLETE: { slug: "profile", label: "Start profiling" },
-  PROFILING_COMPLETE: { slug: "mapping", label: "Generate mapping candidates" },
-  DOMAIN_IDENTIFIED: { slug: "mapping", label: "Generate mapping candidates" },
-  MAPPING_REVIEW: { slug: "mapping", label: "Approve the mapping pack" },
-  MAPPING_APPROVED: { slug: "sttm", label: "Generate the STTM" },
-  STTM_REVIEW: { slug: "sttm", label: "Approve the STTM" },
-  STTM_APPROVED: { slug: "soda", label: "Start Data Quality or dbt" },
+  PROFILING_COMPLETE: { slug: "modeling?tab=mapping", label: "Modeling: generate the field mapping" },
+  DOMAIN_IDENTIFIED: { slug: "modeling?tab=mapping", label: "Modeling: generate the field mapping" },
+  MAPPING_REVIEW: { slug: "modeling?tab=mapping", label: "Modeling: approve the field mapping" },
+  MAPPING_APPROVED: { slug: "modeling?tab=transformations", label: "Modeling: generate transformations and joins" },
+  STTM_REVIEW: { slug: "modeling?tab=transformations", label: "Modeling: approve transformations and joins" },
+  STTM_APPROVED: { slug: "soda", label: "Start Data Quality or Silver code generation" },
   SODA_REVIEW: { slug: "soda", label: "Approve the Data Quality pack" },
-  SODA_APPROVED: { slug: "dbt", label: "Generate or review dbt" },
-  DBT_PENDING: { slug: "dbt", label: "Generate dbt" },
-  DBT_GENERATING: { slug: "dbt", label: "Review generated dbt" },
+  SODA_APPROVED: { slug: "dbt", label: "Generate or review the Silver code" },
+  DBT_PENDING: { slug: "dbt", label: "Generate the Silver code" },
+  DBT_GENERATING: { slug: "dbt", label: "Review the generated Silver code" },
   VALIDATION_PENDING: { slug: "validation", label: "Run validation" },
   VALIDATION_FAILED: { slug: "validation", label: "Inspect validation" },
   DBT_REVIEW: { slug: "review", label: "Review generated code" },
@@ -53,7 +54,14 @@ export function RunConsole({ state }: { state: RunState }) {
     (t) => t.actor !== "HUMAN" && t.to_state !== "FAILED" &&
       (state.current_state === "FAILED" || !PROCEDURE_OWNED.has(t.to_state)),
   );
-  const next = NEXT_STEP[state.current_state];
+  const gold = pipelineOf(state.run?.pipeline) === "GOLD";
+  const step = NEXT_STEP[state.current_state];
+  // a Gold run: the code is gold, and it picks its gold table before mapping
+  const next = step && gold ? {
+    ...step,
+    label: ["PROFILING_COMPLETE", "DOMAIN_IDENTIFIED"].includes(state.current_state) && !state.run?.target_model
+      ? "Modeling: design the gold model and pick the table to build" : step.label.replace(/Silver code/g, "Gold code"),
+  } : step;
 
   const run = (fn: () => Promise<ActionResult>) =>
     start(async () => {
@@ -75,7 +83,7 @@ export function RunConsole({ state }: { state: RunState }) {
           {["STTM_APPROVED", "SODA_PENDING", "SODA_REVIEW"].includes(state.current_state) ? (
             <div className="mb-3 flex flex-wrap gap-2">
               <Link href={`/runs/${state.run_id}/soda`} className={buttonVariants()}>Open Data Quality</Link>
-              <Link href={`/runs/${state.run_id}/dbt`} className={buttonVariants({ variant: "outline" })}>Open dbt</Link>
+              <Link href={`/runs/${state.run_id}/dbt`} className={buttonVariants({ variant: "outline" })}>Open {labelFor("DBT", pipelineOf(state.run?.pipeline))}</Link>
             </div>
           ) : next && (
             <Link href={`/runs/${state.run_id}/${next.slug}`} className={buttonVariants({ className: "mb-3" })}>

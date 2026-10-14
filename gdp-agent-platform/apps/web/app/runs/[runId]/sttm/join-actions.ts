@@ -11,6 +11,6 @@ export async function saveJoinPlan(runId: string, body: {
   const result = await attempt(() =>
     api(`/api/runs/${runId}/sttm/joins`, { method: "PUT", body: JSON.stringify(body) }),
   );
-  revalidatePath(`/runs/${runId}/sttm`);
+  revalidatePath(`/runs/${runId}/modeling`);
   return result;
 }

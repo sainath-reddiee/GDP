@@ -443,10 +443,35 @@ def status(db: Db = Depends(current_db)):
     return {"installed": True, "ready": not _missing(cfg), "missing": _missing(cfg),
             "client_id": bool(cfg.get("client_id")), "client_secret": bool(_secret()), "token_key": bool(_token_key()),
             "site_url": cfg.get("site_url"), "default_project": cfg.get("default_project"), "redirect_uri": cfg["redirect_uri"],
-            "connected": conn, "users_connected": int(users or 0)}
+            "connected": conn, "users_connected": int(users or 0),
+            "confluence": {"enabled": bool(cfg.get("confluence")), "granted": _confluence_granted(conn)}}
+
+
+def _confluence_granted(conn: Optional[dict]) -> bool:
+    from services.confluence.client import SCOPES as CONFLUENCE_SCOPES
+
+    return bool(conn) and set(CONFLUENCE_SCOPES) <= set((conn or {}).get("scopes") or [])
+
+
+def confluence_client(db: Db):
+    """(Confluence client acting as the signed-in user, their connection): the Jira sign-in, with the Confluence
+    scopes. 409 when Confluence is not enabled, 428 when the person must sign in again to grant it."""
+    from services.confluence.client import ConfluenceClient
+
+    jira, conn, cfg = _client(db)
+    if not cfg.get("confluence"):
+        raise HTTPException(409, "Confluence is not enabled. An admin turns it on in Admin, Integrations, Jira (after adding "
+                                 "the Confluence read scopes to the Atlassian app).")
+    if conn.get("scopes") and not _confluence_granted(conn):
+        raise HTTPException(NOT_CONNECTED, "Connect Jira again to give the platform read access to Confluence.")
+    client = ConfluenceClient(_http, conn["cloud_id"], jira.token)
+    cache_key = (db.user, conn["cloud_id"], str(conn.get("account_id") or ""), int(conn.get("token_version") or 0))
+    client.http = _reauthorizing_http(db, cfg, client, cache_key)
+    return client, conn
 
 
 class JiraConfigIn(BaseModel):
+    confluence: Optional[bool] = None   # also read Confluence (adds its read scopes to the sign-in; enable them in the Atlassian app first)
     site_url: Optional[str] = Field(default=None, max_length=300)
     client_id: Optional[str] = Field(default=None, max_length=200)
     redirect_uri: Optional[str] = Field(default=None, max_length=500)
@@ -456,7 +481,7 @@ class JiraConfigIn(BaseModel):
 @router.put("/api/jira/config")
 def set_config(body: JiraConfigIn, db: Db = Depends(current_db)):
     """The Jira site, OAuth app client ID, callback URL and default project. The client secret never comes here."""
-    current = {k: v for k, v in _config(db).items() if k in ("site_url", "client_id", "redirect_uri", "default_project")}
+    current = {k: v for k, v in _config(db).items() if k in ("site_url", "client_id", "redirect_uri", "default_project", "confluence")}
     site = (body.site_url if body.site_url is not None else current.get("site_url") or "").strip().rstrip("/")
     if site and not re.fullmatch(r"https://[A-Za-z0-9.\-]+(:\d+)?", site):
         raise HTTPException(400, "Site URL: https://yourteam.atlassian.net")
@@ -469,7 +494,8 @@ def set_config(body: JiraConfigIn, db: Db = Depends(current_db)):
     project = (body.default_project if body.default_project is not None else current.get("default_project") or "").strip().upper()
     if project and not re.fullmatch(r"[A-Z][A-Z0-9_]{0,30}", project):
         raise HTTPException(400, "Project key: letters and digits, for example QA")
-    value = {"site_url": site, "client_id": client_id, "redirect_uri": redirect, "default_project": project}
+    value = {"site_url": site, "client_id": client_id, "redirect_uri": redirect, "default_project": project,
+             "confluence": bool(body.confluence if body.confluence is not None else current.get("confluence"))}
     _set_config(db, CONFIG_KEY, value, "Jira Cloud connection for QA (the client secret stays on the API host)")
     return status(db)
 
@@ -489,7 +515,11 @@ def connect(body: ConnectIn, db: Db = Depends(current_db)):
     state = secrets.token_urlsafe(32)
     db.execute(f"DELETE FROM JIRA.OAUTH_STATE WHERE CREATED_AT < DATEADD(minute, -{STATE_MINUTES}, CURRENT_TIMESTAMP())")
     db.execute("INSERT INTO JIRA.OAUTH_STATE (STATE, USER_NAME, RETURN_TO) VALUES (%s, %s, %s)", (state, db.user, back))
-    return {"url": authorize_url(cfg["client_id"], cfg["redirect_uri"], state)}
+    from services.confluence.client import SCOPES as CONFLUENCE_SCOPES
+    from services.jira.client import SCOPES
+
+    scopes = SCOPES + (CONFLUENCE_SCOPES if cfg.get("confluence") else [])
+    return {"url": authorize_url(cfg["client_id"], cfg["redirect_uri"], state, scopes)}
 
 
 class CallbackIn(BaseModel):

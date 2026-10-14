@@ -1003,7 +1003,7 @@ TOOLS: Dict[str, Tool] = {t.name: t for t in [
     Tool("fetch_jira_issue", "Read a Jira issue (summary, description, recent comments).", "intake",
          {"key": _s(True, 40, "issue key such as GDP-123")}, fetch_jira_issue),
     Tool("list_domains", "List the business domains registered on the platform.", "context", {}, list_domains),
-    Tool("fetch_domain_context", "Search domain knowledge (rules, definitions, patterns, decisions).", "context",
+    Tool("fetch_domain_context", "Search domain knowledge (rules, definitions, patterns, correct-output examples, decisions).", "context",
          {"query": _s(True, 2000), "domain": _s(False, 128, "domain name to filter on")}, fetch_domain_context),
     Tool("inspect_source", "List the tables of a Snowflake schema with row counts and profile status. With table, also "
          "that table's column profile (types, nulls, distinct values, ranges, suggested checks): use it before choosing "

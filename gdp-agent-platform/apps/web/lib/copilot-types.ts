@@ -128,7 +128,7 @@ export async function readStream(res: Response, on: (e: Record<string, any>) => 
 }
 
 export const KIND_LABEL: Record<ChangeKind, string> = {
-  INGESTION: "Source onboarding", MODEL: "Data model", STTM: "Mapping", DBT: "dbt", QA: "QA pack", DQ: "Data quality",
+  INGESTION: "Source onboarding", MODEL: "Data model", STTM: "Modeling (STTM)", DBT: "Silver code", QA: "QA pack", DQ: "Data quality",
   GIT: "Pull request", JIRA: "Jira",
 };
 

@@ -16,10 +16,16 @@ from typing import Any, Callable, Dict, List, Optional
 Query = Callable[[str, tuple], List[Dict[str, Any]]]
 Execute = Callable[[str, tuple], Any]
 
-ROLLBACK_KEYS = ("rules", "signals", "source_systems", "contract", "silver_database", "silver_schema", "standard")
+ROLLBACK_KEYS = ("rules", "signals", "source_systems", "contract", "silver_database", "silver_schema", "standard",
+                 "rules_gold", "conventions", "conventions_gold", "mdm")
+# kept when the version rolled back to predates them: the MDM contract comes from the domain pack (deploy), not from
+# an edit that a rollback should undo
+KEEP_IF_ABSENT = ("mdm",)
 SECTIONS = {
-    "description": "Description and owner", "rules": "Rules", "signals": "Detection signals",
+    "description": "Description and owner", "rules": "Rules (Silver)", "rules_gold": "Rules (Gold)", "signals": "Detection signals",
     "source_systems": "Source systems", "contract": "Contract and location", "targets": "Target models",
+    "conventions": "Conventions (Silver)", "conventions_gold": "Conventions (Gold)", "mdm": "MDM (Reltio)",
+    "skills": "Domain skills",
 }
 
 
@@ -43,9 +49,14 @@ def state(query: Query, domain_id: str) -> Optional[Dict[str, Any]]:
     if not found:
         return None
     d = found[0]
-    tables = [_low(r) for r in query("""SELECT TARGET_TABLE_ID, TARGET_DATABASE, TARGET_SCHEMA, TARGET_TABLE, DESCRIPTION,
-                                               ACTIVE_FLAG, TABLE_TYPE, GRAIN
-                                          FROM KNOWLEDGE.TARGET_TABLE_REGISTRY WHERE DOMAIN_ID = %s""", (domain_id,))]
+    try:
+        tables = [_low(r) for r in query("""SELECT TARGET_TABLE_ID, TARGET_DATABASE, TARGET_SCHEMA, TARGET_TABLE, DESCRIPTION,
+                                                   ACTIVE_FLAG, TABLE_TYPE, GRAIN, COALESCE(LAYER, 'SILVER') AS LAYER
+                                              FROM KNOWLEDGE.TARGET_TABLE_REGISTRY WHERE DOMAIN_ID = %s""", (domain_id,))]
+    except Exception:   # before V054
+        tables = [_low(r) for r in query("""SELECT TARGET_TABLE_ID, TARGET_DATABASE, TARGET_SCHEMA, TARGET_TABLE, DESCRIPTION,
+                                                   ACTIVE_FLAG, TABLE_TYPE, GRAIN
+                                              FROM KNOWLEDGE.TARGET_TABLE_REGISTRY WHERE DOMAIN_ID = %s""", (domain_id,))]
     columns = [_low(r) for r in query("""SELECT C.TARGET_TABLE_ID, C.COLUMN_NAME, C.DATA_TYPE, C.ORDINAL_POSITION, C.NULLABLE,
                                                 C.IS_BUSINESS_KEY, C.IS_PII, C.BUSINESS_DEFINITION
                                            FROM KNOWLEDGE.TARGET_COLUMN_REGISTRY C
@@ -59,9 +70,18 @@ def state(query: Query, domain_id: str) -> Optional[Dict[str, Any]]:
     targets = sorted(({"table": f"{t['target_database']}.{t['target_schema']}.{t['target_table']}".upper(),
                        "description": t.get("description"), "active": bool(t.get("active_flag")),
                        "type": t.get("table_type"), "grain": t.get("grain"),
+                       # silver targets keep their shape (so versions recorded before layers compare equal)
+                       **({"layer": "GOLD"} if str(t.get("layer") or "").upper() == "GOLD" else {}),
                        "columns": by_table.get(t["target_table_id"], [])} for t in tables), key=lambda t: t["table"])
+    try:   # the domain's own skills, per stage and layer: diffable, never rolled back (V051, V055)
+        skills = sorted(f"{s['stage']}:{s['skill_name']}:{s.get('mode')}:{s.get('replaces') or ''}:{s.get('pipeline') or 'ANY'}"
+                        for s in (_low(r) for r in query("""SELECT STAGE, SKILL_NAME, MODE, REPLACES, COALESCE(PIPELINE, 'ANY') AS PIPELINE
+                                                              FROM KNOWLEDGE.DOMAIN_SKILL WHERE DOMAIN_ID = %s AND ENABLED""",
+                                                           (domain_id,))))
+    except Exception:
+        skills = []
     return {"domain_name": d["domain_name"], "description": d.get("description"), "owner": d.get("owner"),
-            "active": bool(d.get("active_flag")), "targets": targets,
+            "active": bool(d.get("active_flag")), "targets": targets, **({"skills": skills} if skills else {}),
             # CONFIG.seeded is the deploy's own record (services/knowledge/packs.domain_values), not domain content
             "config": {k: v for k, v in (_json(d.get("config")) or {}).items() if k != "seeded"}}
 
@@ -111,6 +131,8 @@ def _section(snap: Dict[str, Any], name: str) -> Any:
         return {k: cfg.get(k) for k in ("contract", "silver_database", "silver_schema", "standard", "origin")}
     if name == "targets":
         return snap.get("targets") or []
+    if name == "skills":
+        return snap.get("skills") or []
     return cfg.get(name)
 
 
@@ -151,10 +173,17 @@ def summary(base: Optional[Dict[str, Any]], head: Dict[str, Any]) -> List[str]:
         out.append(f"Owner {base.get('owner') or 'none'} -> {head.get('owner') or 'none'}")
     if base.get("active") != head.get("active"):
         out.append("Restored" if head.get("active") else "Deleted")
-    br, hr = (base.get("config") or {}).get("rules") or {}, (head.get("config") or {}).get("rules") or {}
-    for key in sorted(set(br) | set(hr)):
-        if br.get(key) != hr.get(key):
-            out.append(f"Rule {key}: {br.get(key, 'default')} -> {hr.get(key, 'default')}")
+    for section, label in (("rules", "Rule"), ("rules_gold", "Gold rule"), ("conventions", "Convention"),
+                           ("conventions_gold", "Gold convention")):
+        br, hr = (base.get("config") or {}).get(section) or {}, (head.get("config") or {}).get(section) or {}
+        for key in sorted(set(br) | set(hr)):
+            if br.get(key) != hr.get(key):
+                out.append(f"{label} {key}: {br.get(key, 'default')} -> {hr.get(key, 'default')}")
+    if (base.get("config") or {}).get("mdm") != (head.get("config") or {}).get("mdm"):
+        out.append("MDM (Reltio) contract or consumed domains changed")
+    bs, hs = set(base.get("skills") or []), set(head.get("skills") or [])
+    out += [f"Skill added: {s.split(':')[1]} at {s.split(':')[0]} ({s.split(':')[4].lower()})" for s in sorted(hs - bs)]
+    out += [f"Skill removed: {s.split(':')[1]} at {s.split(':')[0]} ({s.split(':')[4].lower()})" for s in sorted(bs - hs)]
     for name in ("signals", "source_systems"):
         if _section(base, name) != _section(head, name):
             out.append(f"{SECTIONS[name]} changed")
@@ -185,6 +214,6 @@ def rollback_config(current: Dict[str, Any], old: Dict[str, Any]) -> Dict[str, A
     for key in ROLLBACK_KEYS:
         if key in (old or {}):
             out[key] = old[key]
-        else:
+        elif key not in KEEP_IF_ABSENT:
             out.pop(key, None)
     return out

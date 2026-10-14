@@ -7,9 +7,13 @@ import { ago } from "../skills/types";
 import { Avatars, cleanDescription, DomainMark } from "./domain-ui";
 import { PackEditor } from "./pack-editor";
 
+import { mdmBadge, type MdmRole } from "@/lib/layers";
+import { cn } from "@/lib/utils";
+
 type Domain = {
   domain_id: string; domain_name: string; description: string | null; owner: string | null; standard: string | null;
   active_flag: boolean; version: number; knowledge_items: number; target_tables: number;
+  gold_tables?: number; mdm_role?: MdmRole; consumes?: string | null; gold_model_version?: number | null;
 };
 export type DomainCard = {
   members?: { user: string; role: string }[]; runs_30d?: number; inbox?: number; stale?: number; verified?: number;
@@ -57,12 +61,13 @@ export default async function Domains({ searchParams }: { searchParams?: { delet
                   <p className="flex items-center gap-2 text-base font-semibold group-hover:text-primary">{name}
                     {d.standard && <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">{d.standard}</span>}
                   </p>
+                  {(() => { const b = mdmBadge(d.mdm_role, d.consumes); return b ? <span className={cn("mt-0.5 inline-block rounded-full px-1.5 py-0.5 text-[10px] font-medium", b.cls)}>{b.text}</span> : null; })()}
                   <p className="line-clamp-2 text-xs text-muted-foreground">{cleanDescription(d.description) ?? "No description yet."}</p>
                 </div>
                 <ArrowRight className="h-4 w-4 text-muted-foreground transition group-hover:translate-x-0.5 group-hover:text-primary" />
               </div>
               <div className="mt-4 grid grid-cols-3 gap-2 text-center">
-                <Stat icon={<Boxes className="h-3.5 w-3.5" />} value={d.target_tables} label="targets" />
+                <Stat icon={<Boxes className="h-3.5 w-3.5" />} value={`${d.target_tables} · ${d.gold_tables ?? 0}`} label="Silver · Gold tables" />
                 <Stat icon={<BookOpen className="h-3.5 w-3.5" />} value={d.knowledge_items} label="knowledge" />
                 <Stat icon={<Play className="h-3.5 w-3.5" />} value={c.runs_30d ?? 0} label="runs, 30 d" />
               </div>
@@ -84,7 +89,7 @@ export default async function Domains({ searchParams }: { searchParams?: { delet
   );
 }
 
-function Stat({ icon, value, label }: { icon: React.ReactNode; value: number; label: string }) {
+function Stat({ icon, value, label }: { icon: React.ReactNode; value: number | string; label: string }) {
   return (
     <div className="rounded-xl bg-muted/40 px-2 py-2">
       <p className="flex items-center justify-center gap-1 text-lg font-semibold tabular-nums"><span className="text-muted-foreground">{icon}</span>{value}</p>

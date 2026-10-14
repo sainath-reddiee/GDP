@@ -272,7 +272,7 @@ export function SourceStudio({
             )}
             {profiled && (
               <>
-                <Link href={`/runs/${runId}/mapping`} className={buttonVariants({ size: "lg" })}>
+                <Link href={`/runs/${runId}/modeling?tab=mapping`} className={buttonVariants({ size: "lg" })}>
                   Continue to mapping <ArrowRight className="h-4 w-4" />
                 </Link>
                 <Link href={`/runs/${runId}/profile`} className={buttonVariants({ variant: "outline", size: "lg" })}>

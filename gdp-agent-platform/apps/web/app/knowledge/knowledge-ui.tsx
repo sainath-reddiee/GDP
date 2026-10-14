@@ -11,7 +11,7 @@ const TYPE_ICON: Record<string, LucideIcon> = {
   GLOSSARY: BookOpen, BUSINESS_RULE: Ruler, TRANSFORMATION_RULE: Wand2, MAPPING_PATTERN: GitCompare, MODEL_DEFINITION: Boxes,
   NAMING_STANDARD: TableProperties, DBT_PATTERN: Code2, SODA_PATTERN: ShieldCheck, EXCEPTION: TriangleAlert,
   STTM_TEMPLATE: Layers, ONBOARDING_GUIDE: FileText, COLUMN_RULE: ScanSearch, QA_TEST: ListChecks,
-  INCIDENT_RESOLUTION: BadgeCheck, CASE_RESOLUTION: LifeBuoy,
+  INCIDENT_RESOLUTION: BadgeCheck, CASE_RESOLUTION: LifeBuoy, EXAMPLE: TableProperties,
 };
 
 export function TypeIcon({ type, className }: { type: string; className?: string }) {
@@ -34,6 +34,10 @@ export const ORIGINS: Record<string, { label: string; icon: LucideIcon; tone: st
   DBT: { label: "Learned in dbt", icon: Code2, tone: "bg-orange-100 text-orange-700 dark:bg-orange-950 dark:text-orange-300" },
   DOMAIN_AI: { label: "AI domain review", icon: Bot, tone: "bg-violet-100 text-violet-700 dark:bg-violet-950 dark:text-violet-300" },
   SUGGESTION: { label: "AI suggestion", icon: Sparkles, tone: "bg-violet-100 text-violet-700 dark:bg-violet-950 dark:text-violet-300" },
+  CONFLUENCE: { label: "From Confluence", icon: FileText, tone: "bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300" },
+  DOCUMENT: { label: "From a document", icon: FileText, tone: "bg-cyan-100 text-cyan-700 dark:bg-cyan-950 dark:text-cyan-300" },
+  LEARNED: { label: "Learned from decisions", icon: Sparkles, tone: "bg-teal-100 text-teal-700 dark:bg-teal-950 dark:text-teal-300" },
+  CODE: { label: "From code", icon: Code2, tone: "bg-slate-100 text-slate-700 dark:bg-slate-900 dark:text-slate-300" },
 };
 
 export function OriginChip({ origin, short }: { origin?: string | null; short?: boolean }) {

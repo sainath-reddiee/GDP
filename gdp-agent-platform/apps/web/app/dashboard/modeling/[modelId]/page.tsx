@@ -8,7 +8,7 @@ import { PageHeader } from "@/components/page-header";
 import { StatusPill } from "@/components/hub/states";
 import { ModelWorkbench } from "./workbench";
 
-export default async function DomainModelPage({ params, searchParams }: { params: { modelId: string }; searchParams: { version?: string; tab?: string } }) {
+export default async function DomainModelPage({ params, searchParams }: { params: { modelId: string }; searchParams: { version?: string; tab?: string; import?: string } }) {
   const id = encodeURIComponent(params.modelId);
   const qs = searchParams.version && /^\d+$/.test(searchParams.version) ? `?version=${searchParams.version}` : "";
   const [data, me] = await Promise.all([
@@ -35,7 +35,8 @@ export default async function DomainModelPage({ params, searchParams }: { params
                     {" "}· approvals by MODEL_APPROVER, four eyes</>}
                   actions={current ? <StatusPill status={current.status} /> : undefined} />
       <ModelWorkbench detail={data} comments={comments} me={(me?.user ?? "").toUpperCase()} initialTab={searchParams.tab ?? null}
-                      canEdit={canAct(me, "MODEL.EDIT")} canApprove={canAct(me, "MODEL.APPROVE")} approvedSpec={approvedSpec} />
+                      canEdit={canAct(me, "MODEL.EDIT")} canApprove={canAct(me, "MODEL.APPROVE")} approvedSpec={approvedSpec}
+                      autoImport={searchParams.import === "file"} />
     </div>
   );
 }

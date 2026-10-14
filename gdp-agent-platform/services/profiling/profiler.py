@@ -19,7 +19,7 @@ NULL_PLACEHOLDERS = ("", "N/A", "NA", "NULL", "NONE", "<NULL>", ".")
 TOP_VALUES = 10
 TOP_PATTERNS = 5
 
-PROFILER_VERSION = "2"
+PROFILER_VERSION = "3"   # 3: spread, quartiles, zeros, blanks, padding, type-like text, duplicate rows
 LARGE_TABLE_ROWS = 10_000_000
 SAMPLE_ROWS = 100_000
 HISTOGRAM_BUCKETS = 10
@@ -63,11 +63,15 @@ def sampled(table_fqn: str, approximate: bool) -> str:
 
 
 def stats_sql(table_fqn: str, columns: Sequence[Tuple[str, str]], approximate: bool = False) -> str:
-    """One pass over the table: counts, robust nulls, distinct, min/max, length and numeric stats per column.
+    """One pass over the table: counts, robust nulls, distinct, min/max, length and numeric stats per column, and the
+    number of distinct rows (so whole-row duplicates are known).
 
-    Above LARGE_TABLE_ROWS the distinct count is APPROX_COUNT_DISTINCT (HyperLogLog) so the scan stays linear.
+    Numbers also get standard deviation, quartiles (APPROX_PERCENTILE), zeros and negatives; text gets blanks,
+    values with leading or trailing spaces, and how many values are really numbers or dates.
+    Above LARGE_TABLE_ROWS the distinct counts are APPROX_COUNT_DISTINCT (HyperLogLog) so the scan stays linear.
     """
-    parts = ["COUNT(*) AS ROW_COUNT"]
+    rows_distinct = "APPROX_COUNT_DISTINCT(HASH(*))" if approximate else "COUNT(DISTINCT HASH(*))"
+    parts = ["COUNT(*) AS ROW_COUNT", f"{rows_distinct} AS DISTINCT_ROWS"]
     placeholders = ", ".join(f"'{p}'" for p in NULL_PLACEHOLDERS)
     for i, (name, data_type) in enumerate(columns):
         q = quote(name)
@@ -79,11 +83,19 @@ def stats_sql(table_fqn: str, columns: Sequence[Tuple[str, str]], approximate: b
         if family == "TEXT":
             parts.append(f"COUNT(CASE WHEN UPPER(TRIM({q})) IN ({placeholders}) THEN NULL ELSE {q} END) AS V{i}")
             parts += [f"MIN(LENGTH({q})) AS LMIN{i}", f"MAX(LENGTH({q})) AS LMAX{i}",
-                      f"AVG(LENGTH({q}))::FLOAT AS LAVG{i}"]
+                      f"AVG(LENGTH({q}))::FLOAT AS LAVG{i}",
+                      f"COUNT_IF(TRIM({q}) = '') AS BLANK{i}",
+                      f"COUNT_IF({q} <> TRIM({q})) AS PAD{i}",
+                      f"COUNT_IF(TRY_TO_NUMBER(TRIM({q})) IS NOT NULL) AS NUMLIKE{i}",
+                      # a plain number would read as epoch seconds, so only non-numbers count as dates
+                      f"COUNT_IF(TRY_TO_NUMBER(TRIM({q})) IS NULL AND TRY_TO_DATE(TRIM({q})) IS NOT NULL) AS DATELIKE{i}"]
         else:
             parts.append(f"COUNT({q}) AS V{i}")
         if family == "NUMBER":
-            parts.append(f"AVG({q})::FLOAT AS AVG{i}")
+            parts += [f"AVG({q})::FLOAT AS AVG{i}", f"STDDEV({q})::FLOAT AS SD{i}",
+                      f"APPROX_PERCENTILE({q}, 0.25)::FLOAT AS P25{i}", f"APPROX_PERCENTILE({q}, 0.5)::FLOAT AS P50{i}",
+                      f"APPROX_PERCENTILE({q}, 0.75)::FLOAT AS P75{i}",
+                      f"COUNT_IF({q} = 0) AS ZERO{i}", f"COUNT_IF({q} < 0) AS NEG{i}"]
         count_distinct = f"APPROX_COUNT_DISTINCT({q})" if approximate else f"COUNT(DISTINCT {q})"
         parts += [f"{count_distinct} AS D{i}", f"MIN({q})::VARCHAR AS MIN{i}", f"MAX({q})::VARCHAR AS MAX{i}"]
     return f"SELECT {', '.join(parts)} FROM {table_fqn}"
@@ -189,10 +201,39 @@ def column_stats(row: Dict[str, Any], i: int, row_count: int, approximate: bool 
     if stats["distinct_count"] is not None:
         stats["distinct_percentage"] = round(100.0 * stats["distinct_count"] / non_null, 4) if non_null else 0.0
         stats["duplicate_count"] = max(non_null - stats["distinct_count"], 0)
-    for key, col in (("min_length", "LMIN"), ("max_length", "LMAX"), ("avg_length", "LAVG"), ("average", "AVG")):
+    floats = ("avg_length", "average", "stddev", "p25", "median", "p75")
+    for key, col in (("min_length", "LMIN"), ("max_length", "LMAX"), ("avg_length", "LAVG"), ("average", "AVG"),
+                     ("stddev", "SD"), ("p25", "P25"), ("median", "P50"), ("p75", "P75"),
+                     ("zero_count", "ZERO"), ("negative_count", "NEG"), ("blank_count", "BLANK"),
+                     ("padded_count", "PAD"), ("numeric_like_count", "NUMLIKE"), ("date_like_count", "DATELIKE")):
         if f"{col}{i}" in row and row[f"{col}{i}"] is not None:
-            stats[key] = float(row[f"{col}{i}"]) if key in ("avg_length", "average") else int(row[f"{col}{i}"])
+            stats[key] = float(row[f"{col}{i}"]) if key in floats else int(row[f"{col}{i}"])
     return stats
+
+
+def table_stats(row: Dict[str, Any], approximate: bool = False) -> Dict[str, Any]:
+    """Whole-table facts from the stats row: rows, distinct rows and whole-row duplicates (an estimate when
+    `approximate`)."""
+    rows = int(row.get("ROW_COUNT") or 0)
+    distinct = row.get("DISTINCT_ROWS")
+    if distinct is None:
+        return {"row_count": rows}
+    distinct = min(int(distinct), rows)
+    return {"row_count": rows, "distinct_rows": distinct, "duplicate_rows": max(rows - distinct, 0),
+            "duplicates_estimated": bool(approximate)}
+
+
+def inferred_type(family: str, stats: Dict[str, Any]) -> Optional[str]:
+    """What a text column really holds when (nearly) every non-blank value is a number or a date: NUMBER or DATE."""
+    if family != "TEXT":
+        return None
+    present = (stats.get("row_count") or 0) - (stats.get("null_count") or 0) - (stats.get("blank_count") or 0)
+    if present <= 0:
+        return None
+    for kind, key in (("NUMBER", "numeric_like_count"), ("DATE", "date_like_count")):
+        if (stats.get(key) or 0) >= 0.98 * present:
+            return kind
+    return None
 
 
 def cardinality(distinct: Optional[int], non_null: int) -> Optional[str]:
@@ -415,8 +456,8 @@ def build_profile(name: str, data_type: str, stats: Dict[str, Any], frequencies:
     pii = pii_classification(semantic)
     if pii == "NONE" and family in ("TEXT", "OTHER"):
         pii = value_pii(frequencies)
-    if pii != "NONE":
-        stats = {**stats, "min": None, "max": None}
+    if pii != "NONE":   # never show values of personal data, not even as a quartile
+        stats = {**stats, "min": None, "max": None, "p25": None, "median": None, "p75": None}
     masked_freq = [{"value": mask(f["value"], pii), "count": f["count"]} for f in frequencies]
     profile = {
         "column_name": name,
@@ -426,6 +467,7 @@ def build_profile(name: str, data_type: str, stats: Dict[str, Any], frequencies:
         "semantic_type": semantic,
         "pii_classification": pii,
         "potential_key": potential_key(stats["row_count"], stats, approximate),
+        "inferred_type": inferred_type(family, stats),
         "patterns": patterns,
         "sample_values": masked_freq[:5],
         "statistics": {
@@ -528,7 +570,7 @@ def source_fingerprint(columns: Iterable[Tuple[str, str]], row_count: Optional[i
 
 def profile_document(source: Dict[str, str], row_count: int, columns: Sequence[Dict[str, Any]],
                      fingerprint: str, approximate: bool, model: Optional[str],
-                     profiled_at: str) -> Dict[str, Any]:
+                     profiled_at: str, table: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Run-independent profile of one table. Landing ids and foreign keys depend on the run and are dropped."""
     return {
         "profiler_version": PROFILER_VERSION,
@@ -540,6 +582,7 @@ def profile_document(source: Dict[str, str], row_count: int, columns: Sequence[D
         "model_version": model,
         "profiled_at": profiled_at,
         "columns": [{k: v for k, v in c.items() if k not in RUN_SCOPED_KEYS} for c in columns],
+        "table": {k: v for k, v in (table or {}).items() if k != "row_count"},
     }
 
 

@@ -144,8 +144,11 @@ async function Section({ id, view, integrationView }: { id: SectionId; view: Mod
     return data ? <SkillsSection stages={data.stages} bindings={data.bindings} skills={data.skills} /> : unavailable;
   }
   if (id === "rules") {
-    const rules = await api<RulesState>("/api/config/rules").catch(() => null);
-    return rules ? <RulesSection rules={rules} /> : unavailable;
+    const [rules, gold] = await Promise.all([
+      api<RulesState>("/api/config/rules").catch(() => null),
+      api<RulesState>("/api/config/rules?pipeline=GOLD").catch(() => null),
+    ]);
+    return rules ? <RulesSection rules={rules} gold={gold} /> : unavailable;
   }
   if (id === "standards") {
     const platform = await api<PlatformState>("/api/config/platform").catch(() => null);

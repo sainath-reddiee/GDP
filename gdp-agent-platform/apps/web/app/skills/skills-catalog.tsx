@@ -62,6 +62,7 @@ export function SkillsCatalog({ data }: { data: SkillsResponse }) {
   const { can } = useAccess();
   const editable = can("SKILL.EDIT");
   const category = params.get("category") ?? "all";
+  const domain = params.get("domain") ?? "";
   const [query, setQuery] = useState(params.get("q") ?? "");
   const [stage, setStage] = useState("");
   const [origin, setOrigin] = useState<string>("");
@@ -87,6 +88,7 @@ export function SkillsCatalog({ data }: { data: SkillsResponse }) {
     const q = query.trim().toLowerCase();
     if (q && !`${s.skill_name} ${pretty(s.skill_name)} ${s.description ?? ""} ${s.skill_type}`.toLowerCase().includes(q)) return false;
     if (stage && !s.stages.some((b) => b.stage === stage && b.enabled)) return false;
+    if (domain && !(s.domains ?? []).some((d) => d.domain_id === domain)) return false;
     if (origin && (s.origin || "REPOSITORY") !== origin) return false;
     if (status === "production" && !s.production) return false;
     if (status === "candidate" && !s.candidate) return false;
@@ -94,13 +96,18 @@ export function SkillsCatalog({ data }: { data: SkillsResponse }) {
     return true;
   };
   const shown = data.skills.filter(matches);
-  const filtering = Boolean(query || stage || origin || status !== "all");
+  const filtering = Boolean(query || stage || origin || domain || status !== "all");
   const visibleCats = cats.filter((c) => (category === "all" || c.category_id === category) && shown.some((s) => catOf(s) === c.category_id));
   function catOf(s: SkillCard) { return catById.has(s.category_id) ? s.category_id : "general"; }
 
   const pickCategory = (id: string) => {
     const next = new URLSearchParams(params.toString());
     if (id === "all") next.delete("category"); else next.set("category", id);
+    router.replace(`${pathname}${next.toString() ? `?${next}` : ""}`, { scroll: false });
+  };
+  const pickDomain = (id: string) => {
+    const next = new URLSearchParams(params.toString());
+    if (!id) next.delete("domain"); else next.set("domain", id);
     router.replace(`${pathname}${next.toString() ? `?${next}` : ""}`, { scroll: false });
   };
 
@@ -132,6 +139,15 @@ export function SkillsCatalog({ data }: { data: SkillsResponse }) {
             <RailItem key={c.category_id} active={category === c.category_id} onClick={() => pickCategory(c.category_id)}
                       label={c.name} count={counts[c.category_id] ?? 0} icon={<CategoryIcon icon={c.icon} color={c.color} size="sm" />} />
           ))}
+          {!!data.domains?.length && (
+            <>
+              <p className="px-2.5 pb-1 pt-3 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Attached to a domain</p>
+              {data.domains.map((d) => (
+                <RailItem key={d.domain_id} active={domain === d.domain_id} onClick={() => pickDomain(domain === d.domain_id ? "" : d.domain_id)}
+                          label={d.domain_name} count={d.skills} icon={<CategoryIcon icon="boxes" color="#0ea5e9" size="sm" />} />
+              ))}
+            </>
+          )}
           {editable && (
             <button type="button" onClick={() => setManaging(true)}
                     className="mt-2 flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-xs text-muted-foreground hover:bg-muted hover:text-foreground">
@@ -171,7 +187,7 @@ export function SkillsCatalog({ data }: { data: SkillsResponse }) {
               </Button>
             )}
             {filtering && (
-              <button type="button" onClick={() => { setQuery(""); setStage(""); setOrigin(""); setStatus("all"); }}
+              <button type="button" onClick={() => { setQuery(""); setStage(""); setOrigin(""); setStatus("all"); if (domain) pickDomain(""); }}
                       className="flex items-center gap-1 rounded-md px-2 py-1 text-xs text-muted-foreground hover:text-foreground">
                 <X className="h-3 w-3" />Clear
               </button>
@@ -274,7 +290,14 @@ function Card({ skill: s, kids, cats, editable }: { skill: SkillCard; kids: Skil
       <div className="mt-2 flex flex-wrap gap-1">
         {stages.length ? stages.map((b) => (
           <span key={b.stage} className="rounded-md bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">{STAGE_LABELS[b.stage] ?? b.stage}</span>
-        )) : <span className="text-[10px] text-muted-foreground">Not bound to a stage (reference only)</span>}
+        )) : <span className="text-[10px] text-muted-foreground">{s.domains?.length ? "Loaded by domains only" : "Not bound to a stage (reference only)"}</span>}
+        {(s.domains ?? []).map((d) => (
+          <Link key={`${d.domain_id}-${d.stage}`} href={`/domains/${encodeURIComponent(d.domain_id)}?tab=sources`}
+                title={d.mode === "REPLACE" ? `In ${d.domain_name}'s ${d.stage} stage, instead of ${d.replaces}` : `Added to ${d.domain_name}'s ${d.stage} stage`}
+                className="rounded-md bg-sky-500/10 px-1.5 py-0.5 text-[10px] text-sky-700 hover:underline dark:text-sky-300">
+            {d.domain_name} · {STAGE_LABELS[d.stage] ?? d.stage}{d.mode === "REPLACE" ? " (replaces)" : ""}
+          </Link>
+        ))}
       </div>
       <div className="mt-auto flex items-center gap-2 border-t pt-2.5 text-[11px] text-muted-foreground" style={{ marginTop: "0.75rem" }}>
         <Sparkline values={s.daily} className={s.loads_30d ? "text-primary" : "text-muted-foreground/40"} />

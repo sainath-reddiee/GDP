@@ -16,7 +16,9 @@ class Stage:
         self.graph = _load_graph(session)
         self.run = _get_run(session, run_id)
         try:  # thresholds and name hints for this run: platform config, then the run's domain
-            activate(rules_for(session, self.run.get("DOMAIN_ID")))
+            from services.common.standard import run_pipeline
+
+            activate(rules_for(session, self.run.get("DOMAIN_ID"), run_pipeline(self.run)))
         except Exception:
             pass
 

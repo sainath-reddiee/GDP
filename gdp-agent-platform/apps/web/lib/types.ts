@@ -26,6 +26,7 @@ export type RunInfo = {
   storage_type?: StorageType | null;
   archived_at?: string | null;
   archived_by?: string | null;
+  pipeline?: "SILVER" | "GOLD" | null;
 };
 
 export type Lifecycle = "DRAFT" | "RUNNING" | "COMPLETED" | "FAILED" | "ARCHIVED";
@@ -53,6 +54,7 @@ export type RunState = {
 
 export type RunSummary = {
   run_id: string;
+  pipeline?: "SILVER" | "GOLD" | null;
   run_name: string;
   current_state: string;
   current_stage: string | null;
@@ -259,6 +261,8 @@ export type SourceInventory = {
 export type ProfileColumn = {
   column_name: string; data_type: string; family: string; cardinality: string | null; semantic_type: string;
   pii_classification: string; potential_key: boolean; description?: string | null;
+  /** profiler 3: what a text column really holds (NUMBER or DATE) */
+  inferred_type?: string | null;
   patterns: { pattern: string; count: number }[];
   sample_values: { value: string | null; count: number }[];
   statistics: {
@@ -267,6 +271,11 @@ export type ProfileColumn = {
     avg_length?: number; average?: number; enum_values?: string[] | null; date_format?: string | null;
     frequency_distribution?: { value: string | null; count: number }[];
     histogram?: { lower: number; upper: number; count: number }[];
+    physical_null_count?: number; placeholder_null_count?: number; duplicate_count?: number;
+    date_range?: { min: string | null; max: string | null } | null; approximate?: Record<string, unknown>;
+    /** profiler 3 */
+    stddev?: number; p25?: number | null; median?: number | null; p75?: number | null; zero_count?: number; negative_count?: number;
+    blank_count?: number; padded_count?: number; numeric_like_count?: number; date_like_count?: number;
   };
 };
 
@@ -276,6 +285,8 @@ export type TableProfileDoc = {
     profiler_version: string; row_count: number; column_count: number; approximate: boolean;
     model_version: string | null; profiled_at: string; columns: ProfileColumn[];
     source: { source_name: string; database: string; schema: string; table: string };
+    /** profiler 3: whole-table facts */
+    table?: { distinct_rows?: number; duplicate_rows?: number; duplicates_estimated?: boolean } | null;
   };
 };
 

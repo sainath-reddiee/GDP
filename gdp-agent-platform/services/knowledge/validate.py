@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Optional
 
 KNOWLEDGE_TYPES = {"BUSINESS_RULE", "MODEL_DEFINITION", "NAMING_STANDARD", "DBT_PATTERN", "SODA_PATTERN",
                    "TRANSFORMATION_RULE", "MAPPING_PATTERN", "EXCEPTION", "GLOSSARY", "STTM_TEMPLATE",
-                   "ONBOARDING_GUIDE", "COLUMN_RULE", "QA_TEST", "INCIDENT_RESOLUTION", "CASE_RESOLUTION"}
+                   "ONBOARDING_GUIDE", "COLUMN_RULE", "QA_TEST", "INCIDENT_RESOLUTION", "CASE_RESOLUTION", "EXAMPLE"}
 
 
 def _text(value: Any) -> Optional[str]:
@@ -73,7 +73,8 @@ def normalize_content(kind: str, content: Any) -> Optional[Dict[str, Any]]:
         item["soda_checks"] = [c for c in checks if isinstance(c, dict)] if isinstance(checks, list) else []
     elif kind == "MAPPING_PATTERN":
         # a pattern maps a source column to a target column, or (a rejected proposal) names the target it is not
-        if not (_text(item.get("source_column")) and (_text(item.get("target_column")) or _text(item.get("rejected_target")))):
+        renames = _text(item.get("source_suffix")) and _text(item.get("target_suffix"))   # a learned rename
+        if not renames and not (_text(item.get("source_column")) and (_text(item.get("target_column")) or _text(item.get("rejected_target")))):
             return None
     return item
 

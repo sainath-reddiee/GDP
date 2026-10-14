@@ -29,7 +29,7 @@ import zipfile
 from functools import partial
 from typing import Any, Callable, Literal, Optional
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Query, UploadFile
 from fastapi.responses import PlainTextResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -71,9 +71,11 @@ def _missing(exc: Exception) -> bool:
 
 
 @router.get("/api/hub/domain-models")
-def list_models(db: Db = Depends(current_db)):
+def list_models(layer: str = "SILVER", db: Db = Depends(current_db)):
+    """The domains' models of one layer: SILVER (what Silver runs map into) or GOLD (the star schemas Gold runs build)."""
+    layer = "GOLD" if str(layer).upper() == "GOLD" else "SILVER"
     try:
-        return {"models": invoke_source(db, _svc().list_models), "deployed": True}
+        return {"models": invoke_source(db, _svc().list_models, layer), "deployed": True, "layer": layer}
     except Exception as exc:
         if _missing(exc):
             return {"models": [], "deployed": False}
@@ -398,6 +400,33 @@ def import_model(model_id: str, body: ImportIn, db: Db = Depends(current_db)):
     changes = model_diff.diff(base, merged)
     return {"spec": merged, "issues": spec_v2.validate(merged), "counts": changes["counts"],
             "entities": len(incoming.get("design", {}).get("entities") or [])}
+
+
+@router.post("/api/hub/domain-models/{model_id}/import-file")
+async def import_model_file(model_id: str, file: UploadFile = File(...), spec: str = Form(...), replace: bool = Form(False),
+                            db: Db = Depends(current_db)):
+    """A data model file merged into the draft (`spec`, as the editor holds it): an Erwin model saved as XML, DDL,
+    a data dictionary or Erwin column report (.xlsx or .csv), or a domain_pack.json. Nothing is saved: the editor
+    shows the result as unsaved changes to review and save."""
+    from services.modeling import importers, model_diff, model_files, spec_v2
+
+    data = await file.read(model_files.MAX_BYTES + 1)
+    try:
+        current = json.loads(spec)
+    except ValueError:
+        raise HTTPException(400, "spec is not JSON") from None
+    try:
+        parsed = model_files.parse_file(file.filename or "model", data, model_id)
+    except model_files.ModelFileError as exc:
+        raise HTTPException(400, str(exc)) from None
+    if not parsed["entities"]:
+        raise HTTPException(400, f"No tables were found in {file.filename}.")
+    base = spec_v2.normalize_v2(current, model_id)
+    merged = importers.merge(base, parsed["spec"], model_id, replace)
+    changes = model_diff.diff(base, merged)
+    return {"spec": merged, "issues": spec_v2.validate(merged), "counts": changes["counts"], "entities": parsed["entities"],
+            "columns": parsed["columns"], "relationships": parsed["relationships"], "format": parsed["format"],
+            "notes": parsed["notes"][:50], "file": file.filename}
 
 
 @router.get("/api/hub/domain-models/{model_id}/versions/{version}/comments")

@@ -1,0 +1,29 @@
+-- V052 Uploaded domain documents are kept, and how each was read is recorded.
+-- CONFLUENCE.DOCUMENT_FILES: the original files uploaded to a domain, at <domain_id>/<source_id>/<file name>.
+--   Server-side encryption, so Cortex AI_PARSE_DOCUMENT and image models can read them (TO_FILE).
+-- CONFLUENCE.SOURCE gains the file's facts (stage path, size, type, SHA-256) and the reading's outcome: READ_STATUS
+--   QUEUED | READING | READY (all text read) | PARTIAL (the start of a very long text was read) | NOT_READABLE (kept,
+--   no text) | FAILED, the method that read it, characters read of the total, pages, and notes.
+-- Applied once; never edit after it has been applied. Add a new V### instead. Safe to run again.
+CREATE STAGE IF NOT EXISTS {{database}}.CONFLUENCE.DOCUMENT_FILES
+  ENCRYPTION = (TYPE = 'SNOWFLAKE_SSE')
+  DIRECTORY = (ENABLE = TRUE)
+  COMMENT = 'Original files uploaded to a domain as knowledge sources (Sources tab).';
+
+ALTER TABLE {{database}}.CONFLUENCE.SOURCE ADD COLUMN IF NOT EXISTS STAGE_PATH VARCHAR(1024);
+ALTER TABLE {{database}}.CONFLUENCE.SOURCE ADD COLUMN IF NOT EXISTS FILE_SIZE NUMBER(14,0);
+ALTER TABLE {{database}}.CONFLUENCE.SOURCE ADD COLUMN IF NOT EXISTS CONTENT_TYPE VARCHAR(200);
+ALTER TABLE {{database}}.CONFLUENCE.SOURCE ADD COLUMN IF NOT EXISTS FILE_SHA256 VARCHAR(64);
+ALTER TABLE {{database}}.CONFLUENCE.SOURCE ADD COLUMN IF NOT EXISTS FILE_KIND VARCHAR(16);       -- text | excel | document | image | binary
+ALTER TABLE {{database}}.CONFLUENCE.SOURCE ADD COLUMN IF NOT EXISTS READ_STATUS VARCHAR(16);
+ALTER TABLE {{database}}.CONFLUENCE.SOURCE ADD COLUMN IF NOT EXISTS READ_METHOD VARCHAR(200);
+ALTER TABLE {{database}}.CONFLUENCE.SOURCE ADD COLUMN IF NOT EXISTS READ_NOTE VARCHAR(4000);
+ALTER TABLE {{database}}.CONFLUENCE.SOURCE ADD COLUMN IF NOT EXISTS PAGES NUMBER(8,0);
+ALTER TABLE {{database}}.CONFLUENCE.SOURCE ADD COLUMN IF NOT EXISTS CHARS_TOTAL NUMBER(12,0);
+ALTER TABLE {{database}}.CONFLUENCE.SOURCE ADD COLUMN IF NOT EXISTS CHARS_READ NUMBER(12,0);
+ALTER TABLE {{database}}.CONFLUENCE.SOURCE ADD COLUMN IF NOT EXISTS READ_STARTED_AT TIMESTAMP_LTZ;
+ALTER TABLE {{database}}.CONFLUENCE.SOURCE ADD COLUMN IF NOT EXISTS READ_FINISHED_AT TIMESTAMP_LTZ;
+
+GRANT READ ON STAGE {{database}}.CONFLUENCE.DOCUMENT_FILES TO DATABASE ROLE {{database}}.VIEWER;
+GRANT READ, WRITE ON STAGE {{database}}.CONFLUENCE.DOCUMENT_FILES TO DATABASE ROLE {{database}}.DATA_ENGINEER;
+GRANT READ, WRITE ON STAGE {{database}}.CONFLUENCE.DOCUMENT_FILES TO DATABASE ROLE {{database}}.DATA_STEWARD;

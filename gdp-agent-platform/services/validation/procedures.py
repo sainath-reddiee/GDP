@@ -8,7 +8,7 @@ from typing import Any, Dict, List
 from services.common.audit import tool_call
 from services.common.sql import clip, insert_rows, rows, scalar, variant
 from services.common.stage import Stage
-from services.common.standard import run_standard
+from services.common.standard import run_pipeline, run_standard
 from services.soda.expectations import render_yaml
 from services.knowledge.usage import use_stage
 from services.validation import checks
@@ -80,6 +80,25 @@ def _compile(session, generation: Dict[str, Any], run_id: str) -> Dict[str, Any]
                 "query_id": None}
 
 
+MISSING_NODE = ("depends on a node named", "which was not found", "source named")
+
+
+def gold_compile(result: Dict[str, Any], pipeline: str, files: Dict[str, str]) -> Dict[str, Any]:
+    """A Gold run's models ref() the silver hubs and conformed dimensions of the gdp-dbt project. Without the
+    repository skeleton they are not in the staged project, so a compile that fails only on a missing model or source
+    is a warning that says how to compile for real, not a failure of the generated code (pure)."""
+    if pipeline != "GOLD" or result.get("status") != "FAILED" or ("dbt_project.yml" in files and any(
+            p.startswith("models/silver") for p in files)):
+        return result
+    text = " ".join(f.get("message", "") for f in result.get("findings") or [])
+    if not any(m in text for m in MISSING_NODE):
+        return result
+    return {**result, "status": "SKIPPED", "error_count": 0, "warning_count": 1,
+            "findings": [{"severity": "WARN", "message": "The gold models reference silver hubs and conformed dimensions "
+                          "that live in the gdp-dbt project, so they cannot compile on their own. Set the dbt repository "
+                          "on this step so the branch skeleton is fetched, then validate again. " + text[:500]}]}
+
+
 POST_STTM_VALIDATE = (
     "VALIDATION_PENDING", "VALIDATION_RUNNING", "VALIDATION_FAILED",
     "SODA_REVIEW", "SODA_APPROVED", "DBT_PENDING", "DBT_GENERATING",
@@ -132,7 +151,7 @@ def validate_dbt(session, run_id: str) -> Dict[str, Any]:
             assert files, "generated dbt project has no artifacts"
             soda = files.get("soda/checks.yml") or ""
             results = checks.run(files, _sttm_lines(session, generation["STTM_ID"]), soda)
-            results.append(_compile(session, generation, run_id))
+            results.append(gold_compile(_compile(session, generation, run_id), run_pipeline(stage.run), files))
             results.append({"validation_type": "SKILL", "status": "PASSED", "error_count": 0,
                             "warning_count": 0, "findings": [{"severity": "INFO", "message": guidance[:500]}],
                             "query_id": None})

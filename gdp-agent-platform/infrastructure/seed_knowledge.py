@@ -50,16 +50,35 @@ def load_domain_pack() -> Dict[str, Any]:
 
 
 def load_domain_packs() -> List[Dict[str, Any]]:
-    """Every domain/<name>/domain_pack.json; GDP first so its fixed IDs are assigned before the others."""
+    """Every domain/<name>/domain_pack.json; GDP first so its fixed IDs are assigned before the others. A domain's
+    mdm.json (its MDM contract, kept apart so regenerating the pack never drops it) is merged in: the contract into
+    the domain's config as `mdm`, its knowledge items into the pack's knowledge."""
     from services.knowledge.validate import validate_pack
+    from services.mdm import contract as mdm
 
     packs = []
     for path in sorted(DOMAIN_DIR.glob("*/domain_pack.json")):
         pack = json.loads(path.read_text(encoding="utf-8"))
+        extra = path.parent / "mdm.json"
+        if extra.exists():
+            pack = with_mdm(pack, json.loads(extra.read_text(encoding="utf-8")))
         problems = validate_pack(pack)
         assert not problems, f"{path.parent.name} domain pack is invalid: " + "; ".join(problems[:10])
         packs.append(pack)
+    mastered = [p["domain"]["name"] for p in packs if (p["domain"].get("mdm") or {}).get("role") == "MASTERED"]
+    for p in packs:
+        problems = mdm.validate(p["domain"]["name"], p["domain"].get("mdm"), mastered)
+        assert not problems, "; ".join(problems[:10])
     return sorted(packs, key=lambda pk: (pk["domain"]["name"] != "GDP", pk["domain"]["name"]))
+
+
+def with_mdm(pack: Dict[str, Any], contract: Dict[str, Any]) -> Dict[str, Any]:
+    """The pack with its MDM contract: knowledge items appended (not duplicated), the rest as domain config `mdm`."""
+    out = {**pack, "domain": dict(pack["domain"]), "knowledge": list(pack.get("knowledge") or [])}
+    known = {k.get("key") for k in out["knowledge"]}
+    out["knowledge"] += [k for k in contract.get("knowledge") or [] if k.get("key") not in known]
+    out["domain"]["mdm"] = {k: v for k, v in contract.items() if k != "knowledge"}
+    return out
 
 
 def _frontmatter_meta(raw: str) -> Dict[str, str]:
@@ -256,15 +275,22 @@ def seed_skills(cur, database: str) -> List[str]:
     cur.execute(f"""UPDATE {reg} R SET IS_CURRENT = (R.SKILL_ID IN (SELECT SKILL_ID FROM {database}.KNOWLEDGE.SKILL_LABEL
                                                                      WHERE LABEL = 'production'))""")
     # stage bindings: missing rows only, admin edits are never touched
-    from services.knowledge.usage import GDP_ONLY_SKILLS, STAGE_SKILLS
+    from services.knowledge.usage import GDP_ONLY_SKILLS, STAGE_SKILLS, pipeline_of_skill
 
     for stage, names in STAGE_SKILLS.items():
         for pos, name in enumerate(names):
-            cur.execute(f"""MERGE INTO {database}.KNOWLEDGE.SKILL_STAGE_BINDING T
-                             USING (SELECT %s AS STAGE, %s AS SKILL_NAME) S ON T.STAGE = S.STAGE AND T.SKILL_NAME = S.SKILL_NAME
-                             WHEN NOT MATCHED THEN INSERT (STAGE, SKILL_NAME, ENABLED, POSITION, STANDARD, UPDATED_BY)
-                             VALUES (S.STAGE, S.SKILL_NAME, TRUE, %s, %s, 'SEED')""",
-                        (stage, name, (pos + 1) * 10, "GDP" if name in GDP_ONLY_SKILLS else "ANY"))
+            try:   # V055: each binding's pipeline (Silver, Gold or both)
+                cur.execute(f"""MERGE INTO {database}.KNOWLEDGE.SKILL_STAGE_BINDING T
+                                 USING (SELECT %s AS STAGE, %s AS SKILL_NAME) S ON T.STAGE = S.STAGE AND T.SKILL_NAME = S.SKILL_NAME
+                                 WHEN NOT MATCHED THEN INSERT (STAGE, SKILL_NAME, ENABLED, POSITION, STANDARD, PIPELINE, UPDATED_BY)
+                                 VALUES (S.STAGE, S.SKILL_NAME, TRUE, %s, %s, %s, 'SEED')""",
+                            (stage, name, (pos + 1) * 10, "GDP" if name in GDP_ONLY_SKILLS else "ANY", pipeline_of_skill(name)))
+            except Exception:
+                cur.execute(f"""MERGE INTO {database}.KNOWLEDGE.SKILL_STAGE_BINDING T
+                                 USING (SELECT %s AS STAGE, %s AS SKILL_NAME) S ON T.STAGE = S.STAGE AND T.SKILL_NAME = S.SKILL_NAME
+                                 WHEN NOT MATCHED THEN INSERT (STAGE, SKILL_NAME, ENABLED, POSITION, STANDARD, UPDATED_BY)
+                                 VALUES (S.STAGE, S.SKILL_NAME, TRUE, %s, %s, 'SEED')""",
+                            (stage, name, (pos + 1) * 10, "GDP" if name in GDP_ONLY_SKILLS else "ANY"))
     return log
 
 
@@ -351,7 +377,7 @@ def governed_domains(cur, database: str) -> Dict[str, Any]:
     """Domains whose registry follows an approved Model Workbench version: {domain id: approved version}."""
     try:
         cur.execute(f"SELECT DOMAIN_ID, APPROVED_VERSION FROM {database}.GOVERNANCE.DOMAIN_MODEL "
-                    "WHERE APPROVED_VERSION IS NOT NULL")
+                    "WHERE APPROVED_VERSION IS NOT NULL AND COALESCE(LAYER, 'SILVER') = 'SILVER'")
         return {r[0]: r[1] for r in cur.fetchall()}
     except Exception:
         return {}  # before V039

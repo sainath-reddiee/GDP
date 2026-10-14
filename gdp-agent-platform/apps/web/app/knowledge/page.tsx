@@ -11,7 +11,7 @@ const LIMIT = 50;
 type Pair = { a_id: string; a_title: string; a_origin: string; b_id: string; b_title: string; b_origin: string; knowledge_type: string; domain_name: string; score: number };
 
 export default async function Knowledge({ searchParams }: {
-  searchParams?: { q?: string; domain_id?: string; type?: string; status?: string; offset?: string; tab?: string; origin?: string };
+  searchParams?: { q?: string; domain_id?: string; type?: string; status?: string; offset?: string; tab?: string; origin?: string; layer?: string };
 }) {
   const sp = searchParams ?? {};
   const tab = (HUB_TABS.find((t) => t.id === sp.tab)?.id ?? "overview") as HubTab;
@@ -43,6 +43,7 @@ export default async function Knowledge({ searchParams }: {
     if (sp.q) query.set("q", sp.q);
     if (sp.domain_id) query.set("domain_id", sp.domain_id);
     if (sp.type) query.set("knowledge_type", sp.type);
+    if (sp.layer) query.set("layer", sp.layer);
     if (sp.status !== "ALL") query.set("status", sp.status || "ACTIVE");
     const list = await api<{ items: KnowledgeItem[]; total: number }>(`/api/knowledge?${query.toString()}`).catch(() => ({ items: [], total: 0 }));
     body = <KnowledgeBrowser items={list.items} total={list.total} offset={offset} limit={LIMIT} domains={domainList} />;

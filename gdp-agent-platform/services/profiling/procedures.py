@@ -110,7 +110,8 @@ def _gather(session, statements: Sequence[Optional[str]], limit: int) -> List[Li
 
 
 def _compute(session, refs: Sequence[TableRef], limit: int) -> Dict[TableKey, Tuple[List[Dict[str, Any]], int]]:
-    """Four statements per table (stats, top values, patterns, histograms), `limit` tables at a time."""
+    """Four statements per table (stats, top values, patterns, histograms), `limit` tables at a time. Whole-table
+    facts (distinct and duplicate rows) are kept in _TABLE_STATS by table key for the stored profile."""
     out: Dict[TableKey, Tuple[List[Dict[str, Any]], int]] = {}
     for start in range(0, len(refs), limit):
         chunk = refs[start:start + limit]
@@ -140,7 +141,11 @@ def _compute(session, refs: Sequence[TableRef], limit: int) -> Dict[TableKey, Tu
                     [{"pattern": p["value"], "count": p["count"]} for p in patterns.get(i, [])],
                     histogram=histogram, approximate=ref.approximate))
             out[ref.key] = (columns, row_count)
+            _TABLE_STATS[ref.key] = profiler.table_stats(row, ref.approximate)
     return out
+
+
+_TABLE_STATS: Dict[TableKey, Dict[str, Any]] = {}
 
 
 def _enrich(session, run_id: Optional[str], table: str, profiles: List[Dict[str, Any]],
@@ -329,7 +334,7 @@ def profile_tables(session, tables: List[TableRef], concurrency_limit: int = DEF
         if index is not None:
             try:
                 doc = profiler.profile_document(ref.source(), row_count, columns, ref.fingerprint,
-                                                ref.approximate, model, stamp)
+                                                ref.approximate, model, stamp, _TABLE_STATS.pop(ref.key, None))
                 _write_document(session, ref.stage_path, doc)
                 _upsert_index(session, ref, doc, run_id)
                 result.persisted = True

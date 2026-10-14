@@ -5,7 +5,7 @@ import { STAGE_ORDER, formatAge, stageInfo, statusPill } from "@/lib/run-status"
 import { TagEditor } from "@/components/tag-editor";
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import Link from "next/link";
-import { useSearchParams } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
 import { Archive, ArchiveRestore, Trash2 } from "lucide-react";
 import type { CleanupResult, Lifecycle, RunStatusFilter, RunSummary } from "@/lib/types";
 import { cleanupRuns, setRunsArchived } from "@/app/runs/actions";
@@ -47,8 +47,9 @@ function cleanupMessage(result: CleanupResult): string {
 }
 
 export function RunTable({
-  runs, filter = "all", selectable = true,
-}: { runs: RunSummary[]; filter?: RunStatusFilter; selectable?: boolean }) {
+  runs, filter = "all", selectable = true, pipeline = "SILVER",
+}: { runs: RunSummary[]; filter?: RunStatusFilter; selectable?: boolean; pipeline?: "SILVER" | "GOLD" }) {
+  const gold = pipeline === "GOLD";
   const [selected, setSelected] = useState<string[]>([]);
   const [confirming, setConfirming] = useState(false);
   const [dropLanding, setDropLanding] = useState(true);
@@ -57,13 +58,14 @@ export function RunTable({
   const [pending, start] = useTransition();
   const headerBox = useRef<HTMLInputElement>(null);
   const params = useSearchParams();
+  const listPath = usePathname() || "/runs";   // /runs (Silver Pipeline) or /gold (Gold Pipeline)
   // Status links keep the other filters (search, domain, sort...) and restart paging.
   const statusHref = (status: string) => {
     const next = new URLSearchParams(params?.toString() ?? "");
     if (status === "all") next.delete("status"); else next.set("status", status);
     next.delete("offset");
     const qs = next.toString();
-    return qs ? `/runs?${qs}` : "/runs";
+    return qs ? `${listPath}?${qs}` : listPath;
   };
 
   const ids = useMemo(() => runs.map((r) => r.run_id), [runs]);
@@ -199,7 +201,8 @@ export function RunTable({
                 />
               </TH>
             )}
-            <TH>Run</TH><TH>Domain</TH><TH>Source</TH><TH>Tables</TH><TH>Current stage</TH><TH>Status</TH><TH>Owner</TH><TH>Age</TH>
+            <TH>Run</TH><TH>Domain</TH><TH>{gold ? "Silver inputs" : "Source"}</TH><TH>{gold ? "Gold tables" : "Tables"}</TH>
+            <TH>Current stage</TH><TH>Status</TH><TH>Owner</TH><TH>Age</TH>
           </TR>
         </THead>
         <TBody>
@@ -219,8 +222,9 @@ export function RunTable({
                 </div>
               </TD>
               <TD>{displayDomain(r.domain_name) ?? <span className="text-muted-foreground">—</span>}</TD>
-              <TD className="font-mono text-xs">{sourceLabel(r)}</TD>
-              <TD>{r.table_count || "—"}</TD>
+              <TD className="font-mono text-xs">{gold ? (r.source_database ? `${r.source_database}.${r.source_schema ?? ""}` : "not set")
+                : sourceLabel(r)}{gold && r.table_count ? <span className="ml-1 font-sans text-muted-foreground">({r.table_count})</span> : null}</TD>
+              <TD className={gold ? "font-mono text-xs" : undefined}>{gold ? (r.target_model?.split(".").pop() ?? "Gold model pending") : (r.table_count || "—")}</TD>
               <TD>
                 {(() => {
                   const info = stageInfo(r);

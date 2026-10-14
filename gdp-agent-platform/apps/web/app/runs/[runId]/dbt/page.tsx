@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { api, getRun } from "@/lib/api";
 import { AiSuggestions } from "@/components/ai-suggestions";
 import { StageGate } from "@/components/stage-gate";
@@ -41,6 +42,10 @@ export default async function DbtPage({ params }: { params: { runId: string } })
             {data.sttm_store_change.change_note ? `: ${data.sttm_store_change.change_note}` : ""}) after this dbt was generated. Regenerate dbt to pick it up.</span>
         </div>
       )}
+      {data.generation && (
+        <p className="mb-3 text-xs text-muted-foreground">Column lineage from the approved STTM, Source to Silver and on to Gold, is in the{" "}
+          <Link href={`/lineage?q=${encodeURIComponent(state.run.domain_name ?? "")}`} className="font-medium text-primary hover:underline">Lineage explorer</Link>.</p>
+      )}
       <AiSuggestions runId={params.runId} stage="DBT" canAct={!state.is_archived} />
       <DbtStudio
         runId={params.runId}
@@ -57,6 +62,7 @@ export default async function DbtPage({ params }: { params: { runId: string } })
         models={models}
         defaultModel={workspace.default_model || models[0]?.name || "claude-sonnet-4-5"}
         setup={setup}
+        pipeline={state.run.pipeline ?? "SILVER"}
       />
     </StageGate>
   );
