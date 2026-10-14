@@ -97,7 +97,7 @@ footer { color: var(--muted); font-size: 13px; margin-top: 56px; }
 <div class="wrap">
 <nav class="toc" aria-label="Contents">
   <div class="brand">GDP Agent Platform</div>
-  <div class="ver">Guidebook and runbook for code on main, migrations V001 to V050</div>
+  <div class="ver">Guidebook and runbook for code on main, migrations V001 to V053</div>
   <ol>
     <li><a href="#access"><span class="num">01</span>How access works</a></li>
     <li><a href="#setup"><span class="num">02</span>Setup order</a></li>
@@ -117,6 +117,9 @@ footer { color: var(--muted); font-size: 13px; margin-top: 56px; }
         <li><a href="#f-dashboard">Dashboard</a></li>
         <li><a href="#f-sources">Sources</a></li>
         <li><a href="#f-runs">Runs and stages</a></li>
+        <li><a href="#f-gold">Silver to Gold</a></li>
+        <li><a href="#f-lineage">Lineage</a></li>
+        <li><a href="#f-consumer-domain">Onboarding a consumer domain</a></li>
         <li><a href="#f-dbt">dbt publishing</a></li>
         <li><a href="#f-domains">Domains</a></li>
         <li><a href="#f-knowledge">Knowledge</a></li>
@@ -558,6 +561,57 @@ STTM, DBT) are unchanged, and the old <code>mapping</code> and <code>sttm</code>
   <li>Forcing a state needs ADMIN.DEPLOY.</li>
 </ul>
 
+<h3 id="f-gold">Silver to Gold (pipeline 2)</h3>
+<p>Pipeline 2 builds Gold from Silver after Reltio has mastered Company and Property. It is decoupled from runs: it starts
+when someone opens a gold build, any time after mastering, and never changes Silver or the Reltio schemas. Builds are under
+Pipelines, <strong>Silver to Gold</strong> (<code>/gold</code>), and each build has four steps.</p>
+<div class="tablebox"><table>
+<tr><th>Step</th><th>What happens</th><th>Privileges</th></tr>
+<tr><td>1. Select inputs</td><td>Pick the domain and its Silver tables: post-MDM tables for a mastered domain, the Silver hubs for a consumer domain</td><td>MODEL.EDIT</td></tr>
+<tr><td>2. Gold Modeling</td><td>The proposal engine builds a GOLD model: a FACT at the grain of each hub, the conformed DIM_COMPANY and DIM_PROPERTY reused (never copied), new DIMs for low-cardinality descriptors, and a BRIDGE for each many-to-many relationship. Every gold column has a mapping line saying where it comes from, including RESOLVE lines for mastered keys</td><td>MODEL.EDIT</td></tr>
+<tr><td>3. Review</td><td>The proposal opens as a draft of the domain's GOLD model in the Model Workbench (diagram, diff, comments); approval needs a second person</td><td>MODEL.APPROVE</td></tr>
+<tr><td>4. Gold Code Generation</td><td>Deterministic dbt from the approved model (engine <code>gdp-gold/engine-v1</code>): Iceberg DDL with a sequence, keys and FKs per table; incremental merge on SOURCE_UNIQUE_ID and DIM_DATA_SOURCE_SKEY with a stable surrogate key; HKEY; schema tests. Anything the engine cannot know is listed as an assumption. Download as a zip</td><td>DBT.EDIT</td></tr>
+</table></div>
+<ul>
+  <li>Gold lives in one database per domain: <code>&lt;ENV&gt;_GDP_GOLD_&lt;DOMAIN&gt;_DB.&lt;DOMAIN&gt;</code>.</li>
+  <li>Mastered keys are resolved through the <strong>full</strong> cross-reference (never the STAGE delta), matching on the source key and the upper-cased source-system name; an unresolved record gets <code>-1</code>.</li>
+  <li>A domain has one Silver model and one Gold model in the Model Workbench (<code>GOVERNANCE.DOMAIN_MODEL.LAYER</code>, V053). The Gold model never changes the target registry that runs map to.</li>
+</ul>
+
+<h3 id="f-lineage">Lineage</h3>
+<p><code>/lineage</code> traces a table or a column from Source to Gold, in either direction, and shows each layer as a
+swimlane: Source, Bronze (landed), Silver pre-MDM, MDM cross-reference, Silver post-MDM and Gold. Each hop lists how it
+happens: landed, mapped (the approved STTM expression), MDM match, golden record, resolved key, or built (gold
+generation). Edges come from <code>SOURCE.LANDING_TABLE_REGISTRY</code>, approved <code>CONTRACT.STTM_LINE</code> rows,
+the mastered-domain contracts, consumer target columns and <code>GOVERNANCE.LINEAGE_EDGE</code> (written by gold
+generation). It is linked from a gold build, a run's Silver Code Generation and the domain's Medallion and MDM panel.
+Read only, for everyone signed in (<code>GET /api/lineage/trace</code>, <code>GET /api/lineage/objects</code>).</p>
+
+<h3 id="f-consumer-domain">Onboarding a consumer domain (example: Availability)</h3>
+<p>Only Company and Property are mastered by Reltio. A new domain whose records refer to companies or properties, such
+as Availability, is a <strong>consumer</strong>: its Silver keeps the pre-MDM keys, and its Gold resolves them to the
+mastered dimensions. The pattern is the same for any consumer.</p>
+<ol>
+  <li><strong>Domain intake.</strong> Create the domain, add its sources, data model file and examples on the Sources
+  tab. On the Lineage tab, in <strong>Medallion and MDM</strong>, choose <em>Link to MDM</em> and add Property
+  (PROPERTY_CORE_SKEY to DIM_PROPERTY_SKEY) and Company (COMPANY_CORE_SKEY to DIM_COMPANY_SKEY). This needs DOMAIN.EDIT
+  and is versioned with the domain.</li>
+  <li><strong>Pipeline 1, Source to Silver.</strong> Start a run: Source Ingestion, Profiling, then Modeling. Because the
+  domain is a consumer, field mapping and the STTM use the post-MDM skill, so the Silver hub carries the
+  PROPERTY_CORE_SKEY and COMPANY_CORE_SKEY lookups next to the availability columns. Finish with Silver Code Generation
+  and the quality lane.</li>
+  <li><strong>Pipeline 2, Silver to Gold.</strong> After the Silver hub is loaded and Reltio has mastered the
+  related companies and properties, open a gold build for the domain and select the hub. The proposal gives
+  FACT_AVAILABILITY with DIM_PROPERTY_SKEY and DIM_COMPANY_SKEY resolved through the cross-reference, new dimensions for
+  descriptors, and a bridge where an availability relates to several companies in different roles. Review and approve
+  in the Model Workbench, then generate the gold dbt.</li>
+  <li><strong>Lineage.</strong> In <code>/lineage</code>, trace FACT_AVAILABILITY.DIM_PROPERTY_SKEY upstream: source
+  record, landed table, Silver hub, the property's cross-reference row, the golden record and DIM_PROPERTY.</li>
+</ol>
+<p>Check before you start: the domain's source systems exist in <code>SHARED.REF_GDP_SOURCE_SYSTEM</code> (the match
+uses the upper-cased system name), and the match rate on the Company and Property Medallion panels is acceptable for
+those systems. A low match rate means many gold rows will carry <code>-1</code>.</p>
+
 <h3 id="f-dbt">dbt publishing</h3>
 <dl class="feature-meta">
   <dt>Where</dt><dd>Run, dbt step; configured in Admin, Integrations, Code repositories</dd>
@@ -966,7 +1020,7 @@ cd apps/web; npm install; cd ../..</code></pre></li>
 <pre><code>SELECT VERSION, APPLIED_AT FROM DEV_AI_PLATFORM.CORE.SCHEMA_MIGRATION ORDER BY VERSION DESC LIMIT 5;
 SHOW PROCEDURES IN SCHEMA DEV_AI_PLATFORM.CONTRACT;
 SHOW ROW ACCESS POLICIES IN SCHEMA DEV_AI_PLATFORM.JIRA;</code></pre>
-  The newest version should be V050, and <code>OWN_ROWS</code> should be listed.</li>
+  The newest version should be V053, and <code>OWN_ROWS</code> should be listed.</li>
   <li><strong>Grant people access</strong> (see <a href="#mapping">Who gets what</a>):
 <pre><code>GRANT DATABASE ROLE DEV_AI_PLATFORM.DATA_ENGINEER TO ROLE &lt;data engineers&gt;;
 GRANT DATABASE ROLE DEV_AI_PLATFORM.QA_ENGINEER   TO ROLE &lt;qa team&gt;;
@@ -1212,6 +1266,9 @@ docker compose -f docker/docker-compose.yml --env-file docker/.env logs -f --tai
 <tr><td>CORE.COPILOT_MESSAGE</td><td>Log</td><td>Copilot questions, answers and citations</td><td>Copilot</td><td>Copilot panel</td><td>V015</td></tr>
 <tr><td>CORE.COPILOT_PLAN_STEP</td><td>Content</td><td>The eight plan steps of each copilot conversation and their state (own rows)</td><td>Copilot workspace</td><td>Copilot workspace plan</td><td>V048</td></tr>
 <tr><td>CORE.TICKET_VIEW</td><td>Config</td><td>Saved views of the Tickets page: a name, the filters, private or shared</td><td>Tickets API</td><td>Tickets</td><td>V050</td></tr>
+<tr><td>CORE.GOLD_BUILD</td><td>Content</td><td>Silver to Gold builds: domain, inputs, step, the proposal, the GOLD model version and the generated code</td><td>Gold API</td><td>Silver to Gold</td><td>V053</td></tr>
+<tr><td>GOVERNANCE.GOLD_MAPPING_LINE</td><td>Content</td><td>Where every gold column of a build comes from: source layer, table and column, expression, kind (COLUMN, RESOLVE, DERIVED, KEY, AUDIT)</td><td>Gold API</td><td>Gold build</td><td>V053</td></tr>
+<tr><td>GOVERNANCE.LINEAGE_EDGE</td><td>Content</td><td>Column and table lineage edges between layers, written by gold generation; the current generation is flagged</td><td>Gold API</td><td>Lineage</td><td>V053</td></tr>
 <tr><td>CORE.COPILOT_SESSION</td><td>Content</td><td>One row per copilot conversation: title, Jira issue, state (own rows)</td><td>Copilot workspace</td><td>Copilot workspace</td><td>V048</td></tr>
 <tr><td>CORE.DEPLOY_STATE</td><td>Log</td><td>Checksum of each rendered deploy step, so a re-deploy skips unchanged steps</td><td>infrastructure/deploy_snowflake.py</td><td>Deploy only</td><td>Deploy script</td></tr>
 <tr><td>CORE.PLATFORM_CONFIG</td><td>Config</td><td>Versioned platform settings: AI models, Jira, Ops, dbt publishing, rules</td><td>Admin, deploy seed</td><td>Read across the API and worker</td><td>V004</td></tr>
@@ -1402,6 +1459,9 @@ docker compose -f docker/docker-compose.yml --env-file docker/.env logs -f --tai
 <tr><td>V048</td><td>Copilot workspace: CORE.COPILOT_SESSION, COPILOT_EVENT, COPILOT_PLAN_STEP, COPILOT_CHANGE and COPILOT_ATTACHMENT, with the row access policy CORE.COPILOT_OWN_ROWS (each person sees only their own conversations)</td></tr>
 <tr><td>V049</td><td>Copilot workspace for REVIEWER, DATA_STEWARD and DOMAIN_OWNER (V048 granted it to DATA_ENGINEER and QA_ENGINEER)</td></tr>
 <tr><td>V050</td><td>Saved views of the Tickets page (CORE.TICKET_VIEW)</td></tr>
+<tr><td>V051</td><td>Domain skills and domain documents (Confluence among the document sources)</td></tr>
+<tr><td>V052</td><td>Uploaded domain documents are kept on a stage, with how each was read</td></tr>
+<tr><td>V053</td><td>Gold and lineage: GOVERNANCE.DOMAIN_MODEL.LAYER (one Silver and one Gold model per domain), CORE.GOLD_BUILD, GOVERNANCE.GOLD_MAPPING_LINE and GOVERNANCE.LINEAGE_EDGE</td></tr>
 </table></div>
 
 <!-- ============================================================ 07 -->
@@ -1450,7 +1510,7 @@ docker compose -f docker/docker-compose.yml --env-file docker/.env logs -f --tai
 <div class="note"><strong>Unused table.</strong> <code>AUDIT.AGENT_RUN</code> exists but nothing writes to it yet.</div>
 
 <footer>
-  <p>Generated from the repository source: governance policy, migrations V001 to V050, procedure definitions, API routes and web pages. Where this guide and the code differ, the code is right; report the difference so the guide can be updated.</p>
+  <p>Generated from the repository source: governance policy, migrations V001 to V053, procedure definitions, API routes and web pages. Where this guide and the code differ, the code is right; report the difference so the guide can be updated.</p>
 </footer>
 </main>
 </div>
