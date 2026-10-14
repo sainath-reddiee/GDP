@@ -209,6 +209,12 @@ def domain_context(session, domain_id: str | None, target: str | None = None, bu
             from services.knowledge.examples import as_context
 
             examples = as_context([r for r in items if r["KNOWLEDGE_TYPE"] == "EXAMPLE"])
+        # what the domain owner answered when the engine asked (services/learning/questions.py)
+        for r in rows(session, """SELECT CONTENT FROM KNOWLEDGE.DOMAIN_KNOWLEDGE
+                                   WHERE DOMAIN_ID = ? AND IS_CURRENT AND STATUS = 'ACTIVE' AND KNOWLEDGE_TYPE = 'BUSINESS_RULE'
+                                     AND SOURCE_REFERENCE LIKE 'question.%' AND """ + layer_sql() + """
+                                   ORDER BY UPDATED_AT DESC LIMIT 20""", [domain_id, "GOLD" if gold else "SILVER"]):
+            definitions.append(f"Domain owner's answer: {r['CONTENT']}")
     return compose_domain_context(skill.get("content") or "", domain, target, definitions, budget, examples)
 
 

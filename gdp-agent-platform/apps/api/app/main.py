@@ -6719,3 +6719,6 @@ app.include_router(domain_playbook_router)
 from app.reference_api import router as reference_router  # noqa: E402
 
 app.include_router(reference_router)
+from app.learning_api import router as learning_router  # noqa: E402
+
+app.include_router(learning_router)

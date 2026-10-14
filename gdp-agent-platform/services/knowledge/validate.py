@@ -73,7 +73,8 @@ def normalize_content(kind: str, content: Any) -> Optional[Dict[str, Any]]:
         item["soda_checks"] = [c for c in checks if isinstance(c, dict)] if isinstance(checks, list) else []
     elif kind == "MAPPING_PATTERN":
         # a pattern maps a source column to a target column, or (a rejected proposal) names the target it is not
-        if not (_text(item.get("source_column")) and (_text(item.get("target_column")) or _text(item.get("rejected_target")))):
+        renames = _text(item.get("source_suffix")) and _text(item.get("target_suffix"))   # a learned rename
+        if not renames and not (_text(item.get("source_column")) and (_text(item.get("target_column")) or _text(item.get("rejected_target")))):
             return None
     return item
 

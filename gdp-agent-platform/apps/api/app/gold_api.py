@@ -336,6 +336,12 @@ def propose_gold(run_id: str, db: Db = Depends(current_db)):
     except Exception as exc:
         raise _snowflake_error(exc) from exc
     _record_model_score(db, run["domain_id"], run_id, out, "MODEL")
+    try:   # the proposal's assumptions become questions for the domain owner
+        from services.learning import questions
+
+        invoke_source(db, questions.ask, run["domain_id"], "GOLD", run_id, "MODEL", questions.note_questions(out["notes"], "MODEL"))
+    except Exception:
+        pass
     return {"model_id": model_id, "version": made.get("version"), "notes": out["notes"],
             "reference": out.get("reference"), "alignment": out.get("alignment") or [], "score": out.get("score"),
             "tables": [{"entity": e["entity_name"], "table_type": e.get("table_type"), "conformed": bool(e.get("conformed_from"))}

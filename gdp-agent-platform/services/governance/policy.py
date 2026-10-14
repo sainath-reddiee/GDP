@@ -180,6 +180,9 @@ RULES: List[Tuple[str, str, Any, str]] = [
     ("PUT", r"/api/knowledge/[^/]+", "KNOWLEDGE.EDIT", "Edit knowledge"),
     ("POST", r"/api/knowledge/[^/]+/(retire|restore)", "KNOWLEDGE.EDIT", "Retire or restore knowledge"),
     ("POST", r"/api/knowledge/inbox/decide", "KNOWLEDGE.EDIT", "Approve or reject learned knowledge"),
+    ("POST", r"/api/domains/[^/]+/learning/learn", "KNOWLEDGE.EDIT", "Learn rules from a domain's reviewer decisions"),
+    ("POST", r"/api/knowledge/[^/]+/replay", "KNOWLEDGE.EDIT", "Replay a knowledge change on past runs"),
+    ("POST", r"/api/questions/[^/]+/(answer|dismiss)", "KNOWLEDGE.EDIT", "Answer a question the engine asked"),
     ("POST", r"/api/knowledge/outcomes/refresh", "KNOWLEDGE.EDIT", ""),
     ("POST", r"/api/knowledge/[^/]+/rollback", "KNOWLEDGE.EDIT", "Roll knowledge back to an earlier version"),
     ("POST", r"/api/knowledge/[^/]+/verify", "KNOWLEDGE.EDIT", ""),
@@ -447,6 +450,9 @@ NO_QUEUE_ROUTES = [(m, re.compile(p)) for m, p in [
     ("POST", r"^/api/domains/[^/]+/examples/[^/]+$"),
     # a reference input is read, not applied: what it proposes goes through the inbox, the Workbench or a run's gates
     ("POST", r"^/api/domains/[^/]+/references(?!/[^/]+/use-as-mdm$)(/.*)?$"),   # the MDM contract is governed
+    # learning proposes to the inbox and a replay only measures; an answer is the owner's own knowledge
+    ("POST", r"^/api/domains/[^/]+/learning/learn$"), ("POST", r"^/api/knowledge/[^/]+/replay$"),
+    ("POST", r"^/api/questions/[^/]+/(answer|dismiss)$"),
     # a Gold run's gold model proposal is a draft, reviewed and approved in the Model Workbench (four eyes)
     ("POST", r"^/api/runs/[^/]+/gold/propose$"),
 ]]

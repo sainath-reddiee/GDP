@@ -143,6 +143,9 @@ def refusal(db: Db, who: dict, item: Optional[dict], decision: str) -> Optional[
     if decision == "approve":
         if str(item.get("created_by") or "").upper() == who["user"]:
             return "you proposed it, so someone else must approve it"
+        if item.get("_worse") and not (item.get("_note") or "").strip():
+            return ("the replay on this domain's past runs shows it makes mapping worse; add a note saying why it should "
+                    "be approved anyway")
         if str(item.get("origin") or "").upper() == "CASE" and _case_resolver(db, item) == who["user"]:
             return "you resolved the case it comes from, so someone else must approve it"
     return None
@@ -163,9 +166,30 @@ def inbox(domain_id: Optional[str] = None, db: Db = Depends(current_db)):
         for c in db.query(f"""SELECT {_KNOWLEDGE_COLUMNS} {FROM} WHERE K.IS_CURRENT
                                 AND ARRAY_CONTAINS(K.LINEAGE_ID::VARIANT, PARSE_JSON(%s))""", (json.dumps(lineages),)):
             current[c["lineage_id"]] = _shape_knowledge(c)
-    return {"items": [{**_shape_knowledge(p), "run_name": p.get("run_name"), "current": current.get(p.get("lineage_id")),
-                       "own": str(p.get("created_by") or "").upper() == who["user"]}
-                      for p in proposed]}
+    evals = _latest_evals(db, [p["knowledge_id"] for p in proposed])
+    items = []
+    for p in proposed:
+        shaped = _shape_knowledge(p)
+        cj = shaped.get("content_json") if isinstance(shaped.get("content_json"), dict) else {}
+        # the latest replay of this proposal, else the one a learned rule was proposed with
+        items.append({**shaped, "run_name": p.get("run_name"), "current": current.get(p.get("lineage_id")),
+                      "own": str(p.get("created_by") or "").upper() == who["user"],
+                      "replay": evals.get(p["knowledge_id"]) or cj.get("replay")})
+    return {"items": items}
+
+
+def _latest_evals(db: Db, ids: list) -> dict:
+    """The latest replay of each knowledge id (KNOWLEDGE.CHANGE_EVAL, V058; empty before it)."""
+    if not ids:
+        return {}
+    try:
+        found = db.query("""SELECT SUBJECT_ID, RESULT FROM KNOWLEDGE.CHANGE_EVAL
+                             WHERE SUBJECT_KIND = 'KNOWLEDGE' AND ARRAY_CONTAINS(SUBJECT_ID::VARIANT, PARSE_JSON(%s))
+                             QUALIFY ROW_NUMBER() OVER (PARTITION BY SUBJECT_ID ORDER BY CREATED_AT DESC) = 1""",
+                         (json.dumps(list(ids)[:500]),))
+    except Exception:
+        return {}
+    return {r["subject_id"]: (json.loads(r["result"]) if isinstance(r.get("result"), str) else r.get("result")) for r in found}
 
 
 class Decide(BaseModel):
@@ -184,6 +208,9 @@ def decide(body: Decide, db: Db = Depends(current_db)):
     for kid in dict.fromkeys(body.ids):
         found = db.query("""SELECT KNOWLEDGE_ID, LINEAGE_ID, STATUS, DOMAIN_ID, CREATED_BY, ORIGIN, CONTENT_JSON
                               FROM KNOWLEDGE.DOMAIN_KNOWLEDGE WHERE KNOWLEDGE_ID = %s""", (kid,))
+        if found:
+            found[0] = {**found[0], "_worse": (_latest_evals(db, [kid]).get(kid) or {}).get("verdict") == "WORSE",
+                        "_note": body.note}
         reason = refusal(db, who, found[0] if found else None, body.decision)
         if reason:
             refused.append({"knowledge_id": kid, "reason": reason})

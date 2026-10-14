@@ -92,11 +92,13 @@ def source_columns(session, run_id: str) -> List[Dict[str, Any]]:
     return out
 
 
-def domain_knowledge(session, domain_id: str, run_id: str, target: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+def domain_knowledge(session, domain_id: str, run_id: str, target: Optional[Dict[str, Any]] = None,
+                     holdout: bool = False) -> Dict[str, Any]:
     """Knowledge for one run. Learned evidence (reviewer patterns, past decisions) is scoped to the run's domain and
-    target table, so a column name approved for one company's table never steers an unrelated table."""
+    target table, so a column name approved for one company's table never steers an unrelated table. holdout (a
+    replay): nothing learned from this run's own decisions, and no usage recorded."""
     knowledge: Dict[str, Any] = {"glossary": {}, "rules": {}, "transforms": [], "history": [], "notes": [],
-                                 "avoid": set()}
+                                 "avoid": set(), "renames": []}
     target_name = str((target or {}).get("TARGET_TABLE") or "").upper()
     used: List[str] = []
     from services.knowledge.writer import NOT_OPERATIONAL_SQL, layer_sql, run_layer
@@ -105,8 +107,8 @@ def domain_knowledge(session, domain_id: str, run_id: str, target: Optional[Dict
     patterns: List[Tuple[str, str, Optional[str]]] = []  # reviewer patterns, weighted by their track record below
     for k in rows(session, f"""SELECT KNOWLEDGE_ID, KNOWLEDGE_TYPE, CONTENT_JSON, LINEAGE_ID FROM KNOWLEDGE.DOMAIN_KNOWLEDGE
                               WHERE DOMAIN_ID = ? AND IS_CURRENT AND STATUS = 'ACTIVE' AND CONTENT_JSON IS NOT NULL
-                                AND {NOT_OPERATIONAL_SQL} AND {layer_sql()}""",
-                  [domain_id, "SILVER" if layer == "ANY" else layer]):
+                                AND {NOT_OPERATIONAL_SQL} AND {layer_sql()} AND COALESCE(SOURCE_RUN_ID, '') <> ?""",
+                  [domain_id, "SILVER" if layer == "ANY" else layer, run_id if holdout else ""]):
         kind = k["KNOWLEDGE_TYPE"]
         content = normalize_content(kind, variant(k["CONTENT_JSON"]))
         if content is None:
@@ -131,6 +133,8 @@ def domain_knowledge(session, domain_id: str, run_id: str, target: Optional[Dict
                 bucket[column] = content
         elif kind == "TRANSFORMATION_RULE":
             knowledge["transforms"].append(content)
+        elif kind == "MAPPING_PATTERN" and content.get("source_suffix") and content.get("target_suffix"):
+            knowledge["renames"].append((str(content["source_suffix"]).upper(), str(content["target_suffix"]).upper()))
         elif kind == "MAPPING_PATTERN" and anti_pattern(content):
             src, rejected = anti_pattern(content)
             knowledge["avoid"].add((src.upper(), rejected.upper()))
@@ -147,7 +151,8 @@ def domain_knowledge(session, domain_id: str, run_id: str, target: Optional[Dict
                     + (f" (model proposed {content['proposed_target']})" if content.get("overridden") else "")
                     + (f": {content['justification']}" if content.get("justification") else "")
                 )
-    record_usage(session, run_id, "MAPPING", used)
+    if not holdout:
+        record_usage(session, run_id, "MAPPING", used)
     # a pattern reviewers keep overruling counts less as evidence (services/knowledge/outcomes, V047); a new one or
     # one they keep counts fully
     from services.knowledge.outcomes import for_lineages, weight
@@ -430,6 +435,13 @@ def generate_mapping_candidates(session, run_id: str) -> Dict[str, Any]:
 
             try:
                 _score_mapping(session, run_id, run, reference, engine_first, sources)
+            except Exception:
+                pass
+            try:   # ask the domain owner where the engine is unsure (services/learning/questions.py)
+                from services.learning import questions
+
+                questions.ask(session, run["DOMAIN_ID"], run_pipeline(run), run_id, "MAPPING",
+                              questions.mapping_questions(ranked_by_source, target["TARGET_TABLE"]))
             except Exception:
                 pass
             ambiguous = [(s, r) for s, r in ranked_by_source if r and r[0]["ambiguous"]]
