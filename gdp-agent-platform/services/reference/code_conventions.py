@@ -69,3 +69,27 @@ def learn(files: Dict[str, str]) -> Dict[str, Any]:
     if macros_defined:
         out["macro_files"] = len(macros_defined)
     return out
+
+
+def as_chunks(files: Dict[str, str]) -> list:
+    """The project's files as code chunks (path, kind, name, text), the shape the gold convention learner reads."""
+    return [{"path": p, "kind": "model" if "/models/" in f"/{p.lower()}" else "file",
+             "name": p.replace("\\", "/").rsplit("/", 1)[-1].rsplit(".", 1)[0], "text": t, "columns": []}
+            for p, t in files.items() if p.lower().endswith(".sql")]
+
+
+def to_overrides(learned: Dict[str, Any], pipeline: str = "SILVER") -> Dict[str, Any]:
+    """Convention overrides a layer's code generation can take from what the project does (pure): only settings the
+    evidence decides (seen in at least two models), never names or paths it cannot see whole."""
+    out: Dict[str, Any] = {}
+    seq = next((x["count"] for x in learned.get("surrogate_keys") or [] if x["value"] == "sequence"), 0)
+    hashes = sum(x["count"] for x in learned.get("hash_functions") or [])
+    if seq >= 2 and seq >= hashes:
+        out["key_strategy"] = "sequence"
+    elif hashes >= 2 and not seq:
+        out["key_strategy"] = "hash"
+    if str(pipeline).upper() != "GOLD":
+        light = [x for x in learned.get("materializations") or [] if x["value"] in ("ephemeral", "view")]
+        if light and light[0]["count"] >= 2:
+            out["staging_materialization"] = light[0]["value"]
+    return out

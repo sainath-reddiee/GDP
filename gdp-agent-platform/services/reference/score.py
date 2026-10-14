@@ -87,12 +87,16 @@ def mapping(chosen: Iterable[Tuple[str, str]], reference_lines: Dict[str, Dict[s
             "details": {}}
 
 
-def code(generated: Iterable[str], reference_files: Iterable[str]) -> Dict[str, Any]:
-    """Reference dbt models (by model name) the generated code also has."""
+def code(generated: Iterable[str], reference_files: Iterable[str], of: str = "reference") -> Dict[str, Any]:
+    """Reference dbt models (by model name) the generated code also has; with of="generated", the generated models
+    that carry a name the reference project uses (one run builds a few tables, not the whole project)."""
     def models(paths: Iterable[str]) -> set:
         return {p.replace("\\", "/").rsplit("/", 1)[-1].rsplit(".", 1)[0].lower() for p in paths
                 if p.lower().endswith(".sql") and "/models/" in "/" + p.lower().replace("\\", "/")}
     mine, ref = models(generated), models(reference_files)
     hit = mine & ref
+    if of == "generated":
+        return {"pct": _pct(len(hit), len(mine)), "matched": len(hit), "total": len(mine), "missing": [],
+                "extra": sorted(mine - ref)[:50], "details": {}}
     return {"pct": _pct(len(hit), len(ref)), "matched": len(hit), "total": len(ref), "missing": sorted(ref - mine)[:50],
             "extra": sorted(mine - ref)[:50], "details": {}}

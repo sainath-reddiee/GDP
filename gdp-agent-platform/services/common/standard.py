@@ -204,13 +204,30 @@ def domain_conventions(query, domain_id: Optional[str], pipeline: str = SILVER) 
     return value if isinstance(value, dict) else None
 
 
+def reference_conventions(query, domain_id: Optional[str], pipeline: str = SILVER) -> Dict[str, Any]:
+    """What the domain's own dbt project (a DBT_CODE reference input for the layer, V057) shows, as overrides."""
+    if not domain_id:
+        return {}
+    from services.reference import code_conventions, store
+
+    ref = store.latest(query, domain_id, GOLD if str(pipeline or "").upper() == GOLD else SILVER, "DBT_CODE")
+    learned = ((ref or {}).get("parsed") or {}).get("conventions") or {}
+    return code_conventions.to_overrides(learned, pipeline) if learned else {}
+
+
 def conventions_for(query, standard: str, pipeline: str = SILVER, domain_id: Optional[str] = None) -> Dict[str, Any]:
     """`query(sql, params)` -> rows; reads PLATFORM_CONFIG overrides for this standard, for the Gold Pipeline its gold
-    overrides, then the domain's own overrides for the layer (missing -> preset)."""
+    overrides, then what the domain's own dbt project shows (a reference input), then the domain's own overrides for
+    the layer, which win (missing -> preset)."""
     gold = str(pipeline or "").upper() == GOLD
-    return conventions(standard, _config(query, f"MODELING_STANDARD.{standard}"), pipeline,
-                       _config(query, f"MODELING_STANDARD.{standard}.GOLD") if gold else None,
-                       domain_conventions(query, domain_id, pipeline))
+    learned = reference_conventions(query, domain_id, pipeline)
+    own = domain_conventions(query, domain_id, pipeline)
+    out = conventions(standard, _config(query, f"MODELING_STANDARD.{standard}"), pipeline,
+                      _config(query, f"MODELING_STANDARD.{standard}.GOLD") if gold else None,
+                      {**learned, **(own or {})} if learned else own)
+    if learned:
+        out["learned_from_project"] = sorted(k for k in learned if k not in (own or {}))
+    return out
 
 
 def fill(template: str, **values: Any) -> str:

@@ -190,6 +190,10 @@ function Conventions({ domainId, layer, data, onSaved }: { domainId: string; lay
           ))}
         </tbody>
       </table>
+      {Array.isArray(c.effective.learned_from_project) && c.effective.learned_from_project.length > 0 && (
+        <p className="mt-2 text-xs text-muted-foreground">Learned from your dbt project (References):{" "}
+          {(c.effective.learned_from_project as string[]).map((k) => `${k} = ${String(c.effective[k])}`).join(", ")}. A value set here wins.</p>
+      )}
       {msg && <p role="alert" className="mt-2 text-xs text-destructive">{msg}</p>}
       {dirty && may && (
         <div className="mt-2 flex gap-2">

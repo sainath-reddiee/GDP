@@ -150,5 +150,17 @@ def assemble_for_run(session, run: Dict[str, Any], sttm: Dict[str, Any], design:
         conventions, _ = learn(chunks)
     except Exception:
         conventions = {}
-    return build(ctx["spec"], ctx["entity"], sttm_lines, design, mastered=ctx["mastered"], consumes=ctx["consumes"],
+    from services.reference import store
+
+    project = store.latest(lambda sql, params: rows(session, sql, params), run["DOMAIN_ID"], "GOLD", "DBT_CODE")
+    learned = ((project or {}).get("parsed") or {}).get("gold_conventions") or {}
+    conventions = {**conventions, **learned}   # the project a person gave for this domain wins over the indexed repos
+    built = build(ctx["spec"], ctx["entity"], sttm_lines, design, mastered=ctx["mastered"], consumes=ctx["consumes"],
                  conventions=conventions, env=ctx["env"], soda_yaml=soda_yaml, skeleton=skeleton, run_id=run.get("RUN_ID"))
+    if project and (project.get("parsed") or {}).get("files"):
+        from services.reference import score
+
+        store.record(lambda sql, params: session.sql(sql, params=params).collect(), domain_id=run["DOMAIN_ID"], layer="GOLD",
+                     kind="DBT_CODE", reference_id=project["reference_id"], run_id=run.get("RUN_ID"), stage="CODE",
+                     score=score.code(built["generated"], project["parsed"]["files"], of="generated"))
+    return built

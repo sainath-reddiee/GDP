@@ -144,8 +144,13 @@ def _read(db: Db, domain_id: str, rid: str, name: str, data: bytes, table: Optio
         models = [p for p in files if p.lower().endswith(".sql") and "/models/" in f"/{p.lower()}"]
         from services.reference import code_conventions
 
+        from services.gold.conventions import learn as learn_gold
+
         learned = code_conventions.learn(files)
-        _set(db, rid, status="READY", parsed={"files": sorted(files)[:2000], "models": len(models), "conventions": learned},
+        gold_conventions, gold_notes = learn_gold(code_conventions.as_chunks(files))
+        _set(db, rid, status="READY", parsed={"files": sorted(files)[:2000], "models": len(models), "conventions": learned,
+                                              "gold_conventions": gold_conventions, "gold_notes": gold_notes,
+                                              "overrides": code_conventions.to_overrides(learned, _model_layer(layer))},
              note=f"{len(files)} file(s), {len(models)} model(s); learned: {', '.join(sorted(learned)) or 'nothing yet'}")
     else:   # DOCUMENT: read for knowledge, proposed for this layer (the document reader and the review inbox)
         source_id = str(uuid.uuid4())
