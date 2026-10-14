@@ -1,6 +1,5 @@
 "use server";
 
-import { revalidatePath } from "next/cache";
 import { api, attemptValue } from "@/lib/api";
 
 /** The learning loop (V058): rules learned from reviewer decisions, replays of a change on past runs, and the questions
@@ -32,10 +31,9 @@ export async function domainLearning(domainId: string, layer: string) {
   return attemptValue(() => api<Learning>(`/api/domains/${encodeURIComponent(domainId)}/learning?layer=${layer}`));
 }
 export async function learnFromDecisions(domainId: string, layer: string) {
-  const r = await attemptValue(() => api<LearnResult>(`/api/domains/${encodeURIComponent(domainId)}/learning/learn?layer=${layer}`,
-                                                     { method: "POST" }));
-  revalidatePath("/knowledge");
-  return r;
+  // no revalidation: the knowledge inbox reads fresh on every visit, and a refresh here would clear the result shown
+  return attemptValue(() => api<LearnResult>(`/api/domains/${encodeURIComponent(domainId)}/learning/learn?layer=${layer}`,
+                                             { method: "POST" }));
 }
 export async function replayKnowledge(knowledgeId: string) {
   return attemptValue(() => api<Replay & { knowledge_id: string; layer: string }>(

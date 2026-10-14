@@ -109,7 +109,7 @@ export function NewGoldRun({ domains }: { domains: { domain_id: string; domain_n
               )}
               {schema?.error && <p role="alert" className="text-sm text-destructive">{schema.error}</p>}
               {!!schema?.missing?.length && <p className="text-xs text-muted-foreground">{mastered ? "In the MDM contract but not in Snowflake yet" : "Registered but not in Snowflake yet"}: {schema.missing.join(", ")}{mastered ? " (Reltio has not written them in this environment)" : " (load them with the Silver Pipeline first)"}.</p>}
-              {schema && !schema.error && (
+              {schema && !schema.error && schema.tables.length > 0 && (
                 <div className="max-h-72 overflow-y-auto rounded-xl border">
                   <table className="w-full text-sm">
                     <thead className="sticky top-0 bg-muted/80 text-left text-[11px] uppercase tracking-wide text-muted-foreground">
