@@ -156,6 +156,7 @@ RULES: List[Tuple[str, str, Any, str]] = [
     ("PUT", r"/api/domains/[^/]+/conventions", "DOMAIN.EDIT", "Change how a domain's code is built in a layer"),
     ("POST", r"/api/domains/[^/]+/references(/schema)?", "KNOWLEDGE.EDIT", "Give the platform a reference input for a domain"),
     ("POST", r"/api/domains/[^/]+/references/[^/]+/(kind|withdraw)", "KNOWLEDGE.EDIT", "Correct or withdraw a reference input"),
+    ("POST", r"/api/domains/[^/]+/references/[^/]+/use-as-model", "MODEL.EDIT", "Start a domain model draft from a reference model"),
     ("POST", r"/api/gold/runs", "RUN.CREATE", "Start a Gold run on silver tables"),
     ("POST", rf"{R}/gold/propose", "MODEL.EDIT", "Propose a Gold run's gold model to the Model Workbench"),
     ("POST", rf"{R}/gold/target", "MODEL.EDIT", "Use a table of the approved gold model as a Gold run's target"),

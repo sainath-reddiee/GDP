@@ -395,6 +395,13 @@ export async function setReferenceKind(domainId: string, rid: string, body: { ki
   return attemptValue(() => api<ReferenceRow>(`/api/domains/${encodeURIComponent(domainId)}/references/${encodeURIComponent(rid)}/kind`,
     { method: "POST", body: JSON.stringify(body) }));
 }
+export async function useReferenceAsModel(domainId: string, rid: string, replace = false) {
+  const r = await attemptValue(() => api<{ model_id: string; version: number; layer: string }>(
+    `/api/domains/${encodeURIComponent(domainId)}/references/${encodeURIComponent(rid)}/use-as-model`,
+    { method: "POST", body: JSON.stringify({ replace }) }));
+  revalidatePath(`/domains/${domainId}`);
+  return r;
+}
 export async function withdrawReference(domainId: string, rid: string) {
   return attemptValue(() => api<ReferenceRow>(`/api/domains/${encodeURIComponent(domainId)}/references/${encodeURIComponent(rid)}/withdraw`,
     { method: "POST" }));

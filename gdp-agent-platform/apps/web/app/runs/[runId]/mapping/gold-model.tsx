@@ -27,7 +27,9 @@ export function GoldModelPanel({ runId }: { runId: string }) {
     setError("");
     const r = await proposeGold(runId);
     if (!r.ok) { setError(r.error); return; }
-    setNotes(r.data.notes ?? []);
+    const aligned = r.data.alignment?.filter((a) => a.proposed && a.reference) ?? [];
+    setNotes([...(r.data.reference ? [`Aligned to your reference model ${r.data.reference.title ?? ""}: ${aligned.length} table(s) take its names, columns and types`] : []),
+              ...(r.data.notes ?? [])]);
     load();
   });
   if (data.parent_run_id) {

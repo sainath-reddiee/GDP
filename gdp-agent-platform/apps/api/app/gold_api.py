@@ -237,10 +237,33 @@ def run_gold(run_id: str, db: Db = Depends(current_db)):
             "can_choose_target": run["current_state"] in MODEL_APPLY_STATES}
 
 
+def _reference_model(db: Db, domain_id: str) -> Optional[Dict[str, Any]]:
+    """The domain's gold reference model (a DATA_MODEL reference input for the GOLD layer, V057), if one was given."""
+    from services.reference import store
+
+    ref = store.latest(lambda sql, params: db.query(sql.replace("?", "%s"), tuple(params)), domain_id, "GOLD", "DATA_MODEL")
+    return ref if ref and (ref.get("parsed") or {}).get("spec") else None
+
+
+def _proposal(db: Db, d: Dict[str, Any], reg: Dict[str, Any], inputs: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """The gold proposal for the profiled silver tables, aligned to the domain's gold reference model when there is
+    one (its tables, columns and keys kept exactly; only what it lacks proposed)."""
+    out = gold.propose(d["domain_name"], inputs, consumes=d["mdm"].get("consumes") or [], mastered=_mastered(reg),
+                       env=_env(d.get("silver_database") or inputs[0]["database"]))
+    ref = _reference_model(db, d["domain_id"])
+    if ref:
+        from services.gold import align
+
+        out = align.align(out, ref["parsed"]["spec"], f"your reference model ({ref.get('title') or 'gold'})")
+        out["reference"] = {"reference_id": ref["reference_id"], "title": ref.get("title")}
+    return out
+
+
 @router.post("/api/runs/{run_id}/gold/propose")
 def propose_gold(run_id: str, db: Db = Depends(current_db)):
-    """The run's profiled silver tables as a proposed gold model, saved as a draft of the domain's GOLD model."""
-    from services.modeling import domain_model
+    """The run's profiled silver tables as a proposed gold model, saved as a draft of the domain's GOLD model: a new
+    model, or merged into the open draft (tables a reviewer added are kept), aligned to the gold reference model."""
+    from services.modeling import domain_model, importers
 
     run = _run(db, run_id)
     reg = _contracts(db)
@@ -249,8 +272,7 @@ def propose_gold(run_id: str, db: Db = Depends(current_db)):
     inputs = _profiled_inputs(db, run_id)
     if not inputs:
         raise HTTPException(409, "profile the run's silver tables first")
-    out = gold.propose(d["domain_name"], inputs, consumes=d["mdm"].get("consumes") or [], mastered=_mastered(reg),
-                       env=_env(d.get("silver_database") or inputs[0]["database"]))
+    out = _proposal(db, d, reg, inputs)
     spec = out["spec"]
     user = str(db.user or "").upper()
     model_id = domain_model.model_id_for(run["domain_id"], "GOLD")
@@ -266,7 +288,8 @@ def propose_gold(run_id: str, db: Db = Depends(current_db)):
         if not exists[0].get("OPEN_VERSION"):
             domain_model.open_draft(session, model_id, user, None, note)
         draft = domain_model.get_model(session, model_id)["current"]
-        return domain_model.save_draft(session, model_id, json.dumps({"spec": spec, "etag": draft["etag"], "change_note": note}), user)
+        merged = importers.merge(draft["spec"], spec, model_id)
+        return domain_model.save_draft(session, model_id, json.dumps({"spec": merged, "etag": draft["etag"], "change_note": note}), user)
 
     try:
         made = invoke_source(db, work)
@@ -277,7 +300,8 @@ def propose_gold(run_id: str, db: Db = Depends(current_db)):
     except Exception as exc:
         raise _snowflake_error(exc) from exc
     return {"model_id": model_id, "version": made.get("version"), "notes": out["notes"],
-            "tables": [{"entity": e["entity_name"], "table_type": e["table_type"], "conformed": bool(e.get("conformed_from"))}
+            "reference": out.get("reference"), "alignment": out.get("alignment") or [],
+            "tables": [{"entity": e["entity_name"], "table_type": e.get("table_type"), "conformed": bool(e.get("conformed_from"))}
                        for e in spec["design"]["entities"]]}
 
 
@@ -328,8 +352,7 @@ def build_star_schema(run_id: str, db: Db = Depends(current_db)):
     found = db.query("SELECT SPEC FROM GOVERNANCE.MODEL_DESIGNS WHERE MODEL_ID = %s AND VERSION = %s",
                      (model["model_id"], int(model["approved_version"])))
     spec = spec_v2.active(spec_v2.normalize_v2(_js(found[0]["spec"]) or {}, model["model_id"]))
-    proposal = gold.propose(d["domain_name"], inputs, consumes=d["mdm"].get("consumes") or [], mastered=_mastered(reg),
-                            env=_env(d.get("silver_database") or inputs[0]["database"]))
+    proposal = _proposal(db, d, reg, inputs)
     layout = star.plan(spec, proposal["lines"], inputs)
     have = {str(c.get("entity") or "").upper() for c in _children(db, run_id)}
     created, errors = [], []

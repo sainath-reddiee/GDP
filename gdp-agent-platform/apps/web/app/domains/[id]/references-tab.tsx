@@ -2,11 +2,12 @@
 
 import { useEffect, useRef, useState, useTransition } from "react";
 import { Check, CircleAlert, Database, Loader2, Upload } from "lucide-react";
+import Link from "next/link";
 import { useAccess } from "@/components/access";
 import { LAYER_META, type Layer } from "@/lib/layers";
 import { cn } from "@/lib/utils";
 import {
-  addSchemaReference, domainReferences, setReferenceKind, uploadReferences, withdrawReference,
+  addSchemaReference, domainReferences, setReferenceKind, uploadReferences, useReferenceAsModel, withdrawReference,
   type ReferenceKind, type ReferenceRow, type References,
 } from "../actions";
 
@@ -140,7 +141,14 @@ export function ReferencesTab({ domainId, layer }: { domainId: string; layer: La
                 <td className="px-3 py-2"><span className={cn("inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium", STATUS[r.status])}>
                   {r.status === "READY" ? <Check className="h-3 w-3" /> : r.status === "FAILED" ? <CircleAlert className="h-3 w-3" /> : (r.status === "QUEUED" || r.status === "READING") ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
                   {r.status.toLowerCase()}</span></td>
-                <td className="px-3 py-2 text-right">{may && <button type="button" disabled={pending} onClick={() => act(() => withdrawReference(domainId, r.reference_id))} className="text-[11px] text-muted-foreground hover:text-destructive">Withdraw</button>}</td>
+                <td className="space-y-1 px-3 py-2 text-right">
+                  {r.kind === "DATA_MODEL" && r.status === "READY" && (r.layer === "SILVER" || r.layer === "GOLD") && (
+                    typeof r.applied?.model_id === "string"
+                      ? <Link href={`/dashboard/modeling/${encodeURIComponent(r.applied.model_id)}`} className="block text-[11px] font-medium text-primary hover:underline">Open draft v{String(r.applied.version ?? "")}</Link>
+                      : canAct("MODEL.EDIT") && <button type="button" disabled={pending} title="Start the layer's domain model from it, or merge it into the open draft (reviewed in the Model Workbench)"
+                                                        onClick={() => act(() => useReferenceAsModel(domainId, r.reference_id))}
+                                                        className="block w-full text-right text-[11px] font-medium text-primary hover:underline">Use as the model</button>)}
+                  {may && <button type="button" disabled={pending} onClick={() => act(() => withdrawReference(domainId, r.reference_id))} className="block w-full text-right text-[11px] text-muted-foreground hover:text-destructive">Withdraw</button>}</td>
               </tr>
             ))}
             {!live.length && <tr><td colSpan={5} className="px-3 py-6 text-center text-muted-foreground">Nothing given for this layer yet.</td></tr>}

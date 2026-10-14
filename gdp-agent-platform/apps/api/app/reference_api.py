@@ -318,3 +318,50 @@ def withdraw_reference(domain_id: str, rid: str, db: Db = Depends(current_db)):
     _row(db, domain_id, rid)
     _set(db, rid, status="WITHDRAWN", note="Withdrawn: the engine no longer uses it")
     return _row(db, domain_id, rid)
+
+
+class UseModelIn(BaseModel):
+    replace: bool = False
+
+
+@router.post("/api/domains/{domain_id}/references/{rid}/use-as-model")
+def use_reference_as_model(domain_id: str, rid: str, body: UseModelIn, db: Db = Depends(current_db)):
+    """A data model reference as the layer's domain model: version 1 of a new model, or merged into the open draft
+    (same-named tables replaced with their ids kept; with `replace`, tables the reference lacks are retired). It is a
+    draft like any other: reviewed and approved in the Model Workbench (four eyes)."""
+    from services.modeling import domain_model, importers
+
+    r = _row(db, domain_id, rid)
+    if r["kind"] != "DATA_MODEL" or r["status"] != "READY" or not (r.get("parsed") or {}).get("spec"):
+        raise HTTPException(409, "only a data model reference that has been read can become the domain model")
+    layer = r["layer"]
+    if layer not in ("SILVER", "GOLD"):
+        raise HTTPException(400, "give the reference a layer first (Silver or Gold): the MDM layer has no domain model")
+    spec, user = r["parsed"]["spec"], str(db.user or "").upper()
+    model_id = domain_model.model_id_for(domain_id, layer)
+    note = f"From reference {r.get('title') or rid}"
+
+    def work(session):
+        from services.common.sql import rows
+
+        exists = rows(session, "SELECT OPEN_VERSION FROM GOVERNANCE.DOMAIN_MODEL WHERE MODEL_ID = ?", [model_id])
+        if not exists:
+            return domain_model.create_model(session, domain_id, json.dumps(
+                {"layer": layer, "spec": spec, "origin": "REFERENCE", "change_note": note}), user)
+        if not exists[0].get("OPEN_VERSION"):
+            domain_model.open_draft(session, model_id, user, None, note)
+        draft = domain_model.get_model(session, model_id)["current"]
+        merged = importers.merge(draft["spec"], spec, model_id, replace=body.replace)
+        return domain_model.save_draft(session, model_id, json.dumps({"spec": merged, "etag": draft["etag"], "change_note": note}), user)
+
+    try:
+        made = invoke_source(db, work)
+    except HTTPException:
+        raise
+    except AssertionError as exc:
+        raise HTTPException(409, str(exc)) from None
+    except Exception as exc:
+        raise _snowflake_error(exc) from exc
+    applied = {**(r.get("applied") or {}), "model_id": model_id, "version": made.get("version")}
+    _set(db, rid, applied=applied, note=f"{r.get('note') or ''} Draft v{made.get('version')} of the {layer.lower()} model.".strip()[:3900])
+    return {"model_id": model_id, "version": made.get("version"), "layer": layer}
