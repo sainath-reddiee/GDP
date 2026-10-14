@@ -19,6 +19,8 @@ from __future__ import annotations
 import re
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+from services.common.rules import rule as platform_rule
+
 SAFE = re.compile(r"^[A-Za-z_][A-Za-z0-9_$]*$")
 ALIAS_PREFIX = re.compile(r"\b[a-z][a-z0-9_]{0,5}\.(?=[\"A-Za-z_])")
 CATEGORIES = ("RECONCILIATION", "GRAIN", "COMPLETENESS", "SOURCE_TO_TARGET", "TRANSFORMATION", "LOOKUP", "VALUES", "JOINS")
@@ -228,14 +230,17 @@ def build_suite(target: Dict[str, Any], sources: Dict[str, str], lines: List[Dic
         col = str(l["target_column"]).upper()
         kind = str(l.get("mapping_type") or "").upper()
         if kind == "LOOKUP" or (col.endswith("_SKEY") and col != str(spec.get("hub_fk") or "").upper()):
-            # a gold lookup writes -1 when nothing resolves (GDP gold rule); count those as unresolved too
+            # a gold lookup writes -1 when nothing resolves (GDP gold rule); count those as unresolved too, within the
+            # Gold Pipeline's tolerance
             minus_one = "-1" in str(l.get("lookup_logic") or "")
+            tolerance = platform_rule("quality.gold_unresolved_key_max_pct")
             suite.add("LOOKUP", f"{col} resolves for every row",
                       "A lookup that finds nothing leaves the surrogate key empty; those rows need a reference fix."
                       + (" In gold an unresolved key is -1." if minus_one else ""),
                       f"SELECT COUNT(*) AS unresolved\nFROM {tgt}\nWHERE {ident(col)} IS NULL"
                       + (f" OR {ident(col)} = -1" if minus_one else ""),
-                      "unresolved = 0, or only rows whose source code is blank", "MEDIUM", col)
+                      (f"unresolved at most {tolerance}% of rows (Gold Pipeline rule)" if minus_one
+                       else "unresolved = 0, or only rows whose source code is blank"), "MEDIUM", col)
     fk, hub = spec.get("hub_fk"), spec.get("hub")
     if spec.get("role") == "spoke" and fk and hub and "." in tgt:
         hub_fqn = ".".join(tgt.split(".")[:2] + [ident(str(hub).upper())])

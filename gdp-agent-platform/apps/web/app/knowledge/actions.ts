@@ -12,6 +12,8 @@ export type KnowledgeItem = {
   is_current?: boolean; lineage_id?: string | null; origin?: string | null; source_run_id?: string | null;
   confidence?: number | null; change_note?: string | null; verified_by?: string | null; verified_at?: string | null;
   review_due?: string | null; reviewed_by?: string | null; review_note?: string | null; tags?: string[]; run_name?: string | null;
+  /** which pipeline's runs use it: ANY (both), SILVER or GOLD */
+  layer?: "ANY" | "SILVER" | "GOLD" | null;
 };
 
 export type FeedItem = {
@@ -45,7 +47,7 @@ export type DecideResult = { decided: number; refused?: { knowledge_id: string; 
 
 export type ItemInput = {
   domain_id?: string | null; knowledge_type: string; title: string; content: string; content_json?: unknown;
-  change_note?: string | null;
+  change_note?: string | null; layer?: "ANY" | "SILVER" | "GOLD";
 };
 
 export async function searchKnowledge(query: string, domain?: string | null, knowledgeType?: string | null) {

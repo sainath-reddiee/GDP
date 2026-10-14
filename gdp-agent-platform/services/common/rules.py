@@ -21,6 +21,9 @@ DEFAULTS: Dict[str, Any] = {
     "profile.value_pii_share": 0.8,
     # data quality checks proposed from profiles
     "quality.enum_max": 20,
+    # Gold Pipeline: at most this percent of a gold table's rows may carry -1 for a mastered key (unresolved through
+    # the cross-reference) before QA flags it (overridden per pipeline: RULES.GOLD, a domain's rules_gold)
+    "quality.gold_unresolved_key_max_pct": 5.0,
     "quality.regex_coverage": 0.95,
     "quality.missing_soft_max": 20.0,
     "quality.volume_tolerance": 0.1,
@@ -108,10 +111,12 @@ def _as_dict(value: Any) -> Dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
-def load_rules(query: Callable[[str, List[Any]], List[Dict[str, Any]]], domain_id: Optional[str] = None
-               ) -> Dict[str, Any]:
-    """Defaults <- global RULES config <- the domain's rules. `query(sql, params)` returns dict rows with
-    upper-case keys (Snowpark) or lower-case keys (API connector); both are read."""
+def load_rules(query: Callable[[str, List[Any]], List[Dict[str, Any]]], domain_id: Optional[str] = None,
+               pipeline: str = "SILVER") -> Dict[str, Any]:
+    """Defaults <- global RULES config <- the domain's rules; for the Gold Pipeline the gold layers on top of each
+    (RULES.GOLD, then the domain's rules_gold), so a gold threshold never changes a Silver run. `query(sql, params)`
+    returns dict rows with upper-case keys (Snowpark) or lower-case keys (API connector); both are read."""
+    gold = str(pipeline or "").upper() == "GOLD"
     def first(found: List[Dict[str, Any]], key: str) -> Any:
         if not found:
             return None
@@ -119,27 +124,33 @@ def load_rules(query: Callable[[str, List[Any]], List[Dict[str, Any]]], domain_i
         return row.get(key) if key in row else row.get(key.lower())
 
     platform: Dict[str, Any] = {}
+    platform_gold: Dict[str, Any] = {}
     domain: Dict[str, Any] = {}
+    domain_gold: Dict[str, Any] = {}
     try:
         platform = _as_dict(first(query("SELECT CONFIG_VALUE FROM CORE.PLATFORM_CONFIG "
                                         "WHERE CONFIG_KEY = 'RULES' AND IS_CURRENT", []), "CONFIG_VALUE"))
+        if gold:
+            platform_gold = _as_dict(first(query("SELECT CONFIG_VALUE FROM CORE.PLATFORM_CONFIG "
+                                                 "WHERE CONFIG_KEY = 'RULES.GOLD' AND IS_CURRENT", []), "CONFIG_VALUE"))
     except Exception:
-        platform = {}
+        platform = platform or {}
     if domain_id:
         try:
             config = _as_dict(first(query("SELECT CONFIG FROM KNOWLEDGE.DOMAIN_REGISTRY WHERE DOMAIN_ID = ?",
                                           [domain_id]), "CONFIG"))
             domain = _as_dict(config.get("rules"))
+            domain_gold = _as_dict(config.get("rules_gold")) if gold else {}
         except Exception:
             domain = {}
-    return merged(platform, domain)
+    return merged(platform, platform_gold, domain, domain_gold)
 
 
-def rules_for(session, domain_id: Optional[str] = None) -> Dict[str, Any]:
-    """Rules for a stage running inside Snowflake."""
+def rules_for(session, domain_id: Optional[str] = None, pipeline: str = "SILVER") -> Dict[str, Any]:
+    """Rules for a stage running inside Snowflake (the run's pipeline decides whether the gold layers apply)."""
     from services.common.sql import rows
 
-    return load_rules(lambda sql, params: rows(session, sql, params), domain_id)
+    return load_rules(lambda sql, params: rows(session, sql, params), domain_id, pipeline)
 
 
 def ui_bands(rules: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:

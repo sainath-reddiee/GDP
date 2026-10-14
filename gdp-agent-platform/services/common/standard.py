@@ -120,29 +120,77 @@ PRESETS: Dict[str, Dict[str, Any]] = {
 }
 
 
-def conventions(standard: str, overrides: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """The standard's preset with the organisation's overrides (unknown keys ignored)."""
-    preset = dict(PRESETS.get(standard) or PRESETS[GDP])
+# The Gold Pipeline's own conventions, laid over the standard's (GDP gold: star schema in the domain's gold
+# database, Iceberg, sequences and HKEY; the gold-model skill). Overridden through PLATFORM_CONFIG key
+# MODELING_STANDARD.<STANDARD>.GOLD.
+PIPELINE_PRESETS: Dict[str, Dict[str, Dict[str, Any]]] = {
+    GDP: {
+        GOLD: {
+            "model_dir": "models/gold/{domain}",
+            "layer_tag": "gold",
+            "project_name": "gdp_gold_{domain}",
+            "branch_prefix": "feat/gdp-gold-",
+            "codegen_prefix": "GDP_GOLD_",
+            "pr_title": "GDP Gold: {name} (dbt v{version})",
+            "commit_message": "GDP Gold run {name}: dbt v{version} from the approved STTM and gold model",
+            "skill": "GOLD-MODEL",
+            "convention": "post-MDM silver -> gold star schema (facts, dimensions, bridges; SCD1, sequences, HKEY, Iceberg)",
+        },
+    },
+    GENERIC: {
+        GOLD: {
+            "model_dir": "models/marts/{domain}",
+            "layer_tag": "gold",
+            "branch_prefix": "feat/gold-",
+            "codegen_prefix": "GOLD_",
+            "pr_title": "Gold: {name} (dbt v{version})",
+            "commit_message": "Gold {name}: dbt v{version} from the approved STTM",
+            "convention": "silver -> marts star schema (facts, dimensions, bridges)",
+        },
+    },
+}
+
+
+def _overlay(preset: Dict[str, Any], overrides: Optional[Dict[str, Any]]) -> None:
     for key, value in (overrides or {}).items():
         if key in preset and value is not None and isinstance(value, type(preset[key])):
             preset[key] = value
-    preset["standard"] = standard if standard in PRESETS else GDP
+
+
+def conventions(standard: str, overrides: Optional[Dict[str, Any]] = None, pipeline: str = SILVER,
+                pipeline_overrides: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """The standard's preset with the organisation's overrides (unknown keys ignored); for the Gold Pipeline, the gold
+    preset and its overrides on top."""
+    std = standard if standard in PRESETS else GDP
+    preset = dict(PRESETS[std])
+    _overlay(preset, overrides)
+    if str(pipeline or "").upper() == GOLD:
+        preset.update(PIPELINE_PRESETS.get(std, {}).get(GOLD, {}))
+        _overlay(preset, pipeline_overrides)
+    preset["standard"] = std
+    preset["pipeline"] = GOLD if str(pipeline or "").upper() == GOLD else SILVER
     return preset
 
 
-def conventions_for(query, standard: str) -> Dict[str, Any]:
-    """`query(sql, params)` -> rows; reads PLATFORM_CONFIG overrides for this standard (missing -> preset)."""
+def _config(query, key: str) -> Optional[Dict[str, Any]]:
     import json
 
     try:
-        found = query("SELECT CONFIG_VALUE FROM CORE.PLATFORM_CONFIG WHERE CONFIG_KEY = ? AND IS_CURRENT",
-                      [f"MODELING_STANDARD.{standard}"])
+        found = query("SELECT CONFIG_VALUE FROM CORE.PLATFORM_CONFIG WHERE CONFIG_KEY = ? AND IS_CURRENT", [key])
         value = (found[0].get("CONFIG_VALUE") if "CONFIG_VALUE" in found[0] else found[0].get("config_value")) \
             if found else None
-        overrides = json.loads(value) if isinstance(value, str) else value
+        value = json.loads(value) if isinstance(value, str) else value
     except Exception:
-        overrides = None
-    return conventions(standard, overrides if isinstance(overrides, dict) else None)
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def conventions_for(query, standard: str, pipeline: str = SILVER) -> Dict[str, Any]:
+    """`query(sql, params)` -> rows; reads PLATFORM_CONFIG overrides for this standard, and for the Gold Pipeline its
+    gold overrides (missing -> preset)."""
+    gold = str(pipeline or "").upper() == GOLD
+    return conventions(standard, _config(query, f"MODELING_STANDARD.{standard}"), pipeline,
+                       _config(query, f"MODELING_STANDARD.{standard}.GOLD") if gold else None)
 
 
 def fill(template: str, **values: Any) -> str:

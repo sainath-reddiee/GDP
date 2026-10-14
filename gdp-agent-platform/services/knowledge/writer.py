@@ -33,6 +33,20 @@ NOT_OPERATIONAL_SQL = ("COALESCE(SOURCE_REFERENCE, '') NOT LIKE 'dbt.branch.%' "
                        "AND COALESCE(SOURCE_REFERENCE, '') NOT LIKE 'sttm.csv.%'")
 
 
+def layer_sql(alias: str = "") -> str:
+    """Knowledge scoped to a pipeline (V055): items for ANY layer plus the run's own (one ? bind: SILVER or GOLD)."""
+    return f"COALESCE({alias}LAYER, 'ANY') IN ('ANY', ?)"
+
+
+def run_layer(session, run_id: Optional[str]) -> str:
+    """SILVER or GOLD for a run's knowledge; ANY without a run."""
+    if not run_id:
+        return "ANY"
+    from services.knowledge.usage import run_scope
+
+    return run_scope(session, run_id)[1]
+
+
 def lineage_id(domain_id: Optional[str], key: str) -> str:
     """Same value as the V022 backfill: MD5(domain || '|' || reference)."""
     return hashlib.md5(f"{domain_id or ''}|{key}".encode("utf-8")).hexdigest()
@@ -63,10 +77,11 @@ def _same(current: Dict[str, Any], content: str, content_json: Any) -> bool:
 def remember(session, *, domain_id: Optional[str], kind: str, key: str, title: str, content: str,
              content_json: Any = None, tags: Iterable[str] = (), origin: str, run_id: Optional[str] = None,
              confidence: Optional[float] = None, status: Optional[str] = None, change_note: Optional[str] = None,
-             by_domain: bool = True, mode: Optional[str] = None) -> Optional[str]:
+             by_domain: bool = True, mode: Optional[str] = None, layer: Optional[str] = None) -> Optional[str]:
     """Write one version. Returns the new KNOWLEDGE_ID, or None when nothing changed. by_domain=False keys the lineage
     on the reference alone (references that already contain a run id). mode='review' always queues the version for a
-    steward, whatever the learning policy says (a resolved case's knowledge)."""
+    steward, whatever the learning policy says (a resolved case's knowledge). layer: ANY, SILVER or GOLD; learned from
+    a run, it is the run's pipeline, so what a Gold run learns stays in front of Gold runs."""
     from services.common.sql import insert_rows
 
     content = clip(content, 16000)
@@ -93,12 +108,13 @@ def remember(session, *, domain_id: Optional[str], kind: str, key: str, title: s
     insert_rows(session, "KNOWLEDGE.DOMAIN_KNOWLEDGE",
                 ["KNOWLEDGE_ID", "DOMAIN_ID", "KNOWLEDGE_TYPE", "TITLE", "CONTENT", "CONTENT_JSON", "TAGS",
                  "SOURCE_REFERENCE", "STATUS", "VERSION", "IS_CURRENT", "CREATED_BY", "LINEAGE_ID", "ORIGIN",
-                 "SOURCE_RUN_ID", "CONFIDENCE", "CHANGE_NOTE"],
+                 "SOURCE_RUN_ID", "CONFIDENCE", "CHANGE_NOTE", "LAYER"],
                 ["?", "?", "?", "?", "?", "PARSE_JSON(?)", "PARSE_JSON(?)", "?", "?", "?::NUMBER", "?::BOOLEAN",
-                 "CURRENT_USER()", "?", "?", "NULLIF(?, '')", "TRY_TO_DOUBLE(NULLIF(?, ''))", "NULLIF(?, '')"],
+                 "CURRENT_USER()", "?", "?", "NULLIF(?, '')", "TRY_TO_DOUBLE(NULLIF(?, ''))", "NULLIF(?, '')", "?"],
                 [[knowledge_id, domain_id, kind, clip(title, 500), content, content_json, list(tags), key, new_status,
                   version, is_current, lineage_id(domain_id if by_domain else None, key), origin.upper(), run_id or "",
-                  "" if confidence is None else str(confidence), clip(change_note, 2000) if change_note else ""]])
+                  "" if confidence is None else str(confidence), clip(change_note, 2000) if change_note else "",
+                  str(layer or run_layer(session, run_id)).upper()]])
     return knowledge_id
 
 

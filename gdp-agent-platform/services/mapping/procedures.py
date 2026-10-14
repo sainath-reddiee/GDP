@@ -99,13 +99,14 @@ def domain_knowledge(session, domain_id: str, run_id: str, target: Optional[Dict
                                  "avoid": set()}
     target_name = str((target or {}).get("TARGET_TABLE") or "").upper()
     used: List[str] = []
-    from services.knowledge.writer import NOT_OPERATIONAL_SQL
+    from services.knowledge.writer import NOT_OPERATIONAL_SQL, layer_sql, run_layer
 
+    layer = run_layer(session, run_id)   # a Gold run learns from gold patterns, a Silver run from silver ones
     patterns: List[Tuple[str, str, Optional[str]]] = []  # reviewer patterns, weighted by their track record below
     for k in rows(session, f"""SELECT KNOWLEDGE_ID, KNOWLEDGE_TYPE, CONTENT_JSON, LINEAGE_ID FROM KNOWLEDGE.DOMAIN_KNOWLEDGE
                               WHERE DOMAIN_ID = ? AND IS_CURRENT AND STATUS = 'ACTIVE' AND CONTENT_JSON IS NOT NULL
-                                AND {NOT_OPERATIONAL_SQL}""",
-                  [domain_id]):
+                                AND {NOT_OPERATIONAL_SQL} AND {layer_sql()}""",
+                  [domain_id, "SILVER" if layer == "ANY" else layer]):
         kind = k["KNOWLEDGE_TYPE"]
         content = normalize_content(kind, variant(k["CONTENT_JSON"]))
         if content is None:
@@ -340,7 +341,7 @@ def generate_mapping_candidates(session, run_id: str) -> Dict[str, Any]:
                              "Sources so its columns are captured, or pick another target.")
             try:
                 guidance += "\n\n" + domain_context(session, run["DOMAIN_ID"], target["TARGET_TABLE"], 4000,
-                                                     run_standard(run))
+                                                     run_standard(run), run_pipeline(run))
             except Exception:
                 pass
             mappable = features.mappable_targets(targets)

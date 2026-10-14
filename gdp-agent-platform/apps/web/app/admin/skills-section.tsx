@@ -18,6 +18,14 @@ const HINTS: Record<string, string> = {
 };
 
 /** Which skills each stage loads, in order. Replaces the built-in map once saved. */
+type PipelineScope = "ANY" | "SILVER" | "GOLD";
+const NEXT_PIPELINE: Record<PipelineScope, PipelineScope> = { ANY: "SILVER", SILVER: "GOLD", GOLD: "ANY" };
+const PIPELINE_CHIP: Record<PipelineScope, [string, string]> = {
+  ANY: ["both pipelines", "bg-muted text-muted-foreground"],
+  SILVER: ["Silver only", "bg-slate-200 text-slate-700 dark:bg-slate-800 dark:text-slate-200"],
+  GOLD: ["Gold only", "bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300"],
+};
+
 export function SkillsSection({ stages, bindings, skills }: { stages: string[]; bindings: SkillBinding[]; skills: string[] }) {
   const router = useRouter();
   const { canAct } = useAccess();
@@ -85,6 +93,13 @@ export function SkillsSection({ stages, bindings, skills }: { stages: string[]; 
                             title="Load for every run, or only for runs that follow the GDP standard">
                       {b.standard === "GDP" ? "GDP runs" : "all runs"}
                     </button>
+                    <button type="button" disabled={!editable}
+                            onClick={() => update(stage, list.map((x) => (x.skill_name === b.skill_name
+                              ? { ...x, pipeline: NEXT_PIPELINE[x.pipeline ?? "ANY"] } : x)))}
+                            className={cn("rounded px-1.5 py-0.5 text-[9px] font-medium", PIPELINE_CHIP[b.pipeline ?? "ANY"][1])}
+                            title="Which pipeline's runs load it: both, Silver runs only, or Gold runs only">
+                      {PIPELINE_CHIP[b.pipeline ?? "ANY"][0]}
+                    </button>
                     {editable && (
                       <span className="flex">
                         <button type="button" aria-label="Move up" disabled={i === 0} onClick={() => move(stage, i, -1)} className="rounded p-0.5 hover:bg-muted disabled:opacity-30"><ArrowUp className="h-3 w-3" /></button>
@@ -104,7 +119,7 @@ export function SkillsSection({ stages, bindings, skills }: { stages: string[]; 
                     {free.map((n) => <option key={n} value={n}>{pretty(n)}</option>)}
                   </Select>
                   <Button size="sm" variant="outline" className="h-7" disabled={!adding[stage]}
-                          onClick={() => { update(stage, [...list, { stage, skill_name: adding[stage], enabled: true, position: 0, standard: "ANY" }]); setAdding({ ...adding, [stage]: "" }); }}>
+                          onClick={() => { update(stage, [...list, { stage, skill_name: adding[stage], enabled: true, position: 0, standard: "ANY", pipeline: "ANY" }]); setAdding({ ...adding, [stage]: "" }); }}>
                     <Plus className="h-3 w-3" />
                   </Button>
                 </div>

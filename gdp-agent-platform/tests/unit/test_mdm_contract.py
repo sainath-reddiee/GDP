@@ -121,8 +121,11 @@ def test_knowledge_items_are_valid_exceptions(contract):
 def test_mdm_domains_load_the_post_mdm_skill_while_modeling_and_generating():
     from services.knowledge.skills import MDM_SKILL, mdm_rows, with_domain
 
-    rows = mdm_rows("CONSUMER")
-    assert {r["stage"] for r in rows} == {"MAPPING", "STTM", "DBT"}
-    assert with_domain(["AI-SCHEMA-MAPPING"], rows, "MAPPING") == ["AI-SCHEMA-MAPPING", MDM_SKILL]
-    assert with_domain(["SODA_SKILL"], rows, "SODA") == ["SODA_SKILL"]
-    assert mdm_rows(None) == [] and mdm_rows("MASTERED", "GENERIC") == [] and len(mdm_rows("mastered")) == 3
+    # Silver: the pre-MDM key lookups while mapping; Gold: the resolution while mapping, writing the STTM and code
+    silver, gold = mdm_rows("CONSUMER"), mdm_rows("CONSUMER", "GDP", "GOLD")
+    assert {r["stage"] for r in silver} == {"MAPPING"} and {r["stage"] for r in gold} == {"MAPPING", "STTM", "DBT"}
+    assert with_domain(["AI-SCHEMA-MAPPING"], silver, "MAPPING") == ["AI-SCHEMA-MAPPING", MDM_SKILL]
+    assert with_domain(["GOLD-MODEL"], gold, "DBT", "GOLD") == ["GOLD-MODEL", MDM_SKILL]
+    assert with_domain(["GOLD-MODEL"], gold, "DBT", "SILVER") == ["GOLD-MODEL"]   # gold rows never reach a Silver run
+    assert with_domain(["SODA_SKILL"], gold, "SODA", "GOLD") == ["SODA_SKILL"]
+    assert mdm_rows(None) == [] and mdm_rows("MASTERED", "GENERIC") == [] and len(mdm_rows("mastered", "GDP", "GOLD")) == 3

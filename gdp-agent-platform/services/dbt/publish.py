@@ -14,7 +14,7 @@ from typing import Any, Dict, List, Optional
 
 from services.common.audit import tool_call
 from services.common.sql import clip, insert_rows, rows, scalar, variant
-from services.common.standard import conventions_for, fill, run_standard
+from services.common.standard import conventions_for, fill, run_pipeline, run_standard
 from services.dbt import github
 from services.dbt.workspace import safe_fqn
 from services.git import roundtrip
@@ -593,7 +593,8 @@ def publish_dbt_pr(session, run_id: str, payload_json: str = "{}") -> Dict[str, 
         except Exception as exc:
             return {**github.explain(exc, plan.get("origin") or ""), "check": True}
     run = rows(session, "SELECT * FROM CORE.WORKFLOW_RUN WHERE RUN_ID = ?", [run_id])
-    conv = conventions_for(lambda sql, params: rows(session, sql, params), run_standard(run[0] if run else {}))
+    conv = conventions_for(lambda sql, params: rows(session, sql, params), run_standard(run[0] if run else {}),
+                           run_pipeline(run[0] if run else {}))
     assert run, f"run not found: {run_id}"
     gen = rows(session, """SELECT GENERATION_ID, GENERATION_VERSION, STTM_ID FROM CODEGEN.DBT_GENERATION_REGISTRY
                            WHERE RUN_ID = ? ORDER BY GENERATION_VERSION DESC LIMIT 1""", [run_id])

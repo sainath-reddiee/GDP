@@ -68,18 +68,22 @@ def rank(items: Sequence[Dict[str, Any]], target_table: Optional[str] = None, co
 def relevant(session, domain_id: Optional[str], types: Sequence[str], *, target_table: Optional[str] = None,
              columns: Iterable[str] = (), sources: Iterable[str] = (), limit: int = 8,
              type_order: Sequence[str] = (), run_id: Optional[str] = None, stage: Optional[str] = None,
-             scan: int = SCAN) -> List[Dict[str, Any]]:
+             scan: int = SCAN, pipeline: Optional[str] = None) -> List[Dict[str, Any]]:
     """The domain's active, non-operational items of `types` that best fit the target table and columns (rank).
     Each row has KNOWLEDGE_ID, KNOWLEDGE_TYPE, TITLE, CONTENT, CONTENT_JSON. Records usage for the returned items when
     run_id and stage are given."""
     if not domain_id or not types:
         return []
-    from services.knowledge.writer import NOT_OPERATIONAL_SQL, record_usage
+    from services.knowledge.writer import NOT_OPERATIONAL_SQL, layer_sql, record_usage, run_layer
+
+    layer = str(pipeline or run_layer(session, run_id) or "ANY").upper()
+    layer = "SILVER" if layer == "ANY" else layer   # outside a run, the default pipeline's view
 
     sql = f"""SELECT K.KNOWLEDGE_ID, K.KNOWLEDGE_TYPE, K.TITLE, K.CONTENT, K.CONTENT_JSON{{outcome}}
                 FROM KNOWLEDGE.DOMAIN_KNOWLEDGE K{{join}}
                WHERE K.DOMAIN_ID = ? AND K.IS_CURRENT AND COALESCE(K.STATUS, 'ACTIVE') = 'ACTIVE'
                  AND K.KNOWLEDGE_TYPE IN ({', '.join(['?'] * len(types))}) AND {NOT_OPERATIONAL_SQL.replace("SOURCE_REFERENCE", "K.SOURCE_REFERENCE")}
+                 AND {layer_sql("K.")}
                ORDER BY K.UPDATED_AT DESC NULLS LAST LIMIT {int(scan)}"""
     try:  # V047: each item's track record, in this stage when one is given
         found = rows(session, sql.format(
@@ -87,9 +91,9 @@ def relevant(session, domain_id: Optional[str], types: Sequence[str], *, target_
             join=f""" LEFT JOIN (SELECT LINEAGE_ID, SUM(OBSERVED) AS OBSERVED,
                                        (SUM(ACCEPTED) + SUM(CORRECTED) / 2 + 1) / (SUM(OBSERVED) + 2) AS HELPFULNESS
                                   FROM KNOWLEDGE.KNOWLEDGE_OUTCOME {"WHERE STAGE = ?" if stage else ""} GROUP BY 1) O
-                             ON O.LINEAGE_ID = K.LINEAGE_ID"""), [*([stage] if stage else []), domain_id, *types])
+                             ON O.LINEAGE_ID = K.LINEAGE_ID"""), [*([stage] if stage else []), domain_id, *types, layer])
     except Exception:
-        found = rows(session, sql.format(outcome="", join=""), [domain_id, *types])
+        found = rows(session, sql.format(outcome="", join=""), [domain_id, *types, layer])
     picked = rank(found, target_table, columns, sources, limit, type_order)
     if run_id and stage and picked:
         record_usage(session, run_id, stage, [r["KNOWLEDGE_ID"] for r in picked])

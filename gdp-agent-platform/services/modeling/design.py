@@ -345,6 +345,7 @@ def context(session, run_id: str) -> Dict[str, Any]:
         picked = _rows(
             session, """SELECT KNOWLEDGE_ID, KNOWLEDGE_TYPE, TITLE, CONTENT FROM KNOWLEDGE.DOMAIN_KNOWLEDGE
                          WHERE DOMAIN_ID = ? AND IS_CURRENT AND COALESCE(STATUS, 'ACTIVE') = 'ACTIVE'
+                           AND COALESCE(LAYER, 'ANY') IN ('ANY', 'SILVER')
                            AND KNOWLEDGE_TYPE IN ('MODEL_DEFINITION', 'NAMING_STANDARD', 'GLOSSARY', 'MAPPING_PATTERN',
                                                   'BUSINESS_RULE')
                          ORDER BY IFF(KNOWLEDGE_TYPE = 'MODEL_DEFINITION', 0, 1), UPDATED_AT DESC NULLS LAST

@@ -3598,7 +3598,7 @@ def get_dbt(run_id: str, db: Db = Depends(current_db)):
 def _dbt_setup(db: Db, run_id: str) -> dict:
     """What the run's dbt workspace needs from Admin's configuration: its repository (or the choices), the default new
     branch from the modeling standard, and whether GitHub publishing is ready."""
-    from services.common.standard import conventions_for, run_standard
+    from services.common.standard import conventions_for, run_pipeline, run_standard
     from services.dbt.procedures import branch_slug
 
     run = db.query("SELECT * FROM CORE.WORKFLOW_RUN WHERE RUN_ID = %s", (run_id,))
@@ -3608,7 +3608,7 @@ def _dbt_setup(db: Db, run_id: str) -> dict:
     repo, candidates, legacy = _dbt_repo(db, run[0].get("domain_id"), plan)
     try:
         prefix = conventions_for(lambda sql, params: db.query(sql.replace("?", "%s"), tuple(params)),
-                                 run_standard(run[0]))["branch_prefix"]
+                                 run_standard(run[0]), run_pipeline(run[0]))["branch_prefix"]
     except Exception:
         prefix = "feat/onboard-"
     return {"repository": repo, "candidates": candidates, "legacy": legacy,
@@ -3740,14 +3740,14 @@ def _skill_content(db: Db, name: str) -> str:
 
 
 def _domain_skill(db: Db, run_id: str, budget: int = 9000) -> str:
-    """GDP dbt skill rules plus the run domain's contract and target model definition."""
-    from services.knowledge.usage import DBT_SKILL, compose_domain_context
+    """The pipeline's GDP skill rules (bronze to silver hub for a Silver run; the gold model and post-MDM resolution
+    for a Gold run) plus the run domain's contract and target model definition."""
+    from services.knowledge.usage import DBT_SKILL, GOLD_SKILLS, compose_domain_context
 
-    content = _skill_content(db, DBT_SKILL)
     try:
         run = db.query(
             """
-            SELECT D.DOMAIN_NAME, R.DOMAIN_ID, R.TARGET_MODEL FROM CORE.WORKFLOW_RUN R
+            SELECT D.DOMAIN_NAME, R.DOMAIN_ID, R.TARGET_MODEL, COALESCE(R.PIPELINE, 'SILVER') AS PIPELINE FROM CORE.WORKFLOW_RUN R
               LEFT JOIN KNOWLEDGE.DOMAIN_REGISTRY D ON D.DOMAIN_ID = R.DOMAIN_ID
              WHERE R.RUN_ID = %s
             """,
@@ -3755,6 +3755,8 @@ def _domain_skill(db: Db, run_id: str, budget: int = 9000) -> str:
         )
     except Exception:
         run = []
+    gold = bool(run) and str(run[0].get("pipeline")).upper() == "GOLD"
+    content = "\n\n".join(_skill_content(db, n) for n in (GOLD_SKILLS if gold else (DBT_SKILL,)))
     if not run:
         return compose_domain_context(content, budget=budget)
     domain = run[0].get("domain_name")
@@ -3766,9 +3768,9 @@ def _domain_skill(db: Db, run_id: str, budget: int = 9000) -> str:
                 """
                 SELECT TITLE, CONTENT FROM KNOWLEDGE.DOMAIN_KNOWLEDGE
                  WHERE DOMAIN_ID = %s AND IS_CURRENT AND KNOWLEDGE_TYPE = 'MODEL_DEFINITION'
-                   AND CONTENT_JSON:target_table::STRING = %s
+                   AND CONTENT_JSON:target_table::STRING = %s AND COALESCE(LAYER, 'ANY') IN ('ANY', %s)
                 """,
-                (run[0]["domain_id"], target.upper()),
+                (run[0]["domain_id"], target.upper(), "GOLD" if gold else "SILVER"),
             )]
         except Exception:
             definitions = []
@@ -4516,12 +4518,12 @@ _DOMAIN_VOCAB: dict = {"at": 0.0, "domains": []}
 _RULES_CACHE: dict = {}
 
 
-def _rules(db: Db, domain_id: Optional[str] = None) -> dict:
+def _rules(db: Db, domain_id: Optional[str] = None, pipeline: str = "SILVER") -> dict:
     """Thresholds and name hints (services.common.rules) for the API, cached for a minute per domain, and made
     active for the rest of this request so shared helpers (insights, inference) read the same values."""
     from services.common.rules import activate, load_rules
 
-    key = domain_id or ""
+    key = f"{domain_id or ''}|{pipeline}"
     hit = _RULES_CACHE.get(key)
     if not hit or time.time() - hit[0] > 60:
         try:
@@ -4534,7 +4536,7 @@ def _rules(db: Db, domain_id: Optional[str] = None) -> dict:
         except Exception:
             pass
         hit = (time.time(), load_rules(lambda sql, params: db.query(sql.replace("?", "%s"), tuple(params)),
-                                       domain_id))
+                                       domain_id, pipeline))
         _RULES_CACHE[key] = hit
     activate(hit[1])
     return hit[1]
@@ -5160,40 +5162,46 @@ def _clean_overrides(overrides: dict) -> dict:
 
 
 @app.get("/api/config/rules")
-def get_rules(domain_id: Optional[str] = None, db: Db = Depends(current_db)):
-    """Effective rules (defaults, platform overrides, then the domain's), plus the bands the UI shows."""
+def get_rules(domain_id: Optional[str] = None, pipeline: Literal["SILVER", "GOLD"] = "SILVER",
+              db: Db = Depends(current_db)):
+    """Effective rules for a pipeline (defaults, platform overrides, then the domain's; for GOLD the gold overrides on
+    top of each), plus the bands the UI shows."""
     from services.common.rules import DEFAULTS, ui_bands
 
-    effective = _rules(db, domain_id)
-    return {"rules": effective, "defaults": DEFAULTS, "ui": ui_bands(effective),
+    effective = _rules(db, domain_id, pipeline)
+    return {"rules": effective, "defaults": DEFAULTS, "ui": ui_bands(effective), "pipeline": pipeline,
             "overridden": sorted(k for k in DEFAULTS if effective[k] != DEFAULTS[k])}
 
 
 @app.put("/api/config/rules")
-def put_rules(body: RulesUpdate, db: Db = Depends(current_db)):
-    """Platform-wide overrides; keys not sent fall back to their defaults."""
+def put_rules(body: RulesUpdate, pipeline: Literal["SILVER", "GOLD"] = "SILVER", db: Db = Depends(current_db)):
+    """Platform-wide overrides (for the Gold Pipeline: RULES.GOLD, applied to Gold runs only); keys not sent fall
+    back to their defaults."""
     overrides = _clean_overrides(body.overrides)
-    _put_config(db, "RULES", overrides, "Rule thresholds and name hints (platform overrides)")
+    gold = pipeline == "GOLD"
+    _put_config(db, "RULES.GOLD" if gold else "RULES", overrides,
+                "Gold Pipeline rule thresholds (platform overrides)" if gold else "Rule thresholds and name hints (platform overrides)")
     _RULES_CACHE.clear()
-    return get_rules(None, db)
+    return get_rules(None, pipeline, db)
 
 
 @app.put("/api/domains/{domain_id}/rules")
-def put_domain_rules(domain_id: str, body: RulesUpdate, db: Db = Depends(current_db)):
-    """Overrides for one domain, on top of the platform's."""
+def put_domain_rules(domain_id: str, body: RulesUpdate, pipeline: Literal["SILVER", "GOLD"] = "SILVER",
+                     db: Db = Depends(current_db)):
+    """Overrides for one domain, on top of the platform's (for the Gold Pipeline: CONFIG.rules_gold)."""
     overrides = _clean_overrides(body.overrides)
     found = db.query("SELECT DOMAIN_ID FROM KNOWLEDGE.DOMAIN_REGISTRY WHERE DOMAIN_ID = %s", (domain_id,))
     if not found:
         raise HTTPException(404, "domain not found")
     db.execute(
         """UPDATE KNOWLEDGE.DOMAIN_REGISTRY
-              SET CONFIG = OBJECT_INSERT(COALESCE(CONFIG, OBJECT_CONSTRUCT()), 'rules', PARSE_JSON(%s), TRUE)
+              SET CONFIG = OBJECT_INSERT(COALESCE(CONFIG, OBJECT_CONSTRUCT()), %s, PARSE_JSON(%s), TRUE)
             WHERE DOMAIN_ID = %s""",
-        (json.dumps(overrides), domain_id),
+        ("rules_gold" if pipeline == "GOLD" else "rules", json.dumps(overrides), domain_id),
     )
     _RULES_CACHE.clear()
-    _domain_snapshot(db, domain_id, "RULES", body.note or "Rules changed")
-    return get_rules(domain_id, db)
+    _domain_snapshot(db, domain_id, "RULES", body.note or ("Gold Pipeline rules changed" if pipeline == "GOLD" else "Rules changed"))
+    return get_rules(domain_id, pipeline, db)
 
 
 # ---------------------------------------------------------------- AI suggestions next to rule results
@@ -5337,6 +5345,7 @@ class KnowledgeItemIn(BaseModel):
     content_json: Any = None
     origin: Literal["USER", "COPILOT"] = "USER"
     change_note: Optional[str] = Field(default=None, max_length=2000)
+    layer: Optional[Literal["ANY", "SILVER", "GOLD"]] = None   # which pipeline's runs use it (both by default)
 
 
 class KnowledgeAnswerIn(BaseModel):
@@ -5349,7 +5358,7 @@ _KNOWLEDGE_COLUMNS = """K.KNOWLEDGE_ID, K.DOMAIN_ID, D.DOMAIN_NAME, K.KNOWLEDGE_
        K.SOURCE_REFERENCE, K.STATUS, K.VERSION, K.CREATED_BY, K.CREATED_AT::VARCHAR AS CREATED_AT,
        K.UPDATED_AT::VARCHAR AS UPDATED_AT, K.LINEAGE_ID, K.ORIGIN, K.SOURCE_RUN_ID, K.CONFIDENCE, K.CHANGE_NOTE,
        K.VERIFIED_BY, K.VERIFIED_AT::VARCHAR AS VERIFIED_AT, K.REVIEW_DUE::VARCHAR AS REVIEW_DUE, K.IS_CURRENT,
-       K.REVIEWED_BY, K.REVIEW_NOTE, K.TAGS"""
+       K.REVIEWED_BY, K.REVIEW_NOTE, K.TAGS, COALESCE(K.LAYER, 'ANY') AS LAYER"""
 
 
 def _knowledge_item(db: Db, knowledge_id: str) -> dict:
@@ -5374,12 +5383,12 @@ def _shape_knowledge(row: dict) -> dict:
 @app.get("/api/knowledge")
 def list_knowledge(domain_id: Optional[str] = None, knowledge_type: Optional[str] = None,
                    status: Optional[str] = None, q: Optional[str] = None, offset: int = 0, limit: int = 50,
-                   db: Db = Depends(current_db)):
-    """Current version of each knowledge item, filtered and paged."""
+                   layer: Optional[str] = None, db: Db = Depends(current_db)):
+    """Current version of each knowledge item, filtered (domain, type, status, text, pipeline layer) and paged."""
     from services.knowledge.manage import list_query
 
     try:
-        where, params = list_query(domain_id, knowledge_type, status, q, offset, limit)
+        where, params = list_query(domain_id, knowledge_type, status, q, offset, limit, layer)
     except AssertionError as exc:
         raise HTTPException(400, str(exc)) from exc
     items = db.query(f"""SELECT {_KNOWLEDGE_COLUMNS} FROM KNOWLEDGE.DOMAIN_KNOWLEDGE K
@@ -5410,14 +5419,15 @@ def add_knowledge(body: KnowledgeItemIn, db: Db = Depends(current_db)):
     queued = mode_for(_config(db, "KNOWLEDGE_LEARNING_POLICY", {}), item["knowledge_type"], body.origin) == "review"
     db.execute("""INSERT INTO KNOWLEDGE.DOMAIN_KNOWLEDGE (KNOWLEDGE_ID, DOMAIN_ID, KNOWLEDGE_TYPE, TITLE, CONTENT,
                          CONTENT_JSON, TAGS, SOURCE_REFERENCE, STATUS, VERSION, IS_CURRENT, CREATED_BY, LINEAGE_ID,
-                         ORIGIN, CHANGE_NOTE)
+                         ORIGIN, CHANGE_NOTE, LAYER)
                   SELECT %s, %s, %s, %s, %s, PARSE_JSON(NULLIF(%s, '')), PARSE_JSON(%s), %s, %s, 1, %s,
-                         CURRENT_USER(), %s, %s, %s""",
+                         CURRENT_USER(), %s, %s, %s, %s""",
                (knowledge_id, body.domain_id, item["knowledge_type"], item["title"], item["content"],
                 json.dumps(item["content_json"]) if item["content_json"] is not None else "",
                 json.dumps(["UI"] if body.origin == "USER" else ["COPILOT"]), key,
                 "PROPOSED" if queued else "ACTIVE", not queued, lineage_id(body.domain_id, key), body.origin,
-                body.change_note or ("Saved from the copilot" if body.origin == "COPILOT" else "Added in Knowledge")))
+                body.change_note or ("Saved from the copilot" if body.origin == "COPILOT" else "Added in Knowledge"),
+                body.layer or "ANY"))
     _DOMAIN_VOCAB.update(at=0.0, domains=[])
     return _knowledge_item(db, knowledge_id)
 
@@ -5435,13 +5445,13 @@ def edit_knowledge(knowledge_id: str, body: KnowledgeItemIn, db: Db = Depends(cu
     if problems:
         raise HTTPException(400, "; ".join(problems))
     new_id = _new_knowledge_version(db, current, item["knowledge_type"], item["title"], item["content"],
-                                    item["content_json"], body.change_note or "Edited in Knowledge")
+                                    item["content_json"], body.change_note or "Edited in Knowledge", layer=body.layer)
     _DOMAIN_VOCAB.update(at=0.0, domains=[])
     return _knowledge_item(db, new_id)
 
 
 def _new_knowledge_version(db: Db, current: dict, kind: str, title: str, content: str, content_json: Any,
-                           note: str, status: Optional[str] = None) -> str:
+                           note: str, status: Optional[str] = None, layer: Optional[str] = None) -> str:
     """A person's change: the version in use is superseded, the new one is current (same lineage)."""
     from services.knowledge.writer import lineage_id
 
@@ -5460,14 +5470,14 @@ def _new_knowledge_version(db: Db, current: dict, kind: str, title: str, content
             raise HTTPException(409, "Someone changed this item in the meantime. Reload it and try again.")
         db.execute("""INSERT INTO KNOWLEDGE.DOMAIN_KNOWLEDGE (KNOWLEDGE_ID, DOMAIN_ID, KNOWLEDGE_TYPE, TITLE, CONTENT,
                              CONTENT_JSON, TAGS, SOURCE_REFERENCE, STATUS, VERSION, IS_CURRENT, CREATED_BY, LINEAGE_ID,
-                             ORIGIN, SOURCE_RUN_ID, CHANGE_NOTE)
+                             ORIGIN, SOURCE_RUN_ID, CHANGE_NOTE, LAYER)
                       SELECT %s, %s, %s, %s, %s, PARSE_JSON(NULLIF(%s, '')), PARSE_JSON(%s), %s, %s, %s, TRUE,
-                             CURRENT_USER(), %s, 'USER', %s, %s""",
+                             CURRENT_USER(), %s, 'USER', %s, %s, %s""",
                    (new_id, current["domain_id"], kind, title, content,
                     json.dumps(content_json) if content_json is not None else "",
                     json.dumps(sorted(set((current.get("tags") or []) + ["UI"]))), current["source_reference"],
                     status or (current["status"] if current["status"] in ("ACTIVE", "DRAFT", "RETIRED") else "ACTIVE"),
-                    version, lineage, current.get("source_run_id"), note))
+                    version, lineage, current.get("source_run_id"), note, layer or current.get("layer") or "ANY"))
     return new_id
 
 
@@ -5542,7 +5552,10 @@ def _platform_settings(db: Db) -> dict:
         value = _json(row["config_value"]) if row else DEFAULTS[key]
         settings[key] = {"value": value, "default": DEFAULTS[key], "customised": bool(row) and value != DEFAULTS[key],
                          "changed_by": row["created_by"] if row else None, "changed_at": row["created_at"] if row else None}
-    return {"settings": settings, "known_models": KNOWN_MODELS, "presets": PRESETS}
+    from services.common.platform_config import preset_for
+
+    presets = {**PRESETS, **{f"{std}.GOLD": preset_for(f"MODELING_STANDARD.{std}.GOLD") for std in PRESETS}}
+    return {"settings": settings, "known_models": KNOWN_MODELS, "presets": presets}
 
 
 @app.get("/api/config/platform")

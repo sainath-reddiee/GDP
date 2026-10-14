@@ -14,9 +14,9 @@ export type RulesState = {
   rules: Record<string, unknown>; defaults: Record<string, unknown>; overridden: string[];
 };
 
-export async function saveRules(overrides: Record<string, unknown>) {
+export async function saveRules(overrides: Record<string, unknown>, pipeline: "SILVER" | "GOLD" = "SILVER") {
   const result = await attemptValue(() =>
-    api<RulesState>("/api/config/rules", { method: "PUT", body: JSON.stringify({ overrides }) }));
+    api<RulesState>(`/api/config/rules?pipeline=${pipeline}`, { method: "PUT", body: JSON.stringify({ overrides }) }));
   if (result.ok) revalidatePath("/admin");
   return result;
 }

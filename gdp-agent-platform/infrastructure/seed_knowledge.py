@@ -275,15 +275,22 @@ def seed_skills(cur, database: str) -> List[str]:
     cur.execute(f"""UPDATE {reg} R SET IS_CURRENT = (R.SKILL_ID IN (SELECT SKILL_ID FROM {database}.KNOWLEDGE.SKILL_LABEL
                                                                      WHERE LABEL = 'production'))""")
     # stage bindings: missing rows only, admin edits are never touched
-    from services.knowledge.usage import GDP_ONLY_SKILLS, STAGE_SKILLS
+    from services.knowledge.usage import GDP_ONLY_SKILLS, STAGE_SKILLS, pipeline_of_skill
 
     for stage, names in STAGE_SKILLS.items():
         for pos, name in enumerate(names):
-            cur.execute(f"""MERGE INTO {database}.KNOWLEDGE.SKILL_STAGE_BINDING T
-                             USING (SELECT %s AS STAGE, %s AS SKILL_NAME) S ON T.STAGE = S.STAGE AND T.SKILL_NAME = S.SKILL_NAME
-                             WHEN NOT MATCHED THEN INSERT (STAGE, SKILL_NAME, ENABLED, POSITION, STANDARD, UPDATED_BY)
-                             VALUES (S.STAGE, S.SKILL_NAME, TRUE, %s, %s, 'SEED')""",
-                        (stage, name, (pos + 1) * 10, "GDP" if name in GDP_ONLY_SKILLS else "ANY"))
+            try:   # V055: each binding's pipeline (Silver, Gold or both)
+                cur.execute(f"""MERGE INTO {database}.KNOWLEDGE.SKILL_STAGE_BINDING T
+                                 USING (SELECT %s AS STAGE, %s AS SKILL_NAME) S ON T.STAGE = S.STAGE AND T.SKILL_NAME = S.SKILL_NAME
+                                 WHEN NOT MATCHED THEN INSERT (STAGE, SKILL_NAME, ENABLED, POSITION, STANDARD, PIPELINE, UPDATED_BY)
+                                 VALUES (S.STAGE, S.SKILL_NAME, TRUE, %s, %s, %s, 'SEED')""",
+                            (stage, name, (pos + 1) * 10, "GDP" if name in GDP_ONLY_SKILLS else "ANY", pipeline_of_skill(name)))
+            except Exception:
+                cur.execute(f"""MERGE INTO {database}.KNOWLEDGE.SKILL_STAGE_BINDING T
+                                 USING (SELECT %s AS STAGE, %s AS SKILL_NAME) S ON T.STAGE = S.STAGE AND T.SKILL_NAME = S.SKILL_NAME
+                                 WHEN NOT MATCHED THEN INSERT (STAGE, SKILL_NAME, ENABLED, POSITION, STANDARD, UPDATED_BY)
+                                 VALUES (S.STAGE, S.SKILL_NAME, TRUE, %s, %s, 'SEED')""",
+                            (stage, name, (pos + 1) * 10, "GDP" if name in GDP_ONLY_SKILLS else "ANY"))
     return log
 
 

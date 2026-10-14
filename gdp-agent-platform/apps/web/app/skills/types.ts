@@ -31,7 +31,9 @@ export type SkillVersion = VersionBrief & {
 
 export type SkillLabel = { skill_name: string; label: string; skill_id: string; moved_by: string; moved_at: string; note: string | null };
 
-export type SkillBinding = { stage: string; skill_name: string; enabled: boolean; position: number; standard: "ANY" | "GDP" };
+export type SkillBinding = { stage: string; skill_name: string; enabled: boolean; position: number; standard: "ANY" | "GDP";
+  /** which pipeline's runs load it (V055): both, Silver runs only, or Gold runs only */
+  pipeline?: "ANY" | "SILVER" | "GOLD" };
 
 export type SkillDetail = {
   skill_name: string; versions: SkillVersion[]; labels: Record<string, SkillLabel>;

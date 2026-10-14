@@ -191,3 +191,24 @@ def test_compile_without_the_project_is_a_warning_for_gold_only():
     assert gold_compile(failed, "GOLD", {"dbt_project.yml": "", "models/silver/x.sql": ""})["status"] == "FAILED"
     other = {**failed, "findings": [{"severity": "ERROR", "message": "dbt compile failed: syntax error line 3"}]}
     assert gold_compile(other, "GOLD", {})["status"] == "FAILED"
+
+
+def test_each_pipeline_loads_its_own_skills():
+    from services.knowledge.skills import bound, in_pipeline
+    from services.knowledge.usage import pipeline_of_skill, stage_skills
+
+    assert "GDP-DBT-ONBOARD-SOURCE" in stage_skills("DBT", "GDP", "SILVER") and "GOLD-MODEL" not in stage_skills("DBT", "GDP", "SILVER")
+    assert "GOLD-MODEL" in stage_skills("DBT", "GDP", "GOLD") and "GDP-DBT-ONBOARD-SOURCE" not in stage_skills("DBT", "GDP", "GOLD")
+    assert "SILVER-MODEL" not in stage_skills("DBT", "GDP", "GOLD") and "GOLD-MODEL" not in stage_skills("DBT", "GENERIC", "GOLD")
+    assert pipeline_of_skill("soda_skill") == "ANY" and in_pipeline(None, "GOLD") and not in_pipeline("SILVER", "GOLD")
+    bindings = [{"stage": "DBT", "skill_name": "GDP-DBT-ONBOARD-SOURCE", "position": 10, "pipeline": "SILVER"},
+                {"stage": "DBT", "skill_name": "GOLD-MODEL", "position": 20, "standard": "GDP", "pipeline": "GOLD"},
+                {"stage": "DBT", "skill_name": "SODA_SKILL", "position": 30}]
+    assert bound(bindings, "DBT", "GDP", [], "SILVER") == ["GDP-DBT-ONBOARD-SOURCE", "SODA_SKILL"]
+    assert bound(bindings, "DBT", "GDP", [], "GOLD") == ["GOLD-MODEL", "SODA_SKILL"]
+
+
+def test_knowledge_is_scoped_to_the_layer():
+    from services.knowledge.writer import layer_sql
+
+    assert layer_sql("K.") == "COALESCE(K.LAYER, 'ANY') IN ('ANY', ?)"

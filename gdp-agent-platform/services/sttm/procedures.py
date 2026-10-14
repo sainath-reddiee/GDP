@@ -15,7 +15,7 @@ from services.common.llm import complete_json
 from services.common.sql import clip, insert_rows, rows, scalar, variant
 from services.common.stage import Stage
 from services.knowledge.procedures import current_knowledge_version
-from services.common.standard import run_standard
+from services.common.standard import run_pipeline, run_standard
 from services.knowledge.usage import assert_safe_transformation, domain_context, use_stage
 from services.mapping.procedures import target_columns, target_table
 from services.sttm.assemble import assemble
@@ -222,13 +222,15 @@ def _line_context(session, run_id: str, payload: Dict[str, Any]) -> Dict[str, An
     assert context["target_column"], "target_column or sttm_line_id is required"
     run = rows(session, "SELECT * FROM CORE.WORKFLOW_RUN WHERE RUN_ID = ?", [run_id])
     context["standard"] = run_standard(run[0] if run else {})
+    context["pipeline"] = run_pipeline(run[0] if run else {})
     context["domain_id"] = context["domain_id"] or (run[0]["DOMAIN_ID"] if run else None)
     context["profile"] = _profile_for(session, run_id, context["source_table"], context["source_column"])
     model = ((run[0].get("TARGET_MODEL") if run else "") or "").split(".")[-1] or None
     context["prior_rules"] = _prior_rules(session, context["domain_id"], context["target_column"], run_id, model,
                                           [c for c in (context.get("source_column"), context.get("source_table")) if c])
     try:
-        context["domain_rules"] = domain_context(session, context["domain_id"], model, 3000, context["standard"])
+        context["domain_rules"] = domain_context(session, context["domain_id"], model, 3000, context["standard"],
+                                                 context["pipeline"])
     except Exception:
         context["domain_rules"] = ""
     from services.code.context import for_session, record_usage

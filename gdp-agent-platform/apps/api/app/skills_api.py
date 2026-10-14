@@ -52,8 +52,14 @@ def _labels(db: Db, name: Optional[str] = None) -> dict[str, dict[str, dict]]:
 
 
 def _bindings(db: Db) -> list[dict]:
-    return db.query("""SELECT STAGE, SKILL_NAME, ENABLED, POSITION, STANDARD, UPDATED_BY, UPDATED_AT::VARCHAR AS UPDATED_AT
-                         FROM KNOWLEDGE.SKILL_STAGE_BINDING ORDER BY STAGE, POSITION, SKILL_NAME""")
+    try:
+        return db.query("""SELECT STAGE, SKILL_NAME, ENABLED, POSITION, STANDARD, COALESCE(PIPELINE, 'ANY') AS PIPELINE,
+                                  UPDATED_BY, UPDATED_AT::VARCHAR AS UPDATED_AT
+                             FROM KNOWLEDGE.SKILL_STAGE_BINDING ORDER BY STAGE, POSITION, SKILL_NAME""")
+    except Exception:   # before V055
+        return db.query("""SELECT STAGE, SKILL_NAME, ENABLED, POSITION, STANDARD, 'ANY' AS PIPELINE, UPDATED_BY,
+                                  UPDATED_AT::VARCHAR AS UPDATED_AT
+                             FROM KNOWLEDGE.SKILL_STAGE_BINDING ORDER BY STAGE, POSITION, SKILL_NAME""")
 
 
 def _categories(db: Db) -> list[dict]:
@@ -169,6 +175,7 @@ class Binding(BaseModel):
     enabled: bool = True
     position: int = Field(default=100, ge=0, le=100000)
     standard: Literal["ANY", "GDP"] = "ANY"
+    pipeline: Literal["ANY", "SILVER", "GOLD"] = "ANY"
 
 
 class Bindings(BaseModel):
@@ -188,13 +195,14 @@ def put_bindings(body: Bindings, db: Db = Depends(current_db)):
                    (stage, json.dumps([b.skill_name for b in keep])))
         for b in keep:
             db.execute("""MERGE INTO KNOWLEDGE.SKILL_STAGE_BINDING T
-                          USING (SELECT %s AS STAGE, %s AS SKILL_NAME, %s AS ENABLED, %s AS POSITION, %s AS STANDARD) S
+                          USING (SELECT %s AS STAGE, %s AS SKILL_NAME, %s AS ENABLED, %s AS POSITION, %s AS STANDARD,
+                                        %s AS PIPELINE) S
                              ON T.STAGE = S.STAGE AND T.SKILL_NAME = S.SKILL_NAME
                           WHEN MATCHED THEN UPDATE SET ENABLED = S.ENABLED, POSITION = S.POSITION, STANDARD = S.STANDARD,
-                               UPDATED_BY = CURRENT_USER(), UPDATED_AT = CURRENT_TIMESTAMP()
-                          WHEN NOT MATCHED THEN INSERT (STAGE, SKILL_NAME, ENABLED, POSITION, STANDARD)
-                               VALUES (S.STAGE, S.SKILL_NAME, S.ENABLED, S.POSITION, S.STANDARD)""",
-                       (stage, b.skill_name, b.enabled, b.position, b.standard))
+                               PIPELINE = S.PIPELINE, UPDATED_BY = CURRENT_USER(), UPDATED_AT = CURRENT_TIMESTAMP()
+                          WHEN NOT MATCHED THEN INSERT (STAGE, SKILL_NAME, ENABLED, POSITION, STANDARD, PIPELINE)
+                               VALUES (S.STAGE, S.SKILL_NAME, S.ENABLED, S.POSITION, S.STANDARD, S.PIPELINE)""",
+                       (stage, b.skill_name, b.enabled, b.position, b.standard, b.pipeline))
     return get_bindings(db)
 
 

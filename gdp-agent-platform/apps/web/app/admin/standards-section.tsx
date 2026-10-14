@@ -11,11 +11,14 @@ import { savePlatformSetting, type PlatformState } from "./actions";
 import { DirtyBar, useToast } from "./admin-ui";
 import { Panel } from "./section";
 
-type Std = "GDP" | "GENERIC";
+type Std = "GDP" | "GENERIC" | "GDP.GOLD" | "GENERIC.GOLD";
 const TITLES: Record<Std, [string, string]> = {
-  GDP: ["GDP standard", "Naming and modeling conventions for runs on GDP sources."],
-  GENERIC: ["Generic standard", "Conventions for runs on any other source."],
+  GDP: ["GDP standard, Silver Pipeline", "Naming and modeling conventions for Silver runs on GDP sources."],
+  GENERIC: ["Generic standard, Silver Pipeline", "Conventions for Silver runs on any other source."],
+  "GDP.GOLD": ["GDP standard, Gold Pipeline", "The gold star schema conventions for Gold runs (folder, project, branch, skill), on top of the GDP standard."],
+  "GENERIC.GOLD": ["Generic standard, Gold Pipeline", "Gold conventions for Gold runs on any other source, on top of the generic standard."],
 };
+const STDS: Std[] = ["GDP", "GENERIC", "GDP.GOLD", "GENERIC.GOLD"];
 
 const show = (v: unknown) => (typeof v === "string" ? v : JSON.stringify(v));
 
@@ -81,14 +84,11 @@ export function StandardsSection({ platform }: { platform: PlatformState }) {
   const router = useRouter();
   const toast = useToast();
   const [pending, start] = useTransition();
-  const initial = {
-    GDP: toText(platform.settings["MODELING_STANDARD.GDP"]?.value),
-    GENERIC: toText(platform.settings["MODELING_STANDARD.GENERIC"]?.value),
-  };
+  const initial = Object.fromEntries(STDS.map((s) => [s, toText(platform.settings[`MODELING_STANDARD.${s}`]?.value)])) as Record<Std, Record<string, string>>;
   const [saved, setSaved] = useState(initial);
   const [draft, setDraft] = useState(initial);
   const clean = (o: Record<string, string>) => JSON.stringify(Object.entries(o).filter(([, v]) => v !== "").sort());
-  const changed = (["GDP", "GENERIC"] as Std[]).filter((s) => clean(draft[s]) !== clean(saved[s]));
+  const changed = STDS.filter((s) => clean(draft[s]) !== clean(saved[s]));
 
   const save = () => start(async () => {
     for (const std of changed) {
@@ -109,7 +109,7 @@ export function StandardsSection({ platform }: { platform: PlatformState }) {
 
   return (
     <div className="space-y-5">
-      {(["GDP", "GENERIC"] as Std[]).map((std) => {
+      {STDS.map((std) => {
         const s = platform.settings[`MODELING_STANDARD.${std}`];
         const count = Object.values(draft[std]).filter(Boolean).length;
         return (
