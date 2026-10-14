@@ -131,7 +131,10 @@ export function DocumentReview({ domainId, sourceId, focus, open, onClose, onDec
       {data && (
         <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_400px]" data-testid="document-review">
           <section className="min-w-0 space-y-2">
-            {s?.read_note && <p className="rounded-lg bg-muted/60 px-3 py-2 text-xs text-muted-foreground">{s.read_note}</p>}
+            {s?.read_note && (s.read_status === "READY"
+              ? <details className="rounded-lg bg-muted/60 px-3 py-2 text-xs text-muted-foreground"><summary className="cursor-pointer">How it was read</summary>
+                  <p className="mt-1">Read with {s.read_method}. {s.read_note}</p></details>
+              : <p className="rounded-lg bg-muted/60 px-3 py-2 text-xs text-muted-foreground">{s.read_note}</p>)}
             {isImage && file && (
               <div className="rounded-xl border p-2">
                 <p className="mb-1 flex items-center gap-1 text-[11px] text-muted-foreground"><ImageIcon className="h-3.5 w-3.5" />The uploaded image</p>

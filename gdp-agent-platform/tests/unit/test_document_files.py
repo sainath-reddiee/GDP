@@ -130,3 +130,11 @@ def test_upload_and_read_again_are_governed_and_not_queued():
     for path in ("/api/domains/d1/documents/upload", "/api/domains/d1/documents/s1/refresh"):
         assert policy.privilege_for("POST", path)[0] == "KNOWLEDGE.EDIT"
         assert policy.no_queue("POST", path)
+
+
+def test_failures_are_said_plainly():
+    assert df.why(RuntimeError("512513 (P0000): Request failed ... '400 'unknown model \"x\"''; batch-id: 1")) == "not available in this account"
+    assert df.why(RuntimeError("remote service error: '400 'This model is retired on October 14, 2026, please use other models.''")) == "retired by Snowflake"
+    assert df.why(RuntimeError("SQL compilation error: Unknown function AI_PARSE_DOCUMENT")) == "function not available in this account"
+    assert df.why(RuntimeError("")) == "failed"
+    assert df.VISION_MODELS[0] == "pixtral-large"

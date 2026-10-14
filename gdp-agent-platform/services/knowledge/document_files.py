@@ -40,7 +40,8 @@ IMAGE = (".png", ".jpg", ".jpeg", ".tif", ".tiff", ".webp", ".gif", ".bmp")
 OLD_OFFICE = {".doc": "Word (.docx)", ".xls": "Excel (.xlsx)", ".ppt": "PowerPoint (.pptx)"}
 # images an image model can read through TO_FILE (others are read by OCR only)
 VISION = (".png", ".jpg", ".jpeg", ".webp", ".gif")
-VISION_MODELS = ("claude-3-7-sonnet", "claude-4-sonnet", "pixtral-large", "llama4-maverick")
+# tried in order; which exist depends on the account and region (pixtral-large reads images on the DEV account)
+VISION_MODELS = ("pixtral-large", "claude-sonnet-4-5", "claude-4-sonnet", "llama4-maverick")
 INLINE = {"application/pdf", "image/png", "image/jpeg", "image/gif", "image/webp"}
 
 Query = Callable[[str, tuple], List[Dict[str, Any]]]
@@ -145,6 +146,22 @@ def parsed_text(result: Any) -> Tuple[str, Optional[int]]:
     return str(result.get("content") or "").strip(), int(count) if count is not None else None
 
 
+def why(exc: Exception) -> str:
+    """A failed Cortex call in a few plain words (the raw message carries batch ids and service details)."""
+    text = str(exc)
+    low = text.lower()
+    if "unknown model" in low or "model not found" in low or "not available" in low:
+        return "not available in this account"
+    if "please use other models" in low or "retire" in low or "deprecat" in low:
+        return "retired by Snowflake"
+    if "unknown function" in low or "invalid identifier" in low:
+        return "function not available in this account"
+    if "unsupported" in low or "not supported" in low:
+        return "file type not supported"
+    first = text.splitlines()[0] if text else "failed"
+    return first[:120]
+
+
 def _first(rows: List[Dict[str, Any]]) -> Any:
     return next(iter(rows[0].values())) if rows else None
 
@@ -164,7 +181,7 @@ def parse_document(q: Query, path: str, *, ocr_only: bool = False) -> Tuple[str,
         try:
             text, pages = parsed_text(_first(q(sql, params)))
         except Exception as exc:
-            failed.append(f"{method}: {str(exc).splitlines()[0][:200]}")
+            failed.append(f"{method}: {why(exc)}")
             continue
         if text.strip():
             return text, pages, method, failed
@@ -190,7 +207,7 @@ def describe_image(q: Query, path: str, domain: str, models: Iterable[str] = VIS
         try:
             text = _first(q(f"SELECT AI_COMPLETE(%s, %s, TO_FILE('@{STAGE}', %s)) AS R", (model, prompt, path)))
         except Exception as exc:
-            failed.append(f"{model}: {str(exc).splitlines()[0][:200]}")
+            failed.append(f"{model}: {why(exc)}")
             continue
         text = (json.loads(text) if isinstance(text, str) and text.startswith('"') else text) or ""
         if str(text).strip():

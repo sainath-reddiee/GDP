@@ -2257,10 +2257,25 @@ def _profile_cache_status(db: Db, run_id: str) -> list[dict]:
         return []
     from services.profiling.insights import scorecard
 
+    # when each table last changed, one query per schema, so the grade includes freshness exactly as the table's
+    # profile does (catalog_profile); a schema that cannot be read leaves freshness out
+    altered: dict[tuple[str, str, str], Optional[str]] = {}
+    by_schema: dict[tuple[str, str], list[str]] = {}
+    for r in landed:
+        if r.get("profile_stage_path") and r.get("database_name") and r.get("schema_name"):
+            by_schema.setdefault((r["database_name"], r["schema_name"]), []).append(r["table_name"])
+    for (database, schema), names in by_schema.items():
+        try:
+            for m in db.query(f"SELECT TABLE_NAME, LAST_ALTERED::VARCHAR AS LAST_ALTERED FROM {_quote_ident(database)}.INFORMATION_SCHEMA.TABLES "
+                              f"WHERE TABLE_SCHEMA = %s AND TABLE_NAME IN ({', '.join(['%s'] * len(names))})", (schema, *names)):
+                altered[(database, schema, m["table_name"])] = m["last_altered"]
+        except Exception:
+            continue
     out = []
     for r in landed:
         dims = _json(r.pop("quality_json", None))
-        out.append({**r, "quality": scorecard(dims, None) if dims else None,
+        last = altered.get((r.get("database_name"), r.get("schema_name"), r.get("table_name")))
+        out.append({**r, "quality": scorecard(dims, last) if dims else None,
                     "status": "CACHED" if r.get("profile_stage_path") else "UNPROFILED"})
     return out
 
