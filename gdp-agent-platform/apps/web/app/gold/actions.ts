@@ -19,7 +19,13 @@ export type RunGold = {
   target: { model_id: string; version: number; entity: string; fqn: string | null } | null;
   inputs: { database: string; schema: string; table: string; row_count: number | null; columns: number }[];
   can_choose_target: boolean;
+  /** set on a table run: the Gold run it belongs to */
+  parent_run_id?: string | null;
+  /** a Gold run's table runs (its star schema) */
+  children?: GoldChild[];
 };
+export type GoldChild = { run_id: string; run_name: string; entity: string | null; fqn: string | null; table_type: string | null;
+  current_state: string; current_stage: string | null; status: string | null };
 
 export async function goldInputs(domainId: string) {
   return attemptValue(() => api<GoldInputs>(`/api/gold/inputs?domain_id=${encodeURIComponent(domainId)}`));
@@ -51,6 +57,16 @@ export async function chooseGoldTarget(runId: string, entity: string) {
     const r = await api<{ target_model: string; mapping_reset?: boolean }>(`/api/runs/${encodeURIComponent(runId)}/gold/target`,
       { method: "POST", body: JSON.stringify({ entity }) });
     revalidatePath(`/runs/${runId}`, "layout");
+    return r;
+  });
+}
+
+export async function buildStarSchema(runId: string) {
+  return attemptValue(async () => {
+    const r = await api<{ created: unknown[]; errors: { entity: string; error: string }[]; unsourced: string[]; dimensions: string[]; children: GoldChild[] }>(
+      `/api/runs/${encodeURIComponent(runId)}/gold/star-schema`, { method: "POST" });
+    revalidatePath(`/runs/${runId}`, "layout");
+    revalidatePath("/gold");
     return r;
   });
 }

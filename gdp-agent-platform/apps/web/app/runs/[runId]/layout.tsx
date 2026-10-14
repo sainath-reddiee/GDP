@@ -5,6 +5,7 @@ import { StageRail } from "@/components/stage-rail";
 import { ArchiveToggle } from "@/components/archive-toggle";
 import { TagEditor } from "@/components/tag-editor";
 import { RunSkills } from "@/components/run-skills";
+import { Autopilot } from "@/components/autopilot";
 import { Badge } from "@/components/ui/badge";
 import { displayDomain, isHiddenTarget } from "@/lib/catalog-display";
 import { PIPELINES, pipelineOf } from "@/lib/stages";
@@ -53,6 +54,7 @@ async function RunShell({ runId, children }: { runId: string; children: ReactNod
         <RunSkills runId={runId} disabled={Boolean(state.is_archived)} />
         {/* stage pages put their "Ask AI to review" button here (components/suggestions-panel.tsx) */}
         <span id="run-ai-slot" className="ml-auto flex items-center" />
+        <Autopilot runId={runId} disabled={Boolean(state.is_archived)} />
         <Link href={`/runs/${runId}/audit`} className="text-sm font-medium text-primary hover:underline">
           Audit trail
         </Link>

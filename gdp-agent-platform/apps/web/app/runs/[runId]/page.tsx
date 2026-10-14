@@ -2,6 +2,7 @@ import { getRun } from "@/lib/api";
 import { SttmFork } from "@/components/sttm-fork";
 import { RunConsole } from "./console";
 import { AgentPanel } from "@/components/agent-panel";
+import { AcceleratorCard } from "@/components/accelerator-card";
 
 export default async function RunOverview({ params }: { params: { runId: string } }) {
   const state = await getRun(params.runId);
@@ -13,6 +14,7 @@ export default async function RunOverview({ params }: { params: { runId: string 
   return (
     <>
       {showFork && <SttmFork runId={params.runId} currentState={state.current_state} />}
+      <AcceleratorCard runId={params.runId} />
       <RunConsole state={state} />
       <AgentPanel runId={params.runId} />
     </>

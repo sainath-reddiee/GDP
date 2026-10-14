@@ -30,7 +30,7 @@ RUN_ID = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{
 
 CREATE_RUN_FIELDS = {
     "RUN_NAME", "DOMAIN_ID", "SOURCE_SYSTEM_ID", "TARGET_MODEL",
-    "CORRELATION_ID", "ENVIRONMENT", "CONFIG_VERSION", "MODELING_STANDARD", "PIPELINE",
+    "CORRELATION_ID", "ENVIRONMENT", "CONFIG_VERSION", "MODELING_STANDARD", "PIPELINE", "PARENT_RUN_ID",
 }
 PIPELINES = ("SILVER", "GOLD")
 
@@ -240,15 +240,16 @@ def create_run(session, payload_json: str) -> Dict[str, Any]:
             """
             INSERT INTO CORE.WORKFLOW_RUN
                 (RUN_ID, RUN_NAME, DOMAIN_ID, SOURCE_SYSTEM_ID, TARGET_MODEL, CURRENT_STATE, CURRENT_STAGE,
-                 STATUS, CREATED_BY, CORRELATION_ID, ENVIRONMENT, CONFIG_VERSION, GRAPH_VERSION, MODELING_STANDARD, PIPELINE)
+                 STATUS, CREATED_BY, CORRELATION_ID, ENVIRONMENT, CONFIG_VERSION, GRAPH_VERSION, MODELING_STANDARD, PIPELINE,
+                 PARENT_RUN_ID)
             SELECT ?, ?, NULLIF(?, ''), NULLIF(?, ''), NULLIF(?, ''), ?, ?, ?, CURRENT_USER(),
-                   NULLIF(?, ''), COALESCE(NULLIF(?, ''), 'DEV'), NULLIF(?, ''), ?, NULLIF(?, ''), ?
+                   NULLIF(?, ''), COALESCE(NULLIF(?, ''), 'DEV'), NULLIF(?, ''), ?, NULLIF(?, ''), ?, NULLIF(?, '')
             """,
             params=[run_id, values["RUN_NAME"], domain_id, _n(values["SOURCE_SYSTEM_ID"]),
                     target_model, INITIAL_STATE, graph.states[INITIAL_STATE].stage,
                     run_status_for(graph, INITIAL_STATE), _n(values["CORRELATION_ID"]),
                     _n(values["ENVIRONMENT"]), _n(values["CONFIG_VERSION"]), graph.version,
-                    str(standard).upper() if standard else "", pipeline],
+                    str(standard).upper() if standard else "", pipeline, _n(values["PARENT_RUN_ID"])],
         ).collect()
         session.sql(
             """

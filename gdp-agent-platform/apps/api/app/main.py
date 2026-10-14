@@ -155,6 +155,7 @@ class CreateRun(BaseModel):
     intent: Optional[dict] = None
     modeling_standard: Optional[Literal["GDP", "GENERIC"]] = None
     pipeline: Literal["SILVER", "GOLD"] = "SILVER"
+    parent_run_id: Optional[str] = Field(default=None, max_length=36)   # a Gold run's table run
 
 
 class Transition(BaseModel):
@@ -458,8 +459,38 @@ def list_runs(include_test: bool = False, status: str = "all", limit: int = 200,
         r["lifecycle"] = lifecycle_status(r["current_state"], bool(r.get("is_archived")))
         r["table_count"] = (r.get("selected_tables") or r.get("landed_tables")
                             or intent_counts.get(r["run_id"]) or 0)
+    if pipeline == "GOLD" and rows:
+        _fold_table_runs(db, rows)
     return {"runs": rows, "status": status.lower(), "total": total if total is not None else len(rows),
             "offset": offset, "limit": limit}
+
+
+def _fold_table_runs(db: Db, rows: list[dict]) -> None:
+    """A Gold run with table runs shows its gold tables and the state of the table run furthest behind."""
+    from services.gold.star import least_advanced
+
+    ids = [r["run_id"] for r in rows]
+    try:
+        children = db.query(f"""SELECT PARENT_RUN_ID, MODEL_ENTITY, CURRENT_STATE, CURRENT_STAGE FROM CORE.WORKFLOW_RUN
+                                 WHERE DELETED_AT IS NULL AND PARENT_RUN_ID IN ({", ".join(["%s"] * len(ids))})""", tuple(ids))
+    except Exception:
+        return
+    try:
+        graph = _workflow_graph(db)
+    except Exception:
+        graph = None
+    ordinal = {s.state: s.ordinal for s in graph.states.values()} if graph else {}
+    stage_of = {s.state: s.stage for s in graph.states.values()} if graph else {}
+    by_parent: dict = {}
+    for c in children:
+        by_parent.setdefault(c["parent_run_id"], []).append(c)
+    for r in rows:
+        kids = by_parent.get(r["run_id"])
+        if not kids:
+            continue
+        r["gold_tables"] = sorted(str(k.get("model_entity") or "") for k in kids)
+        state = least_advanced([k["current_state"] for k in kids], ordinal)
+        r["current_state"], r["current_stage"] = state, stage_of.get(state, r.get("current_stage"))
 
 
 class RunIds(BaseModel):
@@ -660,6 +691,8 @@ def create_run(body: CreateRun, db: Db = Depends(current_db)):
         payload["MODELING_STANDARD"] = body.modeling_standard
     if body.pipeline == "GOLD":
         payload["PIPELINE"] = "GOLD"
+    if body.parent_run_id:
+        payload["PARENT_RUN_ID"] = body.parent_run_id
     try:
         created = db.call("CALL CORE.CREATE_RUN(%s)", (json.dumps(payload),))
     except Exception as exc:
@@ -762,7 +795,7 @@ def get_run(run_id: str, db: Db = Depends(current_db)):
         try:
             state["run"] = db.query(base.format(extra=", R.LANDING_DATABASE, R.LANDING_SCHEMA, R.STORAGE_TYPE, "
                                                       "R.ARCHIVED_AT::VARCHAR AS ARCHIVED_AT, R.ARCHIVED_BY, "
-                                                      "COALESCE(R.PIPELINE, 'SILVER') AS PIPELINE"),
+                                                      "COALESCE(R.PIPELINE, 'SILVER') AS PIPELINE, R.PARENT_RUN_ID"),
                                     (run_id,))[0]
         except Exception:
             state["run"] = db.query(base.format(extra=""), (run_id,))[0]
@@ -6667,3 +6700,6 @@ app.include_router(tickets_router)
 from app.pipelines_api import router as pipelines_router  # noqa: E402
 
 app.include_router(pipelines_router)
+from app.autopilot_api import router as autopilot_router  # noqa: E402
+
+app.include_router(autopilot_router)
