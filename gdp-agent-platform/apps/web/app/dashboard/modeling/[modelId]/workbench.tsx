@@ -16,7 +16,7 @@ import { Modal } from "@/components/hub/overlay";
 import { StatusPill, explain } from "@/components/hub/states";
 import { ErCanvas } from "@/components/hub/er-canvas";
 import { useToast } from "@/components/ui/toast";
-import { importInto, openDraft, saveDraft, saveLayout, submitDraft, validateDraft, withdrawVersion } from "../model-actions";
+import { importInto, importModelFile, openDraft, saveDraft, saveLayout, submitDraft, validateDraft, withdrawVersion } from "../model-actions";
 import { EntitiesPanel, RelationshipsPanel } from "./entities-panel";
 import { ReviewPanel } from "./review-panel";
 import { StandardsPanel, VersionsPanel } from "./versions-panel";
@@ -44,9 +44,12 @@ const TABS: [Tab, string, typeof Network][] = [
   ["publish", "Publish", GitPullRequest], ["changes", "Proposals", Workflow],
 ];
 
+const MODEL_FILES = ".xml,.sql,.ddl,.xlsx,.xlsm,.csv,.tsv,.txt,.json,.erwin,.erw";
+
 function ImportModal({ modelId, spec, onClose, onLoaded }: { modelId: string; spec: DmSpec; onClose: () => void; onLoaded: (s: DmSpec, note: string) => void }) {
   const toast = useToast();
-  const [kind, setKind] = useState<"ddl" | "pack" | "schema">("ddl");
+  const [kind, setKind] = useState<"file" | "ddl" | "pack" | "schema">("file");
+  const [file, setFile] = useState<File | null>(null);
   const [text, setText] = useState("");
   const [database, setDatabase] = useState(spec.physical_defaults.database);
   const [schema, setSchema] = useState(spec.physical_defaults.schema);
@@ -54,11 +57,26 @@ function ImportModal({ modelId, spec, onClose, onLoaded }: { modelId: string; sp
   const [replace, setReplace] = useState(false);
   const [pending, start] = useTransition();
   const go = () => start(async () => {
+    if (kind === "file") {
+      if (!file) return;
+      const form = new FormData();
+      form.append("file", file);
+      form.append("spec", JSON.stringify(spec));
+      form.append("replace", String(replace));
+      const f = await importModelFile(modelId, form);
+      if (!f.ok) { toast("error", explain(f.error).message); return; }
+      const d = f.data;
+      onLoaded(d.spec, `${d.format} ${d.file}: ${d.entities} table${d.entities === 1 ? "" : "s"}, ${d.columns} columns, ${d.relationships} relationship${d.relationships === 1 ? "" : "s"} read; `
+        + `${d.counts.ADDITIVE ?? 0} additive, ${d.counts.BREAKING ?? 0} breaking, ${d.counts.NON_FUNCTIONAL ?? 0} documentation change(s).`
+        + (d.notes.length ? ` Notes: ${d.notes.slice(0, 3).join("; ")}${d.notes.length > 3 ? ` (+${d.notes.length - 3} more)` : ""}.` : "")
+        + " Review and save the draft.");
+      return;
+    }
     let pack: unknown;
     if (kind === "pack") {
       try { pack = JSON.parse(text); } catch { toast("error", "That is not valid JSON"); return; }
     }
-    const r = await importInto(modelId, { kind, text: kind === "ddl" ? text : undefined, pack, database, schema,
+    const r = await importInto(modelId, { kind: kind as "ddl" | "pack" | "schema", text: kind === "ddl" ? text : undefined, pack, database, schema,
       tables: tables.split(/[\s,]+/).filter(Boolean), replace, spec });
     if (!r.ok) { toast("error", explain(r.error).message); return; }
     onLoaded(r.data.spec, `${r.data.entities} entit${r.data.entities === 1 ? "y" : "ies"} imported: ${r.data.counts.ADDITIVE} additive, ${r.data.counts.BREAKING} breaking, ${r.data.counts.NON_FUNCTIONAL} documentation change(s). Review and save the draft.`);
@@ -67,14 +85,29 @@ function ImportModal({ modelId, spec, onClose, onLoaded }: { modelId: string; sp
     <Modal open onClose={onClose} wide title="Import into the draft"
            description="The import is merged into the draft as unsaved changes: same-named entities are updated and keep their ids and documentation, new ones are added. Nothing is saved until you save the draft."
            footer={<><Button variant="ghost" onClick={onClose}>Cancel</Button>
-             <Button onClick={go} disabled={pending || (kind !== "schema" && !text.trim()) || (kind === "schema" && (!database || !schema))} data-testid="run-import">
+             <Button onClick={go} disabled={pending || (kind === "file" ? !file : (kind !== "schema" && !text.trim()) || (kind === "schema" && (!database || !schema)))} data-testid="run-import">
                {pending && <Loader2 className="h-4 w-4 animate-spin" />} Import</Button></>}>
       <div className="flex rounded-xl bg-muted p-1 text-xs">
-        {([["ddl", "Snowflake DDL"], ["pack", "domain_pack.json"], ["schema", "Live schema"]] as const).map(([id, label]) => (
+        {([["file", "Model file"], ["ddl", "Paste DDL"], ["pack", "domain_pack.json"], ["schema", "Live schema"]] as const).map(([id, label]) => (
           <button key={id} type="button" onClick={() => setKind(id)} className={cn("flex-1 rounded-lg px-2.5 py-1 font-medium", kind === id ? "bg-card shadow-xs" : "text-muted-foreground")}>{label}</button>
         ))}
       </div>
-      {kind !== "schema" ? (
+      {kind === "file" ? (
+        <div className="space-y-2">
+          <label htmlFor="imp-file" className="flex cursor-pointer flex-col items-center gap-1 rounded-xl border border-dashed px-4 py-6 text-center text-sm hover:border-primary hover:bg-primary/5">
+            <FileInput className="h-5 w-5 text-muted-foreground" />
+            <span className="font-medium">{file ? file.name : "Choose a data model file"}</span>
+            <span className="text-xs text-muted-foreground">{file ? `${(file.size / 1024).toFixed(0)} KB` : "Up to 25 MB"}</span>
+            <input id="imp-file" type="file" accept={MODEL_FILES} className="sr-only" data-testid="import-file"
+                   onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
+          </label>
+          <ul className="space-y-0.5 text-xs text-muted-foreground">
+            <li><span className="font-medium text-foreground">Erwin model:</span> File, Save As, XML file (.xml). Or Tools, Forward Engineer, Schema Generation, and choose the DDL script (.sql). The native .erwin file cannot be read outside Erwin.</li>
+            <li><span className="font-medium text-foreground">Data dictionary or Erwin column report:</span> .xlsx or .csv, one row per column, with headers such as Table, Column, Data Type, Nullable, Primary Key, Definition, Parent Table.</li>
+            <li><span className="font-medium text-foreground">Also:</span> any CREATE TABLE script, a domain_pack.json, or this workbench&apos;s own data dictionary export.</li>
+          </ul>
+        </div>
+      ) : kind !== "schema" ? (
         <><Label htmlFor="imp-text">{kind === "ddl" ? "CREATE TABLE statements" : "domain_pack.json"}</Label>
           <Textarea id="imp-text" rows={12} className="font-mono text-xs" value={text} onChange={(e) => setText(e.target.value)}
                     placeholder={kind === "ddl" ? "CREATE TABLE SILVER.SALES.DIM_CUSTOMER (\n  CUSTOMER_ID NUMBER NOT NULL PRIMARY KEY,\n  ...\n);" : '{ "domain": {...}, "targets": [...] }'} /></>
@@ -91,9 +124,9 @@ function ImportModal({ modelId, spec, onClose, onLoaded }: { modelId: string; sp
   );
 }
 
-export function ModelWorkbench({ detail, comments, me, initialTab, canEdit, canApprove, approvedSpec }: {
+export function ModelWorkbench({ detail, comments, me, initialTab, canEdit, canApprove, approvedSpec, autoImport = false }: {
   detail: DmDetail; comments: DmComment[]; me: string; initialTab: string | null; canEdit: boolean; canApprove: boolean;
-  approvedSpec?: DmSpec | null;
+  approvedSpec?: DmSpec | null; /** open the import dialog on load (?import=file, from the domain page) */ autoImport?: boolean;
 }) {
   const router = useRouter();
   const toast = useToast();
@@ -109,8 +142,10 @@ export function ModelWorkbench({ detail, comments, me, initialTab, canEdit, canA
   const [selected, setSelected] = useState<string | null>(null);
   const [note, setNote] = useState("");
   const [conflict, setConflict] = useState("");
-  const [importing, setImporting] = useState(false);
-  const [notice, setNotice] = useState("");
+  const [importing, setImporting] = useState(autoImport && editable);
+  const [notice, setNotice] = useState(autoImport && !editable
+    ? (canEdit ? "To import a model file, open a draft first (Open a draft), then choose Import." : "Importing a model file needs MODEL.EDIT.")
+    : "");
   const [area, setArea] = useState("");
   const [pending, start] = useTransition();
   const layoutTimer = useRef<ReturnType<typeof setTimeout> | null>(null);

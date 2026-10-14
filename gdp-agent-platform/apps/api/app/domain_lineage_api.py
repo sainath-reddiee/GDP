@@ -1,5 +1,6 @@
 """How a domain is built, and how complete it is (the domain page's Lineage tab and Overview card).
 
+GET /api/domains/{id}/data-model: the domain's data model (approved, or the open draft and its changes) for the diagram.
 GET /api/domains/{id}/provenance: the sources its knowledge came from (services/knowledge/provenance.py), the build
 timeline, and the coverage and trust score with the Copilot requests that close each gap (coverage.py). Read only.
 Every source query fails soft: a schema that is not deployed only drops its part.
@@ -163,3 +164,49 @@ def domain_contract(domain_id: str, db: Db = Depends(current_db)):
             "text": text, "chars": len(text),
             "extracted": {"database": parsed.get("database"), "schema": parsed.get("schema"), "hub": parsed.get("hub"),
                           "targets": targets, "required": parsed.get("required_mapping") or []}}
+
+
+@router.get("/api/domains/{domain_id}/data-model")
+def domain_data_model(domain_id: str, view: str = "approved", db: Db = Depends(current_db)):
+    """The domain's data model for the Lineage tab: the approved version, or the open draft with what it changes.
+    Each table carries what it already has downstream (active knowledge items, STTM, a table model)."""
+    from services.common.sql import variant
+    from services.modeling import diagram, spec_v2
+
+    domain_detail(domain_id, db)
+    model = next(iter(_soft(db, """SELECT MODEL_ID, APPROVED_VERSION, OPEN_VERSION, DIAGRAM_LAYOUT FROM GOVERNANCE.DOMAIN_MODEL
+                                    WHERE DOMAIN_ID = %s""", (domain_id,))), None)
+    if not model:
+        return {"model": None}
+    model_id, approved_v, open_v = model["model_id"], model.get("approved_version"), model.get("open_version")
+    versions = {int(r["version"]): r for r in _soft(db, """SELECT VERSION, STATUS, SPEC, APPROVED_BY,
+                                                              TO_VARCHAR(APPROVED_AT, 'YYYY-MM-DD HH24:MI') AS APPROVED_AT,
+                                                              CREATED_BY, TO_VARCHAR(UPDATED_AT, 'YYYY-MM-DD HH24:MI') AS UPDATED_AT
+                                                         FROM GOVERNANCE.MODEL_DESIGNS WHERE MODEL_ID = %s
+                                                          AND VERSION IN (%s, %s)""",
+                                                    (model_id, int(approved_v or 0), int(open_v or 0)))}
+    spec_of = lambda v: spec_v2.normalize_v2(variant(versions[v]["spec"]) or {}, model_id) if v in versions else None  # noqa: E731
+    approved = spec_of(int(approved_v)) if approved_v else None
+    draft = spec_of(int(open_v)) if open_v else None
+    shown_v = int(open_v) if view == "draft" and draft else int(approved_v) if approved else int(open_v) if draft else None
+    if shown_v is None:
+        return {"model": {"model_id": model_id, "approved_version": approved_v, "open_version": open_v}, "diagram": None}
+    shown = draft if shown_v == open_v else approved
+    knowledge = {r["t"]: r["n"] for r in _soft(db, """SELECT UPPER(CONTENT_JSON:target_table::STRING) AS T, COUNT(*) AS N
+                                                       FROM KNOWLEDGE.DOMAIN_KNOWLEDGE
+                                                      WHERE DOMAIN_ID = %s AND IS_CURRENT AND STATUS = 'ACTIVE'
+                                                        AND CONTENT_JSON:target_table IS NOT NULL GROUP BY 1""", (domain_id,))
+                 if r.get("t")}
+    sttm = [r["target_entity"] for r in _soft(db, "SELECT DISTINCT TARGET_ENTITY FROM GOVERNANCE.STTM_CATALOG WHERE DOMAIN_ID = %s",
+                                              (domain_id,))]
+    table_models = [r["table_name"] for r in _soft(db, "SELECT TABLE_NAME FROM GOVERNANCE.TABLE_MODEL WHERE DOMAIN_ID = %s",
+                                                   (domain_id,))]
+    meta = versions[shown_v]
+    out = diagram.build(shown, model_id=model_id, layout=variant(model.get("diagram_layout")) or {},
+                        approved=approved if shown is draft and approved else None,
+                        knowledge=knowledge, sttm=sttm, table_models=table_models)
+    out.update(version=shown_v, status=meta.get("status"), approved_by=meta.get("approved_by"),
+               approved_at=meta.get("approved_at"), updated_at=meta.get("updated_at"),
+               platform=(shown.get("physical_defaults") or {}).get("platform") or "SNOWFLAKE",
+               location={k: (shown.get("physical_defaults") or {}).get(k) for k in ("database", "schema")})
+    return {"model": {"model_id": model_id, "approved_version": approved_v, "open_version": open_v}, "diagram": out}

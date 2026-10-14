@@ -2,19 +2,20 @@
 
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
-import { ExternalLink, FileText, Link2, Loader2, Plus, RefreshCw, Trash2, Upload, Wand2, X } from "lucide-react";
+import { ArrowRight, ExternalLink, FileInput, FileText, Link2, Loader2, Network, Plus, RefreshCw, Trash2, Upload, Wand2, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAccess } from "@/components/access";
 import {
-  domainDocuments, domainSkills, linkConfluence, refreshDocument, removeDocument, saveDomainSkills, uploadDomainDocuments,
-  type DomainDocuments, type DomainSkillRow, type DomainSkills,
+  domainDataModel, domainDocuments, domainSkills, linkConfluence, refreshDocument, removeDocument, saveDomainSkills, uploadDomainDocuments,
+  type DomainDataModel, type DomainDocuments, type DomainSkillRow, type DomainSkills,
 } from "../actions";
 
 type Msg = { tone: "ok" | "error"; text: string } | null;
 const note = (m: Msg) => m && (
   <p role={m.tone === "error" ? "alert" : "status"} className={cn("rounded-lg px-3 py-2 text-xs", m.tone === "error" ? "bg-destructive/10 text-destructive" : "bg-success/10 text-success")}>{m.text}</p>
 );
-const STAGE_LABEL = (s: string) => s.charAt(0) + s.slice(1).toLowerCase();
+const STAGE_NAMES: Record<string, string> = { STTM: "STTM", DBT: "dbt", QA: "QA", SODA: "Soda (DQ)" };
+const STAGE_LABEL = (s: string) => STAGE_NAMES[s] ?? s.charAt(0) + s.slice(1).toLowerCase();
 
 /** The skills this domain's runs load, per stage: the standard's, plus the domain's own (added, or in place of one). */
 function SkillsPanel({ domainId }: { domainId: string }) {
@@ -204,11 +205,53 @@ function DocumentsPanel({ domainId }: { domainId: string }) {
   );
 }
 
-/** The Sources tab: what this domain is defined by beyond its pack: its own skills and its documents. */
+/** The domain's data model as a source: which version runs use, and where to bring in a model file. */
+function DataModelPanel({ domainId }: { domainId: string }) {
+  const { canAct } = useAccess();
+  const [data, setData] = useState<DomainDataModel | null>(null);
+  const [error, setError] = useState("");
+  useEffect(() => { void domainDataModel(domainId).then((r) => (r.ok ? setData(r.data) : setError(r.error))); }, [domainId]);
+  const m = data?.model;
+  const d = data?.diagram;
+  const workbench = m ? `/dashboard/modeling/${encodeURIComponent(m.model_id)}` : "/dashboard/modeling";
+  return (
+    <section className="surface space-y-3 p-4" data-testid="domain-model-source">
+      <div>
+        <h3 className="flex items-center gap-2 text-sm font-semibold"><Network className="h-4 w-4 text-primary" />Data model</h3>
+        <p className="text-xs text-muted-foreground">The tables every run maps into. Bring in a model file (an Erwin model saved as XML, its DDL, or a data
+          dictionary in Excel or CSV): it is merged into a draft in the Model Workbench, where the changes are reviewed and approved before any run uses them.</p>
+      </div>
+      {error ? <p role="alert" className="text-xs text-destructive">{error}</p> : !data ? (
+        <p className="text-xs text-muted-foreground"><Loader2 className="mr-1 inline h-3 w-3 animate-spin" />Reading the model…</p>
+      ) : (
+        <p className="text-xs">
+          {!m ? "No data model yet." : <>
+            {m.approved_version ? <span className="font-medium">Approved v{m.approved_version}</span> : <span className="font-medium">Not approved yet</span>}
+            {d && <span className="text-muted-foreground"> · {d.summary.tables} tables · {d.summary.columns} columns · {d.summary.relationships} relationships</span>}
+            {m.open_version && <span className="text-amber-600"> · draft v{m.open_version} open</span>}
+          </>}
+        </p>
+      )}
+      <div className="flex flex-wrap gap-2">
+        {canAct("MODEL.EDIT") && (
+          <Link href={`${workbench}?import=file`} className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-primary px-3 text-sm font-medium text-primary-foreground">
+            <FileInput className="h-4 w-4" />Import a model file</Link>
+        )}
+        <Link href={`/domains/${encodeURIComponent(domainId)}?tab=lineage`} className="inline-flex h-9 items-center gap-1.5 rounded-lg border px-3 text-sm hover:bg-muted">
+          See the diagram<ArrowRight className="h-4 w-4" /></Link>
+      </div>
+    </section>
+  );
+}
+
+/** The Sources tab: what this domain is defined by beyond its pack: its data model, its documents and its own skills. */
 export function SourcesTab({ domainId }: { domainId: string }) {
   return (
     <div className="grid gap-4 xl:grid-cols-2">
-      <DocumentsPanel domainId={domainId} />
+      <div className="space-y-4">
+        <DataModelPanel domainId={domainId} />
+        <DocumentsPanel domainId={domainId} />
+      </div>
       <SkillsPanel domainId={domainId} />
     </div>
   );

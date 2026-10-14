@@ -317,7 +317,7 @@ RULES: List[Tuple[str, str, Any, str]] = [
     ("POST", r"/api/hub/domain-models/[^/]+/versions/\d+/comments", "MODEL.EDIT", ""),
     ("POST", r"/api/hub/domain-models/[^/]+/comments/[^/]+/resolve", "MODEL.EDIT", ""),
     ("PUT", r"/api/hub/domain-models/[^/]+/(layout|standard)", "MODEL.EDIT", ""),
-    ("POST", r"/api/hub/domain-models/[^/]+/import", "MODEL.EDIT", ""),
+    ("POST", r"/api/hub/domain-models/[^/]+/import(-file)?", "MODEL.EDIT", ""),
     ("POST", r"/api/hub/domain-models/[^/]+/versions/\d+/publish", "MODEL.EDIT", "Open a pull request for an approved domain model"),
     ("POST", r"/api/hub/domain-models/[^/]+/pr-sync", None, ""),
     ("POST", r"/api/hub/domain-models/[^/]+/changes/[^/]+/(merge|reject)", "MODEL.EDIT", "Decide a run's model proposal"),

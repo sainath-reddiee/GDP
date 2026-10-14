@@ -231,3 +231,26 @@ export async function removeDocument(domainId: string, sourceId: string) {
   return attemptValue(() => api<{ removed: boolean }>(
     `/api/domains/${encodeURIComponent(domainId)}/documents/${encodeURIComponent(sourceId)}/remove`, { method: "POST" }));
 }
+
+/** The domain's data model for the Lineage tab: approved, or the open draft with what it changes. */
+export type DomainDiagramEntity = {
+  entity_name: string; kind: string; purpose: string; grain: string; business_keys: string[]; subject_area: string | null; scd_type: string | null;
+  attributes: { name: string; datatype: string; nullable: boolean; is_pk: boolean; source_columns: string[]; derived: boolean; description: string | null; business_key: boolean }[];
+};
+export type DomainDataModel = {
+  model: { model_id: string; approved_version: number | null; open_version: number | null } | null;
+  diagram?: {
+    model_id: string; version: number; status: string; approved_by: string | null; approved_at: string | null; updated_at: string | null;
+    platform: "SNOWFLAKE" | "ICEBERG"; location: { database: string | null; schema: string | null };
+    entities: DomainDiagramEntity[];
+    relationships: { from_entity: string; from_column: string; to_entity: string; to_column: string; cardinality: string; from_optional?: boolean }[];
+    positions: Record<string, { x: number; y: number }>;
+    coverage: Record<string, { knowledge: number; sttm: boolean; table_model: boolean }>;
+    highlight: { entities: Record<string, "added" | "changed" | "removed">; columns: Record<string, "added" | "changed" | "removed">;
+      removed_entities: string[]; changes: { path: string; kind: string; class: string; message: string }[]; counts?: Record<string, number> };
+    subject_areas: string[]; summary: { tables: number; columns: number; relationships: number };
+  } | null;
+};
+export async function domainDataModel(domainId: string, view: "approved" | "draft" = "approved") {
+  return attemptValue(() => api<DomainDataModel>(`/api/domains/${encodeURIComponent(domainId)}/data-model?view=${view}`));
+}

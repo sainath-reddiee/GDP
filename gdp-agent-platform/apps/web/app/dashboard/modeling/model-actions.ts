@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { api } from "@/lib/api";
+import { api, apiForm } from "@/lib/api";
 import { storeAction } from "@/lib/store-action";
 import type { DmComment, DmDiff, DmImpact, DmIssue, DmSpec } from "@/lib/model-types";
 
@@ -115,6 +115,13 @@ export async function importInto(modelId: string, body: { kind: "ddl" | "pack" |
   schema?: string; tables?: string[]; replace?: boolean; spec: DmSpec }) {
   return storeAction(() => api<{ spec: DmSpec; issues: DmIssue[]; counts: Record<string, number>; entities: number }>(
     `${BASE}/${enc(modelId)}/import`, send("POST", body)));
+}
+
+/** A data model file (Erwin XML, DDL, Excel or CSV data dictionary, domain_pack.json) merged into the draft; nothing saved. */
+export type ImportFileResult = { spec: DmSpec; issues: DmIssue[]; counts: Record<string, number>; entities: number; columns: number;
+  relationships: number; format: string; notes: string[]; file: string };
+export async function importModelFile(modelId: string, form: FormData) {
+  return storeAction(() => apiForm<ImportFileResult>(`${BASE}/${enc(modelId)}/import-file`, form));
 }
 
 // ---------------------------------------------------------------- Git and run proposals

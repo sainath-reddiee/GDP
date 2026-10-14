@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { BadgeCheck, Bot, FileCode2, GitBranch, Loader2, ShieldAlert, Sparkles, X } from "lucide-react";
+import { DataModel } from "./data-model";
 import { cn } from "@/lib/utils";
 import { prettyType } from "../../knowledge/knowledge-ui";
 import { domainProvenance, type DomainProvenance, type ProvenanceSource } from "../actions";
@@ -255,6 +256,7 @@ export function LineageTab({ domainId, domainName }: { domainId: string; domainN
     <div className="space-y-5" data-testid="lineage-tab">
       <LifecycleFlow flow={data.flow} domainName={domainName} onContract={() => setContract(true)} />
       <ContractDrawer domainId={domainId} open={contract} onClose={() => setContract(false)} />
+      <DataModel domainId={domainId} domainName={domainName} />
 
       <BuiltWith m={data.manifest} onContract={() => setContract(true)} />
 
