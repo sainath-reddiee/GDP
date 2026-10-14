@@ -19,6 +19,8 @@ export type GoldBuild = {
   model: { model_id: string; approved_version: number | null; open_version: number | null } | null;
   lines: GoldLine[]; role: "MASTERED" | "CONSUMER" | null; consumes: { domain: string; silver_column: string; gold_column: string }[];
   created_by: string; created_at: string; updated_at: string | null;
+  generation: { version: number; model_version: number; paths: string[];
+    report: { engine: string; tables: string[]; conformed: string[]; conventions: unknown; assumptions: string[]; notes?: string[] } } | null;
 };
 export type GoldBuildRow = { build_id: string; domain_id: string; domain_name: string; name: string; step: string; status: string;
   inputs: number; tables: number; model_id: string | null; created_by: string; created_at: string; updated_at: string | null };
@@ -53,4 +55,12 @@ export async function cancelGold(buildId: string) {
   const r = await attemptValue(() => api<GoldBuild>(`${B(buildId)}/cancel`, { method: "POST" }));
   revalidatePath("/gold");
   return r;
+}
+export async function generateGold(buildId: string) {
+  const r = await attemptValue(() => api<GoldBuild>(`${B(buildId)}/generate`, { method: "POST" }));
+  revalidatePath(`/gold/${buildId}`);
+  return r;
+}
+export async function goldFiles(buildId: string) {
+  return attemptValue(() => api<{ version: number; files: Record<string, string> }>(`${B(buildId)}/generation`));
 }

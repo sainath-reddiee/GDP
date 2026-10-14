@@ -156,6 +156,7 @@ RULES: List[Tuple[str, str, Any, str]] = [
     ("POST", r"/api/gold/builds", "MODEL.EDIT", "Start a gold build"),
     ("PUT", r"/api/gold/builds/[^/]+/inputs", "MODEL.EDIT", "Choose a gold build's input tables"),
     ("POST", r"/api/gold/builds/[^/]+/(propose|workbench|cancel)", "MODEL.EDIT", "Propose or review a gold model"),
+    ("POST", r"/api/gold/builds/[^/]+/generate", "DBT.EDIT", "Generate the gold dbt models of an approved gold model"),
     ("POST", r"/api/domains/[^/]+/documents/(confluence|upload|[^/]+/refresh|[^/]+/remove)", "KNOWLEDGE.EDIT",
      "Link, upload or refresh a domain document"),
     ("POST", r"/api/domains/[^/]+/examples/[^/]+", "KNOWLEDGE.EDIT", "Upload correct-output examples of a table"),

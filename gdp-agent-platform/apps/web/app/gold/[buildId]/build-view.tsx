@@ -7,7 +7,7 @@ import { ArrowRight, Check, Code2, Crown, Database, ExternalLink, GitMerge, Load
 import { cn } from "@/lib/utils";
 import { useAccess } from "@/components/access";
 import { ErCanvas } from "@/components/hub/er-canvas";
-import { cancelGold, goldCandidates, goldToWorkbench, proposeGold, setGoldInputs,
+import { cancelGold, generateGold, goldCandidates, goldFiles, goldToWorkbench, proposeGold, setGoldInputs,
   type GoldBuild, type GoldCandidate, type GoldInput, type GoldLine } from "../actions";
 
 const KIND: Record<GoldLine["kind"], string> = {
@@ -203,12 +203,68 @@ export function BuildView({ build }: { build: GoldBuild }) {
         </div>
       </section>
 
-      <section className="surface space-y-2 p-4" aria-label="Gold code generation">
-        <h2 className="flex items-center gap-2 text-sm font-semibold">4. Gold code generation {!approved && <Lock className="h-3.5 w-3.5 text-muted-foreground" />}</h2>
-        <p className="text-xs text-muted-foreground">{approved
-          ? "The gold model is approved. Generating its dbt models (facts, dimensions and bridges with the cross-reference resolution) comes with the next release of this pipeline."
-          : "Unlocks once the gold model is approved in the Model Workbench."}</p>
-      </section>
+      <GoldCode build={build} approved={approved} may={canAct("DBT.EDIT") && build.status !== "CANCELLED"} />
     </div>
+  );
+}
+
+/** Step 4: the approved gold model as dbt models, Iceberg DDL and a report of what to confirm in review. */
+function GoldCode({ build, approved, may }: { build: GoldBuild; approved: boolean; may: boolean }) {
+  const router = useRouter();
+  const [files, setFiles] = useState<Record<string, string> | null>(null);
+  const [open, setOpen] = useState<string | null>(null);
+  const [error, setError] = useState("");
+  const [pending, start] = useTransition();
+  const gen = build.generation;
+  useEffect(() => {
+    if (!gen) return;
+    void goldFiles(build.build_id).then((r) => { if (r.ok) { setFiles(r.data.files); setOpen((o) => o ?? r.data.files && Object.keys(r.data.files).find((p) => p.startsWith("models/")) ?? null); } });
+  }, [build.build_id, gen?.version]);   // eslint-disable-line react-hooks/exhaustive-deps
+  const run = () => start(async () => {
+    setError("");
+    const r = await generateGold(build.build_id);
+    if (!r.ok) { setError(r.error); return; }
+    router.refresh();
+  });
+  return (
+    <section className="surface space-y-3 p-4" aria-label="Gold code generation">
+      <div className="flex flex-wrap items-center gap-2">
+        <h2 className="flex items-center gap-2 text-sm font-semibold">4. Gold code generation {!approved && <Lock className="h-3.5 w-3.5 text-muted-foreground" />}</h2>
+        {gen && <span className="text-xs text-muted-foreground">v{gen.version} from approved gold model v{gen.model_version} · {gen.report.engine}</span>}
+        <span className="ml-auto flex gap-2">
+          {may && approved && (
+            <button type="button" disabled={pending} onClick={run} className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-primary px-3 text-xs font-medium text-primary-foreground disabled:opacity-50">
+              {pending && <Loader2 className="h-3.5 w-3.5 animate-spin" />}{gen ? "Generate again" : "Generate the gold dbt models"}</button>
+          )}
+          {gen && <a href={`/bff/gold-generation/${encodeURIComponent(build.build_id)}`} className="inline-flex h-8 items-center gap-1.5 rounded-lg border px-3 text-xs hover:bg-muted">Download (.zip)</a>}
+          {gen && build.proposal?.spec && (
+            <Link href={`/lineage?object=${encodeURIComponent(`${build.proposal.spec.physical_defaults.database}.${build.proposal.spec.physical_defaults.schema}.${gen.report.tables[0] ?? ""}`)}&direction=up`}
+                  className="inline-flex h-8 items-center gap-1.5 rounded-lg border px-3 text-xs hover:bg-muted">Trace lineage</Link>
+          )}
+        </span>
+      </div>
+      {!approved && !gen && <p className="text-xs text-muted-foreground">Unlocks once the gold model is approved in the Model Workbench.</p>}
+      {error && <p role="alert" className="text-xs text-destructive">{error}</p>}
+      {gen && (
+        <>
+          <p className="text-xs text-muted-foreground">{gen.report.tables.length} gold table(s): {gen.report.tables.join(", ")}. Conformed dimensions referenced, not generated: {gen.report.conformed.join(", ") || "none"}.
+            Each table has an Iceberg DDL file (run first) and an incremental dbt model that keeps existing skeys and writes only new or changed rows.</p>
+          {!!(gen.report.assumptions.length || gen.report.notes?.length) && (
+            <div className="rounded-xl border border-amber-500/30 bg-amber-500/5 p-3 text-xs">
+              <p className="mb-1 font-medium text-amber-800 dark:text-amber-200">Confirm in review</p>
+              <ul className="space-y-0.5">{[...gen.report.assumptions, ...(gen.report.notes ?? [])].map((a) => <li key={a} className="flex gap-1"><TriangleAlert className="mt-0.5 h-3 w-3 shrink-0 text-amber-600" />{a}</li>)}</ul>
+            </div>
+          )}
+          <div className="grid gap-3 lg:grid-cols-[260px_minmax(0,1fr)]">
+            <ul className="max-h-[480px] overflow-auto rounded-xl border p-1 text-xs">
+              {gen.paths.map((p) => (
+                <li key={p}><button type="button" onClick={() => setOpen(p)} className={cn("w-full truncate rounded px-2 py-1 text-left font-mono", open === p ? "bg-primary/10 text-primary" : "hover:bg-muted")} title={p}>{p}</button></li>
+              ))}
+            </ul>
+            <pre className="max-h-[480px] overflow-auto rounded-xl border bg-muted/40 p-3 font-mono text-[11px] leading-relaxed">{open && files ? files[open] : "Choose a file."}</pre>
+          </div>
+        </>
+      )}
+    </section>
   );
 }

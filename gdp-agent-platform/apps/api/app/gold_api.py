@@ -132,8 +132,11 @@ def get_build(build_id: str, db: Db = Depends(current_db)):
     if b.get("model_id"):
         found = db.query("SELECT MODEL_ID, APPROVED_VERSION, OPEN_VERSION FROM GOVERNANCE.DOMAIN_MODEL WHERE MODEL_ID = %s", (b["model_id"],))
         model = found[0] if found else None
-    return {**b, "lines": lines, "role": str(mdm.get("role") or "").upper() or None, "consumes": mdm.get("consumes") or [],
-            "model": model}
+    gen = b.get("generation") or None
+    if gen:   # the summary; the files themselves come from /generation
+        gen = {k: v for k, v in gen.items() if k != "files"} | {"paths": sorted((gen.get("files") or {}).keys())}
+    return {**b, "generation": gen, "lines": lines, "role": str(mdm.get("role") or "").upper() or None,
+            "consumes": mdm.get("consumes") or [], "model": model}
 
 
 @router.get("/api/gold/builds/{build_id}/candidates")
@@ -305,3 +308,102 @@ def cancel_build(build_id: str, db: Db = Depends(current_db)):
     _build(db, build_id)
     _set(db, build_id, status="CANCELLED")
     return get_build(build_id, db)
+
+
+# ---------------------------------------------------------------- gold code generation (after approval)
+
+def _approved_gold(db: Db, b: Dict[str, Any]) -> Dict[str, Any]:
+    from services.modeling import spec_v2
+
+    if not b.get("model_id"):
+        raise HTTPException(409, "send the proposal to the Model Workbench and have the gold model approved first")
+    found = db.query("""SELECT M.APPROVED_VERSION, D.SPEC FROM GOVERNANCE.DOMAIN_MODEL M
+                          JOIN GOVERNANCE.MODEL_DESIGNS D ON D.MODEL_ID = M.MODEL_ID AND D.VERSION = M.APPROVED_VERSION
+                         WHERE M.MODEL_ID = %s""", (b["model_id"],))
+    if not found or not found[0].get("approved_version"):
+        raise HTTPException(409, "the gold model is not approved yet; approve it in the Model Workbench (four eyes)")
+    spec = spec_v2.active(spec_v2.normalize_v2(_js(found[0]["spec"]) or {}, b["model_id"]))
+    return {"version": int(found[0]["approved_version"]), "spec": spec}
+
+
+def _conventions(db: Db) -> tuple:
+    from services.gold.conventions import learn
+
+    try:
+        chunks = db.query("""SELECT C.PATH, C.KIND, C.NAME, C.TEXT, C.COLUMNS FROM CODE.CODE_CHUNK C
+                              JOIN CODE.REPO R ON R.REPO_ID = C.REPO_ID
+                             WHERE R.ENABLED AND (C.TEXT ILIKE '%m_insert_history_gold(%' OR LOWER(C.NAME) = 'dim_data_source')
+                             LIMIT 200""")
+    except Exception:
+        return {}, ["the code index could not be read; plain SQL is generated"]
+    for c in chunks:
+        c["columns"] = _js(c.get("columns")) or []
+    return learn(chunks)
+
+
+@router.post("/api/gold/builds/{build_id}/generate")
+def generate_gold(build_id: str, db: Db = Depends(current_db)):
+    """dbt models, Iceberg DDL and a report for the approved gold model; lineage edges silver/MDM to gold."""
+    import hashlib
+
+    from services.gold import dbt as gold_dbt
+
+    b = _build(db, build_id)
+    if b["status"] == "CANCELLED":
+        raise HTTPException(409, "the build is cancelled")
+    approved = _approved_gold(db, b)
+    reg = _contracts(db)
+    me = reg.get(b["domain_name"]) or {}
+    mdm = me.get("mdm") or {}
+    mastered = {n: r["mdm"] for n, r in reg.items() if str(r["mdm"].get("role") or "").upper() == "MASTERED"}
+    lines = db.query("""SELECT GOLD_TABLE, GOLD_COLUMN, KIND, SOURCE_LAYER, SOURCE_TABLE, SOURCE_COLUMN, EXPRESSION, NOTE
+                          FROM GOVERNANCE.GOLD_MAPPING_LINE WHERE BUILD_ID = %s ORDER BY POSITION""", (build_id,))
+    conventions, notes = _conventions(db)
+    try:
+        out = gold_dbt.generate(approved["spec"], lines, mastered=mastered, consumes=mdm.get("consumes") or [],
+                                conventions=conventions, env=_env(me.get("silver_database")),
+                                build={"build_id": build_id, "name": b["name"], "model_id": b["model_id"], "model_version": approved["version"]})
+    except (ValueError, KeyError, StopIteration) as exc:
+        raise HTTPException(400, f"the approved gold model cannot be generated: {exc}") from None
+    out["report"]["notes"] = notes
+    version = int((b.get("generation") or {}).get("version") or 0) + 1
+    generation = {"version": version, "model_version": approved["version"], "report": out["report"], "files": out["files"]}
+    try:
+        with transaction(db):
+            db.execute("UPDATE GOVERNANCE.LINEAGE_EDGE SET IS_CURRENT = FALSE WHERE PRODUCER = 'GOLD_BUILD' AND PRODUCER_ID = %s", (build_id,))
+            for e in out["lineage"]:
+                eid = hashlib.md5(json.dumps([e["from_object"], e.get("from_column"), e["to_object"], e["to_column"], build_id, version]).encode()).hexdigest()
+                db.execute("""INSERT INTO GOVERNANCE.LINEAGE_EDGE (EDGE_ID, FROM_LAYER, FROM_OBJECT, FROM_COLUMN, TO_LAYER, TO_OBJECT, TO_COLUMN,
+                                                                   KIND, EXPRESSION, PRODUCER, PRODUCER_ID, GENERATION, DOMAIN_ID)
+                              SELECT %s, %s, %s, %s, %s, %s, %s, %s, %s, 'GOLD_BUILD', %s, %s, %s""",
+                           (eid, e["from_layer"], e["from_object"], e.get("from_column"), e["to_layer"], e["to_object"], e["to_column"],
+                            e["kind"], (e.get("expression") or "")[:8000], build_id, version, b["domain_id"]))
+            _set(db, build_id, generation=generation, step="DONE", status="GENERATED")
+    except Exception as exc:
+        raise _deployed(exc) from exc
+    return get_build(build_id, db)
+
+
+@router.get("/api/gold/builds/{build_id}/generation")
+def gold_generation(build_id: str, db: Db = Depends(current_db)):
+    b = _build(db, build_id)
+    if not b.get("generation"):
+        raise HTTPException(404, "nothing generated yet")
+    return b["generation"]
+
+
+@router.get("/api/gold/builds/{build_id}/generation.zip")
+def gold_generation_zip(build_id: str, db: Db = Depends(current_db)):
+    import io
+    import zipfile
+
+    from fastapi.responses import Response
+
+    gen = gold_generation(build_id, db)
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        for path, text in sorted((gen.get("files") or {}).items()):
+            z.writestr(path, text)
+    name = re.sub(r"[^A-Za-z0-9_-]+", "_", f"gold_{build_id[:8]}_v{gen.get('version')}")
+    return Response(content=buf.getvalue(), media_type="application/zip",
+                    headers={"Content-Disposition": f'attachment; filename="{name}.zip"'})

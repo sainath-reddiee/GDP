@@ -172,3 +172,17 @@ test("runs page: filters and bulk archive, restore, delete", async ({ page }) =>
   await expect(page).toHaveURL(/status=active/);
   expect(errors).toEqual([]);
 });
+
+test("pipelines and lineage: Silver to Gold list and the lineage explorer render without errors", async ({ page }) => {
+  const errors = watchHydration(page);
+  await signIn(page);
+  await page.goto("/gold");
+  await expect(page.getByRole("link", { name: "Silver to Gold" }).first()).toBeVisible();
+  await page.goto("/lineage");
+  await expect(page.getByRole("heading", { name: "Lineage" })).toBeVisible();
+  await expect(page.getByLabel("Find a table")).toBeVisible();
+  await expect(page.getByRole("group", { name: "Direction" })).toBeVisible();
+  await page.goto("/lineage?object=NO_SUCH_DB.NO_SCHEMA.NO_TABLE");
+  await expect(page.getByText(/No lineage found for/)).toBeVisible({ timeout: 30_000 });
+  expect(errors).toEqual([]);
+});

@@ -97,6 +97,7 @@ export const NAV_GROUPS: NavGroup[] = [
           { href: "/gold", label: "Silver to Gold", icon: Crown },
         ],
       },
+      { href: "/lineage", label: "Lineage", icon: Network },
       { href: "/code", label: "Code", icon: FolderGit2, privilege: "CODE.VIEW" },
     ],
   },

@@ -88,6 +88,11 @@ export function MdmPanel({ domainId }: { domainId: string }) {
           </p>
         </div>
         {data.rules > 0 && <Link href={`/knowledge?tab=items&domain_id=${encodeURIComponent(domainId)}&type=EXCEPTION`} className="text-xs text-primary hover:underline">{data.rules} MDM rules</Link>}
+        {(() => {
+          const hops = data.chain ?? data.consumes?.find((c) => c.chain?.length)?.chain;
+          const end = hops?.[hops.length - 1]?.object;
+          return end ? <Link href={`/lineage?object=${encodeURIComponent(end)}&direction=up`} className="text-xs text-primary hover:underline">Trace lineage</Link> : null;
+        })()}
         {may && data.role !== "MASTERED" && !editing && (
           <button type="button" onClick={startEdit} className="inline-flex h-8 items-center gap-1.5 rounded-lg border px-2.5 text-xs font-medium hover:bg-muted">
             {data.role === "CONSUMER" ? "Change" : "Link to MDM"}</button>
