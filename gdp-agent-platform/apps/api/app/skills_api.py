@@ -106,6 +106,14 @@ def list_skills(db: Db = Depends(current_db)):
         return {"categories": [], "skills": [{**r, "category_id": "general", "production": _brief(r), "versions": 1,
                                                "stages": []} for r in rows], "stats": {}, "upgraded": False}
     usage, _ = _usage(db)
+    attached: dict[str, list[dict]] = defaultdict(list)   # skills attached to a domain (V051), by skill
+    try:
+        for d in db.query("""SELECT D.SKILL_NAME, D.DOMAIN_ID, R.DOMAIN_NAME, D.STAGE, D.MODE, D.REPLACES
+                               FROM KNOWLEDGE.DOMAIN_SKILL D JOIN KNOWLEDGE.DOMAIN_REGISTRY R ON R.DOMAIN_ID = D.DOMAIN_ID
+                              WHERE D.ENABLED AND R.ACTIVE_FLAG ORDER BY R.DOMAIN_NAME, D.STAGE"""):
+            attached[d["skill_name"]].append({k: d.get(k) for k in ("domain_id", "domain_name", "stage", "mode", "replaces")})
+    except Exception:
+        pass
     stages: dict[str, list[dict]] = defaultdict(list)
     for b in bindings:
         stages[b["skill_name"]].append({"stage": b["stage"], "enabled": b["enabled"]})
@@ -130,7 +138,7 @@ def list_skills(db: Db = Depends(current_db)):
             "production": {**_brief(prod), **{k: lab["production"].get(k) for k in ("moved_by", "moved_at")}} if prod else None,
             "candidate": _brief(cand) if cand and (not prod or cand["skill_id"] != prod["skill_id"]) else None,
             "versions": len(vs), "drafts": sum(1 for v in vs if v["status"] == "DRAFT"),
-            "stages": stages.get(name, []),
+            "stages": stages.get(name, []), "domains": attached.get(name, []),
             "loads_30d": u.get("loads_30d", 0), "runs_30d": u.get("runs_30d", 0), "last_used": u.get("last_used"),
             "daily": [daily.get(d, 0) for d in sorted(daily)][-14:],
             "status": head.get("status"),
@@ -140,7 +148,12 @@ def list_skills(db: Db = Depends(current_db)):
              "candidates": sum(1 for s in skills if s["candidate"]),
              "loads_30d": sum(s["loads_30d"] for s in skills),
              "unused_30d": sum(1 for s in skills if not s["loads_30d"])}
-    return {"categories": categories, "skills": skills, "stats": stats, "stages": STAGES, "upgraded": True}
+    domains: dict[str, dict] = {}
+    for s in skills:
+        for d in {x["domain_id"]: x for x in s["domains"]}.values():
+            domains.setdefault(d["domain_id"], {"domain_id": d["domain_id"], "domain_name": d["domain_name"], "skills": 0})["skills"] += 1
+    return {"categories": categories, "skills": skills, "stats": stats, "stages": STAGES, "upgraded": True,
+            "domains": sorted(domains.values(), key=lambda d: str(d["domain_name"] or ""))}
 
 
 @router.get("/api/skills/bindings")

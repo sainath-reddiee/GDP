@@ -22,6 +22,7 @@ import {
 } from "../actions";
 import { DomainTools } from "../domain-tools";
 import { BuiltFromCard, LineageTab } from "./lineage-tab";
+import { SourcesTab } from "./sources-tab";
 import { Avatar, cleanDescription, DomainMark } from "../domain-ui";
 import type { DomainCard } from "../page";
 
@@ -38,7 +39,7 @@ export type DomainDetail = {
 };
 
 const TABS = [
-  { id: "overview", label: "Overview" }, { id: "lineage", label: "Lineage" }, { id: "models", label: "Target models" }, { id: "knowledge", label: "Knowledge" },
+  { id: "overview", label: "Overview" }, { id: "lineage", label: "Lineage" }, { id: "sources", label: "Sources" }, { id: "models", label: "Target models" }, { id: "knowledge", label: "Knowledge" },
   { id: "rules", label: "Rules" }, { id: "versions", label: "Versions" },
 ] as const;
 const KIND_TONE: Record<string, string> = {
@@ -174,6 +175,7 @@ export function DomainView({ detail, versions, unrecorded, members, rules, targe
       )}
 
       {active === "lineage" && <LineageTab domainId={d.domain_id} domainName={name} />}
+      {active === "sources" && <SourcesTab domainId={d.domain_id} />}
       {active === "models" && <Models targets={targets} roles={detail.targets} />}
       {active === "knowledge" && <KnowledgeTab domainId={d.domain_id} mix={detail.knowledge} feed={feed} card={card} />}
       {active === "rules" && <RulesTab key={JSON.stringify(rules?.overrides ?? {})} domainId={d.domain_id} rules={rules} may={may} onMsg={setMsg} />}

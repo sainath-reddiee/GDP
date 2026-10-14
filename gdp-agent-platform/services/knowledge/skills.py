@@ -168,6 +168,29 @@ def bound(bindings: Iterable[Dict[str, Any]], stage: str, standard: str, fallbac
             if b.get("enabled") is not False and (str(b.get("standard") or "ANY").upper() != "GDP" or standard == "GDP")]
 
 
+def with_domain(base: List[str], domain_rows: Iterable[Dict[str, Any]], stage: str) -> List[str]:
+    """A stage's skills with its domain's own on top (pure): a REPLACE row stands in for the skill it names, in that
+    skill's place (appended when the stage does not load it); ADD rows follow, by position. No name appears twice."""
+    rows = sorted([r for r in domain_rows if str(r.get("stage") or "").upper() == stage.upper() and r.get("enabled") is not False],
+                  key=lambda r: (int(r.get("position") or 100), str(r.get("skill_name"))))
+    out = list(base)
+    upper = lambda n: str(n or "").upper()   # noqa: E731
+    for r in rows:
+        name = str(r.get("skill_name"))
+        if str(r.get("mode") or "ADD").upper() == "REPLACE" and r.get("replaces"):
+            at = next((i for i, n in enumerate(out) if upper(n) == upper(r["replaces"])), None)
+            if at is not None:
+                out[at] = name
+                continue
+        out.append(name)
+    seen, unique = set(), []
+    for n in out:
+        if upper(n) not in seen:
+            seen.add(upper(n))
+            unique.append(n)
+    return unique
+
+
 # ---------------------------------------------------------------- Snowpark side (procedures)
 
 RESOLVE_SQL = """
@@ -202,8 +225,27 @@ def resolve(session, name: str, run_id: Optional[str] = None) -> Optional[Dict[s
     return found[0] if found else None
 
 
-def stage_skills(session, stage: str, standard: str = "GDP") -> List[str]:
-    """Bound skills for a stage (falls back to the built-in map before any binding exists)."""
+def domain_skill_rows(session, domain_id: Optional[str]) -> List[Dict[str, Any]]:
+    """The skills attached to a domain (V051); none before it is deployed or without a domain."""
+    from services.common.sql import rows
+
+    if not domain_id:
+        return []
+    try:
+        found = rows(session, "SELECT STAGE, SKILL_NAME, MODE, REPLACES, POSITION, ENABLED FROM KNOWLEDGE.DOMAIN_SKILL "
+                              "WHERE DOMAIN_ID = ?", [domain_id])
+    except Exception:
+        return []
+    return [{k.lower(): v for k, v in r.items()} for r in found]
+
+
+def stage_skills(session, stage: str, standard: str = "GDP", domain_id: Optional[str] = None) -> List[str]:
+    """Bound skills for a stage (falls back to the built-in map before any binding exists), with the domain's own
+    skills applied when the run has a domain."""
+    return with_domain(_stage_bound(session, stage, standard), domain_skill_rows(session, domain_id), stage)
+
+
+def _stage_bound(session, stage: str, standard: str = "GDP") -> List[str]:
     from services.common.sql import rows
     from services.knowledge.usage import GDP_ONLY_SKILLS, STAGE_SKILLS
 

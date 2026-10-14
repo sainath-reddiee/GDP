@@ -77,6 +77,8 @@ def domain_provenance(domain_id: str, db: Db = Depends(current_db)):
     standard = next((r.get("standard") for r in _soft(db, "SELECT CONFIG:standard::STRING AS STANDARD FROM KNOWLEDGE.DOMAIN_REGISTRY "
                                                         "WHERE DOMAIN_ID = %s", (domain_id,))), None)
     bindings = _soft(db, "SELECT STAGE, SKILL_NAME, ENABLED, POSITION, STANDARD FROM KNOWLEDGE.SKILL_STAGE_BINDING")
+    own_skills = _soft(db, "SELECT STAGE, SKILL_NAME, MODE, REPLACES, POSITION, ENABLED FROM KNOWLEDGE.DOMAIN_SKILL "
+                           "WHERE DOMAIN_ID = %s", (domain_id,))
     loaded = _soft(db, """SELECT C.INPUT_JSON:skill::STRING AS SKILL, C.INPUT_JSON:version::STRING AS VERSION, COUNT(*) AS N,
                                  COUNT(DISTINCT C.RUN_ID) AS RUNS, TO_VARCHAR(MAX(C.CREATED_AT), 'YYYY-MM-DD HH24:MI') AS LAST
                             FROM AUDIT.AGENT_TOOL_CALL C JOIN CORE.WORKFLOW_RUN R ON R.RUN_ID = C.RUN_ID
@@ -96,7 +98,12 @@ def domain_provenance(domain_id: str, db: Db = Depends(current_db)):
     for r in runs:
         r["kinds"] = _arr(r.get("kinds"))
     manifest = provenance.manifest(detail, standard=standard, bindings=bindings, loaded=loaded, repos=repo_rows,
-                                   files=files, runs=runs, rows=rows)
+                                   files=files, runs=runs, rows=rows, domain_skills=own_skills)
+    documents = [{"title": d.get("title") or d.get("file_name"), "url": d.get("url"), "current": True,
+                  "kind": "confluence" if d.get("kind") != "UPLOAD" else ("excel" if str(d.get("file_name") or "").lower().endswith((".xlsx", ".xls", ".csv")) else "document"),
+                  "kind_label": "Confluence" if d.get("kind") != "UPLOAD" else "Uploaded"}
+                 for d in _soft(db, """SELECT KIND, TITLE, URL, FILE_NAME FROM CONFLUENCE.SOURCE
+                                        WHERE DOMAIN_ID = %s AND STATUS = 'ACTIVE' ORDER BY CREATED_AT""", (domain_id,))]
     domain_model = next(iter(_soft(db, """SELECT MODEL_ID, APPROVED_VERSION, OPEN_VERSION FROM GOVERNANCE.DOMAIN_MODEL
                                            WHERE DOMAIN_ID = %s""", (domain_id,))), None)
     table_models = _soft(db, """SELECT TABLE_MODEL_ID, TABLE_NAME, CURRENT_VERSION FROM GOVERNANCE.TABLE_MODEL
@@ -120,7 +127,7 @@ def domain_provenance(domain_id: str, db: Db = Depends(current_db)):
     return {"domain": detail["domain"],
             "manifest": manifest,
             "flow": provenance.flow(detail, manifest, rows, domain_model=domain_model, table_models=table_models, sttm=sttm_rows,
-                                    ingestion=ingestion, jira=jira, documents=[], proposed=int(proposed), stale=int(stale)),
+                                    ingestion=ingestion, jira=jira, documents=documents, proposed=int(proposed), stale=int(stale)),
             "needs_verification": provenance.needs_verification(rows, usage), "proposed": int(proposed),
             "provenance": provenance.build(detail, rows, usage, repos, versions),
             "coverage": coverage.score(name, detail.get("targets") or [], rows, sttm, dq, qa_sql, usage)}

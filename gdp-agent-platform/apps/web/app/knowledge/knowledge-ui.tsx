@@ -34,6 +34,9 @@ export const ORIGINS: Record<string, { label: string; icon: LucideIcon; tone: st
   DBT: { label: "Learned in dbt", icon: Code2, tone: "bg-orange-100 text-orange-700 dark:bg-orange-950 dark:text-orange-300" },
   DOMAIN_AI: { label: "AI domain review", icon: Bot, tone: "bg-violet-100 text-violet-700 dark:bg-violet-950 dark:text-violet-300" },
   SUGGESTION: { label: "AI suggestion", icon: Sparkles, tone: "bg-violet-100 text-violet-700 dark:bg-violet-950 dark:text-violet-300" },
+  CONFLUENCE: { label: "From Confluence", icon: FileText, tone: "bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300" },
+  DOCUMENT: { label: "From a document", icon: FileText, tone: "bg-cyan-100 text-cyan-700 dark:bg-cyan-950 dark:text-cyan-300" },
+  CODE: { label: "From code", icon: Code2, tone: "bg-slate-100 text-slate-700 dark:bg-slate-900 dark:text-slate-300" },
 };
 
 export function OriginChip({ origin, short }: { origin?: string | null; short?: boolean }) {

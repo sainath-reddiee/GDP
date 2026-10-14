@@ -73,16 +73,29 @@ def use_skills(session, names: List[str], excerpt: int = EXCERPT, run_id: str | 
     return "\n\n".join(parts)
 
 
-def bound_skills(session, stage: str, standard: str = "GDP") -> List[str]:
-    """Skills bound to a stage in Admin (enabled, in order); the built-in map until bindings exist."""
+def run_domain(session, run_id: str | None) -> str | None:
+    """The domain a run works in (None without a run, or when it cannot be read)."""
+    if not run_id:
+        return None
+    from services.common.sql import scalar
+
+    try:
+        return scalar(session, "SELECT DOMAIN_ID FROM CORE.WORKFLOW_RUN WHERE RUN_ID = ?", [run_id])
+    except Exception:
+        return None
+
+
+def bound_skills(session, stage: str, standard: str = "GDP", run_id: str | None = None) -> List[str]:
+    """Skills bound to a stage in Admin (enabled, in order; the built-in map until bindings exist), with the skills
+    attached to the run's domain applied (added, or in place of the one they replace)."""
     from services.knowledge.skills import stage_skills as bound
 
-    return bound(session, stage, standard)
+    return bound(session, stage, standard, run_domain(session, run_id))
 
 
 def use_stage(session, stage: str, standard: str = "GDP", run_id: str | None = None, excerpt: int = EXCERPT) -> str:
-    """use_skills for every skill bound to the stage."""
-    return use_skills(session, bound_skills(session, stage, standard), excerpt, run_id)
+    """use_skills for every skill the stage loads for this run."""
+    return use_skills(session, bound_skills(session, stage, standard, run_id), excerpt, run_id)
 
 
 DBT_SKILL = "GDP-DBT-ONBOARD-SOURCE"

@@ -13,10 +13,13 @@ export type SkillCard = {
   origin: string; production: VersionBrief | null; candidate: VersionBrief | null; versions: number; drafts?: number;
   stages: { stage: string; enabled: boolean }[]; loads_30d: number; runs_30d: number; last_used: string | null;
   daily: number[]; status?: string;
+  /** Domains whose runs load this skill at a stage, added or in place of a standard skill. */
+  domains?: { domain_id: string; domain_name: string; stage: string; mode: "ADD" | "REPLACE"; replaces: string | null }[];
 };
 
 export type SkillsResponse = {
   categories: SkillCategory[]; skills: SkillCard[]; stages?: string[]; upgraded?: boolean;
+  domains?: { domain_id: string; domain_name: string; skills: number }[];
   stats: { skills?: number; in_production?: number; candidates?: number; loads_30d?: number; unused_30d?: number };
 };
 

@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { api, attemptValue } from "@/lib/api";
+import { api, apiForm, attemptValue } from "@/lib/api";
 import type { SuggestionResult } from "@/app/runs/[runId]/pipeline-actions";
 
 export type Pack = Record<string, unknown>;
@@ -140,7 +140,7 @@ export type DomainManifest = {
   skill: { standard: string; name: string; path: string; contract: string } | null;
   pack: { file: string; generator: string | null; items: number; shipped: boolean } | null;
   standard: string | null;
-  stages: { stage: string; skills: { skill: string; position: number | null; loaded: { version: string; loads: number; runs: number; last: string }[] }[] }[];
+  stages: { stage: string; skills: { skill: string; position: number | null; domain?: boolean; replaces?: string | null; loaded: { version: string; loads: number; runs: number; last: string }[] }[] }[];
   repos: { name: string; git_url: string; branch: string; last_commit: string | null; last_indexed_at: string | null;
            files: { path: string; name: string; kind: string | null }[] }[];
   runs: { run_id: string; run_name: string | null; items: number; kinds: string[]; current_state: string | null }[];
@@ -181,4 +181,53 @@ export async function domainProvenance(domainId: string) {
 /** The domain's contract file (Markdown in the dbt skill) and what the platform extracts from it. */
 export async function domainContract(domainId: string) {
   return attemptValue(() => api<DomainContract>(`/api/domains/${encodeURIComponent(domainId)}/contract`));
+}
+
+/** The domain's own skills per stage (V051) and what its runs load. */
+export type DomainSkillRow = { stage: string; skill_name: string; mode: "ADD" | "REPLACE"; replaces: string | null; position: number;
+                               enabled: boolean; note: string | null; updated_by?: string; updated_at?: string };
+export type DomainSkills = {
+  standard: string; deployed: boolean; available: { name: string; description: string; version: string | null }[];
+  stages: { stage: string; standard_skills: string[]; domain_skills: DomainSkillRow[]; effective: string[] }[];
+};
+export async function domainSkills(domainId: string) {
+  return attemptValue(() => api<DomainSkills>(`/api/domains/${encodeURIComponent(domainId)}/skills`));
+}
+export async function saveDomainSkills(domainId: string, skills: Omit<DomainSkillRow, "updated_by" | "updated_at">[]) {
+  const r = await attemptValue(() => api<DomainSkills>(`/api/domains/${encodeURIComponent(domainId)}/skills`,
+    { method: "PUT", body: JSON.stringify({ skills }) }));
+  revalidatePath(`/domains/${domainId}`);
+  return r;
+}
+
+/** Confluence pages, spaces and uploaded documents linked to the domain (V051). */
+export type DomainDocument = {
+  source_id: string; kind: "PAGE" | "SPACE" | "UPLOAD"; space_key: string | null; page_id: string | null; title: string | null;
+  url: string | null; file_name: string | null; created_by: string; created_at: string; last_refreshed_at: string | null;
+  last_result: { read?: number; unchanged?: number; proposed?: number; errors?: { page_id: string; error: string }[] } | null;
+  pages: { page_id: string; title: string; version: number | null; url: string | null; proposed: number; chars: number; fetched_at: string }[];
+};
+export type DomainDocuments = { sources: DomainDocument[]; deployed: boolean; confluence: { enabled: boolean; granted: boolean; connected: boolean } };
+export async function domainDocuments(domainId: string) {
+  return attemptValue(() => api<DomainDocuments>(`/api/domains/${encodeURIComponent(domainId)}/documents`));
+}
+export async function linkConfluence(domainId: string, url: string) {
+  const r = await attemptValue(() => api<{ source_id: string; title: string; kind: string; result: { read: number; unchanged: number; proposed: number } }>(
+    `/api/domains/${encodeURIComponent(domainId)}/documents/confluence`, { method: "POST", body: JSON.stringify({ url }) }));
+  revalidatePath(`/domains/${domainId}`);
+  return r;
+}
+export async function uploadDomainDocuments(domainId: string, form: FormData) {
+  const r = await attemptValue(() => apiForm<{ documents: { file_name: string; proposed?: number; error?: string; note?: string }[] }>(
+    `/api/domains/${encodeURIComponent(domainId)}/documents/upload`, form));
+  revalidatePath(`/domains/${domainId}`);
+  return r;
+}
+export async function refreshDocument(domainId: string, sourceId: string) {
+  return attemptValue(() => api<{ read: number; unchanged: number; proposed: number; errors: { page_id: string; error: string }[] }>(
+    `/api/domains/${encodeURIComponent(domainId)}/documents/${encodeURIComponent(sourceId)}/refresh`, { method: "POST" }));
+}
+export async function removeDocument(domainId: string, sourceId: string) {
+  return attemptValue(() => api<{ removed: boolean }>(
+    `/api/domains/${encodeURIComponent(domainId)}/documents/${encodeURIComponent(sourceId)}/remove`, { method: "POST" }));
 }

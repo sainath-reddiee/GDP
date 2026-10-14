@@ -23,7 +23,7 @@ from services.common.sql import clip, config_value, rows, scalar
 
 # what is learned from automatic steps (no person decided it) waits for review by default
 DEFAULT_POLICY: Dict[str, str] = {"QA_TEST": "review", "EXCEPTION": "review", "CASE_RESOLUTION": "review"}
-REVIEW_ORIGINS = {"COPILOT"}
+REVIEW_ORIGINS = {"COPILOT", "CONFLUENCE", "DOCUMENT"}
 NEVER_QUEUED = {"USER", "SEED", "PACK_IMPORT"}
 # run records kept in DOMAIN_KNOWLEDGE (dbt branch plan, client Soda brief, STTM CSV export): written as ACTIVE so
 # their readers find them, and kept out of the rule queries that feed prompts. Constant SQL, never user input.

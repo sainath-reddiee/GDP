@@ -183,7 +183,7 @@ def generate_dbt(session, run_id: str, payload_json: str = "{}") -> Dict[str, An
 
             soda_yaml = render_yaml(sttm_target_name(session, sttm).lower(), checks)
             plan = _branch_plan(session, run_id, payload, stage.run.get("RUN_NAME") or "")
-            skill_names = bound_skills(session, "DBT", run_standard(stage.run))
+            skill_names = bound_skills(session, "DBT", run_standard(stage.run), run_id)
             skill_meta = []
             for name in skill_names:
                 try:

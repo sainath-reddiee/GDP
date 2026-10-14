@@ -6,6 +6,7 @@ import { api, attemptValue } from "@/lib/api";
 export type JiraStatus = {
   installed: boolean; ready: boolean; missing?: string[]; client_id?: boolean; client_secret?: boolean; token_key?: boolean;
   site_url?: string | null; default_project?: string | null; redirect_uri?: string; users_connected?: number;
+  confluence?: { enabled: boolean; granted: boolean };
   connected?: { cloud_id: string; site_url: string | null; account_id: string | null; display_name: string | null; connected_at: string; updated_at: string } | null;
 };
 export type JiraIssue = {
@@ -35,7 +36,7 @@ export async function jiraStatus() {
   return attemptValue(() => api<JiraStatus>("/api/jira/status"));
 }
 
-export async function saveJiraConfig(body: { site_url?: string; client_id?: string; redirect_uri?: string; default_project?: string }) {
+export async function saveJiraConfig(body: { site_url?: string; client_id?: string; redirect_uri?: string; default_project?: string; confluence?: boolean }) {
   const r = await attemptValue(() => api<JiraStatus>("/api/jira/config", { method: "PUT", body: JSON.stringify(body) }));
   revalidatePath("/admin");
   return r;

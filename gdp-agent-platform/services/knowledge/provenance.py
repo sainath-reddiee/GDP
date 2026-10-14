@@ -138,7 +138,8 @@ def timeline(rows: List[Dict[str, Any]], versions: Iterable[Dict[str, Any]] = ()
 
 def manifest(domain: Dict[str, Any], *, standard: Optional[str] = None, bindings: Iterable[Dict[str, Any]] = (),
              loaded: Iterable[Dict[str, Any]] = (), repos: Iterable[Dict[str, Any]] = (), files: Iterable[Dict[str, Any]] = (),
-             runs: Iterable[Dict[str, Any]] = (), rows: Iterable[Dict[str, Any]] = ()) -> Dict[str, Any]:
+             runs: Iterable[Dict[str, Any]] = (), rows: Iterable[Dict[str, Any]] = (),
+             domain_skills: Iterable[Dict[str, Any]] = ()) -> Dict[str, Any]:
     """Exactly what the domain is built with, for a developer: the skill and contract it was generated from, the pack
     file, the skills each stage loads for it (and the versions its runs actually loaded), the code repositories and
     files that define its tables, the runs that taught it, and the people who wrote or verified it."""
@@ -159,6 +160,18 @@ def manifest(domain: Dict[str, Any], *, standard: Optional[str] = None, bindings
     for l in (_low(l) for l in loaded):
         used[str(l.get("skill"))].append({"version": l.get("version"), "loads": int(l.get("n") or 0),
                                           "runs": int(l.get("runs") or 0), "last": str(l.get("last") or "")[:19]})
+    own = [_low(d) for d in domain_skills]
+    for d in own:   # the domain's own skills join their stage (added, or in place of the one they replace)
+        if d.get("enabled") is False:
+            continue
+        lst = stage_skills[str(d.get("stage") or "").upper()]
+        entry = {"skill": d.get("skill_name"), "position": d.get("position"), "domain": True,
+                 "replaces": d.get("replaces") if str(d.get("mode") or "").upper() == "REPLACE" else None}
+        at = next((i for i, k in enumerate(lst) if entry["replaces"] and str(k["skill"]).upper() == str(entry["replaces"]).upper()), None)
+        if at is not None:
+            lst[at] = {**entry, "position": lst[at].get("position")}
+        else:
+            lst.append({**entry, "position": 10_000 + int(d.get("position") or 0)})
     stages = [{"stage": s, "skills": [{**k, "loaded": used.get(str(k["skill"]), [])} for k in sorted(v, key=lambda x: x.get("position") or 0)]}
               for s, v in sorted(stage_skills.items())]
     files_by_repo: Dict[str, List[Dict[str, Any]]] = defaultdict(list)

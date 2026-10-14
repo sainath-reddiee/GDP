@@ -6550,6 +6550,9 @@ app.include_router(domains_router)
 from app.domain_lineage_api import router as domain_lineage_router  # noqa: E402
 
 app.include_router(domain_lineage_router)
+from app.domain_sources_api import router as domain_sources_router  # noqa: E402
+
+app.include_router(domain_sources_router)
 
 from app.code_api import router as code_router  # noqa: E402
 

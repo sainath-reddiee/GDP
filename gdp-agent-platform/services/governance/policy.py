@@ -151,6 +151,9 @@ RULES: List[Tuple[str, str, Any, str]] = [
     ("POST", r"/api/config/models/test", "ADMIN.VIEW", ""),
     ("POST", r"/api/costs/reconcile", "CONFIG.EDIT", "Reconcile AI cost"),
     ("POST", r"/api/(domains|domains/draft|domains/import)", "DOMAIN.EDIT", "Create or import a domain"),
+    ("PUT", r"/api/domains/[^/]+/skills", "SKILL.RELEASE", "Change the skills a domain's runs load"),
+    ("POST", r"/api/domains/[^/]+/documents/(confluence|upload|[^/]+/refresh|[^/]+/remove)", "KNOWLEDGE.EDIT",
+     "Link, upload or refresh a domain document"),
     ("DELETE", r"/api/domains/[^/]+", "DOMAIN.EDIT", "Delete a domain"),
     ("POST", r"/api/domains/[^/]+/restore", "DOMAIN.EDIT", "Restore a domain"),
     ("PUT", r"/api/domains/[^/]+/rules", "DOMAIN.EDIT", "Change domain rules"),
@@ -425,6 +428,8 @@ NO_QUEUE_ROUTES = [(m, re.compile(p)) for m, p in [
     ("POST", r"^/api/hub/profiles/annotations(/.*)?$"),
     ("POST", r"^/api/hub/sttm/[^/]+/publish$"),
     ("POST", r"^/api/copilot/sessions(/.*)?$"),
+    # what a document proposes is reviewed in the knowledge inbox; uploads cannot be queued anyway
+    ("POST", r"^/api/domains/[^/]+/documents/.+$"),
 ]]
 
 

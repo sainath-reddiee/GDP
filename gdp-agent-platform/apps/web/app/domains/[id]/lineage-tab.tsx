@@ -192,9 +192,10 @@ function BuiltWith({ m, onContract }: { m: DomainProvenance["manifest"]; onContr
                 <span className="w-24 shrink-0 font-medium">{st.stage.replace(/_/g, " ").toLowerCase()}</span>
                 <span className="flex flex-wrap gap-1">
                   {st.skills.map((k) => (
-                    <Link key={k.skill} href={`/skills/${encodeURIComponent(k.skill)}`} className="rounded bg-muted px-1.5 py-0.5 font-mono hover:text-primary"
-                          title={k.loaded.length ? k.loaded.map((l) => `v${l.version}: ${l.loads} loads in ${l.runs} runs, last ${l.last}`).join("; ") : "not loaded by this domain's runs yet"}>
-                      {k.skill}{k.loaded.length ? ` · v${k.loaded.map((l) => l.version).join(", v")}` : ""}
+                    <Link key={k.skill} href={`/skills/${encodeURIComponent(k.skill)}`} className={cn("rounded px-1.5 py-0.5 font-mono hover:text-primary", k.domain ? "bg-primary/10 text-primary" : "bg-muted")}
+                          title={(k.domain ? (k.replaces ? `This domain's skill, instead of ${k.replaces}. ` : "This domain's own skill. ") : "")
+                            + (k.loaded.length ? k.loaded.map((l) => `v${l.version}: ${l.loads} loads in ${l.runs} runs, last ${l.last}`).join("; ") : "not loaded by this domain's runs yet")}>
+                      {k.skill}{k.domain ? (k.replaces ? ` (domain, for ${k.replaces})` : " (domain)") : ""}{k.loaded.length ? ` · v${k.loaded.map((l) => l.version).join(", v")}` : ""}
                     </Link>
                   ))}
                 </span>

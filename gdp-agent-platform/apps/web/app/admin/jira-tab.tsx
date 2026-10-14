@@ -11,6 +11,7 @@ import { connectJira, disconnectJira, saveJiraConfig, type JiraStatus } from "..
 
 type Msg = { tone: "ok" | "info" | "error"; text: string } | null;
 export const SCOPES = "read:jira-work write:jira-work read:jira-user offline_access";
+export const CONFLUENCE_SCOPES = "read:confluence-content.all read:confluence-space.summary search:confluence";
 
 function Item({ done, title, children }: { done: boolean; title: string; children: React.ReactNode }) {
   return (
@@ -30,6 +31,7 @@ export function JiraTab({ status, may, onMsg }: { status: JiraStatus | null; may
   const [clientId, setClientId] = useState("");
   const [redirect, setRedirect] = useState(status?.redirect_uri ?? "");
   const [project, setProject] = useState(status?.default_project ?? "");
+  const [confluence, setConfluence] = useState(!!status?.confluence?.enabled);
   useEffect(() => {
     const flag = params.get("jira");
     if (flag === "connected") onMsg({ tone: "ok", text: "Your Jira account is connected." });
@@ -40,7 +42,7 @@ export function JiraTab({ status, may, onMsg }: { status: JiraStatus | null; may
     return <section className="surface p-5 text-sm text-muted-foreground">Jira needs the latest deploy (migration V027).</section>;
   }
   const save = () => start(async () => {
-    const r = await saveJiraConfig({ site_url: site.trim(), redirect_uri: redirect.trim(), default_project: project.trim(), ...(clientId.trim() ? { client_id: clientId.trim() } : {}) });
+    const r = await saveJiraConfig({ site_url: site.trim(), redirect_uri: redirect.trim(), default_project: project.trim(), confluence, ...(clientId.trim() ? { client_id: clientId.trim() } : {}) });
     onMsg(r.ok ? { tone: "ok", text: "Jira settings saved." } : { tone: /approval|request/i.test(r.error) ? "info" : "error", text: r.error });
     if (r.ok) { setClientId(""); router.refresh(); }
   });
@@ -96,6 +98,16 @@ export function JiraTab({ status, may, onMsg }: { status: JiraStatus | null; may
             </div>
             <p className="text-[11px] text-muted-foreground">Optional. With a site set, only that site is used even when an account can see several.</p>
           </Item>
+          <Item done={!!status.confluence?.enabled} title="5. Confluence (optional)">
+            <p className="text-xs text-muted-foreground">Lets engineers link Confluence pages and spaces to a domain; the knowledge they state is proposed for a steward&apos;s review.
+              First add the Confluence API to the same Atlassian app, with these scopes, then turn it on here. Engineers connect Jira again once to grant it.</p>
+            <p className="flex flex-wrap items-center gap-1.5 text-[11px]"><span className="text-muted-foreground">Scopes</span><code className="rounded bg-muted px-1.5 py-0.5 font-mono">{CONFLUENCE_SCOPES}</code><CopyButton text={CONFLUENCE_SCOPES} /></p>
+            <label className="flex items-center gap-2 text-xs font-medium">
+              <input type="checkbox" checked={confluence} onChange={(e) => setConfluence(e.target.checked)} disabled={!may} className="h-4 w-4 accent-primary" />
+              Read Confluence with the same sign-in
+            </label>
+            {confluence && !status.confluence?.enabled && <p className="text-[11px] text-amber-600">Turn this on only after the scopes are added to the app: sign-ins ask for them, and Atlassian rejects scopes the app does not have.</p>}
+          </Item>
         </ol>
         {may && (
           <footer className="flex items-center gap-2 border-t bg-muted/30 px-5 py-3">
@@ -111,11 +123,17 @@ export function JiraTab({ status, may, onMsg }: { status: JiraStatus | null; may
           <>
             <p className="flex items-center gap-2 text-sm"><CircleCheck className="h-4 w-4 text-emerald-600" />Connected as <span className="font-medium">{me.display_name ?? me.account_id}</span></p>
             <p className="text-xs text-muted-foreground">{me.site_url} · since {new Date(me.connected_at).toLocaleDateString()}</p>
-            <Button variant="outline" size="sm" disabled={pending} onClick={disconnect}><LogOut className="h-3.5 w-3.5" />Disconnect</Button>
+            {status.confluence?.enabled && (status.confluence.granted
+              ? <p className="text-xs text-muted-foreground">Confluence: read access granted.</p>
+              : <p className="text-xs text-amber-600">Confluence is turned on: connect again to grant read access to it.</p>)}
+            <div className="flex flex-wrap gap-2">
+              {status.confluence?.enabled && !status.confluence.granted && <Button size="sm" disabled={pending} onClick={connect}><Link2 className="h-3.5 w-3.5" />Connect again</Button>}
+              <Button variant="outline" size="sm" disabled={pending} onClick={disconnect}><LogOut className="h-3.5 w-3.5" />Disconnect</Button>
+            </div>
           </>
         ) : (
           <>
-            <p className="text-xs text-muted-foreground">Connect to see your issues in the QA workbench, triage them against a run and post results back. You approve the access in Atlassian; the platform never sees your password.</p>
+            <p className="text-xs text-muted-foreground">Connect to see your issues on the Tickets page, triage them against a run and post results back. You approve the access in Atlassian; the platform never sees your password.</p>
             <Button disabled={pending || !status.ready} onClick={connect}>{pending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Link2 className="h-4 w-4" />}Connect Jira</Button>
             {!status.ready && <p className="text-[11px] text-muted-foreground">Available once the setup on the left is complete.</p>}
           </>
