@@ -4,7 +4,7 @@ import { useEffect, useRef, useState, useTransition } from "react";
 import { CheckCheck, Download, FileUp, Loader2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input, Label, Textarea } from "@/components/ui/input";
-import { approveStage } from "../actions";
+import { DecisionBar } from "@/components/decision-bar";
 import { importSoda, saveSodaDecisions } from "../pipeline-actions";
 import { useScrollLock } from "@/components/use-scroll-lock";
 
@@ -136,23 +136,13 @@ export function ApproveRemaining({ runId, ids }: { runId: string; ids: string[] 
   );
 }
 
-/** One slim line for the pack gate: approved, or ready to approve. Nothing while checks are still open. */
+/** The pack gate as the decision bar once every check is decided. Nothing while checks are still open; the approved
+ *  state is a pill in the page header. */
 export function PackGate({ runId, currentState, complete }: { runId: string; currentState: string; complete: boolean }) {
-  const [note, setNote] = useState("Data Quality checks match the STTM and the client quality need.");
-  const [error, setError] = useState("");
-  const [pending, start] = useTransition();
-  // the approved state is a pill in the page header; this only asks for the approval itself
   if (currentState !== "SODA_REVIEW" || !complete) return null;
   return (
-    <div className="flex flex-wrap items-center gap-2 rounded-lg border border-primary/30 bg-primary/5 px-3 py-2">
-      <span className="text-sm font-medium">Every check is decided.</span>
-      <Input className="min-w-[16rem] flex-1" value={note} onChange={(e) => setNote(e.target.value)} aria-label="Approval note" />
-      <Button size="sm" disabled={pending || !note.trim()} onClick={() => start(async () => {
-        setError("");
-        const r = await approveStage(runId, "SODA_APPROVED", note.trim());
-        if (!r.ok) setError(r.error);
-      })}>{pending && <Loader2 className="h-3.5 w-3.5 animate-spin" />}Approve pack</Button>
-      {error && <p role="alert" className="basis-full text-xs text-destructive">{error}</p>}
-    </div>
+    <DecisionBar runId={runId} gate="Data quality checks" role="DQ approver" approveTo="SODA_APPROVED" approveLabel="Approve pack"
+                 sendBack={["SODA_PENDING"]} defaultNote="Data Quality checks match the STTM and the client quality need."
+                 detail="Every check is decided." />
   );
 }

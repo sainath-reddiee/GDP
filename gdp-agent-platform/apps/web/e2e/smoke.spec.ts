@@ -26,7 +26,7 @@ test("onboard a source: register, validate access, land, with later stages locke
   await page.getByRole("button", { name: "Create run" }).click();
   await page.waitForURL(/\/runs\/[0-9a-f-]{36}$/);
   const runUrl = page.url();
-  await expect(page.getByRole("heading", { name: "SOURCE — CREATED" })).toBeVisible();
+  await expect(page.getByText("Created", { exact: true }).first()).toBeVisible();   // the run console names the state in plain words
   await expect(page.getByRole("button", { name: "SOURCE_REGISTERED" })).toHaveCount(0);
 
   // Modeling: the old mapping and STTM addresses open the two steps of one screen
@@ -79,9 +79,12 @@ test("onboard a source: register, validate access, land, with later stages locke
   await page.goto(`${runUrl}/audit`);
   await expect(page.getByRole("cell", { name: "LANDING_COMPLETE" }).first()).toBeVisible();
 
+  // cancelling lives in the run's More menu and asks to confirm
   await page.goto(runUrl);
-  await page.getByRole("button", { name: "CANCELLED" }).click();
-  await expect(page.getByText("CANCELLED").first()).toBeVisible();
+  await page.getByTestId("run-menu").click();
+  await page.getByRole("menuitem", { name: /Cancel run/ }).click();
+  await page.getByRole("alertdialog").getByRole("button", { name: "Cancel run" }).click();
+  await expect(page.getByText("Cancelled").first()).toBeVisible();
 });
 
 const API_URL = process.env.AIP_API_URL ?? "http://127.0.0.1:8001";

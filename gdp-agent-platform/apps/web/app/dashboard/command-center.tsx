@@ -50,7 +50,7 @@ export function RibbonMetric({ label, value, unit, hint, href, children }: {
     <Link href={href} className="group relative flex flex-col gap-1 rounded-xl p-4 transition hover:bg-card/60">
       <span className="text-xs font-medium uppercase tracking-[0.1em] text-muted-foreground">{label}</span>
       <span className="flex items-baseline gap-1">
-        <span className="text-[32px] font-semibold leading-none tracking-tight tabular-nums">{value}</span>
+        <span className="bg-gradient-to-br from-foreground to-foreground/70 bg-clip-text text-[32px] font-semibold leading-none tracking-tight tabular-nums text-transparent">{value}</span>
         {unit && <span className="text-sm font-medium text-muted-foreground">{unit}</span>}
       </span>
       <span className="text-xs text-muted-foreground">{hint}</span>
@@ -83,11 +83,11 @@ export function StoreCard({ title, subtitle, icon: Icon, tone, href, metrics, me
 }) {
   const ActionIcon = action.icon;
   return (
-    <section data-testid={testId} className="surface group relative flex flex-col overflow-hidden p-5 transition duration-200 hover:-translate-y-px hover:border-primary/30 hover:shadow-hover">
+    <section data-testid={testId} className="surface card-lift group relative flex flex-col overflow-hidden p-5">
       <Link href={href} aria-label={`Open the ${title}`} className="absolute inset-0 z-0 rounded-2xl focus-visible:ring-2 focus-visible:ring-ring/50" />
       <div className={cn("pointer-events-none absolute -right-12 -top-12 h-32 w-32 rounded-full bg-gradient-to-br opacity-[0.08] blur-2xl transition-opacity group-hover:opacity-[0.16]", STORE_TONE[tone])} />
       <div className="pointer-events-none relative flex items-start gap-3">
-        <span className={cn("grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-gradient-to-br text-white shadow-lg", STORE_TONE[tone])}>
+        <span className={cn("grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-gradient-to-br text-white shadow-lg ring-1 ring-inset ring-white/20 transition duration-300 group-hover:scale-105 group-hover:shadow-xl", STORE_TONE[tone])}>
           <Icon className="h-5 w-5" />
         </span>
         <div className="min-w-0 flex-1">
