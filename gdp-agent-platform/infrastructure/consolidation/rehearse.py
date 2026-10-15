@@ -69,6 +69,8 @@ def main() -> None:
     p.add_argument("--suffix", default="", help="clone name <SOURCE>_<SUFFIX>_REHEARSAL (several rehearsals side by side)")
     p.add_argument("--start-at", choices=sorted(START_AT),
                    help="continue an interrupted rehearsal on its existing clone from this step")
+    p.add_argument("--quick", action="store_true",
+                   help="skip the row-by-row data verification (already proven by a full rehearsal of the same source)")
     p.add_argument("--no-rollback", action="store_true",
                    help="leave the clone consolidated (for running the application against it)")
     args = p.parse_args()
@@ -167,7 +169,8 @@ def main() -> None:
 
     step("backup clone of the rehearsal database", backup_clone)
     step("deploy --consolidate --through 061 (V061: the move)", lambda: deploy(consolidate=True, through="061"))
-    step("verify data", lambda: run_script(verify, ["data", *base, "--rehearsal", "--backup-database", backup], shared))
+    if not args.quick:
+        step("verify data", lambda: run_script(verify, ["data", *base, "--rehearsal", "--backup-database", backup], shared))
     step("deploy --consolidate (procedures, views, search, agent, seed)", lambda: deploy(consolidate=True))
     step("runtime apply", lambda: run_script(runtime, ["apply", *base, "--rehearsal", "--execute",
                                                           "--source-database", src, "--test-dbt-rename"], shared))

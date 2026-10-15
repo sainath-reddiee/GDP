@@ -164,9 +164,13 @@ def extract(cur, db: str) -> str:
     out += ["", "-- ---------------------------------------------------------------- grants (every object, explicitly)"]
     lines = set()
     for role, rows_ in grants_to.items():
+        # every database role holds an implicit USAGE on its own database; it is explicit only when listed twice
+        database_usage = sum(1 for g in rows_ if g["granted_on"] == "DATABASE" and g["privilege"] == "USAGE")
         for g in rows_:
             on = g["granted_on"]
             if g["privilege"] == "OWNERSHIP" or on not in GRANT_ON:
+                continue
+            if on == "DATABASE" and g["privilege"] == "USAGE" and database_usage < 2:
                 continue
             parts = split_name(g["name"])
             if on == "SCHEMA" and parts[-1] not in KEEP_SCHEMAS:

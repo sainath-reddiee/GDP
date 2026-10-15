@@ -48,8 +48,19 @@ def main() -> None:
     sys.path.insert(0, str(code / "apps" / "api"))
     from fastapi.testclient import TestClient
 
+    from app import db as app_db
     from app.main import app
 
+    for attempt in range(6):   # sign in once before any route (each route would otherwise hit the cool-down)
+        try:
+            who = app_db.dev_db()
+            print(f"signed in as {who.user} ({who.role}) on {db}", flush=True)
+            break
+        except Exception as exc:
+            print(f"sign-in attempt {attempt + 1} failed: {str(exc)[:200]}", flush=True)
+            time.sleep(25)
+    else:
+        sys.exit("could not sign in to Snowflake; nothing was tested")
     client = TestClient(app)
     routes = sorted({r.path for r in app.routes if "GET" in getattr(r, "methods", set())
                      and "{" not in r.path and r.path.startswith("/api") and not SKIP.search(r.path)})

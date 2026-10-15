@@ -37,7 +37,7 @@ CREATE SCHEMA IF NOT EXISTS {{database}}.GDP_SILVER COMMENT = 'Development targe
 CREATE SCHEMA IF NOT EXISTS {{database}}.LANDING COMMENT = 'As-is landing (bronze) of onboarded source objects; one table per source object';
 
 -- ---------------------------------------------------------------- sequences
-CREATE SEQUENCE IF NOT EXISTS {{database}}.CORE.CASE_SEQ start with 1 increment by 1 noorder;
+CREATE SEQUENCE IF NOT EXISTS {{database}}.CORE.CASE_SEQ start with 1 increment by 1 noorder COMMENT = 'Human case numbers (CASE-<n>)';
 CREATE SEQUENCE IF NOT EXISTS {{database}}.CORE.SEQ_INGESTION_CHILD_ID start with 1 increment by 1 noorder;
 CREATE SEQUENCE IF NOT EXISTS {{database}}.CORE.SEQ_INGESTION_MASTER_ID start with 1 increment by 1 noorder;
 
@@ -358,6 +358,7 @@ CREATE TABLE IF NOT EXISTS {{database}}.CORE.CODE_CHUNK (
 	COMMIT_SHA VARCHAR(64),
 	constraint PK_CODE_CHUNK primary key (CHUNK_ID)
 );
+ALTER TABLE {{database}}.CORE.CODE_CHUNK SET CHANGE_TRACKING = TRUE;
 CREATE TABLE IF NOT EXISTS {{database}}.CORE.CODE_EDGE (
 	REPO_ID VARCHAR(36) NOT NULL,
 	FROM_CHUNK_ID VARCHAR(64),
@@ -671,6 +672,7 @@ CREATE TABLE IF NOT EXISTS {{database}}.CORE.DOMAIN_KNOWLEDGE (
 	LAYER VARCHAR(8) DEFAULT 'ANY',
 	constraint PK_DOMAIN_KNOWLEDGE primary key (KNOWLEDGE_ID)
 );
+ALTER TABLE {{database}}.CORE.DOMAIN_KNOWLEDGE SET CHANGE_TRACKING = TRUE;
 CREATE TABLE IF NOT EXISTS {{database}}.CORE.DOMAIN_MEMBER (
 	DOMAIN_ID VARCHAR(36) NOT NULL,
 	USER_NAME VARCHAR(256) NOT NULL,
@@ -2290,6 +2292,32 @@ CREATE TABLE IF NOT EXISTS {{database}}.CORE.WORKFLOW_TRANSITION (
 	constraint PK_WORKFLOW_TRANSITION primary key (FROM_STATE, TO_STATE)
 );
 
+-- ---------------------------------------------------------------- starter rows the migrations insert
+INSERT INTO {{database}}.CORE.SKILL_CATEGORY (CATEGORY_ID, NAME, DESCRIPTION, ICON, COLOR, POSITION, IS_SYSTEM, CREATED_BY, CREATED_AT)
+SELECT V:"CATEGORY_ID"::VARCHAR, V:"NAME"::VARCHAR, V:"DESCRIPTION"::VARCHAR, V:"ICON"::VARCHAR, V:"COLOR"::VARCHAR, V:"POSITION"::NUMBER(6,0), V:"IS_SYSTEM"::BOOLEAN, V:"CREATED_BY"::VARCHAR, V:"CREATED_AT"::TIMESTAMP_LTZ
+  FROM (SELECT PARSE_JSON(COLUMN1) AS V FROM VALUES
+  ('{"CATEGORY_ID":"data-modeling","COLOR":"#8b5cf6","CREATED_AT":"2026-10-15 10:38:45.048 -0700","CREATED_BY":"SEED","DESCRIPTION":"Design target models: entities, keys, grain and DDL","ICON":"boxes","IS_SYSTEM":true,"NAME":"Data modeling","POSITION":30}'),
+  ('{"CATEGORY_ID":"data-quality","COLOR":"#22c55e","CREATED_AT":"2026-10-15 10:38:45.048 -0700","CREATED_BY":"SEED","DESCRIPTION":"Soda checks and data readiness","ICON":"shield-check","IS_SYSTEM":true,"NAME":"Data quality","POSITION":60}'),
+  ('{"CATEGORY_ID":"dbt","COLOR":"#ef4444","CREATED_AT":"2026-10-15 10:38:45.048 -0700","CREATED_BY":"SEED","DESCRIPTION":"dbt models, layers, macros and code generation","ICON":"code-2","IS_SYSTEM":true,"NAME":"dbt and code","POSITION":70}'),
+  ('{"CATEGORY_ID":"domain-standards","COLOR":"#a855f7","CREATED_AT":"2026-10-15 10:38:45.048 -0700","CREATED_BY":"SEED","DESCRIPTION":"GDP and company standards that shape every stage","ICON":"landmark","IS_SYSTEM":true,"NAME":"Domain standards","POSITION":90}'),
+  ('{"CATEGORY_ID":"general","COLOR":"#64748b","CREATED_AT":"2026-10-15 10:38:45.048 -0700","CREATED_BY":"SEED","DESCRIPTION":"Everything else","ICON":"sparkles","IS_SYSTEM":true,"NAME":"General","POSITION":100}'),
+  ('{"CATEGORY_ID":"mapping","COLOR":"#14b8a6","CREATED_AT":"2026-10-15 10:38:45.048 -0700","CREATED_BY":"SEED","DESCRIPTION":"Source to target mapping, validation and pattern reuse","ICON":"git-compare","IS_SYSTEM":true,"NAME":"Mapping","POSITION":40}'),
+  ('{"CATEGORY_ID":"profiling","COLOR":"#6366f1","CREATED_AT":"2026-10-15 10:38:45.048 -0700","CREATED_BY":"SEED","DESCRIPTION":"Column profiling, descriptions and deep quality analysis","ICON":"scan-search","IS_SYSTEM":true,"NAME":"Profiling","POSITION":20}'),
+  ('{"CATEGORY_ID":"source-onboarding","COLOR":"#0ea5e9","CREATED_AT":"2026-10-15 10:38:45.048 -0700","CREATED_BY":"SEED","DESCRIPTION":"Connect, land and extract source schemas","ICON":"plug","IS_SYSTEM":true,"NAME":"Source onboarding","POSITION":10}'),
+  ('{"CATEGORY_ID":"sttm","COLOR":"#f59e0b","CREATED_AT":"2026-10-15 10:38:45.048 -0700","CREATED_BY":"SEED","DESCRIPTION":"Source to target transformation specs","ICON":"table-properties","IS_SYSTEM":true,"NAME":"STTM","POSITION":50}'),
+  ('{"CATEGORY_ID":"validation","COLOR":"#0891b2","CREATED_AT":"2026-10-15 10:38:45.048 -0700","CREATED_BY":"SEED","DESCRIPTION":"Validation, readiness checks and QA","ICON":"badge-check","IS_SYSTEM":true,"NAME":"Validation and QA","POSITION":80}'))
+ WHERE NOT EXISTS (SELECT 1 FROM {{database}}.CORE.SKILL_CATEGORY);
+INSERT INTO {{database}}.CORE.SKILL_STAGE_BINDING (STAGE, SKILL_NAME, ENABLED, POSITION, STANDARD, UPDATED_BY, UPDATED_AT, PIPELINE)
+SELECT V:"STAGE"::VARCHAR, V:"SKILL_NAME"::VARCHAR, V:"ENABLED"::BOOLEAN, V:"POSITION"::NUMBER(6,0), V:"STANDARD"::VARCHAR, V:"UPDATED_BY"::VARCHAR, V:"UPDATED_AT"::TIMESTAMP_LTZ, V:"PIPELINE"::VARCHAR
+  FROM (SELECT PARSE_JSON(COLUMN1) AS V FROM VALUES
+  ('{"ENABLED":true,"PIPELINE":"GOLD","POSITION":10,"SKILL_NAME":"GOLD-MODEL","STAGE":"DBT","STANDARD":"GDP","UPDATED_AT":"2026-10-15 10:43:56.294 -0700","UPDATED_BY":"SEED"}'),
+  ('{"ENABLED":true,"PIPELINE":"GOLD","POSITION":15,"SKILL_NAME":"GDP-POST-MDM-DATA-MODEL","STAGE":"DBT","STANDARD":"GDP","UPDATED_AT":"2026-10-15 10:43:56.294 -0700","UPDATED_BY":"SEED"}'),
+  ('{"ENABLED":true,"PIPELINE":"GOLD","POSITION":40,"SKILL_NAME":"GOLD-MODEL","STAGE":"MAPPING","STANDARD":"GDP","UPDATED_AT":"2026-10-15 10:43:56.294 -0700","UPDATED_BY":"SEED"}'),
+  ('{"ENABLED":true,"PIPELINE":"GOLD","POSITION":40,"SKILL_NAME":"GOLD-MODEL","STAGE":"STTM","STANDARD":"GDP","UPDATED_AT":"2026-10-15 10:43:56.294 -0700","UPDATED_BY":"SEED"}'),
+  ('{"ENABLED":true,"PIPELINE":"GOLD","POSITION":40,"SKILL_NAME":"GOLD-MODEL","STAGE":"VALIDATION","STANDARD":"GDP","UPDATED_AT":"2026-10-15 10:43:56.294 -0700","UPDATED_BY":"SEED"}'),
+  ('{"ENABLED":true,"PIPELINE":"GOLD","POSITION":45,"SKILL_NAME":"GDP-POST-MDM-DATA-MODEL","STAGE":"STTM","STANDARD":"GDP","UPDATED_AT":"2026-10-15 10:43:56.294 -0700","UPDATED_BY":"SEED"}'))
+ WHERE NOT EXISTS (SELECT 1 FROM {{database}}.CORE.SKILL_STAGE_BINDING);
+
 -- ---------------------------------------------------------------- row access policies and attachments
 CREATE ROW ACCESS POLICY IF NOT EXISTS {{database}}.CORE.COPILOT_OWN_ROWS as (ROW_USER VARCHAR) 
 returns BOOLEAN ->
@@ -2328,38 +2356,9 @@ ALTER TABLE {{database}}.CORE.USER_TOKEN DROP ALL ROW ACCESS POLICIES;
 ALTER TABLE {{database}}.CORE.USER_TOKEN ADD ROW ACCESS POLICY {{database}}.CORE.OWN_ROWS ON (USER_NAME);
 
 -- ---------------------------------------------------------------- views
-create or replace view {{database}}.CORE.PERSISTENT_PROFILES(
-	PROFILE_ID,
-	SOURCE_NAME,
-	DATABASE_NAME,
-	SCHEMA_NAME,
-	TABLE_NAME,
-	COLUMN_NAME,
-	ORDINAL,
-	RUN_ID,
-	DOMAIN_ID,
-	DATA_TYPE,
-	FAMILY,
-	SEMANTIC_TYPE,
-	PII_CLASSIFICATION,
-	ROW_COUNT,
-	NULL_COUNT,
-	NULL_PCT,
-	DISTINCT_COUNT,
-	CARDINALITY,
-	CARDINALITY_RATIO,
-	MIN_VALUE,
-	MAX_VALUE,
-	POTENTIAL_KEY,
-	TOP_VALUES,
-	HISTOGRAM,
-	DESCRIPTION,
-	IS_APPROXIMATE,
-	PROFILER_VERSION,
-	PROFILED_BY,
-	PROFILED_AT
-) COMMENT='Alias of CORE.DATA_PROFILES'
- as SELECT * FROM {{database}}.CORE.DATA_PROFILES;
+CREATE OR REPLACE VIEW {{database}}.CORE.PERSISTENT_PROFILES COPY GRANTS
+  comment = 'Alias of CORE.DATA_PROFILES' 
+AS SELECT * FROM {{database}}.CORE.DATA_PROFILES;
 
 -- ---------------------------------------------------------------- grants (every object, explicitly)
 GRANT DELETE ON TABLE {{database}}.CORE.ACTION_LOG TO DATABASE ROLE {{database}}.DATA_ENGINEER;
