@@ -136,6 +136,9 @@ def extract(cur, db: str) -> str:
         place(r["name"])
     out += [texts[n] for n in done]
 
+    out += ["", "-- ---------------------------------------------------------------- starter rows the migrations insert"]
+    out += row_statements(cur, db, tables)
+
     out += ["", "-- ---------------------------------------------------------------- row access policies and attachments"]
     for r in objects("ROW ACCESS POLICIES"):
         fqn = f"{db}.{r['schema_name']}.{r['name']}"
@@ -175,6 +178,39 @@ def extract(cur, db: str) -> str:
                 grantee = grantee if grantee.startswith("{{database}}.") else f"{{{{database}}}}.{grantee}"
                 out.append(f"GRANT {g['privilege']} ON FUTURE {on} IN SCHEMA {{{{database}}}}.{schema} TO DATABASE ROLE {grantee};")
     return "\n".join(out) + "\n"
+
+
+def sql_literal(value: str) -> str:
+    return "'" + value.replace("\\", "\\\\").replace("'", "''") + "'"
+
+
+def col_type(c: Dict[str, Any]) -> str:
+    if c["data_type"] == "NUMBER" and c.get("numeric_precision") is not None:
+        return f"NUMBER({c['numeric_precision']},{c['numeric_scale'] or 0})"
+    return "VARCHAR" if c["data_type"] == "TEXT" else c["data_type"]
+
+
+def row_statements(cur, db: str, tables) -> List[str]:
+    """Rows the migrations themselves insert (skill categories, labels, stage bindings), copied value for value into
+    tables that are still empty, so a re-run inserts nothing twice."""
+    out = []
+    for r in tables:
+        fqn = f"{db}.{r['schema_name']}.{r['name']}"
+        if not int(q(cur, f"SELECT COUNT(*) AS N FROM {fqn}")[0]["n"]):
+            continue
+        cols = q(cur, f"SELECT COLUMN_NAME, DATA_TYPE, NUMERIC_PRECISION, NUMERIC_SCALE FROM {db}.INFORMATION_SCHEMA.COLUMNS "
+                      "WHERE TABLE_SCHEMA = %s "
+                      "AND TABLE_NAME = %s ORDER BY ORDINAL_POSITION", (r["schema_name"], r["name"]))
+        rows_ = q(cur, f"SELECT TO_JSON(OBJECT_CONSTRUCT_KEEP_NULL(*)) AS J FROM {fqn} ORDER BY 1")
+        names = ", ".join(c["column_name"] for c in cols)
+        casts = ", ".join(
+            f"V:\"{c['column_name']}\"" if c["data_type"] in ("VARIANT", "OBJECT", "ARRAY")
+            else f"V:\"{c['column_name']}\"::{col_type(c)}" for c in cols)
+        values = ",\n  ".join(f"({sql_literal(x['j'])})" for x in rows_)
+        table = f"{{{{database}}}}.{r['schema_name']}.{r['name']}"
+        out.append(f"INSERT INTO {table} ({names})\nSELECT {casts}\n  FROM (SELECT PARSE_JSON(COLUMN1) AS V FROM VALUES\n  "
+                   f"{values})\n WHERE NOT EXISTS (SELECT 1 FROM {table});")
+    return out
 
 
 def snapshot(cur, db: str) -> Dict[str, Any]:
@@ -229,6 +265,11 @@ def snapshot(cur, db: str) -> Dict[str, Any]:
         if not skipped(r["schema_name"], r["name"]):
             body = try_q(cur, f"DESCRIBE ROW ACCESS POLICY {db}.{r['schema_name']}.{r['name']}")
             snap["policy_body"][r["name"]] = " ".join(templ(str(body[0].get("body")), db).split()) if body else None
+    for r in show(cur, "TABLES", db):
+        if not skipped(r["schema_name"], r["name"]):
+            fqn = f"{db}.{r['schema_name']}.{r['name']}"
+            stats = q(cur, f"SELECT COUNT(*) AS N, HASH_AGG(*) AS H FROM {fqn}")[0]
+            snap["rows"][f"{r['schema_name']}.{r['name']}"] = [int(stats["n"]), str(stats["h"])]
     return json.loads(json.dumps(snap, default=str))
 
 

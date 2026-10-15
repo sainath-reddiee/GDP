@@ -24,6 +24,11 @@ from infrastructure.consolidation import baseline, common, rollback, runtime, ve
 from infrastructure.consolidation.common import IDENT, LEGACY_SCHEMAS, PLATFORM_SCHEMA, ROOT, q, show, try_q
 
 
+# --start-at keys and the step each one resumes at
+START_AT = {"verify-data": "verify data", "deploy": "deploy --consolidate (", "runtime": "runtime apply",
+            "functional": "verify functional", "rollback": "rollback on"}
+
+
 class Shared:
     """The one connection, handed to every script; their close() is a no-op."""
 
@@ -62,9 +67,14 @@ def main() -> None:
     p.add_argument("--out", default=str(ROOT / "consolidation_runs"))
     p.add_argument("--reuse", action="store_true", help="continue on an existing rehearsal clone (skip the clone step)")
     p.add_argument("--suffix", default="", help="clone name <SOURCE>_<SUFFIX>_REHEARSAL (several rehearsals side by side)")
+    p.add_argument("--start-at", choices=sorted(START_AT),
+                   help="continue an interrupted rehearsal on its existing clone from this step")
     p.add_argument("--no-rollback", action="store_true",
                    help="leave the clone consolidated (for running the application against it)")
     args = p.parse_args()
+    if args.start_at:
+        args.reuse = True
+    waiting = [START_AT[args.start_at]] if args.start_at else []
     src = args.source.upper()
     assert IDENT.match(src), "invalid source database"
     tag = f"_{args.suffix.upper()}" if args.suffix else ""
@@ -77,6 +87,10 @@ def main() -> None:
     cur = con.cursor()
 
     def step(name: str, fn) -> Any:
+        if waiting and not name.startswith(waiting[0]):
+            print(f"===== {name}: skipped (--start-at)", flush=True)
+            return None
+        waiting.clear()
         t0 = time.time()
         print(f"\n===== {name}", flush=True)
         try:
@@ -129,6 +143,8 @@ def main() -> None:
 
     if not args.reuse:
         step("copy staged files into the clone", copy_files)
+    if args.start_at:
+        report["resumed_at"] = args.start_at
 
     from infrastructure.deploy_snowflake import apply_from_session
 
@@ -144,6 +160,8 @@ def main() -> None:
     step("baseline", lambda: run_script(baseline, [*base, "--rehearsal"], shared))
 
     def backup_clone():
+        if args.reuse and q(cur, f"SHOW DATABASES LIKE '{backup}'"):
+            return "reused"
         assert not q(cur, f"SHOW DATABASES LIKE '{backup}'"), f"{backup} already exists"
         cur.execute(f"CREATE DATABASE {backup} CLONE {db} COMMENT = 'Consolidation rehearsal backup: disposable'")
 

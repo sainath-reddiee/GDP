@@ -146,7 +146,7 @@ def data(args, cur, db: str, objects, checks: Checks) -> None:
             body = try_q(cur, f"DESCRIBE ROW ACCESS POLICY {new}")
             text = str(body[0].get("body")) if body else ""
             checks.add(old, "BODY_NAMES_NO_OLD_SCHEMA", "no legacy reference", text, map_fqn(text, db) == text)
-        elif kind == "VIEW":
+        elif kind == "VIEW" and o["method"] == "RENAME":   # reporting views are created later, by the deploy
             found = try_q(cur, f"SELECT COUNT(*) AS N FROM {new}")
             checks.add(old, "VIEW_READABLE_IN_CORE", new, bool(found), bool(found))
 
@@ -171,6 +171,9 @@ def functional(args, cur, db: str, objects, checks: Checks) -> None:
     tasks = {f"{t['database_name']}.{t['schema_name']}.{t['name']}": t for t in show(cur, "TASKS", db)}
     for o in objects:
         kind, old, new, b = o["object_type"], o["old_fqn"], o["new_fqn"], o["baseline"] or {}
+        if kind == "VIEW":
+            found = try_q(cur, f"SELECT COUNT(*) AS N FROM {new}")
+            checks.add(old, "VIEW_READABLE_IN_CORE", new, bool(found), bool(found))
         if kind == "AGENT":
             desc = try_q(cur, f"DESCRIBE AGENT {new}")
             spec = json.dumps(jsonable(desc[0])) if desc else ""
@@ -189,7 +192,7 @@ def functional(args, cur, db: str, objects, checks: Checks) -> None:
         elif kind in ("GIT REPOSITORY", "SECRET", "DBT PROJECT"):
             present = bool(try_q(cur, f"DESCRIBE {kind} {old}"))
             checks.add(old, "KEPT_IN_PLACE", True, present, present)
-        elif kind in ("TABLE", "VIEW") and o["method"] == "RENAME":
+        if kind in ("TABLE", "VIEW") and o["method"] == "RENAME":
             _, schema, name = split(old)
             if (schema, name) in NO_COMPAT_VIEW:
                 continue
