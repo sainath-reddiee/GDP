@@ -125,12 +125,12 @@ class FakeResult:
 
     def collect(self):
         s, p, fake = self.sql, self.params, self.session
-        if "FROM METADATA.TABLE_PROFILES" in s:
+        if "FROM CORE.TABLE_PROFILES" in s:
             if not fake.metadata_deployed:
                 raise RuntimeError("Schema 'METADATA' does not exist or not authorized")
             names = json.loads(p[0])
             return [Row(r) for r in fake.index.values() if r["SOURCE_NAME"] in names]
-        if "MERGE INTO METADATA.TABLE_PROFILES" in s:
+        if "MERGE INTO CORE.TABLE_PROFILES" in s:
             fake.index[tuple(p[:4])] = {
                 "SOURCE_NAME": p[0], "DATABASE_NAME": p[1], "SCHEMA_NAME": p[2], "TABLE_NAME": p[3],
                 "ROW_COUNT": int(p[4]), "PROFILE_STAGE_PATH": p[6], "PROFILE_CHECKSUM": p[7],

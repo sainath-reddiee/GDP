@@ -82,7 +82,7 @@ def check_key(table: Any, column: Any, check_type: Any, definition: Any) -> tupl
 def carry_decisions(checks: List[Dict[str, Any]], prior: List[Dict[str, Any]]) -> Dict[str, int]:
     """Regenerated checks take over the reviewer's decision on the check they replace (same table, column, check
     type and kind), so regenerating never sends reviewed work back to PROPOSED. `prior` are the run's current rows
-    (CONTRACT.SODA_EXPECTATION_REGISTRY, upper-case keys); `checks` are updated in place with status, definition,
+    (CORE.SODA_EXPECTATION_REGISTRY, upper-case keys); `checks` are updated in place with status, definition,
     severity, requirement, reviewer and generated_definition (what the generator proposed, kept for the next time).
 
       the generator proposes what it proposed when the reviewer decided   the decision, the reviewer's definition

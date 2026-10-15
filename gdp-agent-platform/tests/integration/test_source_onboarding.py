@@ -53,15 +53,15 @@ def new_run(cur):
 
 def register(cur, run_id, name, source_type, database, schema):
     payload = {"SOURCE_SYSTEM_NAME": name, "SOURCE_TYPE": source_type, "DATABASE": database, "SCHEMA": schema}
-    return call(cur, "CALL SOURCE.REGISTER_SOURCE(%s, %s)", (run_id, json.dumps(payload)))
+    return call(cur, "CALL CORE.REGISTER_SOURCE(%s, %s)", (run_id, json.dumps(payload)))
 
 
 def validate(cur, run_id, selected):
-    return call(cur, "CALL SOURCE.VALIDATE_SOURCE_ACCESS(%s, %s)", (run_id, json.dumps(selected)))
+    return call(cur, "CALL CORE.VALIDATE_SOURCE_ACCESS(%s, %s)", (run_id, json.dumps(selected)))
 
 
 def land(cur, run_id):
-    return call(cur, "CALL SOURCE.EXECUTE_LANDING(%s)", (run_id,))
+    return call(cur, "CALL CORE.EXECUTE_LANDING(%s)", (run_id,))
 
 
 def test_register_unknown_database_keeps_run_created(cur):
@@ -88,7 +88,7 @@ def test_database_source_end_to_end(cur):
     access = validate(cur, run_id, ["CRM_CUSTOMER", "CRM_ORDER"])
     assert access["passed"], access["checks"]
     assert access["state"]["current_state"] == "ACCESS_APPROVED"
-    stored = rows(cur, "SELECT CHECK_NAME, STATUS FROM SOURCE.SOURCE_ACCESS_CHECK WHERE RUN_ID = %s", (run_id,))
+    stored = rows(cur, "SELECT CHECK_NAME, STATUS FROM CORE.SOURCE_ACCESS_CHECK WHERE RUN_ID = %s", (run_id,))
     assert stored and all(r["STATUS"] != "FAILED" for r in stored)
 
     landed = land(cur, run_id)
@@ -100,8 +100,8 @@ def test_database_source_end_to_end(cur):
 
     columns = rows(cur, """
         SELECT C.COLUMN_NAME, C.DATA_TYPE, C.NULLABLE, C.SOURCE_COMMENT
-          FROM SOURCE.LANDING_COLUMN_REGISTRY C
-          JOIN SOURCE.LANDING_TABLE_REGISTRY T ON T.LANDING_ID = C.LANDING_ID
+          FROM CORE.LANDING_COLUMN_REGISTRY C
+          JOIN CORE.LANDING_TABLE_REGISTRY T ON T.LANDING_ID = C.LANDING_ID
          WHERE T.RUN_ID = %s AND T.SOURCE_TABLE = 'CRM_CUSTOMER'
          ORDER BY C.ORDINAL_POSITION""", (run_id,))
     assert [c["COLUMN_NAME"] for c in columns][:2] == ["CUST_ID", "FIRST_NM"] and len(columns) == 7
@@ -123,7 +123,7 @@ def test_failed_access_returns_to_source_and_can_be_corrected(cur):
 
     good = validate(cur, run_id, ["CRM_CUSTOMER"])
     assert good["passed"] and good["state"]["current_state"] == "ACCESS_APPROVED"
-    selected = rows(cur, "SELECT OBJECT_NAME FROM SOURCE.SOURCE_OBJECT WHERE RUN_ID = %s AND SELECTED_FLAG", (run_id,))
+    selected = rows(cur, "SELECT OBJECT_NAME FROM CORE.SOURCE_OBJECT WHERE RUN_ID = %s AND SELECTED_FLAG", (run_id,))
     assert [r["OBJECT_NAME"] for r in selected] == ["CRM_CUSTOMER"]
 
 

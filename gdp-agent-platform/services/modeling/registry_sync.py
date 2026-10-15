@@ -1,12 +1,12 @@
 """Apply an approved domain model version to the domain registry (the runtime copy every stage reads).
 
-KNOWLEDGE.TARGET_TABLE_REGISTRY / TARGET_COLUMN_REGISTRY stay what mapping, STTM, dbt, QA and DQ read; this module is
-their only writer for domains that have a canonical model (MODELING.APPLY_DOMAIN_MODEL, owner's rights). It keeps
+CORE.TARGET_TABLE_REGISTRY / TARGET_COLUMN_REGISTRY stay what mapping, STTM, dbt, QA and DQ read; this module is
+their only writer for domains that have a canonical model (CORE.APPLY_DOMAIN_MODEL, owner's rights). It keeps
 registry ids stable (an entity's id is its TARGET_TABLE_ID, a column's id its TARGET_COLUMN_ID; rows registered
 before the model existed are matched by name), so mapping decisions and STTM lines that point at a kept table or
 column stay valid. Retired entities are deactivated, never deleted; columns a version drops or retires are removed
 from the registry (approving such a version needs the breaking change acknowledged). Every application writes a
-KNOWLEDGE.DOMAIN_VERSION snapshot, so the Domains page compare and rollback stay current.
+CORE.DOMAIN_VERSION snapshot, so the Domains page compare and rollback stay current.
 A GOLD model registers its own facts, dimensions and bridges with LAYER = 'GOLD' (V054), so a Gold run maps into them
 like a Silver run maps into silver tables; conformed dimensions (DIM_COMPANY, DIM_PROPERTY) belong to their mastered
 domain and are not registered by a consumer. Readers that list a domain's silver targets filter on the layer.
@@ -96,13 +96,13 @@ def _write_columns(session, table_id: str, values: List[List[Any]]) -> int:
 
     ids = [v[0] for v in values]
     if ids:
-        session.sql(f"""DELETE FROM KNOWLEDGE.TARGET_COLUMN_REGISTRY WHERE TARGET_TABLE_ID = ?
+        session.sql(f"""DELETE FROM CORE.TARGET_COLUMN_REGISTRY WHERE TARGET_TABLE_ID = ?
                           AND TARGET_COLUMN_ID NOT IN ({", ".join("?" for _ in ids)})""", params=[table_id, *ids]).collect()
     else:
-        session.sql("DELETE FROM KNOWLEDGE.TARGET_COLUMN_REGISTRY WHERE TARGET_TABLE_ID = ?", params=[table_id]).collect()
+        session.sql("DELETE FROM CORE.TARGET_COLUMN_REGISTRY WHERE TARGET_TABLE_ID = ?", params=[table_id]).collect()
     for start in range(0, len(values), INSERT_BATCH):
         batch = values[start:start + INSERT_BATCH]
-        session.sql(f"""MERGE INTO KNOWLEDGE.TARGET_COLUMN_REGISTRY t
+        session.sql(f"""MERGE INTO CORE.TARGET_COLUMN_REGISTRY t
                         USING ({" UNION ALL ".join([COLUMN_SOURCE] * len(batch))}) s
                            ON t.TARGET_COLUMN_ID = s.TARGET_COLUMN_ID
                         WHEN MATCHED THEN UPDATE SET TARGET_TABLE_ID = s.TARGET_TABLE_ID, COLUMN_NAME = s.COLUMN_NAME,
@@ -121,11 +121,11 @@ def _write_columns(session, table_id: str, values: List[List[Any]]) -> int:
 
 def _find_table(session, entity: Dict[str, Any], domain_id: str, database: str, schema: str,
                 layer: str = "SILVER") -> Optional[Dict[str, Any]]:
-    found = _rows(session, "SELECT TARGET_TABLE_ID, TARGET_TABLE FROM KNOWLEDGE.TARGET_TABLE_REGISTRY WHERE TARGET_TABLE_ID = ?",
+    found = _rows(session, "SELECT TARGET_TABLE_ID, TARGET_TABLE FROM CORE.TARGET_TABLE_REGISTRY WHERE TARGET_TABLE_ID = ?",
                   [entity["id"]])
     if found:
         return found[0]
-    found = _rows(session, """SELECT TARGET_TABLE_ID, TARGET_TABLE FROM KNOWLEDGE.TARGET_TABLE_REGISTRY
+    found = _rows(session, """SELECT TARGET_TABLE_ID, TARGET_TABLE FROM CORE.TARGET_TABLE_REGISTRY
                                WHERE DOMAIN_ID = ? AND UPPER(TARGET_DATABASE) = UPPER(?) AND UPPER(TARGET_SCHEMA) = UPPER(?)
                                  AND UPPER(TARGET_TABLE) = UPPER(?) AND COALESCE(LAYER, 'SILVER') = ?
                                ORDER BY ACTIVE_FLAG DESC LIMIT 1""", [domain_id, database, schema, entity["entity_name"], layer])
@@ -148,7 +148,7 @@ def apply_spec(session, spec: Dict[str, Any], domain_id: str, model_id: str, ver
         existing = _find_table(session, entity, domain_id, database, schema, layer)
         if entity.get("status") == "RETIRED":
             if existing:
-                session.sql("""UPDATE KNOWLEDGE.TARGET_TABLE_REGISTRY SET ACTIVE_FLAG = FALSE, MODEL_ID = ?, MODEL_VERSION = ?
+                session.sql("""UPDATE CORE.TARGET_TABLE_REGISTRY SET ACTIVE_FLAG = FALSE, MODEL_ID = ?, MODEL_VERSION = ?
                                 WHERE TARGET_TABLE_ID = ?""",
                             params=[model_id, int(version), existing["TARGET_TABLE_ID"]]).collect()
                 applied_ids.append(existing["TARGET_TABLE_ID"])
@@ -161,14 +161,14 @@ def apply_spec(session, spec: Dict[str, Any], domain_id: str, model_id: str, ver
                   model_id, int(version), layer]
         if existing:
             table_id = existing["TARGET_TABLE_ID"]
-            session.sql("""UPDATE KNOWLEDGE.TARGET_TABLE_REGISTRY SET TARGET_DATABASE = ?, TARGET_SCHEMA = ?, TARGET_TABLE = ?,
+            session.sql("""UPDATE CORE.TARGET_TABLE_REGISTRY SET TARGET_DATABASE = ?, TARGET_SCHEMA = ?, TARGET_TABLE = ?,
                                   TABLE_TYPE = ?, GRAIN = ?, BUSINESS_KEYS = PARSE_JSON(?), SCD_TYPE = ?, DESCRIPTION = ?,
                                   MODEL_SPEC = PARSE_JSON(?), MODEL_ID = ?, MODEL_VERSION = ?, LAYER = ?,
                                   ACTIVE_FLAG = TRUE, DOMAIN_ID = ?
                             WHERE TARGET_TABLE_ID = ?""", params=values + [domain_id, table_id]).collect()
         else:
             table_id = str(entity["id"])
-            insert_rows(session, "KNOWLEDGE.TARGET_TABLE_REGISTRY",
+            insert_rows(session, "CORE.TARGET_TABLE_REGISTRY",
                         ["TARGET_TABLE_ID", "DOMAIN_ID", "TARGET_DATABASE", "TARGET_SCHEMA", "TARGET_TABLE", "TABLE_TYPE",
                          "GRAIN", "BUSINESS_KEYS", "SCD_TYPE", "DESCRIPTION", "MODEL_SPEC", "MODEL_ID", "MODEL_VERSION",
                          "LAYER", "VERSION", "ACTIVE_FLAG"],
@@ -176,19 +176,19 @@ def apply_spec(session, spec: Dict[str, Any], domain_id: str, model_id: str, ver
                          "?", "1", "TRUE"],
                         [[table_id, domain_id] + values])
         applied_ids.append(table_id)
-        current = _rows(session, "SELECT TARGET_COLUMN_ID, COLUMN_NAME FROM KNOWLEDGE.TARGET_COLUMN_REGISTRY "
+        current = _rows(session, "SELECT TARGET_COLUMN_ID, COLUMN_NAME FROM CORE.TARGET_COLUMN_REGISTRY "
                                  "WHERE TARGET_TABLE_ID = ?", [table_id])
         columns += _write_columns(session, table_id, column_rows(entity, table_id, current, layer))
         registered.append({"entity": entity["entity_name"], "entity_id": entity["id"], "target_table_id": table_id,
                            "fqn": f"{database}.{schema}.{entity['entity_name']}"})
     # tables the model registered before but no longer has stop being live (never deleted)
     if applied_ids:
-        gone = _rows(session, f"""SELECT TARGET_TABLE_ID, TARGET_TABLE FROM KNOWLEDGE.TARGET_TABLE_REGISTRY
+        gone = _rows(session, f"""SELECT TARGET_TABLE_ID, TARGET_TABLE FROM CORE.TARGET_TABLE_REGISTRY
                                    WHERE DOMAIN_ID = ? AND MODEL_ID = ? AND ACTIVE_FLAG
                                      AND TARGET_TABLE_ID NOT IN ({", ".join("?" for _ in applied_ids)})""",
                      [domain_id, model_id, *applied_ids])
         for g in gone:
-            session.sql("UPDATE KNOWLEDGE.TARGET_TABLE_REGISTRY SET ACTIVE_FLAG = FALSE, MODEL_VERSION = ? "
+            session.sql("UPDATE CORE.TARGET_TABLE_REGISTRY SET ACTIVE_FLAG = FALSE, MODEL_VERSION = ? "
                         "WHERE TARGET_TABLE_ID = ?", params=[int(version), g["TARGET_TABLE_ID"]]).collect()
             deactivated.append(g["TARGET_TABLE"])
     return {"registered": registered, "deactivated": deactivated, "columns": columns}
@@ -211,12 +211,12 @@ def _snapshot(session, domain_id: str, note: str) -> Optional[int]:
 
 
 def apply_model_version(session, model_id: str, version: int) -> Dict[str, Any]:
-    """MODELING.APPLY_DOMAIN_MODEL: put an APPROVED (or PUBLISHED) version of a domain model into the registry."""
+    """CORE.APPLY_DOMAIN_MODEL: put an APPROVED (or PUBLISHED) version of a domain model into the registry."""
     from services.common.sql import variant
 
     found = _rows(session, """SELECT D.SPEC, D.STATUS, D.VERSION, M.DOMAIN_ID, M.DOMAIN_NAME, COALESCE(M.LAYER, 'SILVER') AS LAYER
-                                FROM GOVERNANCE.MODEL_DESIGNS D
-                                JOIN GOVERNANCE.DOMAIN_MODEL M ON M.MODEL_ID = D.MODEL_ID
+                                FROM CORE.MODEL_DESIGNS D
+                                JOIN CORE.DOMAIN_MODEL M ON M.MODEL_ID = D.MODEL_ID
                                WHERE D.MODEL_ID = ? AND D.VERSION = ?""", [model_id, int(version)])
     assert found, f"model version {version} not found"
     row = found[0]
@@ -224,7 +224,7 @@ def apply_model_version(session, model_id: str, version: int) -> Dict[str, Any]:
     spec = spec_v2.normalize_v2(variant(row["SPEC"]) or {}, model_id)
     layer = "GOLD" if row["LAYER"] == "GOLD" else "SILVER"
     result = apply_spec(session, spec, row["DOMAIN_ID"], model_id, int(version), layer)
-    session.sql("UPDATE GOVERNANCE.MODEL_DESIGNS SET REGISTRY_SYNCED_AT = CURRENT_TIMESTAMP() WHERE MODEL_ID = ? AND VERSION = ?",
+    session.sql("UPDATE CORE.MODEL_DESIGNS SET REGISTRY_SYNCED_AT = CURRENT_TIMESTAMP() WHERE MODEL_ID = ? AND VERSION = ?",
                 params=[model_id, int(version)]).collect()
     result["domain_version"] = _snapshot(session, row["DOMAIN_ID"], f"{row['DOMAIN_NAME']} model v{version} approved")
     _remember(session, row["DOMAIN_ID"], spec, result["registered"], model_id, int(version))

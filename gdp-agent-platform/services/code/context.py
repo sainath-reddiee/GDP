@@ -13,7 +13,7 @@ import re
 from typing import Any, Callable, Dict, Iterable, List, Optional
 
 Rows = Callable[[str, list], List[Dict[str, Any]]]
-SERVICE = "CODE.CODE_SEARCH"
+SERVICE = "CORE.CODE_SEARCH"
 SEARCH_COLUMNS = ["CHUNK_ID", "REPO_ID", "REPO_NAME", "PATH", "START_LINE", "END_LINE", "KIND", "NAME", "TEXT", "COMMIT_SHA"]
 
 # what each stage wants to see, most useful first
@@ -120,7 +120,7 @@ def block(chunks: List[Dict[str, Any]]) -> str:
 def repos_for(rows: Rows, domain_id: Optional[str]) -> List[Dict[str, Any]]:
     """Enabled, indexed repositories for a domain (a repository with no domains serves every domain)."""
     try:
-        found = [_low(r) for r in rows("""SELECT REPO_ID, NAME, DOMAIN_IDS FROM CODE.REPO
+        found = [_low(r) for r in rows("""SELECT REPO_ID, NAME, DOMAIN_IDS FROM CORE.REPO
                                            WHERE ENABLED AND LAST_INDEXED_AT IS NOT NULL""", [])]
     except Exception:
         return []
@@ -130,7 +130,7 @@ def repos_for(rows: Rows, domain_id: Optional[str]) -> List[Dict[str, Any]]:
 def code_context(rows: Rows, search: Optional[Callable[[Dict[str, Any]], List[Dict[str, Any]]]], *, stage: str,
                  domain_id: Optional[str] = None, target: Optional[str] = None, sources: Iterable[str] = (),
                  columns: Iterable[str] = (), question: Optional[str] = None, budget: Optional[int] = None) -> Dict[str, Any]:
-    """{'text': prompt block or '', 'citations': [...], 'chunks': [...]}. `search(request)` queries CODE.CODE_SEARCH."""
+    """{'text': prompt block or '', 'citations': [...], 'chunks': [...]}. `search(request)` queries CORE.CODE_SEARCH."""
     stage = stage.upper()
     kinds = STAGE_KINDS.get(stage, STAGE_KINDS["COPILOT"])
     repos = repos_for(rows, domain_id)
@@ -146,10 +146,10 @@ def code_context(rows: Rows, search: Optional[Callable[[Dict[str, Any]], List[Di
             # exact: chunks named like the target or its sources, and models whose lineage touches them
             found = rows(f"""SELECT C.CHUNK_ID, C.REPO_ID, C.PATH, C.START_LINE, C.END_LINE, C.KIND, C.NAME, C.TEXT, C.REFS,
                                     C.SOURCES, C.COLUMNS, C.COMMIT_SHA
-                               FROM CODE.CODE_CHUNK C
+                               FROM CORE.CODE_CHUNK C
                               WHERE ARRAY_CONTAINS(C.REPO_ID::VARIANT, PARSE_JSON(?))
                                 AND (UPPER(C.NAME) IN ({', '.join(['?'] * len(wanted))})
-                                     OR C.CHUNK_ID IN (SELECT E.FROM_CHUNK_ID FROM CODE.CODE_EDGE E
+                                     OR C.CHUNK_ID IN (SELECT E.FROM_CHUNK_ID FROM CORE.CODE_EDGE E
                                                         WHERE UPPER(SPLIT_PART(E.TO_NAME, '.', -1)) IN ({', '.join(['?'] * len(wanted))})))
                               LIMIT 60""", [json.dumps(repo_ids), *[w.upper() for w in wanted], *[w.upper() for w in wanted]])
             for r in found:
@@ -158,7 +158,7 @@ def code_context(rows: Rows, search: Optional[Callable[[Dict[str, Any]], List[Di
         if columns and stage in ("DBT", "QA", "SODA", "STTM"):
             found = rows("""SELECT C.CHUNK_ID, C.REPO_ID, C.PATH, C.START_LINE, C.END_LINE, C.KIND, C.NAME, C.TEXT, C.REFS,
                                     C.SOURCES, C.COLUMNS, C.COMMIT_SHA
-                               FROM CODE.CODE_CHUNK C
+                               FROM CORE.CODE_CHUNK C
                               WHERE ARRAY_CONTAINS(C.REPO_ID::VARIANT, PARSE_JSON(?))
                                 AND ARRAY_CONTAINS(C.KIND::VARIANT, PARSE_JSON(?))
                                 AND ARRAYS_OVERLAP(C.COLUMNS, PARSE_JSON(?))
@@ -247,8 +247,8 @@ def record_usage(rows_exec: Callable[[str, list], Any], run_id: Optional[str], s
     if not ids:
         return
     try:
-        rows_exec("""INSERT INTO CODE.CODE_USAGE (CHUNK_ID, REPO_ID, RUN_ID, STAGE)
-                     SELECT C.CHUNK_ID, C.REPO_ID, NULLIF(?, ''), ? FROM CODE.CODE_CHUNK C
+        rows_exec("""INSERT INTO CORE.CODE_USAGE (CHUNK_ID, REPO_ID, RUN_ID, STAGE)
+                     SELECT C.CHUNK_ID, C.REPO_ID, NULLIF(?, ''), ? FROM CORE.CODE_CHUNK C
                       WHERE ARRAY_CONTAINS(C.CHUNK_ID::VARIANT, PARSE_JSON(?))""", [run_id or "", stage.upper(), json.dumps(ids)])
     except Exception:
         pass

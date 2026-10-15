@@ -301,11 +301,11 @@ def model_session(status="DRAFT", authors=("ANA",), submitted_by=None, etag="e1"
                  "AUTHORS": json.dumps(list(authors)), "SUBMITTED_BY": submitted_by, "ISSUES": "[]"}] if status else []
     versions.append({"VERSION": 1, "STATUS": "APPROVED", "ORIGIN": "BACKFILL", "ETAG": "x", "AUTHORS": "[]", "ISSUES": "[]"})
     answers = {
-        "FROM GOVERNANCE.DOMAIN_MODEL WHERE MODEL_ID = ?": [{"MODEL_ID": "m1", "DOMAIN_ID": "d1", "DOMAIN_NAME": "SALES",
+        "FROM CORE.DOMAIN_MODEL WHERE MODEL_ID = ?": [{"MODEL_ID": "m1", "DOMAIN_ID": "d1", "DOMAIN_NAME": "SALES",
                                                              "APPROVED_VERSION": approved, "OPEN_VERSION": open_version,
                                                              "NAMING_STANDARD": "{}", "DIAGRAM_LAYOUT": "{}"}],
         "ORDER BY VERSION DESC": versions,
-        "SELECT SPEC FROM GOVERNANCE.MODEL_DESIGNS": lambda p: [{"SPEC": json.dumps(base if p[1] == 1 else draft)}],
+        "SELECT SPEC FROM CORE.MODEL_DESIGNS": lambda p: [{"SPEC": json.dumps(base if p[1] == 1 else draft)}],
         "KIND = 'BLOCKER'": [{"N": blockers}],
         "SELECT ETAG FROM": [{"ETAG": "will-not-match"}],
     }
@@ -317,14 +317,14 @@ def test_save_draft_refuses_a_stale_etag():
     s = model_session(etag="current")
     with pytest.raises(dm.Conflict, match="saved by ANA since you opened it"):
         dm.save_draft(s, "m1", json.dumps({"etag": "old", "spec": spec_fixture()}), "BEN")
-    assert not s.find("UPDATE GOVERNANCE.MODEL_DESIGNS SET SPEC")
+    assert not s.find("UPDATE CORE.MODEL_DESIGNS SET SPEC")
 
 
 def test_save_draft_writes_with_the_etag_guard():
     s = model_session(etag="e1")
     s.answers["SELECT ETAG FROM"] = lambda p: [{"ETAG": s.find("SET SPEC")[0][1][2]}]  # the etag this save wrote
     out = dm.save_draft(s, "m1", json.dumps({"etag": "e1", "spec": spec_fixture(), "change_note": "x"}), "ben")
-    sql, params = s.find("UPDATE GOVERNANCE.MODEL_DESIGNS SET SPEC")[0]
+    sql, params = s.find("UPDATE CORE.MODEL_DESIGNS SET SPEC")[0]
     assert "AND ETAG = ? AND STATUS = 'DRAFT'" in sql and params[-1] == "e1" and params[3] == "BEN"
     assert out["etag"] == params[2] and out["counts"] == {"ADDITIVE": 0, "NON_FUNCTIONAL": 0, "BREAKING": 0}
 
@@ -352,7 +352,7 @@ def test_open_draft_undoes_itself_when_another_opened_at_the_same_time():
                                           {"VERSION": 2, "STATUS": "SUPERSEDED", "AUTHORS": "[]", "ISSUES": "[]"}]
     with pytest.raises(dm.Conflict, match="opened as a draft just now"):
         dm.open_draft(s, "m1", "ANA")
-    assert s.find("DELETE FROM GOVERNANCE.MODEL_DESIGNS WHERE MODEL_ID = ? AND VERSION = ?")[0][1] == ["m1", 3]
+    assert s.find("DELETE FROM CORE.MODEL_DESIGNS WHERE MODEL_ID = ? AND VERSION = ?")[0][1] == ["m1", 3]
 
 
 def test_rollback_opens_a_draft_from_an_older_version():
@@ -361,7 +361,7 @@ def test_rollback_opens_a_draft_from_an_older_version():
                                           for v, st in [(3, "APPROVED"), (2, "SUPERSEDED"), (1, "SUPERSEDED")]]
     s.answers["AND STATUS IN ('DRAFT', 'IN_REVIEW') ORDER BY VERSION"] = [{"VERSION": 4}]
     out = dm.open_draft(s, "m1", "ANA", from_version=1)
-    insert = s.find("INSERT INTO GOVERNANCE.MODEL_DESIGNS")[0][1]
+    insert = s.find("INSERT INTO CORE.MODEL_DESIGNS")[0][1]
     assert out == {"model_id": "m1", "version": 4, "status": "DRAFT", "etag": out["etag"], "from_version": 1}
     assert "ROLLBACK" in insert and "Roll back to version 1" in insert
 
@@ -432,7 +432,7 @@ def test_reject_and_withdraw():
 def test_comments_and_layout():
     s = model_session()
     out = dm.add_comment(s, "m1", 2, json.dumps({"body": "Grain?", "path": "DIM_CUSTOMER.EMAIL", "kind": "blocker"}), "lee")
-    insert = s.find("INSERT INTO GOVERNANCE.MODEL_REVIEW_COMMENT")[0][1]
+    insert = s.find("INSERT INTO CORE.MODEL_REVIEW_COMMENT")[0][1]
     assert out["kind"] == "BLOCKER" and "DIM_CUSTOMER.EMAIL" in insert and "LEE" in insert
     with pytest.raises(AssertionError, match="kind must be"):
         dm.add_comment(s, "m1", 2, json.dumps({"body": "x", "kind": "SHOUT"}), "lee")
@@ -448,17 +448,17 @@ def test_backfill_writes_an_approved_baseline_once():
     cols = [{"TARGET_COLUMN_ID": "c1", "TARGET_TABLE_ID": "t1", "COLUMN_NAME": "ID", "DATA_TYPE": "NUMBER", "ORDINAL_POSITION": 1,
              "NULLABLE": False, "IS_BUSINESS_KEY": True, "IS_PII": False, "ACCEPTED_VALUES": "[]"}]
     s = Session({"SELECT DISTINCT T.DOMAIN_ID": [{"DOMAIN_ID": "d1"}],
-                 "SELECT COUNT(*) FROM GOVERNANCE.DOMAIN_MODEL": [{"N": 0}],
-                 "SELECT DOMAIN_ID, DOMAIN_NAME FROM KNOWLEDGE.DOMAIN_REGISTRY": [{"DOMAIN_ID": "d1", "DOMAIN_NAME": "SALES"}],
-                 "SELECT C.* FROM KNOWLEDGE.TARGET_COLUMN_REGISTRY": cols,
-                 "SELECT * FROM KNOWLEDGE.TARGET_TABLE_REGISTRY": tables})
+                 "SELECT COUNT(*) FROM CORE.DOMAIN_MODEL": [{"N": 0}],
+                 "SELECT DOMAIN_ID, DOMAIN_NAME FROM CORE.DOMAIN_REGISTRY": [{"DOMAIN_ID": "d1", "DOMAIN_NAME": "SALES"}],
+                 "SELECT C.* FROM CORE.TARGET_COLUMN_REGISTRY": cols,
+                 "SELECT * FROM CORE.TARGET_TABLE_REGISTRY": tables})
     log = dm.backfill(s)
     assert log == ["domain model SALES: baseline v1 (1 entities, 1 columns)"]
-    version = s.find("INSERT INTO GOVERNANCE.MODEL_DESIGNS")[0][1]
+    version = s.find("INSERT INTO CORE.MODEL_DESIGNS")[0][1]
     assert dm.model_id_for("d1") in version and "APPROVED" in version and "BACKFILL" in version
     assert json.loads(version[6])["design"]["entities"][0]["id"] == "t1"  # registry ids are the entity ids
-    assert s.find("UPDATE KNOWLEDGE.TARGET_TABLE_REGISTRY SET MODEL_ID = ?, MODEL_VERSION = 1")[0][1] == [dm.model_id_for("d1"), "d1"]
-    s.answers["SELECT COUNT(*) FROM GOVERNANCE.DOMAIN_MODEL"] = [{"N": 1}]
+    assert s.find("UPDATE CORE.TARGET_TABLE_REGISTRY SET MODEL_ID = ?, MODEL_VERSION = 1")[0][1] == [dm.model_id_for("d1"), "d1"]
+    s.answers["SELECT COUNT(*) FROM CORE.DOMAIN_MODEL"] = [{"N": 1}]
     assert dm.baseline(s, "d1") is None
 
 
@@ -496,27 +496,27 @@ def test_apply_spec_keeps_registry_ids_and_deactivates():
         # DIM_CUSTOMER is registered under another id (by a run): matched by name
         "WHERE DOMAIN_ID = ? AND UPPER(TARGET_DATABASE)": lambda p: [{"TARGET_TABLE_ID": "reg-cust", "TARGET_TABLE": "DIM_CUSTOMER"}]
         if p[3] == "DIM_CUSTOMER" else ([{"TARGET_TABLE_ID": "reg-legacy", "TARGET_TABLE": "LEGACY_TABLE"}] if p[3] == "LEGACY_TABLE" else []),
-        "SELECT TARGET_COLUMN_ID, COLUMN_NAME FROM KNOWLEDGE.TARGET_COLUMN_REGISTRY": lambda p: [
+        "SELECT TARGET_COLUMN_ID, COLUMN_NAME FROM CORE.TARGET_COLUMN_REGISTRY": lambda p: [
             {"TARGET_COLUMN_ID": "reg-email", "COLUMN_NAME": "EMAIL"}] if p[0] == "reg-cust" else [],
         "AND MODEL_ID = ? AND ACTIVE_FLAG": [{"TARGET_TABLE_ID": "old-1", "TARGET_TABLE": "DROPPED"}],
     })
     out = registry_sync.apply_spec(s, spec, "d1", "m1", 3)
     assert [r["target_table_id"] for r in out["registered"]] == ["reg-cust", cust and spec["design"]["entities"][1]["id"]]
     assert out["deactivated"] == ["LEGACY_TABLE", "DROPPED"]
-    update = s.find("UPDATE KNOWLEDGE.TARGET_TABLE_REGISTRY SET TARGET_DATABASE")[0][1]
+    update = s.find("UPDATE CORE.TARGET_TABLE_REGISTRY SET TARGET_DATABASE")[0][1]
     assert update[:6] == ["SILVER", "SALES", "DIM_CUSTOMER", "DIMENSION", "one row per customer", '["CUSTOMER_ID"]']
     assert update[9:11] == ["m1", 3] and update[-1] == "reg-cust"
     model_spec = json.loads(update[8])
     assert model_spec["workbench"]["primary_key"] == ["CUSTOMER_ID"] and model_spec["primary_key"] == ["CUSTOMER_ID"]
-    merge = next(p for sq, p in s.find("MERGE INTO KNOWLEDGE.TARGET_COLUMN_REGISTRY"))
+    merge = next(p for sq, p in s.find("MERGE INTO CORE.TARGET_COLUMN_REGISTRY"))
     assert "reg-email" in merge and "TRUE" in merge  # the registered EMAIL keeps its id; PII is written
-    delete = s.find("DELETE FROM KNOWLEDGE.TARGET_COLUMN_REGISTRY WHERE TARGET_TABLE_ID = ? AND TARGET_COLUMN_ID NOT IN")[0][1]
+    delete = s.find("DELETE FROM CORE.TARGET_COLUMN_REGISTRY WHERE TARGET_TABLE_ID = ? AND TARGET_COLUMN_ID NOT IN")[0][1]
     assert delete[0] == "reg-cust" and "reg-email" in delete and len(delete) == 4  # retired OLD_FLAG is not kept
     assert s.find("SET ACTIVE_FLAG = FALSE, MODEL_ID = ?, MODEL_VERSION = ?")[0][1] == ["m1", 3, "reg-legacy"]
 
 
 def test_apply_model_version_only_applies_approved_versions():
-    s = Session({"JOIN GOVERNANCE.DOMAIN_MODEL M": [{"SPEC": json.dumps(spec_fixture()), "STATUS": "IN_REVIEW", "VERSION": 2,
+    s = Session({"JOIN CORE.DOMAIN_MODEL M": [{"SPEC": json.dumps(spec_fixture()), "STATUS": "IN_REVIEW", "VERSION": 2,
                                                      "DOMAIN_ID": "d1", "DOMAIN_NAME": "SALES"}]})
     with pytest.raises(AssertionError, match="only an approved version"):
         registry_sync.apply_model_version(s, "m1", 2)
@@ -569,7 +569,7 @@ def test_api_maps_conflicts_and_missing_tables(api):
     assert r.status_code == 409 and "saved by ANA" in r.json()["detail"]
 
     def gone(session, layer="SILVER"):
-        raise RuntimeError("Object 'GOVERNANCE.DOMAIN_MODEL' does not exist or not authorized")
+        raise RuntimeError("Object 'CORE.DOMAIN_MODEL' does not exist or not authorized")
 
     mp.setattr(dm, "list_models", gone)
     assert c.get("/api/hub/domain-models").json() == {"models": [], "deployed": False}
@@ -581,7 +581,7 @@ def test_api_approve_applies_to_the_registry(api):
     mp.setattr(dm, "approve", lambda s, m, v, user, ack: seen.update(user=user, ack=ack) or {"status": "APPROVED"})
     mp.setattr(wb, "_source_call", lambda db, proc, fn, *a: seen.update(proc=proc, args=a) or {"registered": [1]})
     body = c.post("/api/hub/domain-models/m1/versions/3/approve", json={"acknowledge_breaking": True}).json()
-    assert seen == {"user": "LEE", "ack": True, "proc": "CALL MODELING.APPLY_DOMAIN_MODEL(%s, %s)", "args": ("m1", 3)}
+    assert seen == {"user": "LEE", "ack": True, "proc": "CALL CORE.APPLY_DOMAIN_MODEL(%s, %s)", "args": ("m1", 3)}
     assert body == {"status": "APPROVED", "registry": {"applied": True, "registered": [1]}, "runs": []}
 
     def boom(*a):
@@ -628,7 +628,7 @@ def test_legacy_hub_never_writes_a_canonical_model(monkeypatch):
         user = "ana"
 
         def query(self, sql, params=()):
-            if "FROM GOVERNANCE.DOMAIN_MODEL WHERE MODEL_ID" in sql:
+            if "FROM CORE.DOMAIN_MODEL WHERE MODEL_ID" in sql:
                 return [{"x": 1}]
             return []
 
@@ -705,7 +705,7 @@ def test_impact_finds_downstream_references_and_fails_soft():
 
     def query(sql, params):
         seen.append((sql, params))
-        if "CONTRACT.STTM_LINE" in sql and params[0] == "DIM_CUSTOMER":
+        if "CORE.STTM_LINE" in sql and params[0] == "DIM_CUSTOMER":
             return [{"ENTITY": "DIM_CUSTOMER", "COLUMN_NAME": "EMAIL", "RUN_ID": "r1"}]
         if "DQ_CHECKS_CATALOG" in sql:
             raise RuntimeError("Object does not exist")

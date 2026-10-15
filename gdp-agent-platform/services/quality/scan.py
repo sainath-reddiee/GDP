@@ -6,7 +6,7 @@ their own statement (multi-column duplicates, references, schema, custom SQL) ru
 also collect up to 20 sample rows, with PII columns masked. When the model is not built yet, the scan falls back to
 the source backtest (services/quality/backtest.py) so the reviewer still sees today's data.
 
-Results go to QUALITY.CHECK_RUN (one row per scan) and QUALITY.CHECK_RESULT (one row per check), so a run's quality
+Results go to CORE.CHECK_RUN (one row per scan) and CORE.CHECK_RESULT (one row per check), so a run's quality
 can be reviewed and trended at any time.
 """
 
@@ -291,7 +291,7 @@ def target_fqn(session, sttm: Dict[str, Any]) -> Optional[str]:
     from services.source.identifiers import sql_ident
 
     design = variant(sttm.get("TABLE_DESIGN")) or {}
-    found = _rows(session, """SELECT TARGET_DATABASE, TARGET_SCHEMA, TARGET_TABLE FROM KNOWLEDGE.TARGET_TABLE_REGISTRY
+    found = _rows(session, """SELECT TARGET_DATABASE, TARGET_SCHEMA, TARGET_TABLE FROM CORE.TARGET_TABLE_REGISTRY
                                WHERE TARGET_TABLE_ID = ?""", [sttm.get("TARGET_TABLE_ID")]) if sttm.get("TARGET_TABLE_ID") else []
     if not found:
         return None
@@ -305,7 +305,7 @@ def _store(session, scan: Dict[str, Any], results: List[Dict[str, Any]]) -> None
     # insert_rows binds None as '' so NULLIF(...) keeps empty values NULL (Snowpark would bind None as 'None')
     from services.common.sql import insert_rows
 
-    insert_rows(session, "QUALITY.CHECK_RUN",
+    insert_rows(session, "CORE.CHECK_RUN",
                 ["SCAN_ID", "RUN_ID", "STTM_ID", "TARGET", "MODE", "DURATION_MS", "CHECKS", "PASSED", "WARNED", "FAILED",
                  "NOT_EVALUATED", "ERRORS", "HEALTH", "ROWS_SCANNED", "TRIGGERED_BY"],
                 ["?", "?", "NULLIF(?, '')", "?", "?", "?::NUMBER", "?::NUMBER", "?::NUMBER", "?::NUMBER", "?::NUMBER",
@@ -313,7 +313,7 @@ def _store(session, scan: Dict[str, Any], results: List[Dict[str, Any]]) -> None
                 [[scan["scan_id"], scan["run_id"], scan.get("sttm_id"), scan["target"], scan["mode"], scan["duration_ms"],
                   scan["checks"], scan["passed"], scan["warned"], scan["failed"], scan["not_evaluated"], scan["errors"],
                   scan["health"], scan.get("rows_scanned"), scan.get("triggered_by") or "UI"]])
-    insert_rows(session, "QUALITY.CHECK_RESULT",
+    insert_rows(session, "CORE.CHECK_RESULT",
                 ["RESULT_ID", "SCAN_ID", "RUN_ID", "EXPECTATION_ID", "TARGET_TABLE", "TARGET_COLUMN", "CHECK_TYPE", "KIND",
                  "DIMENSION", "SEVERITY", "OUTCOME", "MEASURED", "THRESHOLD", "FAILED_ROWS", "DETAIL", "SAMPLE_ROWS", "SQL_TEXT",
                  "DURATION_MS"],
@@ -343,7 +343,7 @@ def run_scan(session, run_id: str, triggered_by: str = "UI") -> Dict[str, Any]:
     sttm = _current_sttm(session, run_id)
     lines = _lines(session, sttm["STTM_ID"])
     stored = _rows(session, """SELECT EXPECTATION_ID, TARGET_TABLE, TARGET_COLUMN, CHECK_TYPE, CHECK_DEFINITION, SEVERITY
-                                 FROM CONTRACT.SODA_EXPECTATION_REGISTRY
+                                 FROM CORE.SODA_EXPECTATION_REGISTRY
                                 WHERE RUN_ID = ? AND IS_CURRENT AND STATUS <> 'REJECTED' ORDER BY CHECK_TYPE""", [run_id])
     checks = [{"expectation_id": r["EXPECTATION_ID"], "target_table": r["TARGET_TABLE"],
                "target_column": r["TARGET_COLUMN"], "check_type": r["CHECK_TYPE"],
@@ -424,7 +424,7 @@ def _scan_model(session, run_id: Optional[str], checks: List[Dict[str, Any]], li
                 value = None if raw is None else float(raw)
                 previous = None
                 if d.get("kind") == "change_over_time" and run_id:
-                    prior = _rows(session, """SELECT ROWS_SCANNED FROM QUALITY.CHECK_RUN
+                    prior = _rows(session, """SELECT ROWS_SCANNED FROM CORE.CHECK_RUN
                                                WHERE RUN_ID = ? AND MODE = 'MODEL' AND ROWS_SCANNED IS NOT NULL
                                                ORDER BY STARTED_AT DESC LIMIT 1""", [run_id])
                     previous = float(prior[0]["ROWS_SCANNED"]) if prior else None
@@ -481,9 +481,9 @@ def _remember_failures(session, run_id: str, sttm: Dict[str, Any], results: List
         return
     try:
         before = {r["EXPECTATION_ID"] for r in _rows(session, """
-            SELECT EXPECTATION_ID FROM QUALITY.CHECK_RESULT
+            SELECT EXPECTATION_ID FROM CORE.CHECK_RESULT
              WHERE RUN_ID = ? AND OUTCOME = 'FAIL'
-               AND SCAN_ID = (SELECT SCAN_ID FROM QUALITY.CHECK_RUN WHERE RUN_ID = ?
+               AND SCAN_ID = (SELECT SCAN_ID FROM CORE.CHECK_RUN WHERE RUN_ID = ?
                               ORDER BY STARTED_AT DESC LIMIT 1 OFFSET 1)""", [run_id, run_id])}
     except Exception:
         return

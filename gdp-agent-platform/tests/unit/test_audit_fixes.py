@@ -142,7 +142,7 @@ def test_qa_results_take_the_latest_result_per_test():
 
     def query(sql, params):
         calls.append((sql, params))
-        if "FROM QUALITY.QA_RUN WHERE" in sql:
+        if "FROM CORE.QA_RUN WHERE" in sql:
             return [{"qa_run_id": "q2", "sttm_id": "s1"}]
         return [{"test_id": "QA-1", "outcome": "FAIL", "severity": "HIGH"}]
 

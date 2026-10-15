@@ -13,7 +13,7 @@ with the pack's newest version (sync_decision):
              (publish it to Git to bring the repository up to date)
   IN_SYNC    the file now holds what the app's newest version holds (its pull request was merged) -> record the hash
   CONFLICT   the file changed since the app edits and differs from them -> nothing is overwritten; a
-             GOVERNANCE.QA_PACK_SYNC row records the repository version for someone to resolve: take the repository
+             CORE.QA_PACK_SYNC row records the repository version for someone to resolve: take the repository
              version as a new draft (reviewed and approved like any change), or keep the app version.
 """
 
@@ -27,7 +27,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from services.common.sql import clip, rows
 
-SYNC = "GOVERNANCE.QA_PACK_SYNC"
+SYNC = "CORE.QA_PACK_SYNC"
 
 
 def repo_sha(text: str) -> str:
@@ -138,8 +138,8 @@ def keep_app(session, pack_id: str, sync_id: str, user: str) -> Dict[str, Any]:
     deploy treats the app as ahead until the file changes again (publish the pack to Git to bring the file up to
     date)."""
     s = _open(session, pack_id, sync_id)
-    session.sql("""UPDATE GOVERNANCE.DOMAIN_QA_PACKS SET REPO_SHA = ?, REPO_PATH = COALESCE(REPO_PATH, NULLIF(?, ''))
-                    WHERE PACK_ID = ? AND VERSION = (SELECT MAX(VERSION) FROM GOVERNANCE.DOMAIN_QA_PACKS WHERE PACK_ID = ?)""",
+    session.sql("""UPDATE CORE.DOMAIN_QA_PACKS SET REPO_SHA = ?, REPO_PATH = COALESCE(REPO_PATH, NULLIF(?, ''))
+                    WHERE PACK_ID = ? AND VERSION = (SELECT MAX(VERSION) FROM CORE.DOMAIN_QA_PACKS WHERE PACK_ID = ?)""",
                 params=[s["repo_sha"], s.get("repo_path") or "", pack_id, pack_id]).collect()
     session.sql(f"""UPDATE {SYNC} SET STATUS = 'RESOLVED', RESOLUTION = 'KEEP_APP', RESOLVED_BY = ?,
                            RESOLVED_AT = CURRENT_TIMESTAMP() WHERE SYNC_ID = ?""", params=[user.upper(), sync_id]).collect()
@@ -148,5 +148,5 @@ def keep_app(session, pack_id: str, sync_id: str, user: str) -> Dict[str, Any]:
 
 def conflict_row(pack_id: str, domain_id: str, path: str, file_sha: str, content: str, app_version: int,
                  base_sha: Optional[str]) -> List[Any]:
-    """Values for a new GOVERNANCE.QA_PACK_SYNC row (the deploy inserts it with its connector cursor)."""
+    """Values for a new CORE.QA_PACK_SYNC row (the deploy inserts it with its connector cursor)."""
     return [str(uuid.uuid4()), pack_id, domain_id, clip(path, 512), file_sha, content, int(app_version), base_sha or None]

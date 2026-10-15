@@ -36,18 +36,18 @@ def domain_playbook(domain_id: str, pipeline: str = "SILVER", db: Db = Depends(c
     rules = domain_rules(domain_id, layer, db)
     changed = sorted(k for k, v in (rules.get("overrides") or {}).items() if v is not None)
     try:
-        rows = db.query("""SELECT KNOWLEDGE_TYPE, COALESCE(LAYER, 'ANY') AS LAYER, COUNT(*) AS N FROM KNOWLEDGE.DOMAIN_KNOWLEDGE
+        rows = db.query("""SELECT KNOWLEDGE_TYPE, COALESCE(LAYER, 'ANY') AS LAYER, COUNT(*) AS N FROM CORE.DOMAIN_KNOWLEDGE
                             WHERE DOMAIN_ID = %s AND IS_CURRENT AND COALESCE(STATUS, 'ACTIVE') = 'ACTIVE' GROUP BY 1, 2""",
                         (domain_id,))
     except Exception:   # before V055: every item is shared
-        rows = [{**r, "layer": "ANY"} for r in db.query("""SELECT KNOWLEDGE_TYPE, COUNT(*) AS N FROM KNOWLEDGE.DOMAIN_KNOWLEDGE
+        rows = [{**r, "layer": "ANY"} for r in db.query("""SELECT KNOWLEDGE_TYPE, COUNT(*) AS N FROM CORE.DOMAIN_KNOWLEDGE
                                                             WHERE DOMAIN_ID = %s AND IS_CURRENT AND COALESCE(STATUS, 'ACTIVE') = 'ACTIVE'
                                                             GROUP BY 1""", (domain_id,))]
     counts: dict = {}
     for r in rows:
         counts.setdefault(r["knowledge_type"], {})[str(r["layer"]).upper()] = int(r["n"])
     try:
-        model = db.query("""SELECT MODEL_ID, APPROVED_VERSION, OPEN_VERSION FROM GOVERNANCE.DOMAIN_MODEL
+        model = db.query("""SELECT MODEL_ID, APPROVED_VERSION, OPEN_VERSION FROM CORE.DOMAIN_MODEL
                              WHERE DOMAIN_ID = %s AND COALESCE(LAYER, 'SILVER') = %s""", (domain_id, layer))
     except Exception:
         model = []
@@ -67,24 +67,24 @@ def _facts(db: Db, domain_id: str, counts: dict) -> dict:
     from services.mdm import contract as mdm
     from services.modeling import spec_v2
 
-    found = db.query("SELECT DOMAIN_NAME, CONFIG:mdm AS MDM FROM KNOWLEDGE.DOMAIN_REGISTRY WHERE DOMAIN_ID = %s", (domain_id,))
+    found = db.query("SELECT DOMAIN_NAME, CONFIG:mdm AS MDM FROM CORE.DOMAIN_REGISTRY WHERE DOMAIN_ID = %s", (domain_id,))
     if not found:
         raise HTTPException(404, "domain not found")
     contract = found[0].get("mdm")
     contract = json.loads(contract) if isinstance(contract, str) else (contract or {})
     models = {r["layer"]: r for r in db.query("""SELECT MODEL_ID, APPROVED_VERSION, COALESCE(LAYER, 'SILVER') AS LAYER
-                                                  FROM GOVERNANCE.DOMAIN_MODEL WHERE DOMAIN_ID = %s""", (domain_id,))}
+                                                  FROM CORE.DOMAIN_MODEL WHERE DOMAIN_ID = %s""", (domain_id,))}
     gold = models.get("GOLD") or {}
     tables = []
     if gold.get("approved_version"):
-        spec = db.query("SELECT SPEC FROM GOVERNANCE.MODEL_DESIGNS WHERE MODEL_ID = %s AND VERSION = %s",
+        spec = db.query("SELECT SPEC FROM CORE.MODEL_DESIGNS WHERE MODEL_ID = %s AND VERSION = %s",
                         (gold["model_id"], int(gold["approved_version"])))
         if spec:
             raw = spec[0]["spec"]
             norm = spec_v2.active(spec_v2.normalize_v2(json.loads(raw) if isinstance(raw, str) else raw or {}, gold["model_id"]))
             tables = [{"entity": e["entity_name"], "columns": [a["name"].upper() for a in e.get("attributes") or []]}
                       for e in norm["design"]["entities"] if not e.get("conformed_from")]
-    consumers = [r["domain_name"] for r in db.query("""SELECT DOMAIN_NAME FROM KNOWLEDGE.DOMAIN_REGISTRY WHERE ACTIVE_FLAG
+    consumers = [r["domain_name"] for r in db.query("""SELECT DOMAIN_NAME FROM CORE.DOMAIN_REGISTRY WHERE ACTIVE_FLAG
                                                         AND ARRAY_CONTAINS(%s::VARIANT, TRANSFORM(COALESCE(CONFIG:mdm:consumes, ARRAY_CONSTRUCT()), c -> c:domain))""",
                                                      (found[0]["domain_name"],))] if str(contract.get("role") or "").upper() == "MASTERED" else []
     return {"role": contract.get("role"), "consumes": contract.get("consumes") or [],
@@ -103,7 +103,7 @@ def layer_readiness(domain_id: str, layer: str, db: Db, counts: dict) -> list:
 @router.get("/api/domains/{domain_id}/mdm-layer")
 def mdm_layer(domain_id: str, db: Db = Depends(current_db)):
     """The MDM (Reltio) layer of a mastered domain: its readiness and the MDM rules its runs read."""
-    rows = db.query("""SELECT KNOWLEDGE_ID, TITLE, CONTENT, COALESCE(LAYER, 'ANY') AS LAYER FROM KNOWLEDGE.DOMAIN_KNOWLEDGE
+    rows = db.query("""SELECT KNOWLEDGE_ID, TITLE, CONTENT, COALESCE(LAYER, 'ANY') AS LAYER FROM CORE.DOMAIN_KNOWLEDGE
                         WHERE DOMAIN_ID = %s AND IS_CURRENT AND KNOWLEDGE_TYPE = 'EXCEPTION'
                           AND COALESCE(STATUS, 'ACTIVE') = 'ACTIVE' ORDER BY TITLE LIMIT 100""", (domain_id,))
     counts = {"EXCEPTION": {"ANY": len(rows)}}
@@ -118,7 +118,7 @@ def playbook_preview(domain_id: str, pipeline: str = "SILVER", stage: str = "MAP
     from services.knowledge.usage import domain_context
 
     layer = _layer(pipeline)
-    found = db.query("SELECT CONFIG:standard::STRING AS STANDARD FROM KNOWLEDGE.DOMAIN_REGISTRY WHERE DOMAIN_ID = %s", (domain_id,))
+    found = db.query("SELECT CONFIG:standard::STRING AS STANDARD FROM CORE.DOMAIN_REGISTRY WHERE DOMAIN_ID = %s", (domain_id,))
     if not found:
         raise HTTPException(404, "domain not found")
     standard = normalize_standard(found[0].get("standard")) or "GDP"

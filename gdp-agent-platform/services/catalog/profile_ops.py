@@ -1,7 +1,7 @@
 """Profiling Store governance (V041): scheduled profiling, comparing any two passes, and reviewed column annotations.
 
 Schedules. A schedule profiles a database.schema (every table, or a list) on a cron. It is a Snowflake task
-PROFILE.PROF_<hash> that calls PROFILE.RUN_SCHEDULED_PROFILE(SCHEDULE_ID) (owner's rights: the owner role needs SELECT
+CORE.PROF_<hash> that calls CORE.RUN_SCHEDULED_PROFILE(SCHEDULE_ID) (owner's rights: the owner role needs SELECT
 on the scheduled tables). Each run uses the normal in-place profiling path (the cache skips tables whose fingerprint
 did not change unless FORCE_REFRESH), and records the outcome on the schedule, including the tables whose newest
 pass drifted from the one before.
@@ -13,7 +13,7 @@ Annotations. What people know about a column that the profiler cannot tell (desc
 class, semantic type, accepted values) is proposed, then approved or rejected by another person. An approved
 annotation supersedes the previous one for the column and overrides the profiler's guess in every profile view. When
 the table is an entity of its domain's approved model and has the column, the annotation is also proposed to the
-model as a GOVERNANCE.MODEL_CHANGE (SOURCE 'ANNOTATION') carrying the fields as a PATCH; modelers merge it into the
+model as a CORE.MODEL_CHANGE (SOURCE 'ANNOTATION') carrying the fields as a PATCH; modelers merge it into the
 draft from the Model Workbench (services/modeling/run_link.merge_change applies the patch), so the model only changes
 through its own review.
 """
@@ -27,10 +27,11 @@ import uuid
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from services.common.sql import clip, insert_rows, rows, scalar, variant
+from services.common.platform_schema import fqn
 
-SCHEDULES = "GOVERNANCE.PROFILE_SCHEDULE"
-ANNOTATIONS = "GOVERNANCE.PROFILE_ANNOTATION"
-CHANGES = "GOVERNANCE.MODEL_CHANGE"
+SCHEDULES = "CORE.PROFILE_SCHEDULE"
+ANNOTATIONS = "CORE.PROFILE_ANNOTATION"
+CHANGES = "CORE.MODEL_CHANGE"
 CRON = re.compile(r"^\s*(\S+\s+){4}\S+(\s+[A-Za-z_]+(?:/[A-Za-z_]+)*)?\s*$")
 NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_$]*$")
 CLASS = re.compile(r"^[A-Z][A-Z0-9_]{1,63}$")
@@ -68,11 +69,11 @@ def schedule_sql(database: str, schedule_id: str, cron: str, warehouse: str) -> 
     assert NAME.match(warehouse or ""), "unsafe warehouse name"
     assert CRON.match(cron or ""), "cron needs five fields and an optional time zone, e.g. 0 5 * * * UTC"
     uuid.UUID(schedule_id)
-    task = f"{database}.PROFILE.{task_name(schedule_id)}"
+    task = fqn(database, task_name(schedule_id))
     return task, [
         f"CREATE OR REPLACE TASK {task} WAREHOUSE = {warehouse} SCHEDULE = 'USING CRON {cron.strip()}' "
         f"COMMENT = 'Profiling Store: scheduled profiling {schedule_id}' "
-        f"AS CALL {database}.PROFILE.RUN_SCHEDULED_PROFILE('{schedule_id}')",
+        f"AS CALL {fqn(database, 'RUN_SCHEDULED_PROFILE')}('{schedule_id}')",
         f"ALTER TASK {task} RESUME",
     ]
 
@@ -193,7 +194,7 @@ def _drifted(session, database: str, schema: str, tables: Sequence[str]) -> List
     out = []
     for t in tables[:200]:
         try:
-            passes = [r["PROFILE_ID"] for r in rows(session, """SELECT PROFILE_ID FROM GOVERNANCE.DATA_PROFILES
+            passes = [r["PROFILE_ID"] for r in rows(session, """SELECT PROFILE_ID FROM CORE.DATA_PROFILES
                                                                  WHERE UPPER(DATABASE_NAME) = UPPER(?) AND UPPER(SCHEMA_NAME) = UPPER(?)
                                                                    AND UPPER(TABLE_NAME) = UPPER(?)
                                                                  GROUP BY PROFILE_ID ORDER BY MAX(PROFILED_AT) DESC LIMIT 2""",
@@ -203,7 +204,7 @@ def _drifted(session, database: str, schema: str, tables: Sequence[str]) -> List
             cols = {}
             for pid in passes:
                 cols[pid] = [_low(r) for r in rows(session, """SELECT COLUMN_NAME, DATA_TYPE, NULL_PCT, DISTINCT_COUNT
-                                                                 FROM GOVERNANCE.DATA_PROFILES WHERE PROFILE_ID = ?""", [pid])]
+                                                                 FROM CORE.DATA_PROFILES WHERE PROFILE_ID = ?""", [pid])]
             drift = drift_between(cols[passes[1]], cols[passes[0]])
             if drift["changed"]:
                 out.append({"table": t, "columns": {k: v for k, v in list(drift["columns"].items())[:20]}})
@@ -213,7 +214,7 @@ def _drifted(session, database: str, schema: str, tables: Sequence[str]) -> List
 
 
 def run_scheduled(session, schedule_id: str) -> Dict[str, Any]:
-    """PROFILE.RUN_SCHEDULED_PROFILE (owner's rights, called by the schedule's task or Run now)."""
+    """CORE.RUN_SCHEDULED_PROFILE (owner's rights, called by the schedule's task or Run now)."""
     from services.profiling.procedures import profile_source_tables, source_table_refs
 
     found = rows(session, f"""SELECT SOURCE_SYSTEM_ID, DATABASE_NAME, SCHEMA_NAME, TABLES, FORCE_REFRESH, ENABLED
@@ -273,7 +274,7 @@ def list_annotations(session, table: Optional[str] = None, status: Optional[str]
 def _detected(session, table: str, column: str) -> Dict[str, Any]:
     db, schema, name = _parts(table)
     try:
-        found = rows(session, """SELECT DESCRIPTION, PII_CLASSIFICATION, SEMANTIC_TYPE FROM GOVERNANCE.DATA_PROFILES
+        found = rows(session, """SELECT DESCRIPTION, PII_CLASSIFICATION, SEMANTIC_TYPE FROM CORE.DATA_PROFILES
                                   WHERE UPPER(DATABASE_NAME) = UPPER(?) AND UPPER(SCHEMA_NAME) = UPPER(?)
                                     AND UPPER(TABLE_NAME) = UPPER(?) AND UPPER(COLUMN_NAME) = UPPER(?)
                                   ORDER BY PROFILED_AT DESC LIMIT 1""", [db, schema, name, column])
@@ -343,8 +344,8 @@ def _model_entity(session, table: str) -> Optional[Dict[str, Any]]:
     if not domain:
         return None
     try:
-        found = rows(session, """SELECT M.MODEL_ID, M.APPROVED_VERSION, D.SPEC FROM GOVERNANCE.DOMAIN_MODEL M
-                                   JOIN GOVERNANCE.MODEL_DESIGNS D ON D.MODEL_ID = M.MODEL_ID AND D.VERSION = M.APPROVED_VERSION
+        found = rows(session, """SELECT M.MODEL_ID, M.APPROVED_VERSION, D.SPEC FROM CORE.DOMAIN_MODEL M
+                                   JOIN CORE.MODEL_DESIGNS D ON D.MODEL_ID = M.MODEL_ID AND D.VERSION = M.APPROVED_VERSION
                                   WHERE M.DOMAIN_ID = ? AND M.APPROVED_VERSION IS NOT NULL AND COALESCE(M.LAYER, 'SILVER') = 'SILVER'""", [domain])
     except Exception:
         return None
@@ -436,12 +437,12 @@ def learn_column_rule(session, a: Dict[str, Any], user: str) -> int:
     db, schema, table = (_parts(a["table_fqn"]) + ["", "", ""])[:3]
     try:
         systems = rows(session, """SELECT DISTINCT L.SOURCE_SYSTEM_ID, S.DOMAIN_ID
-                                     FROM SOURCE.LANDING_TABLE_REGISTRY L
-                                     LEFT JOIN SOURCE.SOURCE_REGISTRY S ON S.SOURCE_SYSTEM_ID = L.SOURCE_SYSTEM_ID
+                                     FROM CORE.LANDING_TABLE_REGISTRY L
+                                     LEFT JOIN CORE.SOURCE_REGISTRY S ON S.SOURCE_SYSTEM_ID = L.SOURCE_SYSTEM_ID
                                     WHERE UPPER(L.SOURCE_DATABASE) = UPPER(?) AND UPPER(L.SOURCE_SCHEMA) = UPPER(?)
                                       AND UPPER(L.SOURCE_TABLE) = UPPER(?)
                                    UNION
-                                   SELECT SOURCE_SYSTEM_ID, DOMAIN_ID FROM SOURCE.SOURCE_REGISTRY
+                                   SELECT SOURCE_SYSTEM_ID, DOMAIN_ID FROM CORE.SOURCE_REGISTRY
                                     WHERE UPPER(CONFIGURATION_JSON:database::VARCHAR) = UPPER(?)
                                       AND UPPER(CONFIGURATION_JSON:schema::VARCHAR) = UPPER(?)""",
                        [db, schema, table, db, schema])

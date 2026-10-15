@@ -18,7 +18,7 @@ triage():
 5. moves a NEW case to TRIAGED, and a TRIAGED case to FIX_PROPOSED when a fix was proposed.
 
 A triage is cached per (fingerprint, context hash, note) unless forced. Every AI call is audited
-(AUDIT.AGENT_TOOL_CALL) and costed (AUDIT.COST_USAGE, stage CASES). People are limited to RATE_LIMIT AI calls an hour
+(CORE.AGENT_TOOL_CALL) and costed (CORE.COST_USAGE, stage CASES). People are limited to RATE_LIMIT AI calls an hour
 (triage and questions; cached answers are free); the worker (actor 'system') is not limited.
 """
 
@@ -34,6 +34,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from services.cases import rules
 from services.cases.context import EVIDENCE_KINDS, build_case_context, case_label
 from services.cases.store import SqlStore
+from services.common.platform_schema import resolve
 from services.ops.redact import redact
 from services.ops.sqlio import as_db, as_session
 
@@ -473,7 +474,7 @@ def repro_tests(sess: Any, output: Dict[str, Any], table: Optional[Dict[str, Any
 
 def _repo_for_path(db: Any, path: str, repo_ids: List[str]) -> Optional[Dict[str, Any]]:
     found = db.query("""SELECT F.REPO_ID, F.PATH, F.COMMIT_SHA, R.NAME, R.GIT_URL, R.PROVIDER, R.BRANCH, R.GIT_REPOSITORY
-                          FROM CODE.CODE_FILE F JOIN CODE.REPO R ON R.REPO_ID = F.REPO_ID
+                          FROM CORE.CODE_FILE F JOIN CORE.REPO R ON R.REPO_ID = F.REPO_ID
                          WHERE F.PATH = %s AND R.ENABLED ORDER BY F.INDEXED_AT DESC LIMIT 10""", (path,))
     for r in found:
         if not repo_ids or r.get("repo_id") in repo_ids:
@@ -489,7 +490,7 @@ def read_repo_file(db: Any, repo: Dict[str, Any], path: str) -> str:
     branch = str(repo.get("branch") or "main").strip().strip("/")
     if not SAFE_BRANCH.fullmatch(branch):
         raise ValueError(f"unsafe branch name: {branch}")
-    fqn = safe_fqn(str(repo.get("git_repository") or ""))
+    fqn = safe_fqn(str(resolve(repo.get("git_repository"), "git_repository") or ""))
     read = lambda sql: [next(iter(r.values()), None) for r in db.query(sql)]  # noqa: E731
     return read_repo_text(read, fqn, branch_segment(branch), path)
 
@@ -630,7 +631,7 @@ def load_case(store: Any, case_id: str) -> Dict[str, Any]:
 def _open_cases(db: Any, case: Dict[str, Any]) -> List[Dict[str, Any]]:
     opened = ", ".join(f"'{s}'" for s in rules.OPEN_STATUSES)   # constants
     try:
-        return db.query(f"""SELECT CASE_ID, CASE_NUMBER, TITLE, FINGERPRINT FROM CASES.CASE_RECORD
+        return db.query(f"""SELECT CASE_ID, CASE_NUMBER, TITLE, FINGERPRINT FROM CORE.CASE_RECORD
                              WHERE EQUAL_NULL(DOMAIN_ID, %s) AND STATUS IN ({opened}) AND CASE_ID <> %s
                              ORDER BY OPENED_AT DESC LIMIT 500""", (case.get("domain_id"), case["case_id"]))
     except Exception:
@@ -820,10 +821,10 @@ def auto_triage(db: Any, limit: int = AUTO_LIMIT, triage_fn: Optional[Callable[.
         return {"triaged": 0, "failed": 0}
     rows = db.query(f"""
         SELECT C.CASE_ID, C.STATUS, C.SEVERITY, C.OPENED_AT, (C.AI IS NOT NULL) AS HAS_AI,
-               EXISTS (SELECT 1 FROM CASES.CASE_EVENT E WHERE E.CASE_ID = C.CASE_ID
+               EXISTS (SELECT 1 FROM CORE.CASE_EVENT E WHERE E.CASE_ID = C.CASE_ID
                          AND E.KIND IN ('triage_attempted', 'triage_failed')
                          AND E.CREATED_AT >= DATEADD(minute, -{BACKOFF_MINUTES}, CURRENT_TIMESTAMP())) AS RECENT_ATTEMPT
-          FROM CASES.CASE_RECORD C
+          FROM CORE.CASE_RECORD C
          WHERE C.STATUS = 'NEW' AND C.AI IS NULL AND C.OPENED_AT >= DATEADD(hour, -72, CURRENT_TIMESTAMP())
          ORDER BY C.SEVERITY, C.OPENED_AT LIMIT 100""")
     store = SqlStore(db)

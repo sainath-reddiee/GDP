@@ -1,4 +1,4 @@
-"""CODEGEN.VALIDATE_DBT: VALIDATION_PENDING -> VALIDATION_RUNNING -> PASSED/FAILED -> DBT_REVIEW."""
+"""CORE.VALIDATE_DBT: VALIDATION_PENDING -> VALIDATION_RUNNING -> PASSED/FAILED -> DBT_REVIEW."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ import uuid
 from typing import Any, Dict, List
 
 from services.common.audit import tool_call
+from services.common.platform_schema import fqn, resolve
 from services.common.sql import clip, insert_rows, rows, scalar, variant
 from services.common.stage import Stage
 from services.common.standard import run_pipeline, run_standard
@@ -15,7 +16,7 @@ from services.validation import checks
 
 
 def _current_generation(session, run_id: str) -> Dict[str, Any]:
-    found = rows(session, """SELECT * FROM CODEGEN.DBT_GENERATION_REGISTRY
+    found = rows(session, """SELECT * FROM CORE.DBT_GENERATION_REGISTRY
                              WHERE RUN_ID = ? AND GENERATION_STATUS IN ('GENERATED', 'GENERATING')
                              ORDER BY GENERATION_VERSION DESC LIMIT 1""", [run_id])
     assert found, "no generated dbt project for this run"
@@ -24,7 +25,7 @@ def _current_generation(session, run_id: str) -> Dict[str, Any]:
 
 def _files(session, generation_id: str) -> Dict[str, str]:
     return {r["FILE_PATH"]: r["CONTENT"] for r in rows(
-        session, "SELECT FILE_PATH, CONTENT FROM CODEGEN.GENERATED_ARTIFACT WHERE GENERATION_ID = ?",
+        session, "SELECT FILE_PATH, CONTENT FROM CORE.GENERATED_ARTIFACT WHERE GENERATION_ID = ?",
         [generation_id])}
 
 
@@ -36,7 +37,7 @@ def _sttm_lines(session, sttm_id: str) -> List[Dict[str, Any]]:
         "accepted_values": variant(r["ACCEPTED_VALUES"]) or [],
         "required": not r["NULLABLE_RULE"] and r["MAPPING_TYPE"] != "UNMAPPED",
         "business_definition": r["BUSINESS_DEFINITION"],
-    } for r in rows(session, "SELECT * FROM CONTRACT.STTM_LINE WHERE STTM_ID = ?", [sttm_id])]
+    } for r in rows(session, "SELECT * FROM CORE.STTM_LINE WHERE STTM_ID = ?", [sttm_id])]
 
 
 UNAVAILABLE_MARKERS = ("unsupported feature", "not supported", "insufficient privileges",
@@ -52,9 +53,9 @@ def _compile(session, generation: Dict[str, Any], run_id: str) -> Dict[str, Any]
     """
     database = scalar(session, "SELECT CURRENT_DATABASE()")
     safe = "GDP_" + run_id.replace("-", "")[:18] + "_V" + str(int(generation["GENERATION_VERSION"]))
-    stage_path = generation["STAGE_PATH"] or ""
+    stage_path = resolve(generation["STAGE_PATH"] or "", "stage") or ""  # stored before V061 as CODEGEN.DBT_STAGE/...
     source = stage_path if stage_path.startswith("@") else f"@{database}.{stage_path}"
-    name = f"{database}.CODEGEN.{safe}"
+    name = fqn(database, safe)
     try:
         session.sql(
             f"CREATE OR REPLACE DBT PROJECT {name} FROM '{source}' "
@@ -122,7 +123,7 @@ def _remember_fixed(session, run: Dict[str, Any], run_id: str) -> None:
     if not run.get("DOMAIN_ID"):
         return
     try:
-        found = rows(session, """SELECT RESULT_JSON FROM CODEGEN.VALIDATION_RUN
+        found = rows(session, """SELECT RESULT_JSON FROM CORE.VALIDATION_RUN
                                   WHERE RUN_ID = ? AND VALIDATION_TYPE = 'SUMMARY' AND STATUS = 'FAILED'
                                   ORDER BY COMPLETED_AT DESC LIMIT 1""", [run_id])
         if not found:
@@ -159,7 +160,7 @@ def validate_dbt(session, run_id: str) -> Dict[str, Any]:
             validation_id = str(uuid.uuid4())
 
             def write(_event_id: str) -> None:
-                insert_rows(session, "CODEGEN.VALIDATION_RUN",
+                insert_rows(session, "CORE.VALIDATION_RUN",
                             ["VALIDATION_ID", "RUN_ID", "GENERATION_ID", "VALIDATION_TYPE", "STATUS",
                              "ERROR_COUNT", "WARNING_COUNT", "RESULT_JSON", "COMPLETED_AT"],
                             ["?", "?", "?", "?", "?", "?::NUMBER", "?::NUMBER", "PARSE_JSON(?)",

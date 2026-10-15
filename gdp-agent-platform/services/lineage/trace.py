@@ -1,8 +1,8 @@
 """End-to-end lineage (pure): Source, Silver pre-MDM, MDM, Silver post-MDM, Gold, at entity and column level.
 
 Edges come from where the platform already holds the truth, so nothing drifts:
-  INGEST       a source object landed as a table (SOURCE.LANDING_TABLE_REGISTRY)
-  MAP          an approved STTM line: source column to silver target column (CONTRACT.STTM_LINE)
+  INGEST       a source object landed as a table (CORE.LANDING_TABLE_REGISTRY)
+  MAP          an approved STTM line: source column to silver target column (CORE.STTM_LINE)
   MDM_MATCH    a pre-MDM record matched to the cross-reference on its source key (mastered-domain contract)
   MDM_GOLDEN   the cross-reference's mastered id to the golden record (contract)
   BUILD        the golden record to the gold dimension, or a silver column to a gold column (gold generation)

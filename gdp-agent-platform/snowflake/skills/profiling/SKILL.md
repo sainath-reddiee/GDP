@@ -7,7 +7,7 @@ description: Deterministic profiling of landed tables and how to read the profil
 
 # Profiling
 
-`PROFILE.RUN_PROFILING` computes every statistic in SQL: row, null (including placeholder values such as N/A),
+`CORE.RUN_PROFILING` computes every statistic in SQL: row, null (including placeholder values such as N/A),
 distinct, duplicate counts, min/max, length and numeric statistics, frequency distribution, character patterns,
 date formats, enum candidates, potential keys and foreign keys. The LLM is used once per table, only to write
 column descriptions and to name a semantic type when the deterministic rules cannot.

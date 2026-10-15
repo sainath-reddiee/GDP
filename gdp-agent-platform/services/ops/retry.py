@@ -128,7 +128,7 @@ def check_allowed(value: Optional[str], source: str, override_reason: Optional[s
 
 
 def human_mark(db: Any, incident_id: str) -> Optional[Dict[str, Any]]:
-    found = db.query("""SELECT ACTOR, DETAIL FROM OPS.INCIDENT_EVENT WHERE INCIDENT_ID = %s AND KIND = 'retry_marked'
+    found = db.query("""SELECT ACTOR, DETAIL FROM CORE.INCIDENT_EVENT WHERE INCIDENT_ID = %s AND KIND = 'retry_marked'
                          ORDER BY CREATED_AT DESC LIMIT 1""", (incident_id,))
     if not found:
         return None
@@ -145,7 +145,7 @@ def failed_tasks(db: Any, incident: Dict[str, Any]) -> List[str]:
     """The task to retry: the incident's task, else the run's failed tasks (latest try)."""
     if incident.get("task_id"):
         return [incident["task_id"]]
-    found = db.query("""SELECT DISTINCT TASK_ID FROM OPS.TASK_RUN WHERE ENV_ID = %s AND DAG_ID = %s AND RUN_ID = %s
+    found = db.query("""SELECT DISTINCT TASK_ID FROM CORE.TASK_RUN WHERE ENV_ID = %s AND DAG_ID = %s AND RUN_ID = %s
                          AND STATE IN ('failed', 'upstream_failed')
                         QUALIFY TRY_NUMBER = MAX(TRY_NUMBER) OVER (PARTITION BY TASK_ID, MAP_INDEX)
                         ORDER BY TASK_ID LIMIT 50""", (incident["env_id"], incident["dag_id"], incident.get("run_id")))
@@ -165,7 +165,7 @@ def retry(db: Any, incident_id: str, *, dry_run: bool, user: str, downstream: bo
         raise RetryError(f"Incident {incident_id} not found", 404)
     if not incident.get("run_id"):
         raise RetryError("This incident has no Airflow run to retry (a late DAG has nothing to clear).", 409)
-    env = db.query("SELECT ENV_ID, MWAA_ENV, REGION FROM OPS.AIRFLOW_ENV WHERE ENV_ID = %s", (incident["env_id"],))
+    env = db.query("SELECT ENV_ID, MWAA_ENV, REGION FROM CORE.AIRFLOW_ENV WHERE ENV_ID = %s", (incident["env_id"],))
     if not env:
         raise RetryError(f"Airflow environment {incident['env_id']} not found", 404)
     env = env[0]

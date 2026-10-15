@@ -24,7 +24,7 @@ def _q(db: Db):
 
 def _domain(db: Db, domain_id: str) -> dict:
     found = db.query("SELECT DOMAIN_ID, DOMAIN_NAME, DESCRIPTION, OWNER, ACTIVE_FLAG, VERSION, CONFIG "
-                     "FROM KNOWLEDGE.DOMAIN_REGISTRY WHERE DOMAIN_ID = %s", (domain_id,))
+                     "FROM CORE.DOMAIN_REGISTRY WHERE DOMAIN_ID = %s", (domain_id,))
     if not found:
         raise HTTPException(404, "domain not found")
     row = found[0]
@@ -43,10 +43,10 @@ def domain_cards(db: Db = Depends(current_db)):
     """Per domain: members, the newest version (who, when, what kind), runs in the last 30 days, stale knowledge."""
     out: dict[str, dict] = {}
     try:
-        for m in db.query("SELECT DOMAIN_ID, USER_NAME, ROLE FROM KNOWLEDGE.DOMAIN_MEMBER ORDER BY ROLE, USER_NAME"):
+        for m in db.query("SELECT DOMAIN_ID, USER_NAME, ROLE FROM CORE.DOMAIN_MEMBER ORDER BY ROLE, USER_NAME"):
             out.setdefault(m["domain_id"], {}).setdefault("members", []).append({"user": m["user_name"], "role": m["role"]})
         for v in db.query("""SELECT DOMAIN_ID, VERSION, CHANGE_KIND, CHANGE_NOTE, CREATED_BY, CREATED_AT::VARCHAR AS CREATED_AT
-                               FROM KNOWLEDGE.DOMAIN_VERSION
+                               FROM CORE.DOMAIN_VERSION
                               QUALIFY ROW_NUMBER() OVER (PARTITION BY DOMAIN_ID ORDER BY VERSION DESC) = 1"""):
             out.setdefault(v["domain_id"], {})["last_change"] = v
     except Exception:
@@ -59,7 +59,7 @@ def domain_cards(db: Db = Depends(current_db)):
                                     COUNT_IF(IS_CURRENT AND STATUS = 'ACTIVE' AND (REVIEW_DUE < CURRENT_DATE() OR (VERIFIED_AT IS NULL
                                              AND COALESCE(UPDATED_AT, CREATED_AT) < DATEADD(DAY, -180, CURRENT_TIMESTAMP())))) AS STALE,
                                     COUNT_IF(IS_CURRENT AND VERIFIED_AT IS NOT NULL) AS VERIFIED
-                               FROM KNOWLEDGE.DOMAIN_KNOWLEDGE GROUP BY 1"""):
+                               FROM CORE.DOMAIN_KNOWLEDGE GROUP BY 1"""):
             out.setdefault(r["domain_id"], {}).update(inbox=int(r["inbox"]), stale=int(r["stale"]), verified=int(r["verified"]))
     except Exception:
         pass
@@ -71,7 +71,7 @@ def versions(domain_id: str, db: Db = Depends(current_db)):
     _domain(db, domain_id)
     rows = db.query("""SELECT DOMAIN_ID, VERSION, DESCRIPTION, OWNER, ACTIVE_FLAG, CONFIG_JSON, TARGETS_JSON, CHANGE_KIND,
                               CHANGE_NOTE, CREATED_BY, CREATED_AT::VARCHAR AS CREATED_AT
-                         FROM KNOWLEDGE.DOMAIN_VERSION WHERE DOMAIN_ID = %s ORDER BY VERSION""", (domain_id,))
+                         FROM CORE.DOMAIN_VERSION WHERE DOMAIN_ID = %s ORDER BY VERSION""", (domain_id,))
     out, prev = [], None
     for r in rows:
         snap = dv.from_row(r)
@@ -81,12 +81,12 @@ def versions(domain_id: str, db: Db = Depends(current_db)):
         prev = snap
     current = dv.state(_q(db), domain_id)
     pending = bool(rows) and current is not None and dv.checksum(current) != db.query(
-        "SELECT CHECKSUM FROM KNOWLEDGE.DOMAIN_VERSION WHERE DOMAIN_ID = %s ORDER BY VERSION DESC LIMIT 1", (domain_id,))[0]["checksum"]
+        "SELECT CHECKSUM FROM CORE.DOMAIN_VERSION WHERE DOMAIN_ID = %s ORDER BY VERSION DESC LIMIT 1", (domain_id,))[0]["checksum"]
     return {"versions": list(reversed(out)), "unrecorded_changes": pending}
 
 
 def _version(db: Db, domain_id: str, version: int) -> dict:
-    found = db.query("SELECT * FROM KNOWLEDGE.DOMAIN_VERSION WHERE DOMAIN_ID = %s AND VERSION = %s", (domain_id, version))
+    found = db.query("SELECT * FROM CORE.DOMAIN_VERSION WHERE DOMAIN_ID = %s AND VERSION = %s", (domain_id, version))
     if not found:
         raise HTTPException(404, f"version {version} not found")
     return dv.from_row(found[0])
@@ -112,7 +112,7 @@ def rollback(domain_id: str, version: int, body: Rollback, db: Db = Depends(curr
     old = _version(db, domain_id, version)
     _baseline(db, domain_id)
     config = dv.rollback_config(row["config"], old["config"])
-    db.execute("""UPDATE KNOWLEDGE.DOMAIN_REGISTRY SET DESCRIPTION = %s, OWNER = %s, CONFIG = PARSE_JSON(%s),
+    db.execute("""UPDATE CORE.DOMAIN_REGISTRY SET DESCRIPTION = %s, OWNER = %s, CONFIG = PARSE_JSON(%s),
                          UPDATED_AT = CURRENT_TIMESTAMP() WHERE DOMAIN_ID = %s""",
                (old["description"], old["owner"], json.dumps(config, default=str), domain_id))
     _RULES_CACHE.clear()
@@ -131,7 +131,7 @@ class DomainEdit(BaseModel):
 def edit(domain_id: str, body: DomainEdit, db: Db = Depends(current_db)):
     row = _domain(db, domain_id)
     _baseline(db, domain_id)
-    db.execute("UPDATE KNOWLEDGE.DOMAIN_REGISTRY SET DESCRIPTION = %s, OWNER = %s, UPDATED_AT = CURRENT_TIMESTAMP() "
+    db.execute("UPDATE CORE.DOMAIN_REGISTRY SET DESCRIPTION = %s, OWNER = %s, UPDATED_AT = CURRENT_TIMESTAMP() "
                "WHERE DOMAIN_ID = %s",
                (body.description if body.description is not None else row["description"],
                 (body.owner or "").strip().upper() or row["owner"], domain_id))
@@ -143,7 +143,7 @@ def edit(domain_id: str, body: DomainEdit, db: Db = Depends(current_db)):
 @router.get("/api/domains/{domain_id}/members")
 def members(domain_id: str, db: Db = Depends(current_db)):
     _domain(db, domain_id)
-    rows = db.query("""SELECT USER_NAME, ROLE, ADDED_BY, ADDED_AT::VARCHAR AS ADDED_AT FROM KNOWLEDGE.DOMAIN_MEMBER
+    rows = db.query("""SELECT USER_NAME, ROLE, ADDED_BY, ADDED_AT::VARCHAR AS ADDED_AT FROM CORE.DOMAIN_MEMBER
                         WHERE DOMAIN_ID = %s ORDER BY ARRAY_POSITION(ROLE::VARIANT, ['OWNER', 'STEWARD', 'EXPERT']), USER_NAME""",
                     (domain_id,))
     return {"members": rows, "roles": list(ROLES)}
@@ -165,13 +165,13 @@ def set_members(domain_id: str, body: Members, db: Db = Depends(current_db)):
     if not any(r == "OWNER" for _, r in wanted):  # checked after blank names are dropped, before anything is written
         raise HTTPException(400, "A domain needs at least one owner")
     current = {(r["user_name"], r["role"]) for r in db.query(
-        "SELECT USER_NAME, ROLE FROM KNOWLEDGE.DOMAIN_MEMBER WHERE DOMAIN_ID = %s", (domain_id,))}
+        "SELECT USER_NAME, ROLE FROM CORE.DOMAIN_MEMBER WHERE DOMAIN_ID = %s", (domain_id,))}
     for user, role in current - wanted:
-        db.execute("DELETE FROM KNOWLEDGE.DOMAIN_MEMBER WHERE DOMAIN_ID = %s AND USER_NAME = %s AND ROLE = %s", (domain_id, user, role))
+        db.execute("DELETE FROM CORE.DOMAIN_MEMBER WHERE DOMAIN_ID = %s AND USER_NAME = %s AND ROLE = %s", (domain_id, user, role))
     for user, role in wanted - current:
-        db.execute("INSERT INTO KNOWLEDGE.DOMAIN_MEMBER (DOMAIN_ID, USER_NAME, ROLE) VALUES (%s, %s, %s)", (domain_id, user, role))
+        db.execute("INSERT INTO CORE.DOMAIN_MEMBER (DOMAIN_ID, USER_NAME, ROLE) VALUES (%s, %s, %s)", (domain_id, user, role))
     owners = sorted(u for u, r in wanted if r == "OWNER")
-    db.execute("UPDATE KNOWLEDGE.DOMAIN_REGISTRY SET OWNER = %s WHERE DOMAIN_ID = %s", (owners[0], domain_id))
+    db.execute("UPDATE CORE.DOMAIN_REGISTRY SET OWNER = %s WHERE DOMAIN_ID = %s", (owners[0], domain_id))
     _domain_snapshot(db, domain_id, "EDIT", "Owner changed")  # only records when the registry owner changed
     return members(domain_id, db)
 
@@ -242,7 +242,7 @@ def domain_conventions_put(domain_id: str, body: ConventionsIn, pipeline: str = 
         raise HTTPException(400, "; ".join(problems))
     clean = {k: v for k, v in body.overrides.items() if v is not None and v != preset.get(k)}
     key = "conventions_gold" if gold else "conventions"
-    db.execute("""UPDATE KNOWLEDGE.DOMAIN_REGISTRY
+    db.execute("""UPDATE CORE.DOMAIN_REGISTRY
                      SET CONFIG = OBJECT_INSERT(COALESCE(CONFIG, OBJECT_CONSTRUCT()), %s, PARSE_JSON(%s), TRUE)
                    WHERE DOMAIN_ID = %s""", (key, json.dumps(clean), domain_id))
     _domain_caches_changed()

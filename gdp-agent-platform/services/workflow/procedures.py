@@ -223,7 +223,7 @@ def create_run(session, payload_json: str) -> Dict[str, Any]:
         found = _rows(
             session,
             """
-            SELECT DOMAIN_ID FROM KNOWLEDGE.TARGET_TABLE_REGISTRY
+            SELECT DOMAIN_ID FROM CORE.TARGET_TABLE_REGISTRY
              WHERE ACTIVE_FLAG AND UPPER(TARGET_TABLE) = UPPER(?) AND COALESCE(LAYER, 'SILVER') = ?
              ORDER BY TARGET_TABLE LIMIT 1
             """,
@@ -328,13 +328,13 @@ def review_transition(session, run_id: str, to_state: str, decision: str,
             return
         if from_state == "STTM_REVIEW" and to_state == "STTM_APPROVED":
             session.sql(
-                "UPDATE CONTRACT.STTM_REGISTRY SET STATUS = 'APPROVED', REVIEWED_BY = CURRENT_USER(), "
+                "UPDATE CORE.STTM_REGISTRY SET STATUS = 'APPROVED', REVIEWED_BY = CURRENT_USER(), "
                 "REVIEWED_AT = CURRENT_TIMESTAMP() WHERE RUN_ID = ? AND STATUS = 'REVIEW'",
                 params=[run_id],
             ).collect()
         if from_state == "SODA_REVIEW" and to_state == "SODA_APPROVED":
             session.sql(
-                "UPDATE CONTRACT.SODA_EXPECTATION_REGISTRY SET STATUS = 'APPROVED', REVIEWED_BY = CURRENT_USER(), "
+                "UPDATE CORE.SODA_EXPECTATION_REGISTRY SET STATUS = 'APPROVED', REVIEWED_BY = CURRENT_USER(), "
                 "REVIEWED_AT = CURRENT_TIMESTAMP() WHERE RUN_ID = ? AND IS_CURRENT AND STATUS <> 'REJECTED'",
                 params=[run_id],
             ).collect()
@@ -350,7 +350,7 @@ def review_transition(session, run_id: str, to_state: str, decision: str,
                 pass  # knowledge is a by-product; the approval itself must not fail on it
         if from_state == "DBT_REVIEW" and to_state == "DBT_APPROVED":
             session.sql(
-                "UPDATE CODEGEN.DBT_GENERATION_REGISTRY SET GENERATION_STATUS = 'APPROVED' "
+                "UPDATE CORE.DBT_GENERATION_REGISTRY SET GENERATION_STATUS = 'APPROVED' "
                 "WHERE RUN_ID = ? AND GENERATION_STATUS = 'GENERATED'",
                 params=[run_id],
             ).collect()

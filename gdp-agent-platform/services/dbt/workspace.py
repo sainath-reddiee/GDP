@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 from typing import Any, Callable, Dict, Iterable, List, Optional
 
+from services.common.platform_schema import PLATFORM_SCHEMA
+
 IDENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_$]*$")
 SAFE_QUOTED = re.compile(r"^[A-Za-z0-9_$-]+$")
 OWNED_PREFIXES = (
@@ -272,7 +274,7 @@ def discover(execute: Execute) -> Dict[str, Any]:
         projects = parse_dbt_projects(try_show(sql))
         if projects:
             break
-    publisher = bool(try_show("SHOW PROCEDURES LIKE 'PUBLISH_DBT_PR' IN SCHEMA CODEGEN"))
+    publisher = bool(try_show(f"SHOW PROCEDURES LIKE 'PUBLISH_DBT_PR' IN SCHEMA {PLATFORM_SCHEMA}"))
     return {
         "role": role,
         "integrations": integrations,
@@ -327,10 +329,10 @@ def grant_hint(error: str, role: str) -> Optional[str]:
 
 
 def read_repo_text(read: Callable[[str], List[Any]], repo: str, branch: str, rel: str) -> str:
-    """Whole-file read via CODEGEN.RAW_TEXT_FORMAT; falls back to line reads where the format is missing."""
+    """Whole-file read via CORE.RAW_TEXT_FORMAT; falls back to line reads where the format is missing."""
     path = f"@{repo}/branches/{branch}/{rel}"
     try:
-        chunks = read(f"SELECT $1 FROM {path} (FILE_FORMAT => 'CODEGEN.RAW_TEXT_FORMAT')")
+        chunks = read(f"SELECT $1 FROM {path} (FILE_FORMAT => 'CORE.RAW_TEXT_FORMAT')")
     except Exception:
         chunks = read(f"SELECT $1 FROM {path}")
     return "\n".join(str(c) for c in chunks if c is not None)
@@ -418,7 +420,7 @@ def create_dbt_project(session, project_fqn: str, stage_path: str, comment: str)
 
 
 def push_pending(plan: Dict[str, Any], publisher: bool) -> Dict[str, Any]:
-    """Snowflake git clones are read-only; pushes happen in CODEGEN.PUBLISH_DBT_PR via the GitHub API."""
+    """Snowflake git clones are read-only; pushes happen in CORE.PUBLISH_DBT_PR via the GitHub API."""
     if not plan.get("push"):
         return {"status": "NOT_REQUESTED"}
     return {
@@ -427,11 +429,11 @@ def push_pending(plan: Dict[str, Any], publisher: bool) -> Dict[str, Any]:
         "detail": ("Publishing the branch and pull request through the GitHub API."
                    if publisher else
                    "GitHub publishing is not set up. Snowflake git repositories are read-only from SQL; "
-                   "set up CODEGEN.PUBLISH_DBT_PR to push branches and open pull requests."),
+                   "set up CORE.PUBLISH_DBT_PR to push branches and open pull requests."),
     }
 
 
-DBT_STAGE = "CODEGEN.DBT_STAGE"
+DBT_STAGE = "CORE.DBT_STAGE"
 RUN_ID_TEXT = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
 
 
@@ -455,19 +457,21 @@ def run_workspace_cleanup(execute: Execute, run_id: str) -> Dict[str, Any]:
         out["files_removed"] = len(execute(f"REMOVE @{DBT_STAGE}/{run_id}/") or [])
     except Exception as exc:
         out["errors"].append(f"REMOVE @{DBT_STAGE}/{run_id}/: {str(exc)[:300]}")
-    for prefix in run_project_prefixes(run_id):
-        try:
-            listed = _lower_rows(execute(f"SHOW DBT PROJECTS LIKE '{prefix}%' IN SCHEMA CODEGEN") or [])
-        except Exception as exc:
-            listed = []
-            out["errors"].append(f"SHOW DBT PROJECTS: {str(exc)[:300]}")
-        for row in listed:
-            name = str(row.get("name") or "")
-            if not name.upper().startswith(prefix):
-                continue
+    # Projects created before V061 stay in CODEGEN (dbt project versions are never recreated), later ones in CORE.
+    for schema in (PLATFORM_SCHEMA, "CODEGEN"):
+        for prefix in run_project_prefixes(run_id):
             try:
-                execute(f"DROP DBT PROJECT IF EXISTS CODEGEN.{quote_exact(name)}")
-                out["projects_dropped"].append(name)
+                listed = _lower_rows(execute(f"SHOW DBT PROJECTS LIKE '{prefix}%' IN SCHEMA {schema}") or [])
             except Exception as exc:
-                out["errors"].append(f"DROP DBT PROJECT {name}: {str(exc)[:300]}")
+                listed = []
+                out["errors"].append(f"SHOW DBT PROJECTS IN {schema}: {str(exc)[:300]}")
+            for row in listed:
+                name = str(row.get("name") or "")
+                if not name.upper().startswith(prefix):
+                    continue
+                try:
+                    execute(f"DROP DBT PROJECT IF EXISTS {schema}.{quote_exact(name)}")
+                    out["projects_dropped"].append(name)
+                except Exception as exc:
+                    out["errors"].append(f"DROP DBT PROJECT {name}: {str(exc)[:300]}")
     return out

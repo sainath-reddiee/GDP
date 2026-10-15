@@ -5,9 +5,9 @@ scanner runs (services/quality/scan.py). SODA_DSL is rendered from it (services/
 exports and the Soda CLI kit stay in step. A check can also be created from a one-line SodaCL string for the common
 metrics (parse_dsl); anything richer goes through the check editor.
 
-Table scans are stored in QUALITY.CHECK_RUN / CHECK_RESULT with SCOPE 'TABLE' and RUN_ID NULL, and update the
+Table scans are stored in CORE.CHECK_RUN / CHECK_RESULT with SCOPE 'TABLE' and RUN_ID NULL, and update the
 catalog's LAST_RUN_STATUS / LAST_RUN_AT / LAST_MEASURED. Schedules are Snowflake tasks that call
-QUALITY.RUN_TABLE_SCAN(TABLE_FQN), one per table.
+CORE.RUN_TABLE_SCAN(TABLE_FQN), one per table.
 """
 
 from __future__ import annotations
@@ -20,8 +20,9 @@ import uuid
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from services.common.sql import clip, insert_rows, rows, variant
+from services.common.platform_schema import fqn
 
-CATALOG = "GOVERNANCE.DQ_CHECKS_CATALOG"
+CATALOG = "CORE.DQ_CHECKS_CATALOG"
 STATUSES = ("ACTIVE", "PAUSED", "RETIRED")
 ORIGINS = ("PROFILE", "RUN", "USER")
 CRON = re.compile(r"^\s*(\S+\s+){4}\S+(\s+[A-Za-z_]+(?:/[A-Za-z_]+)*)?\s*$")  # five fields, optional IANA time zone
@@ -173,12 +174,12 @@ def schedule_sql(database: str, table_fqn: str, cron: str, warehouse: str) -> Tu
     assert re.match(r"^[A-Za-z_][A-Za-z0-9_$]*$", warehouse or ""), "unsafe warehouse name"
     assert FQN.match(table_fqn or ""), "table must be DATABASE.SCHEMA.TABLE"
     assert CRON.match(cron or ""), "cron needs five fields and an optional time zone, e.g. 0 6 * * * UTC"
-    task = f"{database}.QUALITY.{task_name(table_fqn)}"
+    task = fqn(database, task_name(table_fqn))
     literal = table_fqn.replace("'", "''")
     return task, [
         f"CREATE OR REPLACE TASK {task} WAREHOUSE = {warehouse} SCHEDULE = 'USING CRON {cron.strip()}' "
         f"COMMENT = 'Data Quality Store: scheduled scan of {literal}' "
-        f"AS CALL {database}.QUALITY.RUN_TABLE_SCAN('{literal}')",
+        f"AS CALL {fqn(database, 'RUN_TABLE_SCAN')}('{literal}')",
         f"ALTER TASK {task} RESUME",
     ]
 
@@ -199,12 +200,12 @@ def _domain_for(session, table_fqn: str, given: Optional[str]) -> Optional[str]:
         return given
     parts = [p.strip('"') for p in re.findall(r'"(?:[^"]|"")+"|[^.]+', table_fqn)]
     try:
-        found = rows(session, """SELECT DOMAIN_ID FROM KNOWLEDGE.TARGET_TABLE_REGISTRY
+        found = rows(session, """SELECT DOMAIN_ID FROM CORE.TARGET_TABLE_REGISTRY
                                   WHERE UPPER(TARGET_DATABASE) = UPPER(?) AND UPPER(TARGET_SCHEMA) = UPPER(?)
                                     AND UPPER(TARGET_TABLE) = UPPER(?) LIMIT 1""", parts)
         if found:
             return found[0]["DOMAIN_ID"]
-        found = rows(session, """SELECT MAX(DOMAIN_ID) AS D FROM GOVERNANCE.DATA_PROFILES
+        found = rows(session, """SELECT MAX(DOMAIN_ID) AS D FROM CORE.DATA_PROFILES
                                   WHERE UPPER(DATABASE_NAME) = UPPER(?) AND UPPER(SCHEMA_NAME) = UPPER(?)
                                     AND UPPER(TABLE_NAME) = UPPER(?)""", parts)
         return found[0]["D"] if found else None
@@ -310,7 +311,7 @@ def profile_suggestions(session, table: str, domain_id: Optional[str] = None) ->
 
     fqn = _fqn(table)
     parts = [p.strip('"') for p in re.findall(r'"(?:[^"]|"")+"|[^.]+', fqn)]
-    found = rows(session, """SELECT PROFILE_STAGE_PATH FROM METADATA.TABLE_PROFILES
+    found = rows(session, """SELECT PROFILE_STAGE_PATH FROM CORE.TABLE_PROFILES
                               WHERE UPPER(DATABASE_NAME) = UPPER(?) AND UPPER(SCHEMA_NAME) = UPPER(?)
                                 AND UPPER(TABLE_NAME) = UPPER(?) AND SOURCE_FINGERPRINT <> ''
                               ORDER BY PROFILED_AT DESC LIMIT 1""", parts)
@@ -333,7 +334,7 @@ def run_suggestions(session, run_id: str) -> Tuple[str, List[Dict[str, Any]], Op
     fqn = target_fqn(session, sttm)
     assert fqn, "the run's target model is not built yet, so its checks have no table to run against"
     stored = rows(session, """SELECT TARGET_COLUMN, CHECK_DEFINITION, SEVERITY, CLIENT_REQUIREMENT
-                                FROM CONTRACT.SODA_EXPECTATION_REGISTRY
+                                FROM CORE.SODA_EXPECTATION_REGISTRY
                                WHERE RUN_ID = ? AND IS_CURRENT AND STATUS = 'APPROVED'""", [run_id])
     assert stored, "the run has no approved data quality checks"
     checks = [{"target_column": r["TARGET_COLUMN"], "severity": r["SEVERITY"], "requirement": r["CLIENT_REQUIREMENT"],
@@ -374,7 +375,7 @@ def run_table(session, table: str, check_ids: Optional[List[str]] = None, trigge
                "check_type": r["CHECK_TYPE"], "definition": variant(r["CHECK_DEFINITION"]) or {},
                "severity": r["SEVERITY"]} for r in found]
     try:
-        prior = rows(session, """SELECT ROWS_SCANNED FROM QUALITY.CHECK_RUN WHERE TABLE_FQN = ? AND ROWS_SCANNED IS NOT NULL
+        prior = rows(session, """SELECT ROWS_SCANNED FROM CORE.CHECK_RUN WHERE TABLE_FQN = ? AND ROWS_SCANNED IS NOT NULL
                                   ORDER BY STARTED_AT DESC LIMIT 1""", [fqn])
         previous = float(prior[0]["ROWS_SCANNED"]) if prior else None
     except Exception:
@@ -399,7 +400,7 @@ def run_table(session, table: str, check_ids: Optional[List[str]] = None, trigge
 
 
 def _store(session, scan: Dict[str, Any], results: List[Dict[str, Any]]) -> None:
-    insert_rows(session, "QUALITY.CHECK_RUN",
+    insert_rows(session, "CORE.CHECK_RUN",
                 ["SCAN_ID", "TARGET", "MODE", "SCOPE", "TABLE_FQN", "DOMAIN_ID", "DURATION_MS", "CHECKS", "PASSED",
                  "WARNED", "FAILED", "NOT_EVALUATED", "ERRORS", "HEALTH", "ROWS_SCANNED", "TRIGGERED_BY"],
                 ["?", "?", "'MODEL'", "'TABLE'", "?", "NULLIF(?, '')", "?::NUMBER", "?::NUMBER", "?::NUMBER", "?::NUMBER",
@@ -407,7 +408,7 @@ def _store(session, scan: Dict[str, Any], results: List[Dict[str, Any]]) -> None
                 [[scan["scan_id"], scan["table"], scan["table"], scan.get("domain_id"), scan["duration_ms"],
                   scan["checks"], scan["passed"], scan["warned"], scan["failed"], scan["not_evaluated"], scan["errors"],
                   scan["health"], scan.get("rows_scanned"), scan["triggered_by"]]])
-    insert_rows(session, "QUALITY.CHECK_RESULT",
+    insert_rows(session, "CORE.CHECK_RESULT",
                 ["RESULT_ID", "SCAN_ID", "CATALOG_CHECK_ID", "TABLE_FQN", "TARGET_TABLE", "TARGET_COLUMN", "CHECK_TYPE",
                  "KIND", "DIMENSION", "SEVERITY", "OUTCOME", "MEASURED", "THRESHOLD", "FAILED_ROWS", "DETAIL",
                  "SAMPLE_ROWS", "SQL_TEXT", "DURATION_MS"],
@@ -422,7 +423,7 @@ def _store(session, scan: Dict[str, Any], results: List[Dict[str, Any]]) -> None
 
 
 def run_table_scan(session, table_fqn: str) -> Dict[str, Any]:
-    """QUALITY.RUN_TABLE_SCAN(TABLE_FQN): the scheduled scan (Snowflake task)."""
+    """CORE.RUN_TABLE_SCAN(TABLE_FQN): the scheduled scan (Snowflake task)."""
     out = run_table(session, table_fqn, None, "SCHEDULE")
     out.pop("results", None)
     return out

@@ -5,15 +5,15 @@ Reads come straight from the run tables. Writes made here are store edits, so th
 queues them for another person's approval (services/governance/policy.py STORE_ROUTES), except promoting tests into
 a QA pack draft: a draft is not live, and the pack's own submit and approve gates publishing.
 
-  GET  /api/hub/models/runs                latest MODELING.MODEL_DESIGN per run, with its publication
-  GET  /api/hub/dbt                        latest CODEGEN.DBT_GENERATION_REGISTRY row per run
+  GET  /api/hub/models/runs                latest CORE.MODEL_DESIGN per run, with its publication
+  GET  /api/hub/dbt                        latest CORE.DBT_GENERATION_REGISTRY row per run
   GET  /api/hub/dbt/{generation_id}        one generation: files, versions, publication
   GET  /api/hub/dbt/{generation_id}/diff   what changed since the run's previous generation (dbt is read-only here:
                                            it is regenerated from the approved model and the STTM)
-  GET  /api/dq/run-checks                  CONTRACT.SODA_EXPECTATION_REGISTRY current checks with their latest result
+  GET  /api/dq/run-checks                  CORE.SODA_EXPECTATION_REGISTRY current checks with their latest result
   GET  /api/dq/run-checks/coverage         a run's STTM target columns without a check
   POST /api/dq/run-checks/decisions        approve, reject or modify a run's checks (queued)
-  GET  /api/qa/run-tests                   CONTRACT.QA_TEST_CASE with the latest outcome and recent history
+  GET  /api/qa/run-tests                   CORE.QA_TEST_CASE with the latest outcome and recent history
   POST /api/qa/run-tests/promote           copy tests into a new or existing QA pack draft
 """
 
@@ -37,7 +37,7 @@ def _domain(db: Db, value: Optional[str]) -> Optional[str]:
     if not value:
         return None
     try:
-        found = db.query("SELECT DOMAIN_ID FROM KNOWLEDGE.DOMAIN_REGISTRY WHERE DOMAIN_ID = %s OR UPPER(DOMAIN_NAME) = UPPER(%s) "
+        found = db.query("SELECT DOMAIN_ID FROM CORE.DOMAIN_REGISTRY WHERE DOMAIN_ID = %s OR UPPER(DOMAIN_NAME) = UPPER(%s) "
                          "LIMIT 1", (value, value))
     except Exception:
         return None
@@ -60,10 +60,10 @@ def _like(q: Optional[str]) -> Optional[str]:
 RUN_MODELS = """
 WITH M AS (
     SELECT DESIGN_ID, RUN_ID, VERSION, STATUS, ORIGIN, DECISION, DESIGN_JSON, CREATED_BY, CREATED_AT, APPROVED_BY
-      FROM MODELING.MODEL_DESIGN WHERE STATUS IN ('APPROVED', 'DRAFT')
+      FROM CORE.MODEL_DESIGN WHERE STATUS IN ('APPROVED', 'DRAFT')
    QUALIFY ROW_NUMBER() OVER (PARTITION BY RUN_ID ORDER BY VERSION DESC) = 1
 ), P AS (
-    SELECT RUN_ID, STATUS, HEAD_BRANCH, PR_URL, PR_NUMBER FROM CODEGEN.GIT_PUBLICATION
+    SELECT RUN_ID, STATUS, HEAD_BRANCH, PR_URL, PR_NUMBER FROM CORE.GIT_PUBLICATION
    QUALIFY ROW_NUMBER() OVER (PARTITION BY RUN_ID ORDER BY CREATED_AT DESC) = 1
 )
 SELECT M.DESIGN_ID, M.RUN_ID, R.RUN_NAME, R.CURRENT_STATE, R.DOMAIN_ID, D.DOMAIN_NAME, M.VERSION, M.STATUS, M.ORIGIN,
@@ -71,7 +71,7 @@ SELECT M.DESIGN_ID, M.RUN_ID, R.RUN_NAME, R.CURRENT_STATE, R.DOMAIN_ID, D.DOMAIN
        P.STATUS AS PUBLICATION_STATUS, P.HEAD_BRANCH, P.PR_URL, P.PR_NUMBER
   FROM M
   JOIN CORE.WORKFLOW_RUN R ON R.RUN_ID = M.RUN_ID
-  LEFT JOIN KNOWLEDGE.DOMAIN_REGISTRY D ON D.DOMAIN_ID = R.DOMAIN_ID
+  LEFT JOIN CORE.DOMAIN_REGISTRY D ON D.DOMAIN_ID = R.DOMAIN_ID
   LEFT JOIN P ON P.RUN_ID = M.RUN_ID
  WHERE NOT COALESCE(R.IS_ARCHIVED, FALSE) {scope} {search}
  ORDER BY M.CREATED_AT DESC LIMIT 500"""
@@ -109,10 +109,10 @@ def run_models(domain: Optional[str] = None, q: Optional[str] = None, db: Db = D
 
 DBT_LIST = """
 WITH G AS (
-    SELECT * FROM CODEGEN.DBT_GENERATION_REGISTRY
+    SELECT * FROM CORE.DBT_GENERATION_REGISTRY
    QUALIFY ROW_NUMBER() OVER (PARTITION BY RUN_ID ORDER BY GENERATION_VERSION DESC) = 1
 ), P AS (
-    SELECT RUN_ID, GENERATION_ID, STATUS, HEAD_BRANCH, PR_URL, PR_NUMBER FROM CODEGEN.GIT_PUBLICATION
+    SELECT RUN_ID, GENERATION_ID, STATUS, HEAD_BRANCH, PR_URL, PR_NUMBER FROM CORE.GIT_PUBLICATION
    QUALIFY ROW_NUMBER() OVER (PARTITION BY RUN_ID ORDER BY CREATED_AT DESC) = 1
 ), S AS (
     {sttm}
@@ -129,7 +129,7 @@ SELECT G.GENERATION_ID, G.RUN_ID, R.RUN_NAME, R.CURRENT_STATE, R.DOMAIN_ID, G.DO
  ORDER BY G.CREATED_AT DESC LIMIT 500"""
 
 
-STTM_EDITS = "SELECT RUN_ID, MAX(CREATED_AT) AS CHANGED_AT FROM GOVERNANCE.STTM_CATALOG WHERE ORIGIN = 'CATALOG_EDIT' GROUP BY RUN_ID"
+STTM_EDITS = "SELECT RUN_ID, MAX(CREATED_AT) AS CHANGED_AT FROM CORE.STTM_CATALOG WHERE ORIGIN = 'CATALOG_EDIT' GROUP BY RUN_ID"
 NO_STTM_EDITS = "SELECT NULL::VARCHAR AS RUN_ID, NULL::TIMESTAMP_LTZ AS CHANGED_AT"
 
 
@@ -154,7 +154,7 @@ def _generation(db: Db, generation_id: str) -> dict:
     found = db.query("""SELECT GENERATION_ID, RUN_ID, PARENT_GENERATION_ID, DOMAIN, TARGET_MODEL, STTM_ID, STTM_VERSION,
                                FILES_GENERATED, GENERATION_VERSION, GENERATION_STATUS, CREATED_BY,
                                CREATED_AT::VARCHAR AS CREATED_AT
-                          FROM CODEGEN.DBT_GENERATION_REGISTRY WHERE GENERATION_ID = %s""", (generation_id,))
+                          FROM CORE.DBT_GENERATION_REGISTRY WHERE GENERATION_ID = %s""", (generation_id,))
     if not found:
         raise HTTPException(404, "dbt generation not found")
     return found[0]
@@ -162,7 +162,7 @@ def _generation(db: Db, generation_id: str) -> dict:
 
 def _published(db: Db, generation_id: str) -> bool:
     try:
-        return bool(db.query("SELECT 1 AS X FROM CODEGEN.GIT_PUBLICATION WHERE GENERATION_ID = %s AND STATUS = 'PUBLISHED' "
+        return bool(db.query("SELECT 1 AS X FROM CORE.GIT_PUBLICATION WHERE GENERATION_ID = %s AND STATUS = 'PUBLISHED' "
                              "LIMIT 1", (generation_id,)))
     except Exception:
         return False
@@ -172,16 +172,16 @@ def _published(db: Db, generation_id: str) -> bool:
 def dbt_generation(generation_id: str, db: Db = Depends(current_db)):
     gen = _generation(db, generation_id)
     files = db.query("""SELECT ARTIFACT_ID, ARTIFACT_TYPE, FILE_PATH, CONTENT_SHA256, CONTENT
-                          FROM CODEGEN.GENERATED_ARTIFACT WHERE GENERATION_ID = %s ORDER BY FILE_PATH""", (generation_id,))
+                          FROM CORE.GENERATED_ARTIFACT WHERE GENERATION_ID = %s ORDER BY FILE_PATH""", (generation_id,))
     versions = db.query("""SELECT GENERATION_ID, GENERATION_VERSION, GENERATION_STATUS, PARENT_GENERATION_ID, CREATED_BY,
                                   CREATED_AT::VARCHAR AS CREATED_AT
-                             FROM CODEGEN.DBT_GENERATION_REGISTRY WHERE RUN_ID = %s
+                             FROM CORE.DBT_GENERATION_REGISTRY WHERE RUN_ID = %s
                             ORDER BY GENERATION_VERSION DESC LIMIT 50""", (gen["run_id"],))
     run = db.query("SELECT RUN_NAME, CURRENT_STATE, DOMAIN_ID FROM CORE.WORKFLOW_RUN WHERE RUN_ID = %s", (gen["run_id"],))
     try:
         publication = db.query("""SELECT STATUS, HEAD_BRANCH, BASE_BRANCH, PR_URL, PR_NUMBER, COMMIT_SHA, GENERATION_ID,
                                          CREATED_AT::VARCHAR AS CREATED_AT
-                                    FROM CODEGEN.GIT_PUBLICATION WHERE RUN_ID = %s ORDER BY CREATED_AT DESC LIMIT 1""",
+                                    FROM CORE.GIT_PUBLICATION WHERE RUN_ID = %s ORDER BY CREATED_AT DESC LIMIT 1""",
                                (gen["run_id"],))
     except Exception:
         publication = []
@@ -201,7 +201,7 @@ def dbt_generation_diff(generation_id: str, against: Optional[str] = None, db: D
     if against:
         base = _generation(db, against)
     else:
-        found = db.query("""SELECT GENERATION_ID, GENERATION_VERSION FROM CODEGEN.DBT_GENERATION_REGISTRY
+        found = db.query("""SELECT GENERATION_ID, GENERATION_VERSION FROM CORE.DBT_GENERATION_REGISTRY
                              WHERE RUN_ID = %s AND GENERATION_VERSION < %s ORDER BY GENERATION_VERSION DESC LIMIT 1""",
                          (gen["run_id"], int(gen["generation_version"])))
         base = found[0] if found else None
@@ -209,7 +209,7 @@ def dbt_generation_diff(generation_id: str, against: Optional[str] = None, db: D
         if not gid:
             return {}
         return {r["file_path"]: r.get("content") or "" for r in db.query(
-            "SELECT FILE_PATH, CONTENT FROM CODEGEN.GENERATED_ARTIFACT WHERE GENERATION_ID = %s", (gid,))}
+            "SELECT FILE_PATH, CONTENT FROM CORE.GENERATED_ARTIFACT WHERE GENERATION_ID = %s", (gid,))}
 
     old, new = files((base or {}).get("generation_id")), files(generation_id)
     out = []
@@ -235,19 +235,19 @@ RUN_CHECKS = """
 WITH C AS (
     SELECT E.EXPECTATION_ID, E.RUN_ID, E.DOMAIN_ID, E.TARGET_TABLE, E.TARGET_COLUMN, E.CHECK_TYPE, E.CHECK_DEFINITION,
            E.SEVERITY, E.ORIGIN, E.CLIENT_REQUIREMENT, E.STATUS, E.VERSION, E.REVIEWED_BY
-      FROM CONTRACT.SODA_EXPECTATION_REGISTRY E
+      FROM CORE.SODA_EXPECTATION_REGISTRY E
      WHERE E.IS_CURRENT {status} {run} {table}
 ), R AS (
     SELECT EXPECTATION_ID, RESULT_ID, OUTCOME, MEASURED, FAILED_ROWS, DETAIL, SAMPLE_ROWS, SQL_TEXT,
            CREATED_AT::VARCHAR AS CHECKED_AT
-      FROM QUALITY.CHECK_RESULT WHERE EXPECTATION_ID IN (SELECT EXPECTATION_ID FROM C)
+      FROM CORE.CHECK_RESULT WHERE EXPECTATION_ID IN (SELECT EXPECTATION_ID FROM C)
    QUALIFY ROW_NUMBER() OVER (PARTITION BY EXPECTATION_ID ORDER BY CREATED_AT DESC) = 1
 )
 SELECT C.*, W.RUN_NAME, W.CURRENT_STATE, D.DOMAIN_NAME, R.RESULT_ID, R.OUTCOME, R.MEASURED, R.FAILED_ROWS, R.DETAIL, R.SAMPLE_ROWS,
        R.SQL_TEXT, R.CHECKED_AT
   FROM C
   JOIN CORE.WORKFLOW_RUN W ON W.RUN_ID = C.RUN_ID
-  LEFT JOIN KNOWLEDGE.DOMAIN_REGISTRY D ON D.DOMAIN_ID = COALESCE(C.DOMAIN_ID, W.DOMAIN_ID)
+  LEFT JOIN CORE.DOMAIN_REGISTRY D ON D.DOMAIN_ID = COALESCE(C.DOMAIN_ID, W.DOMAIN_ID)
   LEFT JOIN R ON R.EXPECTATION_ID = C.EXPECTATION_ID
  WHERE NOT COALESCE(W.IS_ARCHIVED, FALSE) {scope}
  ORDER BY W.RUN_NAME, C.TARGET_TABLE, C.TARGET_COLUMN NULLS FIRST, C.CHECK_TYPE LIMIT 3000"""
@@ -304,12 +304,12 @@ def run_checks(domain: Optional[str] = None, status: Optional[str] = None, run: 
 def run_check_coverage(run: str, db: Db = Depends(current_db)):
     """A run's STTM target columns with no current, non-rejected check."""
     try:
-        columns = db.query("""SELECT L.TARGET_COLUMN, L.MAPPING_TYPE FROM CONTRACT.STTM_LINE L
-                               WHERE L.STTM_ID = (SELECT STTM_ID FROM CONTRACT.STTM_REGISTRY WHERE RUN_ID = %s
+        columns = db.query("""SELECT L.TARGET_COLUMN, L.MAPPING_TYPE FROM CORE.STTM_LINE L
+                               WHERE L.STTM_ID = (SELECT STTM_ID FROM CORE.STTM_REGISTRY WHERE RUN_ID = %s
                                                    ORDER BY STTM_VERSION DESC LIMIT 1)
                                ORDER BY L.TARGET_COLUMN""", (run,))
         checked = {str(r["target_column"]).upper() for r in db.query(
-            """SELECT DISTINCT TARGET_COLUMN FROM CONTRACT.SODA_EXPECTATION_REGISTRY
+            """SELECT DISTINCT TARGET_COLUMN FROM CORE.SODA_EXPECTATION_REGISTRY
                 WHERE RUN_ID = %s AND IS_CURRENT AND STATUS <> 'REJECTED' AND TARGET_COLUMN IS NOT NULL""", (run,))}
     except Exception as exc:
         raise _snowflake_error(exc) from exc
@@ -347,12 +347,12 @@ RUN_TESTS = """
 WITH T AS (
     SELECT T.TEST_ID, T.RUN_ID, T.DOMAIN_ID, T.TARGET_TABLE_ID, T.SCOPE, T.TARGET_FQN, T.CATEGORY, T.TITLE, T.OBJECTIVE,
            T.SQL_TEXT, T.EXPECTED, T.SEVERITY, T.TARGET_COLUMN, T.ORIGIN, T.CREATED_BY, T.CREATED_AT::VARCHAR AS CREATED_AT
-      FROM CONTRACT.QA_TEST_CASE T
+      FROM CORE.QA_TEST_CASE T
      WHERE NOT COALESCE(T.IS_DELETED, FALSE) {run} {search}
 ), H AS (
     SELECT TEST_ID, RESULT_ID, OUTCOME, ROWS_RETURNED, DETAIL, SAMPLE_ROWS, CREATED_AT::VARCHAR AS RAN_AT,
            ROW_NUMBER() OVER (PARTITION BY TEST_ID ORDER BY CREATED_AT DESC) AS RN
-      FROM QUALITY.QA_RESULT WHERE TEST_ID IN (SELECT TEST_ID FROM T)
+      FROM CORE.QA_RESULT WHERE TEST_ID IN (SELECT TEST_ID FROM T)
    QUALIFY RN <= 10
 ), HA AS (
     SELECT TEST_ID, ARRAY_AGG(OBJECT_CONSTRUCT('outcome', OUTCOME, 'ran_at', RAN_AT)) WITHIN GROUP (ORDER BY RAN_AT) AS HISTORY
@@ -362,7 +362,7 @@ SELECT T.*, W.RUN_NAME, D.DOMAIN_NAME, HA.HISTORY, L.RESULT_ID, L.OUTCOME, L.ROW
   FROM T
   LEFT JOIN HA ON HA.TEST_ID = T.TEST_ID
   LEFT JOIN CORE.WORKFLOW_RUN W ON W.RUN_ID = T.RUN_ID
-  LEFT JOIN KNOWLEDGE.DOMAIN_REGISTRY D ON D.DOMAIN_ID = COALESCE(T.DOMAIN_ID, W.DOMAIN_ID)
+  LEFT JOIN CORE.DOMAIN_REGISTRY D ON D.DOMAIN_ID = COALESCE(T.DOMAIN_ID, W.DOMAIN_ID)
   LEFT JOIN H L ON L.TEST_ID = T.TEST_ID AND L.RN = 1
  WHERE NOT COALESCE(W.IS_ARCHIVED, FALSE) {scope}
  ORDER BY T.CREATED_AT DESC LIMIT 2000"""
@@ -431,7 +431,7 @@ def promote_tests(body: PromoteTests, db: Db = Depends(current_db)):
         raise HTTPException(400, "Choose the domain the pack belongs to.")
     ids = list(dict.fromkeys(body.test_ids))
     found = db.query(f"""SELECT TEST_ID, TITLE, OBJECTIVE, SQL_TEXT, EXPECTED, SEVERITY, CATEGORY
-                           FROM CONTRACT.QA_TEST_CASE
+                           FROM CORE.QA_TEST_CASE
                           WHERE NOT COALESCE(IS_DELETED, FALSE) AND TEST_ID IN ({", ".join(["%s"] * len(ids))})""", tuple(ids))
     if len(found) != len(ids):
         raise HTTPException(404, "Some tests were not found or are deleted; reload and choose again.")

@@ -22,7 +22,7 @@ class ToolCall:
 
 @contextmanager
 def tool_call(session, run_id: Optional[str], tool: str, inputs: Dict[str, Any]) -> Iterator[ToolCall]:
-    """Records one AUDIT.AGENT_TOOL_CALL row for a stage action, including failures."""
+    """Records one CORE.AGENT_TOOL_CALL row for a stage action, including failures."""
     call = ToolCall(tool, inputs)
     started = time.time()
     try:
@@ -32,7 +32,7 @@ def tool_call(session, run_id: Optional[str], tool: str, inputs: Dict[str, Any])
         raise
     finally:
         insert_rows(
-            session, "AUDIT.AGENT_TOOL_CALL",
+            session, "CORE.AGENT_TOOL_CALL",
             ["TOOL_CALL_ID", "RUN_ID", "TOOL_NAME", "INPUT_JSON", "OUTPUT_SUMMARY", "STATUS", "DURATION_MS",
              "QUERY_ID", "ERROR", "CALLED_BY"],
             ["?", "NULLIF(?, '')", "?", "PARSE_JSON(?)", "NULLIF(?, '')", "?", "?::NUMBER", "NULLIF(?, '')",
@@ -63,7 +63,7 @@ def record_cost(session, run_id: Optional[str], stage: str, model: Optional[str]
     exprs = ["?", "NULLIF(?, '')", "?", "?", "NULLIF(?, '')", "?::NUMBER", "?::NUMBER", "?::NUMBER", "?::NUMBER",
              "?::NUMBER", "?::NUMBER", "?::NUMBER", "?::NUMBER(18,6)"]
     try:
-        insert_rows(session, "AUDIT.COST_USAGE", columns + ["QUERY_ID", "COST_SOURCE"],
+        insert_rows(session, "CORE.COST_USAGE", columns + ["QUERY_ID", "COST_SOURCE"],
                     exprs + ["NULLIF(?, '')", "?"], [row])
     except Exception:  # before V014: no query id / cost source columns yet
-        insert_rows(session, "AUDIT.COST_USAGE", columns, exprs, [row[:13]])
+        insert_rows(session, "CORE.COST_USAGE", columns, exprs, [row[:13]])

@@ -1,10 +1,10 @@
 """Resolution knowledge: when a person resolves an incident with a real note (20 characters or more), what fixed it is
-remembered as domain knowledge (KNOWLEDGE.DOMAIN_KNOWLEDGE, type INCIDENT_RESOLUTION), so the next diagnosis finds it.
+remembered as domain knowledge (CORE.DOMAIN_KNOWLEDGE, type INCIDENT_RESOLUTION), so the next diagnosis finds it.
 
 Written through services.knowledge.writer.remember, like every other knowledge row: one lineage per domain and
 fingerprint (reference ops.incident.<fingerprint>), a new version when the same failure is resolved again with a
 different fix, and the learning policy decides whether it is ACTIVE at once or waits for a steward (auto by default).
-Cortex Search (KNOWLEDGE.KNOWLEDGE_SEARCH) indexes current rows within its target lag. The domain is the DAG's DOMAIN_ID,
+Cortex Search (CORE.KNOWLEDGE_SEARCH) indexes current rows within its target lag. The domain is the DAG's DOMAIN_ID,
 else GENERAL. Only redacted text is stored: the title, the fingerprint, the AI's cause when there is one and the note.
 """
 
@@ -53,9 +53,9 @@ def entry(incident: Dict[str, Any], resolution: str, actor: str) -> Dict[str, An
 
 
 def domain_for(db: Any, session: Any, incident: Dict[str, Any]) -> str:
-    found = db.query("SELECT DOMAIN_ID FROM OPS.DAG WHERE ENV_ID = %s AND DAG_ID = %s", (incident["env_id"], incident["dag_id"]))
+    found = db.query("SELECT DOMAIN_ID FROM CORE.DAG WHERE ENV_ID = %s AND DAG_ID = %s", (incident["env_id"], incident["dag_id"]))
     domain_id = found[0].get("domain_id") if found else None
-    if domain_id and db.query("SELECT 1 AS X FROM KNOWLEDGE.DOMAIN_REGISTRY WHERE DOMAIN_ID = %s", (domain_id,)):
+    if domain_id and db.query("SELECT 1 AS X FROM CORE.DOMAIN_REGISTRY WHERE DOMAIN_ID = %s", (domain_id,)):
         return domain_id
     from services.knowledge.procedures import GENERAL_DOMAIN, ensure_domain
 

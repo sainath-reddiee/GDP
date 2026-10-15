@@ -2,7 +2,7 @@
 QA packs, STTM mappings), with filters, and one action that reads their state back from GitHub.
 
 The rows are written by the publishers (services/dbt/publish.py through services/git/roundtrip.py); the sync runs in
-CODEGEN.PUBLISH_DBT_PR, which holds the GitHub token, so the token never reaches the API.
+CORE.PUBLISH_DBT_PR, which holds the GitHub token, so the token never reaches the API.
 """
 
 from __future__ import annotations
@@ -55,6 +55,6 @@ def sync_prs(body: SyncIn, db: Db = Depends(current_db)):
         return {"checked": 0, "merged": [], "closed": [], "open": 0, "errors": [], "detail": "GitHub publishing is not set up"}
     request = {"force": body.force, **({"kind": body.kind} if body.kind else {})}
     try:
-        return db.call("CALL CODEGEN.PUBLISH_DBT_PR(%s, %s)", ("", json.dumps({"sync_git_prs": request}))) or {}
+        return db.call("CALL CORE.PUBLISH_DBT_PR(%s, %s)", ("", json.dumps({"sync_git_prs": request}))) or {}
     except Exception as exc:
         raise _snowflake_error(exc) from exc

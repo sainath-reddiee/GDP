@@ -1,4 +1,4 @@
-"""Run QA tests in Snowflake and keep the results (QUALITY.QA_RUN / QA_RESULT), for a run or a domain target table.
+"""Run QA tests in Snowflake and keep the results (CORE.QA_RUN / QA_RESULT), for a run or a domain target table.
 
 Each test is one guarded, read-only SELECT. It runs wrapped in a LIMIT so a failing test returns at most a page of
 rows; the outcome is decided from the test's `expected` text:
@@ -328,7 +328,7 @@ def _store(session, qa_run: Dict[str, Any], results: List[Dict[str, Any]]) -> No
     detail = json.dumps(qa_run["trigger_detail"]) if qa_run.get("trigger_detail") else None
     legacy = qa_run.get("scope", "RUN") == "RUN"
     try:
-        insert_rows(session, "QUALITY.QA_RUN",
+        insert_rows(session, "CORE.QA_RUN",
                     run_columns + ["DOMAIN_ID", "TARGET_TABLE_ID", "SUITE_ID", "SCOPE", "TRIGGER_DETAIL"],
                     run_exprs + ["NULLIF(?, '')", "NULLIF(?, '')", "NULLIF(?, '')", "?", "PARSE_JSON(NULLIF(?, ''))"],
                     [run_row + [qa_run.get("domain_id"), qa_run.get("target_table_id"), qa_run.get("suite_id"),
@@ -336,7 +336,7 @@ def _store(session, qa_run: Dict[str, Any], results: List[Dict[str, Any]]) -> No
     except Exception:
         if not legacy:
             raise
-        insert_rows(session, "QUALITY.QA_RUN", run_columns, run_exprs, [run_row])  # before V028
+        insert_rows(session, "CORE.QA_RUN", run_columns, run_exprs, [run_row])  # before V028
     result_columns = ["RESULT_ID", "QA_RUN_ID", "RUN_ID", "TEST_ID", "CATEGORY", "TITLE", "SEVERITY", "ORIGIN", "OUTCOME",
                       "ROWS_RETURNED", "MEASURED", "EXPECTED", "DETAIL", "COLUMNS", "SAMPLE_ROWS", "SQL_TEXT", "DURATION_MS"]
     result_exprs = ["?", "?", "NULLIF(?, '')", "?", "?", "?", "?", "?", "?", "NULLIF(?, '')::NUMBER", "NULLIF(?, '')",
@@ -349,13 +349,13 @@ def _store(session, qa_run: Dict[str, Any], results: List[Dict[str, Any]]) -> No
                     json.dumps(r["sample"]) if r.get("sample") else None, clip(r.get("sql"), 16000), r.get("duration_ms")]
                    for r in results]
     try:
-        insert_rows(session, "QUALITY.QA_RESULT", result_columns + ["TARGET_TABLE_ID", "SUITE_ID"],
+        insert_rows(session, "CORE.QA_RESULT", result_columns + ["TARGET_TABLE_ID", "SUITE_ID"],
                     result_exprs + ["NULLIF(?, '')", "NULLIF(?, '')"],
                     [row + [qa_run.get("target_table_id"), r.get("suite_id")] for row, r in zip(result_rows, results)])
     except Exception:
         if not legacy:
             raise
-        insert_rows(session, "QUALITY.QA_RESULT", result_columns, result_exprs, result_rows)  # before V028
+        insert_rows(session, "CORE.QA_RESULT", result_columns, result_exprs, result_rows)  # before V028
 
 
 def _remember(session, run_id: Optional[str], ctx: Dict[str, Any], results: List[Dict[str, Any]]) -> None:
@@ -398,19 +398,19 @@ def latest(query, run_id: str) -> Tuple[Optional[Dict[str, Any]], List[Dict[str,
     try:
         found = query("""SELECT QA_RUN_ID, STTM_ID, TARGET, TARGET_BUILT, STARTED_AT::VARCHAR AS STARTED_AT, DURATION_MS, TESTS,
                                 PASSED, FAILED, REVIEW, NOT_RUN, ERRORS, TRIGGERED_BY, CREATED_BY
-                           FROM QUALITY.QA_RUN WHERE RUN_ID = %s ORDER BY STARTED_AT DESC LIMIT 1""", (run_id,))
+                           FROM CORE.QA_RUN WHERE RUN_ID = %s ORDER BY STARTED_AT DESC LIMIT 1""", (run_id,))
     except Exception:
         return None, []
     if not found:
         return None, []
     last = found[0]
     sql = """SELECT """ + RESULT_FIELDS + """
-               FROM QUALITY.QA_RESULT R
-               JOIN QUALITY.QA_RUN Q ON Q.QA_RUN_ID = R.QA_RUN_ID
+               FROM CORE.QA_RESULT R
+               JOIN CORE.QA_RUN Q ON Q.QA_RUN_ID = R.QA_RUN_ID
               WHERE R.RUN_ID = %s AND EQUAL_NULL(Q.STTM_ID, %s){deleted}
             QUALIFY ROW_NUMBER() OVER (PARTITION BY R.TEST_ID ORDER BY R.CREATED_AT DESC) = 1"""
     deleted = """
-                AND R.TEST_ID NOT IN (SELECT TEST_ID FROM CONTRACT.QA_TEST_CASE
+                AND R.TEST_ID NOT IN (SELECT TEST_ID FROM CORE.QA_TEST_CASE
                                        WHERE (RUN_ID = %s OR SCOPE = 'TABLE') AND COALESCE(IS_DELETED, FALSE))"""
     try:
         return last, query(sql.format(deleted=deleted), (run_id, last.get("sttm_id"), run_id))
@@ -419,7 +419,7 @@ def latest(query, run_id: str) -> Tuple[Optional[Dict[str, Any]], List[Dict[str,
     try:  # before V028: no SCOPE column
         return last, query(sql.format(deleted=deleted.replace(" OR SCOPE = 'TABLE'", "")),
                            (run_id, last.get("sttm_id"), run_id))
-    except Exception:  # roles without SELECT on CONTRACT.QA_TEST_CASE (VIEWER)
+    except Exception:  # roles without SELECT on CORE.QA_TEST_CASE (VIEWER)
         return last, query(sql.format(deleted=""), (run_id, last.get("sttm_id")))
 
 
@@ -434,7 +434,7 @@ def latest_table(query, target_table_id: str,
     for one suite; deleted table tests are left out. (None, []) before V028."""
     suite = suite_id or ""
     try:
-        found = query(f"""SELECT {QA_RUN_FIELDS} FROM QUALITY.QA_RUN
+        found = query(f"""SELECT {QA_RUN_FIELDS} FROM CORE.QA_RUN
                            WHERE SCOPE = 'TABLE' AND TARGET_TABLE_ID = %s AND (%s = '' OR SUITE_ID = %s)
                            ORDER BY STARTED_AT DESC LIMIT 1""", (target_table_id, suite, suite))
     except Exception:
@@ -442,16 +442,16 @@ def latest_table(query, target_table_id: str,
     if not found:
         return None, []
     sql = """SELECT """ + RESULT_FIELDS + """, R.SUITE_ID, R.QA_RUN_ID, R.CREATED_AT::VARCHAR AS CREATED_AT
-               FROM QUALITY.QA_RESULT R
-               JOIN QUALITY.QA_RUN Q ON Q.QA_RUN_ID = R.QA_RUN_ID
+               FROM CORE.QA_RESULT R
+               JOIN CORE.QA_RUN Q ON Q.QA_RUN_ID = R.QA_RUN_ID
               WHERE Q.SCOPE = 'TABLE' AND R.TARGET_TABLE_ID = %s AND R.RUN_ID IS NULL AND (%s = '' OR R.SUITE_ID = %s){deleted}
             QUALIFY ROW_NUMBER() OVER (PARTITION BY R.TEST_ID ORDER BY R.CREATED_AT DESC) = 1"""
     deleted = """
-                AND R.TEST_ID NOT IN (SELECT TEST_ID FROM CONTRACT.QA_TEST_CASE
+                AND R.TEST_ID NOT IN (SELECT TEST_ID FROM CORE.QA_TEST_CASE
                                        WHERE TARGET_TABLE_ID = %s AND COALESCE(IS_DELETED, FALSE))"""
     try:
         return found[0], query(sql.format(deleted=deleted), (target_table_id, suite, suite, target_table_id))
-    except Exception:  # roles without SELECT on CONTRACT.QA_TEST_CASE
+    except Exception:  # roles without SELECT on CORE.QA_TEST_CASE
         return found[0], query(sql.format(deleted=""), (target_table_id, suite, suite))
 
 
@@ -459,7 +459,7 @@ def history(query, target_table_id: str, limit: int = 20) -> List[Dict[str, Any]
     """Recent QA runs that tested a target table, both table runs and run-lane runs (SCOPE tells them apart)."""
     limit = max(1, min(int(limit or 20), 200))
     try:
-        return query(f"""SELECT {QA_RUN_FIELDS} FROM QUALITY.QA_RUN WHERE TARGET_TABLE_ID = %s
+        return query(f"""SELECT {QA_RUN_FIELDS} FROM CORE.QA_RUN WHERE TARGET_TABLE_ID = %s
                           ORDER BY STARTED_AT DESC LIMIT {limit}""", (target_table_id,))
     except Exception:
         return []

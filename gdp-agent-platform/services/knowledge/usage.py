@@ -2,7 +2,7 @@
 
 GDP playbooks live under snowflake/skills/gdp. The Cortex modeling playbooks live under
 snowflake/skills/modeling. Procedures call use_skills so the run records which playbook
-was applied; the agent loads the same names through KNOWLEDGE.LOAD_SKILL.
+was applied; the agent loads the same names through CORE.LOAD_SKILL.
 """
 
 from __future__ import annotations
@@ -198,10 +198,10 @@ def domain_context(session, domain_id: str | None, target: str | None = None, bu
     definitions: List[str] = []
     examples: List[str] = []
     if domain_id:
-        found = rows(session, "SELECT DOMAIN_NAME FROM KNOWLEDGE.DOMAIN_REGISTRY WHERE DOMAIN_ID = ?", [domain_id])
+        found = rows(session, "SELECT DOMAIN_NAME FROM CORE.DOMAIN_REGISTRY WHERE DOMAIN_ID = ?", [domain_id])
         domain = found[0]["DOMAIN_NAME"] if found else None
         if target:
-            items = rows(session, """SELECT KNOWLEDGE_TYPE, TITLE, CONTENT, CONTENT_JSON FROM KNOWLEDGE.DOMAIN_KNOWLEDGE
+            items = rows(session, """SELECT KNOWLEDGE_TYPE, TITLE, CONTENT, CONTENT_JSON FROM CORE.DOMAIN_KNOWLEDGE
                                      WHERE DOMAIN_ID = ? AND IS_CURRENT AND KNOWLEDGE_TYPE IN ('MODEL_DEFINITION', 'EXAMPLE')
                                        AND CONTENT_JSON:target_table::STRING = ? AND """ + layer_sql(),
                          [domain_id, target.upper(), "GOLD" if gold else "SILVER"])
@@ -210,7 +210,7 @@ def domain_context(session, domain_id: str | None, target: str | None = None, bu
 
             examples = as_context([r for r in items if r["KNOWLEDGE_TYPE"] == "EXAMPLE"])
         # what the domain owner answered when the engine asked (services/learning/questions.py)
-        for r in rows(session, """SELECT CONTENT FROM KNOWLEDGE.DOMAIN_KNOWLEDGE
+        for r in rows(session, """SELECT CONTENT FROM CORE.DOMAIN_KNOWLEDGE
                                    WHERE DOMAIN_ID = ? AND IS_CURRENT AND STATUS = 'ACTIVE' AND KNOWLEDGE_TYPE = 'BUSINESS_RULE'
                                      AND SOURCE_REFERENCE LIKE 'question.%' AND """ + layer_sql() + """
                                    ORDER BY UPDATED_AT DESC LIMIT 20""", [domain_id, "GOLD" if gold else "SILVER"]):

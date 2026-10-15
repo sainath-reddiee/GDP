@@ -1,4 +1,4 @@
-"""History of saved QA tests (V042, CONTRACT.QA_TEST_VERSION).
+"""History of saved QA tests (V042, CORE.QA_TEST_VERSION).
 
 Every create, edit, delete and restore of a saved test (a run's test or a table test of the QA workspace) records
 the test as it was after the change, so a tester can see who changed what, compare any two versions and restore an
@@ -13,7 +13,7 @@ from typing import Any, Dict, List, Optional
 
 from services.common.sql import rows
 
-VERSIONS = "CONTRACT.QA_TEST_VERSION"
+VERSIONS = "CORE.QA_TEST_VERSION"
 CHANGES = ("CREATED", "EDITED", "DELETED", "RESTORED", "BASELINE")
 FIELDS = ("title", "objective", "sql_text", "expected", "severity", "suite_id", "is_deleted")
 
@@ -23,7 +23,7 @@ INSERT_SQL = f"""INSERT INTO {VERSIONS} (TEST_ID, VERSION, CHANGE, TITLE, OBJECT
                  SELECT T.TEST_ID, COALESCE((SELECT MAX(V.VERSION) FROM {VERSIONS} V WHERE V.TEST_ID = T.TEST_ID), 0) + 1, ?,
                         T.TITLE, T.OBJECTIVE, T.SQL_TEXT, T.EXPECTED, T.SEVERITY, T.SUITE_ID, COALESCE(T.IS_DELETED, FALSE),
                         CURRENT_USER(), CURRENT_TIMESTAMP()
-                   FROM CONTRACT.QA_TEST_CASE T WHERE T.TEST_ID = ?"""
+                   FROM CORE.QA_TEST_CASE T WHERE T.TEST_ID = ?"""
 
 
 def record(session, test_id: str, change: str) -> bool:
@@ -87,12 +87,12 @@ def restore(session, test_id: str, version: int) -> Dict[str, Any]:
                                WHERE TEST_ID = ? AND VERSION = ?""", [test_id, int(version)])
     assert found, f"version {version} not found"
     old = {str(k).lower(): v for k, v in found[0].items()}
-    test = rows(session, "SELECT RUN_ID, SCOPE, IS_DELETED FROM CONTRACT.QA_TEST_CASE WHERE TEST_ID = ?", [test_id])
+    test = rows(session, "SELECT RUN_ID, SCOPE, IS_DELETED FROM CORE.QA_TEST_CASE WHERE TEST_ID = ?", [test_id])
     assert test, f"QA test {test_id} does not exist"
     payload = {"sql": str(old.get("sql_text") or "").rstrip().rstrip(";"), "title": old.get("title"),
                "objective": old.get("objective"), "expected": old.get("expected"), "severity": old.get("severity")}
     if test[0].get("IS_DELETED"):
-        session.sql("UPDATE CONTRACT.QA_TEST_CASE SET IS_DELETED = FALSE WHERE TEST_ID = ?", params=[test_id]).collect()
+        session.sql("UPDATE CORE.QA_TEST_CASE SET IS_DELETED = FALSE WHERE TEST_ID = ?", params=[test_id]).collect()
     try:
         if (test[0].get("SCOPE") or "RUN") == "TABLE":
             if old.get("suite_id"):
@@ -102,7 +102,7 @@ def restore(session, test_id: str, version: int) -> Dict[str, Any]:
             out = procedures.qa_update(session, test[0]["RUN_ID"], test_id, json.dumps(payload), change="RESTORED")
     except Exception:
         if test[0].get("IS_DELETED"):  # the old SQL no longer passes: leave the test deleted as it was
-            session.sql("UPDATE CONTRACT.QA_TEST_CASE SET IS_DELETED = TRUE WHERE TEST_ID = ?", params=[test_id]).collect()
+            session.sql("UPDATE CORE.QA_TEST_CASE SET IS_DELETED = TRUE WHERE TEST_ID = ?", params=[test_id]).collect()
         raise
     return {"test_id": test_id, "restored": int(version), "note": out.get("note")}
 

@@ -5,7 +5,7 @@ Estimate (at call time), in this order:
   2. the model's calibrated rate: actual credits / tokens over this account's reconciled calls
   3. the legacy single rate (CREDITS_PER_MILLION_TOKENS)
 Actual (later): SNOWFLAKE.ACCOUNT_USAGE Cortex usage views report TOKEN_CREDITS per query id; reconcile() copies them
-onto AUDIT.COST_USAGE (Snowflake's usage views lag behind by up to a few hours). No price is hardcoded here: the
+onto CORE.COST_USAGE (Snowflake's usage views lag behind by up to a few hours). No price is hardcoded here: the
 platform learns this account's real rates from its own bill.
 """
 
@@ -69,7 +69,7 @@ def calibrated_rates(query: Query) -> Dict[str, float]:
         pass
     try:
         rates.update(_per_million(query("""SELECT MODEL, SUM(ACTUAL_CREDITS) AS CREDITS, SUM(TOTAL_TOKENS) AS TOKENS
-                                             FROM AUDIT.COST_USAGE
+                                             FROM CORE.COST_USAGE
                                             WHERE ACTUAL_CREDITS IS NOT NULL AND TOTAL_TOKENS > 0
                                               AND CREATED_AT >= DATEADD('day', -90, CURRENT_TIMESTAMP())
                                             GROUP BY MODEL""", ())))
@@ -86,16 +86,16 @@ def _count(query: Query, sql: str) -> int:
 def reconcile(query: Query, execute: Callable[[str, tuple], Any], days: int = 30) -> Dict[str, Any]:
     """Copy actual credits from Snowflake's Cortex usage views onto COST_USAGE by query id. Needs IMPORTED PRIVILEGES
     on the SNOWFLAKE database; without it the estimates stay."""
-    actual_sql = "SELECT COUNT(*) AS N FROM AUDIT.COST_USAGE WHERE ACTUAL_CREDITS IS NOT NULL"
+    actual_sql = "SELECT COUNT(*) AS N FROM CORE.COST_USAGE WHERE ACTUAL_CREDITS IS NOT NULL"
     before = _count(query, actual_sql)
     errors: List[str] = []
     readable = 0
     for view, credits_col in USAGE_VIEWS:
         try:
             execute(f"""
-                MERGE INTO AUDIT.COST_USAGE C
+                MERGE INTO CORE.COST_USAGE C
                 USING (SELECT QUERY_ID, SUM({credits_col}) AS CREDITS FROM {view}
-                        WHERE QUERY_ID IN (SELECT QUERY_ID FROM AUDIT.COST_USAGE
+                        WHERE QUERY_ID IN (SELECT QUERY_ID FROM CORE.COST_USAGE
                                             WHERE QUERY_ID IS NOT NULL AND ACTUAL_CREDITS IS NULL
                                               AND CREATED_AT >= DATEADD('day', -%s, CURRENT_TIMESTAMP()))
                         GROUP BY QUERY_ID) U
@@ -106,8 +106,8 @@ def reconcile(query: Query, execute: Callable[[str, tuple], Any], days: int = 30
         except Exception as exc:
             errors.append(f"{view.rsplit('.', 1)[-1]}: {str(exc)[:160]}")
     matched = _count(query, actual_sql) - before
-    pending = _count(query, "SELECT COUNT(*) AS N FROM AUDIT.COST_USAGE WHERE QUERY_ID IS NOT NULL AND ACTUAL_CREDITS IS NULL")
-    untracked = _count(query, "SELECT COUNT(*) AS N FROM AUDIT.COST_USAGE WHERE QUERY_ID IS NULL AND TOTAL_TOKENS > 0")
+    pending = _count(query, "SELECT COUNT(*) AS N FROM CORE.COST_USAGE WHERE QUERY_ID IS NOT NULL AND ACTUAL_CREDITS IS NULL")
+    untracked = _count(query, "SELECT COUNT(*) AS N FROM CORE.COST_USAGE WHERE QUERY_ID IS NULL AND TOTAL_TOKENS > 0")
     return {"reconciled": max(matched, 0), "awaiting_billing": pending, "without_query_id": untracked,
             "access": readable > 0, "detail": None if readable else (
                 "Actual credits need IMPORTED PRIVILEGES on the SNOWFLAKE database for this role "
@@ -120,14 +120,14 @@ def backfill_estimates(query: Query, execute: Callable[[str, tuple], Any], rate_
     """Calls recorded before any rate existed (estimate 0) get an estimate from the current rates."""
     calibrated = calibrated_rates(query) if calibrated is None else calibrated
     models = [r.get("model", r.get("MODEL")) for r in query(
-        "SELECT DISTINCT MODEL FROM AUDIT.COST_USAGE WHERE ACTUAL_CREDITS IS NULL AND COALESCE(ESTIMATED_COST, 0) = 0 "
+        "SELECT DISTINCT MODEL FROM CORE.COST_USAGE WHERE ACTUAL_CREDITS IS NULL AND COALESCE(ESTIMATED_COST, 0) = 0 "
         "AND TOTAL_TOKENS > 0 AND MODEL IS NOT NULL", ())]
     updated = 0
     for model in models:
         rin, rout, source = rates_for(model, rate_card, calibrated, legacy)
         if source == "none":
             continue
-        execute("""UPDATE AUDIT.COST_USAGE
+        execute("""UPDATE CORE.COST_USAGE
                       SET ESTIMATED_COST = ROUND((INPUT_TOKENS * %s + OUTPUT_TOKENS * %s) / 1000000, 6),
                           COST_SOURCE = 'ESTIMATE'
                     WHERE MODEL = %s AND ACTUAL_CREDITS IS NULL AND COALESCE(ESTIMATED_COST, 0) = 0

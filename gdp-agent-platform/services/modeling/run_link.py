@@ -1,13 +1,13 @@
 """Runs and the domain model: a run's model design is a proposal to the domain's canonical model, never a direct
 write to the registry (Model Workbench, PR 3).
 
-  propose        the run's design (MODELING.MODEL_DESIGN, v1 shape) merged into the approved domain model; no change
-                 means the run can use the approved model now (the API pins it), otherwise a GOVERNANCE.MODEL_CHANGE
+  propose        the run's design (CORE.MODEL_DESIGN, v1 shape) merged into the approved domain model; no change
+                 means the run can use the approved model now (the API pins it), otherwise a CORE.MODEL_CHANGE
                  is recorded for the modelers
   merge_change   a proposal merged into the model's open draft (a draft is opened when there is none)
   on_approved    when a version with merged proposals is approved: those proposals are APPROVED (their runs are
                  pinned by the API) and proposals made against an older version become STALE
-  pin_run        MODELING.PIN_RUN_MODEL (owner's rights): the run's target becomes the approved entity, its design
+  pin_run        CORE.PIN_RUN_MODEL (owner's rights): the run's target becomes the approved entity, its design
                  version is marked APPROVED, and the run records which model version it uses
 """
 
@@ -20,7 +20,7 @@ from typing import Any, Dict, List, Optional
 from services.common.sql import clip, insert_rows, rows, variant
 from services.modeling import domain_model, importers, model_diff, spec_v2
 
-CHANGES = "GOVERNANCE.MODEL_CHANGE"
+CHANGES = "CORE.MODEL_CHANGE"
 
 
 def _run(session, run_id: str) -> Dict[str, Any]:
@@ -30,7 +30,7 @@ def _run(session, run_id: str) -> Dict[str, Any]:
 
 
 def _model_for(session, domain_id: str) -> Optional[Dict[str, Any]]:
-    found = rows(session, "SELECT MODEL_ID, APPROVED_VERSION, DOMAIN_NAME FROM GOVERNANCE.DOMAIN_MODEL WHERE DOMAIN_ID = ? "
+    found = rows(session, "SELECT MODEL_ID, APPROVED_VERSION, DOMAIN_NAME FROM CORE.DOMAIN_MODEL WHERE DOMAIN_ID = ? "
                          "AND COALESCE(LAYER, 'SILVER') = 'SILVER'",
                  [domain_id])
     return found[0] if found else None
@@ -49,7 +49,7 @@ def run_entities(design: Dict[str, Any]) -> Dict[str, Any]:
 def propose(session, run_id: str, design_version: int, user: str) -> Dict[str, Any]:
     run = _run(session, run_id)
     assert run.get("DOMAIN_ID"), "identify the run's domain first; its model belongs to that domain"
-    found = rows(session, "SELECT DESIGN_JSON, ISSUES FROM MODELING.MODEL_DESIGN WHERE RUN_ID = ? AND VERSION = ?",
+    found = rows(session, "SELECT DESIGN_JSON, ISSUES FROM CORE.MODEL_DESIGN WHERE RUN_ID = ? AND VERSION = ?",
                  [run_id, int(design_version)])
     assert found, f"design version {design_version} not found"
     design, issues = variant(found[0]["DESIGN_JSON"]) or {}, variant(found[0]["ISSUES"]) or []
@@ -74,7 +74,7 @@ def propose_entities(session, domain_id: str, incoming: Dict[str, Any], primary:
     source = {"run_id": run_id, "design_version": design_version, "table_model_id": table_model_id,
               "table_model_version": table_model_version}
     if not model:  # the domain registers nothing yet: the proposal becomes the model's first draft
-        domain = rows(session, "SELECT DOMAIN_NAME FROM KNOWLEDGE.DOMAIN_REGISTRY WHERE DOMAIN_ID = ?", [domain_id])
+        domain = rows(session, "SELECT DOMAIN_NAME FROM CORE.DOMAIN_REGISTRY WHERE DOMAIN_ID = ?", [domain_id])
         spec = spec_v2.normalize_v2({**incoming, "domain": domain[0]["DOMAIN_NAME"] if domain else ""},
                                     domain_model.model_id_for(domain_id))
         created = domain_model.create_model(session, domain_id, json.dumps({"spec": spec, "origin": "RUN",
@@ -196,7 +196,7 @@ def reject_change(session, model_id: str, change_id: str, user: str, note: str) 
                      WHERE CHANGE_ID = ?""", params=[clip(note, 2000), user.upper(), change_id]).collect()
     from services.knowledge.signals import change_rejection, keep
 
-    model = rows(session, "SELECT DOMAIN_ID, DOMAIN_NAME FROM GOVERNANCE.DOMAIN_MODEL WHERE MODEL_ID = ?", [model_id])
+    model = rows(session, "SELECT DOMAIN_ID, DOMAIN_NAME FROM CORE.DOMAIN_MODEL WHERE MODEL_ID = ?", [model_id])
     if model:
         try:
             source = rows(session, f"SELECT SOURCE FROM {CHANGES} WHERE CHANGE_ID = ?", [change_id])[0].get("SOURCE")
@@ -235,8 +235,8 @@ def pending_for_run(session, run_id: str) -> Optional[Dict[str, Any]]:
 
 
 def pin_run(session, run_id: str, model_id: str, version: int, entity: str, design_version: int = 0) -> Dict[str, Any]:
-    """MODELING.PIN_RUN_MODEL (owner's rights): point the run at the approved model's entity."""
-    found = rows(session, """SELECT D.SPEC, D.STATUS FROM GOVERNANCE.MODEL_DESIGNS D WHERE D.MODEL_ID = ? AND D.VERSION = ?""",
+    """CORE.PIN_RUN_MODEL (owner's rights): point the run at the approved model's entity."""
+    found = rows(session, """SELECT D.SPEC, D.STATUS FROM CORE.MODEL_DESIGNS D WHERE D.MODEL_ID = ? AND D.VERSION = ?""",
                  [model_id, int(version)])
     assert found and found[0]["STATUS"] in ("APPROVED", "PUBLISHED"), "the run can only use an approved model version"
     spec = spec_v2.normalize_v2(variant(found[0]["SPEC"]) or {}, model_id)
@@ -247,9 +247,9 @@ def pin_run(session, run_id: str, model_id: str, version: int, entity: str, desi
                           UPDATED_AT = CURRENT_TIMESTAMP() WHERE RUN_ID = ?""",
                 params=[model_id, int(version), ent["entity_name"], fqn, run_id]).collect()
     if design_version:
-        session.sql("UPDATE MODELING.MODEL_DESIGN SET STATUS = 'SUPERSEDED' WHERE RUN_ID = ? AND STATUS = 'APPROVED'",
+        session.sql("UPDATE CORE.MODEL_DESIGN SET STATUS = 'SUPERSEDED' WHERE RUN_ID = ? AND STATUS = 'APPROVED'",
                     params=[run_id]).collect()
-        session.sql("""UPDATE MODELING.MODEL_DESIGN SET STATUS = 'APPROVED', APPROVED_BY = CURRENT_USER(),
+        session.sql("""UPDATE CORE.MODEL_DESIGN SET STATUS = 'APPROVED', APPROVED_BY = CURRENT_USER(),
                               APPROVED_AT = CURRENT_TIMESTAMP() WHERE RUN_ID = ? AND VERSION = ?""",
                     params=[run_id, int(design_version)]).collect()
     return {"run_id": run_id, "model_id": model_id, "model_version": int(version), "entity": ent["entity_name"],

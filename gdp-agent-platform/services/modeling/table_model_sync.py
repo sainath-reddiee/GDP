@@ -1,4 +1,4 @@
-"""Runs and the Table Model Store: every saved run design (MODELING.MODEL_DESIGN) registers its tables as table models
+"""Runs and the Table Model Store: every saved run design (CORE.MODEL_DESIGN) registers its tables as table models
 (services/modeling/table_model.py), so the model a run designed can be reopened, edited and published from the
 Modeling Store after the run has moved on.
 
@@ -24,7 +24,7 @@ KEEP = ("description", "business_definition", "semantic_type")
 
 
 def _source(session, run: Dict[str, Any]) -> Dict[str, Any]:
-    found = rows(session, "SELECT SOURCE_SYSTEM_ID, SOURCE_SYSTEM_NAME FROM SOURCE.SOURCE_REGISTRY WHERE SOURCE_SYSTEM_ID = ?",
+    found = rows(session, "SELECT SOURCE_SYSTEM_ID, SOURCE_SYSTEM_NAME FROM CORE.SOURCE_REGISTRY WHERE SOURCE_SYSTEM_ID = ?",
                  [run.get("SOURCE_SYSTEM_ID") or ""]) if run.get("SOURCE_SYSTEM_ID") else []
     name = (found[0]["SOURCE_SYSTEM_NAME"] if found else None) or run.get("SOURCE_DATABASE") or "RUN"
     return {"source_id": run.get("SOURCE_SYSTEM_ID"), "source_name": str(name).upper()}
@@ -119,7 +119,7 @@ def register_from_run(session, run_id: str, design_version: int, user: str) -> L
     run_rows = rows(session, "SELECT * FROM CORE.WORKFLOW_RUN WHERE RUN_ID = ?", [run_id])
     assert run_rows, "run not found"
     run = run_rows[0]
-    found = rows(session, "SELECT DESIGN_JSON FROM MODELING.MODEL_DESIGN WHERE RUN_ID = ? AND VERSION = ?",
+    found = rows(session, "SELECT DESIGN_JSON FROM CORE.MODEL_DESIGN WHERE RUN_ID = ? AND VERSION = ?",
                  [run_id, int(design_version)])
     assert found, f"design version {design_version} not found"
     design = variant(found[0]["DESIGN_JSON"]) or {}

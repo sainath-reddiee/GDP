@@ -131,7 +131,7 @@ def test_saving_replaces_a_draft_but_never_an_approved_version(store):
     session = Session()
     store["versions"] = [version(2, "DRAFT"), version(1, "APPROVED")]
     out = packs.save_draft(session, "p", json.dumps({"queries": [q()], "base_version": 2}))
-    assert out["version"] == 2 and any(c[0].startswith("DELETE FROM GOVERNANCE.DOMAIN_QA_PACKS") for c in session.calls)
+    assert out["version"] == 2 and any(c[0].startswith("DELETE FROM CORE.DOMAIN_QA_PACKS") for c in session.calls)
     store["versions"] = [version(2, "APPROVED"), version(1, "SUPERSEDED")]
     session = Session()
     out = packs.save_draft(session, "p", json.dumps({"queries": [q()]}))
@@ -214,7 +214,7 @@ def test_seed_inserts_new_repo_packs_and_keeps_ui_edits(monkeypatch):
     monkeypatch.setattr(seed, "merge", lambda execute, db, data: executed.append(("MERGE", data["knowledge"])))
     log = seed.seed_qa_packs(Cur(), "DB")
     assert any("version 1" in line for line in log)
-    inserts = [e for e in executed if e[0].startswith("INSERT INTO DB.GOVERNANCE.DOMAIN_QA_PACKS")]
+    inserts = [e for e in executed if e[0].startswith("INSERT INTO DB.CORE.DOMAIN_QA_PACKS")]
     assert inserts and all("'APPROVED', 'REPO'" in e[0] for e in inserts)
     knowledge = [e for e in executed if e[0] == "MERGE"][0][1]
     assert knowledge and all(k[2] == "QA_TEST" and k[8] == "ACTIVE" for k in knowledge)

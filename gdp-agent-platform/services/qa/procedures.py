@@ -1,9 +1,9 @@
-"""CONTRACT.QA_SUITE / QA_ASK / QA_SAVE: functional test SQL for a run's target model; QA_TABLE_SUITE /
+"""CORE.QA_SUITE / QA_ASK / QA_SAVE: functional test SQL for a run's target model; QA_TABLE_SUITE /
 QA_TABLE_ASK / QA_TABLE_SAVE: the same for a domain target table, with or without a run.
 
 The suite is derived from the current STTM on demand; testers save AI-written or edited queries. Nothing here runs a
 test against data: queries are validated by the read-only guard and compiled with EXPLAIN, then handed to the tester.
-Table tests (SCOPE 'TABLE') belong to a target table and a suite in CONTRACT.QA_TEST_SUITE, not to a run.
+Table tests (SCOPE 'TABLE') belong to a target table and a suite in CORE.QA_TEST_SUITE, not to a run.
 """
 
 from __future__ import annotations
@@ -108,13 +108,13 @@ def knowledge(session, domain_id: Optional[str], run_id: Optional[str],
             + (" key" if r["POTENTIAL_KEY_FLAG"] else "") + (f" PII={r['PII_CLASSIFICATION']}" if r["PII_CLASSIFICATION"] not in (None, "NONE") else "")
             for r in rows(session, """SELECT TABLE_NAME, COLUMN_NAME, DATA_TYPE, SEMANTIC_TYPE, NULL_PERCENTAGE,
                                              DISTINCT_PERCENTAGE, POTENTIAL_KEY_FLAG, PII_CLASSIFICATION
-                                        FROM PROFILE.PROFILE_REGISTRY WHERE RUN_ID = ? AND IS_CURRENT
+                                        FROM CORE.PROFILE_REGISTRY WHERE RUN_ID = ? AND IS_CURRENT
                                        ORDER BY TABLE_NAME, COLUMN_NAME LIMIT 120""", [facts_run])]
     except Exception:
         pass
     try:
         out["checks"] = [f"{r['TARGET_COLUMN'] or 'table'}: {r['CHECK_TYPE']} {clip(r['DEF'], 160)}" for r in rows(session, """
-            SELECT TARGET_COLUMN, CHECK_TYPE, CHECK_DEFINITION::VARCHAR AS DEF FROM CONTRACT.SODA_EXPECTATION_REGISTRY
+            SELECT TARGET_COLUMN, CHECK_TYPE, CHECK_DEFINITION::VARCHAR AS DEF FROM CORE.SODA_EXPECTATION_REGISTRY
              WHERE RUN_ID = ? AND IS_CURRENT AND STATUS = 'APPROVED' ORDER BY TARGET_COLUMN LIMIT 60""", [facts_run])]
     except Exception:
         pass
@@ -133,7 +133,7 @@ def _lines(session, sttm_id: str) -> List[Dict[str, Any]]:
         "accepted_values": variant(r["ACCEPTED_VALUES"]) or [], "default_value": r["DEFAULT_VALUE"],
         "business_definition": r["BUSINESS_DEFINITION"], "target_fqn": _fqn(r, "TARGET"), "source_fqn": _fqn(r, "SOURCE"),
         "lookup_logic": r.get("LOOKUP_LOGIC"),
-    } for r in rows(session, """SELECT * FROM CONTRACT.STTM_LINE WHERE STTM_ID = ? ORDER BY TARGET_COLUMN""", [sttm_id])]
+    } for r in rows(session, """SELECT * FROM CORE.STTM_LINE WHERE STTM_ID = ? ORDER BY TARGET_COLUMN""", [sttm_id])]
 
 
 def _build(session, sttm: Optional[Dict[str, Any]], registry: Optional[Dict[str, Any]] = None,
@@ -149,7 +149,7 @@ def _build(session, sttm: Optional[Dict[str, Any]], registry: Optional[Dict[str,
     if registry is None and sttm:
         try:
             found = rows(session, """SELECT TARGET_DATABASE, TARGET_SCHEMA, TARGET_TABLE, MODEL_SPEC
-                                      FROM KNOWLEDGE.TARGET_TABLE_REGISTRY WHERE TARGET_TABLE_ID = ?""", [sttm["TARGET_TABLE_ID"]])
+                                      FROM CORE.TARGET_TABLE_REGISTRY WHERE TARGET_TABLE_ID = ?""", [sttm["TARGET_TABLE_ID"]])
             registry = found[0] if found else None
         except Exception:
             registry = None
@@ -169,7 +169,7 @@ def _build(session, sttm: Optional[Dict[str, Any]], registry: Optional[Dict[str,
     columns: Dict[str, List[str]] = {}
     if source_run:
         for r in rows(session, """SELECT SOURCE_TABLE, LANDING_DATABASE, LANDING_SCHEMA, LANDING_TABLE
-                                    FROM SOURCE.LANDING_TABLE_REGISTRY WHERE RUN_ID = ? AND INGESTION_STATUS = 'COMPLETE'
+                                    FROM CORE.LANDING_TABLE_REGISTRY WHERE RUN_ID = ? AND INGESTION_STATUS = 'COMPLETE'
                                   QUALIFY ROW_NUMBER() OVER (PARTITION BY SOURCE_TABLE ORDER BY CREATED_AT DESC) = 1""",
                       [source_run]):
             sources[str(r["SOURCE_TABLE"]).upper()] = ".".join(
@@ -180,8 +180,8 @@ def _build(session, sttm: Optional[Dict[str, Any]], registry: Optional[Dict[str,
             sources[table] = l["source_fqn"]
     if source_run:
         for c in rows(session, """SELECT T.SOURCE_TABLE, C.COLUMN_NAME, C.DATA_TYPE
-                                    FROM SOURCE.LANDING_TABLE_REGISTRY T
-                                    JOIN SOURCE.LANDING_COLUMN_REGISTRY C ON C.LANDING_ID = T.LANDING_ID
+                                    FROM CORE.LANDING_TABLE_REGISTRY T
+                                    JOIN CORE.LANDING_COLUMN_REGISTRY C ON C.LANDING_ID = T.LANDING_ID
                                    WHERE T.RUN_ID = ? AND T.INGESTION_STATUS = 'COMPLETE'
                                  QUALIFY DENSE_RANK() OVER (PARTITION BY T.SOURCE_TABLE ORDER BY T.CREATED_AT DESC) = 1
                                    ORDER BY T.SOURCE_TABLE, C.ORDINAL_POSITION""", [source_run]):
@@ -204,7 +204,7 @@ def _build(session, sttm: Optional[Dict[str, Any]], registry: Optional[Dict[str,
 
 def run_sttm(session, run_id: str) -> Dict[str, Any]:
     """The run's current STTM (REVIEW or APPROVED)."""
-    sttm = rows(session, """SELECT STTM_ID, RUN_ID, TARGET_TABLE_ID, TABLE_DESIGN, DOMAIN_ID FROM CONTRACT.STTM_REGISTRY
+    sttm = rows(session, """SELECT STTM_ID, RUN_ID, TARGET_TABLE_ID, TABLE_DESIGN, DOMAIN_ID FROM CORE.STTM_REGISTRY
                             WHERE RUN_ID = ? AND STATUS IN ('REVIEW', 'APPROVED')
                             ORDER BY STTM_VERSION DESC LIMIT 1""", [run_id])
     assert sttm, "no STTM for this run yet; generate it before preparing QA tests"
@@ -227,13 +227,13 @@ def _test(r: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _saved(session, run_id: str) -> List[Dict[str, Any]]:
-    return [_test(r) for r in rows(session, """SELECT * FROM CONTRACT.QA_TEST_CASE WHERE RUN_ID = ? AND NOT IS_DELETED
+    return [_test(r) for r in rows(session, """SELECT * FROM CORE.QA_TEST_CASE WHERE RUN_ID = ? AND NOT IS_DELETED
                                                 ORDER BY CREATED_AT""", [run_id])]
 
 
 def table_saved(session, target_table_id: str, suite_id: Optional[str] = None) -> List[Dict[str, Any]]:
     """Saved TABLE-scope tests of a target table (optionally of one suite), not deleted."""
-    return [_test(r) for r in rows(session, """SELECT * FROM CONTRACT.QA_TEST_CASE
+    return [_test(r) for r in rows(session, """SELECT * FROM CORE.QA_TEST_CASE
                                                 WHERE SCOPE = 'TABLE' AND TARGET_TABLE_ID = ? AND NOT COALESCE(IS_DELETED, FALSE)
                                                   AND (? = '' OR SUITE_ID = ?)
                                                 ORDER BY CREATED_AT""", [target_table_id, suite_id or "", suite_id or ""])]
@@ -403,7 +403,7 @@ def qa_save(session, run_id: str, payload_json: str) -> Dict[str, Any]:
     assert ok, "; ".join(problems)
     category, severity = _fields(payload)
     test_id = str(uuid.uuid4())
-    insert_rows(session, "CONTRACT.QA_TEST_CASE",
+    insert_rows(session, "CORE.QA_TEST_CASE",
                 ["TEST_ID", "RUN_ID", "STTM_ID", "CATEGORY", "TITLE", "OBJECTIVE", "SQL_TEXT", "EXPECTED", "SEVERITY",
                  "TARGET_COLUMN", "ORIGIN", "PROMPT"],
                 ["?", "?", "?", "?", "?", "NULLIF(?, '')", "?", "NULLIF(?, '')", "?", "NULLIF(?, '')", "?", "NULLIF(?, '')"],
@@ -425,7 +425,7 @@ def qa_update(session, run_id: str, test_id: str, payload_json: str, change: str
     severity = severity if severity in SEVERITIES else "MEDIUM"
     compile_error, note = compile_check(session, sql, ctx)
     assert not compile_error, f"the query does not compile: {compile_error}"
-    session.sql("""UPDATE CONTRACT.QA_TEST_CASE
+    session.sql("""UPDATE CORE.QA_TEST_CASE
                       SET SQL_TEXT = ?, TITLE = ?, EXPECTED = NULLIF(?, ''), OBJECTIVE = NULLIF(?, ''), SEVERITY = ?
                     WHERE RUN_ID = ? AND TEST_ID = ? AND NOT IS_DELETED""",
                 params=[sql + ";", clip(payload.get("title") or "Custom test", 500), clip(payload.get("expected"), 1000),
@@ -527,7 +527,7 @@ def table_plan(session, target_table_id: str, focus: str = "") -> Dict[str, Any]
 
 
 def _suite(session, suite_id: str) -> Dict[str, Any]:
-    found = rows(session, """SELECT SUITE_ID, DOMAIN_ID, TARGET_TABLE_ID, NAME, IS_DEFAULT FROM CONTRACT.QA_TEST_SUITE
+    found = rows(session, """SELECT SUITE_ID, DOMAIN_ID, TARGET_TABLE_ID, NAME, IS_DEFAULT FROM CORE.QA_TEST_SUITE
                               WHERE SUITE_ID = ? AND NOT COALESCE(IS_DELETED, FALSE)""", [suite_id])
     assert found, f"QA suite {suite_id} does not exist"
     return found[0]
@@ -535,13 +535,13 @@ def _suite(session, suite_id: str) -> Dict[str, Any]:
 
 def default_suite(session, target_table_id: str, domain_id: Optional[str]) -> str:
     """The table's default suite, created on demand."""
-    found = rows(session, """SELECT SUITE_ID FROM CONTRACT.QA_TEST_SUITE
+    found = rows(session, """SELECT SUITE_ID FROM CORE.QA_TEST_SUITE
                               WHERE TARGET_TABLE_ID = ? AND IS_DEFAULT AND NOT COALESCE(IS_DELETED, FALSE)
                               ORDER BY CREATED_AT LIMIT 1""", [target_table_id])
     if found:
         return found[0]["SUITE_ID"]
     suite_id = str(uuid.uuid4())
-    insert_rows(session, "CONTRACT.QA_TEST_SUITE",
+    insert_rows(session, "CORE.QA_TEST_SUITE",
                 ["SUITE_ID", "DOMAIN_ID", "TARGET_TABLE_ID", "NAME", "DESCRIPTION", "IS_DEFAULT", "IS_DELETED",
                  "CREATED_BY", "CREATED_AT", "UPDATED_AT"],
                 ["?", "NULLIF(?, '')", "?", "?", "NULLIF(?, '')", "TRUE", "FALSE", "CURRENT_USER()",
@@ -564,7 +564,7 @@ def table_save(session, target_table_id: str, payload_json: str) -> Dict[str, An
     else:
         suite_id = default_suite(session, target_table_id, ctx.get("domain_id"))
     test_id = str(uuid.uuid4())
-    insert_rows(session, "CONTRACT.QA_TEST_CASE",
+    insert_rows(session, "CORE.QA_TEST_CASE",
                 ["TEST_ID", "STTM_ID", "CATEGORY", "TITLE", "OBJECTIVE", "SQL_TEXT", "EXPECTED", "SEVERITY",
                  "TARGET_COLUMN", "ORIGIN", "PROMPT", "DOMAIN_ID", "TARGET_TABLE_ID", "SUITE_ID", "SCOPE", "TARGET_FQN"],
                 ["?", "NULLIF(?, '')", "?", "?", "NULLIF(?, '')", "?", "NULLIF(?, '')", "?", "NULLIF(?, '')", "?",
@@ -579,7 +579,7 @@ def table_save(session, target_table_id: str, payload_json: str) -> Dict[str, An
 
 
 def _table_test(session, test_id: str) -> Dict[str, Any]:
-    found = rows(session, """SELECT TEST_ID, TARGET_TABLE_ID, SUITE_ID, SCOPE FROM CONTRACT.QA_TEST_CASE
+    found = rows(session, """SELECT TEST_ID, TARGET_TABLE_ID, SUITE_ID, SCOPE FROM CORE.QA_TEST_CASE
                               WHERE TEST_ID = ? AND NOT COALESCE(IS_DELETED, FALSE)""", [test_id])
     assert found, f"QA test {test_id} does not exist"
     assert (found[0].get("SCOPE") or "RUN") == "TABLE", "that test belongs to a run; edit it from the run's QA tab"
@@ -599,7 +599,7 @@ def update_table_test(session, test_id: str, payload_json: str, change: str = "E
     suite_id = payload.get("suite_id") or test.get("SUITE_ID") or ""
     if payload.get("suite_id"):
         assert _suite(session, suite_id)["TARGET_TABLE_ID"] == test["TARGET_TABLE_ID"], "that suite belongs to another table"
-    session.sql("""UPDATE CONTRACT.QA_TEST_CASE
+    session.sql("""UPDATE CORE.QA_TEST_CASE
                       SET SQL_TEXT = ?, TITLE = ?, EXPECTED = NULLIF(?, ''), OBJECTIVE = NULLIF(?, ''), SEVERITY = ?,
                           SUITE_ID = NULLIF(?, '')
                     WHERE TEST_ID = ? AND SCOPE = 'TABLE' AND NOT COALESCE(IS_DELETED, FALSE)""",
@@ -611,7 +611,7 @@ def update_table_test(session, test_id: str, payload_json: str, change: str = "E
 
 def delete_table_test(session, test_id: str) -> Dict[str, Any]:
     _table_test(session, test_id)
-    session.sql("UPDATE CONTRACT.QA_TEST_CASE SET IS_DELETED = TRUE WHERE TEST_ID = ? AND SCOPE = 'TABLE'",
+    session.sql("UPDATE CORE.QA_TEST_CASE SET IS_DELETED = TRUE WHERE TEST_ID = ? AND SCOPE = 'TABLE'",
                 params=[test_id]).collect()
     record_version(session, test_id, "DELETED")
     return {"test_id": test_id, "deleted": True}
@@ -620,14 +620,14 @@ def delete_table_test(session, test_id: str) -> Dict[str, Any]:
 def create_suite(session, target_table_id: str, name: str, description: Optional[str] = None) -> Dict[str, Any]:
     name = (name or "").strip()
     assert name, "name the suite"
-    found = rows(session, "SELECT DOMAIN_ID FROM KNOWLEDGE.TARGET_TABLE_REGISTRY WHERE TARGET_TABLE_ID = ?",
+    found = rows(session, "SELECT DOMAIN_ID FROM CORE.TARGET_TABLE_REGISTRY WHERE TARGET_TABLE_ID = ?",
                  [target_table_id])
     assert found, f"target table {target_table_id} does not exist"
-    assert not rows(session, """SELECT 1 AS X FROM CONTRACT.QA_TEST_SUITE
+    assert not rows(session, """SELECT 1 AS X FROM CORE.QA_TEST_SUITE
                                  WHERE TARGET_TABLE_ID = ? AND UPPER(NAME) = UPPER(?) AND NOT COALESCE(IS_DELETED, FALSE)""",
                     [target_table_id, clip(name, 200)]), f"a suite named {name!r} already exists on this table"
     suite_id = str(uuid.uuid4())
-    insert_rows(session, "CONTRACT.QA_TEST_SUITE",
+    insert_rows(session, "CORE.QA_TEST_SUITE",
                 ["SUITE_ID", "DOMAIN_ID", "TARGET_TABLE_ID", "NAME", "DESCRIPTION", "IS_DEFAULT", "IS_DELETED",
                  "CREATED_BY", "CREATED_AT", "UPDATED_AT"],
                 ["?", "NULLIF(?, '')", "?", "?", "NULLIF(?, '')", "FALSE", "FALSE", "CURRENT_USER()",
@@ -642,11 +642,11 @@ def update_suite(session, suite_id: str, name: Optional[str] = None,
     suite = _suite(session, suite_id)
     name = (name or "").strip()
     if name and name.upper() != str(suite.get("NAME") or "").upper():
-        assert not rows(session, """SELECT 1 AS X FROM CONTRACT.QA_TEST_SUITE
+        assert not rows(session, """SELECT 1 AS X FROM CORE.QA_TEST_SUITE
                                      WHERE TARGET_TABLE_ID = ? AND UPPER(NAME) = UPPER(?) AND SUITE_ID <> ?
                                        AND NOT COALESCE(IS_DELETED, FALSE)""",
                         [suite["TARGET_TABLE_ID"], clip(name, 200), suite_id]), f"a suite named {name!r} already exists"
-    session.sql("""UPDATE CONTRACT.QA_TEST_SUITE
+    session.sql("""UPDATE CORE.QA_TEST_SUITE
                       SET NAME = COALESCE(NULLIF(?, ''), NAME),
                           DESCRIPTION = IFF(? = 'KEEP', DESCRIPTION, NULLIF(?, '')), UPDATED_AT = CURRENT_TIMESTAMP()
                     WHERE SUITE_ID = ? AND NOT COALESCE(IS_DELETED, FALSE)""",
@@ -660,9 +660,9 @@ def delete_suite(session, suite_id: str) -> Dict[str, Any]:
     suite = _suite(session, suite_id)
     assert not suite.get("IS_DEFAULT"), "the default suite cannot be deleted"
     target = default_suite(session, suite["TARGET_TABLE_ID"], suite.get("DOMAIN_ID"))
-    session.sql("""UPDATE CONTRACT.QA_TEST_CASE SET SUITE_ID = ?
+    session.sql("""UPDATE CORE.QA_TEST_CASE SET SUITE_ID = ?
                     WHERE SUITE_ID = ? AND NOT COALESCE(IS_DELETED, FALSE)""", params=[target, suite_id]).collect()
-    session.sql("""UPDATE CONTRACT.QA_TEST_SUITE SET IS_DELETED = TRUE, UPDATED_AT = CURRENT_TIMESTAMP()
+    session.sql("""UPDATE CORE.QA_TEST_SUITE SET IS_DELETED = TRUE, UPDATED_AT = CURRENT_TIMESTAMP()
                     WHERE SUITE_ID = ?""", params=[suite_id]).collect()
     return {"suite_id": suite_id, "deleted": True, "moved_to": target}
 
@@ -678,8 +678,8 @@ def list_suites(session, target_table_id: Optional[str] = None, domain_id: Optio
     } for r in rows(session, """
         SELECT S.SUITE_ID, S.DOMAIN_ID, S.TARGET_TABLE_ID, S.NAME, S.DESCRIPTION, S.IS_DEFAULT, S.CREATED_BY,
                S.CREATED_AT, S.UPDATED_AT, COALESCE(C.N, 0) AS TESTS
-          FROM CONTRACT.QA_TEST_SUITE S
-          LEFT JOIN (SELECT SUITE_ID, COUNT(*) AS N FROM CONTRACT.QA_TEST_CASE
+          FROM CORE.QA_TEST_SUITE S
+          LEFT JOIN (SELECT SUITE_ID, COUNT(*) AS N FROM CORE.QA_TEST_CASE
                       WHERE SCOPE = 'TABLE' AND NOT COALESCE(IS_DELETED, FALSE) GROUP BY SUITE_ID) C
             ON C.SUITE_ID = S.SUITE_ID
          WHERE NOT COALESCE(S.IS_DELETED, FALSE) AND (? = '' OR S.TARGET_TABLE_ID = ?) AND (? = '' OR S.DOMAIN_ID = ?)

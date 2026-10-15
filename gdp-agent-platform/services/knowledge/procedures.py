@@ -29,19 +29,19 @@ def _database(session) -> str:
 
 def _domain_terms(session) -> List[Dict[str, Any]]:
     try:
-        domains = rows(session, "SELECT DOMAIN_ID, DOMAIN_NAME, CONFIG FROM KNOWLEDGE.DOMAIN_REGISTRY WHERE ACTIVE_FLAG")
+        domains = rows(session, "SELECT DOMAIN_ID, DOMAIN_NAME, CONFIG FROM CORE.DOMAIN_REGISTRY WHERE ACTIVE_FLAG")
     except Exception:
-        domains = rows(session, "SELECT DOMAIN_ID, DOMAIN_NAME FROM KNOWLEDGE.DOMAIN_REGISTRY WHERE ACTIVE_FLAG")
+        domains = rows(session, "SELECT DOMAIN_ID, DOMAIN_NAME FROM CORE.DOMAIN_REGISTRY WHERE ACTIVE_FLAG")
     out = []
     for d in domains:
         terms = set()
-        for k in rows(session, "SELECT CONTENT_JSON FROM KNOWLEDGE.DOMAIN_KNOWLEDGE WHERE DOMAIN_ID = ? AND IS_CURRENT "
+        for k in rows(session, "SELECT CONTENT_JSON FROM CORE.DOMAIN_KNOWLEDGE WHERE DOMAIN_ID = ? AND IS_CURRENT "
                                "AND STATUS = 'ACTIVE' AND KNOWLEDGE_TYPE = 'GLOSSARY'", [d["DOMAIN_ID"]]):
             content = normalize_content("GLOSSARY", variant(k["CONTENT_JSON"])) or {}
             for s in (content.get("synonyms") or []) + [content.get("target_column") or ""]:
                 terms |= token_set(s)
-        for c in rows(session, """SELECT C.COLUMN_NAME, T.TARGET_TABLE FROM KNOWLEDGE.TARGET_COLUMN_REGISTRY C
-                                  JOIN KNOWLEDGE.TARGET_TABLE_REGISTRY T ON T.TARGET_TABLE_ID = C.TARGET_TABLE_ID
+        for c in rows(session, """SELECT C.COLUMN_NAME, T.TARGET_TABLE FROM CORE.TARGET_COLUMN_REGISTRY C
+                                  JOIN CORE.TARGET_TABLE_REGISTRY T ON T.TARGET_TABLE_ID = C.TARGET_TABLE_ID
                                   WHERE T.DOMAIN_ID = ? AND T.ACTIVE_FLAG AND COALESCE(T.LAYER, 'SILVER') = 'SILVER'""", [d["DOMAIN_ID"]]):
             terms |= token_set(c["COLUMN_NAME"]) | entity_tokens(c["TARGET_TABLE"])
         config = variant(d.get("CONFIG")) or {}
@@ -52,8 +52,8 @@ def _domain_terms(session) -> List[Dict[str, Any]]:
 
 def _identified_payload(session, run_id: str, stage: Stage) -> Dict[str, Any]:
     recs = rows(session, """SELECT R.DOMAIN_ID, D.DOMAIN_NAME, R.CONFIDENCE, R.STATUS
-                              FROM KNOWLEDGE.DOMAIN_RECOMMENDATION R
-                              JOIN KNOWLEDGE.DOMAIN_REGISTRY D ON D.DOMAIN_ID = R.DOMAIN_ID
+                              FROM CORE.DOMAIN_RECOMMENDATION R
+                              JOIN CORE.DOMAIN_REGISTRY D ON D.DOMAIN_ID = R.DOMAIN_ID
                              WHERE R.RUN_ID = ? ORDER BY R.CONFIDENCE DESC""", [run_id])
     accepted = next((r for r in recs if r["STATUS"] == "ACCEPTED"), recs[0] if recs else None)
     domain = None
@@ -86,7 +86,7 @@ def _confirmed(session, run: Dict[str, Any]) -> Dict[str, int]:
         return {}
     try:
         found = rows(session, """SELECT R.DOMAIN_ID, COUNT(DISTINCT R.RUN_ID) AS N
-                                   FROM KNOWLEDGE.DOMAIN_RECOMMENDATION R
+                                   FROM CORE.DOMAIN_RECOMMENDATION R
                                    JOIN CORE.WORKFLOW_RUN W ON W.RUN_ID = R.RUN_ID
                                   WHERE W.SOURCE_SYSTEM_ID = ? AND R.RUN_ID <> ? AND R.STATUS = 'ACCEPTED'
                                     AND COALESCE(R.DECIDED_BY, 'SYSTEM') <> 'SYSTEM'
@@ -105,7 +105,7 @@ def identify_domain(session, run_id: str) -> Dict[str, Any]:
     with tool_call(session, run_id, "get_domain_candidates", {"run_id": run_id}) as call:
         try:
             profile = rows(session, """SELECT TABLE_NAME, COLUMN_NAME, SEMANTIC_TYPE, GENERATED_DESCRIPTION
-                                       FROM PROFILE.PROFILE_REGISTRY WHERE RUN_ID = ? AND IS_CURRENT""", [run_id])
+                                       FROM CORE.PROFILE_REGISTRY WHERE RUN_ID = ? AND IS_CURRENT""", [run_id])
             assert profile, "no current profile for this run"
             started = time.time()
             query = " ".join(sorted({p["TABLE_NAME"] for p in profile}) + [p["COLUMN_NAME"] for p in profile])
@@ -151,7 +151,7 @@ def identify_domain(session, run_id: str) -> Dict[str, Any]:
         return bool((stamped_id and d["domain_id"] == stamped_id) or (not stamped_id and confident and d is top))
 
     def record(_event_id: str) -> None:
-        insert_rows(session, "KNOWLEDGE.DOMAIN_RECOMMENDATION",
+        insert_rows(session, "CORE.DOMAIN_RECOMMENDATION",
                     ["RECOMMENDATION_ID", "RUN_ID", "DOMAIN_ID", "CONFIDENCE", "EVIDENCE_JSON", "MATCHED_KNOWLEDGE",
                      "RECOMMENDATION", "STATUS", "DECIDED_BY", "DECIDED_AT", "MODEL_VERSION"],
                     ["?", "?", "?", "?::FLOAT", "PARSE_JSON(?)", "PARSE_JSON(?)", "?", "?", "NULLIF(?, '')",
@@ -180,7 +180,7 @@ def search_knowledge(session, query: str, domain: Optional[str], knowledge_type:
 
 
 def load_skill(session, skill_name: str) -> Dict[str, Any]:
-    """KNOWLEDGE.LOAD_SKILL: the production version (the procedure signature takes the name only)."""
+    """CORE.LOAD_SKILL: the production version (the procedure signature takes the name only)."""
     return load_skill_for(session, skill_name)
 
 
@@ -205,11 +205,11 @@ def ensure_domain(session, name: str, description: str = "") -> str:
     """Domain id by name, created (active) when it does not exist yet."""
     name = (name or "").strip().upper()
     assert name, "domain name is required"
-    found = rows(session, "SELECT DOMAIN_ID FROM KNOWLEDGE.DOMAIN_REGISTRY WHERE UPPER(DOMAIN_NAME) = ?", [name])
+    found = rows(session, "SELECT DOMAIN_ID FROM CORE.DOMAIN_REGISTRY WHERE UPPER(DOMAIN_NAME) = ?", [name])
     if found:
         return found[0]["DOMAIN_ID"]
     domain_id = str(uuid.uuid4())
-    insert_rows(session, "KNOWLEDGE.DOMAIN_REGISTRY",
+    insert_rows(session, "CORE.DOMAIN_REGISTRY",
                 ["DOMAIN_ID", "DOMAIN_NAME", "DESCRIPTION", "OWNER", "ACTIVE_FLAG", "VERSION"],
                 ["?", "?", "NULLIF(?, '')", "CURRENT_USER()", "TRUE", "1"],
                 [[domain_id, name, description]])
@@ -220,7 +220,7 @@ def _target_domain(session, payload: Dict[str, Any], registered_domain: Optional
     """Domain for a target: the caller's choice, else where the same table is already registered, else GENERAL.
     Never a fixed client domain, so any company's tables are filed under their own domain."""
     if payload.get("domain_id"):
-        found = rows(session, "SELECT DOMAIN_ID FROM KNOWLEDGE.DOMAIN_REGISTRY WHERE DOMAIN_ID = ?", [payload["domain_id"]])
+        found = rows(session, "SELECT DOMAIN_ID FROM CORE.DOMAIN_REGISTRY WHERE DOMAIN_ID = ?", [payload["domain_id"]])
         assert found, f"unknown domain {payload['domain_id']}"
         return found[0]["DOMAIN_ID"]
     if payload.get("domain_name"):
@@ -232,11 +232,11 @@ def _target_domain(session, payload: Dict[str, Any], registered_domain: Optional
 
 def _add_new_target_columns(session, target_id: str, columns: List[Dict[str, Any]]) -> None:
     """Re-registering a target picks up columns added to the table since its last snapshot."""
-    known = {str(r["COLUMN_NAME"]) for r in rows(session, "SELECT COLUMN_NAME FROM KNOWLEDGE.TARGET_COLUMN_REGISTRY "
+    known = {str(r["COLUMN_NAME"]) for r in rows(session, "SELECT COLUMN_NAME FROM CORE.TARGET_COLUMN_REGISTRY "
                                                           "WHERE TARGET_TABLE_ID = ?", [target_id])}
     new = [c for c in columns if c["column_name"] not in known]
     if new:
-        insert_rows(session, "KNOWLEDGE.TARGET_COLUMN_REGISTRY",
+        insert_rows(session, "CORE.TARGET_COLUMN_REGISTRY",
                     ["TARGET_COLUMN_ID", "TARGET_TABLE_ID", "COLUMN_NAME", "DATA_TYPE", "ORDINAL_POSITION",
                      "NULLABLE", "BUSINESS_DEFINITION", "SEMANTIC_TYPE", "IS_BUSINESS_KEY", "IS_PII",
                      "ACCEPTED_VALUES", "VERSION"],
@@ -257,7 +257,7 @@ def register_target_table(session, payload_json: str) -> Dict[str, Any]:
     database, schema, table = normalize(payload.get("database")), normalize(payload.get("schema")), normalize(payload.get("table"))
     columns = payload.get("columns") or []
     assert isinstance(columns, list) and columns, f"TARGET_NOT_VISIBLE: {database}.{schema}.{table}"
-    found = rows(session, """SELECT TARGET_TABLE_ID, DOMAIN_ID FROM KNOWLEDGE.TARGET_TABLE_REGISTRY
+    found = rows(session, """SELECT TARGET_TABLE_ID, DOMAIN_ID FROM CORE.TARGET_TABLE_REGISTRY
                              WHERE TARGET_DATABASE = ? AND TARGET_SCHEMA = ? AND TARGET_TABLE = ? AND ACTIVE_FLAG
                              ORDER BY CREATED_AT LIMIT 1""", [database, schema, table])
     domain_id = _target_domain(session, payload, found[0]["DOMAIN_ID"] if found else None)
@@ -266,14 +266,14 @@ def register_target_table(session, payload_json: str) -> Dict[str, Any]:
         _add_new_target_columns(session, target_id, columns)
     else:
         target_id = str(uuid.uuid4())
-        insert_rows(session, "KNOWLEDGE.TARGET_TABLE_REGISTRY",
+        insert_rows(session, "CORE.TARGET_TABLE_REGISTRY",
                     ["TARGET_TABLE_ID", "DOMAIN_ID", "TARGET_DATABASE", "TARGET_SCHEMA", "TARGET_TABLE",
                      "TABLE_TYPE", "GRAIN", "BUSINESS_KEYS", "SCD_TYPE", "DESCRIPTION", "VERSION", "ACTIVE_FLAG"],
                     ["?", "?", "?", "?", "?", "'TABLE'", "?", "PARSE_JSON(?)", "'1'", "?", "1", "TRUE"],
                     [[target_id, domain_id, database, schema, table,
                       f"One row per business key of {table}, snapshotted from the existing table.",
                       [], f"Existing table {database}.{schema}.{table} selected as the modeling target."]])
-        insert_rows(session, "KNOWLEDGE.TARGET_COLUMN_REGISTRY",
+        insert_rows(session, "CORE.TARGET_COLUMN_REGISTRY",
                     ["TARGET_COLUMN_ID", "TARGET_TABLE_ID", "COLUMN_NAME", "DATA_TYPE", "ORDINAL_POSITION",
                      "NULLABLE", "BUSINESS_DEFINITION", "SEMANTIC_TYPE", "IS_BUSINESS_KEY", "IS_PII",
                      "ACCEPTED_VALUES", "VERSION"],
@@ -289,6 +289,6 @@ def register_target_table(session, payload_json: str) -> Dict[str, Any]:
 def current_knowledge_version(session, domain_id: Optional[str]) -> str:
     """Stable fingerprint of the current knowledge set used by an artifact."""
     value = scalar(session, """SELECT TO_VARCHAR(MAX(UPDATED_AT), 'YYYYMMDDHH24MISS') || '-' || COUNT(*)
-                               FROM KNOWLEDGE.DOMAIN_KNOWLEDGE WHERE IS_CURRENT AND (DOMAIN_ID = ? OR ? = '')""",
+                               FROM CORE.DOMAIN_KNOWLEDGE WHERE IS_CURRENT AND (DOMAIN_ID = ? OR ? = '')""",
                    [domain_id or "", domain_id or ""])
     return value or "none"

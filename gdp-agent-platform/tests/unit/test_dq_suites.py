@@ -158,16 +158,16 @@ def lifecycle(versions, checks_by_version, suite=None):
     s = Session()
 
     def etag(_params):
-        writes = s.find("UPDATE GOVERNANCE.DQ_SUITE_VERSION SET CHECKS = PARSE_JSON(?), ETAG = ?")
+        writes = s.find("UPDATE CORE.DQ_SUITE_VERSION SET CHECKS = PARSE_JSON(?), ETAG = ?")
         return [{"ETAG": writes[-1][1][1]}] if writes else []
 
     s.answers = {
-        "FROM GOVERNANCE.DQ_SUITE WHERE TABLE_NAME = ?": [suite or SUITE],
-        "SELECT ETAG FROM GOVERNANCE.DQ_SUITE_VERSION": etag,
-        "SELECT CHECKS FROM GOVERNANCE.DQ_SUITE_VERSION": lambda p: [{"CHECKS": json.dumps(checks_by_version[int(p[1])])}],
-        "FROM GOVERNANCE.DQ_SUITE_VERSION WHERE SUITE_ID = ? AND STATUS IN ('DRAFT', 'IN_REVIEW')": lambda p: [
+        "FROM CORE.DQ_SUITE WHERE TABLE_NAME = ?": [suite or SUITE],
+        "SELECT ETAG FROM CORE.DQ_SUITE_VERSION": etag,
+        "SELECT CHECKS FROM CORE.DQ_SUITE_VERSION": lambda p: [{"CHECKS": json.dumps(checks_by_version[int(p[1])])}],
+        "FROM CORE.DQ_SUITE_VERSION WHERE SUITE_ID = ? AND STATUS IN ('DRAFT', 'IN_REVIEW')": lambda p: [
             {"VERSION": v["VERSION"]} for v in versions if v["STATUS"] in ("DRAFT", "IN_REVIEW")],
-        "FROM GOVERNANCE.DQ_SUITE_VERSION WHERE SUITE_ID = ? ORDER BY VERSION DESC": lambda p: versions,
+        "FROM CORE.DQ_SUITE_VERSION WHERE SUITE_ID = ? ORDER BY VERSION DESC": lambda p: versions,
     }
     return s
 
@@ -252,15 +252,15 @@ def test_approve_records_the_model_version(monkeypatch):
 
 def test_apply_suite_version_merges_and_retires():
     checks = [check(cid="a"), {**check("ID", cid="b"), "status": "PAUSED"}]
-    s = Session({"JOIN GOVERNANCE.DQ_SUITE_VERSION V": [{"TABLE_NAME": TABLE, "DOMAIN_ID": "d1", "STATUS": "APPROVED",
+    s = Session({"JOIN CORE.DQ_SUITE_VERSION V": [{"TABLE_NAME": TABLE, "DOMAIN_ID": "d1", "STATUS": "APPROVED",
                                                         "CHECKS": json.dumps(checks)}]})
     out = ds.apply_suite_version(s, "s1", 2)
     assert out == {"table": TABLE, "version": 2, "checks": 2, "active": 1}
-    merges = s.find("MERGE INTO GOVERNANCE.DQ_CHECKS_CATALOG")
+    merges = s.find("MERGE INTO CORE.DQ_CHECKS_CATALOG")
     assert [m[1][0] for m in merges] == ["a", "b"] and merges[1][1][7] == "PAUSED"
     retire = s.find("SET STATUS = 'RETIRED'")[0]
     assert "NOT IN (?, ?)" in retire[0] and retire[1] == [TABLE, "a", "b"]
-    draft = Session({"JOIN GOVERNANCE.DQ_SUITE_VERSION V": [{"TABLE_NAME": TABLE, "DOMAIN_ID": None, "STATUS": "DRAFT", "CHECKS": "[]"}]})
+    draft = Session({"JOIN CORE.DQ_SUITE_VERSION V": [{"TABLE_NAME": TABLE, "DOMAIN_ID": None, "STATUS": "DRAFT", "CHECKS": "[]"}]})
     with pytest.raises(AssertionError, match="approved"):
         ds.apply_suite_version(draft, "s1", 2)
 
@@ -273,11 +273,11 @@ def test_ensure_baselines_a_catalog_table():
     def header(_p):
         created["n"] += 1
         return [] if created["n"] == 1 else [SUITE]
-    s = Session({"FROM GOVERNANCE.DQ_SUITE WHERE TABLE_NAME = ?": header,
-                 "FROM GOVERNANCE.DQ_CHECKS_CATALOG WHERE TABLE_NAME = ?": catalog})
+    s = Session({"FROM CORE.DQ_SUITE WHERE TABLE_NAME = ?": header,
+                 "FROM CORE.DQ_CHECKS_CATALOG WHERE TABLE_NAME = ?": catalog})
     out = ds._ensure(s, TABLE, "d1", "ana")
     assert out["suite_id"] == SUITE["SUITE_ID"]
-    inserted = s.find("INSERT INTO GOVERNANCE.DQ_SUITE_VERSION")[0][1]
+    inserted = s.find("INSERT INTO CORE.DQ_SUITE_VERSION")[0][1]
     assert inserted[2] == "APPROVED" and json.loads(inserted[4])[0]["check_id"] == "c1"
     assert s.find("SET APPROVED_VERSION = 1")
 
@@ -294,32 +294,32 @@ def test_publish_dq_suite_and_sync(monkeypatch):
         seen.update(files=files, head=head, draft=kw.get("draft"))
         return {"status": "PUBLISHED", "pull_request": {"url": "https://github.com/a/b/pull/5", "number": 5}}
     monkeypatch.setattr(github, "publish", fake_publish)
-    s = Session({"FROM GOVERNANCE.DQ_SUITE_VERSION V JOIN GOVERNANCE.DQ_SUITE S": [
+    s = Session({"FROM CORE.DQ_SUITE_VERSION V JOIN CORE.DQ_SUITE S": [
                     {"STATUS": "APPROVED", "CHECKS": json.dumps([check(cid="a")]), "TABLE_NAME": TABLE, "DOMAIN_ID": "d1",
                      "DOMAIN_NAME": "SALES"}],
-                 "FROM CODE.REPO WHERE REPO_ID": [{"GIT_URL": "https://github.com/a/b", "BRANCH": "main", "PROVIDER": "GITHUB"}]})
+                 "FROM CORE.REPO WHERE REPO_ID": [{"GIT_URL": "https://github.com/a/b", "BRANCH": "main", "PROVIDER": "GITHUB"}]})
     out = publish.publish_dbt_pr(s, "", json.dumps({"dq_suite": {"suite_id": "s1", "version": 2, "repo_id": "r1",
                                                                  "head": "feature/dq-customer-v2"}}))
     assert out["status"] == "PUBLISHED" and seen["draft"] is False
     assert sorted(seen["files"]) == ["dq/sales/silver_sales_customer.gx.json", "dq/sales/silver_sales_customer.soda.yml"]
-    upd = s.find("UPDATE GOVERNANCE.DQ_SUITE_VERSION SET STATUS = ?")[0][1]
+    upd = s.find("UPDATE CORE.DQ_SUITE_VERSION SET STATUS = ?")[0][1]
     assert upd[0] == "APPROVED" and upd[5] == "OPEN"
     with pytest.raises(AssertionError):
         publish.publish_dbt_pr(s, "", json.dumps({"dq_suite": {"suite_id": "s1", "version": 2, "repo_id": "r1", "head": "main"}}))
 
     monkeypatch.setattr(github, "pull_status", lambda req, origin, number: {"state": "MERGED", "merge_commit_sha": "abc"})
-    sync = Session({"FROM GOVERNANCE.DQ_SUITE_VERSION V JOIN CODE.REPO": [{"SUITE_ID": "s1", "VERSION": 2, "PR_NUMBER": 5,
+    sync = Session({"FROM CORE.DQ_SUITE_VERSION V JOIN CORE.REPO": [{"SUITE_ID": "s1", "VERSION": 2, "PR_NUMBER": 5,
                                                                           "GIT_URL": "https://github.com/a/b"}]})
     got = publish.publish_dbt_pr(sync, "", json.dumps({"sync_dq_prs": {"suite_id": "s1"}}))
     assert got["merged"] == [{"suite_id": "s1", "version": 2}]
-    assert "STATUS = 'PUBLISHED'" in sync.find("UPDATE GOVERNANCE.DQ_SUITE_VERSION SET PR_STATE")[0][0]
+    assert "STATUS = 'PUBLISHED'" in sync.find("UPDATE CORE.DQ_SUITE_VERSION SET PR_STATE")[0][0]
     both = publish.publish_dbt_pr(Session(), "", json.dumps({"sync_git_prs": {}}))
-    assert both["source_control"] is True and both["checked"] == 0  # V043: one pass over GOVERNANCE.GIT_PR
+    assert both["source_control"] is True and both["checked"] == 0  # V043: one pass over CORE.GIT_PR
 
     class Legacy(Session):
         def sql(self, sql, params=None):
-            if "FROM GOVERNANCE.GIT_PR LIMIT 1" in " ".join(sql.split()):
-                raise RuntimeError("Object 'GOVERNANCE.GIT_PR' does not exist")
+            if "FROM CORE.GIT_PR LIMIT 1" in " ".join(sql.split()):
+                raise RuntimeError("Object 'CORE.GIT_PR' does not exist")
             return super().sql(sql, params)
     legacy = publish.publish_dbt_pr(Legacy(), "", json.dumps({"sync_git_prs": {}}))
     assert set(legacy) == {"models", "dq_suites", "qa_packs"}

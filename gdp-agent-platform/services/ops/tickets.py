@@ -6,7 +6,7 @@ One ticket per incident, labelled gdp-ops and gdp-inc-<first 8 of the fingerprin
 component and assignee), else the Jira default project. Dedupe, in order:
   1. the incident already has a JIRA_KEY;
   2. a label search finds a ticket for the fingerprint that is not Done (it is linked, not duplicated);
-  3. an idempotency claim in OPS.INCIDENT_EVENT (jira:create:<incident>) so two workers never create two tickets;
+  3. an idempotency claim in CORE.INCIDENT_EVENT (jira:create:<incident>) so two workers never create two tickets;
      a claim nobody finished is taken over after CLAIM_MINUTES.
 Recurrences add at most one comment an hour. A resolve comments and, when the setting transition_on_resolve is on,
 moves the ticket to done_status. Without a bot the incident gets JIRA_STATE NOT_RAISED and a timeline event saying so.

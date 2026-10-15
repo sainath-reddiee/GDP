@@ -54,7 +54,7 @@ def _env(database: Optional[str]) -> str:
 def _contracts(db: Db) -> Dict[str, Dict[str, Any]]:
     rows = db.query("""SELECT DOMAIN_ID, DOMAIN_NAME, CONFIG:mdm AS MDM, CONFIG:silver_database::STRING AS SILVER_DATABASE,
                               CONFIG:silver_schema::STRING AS SILVER_SCHEMA
-                         FROM KNOWLEDGE.DOMAIN_REGISTRY WHERE ACTIVE_FLAG""")
+                         FROM CORE.DOMAIN_REGISTRY WHERE ACTIVE_FLAG""")
     return {r["domain_name"]: {**r, "mdm": _js(r.get("mdm")) or {}} for r in rows}
 
 
@@ -93,7 +93,7 @@ def _require_gold(d: Dict[str, Any]) -> None:
 def gold_inputs(domain_id: str, db: Db = Depends(current_db)):
     d = _domain(db, domain_id)
     role = str(d["mdm"].get("role") or "").upper() or None
-    hubs = db.query("""SELECT TARGET_DATABASE, TARGET_SCHEMA, TARGET_TABLE FROM KNOWLEDGE.TARGET_TABLE_REGISTRY
+    hubs = db.query("""SELECT TARGET_DATABASE, TARGET_SCHEMA, TARGET_TABLE FROM CORE.TARGET_TABLE_REGISTRY
                         WHERE DOMAIN_ID = %s AND ACTIVE_FLAG AND COALESCE(LAYER, 'SILVER') = 'SILVER'""", (domain_id,))
     schemas: Dict[tuple, set] = {}
     if role == "MASTERED":   # its gold comes from the post-MDM golden record and related tables Reltio writes
@@ -188,7 +188,7 @@ def _run(db: Db, run_id: str) -> Dict[str, Any]:
 def _gold_model(db: Db, domain_id: str) -> Optional[Dict[str, Any]]:
     from services.modeling.domain_model import model_id_for
 
-    found = db.query("SELECT MODEL_ID, APPROVED_VERSION, OPEN_VERSION FROM GOVERNANCE.DOMAIN_MODEL WHERE MODEL_ID = %s",
+    found = db.query("SELECT MODEL_ID, APPROVED_VERSION, OPEN_VERSION FROM CORE.DOMAIN_MODEL WHERE MODEL_ID = %s",
                      (model_id_for(domain_id, "GOLD"),))
     return found[0] if found else None
 
@@ -198,7 +198,7 @@ def _approved_tables(db: Db, model: Dict[str, Any]) -> List[Dict[str, Any]]:
 
     if not model or not model.get("approved_version"):
         return []
-    found = db.query("SELECT SPEC FROM GOVERNANCE.MODEL_DESIGNS WHERE MODEL_ID = %s AND VERSION = %s",
+    found = db.query("SELECT SPEC FROM CORE.MODEL_DESIGNS WHERE MODEL_ID = %s AND VERSION = %s",
                      (model["model_id"], int(model["approved_version"])))
     if not found:
         return []
@@ -215,8 +215,8 @@ def _profiled_inputs(db: Db, run_id: str) -> List[Dict[str, Any]]:
     dimensions)."""
     rows = db.query("""SELECT L.LANDING_DATABASE, L.LANDING_SCHEMA, L.LANDING_TABLE, P.COLUMN_NAME, P.DATA_TYPE, P.DISTINCT_COUNT,
                               P.NULL_COUNT, P.ROW_COUNT
-                         FROM PROFILE.PROFILE_REGISTRY P
-                         JOIN SOURCE.LANDING_TABLE_REGISTRY L ON L.LANDING_ID = P.SOURCE_TABLE_ID
+                         FROM CORE.PROFILE_REGISTRY P
+                         JOIN CORE.LANDING_TABLE_REGISTRY L ON L.LANDING_ID = P.SOURCE_TABLE_ID
                         WHERE P.RUN_ID = %s AND P.IS_CURRENT
                         ORDER BY L.LANDING_TABLE, P.COLUMN_NAME""", (run_id,))
     tables: Dict[tuple, Dict[str, Any]] = {}
@@ -234,7 +234,7 @@ def _children(db: Db, run_id: str) -> List[Dict[str, Any]]:
     rows = db.query("""SELECT R.RUN_ID, R.RUN_NAME, R.MODEL_ENTITY, R.TARGET_MODEL, R.CURRENT_STATE, R.CURRENT_STAGE, R.STATUS,
                               T.TABLE_TYPE
                          FROM CORE.WORKFLOW_RUN R
-                         LEFT JOIN KNOWLEDGE.TARGET_TABLE_REGISTRY T ON T.ACTIVE_FLAG AND COALESCE(T.LAYER, 'SILVER') = 'GOLD'
+                         LEFT JOIN CORE.TARGET_TABLE_REGISTRY T ON T.ACTIVE_FLAG AND COALESCE(T.LAYER, 'SILVER') = 'GOLD'
                               AND UPPER(T.TARGET_DATABASE || '.' || T.TARGET_SCHEMA || '.' || T.TARGET_TABLE) = UPPER(R.TARGET_MODEL)
                         WHERE R.PARENT_RUN_ID = %s AND R.DELETED_AT IS NULL ORDER BY R.CREATED_AT""", (run_id,))
     return [{"run_id": r["run_id"], "run_name": r["run_name"], "entity": r.get("model_entity"), "fqn": r.get("target_model"),
@@ -317,7 +317,7 @@ def propose_gold(run_id: str, db: Db = Depends(current_db)):
     def work(session):
         from services.common.sql import rows
 
-        exists = rows(session, "SELECT OPEN_VERSION, APPROVED_VERSION FROM GOVERNANCE.DOMAIN_MODEL WHERE MODEL_ID = ?", [model_id])
+        exists = rows(session, "SELECT OPEN_VERSION, APPROVED_VERSION FROM CORE.DOMAIN_MODEL WHERE MODEL_ID = ?", [model_id])
         if not exists:
             return domain_model.create_model(session, run["domain_id"], json.dumps(
                 {"layer": "GOLD", "spec": spec, "origin": "GOLD_RUN", "change_note": note}), user)
@@ -414,7 +414,7 @@ def build_star_schema(run_id: str, db: Db = Depends(current_db)):
         raise HTTPException(409, "profile the Gold run's silver tables first")
     from services.modeling import spec_v2
 
-    found = db.query("SELECT SPEC FROM GOVERNANCE.MODEL_DESIGNS WHERE MODEL_ID = %s AND VERSION = %s",
+    found = db.query("SELECT SPEC FROM CORE.MODEL_DESIGNS WHERE MODEL_ID = %s AND VERSION = %s",
                      (model["model_id"], int(model["approved_version"])))
     spec = spec_v2.active(spec_v2.normalize_v2(_js(found[0]["spec"]) or {}, model["model_id"]))
     proposal = _proposal(db, d, reg, inputs)

@@ -1,7 +1,7 @@
 -- Hybrid (keyword + vector) search over current domain knowledge. Created once; the service refreshes
 -- itself from the base tables within TARGET_LAG (no tasks involved).
 
-CREATE CORTEX SEARCH SERVICE IF NOT EXISTS {{database}}.KNOWLEDGE.KNOWLEDGE_SEARCH
+CREATE CORTEX SEARCH SERVICE IF NOT EXISTS {{database}}.{{schema}}.KNOWLEDGE_SEARCH
   ON SEARCH_TEXT
   ATTRIBUTES DOMAIN_NAME, KNOWLEDGE_TYPE, STATUS, VERSION
   WAREHOUSE = {{warehouse}}
@@ -18,9 +18,9 @@ AS (
          K.STATUS,
          K.VERSION::VARCHAR AS VERSION,
          K.SOURCE_REFERENCE
-    FROM {{database}}.KNOWLEDGE.DOMAIN_KNOWLEDGE K
-    JOIN {{database}}.KNOWLEDGE.DOMAIN_REGISTRY D ON D.DOMAIN_ID = K.DOMAIN_ID
+    FROM {{database}}.{{schema}}.DOMAIN_KNOWLEDGE K
+    JOIN {{database}}.{{schema}}.DOMAIN_REGISTRY D ON D.DOMAIN_ID = K.DOMAIN_ID
    WHERE K.IS_CURRENT
 );
 
-GRANT USAGE ON CORTEX SEARCH SERVICE {{database}}.KNOWLEDGE.KNOWLEDGE_SEARCH TO DATABASE ROLE {{database}}.VIEWER;
+GRANT USAGE ON CORTEX SEARCH SERVICE {{database}}.{{schema}}.KNOWLEDGE_SEARCH TO DATABASE ROLE {{database}}.VIEWER;

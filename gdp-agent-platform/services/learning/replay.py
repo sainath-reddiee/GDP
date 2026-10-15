@@ -78,7 +78,7 @@ def _runs(session, domain_id: str, layer: str, max_runs: int) -> List[Dict[str, 
 
     return rows(session, """SELECT R.RUN_ID, R.RUN_NAME, R.DOMAIN_ID, R.TARGET_MODEL, COALESCE(R.PIPELINE, 'SILVER') AS PIPELINE,
                                    MAX(D.REVIEWED_AT) AS LAST_DECISION
-                              FROM CORE.WORKFLOW_RUN R JOIN MAPPING.MAPPING_DECISION D ON D.RUN_ID = R.RUN_ID AND D.IS_CURRENT
+                              FROM CORE.WORKFLOW_RUN R JOIN CORE.MAPPING_DECISION D ON D.RUN_ID = R.RUN_ID AND D.IS_CURRENT
                              WHERE R.DOMAIN_ID = ? AND COALESCE(R.PIPELINE, 'SILVER') = ? AND R.DELETED_AT IS NULL
                                AND COALESCE(R.ENVIRONMENT, '') <> 'TEST' AND D.DECISION <> 'REJECTED'
                              GROUP BY 1, 2, 3, 4, 5 ORDER BY LAST_DECISION DESC LIMIT ?""", [domain_id, layer, int(max_runs)])
@@ -112,7 +112,7 @@ def replay(session, domain_id: str, layer: str = "SILVER", changes: Optional[Lis
             continue
         names = {t["target_column_id"]: t["column_name"] for t in mp.target_columns(session, target["TARGET_TABLE_ID"])}
         truth = {d["SOURCE_COLUMN_ID"]: {"target_column": names.get(d["TARGET_COLUMN_ID"]), "transformation": d.get("TRANSFORMATION")}
-                 for d in rows(session, """SELECT SOURCE_COLUMN_ID, TARGET_COLUMN_ID, TRANSFORMATION FROM MAPPING.MAPPING_DECISION
+                 for d in rows(session, """SELECT SOURCE_COLUMN_ID, TARGET_COLUMN_ID, TRANSFORMATION FROM CORE.MAPPING_DECISION
                                            WHERE RUN_ID = ? AND IS_CURRENT AND DECISION <> 'REJECTED'""", [run["RUN_ID"]])}
         if not sources or not truth or not targets:
             continue

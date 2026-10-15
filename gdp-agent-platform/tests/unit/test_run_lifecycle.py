@@ -64,7 +64,7 @@ def test_shared_landing_tables_and_platform_schemas_are_kept():
     assert drops == [("AI", "LANDING", "CRM__CUST")]
     reasons = {k["table"]: k for k in kept}
     assert reasons["AI.LANDING.CRM__ORDER"]["runs"] == ["r9"]
-    assert "platform schema" in reasons["AI.METADATA.TABLE_PROFILES"]["reason"]
+    assert "platform schema" in reasons["AI.CORE.TABLE_PROFILES"]["reason"]
 
 
 def test_workspace_cleanup_only_touches_the_runs_own_objects():
@@ -81,12 +81,12 @@ def test_workspace_cleanup_only_touches_the_runs_own_objects():
         return []
 
     out = run_workspace_cleanup(execute, run_id)
-    assert issued[0] == f"REMOVE @CODEGEN.DBT_STAGE/{run_id}/"
+    assert issued[0] == f"REMOVE @CORE.DBT_STAGE/{run_id}/"
     assert out["files_removed"] == 2 and out["projects_dropped"] == [f"{prefix}1", f"{prefix}2"]
     assert not any("CUSTOMER_PROJECT" in s for s in issued if s.startswith("DROP"))
     assert not any("METADATA" in s for s in issued)
     with pytest.raises(AssertionError):
-        run_workspace_cleanup(execute, "../../METADATA.PROFILES_STAGE")
+        run_workspace_cleanup(execute, "../../CORE.PROFILES_STAGE")
 
 
 def test_workspace_cleanup_never_raises():

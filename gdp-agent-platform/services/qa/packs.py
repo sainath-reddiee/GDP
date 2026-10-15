@@ -7,8 +7,8 @@ saving on top of a submitted or approved version starts a new DRAFT, so an appro
 
 Queries run through the platform's read-only QA guard (services/qa/guard.py) and runner (services/qa/run.execute),
 limited to the domain's tables: its registered target tables and the landing tables of its runs. Results are stored
-in QUALITY.QA_RUN / QA_RESULT with SCOPE 'DOMAIN'. Approving a version publishes its queries as ACTIVE QA_TEST
-knowledge, which Cortex Search (KNOWLEDGE.KNOWLEDGE_SEARCH) and the QA ask and plan prompts already read.
+in CORE.QA_RUN / QA_RESULT with SCOPE 'DOMAIN'. Approving a version publishes its queries as ACTIVE QA_TEST
+knowledge, which Cortex Search (CORE.KNOWLEDGE_SEARCH) and the QA ask and plan prompts already read.
 """
 
 from __future__ import annotations
@@ -21,8 +21,8 @@ from typing import Any, Dict, List, Optional, Sequence
 from services.common.sql import clip, insert_rows, rows, scalar, variant
 from services.qa.pack_files import NAME, SEVERITIES
 
-PACKS = "GOVERNANCE.DOMAIN_QA_PACKS"
-QUERIES = "GOVERNANCE.DOMAIN_QA_QUERIES"
+PACKS = "CORE.DOMAIN_QA_PACKS"
+QUERIES = "CORE.DOMAIN_QA_QUERIES"
 STATUSES = ("DRAFT", "PENDING_APPROVAL", "APPROVED", "SUPERSEDED", "RETIRED")
 TEST_SEVERITY = {"ERROR": "HIGH", "WARN": "MEDIUM", "INFO": "LOW"}
 _NS = uuid.UUID("5f0c1a7e-3d2b-4c8e-9a61-2b7d0e4f9c11")
@@ -109,11 +109,11 @@ def allowed_tables(session, domain_id: str) -> List[str]:
     """The domain's tables a query may read: active registered targets and the landing tables of its runs."""
     out: List[str] = []
     for r in rows(session, """SELECT TARGET_DATABASE || '.' || TARGET_SCHEMA || '.' || TARGET_TABLE AS FQN
-                                FROM KNOWLEDGE.TARGET_TABLE_REGISTRY WHERE DOMAIN_ID = ? AND ACTIVE_FLAG""", [domain_id]):
+                                FROM CORE.TARGET_TABLE_REGISTRY WHERE DOMAIN_ID = ? AND ACTIVE_FLAG""", [domain_id]):
         out.append(r["FQN"])
     try:
         for r in rows(session, """SELECT DISTINCT L.LANDING_DATABASE || '.' || L.LANDING_SCHEMA || '.' || L.LANDING_TABLE AS FQN
-                                    FROM SOURCE.LANDING_TABLE_REGISTRY L
+                                    FROM CORE.LANDING_TABLE_REGISTRY L
                                     JOIN CORE.WORKFLOW_RUN R ON R.RUN_ID = L.RUN_ID
                                    WHERE R.DOMAIN_ID = ? AND L.INGESTION_STATUS = 'COMPLETE'""", [domain_id]):
             out.append(r["FQN"])
@@ -177,7 +177,7 @@ def list_packs(session, domain_id: Optional[str] = None) -> List[Dict[str, Any]]
         SELECT V.PACK_ID, V.VERSION, V.DOMAIN_ID, D.DOMAIN_NAME, V.NAME, V.DESCRIPTION, V.TAGS, V.STATUS, V.SOURCE,
                V.APPROVED_VERSION, V.CREATED_BY, V.CREATED_AT::VARCHAR AS CREATED_AT,
                (SELECT COUNT(*) FROM {QUERIES} Q WHERE Q.PACK_ID = V.PACK_ID AND Q.PACK_VERSION = V.VERSION) AS QUERIES
-          FROM V LEFT JOIN KNOWLEDGE.DOMAIN_REGISTRY D ON D.DOMAIN_ID = V.DOMAIN_ID
+          FROM V LEFT JOIN CORE.DOMAIN_REGISTRY D ON D.DOMAIN_ID = V.DOMAIN_ID
          WHERE V.RN = 1
          ORDER BY D.DOMAIN_NAME, V.NAME""", params)
     out = [_pack_row(r) for r in found]
@@ -193,7 +193,7 @@ def _last_runs(session, pack_ids: List[str]) -> Dict[str, Dict[str, Any]]:
     try:
         found = rows(session, """SELECT TRIGGER_DETAIL:pack_id::VARCHAR AS PACK_ID, TESTS, PASSED, FAILED, ERRORS, REVIEW,
                                         STARTED_AT::VARCHAR AS STARTED_AT
-                                   FROM QUALITY.QA_RUN
+                                   FROM CORE.QA_RUN
                                   WHERE SCOPE = 'DOMAIN' AND ARRAY_CONTAINS(TRIGGER_DETAIL:pack_id, PARSE_JSON(?))
                                 QUALIFY ROW_NUMBER() OVER (PARTITION BY TRIGGER_DETAIL:pack_id ORDER BY STARTED_AT DESC) = 1""",
                      [json.dumps(pack_ids)])
@@ -206,7 +206,7 @@ def runs(session, pack_id: str, limit: int = 20) -> List[Dict[str, Any]]:
     return [{k.lower(): v for k, v in r.items()} for r in rows(session, f"""
         SELECT QA_RUN_ID, TRIGGER_DETAIL:version::NUMBER AS VERSION, TESTS, PASSED, FAILED, REVIEW, ERRORS, NOT_RUN,
                DURATION_MS, TRIGGERED_BY, CREATED_BY, STARTED_AT::VARCHAR AS STARTED_AT
-          FROM QUALITY.QA_RUN WHERE SCOPE = 'DOMAIN' AND TRIGGER_DETAIL:pack_id::VARCHAR = ?
+          FROM CORE.QA_RUN WHERE SCOPE = 'DOMAIN' AND TRIGGER_DETAIL:pack_id::VARCHAR = ?
          ORDER BY STARTED_AT DESC LIMIT {int(max(1, min(limit, 100)))}""", [pack_id])]
 
 
@@ -267,7 +267,7 @@ def _meta(payload: Dict[str, Any], base: Optional[Dict[str, Any]] = None) -> Dic
 
 def create_pack(session, domain_id: str, payload_json: str) -> Dict[str, Any]:
     payload = json.loads(payload_json or "{}")
-    assert scalar(session, "SELECT COUNT(*) FROM KNOWLEDGE.DOMAIN_REGISTRY WHERE DOMAIN_ID = ?", [domain_id]), \
+    assert scalar(session, "SELECT COUNT(*) FROM CORE.DOMAIN_REGISTRY WHERE DOMAIN_ID = ?", [domain_id]), \
         "domain not found"
     meta = _meta(payload)
     taken = rows(session, f"SELECT PACK_ID FROM {PACKS} WHERE DOMAIN_ID = ? AND LOWER(NAME) = LOWER(?) LIMIT 1",
@@ -417,7 +417,7 @@ def _pii(session, allowed: Sequence[str]) -> tuple[set, bool]:
         return set(), True
     try:
         found = rows(session, """SELECT DISTINCT UPPER(COLUMN_NAME) AS C, PII_CLASSIFICATION AS P
-                                   FROM GOVERNANCE.DATA_PROFILES
+                                   FROM CORE.DATA_PROFILES
                                   WHERE ARRAY_CONTAINS(UPPER(DATABASE_NAME || '.' || SCHEMA_NAME || '.' || TABLE_NAME)::VARIANT,
                                                        PARSE_JSON(?))""",
                      [json.dumps([a.upper() for a in allowed])])

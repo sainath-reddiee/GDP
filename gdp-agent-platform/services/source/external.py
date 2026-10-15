@@ -361,7 +361,7 @@ def register_external_source(session, payload_json: str) -> Dict[str, Any]:
     assert SOURCE_SYSTEM_NAME.match(name), "name must be a letter followed by up to 63 letters, digits or _"
     name = name.upper()
     config = validate_config(connector, payload.get("config") or {})
-    existing = rows(session, "SELECT SOURCE_SYSTEM_ID FROM SOURCE.SOURCE_REGISTRY WHERE SOURCE_SYSTEM_NAME = ? "
+    existing = rows(session, "SELECT SOURCE_SYSTEM_ID FROM CORE.SOURCE_REGISTRY WHERE SOURCE_SYSTEM_NAME = ? "
                              "AND ACTIVE_FLAG", [name])
     if existing:
         raise ValueError(f"SOURCE_NAME_CONFLICT: {name} is already registered")
@@ -374,7 +374,7 @@ def register_external_source(session, payload_json: str) -> Dict[str, Any]:
     if CONNECTORS[connector]["landable"]:
         for sql in setup_sql(database, location["schema"], connector, config):
             session.sql(sql).collect()
-    insert_rows(session, "SOURCE.SOURCE_REGISTRY",
+    insert_rows(session, "CORE.SOURCE_REGISTRY",
                 ["SOURCE_SYSTEM_ID", "SOURCE_SYSTEM_NAME", "SOURCE_TYPE", "OWNER", "CONNECTION_TYPE",
                  "SECURITY_CLASSIFICATION", "CONFIGURATION_REFERENCE", "CONFIGURATION_JSON", "CREATED_BY"],
                 ["?", "?", "?", "NULLIF(?, '')", "?", "NULLIF(?, '')", "NULLIF(?, '')", "PARSE_JSON(?)",
@@ -388,7 +388,7 @@ def register_external_source(session, payload_json: str) -> Dict[str, Any]:
 
 def _external_source(session, source_id: str) -> Dict[str, Any]:
     found = rows(session, "SELECT SOURCE_SYSTEM_ID, SOURCE_SYSTEM_NAME, SOURCE_TYPE, CONNECTION_TYPE, "
-                          "CONFIGURATION_JSON FROM SOURCE.SOURCE_REGISTRY WHERE SOURCE_SYSTEM_ID = ? AND ACTIVE_FLAG",
+                          "CONFIGURATION_JSON FROM CORE.SOURCE_REGISTRY WHERE SOURCE_SYSTEM_ID = ? AND ACTIVE_FLAG",
                  [source_id])
     assert found, f"source {source_id} not found"
     src = found[0]
@@ -451,7 +451,7 @@ def land_external_files(session, source_id: str, payload_json: str) -> Dict[str,
         results.append(out)
     landed = sorted({r["table"] for r in results if r["status"] == "LOADED"} | set(cfg.get("landed_tables") or []))
     session.sql(
-        "UPDATE SOURCE.SOURCE_REGISTRY SET CONFIGURATION_JSON = PARSE_JSON(?), UPDATED_AT = CURRENT_TIMESTAMP() "
+        "UPDATE CORE.SOURCE_REGISTRY SET CONFIGURATION_JSON = PARSE_JSON(?), UPDATED_AT = CURRENT_TIMESTAMP() "
         "WHERE SOURCE_SYSTEM_ID = ?",
         params=[json.dumps({**cfg, "landed_tables": landed,
                             "last_landed_at": rows(session, "SELECT CURRENT_TIMESTAMP()::VARCHAR AS T")[0]["T"]}),

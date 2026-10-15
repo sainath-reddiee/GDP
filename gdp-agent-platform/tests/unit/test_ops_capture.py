@@ -157,7 +157,7 @@ class IngestDb:
         self.events, self.statements = set(), []
 
     def execute_count(self, sql, params=()):
-        if "INTO OPS.EVENT" in sql:
+        if "INTO CORE.EVENT" in sql:
             if params[0] in self.events:
                 return 0
             self.events.add(params[0])
@@ -199,7 +199,7 @@ def test_ingest_without_a_session_and_replay(ingest_client):
     raw, headers = _signed(body, event_id="evt-00000001")
     res = client.post("/api/ops/ingest", content=raw, headers=headers)
     assert res.status_code == 200 and res.json()["kind"] == "task_instance"
-    assert any("MERGE INTO OPS.TASK_RUN" in s for s, _ in db.statements)
+    assert any("MERGE INTO CORE.TASK_RUN" in s for s, _ in db.statements)
     again = client.post("/api/ops/ingest", content=raw, headers=headers)
     assert again.status_code == 409 and "Replayed" in again.json()["detail"]
 
@@ -223,29 +223,29 @@ def test_ingest_rejects_bad_signature_skew_unknown_env_and_size(ingest_client):
 # ---------------------------------------------------------------- leases
 
 class LeaseDb:
-    """In-memory OPS.JOB_LEASE that understands the lease module's statements, with a controllable clock."""
+    """In-memory CORE.JOB_LEASE that understands the lease module's statements, with a controllable clock."""
 
     def __init__(self):
         self.rows, self.now = {}, 1000.0
 
     def execute(self, sql, params=()):
-        if sql.startswith("MERGE INTO OPS.JOB_LEASE"):
+        if sql.startswith("MERGE INTO CORE.JOB_LEASE"):
             self.rows.setdefault(params[0], {"holder": None, "until": None})
-        elif sql.startswith("UPDATE OPS.JOB_LEASE SET HOLDER = NULL"):
+        elif sql.startswith("UPDATE CORE.JOB_LEASE SET HOLDER = NULL"):
             cursor, job, holder = params
             row = self.rows.get(job)
             if row and row["holder"] == holder:
                 row.update(holder=None, until=None)
 
     def execute_count(self, sql, params=()):
-        if sql.startswith("UPDATE OPS.JOB_LEASE SET HOLDER = %s"):
+        if sql.startswith("UPDATE CORE.JOB_LEASE SET HOLDER = %s"):
             holder, seconds, job, same = params
             row = self.rows[job]
             if row["holder"] is None or row["holder"] == same or row["until"] is None or row["until"] < self.now:
                 row.update(holder=holder, until=self.now + seconds)
                 return 1
             return 0
-        if sql.startswith("UPDATE OPS.JOB_LEASE SET LEASE_UNTIL"):
+        if sql.startswith("UPDATE CORE.JOB_LEASE SET LEASE_UNTIL"):
             seconds, job, holder = params
             row = self.rows.get(job)
             if row and row["holder"] == holder:
@@ -345,10 +345,10 @@ def test_poll_env_upserts_and_stores_the_cursor():
     assert run_call["QueryParameters"]["updated_at_gte"] == "2024-05-02T11:40:00.000000+00:00"
     task_call = next(c for c in client.calls if c["Path"].endswith("/taskInstances"))
     assert "scheduled__2024-05-01T02%3A00%3A00%2B00%3A00" in task_call["Path"]     # run ids are URL-encoded
-    update = next(p for s, p in db.statements if s.startswith("UPDATE OPS.AIRFLOW_ENV"))
+    update = next(p for s, p in db.statements if s.startswith("UPDATE CORE.AIRFLOW_ENV"))
     assert update[2] == "2024-05-02T12:00:00.000000+00:00" and update[0] == "v1"
     merged = [s for s, _ in db.statements if s.startswith("MERGE INTO OPS.")]
-    assert any("OPS.DAG_RUN" in s for s in merged) and any("OPS.TASK_RUN" in s for s in merged)
+    assert any("CORE.DAG_RUN" in s for s in merged) and any("CORE.TASK_RUN" in s for s in merged)
 
 
 def test_old_airflow_uses_start_date_filter():

@@ -6,7 +6,7 @@ target models and its MODEL_DEFINITION / NAMING_STANDARD / GLOSSARY / MAPPING_PA
 skills (AI-MODEL-GENERATION, SEMANTIC-COLUMN-CLUSTERING). Conventions (audit columns, surrogate keys, naming, SCD)
 are the developer's choice per design: GDP, the company standard, custom toggles, or none at all.
 
-Every save is a new row in MODELING.MODEL_DESIGN; approval registers the model's entities as targets (columns set
+Every save is a new row in CORE.MODEL_DESIGN; approval registers the model's entities as targets (columns set
 exactly to the design), writes MODEL_SPEC, points the run at the primary entity and stores MODEL_DEFINITION knowledge.
 """
 
@@ -320,7 +320,7 @@ def context(session, run_id: str) -> Dict[str, Any]:
     sources: Dict[str, List[Dict[str, Any]]] = {}
     for r in _rows(session, """SELECT TABLE_NAME, COLUMN_NAME, DATA_TYPE, SEMANTIC_TYPE, NULL_PERCENTAGE,
                                       POTENTIAL_KEY_FLAG, POTENTIAL_FOREIGN_KEY_FLAG, PII_CLASSIFICATION
-                                 FROM PROFILE.PROFILE_REGISTRY WHERE RUN_ID = ? AND IS_CURRENT
+                                 FROM CORE.PROFILE_REGISTRY WHERE RUN_ID = ? AND IS_CURRENT
                                 ORDER BY TABLE_NAME, COLUMN_NAME""", [run_id]):
         sources.setdefault(str(r["TABLE_NAME"]).upper(), []).append({
             "column": str(r["COLUMN_NAME"]).upper(), "type": r["DATA_TYPE"], "semantic": r["SEMANTIC_TYPE"],
@@ -331,19 +331,19 @@ def context(session, run_id: str) -> Dict[str, Any]:
     models: List[Dict[str, Any]] = []
     knowledge: List[str] = []
     if domain_id:
-        found = _rows(session, "SELECT DOMAIN_NAME FROM KNOWLEDGE.DOMAIN_REGISTRY WHERE DOMAIN_ID = ?", [domain_id])
+        found = _rows(session, "SELECT DOMAIN_NAME FROM CORE.DOMAIN_REGISTRY WHERE DOMAIN_ID = ?", [domain_id])
         domain = found[0]["DOMAIN_NAME"] if found else None
         for t in _rows(session, """SELECT TARGET_TABLE_ID, TARGET_DATABASE, TARGET_SCHEMA, TARGET_TABLE, DESCRIPTION
-                                     FROM KNOWLEDGE.TARGET_TABLE_REGISTRY WHERE DOMAIN_ID = ? AND ACTIVE_FLAG
+                                     FROM CORE.TARGET_TABLE_REGISTRY WHERE DOMAIN_ID = ? AND ACTIVE_FLAG
                                       AND COALESCE(LAYER, 'SILVER') = 'SILVER'
                                     ORDER BY TARGET_TABLE LIMIT 40""", [domain_id]):
             cols = [f"{c['COLUMN_NAME']} {c['DATA_TYPE']}" for c in _rows(
-                session, """SELECT COLUMN_NAME, DATA_TYPE FROM KNOWLEDGE.TARGET_COLUMN_REGISTRY
+                session, """SELECT COLUMN_NAME, DATA_TYPE FROM CORE.TARGET_COLUMN_REGISTRY
                              WHERE TARGET_TABLE_ID = ? ORDER BY ORDINAL_POSITION""", [t["TARGET_TABLE_ID"]])]
             models.append({"fqn": f"{t['TARGET_DATABASE']}.{t['TARGET_SCHEMA']}.{t['TARGET_TABLE']}".upper(),
                            "description": t["DESCRIPTION"], "columns": cols})
         picked = _rows(
-            session, """SELECT KNOWLEDGE_ID, KNOWLEDGE_TYPE, TITLE, CONTENT FROM KNOWLEDGE.DOMAIN_KNOWLEDGE
+            session, """SELECT KNOWLEDGE_ID, KNOWLEDGE_TYPE, TITLE, CONTENT FROM CORE.DOMAIN_KNOWLEDGE
                          WHERE DOMAIN_ID = ? AND IS_CURRENT AND COALESCE(STATUS, 'ACTIVE') = 'ACTIVE'
                            AND COALESCE(LAYER, 'ANY') IN ('ANY', 'SILVER')
                            AND KNOWLEDGE_TYPE IN ('MODEL_DEFINITION', 'NAMING_STANDARD', 'GLOSSARY', 'MAPPING_PATTERN',
@@ -384,17 +384,17 @@ def _versions(session, run_id: str) -> List[Dict[str, Any]]:
              "note": r["NOTE"], "created_by": r["CREATED_BY"],
              "created_at": str(r["CREATED_AT"])[:19] if r.get("CREATED_AT") else None,
              "approved_by": r["APPROVED_BY"]}
-            for r in _rows(session, "SELECT * FROM MODELING.MODEL_DESIGN WHERE RUN_ID = ? ORDER BY VERSION DESC", [run_id])]
+            for r in _rows(session, "SELECT * FROM CORE.MODEL_DESIGN WHERE RUN_ID = ? ORDER BY VERSION DESC", [run_id])]
 
 
 def _store(session, run_id: str, design: Dict[str, Any], conv: Dict[str, Any], issues: List[Dict[str, str]],
            origin: str, instructions: str = "", model: str = "", note: str = "") -> Dict[str, Any]:
     from services.common.sql import insert_rows
 
-    version = int((_rows(session, "SELECT COALESCE(MAX(VERSION), 0) AS V FROM MODELING.MODEL_DESIGN WHERE RUN_ID = ?",
+    version = int((_rows(session, "SELECT COALESCE(MAX(VERSION), 0) AS V FROM CORE.MODEL_DESIGN WHERE RUN_ID = ?",
                          [run_id])[0]["V"]) or 0) + 1
     design_id = str(uuid.uuid4())
-    insert_rows(session, "MODELING.MODEL_DESIGN",
+    insert_rows(session, "CORE.MODEL_DESIGN",
                 ["DESIGN_ID", "RUN_ID", "VERSION", "STATUS", "ORIGIN", "DECISION", "DESIGN_JSON", "CONVENTIONS",
                  "ISSUES", "INSTRUCTIONS", "MODEL", "NOTE"],
                 ["?", "?", "?::NUMBER", "'DRAFT'", "?", "?", "PARSE_JSON(?)", "PARSE_JSON(?)", "PARSE_JSON(?)",
@@ -416,7 +416,7 @@ def get_design(session, run_id: str) -> Dict[str, Any]:
         model = (run.get("TARGET_MODEL") or "").strip()
         if model.count(".") == 2:
             db, schema, table = model.split(".")
-            target = _rows(session, """SELECT TARGET_TABLE_ID FROM KNOWLEDGE.TARGET_TABLE_REGISTRY WHERE ACTIVE_FLAG
+            target = _rows(session, """SELECT TARGET_TABLE_ID FROM CORE.TARGET_TABLE_REGISTRY WHERE ACTIVE_FLAG
                                          AND UPPER(TARGET_DATABASE) = UPPER(?) AND UPPER(TARGET_SCHEMA) = UPPER(?)
                                          AND UPPER(TARGET_TABLE) = UPPER(?) LIMIT 1""", [db, schema, table])
             if target:
@@ -425,7 +425,7 @@ def get_design(session, run_id: str) -> Dict[str, Any]:
                          "sources": [m.group(1).upper() + "." + m.group(2).upper()] if (
                              m := re.match(r"^From ([A-Za-z0-9_$]+)\.([A-Za-z0-9_$]+)$", str(c["BUSINESS_DEFINITION"] or ""))) else []}
                         for c in _rows(session, """SELECT COLUMN_NAME, DATA_TYPE, IS_BUSINESS_KEY, BUSINESS_DEFINITION
-                                                     FROM KNOWLEDGE.TARGET_COLUMN_REGISTRY WHERE TARGET_TABLE_ID = ?
+                                                     FROM CORE.TARGET_COLUMN_REGISTRY WHERE TARGET_TABLE_ID = ?
                                                     ORDER BY ORDINAL_POSITION""", [target[0]["TARGET_TABLE_ID"]])]
                 if cols:
                     design = baseline(cols, table, {"naming_case": "as_is"})
@@ -516,14 +516,14 @@ def _set_columns(session, target_id: str, values: List[List[Any]]) -> None:
 
     names = [str(v[2]).upper() for v in values]
     if names:
-        session.sql(f"""DELETE FROM KNOWLEDGE.TARGET_COLUMN_REGISTRY WHERE TARGET_TABLE_ID = ?
+        session.sql(f"""DELETE FROM CORE.TARGET_COLUMN_REGISTRY WHERE TARGET_TABLE_ID = ?
                           AND UPPER(COLUMN_NAME) NOT IN ({", ".join("?" for _ in names)})""",
                     params=[target_id, *names]).collect()
     else:
-        session.sql("DELETE FROM KNOWLEDGE.TARGET_COLUMN_REGISTRY WHERE TARGET_TABLE_ID = ?", params=[target_id]).collect()
+        session.sql("DELETE FROM CORE.TARGET_COLUMN_REGISTRY WHERE TARGET_TABLE_ID = ?", params=[target_id]).collect()
     for start in range(0, len(values), INSERT_BATCH):
         batch = values[start:start + INSERT_BATCH]
-        session.sql(f"""MERGE INTO KNOWLEDGE.TARGET_COLUMN_REGISTRY t
+        session.sql(f"""MERGE INTO CORE.TARGET_COLUMN_REGISTRY t
                         USING ({" UNION ALL ".join([COLUMN_SOURCE] * len(batch))}) s
                            ON t.TARGET_TABLE_ID = s.TARGET_TABLE_ID AND UPPER(t.COLUMN_NAME) = UPPER(s.COLUMN_NAME)
                         WHEN MATCHED THEN UPDATE SET COLUMN_NAME = s.COLUMN_NAME, DATA_TYPE = s.DATA_TYPE,
@@ -545,7 +545,7 @@ def apply_design(session, run_id: str, version: int) -> Dict[str, Any]:
     from services.common.sql import insert_rows, variant
     from services.knowledge.procedures import GENERAL_DOMAIN, ensure_domain
 
-    found = _rows(session, "SELECT * FROM MODELING.MODEL_DESIGN WHERE RUN_ID = ? AND VERSION = ?", [run_id, int(version)])
+    found = _rows(session, "SELECT * FROM CORE.MODEL_DESIGN WHERE RUN_ID = ? AND VERSION = ?", [run_id, int(version)])
     assert found, f"design version {version} not found"
     row = found[0]
     design, conv, issues = variant(row["DESIGN_JSON"]) or {}, variant(row["CONVENTIONS"]) or {}, variant(row["ISSUES"]) or []
@@ -560,21 +560,21 @@ def apply_design(session, run_id: str, version: int) -> Dict[str, Any]:
     registered = []
     for entity in design.get("entities", []):
         table = entity["entity_name"]
-        existing = _rows(session, """SELECT TARGET_TABLE_ID FROM KNOWLEDGE.TARGET_TABLE_REGISTRY WHERE ACTIVE_FLAG
+        existing = _rows(session, """SELECT TARGET_TABLE_ID FROM CORE.TARGET_TABLE_REGISTRY WHERE ACTIVE_FLAG
                                        AND DOMAIN_ID = ? AND UPPER(TARGET_DATABASE) = UPPER(?)
                                        AND UPPER(TARGET_SCHEMA) = UPPER(?) AND UPPER(TARGET_TABLE) = UPPER(?) LIMIT 1""",
                          [domain_id, database, schema, table])
         spec = spec_for(entity, design, conv)
         if existing:
             target_id = existing[0]["TARGET_TABLE_ID"]
-            session.sql("""UPDATE KNOWLEDGE.TARGET_TABLE_REGISTRY SET MODEL_SPEC = PARSE_JSON(?), GRAIN = ?,
+            session.sql("""UPDATE CORE.TARGET_TABLE_REGISTRY SET MODEL_SPEC = PARSE_JSON(?), GRAIN = ?,
                                   BUSINESS_KEYS = PARSE_JSON(?), DESCRIPTION = ?, DOMAIN_ID = ?
                             WHERE TARGET_TABLE_ID = ?""",
                         params=[json.dumps(spec), entity.get("grain") or "", json.dumps(entity.get("business_keys") or []),
                                 entity.get("purpose") or "", domain_id, target_id]).collect()
         else:
             target_id = str(uuid.uuid4())
-            insert_rows(session, "KNOWLEDGE.TARGET_TABLE_REGISTRY",
+            insert_rows(session, "CORE.TARGET_TABLE_REGISTRY",
                         ["TARGET_TABLE_ID", "DOMAIN_ID", "TARGET_DATABASE", "TARGET_SCHEMA", "TARGET_TABLE", "TABLE_TYPE",
                          "GRAIN", "BUSINESS_KEYS", "SCD_TYPE", "DESCRIPTION", "VERSION", "ACTIVE_FLAG", "MODEL_SPEC"],
                         ["?", "?", "?", "?", "?", "'TABLE'", "?", "PARSE_JSON(?)", "?", "?", "1", "TRUE", "PARSE_JSON(?)"],
@@ -592,9 +592,9 @@ def apply_design(session, run_id: str, version: int) -> Dict[str, Any]:
     primary = next((r for r in registered if r["entity"].upper() == str(design.get("primary_entity") or "").upper()),
                    registered[0] if registered else None)
     assert primary, "the design has no entities"
-    session.sql("""UPDATE MODELING.MODEL_DESIGN SET STATUS = 'SUPERSEDED' WHERE RUN_ID = ? AND STATUS = 'APPROVED'""",
+    session.sql("""UPDATE CORE.MODEL_DESIGN SET STATUS = 'SUPERSEDED' WHERE RUN_ID = ? AND STATUS = 'APPROVED'""",
                 params=[run_id]).collect()
-    session.sql("""UPDATE MODELING.MODEL_DESIGN SET STATUS = 'APPROVED', APPROVED_BY = CURRENT_USER(),
+    session.sql("""UPDATE CORE.MODEL_DESIGN SET STATUS = 'APPROVED', APPROVED_BY = CURRENT_USER(),
                           APPROVED_AT = CURRENT_TIMESTAMP() WHERE RUN_ID = ? AND VERSION = ?""",
                 params=[run_id, int(version)]).collect()
     session.sql("UPDATE CORE.WORKFLOW_RUN SET TARGET_MODEL = ?, UPDATED_AT = CURRENT_TIMESTAMP() WHERE RUN_ID = ?",

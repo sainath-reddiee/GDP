@@ -68,9 +68,9 @@ def test_auto_supersedes_and_inserts_current_version_with_provenance():
     kid = writer.remember(s, domain_id="D", kind="TRANSFORMATION_RULE", key="transform.T.C", title="t", content="new",
                           content_json={"x": 1}, origin="STTM", run_id="run-9", confidence=0.8)
     assert kid
-    upd = s.statements("UPDATE KNOWLEDGE.DOMAIN_KNOWLEDGE SET IS_CURRENT = FALSE")
+    upd = s.statements("UPDATE CORE.DOMAIN_KNOWLEDGE SET IS_CURRENT = FALSE")
     assert upd and "SUPERSEDED" in upd[0]
-    insert = next(p for sql, p in s.sql_log if sql.startswith("INSERT INTO KNOWLEDGE.DOMAIN_KNOWLEDGE"))
+    insert = next(p for sql, p in s.sql_log if sql.startswith("INSERT INTO CORE.DOMAIN_KNOWLEDGE"))
     assert "ACTIVE" in insert and "3" in insert and "TRUE" in insert and "STTM" in insert and "run-9" in insert
     assert writer.lineage_id("D", "transform.T.C") in insert
 
@@ -78,9 +78,9 @@ def test_auto_supersedes_and_inserts_current_version_with_provenance():
 def test_review_policy_proposes_without_touching_the_version_in_use():
     s = FakeSession(current={"KNOWLEDGE_ID": "k1", "CONTENT": "old", "CONTENT_JSON": None, "STATUS": "ACTIVE"}, max_version=1)
     writer.remember(s, domain_id="D", kind="QA_TEST", key="qa.test.1", title="t", content="new", origin="QA", by_domain=False)
-    assert not s.statements("UPDATE KNOWLEDGE.DOMAIN_KNOWLEDGE SET IS_CURRENT = FALSE")
-    assert s.statements("UPDATE KNOWLEDGE.DOMAIN_KNOWLEDGE SET STATUS = 'SUPERSEDED'")  # an older proposal is replaced
-    insert = next(p for sql, p in s.sql_log if sql.startswith("INSERT INTO KNOWLEDGE.DOMAIN_KNOWLEDGE"))
+    assert not s.statements("UPDATE CORE.DOMAIN_KNOWLEDGE SET IS_CURRENT = FALSE")
+    assert s.statements("UPDATE CORE.DOMAIN_KNOWLEDGE SET STATUS = 'SUPERSEDED'")  # an older proposal is replaced
+    insert = next(p for sql, p in s.sql_log if sql.startswith("INSERT INTO CORE.DOMAIN_KNOWLEDGE"))
     assert "PROPOSED" in insert and "FALSE" in insert
 
 
@@ -88,7 +88,7 @@ def test_explicit_status_bypasses_policy():
     s = FakeSession(policy={"SODA_PATTERN": "review"})
     writer.remember(s, domain_id="D", kind="SODA_PATTERN", key="SODA.T.C.X", title="t", content="rejected", origin="SODA",
                     status="DRAFT")
-    insert = next(p for sql, p in s.sql_log if sql.startswith("INSERT INTO KNOWLEDGE.DOMAIN_KNOWLEDGE"))
+    insert = next(p for sql, p in s.sql_log if sql.startswith("INSERT INTO CORE.DOMAIN_KNOWLEDGE"))
     assert "DRAFT" in insert and "TRUE" in insert
 
 
@@ -100,6 +100,6 @@ def test_usage_never_fails_the_stage():
     writer.record_usage(Broken(), "r", "MAPPING", ["k1"])  # swallowed
     s = FakeSession()
     writer.record_usage(s, "r", "MAPPING", ["k1", "k1", ""])
-    assert len(s.statements("INSERT INTO KNOWLEDGE.KNOWLEDGE_USAGE")) == 1
+    assert len(s.statements("INSERT INTO CORE.KNOWLEDGE_USAGE")) == 1
     writer.record_usage(s, "r", "MAPPING", [])
-    assert len(s.statements("INSERT INTO KNOWLEDGE.KNOWLEDGE_USAGE")) == 1
+    assert len(s.statements("INSERT INTO CORE.KNOWLEDGE_USAGE")) == 1

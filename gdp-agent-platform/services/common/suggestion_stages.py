@@ -85,7 +85,7 @@ def _profiles(session, run_id: str) -> Dict[str, List[Dict[str, Any]]]:
     for p in rows(session, """SELECT TABLE_NAME, COLUMN_NAME, DATA_TYPE, SEMANTIC_TYPE, PII_CLASSIFICATION,
                                      CARDINALITY, NULL_PERCENTAGE, DISTINCT_PERCENTAGE, POTENTIAL_KEY_FLAG,
                                      PATTERN_JSON, SAMPLE_VALUES, STATISTICS_JSON
-                                FROM PROFILE.PROFILE_REGISTRY WHERE RUN_ID = ? AND IS_CURRENT
+                                FROM CORE.PROFILE_REGISTRY WHERE RUN_ID = ? AND IS_CURRENT
                                ORDER BY TABLE_NAME, COLUMN_NAME""", [run_id]):
         stats = variant(p["STATISTICS_JSON"]) or {}
         pii = p["PII_CLASSIFICATION"] or "NONE"
@@ -103,7 +103,7 @@ def _profiles(session, run_id: str) -> Dict[str, List[Dict[str, Any]]]:
 
 
 def _current_sttm(session, run_id: str) -> Optional[Dict[str, Any]]:
-    found = rows(session, """SELECT * FROM CONTRACT.STTM_REGISTRY WHERE RUN_ID = ?
+    found = rows(session, """SELECT * FROM CORE.STTM_REGISTRY WHERE RUN_ID = ?
                               ORDER BY STTM_VERSION DESC LIMIT 1""", [run_id])
     return found[0] if found else None
 
@@ -111,7 +111,7 @@ def _current_sttm(session, run_id: str) -> Optional[Dict[str, Any]]:
 def _sttm_lines(session, sttm_id: str) -> List[Dict[str, Any]]:
     return rows(session, """SELECT STTM_LINE_ID, TARGET_COLUMN, TARGET_DATATYPE, SOURCE_TABLE, SOURCE_COLUMN,
                                    SOURCE_DATATYPE, MAPPING_TYPE, TRANSFORMATION, NULLABLE_RULE
-                              FROM CONTRACT.STTM_LINE WHERE STTM_ID = ? ORDER BY TARGET_COLUMN""", [sttm_id])
+                              FROM CORE.STTM_LINE WHERE STTM_ID = ? ORDER BY TARGET_COLUMN""", [sttm_id])
 
 
 def _target(session, run: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -157,7 +157,7 @@ def _known(session, run: Dict[str, Any], stage: str, target: Optional[str], colu
 def _accepted_column_rules(session, run: Dict[str, Any], table: str) -> List[Dict[str, Any]]:
     """Column rules a reviewer already accepted for this source table (they override the rule result)."""
     try:
-        found = rows(session, """SELECT CONTENT_JSON FROM KNOWLEDGE.DOMAIN_KNOWLEDGE
+        found = rows(session, """SELECT CONTENT_JSON FROM CORE.DOMAIN_KNOWLEDGE
                                   WHERE IS_CURRENT AND STATUS = 'ACTIVE' AND KNOWLEDGE_TYPE = 'COLUMN_RULE'
                                     AND CONTENT_JSON:source_system_id::STRING = ?
                                     AND UPPER(CONTENT_JSON:source_table::STRING) = UPPER(?)""",
@@ -186,10 +186,10 @@ def contexts(session, stage: str, run_id: str) -> List[Tuple[str, Dict[str, Any]
             out.append((scope, context))
         return out
     if stage == "DOMAIN":
-        recs = rows(session, """SELECT D.DOMAIN_NAME, R.CONFIDENCE FROM KNOWLEDGE.DOMAIN_RECOMMENDATION R
-                                  JOIN KNOWLEDGE.DOMAIN_REGISTRY D ON D.DOMAIN_ID = R.DOMAIN_ID
+        recs = rows(session, """SELECT D.DOMAIN_NAME, R.CONFIDENCE FROM CORE.DOMAIN_RECOMMENDATION R
+                                  JOIN CORE.DOMAIN_REGISTRY D ON D.DOMAIN_ID = R.DOMAIN_ID
                                  WHERE R.RUN_ID = ? ORDER BY R.CONFIDENCE DESC LIMIT 5""", [run_id])
-        available = [r["DOMAIN_NAME"] for r in rows(session, "SELECT DOMAIN_NAME FROM KNOWLEDGE.DOMAIN_REGISTRY "
+        available = [r["DOMAIN_NAME"] for r in rows(session, "SELECT DOMAIN_NAME FROM CORE.DOMAIN_REGISTRY "
                                                               "WHERE ACTIVE_FLAG ORDER BY DOMAIN_NAME")]
         tables = {t: [c["column"] for c in cols][:40] for t, cols in _profiles(session, run_id).items()}
         return [(f"run.{run_id}", {"tables": tables, "rule_result": [
@@ -215,13 +215,13 @@ def contexts(session, stage: str, run_id: str) -> List[Tuple[str, Dict[str, Any]
             existing = [{"column": r["TARGET_COLUMN"], "check_type": r["CHECK_TYPE"],
                          "definition": variant(r["CHECK_DEFINITION"])}
                         for r in rows(session, """SELECT TARGET_COLUMN, CHECK_TYPE, CHECK_DEFINITION
-                                                    FROM CONTRACT.SODA_EXPECTATION_REGISTRY
+                                                    FROM CORE.SODA_EXPECTATION_REGISTRY
                                                    WHERE RUN_ID = ? AND IS_CURRENT""", [run_id])]
             return [(scope, {"columns": [{"target_column": l["TARGET_COLUMN"], "type": l["TARGET_DATATYPE"],
                                           "nullable": l["NULLABLE_RULE"], "profile": evidence(l)} for l in lines],
                              "rule_result": existing, "known_rules": known})]
         registry = {r["COLUMN_NAME"].upper(): r for r in rows(
-            session, """SELECT COLUMN_NAME, IS_BUSINESS_KEY, SEMANTIC_TYPE FROM KNOWLEDGE.TARGET_COLUMN_REGISTRY
+            session, """SELECT COLUMN_NAME, IS_BUSINESS_KEY, SEMANTIC_TYPE FROM CORE.TARGET_COLUMN_REGISTRY
                          WHERE TARGET_TABLE_ID = ?""", [target.get("TARGET_TABLE_ID")])} if target else {}
         def role(name):
             r = registry.get(name.upper()) or {}
@@ -279,11 +279,11 @@ def _apply(session, stage: str, run: Dict[str, Any], scope_key: str, item: Dict[
         if fields.get("date_format"):
             sets.append("STATISTICS_JSON = OBJECT_INSERT(COALESCE(STATISTICS_JSON, OBJECT_CONSTRUCT()), 'date_format', ?::VARIANT, TRUE)")
             params.append(fields["date_format"])
-        session.sql(f"UPDATE PROFILE.PROFILE_REGISTRY SET {', '.join(sets)} WHERE RUN_ID = ? AND IS_CURRENT "
+        session.sql(f"UPDATE CORE.PROFILE_REGISTRY SET {', '.join(sets)} WHERE RUN_ID = ? AND IS_CURRENT "
                     "AND TABLE_NAME = ? AND COLUMN_NAME = ?", params=params + [run_id, table, item["column"]]).collect()
         return {"applied": "column rule stored; this run's profile updated"}
     if stage == "DOMAIN":
-        found = rows(session, "SELECT DOMAIN_ID FROM KNOWLEDGE.DOMAIN_REGISTRY WHERE UPPER(DOMAIN_NAME) = UPPER(?) "
+        found = rows(session, "SELECT DOMAIN_ID FROM CORE.DOMAIN_REGISTRY WHERE UPPER(DOMAIN_NAME) = UPPER(?) "
                               "AND ACTIVE_FLAG", [item["domain_name"]])
         assert found, f"unknown domain {item['domain_name']}"
         assert run["CURRENT_STATE"] in ("PROFILING_COMPLETE", "DOMAIN_IDENTIFIED", "MAPPING_PENDING", "FAILED"), \
@@ -295,8 +295,8 @@ def _apply(session, stage: str, run: Dict[str, Any], scope_key: str, item: Dict[
         from services.sttm.procedures import apply_transformation
 
         # apply_transformation edits one STTM line: find the line of this target column in the run's current STTM
-        found = rows(session, """SELECT L.STTM_LINE_ID FROM CONTRACT.STTM_LINE L
-                                  JOIN CONTRACT.STTM_REGISTRY S ON S.STTM_ID = L.STTM_ID
+        found = rows(session, """SELECT L.STTM_LINE_ID FROM CORE.STTM_LINE L
+                                  JOIN CORE.STTM_REGISTRY S ON S.STTM_ID = L.STTM_ID
                                  WHERE S.RUN_ID = ? AND UPPER(L.TARGET_COLUMN) = UPPER(?)
                                    AND S.STATUS IN ('REVIEW', 'DRAFT', 'APPROVED')
                                  ORDER BY S.STTM_VERSION DESC LIMIT 1""", [run_id, item["target_column"]])
@@ -323,7 +323,7 @@ def _apply(session, stage: str, run: Dict[str, Any], scope_key: str, item: Dict[
         assert target, "the run has no target model"
         is_key = role == "BUSINESS_KEY"
         semantic = role if role in ("SURROGATE_KEY", "AUDIT_TIMESTAMP", "RECORD_SOURCE") else None
-        session.sql("""UPDATE KNOWLEDGE.TARGET_COLUMN_REGISTRY
+        session.sql("""UPDATE CORE.TARGET_COLUMN_REGISTRY
                           SET IS_BUSINESS_KEY = ?::BOOLEAN,
                               SEMANTIC_TYPE = IFF(?::BOOLEAN, NULLIF(?, ''), IFF(SEMANTIC_TYPE IN
                                   ('SURROGATE_KEY', 'AUDIT_TIMESTAMP', 'RECORD_SOURCE'), NULL, SEMANTIC_TYPE))

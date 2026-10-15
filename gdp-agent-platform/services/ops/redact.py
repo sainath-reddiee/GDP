@@ -58,7 +58,7 @@ PAYLOAD_TEXT_MAX = 4000
 
 
 def redact_payload(value: Any, depth: int = 0) -> Any:
-    """A JSON payload fit to store (OPS.EVENT): every string redacted; error text and log-like fields keep their
+    """A JSON payload fit to store (CORE.EVENT): every string redacted; error text and log-like fields keep their
     last 4000 characters."""
     if depth > 8:
         return None

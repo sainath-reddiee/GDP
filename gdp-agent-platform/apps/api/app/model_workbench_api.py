@@ -194,7 +194,7 @@ def _apply(db: Db, model_id: str, version: int) -> dict:
     from services.modeling.registry_sync import apply_model_version
 
     try:
-        return {"applied": True, **_source_call(db, "CALL MODELING.APPLY_DOMAIN_MODEL(%s, %s)", apply_model_version,
+        return {"applied": True, **_source_call(db, "CALL CORE.APPLY_DOMAIN_MODEL(%s, %s)", apply_model_version,
                                                 model_id, version)}
     except AssertionError as exc:
         return {"applied": False, "error": str(exc)}
@@ -310,7 +310,7 @@ def publish(model_id: str, version: int, body: PublishIn, db: Db = Depends(curre
     request = {"model_id": model_id, "version": int(version), "repo_id": body.repo_id, "head": head,
                "base": body.base or repo.get("branch"), "title": body.title}
     try:
-        result = db.call("CALL CODEGEN.PUBLISH_DBT_PR(%s, %s)", ("", json.dumps({"domain_model": request})))
+        result = db.call("CALL CORE.PUBLISH_DBT_PR(%s, %s)", ("", json.dumps({"domain_model": request})))
     except Exception as exc:
         return {"status": "FAILED", "detail": str(exc)[:1000], "head_branch": head}
     return {**(result or {}), "head_branch": head}
@@ -329,7 +329,7 @@ def pr_sync(model_id: str, body: SyncIn, db: Db = Depends(current_db)):
     if not _github_publisher_ready(db):
         return {"checked": 0, "merged": [], "closed": [], "errors": [], "detail": "GitHub publishing is not set up"}
     try:
-        return db.call("CALL CODEGEN.PUBLISH_DBT_PR(%s, %s)",
+        return db.call("CALL CORE.PUBLISH_DBT_PR(%s, %s)",
                        ("", json.dumps({"sync_model_prs": {"model_id": model_id, "force": body.force}}))) or {}
     except Exception as exc:
         raise _snowflake_error(exc) from exc

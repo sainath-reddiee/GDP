@@ -41,12 +41,12 @@ def target_table(session, run: Dict[str, Any]) -> Dict[str, Any]:
     assert model, NO_TARGET
     parts = model.split(".")
     if len(parts) == 3:
-        found = rows(session, """SELECT * FROM KNOWLEDGE.TARGET_TABLE_REGISTRY
+        found = rows(session, """SELECT * FROM CORE.TARGET_TABLE_REGISTRY
                                  WHERE ACTIVE_FLAG AND TARGET_DATABASE = ? AND TARGET_SCHEMA = ? AND TARGET_TABLE = ?
                                  ORDER BY IFF(DOMAIN_ID = ?, 0, 1), CREATED_AT LIMIT 1""",
                      [parts[0], parts[1], parts[2], run.get("DOMAIN_ID") or ""])
         if not found:  # registered before identifiers kept their case
-            found = rows(session, """SELECT * FROM KNOWLEDGE.TARGET_TABLE_REGISTRY
+            found = rows(session, """SELECT * FROM CORE.TARGET_TABLE_REGISTRY
                                      WHERE ACTIVE_FLAG AND UPPER(TARGET_DATABASE) = UPPER(?)
                                        AND UPPER(TARGET_SCHEMA) = UPPER(?) AND UPPER(TARGET_TABLE) = UPPER(?)
                                      ORDER BY IFF(DOMAIN_ID = ?, 0, 1), CREATED_AT LIMIT 1""",
@@ -54,7 +54,7 @@ def target_table(session, run: Dict[str, Any]) -> Dict[str, Any]:
     else:
         assert run.get("DOMAIN_ID"), ("NO_DOMAIN: confirm the knowledge pack on the Domain page before mapping, "
                                       f"so the target {model} can be found.")
-        found = rows(session, """SELECT * FROM KNOWLEDGE.TARGET_TABLE_REGISTRY
+        found = rows(session, """SELECT * FROM CORE.TARGET_TABLE_REGISTRY
                                  WHERE ACTIVE_FLAG AND DOMAIN_ID = ? AND UPPER(TARGET_TABLE) = UPPER(?)
                                    AND COALESCE(LAYER, 'SILVER') = ?
                                  ORDER BY CREATED_AT LIMIT 1""", [run["DOMAIN_ID"], parts[-1], run_pipeline(run)])
@@ -65,8 +65,8 @@ def target_table(session, run: Dict[str, Any]) -> Dict[str, Any]:
 
 def target_columns(session, target_table_id: str) -> List[Dict[str, Any]]:
     out = []
-    for c in rows(session, """SELECT C.*, T.TARGET_TABLE FROM KNOWLEDGE.TARGET_COLUMN_REGISTRY C
-                              JOIN KNOWLEDGE.TARGET_TABLE_REGISTRY T ON T.TARGET_TABLE_ID = C.TARGET_TABLE_ID
+    for c in rows(session, """SELECT C.*, T.TARGET_TABLE FROM CORE.TARGET_COLUMN_REGISTRY C
+                              JOIN CORE.TARGET_TABLE_REGISTRY T ON T.TARGET_TABLE_ID = C.TARGET_TABLE_ID
                               WHERE C.TARGET_TABLE_ID = ? ORDER BY C.ORDINAL_POSITION""", [target_table_id]):
         out.append({"target_column_id": c["TARGET_COLUMN_ID"], "column_name": c["COLUMN_NAME"],
                     "table_name": c["TARGET_TABLE"], "data_type": c["DATA_TYPE"], "nullable": c["NULLABLE"],
@@ -78,7 +78,7 @@ def target_columns(session, target_table_id: str) -> List[Dict[str, Any]]:
 
 def source_columns(session, run_id: str) -> List[Dict[str, Any]]:
     out = []
-    for p in rows(session, """SELECT * FROM PROFILE.PROFILE_REGISTRY WHERE RUN_ID = ? AND IS_CURRENT
+    for p in rows(session, """SELECT * FROM CORE.PROFILE_REGISTRY WHERE RUN_ID = ? AND IS_CURRENT
                               ORDER BY TABLE_NAME, COLUMN_NAME""", [run_id]):
         stats = variant(p["STATISTICS_JSON"]) or {}
         patterns = variant(p["PATTERN_JSON"]) or []
@@ -105,7 +105,7 @@ def domain_knowledge(session, domain_id: str, run_id: str, target: Optional[Dict
 
     layer = run_layer(session, run_id)   # a Gold run learns from gold patterns, a Silver run from silver ones
     patterns: List[Tuple[str, str, Optional[str]]] = []  # reviewer patterns, weighted by their track record below
-    for k in rows(session, f"""SELECT KNOWLEDGE_ID, KNOWLEDGE_TYPE, CONTENT_JSON, LINEAGE_ID FROM KNOWLEDGE.DOMAIN_KNOWLEDGE
+    for k in rows(session, f"""SELECT KNOWLEDGE_ID, KNOWLEDGE_TYPE, CONTENT_JSON, LINEAGE_ID FROM CORE.DOMAIN_KNOWLEDGE
                               WHERE DOMAIN_ID = ? AND IS_CURRENT AND STATUS = 'ACTIVE' AND CONTENT_JSON IS NOT NULL
                                 AND {NOT_OPERATIONAL_SQL} AND {layer_sql()} AND COALESCE(SOURCE_RUN_ID, '') <> ?""",
                   [domain_id, "SILVER" if layer == "ANY" else layer, run_id if holdout else ""]):
@@ -161,10 +161,10 @@ def domain_knowledge(session, domain_id: str, run_id: str, target: Optional[Dict
     for src, tgt, lineage in patterns:
         knowledge["history"].append((src, tgt, min(1.0, weight(track.get(lineage)))))
     for h in rows(session, """SELECT L.COLUMN_NAME AS SRC, T.COLUMN_NAME AS TGT
-                              FROM MAPPING.MAPPING_DECISION D
-                              JOIN SOURCE.LANDING_COLUMN_REGISTRY L ON L.LANDING_COLUMN_ID = D.SOURCE_COLUMN_ID
-                              JOIN KNOWLEDGE.TARGET_COLUMN_REGISTRY T ON T.TARGET_COLUMN_ID = D.TARGET_COLUMN_ID
-                              JOIN KNOWLEDGE.TARGET_TABLE_REGISTRY TT ON TT.TARGET_TABLE_ID = T.TARGET_TABLE_ID
+                              FROM CORE.MAPPING_DECISION D
+                              JOIN CORE.LANDING_COLUMN_REGISTRY L ON L.LANDING_COLUMN_ID = D.SOURCE_COLUMN_ID
+                              JOIN CORE.TARGET_COLUMN_REGISTRY T ON T.TARGET_COLUMN_ID = D.TARGET_COLUMN_ID
+                              JOIN CORE.TARGET_TABLE_REGISTRY TT ON TT.TARGET_TABLE_ID = T.TARGET_TABLE_ID
                               WHERE D.IS_CURRENT AND D.RUN_ID <> ? AND D.DECISION IN ('APPROVED', 'MODIFIED', 'ALTERNATIVE_TARGET')
                                 AND TT.DOMAIN_ID = ? AND (NULLIF(?, '') IS NULL OR TT.TARGET_TABLE_ID = ?)""",
                   [run_id, domain_id or "", (target or {}).get("TARGET_TABLE_ID") or "",
@@ -186,7 +186,7 @@ def embeddings(session, kind: str, items: List[Tuple[str, str]], model: str) -> 
     out = {}
     for object_id, text in items:
         sha = hashlib.sha256(f"{model}|{text}".encode("utf-8")).hexdigest()
-        existing = rows(session, "SELECT EMBEDDING_ID FROM MAPPING.COLUMN_EMBEDDING WHERE OBJECT_KIND = ? AND OBJECT_ID = ? "
+        existing = rows(session, "SELECT EMBEDDING_ID FROM CORE.COLUMN_EMBEDDING WHERE OBJECT_KIND = ? AND OBJECT_ID = ? "
                                  "AND TEXT_SHA256 = ? LIMIT 1", [kind, object_id, sha])
         if existing:
             out[object_id] = existing[0]["EMBEDDING_ID"]
@@ -194,7 +194,7 @@ def embeddings(session, kind: str, items: List[Tuple[str, str]], model: str) -> 
         embedding_id = str(uuid.uuid4())
         assert model in EMBED_MODELS, f"unsupported embed model {model}"
         session.sql(
-            "INSERT INTO MAPPING.COLUMN_EMBEDDING (EMBEDDING_ID, OBJECT_KIND, OBJECT_ID, EMBED_MODEL, EMBED_TEXT, "
+            "INSERT INTO CORE.COLUMN_EMBEDDING (EMBEDDING_ID, OBJECT_KIND, OBJECT_ID, EMBED_MODEL, EMBED_TEXT, "
             f"EMBEDDING, TEXT_SHA256) SELECT ?, ?, ?, ?, ?, AI_EMBED('{model}', ?), ?",
             params=[embedding_id, kind, object_id, model, clip(text), clip(text), sha],
         ).collect()
@@ -205,7 +205,7 @@ def embeddings(session, kind: str, items: List[Tuple[str, str]], model: str) -> 
 def cosine_matrix(session, source_ids: Dict[str, str], target_ids: Dict[str, str]) -> Dict[Tuple[str, str], float]:
     result = rows(session, """
         SELECT S.OBJECT_ID AS SID, T.OBJECT_ID AS TID, VECTOR_COSINE_SIMILARITY(S.EMBEDDING, T.EMBEDDING) AS COS
-          FROM MAPPING.COLUMN_EMBEDDING S, MAPPING.COLUMN_EMBEDDING T
+          FROM CORE.COLUMN_EMBEDDING S, CORE.COLUMN_EMBEDDING T
          WHERE ARRAY_CONTAINS(S.EMBEDDING_ID::VARIANT, PARSE_JSON(?)::ARRAY)
            AND ARRAY_CONTAINS(T.EMBEDDING_ID::VARIANT, PARSE_JSON(?)::ARRAY)""",
                   [json.dumps(list(source_ids.values())), json.dumps(list(target_ids.values()))])
@@ -283,7 +283,7 @@ def _adjudicate(session, run_id: str, ambiguous: List[Tuple[Dict[str, Any], List
 
 
 def _scoring_config(session, domain_id: str) -> Dict[str, Any]:
-    found = rows(session, """SELECT CONFIG_ID, WEIGHTS, THRESHOLDS FROM MAPPING.MAPPING_SCORING_CONFIG
+    found = rows(session, """SELECT CONFIG_ID, WEIGHTS, THRESHOLDS FROM CORE.MAPPING_SCORING_CONFIG
                              WHERE ACTIVE_FLAG AND (DOMAIN_ID = ? OR DOMAIN_ID IS NULL)
                              ORDER BY IFF(DOMAIN_ID IS NULL, 1, 0), VERSION DESC LIMIT 1""", [domain_id])
     assert found, "no active mapping scoring configuration"
@@ -398,7 +398,7 @@ def generate_mapping_candidates(session, run_id: str) -> Dict[str, Any]:
             src_emb = embeddings(session, "SOURCE_COLUMN", [(s["source_column_id"], _embed_text_source(s)) for s in sources], model)
             tgt_emb = embeddings(session, "TARGET_COLUMN", [(t["target_column_id"], _embed_text_target(t)) for t in mappable], model)
             cosines = cosine_matrix(session, src_emb, tgt_emb)
-            domain_name = scalar(session, "SELECT DOMAIN_NAME FROM KNOWLEDGE.DOMAIN_REGISTRY WHERE DOMAIN_ID = ?",
+            domain_name = scalar(session, "SELECT DOMAIN_NAME FROM CORE.DOMAIN_REGISTRY WHERE DOMAIN_ID = ?",
                                  [run["DOMAIN_ID"]])
             gold_rules = _gold_rules(session, run, sources)
             try:   # the person's own STTM for this layer ranks first (a reference input); gold model rules fill the rest
@@ -446,7 +446,7 @@ def generate_mapping_candidates(session, run_id: str) -> Dict[str, Any]:
                 pass
             ambiguous = [(s, r) for s, r in ranked_by_source if r and r[0]["ambiguous"]]
             llm = _adjudicate(session, run_id, ambiguous, guidance, knowledge["notes"], knowledge, hits_by_source)
-            version = (scalar(session, "SELECT MAX(CANDIDATE_VERSION) FROM MAPPING.MAPPING_CANDIDATE WHERE RUN_ID = ?",
+            version = (scalar(session, "SELECT MAX(CANDIDATE_VERSION) FROM CORE.MAPPING_CANDIDATE WHERE RUN_ID = ?",
                               [run_id]) or 0) + 1
             knowledge_version = current_knowledge_version(session, run["DOMAIN_ID"])
             values = []
@@ -477,9 +477,9 @@ def generate_mapping_candidates(session, run_id: str) -> Dict[str, Any]:
                                    knowledge_version, version])
 
             def write(_event_id: str) -> None:
-                session.sql("UPDATE MAPPING.MAPPING_CANDIDATE SET IS_CURRENT = FALSE WHERE RUN_ID = ? AND IS_CURRENT",
+                session.sql("UPDATE CORE.MAPPING_CANDIDATE SET IS_CURRENT = FALSE WHERE RUN_ID = ? AND IS_CURRENT",
                             params=[run_id]).collect()
-                insert_rows(session, "MAPPING.MAPPING_CANDIDATE",
+                insert_rows(session, "CORE.MAPPING_CANDIDATE",
                             ["CANDIDATE_ID", "RUN_ID", "SOURCE_COLUMN_ID", "TARGET_COLUMN_ID", "DOMAIN_ID",
                              "SEMANTIC_SCORE", "KEYWORD_SCORE", "DATATYPE_SCORE", "STATISTICAL_SCORE", "DOMAIN_SCORE",
                              "CONTEXT_SCORE", "HISTORICAL_SCORE", "FINAL_SCORE", "RANK", "CONFIDENCE",
@@ -512,10 +512,10 @@ def generate_mapping_candidates(session, run_id: str) -> Dict[str, Any]:
 def mapping_status(session, run_id: str) -> Dict[str, Any]:
     """Progress towards the mapping gate: every proposed source column decided, every required target covered."""
     sources = rows(session, """SELECT DISTINCT C.SOURCE_COLUMN_ID, L.COLUMN_NAME
-                               FROM MAPPING.MAPPING_CANDIDATE C
-                               JOIN SOURCE.LANDING_COLUMN_REGISTRY L ON L.LANDING_COLUMN_ID = C.SOURCE_COLUMN_ID
+                               FROM CORE.MAPPING_CANDIDATE C
+                               JOIN CORE.LANDING_COLUMN_REGISTRY L ON L.LANDING_COLUMN_ID = C.SOURCE_COLUMN_ID
                                WHERE C.RUN_ID = ? AND C.IS_CURRENT""", [run_id])
-    decisions = rows(session, """SELECT SOURCE_COLUMN_ID, DECISION, TARGET_COLUMN_ID FROM MAPPING.MAPPING_DECISION
+    decisions = rows(session, """SELECT SOURCE_COLUMN_ID, DECISION, TARGET_COLUMN_ID FROM CORE.MAPPING_DECISION
                                  WHERE RUN_ID = ? AND IS_CURRENT""", [run_id])
     decided = {d["SOURCE_COLUMN_ID"] for d in decisions}
     mapped_targets = {d["TARGET_COLUMN_ID"] for d in decisions if d["DECISION"] != "REJECTED"}
@@ -538,15 +538,15 @@ def _store_feedback(session, run: Dict[str, Any], targets: Dict[str, Dict[str, A
         return
     names = {r["LANDING_COLUMN_ID"]: r for r in rows(session, """
         SELECT L.LANDING_COLUMN_ID, L.COLUMN_NAME, T.SOURCE_TABLE
-          FROM SOURCE.LANDING_COLUMN_REGISTRY L
-          JOIN SOURCE.LANDING_TABLE_REGISTRY T ON T.LANDING_ID = L.LANDING_ID
+          FROM CORE.LANDING_COLUMN_REGISTRY L
+          JOIN CORE.LANDING_TABLE_REGISTRY T ON T.LANDING_ID = L.LANDING_ID
          WHERE L.LANDING_COLUMN_ID IN (""" + ", ".join("?" for _ in prepared) + ")",
         [p[0] for p in prepared])}
     proposed = {}
     rank1 = rows(session, """
         SELECT C.SOURCE_COLUMN_ID, T.COLUMN_NAME
-          FROM MAPPING.MAPPING_CANDIDATE C
-          JOIN KNOWLEDGE.TARGET_COLUMN_REGISTRY T ON T.TARGET_COLUMN_ID = C.TARGET_COLUMN_ID
+          FROM CORE.MAPPING_CANDIDATE C
+          JOIN CORE.TARGET_COLUMN_REGISTRY T ON T.TARGET_COLUMN_ID = C.TARGET_COLUMN_ID
          WHERE C.RUN_ID = ? AND C.IS_CURRENT AND C.RANK = 1""", [run["RUN_ID"]])
     for r in rank1:
         proposed[r["SOURCE_COLUMN_ID"]] = r["COLUMN_NAME"]
@@ -580,11 +580,11 @@ def save_mapping_decisions(session, run_id: str, decisions_json: str) -> Dict[st
         decisions = [decisions]
     assert isinstance(decisions, list) and decisions, "provide one or more decisions"
     candidates = {c["CANDIDATE_ID"]: c for c in rows(session, """SELECT CANDIDATE_ID, SOURCE_COLUMN_ID, TARGET_COLUMN_ID,
-        RECOMMENDATION, TRANSFORMATION FROM MAPPING.MAPPING_CANDIDATE WHERE RUN_ID = ? AND IS_CURRENT""", [run_id])}
+        RECOMMENDATION, TRANSFORMATION FROM CORE.MAPPING_CANDIDATE WHERE RUN_ID = ? AND IS_CURRENT""", [run_id])}
     run = stage.run
     valid_targets = {t["target_column_id"]: t for t in target_columns(session, target_table(session, run)["TARGET_TABLE_ID"])}
     current = {d["SOURCE_COLUMN_ID"]: d for d in rows(session, """SELECT SOURCE_COLUMN_ID, TARGET_COLUMN_ID, DECISION,
-        VERSION FROM MAPPING.MAPPING_DECISION WHERE RUN_ID = ? AND IS_CURRENT""", [run_id])}
+        VERSION FROM CORE.MAPPING_DECISION WHERE RUN_ID = ? AND IS_CURRENT""", [run_id])}
 
     prepared = []
     for raw in decisions:
@@ -632,12 +632,12 @@ def save_mapping_decisions(session, run_id: str, decisions_json: str) -> Dict[st
     try:
         values = []
         for source_id, decision, candidate, target_id, transformation, justification, comments in prepared:
-            session.sql("UPDATE MAPPING.MAPPING_DECISION SET IS_CURRENT = FALSE WHERE RUN_ID = ? AND SOURCE_COLUMN_ID = ? "
+            session.sql("UPDATE CORE.MAPPING_DECISION SET IS_CURRENT = FALSE WHERE RUN_ID = ? AND SOURCE_COLUMN_ID = ? "
                         "AND IS_CURRENT", params=[run_id, source_id]).collect()
             version = (current.get(source_id, {}).get("VERSION") or 0) + 1
             values.append([str(uuid.uuid4()), run_id, (candidate or {}).get("CANDIDATE_ID"), source_id, target_id,
                            decision, clip(transformation), clip(justification), clip(comments), version])
-        insert_rows(session, "MAPPING.MAPPING_DECISION",
+        insert_rows(session, "CORE.MAPPING_DECISION",
                     ["DECISION_ID", "RUN_ID", "CANDIDATE_ID", "SOURCE_COLUMN_ID", "TARGET_COLUMN_ID", "DECISION",
                      "TRANSFORMATION", "BUSINESS_JUSTIFICATION", "COMMENTS", "REVIEWER", "VERSION", "IS_CURRENT"],
                     ["?", "?", "NULLIF(?, '')", "?", "NULLIF(?, '')", "?", "NULLIF(?, '')", "NULLIF(?, '')",

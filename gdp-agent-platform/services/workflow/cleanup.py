@@ -2,7 +2,7 @@
 
 Purged:  landing tables the runs created, the runs' staged dbt workspace and auto-named DBT PROJECTs.
 Kept:    a landing table another live run still points at (landing names are <SOURCE>__<OBJECT>, so
-         runs of the same source share them), METADATA.TABLE_PROFILES, @METADATA.PROFILES_STAGE,
+         runs of the same source share them), CORE.TABLE_PROFILES, @CORE.PROFILES_STAGE,
          and the audit trail (CORE.WORKFLOW_EVENT, CORE.REVIEW_DECISION, registries).
 """
 
@@ -61,7 +61,7 @@ def _purge_landing(session, run_ids: List[str]) -> Dict[str, Any]:
     ids_json = json.dumps(run_ids)
     owned = rows(session, """
         SELECT RUN_ID, LANDING_DATABASE, LANDING_SCHEMA, LANDING_TABLE, INGESTION_METHOD
-          FROM SOURCE.LANDING_TABLE_REGISTRY
+          FROM CORE.LANDING_TABLE_REGISTRY
          WHERE ARRAY_CONTAINS(RUN_ID::VARIANT, PARSE_JSON(?)::ARRAY) AND INGESTION_STATUS <> 'PURGED'""",
                  [ids_json])
     if not owned:
@@ -69,7 +69,7 @@ def _purge_landing(session, run_ids: List[str]) -> Dict[str, Any]:
     names = sorted({r["LANDING_TABLE"] for r in owned})
     others = rows(session, """
         SELECT L.RUN_ID, L.LANDING_DATABASE, L.LANDING_SCHEMA, L.LANDING_TABLE
-          FROM SOURCE.LANDING_TABLE_REGISTRY L
+          FROM CORE.LANDING_TABLE_REGISTRY L
           JOIN CORE.WORKFLOW_RUN R ON R.RUN_ID = L.RUN_ID
          WHERE NOT ARRAY_CONTAINS(L.RUN_ID::VARIANT, PARSE_JSON(?)::ARRAY)
            AND R.DELETED_AT IS NULL
@@ -85,7 +85,7 @@ def _purge_landing(session, run_ids: List[str]) -> Dict[str, Any]:
             out["errors"].append({"table": name, "error": clip(exc, 400)})
             continue
         session.sql("""
-            UPDATE SOURCE.LANDING_TABLE_REGISTRY SET INGESTION_STATUS = 'PURGED'
+            UPDATE CORE.LANDING_TABLE_REGISTRY SET INGESTION_STATUS = 'PURGED'
              WHERE ARRAY_CONTAINS(RUN_ID::VARIANT, PARSE_JSON(?)::ARRAY)
                AND LANDING_DATABASE = ? AND LANDING_SCHEMA = ? AND LANDING_TABLE = ?""",
                     params=[ids_json, database, schema, table]).collect()

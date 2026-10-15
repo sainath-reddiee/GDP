@@ -2,7 +2,7 @@
 habits behind them (services/learning/patterns.py), replay each candidate on the domain's past runs
 (services/learning/replay.py) and propose the ones that do not make mapping worse to the knowledge inbox, each with
 its evidence and its replay. A candidate the replay shows to be worse is held back and reported, never proposed.
-Every replay is kept (KNOWLEDGE.CHANGE_EVAL, V058) so the inbox shows it next to the proposal.
+Every replay is kept (CORE.CHANGE_EVAL, V058) so the inbox shows it next to the proposal.
 """
 
 from __future__ import annotations
@@ -23,14 +23,14 @@ def events(session, domain_id: str, layer: str) -> List[Dict[str, Any]]:
                P.STATISTICS_JSON:date_format::STRING AS DATE_FORMAT, P.PATTERN_JSON[0]:pattern::STRING AS PATTERN,
                TT.TARGET_TABLE, T.COLUMN_NAME AS TARGET_COLUMN, T.DATA_TYPE AS TARGET_TYPE, D.DECISION, D.TRANSFORMATION,
                CT.COLUMN_NAME AS PROPOSED_TARGET, C.TRANSFORMATION AS PROPOSED_TRANSFORMATION
-          FROM MAPPING.MAPPING_DECISION D
+          FROM CORE.MAPPING_DECISION D
           JOIN CORE.WORKFLOW_RUN R ON R.RUN_ID = D.RUN_ID
-          LEFT JOIN PROFILE.PROFILE_REGISTRY P ON P.RUN_ID = D.RUN_ID AND P.SOURCE_COLUMN_ID = D.SOURCE_COLUMN_ID AND P.IS_CURRENT
-          LEFT JOIN KNOWLEDGE.TARGET_COLUMN_REGISTRY T ON T.TARGET_COLUMN_ID = D.TARGET_COLUMN_ID
-          LEFT JOIN KNOWLEDGE.TARGET_TABLE_REGISTRY TT ON TT.TARGET_TABLE_ID = T.TARGET_TABLE_ID
-          LEFT JOIN MAPPING.MAPPING_CANDIDATE C ON C.RUN_ID = D.RUN_ID AND C.SOURCE_COLUMN_ID = D.SOURCE_COLUMN_ID
+          LEFT JOIN CORE.PROFILE_REGISTRY P ON P.RUN_ID = D.RUN_ID AND P.SOURCE_COLUMN_ID = D.SOURCE_COLUMN_ID AND P.IS_CURRENT
+          LEFT JOIN CORE.TARGET_COLUMN_REGISTRY T ON T.TARGET_COLUMN_ID = D.TARGET_COLUMN_ID
+          LEFT JOIN CORE.TARGET_TABLE_REGISTRY TT ON TT.TARGET_TABLE_ID = T.TARGET_TABLE_ID
+          LEFT JOIN CORE.MAPPING_CANDIDATE C ON C.RUN_ID = D.RUN_ID AND C.SOURCE_COLUMN_ID = D.SOURCE_COLUMN_ID
                AND C.IS_CURRENT AND C.RANK = 1
-          LEFT JOIN KNOWLEDGE.TARGET_COLUMN_REGISTRY CT ON CT.TARGET_COLUMN_ID = C.TARGET_COLUMN_ID
+          LEFT JOIN CORE.TARGET_COLUMN_REGISTRY CT ON CT.TARGET_COLUMN_ID = C.TARGET_COLUMN_ID
          WHERE D.IS_CURRENT AND R.DOMAIN_ID = ? AND COALESCE(R.PIPELINE, 'SILVER') = ? AND R.DELETED_AT IS NULL
            AND COALESCE(R.ENVIRONMENT, '') <> 'TEST'""", [domain_id, layer])
     return [{k.lower(): v for k, v in r.items()} for r in found]
@@ -39,7 +39,7 @@ def events(session, domain_id: str, layer: str) -> List[Dict[str, Any]]:
 def record_eval(session, domain_id: str, layer: str, subject_kind: str, subject_id: str, result: Dict[str, Any]) -> None:
     """Keep one replay (silently nothing before V058)."""
     try:
-        session.sql("""INSERT INTO KNOWLEDGE.CHANGE_EVAL (EVAL_ID, DOMAIN_ID, LAYER, SUBJECT_KIND, SUBJECT_ID, VERDICT, RESULT)
+        session.sql("""INSERT INTO CORE.CHANGE_EVAL (EVAL_ID, DOMAIN_ID, LAYER, SUBJECT_KIND, SUBJECT_ID, VERDICT, RESULT)
                        SELECT ?, ?, ?, ?, ?, ?, PARSE_JSON(?)""",
                     params=[str(uuid.uuid4()), domain_id, layer, subject_kind, subject_id, result.get("verdict") or "NO_EVIDENCE",
                             json.dumps(result, default=str)]).collect()
@@ -53,7 +53,7 @@ def _settled(session, domain_id: str, keys: List[str]) -> set:
 
     if not keys:
         return set()
-    return {r["SOURCE_REFERENCE"] for r in rows(session, f"""SELECT DISTINCT SOURCE_REFERENCE FROM KNOWLEDGE.DOMAIN_KNOWLEDGE
+    return {r["SOURCE_REFERENCE"] for r in rows(session, f"""SELECT DISTINCT SOURCE_REFERENCE FROM CORE.DOMAIN_KNOWLEDGE
                 WHERE DOMAIN_ID = ? AND STATUS IN ('ACTIVE', 'REJECTED') AND SOURCE_REFERENCE IN ({', '.join('?' for _ in keys)})""",
                 [domain_id, *keys])}
 
@@ -95,7 +95,7 @@ def replay_knowledge(session, knowledge_id: str, layer: Optional[str] = None) ->
     from services.common.sql import rows, variant
 
     found = rows(session, """SELECT KNOWLEDGE_ID, DOMAIN_ID, KNOWLEDGE_TYPE, CONTENT_JSON, COALESCE(LAYER, 'ANY') AS LAYER
-                               FROM KNOWLEDGE.DOMAIN_KNOWLEDGE WHERE KNOWLEDGE_ID = ?""", [knowledge_id])
+                               FROM CORE.DOMAIN_KNOWLEDGE WHERE KNOWLEDGE_ID = ?""", [knowledge_id])
     assert found, "knowledge item not found"
     k = found[0]
     assert k["DOMAIN_ID"], "a platform-wide item has no domain runs to replay on"

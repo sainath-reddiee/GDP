@@ -4,7 +4,7 @@
     python -m pytest tests/integration/test_multi_table_profiling.py -m integration
 
 Creates five scratch tables in <AIP_DEMO_SOURCE>.ITEST_PROFILE_<hex>, onboards them in one run, then onboards
-the same tables in a second run and checks every profile is read back from @METADATA.PROFILES_STAGE.
+the same tables in a second run and checks every profile is read back from @CORE.PROFILES_STAGE.
 """
 
 import json
@@ -57,21 +57,21 @@ def scratch(cur):
                     f"SELECT * FROM {DEMO}.CRM.CRM_CUSTOMER ORDER BY CUST_ID LIMIT {100 + 10 * i}")
     yield schema, source
     cur.execute(f"DROP SCHEMA IF EXISTS {DEMO}.{schema}")
-    for r in rows(cur, "SELECT PROFILE_STAGE_PATH FROM METADATA.TABLE_PROFILES WHERE SCHEMA_NAME = %s", (schema,)):
-        cur.execute(f"REMOVE @METADATA.PROFILES_STAGE/{r['PROFILE_STAGE_PATH']}")
-    cur.execute("DELETE FROM METADATA.TABLE_PROFILES WHERE SCHEMA_NAME = %s", (schema,))
+    for r in rows(cur, "SELECT PROFILE_STAGE_PATH FROM CORE.TABLE_PROFILES WHERE SCHEMA_NAME = %s", (schema,)):
+        cur.execute(f"REMOVE @CORE.PROFILES_STAGE/{r['PROFILE_STAGE_PATH']}")
+    cur.execute("DELETE FROM CORE.TABLE_PROFILES WHERE SCHEMA_NAME = %s", (schema,))
 
 
 def onboard_and_profile(cur, schema, source, options=None):
     run_id = call(cur, "CALL CORE.CREATE_RUN(%s)", (json.dumps(
         {"RUN_NAME": f"itest-profile-{uuid.uuid4().hex[:8]}", "ENVIRONMENT": "TEST"}),))["run_id"]
-    call(cur, "CALL SOURCE.REGISTER_SOURCE(%s, %s)", (run_id, json.dumps(
+    call(cur, "CALL CORE.REGISTER_SOURCE(%s, %s)", (run_id, json.dumps(
         {"SOURCE_SYSTEM_NAME": source, "SOURCE_TYPE": "SNOWFLAKE_DATABASE", "DATABASE": DEMO, "SCHEMA": schema})))
-    access = call(cur, "CALL SOURCE.VALIDATE_SOURCE_ACCESS(%s, %s)", (run_id, json.dumps(TABLES)))
+    access = call(cur, "CALL CORE.VALIDATE_SOURCE_ACCESS(%s, %s)", (run_id, json.dumps(TABLES)))
     assert access["passed"], access["checks"]
-    landed = call(cur, "CALL SOURCE.EXECUTE_LANDING(%s)", (run_id,))
+    landed = call(cur, "CALL CORE.EXECUTE_LANDING(%s)", (run_id,))
     assert landed["state"]["current_state"] == "LANDING_COMPLETE", landed
-    result = call(cur, "CALL PROFILE.RUN_PROFILING(%s, %s)", (run_id, json.dumps(options or {"concurrency_limit": 3})))
+    result = call(cur, "CALL CORE.RUN_PROFILING(%s, %s)", (run_id, json.dumps(options or {"concurrency_limit": 3})))
     return run_id, result
 
 
@@ -83,26 +83,26 @@ def test_profiles_are_staged_then_reused_by_the_next_run(cur, scratch):
     assert summary["computed"] == 5 and summary["cache_hits"] == 0, summary
     assert all(t["persisted"] for t in summary["tables"]), summary
 
-    index = rows(cur, "SELECT TABLE_NAME, PROFILE_STAGE_PATH, PROFILED_IN_RUN, ROW_COUNT FROM METADATA.TABLE_PROFILES "
+    index = rows(cur, "SELECT TABLE_NAME, PROFILE_STAGE_PATH, PROFILED_IN_RUN, ROW_COUNT FROM CORE.TABLE_PROFILES "
                       "WHERE SOURCE_NAME = %s AND SCHEMA_NAME = %s ORDER BY TABLE_NAME", (source, schema))
     assert [r["TABLE_NAME"] for r in index] == TABLES
     assert [r["ROW_COUNT"] for r in index] == [100, 110, 120, 130, 140]
     assert all(r["PROFILED_IN_RUN"] == first_run for r in index)
-    cur.execute(f"LIST @METADATA.PROFILES_STAGE/{index[0]['PROFILE_STAGE_PATH'].rsplit('/', 1)[0]}/")
+    cur.execute(f"LIST @CORE.PROFILES_STAGE/{index[0]['PROFILE_STAGE_PATH'].rsplit('/', 1)[0]}/")
     assert len(cur.fetchall()) == 5
 
     second_run, second = onboard_and_profile(cur, schema, source)
     summary = second["profiled"]
     assert summary["cache_hits"] == 5 and summary["computed"] == 0, summary
-    cached = rows(cur, "SELECT DISTINCT STATISTICS_JSON:cache::VARCHAR AS CACHE FROM PROFILE.PROFILE_REGISTRY "
+    cached = rows(cur, "SELECT DISTINCT STATISTICS_JSON:cache::VARCHAR AS CACHE FROM CORE.PROFILE_REGISTRY "
                        "WHERE RUN_ID = %s AND IS_CURRENT", (second_run,))
     assert [r["CACHE"] for r in cached] == ["HIT"]
-    unchanged = rows(cur, "SELECT PROFILED_IN_RUN FROM METADATA.TABLE_PROFILES WHERE SOURCE_NAME = %s", (source,))
+    unchanged = rows(cur, "SELECT PROFILED_IN_RUN FROM CORE.TABLE_PROFILES WHERE SOURCE_NAME = %s", (source,))
     assert {r["PROFILED_IN_RUN"] for r in unchanged} == {first_run}
 
-    refreshed = call(cur, "CALL PROFILE.REFRESH_TABLE_PROFILE(%s, %s)", (second_run, "T3"))
+    refreshed = call(cur, "CALL CORE.REFRESH_TABLE_PROFILE(%s, %s)", (second_run, "T3"))
     assert refreshed["cache"] == "REFRESHED" and refreshed["registry_updated"] is True
-    owner = rows(cur, "SELECT PROFILED_IN_RUN FROM METADATA.TABLE_PROFILES WHERE SOURCE_NAME = %s AND TABLE_NAME = 'T3'",
+    owner = rows(cur, "SELECT PROFILED_IN_RUN FROM CORE.TABLE_PROFILES WHERE SOURCE_NAME = %s AND TABLE_NAME = 'T3'",
                  (source,))
     assert owner[0]["PROFILED_IN_RUN"] == second_run
 

@@ -4,7 +4,7 @@ Snowflake git repository clones are read-only from SQL (COPY FILES can't target 
 the GitHub REST API. The commit uses the base branch tree, so every skeleton file stays exactly as it is
 on the cut-from branch and only the generated paths are added or replaced.
 
-`Request` is injected: Snowflake's CODEGEN.PUBLISH_DBT_PR passes an urllib caller that runs through an
+`Request` is injected: Snowflake's CORE.PUBLISH_DBT_PR passes an urllib caller that runs through an
 external access integration with a token from a Snowflake SECRET; tests pass a fake.
 """
 

@@ -49,15 +49,15 @@ def _facts(db: Db, run_id: str) -> Tuple[str, Dict[str, Any], Dict[str, Any]]:
         model = _gold_model(db, r["domain_id"]) if r.get("domain_id") else None
         facts["gold_model"] = {"approved": bool(model and model.get("approved_version")), "open": bool(model and model.get("open_version"))}
         facts["has_children"] = bool(_children(db, run_id))
-    sttm = db.query("""SELECT STTM_ID FROM CONTRACT.STTM_REGISTRY WHERE RUN_ID = %s AND STATUS = 'APPROVED'
+    sttm = db.query("""SELECT STTM_ID FROM CORE.STTM_REGISTRY WHERE RUN_ID = %s AND STATUS = 'APPROVED'
                         ORDER BY STTM_VERSION DESC LIMIT 1""", (run_id,))
-    facts["soda_generated"] = bool(db.query("""SELECT 1 FROM CONTRACT.SODA_EXPECTATION_REGISTRY WHERE RUN_ID = %s AND IS_CURRENT
+    facts["soda_generated"] = bool(db.query("""SELECT 1 FROM CORE.SODA_EXPECTATION_REGISTRY WHERE RUN_ID = %s AND IS_CURRENT
                                                LIMIT 1""", (run_id,)))
-    gen = db.query("""SELECT GENERATION_ID FROM CODEGEN.DBT_GENERATION_REGISTRY WHERE RUN_ID = %s AND STTM_ID = %s
+    gen = db.query("""SELECT GENERATION_ID FROM CORE.DBT_GENERATION_REGISTRY WHERE RUN_ID = %s AND STTM_ID = %s
                         AND GENERATION_STATUS IN ('GENERATED', 'APPROVED') ORDER BY GENERATION_VERSION DESC LIMIT 1""",
                    (run_id, sttm[0]["sttm_id"] if sttm else ""))
     facts["dbt_generated"] = bool(gen)
-    facts["validated"] = bool(gen) and bool(db.query("""SELECT 1 FROM CODEGEN.VALIDATION_RUN WHERE RUN_ID = %s
+    facts["validated"] = bool(gen) and bool(db.query("""SELECT 1 FROM CORE.VALIDATION_RUN WHERE RUN_ID = %s
                                                           AND GENERATION_ID = %s AND VALIDATION_TYPE = 'SUMMARY' LIMIT 1""",
                                                        (run_id, gen[0]["generation_id"])))
     return r["current_state"], facts, r

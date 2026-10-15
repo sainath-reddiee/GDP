@@ -74,11 +74,11 @@ def test_profile_rows_match_insert_binds_and_never_store_pii_extremes():
 
 
 def test_profile_record_never_raises_when_catalog_missing():
-    session = Session(fail=("GOVERNANCE.DATA_PROFILES",))
+    session = Session(fail=("CORE.DATA_PROFILES",))
     assert cp.record(session, ("SRC", "DB", "S", "T"), DOC, None) is None
     ok = Session()
     assert cp.record(ok, ("SRC", "DB", "S", "T"), DOC, "r1")
-    assert any("INSERT INTO GOVERNANCE.DATA_PROFILES" in sql for sql, _ in ok.calls)
+    assert any("INSERT INTO CORE.DATA_PROFILES" in sql for sql, _ in ok.calls)
 
 
 def test_profile_search_filters_are_bound_not_inlined():
@@ -224,18 +224,18 @@ def test_sttm_export_is_a_dbt_project():
 
 def test_snapshot_writes_next_version_and_swallows_errors():
     session = Session({
-        "FROM CONTRACT.STTM_REGISTRY S": [{"STTM_ID": "s1", "RUN_ID": "r1", "DOMAIN_ID": "d1", "TARGET_TABLE_ID": "t1",
+        "FROM CORE.STTM_REGISTRY S": [{"STTM_ID": "s1", "RUN_ID": "r1", "DOMAIN_ID": "d1", "TARGET_TABLE_ID": "t1",
                                            "STATUS": "REVIEW", "TABLE_DESIGN": "{}", "DOMAIN_NAME": "COMPANY",
                                            "TARGET_DATABASE": "DB", "TARGET_SCHEMA": "S", "TARGET_TABLE": "X"}],
-        "FROM CONTRACT.STTM_LINE": [{"SOURCE_SYSTEM": "CRM", "TARGET_COLUMN": "ID", "SOURCE_TABLE": "T"}],
+        "FROM CORE.STTM_LINE": [{"SOURCE_SYSTEM": "CRM", "TARGET_COLUMN": "ID", "SOURCE_TABLE": "T"}],
         "COALESCE(MAX(VERSION), 0)": [{"V": 3}],
     })
     out = cs.snapshot(session, "s1", "GENERATED", "note")
     assert out == {"catalog_id": cs.catalog_id("CRM", "t1"), "version": 4, "lines": 1}
-    insert = [p for sql, p in session.calls if sql.lstrip().startswith("INSERT INTO GOVERNANCE.STTM_CATALOG")][0]
+    insert = [p for sql, p in session.calls if sql.lstrip().startswith("INSERT INTO CORE.STTM_CATALOG")][0]
     assert insert[9] == "DB.S.X" and insert[11] == "GENERATED"
-    assert cs.snapshot(Session(fail=("CONTRACT.STTM_REGISTRY",)), "s1") is None
-    assert cs.snapshot_run(Session(fail=("CONTRACT.STTM_REGISTRY",)), "r1", "TRANSFORM_EDIT") is None
+    assert cs.snapshot(Session(fail=("CORE.STTM_REGISTRY",)), "s1") is None
+    assert cs.snapshot_run(Session(fail=("CORE.STTM_REGISTRY",)), "r1", "TRANSFORM_EDIT") is None
 
 
 # ---------------------------------------------------------------- models
@@ -342,20 +342,20 @@ def test_publish_model_branch_reads_files_from_the_table(monkeypatch):
     monkeypatch.setattr(publish.github, "urllib_request", lambda token: None)
     monkeypatch.setattr(publish, "_token", lambda: "t")
     session = Session({
-        "FROM GOVERNANCE.MODEL_DESIGNS": [{"DOMAIN_NAME": "SALES_X", "MODE": "NEW", "STATUS": "FINALIZED",
+        "FROM CORE.MODEL_DESIGNS": [{"DOMAIN_NAME": "SALES_X", "MODE": "NEW", "STATUS": "FINALIZED",
                                            "ARTIFACTS": json.dumps({"domain/sales_x/domain_pack.json": "{}"})}],
-        "FROM CODE.REPO": [{"GIT_URL": "https://github.com/o/r", "BRANCH": "main", "PROVIDER": "GITHUB"}],
+        "FROM CORE.REPO": [{"GIT_URL": "https://github.com/o/r", "BRANCH": "main", "PROVIDER": "GITHUB"}],
     })
     payload = {"model_branch": {"design_id": "d1", "version": 2, "repo_id": "r1",
                                 "head": "feature/model-sales-x-20261011090503"}}
     result = publish.publish_dbt_pr(session, "", json.dumps(payload))
     assert result["status"] == "PUBLISHED" and pushed["files"] == {"domain/sales_x/domain_pack.json": "{}"}
     assert pushed["draft"] is True and pushed["base"] == "main"
-    update = [p for sql, p in session.calls if "UPDATE GOVERNANCE.MODEL_DESIGNS" in sql][0]
+    update = [p for sql, p in session.calls if "UPDATE CORE.MODEL_DESIGNS" in sql][0]
     assert update[0] == "PUBLISHED" and update[3] == "https://github.com/o/r/pull/7"
     with pytest.raises(AssertionError, match="feature/model-"):
         publish.publish_model_branch(session, {**payload["model_branch"], "head": "main-hack"})
-    draft = Session({"FROM GOVERNANCE.MODEL_DESIGNS": [{"DOMAIN_NAME": "X", "MODE": "NEW", "STATUS": "DRAFT",
+    draft = Session({"FROM CORE.MODEL_DESIGNS": [{"DOMAIN_NAME": "X", "MODE": "NEW", "STATUS": "DRAFT",
                                                         "ARTIFACTS": "{}"}]})
     with pytest.raises(AssertionError, match="finalized"):
         publish.publish_model_branch(draft, payload["model_branch"])
@@ -411,12 +411,12 @@ def test_staged_landing_statements():
     run = str(uuid.uuid4())
     stmts = staged.landing_statements("AI_PLATFORM", run, '"SHARE_DB"."S"."T"', '"AI_PLATFORM"."LANDING"."X__T"',
                                       "X__T", "As-is landing of 'T'")
-    location = f"@AI_PLATFORM.SOURCE.LANDING_STAGE/runs/{run}/X__T/"
+    location = f"@AI_PLATFORM.CORE.LANDING_STAGE/runs/{run}/X__T/"
     assert stmts[0] == f"REMOVE {location}"
     assert stmts[1].startswith(f"COPY INTO {location}data_ FROM (SELECT * FROM \"SHARE_DB\".\"S\".\"T\")")
     assert "COMPRESSION = 'SNAPPY'" in stmts[1] and "HEADER = TRUE" in stmts[1]
     assert "LIMIT 0" in stmts[2] and "'T''" in stmts[2]
-    assert "MATCH_BY_COLUMN_NAME = CASE_INSENSITIVE" in stmts[3] and "AI_PLATFORM.SOURCE.PARQUET_SNAPPY" in stmts[3]
+    assert "MATCH_BY_COLUMN_NAME = CASE_INSENSITIVE" in stmts[3] and "AI_PLATFORM.CORE.PARQUET_SNAPPY" in stmts[3]
     with pytest.raises(AssertionError):
         staged.stage_prefix("AI_PLATFORM", "../x", "T")
     with pytest.raises(AssertionError):
@@ -504,10 +504,10 @@ def test_edit_version_writes_an_approved_version_and_syncs_the_run(monkeypatch):
               "LINES": json.dumps([{"target_column": "ID", "source_table": "A", "source_column": "ID", "mapping_type": "DIRECT"},
                                    {"target_column": "OLD", "source_table": "A", "source_column": "X", "mapping_type": "DIRECT"}])}
     session = Session({
-        "FROM GOVERNANCE.STTM_CATALOG WHERE CATALOG_ID = ? ORDER BY VERSION DESC LIMIT 1": [latest],
+        "FROM CORE.STTM_CATALOG WHERE CATALOG_ID = ? ORDER BY VERSION DESC LIMIT 1": [latest],
         "COALESCE(MAX(VERSION), 0)": [{"V": 3}],
-        "FROM CONTRACT.STTM_REGISTRY S JOIN CORE.WORKFLOW_RUN": [{"STTM_ID": "s1", "RUN_ID": "r1", "ARCHIVED": False, "DELETED_AT": None}],
-        "FROM CONTRACT.STTM_LINE WHERE STTM_ID": [
+        "FROM CORE.STTM_REGISTRY S JOIN CORE.WORKFLOW_RUN": [{"STTM_ID": "s1", "RUN_ID": "r1", "ARCHIVED": False, "DELETED_AT": None}],
+        "FROM CORE.STTM_LINE WHERE STTM_ID": [
             {"STTM_LINE_ID": "L1", "TARGET_COLUMN": "ID", "TARGET_DOMAIN": "COMPANY", "TARGET_DATABASE": "DB", "TARGET_SCHEMA": "S", "TARGET_TABLE": "DIM"},
             {"STTM_LINE_ID": "L2", "TARGET_COLUMN": "OLD", "TARGET_DOMAIN": "COMPANY", "TARGET_DATABASE": "DB", "TARGET_SCHEMA": "S", "TARGET_TABLE": "DIM"}],
     })
@@ -517,14 +517,14 @@ def test_edit_version_writes_an_approved_version_and_syncs_the_run(monkeypatch):
         "design": {"filters": [{"table": "A", "condition": "A.ACTIVE"}]}}), approved=True)
     assert out["version"] == 4 and out["status"] == "APPROVED" and out["run_updated"] is True
     sql = [c[0] for c in session.calls]
-    insert = next(c for c in session.calls if "INSERT INTO GOVERNANCE.STTM_CATALOG" in c[0])
+    insert = next(c for c in session.calls if "INSERT INTO CORE.STTM_CATALOG" in c[0])
     assert "APPROVED" in insert[1] and "CATALOG_EDIT" in insert[1] and "fix id" in insert[1]
-    assert any(s.startswith("DELETE FROM CONTRACT.STTM_LINE") for s in sql)
-    update = next(c for c in session.calls if c[0].startswith("UPDATE CONTRACT.STTM_LINE SET"))
+    assert any(s.startswith("DELETE FROM CORE.STTM_LINE") for s in sql)
+    update = next(c for c in session.calls if c[0].startswith("UPDATE CORE.STTM_LINE SET"))
     assert "TRIM(ID)" in update[1] and update[1][-1] == "L1" and "FILTER_RULE = ?" in update[0]
-    added = next(c for c in session.calls if "INSERT INTO CONTRACT.STTM_LINE" in c[0])
+    added = next(c for c in session.calls if "INSERT INTO CORE.STTM_LINE" in c[0])
     assert "NEW_COL" in added[1] and "DIM" in added[1] and "VARCHAR" in added[1]
-    design = next(c for c in session.calls if "UPDATE CONTRACT.STTM_REGISTRY SET TABLE_DESIGN" in c[0])
+    design = next(c for c in session.calls if "UPDATE CORE.STTM_REGISTRY SET TABLE_DESIGN" in c[0])
     assert '"condition": "A.ACTIVE"' in design[1][0]
     assert events and events[0][0] == "r1" and "regenerate dbt" in events[0][1]
 
@@ -535,6 +535,6 @@ def test_edit_version_refuses_a_stale_base_and_skips_archived_runs():
     session = Session({"ORDER BY VERSION DESC LIMIT 1": [latest]})
     with pytest.raises(AssertionError, match="reload"):
         cs.edit_version(session, "c1", json.dumps({"base_version": 4, "edits": [{"target_column": "ID", "business_rule": "x"}]}))
-    archived = Session({"FROM CONTRACT.STTM_REGISTRY S JOIN": [{"STTM_ID": "s1", "RUN_ID": "r1", "ARCHIVED": True, "DELETED_AT": None}]})
+    archived = Session({"FROM CORE.STTM_REGISTRY S JOIN": [{"STTM_ID": "s1", "RUN_ID": "r1", "ARCHIVED": True, "DELETED_AT": None}]})
     assert cs.sync_to_run(archived, "s1", "r1", {"lines": [], "design": {}}, 2, "n") is False
     assert cs.sync_to_run(archived, None, None, {"lines": [], "design": {}}, 2, "n") is False

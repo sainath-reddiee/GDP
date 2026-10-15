@@ -80,7 +80,7 @@ def test_cancel_and_reject_need_a_pending_row(monkeypatch):
     _who(monkeypatch)
     row = {"request_id": "q1", "requested_by": "ANA", "status": "PENDING", "payload": None, "result": None,
            "approver_role": "X", "allow_self": True}
-    db = FakeDb({"FROM GOVERNANCE.CHANGE_REQUEST": [row]}, rowcount=0)
+    db = FakeDb({"FROM CORE.CHANGE_REQUEST": [row]}, rowcount=0)
     with pytest.raises(HTTPException) as err:
         gov.cancel_request("q1", db)
     assert err.value.status_code == 409
@@ -90,7 +90,7 @@ def test_cancel_and_reject_need_a_pending_row(monkeypatch):
     with pytest.raises(HTTPException) as err:
         gov.reject_request("q1", gov.Decision(note="no"), db)
     assert err.value.status_code == 409
-    ok = FakeDb({"FROM GOVERNANCE.CHANGE_REQUEST": [row]}, rowcount=1)
+    ok = FakeDb({"FROM CORE.CHANGE_REQUEST": [row]}, rowcount=1)
     assert gov.cancel_request("q1", ok)["status"] == "CANCELLED"
 
 
@@ -121,7 +121,7 @@ def test_unauthenticated_endpoints_now_need_a_session():
 def test_legacy_dbt_plan_keeps_its_stored_location():
     prior = {"git_repository": "DB.CODEGEN.HAND", "origin": "https://github.com/acme/x", "project_dir": "analytics"}
     db = FakeDb({"FROM CORE.WORKFLOW_RUN": [{"domain_id": "d1"}],
-                 "FROM KNOWLEDGE.DOMAIN_KNOWLEDGE": [{"content_json": json.dumps(prior)}]})
+                 "FROM CORE.DOMAIN_KNOWLEDGE": [{"content_json": json.dumps(prior)}]})
     out = main._resolve_dbt_payload(db, "r1", {"origin": "https://evil/x", "git_repository": "X.Y.Z", "push": True})
     assert out["git_repository"] == "DB.CODEGEN.HAND" and out["origin"] == "https://github.com/acme/x"
     assert out["project_dir"] == "analytics" and out["push"] is True
@@ -146,14 +146,14 @@ def test_update_repo_rejects_a_bad_folder_before_writing():
             "git_url": "https://github.com/a/b", "domain_ids": "[]", "include_globs": "[]", "exclude_globs": "[]",
             "kind": "DBT", "enabled": True, "created_objects": None,
             "stats": json.dumps({"dbt_project_roots": [{"root": "analytics"}]})}
-    db = FakeDb({"FROM CODE.REPO WHERE REPO_ID": [repo]})
+    db = FakeDb({"FROM CORE.REPO WHERE REPO_ID": [repo]})
     with pytest.raises(HTTPException) as err:
         code_api.update_repo("r1", code_api.RepoUpdate(domain_ids=["d1"], dbt_project_dir="nope"), db)
     assert err.value.status_code == 400 and not any(s.startswith("UPDATE") for s in db.executed)
 
 
 def test_blank_owner_is_a_400_before_any_write():
-    db = FakeDb({"FROM KNOWLEDGE.DOMAIN_REGISTRY": [{"domain_id": "d1", "config": "{}"}]})
+    db = FakeDb({"FROM CORE.DOMAIN_REGISTRY": [{"domain_id": "d1", "config": "{}"}]})
     body = domains_api.Members(members=[domains_api.Member(user="  ", role="OWNER")])
     with pytest.raises(HTTPException) as err:
         domains_api.set_members("d1", body, db)
@@ -174,22 +174,22 @@ def test_qa_delete_unknown_test_is_404():
 
 
 def test_create_domain_does_not_return_a_deleted_one():
-    db = FakeDb({"FROM KNOWLEDGE.DOMAIN_REGISTRY": [{"domain_id": "d1", "domain_name": "Sales", "active_flag": False}]})
+    db = FakeDb({"FROM CORE.DOMAIN_REGISTRY": [{"domain_id": "d1", "domain_name": "Sales", "active_flag": False}]})
     with pytest.raises(HTTPException) as err:
         main.create_domain(main.CreateDomain(domain_name="sales"), db)
     assert err.value.status_code == 409
-    live = FakeDb({"FROM KNOWLEDGE.DOMAIN_REGISTRY": [{"domain_id": "d1", "domain_name": "Sales", "active_flag": True}]})
+    live = FakeDb({"FROM CORE.DOMAIN_REGISTRY": [{"domain_id": "d1", "domain_name": "Sales", "active_flag": True}]})
     assert main.create_domain(main.CreateDomain(domain_name="sales"), live) == {
         "domain": {"domain_id": "d1", "domain_name": "Sales"}, "created": False}
 
 
 def test_restore_domain_only_brings_back_what_the_delete_retired(monkeypatch):
     config = {"deleted_at": "2026-01-01", "retired_knowledge": ["k1", "k2"]}
-    db = FakeDb({"FROM KNOWLEDGE.DOMAIN_REGISTRY": [{"domain_id": "d1", "domain_name": "S", "active_flag": False,
+    db = FakeDb({"FROM CORE.DOMAIN_REGISTRY": [{"domain_id": "d1", "domain_name": "S", "active_flag": False,
                                                      "config": json.dumps(config)}]})
     monkeypatch.setattr(main, "_domain_snapshot", lambda *a, **k: None)
     main.restore_domain("d1", db)
-    knowledge = [s for s in db.executed if "UPDATE KNOWLEDGE.DOMAIN_KNOWLEDGE" in s]
+    knowledge = [s for s in db.executed if "UPDATE CORE.DOMAIN_KNOWLEDGE" in s]
     assert len(knowledge) == 1 and "FLATTEN" in knowledge[0]
     assert db.executed[0] != "BEGIN" and "BEGIN" in db.executed and db.executed[-1] == "COMMIT"
 
@@ -211,7 +211,7 @@ def test_list_runs_only_falls_back_before_v006(monkeypatch):
     class Broken(FakeDb):
         def query(self, sql, params=()):
             if "TOTAL_MATCHES" in sql:
-                raise RuntimeError("SQL compilation error: Object 'SOURCE.SOURCE_OBJECT' does not exist")
+                raise RuntimeError("SQL compilation error: Object 'CORE.SOURCE_OBJECT' does not exist")
             return []
 
     with pytest.raises(HTTPException):

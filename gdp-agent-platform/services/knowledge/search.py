@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional
 
 from services.common.sql import rows, variant
 
-SERVICE = "KNOWLEDGE.KNOWLEDGE_SEARCH"
+SERVICE = "CORE.KNOWLEDGE_SEARCH"
 COLUMNS = ["KNOWLEDGE_ID", "TITLE", "CONTENT", "DOMAIN_NAME", "KNOWLEDGE_TYPE", "VERSION", "SOURCE_REFERENCE"]
 MAX_LIMIT = 20
 

@@ -1,7 +1,7 @@
-"""The incident outbox: Jira bot actions queued on OPS.NOTIFICATION and delivered by the worker with retries, plus the
+"""The incident outbox: Jira bot actions queued on CORE.NOTIFICATION and delivered by the worker with retries, plus the
 links and keys the incident features share.
 
-Outbox (OPS.NOTIFICATION): rows are enqueued with a DEDUPE_KEY (the same key is never queued twice). The worker's
+Outbox (CORE.NOTIFICATION): rows are enqueued with a DEDUPE_KEY (the same key is never queued twice). The worker's
 'outbox' job sends due rows (PENDING, or FAILED and due again); each row is first claimed (SENDING, for 5 minutes; a
 claim whose sender died is due again), so two workers never send it twice. A failure is FAILED and retries after 1 min,
 5 min, 15 min, then every hour, and the 6th failed attempt marks the row DEAD.
@@ -56,7 +56,7 @@ def enqueue(db: Any, channel: str, kind: str, dedupe_key: str, payload: Optional
             status: str = "PENDING", delay_seconds: int = 0, error: Optional[str] = None) -> bool:
     """Queue one notification unless its dedupe key is already queued. True when a row was added."""
     count = db.execute_count("""
-        MERGE INTO OPS.NOTIFICATION T USING (SELECT %s AS DEDUPE_KEY) S ON T.DEDUPE_KEY = S.DEDUPE_KEY
+        MERGE INTO CORE.NOTIFICATION T USING (SELECT %s AS DEDUPE_KEY) S ON T.DEDUPE_KEY = S.DEDUPE_KEY
         WHEN NOT MATCHED THEN INSERT (NOTIFICATION_ID, INCIDENT_ID, TEAM_ID, CHANNEL, KIND, TARGET_SECRET, PAYLOAD, STATUS,
              ATTEMPTS, NEXT_AT, ERROR, DEDUPE_KEY)
         VALUES (%s, %s, %s, %s, %s, %s, PARSE_JSON(%s), %s, 0, DATEADD(second, %s, CURRENT_TIMESTAMP()), %s, S.DEDUPE_KEY)""",
@@ -77,7 +77,7 @@ def _payload(value: Any) -> Dict[str, Any]:
 
 def _mark(db: Any, notification_id: str, status: str, error: Optional[str] = None, delay: Optional[int] = None,
           attempted: bool = True) -> None:
-    db.execute(f"""UPDATE OPS.NOTIFICATION SET STATUS = %s, ERROR = %s,
+    db.execute(f"""UPDATE CORE.NOTIFICATION SET STATUS = %s, ERROR = %s,
                           ATTEMPTS = ATTEMPTS + {1 if attempted else 0},
                           SENT_AT = IFF(%s = 'SENT', CURRENT_TIMESTAMP(), SENT_AT),
                           NEXT_AT = IFF(%s IS NULL, NEXT_AT, DATEADD(second, %s, CURRENT_TIMESTAMP()))
@@ -92,7 +92,7 @@ def claim(db: Any, notification_id: str) -> bool:
     """Take one due row for sending (compare-and-set): it becomes SENDING with NEXT_AT CLAIM_MINUTES ahead, so another
     worker reading the same due row cannot claim it too. A SENDING row whose claim ran out (its sender died) is due
     again. True when this caller got it."""
-    return db.execute_count(f"""UPDATE OPS.NOTIFICATION SET STATUS = 'SENDING',
+    return db.execute_count(f"""UPDATE CORE.NOTIFICATION SET STATUS = 'SENDING',
                                        NEXT_AT = DATEADD(minute, {CLAIM_MINUTES}, CURRENT_TIMESTAMP())
                                  WHERE NOTIFICATION_ID = %s AND STATUS IN ('PENDING', 'FAILED', 'SENDING')
                                    AND NEXT_AT <= CURRENT_TIMESTAMP()""", (notification_id,)) == 1
@@ -109,7 +109,7 @@ def run_outbox(db: Any, settings: Dict[str, Any],
 
     keep_going = keep_going or lease.still_held
     rows = db.query(f"""SELECT NOTIFICATION_ID, INCIDENT_ID, TEAM_ID, CHANNEL, KIND, TARGET_SECRET, PAYLOAD, ATTEMPTS, DEDUPE_KEY
-                          FROM OPS.NOTIFICATION WHERE STATUS IN ('PENDING', 'FAILED', 'SENDING') AND NEXT_AT <= CURRENT_TIMESTAMP()
+                          FROM CORE.NOTIFICATION WHERE STATUS IN ('PENDING', 'FAILED', 'SENDING') AND NEXT_AT <= CURRENT_TIMESTAMP()
                          ORDER BY CREATED_AT LIMIT {int(limit)}""")
     counts = {"sent": 0, "failed": 0, "dead": 0, "skipped": 0, "busy": 0}
     for row in rows:

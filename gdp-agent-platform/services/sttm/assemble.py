@@ -24,7 +24,7 @@ def sttm_target_name(session, sttm: Dict[str, Any]) -> str:
     design = variant(sttm.get("TABLE_DESIGN")) or {}
     if design.get("target_table"):
         return str(design["target_table"])
-    found = rows(session, "SELECT TARGET_TABLE FROM KNOWLEDGE.TARGET_TABLE_REGISTRY WHERE TARGET_TABLE_ID = ?",
+    found = rows(session, "SELECT TARGET_TABLE FROM CORE.TARGET_TABLE_REGISTRY WHERE TARGET_TABLE_ID = ?",
                  [sttm.get("TARGET_TABLE_ID")]) if sttm.get("TARGET_TABLE_ID") else []
     assert found, "TARGET_UNKNOWN: this STTM has no target table; regenerate the STTM after choosing a target model"
     return str(found[0]["TARGET_TABLE"])

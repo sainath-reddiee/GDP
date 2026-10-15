@@ -1,9 +1,9 @@
 """Domain model specification, version 2 (pure).
 
-The Model Workbench keeps one canonical, versioned model per domain (GOVERNANCE.DOMAIN_MODEL, versions in
-GOVERNANCE.MODEL_DESIGNS). Version 2 of the specification is a superset of the Modeling hub's version 1
+The Model Workbench keeps one canonical, versioned model per domain (CORE.DOMAIN_MODEL, versions in
+CORE.MODEL_DESIGNS). Version 2 of the specification is a superset of the Modeling hub's version 1
 (services/catalog/models.py normalize_spec), so every v1 renderer keeps working, and it carries everything the domain
-registry knows, so a model can round-trip through KNOWLEDGE.TARGET_TABLE_REGISTRY / TARGET_COLUMN_REGISTRY and a
+registry knows, so a model can round-trip through CORE.TARGET_TABLE_REGISTRY / TARGET_COLUMN_REGISTRY and a
 domain_pack.json without losing anything:
 
   model         domain, description, subject_areas, naming_standard, physical_defaults (platform, database, schema,

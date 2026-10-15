@@ -41,15 +41,15 @@ def load_inputs(query: Query, run_id: str, plan: Dict[str, Any], sttm: Dict[str,
                 lines: List[Dict[str, Any]]) -> Dict[str, Any]:
     run = (query("""SELECT R.*, D.DOMAIN_NAME, S.SOURCE_SYSTEM_NAME
                       FROM CORE.WORKFLOW_RUN R
-                      LEFT JOIN KNOWLEDGE.DOMAIN_REGISTRY D ON D.DOMAIN_ID = R.DOMAIN_ID
-                      LEFT JOIN SOURCE.SOURCE_REGISTRY S ON S.SOURCE_SYSTEM_ID = R.SOURCE_SYSTEM_ID
+                      LEFT JOIN CORE.DOMAIN_REGISTRY D ON D.DOMAIN_ID = R.DOMAIN_ID
+                      LEFT JOIN CORE.SOURCE_REGISTRY S ON S.SOURCE_SYSTEM_ID = R.SOURCE_SYSTEM_ID
                      WHERE R.RUN_ID = ?""", [run_id]) or [{}])[0]
     design = sttm.get("table_design") or {}
     standard = run_standard(run)
     conv = conventions_for(query, standard, "SILVER", run.get("DOMAIN_ID"))
     target = design.get("target_table") or str(run.get("TARGET_MODEL") or "target").split(".")[-1]
     landed = query("""SELECT SOURCE_TABLE, LANDING_TABLE, LANDING_DATABASE, LANDING_SCHEMA
-                        FROM SOURCE.LANDING_TABLE_REGISTRY
+                        FROM CORE.LANDING_TABLE_REGISTRY
                        WHERE RUN_ID = ? AND INGESTION_STATUS = 'COMPLETE'
                      QUALIFY ROW_NUMBER() OVER (PARTITION BY SOURCE_TABLE ORDER BY CREATED_AT DESC) = 1""", [run_id])
     sources = []
@@ -80,15 +80,15 @@ def load_inputs(query: Query, run_id: str, plan: Dict[str, Any], sttm: Dict[str,
             "business_definition": r.get("BUSINESS_DEFINITION"), "accepted_values": _json(r.get("ACCEPTED_VALUES")) or [],
         } for r in query("""SELECT C.COLUMN_NAME, C.DATA_TYPE, C.NULLABLE, C.IS_BUSINESS_KEY, C.IS_PII,
                                    C.BUSINESS_DEFINITION, C.ACCEPTED_VALUES
-                              FROM KNOWLEDGE.TARGET_TABLE_REGISTRY T
-                              JOIN KNOWLEDGE.TARGET_COLUMN_REGISTRY C ON C.TARGET_TABLE_ID = T.TARGET_TABLE_ID
+                              FROM CORE.TARGET_TABLE_REGISTRY T
+                              JOIN CORE.TARGET_COLUMN_REGISTRY C ON C.TARGET_TABLE_ID = T.TARGET_TABLE_ID
                              WHERE T.ACTIVE_FLAG AND T.DOMAIN_ID = ? AND UPPER(T.TARGET_TABLE) = UPPER(?) AND COALESCE(T.LAYER, 'SILVER') = 'SILVER'
                              ORDER BY C.ORDINAL_POSITION""", [run.get("DOMAIN_ID"), target])]
     except Exception:
         target_columns = []
     model_spec: Dict[str, Any] = {}
     try:
-        found = query("""SELECT MODEL_SPEC FROM KNOWLEDGE.TARGET_TABLE_REGISTRY
+        found = query("""SELECT MODEL_SPEC FROM CORE.TARGET_TABLE_REGISTRY
                           WHERE ACTIVE_FLAG AND DOMAIN_ID = ? AND UPPER(TARGET_TABLE) = UPPER(?) AND COALESCE(LAYER, 'SILVER') = 'SILVER'
                           ORDER BY TARGET_TABLE LIMIT 1""", [run.get("DOMAIN_ID"), target])
         model_spec = _json(found[0].get("MODEL_SPEC")) if found else {}
@@ -99,9 +99,9 @@ def load_inputs(query: Query, run_id: str, plan: Dict[str, Any], sttm: Dict[str,
     system = str(run.get("SOURCE_SYSTEM_NAME") or "SOURCE")
     key_candidates: Optional[Dict[str, List[str]]] = None
     try:
-        measured = query("""SELECT TABLE_NAME, COLUMN_NAME FROM PROFILE.PROFILE_REGISTRY
+        measured = query("""SELECT TABLE_NAME, COLUMN_NAME FROM CORE.PROFILE_REGISTRY
                              WHERE RUN_ID = ? AND IS_CURRENT AND POTENTIAL_KEY_FLAG""", [run_id])
-        profiled = query("SELECT COUNT(*) AS N FROM PROFILE.PROFILE_REGISTRY WHERE RUN_ID = ? AND IS_CURRENT", [run_id])
+        profiled = query("SELECT COUNT(*) AS N FROM CORE.PROFILE_REGISTRY WHERE RUN_ID = ? AND IS_CURRENT", [run_id])
         if profiled and int(profiled[0].get("N") or 0):
             key_candidates = {}
             for r in measured:

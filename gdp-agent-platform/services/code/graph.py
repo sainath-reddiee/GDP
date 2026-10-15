@@ -1,4 +1,4 @@
-"""The code graph over CODE.CODE_EDGE: what a model, macro, table or function depends on, what depends on it (the
+"""The code graph over CORE.CODE_EDGE: what a model, macro, table or function depends on, what depends on it (the
 impact of changing it), a dependency path between two nodes, hotspots and the repository's architecture.
 
 Pure Python over edge rows, so it runs inside Snowflake procedures, in the API and in tests. Nodes are matched on the
@@ -148,7 +148,7 @@ def load(rows, repo_ids: List[str], limit: int = 50000) -> Graph:
 
     if not repo_ids:
         return Graph([])
-    found = rows("""SELECT FROM_NAME, TO_NAME, KIND, PATH, REPO_ID FROM CODE.CODE_EDGE
+    found = rows("""SELECT FROM_NAME, TO_NAME, KIND, PATH, REPO_ID FROM CORE.CODE_EDGE
                      WHERE ARRAY_CONTAINS(REPO_ID::VARIANT, PARSE_JSON(?)) LIMIT """ + str(int(limit)), [json.dumps(repo_ids)])
     return Graph(found)
 

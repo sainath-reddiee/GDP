@@ -77,10 +77,10 @@ SELECT I.INCIDENT_ID, I.FINGERPRINT, I.ENV_ID, I.DAG_ID, I.TASK_ID, I.MAP_INDEX,
        COALESCE(C.N, 0) AS CHILDREN, I.JIRA_KEY, I.JIRA_STATE, I.TITLE, I.ERROR_EXCERPT, I.AI_SUMMARY, I.AI, I.RESOLUTION,
        I.RESOLVED_BY, I.RESOLVED_AT, I.ACKED_BY, I.ACKED_AT, I.MUTED_UNTIL, I.MUTE_REASON, I.ESCALATIONS,
        E.AIRFLOW_URL, E.API_VERSION
-  FROM OPS.INCIDENT I
-  JOIN OPS.AIRFLOW_ENV E ON E.ENV_ID = I.ENV_ID
-  LEFT JOIN OPS.TEAM T ON T.TEAM_ID = I.TEAM_ID
-  LEFT JOIN (SELECT PARENT_INCIDENT_ID, COUNT(*) AS N FROM OPS.INCIDENT WHERE PARENT_INCIDENT_ID IS NOT NULL
+  FROM CORE.INCIDENT I
+  JOIN CORE.AIRFLOW_ENV E ON E.ENV_ID = I.ENV_ID
+  LEFT JOIN CORE.TEAM T ON T.TEAM_ID = I.TEAM_ID
+  LEFT JOIN (SELECT PARENT_INCIDENT_ID, COUNT(*) AS N FROM CORE.INCIDENT WHERE PARENT_INCIDENT_ID IS NOT NULL
               GROUP BY PARENT_INCIDENT_ID) C ON C.PARENT_INCIDENT_ID = I.INCIDENT_ID"""
 
 
@@ -126,7 +126,7 @@ def list_incidents(status: Optional[str] = Query(default=None, max_length=200),
     clause = (" WHERE " + " AND ".join(where)) if where else ""
     rows = _q(db, _LIST_SELECT + clause + f""" ORDER BY I.SEVERITY, I.LAST_SEEN DESC NULLS LAST
                                               LIMIT {int(limit)} OFFSET {int(offset)}""", tuple(params))
-    total = _q(db, "SELECT COUNT(*) AS N FROM OPS.INCIDENT I JOIN OPS.AIRFLOW_ENV E ON E.ENV_ID = I.ENV_ID" + clause, tuple(params))
+    total = _q(db, "SELECT COUNT(*) AS N FROM CORE.INCIDENT I JOIN CORE.AIRFLOW_ENV E ON E.ENV_ID = I.ENV_ID" + clause, tuple(params))
     site = _jira_site(db)
     return {"incidents": [_list_out(r, site) for r in rows], "total": int(total[0]["n"] or 0) if total else 0}
 
@@ -139,7 +139,7 @@ def incidents_summary(db: Db = Depends(current_db)):
                COUNT_IF(I.STATUS = 'OPEN' AND I.SEVERITY = 'P1') AS P1_OPEN,
                COUNT_IF(I.STATUS IN ('OPEN', 'ACK') AND UPPER(I.ASSIGNEE) = UPPER(%s)) AS MINE_OPEN,
                COUNT_IF(I.STATUS IN ('OPEN', 'ACK') AND I.TEAM_ID IS NULL AND I.PARENT_INCIDENT_ID IS NULL) AS UNROUTED
-          FROM OPS.INCIDENT I JOIN OPS.AIRFLOW_ENV E ON E.ENV_ID = I.ENV_ID
+          FROM CORE.INCIDENT I JOIN CORE.AIRFLOW_ENV E ON E.ENV_ID = I.ENV_ID
          WHERE I.STATUS IN ('OPEN', 'ACK')""", (db.user,))
     row = found[0] if found else {}
     return {"open": int(row.get("open_n") or 0), "ack": int(row.get("ack_n") or 0), "p1_open": int(row.get("p1_open") or 0),
@@ -158,12 +158,12 @@ def _detail(db: Db, incident_id: str) -> Dict[str, Any]:
                 "airflow_url": links(r.get("airflow_url"), r.get("api_version"), r["dag_id"], r.get("run_id")),
                 "muted_until": _iso(r.get("muted_until")), "mute_reason": r.get("mute_reason"),
                 "escalations": int(r.get("escalations") or 0)}
-    events = _q(db, """SELECT EVENT_ID, KIND, ACTOR, DETAIL, CREATED_AT FROM OPS.INCIDENT_EVENT
+    events = _q(db, """SELECT EVENT_ID, KIND, ACTOR, DETAIL, CREATED_AT FROM CORE.INCIDENT_EVENT
                         WHERE INCIDENT_ID = %s AND KIND <> 'claim' ORDER BY CREATED_AT, EVENT_ID LIMIT 500""", (incident_id,))
-    notes = _q(db, """SELECT NOTIFICATION_ID, CHANNEL, KIND, STATUS, ATTEMPTS, ERROR, CREATED_AT, SENT_AT FROM OPS.NOTIFICATION
+    notes = _q(db, """SELECT NOTIFICATION_ID, CHANNEL, KIND, STATUS, ATTEMPTS, ERROR, CREATED_AT, SENT_AT FROM CORE.NOTIFICATION
                        WHERE INCIDENT_ID = %s ORDER BY CREATED_AT DESC LIMIT 100""", (incident_id,))
     runs = _q(db, _RUNS_SQL.format(extra="", limit=20), (r["env_id"], r["dag_id"], r["env_id"], r["dag_id"]))
-    children = _q(db, """SELECT INCIDENT_ID, DAG_ID, TASK_ID, STATUS FROM OPS.INCIDENT WHERE PARENT_INCIDENT_ID = %s
+    children = _q(db, """SELECT INCIDENT_ID, DAG_ID, TASK_ID, STATUS FROM CORE.INCIDENT WHERE PARENT_INCIDENT_ID = %s
                           ORDER BY FIRST_SEEN LIMIT 200""", (incident_id,))
     return {
         "incident": incident,
@@ -479,7 +479,7 @@ def _team_out(r: Dict[str, Any]) -> Dict[str, Any]:
 
 
 _TEAM_SELECT = """SELECT TEAM_ID, NAME, JIRA_PROJECT, JIRA_COMPONENT, JIRA_ASSIGNEE_ACCOUNT_ID, ESCALATION_MINUTES, MEMBERS
-                    FROM OPS.TEAM"""
+                    FROM CORE.TEAM"""
 
 
 def _team(db: Db, team_id: str) -> Dict[str, Any]:
@@ -500,11 +500,11 @@ def create_team(body: TeamIn, db: Db = Depends(current_db)):
     if not values.get("name"):
         raise HTTPException(422, "name is required")
     base = slug(values["name"])
-    taken = {r["team_id"] for r in _q(db, "SELECT TEAM_ID FROM OPS.TEAM WHERE TEAM_ID LIKE %s", (base + "%",))}
+    taken = {r["team_id"] for r in _q(db, "SELECT TEAM_ID FROM CORE.TEAM WHERE TEAM_ID LIKE %s", (base + "%",))}
     team_id = next((c for c in [base] + [f"{base}-{i}" for i in range(2, 100)] if c not in taken), None)
     if not team_id:
         raise HTTPException(409, "Too many teams with this name; choose another name")
-    _x(db, """INSERT INTO OPS.TEAM (TEAM_ID, NAME, JIRA_PROJECT, JIRA_COMPONENT, JIRA_ASSIGNEE_ACCOUNT_ID, ESCALATION_MINUTES, MEMBERS)
+    _x(db, """INSERT INTO CORE.TEAM (TEAM_ID, NAME, JIRA_PROJECT, JIRA_COMPONENT, JIRA_ASSIGNEE_ACCOUNT_ID, ESCALATION_MINUTES, MEMBERS)
               SELECT %s, %s, %s, %s, %s, %s, PARSE_JSON(%s)""",
        (team_id, values["name"], values.get("jira_project"), values.get("jira_component"),
         values.get("jira_assignee_account_id"), values["escalation_minutes"], json.dumps(values.get("members") or [])))
@@ -528,7 +528,7 @@ def update_team(team_id: str, body: TeamPatch, db: Db = Depends(current_db)):
             sets.append(f"{key.upper()} = %s")
             params.append(value)
     if sets:
-        _x(db, f"UPDATE OPS.TEAM SET {', '.join(sets)}, UPDATED_AT = CURRENT_TIMESTAMP() WHERE TEAM_ID = %s",
+        _x(db, f"UPDATE CORE.TEAM SET {', '.join(sets)}, UPDATED_AT = CURRENT_TIMESTAMP() WHERE TEAM_ID = %s",
            tuple(params) + (team_id,))
     return _team(db, team_id)
 
@@ -536,10 +536,10 @@ def update_team(team_id: str, body: TeamPatch, db: Db = Depends(current_db)):
 @router.delete("/api/ops/teams/{team_id}")
 def delete_team(team_id: str, db: Db = Depends(current_db)):
     _team(db, team_id)
-    used = _q(db, "SELECT COUNT(*) AS N FROM OPS.ROUTING_RULE WHERE TEAM_ID = %s", (team_id,))
+    used = _q(db, "SELECT COUNT(*) AS N FROM CORE.ROUTING_RULE WHERE TEAM_ID = %s", (team_id,))
     if used and int(used[0]["n"] or 0):
         raise HTTPException(409, f"{int(used[0]['n'])} routing rule(s) send incidents to this team; change or delete them first.")
-    _x(db, "DELETE FROM OPS.TEAM WHERE TEAM_ID = %s", (team_id,))
+    _x(db, "DELETE FROM CORE.TEAM WHERE TEAM_ID = %s", (team_id,))
     return {"deleted": True, "team_id": team_id}
 
 
@@ -583,9 +583,9 @@ def _rule_values(db: Db, values: Dict[str, Any]) -> Dict[str, Any]:
             raise HTTPException(422, "severity_override must be P1, P2, P3 or P4")
     if "mute_until" in out:
         out["mute_until"] = _iso_in(out.get("mute_until"), "mute_until")
-    if out.get("team_id") and not _q(db, "SELECT 1 AS X FROM OPS.TEAM WHERE TEAM_ID = %s", (out["team_id"],)):
+    if out.get("team_id") and not _q(db, "SELECT 1 AS X FROM CORE.TEAM WHERE TEAM_ID = %s", (out["team_id"],)):
         raise HTTPException(422, f"Team {out['team_id']} not found")
-    if out.get("env_id") and not _q(db, "SELECT 1 AS X FROM OPS.AIRFLOW_ENV WHERE ENV_ID = %s", (out["env_id"],)):
+    if out.get("env_id") and not _q(db, "SELECT 1 AS X FROM CORE.AIRFLOW_ENV WHERE ENV_ID = %s", (out["env_id"],)):
         raise HTTPException(422, f"Airflow environment {out['env_id']} not found")
     if "enabled" in out and out["enabled"] is None:
         raise HTTPException(422, "enabled cannot be empty")
@@ -602,7 +602,7 @@ def _rule_out(r: Dict[str, Any]) -> Dict[str, Any]:
 
 
 _RULE_SELECT = """SELECT RULE_ID, PRIORITY, DAG_PATTERN, TAG, OWNER, ENV_ID, TEAM_ID, SEVERITY_OVERRIDE, MUTE_UNTIL, MUTE_REASON,
-                         ENABLED FROM OPS.ROUTING_RULE"""
+                         ENABLED FROM CORE.ROUTING_RULE"""
 
 
 def _rule(db: Db, rule_id: str) -> Dict[str, Any]:
@@ -628,7 +628,7 @@ def create_rule(body: RuleIn, db: Db = Depends(current_db)):
     values = _rule_values(db, body.model_dump())
     rule_id = str(uuid.uuid4())
     cols = list(_RULE_COLUMNS)
-    _x(db, f"""INSERT INTO OPS.ROUTING_RULE (RULE_ID, {', '.join(c.upper() for c in cols)})
+    _x(db, f"""INSERT INTO CORE.ROUTING_RULE (RULE_ID, {', '.join(c.upper() for c in cols)})
                SELECT %s, {', '.join('TRY_TO_TIMESTAMP_LTZ(%s::VARCHAR)' if c == 'mute_until' else '%s' for c in cols)}""",
        (rule_id,) + tuple(values.get(c) for c in cols))
     return _rule(db, rule_id)
@@ -640,7 +640,7 @@ def update_rule(rule_id: str, body: RulePatch, db: Db = Depends(current_db)):
     values = _rule_values(db, {k: getattr(body, k) for k in body.model_fields_set})
     sets = [(c, values[c]) for c in _RULE_COLUMNS if c in values]
     if sets:
-        _x(db, f"""UPDATE OPS.ROUTING_RULE SET {', '.join(c.upper() + (' = TRY_TO_TIMESTAMP_LTZ(%s::VARCHAR)' if c == 'mute_until' else ' = %s')
+        _x(db, f"""UPDATE CORE.ROUTING_RULE SET {', '.join(c.upper() + (' = TRY_TO_TIMESTAMP_LTZ(%s::VARCHAR)' if c == 'mute_until' else ' = %s')
                                                           for c, _ in sets)}, UPDATED_AT = CURRENT_TIMESTAMP()
                    WHERE RULE_ID = %s""", tuple(v for _, v in sets) + (rule_id,))
     return _rule(db, rule_id)
@@ -649,7 +649,7 @@ def update_rule(rule_id: str, body: RulePatch, db: Db = Depends(current_db)):
 @router.delete("/api/ops/routing/{rule_id}")
 def delete_rule(rule_id: str, db: Db = Depends(current_db)):
     _rule(db, rule_id)
-    _x(db, "DELETE FROM OPS.ROUTING_RULE WHERE RULE_ID = %s", (rule_id,))
+    _x(db, "DELETE FROM CORE.ROUTING_RULE WHERE RULE_ID = %s", (rule_id,))
     return {"deleted": True, "rule_id": rule_id}
 
 
@@ -672,7 +672,7 @@ SETTING_KEYS = ("reopen_hours", "alert_on_retry_for_critical", "transition_on_re
 def _settings_out(db: Db) -> Dict[str, Any]:
     store = _store(db)
     settings = store.settings()
-    seen = _q(db, "SELECT MAX(LAST_RUN_AT) AS AT FROM OPS.JOB_LEASE WHERE JOB_NAME = 'worker'")
+    seen = _q(db, "SELECT MAX(LAST_RUN_AT) AS AT FROM CORE.JOB_LEASE WHERE JOB_NAME = 'worker'")
     site = str(store.jira_config().get("site_url") or "").rstrip("/") or None
     return {"jira_bot": bool(tickets.bot_credentials()) and bool(site), "jira_site": site,
             **{k: settings.get(k) for k in SETTING_KEYS},
