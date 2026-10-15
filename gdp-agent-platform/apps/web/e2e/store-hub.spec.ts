@@ -33,23 +33,19 @@ test("a hub tab link and the short names open each store's own page", async ({ p
   await page.waitForURL(/\/dashboard\/store$/);
 });
 
-test("Store stays highlighted inside any store and its sections can be hidden", async ({ page }) => {
+test("Stores stays highlighted inside any store", async ({ page }) => {
   await page.goto("/dashboard/sttm/c1");
   const nav = page.getByRole("navigation", { name: "Main" });
-  await expect(nav.getByRole("link", { name: "STTM Store" })).toHaveAttribute("aria-current", "page");
+  await expect(nav.getByRole("link", { name: "Stores", exact: true })).toHaveAttribute("aria-current", "page");
   await expect(page.getByRole("navigation", { name: "Breadcrumb" })).toContainText("Store›STTM Store›DIM_CUSTOMER");
-  await nav.getByRole("button", { name: "Hide Store sections" }).click();
-  await expect(nav.getByRole("link", { name: "STTM Store" })).toHaveCount(0);
-  await nav.getByRole("button", { name: "Show Store sections" }).click();
-  await expect(nav.getByRole("link", { name: "QA Store" })).toBeVisible();
 });
 
-test("collapsed, the Store icon opens a flyout of the stores", async ({ page }) => {
+test("collapsed, a workspace icon opens a flyout of its pages", async ({ page }) => {
   await page.goto("/dashboard");
   const nav = page.getByRole("navigation", { name: "Main" });
   await nav.getByRole("button", { name: "Collapse sidebar" }).click();
-  await nav.getByRole("link", { name: "Store", exact: true }).hover();
-  const flyout = page.getByRole("menu", { name: "Store" });
+  await nav.getByRole("link", { name: "Stores", exact: true }).hover();
+  const flyout = page.getByRole("menu", { name: "Stores" });
   await expect(flyout.getByRole("menuitem", { name: /Data Quality Store/ })).toBeVisible();
   await flyout.getByRole("menuitem", { name: /Profiling Store/ }).click();
   await page.waitForURL(/\/dashboard\/profiling$/);
@@ -59,7 +55,7 @@ test("collapsed, the Store icon opens a flyout of the stores", async ({ page }) 
 test("run pages are unchanged", async ({ page }) => {
   await page.goto(`/runs/${RUN}/source`);
   await expect(page).toHaveURL(new RegExp(`/runs/${RUN}/source$`));
-  await expect(page.getByRole("navigation", { name: "Main" }).getByRole("link", { name: "Store", exact: true })).not.toHaveAttribute("aria-current", "page");
+  await expect(page.getByRole("navigation", { name: "Main" }).getByRole("link", { name: "Stores", exact: true })).not.toHaveAttribute("aria-current", "page");
 });
 
 test("the Source Store shows source-only figures and keeps profiles in the Profiling Store", async ({ page }) => {

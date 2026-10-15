@@ -16,7 +16,7 @@ export async function login(_: ActionResult | null, form: FormData): Promise<Act
   if (!result.ok) return result;
   cookies().delete(ROLE_COOKIE);  // a work role picked by whoever used this browser before
   cookies().set(SESSION_COOKIE, sessionId, { ...cookieOptions, maxAge: 8 * 3600 });
-  redirect("/dashboard");
+  redirect("/work");
 }
 
 const cookieOptions = {
@@ -29,7 +29,7 @@ const cookieOptions = {
 export async function continueDev() {
   cookies().delete(ROLE_COOKIE);
   cookies().set(DEV_COOKIE, "1", { ...cookieOptions, maxAge: 8 * 3600 });
-  redirect("/dashboard");
+  redirect("/work");
 }
 
 export async function logout() {

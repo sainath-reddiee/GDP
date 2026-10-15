@@ -50,7 +50,7 @@ export default async function TicketsPage({ searchParams }: { searchParams?: Par
   const visible = mine ? mine.domains.map((d) => ({ domain_id: d.domain_id, name: displayDomain(d.name) ?? d.name })) : active;
   return (
     <div className="space-y-5">
-      <PageHeader eyebrow="Overview" title="Tickets"
+      <PageHeader eyebrow="Operations" title="Tickets"
                   description="Every ticket in one place: your Jira issues and the platform's cases, with filters, saved views and sprints. Hand any Jira ticket to the Copilot to do the work; everything in Jira is done as you." />
       <TicketsWorkspace initial={{ tab, key: sp.key ?? "" }} filters={readFilters(sp)} openNew={sp.new === "1"} access={access}
                         jira={jira} me={jira?.connected?.display_name ?? me?.user ?? "you"} domains={visible} />

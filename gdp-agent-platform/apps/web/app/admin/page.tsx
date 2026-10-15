@@ -59,7 +59,7 @@ export default async function Admin({ searchParams }: { searchParams?: { section
   return (
     <ToastProvider>
       <div className="space-y-5">
-        <PageHeader eyebrow="Govern" title="Admin"
+        <PageHeader eyebrow="Governance" title="Admin"
                     description="AI models and cost, rules, modeling standards and deployment. Changes are versioned and survive deploys." />
         <nav aria-label="Admin sections" className="flex gap-1 overflow-x-auto border-b">
           {SECTIONS.map((s) => (
