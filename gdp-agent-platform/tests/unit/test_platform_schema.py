@@ -155,15 +155,15 @@ class Cur:
 
 
 def test_gate_lets_a_new_environment_through():
-    assert "no baseline needed" in consolidation_gate(Cur({"INFORMATION_SCHEMA.TABLES": [(0,)]}), "AIP", False)
+    assert "new environment" in consolidation_gate(Cur({}), "AIP", False, fresh=True)
 
 
-def test_gate_refuses_a_database_with_data_unless_baselined_and_consolidating():
+def test_gate_refuses_an_existing_environment_unless_baselined_and_consolidating():
     with pytest.raises(AssertionError, match="Nothing was moved"):
-        consolidation_gate(Cur({"INFORMATION_SCHEMA.TABLES": [(5,)]}), "AIP", False)
+        consolidation_gate(Cur({}), "AIP", False)
     with pytest.raises(AssertionError, match="needs a completed baseline"):
-        consolidation_gate(Cur({"INFORMATION_SCHEMA.TABLES": [(5,)], "CONSOLIDATION_RUN": [(0,)]}), "AIP", True)
-    ok = consolidation_gate(Cur({"INFORMATION_SCHEMA.TABLES": [(5,)], "CONSOLIDATION_RUN": [(1,)]}), "AIP", True)
+        consolidation_gate(Cur({"CONSOLIDATION_RUN": [(0,)]}), "AIP", True)
+    ok = consolidation_gate(Cur({"CONSOLIDATION_RUN": [(1,)]}), "AIP", True)
     assert "completed baseline found" in ok
 
 

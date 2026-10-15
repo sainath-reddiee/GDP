@@ -254,6 +254,7 @@ def main() -> None:
     p.add_argument("--role")
     p.add_argument("--check-only", action="store_true")
     p.add_argument("--skip-full-deploy", action="store_true")
+    p.add_argument("--replace", action="store_true", help="drop the two scratch databases first if they exist")
     args = p.parse_args()
     prefix = args.prefix.upper()
     a, b = f"{prefix}_BLA_REHEARSAL", f"{prefix}_BLB_REHEARSAL"
@@ -262,7 +263,10 @@ def main() -> None:
     cur.execute(f"USE WAREHOUSE {args.warehouse}")
 
     def build(db: str, use_baseline: bool) -> None:
-        assert not q(cur, f"SHOW DATABASES LIKE '{db}'"), f"{db} already exists: drop it first"
+        assert db.endswith("_REHEARSAL")
+        if args.replace and q(cur, f"SHOW DATABASES LIKE '{db}'"):
+            cur.execute(f"DROP DATABASE {db}")   # one of this script's own scratch databases
+        assert not q(cur, f"SHOW DATABASES LIKE '{db}'"), f"{db} already exists: pass --replace"
         for line in apply_from_session(shared, db, args.warehouse, rehearsal=True, through=BASELINE_COVERS,
                                        use_baseline=use_baseline):
             print(f"  {line}")

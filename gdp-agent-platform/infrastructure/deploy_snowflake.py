@@ -17,8 +17,8 @@ Steps (idempotent):
 Every platform object lives in <database>.PLATFORM_SCHEMA (services/common/platform_schema.py); SQL templates name it
 {{schema}}. The migration ledger (SCHEMA_MIGRATION, DEPLOY_STATE) is pinned to CORE on purpose: it must never follow a
 change of the constant, or every migration would look unapplied. V061 (the consolidation into CORE) is gated: it is
-applied only with --consolidate after a completed baseline (infrastructure/consolidation/README.md), unless the old
-schemas hold no rows at all. --rehearsal (a database whose name ends in _REHEARSAL) never touches objects outside that
+applied only with --consolidate after a completed baseline (infrastructure/consolidation/README.md), unless the
+environment is new (empty ledger when the deploy began). --rehearsal (a database whose name ends in _REHEARSAL) never touches objects outside that
 database: no Oracle procedure refresh and no publisher task.
 
 Only what changed is applied. CORE.DEPLOY_STATE keeps a checksum of every step's rendered SQL (procedures, views,
@@ -44,7 +44,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from infrastructure.seed_knowledge import _stage_dir, list_skills, seed_inputs_digest, seed_platform  # noqa: E402
-from services.common.platform_schema import LEGACY_SCHEMAS, PLATFORM_SCHEMA  # noqa: E402
+from services.common.platform_schema import PLATFORM_SCHEMA  # noqa: E402
 from services.workflow.graph import load_graph  # noqa: E402
 
 MIGRATIONS_DIR = ROOT / "snowflake" / "database" / "migrations"
@@ -355,19 +355,16 @@ def refresh_oracle_sources(cur, database: str, services_import: str, state: "Dep
     return f"oracle sources: {done} procedure(s) refreshed" + (f"; failed {failed}" if failed else "")
 
 
-def consolidation_gate(cur, database: str, consolidate: bool) -> str:
-    """V061 moves every platform object into CORE. Allowed when the old schemas hold no rows (a new environment), or
-    with --consolidate after a completed baseline of this database. Raises otherwise, before anything moves."""
-    legacy = ", ".join(f"'{s}'" for s in LEGACY_SCHEMAS)
-    cur.execute(f"SELECT COALESCE(SUM(ROW_COUNT), 0) FROM {database}.INFORMATION_SCHEMA.TABLES "
-                f"WHERE TABLE_SCHEMA IN ({legacy}) AND TABLE_TYPE = 'BASE TABLE'")
-    held = int(cur.fetchone()[0] or 0)
-    if held == 0:
-        return f"V{CONSOLIDATION_MIGRATION}: the old schemas hold no rows (new environment); no baseline needed"
+def consolidation_gate(cur, database: str, consolidate: bool, fresh: bool = False) -> str:
+    """V061 moves every platform object into CORE. Allowed in a new environment (the ledger was empty when this deploy
+    began, so every row in it was written by this same run), or with --consolidate after a completed baseline of this
+    database. Raises otherwise, before anything moves."""
+    if fresh:
+        return f"V{CONSOLIDATION_MIGRATION}: new environment (empty ledger at the start of this deploy); no baseline needed"
     assert consolidate, (
-        f"V{CONSOLIDATION_MIGRATION} moves every platform object into {PLATFORM_SCHEMA} and the old schemas hold {held} "
-        "rows. It is applied only by the consolidation runbook (infrastructure/consolidation/README.md): baseline, "
-        "then deploy --consolidate. Nothing was moved.")
+        f"V{CONSOLIDATION_MIGRATION} moves every platform object of {database} into {PLATFORM_SCHEMA}. It is applied only "
+        "by the consolidation runbook (infrastructure/consolidation/README.md): baseline, then deploy --consolidate. "
+        "Nothing was moved.")
     cur.execute(f"SELECT COUNT(*) FROM {database}.{LEDGER_SCHEMA}.CONSOLIDATION_RUN "
                 "WHERE PHASE = 'BASELINE' AND STATUS = 'COMPLETED' AND DATABASE_NAME = %s", (database,))
     assert int(cur.fetchone()[0] or 0) > 0, (
@@ -422,6 +419,7 @@ def apply_to_connection(con, database: str, warehouse: str, variables: Dict[str,
 
     cur.execute(f"SELECT VERSION, CHECKSUM FROM {database}.CORE.SCHEMA_MIGRATION")
     applied = dict(cur.fetchall())
+    fresh = not applied     # a new environment: nothing in it predates this deploy
     migrated = False
     if not applied and use_baseline and BASELINE_FILE.exists() and (not through or through >= BASELINE_COVERS):
         con.execute_string(render(BASELINE_FILE.read_text(encoding="utf-8"), variables))
@@ -449,7 +447,7 @@ def apply_to_connection(con, database: str, warehouse: str, variables: Dict[str,
             state.skipped["migrations"] = state.skipped.get("migrations", 0) + 1
             continue
         if version == CONSOLIDATION_MIGRATION:
-            log.append(consolidation_gate(cur, database, consolidate))
+            log.append(consolidation_gate(cur, database, consolidate, fresh))
         con.execute_string(render(raw, variables))
         cur.execute(
             f"INSERT INTO {database}.CORE.SCHEMA_MIGRATION (VERSION, DESCRIPTION, CHECKSUM, APPLIED_BY) "
