@@ -524,8 +524,9 @@ def _seed_graph(cur, database: str, graph_version, state_rows, transition_rows) 
 
 
 def apply_from_session(con, database: str, warehouse: str, demo_source: str | None = None,
-                       force: bool = False) -> List[str]:
-    # Never passes consolidate: the Admin deploy cannot apply V061 on a database that holds data.
+                       force: bool = False, consolidate: bool = False, rehearsal: bool = False,
+                       through: str | None = None) -> List[str]:
+    # The Admin deploy never passes consolidate, so it cannot apply V061 on a database that holds data.
     """Deploy using an already-authenticated Snowflake connection (no new SSO); only changed steps unless `force`."""
     zip_name, zip_bytes = build_services_zip()
     variables = {
@@ -545,6 +546,7 @@ def apply_from_session(con, database: str, warehouse: str, demo_source: str | No
         list_migrations(), sorted(PROCEDURES_DIR.glob("*.sql")),
         sorted(VIEWS_DIR.glob("*.sql")) + sorted(SEARCH_DIR.glob("*.sql")) + sorted(AGENTS_DIR.glob("*.sql")),
         graph_version, state_rows, transition_rows, demo_files, force=force,
+        consolidate=consolidate, rehearsal=rehearsal, through=through,
     )
 
 
