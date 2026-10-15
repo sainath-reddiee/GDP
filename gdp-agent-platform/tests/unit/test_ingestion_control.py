@@ -20,7 +20,7 @@ from services.governance import policy  # noqa: E402
 from services.source import ingestion_control as ic  # noqa: E402
 from test_hub_api import FakeDb  # noqa: E402
 
-MIGRATION = ROOT / "snowflake" / "database" / "migrations" / "V046__ingestion_control_config.sql"
+MIGRATION = ROOT / "snowflake" / "database" / "migrations" / "archive" / "V046__ingestion_control_config.sql"
 
 GOOD = {
     "source": {"source_name": "crm_oracle", "source_type": "ORACLE", "source_account": "crm_oracle_prod",
@@ -197,11 +197,11 @@ def test_create_writes_catalog_control_rows_and_history_in_order(client):
     assert out["master_id"] == 7 and [x["child_id"] for x in out["children"]] == [11, 12]
     sqls = [" ".join(s.split()) for s, _ in holder["db"].executed]
     order = [next(i for i, s in enumerate(sqls) if needle in s) for needle in
-             ("BEGIN", "INSERT INTO PLATFORM_CONFIG.INGESTION_PIPELINE_CATALOG", "SEQ_INGESTION_MASTER_ID.NEXTVAL",
-              "INSERT INTO PLATFORM_CONFIG.INGESTION_CONTROL_CONFIG", "INGESTION_CONTROL_HISTORY", "COMMIT")]
+             ("BEGIN", "INSERT INTO CORE.INGESTION_PIPELINE_CATALOG", "SEQ_INGESTION_MASTER_ID.NEXTVAL",
+              "INSERT INTO CORE.INGESTION_CONTROL_CONFIG", "INGESTION_CONTROL_HISTORY", "COMMIT")]
     assert order == sorted(order)
-    assert sum("INSERT INTO PLATFORM_CONFIG.INGESTION_CONTROL_HISTORY" in s for s in sqls) == 2
-    insert = next(p for s, p in holder["db"].executed if "INSERT INTO PLATFORM_CONFIG.INGESTION_CONTROL_CONFIG" in s)
+    assert sum("INSERT INTO CORE.INGESTION_CONTROL_HISTORY" in s for s in sqls) == 2
+    insert = next(p for s, p in holder["db"].executed if "INSERT INTO CORE.INGESTION_CONTROL_CONFIG" in s)
     assert insert[0] == 7 and "vault:snaplogic/ingest" in insert
 
 
@@ -222,17 +222,17 @@ def test_list_detail_and_edit(client):
     stored = {**rows[0], "master_id": 7, "child_id": 11, "source_id": "s", "domain_id": None, "target_previous_load_time": None,
               "last_run_timestamp": None, "completion_flag": False, "created_by": "ANA", "updated_by": None, "comments": None,
               "created_at_text": "2026-10-11 10:00:00.000", "updated_at_text": None, "last_run_text": None, "source_name": "CRM_ORACLE"}
-    holder["db"] = FakeDb({"FROM PLATFORM_CONFIG.INGESTION_CONTROL_HISTORY": [{"child_id": 11, "action": "CREATED", "is_active": True,
+    holder["db"] = FakeDb({"FROM CORE.INGESTION_CONTROL_HISTORY": [{"child_id": 11, "action": "CREATED", "is_active": True,
                                                                               "changed_by": "ANA", "changed_at": "2026-10-11 10:00"}],
-                           "LEFT JOIN PLATFORM_CONFIG.INGESTION_PIPELINE_CATALOG P": [stored],
-                           "SELECT * FROM PLATFORM_CONFIG.INGESTION_CONTROL_CONFIG": [stored]})
+                           "LEFT JOIN CORE.INGESTION_PIPELINE_CATALOG P": [stored],
+                           "SELECT * FROM CORE.INGESTION_CONTROL_CONFIG": [stored]})
     listed = c.get("/api/hub/ingestion-control?q=crm&active=true").json()
     assert listed["deployed"] and listed["controls"][0]["master_id"] == 7 and listed["controls"][0]["created_at"].startswith("2026-10-11")
     detail = c.get("/api/hub/ingestion-control/7").json()
     assert detail["history"][0]["action"] == "CREATED"
     r = c.patch("/api/hub/ingestion-control/7/11", json={"changes": {"is_active": False}})
     assert r.status_code == 200 and r.json()["action"] == "DEACTIVATED"
-    update = next(s for s, _ in holder["db"].executed if s.lstrip().startswith("UPDATE PLATFORM_CONFIG.INGESTION_CONTROL_CONFIG"))
+    update = next(s for s, _ in holder["db"].executed if s.lstrip().startswith("UPDATE CORE.INGESTION_CONTROL_CONFIG"))
     assert "IS_ACTIVE = %s" in update and "UPDATED_BY = CURRENT_USER()" in update
     assert any("INGESTION_CONTROL_HISTORY" in s for s, _ in holder["db"].executed)
     assert c.patch("/api/hub/ingestion-control/7/11", json={"changes": {"landing_table": "X"}}).status_code == 422

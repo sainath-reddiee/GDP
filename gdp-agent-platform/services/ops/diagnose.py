@@ -2,13 +2,13 @@
 
 diagnose() builds the bounded, cited context (services.ops.context), asks complete_json for a strict schema, keeps only
 evidence whose reference is in the context's citation list (invented references are dropped), grounds the blast
-radius in the code graph and the context text, redacts every string, and stores the result on OPS.INCIDENT.AI (with
+radius in the code graph and the context text, redacts every string, and stores the result on CORE.INCIDENT.AI (with
 AI_SUMMARY, the one line the incident and Jira show) plus an INCIDENT_EVENT 'diagnosed'. A diagnosis is cached: it is
 reused while the incident's fingerprint is unchanged, unless forced. After a diagnosis a Jira comment is queued
 (outbox channel JIRA, kind 'ai').
 
 The log, the code and past resolutions are untrusted data: the prompt frames them, like services.jira.triage, and
-anything they ask for is ignored. Every call is audited (AUDIT.AGENT_TOOL_CALL) and costed (AUDIT.COST_USAGE, stage OPS).
+anything they ask for is ignored. Every call is audited (CORE.AGENT_TOOL_CALL) and costed (CORE.COST_USAGE, stage OPS).
 
 The worker's 'diagnose' job (auto_diagnose) diagnoses new OPEN incidents that are not children and not muted, when the
 setting ai_auto is on and the severity is in ai_severities; at most 5 per tick.
@@ -278,7 +278,7 @@ def is_cached(incident: Dict[str, Any], force: bool = False) -> bool:
 # ---------------------------------------------------------------- audit helpers
 
 def _audit(session: Any, tool: str, inputs: Dict[str, Any], summary: str, error: Optional[BaseException] = None) -> None:
-    """One AUDIT.AGENT_TOOL_CALL row; never fails the action it describes."""
+    """One CORE.AGENT_TOOL_CALL row; never fails the action it describes."""
     from services.common.audit import tool_call
 
     try:
@@ -311,7 +311,7 @@ def _complete(session: Any, prompt: str, schema: Dict[str, Any], max_tokens: int
 # ---------------------------------------------------------------- diagnose
 
 def store_ai(db: Any, incident_id: str, ai: Dict[str, Any]) -> None:
-    db.execute("UPDATE OPS.INCIDENT SET AI = PARSE_JSON(%s), AI_SUMMARY = %s, UPDATED_AT = CURRENT_TIMESTAMP() "
+    db.execute("UPDATE CORE.INCIDENT SET AI = PARSE_JSON(%s), AI_SUMMARY = %s, UPDATED_AT = CURRENT_TIMESTAMP() "
                "WHERE INCIDENT_ID = %s", (json.dumps(ai, default=str), summary_line(ai), incident_id))
 
 
@@ -390,8 +390,8 @@ def auto_diagnose(db: Any, limit: int = AUTO_LIMIT, diagnose_fn: Optional[Callab
     rows = db.query(f"""
         SELECT I.INCIDENT_ID, I.STATUS, I.SEVERITY, I.PARENT_INCIDENT_ID, I.FINGERPRINT, I.OPENED_AT,
                I.AI:fingerprint::VARCHAR AS AI_FINGERPRINT, F.FAILED_AT
-          FROM OPS.INCIDENT I
-          LEFT JOIN (SELECT INCIDENT_ID, MAX(CREATED_AT) AS FAILED_AT FROM OPS.INCIDENT_EVENT
+          FROM CORE.INCIDENT I
+          LEFT JOIN (SELECT INCIDENT_ID, MAX(CREATED_AT) AS FAILED_AT FROM CORE.INCIDENT_EVENT
                       WHERE KIND = 'diagnose_failed' AND CREATED_AT >= DATEADD(hour, -2, CURRENT_TIMESTAMP())
                       GROUP BY INCIDENT_ID) F ON F.INCIDENT_ID = I.INCIDENT_ID
          WHERE I.STATUS = 'OPEN' AND I.PARENT_INCIDENT_ID IS NULL
@@ -496,7 +496,7 @@ def postmortem(session: Any, incident_id: str, actor: str = "system", *,
     incident = load_incident(db, incident_id)
     if not incident:
         raise DiagnoseError(f"Incident {incident_id} not found", 404)
-    events = db.query("""SELECT KIND, ACTOR, DETAIL, CREATED_AT FROM OPS.INCIDENT_EVENT
+    events = db.query("""SELECT KIND, ACTOR, DETAIL, CREATED_AT FROM CORE.INCIDENT_EVENT
                           WHERE INCIDENT_ID = %s AND KIND <> 'claim' ORDER BY CREATED_AT LIMIT 200""", (incident_id,))
     timeline = timeline_lines(events)
     started = time.time()

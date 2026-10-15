@@ -54,13 +54,13 @@ class FakeDb:
             if marker in sql:
                 found = value(sql, params) if callable(value) else value
                 return [dict(r) for r in found]
-        if "FROM KNOWLEDGE.DOMAIN_REGISTRY" in sql and "DOMAIN_KNOWLEDGE" not in sql:
+        if "FROM CORE.DOMAIN_REGISTRY" in sql and "DOMAIN_KNOWLEDGE" not in sql:
             return [dict(r) for r in self.registry]
-        if "FROM KNOWLEDGE.DOMAIN_MEMBER" in sql:
+        if "FROM CORE.DOMAIN_MEMBER" in sql:
             return [dict(r) for r in self.members]
-        if "FROM GOVERNANCE.USER_ROLE WHERE ROLE_NAME" in sql:
+        if "FROM CORE.USER_ROLE WHERE ROLE_NAME" in sql:
             return [{"user_name": r["user_name"]} for r in self.user_roles if r["role_name"] == params[0]]
-        if "FROM GOVERNANCE.USER_ROLE WHERE USER_NAME" in sql:
+        if "FROM CORE.USER_ROLE WHERE USER_NAME" in sql:
             return [{"role_name": r["role_name"]} for r in self.user_roles if r["user_name"] == params[0]]
         return []
 
@@ -264,7 +264,7 @@ def test_scope_infers_domain_and_refuses_hidden_domain():
     from app import cases_api
 
     db = FakeDb(user="ZOE")
-    db.on("FROM KNOWLEDGE.TARGET_TABLE_REGISTRY WHERE TARGET_TABLE_ID", lambda sql, p: [
+    db.on("FROM CORE.TARGET_TABLE_REGISTRY WHERE TARGET_TABLE_ID", lambda sql, p: [
         {"target_table_id": p[0], "domain_id": {"t-sales": SALES, "t-open": OPEN}[p[0]], "fqn": "A.B.C"}])
     db.on("FROM CORE.WORKFLOW_RUN", [{"domain_id": OPEN}])
     zoe = {"user": "ZOE", "roles": set(), "privileges": privs("QA_ENGINEER")}
@@ -284,7 +284,7 @@ def test_list_filters_by_visible_domains_and_exact_case_number(monkeypatch):
 
     db = FakeDb(user="ZOE")
     seen = []
-    db.on("FROM CASES.CASE_RECORD C", lambda sql, p: seen.append((sql, p)) or ([] if "C.CASE_NUMBER," in sql else [{"n": 0}]))
+    db.on("FROM CORE.CASE_RECORD C", lambda sql, p: seen.append((sql, p)) or ([] if "C.CASE_NUMBER," in sql else [{"n": 0}]))
     monkeypatch.setattr(cases_api, "_who", lambda _db: {"user": "ZOE", "roles": set(), "privileges": privs("QA_ENGINEER")})
     out = cases_api.list_cases(status=None, severity="P1,P2", kind=None, domain_id=None, mine=True, team_id=None,
                                q="CASE-12", sla=None, limit=50, offset=0, db=db)
@@ -527,7 +527,7 @@ def test_from_result_refuses_passing_results(monkeypatch):
     from app import cases_api
 
     db = FakeDb()
-    db.on("FROM QUALITY.QA_RESULT", [{"result_id": "r1", "outcome": "PASS"}])
+    db.on("FROM CORE.QA_RESULT", [{"result_id": "r1", "outcome": "PASS"}])
     monkeypatch.setattr(cases_api, "_who", lambda _db: {"user": "ANA", "roles": set(), "privileges": privs("QA_ENGINEER")})
     with pytest.raises(HTTPException) as err:
         cases_api.case_from_result(cases_api.FromResultIn(qa_result_id="r1"), db)
@@ -561,16 +561,16 @@ def test_assignee_must_see_the_domain(monkeypatch):
     assert err.value.status_code == 400
     out = cases_api.assign_case("c1", cases_api.AssignIn(assignee="bob"), db)
     assert out["case"]["case_id"] == "c1"
-    assert db.wrote("UPDATE CASES.CASE_RECORD SET")[0][1][0] == "BOB"
-    assert db.wrote("INSERT INTO CASES.CASE_EVENT")
+    assert db.wrote("UPDATE CORE.CASE_RECORD SET")[0][1][0] == "BOB"
+    assert db.wrote("INSERT INTO CORE.CASE_EVENT")
 
 
 # ---------------------------------------------------------------- knowledge approval by domain stewards
 
 def knowledge_db(user, items):
     db = FakeDb(user=user)
-    db.on("FROM KNOWLEDGE.DOMAIN_KNOWLEDGE WHERE KNOWLEDGE_ID", lambda sql, p: [i for i in items if i["knowledge_id"] == p[0]])
-    db.on("FROM CASES.CASE_RECORD WHERE CASE_ID", [{"resolved_by": "RITA"}])
+    db.on("FROM CORE.DOMAIN_KNOWLEDGE WHERE KNOWLEDGE_ID", lambda sql, p: [i for i in items if i["knowledge_id"] == p[0]])
+    db.on("FROM CORE.CASE_RECORD WHERE CASE_ID", [{"resolved_by": "RITA"}])
     return db
 
 
@@ -729,11 +729,11 @@ def test_bootstrap_creates_the_four_eyes_package_policy():
 
     class Boot(FakeDb):
         def query(self, sql, params=()):
-            if "SELECT ROLE_NAME FROM GOVERNANCE.APP_ROLE" in sql:
+            if "SELECT ROLE_NAME FROM CORE.APP_ROLE" in sql:
                 return [{"role_name": r} for r in SYSTEM_ROLES]
             if "SETTING_KEY = 'SYSTEM_VERSION'" in sql:
                 return [{"setting_value": "7"}]
-            if "FROM GOVERNANCE.USER_ROLE LIMIT 1" in sql:
+            if "FROM CORE.USER_ROLE LIMIT 1" in sql:
                 return [{"x": 1}]
             return []
 
@@ -745,18 +745,18 @@ def test_bootstrap_creates_the_four_eyes_package_policy():
     finally:
         governance._seeded.update(saved)
         governance.invalidate()
-    package = [w for w in db.wrote("MERGE INTO GOVERNANCE.APPROVAL_POLICY") if "PACKAGE.APPROVE" in w[1]]
+    package = [w for w in db.wrote("MERGE INTO CORE.APPROVAL_POLICY") if "PACKAGE.APPROVE" in w[1]]
     assert package and package[0][1] == ("PACKAGE.APPROVE", "QA_LEAD", True)
 
 
 # ---------------------------------------------------------------- migration
 
 def test_v034_migration():
-    sql = (ROOT / "snowflake" / "database" / "migrations" / "V034__cases.sql").read_text(encoding="utf-8")
+    sql = (ROOT / "snowflake" / "database" / "migrations" / "archive" / "V034__cases.sql").read_text(encoding="utf-8")
     for table in ("CASE_RECORD", "CASE_EVENT", "CASE_LINK", "CASE_ARTIFACT"):
         assert f"CREATE TABLE IF NOT EXISTS {{{{database}}}}.CASES.{table}" in sql
-    assert "CASES.CASE_SEQ.NEXTVAL" in sql and "IDEMPOTENCY_KEY" in sql
-    assert "ADD ROW ACCESS POLICY {{database}}.CASES.DOMAIN_SCOPE ON (DOMAIN_ID)" in sql
+    assert "CASES.CASE_SEQ.NEXTVAL" in sql and "IDEMPOTENCY_KEY" in sql   # V034 is history: names before V061
+    assert "ADD ROW ACCESS POLICY {{database}}.CASES.DOMAIN_SCOPE ON (DOMAIN_ID)" in sql   # names before V061
     assert "IS_DATABASE_ROLE_IN_SESSION('PLATFORM_ADMIN')" in sql and "UPPER(DOMAIN_NAME) = 'GENERAL'" in sql
     for role in ("VIEWER", "QA_ENGINEER", "DATA_ENGINEER", "OPS_SERVICE"):
         assert f"DATABASE ROLE {{{{database}}}}.{role}" in sql

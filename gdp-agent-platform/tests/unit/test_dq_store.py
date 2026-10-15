@@ -77,8 +77,8 @@ def test_build_tree():
 
 def test_schedule_sql():
     task, stmts = dq.schedule_sql("AIP", "DB.S.ORDERS", "0 6 * * * UTC", "WH")
-    assert task.startswith("AIP.QUALITY.DQ_") and task == f"AIP.QUALITY.{dq.task_name('db.s.orders')}"
-    assert "SCHEDULE = 'USING CRON 0 6 * * * UTC'" in stmts[0] and "CALL AIP.QUALITY.RUN_TABLE_SCAN('DB.S.ORDERS')" in stmts[0]
+    assert task.startswith("AIP.CORE.DQ_") and task == f"AIP.CORE.{dq.task_name('db.s.orders')}"
+    assert "SCHEDULE = 'USING CRON 0 6 * * * UTC'" in stmts[0] and "CALL AIP.CORE.RUN_TABLE_SCAN('DB.S.ORDERS')" in stmts[0]
     assert stmts[1] == f"ALTER TASK {task} RESUME"
     for args in [("AIP", "DB.S.T", "every day", "WH"), ("AIP", "T", "0 6 * * *", "WH"), ("A;B", "DB.S.T", "0 6 * * *", "WH")]:
         with pytest.raises(AssertionError):
@@ -114,7 +114,7 @@ def test_upsert_from_dsl_and_duplicates():
     session = Session({"SELECT CHECK_ID, COLUMN_NAME, CHECK_DEFINITION": []})
     out = dq.upsert(session, json.dumps({"table": "db.s.orders", "dsl": "missing_count(EMAIL) = 0", "severity": "FAIL"}))
     assert out["table"] == "DB.S.ORDERS" and out["column"] == "EMAIL" and out["headline"] == "missing_count(EMAIL) = 0"
-    assert any(c[0].startswith("INSERT INTO GOVERNANCE.DQ_CHECKS_CATALOG") for c in session.calls)
+    assert any(c[0].startswith("INSERT INTO CORE.DQ_CHECKS_CATALOG") for c in session.calls)
     dup = Session({"SELECT CHECK_ID, COLUMN_NAME, CHECK_DEFINITION": [
         {"CHECK_ID": "c1", "COLUMN_NAME": "EMAIL", "CHECK_DEFINITION": '{"kind": "not_null"}'}]})
     with pytest.raises(AssertionError, match="same check"):
@@ -145,12 +145,12 @@ def test_upsert_works_before_v038():
 def test_run_table_stores_a_table_scan(monkeypatch):
     import services.quality.scan as scan
 
-    session = Session({"FROM GOVERNANCE.DQ_CHECKS_CATALOG WHERE TABLE_NAME": [
+    session = Session({"FROM CORE.DQ_CHECKS_CATALOG WHERE TABLE_NAME": [
         {"CHECK_ID": "c1", "COLUMN_NAME": "EMAIL", "CHECK_TYPE": "NOT_NULL", "CHECK_DEFINITION": '{"kind": "not_null"}',
          "SEVERITY": "FAIL", "DOMAIN_ID": "d1"},
         {"CHECK_ID": "c2", "COLUMN_NAME": None, "CHECK_TYPE": "ROW_COUNT", "CHECK_DEFINITION": '{"kind": "row_count", "gt": 0}',
          "SEVERITY": "WARN", "DOMAIN_ID": "d1"}],
-        "SELECT ROWS_SCANNED FROM QUALITY.CHECK_RUN": [{"ROWS_SCANNED": 90}]})
+        "SELECT ROWS_SCANNED FROM CORE.CHECK_RUN": [{"ROWS_SCANNED": 90}]})
     seen = {}
 
     def fake_scan(sess, run_id, checks, lines, fqn, guard, previous):
@@ -162,9 +162,9 @@ def test_run_table_stores_a_table_scan(monkeypatch):
     assert seen == {"run_id": None, "fqn": "DB.S.ORDERS", "previous": 90.0, "n": 2}
     assert out["health"] == 50 and out["failed"] == 1 and out["rows_scanned"] == 100
     sql = [c for c in session.calls]
-    run_insert = [c for c in sql if c[0].startswith("INSERT INTO QUALITY.CHECK_RUN")][0]
+    run_insert = [c for c in sql if c[0].startswith("INSERT INTO CORE.CHECK_RUN")][0]
     assert "'TABLE'" in run_insert[0] and "RUN_ID" not in run_insert[0].split("SELECT")[0]
-    updates = [c for c in sql if c[0].startswith("UPDATE GOVERNANCE.DQ_CHECKS_CATALOG")]
+    updates = [c for c in sql if c[0].startswith("UPDATE CORE.DQ_CHECKS_CATALOG")]
     assert [u[1][0] for u in updates] == ["FAIL", "PASS"] and updates[0][1][2] == "c1"
 
 
@@ -227,10 +227,10 @@ def client(monkeypatch):
 
 def test_dq_catalog_tree_and_before_deploy(client):
     c, holder = client
-    holder["db"] = FakeDb({"FROM GOVERNANCE.DQ_CHECKS_CATALOG": [
+    holder["db"] = FakeDb({"FROM CORE.DQ_CHECKS_CATALOG": [
         {"check_id": "c1", "table_name": "DB.S.T", "column_name": "EMAIL", "check_definition": '{"kind": "not_null"}',
          "soda_dsl": "  - missing_count(EMAIL) = 0", "last_run_status": "PASS"}],
-        "FROM GOVERNANCE.DQ_SCHEDULE": [{"table_name": "DB.S.T", "cron": "0 6 * * *", "enabled": True}]})
+        "FROM CORE.DQ_SCHEDULE": [{"table_name": "DB.S.T", "cron": "0 6 * * *", "enabled": True}]})
     body = c.get("/api/dq/catalog").json()
     t = body["tables"][0]
     assert t["schedule"] == {"cron": "0 6 * * *", "enabled": True}
@@ -270,7 +270,7 @@ def test_dq_schedule_requires_active_checks_and_valid_cron(client):
 
 def test_qa_pack_routes(client, monkeypatch):
     c, holder = client
-    holder["db"] = FakeDb({"FROM KNOWLEDGE.DOMAIN_REGISTRY": [{"domain_id": "11111111-1111-1111-1111-111111111111"}]})
+    holder["db"] = FakeDb({"FROM CORE.DOMAIN_REGISTRY": [{"domain_id": "11111111-1111-1111-1111-111111111111"}]})
     calls = []
     monkeypatch.setattr(qa_api, "invoke_source", lambda db, fn, *a: calls.append((getattr(fn, "__name__", "fn"), a)) or {"ok": True})
     body = {"name": "Integrity", "queries": [{"query_name": "orphans", "sql_expression": "SELECT 1 FROM DB.S.T"}]}

@@ -1,4 +1,4 @@
-"""CODEGEN.GENERATE_DBT: runs from the approved STTM in parallel with Soda."""
+"""CORE.GENERATE_DBT: runs from the approved STTM in parallel with Soda."""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from services.common.audit import tool_call
+from services.common.platform_schema import PLATFORM_SCHEMA
 from services.common.standard import GDP, GOLD, conventions, conventions_for, default_prefix, run_pipeline, run_standard
 from services.common.sql import atomic, clip, insert_rows, rows, scalar, variant
 from services.common.stage import Stage
@@ -31,7 +32,7 @@ def _landing_tables(session, run_id: str) -> List[Dict[str, str]]:
         "schema": r["LANDING_SCHEMA"],
     } for r in rows(session, """
         SELECT SOURCE_TABLE, LANDING_TABLE, LANDING_DATABASE, LANDING_SCHEMA
-          FROM SOURCE.LANDING_TABLE_REGISTRY
+          FROM CORE.LANDING_TABLE_REGISTRY
          WHERE RUN_ID = ? AND INGESTION_STATUS = 'COMPLETE'
        QUALIFY ROW_NUMBER() OVER (PARTITION BY SOURCE_TABLE ORDER BY CREATED_AT DESC) = 1
     """, [run_id])]
@@ -112,7 +113,7 @@ def merge_branch_plan(payload: Dict[str, Any], prior: Dict[str, Any], run_name: 
 
 
 def _stored_plan(session, run_id: str) -> Dict[str, Any]:
-    stored = rows(session, """SELECT CONTENT_JSON FROM KNOWLEDGE.DOMAIN_KNOWLEDGE
+    stored = rows(session, """SELECT CONTENT_JSON FROM CORE.DOMAIN_KNOWLEDGE
                               WHERE IS_CURRENT AND SOURCE_REFERENCE = ?""", [f"dbt.branch.{run_id}"])
     return variant(stored[0]["CONTENT_JSON"]) if stored else {}
 
@@ -168,11 +169,11 @@ def generate_dbt(session, run_id: str, payload_json: str = "{}") -> Dict[str, An
                 "nullable_rule": r["NULLABLE_RULE"], "uniqueness_rule": r["UNIQUENESS_RULE"],
                 "accepted_values": variant(r["ACCEPTED_VALUES"]) or [],
                 "business_definition": r["BUSINESS_DEFINITION"],
-            } for r in rows(session, "SELECT * FROM CONTRACT.STTM_LINE WHERE STTM_ID = ? ORDER BY TARGET_COLUMN",
+            } for r in rows(session, "SELECT * FROM CORE.STTM_LINE WHERE STTM_ID = ? ORDER BY TARGET_COLUMN",
                             [sttm["STTM_ID"]])]
             soda_rows = rows(session, """SELECT TARGET_TABLE, TARGET_COLUMN, CHECK_TYPE, CHECK_DEFINITION,
                                          SEVERITY, ORIGIN, CLIENT_REQUIREMENT
-                                         FROM CONTRACT.SODA_EXPECTATION_REGISTRY
+                                         FROM CORE.SODA_EXPECTATION_REGISTRY
                                          WHERE RUN_ID = ? AND IS_CURRENT AND STATUS IN ('PROPOSED', 'APPROVED')""",
                              [run_id])
             checks = [{
@@ -239,23 +240,23 @@ def generate_dbt(session, run_id: str, payload_json: str = "{}") -> Dict[str, An
                           "DBT-ONBOARD-SOURCE rules engine (bronze -> ephemeral silver staging -> silver hub)",
             }, indent=2)
             stage_files.update({k: files[k] for k in ("release/branch.json", "release/skills.json")})
-            version = (scalar(session, "SELECT MAX(GENERATION_VERSION) FROM CODEGEN.DBT_GENERATION_REGISTRY WHERE RUN_ID = ?",
+            version = (scalar(session, "SELECT MAX(GENERATION_VERSION) FROM CORE.DBT_GENERATION_REGISTRY WHERE RUN_ID = ?",
                               [run_id]) or 0) + 1
             generation_id = str(uuid.uuid4())
             kv = current_knowledge_version(session, stage.run["DOMAIN_ID"])
-            stage_path = f"CODEGEN.DBT_STAGE/{run_id}/v{version}"
+            stage_path = f"CORE.DBT_STAGE/{run_id}/v{version}"
             _put_files(session, stage_path, stage_files)
             workspace: Dict[str, Any] = {
                 "stage_path": f"@{stage_path}",
                 "pull_request": {
                     "created": False,
-                    "reason": "Opened by CODEGEN.PUBLISH_DBT_PR through the GitHub API after generation.",
+                    "reason": "Opened by CORE.PUBLISH_DBT_PR through the GitHub API after generation.",
                 },
             }
             conv = conventions_for(lambda sql, params: rows(session, sql, params), run_standard(stage.run),
                                    run_pipeline(stage.run), stage.run.get("DOMAIN_ID"))
             project_name = plan.get("dbt_project") or (
-                f"{scalar(session, 'SELECT CURRENT_DATABASE()')}.CODEGEN.{conv['codegen_prefix']}"
+                f"{scalar(session, 'SELECT CURRENT_DATABASE()')}.{PLATFORM_SCHEMA}.{conv['codegen_prefix']}"
                 f"{run_id.replace('-', '')[:18]}_V{version}"
             )
             try:
@@ -285,22 +286,22 @@ def generate_dbt(session, run_id: str, payload_json: str = "{}") -> Dict[str, An
             plan["workspace"] = workspace
 
             def write(_event_id: str) -> None:
-                session.sql("UPDATE CODEGEN.DBT_GENERATION_REGISTRY SET GENERATION_STATUS = 'SUPERSEDED' "
+                session.sql("UPDATE CORE.DBT_GENERATION_REGISTRY SET GENERATION_STATUS = 'SUPERSEDED' "
                             "WHERE RUN_ID = ? AND GENERATION_STATUS IN ('GENERATING', 'GENERATED')",
                             params=[run_id]).collect()
-                insert_rows(session, "CODEGEN.DBT_GENERATION_REGISTRY",
+                insert_rows(session, "CORE.DBT_GENERATION_REGISTRY",
                             ["GENERATION_ID", "RUN_ID", "DOMAIN", "TARGET_MODEL", "STTM_ID", "STTM_VERSION",
                              "FILES_GENERATED", "SKILL_VERSION", "KNOWLEDGE_VERSION", "MODEL_VERSION",
                              "GENERATION_VERSION", "GENERATION_STATUS", "STAGE_PATH", "CREATED_BY"],
                             ["?", "?", "?", "?", "?", "?::NUMBER", "?::NUMBER", "?",
                              "?", "?", "?::NUMBER", "'GENERATED'", "?", "CURRENT_USER()"],
                             [[generation_id, run_id,
-                              scalar(session, "SELECT DOMAIN_NAME FROM KNOWLEDGE.DOMAIN_REGISTRY WHERE DOMAIN_ID = ?",
+                              scalar(session, "SELECT DOMAIN_NAME FROM CORE.DOMAIN_REGISTRY WHERE DOMAIN_ID = ?",
                                      [stage.run["DOMAIN_ID"]]) or conventions(run_standard(stage.run))["default_domain"].upper(),
                               stage.run.get("TARGET_MODEL") or design.get("target_table"),
                               sttm["STTM_ID"], sttm["STTM_VERSION"], len(files), skill_version, kv, engine_name,
                               version, f"@{stage_path}"]])
-                insert_rows(session, "CODEGEN.GENERATED_ARTIFACT",
+                insert_rows(session, "CORE.GENERATED_ARTIFACT",
                             ["ARTIFACT_ID", "GENERATION_ID", "RUN_ID", "ARTIFACT_TYPE", "FILE_PATH", "CONTENT",
                              "CONTENT_SHA256"],
                             ["?", "?", "?", "?", "?", "?", "?"],

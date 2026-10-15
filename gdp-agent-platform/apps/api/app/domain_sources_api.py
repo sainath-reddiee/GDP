@@ -8,7 +8,7 @@ sign-in) and uploaded files. Each page's text is kept with its version; the AI p
 (services/knowledge/documents.py), and every proposal waits for a steward in the review inbox. A refresh re-reads only
 pages whose version changed.
 
-Uploads (V052): any file is accepted and kept as it is in @CONFLUENCE.DOCUMENT_FILES; it is read in the background
+Uploads (V052): any file is accepted and kept as it is in @CORE.DOCUMENT_FILES; it is read in the background
 (services/knowledge/document_files.py: text, Excel, Cortex document parsing for PDF, Word, PowerPoint and HTML, OCR
 and an image model for images), and the outcome is recorded on the document. GET .../file returns the original;
 GET .../review returns the text read with every item proposed from it, for review side by side.
@@ -58,26 +58,26 @@ def _deployed(exc: Exception) -> HTTPException:
 def _bindings(db: Db) -> List[dict]:
     try:
         return db.query("SELECT STAGE, SKILL_NAME, ENABLED, POSITION, STANDARD, COALESCE(PIPELINE, 'ANY') AS PIPELINE "
-                        "FROM KNOWLEDGE.SKILL_STAGE_BINDING")
+                        "FROM CORE.SKILL_STAGE_BINDING")
     except Exception:   # before V055: the built-in pipeline split
         from services.knowledge.usage import pipeline_of_skill
 
         return [{**b, "pipeline": pipeline_of_skill(b["skill_name"])} for b in db.query(
-            "SELECT STAGE, SKILL_NAME, ENABLED, POSITION, STANDARD FROM KNOWLEDGE.SKILL_STAGE_BINDING")]
+            "SELECT STAGE, SKILL_NAME, ENABLED, POSITION, STANDARD FROM CORE.SKILL_STAGE_BINDING")]
 
 
 def _own_skills(db: Db, domain_id: str) -> List[dict]:
     try:
         return db.query("""SELECT STAGE, SKILL_NAME, MODE, REPLACES, POSITION, ENABLED, NOTE, COALESCE(PIPELINE, 'ANY') AS PIPELINE,
                                   UPDATED_BY, TO_VARCHAR(UPDATED_AT, 'YYYY-MM-DD HH24:MI') AS UPDATED_AT
-                             FROM KNOWLEDGE.DOMAIN_SKILL WHERE DOMAIN_ID = %s ORDER BY STAGE, POSITION""", (domain_id,))
+                             FROM CORE.DOMAIN_SKILL WHERE DOMAIN_ID = %s ORDER BY STAGE, POSITION""", (domain_id,))
     except Exception as exc:
         if "invalid identifier" not in str(exc).lower():
             raise
         return [{**r, "pipeline": "ANY"} for r in db.query(
             """SELECT STAGE, SKILL_NAME, MODE, REPLACES, POSITION, ENABLED, NOTE, UPDATED_BY,
                       TO_VARCHAR(UPDATED_AT, 'YYYY-MM-DD HH24:MI') AS UPDATED_AT
-                 FROM KNOWLEDGE.DOMAIN_SKILL WHERE DOMAIN_ID = %s ORDER BY STAGE, POSITION""", (domain_id,))]
+                 FROM CORE.DOMAIN_SKILL WHERE DOMAIN_ID = %s ORDER BY STAGE, POSITION""", (domain_id,))]
 
 
 @router.get("/api/domains/{domain_id}/skills")
@@ -88,7 +88,7 @@ def domain_skills(domain_id: str, pipeline: Literal["SILVER", "GOLD"] = "SILVER"
     from services.knowledge.usage import stage_skills as built_in
 
     detail = domain_detail(domain_id, db)
-    standard = next((r.get("standard") for r in db.query("SELECT CONFIG:standard::STRING AS STANDARD FROM KNOWLEDGE.DOMAIN_REGISTRY "
+    standard = next((r.get("standard") for r in db.query("SELECT CONFIG:standard::STRING AS STANDARD FROM CORE.DOMAIN_REGISTRY "
                                                        "WHERE DOMAIN_ID = %s", (domain_id,))), None) or "GENERIC"
     bindings = _bindings(db)
     deployed = True
@@ -100,7 +100,7 @@ def domain_skills(domain_id: str, pipeline: Literal["SILVER", "GOLD"] = "SILVER"
         own, deployed = [], False
     role = invoke_source(db, domain_mdm_role, domain_id) if deployed else None
     available = db.query("""SELECT SKILL_NAME, ANY_VALUE(DESCRIPTION) AS DESCRIPTION, MAX(VERSION) AS VERSION
-                              FROM KNOWLEDGE.SKILL_REGISTRY WHERE STATUS = 'ACTIVE' GROUP BY 1 ORDER BY 1""")
+                              FROM CORE.SKILL_REGISTRY WHERE STATUS = 'ACTIVE' GROUP BY 1 ORDER BY 1""")
     std = str(standard).upper()
     from_mdm = mdm_rows(role, std, pipeline)
     stages = []
@@ -146,7 +146,7 @@ def set_domain_skills(domain_id: str, body: DomainSkillsIn, pipeline: Literal["S
     except Exception:
         kept = []
     kept_keys = {(str(r["stage"]).upper(), str(r["skill_name"]).upper()) for r in kept}
-    known = {str(r["skill_name"]).upper() for r in db.query("SELECT DISTINCT SKILL_NAME FROM KNOWLEDGE.SKILL_REGISTRY WHERE STATUS <> 'RETIRED'")}
+    known = {str(r["skill_name"]).upper() for r in db.query("SELECT DISTINCT SKILL_NAME FROM CORE.SKILL_REGISTRY WHERE STATUS <> 'RETIRED'")}
     seen = set()
     for s in body.skills:
         stage = s.stage.upper()
@@ -165,10 +165,10 @@ def set_domain_skills(domain_id: str, body: DomainSkillsIn, pipeline: Literal["S
         seen.add((stage, s.skill_name.upper()))
     try:
         with transaction(db):   # replace the set together: never half of it
-            db.execute("DELETE FROM KNOWLEDGE.DOMAIN_SKILL WHERE DOMAIN_ID = %s AND COALESCE(PIPELINE, 'ANY') IN ('ANY', %s)",
+            db.execute("DELETE FROM CORE.DOMAIN_SKILL WHERE DOMAIN_ID = %s AND COALESCE(PIPELINE, 'ANY') IN ('ANY', %s)",
                        (domain_id, pipeline))
             for s in body.skills:
-                db.execute("""INSERT INTO KNOWLEDGE.DOMAIN_SKILL (DOMAIN_ID, STAGE, SKILL_NAME, MODE, REPLACES, POSITION, ENABLED, NOTE,
+                db.execute("""INSERT INTO CORE.DOMAIN_SKILL (DOMAIN_ID, STAGE, SKILL_NAME, MODE, REPLACES, POSITION, ENABLED, NOTE,
                                                                   PIPELINE)
                               SELECT %s, %s, %s, %s, NULLIF(%s, ''), %s, %s, NULLIF(%s, ''), %s""",
                            (domain_id, s.stage.upper(), s.skill_name, s.mode, s.replaces or "", s.position, s.enabled, s.note or "",
@@ -200,7 +200,7 @@ def _sources(db: Db, domain_id: str) -> List[Dict[str, Any]]:
     base = """SELECT S.SOURCE_ID, S.KIND, S.SPACE_KEY, S.PAGE_ID, S.TITLE, S.URL, S.FILE_NAME, S.STATUS, S.CREATED_BY,
                      TO_VARCHAR(S.CREATED_AT, 'YYYY-MM-DD HH24:MI') AS CREATED_AT,
                      TO_VARCHAR(S.LAST_REFRESHED_AT, 'YYYY-MM-DD HH24:MI') AS LAST_REFRESHED_AT, S.LAST_RESULT{files}
-                FROM CONFLUENCE.SOURCE S WHERE S.DOMAIN_ID = %s AND S.STATUS = 'ACTIVE' ORDER BY S.CREATED_AT DESC"""
+                FROM CORE.CONFLUENCE_SOURCE S WHERE S.DOMAIN_ID = %s AND S.STATUS = 'ACTIVE' ORDER BY S.CREATED_AT DESC"""
     try:
         rows = db.query(base.format(files=", " + FILE_COLUMNS), (domain_id,))
     except Exception as exc:
@@ -209,7 +209,7 @@ def _sources(db: Db, domain_id: str) -> List[Dict[str, Any]]:
         rows = db.query(base.format(files=""), (domain_id,))
     pages = db.query("""SELECT P.SOURCE_ID, P.PAGE_ID, P.TITLE, P.VERSION, P.URL, P.PROPOSED, LENGTH(P.TEXT) AS CHARS,
                                TO_VARCHAR(P.FETCHED_AT, 'YYYY-MM-DD HH24:MI') AS FETCHED_AT
-                          FROM CONFLUENCE.PAGE P JOIN CONFLUENCE.SOURCE S ON S.SOURCE_ID = P.SOURCE_ID
+                          FROM CORE.CONFLUENCE_PAGE P JOIN CORE.CONFLUENCE_SOURCE S ON S.SOURCE_ID = P.SOURCE_ID
                          WHERE S.DOMAIN_ID = %s AND S.STATUS = 'ACTIVE'""", (domain_id,))
     by: Dict[str, List[Dict[str, Any]]] = {}
     for p in pages:
@@ -237,7 +237,7 @@ def domain_documents(domain_id: str, db: Db = Depends(current_db)):
 def _files_ready(db: Db) -> bool:
     """True once V052 is applied (originals are kept and any file type is read)."""
     try:
-        db.query("SELECT STAGE_PATH FROM CONFLUENCE.SOURCE LIMIT 0")
+        db.query("SELECT STAGE_PATH FROM CORE.CONFLUENCE_SOURCE LIMIT 0")
         return True
     except Exception:
         return False
@@ -254,8 +254,8 @@ def _confluence_state(db: Db) -> Dict[str, Any]:
 
 
 def _store_page(db: Db, source_id: str, page: Dict[str, Any], proposed: int) -> None:
-    db.execute("DELETE FROM CONFLUENCE.PAGE WHERE SOURCE_ID = %s AND PAGE_ID = %s", (source_id, page["id"]))
-    db.execute("""INSERT INTO CONFLUENCE.PAGE (SOURCE_ID, PAGE_ID, TITLE, VERSION, TEXT_HASH, TEXT, URL, PROPOSED)
+    db.execute("DELETE FROM CORE.CONFLUENCE_PAGE WHERE SOURCE_ID = %s AND PAGE_ID = %s", (source_id, page["id"]))
+    db.execute("""INSERT INTO CORE.CONFLUENCE_PAGE (SOURCE_ID, PAGE_ID, TITLE, VERSION, TEXT_HASH, TEXT, URL, PROPOSED)
                   SELECT %s, %s, %s, %s, %s, %s, %s, %s""",
                (source_id, page["id"], (page.get("title") or "")[:1024], page.get("version"), documents.text_hash(page.get("text") or ""),
                 page.get("text") or "", page.get("url"), proposed))
@@ -279,7 +279,7 @@ def _refresh(db: Db, domain_id: str, source: Dict[str, Any]) -> Dict[str, Any]:
     from app import jira_api
 
     client, _ = jira_api.confluence_client(db)
-    known = {p["page_id"]: p for p in db.query("SELECT PAGE_ID, VERSION FROM CONFLUENCE.PAGE WHERE SOURCE_ID = %s", (source["source_id"],))}
+    known = {p["page_id"]: p for p in db.query("SELECT PAGE_ID, VERSION FROM CORE.CONFLUENCE_PAGE WHERE SOURCE_ID = %s", (source["source_id"],))}
     if source["kind"] == "PAGE":
         wanted = [{"id": source["page_id"]}]
     else:
@@ -301,7 +301,7 @@ def _refresh(db: Db, domain_id: str, source: Dict[str, Any]) -> Dict[str, Any]:
         _store_page(db, source["source_id"], page, out.get("proposed", 0))
         result["read"] += 1
         result["proposed"] += out.get("proposed", 0)
-    db.execute("""UPDATE CONFLUENCE.SOURCE SET LAST_REFRESHED_AT = CURRENT_TIMESTAMP(), LAST_RESULT = PARSE_JSON(%s)
+    db.execute("""UPDATE CORE.CONFLUENCE_SOURCE SET LAST_REFRESHED_AT = CURRENT_TIMESTAMP(), LAST_RESULT = PARSE_JSON(%s)
                    WHERE SOURCE_ID = %s""", (json.dumps(result), source["source_id"]))
     return result
 
@@ -329,14 +329,14 @@ async def link_confluence(domain_id: str, body: LinkIn, db: Db = Depends(current
         else:
             info = client.space(space)
             kind, title, url, key = "SPACE", info.get("name") or space, body.url, space
-        dup = db.query("""SELECT SOURCE_ID FROM CONFLUENCE.SOURCE WHERE DOMAIN_ID = %s AND STATUS = 'ACTIVE' AND KIND = %s
+        dup = db.query("""SELECT SOURCE_ID FROM CORE.CONFLUENCE_SOURCE WHERE DOMAIN_ID = %s AND STATUS = 'ACTIVE' AND KIND = %s
                            AND COALESCE(PAGE_ID, '') = %s AND COALESCE(SPACE_KEY, '') = %s""",
                        (domain_id, kind, page_id or "", key if kind == "SPACE" else (key or "")))
         if dup:
             source_id = dup[0]["source_id"]
         else:
             source_id = str(uuid.uuid4())
-            db.execute("""INSERT INTO CONFLUENCE.SOURCE (SOURCE_ID, DOMAIN_ID, KIND, CLOUD_ID, SPACE_KEY, PAGE_ID, TITLE, URL)
+            db.execute("""INSERT INTO CORE.CONFLUENCE_SOURCE (SOURCE_ID, DOMAIN_ID, KIND, CLOUD_ID, SPACE_KEY, PAGE_ID, TITLE, URL)
                           SELECT %s, %s, %s, %s, NULLIF(%s, ''), NULLIF(%s, ''), %s, %s""",
                        (source_id, domain_id, kind, conn["cloud_id"], key or "", page_id or "", (title or "")[:1024], url[:2048]))
         source = {"source_id": source_id, "kind": kind, "page_id": page_id, "space_key": key}
@@ -360,7 +360,7 @@ async def refresh_document(domain_id: str, source_id: str, db: Db = Depends(curr
     from app import jira_api
 
     def go():
-        found = db.query("""SELECT SOURCE_ID, KIND, PAGE_ID, SPACE_KEY FROM CONFLUENCE.SOURCE
+        found = db.query("""SELECT SOURCE_ID, KIND, PAGE_ID, SPACE_KEY FROM CORE.CONFLUENCE_SOURCE
                              WHERE SOURCE_ID = %s AND DOMAIN_ID = %s AND STATUS = 'ACTIVE'""", (source_id, domain_id))
         if not found:
             raise HTTPException(404, "document not found")
@@ -386,7 +386,7 @@ async def refresh_document(domain_id: str, source_id: str, db: Db = Depends(curr
 
 def _upload_row(db: Db, domain_id: str, source_id: str) -> Dict[str, Any]:
     found = db.query("""SELECT SOURCE_ID, FILE_NAME, TITLE, STAGE_PATH, CONTENT_TYPE, FILE_SIZE, FILE_KIND, READ_STATUS
-                          FROM CONFLUENCE.SOURCE WHERE SOURCE_ID = %s AND DOMAIN_ID = %s AND KIND = 'UPLOAD'""",
+                          FROM CORE.CONFLUENCE_SOURCE WHERE SOURCE_ID = %s AND DOMAIN_ID = %s AND KIND = 'UPLOAD'""",
                      (source_id, domain_id))
     if not found:
         raise HTTPException(404, "document not found")
@@ -394,7 +394,7 @@ def _upload_row(db: Db, domain_id: str, source_id: str) -> Dict[str, Any]:
 
 
 def _put(db: Db, path: str, data: bytes) -> None:
-    """Keep the original file at @CONFLUENCE.DOCUMENT_FILES/<path>."""
+    """Keep the original file at @CORE.DOCUMENT_FILES/<path>."""
     folder, name = path.rsplit("/", 1)
     tmp = Path(tempfile.mkdtemp())
     try:
@@ -406,7 +406,7 @@ def _put(db: Db, path: str, data: bytes) -> None:
 
 
 def _get(db: Db, path: str) -> bytes:
-    """The original file kept at @CONFLUENCE.DOCUMENT_FILES/<path>."""
+    """The original file kept at @CORE.DOCUMENT_FILES/<path>."""
     tmp = Path(tempfile.mkdtemp())
     try:
         db.execute(f"GET '@{document_files.STAGE}/{path}' 'file://{tmp.as_posix()}/'")
@@ -420,7 +420,7 @@ def _get(db: Db, path: str) -> bytes:
 
 def _set(db: Db, source_id: str, **fields: Any) -> None:
     cols = ", ".join(f"{k.upper()} = %s" for k in fields)
-    db.execute(f"UPDATE CONFLUENCE.SOURCE SET {cols} WHERE SOURCE_ID = %s", (*fields.values(), source_id))
+    db.execute(f"UPDATE CORE.CONFLUENCE_SOURCE SET {cols} WHERE SOURCE_ID = %s", (*fields.values(), source_id))
 
 
 _reading: set = set()
@@ -435,7 +435,7 @@ def _start_reading(db: Db, domain_id: str, source_id: str, data: Optional[bytes]
             return
         _reading.add(source_id)
     _set(db, source_id, read_status="QUEUED", read_note="Waiting to be read")
-    db.execute("UPDATE CONFLUENCE.SOURCE SET READ_STARTED_AT = CURRENT_TIMESTAMP(), READ_FINISHED_AT = NULL WHERE SOURCE_ID = %s",
+    db.execute("UPDATE CORE.CONFLUENCE_SOURCE SET READ_STARTED_AT = CURRENT_TIMESTAMP(), READ_FINISHED_AT = NULL WHERE SOURCE_ID = %s",
                (source_id,))
 
     def run() -> None:
@@ -444,7 +444,7 @@ def _start_reading(db: Db, domain_id: str, source_id: str, data: Optional[bytes]
         except Exception as exc:
             try:
                 _set(db, source_id, read_status="FAILED", read_note=str(getattr(exc, "detail", exc))[:3900])
-                db.execute("UPDATE CONFLUENCE.SOURCE SET READ_FINISHED_AT = CURRENT_TIMESTAMP() WHERE SOURCE_ID = %s", (source_id,))
+                db.execute("UPDATE CORE.CONFLUENCE_SOURCE SET READ_FINISHED_AT = CURRENT_TIMESTAMP() WHERE SOURCE_ID = %s", (source_id,))
             except Exception:
                 pass
         finally:
@@ -473,7 +473,7 @@ def _read_upload(db: Db, domain_id: str, source_id: str, data: Optional[bytes] =
     if not text:
         _set(db, source_id, read_status="NOT_READABLE", file_kind=out["kind"], read_method=out["method"] or None,
              read_note=(" ".join(notes) or "No text could be read from it; the file is kept.")[:3900], chars_total=0, chars_read=0)
-        db.execute("""UPDATE CONFLUENCE.SOURCE SET READ_FINISHED_AT = CURRENT_TIMESTAMP(), LAST_REFRESHED_AT = CURRENT_TIMESTAMP(),
+        db.execute("""UPDATE CORE.CONFLUENCE_SOURCE SET READ_FINISHED_AT = CURRENT_TIMESTAMP(), LAST_REFRESHED_AT = CURRENT_TIMESTAMP(),
                              LAST_RESULT = PARSE_JSON('{"read": 0, "proposed": 0}') WHERE SOURCE_ID = %s""", (source_id,))
         return {"read_status": "NOT_READABLE"}
     _set(db, source_id, file_kind=out["kind"], read_method=out["method"], pages=out.get("pages"), chars_total=len(text),
@@ -488,12 +488,12 @@ def _read_upload(db: Db, domain_id: str, source_id: str, data: Optional[bytes] =
             pass
 
     try:   # a document given for one layer proposes its knowledge for that layer (V057)
-        layer = (db.query("SELECT COALESCE(LAYER, 'ANY') AS LAYER FROM CONFLUENCE.SOURCE WHERE SOURCE_ID = %s", (source_id,))
+        layer = (db.query("SELECT COALESCE(LAYER, 'ANY') AS LAYER FROM CORE.CONFLUENCE_SOURCE WHERE SOURCE_ID = %s", (source_id,))
                  or [{"layer": "ANY"}])[0]["layer"]
     except Exception:
         layer = "ANY"
     result = _propose(db, domain_id, source_id, page, "DOCUMENT", progress, layer)
-    db.execute("DELETE FROM CONFLUENCE.PAGE WHERE SOURCE_ID = %s", (source_id,))   # one text per upload, the latest read
+    db.execute("DELETE FROM CORE.CONFLUENCE_PAGE WHERE SOURCE_ID = %s", (source_id,))   # one text per upload, the latest read
     _store_page(db, source_id, page, result.get("proposed", 0))
     unread = int(result.get("chars_unread") or 0)
     if unread:
@@ -501,7 +501,7 @@ def _read_upload(db: Db, domain_id: str, source_id: str, data: Optional[bytes] =
                      f"({result.get('parts')} parts); split the document to have the rest read.")
     _set(db, source_id, read_status="PARTIAL" if unread else "READY", chars_read=int(result.get("chars_read") or len(text)),
          read_note=" ".join(notes)[:3900] or None)
-    db.execute("""UPDATE CONFLUENCE.SOURCE SET READ_FINISHED_AT = CURRENT_TIMESTAMP(), LAST_REFRESHED_AT = CURRENT_TIMESTAMP(),
+    db.execute("""UPDATE CORE.CONFLUENCE_SOURCE SET READ_FINISHED_AT = CURRENT_TIMESTAMP(), LAST_REFRESHED_AT = CURRENT_TIMESTAMP(),
                          LAST_RESULT = PARSE_JSON(%s) WHERE SOURCE_ID = %s""",
                (json.dumps({"read": 1, "proposed": result.get("proposed", 0), "unchanged": result.get("unchanged", 0)}), source_id))
     return {"read_status": "PARTIAL" if unread else "READY", **result}
@@ -509,7 +509,7 @@ def _read_upload(db: Db, domain_id: str, source_id: str, data: Optional[bytes] =
 
 @router.post("/api/domains/{domain_id}/documents/upload")
 async def upload_documents(domain_id: str, files_in: List[UploadFile] = File(..., alias="files"), db: Db = Depends(current_db)):
-    """Upload documents of any type (up to 10 files of 50 MB). Each original is kept in @CONFLUENCE.DOCUMENT_FILES and
+    """Upload documents of any type (up to 10 files of 50 MB). Each original is kept in @CORE.DOCUMENT_FILES and
     read in the background; the knowledge it states is proposed for review. The same file uploaded again to the same
     domain is not stored twice."""
     files = []
@@ -531,7 +531,7 @@ async def upload_documents(domain_id: str, files_in: List[UploadFile] = File(...
                 out.append({"file_name": name, "error": "the file is empty"})
                 continue
             digest = document_files.sha256(data)
-            dup = db.query("""SELECT SOURCE_ID, FILE_NAME FROM CONFLUENCE.SOURCE WHERE DOMAIN_ID = %s AND KIND = 'UPLOAD'
+            dup = db.query("""SELECT SOURCE_ID, FILE_NAME FROM CORE.CONFLUENCE_SOURCE WHERE DOMAIN_ID = %s AND KIND = 'UPLOAD'
                                AND STATUS = 'ACTIVE' AND FILE_SHA256 = %s""", (domain_id, digest))
             if dup:
                 out.append({"file_name": name, "source_id": dup[0]["source_id"], "duplicate": True,
@@ -541,7 +541,7 @@ async def upload_documents(domain_id: str, files_in: List[UploadFile] = File(...
             path = document_files.stage_path(domain_id, source_id, name)
             kind, note = document_files.classify(name, data)
             _put(db, path, data)
-            db.execute("""INSERT INTO CONFLUENCE.SOURCE (SOURCE_ID, DOMAIN_ID, KIND, TITLE, FILE_NAME, STAGE_PATH, FILE_SIZE,
+            db.execute("""INSERT INTO CORE.CONFLUENCE_SOURCE (SOURCE_ID, DOMAIN_ID, KIND, TITLE, FILE_NAME, STAGE_PATH, FILE_SIZE,
                                                          CONTENT_TYPE, FILE_SHA256, FILE_KIND, READ_STATUS)
                           SELECT %s, %s, 'UPLOAD', %s, %s, %s, %s, %s, %s, %s, 'QUEUED'""",
                        (source_id, domain_id, name[:1024], name, path, len(data), document_files.content_type(name), digest, kind))
@@ -587,22 +587,22 @@ def document_review(domain_id: str, source_id: str, db: Db = Depends(current_db)
     from services.common.sql import variant
 
     domain_detail(domain_id, db)
-    found = db.query("""SELECT SOURCE_ID, KIND, TITLE, FILE_NAME, URL, STATUS FROM CONFLUENCE.SOURCE
+    found = db.query("""SELECT SOURCE_ID, KIND, TITLE, FILE_NAME, URL, STATUS FROM CORE.CONFLUENCE_SOURCE
                          WHERE SOURCE_ID = %s AND DOMAIN_ID = %s""", (source_id, domain_id))
     if not found:
         raise HTTPException(404, "document not found")
     source = found[0]
     try:
-        extra = db.query(f"SELECT {FILE_COLUMNS} FROM CONFLUENCE.SOURCE S WHERE S.SOURCE_ID = %s", (source_id,))
+        extra = db.query(f"SELECT {FILE_COLUMNS} FROM CORE.CONFLUENCE_SOURCE S WHERE S.SOURCE_ID = %s", (source_id,))
         source.update(extra[0] if extra else {})
     except Exception:
         pass
     pages = db.query("""SELECT PAGE_ID, TITLE, VERSION, URL, TEXT, TO_VARCHAR(FETCHED_AT, 'YYYY-MM-DD HH24:MI') AS FETCHED_AT
-                          FROM CONFLUENCE.PAGE WHERE SOURCE_ID = %s ORDER BY TITLE""", (source_id,))
+                          FROM CORE.CONFLUENCE_PAGE WHERE SOURCE_ID = %s ORDER BY TITLE""", (source_id,))
     items = db.query("""SELECT KNOWLEDGE_ID, KNOWLEDGE_TYPE, TITLE, CONTENT, CONTENT_JSON, STATUS, IS_CURRENT, LINEAGE_ID,
                                CONFIDENCE, CREATED_BY, REVIEWED_BY, REVIEW_NOTE,
                                TO_VARCHAR(CREATED_AT, 'YYYY-MM-DD HH24:MI') AS CREATED_AT
-                          FROM KNOWLEDGE.DOMAIN_KNOWLEDGE
+                          FROM CORE.DOMAIN_KNOWLEDGE
                          WHERE DOMAIN_ID = %s AND CONTENT_JSON:source:source_id::STRING = %s
                            AND STATUS IN ('PROPOSED', 'ACTIVE', 'REJECTED')
                          ORDER BY CREATED_AT DESC LIMIT 1000""", (domain_id, source_id))
@@ -637,7 +637,7 @@ def remove_document(domain_id: str, source_id: str, db: Db = Depends(current_db)
     """Unlink a document. Knowledge already accepted from it stays (it was reviewed); proposals still waiting stay in
     the inbox to decide."""
     try:
-        changed = db.execute_count("UPDATE CONFLUENCE.SOURCE SET STATUS = 'REMOVED' WHERE SOURCE_ID = %s AND DOMAIN_ID = %s "
+        changed = db.execute_count("UPDATE CORE.CONFLUENCE_SOURCE SET STATUS = 'REMOVED' WHERE SOURCE_ID = %s AND DOMAIN_ID = %s "
                                    "AND STATUS = 'ACTIVE'", (source_id, domain_id))
     except Exception as exc:
         raise _deployed(exc) from exc
@@ -654,8 +654,8 @@ def _approved_entities(db: Db, domain_id: str, layer: str = "SILVER") -> Dict[st
     from services.common.sql import variant
     from services.modeling import spec_v2
 
-    found = db.query("""SELECT D.SPEC, M.MODEL_ID FROM GOVERNANCE.DOMAIN_MODEL M
-                          JOIN GOVERNANCE.MODEL_DESIGNS D ON D.MODEL_ID = M.MODEL_ID AND D.VERSION = M.APPROVED_VERSION
+    found = db.query("""SELECT D.SPEC, M.MODEL_ID FROM CORE.DOMAIN_MODEL M
+                          JOIN CORE.MODEL_DESIGNS D ON D.MODEL_ID = M.MODEL_ID AND D.VERSION = M.APPROVED_VERSION
                          WHERE M.DOMAIN_ID = %s AND COALESCE(M.LAYER, 'SILVER') = %s""",
                      (domain_id, "GOLD" if str(layer).upper() == "GOLD" else "SILVER"))
     if not found:
@@ -672,7 +672,7 @@ def domain_examples(domain_id: str, db: Db = Depends(current_db)):
     domain_detail(domain_id, db)
     rows = db.query("""SELECT KNOWLEDGE_ID, STATUS, IS_CURRENT, CONTENT_JSON, CREATED_BY, VERIFIED_BY,
                               TO_VARCHAR(CREATED_AT, 'YYYY-MM-DD HH24:MI') AS CREATED_AT
-                         FROM KNOWLEDGE.DOMAIN_KNOWLEDGE
+                         FROM CORE.DOMAIN_KNOWLEDGE
                         WHERE DOMAIN_ID = %s AND KNOWLEDGE_TYPE = 'EXAMPLE'
                           AND (IS_CURRENT AND STATUS = 'ACTIVE' OR STATUS = 'PROPOSED')
                         ORDER BY CREATED_AT DESC""", (domain_id,))

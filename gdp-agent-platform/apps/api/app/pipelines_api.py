@@ -47,7 +47,7 @@ def pipeline_summary(pipeline: Literal["SILVER", "GOLD"], db: Db = Depends(curre
                                   MEDIAN(IFF(R.CURRENT_STATE = 'COMPLETED' AND R.UPDATED_AT >= DATEADD(day, -90, CURRENT_TIMESTAMP()),
                                              DATEDIFF('minute', R.CREATED_AT, R.UPDATED_AT), NULL)) AS MEDIAN_CYCLE_MINUTES
                              FROM CORE.WORKFLOW_RUN R WHERE {_scope()}""", (pipeline,))[0]
-        decisions = db.query(f"""SELECT D.DECISION FROM MAPPING.MAPPING_DECISION D JOIN CORE.WORKFLOW_RUN R ON R.RUN_ID = D.RUN_ID
+        decisions = db.query(f"""SELECT D.DECISION FROM CORE.MAPPING_DECISION D JOIN CORE.WORKFLOW_RUN R ON R.RUN_ID = D.RUN_ID
                                   WHERE D.IS_CURRENT AND D.REVIEWED_AT >= DATEADD(day, -90, CURRENT_TIMESTAMP())
                                     AND COALESCE(R.PIPELINE, 'SILVER') = %s AND R.DELETED_AT IS NULL""", (pipeline,))
     except Exception as exc:
@@ -65,9 +65,9 @@ def pipeline_summary(pipeline: Literal["SILVER", "GOLD"], db: Db = Depends(curre
 def run_accelerator(run_id: str, db: Db = Depends(current_db)):
     events = db.query("""SELECT FROM_STATE, TO_STATE, ACTOR_TYPE, CREATED_AT FROM CORE.WORKFLOW_EVENT
                           WHERE RUN_ID = %s ORDER BY CREATED_AT, EVENT_ID""", (run_id,))
-    decisions = db.query("SELECT DECISION FROM MAPPING.MAPPING_DECISION WHERE RUN_ID = %s AND IS_CURRENT", (run_id,))
+    decisions = db.query("SELECT DECISION FROM CORE.MAPPING_DECISION WHERE RUN_ID = %s AND IS_CURRENT", (run_id,))
     try:
-        soda = db.query("""SELECT STATUS, COUNT(*) AS N FROM CONTRACT.SODA_EXPECTATION_REGISTRY
+        soda = db.query("""SELECT STATUS, COUNT(*) AS N FROM CORE.SODA_EXPECTATION_REGISTRY
                             WHERE RUN_ID = %s AND IS_CURRENT GROUP BY STATUS""", (run_id,))
     except Exception:
         soda = []

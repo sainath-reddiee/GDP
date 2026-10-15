@@ -1,4 +1,4 @@
-"""CODEGEN.PUBLISH_DBT_PR: push the latest generated dbt code to a new GitHub branch and open a pull request.
+"""CORE.PUBLISH_DBT_PR: push the latest generated dbt code to a new GitHub branch and open a pull request.
 
 Runs inside Snowflake with an external access integration to api.github.com and a SECRET holding a GitHub
 token, so the token never leaves Snowflake. After the push, the branch is FETCHed into the Snowflake git
@@ -13,6 +13,7 @@ import uuid
 from typing import Any, Dict, List, Optional
 
 from services.common.audit import tool_call
+from services.common.platform_schema import PLATFORM_SCHEMA
 from services.common.sql import clip, insert_rows, rows, scalar, variant
 from services.common.standard import conventions_for, fill, run_pipeline, run_standard
 from services.dbt import github
@@ -29,7 +30,7 @@ def procedure_sql(database: str, services_import: str, eai: str, secret: str) ->
         assert NAME.match(value or ""), f"unsafe identifier: {value}"
     assert re.fullmatch(r"@[A-Za-z0-9_./$-]+\.zip", services_import or ""), f"unsafe import: {services_import}"
     return (
-        f"CREATE OR REPLACE PROCEDURE {database}.CODEGEN.PUBLISH_DBT_PR(RUN_ID VARCHAR, PAYLOAD_JSON VARCHAR)\n"
+        f"CREATE OR REPLACE PROCEDURE {database}.CORE.PUBLISH_DBT_PR(RUN_ID VARCHAR, PAYLOAD_JSON VARCHAR)\n"
         "  RETURNS VARIANT LANGUAGE PYTHON RUNTIME_VERSION = '3.11'\n"
         "  PACKAGES = ('snowflake-snowpark-python')\n"
         f"  IMPORTS = ('{services_import}')\n"
@@ -46,14 +47,14 @@ def setup_sql(database: str, eai: str, secret: str, create_secret: bool) -> list
     for value in (database, eai, secret):
         assert NAME.match(value or ""), f"unsafe identifier: {value}"
     statements = [
-        f"CREATE NETWORK RULE IF NOT EXISTS {database}.CODEGEN.GITHUB_API_EGRESS MODE = EGRESS TYPE = HOST_PORT "
+        f"CREATE NETWORK RULE IF NOT EXISTS {database}.CORE.GITHUB_API_EGRESS MODE = EGRESS TYPE = HOST_PORT "
         "VALUE_LIST = ('api.github.com')",
     ]
     if create_secret:
         statements.append(f"CREATE OR REPLACE SECRET {secret} TYPE = GENERIC_STRING SECRET_STRING = '<github token>'")
     statements.append(
         f"CREATE OR REPLACE EXTERNAL ACCESS INTEGRATION {eai} "
-        f"ALLOWED_NETWORK_RULES = ({database}.CODEGEN.GITHUB_API_EGRESS) "
+        f"ALLOWED_NETWORK_RULES = ({database}.CORE.GITHUB_API_EGRESS) "
         f"ALLOWED_AUTHENTICATION_SECRETS = ({secret}) ENABLED = TRUE "
         "COMMENT = 'Agentic pipeline: push generated dbt branches and open pull requests'"
     )
@@ -73,7 +74,7 @@ def _token() -> str:
 
 
 def _plan(session, run_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
-    stored = rows(session, "SELECT CONTENT_JSON FROM KNOWLEDGE.DOMAIN_KNOWLEDGE WHERE IS_CURRENT AND SOURCE_REFERENCE = ?",
+    stored = rows(session, "SELECT CONTENT_JSON FROM CORE.DOMAIN_KNOWLEDGE WHERE IS_CURRENT AND SOURCE_REFERENCE = ?",
                   [f"dbt.branch.{run_id}"])
     plan = dict(variant(stored[0]["CONTENT_JSON"]) or {}) if stored else {}
     # where to push is decided at generation (the configured repository); a publish call may not redirect it
@@ -85,7 +86,7 @@ def _plan(session, run_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
 
 def _record(session, run_id: str, generation_id: Optional[str], plan: Dict[str, Any], result: Dict[str, Any]) -> None:
     pr = result.get("pull_request") or {}
-    insert_rows(session, "CODEGEN.GIT_PUBLICATION",
+    insert_rows(session, "CORE.GIT_PUBLICATION",
                 ["PUBLICATION_ID", "RUN_ID", "GENERATION_ID", "PROVIDER", "ORIGIN", "BASE_BRANCH", "HEAD_BRANCH",
                  "COMMIT_SHA", "FILES_PUSHED", "PR_NUMBER", "PR_URL", "DBT_PROJECT", "STATUS", "DETAIL", "CREATED_BY"],
                 ["?", "?", "NULLIF(?, '')", "'GITHUB'", "?", "?", "?", "NULLIF(?, '')", "NULLIF(?, '')::NUMBER",
@@ -115,18 +116,18 @@ def project_from_branch(session, repo_fqn: str, branch: str, project_fqn: str, c
 
 def publish_case_patch(session, request: Dict[str, Any]) -> Dict[str, Any]:
     """A case's accepted DBT_PATCH as a draft pull request (PR Q2). Only ids and the branch come from the caller: the
-    file, its new content and the repository are read here from CASES.CASE_ARTIFACT and CODE.REPO, and the artifact
+    file, its new content and the repository are read here from CORE.CASE_ARTIFACT and CORE.REPO, and the artifact
     must be an ACCEPTED, publishable DBT_PATCH, so the procedure never pushes content a person did not accept."""
     artifact_id, case_id = str(request.get("artifact_id") or ""), str(request.get("case_id") or "")
     head = github.check_branch(str(request.get("head") or ""))
     assert head.startswith("fix/"), "a case fix branch starts with fix/"
-    found = rows(session, "SELECT TYPE, STATUS, CONTENT FROM CASES.CASE_ARTIFACT WHERE ARTIFACT_ID = ? AND CASE_ID = ?",
+    found = rows(session, "SELECT TYPE, STATUS, CONTENT FROM CORE.CASE_ARTIFACT WHERE ARTIFACT_ID = ? AND CASE_ID = ?",
                  [artifact_id, case_id])
     assert found, "case artifact not found"
     content = variant(found[0]["CONTENT"]) or {}
     assert found[0]["TYPE"] == "DBT_PATCH" and found[0]["STATUS"] == "ACCEPTED", "only an accepted dbt patch is published"
     assert content.get("publishable") and content.get("new_content") and content.get("path"), "this patch cannot be published"
-    repo = rows(session, "SELECT GIT_URL, BRANCH, PROVIDER FROM CODE.REPO WHERE REPO_ID = ? AND ENABLED", [content.get("repo_id")])
+    repo = rows(session, "SELECT GIT_URL, BRANCH, PROVIDER FROM CORE.REPO WHERE REPO_ID = ? AND ENABLED", [content.get("repo_id")])
     assert repo and str(repo[0]["PROVIDER"] or "").upper() == "GITHUB", "the patch's repository is not a connected GitHub repository"
     origin, base = repo[0]["GIT_URL"], str(repo[0]["BRANCH"] or "main")
     with tool_call(session, None, "publish_case_patch", {"case_id": case_id, "artifact_id": artifact_id, "head": head}) as call:
@@ -145,18 +146,18 @@ def publish_case_patch(session, request: Dict[str, Any]) -> Dict[str, Any]:
 
 def publish_model_branch(session, request: Dict[str, Any]) -> Dict[str, Any]:
     """A model finalized in the Modeling hub as a branch feature/model-<domain>-<timestamp> with a draft pull request.
-    Only ids and the branch come from the caller: the files are read here from GOVERNANCE.MODEL_DESIGNS (a FINALIZED or
-    PUBLISH_FAILED version) and the repository from CODE.REPO, so the procedure never pushes content nobody finalized."""
+    Only ids and the branch come from the caller: the files are read here from CORE.MODEL_DESIGNS (a FINALIZED or
+    PUBLISH_FAILED version) and the repository from CORE.REPO, so the procedure never pushes content nobody finalized."""
     design_id, version = str(request.get("design_id") or ""), int(request.get("version") or 0)
     head = github.check_branch(str(request.get("head") or ""))
     assert head.startswith("feature/model-"), "a model branch starts with feature/model-"
-    found = rows(session, """SELECT DOMAIN_NAME, MODE, STATUS, ARTIFACTS FROM GOVERNANCE.MODEL_DESIGNS
+    found = rows(session, """SELECT DOMAIN_NAME, MODE, STATUS, ARTIFACTS FROM CORE.MODEL_DESIGNS
                               WHERE DESIGN_ID = ? AND VERSION = ?""", [design_id, version])
     assert found, "model design not found"
     assert found[0]["STATUS"] in ("FINALIZED", "PUBLISH_FAILED"), "only a finalized model design is published"
     files = variant(found[0]["ARTIFACTS"]) or {}
     assert isinstance(files, dict) and files, "the model design has no rendered files"
-    repo = rows(session, "SELECT GIT_URL, BRANCH, PROVIDER FROM CODE.REPO WHERE REPO_ID = ? AND ENABLED",
+    repo = rows(session, "SELECT GIT_URL, BRANCH, PROVIDER FROM CORE.REPO WHERE REPO_ID = ? AND ENABLED",
                 [str(request.get("repo_id") or "")])
     assert repo and str(repo[0]["PROVIDER"] or "").upper() == "GITHUB", "the repository is not a connected GitHub repository"
     origin = repo[0]["GIT_URL"]
@@ -175,7 +176,7 @@ def publish_model_branch(session, request: Dict[str, Any]) -> Dict[str, Any]:
             result["detail"] = clip(result.get("detail"), 1000)
             call.status, call.error = "FAILED", clip(exc)
     ok = result.get("status") in ("PUBLISHED", "NO_CHANGES")
-    session.sql("""UPDATE GOVERNANCE.MODEL_DESIGNS SET STATUS = ?, REPO_ID = ?, BRANCH = ?, PR_URL = NULLIF(?, ''),
+    session.sql("""UPDATE CORE.MODEL_DESIGNS SET STATUS = ?, REPO_ID = ?, BRANCH = ?, PR_URL = NULLIF(?, ''),
                           PUBLISH_RESULT = PARSE_JSON(?), UPDATED_AT = CURRENT_TIMESTAMP()
                     WHERE DESIGN_ID = ? AND VERSION = ?""",
                 params=["PUBLISHED" if ok else "PUBLISH_FAILED", str(request.get("repo_id") or ""), head,
@@ -185,7 +186,7 @@ def publish_model_branch(session, request: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _repo(session, repo_id: str) -> Dict[str, Any]:
-    repo = rows(session, "SELECT GIT_URL, BRANCH, PROVIDER FROM CODE.REPO WHERE REPO_ID = ? AND ENABLED", [repo_id])
+    repo = rows(session, "SELECT GIT_URL, BRANCH, PROVIDER FROM CORE.REPO WHERE REPO_ID = ? AND ENABLED", [repo_id])
     assert repo and str(repo[0]["PROVIDER"] or "").upper() == "GITHUB", "the repository is not a connected GitHub repository"
     return repo[0]
 
@@ -201,8 +202,8 @@ def publish_domain_model(session, request: Dict[str, Any]) -> Dict[str, Any]:
     model_id, version = str(request.get("model_id") or ""), int(request.get("version") or 0)
     head = github.check_branch(str(request.get("head") or ""))
     assert head.startswith("feature/model-"), "a model branch starts with feature/model-"
-    found = rows(session, """SELECT D.STATUS, D.SPEC, M.DOMAIN_ID, M.DOMAIN_NAME FROM GOVERNANCE.MODEL_DESIGNS D
-                              JOIN GOVERNANCE.DOMAIN_MODEL M ON M.MODEL_ID = D.MODEL_ID
+    found = rows(session, """SELECT D.STATUS, D.SPEC, M.DOMAIN_ID, M.DOMAIN_NAME FROM CORE.MODEL_DESIGNS D
+                              JOIN CORE.DOMAIN_MODEL M ON M.MODEL_ID = D.MODEL_ID
                              WHERE D.MODEL_ID = ? AND D.VERSION = ?""", [model_id, version])
     assert found, "model version not found"
     assert found[0]["STATUS"] == "APPROVED", "only an approved model version is published"
@@ -230,7 +231,7 @@ def publish_domain_model(session, request: Dict[str, Any]) -> Dict[str, Any]:
             call.status, call.error = "FAILED", clip(exc)
     state, pr = roundtrip.outcome(result)
     status = "PUBLISHED" if state == "NO_CHANGES" else "APPROVED"  # the repository already holds exactly this model
-    session.sql("""UPDATE GOVERNANCE.MODEL_DESIGNS SET STATUS = ?, REPO_ID = ?, BRANCH = ?, PR_URL = NULLIF(?, ''),
+    session.sql("""UPDATE CORE.MODEL_DESIGNS SET STATUS = ?, REPO_ID = ?, BRANCH = ?, PR_URL = NULLIF(?, ''),
                           PR_NUMBER = NULLIF(?, '')::NUMBER, PR_STATE = ?, PUBLISH_RESULT = PARSE_JSON(?),
                           PR_SYNCED_AT = CURRENT_TIMESTAMP(), UPDATED_AT = CURRENT_TIMESTAMP()
                     WHERE MODEL_ID = ? AND VERSION = ?""",
@@ -244,7 +245,7 @@ def publish_domain_model(session, request: Dict[str, Any]) -> Dict[str, Any]:
 def sync_model_prs(session, request: Dict[str, Any]) -> Dict[str, Any]:
     """Read the state of open domain model pull requests from GitHub: merged marks the version PUBLISHED, closed
     without merging leaves it APPROVED with PR_STATE CLOSED (to publish again). Versions synced in the last minute are
-    skipped unless `force`. Run on demand from the Publish tab and by the CODEGEN.SYNC_MODEL_PRS_TASK task."""
+    skipped unless `force`. Run on demand from the Publish tab and by the CORE.SYNC_MODEL_PRS_TASK task."""
     model_id = str(request.get("model_id") or "")
     where = "D.PR_NUMBER IS NOT NULL AND D.PR_STATE IN ('OPEN', 'DRAFT') AND D.REPO_ID IS NOT NULL"
     params: List[Any] = []
@@ -253,8 +254,8 @@ def sync_model_prs(session, request: Dict[str, Any]) -> Dict[str, Any]:
         params.append(model_id)
     if not request.get("force"):
         where += " AND (D.PR_SYNCED_AT IS NULL OR D.PR_SYNCED_AT < DATEADD('second', -60, CURRENT_TIMESTAMP()))"
-    found = rows(session, f"""SELECT D.MODEL_ID, D.VERSION, D.PR_NUMBER, R.GIT_URL FROM GOVERNANCE.MODEL_DESIGNS D
-                               JOIN CODE.REPO R ON R.REPO_ID = D.REPO_ID WHERE {where} LIMIT 200""", params)
+    found = rows(session, f"""SELECT D.MODEL_ID, D.VERSION, D.PR_NUMBER, R.GIT_URL FROM CORE.MODEL_DESIGNS D
+                               JOIN CORE.REPO R ON R.REPO_ID = D.REPO_ID WHERE {where} LIMIT 200""", params)
     request_fn = github.urllib_request(_token()) if found else None
     out: Dict[str, Any] = {"checked": 0, "merged": [], "closed": [], "errors": []}
     for r in found:
@@ -265,7 +266,7 @@ def sync_model_prs(session, request: Dict[str, Any]) -> Dict[str, Any]:
             continue
         out["checked"] += 1
         status_sql = ", STATUS = 'PUBLISHED'" if pr["state"] == "MERGED" else ""
-        session.sql(f"""UPDATE GOVERNANCE.MODEL_DESIGNS SET PR_STATE = ?, MERGED_SHA = NULLIF(?, ''),
+        session.sql(f"""UPDATE CORE.MODEL_DESIGNS SET PR_STATE = ?, MERGED_SHA = NULLIF(?, ''),
                                PR_SYNCED_AT = CURRENT_TIMESTAMP(){status_sql}
                          WHERE MODEL_ID = ? AND VERSION = ? AND STATUS IN ('APPROVED', 'PUBLISHED')""",
                     params=[pr["state"], pr.get("merge_commit_sha") or "", r["MODEL_ID"], int(r["VERSION"])]).collect()
@@ -287,8 +288,8 @@ def publish_dq_suite(session, request: Dict[str, Any]) -> Dict[str, Any]:
     head = github.check_branch(str(request.get("head") or ""))
     assert head.startswith("feature/dq-"), "a data quality branch starts with feature/dq-"
     found = rows(session, """SELECT V.STATUS, V.CHECKS, S.TABLE_NAME, S.DOMAIN_ID, D.DOMAIN_NAME
-                              FROM GOVERNANCE.DQ_SUITE_VERSION V JOIN GOVERNANCE.DQ_SUITE S ON S.SUITE_ID = V.SUITE_ID
-                              LEFT JOIN KNOWLEDGE.DOMAIN_REGISTRY D ON D.DOMAIN_ID = S.DOMAIN_ID
+                              FROM CORE.DQ_SUITE_VERSION V JOIN CORE.DQ_SUITE S ON S.SUITE_ID = V.SUITE_ID
+                              LEFT JOIN CORE.DOMAIN_REGISTRY D ON D.DOMAIN_ID = S.DOMAIN_ID
                              WHERE V.SUITE_ID = ? AND V.VERSION = ?""", [suite_id, version])
     assert found, "suite version not found"
     assert found[0]["STATUS"] == "APPROVED", "only an approved data quality suite version is published"
@@ -311,7 +312,7 @@ def publish_dq_suite(session, request: Dict[str, Any]) -> Dict[str, Any]:
             call.status, call.error = "FAILED", clip(exc)
     state, pr = roundtrip.outcome(result)
     status = "PUBLISHED" if state == "NO_CHANGES" else "APPROVED"
-    session.sql("""UPDATE GOVERNANCE.DQ_SUITE_VERSION SET STATUS = ?, REPO_ID = ?, BRANCH = ?, PR_URL = NULLIF(?, ''),
+    session.sql("""UPDATE CORE.DQ_SUITE_VERSION SET STATUS = ?, REPO_ID = ?, BRANCH = ?, PR_URL = NULLIF(?, ''),
                           PR_NUMBER = NULLIF(?, '')::NUMBER, PR_STATE = ?, PUBLISH_RESULT = PARSE_JSON(?),
                           PR_SYNCED_AT = CURRENT_TIMESTAMP(), UPDATED_AT = CURRENT_TIMESTAMP()
                     WHERE SUITE_ID = ? AND VERSION = ?""",
@@ -334,8 +335,8 @@ def sync_dq_prs(session, request: Dict[str, Any]) -> Dict[str, Any]:
     if not request.get("force"):
         where += " AND (V.PR_SYNCED_AT IS NULL OR V.PR_SYNCED_AT < DATEADD('second', -60, CURRENT_TIMESTAMP()))"
     try:
-        found = rows(session, f"""SELECT V.SUITE_ID, V.VERSION, V.PR_NUMBER, R.GIT_URL FROM GOVERNANCE.DQ_SUITE_VERSION V
-                                   JOIN CODE.REPO R ON R.REPO_ID = V.REPO_ID WHERE {where} LIMIT 200""", params)
+        found = rows(session, f"""SELECT V.SUITE_ID, V.VERSION, V.PR_NUMBER, R.GIT_URL FROM CORE.DQ_SUITE_VERSION V
+                                   JOIN CORE.REPO R ON R.REPO_ID = V.REPO_ID WHERE {where} LIMIT 200""", params)
     except Exception as exc:  # before V040
         return {"checked": 0, "merged": [], "closed": [], "errors": [{"error": clip(exc, 300)}]}
     request_fn = github.urllib_request(_token()) if found else None
@@ -348,7 +349,7 @@ def sync_dq_prs(session, request: Dict[str, Any]) -> Dict[str, Any]:
             continue
         out["checked"] += 1
         status_sql = ", STATUS = 'PUBLISHED'" if pr["state"] == "MERGED" else ""
-        session.sql(f"""UPDATE GOVERNANCE.DQ_SUITE_VERSION SET PR_STATE = ?, MERGED_SHA = NULLIF(?, ''),
+        session.sql(f"""UPDATE CORE.DQ_SUITE_VERSION SET PR_STATE = ?, MERGED_SHA = NULLIF(?, ''),
                                PR_SYNCED_AT = CURRENT_TIMESTAMP(){status_sql}
                          WHERE SUITE_ID = ? AND VERSION = ? AND STATUS IN ('APPROVED', 'PUBLISHED')""",
                     params=[pr["state"], pr.get("merge_commit_sha") or "", r["SUITE_ID"], int(r["VERSION"])]).collect()
@@ -371,7 +372,7 @@ def publish_qa_pack(session, request: Dict[str, Any]) -> Dict[str, Any]:
     detail = packs.get_pack(session, pack_id, version)
     pack = detail["pack"]
     assert pack["status"] == "APPROVED", "only an approved QA pack version is published"
-    domain = rows(session, "SELECT DOMAIN_NAME FROM KNOWLEDGE.DOMAIN_REGISTRY WHERE DOMAIN_ID = ?", [pack["domain_id"]])
+    domain = rows(session, "SELECT DOMAIN_NAME FROM CORE.DOMAIN_REGISTRY WHERE DOMAIN_ID = ?", [pack["domain_id"]])
     path = pack.get("repo_path") or pack_git.pack_path(domain[0]["DOMAIN_NAME"] if domain else "domain", pack["name"])
     text = render({"name": pack["name"], "description": pack.get("description"), "tags": pack.get("tags") or [],
                    "queries": detail["queries"]})
@@ -390,7 +391,7 @@ def publish_qa_pack(session, request: Dict[str, Any]) -> Dict[str, Any]:
             result["detail"] = clip(result.get("detail"), 1000)
             call.status, call.error = "FAILED", clip(exc)
     state, pr = roundtrip.outcome(result)
-    session.sql("""UPDATE GOVERNANCE.DOMAIN_QA_PACKS SET REPO_ID = ?, BRANCH = ?, PR_URL = NULLIF(?, ''),
+    session.sql("""UPDATE CORE.DOMAIN_QA_PACKS SET REPO_ID = ?, BRANCH = ?, PR_URL = NULLIF(?, ''),
                           PR_NUMBER = NULLIF(?, '')::NUMBER, PR_STATE = ?, PUBLISH_RESULT = PARSE_JSON(?),
                           REPO_PATH = COALESCE(REPO_PATH, ?), PR_SYNCED_AT = CURRENT_TIMESTAMP()
                     WHERE PACK_ID = ? AND VERSION = ?""",
@@ -413,8 +414,8 @@ def sync_qa_prs(session, request: Dict[str, Any]) -> Dict[str, Any]:
     if not request.get("force"):
         where += " AND (P.PR_SYNCED_AT IS NULL OR P.PR_SYNCED_AT < DATEADD('second', -60, CURRENT_TIMESTAMP()))"
     try:
-        found = rows(session, f"""SELECT P.PACK_ID, P.VERSION, P.PR_NUMBER, R.GIT_URL FROM GOVERNANCE.DOMAIN_QA_PACKS P
-                                   JOIN CODE.REPO R ON R.REPO_ID = P.REPO_ID WHERE {where} LIMIT 200""", params)
+        found = rows(session, f"""SELECT P.PACK_ID, P.VERSION, P.PR_NUMBER, R.GIT_URL FROM CORE.DOMAIN_QA_PACKS P
+                                   JOIN CORE.REPO R ON R.REPO_ID = P.REPO_ID WHERE {where} LIMIT 200""", params)
     except Exception as exc:  # before V042
         return {"checked": 0, "merged": [], "closed": [], "errors": [{"error": clip(exc, 300)}]}
     request_fn = github.urllib_request(_token()) if found else None
@@ -426,7 +427,7 @@ def sync_qa_prs(session, request: Dict[str, Any]) -> Dict[str, Any]:
             out["errors"].append({"pack_id": r["PACK_ID"], "version": int(r["VERSION"]), "error": clip(exc, 300)})
             continue
         out["checked"] += 1
-        session.sql("""UPDATE GOVERNANCE.DOMAIN_QA_PACKS SET PR_STATE = ?, MERGED_SHA = NULLIF(?, ''),
+        session.sql("""UPDATE CORE.DOMAIN_QA_PACKS SET PR_STATE = ?, MERGED_SHA = NULLIF(?, ''),
                               PR_SYNCED_AT = CURRENT_TIMESTAMP() WHERE PACK_ID = ? AND VERSION = ?""",
                     params=[pr["state"], pr.get("merge_commit_sha") or "", r["PACK_ID"], int(r["VERSION"])]).collect()
         roundtrip.mirror(session, "QA_PACK", r["PACK_ID"], int(r["VERSION"]), pr["state"], pr.get("merge_commit_sha"))
@@ -456,12 +457,12 @@ def sttm_files(entry: Dict[str, Any]) -> Dict[str, str]:
 
 def publish_sttm(session, request: Dict[str, Any]) -> Dict[str, Any]:
     """An APPROVED STTM catalog version (STTM Store) as its repository files on a branch feature/sttm-<target>-v<version>
-    with a pull request. Rendered here from the approved version; the pull request lives in GOVERNANCE.GIT_PR only."""
+    with a pull request. Rendered here from the approved version; the pull request lives in CORE.GIT_PR only."""
     catalog_id, version = str(request.get("catalog_id") or ""), int(request.get("version") or 0)
     head = github.check_branch(str(request.get("head") or ""))
     assert head.startswith("feature/sttm-"), "an STTM branch starts with feature/sttm-"
     found = rows(session, """SELECT CATALOG_ID, VERSION, DOMAIN_ID, DOMAIN_NAME, SOURCE_SYSTEM, TARGET_ENTITY, STATUS,
-                                    TABLE_DESIGN, LINES FROM GOVERNANCE.STTM_CATALOG WHERE CATALOG_ID = ? AND VERSION = ?""",
+                                    TABLE_DESIGN, LINES FROM CORE.STTM_CATALOG WHERE CATALOG_ID = ? AND VERSION = ?""",
                  [catalog_id, version])
     assert found, "mapping version not found"
     assert str(found[0]["STATUS"]).upper() == "APPROVED", "only an approved mapping version is published"
@@ -494,7 +495,7 @@ def publish_sttm(session, request: Dict[str, Any]) -> Dict[str, Any]:
 def publish_table_model(session, request: Dict[str, Any]) -> Dict[str, Any]:
     """A table model version (Model Store) as its DDL and dbt files on a branch feature/model-<table>-v<version> with a
     pull request. The files are rendered here from the stored version, so only what was saved in the app is pushed;
-    the version becomes PUBLISHED when the pull request is merged (GOVERNANCE.GIT_PR sync)."""
+    the version becomes PUBLISHED when the pull request is merged (CORE.GIT_PR sync)."""
     from services.modeling import table_model
 
     model_id, version = str(request.get("table_model_id") or ""), int(request.get("version") or 0)
@@ -537,7 +538,7 @@ def publish_table_model(session, request: Dict[str, Any]) -> Dict[str, Any]:
 
 def sync_git_prs(session, request: Dict[str, Any]) -> Dict[str, Any]:
     """Every governed pull request (the scheduled task and the Source control page): with V043 one pass over
-    GOVERNANCE.GIT_PR, which also updates each asset's own version table; before it, each asset's own sync."""
+    CORE.GIT_PR, which also updates each asset's own version table; before it, each asset's own sync."""
     if roundtrip.deployed(session):
         request_fn: Dict[str, Any] = {}
 
@@ -556,10 +557,10 @@ def sync_task_sql(database: str, warehouse: str) -> List[str]:
     every 30 minutes (created with the publisher)."""
     for value in (database, warehouse):
         assert NAME.match(value or ""), f"unsafe identifier: {value}"
-    return [f"CREATE OR REPLACE TASK {database}.CODEGEN.SYNC_MODEL_PRS_TASK WAREHOUSE = {warehouse} "
-            f"SCHEDULE = '30 MINUTE' COMMENT = 'Read the state of every governed pull request (GOVERNANCE.GIT_PR)' "
-            f"AS CALL {database}.CODEGEN.PUBLISH_DBT_PR('', '{{\"sync_git_prs\": {{}}}}')",
-            f"ALTER TASK {database}.CODEGEN.SYNC_MODEL_PRS_TASK RESUME"]
+    return [f"CREATE OR REPLACE TASK {database}.CORE.SYNC_MODEL_PRS_TASK WAREHOUSE = {warehouse} "
+            f"SCHEDULE = '30 MINUTE' COMMENT = 'Read the state of every governed pull request (CORE.GIT_PR)' "
+            f"AS CALL {database}.CORE.PUBLISH_DBT_PR('', '{{\"sync_git_prs\": {{}}}}')",
+            f"ALTER TASK {database}.CORE.SYNC_MODEL_PRS_TASK RESUME"]
 
 
 def publish_dbt_pr(session, run_id: str, payload_json: str = "{}") -> Dict[str, Any]:
@@ -598,7 +599,7 @@ def publish_dbt_pr(session, run_id: str, payload_json: str = "{}") -> Dict[str, 
     conv = conventions_for(lambda sql, params: rows(session, sql, params), run_standard(run[0] if run else {}),
                            run_pipeline(run[0] if run else {}), (run[0] if run else {}).get("DOMAIN_ID"))
     assert run, f"run not found: {run_id}"
-    gen = rows(session, """SELECT GENERATION_ID, GENERATION_VERSION, STTM_ID FROM CODEGEN.DBT_GENERATION_REGISTRY
+    gen = rows(session, """SELECT GENERATION_ID, GENERATION_VERSION, STTM_ID FROM CORE.DBT_GENERATION_REGISTRY
                            WHERE RUN_ID = ? ORDER BY GENERATION_VERSION DESC LIMIT 1""", [run_id])
     generation_id = gen[0]["GENERATION_ID"] if gen else None
     result: Dict[str, Any]
@@ -606,7 +607,7 @@ def publish_dbt_pr(session, run_id: str, payload_json: str = "{}") -> Dict[str, 
         try:
             assert gen, "generate dbt before publishing"
             files = {r["FILE_PATH"]: r["CONTENT"] for r in rows(
-                session, "SELECT FILE_PATH, CONTENT FROM CODEGEN.GENERATED_ARTIFACT WHERE GENERATION_ID = ?",
+                session, "SELECT FILE_PATH, CONTENT FROM CORE.GENERATED_ARTIFACT WHERE GENERATION_ID = ?",
                 [generation_id]) if r["CONTENT"] is not None}
             name = run[0]["RUN_NAME"] or run_id
             version = gen[0]["GENERATION_VERSION"]
@@ -622,7 +623,7 @@ def publish_dbt_pr(session, run_id: str, payload_json: str = "{}") -> Dict[str, 
             )
             if plan.get("git_repository") and plan.get("create_project", True) and result["status"] != "FAILED":
                 project = plan.get("dbt_project") or (
-                    f"{scalar(session, 'SELECT CURRENT_DATABASE()')}.CODEGEN.{conv['codegen_prefix']}"
+                    f"{scalar(session, 'SELECT CURRENT_DATABASE()')}.{PLATFORM_SCHEMA}.{conv['codegen_prefix']}"
                     f"{run_id.replace('-', '')[:18]}_BRANCH")
                 try:
                     result["dbt_project"] = project_from_branch(
@@ -651,7 +652,7 @@ def publish_star_schema(session, run_id: str, payload: Dict[str, Any]) -> Dict[s
     run = rows(session, "SELECT * FROM CORE.WORKFLOW_RUN WHERE RUN_ID = ?", [run_id])
     assert run, f"run not found: {run_id}"
     children = rows(session, """SELECT R.RUN_ID, R.MODEL_ENTITY,
-                                       (SELECT G.GENERATION_ID FROM CODEGEN.DBT_GENERATION_REGISTRY G WHERE G.RUN_ID = R.RUN_ID
+                                       (SELECT G.GENERATION_ID FROM CORE.DBT_GENERATION_REGISTRY G WHERE G.RUN_ID = R.RUN_ID
                                          AND G.GENERATION_STATUS IN ('GENERATED', 'APPROVED')
                                          ORDER BY G.GENERATION_VERSION DESC LIMIT 1) AS GENERATION_ID
                                   FROM CORE.WORKFLOW_RUN R WHERE R.PARENT_RUN_ID = ? AND R.DELETED_AT IS NULL
@@ -664,7 +665,7 @@ def publish_star_schema(session, run_id: str, payload: Dict[str, Any]) -> Dict[s
     parts = []
     for c in children:
         files = {r["FILE_PATH"]: r["CONTENT"] for r in rows(
-            session, "SELECT FILE_PATH, CONTENT FROM CODEGEN.GENERATED_ARTIFACT WHERE GENERATION_ID = ?", [c["GENERATION_ID"]])}
+            session, "SELECT FILE_PATH, CONTENT FROM CORE.GENERATED_ARTIFACT WHERE GENERATION_ID = ?", [c["GENERATION_ID"]])}
         parts.append({"entity": c["MODEL_ENTITY"], "files": files})
     merged = merge_files(parts)
     plan = _plan(session, children[0]["RUN_ID"], {})   # the repository the table runs were generated for

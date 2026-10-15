@@ -27,7 +27,7 @@ router = APIRouter()
 
 
 def _config(db: Db, domain_id: str) -> Dict[str, Any]:
-    found = db.query("SELECT DOMAIN_NAME, CONFIG FROM KNOWLEDGE.DOMAIN_REGISTRY WHERE DOMAIN_ID = %s", (domain_id,))
+    found = db.query("SELECT DOMAIN_NAME, CONFIG FROM CORE.DOMAIN_REGISTRY WHERE DOMAIN_ID = %s", (domain_id,))
     if not found:
         raise HTTPException(404, "domain not found")
     raw = found[0].get("config")
@@ -41,7 +41,7 @@ def _env(config: Dict[str, Any]) -> str:
 
 
 def _all(db: Db) -> List[Dict[str, Any]]:
-    rows = db.query("""SELECT DOMAIN_ID, DOMAIN_NAME, CONFIG:mdm AS MDM FROM KNOWLEDGE.DOMAIN_REGISTRY
+    rows = db.query("""SELECT DOMAIN_ID, DOMAIN_NAME, CONFIG:mdm AS MDM FROM CORE.DOMAIN_REGISTRY
                         WHERE ACTIVE_FLAG AND CONFIG:mdm IS NOT NULL ORDER BY DOMAIN_NAME""")
     for r in rows:
         r["mdm"] = json.loads(r["mdm"]) if isinstance(r.get("mdm"), str) else r.get("mdm")
@@ -79,7 +79,7 @@ def domain_mdm(domain_id: str, db: Db = Depends(current_db)):
                 item["gold"] = {k: m["mdm"]["gold"].get(k) for k in ("schema", "dimension", "skey", "mastered_id")}
             consumes.append(item)
         out.update(contract=contract, consumes=consumes)
-    knowledge = db.query("""SELECT COUNT(*) AS N FROM KNOWLEDGE.DOMAIN_KNOWLEDGE WHERE DOMAIN_ID = %s AND IS_CURRENT
+    knowledge = db.query("""SELECT COUNT(*) AS N FROM CORE.DOMAIN_KNOWLEDGE WHERE DOMAIN_ID = %s AND IS_CURRENT
                               AND SOURCE_REFERENCE ILIKE %s""", (domain_id, "%.mdm.rule.%"))
     out["rules"] = int((knowledge[0] if knowledge else {}).get("n") or 0)
     return out
@@ -136,10 +136,10 @@ def set_domain_mdm(domain_id: str, body: MdmIn, db: Db = Depends(current_db)):
     try:
         _baseline(db, domain_id)
         if contract:
-            db.execute("UPDATE KNOWLEDGE.DOMAIN_REGISTRY SET CONFIG = OBJECT_INSERT(COALESCE(CONFIG, OBJECT_CONSTRUCT()), 'mdm', PARSE_JSON(%s), TRUE), "
+            db.execute("UPDATE CORE.DOMAIN_REGISTRY SET CONFIG = OBJECT_INSERT(COALESCE(CONFIG, OBJECT_CONSTRUCT()), 'mdm', PARSE_JSON(%s), TRUE), "
                        "UPDATED_AT = CURRENT_TIMESTAMP() WHERE DOMAIN_ID = %s", (json.dumps(contract), domain_id))
         else:
-            db.execute("UPDATE KNOWLEDGE.DOMAIN_REGISTRY SET CONFIG = OBJECT_DELETE(COALESCE(CONFIG, OBJECT_CONSTRUCT()), 'mdm'), "
+            db.execute("UPDATE CORE.DOMAIN_REGISTRY SET CONFIG = OBJECT_DELETE(COALESCE(CONFIG, OBJECT_CONSTRUCT()), 'mdm'), "
                        "UPDATED_AT = CURRENT_TIMESTAMP() WHERE DOMAIN_ID = %s", (domain_id,))
     except Exception as exc:
         raise _snowflake_error(exc) from exc

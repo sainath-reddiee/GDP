@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, Dict
 
 from services.dbt.procedures import _artifact_type, merge_branch_plan
+from services.common.platform_schema import PLATFORM_SCHEMA
 from services.dbt.inputs import assemble, db_query, load_inputs
 from services.dbt.workspace import origin_allowed, push_pending, read_repo_text, safe_fqn
 from services.soda.expectations import render_yaml
@@ -97,7 +98,7 @@ def generate_via_db(db, run_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
     run = _upper(run_rows[0])
     sttm_rows = db.query(
         """
-        SELECT * FROM CONTRACT.STTM_REGISTRY
+        SELECT * FROM CORE.STTM_REGISTRY
          WHERE RUN_ID = %s AND STATUS IN ('REVIEW', 'APPROVED')
          ORDER BY STTM_VERSION DESC LIMIT 1
         """,
@@ -107,7 +108,7 @@ def generate_via_db(db, run_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
     sttm = _upper(sttm_rows[0])
     design = _json(sttm.get("TABLE_DESIGN")) or {}
     line_rows = db.query(
-        "SELECT * FROM CONTRACT.STTM_LINE WHERE STTM_ID = %s ORDER BY TARGET_COLUMN",
+        "SELECT * FROM CORE.STTM_LINE WHERE STTM_ID = %s ORDER BY TARGET_COLUMN",
         (sttm["STTM_ID"],),
     )
     lines = [{
@@ -122,7 +123,7 @@ def generate_via_db(db, run_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         """
         SELECT TARGET_TABLE, TARGET_COLUMN, CHECK_TYPE, CHECK_DEFINITION,
                SEVERITY, ORIGIN, CLIENT_REQUIREMENT
-          FROM CONTRACT.SODA_EXPECTATION_REGISTRY
+          FROM CORE.SODA_EXPECTATION_REGISTRY
          WHERE RUN_ID = %s AND IS_CURRENT AND STATUS IN ('PROPOSED', 'APPROVED')
         """,
         (run_id,),
@@ -137,7 +138,7 @@ def generate_via_db(db, run_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
     assert target_name, "TARGET_UNKNOWN: this STTM has no target table; regenerate the STTM after choosing a target model"
     soda_yaml = render_yaml(str(target_name).lower(), checks)
     prior_rows = db.query(
-        "SELECT CONTENT_JSON FROM KNOWLEDGE.DOMAIN_KNOWLEDGE "
+        "SELECT CONTENT_JSON FROM CORE.DOMAIN_KNOWLEDGE "
         "WHERE IS_CURRENT AND SOURCE_REFERENCE = %s",
         (f"dbt.branch.{run_id}",),
     )
@@ -177,26 +178,26 @@ def generate_via_db(db, run_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
     stage_files.update({k: files[k] for k in ("release/branch.json", "release/skills.json")})
     version_rows = db.query(
         "SELECT COALESCE(MAX(GENERATION_VERSION), 0) + 1 AS V "
-        "FROM CODEGEN.DBT_GENERATION_REGISTRY WHERE RUN_ID = %s",
+        "FROM CORE.DBT_GENERATION_REGISTRY WHERE RUN_ID = %s",
         (run_id,),
     )
     version = version_rows[0]["v"] if version_rows else 1
     generation_id = str(uuid.uuid4())
-    stage_path = f"CODEGEN.DBT_STAGE/{run_id}/v{version}"
+    stage_path = f"CORE.DBT_STAGE/{run_id}/v{version}"
     _put_files(db, stage_path, stage_files)
     workspace: Dict[str, Any] = {
         "stage_path": f"@{stage_path}",
         "overlay": True,
         "pull_request": {
             "created": False,
-            "reason": "Opened by CODEGEN.PUBLISH_DBT_PR through the GitHub API after generation.",
+            "reason": "Opened by CORE.PUBLISH_DBT_PR through the GitHub API after generation.",
         },
     }
     from services.common.standard import conventions_for, run_standard
 
     conv = conventions_for(lambda sql, params: db.query(sql.replace("?", "%s"), tuple(params)), run_standard(run))
     project_name = plan.get("dbt_project") or (
-        f"{_current_database(db)}.CODEGEN.{conv['codegen_prefix']}{run_id.replace('-', '')[:18]}_V{version}"
+        f"{_current_database(db)}.{PLATFORM_SCHEMA}.{conv['codegen_prefix']}{run_id.replace('-', '')[:18]}_V{version}"
     )
     try:
         workspace["dbt_project"] = _create_project(db, project_name, f"@{stage_path}",
@@ -223,21 +224,21 @@ def generate_via_db(db, run_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
     _put_files(db, stage_path, {"release/workspace.json": files["release/workspace.json"]})
     plan["workspace"] = workspace
     db.execute(
-        "UPDATE CODEGEN.DBT_GENERATION_REGISTRY SET GENERATION_STATUS = 'SUPERSEDED' "
+        "UPDATE CORE.DBT_GENERATION_REGISTRY SET GENERATION_STATUS = 'SUPERSEDED' "
         "WHERE RUN_ID = %s AND GENERATION_STATUS IN ('GENERATING', 'GENERATED')",
         (run_id,),
     )
     domain = conv["default_domain"].upper()
     if run.get("DOMAIN_ID"):
         domain_rows = db.query(
-            "SELECT DOMAIN_NAME FROM KNOWLEDGE.DOMAIN_REGISTRY WHERE DOMAIN_ID = %s",
+            "SELECT DOMAIN_NAME FROM CORE.DOMAIN_REGISTRY WHERE DOMAIN_ID = %s",
             (run["DOMAIN_ID"],),
         )
         if domain_rows:
             domain = domain_rows[0].get("domain_name") or domain
     db.execute(
         """
-        INSERT INTO CODEGEN.DBT_GENERATION_REGISTRY
+        INSERT INTO CORE.DBT_GENERATION_REGISTRY
           (GENERATION_ID, RUN_ID, DOMAIN, TARGET_MODEL, STTM_ID, STTM_VERSION,
            FILES_GENERATED, SKILL_VERSION, KNOWLEDGE_VERSION, MODEL_VERSION,
            GENERATION_VERSION, GENERATION_STATUS, STAGE_PATH, CREATED_BY)
@@ -253,7 +254,7 @@ def generate_via_db(db, run_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
     for path, content in files.items():
         db.execute(
             """
-            INSERT INTO CODEGEN.GENERATED_ARTIFACT
+            INSERT INTO CORE.GENERATED_ARTIFACT
               (ARTIFACT_ID, GENERATION_ID, RUN_ID, ARTIFACT_TYPE, FILE_PATH, CONTENT, CONTENT_SHA256)
             SELECT %s, %s, %s, %s, %s, %s, %s
             """,

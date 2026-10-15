@@ -39,7 +39,7 @@ def _query(session) -> Callable[[str, Any], List[Dict[str, Any]]]:
 
 
 def _domain(session, domain_id: str) -> Dict[str, Any]:
-    found = rows(session, "SELECT DOMAIN_ID, DOMAIN_NAME, CONFIG FROM KNOWLEDGE.DOMAIN_REGISTRY WHERE DOMAIN_ID = ?",
+    found = rows(session, "SELECT DOMAIN_ID, DOMAIN_NAME, CONFIG FROM CORE.DOMAIN_REGISTRY WHERE DOMAIN_ID = ?",
                  [domain_id])
     assert found, "domain not found"
     return {**found[0], "CONFIG": variant(found[0]["CONFIG"]) or {}}
@@ -92,7 +92,7 @@ def apply_item(session, domain_id: str, item: Dict[str, Any]) -> str:
     if kind == "GLOSSARY":
         assert col, "a glossary suggestion needs a target column"
         new = [s.strip() for s in value.split(",") if s.strip()]
-        found = rows(session, """SELECT SOURCE_REFERENCE, TITLE, CONTENT, CONTENT_JSON FROM KNOWLEDGE.DOMAIN_KNOWLEDGE
+        found = rows(session, """SELECT SOURCE_REFERENCE, TITLE, CONTENT, CONTENT_JSON FROM CORE.DOMAIN_KNOWLEDGE
                                   WHERE DOMAIN_ID = ? AND IS_CURRENT AND KNOWLEDGE_TYPE = 'GLOSSARY'
                                     AND UPPER(CONTENT_JSON:target_column::STRING) = ? LIMIT 1""", [domain_id, col])
         content = variant(found[0]["CONTENT_JSON"]) if found else {}
@@ -114,15 +114,15 @@ def apply_item(session, domain_id: str, item: Dict[str, Any]) -> str:
         terms = dict(signals.get(bucket) or {})
         terms[value.upper()] = max(int(terms.get(value.upper()) or 0), 2)
         signals[bucket] = terms
-        session.sql("""UPDATE KNOWLEDGE.DOMAIN_REGISTRY
+        session.sql("""UPDATE CORE.DOMAIN_REGISTRY
                           SET CONFIG = OBJECT_INSERT(COALESCE(CONFIG, OBJECT_CONSTRUCT()), 'signals', PARSE_JSON(?), TRUE),
                               UPDATED_AT = CURRENT_TIMESTAMP()
                         WHERE DOMAIN_ID = ?""", params=[json.dumps(signals), domain_id]).collect()
         return f"{bucket[:-1]} signal {value.upper()} added"
     assert table and col, "a definition needs a target table and column"
-    updated = session.sql("""UPDATE KNOWLEDGE.TARGET_COLUMN_REGISTRY C SET BUSINESS_DEFINITION = ?
+    updated = session.sql("""UPDATE CORE.TARGET_COLUMN_REGISTRY C SET BUSINESS_DEFINITION = ?
                               WHERE UPPER(C.COLUMN_NAME) = ? AND C.TARGET_TABLE_ID IN (
-                                    SELECT TARGET_TABLE_ID FROM KNOWLEDGE.TARGET_TABLE_REGISTRY
+                                    SELECT TARGET_TABLE_ID FROM CORE.TARGET_TABLE_REGISTRY
                                      WHERE DOMAIN_ID = ? AND UPPER(TARGET_TABLE) = ?)""",
                           params=[value, col, domain_id, table]).collect()
     assert updated and updated[0][0], f"{table}.{col} is not a column of this domain"

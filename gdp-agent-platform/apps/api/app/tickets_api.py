@@ -59,7 +59,7 @@ def _jira(db: Db, f: Dict[str, Any]) -> tuple[List[Dict[str, Any]], Dict[str, An
     keys = [r["key"] for r in rows]
     if keys:   # how many platform objects each issue is linked to (runs, tests, tables)
         try:
-            for r in db.query(f"""SELECT ISSUE_KEY, COUNT(*) AS N FROM JIRA.ISSUE_LINK
+            for r in db.query(f"""SELECT ISSUE_KEY, COUNT(*) AS N FROM CORE.ISSUE_LINK
                                    WHERE NOT IS_DELETED AND ISSUE_KEY IN ({', '.join(['%s'] * len(keys))}) GROUP BY 1""", tuple(keys)):
                 for row in rows:
                     if row["key"] == r["issue_key"]:

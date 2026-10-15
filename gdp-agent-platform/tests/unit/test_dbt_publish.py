@@ -68,4 +68,4 @@ def test_read_repo_text_prefers_whole_file_format():
         seen.append(sql)
         return ["a, b\nc"]
     assert read_repo_text(read, "DB.S.R", "main", "models/x.sql") == "a, b\nc"
-    assert "FILE_FORMAT => 'CODEGEN.RAW_TEXT_FORMAT'" in seen[0]
+    assert "FILE_FORMAT => 'CORE.RAW_TEXT_FORMAT'" in seen[0]

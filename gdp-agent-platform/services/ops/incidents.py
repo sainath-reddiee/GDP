@@ -4,9 +4,9 @@ The rules (services.ops.detect produces the candidates):
   - the same fingerprint while an incident is open (OPEN, ACK, MITIGATED, MUTED) adds an occurrence;
   - resolved within reopen_hours (default 24): the incident is reopened;
   - otherwise a new incident opens.
-  A sighting is counted once: its occurrence key (run, task, map index, try) is claimed in OPS.INCIDENT_EVENT, so the
+  A sighting is counted once: its occurrence key (run, task, map index, try) is claimed in CORE.INCIDENT_EVENT, so the
   same run read by push and poll, or twice by the poll overlap, changes nothing.
-Storm control: a new failure in a DAG downstream (OPS.DAG_DEPENDENCY, one or two hops, filled by services.ops.deps) of an
+Storm control: a new failure in a DAG downstream (CORE.DAG_DEPENDENCY, one or two hops, filled by services.ops.deps) of an
 OPEN or ACK incident seen in the last 2 hours becomes its child (KIND UPSTREAM, PARENT_INCIDENT_ID) with no ticket.
 Routing: the first enabled ROUTING_RULE by PRIORITY whose DAG pattern (glob), tag, owner and environment all match
 gives the team (and may override the severity or mute); else the DAG's own team; else the incident is unrouted (still
@@ -241,47 +241,47 @@ class SqlStore:
         found = self.db.query("""
             SELECT D.ENV_ID, D.DAG_ID, D.CRITICALITY, D.TEAM_ID, D.TAGS, D.OWNERS, D.MUTE_UNTIL, D.MUTE_REASON, D.IS_PAUSED,
                    D.IS_ACTIVE, D.EXPECTED_BY_CRON, D.MAX_DURATION_MIN, D.TIMEZONE
-              FROM OPS.DAG D JOIN TABLE(FLATTEN(INPUT => PARSE_JSON(%s))) F
+              FROM CORE.DAG D JOIN TABLE(FLATTEN(INPUT => PARSE_JSON(%s))) F
                 ON D.ENV_ID = F.VALUE[0]::VARCHAR AND D.DAG_ID = F.VALUE[1]::VARCHAR""", (json.dumps([list(p) for p in pairs]),))
         return {(r["env_id"], r["dag_id"]): _row(r) for r in found}
 
     def envs(self) -> Dict[str, Dict[str, Any]]:
-        return {r["env_id"]: r for r in self.db.query("SELECT ENV_ID, NAME, AIRFLOW_URL, API_VERSION FROM OPS.AIRFLOW_ENV")}
+        return {r["env_id"]: r for r in self.db.query("SELECT ENV_ID, NAME, AIRFLOW_URL, API_VERSION FROM CORE.AIRFLOW_ENV")}
 
     def rules(self) -> List[Dict[str, Any]]:
         return [_row(r) for r in self.db.query("""SELECT RULE_ID, PRIORITY, DAG_PATTERN, TAG, OWNER, ENV_ID, TEAM_ID,
                                                          SEVERITY_OVERRIDE, MUTE_UNTIL, MUTE_REASON, ENABLED
-                                                    FROM OPS.ROUTING_RULE WHERE ENABLED ORDER BY PRIORITY, CREATED_AT""")]
+                                                    FROM CORE.ROUTING_RULE WHERE ENABLED ORDER BY PRIORITY, CREATED_AT""")]
 
     def team(self, team_id: Optional[str]) -> Optional[Dict[str, Any]]:
         if not team_id:
             return None
         found = self.db.query("""SELECT TEAM_ID, NAME, JIRA_PROJECT, JIRA_COMPONENT, JIRA_ASSIGNEE_ACCOUNT_ID, ESCALATION_MINUTES
-                                   FROM OPS.TEAM WHERE TEAM_ID = %s""", (team_id,))
+                                   FROM CORE.TEAM WHERE TEAM_ID = %s""", (team_id,))
         return found[0] if found else None
 
     # ---- idempotency claims and the timeline
     def claim(self, key: str) -> bool:
         return self.db.execute_count("""
-            MERGE INTO OPS.INCIDENT_EVENT T USING (SELECT %s AS K) S ON T.IDEMPOTENCY_KEY = S.K
+            MERGE INTO CORE.INCIDENT_EVENT T USING (SELECT %s AS K) S ON T.IDEMPOTENCY_KEY = S.K
             WHEN NOT MATCHED THEN INSERT (EVENT_ID, KIND, ACTOR, IDEMPOTENCY_KEY) VALUES (%s, 'claim', 'system', S.K)""",
                                      (key, str(uuid.uuid4()))) >= 1
 
     def reclaim_stale(self, key: str, minutes: int) -> bool:
         """Take over a claim nobody finished (no incident bound) that is older than `minutes`."""
-        return self.db.execute_count("""UPDATE OPS.INCIDENT_EVENT SET CREATED_AT = CURRENT_TIMESTAMP()
+        return self.db.execute_count("""UPDATE CORE.INCIDENT_EVENT SET CREATED_AT = CURRENT_TIMESTAMP()
                                          WHERE IDEMPOTENCY_KEY = %s AND KIND = 'claim'
                                            AND CREATED_AT < DATEADD(minute, %s, CURRENT_TIMESTAMP())""",
                                      (key, -abs(int(minutes)))) >= 1
 
     def bind(self, key: str, incident_id: Optional[str], kind: str, actor: str = SYSTEM,
              detail: Optional[Dict[str, Any]] = None) -> None:
-        self.db.execute("""UPDATE OPS.INCIDENT_EVENT SET INCIDENT_ID = %s, KIND = %s, ACTOR = %s, DETAIL = PARSE_JSON(%s)
+        self.db.execute("""UPDATE CORE.INCIDENT_EVENT SET INCIDENT_ID = %s, KIND = %s, ACTOR = %s, DETAIL = PARSE_JSON(%s)
                             WHERE IDEMPOTENCY_KEY = %s""", (incident_id, kind, actor, json.dumps(detail or {}, default=str), key))
 
     def release_claim(self, key: str) -> None:
         """Make an unfinished claim free to take again at once (after a failed attempt)."""
-        self.db.execute("""UPDATE OPS.INCIDENT_EVENT SET KIND = 'claim', CREATED_AT = DATEADD(day, -1, CURRENT_TIMESTAMP())
+        self.db.execute("""UPDATE CORE.INCIDENT_EVENT SET KIND = 'claim', CREATED_AT = DATEADD(day, -1, CURRENT_TIMESTAMP())
                             WHERE IDEMPOTENCY_KEY = %s""", (key,))
 
     def ticketed_open(self) -> List[Dict[str, Any]]:
@@ -302,17 +302,17 @@ class SqlStore:
             yield self
 
     def claimed_incident(self, key: str) -> Optional[str]:
-        found = self.db.query("SELECT INCIDENT_ID FROM OPS.INCIDENT_EVENT WHERE IDEMPOTENCY_KEY = %s LIMIT 1", (key,))
+        found = self.db.query("SELECT INCIDENT_ID FROM CORE.INCIDENT_EVENT WHERE IDEMPOTENCY_KEY = %s LIMIT 1", (key,))
         return found[0].get("incident_id") if found else None
 
     def event(self, incident_id: str, kind: str, actor: str = SYSTEM, detail: Optional[Dict[str, Any]] = None) -> None:
-        self.db.execute("""INSERT INTO OPS.INCIDENT_EVENT (EVENT_ID, INCIDENT_ID, KIND, ACTOR, DETAIL)
+        self.db.execute("""INSERT INTO CORE.INCIDENT_EVENT (EVENT_ID, INCIDENT_ID, KIND, ACTOR, DETAIL)
                            SELECT %s, %s, %s, %s, PARSE_JSON(%s)""",
                         (str(uuid.uuid4()), incident_id, kind, actor or SYSTEM, json.dumps(detail or {}, default=str)))
 
     # ---- incidents
-    _SELECT = "SELECT " + ", ".join(c.upper() for c in INCIDENT_COLUMNS) + " FROM OPS.INCIDENT"
-    _SELECT_I = "SELECT " + ", ".join("I." + c.upper() for c in INCIDENT_COLUMNS) + " FROM OPS.INCIDENT I"
+    _SELECT = "SELECT " + ", ".join(c.upper() for c in INCIDENT_COLUMNS) + " FROM CORE.INCIDENT"
+    _SELECT_I = "SELECT " + ", ".join("I." + c.upper() for c in INCIDENT_COLUMNS) + " FROM CORE.INCIDENT I"
 
     def get(self, incident_id: str) -> Optional[Dict[str, Any]]:
         found = self.db.query(self._SELECT + " WHERE INCIDENT_ID = %s", (incident_id,))
@@ -347,7 +347,7 @@ class SqlStore:
         cols = [c for c in INCIDENT_COLUMNS if c in incident]
         values = ", ".join("TRY_TO_TIMESTAMP_LTZ(%s::VARCHAR)" if c in TS_COLUMNS else "%s" for c in cols)
         return self.db.execute_count(
-            f"MERGE INTO OPS.INCIDENT T USING (SELECT %s AS INCIDENT_ID) S ON T.INCIDENT_ID = S.INCIDENT_ID "
+            f"MERGE INTO CORE.INCIDENT T USING (SELECT %s AS INCIDENT_ID) S ON T.INCIDENT_ID = S.INCIDENT_ID "
             f"WHEN NOT MATCHED THEN INSERT ({', '.join(c.upper() for c in cols)}) VALUES ({values})",
             (incident["incident_id"],) + tuple(incident[c] for c in cols))
 
@@ -368,22 +368,22 @@ class SqlStore:
             statuses = list(only_status)
             where += f" AND STATUS IN ({', '.join(['%s'] * len(statuses))})"
             params += statuses
-        return self.db.execute_count(f"UPDATE OPS.INCIDENT SET {', '.join(sets)} WHERE {where}", tuple(params))
+        return self.db.execute_count(f"UPDATE CORE.INCIDENT SET {', '.join(sets)} WHERE {where}", tuple(params))
 
     def storm_parent(self, env_id: str, dag_id: str) -> Optional[str]:
-        """An open incident of a DAG upstream of this one (OPS.DAG_DEPENDENCY: datasets, sensors, triggers, the code
+        """An open incident of a DAG upstream of this one (CORE.DAG_DEPENDENCY: datasets, sensors, triggers, the code
         graph or set by hand), one or two hops up; the nearest and newest wins."""
         try:
             found = self.db.query(f"""
                 WITH UP AS (
-                    SELECT UPSTREAM_DAG_ID AS DAG_ID, 1 AS HOPS FROM OPS.DAG_DEPENDENCY
+                    SELECT UPSTREAM_DAG_ID AS DAG_ID, 1 AS HOPS FROM CORE.DAG_DEPENDENCY
                      WHERE ENV_ID = %s AND DOWNSTREAM_DAG_ID = %s AND UPSTREAM_DAG_ID <> DOWNSTREAM_DAG_ID
                     UNION ALL
-                    SELECT D2.UPSTREAM_DAG_ID, 2 FROM OPS.DAG_DEPENDENCY D1
-                      JOIN OPS.DAG_DEPENDENCY D2 ON D2.ENV_ID = D1.ENV_ID AND D2.DOWNSTREAM_DAG_ID = D1.UPSTREAM_DAG_ID
+                    SELECT D2.UPSTREAM_DAG_ID, 2 FROM CORE.DAG_DEPENDENCY D1
+                      JOIN CORE.DAG_DEPENDENCY D2 ON D2.ENV_ID = D1.ENV_ID AND D2.DOWNSTREAM_DAG_ID = D1.UPSTREAM_DAG_ID
                      WHERE D1.ENV_ID = %s AND D1.DOWNSTREAM_DAG_ID = %s AND D1.UPSTREAM_DAG_ID <> D1.DOWNSTREAM_DAG_ID
                        AND D2.UPSTREAM_DAG_ID NOT IN (D2.DOWNSTREAM_DAG_ID, %s))
-                SELECT I.INCIDENT_ID FROM OPS.INCIDENT I JOIN UP ON UP.DAG_ID = I.DAG_ID
+                SELECT I.INCIDENT_ID FROM CORE.INCIDENT I JOIN UP ON UP.DAG_ID = I.DAG_ID
                  WHERE I.ENV_ID = %s AND I.STATUS IN ('OPEN', 'ACK') AND I.PARENT_INCIDENT_ID IS NULL
                    AND I.LAST_SEEN >= DATEADD(hour, -{STORM_HOURS}, CURRENT_TIMESTAMP())
                  ORDER BY UP.HOPS, I.LAST_SEEN DESC LIMIT 1""", (env_id, dag_id, env_id, dag_id, dag_id, env_id))
@@ -393,7 +393,7 @@ class SqlStore:
 
     def escalation_candidates(self) -> List[Dict[str, Any]]:
         found = self.db.query(self._SELECT_I.replace("SELECT ", "SELECT T.ESCALATION_MINUTES, ", 1) + """
-            JOIN OPS.TEAM T ON T.TEAM_ID = I.TEAM_ID
+            JOIN CORE.TEAM T ON T.TEAM_ID = I.TEAM_ID
             WHERE I.STATUS = 'OPEN' AND I.PARENT_INCIDENT_ID IS NULL AND COALESCE(I.ESCALATIONS, 0) < %s""", (MAX_ESCALATIONS,))
         return [_row(r) for r in found]
 
@@ -406,13 +406,13 @@ class SqlStore:
         dags = self.db.query("""
             SELECT D.ENV_ID, D.DAG_ID, D.CRITICALITY, D.TEAM_ID, D.TAGS, D.OWNERS, D.MUTE_UNTIL, D.MUTE_REASON, D.IS_PAUSED,
                    D.IS_ACTIVE, D.EXPECTED_BY_CRON, D.MAX_DURATION_MIN, D.TIMEZONE, S.LAST_SUCCESS_AT
-              FROM OPS.DAG D JOIN OPS.AIRFLOW_ENV E ON E.ENV_ID = D.ENV_ID
-              LEFT JOIN (SELECT ENV_ID, DAG_ID, MAX(COALESCE(ENDED_AT, UPDATED_AT)) AS LAST_SUCCESS_AT FROM OPS.DAG_RUN
+              FROM CORE.DAG D JOIN CORE.AIRFLOW_ENV E ON E.ENV_ID = D.ENV_ID
+              LEFT JOIN (SELECT ENV_ID, DAG_ID, MAX(COALESCE(ENDED_AT, UPDATED_AT)) AS LAST_SUCCESS_AT FROM CORE.DAG_RUN
                           WHERE STATE = 'success' GROUP BY ENV_ID, DAG_ID) S ON S.ENV_ID = D.ENV_ID AND S.DAG_ID = D.DAG_ID
              WHERE E.ENABLED AND (D.EXPECTED_BY_CRON IS NOT NULL OR D.MAX_DURATION_MIN IS NOT NULL)""")
         runs = self.db.query("""
             SELECT R.ENV_ID, R.DAG_ID, R.RUN_ID, R.RUN_TYPE, R.STATE, R.STARTED_AT, R.EXTERNAL_TRIGGER
-              FROM OPS.DAG_RUN R JOIN OPS.DAG D ON D.ENV_ID = R.ENV_ID AND D.DAG_ID = R.DAG_ID
+              FROM CORE.DAG_RUN R JOIN CORE.DAG D ON D.ENV_ID = R.ENV_ID AND D.DAG_ID = R.DAG_ID
              WHERE R.STATE = 'running' AND D.MAX_DURATION_MIN IS NOT NULL
                AND R.STARTED_AT < DATEADD(minute, -D.MAX_DURATION_MIN, CURRENT_TIMESTAMP())""")
         return [_row(d) for d in dags], [_row(r) for r in runs]
@@ -425,10 +425,10 @@ class SqlStore:
         bound = "TRY_TO_TIMESTAMP_LTZ(%s::VARCHAR)" if since else "DATEADD(hour, -1, CURRENT_TIMESTAMP())"
         params: Tuple[Any, ...] = (since,) if since else ()
         runs = self.db.query(f"""SELECT ENV_ID, DAG_ID, RUN_ID, RUN_TYPE, STATE, STARTED_AT, ENDED_AT, EXTERNAL_TRIGGER,
-                                        UPDATED_AT, LOADED_AT FROM OPS.DAG_RUN WHERE LOADED_AT {op} {bound}
+                                        UPDATED_AT, LOADED_AT FROM CORE.DAG_RUN WHERE LOADED_AT {op} {bound}
                                   ORDER BY LOADED_AT LIMIT {int(limit)}""", params)
         tasks = self.db.query(f"""SELECT ENV_ID, DAG_ID, RUN_ID, TASK_ID, MAP_INDEX, TRY_NUMBER, STATE, STARTED_AT, ENDED_AT,
-                                         ERROR_EXCERPT, UPDATED_AT, LOADED_AT FROM OPS.TASK_RUN WHERE LOADED_AT {op} {bound}
+                                         ERROR_EXCERPT, UPDATED_AT, LOADED_AT FROM CORE.TASK_RUN WHERE LOADED_AT {op} {bound}
                                    ORDER BY LOADED_AT LIMIT {int(limit)}""", params)
         cursor, truncated = detect_cursor(runs, tasks, limit, since)
         return [_row(r) for r in runs], [_row(t) for t in tasks], cursor, truncated
@@ -460,7 +460,7 @@ def _notify(store: Any, incident: Dict[str, Any], kind: str, now: datetime, note
 # ---------------------------------------------------------------- open or update
 
 def occurrence_key(candidate: Dict[str, Any]) -> str:
-    """The idempotency key of one sighting (OPS.INCIDENT_EVENT.IDEMPOTENCY_KEY, VARCHAR(500)). Short keys keep their
+    """The idempotency key of one sighting (CORE.INCIDENT_EVENT.IDEMPOTENCY_KEY, VARCHAR(500)). Short keys keep their
     readable form (claims already stored still match); a key over OCCURRENCE_KEY_MAX characters (long DAG, task or
     run ids) becomes occ:<env>:<dag prefix>:<sha1 of the full key>, which always fits."""
     full = f"occ:{candidate['env_id']}:{candidate['dag_id']}:{candidate.get('task_id') or ''}:{candidate['occurrence_key']}"

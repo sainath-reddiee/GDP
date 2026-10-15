@@ -1,4 +1,4 @@
-"""CONTRACT.GENERATE_STTM / REFINE_TRANSFORMATION / APPLY_TRANSFORMATION / EXPORT_STTM_CSV."""
+"""CORE.GENERATE_STTM / REFINE_TRANSFORMATION / APPLY_TRANSFORMATION / EXPORT_STTM_CSV."""
 
 from __future__ import annotations
 
@@ -50,7 +50,7 @@ def generate_sttm(session, run_id: str) -> Dict[str, Any]:
             use_stage(session, "STTM", run_standard(run), run_id)
             target = target_table(session, run)
             columns = target_columns(session, target["TARGET_TABLE_ID"])
-            source = rows(session, "SELECT SOURCE_SYSTEM_NAME FROM SOURCE.SOURCE_REGISTRY WHERE SOURCE_SYSTEM_ID = ?",
+            source = rows(session, "SELECT SOURCE_SYSTEM_NAME FROM CORE.SOURCE_REGISTRY WHERE SOURCE_SYSTEM_ID = ?",
                           [run["SOURCE_SYSTEM_ID"]])
             source_name = source[0]["SOURCE_SYSTEM_NAME"] if source else "SOURCE"
             decisions = {}
@@ -58,10 +58,10 @@ def generate_sttm(session, run_id: str) -> Dict[str, Any]:
                 SELECT D.DECISION_ID, D.TARGET_COLUMN_ID, D.TRANSFORMATION, D.BUSINESS_JUSTIFICATION, D.REVIEWER,
                        C.FINAL_SCORE, L.COLUMN_NAME AS SOURCE_COLUMN, L.DATA_TYPE AS SOURCE_DATATYPE,
                        T.SOURCE_TABLE, T.SOURCE_DATABASE, T.SOURCE_SCHEMA
-                  FROM MAPPING.MAPPING_DECISION D
-                  JOIN SOURCE.LANDING_COLUMN_REGISTRY L ON L.LANDING_COLUMN_ID = D.SOURCE_COLUMN_ID
-                  JOIN SOURCE.LANDING_TABLE_REGISTRY T ON T.LANDING_ID = L.LANDING_ID
-                  LEFT JOIN MAPPING.MAPPING_CANDIDATE C ON C.CANDIDATE_ID = D.CANDIDATE_ID
+                  FROM CORE.MAPPING_DECISION D
+                  JOIN CORE.LANDING_COLUMN_REGISTRY L ON L.LANDING_COLUMN_ID = D.SOURCE_COLUMN_ID
+                  JOIN CORE.LANDING_TABLE_REGISTRY T ON T.LANDING_ID = L.LANDING_ID
+                  LEFT JOIN CORE.MAPPING_CANDIDATE C ON C.CANDIDATE_ID = D.CANDIDATE_ID
                  WHERE D.RUN_ID = ? AND D.IS_CURRENT AND D.DECISION <> 'REJECTED' AND D.TARGET_COLUMN_ID IS NOT NULL
                 """, [run_id]):
                 decisions[d["TARGET_COLUMN_ID"]] = {
@@ -93,22 +93,22 @@ def generate_sttm(session, run_id: str) -> Dict[str, Any]:
             if contract["unmapped_required"]:
                 raise ValueError("STTM_INCOMPLETE: required columns have no approved mapping: "
                                  + ", ".join(contract["unmapped_required"]))
-            version = (scalar(session, "SELECT MAX(STTM_VERSION) FROM CONTRACT.STTM_REGISTRY WHERE RUN_ID = ?",
+            version = (scalar(session, "SELECT MAX(STTM_VERSION) FROM CORE.STTM_REGISTRY WHERE RUN_ID = ?",
                               [run_id]) or 0) + 1
             sttm_id = str(uuid.uuid4())
             kv = current_knowledge_version(session, run["DOMAIN_ID"])
 
             def write(_event_id: str) -> None:
-                session.sql("UPDATE CONTRACT.STTM_REGISTRY SET STATUS = 'SUPERSEDED' WHERE RUN_ID = ? AND STATUS IN ('DRAFT','REVIEW')",
+                session.sql("UPDATE CORE.STTM_REGISTRY SET STATUS = 'SUPERSEDED' WHERE RUN_ID = ? AND STATUS IN ('DRAFT','REVIEW')",
                             params=[run_id]).collect()
-                insert_rows(session, "CONTRACT.STTM_REGISTRY",
+                insert_rows(session, "CORE.STTM_REGISTRY",
                             ["STTM_ID", "RUN_ID", "DOMAIN_ID", "TARGET_TABLE_ID", "STTM_VERSION", "STATUS",
                              "TABLE_DESIGN", "KNOWLEDGE_VERSION", "SKILL_VERSION", "GENERATION_VERSION", "CREATED_BY"],
                             ["?", "?", "?", "?", "?::NUMBER", "'REVIEW'", "PARSE_JSON(?)", "?", "'STTM_SKILL:1.0.0'",
                              "'sttm-v1'", "CURRENT_USER()"],
                             [[sttm_id, run_id, run["DOMAIN_ID"], target["TARGET_TABLE_ID"], version,
                               contract["table_design"], kv]])
-                insert_rows(session, "CONTRACT.STTM_LINE",
+                insert_rows(session, "CORE.STTM_LINE",
                             ["STTM_LINE_ID", "STTM_ID", "DECISION_ID", "SOURCE_SYSTEM", "SOURCE_DATABASE",
                              "SOURCE_SCHEMA", "SOURCE_TABLE", "SOURCE_COLUMN", "SOURCE_DATATYPE",
                              "TARGET_DOMAIN", "TARGET_DATABASE", "TARGET_SCHEMA", "TARGET_TABLE", "TARGET_COLUMN",
@@ -124,7 +124,7 @@ def generate_sttm(session, run_id: str) -> Dict[str, Any]:
                             [[str(uuid.uuid4()), sttm_id, l.get("decision_id"), l.get("source_system"),
                               l.get("source_database"), l.get("source_schema"), l.get("source_table"),
                               l.get("source_column"), l.get("source_datatype"),
-                              scalar(session, "SELECT DOMAIN_NAME FROM KNOWLEDGE.DOMAIN_REGISTRY WHERE DOMAIN_ID = ?",
+                              scalar(session, "SELECT DOMAIN_NAME FROM CORE.DOMAIN_REGISTRY WHERE DOMAIN_ID = ?",
                                      [run["DOMAIN_ID"]]),
                               target["TARGET_DATABASE"], target["TARGET_SCHEMA"], target["TARGET_TABLE"],
                               l["target_column"], l["target_datatype"], l["mapping_type"], l.get("transformation"),
@@ -147,13 +147,13 @@ def generate_sttm(session, run_id: str) -> Dict[str, Any]:
             stage.fail(exc)
             return {"state": stage.payload()}
     stage.move("STTM_REVIEW", call.summary, {"sttm_id": sttm_id, "version": version}, in_transaction=write)
-    catalog_sttm.snapshot(session, sttm_id, "GENERATED", call.summary)  # GOVERNANCE.STTM_CATALOG; never raises
+    catalog_sttm.snapshot(session, sttm_id, "GENERATED", call.summary)  # CORE.STTM_CATALOG; never raises
     return {"sttm_id": sttm_id, "version": version, "table_design": contract["table_design"],
             "lines": contract["lines"], "store_edits": carried, "state": stage.payload()}
 
 
 def _current_sttm(session, run_id: str) -> Dict[str, Any]:
-    found = rows(session, """SELECT * FROM CONTRACT.STTM_REGISTRY
+    found = rows(session, """SELECT * FROM CORE.STTM_REGISTRY
                              WHERE RUN_ID = ? AND STATUS IN ('REVIEW', 'APPROVED', 'DRAFT')
                              ORDER BY STTM_VERSION DESC LIMIT 1""", [run_id])
     assert found, "no current STTM for this run"
@@ -167,7 +167,7 @@ def _profile_for(session, run_id: str, table: Optional[str], column: Optional[st
     found = rows(session, """
         SELECT TABLE_NAME, COLUMN_NAME, DATA_TYPE, SEMANTIC_TYPE, NULL_PERCENTAGE, DISTINCT_PERCENTAGE,
                CARDINALITY, GENERATED_DESCRIPTION, SAMPLE_VALUES, PATTERN_JSON, STATISTICS_JSON
-          FROM PROFILE.PROFILE_REGISTRY
+          FROM CORE.PROFILE_REGISTRY
          WHERE RUN_ID = ? AND IS_CURRENT AND UPPER(COLUMN_NAME) = UPPER(?)
            AND (? = '' OR UPPER(TABLE_NAME) = UPPER(?))
          ORDER BY IS_CURRENT DESC LIMIT 1
@@ -202,8 +202,8 @@ def _line_context(session, run_id: str, payload: Dict[str, Any]) -> Dict[str, An
     line_id = payload.get("sttm_line_id")
     line = None
     if line_id:
-        found = rows(session, """SELECT L.*, S.DOMAIN_ID FROM CONTRACT.STTM_LINE L
-                                 JOIN CONTRACT.STTM_REGISTRY S ON S.STTM_ID = L.STTM_ID
+        found = rows(session, """SELECT L.*, S.DOMAIN_ID FROM CORE.STTM_LINE L
+                                 JOIN CORE.STTM_REGISTRY S ON S.STTM_ID = L.STTM_ID
                                  WHERE L.STTM_LINE_ID = ? AND S.RUN_ID = ?""", [line_id, run_id])
         assert found, "STTM line not found on this run"
         line = found[0]
@@ -304,11 +304,11 @@ def apply_transformation(session, run_id: str, payload_json: str) -> Dict[str, A
     ref = f"transform.{target_table}.{str(context['target_column']).upper()}" if target_table         else f"transform.{str(context['target_column']).upper()}"
     with tool_call(session, run_id, "apply_transformation",
                    {"target": context["target_column"], "sql": clip(sql, 400)}) as call:
-        session.sql("""UPDATE CONTRACT.STTM_LINE SET TRANSFORMATION = ?, MAPPING_TYPE = ?
+        session.sql("""UPDATE CORE.STTM_LINE SET TRANSFORMATION = ?, MAPPING_TYPE = ?
                        WHERE STTM_LINE_ID = ?""",
                     params=[sql, mapping_type, context["sttm_line_id"]]).collect()
         if context.get("decision_id"):
-            session.sql("UPDATE MAPPING.MAPPING_DECISION SET TRANSFORMATION = ? WHERE DECISION_ID = ?",
+            session.sql("UPDATE CORE.MAPPING_DECISION SET TRANSFORMATION = ? WHERE DECISION_ID = ?",
                         params=[sql, context["decision_id"]]).collect()
         if context.get("domain_id"):
             from services.knowledge.writer import remember
@@ -346,13 +346,13 @@ def export_sttm_csv(session, run_id: str) -> Dict[str, Any]:
     # this domain's rules for this target table only; a column name on another table is a different rule
     rules = rules_by_column(
         [variant(k["CONTENT_JSON"]) or {} for k in rows(
-            session, f"""SELECT CONTENT_JSON FROM KNOWLEDGE.DOMAIN_KNOWLEDGE
+            session, f"""SELECT CONTENT_JSON FROM CORE.DOMAIN_KNOWLEDGE
                           WHERE IS_CURRENT AND KNOWLEDGE_TYPE = 'TRANSFORMATION_RULE'
                             AND DOMAIN_ID = ? AND {NOT_OPERATIONAL_SQL}
                           ORDER BY UPDATED_AT NULLS FIRST""", [sttm["DOMAIN_ID"]])],
         (model[0]["TARGET_MODEL"] if model else None) or sttm.get("TARGET_TABLE"))
     lines = []
-    for r in rows(session, "SELECT * FROM CONTRACT.STTM_LINE WHERE STTM_ID = ? ORDER BY TARGET_COLUMN",
+    for r in rows(session, "SELECT * FROM CORE.STTM_LINE WHERE STTM_ID = ? ORDER BY TARGET_COLUMN",
                   [sttm["STTM_ID"]]):
         extra = rules.get((r["TARGET_COLUMN"] or "").upper()) or {}
         lines.append({
@@ -366,7 +366,7 @@ def export_sttm_csv(session, run_id: str) -> Dict[str, Any]:
         })
     csv_text = render_csv(lines)
     version = sttm["STTM_VERSION"]
-    stage_root = f"CODEGEN.DBT_STAGE/{run_id}/sttm"
+    stage_root = f"CORE.DBT_STAGE/{run_id}/sttm"
     filename = f"sttm_v{version}.csv"
     _put_text(session, stage_root, filename, csv_text)
     stage_path = f"@{stage_root}/{filename}"
@@ -391,8 +391,8 @@ def _run_columns(session, run_id: str) -> Dict[str, List[Dict[str, Any]]]:
     out: Dict[str, List[Dict[str, Any]]] = {}
     for c in rows(session, """
         SELECT T.SOURCE_TABLE, C.COLUMN_NAME, C.DATA_TYPE
-          FROM SOURCE.LANDING_TABLE_REGISTRY T
-          JOIN SOURCE.LANDING_COLUMN_REGISTRY C ON C.LANDING_ID = T.LANDING_ID
+          FROM CORE.LANDING_TABLE_REGISTRY T
+          JOIN CORE.LANDING_COLUMN_REGISTRY C ON C.LANDING_ID = T.LANDING_ID
          WHERE T.RUN_ID = ? AND T.INGESTION_STATUS = 'COMPLETE'
        QUALIFY DENSE_RANK() OVER (PARTITION BY T.SOURCE_TABLE ORDER BY T.CREATED_AT DESC) = 1
          ORDER BY T.SOURCE_TABLE, C.ORDINAL_POSITION """, [run_id]):
@@ -411,8 +411,8 @@ def _value_relationships(session, run_id: str, docs: Dict[str, Dict[str, Any]]) 
     try:
         for r in rows(session, """
             SELECT T.SOURCE_TABLE, T.LANDING_DATABASE, T.LANDING_SCHEMA, T.LANDING_TABLE, C.COLUMN_NAME
-              FROM SOURCE.LANDING_TABLE_REGISTRY T
-              JOIN SOURCE.LANDING_COLUMN_REGISTRY C ON C.LANDING_ID = T.LANDING_ID
+              FROM CORE.LANDING_TABLE_REGISTRY T
+              JOIN CORE.LANDING_COLUMN_REGISTRY C ON C.LANDING_ID = T.LANDING_ID
              WHERE T.RUN_ID = ? AND T.INGESTION_STATUS = 'COMPLETE'
            QUALIFY DENSE_RANK() OVER (PARTITION BY T.SOURCE_TABLE ORDER BY T.CREATED_AT DESC) = 1""", [run_id]):
             key = str(r["SOURCE_TABLE"]).upper()
@@ -429,7 +429,7 @@ def _profile_docs(session, run_id: str) -> Dict[str, Dict[str, Any]]:
     """The run's current column profiles in the shape services.profiling.insights reads."""
     docs: Dict[str, Dict[str, Any]] = {}
     for p in rows(session, """SELECT TABLE_NAME, COLUMN_NAME, POTENTIAL_KEY_FLAG, PII_CLASSIFICATION, STATISTICS_JSON
-                              FROM PROFILE.PROFILE_REGISTRY WHERE RUN_ID = ? AND IS_CURRENT """, [run_id]):
+                              FROM CORE.PROFILE_REGISTRY WHERE RUN_ID = ? AND IS_CURRENT """, [run_id]):
         stats = variant(p["STATISTICS_JSON"]) or {}
         docs.setdefault(str(p["TABLE_NAME"]).upper(), {"columns": []})["columns"].append({
             "column_name": str(p["COLUMN_NAME"]).upper(), "family": stats.get("family"),
@@ -447,7 +447,7 @@ def plan_joins(session, run_id: str, lines: List[Dict[str, Any]]) -> Dict[str, A
 
     columns = _run_columns(session, run_id)
     tables = sorted(columns)
-    prior = rows(session, """SELECT TABLE_DESIGN:join_graph AS G FROM CONTRACT.STTM_REGISTRY
+    prior = rows(session, """SELECT TABLE_DESIGN:join_graph AS G FROM CORE.STTM_REGISTRY
                               WHERE RUN_ID = ? AND TABLE_DESIGN:join_graph:edited::BOOLEAN
                               ORDER BY STTM_VERSION DESC LIMIT 1""", [run_id])
     if prior:
@@ -485,13 +485,13 @@ def update_join_graph(session, run_id: str, payload_json: str) -> Dict[str, Any]
     design.update(join_graph=graph, driving_table=graph["driving_table"],
                   join_paths=[j["condition"] for j in graph["joins"]])
     logic = join_logic_by_table(graph)
-    session.sql("UPDATE CONTRACT.STTM_REGISTRY SET TABLE_DESIGN = PARSE_JSON(?) WHERE STTM_ID = ?",
+    session.sql("UPDATE CORE.STTM_REGISTRY SET TABLE_DESIGN = PARSE_JSON(?) WHERE STTM_ID = ?",
                 params=[json.dumps(design), sttm["STTM_ID"]]).collect()
     # joins removed by the edit must not keep their old JOIN_LOGIC on the lines
-    session.sql("UPDATE CONTRACT.STTM_LINE SET JOIN_LOGIC = NULL WHERE STTM_ID = ?",
+    session.sql("UPDATE CORE.STTM_LINE SET JOIN_LOGIC = NULL WHERE STTM_ID = ?",
                 params=[sttm["STTM_ID"]]).collect()
     for table, text in logic.items():
-        session.sql("UPDATE CONTRACT.STTM_LINE SET JOIN_LOGIC = ? WHERE STTM_ID = ? AND UPPER(SOURCE_TABLE) = ?",
+        session.sql("UPDATE CORE.STTM_LINE SET JOIN_LOGIC = ? WHERE STTM_ID = ? AND UPPER(SOURCE_TABLE) = ?",
                     params=[text, sttm["STTM_ID"], table]).collect()
     _record_run_event(session, run, "HUMAN", "join plan edited",
                       {"driving_table": graph["driving_table"], "joins": len(graph["joins"]),

@@ -23,6 +23,7 @@ from pydantic import BaseModel, Field
 
 from app.agent import AGENT_NAME, stream_agent
 from app.source_invoke import USE_CALLER, invoke_source
+from services.common.platform_schema import PLATFORM_SCHEMA
 from app.db import (
     AUTH_MODE, DATABASE, WAREHOUSE, Db, SnowflakeSessionError,
     apply_work_role, close_session, dev_db, list_grantable_roles, lookup_session, open_pat_session, transaction,
@@ -207,7 +208,7 @@ class SodaDecisions(BaseModel):
 
 
 class DbtPlan(BaseModel):
-    # the repository comes from Admin, Integrations (CODE.REPO); origin, clone and integration are resolved server-side
+    # the repository comes from Admin, Integrations (CORE.REPO); origin, clone and integration are resolved server-side
     code_repo_id: Optional[str] = Field(default=None, max_length=36)
     base_branch: Optional[str] = Field(default=None, max_length=200)
     cut_branch: Optional[str] = Field(default=None, max_length=200)
@@ -412,8 +413,8 @@ def list_runs(include_test: bool = False, status: str = "all", limit: int = 200,
     try:
         rows = db.query(
             f"""
-            WITH SEL AS (SELECT RUN_ID, COUNT(*) AS N FROM SOURCE.SOURCE_OBJECT WHERE SELECTED_FLAG GROUP BY RUN_ID),
-                 LAND AS (SELECT RUN_ID, COUNT(DISTINCT SOURCE_TABLE) AS N FROM SOURCE.LANDING_TABLE_REGISTRY
+            WITH SEL AS (SELECT RUN_ID, COUNT(*) AS N FROM CORE.SOURCE_OBJECT WHERE SELECTED_FLAG GROUP BY RUN_ID),
+                 LAND AS (SELECT RUN_ID, COUNT(DISTINCT SOURCE_TABLE) AS N FROM CORE.LANDING_TABLE_REGISTRY
                            WHERE INGESTION_STATUS = 'COMPLETE' GROUP BY RUN_ID)
             SELECT R.RUN_ID, R.RUN_NAME, R.CURRENT_STATE, R.CURRENT_STAGE, R.STATUS, R.TARGET_MODEL, R.DOMAIN_ID,
                    R.CREATED_BY, R.CREATED_AT::VARCHAR AS CREATED_AT, R.UPDATED_AT::VARCHAR AS UPDATED_AT,
@@ -423,8 +424,8 @@ def list_runs(include_test: bool = False, status: str = "all", limit: int = 200,
                    COALESCE(SEL.N, 0) AS SELECTED_TABLES, COALESCE(LAND.N, 0) AS LANDED_TABLES,
                    COALESCE(R.PIPELINE, 'SILVER') AS PIPELINE, COUNT(*) OVER () AS TOTAL_MATCHES
               FROM CORE.WORKFLOW_RUN R
-              LEFT JOIN SOURCE.SOURCE_REGISTRY S ON S.SOURCE_SYSTEM_ID = R.SOURCE_SYSTEM_ID
-              LEFT JOIN KNOWLEDGE.DOMAIN_REGISTRY D ON D.DOMAIN_ID = R.DOMAIN_ID
+              LEFT JOIN CORE.SOURCE_REGISTRY S ON S.SOURCE_SYSTEM_ID = R.SOURCE_SYSTEM_ID
+              LEFT JOIN CORE.DOMAIN_REGISTRY D ON D.DOMAIN_ID = R.DOMAIN_ID
               LEFT JOIN SEL ON SEL.RUN_ID = R.RUN_ID
               LEFT JOIN LAND ON LAND.RUN_ID = R.RUN_ID
              WHERE {filtered_where}
@@ -583,9 +584,9 @@ def _qa_signoff(db: Db, run_id: str) -> Optional[dict]:
     try:
         found = db.query(
             """SELECT Q.DECISION, Q.NOTE, Q.DECIDED_BY, Q.DECIDED_AT::VARCHAR AS DECIDED_AT, Q.STTM_ID
-                 FROM CONTRACT.QA_SIGNOFF Q
+                 FROM CORE.QA_SIGNOFF Q
                 WHERE Q.RUN_ID = %s
-                  AND Q.STTM_ID IS NOT DISTINCT FROM (SELECT STTM_ID FROM CONTRACT.STTM_REGISTRY WHERE RUN_ID = %s
+                  AND Q.STTM_ID IS NOT DISTINCT FROM (SELECT STTM_ID FROM CORE.STTM_REGISTRY WHERE RUN_ID = %s
                                                        AND STATUS IN ('APPROVED', 'REVIEW')
                                                      ORDER BY STTM_VERSION DESC LIMIT 1)
                 ORDER BY Q.DECIDED_AT DESC LIMIT 1""", (run_id, run_id))
@@ -602,7 +603,7 @@ def _run_lanes(db: Db, run_id: str, current_state: Optional[str]) -> Optional[di
         return None
     try:
         counts = {r["status"]: int(r["n"]) for r in db.query(
-            """SELECT STATUS, COUNT(*) AS N FROM CONTRACT.SODA_EXPECTATION_REGISTRY
+            """SELECT STATUS, COUNT(*) AS N FROM CORE.SODA_EXPECTATION_REGISTRY
                 WHERE RUN_ID = %s AND IS_CURRENT GROUP BY STATUS""", (run_id,))}
     except Exception:
         counts = {}
@@ -618,7 +619,7 @@ def _domain_id_for_target(db: Db, target_model: Optional[str], domain_id: Option
     if len(parts) == 3:
         found = db.query(
             """
-            SELECT DOMAIN_ID FROM KNOWLEDGE.TARGET_TABLE_REGISTRY
+            SELECT DOMAIN_ID FROM CORE.TARGET_TABLE_REGISTRY
              WHERE ACTIVE_FLAG AND UPPER(TARGET_DATABASE) = UPPER(%s) AND UPPER(TARGET_SCHEMA) = UPPER(%s)
                AND UPPER(TARGET_TABLE) = UPPER(%s)
              ORDER BY CREATED_AT LIMIT 1
@@ -628,7 +629,7 @@ def _domain_id_for_target(db: Db, target_model: Optional[str], domain_id: Option
         return found[0]["domain_id"] if found else None
     # A bare table name is ambiguous across domains (ADDRESS exists in several); only accept a unique match.
     found = db.query(
-        "SELECT DISTINCT DOMAIN_ID FROM KNOWLEDGE.TARGET_TABLE_REGISTRY WHERE ACTIVE_FLAG AND UPPER(TARGET_TABLE) = UPPER(%s)",
+        "SELECT DISTINCT DOMAIN_ID FROM CORE.TARGET_TABLE_REGISTRY WHERE ACTIVE_FLAG AND UPPER(TARGET_TABLE) = UPPER(%s)",
         (parts[-1],),
     )
     return found[0]["domain_id"] if len(found) == 1 else None
@@ -727,7 +728,7 @@ def _register_from_intent(db: Db, run_id: str, intent: dict, created: dict) -> d
         "STORAGE_TYPE": target.get("storage_type"),
     }
     try:
-        registered = _source_call(db, "CALL SOURCE.REGISTER_SOURCE(%s, %s)", register_source_handler, run_id,
+        registered = _source_call(db, "CALL CORE.REGISTER_SOURCE(%s, %s)", register_source_handler, run_id,
                                   json.dumps({k: v for k, v in payload.items() if v}))
     except Exception as exc:
         return {**created, "registration_error": _snowflake_error(exc).detail}
@@ -789,7 +790,7 @@ def get_run(run_id: str, db: Db = Depends(current_db)):
                    R.ENVIRONMENT, R.CREATED_BY, R.CREATED_AT::VARCHAR AS CREATED_AT,
                    R.DOMAIN_ID, D.DOMAIN_NAME{extra}
               FROM CORE.WORKFLOW_RUN R
-              LEFT JOIN KNOWLEDGE.DOMAIN_REGISTRY D ON D.DOMAIN_ID = R.DOMAIN_ID
+              LEFT JOIN CORE.DOMAIN_REGISTRY D ON D.DOMAIN_ID = R.DOMAIN_ID
              WHERE R.RUN_ID = %s
             """
         try:
@@ -831,7 +832,7 @@ def get_model_graph(run_id: str, db: Db = Depends(current_db)):
     sources = db.query(
         """
         SELECT OBJECT_NAME, OBJECT_TYPE, ROW_COUNT_ESTIMATE, SELECTED_FLAG
-          FROM SOURCE.SOURCE_OBJECT WHERE RUN_ID = %s
+          FROM CORE.SOURCE_OBJECT WHERE RUN_ID = %s
          ORDER BY OBJECT_NAME
         """,
         (run_id,),
@@ -845,7 +846,7 @@ def get_model_graph(run_id: str, db: Db = Depends(current_db)):
     profile = db.query(
         """
         SELECT TABLE_NAME, COLUMN_NAME, DATA_TYPE, SEMANTIC_TYPE, POTENTIAL_KEY_FLAG
-          FROM PROFILE.PROFILE_REGISTRY
+          FROM CORE.PROFILE_REGISTRY
          WHERE RUN_ID = %s AND IS_CURRENT
          ORDER BY TABLE_NAME, COLUMN_NAME
         """,
@@ -855,8 +856,8 @@ def get_model_graph(run_id: str, db: Db = Depends(current_db)):
         """
         SELECT T.TARGET_TABLE_ID, D.DOMAIN_NAME, T.DOMAIN_ID, T.TARGET_DATABASE, T.TARGET_SCHEMA,
                T.TARGET_TABLE, T.TABLE_TYPE, T.GRAIN
-          FROM KNOWLEDGE.TARGET_TABLE_REGISTRY T
-          JOIN KNOWLEDGE.DOMAIN_REGISTRY D ON D.DOMAIN_ID = T.DOMAIN_ID
+          FROM CORE.TARGET_TABLE_REGISTRY T
+          JOIN CORE.DOMAIN_REGISTRY D ON D.DOMAIN_ID = T.DOMAIN_ID
          WHERE T.ACTIVE_FLAG AND COALESCE(T.LAYER, 'SILVER') = %s
          ORDER BY T.TARGET_TABLE
         """, (layer,)
@@ -865,8 +866,8 @@ def get_model_graph(run_id: str, db: Db = Depends(current_db)):
     for col in db.query(
         """
         SELECT T.TARGET_TABLE, C.COLUMN_NAME
-          FROM KNOWLEDGE.TARGET_COLUMN_REGISTRY C
-          JOIN KNOWLEDGE.TARGET_TABLE_REGISTRY T ON T.TARGET_TABLE_ID = C.TARGET_TABLE_ID
+          FROM CORE.TARGET_COLUMN_REGISTRY C
+          JOIN CORE.TARGET_TABLE_REGISTRY T ON T.TARGET_TABLE_ID = C.TARGET_TABLE_ID
          WHERE T.ACTIVE_FLAG AND COALESCE(T.LAYER, 'SILVER') = %s
         """, (layer,)
     ):
@@ -902,11 +903,11 @@ def get_model_graph(run_id: str, db: Db = Depends(current_db)):
         mappings = db.query(
             """
             SELECT TBL.SOURCE_TABLE, TGT.TARGET_TABLE, COUNT(*) AS EDGES
-              FROM MAPPING.MAPPING_DECISION D
-              JOIN SOURCE.LANDING_COLUMN_REGISTRY L ON L.LANDING_COLUMN_ID = D.SOURCE_COLUMN_ID
-              JOIN SOURCE.LANDING_TABLE_REGISTRY TBL ON TBL.LANDING_ID = L.LANDING_ID
-              JOIN KNOWLEDGE.TARGET_COLUMN_REGISTRY C ON C.TARGET_COLUMN_ID = D.TARGET_COLUMN_ID
-              JOIN KNOWLEDGE.TARGET_TABLE_REGISTRY TGT ON TGT.TARGET_TABLE_ID = C.TARGET_TABLE_ID
+              FROM CORE.MAPPING_DECISION D
+              JOIN CORE.LANDING_COLUMN_REGISTRY L ON L.LANDING_COLUMN_ID = D.SOURCE_COLUMN_ID
+              JOIN CORE.LANDING_TABLE_REGISTRY TBL ON TBL.LANDING_ID = L.LANDING_ID
+              JOIN CORE.TARGET_COLUMN_REGISTRY C ON C.TARGET_COLUMN_ID = D.TARGET_COLUMN_ID
+              JOIN CORE.TARGET_TABLE_REGISTRY TGT ON TGT.TARGET_TABLE_ID = C.TARGET_TABLE_ID
              WHERE D.RUN_ID = %s AND D.IS_CURRENT AND D.DECISION <> 'REJECTED' AND D.TARGET_COLUMN_ID IS NOT NULL
              GROUP BY TBL.SOURCE_TABLE, TGT.TARGET_TABLE
             """,
@@ -1015,7 +1016,7 @@ def pin_run_model(db: Db, run_id: str, model_id: str, version: int, entity: str,
     if state not in MODEL_APPLY_STATES:
         return {"run_id": run_id, "pinned": False, "state": state,
                 "detail": f"The run is at {state}; reopen mapping to use the new model"}
-    result = _source_call(db, "CALL MODELING.PIN_RUN_MODEL(%s, %s, %s, %s, %s)", pin_run, run_id, model_id, int(version),
+    result = _source_call(db, "CALL CORE.PIN_RUN_MODEL(%s, %s, %s, %s, %s)", pin_run, run_id, model_id, int(version),
                           entity, int(design_version or 0))
     sent_back = False
     if state == "MAPPING_REVIEW":
@@ -1143,7 +1144,7 @@ def approve_model_design(run_id: str, version: int, db: Db = Depends(current_db)
         raise HTTPException(409, f"The run is at {state}. Reopen mapping before changing the target model; "
                                  "you can still edit and save versions.")
     try:
-        result = _source_call(db, "CALL MODELING.APPLY_MODEL_DESIGN(%s, %s)", apply_design, run_id, version)
+        result = _source_call(db, "CALL CORE.APPLY_MODEL_DESIGN(%s, %s)", apply_design, run_id, version)
     except AssertionError as exc:
         raise HTTPException(409, str(exc)) from exc
     except Exception as exc:
@@ -1165,7 +1166,7 @@ def model_design_diff(run_id: str, base: int, compare: int, db: Db = Depends(cur
     from services.modeling.design import diff
 
     found = {r["version"]: _json(r["design_json"]) or {} for r in db.query(
-        "SELECT VERSION, DESIGN_JSON FROM MODELING.MODEL_DESIGN WHERE RUN_ID = %s AND VERSION IN (%s, %s)",
+        "SELECT VERSION, DESIGN_JSON FROM CORE.MODEL_DESIGN WHERE RUN_ID = %s AND VERSION IN (%s, %s)",
         (run_id, base, compare))}
     if base not in found or compare not in found:
         raise HTTPException(404, "version not found")
@@ -1280,7 +1281,7 @@ def source_connections(db: Db = Depends(current_db)):
                (SELECT COUNT(*) FROM CORE.WORKFLOW_RUN R WHERE R.SOURCE_SYSTEM_ID = S.SOURCE_SYSTEM_ID) AS RUNS,
                (SELECT MAX(R.CREATED_AT)::VARCHAR FROM CORE.WORKFLOW_RUN R
                  WHERE R.SOURCE_SYSTEM_ID = S.SOURCE_SYSTEM_ID) AS LAST_RUN_AT
-          FROM SOURCE.SOURCE_REGISTRY S
+          FROM CORE.SOURCE_REGISTRY S
          WHERE S.ACTIVE_FLAG
          ORDER BY LAST_RUN_AT DESC NULLS LAST, S.SOURCE_SYSTEM_NAME
         """
@@ -1293,7 +1294,7 @@ def source_catalog(connection_id: str, database: str = "", schema: str = "", db:
     from services.source.procedures import fetch_schema_catalog
 
     try:
-        return _source_call(db, "CALL SOURCE.FETCH_SCHEMA_CATALOG(%s, %s, %s)", fetch_schema_catalog,
+        return _source_call(db, "CALL CORE.FETCH_SCHEMA_CATALOG(%s, %s, %s)", fetch_schema_catalog,
                             connection_id, database or None, schema or None)
     except Exception as exc:
         raise _snowflake_error(exc) from exc
@@ -1330,7 +1331,7 @@ def cached_profiles(database: str, schema: str, db: Db = Depends(current_db)):
             """
             SELECT SOURCE_NAME, DATABASE_NAME, SCHEMA_NAME, TABLE_NAME, ROW_COUNT, COLUMN_COUNT, IS_APPROXIMATE,
                    PROFILED_IN_RUN, PROFILED_BY, PROFILED_AT::VARCHAR AS PROFILED_AT
-              FROM METADATA.TABLE_PROFILES
+              FROM CORE.TABLE_PROFILES
              WHERE DATABASE_NAME = %s AND SCHEMA_NAME = %s
              ORDER BY TABLE_NAME
             """,
@@ -1356,7 +1357,7 @@ def set_landing_target(run_id: str, body: LandingTarget, db: Db = Depends(curren
     payload = json.dumps({"landing_database": body.landing_database or DATABASE,
                           "landing_schema": body.landing_schema, "storage_type": body.storage_type})
     try:
-        return _source_call(db, "CALL SOURCE.SET_LANDING_TARGET(%s, %s)", set_landing_target_handler,
+        return _source_call(db, "CALL CORE.SET_LANDING_TARGET(%s, %s)", set_landing_target_handler,
                             run_id, payload)
     except Exception as exc:
         raise _snowflake_error(exc) from exc
@@ -1408,8 +1409,8 @@ def _targets_with_columns(db: Db) -> list[dict]:
         """
         SELECT T.TARGET_TABLE_ID, D.DOMAIN_ID, D.DOMAIN_NAME, T.TARGET_DATABASE, T.TARGET_SCHEMA,
                T.TARGET_TABLE, T.TABLE_TYPE, T.GRAIN
-          FROM KNOWLEDGE.TARGET_TABLE_REGISTRY T
-          JOIN KNOWLEDGE.DOMAIN_REGISTRY D ON D.DOMAIN_ID = T.DOMAIN_ID
+          FROM CORE.TARGET_TABLE_REGISTRY T
+          JOIN CORE.DOMAIN_REGISTRY D ON D.DOMAIN_ID = T.DOMAIN_ID
          WHERE T.ACTIVE_FLAG AND COALESCE(T.LAYER, 'SILVER') = 'SILVER'
          ORDER BY T.TARGET_TABLE
         """
@@ -1417,8 +1418,8 @@ def _targets_with_columns(db: Db) -> list[dict]:
     cols = db.query(
         """
         SELECT T.TARGET_TABLE, C.COLUMN_NAME
-          FROM KNOWLEDGE.TARGET_COLUMN_REGISTRY C
-          JOIN KNOWLEDGE.TARGET_TABLE_REGISTRY T ON T.TARGET_TABLE_ID = C.TARGET_TABLE_ID
+          FROM CORE.TARGET_COLUMN_REGISTRY C
+          JOIN CORE.TARGET_TABLE_REGISTRY T ON T.TARGET_TABLE_ID = C.TARGET_TABLE_ID
          WHERE T.ACTIVE_FLAG AND COALESCE(T.LAYER, 'SILVER') = 'SILVER'
         """
     )
@@ -1470,7 +1471,7 @@ def _match_knowledge(db: Db, tables: list[str]) -> dict:
     history: list[dict] = []
     lineage: dict[str, set] = {}
     try:
-        for k in db.query("SELECT CONTENT_JSON FROM KNOWLEDGE.DOMAIN_KNOWLEDGE WHERE IS_CURRENT AND STATUS = 'ACTIVE' "
+        for k in db.query("SELECT CONTENT_JSON FROM CORE.DOMAIN_KNOWLEDGE WHERE IS_CURRENT AND STATUS = 'ACTIVE' "
                           "AND KNOWLEDGE_TYPE = 'GLOSSARY'"):
             content = _json(k.get("content_json")) or {}
             target = norm(content.get("target_column"))
@@ -1482,7 +1483,7 @@ def _match_knowledge(db: Db, tables: list[str]) -> dict:
     try:
         history = db.query("""SELECT DISTINCT UPPER(O.OBJECT_NAME) AS SOURCE_TABLE, UPPER(R.TARGET_MODEL) AS TARGET_FQN,
                                      R.RUN_NAME, R.RUN_ID
-                                FROM CORE.WORKFLOW_RUN R JOIN SOURCE.SOURCE_OBJECT O ON O.RUN_ID = R.RUN_ID AND O.SELECTED_FLAG
+                                FROM CORE.WORKFLOW_RUN R JOIN CORE.SOURCE_OBJECT O ON O.RUN_ID = R.RUN_ID AND O.SELECTED_FLAG
                                WHERE R.TARGET_MODEL IS NOT NULL AND R.DELETED_AT IS NULL
                                  AND R.CURRENT_STATE NOT IN ('DRAFT', 'SOURCE_PENDING', 'SOURCE_REGISTERED', 'CANCELLED')
                                  AND ARRAY_CONTAINS(UPPER(O.OBJECT_NAME)::VARIANT, PARSE_JSON(%s)::ARRAY)""",
@@ -1490,7 +1491,7 @@ def _match_knowledge(db: Db, tables: list[str]) -> dict:
     except Exception:
         history = []
     try:
-        for k in db.query("SELECT CONTENT_JSON FROM KNOWLEDGE.DOMAIN_KNOWLEDGE WHERE IS_CURRENT AND STATUS = 'ACTIVE' "
+        for k in db.query("SELECT CONTENT_JSON FROM CORE.DOMAIN_KNOWLEDGE WHERE IS_CURRENT AND STATUS = 'ACTIVE' "
                           "AND KNOWLEDGE_TYPE = 'MODEL_DEFINITION' AND CONTENT_JSON:fqn IS NOT NULL"):
             content = _json(k.get("content_json")) or {}
             sources = {str(s).split(".")[0].upper() for c in content.get("columns") or [] for s in c.get("source_columns") or []}
@@ -1733,7 +1734,7 @@ def _domain_snapshot(db: Db, domain_id: Optional[str], kind: str, note: Optional
 def create_domain(body: CreateDomain, db: Db = Depends(current_db)):
     name = body.domain_name.strip()
     existing = db.query(
-        "SELECT DOMAIN_ID, DOMAIN_NAME, ACTIVE_FLAG FROM KNOWLEDGE.DOMAIN_REGISTRY WHERE UPPER(DOMAIN_NAME) = UPPER(%s)",
+        "SELECT DOMAIN_ID, DOMAIN_NAME, ACTIVE_FLAG FROM CORE.DOMAIN_REGISTRY WHERE UPPER(DOMAIN_NAME) = UPPER(%s)",
         (name,),
     )
     if existing:
@@ -1747,7 +1748,7 @@ def create_domain(body: CreateDomain, db: Db = Depends(current_db)):
     try:
         db.execute(
             """
-            INSERT INTO KNOWLEDGE.DOMAIN_REGISTRY (DOMAIN_ID, DOMAIN_NAME, DESCRIPTION, OWNER)
+            INSERT INTO CORE.DOMAIN_REGISTRY (DOMAIN_ID, DOMAIN_NAME, DESCRIPTION, OWNER)
             SELECT %s, %s, %s, CURRENT_USER()
             """,
             (domain_id, name, body.description),
@@ -1755,7 +1756,7 @@ def create_domain(body: CreateDomain, db: Db = Depends(current_db)):
     except Exception as exc:
         raise _snowflake_error(exc) from exc
     if _has_domain_members(db):  # whoever creates a domain owns it
-        db.execute("""MERGE INTO KNOWLEDGE.DOMAIN_MEMBER T USING (SELECT %s AS DOMAIN_ID, CURRENT_USER() AS USER_NAME) S
+        db.execute("""MERGE INTO CORE.DOMAIN_MEMBER T USING (SELECT %s AS DOMAIN_ID, CURRENT_USER() AS USER_NAME) S
                          ON T.DOMAIN_ID = S.DOMAIN_ID AND T.USER_NAME = S.USER_NAME AND T.ROLE = 'OWNER'
                       WHEN NOT MATCHED THEN INSERT (DOMAIN_ID, USER_NAME, ROLE) VALUES (S.DOMAIN_ID, S.USER_NAME, 'OWNER')""",
                    (domain_id,))
@@ -1765,7 +1766,7 @@ def create_domain(body: CreateDomain, db: Db = Depends(current_db)):
 
 def _has_domain_members(db: Db) -> bool:
     try:
-        db.query("SELECT 1 FROM KNOWLEDGE.DOMAIN_MEMBER LIMIT 1")
+        db.query("SELECT 1 FROM CORE.DOMAIN_MEMBER LIMIT 1")
         return True
     except Exception:
         return False
@@ -1788,10 +1789,10 @@ def list_targets(db: Db = Depends(current_db)):
         """
         SELECT T.TARGET_TABLE_ID, D.DOMAIN_NAME, T.TARGET_DATABASE, T.TARGET_SCHEMA, T.TARGET_TABLE,
                T.TABLE_TYPE, T.GRAIN,
-               (SELECT COUNT(*) FROM KNOWLEDGE.TARGET_COLUMN_REGISTRY C
+               (SELECT COUNT(*) FROM CORE.TARGET_COLUMN_REGISTRY C
                  WHERE C.TARGET_TABLE_ID = T.TARGET_TABLE_ID) AS COLUMNS
-          FROM KNOWLEDGE.TARGET_TABLE_REGISTRY T
-          JOIN KNOWLEDGE.DOMAIN_REGISTRY D ON D.DOMAIN_ID = T.DOMAIN_ID
+          FROM CORE.TARGET_TABLE_REGISTRY T
+          JOIN CORE.DOMAIN_REGISTRY D ON D.DOMAIN_ID = T.DOMAIN_ID
          WHERE T.ACTIVE_FLAG AND COALESCE(T.LAYER, 'SILVER') = 'SILVER'
          ORDER BY T.TARGET_TABLE
         """
@@ -1843,13 +1844,13 @@ def register_target(body: TargetBind, db: Db = Depends(current_db)):
         } for c in raw],
     }
     try:
-        return db.call("CALL KNOWLEDGE.REGISTER_TARGET_TABLE(%s)", (json.dumps(payload),))
+        return db.call("CALL CORE.REGISTER_TARGET_TABLE(%s)", (json.dumps(payload),))
     except Exception as exc:
         raise _snowflake_error(exc) from exc
 
 
 def _record_cost(db: Db, run_id: str, stage: str, model: Optional[str], usage: Optional[dict], started: float) -> None:
-    """AUDIT.COST_USAGE row for an AI call the API makes directly (same rate table as the procedures).
+    """CORE.COST_USAGE row for an AI call the API makes directly (same rate table as the procedures).
     Never fails the request it describes."""
     try:
         from services.common.cost import estimate, rates_for
@@ -1861,7 +1862,7 @@ def _record_cost(db: Db, run_id: str, stage: str, model: Optional[str], usage: O
                           _config(db, "CALIBRATED_RATES", {}) or {},
                           _config(db, "CREDITS_PER_MILLION_TOKENS", {}) or {})
         db.execute(
-            """INSERT INTO AUDIT.COST_USAGE (COST_USAGE_ID, RUN_ID, STAGE, AGENT, MODEL, INPUT_TOKENS, OUTPUT_TOKENS,
+            """INSERT INTO CORE.COST_USAGE (COST_USAGE_ID, RUN_ID, STAGE, AGENT, MODEL, INPUT_TOKENS, OUTPUT_TOKENS,
                    TOTAL_TOKENS, TOOL_CALL_COUNT, SEARCH_CALL_COUNT, CODE_CALL_COUNT, DURATION_MS, ESTIMATED_COST,
                    QUERY_ID, COST_SOURCE)
                SELECT %s, %s, %s, 'PLATFORM', %s, %s, %s, %s, 1, 0, 0, %s, %s, %s, %s""",
@@ -1919,7 +1920,7 @@ def register_source(run_id: str, body: RegisterSource, db: Db = Depends(current_
     try:
         return _source_call(
             db,
-            "CALL SOURCE.REGISTER_SOURCE(%s, %s)",
+            "CALL CORE.REGISTER_SOURCE(%s, %s)",
             register_source_handler,
             run_id,
             payload_json,
@@ -1936,7 +1937,7 @@ def validate_access(run_id: str, body: AccessRequest, db: Db = Depends(current_d
     try:
         return _source_call(
             db,
-            "CALL SOURCE.VALIDATE_SOURCE_ACCESS(%s, %s)",
+            "CALL CORE.VALIDATE_SOURCE_ACCESS(%s, %s)",
             validate_source_access,
             run_id,
             selected_json,
@@ -1950,7 +1951,7 @@ def execute_landing(run_id: str, db: Db = Depends(current_db)):
     from services.source.procedures import execute_landing as execute_landing_handler
 
     try:
-        return _source_call(db, "CALL SOURCE.EXECUTE_LANDING(%s)", execute_landing_handler, run_id)
+        return _source_call(db, "CALL CORE.EXECUTE_LANDING(%s)", execute_landing_handler, run_id)
     except Exception as exc:
         raise _snowflake_error(exc) from exc
 
@@ -1987,7 +1988,7 @@ def prepare_source(run_id: str, body: AccessRequest, db: Db = Depends(current_db
             result = execute_landing(run_id, db) or {}
             out.update(tables=result.get("tables", []), state=result.get("state"))
             state = result.get("state") if isinstance(result.get("state"), dict) else {}
-            selected = db.query("SELECT COUNT(*) AS N FROM SOURCE.SOURCE_OBJECT WHERE RUN_ID = %s AND SELECTED_FLAG",
+            selected = db.query("SELECT COUNT(*) AS N FROM CORE.SOURCE_OBJECT WHERE RUN_ID = %s AND SELECTED_FLAG",
                                 (run_id,))
             wanted = int(selected[0]["n"] or 0) if selected else 0
             landed = sum(1 for t in out["tables"] if t.get("status") == "COMPLETE")
@@ -2006,7 +2007,7 @@ def source_overview(run_id: str, db: Db = Depends(current_db)):
         SELECT S.SOURCE_SYSTEM_ID, S.SOURCE_SYSTEM_NAME, S.SOURCE_TYPE, S.OWNER, S.SECURITY_CLASSIFICATION,
                R.SOURCE_DATABASE, R.SOURCE_SCHEMA
           FROM CORE.WORKFLOW_RUN R
-          JOIN SOURCE.SOURCE_REGISTRY S ON S.SOURCE_SYSTEM_ID = R.SOURCE_SYSTEM_ID
+          JOIN CORE.SOURCE_REGISTRY S ON S.SOURCE_SYSTEM_ID = R.SOURCE_SYSTEM_ID
          WHERE R.RUN_ID = %s
         """,
         (run_id,),
@@ -2015,14 +2016,14 @@ def source_overview(run_id: str, db: Db = Depends(current_db)):
         """
         SELECT OBJECT_NAME, OBJECT_TYPE, ROW_COUNT_ESTIMATE, BYTES, LAST_ALTERED::VARCHAR AS LAST_ALTERED,
                SELECTED_FLAG
-          FROM SOURCE.SOURCE_OBJECT WHERE RUN_ID = %s ORDER BY OBJECT_NAME
+          FROM CORE.SOURCE_OBJECT WHERE RUN_ID = %s ORDER BY OBJECT_NAME
         """,
         (run_id,),
     )
     checks = db.query(
         """
         SELECT CHECK_NAME, STATUS, DETAIL, REMEDIATION, CHECKED_AT::VARCHAR AS CHECKED_AT
-          FROM SOURCE.SOURCE_ACCESS_CHECK WHERE RUN_ID = %s ORDER BY CHECKED_AT DESC, CHECK_NAME
+          FROM CORE.SOURCE_ACCESS_CHECK WHERE RUN_ID = %s ORDER BY CHECKED_AT DESC, CHECK_NAME
         """,
         (run_id,),
     )
@@ -2031,8 +2032,8 @@ def source_overview(run_id: str, db: Db = Depends(current_db)):
         SELECT T.LANDING_ID, T.SOURCE_TABLE, T.LANDING_DATABASE || '.' || T.LANDING_SCHEMA || '.' || T.LANDING_TABLE
                  AS LANDING_TABLE, T.INGESTION_METHOD, T.INGESTION_STATUS, T.SOURCE_ROW_COUNT, T.ROW_COUNT,
                T.QUERY_ID, T.ERROR_MESSAGE, T.CREATED_AT::VARCHAR AS CREATED_AT,
-               (SELECT COUNT(*) FROM SOURCE.LANDING_COLUMN_REGISTRY C WHERE C.LANDING_ID = T.LANDING_ID) AS COLUMNS
-          FROM SOURCE.LANDING_TABLE_REGISTRY T WHERE T.RUN_ID = %s ORDER BY T.CREATED_AT DESC, T.SOURCE_TABLE
+               (SELECT COUNT(*) FROM CORE.LANDING_COLUMN_REGISTRY C WHERE C.LANDING_ID = T.LANDING_ID) AS COLUMNS
+          FROM CORE.LANDING_TABLE_REGISTRY T WHERE T.RUN_ID = %s ORDER BY T.CREATED_AT DESC, T.SOURCE_TABLE
         """,
         (run_id,),
     )
@@ -2097,7 +2098,7 @@ def recent_audit(run_id: Optional[str] = None, actor_type: Optional[str] = None,
 @app.get("/api/costs")
 def costs(group_by: str = "stage", since: Optional[str] = None, until: Optional[str] = None, limit: int = 50,
           db: Db = Depends(current_db)):
-    """AI usage and estimated cost from AUDIT.COST_USAGE, grouped by stage, model, run or day."""
+    """AI usage and estimated cost from CORE.COST_USAGE, grouped by stage, model, run or day."""
     from services.workflow.listing import cost_query
 
     try:
@@ -2139,7 +2140,7 @@ def metrics_summary(db: Db = Depends(current_db)):
                                   COALESCE(SUM(COALESCE(ACTUAL_CREDITS, ESTIMATED_COST, 0)), 0) AS COST,
                                   COALESCE(SUM(ACTUAL_CREDITS), 0) AS ACTUAL,
                                   COALESCE(SUM(IFF(ACTUAL_CREDITS IS NULL, ESTIMATED_COST, 0)), 0) AS ESTIMATED
-                             FROM AUDIT.COST_USAGE WHERE CREATED_AT >= DATEADD('day', -30, CURRENT_TIMESTAMP())""")
+                             FROM CORE.COST_USAGE WHERE CREATED_AT >= DATEADD('day', -30, CURRENT_TIMESTAMP())""")
         out["cost_30d"] = {"calls": int(cost[0]["calls"] or 0), "tokens": int(cost[0]["tokens"] or 0),
                            "estimated_cost": float(cost[0]["cost"] or 0), "credits": float(cost[0]["cost"] or 0),
                            "actual_credits": float(cost[0]["actual"] or 0),
@@ -2151,8 +2152,8 @@ def metrics_summary(db: Db = Depends(current_db)):
 
 _DOMAIN_TARGETS_SQL = """
     SELECT T.TARGET_TABLE_ID, T.TARGET_DATABASE, T.TARGET_SCHEMA, T.TARGET_TABLE, T.DESCRIPTION, {spec} AS MODEL_SPEC,
-           (SELECT COUNT(*) FROM KNOWLEDGE.TARGET_COLUMN_REGISTRY C WHERE C.TARGET_TABLE_ID = T.TARGET_TABLE_ID) AS COLUMN_COUNT
-      FROM KNOWLEDGE.TARGET_TABLE_REGISTRY T
+           (SELECT COUNT(*) FROM CORE.TARGET_COLUMN_REGISTRY C WHERE C.TARGET_TABLE_ID = T.TARGET_TABLE_ID) AS COLUMN_COUNT
+      FROM CORE.TARGET_TABLE_REGISTRY T
      WHERE T.DOMAIN_ID = %s AND T.ACTIVE_FLAG AND COALESCE(T.LAYER, 'SILVER') = 'SILVER'
      ORDER BY T.TARGET_TABLE
 """
@@ -2162,12 +2163,12 @@ _DOMAIN_TARGETS_SQL = """
 def domain_detail(domain_id: str, db: Db = Depends(current_db)):
     """Targets (hub and spokes with column counts and model spec), detection signals, source systems, knowledge mix."""
     try:
-        found = db.query("SELECT DOMAIN_ID, DOMAIN_NAME, DESCRIPTION, OWNER, CONFIG FROM KNOWLEDGE.DOMAIN_REGISTRY "
+        found = db.query("SELECT DOMAIN_ID, DOMAIN_NAME, DESCRIPTION, OWNER, CONFIG FROM CORE.DOMAIN_REGISTRY "
                          "WHERE DOMAIN_ID = %s", (domain_id,))
         targets = db.query(_DOMAIN_TARGETS_SQL.format(spec="T.MODEL_SPEC"), (domain_id,))
     except Exception:
         found = db.query("SELECT DOMAIN_ID, DOMAIN_NAME, DESCRIPTION, OWNER, NULL AS CONFIG "
-                         "FROM KNOWLEDGE.DOMAIN_REGISTRY WHERE DOMAIN_ID = %s", (domain_id,))
+                         "FROM CORE.DOMAIN_REGISTRY WHERE DOMAIN_ID = %s", (domain_id,))
         targets = db.query(_DOMAIN_TARGETS_SQL.format(spec="NULL"), (domain_id,))
     if not found:
         raise HTTPException(404, "domain not found")
@@ -2183,7 +2184,7 @@ def domain_detail(domain_id: str, db: Db = Depends(current_db)):
         t["casts"] = len(spec.get("casts") or [])
     targets.sort(key=lambda t: (t["role"] != "hub", t["target_table"]))
     knowledge = db.query(
-        "SELECT KNOWLEDGE_TYPE, COUNT(*) AS N FROM KNOWLEDGE.DOMAIN_KNOWLEDGE WHERE DOMAIN_ID = %s AND IS_CURRENT "
+        "SELECT KNOWLEDGE_TYPE, COUNT(*) AS N FROM CORE.DOMAIN_KNOWLEDGE WHERE DOMAIN_ID = %s AND IS_CURRENT "
         "GROUP BY KNOWLEDGE_TYPE ORDER BY N DESC",
         (domain_id,),
     )
@@ -2209,24 +2210,24 @@ def _domains(db: Db) -> dict:
     base = """
         SELECT D.DOMAIN_ID, D.DOMAIN_NAME, D.DESCRIPTION, D.OWNER, D.ACTIVE_FLAG, D.VERSION,
                D.CONFIG:standard::VARCHAR AS STANDARD,
-               (SELECT COUNT(*) FROM KNOWLEDGE.DOMAIN_KNOWLEDGE K
+               (SELECT COUNT(*) FROM CORE.DOMAIN_KNOWLEDGE K
                  WHERE K.DOMAIN_ID = D.DOMAIN_ID AND K.IS_CURRENT) AS KNOWLEDGE_ITEMS{extra}
-          FROM KNOWLEDGE.DOMAIN_REGISTRY D
+          FROM CORE.DOMAIN_REGISTRY D
          ORDER BY D.DOMAIN_NAME
         """
     try:   # each layer counted on its own, and the domain's place in MDM (mastered by Reltio, or consuming)
         return {"domains": db.query(base.format(extra=""",
-               (SELECT COUNT(*) FROM KNOWLEDGE.TARGET_TABLE_REGISTRY T
+               (SELECT COUNT(*) FROM CORE.TARGET_TABLE_REGISTRY T
                  WHERE T.DOMAIN_ID = D.DOMAIN_ID AND T.ACTIVE_FLAG AND COALESCE(T.LAYER, 'SILVER') = 'SILVER') AS TARGET_TABLES,
-               (SELECT COUNT(*) FROM KNOWLEDGE.TARGET_TABLE_REGISTRY T
+               (SELECT COUNT(*) FROM CORE.TARGET_TABLE_REGISTRY T
                  WHERE T.DOMAIN_ID = D.DOMAIN_ID AND T.ACTIVE_FLAG AND T.LAYER = 'GOLD') AS GOLD_TABLES,
                D.CONFIG:mdm:role::VARCHAR AS MDM_ROLE,
                ARRAY_TO_STRING(TRANSFORM(COALESCE(D.CONFIG:mdm:consumes, ARRAY_CONSTRUCT()), c -> c:domain::VARCHAR), ',') AS CONSUMES,
-               (SELECT MAX(M.APPROVED_VERSION) FROM GOVERNANCE.DOMAIN_MODEL M
+               (SELECT MAX(M.APPROVED_VERSION) FROM CORE.DOMAIN_MODEL M
                  WHERE M.DOMAIN_ID = D.DOMAIN_ID AND M.LAYER = 'GOLD') AS GOLD_MODEL_VERSION"""))}
     except Exception:   # before V054
         return {"domains": db.query(base.format(extra=""",
-               (SELECT COUNT(*) FROM KNOWLEDGE.TARGET_TABLE_REGISTRY T
+               (SELECT COUNT(*) FROM CORE.TARGET_TABLE_REGISTRY T
                  WHERE T.DOMAIN_ID = D.DOMAIN_ID AND T.ACTIVE_FLAG) AS TARGET_TABLES"""))}
 
 
@@ -2273,8 +2274,8 @@ def run_profiling(run_id: str, body: Optional[ProfileOptions] = None, db: Db = D
     _prewarm_run_profiles(db, run_id, bool(body and body.force_refresh))
     try:
         if body is None:
-            return db.call("CALL PROFILE.RUN_PROFILING(%s)", (run_id,))
-        return db.call("CALL PROFILE.RUN_PROFILING(%s, %s)", (run_id, body.model_dump_json()))
+            return db.call("CALL CORE.RUN_PROFILING(%s)", (run_id,))
+        return db.call("CALL CORE.RUN_PROFILING(%s, %s)", (run_id, body.model_dump_json()))
     except Exception as exc:
         raise _snowflake_error(exc) from exc
 
@@ -2283,7 +2284,7 @@ def run_profiling(run_id: str, body: Optional[ProfileOptions] = None, db: Db = D
 def refresh_table_profile(run_id: str, body: ProfileRefresh, db: Db = Depends(current_db)):
     """Bust the persistent profile of one table and re-profile it; no workflow transition."""
     try:
-        return db.call("CALL PROFILE.REFRESH_TABLE_PROFILE(%s, %s)", (run_id, body.table))
+        return db.call("CALL CORE.REFRESH_TABLE_PROFILE(%s, %s)", (run_id, body.table))
     except Exception as exc:
         raise _snowflake_error(exc) from exc
 
@@ -2297,9 +2298,9 @@ def _profile_cache_status(db: Db, run_id: str) -> list[dict]:
                    P.PROFILED_AT::VARCHAR AS PROFILED_AT, P.ROW_COUNT,
                    P.COLUMN_COUNT, P.IS_APPROXIMATE, P.PROFILE_STAGE_PATH, P.PROFILED_IN_RUN,
                    P.KEY_CANDIDATES, P.PII_COLUMNS, P.AVG_NULL_PERCENTAGE, P.QUALITY_JSON
-              FROM SOURCE.LANDING_TABLE_REGISTRY L
-              LEFT JOIN SOURCE.SOURCE_REGISTRY S ON S.SOURCE_SYSTEM_ID = L.SOURCE_SYSTEM_ID
-              LEFT JOIN METADATA.TABLE_PROFILES P
+              FROM CORE.LANDING_TABLE_REGISTRY L
+              LEFT JOIN CORE.SOURCE_REGISTRY S ON S.SOURCE_SYSTEM_ID = L.SOURCE_SYSTEM_ID
+              LEFT JOIN CORE.TABLE_PROFILES P
                      ON P.SOURCE_NAME = S.SOURCE_SYSTEM_NAME AND P.DATABASE_NAME = L.SOURCE_DATABASE
                     AND P.SCHEMA_NAME = L.SOURCE_SCHEMA AND P.TABLE_NAME = L.SOURCE_TABLE
              WHERE L.RUN_ID = %s AND L.INGESTION_STATUS = 'COMPLETE'
@@ -2345,8 +2346,8 @@ def _cached_profile_columns(db: Db, tables: list[dict]) -> list[dict]:
         if not STAGE_PATH.match(path):
             continue
         try:
-            found = db.query(f"SELECT $1 AS DOC FROM @METADATA.PROFILES_STAGE/{path} "
-                             "(FILE_FORMAT => 'METADATA.PROFILE_JSON_FORMAT')")
+            found = db.query(f"SELECT $1 AS DOC FROM @CORE.PROFILES_STAGE/{path} "
+                             "(FILE_FORMAT => 'CORE.PROFILE_JSON_FORMAT')")
         except Exception:
             continue
         doc = found[0]["doc"] if found else None
@@ -2375,7 +2376,7 @@ def get_profile(run_id: str, db: Db = Depends(current_db)):
                ROW_COUNT, NULL_PERCENTAGE, DISTINCT_PERCENTAGE, CARDINALITY, POTENTIAL_KEY_FLAG,
                POTENTIAL_FOREIGN_KEY_FLAG, GENERATED_DESCRIPTION, PROFILE_STATUS,
                STATISTICS_JSON:cache::VARCHAR AS CACHE
-          FROM PROFILE.PROFILE_REGISTRY
+          FROM CORE.PROFILE_REGISTRY
          WHERE RUN_ID = %s AND IS_CURRENT
          ORDER BY TABLE_NAME, COLUMN_NAME
         """,
@@ -2392,7 +2393,7 @@ def get_profile(run_id: str, db: Db = Depends(current_db)):
 @app.post("/api/runs/{run_id}/domain")
 def identify_domain(run_id: str, db: Db = Depends(current_db)):
     try:
-        return db.call("CALL KNOWLEDGE.IDENTIFY_DOMAIN(%s)", (run_id,))
+        return db.call("CALL CORE.IDENTIFY_DOMAIN(%s)", (run_id,))
     except Exception as exc:
         raise _snowflake_error(exc) from exc
 
@@ -2409,11 +2410,11 @@ def confirm_domain(run_id: str, body: DomainChoice, db: Db = Depends(current_db)
         raise HTTPException(404, "run not found")
     if run[0]["current_state"] not in ("PROFILING_COMPLETE", "DOMAIN_IDENTIFIED", "MAPPING_PENDING", "FAILED"):
         raise HTTPException(409, "The pack can only be changed before mapping starts.")
-    if not db.query("SELECT 1 FROM KNOWLEDGE.DOMAIN_REGISTRY WHERE DOMAIN_ID = %s AND ACTIVE_FLAG", (body.domain_id,)):
+    if not db.query("SELECT 1 FROM CORE.DOMAIN_REGISTRY WHERE DOMAIN_ID = %s AND ACTIVE_FLAG", (body.domain_id,)):
         raise HTTPException(400, "unknown or inactive domain")
     db.execute("UPDATE CORE.WORKFLOW_RUN SET DOMAIN_ID = %s, UPDATED_AT = CURRENT_TIMESTAMP() WHERE RUN_ID = %s",
                (body.domain_id, run_id))
-    db.execute("UPDATE KNOWLEDGE.DOMAIN_RECOMMENDATION SET STATUS = IFF(DOMAIN_ID = %s, 'ACCEPTED', 'PROPOSED'), "
+    db.execute("UPDATE CORE.DOMAIN_RECOMMENDATION SET STATUS = IFF(DOMAIN_ID = %s, 'ACCEPTED', 'PROPOSED'), "
                "DECIDED_BY = IFF(DOMAIN_ID = %s, CURRENT_USER(), DECIDED_BY), "
                "DECIDED_AT = IFF(DOMAIN_ID = %s, CURRENT_TIMESTAMP(), DECIDED_AT) WHERE RUN_ID = %s",
                (body.domain_id, body.domain_id, body.domain_id, run_id))
@@ -2427,8 +2428,8 @@ def get_domain(run_id: str, db: Db = Depends(current_db)):
         """
         SELECT R.RECOMMENDATION_ID, D.DOMAIN_NAME, R.DOMAIN_ID, R.CONFIDENCE, R.RECOMMENDATION,
                R.STATUS, R.DECIDED_BY, R.CREATED_AT::VARCHAR AS CREATED_AT
-          FROM KNOWLEDGE.DOMAIN_RECOMMENDATION R
-          JOIN KNOWLEDGE.DOMAIN_REGISTRY D ON D.DOMAIN_ID = R.DOMAIN_ID
+          FROM CORE.DOMAIN_RECOMMENDATION R
+          JOIN CORE.DOMAIN_REGISTRY D ON D.DOMAIN_ID = R.DOMAIN_ID
          WHERE R.RUN_ID = %s
          ORDER BY R.CONFIDENCE DESC
         """,
@@ -2449,7 +2450,7 @@ def generate_mapping(run_id: str, db: Db = Depends(current_db)):
             raise HTTPException(409, "The run's model change is waiting in the Model Workbench; mapping starts once a model "
                                      "approver approves it (or withdraw the proposal to map to the current target).")
     try:
-        return db.call("CALL MAPPING.GENERATE_MAPPING_CANDIDATES(%s)", (run_id,))
+        return db.call("CALL CORE.GENERATE_MAPPING_CANDIDATES(%s)", (run_id,))
     except Exception as exc:
         raise _snowflake_error(exc) from exc
 
@@ -2457,19 +2458,19 @@ def generate_mapping(run_id: str, db: Db = Depends(current_db)):
 @app.post("/api/runs/{run_id}/mapping/decisions")
 def save_mapping(run_id: str, body: MappingDecisions, db: Db = Depends(current_db)):
     try:
-        return db.call("CALL MAPPING.SAVE_MAPPING_DECISIONS(%s, %s)",
+        return db.call("CALL CORE.SAVE_MAPPING_DECISIONS(%s, %s)",
                        (run_id, json.dumps(body.decisions)))
     except Exception as exc:
         raise _snowflake_error(exc) from exc
 
 
 def _mapping_target_table(db: Db, run_id: str) -> Optional[dict]:
-    """The run's target model, resolved exactly like MAPPING.SAVE_MAPPING_DECISIONS does."""
+    """The run's target model, resolved exactly like CORE.SAVE_MAPPING_DECISIONS does."""
     found = db.query(
         """
         SELECT TB.TARGET_TABLE_ID, TB.TARGET_TABLE, TB.TARGET_DATABASE, TB.TARGET_SCHEMA, TB.GRAIN
           FROM CORE.WORKFLOW_RUN R
-          JOIN KNOWLEDGE.TARGET_TABLE_REGISTRY TB ON TB.ACTIVE_FLAG
+          JOIN CORE.TARGET_TABLE_REGISTRY TB ON TB.ACTIVE_FLAG
                AND COALESCE(R.TARGET_MODEL, '') <> ''
                AND UPPER(TB.TARGET_TABLE) = UPPER(SPLIT_PART(R.TARGET_MODEL, '.', -1))
                AND (ARRAY_SIZE(SPLIT(R.TARGET_MODEL, '.')) < 3
@@ -2489,7 +2490,7 @@ def _mapping_targets(db: Db, target_table_id: str) -> list[dict]:
         """
         SELECT T.TARGET_COLUMN_ID, T.COLUMN_NAME, T.DATA_TYPE, T.NULLABLE, T.IS_BUSINESS_KEY, T.SEMANTIC_TYPE,
                T.IS_PII, T.BUSINESS_DEFINITION AS DEFINITION
-          FROM KNOWLEDGE.TARGET_COLUMN_REGISTRY T
+          FROM CORE.TARGET_COLUMN_REGISTRY T
          WHERE T.TARGET_TABLE_ID = %s
          ORDER BY T.ORDINAL_POSITION
         """,
@@ -2504,7 +2505,7 @@ def _mapping_profile(db: Db, run_id: str) -> dict[str, dict]:
         SELECT SOURCE_COLUMN_ID, TABLE_NAME, COLUMN_NAME, DATA_TYPE, SEMANTIC_TYPE, NULL_PERCENTAGE,
                DISTINCT_PERCENTAGE, CARDINALITY, GENERATED_DESCRIPTION, PII_CLASSIFICATION,
                STATISTICS_JSON:enum_values AS ENUM_VALUES, STATISTICS_JSON:frequency_distribution AS TOP_VALUES
-          FROM PROFILE.PROFILE_REGISTRY WHERE RUN_ID = %s AND IS_CURRENT
+          FROM CORE.PROFILE_REGISTRY WHERE RUN_ID = %s AND IS_CURRENT
         """,
         (run_id,),
     ):
@@ -2539,8 +2540,8 @@ def _mapping_profile_from_cache(db: Db, run_id: str) -> dict[str, dict]:
     for col in db.query(
         """
         SELECT C.LANDING_COLUMN_ID, T.SOURCE_TABLE, C.COLUMN_NAME
-          FROM SOURCE.LANDING_COLUMN_REGISTRY C
-          JOIN SOURCE.LANDING_TABLE_REGISTRY T ON T.LANDING_ID = C.LANDING_ID
+          FROM CORE.LANDING_COLUMN_REGISTRY C
+          JOIN CORE.LANDING_TABLE_REGISTRY T ON T.LANDING_ID = C.LANDING_ID
          WHERE T.RUN_ID = %s AND T.INGESTION_STATUS = 'COMPLETE'
         """,
         (run_id,),
@@ -2570,10 +2571,10 @@ def get_mapping(run_id: str, db: Db = Depends(current_db)):
                C.STATISTICAL_SCORE, C.DOMAIN_SCORE, C.CONTEXT_SCORE, C.HISTORICAL_SCORE,
                C.EVIDENCE_JSON:llm:preferred_target::VARCHAR AS LLM_PREFERRED,
                C.EVIDENCE_JSON:llm:agrees::BOOLEAN AS LLM_AGREES
-          FROM MAPPING.MAPPING_CANDIDATE C
-          JOIN SOURCE.LANDING_COLUMN_REGISTRY L ON L.LANDING_COLUMN_ID = C.SOURCE_COLUMN_ID
-          JOIN SOURCE.LANDING_TABLE_REGISTRY TBL ON TBL.LANDING_ID = L.LANDING_ID
-          JOIN KNOWLEDGE.TARGET_COLUMN_REGISTRY T ON T.TARGET_COLUMN_ID = C.TARGET_COLUMN_ID
+          FROM CORE.MAPPING_CANDIDATE C
+          JOIN CORE.LANDING_COLUMN_REGISTRY L ON L.LANDING_COLUMN_ID = C.SOURCE_COLUMN_ID
+          JOIN CORE.LANDING_TABLE_REGISTRY TBL ON TBL.LANDING_ID = L.LANDING_ID
+          JOIN CORE.TARGET_COLUMN_REGISTRY T ON T.TARGET_COLUMN_ID = C.TARGET_COLUMN_ID
          WHERE C.RUN_ID = %s AND C.IS_CURRENT
          ORDER BY TBL.SOURCE_TABLE, L.COLUMN_NAME, C.RANK
         """,
@@ -2583,7 +2584,7 @@ def get_mapping(run_id: str, db: Db = Depends(current_db)):
         """
         SELECT D.DECISION_ID, D.SOURCE_COLUMN_ID, D.TARGET_COLUMN_ID, D.CANDIDATE_ID, D.DECISION,
                D.TRANSFORMATION, D.BUSINESS_JUSTIFICATION, D.REVIEWER, D.REVIEWED_AT::VARCHAR AS REVIEWED_AT
-          FROM MAPPING.MAPPING_DECISION D
+          FROM CORE.MAPPING_DECISION D
          WHERE D.RUN_ID = %s AND D.IS_CURRENT
         """,
         (run_id,),
@@ -2696,7 +2697,7 @@ def mapping_assist(run_id: str, body: MappingAssist, db: Db = Depends(current_db
 @app.post("/api/runs/{run_id}/sttm")
 def generate_sttm(run_id: str, db: Db = Depends(current_db)):
     try:
-        return db.call("CALL CONTRACT.GENERATE_STTM(%s)", (run_id,))
+        return db.call("CALL CORE.GENERATE_STTM(%s)", (run_id,))
     except Exception as exc:
         raise _snowflake_error(exc) from exc
 
@@ -2707,7 +2708,7 @@ def get_sttm(run_id: str, db: Db = Depends(current_db)):
         """
         SELECT STTM_ID, STTM_VERSION, STATUS, TABLE_DESIGN, CREATED_BY, CREATED_AT::VARCHAR AS CREATED_AT,
                REVIEWED_BY, REVIEWED_AT::VARCHAR AS REVIEWED_AT
-          FROM CONTRACT.STTM_REGISTRY WHERE RUN_ID = %s
+          FROM CORE.STTM_REGISTRY WHERE RUN_ID = %s
          ORDER BY STTM_VERSION DESC LIMIT 1
         """,
         (run_id,),
@@ -2719,7 +2720,7 @@ def get_sttm(run_id: str, db: Db = Depends(current_db)):
             SELECT STTM_LINE_ID, SOURCE_TABLE, SOURCE_COLUMN, SOURCE_DATATYPE, TARGET_COLUMN, TARGET_DATATYPE,
                    MAPPING_TYPE, TRANSFORMATION, BUSINESS_RULE, BUSINESS_DEFINITION, NULLABLE_RULE,
                    UNIQUENESS_RULE, HUMAN_APPROVED, REVIEWER, MAPPING_CONFIDENCE, JOIN_LOGIC
-              FROM CONTRACT.STTM_LINE WHERE STTM_ID = %s ORDER BY TARGET_COLUMN
+              FROM CORE.STTM_LINE WHERE STTM_ID = %s ORDER BY TARGET_COLUMN
             """,
             (header[0]["sttm_id"],),
         )
@@ -2744,7 +2745,7 @@ class JoinPlanEdit(BaseModel):
 def update_sttm_joins(run_id: str, body: JoinPlanEdit, db: Db = Depends(current_db)):
     """Edit the STTM join plan while it is under review; dbt generation follows the edited plan."""
     try:
-        return db.call("CALL CONTRACT.UPDATE_JOIN_GRAPH(%s, %s)", (run_id, body.model_dump_json()))
+        return db.call("CALL CORE.UPDATE_JOIN_GRAPH(%s, %s)", (run_id, body.model_dump_json()))
     except Exception as exc:
         raise _snowflake_error(exc) from exc
 
@@ -2765,7 +2766,7 @@ def sttm_preview(run_id: str, db: Db = Depends(current_db)):
 @app.post("/api/runs/{run_id}/sttm/refine")
 def refine_sttm_transform(run_id: str, body: TransformPrompt, db: Db = Depends(current_db)):
     try:
-        return db.call("CALL CONTRACT.REFINE_TRANSFORMATION(%s, %s)", (run_id, body.model_dump_json()))
+        return db.call("CALL CORE.REFINE_TRANSFORMATION(%s, %s)", (run_id, body.model_dump_json()))
     except Exception as exc:
         raise _snowflake_error(exc) from exc
 
@@ -2773,7 +2774,7 @@ def refine_sttm_transform(run_id: str, body: TransformPrompt, db: Db = Depends(c
 @app.post("/api/runs/{run_id}/sttm/apply")
 def apply_sttm_transform(run_id: str, body: TransformApply, db: Db = Depends(current_db)):
     try:
-        return db.call("CALL CONTRACT.APPLY_TRANSFORMATION(%s, %s)", (run_id, body.model_dump_json()))
+        return db.call("CALL CORE.APPLY_TRANSFORMATION(%s, %s)", (run_id, body.model_dump_json()))
     except Exception as exc:
         raise _snowflake_error(exc) from exc
 
@@ -2781,7 +2782,7 @@ def apply_sttm_transform(run_id: str, body: TransformApply, db: Db = Depends(cur
 @app.post("/api/runs/{run_id}/sttm/export")
 def export_sttm_csv(run_id: str, db: Db = Depends(current_db)):
     try:
-        return db.call("CALL CONTRACT.EXPORT_STTM_CSV(%s)", (run_id,))
+        return db.call("CALL CORE.EXPORT_STTM_CSV(%s)", (run_id,))
     except Exception as exc:
         raise _snowflake_error(exc) from exc
 
@@ -2789,7 +2790,7 @@ def export_sttm_csv(run_id: str, db: Db = Depends(current_db)):
 @app.post("/api/runs/{run_id}/soda")
 def generate_soda(run_id: str, db: Db = Depends(current_db)):
     try:
-        return db.call("CALL CONTRACT.GENERATE_SODA(%s)", (run_id,))
+        return db.call("CALL CORE.GENERATE_SODA(%s)", (run_id,))
     except Exception as exc:
         raise _snowflake_error(exc) from exc
 
@@ -2804,7 +2805,7 @@ def import_soda(run_id: str, body: ClientExpectations, db: Db = Depends(current_
     else:
         raise HTTPException(400, "Upload a client brief or a JSON/CSV array of requirement rows")
     try:
-        return db.call("CALL CONTRACT.IMPORT_CLIENT_EXPECTATIONS(%s, %s)",
+        return db.call("CALL CORE.IMPORT_CLIENT_EXPECTATIONS(%s, %s)",
                        (run_id, json.dumps(payload)))
     except Exception as exc:
         raise _snowflake_error(exc) from exc
@@ -2816,7 +2817,7 @@ def save_soda(run_id: str, body: SodaDecisions, db: Db = Depends(current_db)):
 
     for d in body.decisions:  # an edited definition is checked like a new check before it is stored
         if str(d.get("decision") or "").upper() == "MODIFIED" and isinstance(d.get("definition"), dict):
-            found = db.query("SELECT TARGET_COLUMN, SEVERITY FROM CONTRACT.SODA_EXPECTATION_REGISTRY "
+            found = db.query("SELECT TARGET_COLUMN, SEVERITY FROM CORE.SODA_EXPECTATION_REGISTRY "
                              "WHERE EXPECTATION_ID = %s AND RUN_ID = %s AND IS_CURRENT", (d.get("expectation_id"), run_id))
             if not found:  # an unknown id would be stored without validation
                 raise HTTPException(400, f"No current check {d.get('expectation_id')} in this run; reload and try again.")
@@ -2826,7 +2827,7 @@ def save_soda(run_id: str, body: SodaDecisions, db: Db = Depends(current_db)):
                 raise HTTPException(400, "; ".join(problems))
             d["definition"] = cleaned["definition"]
     try:
-        return db.call("CALL CONTRACT.SAVE_SODA_DECISIONS(%s, %s)",
+        return db.call("CALL CORE.SAVE_SODA_DECISIONS(%s, %s)",
                        (run_id, json.dumps(body.decisions)))
     except Exception as exc:
         raise _snowflake_error(exc) from exc
@@ -2848,7 +2849,7 @@ def add_soda_check(run_id: str, body: SodaCheckIn, db: Db = Depends(current_db))
     if problems:
         raise HTTPException(400, "; ".join(problems))
     try:
-        current = db.query("""SELECT STTM_ID, DOMAIN_ID, TARGET_TABLE, VERSION FROM CONTRACT.SODA_EXPECTATION_REGISTRY
+        current = db.query("""SELECT STTM_ID, DOMAIN_ID, TARGET_TABLE, VERSION FROM CORE.SODA_EXPECTATION_REGISTRY
                                WHERE RUN_ID = %s AND IS_CURRENT ORDER BY VERSION DESC LIMIT 1""", (run_id,))
     except Exception as exc:
         raise _snowflake_error(exc) from exc
@@ -2857,7 +2858,7 @@ def add_soda_check(run_id: str, body: SodaCheckIn, db: Db = Depends(current_db))
     c = current[0]
     expectation_id = str(uuid.uuid4())
     try:
-        db.execute("""INSERT INTO CONTRACT.SODA_EXPECTATION_REGISTRY (EXPECTATION_ID, RUN_ID, STTM_ID, DOMAIN_ID, TARGET_TABLE,
+        db.execute("""INSERT INTO CORE.SODA_EXPECTATION_REGISTRY (EXPECTATION_ID, RUN_ID, STTM_ID, DOMAIN_ID, TARGET_TABLE,
                              TARGET_COLUMN, CHECK_TYPE, CHECK_DEFINITION, SEVERITY, ORIGIN, CLIENT_REQUIREMENT, STATUS, VERSION,
                              IS_CURRENT, CREATED_BY)
                       SELECT %s, %s, %s, %s, %s, NULLIF(%s, ''), %s, PARSE_JSON(%s), %s, 'USER', NULLIF(%s, ''), 'PROPOSED',
@@ -2892,7 +2893,7 @@ def soda_scans(run_id: str, db: Db = Depends(current_db)):
     try:
         scans = db.query("""SELECT SCAN_ID, TARGET, MODE, STARTED_AT::VARCHAR AS STARTED_AT, DURATION_MS, CHECKS, PASSED,
                                    WARNED, FAILED, NOT_EVALUATED, ERRORS, HEALTH, ROWS_SCANNED, TRIGGERED_BY, CREATED_BY
-                              FROM QUALITY.CHECK_RUN WHERE RUN_ID = %s ORDER BY STARTED_AT DESC LIMIT 30""", (run_id,))
+                              FROM CORE.CHECK_RUN WHERE RUN_ID = %s ORDER BY STARTED_AT DESC LIMIT 30""", (run_id,))
     except Exception:
         return {"scans": [], "latest": [], "history": {}, "ready": False}
     latest: list[dict] = []
@@ -2900,13 +2901,13 @@ def soda_scans(run_id: str, db: Db = Depends(current_db)):
     if scans:
         latest = db.query("""SELECT RESULT_ID AS CHECK_RESULT_ID, EXPECTATION_ID, TARGET_TABLE, TARGET_COLUMN, CHECK_TYPE, KIND, DIMENSION, SEVERITY,
                                     OUTCOME, MEASURED, THRESHOLD, FAILED_ROWS, DETAIL, SAMPLE_ROWS, SQL_TEXT, DURATION_MS
-                               FROM QUALITY.CHECK_RESULT WHERE SCAN_ID = %s
+                               FROM CORE.CHECK_RESULT WHERE SCAN_ID = %s
                               ORDER BY ARRAY_POSITION(OUTCOME::VARIANT, ARRAY_CONSTRUCT('FAIL','ERROR','WARN','NOT_EVALUATED','PASS')),
                                        TARGET_COLUMN""", (scans[0]["scan_id"],))
         for r in latest:
             r["sample"] = _json(r.pop("sample_rows", None))
         for r in db.query("""SELECT EXPECTATION_ID, OUTCOME, MEASURED, CREATED_AT::VARCHAR AS AT
-                               FROM QUALITY.CHECK_RESULT WHERE RUN_ID = %s
+                               FROM CORE.CHECK_RESULT WHERE RUN_ID = %s
                               QUALIFY ROW_NUMBER() OVER (PARTITION BY EXPECTATION_ID ORDER BY CREATED_AT DESC) <= 12
                               ORDER BY CREATED_AT""", (run_id,)):
             history.setdefault(r["expectation_id"] or "", []).append({"outcome": r["outcome"], "measured": r["measured"], "at": r["at"]})
@@ -2921,13 +2922,13 @@ def _soda_kit(db: Db, run_id: str) -> tuple[dict, str]:
         raise HTTPException(404, "run not found")
     checks = db.query("""SELECT TARGET_TABLE, TARGET_COLUMN, CHECK_TYPE, CHECK_DEFINITION, SEVERITY, STATUS,
                                 CLIENT_REQUIREMENT AS REQUIREMENT
-                           FROM CONTRACT.SODA_EXPECTATION_REGISTRY WHERE RUN_ID = %s AND IS_CURRENT""", (run_id,))
+                           FROM CORE.SODA_EXPECTATION_REGISTRY WHERE RUN_ID = %s AND IS_CURRENT""", (run_id,))
     if not checks:
         raise HTTPException(409, "Generate the data quality checks first.")
     for c in checks:
         c["definition"] = _json(c.pop("check_definition")) or {}
     target = db.query("""SELECT T.TARGET_DATABASE, T.TARGET_SCHEMA, COALESCE(S.TABLE_DESIGN:target_table::VARCHAR, T.TARGET_TABLE) AS T
-                           FROM CONTRACT.STTM_REGISTRY S JOIN KNOWLEDGE.TARGET_TABLE_REGISTRY T ON T.TARGET_TABLE_ID = S.TARGET_TABLE_ID
+                           FROM CORE.STTM_REGISTRY S JOIN CORE.TARGET_TABLE_REGISTRY T ON T.TARGET_TABLE_ID = S.TARGET_TABLE_ID
                           WHERE S.RUN_ID = %s ORDER BY S.STTM_VERSION DESC LIMIT 1""", (run_id,))
     ctx = db.query("""SELECT CURRENT_ORGANIZATION_NAME() || '-' || CURRENT_ACCOUNT_NAME() AS ACCOUNT,
                              CURRENT_WAREHOUSE() AS WAREHOUSE, CURRENT_ROLE() AS ROLE""")[0]
@@ -2975,7 +2976,7 @@ def qa_suite(run_id: str, db: Db = Depends(current_db)):
     from services.qa.procedures import qa_suite as handler
 
     try:
-        return _source_call(db, "CALL CONTRACT.QA_SUITE(%s)", handler, run_id)
+        return _source_call(db, "CALL CORE.QA_SUITE(%s)", handler, run_id)
     except Exception as exc:
         raise _snowflake_error(exc) from exc
 
@@ -3004,7 +3005,7 @@ def qa_signoff(run_id: str, body: QaSignoff, db: Db = Depends(current_db)):
     if body.decision == "REJECTED" and not (body.note or "").strip():
         raise HTTPException(400, "Say what failed when rejecting the QA tests.")
     note = (body.note or "").strip()
-    sttm = db.query("SELECT STTM_ID FROM CONTRACT.STTM_REGISTRY WHERE RUN_ID = %s AND STATUS IN ('APPROVED', 'REVIEW') "
+    sttm = db.query("SELECT STTM_ID FROM CORE.STTM_REGISTRY WHERE RUN_ID = %s AND STATUS IN ('APPROVED', 'REVIEW') "
                     "ORDER BY STTM_VERSION DESC LIMIT 1", (run_id,))
     if not sttm:
         raise HTTPException(409, "The run has no STTM in review or approved yet.")
@@ -3023,7 +3024,7 @@ def qa_signoff(run_id: str, body: QaSignoff, db: Db = Depends(current_db)):
             if len(note) < 15:
                 raise HTTPException(400, "An override needs a reason of at least 15 characters.")
             note = f"[override: {len(failing)} critical/high tests failing] {note}"
-    db.execute("INSERT INTO CONTRACT.QA_SIGNOFF (SIGNOFF_ID, RUN_ID, STTM_ID, DECISION, NOTE) "
+    db.execute("INSERT INTO CORE.QA_SIGNOFF (SIGNOFF_ID, RUN_ID, STTM_ID, DECISION, NOTE) "
                "SELECT %s, %s, %s, %s, NULLIF(%s, '')",
                (str(uuid.uuid4()), run_id, sttm[0]["sttm_id"], body.decision, note))
     _drop_run(run_id)
@@ -3036,7 +3037,7 @@ def qa_ask(run_id: str, body: QaAsk, db: Db = Depends(current_db)):
     from services.qa.procedures import qa_ask as handler
 
     try:
-        return _source_call(db, "CALL CONTRACT.QA_ASK(%s, %s)", handler, run_id, body.question)
+        return _source_call(db, "CALL CORE.QA_ASK(%s, %s)", handler, run_id, body.question)
     except Exception as exc:
         raise _snowflake_error(exc) from exc
 
@@ -3046,7 +3047,7 @@ def qa_save(run_id: str, body: QaTest, db: Db = Depends(current_db)):
     from services.qa.procedures import qa_save as handler
 
     try:
-        return _source_call(db, "CALL CONTRACT.QA_SAVE(%s, %s)", handler, run_id, body.model_dump_json())
+        return _source_call(db, "CALL CORE.QA_SAVE(%s, %s)", handler, run_id, body.model_dump_json())
     except Exception as exc:
         raise _snowflake_error(exc) from exc
 
@@ -3090,7 +3091,7 @@ def qa_results(run_id: str, db: Db = Depends(current_db)):
     last, results = latest(db.query, run_id)
     if last is None and not results:
         try:
-            db.query("SELECT 1 FROM QUALITY.QA_RUN LIMIT 0")
+            db.query("SELECT 1 FROM CORE.QA_RUN LIMIT 0")
         except Exception:
             return {"run": None, "results": [], "history": {}, "runs": [], "ready": False}
     for r in results:
@@ -3099,12 +3100,12 @@ def qa_results(run_id: str, db: Db = Depends(current_db)):
     history: dict[str, list] = {}
     runs: list[dict] = []
     if last:
-        for r in db.query("""SELECT TEST_ID, OUTCOME, CREATED_AT::VARCHAR AS AT FROM QUALITY.QA_RESULT WHERE RUN_ID = %s
+        for r in db.query("""SELECT TEST_ID, OUTCOME, CREATED_AT::VARCHAR AS AT FROM CORE.QA_RESULT WHERE RUN_ID = %s
                              QUALIFY ROW_NUMBER() OVER (PARTITION BY TEST_ID ORDER BY CREATED_AT DESC) <= 10
                              ORDER BY CREATED_AT""", (run_id,)):
             history.setdefault(r["test_id"], []).append({"outcome": r["outcome"], "at": r["at"]})
         runs = db.query("""SELECT QA_RUN_ID, STARTED_AT::VARCHAR AS STARTED_AT, TESTS, PASSED, FAILED, REVIEW, NOT_RUN, ERRORS,
-                                  CREATED_BY FROM QUALITY.QA_RUN WHERE RUN_ID = %s ORDER BY STARTED_AT DESC LIMIT 20""",
+                                  CREATED_BY FROM CORE.QA_RUN WHERE RUN_ID = %s ORDER BY STARTED_AT DESC LIMIT 20""",
                         (run_id,))
     return {"run": last, "results": results, "history": history, "runs": runs, "ready": True}
 
@@ -3128,10 +3129,10 @@ def qa_plan(run_id: str, body: QaPlanIn, db: Db = Depends(current_db)):
 
 @app.delete("/api/runs/{run_id}/qa/tests/{test_id}")
 def qa_delete(run_id: str, test_id: str, db: Db = Depends(current_db)):
-    if not db.query("SELECT 1 AS X FROM CONTRACT.QA_TEST_CASE WHERE RUN_ID = %s AND TEST_ID = %s AND NOT IS_DELETED",
+    if not db.query("SELECT 1 AS X FROM CORE.QA_TEST_CASE WHERE RUN_ID = %s AND TEST_ID = %s AND NOT IS_DELETED",
                     (run_id, test_id)):
         raise HTTPException(404, "That QA test does not exist in this run.")
-    db.execute("UPDATE CONTRACT.QA_TEST_CASE SET IS_DELETED = TRUE WHERE RUN_ID = %s AND TEST_ID = %s",
+    db.execute("UPDATE CORE.QA_TEST_CASE SET IS_DELETED = TRUE WHERE RUN_ID = %s AND TEST_ID = %s",
                (run_id, test_id))
     from services.qa.test_versions import record_db
 
@@ -3145,7 +3146,7 @@ def backtest_soda(run_id: str, db: Db = Depends(current_db)):
     from services.soda.procedures import backtest_soda as backtest_handler
 
     try:
-        return _source_call(db, "CALL CONTRACT.BACKTEST_SODA(%s)", backtest_handler, run_id)
+        return _source_call(db, "CALL CORE.BACKTEST_SODA(%s)", backtest_handler, run_id)
     except Exception as exc:
         raise _snowflake_error(exc) from exc
 
@@ -3158,7 +3159,7 @@ def get_soda(run_id: str, db: Db = Depends(current_db)):
         """
         SELECT EXPECTATION_ID, TARGET_TABLE, TARGET_COLUMN, CHECK_TYPE, CHECK_DEFINITION, SEVERITY,
                ORIGIN, CLIENT_REQUIREMENT, STATUS, VERSION, REVIEWED_BY
-          FROM CONTRACT.SODA_EXPECTATION_REGISTRY
+          FROM CORE.SODA_EXPECTATION_REGISTRY
          WHERE RUN_ID = %s AND IS_CURRENT
          ORDER BY TARGET_TABLE, TARGET_COLUMN, CHECK_TYPE
         """,
@@ -3167,7 +3168,7 @@ def get_soda(run_id: str, db: Db = Depends(current_db)):
     briefs = db.query(
         """
         SELECT TITLE, CONTENT, SOURCE_REFERENCE, CREATED_AT::VARCHAR AS CREATED_AT
-          FROM KNOWLEDGE.DOMAIN_KNOWLEDGE
+          FROM CORE.DOMAIN_KNOWLEDGE
          WHERE IS_CURRENT AND SOURCE_REFERENCE = %s
          ORDER BY VERSION DESC LIMIT 1
         """,
@@ -3225,18 +3226,18 @@ def _save_dbt_plan(db: Db, run_id: str, payload: dict) -> None:
         return
     ref = f"dbt.branch.{run_id}"
     db.execute(
-        "UPDATE KNOWLEDGE.DOMAIN_KNOWLEDGE SET IS_CURRENT = FALSE, STATUS = 'SUPERSEDED', UPDATED_AT = CURRENT_TIMESTAMP() "
+        "UPDATE CORE.DOMAIN_KNOWLEDGE SET IS_CURRENT = FALSE, STATUS = 'SUPERSEDED', UPDATED_AT = CURRENT_TIMESTAMP() "
         "WHERE SOURCE_REFERENCE = %s AND IS_CURRENT",
         (ref,),
     )
     version_rows = db.query(
-        "SELECT COALESCE(MAX(VERSION), 0) + 1 AS V FROM KNOWLEDGE.DOMAIN_KNOWLEDGE WHERE SOURCE_REFERENCE = %s",
+        "SELECT COALESCE(MAX(VERSION), 0) + 1 AS V FROM CORE.DOMAIN_KNOWLEDGE WHERE SOURCE_REFERENCE = %s",
         (ref,),
     )
     version = version_rows[0]["v"] if version_rows else 1
     db.execute(
         """
-        INSERT INTO KNOWLEDGE.DOMAIN_KNOWLEDGE
+        INSERT INTO CORE.DOMAIN_KNOWLEDGE
           (KNOWLEDGE_ID, DOMAIN_ID, KNOWLEDGE_TYPE, TITLE, CONTENT, CONTENT_JSON, TAGS,
            SOURCE_REFERENCE, STATUS, VERSION, IS_CURRENT, CREATED_BY, LINEAGE_ID, ORIGIN, SOURCE_RUN_ID)
         SELECT UUID_STRING(), %s, 'TRANSFORMATION_RULE', %s, %s, PARSE_JSON(%s),
@@ -3264,7 +3265,7 @@ def _generate_dbt_overlay(db: Db, run_id: str, payload: dict):
 
     found = db.query("SELECT COALESCE(PIPELINE, 'SILVER') AS PIPELINE FROM CORE.WORKFLOW_RUN WHERE RUN_ID = %s", (run_id,))
     if found and str(found[0].get("pipeline")).upper() == "GOLD":
-        # the overlay regenerates Silver code only; a Gold run regenerates through its stage (CODEGEN.GENERATE_DBT)
+        # the overlay regenerates Silver code only; a Gold run regenerates through its stage (CORE.GENERATE_DBT)
         raise HTTPException(409, "Regenerate this Gold run's code from its Gold Code Generation step (fix and "
                                  "regenerate after a failed validation)")
     return generate_via_db(db, run_id, payload)
@@ -3276,7 +3277,7 @@ REPO_LOCATION_KEYS = ("origin", "repo", "git_repository", "api_integration", "al
 
 def _stored_dbt_plan(db: Db, run_id: str) -> dict:
     try:
-        found = db.query("SELECT CONTENT_JSON FROM KNOWLEDGE.DOMAIN_KNOWLEDGE WHERE IS_CURRENT AND SOURCE_REFERENCE = %s",
+        found = db.query("SELECT CONTENT_JSON FROM CORE.DOMAIN_KNOWLEDGE WHERE IS_CURRENT AND SOURCE_REFERENCE = %s",
                          (f"dbt.branch.{run_id}",))
     except Exception:
         return {}
@@ -3290,7 +3291,7 @@ def _dbt_repos(db: Db, domain_id: Optional[str]) -> list[dict]:
         found = db.query("""SELECT REPO_ID, NAME, GIT_URL, PROVIDER, BRANCH, GIT_REPOSITORY, API_INTEGRATION, STATUS, STATS,
                                    DOMAIN_IDS, COALESCE(DBT_PROJECT_DIR, '') AS DBT_PROJECT_DIR,
                                    COALESCE(OPEN_PR, TRUE) AS OPEN_PR, COALESCE(DRAFT_PR, FALSE) AS DRAFT_PR
-                              FROM CODE.REPO WHERE ENABLED AND COALESCE(USE_FOR_DBT, TRUE) ORDER BY NAME""")
+                              FROM CORE.REPO WHERE ENABLED AND COALESCE(USE_FOR_DBT, TRUE) ORDER BY NAME""")
     except Exception:
         return []
     out = []
@@ -3376,7 +3377,7 @@ def _generate_dbt(run_id: str, payload: dict, db: Db):
     except Exception:
         pass
     try:
-        return db.call("CALL CODEGEN.GENERATE_DBT(%s, %s)", (run_id, json.dumps(payload)))
+        return db.call("CALL CORE.GENERATE_DBT(%s, %s)", (run_id, json.dumps(payload)))
     except Exception as two_arg:
         if _is_transition_rejected(two_arg):
             try:
@@ -3386,7 +3387,7 @@ def _generate_dbt(run_id: str, payload: dict, db: Db):
         if not _is_dbt_arity_error(two_arg):
             raise _snowflake_error(two_arg) from two_arg
         try:
-            return db.call("CALL CODEGEN.GENERATE_DBT(%s)", (run_id,))
+            return db.call("CALL CORE.GENERATE_DBT(%s)", (run_id,))
         except Exception as one_arg:
             if _is_transition_rejected(one_arg):
                 try:
@@ -3398,7 +3399,7 @@ def _generate_dbt(run_id: str, payload: dict, db: Db):
 
 def _github_publisher_ready(db: Db) -> bool:
     try:
-        return bool(db.query("SHOW PROCEDURES LIKE 'PUBLISH_DBT_PR' IN SCHEMA CODEGEN"))
+        return bool(db.query(f"SHOW PROCEDURES LIKE 'PUBLISH_DBT_PR' IN SCHEMA {PLATFORM_SCHEMA}"))
     except Exception:
         return False
 
@@ -3408,7 +3409,7 @@ def _publish_dbt(db: Db, run_id: str, payload: dict) -> dict:
         return {"status": "NOT_CONFIGURED",
                 "detail": "GitHub publishing is not set up. An admin can set it up in the GitHub publishing card."}
     try:
-        return db.call("CALL CODEGEN.PUBLISH_DBT_PR(%s, %s)", (run_id, json.dumps(payload)))
+        return db.call("CALL CORE.PUBLISH_DBT_PR(%s, %s)", (run_id, json.dumps(payload)))
     except Exception as exc:
         return {"status": "FAILED", "detail": str(exc)[:1000]}
 
@@ -3424,10 +3425,10 @@ class DbtPublish(BaseModel):
 
 @app.post("/api/runs/{run_id}/dbt/publish")
 def publish_dbt(run_id: str, body: DbtPublish, db: Db = Depends(current_db)):
-    """Push the latest generation to a new GitHub branch and open a PR (CODEGEN.PUBLISH_DBT_PR)."""
+    """Push the latest generation to a new GitHub branch and open a PR (CORE.PUBLISH_DBT_PR)."""
     plan = _stored_dbt_plan(db, run_id)
     if plan.get("code_repo_id"):
-        found = db.query("SELECT ENABLED, COALESCE(USE_FOR_DBT, TRUE) AS USE_FOR_DBT, PROVIDER, NAME FROM CODE.REPO WHERE REPO_ID = %s",
+        found = db.query("SELECT ENABLED, COALESCE(USE_FOR_DBT, TRUE) AS USE_FOR_DBT, PROVIDER, NAME FROM CORE.REPO WHERE REPO_ID = %s",
                          (plan["code_repo_id"],))
         if not found or not found[0]["enabled"] or not found[0]["use_for_dbt"]:
             raise HTTPException(409, "The repository this run was generated for is no longer connected or used for dbt. "
@@ -3442,12 +3443,12 @@ def publish_dbt(run_id: str, body: DbtPublish, db: Db = Depends(current_db)):
 
 def _services_import(db: Db) -> str:
     """IMPORTS of the deployed GENERATE_DBT, so the publisher runs the same code package."""
-    for row in db.query("DESC PROCEDURE CODEGEN.GENERATE_DBT(VARCHAR, VARCHAR)"):
+    for row in db.query("DESC PROCEDURE CORE.GENERATE_DBT(VARCHAR, VARCHAR)"):
         if str(row.get("property") or "").lower() == "imports":
             value = str(row.get("value") or "").strip("[] ")
             if value:
                 return value.split(",")[0].strip().strip("'\"")
-    raise HTTPException(409, "Deploy the platform first (Admin > Apply) so CODEGEN.GENERATE_DBT exists.")
+    raise HTTPException(409, "Deploy the platform first (Admin > Apply) so CORE.GENERATE_DBT exists.")
 
 
 def _set_config(db: Db, key: str, value: dict, description: str) -> None:
@@ -3475,7 +3476,7 @@ def github_publish_status(db: Db = Depends(current_db)):
 
 class GithubSetup(BaseModel):
     token: Optional[str] = Field(default=None, max_length=255)
-    secret: str = Field(default="CODEGEN.GITHUB_TOKEN", max_length=256)
+    secret: str = Field(default=f"{PLATFORM_SCHEMA}.GITHUB_TOKEN", max_length=256)
     external_access_integration: str = Field(default="GDP_GITHUB_ACCESS", max_length=256)
 
 
@@ -3524,7 +3525,7 @@ def github_check(body: GithubCheck, db: Db = Depends(current_db)):
     if not _github_publisher_ready(db):
         return {"status": "NOT_CONFIGURED", "detail": "Set up GitHub publishing first."}
     try:
-        return db.call("CALL CODEGEN.PUBLISH_DBT_PR(%s, %s)", ("", json.dumps({"check_only": True, "origin": body.origin})))
+        return db.call("CALL CORE.PUBLISH_DBT_PR(%s, %s)", ("", json.dumps({"check_only": True, "origin": body.origin})))
     except Exception as exc:
         return {"status": "FAILED", "detail": str(exc)[:600]}
 
@@ -3568,7 +3569,7 @@ def create_git_repository(body: GitRepositoryCreate, db: Db = Depends(current_db
     origin = body.origin.strip()
     if not re.fullmatch(r"https://[A-Za-z0-9.\-]+/[A-Za-z0-9_.\-/]+", origin):
         raise HTTPException(400, "Origin must be an https git URL")
-    fqn = f"{DATABASE.upper()}.CODEGEN.{name}"
+    fqn = f"{DATABASE.upper()}.{PLATFORM_SCHEMA}.{name}"
     creds = f" GIT_CREDENTIALS = {safe_fqn(body.git_credentials)}" if body.git_credentials else ""
     try:
         db.execute(
@@ -3587,7 +3588,7 @@ def get_dbt(run_id: str, db: Db = Depends(current_db)):
         """
         SELECT GENERATION_ID, GENERATION_VERSION, GENERATION_STATUS, FILES_GENERATED, STAGE_PATH,
                SKILL_VERSION, MODEL_VERSION, CREATED_AT::VARCHAR AS CREATED_AT
-          FROM CODEGEN.DBT_GENERATION_REGISTRY WHERE RUN_ID = %s
+          FROM CORE.DBT_GENERATION_REGISTRY WHERE RUN_ID = %s
          ORDER BY GENERATION_VERSION DESC LIMIT 1
         """,
         (run_id,),
@@ -3597,7 +3598,7 @@ def get_dbt(run_id: str, db: Db = Depends(current_db)):
         artifacts = db.query(
             """
             SELECT ARTIFACT_ID, ARTIFACT_TYPE, FILE_PATH, CONTENT_SHA256, CONTENT
-              FROM CODEGEN.GENERATED_ARTIFACT WHERE GENERATION_ID = %s ORDER BY FILE_PATH
+              FROM CORE.GENERATED_ARTIFACT WHERE GENERATION_ID = %s ORDER BY FILE_PATH
             """,
             (gen[0]["generation_id"],),
         )
@@ -3617,7 +3618,7 @@ def get_dbt(run_id: str, db: Db = Depends(current_db)):
             """
             SELECT STATUS, ORIGIN, BASE_BRANCH, HEAD_BRANCH, COMMIT_SHA, FILES_PUSHED, PR_NUMBER, PR_URL,
                    DBT_PROJECT, DETAIL, GENERATION_ID, CREATED_AT::VARCHAR AS CREATED_AT
-              FROM CODEGEN.GIT_PUBLICATION WHERE RUN_ID = %s ORDER BY CREATED_AT DESC LIMIT 1
+              FROM CORE.GIT_PUBLICATION WHERE RUN_ID = %s ORDER BY CREATED_AT DESC LIMIT 1
             """,
             (run_id,),
         )
@@ -3626,7 +3627,7 @@ def get_dbt(run_id: str, db: Db = Depends(current_db)):
     store_change = None
     try:  # an STTM edited in the STTM Store after this generation: dbt should be regenerated
         changed = db.query("""SELECT VERSION, CHANGE_NOTE, CREATED_BY, CREATED_AT::VARCHAR AS CREATED_AT
-                                FROM GOVERNANCE.STTM_CATALOG
+                                FROM CORE.STTM_CATALOG
                                WHERE RUN_ID = %s AND ORIGIN = 'CATALOG_EDIT'
                                ORDER BY CREATED_AT DESC LIMIT 1""", (run_id,))
         if changed and (not gen or str(changed[0]["created_at"]) > str(gen[0].get("created_at") or "")):
@@ -3748,7 +3749,7 @@ def get_dbt_workspace(run_id: str, git: bool = True, db: Db = Depends(current_db
         skills = db.query(
             """
             SELECT SKILL_NAME, VERSION, DESCRIPTION, SKILL_TYPE
-              FROM KNOWLEDGE.SKILL_REGISTRY
+              FROM CORE.SKILL_REGISTRY
              WHERE IS_CURRENT AND STATUS = 'ACTIVE'
                AND UPPER(REPLACE(SKILL_NAME, '_', '-')) IN ('DBT-ONBOARD-SOURCE', 'SILVER-MODEL', 'GDP-DOMAIN-SKILL')
              ORDER BY SKILL_NAME
@@ -3773,7 +3774,7 @@ class DbtReview(BaseModel):
 def _skill_content(db: Db, name: str) -> str:
     rows = db.query(
         """
-        SELECT CONTENT FROM KNOWLEDGE.SKILL_REGISTRY
+        SELECT CONTENT FROM CORE.SKILL_REGISTRY
          WHERE IS_CURRENT AND UPPER(REPLACE(SKILL_NAME, '_', '-')) = %s
          ORDER BY VERSION DESC LIMIT 1
         """,
@@ -3791,7 +3792,7 @@ def _domain_skill(db: Db, run_id: str, budget: int = 9000) -> str:
         run = db.query(
             """
             SELECT D.DOMAIN_NAME, R.DOMAIN_ID, R.TARGET_MODEL, COALESCE(R.PIPELINE, 'SILVER') AS PIPELINE FROM CORE.WORKFLOW_RUN R
-              LEFT JOIN KNOWLEDGE.DOMAIN_REGISTRY D ON D.DOMAIN_ID = R.DOMAIN_ID
+              LEFT JOIN CORE.DOMAIN_REGISTRY D ON D.DOMAIN_ID = R.DOMAIN_ID
              WHERE R.RUN_ID = %s
             """,
             (run_id,),
@@ -3809,7 +3810,7 @@ def _domain_skill(db: Db, run_id: str, budget: int = 9000) -> str:
         try:
             definitions = [f"{r['title']}: {r['content']}" for r in db.query(
                 """
-                SELECT TITLE, CONTENT FROM KNOWLEDGE.DOMAIN_KNOWLEDGE
+                SELECT TITLE, CONTENT FROM CORE.DOMAIN_KNOWLEDGE
                  WHERE DOMAIN_ID = %s AND IS_CURRENT AND KNOWLEDGE_TYPE = 'MODEL_DEFINITION'
                    AND CONTENT_JSON:target_table::STRING = %s AND COALESCE(LAYER, 'ANY') IN ('ANY', %s)
                 """,
@@ -3825,8 +3826,8 @@ def _sttm_context(db: Db, run_id: str) -> str:
         lines = db.query(
             """
             SELECT L.TARGET_COLUMN, L.TARGET_DATATYPE, L.SOURCE_TABLE, L.SOURCE_COLUMN, L.MAPPING_TYPE, L.TRANSFORMATION
-              FROM CONTRACT.STTM_LINE L
-              JOIN CONTRACT.STTM_REGISTRY S ON S.STTM_ID = L.STTM_ID
+              FROM CORE.STTM_LINE L
+              JOIN CORE.STTM_REGISTRY S ON S.STTM_ID = L.STTM_ID
              WHERE S.RUN_ID = %s AND S.STATUS IN ('REVIEW', 'APPROVED')
             QUALIFY DENSE_RANK() OVER (ORDER BY S.STTM_VERSION DESC) = 1
              ORDER BY L.TARGET_COLUMN LIMIT 120
@@ -3848,13 +3849,13 @@ def review_dbt(run_id: str, body: DbtReview, db: Db = Depends(current_db)):
     from services.dbt.review import review_file
 
     gen = db.query(
-        "SELECT GENERATION_ID FROM CODEGEN.DBT_GENERATION_REGISTRY WHERE RUN_ID = %s ORDER BY GENERATION_VERSION DESC LIMIT 1",
+        "SELECT GENERATION_ID FROM CORE.DBT_GENERATION_REGISTRY WHERE RUN_ID = %s ORDER BY GENERATION_VERSION DESC LIMIT 1",
         (run_id,),
     )
     if not gen:
         raise HTTPException(400, "Generate dbt first, then review a file.")
     files = {r["file_path"]: r.get("content") or "" for r in db.query(
-        "SELECT FILE_PATH, CONTENT FROM CODEGEN.GENERATED_ARTIFACT WHERE GENERATION_ID = %s "
+        "SELECT FILE_PATH, CONTENT FROM CORE.GENERATED_ARTIFACT WHERE GENERATION_ID = %s "
         "AND (FILE_PATH = %s OR FILE_PATH = 'release/generation-report.json')",
         (gen[0]["generation_id"], body.file_path.strip()),
     )}
@@ -3908,7 +3909,7 @@ def enhance_dbt(run_id: str, body: DbtEnhance, db: Db = Depends(current_db)):
 
     gen = db.query(
         """
-        SELECT GENERATION_ID, GENERATION_STATUS FROM CODEGEN.DBT_GENERATION_REGISTRY
+        SELECT GENERATION_ID, GENERATION_STATUS FROM CORE.DBT_GENERATION_REGISTRY
          WHERE RUN_ID = %s ORDER BY GENERATION_VERSION DESC LIMIT 1
         """,
         (run_id,),
@@ -3921,24 +3922,24 @@ def enhance_dbt(run_id: str, body: DbtEnhance, db: Db = Depends(current_db)):
         if not (body.content or "").strip():
             raise HTTPException(400, "Apply needs the previewed file content.")
         content = body.content
-        if not db.query("SELECT 1 AS X FROM CODEGEN.GENERATED_ARTIFACT WHERE GENERATION_ID = %s AND FILE_PATH = %s",
+        if not db.query("SELECT 1 AS X FROM CORE.GENERATED_ARTIFACT WHERE GENERATION_ID = %s AND FILE_PATH = %s",
                         (generation_id, path)):
             raise HTTPException(404, f"No generated file {path}")
         if (gen[0].get("generation_status") or "").upper() == "APPROVED":
             raise HTTPException(409, "This generation is approved; regenerate dbt to change its files.")
-        if db.query("SELECT 1 AS X FROM CODEGEN.GIT_PUBLICATION WHERE GENERATION_ID = %s AND STATUS = 'PUBLISHED' LIMIT 1",
+        if db.query("SELECT 1 AS X FROM CORE.GIT_PUBLICATION WHERE GENERATION_ID = %s AND STATUS = 'PUBLISHED' LIMIT 1",
                     (generation_id,)):
             raise HTTPException(409, "This generation is already published to Git; regenerate dbt to change its files.")
         sha = hashlib.sha256(content.encode("utf-8")).hexdigest()
         db.execute(
-            "UPDATE CODEGEN.GENERATED_ARTIFACT SET CONTENT = %s, CONTENT_SHA256 = %s "
+            "UPDATE CORE.GENERATED_ARTIFACT SET CONTENT = %s, CONTENT_SHA256 = %s "
             "WHERE GENERATION_ID = %s AND FILE_PATH = %s",
             (content, sha, generation_id, path),
         )
         return {"applied": True, "file_path": path, "content": content}
 
     rows = db.query(
-        "SELECT CONTENT FROM CODEGEN.GENERATED_ARTIFACT WHERE GENERATION_ID = %s AND FILE_PATH = %s",
+        "SELECT CONTENT FROM CORE.GENERATED_ARTIFACT WHERE GENERATION_ID = %s AND FILE_PATH = %s",
         (generation_id, path),
     )
     if not rows:
@@ -3949,8 +3950,8 @@ def enhance_dbt(run_id: str, body: DbtEnhance, db: Db = Depends(current_db)):
         sttm = db.query(
             """
             SELECT L.TARGET_COLUMN, L.SOURCE_TABLE, L.SOURCE_COLUMN, L.TRANSFORMATION
-              FROM CONTRACT.STTM_LINE L
-              JOIN CONTRACT.STTM_REGISTRY S ON S.STTM_ID = L.STTM_ID
+              FROM CORE.STTM_LINE L
+              JOIN CORE.STTM_REGISTRY S ON S.STTM_ID = L.STTM_ID
              WHERE S.RUN_ID = %s AND S.STATUS IN ('REVIEW', 'APPROVED')
              ORDER BY S.STTM_VERSION DESC, L.TARGET_COLUMN LIMIT 40
             """,
@@ -3993,7 +3994,7 @@ def enhance_dbt(run_id: str, body: DbtEnhance, db: Db = Depends(current_db)):
 @app.post("/api/runs/{run_id}/validation")
 def validate_dbt(run_id: str, db: Db = Depends(current_db)):
     try:
-        return db.call("CALL CODEGEN.VALIDATE_DBT(%s)", (run_id,))
+        return db.call("CALL CORE.VALIDATE_DBT(%s)", (run_id,))
     except Exception as exc:
         raise _snowflake_error(exc) from exc
 
@@ -4004,7 +4005,7 @@ def get_validation(run_id: str, db: Db = Depends(current_db)):
         """
         SELECT VALIDATION_ID, VALIDATION_TYPE, STATUS, ERROR_COUNT, WARNING_COUNT, RESULT_JSON,
                STARTED_AT::VARCHAR AS STARTED_AT, COMPLETED_AT::VARCHAR AS COMPLETED_AT
-          FROM CODEGEN.VALIDATION_RUN WHERE RUN_ID = %s
+          FROM CORE.VALIDATION_RUN WHERE RUN_ID = %s
          ORDER BY STARTED_AT DESC
         """,
         (run_id,),
@@ -4014,7 +4015,7 @@ def get_validation(run_id: str, db: Db = Depends(current_db)):
 @app.post("/api/knowledge/search")
 def search_knowledge(body: KnowledgeQuery, db: Db = Depends(current_db)):
     try:
-        return db.call("CALL KNOWLEDGE.SEARCH_KNOWLEDGE(%s, %s, %s, %s)",
+        return db.call("CALL CORE.SEARCH_KNOWLEDGE(%s, %s, %s, %s)",
                        (body.query, body.domain, body.knowledge_type, body.limit))
     except Exception as exc:
         raise _snowflake_error(exc) from exc
@@ -4070,7 +4071,7 @@ def _profile_source(db: Db, source_id: str, tables: list[str], force: bool) -> d
     from services.profiling.procedures import profile_source_tables as profile_source_handler
 
     payload = json.dumps({"tables": tables, "force_refresh": force})
-    return _source_call(db, "CALL SOURCE.PROFILE_SOURCE_TABLES(%s, %s)", profile_source_handler, source_id, payload)
+    return _source_call(db, "CALL CORE.PROFILE_SOURCE_TABLES(%s, %s)", profile_source_handler, source_id, payload)
 
 
 def _prewarm_run_profiles(db: Db, run_id: str, force: bool = False) -> None:
@@ -4079,7 +4080,7 @@ def _prewarm_run_profiles(db: Db, run_id: str, force: bool = False) -> None:
     try:
         run = db.query("SELECT SOURCE_SYSTEM_ID FROM CORE.WORKFLOW_RUN WHERE RUN_ID = %s", (run_id,))
         tables = [r["source_table"] for r in db.query(
-            "SELECT DISTINCT SOURCE_TABLE FROM SOURCE.LANDING_TABLE_REGISTRY WHERE RUN_ID = %s "
+            "SELECT DISTINCT SOURCE_TABLE FROM CORE.LANDING_TABLE_REGISTRY WHERE RUN_ID = %s "
             "AND INGESTION_STATUS = 'COMPLETE'", (run_id,))]
         if run and run[0]["source_system_id"] and tables:
             _profile_source(db, run[0]["source_system_id"], tables, force)
@@ -4093,7 +4094,7 @@ def _source_row(db: Db, source_id: str) -> dict:
         SELECT SOURCE_SYSTEM_ID, SOURCE_SYSTEM_NAME, SOURCE_TYPE, OWNER, DOMAIN_ID,
                CONFIGURATION_JSON:database::VARCHAR AS DATABASE_NAME, CONFIGURATION_JSON:schema::VARCHAR AS SCHEMA_NAME,
                CREATED_AT::VARCHAR AS CREATED_AT
-          FROM SOURCE.SOURCE_REGISTRY WHERE SOURCE_SYSTEM_ID = %s AND ACTIVE_FLAG
+          FROM CORE.SOURCE_REGISTRY WHERE SOURCE_SYSTEM_ID = %s AND ACTIVE_FLAG
         """,
         (source_id,),
     )
@@ -4151,7 +4152,7 @@ def _store_rows(db: Db, source_names: Optional[list[str]] = None) -> list[dict]:
                    SOURCE_FINGERPRINT, IS_APPROXIMATE, PROFILED_IN_RUN, PROFILED_BY, PROFILED_AT::VARCHAR AS PROFILED_AT,
                    STATUS, STATUS_UPDATED_AT::VARCHAR AS STATUS_UPDATED_AT, ERROR_MESSAGE, AVG_NULL_PERCENTAGE,
                    KEY_CANDIDATES, PII_COLUMNS
-              FROM METADATA.TABLE_PROFILES {where}
+              FROM CORE.TABLE_PROFILES {where}
             """,
             params,
         )
@@ -4286,9 +4287,9 @@ def source_inventory(source_id: str, db: Db = Depends(current_db)):
         for r in db.query(
             """
             SELECT O.OBJECT_NAME, D.DOMAIN_NAME
-              FROM SOURCE.SOURCE_OBJECT O
+              FROM CORE.SOURCE_OBJECT O
               JOIN CORE.WORKFLOW_RUN R ON R.RUN_ID = O.RUN_ID
-              JOIN KNOWLEDGE.DOMAIN_REGISTRY D ON D.DOMAIN_ID = R.DOMAIN_ID
+              JOIN CORE.DOMAIN_REGISTRY D ON D.DOMAIN_ID = R.DOMAIN_ID
              WHERE O.SOURCE_SYSTEM_ID = %s AND O.SELECTED_FLAG
            QUALIFY ROW_NUMBER() OVER (PARTITION BY O.OBJECT_NAME ORDER BY O.DISCOVERED_AT DESC) = 1
             """,
@@ -4324,7 +4325,7 @@ def source_inventory(source_id: str, db: Db = Depends(current_db)):
 
 @app.get("/api/sources/{source_id}/profiles/{table}")
 def source_table_profile(source_id: str, table: str, db: Db = Depends(current_db)):
-    """The staged profile document of one table, read from @METADATA.PROFILES_STAGE."""
+    """The staged profile document of one table, read from @CORE.PROFILES_STAGE."""
     from services.profiling.profiler import STAGE_PATH
 
     src = _source_row(db, source_id)
@@ -4333,8 +4334,8 @@ def source_table_profile(source_id: str, table: str, db: Db = Depends(current_db
                   and r["schema_name"] == src["schema_name"]), None)
     if not entry or not entry.get("source_fingerprint") or not STAGE_PATH.match(entry["profile_stage_path"] or ""):
         raise HTTPException(404, f"{table} has no staged profile yet")
-    found = db.query(f"SELECT $1 AS DOC FROM @METADATA.PROFILES_STAGE/{entry['profile_stage_path']} "
-                     "(FILE_FORMAT => 'METADATA.PROFILE_JSON_FORMAT')")
+    found = db.query(f"SELECT $1 AS DOC FROM @CORE.PROFILES_STAGE/{entry['profile_stage_path']} "
+                     "(FILE_FORMAT => 'CORE.PROFILE_JSON_FORMAT')")
     if not found:
         raise HTTPException(404, f"the staged file for {table} is missing; re-profile it")
     doc = found[0]["doc"]
@@ -4405,7 +4406,7 @@ def create_source_connection(body: SourceConnectionCreate, db: Db = Depends(curr
         "SOURCE_SYSTEM_NAME": name[:64], "SOURCE_TYPE": body.source_type, "DATABASE": body.database,
         "SCHEMA": body.schema_name, "DOMAIN_ID": body.domain_id}.items() if v})
     try:
-        return _source_call(db, "CALL SOURCE.REGISTER_CONNECTION(%s)", register_connection, payload)
+        return _source_call(db, "CALL CORE.REGISTER_CONNECTION(%s)", register_connection, payload)
     except Exception as exc:
         raise _snowflake_error(exc) from exc
 
@@ -4472,7 +4473,7 @@ def _register_proposed_target(db: Db, src: dict, tables: list[str], domain_id: O
     payload = {"database": database, "schema": schema or "SILVER", "table": name or _proposed_name(tables),
                "columns": columns, "domain_id": domain_id}
     try:
-        registered = db.call("CALL KNOWLEDGE.REGISTER_TARGET_TABLE(%s)", (json.dumps(payload),))
+        registered = db.call("CALL CORE.REGISTER_TARGET_TABLE(%s)", (json.dumps(payload),))
     except Exception as exc:
         raise _snowflake_error(exc) from exc
     return {"fqn": registered["target_model"], "target_table": payload["table"],
@@ -4531,7 +4532,7 @@ def _catalog_store_rows(db: Db, database: str, schema: str) -> dict[str, dict]:
                    SOURCE_FINGERPRINT, IS_APPROXIMATE, PROFILED_IN_RUN, PROFILED_BY, PROFILED_AT::VARCHAR AS PROFILED_AT,
                    STATUS, STATUS_UPDATED_AT::VARCHAR AS STATUS_UPDATED_AT, ERROR_MESSAGE, AVG_NULL_PERCENTAGE,
                    KEY_CANDIDATES, PII_COLUMNS, QUALITY_JSON
-              FROM METADATA.TABLE_PROFILES
+              FROM CORE.TABLE_PROFILES
              WHERE DATABASE_NAME = %s AND SCHEMA_NAME = %s
            QUALIFY ROW_NUMBER() OVER (PARTITION BY TABLE_NAME
                                       ORDER BY IFF(STATUS = 'PROFILING', 0, 1), STATUS_UPDATED_AT DESC NULLS LAST) = 1
@@ -4548,7 +4549,7 @@ def _registered_source(db: Db, database: str, schema: str) -> Optional[dict]:
         """
         SELECT SOURCE_SYSTEM_ID, SOURCE_SYSTEM_NAME, SOURCE_TYPE,
                CONFIGURATION_JSON:database::VARCHAR AS DATABASE_NAME, CONFIGURATION_JSON:schema::VARCHAR AS SCHEMA_NAME
-          FROM SOURCE.SOURCE_REGISTRY
+          FROM CORE.SOURCE_REGISTRY
          WHERE ACTIVE_FLAG AND CONFIGURATION_JSON:database::VARCHAR = %s AND CONFIGURATION_JSON:schema::VARCHAR = %s
          ORDER BY CREATED_AT LIMIT 1
         """,
@@ -4610,17 +4611,17 @@ def _domain_vocab(db: Db) -> list[dict]:
     if time.time() - _DOMAIN_VOCAB["at"] < 60 and _DOMAIN_VOCAB["domains"]:
         return _DOMAIN_VOCAB["domains"]
     try:
-        registry = db.query("SELECT DOMAIN_ID, DOMAIN_NAME, CONFIG FROM KNOWLEDGE.DOMAIN_REGISTRY WHERE ACTIVE_FLAG")
+        registry = db.query("SELECT DOMAIN_ID, DOMAIN_NAME, CONFIG FROM CORE.DOMAIN_REGISTRY WHERE ACTIVE_FLAG")
     except Exception:
-        registry = db.query("SELECT DOMAIN_ID, DOMAIN_NAME FROM KNOWLEDGE.DOMAIN_REGISTRY WHERE ACTIVE_FLAG")
+        registry = db.query("SELECT DOMAIN_ID, DOMAIN_NAME FROM CORE.DOMAIN_REGISTRY WHERE ACTIVE_FLAG")
     terms: dict[str, set] = {d["domain_id"]: set() for d in registry}
-    for k in db.query("SELECT DOMAIN_ID, CONTENT_JSON FROM KNOWLEDGE.DOMAIN_KNOWLEDGE WHERE IS_CURRENT "
+    for k in db.query("SELECT DOMAIN_ID, CONTENT_JSON FROM CORE.DOMAIN_KNOWLEDGE WHERE IS_CURRENT "
                       "AND STATUS = 'ACTIVE' AND KNOWLEDGE_TYPE = 'GLOSSARY'"):
         content = _json(k.get("content_json")) or {}
         for word in (content.get("synonyms") or []) + [content.get("target_column") or ""]:
             terms.setdefault(k["domain_id"], set()).update(token_set(word))
-    for c in db.query("""SELECT T.DOMAIN_ID, C.COLUMN_NAME, T.TARGET_TABLE FROM KNOWLEDGE.TARGET_COLUMN_REGISTRY C
-                           JOIN KNOWLEDGE.TARGET_TABLE_REGISTRY T ON T.TARGET_TABLE_ID = C.TARGET_TABLE_ID
+    for c in db.query("""SELECT T.DOMAIN_ID, C.COLUMN_NAME, T.TARGET_TABLE FROM CORE.TARGET_COLUMN_REGISTRY C
+                           JOIN CORE.TARGET_TABLE_REGISTRY T ON T.TARGET_TABLE_ID = C.TARGET_TABLE_ID
                           WHERE T.ACTIVE_FLAG"""):
         terms.setdefault(c["domain_id"], set()).update(token_set(c["column_name"]) | entity_tokens(c["target_table"]))
     out = [{"domain_id": d["domain_id"], "name": d["domain_name"], "terms": terms.get(d["domain_id"], set()),
@@ -4672,9 +4673,9 @@ def _run_domains(db: Db, database: str, schema: str) -> dict[str, str]:
         return {r["object_name"]: r["domain_name"] for r in db.query(
             """
             SELECT O.OBJECT_NAME, D.DOMAIN_NAME
-              FROM SOURCE.SOURCE_OBJECT O
+              FROM CORE.SOURCE_OBJECT O
               JOIN CORE.WORKFLOW_RUN R ON R.RUN_ID = O.RUN_ID
-              JOIN KNOWLEDGE.DOMAIN_REGISTRY D ON D.DOMAIN_ID = R.DOMAIN_ID
+              JOIN CORE.DOMAIN_REGISTRY D ON D.DOMAIN_ID = R.DOMAIN_ID
              WHERE O.SOURCE_DATABASE = %s AND O.SOURCE_SCHEMA = %s AND O.SELECTED_FLAG
            QUALIFY ROW_NUMBER() OVER (PARTITION BY O.OBJECT_NAME ORDER BY O.DISCOVERED_AT DESC) = 1
             """,
@@ -4748,8 +4749,8 @@ def _read_stage_doc(db: Db, stage_path: str) -> Optional[dict]:
 
     if not STAGE_PATH.match(stage_path or ""):
         return None
-    found = db.query(f"SELECT $1 AS DOC FROM @METADATA.PROFILES_STAGE/{stage_path} "
-                     "(FILE_FORMAT => 'METADATA.PROFILE_JSON_FORMAT')")
+    found = db.query(f"SELECT $1 AS DOC FROM @CORE.PROFILES_STAGE/{stage_path} "
+                     "(FILE_FORMAT => 'CORE.PROFILE_JSON_FORMAT')")
     return _json(found[0]["doc"]) if found else None
 
 
@@ -4764,7 +4765,7 @@ def _backfill_quality(db: Db, entries: list[dict], limit: int = 25) -> None:
                 continue
             dims = quality_dimensions(doc)
             db.execute(
-                "UPDATE METADATA.TABLE_PROFILES SET QUALITY_JSON = PARSE_JSON(%s) WHERE SOURCE_NAME = %s "
+                "UPDATE CORE.TABLE_PROFILES SET QUALITY_JSON = PARSE_JSON(%s) WHERE SOURCE_NAME = %s "
                 "AND DATABASE_NAME = %s AND SCHEMA_NAME = %s AND TABLE_NAME = %s",
                 (json.dumps(dims), entry["source_name"], entry["database_name"], entry["schema_name"], entry["table_name"]),
             )
@@ -4798,7 +4799,7 @@ def catalog_inventory(database: str, schema: str, db: Db = Depends(current_db)):
 
 @app.get("/api/catalog/profile")
 def catalog_table_profile(database: str, schema: str, table: str, db: Db = Depends(current_db)):
-    """The staged profile document of any profiled table, read from @METADATA.PROFILES_STAGE."""
+    """The staged profile document of any profiled table, read from @CORE.PROFILES_STAGE."""
     from services.profiling.profiler import STAGE_PATH
 
     database, schema, table = _ident(database, "database"), _ident(schema, "schema"), _table_ident(table)
@@ -4935,7 +4936,7 @@ def _ensure_source(db: Db, database: str, schema: str) -> dict:
         payload = json.dumps({"SOURCE_SYSTEM_NAME": name, "SOURCE_TYPE": source_type,
                               "DATABASE": database, "SCHEMA": schema})
         try:
-            _source_call(db, "CALL SOURCE.REGISTER_CONNECTION(%s)", register_connection, payload)
+            _source_call(db, "CALL CORE.REGISTER_CONNECTION(%s)", register_connection, payload)
             break
         except Exception as exc:
             last_error = exc
@@ -5091,7 +5092,7 @@ def create_external_source(body: ExternalSourceCreate, db: Db = Depends(current_
     from services.source.external import register_external_source
 
     try:
-        return _source_call(db, "CALL SOURCE.REGISTER_EXTERNAL_SOURCE(%s)", register_external_source,
+        return _source_call(db, "CALL CORE.REGISTER_EXTERNAL_SOURCE(%s)", register_external_source,
                             body.model_dump_json())
     except Exception as exc:
         raise _snowflake_error(exc) from exc
@@ -5110,7 +5111,7 @@ def external_files(source_id: str, db: Db = Depends(current_db)):
 
     _external_row(db, source_id)
     try:
-        return _source_call(db, "CALL SOURCE.LIST_EXTERNAL_FILES(%s)", list_external_files, source_id)
+        return _source_call(db, "CALL CORE.LIST_EXTERNAL_FILES(%s)", list_external_files, source_id)
     except Exception as exc:
         raise _snowflake_error(exc) from exc
 
@@ -5122,7 +5123,7 @@ def upload_external_files(source_id: str, files: list[UploadFile] = File(...), d
     import tempfile
 
     src = _external_row(db, source_id)
-    found = db.query("SELECT CONNECTION_TYPE FROM SOURCE.SOURCE_REGISTRY WHERE SOURCE_SYSTEM_ID = %s", (source_id,))
+    found = db.query("SELECT CONNECTION_TYPE FROM CORE.SOURCE_REGISTRY WHERE SOURCE_SYSTEM_ID = %s", (source_id,))
     if not found or found[0]["connection_type"] != "upload":
         raise HTTPException(400, "files can only be uploaded to a file-upload source; cloud sources read their bucket")
     database, schema = src["database_name"], src["schema_name"]  # stored spelling; quoted where used
@@ -5162,7 +5163,7 @@ def land_external(source_id: str, body: LandRequest, db: Db = Depends(current_db
 
     _external_row(db, source_id)
     try:
-        return _source_call(db, "CALL SOURCE.LAND_EXTERNAL_FILES(%s, %s)", land_external_files, source_id,
+        return _source_call(db, "CALL CORE.LAND_EXTERNAL_FILES(%s, %s)", land_external_files, source_id,
                             body.model_dump_json())
     except Exception as exc:
         raise _snowflake_error(exc) from exc
@@ -5233,11 +5234,11 @@ def put_domain_rules(domain_id: str, body: RulesUpdate, pipeline: Literal["SILVE
                      db: Db = Depends(current_db)):
     """Overrides for one domain, on top of the platform's (for the Gold Pipeline: CONFIG.rules_gold)."""
     overrides = _clean_overrides(body.overrides)
-    found = db.query("SELECT DOMAIN_ID FROM KNOWLEDGE.DOMAIN_REGISTRY WHERE DOMAIN_ID = %s", (domain_id,))
+    found = db.query("SELECT DOMAIN_ID FROM CORE.DOMAIN_REGISTRY WHERE DOMAIN_ID = %s", (domain_id,))
     if not found:
         raise HTTPException(404, "domain not found")
     db.execute(
-        """UPDATE KNOWLEDGE.DOMAIN_REGISTRY
+        """UPDATE CORE.DOMAIN_REGISTRY
               SET CONFIG = OBJECT_INSERT(COALESCE(CONFIG, OBJECT_CONSTRUCT()), %s, PARSE_JSON(%s), TRUE)
             WHERE DOMAIN_ID = %s""",
         ("rules_gold" if pipeline == "GOLD" else "rules", json.dumps(overrides), domain_id),
@@ -5405,8 +5406,8 @@ _KNOWLEDGE_COLUMNS = """K.KNOWLEDGE_ID, K.DOMAIN_ID, D.DOMAIN_NAME, K.KNOWLEDGE_
 
 
 def _knowledge_item(db: Db, knowledge_id: str) -> dict:
-    found = db.query(f"""SELECT {_KNOWLEDGE_COLUMNS} FROM KNOWLEDGE.DOMAIN_KNOWLEDGE K
-                          JOIN KNOWLEDGE.DOMAIN_REGISTRY D ON D.DOMAIN_ID = K.DOMAIN_ID
+    found = db.query(f"""SELECT {_KNOWLEDGE_COLUMNS} FROM CORE.DOMAIN_KNOWLEDGE K
+                          JOIN CORE.DOMAIN_REGISTRY D ON D.DOMAIN_ID = K.DOMAIN_ID
                          WHERE K.KNOWLEDGE_ID = %s""", (knowledge_id,))
     if not found:
         raise HTTPException(404, "knowledge item not found")
@@ -5434,11 +5435,11 @@ def list_knowledge(domain_id: Optional[str] = None, knowledge_type: Optional[str
         where, params = list_query(domain_id, knowledge_type, status, q, offset, limit, layer)
     except AssertionError as exc:
         raise HTTPException(400, str(exc)) from exc
-    items = db.query(f"""SELECT {_KNOWLEDGE_COLUMNS} FROM KNOWLEDGE.DOMAIN_KNOWLEDGE K
-                          JOIN KNOWLEDGE.DOMAIN_REGISTRY D ON D.DOMAIN_ID = K.DOMAIN_ID
+    items = db.query(f"""SELECT {_KNOWLEDGE_COLUMNS} FROM CORE.DOMAIN_KNOWLEDGE K
+                          JOIN CORE.DOMAIN_REGISTRY D ON D.DOMAIN_ID = K.DOMAIN_ID
                          WHERE {where} ORDER BY K.UPDATED_AT DESC NULLS LAST, K.TITLE LIMIT %s OFFSET %s""",
                      tuple(params))
-    total = db.query(f"SELECT COUNT(*) AS N FROM KNOWLEDGE.DOMAIN_KNOWLEDGE K WHERE {where}", tuple(params[:-2]))
+    total = db.query(f"SELECT COUNT(*) AS N FROM CORE.DOMAIN_KNOWLEDGE K WHERE {where}", tuple(params[:-2]))
     return {"items": [_shape_knowledge(r) for r in items], "total": int(total[0]["n"]) if total else 0}
 
 
@@ -5451,7 +5452,7 @@ def add_knowledge(body: KnowledgeItemIn, db: Db = Depends(current_db)):
     item, problems = prepare_item(body.knowledge_type, body.title, body.content, body.content_json)
     if problems:
         raise HTTPException(400, "; ".join(problems))
-    domain = db.query("SELECT DOMAIN_NAME FROM KNOWLEDGE.DOMAIN_REGISTRY WHERE DOMAIN_ID = %s AND ACTIVE_FLAG",
+    domain = db.query("SELECT DOMAIN_NAME FROM CORE.DOMAIN_REGISTRY WHERE DOMAIN_ID = %s AND ACTIVE_FLAG",
                       (body.domain_id,))
     if not domain:
         raise HTTPException(400, "unknown or deleted domain")
@@ -5460,7 +5461,7 @@ def add_knowledge(body: KnowledgeItemIn, db: Db = Depends(current_db)):
     knowledge_id = str(uuid.uuid4())
     key = new_key(domain[0]["domain_name"], item["knowledge_type"], item["title"])
     queued = mode_for(_config(db, "KNOWLEDGE_LEARNING_POLICY", {}), item["knowledge_type"], body.origin) == "review"
-    db.execute("""INSERT INTO KNOWLEDGE.DOMAIN_KNOWLEDGE (KNOWLEDGE_ID, DOMAIN_ID, KNOWLEDGE_TYPE, TITLE, CONTENT,
+    db.execute("""INSERT INTO CORE.DOMAIN_KNOWLEDGE (KNOWLEDGE_ID, DOMAIN_ID, KNOWLEDGE_TYPE, TITLE, CONTENT,
                          CONTENT_JSON, TAGS, SOURCE_REFERENCE, STATUS, VERSION, IS_CURRENT, CREATED_BY, LINEAGE_ID,
                          ORIGIN, CHANGE_NOTE, LAYER)
                   SELECT %s, %s, %s, %s, %s, PARSE_JSON(NULLIF(%s, '')), PARSE_JSON(%s), %s, %s, 1, %s,
@@ -5504,14 +5505,14 @@ def _new_knowledge_version(db: Db, current: dict, kind: str, title: str, content
                                             if current.get("source_reference") else current["knowledge_id"])
     new_id = str(uuid.uuid4())
     with transaction(db):  # supersede and insert together; a concurrent edit that got there first wins
-        top = db.query("SELECT COALESCE(MAX(VERSION), 0) AS V FROM KNOWLEDGE.DOMAIN_KNOWLEDGE WHERE LINEAGE_ID = %s",
+        top = db.query("SELECT COALESCE(MAX(VERSION), 0) AS V FROM CORE.DOMAIN_KNOWLEDGE WHERE LINEAGE_ID = %s",
                        (lineage,))
         version = max(int(top[0]["v"] if top else 0), int(current["version"])) + 1
-        if not db.execute_count("""UPDATE KNOWLEDGE.DOMAIN_KNOWLEDGE SET IS_CURRENT = FALSE, UPDATED_AT = CURRENT_TIMESTAMP(),
+        if not db.execute_count("""UPDATE CORE.DOMAIN_KNOWLEDGE SET IS_CURRENT = FALSE, UPDATED_AT = CURRENT_TIMESTAMP(),
                                          STATUS = IFF(STATUS IN ('ACTIVE', 'RETIRED'), 'SUPERSEDED', STATUS)
                                    WHERE KNOWLEDGE_ID = %s AND IS_CURRENT""", (current["knowledge_id"],)):
             raise HTTPException(409, "Someone changed this item in the meantime. Reload it and try again.")
-        db.execute("""INSERT INTO KNOWLEDGE.DOMAIN_KNOWLEDGE (KNOWLEDGE_ID, DOMAIN_ID, KNOWLEDGE_TYPE, TITLE, CONTENT,
+        db.execute("""INSERT INTO CORE.DOMAIN_KNOWLEDGE (KNOWLEDGE_ID, DOMAIN_ID, KNOWLEDGE_TYPE, TITLE, CONTENT,
                              CONTENT_JSON, TAGS, SOURCE_REFERENCE, STATUS, VERSION, IS_CURRENT, CREATED_BY, LINEAGE_ID,
                              ORIGIN, SOURCE_RUN_ID, CHANGE_NOTE, LAYER)
                       SELECT %s, %s, %s, %s, %s, PARSE_JSON(NULLIF(%s, '')), PARSE_JSON(%s), %s, %s, %s, TRUE,
@@ -5528,7 +5529,7 @@ def _set_knowledge_status(db: Db, knowledge_id: str, status: str) -> dict:
     current = _knowledge_item(db, knowledge_id)
     if not current["editable"]:
         raise HTTPException(409, current["read_only_reason"])
-    db.execute("UPDATE KNOWLEDGE.DOMAIN_KNOWLEDGE SET STATUS = %s, UPDATED_AT = CURRENT_TIMESTAMP() "
+    db.execute("UPDATE CORE.DOMAIN_KNOWLEDGE SET STATUS = %s, UPDATED_AT = CURRENT_TIMESTAMP() "
                "WHERE KNOWLEDGE_ID = %s", (status, knowledge_id))
     _DOMAIN_VOCAB.update(at=0.0, domains=[])
     return _knowledge_item(db, knowledge_id)
@@ -5547,8 +5548,8 @@ def restore_knowledge(knowledge_id: str, db: Db = Depends(current_db)):
 @app.get("/api/knowledge/{knowledge_id}/history")
 def knowledge_history(knowledge_id: str, db: Db = Depends(current_db)):
     current = _knowledge_item(db, knowledge_id)
-    versions = db.query(f"""SELECT {_KNOWLEDGE_COLUMNS} FROM KNOWLEDGE.DOMAIN_KNOWLEDGE K
-                             JOIN KNOWLEDGE.DOMAIN_REGISTRY D ON D.DOMAIN_ID = K.DOMAIN_ID
+    versions = db.query(f"""SELECT {_KNOWLEDGE_COLUMNS} FROM CORE.DOMAIN_KNOWLEDGE K
+                             JOIN CORE.DOMAIN_REGISTRY D ON D.DOMAIN_ID = K.DOMAIN_ID
                             WHERE K.LINEAGE_ID = %s ORDER BY K.VERSION DESC, K.CREATED_AT DESC""",
                         (current["lineage_id"],)) if current.get("lineage_id") else []
     return {"versions": [_shape_knowledge(v) for v in versions] or [current]}
@@ -5656,7 +5657,7 @@ def _domain_active_runs(db: Db, domain_id: str) -> list[dict]:
 
 
 def _domain_row(db: Db, domain_id: str) -> dict:
-    found = db.query("SELECT DOMAIN_ID, DOMAIN_NAME, ACTIVE_FLAG, CONFIG FROM KNOWLEDGE.DOMAIN_REGISTRY "
+    found = db.query("SELECT DOMAIN_ID, DOMAIN_NAME, ACTIVE_FLAG, CONFIG FROM CORE.DOMAIN_REGISTRY "
                      "WHERE DOMAIN_ID = %s", (domain_id,))
     if not found:
         raise HTTPException(404, "domain not found")
@@ -5689,16 +5690,16 @@ def delete_domain(domain_id: str, force: bool = False, db: Db = Depends(current_
         # The ids retired by this delete are kept on the domain, so a restore brings back only those (never what a
         # user retired on purpose before the delete).
         retired = json.dumps([r["knowledge_id"] for r in db.query(
-            "SELECT KNOWLEDGE_ID FROM KNOWLEDGE.DOMAIN_KNOWLEDGE WHERE DOMAIN_ID = %s AND IS_CURRENT AND STATUS = 'ACTIVE'",
+            "SELECT KNOWLEDGE_ID FROM CORE.DOMAIN_KNOWLEDGE WHERE DOMAIN_ID = %s AND IS_CURRENT AND STATUS = 'ACTIVE'",
             (domain_id,))])
-        db.execute("""UPDATE KNOWLEDGE.DOMAIN_REGISTRY
+        db.execute("""UPDATE CORE.DOMAIN_REGISTRY
                          SET ACTIVE_FLAG = FALSE, UPDATED_AT = CURRENT_TIMESTAMP(),
                              CONFIG = OBJECT_INSERT(OBJECT_INSERT(OBJECT_INSERT(COALESCE(CONFIG, OBJECT_CONSTRUCT()),
                                       'deleted_at', CURRENT_TIMESTAMP()::VARCHAR, TRUE), 'deleted_by', CURRENT_USER(), TRUE),
                                       'retired_knowledge', PARSE_JSON(%s), TRUE)
                        WHERE DOMAIN_ID = %s""", (retired, domain_id))
-        db.execute("UPDATE KNOWLEDGE.TARGET_TABLE_REGISTRY SET ACTIVE_FLAG = FALSE WHERE DOMAIN_ID = %s", (domain_id,))
-        db.execute("UPDATE KNOWLEDGE.DOMAIN_KNOWLEDGE SET STATUS = 'RETIRED', UPDATED_AT = CURRENT_TIMESTAMP() "
+        db.execute("UPDATE CORE.TARGET_TABLE_REGISTRY SET ACTIVE_FLAG = FALSE WHERE DOMAIN_ID = %s", (domain_id,))
+        db.execute("UPDATE CORE.DOMAIN_KNOWLEDGE SET STATUS = 'RETIRED', UPDATED_AT = CURRENT_TIMESTAMP() "
                    "WHERE DOMAIN_ID = %s AND IS_CURRENT AND STATUS = 'ACTIVE' "
                    "AND KNOWLEDGE_ID IN (SELECT VALUE::VARCHAR FROM TABLE(FLATTEN(INPUT => PARSE_JSON(%s))))",
                    (domain_id, retired))
@@ -5715,20 +5716,20 @@ def restore_domain(domain_id: str, db: Db = Depends(current_db)):
         raise HTTPException(409, f"{row['domain_name']} is not deleted.")
     retired = row["config"].get("retired_knowledge")
     with transaction(db):
-        db.execute("""UPDATE KNOWLEDGE.DOMAIN_REGISTRY
+        db.execute("""UPDATE CORE.DOMAIN_REGISTRY
                          SET ACTIVE_FLAG = TRUE, UPDATED_AT = CURRENT_TIMESTAMP(),
                              CONFIG = OBJECT_DELETE(CONFIG, 'deleted_at', 'deleted_by', 'retired_knowledge')
                        WHERE DOMAIN_ID = %s""", (domain_id,))
-        db.execute("""UPDATE KNOWLEDGE.TARGET_TABLE_REGISTRY T SET ACTIVE_FLAG = TRUE
-                       WHERE T.DOMAIN_ID = %s AND EXISTS (SELECT 1 FROM KNOWLEDGE.TARGET_COLUMN_REGISTRY C
+        db.execute("""UPDATE CORE.TARGET_TABLE_REGISTRY T SET ACTIVE_FLAG = TRUE
+                       WHERE T.DOMAIN_ID = %s AND EXISTS (SELECT 1 FROM CORE.TARGET_COLUMN_REGISTRY C
                                                            WHERE C.TARGET_TABLE_ID = T.TARGET_TABLE_ID)""", (domain_id,))
         if isinstance(retired, list):
-            db.execute("UPDATE KNOWLEDGE.DOMAIN_KNOWLEDGE SET STATUS = 'ACTIVE', UPDATED_AT = CURRENT_TIMESTAMP() "
+            db.execute("UPDATE CORE.DOMAIN_KNOWLEDGE SET STATUS = 'ACTIVE', UPDATED_AT = CURRENT_TIMESTAMP() "
                        "WHERE DOMAIN_ID = %s AND IS_CURRENT AND STATUS = 'RETIRED' "
                        "AND KNOWLEDGE_ID IN (SELECT VALUE::VARCHAR FROM TABLE(FLATTEN(INPUT => PARSE_JSON(%s))))",
                        (domain_id, json.dumps(retired)))
         else:  # deleted before the ids were recorded: only items retired at (or after) the delete itself
-            db.execute("UPDATE KNOWLEDGE.DOMAIN_KNOWLEDGE SET STATUS = 'ACTIVE', UPDATED_AT = CURRENT_TIMESTAMP() "
+            db.execute("UPDATE CORE.DOMAIN_KNOWLEDGE SET STATUS = 'ACTIVE', UPDATED_AT = CURRENT_TIMESTAMP() "
                        "WHERE DOMAIN_ID = %s AND IS_CURRENT AND STATUS = 'RETIRED' "
                        "AND UPDATED_AT >= DATEADD(second, -5, TRY_TO_TIMESTAMP_LTZ(%s::VARCHAR))",
                        (domain_id, str(row["config"].get("deleted_at"))))
@@ -5866,7 +5867,7 @@ _oracle_running: dict[str, str] = {}   # source id -> job id of its running prof
 
 def _oracle_source(db: Db, source_id: str) -> dict:
     found = db.query("SELECT SOURCE_SYSTEM_ID, SOURCE_SYSTEM_NAME, CONNECTION_TYPE, CONFIGURATION_JSON "
-                     "FROM SOURCE.SOURCE_REGISTRY WHERE SOURCE_SYSTEM_ID = %s AND ACTIVE_FLAG", (source_id,))
+                     "FROM CORE.SOURCE_REGISTRY WHERE SOURCE_SYSTEM_ID = %s AND ACTIVE_FLAG", (source_id,))
     if not found or found[0]["connection_type"] != "oracle":
         raise HTTPException(404, "Oracle source not found")
     src = found[0]
@@ -5878,7 +5879,7 @@ def _save_oracle_config(db: Db, source_id: str, change) -> dict:
     """Read-modify-write of the source configuration (procedures write loads into it too)."""
     cfg = _oracle_source(db, source_id)["config"]
     change(cfg)
-    db.execute("UPDATE SOURCE.SOURCE_REGISTRY SET CONFIGURATION_JSON = PARSE_JSON(%s), CONFIGURATION_REFERENCE = %s, "
+    db.execute("UPDATE CORE.SOURCE_REGISTRY SET CONFIGURATION_JSON = PARSE_JSON(%s), CONFIGURATION_REFERENCE = %s, "
                "UPDATED_AT = CURRENT_TIMESTAMP() WHERE SOURCE_SYSTEM_ID = %s",
                (json.dumps(cfg, default=str), cfg.get("secret") or cfg.get("password_env"), source_id))
     return cfg
@@ -6277,7 +6278,7 @@ def oracle_remove(source_id: str, drop_landed: bool = False, db: Db = Depends(cu
             log.append({"sql": sql, "ok": True})
         except Exception as exc:
             log.append({"sql": sql, "ok": False, "error": str(exc)[:300]})
-    db.execute("UPDATE SOURCE.SOURCE_REGISTRY SET ACTIVE_FLAG = FALSE, UPDATED_AT = CURRENT_TIMESTAMP() "
+    db.execute("UPDATE CORE.SOURCE_REGISTRY SET ACTIVE_FLAG = FALSE, UPDATED_AT = CURRENT_TIMESTAMP() "
                "WHERE SOURCE_SYSTEM_ID = %s", (source_id,))
     return {"removed": src["source_system_name"], "log": log}
 
@@ -6295,7 +6296,7 @@ def oracle_catalog(source_id: str, db: Db = Depends(current_db)):
     try:
         profiled = {r["table_name"]: r for r in db.query(
             """SELECT TABLE_NAME, ROW_COUNT, STATUS, PROFILED_AT::VARCHAR AS PROFILED_AT, PII_COLUMNS, KEY_CANDIDATES,
-                      PROFILE_STAGE_PATH FROM METADATA.TABLE_PROFILES WHERE SOURCE_NAME = %s""",
+                      PROFILE_STAGE_PATH FROM CORE.TABLE_PROFILES WHERE SOURCE_NAME = %s""",
             (f"ORACLE_{src['source_system_name']}",))}
     except Exception:
         profiled = {}
@@ -6324,7 +6325,7 @@ def oracle_preview(source_id: str, body: OraclePreview, db: Db = Depends(current
 def oracle_profile_doc(source_id: str, table: str, db: Db = Depends(current_db)):
     """The in-place Oracle profile document of one table (same shape as Snowflake profiles)."""
     src = _oracle_source(db, source_id)
-    found = db.query("SELECT PROFILE_STAGE_PATH FROM METADATA.TABLE_PROFILES WHERE SOURCE_NAME = %s AND TABLE_NAME = %s "
+    found = db.query("SELECT PROFILE_STAGE_PATH FROM CORE.TABLE_PROFILES WHERE SOURCE_NAME = %s AND TABLE_NAME = %s "
                      "AND STATUS <> 'PROFILING' ORDER BY PROFILED_AT DESC LIMIT 1",
                      (f"ORACLE_{src['source_system_name']}", table))
     if not found or not found[0]["profile_stage_path"]:

@@ -7,7 +7,7 @@ Governance (services.governance.policy): reads are open to everyone signed in an
 also needs CASE.RESOLVE, checked here, to move a case to VERIFIED, RESOLVED, CLOSED or DUPLICATE; merging needs
 CASE.RESOLVE. Opening from Jira needs JIRA.READ (the issue is read as the caller); opening from an incident needs
 OPS.VIEW. Descriptions, comments and page context are redacted (services/ops/redact.py) before they are stored.
-Calls run on the caller's session, so the CASES.DOMAIN_SCOPE row policy applies to every read as well.
+Calls run on the caller's session, so the CORE.DOMAIN_SCOPE row policy applies to every read as well.
 """
 
 from __future__ import annotations
@@ -141,7 +141,7 @@ def _visible_case(db: Db, who: Dict[str, Any], case_id: str) -> Dict[str, Any]:
 
 def _table(db: Db, target_table_id: str) -> Dict[str, Any]:
     found = db.query("""SELECT TARGET_TABLE_ID, DOMAIN_ID, TARGET_DATABASE || '.' || TARGET_SCHEMA || '.' || TARGET_TABLE AS FQN
-                          FROM KNOWLEDGE.TARGET_TABLE_REGISTRY WHERE TARGET_TABLE_ID = %s""", (target_table_id,))
+                          FROM CORE.TARGET_TABLE_REGISTRY WHERE TARGET_TABLE_ID = %s""", (target_table_id,))
     if not found:
         raise HTTPException(400, f"Unknown target table {target_table_id}")
     return found[0]
@@ -159,7 +159,7 @@ def _table_by_name(db: Db, name: Optional[str], domain_id: Optional[str] = None)
         where.append("DOMAIN_ID = %s")
         params.append(domain_id)
     try:
-        found = db.query(f"""SELECT TARGET_TABLE_ID, DOMAIN_ID FROM KNOWLEDGE.TARGET_TABLE_REGISTRY
+        found = db.query(f"""SELECT TARGET_TABLE_ID, DOMAIN_ID FROM CORE.TARGET_TABLE_REGISTRY
                               WHERE {' AND '.join(where)} AND COALESCE(ACTIVE_FLAG, TRUE) LIMIT 2""", tuple(params))
     except Exception:
         return None
@@ -220,7 +220,7 @@ def _settings_out(db: Db) -> Dict[str, Any]:
 
     out = settings_from(_cfg(db))
     try:
-        seen = db.query("SELECT MAX(LAST_RUN_AT) AS AT FROM OPS.JOB_LEASE WHERE JOB_NAME = 'worker'")
+        seen = db.query("SELECT MAX(LAST_RUN_AT) AS AT FROM CORE.JOB_LEASE WHERE JOB_NAME = 'worker'")
         out["worker_seen_at"] = _iso(seen[0].get("at")) if seen else None
     except Exception:
         out["worker_seen_at"] = None
@@ -311,7 +311,7 @@ def list_cases(status: Optional[str] = Query(default=None, max_length=200), seve
     clause = " WHERE " + " AND ".join(where)
     rows = db.query(CASE_SELECT + clause + f" ORDER BY C.SEVERITY, C.OPENED_AT DESC LIMIT {int(limit)} OFFSET {int(offset)}",
                     tuple(params))
-    total = db.query("SELECT COUNT(*) AS N FROM CASES.CASE_RECORD C" + clause, tuple(params))
+    total = db.query("SELECT COUNT(*) AS N FROM CORE.CASE_RECORD C" + clause, tuple(params))
     return {"cases": [case_out(r) for r in rows], "total": int(total[0]["n"] or 0) if total else 0}
 
 
@@ -327,7 +327,7 @@ def cases_summary(db: Db = Depends(current_db)):
                                COUNT_IF(C.STATUS IN ({opened}) AND UPPER(C.ASSIGNEE) = %s) AS MINE,
                                COUNT_IF(C.STATUS IN ({opened}) AND C.SEVERITY = 'P1') AS P1,
                                COUNT_IF(C.STATUS IN ({opened}) AND C.SLA_DUE_AT < CURRENT_TIMESTAMP()) AS BREACHED
-                          FROM CASES.CASE_RECORD C WHERE {cond} GROUP BY C.STATUS""", (who["user"], *cparams))
+                          FROM CORE.CASE_RECORD C WHERE {cond} GROUP BY C.STATUS""", (who["user"], *cparams))
     by_status = {s: 0 for s in rules.STATUSES}
     out = {"open": 0, "mine": 0, "p1_open": 0, "sla_breached": 0}
     for r in rows:
@@ -584,7 +584,7 @@ def _registry(db: Db) -> List[Dict[str, Any]]:
     """The target tables in the shape services.jira.triage.score_tables reads."""
     try:
         found = db.query("""SELECT TARGET_TABLE_ID, DOMAIN_ID, TARGET_DATABASE, TARGET_SCHEMA, TARGET_TABLE, DESCRIPTION,
-                                   COALESCE(ACTIVE_FLAG, TRUE) AS ACTIVE FROM KNOWLEDGE.TARGET_TABLE_REGISTRY LIMIT 5000""")
+                                   COALESCE(ACTIVE_FLAG, TRUE) AS ACTIVE FROM CORE.TARGET_TABLE_REGISTRY LIMIT 5000""")
     except Exception:
         return []
     part = lambda v: str(v or "").strip().strip('"').upper()  # noqa: E731
@@ -620,7 +620,7 @@ def case_from_jira(body: FromJiraIn, db: Db = Depends(current_db)):
     except JiraError as exc:
         raise jira._jira_error(exc) from None
     try:
-        linked = db.query("""SELECT RUN_ID, TARGET_TABLE, TARGET_TABLE_ID FROM JIRA.ISSUE_LINK
+        linked = db.query("""SELECT RUN_ID, TARGET_TABLE, TARGET_TABLE_ID FROM CORE.ISSUE_LINK
                               WHERE ISSUE_KEY = %s AND NOT IS_DELETED""", (key,))
     except Exception:
         linked = []
@@ -662,7 +662,7 @@ def case_from_incident(body: FromIncidentIn, db: Db = Depends(current_db)):
     who = _who(db)
     _need(who, "OPS.VIEW", "reading incidents")
     found = db.query("""SELECT INCIDENT_ID, DAG_ID, TASK_ID, KIND, SEVERITY, TEAM_ID, TITLE, ERROR_EXCERPT, AI_SUMMARY, JIRA_KEY
-                          FROM OPS.INCIDENT WHERE INCIDENT_ID = %s""", (body.incident_id,))
+                          FROM CORE.INCIDENT WHERE INCIDENT_ID = %s""", (body.incident_id,))
     if not found:
         raise HTTPException(404, "Incident not found")
     i = found[0]
@@ -712,7 +712,7 @@ def case_from_result(body: FromResultIn, db: Db = Depends(current_db)):
         from services.jira.triage import measured_count
 
         found = db.query("""SELECT RESULT_ID, RUN_ID, TEST_ID, TITLE, SEVERITY, OUTCOME, ROWS_RETURNED, MEASURED, EXPECTED,
-                                   DETAIL, TARGET_TABLE_ID FROM QUALITY.QA_RESULT WHERE RESULT_ID = %s""", (body.qa_result_id,))
+                                   DETAIL, TARGET_TABLE_ID FROM CORE.QA_RESULT WHERE RESULT_ID = %s""", (body.qa_result_id,))
         if not found:
             raise HTTPException(404, "QA result not found")
         r = found[0]
@@ -731,7 +731,7 @@ def case_from_result(body: FromResultIn, db: Db = Depends(current_db)):
         source, ref, kind, link_kind = "QA_FAILURE", r["result_id"], "DATA_BUG", "QA_RESULT"
     else:
         found = db.query("""SELECT RESULT_ID, RUN_ID, TARGET_TABLE, TARGET_COLUMN, CHECK_TYPE, DIMENSION, SEVERITY, OUTCOME,
-                                   FAILED_ROWS, THRESHOLD, DETAIL FROM QUALITY.CHECK_RESULT WHERE RESULT_ID = %s""",
+                                   FAILED_ROWS, THRESHOLD, DETAIL FROM CORE.CHECK_RESULT WHERE RESULT_ID = %s""",
                          (body.check_result_id,))
         if not found:
             raise HTTPException(404, "Check result not found")

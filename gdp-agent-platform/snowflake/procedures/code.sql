@@ -1,6 +1,6 @@
 -- Code context procedures. Re-applied on every deploy.
 
-CREATE OR REPLACE PROCEDURE {{database}}.CODE.INDEX_REPO(REPO_ID VARCHAR)
+CREATE OR REPLACE PROCEDURE {{database}}.{{schema}}.INDEX_REPO(REPO_ID VARCHAR)
   RETURNS VARIANT LANGUAGE PYTHON RUNTIME_VERSION = '3.11'
   PACKAGES = ('snowflake-snowpark-python')
   IMPORTS = ('{{services_import}}')

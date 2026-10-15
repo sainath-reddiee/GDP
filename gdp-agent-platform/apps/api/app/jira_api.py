@@ -94,7 +94,7 @@ RECONNECT_FORMAT = ("Your Jira connection was stored in an older format (or with
 
 
 def _seal_token(token: str, kind: str, user: str, cloud_id: str) -> bytes:
-    """A refresh or access token sealed for JIRA.USER_TOKEN, bound to its row (kind, user, site)."""
+    """A refresh or access token sealed for CORE.USER_TOKEN, bound to its row (kind, user, site)."""
     return secretbox.seal(token, _token_key(), secretbox.JIRA_TOKEN, f"{kind}:{user}:{cloud_id}")
 
 
@@ -126,7 +126,7 @@ def _log(db: Db, issue_key: str, action: str, status: str, cloud_id: Optional[st
     extra, value = (", IDEMPOTENCY_KEY", ", %s") if idempotency_key else ("", "")
     params = (str(uuid.uuid4()), issue_key, cloud_id or "", run_id or "", action, json.dumps(detail_ or {}), status, (error or "")[:2000])
     try:
-        db.execute(f"""INSERT INTO JIRA.ACTION_LOG (ACTION_ID, ISSUE_KEY, CLOUD_ID, RUN_ID, ACTION, DETAIL, STATUS, ERROR{extra})
+        db.execute(f"""INSERT INTO CORE.ACTION_LOG (ACTION_ID, ISSUE_KEY, CLOUD_ID, RUN_ID, ACTION, DETAIL, STATUS, ERROR{extra})
                        SELECT %s, %s, NULLIF(%s, ''), NULLIF(%s, ''), %s, PARSE_JSON(%s), %s, NULLIF(%s, ''){value}""",
                    params + ((idempotency_key,) if idempotency_key else ()))
     except Exception:
@@ -163,7 +163,7 @@ def _missing_column(exc: BaseException) -> bool:
 def _store_access(db: Db, user: str, cloud_id: str, access_token: str, expires_in: int) -> None:
     """Share a fresh access token with the other replicas and start a new token version (after a sign-in)."""
     try:
-        db.execute("""UPDATE JIRA.USER_TOKEN SET ACCESS_TOKEN = %s,
+        db.execute("""UPDATE CORE.USER_TOKEN SET ACCESS_TOKEN = %s,
                              ACCESS_EXPIRES_AT = DATEADD(second, %s, CURRENT_TIMESTAMP()),
                              TOKEN_VERSION = COALESCE(TOKEN_VERSION, 0) + 1, LEASE_BY = NULL, LEASE_UNTIL = NULL
                        WHERE USER_NAME = %s AND CLOUD_ID = %s""",
@@ -176,7 +176,7 @@ def _store_access(db: Db, user: str, cloud_id: str, access_token: str, expires_i
 def _store_refresh(db: Db, user: str, cloud_id: str, refresh_token: str, access_token: str = "", expires_in: int = 3600,
                    **fields: Any) -> None:
     sealed = _seal_token(refresh_token, "refresh", user, cloud_id)
-    db.execute("""MERGE INTO JIRA.USER_TOKEN T USING (SELECT %s AS USER_NAME, %s AS CLOUD_ID) S
+    db.execute("""MERGE INTO CORE.USER_TOKEN T USING (SELECT %s AS USER_NAME, %s AS CLOUD_ID) S
                     ON T.USER_NAME = S.USER_NAME AND T.CLOUD_ID = S.CLOUD_ID
                   WHEN MATCHED THEN UPDATE SET REFRESH_TOKEN = %s, UPDATED_AT = CURRENT_TIMESTAMP(),
                        SITE_URL = COALESCE(NULLIF(%s, ''), T.SITE_URL), ACCOUNT_ID = COALESCE(NULLIF(%s, ''), T.ACCOUNT_ID),
@@ -192,7 +192,7 @@ def _store_refresh(db: Db, user: str, cloud_id: str, refresh_token: str, access_
 
 _CONNECTION_SQL = """SELECT CLOUD_ID, SITE_URL, ACCOUNT_ID, DISPLAY_NAME, CONNECTED_AT::VARCHAR AS CONNECTED_AT,
                              UPDATED_AT::VARCHAR AS UPDATED_AT, SCOPES{version}
-                        FROM JIRA.USER_TOKEN WHERE USER_NAME = %s ORDER BY UPDATED_AT DESC"""
+                        FROM CORE.USER_TOKEN WHERE USER_NAME = %s ORDER BY UPDATED_AT DESC"""
 
 
 def _connection(db: Db, cfg: dict) -> Optional[dict]:
@@ -247,7 +247,7 @@ def _expire_access(db: Db, cache_key: tuple[str, str, str, int]) -> None:
     so a token another replica just stored is kept), so the next read refreshes it."""
     _access.pop(cache_key, None)
     try:
-        db.execute("""UPDATE JIRA.USER_TOKEN SET ACCESS_EXPIRES_AT = NULL
+        db.execute("""UPDATE CORE.USER_TOKEN SET ACCESS_EXPIRES_AT = NULL
                        WHERE USER_NAME = %s AND CLOUD_ID = %s AND COALESCE(TOKEN_VERSION, 0) = %s""",
                    (db.user, cache_key[1], cache_key[3]))
     except Exception:
@@ -283,7 +283,7 @@ REVOKED = "Your Jira sign-in has expired or was revoked; connect again."
 _ROW_SQL = """SELECT REFRESH_TOKEN AS T, ACCESS_TOKEN AS A,
                      DATEDIFF(second, CURRENT_TIMESTAMP(), ACCESS_EXPIRES_AT) AS TTL, COALESCE(TOKEN_VERSION, 0) AS V,
                      (LEASE_UNTIL IS NOT NULL AND LEASE_UNTIL >= CURRENT_TIMESTAMP()) AS LEASED
-                FROM JIRA.USER_TOKEN WHERE USER_NAME = %s AND CLOUD_ID = %s"""
+                FROM CORE.USER_TOKEN WHERE USER_NAME = %s AND CLOUD_ID = %s"""
 
 
 def _token_row(db: Db, cloud_id: str) -> Optional[dict]:
@@ -329,7 +329,7 @@ def _shared_token(db: Db, cfg: dict, cloud_id: str) -> tuple[str, float]:
         return usable
     version = int(row.get("v") or 0)
     me = f"{_REPLICA}:{uuid.uuid4().hex[:12]}"
-    claimed = db.execute_count("""UPDATE JIRA.USER_TOKEN SET LEASE_BY = %s, LEASE_UNTIL = DATEADD(second, 30, CURRENT_TIMESTAMP())
+    claimed = db.execute_count("""UPDATE CORE.USER_TOKEN SET LEASE_BY = %s, LEASE_UNTIL = DATEADD(second, 30, CURRENT_TIMESTAMP())
                                    WHERE USER_NAME = %s AND CLOUD_ID = %s AND COALESCE(TOKEN_VERSION, 0) = %s
                                      AND (LEASE_UNTIL IS NULL OR LEASE_UNTIL < CURRENT_TIMESTAMP())""",
                                (me, db.user, cloud_id, version))
@@ -340,7 +340,7 @@ def _shared_token(db: Db, cfg: dict, cloud_id: str) -> tuple[str, float]:
 
 def _release(db: Db, cloud_id: str, me: str) -> None:
     try:
-        db.execute_count("UPDATE JIRA.USER_TOKEN SET LEASE_BY = NULL, LEASE_UNTIL = NULL WHERE USER_NAME = %s AND CLOUD_ID = %s AND LEASE_BY = %s",
+        db.execute_count("UPDATE CORE.USER_TOKEN SET LEASE_BY = NULL, LEASE_UNTIL = NULL WHERE USER_NAME = %s AND CLOUD_ID = %s AND LEASE_BY = %s",
                          (db.user, cloud_id, me))
     except Exception:
         pass   # the lease runs out on its own after 30 seconds
@@ -356,7 +356,7 @@ def _refresh_with_lease(db: Db, cfg: dict, cloud_id: str, version: int, me: str)
     except JiraError as exc:
         if exc.status in (400, 401, 403):
             # revoked, unless another replica rotated the token after our lease ran out: only our own version goes
-            gone = db.execute_count("""DELETE FROM JIRA.USER_TOKEN WHERE USER_NAME = %s AND CLOUD_ID = %s
+            gone = db.execute_count("""DELETE FROM CORE.USER_TOKEN WHERE USER_NAME = %s AND CLOUD_ID = %s
                                           AND COALESCE(TOKEN_VERSION, 0) = %s AND LEASE_BY = %s""", (db.user, cloud_id, version, me))
             if not gone:
                 usable = _usable(_token_row(db, cloud_id))
@@ -370,7 +370,7 @@ def _refresh_with_lease(db: Db, cfg: dict, cloud_id: str, version: int, me: str)
         raise
     expires_in = int(tokens.get("expires_in") or 3600)
     rotated = tokens.get("refresh_token") or ""
-    stored = db.execute_count("""UPDATE JIRA.USER_TOKEN SET REFRESH_TOKEN = COALESCE(%s, REFRESH_TOKEN),
+    stored = db.execute_count("""UPDATE CORE.USER_TOKEN SET REFRESH_TOKEN = COALESCE(%s, REFRESH_TOKEN),
                                         ACCESS_TOKEN = %s, ACCESS_EXPIRES_AT = DATEADD(second, %s, CURRENT_TIMESTAMP()),
                                         TOKEN_VERSION = COALESCE(TOKEN_VERSION, 0) + 1, LEASE_BY = NULL, LEASE_UNTIL = NULL,
                                         UPDATED_AT = CURRENT_TIMESTAMP()
@@ -402,7 +402,7 @@ def _wait_for_refresh(db: Db, cloud_id: str, version: int) -> tuple[str, float]:
 
 def _refresh_legacy(db: Db, cfg: dict, cloud_id: str) -> tuple[str, float]:
     """Before V028: refresh under the in-process lock only."""
-    found = db.query("SELECT REFRESH_TOKEN AS T FROM JIRA.USER_TOKEN WHERE USER_NAME = %s AND CLOUD_ID = %s",
+    found = db.query("SELECT REFRESH_TOKEN AS T FROM CORE.USER_TOKEN WHERE USER_NAME = %s AND CLOUD_ID = %s",
                      (db.user, cloud_id))
     try:
         refresh = _open_token(found[0].get("t"), "refresh", db.user, cloud_id) if found else None
@@ -414,7 +414,7 @@ def _refresh_legacy(db: Db, cfg: dict, cloud_id: str) -> tuple[str, float]:
         tokens = refresh_tokens(_http, cfg["client_id"], _secret(), refresh)
     except JiraError as exc:
         if exc.status in (400, 401, 403):
-            db.execute("DELETE FROM JIRA.USER_TOKEN WHERE USER_NAME = %s AND CLOUD_ID = %s", (db.user, cloud_id))
+            db.execute("DELETE FROM CORE.USER_TOKEN WHERE USER_NAME = %s AND CLOUD_ID = %s", (db.user, cloud_id))
             raise HTTPException(NOT_CONNECTED, REVOKED) from None
         raise _jira_error(exc) from None
     if tokens.get("refresh_token"):
@@ -435,7 +435,7 @@ def status(db: Db = Depends(current_db)):
     try:
         cfg = _config(db)
         conn = _connection(db, cfg)
-        users = db.query("SELECT COUNT(DISTINCT USER_NAME) AS N FROM JIRA.USER_TOKEN")[0]["n"]
+        users = db.query("SELECT COUNT(DISTINCT USER_NAME) AS N FROM CORE.USER_TOKEN")[0]["n"]
     except Exception as exc:
         if "does not exist" in str(exc):
             return {"ready": False, "installed": False}
@@ -513,8 +513,8 @@ def connect(body: ConnectIn, db: Db = Depends(current_db)):
     if not re.fullmatch(r"/(?![/\\])[^\\\s]*", back):  # a same-site path: never //host or /\host
         back = "/"
     state = secrets.token_urlsafe(32)
-    db.execute(f"DELETE FROM JIRA.OAUTH_STATE WHERE CREATED_AT < DATEADD(minute, -{STATE_MINUTES}, CURRENT_TIMESTAMP())")
-    db.execute("INSERT INTO JIRA.OAUTH_STATE (STATE, USER_NAME, RETURN_TO) VALUES (%s, %s, %s)", (state, db.user, back))
+    db.execute(f"DELETE FROM CORE.OAUTH_STATE WHERE CREATED_AT < DATEADD(minute, -{STATE_MINUTES}, CURRENT_TIMESTAMP())")
+    db.execute("INSERT INTO CORE.OAUTH_STATE (STATE, USER_NAME, RETURN_TO) VALUES (%s, %s, %s)", (state, db.user, back))
     from services.confluence.client import SCOPES as CONFLUENCE_SCOPES
     from services.jira.client import SCOPES
 
@@ -532,9 +532,9 @@ def callback(body: CallbackIn, db: Db = Depends(current_db)):
     """Finish the sign-in: exchange the code, pick the site, remember the (encrypted) refresh token."""
     cfg = _config(db)
     _ready(cfg)
-    found = db.query(f"""SELECT RETURN_TO FROM JIRA.OAUTH_STATE WHERE STATE = %s AND USER_NAME = %s
+    found = db.query(f"""SELECT RETURN_TO FROM CORE.OAUTH_STATE WHERE STATE = %s AND USER_NAME = %s
                            AND CREATED_AT >= DATEADD(minute, -{STATE_MINUTES}, CURRENT_TIMESTAMP())""", (body.state, db.user))
-    db.execute("DELETE FROM JIRA.OAUTH_STATE WHERE STATE = %s", (body.state,))
+    db.execute("DELETE FROM CORE.OAUTH_STATE WHERE STATE = %s", (body.state,))
     if not found:
         raise HTTPException(400, "This sign-in link expired or was started by someone else. Connect again.")
     try:
@@ -558,7 +558,7 @@ def callback(body: CallbackIn, db: Db = Depends(current_db)):
 @router.delete("/api/jira/connection")
 def disconnect(db: Db = Depends(current_db)):
     """Forget the signed-in user's Jira tokens (they can also revoke the app in their Atlassian account)."""
-    db.execute("DELETE FROM JIRA.USER_TOKEN WHERE USER_NAME = %s", (db.user,))
+    db.execute("DELETE FROM CORE.USER_TOKEN WHERE USER_NAME = %s", (db.user,))
     for k in [k for k in _access if k[0] == db.user]:
         _access.pop(k, None)
     _log(db, "-", "DISCONNECT", "DONE")
@@ -583,7 +583,7 @@ def issues(scope: str = "mine", q: str = "", project: str = "", run_id: Optional
     if scope == "run":
         if not run_id:
             raise HTTPException(400, "run_id is required")
-        keys = [r["issue_key"] for r in db.query("SELECT DISTINCT ISSUE_KEY FROM JIRA.ISSUE_LINK WHERE RUN_ID = %s AND NOT IS_DELETED",
+        keys = [r["issue_key"] for r in db.query("SELECT DISTINCT ISSUE_KEY FROM CORE.ISSUE_LINK WHERE RUN_ID = %s AND NOT IS_DELETED",
                                                 (run_id,))]
         if not keys:
             return {"issues": [], "jql": None}
@@ -608,7 +608,7 @@ def issues(scope: str = "mine", q: str = "", project: str = "", run_id: Optional
     site = conn.get("site_url") or ""
     linked = {}
     if run_id:
-        for r in db.query("SELECT ISSUE_KEY, COUNT(*) AS N FROM JIRA.ISSUE_LINK WHERE RUN_ID = %s AND NOT IS_DELETED GROUP BY 1", (run_id,)):
+        for r in db.query("SELECT ISSUE_KEY, COUNT(*) AS N FROM CORE.ISSUE_LINK WHERE RUN_ID = %s AND NOT IS_DELETED GROUP BY 1", (run_id,)):
             linked[r["issue_key"]] = int(r["n"])
     return {"issues": [{**summary(i, site), "linked": linked.get(i.get("key"), 0)} for i in found], "jql": jql}
 
@@ -623,8 +623,8 @@ def issue(key: str, run_id: Optional[str] = None, db: Db = Depends(current_db)):
     except JiraError as exc:
         raise _jira_error(exc) from None
     links = db.query("""SELECT LINK_ID, RUN_ID, QA_TEST_ID, TARGET_TABLE, LINKED_BY, LINKED_AT::VARCHAR AS LINKED_AT
-                          FROM JIRA.ISSUE_LINK WHERE ISSUE_KEY = %s AND NOT IS_DELETED ORDER BY LINKED_AT DESC""", (check_key(key),))
-    history = db.query("""SELECT ACTION, STATUS, ERROR, ACTED_BY, ACTED_AT::VARCHAR AS ACTED_AT, RUN_ID, DETAIL FROM JIRA.ACTION_LOG
+                          FROM CORE.ISSUE_LINK WHERE ISSUE_KEY = %s AND NOT IS_DELETED ORDER BY LINKED_AT DESC""", (check_key(key),))
+    history = db.query("""SELECT ACTION, STATUS, ERROR, ACTED_BY, ACTED_AT::VARCHAR AS ACTED_AT, RUN_ID, DETAIL FROM CORE.ACTION_LOG
                            WHERE ISSUE_KEY = %s ORDER BY ACTED_AT DESC LIMIT 20""", (check_key(key),))
     for h in history:
         h["detail"] = _json(h.get("detail"))
@@ -723,7 +723,7 @@ def run_links(run_id: str, db: Db = Depends(current_db)):
     return {"links": visible_links(db, db.query(
         """SELECT L.LINK_ID, L.ISSUE_KEY, L.QA_TEST_ID, T.TITLE AS TEST_TITLE, L.SUMMARY, L.STATUS, L.LINKED_BY,
                   L.LINKED_AT::VARCHAR AS LINKED_AT
-             FROM JIRA.ISSUE_LINK L LEFT JOIN CONTRACT.QA_TEST_CASE T ON T.TEST_ID = L.QA_TEST_ID
+             FROM CORE.ISSUE_LINK L LEFT JOIN CORE.QA_TEST_CASE T ON T.TEST_ID = L.QA_TEST_ID
             WHERE L.RUN_ID = %s AND NOT L.IS_DELETED ORDER BY L.LINKED_AT DESC""", (run_id,)))}
 
 
@@ -763,12 +763,12 @@ def _save_link(db: Db, key: str, cloud_id: str, issue: dict, run_id: Optional[st
            issue.get("status") or "") + tuple(str(v) for v in extra.values())
     # the match binds the scope values again: S only carries the row to insert
     inserted = db.execute_count(
-        f"""MERGE INTO JIRA.ISSUE_LINK T
+        f"""MERGE INTO CORE.ISSUE_LINK T
               USING (SELECT {', '.join(f'{v} AS {c}' for c, v in zip(columns, values))}) S ON {match}
             WHEN NOT MATCHED THEN INSERT ({', '.join(columns)}) VALUES ({', '.join('S.' + c for c in columns)})""",
         row + params)
     if not inserted:
-        exists = db.query(f"SELECT LINK_ID FROM JIRA.ISSUE_LINK WHERE {where} ORDER BY LINKED_AT LIMIT 1", params)
+        exists = db.query(f"SELECT LINK_ID FROM CORE.ISSUE_LINK WHERE {where} ORDER BY LINKED_AT LIMIT 1", params)
         return (exists[0]["link_id"] if exists else link_id), True
     _log(db, key, "LINK", "DONE", cloud_id, run_id, {"qa_test_id": qa_test_id, **{k: v for k, v in extra.items() if k != "issue_id"}})
     return link_id, False
@@ -806,21 +806,21 @@ def _link_target(db: Db, target_table_id: Optional[str] = None, suite_id: Option
         out[field] = out.get(field) or value or None
 
     if test_id:
-        found = db.query("""SELECT TEST_ID, RUN_ID, TARGET_TABLE_ID, SUITE_ID, DOMAIN_ID FROM CONTRACT.QA_TEST_CASE
+        found = db.query("""SELECT TEST_ID, RUN_ID, TARGET_TABLE_ID, SUITE_ID, DOMAIN_ID FROM CORE.QA_TEST_CASE
                              WHERE TEST_ID = %s AND NOT COALESCE(IS_DELETED, FALSE)""", (test_id,))
         if not found:
             raise HTTPException(404, "QA test not found")
         for field in ("run_id", "target_table_id", "suite_id", "domain_id"):
             fill(field, found[0].get(field), "test")
     if out["suite_id"]:
-        found = db.query("""SELECT TARGET_TABLE_ID, DOMAIN_ID FROM CONTRACT.QA_TEST_SUITE
+        found = db.query("""SELECT TARGET_TABLE_ID, DOMAIN_ID FROM CORE.QA_TEST_SUITE
                              WHERE SUITE_ID = %s AND NOT COALESCE(IS_DELETED, FALSE)""", (out["suite_id"],))
         if not found:
             raise HTTPException(404, "suite not found")
         fill("target_table_id", found[0].get("target_table_id"), "suite")
         fill("domain_id", found[0].get("domain_id"), "suite")
     if out["target_table_id"]:
-        found = db.query("""SELECT DOMAIN_ID, TARGET_DATABASE, TARGET_SCHEMA, TARGET_TABLE FROM KNOWLEDGE.TARGET_TABLE_REGISTRY
+        found = db.query("""SELECT DOMAIN_ID, TARGET_DATABASE, TARGET_SCHEMA, TARGET_TABLE FROM CORE.TARGET_TABLE_REGISTRY
                              WHERE TARGET_TABLE_ID = %s""", (out["target_table_id"],))
         if not found:
             raise HTTPException(404, "target table not found")
@@ -843,7 +843,7 @@ def link(run_id: str, body: LinkIn, db: Db = Depends(current_db)):
     run = db.query("SELECT RUN_NAME, TARGET_MODEL FROM CORE.WORKFLOW_RUN WHERE RUN_ID = %s", (run_id,))
     if not run:
         raise HTTPException(404, "run not found")
-    if body.qa_test_id and not db.query("SELECT 1 FROM CONTRACT.QA_TEST_CASE WHERE TEST_ID = %s AND RUN_ID = %s AND NOT IS_DELETED",
+    if body.qa_test_id and not db.query("SELECT 1 FROM CORE.QA_TEST_CASE WHERE TEST_ID = %s AND RUN_ID = %s AND NOT IS_DELETED",
                                         (body.qa_test_id, run_id)):
         raise HTTPException(404, "that QA test is not in this run")
     try:
@@ -861,10 +861,10 @@ def link(run_id: str, body: LinkIn, db: Db = Depends(current_db)):
 
 @router.delete("/api/runs/{run_id}/jira/links/{link_id}")
 def unlink(run_id: str, link_id: str, db: Db = Depends(current_db)):
-    found = db.query("SELECT ISSUE_KEY, CLOUD_ID FROM JIRA.ISSUE_LINK WHERE LINK_ID = %s AND RUN_ID = %s AND NOT IS_DELETED", (link_id, run_id))
+    found = db.query("SELECT ISSUE_KEY, CLOUD_ID FROM CORE.ISSUE_LINK WHERE LINK_ID = %s AND RUN_ID = %s AND NOT IS_DELETED", (link_id, run_id))
     if not found:
         raise HTTPException(404, "link not found")
-    db.execute("UPDATE JIRA.ISSUE_LINK SET IS_DELETED = TRUE WHERE LINK_ID = %s", (link_id,))
+    db.execute("UPDATE CORE.ISSUE_LINK SET IS_DELETED = TRUE WHERE LINK_ID = %s", (link_id,))
     _log(db, found[0]["issue_key"], "UNLINK", "DONE", found[0]["cloud_id"], run_id)
     return {"unlinked": link_id}
 
@@ -903,7 +903,7 @@ def triage(run_id: str, key: str, db: Db = Depends(current_db)):
     client, conn, _ = _client(db)
     info, payload = _issue_payload(client, conn, key)
     try:
-        result = _source_call(db, "CALL JIRA.TRIAGE_ISSUE(%s, %s)", triage_issue, run_id, json.dumps(payload))
+        result = _source_call(db, "CALL CORE.TRIAGE_ISSUE(%s, %s)", triage_issue, run_id, json.dumps(payload))
     except Exception as exc:
         _log(db, info["key"], "TRIAGE", "FAILED", conn["cloud_id"], run_id, error=str(exc)[:500])
         raise _snowflake_error(exc) from exc
@@ -924,9 +924,9 @@ def report(run_id: str, key: str, db: Db = Depends(current_db)):
     if not run:
         raise HTTPException(404, "run not found")
     results = db.query("""SELECT T.TEST_ID, T.TITLE, T.EXPECTED, R.OUTCOME, R.ROWS_RETURNED, R.MEASURED, R.CREATED_AT::VARCHAR AS RAN_AT
-                            FROM JIRA.ISSUE_LINK L
-                            JOIN CONTRACT.QA_TEST_CASE T ON T.TEST_ID = L.QA_TEST_ID
-                            LEFT JOIN QUALITY.QA_RESULT R ON R.TEST_ID = L.QA_TEST_ID AND R.RUN_ID = L.RUN_ID
+                            FROM CORE.ISSUE_LINK L
+                            JOIN CORE.QA_TEST_CASE T ON T.TEST_ID = L.QA_TEST_ID
+                            LEFT JOIN CORE.QA_RESULT R ON R.TEST_ID = L.QA_TEST_ID AND R.RUN_ID = L.RUN_ID
                            WHERE L.ISSUE_KEY = %s AND L.RUN_ID = %s AND NOT L.IS_DELETED
                          QUALIFY ROW_NUMBER() OVER (PARTITION BY T.TEST_ID ORDER BY R.CREATED_AT DESC NULLS LAST) = 1""", (key, run_id))
     url = f"{_web_base(cfg)}/runs/{run_id}/qa"
@@ -968,7 +968,7 @@ class TransitionIn(BaseModel):
 
 def _set_link_status(db: Db, key: str, status: Optional[str], category: Optional[str]) -> None:
     """Keep the stored status and its category together on every link of the issue (create_bug reads the category)."""
-    db.execute("""UPDATE JIRA.ISSUE_LINK SET STATUS = %s, STATUS_CATEGORY = COALESCE(NULLIF(%s, ''), STATUS_CATEGORY)
+    db.execute("""UPDATE CORE.ISSUE_LINK SET STATUS = %s, STATUS_CATEGORY = COALESCE(NULLIF(%s, ''), STATUS_CATEGORY)
                    WHERE ISSUE_KEY = %s AND NOT IS_DELETED""", (status or "", category or "", key))
 
 
@@ -998,7 +998,7 @@ def _linked_counts(db: Db, keys: list[str]) -> dict[str, int]:
     keys = [k for k in dict.fromkeys(keys) if k][:100]
     if not keys:
         return {}
-    found = db.query(f"""SELECT ISSUE_KEY, COUNT(*) AS N FROM JIRA.ISSUE_LINK
+    found = db.query(f"""SELECT ISSUE_KEY, COUNT(*) AS N FROM CORE.ISSUE_LINK
                           WHERE ISSUE_KEY IN ({', '.join(['%s'] * len(keys))}) AND NOT IS_DELETED GROUP BY ISSUE_KEY""", tuple(keys))
     return {r["issue_key"]: int(r["n"]) for r in found}
 
@@ -1019,7 +1019,7 @@ def _next(token: Optional[str]) -> Optional[str]:
 
 def _filter(db: Db, filter_id: str) -> dict:
     """A saved filter the user owns or that is shared; 404 otherwise."""
-    found = db.query("""SELECT FILTER_ID, USER_NAME, NAME, JQL, SHARED FROM JIRA.SAVED_FILTER
+    found = db.query("""SELECT FILTER_ID, USER_NAME, NAME, JQL, SHARED FROM CORE.SAVED_FILTER
                          WHERE FILTER_ID = %s AND (USER_NAME = %s OR SHARED)""", (filter_id, db.user))
     if not found:
         raise HTTPException(404, "filter not found")
@@ -1070,7 +1070,7 @@ def validate_jql(body: JqlIn, db: Db = Depends(current_db)):
 def filters(db: Db = Depends(current_db)):
     """My saved filters and the ones others shared."""
     try:
-        found = db.query("""SELECT FILTER_ID, USER_NAME, NAME, JQL, SHARED FROM JIRA.SAVED_FILTER
+        found = db.query("""SELECT FILTER_ID, USER_NAME, NAME, JQL, SHARED FROM CORE.SAVED_FILTER
                              WHERE USER_NAME = %s OR SHARED ORDER BY IFF(USER_NAME = %s, 0, 1), NAME""", (db.user, db.user))
     except Exception as exc:
         if "does not exist" in str(exc):
@@ -1098,10 +1098,10 @@ def filter_create(body: FilterIn, db: Db = Depends(current_db)):
         raise _jira_error(exc) from None
     if errors:
         raise HTTPException(400, "Jira: " + "; ".join(errors))
-    if db.query("SELECT 1 FROM JIRA.SAVED_FILTER WHERE USER_NAME = %s AND UPPER(NAME) = UPPER(%s)", (db.user, name)):
+    if db.query("SELECT 1 FROM CORE.SAVED_FILTER WHERE USER_NAME = %s AND UPPER(NAME) = UPPER(%s)", (db.user, name)):
         raise HTTPException(409, f"You already have a filter named {name}.")
     filter_id = str(uuid.uuid4())
-    db.execute("INSERT INTO JIRA.SAVED_FILTER (FILTER_ID, USER_NAME, NAME, JQL, SHARED) VALUES (%s, %s, %s, %s, %s)",
+    db.execute("INSERT INTO CORE.SAVED_FILTER (FILTER_ID, USER_NAME, NAME, JQL, SHARED) VALUES (%s, %s, %s, %s, %s)",
                (filter_id, db.user, name, jql, bool(body.shared)))
     return {"filter_id": filter_id, "name": name, "jql": jql, "shared": bool(body.shared), "owner": db.user, "mine": True}
 
@@ -1109,7 +1109,7 @@ def filter_create(body: FilterIn, db: Db = Depends(current_db)):
 @router.delete("/api/jira/filters/{filter_id}")
 def filter_delete(filter_id: str, db: Db = Depends(current_db)):
     """Only the owner deletes a filter; anyone else gets 404, as if it did not exist."""
-    if not db.execute_count("DELETE FROM JIRA.SAVED_FILTER WHERE FILTER_ID = %s AND USER_NAME = %s", (filter_id, db.user)):
+    if not db.execute_count("DELETE FROM CORE.SAVED_FILTER WHERE FILTER_ID = %s AND USER_NAME = %s", (filter_id, db.user)):
         raise HTTPException(404, "filter not found")
     return {"deleted": filter_id}
 
@@ -1204,7 +1204,7 @@ def create_issue(body: IssueIn, db: Db = Depends(current_db)):
     idempotency key returns the issue created the first time."""
     client, conn, _ = _client(db)
     if body.idempotency_key:
-        earlier = db.query("""SELECT ISSUE_KEY, DETAIL FROM JIRA.ACTION_LOG WHERE IDEMPOTENCY_KEY = %s AND ACTION = 'CREATE'
+        earlier = db.query("""SELECT ISSUE_KEY, DETAIL FROM CORE.ACTION_LOG WHERE IDEMPOTENCY_KEY = %s AND ACTION = 'CREATE'
                                AND STATUS = 'DONE' ORDER BY ACTED_AT DESC LIMIT 1""", (body.idempotency_key,))
         if earlier:
             stored = _json(earlier[0].get("detail")) or {}
@@ -1370,7 +1370,7 @@ def create_bug(body: BugIn, db: Db = Depends(current_db)):
     if open_bug:
         return answer(open_bug, False)
     # 2. a repeated request (same idempotency key) gets the first answer
-    earlier = db.query("""SELECT ISSUE_KEY, DETAIL FROM JIRA.ACTION_LOG WHERE IDEMPOTENCY_KEY = %s AND ACTION = 'BUG' AND STATUS = 'DONE'
+    earlier = db.query("""SELECT ISSUE_KEY, DETAIL FROM CORE.ACTION_LOG WHERE IDEMPOTENCY_KEY = %s AND ACTION = 'BUG' AND STATUS = 'DONE'
                            ORDER BY ACTED_AT DESC LIMIT 1""", (body.idempotency_key,))
     if earlier:
         stored = _json(earlier[0].get("detail")) or {}
@@ -1379,7 +1379,7 @@ def create_bug(body: BugIn, db: Db = Depends(current_db)):
         return answer(earlier[0]["issue_key"], False)
 
     table = _link_target(db, target_table_id=table_id)
-    test = db.query("""SELECT TEST_ID, TITLE, SEVERITY, EXPECTED, OBJECTIVE, TARGET_TABLE_ID, SUITE_ID FROM CONTRACT.QA_TEST_CASE
+    test = db.query("""SELECT TEST_ID, TITLE, SEVERITY, EXPECTED, OBJECTIVE, TARGET_TABLE_ID, SUITE_ID FROM CORE.QA_TEST_CASE
                         WHERE TEST_ID = %s AND NOT COALESCE(IS_DELETED, FALSE)""", (test_id,))
     if test and test[0].get("target_table_id") and test[0]["target_table_id"] != table_id:
         raise HTTPException(400, "that test belongs to another table")
@@ -1487,7 +1487,7 @@ def _open_linked_bug(db: Db, client: JiraClient, cfg: dict, test_id: str, table_
     """The key of an open bug already linked to this test and table. The stored status category is only a hint (set when
     the link is made, may be stale or empty): the bug's live status in Jira decides, and a closed one is skipped. A 404
     is skipped for this request without a write; the link is marked DELETED only when the bot confirms it is gone."""
-    linked = db.query("""SELECT ISSUE_KEY FROM JIRA.ISSUE_LINK
+    linked = db.query("""SELECT ISSUE_KEY FROM CORE.ISSUE_LINK
                           WHERE ORIGIN = 'BUG' AND QA_TEST_ID = %s AND TARGET_TABLE_ID = %s AND NOT IS_DELETED
                             AND LOWER(COALESCE(STATUS_CATEGORY, '')) <> 'done' AND COALESCE(ISSUE_STATE, 'OK') <> 'DELETED'
                           ORDER BY LINKED_AT DESC LIMIT 5""", (test_id, table_id))
@@ -1500,7 +1500,7 @@ def _open_linked_bug(db: Db, client: JiraClient, cfg: dict, test_id: str, table_
             if exc.status == 404:   # deleted in Jira, or not visible to this user: not this user's call to make
                 skipped.add(key)
                 if _gone_for_everyone(cfg, key):
-                    db.execute("UPDATE JIRA.ISSUE_LINK SET ISSUE_STATE = 'DELETED' WHERE ISSUE_KEY = %s AND NOT IS_DELETED", (key,))
+                    db.execute("UPDATE CORE.ISSUE_LINK SET ISSUE_STATE = 'DELETED' WHERE ISSUE_KEY = %s AND NOT IS_DELETED", (key,))
                 continue
             raise _jira_error(exc) from None
         _set_link_status(db, key, live.get("status"), live.get("status_category"))
@@ -1513,12 +1513,12 @@ BUG_CLAIM_SECONDS = 120   # a claim older than this is from a request that died;
 
 
 def _claim_bug(db: Db, label: str, test_id: str, table_id: str) -> Optional[str]:
-    """Claim the bug label (a PENDING BUG_CLAIM row in JIRA.ACTION_LOG keyed by the label). MERGE serialises on the
+    """Claim the bug label (a PENDING BUG_CLAIM row in CORE.ACTION_LOG keyed by the label). MERGE serialises on the
     table, so exactly one request inserts the row (or takes over a stale one); the claim id, or None when another
     request holds it."""
     claim = str(uuid.uuid4())
     taken = db.execute_count(
-        f"""MERGE INTO JIRA.ACTION_LOG T USING (SELECT %s AS ISSUE_KEY) S
+        f"""MERGE INTO CORE.ACTION_LOG T USING (SELECT %s AS ISSUE_KEY) S
               ON T.ISSUE_KEY = S.ISSUE_KEY AND T.ACTION = 'BUG_CLAIM' AND T.STATUS = 'PENDING'
             WHEN MATCHED AND T.ACTED_AT < DATEADD(second, -{BUG_CLAIM_SECONDS}, CURRENT_TIMESTAMP()) THEN UPDATE
                  SET ACTION_ID = %s, ACTED_BY = CURRENT_USER(), ACTED_AT = CURRENT_TIMESTAMP()
@@ -1530,7 +1530,7 @@ def _claim_bug(db: Db, label: str, test_id: str, table_id: str) -> Optional[str]
 
 def _bug_claim(db: Db, label: str) -> Optional[dict]:
     """The latest claim on a label: {"status", "key"} (key once its bug is known)."""
-    found = db.query("""SELECT STATUS, DETAIL FROM JIRA.ACTION_LOG WHERE ISSUE_KEY = %s AND ACTION = 'BUG_CLAIM'
+    found = db.query("""SELECT STATUS, DETAIL FROM CORE.ACTION_LOG WHERE ISSUE_KEY = %s AND ACTION = 'BUG_CLAIM'
                          ORDER BY ACTED_AT DESC LIMIT 1""", (label,))
     if not found:
         return None
@@ -1540,7 +1540,7 @@ def _bug_claim(db: Db, label: str) -> Optional[dict]:
 def _finish_bug_claim(db: Db, claim: str, status: str, key: Optional[str] = None) -> None:
     """DONE with the bug's key, or RELEASED after a failure so the next request can try again."""
     try:
-        db.execute("""UPDATE JIRA.ACTION_LOG SET STATUS = %s,
+        db.execute("""UPDATE CORE.ACTION_LOG SET STATUS = %s,
                              DETAIL = IFF(%s = '', DETAIL, OBJECT_INSERT(COALESCE(DETAIL, OBJECT_CONSTRUCT())::OBJECT, 'key', %s, TRUE))
                        WHERE ACTION_ID = %s AND ACTION = 'BUG_CLAIM'""", (status, key or "", key or "", claim))
     except Exception:
@@ -1551,7 +1551,7 @@ def _result_id(db: Db, result: dict, test_id: str) -> Optional[str]:
     if not result.get("qa_run_id"):
         return None
     try:
-        found = db.query("""SELECT RESULT_ID FROM QUALITY.QA_RESULT WHERE QA_RUN_ID = %s AND TEST_ID = %s
+        found = db.query("""SELECT RESULT_ID FROM CORE.QA_RESULT WHERE QA_RUN_ID = %s AND TEST_ID = %s
                              ORDER BY CREATED_AT DESC LIMIT 1""", (result["qa_run_id"], test_id))
     except Exception:
         return None
@@ -1595,7 +1595,7 @@ def bulk(body: BulkIn, db: Db = Depends(current_db)):
     posted_before: set[str] = set()
     if body.action == "comment" and body.idempotency_key:
         posted_before = {r["issue_key"] for r in db.query(
-            """SELECT DISTINCT ISSUE_KEY FROM JIRA.ACTION_LOG
+            """SELECT DISTINCT ISSUE_KEY FROM CORE.ACTION_LOG
                 WHERE IDEMPOTENCY_KEY = %s AND ACTION = 'COMMENT' AND STATUS = 'DONE'""", (body.idempotency_key,))}
     for raw in body.keys:
         if limited:

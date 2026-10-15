@@ -36,7 +36,7 @@ def _mean(values: Iterable[Optional[float]]) -> Optional[float]:
 
 
 def team_stats(incidents: List[Dict[str, Any]], teams: Dict[str, str]) -> List[Dict[str, Any]]:
-    """[{team_id, name, incidents, p1, mttr_min, mtta_min, repeats}] from incident rows (lower-case OPS.INCIDENT
+    """[{team_id, name, incidents, p1, mttr_min, mtta_min, repeats}] from incident rows (lower-case CORE.INCIDENT
     columns), one entry per team that has incidents (and every named team), most incidents first."""
     rows = sorted([i for i in incidents if not i.get("parent_incident_id")], key=lambda i: ts(i.get("first_seen")) or "")
     seen_fp: Dict[str, int] = {}
@@ -104,9 +104,9 @@ def report(db: Any, days: int = 7, team_id: Optional[str] = None, now: Optional[
         params.append(team_id)
     incidents = db.query(f"""SELECT I.INCIDENT_ID, I.FINGERPRINT, I.TEAM_ID, I.SEVERITY, I.TITLE, I.OCCURRENCES, I.FIRST_SEEN,
                                     I.OPENED_AT, I.RESOLVED_AT, I.ACKED_AT, I.PARENT_INCIDENT_ID
-                               FROM OPS.INCIDENT I JOIN OPS.AIRFLOW_ENV E ON E.ENV_ID = I.ENV_ID
+                               FROM CORE.INCIDENT I JOIN CORE.AIRFLOW_ENV E ON E.ENV_ID = I.ENV_ID
                               WHERE {where} LIMIT 20000""", tuple(params))
-    team_rows = db.query("SELECT TEAM_ID, NAME FROM OPS.TEAM" + (" WHERE TEAM_ID = %s" if team_id else ""),
+    team_rows = db.query("SELECT TEAM_ID, NAME FROM CORE.TEAM" + (" WHERE TEAM_ID = %s" if team_id else ""),
                          (team_id,) if team_id else ())
     teams = {t["team_id"]: t["name"] for t in team_rows}
     run_params: List[Any] = [start.isoformat()]
@@ -115,17 +115,17 @@ def report(db: Any, days: int = 7, team_id: Optional[str] = None, now: Optional[
         run_where += " AND D.TEAM_ID = %s"
         run_params.append(team_id)
     runs = db.query(f"""SELECT R.ENV_ID, R.DAG_ID, COUNT_IF(R.STATE = 'success') AS OK, COUNT_IF(R.STATE = 'failed') AS FAILED
-                          FROM OPS.DAG_RUN R JOIN OPS.AIRFLOW_ENV E ON E.ENV_ID = R.ENV_ID
-                          LEFT JOIN OPS.DAG D ON D.ENV_ID = R.ENV_ID AND D.DAG_ID = R.DAG_ID
+                          FROM CORE.DAG_RUN R JOIN CORE.AIRFLOW_ENV E ON E.ENV_ID = R.ENV_ID
+                          LEFT JOIN CORE.DAG D ON D.ENV_ID = R.ENV_ID AND D.DAG_ID = R.DAG_ID
                          WHERE {run_where} GROUP BY R.ENV_ID, R.DAG_ID""", tuple(run_params))
     ai = {"diagnoses": 0, "cost_usd": 0.0}
     try:
-        found = db.query(f"""SELECT COUNT(*) AS N FROM OPS.INCIDENT_EVENT V
-                              {"JOIN OPS.INCIDENT I ON I.INCIDENT_ID = V.INCIDENT_ID" if team_id else ""}
+        found = db.query(f"""SELECT COUNT(*) AS N FROM CORE.INCIDENT_EVENT V
+                              {"JOIN CORE.INCIDENT I ON I.INCIDENT_ID = V.INCIDENT_ID" if team_id else ""}
                              WHERE V.KIND = 'diagnosed' AND V.CREATED_AT >= TRY_TO_TIMESTAMP_LTZ(%s::VARCHAR)
                              {"AND I.TEAM_ID = %s" if team_id else ""}""", tuple(params[:2]) if team_id else (params[0],))
         ai["diagnoses"] = int(found[0]["n"] or 0) if found else 0
-        cost = db.query("""SELECT COALESCE(SUM(ESTIMATED_COST), 0) AS USD FROM AUDIT.COST_USAGE
+        cost = db.query("""SELECT COALESCE(SUM(ESTIMATED_COST), 0) AS USD FROM CORE.COST_USAGE
                             WHERE STAGE = 'OPS' AND CREATED_AT >= TRY_TO_TIMESTAMP_LTZ(%s::VARCHAR)""", (params[0],))
         ai["cost_usd"] = round(float(cost[0]["usd"] or 0), 4) if cost else 0.0
     except Exception:

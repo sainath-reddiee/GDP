@@ -1,8 +1,8 @@
 """Profiling and STTM hubs (/dashboard/profiling, /dashboard/sttm): tenant-wide catalogs over every run.
 
-Profiles: GOVERNANCE.DATA_PROFILES (column history, V036) with tables profiled before V036 filled in from
-METADATA.TABLE_PROFILES; the table detail (staged document, scorecard, live drift) is the existing /api/catalog/profile.
-STTM: GOVERNANCE.STTM_CATALOG versions, edited inline (each edit a new version), compared and exported to dbt.
+Profiles: CORE.DATA_PROFILES (column history, V036) with tables profiled before V036 filled in from
+CORE.TABLE_PROFILES; the table detail (staged document, scorecard, live drift) is the existing /api/catalog/profile.
+STTM: CORE.STTM_CATALOG versions, edited inline (each edit a new version), compared and exported to dbt.
 """
 
 from __future__ import annotations
@@ -21,6 +21,7 @@ from app.main import (CatalogProfileRequest, _json, _snowflake_error, _store_row
                       catalog_profile_tables, catalog_table_profile, current_db)
 from app.source_invoke import invoke_source
 from services.catalog import profile_ops
+from services.common.platform_schema import fqn, resolve
 from services.catalog import profiles as cat_profiles
 from services.catalog import sttm as cat_sttm
 
@@ -46,7 +47,7 @@ def _tag_keys(db: Db, tag: str) -> list[str]:
 
 
 def _legacy_rows(db: Db, seen: set, domain: Optional[str], table: Optional[str], q: Optional[str]) -> list[dict]:
-    """Tables profiled before V036 (or whose catalog copy failed), from METADATA.TABLE_PROFILES."""
+    """Tables profiled before V036 (or whose catalog copy failed), from CORE.TABLE_PROFILES."""
     out = []
     for r in _store_rows(db):
         if not r.get("source_fingerprint") or str(r.get("source_name") or "").upper().startswith("ORACLE_"):
@@ -99,7 +100,7 @@ def search_profiles(domain: Optional[str] = None, table: Optional[str] = None, r
 
 def _bookmarks(db: Db) -> set:
     try:
-        return {r["table_fqn"] for r in db.query("SELECT TABLE_FQN FROM GOVERNANCE.PROFILE_BOOKMARK WHERE USER_NAME = %s",
+        return {r["table_fqn"] for r in db.query("SELECT TABLE_FQN FROM CORE.PROFILE_BOOKMARK WHERE USER_NAME = %s",
                                                  (db.user,))}
     except Exception:
         return set()
@@ -108,7 +109,7 @@ def _bookmarks(db: Db) -> set:
 def _facets(db: Db) -> dict:
     out: dict = {"domains": [], "tags": [], "runs": []}
     try:
-        out["domains"] = db.query("SELECT DOMAIN_ID, DOMAIN_NAME FROM KNOWLEDGE.DOMAIN_REGISTRY WHERE ACTIVE_FLAG "
+        out["domains"] = db.query("SELECT DOMAIN_ID, DOMAIN_NAME FROM CORE.DOMAIN_REGISTRY WHERE ACTIVE_FLAG "
                                   "ORDER BY DOMAIN_NAME")
     except Exception:
         pass
@@ -119,7 +120,7 @@ def _facets(db: Db) -> dict:
         pass
     try:
         out["runs"] = db.query("""SELECT P.RUN_ID, MAX(R.RUN_NAME) AS RUN_NAME, MAX(P.PROFILED_AT)::VARCHAR AS PROFILED_AT
-                                    FROM GOVERNANCE.DATA_PROFILES P LEFT JOIN CORE.WORKFLOW_RUN R ON R.RUN_ID = P.RUN_ID
+                                    FROM CORE.DATA_PROFILES P LEFT JOIN CORE.WORKFLOW_RUN R ON R.RUN_ID = P.RUN_ID
                                    WHERE P.RUN_ID IS NOT NULL GROUP BY P.RUN_ID ORDER BY 3 DESC LIMIT 50""")
     except Exception:
         pass
@@ -129,7 +130,7 @@ def _facets(db: Db) -> dict:
 COLUMN_SELECT = """SELECT COLUMN_NAME, ORDINAL, DATA_TYPE, FAMILY, SEMANTIC_TYPE, PII_CLASSIFICATION, ROW_COUNT,
                           NULL_COUNT, NULL_PCT, DISTINCT_COUNT, CARDINALITY, CARDINALITY_RATIO, MIN_VALUE, MAX_VALUE,
                           POTENTIAL_KEY, TOP_VALUES, HISTOGRAM, DESCRIPTION
-                     FROM GOVERNANCE.DATA_PROFILES WHERE PROFILE_ID = %s ORDER BY ORDINAL"""
+                     FROM CORE.DATA_PROFILES WHERE PROFILE_ID = %s ORDER BY ORDINAL"""
 
 
 @router.get("/api/hub/profiles/columns")
@@ -142,7 +143,7 @@ def profile_columns(fqn: str, profile_id: Optional[str] = None, compare_to: Opti
     try:
         passes = db.query("""SELECT PROFILE_ID, MAX(RUN_ID) AS RUN_ID, MAX(ROW_COUNT) AS ROW_COUNT, COUNT(*) AS COLUMNS,
                                     MAX(PROFILED_AT)::VARCHAR AS PROFILED_AT, MAX(PROFILED_BY) AS PROFILED_BY
-                               FROM GOVERNANCE.DATA_PROFILES
+                               FROM CORE.DATA_PROFILES
                               WHERE UPPER(DATABASE_NAME) = UPPER(%s) AND UPPER(SCHEMA_NAME) = UPPER(%s)
                                 AND UPPER(TABLE_NAME) = UPPER(%s)
                               GROUP BY PROFILE_ID ORDER BY MAX(PROFILED_AT) DESC LIMIT 50""", (database, schema, table))
@@ -195,7 +196,7 @@ def profile_schedules(db: Db = Depends(current_db)):
         found = db.query("""SELECT SCHEDULE_ID, SOURCE_SYSTEM_ID, DATABASE_NAME, SCHEMA_NAME, TABLES, CRON, FORCE_REFRESH,
                                    TASK_NAME, ENABLED, LAST_RUN_AT::VARCHAR AS LAST_RUN_AT, LAST_STATUS, LAST_RESULT,
                                    CREATED_BY, CREATED_AT::VARCHAR AS CREATED_AT
-                              FROM GOVERNANCE.PROFILE_SCHEDULE ORDER BY DATABASE_NAME, SCHEMA_NAME, CREATED_AT""")
+                              FROM CORE.PROFILE_SCHEDULE ORDER BY DATABASE_NAME, SCHEMA_NAME, CREATED_AT""")
     except Exception:
         return {"schedules": [], "deployed": False}
     for r in found:
@@ -230,7 +231,7 @@ def set_profile_schedule(body: ScheduleIn, db: Db = Depends(current_db)):
     src = _ensure_source(db, _ident(body.database, "database"), _ident(body.schema_name, "schema"))
     tables = sorted({t.strip() for t in body.tables if t.strip()})
     try:
-        db.execute("""MERGE INTO GOVERNANCE.PROFILE_SCHEDULE T
+        db.execute("""MERGE INTO CORE.PROFILE_SCHEDULE T
                         USING (SELECT %s AS SCHEDULE_ID, %s AS SOURCE_SYSTEM_ID, %s AS DATABASE_NAME, %s AS SCHEMA_NAME,
                                       PARSE_JSON(%s)::ARRAY AS TABLES, %s AS CRON, %s AS FORCE_REFRESH, %s AS TASK_NAME) S
                            ON T.SCHEDULE_ID = S.SCHEDULE_ID
@@ -250,24 +251,36 @@ def set_profile_schedule(body: ScheduleIn, db: Db = Depends(current_db)):
     return {"schedule_id": schedule_id, "task": task, "cron": body.cron.strip(), "tables": tables}
 
 
+def _drop_legacy_task(db: Db, task: str) -> None:
+    """The suspended copy of a schedule's task kept from before V061 (names before V061); a new environment has no
+    PROFILE schema at all, so a failure here is not an error."""
+    try:
+        db.execute(f"DROP TASK IF EXISTS {task}")
+    except Exception:
+        pass
+
+
 def _schedule_task(db: Db, schedule_id: str) -> str:
     from app.db import DATABASE
 
-    found = db.query("SELECT TASK_NAME FROM GOVERNANCE.PROFILE_SCHEDULE WHERE SCHEDULE_ID = %s", (schedule_id,))
+    found = db.query("SELECT TASK_NAME FROM CORE.PROFILE_SCHEDULE WHERE SCHEDULE_ID = %s", (schedule_id,))
     if not found:
         raise HTTPException(404, "schedule not found")
-    task = found[0]["task_name"] or ""
-    if not task.startswith(f"{DATABASE}.PROFILE.PROF_"):
+    task = resolve(found[0]["task_name"] or "", "task")  # names stored before V061 still say PROFILE
+    if not task.startswith(fqn(DATABASE, "PROF_")):
         raise HTTPException(409, "the stored task name is not a Profiling Store task")
     return task
 
 
 @router.delete("/api/hub/profiles/schedules")
 def delete_profile_schedule(id: str, db: Db = Depends(current_db)):  # noqa: A002
+    from app.db import DATABASE
+
     task = _schedule_task(db, id)
     try:
         db.execute(f"DROP TASK IF EXISTS {task}")
-        db.execute("DELETE FROM GOVERNANCE.PROFILE_SCHEDULE WHERE SCHEDULE_ID = %s", (id,))
+        _drop_legacy_task(db, task.replace(fqn(DATABASE, ""), f"{DATABASE}.PROFILE.", 1))
+        db.execute("DELETE FROM CORE.PROFILE_SCHEDULE WHERE SCHEDULE_ID = %s", (id,))
     except Exception as exc:
         raise _snowflake_error(exc) from exc
     return {"schedule_id": id, "deleted": True}
@@ -278,7 +291,7 @@ def run_profile_schedule(schedule_id: str, db: Db = Depends(current_db)):
     """Run a schedule now (the same procedure its task calls)."""
     _schedule_task(db, schedule_id)
     try:
-        return db.call("CALL PROFILE.RUN_SCHEDULED_PROFILE(%s)", (schedule_id,)) or {}
+        return db.call("CALL CORE.RUN_SCHEDULED_PROFILE(%s)", (schedule_id,)) or {}
     except Exception as exc:
         raise _snowflake_error(exc) from exc
 
@@ -341,7 +354,7 @@ class Bookmark(BaseModel):
 @router.post("/api/hub/profiles/bookmarks")
 def add_bookmark(body: Bookmark, db: Db = Depends(current_db)):
     key = ".".join(_fqn(body.table_fqn)).upper()
-    db.execute("""MERGE INTO GOVERNANCE.PROFILE_BOOKMARK T USING (SELECT %s AS U, %s AS K, %s AS N) S
+    db.execute("""MERGE INTO CORE.PROFILE_BOOKMARK T USING (SELECT %s AS U, %s AS K, %s AS N) S
                     ON T.USER_NAME = S.U AND T.TABLE_FQN = S.K
                   WHEN NOT MATCHED THEN INSERT (USER_NAME, TABLE_FQN, NOTE) VALUES (S.U, S.K, S.N)""",
                (db.user, key, body.note))
@@ -351,7 +364,7 @@ def add_bookmark(body: Bookmark, db: Db = Depends(current_db)):
 @router.delete("/api/hub/profiles/bookmarks")
 def remove_bookmark(fqn: str, db: Db = Depends(current_db)):
     key = ".".join(_fqn(fqn)).upper()
-    db.execute("DELETE FROM GOVERNANCE.PROFILE_BOOKMARK WHERE USER_NAME = %s AND TABLE_FQN = %s", (db.user, key))
+    db.execute("DELETE FROM CORE.PROFILE_BOOKMARK WHERE USER_NAME = %s AND TABLE_FQN = %s", (db.user, key))
     return {"bookmarked": False, "table_fqn": key}
 
 
@@ -408,7 +421,7 @@ def _version(db: Db, catalog_id: str, version: Optional[int] = None) -> dict:
     sql = """SELECT CATALOG_ID, VERSION, STTM_ID, RUN_ID, DOMAIN_ID, DOMAIN_NAME, SOURCE_SYSTEM, SOURCE_ENTITIES,
                     TARGET_TABLE_ID, TARGET_ENTITY, STATUS, ORIGIN, CHANGE_NOTE, TABLE_DESIGN, LINES, LINE_COUNT,
                     CREATED_BY, CREATED_AT::VARCHAR AS CREATED_AT
-               FROM GOVERNANCE.STTM_CATALOG WHERE CATALOG_ID = %s"""
+               FROM CORE.STTM_CATALOG WHERE CATALOG_ID = %s"""
     params: tuple = (catalog_id,)
     if version is not None:
         sql += " AND VERSION = %s"
@@ -427,7 +440,7 @@ def get_sttm(catalog_id: str, version: Optional[int] = None, db: Db = Depends(cu
     entry = _version(db, catalog_id, version)
     versions = db.query("""SELECT VERSION, ORIGIN, STATUS, CHANGE_NOTE, LINE_COUNT, STTM_ID, RUN_ID, CREATED_BY,
                                   CREATED_AT::VARCHAR AS CREATED_AT
-                             FROM GOVERNANCE.STTM_CATALOG WHERE CATALOG_ID = %s ORDER BY VERSION DESC""", (catalog_id,))
+                             FROM CORE.STTM_CATALOG WHERE CATALOG_ID = %s ORDER BY VERSION DESC""", (catalog_id,))
     return {"mapping": entry, "versions": versions}
 
 
@@ -497,7 +510,7 @@ class SttmPublishIn(BaseModel):
 @router.post("/api/hub/sttm/{catalog_id}/publish")
 def publish_sttm(catalog_id: str, body: SttmPublishIn, db: Db = Depends(current_db)):
     """Open a pull request with an approved mapping version as sttm/<domain>/<target>.csv and its table design
-    (feature/sttm-<target>-v<version>). Tracked on the Source control page (GOVERNANCE.GIT_PR)."""
+    (feature/sttm-<target>-v<version>). Tracked on the Source control page (CORE.GIT_PR)."""
     import re
 
     from app.main import _dbt_repos, _github_publisher_ready
@@ -515,7 +528,7 @@ def publish_sttm(catalog_id: str, body: SttmPublishIn, db: Db = Depends(current_
     request = {"catalog_id": catalog_id, "version": int(body.version), "repo_id": body.repo_id, "head": head,
                "base": body.base or repo.get("branch"), "title": body.title}
     try:
-        result = db.call("CALL CODEGEN.PUBLISH_DBT_PR(%s, %s)", ("", json.dumps({"sttm": request})))
+        result = db.call("CALL CORE.PUBLISH_DBT_PR(%s, %s)", ("", json.dumps({"sttm": request})))
     except Exception as exc:
         return {"status": "FAILED", "detail": str(exc)[:1000], "head_branch": head}
     return {**(result or {}), "head_branch": head}
@@ -548,8 +561,8 @@ def sttm_context(catalog_id: str, version: Optional[int] = None, db: Db = Depend
     if run_id:
         try:
             for r in db.query("""SELECT T.SOURCE_TABLE, C.COLUMN_NAME, C.DATA_TYPE
-                                   FROM SOURCE.LANDING_TABLE_REGISTRY T
-                                   JOIN SOURCE.LANDING_COLUMN_REGISTRY C ON C.LANDING_ID = T.LANDING_ID
+                                   FROM CORE.LANDING_TABLE_REGISTRY T
+                                   JOIN CORE.LANDING_COLUMN_REGISTRY C ON C.LANDING_ID = T.LANDING_ID
                                   WHERE T.RUN_ID = %s AND T.INGESTION_STATUS = 'COMPLETE'
                                 QUALIFY DENSE_RANK() OVER (PARTITION BY T.SOURCE_TABLE ORDER BY T.CREATED_AT DESC) = 1
                                   ORDER BY T.SOURCE_TABLE, C.ORDINAL_POSITION""", (run_id,)):
@@ -566,7 +579,7 @@ def sttm_context(catalog_id: str, version: Optional[int] = None, db: Db = Depend
             for r in db.query(f"""SELECT UPPER(TABLE_NAME) AS T, UPPER(COLUMN_NAME) AS C, DATA_TYPE, SEMANTIC_TYPE,
                                          PII_CLASSIFICATION, NULL_PCT, DISTINCT_COUNT, CARDINALITY, MIN_VALUE, MAX_VALUE,
                                          POTENTIAL_KEY, TOP_VALUES, ROW_COUNT
-                                    FROM GOVERNANCE.DATA_PROFILES
+                                    FROM CORE.DATA_PROFILES
                                    WHERE UPPER(TABLE_NAME) IN ({", ".join(["%s"] * len(tables))})
                                  QUALIFY ROW_NUMBER() OVER (PARTITION BY UPPER(TABLE_NAME), UPPER(COLUMN_NAME)
                                                             ORDER BY PROFILED_AT DESC) = 1""", tuple(tables)):
@@ -582,10 +595,10 @@ def sttm_context(catalog_id: str, version: Optional[int] = None, db: Db = Depend
                                             L.DATA_TYPE AS SOURCE_DATATYPE, UPPER(TC.COLUMN_NAME) AS TARGET_COLUMN,
                                             C.FINAL_SCORE, C.CONFIDENCE, C.RANK, C.RECOMMENDATION, C.GENERATED_REASON,
                                             C.TRANSFORMATION
-                                       FROM MAPPING.MAPPING_CANDIDATE C
-                                       JOIN SOURCE.LANDING_COLUMN_REGISTRY L ON L.LANDING_COLUMN_ID = C.SOURCE_COLUMN_ID
-                                       JOIN SOURCE.LANDING_TABLE_REGISTRY TBL ON TBL.LANDING_ID = L.LANDING_ID
-                                       JOIN KNOWLEDGE.TARGET_COLUMN_REGISTRY TC ON TC.TARGET_COLUMN_ID = C.TARGET_COLUMN_ID
+                                       FROM CORE.MAPPING_CANDIDATE C
+                                       JOIN CORE.LANDING_COLUMN_REGISTRY L ON L.LANDING_COLUMN_ID = C.SOURCE_COLUMN_ID
+                                       JOIN CORE.LANDING_TABLE_REGISTRY TBL ON TBL.LANDING_ID = L.LANDING_ID
+                                       JOIN CORE.TARGET_COLUMN_REGISTRY TC ON TC.TARGET_COLUMN_ID = C.TARGET_COLUMN_ID
                                       WHERE C.RUN_ID = %s AND C.IS_CURRENT AND C.RANK <= 5
                                       ORDER BY TC.COLUMN_NAME, C.RANK LIMIT 3000""", (run_id,))
         except Exception:
@@ -593,8 +606,8 @@ def sttm_context(catalog_id: str, version: Optional[int] = None, db: Db = Depend
         try:
             decisions = db.query("""SELECT UPPER(TC.COLUMN_NAME) AS TARGET_COLUMN, D.DECISION, D.TRANSFORMATION,
                                            D.BUSINESS_JUSTIFICATION, D.REVIEWER, D.CREATED_AT::VARCHAR AS DECIDED_AT
-                                      FROM MAPPING.MAPPING_DECISION D
-                                      LEFT JOIN KNOWLEDGE.TARGET_COLUMN_REGISTRY TC ON TC.TARGET_COLUMN_ID = D.TARGET_COLUMN_ID
+                                      FROM CORE.MAPPING_DECISION D
+                                      LEFT JOIN CORE.TARGET_COLUMN_REGISTRY TC ON TC.TARGET_COLUMN_ID = D.TARGET_COLUMN_ID
                                      WHERE D.RUN_ID = %s AND D.IS_CURRENT""", (run_id,))
         except Exception:
             decisions = []
@@ -653,7 +666,7 @@ def export_sttm(catalog_id: str, version: Optional[int] = None, format: str = "z
             landing = [{"source_table": r["source_table"], "landing_table": r["landing_table"],
                         "database": r["landing_database"], "schema": r["landing_schema"]}
                        for r in db.query("""SELECT SOURCE_TABLE, LANDING_TABLE, LANDING_DATABASE, LANDING_SCHEMA
-                                              FROM SOURCE.LANDING_TABLE_REGISTRY
+                                              FROM CORE.LANDING_TABLE_REGISTRY
                                              WHERE RUN_ID = %s AND INGESTION_STATUS = 'COMPLETE'""", (entry["run_id"],))]
         except Exception:
             landing = []

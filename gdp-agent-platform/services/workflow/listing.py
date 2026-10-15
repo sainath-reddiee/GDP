@@ -94,7 +94,7 @@ def cost_query(group_by: str, since: Optional[str], until: Optional[str], limit:
                      SUM(IFF(C.ACTUAL_CREDITS IS NULL, C.ESTIMATED_COST, 0)) AS ESTIMATED_CREDITS,
                      COUNT_IF(C.ACTUAL_CREDITS IS NOT NULL) AS ACTUAL_CALLS,
                      SUM(C.DURATION_MS) AS DURATION_MS
-                FROM AUDIT.COST_USAGE C{join}
+                FROM CORE.COST_USAGE C{join}
                WHERE {' AND '.join(where)}
                GROUP BY {key}
                ORDER BY {order}

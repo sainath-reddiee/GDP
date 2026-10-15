@@ -238,7 +238,7 @@ def _candidate(kind: str, dag: Dict[str, Any], env: Dict[str, Any], task_id: Opt
 
 def from_task(task: Dict[str, Any], dag: Dict[str, Any], env: Dict[str, Any], settings: Dict[str, Any],
               run: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
-    """A task row (lower-case OPS.TASK_RUN columns) -> RETRIES_EXHAUSTED candidate or None."""
+    """A task row (lower-case CORE.TASK_RUN columns) -> RETRIES_EXHAUSTED candidate or None."""
     state = str(task.get("state") or "").lower()
     retrying = False
     if state == "failed":

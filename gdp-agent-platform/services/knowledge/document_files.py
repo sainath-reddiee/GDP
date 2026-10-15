@@ -1,11 +1,11 @@
 """Documents uploaded to a domain: the original file is kept, its text is read, and its knowledge proposed for review.
 
 Where things live (all in the platform database):
-  @CONFLUENCE.DOCUMENT_FILES                the original files, server-side encrypted, at <domain_id>/<source_id>/<name>
-  CONFLUENCE.SOURCE                         one row per document: file name, size, type, SHA-256, who uploaded it, the
+  @CORE.DOCUMENT_FILES                the original files, server-side encrypted, at <domain_id>/<source_id>/<name>
+  CORE.CONFLUENCE_SOURCE                         one row per document: file name, size, type, SHA-256, who uploaded it, the
                                             stage path, and how it was read (status, method, characters read of total)
-  CONFLUENCE.PAGE                           the text read from it (one page row per document; Confluence: per page)
-  KNOWLEDGE.DOMAIN_KNOWLEDGE                each proposed item (STATUS PROPOSED, ORIGIN DOCUMENT) with the exact quote
+  CORE.CONFLUENCE_PAGE                           the text read from it (one page row per document; Confluence: per page)
+  CORE.DOMAIN_KNOWLEDGE                each proposed item (STATUS PROPOSED, ORIGIN DOCUMENT) with the exact quote
                                             and the source document in CONTENT_JSON, until a steward decides
 
 How a file is read depends on its kind (classify):
@@ -27,7 +27,7 @@ import re
 from pathlib import PurePosixPath
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
-STAGE = "CONFLUENCE.DOCUMENT_FILES"
+STAGE = "CORE.DOCUMENT_FILES"
 MAX_FILE_BYTES = 50 * 1024 * 1024
 MAX_FILES = 10
 STALE_MINUTES = 30

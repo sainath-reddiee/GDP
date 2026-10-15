@@ -62,22 +62,22 @@ class FakeDb:
         self.executed = []
 
     def query(self, sql, params):
-        if "FROM KNOWLEDGE.DOMAIN_REGISTRY" in sql:
+        if "FROM CORE.DOMAIN_REGISTRY" in sql:
             return [{"DOMAIN_ID": "d1", "DOMAIN_NAME": "SALES", "DESCRIPTION": "Sales", "OWNER": "ANA",
                      "ACTIVE_FLAG": True, "CONFIG": '{"rules": {}}'}]
-        if "FROM KNOWLEDGE.TARGET_TABLE_REGISTRY" in sql:
+        if "FROM CORE.TARGET_TABLE_REGISTRY" in sql:
             return [{"TARGET_TABLE_ID": "t1", "TARGET_DATABASE": "db", "TARGET_SCHEMA": "s", "TARGET_TABLE": "orders",
                      "DESCRIPTION": None, "ACTIVE_FLAG": True, "TABLE_TYPE": "FACT", "GRAIN": None}]
-        if "FROM KNOWLEDGE.TARGET_COLUMN_REGISTRY" in sql:
+        if "FROM CORE.TARGET_COLUMN_REGISTRY" in sql:
             return [{"TARGET_TABLE_ID": "t1", "COLUMN_NAME": "ORDER_ID", "DATA_TYPE": "NUMBER", "ORDINAL_POSITION": 1,
                      "NULLABLE": False, "IS_BUSINESS_KEY": True, "IS_PII": False, "BUSINESS_DEFINITION": None}]
-        if "FROM KNOWLEDGE.DOMAIN_VERSION" in sql:
+        if "FROM CORE.DOMAIN_VERSION" in sql:
             return [self.versions[-1]] if self.versions else []
         return []
 
     def execute(self, sql, params):
         self.executed.append(sql)
-        if sql.lstrip().startswith("INSERT INTO KNOWLEDGE.DOMAIN_VERSION"):
+        if sql.lstrip().startswith("INSERT INTO CORE.DOMAIN_VERSION"):
             self.versions.append({"VERSION": params[1], "CHECKSUM": params[7]})
 
 
@@ -89,4 +89,4 @@ def test_snapshot_records_once_until_something_changes():
     assert snap["targets"][0]["table"] == "DB.S.ORDERS" and snap["targets"][0]["columns"][0]["key"] is True
     db.versions[-1]["CHECKSUM"] = "different"
     assert dv.snapshot(db.query, db.execute, "d1", "RULES") == 2
-    assert any("UPDATE KNOWLEDGE.DOMAIN_REGISTRY SET VERSION" in s for s in db.executed)
+    assert any("UPDATE CORE.DOMAIN_REGISTRY SET VERSION" in s for s in db.executed)

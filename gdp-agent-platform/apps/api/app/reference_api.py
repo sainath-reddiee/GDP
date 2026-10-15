@@ -59,7 +59,7 @@ def _deployed(exc: Exception) -> HTTPException:
 def _row(db: Db, domain_id: str, rid: str) -> Dict[str, Any]:
     found = db.query("""SELECT REFERENCE_ID, DOMAIN_ID, LAYER, KIND, TITLE, ORIGIN, SOURCE_POINTER, STATUS, NOTE, PARSED, APPLIED,
                                CREATED_BY, TO_VARCHAR(CREATED_AT, 'YYYY-MM-DD HH24:MI') AS CREATED_AT
-                          FROM KNOWLEDGE.REFERENCE_INPUT WHERE REFERENCE_ID = %s AND DOMAIN_ID = %s""", (rid, domain_id))
+                          FROM CORE.REFERENCE_INPUT WHERE REFERENCE_ID = %s AND DOMAIN_ID = %s""", (rid, domain_id))
     if not found:
         raise HTTPException(404, "reference not found")
     r = found[0]
@@ -74,7 +74,7 @@ def _set(db: Db, rid: str, **fields: Any) -> None:
             sets.append(f"{k.upper()} = PARSE_JSON(%s)"); params.append(json.dumps(v, default=str))
         else:
             sets.append(f"{k.upper()} = %s"); params.append(v)
-    db.execute(f"UPDATE KNOWLEDGE.REFERENCE_INPUT SET {', '.join(sets)}, UPDATED_AT = CURRENT_TIMESTAMP() WHERE REFERENCE_ID = %s",
+    db.execute(f"UPDATE CORE.REFERENCE_INPUT SET {', '.join(sets)}, UPDATED_AT = CURRENT_TIMESTAMP() WHERE REFERENCE_ID = %s",
                (*params, rid))
 
 
@@ -101,7 +101,7 @@ def _with_mdm(db: Db, domain_id: str, parsed: Dict[str, Any]) -> Dict[str, Any]:
     """A post-MDM schema read as the MASTERED contract it implies, with the questions for the domain owner."""
     from services.mdm.derive import derive
 
-    name = (db.query("SELECT DOMAIN_NAME FROM KNOWLEDGE.DOMAIN_REGISTRY WHERE DOMAIN_ID = %s", (domain_id,)) or [{}])[0].get("domain_name")
+    name = (db.query("SELECT DOMAIN_NAME FROM CORE.DOMAIN_REGISTRY WHERE DOMAIN_ID = %s", (domain_id,)) or [{}])[0].get("domain_name")
     out = derive(str(name or ""), parsed.get("spec") or {})
     return {**parsed, "mdm_contract": out["contract"], "mdm_questions": out["questions"], "mdm_found": out["found"]}
 
@@ -168,7 +168,7 @@ def _read(db: Db, domain_id: str, rid: str, name: str, data: bytes, table: Optio
         path = document_files.stage_path(domain_id, source_id, name)
         file_kind, _note = document_files.classify(name, data)
         _put(db, path, data)
-        db.execute("""INSERT INTO CONFLUENCE.SOURCE (SOURCE_ID, DOMAIN_ID, KIND, TITLE, FILE_NAME, STAGE_PATH, FILE_SIZE,
+        db.execute("""INSERT INTO CORE.CONFLUENCE_SOURCE (SOURCE_ID, DOMAIN_ID, KIND, TITLE, FILE_NAME, STAGE_PATH, FILE_SIZE,
                                                      CONTENT_TYPE, FILE_SHA256, FILE_KIND, READ_STATUS, LAYER)
                       SELECT %s, %s, 'UPLOAD', %s, %s, %s, %s, %s, %s, %s, 'QUEUED', %s""",
                    (source_id, domain_id, name[:1024], name, path, len(data), document_files.content_type(name),
@@ -218,7 +218,7 @@ async def add_references(domain_id: str, files_in: List[UploadFile] = File(..., 
             if len(data) > MAX_BYTES or not data:
                 out.append({"file_name": name, "error": "empty" if not data else "larger than 50 MB"}); continue
             digest = document_files.sha256(data)
-            dup = db.query("""SELECT REFERENCE_ID FROM KNOWLEDGE.REFERENCE_INPUT WHERE DOMAIN_ID = %s AND FILE_SHA256 = %s
+            dup = db.query("""SELECT REFERENCE_ID FROM CORE.REFERENCE_INPUT WHERE DOMAIN_ID = %s AND FILE_SHA256 = %s
                                AND LAYER = %s AND STATUS <> 'WITHDRAWN'""", (domain_id, digest, layer))
             if dup:
                 out.append({"file_name": name, "reference_id": dup[0]["reference_id"], "duplicate": True}); continue
@@ -227,7 +227,7 @@ async def add_references(domain_id: str, files_in: List[UploadFile] = File(..., 
             rid = str(uuid.uuid4())
             path = f"{domain_id}/references/{rid}/{re.sub(r'[^A-Za-z0-9._-]+', '_', name)[:200]}"
             _put(db, path, data)
-            db.execute("""INSERT INTO KNOWLEDGE.REFERENCE_INPUT (REFERENCE_ID, DOMAIN_ID, LAYER, KIND, TITLE, ORIGIN, SOURCE_POINTER,
+            db.execute("""INSERT INTO CORE.REFERENCE_INPUT (REFERENCE_ID, DOMAIN_ID, LAYER, KIND, TITLE, ORIGIN, SOURCE_POINTER,
                                                                  FILE_SHA256, STATUS, NOTE, PARSED)
                           SELECT %s, %s, %s, %s, %s, 'UPLOAD', %s, %s, 'QUEUED', %s, PARSE_JSON(%s)""",
                        (rid, domain_id, layer, k, name, path, digest, f"Detected as {k.replace('_', ' ').lower()}: {found['why']}",
@@ -273,7 +273,7 @@ def add_schema_reference(domain_id: str, body: SchemaIn, db: Db = Depends(curren
     rid = str(uuid.uuid4())
     pointer = f"{body.database.upper()}.{body.schema_name.upper()}"
     try:
-        db.execute("""INSERT INTO KNOWLEDGE.REFERENCE_INPUT (REFERENCE_ID, DOMAIN_ID, LAYER, KIND, TITLE, ORIGIN, SOURCE_POINTER,
+        db.execute("""INSERT INTO CORE.REFERENCE_INPUT (REFERENCE_ID, DOMAIN_ID, LAYER, KIND, TITLE, ORIGIN, SOURCE_POINTER,
                                                              STATUS, NOTE, PARSED)
                       SELECT %s, %s, %s, %s, %s, 'SCHEMA', %s, 'READY', %s, PARSE_JSON(%s)""",
                    (rid, domain_id, body.layer, body.kind, pointer, pointer,
@@ -295,10 +295,10 @@ def list_references(domain_id: str, layer: Optional[str] = None, db: Db = Depend
                                    PARSED:mdm_questions AS MDM_QUESTIONS, PARSED:mdm_contract IS NOT NULL AND
                                    NOT IS_NULL_VALUE(PARSED:mdm_contract) AS MDM_DERIVED, CREATED_BY,
                                    TO_VARCHAR(CREATED_AT, 'YYYY-MM-DD HH24:MI') AS CREATED_AT
-                              FROM KNOWLEDGE.REFERENCE_INPUT WHERE {' AND '.join(where)} ORDER BY CREATED_AT DESC LIMIT 200""",
+                              FROM CORE.REFERENCE_INPUT WHERE {' AND '.join(where)} ORDER BY CREATED_AT DESC LIMIT 200""",
                         tuple(params))
         scores = db.query(f"""SELECT LAYER, KIND, STAGE, SCORE, RUN_ID, TO_VARCHAR(SCORED_AT, 'YYYY-MM-DD HH24:MI') AS SCORED_AT
-                                FROM KNOWLEDGE.REFERENCE_SCORE WHERE DOMAIN_ID = %s ORDER BY SCORED_AT DESC LIMIT 50""", (domain_id,))
+                                FROM CORE.REFERENCE_SCORE WHERE DOMAIN_ID = %s ORDER BY SCORED_AT DESC LIMIT 50""", (domain_id,))
     except Exception as exc:
         if "does not exist" in str(exc).lower():
             return {"references": [], "scores": [], "deployed": False}
@@ -365,7 +365,7 @@ def use_reference_as_model(domain_id: str, rid: str, body: UseModelIn, db: Db = 
     def work(session):
         from services.common.sql import rows
 
-        exists = rows(session, "SELECT OPEN_VERSION FROM GOVERNANCE.DOMAIN_MODEL WHERE MODEL_ID = ?", [model_id])
+        exists = rows(session, "SELECT OPEN_VERSION FROM CORE.DOMAIN_MODEL WHERE MODEL_ID = ?", [model_id])
         if not exists:
             return domain_model.create_model(session, domain_id, json.dumps(
                 {"layer": layer, "spec": spec, "origin": "REFERENCE", "change_note": note}), user)
@@ -405,7 +405,7 @@ def use_reference_as_mdm(domain_id: str, rid: str, body: UseMdmIn, db: Db = Depe
     contract = body.contract or derived
     if r["kind"] != "MDM_SCHEMA" or r["status"] != "READY" or not contract:
         raise HTTPException(409, "only a post-MDM schema reference with a derived contract can become the MDM contract")
-    found = db.query("SELECT DOMAIN_NAME, CONFIG:mdm AS MDM FROM KNOWLEDGE.DOMAIN_REGISTRY "
+    found = db.query("SELECT DOMAIN_NAME, CONFIG:mdm AS MDM FROM CORE.DOMAIN_REGISTRY "
                      "WHERE DOMAIN_ID = %s", (domain_id,))
     if not found:
         raise HTTPException(404, "domain not found")
@@ -422,7 +422,7 @@ def use_reference_as_mdm(domain_id: str, rid: str, body: UseMdmIn, db: Db = Depe
                                  f"(it is re-registered on deploy). {json.dumps(contract)[:3000]}")
     try:
         _baseline(db, domain_id)
-        db.execute("UPDATE KNOWLEDGE.DOMAIN_REGISTRY SET CONFIG = OBJECT_INSERT(COALESCE(CONFIG, OBJECT_CONSTRUCT()), 'mdm', PARSE_JSON(%s), TRUE), "
+        db.execute("UPDATE CORE.DOMAIN_REGISTRY SET CONFIG = OBJECT_INSERT(COALESCE(CONFIG, OBJECT_CONSTRUCT()), 'mdm', PARSE_JSON(%s), TRUE), "
                    "UPDATED_AT = CURRENT_TIMESTAMP() WHERE DOMAIN_ID = %s", (json.dumps(contract), domain_id))
     except Exception as exc:
         raise _snowflake_error(exc) from exc

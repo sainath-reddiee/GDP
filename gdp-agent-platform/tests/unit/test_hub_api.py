@@ -82,7 +82,7 @@ def test_register_pipeline_seals_secrets(client, monkeypatch):
     assert res.status_code == 200, res.text
     assert res.json()["pipeline"]["domain_id"] == "d-1"
     assert res.json()["pipeline"]["has_secret"] is True and "secret_sealed" not in res.json()["pipeline"]
-    insert = [p for sql, p in holder["db"].executed if "INSERT INTO PLATFORM_CONFIG.INGESTION_PIPELINE_CATALOG" in sql][0]
+    insert = [p for sql, p in holder["db"].executed if "INSERT INTO CORE.INGESTION_PIPELINE_CATALOG" in sql][0]
     assert isinstance(insert[5], bytes) and insert[5].startswith(b"gdp1:")
     assert "s3cret" not in json.dumps([v for v in insert if not isinstance(v, bytes)])
 
@@ -100,7 +100,7 @@ def test_register_pipeline_errors(client, monkeypatch):
 
 def test_list_pipelines_masks_and_tolerates_missing_table(client):
     c, holder = client
-    holder["db"] = FakeDb({"FROM PLATFORM_CONFIG.INGESTION_PIPELINE_CATALOG": [
+    holder["db"] = FakeDb({"FROM CORE.INGESTION_PIPELINE_CATALOG": [
         {"source_id": "1", "source_name": "A", "secret_sealed": b"gdp1:x", "connection_metadata": '{"host": "h"}'}]})
     rows = c.get("/api/hub/pipelines").json()["pipelines"]
     assert rows == [{"source_id": "1", "source_name": "A", "connection_metadata": {"host": "h"}, "has_secret": True}]
@@ -132,8 +132,8 @@ def test_share_onboarding_walks_the_run(client, monkeypatch):
                                                          "tables": ["ORDERS"], "source_system_name": "PARTNER"})
     body = res.json()
     assert res.status_code == 200 and body["ok"] and body["continue_at"] == "/runs/run-1/profile"
-    assert [p for p, _ in steps] == ["CALL SOURCE.REGISTER_SOURCE(%s, %s)", "CALL SOURCE.VALIDATE_SOURCE_ACCESS(%s, %s)",
-                                     "CALL SOURCE.EXECUTE_STAGED_LANDING(%s)"]
+    assert [p for p, _ in steps] == ["CALL CORE.REGISTER_SOURCE(%s, %s)", "CALL CORE.VALIDATE_SOURCE_ACCESS(%s, %s)",
+                                     "CALL CORE.EXECUTE_STAGED_LANDING(%s)"]
     registered = json.loads(steps[0][1][1])
     assert registered["SOURCE_TYPE"] == "SNOWFLAKE_SHARE" and registered["DATABASE"] == "SHARE_DB"
     assert json.loads(steps[1][1][1]) == ["ORDERS"]
@@ -172,9 +172,9 @@ def test_share_onboarding_input_checks(client):
 def test_profile_search_merges_legacy_tables(client, monkeypatch):
     c, holder = client
     holder["db"] = FakeDb({
-        "FROM GOVERNANCE.DATA_PROFILES": [{"profile_id": "p1", "table_fqn": "DB.S.A", "semantic_types": '["ID", null]',
+        "FROM CORE.DATA_PROFILES": [{"profile_id": "p1", "table_fqn": "DB.S.A", "semantic_types": '["ID", null]',
                                            "total": 1, "database_name": "DB", "schema_name": "S", "table_name": "A"}],
-        "FROM GOVERNANCE.PROFILE_BOOKMARK": [{"table_fqn": "DB.S.A"}],
+        "FROM CORE.PROFILE_BOOKMARK": [{"table_fqn": "DB.S.A"}],
     })
     monkeypatch.setattr(hub_catalog, "_store_rows", lambda db: [
         {"source_name": "X", "database_name": "DB", "schema_name": "S", "table_name": "A", "source_fingerprint": "f"},
@@ -190,12 +190,12 @@ def test_bookmarks_require_a_table_fqn(client):
     c, holder = client
     assert c.post("/api/hub/profiles/bookmarks", json={"table_fqn": "just_a_name"}).status_code == 400
     assert c.post("/api/hub/profiles/bookmarks", json={"table_fqn": "db.s.t"}).json()["table_fqn"] == "DB.S.T"
-    merge = [p for sql, p in holder["db"].executed if "MERGE INTO GOVERNANCE.PROFILE_BOOKMARK" in sql][0]
+    merge = [p for sql, p in holder["db"].executed if "MERGE INTO CORE.PROFILE_BOOKMARK" in sql][0]
     assert merge[:2] == ("ANA", "DB.S.T")
 
 
 def _sttm_db(version=2):
-    return FakeDb({"FROM GOVERNANCE.STTM_CATALOG WHERE CATALOG_ID = %s": lambda p: [{
+    return FakeDb({"FROM CORE.STTM_CATALOG WHERE CATALOG_ID = %s": lambda p: [{
         "catalog_id": "c1", "version": p[1] if len(p) > 1 else version, "source_system": "CRM",
         "target_entity": "DB.S.DIM_X", "run_id": None, "lines": json.dumps([
             {"target_column": "ID", "source_column": "ID", "mapping_type": "DIRECT", "target_datatype": "NUMBER"}]),
@@ -257,7 +257,7 @@ def test_sttm_export_zip(client):
 
 def test_catalog_reads_before_deploy(client):
     c, holder = client
-    holder["db"] = FakeDb(fail=("GOVERNANCE.",))
+    holder["db"] = FakeDb(fail=("CORE.STTM_CATALOG", "CORE.MODEL_DESIGNS", "CORE.DOMAIN_MODEL", "CORE.TABLE_MODEL"))  # the catalog tables (GOVERNANCE before V061)
     assert c.get("/api/hub/sttm").json() == {"mappings": [], "total": 0, "deployed": False}
     assert c.get("/api/hub/models/context").json()["deployed"] is False
 
@@ -272,7 +272,7 @@ SPEC = {"domain": "SALES_X", "mode": "NEW", "design": {"entities": [
 
 def test_models_render_and_finalize(client, monkeypatch):
     c, holder = client
-    holder["db"] = FakeDb({"FROM KNOWLEDGE.DOMAIN_REGISTRY": [{"domain_id": "d1", "domain_name": "COMPANY"}],
+    holder["db"] = FakeDb({"FROM CORE.DOMAIN_REGISTRY": [{"domain_id": "d1", "domain_name": "COMPANY"}],
                            "COALESCE(MAX(VERSION), 0) AS V": [{"v": 1}]})
     monkeypatch.setattr(hub_models, "_dbt_repos", lambda db, domain: [])
     body = c.post("/api/hub/models/render", json={"spec": SPEC}).json()
@@ -282,21 +282,21 @@ def test_models_render_and_finalize(client, monkeypatch):
     assert clash.status_code == 422
     ok = c.post("/api/hub/models/d9/finalize", json={"spec": SPEC})
     assert ok.status_code == 200 and ok.json()["version"] == 2
-    insert = [p for sql, p in holder["db"].executed if "INSERT INTO GOVERNANCE.MODEL_DESIGNS" in sql][0]
+    insert = [p for sql, p in holder["db"].executed if "INSERT INTO CORE.MODEL_DESIGNS" in sql][0]
     assert insert[5] == "FINALIZED" and "domain/sales_x/domain_pack.json" in json.loads(insert[9])
 
 
 def test_models_publish_guards(client, monkeypatch):
     c, holder = client
-    holder["db"] = FakeDb({"FROM GOVERNANCE.MODEL_DESIGNS WHERE DESIGN_ID": [{"domain_name": "SALES_X",
+    holder["db"] = FakeDb({"FROM CORE.MODEL_DESIGNS WHERE DESIGN_ID": [{"domain_name": "SALES_X",
                                                                              "status": "DRAFT"}]})
     assert c.post("/api/hub/models/d1/publish", json={"version": 1, "repo_id": "r"}).status_code == 409
-    holder["db"] = FakeDb({"FROM GOVERNANCE.MODEL_DESIGNS WHERE DESIGN_ID": [{"domain_name": "SALES_X",
+    holder["db"] = FakeDb({"FROM CORE.MODEL_DESIGNS WHERE DESIGN_ID": [{"domain_name": "SALES_X",
                                                                              "status": "FINALIZED"}]})
     monkeypatch.setattr(hub_models, "_dbt_repos", lambda db, d: [{"repo_id": "r", "provider": "GITHUB", "branch": "main",
                                                                   "name": "repo"}])
     monkeypatch.setattr(hub_models, "_github_publisher_ready", lambda db: True)
-    holder["db"].answers["CODEGEN.PUBLISH_DBT_PR"] = {"status": "PUBLISHED"}
+    holder["db"].answers["CORE.PUBLISH_DBT_PR"] = {"status": "PUBLISHED"}
     body = c.post("/api/hub/models/d1/publish", json={"version": 1, "repo_id": "r"}).json()
     assert body["status"] == "PUBLISHED" and body["head_branch"].startswith("feature/model-sales-x-")
     request = json.loads(holder["db"].calls[-1][1][1])["model_branch"]
@@ -311,9 +311,9 @@ def test_quality_gates(client):
     c, holder = client
     holder["db"] = FakeDb({
         "FROM CORE.WORKFLOW_RUN": [{"run_id": "r1", "run_name": "Run 1"}],
-        "FROM QUALITY.CHECK_RUN WHERE RUN_ID IN": [{"run_id": "r1", "health": 98, "failed": 0}],
-        "FROM QUALITY.QA_RUN WHERE RUN_ID IN": [{"run_id": "r1", "tests": 3, "failed": 0, "errors": 0}],
-        "FROM CONTRACT.QA_SIGNOFF": [{"run_id": "r1", "decision": "APPROVED", "decided_by": "ANA"}],
+        "FROM CORE.CHECK_RUN WHERE RUN_ID IN": [{"run_id": "r1", "health": 98, "failed": 0}],
+        "FROM CORE.QA_RUN WHERE RUN_ID IN": [{"run_id": "r1", "tests": 3, "failed": 0, "errors": 0}],
+        "FROM CORE.QA_SIGNOFF": [{"run_id": "r1", "decision": "APPROVED", "decided_by": "ANA"}],
     })
     run = c.get("/api/hub/quality/gates").json()["runs"][0]
     assert run["status"] == "READY" and run["run_name"] == "Run 1"

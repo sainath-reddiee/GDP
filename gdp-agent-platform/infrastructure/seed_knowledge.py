@@ -41,7 +41,7 @@ PLATFORM_CONFIG = [
       "hidden_domain_names": ["GDP"], "strip_tokens": ["GDP"]},
      "Catalog objects hidden from task screens and product tokens stripped from suggested names (editable in Admin)"),
     ("INGESTION_INTAKE_FORM", INTAKE_FORM,
-     "Questions the Source Hub asks for an external pipeline; answers go to PLATFORM_CONFIG.INGESTION_PIPELINE_CATALOG"),
+     "Questions the Source Hub asks for an external pipeline; answers go to CORE.INGESTION_PIPELINE_CATALOG"),
 ]
 
 
@@ -235,7 +235,7 @@ def seed_skills(cur, database: str) -> List[str]:
     SKILLS_AUTO_PROMOTE_REPO is on; otherwise the new version becomes the candidate, for someone to review and promote.
     """
     log: List[str] = []
-    reg = f"{database}.KNOWLEDGE.SKILL_REGISTRY"
+    reg = f"{database}.CORE.SKILL_REGISTRY"
     cur.execute(f"""SELECT CONFIG_VALUE FROM {database}.CORE.PLATFORM_CONFIG
                      WHERE CONFIG_KEY = 'SKILLS_AUTO_PROMOTE_REPO' AND IS_CURRENT ORDER BY VERSION DESC LIMIT 1""")
     found = cur.fetchall()
@@ -261,7 +261,7 @@ def seed_skills(cur, database: str) -> List[str]:
                         (skill_id, name, stype, domain or "", version, path, checksum, status, desc, content,
                          _dumps(config), name, category, parent or ""))
             new = True
-        cur.execute(f"SELECT LABEL, SKILL_ID, MOVED_BY FROM {database}.KNOWLEDGE.SKILL_LABEL WHERE SKILL_NAME = %s", (name,))
+        cur.execute(f"SELECT LABEL, SKILL_ID, MOVED_BY FROM {database}.CORE.SKILL_LABEL WHERE SKILL_NAME = %s", (name,))
         labels = {r[0]: (r[1], r[2]) for r in cur.fetchall()}
         production = labels.get("production")
         if production is None or (new and auto and production[1] == "SEED"):
@@ -272,7 +272,7 @@ def seed_skills(cur, database: str) -> List[str]:
             _move_label(cur, database, name, "candidate", skill_id, (labels.get("candidate") or (None,))[0])
             log.append(f"skill {name}: new repository version {version} is the candidate (production was set by a person)")
     # IS_CURRENT mirrors production so readers that predate labels keep working
-    cur.execute(f"""UPDATE {reg} R SET IS_CURRENT = (R.SKILL_ID IN (SELECT SKILL_ID FROM {database}.KNOWLEDGE.SKILL_LABEL
+    cur.execute(f"""UPDATE {reg} R SET IS_CURRENT = (R.SKILL_ID IN (SELECT SKILL_ID FROM {database}.CORE.SKILL_LABEL
                                                                      WHERE LABEL = 'production'))""")
     # stage bindings: missing rows only, admin edits are never touched
     from services.knowledge.usage import GDP_ONLY_SKILLS, STAGE_SKILLS, pipeline_of_skill
@@ -280,13 +280,13 @@ def seed_skills(cur, database: str) -> List[str]:
     for stage, names in STAGE_SKILLS.items():
         for pos, name in enumerate(names):
             try:   # V055: each binding's pipeline (Silver, Gold or both)
-                cur.execute(f"""MERGE INTO {database}.KNOWLEDGE.SKILL_STAGE_BINDING T
+                cur.execute(f"""MERGE INTO {database}.CORE.SKILL_STAGE_BINDING T
                                  USING (SELECT %s AS STAGE, %s AS SKILL_NAME) S ON T.STAGE = S.STAGE AND T.SKILL_NAME = S.SKILL_NAME
                                  WHEN NOT MATCHED THEN INSERT (STAGE, SKILL_NAME, ENABLED, POSITION, STANDARD, PIPELINE, UPDATED_BY)
                                  VALUES (S.STAGE, S.SKILL_NAME, TRUE, %s, %s, %s, 'SEED')""",
                             (stage, name, (pos + 1) * 10, "GDP" if name in GDP_ONLY_SKILLS else "ANY", pipeline_of_skill(name)))
             except Exception:
-                cur.execute(f"""MERGE INTO {database}.KNOWLEDGE.SKILL_STAGE_BINDING T
+                cur.execute(f"""MERGE INTO {database}.CORE.SKILL_STAGE_BINDING T
                                  USING (SELECT %s AS STAGE, %s AS SKILL_NAME) S ON T.STAGE = S.STAGE AND T.SKILL_NAME = S.SKILL_NAME
                                  WHEN NOT MATCHED THEN INSERT (STAGE, SKILL_NAME, ENABLED, POSITION, STANDARD, UPDATED_BY)
                                  VALUES (S.STAGE, S.SKILL_NAME, TRUE, %s, %s, 'SEED')""",
@@ -297,14 +297,14 @@ def seed_skills(cur, database: str) -> List[str]:
 def _move_label(cur, database: str, name: str, label: str, skill_id: str, previous: Optional[str]) -> None:
     import uuid
 
-    cur.execute(f"""MERGE INTO {database}.KNOWLEDGE.SKILL_LABEL T
+    cur.execute(f"""MERGE INTO {database}.CORE.SKILL_LABEL T
                      USING (SELECT %s AS SKILL_NAME, %s AS LABEL, %s AS SKILL_ID) S
                         ON T.SKILL_NAME = S.SKILL_NAME AND T.LABEL = S.LABEL
                      WHEN MATCHED THEN UPDATE SET SKILL_ID = S.SKILL_ID, MOVED_BY = 'SEED', MOVED_AT = CURRENT_TIMESTAMP(),
                           NOTE = 'Repository deploy'
                      WHEN NOT MATCHED THEN INSERT (SKILL_NAME, LABEL, SKILL_ID, MOVED_BY, NOTE)
                           VALUES (S.SKILL_NAME, S.LABEL, S.SKILL_ID, 'SEED', 'Repository deploy')""", (name, label, skill_id))
-    cur.execute(f"""INSERT INTO {database}.KNOWLEDGE.SKILL_LABEL_HISTORY
+    cur.execute(f"""INSERT INTO {database}.CORE.SKILL_LABEL_HISTORY
                      (EVENT_ID, SKILL_NAME, LABEL, FROM_SKILL_ID, TO_SKILL_ID, MOVED_BY, NOTE)
                      VALUES (%s, %s, %s, NULLIF(%s, ''), %s, 'SEED', 'Repository deploy')""",
                 (str(uuid.uuid4()), name, label, previous or "", skill_id))
@@ -327,7 +327,7 @@ def snapshot_domains(cur, database: str) -> List[str]:
 
     log: List[str] = []
     try:
-        cur.execute(f"SELECT DOMAIN_ID, DOMAIN_NAME FROM {database}.KNOWLEDGE.DOMAIN_REGISTRY")
+        cur.execute(f"SELECT DOMAIN_ID, DOMAIN_NAME FROM {database}.CORE.DOMAIN_REGISTRY")
         domains = cur.fetchall()
     except Exception as exc:
         return [f"domain versions skipped: {exc}"]
@@ -376,7 +376,7 @@ def seed_inputs_digest() -> str:
 def governed_domains(cur, database: str) -> Dict[str, Any]:
     """Domains whose registry follows an approved Model Workbench version: {domain id: approved version}."""
     try:
-        cur.execute(f"SELECT DOMAIN_ID, APPROVED_VERSION FROM {database}.GOVERNANCE.DOMAIN_MODEL "
+        cur.execute(f"SELECT DOMAIN_ID, APPROVED_VERSION FROM {database}.CORE.DOMAIN_MODEL "
                     "WHERE APPROVED_VERSION IS NOT NULL AND COALESCE(LAYER, 'SILVER') = 'SILVER'")
         return {r[0]: r[1] for r in cur.fetchall()}
     except Exception:
@@ -443,7 +443,7 @@ def seed_platform(cur, database: str) -> List[str]:
 
     for skill in list_skills():
         root = skill["path"].parent
-        dest_root = f"@{database}.KNOWLEDGE.SKILL_STAGE/{skill['folder']}/{_stage_dir(skill)}"
+        dest_root = f"@{database}.CORE.SKILL_STAGE/{skill['folder']}/{_stage_dir(skill)}"
         for local in skill["files"]:
             rel = local.relative_to(root).as_posix()
             parent = rel.rsplit("/", 1)[0] if "/" in rel else ""
@@ -472,7 +472,7 @@ def seed_platform(cur, database: str) -> List[str]:
         )
 
     cur.execute(
-        f"""MERGE INTO {database}.MAPPING.MAPPING_SCORING_CONFIG t
+        f"""MERGE INTO {database}.CORE.MAPPING_SCORING_CONFIG t
             USING (SELECT %s AS CONFIG_ID, NULL AS DOMAIN_ID, %s AS VERSION, PARSE_JSON(%s) AS WEIGHTS,
                           PARSE_JSON(%s) AS THRESHOLDS, TRUE AS ACTIVE_FLAG, 'SEED' AS CREATED_BY) s
                ON t.CONFIG_ID = s.CONFIG_ID
@@ -508,16 +508,16 @@ def load_qa_packs() -> List[Tuple[str, Dict[str, Any], Path]]:
 def seed_qa_packs(cur, database: str) -> List[str]:
     """Repository packs become APPROVED versions (SOURCE REPO) and their queries ACTIVE QA_TEST knowledge. A pack the
     app edited is never overwritten: when the repository file changed since those edits, the deploy records a conflict
-    (GOVERNANCE.QA_PACK_SYNC) for someone to resolve in the QA Store (services/qa/pack_git.sync_decision)."""
+    (CORE.QA_PACK_SYNC) for someone to resolve in the QA Store (services/qa/pack_git.sync_decision)."""
     from services.qa.pack_git import repo_sha, signature, sync_decision
     from services.qa.packs import knowledge_key, query_id_for, seed_rows
 
     try:
-        cur.execute(f"SELECT 1 FROM {database}.GOVERNANCE.DOMAIN_QA_PACKS LIMIT 1")
+        cur.execute(f"SELECT 1 FROM {database}.CORE.DOMAIN_QA_PACKS LIMIT 1")
     except Exception:
         return ["qa packs: V037 not deployed (skipped)"]
     try:
-        cur.execute(f"SELECT REPO_SHA FROM {database}.GOVERNANCE.DOMAIN_QA_PACKS LIMIT 1")
+        cur.execute(f"SELECT REPO_SHA FROM {database}.CORE.DOMAIN_QA_PACKS LIMIT 1")
         tracked = True
     except Exception:  # before V042: no repository tracking, app edits are kept as before
         tracked = False
@@ -531,14 +531,14 @@ def seed_qa_packs(cur, database: str) -> List[str]:
         text = path.read_text(encoding="utf-8")
         sha = repo_sha(text)
         cols = "VERSION, STATUS, SOURCE" + (", REPO_SHA" if tracked else "")
-        cur.execute(f"SELECT {cols} FROM {database}.GOVERNANCE.DOMAIN_QA_PACKS WHERE PACK_ID = %s ORDER BY VERSION DESC",
+        cur.execute(f"SELECT {cols} FROM {database}.CORE.DOMAIN_QA_PACKS WHERE PACK_ID = %s ORDER BY VERSION DESC",
                     (pid,))
         versions = cur.fetchall()
         newest = ({"version": versions[0][0], "status": versions[0][1], "source": versions[0][2],
                    "repo_sha": versions[0][3] if tracked else None} if versions else None)
         current: List[Dict[str, Any]] = []
         if newest:
-            cur.execute(f"SELECT QUERY_NAME, SQL_EXPRESSION, SEVERITY, EXPECTATION FROM {database}.GOVERNANCE.DOMAIN_QA_QUERIES "
+            cur.execute(f"SELECT QUERY_NAME, SQL_EXPRESSION, SEVERITY, EXPECTATION FROM {database}.CORE.DOMAIN_QA_QUERIES "
                         f"WHERE PACK_ID = %s AND PACK_VERSION = %s ORDER BY ORDINAL", (pid, newest["version"]))
             current = [{"query_name": r[0], "sql_expression": r[1], "severity": r[2], "expectation": r[3]}
                        for r in cur.fetchall()]
@@ -547,13 +547,13 @@ def seed_qa_packs(cur, database: str) -> List[str]:
             # app edits made before V042 carry no repository hash: when the file still matches the pack's last seeded
             # version, the repository did not change since, so the app version is ahead (record the lineage)
             cur.execute(f"""SELECT Q.QUERY_NAME, Q.SQL_EXPRESSION, Q.SEVERITY, Q.EXPECTATION
-                              FROM {database}.GOVERNANCE.DOMAIN_QA_QUERIES Q
-                             WHERE Q.PACK_ID = %s AND Q.PACK_VERSION = (SELECT MAX(VERSION) FROM {database}.GOVERNANCE.DOMAIN_QA_PACKS
+                              FROM {database}.CORE.DOMAIN_QA_QUERIES Q
+                             WHERE Q.PACK_ID = %s AND Q.PACK_VERSION = (SELECT MAX(VERSION) FROM {database}.CORE.DOMAIN_QA_PACKS
                                                                          WHERE PACK_ID = %s AND SOURCE = 'REPO')
                              ORDER BY Q.ORDINAL""", (pid, pid))
             seeded = [{"query_name": r[0], "sql_expression": r[1], "severity": r[2], "expectation": r[3]} for r in cur.fetchall()]
             if seeded and signature(seeded) == signature(queries):
-                cur.execute(f"UPDATE {database}.GOVERNANCE.DOMAIN_QA_PACKS SET REPO_SHA = %s, REPO_PATH = %s "
+                cur.execute(f"UPDATE {database}.CORE.DOMAIN_QA_PACKS SET REPO_SHA = %s, REPO_PATH = %s "
                             f"WHERE PACK_ID = %s AND VERSION = %s", (sha, rel, pid, newest["version"]))
                 decision = "AHEAD"
         label = f"qa pack {domain_name}/{meta['name']}"
@@ -561,9 +561,9 @@ def seed_qa_packs(cur, database: str) -> List[str]:
             log.append(f"{label}: {'unchanged' if decision in ('UNCHANGED', 'IN_SYNC') else 'edited in the app, kept'}")
             continue
         if decision in ("UNCHANGED", "IN_SYNC"):
-            cur.execute(f"UPDATE {database}.GOVERNANCE.DOMAIN_QA_PACKS SET REPO_SHA = %s, REPO_PATH = %s "
+            cur.execute(f"UPDATE {database}.CORE.DOMAIN_QA_PACKS SET REPO_SHA = %s, REPO_PATH = %s "
                         f"WHERE PACK_ID = %s AND VERSION = %s", (sha, rel, pid, newest["version"]))
-            cur.execute(f"UPDATE {database}.GOVERNANCE.QA_PACK_SYNC SET STATUS = 'RESOLVED', RESOLUTION = 'IN_SYNC', "
+            cur.execute(f"UPDATE {database}.CORE.QA_PACK_SYNC SET STATUS = 'RESOLVED', RESOLUTION = 'IN_SYNC', "
                         f"RESOLVED_BY = 'DEPLOY', RESOLVED_AT = CURRENT_TIMESTAMP() WHERE PACK_ID = %s AND STATUS = 'OPEN'",
                         (pid,))
             log.append(f"{label}: {'unchanged' if decision == 'UNCHANGED' else 'in step with the repository'}")
@@ -572,13 +572,13 @@ def seed_qa_packs(cur, database: str) -> List[str]:
             log.append(f"{label}: edited in the app since {rel}; kept (publish it to Git to update the file)")
             continue
         if decision == "CONFLICT":
-            cur.execute(f"SELECT COUNT(*) FROM {database}.GOVERNANCE.QA_PACK_SYNC WHERE PACK_ID = %s AND STATUS = 'OPEN' "
+            cur.execute(f"SELECT COUNT(*) FROM {database}.CORE.QA_PACK_SYNC WHERE PACK_ID = %s AND STATUS = 'OPEN' "
                         f"AND REPO_SHA = %s", (pid, sha))
             if not cur.fetchone()[0]:
-                cur.execute(f"UPDATE {database}.GOVERNANCE.QA_PACK_SYNC SET STATUS = 'RESOLVED', RESOLUTION = 'SUPERSEDED', "
+                cur.execute(f"UPDATE {database}.CORE.QA_PACK_SYNC SET STATUS = 'RESOLVED', RESOLUTION = 'SUPERSEDED', "
                             f"RESOLVED_BY = 'DEPLOY', RESOLVED_AT = CURRENT_TIMESTAMP() WHERE PACK_ID = %s AND STATUS = 'OPEN'",
                             (pid,))
-                cur.execute(f"""INSERT INTO {database}.GOVERNANCE.QA_PACK_SYNC (SYNC_ID, PACK_ID, DOMAIN_ID, REPO_PATH, REPO_SHA,
+                cur.execute(f"""INSERT INTO {database}.CORE.QA_PACK_SYNC (SYNC_ID, PACK_ID, DOMAIN_ID, REPO_PATH, REPO_SHA,
                                        REPO_CONTENT, APP_VERSION, BASE_REPO_SHA, STATUS)
                                 SELECT %s, %s, %s, %s, %s, %s, %s, %s, 'OPEN'""",
                             (str(uuid.uuid4()), pid, did, rel, sha, text, newest["version"], newest.get("repo_sha")))
@@ -587,22 +587,22 @@ def seed_qa_packs(cur, database: str) -> List[str]:
         if newest:  # UPDATE: the repository owns the pack and the file changed
             dropped = {q["query_name"].lower() for q in current} - {q["query_name"].lower() for q in queries}
             for name in dropped:
-                cur.execute(f"UPDATE {database}.KNOWLEDGE.DOMAIN_KNOWLEDGE SET IS_CURRENT = FALSE, STATUS = 'RETIRED' "
+                cur.execute(f"UPDATE {database}.CORE.DOMAIN_KNOWLEDGE SET IS_CURRENT = FALSE, STATUS = 'RETIRED' "
                             f"WHERE DOMAIN_ID = %s AND SOURCE_REFERENCE = %s AND IS_CURRENT",
                             (did, knowledge_key(pid, name)))
         version = (newest["version"] + 1) if newest else 1
-        cur.execute(f"UPDATE {database}.GOVERNANCE.DOMAIN_QA_PACKS SET STATUS = 'SUPERSEDED' "
+        cur.execute(f"UPDATE {database}.CORE.DOMAIN_QA_PACKS SET STATUS = 'SUPERSEDED' "
                     f"WHERE PACK_ID = %s AND STATUS = 'APPROVED'", (pid,))
         repo_cols, repo_vals = (", REPO_SHA, REPO_PATH", ", %s, %s") if tracked else ("", "")
         cur.execute(
-            f"""INSERT INTO {database}.GOVERNANCE.DOMAIN_QA_PACKS (PACK_ID, VERSION, DOMAIN_ID, NAME, DESCRIPTION, TAGS,
+            f"""INSERT INTO {database}.CORE.DOMAIN_QA_PACKS (PACK_ID, VERSION, DOMAIN_ID, NAME, DESCRIPTION, TAGS,
                        STATUS, SOURCE, CHANGE_NOTE, CREATED_BY, APPROVED_BY, APPROVED_AT{repo_cols})
                 SELECT %s, %s, %s, %s, %s, PARSE_JSON(%s)::ARRAY, 'APPROVED', 'REPO', %s, 'SEED', 'SEED', CURRENT_TIMESTAMP(){repo_vals}""",
             (pid, version, did, meta["name"], meta["description"], json.dumps(meta["tags"]),
              f"Seeded from {rel}", *((sha, rel) if tracked else ())))
         for q in queries:
             cur.execute(
-                f"""INSERT INTO {database}.GOVERNANCE.DOMAIN_QA_QUERIES (QUERY_ID, PACK_ID, PACK_VERSION, QUERY_NAME,
+                f"""INSERT INTO {database}.CORE.DOMAIN_QA_QUERIES (QUERY_ID, PACK_ID, PACK_VERSION, QUERY_NAME,
                            DESCRIPTION, SQL_EXPRESSION, SEVERITY, EXPECTATION, TAGS, ORDINAL, CREATED_BY)
                     SELECT %s, %s, %s, %s, %s, %s, %s, %s, PARSE_JSON(%s)::ARRAY, %s, 'SEED'""",
                 (query_id_for(pid, q["query_name"]), pid, version, q["query_name"], q.get("description") or None,

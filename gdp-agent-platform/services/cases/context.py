@@ -5,8 +5,8 @@ Parts, in the order they are packed (each has a character budget; the whole text
   jira       the linked Jira issue as the caller reads it (only when the API passes one; services.jira.triage framing)
   table      the target table: location, business keys, sources, join plan, STTM lines, profile facts and approved
              checks (services.qa.scope.table_context and services.qa.procedures), PII columns named, never values
-  results    the latest QA results (QUALITY.QA_RESULT, failures first) and failing data quality checks
-             (QUALITY.CHECK_RESULT) on the table: counts only, no sample rows
+  results    the latest QA results (CORE.QA_RESULT, failures first) and failing data quality checks
+             (CORE.CHECK_RESULT) on the table: counts only, no sample rows
   code       client code for the table and the case's models (services.code.context.for_session)
   impact     upstream and downstream of the models and the table in the code graph (services.code.graph)
   changes    files of those models re-indexed since the last good QA or data quality result (services.ops.context)
@@ -94,7 +94,7 @@ def pack(parts: Dict[str, str], budgets: Optional[Dict[str, int]] = None, total:
 
 
 def knowledge_search(db: Any) -> Search:
-    """Cortex Search over KNOWLEDGE.KNOWLEDGE_SEARCH in the current database (ACTIVE knowledge only)."""
+    """Cortex Search over CORE.KNOWLEDGE_SEARCH in the current database (ACTIVE knowledge only)."""
     state: Dict[str, Any] = {}
 
     def run(query: str, knowledge_type: Optional[str] = None, domain: Optional[str] = None,
@@ -194,7 +194,7 @@ def results_part(db: Any, target_table_id: str, table_name: str) -> Dict[str, An
     if table_name:
         try:
             checks = db.query("""SELECT RESULT_ID, TARGET_TABLE, TARGET_COLUMN, CHECK_TYPE, DIMENSION, OUTCOME, FAILED_ROWS,
-                                        CREATED_AT::VARCHAR AS CREATED_AT FROM QUALITY.CHECK_RESULT
+                                        CREATED_AT::VARCHAR AS CREATED_AT FROM CORE.CHECK_RESULT
                                   WHERE UPPER(SPLIT_PART(TARGET_TABLE, '.', -1)) = %s
                                     AND CREATED_AT >= DATEADD(day, -14, CURRENT_TIMESTAMP())
                                   ORDER BY IFF(OUTCOME IN ('FAIL', 'ERROR', 'WARN'), 0, 1), CREATED_AT DESC LIMIT 12""",
@@ -274,8 +274,8 @@ def impact_part(db: Any, domain_id: Optional[str], names: List[str]) -> Dict[str
     keys = sorted({code_graph.key(n) for n in known + out["downstream"]})
     try:
         tables = db.query(f"""SELECT T.TARGET_DATABASE || '.' || T.TARGET_SCHEMA || '.' || T.TARGET_TABLE AS FQN, D.DOMAIN_NAME
-                                FROM KNOWLEDGE.TARGET_TABLE_REGISTRY T
-                                LEFT JOIN KNOWLEDGE.DOMAIN_REGISTRY D ON D.DOMAIN_ID = T.DOMAIN_ID
+                                FROM CORE.TARGET_TABLE_REGISTRY T
+                                LEFT JOIN CORE.DOMAIN_REGISTRY D ON D.DOMAIN_ID = T.DOMAIN_ID
                                WHERE COALESCE(T.ACTIVE_FLAG, TRUE) AND UPPER(T.TARGET_TABLE) IN ({', '.join(['%s'] * len(keys))})
                                LIMIT 100""", tuple(keys)) if keys else []
     except Exception:
@@ -302,7 +302,7 @@ def runs_part(db: Any, case: Dict[str, Any], target_table_id: Optional[str]) -> 
     ids: List[str] = [case["run_id"]] if case.get("run_id") else []
     if target_table_id:
         try:
-            for r in db.query("""SELECT DISTINCT S.RUN_ID, S.CREATED_AT FROM CONTRACT.STTM_REGISTRY S
+            for r in db.query("""SELECT DISTINCT S.RUN_ID, S.CREATED_AT FROM CORE.STTM_REGISTRY S
                                    WHERE S.TARGET_TABLE_ID = %s ORDER BY S.CREATED_AT DESC LIMIT 5""", (target_table_id,)):
                 if r.get("run_id") and r["run_id"] not in ids:
                     ids.append(r["run_id"])
@@ -344,7 +344,7 @@ def similar_cases(db: Any, case: Dict[str, Any], search: Optional[Search], limit
                     "title": redact(str(r.get("title") or ""))[:300],
                     "resolution": redact(str(r.get("resolution") or ""))[:800], "score": round(score, 2)})
 
-    select = """SELECT CASE_ID, CASE_NUMBER, DOMAIN_ID, TITLE, RESOLUTION FROM CASES.CASE_RECORD
+    select = """SELECT CASE_ID, CASE_NUMBER, DOMAIN_ID, TITLE, RESOLUTION FROM CORE.CASE_RECORD
                  WHERE STATUS IN ('RESOLVED', 'CLOSED') AND RESOLUTION IS NOT NULL AND CASE_ID <> %s"""
     if case.get("fingerprint"):
         for r in db.query(select + " AND FINGERPRINT = %s ORDER BY RESOLVED_AT DESC NULLS LAST LIMIT 5",
@@ -416,7 +416,7 @@ def knowledge_part(db: Any, case: Dict[str, Any], search: Optional[Search]) -> D
     if not picked and domain_id:
         from services.knowledge.writer import NOT_OPERATIONAL_SQL
 
-        found = db.query(f"""SELECT KNOWLEDGE_ID, KNOWLEDGE_TYPE, TITLE, CONTENT FROM KNOWLEDGE.DOMAIN_KNOWLEDGE
+        found = db.query(f"""SELECT KNOWLEDGE_ID, KNOWLEDGE_TYPE, TITLE, CONTENT FROM CORE.DOMAIN_KNOWLEDGE
                               WHERE DOMAIN_ID = %s AND IS_CURRENT AND COALESCE(STATUS, 'ACTIVE') = 'ACTIVE'
                                 AND KNOWLEDGE_TYPE IN ({', '.join(['%s'] * len(KNOWLEDGE_TYPES))})
                                 AND {NOT_OPERATIONAL_SQL.replace('%', '%%')}

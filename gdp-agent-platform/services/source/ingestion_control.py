@@ -1,4 +1,4 @@
-"""SnapLogic ingestion control (V046, PLATFORM_CONFIG.INGESTION_CONTROL_CONFIG): the external onboarding wizard's
+"""SnapLogic ingestion control (V046, CORE.INGESTION_CONTROL_CONFIG): the external onboarding wizard's
 answers, validated and turned into one control row per table (pure; the API writes them).
 
 One onboarding is one source: a source block, a target block, a load block, a SnapLogic block and one or more
@@ -19,8 +19,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from services.source.identifiers import landing_table_name
 
-TABLE = "PLATFORM_CONFIG.INGESTION_CONTROL_CONFIG"
-HISTORY = "PLATFORM_CONFIG.INGESTION_CONTROL_HISTORY"
+TABLE = "CORE.INGESTION_CONTROL_CONFIG"
+HISTORY = "CORE.INGESTION_CONTROL_HISTORY"
 SOURCE_TYPES = ("ORACLE", "SQLSERVER", "POSTGRES", "MYSQL", "SALESFORCE", "REST_API", "S3", "SFTP", "OTHER")
 FILE_TYPES = ("TABLE", "CSV", "JSON", "PARQUET", "XLSX")
 LOAD_TYPES = ("APPEND", "TRUNCATE", "SCD2")

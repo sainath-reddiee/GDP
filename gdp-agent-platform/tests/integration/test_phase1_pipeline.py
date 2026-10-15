@@ -43,31 +43,31 @@ def test_phase1_source_to_dbt_review(cur):
     payload = {"RUN_NAME": f"itest-p1-{uuid.uuid4().hex[:8]}", "ENVIRONMENT": "TEST",
                "TARGET_MODEL": "GDP.DIM_CUSTOMER"}
     run_id = call(cur, "CALL CORE.CREATE_RUN(%s)", (json.dumps(payload),))["run_id"]
-    call(cur, "CALL SOURCE.REGISTER_SOURCE(%s, %s)", (run_id, json.dumps({
+    call(cur, "CALL CORE.REGISTER_SOURCE(%s, %s)", (run_id, json.dumps({
         "SOURCE_SYSTEM_NAME": "ITEST_CRM_P1", "SOURCE_TYPE": "SNOWFLAKE_DATABASE",
         "DATABASE": DEMO, "SCHEMA": "CRM",
     })))
-    call(cur, "CALL SOURCE.VALIDATE_SOURCE_ACCESS(%s, %s)", (run_id, json.dumps(["CRM_CUSTOMER"])))
-    landing = call(cur, "CALL SOURCE.EXECUTE_LANDING(%s)", (run_id,))
+    call(cur, "CALL CORE.VALIDATE_SOURCE_ACCESS(%s, %s)", (run_id, json.dumps(["CRM_CUSTOMER"])))
+    landing = call(cur, "CALL CORE.EXECUTE_LANDING(%s)", (run_id,))
     assert landing["state"]["current_state"] == "LANDING_COMPLETE"
 
-    profile = call(cur, "CALL PROFILE.RUN_PROFILING(%s)", (run_id,))
+    profile = call(cur, "CALL CORE.RUN_PROFILING(%s)", (run_id,))
     assert profile["state"]["current_state"] in ("PROFILING_COMPLETE", "DOMAIN_IDENTIFIED")
 
-    domain = call(cur, "CALL KNOWLEDGE.IDENTIFY_DOMAIN(%s)", (run_id,))
+    domain = call(cur, "CALL CORE.IDENTIFY_DOMAIN(%s)", (run_id,))
     assert domain["state"]["current_state"] == "DOMAIN_IDENTIFIED"
     assert domain["domain"]["domain_name"] == "GDP"
 
-    mapping = call(cur, "CALL MAPPING.GENERATE_MAPPING_CANDIDATES(%s)", (run_id,))
+    mapping = call(cur, "CALL CORE.GENERATE_MAPPING_CANDIDATES(%s)", (run_id,))
     assert mapping["state"]["current_state"] == "MAPPING_REVIEW"
 
     cur.execute(
         """
         SELECT C.CANDIDATE_ID, C.SOURCE_COLUMN_ID, C.TARGET_COLUMN_ID, C.RANK, C.RECOMMENDATION,
                C.FINAL_SCORE, C.TRANSFORMATION, L.COLUMN_NAME AS SRC, T.COLUMN_NAME AS TGT
-          FROM MAPPING.MAPPING_CANDIDATE C
-          JOIN SOURCE.LANDING_COLUMN_REGISTRY L ON L.LANDING_COLUMN_ID = C.SOURCE_COLUMN_ID
-          JOIN KNOWLEDGE.TARGET_COLUMN_REGISTRY T ON T.TARGET_COLUMN_ID = C.TARGET_COLUMN_ID
+          FROM CORE.MAPPING_CANDIDATE C
+          JOIN CORE.LANDING_COLUMN_REGISTRY L ON L.LANDING_COLUMN_ID = C.SOURCE_COLUMN_ID
+          JOIN CORE.TARGET_COLUMN_REGISTRY T ON T.TARGET_COLUMN_ID = C.TARGET_COLUMN_ID
          WHERE C.RUN_ID = %s AND C.IS_CURRENT
          ORDER BY C.FINAL_SCORE DESC, C.RANK
         """,
@@ -104,28 +104,28 @@ def test_phase1_source_to_dbt_review(cur):
             decisions.append({"source_column_id": row["SOURCE_COLUMN_ID"], "decision": "REJECTED"})
             used_sources.add(row["SOURCE_COLUMN_ID"])
 
-    saved = call(cur, "CALL MAPPING.SAVE_MAPPING_DECISIONS(%s, %s)", (run_id, json.dumps(decisions)))
+    saved = call(cur, "CALL CORE.SAVE_MAPPING_DECISIONS(%s, %s)", (run_id, json.dumps(decisions)))
     assert saved["status"]["complete"], saved["status"]
 
     reviewed = call(cur, "CALL CORE.REVIEW_TRANSITION(%s, %s, %s, %s, %s)",
                     (run_id, "MAPPING_APPROVED", "APPROVE", "itest: mappings complete", None))
     assert reviewed["state"]["current_state"] == "MAPPING_APPROVED"
 
-    sttm = call(cur, "CALL CONTRACT.GENERATE_STTM(%s)", (run_id,))
+    sttm = call(cur, "CALL CORE.GENERATE_STTM(%s)", (run_id,))
     assert sttm["state"]["current_state"] == "STTM_REVIEW"
     call(cur, "CALL CORE.REVIEW_TRANSITION(%s, %s, %s, %s, %s)",
          (run_id, "STTM_APPROVED", "APPROVE", "itest: STTM matches GDP DIM_CUSTOMER", None))
 
-    soda = call(cur, "CALL CONTRACT.GENERATE_SODA(%s)", (run_id,))
+    soda = call(cur, "CALL CORE.GENERATE_SODA(%s)", (run_id,))
     assert soda["state"]["current_state"] == "SODA_REVIEW"
     call(cur, "CALL CORE.REVIEW_TRANSITION(%s, %s, %s, %s, %s)",
          (run_id, "SODA_APPROVED", "APPROVE", "itest: Soda checks cover grain and required columns", None))
 
-    dbt = call(cur, "CALL CODEGEN.GENERATE_DBT(%s)", (run_id,))
+    dbt = call(cur, "CALL CORE.GENERATE_DBT(%s)", (run_id,))
     assert dbt["state"]["current_state"] == "VALIDATION_PENDING"
     assert dbt["files"]
 
-    validation = call(cur, "CALL CODEGEN.VALIDATE_DBT(%s)", (run_id,))
+    validation = call(cur, "CALL CORE.VALIDATE_DBT(%s)", (run_id,))
     assert validation["status"] == "PASSED", validation
     assert validation["state"]["current_state"] == "DBT_REVIEW"
 

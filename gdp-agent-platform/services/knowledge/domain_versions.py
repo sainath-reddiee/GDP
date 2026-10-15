@@ -45,22 +45,22 @@ def _low(row: Dict[str, Any]) -> Dict[str, Any]:
 def state(query: Query, domain_id: str) -> Optional[Dict[str, Any]]:
     """The domain as it is now, in snapshot form."""
     found = [_low(r) for r in query("SELECT DOMAIN_ID, DOMAIN_NAME, DESCRIPTION, OWNER, ACTIVE_FLAG, CONFIG "
-                                    "FROM KNOWLEDGE.DOMAIN_REGISTRY WHERE DOMAIN_ID = %s", (domain_id,))]
+                                    "FROM CORE.DOMAIN_REGISTRY WHERE DOMAIN_ID = %s", (domain_id,))]
     if not found:
         return None
     d = found[0]
     try:
         tables = [_low(r) for r in query("""SELECT TARGET_TABLE_ID, TARGET_DATABASE, TARGET_SCHEMA, TARGET_TABLE, DESCRIPTION,
                                                    ACTIVE_FLAG, TABLE_TYPE, GRAIN, COALESCE(LAYER, 'SILVER') AS LAYER
-                                              FROM KNOWLEDGE.TARGET_TABLE_REGISTRY WHERE DOMAIN_ID = %s""", (domain_id,))]
+                                              FROM CORE.TARGET_TABLE_REGISTRY WHERE DOMAIN_ID = %s""", (domain_id,))]
     except Exception:   # before V054
         tables = [_low(r) for r in query("""SELECT TARGET_TABLE_ID, TARGET_DATABASE, TARGET_SCHEMA, TARGET_TABLE, DESCRIPTION,
                                                    ACTIVE_FLAG, TABLE_TYPE, GRAIN
-                                              FROM KNOWLEDGE.TARGET_TABLE_REGISTRY WHERE DOMAIN_ID = %s""", (domain_id,))]
+                                              FROM CORE.TARGET_TABLE_REGISTRY WHERE DOMAIN_ID = %s""", (domain_id,))]
     columns = [_low(r) for r in query("""SELECT C.TARGET_TABLE_ID, C.COLUMN_NAME, C.DATA_TYPE, C.ORDINAL_POSITION, C.NULLABLE,
                                                 C.IS_BUSINESS_KEY, C.IS_PII, C.BUSINESS_DEFINITION
-                                           FROM KNOWLEDGE.TARGET_COLUMN_REGISTRY C
-                                           JOIN KNOWLEDGE.TARGET_TABLE_REGISTRY T ON T.TARGET_TABLE_ID = C.TARGET_TABLE_ID
+                                           FROM CORE.TARGET_COLUMN_REGISTRY C
+                                           JOIN CORE.TARGET_TABLE_REGISTRY T ON T.TARGET_TABLE_ID = C.TARGET_TABLE_ID
                                           WHERE T.DOMAIN_ID = %s""", (domain_id,))]
     by_table: Dict[str, List[Dict[str, Any]]] = {}
     for c in sorted(columns, key=lambda c: (int(c.get("ordinal_position") or 0), str(c.get("column_name")))):
@@ -76,7 +76,7 @@ def state(query: Query, domain_id: str) -> Optional[Dict[str, Any]]:
     try:   # the domain's own skills, per stage and layer: diffable, never rolled back (V051, V055)
         skills = sorted(f"{s['stage']}:{s['skill_name']}:{s.get('mode')}:{s.get('replaces') or ''}:{s.get('pipeline') or 'ANY'}"
                         for s in (_low(r) for r in query("""SELECT STAGE, SKILL_NAME, MODE, REPLACES, COALESCE(PIPELINE, 'ANY') AS PIPELINE
-                                                              FROM KNOWLEDGE.DOMAIN_SKILL WHERE DOMAIN_ID = %s AND ENABLED""",
+                                                              FROM CORE.DOMAIN_SKILL WHERE DOMAIN_ID = %s AND ENABLED""",
                                                            (domain_id,))))
     except Exception:
         skills = []
@@ -91,7 +91,7 @@ def checksum(snap: Dict[str, Any]) -> str:
 
 
 def latest(query: Query, domain_id: str) -> Optional[Dict[str, Any]]:
-    found = query("SELECT VERSION, CHECKSUM FROM KNOWLEDGE.DOMAIN_VERSION WHERE DOMAIN_ID = %s ORDER BY VERSION DESC LIMIT 1",
+    found = query("SELECT VERSION, CHECKSUM FROM CORE.DOMAIN_VERSION WHERE DOMAIN_ID = %s ORDER BY VERSION DESC LIMIT 1",
                   (domain_id,))
     return _low(found[0]) if found else None
 
@@ -107,12 +107,12 @@ def snapshot(query: Query, execute: Execute, domain_id: str, kind: str, note: Op
     if last and last.get("checksum") == digest:
         return None
     version = int(last["version"]) + 1 if last else 1
-    execute("""INSERT INTO KNOWLEDGE.DOMAIN_VERSION (DOMAIN_ID, VERSION, DESCRIPTION, OWNER, ACTIVE_FLAG, CONFIG_JSON,
+    execute("""INSERT INTO CORE.DOMAIN_VERSION (DOMAIN_ID, VERSION, DESCRIPTION, OWNER, ACTIVE_FLAG, CONFIG_JSON,
                      TARGETS_JSON, CHECKSUM, CHANGE_KIND, CHANGE_NOTE, CREATED_BY)
                SELECT %s, %s, %s, %s, %s, PARSE_JSON(%s), PARSE_JSON(%s), %s, %s, %s, COALESCE(%s, CURRENT_USER())""",
             (domain_id, version, snap["description"], snap["owner"], snap["active"], json.dumps(snap["config"], default=str),
              json.dumps(snap["targets"], default=str), digest, kind, (note or "")[:2000] or None, by))
-    execute("UPDATE KNOWLEDGE.DOMAIN_REGISTRY SET VERSION = %s WHERE DOMAIN_ID = %s", (version, domain_id))
+    execute("UPDATE CORE.DOMAIN_REGISTRY SET VERSION = %s WHERE DOMAIN_ID = %s", (version, domain_id))
     return version
 
 

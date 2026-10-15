@@ -1,4 +1,4 @@
-"""QA on a domain target table (KNOWLEDGE.TARGET_TABLE_REGISTRY), with or without a run.
+"""QA on a domain target table (CORE.TARGET_TABLE_REGISTRY), with or without a run.
 
 table_context() returns the same shape as procedures.context(), so the prompt builders, the guard, compile_check()
 and run.execute() work unchanged. The target location, model spec and business keys come from the registry; the
@@ -23,7 +23,7 @@ PII_TAG = re.compile(r"pii|sensitive|confidential|personal|gdpr|restricted", re.
 
 
 def _registry(session, target_table_id: str) -> Dict[str, Any]:
-    found = rows(session, "SELECT * FROM KNOWLEDGE.TARGET_TABLE_REGISTRY WHERE TARGET_TABLE_ID = ?", [target_table_id])
+    found = rows(session, "SELECT * FROM CORE.TARGET_TABLE_REGISTRY WHERE TARGET_TABLE_ID = ?", [target_table_id])
     assert found, f"target table {target_table_id} does not exist"
     return found[0]
 
@@ -32,7 +32,7 @@ def _columns(session, target_table_id: str) -> List[Dict[str, Any]]:
     try:
         found = rows(session, """SELECT COLUMN_NAME, DATA_TYPE, IS_BUSINESS_KEY, IS_PII, SEMANTIC_TYPE,
                                         BUSINESS_DEFINITION, ACCEPTED_VALUES
-                                   FROM KNOWLEDGE.TARGET_COLUMN_REGISTRY WHERE TARGET_TABLE_ID = ?
+                                   FROM CORE.TARGET_COLUMN_REGISTRY WHERE TARGET_TABLE_ID = ?
                                  QUALIFY ROW_NUMBER() OVER (PARTITION BY UPPER(COLUMN_NAME)
                                                             ORDER BY VERSION DESC, CREATED_AT DESC) = 1
                                   ORDER BY ORDINAL_POSITION""", [target_table_id])
@@ -46,7 +46,7 @@ def _columns(session, target_table_id: str) -> List[Dict[str, Any]]:
 
 def table_sttm(session, target_table_id: str) -> Optional[Dict[str, Any]]:
     """The latest STTM for a target across runs: APPROVED first, else REVIEW; None when there is none."""
-    found = rows(session, """SELECT STTM_ID, RUN_ID, TARGET_TABLE_ID, TABLE_DESIGN, DOMAIN_ID FROM CONTRACT.STTM_REGISTRY
+    found = rows(session, """SELECT STTM_ID, RUN_ID, TARGET_TABLE_ID, TABLE_DESIGN, DOMAIN_ID FROM CORE.STTM_REGISTRY
                               WHERE TARGET_TABLE_ID = ? AND STATUS IN ('REVIEW', 'APPROVED')
                               ORDER BY IFF(STATUS = 'APPROVED', 0, 1), CREATED_AT DESC, STTM_VERSION DESC LIMIT 1""",
                  [target_table_id])
@@ -94,7 +94,7 @@ def pii_columns(session, ctx: Dict[str, Any]) -> Tuple[Set[str], str]:
     run_id = ctx.get("run_id")
     if run_id:
         try:
-            profile = rows(session, """SELECT TABLE_NAME, COLUMN_NAME, PII_CLASSIFICATION FROM PROFILE.PROFILE_REGISTRY
+            profile = rows(session, """SELECT TABLE_NAME, COLUMN_NAME, PII_CLASSIFICATION FROM CORE.PROFILE_REGISTRY
                                         WHERE RUN_ID = ? AND IS_CURRENT""", [run_id])
         except Exception:  # the profile exists but this role cannot read it: never guess from curation then
             profile, unreadable = [], True
@@ -127,14 +127,14 @@ def list_tables(session, domain_id: Optional[str] = None) -> List[Dict[str, Any]
                COALESCE(T.ACTIVE_FLAG, TRUE) AS ACTIVE, COALESCE(S.N, 0) AS STTMS, COALESCE(C.N, 0) AS TESTS,
                Q.STARTED_AT::VARCHAR AS LAST_RUN_AT, Q.TESTS AS LAST_TESTS, Q.PASSED, Q.FAILED, Q.REVIEW, Q.NOT_RUN,
                Q.ERRORS
-          FROM KNOWLEDGE.TARGET_TABLE_REGISTRY T
-          LEFT JOIN (SELECT TARGET_TABLE_ID, COUNT(*) AS N FROM CONTRACT.STTM_REGISTRY
+          FROM CORE.TARGET_TABLE_REGISTRY T
+          LEFT JOIN (SELECT TARGET_TABLE_ID, COUNT(*) AS N FROM CORE.STTM_REGISTRY
                       WHERE STATUS IN ('REVIEW', 'APPROVED') GROUP BY TARGET_TABLE_ID) S
             ON S.TARGET_TABLE_ID = T.TARGET_TABLE_ID
-          LEFT JOIN (SELECT TARGET_TABLE_ID, COUNT(*) AS N FROM CONTRACT.QA_TEST_CASE
+          LEFT JOIN (SELECT TARGET_TABLE_ID, COUNT(*) AS N FROM CORE.QA_TEST_CASE
                       WHERE SCOPE = 'TABLE' AND NOT COALESCE(IS_DELETED, FALSE) GROUP BY TARGET_TABLE_ID) C
             ON C.TARGET_TABLE_ID = T.TARGET_TABLE_ID
-          LEFT JOIN (SELECT * FROM QUALITY.QA_RUN WHERE SCOPE = 'TABLE'
+          LEFT JOIN (SELECT * FROM CORE.QA_RUN WHERE SCOPE = 'TABLE'
                      QUALIFY ROW_NUMBER() OVER (PARTITION BY TARGET_TABLE_ID ORDER BY STARTED_AT DESC) = 1) Q
             ON Q.TARGET_TABLE_ID = T.TARGET_TABLE_ID
          WHERE (? = '' OR T.DOMAIN_ID = ?)

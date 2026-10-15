@@ -70,7 +70,7 @@ def learning(domain_id: str, layer: str = "SILVER", db: Db = Depends(current_db)
     lay = _layer(layer)
     learned = db.query("""SELECT KNOWLEDGE_ID, KNOWLEDGE_TYPE, TITLE, CONTENT, STATUS, CONTENT_JSON:evidence AS EVIDENCE,
                                  CONTENT_JSON:replay AS REPLAY, TO_VARCHAR(CREATED_AT, 'YYYY-MM-DD HH24:MI') AS CREATED_AT
-                            FROM KNOWLEDGE.DOMAIN_KNOWLEDGE
+                            FROM CORE.DOMAIN_KNOWLEDGE
                            WHERE DOMAIN_ID = %s AND SOURCE_REFERENCE LIKE 'learned.%%' AND COALESCE(LAYER, 'ANY') IN ('ANY', %s)
                              AND STATUS IN ('PROPOSED', 'ACTIVE', 'REJECTED')
                            QUALIFY ROW_NUMBER() OVER (PARTITION BY LINEAGE_ID ORDER BY VERSION DESC) = 1
@@ -81,18 +81,18 @@ def learning(domain_id: str, layer: str = "SILVER", db: Db = Depends(current_db)
     try:
         evals = db.query("""SELECT SUBJECT_KIND, SUBJECT_ID, VERDICT, RESULT:delta AS DELTA, RESULT:runs::NUMBER AS RUNS,
                                    CREATED_BY, TO_VARCHAR(CREATED_AT, 'YYYY-MM-DD HH24:MI') AS CREATED_AT
-                              FROM KNOWLEDGE.CHANGE_EVAL WHERE DOMAIN_ID = %s AND LAYER = %s
+                              FROM CORE.CHANGE_EVAL WHERE DOMAIN_ID = %s AND LAYER = %s
                              ORDER BY CREATED_AT DESC LIMIT 20""", (domain_id, lay))
         for e in evals:
             e["delta"] = _js(e.get("delta"))
-        open_questions = int((db.query("""SELECT COUNT(*) AS N FROM KNOWLEDGE.OPEN_QUESTION
+        open_questions = int((db.query("""SELECT COUNT(*) AS N FROM CORE.OPEN_QUESTION
                                            WHERE DOMAIN_ID = %s AND LAYER = %s AND STATUS = 'OPEN'""", (domain_id, lay))
                               or [{"n": 0}])[0]["n"] or 0)
     except Exception as exc:
         if not _missing(exc):
             raise _snowflake_error(exc) from exc
         deployed = False
-    decisions = db.query("""SELECT COUNT(*) AS N FROM MAPPING.MAPPING_DECISION D JOIN CORE.WORKFLOW_RUN R ON R.RUN_ID = D.RUN_ID
+    decisions = db.query("""SELECT COUNT(*) AS N FROM CORE.MAPPING_DECISION D JOIN CORE.WORKFLOW_RUN R ON R.RUN_ID = D.RUN_ID
                              WHERE D.IS_CURRENT AND R.DOMAIN_ID = %s AND COALESCE(R.PIPELINE, 'SILVER') = %s
                                AND R.DELETED_AT IS NULL AND COALESCE(R.ENVIRONMENT, '') <> 'TEST'""", (domain_id, lay))
     return {"layer": lay, "deployed": deployed, "decisions": int(decisions[0]["n"] or 0) if decisions else 0,
@@ -104,7 +104,7 @@ def _question_rows(db: Db, where: str, params: tuple) -> Dict[str, Any]:
         found = db.query(f"""SELECT QUESTION_ID, DOMAIN_ID, LAYER, RUN_ID, STAGE, SUBJECT_KEY, KIND, QUESTION, CONTEXT, OPTIONS,
                                     STATUS, ANSWER, ANSWERED_BY, TO_VARCHAR(ANSWERED_AT, 'YYYY-MM-DD HH24:MI') AS ANSWERED_AT,
                                     KNOWLEDGE_ID, TO_VARCHAR(CREATED_AT, 'YYYY-MM-DD HH24:MI') AS CREATED_AT
-                               FROM KNOWLEDGE.OPEN_QUESTION WHERE {where}
+                               FROM CORE.OPEN_QUESTION WHERE {where}
                               ORDER BY IFF(STATUS = 'OPEN', 0, 1), CREATED_AT DESC LIMIT 100""", params)
     except Exception as exc:
         if _missing(exc):
@@ -152,7 +152,7 @@ def answer_question(question_id: str, body: AnswerIn, db: Db = Depends(current_d
 @router.post("/api/questions/{question_id}/dismiss")
 def dismiss_question(question_id: str, db: Db = Depends(current_db)):
     try:
-        db.execute("""UPDATE KNOWLEDGE.OPEN_QUESTION SET STATUS = 'DISMISSED', ANSWERED_BY = CURRENT_USER(),
+        db.execute("""UPDATE CORE.OPEN_QUESTION SET STATUS = 'DISMISSED', ANSWERED_BY = CURRENT_USER(),
                              ANSWERED_AT = CURRENT_TIMESTAMP() WHERE QUESTION_ID = %s AND STATUS = 'OPEN'""", (question_id,))
     except Exception as exc:
         raise _snowflake_error(exc) from exc

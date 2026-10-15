@@ -1,6 +1,6 @@
 -- Reporting views. Re-applied on every deploy.
 
-CREATE OR REPLACE VIEW {{database}}.AUDIT.V_RUN_COST AS
+CREATE OR REPLACE VIEW {{database}}.{{schema}}.V_RUN_COST AS
 SELECT RUN_ID, STAGE, MODEL,
        SUM(INPUT_TOKENS)       AS INPUT_TOKENS,
        SUM(OUTPUT_TOKENS)      AS OUTPUT_TOKENS,
@@ -10,11 +10,11 @@ SELECT RUN_ID, STAGE, MODEL,
        SUM(CODE_CALL_COUNT)    AS CODE_CALLS,
        SUM(DURATION_MS)        AS DURATION_MS,
        SUM(ESTIMATED_COST)     AS ESTIMATED_CREDITS
-  FROM {{database}}.AUDIT.COST_USAGE
+  FROM {{database}}.{{schema}}.COST_USAGE
  GROUP BY RUN_ID, STAGE, MODEL;
 
 -- Mapping feedback: how the top-ranked candidate compared with the reviewer's current decision.
-CREATE OR REPLACE VIEW {{database}}.MAPPING.V_MAPPING_FEEDBACK AS
+CREATE OR REPLACE VIEW {{database}}.{{schema}}.V_MAPPING_FEEDBACK AS
 SELECT C.RUN_ID,
        C.SOURCE_COLUMN_ID,
        C.TARGET_COLUMN_ID      AS PROPOSED_TARGET_COLUMN_ID,
@@ -27,10 +27,10 @@ SELECT C.RUN_ID,
        IFF(D.DECISION = 'REJECTED', TRUE, FALSE)                                            AS REJECTED,
        D.REVIEWER,
        D.REVIEWED_AT
-  FROM {{database}}.MAPPING.MAPPING_CANDIDATE C
-  LEFT JOIN {{database}}.MAPPING.MAPPING_DECISION D
+  FROM {{database}}.{{schema}}.MAPPING_CANDIDATE C
+  LEFT JOIN {{database}}.{{schema}}.MAPPING_DECISION D
     ON D.RUN_ID = C.RUN_ID AND D.SOURCE_COLUMN_ID = C.SOURCE_COLUMN_ID AND D.IS_CURRENT
  WHERE C.IS_CURRENT AND C.RANK = 1;
 
-GRANT SELECT ON VIEW {{database}}.AUDIT.V_RUN_COST TO DATABASE ROLE {{database}}.VIEWER;
-GRANT SELECT ON VIEW {{database}}.MAPPING.V_MAPPING_FEEDBACK TO DATABASE ROLE {{database}}.VIEWER;
+GRANT SELECT ON VIEW {{database}}.{{schema}}.V_RUN_COST TO DATABASE ROLE {{database}}.VIEWER;
+GRANT SELECT ON VIEW {{database}}.{{schema}}.V_MAPPING_FEEDBACK TO DATABASE ROLE {{database}}.VIEWER;

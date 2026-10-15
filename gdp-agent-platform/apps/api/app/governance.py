@@ -26,6 +26,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from app.db import AUTH_MODE, Db, dev_db, lookup_session
+from services.common.platform_schema import PLATFORM_SCHEMA
 from services.governance.policy import (
     ADDED_PRIVILEGES, ALL, DEFAULT_FOUR_EYES, DEFAULT_POLICIES, PRIVILEGES, SYSTEM_ROLES, SYSTEM_VERSION, can_approve, carries_secret, creates_cycle,
     decide, effective_privileges, no_queue, privilege_for, read_only, store_policy, store_queue, summarize,
@@ -68,7 +69,7 @@ def _json(value: Any) -> Any:
 
 def _event(db: Db, kind: str, target: str, detail: dict) -> None:
     try:
-        db.execute("INSERT INTO GOVERNANCE.GOVERNANCE_EVENT (EVENT_ID, EVENT_TYPE, TARGET, DETAIL) "
+        db.execute("INSERT INTO CORE.GOVERNANCE_EVENT (EVENT_ID, EVENT_TYPE, TARGET, DETAIL) "
                    "SELECT %s, %s, %s, PARSE_JSON(%s)", (str(uuid.uuid4()), kind, target[:500], json.dumps(detail)))
     except Exception:
         pass
@@ -79,7 +80,7 @@ def _event(db: Db, kind: str, target: str, detail: dict) -> None:
 def ready(db: Db) -> bool:
     def check():
         try:
-            db.query("SELECT 1 FROM GOVERNANCE.APP_ROLE LIMIT 0")
+            db.query("SELECT 1 FROM CORE.APP_ROLE LIMIT 0")
             return True
         except Exception:
             return False
@@ -100,7 +101,7 @@ def _merge(db: Db, table: str, keys: dict, extra: Optional[dict] = None) -> None
     cols = {**keys, **(extra or {})}
     on = " AND ".join(f"T.{k} = S.{k}" for k in keys)
     select = ", ".join(f"%s AS {k}" for k in cols)
-    db.execute(f"MERGE INTO GOVERNANCE.{table} T USING (SELECT {select}) S ON {on} "
+    db.execute(f"MERGE INTO {PLATFORM_SCHEMA}.{table} T USING (SELECT {select}) S ON {on} "
                f"WHEN NOT MATCHED THEN INSERT ({', '.join(cols)}) VALUES ({', '.join('S.' + k for k in cols)})",
                tuple(cols.values()))
 
@@ -115,11 +116,11 @@ def bootstrap(db: Db) -> None:
             return
         for table, keys in _DEDUPE.items():
             try:
-                db.execute(f"INSERT OVERWRITE INTO GOVERNANCE.{table} SELECT * FROM GOVERNANCE.{table} "
+                db.execute(f"INSERT OVERWRITE INTO {PLATFORM_SCHEMA}.{table} SELECT * FROM {PLATFORM_SCHEMA}.{table} "
                            f"QUALIFY ROW_NUMBER() OVER (PARTITION BY {keys} ORDER BY {keys}) = 1")
             except Exception:
                 pass
-        existing = {r["role_name"] for r in db.query("SELECT ROLE_NAME FROM GOVERNANCE.APP_ROLE")}
+        existing = {r["role_name"] for r in db.query("SELECT ROLE_NAME FROM CORE.APP_ROLE")}
         for name, spec in SYSTEM_ROLES.items():
             if name in existing:
                 continue
@@ -131,7 +132,7 @@ def bootstrap(db: Db) -> None:
         for priv, role in DEFAULT_POLICIES.items():
             _merge(db, "APPROVAL_POLICY", {"PRIVILEGE": priv}, {"APPROVER_ROLE": role, "FOUR_EYES": priv in DEFAULT_FOUR_EYES})
         # privileges introduced after a deployment was seeded: granted once to the system roles that list them
-        found = db.query("SELECT SETTING_VALUE FROM GOVERNANCE.SETTING WHERE SETTING_KEY = 'SYSTEM_VERSION'")
+        found = db.query("SELECT SETTING_VALUE FROM CORE.SETTING WHERE SETTING_KEY = 'SYSTEM_VERSION'")
         stored = int(_json(found[0]["setting_value"]) or 1) if found else 1
         if stored < SYSTEM_VERSION:
             for version, privs in sorted(ADDED_PRIVILEGES.items()):
@@ -141,11 +142,11 @@ def bootstrap(db: Db) -> None:
                     for p in privs:
                         if p in spec["privileges"]:
                             _merge(db, "ROLE_PRIVILEGE", {"ROLE_NAME": name, "PRIVILEGE": p})
-            db.execute("""MERGE INTO GOVERNANCE.SETTING T USING (SELECT 'SYSTEM_VERSION' AS K) S ON T.SETTING_KEY = S.K
+            db.execute("""MERGE INTO CORE.SETTING T USING (SELECT 'SYSTEM_VERSION' AS K) S ON T.SETTING_KEY = S.K
                           WHEN MATCHED THEN UPDATE SET SETTING_VALUE = PARSE_JSON(%s)
                           WHEN NOT MATCHED THEN INSERT (SETTING_KEY, SETTING_VALUE) VALUES (S.K, PARSE_JSON(%s))""",
                        (str(SYSTEM_VERSION), str(SYSTEM_VERSION)))
-        if not db.query("SELECT 1 FROM GOVERNANCE.USER_ROLE LIMIT 1"):
+        if not db.query("SELECT 1 FROM CORE.USER_ROLE LIMIT 1"):
             admins = {db.user.upper()} | {u.strip().upper() for u in os.environ.get("AIP_SUPER_ADMINS", "").split(",") if u.strip()}
             for user in admins:
                 _merge(db, "USER_ROLE", {"USER_NAME": user, "ROLE_NAME": "SUPER_ADMIN"}, {"GRANTED_BY": "BOOTSTRAP"})
@@ -159,7 +160,7 @@ def bootstrap(db: Db) -> None:
 def settings(db: Db) -> dict:
     def load():
         out = dict(DEFAULT_SETTINGS)
-        for r in db.query("SELECT SETTING_KEY, SETTING_VALUE FROM GOVERNANCE.SETTING WHERE SETTING_KEY <> 'SYSTEM_VERSION'"):
+        for r in db.query("SELECT SETTING_KEY, SETTING_VALUE FROM CORE.SETTING WHERE SETTING_KEY <> 'SYSTEM_VERSION'"):
             out[r["setting_key"]] = _json(r["setting_value"])
         return out
     return _cached("settings", load)
@@ -168,10 +169,10 @@ def settings(db: Db) -> dict:
 def role_model(db: Db) -> tuple[dict, dict]:
     def load():
         privs: dict[str, list[str]] = {}
-        for r in db.query("SELECT ROLE_NAME, PRIVILEGE FROM GOVERNANCE.ROLE_PRIVILEGE"):
+        for r in db.query("SELECT ROLE_NAME, PRIVILEGE FROM CORE.ROLE_PRIVILEGE"):
             privs.setdefault(r["role_name"], []).append(r["privilege"])
         grants: dict[str, list[str]] = {}
-        for r in db.query("SELECT ROLE_NAME, GRANTED_ROLE FROM GOVERNANCE.ROLE_GRANT"):
+        for r in db.query("SELECT ROLE_NAME, GRANTED_ROLE FROM CORE.ROLE_GRANT"):
             grants.setdefault(r["role_name"], []).append(r["granted_role"])
         return privs, grants
     return _cached("roles", load)
@@ -182,7 +183,7 @@ def policies(db: Db) -> dict[str, dict]:
         return {r["privilege"]: {"requires_approval": bool(r["requires_approval"]), "approver_role": r["approver_role"],
                                  "four_eyes": bool(r["four_eyes"]), "allow_self": bool(r["allow_self"]),
                                  "active": bool(r["active"])}
-                for r in db.query("SELECT * FROM GOVERNANCE.APPROVAL_POLICY")}
+                for r in db.query("SELECT * FROM CORE.APPROVAL_POLICY")}
     return _cached("policies", load)
 
 
@@ -192,7 +193,7 @@ def identity(db: Db) -> dict:
     user = db.user.upper()
 
     def load():
-        roles = [r["role_name"] for r in db.query("SELECT ROLE_NAME FROM GOVERNANCE.USER_ROLE WHERE USER_NAME = %s", (user,))]
+        roles = [r["role_name"] for r in db.query("SELECT ROLE_NAME FROM CORE.USER_ROLE WHERE USER_NAME = %s", (user,))]
         if not roles and settings(db).get("DEFAULT_ROLE"):
             roles = [str(settings(db)["DEFAULT_ROLE"]).upper()]
         role_privs, grants = role_model(db)
@@ -293,7 +294,7 @@ async def middleware(request: Request, call_next):
     parts = path.strip("/").split("/")
     run_id = parts[2] if len(parts) > 2 and parts[1] == "runs" else None
     await run_in_threadpool(lambda: db.execute(
-        """INSERT INTO GOVERNANCE.CHANGE_REQUEST (REQUEST_ID, PRIVILEGE, TITLE, SUMMARY, RUN_ID, METHOD, PATH, PAYLOAD,
+        """INSERT INTO CORE.CHANGE_REQUEST (REQUEST_ID, PRIVILEGE, TITLE, SUMMARY, RUN_ID, METHOD, PATH, PAYLOAD,
                                                   REQUESTED_BY, APPROVER_ROLE, ALLOW_SELF, STATUS)
            SELECT %s, %s, %s, %s, %s, %s, %s, PARSE_JSON(%s), %s, %s, %s, 'PENDING'""",
         (request_id, privilege, title or PRIVILEGES.get(privilege, ("", privilege))[1], summarize(method, path, body, title)[:1000],
@@ -323,7 +324,7 @@ def summary(db: Db) -> dict:
     who = identity(db)
     pending = 0
     try:
-        rows = db.query("SELECT APPROVER_ROLE, REQUESTED_BY, ALLOW_SELF FROM GOVERNANCE.CHANGE_REQUEST WHERE STATUS = 'PENDING'")
+        rows = db.query("SELECT APPROVER_ROLE, REQUESTED_BY, ALLOW_SELF FROM CORE.CHANGE_REQUEST WHERE STATUS = 'PENDING'")
         roles = set(who["roles"])
         pending = sum(1 for r in rows if can_approve({"status": "PENDING", **r}, who["user"], roles, set(who["privileges"]),
                                                      bool(settings(db).get("SUPER_SELF_APPROVE", True)))[0])
@@ -337,7 +338,7 @@ def _requests(db: Db, where: str = "1 = 1", params: tuple = ()) -> list[dict]:
     rows = db.query(f"""SELECT REQUEST_ID, PRIVILEGE, TITLE, SUMMARY, RUN_ID, METHOD, PATH, PAYLOAD, REQUESTED_BY,
                                APPROVER_ROLE, ALLOW_SELF, STATUS, DECIDED_BY, DECISION_NOTE, RESULT,
                                CREATED_AT::VARCHAR AS CREATED_AT, DECIDED_AT::VARCHAR AS DECIDED_AT
-                          FROM GOVERNANCE.CHANGE_REQUEST WHERE {where}
+                          FROM CORE.CHANGE_REQUEST WHERE {where}
                          ORDER BY CREATED_AT DESC LIMIT 300""", params)
     for r in rows:
         r["payload"] = _json(r.get("payload"))
@@ -406,7 +407,7 @@ async def approve_request(request_id: str, body: Decision, request: Request):
     if not ok:
         raise HTTPException(403, why)
     claimed = await run_in_threadpool(lambda: db.execute_count(
-        "UPDATE GOVERNANCE.CHANGE_REQUEST SET STATUS = 'APPROVED', DECIDED_BY = %s, DECISION_NOTE = %s, "
+        "UPDATE CORE.CHANGE_REQUEST SET STATUS = 'APPROVED', DECIDED_BY = %s, DECISION_NOTE = %s, "
         "DECIDED_AT = CURRENT_TIMESTAMP() WHERE REQUEST_ID = %s AND STATUS = 'PENDING'",
         (who["user"], body.note, request_id)))
     if not claimed:  # someone else decided (or the requester cancelled) in the meantime: never replay twice
@@ -430,7 +431,7 @@ async def approve_request(request_id: str, body: Decision, request: Request):
         code, result = 500, {"detail": f"Applying the change failed: {str(exc)[:500]}"}
     status = "APPLIED" if code < 400 else "FAILED"
     await run_in_threadpool(lambda: db.execute(
-        "UPDATE GOVERNANCE.CHANGE_REQUEST SET STATUS = %s, RESULT = PARSE_JSON(%s) WHERE REQUEST_ID = %s",
+        "UPDATE CORE.CHANGE_REQUEST SET STATUS = %s, RESULT = PARSE_JSON(%s) WHERE REQUEST_ID = %s",
         (status, json.dumps({"status_code": code, "body": result}, default=str)[:60000], request_id)))
     await run_in_threadpool(_event, db, status, request_id, {"by": who["user"], "status_code": code})
     return {"request_id": request_id, "status": status, "status_code": code, "result": result}
@@ -446,7 +447,7 @@ def reject_request(request_id: str, body: Decision, db: Db = Depends(gov_db)):
         raise HTTPException(403, why)
     if not (body.note or "").strip():
         raise HTTPException(400, "Say why the request is rejected.")
-    if not db.execute_count("UPDATE GOVERNANCE.CHANGE_REQUEST SET STATUS = 'REJECTED', DECIDED_BY = %s, "
+    if not db.execute_count("UPDATE CORE.CHANGE_REQUEST SET STATUS = 'REJECTED', DECIDED_BY = %s, "
                             "DECISION_NOTE = %s, DECIDED_AT = CURRENT_TIMESTAMP() WHERE REQUEST_ID = %s "
                             "AND STATUS = 'PENDING'", (who["user"], body.note, request_id)):
         raise HTTPException(409, "This request is no longer pending.")
@@ -460,7 +461,7 @@ def cancel_request(request_id: str, db: Db = Depends(gov_db)):
     who = identity(db)
     if req["requested_by"].upper() != who["user"] or req["status"] != "PENDING":
         raise HTTPException(403, "Only the requester can cancel a pending request.")
-    if not db.execute_count("UPDATE GOVERNANCE.CHANGE_REQUEST SET STATUS = 'CANCELLED', DECIDED_AT = CURRENT_TIMESTAMP() "
+    if not db.execute_count("UPDATE CORE.CHANGE_REQUEST SET STATUS = 'CANCELLED', DECIDED_AT = CURRENT_TIMESTAMP() "
                             "WHERE REQUEST_ID = %s AND STATUS = 'PENDING'", (request_id,)):
         raise HTTPException(409, "This request is no longer pending.")
     _event(db, "CANCELLED", request_id, {"by": who["user"]})
@@ -479,11 +480,11 @@ class _PreviewLoader:
         return _version(self.db, catalog_id, version)
 
     def dq_schedule(self, table: str) -> Optional[dict]:
-        found = self.db.query("SELECT CRON, ENABLED FROM GOVERNANCE.DQ_SCHEDULE WHERE TABLE_NAME = %s", (table,))
+        found = self.db.query("SELECT CRON, ENABLED FROM CORE.DQ_SCHEDULE WHERE TABLE_NAME = %s", (table,))
         return found[0] if found else None
 
     def dq_active_checks(self, table: str) -> int:
-        found = self.db.query("SELECT COUNT(*) AS N FROM GOVERNANCE.DQ_CHECKS_CATALOG WHERE TABLE_NAME = %s AND STATUS = 'ACTIVE'",
+        found = self.db.query("SELECT COUNT(*) AS N FROM CORE.DQ_CHECKS_CATALOG WHERE TABLE_NAME = %s AND STATUS = 'ACTIVE'",
                               (table,))
         return int(found[0]["n"]) if found else 0
 
@@ -492,7 +493,7 @@ class _PreviewLoader:
         if not ids:
             return {}
         found = self.db.query(f"""SELECT EXPECTATION_ID, TARGET_COLUMN, CHECK_TYPE, CHECK_DEFINITION, SEVERITY, STATUS
-                                    FROM CONTRACT.SODA_EXPECTATION_REGISTRY
+                                    FROM CORE.SODA_EXPECTATION_REGISTRY
                                    WHERE RUN_ID = %s AND EXPECTATION_ID IN ({', '.join(['%s'] * len(ids))})""",
                               (run_id, *ids))
         return {r["expectation_id"]: {**r, "check_definition": _json(r.get("check_definition"))} for r in found}
@@ -523,7 +524,7 @@ def list_privileges(db: Db = Depends(gov_db)):
 def list_roles(db: Db = Depends(gov_db)):
     role_privs, grants = role_model(db)
     members: dict[str, list[str]] = {}
-    for r in db.query("SELECT USER_NAME, ROLE_NAME FROM GOVERNANCE.USER_ROLE ORDER BY USER_NAME"):
+    for r in db.query("SELECT USER_NAME, ROLE_NAME FROM CORE.USER_ROLE ORDER BY USER_NAME"):
         members.setdefault(r["role_name"], []).append(r["user_name"])
     def sources(role: str) -> dict:
         """Privilege -> the inherited role it comes from (own privileges excluded)."""
@@ -534,8 +535,8 @@ def list_roles(db: Db = Depends(gov_db)):
                 out.setdefault(p, parent)
         return out
 
-    rows = db.query("SELECT * FROM GOVERNANCE.APP_ROLE ORDER BY IS_SYSTEM DESC, ROLE_NAME")
-    used = {r["approver_role"] for r in db.query("SELECT DISTINCT APPROVER_ROLE FROM GOVERNANCE.APPROVAL_POLICY WHERE ACTIVE")}
+    rows = db.query("SELECT * FROM CORE.APP_ROLE ORDER BY IS_SYSTEM DESC, ROLE_NAME")
+    used = {r["approver_role"] for r in db.query("SELECT DISTINCT APPROVER_ROLE FROM CORE.APPROVAL_POLICY WHERE ACTIVE")}
     out = []
     for r in rows:
         name = r["role_name"]
@@ -559,7 +560,7 @@ def _write_role(db: Db, body: RoleIn, create: bool) -> dict:
     unknown = [p for p in body.privileges if p not in PRIVILEGES and p != ALL]
     if unknown:
         raise HTTPException(400, f"Unknown privilege {unknown[0]}")
-    known_roles = {r["role_name"] for r in db.query("SELECT ROLE_NAME FROM GOVERNANCE.APP_ROLE")}
+    known_roles = {r["role_name"] for r in db.query("SELECT ROLE_NAME FROM CORE.APP_ROLE")}
     bad = [r for r in body.inherits if r.upper() not in known_roles or r.upper() in (name, "SUPER_ADMIN")]
     if bad:
         raise HTTPException(400, f"Cannot inherit {bad[0]}")
@@ -569,19 +570,19 @@ def _write_role(db: Db, body: RoleIn, create: bool) -> dict:
     if create:
         if name in known_roles:
             raise HTTPException(409, f"{name} already exists")
-        db.execute("INSERT INTO GOVERNANCE.APP_ROLE (ROLE_NAME, DESCRIPTION) SELECT %s, %s", (name, body.description))
+        db.execute("INSERT INTO CORE.APP_ROLE (ROLE_NAME, DESCRIPTION) SELECT %s, %s", (name, body.description))
     else:
         if name not in known_roles:
             raise HTTPException(404, f"{name} not found")
         if name == "SUPER_ADMIN":
             raise HTTPException(400, "SUPER_ADMIN always holds every privilege.")
-        db.execute("UPDATE GOVERNANCE.APP_ROLE SET DESCRIPTION = %s WHERE ROLE_NAME = %s", (body.description, name))
-        db.execute("DELETE FROM GOVERNANCE.ROLE_PRIVILEGE WHERE ROLE_NAME = %s", (name,))
-        db.execute("DELETE FROM GOVERNANCE.ROLE_GRANT WHERE ROLE_NAME = %s", (name,))
+        db.execute("UPDATE CORE.APP_ROLE SET DESCRIPTION = %s WHERE ROLE_NAME = %s", (body.description, name))
+        db.execute("DELETE FROM CORE.ROLE_PRIVILEGE WHERE ROLE_NAME = %s", (name,))
+        db.execute("DELETE FROM CORE.ROLE_GRANT WHERE ROLE_NAME = %s", (name,))
     for p in dict.fromkeys(body.privileges):
-        db.execute("INSERT INTO GOVERNANCE.ROLE_PRIVILEGE (ROLE_NAME, PRIVILEGE) SELECT %s, %s", (name, p))
+        db.execute("INSERT INTO CORE.ROLE_PRIVILEGE (ROLE_NAME, PRIVILEGE) SELECT %s, %s", (name, p))
     for g in dict.fromkeys(r.upper() for r in body.inherits):
-        db.execute("INSERT INTO GOVERNANCE.ROLE_GRANT (ROLE_NAME, GRANTED_ROLE) SELECT %s, %s", (name, g))
+        db.execute("INSERT INTO CORE.ROLE_GRANT (ROLE_NAME, GRANTED_ROLE) SELECT %s, %s", (name, g))
     _event(db, "ROLE_CREATED" if create else "ROLE_CHANGED", name, body.model_dump())
     invalidate()
     return {"role": name}
@@ -601,18 +602,18 @@ def update_role(role: str, body: RoleIn, db: Db = Depends(gov_db)):
 @router.delete("/api/governance/roles/{role}")
 def delete_role(role: str, db: Db = Depends(gov_db)):
     name = role.upper()
-    found = db.query("SELECT IS_SYSTEM FROM GOVERNANCE.APP_ROLE WHERE ROLE_NAME = %s", (name,))
+    found = db.query("SELECT IS_SYSTEM FROM CORE.APP_ROLE WHERE ROLE_NAME = %s", (name,))
     if not found:
         raise HTTPException(404, f"{name} not found")
     if found[0]["is_system"]:
         raise HTTPException(400, "System roles cannot be deleted; remove their members or privileges instead.")
-    if db.query("SELECT 1 FROM GOVERNANCE.APPROVAL_POLICY WHERE APPROVER_ROLE = %s AND ACTIVE LIMIT 1", (name,)):
+    if db.query("SELECT 1 FROM CORE.APPROVAL_POLICY WHERE APPROVER_ROLE = %s AND ACTIVE LIMIT 1", (name,)):
         raise HTTPException(400, f"{name} approves at least one policy; pick another approver role first.")
     if str(settings(db).get("DEFAULT_ROLE") or "").upper() == name:
         raise HTTPException(400, f"{name} is the default role for new users; change the default first.")
     for table in ("USER_ROLE", "ROLE_PRIVILEGE", "APP_ROLE"):
-        db.execute(f"DELETE FROM GOVERNANCE.{table} WHERE ROLE_NAME = %s", (name,))
-    db.execute("DELETE FROM GOVERNANCE.ROLE_GRANT WHERE ROLE_NAME = %s OR GRANTED_ROLE = %s", (name, name))
+        db.execute(f"DELETE FROM {PLATFORM_SCHEMA}.{table} WHERE ROLE_NAME = %s", (name,))
+    db.execute("DELETE FROM CORE.ROLE_GRANT WHERE ROLE_NAME = %s OR GRANTED_ROLE = %s", (name, name))
     _event(db, "ROLE_DELETED", name, {})
     invalidate()
     return {"deleted": name}
@@ -627,15 +628,15 @@ class MemberIn(BaseModel):
 def role_member(role: str, body: MemberIn, db: Db = Depends(gov_db)):
     """Grant or revoke one role for one user, from the role page."""
     name, user = role.upper(), body.user.strip().upper()
-    if not db.query("SELECT 1 FROM GOVERNANCE.APP_ROLE WHERE ROLE_NAME = %s", (name,)):
+    if not db.query("SELECT 1 FROM CORE.APP_ROLE WHERE ROLE_NAME = %s", (name,)):
         raise HTTPException(404, f"{name} not found")
     if body.action == "add":
         _merge(db, "USER_ROLE", {"USER_NAME": user, "ROLE_NAME": name})
     else:
-        last = db.query("SELECT COUNT(*) AS N FROM GOVERNANCE.USER_ROLE WHERE ROLE_NAME = 'SUPER_ADMIN'")[0]["n"] <= 1
+        last = db.query("SELECT COUNT(*) AS N FROM CORE.USER_ROLE WHERE ROLE_NAME = 'SUPER_ADMIN'")[0]["n"] <= 1
         if name == "SUPER_ADMIN" and last:
             raise HTTPException(400, "This is the last super admin; grant SUPER_ADMIN to someone else first.")
-        db.execute("DELETE FROM GOVERNANCE.USER_ROLE WHERE USER_NAME = %s AND ROLE_NAME = %s", (user, name))
+        db.execute("DELETE FROM CORE.USER_ROLE WHERE USER_NAME = %s AND ROLE_NAME = %s", (user, name))
     _event(db, "ROLE_MEMBER", name, {"user": user, "action": body.action})
     invalidate()
     return {"role": name, "user": user, "action": body.action}
@@ -645,13 +646,13 @@ def role_member(role: str, body: MemberIn, db: Db = Depends(gov_db)):
 def list_users(db: Db = Depends(gov_db)):
     """Users with roles, plus users seen in the platform (run owners, requesters) without one."""
     assigned: dict[str, list[str]] = {}
-    for r in db.query("SELECT USER_NAME, ROLE_NAME FROM GOVERNANCE.USER_ROLE ORDER BY ROLE_NAME"):
+    for r in db.query("SELECT USER_NAME, ROLE_NAME FROM CORE.USER_ROLE ORDER BY ROLE_NAME"):
         assigned.setdefault(r["user_name"], []).append(r["role_name"])
     seen = set()
     try:
         seen = {str(r["u"]).upper() for r in db.query(
             "SELECT DISTINCT CREATED_BY AS U FROM CORE.WORKFLOW_RUN WHERE CREATED_BY IS NOT NULL "
-            "UNION SELECT DISTINCT REQUESTED_BY FROM GOVERNANCE.CHANGE_REQUEST")}
+            "UNION SELECT DISTINCT REQUESTED_BY FROM CORE.CHANGE_REQUEST")}
     except Exception:
         pass
     users = sorted(set(assigned) | seen)
@@ -669,18 +670,18 @@ def set_user_roles(user: str, body: UserRoles, db: Db = Depends(gov_db)):
     if not name:
         raise HTTPException(400, "user is required")
     roles = list(dict.fromkeys(r.upper() for r in body.roles))
-    known = {r["role_name"] for r in db.query("SELECT ROLE_NAME FROM GOVERNANCE.APP_ROLE")}
+    known = {r["role_name"] for r in db.query("SELECT ROLE_NAME FROM CORE.APP_ROLE")}
     bad = [r for r in roles if r not in known]
     if bad:
         raise HTTPException(400, f"Unknown role {bad[0]}")
     if "SUPER_ADMIN" not in roles:
-        others = db.query("SELECT COUNT(*) AS N FROM GOVERNANCE.USER_ROLE WHERE ROLE_NAME = 'SUPER_ADMIN' AND USER_NAME <> %s",
+        others = db.query("SELECT COUNT(*) AS N FROM CORE.USER_ROLE WHERE ROLE_NAME = 'SUPER_ADMIN' AND USER_NAME <> %s",
                           (name,))
-        if not others[0]["n"] and db.query("SELECT 1 FROM GOVERNANCE.USER_ROLE WHERE USER_NAME = %s AND ROLE_NAME = 'SUPER_ADMIN'", (name,)):
+        if not others[0]["n"] and db.query("SELECT 1 FROM CORE.USER_ROLE WHERE USER_NAME = %s AND ROLE_NAME = 'SUPER_ADMIN'", (name,)):
             raise HTTPException(400, "This is the last super admin; grant SUPER_ADMIN to someone else first.")
-    db.execute("DELETE FROM GOVERNANCE.USER_ROLE WHERE USER_NAME = %s", (name,))
+    db.execute("DELETE FROM CORE.USER_ROLE WHERE USER_NAME = %s", (name,))
     for r in roles:
-        db.execute("INSERT INTO GOVERNANCE.USER_ROLE (USER_NAME, ROLE_NAME) SELECT %s, %s", (name, r))
+        db.execute("INSERT INTO CORE.USER_ROLE (USER_NAME, ROLE_NAME) SELECT %s, %s", (name, r))
     _event(db, "USER_ROLES", name, {"roles": roles})
     invalidate()
     return {"user": name, "roles": roles}
@@ -708,9 +709,9 @@ class PolicyIn(BaseModel):
 def set_policy(privilege: str, body: PolicyIn, db: Db = Depends(gov_db)):
     if privilege not in PRIVILEGES:
         raise HTTPException(404, "unknown privilege")
-    if not db.query("SELECT 1 FROM GOVERNANCE.APP_ROLE WHERE ROLE_NAME = %s", (body.approver_role.upper(),)):
+    if not db.query("SELECT 1 FROM CORE.APP_ROLE WHERE ROLE_NAME = %s", (body.approver_role.upper(),)):
         raise HTTPException(400, f"Unknown role {body.approver_role}")
-    db.execute("""MERGE INTO GOVERNANCE.APPROVAL_POLICY P USING (SELECT %s AS PRIVILEGE) S ON P.PRIVILEGE = S.PRIVILEGE
+    db.execute("""MERGE INTO CORE.APPROVAL_POLICY P USING (SELECT %s AS PRIVILEGE) S ON P.PRIVILEGE = S.PRIVILEGE
                   WHEN MATCHED THEN UPDATE SET REQUIRES_APPROVAL = %s, APPROVER_ROLE = %s, FOUR_EYES = %s, ALLOW_SELF = %s,
                        ACTIVE = %s, UPDATED_BY = CURRENT_USER(), UPDATED_AT = CURRENT_TIMESTAMP()
                   WHEN NOT MATCHED THEN INSERT (PRIVILEGE, REQUIRES_APPROVAL, APPROVER_ROLE, FOUR_EYES, ALLOW_SELF, ACTIVE)
@@ -740,9 +741,9 @@ def put_settings(body: SettingsIn, db: Db = Depends(gov_db)):
     for key, value in body.model_dump(exclude_none=True).items():
         if key == "DEFAULT_ROLE":
             value = str(value).upper()
-            if value and not db.query("SELECT 1 FROM GOVERNANCE.APP_ROLE WHERE ROLE_NAME = %s", (value,)):
+            if value and not db.query("SELECT 1 FROM CORE.APP_ROLE WHERE ROLE_NAME = %s", (value,)):
                 raise HTTPException(400, f"Unknown role {value}")
-        db.execute("""MERGE INTO GOVERNANCE.SETTING T USING (SELECT %s AS K) S ON T.SETTING_KEY = S.K
+        db.execute("""MERGE INTO CORE.SETTING T USING (SELECT %s AS K) S ON T.SETTING_KEY = S.K
                       WHEN MATCHED THEN UPDATE SET SETTING_VALUE = PARSE_JSON(%s), UPDATED_BY = CURRENT_USER(),
                            UPDATED_AT = CURRENT_TIMESTAMP()
                       WHEN NOT MATCHED THEN INSERT (SETTING_KEY, SETTING_VALUE) VALUES (S.K, PARSE_JSON(%s))""",
@@ -755,7 +756,7 @@ def put_settings(body: SettingsIn, db: Db = Depends(gov_db)):
 @router.get("/api/governance/events")
 def list_events(db: Db = Depends(gov_db)):
     rows = db.query("""SELECT EVENT_ID, EVENT_TYPE, ACTOR, TARGET, DETAIL, CREATED_AT::VARCHAR AS CREATED_AT
-                         FROM GOVERNANCE.GOVERNANCE_EVENT ORDER BY CREATED_AT DESC LIMIT 300""")
+                         FROM CORE.GOVERNANCE_EVENT ORDER BY CREATED_AT DESC LIMIT 300""")
     for r in rows:
         r["detail"] = _json(r.get("detail"))
     return {"events": rows}

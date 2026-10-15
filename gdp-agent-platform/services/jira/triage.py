@@ -1,5 +1,5 @@
-"""Jira triage: JIRA.TRIAGE_ISSUE reads a reported bug against the run it is about, JIRA.TRIAGE_TABLE against a domain
-target table, and JIRA.RESOLVE_TARGETS ranks the target tables a ticket is likely about.
+"""Jira triage: CORE.TRIAGE_ISSUE reads a reported bug against the run it is about, CORE.TRIAGE_TABLE against a domain
+target table, and CORE.RESOLVE_TARGETS ranks the target tables a ticket is likely about.
 
 The issue (summary, description, comments, small text attachments) is fetched by the API with the engineer's own
 Jira token and passed in; nothing here reaches Jira. The issue text is untrusted: it is framed as data, and anything it
@@ -130,12 +130,12 @@ def _triage(session, ctx: Dict[str, Any], run_id: Optional[str], issue: Dict[str
 
 
 def triage_entry(session, run_id: str, payload_json: str) -> Dict[str, Any]:
-    """Procedure handler: CALL JIRA.TRIAGE_ISSUE('<run id>', '<issue json>')."""
+    """Procedure handler: CALL CORE.TRIAGE_ISSUE('<run id>', '<issue json>')."""
     return triage_issue(session, run_id, payload_json)
 
 
 def triage_table_entry(session, target_table_id: str, payload_json: str) -> Dict[str, Any]:
-    """Procedure handler: CALL JIRA.TRIAGE_TABLE('<target table id>', '<issue json>')."""
+    """Procedure handler: CALL CORE.TRIAGE_TABLE('<target table id>', '<issue json>')."""
     return triage_table(session, target_table_id, payload_json)
 
 
@@ -178,9 +178,9 @@ def _mentions(text: str) -> Dict[str, Set[str]]:
 def _registry(session) -> List[Dict[str, Any]]:
     found = rows(session, """SELECT T.TARGET_TABLE_ID, T.DOMAIN_ID, T.TARGET_DATABASE, T.TARGET_SCHEMA, T.TARGET_TABLE,
                                     T.DESCRIPTION, COALESCE(T.ACTIVE_FLAG, TRUE) AS ACTIVE,
-                                    EXISTS (SELECT 1 FROM CONTRACT.STTM_REGISTRY S WHERE S.TARGET_TABLE_ID = T.TARGET_TABLE_ID
+                                    EXISTS (SELECT 1 FROM CORE.STTM_REGISTRY S WHERE S.TARGET_TABLE_ID = T.TARGET_TABLE_ID
                                                AND S.STATUS IN ('REVIEW', 'APPROVED')) AS HAS_STTM
-                               FROM KNOWLEDGE.TARGET_TABLE_REGISTRY T LIMIT 5000""")
+                               FROM CORE.TARGET_TABLE_REGISTRY T LIMIT 5000""")
     return [{"target_table_id": r["TARGET_TABLE_ID"], "domain_id": r.get("DOMAIN_ID"),
              "database": _part(r.get("TARGET_DATABASE")), "schema": _part(r.get("TARGET_SCHEMA")), "table": _part(r.get("TARGET_TABLE")),
              "description": r.get("DESCRIPTION") or "", "active": bool(r.get("ACTIVE")), "has_sttm": bool(r.get("HAS_STTM"))}
@@ -278,7 +278,7 @@ def resolve_targets(session, issue: Dict[str, Any], linked_rows: List[Dict[str, 
 
 
 def resolve_entry(session, payload_json: str) -> Dict[str, Any]:
-    """Procedure handler: CALL JIRA.RESOLVE_TARGETS('{"issue": {...}, "linked": [...]}')."""
+    """Procedure handler: CALL CORE.RESOLVE_TARGETS('{"issue": {...}, "linked": [...]}')."""
     payload = json.loads(payload_json or "{}")
     return resolve_targets(session, payload.get("issue") or {}, payload.get("linked") or [])
 

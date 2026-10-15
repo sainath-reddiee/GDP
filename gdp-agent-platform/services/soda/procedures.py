@@ -1,4 +1,4 @@
-"""CONTRACT.GENERATE_SODA / IMPORT_CLIENT_EXPECTATIONS / SAVE_SODA_DECISIONS."""
+"""CORE.GENERATE_SODA / IMPORT_CLIENT_EXPECTATIONS / SAVE_SODA_DECISIONS."""
 
 from __future__ import annotations
 
@@ -27,7 +27,7 @@ from services.soda.feedback import pattern as feedback_pattern
 
 
 def _current_sttm(session, run_id: str) -> Dict[str, Any]:
-    found = rows(session, """SELECT * FROM CONTRACT.STTM_REGISTRY
+    found = rows(session, """SELECT * FROM CORE.STTM_REGISTRY
                              WHERE RUN_ID = ? AND STATUS IN ('REVIEW', 'APPROVED')
                              ORDER BY STTM_VERSION DESC LIMIT 1""", [run_id])
     assert found, "no current STTM for this run"
@@ -49,9 +49,9 @@ def _lines(session, sttm_id: str) -> List[Dict[str, Any]]:
         SELECT L.TARGET_COLUMN, L.TARGET_DATATYPE, L.NULLABLE_RULE, L.UNIQUENESS_RULE,
                L.ACCEPTED_VALUES, L.BUSINESS_DEFINITION, L.TRANSFORMATION, L.RANGE_RULE, C.SEMANTIC_TYPE,
                L.SOURCE_TABLE, L.SOURCE_COLUMN, L.MAPPING_TYPE
-          FROM CONTRACT.STTM_LINE L
-          JOIN CONTRACT.STTM_REGISTRY S ON S.STTM_ID = L.STTM_ID
-          LEFT JOIN KNOWLEDGE.TARGET_COLUMN_REGISTRY C
+          FROM CORE.STTM_LINE L
+          JOIN CORE.STTM_REGISTRY S ON S.STTM_ID = L.STTM_ID
+          LEFT JOIN CORE.TARGET_COLUMN_REGISTRY C
             ON C.TARGET_TABLE_ID = S.TARGET_TABLE_ID AND UPPER(C.COLUMN_NAME) = UPPER(L.TARGET_COLUMN)
          WHERE L.STTM_ID = ?
          ORDER BY L.TARGET_COLUMN
@@ -63,7 +63,7 @@ def _profile_docs(session, run_id: str) -> Dict[str, Dict[str, Any]]:
     docs: Dict[str, Dict[str, Any]] = {}
     for p in rows(session, """SELECT TABLE_NAME, COLUMN_NAME, ROW_COUNT, CARDINALITY, POTENTIAL_KEY_FLAG,
                                      PII_CLASSIFICATION, PATTERN_JSON, STATISTICS_JSON
-                                FROM PROFILE.PROFILE_REGISTRY WHERE RUN_ID = ? AND IS_CURRENT""", [run_id]):
+                                FROM CORE.PROFILE_REGISTRY WHERE RUN_ID = ? AND IS_CURRENT""", [run_id]):
         stats = variant(p["STATISTICS_JSON"]) or {}
         table = str(p["TABLE_NAME"]).upper()
         doc = docs.setdefault(table, {"row_count": p["ROW_COUNT"], "columns": []})
@@ -79,7 +79,7 @@ def _profile_docs(session, run_id: str) -> Dict[str, Dict[str, Any]]:
 
 def _model_spec(session, sttm: Dict[str, Any]) -> Dict[str, Any]:
     try:
-        found = rows(session, "SELECT MODEL_SPEC FROM KNOWLEDGE.TARGET_TABLE_REGISTRY WHERE TARGET_TABLE_ID = ?",
+        found = rows(session, "SELECT MODEL_SPEC FROM CORE.TARGET_TABLE_REGISTRY WHERE TARGET_TABLE_ID = ?",
                      [sttm.get("TARGET_TABLE_ID")])
         return (variant(found[0]["MODEL_SPEC"]) or {}) if found else {}
     except Exception:
@@ -99,7 +99,7 @@ def _driving_table(design: Dict[str, Any], lines: List[Dict[str, Any]]) -> str |
 
 
 def _rejected(session, domain_id: str) -> List[Dict[str, Any]]:
-    found = rows(session, """SELECT CONTENT_JSON FROM KNOWLEDGE.DOMAIN_KNOWLEDGE
+    found = rows(session, """SELECT CONTENT_JSON FROM CORE.DOMAIN_KNOWLEDGE
                              WHERE IS_CURRENT AND KNOWLEDGE_TYPE = 'SODA_PATTERN'
                                AND DOMAIN_ID = ?""", [domain_id])
     out = []
@@ -125,7 +125,7 @@ def _knowledge(session, domain_id: str, run_id: Optional[str] = None, table: Opt
 
 
 def _transform_checks(session, domain_id: str, table: str) -> List[Dict[str, Any]]:
-    found = rows(session, """SELECT CONTENT_JSON FROM KNOWLEDGE.DOMAIN_KNOWLEDGE
+    found = rows(session, """SELECT CONTENT_JSON FROM CORE.DOMAIN_KNOWLEDGE
                              WHERE IS_CURRENT AND STATUS = 'ACTIVE' AND KNOWLEDGE_TYPE = 'TRANSFORMATION_RULE'
                                AND DOMAIN_ID = ?""", [domain_id])
     out = []
@@ -143,7 +143,7 @@ def _transform_checks(session, domain_id: str, table: str) -> List[Dict[str, Any
 
 
 def _briefs(session, run_id: str) -> List[str]:
-    found = rows(session, """SELECT CONTENT FROM KNOWLEDGE.DOMAIN_KNOWLEDGE
+    found = rows(session, """SELECT CONTENT FROM CORE.DOMAIN_KNOWLEDGE
                              WHERE IS_CURRENT AND SOURCE_REFERENCE = ?""", [f"soda.brief.{run_id}"])
     return [r["CONTENT"] for r in found if r.get("CONTENT")]
 
@@ -173,7 +173,7 @@ def _extract(session, brief: str, table: str, columns: List[str], knowledge: Lis
 
 PRIOR_SQL = """SELECT TARGET_TABLE, TARGET_COLUMN, CHECK_TYPE, CHECK_DEFINITION, SEVERITY, CLIENT_REQUIREMENT, STATUS,
                       REVIEWED_BY, REVIEWED_AT{extra}
-                 FROM CONTRACT.SODA_EXPECTATION_REGISTRY WHERE RUN_ID = ? AND IS_CURRENT"""
+                 FROM CORE.SODA_EXPECTATION_REGISTRY WHERE RUN_ID = ? AND IS_CURRENT"""
 
 
 def _prior(session, run_id: str) -> List[Dict[str, Any]]:
@@ -187,9 +187,9 @@ def _prior(session, run_id: str) -> List[Dict[str, Any]]:
 def _store(session, run_id: str, sttm: Dict[str, Any], checks: List[Dict[str, Any]]) -> int:
     """A new version of the run's checks. Each check keeps the status and reviewer carry_decisions gave it
     (PROPOSED otherwise) and, from V045, the definition the generator proposed."""
-    version = (scalar(session, "SELECT MAX(VERSION) FROM CONTRACT.SODA_EXPECTATION_REGISTRY WHERE RUN_ID = ?",
+    version = (scalar(session, "SELECT MAX(VERSION) FROM CORE.SODA_EXPECTATION_REGISTRY WHERE RUN_ID = ?",
                       [run_id]) or 0) + 1
-    session.sql("UPDATE CONTRACT.SODA_EXPECTATION_REGISTRY SET IS_CURRENT = FALSE, STATUS = 'SUPERSEDED' "
+    session.sql("UPDATE CORE.SODA_EXPECTATION_REGISTRY SET IS_CURRENT = FALSE, STATUS = 'SUPERSEDED' "
                 "WHERE RUN_ID = ? AND IS_CURRENT", params=[run_id]).collect()
     columns = ["EXPECTATION_ID", "RUN_ID", "STTM_ID", "DOMAIN_ID", "TARGET_TABLE", "TARGET_COLUMN", "CHECK_TYPE",
                "CHECK_DEFINITION", "SEVERITY", "ORIGIN", "CLIENT_REQUIREMENT", "STATUS", "VERSION", "IS_CURRENT",
@@ -201,7 +201,7 @@ def _store(session, run_id: str, sttm: Dict[str, Any], checks: List[Dict[str, An
                clip(c.get("requirement")), c.get("status") or "PROPOSED", version, c.get("reviewed_by") or "",
                str(c.get("reviewed_at") or "")] for c in checks]
     try:  # V045
-        insert_rows(session, "CONTRACT.SODA_EXPECTATION_REGISTRY", columns + ["GENERATED_DEFINITION"],
+        insert_rows(session, "CORE.SODA_EXPECTATION_REGISTRY", columns + ["GENERATED_DEFINITION"],
                     exprs + ["PARSE_JSON(NULLIF(?, ''))"],
                     [v + [json.dumps(c["generated_definition"]) if c.get("generated_definition") is not None else ""]
                      for v, c in zip(values, checks)])
@@ -209,7 +209,7 @@ def _store(session, run_id: str, sttm: Dict[str, Any], checks: List[Dict[str, An
     except Exception as exc:
         if "GENERATED_DEFINITION" not in str(exc).upper():
             raise
-    insert_rows(session, "CONTRACT.SODA_EXPECTATION_REGISTRY", columns, exprs, values)
+    insert_rows(session, "CORE.SODA_EXPECTATION_REGISTRY", columns, exprs, values)
     return version
 
 
@@ -247,7 +247,7 @@ def generate_soda(session, run_id: str) -> Dict[str, Any]:
                 except Exception:
                     continue
             existing_client = rows(session, """SELECT TARGET_TABLE, TARGET_COLUMN, CHECK_TYPE, CHECK_DEFINITION,
-                                               SEVERITY, CLIENT_REQUIREMENT, ORIGIN FROM CONTRACT.SODA_EXPECTATION_REGISTRY
+                                               SEVERITY, CLIENT_REQUIREMENT, ORIGIN FROM CORE.SODA_EXPECTATION_REGISTRY
                                                WHERE RUN_ID = ? AND ORIGIN IN ('CLIENT', 'AI') AND STATUS <> 'REJECTED'
                                                QUALIFY ROW_NUMBER() OVER (PARTITION BY CHECK_TYPE, TARGET_COLUMN
                                                                           ORDER BY VERSION DESC) = 1""", [run_id])
@@ -290,13 +290,13 @@ def backtest_soda(session, run_id: str) -> Dict[str, Any]:
     design = variant(sttm["TABLE_DESIGN"]) or {}
     lines = _lines(session, sttm["STTM_ID"])
     stored = rows(session, """SELECT EXPECTATION_ID, TARGET_COLUMN, CHECK_TYPE, CHECK_DEFINITION, SEVERITY
-                                FROM CONTRACT.SODA_EXPECTATION_REGISTRY
+                                FROM CORE.SODA_EXPECTATION_REGISTRY
                                WHERE RUN_ID = ? AND IS_CURRENT AND STATUS <> 'REJECTED'""", [run_id])
     checks = [{"expectation_id": r["EXPECTATION_ID"], "target_column": r["TARGET_COLUMN"],
                "check_type": r["CHECK_TYPE"], "definition": variant(r["CHECK_DEFINITION"]) or {},
                "severity": r["SEVERITY"]} for r in stored]
     landed = rows(session, """SELECT SOURCE_TABLE, LANDING_DATABASE, LANDING_SCHEMA, LANDING_TABLE
-                                FROM SOURCE.LANDING_TABLE_REGISTRY
+                                FROM CORE.LANDING_TABLE_REGISTRY
                                WHERE RUN_ID = ? AND INGESTION_STATUS = 'COMPLETE'
                              QUALIFY ROW_NUMBER() OVER (PARTITION BY SOURCE_TABLE ORDER BY CREATED_AT DESC) = 1""",
                   [run_id])
@@ -321,7 +321,7 @@ def backtest_soda(session, run_id: str) -> Dict[str, Any]:
         result = {**evaluate_check(check, slot, results.get(slot.get("table"))),
                   "expectation_id": check["expectation_id"]}
         outcome.append(result)
-        session.sql("""UPDATE CONTRACT.SODA_EXPECTATION_REGISTRY
+        session.sql("""UPDATE CORE.SODA_EXPECTATION_REGISTRY
                           SET CHECK_DEFINITION = OBJECT_INSERT(CHECK_DEFINITION, 'backtest', PARSE_JSON(?), TRUE)
                         WHERE EXPECTATION_ID = ? AND RUN_ID = ?""",
                     params=[json.dumps({k: result.get(k) for k in ("status", "observed", "percent", "detail")}),
@@ -357,15 +357,15 @@ def import_client_expectations(session, run_id: str, rows_json: str) -> Dict[str
     if parsed.get("rows"):
         imported = merge_checks(imported, from_client(table, parsed["rows"]))
     assert imported, "no Soda requirements could be extracted from the client brief"
-    current = rows(session, """SELECT TARGET_COLUMN, CHECK_TYPE, CHECK_DEFINITION FROM CONTRACT.SODA_EXPECTATION_REGISTRY
+    current = rows(session, """SELECT TARGET_COLUMN, CHECK_TYPE, CHECK_DEFINITION FROM CORE.SODA_EXPECTATION_REGISTRY
                                WHERE RUN_ID = ? AND IS_CURRENT AND STATUS <> 'REJECTED'""", [run_id])
     imported = not_yet_current(imported, [{"target_column": r["TARGET_COLUMN"], "check_type": r["CHECK_TYPE"],
                                            "definition": variant(r["CHECK_DEFINITION"]) or {}} for r in current])
     if not imported:
         return {"imported": 0, "version": None, "yaml": "", "duplicates": True}
-    version = (scalar(session, "SELECT MAX(VERSION) FROM CONTRACT.SODA_EXPECTATION_REGISTRY WHERE RUN_ID = ?",
+    version = (scalar(session, "SELECT MAX(VERSION) FROM CORE.SODA_EXPECTATION_REGISTRY WHERE RUN_ID = ?",
                       [run_id]) or 0) + 1
-    insert_rows(session, "CONTRACT.SODA_EXPECTATION_REGISTRY",
+    insert_rows(session, "CORE.SODA_EXPECTATION_REGISTRY",
                 ["EXPECTATION_ID", "RUN_ID", "STTM_ID", "DOMAIN_ID", "TARGET_TABLE", "TARGET_COLUMN", "CHECK_TYPE",
                  "CHECK_DEFINITION", "SEVERITY", "ORIGIN", "CLIENT_REQUIREMENT", "STATUS", "VERSION", "IS_CURRENT",
                  "CREATED_BY"],
@@ -397,7 +397,7 @@ def store_approved_set(session, run_id: str) -> None:
     item for the target table, so the next run on this model starts from what was agreed."""
     found = rows(session, """SELECT TARGET_TABLE, TARGET_COLUMN, CHECK_TYPE, CHECK_DEFINITION, SEVERITY,
                                     CLIENT_REQUIREMENT, DOMAIN_ID
-                               FROM CONTRACT.SODA_EXPECTATION_REGISTRY
+                               FROM CORE.SODA_EXPECTATION_REGISTRY
                               WHERE RUN_ID = ? AND IS_CURRENT AND STATUS = 'APPROVED'""", [run_id])
     if not found or not found[0]["DOMAIN_ID"]:
         return
@@ -430,7 +430,7 @@ def save_soda_decisions(session, run_id: str, decisions_json: str) -> Dict[str, 
     for raw in decisions:
         expectation_id = raw["expectation_id"]
         decision = raw["decision"]
-        found = rows(session, """SELECT * FROM CONTRACT.SODA_EXPECTATION_REGISTRY
+        found = rows(session, """SELECT * FROM CORE.SODA_EXPECTATION_REGISTRY
                                  WHERE EXPECTATION_ID = ? AND RUN_ID = ? AND IS_CURRENT""",
                      [expectation_id, run_id])
         if not found:
@@ -443,7 +443,7 @@ def save_soda_decisions(session, run_id: str, decisions_json: str) -> Dict[str, 
         definition = variant(raw.get("definition")) or variant(row["CHECK_DEFINITION"]) or {}
         requirement = raw.get("requirement") or row["CLIENT_REQUIREMENT"]
         severity = (raw.get("severity") if decision == "MODIFIED" else None) or row["SEVERITY"]
-        session.sql("""UPDATE CONTRACT.SODA_EXPECTATION_REGISTRY
+        session.sql("""UPDATE CORE.SODA_EXPECTATION_REGISTRY
                           SET STATUS = ?, CHECK_DEFINITION = PARSE_JSON(?), CLIENT_REQUIREMENT = NULLIF(?, ''), SEVERITY = ?,
                               REVIEWED_BY = CURRENT_USER(), REVIEWED_AT = CURRENT_TIMESTAMP()
                         WHERE EXPECTATION_ID = ? AND RUN_ID = ? AND IS_CURRENT""",
@@ -452,7 +452,7 @@ def save_soda_decisions(session, run_id: str, decisions_json: str) -> Dict[str, 
             row["TARGET_TABLE"], row["TARGET_COLUMN"], row["CHECK_TYPE"], decision,
             requirement, raw.get("justification"), definition))
         applied += 1
-    remaining = rows(session, """SELECT EXPECTATION_ID FROM CONTRACT.SODA_EXPECTATION_REGISTRY
+    remaining = rows(session, """SELECT EXPECTATION_ID FROM CORE.SODA_EXPECTATION_REGISTRY
                                  WHERE RUN_ID = ? AND IS_CURRENT AND STATUS = 'PROPOSED'""", [run_id])
     if applied:
         from services.knowledge.outcomes import refresh_run

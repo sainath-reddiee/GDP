@@ -1,11 +1,11 @@
 """Source Hub (/dashboard/sources): onboard tables from a Snowflake share in one step, and register external
-(non-Snowflake) sources in PLATFORM_CONFIG.INGESTION_PIPELINE_CATALOG for the ingestion tool to load.
+(non-Snowflake) sources in CORE.INGESTION_PIPELINE_CATALOG for the ingestion tool to load.
 
 Share onboarding creates an ordinary run and walks it through the existing source procedures (register, access,
-landing), landing through SOURCE.LANDING_STAGE as compressed Parquet (services/source/staged.py), so the run then
+landing), landing through CORE.LANDING_STAGE as compressed Parquet (services/source/staged.py), so the run then
 continues on /runs/<id> exactly like any other. External sources are intake only: the platform stores the answers
 (secrets sealed with services/common/secretbox.py) and never calls the ingestion tool. SnapLogic onboarding writes one
-row per table to PLATFORM_CONFIG.INGESTION_CONTROL_CONFIG (V046), which the SnapLogic parent and child pipelines read.
+row per table to CORE.INGESTION_CONTROL_CONFIG (V046), which the SnapLogic parent and child pipelines read.
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ from services.common import secretbox
 from services.source import ingestion_control, pipelines
 
 router = APIRouter()
-CATALOG = "PLATFORM_CONFIG.INGESTION_PIPELINE_CATALOG"
+CATALOG = "CORE.INGESTION_PIPELINE_CATALOG"
 ACCOUNT = re.compile(r"^[A-Za-z0-9_.-]{1,255}$")
 SHARE = re.compile(r"^[A-Za-z_][A-Za-z0-9_$]{0,254}$")
 
@@ -210,7 +210,7 @@ CONTROL_SELECT = f"""SELECT C.*, C.CREATED_AT::VARCHAR AS CREATED_AT_TEXT, C.UPD
                             C.LAST_RUN_TIMESTAMP::VARCHAR AS LAST_RUN_TEXT, P.SOURCE_NAME, P.SOURCE_TYPE, D.DOMAIN_NAME
                        FROM {ingestion_control.TABLE} C
                        LEFT JOIN {CATALOG} P ON P.SOURCE_ID = C.SOURCE_ID
-                       LEFT JOIN KNOWLEDGE.DOMAIN_REGISTRY D ON D.DOMAIN_ID = C.DOMAIN_ID"""
+                       LEFT JOIN CORE.DOMAIN_REGISTRY D ON D.DOMAIN_ID = C.DOMAIN_ID"""
 
 
 def _control(r: dict) -> dict:
@@ -265,11 +265,11 @@ def create_control(body: ControlIn, db: Db = Depends(current_db)):
                                                   SCHEDULE, TARGET_LANDING_TABLE, SNAPLOGIC_PIPELINE_NAME, DOMAIN_ID, STATUS, NOTES)
                            SELECT %s, %s, %s, NULL, PARSE_JSON(%s), PARSE_JSON(%s), %s, %s, %s, %s, %s""",
                        (source_id, header["source_name"], header["source_type"],
-                        json.dumps({"tables": len(rows), "control": "PLATFORM_CONFIG.INGESTION_CONTROL_CONFIG"}),
+                        json.dumps({"tables": len(rows), "control": "CORE.INGESTION_CONTROL_CONFIG"}),
                         json.dumps(schedule), f"{header['landing_database']}.{header['landing_schema']}.{rows[0]['landing_table']}",
                         header["parent_pipeline_name"], header["domain_id"],
                         "ACTIVE" if header["is_active"] else "REGISTERED", header["comments"]))
-            master_id = int(db.query("SELECT PLATFORM_CONFIG.SEQ_INGESTION_MASTER_ID.NEXTVAL AS N")[0]["n"])
+            master_id = int(db.query("SELECT CORE.SEQ_INGESTION_MASTER_ID.NEXTVAL AS N")[0]["n"])
             db.execute(ingestion_control.insert_sql(len(rows)),
                        tuple(ingestion_control.insert_params(master_id, source_id, header, rows, who)))
             children = db.query(f"SELECT CHILD_ID, LANDING_TABLE FROM {ingestion_control.TABLE} WHERE MASTER_ID = %s ORDER BY CHILD_ID",
@@ -501,10 +501,10 @@ def onboard_share(body: ShareOnboard, db: Db = Depends(current_db)):
                 "SCHEMA": schema, "DOMAIN_ID": body.domain_id, "LANDING_DATABASE": body.landing_database,
                 "LANDING_SCHEMA": body.landing_schema, "STORAGE_TYPE": "MANAGED"}
     plan = [
-        ("register", "CALL SOURCE.REGISTER_SOURCE(%s, %s)", register_source,
+        ("register", "CALL CORE.REGISTER_SOURCE(%s, %s)", register_source,
          (run_id, json.dumps({k: v for k, v in register.items() if v}))),
-        ("access", "CALL SOURCE.VALIDATE_SOURCE_ACCESS(%s, %s)", validate_source_access, (run_id, json.dumps(tables))),
-        ("landing", "CALL SOURCE.EXECUTE_STAGED_LANDING(%s)", execute_staged_landing, (run_id,)),
+        ("access", "CALL CORE.VALIDATE_SOURCE_ACCESS(%s, %s)", validate_source_access, (run_id, json.dumps(tables))),
+        ("landing", "CALL CORE.EXECUTE_STAGED_LANDING(%s)", execute_staged_landing, (run_id,)),
     ]
     result: Any = None
     for name, proc, handler, args in plan:

@@ -1,4 +1,4 @@
-"""DAG to DAG dependencies for storm grouping (OPS.DAG_DEPENDENCY), read by the poller at most every 30 minutes per
+"""DAG to DAG dependencies for storm grouping (CORE.DAG_DEPENDENCY), read by the poller at most every 30 minutes per
 environment.
 
 Sources, each stored with its KIND:
@@ -188,7 +188,7 @@ def upsert(db: Any, edges: List[Dict[str, Any]]) -> int:
     if not edges:
         return 0
     db.execute("""
-        MERGE INTO OPS.DAG_DEPENDENCY T USING (
+        MERGE INTO CORE.DAG_DEPENDENCY T USING (
             SELECT F.VALUE:env_id::VARCHAR AS ENV_ID, F.VALUE:upstream_dag_id::VARCHAR AS UPSTREAM_DAG_ID,
                    F.VALUE:downstream_dag_id::VARCHAR AS DOWNSTREAM_DAG_ID, F.VALUE:kind::VARCHAR AS KIND
               FROM TABLE(FLATTEN(INPUT => PARSE_JSON(%s))) F) S
@@ -205,26 +205,26 @@ def prune(db: Any, env_id: str, kinds: List[str], before: Optional[str] = None, 
         return
     marks = ", ".join(["%s"] * len(kinds))
     if before:
-        db.execute(f"""DELETE FROM OPS.DAG_DEPENDENCY WHERE ENV_ID = %s AND KIND IN ({marks})
+        db.execute(f"""DELETE FROM CORE.DAG_DEPENDENCY WHERE ENV_ID = %s AND KIND IN ({marks})
                          AND UPDATED_AT < TRY_TO_TIMESTAMP_LTZ(%s::VARCHAR)""", (env_id, *kinds, before))
     elif days:
-        db.execute(f"""DELETE FROM OPS.DAG_DEPENDENCY WHERE ENV_ID = %s AND KIND IN ({marks})
+        db.execute(f"""DELETE FROM CORE.DAG_DEPENDENCY WHERE ENV_ID = %s AND KIND IN ({marks})
                          AND UPDATED_AT < DATEADD(day, %s, CURRENT_TIMESTAMP())""", (env_id, *kinds, -abs(int(days))))
 
 
 def claim_refresh(db: Any, env_id: str, minutes: int = REFRESH_MINUTES) -> Tuple[bool, int]:
     """(due, rotation offset): True for the one caller that may refresh now (a compare-and-set on the deps:<env> row
-    of OPS.JOB_LEASE, so two pollers never both refresh)."""
+    of CORE.JOB_LEASE, so two pollers never both refresh)."""
     from services.ops import lease
 
     job = f"deps:{env_id}"
     lease.ensure(db, job)
-    got = db.execute_count("""UPDATE OPS.JOB_LEASE SET LAST_RUN_AT = CURRENT_TIMESTAMP()
+    got = db.execute_count("""UPDATE CORE.JOB_LEASE SET LAST_RUN_AT = CURRENT_TIMESTAMP()
                                WHERE JOB_NAME = %s AND (LAST_RUN_AT IS NULL
                                      OR LAST_RUN_AT < DATEADD(minute, %s, CURRENT_TIMESTAMP()))""", (job, -abs(int(minutes))))
     if got < 1:
         return False, 0
-    found = db.query("SELECT CURSOR_VALUE FROM OPS.JOB_LEASE WHERE JOB_NAME = %s", (job,))
+    found = db.query("SELECT CURSOR_VALUE FROM CORE.JOB_LEASE WHERE JOB_NAME = %s", (job,))
     try:
         offset = int((found[0].get("cursor_value") if found else 0) or 0)
     except (TypeError, ValueError):
@@ -246,7 +246,7 @@ def _latest_task_runs(db: Any, env_id: str, pairs: List[Tuple[str, str]]) -> Dic
     if not pairs:
         return {}
     found = db.query("""
-        SELECT T.DAG_ID, T.TASK_ID, T.RUN_ID, T.MAP_INDEX FROM OPS.TASK_RUN T
+        SELECT T.DAG_ID, T.TASK_ID, T.RUN_ID, T.MAP_INDEX FROM CORE.TASK_RUN T
           JOIN TABLE(FLATTEN(INPUT => PARSE_JSON(%s))) F ON T.DAG_ID = F.VALUE[0]::VARCHAR AND T.TASK_ID = F.VALUE[1]::VARCHAR
          WHERE T.ENV_ID = %s
         QUALIFY ROW_NUMBER() OVER (PARTITION BY T.DAG_ID, T.TASK_ID ORDER BY COALESCE(T.STARTED_AT, T.UPDATED_AT) DESC NULLS LAST) = 1""",
@@ -259,12 +259,12 @@ def dag_models(db: Any, env_id: str) -> Tuple[Dict[str, Set[str]], List[str]]:
     the last 14 days, plus dbt commands in the DAG file as indexed."""
     from services.ops import code_map
 
-    dags = db.query("""SELECT DAG_ID, FILELOC, REPO_ID, REPO_PATH FROM OPS.DAG
+    dags = db.query("""SELECT DAG_ID, FILELOC, REPO_ID, REPO_PATH FROM CORE.DAG
                         WHERE ENV_ID = %s AND REPO_ID IS NOT NULL AND COALESCE(IS_ACTIVE, TRUE)""", (env_id,))
     if not dags:
         return {}, []
     out: Dict[str, Set[str]] = {d["dag_id"]: set() for d in dags}
-    tasks = db.query("""SELECT DISTINCT DAG_ID, TASK_ID, OPERATOR FROM OPS.TASK_RUN
+    tasks = db.query("""SELECT DISTINCT DAG_ID, TASK_ID, OPERATOR FROM CORE.TASK_RUN
                          WHERE ENV_ID = %s AND ARRAY_CONTAINS(DAG_ID::VARIANT, PARSE_JSON(%s))
                            AND COALESCE(STARTED_AT, UPDATED_AT) >= DATEADD(day, -14, CURRENT_TIMESTAMP())
                          LIMIT 20000""", (env_id, json.dumps(sorted(out))))
@@ -277,7 +277,7 @@ def dag_models(db: Any, env_id: str) -> Tuple[Dict[str, Set[str]], List[str]]:
         path = code_map.candidate_repo_path(d.get("fileloc"), d.get("repo_path"))
         if not path:
             continue
-        chunks = db.query("SELECT TEXT FROM CODE.CODE_CHUNK WHERE REPO_ID = %s AND PATH = %s ORDER BY START_LINE LIMIT 200",
+        chunks = db.query("SELECT TEXT FROM CORE.CODE_CHUNK WHERE REPO_ID = %s AND PATH = %s ORDER BY START_LINE LIMIT 200",
                           (d["repo_id"], path))
         source = "\n".join(str(c.get("text") or "") for c in chunks)
         for selector in code_map.source_task_models(source):
@@ -302,7 +302,7 @@ def refresh(db: Any, mw: Any, env_id: str, offset: int = 0) -> Dict[str, Any]:
     except Exception as exc:
         problems.append(f"datasets: {type(exc).__name__}")
 
-    dag_ids = [r["dag_id"] for r in db.query("""SELECT DAG_ID FROM OPS.DAG WHERE ENV_ID = %s AND COALESCE(IS_ACTIVE, TRUE)
+    dag_ids = [r["dag_id"] for r in db.query("""SELECT DAG_ID FROM CORE.DAG WHERE ENV_ID = %s AND COALESCE(IS_ACTIVE, TRUE)
                                                  ORDER BY DAG_ID""", (env_id,))]
     if offset >= len(dag_ids):
         offset = 0
@@ -345,7 +345,7 @@ def refresh(db: Any, mw: Any, env_id: str, offset: int = 0) -> Dict[str, Any]:
     if started:
         prune(db, env_id, complete, before=started)
     prune(db, env_id, ["SENSOR", "MARKER", "TRIGGER"], days=STALE_TASK_DAYS)
-    db.execute("UPDATE OPS.JOB_LEASE SET CURSOR_VALUE = %s WHERE JOB_NAME = %s", (str(next_offset), f"deps:{env_id}"))
+    db.execute("UPDATE CORE.JOB_LEASE SET CURSOR_VALUE = %s WHERE JOB_NAME = %s", (str(next_offset), f"deps:{env_id}"))
     counts: Dict[str, int] = {}
     for e in merged:
         counts[e["kind"]] = counts.get(e["kind"], 0) + 1

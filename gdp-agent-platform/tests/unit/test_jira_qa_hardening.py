@@ -199,7 +199,7 @@ class SignoffDb:
     def query(self, sql, params=()):
         if "FROM CORE.WORKFLOW_RUN" in sql:
             return [{"current_state": "VALIDATION_PASSED"}]
-        if "FROM CONTRACT.STTM_REGISTRY" in sql and "QA_SIGNOFF" not in sql:
+        if "FROM CORE.STTM_REGISTRY" in sql and "QA_SIGNOFF" not in sql:
             return [{"sttm_id": self.sttm}]
         return []
 
@@ -231,7 +231,7 @@ def test_approval_on_the_current_sttm_keeps_the_override_rules(monkeypatch):
     assert err.value.status_code == 409 and "failing critical or high" in err.value.detail
     _, db = _signoff(monkeypatch, {"sttm_id": "s2"}, failing, override=True, note="known issue, ticket QA-12 open")
     (sql, params), = db.executed
-    assert "INSERT INTO CONTRACT.QA_SIGNOFF" in sql and params[2] == "s2" and params[4].startswith("[override: 1")
+    assert "INSERT INTO CORE.QA_SIGNOFF" in sql and params[2] == "s2" and params[4].startswith("[override: 1")
     _, db = _signoff(monkeypatch, {"sttm_id": "s2"}, [{"outcome": "PASS", "severity": "HIGH"}])
     assert db.executed[0][1][3] == "APPROVED"
 
@@ -256,11 +256,11 @@ def test_run_path_without_profile_rows_is_conservative():
 
 
 def test_run_path_with_an_unreadable_profile_is_conservative():
-    session = qs.Session(qs._handlers(extra=[("FROM PROFILE.PROFILE_REGISTRY", RuntimeError("insufficient privileges"))]))
+    session = qs.Session(qs._handlers(extra=[("FROM CORE.PROFILE_REGISTRY", RuntimeError("insufficient privileges"))]))
     assert qa_run.run_pii(session, _run_ctx(session))[1] == "conservative"
     # the table path too: a profile it cannot read is never replaced by curation
     curated = [dict(c, IS_PII=c["COLUMN_NAME"] == "SEGMENT") for c in qs.COLUMNS]
-    table = qs.Session(qs._handlers(columns=curated, extra=[("FROM PROFILE.PROFILE_REGISTRY", RuntimeError("denied"))]))
+    table = qs.Session(qs._handlers(columns=curated, extra=[("FROM CORE.PROFILE_REGISTRY", RuntimeError("denied"))]))
     assert qs.table_context(table, "t1")["pii_basis"] == "conservative"
 
 
@@ -389,9 +389,9 @@ def test_web_comment_draft_has_no_detail():
 
 def test_qa_and_jira_procedures_are_granted_consistently():
     sql = "\n".join((ROOT / "snowflake" / "procedures" / name).read_text(encoding="utf-8") for name in ("pipeline.sql", "jira.sql"))
-    procs = set(re.findall(r"PROCEDURE \{\{database\}\}\.((?:CONTRACT\.QA_\w+|JIRA\.\w+)\([^)]*\))", sql))
+    procs = set(re.findall(r"PROCEDURE \{\{database\}\}\.(\{\{schema\}\}\.(?:QA_\w+|TRIAGE_\w+|RESOLVE_TARGETS)\([^)]*\))", sql))
     signatures = {re.sub(r"\(.*\)", "", p) + "(" + ", ".join("VARCHAR" for _ in re.findall(r"VARCHAR", p)) + ")" for p in procs}
-    assert "CONTRACT.QA_SAVE(VARCHAR, VARCHAR)" in signatures and "JIRA.TRIAGE_TABLE(VARCHAR, VARCHAR)" in signatures
+    assert "{{schema}}.QA_SAVE(VARCHAR, VARCHAR)" in signatures and "{{schema}}.TRIAGE_TABLE(VARCHAR, VARCHAR)" in signatures
     for sig in signatures:
         for role in ("DATA_ENGINEER", "REVIEWER", "QA_ENGINEER"):
             grant = f"GRANT USAGE ON PROCEDURE {{{{database}}}}.{sig} TO DATABASE ROLE {{{{database}}}}.{role};"
@@ -401,10 +401,10 @@ def test_qa_and_jira_procedures_are_granted_consistently():
 # ---------------------------------------------------------------- 8. V033: own rows only
 
 def test_v033_limits_token_and_state_rows_to_their_user():
-    text = (ROOT / "snowflake" / "database" / "migrations" / "V033__jira_row_access.sql").read_text(encoding="utf-8")
+    text = (ROOT / "snowflake" / "database" / "migrations" / "archive" / "V033__jira_row_access.sql").read_text(encoding="utf-8")
     assert "ROW_USER = CURRENT_USER()" in text
     for table in ("USER_TOKEN", "OAUTH_STATE"):
-        assert f"ALTER TABLE {{{{database}}}}.JIRA.{table} ADD ROW ACCESS POLICY {{{{database}}}}.JIRA.OWN_ROWS ON (USER_NAME);" in text
+        assert f"ALTER TABLE {{{{database}}}}.JIRA.{table} ADD ROW ACCESS POLICY {{{{database}}}}.JIRA.OWN_ROWS ON (USER_NAME);" in text  # names before V061
     assert chr(0x2014) not in text and chr(0x2013) not in text   # no em or en dashes
 
 
@@ -462,7 +462,7 @@ def test_a_second_401_asks_to_reconnect(monkeypatch):
 
 def test_a_second_request_while_a_bug_is_being_created_gets_409(api_bug):
     module, client = api_bug(Jira=ji.Jira(search_page=lambda *a: {"issues": [], "next": None}))
-    db = ji.bug_db(**{"FROM JIRA.ACTION_LOG WHERE ISSUE_KEY = %s AND ACTION = 'BUG_CLAIM'": [{"status": "PENDING", "detail": "{}"}]})
+    db = ji.bug_db(**{"FROM CORE.ACTION_LOG WHERE ISSUE_KEY = %s AND ACTION = 'BUG_CLAIM'": [{"status": "PENDING", "detail": "{}"}]})
     db.count = lambda sql, params: 0 if "BUG_CLAIM" in sql else 1
     with pytest.raises(HTTPException) as err:
         ji.bug(module, db)
@@ -472,7 +472,7 @@ def test_a_second_request_while_a_bug_is_being_created_gets_409(api_bug):
 
 def test_a_loser_after_the_winner_finished_gets_its_key(api_bug):
     module, client = api_bug(Jira=ji.Jira())
-    db = ji.bug_db(**{"FROM JIRA.ACTION_LOG WHERE ISSUE_KEY = %s AND ACTION = 'BUG_CLAIM'":
+    db = ji.bug_db(**{"FROM CORE.ACTION_LOG WHERE ISSUE_KEY = %s AND ACTION = 'BUG_CLAIM'":
                       [{"status": "DONE", "detail": json.dumps({"key": "QA-77"})}]})
     db.count = lambda sql, params: 0 if "BUG_CLAIM" in sql else 1
     out = ji.bug(module, db)
@@ -485,9 +485,9 @@ def test_the_claim_is_taken_before_creating_and_finished_with_the_key(api_bug):
                                           create_issue=lambda *a: {"id": "9", "key": "QA-9"}, remote_link=lambda *a: None))
     db = ji.bug_db()
     assert ji.bug(module, db)["key"] == "QA-9"
-    claims = [(s, p) for s, p in db.executed if "MERGE INTO JIRA.ACTION_LOG" in s]
+    claims = [(s, p) for s, p in db.executed if "MERGE INTO CORE.ACTION_LOG" in s]
     assert len(claims) == 1 and claims[0][1][0] == module.bug_label("t1", "tt1") and "'BUG_CLAIM'" in claims[0][0]
-    finished = [p for s, p in db.executed if "UPDATE JIRA.ACTION_LOG SET STATUS" in s]
+    finished = [p for s, p in db.executed if "UPDATE CORE.ACTION_LOG SET STATUS" in s]
     assert finished and finished[-1][0] == "DONE" and finished[-1][1] == "QA-9"
 
 
@@ -498,7 +498,7 @@ def test_the_claim_is_released_when_creation_fails(api_bug):
     db = ji.bug_db()
     with pytest.raises(HTTPException):
         ji.bug(module, db)
-    finished = [p for s, p in db.executed if "UPDATE JIRA.ACTION_LOG SET STATUS" in s]
+    finished = [p for s, p in db.executed if "UPDATE CORE.ACTION_LOG SET STATUS" in s]
     assert finished and finished[-1][0] == "RELEASED"
 
 
@@ -506,15 +506,15 @@ def test_save_link_is_one_merge_and_reports_an_existing_link():
     importlib.import_module("app.main")
     import app.jira_api as api
 
-    db = ji.Db({"SELECT LINK_ID FROM JIRA.ISSUE_LINK WHERE": [{"link_id": "L-1"}]}, count=0)
+    db = ji.Db({"SELECT LINK_ID FROM CORE.ISSUE_LINK WHERE": [{"link_id": "L-1"}]}, count=0)
     link_id, already = api._save_link(db, "QA-1", tj.CLOUD, {"summary": "s"}, qa_test_id="t1", target_table_id="tt1", origin="BUG")
     assert (link_id, already) == ("L-1", True)
-    merge = next(s for s, _ in db.executed if "MERGE INTO JIRA.ISSUE_LINK" in s)
+    merge = next(s for s, _ in db.executed if "MERGE INTO CORE.ISSUE_LINK" in s)
     assert "WHEN NOT MATCHED THEN INSERT" in merge and "T.TARGET_TABLE_ID" in merge and "T.ORIGIN" in merge
-    assert not db.wrote("INTO JIRA.ACTION_LOG")       # nothing new was linked, nothing logged
+    assert not db.wrote("INTO CORE.ACTION_LOG")       # nothing new was linked, nothing logged
     db = ji.Db(count=1)
     link_id, already = api._save_link(db, "QA-1", tj.CLOUD, {"summary": "s"}, run_id="r1")
-    assert already is False and db.wrote("INTO JIRA.ACTION_LOG")
+    assert already is False and db.wrote("INTO CORE.ACTION_LOG")
 
 
 # ---------------------------------------------------------------- 11. one user's 404 is not a deletion
@@ -587,7 +587,7 @@ def test_bulk_comment_skips_issues_already_commented_under_the_key(api):
     out = module.bulk(body, db=db)["results"]
     assert out == [{"key": "QA-1", "ok": True, "already": True}, {"key": "QA-2", "ok": True}]
     assert [a[0] for n, a in client.calls if n == "add_comment"] == ["QA-2"]
-    logged = [p for s, p in db.executed if "INTO JIRA.ACTION_LOG" in s and "IDEMPOTENCY_KEY" in s]
+    logged = [p for s, p in db.executed if "INTO CORE.ACTION_LOG" in s and "IDEMPOTENCY_KEY" in s]
     assert logged and logged[0][-1] == "bulk-0001"
 
 

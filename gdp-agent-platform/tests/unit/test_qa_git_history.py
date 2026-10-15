@@ -86,7 +86,7 @@ class Cur:
             self.result = [self.newest] if self.newest else []
         elif "SELECT QUERY_NAME, SQL_EXPRESSION" in flat:
             self.result = [(q["query_name"], q["sql_expression"], q["severity"], q["expectation"]) for q in self.current]
-        elif "SELECT COUNT(*) FROM DB.GOVERNANCE.QA_PACK_SYNC" in flat:
+        elif "SELECT COUNT(*) FROM DB.CORE.QA_PACK_SYNC" in flat:
             self.result = [(self.open,)]
         else:
             self.result = []
@@ -120,12 +120,12 @@ def test_seed_records_a_conflict_instead_of_overwriting_app_edits(one_pack):
     cur = Cur(newest=(4, "APPROVED", "UI", "old-sha"), current=[Q1, Q2])
     log = seed.seed_qa_packs(cur, "DB")
     assert "CONFLICT" in log[0]
-    ins = cur.find("INSERT INTO DB.GOVERNANCE.QA_PACK_SYNC")[0][1]
+    ins = cur.find("INSERT INTO DB.CORE.QA_PACK_SYNC")[0][1]
     assert ins[3] == "domain/sales/qa/integrity.sql" and ins[4] == sha and ins[6] == 4 and ins[7] == "old-sha"
-    assert not cur.find("INSERT INTO DB.GOVERNANCE.DOMAIN_QA_PACKS")
+    assert not cur.find("INSERT INTO DB.CORE.DOMAIN_QA_PACKS")
     again = Cur(newest=(4, "APPROVED", "UI", "old-sha"), current=[Q1, Q2], open_conflicts=1)
     seed.seed_qa_packs(again, "DB")
-    assert not again.find("INSERT INTO DB.GOVERNANCE.QA_PACK_SYNC")  # the same conflict is recorded once
+    assert not again.find("INSERT INTO DB.CORE.QA_PACK_SYNC")  # the same conflict is recorded once
 
 
 def test_seed_does_not_flag_app_edits_made_before_tracking(one_pack):
@@ -139,7 +139,7 @@ def test_seed_does_not_flag_app_edits_made_before_tracking(one_pack):
 
     cur = Legacy(newest=(4, "APPROVED", "UI", None), current=[Q1, Q2])
     log = seed.seed_qa_packs(cur, "DB")
-    assert "kept" in log[0] and not cur.find("INSERT INTO DB.GOVERNANCE.QA_PACK_SYNC")
+    assert "kept" in log[0] and not cur.find("INSERT INTO DB.CORE.QA_PACK_SYNC")
     assert cur.find("SET REPO_SHA = %s, REPO_PATH = %s")[0][1][:2] == (sha, "domain/sales/qa/integrity.sql")
 
 
@@ -158,7 +158,7 @@ def test_seed_updates_a_repo_owned_pack_with_its_file_hash(one_pack):
     cur = Cur(newest=(2, "APPROVED", "REPO", "old"), current=[Q2])
     log = seed.seed_qa_packs(cur, "DB")
     assert "version 3" in log[0]
-    ins = cur.find("INSERT INTO DB.GOVERNANCE.DOMAIN_QA_PACKS")[0]
+    ins = cur.find("INSERT INTO DB.CORE.DOMAIN_QA_PACKS")[0]
     assert "REPO_SHA, REPO_PATH" in ins[0] and ins[1][-2:] == (sha, "domain/sales/qa/integrity.sql")
 
 
@@ -188,15 +188,15 @@ def test_take_repo_and_keep_app(monkeypatch):
     saved = {}
     monkeypatch.setattr(packs, "get_pack", lambda s, pid, v=None: {"pack": {"version": 4, "status": "APPROVED", "name": "Integrity"}, "queries": [Q1, Q2]})
     monkeypatch.setattr(packs, "save_draft", lambda s, pid, payload: saved.update(json.loads(payload)) or {"version": 5, "diff": {}})
-    s = Session({"FROM GOVERNANCE.QA_PACK_SYNC WHERE SYNC_ID = ?": [row]})
+    s = Session({"FROM CORE.QA_PACK_SYNC WHERE SYNC_ID = ?": [row]})
     out = pack_git.take_repo(s, "p1", "s1", "ana")
     assert out["draft_version"] == 5 and saved["repo_sha"] == "sha2" and saved["base_version"] == 4
     assert [q["query_name"] for q in saved["queries"]] == ["orphans"]
     assert s.find("RESOLUTION = 'TAKE_REPO'")[0][1][:2] == [5, "ANA"]
-    k = Session({"FROM GOVERNANCE.QA_PACK_SYNC WHERE SYNC_ID = ?": [row]})
+    k = Session({"FROM CORE.QA_PACK_SYNC WHERE SYNC_ID = ?": [row]})
     assert pack_git.keep_app(k, "p1", "s1", "lee")["resolution"] == "KEEP_APP"
-    assert k.find("UPDATE GOVERNANCE.DOMAIN_QA_PACKS SET REPO_SHA = ?")[0][1][0] == "sha2"
-    done = Session({"FROM GOVERNANCE.QA_PACK_SYNC WHERE SYNC_ID = ?": [{**row, "STATUS": "RESOLVED"}]})
+    assert k.find("UPDATE CORE.DOMAIN_QA_PACKS SET REPO_SHA = ?")[0][1][0] == "sha2"
+    done = Session({"FROM CORE.QA_PACK_SYNC WHERE SYNC_ID = ?": [{**row, "STATUS": "RESOLVED"}]})
     with pytest.raises(AssertionError, match="already resolved"):
         pack_git.keep_app(done, "p1", "s1", "lee")
 
@@ -205,7 +205,7 @@ def test_conflict_view_parses_the_repository_version(monkeypatch):
     row = {"SYNC_ID": "s1", "PACK_ID": "p1", "REPO_CONTENT": "-- @pack Integrity\n\n-- @query orphans\nSELECT 1 FROM T WHERE X IS NULL\n",
            "REPO_SHA": "x", "STATUS": "OPEN", "DETECTED_AT": None, "RESOLVED_AT": None}
     monkeypatch.setattr(packs, "get_pack", lambda s, pid, v=None: {"pack": {"version": 4, "status": "APPROVED"}, "queries": [Q1, Q2]})
-    out = pack_git.conflict(Session({"FROM GOVERNANCE.QA_PACK_SYNC WHERE PACK_ID = ?": [row]}), "p1")
+    out = pack_git.conflict(Session({"FROM CORE.QA_PACK_SYNC WHERE PACK_ID = ?": [row]}), "p1")
     assert out["diff"]["removed"] == ["dups"] and "repo_content" not in out["sync"]
     assert pack_git.conflict(Session(), "p1") is None
 
@@ -222,14 +222,14 @@ def test_publish_qa_pack_renders_the_file(monkeypatch):
     monkeypatch.setattr(packs, "get_pack", lambda s, pid, v=None: {
         "pack": {"version": 3, "status": "APPROVED", "name": "Integrity", "domain_id": "d1", "description": "", "tags": [], "repo_path": None},
         "queries": [{**Q1, "description": None, "tags": []}]})
-    s = Session({"FROM KNOWLEDGE.DOMAIN_REGISTRY": [{"DOMAIN_NAME": "SALES"}],
-                 "FROM CODE.REPO WHERE REPO_ID": [{"GIT_URL": "https://github.com/a/b", "BRANCH": "main", "PROVIDER": "GITHUB"}]})
+    s = Session({"FROM CORE.DOMAIN_REGISTRY": [{"DOMAIN_NAME": "SALES"}],
+                 "FROM CORE.REPO WHERE REPO_ID": [{"GIT_URL": "https://github.com/a/b", "BRANCH": "main", "PROVIDER": "GITHUB"}]})
     out = publish.publish_dbt_pr(s, "", json.dumps({"qa_pack": {"pack_id": "p1", "version": 3, "repo_id": "r1", "head": "feature/qa-integrity-v3"}}))
     assert out["path"] == "domain/sales/qa/integrity.sql" and "-- @query orphans" in seen["files"]["domain/sales/qa/integrity.sql"]
-    upd = s.find("UPDATE GOVERNANCE.DOMAIN_QA_PACKS SET REPO_ID = ?")[0][1]
+    upd = s.find("UPDATE CORE.DOMAIN_QA_PACKS SET REPO_ID = ?")[0][1]
     assert upd[4] == "OPEN" and upd[6] == "domain/sales/qa/integrity.sql"
     monkeypatch.setattr(github, "pull_status", lambda req, origin, n: {"state": "MERGED", "merge_commit_sha": "m"})
-    sync = Session({"FROM GOVERNANCE.DOMAIN_QA_PACKS P JOIN CODE.REPO": [{"PACK_ID": "p1", "VERSION": 3, "PR_NUMBER": 9, "GIT_URL": "https://github.com/a/b"}]})
+    sync = Session({"FROM CORE.DOMAIN_QA_PACKS P JOIN CORE.REPO": [{"PACK_ID": "p1", "VERSION": 3, "PR_NUMBER": 9, "GIT_URL": "https://github.com/a/b"}]})
     assert publish.sync_qa_prs(sync, {})["merged"] == [{"pack_id": "p1", "version": 3}]
     assert "source_control" in publish.sync_git_prs(Session(), {})
 
@@ -245,7 +245,7 @@ def test_record_and_history_with_sql_diff():
           "EXPECTED": "0 rows", "SEVERITY": "HIGH", "SUITE_ID": "s", "IS_DELETED": False, "CHANGED_BY": "ANA", "CHANGED_AT": None},
          {"VERSION": 2, "CHANGE": "EDITED", "TITLE": "Orphan keys", "OBJECTIVE": None, "SQL_TEXT": "SELECT 1\nFROM T\nWHERE X IS NULL;",
           "EXPECTED": "0 rows", "SEVERITY": "CRITICAL", "SUITE_ID": "s", "IS_DELETED": False, "CHANGED_BY": "BEN", "CHANGED_AT": None}]
-    out = test_versions.history(Session({"FROM CONTRACT.QA_TEST_VERSION WHERE TEST_ID": v}), "t1")
+    out = test_versions.history(Session({"FROM CORE.QA_TEST_VERSION WHERE TEST_ID": v}), "t1")
     newest = out["versions"][0]
     assert newest["version"] == 2 and set(newest["diff"]["fields"]) == {"title", "sql_text", "severity"}
     assert any(line.startswith("+WHERE X IS NULL") for line in newest["diff"]["sql_diff"])
@@ -264,8 +264,8 @@ def test_restore_goes_through_the_update_path(monkeypatch):
     monkeypatch.setattr(procedures, "update_table_test", lambda s, tid, payload, change="EDITED": called.update(
         tid=tid, payload=json.loads(payload), change=change) or {"note": None})
     old = {"TITLE": "Orphans", "OBJECTIVE": None, "SQL_TEXT": "SELECT 1 FROM T;", "EXPECTED": "0 rows", "SEVERITY": "HIGH", "SUITE_ID": "s1"}
-    s = Session({"FROM CONTRACT.QA_TEST_VERSION WHERE TEST_ID = ? AND VERSION = ?": [old],
-                 "SELECT RUN_ID, SCOPE, IS_DELETED FROM CONTRACT.QA_TEST_CASE": [{"RUN_ID": None, "SCOPE": "TABLE", "IS_DELETED": True}]})
+    s = Session({"FROM CORE.QA_TEST_VERSION WHERE TEST_ID = ? AND VERSION = ?": [old],
+                 "SELECT RUN_ID, SCOPE, IS_DELETED FROM CORE.QA_TEST_CASE": [{"RUN_ID": None, "SCOPE": "TABLE", "IS_DELETED": True}]})
     out = test_versions.restore(s, "t1", 1)
     assert out["restored"] == 1 and called["change"] == "RESTORED" and called["payload"]["sql"] == "SELECT 1 FROM T"
     assert called["payload"]["suite_id"] == "s1" and s.find("SET IS_DELETED = FALSE")

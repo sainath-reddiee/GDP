@@ -66,14 +66,14 @@ LINES = [_line("CUSTOMER_ID", "CUST_ID"), _line("CONTACT", "CONTACT_INFO"), _lin
 
 def _handlers(sttm=True, profile=None, columns=COLUMNS, tags=(), extra=()):
     return list(extra) + [
-        ("FROM KNOWLEDGE.TARGET_TABLE_REGISTRY WHERE TARGET_TABLE_ID", [REGISTRY]),
-        ("FROM KNOWLEDGE.TARGET_COLUMN_REGISTRY", columns),
-        ("FROM CONTRACT.STTM_REGISTRY", [STTM] if sttm else []),
-        ("FROM CONTRACT.STTM_LINE", LINES),
-        ("FROM SOURCE.LANDING_TABLE_REGISTRY WHERE RUN_ID", [
+        ("FROM CORE.TARGET_TABLE_REGISTRY WHERE TARGET_TABLE_ID", [REGISTRY]),
+        ("FROM CORE.TARGET_COLUMN_REGISTRY", columns),
+        ("FROM CORE.STTM_REGISTRY", [STTM] if sttm else []),
+        ("FROM CORE.STTM_LINE", LINES),
+        ("FROM CORE.LANDING_TABLE_REGISTRY WHERE RUN_ID", [
             {"SOURCE_TABLE": "CUSTOMERS", "LANDING_DATABASE": "DB", "LANDING_SCHEMA": "LANDING",
              "LANDING_TABLE": "CUSTOMERS"}]),
-        ("FROM PROFILE.PROFILE_REGISTRY", profile or []),
+        ("FROM CORE.PROFILE_REGISTRY", profile or []),
         ("FROM CORE.TAG_ASSIGNMENT", [{"TAG": t} for t in tags]),
     ]
 
@@ -101,8 +101,8 @@ def test_table_context_with_sttm_adds_sources_to_allowed():
 
 def test_missing_and_retired_tables():
     with pytest.raises(AssertionError, match="does not exist"):
-        table_context(Session([("FROM KNOWLEDGE.TARGET_TABLE_REGISTRY", [])]), "nope")
-    retired = Session(_handlers(sttm=False, extra=[("FROM KNOWLEDGE.TARGET_TABLE_REGISTRY WHERE TARGET_TABLE_ID",
+        table_context(Session([("FROM CORE.TARGET_TABLE_REGISTRY", [])]), "nope")
+    retired = Session(_handlers(sttm=False, extra=[("FROM CORE.TARGET_TABLE_REGISTRY WHERE TARGET_TABLE_ID",
                                                     [{**REGISTRY, "ACTIVE_FLAG": False}])]))
     assert table_context(retired, "t1")["retired"] is True
     with pytest.raises(AssertionError, match="retired"):
@@ -157,10 +157,10 @@ def test_run_scope_table_path_stores_run_id_null_and_new_columns(monkeypatch):
                     trigger_detail={"issue": "QA-1"})
     assert out["scope"] == "TABLE" and out["run_id"] is None and out["tests"] == 1 and out["suite_id"] == "su1"
     assert calls == [{"test": "tt1", "allowed": ["DB.MART.DIM_CUSTOMER", "DB.MART.HUB_CUSTOMER"], "conservative": True}]
-    (run_sql, run_params), = session.inserts("QUALITY.QA_RUN")
+    (run_sql, run_params), = session.inserts("CORE.QA_RUN")
     assert "SCOPE" in run_sql and "TRIGGER_DETAIL" in run_sql
     assert run_params[1] == "" and run_params[-5:] == ["d1", "t1", "su1", "TABLE", json.dumps({"issue": "QA-1"})]
-    (res_sql, res_params), = session.inserts("QUALITY.QA_RESULT")
+    (res_sql, res_params), = session.inserts("CORE.QA_RESULT")
     assert "TARGET_TABLE_ID, SUITE_ID" in res_sql and res_params[2] == "" and res_params[-2:] == ["t1", "su1"]
 
 
@@ -169,7 +169,7 @@ def test_run_scope_by_suite_alone_finds_its_table(monkeypatch):
     monkeypatch.setattr(qa_run, "execute", _fake_execute(calls))
     monkeypatch.setattr(qa_run, "_target_built", lambda session, fqn: True)
     session = Session(_handlers(sttm=False, extra=[
-        ("FROM CONTRACT.QA_TEST_SUITE", [{"SUITE_ID": "su1", "TARGET_TABLE_ID": "t1", "IS_DEFAULT": False}]),
+        ("FROM CORE.QA_TEST_SUITE", [{"SUITE_ID": "su1", "TARGET_TABLE_ID": "t1", "IS_DEFAULT": False}]),
         ("WHERE SCOPE = 'TABLE' AND TARGET_TABLE_ID", [SAVED_TABLE])]))
     out = run_scope(session, suite_id="su1")
     assert out["target_table_id"] == "t1" and out["suite_id"] == "su1" and [c["test"] for c in calls] == ["tt1"]
@@ -192,7 +192,7 @@ def test_run_path_includes_the_targets_table_tests(monkeypatch):
     out = run_tests(session, "r1", ["tt1"], "UI")
     assert out["scope"] == "RUN" and out["run_id"] == "r1" and out["target_table_id"] == "t1"
     assert [c["test"] for c in calls] == ["tt1"] and calls[0]["conservative"] is False
-    (_, res_params), = session.inserts("QUALITY.QA_RESULT")
+    (_, res_params), = session.inserts("CORE.QA_RESULT")
     assert res_params[2] == "r1" and res_params[3] == "tt1" and res_params[-2:] == ["t1", "su1"]
 
 
@@ -208,7 +208,7 @@ def test_latest_excludes_deleted_table_tests():
 
     def query(sql, params):
         calls.append((sql, params))
-        if "FROM QUALITY.QA_RUN WHERE" in sql:
+        if "FROM CORE.QA_RUN WHERE" in sql:
             return [{"qa_run_id": "q1", "sttm_id": "s1"}]
         return []
 

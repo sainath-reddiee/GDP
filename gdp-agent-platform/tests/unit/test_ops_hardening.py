@@ -128,7 +128,7 @@ def test_no_bound_key_left_in_any_sql():
 def test_push_secret_write_binds_only_ciphertext(monkeypatch):
     ops_api, _, _ = _modules()
     monkeypatch.setenv("AIP_SECRET_KEY", KEY)
-    db = CaptureDb({"FROM OPS.AIRFLOW_ENV WHERE ENV_ID": [{"env_id": "prod", "name": "Prod", "mwaa_env": "m", "region": "us-east-1"}]})
+    db = CaptureDb({"FROM CORE.AIRFLOW_ENV WHERE ENV_ID": [{"env_id": "prod", "name": "Prod", "mwaa_env": "m", "region": "us-east-1"}]})
     out = ops_api.rotate_push_secret("prod", db=db, x_aip_replay=None)
     assert_no_secret_in_sql(db, KEY, out["secret"])
     sql, params = next((s, p) for s, p in db.sent if "SET PUSH_SECRET" in s)
@@ -155,7 +155,7 @@ def test_jira_tokens_are_sealed_and_legacy_rows_ask_to_reconnect(monkeypatch):
     jira_api._store_refresh(db, "ANA", CLOUD, "refresh-SECRET-1", access_token="access-SECRET-2", expires_in=600,
                             site_url="https://team.atlassian.net")
     assert_no_secret_in_sql(db, KEY, "refresh-SECRET-1", "access-SECRET-2")
-    merged = next(p for s, p in db.sent if "MERGE INTO JIRA.USER_TOKEN" in s)
+    merged = next(p for s, p in db.sent if "MERGE INTO CORE.USER_TOKEN" in s)
     sealed_refresh = [p for p in merged if isinstance(p, bytes)]
     assert len(sealed_refresh) == 2 and jira_api._open_token(sealed_refresh[0], "refresh", "ANA", CLOUD) == "refresh-SECRET-1"
     access = next(p for s, p in db.sent if "SET ACCESS_TOKEN = %s" in s)[0]
@@ -268,7 +268,7 @@ def test_old_airflow_marks_runs_it_no_longer_has_removed():
     stale_sql = next(s for s, _ in db.sent if "STATE IN ('running'" in s and "SELECT DAG_ID, RUN_ID" in s)
     assert "ORDER BY LOADED_AT" in stale_sql            # the least recently loaded first, so the re-read rotates
     removed = [(s, p) for s, p in db.sent if "SET STATE = 'removed'" in s]
-    assert {("OPS.DAG_RUN" in s, "OPS.TASK_RUN" in s) for s, _ in removed} == {(True, False), (False, True)}
+    assert {("CORE.DAG_RUN" in s, "CORE.TASK_RUN" in s) for s, _ in removed} == {(True, False), (False, True)}
     assert all(json.loads(p[0]) == [["d", "gone-run"]] and p[1] == "prod" for _, p in removed)
     assert all("STATE IN ('running'" in s for s, _ in removed)   # only rows still active
 
@@ -326,7 +326,7 @@ def test_closed_linked_bug_is_skipped_and_a_new_one_created(bug_api):
     db = ji.bug_db(**{"ORIGIN = 'BUG'": [{"issue_key": "QA-5"}]})
     out = ji.bug(module, db)
     assert out["key"] == "QA-90" and out["created"] is True
-    status = db.wrote("UPDATE JIRA.ISSUE_LINK SET STATUS = %s, STATUS_CATEGORY")
+    status = db.wrote("UPDATE CORE.ISSUE_LINK SET STATUS = %s, STATUS_CATEGORY")
     assert status and status[0] == ("Done", "done", "QA-5")      # the stale link learns it is closed
 
 
@@ -482,7 +482,7 @@ def test_pushed_event_is_stored_redacted(monkeypatch):
     stamp, event_id = str(int(time.time())), "evt-redact-0001"
     db = CaptureDb()
     ops_api.ingest_event(db, "prod", stamp, event_id, signing.sign(secret, stamp, event_id, raw), raw)
-    stored = next(p for s, p in db.sent if "INTO OPS.EVENT" in s)[4]
+    stored = next(p for s, p in db.sent if "INTO CORE.EVENT" in s)[4]
     for leaked in ("hunter2", "ana@example.com", "wJalrXUtnFEMI", "ghp_abcdefghij"):
         assert leaked not in stored
     assert len(json.loads(stored)["error"]) <= 4000
@@ -693,7 +693,7 @@ def test_sql_store_insert_is_a_merge_and_writes_share_a_transaction():
     store = inc.SqlStore(db)
     assert store.insert({"incident_id": "i-1", "fingerprint": "f", "first_seen": "2026-10-10T10:00:00+00:00"}) == 0
     sql, params = db.sent[-1]
-    assert sql.startswith("MERGE INTO OPS.INCIDENT T USING (SELECT %s AS INCIDENT_ID)") and params[:2] == ("i-1", "i-1")
+    assert sql.startswith("MERGE INTO CORE.INCIDENT T USING (SELECT %s AS INCIDENT_ID)") and params[:2] == ("i-1", "i-1")
     with store.atomic():
         db.execute("UPDATE X")
     assert [s for s, _ in db.sent[-3:]] == ["BEGIN", "UPDATE X", "COMMIT"]

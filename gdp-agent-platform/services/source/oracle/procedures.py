@@ -7,7 +7,7 @@
                        the password comes from the environment variable named in the source (`password_env`).
 
 Either way the session uploads Parquet to the source's stage, lands with INFER_SCHEMA + COPY (or MERGE), verifies
-the landed row count, stores profiles in @METADATA.PROFILES_STAGE and records loads on the source, so the rest of the
+the landed row count, stores profiles in @CORE.PROFILES_STAGE and records loads on the source, so the rest of the
 platform sees one behaviour. Scheduled loads are Snowflake tasks calling the same procedure.
 """
 
@@ -151,7 +151,7 @@ def procedure_entry(session, source_id: str, action: str, payload_json: str) -> 
 
 def source(session, source_id: str) -> Dict[str, Any]:
     found = rows(session, "SELECT SOURCE_SYSTEM_ID, SOURCE_SYSTEM_NAME, CONNECTION_TYPE, CONFIGURATION_JSON "
-                          "FROM SOURCE.SOURCE_REGISTRY WHERE SOURCE_SYSTEM_ID = ? AND ACTIVE_FLAG", [source_id])
+                          "FROM CORE.SOURCE_REGISTRY WHERE SOURCE_SYSTEM_ID = ? AND ACTIVE_FLAG", [source_id])
     assert found, f"source {source_id} not found"
     assert found[0]["CONNECTION_TYPE"] == "oracle", f"{found[0]['SOURCE_SYSTEM_NAME']} is not an Oracle source"
     return {"id": source_id, "name": found[0]["SOURCE_SYSTEM_NAME"], "config": variant(found[0]["CONFIGURATION_JSON"]) or {}}
@@ -180,10 +180,10 @@ def _connect(config: Dict[str, Any], password: str, retry: bool = True):
 def _update_config(session, source_id: str, change: Callable[[Dict[str, Any]], None]) -> Dict[str, Any]:
     """Read the source's latest configuration, apply `change`, write it back: concurrent loads of other tables (or a
     scheduled run) never lose each other's records."""
-    found = rows(session, "SELECT CONFIGURATION_JSON FROM SOURCE.SOURCE_REGISTRY WHERE SOURCE_SYSTEM_ID = ?", [source_id])
+    found = rows(session, "SELECT CONFIGURATION_JSON FROM CORE.SOURCE_REGISTRY WHERE SOURCE_SYSTEM_ID = ?", [source_id])
     cfg = (variant(found[0]["CONFIGURATION_JSON"]) if found else None) or {}
     change(cfg)
-    session.sql("UPDATE SOURCE.SOURCE_REGISTRY SET CONFIGURATION_JSON = PARSE_JSON(?), "
+    session.sql("UPDATE CORE.SOURCE_REGISTRY SET CONFIGURATION_JSON = PARSE_JSON(?), "
                 "UPDATED_AT = CURRENT_TIMESTAMP() WHERE SOURCE_SYSTEM_ID = ?",
                 params=[json.dumps(cfg, default=str), source_id]).collect()
     return cfg

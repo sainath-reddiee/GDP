@@ -1,7 +1,7 @@
 -- One supervisor agent. Tools recommend and call stage procedures; they never approve reviews
 -- and never change production. Custom tools are generic procedures with VARCHAR/NUMBER only.
 
-CREATE OR REPLACE AGENT {{database}}.CORE.DATA_ENGINEERING_SUPERVISOR
+CREATE OR REPLACE AGENT {{database}}.{{schema}}.DATA_ENGINEERING_SUPERVISOR
   COMMENT = 'Phase 1 supervisor: recommend, call tools, never approve or promote to production'
   PROFILE = '{"display_name": "Data Engineering Supervisor"}'
   FROM SPECIFICATION
@@ -122,67 +122,67 @@ tools:
         required: [RUN_ID]
 tool_resources:
   search_domain_knowledge:
-    search_service: "{{database}}.KNOWLEDGE.KNOWLEDGE_SEARCH"
+    search_service: "{{database}}.{{schema}}.KNOWLEDGE_SEARCH"
     max_results: "8"
     title_column: "TITLE"
     id_column: "KNOWLEDGE_ID"
   get_workflow_state:
     type: procedure
-    identifier: "{{database}}.CORE.GET_WORKFLOW_STATE"
+    identifier: "{{database}}.{{schema}}.GET_WORKFLOW_STATE"
     execution_environment:
       type: warehouse
       warehouse: "{{warehouse}}"
   load_skill:
     type: procedure
-    identifier: "{{database}}.KNOWLEDGE.LOAD_SKILL"
+    identifier: "{{database}}.{{schema}}.LOAD_SKILL"
     execution_environment:
       type: warehouse
       warehouse: "{{warehouse}}"
   run_profiling:
     type: procedure
-    identifier: "{{database}}.PROFILE.RUN_PROFILING"
+    identifier: "{{database}}.{{schema}}.RUN_PROFILING"
     execution_environment:
       type: warehouse
       warehouse: "{{warehouse}}"
   identify_domain:
     type: procedure
-    identifier: "{{database}}.KNOWLEDGE.IDENTIFY_DOMAIN"
+    identifier: "{{database}}.{{schema}}.IDENTIFY_DOMAIN"
     execution_environment:
       type: warehouse
       warehouse: "{{warehouse}}"
   generate_mapping_candidates:
     type: procedure
-    identifier: "{{database}}.MAPPING.GENERATE_MAPPING_CANDIDATES"
+    identifier: "{{database}}.{{schema}}.GENERATE_MAPPING_CANDIDATES"
     execution_environment:
       type: warehouse
       warehouse: "{{warehouse}}"
   generate_sttm:
     type: procedure
-    identifier: "{{database}}.CONTRACT.GENERATE_STTM"
+    identifier: "{{database}}.{{schema}}.GENERATE_STTM"
     execution_environment:
       type: warehouse
       warehouse: "{{warehouse}}"
   generate_soda:
     type: procedure
-    identifier: "{{database}}.CONTRACT.GENERATE_SODA"
+    identifier: "{{database}}.{{schema}}.GENERATE_SODA"
     execution_environment:
       type: warehouse
       warehouse: "{{warehouse}}"
   generate_dbt:
     type: procedure
-    identifier: "{{database}}.CODEGEN.GENERATE_DBT"
+    identifier: "{{database}}.{{schema}}.GENERATE_DBT"
     execution_environment:
       type: warehouse
       warehouse: "{{warehouse}}"
   validate_dbt:
     type: procedure
-    identifier: "{{database}}.CODEGEN.VALIDATE_DBT"
+    identifier: "{{database}}.{{schema}}.VALIDATE_DBT"
     execution_environment:
       type: warehouse
       warehouse: "{{warehouse}}"
   $$;
 
-GRANT READ ON STAGE {{database}}.KNOWLEDGE.SKILL_STAGE TO DATABASE ROLE {{database}}.SERVICE_AGENT;
-GRANT READ ON STAGE {{database}}.KNOWLEDGE.SKILL_STAGE TO DATABASE ROLE {{database}}.DATA_ENGINEER;
-GRANT USAGE ON AGENT {{database}}.CORE.DATA_ENGINEERING_SUPERVISOR TO DATABASE ROLE {{database}}.SERVICE_AGENT;
-GRANT USAGE ON AGENT {{database}}.CORE.DATA_ENGINEERING_SUPERVISOR TO DATABASE ROLE {{database}}.DATA_ENGINEER;
+GRANT READ ON STAGE {{database}}.{{schema}}.SKILL_STAGE TO DATABASE ROLE {{database}}.SERVICE_AGENT;
+GRANT READ ON STAGE {{database}}.{{schema}}.SKILL_STAGE TO DATABASE ROLE {{database}}.DATA_ENGINEER;
+GRANT USAGE ON AGENT {{database}}.{{schema}}.DATA_ENGINEERING_SUPERVISOR TO DATABASE ROLE {{database}}.SERVICE_AGENT;
+GRANT USAGE ON AGENT {{database}}.{{schema}}.DATA_ENGINEERING_SUPERVISOR TO DATABASE ROLE {{database}}.DATA_ENGINEER;

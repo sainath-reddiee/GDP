@@ -1,6 +1,6 @@
 """Dataset-aware checks for a target model, derived from the staged profiles of the source columns it is built from.
 
-Each check uses the neutral shape of CONTRACT.SODA_EXPECTATION_REGISTRY (check_type plus a `definition` with a `kind`)
+Each check uses the neutral shape of CORE.SODA_EXPECTATION_REGISTRY (check_type plus a `definition` with a `kind`)
 and carries the evidence it was derived from, so a reviewer sees why a threshold was chosen. Rules:
 
 - Evidence only flows through a mapping that preserves values: DIRECT lines carry every rule; trivially wrapped

@@ -89,7 +89,7 @@ def test_type_order_breaks_ties():
 
 def test_relevant_records_usage_only_for_what_it_returns():
     found = [item(f"k{i}", f"t{i}") for i in range(5)] + [item("mine", "Transform EMAIL", {"target_column": "EMAIL"})]
-    session = Session({"FROM KNOWLEDGE.DOMAIN_KNOWLEDGE": found})
+    session = Session({"FROM CORE.DOMAIN_KNOWLEDGE": found})
     picked = select.relevant(session, "d1", ["TRANSFORMATION_RULE"], columns=["EMAIL"], limit=2, run_id="r1",
                              stage="STTM")
     assert picked[0]["KNOWLEDGE_ID"] == "mine"
@@ -190,7 +190,7 @@ def test_mapping_glossary_is_scoped_to_the_target_table():
         {"KNOWLEDGE_ID": "g4", "KNOWLEDGE_TYPE": "GLOSSARY",
          "CONTENT_JSON": json.dumps({"target_column": "NAME", "definition": "domain-wide name"})},
     ]
-    session = Session({"FROM KNOWLEDGE.DOMAIN_KNOWLEDGE": rows})
+    session = Session({"FROM CORE.DOMAIN_KNOWLEDGE": rows})
     known = mp.domain_knowledge(session, "d1", "r1", {"TARGET_TABLE": "CUSTOMER", "TARGET_TABLE_ID": "t1"})
     assert known["glossary"]["STATUS"]["definition"] == "customer status"
     assert known["glossary"]["NAME"]["definition"] == "domain-wide name"

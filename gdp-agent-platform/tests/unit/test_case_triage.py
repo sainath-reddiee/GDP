@@ -324,12 +324,12 @@ NEW = "select distinct id\nfrom {{ ref('stg') }}\n"
 
 def patch_db(read=OLD, provider="GITHUB"):
     db = FakeDb()
-    db.on("FROM CODE.CODE_FILE F JOIN CODE.REPO", [{"repo_id": "repo1", "path": "models/dim.sql", "commit_sha": "abc",
+    db.on("FROM CORE.CODE_FILE F JOIN CORE.REPO", [{"repo_id": "repo1", "path": "models/dim.sql", "commit_sha": "abc",
                                                     "name": "dbt-repo", "git_url": "https://github.com/o/r", "provider": provider,
                                                     "branch": "main", "git_repository": "DB.CODE.REPO_GIT"}])
     if read is not None:
         db.on("SELECT $1 FROM @DB.CODE.REPO_GIT/branches/main/models/dim.sql", [{"$1": read}])
-    db.on("GIT_REPOSITORY, ENABLED FROM CODE.REPO", [{"repo_id": "repo1", "name": "dbt-repo", "git_url": "https://github.com/o/r",
+    db.on("GIT_REPOSITORY, ENABLED FROM CORE.REPO", [{"repo_id": "repo1", "name": "dbt-repo", "git_url": "https://github.com/o/r",
                                             "provider": provider, "branch": "main", "git_repository": "DB.CODE.REPO_GIT",
                                             "enabled": True}])
     return db
@@ -433,7 +433,7 @@ def test_publisher_case_mode_reads_the_accepted_artifact_itself(monkeypatch):
     class Session:
         def sql(self, sql, params=None):
             rows = []
-            if "FROM CASES.CASE_ARTIFACT" in sql:
+            if "FROM CORE.CASE_ARTIFACT" in sql:
                 rows = [{"TYPE": "DBT_PATCH", "STATUS": "PROPOSED", "CONTENT": {"publishable": True, "new_content": "x",
                                                                                 "path": "m.sql", "repo_id": "r"}}]
             return type("R", (), {"collect": lambda self: [type("Row", (), {"as_dict": lambda s, r=r: r})() for r in rows]})()
@@ -678,7 +678,7 @@ def test_worker_picks_new_untriaged_cases_by_severity():
 
 def test_auto_triage_records_attempts_and_failures(monkeypatch):
     db = FakeDb()
-    db.on("FROM CASES.CASE_RECORD C", [{"case_id": "a", "status": "NEW", "severity": "P1", "opened_at": "x"},
+    db.on("FROM CORE.CASE_RECORD C", [{"case_id": "a", "status": "NEW", "severity": "P1", "opened_at": "x"},
                                        {"case_id": "b", "status": "NEW", "severity": "P2", "opened_at": "y"}])
     done = []
 

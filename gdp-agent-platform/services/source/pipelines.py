@@ -1,7 +1,7 @@
 """External (non-Snowflake) sources in the Source Hub: the intake form and its validation (pure).
 
 The platform does not run these pipelines. The Source Hub asks the intake questions, and the answers become one row
-of PLATFORM_CONFIG.INGESTION_PIPELINE_CATALOG (V035), which the ingestion tool (SnapLogic) reads to load the named
+of CORE.INGESTION_PIPELINE_CATALOG (V035), which the ingestion tool (SnapLogic) reads to load the named
 landing table. The questions are data: CORE.PLATFORM_CONFIG key INGESTION_INTAKE_FORM (seeded with DEFAULT_FORM,
 editable in Admin), so a team can ask exactly what its pipelines need without a code change.
 

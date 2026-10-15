@@ -28,7 +28,7 @@ from services.knowledge.writer import DEFAULT_POLICY
 
 router = APIRouter()
 
-FROM = "FROM KNOWLEDGE.DOMAIN_KNOWLEDGE K JOIN KNOWLEDGE.DOMAIN_REGISTRY D ON D.DOMAIN_ID = K.DOMAIN_ID"
+FROM = "FROM CORE.DOMAIN_KNOWLEDGE K JOIN CORE.DOMAIN_REGISTRY D ON D.DOMAIN_ID = K.DOMAIN_ID"
 FEED_COLS = """K.KNOWLEDGE_ID, K.LINEAGE_ID, K.TITLE, K.KNOWLEDGE_TYPE, K.ORIGIN, K.SOURCE_RUN_ID, R.RUN_NAME, K.VERSION,
                K.STATUS, K.IS_CURRENT, K.CREATED_BY, K.CREATED_AT::VARCHAR AS CREATED_AT, D.DOMAIN_NAME, K.CHANGE_NOTE,
                K.SOURCE_REFERENCE, COALESCE(K.LAYER, 'ANY') AS LAYER"""
@@ -54,13 +54,13 @@ def overview(domain_id: Optional[str] = None, db: Db = Depends(current_db)):
             COUNT_IF(K.IS_CURRENT AND K.VERIFIED_AT IS NOT NULL) AS VERIFIED
           {FROM} WHERE TRUE {scope}""", params)[0]
     try:
-        used = db.query(f"""SELECT COUNT(DISTINCT U.LINEAGE_ID) AS USED, COUNT(*) AS USES FROM KNOWLEDGE.KNOWLEDGE_USAGE U
-                              JOIN KNOWLEDGE.DOMAIN_KNOWLEDGE K ON K.KNOWLEDGE_ID = U.KNOWLEDGE_ID
+        used = db.query(f"""SELECT COUNT(DISTINCT U.LINEAGE_ID) AS USED, COUNT(*) AS USES FROM CORE.KNOWLEDGE_USAGE U
+                              JOIN CORE.DOMAIN_KNOWLEDGE K ON K.KNOWLEDGE_ID = U.KNOWLEDGE_ID
                              WHERE U.USED_AT >= DATEADD(DAY, -30, CURRENT_TIMESTAMP()) {scope}""", params)[0]
         top = db.query(f"""SELECT K.KNOWLEDGE_ID, K.TITLE, K.KNOWLEDGE_TYPE, D.DOMAIN_NAME, COUNT(*) AS USES,
                                   COUNT(DISTINCT U.RUN_ID) AS RUNS
-                             FROM KNOWLEDGE.KNOWLEDGE_USAGE U JOIN KNOWLEDGE.DOMAIN_KNOWLEDGE K ON K.KNOWLEDGE_ID = U.KNOWLEDGE_ID
-                             JOIN KNOWLEDGE.DOMAIN_REGISTRY D ON D.DOMAIN_ID = K.DOMAIN_ID
+                             FROM CORE.KNOWLEDGE_USAGE U JOIN CORE.DOMAIN_KNOWLEDGE K ON K.KNOWLEDGE_ID = U.KNOWLEDGE_ID
+                             JOIN CORE.DOMAIN_REGISTRY D ON D.DOMAIN_ID = K.DOMAIN_ID
                             WHERE U.USED_AT >= DATEADD(DAY, -30, CURRENT_TIMESTAMP()) {scope}
                             GROUP BY 1, 2, 3, 4 ORDER BY USES DESC LIMIT 8""", params)
     except Exception:
@@ -126,7 +126,7 @@ def _case_resolver(db: Db, item: dict) -> Optional[str]:
         return str(content["resolved_by"]).upper()
     if content.get("case_id"):
         try:
-            found = db.query("SELECT RESOLVED_BY FROM CASES.CASE_RECORD WHERE CASE_ID = %s", (str(content["case_id"]),))
+            found = db.query("SELECT RESOLVED_BY FROM CORE.CASE_RECORD WHERE CASE_ID = %s", (str(content["case_id"]),))
             if found and found[0].get("resolved_by"):
                 return str(found[0]["resolved_by"]).upper()
         except Exception:
@@ -179,11 +179,11 @@ def inbox(domain_id: Optional[str] = None, db: Db = Depends(current_db)):
 
 
 def _latest_evals(db: Db, ids: list) -> dict:
-    """The latest replay of each knowledge id (KNOWLEDGE.CHANGE_EVAL, V058; empty before it)."""
+    """The latest replay of each knowledge id (CORE.CHANGE_EVAL, V058; empty before it)."""
     if not ids:
         return {}
     try:
-        found = db.query("""SELECT SUBJECT_ID, RESULT FROM KNOWLEDGE.CHANGE_EVAL
+        found = db.query("""SELECT SUBJECT_ID, RESULT FROM CORE.CHANGE_EVAL
                              WHERE SUBJECT_KIND = 'KNOWLEDGE' AND ARRAY_CONTAINS(SUBJECT_ID::VARIANT, PARSE_JSON(%s))
                              QUALIFY ROW_NUMBER() OVER (PARTITION BY SUBJECT_ID ORDER BY CREATED_AT DESC) = 1""",
                          (json.dumps(list(ids)[:500]),))
@@ -207,7 +207,7 @@ def decide(body: Decide, db: Db = Depends(current_db)):
     done, refused = 0, []
     for kid in dict.fromkeys(body.ids):
         found = db.query("""SELECT KNOWLEDGE_ID, LINEAGE_ID, STATUS, DOMAIN_ID, CREATED_BY, ORIGIN, CONTENT_JSON
-                              FROM KNOWLEDGE.DOMAIN_KNOWLEDGE WHERE KNOWLEDGE_ID = %s""", (kid,))
+                              FROM CORE.DOMAIN_KNOWLEDGE WHERE KNOWLEDGE_ID = %s""", (kid,))
         if found:
             found[0] = {**found[0], "_worse": (_latest_evals(db, [kid]).get(kid) or {}).get("verdict") == "WORSE",
                         "_note": body.note}
@@ -216,14 +216,14 @@ def decide(body: Decide, db: Db = Depends(current_db)):
             refused.append({"knowledge_id": kid, "reason": reason})
             continue
         if body.decision == "approve":
-            db.execute("""UPDATE KNOWLEDGE.DOMAIN_KNOWLEDGE SET IS_CURRENT = FALSE, UPDATED_AT = CURRENT_TIMESTAMP(),
+            db.execute("""UPDATE CORE.DOMAIN_KNOWLEDGE SET IS_CURRENT = FALSE, UPDATED_AT = CURRENT_TIMESTAMP(),
                                  STATUS = IFF(STATUS IN ('ACTIVE', 'RETIRED'), 'SUPERSEDED', STATUS)
                            WHERE LINEAGE_ID = %s AND IS_CURRENT""", (found[0]["lineage_id"],))
-            db.execute("""UPDATE KNOWLEDGE.DOMAIN_KNOWLEDGE SET STATUS = 'ACTIVE', IS_CURRENT = TRUE, REVIEWED_BY = CURRENT_USER(),
+            db.execute("""UPDATE CORE.DOMAIN_KNOWLEDGE SET STATUS = 'ACTIVE', IS_CURRENT = TRUE, REVIEWED_BY = CURRENT_USER(),
                                  REVIEW_NOTE = %s, VERIFIED_BY = CURRENT_USER(), VERIFIED_AT = CURRENT_TIMESTAMP(),
                                  UPDATED_AT = CURRENT_TIMESTAMP() WHERE KNOWLEDGE_ID = %s""", (body.note, kid))
         else:
-            db.execute("""UPDATE KNOWLEDGE.DOMAIN_KNOWLEDGE SET STATUS = 'REJECTED', REVIEWED_BY = CURRENT_USER(),
+            db.execute("""UPDATE CORE.DOMAIN_KNOWLEDGE SET STATUS = 'REJECTED', REVIEWED_BY = CURRENT_USER(),
                                  REVIEW_NOTE = %s, UPDATED_AT = CURRENT_TIMESTAMP() WHERE KNOWLEDGE_ID = %s""", (body.note, kid))
         done += 1
     if done:
@@ -302,7 +302,7 @@ def verify(knowledge_id: str, body: Verify, db: Db = Depends(current_db)):
     item = _knowledge_item(db, knowledge_id)
     if not item.get("is_current"):
         raise HTTPException(400, "Verify the version in use")
-    db.execute("""UPDATE KNOWLEDGE.DOMAIN_KNOWLEDGE SET VERIFIED_BY = CURRENT_USER(), VERIFIED_AT = CURRENT_TIMESTAMP(),
+    db.execute("""UPDATE CORE.DOMAIN_KNOWLEDGE SET VERIFIED_BY = CURRENT_USER(), VERIFIED_AT = CURRENT_TIMESTAMP(),
                          REVIEW_DUE = DATEADD(DAY, %s, CURRENT_DATE()) WHERE KNOWLEDGE_ID = %s""",
                (body.review_in_days, knowledge_id))
     return _knowledge_item(db, knowledge_id)
@@ -314,7 +314,7 @@ def usage(knowledge_id: str, db: Db = Depends(current_db)):
     try:
         rows = db.query("""SELECT U.RUN_ID, R.RUN_NAME, R.CURRENT_STATE, U.STAGE, K.VERSION, COUNT(*) AS USES,
                                   MAX(U.USED_AT)::VARCHAR AS LAST_USED
-                             FROM KNOWLEDGE.KNOWLEDGE_USAGE U JOIN KNOWLEDGE.DOMAIN_KNOWLEDGE K ON K.KNOWLEDGE_ID = U.KNOWLEDGE_ID
+                             FROM CORE.KNOWLEDGE_USAGE U JOIN CORE.DOMAIN_KNOWLEDGE K ON K.KNOWLEDGE_ID = U.KNOWLEDGE_ID
                              LEFT JOIN CORE.WORKFLOW_RUN R ON R.RUN_ID = U.RUN_ID
                             WHERE U.LINEAGE_ID = %s GROUP BY 1, 2, 3, 4, 5 ORDER BY LAST_USED DESC LIMIT 100""",
                         (item.get("lineage_id") or knowledge_id,))
@@ -326,7 +326,7 @@ def usage(knowledge_id: str, db: Db = Depends(current_db)):
     try:  # V047: what reviewers decided on the proposals this item fed
         outcomes = db.query("""SELECT STAGE, USES, RUNS, OBSERVED, ACCEPTED, CORRECTED, REJECTED, HELPFULNESS,
                                       COMPUTED_AT::VARCHAR AS COMPUTED_AT
-                                 FROM KNOWLEDGE.KNOWLEDGE_OUTCOME WHERE LINEAGE_ID = %s ORDER BY STAGE""",
+                                 FROM CORE.KNOWLEDGE_OUTCOME WHERE LINEAGE_ID = %s ORDER BY STAGE""",
                             (item.get("lineage_id") or knowledge_id,))
     except Exception:
         outcomes = []
@@ -344,9 +344,9 @@ def outcomes(domain_id: Optional[str] = None, order: Literal["low", "high"] = "l
         found = db.query(f"""
             SELECT K.KNOWLEDGE_ID, K.TITLE, K.KNOWLEDGE_TYPE, D.DOMAIN_NAME, O.STAGE, O.USES, O.RUNS, O.OBSERVED,
                    O.ACCEPTED, O.CORRECTED, O.REJECTED, O.HELPFULNESS
-              FROM KNOWLEDGE.KNOWLEDGE_OUTCOME O
-              JOIN KNOWLEDGE.DOMAIN_KNOWLEDGE K ON K.LINEAGE_ID = O.LINEAGE_ID AND K.IS_CURRENT
-              LEFT JOIN KNOWLEDGE.DOMAIN_REGISTRY D ON D.DOMAIN_ID = K.DOMAIN_ID
+              FROM CORE.KNOWLEDGE_OUTCOME O
+              JOIN CORE.DOMAIN_KNOWLEDGE K ON K.LINEAGE_ID = O.LINEAGE_ID AND K.IS_CURRENT
+              LEFT JOIN CORE.DOMAIN_REGISTRY D ON D.DOMAIN_ID = K.DOMAIN_ID
              WHERE O.OBSERVED >= %s {scope}
              ORDER BY O.HELPFULNESS {"ASC" if order == "low" else "DESC"}, O.OBSERVED DESC LIMIT 50""",
                          (MIN_OBSERVED, *params))
@@ -376,11 +376,11 @@ def duplicates(domain_id: Optional[str] = None, db: Db = Depends(current_db)):
     rows = db.query(f"""SELECT A.KNOWLEDGE_ID AS A_ID, A.TITLE AS A_TITLE, A.ORIGIN AS A_ORIGIN, A.UPDATED_AT::VARCHAR AS A_UPDATED,
                                B.KNOWLEDGE_ID AS B_ID, B.TITLE AS B_TITLE, B.ORIGIN AS B_ORIGIN, B.UPDATED_AT::VARCHAR AS B_UPDATED,
                                A.KNOWLEDGE_TYPE, D.DOMAIN_NAME, JAROWINKLER_SIMILARITY(LOWER(A.TITLE), LOWER(B.TITLE)) AS SCORE
-                          FROM KNOWLEDGE.DOMAIN_KNOWLEDGE A
-                          JOIN KNOWLEDGE.DOMAIN_KNOWLEDGE B ON B.DOMAIN_ID = A.DOMAIN_ID AND B.KNOWLEDGE_TYPE = A.KNOWLEDGE_TYPE
+                          FROM CORE.DOMAIN_KNOWLEDGE A
+                          JOIN CORE.DOMAIN_KNOWLEDGE B ON B.DOMAIN_ID = A.DOMAIN_ID AND B.KNOWLEDGE_TYPE = A.KNOWLEDGE_TYPE
                                AND A.KNOWLEDGE_ID < B.KNOWLEDGE_ID AND B.IS_CURRENT AND B.STATUS = 'ACTIVE'
                                AND COALESCE(A.LINEAGE_ID, A.KNOWLEDGE_ID) <> COALESCE(B.LINEAGE_ID, B.KNOWLEDGE_ID)
-                          JOIN KNOWLEDGE.DOMAIN_REGISTRY D ON D.DOMAIN_ID = A.DOMAIN_ID
+                          JOIN CORE.DOMAIN_REGISTRY D ON D.DOMAIN_ID = A.DOMAIN_ID
                          WHERE A.IS_CURRENT AND A.STATUS = 'ACTIVE' {scope}
                            AND JAROWINKLER_SIMILARITY(LOWER(A.TITLE), LOWER(B.TITLE)) >= 95
                            -- the same title for another table or column is not a duplicate: the content must match too

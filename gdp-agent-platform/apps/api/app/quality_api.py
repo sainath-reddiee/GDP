@@ -1,11 +1,11 @@
 """Data Quality Store (/dashboard/dq-store): Soda / Great Expectations checks per table and column, without a run.
 
-The catalog (GOVERNANCE.DQ_CHECKS_CATALOG, V037) keeps each check in the platform's neutral form, which the scanner
+The catalog (CORE.DQ_CHECKS_CATALOG, V037) keeps each check in the platform's neutral form, which the scanner
 runs, with the rendered SodaCL beside it; a table is scanned now or on a schedule (a Snowflake task that calls
-QUALITY.RUN_TABLE_SCAN). Each table's checks are versioned as a suite (V040): additions and changes from the one-line
+CORE.RUN_TABLE_SCAN). Each table's checks are versioned as a suite (V040): additions and changes from the one-line
 SodaCL editor, the structured editor, a table's profile or a run's approved checks land in the table's draft, which
 is submitted, reviewed (changes, validation against the approved domain model) and approved by another person; the
-approved version is then written to the catalog (QUALITY.APPLY_DQ_SUITE) and can be published to Git as SodaCL and a
+approved version is then written to the catalog (CORE.APPLY_DQ_SUITE) and can be published to Git as SodaCL and a
 Great Expectations suite. The logic lives in services/catalog/dq.py and dq_suite.py; this router validates input and
 maps errors.
 """
@@ -25,6 +25,7 @@ from app.main import _json, _snowflake_error, _source_call, current_db
 from app.perf import cached
 from app.source_invoke import invoke_source
 from services.catalog import dq, dq_suite
+from services.common.platform_schema import fqn, resolve
 
 router = APIRouter()
 CATALOG_FIELDS = """CHECK_ID, TABLE_NAME, COLUMN_NAME, CHECK_TYPE, CHECK_DEFINITION, SODA_DSL, SEVERITY, STATUS, ORIGIN,
@@ -56,7 +57,7 @@ def _domain_filter(db: Db, domain: Optional[str]) -> Optional[str]:
         return None
     if len(domain) == 36 and domain.count("-") == 4:
         return domain
-    found = db.query("SELECT DOMAIN_ID FROM KNOWLEDGE.DOMAIN_REGISTRY WHERE UPPER(DOMAIN_NAME) = UPPER(%s) LIMIT 1", (domain,))
+    found = db.query("SELECT DOMAIN_ID FROM CORE.DOMAIN_REGISTRY WHERE UPPER(DOMAIN_NAME) = UPPER(%s) LIMIT 1", (domain,))
     if not found:
         raise HTTPException(404, f"domain {domain} not found")
     return found[0]["domain_id"]
@@ -91,7 +92,7 @@ def catalog(domain: Optional[str] = None, table: Optional[str] = None, column: O
     if q:
         where.append("(TABLE_NAME ILIKE %s OR COLUMN_NAME ILIKE %s OR SODA_DSL ILIKE %s)")
         params += [f"%{q}%"] * 3
-    sql = (f"SELECT {{fields}} FROM GOVERNANCE.DQ_CHECKS_CATALOG WHERE {' AND '.join(where)} "
+    sql = (f"SELECT {{fields}} FROM CORE.DQ_CHECKS_CATALOG WHERE {' AND '.join(where)} "
            "ORDER BY TABLE_NAME, COLUMN_NAME NULLS FIRST, CHECK_TYPE LIMIT 5000")
     try:
         found = db.query(sql.format(fields=f"{CATALOG_FIELDS}, {LINEAGE_FIELDS}"), tuple(params))
@@ -103,7 +104,7 @@ def catalog(domain: Optional[str] = None, table: Optional[str] = None, column: O
     rows = [_row(r) for r in found]
     try:
         schedules = {r["table_name"]: r for r in db.query(
-            "SELECT TABLE_NAME, CRON, TASK_NAME, ENABLED FROM GOVERNANCE.DQ_SCHEDULE")}
+            "SELECT TABLE_NAME, CRON, TASK_NAME, ENABLED FROM CORE.DQ_SCHEDULE")}
     except Exception:
         schedules = {}
     tree = dq.build_tree(rows)
@@ -127,9 +128,9 @@ def _suites(db: Db, domain_id: Optional[str]) -> dict:
     try:
         found = db.query(f"""SELECT S.TABLE_NAME, S.DOMAIN_ID, S.APPROVED_VERSION, S.OPEN_VERSION, O.STATUS AS OPEN_STATUS,
                                     O.AUTHORS AS OPEN_AUTHORS, O.SUBMITTED_BY, A.PR_STATE, A.MODEL_VERSION
-                               FROM GOVERNANCE.DQ_SUITE S
-                               LEFT JOIN GOVERNANCE.DQ_SUITE_VERSION O ON O.SUITE_ID = S.SUITE_ID AND O.VERSION = S.OPEN_VERSION
-                               LEFT JOIN GOVERNANCE.DQ_SUITE_VERSION A ON A.SUITE_ID = S.SUITE_ID AND A.VERSION = S.APPROVED_VERSION
+                               FROM CORE.DQ_SUITE S
+                               LEFT JOIN CORE.DQ_SUITE_VERSION O ON O.SUITE_ID = S.SUITE_ID AND O.VERSION = S.OPEN_VERSION
+                               LEFT JOIN CORE.DQ_SUITE_VERSION A ON A.SUITE_ID = S.SUITE_ID AND A.VERSION = S.APPROVED_VERSION
                                {clause}""", params)
     except Exception:
         return {}
@@ -185,7 +186,7 @@ def check_status(check_id: str, body: StatusIn, db: Db = Depends(current_db)):
     """Pause, resume or retire (remove) a check in the table's suite draft."""
     table = body.table
     if not table:
-        found = db.query("SELECT TABLE_NAME FROM GOVERNANCE.DQ_CHECKS_CATALOG WHERE CHECK_ID = %s", (check_id,))
+        found = db.query("SELECT TABLE_NAME FROM CORE.DQ_CHECKS_CATALOG WHERE CHECK_ID = %s", (check_id,))
         if not found:
             raise HTTPException(404, "check not found; pass its table")
         table = found[0]["table_name"]
@@ -227,11 +228,11 @@ def history(table: str, limit: int = 20, db: Db = Depends(current_db)):
     try:
         scans = db.query(f"""SELECT SCAN_ID, STARTED_AT::VARCHAR AS STARTED_AT, CHECKS, PASSED, WARNED, FAILED, ERRORS,
                                     NOT_EVALUATED, HEALTH, ROWS_SCANNED, TRIGGERED_BY, DURATION_MS
-                               FROM QUALITY.CHECK_RUN WHERE TABLE_FQN = %s AND SCOPE = 'TABLE'
+                               FROM CORE.CHECK_RUN WHERE TABLE_FQN = %s AND SCOPE = 'TABLE'
                               ORDER BY STARTED_AT DESC LIMIT {limit}""", (table,))
         results = db.query(f"""SELECT CATALOG_CHECK_ID, OUTCOME, MEASURED, FAILED_ROWS, DETAIL,
                                       CREATED_AT::VARCHAR AS CREATED_AT
-                                 FROM QUALITY.CHECK_RESULT WHERE TABLE_FQN = %s AND CATALOG_CHECK_ID IS NOT NULL
+                                 FROM CORE.CHECK_RESULT WHERE TABLE_FQN = %s AND CATALOG_CHECK_ID IS NOT NULL
                               QUALIFY ROW_NUMBER() OVER (PARTITION BY CATALOG_CHECK_ID ORDER BY CREATED_AT DESC) <= {limit}
                                 ORDER BY CREATED_AT""", (table,))
     except Exception:
@@ -255,7 +256,7 @@ def set_schedule(body: ScheduleIn, db: Db = Depends(current_db)):
         task, statements = dq.schedule_sql(DATABASE, body.table, body.cron, WAREHOUSE)
     except AssertionError as exc:
         raise HTTPException(400, str(exc)) from exc
-    if not db.query("SELECT 1 FROM GOVERNANCE.DQ_CHECKS_CATALOG WHERE TABLE_NAME = %s AND STATUS = 'ACTIVE' LIMIT 1",
+    if not db.query("SELECT 1 FROM CORE.DQ_CHECKS_CATALOG WHERE TABLE_NAME = %s AND STATUS = 'ACTIVE' LIMIT 1",
                     (body.table,)):
         raise HTTPException(409, "add an active check to the table before scheduling it")
     try:
@@ -263,31 +264,35 @@ def set_schedule(body: ScheduleIn, db: Db = Depends(current_db)):
             db.execute(statement)
     except Exception as exc:
         raise _snowflake_error(exc) from exc
-    db.execute("""MERGE INTO GOVERNANCE.DQ_SCHEDULE T USING (SELECT %s AS TABLE_NAME, %s AS CRON, %s AS TASK_NAME) S
+    db.execute("""MERGE INTO CORE.DQ_SCHEDULE T USING (SELECT %s AS TABLE_NAME, %s AS CRON, %s AS TASK_NAME) S
                     ON T.TABLE_NAME = S.TABLE_NAME
                   WHEN MATCHED THEN UPDATE SET CRON = S.CRON, TASK_NAME = S.TASK_NAME, ENABLED = TRUE,
                        UPDATED_AT = CURRENT_TIMESTAMP()
                   WHEN NOT MATCHED THEN INSERT (TABLE_NAME, CRON, TASK_NAME) VALUES (S.TABLE_NAME, S.CRON, S.TASK_NAME)""",
                (body.table, body.cron.strip(), task))
-    db.execute("UPDATE GOVERNANCE.DQ_CHECKS_CATALOG SET SCHEDULE_CRON = %s WHERE TABLE_NAME = %s",
+    db.execute("UPDATE CORE.DQ_CHECKS_CATALOG SET SCHEDULE_CRON = %s WHERE TABLE_NAME = %s",
                (body.cron.strip(), body.table))
     return {"table": body.table, "cron": body.cron.strip(), "task": task}
 
 
 @router.delete("/api/dq/schedules")
 def delete_schedule(table: str, db: Db = Depends(current_db)):
-    found = db.query("SELECT TASK_NAME FROM GOVERNANCE.DQ_SCHEDULE WHERE TABLE_NAME = %s", (table,))
+    found = db.query("SELECT TASK_NAME FROM CORE.DQ_SCHEDULE WHERE TABLE_NAME = %s", (table,))
     if not found:
         raise HTTPException(404, "this table has no schedule")
-    task = found[0]["task_name"]
-    if not task.startswith(f"{DATABASE}.QUALITY.DQ_"):
+    task = resolve(found[0]["task_name"] or "", "task")  # names stored before V061 still say QUALITY
+    if not task.startswith(fqn(DATABASE, "DQ_")):
         raise HTTPException(409, "the stored task name is not a Data Quality Store task")
     try:
         db.execute(f"DROP TASK IF EXISTS {task}")
     except Exception as exc:
         raise _snowflake_error(exc) from exc
-    db.execute("DELETE FROM GOVERNANCE.DQ_SCHEDULE WHERE TABLE_NAME = %s", (table,))
-    db.execute("UPDATE GOVERNANCE.DQ_CHECKS_CATALOG SET SCHEDULE_CRON = NULL WHERE TABLE_NAME = %s", (table,))
+    try:   # the suspended copy kept from before V061 (names before V061); a new environment has no QUALITY schema
+        db.execute(f"DROP TASK IF EXISTS {task.replace(fqn(DATABASE, ''), f'{DATABASE}.QUALITY.', 1)}")
+    except Exception:
+        pass
+    db.execute("DELETE FROM CORE.DQ_SCHEDULE WHERE TABLE_NAME = %s", (table,))
+    db.execute("UPDATE CORE.DQ_CHECKS_CATALOG SET SCHEDULE_CRON = NULL WHERE TABLE_NAME = %s", (table,))
     return {"table": table, "schedule": None}
 
 
@@ -303,18 +308,18 @@ def summary(domain: Optional[str] = None, db: Db = Depends(current_db)):
                                     COUNT_IF(LAST_RUN_STATUS IN ('FAIL', 'ERROR')) AS FAILED,
                                     COUNT_IF(LAST_RUN_STATUS IS NULL) AS NEVER_RUN,
                                     COUNT(DISTINCT IFF(SCHEDULE_CRON IS NOT NULL, TABLE_NAME, NULL)) AS SCHEDULED
-                               FROM GOVERNANCE.DQ_CHECKS_CATALOG WHERE STATUS = 'ACTIVE' {clause}""", params)
+                               FROM CORE.DQ_CHECKS_CATALOG WHERE STATUS = 'ACTIVE' {clause}""", params)
     except Exception:
         return {"deployed": False, "checks": 0, "tables": 0, "pass_rate": None, "coverage": None}
     s = found[0] if found else {}
     try:
         profiled = db.query(f"""SELECT COUNT(DISTINCT UPPER(DATABASE_NAME || '.' || SCHEMA_NAME || '.' || TABLE_NAME)) AS N
-                                  FROM GOVERNANCE.DATA_PROFILES WHERE TRUE {clause}""", params)[0]["n"]
+                                  FROM CORE.DATA_PROFILES WHERE TRUE {clause}""", params)[0]["n"]
     except Exception:
         profiled = 0
     try:  # approved checks that live in runs (not promoted to the store); shown beside the store's own count
         run_clause, run_params = ("AND DOMAIN_ID = %s", (domain_id,)) if domain_id else ("", ())
-        run_checks = int(db.query(f"""SELECT COUNT(*) AS N FROM CONTRACT.SODA_EXPECTATION_REGISTRY
+        run_checks = int(db.query(f"""SELECT COUNT(*) AS N FROM CORE.SODA_EXPECTATION_REGISTRY
                                         WHERE IS_CURRENT AND STATUS = 'APPROVED' {run_clause}""", run_params)[0]["n"])
     except Exception:
         run_checks = 0
@@ -404,7 +409,7 @@ class DecideIn(BaseModel):
 
 def _apply(db: Db, suite_id: str, version: int) -> dict:
     try:
-        return {"applied": True, **_source_call(db, "CALL QUALITY.APPLY_DQ_SUITE(%s, %s)", dq_suite.apply_suite_version,
+        return {"applied": True, **_source_call(db, "CALL CORE.APPLY_DQ_SUITE(%s, %s)", dq_suite.apply_suite_version,
                                                 suite_id, version)}
     except AssertionError as exc:
         return {"applied": False, "error": str(exc)}
@@ -473,7 +478,7 @@ def suite_publish(body: PublishIn, db: Db = Depends(current_db)):
     request = {"suite_id": found["suite"]["suite_id"], "version": int(body.version), "repo_id": body.repo_id,
                "head": head, "base": body.base or repo.get("branch"), "title": body.title}
     try:
-        result = db.call("CALL CODEGEN.PUBLISH_DBT_PR(%s, %s)", ("", json.dumps({"dq_suite": request})))
+        result = db.call("CALL CORE.PUBLISH_DBT_PR(%s, %s)", ("", json.dumps({"dq_suite": request})))
     except Exception as exc:
         return {"status": "FAILED", "detail": str(exc)[:1000], "head_branch": head}
     return {**(result or {}), "head_branch": head}
@@ -495,7 +500,7 @@ def suite_pr_sync(body: SyncIn, db: Db = Depends(current_db)):
     except AssertionError as exc:
         raise HTTPException(400, str(exc)) from exc
     try:
-        return db.call("CALL CODEGEN.PUBLISH_DBT_PR(%s, %s)",
+        return db.call("CALL CORE.PUBLISH_DBT_PR(%s, %s)",
                        ("", json.dumps({"sync_dq_prs": {"suite_id": suite_id, "force": body.force}}))) or {}
     except Exception as exc:
         raise _snowflake_error(exc) from exc

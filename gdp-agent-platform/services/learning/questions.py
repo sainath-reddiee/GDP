@@ -1,5 +1,5 @@
 """Ask instead of guessing: where the engine is unsure, the domain owner is asked a few targeted questions, and each
-answer becomes knowledge every later run uses (KNOWLEDGE.OPEN_QUESTION, V058).
+answer becomes knowledge every later run uses (CORE.OPEN_QUESTION, V058).
 
   MAPPING   a source column whose best target is ambiguous or low in confidence, and that nothing already decides
             (no reviewer pattern, gold rule or reference STTM): "which target does it feed?", with the top candidates
@@ -70,12 +70,12 @@ def ask(session, domain_id: str, layer: str, run_id: Optional[str], stage: str, 
         return 0
     try:
         keys = [q["subject_key"] for q in questions]
-        known = {r["SUBJECT_KEY"] for r in rows(session, f"""SELECT SUBJECT_KEY FROM KNOWLEDGE.OPEN_QUESTION
+        known = {r["SUBJECT_KEY"] for r in rows(session, f"""SELECT SUBJECT_KEY FROM CORE.OPEN_QUESTION
                      WHERE DOMAIN_ID = ? AND STATUS IN ('OPEN', 'ANSWERED')
                        AND SUBJECT_KEY IN ({', '.join('?' for _ in keys)})""", [domain_id, *keys])}
         new = [q for q in questions if q["subject_key"] not in known]
         if new:
-            insert_rows(session, "KNOWLEDGE.OPEN_QUESTION",
+            insert_rows(session, "CORE.OPEN_QUESTION",
                         ["QUESTION_ID", "DOMAIN_ID", "LAYER", "RUN_ID", "STAGE", "SUBJECT_KEY", "KIND", "QUESTION",
                          "CONTEXT", "OPTIONS"],
                         ["?", "?", "?", "NULLIF(?, '')", "?", "?", "?", "?", "PARSE_JSON(?)", "PARSE_JSON(?)"],
@@ -119,7 +119,7 @@ def answer(session, question_id: str, choice: Optional[str], text: Optional[str]
     from services.common.sql import rows, variant
     from services.knowledge.writer import remember
 
-    found = rows(session, "SELECT * FROM KNOWLEDGE.OPEN_QUESTION WHERE QUESTION_ID = ?", [question_id])
+    found = rows(session, "SELECT * FROM CORE.OPEN_QUESTION WHERE QUESTION_ID = ?", [question_id])
     assert found, "question not found"
     q = {k.lower(): v for k, v in found[0].items()}
     assert q["status"] == "OPEN", f"the question is already {str(q['status']).lower()}"
@@ -129,7 +129,7 @@ def answer(session, question_id: str, choice: Optional[str], text: Optional[str]
                             content=item["content"], content_json=item["content_json"], tags=["QUESTION"], origin="USER",
                             run_id=q.get("run_id"), layer=q.get("layer") or "ANY",
                             change_note="Answer to a question the engine asked")
-    session.sql("""UPDATE KNOWLEDGE.OPEN_QUESTION SET STATUS = 'ANSWERED', ANSWER = PARSE_JSON(?), ANSWERED_BY = CURRENT_USER(),
+    session.sql("""UPDATE CORE.OPEN_QUESTION SET STATUS = 'ANSWERED', ANSWER = PARSE_JSON(?), ANSWERED_BY = CURRENT_USER(),
                           ANSWERED_AT = CURRENT_TIMESTAMP(), KNOWLEDGE_ID = NULLIF(?, '') WHERE QUESTION_ID = ?""",
                 params=[json.dumps({"choice": choice, "text": text}), knowledge_id or "", question_id]).collect()
     return {"question_id": question_id, "status": "ANSWERED", "knowledge_id": knowledge_id, "kind": item["kind"]}

@@ -1,4 +1,4 @@
-"""GOVERNANCE.STTM_CATALOG: every version of every source-to-target mapping, decoupled from run state.
+"""CORE.STTM_CATALOG: every version of every source-to-target mapping, decoupled from run state.
 
 A catalog entry (CATALOG_ID) is one mapping: a source system feeding one target table. Each STTM generation,
 transformation edit and join edit in a run, and each edit made in the STTM hub, adds a version holding the full line
@@ -15,7 +15,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from services.common.sql import rows, scalar, variant
 
-TABLE = "GOVERNANCE.STTM_CATALOG"
+TABLE = "CORE.STTM_CATALOG"
 ORIGINS = ("GENERATED", "TRANSFORM_EDIT", "JOIN_EDIT", "CATALOG_EDIT", "BACKFILL")
 LINE_FIELDS = ("source_system", "source_table", "source_column", "source_datatype", "target_column", "target_datatype",
                "mapping_type", "transformation", "business_rule", "business_definition", "join_logic", "filter_rule")
@@ -353,7 +353,7 @@ def _lines_for(session, sttm_id: str) -> List[Dict[str, Any]]:
     return [_line(r) for r in rows(session, """SELECT SOURCE_SYSTEM, SOURCE_TABLE, SOURCE_COLUMN, SOURCE_DATATYPE,
                                                      TARGET_COLUMN, TARGET_DATATYPE, MAPPING_TYPE, TRANSFORMATION,
                                                      BUSINESS_RULE, BUSINESS_DEFINITION, JOIN_LOGIC, FILTER_RULE
-                                                FROM CONTRACT.STTM_LINE WHERE STTM_ID = ? ORDER BY TARGET_COLUMN""",
+                                                FROM CORE.STTM_LINE WHERE STTM_ID = ? ORDER BY TARGET_COLUMN""",
                                        [sttm_id])]
 
 
@@ -364,9 +364,9 @@ def snapshot(session, sttm_id: str, origin: str = "GENERATED", note: str = "") -
         assert origin in ORIGINS
         reg = rows(session, """SELECT S.STTM_ID, S.RUN_ID, S.DOMAIN_ID, S.TARGET_TABLE_ID, S.STATUS, S.TABLE_DESIGN,
                                       D.DOMAIN_NAME, T.TARGET_DATABASE, T.TARGET_SCHEMA, T.TARGET_TABLE
-                                 FROM CONTRACT.STTM_REGISTRY S
-                                 LEFT JOIN KNOWLEDGE.DOMAIN_REGISTRY D ON D.DOMAIN_ID = S.DOMAIN_ID
-                                 LEFT JOIN KNOWLEDGE.TARGET_TABLE_REGISTRY T ON T.TARGET_TABLE_ID = S.TARGET_TABLE_ID
+                                 FROM CORE.STTM_REGISTRY S
+                                 LEFT JOIN CORE.DOMAIN_REGISTRY D ON D.DOMAIN_ID = S.DOMAIN_ID
+                                 LEFT JOIN CORE.TARGET_TABLE_REGISTRY T ON T.TARGET_TABLE_ID = S.TARGET_TABLE_ID
                                 WHERE S.STTM_ID = ?""", [sttm_id])
         if not reg:
             return None
@@ -386,7 +386,7 @@ def snapshot(session, sttm_id: str, origin: str = "GENERATED", note: str = "") -
 def snapshot_run(session, run_id: str, origin: str, note: str = "") -> Optional[Dict[str, Any]]:
     """snapshot() of the run's current STTM (newest REVIEW, APPROVED or DRAFT version). Never raises."""
     try:
-        found = rows(session, """SELECT STTM_ID FROM CONTRACT.STTM_REGISTRY
+        found = rows(session, """SELECT STTM_ID FROM CORE.STTM_REGISTRY
                                  WHERE RUN_ID = ? AND STATUS IN ('REVIEW', 'APPROVED', 'DRAFT')
                                  ORDER BY STTM_VERSION DESC LIMIT 1""", [run_id])
     except Exception:
@@ -567,26 +567,26 @@ def sync_to_run(session, sttm_id: Optional[str], run_id: Optional[str], plan: Di
     if not sttm_id:
         return False
     reg = rows(session, """SELECT S.STTM_ID, R.RUN_ID, COALESCE(R.IS_ARCHIVED, FALSE) AS ARCHIVED, R.DELETED_AT
-                             FROM CONTRACT.STTM_REGISTRY S JOIN CORE.WORKFLOW_RUN R ON R.RUN_ID = S.RUN_ID
+                             FROM CORE.STTM_REGISTRY S JOIN CORE.WORKFLOW_RUN R ON R.RUN_ID = S.RUN_ID
                             WHERE S.STTM_ID = ?""", [sttm_id])
     if not reg or reg[0].get("ARCHIVED") or reg[0].get("DELETED_AT"):
         return False
     existing = rows(session, """SELECT STTM_LINE_ID, TARGET_COLUMN, TARGET_DOMAIN, TARGET_DATABASE, TARGET_SCHEMA, TARGET_TABLE
-                                  FROM CONTRACT.STTM_LINE WHERE STTM_ID = ?""", [sttm_id])
+                                  FROM CORE.STTM_LINE WHERE STTM_ID = ?""", [sttm_id])
     by_col = {str(r["TARGET_COLUMN"]).upper(): r for r in existing}
     target = existing[0] if existing else None
     wanted = {_key(l): l for l in plan["lines"]}
     for col in sorted(set(by_col) - set(wanted)):
-        session.sql("DELETE FROM CONTRACT.STTM_LINE WHERE STTM_LINE_ID = ?", params=[by_col[col]["STTM_LINE_ID"]]).collect()
+        session.sql("DELETE FROM CORE.STTM_LINE WHERE STTM_LINE_ID = ?", params=[by_col[col]["STTM_LINE_ID"]]).collect()
     for col, line in wanted.items():
         values = [line.get(f) for f in LINE_COLUMNS]
         if col in by_col:
             sets = ", ".join(f"{c} = ?" for c in LINE_COLUMNS.values())
-            session.sql(f"UPDATE CONTRACT.STTM_LINE SET {sets}, HUMAN_APPROVED = TRUE, REVIEWER = CURRENT_USER() "
+            session.sql(f"UPDATE CORE.STTM_LINE SET {sets}, HUMAN_APPROVED = TRUE, REVIEWER = CURRENT_USER() "
                         f"WHERE STTM_LINE_ID = ?", params=[*values, by_col[col]["STTM_LINE_ID"]]).collect()
         elif target is not None:
             cols = ", ".join(LINE_COLUMNS.values())
-            session.sql(f"""INSERT INTO CONTRACT.STTM_LINE (STTM_LINE_ID, STTM_ID, TARGET_DOMAIN, TARGET_DATABASE,
+            session.sql(f"""INSERT INTO CORE.STTM_LINE (STTM_LINE_ID, STTM_ID, TARGET_DOMAIN, TARGET_DATABASE,
                                    TARGET_SCHEMA, TARGET_TABLE, TARGET_COLUMN, {cols}, HUMAN_APPROVED, REVIEWER)
                             SELECT ?, ?, ?, ?, ?, ?, ?, {", ".join(["?"] * len(LINE_COLUMNS))}, TRUE, CURRENT_USER()""",
                         params=[str(uuid.uuid4()), sttm_id, target["TARGET_DOMAIN"], target["TARGET_DATABASE"],
@@ -594,7 +594,7 @@ def sync_to_run(session, sttm_id: Optional[str], run_id: Optional[str], plan: Di
                                 *[v if v is not None or f not in ("target_datatype", "mapping_type")
                                   else ("VARCHAR" if f == "target_datatype" else "UNMAPPED")
                                   for f, v in zip(LINE_COLUMNS, values)]]).collect()
-    session.sql("UPDATE CONTRACT.STTM_REGISTRY SET TABLE_DESIGN = PARSE_JSON(?) WHERE STTM_ID = ?",
+    session.sql("UPDATE CORE.STTM_REGISTRY SET TABLE_DESIGN = PARSE_JSON(?) WHERE STTM_ID = ?",
                 params=[json.dumps(plan["design"], default=str), sttm_id]).collect()
     try:
         from services.workflow.procedures import _get_run, _record_run_event

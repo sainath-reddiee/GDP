@@ -2,9 +2,9 @@
 
 GET /api/lineage/trace?object=&column=&direction=up|down|both&depth=   the path through every layer
 GET /api/lineage/objects?q=                                             objects that have lineage, to pick from
-Edges are read from where the platform holds them: landed tables (SOURCE.LANDING_TABLE_REGISTRY), approved STTM lines
-(CONTRACT.STTM_LINE, the latest approved version per target), the mastered-domain contracts and consumer hubs
-(KNOWLEDGE.DOMAIN_REGISTRY CONFIG.mdm, KNOWLEDGE.TARGET_COLUMN_REGISTRY), and gold generation (GOVERNANCE.LINEAGE_EDGE).
+Edges are read from where the platform holds them: landed tables (CORE.LANDING_TABLE_REGISTRY), approved STTM lines
+(CORE.STTM_LINE, the latest approved version per target), the mastered-domain contracts and consumer hubs
+(CORE.DOMAIN_REGISTRY CONFIG.mdm, CORE.TARGET_COLUMN_REGISTRY), and gold generation (CORE.LINEAGE_EDGE).
 Read only; any source that is not deployed is skipped.
 """
 
@@ -42,14 +42,14 @@ def _env(silver_database: Optional[str]) -> str:
 def edges(db: Db) -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
     for r in _soft(db, """SELECT SOURCE_DATABASE, SOURCE_SCHEMA, SOURCE_TABLE, LANDING_DATABASE, LANDING_SCHEMA, LANDING_TABLE
-                            FROM SOURCE.LANDING_TABLE_REGISTRY WHERE INGESTION_STATUS = 'COMPLETE'
+                            FROM CORE.LANDING_TABLE_REGISTRY WHERE INGESTION_STATUS = 'COMPLETE'
                            QUALIFY ROW_NUMBER() OVER (PARTITION BY LANDING_DATABASE, LANDING_SCHEMA, LANDING_TABLE ORDER BY CREATED_AT DESC) = 1"""):
         out.append(lt.edge("SOURCE", f"{r['source_database']}.{r['source_schema']}.{r['source_table']}", None,
                            "BRONZE", f"{r['landing_database']}.{r['landing_schema']}.{r['landing_table']}", None, "INGEST", "landed", "SILVER_RUN"))
     for r in _soft(db, """SELECT L.SOURCE_DATABASE, L.SOURCE_SCHEMA, L.SOURCE_TABLE, L.SOURCE_COLUMN, L.TARGET_DATABASE, L.TARGET_SCHEMA,
                                  L.TARGET_TABLE, L.TARGET_COLUMN, L.TRANSFORMATION, L.MAPPING_TYPE, L.LOOKUP_LOGIC,
                                  COALESCE(W.PIPELINE, 'SILVER') AS PIPELINE
-                            FROM CONTRACT.STTM_LINE L JOIN CONTRACT.STTM_REGISTRY S ON S.STTM_ID = L.STTM_ID
+                            FROM CORE.STTM_LINE L JOIN CORE.STTM_REGISTRY S ON S.STTM_ID = L.STTM_ID
                             LEFT JOIN CORE.WORKFLOW_RUN W ON W.RUN_ID = S.RUN_ID
                            WHERE S.STATUS = 'APPROVED' AND L.SOURCE_TABLE IS NOT NULL
                          QUALIFY DENSE_RANK() OVER (PARTITION BY S.TARGET_TABLE_ID ORDER BY S.CREATED_AT DESC) = 1
@@ -65,7 +65,7 @@ def edges(db: Db) -> List[Dict[str, Any]]:
             out.append(lt.edge("BRONZE", src, r.get("source_column"), "SILVER_PRE_MDM", tgt, r.get("target_column"), "MAP",
                                r.get("transformation"), "SILVER_RUN"))
     reg = _soft(db, """SELECT DOMAIN_ID, DOMAIN_NAME, CONFIG:mdm AS MDM, CONFIG:silver_database::STRING AS SILVER_DATABASE
-                         FROM KNOWLEDGE.DOMAIN_REGISTRY WHERE ACTIVE_FLAG AND CONFIG:mdm IS NOT NULL""")
+                         FROM CORE.DOMAIN_REGISTRY WHERE ACTIVE_FLAG AND CONFIG:mdm IS NOT NULL""")
     mastered = {}
     for r in reg:
         m = _js(r.get("mdm")) or {}
@@ -80,7 +80,7 @@ def edges(db: Db) -> List[Dict[str, Any]]:
         if str(m.get("role") or "").upper() != "CONSUMER":
             continue
         cols = _soft(db, """SELECT T.TARGET_DATABASE, T.TARGET_SCHEMA, T.TARGET_TABLE, C.COLUMN_NAME
-                              FROM KNOWLEDGE.TARGET_TABLE_REGISTRY T JOIN KNOWLEDGE.TARGET_COLUMN_REGISTRY C ON C.TARGET_TABLE_ID = T.TARGET_TABLE_ID
+                              FROM CORE.TARGET_TABLE_REGISTRY T JOIN CORE.TARGET_COLUMN_REGISTRY C ON C.TARGET_TABLE_ID = T.TARGET_TABLE_ID
                              WHERE T.DOMAIN_ID = %s AND T.ACTIVE_FLAG AND COALESCE(T.LAYER, 'SILVER') = 'SILVER'""", (r["domain_id"],))
         tables: Dict[str, List[str]] = {}
         for c in cols:
@@ -88,7 +88,7 @@ def edges(db: Db) -> List[Dict[str, Any]]:
         out += lt.consumer_edges(r["domain_name"], m.get("consumes") or [], [{"object": o, "columns": v} for o, v in tables.items()],
                                  mastered, _env(r.get("silver_database")))
     for r in _soft(db, """SELECT FROM_LAYER, FROM_OBJECT, FROM_COLUMN, TO_LAYER, TO_OBJECT, TO_COLUMN, KIND, EXPRESSION, PRODUCER
-                            FROM GOVERNANCE.LINEAGE_EDGE WHERE IS_CURRENT LIMIT 50000"""):
+                            FROM CORE.LINEAGE_EDGE WHERE IS_CURRENT LIMIT 50000"""):
         out.append(lt.edge(r["from_layer"], r["from_object"], r.get("from_column"), r["to_layer"], r["to_object"], r.get("to_column"),
                            r["kind"], r.get("expression"), r.get("producer") or ""))
     return out
