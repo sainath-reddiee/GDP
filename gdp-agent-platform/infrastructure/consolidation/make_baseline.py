@@ -106,7 +106,10 @@ def extract(cur, db: str) -> str:
     out += ["", "-- ---------------------------------------------------------------- sequences"]
     for r in objects("SEQUENCES"):
         text = ddl(cur, "SEQUENCE", f"{db}.{r['schema_name']}.{r['name']}")
-        out.append(templ(re.sub(r"(?i)^create or replace sequence", "CREATE SEQUENCE IF NOT EXISTS", text), db) + ";")
+        text = templ(re.sub(r"(?i)^create or replace sequence", "CREATE SEQUENCE IF NOT EXISTS", text), db)
+        if r.get("comment") and "comment" not in text.lower():
+            text += " COMMENT = '" + str(r["comment"]).replace("'", "''") + "'"
+        out.append(text + ";")
     out += ["", "-- ---------------------------------------------------------------- file formats"]
     for r in objects("FILE FORMATS"):
         text = ddl(cur, "FILE_FORMAT", f"{db}.{r['schema_name']}.{r['name']}")
@@ -122,6 +125,9 @@ def extract(cur, db: str) -> str:
         text = re.sub(r"(?is)\s+with row access policy\s+\S+\s+on\s+\([^)]*\)", "", text)
         text = re.sub(r"(?i)^create or replace (transient )?table", lambda m: f"CREATE {(m.group(1) or '').upper()}TABLE IF NOT EXISTS", text)
         texts[r["name"]] = templ(text, db) + ";"
+        if str(r.get("change_tracking")).upper() == "ON" and "change_tracking" not in text.lower():
+            # GET_DDL leaves change tracking out; Cortex Search needs it on its source tables
+            texts[r["name"]] += f"\nALTER TABLE {{{{database}}}}.{r['schema_name']}.{r['name']} SET CHANGE_TRACKING = TRUE;"
     done: List[str] = []
 
     def place(name: str, path=()):
@@ -152,8 +158,8 @@ def extract(cur, db: str) -> str:
             out.append(f"ALTER TABLE {table} ADD ROW ACCESS POLICY {{{{database}}}}.{r['schema_name']}.{r['name']} ON ({cols});")
 
     out += ["", "-- ---------------------------------------------------------------- views"]
-    for r in objects("VIEWS"):
-        out.append(templ(ddl(cur, "VIEW", f"{db}.{r['schema_name']}.{r['name']}"), db) + ";")
+    for r in objects("VIEWS"):   # the view's own text: GET_DDL would freeze SELECT * into a column list
+        out.append(templ(str(r["text"]).strip().rstrip(";"), db) + ";")
 
     out += ["", "-- ---------------------------------------------------------------- grants (every object, explicitly)"]
     lines = set()
@@ -274,6 +280,10 @@ def snapshot(cur, db: str) -> Dict[str, Any]:
 
 
 def diff(a: Any, b: Any, path: str = "") -> List[str]:
+    if isinstance(a, list) and isinstance(b, list) and a != b and all(isinstance(x, list) for x in a + b):
+        sa, sb = {json.dumps(x) for x in a}, {json.dumps(x) for x in b}
+        if sa != sb:
+            return [f"{path}: only after migrations {sorted(sa - sb)[:20]}; only from baseline {sorted(sb - sa)[:20]}"]
     if isinstance(a, dict) and isinstance(b, dict):
         out = []
         for k in sorted(set(a) | set(b)):
