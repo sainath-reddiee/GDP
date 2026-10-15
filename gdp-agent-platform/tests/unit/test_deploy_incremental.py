@@ -60,13 +60,13 @@ def files(tmp_path, monkeypatch):
     return tmp_path, seeded
 
 
-def _apply(con, root: Path, zip_name="services-1.zip", force=False):
+def _apply(con, root: Path, zip_name="services-1.zip", force=False, use_baseline=False):
     variables = {"database": "DB", "services_import": f"@DB.CORE.CODE_STAGE/{zip_name}", "warehouse": "WH"}
     migrations = [(m.name[1:4], m.name[6:-4], m) for m in sorted((root / "migrations").glob("*.sql"))]
     return deploy.apply_to_connection(
         con, "DB", "WH", variables, zip_name, b"zip", migrations, sorted((root / "procedures").glob("*.sql")),
         sorted((root / "views").glob("*.sql")), "1.0", [("CREATED", "SOURCE", "PENDING", 1, 1, True, None, "1.0")],
-        [("CREATED", "FAILED", "SYSTEM", None, True, "1.0")], [], force=force)
+        [("CREATED", "FAILED", "SYSTEM", None, True, "1.0")], [], force=force, use_baseline=use_baseline)
 
 
 def test_first_deploy_applies_everything_then_a_repeat_skips_everything(files):
@@ -169,3 +169,23 @@ def test_seed_leaves_governed_domains_tables_alone():
     assert data["knowledge"] == [("k1", "d1")] and data["drift"] == [{"domain": "NEW"}]
     assert "COMPANY" in log[0] and "approved model v3" in log[0]
     assert seed.drop_governed(data, {}) == []
+
+
+def test_a_new_environment_runs_the_baseline_and_records_the_migrations_it_covers(files, monkeypatch):
+    root, _ = files
+    (root / "migrations" / "V002__second.sql").write_text("ALTER TABLE {{database}}.CORE.T ADD COLUMN Y INT;")
+    (root / "migrations" / "V003__third.sql").write_text("ALTER TABLE {{database}}.CORE.T ADD COLUMN Z INT;")
+    baseline = root / "B002__base.sql"
+    baseline.write_text("CREATE TABLE IF NOT EXISTS {{database}}.CORE.T (X INT, Y INT);")
+    monkeypatch.setattr(deploy, "BASELINE_FILE", baseline)
+    monkeypatch.setattr(deploy, "BASELINE_COVERS", "002")
+    con = FakeCon()
+    log = _apply(con, root, use_baseline=True)
+    assert con.scripts[0] == "CREATE TABLE IF NOT EXISTS DB.CORE.T (X INT, Y INT);"   # the baseline, not V001/V002
+    assert sorted(con.migrations) == ["001", "002", "003"]                            # V003 applied on top
+    assert any("ADD COLUMN Z" in s for s in con.scripts) and not any("ADD COLUMN Y" in s for s in con.scripts)
+    assert any(line.startswith("baseline B002__base.sql") for line in log)
+    again = FakeCon()
+    again.migrations = {"001": deploy.checksum((root / "migrations" / "V001__first.sql").read_text())}
+    _apply(again, root, use_baseline=True)                                            # an existing environment
+    assert not any("(X INT, Y INT)" in s for s in again.scripts) and any("ADD COLUMN Y" in s for s in again.scripts)
