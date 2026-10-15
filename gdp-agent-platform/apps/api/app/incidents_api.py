@@ -1,13 +1,9 @@
-"""Ops incidents: the inbox, incident detail and actions, support teams with their Teams webhooks, routing rules and
-ops settings (services.ops.incidents, notify and tickets do the work).
+"""Ops incidents: the inbox, incident detail and actions, support teams (ownership, Jira routing, escalation), routing
+rules and ops settings (services.ops.incidents and tickets do the work).
 
 Governance (services.governance.policy): reads need OPS.VIEW; incident actions and bulk actions OPS.OPERATE; teams,
-webhooks, test sends, routing rules and settings INTEGRATION.MANAGE. Calls run on the caller's session; the actor on the
-timeline is the signed-in user.
-
-Teams webhook URLs are sealed in the API (services.common.secretbox, a key derived from AIP_SECRET_KEY, else
-JIRA_TOKEN_KEY), stored as ciphertext only (never in SQL text) and never returned:
-teams only say has_teams_webhook and has_escalation_webhook. The request carrying a URL cannot be queued for approval.
+routing rules and settings INTEGRATION.MANAGE. Calls run on the caller's session; the actor on the timeline is the
+signed-in user.
 
 PR O3 (AI root cause and support assistant): diagnose, ask and postmortem need AI.USE (services.ops.diagnose); retry and
 the safe-to-retry mark need OPS.OPERATE (services.ops.retry; a governance policy on OPS.OPERATE makes them approvable,
@@ -30,7 +26,7 @@ from app.ops_api import _RUNS_SQL, _iso, _mwaa_http, _ops_error, _q, _run_out, _
 from app.perf import cached
 from services.jira.client import JiraError, check_project
 from services.ops import incidents as inc
-from services.ops import notify, tickets
+from services.ops import tickets
 from services.ops.diagnose import ai_out
 from services.ops.mwaa import MwaaError
 from services.ops.detect import SEVERITIES, STATUSES
@@ -478,18 +474,11 @@ def _team_out(r: Dict[str, Any]) -> Dict[str, Any]:
     members = _json(r.get("members"))
     return {"team_id": r["team_id"], "name": r["name"], "jira_project": r.get("jira_project"),
             "jira_component": r.get("jira_component"), "jira_assignee_account_id": r.get("jira_assignee_account_id"),
-            "has_teams_webhook": bool(r.get("has_teams_webhook")),
             "escalation_minutes": int(r.get("escalation_minutes") or inc.DEFAULT_ESCALATION_MINUTES),
-            "has_escalation_webhook": bool(r.get("has_escalation_webhook")),
-            "members": members if isinstance(members, list) else [],
-            "webhook_detail": notify.WEBHOOK_AGAIN if r.get("webhook_legacy") else None}
+            "members": members if isinstance(members, list) else []}
 
 
-_TEAM_SELECT = """SELECT TEAM_ID, NAME, JIRA_PROJECT, JIRA_COMPONENT, JIRA_ASSIGNEE_ACCOUNT_ID,
-                         TEAMS_WEBHOOK_SECRET IS NOT NULL AS HAS_TEAMS_WEBHOOK, ESCALATION_MINUTES,
-                         ESCALATION_WEBHOOK_SECRET IS NOT NULL AS HAS_ESCALATION_WEBHOOK, MEMBERS,
-                         COALESCE(LEFT(HEX_ENCODE(TEAMS_WEBHOOK_SECRET), 10) <> '676470313A', FALSE)
-                           OR COALESCE(LEFT(HEX_ENCODE(ESCALATION_WEBHOOK_SECRET), 10) <> '676470313A', FALSE) AS WEBHOOK_LEGACY
+_TEAM_SELECT = """SELECT TEAM_ID, NAME, JIRA_PROJECT, JIRA_COMPONENT, JIRA_ASSIGNEE_ACCOUNT_ID, ESCALATION_MINUTES, MEMBERS
                     FROM OPS.TEAM"""
 
 
@@ -552,67 +541,6 @@ def delete_team(team_id: str, db: Db = Depends(current_db)):
         raise HTTPException(409, f"{int(used[0]['n'])} routing rule(s) send incidents to this team; change or delete them first.")
     _x(db, "DELETE FROM OPS.TEAM WHERE TEAM_ID = %s", (team_id,))
     return {"deleted": True, "team_id": team_id}
-
-
-class WebhookIn(BaseModel):
-    kind: Literal["alerts", "escalation"] = "alerts"
-    url: str = Field(min_length=10, max_length=2048)
-
-
-def _key() -> str:
-    key = notify.secret_key()
-    if not key:
-        raise HTTPException(409, "No encryption key on the API host: set AIP_SECRET_KEY (16+ random characters; "
-                                 "JIRA_TOKEN_KEY is used when it is absent) and restart the API.")
-    return key
-
-
-@router.post("/api/ops/teams/{team_id}/webhook")
-def set_webhook(team_id: str, body: WebhookIn, db: Db = Depends(current_db),
-                x_aip_replay: Optional[str] = Header(default=None)):
-    """Store a team's Teams webhook URL, encrypted. It is never shown again."""
-    if x_aip_replay:
-        raise HTTPException(403, "A webhook URL cannot be set through an approval; someone with INTEGRATION.MANAGE sets it directly.")
-    try:
-        url = notify.validate_webhook_url(body.url)
-    except ValueError as exc:
-        raise HTTPException(400, str(exc)) from None
-    key = _key()
-    _team(db, team_id)
-    column = notify.webhook_column(body.kind)
-    _x(db, f"UPDATE OPS.TEAM SET {column} = %s, UPDATED_AT = CURRENT_TIMESTAMP() WHERE TEAM_ID = %s",
-       (notify.seal_webhook(url, team_id, column, key), team_id))
-    return {"ok": True}
-
-
-@router.delete("/api/ops/teams/{team_id}/webhook")
-def delete_webhook(team_id: str, kind: Literal["alerts", "escalation"] = "alerts", db: Db = Depends(current_db)):
-    _team(db, team_id)
-    column = notify.webhook_column(kind)
-    _x(db, f"UPDATE OPS.TEAM SET {column} = NULL, UPDATED_AT = CURRENT_TIMESTAMP() WHERE TEAM_ID = %s", (team_id,))
-    return {"ok": True}
-
-
-class TestIn(BaseModel):
-    kind: Literal["alerts", "escalation"] = "alerts"
-
-
-@router.post("/api/ops/teams/{team_id}/test")
-def test_webhook(team_id: str, body: TestIn, db: Db = Depends(current_db)):
-    """Send one test card now (not through the outbox)."""
-    team = _team(db, team_id)
-    key = _key()
-    column = notify.webhook_column(body.kind)
-    found = _q(db, f"SELECT {column} AS U FROM OPS.TEAM WHERE TEAM_ID = %s", (team_id,))
-    try:
-        url = notify.open_webhook(found[0].get("u"), team_id, column, key) if found else None
-    except RuntimeError:
-        return {"ok": False, "detail": notify.WEBHOOK_AGAIN}
-    if not url:
-        return {"ok": False, "detail": f"The team has no {body.kind} webhook."}
-    settings = _store(db).settings()
-    ok, detail = notify.send(url, notify.test_card(team["name"], body.kind, settings.get("public_base_url")))
-    return {"ok": ok, "detail": "Test card sent." if ok else f"The webhook refused the card: {detail}"}
 
 
 # ---------------------------------------------------------------- routing rules
@@ -732,15 +660,13 @@ class SettingsIn(BaseModel):
     alert_on_retry_for_critical: Optional[bool] = None
     transition_on_resolve: Optional[bool] = None
     done_status: Optional[str] = Field(default=None, max_length=60)
-    rate_limit_per_10min: Optional[int] = Field(default=None, ge=1, le=500)
     public_base_url: Optional[str] = Field(default=None, max_length=500)
     ai_auto: Optional[bool] = None
     ai_severities: Optional[List[str]] = Field(default=None, max_length=4)
-    weekly_digest: Optional[bool] = None
 
 
-SETTING_KEYS = ("reopen_hours", "alert_on_retry_for_critical", "transition_on_resolve", "done_status", "rate_limit_per_10min",
-                "public_base_url", "ai_auto", "ai_severities", "weekly_digest")
+SETTING_KEYS = ("reopen_hours", "alert_on_retry_for_critical", "transition_on_resolve", "done_status",
+                "public_base_url", "ai_auto", "ai_severities")
 
 
 def _settings_out(db: Db) -> Dict[str, Any]:
@@ -781,7 +707,7 @@ def put_settings(body: SettingsIn, db: Db = Depends(current_db)):
         current[key] = value
     try:
         _set_config(db, inc.CONFIG_KEY, current,
-                    "Ops incidents: reopen window, Teams rate limit, Jira transition, public URL, AI diagnosis, weekly digest")
+                    "Ops incidents: reopen window, Jira transition, public URL, AI diagnosis")
     except Exception as exc:
         raise _ops_error(exc) from exc
     return _settings_out(db)

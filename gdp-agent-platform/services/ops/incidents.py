@@ -7,15 +7,15 @@ The rules (services.ops.detect produces the candidates):
   A sighting is counted once: its occurrence key (run, task, map index, try) is claimed in OPS.INCIDENT_EVENT, so the
   same run read by push and poll, or twice by the poll overlap, changes nothing.
 Storm control: a new failure in a DAG downstream (OPS.DAG_DEPENDENCY, one or two hops, filled by services.ops.deps) of an
-OPEN or ACK incident seen in the last 2 hours becomes its child (KIND UPSTREAM, PARENT_INCIDENT_ID) with no ticket and no card.
+OPEN or ACK incident seen in the last 2 hours becomes its child (KIND UPSTREAM, PARENT_INCIDENT_ID) with no ticket.
 Routing: the first enabled ROUTING_RULE by PRIORITY whose DAG pattern (glob), tag, owner and environment all match
 gives the team (and may override the severity or mute); else the DAG's own team; else the incident is unrouted (still
-created, still ticketed to the Jira default project, no card).
-Mutes: a rule's MUTE_UNTIL or the DAG's MUTE_UNTIL opens the incident MUTED: no ticket, no card, until the mute ends.
+created, still ticketed to the Jira default project).
+Mutes: a rule's MUTE_UNTIL or the DAG's MUTE_UNTIL opens the incident MUTED: no ticket until the mute ends.
 Auto-resolve: a later successful run of the same task (or DAG, for DAG-level kinds) resolves it as 'system'.
 
-Deliveries go through the outbox (services.ops.notify): Teams cards on channel TEAMS, Jira bot actions on channel JIRA
-(create, recur, resolve, reopen; services.ops.tickets handles them).
+Deliveries go through the outbox (services.ops.notify): Jira bot actions on channel JIRA (create, recur, resolve,
+reopen; services.ops.tickets handles them).
 
 Every database access goes through a store (SqlStore over the API's Db, or an in-memory one in tests).
 """
@@ -84,13 +84,11 @@ def settings_from(config: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         if v is not None:
             out[k] = v
     out["reopen_hours"] = max(0, int(out.get("reopen_hours") or 0))
-    out["rate_limit_per_10min"] = max(1, int(out.get("rate_limit_per_10min") or 10))
     severities = out.get("ai_severities")
     if isinstance(severities, str):
         severities = [v.strip() for v in severities.split(",")]
     out["ai_severities"] = [v for v in detect.SEVERITIES if v in {str(x).upper() for x in (severities or [])}]
     out["ai_auto"] = bool(out.get("ai_auto"))
-    out["weekly_digest"] = bool(out.get("weekly_digest"))
     return out
 
 
@@ -258,8 +256,7 @@ class SqlStore:
     def team(self, team_id: Optional[str]) -> Optional[Dict[str, Any]]:
         if not team_id:
             return None
-        found = self.db.query("""SELECT TEAM_ID, NAME, JIRA_PROJECT, JIRA_COMPONENT, JIRA_ASSIGNEE_ACCOUNT_ID, ESCALATION_MINUTES,
-                                        TEAMS_WEBHOOK_SECRET IS NOT NULL AS HAS_TEAMS_WEBHOOK
+        found = self.db.query("""SELECT TEAM_ID, NAME, JIRA_PROJECT, JIRA_COMPONENT, JIRA_ASSIGNEE_ACCOUNT_ID, ESCALATION_MINUTES
                                    FROM OPS.TEAM WHERE TEAM_ID = %s""", (team_id,))
         return found[0] if found else None
 
@@ -449,14 +446,11 @@ class SqlStore:
 
 def _notify(store: Any, incident: Dict[str, Any], kind: str, now: datetime, note: Optional[str] = None,
             jira_kind: Optional[str] = None, dedupe: Optional[str] = None, jira_again: bool = False) -> None:
-    """Queue the Teams card (when the incident has a team) and the Jira action for one change. The first Jira create
-    of an incident is queued once ever; `jira_again` queues another one (a reopened incident that has no ticket)."""
+    """Queue the Jira action for one change (`kind` names the change; the timeline event records it). The first Jira
+    create of an incident is queued once ever; `jira_again` queues another one (a reopened incident that has no
+    ticket)."""
     iid = incident["incident_id"]
     suffix = dedupe or now.isoformat()
-    if kind and incident.get("team_id"):
-        target = "escalation" if kind == "escalated" else "alerts"
-        store.enqueue("TEAMS", kind, f"teams:{kind}:{iid}:{suffix}", {"note": note} if note else {},
-                      incident_id=iid, team_id=incident["team_id"], target=target)
     if jira_kind:
         once = jira_kind == "create" and not jira_again
         store.enqueue("JIRA", jira_kind, f"jira:{jira_kind}:{iid}" + ("" if once else f":{suffix}"),

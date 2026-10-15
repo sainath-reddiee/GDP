@@ -2,16 +2,15 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState, useTransition } from "react";
-import { Check, Clock3, KeyRound, Loader2, Pencil, Plus, Send, Siren, Trash2, TriangleAlert, Users, X } from "lucide-react";
+import { Check, Clock3, Loader2, Pencil, Plus, Siren, Trash2, TriangleAlert, Users } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input, Select } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import type { AirflowEnv } from "../ops/actions";
 import { When, parseTs } from "../ops/ops-shared";
 import {
-  createRule, createTeam, deleteRule, deleteTeam, getOpsSettings, listRouting, listTeams, removeTeamWebhook, saveOpsSettings,
-  setTeamWebhook, testTeamWebhook, updateRule, updateTeam,
-  type OpsSettings, type OpsTeam, type RoutingRule, type RuleInput, type TeamInput, type WebhookKind,
+  createRule, createTeam, deleteRule, deleteTeam, getOpsSettings, listRouting, listTeams, saveOpsSettings, updateRule, updateTeam,
+  type OpsSettings, type OpsTeam, type RoutingRule, type RuleInput, type TeamInput,
 } from "../incidents/actions";
 import { localInput, SEVERITIES } from "../incidents/incident-shared";
 
@@ -20,7 +19,6 @@ type OnMsg = (m: Msg) => void;
 type Result<T> = { ok: true; data: T } | { ok: false; error: string };
 const toneOf = (e: string): "info" | "error" => (/approval|request/i.test(e) ? "info" : "error");
 const WORKER_STALE_MS = 5 * 60 * 1000;
-const WEBHOOK_LABEL: Record<WebhookKind, string> = { alerts: "Alerts", escalation: "Escalation" };
 
 /** Load once on mount and on demand; an answer to an older request is dropped. */
 function useLoad<T>(fn: () => Promise<Result<T>>) {
@@ -56,7 +54,7 @@ const FieldError = ({ children }: { children: React.ReactNode }) => (
   <p role="alert" className="rounded-lg bg-destructive/10 px-3 py-2 text-xs text-destructive">{children}</p>
 );
 
-/** Admin, Integrations, Incidents: teams (Jira routing and Teams channels), routing rules and incident settings. */
+/** Admin, Integrations, Incidents: support teams (ownership, Jira routing, escalation), routing rules and incident settings. */
 export function IncidentsTab({ envs, may, onMsg }: { envs: AirflowEnv[]; may: boolean; onMsg: OnMsg }) {
   const teams = useLoad(listTeams);
   const rules = useLoad(listRouting);
@@ -65,7 +63,7 @@ export function IncidentsTab({ envs, may, onMsg }: { envs: AirflowEnv[]; may: bo
   return (
     <div className="space-y-4">
       <SettingsCard state={settings.data} error={settings.error} may={may} onMsg={onMsg} onSaved={settings.reload} />
-      <TeamsCard teams={teams.data?.teams ?? null} error={teams.error} may={may} onMsg={onMsg} reload={() => { teams.reload(); rules.reload(); }} />
+      <SupportTeamsCard teams={teams.data?.teams ?? null} error={teams.error} may={may} onMsg={onMsg} reload={() => { teams.reload(); rules.reload(); }} />
       <RulesCard rules={rules.data?.rules ?? null} error={rules.error} teams={teamList} envs={envs} may={may} onMsg={onMsg} reload={rules.reload} />
     </div>
   );
@@ -97,7 +95,7 @@ function WorkerStatus({ seen }: { seen: string | null }) {
       <p className="flex items-center gap-1.5"><Clock3 className="h-3.5 w-3.5" />Worker last seen <When iso={seen} rel /></p>
       {stale && (
         <p className="mt-1 flex items-start gap-1.5" role="alert"><TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-          <span>No incidents, tickets or Teams cards go out without it. Start the worker: <code className="font-mono">python -m app.worker</code> in apps/api.</span></p>
+          <span>No incidents or tickets go out without it. Start the worker: <code className="font-mono">python -m app.worker</code> in apps/api.</span></p>
       )}
     </div>
   );
@@ -108,19 +106,15 @@ function SettingsForm({ state, may, onMsg, onSaved }: { state: OpsSettings; may:
   const [retryCritical, setRetryCritical] = useState(state.alert_on_retry_for_critical);
   const [transition, setTransition] = useState(state.transition_on_resolve);
   const [done, setDone] = useState(state.done_status ?? "");
-  const [rate, setRate] = useState(String(state.rate_limit_per_10min));
   const [base, setBase] = useState(state.public_base_url ?? "");
   const [aiAuto, setAiAuto] = useState(!!state.ai_auto);
   const [aiSev, setAiSev] = useState<string[]>(state.ai_severities ?? ["P1", "P2"]);
-  const [digest, setDigest] = useState(!!state.weekly_digest);
   const [origin, setOrigin] = useState("");
   const [error, setError] = useState("");
   const [pending, start] = useTransition();
   useEffect(() => { setOrigin(window.location.origin); }, []);
   const hours = Number(reopen);
-  const perTen = Number(rate);
   const badHours = !Number.isInteger(hours) || hours < 0 || hours > 720;
-  const badRate = !Number.isInteger(perTen) || perTen < 1 || perTen > 100;
   const badBase = !!base.trim() && !/^https?:\/\/[^\s/]+(\/\S*)?$/i.test(base.trim());
   const badDone = transition && !done.trim();
   const badSev = aiAuto && !aiSev.length;
@@ -129,8 +123,8 @@ function SettingsForm({ state, may, onMsg, onSaved }: { state: OpsSettings; may:
     setError("");
     const r = await saveOpsSettings({
       reopen_hours: hours, alert_on_retry_for_critical: retryCritical, transition_on_resolve: transition,
-      done_status: done.trim() || null, rate_limit_per_10min: perTen, public_base_url: base.trim().replace(/\/+$/, "") || null,
-      ai_auto: aiAuto, ai_severities: aiSev, weekly_digest: digest,
+      done_status: done.trim() || null, public_base_url: base.trim().replace(/\/+$/, "") || null,
+      ai_auto: aiAuto, ai_severities: aiSev,
     });
     if (!r.ok) { failed(r.error, onMsg, setError); return; }
     onMsg({ tone: "ok", text: "Incident settings saved." });
@@ -152,17 +146,12 @@ function SettingsForm({ state, may, onMsg, onSaved }: { state: OpsSettings; may:
             <span className="block font-normal text-muted-foreground">A repeat failure within this window reopens the incident instead of opening a new one.</span>
             {badHours && <span role="alert" className="block font-normal text-destructive">A whole number from 0 to 720.</span>}
           </label>
-          <label className="space-y-1 text-xs font-medium">Teams cards per team, per 10 minutes
-            <Input value={rate} onChange={(e) => setRate(e.target.value)} inputMode="numeric" className="text-xs" aria-invalid={badRate} />
-            <span className="block font-normal text-muted-foreground">Beyond this, one summary card is sent instead.</span>
-            {badRate && <span role="alert" className="block font-normal text-destructive">A whole number from 1 to 100.</span>}
-          </label>
           <label className="space-y-1 text-xs font-medium md:col-span-2">Public base URL
             <span className="flex gap-2">
               <Input value={base} onChange={(e) => setBase(e.target.value)} placeholder={origin || "https://gdp.example.com"} className="font-mono text-xs" aria-invalid={badBase} />
               {origin && base.trim() !== origin && <Button type="button" variant="outline" size="sm" className="h-9" onClick={() => setBase(origin)}>Use {origin.replace(/^https?:\/\//, "")}</Button>}
             </span>
-            <span className="block font-normal text-muted-foreground">Used for the links in Teams cards and Jira tickets.</span>
+            <span className="block font-normal text-muted-foreground">Used for the links in Jira tickets.</span>
             {badBase && <span role="alert" className="block font-normal text-destructive">An http:// or https:// address.</span>}
           </label>
           <label className="flex items-start gap-2 text-xs md:col-span-2">
@@ -192,14 +181,10 @@ function SettingsForm({ state, may, onMsg, onSaved }: { state: OpsSettings; may:
             </span>
             {badSev && <span role="alert" className="block font-normal text-destructive">Pick at least one severity, or turn automatic diagnosis off.</span>}
           </div>
-          <label className="flex items-start gap-2 text-xs md:col-span-2">
-            <input type="checkbox" className="mt-0.5" checked={digest} onChange={(e) => setDigest(e.target.checked)} />
-            <span>Weekly reliability digest <span className="block text-muted-foreground">Each team with an alerts webhook gets a Teams card with its MTTR, MTTA, top failing DAGs and repeat failures.</span></span>
-          </label>
           {error && <div className="md:col-span-2"><FieldError>{error}</FieldError></div>}
           {may && (
             <div className="flex justify-end md:col-span-2">
-              <Button onClick={save} disabled={pending || badHours || badRate || badBase || badDone || badSev}>
+              <Button onClick={save} disabled={pending || badHours || badBase || badDone || badSev}>
                 {pending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}Save settings</Button>
             </div>
           )}
@@ -221,19 +206,19 @@ function SettingsForm({ state, may, onMsg, onSaved }: { state: OpsSettings; may:
 
 // ---------------------------------------------------------------- teams
 
-function TeamsCard({ teams, error, may, onMsg, reload }: { teams: OpsTeam[] | null; error: string; may: boolean; onMsg: OnMsg; reload: () => void }) {
+function SupportTeamsCard({ teams, error, may, onMsg, reload }: { teams: OpsTeam[] | null; error: string; may: boolean; onMsg: OnMsg; reload: () => void }) {
   const [editing, setEditing] = useState<string | "new" | null>(null);
   return (
     <section className="surface overflow-hidden">
       <header className="flex flex-wrap items-center gap-3 border-b px-5 py-4">
         <span className="grid h-10 w-10 place-items-center rounded-xl bg-indigo-50 text-indigo-600 ring-1 ring-inset ring-indigo-100"><Users className="h-5 w-5" /></span>
         <div className="min-w-[14rem] flex-1">
-          <h3 className="text-base font-semibold">Teams</h3>
-          <p className="text-xs text-muted-foreground">Who owns an incident: its Jira project and assignee, and the Microsoft Teams channels for alerts and escalation.</p>
+          <h3 className="text-base font-semibold">Support teams</h3>
+          <p className="text-xs text-muted-foreground">Who owns an incident: its Jira project and assignee, its members, and when it escalates.</p>
         </div>
         {may && editing === null && teams && <Button onClick={() => setEditing("new")}><Plus className="h-4 w-4" />Add team</Button>}
       </header>
-      {error && <div className="mx-5 mt-4"><FieldError>Teams did not load: {error}</FieldError></div>}
+      {error && <div className="mx-5 mt-4"><FieldError>Support teams did not load: {error}</FieldError></div>}
       {teams === null && !error && <p className="flex items-center gap-2 px-5 py-6 text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" />Loading teams</p>}
       {editing === "new" && <TeamForm onClose={() => setEditing(null)} onMsg={onMsg} onSaved={reload} />}
       {teams && (teams.length ? (
@@ -245,7 +230,7 @@ function TeamsCard({ teams, error, may, onMsg, reload }: { teams: OpsTeam[] | nu
       ) : editing !== "new" && (
         <div className="px-6 py-10 text-center">
           <p className="text-sm font-semibold">No team yet</p>
-          <p className="mx-auto mt-1 max-w-md text-xs text-muted-foreground">Without a team, incidents stay unrouted: the ticket goes to the default Jira project and no Teams card is sent. Add one, then a routing rule.</p>
+          <p className="mx-auto mt-1 max-w-md text-xs text-muted-foreground">Without a team, incidents stay unrouted: the ticket goes to the default Jira project. Add one, then a routing rule.</p>
           {may && <Button className="mt-4" onClick={() => setEditing("new")}><Plus className="h-4 w-4" />Add team</Button>}
         </div>
       ))}
@@ -285,102 +270,12 @@ function TeamRow({ team: t, may, onEdit, onMsg, reload }: { team: OpsTeam; may: 
       </div>
       {confirm && (
         <div role="alertdialog" aria-label="Confirm delete" className="flex flex-wrap items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs">
-          <span className="flex-1">Delete {t.name}? Its webhooks are removed. A team that routing rules still use cannot be deleted.</span>
+          <span className="flex-1">Delete {t.name}? A team that routing rules still use cannot be deleted.</span>
           <Button size="sm" variant="ghost" disabled={pending} onClick={() => setConfirm(false)}>Cancel</Button>
           <Button size="sm" variant="destructive" disabled={pending} onClick={remove}>{pending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}Delete</Button>
         </div>
       )}
-      {t.webhook_detail && <p role="alert" className="text-xs text-amber-700 dark:text-amber-300">{t.webhook_detail}</p>}
-      <div className="grid gap-2 md:grid-cols-2">
-        <Webhook team={t} kind="alerts" has={t.has_teams_webhook} may={may} onMsg={onMsg} reload={reload} />
-        <Webhook team={t} kind="escalation" has={t.has_escalation_webhook} may={may} onMsg={onMsg} reload={reload} />
-      </div>
     </li>
-  );
-}
-
-/** A Teams Workflows webhook. The URL is write only: it is sent once, stored as a secret, and never shown again. */
-function Webhook({ team, kind, has, may, onMsg, reload }: {
-  team: OpsTeam; kind: WebhookKind; has: boolean; may: boolean; onMsg: OnMsg; reload: () => void;
-}) {
-  const [url, setUrl] = useState("");
-  const [confirm, setConfirm] = useState<"test" | "remove" | null>(null);
-  const [busy, setBusy] = useState<"save" | "test" | "remove" | null>(null);
-  const [error, setError] = useState("");
-  const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null);
-  const [pending, start] = useTransition();
-  const badUrl = !!url.trim() && !/^https:\/\/\S+$/i.test(url.trim());
-  const run = (what: NonNullable<typeof busy>, fn: () => Promise<void>) => start(async () => {
-    setBusy(what); setError(""); setResult(null);
-    try { await fn(); } finally { setBusy(null); }
-  });
-  const save = () => run("save", async () => {
-    const value = url.trim();
-    setUrl(""); // never keep the secret in the page, whatever the answer
-    const r = await setTeamWebhook(team.team_id, kind, value);
-    if (!r.ok) { failed(r.error, onMsg, setError); return; }
-    onMsg({ tone: "ok", text: `${WEBHOOK_LABEL[kind]} webhook of ${team.name} is saved.` });
-    reload();
-  });
-  const remove = () => run("remove", async () => {
-    const r = await removeTeamWebhook(team.team_id, kind);
-    setConfirm(null);
-    if (!r.ok) { failed(r.error, onMsg, setError); return; }
-    onMsg({ tone: "ok", text: `${WEBHOOK_LABEL[kind]} webhook of ${team.name} is removed.` });
-    reload();
-  });
-  const test = () => run("test", async () => {
-    const r = await testTeamWebhook(team.team_id, kind);
-    setConfirm(null);
-    if (!r.ok) { failed(r.error, onMsg, setError); return; }
-    setResult({ ok: r.data.ok, text: r.data.detail || (r.data.ok ? "Test card sent. Check the channel." : "The test card was not accepted.") });
-  });
-  const spin = (b: typeof busy, icon: React.ReactNode) => (busy === b ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : icon);
-  return (
-    <div className="space-y-2 rounded-lg border px-3 py-2 text-xs">
-      <p className="flex flex-wrap items-center gap-2 font-medium">{WEBHOOK_LABEL[kind]} channel
-        {has ? <Chip tone="good">webhook set</Chip> : <Chip tone="idle">no webhook</Chip>}
-        {kind === "escalation" && !team.escalation_minutes && <span className="font-normal text-muted-foreground">(set escalation minutes to use it)</span>}
-      </p>
-      {may && (
-        <form className="flex gap-2" onSubmit={(e) => { e.preventDefault(); if (url.trim() && !badUrl) save(); }}>
-          <Input type="password" autoComplete="off" value={url} onChange={(e) => setUrl(e.target.value)} className="font-mono text-xs"
-                 placeholder={has ? "Paste a new URL to replace it" : "Paste the Teams Workflows webhook URL"} aria-label={`${WEBHOOK_LABEL[kind]} webhook URL for ${team.name}`}
-                 aria-invalid={badUrl} />
-          <Button size="sm" type="submit" className="h-9" disabled={pending || !url.trim() || badUrl}>{spin("save", <KeyRound className="h-3.5 w-3.5" />)}Save</Button>
-        </form>
-      )}
-      {badUrl && <p role="alert" className="text-destructive">An https:// address.</p>}
-      {may && has && confirm === null && (
-        <div className="flex gap-1.5">
-          <Button size="sm" variant="outline" disabled={pending} onClick={() => setConfirm("test")}><Send className="h-3.5 w-3.5" />Send test card</Button>
-          <Button size="sm" variant="ghost" disabled={pending} onClick={() => setConfirm("remove")}>Remove</Button>
-        </div>
-      )}
-      {confirm === "test" && (
-        <div role="alertdialog" aria-label="Confirm test card" className="space-y-2 rounded-lg border border-primary/30 bg-primary/5 p-2">
-          <p>This posts a test card to the {kind === "alerts" ? "alerts" : "escalation"} Teams channel of {team.name}. Everyone in that channel sees it. Send it?</p>
-          <div className="flex gap-1.5">
-            <Button size="sm" disabled={pending} onClick={test}>{spin("test", <Send className="h-3.5 w-3.5" />)}Yes, send</Button>
-            <Button size="sm" variant="ghost" disabled={pending} onClick={() => setConfirm(null)}>Cancel</Button>
-          </div>
-        </div>
-      )}
-      {confirm === "remove" && (
-        <div role="alertdialog" aria-label="Confirm remove" className="flex flex-wrap items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/5 p-2">
-          <span className="flex-1">Remove this webhook? No more {kind} cards go to the channel.</span>
-          <Button size="sm" variant="ghost" disabled={pending} onClick={() => setConfirm(null)}>Cancel</Button>
-          <Button size="sm" variant="destructive" disabled={pending} onClick={remove}>{spin("remove", null)}Remove</Button>
-        </div>
-      )}
-      {result && (
-        <p role={result.ok ? "status" : "alert"} className={cn("flex items-start gap-2 rounded px-2 py-1", result.ok ? "bg-success/10 text-success" : "bg-destructive/10 text-destructive")}>
-          <span className="flex-1">{result.text}</span>
-          <button type="button" aria-label="Dismiss" onClick={() => setResult(null)}><X className="h-3 w-3" /></button>
-        </p>
-      )}
-      {error && <p role="alert" className="text-destructive">{error}</p>}
-    </div>
   );
 }
 
@@ -405,7 +300,7 @@ function TeamForm({ team, onClose, onMsg, onSaved }: { team?: OpsTeam; onClose: 
     };
     const r = team ? await updateTeam(team.team_id, body) : await createTeam(body);
     if (!r.ok) { failed(r.error, onMsg, setError); return; }
-    onMsg({ tone: "ok", text: team ? `${body.name} is saved.` : `${body.name} is added. Paste its Teams webhooks next.` });
+    onMsg({ tone: "ok", text: team ? `${body.name} is saved.` : `${body.name} is added.` });
     onClose();
     onSaved();
   });

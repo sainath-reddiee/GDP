@@ -21,6 +21,9 @@ const config: Config = {
         sidebar: { DEFAULT: "hsl(var(--sidebar))", foreground: "hsl(var(--sidebar-foreground))" },
         success: "hsl(var(--success))",
         warning: "hsl(var(--warning))",
+        // agent work vs. a human approval (globals.css --agent, --human)
+        agent: "hsl(var(--agent) / <alpha-value>)",
+        human: "hsl(var(--human) / <alpha-value>)",
       },
       borderRadius: { lg: "var(--radius)", md: "calc(var(--radius) - 2px)", sm: "calc(var(--radius) - 4px)" },
       boxShadow: {

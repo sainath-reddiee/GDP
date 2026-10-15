@@ -26,8 +26,8 @@ type NodeStatus = StageStatusValue | "AVAILABLE";
 
 const TONE: Record<NodeStatus, { tile: string; text: string; label: string }> = {
   COMPLETE: { tile: "border-emerald-500/30 bg-emerald-500/10 text-emerald-600", text: "text-emerald-600", label: "complete" },
-  ACTIVE: { tile: "border-blue-500/40 bg-blue-500/10 text-blue-600 ring-4 ring-blue-500/10", text: "text-blue-600", label: "in progress" },
-  REVIEW_REQUIRED: { tile: "border-amber-500/40 bg-amber-500/10 text-amber-600 ring-4 ring-amber-500/10", text: "text-amber-600", label: "needs review" },
+  ACTIVE: { tile: "border-agent/40 bg-agent/10 text-agent ring-4 ring-agent/10", text: "text-agent", label: "in progress" },
+  REVIEW_REQUIRED: { tile: "border-human/50 bg-human/10 text-human ring-4 ring-human/15", text: "text-human", label: "awaiting approval" },
   LOCKED: { tile: "border-border bg-muted/60 text-muted-foreground/60", text: "text-muted-foreground", label: "locked" },
   FAILED: { tile: "border-rose-500/40 bg-rose-500/10 text-rose-600", text: "text-rose-600", label: "failed" },
   BLOCKED: { tile: "border-rose-500/40 bg-rose-500/10 text-rose-600", text: "text-rose-600", label: "blocked" },
@@ -38,8 +38,8 @@ const TONE: Record<NodeStatus, { tile: string; text: string; label: string }> = 
 function Marker({ status }: { status: NodeStatus }) {
   const base = "absolute -right-1 -top-1 grid h-4 w-4 place-items-center rounded-full border-2 border-card text-white";
   if (status === "COMPLETE") return <span className={cn(base, "bg-emerald-500")}><Check className="h-2.5 w-2.5" strokeWidth={3} /></span>;
-  if (status === "ACTIVE") return <span className={cn(base, "bg-blue-500")}><span className="h-1.5 w-1.5 animate-ping rounded-full bg-white" /></span>;
-  if (status === "REVIEW_REQUIRED") return <span className={cn(base, "bg-amber-500")}><Eye className="h-2.5 w-2.5" /></span>;
+  if (status === "ACTIVE") return <span className={cn(base, "bg-agent")}><span className="h-1.5 w-1.5 animate-ping rounded-full bg-white" /></span>;
+  if (status === "REVIEW_REQUIRED") return <span className={cn(base, "bg-human")}><Eye className="h-2.5 w-2.5" /></span>;
   if (status === "FAILED" || status === "BLOCKED") return <span className={cn(base, "bg-rose-500")}><X className="h-2.5 w-2.5" strokeWidth={3} /></span>;
   if (status === "LOCKED") return <span className={cn(base, "bg-muted-foreground/40")}><Lock className="h-2 w-2" /></span>;
   return null;

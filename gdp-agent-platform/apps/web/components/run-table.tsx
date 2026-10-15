@@ -147,7 +147,7 @@ export function RunTable({
                 <ArchiveRestore className="h-3.5 w-3.5" /> Restore selected
               </Button>
             )}
-            <Button size="sm" variant="destructive" disabled={pending || selected.length === 0}
+            <Button size="sm" variant={selected.length ? "destructive" : "outline"} disabled={pending || selected.length === 0}
                     onClick={() => setConfirming(true)}>
               <Trash2 className="h-3.5 w-3.5" /> Delete selected
             </Button>
@@ -235,11 +235,11 @@ export function RunTable({
                         <span className="flex gap-0.5" aria-label={`stage ${info.index + 1} of ${STAGE_ORDER.length}`}>
                           {STAGE_ORDER.map((st, i) => (
                             <span key={st} className={cn("h-1.5 w-2.5 rounded-full",
-                              i < info.index ? "bg-emerald-400" : i === info.index ? "bg-blue-500" : "bg-muted")} />
+                              i < info.index ? "bg-emerald-400" : i === info.index ? "bg-agent" : "bg-muted")} />
                           ))}
                         </span>
                       </div>
-                      <div className="text-[11px] text-muted-foreground">{info.state}</div>
+                      <div className="text-[11px] text-muted-foreground" title={r.current_state}>{info.state}</div>
                     </div>
                   );
                 })()}

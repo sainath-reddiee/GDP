@@ -1,7 +1,6 @@
 """Ops AI (PR O3): DAG dependency normalization (datasets v1 and v2, sensors, triggers, links, the code graph), context
 budgets and redaction, citation validation, prompt framing, the diagnosis cache, auto-diagnosis selection, retry
-preview tokens and the safe-to-retry refusal, resolution knowledge, reliability math, the weekly digest's idempotency
-and the governance mapping of the new routes."""
+preview tokens and the safe-to-retry refusal, resolution knowledge, reliability math and the governance mapping of the new routes."""
 
 import json
 import sys
@@ -449,7 +448,7 @@ def test_resolution_is_remembered_redacted_with_the_dag_domain():
     assert "INCIDENT_RESOLUTION" in KNOWLEDGE_TYPES
 
 
-# ---------------------------------------------------------------- reliability and digest
+# ---------------------------------------------------------------- reliability
 
 def test_reliability_math():
     t0 = datetime(2026, 10, 5, 8, 0, tzinfo=timezone.utc)
@@ -475,36 +474,6 @@ def test_reliability_math():
                         {"env_id": "p", "dag_id": "z", "ok": 9, "failed": 0}])
     assert top == [{"env_id": "p", "dag_id": "y", "failures": 4, "success_rate": 0.0},
                    {"env_id": "p", "dag_id": "x", "failures": 1, "success_rate": 0.75}]
-
-
-class DigestDb(FakeDb):
-    def __init__(self, weekly=True):
-        super().__init__([("FROM CORE.PLATFORM_CONFIG", [{"config_value": json.dumps({"weekly_digest": weekly})}]),
-                          ("FROM OPS.TEAM WHERE TEAMS_WEBHOOK_SECRET", [{"team_id": "data", "name": "Data team"}]),
-                          ("FROM OPS.TEAM", [{"team_id": "data", "name": "Data team"}])])
-        self.keys = set()
-        self.on("FROM OPS.NOTIFICATION WHERE DEDUPE_KEY", lambda sql, params: [{"x": 1}] if params[0] in self.keys else [])
-
-    def execute_count(self, sql, params=()):
-        self.writes.append((sql, params))
-        if "MERGE INTO OPS.NOTIFICATION" in sql:
-            if params[0] in self.keys:
-                return 0
-            self.keys.add(params[0])
-        return 1
-
-
-def test_weekly_digest_is_idempotent_per_iso_week():
-    db = DigestDb()
-    assert rel.run_digest(db, NOW) == {"queued": 1}
-    assert rel.run_digest(db, NOW + timedelta(hours=3)) == {"queued": 0}
-    assert db.keys == {"teams:digest:data:2026-W42"}
-    card = json.loads(db.wrote("MERGE INTO OPS.NOTIFICATION")[0][1][7])
-    assert card["type"] == "message" and "Weekly reliability" in json.dumps(card)
-    assert rel.run_digest(db, NOW + timedelta(days=7)) == {"queued": 1}             # the next week
-    assert rel.run_digest(DigestDb(), NOW.replace(hour=8)) == {"queued": 0}          # before 09:00 UTC
-    assert rel.run_digest(DigestDb(), NOW + timedelta(days=1)) == {"queued": 0}      # not Monday
-    assert rel.run_digest(DigestDb(weekly=False), NOW) == {"queued": 0}              # off by default
 
 
 # ---------------------------------------------------------------- governance and routes
@@ -544,7 +513,8 @@ def test_api_routes_are_registered():
 def test_settings_and_dag_fields():
     from app import incidents_api, ops_api
 
-    assert {"ai_auto", "ai_severities", "weekly_digest"} <= set(incidents_api.SETTING_KEYS)
+    assert {"ai_auto", "ai_severities"} <= set(incidents_api.SETTING_KEYS)
+    assert not {"weekly_digest", "rate_limit_per_10min"} & set(incidents_api.SETTING_KEYS)   # Teams settings retired
     assert "D.TIMEZONE" in ops_api._DAG_SQL and "D.MUTE_UNTIL" in ops_api._DAG_SQL
     out = ops_api._dag_out({"env_id": "p", "dag_id": "d", "timezone": "Europe/London", "mute_reason": "deploy",
                             "mute_until": datetime(2026, 10, 13, tzinfo=timezone.utc)}, detail=True)

@@ -85,7 +85,7 @@ export default async function ReviewPage({ params }: { params: { runId: string }
           )}
         </CardContent>
       </Card>
-      <RunConsole state={state} />
+      <RunConsole state={state} onGatePage />
     </StageGate>
   );
 }

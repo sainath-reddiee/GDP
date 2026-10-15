@@ -1,7 +1,7 @@
 """Redaction of secrets and personal data in Airflow logs and error text (pure).
 
 Applied before an error excerpt is stored, before a log is returned to the browser, and (later) before anything is
-sent to AI, Jira or Teams. It is deliberately greedy: a false positive hides a harmless value, a false negative leaks.
+sent to AI or Jira. It is deliberately greedy: a false positive hides a harmless value, a false negative leaks.
 """
 
 from __future__ import annotations

@@ -268,9 +268,6 @@ RULES: List[Tuple[str, str, Any, str]] = [
     ("POST", r"/api/ops/teams", "INTEGRATION.MANAGE", "Add a support team"),
     ("PUT", r"/api/ops/teams/[^/]+", "INTEGRATION.MANAGE", "Change a support team"),
     ("DELETE", r"/api/ops/teams/[^/]+", "INTEGRATION.MANAGE", "Delete a support team"),
-    ("POST", r"/api/ops/teams/[^/]+/webhook", "INTEGRATION.MANAGE", "Set a team's Teams webhook"),
-    ("DELETE", r"/api/ops/teams/[^/]+/webhook", "INTEGRATION.MANAGE", "Remove a team's Teams webhook"),
-    ("POST", r"/api/ops/teams/[^/]+/test", "INTEGRATION.MANAGE", ""),
     ("POST", r"/api/ops/routing", "INTEGRATION.MANAGE", "Add an incident routing rule"),
     ("PUT", r"/api/ops/routing/[^/]+", "INTEGRATION.MANAGE", "Change an incident routing rule"),
     ("DELETE", r"/api/ops/routing/[^/]+", "INTEGRATION.MANAGE", "Delete an incident routing rule"),
@@ -401,9 +398,8 @@ RULES: List[Tuple[str, str, Any, str]] = [
     ("POST", rf"{R}/.*", "RUN.OPERATE", ""),
 ]
 _COMPILED = [(m, re.compile(f"^{p}$"), priv, title) for m, p, priv, title in RULES]
-# Calls whose body carries a secret (a webhook URL): never stored on a change request, so never queued for approval.
-SECRET_BODY = [("POST", re.compile(r"^/api/ops/teams/[^/]+/webhook$")),
-               ("POST", re.compile(r"^/api/hub/pipelines$")), ("PATCH", re.compile(r"^/api/hub/pipelines/[^/]+$"))]
+# Calls whose body carries a secret: never stored on a change request, so never queued for approval.
+SECRET_BODY = [("POST", re.compile(r"^/api/hub/pipelines$")), ("PATCH", re.compile(r"^/api/hub/pipelines/[^/]+$"))]
 
 
 def carries_secret(method: str, path: str) -> bool:

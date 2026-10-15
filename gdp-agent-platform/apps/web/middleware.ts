@@ -12,4 +12,5 @@ export function middleware(req: NextRequest) {
   return NextResponse.redirect(new URL("/login", req.url));
 }
 
-export const config = { matcher: ["/((?!_next|favicon.ico).*)"] };
+// the favicon (app/icon.svg) is public: the login page shows it before anyone signs in
+export const config = { matcher: ["/((?!_next|favicon.ico|icon.svg).*)"] };

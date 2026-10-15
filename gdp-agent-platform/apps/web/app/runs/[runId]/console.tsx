@@ -4,15 +4,13 @@ import Link from "next/link";
 import { useState, useTransition } from "react";
 import type { RunState } from "@/lib/types";
 import type { ActionResult } from "@/lib/api";
-import { Loader2 } from "lucide-react";
+import { ArrowRight, Bot, Loader2, TriangleAlert } from "lucide-react";
 import { Button, buttonVariants } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input, Label, Select, Textarea } from "@/components/ui/input";
-import { reviewRun, transitionRun } from "./actions";
+import { Card, CardContent } from "@/components/ui/card";
+import { DecisionBar } from "@/components/decision-bar";
+import { transitionRun } from "./actions";
 import { labelFor, pipelineOf } from "@/lib/stages";
-
-/** APPROVE only moves a run into an *_APPROVED state; the other decisions only move it back (as the procedure enforces). */
-const decisionsFor = (toState: string) => toState.endsWith("_APPROVED") ? ["APPROVE"] : ["REQUEST_CHANGES", "REJECT", "REOPEN"];
+import { GATES, stateLabel } from "@/lib/run-labels";
 
 /** States entered only through their stage action (mirrors PROCEDURE_OWNED_STATES in the API). */
 const PROCEDURE_OWNED = new Set([
@@ -44,17 +42,18 @@ const NEXT_STEP: Record<string, { slug: string; label: string }> = {
   DBT_REVIEW: { slug: "review", label: "Review generated code" },
 };
 
-export function RunConsole({ state }: { state: RunState }) {
+/** Where the run is, in plain words, and the one thing to do next. A run at a gate gets the decision bar; cancelling
+ *  lives in the run's menu (components/run-menu), and other moves the state machine allows are offered by name. */
+export function RunConsole({ state, onGatePage = false }: { state: RunState; onGatePage?: boolean }) {
   const [error, setError] = useState("");
   const [pending, start] = useTransition();
   const human = state.allowed_transitions.filter((t) => t.actor === "HUMAN");
-  const [target, setTarget] = useState("");
-  const toState = human.some((t) => t.to_state === target) ? target : (human[0]?.to_state ?? "");
   const system = state.allowed_transitions.filter(
-    (t) => t.actor !== "HUMAN" && t.to_state !== "FAILED" &&
+    (t) => t.actor !== "HUMAN" && t.to_state !== "FAILED" && t.to_state !== "CANCELLED" &&
       (state.current_state === "FAILED" || !PROCEDURE_OWNED.has(t.to_state)),
   );
-  const gold = pipelineOf(state.run?.pipeline) === "GOLD";
+  const pipeline = pipelineOf(state.run?.pipeline);
+  const gold = pipeline === "GOLD";
   const step = NEXT_STEP[state.current_state];
   // a Gold run: the code is gold, and it picks its gold table before mapping
   const next = step && gold ? {
@@ -62,6 +61,10 @@ export function RunConsole({ state }: { state: RunState }) {
     label: ["PROFILING_COMPLETE", "DOMAIN_IDENTIFIED"].includes(state.current_state) && !state.run?.target_model
       ? "Modeling: design the gold model and pick the table to build" : step.label.replace(/Silver code/g, "Gold code"),
   } : step;
+  const gate = GATES[state.current_state];
+  const approveTo = human.find((t) => t.to_state.endsWith("_APPROVED"))?.to_state ?? gate?.approveTo;
+  const sendBack = human.filter((t) => !t.to_state.endsWith("_APPROVED")).map((t) => t.to_state);
+  const lanesOpen = ["STTM_APPROVED", "SODA_PENDING", "SODA_REVIEW"].includes(state.current_state);
 
   const run = (fn: () => Promise<ActionResult>) =>
     start(async () => {
@@ -73,69 +76,44 @@ export function RunConsole({ state }: { state: RunState }) {
   return (
     <>
       <Card>
-        <CardHeader>
-          <CardTitle>{state.current_stage ?? "Run"} — {state.current_state}</CardTitle>
-          <CardDescription>Only the transitions Snowflake allows from this state are offered.</CardDescription>
-        </CardHeader>
-        <CardContent>
-          {state.failure_reason && <p className="mb-3 text-sm text-destructive">Failure: {state.failure_reason}</p>}
-          {error && <p role="alert" className="mb-3 text-sm text-destructive">{error}</p>}
-          {["STTM_APPROVED", "SODA_PENDING", "SODA_REVIEW"].includes(state.current_state) ? (
-            <div className="mb-3 flex flex-wrap gap-2">
-              <Link href={`/runs/${state.run_id}/soda`} className={buttonVariants()}>Open Data Quality</Link>
-              <Link href={`/runs/${state.run_id}/dbt`} className={buttonVariants({ variant: "outline" })}>Open {labelFor("DBT", pipelineOf(state.run?.pipeline))}</Link>
-            </div>
-          ) : next && (
-            <Link href={`/runs/${state.run_id}/${next.slug}`} className={buttonVariants({ className: "mb-3" })}>
-              Next: {next.label}
-            </Link>
-          )}
-          <div className="flex flex-wrap gap-2">
+        <CardContent className="flex flex-wrap items-center gap-4 p-5">
+          <span className={gate ? "grid h-10 w-10 place-items-center rounded-xl bg-human/10 text-human" : "grid h-10 w-10 place-items-center rounded-xl bg-agent/10 text-agent"}>
+            {state.failure_reason ? <TriangleAlert className="h-5 w-5 text-destructive" /> : <Bot className="h-5 w-5" />}
+          </span>
+          <div className="min-w-[14rem] flex-1">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+              {state.current_stage ? labelFor(state.current_stage, pipeline) : "Run"}
+            </p>
+            <p className="text-lg font-semibold" title={state.current_state}>{stateLabel(state.current_state)}</p>
+            {state.failure_reason && <p className="text-sm text-destructive">Failure: {state.failure_reason}</p>}
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            {lanesOpen ? (
+              <>
+                <Link href={`/runs/${state.run_id}/soda`} className={buttonVariants()}>Open Data Quality <ArrowRight className="h-4 w-4" /></Link>
+                <Link href={`/runs/${state.run_id}/dbt`} className={buttonVariants({ variant: "outline" })}>Open {labelFor("DBT", pipeline)}</Link>
+              </>
+            ) : next && !gate && (
+              <Link href={`/runs/${state.run_id}/${next.slug}`} className={buttonVariants()}>
+                {next.label} <ArrowRight className="h-4 w-4" />
+              </Link>
+            )}
             {system.map((t) => (
-              <Button
-                key={t.to_state}
-                variant={t.to_state === "CANCELLED" || next ? "outline" : "default"}
-                disabled={pending}
-                onClick={() => run(() => transitionRun(state.run_id, t.to_state))}
-              >
+              <Button key={t.to_state} variant="outline" disabled={pending} title={t.to_state}
+                      onClick={() => run(() => transitionRun(state.run_id, t.to_state))}>
                 {pending && <Loader2 className="h-4 w-4 animate-spin" />}
-                {t.to_state}
+                Move to: {stateLabel(t.to_state)}
               </Button>
             ))}
-            {system.length === 0 && human.length === 0 && !next && (
-              <p className="text-sm text-muted-foreground">No actions available.</p>
-            )}
           </div>
+          {error && <p role="alert" className="basis-full text-sm text-destructive">{error}</p>}
         </CardContent>
       </Card>
 
-      {human.length > 0 && (
-        <Card>
-          <CardHeader>
-            <CardTitle>Human review</CardTitle>
-            <CardDescription>Approval requires a business justification. The reviewer is your Snowflake user.</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <form action={(form) => run(() => reviewRun(state.run_id, form))}>
-              <Label htmlFor="to_state">Move to</Label>
-              <Select id="to_state" name="to_state" value={toState} onChange={(e) => setTarget(e.target.value)}>
-                {human.map((t) => <option key={t.to_state} value={t.to_state}>{t.to_state}</option>)}
-              </Select>
-              <Label htmlFor="decision">Decision</Label>
-              <Select id="decision" name="decision" key={toState}>
-                {decisionsFor(toState).map((d) => <option key={d}>{d}</option>)}
-              </Select>
-              <Label htmlFor="justification">Business justification</Label>
-              <Textarea id="justification" name="justification" rows={3} />
-              <Label htmlFor="comments">Comments</Label>
-              <Input id="comments" name="comments" />
-              <Button type="submit" className="mt-4" disabled={pending}>
-                {pending && <Loader2 className="h-4 w-4 animate-spin" />}
-                {pending ? "Submitting…" : "Submit review"}
-              </Button>
-            </form>
-          </CardContent>
-        </Card>
+      {human.length > 0 && approveTo && (
+        <DecisionBar runId={state.run_id} gate={gate?.name ?? stateLabel(state.current_state)} role={gate?.role}
+                     approveTo={approveTo} sendBack={sendBack}
+                     reviewHref={gate && !onGatePage ? `/runs/${state.run_id}/${gate.slug}` : undefined} />
       )}
     </>
   );

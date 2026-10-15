@@ -4,7 +4,9 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { createPortal } from "react-dom";
-import { ChevronDown, ChevronsLeft, ChevronsRight, Workflow } from "lucide-react";
+import { ChevronDown, ChevronsLeft, ChevronsRight } from "lucide-react";
+import { LogoMark } from "@/components/brand/logo-mark";
+import { PRODUCT, PRODUCT_SHORT } from "@/lib/brand";
 import { cn } from "@/lib/utils";
 import type { NavCounts } from "@/app/bff/nav/route";
 import { ReportProblemButton } from "@/components/report-problem";
@@ -58,7 +60,7 @@ function ParentItem({ link, kids, path, counts, collapsed }: {
   const active = path === link.href || kids.some((k) => isActive(k, path));
   const inside = kids.some((k) => isActive(k, path));
   const listId = `nav-sub-${link.href.replace(/\W+/g, "-")}`;
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useState(!link.folded || inside);
   const [fly, setFly] = useState<{ top: number; left: number } | null>(null);
   const root = useRef<HTMLDivElement>(null);
   const flyRef = useRef<HTMLDivElement>(null);
@@ -141,7 +143,10 @@ function ParentItem({ link, kids, path, counts, collapsed }: {
     <div>
       <div className={cn(ROW, "pl-0 pr-1", path === link.href || (inside && !open) ? ON : inside ? "font-medium text-white" : OFF)}>
         {active && <span className="absolute -left-3 top-1/2 h-5 w-1 -translate-y-1/2 rounded-r-full bg-gradient-to-b from-indigo-300 to-violet-400" />}
-        <Link href={link.href} aria-current={path === link.href ? "page" : undefined} className="flex flex-1 items-center gap-3 self-stretch pl-2.5">
+        {/* named by its label alone: the folded count badge inside it is a hint (its title says what waits), not part of the name */}
+        <Link href={link.href} aria-current={path === link.href ? "page" : undefined} aria-label={link.label}
+              aria-describedby={b && !open ? `${listId}-waiting` : undefined} className="flex flex-1 items-center gap-3 self-stretch pl-2.5">
+          {b && !open && <span id={`${listId}-waiting`} className="sr-only">{b.title}</span>}
           <Icon className={cn("h-[17px] w-[17px] shrink-0", active ? "text-indigo-300" : "text-white/40 group-hover:text-white/80")} />
           <span className="flex-1 truncate">{link.label}</span>
           {!open && <Badge b={b} collapsed={false} />}
@@ -275,15 +280,12 @@ export function Sidebar({ privileges }: { privileges?: string[] | null }) {
     <nav aria-label="Main"
          className={cn("sticky top-0 flex h-screen shrink-0 flex-col overflow-y-auto overflow-x-hidden border-r border-white/[0.06] bg-sidebar text-sidebar-foreground transition-[width] duration-200",
            collapsed ? "w-[72px] px-2" : "w-[244px] px-3")}>
-      <Link href="/dashboard" className={cn("flex items-center gap-3 py-5", collapsed ? "justify-center" : "px-2")}>
-        <span className="relative grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-gradient-to-br from-indigo-400 via-indigo-500 to-violet-500 text-white shadow-lg shadow-indigo-500/30">
-          <Workflow className="h-[18px] w-[18px]" />
-          <span className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full border-2 border-sidebar bg-emerald-400" />
-        </span>
+      <Link href="/dashboard" title={PRODUCT} className={cn("group/brand flex items-center gap-3 py-5", collapsed ? "justify-center" : "px-2")}>
+        <LogoMark size="sm" className="transition-transform duration-300 group-hover/brand:scale-105" />
         {!collapsed && (
           <div className="min-w-0">
-            <div className="truncate text-sm font-semibold tracking-tight text-white">Agentic pipeline</div>
-            <div className="text-[10px] font-medium uppercase tracking-[0.14em] text-white/40">Data command center</div>
+            <div className="truncate text-sm font-semibold tracking-tight text-white">{PRODUCT_SHORT}</div>
+            <div className="truncate whitespace-nowrap text-[10px] font-medium uppercase tracking-[0.1em] text-white/40">On Snowflake Cortex</div>
           </div>
         )}
       </Link>

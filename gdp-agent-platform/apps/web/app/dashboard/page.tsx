@@ -14,7 +14,11 @@ import { buttonVariants } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { fmt, Meter, PipelineTable, RibbonMetric, Sparkline } from "./command-center";
 import { StoreCards } from "@/components/hub/store-cards";
+import { CountUp } from "@/components/motion/count-up";
 import { TicketsCard, type TicketsCardData } from "./tickets-card";
+
+/** Below this many finished runs the ribbon shows "n of m finished succeeded" rather than a percentage. */
+const FEW = 5;
 
 /** Minutes as "45m", "3h 10m" or "2d 4h". */
 function duration(minutes: number) {
@@ -56,7 +60,7 @@ export default async function Dashboard() {
   const openIncidents = incidents ? incidents.open + incidents.ack : null;
   const dqFailing = o?.dq?.failed ?? 0;
   const attention = [
-    { show: reviewCount > 0, href: "/runs?needs_review=1", icon: Eye, text: `${reviewCount} run${reviewCount === 1 ? "" : "s"} need review`, tone: "text-rose-700 bg-rose-50 ring-rose-200" },
+    { show: reviewCount > 0, href: "/runs?needs_review=1", icon: Eye, text: `${reviewCount} run${reviewCount === 1 ? "" : "s"} awaiting approval`, tone: "text-human bg-human/10 ring-human/30" },
     { show: failedCount > 0, href: "/runs?status=failed", icon: XCircle, text: `${failedCount} run${failedCount === 1 ? "" : "s"} failed this week`, tone: "text-amber-800 bg-amber-50 ring-amber-200" },
     { show: !!openIncidents, href: "/incidents", icon: Siren, text: `${openIncidents} open incident${openIncidents === 1 ? "" : "s"}`, tone: "text-rose-700 bg-rose-50 ring-rose-200" },
     { show: !!o?.qa?.pending, href: "/dashboard/qa-store", icon: SquareTerminal, text: `${o?.qa?.pending} QA pack${o?.qa?.pending === 1 ? "" : "s"} awaiting approval`, tone: "text-violet-700 bg-violet-50 ring-violet-200" },
@@ -64,6 +68,8 @@ export default async function Dashboard() {
     { show: !!o?.profiling?.drift, href: "/dashboard/profiling", icon: BarChart3, text: `${o?.profiling?.drift} drifting column${o?.profiling?.drift === 1 ? "" : "s"}`, tone: "text-amber-800 bg-amber-50 ring-amber-200" },
   ].filter((a) => a.show);
   const d = o?.delivery;
+  // with only a few finished runs a percentage misleads (one failure reads "0% succeeded"): show the count instead
+  const finished = d && d.completed + d.failed > 0 ? d.completed + d.failed : null;
   const w = o?.waiting;
   const f = o?.freshness;
   const x = o?.failing;
@@ -79,10 +85,11 @@ export default async function Dashboard() {
                   </>} />
 
       {/* hero ribbon */}
-      <section className="glass relative overflow-hidden p-1" data-testid="hero-ribbon">
+      <section className="glass aurora-border relative overflow-hidden p-1" data-testid="hero-ribbon">
         <div className="pointer-events-none absolute inset-0 bg-gradient-to-r from-indigo-500/[0.07] via-transparent to-cyan-500/[0.07]" />
         <div className="relative grid divide-y divide-border/60 sm:grid-cols-2 sm:divide-y-0 xl:grid-cols-4 xl:divide-x">
-          <RibbonMetric label="Runs, last 7 days" value={d?.success_rate == null ? "-" : Math.round(d.success_rate)} unit={d?.success_rate == null ? undefined : "% succeeded"}
+          <RibbonMetric label="Runs, last 7 days" value={<CountUp value={finished == null ? null : finished < FEW ? d!.completed : Math.round(d!.success_rate ?? 0)} />}
+                        unit={finished == null ? undefined : finished < FEW ? `of ${finished} finished succeeded` : "% succeeded"}
                         href="/runs" hint={d ? `${fmt(d.completed)} completed · ${fmt(d.failed)} failed · ${fmt(inFlightCount)} in flight now` : "run history not available"}>
             <Sparkline values={(d?.daily ?? []).map((x) => x.completed + x.failed)} />
             <p className="mt-1.5 text-[11px] text-muted-foreground">
@@ -90,11 +97,11 @@ export default async function Dashboard() {
               {o?.runs?.drafts ? ` · ${fmt(o.runs.drafts)} draft${o.runs.drafts === 1 ? "" : "s"} not started` : ""}
             </p>
           </RibbonMetric>
-          <RibbonMetric label="Waiting on people" value={w ? fmt(w.total) : "-"} href={w?.requests ? "/approvals" : "/runs?needs_review=1"}
+          <RibbonMetric label="Awaiting human approval" value={<CountUp value={w?.total} />} href={w?.requests ? "/approvals" : "/runs?needs_review=1"}
                         hint={w ? `${count(w.runs, "run")} at review · ${count(w.requests, "approval")} · ${count(w.versions, "version")} in review` : "not available"}>
             <p className="text-[11px] text-muted-foreground">{w?.oldest_minutes == null ? "Nothing is waiting" : `Oldest has waited ${duration(w.oldest_minutes)}`}</p>
           </RibbonMetric>
-          <RibbonMetric label="Stale landed tables" value={f ? fmt(f.stale) : "-"} href="/dashboard/sources"
+          <RibbonMetric label="Stale landed tables" value={<CountUp value={f?.stale} />} href="/dashboard/sources"
                         hint={f ? `of ${fmt(f.tables)} landed · ${fmt(f.fresh)} in the last 24 hours · ${fmt(f.aging)} from 1 to 7 days ago` : "landing registry not available"}>
             <Meter value={f && f.tables ? pct(f.fresh, f.tables) : null} tone="primary" />
             <p className="mt-1.5 text-[11px] text-muted-foreground">
@@ -103,7 +110,7 @@ export default async function Dashboard() {
                     f.oldest_hours != null ? `oldest load ${duration(f.oldest_hours * 60)} ago` : ""].filter(Boolean).join(" · ") : ""}
             </p>
           </RibbonMetric>
-          <RibbonMetric label="Failing checks" value={x ? fmt(x.total) : "-"} href="/dashboard/quality"
+          <RibbonMetric label="Failing checks" value={<CountUp value={x?.total} />} href="/dashboard/quality"
                         hint={x ? `${fmt(x.dq_checks)} data quality · ${count(x.qa_tests, "QA test")} · ${count(x.tables, "table")} affected` : "no check results readable"}>
             <Meter value={o?.dq?.pass_rate} />
             <p className="mt-1.5 text-[11px] text-muted-foreground">{o?.dq?.pass_rate == null ? "No data quality results yet" : `${o.dq.pass_rate}% of data quality checks passing`}</p>

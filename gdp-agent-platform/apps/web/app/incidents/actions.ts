@@ -60,13 +60,12 @@ export type BulkResult = { incident_id: string; ok: boolean; error?: string | nu
 
 export type OpsTeam = {
   team_id: string; name: string; jira_project: string | null; jira_component: string | null; jira_assignee_account_id: string | null;
-  has_teams_webhook: boolean; escalation_minutes: number | null; has_escalation_webhook: boolean; webhook_detail?: string | null; members: string[];
+  escalation_minutes: number | null; members: string[];
 };
 export type TeamInput = {
   name: string; jira_project: string | null; jira_component: string | null; jira_assignee_account_id: string | null;
   escalation_minutes: number | null; members: string[];
 };
-export type WebhookKind = "alerts" | "escalation";
 
 export type RoutingRule = {
   rule_id: string; priority: number; dag_pattern: string | null; tag: string | null; owner: string | null; env_id: string | null;
@@ -76,8 +75,8 @@ export type RuleInput = Omit<RoutingRule, "rule_id">;
 
 export type OpsSettings = {
   jira_bot: boolean; jira_site: string | null; reopen_hours: number; alert_on_retry_for_critical: boolean; transition_on_resolve: boolean;
-  done_status: string | null; rate_limit_per_10min: number; public_base_url: string | null; worker_seen_at: string | null;
-  /** O3; absent on an older API */ ai_auto?: boolean; ai_severities?: string[]; weekly_digest?: boolean;
+  done_status: string | null; public_base_url: string | null; worker_seen_at: string | null;
+  /** O3; absent on an older API */ ai_auto?: boolean; ai_severities?: string[];
 };
 export type SettingsInput = Partial<Omit<OpsSettings, "jira_bot" | "jira_site" | "worker_seen_at">>;
 
@@ -202,23 +201,6 @@ export async function deleteTeam(id: string) {
   const r = await attemptValue(() => api<unknown>(`/api/ops/teams/${enc(id)}`, { method: "DELETE" }));
   adminChanged();
   return r;
-}
-
-/** The URL goes to the API once and is stored as a Snowflake secret; it is never read back. */
-export async function setTeamWebhook(id: string, kind: WebhookKind, url: string) {
-  const r = await attemptValue(() => api<{ ok: boolean }>(`/api/ops/teams/${enc(id)}/webhook`, { method: "POST", body: json({ kind, url }) }));
-  adminChanged();
-  return r;
-}
-
-export async function removeTeamWebhook(id: string, kind: WebhookKind) {
-  const r = await attemptValue(() => api<unknown>(`/api/ops/teams/${enc(id)}/webhook?${query({ kind })}`, { method: "DELETE" }));
-  adminChanged();
-  return r;
-}
-
-export async function testTeamWebhook(id: string, kind: WebhookKind) {
-  return attemptValue(() => api<{ ok: boolean; detail: string | null }>(`/api/ops/teams/${enc(id)}/test`, { method: "POST", body: json({ kind }) }));
 }
 
 export async function listRouting() {

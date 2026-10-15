@@ -1,6 +1,6 @@
 """Authenticated encryption of stored secrets in the application (pure).
 
-Secrets (Jira refresh and access tokens, Airflow push secrets, Teams webhook URLs) are sealed here with AES-256-GCM and
+Secrets (Jira refresh and access tokens, Airflow push secrets, ingestion secrets) are sealed here with AES-256-GCM and
 stored as ciphertext in their BINARY columns. Neither the key nor the plaintext is ever part of a SQL statement: the
 connector binds parameters client side, so anything bound ends up in the statement text and in Snowflake's
 QUERY_HISTORY. Only the sealed bytes are bound.
@@ -32,7 +32,6 @@ _SALT = b"gdp-secretbox-v1"
 
 JIRA_TOKEN = "jira-token"
 PUSH_SECRET = "push-secret"
-TEAMS_WEBHOOK = "teams-webhook"
 INGESTION_SECRET = "ingestion-secret"  # Source Hub: secret intake answers of an external pipeline
 
 

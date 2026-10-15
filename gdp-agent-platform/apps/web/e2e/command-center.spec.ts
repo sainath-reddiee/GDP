@@ -20,13 +20,16 @@ for (const theme of ["light", "dark"] as const) {
       await page.goto("/dashboard");
       await expect(page.locator("html")).toHaveClass(theme === "dark" ? /dark/ : /^(?!.*dark).*$/);
       const ribbon = page.getByTestId("hero-ribbon");
-      for (const stat of ["Runs, last 7 days", "Waiting on people", "Stale landed tables", "Failing checks"]) await expect(ribbon).toContainText(stat);
+      for (const stat of ["Runs, last 7 days", "Awaiting human approval", "Stale landed tables", "Failing checks"]) await expect(ribbon).toContainText(stat);
       for (const store of ["source", "profiling", "models", "sttm", "qa", "dq"]) await expect(page.getByTestId(`store-${store}`)).toBeVisible();
       await expect(page.getByTestId("pipeline-table")).toBeVisible();
       // one place for the stores: Store in the sidebar with the six stores under it, and no duplicate tab row above the page
       const nav = page.getByRole("navigation", { name: "Main" });
       await expect(nav.getByText("Asset stores")).toBeVisible();
       await expect(nav.getByRole("link", { name: "Store", exact: true })).toHaveAttribute("href", "/dashboard/store");
+      // the six stores start folded under Store; the chevron shows them (and the choice is remembered)
+      const show = nav.getByRole("button", { name: "Show Store sections" });
+      if (await show.isVisible()) await show.click();
       for (const store of ["Source Store", "Profiling Store", "Modeling Store", "STTM Store", "QA Store", "Data Quality Store"]) {
         await expect(nav.getByRole("link", { name: store })).toBeVisible();
       }

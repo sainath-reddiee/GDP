@@ -10,7 +10,9 @@ export type NavLink = { href: string; label: string; icon: typeof Database; priv
   /** a second line under the label, shown on a featured entry */
   hint?: string;
   /** sub-links shown under the item (expanded sidebar) or in a flyout (collapsed); the item is active on any of them */
-  children?: NavLink[] };
+  children?: NavLink[];
+  /** sub-links start folded (they open on their own on one of their pages, and the chevron choice is remembered) */
+  folded?: boolean };
 
 /** Incidents shipped with PR O2. */
 const SHOW_INCIDENTS = true;
@@ -52,8 +54,8 @@ export type NavGroup = { label: string; links: NavLink[]; secondary?: boolean; d
   /** a single call to action, drawn as a highlighted entry with no section heading */
   feature?: boolean };
 
-// The lifecycle first: onboard what comes in, the six asset stores it fills, the domains and knowledge that give it
-// meaning, then the runs that build on them. Monitor and Govern follow as foldable sections. A group with no visible links is hidden.
+// The lifecycle first: onboard what comes in, build it (the Silver and Gold runs), the six asset stores the runs fill,
+// and the domains and knowledge that give it meaning. Monitor and Govern follow as foldable sections. A group with no visible links is hidden.
 export const NAV_GROUPS: NavGroup[] = [
   {
     label: "Overview",
@@ -74,18 +76,7 @@ export const NAV_GROUPS: NavGroup[] = [
     links: [{ href: "/dashboard/onboarding", label: "Onboarding", icon: Rocket, hint: "Sources, domains, applications" }],
   },
   {
-    label: "Asset stores",
-    links: [{ href: "/dashboard/store", label: "Store", icon: Store, children: STORES, badge: storeBadge }],
-  },
-  {
-    label: "Knowledge",
-    links: [
-      { href: "/domains", label: "Domains", icon: Boxes },
-      { href: "/knowledge", label: "Knowledge", icon: BookOpen },
-      { href: "/skills", label: "Skills", icon: Sparkles },
-    ],
-  },
-  {
+    // the run engine: the Silver and Gold pipelines and what they build; first after onboarding, where developers work
     label: "Build",
     links: [
       {
@@ -99,6 +90,18 @@ export const NAV_GROUPS: NavGroup[] = [
       },
       { href: "/lineage", label: "Lineage", icon: Network },
       { href: "/code", label: "Code", icon: FolderGit2, privilege: "CODE.VIEW" },
+    ],
+  },
+  {
+    label: "Asset stores",
+    links: [{ href: "/dashboard/store", label: "Store", icon: Store, children: STORES, badge: storeBadge, folded: true }],
+  },
+  {
+    label: "Knowledge",
+    links: [
+      { href: "/domains", label: "Domains", icon: Boxes },
+      { href: "/knowledge", label: "Knowledge", icon: BookOpen },
+      { href: "/skills", label: "Skills", icon: Sparkles },
     ],
   },
   {

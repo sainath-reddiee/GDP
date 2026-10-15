@@ -1,0 +1,42 @@
+/* The signed-out landing page: an editorial, spec-sheet look (serif display, mono labels, hairline rules on warm paper)
+   so it does not read like a stock dark SaaS template. Colours are literal on purpose: the app's dark-mode remap
+   (theme-compat.css) targets named Tailwind classes, and this page is always light. */
+
+.lp {
+  --paper: #f3f1ea;
+  --panel: #fbfaf6;
+  --ink: #15140f;
+  --ink-2: #3b3934;
+  --muted: #6e6b62;
+  --line: #d9d4c7;
+  --agent: #4b44e8;
+  --human: #e4572e;
+  --cortex: #1c8fc4;
+  --ok: #17794b;
+  background: var(--paper);
+  color: var(--ink);
+  color-scheme: light;
+}
+.lp-display { font-family: "Instrument Serif", ui-serif, Georgia, serif; font-weight: 400; letter-spacing: -0.015em; }
+.lp-mono { font-family: "JetBrains Mono Variable", "JetBrains Mono", "Cascadia Code", ui-monospace, monospace; }
+.lp-label {
+  font-family: "JetBrains Mono Variable", "JetBrains Mono", ui-monospace, monospace;
+  font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted);
+}
+/* faint graph paper behind the hero */
+.lp-grid {
+  background-image:
+    linear-gradient(to right, rgb(21 20 15 / 0.05) 1px, transparent 1px),
+    linear-gradient(to bottom, rgb(21 20 15 / 0.05) 1px, transparent 1px);
+  background-size: 32px 32px;
+  mask-image: linear-gradient(to bottom, #000 40%, transparent 100%);
+}
+.lp-link { background: linear-gradient(currentColor, currentColor) 0 100% / 0 1px no-repeat; transition: background-size 0.3s ease; }
+.lp-link:hover { background-size: 100% 1px; }
+
+@keyframes lp-marquee { to { transform: translateX(-50%); } }
+.lp-marquee { animation: lp-marquee 48s linear infinite; }
+.lp-marquee-wrap:hover .lp-marquee { animation-play-state: paused; }
+@media (prefers-reduced-motion: reduce) {
+  .lp-marquee { animation: none; }
+}

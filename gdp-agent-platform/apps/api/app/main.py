@@ -28,7 +28,7 @@ from app.db import (
     apply_work_role, close_session, dev_db, list_grantable_roles, lookup_session, open_pat_session, transaction,
 )
 
-app = FastAPI(title="Agentic pipeline API")
+app = FastAPI(title="Agentic Data Operating System API")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:3000", "http://127.0.0.1:3000",

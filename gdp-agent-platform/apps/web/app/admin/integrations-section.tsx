@@ -95,7 +95,7 @@ export function IntegrationsSection({ repos, domains, publishing, jira, airflow,
       badge: airflow === null ? <Badge tone="idle">not installed</Badge>
         : airflowFailing ? <Badge tone="bad">{airflowFailing} failing</Badge>
           : <Badge tone={airflow.length ? "good" : "idle"}>{airflow.length}</Badge> },
-    { id: "incidents", label: "Incidents", icon: Siren, hint: "Teams, routing rules, Teams channels and escalation",
+    { id: "incidents", label: "Incidents", icon: Siren, hint: "Support teams, routing rules and escalation",
       badge: airflow === null ? <Badge tone="idle">not installed</Badge> : null },
     { id: "cases", label: "Cases", icon: LifeBuoy, hint: "Automatic AI triage and SLA per severity", badge: null },
   ];

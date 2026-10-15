@@ -116,7 +116,9 @@ function SsoForm() {
   );
 }
 
-export function LoginForm({ mode }: { mode: AuthMode }) {
+/** compact: just the form, for the sign-in dialog on the landing page (the page itself says what the platform does). */
+export function LoginForm({ mode, compact = false }: { mode: AuthMode; compact?: boolean }) {
+  if (compact) return mode === "pat" ? <TokenForm /> : <SsoForm />;
   return (
     <div className="space-y-5">
       {mode === "pat" ? <TokenForm /> : <SsoForm />}
