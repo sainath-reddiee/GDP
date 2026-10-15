@@ -75,7 +75,10 @@ def _drop_refresh_tasks(db: Db, repo_id: str) -> None:
     """The schedule's task, and the suspended copy kept from before V061 (names before V061)."""
     task = _task_name(repo_id)
     db.execute(f"DROP TASK IF EXISTS {task}")
-    db.execute(f"DROP TASK IF EXISTS {task.replace(fqn(DATABASE, ''), f'{DATABASE}.CODE.', 1)}")
+    try:   # a new environment has no CODE schema
+        db.execute(f"DROP TASK IF EXISTS {task.replace(fqn(DATABASE, ''), f'{DATABASE}.CODE.', 1)}")
+    except Exception:
+        pass
 
 
 def _platform_repo_name(name: str) -> str:

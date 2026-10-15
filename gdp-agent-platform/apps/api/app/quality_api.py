@@ -285,10 +285,12 @@ def delete_schedule(table: str, db: Db = Depends(current_db)):
         raise HTTPException(409, "the stored task name is not a Data Quality Store task")
     try:
         db.execute(f"DROP TASK IF EXISTS {task}")
-        # the suspended copy kept from before V061 (names before V061), so the whole schedule goes
-        db.execute(f"DROP TASK IF EXISTS {task.replace(fqn(DATABASE, ''), f'{DATABASE}.QUALITY.', 1)}")
     except Exception as exc:
         raise _snowflake_error(exc) from exc
+    try:   # the suspended copy kept from before V061 (names before V061); a new environment has no QUALITY schema
+        db.execute(f"DROP TASK IF EXISTS {task.replace(fqn(DATABASE, ''), f'{DATABASE}.QUALITY.', 1)}")
+    except Exception:
+        pass
     db.execute("DELETE FROM CORE.DQ_SCHEDULE WHERE TABLE_NAME = %s", (table,))
     db.execute("UPDATE CORE.DQ_CHECKS_CATALOG SET SCHEDULE_CRON = NULL WHERE TABLE_NAME = %s", (table,))
     return {"table": table, "schedule": None}

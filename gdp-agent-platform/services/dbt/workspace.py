@@ -464,7 +464,8 @@ def run_workspace_cleanup(execute: Execute, run_id: str) -> Dict[str, Any]:
                 listed = _lower_rows(execute(f"SHOW DBT PROJECTS LIKE '{prefix}%' IN SCHEMA {schema}") or [])
             except Exception as exc:
                 listed = []
-                out["errors"].append(f"SHOW DBT PROJECTS IN {schema}: {str(exc)[:300]}")
+                if schema == PLATFORM_SCHEMA or "does not exist" not in str(exc):   # no CODEGEN in a new environment
+                    out["errors"].append(f"SHOW DBT PROJECTS IN {schema}: {str(exc)[:300]}")
             for row in listed:
                 name = str(row.get("name") or "")
                 if not name.upper().startswith(prefix):

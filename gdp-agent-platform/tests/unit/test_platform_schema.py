@@ -48,7 +48,6 @@ def test_no_two_objects_collide_in_the_platform_schema():
 
 def test_generated_files_match_the_mapping():
     assert generate.V061.read_text(encoding="utf-8") == generate.v061_sql()
-    assert generate.COMPAT.read_text(encoding="utf-8") == generate.compat_sql()
 
 
 def test_v061_only_renames_in_place_and_is_rerunnable():
@@ -64,10 +63,11 @@ def test_v061_only_renames_in_place_and_is_rerunnable():
     assert renames == sum(1 for (_, _, m) in MOVED.values() if m == RENAME)
 
 
-def test_compatibility_views_never_expose_credentials():
-    text = re.sub(r"--[^\n]*", "", generate.COMPAT.read_text(encoding="utf-8"))
-    assert "JIRA.USER_TOKEN " not in text and "JIRA.OAUTH_STATE " not in text
-    assert text.count("CREATE OR REPLACE VIEW") == text.count("COPY GRANTS")
+def test_compatibility_views_never_expose_credentials_and_never_reach_a_new_environment():
+    assert {("JIRA", "USER_TOKEN"), ("JIRA", "OAUTH_STATE")} <= generate.NO_COMPAT_VIEW
+    for d in TEMPLATE_DIRS:   # only `runtime apply` creates them, never a deploy
+        for path in d.glob("*.sql"):
+            assert "Compatibility view" not in path.read_text(encoding="utf-8"), path.name
 
 
 def test_no_code_or_template_names_an_old_schema():
@@ -84,9 +84,8 @@ def test_templates_use_the_schema_placeholder():
         for path in d.glob("*.sql"):
             text = path.read_text(encoding="utf-8")
             assert "{{database}}.CORE." not in text, path.name
-            if path.name != "compat_legacy.sql":
-                for schema in LEGACY_SCHEMAS:
-                    assert f"{{{{database}}}}.{schema}." not in text, (path.name, schema)
+            for schema in LEGACY_SCHEMAS:
+                assert f"{{{{database}}}}.{schema}." not in text, (path.name, schema)
 
 
 def test_privilege_codes_that_look_qualified_are_untouched():

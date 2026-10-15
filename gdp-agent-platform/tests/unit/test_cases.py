@@ -752,7 +752,7 @@ def test_bootstrap_creates_the_four_eyes_package_policy():
 # ---------------------------------------------------------------- migration
 
 def test_v034_migration():
-    sql = (ROOT / "snowflake" / "database" / "migrations" / "V034__cases.sql").read_text(encoding="utf-8")
+    sql = (ROOT / "snowflake" / "database" / "migrations" / "archive" / "V034__cases.sql").read_text(encoding="utf-8")
     for table in ("CASE_RECORD", "CASE_EVENT", "CASE_LINK", "CASE_ARTIFACT"):
         assert f"CREATE TABLE IF NOT EXISTS {{{{database}}}}.CASES.{table}" in sql
     assert "CASES.CASE_SEQ.NEXTVAL" in sql and "IDEMPOTENCY_KEY" in sql   # V034 is history: names before V061

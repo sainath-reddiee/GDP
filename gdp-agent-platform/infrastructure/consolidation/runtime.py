@@ -6,8 +6,8 @@
 
 freeze  P3: record the state of every task in the platform database and suspend the running ones.
 apply   P5, after `deploy_snowflake.py --consolidate`: tasks get a twin in CORE (clone, then the body re-pointed at CORE;
-        Snowflake cannot rename a task), the network rule is re-created in CORE, each compatibility view gets exactly
-        the SELECT grants its table had, the old Cortex Search services are suspended and USAGE on the old procedures
+        Snowflake cannot rename a task), the network rule is re-created in CORE, a read-only compatibility view
+        takes each moved table's old name with exactly the SELECT grants the table had, the old Cortex Search services are suspended and USAGE on the old procedures
         is revoked. Nothing is dropped: old tasks stay suspended and the old rule stays. Existing secrets, git
         repository clones and dbt projects stay where they are (rows store their names); new ones go to CORE.
 resume  P7: resume the CORE twins of the tasks that were running before the freeze. Never on a rehearsal clone.
@@ -25,6 +25,10 @@ from infrastructure.consolidation.common import (LEDGER, PLATFORM_SCHEMA, REHEAR
                                                  baseline_objects, connect, database_name, finish_run, latest_run,
                                                  map_fqn, parser, q, show, start_run, try_q, write_json)
 from infrastructure.consolidation.generate import NO_COMPAT_VIEW
+
+# Read-only views on the old names for the 30-day transition; only `runtime apply` creates them (never a deploy, so a
+# new environment has none), `rollback` and the cleanup remove them. Row access policies of the tables still apply.
+COMPAT_COMMENT = "Compatibility view (read-only) of"
 
 
 class Plan:
@@ -96,6 +100,8 @@ def apply(args, cur, db: str) -> int:
             schema, name = o["old_fqn"].split(".")[1:3]
             if (schema, name) in NO_COMPAT_VIEW:
                 continue
+            plan.run(f"CREATE OR REPLACE VIEW {o['old_fqn']} COPY GRANTS COMMENT = '{COMPAT_COMMENT} {o['new_fqn']}' "
+                     f"AS SELECT * FROM {o['new_fqn']}", "compatibility view (read-only, transition only) on the old name")
             for g in b.get("grants") or []:
                 if g["privilege"] == "SELECT" and g["granted_to"] in ("DATABASE_ROLE", "ROLE"):
                     to = "DATABASE ROLE" if g["granted_to"] == "DATABASE_ROLE" else "ROLE"

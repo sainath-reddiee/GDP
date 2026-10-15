@@ -4,7 +4,11 @@
 
 Steps (idempotent):
   1. bootstrap   CREATE DATABASE/SCHEMA CORE IF NOT EXISTS + CORE.SCHEMA_MIGRATION + CORE.DEPLOY_STATE
-  2. migrations  snowflake/database/migrations/V###__*.sql, each applied once; checksum must not change
+  2. migrations  a new environment (empty ledger): snowflake/database/baseline/B061__platform_core.sql creates the
+                 final CORE layout directly and records V001 to V061 as applied; an existing environment applies what
+                 it has not applied yet from snowflake/database/migrations/archive/ (V001 to V061, history, never
+                 edited). Then snowflake/database/migrations/V###__*.sql (V062 on). Each applied once; checksum must
+                 not change
   3. seed        workflow graph JSON -> CORE.WORKFLOW_STATE / CORE.WORKFLOW_TRANSITION (MERGE)
   4. package     services/ -> content-addressed zip -> PUT @CORE.CODE_STAGE
   5. procedures  snowflake/procedures/*.sql (CREATE OR REPLACE PROCEDURE + grants)
@@ -44,6 +48,9 @@ from services.common.platform_schema import LEGACY_SCHEMAS, PLATFORM_SCHEMA  # n
 from services.workflow.graph import load_graph  # noqa: E402
 
 MIGRATIONS_DIR = ROOT / "snowflake" / "database" / "migrations"
+ARCHIVE_DIR = MIGRATIONS_DIR / "archive"          # V001 to V061: history, kept for environments that predate V061
+BASELINE_FILE = ROOT / "snowflake" / "database" / "baseline" / "B061__platform_core.sql"
+BASELINE_COVERS = "061"                          # the baseline equals V001 to V061 applied in order
 PROCEDURES_DIR = ROOT / "snowflake" / "procedures"
 DEMO_DIR = ROOT / "snowflake" / "demo"
 VIEWS_DIR = ROOT / "snowflake" / "views"
@@ -92,8 +99,9 @@ def checksum(text: str) -> str:
 
 
 def list_migrations() -> List[Tuple[str, str, Path]]:
+    """Archived (V001 to V061) and active migrations, in version order."""
     found = []
-    for path in sorted(MIGRATIONS_DIR.glob("*.sql")):
+    for path in sorted([*ARCHIVE_DIR.glob("*.sql"), *MIGRATIONS_DIR.glob("*.sql")], key=lambda p: p.name):
         m = MIGRATION_NAME.match(path.name)
         assert m, f"migration file name must match V###__name.sql: {path.name}"
         found.append((m.group(1), m.group(2), path))
@@ -230,6 +238,9 @@ def deploy(args) -> None:
 
     if args.dry_run:
         print(f"-- bootstrap\n{bootstrap_sql(database)}")
+        if BASELINE_FILE.exists() and not args.no_baseline:
+            print(f"-- baseline {BASELINE_FILE.name} (new environment only; existing ones apply the archive below)")
+            print(render(BASELINE_FILE.read_text(encoding="utf-8"), variables))
         for version, name, path in migrations:
             print(f"-- migration V{version} {name} checksum={checksum(path.read_text(encoding='utf-8'))}")
             print(render(path.read_text(encoding="utf-8"), variables))
@@ -271,7 +282,8 @@ def deploy(args) -> None:
         log = apply_to_connection(con, database, warehouse, variables, zip_name, zip_bytes,
                                   migrations, procedures, extra_sql, graph_version,
                                   state_rows, transition_rows, demo_files, force=args.force,
-                                  consolidate=args.consolidate, rehearsal=args.rehearsal, through=args.through)
+                                  consolidate=args.consolidate, rehearsal=args.rehearsal, through=args.through,
+                                  use_baseline=not args.no_baseline)
         for line in log:
             print(line)
     finally:
@@ -386,7 +398,7 @@ def apply_to_connection(con, database: str, warehouse: str, variables: Dict[str,
                         zip_name: str, zip_bytes: bytes, migrations, procedures, extra_sql,
                         graph_version, state_rows, transition_rows, demo_files, force: bool = False,
                         consolidate: bool = False, rehearsal: bool = False,
-                        through: str | None = None) -> List[str]:
+                        through: str | None = None, use_baseline: bool = True) -> List[str]:
     """Apply migrations, seed, package, procedures and extras on an open connection; steps that did not change
     since their last successful apply are skipped unless `force`. `rehearsal` keeps every change inside `database`
     (which must end in _REHEARSAL): no Oracle procedure refresh, no publisher task. `through` applies migrations up to
@@ -411,6 +423,21 @@ def apply_to_connection(con, database: str, warehouse: str, variables: Dict[str,
     cur.execute(f"SELECT VERSION, CHECKSUM FROM {database}.CORE.SCHEMA_MIGRATION")
     applied = dict(cur.fetchall())
     migrated = False
+    if not applied and use_baseline and BASELINE_FILE.exists() and (not through or through >= BASELINE_COVERS):
+        con.execute_string(render(BASELINE_FILE.read_text(encoding="utf-8"), variables))
+        for version, name, path in migrations:
+            if version > BASELINE_COVERS:
+                continue
+            digest = checksum(path.read_text(encoding="utf-8"))
+            cur.execute(
+                f"INSERT INTO {database}.CORE.SCHEMA_MIGRATION (VERSION, DESCRIPTION, CHECKSUM, APPLIED_BY) "
+                f"SELECT %s, %s, %s, CURRENT_USER()",
+                (version, name, digest),
+            )
+            applied[version] = digest
+        log.append(f"baseline {BASELINE_FILE.name}: new environment created in {PLATFORM_SCHEMA}; "
+                   f"V001 to V{BASELINE_COVERS} recorded as applied")
+        migrated = True
     for version, name, path in migrations:
         if through and version > through:
             break
@@ -525,7 +552,7 @@ def _seed_graph(cur, database: str, graph_version, state_rows, transition_rows) 
 
 def apply_from_session(con, database: str, warehouse: str, demo_source: str | None = None,
                        force: bool = False, consolidate: bool = False, rehearsal: bool = False,
-                       through: str | None = None) -> List[str]:
+                       through: str | None = None, use_baseline: bool = True) -> List[str]:
     # The Admin deploy never passes consolidate, so it cannot apply V061 on a database that holds data.
     """Deploy using an already-authenticated Snowflake connection (no new SSO); only changed steps unless `force`."""
     zip_name, zip_bytes = build_services_zip()
@@ -546,7 +573,7 @@ def apply_from_session(con, database: str, warehouse: str, demo_source: str | No
         list_migrations(), sorted(PROCEDURES_DIR.glob("*.sql")),
         sorted(VIEWS_DIR.glob("*.sql")) + sorted(SEARCH_DIR.glob("*.sql")) + sorted(AGENTS_DIR.glob("*.sql")),
         graph_version, state_rows, transition_rows, demo_files, force=force,
-        consolidate=consolidate, rehearsal=rehearsal, through=through,
+        consolidate=consolidate, rehearsal=rehearsal, through=through, use_baseline=use_baseline,
     )
 
 
@@ -562,6 +589,8 @@ def main() -> None:
                         help="apply every step, even the ones that did not change since the last deploy")
     parser.add_argument("--consolidate", action="store_true",
                         help="allow V061 (move every platform object into CORE) after a completed baseline")
+    parser.add_argument("--no-baseline", action="store_true",
+                        help="new environment: apply the archived V001 to V061 instead of the baseline (checks only)")
     parser.add_argument("--through", help="apply migrations up to and including this version (e.g. 060), then stop")
     parser.add_argument("--rehearsal", action="store_true",
                         help="the database is a *_REHEARSAL clone; change nothing outside it")

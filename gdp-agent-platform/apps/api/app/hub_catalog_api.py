@@ -251,6 +251,15 @@ def set_profile_schedule(body: ScheduleIn, db: Db = Depends(current_db)):
     return {"schedule_id": schedule_id, "task": task, "cron": body.cron.strip(), "tables": tables}
 
 
+def _drop_legacy_task(db: Db, task: str) -> None:
+    """The suspended copy of a schedule's task kept from before V061 (names before V061); a new environment has no
+    PROFILE schema at all, so a failure here is not an error."""
+    try:
+        db.execute(f"DROP TASK IF EXISTS {task}")
+    except Exception:
+        pass
+
+
 def _schedule_task(db: Db, schedule_id: str) -> str:
     from app.db import DATABASE
 
@@ -270,8 +279,7 @@ def delete_profile_schedule(id: str, db: Db = Depends(current_db)):  # noqa: A00
     task = _schedule_task(db, id)
     try:
         db.execute(f"DROP TASK IF EXISTS {task}")
-        # the suspended copy kept from before V061 (names before V061), so the whole schedule goes
-        db.execute(f"DROP TASK IF EXISTS {task.replace(fqn(DATABASE, ''), f'{DATABASE}.PROFILE.', 1)}")
+        _drop_legacy_task(db, task.replace(fqn(DATABASE, ""), f"{DATABASE}.PROFILE.", 1))
         db.execute("DELETE FROM CORE.PROFILE_SCHEDULE WHERE SCHEDULE_ID = %s", (id,))
     except Exception as exc:
         raise _snowflake_error(exc) from exc

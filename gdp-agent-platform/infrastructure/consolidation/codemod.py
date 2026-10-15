@@ -24,7 +24,7 @@ from services.common.platform_schema import MOVED, PLATFORM_SCHEMA  # noqa: E402
 DEFAULT_PATHS = ("services", "apps/api", "infrastructure", "snowflake", "tests", "docs", "airflow_plugins", "docker",
                  "README.md")
 TEMPLATE_DIRS = ("snowflake/procedures", "snowflake/views", "snowflake/cortex_search", "snowflake/agents")
-SKIP = ("snowflake/database/migrations/", "snowflake/views/compat_legacy.sql", "services/common/platform_schema.py",
+SKIP = ("snowflake/database/migrations/", "services/common/platform_schema.py",
         "infrastructure/consolidation/", "tests/unit/test_platform_schema.py")
 EXTS = {".py", ".sql", ".md", ".yaml", ".yml", ".json", ".j2", ".jinja", ".txt", ".toml"}
 

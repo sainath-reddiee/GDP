@@ -18,7 +18,7 @@ from services.governance import policy  # noqa: E402
 from services.governance import preview as pv  # noqa: E402
 from test_dq_suites import Session  # noqa: E402
 
-MIGRATION = ROOT / "snowflake" / "database" / "migrations" / "V043__source_control.sql"
+MIGRATION = ROOT / "snowflake" / "database" / "migrations" / "archive" / "V043__source_control.sql"
 
 
 def entry(version=3, status="APPROVED", **extra):

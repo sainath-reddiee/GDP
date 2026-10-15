@@ -20,7 +20,7 @@ from services.governance import policy  # noqa: E402
 from services.source import ingestion_control as ic  # noqa: E402
 from test_hub_api import FakeDb  # noqa: E402
 
-MIGRATION = ROOT / "snowflake" / "database" / "migrations" / "V046__ingestion_control_config.sql"
+MIGRATION = ROOT / "snowflake" / "database" / "migrations" / "archive" / "V046__ingestion_control_config.sql"
 
 GOOD = {
     "source": {"source_name": "crm_oracle", "source_type": "ORACLE", "source_account": "crm_oracle_prod",

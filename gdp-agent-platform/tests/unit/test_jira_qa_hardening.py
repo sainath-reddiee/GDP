@@ -401,7 +401,7 @@ def test_qa_and_jira_procedures_are_granted_consistently():
 # ---------------------------------------------------------------- 8. V033: own rows only
 
 def test_v033_limits_token_and_state_rows_to_their_user():
-    text = (ROOT / "snowflake" / "database" / "migrations" / "V033__jira_row_access.sql").read_text(encoding="utf-8")
+    text = (ROOT / "snowflake" / "database" / "migrations" / "archive" / "V033__jira_row_access.sql").read_text(encoding="utf-8")
     assert "ROW_USER = CURRENT_USER()" in text
     for table in ("USER_TOKEN", "OAUTH_STATE"):
         assert f"ALTER TABLE {{{{database}}}}.JIRA.{table} ADD ROW ACCESS POLICY {{{{database}}}}.JIRA.OWN_ROWS ON (USER_NAME);" in text  # names before V061

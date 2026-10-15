@@ -61,10 +61,14 @@ def main() -> None:
     p.add_argument("--role")
     p.add_argument("--out", default=str(ROOT / "consolidation_runs"))
     p.add_argument("--reuse", action="store_true", help="continue on an existing rehearsal clone (skip the clone step)")
+    p.add_argument("--suffix", default="", help="clone name <SOURCE>_<SUFFIX>_REHEARSAL (several rehearsals side by side)")
+    p.add_argument("--no-rollback", action="store_true",
+                   help="leave the clone consolidated (for running the application against it)")
     args = p.parse_args()
     src = args.source.upper()
     assert IDENT.match(src), "invalid source database"
-    db, backup = f"{src}_REHEARSAL", f"{src}_RH_BACKUP_REHEARSAL"
+    tag = f"_{args.suffix.upper()}" if args.suffix else ""
+    db, backup = f"{src}{tag}_REHEARSAL", f"{src}{tag}_RH_BACKUP_REHEARSAL"
     report: Dict[str, Any] = {"source": src, "rehearsal": db, "backup": backup, "steps": []}
     started = time.time()
 
@@ -150,6 +154,9 @@ def main() -> None:
     step("runtime apply", lambda: run_script(runtime, ["apply", *base, "--rehearsal", "--execute",
                                                           "--source-database", src, "--test-dbt-rename"], shared))
     step("verify functional", lambda: run_script(verify, ["functional", *base, "--rehearsal"], shared))
+    if args.no_rollback:
+        finish(report, args, started)
+        return
     step("rollback on the rehearsal clone", lambda: run_script(rollback, [*base, "--rehearsal", "--execute"], shared))
 
     def after_rollback():
