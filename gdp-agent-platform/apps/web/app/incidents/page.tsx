@@ -27,10 +27,10 @@ export default async function IncidentsPage({ searchParams }: { searchParams?: P
   const canManage = canAct(me, "INTEGRATION.MANAGE");
   const header = (
     <PageHeader eyebrow="Operate" title="Incidents"
-                description="Airflow failures, late and long running DAGs, grouped and routed to a team. Acknowledge, assign and resolve them here; Jira and Teams follow."
+                description="Airflow failures, late and long running DAGs, grouped and routed to a team. Acknowledge, assign and resolve them here; Jira follows."
                 actions={canManage ? (
                   <Link href="/admin?section=integrations&view=incidents" className="inline-flex items-center gap-1.5 rounded-lg border bg-card px-3 py-1.5 text-sm font-medium shadow-xs hover:bg-muted">
-                    <Settings2 className="h-4 w-4" />Teams and routing
+                    <Settings2 className="h-4 w-4" />Support teams and routing
                   </Link>
                 ) : undefined} />
   );

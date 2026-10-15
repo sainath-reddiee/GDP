@@ -84,19 +84,19 @@ def assert_no_secret_in_sql(db, *secrets):
 # ---------------------------------------------------------------- 1. secrets sealed in the application
 
 def test_secretbox_round_trip_tamper_wrong_key_context_and_legacy():
-    sealed = secretbox.seal("https://a.logic.azure.com/x?sig=S3CRET", KEY, secretbox.TEAMS_WEBHOOK, "t1:COL")
+    sealed = secretbox.seal("password=hunter2;sig=S3CRET", KEY, secretbox.INGESTION_SECRET, "t1:COL")
     assert sealed.startswith(secretbox.PREFIX) and b"S3CRET" not in sealed
-    assert secretbox.open_secret(sealed, KEY, secretbox.TEAMS_WEBHOOK, "t1:COL").endswith("sig=S3CRET")
-    assert secretbox.open_secret(bytearray(sealed), KEY, secretbox.TEAMS_WEBHOOK, "t1:COL").endswith("S3CRET")
-    assert secretbox.open_secret(sealed.hex(), KEY, secretbox.TEAMS_WEBHOOK, "t1:COL").endswith("S3CRET")
-    assert secretbox.seal("x", KEY, secretbox.TEAMS_WEBHOOK) != secretbox.seal("x", KEY, secretbox.TEAMS_WEBHOOK)  # fresh nonce
-    assert secretbox.open_secret(None, KEY, secretbox.TEAMS_WEBHOOK) is None
+    assert secretbox.open_secret(sealed, KEY, secretbox.INGESTION_SECRET, "t1:COL").endswith("sig=S3CRET")
+    assert secretbox.open_secret(bytearray(sealed), KEY, secretbox.INGESTION_SECRET, "t1:COL").endswith("S3CRET")
+    assert secretbox.open_secret(sealed.hex(), KEY, secretbox.INGESTION_SECRET, "t1:COL").endswith("S3CRET")
+    assert secretbox.seal("x", KEY, secretbox.INGESTION_SECRET) != secretbox.seal("x", KEY, secretbox.INGESTION_SECRET)  # fresh nonce
+    assert secretbox.open_secret(None, KEY, secretbox.INGESTION_SECRET) is None
     tampered = sealed[:-1] + bytes([sealed[-1] ^ 1])
-    for value, key, purpose, context in ((tampered, KEY, secretbox.TEAMS_WEBHOOK, "t1:COL"),
-                                         (sealed, "z" * 32, secretbox.TEAMS_WEBHOOK, "t1:COL"),     # wrong key
+    for value, key, purpose, context in ((tampered, KEY, secretbox.INGESTION_SECRET, "t1:COL"),
+                                         (sealed, "z" * 32, secretbox.INGESTION_SECRET, "t1:COL"),     # wrong key
                                          (sealed, KEY, secretbox.PUSH_SECRET, "t1:COL"),            # other purpose
-                                         (sealed, KEY, secretbox.TEAMS_WEBHOOK, "t2:COL"),          # copied to another row
-                                         (sealed[:20], KEY, secretbox.TEAMS_WEBHOOK, "t1:COL")):    # truncated
+                                         (sealed, KEY, secretbox.INGESTION_SECRET, "t2:COL"),          # copied to another row
+                                         (sealed[:20], KEY, secretbox.INGESTION_SECRET, "t1:COL")):    # truncated
         with pytest.raises(secretbox.SecretError) as err:
             secretbox.open_secret(value, key, purpose, context)
         assert not isinstance(err.value, secretbox.LegacySecret)
@@ -146,28 +146,6 @@ def test_push_secret_legacy_value_needs_a_new_secret(monkeypatch):
     assert_no_secret_in_sql(db, KEY)
     row = {"env_id": "prod", "name": "P", "mwaa_env": "m", "region": "r", "push_secret_legacy": True, "has_push_secret": True}
     assert "generate a new push secret" in ops_api._env_out(row)["push_secret_detail"]
-
-
-def test_webhook_write_and_read_never_put_the_url_or_key_in_sql(monkeypatch):
-    _, incidents_api, _ = _modules()
-    monkeypatch.setenv("AIP_SECRET_KEY", KEY)
-    url = "https://prod-1.westus.logic.azure.com/workflows/x/triggers/manual/paths/invoke?sig=TOPSECRET"
-    team = {"team_id": "data", "name": "Data"}
-    db = CaptureDb({"FROM OPS.TEAM WHERE TEAM_ID": [team]})
-    incidents_api.set_webhook("data", incidents_api.WebhookIn(kind="alerts", url=url), db=db, x_aip_replay=None)
-    assert_no_secret_in_sql(db, KEY, "TOPSECRET")
-    sealed = next(p[0] for s, p in db.sent if "SET TEAMS_WEBHOOK_SECRET = %s" in s)
-    assert isinstance(sealed, bytes)
-    reader = CaptureDb({"TEAMS_WEBHOOK_SECRET AS A": [{"a": sealed, "e": None}]})
-    assert notify.webhook_url(reader, "data", "escalation") == url     # escalation falls back to alerts
-    assert_no_secret_in_sql(reader, KEY)
-    legacy = CaptureDb({"TEAMS_WEBHOOK_SECRET AS A": [{"a": bytes.fromhex("bb" * 40), "e": None}]})
-    with pytest.raises(RuntimeError) as err:
-        notify.webhook_url(legacy, "data", "alerts")
-    assert "set the webhook again" in str(err.value)
-    tester = CaptureDb({"FROM OPS.TEAM WHERE TEAM_ID": lambda sql, p: [{**team, "u": bytes.fromhex("bb" * 40)}]})
-    assert incidents_api.test_webhook("data", incidents_api.TestIn(kind="alerts"), db=tester) == \
-        {"ok": False, "detail": notify.WEBHOOK_AGAIN}
 
 
 def test_jira_tokens_are_sealed_and_legacy_rows_ask_to_reconnect(monkeypatch):
@@ -585,7 +563,7 @@ def test_ingest_answers_429_before_any_database_read(monkeypatch):
 
 class ClaimDb(oi.OutboxDb):
     def __init__(self, rows, taken=()):
-        super().__init__(rows, status=202)
+        super().__init__(rows)
         self.taken, self.claims = set(taken), []
 
     def execute_count(self, sql, params=()):
@@ -597,23 +575,25 @@ class ClaimDb(oi.OutboxDb):
 
 
 def _rows(*ids):
-    return [{"notification_id": i, "incident_id": "i-1", "team_id": "a", "channel": "TEAMS", "kind": "opened",
-             "target_secret": "alerts", "payload": "{}", "attempts": 0} for i in ids]
+    return [{"notification_id": i, "incident_id": "i-1", "team_id": "a", "channel": "JIRA", "kind": "create",
+             "target_secret": None, "payload": "{}", "attempts": 0} for i in ids]
 
 
-def test_outbox_sends_only_rows_it_claimed(monkeypatch):
-    monkeypatch.setenv("AIP_SECRET_KEY", KEY)
-    db = ClaimDb(_rows("n1", "n2"), taken={"n2"})
-    counts = notify.run_outbox(db, {}, http=db.http, keep_going=lambda: True)
-    assert counts["sent"] == 1 and counts["busy"] == 1 and len(db.posts) == 1 and db.claims == ["n1", "n2"]
+def _sent(sent):
+    return lambda _db, row: sent.append(row["notification_id"]) or ("SENT", "ok")
+
+
+def test_outbox_sends_only_rows_it_claimed():
+    db, sent = ClaimDb(_rows("n1", "n2"), taken={"n2"}), []
+    counts = notify.run_outbox(db, {}, jira=_sent(sent), keep_going=lambda: True)
+    assert counts["sent"] == 1 and counts["busy"] == 1 and sent == ["n1"] and db.claims == ["n1", "n2"]
     assert [m[-1] for m in db.marks] == ["n1"]
 
 
-def test_outbox_stops_when_the_lease_is_lost(monkeypatch):
-    monkeypatch.setenv("AIP_SECRET_KEY", KEY)
-    db = ClaimDb(_rows("n1", "n2"))
+def test_outbox_stops_when_the_lease_is_lost():
+    db, sent = ClaimDb(_rows("n1", "n2")), []
     answers = iter([True, False])
-    counts = notify.run_outbox(db, {}, http=db.http, keep_going=lambda: next(answers))
+    counts = notify.run_outbox(db, {}, jira=_sent(sent), keep_going=lambda: next(answers))
     assert counts["sent"] == 1 and db.claims == ["n1"]
 
 
@@ -701,7 +681,6 @@ def test_retry_after_a_failed_bind_never_duplicates_the_incident():
     retry = inc.open_or_update(s, oi.cand(s), s.settings(), s.dag_meta[("prod", "orders")], [], NOW + timedelta(seconds=5))
     assert retry["action"] == "opened" and len(s.incidents) == 1 and retry["incident_id"] in s.incidents
     assert retry["incident_id"] == inc.incident_id_for(inc.occurrence_key(oi.cand(s)))
-    assert len([n for n in s.notes if n["channel"] == "TEAMS" and n["kind"] == "opened"]) == 1
     assert len([n for n in s.notes if n["channel"] == "JIRA" and n["kind"] == "create"]) == 1
 
 

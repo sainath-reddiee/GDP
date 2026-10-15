@@ -1,12 +1,10 @@
 """Reliability report: per team incidents, P1s, MTTR and MTTA, repeats, the most failing DAGs, repeat fingerprints and
-the AI's cost; and the weekly Teams digest that carries it.
+the AI's cost.
 
 Definitions (period = the last `days` days, incidents counted by FIRST_SEEN, storm children left out):
   mttr_min  mean minutes from the incident's (last) opening to its resolution, over incidents resolved in the period
   mtta_min  mean minutes from opening to the first acknowledgement, over incidents acknowledged
   repeats   incidents that occurred more than once, or whose fingerprint already had an incident in the period
-The digest is posted on Mondays from 09:00 UTC when the setting weekly_digest is on, once per team and ISO week (the
-outbox dedupe key teams:digest:<team>:<year>-W<week> makes it idempotent across workers and restarts).
 """
 
 from __future__ import annotations
@@ -17,8 +15,6 @@ from typing import Any, Dict, Iterable, List, Optional
 from services.ops.normalize import ts
 from services.ops.redact import redact
 
-DIGEST_WEEKDAY = 0      # Monday
-DIGEST_HOUR = 9         # 09:00 UTC
 UNROUTED = "unrouted"
 
 
@@ -139,66 +135,3 @@ def report(db: Any, days: int = 7, team_id: Optional[str] = None, now: Optional[
         stats = [t for t in stats if t["team_id"] == team_id]
     return {"period": {"from": start.isoformat(timespec="seconds"), "to": now.isoformat(timespec="seconds"), "days": days},
             "teams": stats, "top_dags": top_dags(runs), "repeats": repeat_fingerprints(incidents), "ai": ai}
-
-
-# ---------------------------------------------------------------- weekly digest
-
-def iso_week(now: datetime) -> str:
-    year, week, _ = now.isocalendar()
-    return f"{year}-W{week:02d}"
-
-
-def digest_due(now: datetime, settings: Dict[str, Any]) -> bool:
-    return bool(settings.get("weekly_digest")) and now.weekday() == DIGEST_WEEKDAY and now.hour >= DIGEST_HOUR
-
-
-def digest_key(team_id: str, now: datetime) -> str:
-    return f"teams:digest:{team_id}:{iso_week(now)}"
-
-
-def _fmt(value: Optional[float]) -> str:
-    return "-" if value is None else f"{value:.0f} min"
-
-
-def digest_card(team_name: str, data: Dict[str, Any], base: Optional[str]) -> Dict[str, Any]:
-    from services.ops.notify import _message
-
-    team = (data.get("teams") or [{}])[0] if data.get("teams") else {}
-    facts = [{"title": "Incidents", "value": str(team.get("incidents", 0))}, {"title": "P1", "value": str(team.get("p1", 0))},
-             {"title": "MTTR", "value": _fmt(team.get("mttr_min"))}, {"title": "MTTA", "value": _fmt(team.get("mtta_min"))},
-             {"title": "Repeats", "value": str(team.get("repeats", 0))},
-             {"title": "AI diagnoses", "value": f"{data['ai']['diagnoses']} (about ${data['ai']['cost_usd']:.2f})"}]
-    body: List[Dict[str, Any]] = [
-        {"type": "TextBlock", "text": f"Weekly reliability: {redact(team_name)[:120]}", "weight": "Bolder", "size": "Medium", "wrap": True},
-        {"type": "TextBlock", "text": f"{data['period']['from'][:10]} to {data['period']['to'][:10]}", "isSubtle": True, "wrap": True},
-        {"type": "FactSet", "facts": facts},
-    ]
-    if data.get("top_dags"):
-        body.append({"type": "TextBlock", "wrap": True, "text": "Most failing DAGs:\n" + "\n".join(
-            f"- {redact(d['dag_id'])[:120]} ({d['env_id']}): {d['failures']} failures" for d in data["top_dags"][:5])})
-    if data.get("repeats"):
-        body.append({"type": "TextBlock", "wrap": True, "text": "Repeat failures:\n" + "\n".join(
-            f"- {redact(r['title'])[:150]} ({r['count']}x)" for r in data["repeats"][:5])})
-    root = (base or "").rstrip("/")
-    return _message(body, [{"type": "Action.OpenUrl", "title": "Open incidents", "url": f"{root}/incidents"}] if root else [])
-
-
-def run_digest(db: Any, now: Optional[datetime] = None) -> Dict[str, int]:
-    """Queue this week's digest card for every team with a Teams webhook (once per ISO week)."""
-    from services.ops.incidents import SqlStore
-    from services.ops.notify import enqueue
-
-    now = now or datetime.now(timezone.utc)
-    settings = SqlStore(db).settings()
-    if not digest_due(now, settings):
-        return {"queued": 0}
-    queued = 0
-    for team in db.query("SELECT TEAM_ID, NAME FROM OPS.TEAM WHERE TEAMS_WEBHOOK_SECRET IS NOT NULL ORDER BY TEAM_ID"):
-        key = digest_key(team["team_id"], now)
-        if db.query("SELECT 1 AS X FROM OPS.NOTIFICATION WHERE DEDUPE_KEY = %s LIMIT 1", (key,)):
-            continue
-        data = report(db, 7, team["team_id"], now)
-        if enqueue(db, "TEAMS", "digest", key, digest_card(team["name"], data, settings.get("public_base_url")),
-                   team_id=team["team_id"], target="alerts"):
-            queued += 1
-    return {"queued": queued}

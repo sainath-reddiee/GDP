@@ -1,6 +1,6 @@
 """Ops incidents (PR O2): fingerprints, detection kinds and timing, open / occurrence / reopen / new, storm grouping,
-routing and mutes, severity, Jira ticket dedupe and throttling, Teams cards, the outbox (backoff, dead letter, team
-rate limit), escalation, auto-resolve, webhook URL validation and the governance mapping of the new routes."""
+routing and mutes, severity, Jira ticket dedupe and throttling, the Jira outbox (backoff, dead letter, retired channels),
+escalation, auto-resolve and the governance mapping of the routes."""
 
 import json
 import sys
@@ -317,7 +317,7 @@ def test_open_occurrence_duplicate_reopen_and_new():
     assert first["action"] == "opened"
     row = s.incidents[iid]
     assert row["status"] == "OPEN" and row["team_id"] == "data" and row["severity"] == "P2" and row["jira_state"] == "PENDING"
-    assert {n["kind"] for n in s.notes_for(iid)} == {"opened", "create"}
+    assert {n["kind"] for n in s.notes_for(iid)} == {"create"}
     # the same sighting again (push and poll): nothing changes
     assert inc.open_or_update(s, cand(s), s.settings(), s.dag_meta[("prod", "orders")], [], NOW)["action"] == "duplicate"
     assert s.incidents[iid]["occurrences"] == 1
@@ -325,7 +325,7 @@ def test_open_occurrence_duplicate_reopen_and_new():
     second = inc.open_or_update(s, cand(s, run="r2", ended=NOW - timedelta(minutes=1)), s.settings(), s.dag_meta[("prod", "orders")], [], NOW)
     assert second == {"action": "occurrence", "incident_id": iid} and s.incidents[iid]["occurrences"] == 2
     assert s.incidents[iid]["run_id"] == "r2" and len(s.notes_for(iid, "JIRA")) == 1
-    assert [n["kind"] for n in s.notes_for(iid, "TEAMS")] == ["opened", "reoccurred"]
+    assert s.notes_for(iid, "TEAMS") == []   # Teams notifications are retired
     # resolved, then failing again within the reopen window: reopened
     inc.resolve(s, iid, "fixed the source file", "ana", NOW)
     later = NOW + timedelta(hours=2)
@@ -355,7 +355,7 @@ def test_dag_failure_is_covered_by_its_task_incident_and_late_excerpt_is_filled(
     assert row["error_excerpt"] and row["fingerprint"] == with_excerpt["fingerprint"]
 
 
-def test_storm_child_has_no_ticket_and_no_card():
+def test_storm_child_has_no_ticket():
     s = store_with_dag()
     s.dag_meta[("prod", "billing")] = {"env_id": "prod", "dag_id": "billing", "team_id": "data"}
     s.deps.add(("prod", "orders", "billing"))
@@ -402,11 +402,11 @@ def test_routing_priority_override_and_mutes():
         row = s3.incidents[result["incident_id"]]
         assert result["action"] == "muted" and row["status"] == "MUTED" and row["jira_state"] == "SKIPPED"
         assert s3.notes_for(result["incident_id"]) == [] and "muted" in s3.kinds(result["incident_id"])
-        # the mute ends: back to OPEN, card and ticket queued
+        # the mute ends: back to OPEN, ticket queued
         s3.now = NOW + timedelta(hours=4)
         assert inc.escalate(s3, s3.now)["unmuted"] == 1
         assert s3.incidents[result["incident_id"]]["status"] == "OPEN"
-        assert {n["channel"] for n in s3.notes_for(result["incident_id"])} == {"TEAMS", "JIRA"}
+        assert {n["channel"] for n in s3.notes_for(result["incident_id"])} == {"JIRA"}
     # an expired rule mute does nothing
     s4 = store_with_dag()
     old = {**rule, "mute_until": iso(NOW - timedelta(hours=1))}
@@ -457,7 +457,7 @@ def test_auto_resolve_on_a_later_success():
     assert out["resolved"] == 1
     row = s.incidents[iid]
     assert row["status"] == "RESOLVED" and row["resolved_by"] == "system" and "succeeded" in row["resolution"]
-    assert {n["kind"] for n in s.notes_for(iid)} >= {"resolved", "resolve"}
+    assert "resolve" in {n["kind"] for n in s.notes_for(iid, "JIRA")}
     # an older success never resolves a newer failure
     s2 = store_with_dag()
     inc.process(s2, [], [task()], s2.settings(), NOW)
@@ -491,8 +491,7 @@ def test_escalation_schedule_and_p1_immediate():
     assert inc.escalate(s, NOW + timedelta(minutes=10))["escalated"] == 0
     assert inc.escalate(s, NOW + timedelta(minutes=31))["escalated"] == 1
     assert inc.escalate(s, NOW + timedelta(minutes=32))["escalated"] == 0       # next one at +90
-    esc = [n for n in s.notes_for(iid, "TEAMS") if n["kind"] == "escalated"]
-    assert len(esc) == 1 and esc[0]["target"] == "escalation" and "escalated" in s.kinds(iid)
+    assert "escalated" in s.kinds(iid) and s.notes_for(iid, "TEAMS") == []
     for minutes in (91, 151, 400):
         inc.escalate(s, NOW + timedelta(minutes=minutes))
     assert s.incidents[iid]["escalations"] == 3
@@ -653,57 +652,21 @@ def test_jira_done_marks_mitigated():
     assert s.incidents[iid]["status"] == "OPEN" and "reopened" in s.kinds(iid)
 
 
-# ---------------------------------------------------------------- Teams cards
-
-WEBHOOK = "https://prod-12.westus.logic.azure.com:443/workflows/abc/triggers/manual/paths/invoke?sig=SECRETSIG"
-
+# ---------------------------------------------------------------- links and the Jira outbox
 
 def sample_incident(**kw):
     return {"incident_id": "i-1", "env_id": "prod", "dag_id": "orders", "task_id": "load", "run_id": "r1", "status": "OPEN",
-            "severity": "P1", "title": "Task load failed", "occurrences": 3, "jira_key": "DATA-1",
-            "error_excerpt": "ValueError: password=hunter2 token: ghp_abcdefghijklmnopqrstuvwxyz0123 for ana@example.com", **kw}
+            "severity": "P1", "title": "Task load failed", "occurrences": 3, "jira_key": "DATA-1", **kw}
 
 
-def test_card_payload_has_no_secrets_and_the_right_buttons():
+def test_links_point_into_the_platform():
     link = notify.links(sample_incident(), "https://gdp.example.com/", "https://acme.atlassian.net/browse/DATA-1",
                         "https://airflow.example.com/dags/orders/grid?dag_run_id=r1")
-    message = notify.card("opened", sample_incident(), link, "Data team")
-    text = json.dumps(message)
-    assert message["type"] == "message"
-    attachment = message["attachments"][0]
-    assert attachment["contentType"] == "application/vnd.microsoft.card.adaptive"
-    assert attachment["content"]["type"] == "AdaptiveCard" and attachment["content"]["version"] == "1.4"
-    for secret in ("hunter2", "ghp_abcdefghijklmnopqrstuvwxyz0123", "ana@example.com", "SECRETSIG"):
-        assert secret not in text
-    actions = attachment["content"]["actions"]
-    assert [a["title"] for a in actions] == ["Acknowledge", "Open incident", "Open Jira", "Open Airflow log"]
-    assert all(a["type"] == "Action.OpenUrl" for a in actions)
-    assert actions[0]["url"] == "https://gdp.example.com/incidents/i-1?ack=1"
-    assert actions[1]["url"] == "https://gdp.example.com/incidents/i-1"
-    resolved = notify.card("resolved", sample_incident(status="RESOLVED"), link)
-    assert "Acknowledge" not in json.dumps(resolved) and "hunter2" not in json.dumps(resolved)
-    for kind in ("escalated", "reoccurred"):
-        assert notify.card(kind, sample_incident(), link)["attachments"][0]["content"]["actions"][0]["title"] == "Acknowledge"
-    # no public URL: no platform buttons
-    bare = notify.card("opened", sample_incident(), notify.links(sample_incident(), None))
-    assert "actions" not in bare["attachments"][0]["content"]
-    storm = notify.storm_card("Data team", 12, ["A failed", "B failed"], "https://gdp.example.com")
-    assert "12 more alerts" in json.dumps(storm)
-    assert "SECRETSIG" not in json.dumps(notify.test_card("Data team", "alerts", None))
+    assert link == {"ack": "https://gdp.example.com/incidents/i-1?ack=1", "open": "https://gdp.example.com/incidents/i-1",
+                    "jira": "https://acme.atlassian.net/browse/DATA-1",
+                    "airflow": "https://airflow.example.com/dags/orders/grid?dag_run_id=r1"}
+    assert notify.links(sample_incident(), None)["ack"] is None
 
-
-def test_webhook_url_validation():
-    for good in ("https://acme.webhook.office.com/webhookb2/x", WEBHOOK, "https://x.powerautomate.com/flows/1",
-                 "https://default1234.environment.api.powerplatform.com/powerautomate/automations/direct/workflows/x"):
-        assert notify.validate_webhook_url(good) == good
-    for bad in ("http://acme.webhook.office.com/x", "https://example.com/hook", "https://webhook.office.com.evil.com/x",
-                "https://user:pw@acme.webhook.office.com/x", "https://acme.webhook.office.com:8443/x", "ftp://a.logic.azure.com/x",
-                "", "https://outlook.office.com/webhook/x"):
-        with pytest.raises(ValueError):
-            notify.validate_webhook_url(bad)
-
-
-# ---------------------------------------------------------------- outbox
 
 def test_backoff_schedule_and_dead_letter():
     assert [notify.backoff_seconds(n) for n in (1, 2, 3, 4, 5)] == [60, 300, 900, 3600, 3600]
@@ -711,30 +674,16 @@ def test_backoff_schedule_and_dead_letter():
     assert notify.after_failure(6) == ("DEAD", None)
 
 
-def test_team_rate_limit_plan():
-    rows = [{"notification_id": str(i), "team_id": "a", "kind": "opened"} for i in range(3)]
-    rows += [{"notification_id": "e", "team_id": "a", "kind": "escalated"}, {"notification_id": "b", "team_id": "b", "kind": "opened"}]
-    send, suppress = notify.plan_rate_limit(rows, {"a": 9}, 10)
-    assert [r["notification_id"] for r in send] == ["0", "e", "b"]
-    assert [r["notification_id"] for r in suppress] == ["1", "2"]
-
-
 class OutboxDb:
-    """Answers the outbox's statements: due rows, sent counts, the team webhook, the incident for its card."""
+    """Answers the outbox's statements: the due rows, the claim and the status marks."""
 
-    def __init__(self, rows, sent=0, status=500, echo=True):
-        self.rows, self.sent, self.status, self.echo = rows, sent, status, echo
-        self.marks, self.merges, self.posts = [], [], []
+    def __init__(self, rows):
+        self.rows = rows
+        self.marks, self.merges = [], []
 
     def query(self, sql, params=()):
         if "FROM OPS.NOTIFICATION WHERE STATUS IN ('PENDING', 'FAILED', 'SENDING')" in sql:
             return self.rows
-        if "COUNT(*) AS N FROM OPS.NOTIFICATION" in sql:
-            return [{"team_id": "a", "n": self.sent}] if self.sent else []
-        if "TEAMS_WEBHOOK_SECRET AS A" in sql:   # sealed by the API, never Snowflake ENCRYPT with a bound key
-            return [{"a": notify.seal_webhook(WEBHOOK, params[0], "TEAMS_WEBHOOK_SECRET"), "e": None}]
-        if "FROM OPS.INCIDENT I LEFT JOIN OPS.TEAM" in sql:
-            return [{**sample_incident(), "team_name": "Data team", "airflow_url": None, "api_version": None}]
         return []
 
     def execute(self, sql, params=()):
@@ -745,50 +694,40 @@ class OutboxDb:
         self.merges.append(params)
         return 1
 
-    def http(self, url, payload):
-        self.posts.append((url, payload))
-        return self.status, (f"bad request for {url}" if self.echo else "")
 
-
-def test_outbox_retries_then_dead_and_never_leaks_the_url(monkeypatch):
-    monkeypatch.setenv("AIP_SECRET_KEY", "k" * 32)
-    db = OutboxDb([{"notification_id": "n1", "incident_id": "i-1", "team_id": "a", "channel": "TEAMS", "kind": "opened",
-                    "target_secret": "alerts", "payload": "{}", "attempts": 0}])
-    counts = notify.run_outbox(db, {"public_base_url": "https://gdp.example.com"}, http=db.http)
-    assert counts["failed"] == 1 and db.posts[0][0] == WEBHOOK
-    status, error, _, _, delay, _ = db.marks[0]
-    assert status == "FAILED" and delay == 60 and "SECRETSIG" not in error and "[webhook]" in error
-    card = json.dumps(db.posts[0][1])
-    assert "hunter2" not in card and "Acknowledge" in card
-    db = OutboxDb([{"notification_id": "n1", "incident_id": "i-1", "team_id": "a", "channel": "TEAMS", "kind": "opened",
-                    "target_secret": "alerts", "payload": "{}", "attempts": 5}])
-    assert notify.run_outbox(db, {}, http=db.http)["dead"] == 1 and db.marks[0][0] == "DEAD"
-    db = OutboxDb([{"notification_id": "n1", "incident_id": "i-1", "team_id": "a", "channel": "TEAMS", "kind": "opened",
-                    "target_secret": "alerts", "payload": "{}", "attempts": 2}], status=202)
-    assert notify.run_outbox(db, {}, http=db.http)["sent"] == 1 and db.marks[0][0] == "SENT"
-    # transport errors say nothing about the URL either
-    ok, detail = notify.send(WEBHOOK, {}, http=lambda url, payload: (_ for _ in ()).throw(OSError(url)))
-    assert not ok and "SECRETSIG" not in detail
-
-
-def test_outbox_rate_limit_folds_into_one_storm_summary(monkeypatch):
-    monkeypatch.setenv("AIP_SECRET_KEY", "k" * 32)
-    rows = [{"notification_id": f"n{i}", "incident_id": "i-1", "team_id": "a", "channel": "TEAMS", "kind": "opened",
-             "target_secret": "alerts", "payload": "{}", "attempts": 0} for i in range(4)]
-    db = OutboxDb(rows, sent=9, status=202)
-    counts = notify.run_outbox(db, {"rate_limit_per_10min": 10}, http=db.http, now=NOW)
-    assert counts["sent"] == 1 and counts["suppressed"] == 3 and len(db.posts) == 1
-    storm_keys = {p[0] for p in db.merges if str(p[0]).startswith("storm:")}
-    assert storm_keys == {f"storm:a:{int(notify.window_start(NOW).timestamp())}"}
-    assert sum(1 for m in db.marks if m[0] == "SUPPRESSED") == 3
+def jira_row(attempts=0, channel="JIRA"):
+    return {"notification_id": "j1", "incident_id": "i-1", "team_id": None, "channel": channel, "kind": "create",
+            "target_secret": None, "payload": "{}", "attempts": attempts}
 
 
 def test_outbox_jira_rows_use_the_handler():
-    db = OutboxDb([{"notification_id": "j1", "incident_id": "i-1", "team_id": None, "channel": "JIRA", "kind": "create",
-                    "target_secret": None, "payload": "{}", "attempts": 0}])
+    db = OutboxDb([jira_row()])
     seen = []
-    counts = notify.run_outbox(db, {}, jira=lambda _db, row: seen.append(row["kind"]) or ("SKIPPED", tickets.NO_BOT))
+    counts = notify.run_outbox(db, {}, jira=lambda _db, row: seen.append(row["kind"]) or ("SKIPPED", tickets.NO_BOT),
+                               keep_going=lambda: True)
     assert seen == ["create"] and counts["skipped"] == 1 and db.marks[0][0] == "SKIPPED"
+
+
+def test_outbox_retries_then_dead():
+    def boom(_db, _row):
+        raise RuntimeError("Jira is down")
+
+    db = OutboxDb([jira_row(attempts=0)])
+    assert notify.run_outbox(db, {}, jira=boom, keep_going=lambda: True)["failed"] == 1
+    status, error, _, _, delay, _ = db.marks[0]
+    assert status == "FAILED" and delay == 60 and "Jira is down" in error
+    db = OutboxDb([jira_row(attempts=5)])
+    assert notify.run_outbox(db, {}, jira=boom, keep_going=lambda: True)["dead"] == 1 and db.marks[0][0] == "DEAD"
+    db = OutboxDb([jira_row(attempts=2)])
+    assert notify.run_outbox(db, {}, jira=lambda _db, _row: ("SENT", "ok"), keep_going=lambda: True)["sent"] == 1
+    assert db.marks[0][0] == "SENT"
+
+
+def test_outbox_skips_retired_teams_rows():
+    db = OutboxDb([jira_row(channel="TEAMS")])
+    seen = []
+    counts = notify.run_outbox(db, {}, jira=lambda _db, row: seen.append(row) or ("SENT", "ok"), keep_going=lambda: True)
+    assert seen == [] and counts["skipped"] == 1 and db.marks[0][0] == "SKIPPED"
 
 
 # ---------------------------------------------------------------- governance and routes
@@ -802,8 +741,7 @@ OPS_O2_ROUTES = [
     ("POST", "/api/ops/incidents/i1/mute", "OPS.OPERATE"), ("POST", "/api/ops/incidents/i1/comment", "OPS.OPERATE"),
     ("POST", "/api/ops/incidents/i1/ticket", "OPS.OPERATE"), ("POST", "/api/ops/incidents/bulk", "OPS.OPERATE"),
     ("POST", "/api/ops/teams", "INTEGRATION.MANAGE"), ("PUT", "/api/ops/teams/t1", "INTEGRATION.MANAGE"),
-    ("DELETE", "/api/ops/teams/t1", "INTEGRATION.MANAGE"), ("POST", "/api/ops/teams/t1/webhook", "INTEGRATION.MANAGE"),
-    ("DELETE", "/api/ops/teams/t1/webhook", "INTEGRATION.MANAGE"), ("POST", "/api/ops/teams/t1/test", "INTEGRATION.MANAGE"),
+    ("DELETE", "/api/ops/teams/t1", "INTEGRATION.MANAGE"),
     ("POST", "/api/ops/routing", "INTEGRATION.MANAGE"), ("PUT", "/api/ops/routing/r1", "INTEGRATION.MANAGE"),
     ("DELETE", "/api/ops/routing/r1", "INTEGRATION.MANAGE"), ("PUT", "/api/ops/settings", "INTEGRATION.MANAGE"),
 ]
@@ -819,7 +757,7 @@ def test_governance_mapping_of_incident_routes():
         if priv == "OPS.OPERATE":
             assert decide(priv, support, None)[0] == "ALLOW" and decide(priv, viewer, None)[0] == "FORBID"
     assert decide("INTEGRATION.MANAGE", support, None)[0] == "FORBID"
-    assert carries_secret("POST", "/api/ops/teams/t1/webhook") and not carries_secret("DELETE", "/api/ops/teams/t1/webhook")
+    assert not carries_secret("POST", "/api/ops/teams") and not carries_secret("PUT", "/api/ops/teams/t1")
 
 
 def test_api_routes_are_registered():
@@ -828,11 +766,12 @@ def test_api_routes_are_registered():
     paths = {(m, r.path) for r in main.app.routes for m in getattr(r, "methods", set())}
     for method, path in [("GET", "/api/ops/incidents"), ("GET", "/api/ops/incidents/summary"),
                          ("GET", "/api/ops/incidents/{incident_id}"), ("POST", "/api/ops/incidents/{incident_id}/ack"),
-                         ("POST", "/api/ops/incidents/bulk"), ("GET", "/api/ops/teams"), ("POST", "/api/ops/teams/{team_id}/webhook"),
-                         ("DELETE", "/api/ops/teams/{team_id}/webhook"), ("POST", "/api/ops/teams/{team_id}/test"),
+                         ("POST", "/api/ops/incidents/bulk"), ("GET", "/api/ops/teams"),
                          ("GET", "/api/ops/routing"), ("PUT", "/api/ops/routing/{rule_id}"), ("GET", "/api/ops/settings"),
                          ("PUT", "/api/ops/settings")]:
         assert (method, path) in paths, (method, path)
+    # Teams webhooks are retired: no route sets, removes or tests one
+    assert not any("/webhook" in p or p.endswith("/test") for _, p in paths if p.startswith("/api/ops/teams"))
     # the summary route is matched before the incident detail route
     order = [r.path for r in main.app.routes]
     assert order.index("/api/ops/incidents/summary") < order.index("/api/ops/incidents/{incident_id}")

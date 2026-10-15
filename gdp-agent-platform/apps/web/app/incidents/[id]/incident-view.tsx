@@ -327,7 +327,7 @@ export function IncidentView({ initial, envName, askAck, canOperate, canAI, canC
                   </tbody>
                 </table>
               </div>
-            ) : <Muted>Nothing sent yet. Teams cards go to the team&apos;s channel once it has a webhook.</Muted>}
+            ) : <Muted>Nothing sent yet. Jira actions for this incident appear here once they are queued.</Muted>}
           </Section>
         </div>
 

@@ -147,7 +147,7 @@ export function IncidentInbox({
       </div>
       {summaryError && <Alert>The summary did not load: {summaryError}</Alert>}
       {envsError && <Alert>Airflow environments did not load: {envsError}</Alert>}
-      {teamsError && <Alert>Teams did not load: {teamsError}</Alert>}
+      {teamsError && <Alert>Support teams did not load: {teamsError}</Alert>}
 
       <section className="surface overflow-hidden">
         <header className="space-y-2 border-b px-4 py-3">

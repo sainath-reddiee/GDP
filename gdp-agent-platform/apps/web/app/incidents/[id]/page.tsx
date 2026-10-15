@@ -19,7 +19,7 @@ function Crumb() {
   return <p className="eyebrow"><Link href="/incidents" className="hover:underline">Incidents</Link></p>;
 }
 
-/** One incident. `?ack=1` (the Teams card button) asks to acknowledge; it never acknowledges on load. */
+/** One incident. `?ack=1` (the acknowledge link) asks to acknowledge; it never acknowledges on load. */
 export default async function IncidentPage({ params, searchParams }: { params: { id: string }; searchParams?: { ack?: string } }) {
   const me = await whoami();
   if (!can(me, "OPS.VIEW")) {

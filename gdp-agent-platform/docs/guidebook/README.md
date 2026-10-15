@@ -1,6 +1,6 @@
 # GDP Agent Platform guidebook
 
-`index.html` is the operating guide and runbook for the platform: access model, roles and Snowflake grants, setup order, every feature, configuration (environment variables, Jira, GitHub, Airflow, Teams), the deployment and secrets runbooks, acceptance checks, the table reference and known gaps.
+`index.html` is the operating guide and runbook for the platform: access model, roles and Snowflake grants, setup order, every feature, configuration (environment variables, Jira, GitHub, Airflow), the deployment and secrets runbooks, acceptance checks, the table reference and known gaps.
 
 ## Open it
 

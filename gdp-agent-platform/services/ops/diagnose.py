@@ -3,9 +3,9 @@
 diagnose() builds the bounded, cited context (services.ops.context), asks complete_json for a strict schema, keeps only
 evidence whose reference is in the context's citation list (invented references are dropped), grounds the blast
 radius in the code graph and the context text, redacts every string, and stores the result on OPS.INCIDENT.AI (with
-AI_SUMMARY, the one line Teams cards and Jira show) plus an INCIDENT_EVENT 'diagnosed'. A diagnosis is cached: it is
+AI_SUMMARY, the one line the incident and Jira show) plus an INCIDENT_EVENT 'diagnosed'. A diagnosis is cached: it is
 reused while the incident's fingerprint is unchanged, unless forced. After a diagnosis a Jira comment is queued
-(outbox channel JIRA, kind 'ai'); the next Teams card carries the one-line cause (no extra card is sent).
+(outbox channel JIRA, kind 'ai').
 
 The log, the code and past resolutions are untrusted data: the prompt frames them, like services.jira.triage, and
 anything they ask for is ignored. Every call is audited (AUDIT.AGENT_TOOL_CALL) and costed (AUDIT.COST_USAGE, stage OPS).
@@ -255,7 +255,7 @@ def validate_diagnosis(output: Dict[str, Any], ctx: Dict[str, Any], model: str, 
 
 
 def summary_line(ai: Dict[str, Any]) -> str:
-    """The one line on Teams cards and Jira: 'Data issue (0.8): the cause'."""
+    """The one line on the incident and in Jira: 'Data issue (0.8): the cause'."""
     label = CATEGORY_LABELS.get(ai.get("category") or "unknown", "Unknown")
     return redact(f"{label} ({float(ai.get('confidence') or 0):.1f}): {ai.get('probable_cause') or ''}")[:300]
 

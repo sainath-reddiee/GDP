@@ -68,6 +68,6 @@ export default async function DagPage({ searchParams }: { searchParams?: Params 
              repos={(repos?.data?.repos ?? []).map((r) => ({ id: r.repo_id, name: r.name }))}
              teams={(teams?.data?.teams ?? []).map((t) => ({ id: t.team_id, name: t.name }))}
              lookupErrors={[domains?.error ? `Domains did not load: ${domains.error}` : "", repos?.error ? `Repositories did not load: ${repos.error}` : "",
-               teams?.error && teams.status !== 404 ? `Teams did not load: ${teams.error}` : ""].filter(Boolean)} />
+               teams?.error && teams.status !== 404 ? `Support teams did not load: ${teams.error}` : ""].filter(Boolean)} />
   );
 }
