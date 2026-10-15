@@ -23,7 +23,7 @@ from pydantic import BaseModel, Field
 
 from app.agent import AGENT_NAME, stream_agent
 from app.source_invoke import USE_CALLER, invoke_source
-from services.common.platform_schema import PLATFORM_SCHEMA, resolve
+from services.common.platform_schema import PLATFORM_SCHEMA
 from app.db import (
     AUTH_MODE, DATABASE, WAREHOUSE, Db, SnowflakeSessionError,
     apply_work_role, close_session, dev_db, list_grantable_roles, lookup_session, open_pat_session, transaction,
@@ -3333,8 +3333,7 @@ def _resolve_dbt_payload(db: Db, run_id: str, payload: dict) -> dict:
         raise HTTPException(409, "That repository is no longer offered to this run's domain (disconnected, disabled or "
                                  "moved to another domain). Pick another one, or ask an admin in Admin, Integrations.")
     if repo:
-        payload.update(code_repo_id=repo["repo_id"], git_repository=resolve(repo["git_repository"], "git_repository"),
-                       origin=repo["git_url"],
+        payload.update(code_repo_id=repo["repo_id"], git_repository=repo["git_repository"], origin=repo["git_url"],
                        repo=repo["git_url"], api_integration=repo.get("api_integration") or "",
                        project_dir=repo.get("dbt_project_dir") or "")
         base = (payload.get("base_branch") or ("" if prior.get("code_repo_id") != repo["repo_id"] else prior.get("base_branch"))

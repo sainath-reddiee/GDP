@@ -53,7 +53,7 @@ def _compile(session, generation: Dict[str, Any], run_id: str) -> Dict[str, Any]
     """
     database = scalar(session, "SELECT CURRENT_DATABASE()")
     safe = "GDP_" + run_id.replace("-", "")[:18] + "_V" + str(int(generation["GENERATION_VERSION"]))
-    stage_path = resolve(generation["STAGE_PATH"] or "", "stage") or ""  # stored before V061 as CODEGEN.DBT_STAGE/...
+    stage_path = resolve(generation["STAGE_PATH"] or "", "stage") or ""  # names before V061 (CODEGEN.DBT_STAGE/...) still resolve
     source = stage_path if stage_path.startswith("@") else f"@{database}.{stage_path}"
     name = fqn(database, safe)
     try:

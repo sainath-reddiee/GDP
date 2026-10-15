@@ -64,7 +64,7 @@ def spec():
 def test_schedule_sql_validates_and_names_the_task():
     sid = str(uuid.uuid4())
     task, stmts = po.schedule_sql("AIP", sid, "0 5 * * * UTC", "WH")
-    assert task == f"AIP.PROFILE.{po.task_name(sid)}" and "USING CRON 0 5 * * * UTC" in stmts[0]
+    assert task == f"AIP.CORE.{po.task_name(sid)}" and "USING CRON 0 5 * * * UTC" in stmts[0]
     assert f"RUN_SCHEDULED_PROFILE('{sid}')" in stmts[0] and stmts[1].endswith("RESUME")
     for bad in [("AIP;DROP", sid, "0 5 * * *", "WH"), ("AIP", sid, "whenever", "WH"), ("AIP", "x'); DROP", "0 5 * * *", "WH")]:
         with pytest.raises((AssertionError, ValueError)):

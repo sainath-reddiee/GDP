@@ -5,7 +5,8 @@
 Driven only by services.common.platform_schema.MOVED, so strings that merely look qualified (app privilege codes such
 as OPS.VIEW, JIRA.READ, KNOWLEDGE.EDIT) are never touched. Deploy-rendered SQL templates (snowflake/procedures,
 views, cortex_search, agents) get `{{database}}.{{schema}}.<NAME>`; everything else gets the literal schema. Applied
-migrations (V001 to V061) and generated files are skipped. --check exits non-zero if anything would change.
+migrations (V001 to V061) and generated files are skipped, and so is any line carrying the marker "names before V061"
+(tests that assert the text of an applied migration). --check exits non-zero if anything would change.
 """
 
 from __future__ import annotations
@@ -37,7 +38,16 @@ PATTERN = re.compile(
 )
 
 
+KEEP_MARKER = "names before V061"
+
+
 def rewrite(text: str, template: bool) -> str:
+    if KEEP_MARKER in text:
+        return "".join(line if KEEP_MARKER in line else _rewrite(line, template) for line in text.splitlines(True))
+    return _rewrite(text, template)
+
+
+def _rewrite(text: str, template: bool) -> str:
     def sub(m: re.Match) -> str:
         new = _NAMES[m.group("schema")].get(m.group("name"))
         if new is None:

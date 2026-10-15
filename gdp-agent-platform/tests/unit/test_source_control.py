@@ -38,7 +38,7 @@ def entry(version=3, status="APPROVED", **extra):
 
 def test_migration_creates_the_table_and_backfills_each_kind_once():
     sql = MIGRATION.read_text()
-    assert "CREATE TABLE IF NOT EXISTS {{database}}.CORE.GIT_PR" in sql
+    assert "CREATE TABLE IF NOT EXISTS {{database}}.GOVERNANCE.GIT_PR" in sql   # V043 is history: names before V061
     assert "PRIMARY KEY (KIND, ASSET_ID, VERSION)" in sql
     for kind, source in (("MODEL", "MODEL_DESIGNS"), ("DQ_SUITE", "DQ_SUITE_VERSION"), ("QA_PACK", "DOMAIN_QA_PACKS")):
         assert f"SELECT '{kind}'" in sql and f"GOVERNANCE.{source}" in sql

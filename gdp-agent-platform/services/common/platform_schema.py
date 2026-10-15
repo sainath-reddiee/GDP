@@ -9,8 +9,9 @@ repositories, stages, deploy rendering) use the helpers below.
 MOVED is the single source of truth for the consolidation: V061 (the renames), the compatibility views, the codemod,
 the verification and the rollback are all generated from it. It is data, never edited after V061 is applied.
 
-Secrets stay where they were created: Snowflake has no ALTER SECRET ... RENAME and a secret value cannot be read back,
-so `resolve(..., kind="secret")` never rewrites a name.
+Secrets stay where they were created: Snowflake has no ALTER SECRET ... RENAME and a secret value cannot be read back.
+Existing git repository clones, dbt projects and secrets keep their names (the rows that store them stay valid); new
+ones are created in PLATFORM_SCHEMA. `resolve` therefore leaves those kinds alone.
 """
 
 from __future__ import annotations
@@ -236,6 +237,9 @@ MOVED: Dict[Tuple[str, str], Tuple[str, str, str]] = {
 # projects). They keep their names in PLATFORM_SCHEMA.
 RUNTIME_PREFIXES = {("QUALITY", "DQ_"): "TASK", ("PROFILE", "PROF_"): "TASK", ("CODE", "REFRESH_"): "TASK"}
 
+# Kinds whose existing objects stay where they are (no RENAME in Snowflake, or versions that must not be reset).
+KEPT_KINDS = ("secret", "git_repository", "dbt_project")
+
 _IDENT = r'(?:"[^"]+"|[A-Za-z_][A-Za-z0-9_$]*)'
 _REF = re.compile(rf"^(@?)(?:({_IDENT})\.)?({_IDENT})\.({_IDENT})(/.*)?$", re.S)
 
@@ -269,18 +273,15 @@ def resolve(reference: Optional[str], kind: str = "object") -> Optional[str]:
     """Translate a name stored before V061 (in a row or a config value) to where the object lives now.
 
     Accepts `SCHEMA.OBJ`, `DB.SCHEMA.OBJ`, `@SCHEMA.STAGE/path` and `@DB.SCHEMA.STAGE/path`. Anything that is not a
-    moved platform object is returned unchanged, so this is safe on new names, client tables and paths. Secrets never
-    move (kind="secret"). Git repositories (kind="git_repository") are recreated under the same name by
-    infrastructure/consolidate_runtime.py, so any legacy-schema git repository maps to PLATFORM_SCHEMA."""
-    if not reference or kind == "secret":
+    moved platform object is returned unchanged, so this is safe on new names, client tables and paths. Secrets, git
+    repositories and dbt projects keep their location, so those kinds are never rewritten."""
+    if not reference or kind in KEPT_KINDS:
         return reference
     m = _REF.match(reference.strip())
     if not m:
         return reference
     at, db, schema, name, rest = m.groups()
     target = new_name(schema, name)
-    if target is None and kind == "git_repository" and schema.strip('"').upper() in LEGACY_SCHEMAS:
-        target = name.strip('"')
     if target is None:
         return reference
     return f"{at}{db + '.' if db else ''}{PLATFORM_SCHEMA}.{target}{rest or ''}"

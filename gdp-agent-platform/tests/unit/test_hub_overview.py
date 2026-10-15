@@ -46,7 +46,7 @@ ANSWERS = {
     "STATUS = 'IN_REVIEW'": [{"n": 1, "oldest": 4000}],
     "STATUS = 'PENDING_APPROVAL'": [{"n": 2, "oldest": 100}],
     "AS FAILED_LOADS": [{"tables": 20, "fresh": 15, "stale": 3, "oldest_hours": 400, "failed_loads": 2}],
-    "AS IDLE FROM PLATFORM_CONFIG": [{"idle": 1}],
+    "AS IDLE FROM CORE.INGESTION_PIPELINE_CATALOG": [{"idle": 1}],
     "SELECT COUNT(DISTINCT NAME) AS N": [{"n": 1}],
     "AS TARGETS, COUNT_IF": [{"targets": 8, "covered": 6}],
     "FROM CORE.DOMAIN_REGISTRY": [{"domain_id": "d-1", "domain_name": "COMPANY"}],

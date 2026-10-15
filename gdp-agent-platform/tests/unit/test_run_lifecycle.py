@@ -64,7 +64,7 @@ def test_shared_landing_tables_and_platform_schemas_are_kept():
     assert drops == [("AI", "LANDING", "CRM__CUST")]
     reasons = {k["table"]: k for k in kept}
     assert reasons["AI.LANDING.CRM__ORDER"]["runs"] == ["r9"]
-    assert "platform schema" in reasons["AI.CORE.TABLE_PROFILES"]["reason"]
+    assert "platform schema" in reasons["AI.METADATA.TABLE_PROFILES"]["reason"]  # names before V061 stay protected
 
 
 def test_workspace_cleanup_only_touches_the_runs_own_objects():
@@ -76,14 +76,17 @@ def test_workspace_cleanup_only_touches_the_runs_own_objects():
         issued.append(sql)
         if sql.startswith("REMOVE"):
             return [{"name": "a"}, {"name": "b"}]
-        if sql.startswith("SHOW DBT PROJECTS"):
-            return [{"name": f"{prefix}1"}, {"name": "CUSTOMER_PROJECT"}, {"name": f"{prefix}2"}]
+        if sql.startswith("SHOW DBT PROJECTS") and sql.endswith("IN SCHEMA CORE"):
+            return [{"name": f"{prefix}1"}, {"name": "CUSTOMER_PROJECT"}]
+        if sql.startswith("SHOW DBT PROJECTS") and sql.endswith("IN SCHEMA CODEGEN"):   # created before V061
+            return [{"name": f"{prefix}2"}, {"name": "CUSTOMER_PROJECT"}]
         return []
 
     out = run_workspace_cleanup(execute, run_id)
     assert issued[0] == f"REMOVE @CORE.DBT_STAGE/{run_id}/"
     assert out["files_removed"] == 2 and out["projects_dropped"] == [f"{prefix}1", f"{prefix}2"]
     assert not any("CUSTOMER_PROJECT" in s for s in issued if s.startswith("DROP"))
+    assert f"DROP DBT PROJECT IF EXISTS CORE.\"{prefix}1\"" in issued and f"DROP DBT PROJECT IF EXISTS CODEGEN.\"{prefix}2\"" in issued
     assert not any("METADATA" in s for s in issued)
     with pytest.raises(AssertionError):
         run_workspace_cleanup(execute, "../../CORE.PROFILES_STAGE")
@@ -95,7 +98,7 @@ def test_workspace_cleanup_never_raises():
 
     run_id = str(uuid.uuid4())
     out = run_workspace_cleanup(failing, run_id)
-    assert out["files_removed"] == 0 and len(out["errors"]) == 1 + len(run_project_prefixes(run_id))
+    assert out["files_removed"] == 0 and len(out["errors"]) == 1 + 2 * len(run_project_prefixes(run_id))  # CORE, CODEGEN
 
 
 def test_in_place_landing_rows_are_never_dropped():

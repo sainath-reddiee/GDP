@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from services.common.audit import tool_call
-from services.common.platform_schema import PLATFORM_SCHEMA, resolve
+from services.common.platform_schema import PLATFORM_SCHEMA
 from services.common.standard import GDP, GOLD, conventions, conventions_for, default_prefix, run_pipeline, run_standard
 from services.common.sql import atomic, clip, insert_rows, rows, scalar, variant
 from services.common.stage import Stage
@@ -100,7 +100,7 @@ def merge_branch_plan(payload: Dict[str, Any], prior: Dict[str, Any], run_name: 
         "project_dir": pick("project_dir"),
         "repo": pick("repo", "origin"),
         "origin": origin,
-        "git_repository": resolve(pick("git_repository"), "git_repository"),  # stored before V061
+        "git_repository": pick("git_repository"),
         "api_integration": pick("api_integration"),
         "dbt_project": pick("dbt_project"),
         "push": flag("push", False),

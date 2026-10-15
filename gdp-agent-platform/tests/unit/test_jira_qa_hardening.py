@@ -389,9 +389,9 @@ def test_web_comment_draft_has_no_detail():
 
 def test_qa_and_jira_procedures_are_granted_consistently():
     sql = "\n".join((ROOT / "snowflake" / "procedures" / name).read_text(encoding="utf-8") for name in ("pipeline.sql", "jira.sql"))
-    procs = set(re.findall(r"PROCEDURE \{\{database\}\}\.((?:CONTRACT\.QA_\w+|JIRA\.\w+)\([^)]*\))", sql))
+    procs = set(re.findall(r"PROCEDURE \{\{database\}\}\.(\{\{schema\}\}\.(?:QA_\w+|TRIAGE_\w+|RESOLVE_TARGETS)\([^)]*\))", sql))
     signatures = {re.sub(r"\(.*\)", "", p) + "(" + ", ".join("VARCHAR" for _ in re.findall(r"VARCHAR", p)) + ")" for p in procs}
-    assert "CORE.QA_SAVE(VARCHAR, VARCHAR)" in signatures and "CORE.TRIAGE_TABLE(VARCHAR, VARCHAR)" in signatures
+    assert "{{schema}}.QA_SAVE(VARCHAR, VARCHAR)" in signatures and "{{schema}}.TRIAGE_TABLE(VARCHAR, VARCHAR)" in signatures
     for sig in signatures:
         for role in ("DATA_ENGINEER", "REVIEWER", "QA_ENGINEER"):
             grant = f"GRANT USAGE ON PROCEDURE {{{{database}}}}.{sig} TO DATABASE ROLE {{{{database}}}}.{role};"
@@ -404,7 +404,7 @@ def test_v033_limits_token_and_state_rows_to_their_user():
     text = (ROOT / "snowflake" / "database" / "migrations" / "V033__jira_row_access.sql").read_text(encoding="utf-8")
     assert "ROW_USER = CURRENT_USER()" in text
     for table in ("USER_TOKEN", "OAUTH_STATE"):
-        assert f"ALTER TABLE {{{{database}}}}.JIRA.{table} ADD ROW ACCESS POLICY {{{{database}}}}.CORE.OWN_ROWS ON (USER_NAME);" in text
+        assert f"ALTER TABLE {{{{database}}}}.JIRA.{table} ADD ROW ACCESS POLICY {{{{database}}}}.JIRA.OWN_ROWS ON (USER_NAME);" in text  # names before V061
     assert chr(0x2014) not in text and chr(0x2013) not in text   # no em or en dashes
 
 

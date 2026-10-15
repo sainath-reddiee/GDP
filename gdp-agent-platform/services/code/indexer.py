@@ -23,7 +23,7 @@ import uuid
 from typing import Any, Dict, List, Optional, Tuple
 
 from services.code import dbt_parse
-from services.common.platform_schema import PLATFORM_SCHEMA, resolve
+from services.common.platform_schema import PLATFORM_SCHEMA
 from services.common.sql import clip, insert_rows, rows, variant
 
 MAX_FILES = 6000          # files considered per repository
@@ -180,7 +180,6 @@ def index_repo(session, repo_id: str) -> Dict[str, Any]:
     if not found:
         return {"repo_id": repo_id, "skipped": True, "reason": "repository not found (disconnected)"}
     repo = {k.lower(): v for k, v in found[0].items()}
-    repo["git_repository"] = resolve(repo.get("git_repository"), "git_repository")  # stored before V061
     run_id, started = str(uuid.uuid4()), time.time()
     if not _acquire(session, repo_id, run_id):
         return {"repo_id": repo_id, "skipped": True, "reason": "another index run is in progress"}

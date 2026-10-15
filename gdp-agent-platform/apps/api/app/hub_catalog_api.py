@@ -265,9 +265,13 @@ def _schedule_task(db: Db, schedule_id: str) -> str:
 
 @router.delete("/api/hub/profiles/schedules")
 def delete_profile_schedule(id: str, db: Db = Depends(current_db)):  # noqa: A002
+    from app.db import DATABASE
+
     task = _schedule_task(db, id)
     try:
         db.execute(f"DROP TASK IF EXISTS {task}")
+        # the suspended copy kept from before V061 (names before V061), so the whole schedule goes
+        db.execute(f"DROP TASK IF EXISTS {task.replace(fqn(DATABASE, ''), f'{DATABASE}.PROFILE.', 1)}")
         db.execute("DELETE FROM CORE.PROFILE_SCHEDULE WHERE SCHEDULE_ID = %s", (id,))
     except Exception as exc:
         raise _snowflake_error(exc) from exc

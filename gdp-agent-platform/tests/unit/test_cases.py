@@ -755,8 +755,8 @@ def test_v034_migration():
     sql = (ROOT / "snowflake" / "database" / "migrations" / "V034__cases.sql").read_text(encoding="utf-8")
     for table in ("CASE_RECORD", "CASE_EVENT", "CASE_LINK", "CASE_ARTIFACT"):
         assert f"CREATE TABLE IF NOT EXISTS {{{{database}}}}.CASES.{table}" in sql
-    assert "CORE.CASE_SEQ.NEXTVAL" in sql and "IDEMPOTENCY_KEY" in sql
-    assert "ADD ROW ACCESS POLICY {{database}}.CORE.DOMAIN_SCOPE ON (DOMAIN_ID)" in sql
+    assert "CASES.CASE_SEQ.NEXTVAL" in sql and "IDEMPOTENCY_KEY" in sql   # V034 is history: names before V061
+    assert "ADD ROW ACCESS POLICY {{database}}.CASES.DOMAIN_SCOPE ON (DOMAIN_ID)" in sql   # names before V061
     assert "IS_DATABASE_ROLE_IN_SESSION('PLATFORM_ADMIN')" in sql and "UPPER(DOMAIN_NAME) = 'GENERAL'" in sql
     for role in ("VIEWER", "QA_ENGINEER", "DATA_ENGINEER", "OPS_SERVICE"):
         assert f"DATABASE ROLE {{{{database}}}}.{role}" in sql

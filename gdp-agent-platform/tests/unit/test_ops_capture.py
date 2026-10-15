@@ -347,7 +347,7 @@ def test_poll_env_upserts_and_stores_the_cursor():
     assert "scheduled__2024-05-01T02%3A00%3A00%2B00%3A00" in task_call["Path"]     # run ids are URL-encoded
     update = next(p for s, p in db.statements if s.startswith("UPDATE CORE.AIRFLOW_ENV"))
     assert update[2] == "2024-05-02T12:00:00.000000+00:00" and update[0] == "v1"
-    merged = [s for s, _ in db.statements if s.startswith("MERGE INTO OPS.")]
+    merged = [s for s, _ in db.statements if s.startswith("MERGE INTO CORE.")]
     assert any("CORE.DAG_RUN" in s for s in merged) and any("CORE.TASK_RUN" in s for s in merged)
 
 

@@ -77,7 +77,7 @@ def test_build_tree():
 
 def test_schedule_sql():
     task, stmts = dq.schedule_sql("AIP", "DB.S.ORDERS", "0 6 * * * UTC", "WH")
-    assert task.startswith("AIP.QUALITY.DQ_") and task == f"AIP.QUALITY.{dq.task_name('db.s.orders')}"
+    assert task.startswith("AIP.CORE.DQ_") and task == f"AIP.CORE.{dq.task_name('db.s.orders')}"
     assert "SCHEDULE = 'USING CRON 0 6 * * * UTC'" in stmts[0] and "CALL AIP.CORE.RUN_TABLE_SCAN('DB.S.ORDERS')" in stmts[0]
     assert stmts[1] == f"ALTER TASK {task} RESUME"
     for args in [("AIP", "DB.S.T", "every day", "WH"), ("AIP", "T", "0 6 * * *", "WH"), ("A;B", "DB.S.T", "0 6 * * *", "WH")]:

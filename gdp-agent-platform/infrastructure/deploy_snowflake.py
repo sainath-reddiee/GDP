@@ -271,7 +271,7 @@ def deploy(args) -> None:
         log = apply_to_connection(con, database, warehouse, variables, zip_name, zip_bytes,
                                   migrations, procedures, extra_sql, graph_version,
                                   state_rows, transition_rows, demo_files, force=args.force,
-                                  consolidate=args.consolidate, rehearsal=args.rehearsal)
+                                  consolidate=args.consolidate, rehearsal=args.rehearsal, through=args.through)
         for line in log:
             print(line)
     finally:
@@ -385,10 +385,12 @@ def agent_statements(cur, sql: str) -> str:
 def apply_to_connection(con, database: str, warehouse: str, variables: Dict[str, str],
                         zip_name: str, zip_bytes: bytes, migrations, procedures, extra_sql,
                         graph_version, state_rows, transition_rows, demo_files, force: bool = False,
-                        consolidate: bool = False, rehearsal: bool = False) -> List[str]:
+                        consolidate: bool = False, rehearsal: bool = False,
+                        through: str | None = None) -> List[str]:
     """Apply migrations, seed, package, procedures and extras on an open connection; steps that did not change
     since their last successful apply are skipped unless `force`. `rehearsal` keeps every change inside `database`
-    (which must end in _REHEARSAL): no Oracle procedure refresh, no publisher task."""
+    (which must end in _REHEARSAL): no Oracle procedure refresh, no publisher task. `through` applies migrations up to
+    and including that version and stops (the consolidation runbook checks the data between V060, V061 and the rest)."""
     log: List[str] = []
     if rehearsal:
         assert database.endswith(REHEARSAL_SUFFIX), f"--rehearsal needs a database named *{REHEARSAL_SUFFIX}"
@@ -410,6 +412,8 @@ def apply_to_connection(con, database: str, warehouse: str, variables: Dict[str,
     applied = dict(cur.fetchall())
     migrated = False
     for version, name, path in migrations:
+        if through and version > through:
+            break
         raw = path.read_text(encoding="utf-8")
         digest = checksum(raw)
         if version in applied:
@@ -427,6 +431,9 @@ def apply_to_connection(con, database: str, warehouse: str, variables: Dict[str,
         )
         log.append(f"migration V{version} {name}: applied")
         migrated = True
+    if through:
+        log.append(f"--through {through}: stopped after the migrations")
+        return log
     if migrated:
         log.append("migrations applied: views, Cortex Search, agents and the seed run again")
 
@@ -553,6 +560,7 @@ def main() -> None:
                         help="apply every step, even the ones that did not change since the last deploy")
     parser.add_argument("--consolidate", action="store_true",
                         help="allow V061 (move every platform object into CORE) after a completed baseline")
+    parser.add_argument("--through", help="apply migrations up to and including this version (e.g. 060), then stop")
     parser.add_argument("--rehearsal", action="store_true",
                         help="the database is a *_REHEARSAL clone; change nothing outside it")
     args = parser.parse_args()

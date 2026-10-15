@@ -19,7 +19,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from app.db import DATABASE, WAREHOUSE, Db
-from services.common.platform_schema import PLATFORM_SCHEMA, fqn, resolve
+from services.common.platform_schema import PLATFORM_SCHEMA, fqn
 from app.main import _json, _snowflake_error, current_db
 from services.code import context as code_ctx
 from services.code.indexer import LOCK_MINUTES, SAFE_BRANCH, branch_segment, safe_path
@@ -64,12 +64,18 @@ def _repo(db: Db, repo_id: str) -> dict:
     r = found[0]
     for k in ("domain_ids", "include_globs", "exclude_globs", "stats", "created_objects"):
         r[k] = _json(r.get(k)) or ([] if k != "stats" else {})
-    r["git_repository"] = resolve(r.get("git_repository"), "git_repository")  # stored before V061
     return r
 
 
 def _task_name(repo_id: str) -> str:
     return fqn(DATABASE, f"REFRESH_{repo_id.replace('-', '')[:12].upper()}")
+
+
+def _drop_refresh_tasks(db: Db, repo_id: str) -> None:
+    """The schedule's task, and the suspended copy kept from before V061 (names before V061)."""
+    task = _task_name(repo_id)
+    db.execute(f"DROP TASK IF EXISTS {task}")
+    db.execute(f"DROP TASK IF EXISTS {task.replace(fqn(DATABASE, ''), f'{DATABASE}.CODE.', 1)}")
 
 
 def _platform_repo_name(name: str) -> str:
@@ -82,11 +88,12 @@ def _platform_secret_name(name: str) -> str:
 
 def _owns_git_repo(repo: dict) -> bool:
     """Whether the platform created this repository's GIT REPOSITORY object (a reused one is never altered or dropped)."""
-    target = str(resolve(repo.get("git_repository"), "git_repository") or "").upper()
-    if any(o.get("kind") == "GIT REPOSITORY" and str(resolve(o.get("name", ""), "git_repository") or "").upper() == target
-           for o in repo.get("created_objects") or []):
+    target = str(repo.get("git_repository") or "").upper()
+    if any(o.get("kind") == "GIT REPOSITORY" and str(o.get("name", "")).upper() == target for o in repo.get("created_objects") or []):
         return True
-    return target == _platform_repo_name(str(repo.get("name") or "")).upper()  # rows from before CREATED_OBJECTS existed
+    name = str(repo.get("name") or "")
+    # rows from before CREATED_OBJECTS existed; clones made before V061 stay in CODE (names before V061)
+    return target in (_platform_repo_name(name).upper(), f"{DATABASE}.CODE.{name}".upper())
 
 
 def _branches(db: Db, fqn: str, fetch: bool = True) -> tuple[list[dict], str]:
@@ -163,7 +170,6 @@ def list_repos(db: Db = Depends(current_db)):
     for r in repos:
         for k in ("domain_ids", "include_globs", "exclude_globs", "stats", "last_run", "created_objects"):
             r[k] = _json(r.get(k)) or ([] if k in ("domain_ids", "include_globs", "exclude_globs", "created_objects") else {})
-        r["git_repository"] = resolve(r.get("git_repository"), "git_repository")  # stored before V061
         r["refreshing"] = r["repo_id"] in _refreshing
         if r.get("error") in ("None", ""):
             r["error"] = None  # written as text by an earlier indexer
@@ -411,7 +417,7 @@ def remove_repo(repo_id: str, drop_objects: bool = False, db: Db = Depends(curre
     Git repository and secret the platform created for it (never reused objects, nor ones another repository uses)."""
     repo = _repo(db, repo_id)
     try:
-        db.execute(f"DROP TASK IF EXISTS {_task_name(repo_id)}")
+        _drop_refresh_tasks(db, repo_id)
     except Exception as exc:
         raise _snowflake_error(exc) from exc
     # deleting the row first makes a run in progress stop without writing (it checks the row before each write)
@@ -511,7 +517,7 @@ def set_schedule(repo_id: str, body: Schedule, db: Db = Depends(current_db)):
 def clear_schedule(repo_id: str, db: Db = Depends(current_db)):
     _repo(db, repo_id)
     try:
-        db.execute(f"DROP TASK IF EXISTS {_task_name(repo_id)}")
+        _drop_refresh_tasks(db, repo_id)
     except Exception as exc:
         raise _snowflake_error(exc) from exc
     db.execute("UPDATE CORE.REPO SET SCHEDULE_CRON = NULL WHERE REPO_ID = %s", (repo_id,))

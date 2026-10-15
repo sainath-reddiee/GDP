@@ -257,7 +257,7 @@ def test_sttm_export_zip(client):
 
 def test_catalog_reads_before_deploy(client):
     c, holder = client
-    holder["db"] = FakeDb(fail=("GOVERNANCE.",))
+    holder["db"] = FakeDb(fail=("CORE.STTM_CATALOG", "CORE.MODEL_DESIGNS", "CORE.DOMAIN_MODEL", "CORE.TABLE_MODEL"))  # the catalog tables (GOVERNANCE before V061)
     assert c.get("/api/hub/sttm").json() == {"mappings": [], "total": 0, "deployed": False}
     assert c.get("/api/hub/models/context").json()["deployed"] is False
 

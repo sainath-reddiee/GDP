@@ -34,7 +34,6 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from services.cases import rules
 from services.cases.context import EVIDENCE_KINDS, build_case_context, case_label
 from services.cases.store import SqlStore
-from services.common.platform_schema import resolve
 from services.ops.redact import redact
 from services.ops.sqlio import as_db, as_session
 
@@ -490,7 +489,7 @@ def read_repo_file(db: Any, repo: Dict[str, Any], path: str) -> str:
     branch = str(repo.get("branch") or "main").strip().strip("/")
     if not SAFE_BRANCH.fullmatch(branch):
         raise ValueError(f"unsafe branch name: {branch}")
-    fqn = safe_fqn(str(resolve(repo.get("git_repository"), "git_repository") or ""))
+    fqn = safe_fqn(str(repo.get("git_repository") or ""))
     read = lambda sql: [next(iter(r.values()), None) for r in db.query(sql)]  # noqa: E731
     return read_repo_text(read, fqn, branch_segment(branch), path)
 
