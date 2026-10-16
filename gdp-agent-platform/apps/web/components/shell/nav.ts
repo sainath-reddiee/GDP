@@ -1,6 +1,6 @@
 import {
   Activity, Crown, BadgeCheck, BarChart3, BookOpen, Boxes, ClipboardCheck, Database, FileClock, FlaskConical, FolderGit2, GitCompareArrows, GitPullRequest,
-  Inbox, LayoutDashboard, ListChecks, Network, Rocket, Settings, ShieldCheck, Siren, Sparkles, SquareTerminal, Store, Ticket,
+  Inbox, LayoutDashboard, ListChecks, Network, Rocket, Settings, ShieldCheck, Siren, Sparkles, SquareTerminal, Store, Ticket, Wrench, BookCheck,
 } from "lucide-react";
 import type { NavCounts } from "@/app/bff/nav/route";
 
@@ -125,6 +125,8 @@ export const NAV_GROUPS: NavGroup[] = [
         children: [
           { href: "/ops", label: "Monitoring", icon: Activity, privilege: "OPS.VIEW" },
           ...(SHOW_INCIDENTS ? [{ href: "/incidents", label: "Incidents", icon: Siren, privilege: "OPS.VIEW" }] : []),
+          { href: "/ops/resolutions", label: "Resolutions", icon: Wrench, privilege: "OPS.VIEW" },
+          { href: "/ops/fixes", label: "Known fixes", icon: BookCheck, privilege: "OPS.VIEW" },
           { href: "/tickets", label: "Tickets", icon: Ticket, privilege: ["JIRA.READ", "CASE.WORK"] },
         ],
       },

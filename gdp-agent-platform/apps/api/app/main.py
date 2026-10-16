@@ -6673,6 +6673,10 @@ from app.incidents_api import router as incidents_router  # noqa: E402
 
 app.include_router(incidents_router)
 
+from app.resolve_api import router as resolve_router  # noqa: E402
+
+app.include_router(resolve_router)
+
 from app.cases_api import router as cases_router  # noqa: E402
 
 app.include_router(cases_router)

@@ -53,7 +53,7 @@ def poll_job(env_id: str) -> str:
 
 
 def load_env(db: Any, env_id: str) -> Optional[Dict[str, Any]]:
-    found = db.query("""SELECT ENV_ID, NAME, MWAA_ENV, REGION, ENABLED, POLL_SECONDS, CURSOR_VALUE
+    found = db.query("""SELECT ENV_ID, NAME, KIND, MWAA_ENV, REGION, AIRFLOW_URL, ENABLED, POLL_SECONDS, CURSOR_VALUE
                           FROM CORE.AIRFLOW_ENV WHERE ENV_ID = %s""", (env_id,))
     return found[0] if found else None
 
@@ -61,7 +61,7 @@ def load_env(db: Any, env_id: str) -> Optional[Dict[str, Any]]:
 def due_envs(db: Any) -> List[Dict[str, Any]]:
     """Enabled environments whose last attempt is older than their poll interval (database clock, so every worker
     agrees)."""
-    return db.query("""SELECT ENV_ID, NAME, MWAA_ENV, REGION, POLL_SECONDS, CURSOR_VALUE FROM CORE.AIRFLOW_ENV
+    return db.query("""SELECT ENV_ID, NAME, KIND, MWAA_ENV, REGION, AIRFLOW_URL, POLL_SECONDS, CURSOR_VALUE FROM CORE.AIRFLOW_ENV
                         WHERE ENABLED AND (LAST_ATTEMPT_AT IS NULL
                               OR DATEDIFF(second, LAST_ATTEMPT_AT, CURRENT_TIMESTAMP()) >= COALESCE(POLL_SECONDS, 300))
                         ORDER BY LAST_ATTEMPT_AT NULLS FIRST""")
@@ -125,7 +125,8 @@ def poll_now(env_id: str, db_factory: Callable[[], Any] = system_db) -> Dict[str
 # ---------------------------------------------------------------- incidents (PR O2)
 
 DETECT_OVERLAP = timedelta(minutes=2)
-INTERVALS = {"outbox": 30, "escalate": 60, "sla": 120, "jira_sync": 300, "diagnose": 60, "case_triage": 30}
+INTERVALS = {"outbox": 30, "escalate": 60, "sla": 120, "jira_sync": 300, "diagnose": 60, "case_triage": 30,
+             "resolve": 15}
 
 
 def _store(db: Any):
@@ -239,6 +240,27 @@ def case_triage(db: Any) -> None:
         log.info("case_triage: %s", result)
 
 
+def resolve(db: Any) -> None:
+    """Airflow failure resolution (services.resolve): trigger the Snowflake procedures that claim and resolve failures
+    and resume approved fixes, then clear the Airflow tasks of fixed failures. No Snowflake tasks: the worker is the
+    trigger, and it skips the calls when nothing waits."""
+    from services.resolve import bridge
+
+    work = bridge.has_work(db)
+    if work["resolve"]:
+        result = bridge.trigger(db, HOLDER)
+        if result.get("claimed"):
+            log.info("resolve: %s", result)
+    if work["resume"]:
+        result = bridge.resume(db, HOLDER)
+        if any(result.get(k) for k in ("ran", "rejected", "failed")):
+            log.info("resolve resume: %s", result)
+    if work["clear"]:
+        result = bridge.clear_requested(db)
+        if any(result.values()):
+            log.info("resolve clear: %s", result)
+
+
 def retention(db: Any) -> None:
     from services.ops.store import purge_events
 
@@ -289,7 +311,7 @@ class Worker:
                 log.info("poll %s: %s", env["env_id"], "ok" if result.get("ok") else result.get("error"))
         self._safe(db, "detect", detect)
         for name, fn in (("outbox", outbox), ("escalate", escalate), ("sla", sla), ("jira_sync", jira_sync),
-                         ("diagnose", diagnose), ("case_triage", case_triage)):
+                         ("diagnose", diagnose), ("case_triage", case_triage), ("resolve", resolve)):
             if self.stop.is_set():
                 return
             if self._every(name, INTERVALS[name]):

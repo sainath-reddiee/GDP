@@ -2,6 +2,7 @@ import { api } from "@/lib/api";
 import { can, type RunSummary, type WhoAmI } from "@/lib/types";
 import { GATES, type Gate } from "@/lib/run-labels";
 import type { ChangeRequest } from "@/app/governance-actions";
+import type { FixApproval } from "@/app/ops/resolve-actions";
 
 // The signed-in person's work, read from the endpoints the other pages already use (no new backend). Lists the API
 // does not filter per user are filtered here: runs by created_by, gates by the approval privilege, pull requests by
@@ -22,6 +23,8 @@ export type PrItem = { title: string | null; asset_name: string | null; label: s
 export type MyWork = {
   gates: GateItem[];
   requests: ChangeRequest[];
+  /** known fixes waiting for this person's approval before they run on an Airflow failure */
+  fixApprovals: FixApproval[];
   inbox: InboxItem[];
   questions: QuestionItem[];
   running: RunSummary[];
@@ -42,7 +45,7 @@ const safe = <T>(p: Promise<T>, fallback: T) => p.catch(() => fallback);
 export async function loadMyWork(me: WhoAmI | null): Promise<MyWork> {
   const user = me?.user ?? "";
   const approves = Object.values(GATES).filter((g) => can(me, g.privilege));
-  const [review, running, failed, requests, inbox, myDomains, tickets, incidents, prs] = await Promise.all([
+  const [review, running, failed, requests, inbox, myDomains, tickets, incidents, prs, fixApprovals] = await Promise.all([
     safe(api<{ runs: RunSummary[] }>("/api/runs?needs_review=true&sort=updated&limit=200"), { runs: [] }),
     safe(api<{ runs: RunSummary[]; total?: number }>("/api/runs?status=running&sort=updated&limit=200"), { runs: [], total: 0 }),
     safe(api<{ runs: RunSummary[] }>("/api/runs?status=failed&sort=updated&limit=100"), { runs: [] }),
@@ -56,6 +59,7 @@ export async function loadMyWork(me: WhoAmI | null): Promise<MyWork> {
       ? safe(api<{ incidents: IncidentItem[] }>("/api/ops/incidents?mine=true&limit=20").then((r) => r.incidents ?? []), null)
       : Promise.resolve(null),
     safe(api<{ prs: PrItem[] }>("/api/source-control/prs?state=OPEN"), { prs: [] }),
+    can(me, "OPS.FIX_APPROVE") ? safe(api<FixApproval[]>("/api/ops/resolve/approvals?scope=mine"), []) : Promise.resolve([] as FixApproval[]),
   ]);
 
   // gates this person can decide, oldest wait first
@@ -88,6 +92,7 @@ export async function loadMyWork(me: WhoAmI | null): Promise<MyWork> {
   return {
     gates,
     requests: requests.requests ?? [],
+    fixApprovals: fixApprovals.slice(0, 8),
     inbox: (inbox.items ?? []).filter((i) => !i.own).slice(0, 6),
     questions,
     running: running.runs.filter(mine).slice(0, 8),

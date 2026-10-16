@@ -71,7 +71,7 @@ export default async function MyWorkPage() {
   const w = await loadMyWork(me);
   const user = (me?.user ?? "").split(/[._@ ]/)[0];
   const name = user ? user.charAt(0) + user.slice(1).toLowerCase() : "";
-  const approvals = w.gates.length + w.requests.length;
+  const approvals = w.gates.length + w.requests.length + w.fixApprovals.length;
   const knowledge = w.questions.length + w.inbox.length;
   const summary = approvals
     ? `${plural(approvals, "decision")} ${approvals === 1 ? "waits" : "wait"} on you.`
@@ -107,7 +107,7 @@ export default async function MyWorkPage() {
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4" data-testid="work-tiles">
         <Tile href="#approve" label="Awaiting your approval" value={approvals} tone="human"
-              hint={`${plural(w.gates.length, "gate")} · ${plural(w.requests.length, "change request")}`} />
+              hint={`${plural(w.gates.length, "gate")} · ${plural(w.requests.length, "change request")}${w.fixApprovals.length ? ` · ${w.fixApprovals.length} fix${w.fixApprovals.length === 1 ? "" : "es"}` : ""}`} />
         <Tile href="#runs" label="Your runs in flight" value={w.running.length} tone="agent"
               hint={`${w.inFlightTotal} in flight across the platform`} />
         <Tile href="#fix" label="Needs a fix" value={w.fix.length} tone="fix" hint="your failed runs, last 14 days" />
@@ -131,6 +131,16 @@ export default async function MyWorkPage() {
                     <p className="mt-0.5 truncate text-xs text-muted-foreground">
                       {run.domain_name ?? "No domain"}{run.source_system_name ? ` · ${run.source_system_name}` : ""} · waiting since {ago(run.updated_at ?? run.created_at)} · as {gate.role}
                     </p>
+                  </Row>
+                ))}
+                {w.fixApprovals.map((a) => (
+                  <Row key={a.approval_id} href={`/ops/resolutions/${encodeURIComponent(a.failure_id)}`}
+                       action={<Link href={`/ops/resolutions/${encodeURIComponent(a.failure_id)}`} className="inline-flex items-center gap-1 rounded-lg bg-human px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-human/90">Decide <ArrowRight className="h-3 w-3" /></Link>}>
+                    <p className="flex flex-wrap items-center gap-2 text-sm font-medium">
+                      <span className="rounded-full bg-human/10 px-2 py-0.5 text-[11px] font-semibold text-human">Known fix</span>
+                      <span className="truncate group-hover:text-primary">{a.issue_title ?? a.fix_name} on {a.dag_id} · {a.task_id}</span>
+                    </p>
+                    <p className="mt-0.5 truncate text-xs text-muted-foreground">Airflow failure · waiting since {ago(a.requested_at)} · {a.approver ? `routed to ${a.approver}` : "any fix approver"}</p>
                   </Row>
                 ))}
                 {w.requests.map((r) => (
