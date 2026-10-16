@@ -12,6 +12,8 @@ export type FixType = "PROCEDURE" | "SKILL";
 export type Preference = {
   auto_resolve_enabled: boolean; search_score_min: number; max_parallel_tasks: number; airflow_clear_enabled: boolean;
   default_approval_required: boolean; graph_hops: number; notify_target: string | null; rca_mode: "AGENT" | "GROUNDED";
+  /** agent-proposed fixes from the safe-action catalogue (V063) */
+  agent_proposals_enabled?: boolean; agent_fix_scope?: string | null;
 };
 export type ResolveSummary = {
   enabled: boolean; preference: Preference; statuses: Partial<Record<FailureStatus, number>>;
@@ -26,6 +28,7 @@ export type FailureRow = {
   severity?: string | null; jira_key?: string | null;
 };
 export type Rca = { mode?: string; cause?: string; evidence?: string[]; path?: string[]; fix_steps?: string[]; agent_note?: string;
+  proposal?: { issue_id: string; steps: SkillStep[]; rationale: string; source: string; risk: string }; proposal_note?: string;
   category?: string | null; confidence?: number | null; graph_nodes?: number };
 export type FailureDetail = {
   failure: FailureRow & { rca: Rca | null; query_id: string | null; dbt_node_id: string | null; error_signature: string;
@@ -41,6 +44,9 @@ export type FixApproval = {
   approval_id: string; failure_id: string; issue_id: string; fix_type: FixType | null; fix_name: string | null;
   status: "OPEN" | "APPROVED" | "REJECTED" | "DONE"; approver: string | null; decided_by: string | null;
   decision_note: string | null; requested_at: string; decided_at: string | null; issue_title?: string | null;
+  /** RUN: run a published fix; PROPOSAL: publish and run the fix the agent proposed */
+  kind?: "RUN" | "PROPOSAL"; proposed_by_agent?: boolean | null; rationale?: string | null; cause?: string | null;
+  steps?: SkillStep[] | null;
   dag_id?: string; task_id?: string | null; run_id?: string | null; incident_id?: string | null; search_score?: number | null;
   exception_class?: string | null;
 };
@@ -51,6 +57,7 @@ export type KnownFix = {
   source_incident_id: string | null; source_failure_id: string | null; notes: string | null; created_by: string | null;
   created_at: string; published_by: string | null; published_at: string | null; updated_at: string;
   skill_name?: string | null; runs_ok?: number; runs_failed?: number; search_refresh?: string;
+  proposed_by_agent?: boolean | null; rationale?: string | null;
 };
 export type FixInput = Partial<Pick<KnownFix, "title" | "error_signature" | "dag_id" | "task_id" | "exception_class" | "match_text"
   | "fix_type" | "procedure_fqn" | "skill_id" | "approval_required" | "owner" | "notes" | "source_incident_id" | "source_failure_id">>;

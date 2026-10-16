@@ -18,14 +18,22 @@ from services.resolve import agent, graph
 AGENT_NAME = "RCA_AGENT"
 
 
-def agent_message(failure: Dict[str, Any], hops: int) -> str:
+def agent_message(failure: Dict[str, Any], hops: int, propose: bool = False) -> str:
+    ask = ""
+    if propose:
+        from services.resolve.actions import catalogue_text
+
+        ask = ("\nIf one of these actions repairs the cause, also propose it (use describe_object to check the tables; "
+               "fully qualified names only, never invent a table or column):\n" + catalogue_text() +
+               '\nAdd to the JSON: "proposed_fix": {"rationale": "why", "steps": [{"action": "NAME", "input": {...}}]} '
+               "or null when no action repairs it.")
     return (f"Find the root cause of Airflow failure {failure['failure_id']}: DAG {failure.get('dag_id')}, task "
             f"{failure.get('task_id')}, {failure.get('exception_class') or 'error'}: "
             f"{str(failure.get('exception_text') or '')[:600]}.\n"
             f"Call get_failure_context with FAILURE_ID={failure['failure_id']}, then walk_graph with the same FAILURE_ID "
             f"and HOPS={hops}, and search the code and knowledge where it helps. Answer with JSON only: "
             '{"cause": "one or two sentences", "evidence": ["what you saw, with the object or file"], '
-            '"path": ["upstream objects, nearest first"], "fix_steps": ["what a person should do"]}')
+            '"path": ["upstream objects, nearest first"], "fix_steps": ["what a person should do"]}' + ask)
 
 
 def _strings(value: Any, limit: int, size: int = 400) -> List[str]:
@@ -43,12 +51,14 @@ class Analyst:
         walked = graph.walk(self.db, failure, hops)
         if prefs.get("rca_mode", "AGENT") == "AGENT":
             try:
-                answer = agent.json_answer(agent.run(self.database, "CORE", AGENT_NAME, agent_message(failure, hops)))
+                propose = bool(prefs.get("agent_proposals_enabled") and prefs.get("agent_fix_scope"))
+                answer = agent.json_answer(agent.run(self.database, "CORE", AGENT_NAME, agent_message(failure, hops, propose)))
                 cause = redact(str(answer.get("cause") or "")).strip()[:1000]
                 if cause:
                     return {"mode": "agent", "cause": cause, "evidence": _strings(answer.get("evidence"), 8),
                             "path": _strings(answer.get("path"), 10, 200) or graph.path_names(walked),
-                            "fix_steps": _strings(answer.get("fix_steps"), 8), "graph_nodes": len(walked["nodes"])}
+                            "fix_steps": _strings(answer.get("fix_steps"), 8), "graph_nodes": len(walked["nodes"]),
+                            **({"proposed_fix": answer["proposed_fix"]} if isinstance(answer.get("proposed_fix"), dict) else {})}
             except agent.AgentUnavailable as exc:
                 note = str(exc)[:300]
             else:

@@ -174,7 +174,7 @@ class Exec:
 def routed(monkeypatch):
     seen = {}
     monkeypatch.setattr(engine, "move", lambda db, fid, cur, tgt, fields=None: seen.setdefault("moves", []).append((cur, tgt)) or True)
-    monkeypatch.setattr(engine, "open_ticket", lambda db, f, cur, a, p, actor, reason, prior=None: {"action": "ticketed", "reason": reason})
+    monkeypatch.setattr(engine, "open_ticket", lambda db, f, cur, a, p, actor, reason, prior=None, rca=None: {"action": "ticketed", "reason": reason})
     monkeypatch.setattr(engine, "request_approval", lambda db, f, hit, routes, p: {"action": "approval", "issue": hit["issue_id"]})
     monkeypatch.setattr(engine, "run_fix", lambda db, f, hit, p, actor, ex, cur: seen.get("fix") or {"action": "resolved"})
     return seen

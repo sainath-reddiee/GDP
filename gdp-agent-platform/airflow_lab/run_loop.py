@@ -1,10 +1,12 @@
 """Run the Airflow failure-resolution lab end to end, N passes, and check every DAG ends where it should.
 
-    python airflow_lab/run_loop.py --database DEV_AI_PLATFORM_APP_REHEARSAL --passes 2
+    python airflow_lab/run_loop.py --passes 2          # DEV_AI_PLATFORM by default
+    python airflow_lab/run_loop.py --teardown          # remove every lab object again
 
 Needs: the WSL Airflow serving http://localhost:8080 with airflow_lab/dags loaded and the `lab_snowflake` connection;
-the platform worker running against the same test copy with the local Airflow environment `local-lab` (KIND AIRFLOW)
-enabled; one Snowflake sign-in (role SYSADMIN). The test copy only: the script refuses a database without _REHEARSAL.
+the platform worker running against the same database with the local Airflow environment `local-lab` (KIND AIRFLOW)
+enabled; one Snowflake sign-in (role SYSADMIN, or LAB_ROLE). Everything lives in the platform's one schema, CORE: the
+lab only creates and resets CORE.LAB_* objects, the FIX_LAB_* procedures and the lab DAGs' scopes.
 
 Each pass:
   1. reset the lab (airflow_lab/reset.sql) and switch automatic resolution off, so the failures queue up;
@@ -16,6 +18,10 @@ Each pass:
   6. learning loop: the invalid-column failure was a miss (RCA + ticket); publish the fix written from its incident and
      trigger the DAG again, which is then fixed automatically;
   7. wait for the platform to clear the fixed tasks and for Airflow's reruns to succeed; check everything.
+Then one more pass shows agent-proposed fixes (--no-proposal-pass skips it): the fixes for lab_invalid_column and
+lab_invalid_identifier are retired so both are misses again; the agent proposes a fix from the safe-action catalogue,
+the loop approves it once as LAB_APPROVER (which publishes it), the fix runs and Airflow's rerun succeeds; the same
+failure triggered again is then fixed automatically by the agent's fix, with no approval.
 Results are printed as a table and written to airflow_lab/last_run.json.
 """
 
@@ -156,6 +162,65 @@ class Lab:
     def run_state(self, dag_id: str, run_id: str) -> str:
         return str((self.af.dag_run(dag_id, run_id) or {}).get("state") or "")
 
+    # ------------------------------------------------------------ the agent proposes (V063)
+    def proposals(self, on: bool, scope: str = "") -> None:
+        self.db.execute("UPDATE CORE.CONTROL_PREFERENCE SET AGENT_PROPOSALS_ENABLED = %s, AGENT_FIX_SCOPE = %s, "
+                        "UPDATED_BY = 'airflow_lab', UPDATED_AT = CURRENT_TIMESTAMP() WHERE IS_ACTIVE", (on, scope or None))
+
+    def proposal_pass(self, n: int) -> None:
+        from services.resolve import engine, publish
+
+        tag = f"lab{n}p_{datetime.now(timezone.utc).strftime('%m%d%H%M')}"
+        dags = ["lab_invalid_column", "lab_invalid_identifier"]
+        log(f"===== pass {n}: the agent proposes ({tag})")
+        self.sql_file("reset.sql")
+        for d in dags:   # forget the fixes learned earlier, so both are misses again
+            for r in self.db.query("SELECT ISSUE_ID FROM CORE.KNOWN_ISSUE WHERE DAG_ID = %s AND STATUS IN ('PUBLISHED', 'DRAFT')", (d,)):
+                publish.retire(self.db, r["issue_id"], "airflow_lab")
+        self.auto(False)
+        self.proposals(True, f"{self.database}.CORE.LAB_*")
+        runs = {d: self.trigger(d, tag) for d in dags}
+        wait("Airflow finished the runs", lambda: all(self.run_state(d, r) in ("success", "failed") for d, r in runs.items()))
+        wait("the worker queued both failures", lambda: set(dags) <= set(self.failures(list(runs.values()))), timeout=600)
+        self.auto(True)
+        wait("the agent proposed (or ticketed) each failure",
+             lambda: all(self.failures(list(runs.values())).get(d, {}).get("status") in ("AWAITING_APPROVAL", "TICKETED") for d in dags),
+             timeout=900)
+        proposed = {}
+        for d in dags:
+            f = self.failures(list(runs.values()))[d]
+            found = self.db.query("""SELECT A.APPROVAL_ID, A.KIND, K.ISSUE_ID, K.CREATED_BY, S.STEPS FROM CORE.APPROVAL_REQUEST A
+                                       JOIN CORE.KNOWN_ISSUE K ON K.ISSUE_ID = A.ISSUE_ID
+                                       LEFT JOIN CORE.FIX_SKILL S ON S.SKILL_ID = K.SKILL_ID
+                                      WHERE A.FAILURE_ID = %s AND A.STATUS = 'OPEN'""", (f["failure_id"],))
+            if f["status"] == "AWAITING_APPROVAL" and found and found[0]["kind"] == "PROPOSAL":
+                proposed[d] = found[0]
+                steps = json.loads(found[0]["steps"]) if isinstance(found[0]["steps"], str) else found[0]["steps"]
+                log(f"{d}: the agent proposes " + "; ".join(s.get("note", s["action"]) for s in steps))
+                engine.decide_approval(self.db, found[0]["approval_id"], "LAB_APPROVER", True, "lab: approve the agent's fix", False)
+            else:
+                log(f"{d}: no proposal ({f['status']}): {(f['detail'] or '')[:160]}")
+        wait("the approved agent fixes ran",
+             lambda: all(self.failures(list(runs.values()))[d]["status"] == "RESOLVED" for d in proposed), timeout=600)
+        wait("Airflow's reruns succeeded", lambda: all(self.run_state(d, runs[d]) == "success" for d in proposed), timeout=900)
+        self.sql_file("reset.sql")   # break the lab again, so the same failure happens once more
+        again = {d: self.trigger(d, tag + "_again") for d in proposed}   # the same failure, now known
+        wait("the same failures were fixed automatically",
+             lambda: all(self.failures([r]).get(d, {}).get("status") == "RESOLVED" for d, r in again.items()), timeout=900)
+        wait("their reruns succeeded", lambda: all(self.run_state(d, r) == "success" for d, r in again.items()), timeout=900)
+        for d in dags:
+            first = self.failures(list(runs.values()))[d]
+            p = proposed.get(d)
+            second = self.failures([again[d]])[d] if d in again else None
+            ok = bool(p) and p["created_by"] == engine.AGENT_AUTHOR and first["status"] == "RESOLVED" and \
+                bool(second) and second["status"] == "RESOLVED" and second["issue_id"] == p["issue_id"]
+            required = d == "lab_invalid_column"   # the clear case; the missing table depends on the agent finding its source
+            self.results.append({"pass": n, "dag": d, "want": "agent proposes, approve once, then automatic",
+                                 "got": (f"proposed -> {first['status']} -> again {second['status']}" if p and second
+                                         else first["status"]), "airflow": self.run_state(d, again.get(d, runs[d])),
+                                 "ok": ok or not required, "detail": (first["detail"] or "")[:160]})
+        log(f"pass {n}: agent proposals done")
+
     # ------------------------------------------------------------ one pass
     def one_pass(self, n: int) -> None:
         tag = f"lab{n}_{datetime.now(timezone.utc).strftime('%m%d%H%M')}"
@@ -224,32 +289,51 @@ class Lab:
 
 def main() -> None:
     p = argparse.ArgumentParser()
-    p.add_argument("--database", default="DEV_AI_PLATFORM_APP_REHEARSAL")
+    p.add_argument("--database", default="DEV_AI_PLATFORM")
+    p.add_argument("--teardown", action="store_true", help="remove the lab objects and stop")
+    p.add_argument("--no-proposal-pass", action="store_true", help="skip the agent-proposed fixes pass")
+    p.add_argument("--only-proposal-pass", action="store_true", help="run only the agent-proposed fixes pass")
     p.add_argument("--passes", type=int, default=2)
     p.add_argument("--airflow", default="http://localhost:8080")
     args = p.parse_args()
-    assert args.database.upper().endswith("_REHEARSAL"), "the lab runs on a *_REHEARSAL test copy only"
 
     import snowflake.connector
     from services.ops.airflow_rest import AirflowRest
 
+    try:
+        import app.db  # noqa: F401  (the platform's in-memory token cache; the Windows store refuses the token)
+    except Exception:
+        pass
+
     af = AirflowRest(args.airflow, "admin", airflow_password(), env_id=ENV_ID)
     log(f"Airflow {af.version()['version']} at {args.airflow}")
     log("Connecting to Snowflake: complete the sign-in in your browser...")
-    con = snowflake.connector.connect(connection_name="anblicksorg-anblicksorg_aws", role="SYSADMIN", warehouse="DBT_WH",
+    import os
+
+    con = snowflake.connector.connect(connection_name="anblicksorg-anblicksorg_aws", role=os.environ.get("LAB_ROLE", "SYSADMIN"),
+                                      warehouse="DBT_WH",
                                       database=args.database.upper(), schema="CORE", login_timeout=600,
                                       client_session_keep_alive=True, client_store_temporary_credential=True)
     lab = Lab(ConnDb(con), af, args.database.upper())
+    if args.teardown:
+        lab.auto(False)
+        lab.sql_file("teardown.sql")
+        log("lab objects removed")
+        con.close()
+        return
     lab.sql_file("setup_lab.sql")
     error = None
     try:
-        for n in range(1, args.passes + 1):
+        for n in range(1, (0 if args.only_proposal_pass else args.passes) + 1):
             lab.one_pass(n)
+        if not args.no_proposal_pass:
+            lab.proposal_pass((0 if args.only_proposal_pass else args.passes) + 1)
     except Exception as exc:   # report what ran so far
         error = f"{type(exc).__name__}: {exc}"
         log(f"stopped: {error}")
     finally:
         lab.auto(False)
+        lab.proposals(False)
         (LAB / "last_run.json").write_text(json.dumps({"results": lab.results, "error": error}, indent=2, default=str), encoding="utf-8")
         print(f"\n{'pass':<5}{'dag':<24}{'want':<36}{'got':<19}{'airflow':<9}{'ok'}")
         for r in lab.results:

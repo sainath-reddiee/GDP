@@ -51,7 +51,7 @@ export default async function ApprovalsPage({ searchParams }: { searchParams: { 
                 <Link href={`/ops/resolutions/${encodeURIComponent(a.failure_id)}`} className="hover:text-primary">{a.dag_id} · {a.task_id}</Link>
                 <span className="ml-2 text-xs font-normal text-muted-foreground">{a.exception_class ?? "Airflow failure"}</span>
               </p>
-              <FixDecision approvalId={a.approval_id} fixTitle={a.issue_title} approver={a.approver} compact />
+              <FixDecision approvalId={a.approval_id} fixTitle={a.issue_title} approver={a.approver} compact proposal={a.kind === "PROPOSAL" ? { cause: a.cause, rationale: a.rationale, steps: a.steps } : null} />
             </div>
           ))}
         </section>

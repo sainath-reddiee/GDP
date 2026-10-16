@@ -84,11 +84,11 @@ export default async function ResolutionsPage({ searchParams }: { searchParams?:
           {list.data.map((a) => (
             <li key={a.approval_id} className="surface space-y-2 p-4">
               <div className="flex flex-wrap items-center gap-2 text-sm">
-                <span className="rounded-full bg-human/10 px-2 py-0.5 text-[11px] font-semibold text-human">Fix approval</span>
+                <span className="rounded-full bg-human/10 px-2 py-0.5 text-[11px] font-semibold text-human">{a.kind === "PROPOSAL" ? "Agent proposal" : "Fix approval"}</span>
                 <Link href={`/ops/resolutions/${encodeURIComponent(a.failure_id)}`} className="font-medium hover:text-primary">{a.dag_id} · {a.task_id}</Link>
                 <span className="text-xs text-muted-foreground">match {score(a.search_score)} · {a.fix_type} {a.fix_name}</span>
               </div>
-              {canApprove ? <FixDecision approvalId={a.approval_id} fixTitle={a.issue_title} approver={a.approver} compact />
+              {canApprove ? <FixDecision approvalId={a.approval_id} fixTitle={a.issue_title} approver={a.approver} compact proposal={a.kind === "PROPOSAL" ? { cause: a.cause, rationale: a.rationale, steps: a.steps } : null} />
                 : <p className="text-xs text-muted-foreground">Waiting for {a.approver ?? "a fix approver"} (OPS.FIX_APPROVE).</p>}
             </li>
           ))}

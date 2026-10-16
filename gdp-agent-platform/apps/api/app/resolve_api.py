@@ -118,9 +118,12 @@ def failure_detail(failure_id: str, db: Db = Depends(current_db)):
                           FROM CORE.RESOLUTION_STEP S JOIN CORE.RESOLUTION_RUN R ON R.RESOLUTION_ID = S.RESOLUTION_ID
                          WHERE R.FAILURE_ID = %s ORDER BY S.RESOLUTION_ID, S.STEP_NO""", (failure_id,))
     approvals = db.query("""SELECT APPROVAL_ID, ISSUE_ID, FIX_TYPE, FIX_NAME, STATUS, APPROVER, DECIDED_BY, DECISION_NOTE,
-                                   REQUESTED_AT, DECIDED_AT FROM CORE.APPROVAL_REQUEST WHERE FAILURE_ID = %s
+                                   REQUESTED_AT, DECIDED_AT, KIND FROM CORE.APPROVAL_REQUEST WHERE FAILURE_ID = %s
                              ORDER BY REQUESTED_AT""", (failure_id,))
     issue = engine.get_issue(db, failure["issue_id"]) if failure.get("issue_id") else None
+    proposal = (failure.get("rca") or {}).get("proposal") if isinstance(failure.get("rca"), dict) else None
+    if not issue and proposal and proposal.get("issue_id"):
+        issue = engine.get_issue(db, proposal["issue_id"])
     return {"failure": _out(failure), "issue": _out(issue), "runs": [_out(r) for r in runs],
             "steps": [_out(s) for s in steps], "approvals": [_out(a) for a in approvals]}
 
@@ -140,11 +143,13 @@ def list_approvals(scope: str = Query("open", pattern="^(open|mine|all)$"), db: 
         where.append("(UPPER(A.APPROVER) = %s OR A.APPROVER IS NULL)")
         params.append(str(db.user or "").upper())
     rows = db.query(f"""SELECT A.APPROVAL_ID, A.FAILURE_ID, A.ISSUE_ID, A.FIX_TYPE, A.FIX_NAME, A.STATUS, A.APPROVER,
-                               A.DECIDED_BY, A.DECISION_NOTE, A.REQUESTED_AT, A.DECIDED_AT, K.TITLE AS ISSUE_TITLE,
+                               A.DECIDED_BY, A.DECISION_NOTE, A.REQUESTED_AT, A.DECIDED_AT, A.KIND, K.TITLE AS ISSUE_TITLE,
+                               K.PROPOSED_BY_AGENT, K.RATIONALE, S.STEPS, F.RCA:cause::VARCHAR AS CAUSE,
                                F.DAG_ID, F.TASK_ID, F.RUN_ID, F.INCIDENT_ID, F.EXCEPTION_CLASS, F.SEARCH_SCORE
                           FROM CORE.APPROVAL_REQUEST A
                           JOIN CORE.FAILURE_EVENT F ON F.FAILURE_ID = A.FAILURE_ID
                           LEFT JOIN CORE.KNOWN_ISSUE K ON K.ISSUE_ID = A.ISSUE_ID
+                          LEFT JOIN CORE.FIX_SKILL S ON S.SKILL_ID = K.SKILL_ID
                          WHERE {' AND '.join(where)} ORDER BY A.REQUESTED_AT DESC LIMIT {LIST_LIMIT}""", tuple(params))
     return [_out(r) for r in rows]
 
@@ -285,6 +290,8 @@ class PreferenceIn(BaseModel):
     graph_hops: Optional[int] = Field(None, ge=1, le=6)
     notify_target: Optional[str] = Field(None, max_length=256)
     rca_mode: Optional[str] = Field(None, pattern="^(AGENT|GROUNDED)$")
+    agent_proposals_enabled: Optional[bool] = None
+    agent_fix_scope: Optional[str] = Field(None, max_length=2000, pattern=r"^[A-Za-z0-9_$.*,\s]*$")
 
 
 @router.get("/api/ops/resolve/preference")

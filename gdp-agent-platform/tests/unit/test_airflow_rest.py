@@ -91,3 +91,31 @@ def test_client_for_picks_the_kind_and_reads_credentials_from_the_host(monkeypat
                     "region": "local"})
     assert isinstance(c, AirflowRest) and c.base == "http://localhost:8080" and (c.username, c.password) == ("admin", "pw")
     assert env_key("local-lab") == "LOCAL_LAB" and credentials("local-lab") == ("admin", "pw")
+
+
+def test_airflow3_error_detail_becomes_the_traceback_and_full_message():
+    from services.ops.mwaa import log_text
+    from services.resolve.rules import parse_failure
+
+    text = log_text([
+        {"timestamp": "2026-10-16T09:45:37Z", "event": "Running statement: SELECT SUM(AMOUNT_USD) FROM CORE.LAB_ORDERS_CLEAN",
+         "level": "info"},
+        {"timestamp": "2026-10-16T09:45:39Z", "event": "Task failed with exception", "level": "error", "error_detail": [
+            {"exc_type": "ProgrammingError", "is_cause": False,
+             "exc_value": "000904 (42000): SQL compilation error: error line 1 at position 11\ninvalid identifier 'AMOUNT_USD'",
+             "frames": [{"filename": "/dags/lab_dags.py", "lineno": 80, "name": "publish_revenue"}]}]},
+        {"timestamp": "2026-10-16T09:45:40Z", "event": "Post Execute", "level": "info"}])
+    assert 'File "/dags/lab_dags.py", line 80, in publish_revenue' in text
+    parsed = parse_failure(text)
+    assert parsed["exception_class"] == "ProgrammingError"
+    assert parsed["exception_text"].endswith("invalid identifier 'AMOUNT_USD'")
+
+
+def test_the_excerpt_keeps_the_last_statement_before_the_traceback():
+    from services.ops.normalize import excerpt
+
+    log = ("t INFO Running statement: SELECT 1 FROM CORE.LAB_A\nt INFO Running statement: SELECT SUM(AMOUNT_USD) FROM CORE.LAB_ORDERS_CLEAN\n"
+           "t ERROR Task failed\nTraceback (most recent call last):\n  File \"x\", line 1, in f\nProgrammingError: invalid identifier 'AMOUNT_USD'")
+    out = excerpt(log)
+    assert out.splitlines()[0].endswith("FROM CORE.LAB_ORDERS_CLEAN") and "CORE.LAB_A" not in out
+    assert out.splitlines()[1].startswith("Traceback")

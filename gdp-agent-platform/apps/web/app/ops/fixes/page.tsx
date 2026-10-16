@@ -63,6 +63,7 @@ export default async function FixesPage({ searchParams }: { searchParams?: { sta
                     <tr key={k.issue_id} className="align-top hover:bg-muted/30">
                       <td className="px-4 py-2.5">
                         <Link href={`/ops/fixes/${encodeURIComponent(k.issue_id)}`} className="font-medium hover:text-primary">{k.title}</Link>
+                        {k.proposed_by_agent && <span className="ml-2 rounded-full bg-agent/10 px-2 py-0.5 text-[10px] font-semibold text-agent">Proposed by the agent</span>}
                         <p className="text-xs text-muted-foreground">{k.fix_type === "SKILL" ? `Skill ${k.skill_name ?? ""}` : k.procedure_fqn} · v{k.version_no} · by {k.created_by}{k.published_by ? `, published by ${k.published_by}` : ""}</p>
                       </td>
                       <td className="px-3 py-2.5 text-xs">{k.dag_id ?? "any DAG"}{k.task_id ? ` · ${k.task_id}` : ""}{k.exception_class ? ` · ${k.exception_class}` : ""}</td>
