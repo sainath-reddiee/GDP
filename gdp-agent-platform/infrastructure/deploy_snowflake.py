@@ -69,6 +69,7 @@ REHEARSAL_SUFFIX = "_REHEARSAL"
 AGENT_CREATE = re.compile(
     r"CREATE\s+OR\s+REPLACE\s+AGENT\s+(?P<name>[A-Za-z0-9_$.\"]+)\s+(?P<props>.*?)\s*FROM\s+SPECIFICATION\s*"
     r"(?P<spec>\$\$.*?\$\$)\s*;", re.S | re.I)
+AGENT_PROP = re.compile(r"\b(COMMENT|PROFILE)\s*=\s*('(?:[^']|'')*')", re.I)
 
 
 def agent_skills_yaml(database: str) -> str:
@@ -385,9 +386,10 @@ def agent_statements(cur, sql: str) -> str:
     cur.execute(f"SHOW AGENTS LIKE '{parts[2]}' IN SCHEMA {parts[0]}.{parts[1]}")
     if not cur.fetchall():
         return sql
-    props = " ".join(m.group("props").split())
-    alter = (f"ALTER AGENT {name} SET {props};\n" if props else "") + \
-        f"ALTER AGENT {name} MODIFY LIVE VERSION SET SPECIFICATION = {m.group('spec')};"
+    # one property per SET: Snowflake refuses ALTER AGENT ... SET COMMENT = ... PROFILE = ... in one statement
+    sets = "".join(f"ALTER AGENT {name} SET {key.upper()} = {value};\n"
+                   for key, value in AGENT_PROP.findall(m.group("props")))
+    alter = sets + f"ALTER AGENT {name} MODIFY LIVE VERSION SET SPECIFICATION = {m.group('spec')};"
     return sql[:m.start()] + alter + sql[m.end():]
 
 

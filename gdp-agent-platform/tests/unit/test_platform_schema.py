@@ -181,7 +181,8 @@ GRANT USAGE ON AGENT AIP.CORE.SUP TO DATABASE ROLE AIP.VIEWER;"""
 def test_existing_agent_is_altered_in_place_and_keeps_its_versions():
     out = agent_statements(Cur({"SHOW AGENTS": [("SUP",)]}), AGENT)
     assert "CREATE OR REPLACE AGENT" not in out
-    assert "ALTER AGENT AIP.CORE.SUP SET COMMENT = 'c' PROFILE = '{\"display_name\": \"S\"}';" in out
+    assert "ALTER AGENT AIP.CORE.SUP SET COMMENT = 'c';" in out   # one property per SET
+    assert "ALTER AGENT AIP.CORE.SUP SET PROFILE = '{\"display_name\": \"S\"}';" in out
     assert "ALTER AGENT AIP.CORE.SUP MODIFY LIVE VERSION SET SPECIFICATION = $$" in out
     assert out.rstrip().endswith("GRANT USAGE ON AGENT AIP.CORE.SUP TO DATABASE ROLE AIP.VIEWER;")
 
