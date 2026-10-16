@@ -6,7 +6,7 @@ export default function LineagePage({ searchParams }: { searchParams: { object?:
   const direction = searchParams.direction === "up" || searchParams.direction === "down" ? searchParams.direction : "both";
   return (
     <div className="space-y-5">
-      <PageHeader eyebrow="Model and build" title="Lineage"
+      <PageHeader eyebrow="Pipelines" title="Lineage"
                   description="How data moves from a source through Silver (pre-MDM), Reltio's cross-reference and golden records (post-MDM) to Gold. Pick a table, and a column for column-level lineage. Built from landed tables, approved mappings (STTM), the mastered-domain contracts and gold generation." />
       <LineageExplorer initial={{ q: searchParams.q ?? "", object: searchParams.object ?? "", column: searchParams.column ?? null, direction }} />
     </div>

@@ -299,3 +299,14 @@ class Mwaa:
         params = {"map_index": int(map_index)} if map_index is not None and int(map_index) >= 0 else None
         found = self.invoke("GET", f"/dags/{_seg(dag_id)}/dagRuns/{_seg(run_id)}/taskInstances/{_seg(task_id)}/links", params)
         return found if isinstance(found, dict) else {}
+
+
+def client_for(env: Dict[str, Any]) -> "Mwaa":
+    """The client for an environment row: KIND 'AIRFLOW' is a self-hosted Airflow reached over its REST API at
+    AIRFLOW_URL (services.ops.airflow_rest); anything else is Amazon MWAA."""
+    if str(env.get("kind") or "MWAA").upper() == "AIRFLOW":
+        from services.ops.airflow_rest import AirflowRest, credentials
+
+        user, password = credentials(env.get("env_id") or "")
+        return AirflowRest(env.get("airflow_url") or "", user, password, env_id=env.get("env_id") or "")
+    return Mwaa(env["mwaa_env"], env["region"])

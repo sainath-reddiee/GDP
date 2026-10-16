@@ -118,7 +118,9 @@ def _mwaa_http(exc: MwaaError) -> HTTPException:
 
 
 def _mwaa(env: Dict[str, Any]) -> Mwaa:
-    return Mwaa(env["mwaa_env"], env["region"])
+    from services.ops.mwaa import client_for
+
+    return client_for(env)
 
 
 def _env(db: Db, env_id: str) -> Dict[str, Any]:
@@ -160,8 +162,10 @@ def _forget_secret(env_id: Optional[str] = None) -> None:
 
 class EnvBody(BaseModel):
     name: str = Field(min_length=1, max_length=120)
-    mwaa_env: str = Field(min_length=1, max_length=80)
-    region: str = Field(min_length=6, max_length=32)
+    # MWAA (Amazon managed, IAM) or AIRFLOW (self-hosted: the REST API at airflow_url, credentials from host variables)
+    kind: str = Field(default="MWAA", pattern="^(MWAA|AIRFLOW)$")
+    mwaa_env: Optional[str] = Field(default=None, min_length=1, max_length=80)
+    region: Optional[str] = Field(default=None, min_length=6, max_length=32)
     airflow_url: Optional[str] = Field(default=None, max_length=1024)
     poll_seconds: int = Field(default=300, ge=60, le=3600)
     enabled: bool = True
@@ -197,9 +201,10 @@ def _check_env_fields(values: Dict[str, Any]) -> Dict[str, Any]:
         out["name"] = out["name"].strip()
         if not out["name"]:
             raise HTTPException(422, "name is required")
-    if out.get("mwaa_env") is not None and not _MWAA_NAME.match(out["mwaa_env"].strip()):
+    local = out.get("kind") == "AIRFLOW"
+    if not local and out.get("mwaa_env") is not None and not _MWAA_NAME.match(out["mwaa_env"].strip()):
         raise HTTPException(422, "mwaa_env must be an MWAA environment name (letters, digits, - and _)")
-    if out.get("region") is not None and not _REGION.match(out["region"].strip()):
+    if not local and out.get("region") is not None and not _REGION.match(out["region"].strip()):
         raise HTTPException(422, "region must be an AWS region such as us-east-1")
     if "airflow_url" in out:
         url = (out.get("airflow_url") or "").strip().rstrip("/")
@@ -274,14 +279,20 @@ def _one_env_out(db: Db, env_id: str) -> Dict[str, Any]:
 @router.post("/api/ops/envs")
 def create_env(body: EnvBody, db: Db = Depends(current_db)):
     values = _check_env_fields(body.model_dump())
+    if values["kind"] == "AIRFLOW":
+        if not values.get("airflow_url"):
+            raise HTTPException(422, "a self-hosted Airflow needs airflow_url, the base URL of its REST API")
+        values["mwaa_env"], values["region"] = "local", "local"   # NOT NULL columns; unused for this kind
+    elif not values.get("mwaa_env") or not values.get("region"):
+        raise HTTPException(422, "an MWAA environment needs mwaa_env and region")
     base = slug(values["name"])
     taken = {r["env_id"] for r in _q(db, "SELECT ENV_ID FROM CORE.AIRFLOW_ENV WHERE ENV_ID LIKE %s", (base + "%",))}
     env_id = next((c for c in [base] + [f"{base}-{i}" for i in range(2, 100)] if c not in taken), None)
     if not env_id:
         raise HTTPException(409, "Too many environments with this name; choose another name")
     _x(db, """INSERT INTO CORE.AIRFLOW_ENV (ENV_ID, NAME, KIND, MWAA_ENV, REGION, AIRFLOW_URL, ENABLED, POLL_SECONDS, PUSH_ENABLED)
-              SELECT %s, %s, 'MWAA', %s, %s, %s, %s, %s, %s""",
-       (env_id, values["name"], values["mwaa_env"], values["region"], values.get("airflow_url"), values["enabled"],
+              SELECT %s, %s, %s, %s, %s, %s, %s, %s, %s""",
+       (env_id, values["name"], values["kind"], values["mwaa_env"], values["region"], values.get("airflow_url"), values["enabled"],
         values["poll_seconds"], values["push_enabled"]))
     return _one_env_out(db, env_id)
 

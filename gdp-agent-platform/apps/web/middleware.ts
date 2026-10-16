@@ -2,8 +2,9 @@ import { NextResponse, type NextRequest } from "next/server";
 
 export function middleware(req: NextRequest) {
   const path = req.nextUrl.pathname;
-  // Airflow push events carry their own HMAC signature and never a user session; /bff/version only names the build
-  if (path.startsWith("/login") || path === "/bff/signout" || path === "/bff/ops/ingest" || path === "/bff/version") {
+  // the home page is public (the product page when signed out, app/page.tsx); Airflow push events carry their own HMAC
+  // signature and never a user session; /bff/version only names the build
+  if (path === "/" || path.startsWith("/login") || path === "/bff/signout" || path === "/bff/ops/ingest" || path === "/bff/version") {
     return NextResponse.next();
   }
   const auth = process.env.AIP_AUTH ?? "dev";

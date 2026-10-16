@@ -12,7 +12,7 @@ import { PRODUCT, PRODUCT_SHORT } from "@/lib/brand";
 import { cn } from "@/lib/utils";
 import { RunPreview } from "./run-preview";
 import { FeatureExplorer, KnowledgeLoop } from "./engine-sections";
-import { reveal, Section } from "./landing-ui";
+import { NextChapter, reveal, Section } from "./landing-ui";
 import { SignInDialog } from "./sign-in-dialog";
 import type { AuthMode } from "./form";
 
@@ -20,13 +20,16 @@ import type { AuthMode } from "./form";
 // snowflake/agents/supervisor.sql), where AI is used (services/common/llm.py call sites), the Copilot (services/agentic),
 // governance and audit (services/governance/policy.py, CORE.AGENT_RUN) and integrations (services/*). Keep it that way.
 
+// The page as a story: why it matters, how it works, see it run, why it gets smarter, what is in it, why you can trust
+// it, and how it fits your stack. The nav follows the same order.
 const NAV = [
-  { href: "#agent", label: "Agent at work" },
+  { href: "#value", label: "Why" },
+  { href: "#how", label: "How it works" },
+  { href: "#agent", label: "See it run" },
   { href: "#knowledge", label: "Knowledge loop" },
   { href: "#features", label: "Features" },
-  { href: "#how", label: "How it works" },
-  { href: "#governance", label: "Governance" },
-  { href: "#sources", label: "Sources" },
+  { href: "#governance", label: "Trust" },
+  { href: "#sources", label: "Integrations" },
 ];
 
 const KEYWORDS = [
@@ -55,16 +58,27 @@ const FACTS = [
 ];
 
 /** The Silver pipeline, as the platform runs it. tool: the agent tool or procedure behind the stage. */
-const STAGES: { name: string; tool: string; delivers: string; ai?: string; human?: string; platform?: boolean }[] = [
-  { name: "Source onboarding", tool: "prepare_source", platform: true, delivers: "Access validated; tables landed, as Iceberg, or read in place" },
-  { name: "Profiling", tool: "run_profiling", delivers: "Statistics, patterns, keys and drift for every column", ai: "Descriptions, PII hints" },
-  { name: "Domain identification", tool: "identify_domain", delivers: "Matched domain knowledge pack with a confidence score", ai: "Cortex Search", human: "Confirms if confidence is low" },
-  { name: "Field mapping", tool: "generate_mapping_candidates", delivers: "Ranked source-to-target candidates with evidence on 7 signals", ai: "Embeddings, explanations", human: "Model approver" },
-  { name: "STTM", tool: "generate_sttm", delivers: "Versioned transformations, joins and business rules", ai: "Natural-language refinement", human: "STTM approver" },
-  { name: "Data quality", tool: "generate_soda", delivers: "SodaCL checks and a Great Expectations suite, backtested", human: "DQ approver" },
-  { name: "QA testing", tool: "qa_suite", platform: true, delivers: "SQL tests in 8 categories, traced to the STTM", ai: "Plain-language test drafting", human: "QA lead sign-off" },
-  { name: "Code generation", tool: "generate_dbt · validate_dbt", delivers: "Silver dbt models compiled on dbt Projects on Snowflake" },
-  { name: "Code review", tool: "review", delivers: "Approved code published as a GitHub pull request", ai: "Advisory review per file", human: "Code reviewer" },
+/** The Silver pipeline in plain words, for anyone: what each stage does, what it hands over, where AI helps and who
+ *  signs it off. (The engineering detail, tool by tool, lives in the product and the guidebook.) */
+const STAGES: { name: string; does: string; gives: string; ai?: string; human?: string; parallel?: boolean }[] = [
+  { name: "Connect the source", does: "Connects to the source and brings its tables into Snowflake, or reads them where they already are.",
+    gives: "Source tables, ready to work on" },
+  { name: "Profile the data", does: "Reads every column to learn what the data looks like: types, patterns, keys, gaps and personal data.",
+    gives: "A profile of every column", ai: "Describes each column and flags personal data" },
+  { name: "Recognise the business area", does: "Works out which part of the business the data belongs to, such as customers or orders, so the right rules apply.",
+    gives: "The matching business domain", ai: "Searches your team's knowledge", human: "Confirmed by a person if unsure" },
+  { name: "Map the fields", does: "Suggests which source column feeds each target column, and shows the evidence for every match.",
+    gives: "A source-to-target map", ai: "Explains the uncertain matches", human: "Model approver" },
+  { name: "Write the transformation rules", does: "Writes how source data becomes target data: calculations, joins and business rules (the STTM).",
+    gives: "Versioned transformation rules", ai: "Turns plain-English instructions into rules", human: "STTM approver" },
+  { name: "Add data quality checks", does: "Writes checks that catch bad data, and tries them on real data before anyone approves them.",
+    gives: "Data quality checks", human: "Data quality approver", parallel: true },
+  { name: "Test the results", does: "Writes tests that prove the target data matches the source: counts, keys, totals and joins.",
+    gives: "A test suite", ai: "Drafts tests from plain English", human: "QA lead", parallel: true },
+  { name: "Generate the code", does: "Writes the dbt code that builds the tables, and checks that it compiles in Snowflake.",
+    gives: "Ready-to-run dbt code", parallel: true },
+  { name: "Review and ship", does: "Reviews the generated code and packages everything as a pull request for your team.",
+    gives: "A pull request in GitHub", ai: "Gives a second-opinion review", human: "Code reviewer" },
 ];
 
 const VALUE: { task: string; before: string; now: string }[] = [
@@ -109,7 +123,7 @@ function TopBar({ onSignIn }: { onSignIn: () => void }) {
   }, []);
   return (
     <header className={cn("sticky top-0 z-40 transition-colors", scrolled ? "border-b border-[color:var(--line)] bg-[#f3f1ea]/90 backdrop-blur" : "border-b border-transparent")}>
-      <div className="mx-auto flex h-16 max-w-[1200px] items-center gap-6 px-5 sm:px-8">
+      <div className="mx-auto flex h-16 max-w-[1200px] 2xl:max-w-[1360px] items-center gap-6 px-5 sm:px-8">
         <a href="#top" className="flex items-center gap-2.5">
           <LogoMark size="sm" />
           <span className="text-[15px] font-semibold tracking-tight">
@@ -129,7 +143,7 @@ function Hero({ onSignIn }: { onSignIn: () => void }) {
   return (
     <section id="top" className="relative">
       <div aria-hidden className="lp-grid pointer-events-none absolute inset-x-0 top-0 h-[620px]" />
-      <div className="relative mx-auto grid max-w-[1200px] gap-12 px-5 pb-16 pt-14 sm:px-8 lg:grid-cols-12 lg:pt-20">
+      <div className="relative mx-auto grid max-w-[1200px] 2xl:max-w-[1360px] gap-12 px-5 pb-16 pt-14 sm:px-8 lg:grid-cols-12 lg:pt-20">
         <div className="lg:col-span-7">
           <motion.p initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5 }}
                     className="lp-label flex items-center gap-2">
@@ -182,7 +196,7 @@ function Hero({ onSignIn }: { onSignIn: () => void }) {
         </motion.aside>
       </div>
 
-      <div className="mx-auto max-w-[1200px] px-5 sm:px-8">
+      <div className="mx-auto max-w-[1200px] 2xl:max-w-[1360px] px-5 sm:px-8">
         <dl className="grid grid-cols-2 border-y border-[color:var(--ink)] md:grid-cols-4">
           {FACTS.map((f, i) => (
             <div key={f.label} className={cn("px-4 py-6", i > 0 && "md:border-l md:border-[color:var(--line)]", i % 2 === 1 && "border-l border-[color:var(--line)] md:border-l")}>
@@ -207,27 +221,26 @@ function Hero({ onSignIn }: { onSignIn: () => void }) {
 
 function AgentAtWork() {
   return (
-    <section id="agent" className="scroll-mt-16 bg-[#0e0d0a] py-24 text-[#f3f1ea]">
-      <div className="mx-auto max-w-[1200px] px-5 sm:px-8">
+    <section id="agent" className="scroll-mt-16 bg-[#0e0d0a] pb-12 pt-6 text-[#f3f1ea]">
+      <div className="mx-auto max-w-[1200px] 2xl:max-w-[1360px] px-5 sm:px-8">
         <motion.div {...reveal} className="flex items-center gap-4 border-t border-[#f3f1ea] pt-4">
-          <span className="lp-label !text-[#f3f1ea]">§ 01</span><span className="lp-label !text-[#9b978c]">The agent at work</span>
+          <span className="lp-label !text-[#f3f1ea]">§ 03</span><span className="lp-label !text-[#9b978c]">See it run</span>
         </motion.div>
-        <div className="mt-8 grid gap-6 lg:grid-cols-12">
-          <motion.h2 {...reveal} className="lp-display text-[40px] leading-[1.02] sm:text-[56px] lg:col-span-7">
+        <div className="mt-5 grid gap-4 lg:grid-cols-12">
+          <motion.h2 {...reveal} className="lp-display text-[32px] leading-[1.05] sm:text-[38px] lg:col-span-7">
             Watch the agent work. <em className="text-[#ff8a5c]">Approve</em> what it delivers.
           </motion.h2>
           <motion.p {...reveal} className="self-end text-[16px] leading-relaxed text-[#c9c5ba] lg:col-span-5">
-            A replay of a Silver run with the platform&apos;s real stages, tools, states and roles. The agent calls each stage
-            tool, runs three lanes in parallel after the STTM, and pauses at every gate until an approver signs off.
-            Source tables are illustrative.
+            A replay of a Silver run with the platform&apos;s real stages and roles: the agent runs each stage and pauses at every gate until an approver signs off. Source tables are illustrative.
           </motion.p>
         </div>
-        <motion.div {...reveal} className="mt-12"><RunPreview /></motion.div>
+        <motion.div {...reveal} className="mt-6"><RunPreview /></motion.div>
         <div className="mt-6 flex flex-wrap gap-x-6 gap-y-2 text-[12px] text-[#9b978c]">
           <span className="flex items-center gap-2"><span className="h-2 w-2 rounded-full bg-[#8b89ff]" /> Agent tool call</span>
           <span className="flex items-center gap-2"><span className="h-2 w-2 rounded-full bg-[#29b5e8]" /> Cortex AI assist</span>
           <span className="flex items-center gap-2"><span className="h-2 w-2 rounded-full bg-[#ff7a3d]" /> Human approval</span>
         </div>
+        <NextChapter href="#knowledge" label="Why it gets smarter with every run" dark />
       </div>
     </section>
   );
@@ -235,13 +248,32 @@ function AgentAtWork() {
 
 function HowItWorks() {
   return (
-    <Section id="how" n="04" label="How it works" title={<>Nine stages. Four <em className="text-[color:var(--human)]">human approval</em> gates. One pull request.</>}
-             body="Seven stages are tools the supervisor agent calls, the other two are platform steps; all run on deterministic engines in your Snowflake account, so results are repeatable and explainable. Cortex AI adds judgement where it helps, and nothing advances past a gate without an approver.">
-      <motion.div {...reveal} className="overflow-x-auto">
-        <table className="w-full min-w-[860px] border-collapse text-left">
+    <Section id="how" n="02" label="How it works" next={{ href: "#agent", label: "See a run, start to finish" }}
+             title={<>Nine stages. Four <em className="text-[color:var(--human)]">human approval</em> gates. One pull request.</>}
+             body="From the moment a source is connected to the moment the code is ready, the agent does the work in your Snowflake account, using the same rules every time. AI helps where judgement is needed, and the run stops at each approval gate until the right person signs off.">
+      {/* one row per stage on wide screens; one card per stage on narrow ones, so nothing scrolls sideways or gets cut */}
+      <ol className="space-y-3 lg:hidden">
+        {STAGES.map((s, i) => (
+          <motion.li key={s.name} {...reveal} className="rounded-[6px] border border-[color:var(--line)] bg-[color:var(--panel)] p-4">
+            <p className="flex flex-wrap items-baseline gap-x-2">
+              <span className="lp-mono text-[12px] text-[color:var(--muted)]">{String(i + 1).padStart(2, "0")}</span>
+              <span className="text-[16px] font-semibold">{s.name}</span>
+              {s.parallel && <span className="lp-label !text-[10px] !text-[color:var(--agent)]">in parallel</span>}
+            </p>
+            <p className="mt-2 text-[14px] text-[color:var(--ink-2)]">{s.does}</p>
+            <p className="mt-2 flex gap-2 text-[14px] font-medium"><Check className="mt-0.5 h-4 w-4 shrink-0 text-[color:var(--ok)]" />{s.gives}</p>
+            <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-[13px]">
+              {s.ai && <span className="inline-flex items-center gap-1.5 text-[color:var(--cortex)]"><Sparkles className="h-3.5 w-3.5" /> {s.ai}</span>}
+              {s.human && <span className="inline-flex items-center gap-1.5 font-medium text-[color:var(--human)]"><UserCheck className="h-3.5 w-3.5" /> {s.human}</span>}
+            </div>
+          </motion.li>
+        ))}
+      </ol>
+      <motion.div {...reveal} className="hidden lg:block">
+        <table className="w-full border-collapse text-left">
           <thead>
             <tr className="border-b border-[color:var(--ink)]">
-              {["#", "Stage", "Tool", "Delivers", "Cortex AI", "Human approval"].map((h) => (
+              {["#", "Stage", "What happens", "You get", "AI helps by", "Who approves"].map((h) => (
                 <th key={h} className="lp-label py-3 pr-4 font-normal">{h}</th>
               ))}
             </tr>
@@ -250,15 +282,15 @@ function HowItWorks() {
             {STAGES.map((s, i) => (
               <tr key={s.name} className="group border-b border-[color:var(--line)] align-top transition-colors hover:bg-[color:var(--panel)]">
                 <td className="lp-mono py-4 pr-4 text-[12px] text-[color:var(--muted)]">{String(i + 1).padStart(2, "0")}</td>
-                <td className="py-4 pr-4 text-[15px] font-semibold">{s.name}{i >= 5 && i <= 7 && <span className="lp-label ml-2 !text-[10px] !text-[color:var(--agent)]">parallel</span>}</td>
-                <td className={cn("lp-mono py-4 pr-4 text-[12px]", s.platform ? "text-[color:var(--muted)]" : "text-[color:var(--agent)]")}>
-                  {s.tool}(){s.platform && <span className="mt-0.5 block font-sans text-[11px]">platform step</span>}
+                <td className="w-[17%] py-4 pr-4 text-[15px] font-semibold">
+                  {s.name}{s.parallel && <span className="lp-label mt-1 block !text-[10px] !text-[color:var(--agent)]">in parallel</span>}
                 </td>
-                <td className="py-4 pr-4 text-[14px] text-[color:var(--ink-2)]">{s.delivers}</td>
+                <td className="w-[32%] py-4 pr-4 text-[14px] text-[color:var(--ink-2)]">{s.does}</td>
+                <td className="py-4 pr-4 text-[14px] font-medium">{s.gives}</td>
                 <td className="py-4 pr-4 text-[13px] text-[color:var(--cortex)]">{s.ai ?? <span className="text-[color:var(--line)]">-</span>}</td>
                 <td className="py-4 text-[13px]">
                   {s.human
-                    ? <span className="inline-flex items-center gap-1.5 font-medium text-[color:var(--human)]"><UserCheck className="h-3.5 w-3.5" /> {s.human}</span>
+                    ? <span className="inline-flex items-center gap-1.5 font-medium text-[color:var(--human)]"><UserCheck className="h-3.5 w-3.5 shrink-0" /> {s.human}</span>
                     : <span className="text-[color:var(--line)]">-</span>}
                 </td>
               </tr>
@@ -287,7 +319,7 @@ function Governance() {
     "All model calls run on Snowflake Cortex, inside your Snowflake account's security boundary.",
   ];
   return (
-    <Section id="governance" n="05" label="Agentic, governed" title={<>Agents propose. <em className="text-[color:var(--human)]">Humans approve.</em> Everything is audited.</>}
+    <Section id="governance" n="06" label="Why you can trust it" next={{ href: "#sources", label: "How it fits your stack" }} title={<>Agents propose. <em className="text-[color:var(--human)]">Humans approve.</em> Everything is audited.</>}
              body="Agentic speed with enterprise control: the agent does the engineering, approver roles own every decision, and the platform keeps the evidence.">
       <div className="grid gap-px overflow-hidden rounded-[6px] border border-[color:var(--ink)] bg-[color:var(--ink)] lg:grid-cols-3">
         {actors.map((a, i) => {
@@ -322,10 +354,19 @@ function Value() {
     { title: "Gold, not just Silver", body: "Star schemas proposed from mastered Silver, approved by a second model approver, delivered as one pull request." },
   ];
   return (
-    <Section id="value" n="06" label="Acceleration" title={<>The pipeline work your team writes by hand, <em className="text-[color:var(--agent)]">delivered for review.</em></>}
+    <Section id="value" n="01" label="Why it matters" next={{ href: "#how", label: "How it works" }} title={<>The pipeline work your team writes by hand, <em className="text-[color:var(--agent)]">delivered for review.</em></>}
              body="Engineers move from writing boilerplate to approving evidence-backed artifacts, so each new source reaches a reviewed pull request with far less manual effort.">
-      <motion.div {...reveal} className="overflow-x-auto">
-        <table className="w-full min-w-[720px] border-collapse text-left">
+      <ul className="space-y-3 md:hidden">
+        {VALUE.map((r) => (
+          <motion.li key={r.task} {...reveal} className="rounded-[6px] border border-[color:var(--line)] bg-[color:var(--panel)] p-4">
+            <p className="text-[16px] font-semibold">{r.task}</p>
+            <p className="mt-2 text-[13px] text-[color:var(--muted)]"><span className="lp-label mr-2 !text-[10px]">Manual</span>{r.before}</p>
+            <p className="mt-1.5 flex gap-2 text-[14px]"><Check className="mt-0.5 h-4 w-4 shrink-0 text-[color:var(--ok)]" />{r.now}</p>
+          </motion.li>
+        ))}
+      </ul>
+      <motion.div {...reveal} className="hidden md:block">
+        <table className="w-full border-collapse text-left">
           <thead>
             <tr className="border-b border-[color:var(--ink)]">
               <th className="lp-label py-3 pr-4 font-normal">Work</th>
@@ -363,7 +404,7 @@ function Sources() {
     { n: "C", title: "Files and object storage", body: "Bring files from cloud storage or upload them; they land in Snowflake ready for profiling." },
   ];
   return (
-    <Section id="sources" n="07" label="Sources and integrations" title={<>Onboard <em className="text-[color:var(--agent)]">any</em> source. Deliver into the stack you already run.</>}
+    <Section id="sources" n="07" label="Fits your stack" title={<>Onboard <em className="text-[color:var(--agent)]">any</em> source. Deliver into the stack you already run.</>}
              body="One onboarding flow for every source, and native integration with the tools your data, engineering and operations teams use every day.">
       <div className="grid gap-px overflow-hidden rounded-[6px] border border-[color:var(--ink)] bg-[color:var(--ink)] md:grid-cols-3">
         {ways.map((w) => (
@@ -388,7 +429,7 @@ function Sources() {
 
 function Closing({ onSignIn }: { onSignIn: () => void }) {
   return (
-    <section className="mx-auto max-w-[1200px] px-5 sm:px-8">
+    <section className="mx-auto max-w-[1200px] 2xl:max-w-[1360px] px-5 sm:px-8">
       <motion.div {...reveal} className="relative overflow-hidden rounded-[6px] bg-[color:var(--ink)] px-8 py-14 text-[color:var(--paper)] sm:px-14">
         <div aria-hidden className="lp-grid pointer-events-none absolute inset-0 opacity-[0.25] invert" />
         <div className="relative grid items-end gap-8 lg:grid-cols-12">
@@ -408,8 +449,10 @@ function Closing({ onSignIn }: { onSignIn: () => void }) {
   );
 }
 
-export function Landing({ mode, expired }: { mode: AuthMode; expired: boolean }) {
-  const [open, setOpen] = useState(expired);
+/** The product page. `signIn` opens the sign-in dialog straight away (/login, or an ended session); the home page
+ *  (/) opens with the page itself and sign-in one click away in the top bar. */
+export function Landing({ mode, expired, signIn = false }: { mode: AuthMode; expired: boolean; signIn?: boolean }) {
+  const [open, setOpen] = useState(expired || signIn);
   const close = useCallback(() => setOpen(false), []);
   const show = useCallback(() => setOpen(true), []);
   return (
@@ -418,17 +461,17 @@ export function Landing({ mode, expired }: { mode: AuthMode; expired: boolean })
         <TopBar onSignIn={show} />
         <main className="space-y-28 pb-24">
           <Hero onSignIn={show} />
+          <Value />
+          <HowItWorks />
           <AgentAtWork />
           <KnowledgeLoop />
           <FeatureExplorer />
-          <HowItWorks />
           <Governance />
-          <Value />
           <Sources />
           <Closing onSignIn={show} />
         </main>
         <footer className="border-t border-[color:var(--ink)]">
-          <div className="mx-auto flex max-w-[1200px] flex-wrap items-center gap-4 px-5 py-8 text-[13px] text-[color:var(--muted)] sm:px-8">
+          <div className="mx-auto flex max-w-[1200px] 2xl:max-w-[1360px] flex-wrap items-center gap-4 px-5 py-8 text-[13px] text-[color:var(--muted)] sm:px-8">
             <span className="flex items-center gap-2 text-[color:var(--ink)]"><LogoMark size="sm" className="scale-75" /> {PRODUCT}</span>
             <span className="lp-label ml-auto">Agentic · Knowledge-driven · Human-approved · Snowflake-native</span>
           </div>

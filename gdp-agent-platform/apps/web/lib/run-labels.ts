@@ -56,14 +56,15 @@ export function statusLabel(status: string | null | undefined): string {
   return STATUS_LABEL[status] ?? sentence(status);
 }
 
-/** The four human approval gates: what is approved, by which role, where it is reviewed and the state approval enters. */
-export type Gate = { name: string; role: string; slug: string; approveTo: string };
+/** The four human approval gates: what is approved, by which role and privilege (services/governance/policy.py
+ *  REVIEW_TARGETS), where it is reviewed and the state approval enters. */
+export type Gate = { name: string; role: string; privilege: string; slug: string; approveTo: string };
 
 export const GATES: Record<string, Gate> = {
-  MAPPING_REVIEW: { name: "Field mapping", role: "Model approver", slug: "modeling?tab=mapping", approveTo: "MAPPING_APPROVED" },
-  STTM_REVIEW: { name: "Transformations and joins (STTM)", role: "STTM approver", slug: "modeling?tab=transformations", approveTo: "STTM_APPROVED" },
-  SODA_REVIEW: { name: "Data quality checks", role: "DQ approver", slug: "soda", approveTo: "SODA_APPROVED" },
-  DBT_REVIEW: { name: "Code review", role: "Code reviewer", slug: "review", approveTo: "DBT_APPROVED" },
+  MAPPING_REVIEW: { name: "Field mapping", role: "Model approver", privilege: "MAPPING.APPROVE", slug: "modeling?tab=mapping", approveTo: "MAPPING_APPROVED" },
+  STTM_REVIEW: { name: "Transformations and joins (STTM)", role: "STTM approver", privilege: "STTM.APPROVE", slug: "modeling?tab=transformations", approveTo: "STTM_APPROVED" },
+  SODA_REVIEW: { name: "Data quality checks", role: "DQ approver", privilege: "SODA.APPROVE", slug: "soda", approveTo: "SODA_APPROVED" },
+  DBT_REVIEW: { name: "Code review", role: "Code reviewer", privilege: "REVIEW.APPROVE", slug: "review", approveTo: "DBT_APPROVED" },
 };
 
 /** The run waits on a person (one of the four gates). */

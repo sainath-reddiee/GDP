@@ -434,6 +434,12 @@ class SqlStore:
         return [_row(r) for r in runs], [_row(t) for t in tasks], cursor, truncated
 
     # ---- outbox
+    def record_failure(self, candidate: Dict[str, Any], incident_id: str) -> Optional[str]:
+        """Queue a failed task try for the resolution engine (CORE.FAILURE_EVENT, once per try)."""
+        from services.resolve.engine import ingest
+
+        return ingest(self.db, candidate, incident_id)
+
     def enqueue(self, channel: str, kind: str, dedupe_key: str, payload: Optional[Dict[str, Any]] = None,
                 incident_id: Optional[str] = None, team_id: Optional[str] = None, target: Optional[str] = None,
                 status: str = "PENDING", delay_seconds: int = 0, error: Optional[str] = None) -> bool:
@@ -624,6 +630,22 @@ def _open_new(store: Any, key: str, candidate: Dict[str, Any], settings: Dict[st
 
 # ---------------------------------------------------------------- processing captured runs
 
+# a failed task try that opened, recurred or reopened an incident goes to the resolution queue (services.resolve);
+# a child of an upstream incident, a muted one or a sighting already counted does not
+RESOLVABLE = ("opened", "occurrence", "reopened")
+
+
+def _queue_failure(store: Any, candidate: Dict[str, Any], incident_id: str) -> None:
+    record = getattr(store, "record_failure", None)
+    if not callable(record):
+        return
+    try:
+        record(candidate, incident_id)
+    except Exception as exc:   # the resolution queue never holds up incident detection
+        log.warning("failure %s/%s not queued for resolution: %s", candidate.get("dag_id"), candidate.get("task_id"),
+                    redact(str(exc))[:300])
+
+
 def process(store: Any, runs: List[Dict[str, Any]], tasks: List[Dict[str, Any]], settings: Optional[Dict[str, Any]] = None,
             now: Optional[datetime] = None) -> Dict[str, Any]:
     """Detect and apply incidents for changed runs and tasks, then auto-resolve from their successes. Idempotent."""
@@ -650,6 +672,8 @@ def process(store: Any, runs: List[Dict[str, Any]], tasks: List[Dict[str, Any]],
             errors.append(text)
             continue
         actions[result["action"]] = actions.get(result["action"], 0) + 1
+        if result["action"] in RESOLVABLE and result.get("incident_id"):
+            _queue_failure(store, c, result["incident_id"])
     resolved = auto_resolve(store, detect.successes(runs, tasks), settings, now)
     summary: Dict[str, Any] = {"candidates": len(found), "actions": actions, "resolved": len(resolved)}
     if errors:

@@ -120,7 +120,7 @@ function EnvRow({ env: e, may, canPoll, onEdit, onMsg }: {
           </p>
           {e.push_secret_detail && <p role="alert" className="text-xs text-amber-700 dark:text-amber-300">{e.push_secret_detail}</p>}
           <p className="text-xs text-muted-foreground">
-            <span className="font-mono">{e.mwaa_env}</span> · {e.region} · every {e.poll_seconds} s · {e.dags} DAG{e.dags === 1 ? "" : "s"}
+            {e.kind === "AIRFLOW" ? <span className="font-mono">{e.airflow_url}</span> : <><span className="font-mono">{e.mwaa_env}</span> · {e.region}</>} · every {e.poll_seconds} s · {e.dags} DAG{e.dags === 1 ? "" : "s"}
             {e.api_version && <> · API {e.api_version}</>} · last poll <When iso={e.last_poll_at} rel />
           </p>
           {e.airflow_url && <a href={e.airflow_url} target="_blank" rel="noreferrer" className="text-xs text-primary hover:underline">{e.airflow_url}</a>}
@@ -223,6 +223,8 @@ function EnvForm({ env, onClose, onMsg }: { env?: AirflowEnv; onClose: () => voi
   const router = useRouter();
   const [pending, start] = useTransition();
   const [name, setName] = useState(env?.name ?? "");
+  const [kind, setKind] = useState<"MWAA" | "AIRFLOW">(env?.kind === "AIRFLOW" ? "AIRFLOW" : "MWAA");
+  const local = kind === "AIRFLOW";
   const [mwaa, setMwaa] = useState(env?.mwaa_env ?? "");
   const [region, setRegion] = useState(env?.region ?? "");
   const [url, setUrl] = useState(env?.airflow_url ?? "");
@@ -232,13 +234,15 @@ function EnvForm({ env, onClose, onMsg }: { env?: AirflowEnv; onClose: () => voi
   const [error, setError] = useState("");
   const seconds = Number(poll);
   const badPoll = !Number.isInteger(seconds) || seconds < 60 || seconds > 3600;
-  const badUrl = !!url.trim() && !/^https:\/\/\S+$/i.test(url.trim());
-  const ready = name.trim() && mwaa.trim() && /^[a-z]{2}(-[a-z]+)+-\d$/.test(region.trim()) && !badPoll && !badUrl;
+  // a self-hosted Airflow may be on this machine (http://localhost); anything else is https
+  const badUrl = !!url.trim() && !/^(https:\/\/\S+|http:\/\/(localhost|127\.0\.0\.1)(:\d+)?(\/\S*)?)$/i.test(url.trim());
+  const ready = name.trim() && !badPoll && !badUrl
+    && (local ? !!url.trim() : !!mwaa.trim() && /^[a-z]{2}(-[a-z]+)+-\d$/.test(region.trim()));
   const save = () => start(async () => {
     setError("");
     const body: EnvInput = {
-      name: name.trim(), mwaa_env: mwaa.trim(), region: region.trim(), airflow_url: url.trim() || null,
-      poll_seconds: seconds, enabled, push_enabled: push,
+      name: name.trim(), airflow_url: url.trim() || null, poll_seconds: seconds, enabled, push_enabled: push,
+      ...(local ? {} : { mwaa_env: mwaa.trim(), region: region.trim() }), ...(env ? {} : { kind }),
     };
     const r = env ? await updateEnv(env.env_id, body) : await createEnv(body);
     if (!r.ok) { if (toneOf(r.error) === "info") onMsg({ tone: "info", text: r.error }); else setError(explain(r.error)); return; }
@@ -248,17 +252,34 @@ function EnvForm({ env, onClose, onMsg }: { env?: AirflowEnv; onClose: () => voi
   });
   return (
     <div className="space-y-3 border-b bg-muted/20 px-5 py-4">
-      <p className="text-sm font-semibold">{env ? `Edit ${env.name}` : "Add an MWAA environment"}</p>
+      <p className="text-sm font-semibold">{env ? `Edit ${env.name}` : "Add an Airflow environment"}</p>
       <div className="grid gap-3 md:grid-cols-2">
         <label className="space-y-1 text-xs font-medium">Name
           <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Production" className="text-xs" /></label>
-        <label className="space-y-1 text-xs font-medium">MWAA environment name
-          <Input value={mwaa} onChange={(e) => setMwaa(e.target.value)} placeholder="prod-airflow" className="font-mono text-xs" /></label>
-        <label className="space-y-1 text-xs font-medium">AWS region
-          <Input value={region} onChange={(e) => setRegion(e.target.value.toLowerCase())} placeholder="us-east-1" className="font-mono text-xs" /></label>
-        <label className="space-y-1 text-xs font-medium">Airflow UI URL <span className="font-normal text-muted-foreground">(optional, for links)</span>
-          <Input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://xxxx.airflow.us-east-1.on.aws" className="font-mono text-xs" aria-invalid={badUrl} />
-          {badUrl && <span role="alert" className="block font-normal text-destructive">An https:// address.</span>}</label>
+        <label className="space-y-1 text-xs font-medium">Kind
+          <select value={kind} disabled={!!env} onChange={(e) => setKind(e.target.value as "MWAA" | "AIRFLOW")} aria-label="Environment kind"
+                  className="h-9 w-full rounded-lg border bg-card px-2 text-xs">
+            <option value="MWAA">Amazon MWAA (IAM, no Airflow password)</option>
+            <option value="AIRFLOW">Self-hosted Airflow (REST API)</option>
+          </select></label>
+        {local ? (
+          <p className="text-xs text-muted-foreground md:col-span-2">
+            The platform calls the Airflow REST API at the URL below. Set the credentials on the API and worker hosts as
+            <code className="mx-1 font-mono">AIP_AIRFLOW_&lt;ENV_ID&gt;_USER</code>and
+            <code className="mx-1 font-mono">AIP_AIRFLOW_&lt;ENV_ID&gt;_PASSWORD</code>; they are never stored in Snowflake.
+          </p>
+        ) : (
+          <>
+            <label className="space-y-1 text-xs font-medium">MWAA environment name
+              <Input value={mwaa} onChange={(e) => setMwaa(e.target.value)} placeholder="prod-airflow" className="font-mono text-xs" /></label>
+            <label className="space-y-1 text-xs font-medium">AWS region
+              <Input value={region} onChange={(e) => setRegion(e.target.value.toLowerCase())} placeholder="us-east-1" className="font-mono text-xs" /></label>
+          </>
+        )}
+        <label className="space-y-1 text-xs font-medium">{local ? "Airflow URL" : <>Airflow UI URL <span className="font-normal text-muted-foreground">(optional, for links)</span></>}
+          <Input value={url} onChange={(e) => setUrl(e.target.value)} placeholder={local ? "http://localhost:8080" : "https://xxxx.airflow.us-east-1.on.aws"}
+                 className="font-mono text-xs" aria-invalid={badUrl} />
+          {badUrl && <span role="alert" className="block font-normal text-destructive">An https:// address, or http://localhost for an Airflow on this machine.</span>}</label>
         <label className="space-y-1 text-xs font-medium">Poll every (seconds)
           <Input value={poll} onChange={(e) => setPoll(e.target.value)} inputMode="numeric" className="text-xs" aria-invalid={badPoll} />
           {badPoll && <span role="alert" className="block font-normal text-destructive">From 60 to 3600.</span>}</label>

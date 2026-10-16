@@ -41,7 +41,7 @@ export default async function OpsPage({ searchParams }: { searchParams?: Params 
   const me = await whoami();
   const access = { canOperate: can(me, "OPS.OPERATE"), canManage: canAct(me, "INTEGRATION.MANAGE") };
   const header = (
-    <PageHeader eyebrow="Operate" title="Pipelines"
+    <PageHeader eyebrow="Operations" title="Pipelines"
                 description="Airflow DAG health from Amazon MWAA: what failed, what is running, how long runs take and how often they succeed. Open a DAG for its runs, task grid and logs."
                 actions={access.canManage ? (
                   <Link href="/admin?section=integrations&view=airflow" className="inline-flex items-center gap-1.5 rounded-lg border bg-card px-3 py-1.5 text-sm font-medium shadow-xs hover:bg-muted">

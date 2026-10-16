@@ -310,7 +310,35 @@ def handle(store: Any, row: Dict[str, Any], client: Optional[JiraClient], settin
         return "SENT", f"commented the AI diagnosis on {incident['jira_key']}"
     if kind == "reopen":
         return reopened(store, incident, client)
+    if kind == "resolution":   # the resolution engine: an RCA (raises the ticket if needed) or a fix awaiting approval
+        return resolution_note(store, incident, row, client, settings)
     return "SKIPPED", f"unknown Jira action {kind}"
+
+
+def resolution_note(store: Any, incident: Dict[str, Any], row: Dict[str, Any], client: JiraClient,
+                    settings: Dict[str, Any]) -> Tuple[str, str]:
+    """Comment the resolution engine's text on the incident's ticket. With `raise` (a root-cause analysis, slide 3 step
+    4b) the ticket is raised first when the incident has none; the key is then stored on the failure (TICKET_ID)."""
+    from services.ops.notify import _payload
+
+    payload = _payload(row.get("payload"))
+    text = str(payload.get("text") or "").strip()
+    if not text:
+        return "SKIPPED", "empty resolution note"
+    key = incident.get("jira_key")
+    if not key and payload.get("raise"):
+        result = raise_ticket(store, incident["incident_id"], client, settings)
+        if result["state"] == "in_progress":
+            raise RuntimeError(result["detail"])
+        key = result.get("key")
+    if not key:
+        return "SKIPPED", "the incident has no ticket"
+    client.add_comment(key, _comment(text))
+    store.event(incident["incident_id"], "jira_commented", SYSTEM, {"key": key, "resolution": True})
+    if payload.get("failure_id"):
+        store.db.execute("UPDATE CORE.FAILURE_EVENT SET TICKET_ID = %s, UPDATED_AT = CURRENT_TIMESTAMP() "
+                         "WHERE FAILURE_ID = %s", (key, payload["failure_id"]))
+    return "SENT", f"commented the resolution note on {key}"
 
 
 REOPEN_NAMES = ("reopen", "reopened", "re-open", "to do", "open", "in progress")

@@ -165,7 +165,8 @@ def retry(db: Any, incident_id: str, *, dry_run: bool, user: str, downstream: bo
         raise RetryError(f"Incident {incident_id} not found", 404)
     if not incident.get("run_id"):
         raise RetryError("This incident has no Airflow run to retry (a late DAG has nothing to clear).", 409)
-    env = db.query("SELECT ENV_ID, MWAA_ENV, REGION FROM CORE.AIRFLOW_ENV WHERE ENV_ID = %s", (incident["env_id"],))
+    env = db.query("SELECT ENV_ID, KIND, MWAA_ENV, REGION, AIRFLOW_URL FROM CORE.AIRFLOW_ENV WHERE ENV_ID = %s",
+                   (incident["env_id"],))
     if not env:
         raise RetryError(f"Airflow environment {incident['env_id']} not found", 404)
     env = env[0]
@@ -175,9 +176,9 @@ def retry(db: Any, incident_id: str, *, dry_run: bool, user: str, downstream: bo
     def client():
         if mwaa_factory:
             return mwaa_factory(env)
-        from services.ops.mwaa import Mwaa
+        from services.ops.mwaa import client_for
 
-        return Mwaa(env["mwaa_env"], env["region"])
+        return client_for(env)
 
     if dry_run:
         tasks = [str(t) for t in (task_ids or failed_tasks(db, incident)) if str(t).strip()][:MAX_TASKS]

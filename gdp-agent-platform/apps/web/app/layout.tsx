@@ -13,6 +13,7 @@ import { NavProgress } from "@/components/nav-progress";
 import { Sidebar } from "@/components/sidebar";
 import { CommandPalette } from "@/components/shell/command-palette";
 import { TopBar, type DomainOption } from "@/components/shell/top-bar";
+import { WorkspaceTabs } from "@/components/shell/workspace-tabs";
 import { THEME_SCRIPT, ThemeProvider } from "@/components/theme/theme-provider";
 import { ToastProvider } from "@/components/ui/toast";
 import { BUILD_SHA } from "@/lib/build";
@@ -58,6 +59,7 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
                         privileges={privileges} domains={domains} scope={getDomainScope()} />
                 <div className="mx-auto w-full max-w-[1600px] px-6 py-7 lg:px-10">
                   <ReadOnlyBanner />
+                  <WorkspaceTabs privileges={privileges} />
                   <CatalogDisplayProvider config={catalog}>{children}</CatalogDisplayProvider>
                 </div>
                 <CommandPalette privileges={privileges} domains={domains} />

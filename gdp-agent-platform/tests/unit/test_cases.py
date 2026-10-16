@@ -712,7 +712,7 @@ def test_every_registered_case_route_is_mapped():
 
 
 def test_privileges_roles_and_version():
-    assert SYSTEM_VERSION == 7 and ADDED_PRIVILEGES[7] == ["CASE.WORK", "CASE.RESOLVE", "PACKAGE.EDIT", "PACKAGE.APPROVE"]
+    assert SYSTEM_VERSION >= 7 and ADDED_PRIVILEGES[7] == ["CASE.WORK", "CASE.RESOLVE", "PACKAGE.EDIT", "PACKAGE.APPROVE"]
     for p in ADDED_PRIVILEGES[7]:
         assert p in PRIVILEGES
     assert {"CASE.WORK", "PACKAGE.EDIT"} <= privs("QA_ENGINEER") and "CASE.RESOLVE" not in privs("QA_ENGINEER")

@@ -41,13 +41,17 @@ function Item({ link, active, counts, collapsed, nested }: {
   link: NavLink; active: boolean; counts: NavCounts | null; collapsed: boolean; nested?: boolean;
 }) {
   const { href, label, icon: Icon, badge } = link;
+  const b = counts && badge ? badge(counts) : null;
+  const descId = b ? `nav-badge-${href.replace(/\W+/g, "-")}` : undefined;
+  // named by its label alone; what the badge counts is its description (and its title on hover)
   return (
-    <Link href={href} title={collapsed ? label : undefined} aria-label={collapsed ? label : undefined} aria-current={active ? "page" : undefined}
+    <Link href={href} title={collapsed ? label : undefined} aria-label={label} aria-describedby={descId} aria-current={active ? "page" : undefined}
           className={cn(ROW, collapsed ? "justify-center px-0" : nested ? "py-[6px] pl-9 pr-2.5 text-[12.5px]" : "px-2.5", active ? ON : OFF)}>
+      {b && <span id={descId} className="sr-only">{b.title}</span>}
       {active && !nested && <span className="absolute -left-3 top-1/2 h-5 w-1 -translate-y-1/2 rounded-r-full bg-gradient-to-b from-indigo-300 to-violet-400" />}
       <Icon className={cn("shrink-0", nested ? "h-[15px] w-[15px]" : "h-[17px] w-[17px]", active ? "text-indigo-300" : "text-white/40 group-hover:text-white/80")} />
       {!collapsed && <span className="flex-1 truncate">{label}</span>}
-      <Badge b={counts && badge ? badge(counts) : null} collapsed={collapsed} />
+      <Badge b={b} collapsed={collapsed} />
     </Link>
   );
 }
@@ -195,9 +199,19 @@ function Links({ links, path, counts, collapsed, allowed }: {
 }) {
   return (
     <>
-      {links.map((link) => link.children?.length
-        ? <ParentItem key={link.href} link={link} kids={link.children.filter((c) => allowed(c.privilege))} path={path} counts={counts} collapsed={collapsed} />
-        : <Item key={link.href} link={link} active={isActive(link, path)} counts={counts} collapsed={collapsed} />)}
+      {links.map((link) => {
+        if (!link.children?.length) return <Item key={link.href} link={link} active={isActive(link, path)} counts={counts} collapsed={collapsed} />;
+        const kids = link.children.filter((c) => allowed(c.privilege));
+        if (!kids.length) return null;
+        // a workspace is one row (its pages are tabs on the page). It opens its own page; only when that page is one of
+        // its tabs the caller may not open does it open the first tab they may (a hub page like the Store hub stays)
+        const ownPage = link.children.some((c) => c.href === link.href);
+        const href = !ownPage || kids.some((k) => k.href === link.href) ? link.href : kids[0].href;
+        const ws = link.tabs ? { ...link, href, children: kids } : link;
+        return link.tabs && !collapsed
+          ? <Item key={link.href} link={ws} active={isActive(ws, path)} counts={counts} collapsed={false} />
+          : <ParentItem key={link.href} link={ws} kids={kids} path={path} counts={counts} collapsed={collapsed} />;
+      })}
     </>
   );
 }
@@ -280,7 +294,7 @@ export function Sidebar({ privileges }: { privileges?: string[] | null }) {
     <nav aria-label="Main"
          className={cn("sticky top-0 flex h-screen shrink-0 flex-col overflow-y-auto overflow-x-hidden border-r border-white/[0.06] bg-sidebar text-sidebar-foreground transition-[width] duration-200",
            collapsed ? "w-[72px] px-2" : "w-[244px] px-3")}>
-      <Link href="/dashboard" title={PRODUCT} className={cn("group/brand flex items-center gap-3 py-5", collapsed ? "justify-center" : "px-2")}>
+      <Link href="/work" title={PRODUCT} className={cn("group/brand flex items-center gap-3 py-5", collapsed ? "justify-center" : "px-2")}>
         <LogoMark size="sm" className="transition-transform duration-300 group-hover/brand:scale-105" />
         {!collapsed && (
           <div className="min-w-0">

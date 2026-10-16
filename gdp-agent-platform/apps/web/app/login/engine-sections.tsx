@@ -123,7 +123,7 @@ const INPUTS: { title: string; body: string }[] = [
 export function KnowledgeLoop() {
   const [col, setCol] = useState<string | null>(null);
   return (
-    <Section id="knowledge" n="02" label="Knowledge-driven core engine"
+    <Section id="knowledge" n="04" label="Why it gets smarter" next={{ href: "#features", label: "What is in the core engine" }}
              title={<>Every task starts from <em className="text-[color:var(--agent)]">knowledge.</em> Every decision feeds it back.</>}
              body="The core engine is knowledge-driven. Each stage reads the domain's knowledge before it proposes anything, and every human approval, send-back and fix is written back as knowledge. The next run starts smarter than the last.">
       <div className="grid items-center gap-10 lg:grid-cols-12">
@@ -148,8 +148,19 @@ export function KnowledgeLoop() {
           <span className="lp-label !text-[color:var(--ink)]">Which knowledge each stage reads</span>
           <span className="text-[12px] text-[color:var(--muted)]">Silver pipeline. Gold adds MDM rules and gold model definitions.</span>
         </div>
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[760px] border-collapse text-left">
+        {/* narrow screens: each knowledge type with the stages that read it */}
+        <ul className="divide-y divide-[color:var(--line)] md:hidden">
+          {READS.map((r) => (
+            <li key={r.kind} className="px-5 py-3">
+              <p className="text-[14px] font-semibold">{r.kind} <span className="text-[12px] font-normal text-[color:var(--muted)]">{r.why}</span></p>
+              <p className="mt-1.5 flex flex-wrap gap-1.5">
+                {r.stages.map((st) => <span key={st} className="rounded-full bg-[#4b44e8]/10 px-2 py-0.5 text-[11px] font-medium text-[color:var(--agent)]">{st}</span>)}
+              </p>
+            </li>
+          ))}
+        </ul>
+        <div className="hidden md:block">
+          <table className="w-full border-collapse text-left">
             <thead>
               <tr className="border-b border-[color:var(--line)]">
                 <th className="lp-label px-5 py-3 font-normal">Knowledge</th>
@@ -362,7 +373,7 @@ export function FeatureExplorer() {
   const f = FEATURES.find((x) => x.id === active) ?? FEATURES[0];
   const Mocked = f.mock;
   return (
-    <Section id="features" n="03" label="Core engine features"
+    <Section id="features" n="05" label="What is in it" next={{ href: "#governance", label: "Why you can trust it" }}
              title={<>The core engine, <em className="text-[color:var(--agent)]">feature by feature.</em></>}
              body="What sets the engine apart, shown the way it appears in the platform. Pick a feature to see it.">
       <div className="grid gap-10 lg:grid-cols-12">
