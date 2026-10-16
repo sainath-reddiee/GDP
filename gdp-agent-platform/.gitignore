@@ -17,3 +17,6 @@ apps/web/.env*.local
 
 # Consolidation runbook output (baselines, verification results; may name client tables)
 consolidation_runs/
+
+# Airflow lab results (airflow_lab/run_loop.py)
+airflow_lab/last_run.json

@@ -1,11 +1,11 @@
 """Airflow failure-resolution lab: one small DAG per edge case, each failing the way real pipelines fail.
 
-Copy this file into $AIRFLOW_HOME/dags. Every DAG is manual (no schedule) and runs SQL in the lab schema through the
-Airflow connection `lab_snowflake` (Snowflake key pair or programmatic access token for the LAB_AIRFLOW service user;
+Copy this file into $AIRFLOW_HOME/dags. Every DAG is manual (no schedule) and runs SQL on the lab tables (CORE.LAB_*) through the
+Airflow connection `lab_snowflake` (a key pair for an existing user with the DATA_ENGINEER role;
 see airflow_lab/README.md). The platform's fixes (CORE.FIX_LAB_*) repair the cause in Snowflake, the platform clears the
 task, and the rerun succeeds. airflow_lab/reset.sql puts every failure back.
 
-    lab_invalid_identifier  table LAB.ORDERS_STG is missing            -> known fix creates it
+    lab_invalid_identifier  table CORE.LAB_ORDERS_STG is missing            -> known fix creates it
     lab_invalid_column      invalid identifier 'AMOUNT_USD'            -> miss, RCA, ticket; then a learned fix
     lab_duplicate_keys      duplicate order ids (a data check)         -> fix needs human approval (dedup)
     lab_multi_step          export stage and table are missing         -> two-step skill
@@ -17,6 +17,10 @@ task, and the rerun succeeds. airflow_lab/reset.sql puts every failure back.
 
 from __future__ import annotations
 
+import json
+import os
+import time
+import uuid
 from datetime import datetime, timedelta
 
 try:  # Airflow 3
@@ -32,13 +36,13 @@ START = datetime(2026, 1, 1)
 
 def connect():
     """A Snowflake connection from `lab_snowflake`: login is the user; the password is a programmatic access token, or
-    extra.private_key_file points at a key pair. extra holds account, warehouse, database, role (schema LAB)."""
+    extra.private_key_file points at a key pair. extra holds account, warehouse, database, role (the platform's one schema, CORE)."""
     import snowflake.connector
 
     c = BaseHook.get_connection(CONN_ID)
     extra = c.extra_dejson or {}
     kwargs = dict(user=c.login, account=extra.get("account"), warehouse=extra.get("warehouse"),
-                  database=extra.get("database"), role=extra.get("role"), schema="LAB", login_timeout=60)
+                  database=extra.get("database"), role=extra.get("role"), schema="CORE", login_timeout=60)
     if extra.get("private_key_file"):
         kwargs.update(authenticator="SNOWFLAKE_JWT", private_key_file=extra["private_key_file"])
     else:
@@ -46,12 +50,55 @@ def connect():
     return snowflake.connector.connect(**kwargs)
 
 
+GATEWAY_CONFIG = os.path.expanduser("~/airflow/lab_gateway.json")
+
+
+def _gateway():
+    """The local SQL gateway (airflow_lab/sql_gateway.py) when it runs: it stands in for the client's service account."""
+    try:
+        with open(GATEWAY_CONFIG) as fh:
+            return json.load(fh)
+    except (OSError, ValueError):
+        return None
+
+
+def _through_gateway(config, statement: str):
+    folder = config["dir"]
+    rid = uuid.uuid4().hex
+    tmp, req, res = (os.path.join(folder, f"{p}-{rid}.{x}") for p, x in (("req", "tmp"), ("req", "json"), ("res", "json")))
+    with open(tmp, "w") as fh:
+        json.dump({"sql": statement, "dag": os.environ.get("AIRFLOW_CTX_DAG_ID", "")}, fh)
+    os.replace(tmp, req)
+    deadline = time.time() + 180
+    while not os.path.exists(res):
+        if time.time() > deadline:
+            raise TimeoutError("the lab SQL gateway did not answer within 180 seconds (is sql_gateway.py running?)")
+        time.sleep(0.3)
+    with open(res) as fh:
+        answer = json.load(fh)
+    os.remove(res)
+    if "refused" in answer:
+        raise PermissionError(f"lab SQL gateway refused the statement: {answer['refused']}")
+    if "error" in answer:   # Snowflake's own error, raised under its own class name
+        err = answer["error"]
+        raise type(err["type"], (Exception,), {"__module__": err["module"]})(err["text"])
+    return answer["rows"]
+
+
 def run(sql: str):
+    statements = [s for s in sql.split(";") if s.strip()]
+    config = _gateway()
+    if config:
+        rows = None
+        for statement in statements:
+            found = _through_gateway(config, statement)
+            rows = found if found else rows
+        return rows
     con = connect()
     try:
         cur = con.cursor()
         rows = None
-        for statement in [s for s in sql.split(";") if s.strip()]:
+        for statement in statements:
             cur.execute(statement)
             rows = cur.fetchall() if cur.description else rows
         return rows
@@ -67,21 +114,21 @@ def lab_dag(dag_id: str, doc: str, retries: int = 0):
 with lab_dag("lab_invalid_identifier", "Reads a staging table that is missing."):
     @task(task_id="load_orders")
     def load_orders():
-        return run("SELECT COUNT(*) FROM LAB.ORDERS_STG")[0][0]
+        return run("SELECT COUNT(*) FROM CORE.LAB_ORDERS_STG")[0][0]
     load_orders()
 
 with lab_dag("lab_invalid_column", "Selects a column the table does not have yet."):
     @task(task_id="publish_revenue")
     def publish_revenue():
-        return run("SELECT SUM(AMOUNT_USD) FROM LAB.ORDERS_CLEAN")[0][0]
+        return run("SELECT SUM(AMOUNT_USD) FROM CORE.LAB_ORDERS_CLEAN")[0][0]
     publish_revenue()
 
 with lab_dag("lab_duplicate_keys", "A data check: order ids must be unique."):
     @task(task_id="check_unique_orders")
     def check_unique_orders():
-        dupes = run("SELECT ORDER_ID, COUNT(*) FROM LAB.ORDERS_IN GROUP BY ORDER_ID HAVING COUNT(*) > 1")
+        dupes = run("SELECT ORDER_ID, COUNT(*) FROM CORE.LAB_ORDERS_IN GROUP BY ORDER_ID HAVING COUNT(*) > 1")
         if dupes:
-            raise ValueError(f"Data quality check failed: {len(dupes)} duplicate ORDER_ID values in LAB.ORDERS_IN "
+            raise ValueError(f"Data quality check failed: {len(dupes)} duplicate ORDER_ID values in CORE.LAB_ORDERS_IN "
                              f"(first: {dupes[0][0]})")
         return "unique"
     check_unique_orders()
@@ -89,15 +136,15 @@ with lab_dag("lab_duplicate_keys", "A data check: order ids must be unique."):
 with lab_dag("lab_multi_step", "Exports to a stage and a table that both have to exist."):
     @task(task_id="export_orders")
     def export_orders():
-        run("LIST @LAB.EXPORT_STAGE")
-        return run("SELECT COUNT(*) FROM LAB.ORDERS_EXPORT")[0][0]
+        run("LIST @CORE.LAB_EXPORT_STAGE")
+        return run("SELECT COUNT(*) FROM CORE.LAB_ORDERS_EXPORT")[0][0]
     export_orders()
 
 with lab_dag("lab_flaky", "Fails on its first try and passes when Airflow retries it.", retries=1):
     @task(task_id="call_partner_api")
     def call_partner_api():
-        seen = run("SELECT COUNT(*) FROM LAB.FLAKY_STATE")[0][0]
-        run("INSERT INTO LAB.FLAKY_STATE (TRIED_AT) SELECT CURRENT_TIMESTAMP()")
+        seen = run("SELECT COUNT(*) FROM CORE.LAB_FLAKY_STATE")[0][0]
+        run("INSERT INTO CORE.LAB_FLAKY_STATE (TRIED_AT) SELECT CURRENT_TIMESTAMP()")
         if not seen:
             raise TimeoutError("Partner API did not answer within 30 seconds (transient)")
         return "ok"
@@ -106,13 +153,13 @@ with lab_dag("lab_flaky", "Fails on its first try and passes when Airflow retrie
 with lab_dag("lab_fix_breaks", "Joins a dimension table that is missing; its known fix is broken on purpose."):
     @task(task_id="join_customer_dim")
     def join_customer_dim():
-        return run("SELECT COUNT(*) FROM LAB.ORDERS_RAW O JOIN LAB.CUSTOMER_DIM C ON C.CUSTOMER_ID = O.CUSTOMER_ID")[0][0]
+        return run("SELECT COUNT(*) FROM CORE.LAB_ORDERS_RAW O JOIN CORE.LAB_CUSTOMER_DIM C ON C.CUSTOMER_ID = O.CUSTOMER_ID")[0][0]
     join_customer_dim()
 
 with lab_dag("lab_ticket_only", "A bad reference value: never auto-fixed, always analysed and ticketed."):
     @task(task_id="validate_currency")
     def validate_currency():
-        bad = run("SELECT DISTINCT CURRENCY FROM LAB.ORDERS_RAW WHERE CURRENCY NOT IN ('USD', 'EUR', 'GBP')")
+        bad = run("SELECT DISTINCT CURRENCY FROM CORE.LAB_ORDERS_RAW WHERE CURRENCY NOT IN ('USD', 'EUR', 'GBP')")
         if bad:
             raise ValueError(f"Currency code '{bad[0][0]}' is not in the reference list")
         return "ok"

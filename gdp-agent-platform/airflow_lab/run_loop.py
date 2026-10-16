@@ -1,10 +1,12 @@
 """Run the Airflow failure-resolution lab end to end, N passes, and check every DAG ends where it should.
 
-    python airflow_lab/run_loop.py --database DEV_AI_PLATFORM_APP_REHEARSAL --passes 2
+    python airflow_lab/run_loop.py --passes 2          # DEV_AI_PLATFORM by default
+    python airflow_lab/run_loop.py --teardown          # remove every lab object again
 
 Needs: the WSL Airflow serving http://localhost:8080 with airflow_lab/dags loaded and the `lab_snowflake` connection;
-the platform worker running against the same test copy with the local Airflow environment `local-lab` (KIND AIRFLOW)
-enabled; one Snowflake sign-in (role SYSADMIN). The test copy only: the script refuses a database without _REHEARSAL.
+the platform worker running against the same database with the local Airflow environment `local-lab` (KIND AIRFLOW)
+enabled; one Snowflake sign-in (role SYSADMIN, or LAB_ROLE). Everything lives in the platform's one schema, CORE: the
+lab only creates and resets CORE.LAB_* objects, the FIX_LAB_* procedures and the lab DAGs' scopes.
 
 Each pass:
   1. reset the lab (airflow_lab/reset.sql) and switch automatic resolution off, so the failures queue up;
@@ -224,22 +226,36 @@ class Lab:
 
 def main() -> None:
     p = argparse.ArgumentParser()
-    p.add_argument("--database", default="DEV_AI_PLATFORM_APP_REHEARSAL")
+    p.add_argument("--database", default="DEV_AI_PLATFORM")
+    p.add_argument("--teardown", action="store_true", help="remove the lab objects and stop")
     p.add_argument("--passes", type=int, default=2)
     p.add_argument("--airflow", default="http://localhost:8080")
     args = p.parse_args()
-    assert args.database.upper().endswith("_REHEARSAL"), "the lab runs on a *_REHEARSAL test copy only"
 
     import snowflake.connector
     from services.ops.airflow_rest import AirflowRest
 
+    try:
+        import app.db  # noqa: F401  (the platform's in-memory token cache; the Windows store refuses the token)
+    except Exception:
+        pass
+
     af = AirflowRest(args.airflow, "admin", airflow_password(), env_id=ENV_ID)
     log(f"Airflow {af.version()['version']} at {args.airflow}")
     log("Connecting to Snowflake: complete the sign-in in your browser...")
-    con = snowflake.connector.connect(connection_name="anblicksorg-anblicksorg_aws", role="SYSADMIN", warehouse="DBT_WH",
+    import os
+
+    con = snowflake.connector.connect(connection_name="anblicksorg-anblicksorg_aws", role=os.environ.get("LAB_ROLE", "SYSADMIN"),
+                                      warehouse="DBT_WH",
                                       database=args.database.upper(), schema="CORE", login_timeout=600,
                                       client_session_keep_alive=True, client_store_temporary_credential=True)
     lab = Lab(ConnDb(con), af, args.database.upper())
+    if args.teardown:
+        lab.auto(False)
+        lab.sql_file("teardown.sql")
+        log("lab objects removed")
+        con.close()
+        return
     lab.sql_file("setup_lab.sql")
     error = None
     try:
