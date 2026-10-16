@@ -124,6 +124,10 @@ def run_step_entry(session: Any, failure_id: str, resolution_id: str, step_no: A
     skill = get_skill(db, issue.get("skill_id"))
     if str(issue.get("status")) != "PUBLISHED" or not skill:
         return {"error": "the failure has no published skill fix"}
+    if str(failure.get("status")) == "AWAITING_APPROVAL" and not db.query(
+            """SELECT 1 AS X FROM CORE.APPROVAL_REQUEST WHERE FAILURE_ID = %s AND ISSUE_ID = %s
+                 AND STATUS IN ('APPROVED', 'DONE') LIMIT 1""", (failure_id, issue["issue_id"])):
+        return {"error": "the fix for this failure has not been approved"}
     database = database_of(db)
     try:
         return run_step(db, database, resolution_id, failure_id, rules.skill_steps(skill.get("steps"), database), int(step_no))

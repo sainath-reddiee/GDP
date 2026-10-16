@@ -771,6 +771,13 @@ def ingest_event(db: Db, env_id: str, timestamp: str, event_id: str, signature: 
         from services.ops import lease
 
         lease.wake(db, "resolve")
+        if "Traceback (most recent call last)" not in str(row.get("error_excerpt") or ""):
+            # a short pushed error (an older plugin): poll at once, so the log is read within the claim grace period
+            # (services.resolve.engine.CLAIM_GRACE_SECONDS) instead of at the next safety poll
+            try:
+                db.execute("UPDATE CORE.AIRFLOW_ENV SET LAST_ATTEMPT_AT = NULL WHERE ENV_ID = %s", (env_id,))
+            except Exception:
+                pass
     return {"ok": True, "event_id": event_id, "kind": kind}
 
 

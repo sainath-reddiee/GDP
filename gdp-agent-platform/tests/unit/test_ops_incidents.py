@@ -155,8 +155,8 @@ class MemoryStore:
     def kinds(self, incident_id):
         return [e["kind"] for e in self.events if e["incident_id"] == incident_id]
 
-    def has_event(self, incident_id, kind):
-        return kind in self.kinds(incident_id)
+    def last_event_kind(self, incident_id, kinds):
+        return next((k for k in reversed(self.kinds(incident_id)) if k in kinds), None)
 
     def notes_for(self, incident_id, channel=None):
         return [n for n in self.notes if n["incident_id"] == incident_id and (channel is None or n["channel"] == channel)]

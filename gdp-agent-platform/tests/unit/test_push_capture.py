@@ -174,6 +174,7 @@ def test_worker_runs_resolve_when_woken(monkeypatch):
     w = worker.Worker(db_factory=lambda: Recorder())
     monkeypatch.setattr(worker, "due_envs", lambda db, state=None: [])
     monkeypatch.setattr(worker.lease, "take_wake", lambda db, job: job == "resolve")
+    monkeypatch.setattr(w, "push_on", lambda db: True)
     monkeypatch.setattr(w, "_safe", lambda db, job, fn: ran.append(job))
     for name in worker.INTERVALS:
         w._last[name] = 1e18   # nothing is due by its interval

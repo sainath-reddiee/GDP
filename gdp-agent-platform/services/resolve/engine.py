@@ -24,6 +24,8 @@ SEARCH_SERVICE = "KNOWN_ISSUE_SEARCH"
 SEARCH_LIMIT = 8
 CLAIM_STALE_MINUTES = 30   # a claim whose procedure died goes back to PENDING after this long
 CLAIM_GRACE_SECONDS = 120  # a failure without an exception class waits this long for its log
+MAX_ATTEMPTS = 3           # claims that end in an error before the failure is handed to a person (V065)
+MAX_FIXES_PER_RUN = 2      # automatic runs of one fix for one task in one DAG run before it counts as not repairing it
 
 FAILURE_COLUMNS = ("failure_id", "env_id", "incident_id", "dag_id", "task_id", "run_id", "map_index", "try_number",
                    "exception_class", "exception_text", "error_signature", "log_url", "query_id", "dbt_node_id", "status",
@@ -173,11 +175,38 @@ def move(db: Any, failure_id: str, current: str, target: str, fields: Optional[D
 
 
 def release_stale_claims(db: Any) -> int:
-    """IN_PROGRESS rows whose procedure died mid-way go back to PENDING (a claim never sticks forever)."""
-    return db.execute_count(f"""UPDATE CORE.FAILURE_EVENT SET STATUS = 'PENDING', CLAIMED_BY = NULL, CLAIMED_AT = NULL,
-                                       DETAIL = 'claim expired; claimed again', UPDATED_AT = CURRENT_TIMESTAMP()
-                                 WHERE STATUS = 'IN_PROGRESS'
-                                   AND CLAIMED_AT < DATEADD(minute, -{CLAIM_STALE_MINUTES}, CURRENT_TIMESTAMP())""")
+    """IN_PROGRESS rows whose procedure died mid-way go back to PENDING (a claim never sticks forever); one that keeps
+    dying is given up after MAX_ATTEMPTS."""
+    stale = db.query(f"""SELECT FAILURE_ID FROM CORE.FAILURE_EVENT WHERE STATUS = 'IN_PROGRESS'
+                           AND CLAIMED_AT < DATEADD(minute, -{CLAIM_STALE_MINUTES}, CURRENT_TIMESTAMP())""")
+    for r in stale:
+        retry_or_give_up(db, r["failure_id"], "the claim expired (the procedure stopped mid-way)")
+    return len(stale)
+
+
+def retry_or_give_up(db: Any, failure_id: str, reason: str) -> str:
+    """After an error while resolving: back to PENDING for another attempt, or TICKETED once MAX_ATTEMPTS were used,
+    so a failure the engine cannot process reaches a person instead of being claimed (and analysed) forever.
+    Returns the new status, or '' when the failure was no longer IN_PROGRESS."""
+    text = redact(reason)[:3000]
+    found = db.query("SELECT COALESCE(ATTEMPTS, 0) AS N, INCIDENT_ID FROM CORE.FAILURE_EVENT WHERE FAILURE_ID = %s",
+                     (failure_id,))
+    attempts = int((found[0].get("n") if found else 0) or 0) + 1
+    status = "TICKETED" if attempts >= MAX_ATTEMPTS else "PENDING"
+    detail = (f"gave up after {attempts} attempts: {text}" if status == "TICKETED" else f"retrying after: {text}")[:4000]
+    changed = db.execute_count("""UPDATE CORE.FAILURE_EVENT SET STATUS = %s, ATTEMPTS = %s, CLAIMED_BY = NULL,
+                                         CLAIMED_AT = NULL, DETAIL = %s, UPDATED_AT = CURRENT_TIMESTAMP()
+                                   WHERE FAILURE_ID = %s AND STATUS = 'IN_PROGRESS'""",
+                               (status, attempts, detail, failure_id))
+    if changed < 1:
+        return ""
+    if status == "TICKETED":
+        failure = {"failure_id": failure_id, "incident_id": (found[0].get("incident_id") if found else None)}
+        _jira(db, failure, "gave_up", failure_id,
+              redact(f"Automatic resolution gave up on this failure after {attempts} attempts. Last error: {text}. "
+                     "A person needs to look at it.")[:4000], raise_ticket=True)
+        _incident_event(db, failure.get("incident_id"), "resolution_gave_up", {"attempts": attempts, "error": text[:500]})
+    return status
 
 
 def claim(db: Any, holder: str, limit: int) -> List[Dict[str, Any]]:
@@ -523,10 +552,13 @@ def propose_fix(db: Any, failure: Dict[str, Any], rca: Dict[str, Any], prefs: Di
         return None
     from services.resolve import publish
 
-    name = f"agent_{failure['dag_id']}_{str(failure.get('error_signature') or uuid.uuid4().hex)[:8]}"[:250]
+    name = f"agent_{failure['dag_id']}_{str(failure.get('error_signature') or uuid.uuid4().hex)[:8]}"[:240]
+    existing = _skill_named(db, name)
+    if existing and publish.skill_locked(db, existing):   # never rewrite steps a fix runs or an approver is reviewing
+        name, existing = f"{name}_{uuid.uuid4().hex[:6]}", None
     skill = publish.save_skill(db, {"skill_name": name, "steps": plan["steps"],
                                     "description": f"Proposed by the RCA agent for {failure['dag_id']}.{failure.get('task_id')}"},
-                               AGENT_AUTHOR, skill_id=_skill_named(db, name))
+                               AGENT_AUTHOR, skill_id=existing)
     draft = publish.draft_from_incident(db, failure["incident_id"]) if failure.get("incident_id") else {}
     issue = publish.create(db, {**draft, "title": f"Agent fix: {failure['dag_id']}.{failure.get('task_id')}"[:500],
                                 "fix_type": "SKILL", "skill_id": skill["skill_id"], "approval_required": True,
@@ -581,11 +613,26 @@ def resolve_one(db: Any, failure: Dict[str, Any], prefs: Dict[str, Any], scopes:
         return open_ticket(db, failure, "IN_PROGRESS", analyst, prefs, actor, reason, rca=rca)
     if action == "APPROVAL":
         return request_approval(db, failure, hit, routes, prefs)
+    earlier = fixes_in_run(db, failure, hit["issue_id"])
+    if earlier >= MAX_FIXES_PER_RUN:   # the fix "works" but the task keeps failing: stop the fix-and-rerun loop
+        return open_ticket(db, failure, "IN_PROGRESS", analyst, prefs, actor,
+                           f"the known fix {hit.get('title')} already ran {earlier} times in this run and the task still "
+                           "fails, so it does not repair this cause", prior={"issue_id": hit["issue_id"]})
     done = run_fix(db, failure, hit, prefs, actor, executor, "IN_PROGRESS")
     if done["action"] == "fix_failed":
         return open_ticket(db, failure, "IN_PROGRESS", analyst, prefs, actor,
                            f"the known fix {hit.get('title')} failed: {done['error']}", prior={"issue_id": hit["issue_id"]})
     return done
+
+
+def fixes_in_run(db: Any, failure: Dict[str, Any], issue_id: str) -> int:
+    """How many earlier tries of this task in this DAG run the same fix already 'repaired'."""
+    found = db.query("""SELECT COUNT(*) AS N FROM CORE.FAILURE_EVENT
+                         WHERE ENV_ID = %s AND DAG_ID = %s AND COALESCE(TASK_ID, '') = %s AND RUN_ID = %s
+                           AND ISSUE_ID = %s AND STATUS = 'RESOLVED' AND FAILURE_ID <> %s""",
+                     (failure.get("env_id"), failure["dag_id"], failure.get("task_id") or "", failure.get("run_id"),
+                      issue_id, failure["failure_id"]))
+    return int((found[0].get("n") if found else 0) or 0)
 
 
 def claim_and_resolve(db: Any, holder: str, executor: Any, analyst: Any,
@@ -608,9 +655,8 @@ def claim_and_resolve(db: Any, holder: str, executor: Any, analyst: Any,
         except Exception as exc:
             text = redact(f"{type(exc).__name__}: {exc}")[:300]
             errors.append(text)
-            db.execute("""UPDATE CORE.FAILURE_EVENT SET STATUS = 'PENDING', CLAIMED_BY = NULL, CLAIMED_AT = NULL,
-                                 DETAIL = %s, UPDATED_AT = CURRENT_TIMESTAMP()
-                           WHERE FAILURE_ID = %s AND STATUS = 'IN_PROGRESS'""", (f"retrying after: {text}", failure["failure_id"]))
+            if retry_or_give_up(db, failure["failure_id"], text) == "TICKETED":
+                actions["gave_up"] = actions.get("gave_up", 0) + 1
     out: Dict[str, Any] = {"enabled": True, "claimed": len(claimed), "actions": actions}
     if errors:
         out["errors"] = errors[:5]
@@ -630,7 +676,15 @@ def resume_approved(db: Any, executor: Any, analyst: Any, actor: str = SYSTEM, l
                             (r["approval_id"],)) != 1:
             continue
         failure, issue = get_failure(db, r["failure_id"]), get_issue(db, r["issue_id"])
-        if not failure or not issue:
+        if not failure:
+            continue
+        if not issue:   # the approval is used up: hand the failure to a person rather than leave it waiting forever
+            move(db, failure["failure_id"], "AWAITING_APPROVAL", "TICKETED",
+                 {"detail": f"the approved fix {r['issue_id']} no longer exists"})
+            _jira(db, failure, "missing_fix", failure["failure_id"],
+                  f"The approved fix {r['issue_id']} no longer exists, so it did not run. A person needs to look at this "
+                  "failure.", raise_ticket=True)
+            counts["failed"] += 1
             continue
         if str(issue.get("status")).upper() != "PUBLISHED":   # retired while it waited: never run a fix that is not live
             open_ticket(db, failure, "AWAITING_APPROVAL", analyst, prefs, actor,

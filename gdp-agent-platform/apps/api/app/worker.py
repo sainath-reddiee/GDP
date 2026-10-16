@@ -335,6 +335,21 @@ class Worker:
         self._last: Dict[str, float] = {}
         self._states: Dict[str, Tuple[float, Dict[str, bool]]] = {}
 
+    def push_on(self, db: Any) -> bool:
+        """Whether any enabled environment has push on, read again every STATE_SECONDS: without push nothing sets a
+        wake flag, so the worker does not check one every tick."""
+        now = time.monotonic()
+        cached = self._states.get("__push__")
+        if cached and now - cached[0] < STATE_SECONDS:
+            return cached[1]["on"]
+        try:
+            found = db.query("SELECT COUNT_IF(PUSH_ENABLED) AS N FROM CORE.AIRFLOW_ENV WHERE ENABLED")
+            on = bool(found) and int(found[0].get("n") or 0) > 0
+        except Exception:
+            on = True
+        self._states["__push__"] = (now, {"on": on})
+        return on
+
     def env_state(self, db: Any, env_id: str) -> Dict[str, bool]:
         """{push_live, in_window} of an environment, read again every STATE_SECONDS (schedules change rarely)."""
         from services.ops.schedule import env_state
@@ -386,15 +401,31 @@ class Worker:
             if self.stop.is_set():
                 return
             due = self._every(name, INTERVALS[name])
-            if name in WAKEABLE and lease.take_wake(db, name):   # a pushed failure: resolve now, not in 15 s
-                due = True
+            if name in WAKEABLE and not due and self.push_on(db) and lease.take_wake(db, name):
+                due = True   # a pushed failure: resolve now, not in 15 s
             if due:
                 self._safe(db, name, fn)
         if self._every("retention", RETENTION_EVERY):
             self._guarded(db, "retention", retention)
 
+    def maintain(self, db: Any) -> None:
+        """Once per start: live known fixes re-signed with today's matching rules (services.resolve.publish
+        .refresh_signatures). Never stops the worker."""
+        try:
+            from services.resolve.publish import refresh_signatures
+
+            changed = refresh_signatures(db)
+            if changed:
+                log.info("known fixes re-signed for today's matching: %s", changed)
+        except Exception as exc:
+            log.warning("re-signing known fixes skipped: %s", _error_text(exc))
+
     def run(self) -> None:
         log.info("ops worker %s started", HOLDER)
+        try:
+            self.maintain(self.db_factory())
+        except SnowflakeSessionError as exc:
+            log.error("no Snowflake session: %s", exc)
         while not self.stop.is_set():
             try:
                 self.once()

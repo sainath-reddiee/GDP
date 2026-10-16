@@ -15,6 +15,7 @@ from services.ops.redact import redact
 
 log = logging.getLogger("gdp.resolve.bridge")
 CLEAR_LIMIT = 20
+CLEARING_STALE_MINUTES = 10
 
 
 def _call(db: Any, sql: str, params: tuple) -> Dict[str, Any]:
@@ -44,12 +45,16 @@ def resume(db: Any, holder: str) -> Dict[str, Any]:
 
 def has_work(db: Any) -> Dict[str, bool]:
     """Skip the procedure calls (and their warehouse time) when nothing waits."""
-    found = db.query("""SELECT
+    from services.resolve.engine import CLAIM_GRACE_SECONDS
+
+    found = db.query(f"""SELECT
           (SELECT COUNT(*) FROM CORE.FAILURE_EVENT WHERE STATUS = 'IN_PROGRESS' OR (STATUS = 'PENDING'
-              AND (EXCEPTION_CLASS IS NOT NULL OR CREATED_AT < DATEADD(second, -120, CURRENT_TIMESTAMP())))) AS PENDING,
+              AND (EXCEPTION_CLASS IS NOT NULL
+                   OR CREATED_AT < DATEADD(second, -{int(CLAIM_GRACE_SECONDS)}, CURRENT_TIMESTAMP())))) AS PENDING,
           (SELECT COUNT(*) FROM CORE.APPROVAL_REQUEST A JOIN CORE.FAILURE_EVENT F ON F.FAILURE_ID = A.FAILURE_ID
             WHERE A.STATUS IN ('APPROVED', 'REJECTED') AND F.STATUS = 'AWAITING_APPROVAL') AS DECIDED,
-          (SELECT COUNT(*) FROM CORE.FAILURE_EVENT WHERE CLEAR_STATE = 'REQUESTED') AS CLEARS,
+          (SELECT COUNT(*) FROM CORE.FAILURE_EVENT WHERE CLEAR_STATE = 'REQUESTED' OR (CLEAR_STATE = 'CLEARING'
+              AND UPDATED_AT < DATEADD(minute, -{CLEARING_STALE_MINUTES}, CURRENT_TIMESTAMP()))) AS CLEARS,
           (SELECT COUNT(*) FROM CORE.CONTROL_PREFERENCE WHERE IS_ACTIVE AND AUTO_RESOLVE_ENABLED) AS ENABLED""")
     r = found[0] if found else {}
     return {"resolve": int(r.get("pending") or 0) > 0 and int(r.get("enabled") or 0) > 0,
@@ -62,12 +67,15 @@ def clear_requested(db: Any, mwaa_factory: Optional[Callable[[Dict[str, Any]], A
     from services.ops.incidents import SqlStore
 
     counts = {"cleared": 0, "failed": 0}
+    # a clear whose worker died between taking it and calling Airflow is taken again
+    db.execute(f"""UPDATE CORE.FAILURE_EVENT SET CLEAR_STATE = 'REQUESTED', UPDATED_AT = CURRENT_TIMESTAMP()
+                    WHERE CLEAR_STATE = 'CLEARING' AND UPDATED_AT < DATEADD(minute, -{CLEARING_STALE_MINUTES}, CURRENT_TIMESTAMP())""")
     rows = db.query(f"""SELECT F.FAILURE_ID, F.ENV_ID, F.DAG_ID, F.TASK_ID, F.RUN_ID, F.INCIDENT_ID, E.KIND, E.MWAA_ENV, E.REGION, E.AIRFLOW_URL
                           FROM CORE.FAILURE_EVENT F JOIN CORE.AIRFLOW_ENV E ON E.ENV_ID = F.ENV_ID
                          WHERE F.CLEAR_STATE = 'REQUESTED' ORDER BY F.UPDATED_AT LIMIT {CLEAR_LIMIT}""")
     for r in rows:
-        if db.execute_count("""UPDATE CORE.FAILURE_EVENT SET CLEAR_STATE = 'CLEARING' WHERE FAILURE_ID = %s
-                                 AND CLEAR_STATE = 'REQUESTED'""", (r["failure_id"],)) != 1:
+        if db.execute_count("""UPDATE CORE.FAILURE_EVENT SET CLEAR_STATE = 'CLEARING', UPDATED_AT = CURRENT_TIMESTAMP()
+                                 WHERE FAILURE_ID = %s AND CLEAR_STATE = 'REQUESTED'""", (r["failure_id"],)) != 1:
             continue
         try:
             if mwaa_factory:
@@ -76,7 +84,10 @@ def clear_requested(db: Any, mwaa_factory: Optional[Callable[[Dict[str, Any]], A
                 from services.ops.mwaa import client_for
 
                 client = client_for(r)
-            client.clear_task_instances(r["dag_id"], [r["task_id"]], r["run_id"], dry_run=False, include_downstream=False)
+            # downstream too: the tasks the failure left upstream_failed must run again, or the DAG run ends failed
+            # (only_failed keeps tasks that already succeeded as they are)
+            client.clear_task_instances(r["dag_id"], [r["task_id"]], r["run_id"], dry_run=False, only_failed=True,
+                                        include_downstream=True)
             state, detail = "DONE", f"cleared {r['task_id']} in run {r['run_id']}"
             counts["cleared"] += 1
         except Exception as exc:
