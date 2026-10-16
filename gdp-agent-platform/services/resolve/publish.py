@@ -147,9 +147,47 @@ def list_issues(db: Any, status: Optional[str] = None, q: Optional[str] = None, 
     cols = ", ".join(f"K.{c.upper()}" for c in ISSUE_COLUMNS)
     return db.query(f"""SELECT {cols}, S.SKILL_NAME,
                                (SELECT COUNT(*) FROM CORE.RESOLUTION_RUN R WHERE R.ISSUE_ID = K.ISSUE_ID AND R.OUTCOME = 'SUCCESS') AS RUNS_OK,
-                               (SELECT COUNT(*) FROM CORE.RESOLUTION_RUN R WHERE R.ISSUE_ID = K.ISSUE_ID AND R.OUTCOME = 'FAILED') AS RUNS_FAILED
+                               (SELECT COUNT(*) FROM CORE.RESOLUTION_RUN R WHERE R.ISSUE_ID = K.ISSUE_ID AND R.OUTCOME = 'FAILED') AS RUNS_FAILED,
+                               U.RUNS_30D, U.OK_30D, U.DAGS_30D, U.LAST_RUN_AT
                           FROM CORE.KNOWN_ISSUE K LEFT JOIN CORE.FIX_SKILL S ON S.SKILL_ID = K.SKILL_ID
-                         WHERE {' AND '.join(where)} ORDER BY K.UPDATED_AT DESC LIMIT {int(limit)}""", tuple(params))
+                          LEFT JOIN ({_USAGE_SQL}) U ON U.ISSUE_ID = K.ISSUE_ID
+                         WHERE {' AND '.join(where)} ORDER BY K.UPDATED_AT DESC LIMIT {int(limit)}""",
+                    (RECENT_DAYS, *params))
+
+
+RECENT_DAYS = 30
+# how often each known fix ran lately: runs, successes, distinct DAGs and the last run (one %s: the days)
+_USAGE_SQL = """SELECT R.ISSUE_ID, COUNT(*) AS RUNS_30D, COUNT_IF(R.OUTCOME = 'SUCCESS') AS OK_30D,
+                       COUNT(DISTINCT F.DAG_ID) AS DAGS_30D, MAX(R.STARTED_AT) AS LAST_RUN_AT,
+                       ARRAY_AGG(DISTINCT F.DAG_ID) WITHIN GROUP (ORDER BY F.DAG_ID) AS DAG_IDS
+                  FROM CORE.RESOLUTION_RUN R JOIN CORE.FAILURE_EVENT F ON F.FAILURE_ID = R.FAILURE_ID
+                 WHERE R.ISSUE_ID IS NOT NULL AND R.OUTCOME IN ('SUCCESS', 'FAILED')
+                   AND R.STARTED_AT >= DATEADD(day, -%s, CURRENT_TIMESTAMP())
+                 GROUP BY R.ISSUE_ID"""
+
+
+def recurring(db: Any, days: int = RECENT_DAYS, min_runs: int = 2, limit: int = 10) -> List[Dict[str, Any]]:
+    """Known fixes that keep firing: [{issue_id, title, status, runs, ok, success_rate, dags, dag_ids, last_run_at}],
+    the most frequent first. A fix that runs every week points at a cause worth repairing for good."""
+    found = db.query(f"""SELECT K.ISSUE_ID, K.TITLE, K.STATUS, K.PROPOSED_BY_AGENT, U.RUNS_30D, U.OK_30D, U.DAGS_30D,
+                                U.LAST_RUN_AT, U.DAG_IDS
+                           FROM ({_USAGE_SQL}) U JOIN CORE.KNOWN_ISSUE K ON K.ISSUE_ID = U.ISSUE_ID
+                          WHERE U.RUNS_30D >= %s ORDER BY U.RUNS_30D DESC, U.LAST_RUN_AT DESC LIMIT {int(limit)}""",
+                     (max(1, min(int(days), 365)), int(min_runs)))
+    out = []
+    for r in found:
+        runs, ok = int(r.get("runs_30d") or 0), int(r.get("ok_30d") or 0)
+        dag_ids = r.get("dag_ids")
+        if isinstance(dag_ids, str):
+            try:
+                dag_ids = json.loads(dag_ids)
+            except ValueError:
+                dag_ids = []
+        out.append({"issue_id": r["issue_id"], "title": r.get("title"), "status": r.get("status"),
+                    "proposed_by_agent": bool(r.get("proposed_by_agent")), "runs": runs, "ok": ok,
+                    "success_rate": round(ok / runs, 3) if runs else None, "dags": int(r.get("dags_30d") or 0),
+                    "dag_ids": list(dag_ids or [])[:10], "last_run_at": r.get("last_run_at")})
+    return out
 
 
 # ---------------------------------------------------------------- skills (multi-step fixes)

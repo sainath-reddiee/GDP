@@ -663,10 +663,12 @@ class SettingsIn(BaseModel):
     public_base_url: Optional[str] = Field(default=None, max_length=500)
     ai_auto: Optional[bool] = None
     ai_severities: Optional[List[str]] = Field(default=None, max_length=4)
+    ticket_auto_fixes: Optional[bool] = None
+    close_auto_fixed: Optional[bool] = None
 
 
 SETTING_KEYS = ("reopen_hours", "alert_on_retry_for_critical", "transition_on_resolve", "done_status",
-                "public_base_url", "ai_auto", "ai_severities")
+                "public_base_url", "ai_auto", "ai_severities", "ticket_auto_fixes", "close_auto_fixed")
 
 
 def _settings_out(db: Db) -> Dict[str, Any]:

@@ -1,0 +1,133 @@
+{
+  "description": "Airflow runbooks shipped with the platform: how the common failures of Airflow pipelines on Snowflake, dbt and SnapLogic read, what usually causes them and what repairs them. Seeded into the GENERAL domain as AIRFLOW_RUNBOOK knowledge (origin SEED); a runbook a person edited in Knowledge is never overwritten by the deploy. Teams add their own in Knowledge.",
+  "knowledge": [
+    {
+      "key": "ops.runbook.object-does-not-exist",
+      "type": "AIRFLOW_RUNBOOK",
+      "title": "Snowflake object does not exist or not authorized (002003)",
+      "content": "Signals: SQL compilation error 002003, 'Object ... does not exist or not authorized', 'Stage ... does not exist'. Meaning: the statement names a table, view or stage the task's role cannot see. Usual causes: an upstream DAG or deployment that creates the object has not run yet or failed; the object was renamed or dropped; the role lost its grant; the connection points at another database or schema. Repair: check the upstream DAGs and the last deployment first. When the object is a known derived table or a stage inside the resolution scope, the catalogue actions CREATE_TABLE_FROM or CREATE_STAGE recreate it; a missing grant is a human step (grant to the role), never automatic. Rerun the failed task once the object exists.",
+      "content_json": {"signals": ["002003", "does not exist or not authorized"], "meaning": "The named object is missing or not visible to the role.", "usual_cause": "Upstream creation has not run, a rename or drop, a lost grant, or the wrong database or schema in the connection.", "action": "CREATE_TABLE_FROM", "human_steps": ["Check the upstream DAG run and the last deployment.", "Check the connection's database, schema and role.", "Grant the role access when the object exists."]},
+      "tags": ["AIRFLOW", "RUNBOOK", "SNOWFLAKE"]
+    },
+    {
+      "key": "ops.runbook.invalid-identifier",
+      "type": "AIRFLOW_RUNBOOK",
+      "title": "Invalid identifier (000904)",
+      "content": "Signals: SQL compilation error 000904, \"invalid identifier 'COLUMN'\". Meaning: a column the statement uses is not in the table it reads. Usual causes: an upstream model or source changed (column renamed, dropped or not yet added); the task was deployed before the schema change it depends on; a typo. Repair: compare the statement with the table's columns and the upstream change. When the table documents how the column is derived (a table comment or column rule) and the table is inside the resolution scope, the catalogue action ADD_COLUMN adds and fills it. A rename belongs in the code, a human change. Rerun the task after.",
+      "content_json": {"signals": ["000904", "invalid identifier"], "meaning": "A referenced column is not in the table.", "usual_cause": "Upstream schema change or deployment order.", "action": "ADD_COLUMN", "human_steps": ["Compare the SQL with the table's columns.", "Find the upstream change (model, source, deployment).", "Fix the code when the column was renamed."]},
+      "tags": ["AIRFLOW", "RUNBOOK", "SNOWFLAKE"]
+    },
+    {
+      "key": "ops.runbook.insufficient-privileges",
+      "type": "AIRFLOW_RUNBOOK",
+      "title": "Insufficient privileges (003001)",
+      "content": "Signals: SQL access control error 003001, 'Insufficient privileges to operate on ...'. Meaning: the task's role lacks a privilege on the object. Usual causes: a new object without future grants, a role change on the Airflow connection, a revoked grant. Repair: a human step only. Grant the missing privilege to the role (or fix the role on the connection), then rerun. The platform never grants privileges itself.",
+      "content_json": {"signals": ["003001", "Insufficient privileges"], "meaning": "The role lacks a privilege.", "usual_cause": "New object without future grants, connection role change, revoked grant.", "action": null, "human_steps": ["Find the role in the Airflow connection.", "Grant the privilege or add future grants.", "Rerun the task."]},
+      "tags": ["AIRFLOW", "RUNBOOK", "SNOWFLAKE", "ACCESS"]
+    },
+    {
+      "key": "ops.runbook.no-active-warehouse",
+      "type": "AIRFLOW_RUNBOOK",
+      "title": "No active warehouse or warehouse suspended (000606)",
+      "content": "Signals: 000606 'No active warehouse selected in the current session', 'Warehouse ... cannot be resumed', 'warehouse ... is suspended'. Meaning: the session has no usable warehouse. Usual causes: the connection names no warehouse or one the role cannot use; the warehouse hit a resource monitor quota; auto-resume is off. Repair: a human step. Set the warehouse on the connection, grant USAGE, or raise the resource monitor quota, then rerun.",
+      "content_json": {"signals": ["000606", "No active warehouse", "cannot be resumed", "resource monitor"], "meaning": "No usable warehouse in the session.", "usual_cause": "Missing warehouse on the connection, no USAGE grant, quota reached.", "action": null, "human_steps": ["Check the connection's warehouse.", "Check resource monitors.", "Grant USAGE to the role."]},
+      "tags": ["AIRFLOW", "RUNBOOK", "SNOWFLAKE", "WAREHOUSE"]
+    },
+    {
+      "key": "ops.runbook.statement-timeout",
+      "type": "AIRFLOW_RUNBOOK",
+      "title": "Statement timed out (000630) or the task ran past its SLA",
+      "content": "Signals: 000630 'Statement reached its statement or warehouse timeout', 'canceled', the task running far beyond the DAG's usual duration. Meaning: the query was stopped by STATEMENT_TIMEOUT_IN_SECONDS or ran too long. Usual causes: more data than usual, a lost pruning (filter on a function of the clustering key), a warehouse queued by other work, a bad join that multiplies rows. Repair: one rerun (RERUN_ONLY) is reasonable when the warehouse was busy; otherwise look at the query profile of the query id in the log, the input volume and the warehouse size before rerunning.",
+      "content_json": {"signals": ["000630", "statement or warehouse timeout", "canceled"], "meaning": "The query hit a timeout.", "usual_cause": "Volume growth, lost pruning, queueing, exploding joins.", "action": "RERUN_ONLY", "human_steps": ["Open the query profile for the query id.", "Compare input volume with usual runs.", "Check warehouse queueing and size."]},
+      "tags": ["AIRFLOW", "RUNBOOK", "SNOWFLAKE", "PERFORMANCE"]
+    },
+    {
+      "key": "ops.runbook.auth-expired",
+      "type": "AIRFLOW_RUNBOOK",
+      "title": "Authentication failed or token expired (390114, 390100, JWT)",
+      "content": "Signals: 390114 'Authentication token has expired', 390100 'Incorrect username or password', 'JWT token is invalid', 'Failed to authenticate', HTTP 401 from an API the task calls. Meaning: the credentials of the Airflow connection are no longer accepted. Usual causes: a rotated key pair or password, an expired programmatic access token, a disabled service user, a long task outliving its session token. Repair: a human step. Rotate or update the credentials in the Airflow connection or secrets backend, then rerun. A long-running session error alone may pass on one rerun.",
+      "content_json": {"signals": ["390114", "390100", "JWT token is invalid", "Failed to authenticate", "401"], "meaning": "The connection's credentials are rejected.", "usual_cause": "Rotation, expiry or a disabled service user.", "action": null, "human_steps": ["Check the secrets backend and the connection.", "Rotate the key or token.", "Rerun the task."]},
+      "tags": ["AIRFLOW", "RUNBOOK", "AUTH"]
+    },
+    {
+      "key": "ops.runbook.dbt-compilation-error",
+      "type": "AIRFLOW_RUNBOOK",
+      "title": "dbt compilation error",
+      "content": "Signals: 'Compilation Error in model ...', \"depends on a node named '...' which was not found\", 'macro ... not found', a dbt run that fails before any model runs. Meaning: the dbt project does not compile. Usual causes: a merged change that references a removed or renamed model, a missing package (dbt deps not run in the image), a variable the DAG does not pass. Repair: a human change in the repository: fix the reference, run dbt deps in the image, or pass the variable. Rerun the task after the fix is deployed. Nothing in the warehouse needs repair.",
+      "content_json": {"signals": ["Compilation Error", "was not found", "dbt deps"], "meaning": "The dbt project does not compile.", "usual_cause": "Broken reference, missing package, missing variable.", "action": null, "human_steps": ["Read the model named in the error.", "Check the last merge to the dbt repository.", "Run dbt deps in the image when a package is missing."]},
+      "tags": ["AIRFLOW", "RUNBOOK", "DBT"]
+    },
+    {
+      "key": "ops.runbook.dbt-test-failure",
+      "type": "AIRFLOW_RUNBOOK",
+      "title": "dbt test failed (unique, not_null, relationships, accepted_values)",
+      "content": "Signals: 'Failure in test unique_...', 'Got N results, configured to fail if != 0', a dbt test task failing after its model succeeded. Meaning: the data broke a declared expectation. Usual causes: duplicate rows from a source that replayed a batch, nulls from a new source value, orphaned keys when an upstream load was late. Repair: look at the failing rows (dbt stores them when store_failures is on). Duplicates on a table inside the resolution scope can be removed with DEDUP_ON_KEY, which always needs a person's approval; other failures need the source fixed or the expectation reviewed. Rerun the model and its tests after.",
+      "content_json": {"signals": ["Failure in test", "configured to fail if"], "meaning": "Data broke a declared test.", "usual_cause": "Replayed source batch, new source values, late upstream load.", "action": "DEDUP_ON_KEY", "human_steps": ["Query the failing rows.", "Find the source batch that caused them.", "Review the expectation when the data is right."]},
+      "tags": ["AIRFLOW", "RUNBOOK", "DBT", "DATA_QUALITY"]
+    },
+    {
+      "key": "ops.runbook.duplicate-keys",
+      "type": "AIRFLOW_RUNBOOK",
+      "title": "Duplicate keys (a data check, a MERGE or a unique constraint)",
+      "content": "Signals: 'Duplicate row detected during DML action' (100090), a data check reporting duplicate ids, a MERGE that matches one target row with several source rows. Meaning: a key that should be unique is not. Usual causes: a source replayed or delivered overlapping files, a COPY INTO with FORCE, a join that fans out. Repair: confirm the duplicates are true copies of the same record. DEDUP_ON_KEY keeps one row per key on a table inside the resolution scope, and always asks a person first. Fix the load that produced them so it does not recur, then rerun.",
+      "content_json": {"signals": ["100090", "Duplicate row detected", "duplicate"], "meaning": "A unique key has duplicates.", "usual_cause": "Replayed or overlapping source files, forced reloads, fan-out joins.", "action": "DEDUP_ON_KEY", "human_steps": ["Check whether the duplicates are identical.", "Find the load that wrote them.", "Prevent the replay at the source."]},
+      "tags": ["AIRFLOW", "RUNBOOK", "DATA_QUALITY"]
+    },
+    {
+      "key": "ops.runbook.schema-drift",
+      "type": "AIRFLOW_RUNBOOK",
+      "title": "Schema drift from a source (column added, removed or retyped)",
+      "content": "Signals: 'Numeric value ... is not recognized' (100038), 'Number of columns in file does not match' (COPY), 'NULL result in a non-nullable column' (100072), invalid identifier after a source release. Meaning: the source's shape changed under the pipeline. Usual causes: a source system release, a new file layout, a vendor change without notice. Repair: compare the new files or source table with the target. A documented new column inside the resolution scope can be added with ADD_COLUMN; type changes, file format changes and NOT NULL breaks need the contract and the code updated by a person, and often the source owner told.",
+      "content_json": {"signals": ["100038", "does not match", "100072", "is not recognized"], "meaning": "The source changed shape.", "usual_cause": "Source release or file layout change.", "action": "ADD_COLUMN", "human_steps": ["Compare the source with the target contract.", "Update the file format or the model.", "Tell the source owner."]},
+      "tags": ["AIRFLOW", "RUNBOOK", "SCHEMA"]
+    },
+    {
+      "key": "ops.runbook.sensor-timeout",
+      "type": "AIRFLOW_RUNBOOK",
+      "title": "Sensor or upstream timeout (ExternalTaskSensor, file and S3 sensors)",
+      "content": "Signals: AirflowSensorTimeout, 'Sensor has timed out', 'Snap. Time elapsed', an ExternalTaskSensor that never sees its upstream task succeed. Meaning: what the DAG waits for did not arrive in time. Usual causes: the upstream DAG failed or ran late, the file was delivered late or under another name, the sensor's execution date offset does not match the upstream schedule. Repair: check the upstream DAG run (Operations shows DAG dependencies) or the landing location. Once the upstream succeeded or the file landed, a rerun of the sensor (RERUN_ONLY) is enough; a schedule mismatch is a code change.",
+      "content_json": {"signals": ["AirflowSensorTimeout", "Sensor has timed out"], "meaning": "The awaited event did not happen in time.", "usual_cause": "Upstream failure or delay, late or renamed file, schedule offset mismatch.", "action": "RERUN_ONLY", "human_steps": ["Check the upstream DAG run.", "Check the landing location.", "Check execution_delta or execution_date_fn."]},
+      "tags": ["AIRFLOW", "RUNBOOK", "DEPENDENCY"]
+    },
+    {
+      "key": "ops.runbook.zombie-or-killed",
+      "type": "AIRFLOW_RUNBOOK",
+      "title": "Zombie task, heartbeat lost or worker killed",
+      "content": "Signals: 'Detected zombie job', 'heartbeat', 'Task exited with return code -9' or 'Negsignal.SIGKILL', 'SIGTERM', a task marked failed with no error in its own log. Meaning: the worker running the task died or lost contact with the scheduler. Usual causes: the worker ran out of memory (pandas on a large result), a worker restart or scale-in during the run, a node eviction. Repair: one rerun (RERUN_ONLY) usually passes when the cause was a restart. Repeated kills of the same task point at memory: push the work down into Snowflake, stream the result, or give the task more memory (a human change).",
+      "content_json": {"signals": ["zombie", "return code -9", "SIGKILL", "SIGTERM", "heartbeat"], "meaning": "The worker running the task died.", "usual_cause": "Out of memory, worker restart or scale-in, eviction.", "action": "RERUN_ONLY", "human_steps": ["Check worker memory around the failure time.", "Move heavy work into Snowflake.", "Raise the task's resources."]},
+      "tags": ["AIRFLOW", "RUNBOOK", "INFRASTRUCTURE"]
+    },
+    {
+      "key": "ops.runbook.snaplogic-pipeline-error",
+      "type": "AIRFLOW_RUNBOOK",
+      "title": "SnapLogic pipeline failed",
+      "content": "Signals: a SnapLogic task URL call returning an error status, 'Pipeline execution failed', 'Snap ... failed', HTTP 4xx or 5xx from the SnapLogic triggered task. Meaning: the SnapLogic pipeline the task triggers did not complete. Usual causes: the Snaplex (Groundplex) is down or overloaded, an account credential in SnapLogic expired, the source or target endpoint failed, the pipeline was changed. Repair: open the pipeline execution in SnapLogic Manager by its runtime id, check the Snaplex and the account, then rerun the Airflow task. Pipeline and account changes are human steps.",
+      "content_json": {"signals": ["SnapLogic", "Pipeline execution failed", "Snaplex"], "meaning": "The triggered SnapLogic pipeline failed.", "usual_cause": "Snaplex down, expired account, endpoint failure, pipeline change.", "action": "RERUN_ONLY", "human_steps": ["Open the execution in SnapLogic Manager.", "Check the Snaplex and the account.", "Rerun the Airflow task."]},
+      "tags": ["AIRFLOW", "RUNBOOK", "SNAPLOGIC"]
+    },
+    {
+      "key": "ops.runbook.network-egress",
+      "type": "AIRFLOW_RUNBOOK",
+      "title": "Network or egress failure (connection refused, timed out, SSL)",
+      "content": "Signals: 'Connection refused', 'Connection timed out', 'Name or service not known', 'Max retries exceeded with url', 'SSLError', 'certificate verify failed', 'Failed to connect to DB'. Meaning: the task could not reach a host. Usual causes: a network policy or firewall change, a NAT or proxy outage, DNS, a certificate rotated on the far side, the remote service down. Repair: one rerun (RERUN_ONLY) when the failure was brief; repeated failures need the network path checked by a person (Snowflake network policy, egress rules, proxy, certificates).",
+      "content_json": {"signals": ["Connection refused", "timed out", "Max retries exceeded", "SSLError", "certificate verify failed"], "meaning": "The task could not reach a host.", "usual_cause": "Network policy, NAT or proxy, DNS, certificate rotation, remote outage.", "action": "RERUN_ONLY", "human_steps": ["Check the remote service status.", "Check network policies and egress rules.", "Check proxy and certificates."]},
+      "tags": ["AIRFLOW", "RUNBOOK", "NETWORK"]
+    },
+    {
+      "key": "ops.runbook.python-task-error",
+      "type": "AIRFLOW_RUNBOOK",
+      "title": "Python error in task code (KeyError, ValueError, TypeError, ImportError)",
+      "content": "Signals: a Python traceback ending in KeyError, ValueError, TypeError, AttributeError, ModuleNotFoundError or ImportError raised by the DAG's own code. Meaning: the task's code met data or an environment it does not handle. Usual causes: an unexpected value in the data (a new code, an empty result), an API response that changed shape, a package missing from or upgraded in the image. Repair: read the last frame of the traceback in the DAG file and the value it names. A data problem is fixed at the source or handled in the code; a package problem in the image's requirements. These are human changes; rerun after.",
+      "content_json": {"signals": ["KeyError", "ValueError", "TypeError", "AttributeError", "ModuleNotFoundError", "ImportError"], "meaning": "The task's code failed on its input or environment.", "usual_cause": "Unexpected data value, changed API response, image package change.", "action": null, "human_steps": ["Read the last frame of the traceback.", "Check the data value it names.", "Check the image requirements."]},
+      "tags": ["AIRFLOW", "RUNBOOK", "PYTHON"]
+    },
+    {
+      "key": "ops.runbook.transient-retry",
+      "type": "AIRFLOW_RUNBOOK",
+      "title": "Transient failure that passes on retry",
+      "content": "Signals: a task that failed on one try and succeeded on the next (state up_for_retry, then success), timeouts and 429 or 503 answers from APIs. Meaning: the failure was transient. Usual causes: rate limits, a short outage, contention. Repair: nothing while Airflow's own retries absorb it; the platform does not act on a try that Airflow will retry. When the same task needs its retries most days, raise retries with a backoff (retry_exponential_backoff) or fix the contention: a fix that keeps firing is worth making permanent.",
+      "content_json": {"signals": ["up_for_retry", "429", "503", "Too Many Requests"], "meaning": "A transient failure.", "usual_cause": "Rate limits, short outages, contention.", "action": null, "human_steps": ["Leave it to Airflow's retries.", "Add backoff when it recurs.", "Fix the contention when retries are routine."]},
+      "tags": ["AIRFLOW", "RUNBOOK", "RELIABILITY"]
+    }
+  ]
+}

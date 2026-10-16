@@ -164,6 +164,9 @@ def task_row(env_id: str, payload: Dict[str, Any], source: str = "POLL") -> Dict
     state = _state(payload.get("state"))
     run_id = str(payload.get("dag_run_id") or payload.get("run_id"))
     try_number = int(payload.get("try_number") or 0)
+    error = payload.get("error")
+    if error and payload.get("sql"):   # a pushed SQL task: the statement it ran, as its log would show it
+        error = f"Running statement: {' '.join(str(payload['sql']).split())[:1500]}\n{error}"
     row = {
         "env_id": env_id, "dag_id": str(payload["dag_id"]), "run_id": run_id, "task_id": str(payload["task_id"]),
         "map_index": int(map_index) if map_index is not None else -1, "try_number": try_number,
@@ -171,7 +174,8 @@ def task_row(env_id: str, payload: Dict[str, Any], source: str = "POLL") -> Dict
         "started_at": start, "ended_at": end, "duration_s": duration(start, end, payload.get("duration")),
         "hostname": payload.get("hostname") or None,
         "log_ref": f"{payload['dag_id']}/{run_id}/{payload['task_id']}/{try_number}/{int(map_index) if map_index is not None else -1}",
-        "error_excerpt": excerpt(payload.get("error")) if payload.get("error") else None,
+        "error_excerpt": excerpt(error) if error else None,
+        "excerpt_source": ("PUSH" if source == "PUSH" else "LOG") if error else None,
         "source": source,
         "updated_at": newest(ts(payload.get("updated_at")), start, end, ts(payload.get("queued_when")),
                              ts(payload.get("scheduled_when"))),
@@ -210,13 +214,16 @@ def excerpt(text: Any, limit: int = EXCERPT_MAX) -> Optional[str]:
         return None
     body = str(text)
     marker = body.rfind("Traceback (most recent call last)")
-    before = body[:marker] if marker >= 0 else ""
+    before = body[:marker] if marker >= 0 else body
     if marker >= 0:
         body = body[marker:]
     else:
-        lines = [ln for ln in body.splitlines() if " ERROR " in ln or "Error" in ln or "Exception" in ln]
+        lines = [ln for ln in body.splitlines()
+                 if (" ERROR " in ln or "Error" in ln or "Exception" in ln) and not _STATEMENT.search(ln)]
         if lines:
             body = "\n".join(lines[-30:])
+        else:
+            body = "\n".join(ln for ln in body.splitlines() if not _STATEMENT.search(ln))
     statement = [ln.strip()[:1500] for ln in before.splitlines() if _STATEMENT.search(ln)][-1:]
     body = redact("\n".join(statement + [body.strip()]))
     return body[-limit:] if len(body) > limit else body

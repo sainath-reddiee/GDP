@@ -14,7 +14,7 @@ import { useScrollLock } from "@/components/use-scroll-lock";
 
 export const TYPES = ["GLOSSARY", "BUSINESS_RULE", "TRANSFORMATION_RULE", "MAPPING_PATTERN", "MODEL_DEFINITION",
   "NAMING_STANDARD", "DBT_PATTERN", "SODA_PATTERN", "EXCEPTION", "STTM_TEMPLATE", "ONBOARDING_GUIDE", "COLUMN_RULE", "QA_TEST",
-  "INCIDENT_RESOLUTION", "CASE_RESOLUTION", "EXAMPLE"];
+  "INCIDENT_RESOLUTION", "CASE_RESOLUTION", "EXAMPLE", "AIRFLOW_DAG", "AIRFLOW_RUNBOOK"];
 
 type Domain = { domain_id: string; domain_name: string };
 
@@ -23,6 +23,7 @@ const TEMPLATE: Record<string, Record<string, unknown>> = {
   BUSINESS_RULE: { target_column: "", rule: "" },
   TRANSFORMATION_RULE: { target_column: "", expression: "TRIM({col})" },
   MAPPING_PATTERN: { source_column: "", target_column: "" },
+  AIRFLOW_RUNBOOK: { signals: [], meaning: "", usual_cause: "", action: null, human_steps: [] },
 };
 
 /** Browse knowledge in use; open an item for its versions, provenance and usage; add, edit, verify and retire. */

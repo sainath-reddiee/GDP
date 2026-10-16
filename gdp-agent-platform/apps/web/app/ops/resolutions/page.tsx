@@ -6,6 +6,7 @@ import { cn } from "@/lib/utils";
 import { PageHeader } from "@/components/page-header";
 import { FixDecision } from "@/components/ops/fix-decision";
 import { FailureStatusPill } from "@/components/ops/status-pill";
+import { RecurringFixes } from "@/components/ops/recurring-fixes";
 import { FAILURE_STATUS, flowLabel, score } from "@/lib/resolve-labels";
 import type { FailureRow, FixApproval, Preference, ResolveSummary, Route, Scope } from "../resolve-actions";
 import { Guardrails } from "./guardrails";
@@ -159,6 +160,7 @@ export default async function ResolutionsPage({ searchParams }: { searchParams?:
         <Stat label="Published known fixes" value={s.fixes.PUBLISHED ?? 0} icon={BookCheck} tone="bg-agent/10 text-agent" />
       </div>
       {banner}
+      {view === "queue" && (s.recurring?.length ?? 0) > 0 && <RecurringFixes items={s.recurring ?? []} />}
       <Tabs view={view} approvals={s.approvals_open} />
       {body}
     </div>

@@ -314,6 +314,20 @@ class Mwaa:
         found = self.invoke("GET", f"/dags/{_seg(dag_id)}/tasks") or {}
         return list(found.get("tasks") or []) if isinstance(found, dict) else []
 
+    def dag_source(self, dag_id: str) -> str:
+        """The DAG file's source code: v2 GET /dagSources/{dag_id}; v1 through the file_token of GET /dags/{dag_id}.
+        Empty when Airflow returns nothing."""
+        if self.api_version == "v2":
+            found = self.invoke("GET", f"/dagSources/{_seg(dag_id)}")
+        else:
+            token = (self.invoke("GET", f"/dags/{_seg(dag_id)}") or {}).get("file_token")
+            if not token:
+                return ""
+            found = self.invoke("GET", f"/dagSources/{_seg(token)}")
+        if isinstance(found, dict):
+            return str(found.get("content") or "")
+        return str(found or "")
+
     def task_links(self, dag_id: str, run_id: str, task_id: str, map_index: int = -1) -> Dict[str, Any]:
         """Resolved operator extra links of one task instance ({name: url}); ExternalTaskSensor and
         TriggerDagRunOperator link to the other DAG this way."""

@@ -269,7 +269,7 @@ def test_resolution_note_raises_the_ticket_and_stores_the_key(monkeypatch):
         def add_comment(self, key, body):
             self.comments.append(key)
 
-    monkeypatch.setattr(tickets, "raise_ticket", lambda store, iid, client, settings: {"state": "raised", "key": "OPS-7"})
+    monkeypatch.setattr(tickets, "raise_ticket", lambda store, iid, client, settings, record=False: {"state": "raised", "key": "OPS-7"})
     store, client = Store(), Client()
     row = {"payload": json.dumps({"failure_id": "f1", "text": "Cause: x", "raise": True})}
     status, _ = tickets.resolution_note(store, {"incident_id": "i1", "jira_key": None}, row, client, {})

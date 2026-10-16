@@ -133,5 +133,12 @@ def report(db: Any, days: int = 7, team_id: Optional[str] = None, now: Optional[
     stats = team_stats(incidents, teams)
     if team_id:
         stats = [t for t in stats if t["team_id"] == team_id]
+    try:   # known fixes that keep firing: each one points at a cause worth repairing for good
+        from services.resolve.publish import recurring
+
+        recurring_fixes = recurring(db, days=max(days, 30))
+    except Exception:
+        recurring_fixes = []
     return {"period": {"from": start.isoformat(timespec="seconds"), "to": now.isoformat(timespec="seconds"), "days": days},
-            "teams": stats, "top_dags": top_dags(runs), "repeats": repeat_fingerprints(incidents), "ai": ai}
+            "teams": stats, "top_dags": top_dags(runs), "repeats": repeat_fingerprints(incidents), "ai": ai,
+            "recurring_fixes": recurring_fixes}

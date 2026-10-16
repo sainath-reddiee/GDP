@@ -155,21 +155,22 @@ def upsert_tasks(db: Any, rows: List[Dict[str, Any]]) -> int:
                        TRY_TO_TIMESTAMP_LTZ(F.VALUE:ended_at::VARCHAR) AS ENDED_AT,
                        F.VALUE:duration_s::NUMBER(12,3) AS DURATION_S, F.VALUE:hostname::VARCHAR AS HOSTNAME,
                        F.VALUE:log_ref::VARCHAR AS LOG_REF, F.VALUE:error_excerpt::VARCHAR AS ERROR_EXCERPT,
-                       F.VALUE:source::VARCHAR AS SOURCE, TRY_TO_TIMESTAMP_LTZ(F.VALUE:updated_at::VARCHAR) AS UPDATED_AT
+                       F.VALUE:excerpt_source::VARCHAR AS EXCERPT_SOURCE, F.VALUE:source::VARCHAR AS SOURCE, TRY_TO_TIMESTAMP_LTZ(F.VALUE:updated_at::VARCHAR) AS UPDATED_AT
                   FROM {_SRC}) S
             ON T.ENV_ID = S.ENV_ID AND T.DAG_ID = S.DAG_ID AND T.RUN_ID = S.RUN_ID AND T.TASK_ID = S.TASK_ID
                AND T.MAP_INDEX = S.MAP_INDEX AND T.TRY_NUMBER = S.TRY_NUMBER
             WHEN MATCHED AND {NEWER_SQL} THEN UPDATE SET STATE = S.STATE, OPERATOR = COALESCE(S.OPERATOR, T.OPERATOR),
                  STARTED_AT = COALESCE(S.STARTED_AT, T.STARTED_AT), ENDED_AT = S.ENDED_AT, DURATION_S = S.DURATION_S,
                  HOSTNAME = COALESCE(S.HOSTNAME, T.HOSTNAME), LOG_REF = COALESCE(S.LOG_REF, T.LOG_REF),
-                 ERROR_EXCERPT = COALESCE(S.ERROR_EXCERPT, T.ERROR_EXCERPT), SOURCE = S.SOURCE, UPDATED_AT = S.UPDATED_AT,
-                 LOADED_AT = CURRENT_TIMESTAMP()
+                 ERROR_EXCERPT = IFF(T.EXCERPT_SOURCE = 'LOG' OR S.ERROR_EXCERPT IS NULL, T.ERROR_EXCERPT, S.ERROR_EXCERPT),
+                 EXCERPT_SOURCE = IFF(T.EXCERPT_SOURCE = 'LOG' OR S.ERROR_EXCERPT IS NULL, T.EXCERPT_SOURCE, S.EXCERPT_SOURCE),
+                 SOURCE = S.SOURCE, UPDATED_AT = S.UPDATED_AT, LOADED_AT = CURRENT_TIMESTAMP()
             WHEN MATCHED AND T.ERROR_EXCERPT IS NULL AND S.ERROR_EXCERPT IS NOT NULL THEN UPDATE SET ERROR_EXCERPT = S.ERROR_EXCERPT,
-                 LOADED_AT = CURRENT_TIMESTAMP()
+                 EXCERPT_SOURCE = S.EXCERPT_SOURCE, LOADED_AT = CURRENT_TIMESTAMP()
             WHEN NOT MATCHED THEN INSERT (ENV_ID, DAG_ID, RUN_ID, TASK_ID, MAP_INDEX, TRY_NUMBER, STATE, OPERATOR, STARTED_AT,
-                 ENDED_AT, DURATION_S, HOSTNAME, LOG_REF, ERROR_EXCERPT, SOURCE, UPDATED_AT)
+                 ENDED_AT, DURATION_S, HOSTNAME, LOG_REF, ERROR_EXCERPT, EXCERPT_SOURCE, SOURCE, UPDATED_AT)
                  VALUES (S.ENV_ID, S.DAG_ID, S.RUN_ID, S.TASK_ID, S.MAP_INDEX, S.TRY_NUMBER, S.STATE, S.OPERATOR, S.STARTED_AT,
-                 S.ENDED_AT, S.DURATION_S, S.HOSTNAME, S.LOG_REF, S.ERROR_EXCERPT, S.SOURCE, S.UPDATED_AT)""",
+                 S.ENDED_AT, S.DURATION_S, S.HOSTNAME, S.LOG_REF, S.ERROR_EXCERPT, S.EXCERPT_SOURCE, S.SOURCE, S.UPDATED_AT)""",
                    (json.dumps(chunk, default=str),))
     return len(rows)
 
@@ -244,11 +245,17 @@ def _fetch_tasks(mw: Mwaa, env_id: str, runs: List[Dict[str, Any]]) -> List[Dict
     return out
 
 
+_NEEDS_LOG_SQL = ("(ERROR_EXCERPT IS NULL OR (EXCERPT_SOURCE = 'PUSH' "
+                  "AND POSITION('Traceback (most recent call last)' IN ERROR_EXCERPT) = 0))")
+
+
 def fill_error_excerpts(db: Any, mw: Mwaa, env_id: str, limit: int = MAX_ERROR_LOGS) -> int:
-    """Failed tasks of the last day without an error excerpt: read the end of their log and store the redacted error."""
-    found = db.query("""
+    """Failed tasks of the last day without a full error: no excerpt yet, or only a short pushed one (an older listener
+    plugin sends just 'Class: message'). Read the end of their log, store the redacted error, and let a failure still
+    waiting to be resolved pick up the better error (services.resolve.engine.reparse)."""
+    found = db.query(f"""
         SELECT DAG_ID, RUN_ID, TASK_ID, MAP_INDEX, TRY_NUMBER FROM CORE.TASK_RUN
-         WHERE ENV_ID = %s AND STATE IN ('failed', 'up_for_retry') AND ERROR_EXCERPT IS NULL
+         WHERE ENV_ID = %s AND STATE IN ('failed', 'up_for_retry') AND {_NEEDS_LOG_SQL}
            AND COALESCE(ENDED_AT, UPDATED_AT) >= DATEADD(hour, -24, CURRENT_TIMESTAMP())
          ORDER BY COALESCE(ENDED_AT, UPDATED_AT) DESC LIMIT """ + str(int(limit)), (env_id,))
     filled = 0
@@ -259,11 +266,36 @@ def fill_error_excerpts(db: Any, mw: Mwaa, env_id: str, limit: int = MAX_ERROR_L
         except MwaaError:
             continue
         text = excerpt(log.get("text")) or "(the log has no error lines)"
-        db.execute("""UPDATE CORE.TASK_RUN SET ERROR_EXCERPT = %s, LOADED_AT = CURRENT_TIMESTAMP() WHERE ENV_ID = %s AND DAG_ID = %s AND RUN_ID = %s
-                         AND TASK_ID = %s AND MAP_INDEX = %s AND TRY_NUMBER = %s AND ERROR_EXCERPT IS NULL""",
+        db.execute(f"""UPDATE CORE.TASK_RUN SET ERROR_EXCERPT = %s, EXCERPT_SOURCE = 'LOG', LOADED_AT = CURRENT_TIMESTAMP()
+                        WHERE ENV_ID = %s AND DAG_ID = %s AND RUN_ID = %s AND TASK_ID = %s AND MAP_INDEX = %s
+                          AND TRY_NUMBER = %s AND {_NEEDS_LOG_SQL}""",
                    (text, env_id, t["dag_id"], t["run_id"], t["task_id"], t["map_index"], t["try_number"]))
         filled += 1
+        try:
+            from services.resolve.engine import reparse
+
+            reparse(db, env_id, t, text)
+        except Exception:
+            pass   # before V062, or nothing waiting: the excerpt is stored either way
     return filled
+
+
+DAG_LIST_MINUTES = 30
+
+
+def dag_list_due(db: Any, env_id: str, minutes: int = DAG_LIST_MINUTES) -> bool:
+    """True when the environment's DAG list was last read `minutes` ago or more (or never, or it cannot tell), or when
+    a run of a DAG not listed yet arrived in the last hour (a placeholder row from ensure_dags, without its file)."""
+    try:
+        found = db.query("""SELECT DATEDIFF(minute, MAX(IFF(FILELOC IS NOT NULL, LAST_SEEN_AT, NULL)), CURRENT_TIMESTAMP()) AS AGE_MIN,
+                                   COUNT_IF(FILELOC IS NULL AND COALESCE(IS_ACTIVE, TRUE)
+                                            AND LAST_SEEN_AT >= DATEADD(hour, -1, CURRENT_TIMESTAMP())) AS NEW_DAGS
+                              FROM CORE.DAG WHERE ENV_ID = %s""", (env_id,))
+        row = found[0] if found else {}
+        age = row.get("age_min")
+        return age is None or int(age) >= int(minutes) or int(row.get("new_dags") or 0) > 0
+    except Exception:
+        return True
 
 
 def poll_env(db: Any, env: Dict[str, Any], client: Optional[Mwaa] = None, now: Optional[str] = None,
@@ -275,8 +307,10 @@ def poll_env(db: Any, env: Dict[str, Any], client: Optional[Mwaa] = None, now: O
     mw = client or client_for(env)
     info = mw.version()
 
-    dags, complete = mw.all_dags()
-    upsert_dags(db, [dag_row(env_id, d) for d in dags])
+    # the DAG list changes rarely: read it at most every DAG_LIST_MINUTES; DAGs first seen in a run are added below
+    dags, complete = mw.all_dags() if dag_list_due(db, env_id) else ([], False)
+    if dags:
+        upsert_dags(db, [dag_row(env_id, d) for d in dags])
     if complete and dags:
         mark_missing_inactive(db, env_id, [str(d["dag_id"]) for d in dags])
 
@@ -331,6 +365,9 @@ def poll_env(db: Any, env: Dict[str, Any], client: Optional[Mwaa] = None, now: O
     from services.ops.deps import refresh_if_due
 
     dependencies = refresh_if_due(db, mw, env_id)   # at most every 30 minutes; never fails the poll
+    from services.ops import catalog
+
+    cataloged = catalog.refresh_if_due(db, mw, env_id)   # new DAGs at once, the rest every 6 hours; never fails the poll
 
     if later:
         cursor = later[0].get("updated_at") or since
@@ -348,6 +385,8 @@ def poll_env(db: Any, env: Dict[str, Any], client: Optional[Mwaa] = None, now: O
                "complete": paged_all and not later}
     if dependencies is not None:
         summary["dependencies"] = dependencies
+    if cataloged and (cataloged.get("changed") or cataloged.get("problems")):
+        summary["catalogue"] = cataloged
     try:
         record_event(db, f"poll:{env_id}:{started}", env_id, "POLL", "poll", summary)
     except Exception:

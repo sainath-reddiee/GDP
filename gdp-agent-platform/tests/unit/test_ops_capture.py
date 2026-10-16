@@ -459,8 +459,9 @@ def test_plugin_payloads_and_config(monkeypatch):
     assert kind == "dag_run" and row["state"] == "running"
     ti = Obj(dag_id="d", run_id="r", task_id="t", map_index=-1, try_number=2, task=Obj(), start_date=None, end_date=None,
              duration=None, hostname="h")
-    payload = plugin.task_payload(ti, "failed", ValueError("bad " * 1000))
-    assert payload["operator"] == "Obj" and payload["error"].startswith("ValueError") is False and len(payload["error"]) == 2000
+    payload = plugin.task_payload(ti, "failed", ValueError("bad " * 2000))
+    assert payload["operator"] == "Obj" and payload["error"].startswith("ValueError") is False
+    assert len(payload["error"]) == plugin.ERROR_MAX and "sql" not in payload
     assert push_row("prod", payload)[1]["try_number"] == 2
     for key in ("GDP_INGEST_URL", "GDP_ENV_ID", "GDP_PUSH_SECRET", "AIRFLOW__GDP__INGEST_URL", "AIRFLOW__GDP__ENV_ID",
                 "AIRFLOW__GDP__PUSH_SECRET"):

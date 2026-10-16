@@ -3,13 +3,13 @@
 import Link from "next/link";
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { Check, CircleCheck, KeyRound, Loader2, Pencil, Plug, Plus, RefreshCw, ShieldCheck, Trash2, Workflow, X } from "lucide-react";
+import { Check, CircleCheck, KeyRound, ListTree, Loader2, Pencil, Plug, Plus, RefreshCw, ShieldCheck, Trash2, Workflow, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { CopyButton } from "../runs/[runId]/dbt/studio-ui";
 import {
-  createEnv, deleteEnv, pollEnv, rotatePushSecret, testEnv, updateEnv,
+  createEnv, deleteEnv, pollEnv, refreshCatalog, rotatePushSecret, testEnv, updateEnv,
   type AirflowEnv, type EnvInput, type EnvTest, type PushSecret,
 } from "../ops/actions";
 import { explain, When } from "../ops/ops-shared";
@@ -64,7 +64,11 @@ export function AirflowTab({ envs, error, may, canPoll, onMsg }: {
         <p className="text-muted-foreground">Scope them to the environment and its log groups. When a call is refused, the message names the missing action.</p>
         <h3 className="pt-2 text-sm font-semibold">Polling and push</h3>
         <p className="text-muted-foreground">Polling alone is enough, and is the only option when MWAA runs on a private network that cannot reach this app.
-          Push adds near real time events: the gdp_listener plugin posts each DAG and task state change, signed with the environment&apos;s push secret.</p>
+          Push adds near real time events: the gdp_listener plugin posts each DAG and task state change, signed with the environment&apos;s push secret.
+          While pushes arrive, the environment is polled every 30 minutes as a safety net, and at its own interval only around the times its DAGs are scheduled.</p>
+        <h3 className="pt-2 text-sm font-semibold">Task catalogue</h3>
+        <p className="text-muted-foreground">Each poll reads the source of new DAGs, and of every DAG every 6 hours, to record what each task runs and the tables
+          it reads and writes. Root-cause analysis and fix proposals use it, so they do not depend on the log showing the statement.</p>
       </section>
     </div>
   );
@@ -75,7 +79,7 @@ function EnvRow({ env: e, may, canPoll, onEdit, onMsg }: {
 }) {
   const router = useRouter();
   const [pending, start] = useTransition();
-  const [busy, setBusy] = useState<"test" | "poll" | "delete" | "secret" | null>(null);
+  const [busy, setBusy] = useState<"test" | "poll" | "catalog" | "delete" | "secret" | null>(null);
   const [test, setTest] = useState<EnvTest | null>(null);
   const [confirm, setConfirm] = useState<"delete" | "secret" | null>(null);
   const [secret, setSecret] = useState<PushSecret | null>(null);
@@ -93,6 +97,11 @@ function EnvRow({ env: e, may, canPoll, onEdit, onMsg }: {
     onMsg(r.ok ? { tone: "ok", text: r.data.detail || (r.data.started ? `Polling ${e.name} now.` : `A poll of ${e.name} is already running.`) }
       : { tone: toneOf(r.error), text: explain(r.error) });
     if (r.ok) router.refresh();
+  });
+  const doCatalog = () => run("catalog", async () => {
+    const r = await refreshCatalog(e.env_id);
+    onMsg(r.ok ? { tone: "ok", text: r.data.detail || (r.data.started ? `Reading the DAG sources of ${e.name}.` : `The catalogue of ${e.name} is already being refreshed.`) }
+      : { tone: toneOf(r.error), text: explain(r.error) });
   });
   const doDelete = () => run("delete", async () => {
     const r = await deleteEnv(e.env_id);
@@ -133,6 +142,11 @@ function EnvRow({ env: e, may, canPoll, onEdit, onMsg }: {
           {canPoll && (
             <Button variant="outline" size="sm" disabled={pending || !e.enabled} onClick={doPoll} title={e.enabled ? undefined : "The environment is disabled"}>
               {busy === "poll" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}Poll now</Button>
+          )}
+          {canPoll && (
+            <Button variant="outline" size="sm" disabled={pending || !e.enabled} onClick={doCatalog}
+                    title="Read every DAG source again: tasks, the SQL they run and the tables they read and write">
+              {busy === "catalog" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ListTree className="h-3.5 w-3.5" />}Refresh catalogue</Button>
           )}
           {may && <>
             <Button variant="outline" size="sm" disabled={pending} onClick={onEdit}><Pencil className="h-3.5 w-3.5" />Edit</Button>

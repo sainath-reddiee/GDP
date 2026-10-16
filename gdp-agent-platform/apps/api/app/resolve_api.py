@@ -76,7 +76,8 @@ def summary(db: Db = Depends(current_db)):
         "SELECT OUTCOME, COUNT(*) AS N FROM CORE.RESOLUTION_RUN WHERE STARTED_AT >= DATEADD(day, -30, CURRENT_TIMESTAMP()) "
         "GROUP BY OUTCOME")}
     return {"enabled": prefs["auto_resolve_enabled"], "preference": prefs, "statuses": counts, "fixes": fixes,
-            "approvals_open": int(a.get("n") or 0), "approvals_mine": int(a.get("mine") or 0), "runs": runs}
+            "approvals_open": int(a.get("n") or 0), "approvals_mine": int(a.get("mine") or 0), "runs": runs,
+            "recurring": [_out(r) for r in publish.recurring(db, limit=5)]}
 
 
 @router.get("/api/ops/resolve/failures")

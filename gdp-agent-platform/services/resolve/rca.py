@@ -108,6 +108,16 @@ def failure_context_entry(session: Any, failure_id: str) -> Dict[str, Any]:
             out["incident"] = {"title": r.get("title"), "severity": r.get("severity"), "occurrences": r.get("occurrences"),
                                "first_seen": str(r.get("first_seen")), "ai_summary": r.get("ai_summary"),
                                "error_excerpt": redact(str(r.get("error_excerpt") or ""))[-3000:]}
+    try:   # what the task runs, the tables it reads and who writes them, and the runbooks the error matches
+        from services.ops import pipeline
+
+        error = (f"{failure.get('exception_class') or ''}: {failure.get('exception_text') or ''}\n"
+                 + str((out.get("incident") or {}).get("error_excerpt") or ""))
+        found = pipeline.facts(db, failure.get("env_id"), failure.get("dag_id"), failure.get("task_id"),
+                               failure.get("run_id"), error)
+        out["pipeline"] = pipeline.text(found) or None
+    except Exception:
+        out["pipeline"] = None
     return json.loads(json.dumps(out, default=str))
 
 

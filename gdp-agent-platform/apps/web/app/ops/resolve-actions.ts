@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { api, attemptValue } from "@/lib/api";
+import type { RecurringFix } from "@/components/ops/recurring-fixes";
 
 // ---------------------------------------------------------------- types (the /api/ops/resolve contract)
 
@@ -19,6 +20,7 @@ export type ResolveSummary = {
   enabled: boolean; preference: Preference; statuses: Partial<Record<FailureStatus, number>>;
   fixes: Partial<Record<"DRAFT" | "PUBLISHED" | "RETIRED", number>>; approvals_open: number; approvals_mine: number;
   runs: Partial<Record<"SUCCESS" | "FAILED" | "TICKETED", number>>;
+  /** known fixes that keep firing; absent on an older API */ recurring?: RecurringFix[];
 };
 export type FailureRow = {
   failure_id: string; env_id: string; incident_id: string | null; dag_id: string; task_id: string | null; run_id: string | null;
@@ -58,6 +60,7 @@ export type KnownFix = {
   created_at: string; published_by: string | null; published_at: string | null; updated_at: string;
   skill_name?: string | null; runs_ok?: number; runs_failed?: number; search_refresh?: string;
   proposed_by_agent?: boolean | null; rationale?: string | null;
+  /** the last 30 days */ runs_30d?: number | null; ok_30d?: number | null; dags_30d?: number | null; last_run_at?: string | null;
 };
 export type FixInput = Partial<Pick<KnownFix, "title" | "error_signature" | "dag_id" | "task_id" | "exception_class" | "match_text"
   | "fix_type" | "procedure_fqn" | "skill_id" | "approval_required" | "owner" | "notes" | "source_incident_id" | "source_failure_id">>;

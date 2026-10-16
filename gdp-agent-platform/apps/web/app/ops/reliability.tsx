@@ -6,6 +6,7 @@ import { Loader2 } from "lucide-react";
 import { Select } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { Alert, useSeq } from "../qa/qa-shared";
+import { RecurringFixes } from "@/components/ops/recurring-fixes";
 import { reliability, type Reliability } from "./actions";
 import { dagHref } from "./ops-board";
 import { explain, pct, pctTone, When } from "./ops-shared";
@@ -151,6 +152,8 @@ export function ReliabilityView({ initialDays, initialTeam, initial, initialErro
               ) : <p className="px-4 py-8 text-center text-sm text-muted-foreground">No failure repeated in this period.</p>}
             </section>
           </div>
+
+          {data.recurring_fixes && <RecurringFixes items={data.recurring_fixes} days={Math.max(30, data.period.days)} />}
 
           <section className="surface flex flex-wrap items-center gap-x-6 gap-y-1 px-4 py-3 text-xs">
             <h2 className="text-sm font-semibold">AI diagnoses</h2>

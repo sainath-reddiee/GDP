@@ -50,8 +50,16 @@ def run_step(db: Any, database: str, resolution_id: str, failure_id: str, steps:
     if step_no not in by_no:
         raise ValueError(f"the skill has no step {step_no}")
     done = steps_done(db, resolution_id)
-    if step_no in done:
-        return {"step_no": step_no, "status": done[step_no], "output": "already ran"}
+    if step_no in done:   # the resolution agent ran it already: report what it did, not just that it ran
+        found = db.query("SELECT OUTPUT FROM CORE.RESOLUTION_STEP WHERE RESOLUTION_ID = %s AND STEP_NO = %s",
+                         (resolution_id, step_no))
+        stored = found[0].get("output") if found else None
+        if isinstance(stored, str):
+            try:
+                stored = json.loads(stored)
+            except ValueError:
+                pass
+        return {"step_no": step_no, "status": done[step_no], "output": stored if stored not in (None, "") else "already ran"}
     earlier = [n for n in by_no if n < step_no]
     if earlier and done.get(max(earlier)) != "SUCCESS":
         raise ValueError(f"step {max(earlier)} has not succeeded yet")

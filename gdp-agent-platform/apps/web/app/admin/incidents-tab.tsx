@@ -109,6 +109,8 @@ function SettingsForm({ state, may, onMsg, onSaved }: { state: OpsSettings; may:
   const [base, setBase] = useState(state.public_base_url ?? "");
   const [aiAuto, setAiAuto] = useState(!!state.ai_auto);
   const [aiSev, setAiSev] = useState<string[]>(state.ai_severities ?? ["P1", "P2"]);
+  const [ticketFixes, setTicketFixes] = useState(state.ticket_auto_fixes ?? true);
+  const [closeFixed, setCloseFixed] = useState(state.close_auto_fixed ?? true);
   const [origin, setOrigin] = useState("");
   const [error, setError] = useState("");
   const [pending, start] = useTransition();
@@ -116,7 +118,7 @@ function SettingsForm({ state, may, onMsg, onSaved }: { state: OpsSettings; may:
   const hours = Number(reopen);
   const badHours = !Number.isInteger(hours) || hours < 0 || hours > 720;
   const badBase = !!base.trim() && !/^https?:\/\/[^\s/]+(\/\S*)?$/i.test(base.trim());
-  const badDone = transition && !done.trim();
+  const badDone = (transition || closeFixed) && !done.trim();
   const badSev = aiAuto && !aiSev.length;
   const toggleSev = (s: string) => setAiSev((v) => (v.includes(s) ? v.filter((x) => x !== s) : SEVERITIES.filter((x) => x === s || v.includes(x))));
   const save = () => start(async () => {
@@ -124,7 +126,7 @@ function SettingsForm({ state, may, onMsg, onSaved }: { state: OpsSettings; may:
     const r = await saveOpsSettings({
       reopen_hours: hours, alert_on_retry_for_critical: retryCritical, transition_on_resolve: transition,
       done_status: done.trim() || null, public_base_url: base.trim().replace(/\/+$/, "") || null,
-      ai_auto: aiAuto, ai_severities: aiSev,
+      ai_auto: aiAuto, ai_severities: aiSev, ticket_auto_fixes: ticketFixes, close_auto_fixed: closeFixed,
     });
     if (!r.ok) { failed(r.error, onMsg, setError); return; }
     onMsg({ tone: "ok", text: "Incident settings saved." });
@@ -163,8 +165,16 @@ function SettingsForm({ state, may, onMsg, onSaved }: { state: OpsSettings; may:
             <span>Move the Jira ticket when the incident resolves</span>
           </label>
           <label className="space-y-1 text-xs font-medium">Done status in Jira
-            <Input value={done} onChange={(e) => setDone(e.target.value)} placeholder="Done" className="text-xs" disabled={!transition} aria-invalid={badDone} />
+            <Input value={done} onChange={(e) => setDone(e.target.value)} placeholder="Done" className="text-xs" disabled={!transition && !closeFixed} aria-invalid={badDone} />
             {badDone && <span role="alert" className="block font-normal text-destructive">Name the status to move tickets to.</span>}
+          </label>
+          <label className="flex items-start gap-2 text-xs">
+            <input type="checkbox" className="mt-0.5" checked={ticketFixes} onChange={(e) => setTicketFixes(e.target.checked)} />
+            <span>Raise a ticket for automatic fixes <span className="block text-muted-foreground">When a known fix repairs a failure, the ticket records the cause, the fix and the rerun.</span></span>
+          </label>
+          <label className="flex items-start gap-2 text-xs">
+            <input type="checkbox" className="mt-0.5" checked={closeFixed} onChange={(e) => setCloseFixed(e.target.checked)} />
+            <span>Close it when the rerun succeeds <span className="block text-muted-foreground">Moves the ticket of an automatically fixed incident to the done status, whatever the setting above says.</span></span>
           </label>
           <label className="flex items-start gap-2 text-xs md:col-span-2">
             <input type="checkbox" className="mt-0.5" checked={aiAuto} onChange={(e) => setAiAuto(e.target.checked)} />

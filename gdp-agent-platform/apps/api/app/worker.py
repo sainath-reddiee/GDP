@@ -2,7 +2,9 @@
 on the API host or in its own container with the same environment).
 
 Jobs, each guarded by an CORE.JOB_LEASE so exactly one holder runs it at a time across processes and replicas:
-  poll:<env_id>  incremental capture of one MWAA environment, every POLL_SECONDS (services.ops.store.poll_env)
+  poll:<env_id>  incremental capture of one Airflow environment, every POLL_SECONDS (services.ops.store.poll_env);
+                 with push live, every 30 minutes outside its DAGs' run windows (services.ops.schedule); each poll
+                 also catalogues new and changed DAG sources (services.ops.catalog)
   detect         incidents for runs and task runs loaded since its cursor (every tick, after the polls)
   outbox         Jira bot actions from CORE.NOTIFICATION, with retries (every 30 s)
   escalate       unacknowledged incidents and ended mutes (every 60 s)
@@ -11,6 +13,8 @@ Jobs, each guarded by an CORE.JOB_LEASE so exactly one holder runs it at a time 
   diagnose       AI diagnosis of new OPEN incidents (settings ai_auto, ai_severities; at most 5 per run; every 60 s)
   case_triage    AI triage of NEW cases (CORE.PLATFORM_CONFIG CASES: auto_triage, auto_triage_severities, default
                  P1 to P3); at most 3 per run, skipping cases attempted in the last 30 minutes; every 30 s
+  resolve        failure resolution (services.resolve.bridge), every 15 s, and at the next tick when a pushed failure
+                 sets the wake:resolve flag
   retention      purges raw CORE.EVENT rows after 30 days (every 6 hours)
 The worker uses worker_db(): its own non-shared connection (the named dev connection in dev mode, else the key-pair
 service user from AIP_SERVICE_USER, AIP_SERVICE_KEY_PATH), so incident writes run in transactions. AWS credentials come from the host's default chain (role, AWS_PROFILE). A heartbeat row
@@ -58,13 +62,29 @@ def load_env(db: Any, env_id: str) -> Optional[Dict[str, Any]]:
     return found[0] if found else None
 
 
-def due_envs(db: Any) -> List[Dict[str, Any]]:
+def due_envs(db: Any, state: Optional[Callable[[str], Dict[str, bool]]] = None) -> List[Dict[str, Any]]:
     """Enabled environments whose last attempt is older than their poll interval (database clock, so every worker
-    agrees)."""
-    return db.query("""SELECT ENV_ID, NAME, KIND, MWAA_ENV, REGION, AIRFLOW_URL, POLL_SECONDS, CURSOR_VALUE FROM CORE.AIRFLOW_ENV
+    agrees). With `state` (env id -> {push_live, in_window}), an environment that pushes is polled at the safety
+    interval outside its DAGs' run windows (services.ops.schedule)."""
+    from services.ops.schedule import MIN_POLL_SECONDS, effective_interval
+
+    rows = db.query("""SELECT ENV_ID, NAME, KIND, MWAA_ENV, REGION, AIRFLOW_URL, POLL_SECONDS, CURSOR_VALUE, PUSH_ENABLED,
+                              DATEDIFF(second, LAST_ATTEMPT_AT, CURRENT_TIMESTAMP()) AS AGE_S FROM CORE.AIRFLOW_ENV
                         WHERE ENABLED AND (LAST_ATTEMPT_AT IS NULL
-                              OR DATEDIFF(second, LAST_ATTEMPT_AT, CURRENT_TIMESTAMP()) >= COALESCE(POLL_SECONDS, 300))
-                        ORDER BY LAST_ATTEMPT_AT NULLS FIRST""")
+                              OR DATEDIFF(second, LAST_ATTEMPT_AT, CURRENT_TIMESTAMP()) >= GREATEST(COALESCE(POLL_SECONDS, 300), %s))
+                        ORDER BY LAST_ATTEMPT_AT NULLS FIRST""", (MIN_POLL_SECONDS,))
+    out = []
+    for env in rows:
+        age = env.get("age_s")
+        if age is not None and state is not None and env.get("push_enabled"):
+            try:
+                found = state(env["env_id"])
+            except Exception:
+                found = {"push_live": False, "in_window": True}
+            if int(age) < effective_interval(env.get("poll_seconds"), found["push_live"], found["in_window"]):
+                continue
+        out.append(env)
+    return out
 
 
 def _error_text(exc: BaseException) -> str:
@@ -122,11 +142,49 @@ def poll_now(env_id: str, db_factory: Callable[[], Any] = system_db) -> Dict[str
     return {"started": True, "detail": "Polling started. New runs show up when it finishes (usually under a minute)."}
 
 
+def catalog_now(env_id: str, db_factory: Callable[[], Any] = system_db) -> Dict[str, Any]:
+    """Rebuild the environment's task catalogue in a background thread ("Refresh catalogue" in Admin): every DAG's
+    source is read again, whatever its hash."""
+    key = f"catalog:{env_id}"
+    with _manual_lock:
+        running = _manual.get(key)
+        if running and running.is_alive():
+            return {"started": False, "detail": "The catalogue of this environment is already being refreshed."}
+        try:
+            db = db_factory()
+        except SnowflakeSessionError as exc:
+            return {"started": False, "detail": str(exc)}
+
+        def work() -> None:
+            from services.ops import catalog
+            from services.ops.mwaa import client_for
+
+            try:
+                env = load_env(db, env_id)
+                if env is None:
+                    return
+                result = catalog.refresh(db, client_for(env), env_id, force=True, limit=CATALOG_ALL)
+                log.info("catalogue %s: %s DAGs read, %s changed, %s tasks", env_id, result["dags"],
+                         len(result["changed"]), result["tasks"])
+            except Exception as exc:  # never kill the API process
+                log.warning("catalogue %s failed: %s", env_id, _error_text(exc))
+
+        thread = threading.Thread(target=work, name=f"ops-catalog:{env_id}", daemon=True)
+        _manual[key] = thread
+        thread.start()
+    return {"started": True, "detail": "Reading every DAG source again. Tasks and DAG profiles update when it finishes."}
+
+
+CATALOG_ALL = 2000
+
+
 # ---------------------------------------------------------------- incidents (PR O2)
 
 DETECT_OVERLAP = timedelta(minutes=2)
 INTERVALS = {"outbox": 30, "escalate": 60, "sla": 120, "jira_sync": 300, "diagnose": 60, "case_triage": 30,
              "resolve": 15}
+WAKEABLE = {"resolve"}   # the push ingest wakes it (lease.wake), so a pushed failure is handled in seconds
+STATE_SECONDS = 300
 
 
 def _store(db: Any):
@@ -275,6 +333,19 @@ class Worker:
         self.tick = tick
         self.stop = threading.Event()
         self._last: Dict[str, float] = {}
+        self._states: Dict[str, Tuple[float, Dict[str, bool]]] = {}
+
+    def env_state(self, db: Any, env_id: str) -> Dict[str, bool]:
+        """{push_live, in_window} of an environment, read again every STATE_SECONDS (schedules change rarely)."""
+        from services.ops.schedule import env_state
+
+        now = time.monotonic()
+        cached = self._states.get(env_id)
+        if cached and now - cached[0] < STATE_SECONDS:
+            return cached[1]
+        found = env_state(db, env_id, datetime.now().astimezone())
+        self._states[env_id] = (now, found)
+        return found
 
     def _every(self, name: str, seconds: float) -> bool:
         now = time.monotonic()
@@ -303,7 +374,7 @@ class Worker:
                       WHEN MATCHED THEN UPDATE SET LAST_RUN_AT = CURRENT_TIMESTAMP(), CURSOR_VALUE = %s
                       WHEN NOT MATCHED THEN INSERT (JOB_NAME, LAST_RUN_AT, CURSOR_VALUE) VALUES ('worker', CURRENT_TIMESTAMP(), %s)""",
                    (HOLDER, HOLDER))
-        for env in due_envs(db):
+        for env in due_envs(db, lambda env_id: self.env_state(db, env_id)):
             if self.stop.is_set():
                 return
             result = run_poll(db, env["env_id"])
@@ -314,7 +385,10 @@ class Worker:
                          ("diagnose", diagnose), ("case_triage", case_triage), ("resolve", resolve)):
             if self.stop.is_set():
                 return
-            if self._every(name, INTERVALS[name]):
+            due = self._every(name, INTERVALS[name])
+            if name in WAKEABLE and lease.take_wake(db, name):   # a pushed failure: resolve now, not in 15 s
+                due = True
+            if due:
                 self._safe(db, name, fn)
         if self._every("retention", RETENTION_EVERY):
             self._guarded(db, "retention", retention)

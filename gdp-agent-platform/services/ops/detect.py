@@ -38,6 +38,8 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
     "public_base_url": None,
     # PR O3: automatic AI diagnosis of new incidents of these severities
     "ai_auto": True, "ai_severities": ["P1", "P2", "P3"],
+    # an automatic fix raises a Jira ticket with the cause and the fix, and closes it when the rerun succeeds
+    "ticket_auto_fixes": True, "close_auto_fixed": True,
 }
 
 
@@ -50,6 +52,8 @@ _QUOTED = re.compile(r"'[^'\n]*'|\"[^\"\n]*\"|`[^`\n]*`")
 _PATH = re.compile(r"(?:[A-Za-z]:\\|\\\\|(?<![\w:])/|\b(?:s3|gs|hdfs|file)://)[^\s,;:)'\"]+")
 _NUMBER = re.compile(r"(?<![A-Za-z_])[-+]?\d+(?:[.,]\d+)*")
 _EXCEPTION = re.compile(r"^[A-Za-z_][\w.]*(Error|Exception|Exit|Interrupt|Failure|Timeout|Warning)\b.*")
+_ROLE_HINT = re.compile(r"\s*Your primary role \S+ or one of your secondary roles must have at least one privilege granted on"
+                        r"\s+\w+\s+\S+?\.?(?=\s|$)", re.I)
 
 
 def last_exception_line(text: Optional[str]) -> str:
@@ -65,8 +69,9 @@ def last_exception_line(text: Optional[str]) -> str:
 
 def signature(text: Optional[str]) -> str:
     """The error's stable shape: the last exception line with times, ids, hex, paths, quoted literals and numbers
-    replaced by placeholders, lower case, single spaces."""
-    line = last_exception_line(text)
+    replaced by placeholders, lower case, single spaces. Snowflake's privilege hint, which names the session's role,
+    is dropped, so the same failure has the same shape whichever role ran it."""
+    line = _ROLE_HINT.sub("", last_exception_line(text))
     for pattern, repl in ((_TIMESTAMP, "<ts>"), (_UUID, "<id>"), (_QUOTED, "<str>"), (_PATH, "<path>"), (_HEX, "<hex>"),
                           (_NUMBER, "<n>")):
         line = pattern.sub(repl, line)
@@ -186,6 +191,33 @@ def prev_fire(expr: str, now: datetime, tz: Optional[str] = None) -> Optional[da
             for m in reversed(spec["minute"]):
                 at = candidate_day.replace(hour=h, minute=m)
                 if at <= local:
+                    return at.astimezone(timezone.utc)
+    return None
+
+
+def next_fire(expr: str, now: datetime, tz: Optional[str] = None) -> Optional[datetime]:
+    """The first time after `now` matching the cron expression, read in timezone `tz` (UTC when empty or unknown).
+    Returned in UTC. Uses croniter when it is installed."""
+    zone = _zone(tz)
+    local = now.astimezone(zone)
+    try:
+        from croniter import croniter  # type: ignore
+
+        found = croniter(_ALIASES.get(expr.strip().lower(), expr), local).get_next(datetime)
+        return found.astimezone(timezone.utc)
+    except ImportError:
+        pass
+    spec = parse_cron(expr)
+    start = (local + timedelta(minutes=1)).replace(second=0, microsecond=0)
+    day = start.replace(hour=0, minute=0)
+    for ahead in range(0, 370):
+        candidate_day = day + timedelta(days=ahead)
+        if not _day_matches(spec, candidate_day):
+            continue
+        for h in spec["hour"]:
+            for m in spec["minute"]:
+                at = candidate_day.replace(hour=h, minute=m)
+                if at >= start:
                     return at.astimezone(timezone.utc)
     return None
 

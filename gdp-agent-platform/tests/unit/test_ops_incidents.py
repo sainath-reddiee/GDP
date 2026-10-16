@@ -155,6 +155,9 @@ class MemoryStore:
     def kinds(self, incident_id):
         return [e["kind"] for e in self.events if e["incident_id"] == incident_id]
 
+    def has_event(self, incident_id, kind):
+        return kind in self.kinds(incident_id)
+
     def notes_for(self, incident_id, channel=None):
         return [n for n in self.notes if n["incident_id"] == incident_id and (channel is None or n["channel"] == channel)]
 
@@ -463,6 +466,19 @@ def test_auto_resolve_on_a_later_success():
     inc.process(s2, [], [task()], s2.settings(), NOW)
     inc.process(s2, [], [task(run="r0", state="success", ended=NOW - timedelta(hours=1))], s2.settings(), NOW)
     assert next(iter(s2.incidents.values()))["status"] == "OPEN"
+
+
+def test_a_failure_read_with_the_success_before_it_reopens_the_incident():
+    """The rerun's success and the next run's failure land in one poll: the incident resolves at the success, so the
+    newer failure reopens it instead of being dropped as stale."""
+    s = store_with_dag()
+    inc.process(s, [], [task()], s.settings(), NOW)
+    iid = next(iter(s.incidents))
+    success, failure, read = NOW + timedelta(minutes=5), NOW + timedelta(minutes=6), NOW + timedelta(minutes=7)
+    inc.process(s, [], [task(run="r2", state="success", ended=success)], s.settings(), read)
+    assert s.incidents[iid]["status"] == "RESOLVED" and s.incidents[iid]["resolved_at"] == success.isoformat()
+    inc.process(s, [], [task(run="r3", ended=failure)], s.settings(), read)
+    assert s.incidents[iid]["status"] == "OPEN" and "stale" not in s.kinds(iid)
 
 
 def test_sla_job_opens_late_once():

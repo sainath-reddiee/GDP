@@ -359,6 +359,23 @@ def poll_env_now(env_id: str, db: Db = Depends(current_db)):
         return result
 
 
+@router.post("/api/ops/envs/{env_id}/catalog")
+def refresh_catalog(env_id: str, db: Db = Depends(current_db)):
+    """Read every DAG source of the environment again and rebuild its task catalogue and DAG profiles (in the
+    background; normally the poller does this for new DAGs at once and for the rest every 6 hours)."""
+    from app import worker
+
+    _env(db, env_id)
+    try:
+        system_db()
+        return worker.catalog_now(env_id)
+    except SnowflakeSessionError:
+        result = worker.catalog_now(env_id, db_factory=lambda: db)
+        if result.get("started"):
+            result["detail"] += " It runs with your Snowflake session because no service user is configured."
+        return result
+
+
 @router.post("/api/ops/envs/{env_id}/push-secret")
 def rotate_push_secret(env_id: str, db: Db = Depends(current_db), x_aip_replay: Optional[str] = Header(default=None)):
     """A new push secret, returned once. The old one stops working immediately."""
@@ -524,6 +541,28 @@ def get_dag(env_id: str, dag_id: str, db: Db = Depends(current_db)):
         raise HTTPException(404, f"DAG {dag_id} not found in {env_id}")
     runs = _q(db, _RUNS_SQL.format(extra="", limit=RUN_LIMIT), (env_id, dag_id, env_id, dag_id))
     return {"dag": _with_counts(db, found[:1], True, env_id, dag_id)[0], "runs": [_run_out(r) for r in runs]}
+
+
+@router.get("/api/ops/dag/tasks")
+def get_dag_tasks(env_id: str, dag_id: str, db: Db = Depends(current_db)):
+    """The DAG's task catalogue (services.ops.catalog, from the DAG source): each task's operator, the SQL it runs, the
+    tables it reads and writes, its dbt models and SnapLogic pipeline, in run order."""
+    from services.ops.dag_profile import task_order
+
+    try:
+        rows = db.query("""SELECT TASK_ID, OPERATOR, UPSTREAM, DOWNSTREAM, SQL_TEXT, READS, WRITES, DBT_SELECTORS,
+                                  SNAPLOGIC_PIPELINE, SOURCE_PATH, UPDATED_AT FROM CORE.DAG_TASK
+                            WHERE ENV_ID = %s AND DAG_ID = %s ORDER BY TASK_ID""", (env_id, dag_id))
+        stamp = db.query("SELECT CATALOGED_AT FROM CORE.DAG WHERE ENV_ID = %s AND DAG_ID = %s", (env_id, dag_id))
+    except Exception:   # before V064: no catalogue yet
+        return {"tasks": [], "cataloged_at": None, "available": False}
+    tasks = [{"task_id": r["task_id"], "operator": r.get("operator"), "upstream": _list(r.get("upstream")),
+              "downstream": _list(r.get("downstream")), "sql_text": r.get("sql_text"), "reads": _list(r.get("reads")),
+              "writes": _list(r.get("writes")), "dbt_selectors": _list(r.get("dbt_selectors")),
+              "snaplogic_pipeline": r.get("snaplogic_pipeline"), "source_path": r.get("source_path"),
+              "updated_at": _iso(r.get("updated_at"))} for r in rows]
+    return {"tasks": task_order(tasks), "cataloged_at": _iso(stamp[0].get("cataloged_at")) if stamp else None,
+            "available": True}
 
 
 @router.put("/api/ops/dag")
@@ -728,6 +767,10 @@ def ingest_event(db: Db, env_id: str, timestamp: str, event_id: str, signature: 
         detect_rows(db, [row] if kind == "dag_run" else [], [row] if kind != "dag_run" else [])
     except Exception:
         pass
+    if kind != "dag_run" and row.get("state") == "failed":   # the worker resolves it at its next tick
+        from services.ops import lease
+
+        lease.wake(db, "resolve")
     return {"ok": True, "event_id": event_id, "kind": kind}
 
 

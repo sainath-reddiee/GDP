@@ -486,6 +486,8 @@ def test_pushed_event_is_stored_redacted(monkeypatch):
     for leaked in ("hunter2", "ana@example.com", "wJalrXUtnFEMI", "ghp_abcdefghij"):
         assert leaked not in stored
     assert len(json.loads(stored)["error"]) <= 4000
+    assert any(s.startswith("UPDATE CORE.JOB_LEASE SET CURSOR_VALUE = 'WAKE'") and p == ("wake:resolve",)
+               for s, p in db.sent)   # a pushed failure wakes the resolver
 
 
 # ---------------------------------------------------------------- 9. the event id is signed
