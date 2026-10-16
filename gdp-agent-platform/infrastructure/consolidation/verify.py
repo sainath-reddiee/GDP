@@ -105,7 +105,10 @@ def data(args, cur, db: str, objects, checks: Checks) -> None:
             checks.eq(old, "PRIMARY_KEY", b["primary_key"], now["primary_key"])
             checks.eq(old, "FOREIGN_KEYS", norm_fks(b["foreign_keys"], moved_pairs),
                       norm_fks(now["foreign_keys"], moved_pairs))
-            for k in ("retention_time", "cluster_by", "change_tracking", "comment", "owner"):
+            # retention is raised on purpose after the baseline (the safety net), so it may only go up
+            checks.add(old, "RETENTION_NOT_LOWER", b.get("retention_time"), now.get("retention_time"),
+                       int(now.get("retention_time") or 0) >= int(b.get("retention_time") or 0))
+            for k in ("cluster_by", "change_tracking", "comment", "owner"):
                 checks.eq(old, k.upper(), b.get(k), now.get(k))
             checks.eq(old, "POLICIES", b["policies"], now["policies"])
             checks.eq(old, "GRANTS", mapped_grants(b["grants"]), mapped_grants(now["grants"]))
@@ -192,7 +195,7 @@ def functional(args, cur, db: str, objects, checks: Checks) -> None:
         elif kind in ("GIT REPOSITORY", "SECRET", "DBT PROJECT"):
             present = bool(try_q(cur, f"DESCRIBE {kind} {old}"))
             checks.add(old, "KEPT_IN_PLACE", True, present, present)
-        if kind in ("TABLE", "VIEW") and o["method"] == "RENAME":
+        if kind in ("TABLE", "VIEW") and o["method"] == "RENAME" and not args.no_compat_views:
             _, schema, name = split(old)
             if (schema, name) in NO_COMPAT_VIEW:
                 continue
@@ -216,6 +219,7 @@ def main() -> None:
     p.add_argument("phase", choices=("data", "functional"))
     p.add_argument("--backup-database", help="the zero-copy backup clone taken in P4")
     p.add_argument("--rehearsal", action="store_true")
+    p.add_argument("--no-compat-views", action="store_true", help="the runtime step created no compatibility views")
     args = p.parse_args()
     db = database_name(args)
     con = connect(args)

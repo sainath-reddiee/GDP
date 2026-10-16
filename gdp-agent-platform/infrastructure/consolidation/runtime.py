@@ -96,7 +96,7 @@ def apply(args, cur, db: str) -> int:
             notes.append(f"Owner of the external access integration: replace {o['old_fqn']} by {o['new_fqn']} in "
                          "ALLOWED_NETWORK_RULES (ALTER EXTERNAL ACCESS INTEGRATION <name> SET ALLOWED_NETWORK_RULES = "
                          "(...)). Not done by this script; the old rule keeps working meanwhile.")
-        elif kind in ("TABLE", "VIEW") and o["method"] == "RENAME":
+        elif kind in ("TABLE", "VIEW") and o["method"] == "RENAME" and not args.no_compat_views:
             schema, name = o["old_fqn"].split(".")[1:3]
             if (schema, name) in NO_COMPAT_VIEW:
                 continue
@@ -173,6 +173,8 @@ def main() -> None:
     p.add_argument("--source-database", default="",
                    help="rehearsal: the database the clone was made from (task bodies name it)")
     p.add_argument("--test-dbt-rename", action="store_true", help="rehearsal: rename one dbt project and compare versions")
+    p.add_argument("--no-compat-views", action="store_true",
+                   help="leave nothing under the old names (readers outside the app must switch to CORE at once)")
     args = p.parse_args()
     db = database_name(args)
     if args.rehearsal:

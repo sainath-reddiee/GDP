@@ -33,6 +33,8 @@ def main() -> None:
     p.add_argument("--role")
     p.add_argument("--retention-days", type=int, default=14)
     p.add_argument("--out", default=str(ROOT / "consolidation_runs"))
+    p.add_argument("--no-compat-views", action="store_true", help="leave nothing under the old schema names")
+    p.add_argument("--start-at", choices=("deploy",), help="continue after a data verification that was reviewed")
     args = p.parse_args()
     db = args.database.upper()
     assert IDENT.match(db) and not db.endswith(common.REHEARSAL_SUFFIX), "use rehearse.py for *_REHEARSAL clones"
@@ -82,6 +84,10 @@ def main() -> None:
         return log
 
     base = ["--connection", args.connection, "--database", db, "--out", args.out]
+    compat = ["--no-compat-views"] if args.no_compat_views else []
+    if args.start_at == "deploy":
+        report["resumed_at"] = "deploy"
+        return finish_from_deploy(step, deploy, base, compat, shared, finish, con)
     step("deploy --through 060 (manifest tables)", lambda: deploy(through="060"))
     step("freeze: suspend running tasks", lambda: run_script(runtime, ["freeze", *base, "--execute"], shared))
     step("baseline", lambda: run_script(baseline, base, shared))
@@ -117,10 +123,14 @@ def main() -> None:
     step("V061: move every platform object into CORE", lambda: deploy(consolidate=True, through="061"))
     step("verify data (rows, hashes, ids, files, grants vs backup)",
          lambda: run_script(verify, ["data", *base, "--backup-database", backup], shared))
+    finish_from_deploy(step, deploy, base, compat, shared, finish, con)
+
+
+def finish_from_deploy(step, deploy, base, compat, shared, finish, con) -> None:
     step("deploy (procedures, views, Cortex Search, agent, seed)", lambda: deploy(consolidate=True))
     step("runtime apply (task twins, network rule, compatibility views)",
-         lambda: run_script(runtime, ["apply", *base, "--execute"], shared))
-    step("verify functional", lambda: run_script(verify, ["functional", *base], shared))
+         lambda: run_script(runtime, ["apply", *base, "--execute", *compat], shared))
+    step("verify functional", lambda: run_script(verify, ["functional", *base, *compat], shared))
     step("resume the tasks that were running", lambda: run_script(runtime, ["resume", *base, "--execute"], shared))
     finish(True)
     con.close()
