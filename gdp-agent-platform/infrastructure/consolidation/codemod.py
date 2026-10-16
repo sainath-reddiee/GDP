@@ -21,12 +21,12 @@ sys.path.insert(0, str(ROOT))
 
 from services.common.platform_schema import MOVED, PLATFORM_SCHEMA  # noqa: E402
 
-DEFAULT_PATHS = ("services", "apps/api", "infrastructure", "snowflake", "tests", "docs", "airflow_plugins", "docker",
-                 "README.md")
+DEFAULT_PATHS = ("services", "apps/api", "apps/web", "infrastructure", "snowflake", "tests", "docs", "airflow_plugins",
+                 "docker", "README.md")
 TEMPLATE_DIRS = ("snowflake/procedures", "snowflake/views", "snowflake/cortex_search", "snowflake/agents")
 SKIP = ("snowflake/database/migrations/", "services/common/platform_schema.py",
         "infrastructure/consolidation/", "tests/unit/test_platform_schema.py")
-EXTS = {".py", ".sql", ".md", ".yaml", ".yml", ".json", ".j2", ".jinja", ".txt", ".toml"}
+EXTS = {".py", ".sql", ".md", ".yaml", ".yml", ".json", ".j2", ".jinja", ".txt", ".toml", ".ts", ".tsx"}
 
 _DB = r"(?:\{\{\s*database\s*\}\}|\{[^{}\s]+\}|\"[^\"]+\"|[A-Za-z_][A-Za-z0-9_$]*)"
 _NAMES = {}
@@ -68,7 +68,7 @@ def files(paths):
         candidates = [p] if p.is_file() else sorted(p.rglob("*")) if p.exists() else []
         for f in candidates:
             rel = f.relative_to(ROOT).as_posix()
-            if not f.is_file() or f.suffix not in EXTS or "__pycache__" in rel or "node_modules" in rel:
+            if not f.is_file() or f.suffix not in EXTS or any(x in rel for x in ("__pycache__", "node_modules", "/.next/")):
                 continue
             if any(rel.startswith(s) for s in SKIP):
                 continue

@@ -211,7 +211,7 @@ function Studio({
         : skeleton?.error ? skeleton.error : `${report?.skeleton_files ?? skeleton?.files ?? 0} files from ${where}`,
       tone: !generation ? "idle" : skeleton?.error ? "fail" : (report?.skeleton_files ?? skeleton?.files) ? "done" : "warn",
     },
-    { title: "Write compile-only project", detail: generation ? `${generation.files_generated} files · ${generation.stage_path}` : "@CODEGEN.DBT_STAGE",
+    { title: "Write compile-only project", detail: generation ? `${generation.files_generated} files · ${generation.stage_path}` : "@CORE.DBT_STAGE",
       tone: generation ? "done" : "idle" },
     {
       title: `Push ${pub?.head_branch || cutBranch}`,

@@ -297,7 +297,7 @@ export function ShareWizard({ shares, domains, databases, landing }: {
         <div className="space-y-4">
           <ol className="grid gap-2 text-sm md:grid-cols-5" aria-label="What happens">
             {[["Register", `${sourceName.toUpperCase()} as a share source`], ["Check access", `read ${picked.size} table${picked.size === 1 ? "" : "s"} in ${database}.${schema}`],
-              ["Unload", "each table once to Parquet on SOURCE.LANDING_STAGE"], ["Copy into landing", `${landingDb}.${landingSchema} with exact column types`],
+              ["Unload", "each table once to Parquet on CORE.LANDING_STAGE"], ["Copy into landing", `${landingDb}.${landingSchema} with exact column types`],
               ["Profile", "the run continues to profiling"]].map(([t, d], i) => {
               const done = result?.steps.find((s) => s.step === ["register", "access", "landing", "landing", "run"][i]);
               return (

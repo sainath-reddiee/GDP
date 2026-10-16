@@ -159,7 +159,7 @@ function ScheduleModal({ table, current, onClose }: { table: string; current: st
       <Label htmlFor="cron">Cron (five fields and an optional time zone)</Label>
       <Input id="cron" className="font-mono" value={cron} onChange={(e) => setCron(e.target.value)} />
       <p className="mt-2 text-xs text-muted-foreground">
-        Creates a Snowflake task that calls QUALITY.RUN_TABLE_SCAN on this table. The task runs as the platform owner role, which needs SELECT on the table.
+        Creates a Snowflake task that calls CORE.RUN_TABLE_SCAN on this table. The task runs as the platform owner role, which needs SELECT on the table.
       </p>
     </Modal>
   );

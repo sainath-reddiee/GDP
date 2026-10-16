@@ -9,9 +9,10 @@ repositories, stages, deploy rendering) use the helpers below.
 MOVED is the single source of truth for the consolidation: V061 (the renames), the compatibility views, the codemod,
 the verification and the rollback are all generated from it. It is data, never edited after V061 is applied.
 
-Secrets stay where they were created: Snowflake has no ALTER SECRET ... RENAME and a secret value cannot be read back.
-Existing git repository clones, dbt projects and secrets keep their names (the rows that store them stay valid); new
-ones are created in PLATFORM_SCHEMA. `resolve` therefore leaves those kinds alone.
+Secrets, git repository clones and dbt projects are not renamed by V061 (Snowflake has no RENAME for the first two and
+a secret value cannot be read back). New ones are created in PLATFORM_SCHEMA; existing ones are moved by
+infrastructure/consolidation/cleanup.py, which also re-points the rows that name them. `resolve` therefore leaves
+those kinds alone.
 """
 
 from __future__ import annotations

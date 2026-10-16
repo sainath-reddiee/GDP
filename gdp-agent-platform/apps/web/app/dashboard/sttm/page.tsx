@@ -32,7 +32,7 @@ export default async function SttmCatalog({ searchParams }: { searchParams: Para
         <Kpi label="Versions" value={versions} hint="on record for the mappings shown" icon={History} tone="slate" />
         <Kpi label="Approved" value={data.mappings.filter((m) => m.status === "APPROVED").length} hint="latest version approved" icon={Layers} tone="emerald" />
       </div>
-      {!data.deployed && <NotDeployed what="The STTM catalog (GOVERNANCE.STTM_CATALOG)" />}
+      {!data.deployed && <NotDeployed what="The STTM catalog (CORE.STTM_CATALOG)" />}
       <SttmFilters initial={{ q: searchParams.q ?? "", source: searchParams.source ?? "", target: searchParams.target ?? "", status: searchParams.status ?? "" }} />
       {!data.mappings.length ? (
         <EmptyState icon={GitCompareArrows} title="No mappings yet">Generate an STTM in a run; each version lands here automatically.</EmptyState>

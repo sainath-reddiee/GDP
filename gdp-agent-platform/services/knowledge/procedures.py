@@ -1,4 +1,4 @@
-"""Knowledge procedures (KNOWLEDGE schema, EXECUTE AS OWNER).
+"""Knowledge procedures (CORE schema, EXECUTE AS OWNER).
 
 IDENTIFY_DOMAIN   side track: scores domains after profiling, records DOMAIN_RECOMMENDATION.
                   Does not overwrite a DOMAIN_ID already stamped from the onboarding target.

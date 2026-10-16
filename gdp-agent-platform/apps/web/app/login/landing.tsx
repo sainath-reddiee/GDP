@@ -18,7 +18,7 @@ import type { AuthMode } from "./form";
 
 // Every claim on this page is traceable to the code: stages, gates and tools (snowflake/database/seed/workflow_graph.json,
 // snowflake/agents/supervisor.sql), where AI is used (services/common/llm.py call sites), the Copilot (services/agentic),
-// governance and audit (services/governance/policy.py, AUDIT.AGENT_RUN) and integrations (services/*). Keep it that way.
+// governance and audit (services/governance/policy.py, CORE.AGENT_RUN) and integrations (services/*). Keep it that way.
 
 const NAV = [
   { href: "#agent", label: "Agent at work" },

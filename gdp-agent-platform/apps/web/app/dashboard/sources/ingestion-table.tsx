@@ -10,7 +10,7 @@ import { useToast } from "@/components/ui/toast";
 import { cn } from "@/lib/utils";
 import { editIngestion, loadIngestion } from "./actions";
 
-/** SnapLogic ingestion configurations (PLATFORM_CONFIG.INGESTION_CONTROL_CONFIG), one group per source (master ID)
+/** SnapLogic ingestion configurations (CORE.INGESTION_CONTROL_CONFIG), one group per source (master ID)
  * with a row per table; a row opens its full configuration and history, and its switch turns it on or off. */
 export function IngestionTable({ controls: initial }: { controls: IngestionControl[] }) {
   const toast = useToast();

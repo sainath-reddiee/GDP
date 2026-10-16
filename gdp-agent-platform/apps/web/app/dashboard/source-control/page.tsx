@@ -28,7 +28,7 @@ export default async function SourceControlPage({ searchParams }: { searchParams
         <Kpi href={base()} label="All pull requests" value={c?.total ?? 0} hint={`${c?.no_changes ?? 0} already in the repository`} icon={Layers} tone="slate" />
       </div>
       {!data ? <p className="text-sm text-destructive">Pull requests could not be loaded.</p>
-        : !data.deployed ? <NotDeployed what="Source control (GOVERNANCE.GIT_PR, V043)" />
+        : !data.deployed ? <NotDeployed what="Source control (CORE.GIT_PR, V043)" />
         : <SourceControlView prs={data.prs} kinds={data.kinds ?? {}} publisherReady={data.publisher_ready}
                              filters={{ kind: searchParams.kind ?? "", state: searchParams.state ?? "", q: searchParams.q ?? "", domain: searchParams.domain ?? "" }} />}
     </div>

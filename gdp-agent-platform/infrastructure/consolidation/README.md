@@ -1,75 +1,73 @@
-# Platform schema consolidation runbook (V060, V061)
+# One platform schema: CORE
 
-Moves every platform object of the platform database into one schema, `CORE`, with zero data loss. The mapping is
-`services/common/platform_schema.py` (`MOVED`); V061, the compatibility views and the codemod are generated from it.
+Every platform object of the platform database lives in one schema, `CORE`: tables, stages, file formats, sequences,
+row access policies, views, procedures, tasks, Cortex Search services, the Cortex Agent, dbt projects, git repository
+clones, the network rule and the GitHub token secret. Only client data stays outside it, in `LANDING`, `GDP_SILVER`
+and any landing target a user picks. Code names objects as `CORE.<NAME>` (SQL templates as `{{database}}.{{schema}}`);
+the one constant is `PLATFORM_SCHEMA` in `services/common/platform_schema.py`, and
+`tests/unit/test_platform_schema.py` fails the build if any code, template or web label names one of the old schemas.
 
-What moves and how:
-
-| Objects | How | Why |
-|---|---|---|
-| Tables (112), stages (5), file formats (3), sequences (3), row access policies (2), one view | `ALTER ... RENAME TO <db>.CORE.<name>` in V061 | The same object: rows, staged files, Time Travel, constraints and grants stay with it |
-| Procedures, reporting views, Cortex Search services | Created in CORE by the deploy | Code only, or derived from the moved tables |
-| Cortex Agent | Already in CORE; updated in place with `ALTER AGENT ... MODIFY LIVE VERSION` | Keeps its versions and monitoring |
-| Tasks, network rule | Twin in CORE by `runtime apply` (Snowflake cannot rename them); old ones stay suspended | |
-| Secrets, git repository clones, dbt projects | Stay where they are; new ones are created in CORE | No RENAME for secrets or git repositories; dbt project versions must not be reset; rows store their names |
-| LANDING, GDP_SILVER | Not moved | Client data, user-configurable locations |
-
-Nothing is dropped. Old schemas keep read-only compatibility views (30 days), suspended old tasks, the old network rule
-and the old Cortex Search services (suspended) until a separately approved cleanup.
-
-## New environments: one command, no runbook
+## New environment: one command
 
 ```
-python infrastructure/deploy_snowflake.py --connection <c> --database <NEW_DB> --warehouse <WH>
+python infrastructure/deploy_snowflake.py --connection <name> --database <NEW_DB> --warehouse <WH>
 ```
 
 With an empty ledger the deploy runs `snowflake/database/baseline/B061__platform_core.sql`, which creates the final
-layout directly in CORE (plus the LANDING and GDP_SILVER data schemas), records V001 to V061 as applied, then applies
-any later migration and the usual procedures, views, Cortex Search, agent and seed. No old schema is ever created.
-`make_baseline.py` proved on Snowflake that the baseline builds exactly what V001 to V061 build (objects, columns,
-keys, defaults, policies, grants, future grants, role hierarchy and starter rows). The 61 old migrations live in
-`snowflake/database/migrations/archive/` only for environments that already ran some of them; new migrations go in
-`snowflake/database/migrations/` from V062 and name only `{{database}}.CORE`.
+layout directly in CORE, records V001 to V061 as applied, then applies later migrations and the procedures, views,
+Cortex Search, agent and seed. No old schema is ever created. `make_baseline.py` proved on Snowflake that the baseline
+builds exactly what V001 to V061 build (objects, columns, keys, defaults, policies, grants, future grants, role
+hierarchy, starter rows). New migrations go in `snowflake/database/migrations/` from V062, name only
+`{{database}}.CORE`, and grant every object they create (no future grants in CORE).
 
-## Existing environments: the one-time move (order)
+## Existing environment: the one-time move
 
-Every script takes `--connection <name in connections.toml> --database <DB>`, prints what it does, and writes JSON to
-`consolidation_runs/` (git-ignored) plus rows in `CORE.CONSOLIDATION_*`. Scripts that change objects run only with
-`--execute`.
+V001 to V061 stay in `snowflake/database/migrations/archive/` (applied history, never edited) for environments that
+predate the move. Stop the API and the worker, then:
 
-| Step | Command | Exit check |
-|---|---|---|
-| P0b rehearsal | `CREATE DATABASE <DB>_REHEARSAL CLONE <DB> INCLUDE INTERNAL STAGES` (after `ALTER STAGE ... REFRESH` on directory stages), copy the other stages with `COPY FILES`, then every step below with `--database <DB>_REHEARSAL --rehearsal` | All checks pass; results reviewed |
-| V060 | `python infrastructure/deploy_snowflake.py --connection C --database DB --through 060` | Manifest tables exist |
-| P3 freeze | Stop the API and the worker; `python -m infrastructure.consolidation.runtime freeze ... --execute` | Running tasks suspended and recorded |
-| P1/P2 baseline | `python -m infrastructure.consolidation.baseline ...` | `COMPLETED`: no unknown objects, every capture succeeded |
-| P4 safety net | Raise `DATA_RETENTION_TIME_IN_DAYS`; `CREATE DATABASE <DB>_PRECONSOLIDATION_<date> CLONE <DB> INCLUDE INTERNAL STAGES`; `COPY FILES` for every internal stage | Backup counts and file lists equal the baseline |
-| P5a move | `python infrastructure/deploy_snowflake.py ... --consolidate --through 061` | V061 recorded |
-| P6a verify data | `python -m infrastructure.consolidation.verify data ... --backup-database <backup>` | 0 failed (same object ids, rows, hashes, columns, keys, policies, grants, Time Travel, files, sequences) |
-| P5b deploy | `python infrastructure/deploy_snowflake.py ... --consolidate` (rehearsal: add `--rehearsal`) | Procedures, views, compatibility views, search services, agent applied |
-| P5c runtime | `python -m infrastructure.consolidation.runtime apply ... --execute` | Task twins, network rule, read-only compatibility views on the old names (with the tables' own SELECT grants), old services suspended, old procedure usage revoked |
-| P6b verify functional | `python -m infrastructure.consolidation.verify functional ...` | 0 failed |
-| P7 reopen | Start the API and worker on the new release; `runtime resume ... --execute`; smoke test | Journeys work |
+```
+python -m infrastructure.consolidation.consolidate --connection <name> --database <DB> --no-compat-views
+python -m infrastructure.consolidation.cleanup     --connection <name> --database <DB>             # dry run
+python -m infrastructure.consolidation.cleanup     --connection <name> --database <DB> --execute
+```
 
-The external access integration of GitHub publishing is account level: `runtime apply` prints the statement that
-points it at `CORE.GITHUB_API_EGRESS` for its owner; the old rule keeps working until then.
+`consolidate.py` runs, in one session and stopping at the first failure: V060 (manifest tables), freeze (running
+tasks suspended and recorded), baseline (row counts, full-row hashes, columns, keys, grants, policies, staged files,
+sequence positions, runtime objects; unknown objects stop it), safety net (Time Travel retention raised, zero-copy
+backup clone `<DB>_PRECONSOLIDATION_<date>` with every staged file), V061 (`ALTER ... RENAME TO <db>.CORE.<name>`:
+the same objects, so rows, files, Time Travel and grants stay with them), data verification against the baseline and
+the backup, the full deploy, the runtime step (task twins, network rule), functional verification, and the resume of
+the tasks that were running. `--start-at deploy` continues after a data verification that was reviewed.
+
+`cleanup.py` then empties the old schemas: old procedures, search services, tasks and views (CORE has them) are
+dropped; dbt projects are renamed into CORE with their versions; git clones are re-created in CORE from GitHub and the
+rows that name them re-pointed; the GitHub integration is switched to the CORE network rule. The GitHub token cannot
+be copied (a secret cannot be read): create `CORE.GITHUB_TOKEN`, add it to the integration, have its owner set the value
+in Snowsight, switch `GITHUB_PUBLISH.secret` to it, refresh the publisher, test, then drop the old secret. Finally
+`cleanup.py --execute --drop-schemas` drops each old schema only when nothing is left in it.
+
+Without `--no-compat-views`, `runtime apply` leaves read-only views under the old names (the tables' own SELECT grants,
+none for credential tables) for readers outside the app; they go with the cleanup.
+
+Rollback before the cleanup: `python -m infrastructure.consolidation.rollback ... --execute` renames everything back
+(rows written since stay), then deploy the previous release with `--force`. After the cleanup, restore from the backup
+clone and Time Travel.
 
 ## Gate
 
-`deploy_snowflake.py` applies V061 only with `--consolidate` after a completed baseline of that database, unless the
-old schemas hold no rows (a new environment). The Admin "Re-apply everything" path never passes `--consolidate`.
+`deploy_snowflake.py` applies V061 only to a new environment (empty ledger at the start of the deploy) or with
+`--consolidate` after a completed baseline of that database. The Admin "Re-apply everything" path never passes
+`--consolidate`.
 
-## Rollback
+## Proof
 
-`python -m infrastructure.consolidation.rollback ... --execute` renames everything back from the manifest (rows written
-since the cut-over stay), restores the references V061 changed, re-grants and resumes the old objects and removes the
-V061 ledger row. Then deploy the previous release with `--force` and run `verify data` again.
-
-## Rehearsal and checks used on DEV (2026-10-15/16)
-
-- `rehearse.py` on a clone of DEV_AI_PLATFORM: data verification 2,382 of 2,384 checks passed (the two were reporting
-  views checked too early, since fixed), runtime 464 statements and 0 failed, functional 333 checks and 0 failed,
-  rollback 329 statements and 0 failed with every table back and no row lost.
-- `app_smoke.py`: every API read endpoint (133) gave the same result on the consolidated clone with the new code as on
-  the original with the old code (0 newly failing).
-- `make_baseline.py`: baseline and migration path identical.
+- Rehearsals on clones of DEV_AI_PLATFORM (`rehearse.py`): data checks 2,382 of 2,384 (the two were a checker bug,
+  fixed), runtime 464 statements and functional 333 checks with 0 failed, rollback 329 statements with every table
+  back and no row lost; every API read endpoint (133, `app_smoke.py`) answered the same on the consolidated clone with
+  the new code as on the original with the old code.
+- DEV_AI_PLATFORM, 2026-10-16 (`consolidate.py`, `cleanup.py`): row counts, full-row hashes, columns, Time Travel
+  counts and grants of all 131 tables and all 6 stages' files matched the baseline, and the row-by-row comparison with
+  the backup clone matched for 130 tables (CASE_RECORD's backup copy cannot be read once its policy's tables moved;
+  its count, hash and Time Travel matched); functional 122 checks with 0 failed; cleanup 77 statements with 0 failed;
+  the GitHub publisher runs on `CORE.GITHUB_TOKEN`; all 17 old schemas dropped. Backup kept:
+  `DEV_AI_PLATFORM_PRECONSOLIDATION_20261016` (Time Travel retention raised to 14 days).

@@ -65,7 +65,7 @@ function Toggle({ id, checked, onChange, label, help, col }: { id: string; check
 }
 
 /** Onboard an external source for SnapLogic: six steps, each checked by the API before moving on; saving writes one
- * catalog row for the source and one control row per table (PLATFORM_CONFIG.INGESTION_CONTROL_CONFIG) under one
+ * catalog row for the source and one control row per table (CORE.INGESTION_CONTROL_CONFIG) under one
  * master ID. SnapLogic reads the table; nothing is sent to it. */
 export function IngestionWizard({ domains, user }: { domains: DomainOption[]; user: string | null }) {
   const toast = useToast();
@@ -129,7 +129,7 @@ export function IngestionWizard({ domains, user }: { domains: DomainOption[]; us
         <CheckCircle2 className="h-10 w-10 text-success" />
         <h3 className="text-base font-semibold">Configuration saved</h3>
         <p className="max-w-md text-sm text-muted-foreground">
-          Master ID {saved.master_id} with {saved.tables} table{saved.tables === 1 ? "" : "s"} is in PLATFORM_CONFIG.INGESTION_CONTROL_CONFIG.
+          Master ID {saved.master_id} with {saved.tables} table{saved.tables === 1 ? "" : "s"} is in CORE.INGESTION_CONTROL_CONFIG.
           {" "}{saved.parent} picks it up on its next run{load.is_active ? "" : " once the rows are switched on"}.
         </p>
         <div className="flex gap-2">
