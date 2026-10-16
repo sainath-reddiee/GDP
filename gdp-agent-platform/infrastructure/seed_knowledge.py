@@ -17,6 +17,7 @@ from services.knowledge.packs import (GDP_DOMAIN_ID, GDP_TABLE_ID, LiveColumns, 
 ROOT = Path(__file__).resolve().parents[1]
 DOMAIN_DIR = ROOT / "domain"
 DOMAIN_PACK = DOMAIN_DIR / "gdp" / "domain_pack.json"
+RUNBOOK_PACK = DOMAIN_DIR / "general" / "airflow_runbook_pack.json"
 SKILLS_DIR = ROOT / "snowflake" / "skills"
 FRONTMATTER = re.compile(r"^---\n(.*?)\n---\n(.*)$", re.S)
 
@@ -440,6 +441,7 @@ def seed_platform(cur, database: str) -> List[str]:
     log.extend(seed_qa_packs(cur, database))
     log.extend(seed_domain_models(cur, database))
     log.extend(seed_dq_suites(cur, database))
+    log.extend(seed_runbooks(cur, database))
 
     for skill in list_skills():
         root = skill["path"].parent
@@ -482,6 +484,65 @@ def seed_platform(cur, database: str) -> List[str]:
         (SCORING_CONFIG_ID, 1, json.dumps(DEFAULT_WEIGHTS), json.dumps(DEFAULT_THRESHOLDS)),
     )
     return log
+
+
+# ---------------------------------------------------------------- Airflow runbooks: domain/general/airflow_runbook_pack.json
+
+
+def load_runbooks() -> List[Dict[str, Any]]:
+    """The shipped AIRFLOW_RUNBOOK items (the Airflow knowledge pack's runbooks)."""
+    if not RUNBOOK_PACK.exists():
+        return []
+    return list(json.loads(RUNBOOK_PACK.read_text(encoding="utf-8")).get("knowledge") or [])
+
+
+class _CursorDb:
+    """A connector cursor as an ops Db (query/execute/execute_count, %s binds, lower case names), with the platform
+    tables qualified by the deployed database, so the shared knowledge writer runs at deploy time."""
+
+    def __init__(self, cur, database: str):
+        self.cur, self.database = cur, database
+
+    def _sql(self, sql: str) -> str:
+        return re.sub(r"(?<![\w.])CORE\.", f"{self.database}.CORE.", sql)
+
+    def query(self, sql: str, params: tuple = ()) -> List[Dict[str, Any]]:
+        self.cur.execute(self._sql(sql), params or None)
+        names = [str(d[0]).lower() for d in (self.cur.description or [])]
+        return [dict(zip(names, row)) for row in self.cur.fetchall()] if names else []
+
+    def execute(self, sql: str, params: tuple = ()) -> None:
+        self.cur.execute(self._sql(sql), params or None)
+
+    def execute_count(self, sql: str, params: tuple = ()) -> int:
+        self.cur.execute(self._sql(sql), params or None)
+        return int(self.cur.rowcount or 0)
+
+
+def seed_runbooks(cur, database: str) -> List[str]:
+    """Write the shipped runbooks into the GENERAL domain (origin SEED, ACTIVE). A new version only when the file
+    changed, and never over a runbook a person edited in Knowledge (its current version is not from the seed)."""
+    from services.knowledge.procedures import GENERAL_DOMAIN, ensure_domain
+    from services.knowledge.writer import remember
+    from services.ops.sqlio import DbSession
+
+    items = load_runbooks()
+    if not items:
+        return []
+    session = DbSession(_CursorDb(cur, database))
+    domain_id = ensure_domain(session, GENERAL_DOMAIN, "Targets registered without a domain pack")
+    written, kept = 0, 0
+    for k in items:
+        current = session.sql("""SELECT ORIGIN FROM CORE.DOMAIN_KNOWLEDGE WHERE DOMAIN_ID = ? AND SOURCE_REFERENCE = ?
+                                    AND IS_CURRENT LIMIT 1""", params=[domain_id, k["key"]]).collect()
+        if current and str(current[0]["ORIGIN"] or "").upper() != "SEED":
+            kept += 1
+            continue
+        if remember(session, domain_id=domain_id, kind=k["type"], key=k["key"], title=k["title"], content=k["content"],
+                    content_json=k.get("content_json"), tags=k.get("tags") or ["AIRFLOW", "RUNBOOK"], origin="SEED",
+                    change_note="Airflow runbook pack (repository)"):
+            written += 1
+    return [f"airflow runbooks: {written} written, {len(items) - written - kept} unchanged, {kept} edited in the app (kept)"]
 
 
 # ---------------------------------------------------------------- QA Store: domain/<name>/qa/<pack>.sql

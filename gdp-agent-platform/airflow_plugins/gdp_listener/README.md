@@ -65,12 +65,30 @@ If your environment already has a plugins.zip, add these two entries to it inste
 Treat the push secret like a password: keep it in the MWAA configuration (or AWS Secrets Manager through MWAA's
 secrets backend), never in DAG code or a repository.
 
+## Self-hosted Airflow (and the WSL lab)
+
+1. Copy the `gdp_listener` folder and `gdp_listener_plugin.py` into `$AIRFLOW_HOME/plugins`.
+2. Set `GDP_INGEST_URL`, `GDP_ENV_ID` and `GDP_PUSH_SECRET` in the environment of the scheduler and the workers (for
+   Airflow 3, also the DAG processor and the task runners), or the `[gdp]` section of `airflow.cfg`.
+3. Restart Airflow. Trigger a DAG and check that its run shows on the Pipelines page within seconds.
+
+From WSL, `localhost` is the Linux side. Either turn on mirrored networking (`networkingMode=mirrored` under `[wsl2]`
+in `%UserProfile%\.wslconfig`, then `wsl --shutdown`), so `http://localhost:<api port>/api/ops/ingest` reaches the
+API on Windows, or use the Windows host address that `ip route show default` prints in WSL.
+
 ## Network
 
 The plugin needs outbound HTTPS from the MWAA workers and scheduler to the GDP web address. MWAA environments in
 private network mode usually have no internet egress; there, either allow egress to that one host (NAT gateway or a
 proxy) or skip the plugin. The poller alone captures every run either way; push only reduces the delay from the poll
 interval to a few seconds.
+
+## Push and polling together
+
+With push on, the worker polls an environment every 30 minutes as a safety net, and at its normal interval only
+around the times its DAGs are scheduled (from 15 minutes before a cron fire time until the DAG's maximum or usual
+duration after it). An environment counts as pushing only while pushed events keep arriving (in the last 36 hours);
+otherwise it is polled at its normal interval. A pushed failure wakes the resolution job at once.
 
 ## Request format
 
@@ -86,6 +104,8 @@ interval to a few seconds.
 The event id is part of the signed message, so a captured request cannot be replayed under a new id. Plugins built
 before this change sign `"<timestamp>.<raw body>"` and are rejected (401): upgrade the plugin and the platform together.
 
-Bodies are at most 64 KB. A failed task's error text is cut to its last 2000 characters; the platform redacts secrets
-and personal data before storing it. A failed try that Airflow will retry is reported with its real state
+Bodies are at most 64 KB. A failed task's error is its formatted traceback, cut to its last 6000 characters; for SQL
+operators the event also carries the rendered statement (`sql`, first 3000 characters). The platform redacts secrets
+and personal data before storing either. An error without a traceback (from an older plugin) is read again from the
+task log by the next poll. A failed try that Airflow will retry is reported with its real state
 (`up_for_retry`), not as `failed`.

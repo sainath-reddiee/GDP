@@ -77,6 +77,7 @@ export type OpsSettings = {
   jira_bot: boolean; jira_site: string | null; reopen_hours: number; alert_on_retry_for_critical: boolean; transition_on_resolve: boolean;
   done_status: string | null; public_base_url: string | null; worker_seen_at: string | null;
   /** O3; absent on an older API */ ai_auto?: boolean; ai_severities?: string[];
+  /** automatic fixes on record in Jira; absent on an older API */ ticket_auto_fixes?: boolean; close_auto_fixed?: boolean;
 };
 export type SettingsInput = Partial<Omit<OpsSettings, "jira_bot" | "jira_site" | "worker_seen_at">>;
 

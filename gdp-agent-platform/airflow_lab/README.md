@@ -39,6 +39,16 @@ removes them. The lab worker runs without the Jira bot, so no real Jira ticket i
    (each asks for a Snowflake sign-in). Add the environment once in Admin, Integrations, Airflow: kind
    *Self-hosted Airflow*, name `local-lab`, URL `http://localhost:8080`, poll every 60 s.
 
+4. **Push (optional, to test push-first capture):** in Admin, Airflow, turn push on for `local-lab` and use *Push
+   setup* to get the secret. Then in WSL:
+   ```bash
+   cp -r /mnt/c/<repo>/airflow_plugins/gdp_listener/gdp_listener /mnt/c/<repo>/airflow_plugins/gdp_listener/gdp_listener_plugin.py ~/airflow/plugins/
+   export GDP_INGEST_URL=http://localhost:8021/api/ops/ingest GDP_ENV_ID=local-lab GDP_PUSH_SECRET=<the secret>
+   ```
+   and restart `airflow standalone` in the same shell. `localhost` reaches the API on Windows only with WSL mirrored
+   networking (`networkingMode=mirrored` under `[wsl2]` in `%UserProfile%\.wslconfig`, then `wsl --shutdown`); without it,
+   use the Windows host address from `ip route show default`.
+
 ## Run
 
 ```bash
@@ -47,6 +57,16 @@ python airflow_lab/run_loop.py --passes 2
 
 It prints one row per DAG and pass, and writes `airflow_lab/last_run.json`. Open Operations, Resolutions to follow
 along: each failure's path, the RCA, the approval, the fixes in Known fixes.
+
+What to look for besides the outcomes:
+- **Task catalogue:** the first poll reads the DAG source. Each lab DAG's page shows a Tasks section with the SQL and
+  the `CORE.LAB_*` tables, and Knowledge has an *Airflow DAG* profile per DAG and the shipped *Airflow runbook* items.
+  The RCA cites the task's SQL and tables (`PIPELINE [task:...]`), even when the log does not show the statement.
+- **Push:** with the plugin installed, failures appear in seconds, and the worker log shows the resolve job running at
+  the next tick. Outside the DAGs' run windows the environment is polled every 30 minutes (lab DAGs are manual, so
+  only push and the safety poll capture them).
+- **Tickets for automatic fixes:** each automatic fix queues a Jira note that raises the ticket, and the ticket is
+  closed when the rerun succeeds. The lab has no Jira bot, so the incident shows the note as not sent.
 
 ## Clean up
 

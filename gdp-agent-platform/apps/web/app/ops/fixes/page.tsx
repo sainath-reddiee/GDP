@@ -67,7 +67,11 @@ export default async function FixesPage({ searchParams }: { searchParams?: { sta
                         <p className="text-xs text-muted-foreground">{k.fix_type === "SKILL" ? `Skill ${k.skill_name ?? ""}` : k.procedure_fqn} · v{k.version_no} · by {k.created_by}{k.published_by ? `, published by ${k.published_by}` : ""}</p>
                       </td>
                       <td className="px-3 py-2.5 text-xs">{k.dag_id ?? "any DAG"}{k.task_id ? ` · ${k.task_id}` : ""}{k.exception_class ? ` · ${k.exception_class}` : ""}</td>
-                      <td className="px-3 py-2.5 text-xs tabular-nums">{k.runs_ok ?? 0} ok{k.runs_failed ? `, ${k.runs_failed} failed` : ""}</td>
+                      <td className="px-3 py-2.5 text-xs tabular-nums">{k.runs_ok ?? 0} ok{k.runs_failed ? `, ${k.runs_failed} failed` : ""}
+                        {k.runs_30d ? <p className={cn("text-[11px]", k.runs_30d > 1 ? "text-amber-700" : "text-muted-foreground")}
+                                         title={k.last_run_at ? `last run ${String(k.last_run_at).slice(0, 16).replace("T", " ")}` : undefined}>
+                          {k.runs_30d} in 30 days on {k.dags_30d ?? 1} DAG{(k.dags_30d ?? 1) === 1 ? "" : "s"}</p> : null}
+                      </td>
                       <td className="px-3 py-2.5 text-xs">{k.approval_required === false ? "Runs on its own" : "Asks first"}</td>
                       <td className="px-3 py-2.5"><FixStatusPill status={k.status} /></td>
                     </tr>

@@ -103,3 +103,26 @@ def held(db: Any, job: str, holder: str, seconds: int = LEASE_SECONDS, renew_eve
                 release(db, job, holder)
             except Exception:
                 pass  # it expires on its own
+
+
+# ---------------------------------------------------------------- wake flags
+
+def wake(db: Any, job: str) -> None:
+    """Ask the worker to run `job` at its next tick instead of waiting for its interval (a row wake:<job> of
+    CORE.JOB_LEASE). Never raises: the job still runs on its interval."""
+    try:
+        name = f"wake:{job}"
+        ensure(db, name)
+        db.execute("UPDATE CORE.JOB_LEASE SET CURSOR_VALUE = 'WAKE', LAST_RUN_AT = CURRENT_TIMESTAMP() WHERE JOB_NAME = %s",
+                   (name,))
+    except Exception:
+        pass
+
+
+def take_wake(db: Any, job: str) -> bool:
+    """True once per wake: a compare-and-set that clears the flag, so one worker runs the job for it."""
+    try:
+        return db.execute_count("UPDATE CORE.JOB_LEASE SET CURSOR_VALUE = NULL WHERE JOB_NAME = %s AND CURSOR_VALUE = 'WAKE'",
+                                (f"wake:{job}",)) >= 1
+    except Exception:
+        return False

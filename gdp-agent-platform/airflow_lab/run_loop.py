@@ -130,6 +130,18 @@ class Lab:
                                   ORDER BY CREATED_AT""", (ENV_ID, *run_ids))
         return {r["dag_id"]: r for r in rows}   # the latest failure per DAG among these runs
 
+    def forget_fixes(self) -> int:
+        """Retire every lab fix left by an earlier run (agent fixes included), so the passes learn from this run's
+        failures, as they are written today."""
+        from services.resolve import publish
+
+        rows = self.db.query("""SELECT ISSUE_ID FROM CORE.KNOWN_ISSUE WHERE STARTSWITH(DAG_ID, 'lab_')
+                                   AND STATUS IN ('PUBLISHED', 'DRAFT')""")
+        for r in rows:
+            publish.retire(self.db, r["issue_id"], "airflow_lab")
+        log(f"retired {len(rows)} lab fixes from earlier runs")
+        return len(rows)
+
     def published(self, dag_id: str):
         found = self.db.query("SELECT ISSUE_ID FROM CORE.KNOWN_ISSUE WHERE DAG_ID = %s AND STATUS = 'PUBLISHED' LIMIT 1", (dag_id,))
         return found[0]["issue_id"] if found else None
@@ -324,6 +336,8 @@ def main() -> None:
     lab.sql_file("setup_lab.sql")
     error = None
     try:
+        if not args.only_proposal_pass:
+            lab.forget_fixes()
         for n in range(1, (0 if args.only_proposal_pass else args.passes) + 1):
             lab.one_pass(n)
         if not args.no_proposal_pass:

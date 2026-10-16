@@ -45,7 +45,8 @@ def resume(db: Any, holder: str) -> Dict[str, Any]:
 def has_work(db: Any) -> Dict[str, bool]:
     """Skip the procedure calls (and their warehouse time) when nothing waits."""
     found = db.query("""SELECT
-          (SELECT COUNT(*) FROM CORE.FAILURE_EVENT WHERE STATUS IN ('PENDING', 'IN_PROGRESS')) AS PENDING,
+          (SELECT COUNT(*) FROM CORE.FAILURE_EVENT WHERE STATUS = 'IN_PROGRESS' OR (STATUS = 'PENDING'
+              AND (EXCEPTION_CLASS IS NOT NULL OR CREATED_AT < DATEADD(second, -120, CURRENT_TIMESTAMP())))) AS PENDING,
           (SELECT COUNT(*) FROM CORE.APPROVAL_REQUEST A JOIN CORE.FAILURE_EVENT F ON F.FAILURE_ID = A.FAILURE_ID
             WHERE A.STATUS IN ('APPROVED', 'REJECTED') AND F.STATUS = 'AWAITING_APPROVAL') AS DECIDED,
           (SELECT COUNT(*) FROM CORE.FAILURE_EVENT WHERE CLEAR_STATE = 'REQUESTED') AS CLEARS,

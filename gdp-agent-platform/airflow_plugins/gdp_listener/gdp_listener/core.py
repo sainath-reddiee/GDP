@@ -13,6 +13,7 @@ import json
 import os
 import threading
 import time
+import traceback
 import urllib.request
 import uuid
 from datetime import datetime, timezone
@@ -20,7 +21,8 @@ from typing import Any, Dict, Optional
 
 TIMEOUT_SECONDS = 3.0
 MAX_BODY_BYTES = 60 * 1024
-ERROR_MAX = 2000
+ERROR_MAX = 6000      # the traceback tail: the exception and the frames that raised it
+SQL_MAX = 3000
 _pending: list = []
 _pending_lock = threading.Lock()
 
@@ -136,15 +138,45 @@ def task_payload(task_instance: Any, state: str, error: Any = None, now: Optiona
         "updated_at": iso(stamp),
     }
     if error is not None:
-        text = f"{type(error).__name__}: {error}" if isinstance(error, BaseException) else str(error)
-        body["error"] = text[-ERROR_MAX:]
+        body["error"] = error_text(error)[-ERROR_MAX:]
+        statement = task_sql(task)
+        if statement:
+            body["sql"] = statement
     return body
+
+
+def error_text(error: Any) -> str:
+    """The formatted traceback of an exception (its tail is what the platform parses: the exception class, its
+    message and the frames in the DAG file), else 'Class: message', else the text."""
+    if isinstance(error, BaseException):
+        try:
+            if error.__traceback__ is not None:
+                return "".join(traceback.format_exception(type(error), error, error.__traceback__))
+        except Exception:
+            pass
+        return f"{type(error).__name__}: {error}"
+    return str(error)
+
+
+def task_sql(task: Any) -> Optional[str]:
+    """The SQL a SQL operator ran (its `sql` field, rendered by the time the task fails), capped; None for other
+    operators and for SQL given as a file name that was not rendered."""
+    try:
+        sql = getattr(task, "sql", None)
+        if isinstance(sql, (list, tuple)):
+            sql = ";\n".join(str(s) for s in sql)
+        if not isinstance(sql, str) or not sql.strip() or sql.strip().endswith(".sql"):
+            return None
+        return sql.strip()[:SQL_MAX]
+    except Exception:
+        return None
 
 
 def encode(payload: Dict[str, Any]) -> bytes:
     raw = json.dumps(payload, separators=(",", ":"), default=str).encode("utf-8")
-    if len(raw) > MAX_BODY_BYTES and payload.get("error"):
-        payload = {**payload, "error": str(payload["error"])[-1000:]}
+    if len(raw) > MAX_BODY_BYTES and (payload.get("error") or payload.get("sql")):
+        payload = {**payload, "error": str(payload.get("error") or "")[-1000:] or None,
+                   "sql": str(payload.get("sql") or "")[:500] or None}
         raw = json.dumps(payload, separators=(",", ":"), default=str).encode("utf-8")
     return raw
 

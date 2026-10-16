@@ -9,7 +9,8 @@ component and assignee), else the Jira default project. Dedupe, in order:
   3. an idempotency claim in CORE.INCIDENT_EVENT (jira:create:<incident>) so two workers never create two tickets;
      a claim nobody finished is taken over after CLAIM_MINUTES.
 Recurrences add at most one comment an hour. A resolve comments and, when the setting transition_on_resolve is on,
-moves the ticket to done_status. Without a bot the incident gets JIRA_STATE NOT_RAISED and a timeline event saying so.
+moves the ticket to done_status; an incident a known fix repaired is moved to done_status whenever close_auto_fixed
+is on (the default), so an automatic fix leaves a closed ticket on record (ticket_auto_fixes). Without a bot the incident gets JIRA_STATE NOT_RAISED and a timeline event saying so.
 The worker's jira_sync job marks incidents MITIGATED when their ticket went Done in Jira after they were (re)opened.
 A reopened incident (it failed again after Jira Done, or someone reopened it) has JIRA_STATE REOPENED until the reopen
 action moved its ticket out of Done (or commented when the workflow has no way back), so an old Done never mitigates it
@@ -140,15 +141,16 @@ def _links(store: Any, incident: Dict[str, Any], settings: Dict[str, Any]) -> Di
 
 
 def raise_ticket(store: Any, incident_id: str, client: Optional[JiraClient], settings: Dict[str, Any],
-                 actor: str = SYSTEM) -> Dict[str, Any]:
+                 actor: str = SYSTEM, record: bool = False) -> Dict[str, Any]:
     """{state: exists | linked | raised | NOT_RAISED | in_progress, key, detail}. JiraError propagates (after the
-    incident is marked FAILED) so the outbox retries."""
+    incident is marked FAILED) so the outbox retries. `record` (an automatic fix, kept on record in Jira) raises the
+    ticket even when the incident already resolved; it is then closed at once."""
     incident = store.get(incident_id)
     if not incident:
         return {"state": "NOT_RAISED", "key": None, "detail": "the incident no longer exists"}
     if incident.get("jira_key"):
         return {"state": "exists", "key": incident["jira_key"], "detail": "the incident already has a ticket"}
-    reason = skip_reason(incident)
+    reason = skip_reason(incident) if not (record and str(incident.get("status") or "").upper() == "RESOLVED") else None
     if reason:
         # resolved, muted or grouped before the create was sent: no ticket (a reopen or an ended mute queues a new create)
         store.update(incident_id, {"jira_state": "SKIPPED"})
@@ -259,6 +261,14 @@ def _done_transition(client: JiraClient, key: str, done_status: str) -> Optional
     return None
 
 
+def auto_fixed(store: Any, incident: Dict[str, Any]) -> bool:
+    """True when a known fix repaired the incident (its timeline has an auto_fixed event)."""
+    try:
+        return bool(store.has_event(incident["incident_id"], "auto_fixed"))
+    except Exception:
+        return False
+
+
 def resolved(store: Any, incident: Dict[str, Any], client: JiraClient, settings: Dict[str, Any]) -> Tuple[str, str]:
     key = incident.get("jira_key")
     if not key:
@@ -266,7 +276,7 @@ def resolved(store: Any, incident: Dict[str, Any], client: JiraClient, settings:
     who = incident.get("resolved_by") or SYSTEM
     client.add_comment(key, _comment(f"Resolved by {who}: {incident.get('resolution') or ''}"))
     detail = f"commented on {key}"
-    if settings.get("transition_on_resolve"):
+    if settings.get("transition_on_resolve") or (settings.get("close_auto_fixed") and auto_fixed(store, incident)):
         transition = _done_transition(client, key, str(settings.get("done_status") or "Done"))
         if transition:
             client.transition(key, transition)
@@ -327,7 +337,7 @@ def resolution_note(store: Any, incident: Dict[str, Any], row: Dict[str, Any], c
         return "SKIPPED", "empty resolution note"
     key = incident.get("jira_key")
     if not key and payload.get("raise"):
-        result = raise_ticket(store, incident["incident_id"], client, settings)
+        result = raise_ticket(store, incident["incident_id"], client, settings, record=bool(payload.get("record")))
         if result["state"] == "in_progress":
             raise RuntimeError(result["detail"])
         key = result.get("key")

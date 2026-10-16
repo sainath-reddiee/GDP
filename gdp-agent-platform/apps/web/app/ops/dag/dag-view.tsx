@@ -2,15 +2,15 @@
 
 import Link from "next/link";
 import { Fragment, useEffect, useMemo, useState, useTransition } from "react";
-import { BellOff, Check, ExternalLink, FileText, Globe, Loader2, RefreshCw, Settings2, X } from "lucide-react";
+import { BellOff, Check, ExternalLink, FileText, Globe, ListTree, Loader2, RefreshCw, Settings2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input, Select } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { CopyButton } from "../../runs/[runId]/dbt/studio-ui";
 import { Alert, Notice, Pending, useSeq } from "../../qa/qa-shared";
 import {
-  dagDetail, pollEnv, runDetail, saveDagSettings, taskLog,
-  type Criticality, type DagDetail, type DagRun, type TaskLog, type TaskRun,
+  dagDetail, dagTasks, pollEnv, runDetail, saveDagSettings, taskLog,
+  type Criticality, type DagDetail, type DagRun, type DagTask, type TaskLog, type TaskRun,
 } from "../actions";
 import { duration, explain, parseTs, pct, pctTone, RunStrip, StateBadge, When } from "../ops-shared";
 import { localInput } from "../../incidents/incident-shared";
@@ -143,6 +143,8 @@ export function DagView({ envId, envName, envEnabled, initial, initialRun, canOp
                       onSaved={async () => { setEditing(false); setNotice("DAG settings saved."); await refresh(); }} />
       )}
 
+      <TasksPanel envId={envId} dagId={dag.dag_id} />
+
       <section className="surface overflow-hidden">
         <header className="flex items-center gap-2 border-b px-4 py-3">
           <h2 className="text-sm font-semibold">Runs</h2>
@@ -158,6 +160,103 @@ export function DagView({ envId, envName, envEnabled, initial, initialRun, canOp
 
       {runId && <RunPanel key={runId} envId={envId} dagId={dag.dag_id} runId={runId} onClose={() => select("")} />}
     </div>
+  );
+}
+
+function Names({ items, empty = "-" }: { items: string[]; empty?: string }) {
+  if (!items.length) return <span className="text-muted-foreground">{empty}</span>;
+  return (
+    <span className="flex flex-wrap gap-1">
+      {items.map((n) => <span key={n} className="break-all rounded bg-muted px-1.5 py-0.5 font-mono text-[11px]">{n}</span>)}
+    </span>
+  );
+}
+
+/** The DAG's task catalogue: what each task runs and the tables it reads and writes, read from the DAG source. The
+ *  root-cause analysis and the agent's fix proposals use the same rows. */
+function TasksPanel({ envId, dagId }: { envId: string; dagId: string }) {
+  const [data, setData] = useState<{ tasks: DagTask[]; cataloged_at: string | null; available: boolean } | null>(null);
+  const [error, setError] = useState("");
+  const [open, setOpen] = useState(false);
+  const [sql, setSql] = useState<string | null>(null);
+  useEffect(() => {
+    let live = true;
+    dagTasks(envId, dagId).then((r) => {
+      if (!live) return;
+      if (r.ok) setData(r.data); else setError(explain(r.error));
+    }, (e: unknown) => { if (live) setError(e instanceof Error ? e.message : "Could not load the tasks."); });
+    return () => { live = false; };
+  }, [envId, dagId]);
+  const tasks = data?.tasks ?? [];
+  const withSql = tasks.filter((t) => t.sql_text).length;
+  return (
+    <section className="surface overflow-hidden">
+      <header className="flex flex-wrap items-center gap-2 border-b px-4 py-3">
+        <ListTree className="h-4 w-4 text-muted-foreground" />
+        <h2 className="text-sm font-semibold">Tasks</h2>
+        <span className="text-xs text-muted-foreground">
+          {data === null ? "loading" : !data.available ? "the task catalogue needs the latest deploy (V064)"
+            : tasks.length ? <>{tasks.length} from the DAG source · {withSql} with SQL · read <When iso={data.cataloged_at} rel /></>
+              : "not catalogued yet: the next poll reads the DAG source"}
+        </span>
+        {tasks.length > 0 && (
+          <Button variant="ghost" size="sm" className="ml-auto" onClick={() => setOpen((v) => !v)} aria-expanded={open}>
+            {open ? "Hide" : "Show"} tasks
+          </Button>
+        )}
+      </header>
+      {error && <div className="px-4 py-3"><Alert>{error}</Alert></div>}
+      {open && tasks.length > 0 && (
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="text-left text-[11px] uppercase tracking-wide text-muted-foreground">
+              <tr className="border-b">
+                <th className="px-4 py-2 font-medium">Task</th>
+                <th className="px-3 py-2 font-medium">Operator</th>
+                <th className="px-3 py-2 font-medium">After</th>
+                <th className="px-3 py-2 font-medium">Reads</th>
+                <th className="px-3 py-2 font-medium">Writes</th>
+                <th className="px-3 py-2 font-medium">dbt / SnapLogic</th>
+                <th className="px-4 py-2" />
+              </tr>
+            </thead>
+            <tbody className="divide-y align-top">
+              {tasks.map((t) => (
+                <Fragment key={t.task_id}>
+                  <tr className={cn(sql === t.task_id && "bg-primary/5")}>
+                    <td className="max-w-[16rem] break-all px-4 py-2 font-mono text-xs">{t.task_id}</td>
+                    <td className="px-3 py-2 text-xs text-muted-foreground">{t.operator ?? "-"}</td>
+                    <td className="max-w-[12rem] px-3 py-2 text-xs"><Names items={t.upstream} /></td>
+                    <td className="max-w-[16rem] px-3 py-2 text-xs"><Names items={t.reads} /></td>
+                    <td className="max-w-[16rem] px-3 py-2 text-xs"><Names items={t.writes} /></td>
+                    <td className="max-w-[14rem] px-3 py-2 text-xs">
+                      <Names items={[...t.dbt_selectors, ...(t.snaplogic_pipeline ? [t.snaplogic_pipeline] : [])]} />
+                    </td>
+                    <td className="px-4 py-2 text-right">
+                      {t.sql_text && (
+                        <Button variant={sql === t.task_id ? "secondary" : "outline"} size="sm" aria-expanded={sql === t.task_id}
+                                onClick={() => setSql(sql === t.task_id ? null : t.task_id)}>
+                          <FileText className="h-3.5 w-3.5" />SQL
+                        </Button>
+                      )}
+                    </td>
+                  </tr>
+                  {sql === t.task_id && t.sql_text && (
+                    <tr><td colSpan={7} className="bg-muted/30 px-4 py-3">
+                      <div className="mb-1.5 flex items-center gap-2 text-[11px] text-muted-foreground">
+                        <span>As written in {t.source_path ? <span className="font-mono">{t.source_path}</span> : "the DAG source"}</span>
+                        <span className="ml-auto"><CopyButton text={t.sql_text} label="Copy SQL" /></span>
+                      </div>
+                      <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-all rounded-lg bg-slate-950 p-3 font-mono text-[11px] text-slate-200">{t.sql_text}</pre>
+                    </td></tr>
+                  )}
+                </Fragment>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
   );
 }
 

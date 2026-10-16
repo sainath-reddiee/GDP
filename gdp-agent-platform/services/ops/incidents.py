@@ -305,6 +305,10 @@ class SqlStore:
         found = self.db.query("SELECT INCIDENT_ID FROM CORE.INCIDENT_EVENT WHERE IDEMPOTENCY_KEY = %s LIMIT 1", (key,))
         return found[0].get("incident_id") if found else None
 
+    def has_event(self, incident_id: str, kind: str) -> bool:
+        return bool(self.db.query("SELECT 1 AS X FROM CORE.INCIDENT_EVENT WHERE INCIDENT_ID = %s AND KIND = %s LIMIT 1",
+                                  (incident_id, kind)))
+
     def event(self, incident_id: str, kind: str, actor: str = SYSTEM, detail: Optional[Dict[str, Any]] = None) -> None:
         self.db.execute("""INSERT INTO CORE.INCIDENT_EVENT (EVENT_ID, INCIDENT_ID, KIND, ACTOR, DETAIL)
                            SELECT %s, %s, %s, %s, PARSE_JSON(%s)""",
@@ -691,9 +695,13 @@ def auto_resolve(store: Any, signals: List[Dict[str, Any]], settings: Dict[str, 
         if signal is None:
             continue
         what = "task" if incident.get("task_id") else "DAG"
+        # resolved when the run succeeded, not when detection read it: a failure read in the same batch but newer
+        # than the success is a new sighting (it reopens the incident), not a stale one
+        succeeded = detect._dt(signal.get("at"))
+        when = succeeded if succeeded is not None and succeeded < now else now
         try:
             resolve(store, incident["incident_id"], f"Resolved automatically: a later {what} run succeeded "
-                                                    f"({signal.get('run_id') or 'run'}).", SYSTEM, now, auto=True)
+                                                    f"({signal.get('run_id') or 'run'}).", SYSTEM, when, auto=True)
             done.append(incident["incident_id"])
         except ActionError:
             continue

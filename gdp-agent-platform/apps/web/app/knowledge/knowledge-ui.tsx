@@ -1,5 +1,5 @@
 import {
-  BadgeCheck, BookOpen, LifeBuoy, Bot, Boxes, Code2, FileText, GitCompare, Hand, Layers, ListChecks, MessageSquare, Package, Ruler,
+  BadgeCheck, BookOpen, LifeBuoy, Workflow, NotebookTabs, Bot, Boxes, Code2, FileText, GitCompare, Hand, Layers, ListChecks, MessageSquare, Package, Ruler,
   ScanSearch, ShieldCheck, Sparkles, TableProperties, TriangleAlert, Wand2, type LucideIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -12,6 +12,7 @@ const TYPE_ICON: Record<string, LucideIcon> = {
   NAMING_STANDARD: TableProperties, DBT_PATTERN: Code2, SODA_PATTERN: ShieldCheck, EXCEPTION: TriangleAlert,
   STTM_TEMPLATE: Layers, ONBOARDING_GUIDE: FileText, COLUMN_RULE: ScanSearch, QA_TEST: ListChecks,
   INCIDENT_RESOLUTION: BadgeCheck, CASE_RESOLUTION: LifeBuoy, EXAMPLE: TableProperties,
+  AIRFLOW_DAG: Workflow, AIRFLOW_RUNBOOK: NotebookTabs,
 };
 
 export function TypeIcon({ type, className }: { type: string; className?: string }) {

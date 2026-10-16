@@ -23,6 +23,7 @@ SYSTEM = "system"
 SEARCH_SERVICE = "KNOWN_ISSUE_SEARCH"
 SEARCH_LIMIT = 8
 CLAIM_STALE_MINUTES = 30   # a claim whose procedure died goes back to PENDING after this long
+CLAIM_GRACE_SECONDS = 120  # a failure without an exception class waits this long for its log
 
 FAILURE_COLUMNS = ("failure_id", "env_id", "incident_id", "dag_id", "task_id", "run_id", "map_index", "try_number",
                    "exception_class", "exception_text", "error_signature", "log_url", "query_id", "dbt_node_id", "status",
@@ -76,6 +77,31 @@ def ingest(db: Any, candidate: Dict[str, Any], incident_id: Optional[str]) -> Op
                               parsed["exception_class"], redact(parsed["exception_text"] or "")[:4000] or None, sig,
                               candidate.get("log_url"), parsed["query_id"], parsed["dbt_node_id"]))
     return failure_id if added >= 1 else None
+
+
+def reparse(db: Any, env_id: str, task: Dict[str, Any], excerpt: Optional[str]) -> bool:
+    """A failed try's error got better (the log replaced a short pushed message): a failure of that try still PENDING
+    takes the class, text, signature and ids parsed from it, and its incident the excerpt when it had no traceback.
+    True when a failure changed."""
+    parsed = rules.parse_failure(excerpt)
+    if not parsed["exception_class"]:
+        return False
+    key = rules.dedup_key(env_id, task["dag_id"], task.get("task_id"), task.get("run_id"), task.get("map_index"),
+                          task.get("try_number"))
+    sig = rules.error_signature(task["dag_id"], task.get("task_id"), parsed["exception_class"], excerpt)
+    changed = db.execute_count("""
+        UPDATE CORE.FAILURE_EVENT SET EXCEPTION_CLASS = %s, EXCEPTION_TEXT = %s, ERROR_SIGNATURE = %s,
+               QUERY_ID = COALESCE(%s, QUERY_ID), DBT_NODE_ID = COALESCE(%s, DBT_NODE_ID), UPDATED_AT = CURRENT_TIMESTAMP(),
+               DETAIL = 'error read again from the task log'
+         WHERE DEDUP_KEY = %s AND STATUS = 'PENDING'""",
+                               (parsed["exception_class"], redact(parsed["exception_text"] or "")[:4000] or None, sig,
+                                parsed["query_id"], parsed["dbt_node_id"], key)) >= 1
+    if changed:
+        db.execute("""UPDATE CORE.INCIDENT SET ERROR_EXCERPT = %s
+                       WHERE INCIDENT_ID = (SELECT MAX(INCIDENT_ID) FROM CORE.FAILURE_EVENT WHERE DEDUP_KEY = %s)
+                         AND (ERROR_EXCERPT IS NULL OR POSITION('Traceback (most recent call last)' IN ERROR_EXCERPT) = 0)""",
+                   (redact(excerpt or "")[:4000], key))
+    return changed
 
 
 # ---------------------------------------------------------------- reads
@@ -156,8 +182,13 @@ def release_stale_claims(db: Any) -> int:
 
 def claim(db: Any, holder: str, limit: int) -> List[Dict[str, Any]]:
     """Take up to `limit` PENDING failures (oldest first). Each row is claimed with a compare-and-set, so two callers
-    never take the same failure; IN_PROGRESS is set before any search."""
-    ids = db.query(f"SELECT FAILURE_ID FROM CORE.FAILURE_EVENT WHERE STATUS = 'PENDING' ORDER BY CREATED_AT LIMIT {int(limit)}")
+    never take the same failure; IN_PROGRESS is set before any search. A failure whose error has no exception class
+    yet waits up to CLAIM_GRACE_SECONDS for the log to bring it (fill_error_excerpts and reparse), so it is not
+    searched and analysed on an empty error."""
+    ids = db.query(f"""SELECT FAILURE_ID FROM CORE.FAILURE_EVENT
+                        WHERE STATUS = 'PENDING' AND (EXCEPTION_CLASS IS NOT NULL
+                              OR CREATED_AT < DATEADD(second, -{int(CLAIM_GRACE_SECONDS)}, CURRENT_TIMESTAMP()))
+                        ORDER BY CREATED_AT LIMIT {int(limit)}""")
     out = []
     for r in ids:
         got = db.execute_count("""UPDATE CORE.FAILURE_EVENT SET STATUS = 'IN_PROGRESS', CLAIMED_BY = %s,
@@ -370,7 +401,40 @@ def run_fix(db: Any, failure: Dict[str, Any], issue: Dict[str, Any], prefs: Dict
                     {"issue_id": issue["issue_id"], "fix": fix_name(issue), "resolution_id": resolution_id,
                      "airflow_clear": clear})
     _mitigate(db, failure.get("incident_id"))
+    if _ops_setting(db, "ticket_auto_fixes", True):   # on record in Jira: raised now, closed when the rerun succeeds
+        _jira(db, failure, "fixed", failure["failure_id"], fixed_text(failure, issue, clear), raise_ticket=True,
+              record=True)
     return {"action": "resolved", "resolution_id": resolution_id, "clear": clear}
+
+
+def _ops_setting(db: Any, key: str, default: Any) -> Any:
+    try:
+        from services.ops.incidents import SqlStore
+
+        return SqlStore(db).settings().get(key, default)
+    except Exception:
+        return default
+
+
+def fixed_text(failure: Dict[str, Any], issue: Dict[str, Any], clear: str) -> str:
+    """The Jira note of an automatic fix: what failed, the cause, the fix that ran and the rerun."""
+    rca = failure.get("rca") if isinstance(failure.get("rca"), dict) else {}
+    cause = issue.get("rationale") or rca.get("cause") or issue.get("notes")
+    if str(issue.get("fix_type") or "").upper() == "PROCEDURE":
+        how = issue.get("procedure_fqn")
+    else:
+        how = f"skill {issue.get('skill_name') or issue.get('skill_id')}"
+    lines = [f"Fixed automatically by the platform with the known fix \"{issue.get('title')}\" ({how}).",
+             f"Failure: {failure.get('dag_id')}.{failure.get('task_id')}, {failure.get('exception_class') or 'error'}: "
+             f"{str(failure.get('exception_text') or '')[:400]}"]
+    if cause:
+        lines.append(f"Cause: {str(cause)[:800]}")
+    if issue.get("proposed_by_agent"):
+        lines.append(f"The fix was proposed by the RCA agent and approved by {issue.get('published_by') or 'a person'}; "
+                     "it now runs without approval for this failure.")
+    lines.append("Rerun: the Airflow task was cleared and runs again; this ticket closes when the rerun succeeds."
+                 if clear == "REQUESTED" else "Rerun: clearing Airflow tasks is off; rerun the task to close this ticket.")
+    return redact("\n".join(lines))[:4000]
 
 
 def _mitigate(db: Any, incident_id: Optional[str]) -> None:
@@ -419,13 +483,16 @@ def ticket_text(failure: Dict[str, Any], rca: Dict[str, Any], reason: str) -> st
     return redact("\n".join(lines))[:4000]
 
 
-def _jira(db: Any, failure: Dict[str, Any], what: str, ref: str, text: str, raise_ticket: bool) -> None:
+def _jira(db: Any, failure: Dict[str, Any], what: str, ref: str, text: str, raise_ticket: bool,
+          record: bool = False) -> None:
+    """Queue a note on the incident's ticket. `record` (an automatic fix) raises the ticket even when the incident
+    resolved before the note was sent."""
     if not failure.get("incident_id"):
         return
     from services.ops.notify import enqueue
 
     enqueue(db, "JIRA", "resolution", f"jira:resolution:{what}:{ref}",
-            {"failure_id": failure["failure_id"], "text": text, "raise": raise_ticket},
+            {"failure_id": failure["failure_id"], "text": text, "raise": raise_ticket, **({"record": True} if record else {})},
             incident_id=failure["incident_id"])
 
 

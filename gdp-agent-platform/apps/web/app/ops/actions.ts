@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { api, attemptValue } from "@/lib/api";
+import type { RecurringFix } from "@/components/ops/recurring-fixes";
 
 // ---------------------------------------------------------------- types (the /api/ops contract)
 
@@ -50,6 +51,7 @@ export type Reliability = {
   top_dags: { env_id: string; dag_id: string; failures: number; success_rate: number | null }[];
   repeats: { fingerprint: string; title: string; count: number }[];
   ai: { diagnoses: number; cost_usd: number | null };
+  /** known fixes that keep firing; absent on an older API */ recurring_fixes?: RecurringFix[];
 };
 export type DagFilters = { env_id: string; q?: string; state?: string; team_id?: string; owner?: string };
 
@@ -85,6 +87,17 @@ export async function dagDetail(envId: string, dagId: string) {
   return attemptValue(() => api<{ dag: DagDetail; runs: DagRun[] }>(`/api/ops/dag?${query({ env_id: envId, dag_id: dagId })}`));
 }
 
+/** One task of the Airflow task catalogue (read from the DAG source by the platform). */
+export type DagTask = {
+  task_id: string; operator: string | null; upstream: string[]; downstream: string[]; sql_text: string | null; reads: string[];
+  writes: string[]; dbt_selectors: string[]; snaplogic_pipeline: string | null; source_path: string | null; updated_at: string | null;
+};
+
+export async function dagTasks(envId: string, dagId: string) {
+  return attemptValue(() => api<{ tasks: DagTask[]; cataloged_at: string | null; available: boolean }>(
+    `/api/ops/dag/tasks?${query({ env_id: envId, dag_id: dagId })}`));
+}
+
 export async function runDetail(envId: string, dagId: string, runId: string) {
   return attemptValue(() => api<{ run: DagRun; tasks: TaskRun[] }>(`/api/ops/run?${query({ env_id: envId, dag_id: dagId, run_id: runId })}`));
 }
@@ -103,6 +116,12 @@ export async function reliability(days: number, teamId: string) {
 
 export async function pollEnv(envId: string) {
   const r = await attemptValue(() => api<{ started: boolean; detail: string | null }>(`/api/ops/envs/${enc(envId)}/poll`, { method: "POST" }));
+  changed();
+  return r;
+}
+
+export async function refreshCatalog(envId: string) {
+  const r = await attemptValue(() => api<{ started: boolean; detail: string | null }>(`/api/ops/envs/${enc(envId)}/catalog`, { method: "POST" }));
   changed();
   return r;
 }

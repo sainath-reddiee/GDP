@@ -11,8 +11,10 @@ _NAME = re.compile(r"[^A-Za-z0-9_]")
 
 
 def start_nodes(db: Any, failure: Dict[str, Any]) -> List[str]:
-    """The failed DAG, and the code symbol of its dbt node or task (matched by name)."""
-    ids = [f"dag:{failure['env_id']}:{failure['dag_id']}"]
+    """The failed task (its catalogue node: its upstream tasks and the tables it reads), the failed DAG, and the code
+    symbol of its dbt node or task (matched by name)."""
+    ids = [f"task:{failure['env_id']}:{failure['dag_id']}:{failure['task_id']}"] if failure.get("task_id") else []
+    ids.append(f"dag:{failure['env_id']}:{failure['dag_id']}")
     names = []
     node = str(failure.get("dbt_node_id") or "")
     if node:
