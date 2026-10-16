@@ -18,12 +18,14 @@ import ast
 import hashlib
 import json
 import re
+import time
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 from services.code import dbt_parse
 from services.ops import code_map
 
 CATALOG_HOURS = 6
+POLL_BUDGET_SECONDS = 20   # catalogue time a poll may spend; what is left stays due for the next poll
 MAX_DAGS = 40            # DAG sources read per refresh, so a large environment is spread over several polls
 SQL_CAP = 8000
 VAR = "__VAR__"          # stands for an f-string placeholder; a table name containing it is not a real name
@@ -305,10 +307,11 @@ def object_refs(statements: Iterable[str]) -> Tuple[List[str], List[str]]:
         copy_to_stage = re.search(r"\bcopy\s+into\s+@", clean, re.I)
         writes |= {n for n in (_name(x) for x in w) if n} | {t for t in targets if t}
         reads |= {n for n in (_name(x) for x in r) if n} - {t for t in targets if t}
-        if copy_to_stage:
-            first = "@" + (_name(STAGE_REF.search(clean[copy_to_stage.start():]).group(1)) or "")   # type: ignore[union-attr]
-            writes.add(first)
-            stages.discard(first)
+        target = STAGE_REF.search(clean[copy_to_stage.start():]) if copy_to_stage else None
+        stage = _name(target.group(1)) if target else None
+        if stage:   # COPY INTO @stage: the stage is written; a stage named by a variable is not recorded at all
+            writes.add("@" + stage)
+            stages.discard("@" + stage)
         reads |= stages
     return sorted(reads), sorted(writes)
 
@@ -409,8 +412,14 @@ def build_rows(env_id: str, dag_id: str, source: Optional[str], rest_tasks: List
     return rows
 
 
-def source_hash(text: Optional[str]) -> Optional[str]:
-    return hashlib.sha256(text.encode("utf-8")).hexdigest() if text else None
+def source_hash(text: Optional[str], rest_tasks: Optional[List[Dict[str, Any]]] = None) -> Optional[str]:
+    """What decides whether a DAG is rebuilt: its source and the task list Airflow reports (ids, operators, edges), so
+    a config-driven DAG whose tasks change without a file edit is rebuilt too."""
+    if not text and not rest_tasks:
+        return None
+    shape = sorted((str(t.get("task_id")), rest_operator(t), sorted(str(d) for d in t.get("downstream_task_ids") or []))
+                   for t in rest_tasks or [])
+    return hashlib.sha256(((text or "") + "\n" + json.dumps(shape)).encode("utf-8")).hexdigest()
 
 
 # ---------------------------------------------------------------- reading Airflow and storing the rows
@@ -492,25 +501,32 @@ def catalogue_dag(db: Any, mw: Any, env_id: str, dag: Dict[str, Any], force: boo
     repo_path = code_map.candidate_repo_path(fileloc, dag.get("repo_path")) if dag.get("repo_id") else None
     origin = "AIRFLOW"
     text = sources.get(fileloc) if fileloc else None
+    error = None
     if text is None:
         try:
             text = mw.dag_source(dag_id)
-        except Exception:
-            text = ""
+        except Exception as exc:
+            text, error = "", f"source: {type(exc).__name__}: {str(exc)[:120]}"
         if fileloc and text:
             sources[fileloc] = text
     if not text and repo_path:
         text, origin = _repo_text(db, dag["repo_id"], repo_path), "REPO"
     if not text:
         origin = "NONE"
-    digest = source_hash(text)
+    try:
+        rest = mw.dag_tasks(dag_id)
+    except Exception as exc:
+        rest, error = [], error or f"tasks: {type(exc).__name__}: {str(exc)[:120]}"
+    if error and (not text or not rest):
+        # a read failed: keep the rows the catalogue has (a transient Airflow error must never wipe or downgrade them)
+        # and try again within the hour
+        db.execute("""UPDATE CORE.DAG SET CATALOGED_AT = DATEADD(hour, %s, CURRENT_TIMESTAMP())
+                       WHERE ENV_ID = %s AND DAG_ID = %s""", (1 - CATALOG_HOURS, env_id, dag_id))
+        return {"dag_id": dag_id, "changed": False, "source": origin, "error": error}
+    digest = source_hash(text, rest)
     if not force and digest and digest == dag.get("source_hash"):
         db.execute("UPDATE CORE.DAG SET CATALOGED_AT = CURRENT_TIMESTAMP() WHERE ENV_ID = %s AND DAG_ID = %s", (env_id, dag_id))
         return {"dag_id": dag_id, "changed": False, "source": origin}
-    try:
-        rest = mw.dag_tasks(dag_id)
-    except Exception:
-        rest = []
     parsed_strings = [s for p in parse_source(text) for s in p["strings"]]
     file_sql = _repo_sql(db, dag.get("repo_id"), sql_files(parsed_strings))
     rows = build_rows(env_id, dag_id, text, rest, repo_path or code_map.dag_relative_path(fileloc), digest, file_sql)
@@ -520,19 +536,29 @@ def catalogue_dag(db: Any, mw: Any, env_id: str, dag: Dict[str, Any], force: boo
 
 
 def refresh(db: Any, mw: Any, env_id: str, force: bool = False, limit: int = MAX_DAGS,
-            dag_ids: Optional[List[str]] = None, profiles: bool = True) -> Dict[str, Any]:
+            dag_ids: Optional[List[str]] = None, profiles: bool = True,
+            budget_seconds: Optional[float] = None) -> Dict[str, Any]:
     """Catalogue the DAGs that are due and refresh their profiles (AIRFLOW_DAG knowledge, services.ops.dag_profile).
-    Returns {dags, changed, tasks, profiles, problems}."""
+    With `budget_seconds` it stops once that time is used (the rest stay due for the next call), so cataloguing never
+    holds up the poll that triggered it. Returns {dags, changed, tasks, profiles, problems}."""
+    started = time.monotonic()
     sources: Dict[str, str] = {}
     profiled = 0
+    read = 0
     changed: List[Dict[str, Any]] = []
     problems: List[str] = []
     dags = due_dags(db, env_id, force, limit=limit, dag_ids=dag_ids)
     for dag in dags:
+        if budget_seconds is not None and read and time.monotonic() - started > budget_seconds:
+            break
+        read += 1
         try:
             result = catalogue_dag(db, mw, env_id, dag, force, sources)
         except Exception as exc:
             problems.append(f"{dag['dag_id']}: {type(exc).__name__}: {str(exc)[:160]}")
+            continue
+        if result.get("error"):
+            problems.append(f"{dag['dag_id']}: {result['error']}")
             continue
         if result.get("changed"):
             changed.append(result)
@@ -545,9 +571,10 @@ def refresh(db: Any, mw: Any, env_id: str, force: bool = False, limit: int = MAX
 
 
 def refresh_if_due(db: Any, mw: Any, env_id: str) -> Optional[Dict[str, Any]]:
-    """Catalogue whatever is due after a poll. Never raises: the catalogue is an input to analysis, not to capture."""
+    """Catalogue whatever is due after a poll, within POLL_BUDGET_SECONDS. Never raises: the catalogue is an input to
+    analysis, not to capture."""
     try:
-        return refresh(db, mw, env_id)
+        return refresh(db, mw, env_id, budget_seconds=POLL_BUDGET_SECONDS)
     except Exception as exc:
         return {"dags": 0, "problems": [f"{type(exc).__name__}"]}
 

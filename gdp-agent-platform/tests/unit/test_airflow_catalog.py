@@ -179,7 +179,8 @@ def test_refresh_rebuilds_changed_sources_and_reads_a_shared_file_once():
     merge = next(p for s, p in db.statements if s.startswith("MERGE INTO CORE.DAG_TASK"))
     assert {r["task_id"] for r in json.loads(merge[0])} >= {"extract", "publish_us"}
     stamps = [p for s, p in db.statements if s.startswith("UPDATE CORE.DAG SET")]
-    assert (digest, "e", "orders_daily") in stamps and ("e", "cleanup") in stamps   # unchanged: only the time is stamped
+    assert (catalog.source_hash(text, REST), "e", "orders_daily") in stamps   # the hash covers the task list too
+    assert ("e", "cleanup") in stamps   # unchanged: only the time is stamped
 
 
 def test_refresh_never_raises_from_a_poll():

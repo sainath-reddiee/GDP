@@ -38,8 +38,10 @@ ACTIONS: Dict[str, Dict[str, Any]] = {
     },
     "DEDUP_ON_KEY": {
         "procedure": "CORE.FIX_DEDUP_ON_KEY", "risk": "data",
-        "doc": "Keep one row per key in a table (removes duplicate rows; changes data)",
-        "input": {"table": "DB.SCHEMA.TABLE", "key_columns": ["COLUMN", "..."]},
+        "doc": "Keep one row per key in a table (removes duplicate rows; changes data). With keep_latest_by, the row with "
+               "the latest value of that column is kept; otherwise the choice is repeatable (ordered by every column)",
+        "input": {"table": "DB.SCHEMA.TABLE", "key_columns": ["COLUMN", "..."],
+                  "keep_latest_by": "a timestamp or sequence column of the table (optional)"},
     },
     "RERUN_ONLY": {
         "procedure": "CORE.FIX_RERUN_ONLY", "risk": "none",
@@ -139,9 +141,12 @@ def tables_in_scope(db: Any, patterns: List[str], database: str, limit: int = 40
 
 # ---------------------------------------------------------------- validation (proposal time and run time)
 
-def check_step(db: Any, action: str, given: Dict[str, Any], database: str, patterns: List[str]) -> Dict[str, Any]:
+def check_step(db: Any, action: str, given: Dict[str, Any], database: str, patterns: List[str],
+               running: bool = False) -> Dict[str, Any]:
     """The step's normalised input, or ValueError: unknown action, a name outside the scope, or a state in Snowflake
-    that does not need this action (the column already exists, the table is not missing, ...)."""
+    that does not need this action (the column already exists, the table is not missing, ...). `running` (the fix
+    procedure, not the proposal): an ADD_COLUMN whose column was added by an earlier attempt that failed while filling
+    it may finish the fill instead of being refused."""
     action = str(action or "").upper()
     if action not in ACTIONS:
         raise ValueError(f"unknown action {action}; allowed: {', '.join(ACTIONS)}")
@@ -157,11 +162,13 @@ def check_step(db: Any, action: str, given: Dict[str, Any], database: str, patte
         cols = columns_of(db, table)
         if cols is None:
             raise ValueError(f"{table} does not exist")
-        if column in cols:
-            raise ValueError(f"{table}.{column} already exists")
         fill = str(given.get("fill_from") or "").strip().upper() or None
-        if fill and fill not in cols:
+        if fill and (fill not in cols or not _COLUMN.match(fill)):
             raise ValueError(f"{table}.{fill} does not exist (fill_from)")
+        if column in cols:
+            if running and fill and _unfilled(db, table, column, fill):
+                return {"table": table, "column": column, "data_type": data_type, "fill_from": fill, "exists": True}
+            raise ValueError(f"{table}.{column} already exists")
         return {"table": table, "column": column, "data_type": data_type, "fill_from": fill}
     if action == "CREATE_TABLE_FROM":
         table = _scoped(given.get("table"), database, patterns)
@@ -184,7 +191,12 @@ def check_step(db: Any, action: str, given: Dict[str, Any], database: str, patte
             raise ValueError(f"{table} does not exist")
         if not keys or any(not _COLUMN.match(k) or k not in cols for k in keys):
             raise ValueError(f"key columns must be existing columns of {table}")
-        return {"table": table, "key_columns": keys}
+        latest = str(given.get("keep_latest_by") or "").strip().upper() or None
+        if latest and (not _COLUMN.match(latest) or latest not in cols):
+            raise ValueError(f"keep_latest_by must be an existing column of {table}")
+        return {"table": table, "key_columns": keys, "keep_latest_by": latest,
+                "order_columns": [c for c, t in cols.items() if c not in keys
+                                  and str(t).upper() not in ("GEOGRAPHY", "GEOMETRY", "VECTOR")]}
     return {}
 
 
@@ -230,9 +242,10 @@ def _run(session: Any, action: str, failure_id: str, given: str) -> Dict[str, An
         payload = json.loads(given or "{}")
     except ValueError:
         raise ValueError("the step input is not JSON")
-    clean = check_step(db, action, payload, database, patterns)
+    clean = check_step(db, action, payload, database, patterns, running=True)
     if action == "ADD_COLUMN":
-        db.execute(f"ALTER TABLE {clean['table']} ADD COLUMN {clean['column']} {clean['data_type']}")
+        if not clean.get("exists"):
+            db.execute(f"ALTER TABLE {clean['table']} ADD COLUMN {clean['column']} {clean['data_type']}")
         if clean.get("fill_from"):
             db.execute(f"UPDATE {clean['table']} SET {clean['column']} = {clean['fill_from']} WHERE {clean['column']} IS NULL")
     elif action == "CREATE_TABLE_FROM":
@@ -240,10 +253,28 @@ def _run(session: Any, action: str, failure_id: str, given: str) -> Dict[str, An
     elif action == "CREATE_STAGE":
         db.execute(f"CREATE STAGE {clean['stage']}")
     elif action == "DEDUP_ON_KEY":
-        keys = ", ".join(clean["key_columns"])
-        db.execute(f"CREATE OR REPLACE TABLE {clean['table']} COPY GRANTS AS SELECT * FROM {clean['table']} "
-                   f"QUALIFY ROW_NUMBER() OVER (PARTITION BY {keys} ORDER BY {keys}) = 1")
+        db.execute(dedup_sql(clean))
     return {"action": action, "done": clean, "failure": failure_id}
+
+
+def _unfilled(db: Any, table: str, column: str, fill: str) -> bool:
+    """True when rows still wait for the fill (the column is NULL where the source column is not)."""
+    try:
+        found = db.query(f"SELECT COUNT(*) AS N FROM {table} WHERE {column} IS NULL AND {fill} IS NOT NULL")
+    except Exception:
+        return False
+    return bool(found) and int(found[0].get("n") or 0) > 0
+
+
+def dedup_sql(clean: Dict[str, Any]) -> str:
+    """One row per key, in place: INSERT OVERWRITE keeps the table itself (its streams, grants, comments, clustering and
+    defaults), unlike CREATE OR REPLACE. The kept row is chosen the same way every time: the latest keep_latest_by,
+    then every other column."""
+    keys = ", ".join(clean["key_columns"])
+    order = [f"{clean['keep_latest_by']} DESC NULLS LAST"] if clean.get("keep_latest_by") else []
+    order += [c for c in clean.get("order_columns") or [] if c != clean.get("keep_latest_by")]
+    return (f"INSERT OVERWRITE INTO {clean['table']} SELECT * FROM {clean['table']} "
+            f"QUALIFY ROW_NUMBER() OVER (PARTITION BY {keys} ORDER BY {', '.join(order) or keys}) = 1")
 
 
 def add_column_entry(session: Any, failure_id: str, given: str) -> Dict[str, Any]:

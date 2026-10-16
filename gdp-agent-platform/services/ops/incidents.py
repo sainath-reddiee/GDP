@@ -305,9 +305,13 @@ class SqlStore:
         found = self.db.query("SELECT INCIDENT_ID FROM CORE.INCIDENT_EVENT WHERE IDEMPOTENCY_KEY = %s LIMIT 1", (key,))
         return found[0].get("incident_id") if found else None
 
-    def has_event(self, incident_id: str, kind: str) -> bool:
-        return bool(self.db.query("SELECT 1 AS X FROM CORE.INCIDENT_EVENT WHERE INCIDENT_ID = %s AND KIND = %s LIMIT 1",
-                                  (incident_id, kind)))
+    def last_event_kind(self, incident_id: str, kinds: Iterable[str]) -> Optional[str]:
+        """The kind of the newest of these timeline events, or None."""
+        wanted = list(kinds)
+        marks = ", ".join(["%s"] * len(wanted))
+        found = self.db.query(f"""SELECT KIND FROM CORE.INCIDENT_EVENT WHERE INCIDENT_ID = %s AND KIND IN ({marks})
+                                  ORDER BY CREATED_AT DESC LIMIT 1""", (incident_id, *wanted))
+        return found[0].get("kind") if found else None
 
     def event(self, incident_id: str, kind: str, actor: str = SYSTEM, detail: Optional[Dict[str, Any]] = None) -> None:
         self.db.execute("""INSERT INTO CORE.INCIDENT_EVENT (EVENT_ID, INCIDENT_ID, KIND, ACTOR, DETAIL)
@@ -697,7 +701,10 @@ def auto_resolve(store: Any, signals: List[Dict[str, Any]], settings: Dict[str, 
         what = "task" if incident.get("task_id") else "DAG"
         # resolved when the run succeeded, not when detection read it: a failure read in the same batch but newer
         # than the success is a new sighting (it reopens the incident), not a stale one
-        succeeded = detect._dt(signal.get("at"))
+        # never before the incident opened (both read in one poll), so the time to resolve is never negative
+        succeeded, opened = detect._dt(signal.get("at")), detect._dt(incident.get("opened_at"))
+        if succeeded is not None and opened is not None and succeeded < opened:
+            succeeded = opened
         when = succeeded if succeeded is not None and succeeded < now else now
         try:
             resolve(store, incident["incident_id"], f"Resolved automatically: a later {what} run succeeded "

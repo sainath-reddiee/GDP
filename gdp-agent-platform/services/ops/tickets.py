@@ -262,9 +262,10 @@ def _done_transition(client: JiraClient, key: str, done_status: str) -> Optional
 
 
 def auto_fixed(store: Any, incident: Dict[str, Any]) -> bool:
-    """True when a known fix repaired the incident (its timeline has an auto_fixed event)."""
+    """True when a known fix repaired the incident this time: an auto_fixed event newer than its last reopen (an
+    automatic fix from an earlier occurrence does not make a person's later resolution an automatic one)."""
     try:
-        return bool(store.has_event(incident["incident_id"], "auto_fixed"))
+        return store.last_event_kind(incident["incident_id"], ("auto_fixed", "reopened")) == "auto_fixed"
     except Exception:
         return False
 

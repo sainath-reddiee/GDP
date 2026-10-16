@@ -64,6 +64,31 @@ def draft_from_incident(db: Any, incident_id: str) -> Dict[str, Any]:
             "source_incident_id": incident_id, "source_failure_id": f.get("failure_id")}
 
 
+def refresh_signatures(db: Any) -> int:
+    """Bring live fixes in line with how failures are matched today: the error signature recomputed from the incident
+    the fix was written from, and Snowflake's role-naming privilege hint dropped from the match text (services.ops.detect
+    .signature). Without it a fix published before a matching change would stop matching its own failure. Changes only
+    the matching fields, never what the fix runs. Returns the number of fixes updated."""
+    from services.ops.detect import _ROLE_HINT
+
+    changed = 0
+    rows = db.query("""SELECT K.ISSUE_ID, K.DAG_ID, K.TASK_ID, K.EXCEPTION_CLASS, K.ERROR_SIGNATURE, K.MATCH_TEXT,
+                              I.ERROR_EXCERPT
+                         FROM CORE.KNOWN_ISSUE K LEFT JOIN CORE.INCIDENT I ON I.INCIDENT_ID = K.SOURCE_INCIDENT_ID
+                        WHERE K.STATUS IN ('PUBLISHED', 'DRAFT')""")
+    for r in rows:
+        sig = r.get("error_signature")
+        if sig and r.get("error_excerpt") and r.get("dag_id"):
+            sig = rules.error_signature(r["dag_id"], r.get("task_id"), r.get("exception_class"), r["error_excerpt"])
+        text = " ".join(_ROLE_HINT.sub("", str(r.get("match_text") or "")).split())
+        if sig == r.get("error_signature") and text == " ".join(str(r.get("match_text") or "").split()):
+            continue
+        db.execute("UPDATE CORE.KNOWN_ISSUE SET ERROR_SIGNATURE = %s, MATCH_TEXT = %s, UPDATED_AT = CURRENT_TIMESTAMP() "
+                   "WHERE ISSUE_ID = %s", (sig, text or r.get("match_text"), r["issue_id"]))
+        changed += 1
+    return changed
+
+
 def create(db: Any, data: Dict[str, Any], actor: str) -> Dict[str, Any]:
     fields = _clean(data)
     if not fields.get("title") or not fields.get("match_text"):
@@ -88,6 +113,8 @@ def update(db: Any, issue_id: str, data: Dict[str, Any], actor: str) -> Dict[str
         raise LookupError(f"fix {issue_id} not found")
     if str(issue.get("status")) != "DRAFT":
         raise ValueError("only a draft can be edited: retire a published fix and write a new one")
+    if awaiting_approval(db, issue_id):
+        raise ValueError("this fix waits for an approval: it cannot change while the approver reviews it")
     fields = _clean(data)
     if not fields:
         return issue
@@ -95,6 +122,23 @@ def update(db: Any, issue_id: str, data: Dict[str, Any], actor: str) -> Dict[str
     db.execute(f"UPDATE CORE.KNOWN_ISSUE SET {sets} WHERE ISSUE_ID = %s AND STATUS = 'DRAFT'",
                tuple(fields.values()) + (issue_id,))
     return get_issue(db, issue_id) or {}
+
+
+def awaiting_approval(db: Any, issue_id: str) -> bool:
+    """True while an approval of this fix is OPEN: what the approver reviews must be what runs."""
+    return bool(db.query("SELECT 1 AS X FROM CORE.APPROVAL_REQUEST WHERE ISSUE_ID = %s AND STATUS = 'OPEN' LIMIT 1",
+                         (issue_id,)))
+
+
+def skill_locked(db: Any, skill_id: str) -> Optional[str]:
+    """Why the skill's steps may not change now (a published fix runs it, or a fix that runs it waits for approval),
+    else None."""
+    if db.query("SELECT 1 AS X FROM CORE.KNOWN_ISSUE WHERE SKILL_ID = %s AND STATUS = 'PUBLISHED' LIMIT 1", (skill_id,)):
+        return "a published fix runs this skill: retire it before changing the steps"
+    if db.query("""SELECT 1 AS X FROM CORE.KNOWN_ISSUE K JOIN CORE.APPROVAL_REQUEST A ON A.ISSUE_ID = K.ISSUE_ID
+                    WHERE K.SKILL_ID = %s AND A.STATUS = 'OPEN' LIMIT 1""", (skill_id,)):
+        return "a fix that runs this skill waits for an approval: it cannot change while the approver reviews it"
+    return None
 
 
 def refresh_search(db: Any, database: Optional[str] = None) -> Optional[str]:
@@ -202,8 +246,9 @@ def save_skill(db: Any, data: Dict[str, Any], actor: str, skill_id: Optional[str
         raise ValueError(f"a skill named {name} already exists")
     body = json.dumps(steps)
     if skill_id:
-        if db.query("""SELECT 1 AS X FROM CORE.KNOWN_ISSUE WHERE SKILL_ID = %s AND STATUS = 'PUBLISHED' LIMIT 1""", (skill_id,)):
-            raise ValueError("a published fix runs this skill: retire it before changing the steps")
+        locked = skill_locked(db, skill_id)
+        if locked:
+            raise ValueError(locked)
         db.execute("""UPDATE CORE.FIX_SKILL SET SKILL_NAME = %s, DESCRIPTION = %s, STEPS = PARSE_JSON(%s),
                              VERSION_NO = VERSION_NO + 1, OWNER = %s, UPDATED_AT = CURRENT_TIMESTAMP() WHERE SKILL_ID = %s""",
                    (name, str(data.get("description") or "")[:4000] or None, body, data.get("owner") or actor, skill_id))

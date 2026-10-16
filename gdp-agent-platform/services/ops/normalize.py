@@ -224,6 +224,8 @@ def excerpt(text: Any, limit: int = EXCERPT_MAX) -> Optional[str]:
             body = "\n".join(lines[-30:])
         else:
             body = "\n".join(ln for ln in body.splitlines() if not _STATEMENT.search(ln))
-    statement = [ln.strip()[:1500] for ln in before.splitlines() if _STATEMENT.search(ln)][-1:]
-    body = redact("\n".join(statement + [body.strip()]))
-    return body[-limit:] if len(body) > limit else body
+    statement = [redact(ln.strip()[:1500]) for ln in before.splitlines() if _STATEMENT.search(ln)][-1:]
+    body = redact(body.strip())
+    # the statement stays in front whatever the length: the cap cuts the start of the traceback, never the statement
+    room = max(0, limit - sum(len(s) + 1 for s in statement))
+    return "\n".join(statement + [body[-room:] if len(body) > room else body])

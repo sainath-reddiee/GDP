@@ -42,6 +42,12 @@ def _json(value: Any) -> Dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
+def table_key(name: str) -> str:
+    """SCHEMA.TABLE of a 2- or 3-part name, upper case: how two tasks naming the same table differently still match."""
+    parts = str(name or "").upper().split(".")
+    return ".".join(parts[-2:])
+
+
 def signal_hits(signals: List[str], text: str) -> int:
     """How many of a runbook's signals appear in the error: case-insensitive phrases; a bare number (an error code)
     only as a whole number."""
@@ -103,14 +109,18 @@ def facts(db: Any, env_id: Optional[str], dag_id: Optional[str], task_id: Option
     reads = [r for r in _list(task.get("reads")) if not r.startswith("@")][:20]
     if reads:
         try:
+            # matched on SCHEMA.TABLE: one task may name DB.CORE.ORDERS and another CORE.ORDERS (its default database)
+            by_key = {table_key(r): r.upper() for r in reads}
             found = db.query("""SELECT T.ENV_ID, T.DAG_ID, T.TASK_ID, UPPER(W.VALUE::VARCHAR) AS OBJ FROM CORE.DAG_TASK T,
                                        LATERAL FLATTEN(INPUT => T.WRITES) W
-                                 WHERE ARRAY_CONTAINS(UPPER(W.VALUE::VARCHAR)::VARIANT, PARSE_JSON(%s)::ARRAY)
+                                 WHERE ARRAY_CONTAINS((SPLIT_PART(UPPER(W.VALUE::VARCHAR), '.', -2) || '.'
+                                                       || SPLIT_PART(UPPER(W.VALUE::VARCHAR), '.', -1))::VARIANT,
+                                                      PARSE_JSON(%s)::ARRAY)
                                    AND NOT (T.DAG_ID = %s AND T.TASK_ID = %s)
-                                 ORDER BY T.DAG_ID, T.TASK_ID LIMIT 40""", (json.dumps([r.upper() for r in reads]), dag_id, task_id))
+                                 ORDER BY T.DAG_ID, T.TASK_ID LIMIT 40""", (json.dumps(sorted(by_key)), dag_id, task_id))
             writers: Dict[str, List[str]] = {}
             for r in found:
-                names = writers.setdefault(r["obj"], [])
+                names = writers.setdefault(by_key.get(table_key(r["obj"]), r["obj"]), [])
                 if len(names) < WRITERS_LIMIT:
                     names.append(f"{r['dag_id']}.{r['task_id']}" + ("" if r.get("env_id") == env_id else f" ({r['env_id']})"))
             out["writers"] = writers

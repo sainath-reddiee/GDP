@@ -86,6 +86,22 @@ SELECT DISTINCT SHA1(FROM_NODE_ID || '>' || TO_NODE_ID || '>' || EDGE_TYPE) AS E
     -- table lineage
     SELECT 'obj:' || UPPER(L.FROM_OBJECT), 'obj:' || UPPER(L.TO_OBJECT), 'LINEAGE'
       FROM {{database}}.{{schema}}.LINEAGE_EDGE L WHERE L.IS_CURRENT AND UPPER(L.FROM_OBJECT) <> UPPER(L.TO_OBJECT)
+    UNION ALL
+    -- a table a task names without its database (SCHEMA.TABLE, the connection's default) is the same table as the
+    -- DB.SCHEMA.TABLE that lineage and other tasks name, so the walk crosses from one spelling to the other
+    SELECT 'obj:' || Q.NAME, 'obj:' || S.NAME, 'SAME_TABLE'
+      FROM (SELECT DISTINCT UPPER(O.VALUE::VARCHAR) AS NAME
+              FROM {{database}}.{{schema}}.DAG_TASK T,
+                   LATERAL FLATTEN(INPUT => ARRAY_CAT(COALESCE(T.READS, ARRAY_CONSTRUCT()), COALESCE(T.WRITES, ARRAY_CONSTRUCT()))) O
+             WHERE NOT STARTSWITH(O.VALUE::VARCHAR, '@') AND ARRAY_SIZE(SPLIT(O.VALUE::VARCHAR, '.')) = 2) S
+      JOIN (SELECT DISTINCT UPPER(O.VALUE::VARCHAR) AS NAME
+              FROM {{database}}.{{schema}}.DAG_TASK T,
+                   LATERAL FLATTEN(INPUT => ARRAY_CAT(COALESCE(T.READS, ARRAY_CONSTRUCT()), COALESCE(T.WRITES, ARRAY_CONSTRUCT()))) O
+             WHERE ARRAY_SIZE(SPLIT(O.VALUE::VARCHAR, '.')) = 3
+            UNION SELECT UPPER(FROM_OBJECT) FROM {{database}}.{{schema}}.LINEAGE_EDGE WHERE IS_CURRENT
+            UNION SELECT UPPER(TO_OBJECT) FROM {{database}}.{{schema}}.LINEAGE_EDGE WHERE IS_CURRENT) Q
+        ON ARRAY_SIZE(SPLIT(Q.NAME, '.')) = 3
+       AND SPLIT_PART(Q.NAME, '.', 2) || '.' || SPLIT_PART(Q.NAME, '.', 3) = S.NAME
 );
 
 GRANT SELECT ON VIEW {{database}}.{{schema}}.GRAPH_NODE TO DATABASE ROLE {{database}}.OPS_VIEWER;
