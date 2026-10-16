@@ -30,7 +30,8 @@ FAILURE_COLUMNS = ("failure_id", "env_id", "incident_id", "dag_id", "task_id", "
                    "claimed_by", "claimed_at", "created_at", "updated_at")
 ISSUE_COLUMNS = ("issue_id", "title", "error_signature", "dag_id", "task_id", "exception_class", "match_text", "fix_type",
                  "procedure_fqn", "skill_id", "approval_required", "status", "version_no", "owner", "source_incident_id",
-                 "source_failure_id", "notes", "created_by", "created_at", "published_by", "published_at", "updated_at")
+                 "source_failure_id", "notes", "created_by", "created_at", "published_by", "published_at", "updated_at",
+                 "proposed_by_agent", "rationale")
 
 
 def _json(value: Any) -> Any:
@@ -106,9 +107,15 @@ def get_skill(db: Any, skill_id: Optional[str]) -> Optional[Dict[str, Any]]:
 
 
 def load_preference(db: Any) -> Dict[str, Any]:
-    found = db.query("""SELECT AUTO_RESOLVE_ENABLED, SEARCH_SCORE_MIN, MAX_PARALLEL_TASKS, AIRFLOW_CLEAR_ENABLED,
-                               DEFAULT_APPROVAL_REQUIRED, GRAPH_HOPS, NOTIFY_TARGET, RCA_MODE
-                          FROM CORE.CONTROL_PREFERENCE WHERE IS_ACTIVE ORDER BY UPDATED_AT DESC LIMIT 1""")
+    try:
+        found = db.query("""SELECT AUTO_RESOLVE_ENABLED, SEARCH_SCORE_MIN, MAX_PARALLEL_TASKS, AIRFLOW_CLEAR_ENABLED,
+                                   DEFAULT_APPROVAL_REQUIRED, GRAPH_HOPS, NOTIFY_TARGET, RCA_MODE, AGENT_PROPOSALS_ENABLED,
+                                   AGENT_FIX_SCOPE
+                              FROM CORE.CONTROL_PREFERENCE WHERE IS_ACTIVE ORDER BY UPDATED_AT DESC LIMIT 1""")
+    except Exception:   # before V063: no agent proposal columns yet
+        found = db.query("""SELECT AUTO_RESOLVE_ENABLED, SEARCH_SCORE_MIN, MAX_PARALLEL_TASKS, AIRFLOW_CLEAR_ENABLED,
+                                   DEFAULT_APPROVAL_REQUIRED, GRAPH_HOPS, NOTIFY_TARGET, RCA_MODE
+                              FROM CORE.CONTROL_PREFERENCE WHERE IS_ACTIVE ORDER BY UPDATED_AT DESC LIMIT 1""")
     return rules.preference(found[0] if found else None)
 
 
@@ -263,20 +270,25 @@ def cortex_search(db: Any, database: Optional[str]) -> Callable[[Dict[str, Any]]
 # ---------------------------------------------------------------- 4a. approval
 
 def request_approval(db: Any, failure: Dict[str, Any], issue: Dict[str, Any], routes: List[Dict[str, Any]],
-                     prefs: Dict[str, Any]) -> Dict[str, Any]:
+                     prefs: Dict[str, Any], kind: str = "RUN", rca: Optional[Dict[str, Any]] = None,
+                     text: Optional[str] = None) -> Dict[str, Any]:
     """APPROVAL_REQUEST OPEN for the route's approver; the failure waits (AWAITING_APPROVAL) and this run ends. The
-    approver sees it in Approvals and My Work, and as a comment on the incident's Jira ticket."""
+    approver sees it in Approvals and My Work, and as a comment on the incident's Jira ticket. KIND RUN: run a published
+    fix; KIND PROPOSAL: publish and run the fix the agent proposed (its root cause is kept on the failure)."""
     route = rules.approver_for(routes, failure["dag_id"], failure.get("task_id")) or {}
     approval_id = str(uuid.uuid4())
-    db.execute("""INSERT INTO CORE.APPROVAL_REQUEST (APPROVAL_ID, FAILURE_ID, ISSUE_ID, FIX_TYPE, FIX_NAME, STATUS, APPROVER)
-                  VALUES (%s, %s, %s, %s, %s, 'OPEN', %s)""",
+    db.execute("""INSERT INTO CORE.APPROVAL_REQUEST (APPROVAL_ID, FAILURE_ID, ISSUE_ID, FIX_TYPE, FIX_NAME, STATUS, APPROVER, KIND)
+                  VALUES (%s, %s, %s, %s, %s, 'OPEN', %s, %s)""",
                (approval_id, failure["failure_id"], issue["issue_id"], issue.get("fix_type"), fix_name(issue),
-                route.get("approver")))
-    move(db, failure["failure_id"], "IN_PROGRESS", "AWAITING_APPROVAL",
-         {"detail": f"waiting for {route.get('approver') or 'an approver'} to approve {issue.get('title')}"})
-    text = (f"Known fix found for this failure: {issue.get('title')} ({issue.get('fix_type')} {fix_name(issue)}). "
-            f"It needs approval before it runs" + (f"; approver: {route['approver']}" if route.get("approver") else "") +
-            ". Approve or reject it on the incident page or in Approvals.")
+                route.get("approver"), kind))
+    fields: Dict[str, Any] = {"detail": f"waiting for {route.get('approver') or 'an approver'} to approve "
+                                        + ("the agent's proposed fix " if kind == "PROPOSAL" else "") + str(issue.get("title"))}
+    if rca is not None:
+        fields["rca"] = rca
+    move(db, failure["failure_id"], "IN_PROGRESS", "AWAITING_APPROVAL", fields)
+    text = text or (f"Known fix found for this failure: {issue.get('title')} ({issue.get('fix_type')} {fix_name(issue)}). "
+                    f"It needs approval before it runs" + (f"; approver: {route['approver']}" if route.get("approver") else "") +
+                    ". Approve or reject it on the incident page or in Approvals.")
     _jira(db, failure, "approval", approval_id, text, raise_ticket=False)
     _incident_event(db, failure.get("incident_id"), "fix_approval_requested",
                     {"approval_id": approval_id, "issue_id": issue["issue_id"], "approver": route.get("approver")})
@@ -287,7 +299,8 @@ def decide_approval(db: Any, approval_id: str, actor: str, approve: bool, note: 
                     ) -> Dict[str, Any]:
     """A person's decision (API). The routed approver, or anyone holding OPS.FIX_APPROVE when no approver is routed,
     may decide; the author of the fix may not approve its own run. The worker's resume step does the rest."""
-    found = db.query("""SELECT A.APPROVAL_ID, A.STATUS, A.APPROVER, A.FAILURE_ID, K.CREATED_BY, K.PUBLISHED_BY
+    found = db.query("""SELECT A.APPROVAL_ID, A.STATUS, A.APPROVER, A.FAILURE_ID, A.ISSUE_ID, A.KIND, K.CREATED_BY,
+                               K.PUBLISHED_BY, K.STATUS AS ISSUE_STATUS
                           FROM CORE.APPROVAL_REQUEST A LEFT JOIN CORE.KNOWN_ISSUE K ON K.ISSUE_ID = A.ISSUE_ID
                          WHERE A.APPROVAL_ID = %s""", (approval_id,))
     if not found:
@@ -301,6 +314,14 @@ def decide_approval(db: Any, approval_id: str, actor: str, approve: bool, note: 
     if approve and str(req.get("created_by") or "").lower() == actor.lower():
         raise PermissionError("the author of a fix cannot approve running it")
     status = "APPROVED" if approve else "REJECTED"
+    if approve and str(req.get("kind") or "RUN") == "PROPOSAL" and str(req.get("issue_status")) == "DRAFT":
+        # one approval publishes the agent's fix (the approver is the second person) and lets it run on its own
+        # from now on; the worker then runs it for this failure
+        from services.resolve import publish
+
+        db.execute("UPDATE CORE.KNOWN_ISSUE SET APPROVAL_REQUIRED = FALSE WHERE ISSUE_ID = %s AND STATUS = 'DRAFT'",
+                   (req["issue_id"],))
+        publish.publish(db, req["issue_id"], actor)
     changed = db.execute_count("""UPDATE CORE.APPROVAL_REQUEST SET STATUS = %s, DECIDED_BY = %s, DECISION_NOTE = %s,
                                          DECIDED_AT = CURRENT_TIMESTAMP() WHERE APPROVAL_ID = %s AND STATUS = 'OPEN'""",
                                   (status, actor[:256], (note or "")[:2000] or None, approval_id))
@@ -321,6 +342,9 @@ def run_fix(db: Any, failure: Dict[str, Any], issue: Dict[str, Any], prefs: Dict
     opened, so a fix that stopped working reaches a person."""
     database = executor.database
     resolution_id = str(uuid.uuid4())
+    if failure.get("issue_id") != issue.get("issue_id"):   # an approved agent proposal: the failure now names its fix
+        db.execute("UPDATE CORE.FAILURE_EVENT SET ISSUE_ID = %s WHERE FAILURE_ID = %s", (issue["issue_id"], failure["failure_id"]))
+        failure = {**failure, "issue_id": issue["issue_id"]}
     try:
         if str(issue.get("fix_type")).upper() == "PROCEDURE":
             result = {"result": executor.call_procedure(rules.fix_procedure(issue.get("procedure_fqn"), database),
@@ -358,15 +382,19 @@ def _mitigate(db: Any, incident_id: Optional[str]) -> None:
 
 # ---------------------------------------------------------------- 4b. RCA and ticket
 
+def analyse(analyst: Any, failure: Dict[str, Any], prefs: Dict[str, Any]) -> Dict[str, Any]:
+    try:
+        return analyst.analyse(failure, prefs)
+    except Exception as exc:
+        return {"cause": "The cause could not be determined automatically.", "evidence": [], "path": [],
+                "mode": "none", "error": redact(f"{type(exc).__name__}: {exc}")[:500]}
+
+
 def open_ticket(db: Any, failure: Dict[str, Any], current: str, analyst: Any, prefs: Dict[str, Any], actor: str,
-                reason: str, prior: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+                reason: str, prior: Optional[Dict[str, Any]] = None, rca: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Find the cause (RCA agent, or the grounded diagnosis) and open the Jira ticket with it: the incident's ticket
     gets the cause as a comment, raised first if the incident has none. Status TICKETED."""
-    try:
-        rca = analyst.analyse(failure, prefs)
-    except Exception as exc:
-        rca = {"cause": "The cause could not be determined automatically.", "evidence": [], "path": [],
-               "mode": "none", "error": redact(f"{type(exc).__name__}: {exc}")[:500]}
+    rca = rca or analyse(analyst, failure, prefs)
     detail = {"reason": reason, "cause": rca.get("cause"), "mode": rca.get("mode"), **({"fix": prior} if prior else {})}
     _audit(db, failure, None, "TICKETED", {**detail, "evidence": rca.get("evidence"), "path": rca.get("path")}, actor)
     move(db, failure["failure_id"], current, "TICKETED", {"rca": rca, "detail": reason[:4000]})
@@ -385,6 +413,8 @@ def ticket_text(failure: Dict[str, Any], rca: Dict[str, Any], reason: str) -> st
         lines.append("Upstream path: " + " <- ".join(str(p) for p in rca["path"][:8]))
     if rca.get("fix_steps"):
         lines.append("Suggested steps: " + "; ".join(str(s) for s in rca["fix_steps"][:6]))
+    if rca.get("proposal_note"):
+        lines.append(f"No fix was proposed automatically: {rca['proposal_note']}")
     lines.append("When this is solved, publish the fix as a known fix so the same failure is fixed automatically next time.")
     return redact("\n".join(lines))[:4000]
 
@@ -397,6 +427,61 @@ def _jira(db: Any, failure: Dict[str, Any], what: str, ref: str, text: str, rais
     enqueue(db, "JIRA", "resolution", f"jira:resolution:{what}:{ref}",
             {"failure_id": failure["failure_id"], "text": text, "raise": raise_ticket},
             incident_id=failure["incident_id"])
+
+
+# ---------------------------------------------------------------- 4c. the agent proposes a fix (V063)
+
+AGENT_AUTHOR = "RCA_AGENT"
+
+
+def propose_fix(db: Any, failure: Dict[str, Any], rca: Dict[str, Any], prefs: Dict[str, Any], database: str,
+                routes: List[Dict[str, Any]], proposer: Any = None) -> Optional[Dict[str, Any]]:
+    """On a miss: the agent's fix from the safe-action catalogue, checked against Snowflake, as a DRAFT known fix written
+    by the agent and an approval of KIND PROPOSAL. One approval publishes and runs it. None when nothing safe and valid
+    was proposed (or proposals are off), and the failure is ticketed as before."""
+    if not prefs.get("agent_proposals_enabled"):
+        return None
+    excerpt = ""
+    if failure.get("incident_id"):
+        found = db.query("SELECT ERROR_EXCERPT FROM CORE.INCIDENT WHERE INCIDENT_ID = %s", (failure["incident_id"],))
+        excerpt = str((found[0].get("error_excerpt") if found else "") or "")
+    if proposer is None:
+        from services.resolve.propose import propose as proposer
+    try:
+        plan = proposer(db, failure, rca, prefs, database, excerpt)
+    except Exception as exc:
+        rca["proposal_note"] = redact(f"{type(exc).__name__}: {exc}")[:300]
+        return None
+    if not plan:
+        return None
+    from services.resolve import publish
+
+    name = f"agent_{failure['dag_id']}_{str(failure.get('error_signature') or uuid.uuid4().hex)[:8]}"[:250]
+    skill = publish.save_skill(db, {"skill_name": name, "steps": plan["steps"],
+                                    "description": f"Proposed by the RCA agent for {failure['dag_id']}.{failure.get('task_id')}"},
+                               AGENT_AUTHOR, skill_id=_skill_named(db, name))
+    draft = publish.draft_from_incident(db, failure["incident_id"]) if failure.get("incident_id") else {}
+    issue = publish.create(db, {**draft, "title": f"Agent fix: {failure['dag_id']}.{failure.get('task_id')}"[:500],
+                                "fix_type": "SKILL", "skill_id": skill["skill_id"], "approval_required": True,
+                                "notes": plan["rationale"], "source_failure_id": failure["failure_id"]}, AGENT_AUTHOR)
+    db.execute("UPDATE CORE.KNOWN_ISSUE SET PROPOSED_BY_AGENT = TRUE, RATIONALE = %s WHERE ISSUE_ID = %s",
+               (plan["rationale"], issue["issue_id"]))
+    rca = {**rca, "proposal": {"issue_id": issue["issue_id"], "steps": plan["steps"], "rationale": plan["rationale"],
+                               "source": plan["source"], "risk": plan["risk"]}}
+    steps = "; ".join(s["note"] for s in plan["steps"])
+    text = (f"Root cause: {rca.get('cause')}\nThe agent proposes a fix ({plan['risk']} change): {steps}. "
+            f"Why: {plan['rationale']}\nApprove it once on the incident page or in Approvals: it runs now, and the same "
+            "failure is then fixed automatically.")
+    out = request_approval(db, failure, {**issue, "skill_name": skill["skill_name"]}, routes, prefs, kind="PROPOSAL",
+                           rca=rca, text=redact(text)[:4000])
+    _incident_event(db, failure.get("incident_id"), "fix_proposed",
+                    {"issue_id": issue["issue_id"], "steps": [s["note"] for s in plan["steps"]], "source": plan["source"]})
+    return {**out, "action": "proposed"}
+
+
+def _skill_named(db: Any, name: str) -> Optional[str]:
+    found = db.query("SELECT SKILL_ID FROM CORE.FIX_SKILL WHERE SKILL_NAME = %s", (name,))
+    return found[0]["skill_id"] if found else None
 
 
 # ---------------------------------------------------------------- 2-4. one claimed failure
@@ -419,9 +504,14 @@ def resolve_one(db: Any, failure: Dict[str, Any], prefs: Dict[str, Any], scopes:
                (mode, (hit or {}).get("issue_id"), score, failure["failure_id"]))
     action = rules.decide(prefs, mode, hit)
     if action == "TICKET":
-        reason = "the pipeline is set to ticket only" if mode == "TICKET_ONLY" else \
-            (f"no published fix scored {prefs['search_score_min']} or more (best {score})")
-        return open_ticket(db, failure, "IN_PROGRESS", analyst, prefs, actor, reason)
+        if mode == "TICKET_ONLY":
+            return open_ticket(db, failure, "IN_PROGRESS", analyst, prefs, actor, "the pipeline is set to ticket only")
+        reason = f"no published fix scored {prefs['search_score_min']} or more (best {score})"
+        rca = analyse(analyst, failure, prefs)
+        proposal = propose_fix(db, failure, rca, prefs, executor.database, routes)
+        if proposal:
+            return proposal
+        return open_ticket(db, failure, "IN_PROGRESS", analyst, prefs, actor, reason, rca=rca)
     if action == "APPROVAL":
         return request_approval(db, failure, hit, routes, prefs)
     done = run_fix(db, failure, hit, prefs, actor, executor, "IN_PROGRESS")
@@ -487,10 +577,19 @@ def resume_approved(db: Any, executor: Any, analyst: Any, actor: str = SYSTEM, l
             counts["failed"] += 1
         else:
             counts["ran"] += 1
-    for r in db.query(f"""SELECT A.APPROVAL_ID, A.FAILURE_ID, A.DECIDED_BY, A.DECISION_NOTE FROM CORE.APPROVAL_REQUEST A
-                            JOIN CORE.FAILURE_EVENT F ON F.FAILURE_ID = A.FAILURE_ID
+    for r in db.query(f"""SELECT A.APPROVAL_ID, A.FAILURE_ID, A.ISSUE_ID, A.DECIDED_BY, A.DECISION_NOTE, A.KIND
+                            FROM CORE.APPROVAL_REQUEST A JOIN CORE.FAILURE_EVENT F ON F.FAILURE_ID = A.FAILURE_ID
                            WHERE A.STATUS = 'REJECTED' AND F.STATUS = 'AWAITING_APPROVAL' LIMIT {int(limit)}"""):
         failure = get_failure(db, r["failure_id"])
+        if failure and str(r.get("kind") or "RUN") == "PROPOSAL":
+            # the person did not want the agent's fix: retire the draft, and a person takes the cause from the ticket
+            db.execute("UPDATE CORE.KNOWN_ISSUE SET STATUS = 'RETIRED', UPDATED_AT = CURRENT_TIMESTAMP() "
+                       "WHERE ISSUE_ID = %s AND STATUS = 'DRAFT'", (r["issue_id"],))
+            open_ticket(db, failure, "AWAITING_APPROVAL", analyst, prefs, actor,
+                        f"the agent's proposed fix was rejected by {r.get('decided_by')}: {r.get('decision_note') or ''}"[:500],
+                        rca=failure.get("rca") if isinstance(failure.get("rca"), dict) else None)
+            counts["rejected"] += 1
+            continue
         if failure and move(db, r["failure_id"], "AWAITING_APPROVAL", "REJECTED",
                             {"detail": f"rejected by {r.get('decided_by')}: {r.get('decision_note') or ''}"[:4000]}):
             _audit(db, failure, None, "FAILED", {"reason": "rejected", "by": r.get("decided_by"),

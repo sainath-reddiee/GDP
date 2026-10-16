@@ -53,7 +53,8 @@ export default async function FailurePage({ params }: { params: { id: string } }
         </p>
       </div>
 
-      {open && can(me, "OPS.FIX_APPROVE") && <FixDecision approvalId={open.approval_id} fixTitle={issue?.title} approver={open.approver} />}
+      {open && can(me, "OPS.FIX_APPROVE") && <FixDecision approvalId={open.approval_id} fixTitle={issue?.title} approver={open.approver}
+        proposal={open.kind === "PROPOSAL" ? { cause: rca?.cause, rationale: rca?.proposal?.rationale, steps: rca?.proposal?.steps } : null} />}
 
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)]">
         <section className="surface p-4">
@@ -110,6 +111,8 @@ export default async function FailurePage({ params }: { params: { id: string } }
               {!!rca.path?.length && <p className="mt-2 text-xs"><span className="font-medium">Upstream:</span> {rca.path.join(" ← ")}</p>}
               {!!rca.fix_steps?.length && <ol className="mt-2 list-decimal space-y-1 pl-4 text-xs">{rca.fix_steps.map((s, i) => <li key={i}>{s}</li>)}</ol>}
               {rca.agent_note && <p className="mt-2 text-[11px] text-muted-foreground">RCA agent not used: {rca.agent_note}</p>}
+              {rca.proposal && <p className="mt-2 text-xs text-agent">The agent proposed a fix ({rca.proposal.risk} change, from {rca.proposal.source}).</p>}
+              {rca.proposal_note && <p className="mt-2 text-[11px] text-muted-foreground">No fix proposed: {rca.proposal_note}</p>}
             </section>
           )}
           {f.status === "TICKETED" && f.incident_id && can(me, "OPS.OPERATE") && (

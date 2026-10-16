@@ -7,6 +7,7 @@ which of two writes for the same key wins.
 
 from __future__ import annotations
 
+import re
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Optional
 
@@ -198,17 +199,24 @@ def push_row(env_id: str, body: Dict[str, Any]) -> tuple[str, Dict[str, Any]]:
     return kind, row
 
 
+_STATEMENT = re.compile(r"(Running statement|Executing statement|Executing query|Running query|Executing SQL)\s*:", re.I)
+
+
 def excerpt(text: Any, limit: int = EXCERPT_MAX) -> Optional[str]:
-    """The useful end of an error: the last traceback (or ERROR lines) of a log, redacted and capped."""
+    """The useful end of an error: the last traceback (or ERROR lines) of a log, redacted and capped. The last SQL
+    statement the task logged before it (SQL operators log 'Running statement: ...') is kept in front, so the analysis
+    knows which table a failing query read."""
     if not text:
         return None
     body = str(text)
     marker = body.rfind("Traceback (most recent call last)")
+    before = body[:marker] if marker >= 0 else ""
     if marker >= 0:
         body = body[marker:]
     else:
         lines = [ln for ln in body.splitlines() if " ERROR " in ln or "Error" in ln or "Exception" in ln]
         if lines:
             body = "\n".join(lines[-30:])
-    body = redact(body.strip())
+    statement = [ln.strip()[:1500] for ln in before.splitlines() if _STATEMENT.search(ln)][-1:]
+    body = redact("\n".join(statement + [body.strip()]))
     return body[-limit:] if len(body) > limit else body

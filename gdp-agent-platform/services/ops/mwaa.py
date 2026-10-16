@@ -57,8 +57,28 @@ def supports_updated_at(airflow_version: str) -> bool:
     return _version_tuple(airflow_version) >= (2, 6, 0)
 
 
+def error_detail_text(details: Any) -> List[str]:
+    """Airflow 3 puts a failed task's exception in the message's error_detail ([{exc_type, exc_value, frames, ...}])
+    instead of the text: render it as the Python traceback it stands for, so excerpts, signatures and the root-cause
+    analysis see the real error ('ProgrammingError: 000904 ... invalid identifier ...')."""
+    lines: List[str] = []
+    for d in details if isinstance(details, list) else []:
+        if not isinstance(d, dict):
+            continue
+        if lines:
+            lines.append("The above exception was the direct cause of the following exception:" if d.get("is_cause")
+                         else "During handling of the above exception, another exception occurred:")
+        frames = [f for f in (d.get("frames") or []) if isinstance(f, dict)]
+        if frames:
+            lines.append("Traceback (most recent call last):")
+            lines += [f'  File "{f.get("filename")}", line {f.get("lineno")}, in {f.get("name")}' for f in frames[-25:]]
+        lines.append(f"{d.get('exc_type') or 'Exception'}: {d.get('exc_value') or ''}".rstrip())
+    return lines
+
+
 def log_text(content: Any) -> str:
-    """The text of a log page: a string, a v1 '[(host, text)]' string, or v2 structured messages."""
+    """The text of a log page: a string, a v1 '[(host, text)]' string, or v2 structured messages (with the exception of
+    a failed task rendered from error_detail)."""
     if content is None:
         return ""
     if isinstance(content, list):
@@ -69,6 +89,7 @@ def log_text(content: Any) -> str:
                 level = item.get("level") or ""
                 event = item.get("event") if item.get("event") is not None else item.get("message", "")
                 lines.append(" ".join(str(x) for x in (stamp, level.upper() if level else "", event) if x != ""))
+                lines += error_detail_text(item.get("error_detail"))
             elif isinstance(item, (list, tuple)) and len(item) == 2:
                 lines.append(str(item[1]))
             else:

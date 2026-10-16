@@ -47,6 +47,13 @@ def parse_failure(excerpt: Optional[str]) -> Dict[str, Optional[str]]:
     m = _CLASS.match(line)
     cls = m.group("cls").split(".")[-1] if m else None
     msg = (m.group("msg") if m else line).strip()
+    # a multi-line message (Snowflake: "SQL compilation error: ...\ninvalid identifier 'X'") continues on the next lines
+    rows = text.splitlines()
+    at = max((i for i, r in enumerate(rows) if line and line in r), default=-1)
+    for extra in rows[at + 1:at + 4] if at >= 0 else []:
+        if not extra.strip() or re.match(r"^\s*(\[|\d{4}-\d\d-\d\dT|t? ?(INFO|ERROR|WARNING|DEBUG)\b|Traceback|During handling|The above)", extra):
+            break
+        msg = f"{msg} {extra.strip()}"
     q = _QUERY_ID.search(text)
     node = _DBT_NODE.search(text)
     model = None if node else _DBT_MODEL.search(text)
@@ -92,7 +99,10 @@ def preference(row: Optional[Dict[str, Any]]) -> Dict[str, Any]:
             "default_approval_required": r.get("default_approval_required") is not False,
             "graph_hops": int(min(6, max(1, num("graph_hops", 3)))),
             "notify_target": r.get("notify_target"),
-            "rca_mode": mode if mode in ("AGENT", "GROUNDED") else "AGENT"}
+            "rca_mode": mode if mode in ("AGENT", "GROUNDED") else "AGENT",
+            # agent-proposed fixes (V063): off unless enabled, and only on objects the scope names
+            "agent_proposals_enabled": bool(r.get("agent_proposals_enabled")),
+            "agent_fix_scope": (str(r.get("agent_fix_scope")).strip() or None) if r.get("agent_fix_scope") else None}
 
 
 def _most_specific(rows: Iterable[Dict[str, Any]], dag_id: str, task_id: Optional[str]) -> Optional[Dict[str, Any]]:

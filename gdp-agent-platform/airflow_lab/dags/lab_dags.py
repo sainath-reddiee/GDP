@@ -18,6 +18,7 @@ task, and the rerun succeeds. airflow_lab/reset.sql puts every failure back.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import time
 import uuid
@@ -31,6 +32,7 @@ except ImportError:  # Airflow 2
     from airflow.hooks.base import BaseHook
 
 CONN_ID = "lab_snowflake"
+log = logging.getLogger(__name__)
 START = datetime(2026, 1, 1)
 
 
@@ -87,6 +89,8 @@ def _through_gateway(config, statement: str):
 
 def run(sql: str):
     statements = [s for s in sql.split(";") if s.strip()]
+    for statement in statements:   # like the Snowflake operator: the statement is in the task log
+        log.info("Running statement: %s", statement.strip())
     config = _gateway()
     if config:
         rows = None

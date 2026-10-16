@@ -63,6 +63,13 @@ export function Guardrails({ preference, scopes, routes, canEdit }: { preference
                 checked={pref.airflow_clear_enabled} disabled={ro} onChange={(v) => patch({ airflow_clear_enabled: v })} />
         <Toggle label="Fixes need approval unless they say otherwise" hint="Applies to a published fix that does not set its own approval flag."
                 checked={pref.default_approval_required} disabled={ro} onChange={(v) => patch({ default_approval_required: v })} />
+        <Toggle label="The agent proposes fixes on a miss" hint="Built only from the safe-action catalogue, on objects inside the fix scope below, checked against Snowflake. One person's approval publishes and runs it; the same failure is then fixed automatically."
+                checked={!!pref.agent_proposals_enabled} disabled={ro} onChange={(v) => patch({ agent_proposals_enabled: v })} />
+        <label className="block space-y-1 text-xs font-medium">Agent fix scope
+          <Input defaultValue={pref.agent_fix_scope ?? ""} disabled={ro} className="font-mono text-xs" placeholder="ANALYTICS.STAGING.*, DEV_AI_PLATFORM.CORE.LAB_*"
+                 onBlur={(e) => e.target.value.trim() !== (pref.agent_fix_scope ?? "") && patch({ agent_fix_scope: e.target.value.trim() })} />
+          <span className="block font-normal text-muted-foreground">Comma-separated DATABASE.SCHEMA.NAME patterns (* wildcards). The agent never touches anything else, and never the platform's own tables.</span>
+        </label>
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <label className="space-y-1 text-xs font-medium">Minimum match score
             <Input type="number" min={0} max={1} step={0.05} defaultValue={pref.search_score_min} disabled={ro} className="text-xs"

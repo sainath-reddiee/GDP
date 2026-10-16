@@ -57,3 +57,60 @@ GRANT USAGE ON PROCEDURE {{database}}.{{schema}}.SP_PUBLISH_KNOWN_ISSUE(VARCHAR,
 GRANT USAGE ON PROCEDURE {{database}}.{{schema}}.SP_RUN_FIX_STEP(VARCHAR, VARCHAR, NUMBER) TO DATABASE ROLE {{database}}.OPS_SERVICE;
 GRANT USAGE ON PROCEDURE {{database}}.{{schema}}.SP_RCA_CONTEXT(VARCHAR) TO DATABASE ROLE {{database}}.OPS_VIEWER;
 GRANT USAGE ON PROCEDURE {{database}}.{{schema}}.SP_WALK_GRAPH(VARCHAR, NUMBER) TO DATABASE ROLE {{database}}.OPS_VIEWER;
+
+-- The safe-action catalogue (services/resolve/actions.py): the only steps an agent-proposed fix may use. Each
+-- checks its input and the agent fix scope again when it runs.
+CREATE OR REPLACE PROCEDURE {{database}}.{{schema}}.FIX_ADD_COLUMN(FAILURE_ID VARCHAR, INPUT VARCHAR)
+  RETURNS VARIANT LANGUAGE PYTHON RUNTIME_VERSION = '3.11'
+  PACKAGES = ('snowflake-snowpark-python')
+  IMPORTS = ('{{services_import}}')
+  HANDLER = 'services.resolve.actions.add_column_entry'
+  COMMENT = 'Safe action: add a missing column (in the agent fix scope only), optionally filled from another column'
+  EXECUTE AS CALLER;
+
+CREATE OR REPLACE PROCEDURE {{database}}.{{schema}}.FIX_CREATE_TABLE_FROM(FAILURE_ID VARCHAR, INPUT VARCHAR)
+  RETURNS VARIANT LANGUAGE PYTHON RUNTIME_VERSION = '3.11'
+  PACKAGES = ('snowflake-snowpark-python')
+  IMPORTS = ('{{services_import}}')
+  HANDLER = 'services.resolve.actions.create_table_from_entry'
+  COMMENT = 'Safe action: create a missing table as a copy of an existing one (fix scope only)'
+  EXECUTE AS CALLER;
+
+CREATE OR REPLACE PROCEDURE {{database}}.{{schema}}.FIX_CREATE_STAGE(FAILURE_ID VARCHAR, INPUT VARCHAR)
+  RETURNS VARIANT LANGUAGE PYTHON RUNTIME_VERSION = '3.11'
+  PACKAGES = ('snowflake-snowpark-python')
+  IMPORTS = ('{{services_import}}')
+  HANDLER = 'services.resolve.actions.create_stage_entry'
+  COMMENT = 'Safe action: create a missing internal stage (fix scope only)'
+  EXECUTE AS CALLER;
+
+CREATE OR REPLACE PROCEDURE {{database}}.{{schema}}.FIX_DEDUP_ON_KEY(FAILURE_ID VARCHAR, INPUT VARCHAR)
+  RETURNS VARIANT LANGUAGE PYTHON RUNTIME_VERSION = '3.11'
+  PACKAGES = ('snowflake-snowpark-python')
+  IMPORTS = ('{{services_import}}')
+  HANDLER = 'services.resolve.actions.dedup_on_key_entry'
+  COMMENT = 'Safe action: keep one row per key (changes data; fix scope only)'
+  EXECUTE AS CALLER;
+
+CREATE OR REPLACE PROCEDURE {{database}}.{{schema}}.FIX_RERUN_ONLY(FAILURE_ID VARCHAR, INPUT VARCHAR)
+  RETURNS VARIANT LANGUAGE PYTHON RUNTIME_VERSION = '3.11'
+  PACKAGES = ('snowflake-snowpark-python')
+  IMPORTS = ('{{services_import}}')
+  HANDLER = 'services.resolve.actions.rerun_only_entry'
+  COMMENT = 'Safe action: change nothing; the task is cleared to run again'
+  EXECUTE AS CALLER;
+
+CREATE OR REPLACE PROCEDURE {{database}}.{{schema}}.SP_DESCRIBE_OBJECT(NAME VARCHAR)
+  RETURNS VARIANT LANGUAGE PYTHON RUNTIME_VERSION = '3.11'
+  PACKAGES = ('snowflake-snowpark-python')
+  IMPORTS = ('{{services_import}}')
+  HANDLER = 'services.resolve.actions.describe_entry'
+  COMMENT = 'Read only: whether a table or stage in the agent fix scope exists, and its columns'
+  EXECUTE AS CALLER;
+
+GRANT USAGE ON PROCEDURE {{database}}.{{schema}}.FIX_ADD_COLUMN(VARCHAR, VARCHAR) TO DATABASE ROLE {{database}}.OPS_SERVICE;
+GRANT USAGE ON PROCEDURE {{database}}.{{schema}}.FIX_CREATE_TABLE_FROM(VARCHAR, VARCHAR) TO DATABASE ROLE {{database}}.OPS_SERVICE;
+GRANT USAGE ON PROCEDURE {{database}}.{{schema}}.FIX_CREATE_STAGE(VARCHAR, VARCHAR) TO DATABASE ROLE {{database}}.OPS_SERVICE;
+GRANT USAGE ON PROCEDURE {{database}}.{{schema}}.FIX_DEDUP_ON_KEY(VARCHAR, VARCHAR) TO DATABASE ROLE {{database}}.OPS_SERVICE;
+GRANT USAGE ON PROCEDURE {{database}}.{{schema}}.FIX_RERUN_ONLY(VARCHAR, VARCHAR) TO DATABASE ROLE {{database}}.OPS_SERVICE;
+GRANT USAGE ON PROCEDURE {{database}}.{{schema}}.SP_DESCRIBE_OBJECT(VARCHAR) TO DATABASE ROLE {{database}}.OPS_VIEWER;
