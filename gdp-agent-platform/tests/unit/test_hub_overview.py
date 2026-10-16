@@ -12,8 +12,11 @@ from fastapi.testclient import TestClient  # noqa: E402
 import app.main as main  # noqa: E402
 import app.governance as gov  # noqa: E402
 import app.hub_overview_api as overview  # noqa: E402
-from datetime import date  # noqa: E402
+from datetime import date, timedelta  # noqa: E402
 
+
+# two days inside the overview's 7-day window, relative to today (fixed dates fail once the week moves on)
+DAY_A, DAY_B = (date.today() - timedelta(days=3)).isoformat(), (date.today() - timedelta(days=2)).isoformat()
 
 
 class FakeDb:
@@ -40,7 +43,7 @@ ANSWERS = {
     # developer stats: matched before the store blocks' broader needles
     "AS IN_FLIGHT": [{"in_flight": 4, "drafts": 2, "needs_review": 2}],
     "AS LEAD_MINUTES": [{"completed": 9, "failed": 1, "lead_minutes": 190, "active": 4, "started": 12}],
-    "AS DAY, COUNT_IF(TO_STATE": [{"day": "2026-10-09", "completed": 4, "failed": 1}, {"day": "2026-10-10", "completed": 5, "failed": 0}],
+    "AS DAY, COUNT_IF(TO_STATE": [{"day": DAY_A, "completed": 4, "failed": 1}, {"day": DAY_B, "completed": 5, "failed": 0}],
     "AS OLDEST_MINUTES": [{"runs": 2, "oldest_minutes": 3000}],
     "FROM CORE.CHANGE_REQUEST": [{"n": 3, "oldest": 600}],
     "STATUS = 'IN_REVIEW'": [{"n": 1, "oldest": 4000}],
@@ -110,7 +113,7 @@ def test_overview_counts_runs_and_stores(client):
     dl = out["delivery"]
     assert {k: dl[k] for k in ("completed", "failed", "started", "active", "success_rate", "lead_minutes")} == {
         "completed": 9, "failed": 1, "started": 12, "active": 4, "success_rate": 90.0, "lead_minutes": 190}
-    assert len(dl["daily"]) == 7 and {"day": "2026-10-09", "completed": 4, "failed": 1} in dl["daily"]
+    assert len(dl["daily"]) == 7 and {"day": DAY_A, "completed": 4, "failed": 1} in dl["daily"]
     assert out["waiting"] == {"runs": 2, "requests": 3, "versions": 1 + 1 + 2, "total": 9, "oldest_minutes": 4000}
     assert out["freshness"] == {"tables": 20, "fresh": 15, "aging": 2, "stale": 3, "failed_loads": 2, "idle_pipelines": 1,
                                 "oldest_hours": 400}
