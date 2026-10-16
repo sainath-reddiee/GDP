@@ -180,7 +180,7 @@ def _dag(db: Any, env_id: str, dag_id: str) -> Dict[str, Any]:
 
 
 def _env(db: Any, env_id: str) -> Dict[str, Any]:
-    found = db.query("SELECT ENV_ID, NAME, MWAA_ENV, REGION, AIRFLOW_URL, API_VERSION FROM CORE.AIRFLOW_ENV WHERE ENV_ID = %s",
+    found = db.query("SELECT ENV_ID, NAME, KIND, MWAA_ENV, REGION, AIRFLOW_URL, API_VERSION FROM CORE.AIRFLOW_ENV WHERE ENV_ID = %s",
                      (env_id,))
     return found[0] if found else {"env_id": env_id}
 
@@ -237,9 +237,9 @@ def log_part(db: Any, incident: Dict[str, Any], env: Dict[str, Any], task: Optio
     text, source, note = "", "none", ""
     if fetch and task_id and incident.get("run_id") and env.get("mwaa_env") and env.get("region"):
         try:
-            from services.ops.mwaa import Mwaa
+            from services.ops.mwaa import client_for
 
-            mw = mwaa_factory(env) if mwaa_factory else Mwaa(env["mwaa_env"], env["region"])
+            mw = mwaa_factory(env) if mwaa_factory else client_for(env)
             found = mw.task_log(incident["dag_id"], incident["run_id"], task_id, max(try_number, 1), map_index,
                                 cap=LOG_FETCH_BYTES)
             text = redact(found.get("text") or "")

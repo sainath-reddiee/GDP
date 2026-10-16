@@ -13,7 +13,7 @@ import json
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
-from services.ops.mwaa import Mwaa, MwaaError, supports_updated_at
+from services.ops.mwaa import Mwaa, MwaaError, client_for, supports_updated_at
 from services.ops.normalize import ACTIVE, dag_row, dag_run_row, excerpt, newer, task_row, ts
 from services.ops.redact import redact, redact_payload
 
@@ -272,7 +272,7 @@ def poll_env(db: Any, env: Dict[str, Any], client: Optional[Mwaa] = None, now: O
     changed, error excerpts of new failures. Stores the cursor and clears LAST_ERROR. MwaaError propagates."""
     env_id = env["env_id"]
     started = ts(now) or utcnow()
-    mw = client or Mwaa(env["mwaa_env"], env["region"])
+    mw = client or client_for(env)
     info = mw.version()
 
     dags, complete = mw.all_dags()
