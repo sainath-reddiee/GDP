@@ -1,9 +1,9 @@
 """Model Workbench: one canonical, versioned model per domain, reviewed and approved in the app (V039).
 
-  GOVERNANCE.DOMAIN_MODEL         one row per domain: approved version, open version, naming standard, diagram layout
-  GOVERNANCE.MODEL_DESIGNS        the versions (DESIGN_ID = MODEL_ID for canonical models; rows without a MODEL_ID
+  CORE.DOMAIN_MODEL         one row per domain: approved version, open version, naming standard, diagram layout
+  CORE.MODEL_DESIGNS        the versions (DESIGN_ID = MODEL_ID for canonical models; rows without a MODEL_ID
                                   are legacy Modeling hub designs and stay read-only)
-  GOVERNANCE.MODEL_REVIEW_COMMENT review threads per path (ENTITY, ENTITY.COLUMN, rel:<id>, model)
+  CORE.MODEL_REVIEW_COMMENT review threads per path (ENTITY, ENTITY.COLUMN, rel:<id>, model)
 
 Lifecycle of a version: DRAFT -> IN_REVIEW -> APPROVED (-> PUBLISHED once its Git pull request is merged), or
 REJECTED; the version it replaces becomes SUPERSEDED. A model has at most one open version (DRAFT or IN_REVIEW). The
@@ -26,9 +26,9 @@ from typing import Any, Dict, List, Optional
 from services.common.sql import clip, insert_rows, rows, scalar, variant
 from services.modeling import model_diff, spec_v2
 
-MODELS = "GOVERNANCE.DOMAIN_MODEL"
-DESIGNS = "GOVERNANCE.MODEL_DESIGNS"
-COMMENTS = "GOVERNANCE.MODEL_REVIEW_COMMENT"
+MODELS = "CORE.DOMAIN_MODEL"
+DESIGNS = "CORE.MODEL_DESIGNS"
+COMMENTS = "CORE.MODEL_REVIEW_COMMENT"
 OPEN = ("DRAFT", "IN_REVIEW")
 LIVE = ("APPROVED", "PUBLISHED")
 COMMENT_KINDS = ("COMMENT", "SUGGESTION", "BLOCKER")
@@ -102,7 +102,7 @@ def _open(versions: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
 
 def _domains(session) -> List[str]:
     try:
-        return [str(r["DOMAIN_NAME"]).upper() for r in rows(session, "SELECT DOMAIN_NAME FROM KNOWLEDGE.DOMAIN_REGISTRY")]
+        return [str(r["DOMAIN_NAME"]).upper() for r in rows(session, "SELECT DOMAIN_NAME FROM CORE.DOMAIN_REGISTRY")]
     except Exception:
         return []
 
@@ -117,7 +117,7 @@ def list_models(session, layer: str = "SILVER") -> List[Dict[str, Any]]:
                                      M.APPROVED_VERSION, M.OPEN_VERSION, M.UPDATED_AT,
                                      O.STATUS AS OPEN_STATUS, O.SUBMITTED_BY, O.AUTHORS AS OPEN_AUTHORS,
                                      A.PR_STATE, A.PR_URL, A.APPROVED_AT, A.APPROVED_BY, A.SPEC AS APPROVED_SPEC
-                                FROM KNOWLEDGE.DOMAIN_REGISTRY R
+                                FROM CORE.DOMAIN_REGISTRY R
                                 LEFT JOIN {MODELS} M ON M.DOMAIN_ID = R.DOMAIN_ID AND COALESCE(M.LAYER, 'SILVER') = ?
                                 LEFT JOIN {DESIGNS} O ON O.MODEL_ID = M.MODEL_ID AND O.VERSION = M.OPEN_VERSION
                                 LEFT JOIN {DESIGNS} A ON A.MODEL_ID = M.MODEL_ID AND A.VERSION = M.APPROVED_VERSION
@@ -184,16 +184,16 @@ def _claim_open(session, model_id: str, version: int) -> None:
 
 
 def _domain(session, domain_id: str) -> Dict[str, Any]:
-    found = rows(session, "SELECT DOMAIN_ID, DOMAIN_NAME FROM KNOWLEDGE.DOMAIN_REGISTRY WHERE DOMAIN_ID = ?", [domain_id])
+    found = rows(session, "SELECT DOMAIN_ID, DOMAIN_NAME FROM CORE.DOMAIN_REGISTRY WHERE DOMAIN_ID = ?", [domain_id])
     assert found, "domain not found"
     return _low(found[0])
 
 
 def _registry_spec(session, domain: Dict[str, Any]) -> Dict[str, Any]:
-    tables = [_low(r) for r in rows(session, "SELECT * FROM KNOWLEDGE.TARGET_TABLE_REGISTRY WHERE DOMAIN_ID = ? AND COALESCE(LAYER, 'SILVER') = 'SILVER'",
+    tables = [_low(r) for r in rows(session, "SELECT * FROM CORE.TARGET_TABLE_REGISTRY WHERE DOMAIN_ID = ? AND COALESCE(LAYER, 'SILVER') = 'SILVER'",
                                     [domain["domain_id"]])]
-    columns = [_low(r) for r in rows(session, """SELECT C.* FROM KNOWLEDGE.TARGET_COLUMN_REGISTRY C
-                                                   JOIN KNOWLEDGE.TARGET_TABLE_REGISTRY T ON T.TARGET_TABLE_ID = C.TARGET_TABLE_ID
+    columns = [_low(r) for r in rows(session, """SELECT C.* FROM CORE.TARGET_COLUMN_REGISTRY C
+                                                   JOIN CORE.TARGET_TABLE_REGISTRY T ON T.TARGET_TABLE_ID = C.TARGET_TABLE_ID
                                                   WHERE T.DOMAIN_ID = ? AND COALESCE(T.LAYER, 'SILVER') = 'SILVER'""", [domain["domain_id"]])]
     return spec_v2.spec_from_registry(domain, tables, columns)
 
@@ -513,7 +513,7 @@ def baseline(session, domain_id: str, user: str = "SYSTEM_BACKFILL") -> Optional
                     "Baseline: the domain's registered targets when the Model Workbench was introduced")
     session.sql(f"""UPDATE {DESIGNS} SET APPROVED_BY = ?, APPROVED_AT = CURRENT_TIMESTAMP(), REGISTRY_SYNCED_AT = CURRENT_TIMESTAMP()
                      WHERE MODEL_ID = ? AND VERSION = 1""", params=[user, model_id]).collect()
-    session.sql("UPDATE KNOWLEDGE.TARGET_TABLE_REGISTRY SET MODEL_ID = ?, MODEL_VERSION = 1 WHERE DOMAIN_ID = ? AND COALESCE(LAYER, 'SILVER') = 'SILVER'",
+    session.sql("UPDATE CORE.TARGET_TABLE_REGISTRY SET MODEL_ID = ?, MODEL_VERSION = 1 WHERE DOMAIN_ID = ? AND COALESCE(LAYER, 'SILVER') = 'SILVER'",
                 params=[model_id, domain_id]).collect()
     return {"model_id": model_id, "domain": domain["domain_name"], **spec_v2.summary(spec)}
 
@@ -521,8 +521,8 @@ def baseline(session, domain_id: str, user: str = "SYSTEM_BACKFILL") -> Optional
 def backfill(session, user: str = "SYSTEM_BACKFILL") -> List[str]:
     """Baselines for every domain that registers tables and has no model yet (run by the deploy; idempotent)."""
     try:
-        found = rows(session, f"""SELECT DISTINCT T.DOMAIN_ID FROM KNOWLEDGE.TARGET_TABLE_REGISTRY T
-                                   JOIN KNOWLEDGE.DOMAIN_REGISTRY R ON R.DOMAIN_ID = T.DOMAIN_ID
+        found = rows(session, f"""SELECT DISTINCT T.DOMAIN_ID FROM CORE.TARGET_TABLE_REGISTRY T
+                                   JOIN CORE.DOMAIN_REGISTRY R ON R.DOMAIN_ID = T.DOMAIN_ID
                                    LEFT JOIN {MODELS} M ON M.DOMAIN_ID = T.DOMAIN_ID AND COALESCE(M.LAYER, 'SILVER') = 'SILVER'
                                   WHERE M.MODEL_ID IS NULL AND COALESCE(T.LAYER, 'SILVER') = 'SILVER'""")
     except Exception as exc:

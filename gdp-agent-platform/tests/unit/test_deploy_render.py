@@ -24,7 +24,7 @@ def test_render_substitutes_and_rejects_unknown():
 
 
 def test_all_sql_renders_without_leftover_placeholders():
-    variables = {"database": "AI_PLATFORM", "services_import": "@AI_PLATFORM.CORE.CODE_STAGE/services-x.zip",
+    variables = {"database": "AI_PLATFORM", "schema": "CORE", "services_import": "@AI_PLATFORM.CORE.CODE_STAGE/services-x.zip",
                  "warehouse": "DBT_WH", "agent_skills": "skills:\n  - name: example\n"}
     for _, _, path in list_migrations():
         render(path.read_text(encoding="utf-8"), variables)

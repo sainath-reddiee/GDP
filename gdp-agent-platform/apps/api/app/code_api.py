@@ -1,4 +1,4 @@
-"""Code repositories: connect a Git repository through Snowflake's Git integration, index it (CODE.INDEX_REPO), refresh
+"""Code repositories: connect a Git repository through Snowflake's Git integration, index it (CORE.INDEX_REPO), refresh
 it on demand or on a schedule (a Snowflake task), switch its branch, rotate its credentials, and search, read and trace
 its code. Credentials never pass through this API's storage: a token given here goes straight into a Snowflake SECRET.
 
@@ -19,6 +19,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from app.db import DATABASE, WAREHOUSE, Db
+from services.common.platform_schema import PLATFORM_SCHEMA, fqn
 from app.main import _json, _snowflake_error, current_db
 from services.code import context as code_ctx
 from services.code.indexer import LOCK_MINUTES, SAFE_BRANCH, branch_segment, safe_path
@@ -57,7 +58,7 @@ def same_origin(a: str, b: str) -> bool:
 
 
 def _repo(db: Db, repo_id: str) -> dict:
-    found = db.query("SELECT * FROM CODE.REPO WHERE REPO_ID = %s", (repo_id,))
+    found = db.query("SELECT * FROM CORE.REPO WHERE REPO_ID = %s", (repo_id,))
     if not found:
         raise HTTPException(404, "repository not found")
     r = found[0]
@@ -67,15 +68,25 @@ def _repo(db: Db, repo_id: str) -> dict:
 
 
 def _task_name(repo_id: str) -> str:
-    return f"{DATABASE}.CODE.REFRESH_{repo_id.replace('-', '')[:12].upper()}"
+    return fqn(DATABASE, f"REFRESH_{repo_id.replace('-', '')[:12].upper()}")
+
+
+def _drop_refresh_tasks(db: Db, repo_id: str) -> None:
+    """The schedule's task, and the suspended copy kept from before V061 (names before V061)."""
+    task = _task_name(repo_id)
+    db.execute(f"DROP TASK IF EXISTS {task}")
+    try:   # a new environment has no CODE schema
+        db.execute(f"DROP TASK IF EXISTS {task.replace(fqn(DATABASE, ''), f'{DATABASE}.CODE.', 1)}")
+    except Exception:
+        pass
 
 
 def _platform_repo_name(name: str) -> str:
-    return f"{DATABASE}.CODE.{name}"
+    return fqn(DATABASE, name)
 
 
 def _platform_secret_name(name: str) -> str:
-    return f"{DATABASE}.CODE.{name}_GIT_TOKEN"
+    return fqn(DATABASE, f"{name}_GIT_TOKEN")
 
 
 def _owns_git_repo(repo: dict) -> bool:
@@ -83,7 +94,9 @@ def _owns_git_repo(repo: dict) -> bool:
     target = str(repo.get("git_repository") or "").upper()
     if any(o.get("kind") == "GIT REPOSITORY" and str(o.get("name", "")).upper() == target for o in repo.get("created_objects") or []):
         return True
-    return target == _platform_repo_name(str(repo.get("name") or "")).upper()  # rows from before CREATED_OBJECTS existed
+    name = str(repo.get("name") or "")
+    # rows from before CREATED_OBJECTS existed; clones made before V061 stay in CODE (names before V061)
+    return target in (_platform_repo_name(name).upper(), f"{DATABASE}.CODE.{name}".upper())
 
 
 def _branches(db: Db, fqn: str, fetch: bool = True) -> tuple[list[dict], str]:
@@ -148,11 +161,11 @@ def list_repos(db: Db = Depends(current_db)):
                                  SELECT REPO_ID, OBJECT_CONSTRUCT('status', STATUS, 'started_at', STARTED_AT::VARCHAR,
                                                                   'duration_ms', DURATION_MS, 'files_changed', FILES_CHANGED,
                                                                   'error', NULLIF(NULLIF(ERROR, 'None'), '')) AS LAST_RUN
-                                   FROM CODE.INDEX_RUN QUALIFY ROW_NUMBER() OVER (PARTITION BY REPO_ID ORDER BY STARTED_AT DESC) = 1)
+                                   FROM CORE.INDEX_RUN QUALIFY ROW_NUMBER() OVER (PARTITION BY REPO_ID ORDER BY STARTED_AT DESC) = 1)
                                SELECT R.*, R.LAST_INDEXED_AT::VARCHAR AS LAST_INDEXED, R.CREATED_AT::VARCHAR AS CREATED, L.LAST_RUN,
                                       R.LOCK_RUN_ID IS NOT NULL AND R.LOCKED_AT >= DATEADD(minute, -{LOCK_MINUTES}, CURRENT_TIMESTAMP())
                                         AS LOCK_LIVE
-                                 FROM CODE.REPO R LEFT JOIN LAST L ON L.REPO_ID = R.REPO_ID ORDER BY R.NAME""")
+                                 FROM CORE.REPO R LEFT JOIN LAST L ON L.REPO_ID = R.REPO_ID ORDER BY R.NAME""")
     except Exception as exc:
         if "does not exist" not in str(exc) and "invalid identifier" not in str(exc):
             raise _snowflake_error(exc) from exc
@@ -210,7 +223,7 @@ def create_repo(body: RepoIn, db: Db = Depends(current_db)):
     branch = body.branch.strip().strip("/")
     if not SAFE_BRANCH.fullmatch(branch):
         raise HTTPException(400, "Branch name has unexpected characters")
-    if db.query("SELECT 1 FROM CODE.REPO WHERE NAME = %s", (name,)):
+    if db.query("SELECT 1 FROM CORE.REPO WHERE NAME = %s", (name,)):
         raise HTTPException(409, f"A repository named {name} is already connected")
     secret = (body.secret_name or "").strip() or None
     created: list[dict] = []
@@ -256,7 +269,7 @@ def create_repo(body: RepoIn, db: Db = Depends(current_db)):
     if branch not in names:
         raise _missing_branch(branch, names, url)
     repo_id = str(uuid.uuid4())
-    db.execute("""INSERT INTO CODE.REPO (REPO_ID, NAME, GIT_URL, PROVIDER, BRANCH, GIT_REPOSITORY, API_INTEGRATION, SECRET_NAME,
+    db.execute("""INSERT INTO CORE.REPO (REPO_ID, NAME, GIT_URL, PROVIDER, BRANCH, GIT_REPOSITORY, API_INTEGRATION, SECRET_NAME,
                          DOMAIN_IDS, INCLUDE_GLOBS, EXCLUDE_GLOBS, KIND, CREATED_OBJECTS)
                   SELECT %s, %s, %s, %s, %s, %s, %s, NULLIF(%s, ''), PARSE_JSON(%s), PARSE_JSON(%s), PARSE_JSON(%s), %s, PARSE_JSON(%s)""",
                (repo_id, name, url, provider_of(url), branch, git_repo, body.api_integration, secret or "",
@@ -307,8 +320,8 @@ def _flag(value: Optional[bool], current: Any, default: bool) -> bool:
 
 def _reset_index(db: Db, repo_id: str) -> None:
     for table in ("CODE_CHUNK", "CODE_EDGE", "CODE_FILE", "REPO_SUMMARY"):
-        db.execute(f"DELETE FROM CODE.{table} WHERE REPO_ID = %s", (repo_id,))
-    db.execute("""UPDATE CODE.REPO SET STATS = NULL, LAST_COMMIT = NULL, LAST_INDEXED_AT = NULL, ERROR = NULL,
+        db.execute(f"DELETE FROM {PLATFORM_SCHEMA}.{table} WHERE REPO_ID = %s", (repo_id,))
+    db.execute("""UPDATE CORE.REPO SET STATS = NULL, LAST_COMMIT = NULL, LAST_INDEXED_AT = NULL, ERROR = NULL,
                          STATUS = IFF(LOCK_RUN_ID IS NULL, 'NEW', STATUS) WHERE REPO_ID = %s""", (repo_id,))
 
 
@@ -340,13 +353,13 @@ def update_repo(repo_id: str, body: RepoUpdate, db: Db = Depends(current_db)):
         roots = project_roots(repo)
         if roots and folder not in roots:
             raise HTTPException(400, f"No dbt_project.yml in '{folder or '(root)'}'. Found: {', '.join(r or '(root)' for r in roots)}")
-    db.execute("""UPDATE CODE.REPO SET BRANCH = %s, DOMAIN_IDS = PARSE_JSON(%s), INCLUDE_GLOBS = PARSE_JSON(%s),
+    db.execute("""UPDATE CORE.REPO SET BRANCH = %s, DOMAIN_IDS = PARSE_JSON(%s), INCLUDE_GLOBS = PARSE_JSON(%s),
                          EXCLUDE_GLOBS = PARSE_JSON(%s), KIND = %s, ENABLED = %s WHERE REPO_ID = %s""",
                (branch, json.dumps(body.domain_ids if body.domain_ids is not None else repo["domain_ids"]),
                 json.dumps(include), json.dumps(exclude), body.kind or repo["kind"],
                 repo["enabled"] if body.enabled is None else body.enabled, repo_id))
     if any(v is not None for v in (body.use_for_dbt, body.dbt_project_dir, body.open_pr, body.draft_pr)):
-        db.execute("""UPDATE CODE.REPO SET USE_FOR_DBT = %s, DBT_PROJECT_DIR = %s, OPEN_PR = %s, DRAFT_PR = %s WHERE REPO_ID = %s""",
+        db.execute("""UPDATE CORE.REPO SET USE_FOR_DBT = %s, DBT_PROJECT_DIR = %s, OPEN_PR = %s, DRAFT_PR = %s WHERE REPO_ID = %s""",
                    (_flag(body.use_for_dbt, repo.get("use_for_dbt"), True), folder, _flag(body.open_pr, repo.get("open_pr"), True),
                     _flag(body.draft_pr, repo.get("draft_pr"), False), repo_id))
     if new_files:
@@ -396,7 +409,7 @@ def set_credentials(repo_id: str, body: CredentialsIn, db: Db = Depends(current_
     except Exception as exc:
         text = _mask(str(exc), body.token)
         raise (_privilege_hint(db, text, repo.get("api_integration") or "") or _snowflake_error(Exception(text))) from None
-    db.execute("UPDATE CODE.REPO SET SECRET_NAME = NULLIF(%s, ''), CREATED_OBJECTS = PARSE_JSON(%s), ERROR = NULL WHERE REPO_ID = %s",
+    db.execute("UPDATE CORE.REPO SET SECRET_NAME = NULLIF(%s, ''), CREATED_OBJECTS = PARSE_JSON(%s), ERROR = NULL WHERE REPO_ID = %s",
                (secret or "", json.dumps(created), repo_id))
     return _repo(db, repo_id)
 
@@ -407,20 +420,20 @@ def remove_repo(repo_id: str, drop_objects: bool = False, db: Db = Depends(curre
     Git repository and secret the platform created for it (never reused objects, nor ones another repository uses)."""
     repo = _repo(db, repo_id)
     try:
-        db.execute(f"DROP TASK IF EXISTS {_task_name(repo_id)}")
+        _drop_refresh_tasks(db, repo_id)
     except Exception as exc:
         raise _snowflake_error(exc) from exc
     # deleting the row first makes a run in progress stop without writing (it checks the row before each write)
-    db.execute("DELETE FROM CODE.REPO WHERE REPO_ID = %s", (repo_id,))
+    db.execute("DELETE FROM CORE.REPO WHERE REPO_ID = %s", (repo_id,))
     for table in ("CODE_CHUNK", "CODE_EDGE", "CODE_FILE", "REPO_SUMMARY", "INDEX_RUN", "CODE_USAGE"):
         try:
-            db.execute(f"DELETE FROM CODE.{table} WHERE REPO_ID = %s", (repo_id,))
+            db.execute(f"DELETE FROM {PLATFORM_SCHEMA}.{table} WHERE REPO_ID = %s", (repo_id,))
         except Exception:
             pass
     dropped, kept = [], []
     if drop_objects:
-        others = {str(r["git_repository"]).upper() for r in db.query("SELECT GIT_REPOSITORY FROM CODE.REPO")}
-        others_secrets = {str(r["secret_name"]).upper() for r in db.query("SELECT SECRET_NAME FROM CODE.REPO WHERE SECRET_NAME IS NOT NULL")}
+        others = {str(r["git_repository"]).upper() for r in db.query("SELECT GIT_REPOSITORY FROM CORE.REPO")}
+        others_secrets = {str(r["secret_name"]).upper() for r in db.query("SELECT SECRET_NAME FROM CORE.REPO WHERE SECRET_NAME IS NOT NULL")}
         owned = list(repo.get("created_objects") or [])
         if not owned and _owns_git_repo(repo):
             owned = [{"kind": "GIT REPOSITORY", "name": repo["git_repository"]}]
@@ -452,7 +465,7 @@ def _start_refresh(db: Db, repo_id: str) -> None:
             for _ in range(60):
                 _again.discard(repo_id)
                 try:
-                    result = db.call("CALL CODE.INDEX_REPO(%s)", (repo_id,))
+                    result = db.call("CALL CORE.INDEX_REPO(%s)", (repo_id,))
                 except Exception:
                     result = None  # the procedure records the failure on the repository and its index run
                 result = _json(result) if isinstance(result, str) else result
@@ -475,7 +488,7 @@ def refresh(repo_id: str, wait: bool = False, db: Db = Depends(current_db)):
     _repo(db, repo_id)
     if wait:
         try:
-            return {"result": db.call("CALL CODE.INDEX_REPO(%s)", (repo_id,))}
+            return {"result": db.call("CALL CORE.INDEX_REPO(%s)", (repo_id,))}
         except Exception as exc:
             raise _snowflake_error(exc) from exc
     _start_refresh(db, repo_id)
@@ -495,11 +508,11 @@ def set_schedule(repo_id: str, body: Schedule, db: Db = Depends(current_db)):
     task = _task_name(repo_id)
     try:
         db.execute(f"CREATE OR REPLACE TASK {task} WAREHOUSE = {WAREHOUSE} SCHEDULE = 'USING CRON {cron}' "
-                   f"COMMENT = 'Code context: scheduled repository refresh' AS CALL {DATABASE}.CODE.INDEX_REPO('{repo_id}')")
+                   f"COMMENT = 'Code context: scheduled repository refresh' AS CALL {DATABASE}.CORE.INDEX_REPO('{repo_id}')")
         db.execute(f"ALTER TASK {task} RESUME")
     except Exception as exc:
         raise _snowflake_error(exc) from exc
-    db.execute("UPDATE CODE.REPO SET SCHEDULE_CRON = %s WHERE REPO_ID = %s", (cron, repo_id))
+    db.execute("UPDATE CORE.REPO SET SCHEDULE_CRON = %s WHERE REPO_ID = %s", (cron, repo_id))
     return {"schedule": cron, "task": task}
 
 
@@ -507,10 +520,10 @@ def set_schedule(repo_id: str, body: Schedule, db: Db = Depends(current_db)):
 def clear_schedule(repo_id: str, db: Db = Depends(current_db)):
     _repo(db, repo_id)
     try:
-        db.execute(f"DROP TASK IF EXISTS {_task_name(repo_id)}")
+        _drop_refresh_tasks(db, repo_id)
     except Exception as exc:
         raise _snowflake_error(exc) from exc
-    db.execute("UPDATE CODE.REPO SET SCHEDULE_CRON = NULL WHERE REPO_ID = %s", (repo_id,))
+    db.execute("UPDATE CORE.REPO SET SCHEDULE_CRON = NULL WHERE REPO_ID = %s", (repo_id,))
     return {"schedule": None}
 
 
@@ -519,7 +532,7 @@ def index_runs(repo_id: str, db: Db = Depends(current_db)):
     return {"runs": db.query("""SELECT INDEX_RUN_ID, STATUS, STARTED_AT::VARCHAR AS STARTED_AT, FINISHED_AT::VARCHAR AS FINISHED_AT,
                                        COMMIT_SHA, FILES_SEEN, FILES_CHANGED, FILES_REMOVED, CHUNKS, EDGES, DURATION_MS,
                                        TRIGGERED_BY, NULLIF(NULLIF(ERROR, 'None'), '') AS ERROR
-                                  FROM CODE.INDEX_RUN WHERE REPO_ID = %s ORDER BY STARTED_AT DESC LIMIT 30""", (repo_id,))}
+                                  FROM CORE.INDEX_RUN WHERE REPO_ID = %s ORDER BY STARTED_AT DESC LIMIT 30""", (repo_id,))}
 
 
 def like_pattern(q: str) -> str:
@@ -534,14 +547,14 @@ def search(q: str, repo_id: Optional[str] = None, kind: Optional[str] = None, li
     q = q.strip()
     if not q:
         return {"hits": []}
-    repos = [r for r in db.query("SELECT REPO_ID, NAME FROM CODE.REPO WHERE ENABLED") if not repo_id or r["repo_id"] == repo_id]
+    repos = [r for r in db.query("SELECT REPO_ID, NAME FROM CORE.REPO WHERE ENABLED") if not repo_id or r["repo_id"] == repo_id]
     if not repos:
         return {"hits": []}
     names = {r["repo_id"]: r["name"] for r in repos}
     ids = list(names)
     pattern = like_pattern(q)
     exact = db.query("""SELECT CHUNK_ID, REPO_ID, PATH, START_LINE, END_LINE, KIND, NAME, LEFT(TEXT, 600) AS TEXT
-                          FROM CODE.CODE_CHUNK
+                          FROM CORE.CODE_CHUNK
                          WHERE ARRAY_CONTAINS(REPO_ID::VARIANT, PARSE_JSON(%s)) AND (%s IS NULL OR KIND = %s)
                            AND (UPPER(NAME) LIKE UPPER(%s) ESCAPE '!' OR UPPER(PATH) LIKE UPPER(%s) ESCAPE '!')
                          ORDER BY IFF(UPPER(NAME) = UPPER(%s), 0, 1), LENGTH(PATH) LIMIT 15""",
@@ -569,7 +582,7 @@ def _read_text(db: Db, fqn: str, ref: str, path: str) -> str:
     stage = f"@{fqn}/{ref}/{path}"
     read = lambda sql: [list(r.values())[0] for r in db.query(sql)]  # noqa: E731
     try:
-        chunks = read(f"SELECT $1 FROM {stage} (FILE_FORMAT => '{DATABASE}.CODEGEN.RAW_TEXT_FORMAT')")
+        chunks = read(f"SELECT $1 FROM {stage} (FILE_FORMAT => '{DATABASE}.CORE.RAW_TEXT_FORMAT')")
     except Exception:
         chunks = read(f"SELECT $1 FROM {stage}")
     return "\n".join(str(c) for c in chunks if c is not None)
@@ -584,7 +597,7 @@ def file(repo_id: str, path: str, db: Db = Depends(current_db)):
     repo = _repo(db, repo_id)
     if not safe_path(path):
         raise HTTPException(400, "invalid path")
-    known = db.query("SELECT SKIPPED_REASON FROM CODE.CODE_FILE WHERE REPO_ID = %s AND PATH = %s", (repo_id, path))
+    known = db.query("SELECT SKIPPED_REASON FROM CORE.CODE_FILE WHERE REPO_ID = %s AND PATH = %s", (repo_id, path))
     if not known:
         raise HTTPException(404, "This file is not in the index (it may be excluded or not a text file)")
     if known[0].get("skipped_reason"):
@@ -603,7 +616,7 @@ def file(repo_id: str, path: str, db: Db = Depends(current_db)):
         except Exception as exc:
             raise _snowflake_error(exc) from exc
     chunks = db.query("""SELECT CHUNK_ID, START_LINE, END_LINE, KIND, NAME, REFS, SOURCES, COLUMNS, TESTS
-                           FROM CODE.CODE_CHUNK WHERE REPO_ID = %s AND PATH = %s ORDER BY START_LINE""", (repo_id, path))
+                           FROM CORE.CODE_CHUNK WHERE REPO_ID = %s AND PATH = %s ORDER BY START_LINE""", (repo_id, path))
     for c in chunks:
         for k in ("refs", "sources", "columns", "tests"):
             c[k] = _json(c.get(k)) or []
@@ -615,18 +628,18 @@ def file(repo_id: str, path: str, db: Db = Depends(current_db)):
 def lineage(name: str, repo_id: Optional[str] = None, db: Db = Depends(current_db)):
     """What a model, source or macro uses and what uses it (two hops each way), in enabled repositories."""
     key = name.strip().upper()
-    scope = "AND REPO_ID = %s" if repo_id else "AND REPO_ID IN (SELECT REPO_ID FROM CODE.REPO WHERE ENABLED)"
+    scope = "AND REPO_ID = %s" if repo_id else "AND REPO_ID IN (SELECT REPO_ID FROM CORE.REPO WHERE ENABLED)"
     args = (repo_id,) if repo_id else ()
     up, down, frontier_up, frontier_down = [], [], {key}, {key}
     for _ in range(2):
         if frontier_up:
-            rows = db.query(f"""SELECT FROM_NAME, TO_NAME, KIND, PATH, REPO_ID, ORIGIN FROM CODE.CODE_EDGE
+            rows = db.query(f"""SELECT FROM_NAME, TO_NAME, KIND, PATH, REPO_ID, ORIGIN FROM CORE.CODE_EDGE
                                  WHERE ARRAY_CONTAINS(UPPER(FROM_NAME)::VARIANT, PARSE_JSON(%s)) {scope} LIMIT 300""",
                             (json.dumps(sorted(frontier_up)), *args))
             up += rows
             frontier_up = {str(r["to_name"]).split(".")[-1].upper() for r in rows if r["kind"] == "REF"}
         if frontier_down:
-            rows = db.query(f"""SELECT FROM_NAME, TO_NAME, KIND, PATH, REPO_ID, ORIGIN FROM CODE.CODE_EDGE
+            rows = db.query(f"""SELECT FROM_NAME, TO_NAME, KIND, PATH, REPO_ID, ORIGIN FROM CORE.CODE_EDGE
                                  WHERE ARRAY_CONTAINS(UPPER(SPLIT_PART(TO_NAME, '.', -1))::VARIANT, PARSE_JSON(%s)) {scope}
                                  LIMIT 300""", (json.dumps(sorted(frontier_down)), *args))
             down += rows
@@ -637,7 +650,7 @@ def lineage(name: str, repo_id: Optional[str] = None, db: Db = Depends(current_d
 def _graph(db: Db, repo_id: Optional[str]):
     from services.code import graph as code_graph
 
-    ids = [repo_id] if repo_id else [r["repo_id"] for r in db.query("SELECT REPO_ID FROM CODE.REPO WHERE ENABLED")]
+    ids = [repo_id] if repo_id else [r["repo_id"] for r in db.query("SELECT REPO_ID FROM CORE.REPO WHERE ENABLED")]
     return code_graph.load(_rows(db), ids)
 
 
@@ -720,7 +733,7 @@ def repo_catalog(repo_id: str, db: Db = Depends(current_db)):
     _repo(db, repo_id)
     chunks = db.query("""SELECT KIND, NAME, PATH, START_LINE, COLUMNS, TESTS, REFS, SOURCES,
                                 IFF(KIND IN ('DBT_MODEL', 'DBT_SNAPSHOT'), LEFT(TEXT, 2000), NULL) AS TEXT
-                           FROM CODE.CODE_CHUNK
+                           FROM CORE.CODE_CHUNK
                           WHERE REPO_ID = %s AND KIND IN ('DBT_MODEL', 'DBT_SNAPSHOT', 'DBT_SCHEMA_YML', 'DBT_SOURCE', 'DBT_MACRO')
                           ORDER BY PATH, START_LINE""", (repo_id,))
     seen, unique = set(), []
@@ -738,8 +751,8 @@ def repo_files(repo_id: str, db: Db = Depends(current_db)):
     _repo(db, repo_id)
     files = db.query("""SELECT F.PATH, F.LANG, F.SIZE, F.SKIPPED_REASON, F.INDEXED_AT::VARCHAR AS INDEXED_AT,
                                COUNT(C.CHUNK_ID) AS CHUNKS, ARRAY_UNIQUE_AGG(C.KIND) AS KINDS
-                          FROM CODE.CODE_FILE F
-                          LEFT JOIN CODE.CODE_CHUNK C ON C.REPO_ID = F.REPO_ID AND C.PATH = F.PATH
+                          FROM CORE.CODE_FILE F
+                          LEFT JOIN CORE.CODE_CHUNK C ON C.REPO_ID = F.REPO_ID AND C.PATH = F.PATH
                          WHERE F.REPO_ID = %s GROUP BY 1, 2, 3, 4, 5 ORDER BY F.PATH""", (repo_id,))
     for f in files:
         f["kinds"] = _json(f.get("kinds")) or []
@@ -754,13 +767,13 @@ def code_usage(repo_id: Optional[str] = None, days: int = 30, db: Db = Depends(c
     args: tuple = (days, *((repo_id,) if repo_id else ()))
     recent = db.query(f"""SELECT U.RUN_ID, MAX(R.RUN_NAME) AS RUN_NAME, U.STAGE, COUNT(*) AS CITATIONS,
                                  MAX(U.USED_AT)::VARCHAR AS LAST_USED, ARRAY_UNIQUE_AGG(C.NAME) AS NAMES
-                            FROM CODE.CODE_USAGE U
-                            LEFT JOIN CODE.CODE_CHUNK C ON C.CHUNK_ID = U.CHUNK_ID
+                            FROM CORE.CODE_USAGE U
+                            LEFT JOIN CORE.CODE_CHUNK C ON C.CHUNK_ID = U.CHUNK_ID
                             LEFT JOIN CORE.WORKFLOW_RUN R ON R.RUN_ID = U.RUN_ID
                            WHERE U.USED_AT >= DATEADD(DAY, -%s, CURRENT_TIMESTAMP()) {scope}
                            GROUP BY U.RUN_ID, U.STAGE ORDER BY LAST_USED DESC LIMIT 60""", args)
     top = db.query(f"""SELECT C.NAME, C.KIND, C.PATH, C.START_LINE, U.REPO_ID, COUNT(*) AS CITATIONS
-                         FROM CODE.CODE_USAGE U JOIN CODE.CODE_CHUNK C ON C.CHUNK_ID = U.CHUNK_ID
+                         FROM CORE.CODE_USAGE U JOIN CORE.CODE_CHUNK C ON C.CHUNK_ID = U.CHUNK_ID
                         WHERE U.USED_AT >= DATEADD(DAY, -%s, CURRENT_TIMESTAMP()) {scope}
                         GROUP BY 1, 2, 3, 4, 5 ORDER BY CITATIONS DESC LIMIT 15""", args)
     for r in recent:
@@ -801,10 +814,10 @@ def summary(db: Db = Depends(current_db)):
     """Per repository: dbt shape and most-used macros, its architecture from the code graph, and usage by stage in the
     last 30 days."""
     out: dict = {}
-    for r in db.query("SELECT REPO_ID, KIND, SUMMARY FROM CODE.REPO_SUMMARY WHERE KIND IN ('DBT', 'ARCHITECTURE')"):
+    for r in db.query("SELECT REPO_ID, KIND, SUMMARY FROM CORE.REPO_SUMMARY WHERE KIND IN ('DBT', 'ARCHITECTURE')"):
         out.setdefault(r["repo_id"], {})["dbt" if r["kind"] == "DBT" else "architecture"] = _json(r["summary"])
     try:
-        for r in db.query("""SELECT REPO_ID, STAGE, COUNT(*) AS N, COUNT(DISTINCT RUN_ID) AS RUNS FROM CODE.CODE_USAGE
+        for r in db.query("""SELECT REPO_ID, STAGE, COUNT(*) AS N, COUNT(DISTINCT RUN_ID) AS RUNS FROM CORE.CODE_USAGE
                               WHERE USED_AT >= DATEADD(DAY, -30, CURRENT_TIMESTAMP()) GROUP BY 1, 2"""):
             out.setdefault(r["repo_id"], {}).setdefault("usage", {})[r["stage"]] = {"uses": int(r["n"]), "runs": int(r["runs"])}
     except Exception:
@@ -819,10 +832,10 @@ def run_code_context(db: Db, run_id: str, stage: str, question: Optional[str] = 
         if not run:
             return {"text": "", "citations": []}
         target = str(run[0].get("target_model") or "").split(".")[-1] or None
-        sources = [r["object_name"] for r in db.query("""SELECT DISTINCT OBJECT_NAME FROM SOURCE.SOURCE_OBJECT
+        sources = [r["object_name"] for r in db.query("""SELECT DISTINCT OBJECT_NAME FROM CORE.SOURCE_OBJECT
                                                          WHERE RUN_ID = %s AND SELECTED_FLAG LIMIT 30""", (run_id,))]
-        columns = [r["target_column"] for r in db.query("""SELECT L.TARGET_COLUMN FROM CONTRACT.STTM_LINE L
-                                                           JOIN CONTRACT.STTM_REGISTRY S ON S.STTM_ID = L.STTM_ID
+        columns = [r["target_column"] for r in db.query("""SELECT L.TARGET_COLUMN FROM CORE.STTM_LINE L
+                                                           JOIN CORE.STTM_REGISTRY S ON S.STTM_ID = L.STTM_ID
                                                           WHERE S.RUN_ID = %s QUALIFY DENSE_RANK() OVER (ORDER BY S.STTM_VERSION DESC) = 1
                                                           LIMIT 200""", (run_id,))]
         out = code_ctx.code_context(_rows(db), _search(db), stage=stage, domain_id=run[0].get("domain_id"), target=target,

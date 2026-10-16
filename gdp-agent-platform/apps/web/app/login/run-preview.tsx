@@ -74,19 +74,19 @@ const STATUS_WORD: Record<Status, string> = { locked: "locked", progress: "agent
 
 function Node({ label, sub, status, className }: { label: string; sub?: string; status: Status; className?: string }) {
   return (
-    <div className={cn("relative rounded-xl border px-3 py-2.5 transition-all duration-500",
+    <div className={cn("relative rounded-xl border px-3 py-2 transition-all duration-500",
       status === "complete" ? "border-emerald-500/40 bg-emerald-500/[0.07]"
         : status === "review" ? "border-[#ff7a3d]/60 bg-[#ff7a3d]/[0.09] shadow-[0_0_0_3px_rgba(255,122,61,0.14)]"
         : status === "progress" ? "border-cyan-400/50 bg-cyan-400/[0.07]"
         : "border-white/[0.07] bg-white/[0.02]", className)}>
-      <div className="flex items-center gap-1.5">
-        {status === "complete" ? <Check className="h-3.5 w-3.5 text-emerald-400" />
-          : status === "review" ? <UserCheck className="h-3.5 w-3.5 text-[#ffb68f]" />
-          : status === "progress" ? <CircleDot className="h-3.5 w-3.5 animate-glow text-cyan-300" />
-          : <Lock className="h-3 w-3 text-slate-600" />}
-        <span className={cn("truncate text-[12px] font-semibold", status === "locked" ? "text-slate-500" : "text-slate-100")}>{label}</span>
+      <div className="flex items-start gap-1.5">
+        {status === "complete" ? <Check className="mt-px h-3.5 w-3.5 shrink-0 text-emerald-400" />
+          : status === "review" ? <UserCheck className="mt-px h-3.5 w-3.5 shrink-0 text-[#ffb68f]" />
+          : status === "progress" ? <CircleDot className="mt-px h-3.5 w-3.5 shrink-0 animate-glow text-cyan-300" />
+          : <Lock className="mt-0.5 h-3 w-3 shrink-0 text-slate-600" />}
+        <span className={cn("min-w-0 break-words text-[12px] font-semibold leading-snug", status === "locked" ? "text-slate-500" : "text-slate-100")}>{label}</span>
       </div>
-      {sub && <p className="mt-0.5 truncate pl-5 text-[10px] text-slate-500">{sub}</p>}
+      {sub && <p className="mt-0.5 break-words pl-5 text-[10px] leading-snug text-slate-500">{sub}</p>}
       <p className={cn("mt-1 pl-5 font-mono text-[10px]",
         status === "complete" ? "text-emerald-400/90" : status === "review" ? "text-[#ffb68f]" : status === "progress" ? "text-cyan-300" : "text-slate-600")}>
         {STATUS_WORD[status]}
@@ -151,33 +151,35 @@ export function RunPreview() {
         </span>
       </div>
 
-      {/* the stage rail: sequence, then three lanes in parallel, merging into code review */}
-      <div className="overflow-x-auto px-5 pt-5">
-        <div className="grid min-w-[720px] grid-cols-[1fr_1fr_1.15fr_auto_1.7fr_auto_1fr] items-center gap-2.5">
+      {/* the stage rail: sequence, then three lanes in parallel, merging into code review. Wide screens draw it as one
+          row with the fork and merge; narrower ones stack it top to bottom, so nothing scrolls sideways or gets cut. */}
+      <div className="px-5 pt-5">
+        <div className="flex flex-col gap-2 lg:grid lg:grid-cols-[1fr_1fr_1.15fr_auto_1.8fr_auto_1fr] lg:items-center lg:gap-2.5">
           <Node label="Source Ingestion" sub="validate and land" status={st("source")} />
           <Node label="Profiling" sub="profile, match domain" status={st("profiling")} />
           <Node label="Modeling" sub={shown < 6 ? "field mapping" : "transformations and joins"} status={st("modeling")} />
-          <Fork active={["complete", "progress", "review"].includes(st("qa"))} />
-          <div className="space-y-2">
+          <span className="hidden lg:block"><Fork active={["complete", "progress", "review"].includes(st("qa"))} /></span>
+          <div className="space-y-2 rounded-xl border border-dashed border-white/10 p-2 lg:border-0 lg:p-0">
+            <p className="font-mono text-[10px] uppercase tracking-[0.16em] text-slate-500 lg:hidden">in parallel</p>
             <Node label="QA tests" sub="SQL tests from the STTM" status={st("qa")} />
             <Node label="Data Quality" sub="SodaCL and GX checks" status={st("dq")} />
-            <div className="grid grid-cols-2 gap-2">
-              <Node label="Silver Code Gen" sub="dbt models" status={st("code")} />
+            <div className="grid gap-2 sm:grid-cols-2">
+              <Node label="Silver Code Generation" sub="dbt models" status={st("code")} />
               <Node label="Validation" sub="compile on Snowflake" status={st("validation")} />
             </div>
           </div>
-          <Fork merge active={st("review") !== "locked"} />
+          <span className="hidden lg:block"><Fork merge active={st("review") !== "locked"} /></span>
           <Node label="Code review" sub="then GitHub PR" status={st("review")} />
         </div>
       </div>
 
-      <div className="grid flex-1 gap-4 px-5 py-5 md:grid-cols-[1fr_220px]">
+      <div className="grid flex-1 gap-4 px-5 py-4 md:grid-cols-[1fr_280px]">
         {/* agent console */}
-        <div className="flex min-h-[200px] flex-col rounded-2xl border border-white/[0.06] bg-black/30 p-4" aria-live="polite">
+        <div className="flex min-h-[150px] flex-col rounded-2xl border border-white/[0.06] bg-black/30 p-4" aria-live="polite">
           <p className="mb-3 flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.16em] text-slate-500">
             <span className="h-1.5 w-1.5 animate-glow rounded-full bg-emerald-400" /> agent console
           </p>
-          <ol className="space-y-2">
+          <ol className="space-y-1.5">
             {lines.map((l) => {
               const t = TAG[l.actor];
               const Icon = t.icon;
@@ -210,7 +212,7 @@ export function RunPreview() {
               );
             })}
           </ol>
-          <p className="mt-4 border-t border-white/[0.06] pt-3 text-[11px] leading-relaxed text-slate-500">
+          <p className="mt-3 border-t border-white/[0.06] pt-2.5 text-[11px] leading-relaxed text-slate-500">
             Agents never approve. Each gate needs an approver role and a written justification, recorded in the audit trail.
           </p>
         </div>

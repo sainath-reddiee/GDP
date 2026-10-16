@@ -1,7 +1,7 @@
-"""Did the knowledge help? KNOWLEDGE.KNOWLEDGE_OUTCOME (V047) joins what went into a prompt with what reviewers then
+"""Did the knowledge help? CORE.KNOWLEDGE_OUTCOME (V047) joins what went into a prompt with what reviewers then
 decided on what the stage proposed.
 
-  KNOWLEDGE.KNOWLEDGE_USAGE   which knowledge a stage used, per run (services/knowledge/writer.record_usage)
+  CORE.KNOWLEDGE_USAGE   which knowledge a stage used, per run (services/knowledge/writer.record_usage)
   MAPPING                     the reviewer's decision on each rank-1 candidate: kept as proposed (ACCEPTED), changed
                               to another target or modified (CORRECTED), or rejected (REJECTED)
   SODA                        each reviewed check: approved as generated (ACCEPTED), approved after a change
@@ -24,7 +24,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from services.common.sql import rows, variant
 
-TABLE = "KNOWLEDGE.KNOWLEDGE_OUTCOME"
+TABLE = "CORE.KNOWLEDGE_OUTCOME"
 STAGES = ("MAPPING", "SODA", "QA")
 OUTCOMES = ("ACCEPTED", "CORRECTED", "REJECTED")
 MIN_OBSERVED = 3  # decisions before helpfulness moves a ranking
@@ -89,17 +89,17 @@ SELECT C.RUN_ID, 'MAPPING' AS STAGE, TT.TARGET_TABLE AS TBL, T.COLUMN_NAME AS CO
        CASE WHEN D.DECISION = 'REJECTED' THEN 'REJECTED'
             WHEN D.DECISION = 'APPROVED' AND D.TARGET_COLUMN_ID = C.TARGET_COLUMN_ID THEN 'ACCEPTED'
             ELSE 'CORRECTED' END AS OUTCOME
-  FROM MAPPING.MAPPING_CANDIDATE C
-  JOIN MAPPING.MAPPING_DECISION D ON D.RUN_ID = C.RUN_ID AND D.SOURCE_COLUMN_ID = C.SOURCE_COLUMN_ID AND D.IS_CURRENT
-  JOIN KNOWLEDGE.TARGET_COLUMN_REGISTRY T ON T.TARGET_COLUMN_ID = C.TARGET_COLUMN_ID
-  LEFT JOIN KNOWLEDGE.TARGET_TABLE_REGISTRY TT ON TT.TARGET_TABLE_ID = T.TARGET_TABLE_ID
+  FROM CORE.MAPPING_CANDIDATE C
+  JOIN CORE.MAPPING_DECISION D ON D.RUN_ID = C.RUN_ID AND D.SOURCE_COLUMN_ID = C.SOURCE_COLUMN_ID AND D.IS_CURRENT
+  JOIN CORE.TARGET_COLUMN_REGISTRY T ON T.TARGET_COLUMN_ID = C.TARGET_COLUMN_ID
+  LEFT JOIN CORE.TARGET_TABLE_REGISTRY TT ON TT.TARGET_TABLE_ID = T.TARGET_TABLE_ID
  WHERE C.IS_CURRENT AND C.RANK = 1 AND ARRAY_CONTAINS(C.RUN_ID::VARIANT, PARSE_JSON(?))"""
 
 SODA_OUTCOMES = """
 SELECT RUN_ID, 'SODA' AS STAGE, TARGET_TABLE AS TBL, TARGET_COLUMN AS COL,
        CASE WHEN STATUS = 'REJECTED' THEN 'REJECTED'
             WHEN {same} THEN 'ACCEPTED' ELSE 'CORRECTED' END AS OUTCOME
-  FROM CONTRACT.SODA_EXPECTATION_REGISTRY
+  FROM CORE.SODA_EXPECTATION_REGISTRY
  WHERE IS_CURRENT AND REVIEWED_BY IS NOT NULL AND STATUS IN ('APPROVED', 'REJECTED')
    AND ARRAY_CONTAINS(RUN_ID::VARIANT, PARSE_JSON(?))"""
 
@@ -107,12 +107,12 @@ SELECT RUN_ID, 'SODA' AS STAGE, TARGET_TABLE AS TBL, TARGET_COLUMN AS COL,
 QA_OUTCOMES = """
 SELECT T.RUN_ID, 'QA' AS STAGE, SPLIT_PART(COALESCE(T.TARGET_FQN, ''), '.', -1) AS TBL, T.TARGET_COLUMN AS COL,
        CASE WHEN T.IS_DELETED THEN 'REJECTED'
-            WHEN EXISTS (SELECT 1 FROM CONTRACT.QA_TEST_VERSION V WHERE V.TEST_ID = T.TEST_ID AND V.CHANGE = 'EDITED')
+            WHEN EXISTS (SELECT 1 FROM CORE.QA_TEST_VERSION V WHERE V.TEST_ID = T.TEST_ID AND V.CHANGE = 'EDITED')
                  THEN 'CORRECTED'
             ELSE 'ACCEPTED' END AS OUTCOME
-  FROM CONTRACT.QA_TEST_CASE T
+  FROM CORE.QA_TEST_CASE T
  WHERE T.ORIGIN = 'AI' AND ARRAY_CONTAINS(T.RUN_ID::VARIANT, PARSE_JSON(?))
-   AND (T.IS_DELETED OR EXISTS (SELECT 1 FROM QUALITY.QA_RESULT R WHERE R.TEST_ID = T.TEST_ID))"""
+   AND (T.IS_DELETED OR EXISTS (SELECT 1 FROM CORE.QA_RESULT R WHERE R.TEST_ID = T.TEST_ID))"""
 
 
 def _outcomes(session, runs: List[str]) -> List[Dict[str, Any]]:
@@ -145,7 +145,7 @@ def refresh(session, lineages: Optional[Iterable[str]] = None) -> Dict[str, Any]
     where = "" if wanted is None else " AND ARRAY_CONTAINS(LINEAGE_ID::VARIANT, PARSE_JSON(?))"
     usage = rows(session, f"""SELECT LINEAGE_ID, STAGE, RUN_ID, MAX(KNOWLEDGE_ID) AS KNOWLEDGE_ID, COUNT(*) AS USES,
                                      MAX(USED_AT) AS LAST_USED
-                                FROM KNOWLEDGE.KNOWLEDGE_USAGE
+                                FROM CORE.KNOWLEDGE_USAGE
                                WHERE LINEAGE_ID IS NOT NULL AND RUN_ID IS NOT NULL
                                  AND ARRAY_CONTAINS(STAGE::VARIANT, PARSE_JSON(?)){where}
                                GROUP BY 1, 2, 3""", [json.dumps(list(STAGES)), *([_in(wanted)] if wanted else [])])
@@ -153,7 +153,7 @@ def refresh(session, lineages: Optional[Iterable[str]] = None) -> Dict[str, Any]
         return {"items": 0}
     lineage_ids = {r["LINEAGE_ID"] for r in usage}
     contents = {r["LINEAGE_ID"]: variant(r["CONTENT_JSON"]) or {} for r in rows(
-        session, """SELECT LINEAGE_ID, CONTENT_JSON FROM KNOWLEDGE.DOMAIN_KNOWLEDGE
+        session, """SELECT LINEAGE_ID, CONTENT_JSON FROM CORE.DOMAIN_KNOWLEDGE
                      WHERE IS_CURRENT AND ARRAY_CONTAINS(LINEAGE_ID::VARIANT, PARSE_JSON(?))""", [_in(lineage_ids)])}
     contents = {k: (v if isinstance(v, dict) else {}) for k, v in contents.items()}
     stats = attribute([{"lineage_id": r["LINEAGE_ID"], "knowledge_id": r["KNOWLEDGE_ID"], "run_id": r["RUN_ID"],
@@ -186,7 +186,7 @@ def refresh_run(session, run_id: str, stage: Optional[str] = None) -> Dict[str, 
     triggered it is already saved, and before V047 there is nowhere to write."""
     try:
         stages = [stage] if stage else list(STAGES)
-        used = [r["LINEAGE_ID"] for r in rows(session, """SELECT DISTINCT LINEAGE_ID FROM KNOWLEDGE.KNOWLEDGE_USAGE
+        used = [r["LINEAGE_ID"] for r in rows(session, """SELECT DISTINCT LINEAGE_ID FROM CORE.KNOWLEDGE_USAGE
                                                            WHERE RUN_ID = ? AND LINEAGE_ID IS NOT NULL
                                                              AND ARRAY_CONTAINS(STAGE::VARIANT, PARSE_JSON(?))""",
                                                [run_id, json.dumps(stages)])]

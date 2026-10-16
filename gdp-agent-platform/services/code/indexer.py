@@ -1,11 +1,11 @@
-"""CODE.INDEX_REPO: refresh one repository's index from its Snowflake Git clone (Snowpark, standard library only).
+"""CORE.INDEX_REPO: refresh one repository's index from its Snowflake Git clone (Snowpark, standard library only).
 
 FETCH the clone, list the branch, re-read only files whose blob hash changed, parse them (services/code/dbt_parse),
 replace their chunks, edges and file rows, and record an INDEX_RUN. A repository row never holds credentials: the
 GIT REPOSITORY object carries them through its secret.
 
 Safety rules:
-- one run at a time per repository: a lock on CODE.REPO (LOCK_RUN_ID) that expires after LOCK_MINUTES, so a run killed
+- one run at a time per repository: a lock on CORE.REPO (LOCK_RUN_ID) that expires after LOCK_MINUTES, so a run killed
   by a timeout never blocks the repository for good;
 - a run writes only while it still holds the lock and the branch it started on is still the configured branch, so a
   disconnect or a branch switch during a run never leaves stale rows behind;
@@ -23,6 +23,7 @@ import uuid
 from typing import Any, Dict, List, Optional, Tuple
 
 from services.code import dbt_parse
+from services.common.platform_schema import PLATFORM_SCHEMA
 from services.common.sql import clip, insert_rows, rows, variant
 
 MAX_FILES = 6000          # files considered per repository
@@ -104,7 +105,7 @@ def _changed_count(result: list) -> int:
 
 def _acquire(session, repo_id: str, run_id: str) -> bool:
     """Take the repository's index lock unless another live run holds it (an expired lock is taken over)."""
-    done = session.sql(f"""UPDATE CODE.REPO SET LOCK_RUN_ID = ?, LOCKED_AT = CURRENT_TIMESTAMP(), STATUS = 'INDEXING', ERROR = NULL
+    done = session.sql(f"""UPDATE CORE.REPO SET LOCK_RUN_ID = ?, LOCKED_AT = CURRENT_TIMESTAMP(), STATUS = 'INDEXING', ERROR = NULL
                             WHERE REPO_ID = ? AND (LOCK_RUN_ID IS NULL
                                                    OR LOCKED_AT < DATEADD(minute, -{LOCK_MINUTES}, CURRENT_TIMESTAMP()))""",
                        params=[run_id, repo_id]).collect()
@@ -112,7 +113,7 @@ def _acquire(session, repo_id: str, run_id: str) -> bool:
 
 
 def _still_mine(session, repo_id: str, run_id: str, branch: str) -> None:
-    found = rows(session, "SELECT LOCK_RUN_ID, BRANCH FROM CODE.REPO WHERE REPO_ID = ?", [repo_id])
+    found = rows(session, "SELECT LOCK_RUN_ID, BRANCH FROM CORE.REPO WHERE REPO_ID = ?", [repo_id])
     if not found:
         raise Cancelled("the repository was disconnected during the run")
     if found[0]["LOCK_RUN_ID"] != run_id:
@@ -134,12 +135,12 @@ def _release(session, repo_id: str, run_id: str, status: str, error: Optional[st
         else:
             sets.append(f"{column} = NULLIF(?, '')")
         params.append(value)
-    session.sql(f"UPDATE CODE.REPO SET {', '.join(sets)} WHERE REPO_ID = ? AND LOCK_RUN_ID = ?",
+    session.sql(f"UPDATE CORE.REPO SET {', '.join(sets)} WHERE REPO_ID = ? AND LOCK_RUN_ID = ?",
                 params=[*params, repo_id, run_id]).collect()
 
 
 def _finish_run(session, run_id: str, status: str, started: float, error: Optional[str] = None, **counts: Any) -> None:
-    session.sql("""UPDATE CODE.INDEX_RUN SET STATUS = ?, FINISHED_AT = CURRENT_TIMESTAMP(), ERROR = NULLIF(?, ''), DURATION_MS = ?,
+    session.sql("""UPDATE CORE.INDEX_RUN SET STATUS = ?, FINISHED_AT = CURRENT_TIMESTAMP(), ERROR = NULLIF(?, ''), DURATION_MS = ?,
                           COMMIT_SHA = NULLIF(?, ''), FILES_SEEN = ?, FILES_CHANGED = ?, FILES_REMOVED = ?, CHUNKS = ?, EDGES = ?
                     WHERE INDEX_RUN_ID = ?""",
                 params=[status, error or "", int((time.time() - started) * 1000), counts.get("commit", ""), counts.get("seen", 0),
@@ -168,21 +169,21 @@ def mark_stale(session, repo_id: str, paths: List[str]) -> None:
     """Forget the stored hash of files that still need a re-read (a capped fan-out or re-link), so the next pass
     picks them up as changed."""
     if paths:
-        session.sql("UPDATE CODE.CODE_FILE SET FILE_HASH = NULL WHERE REPO_ID = ? AND ARRAY_CONTAINS(PATH::VARIANT, PARSE_JSON(?))",
+        session.sql("UPDATE CORE.CODE_FILE SET FILE_HASH = NULL WHERE REPO_ID = ? AND ARRAY_CONTAINS(PATH::VARIANT, PARSE_JSON(?))",
                     params=[repo_id, json.dumps(paths)]).collect()
 
 
 def index_repo(session, repo_id: str) -> Dict[str, Any]:
     from services.dbt.workspace import safe_fqn
 
-    found = rows(session, "SELECT * FROM CODE.REPO WHERE REPO_ID = ?", [repo_id])
+    found = rows(session, "SELECT * FROM CORE.REPO WHERE REPO_ID = ?", [repo_id])
     if not found:
         return {"repo_id": repo_id, "skipped": True, "reason": "repository not found (disconnected)"}
     repo = {k.lower(): v for k, v in found[0].items()}
     run_id, started = str(uuid.uuid4()), time.time()
     if not _acquire(session, repo_id, run_id):
         return {"repo_id": repo_id, "skipped": True, "reason": "another index run is in progress"}
-    session.sql("INSERT INTO CODE.INDEX_RUN (INDEX_RUN_ID, REPO_ID, STATUS) VALUES (?, ?, 'RUNNING')",
+    session.sql("INSERT INTO CORE.INDEX_RUN (INDEX_RUN_ID, REPO_ID, STATUS) VALUES (?, ?, 'RUNNING')",
                 params=[run_id, repo_id]).collect()
     branch = str(repo.get("branch") or "main").strip().strip("/")
     counts: Dict[str, Any] = {}
@@ -201,7 +202,7 @@ def index_repo(session, repo_id: str) -> Dict[str, Any]:
         counts["commit"] = commit
         include, exclude = _arr(repo.get("include_globs")), _arr(repo.get("exclude_globs"))
         everything = _branch_files(session, fqn, branch)
-        known = {r["PATH"]: r["FILE_HASH"] for r in rows(session, "SELECT PATH, FILE_HASH FROM CODE.CODE_FILE WHERE REPO_ID = ?",
+        known = {r["PATH"]: r["FILE_HASH"] for r in rows(session, "SELECT PATH, FILE_HASH FROM CORE.CODE_FILE WHERE REPO_ID = ?",
                                                         [repo_id])}
         if not everything and known:
             raise RuntimeError(f"The clone listed no files on '{branch}'; the index was kept. Refresh again, or check the branch.")
@@ -225,7 +226,7 @@ def index_repo(session, repo_id: str) -> Dict[str, Any]:
         touched = changed + removed
         def names(kind: str, outside: Optional[List[str]] = None) -> set:
             extra = " AND NOT ARRAY_CONTAINS(PATH::VARIANT, PARSE_JSON(?))" if outside is not None else ""
-            return {r["NAME"] for r in rows(session, f"SELECT DISTINCT NAME FROM CODE.CODE_CHUNK WHERE REPO_ID = ? AND KIND = ?{extra}",
+            return {r["NAME"] for r in rows(session, f"SELECT DISTINCT NAME FROM CORE.CODE_CHUNK WHERE REPO_ID = ? AND KIND = ?{extra}",
                                             [repo_id, kind, *([json.dumps(outside)] if outside is not None else [])]) if r["NAME"]}
 
         before = {"DBT_MACRO": names("DBT_MACRO"), "PY_FUNC": names("PY_FUNC")}
@@ -259,10 +260,10 @@ def index_repo(session, repo_id: str) -> Dict[str, Any]:
         try:
             for table in ("CODE_CHUNK", "CODE_EDGE", "CODE_FILE"):
                 extra = " AND ORIGIN = 'PARSER'" if table == "CODE_EDGE" else ""
-                session.sql(f"DELETE FROM CODE.{table} WHERE REPO_ID = ? AND ARRAY_CONTAINS(PATH::VARIANT, PARSE_JSON(?)){extra}",
+                session.sql(f"DELETE FROM {PLATFORM_SCHEMA}.{table} WHERE REPO_ID = ? AND ARRAY_CONTAINS(PATH::VARIANT, PARSE_JSON(?)){extra}",
                             params=[repo_id, json.dumps(touched)]).collect()
             # names are clipped to the column sizes in V024__code_context.sql
-            insert_rows(session, "CODE.CODE_CHUNK",
+            insert_rows(session, "CORE.CODE_CHUNK",
                         ["CHUNK_ID", "REPO_ID", "PATH", "START_LINE", "END_LINE", "KIND", "NAME", "TEXT", "TOKENS", "REFS",
                          "SOURCES", "COLUMNS", "TESTS", "PROJECT", "COMMIT_SHA"],
                         ["?", "?", "?", "?::NUMBER", "?::NUMBER", "?", "NULLIF(?, '')", "?", "?::NUMBER", "PARSE_JSON(?)",
@@ -270,7 +271,7 @@ def index_repo(session, repo_id: str) -> Dict[str, Any]:
                         [[c["chunk_id"], repo_id, c["path"], c["start_line"], c["end_line"], c["kind"], clip(c.get("name"), 512),
                           c["text"], c["tokens"], c.get("refs") or [], c.get("sources") or [], c.get("columns") or [],
                           c.get("tests") or [], clip(c.get("project"), 256), commit] for c in chunks])
-            insert_rows(session, "CODE.CODE_EDGE",
+            insert_rows(session, "CORE.CODE_EDGE",
                         ["REPO_ID", "FROM_CHUNK_ID", "FROM_NAME", "TO_NAME", "KIND", "PATH", "ORIGIN", "COMMIT_SHA"],
                         ["?", "NULLIF(?, '')", "?", "?", "?", "?", "'PARSER'", "NULLIF(?, '')"],
                         [[repo_id, e.get("chunk") or "", clip(e["from_name"], 512), clip(e["to_name"], 512), e["kind"], e["path"],
@@ -278,12 +279,12 @@ def index_repo(session, repo_id: str) -> Dict[str, Any]:
             file_rows = [[repo_id, p, p.rsplit(".", 1)[-1].lower() if "." in p else "", listed[p][0], listed[p][1], commit,
                           skipped.get(p, "")]
                          for p in dict.fromkeys(changed) if p in listed and (p in parse_now or p in skipped)]
-            insert_rows(session, "CODE.CODE_FILE", ["REPO_ID", "PATH", "LANG", "FILE_HASH", "SIZE", "COMMIT_SHA", "SKIPPED_REASON"],
+            insert_rows(session, "CORE.CODE_FILE", ["REPO_ID", "PATH", "LANG", "FILE_HASH", "SIZE", "COMMIT_SHA", "SKIPPED_REASON"],
                         ["?", "?", "?", "?", "?::NUMBER", "NULLIF(?, '')", "NULLIF(?, '')"], file_rows)
             mark_stale(session, repo_id, [p for p in left if p not in parse_now and p not in skipped])
             # unchanged files are identical at the new commit, so citations point at the commit that was indexed
             for table in ("CODE_CHUNK", "CODE_EDGE", "CODE_FILE"):
-                session.sql(f"UPDATE CODE.{table} SET COMMIT_SHA = NULLIF(?, '') WHERE REPO_ID = ? AND COMMIT_SHA IS DISTINCT FROM NULLIF(?, '')",
+                session.sql(f"UPDATE {PLATFORM_SCHEMA}.{table} SET COMMIT_SHA = NULLIF(?, '') WHERE REPO_ID = ? AND COMMIT_SHA IS DISTINCT FROM NULLIF(?, '')",
                             params=[commit, repo_id, commit]).collect()
             _still_mine(session, repo_id, run_id, branch)
             session.sql("COMMIT").collect()
@@ -301,9 +302,9 @@ def index_repo(session, repo_id: str) -> Dict[str, Any]:
                 "files_removed": len(removed), "files_skipped": len(skipped), "chunks": len(chunks), "edges": len(edges),
                 "stats": stats, "more_to_read": more}
     except Cancelled as exc:
-        if not rows(session, "SELECT 1 FROM CODE.REPO WHERE REPO_ID = ?", [repo_id]):
+        if not rows(session, "SELECT 1 FROM CORE.REPO WHERE REPO_ID = ?", [repo_id]):
             for table in ("CODE_CHUNK", "CODE_EDGE", "CODE_FILE", "REPO_SUMMARY"):
-                session.sql(f"DELETE FROM CODE.{table} WHERE REPO_ID = ?", params=[repo_id]).collect()
+                session.sql(f"DELETE FROM {PLATFORM_SCHEMA}.{table} WHERE REPO_ID = ?", params=[repo_id]).collect()
         _release(session, repo_id, run_id, "NEW", None)
         _finish_run(session, run_id, "CANCELLED", started, str(exc), **counts)
         return {"repo_id": repo_id, "skipped": True, "reason": str(exc)}
@@ -315,11 +316,11 @@ def index_repo(session, repo_id: str) -> Dict[str, Any]:
 
 
 def _stats(session, repo_id: str, dbt: List[Dict[str, Any]]) -> Dict[str, Any]:
-    kinds = {r["KIND"]: int(r["N"]) for r in rows(session, "SELECT KIND, COUNT(*) AS N FROM CODE.CODE_CHUNK WHERE REPO_ID = ? GROUP BY 1", [repo_id])}
+    kinds = {r["KIND"]: int(r["N"]) for r in rows(session, "SELECT KIND, COUNT(*) AS N FROM CORE.CODE_CHUNK WHERE REPO_ID = ? GROUP BY 1", [repo_id])}
     files = rows(session, """SELECT COUNT_IF(SKIPPED_REASON IS NULL) AS N, COUNT_IF(SKIPPED_REASON IS NOT NULL) AS S,
                                     COUNT(DISTINCT IFF(SKIPPED_REASON IS NULL, LANG, NULL)) AS L
-                               FROM CODE.CODE_FILE WHERE REPO_ID = ?""", [repo_id])[0]
-    edges = rows(session, "SELECT COUNT(*) AS N FROM CODE.CODE_EDGE WHERE REPO_ID = ?", [repo_id])[0]
+                               FROM CORE.CODE_FILE WHERE REPO_ID = ?""", [repo_id])[0]
+    edges = rows(session, "SELECT COUNT(*) AS N FROM CORE.CODE_EDGE WHERE REPO_ID = ?", [repo_id])[0]
     return {"files": int(files["N"] or 0), "languages": int(files["L"] or 0), "chunks": sum(kinds.values()), "by_kind": kinds,
             "edges": int(edges["N"] or 0), "dbt_projects": [p["name"] for p in dbt],
             "dbt_project_roots": [{"name": p["name"], "root": p["root"].rstrip("/")} for p in dbt],
@@ -328,9 +329,9 @@ def _stats(session, repo_id: str, dbt: List[Dict[str, Any]]) -> Dict[str, Any]:
 
 def _summary(session, repo_id: str, commit: str, dbt: List[Dict[str, Any]]) -> None:
     """The dbt shape of the repository: projects, model and macro counts, most-used macros, sources."""
-    top = rows(session, """SELECT TO_NAME, COUNT(*) AS N FROM CODE.CODE_EDGE WHERE REPO_ID = ? AND KIND = 'MACRO_USE'
+    top = rows(session, """SELECT TO_NAME, COUNT(*) AS N FROM CORE.CODE_EDGE WHERE REPO_ID = ? AND KIND = 'MACRO_USE'
                             GROUP BY 1 ORDER BY N DESC LIMIT 15""", [repo_id])
-    sources = rows(session, """SELECT DISTINCT TO_NAME FROM CODE.CODE_EDGE WHERE REPO_ID = ? AND KIND = 'SOURCE'
+    sources = rows(session, """SELECT DISTINCT TO_NAME FROM CORE.CODE_EDGE WHERE REPO_ID = ? AND KIND = 'SOURCE'
                                ORDER BY 1 LIMIT 100""", [repo_id])
     summary = {"projects": dbt, "top_macros": [{"name": r["TO_NAME"], "uses": int(r["N"])} for r in top],
                "sources": [r["TO_NAME"] for r in sources]}
@@ -338,8 +339,8 @@ def _summary(session, repo_id: str, commit: str, dbt: List[Dict[str, Any]]) -> N
     # the repository at a glance, from the code graph: languages, folders, dbt layers, hotspots, hard-coded tables
     from services.code import graph as code_graph
 
-    files = rows(session, "SELECT PATH, LANG FROM CODE.CODE_FILE WHERE REPO_ID = ? AND SKIPPED_REASON IS NULL", [repo_id])
-    kinds = {r["KIND"]: int(r["N"]) for r in rows(session, "SELECT KIND, COUNT(*) AS N FROM CODE.CODE_CHUNK WHERE REPO_ID = ? GROUP BY 1",
+    files = rows(session, "SELECT PATH, LANG FROM CORE.CODE_FILE WHERE REPO_ID = ? AND SKIPPED_REASON IS NULL", [repo_id])
+    kinds = {r["KIND"]: int(r["N"]) for r in rows(session, "SELECT KIND, COUNT(*) AS N FROM CORE.CODE_CHUNK WHERE REPO_ID = ? GROUP BY 1",
                                                      [repo_id])}
     g = code_graph.load(lambda sql, params: rows(session, sql, params), [repo_id])
     _put_summary(session, repo_id, "ARCHITECTURE",
@@ -347,7 +348,7 @@ def _summary(session, repo_id: str, commit: str, dbt: List[Dict[str, Any]]) -> N
 
 
 def _put_summary(session, repo_id: str, kind: str, summary: Dict[str, Any], commit: str) -> None:
-    session.sql("""MERGE INTO CODE.REPO_SUMMARY T USING (SELECT ? AS REPO_ID, ? AS KIND) S
+    session.sql("""MERGE INTO CORE.REPO_SUMMARY T USING (SELECT ? AS REPO_ID, ? AS KIND) S
                      ON T.REPO_ID = S.REPO_ID AND T.KIND = S.KIND
                    WHEN MATCHED THEN UPDATE SET SUMMARY = PARSE_JSON(?), COMMIT_SHA = NULLIF(?, ''), UPDATED_AT = CURRENT_TIMESTAMP()
                    WHEN NOT MATCHED THEN INSERT (REPO_ID, KIND, SUMMARY, COMMIT_SHA) VALUES (S.REPO_ID, S.KIND, PARSE_JSON(?), NULLIF(?, ''))""",
@@ -355,7 +356,7 @@ def _put_summary(session, repo_id: str, kind: str, summary: Dict[str, Any], comm
 
 
 def index_repo_entry(session, repo_id: str) -> Dict[str, Any]:
-    """Procedure handler: CALL CODE.INDEX_REPO('<repo id>'). Runs further passes while a large repository still has
+    """Procedure handler: CALL CORE.INDEX_REPO('<repo id>'). Runs further passes while a large repository still has
     changed files left (each pass reads at most MAX_READS_PER_RUN files)."""
     result: Dict[str, Any] = {}
     for _ in range(MAX_PASSES):

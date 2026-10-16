@@ -52,9 +52,9 @@ def test_artifacts_stay_under_the_domain_folder():
 
 
 def _publish_session(status="APPROVED"):
-    return Session({"JOIN GOVERNANCE.DOMAIN_MODEL M ON M.MODEL_ID = D.MODEL_ID": [
+    return Session({"JOIN CORE.DOMAIN_MODEL M ON M.MODEL_ID = D.MODEL_ID": [
                         {"STATUS": status, "SPEC": json.dumps(spec_fixture()), "DOMAIN_ID": "d1", "DOMAIN_NAME": "SALES"}],
-                    "FROM CODE.REPO WHERE REPO_ID = ? AND ENABLED": [{"GIT_URL": "https://github.com/acme/models", "BRANCH": "main",
+                    "FROM CORE.REPO WHERE REPO_ID = ? AND ENABLED": [{"GIT_URL": "https://github.com/acme/models", "BRANCH": "main",
                                                                       "PROVIDER": "GITHUB"}]})
 
 
@@ -75,7 +75,7 @@ def test_publish_domain_model_pushes_the_approved_files(monkeypatch):
     out = publish.publish_dbt_pr(s, "", json.dumps({"domain_model": REQ}))
     assert out["status"] == "PUBLISHED" and seen["head"] == "feature/model-sales-v3" and seen["base"] == "main"
     assert not seen["draft"] and all(p.startswith("domain/sales/") for p in seen["files"]) and "v3" in seen["title"]
-    update = s.find("UPDATE GOVERNANCE.MODEL_DESIGNS SET STATUS = ?, REPO_ID = ?")[0][1]
+    update = s.find("UPDATE CORE.MODEL_DESIGNS SET STATUS = ?, REPO_ID = ?")[0][1]
     assert update[:6] == ["APPROVED", "r1", "feature/model-sales-v3", "https://github.com/acme/models/pull/9", "9", "OPEN"]
 
 
@@ -97,7 +97,7 @@ def test_publish_failure_keeps_the_version_approved(monkeypatch):
     s = _publish_session()
     out = publish.publish_domain_model(s, REQ)
     assert out["status"] != "PUBLISHED"
-    update = s.find("UPDATE GOVERNANCE.MODEL_DESIGNS SET STATUS = ?, REPO_ID = ?")[0][1]
+    update = s.find("UPDATE CORE.MODEL_DESIGNS SET STATUS = ?, REPO_ID = ?")[0][1]
     assert update[0] == "APPROVED" and update[5] == "FAILED"
 
 
@@ -107,7 +107,7 @@ def test_publish_with_nothing_new_marks_published(monkeypatch):
     monkeypatch.setattr("services.knowledge.packs.export_pack", lambda q, d: None)
     s = _publish_session()
     publish.publish_domain_model(s, REQ)
-    assert s.find("UPDATE GOVERNANCE.MODEL_DESIGNS SET STATUS = ?, REPO_ID = ?")[0][1][0] == "PUBLISHED"
+    assert s.find("UPDATE CORE.MODEL_DESIGNS SET STATUS = ?, REPO_ID = ?")[0][1][0] == "PUBLISHED"
 
 
 def test_sync_model_prs_marks_merged_and_closed(monkeypatch):
@@ -120,16 +120,16 @@ def test_sync_model_prs_marks_merged_and_closed(monkeypatch):
 
     monkeypatch.setattr(publish, "_token", lambda: "t")
     monkeypatch.setattr(github, "pull_status", status)
-    s = Session({"JOIN CODE.REPO R ON R.REPO_ID = D.REPO_ID": [
+    s = Session({"JOIN CORE.REPO R ON R.REPO_ID = D.REPO_ID": [
         {"MODEL_ID": "m1", "VERSION": v, "PR_NUMBER": n, "GIT_URL": "https://github.com/acme/models"} for v, n in [(3, 7), (2, 8), (1, 9)]]})
     out = publish.publish_dbt_pr(s, "", json.dumps({"sync_model_prs": {"model_id": "m1"}}))
     assert out["checked"] == 2 and out["merged"] == [{"model_id": "m1", "version": 3}] and out["closed"] == [{"model_id": "m1", "version": 2}]
     assert out["errors"][0]["version"] == 1
-    sql, params = s.find("FROM GOVERNANCE.MODEL_DESIGNS D JOIN CODE.REPO")[0]
+    sql, params = s.find("FROM CORE.MODEL_DESIGNS D JOIN CORE.REPO")[0]
     assert "DATEADD('second', -60" in sql and params == ["m1"]
-    merged = [c for c in s.find("UPDATE GOVERNANCE.MODEL_DESIGNS SET PR_STATE = ?") if c[1][0] == "MERGED"][0]
+    merged = [c for c in s.find("UPDATE CORE.MODEL_DESIGNS SET PR_STATE = ?") if c[1][0] == "MERGED"][0]
     assert "STATUS = 'PUBLISHED'" in merged[0] and merged[1][1] == "sha7"
-    closed = [c for c in s.find("UPDATE GOVERNANCE.MODEL_DESIGNS SET PR_STATE = ?") if c[1][0] == "CLOSED"][0]
+    closed = [c for c in s.find("UPDATE CORE.MODEL_DESIGNS SET PR_STATE = ?") if c[1][0] == "CLOSED"][0]
     assert "STATUS = 'PUBLISHED'" not in closed[0]
     forced = Session()
     publish.sync_model_prs(forced, {"force": True})
@@ -169,9 +169,9 @@ def approved_customer_spec():
 def run_session(design, model=True, approved_spec=None, extra=None):
     answers = {
         "SELECT * FROM CORE.WORKFLOW_RUN WHERE RUN_ID = ?": [{"RUN_ID": "r1", "RUN_NAME": "CRM", "DOMAIN_ID": "d1"}],
-        "FROM MODELING.MODEL_DESIGN WHERE RUN_ID = ? AND VERSION = ?": [design],
-        "FROM GOVERNANCE.DOMAIN_MODEL WHERE DOMAIN_ID = ?": [{"MODEL_ID": "m1", "APPROVED_VERSION": 4, "DOMAIN_NAME": "SALES"}] if model else [],
-        "SELECT SPEC FROM GOVERNANCE.MODEL_DESIGNS": [{"SPEC": json.dumps(approved_spec or approved_customer_spec())}],
+        "FROM CORE.MODEL_DESIGN WHERE RUN_ID = ? AND VERSION = ?": [design],
+        "FROM CORE.DOMAIN_MODEL WHERE DOMAIN_ID = ?": [{"MODEL_ID": "m1", "APPROVED_VERSION": 4, "DOMAIN_NAME": "SALES"}] if model else [],
+        "SELECT SPEC FROM CORE.MODEL_DESIGNS": [{"SPEC": json.dumps(approved_spec or approved_customer_spec())}],
     }
     answers.update(extra or {})
     return Session(answers)
@@ -187,7 +187,7 @@ def test_a_design_with_changes_becomes_a_proposal():
     out = run_link.propose(s, "r1", 2, "ana")
     assert out["status"] == "PROPOSED" and out["counts"]["ADDITIVE"] == 1 and not out["breaking"]
     assert s.find("SET STATUS = 'WITHDRAWN'")[0][1] == ["ANA", "r1"]  # an older open proposal of the run is replaced
-    insert = s.find("INSERT INTO GOVERNANCE.MODEL_CHANGE")[0][1]
+    insert = s.find("INSERT INTO CORE.MODEL_CHANGE")[0][1]
     entities = json.loads(insert[6])
     assert insert[1] == "m1" and str(insert[2]) == "4" and insert[5] == "DIM_CUSTOMER" and "PROPOSED" in insert
     assert [e["entity_name"] for e in entities] == ["DIM_CUSTOMER"]
@@ -206,7 +206,7 @@ def test_a_domain_with_nothing_registered_starts_its_model_from_the_run(monkeypa
     made = {}
     monkeypatch.setattr(dm, "baseline", lambda s, d, u: None)
     monkeypatch.setattr(dm, "create_model", lambda s, d, payload, u: made.update(payload=json.loads(payload)) or {"model_id": "m9", "version": 1})
-    s = run_session(run_design(), model=False, extra={"SELECT DOMAIN_NAME FROM KNOWLEDGE.DOMAIN_REGISTRY": [{"DOMAIN_NAME": "SALES"}]})
+    s = run_session(run_design(), model=False, extra={"SELECT DOMAIN_NAME FROM CORE.DOMAIN_REGISTRY": [{"DOMAIN_NAME": "SALES"}]})
     out = run_link.propose(s, "r1", 2, "ana")
     assert out["merged_into"] == 1 and out["status"] == "MERGED" and made["payload"]["origin"] == "RUN"
     assert made["payload"]["spec"]["design"]["entities"][0]["entity_name"] == "DIM_CUSTOMER"
@@ -228,7 +228,7 @@ def test_merge_change_opens_a_draft_and_merges(monkeypatch):
     monkeypatch.setattr(dm, "_spec", lambda s, m, v: spec_fixture())
     monkeypatch.setattr(dm, "save_draft", lambda s, m, payload, u: calls.update(payload=json.loads(payload)) or {"etag": "e6", "counts": {"ADDITIVE": 1}})
     entity = spec_v2._entity({"entity_name": "DIM_CHANNEL", "attributes": [{"name": "CHANNEL_ID", "datatype": "INT"}]}, "m1")
-    s = Session({"FROM GOVERNANCE.MODEL_CHANGE WHERE CHANGE_ID = ? AND MODEL_ID = ?": [{"STATUS": "PROPOSED", "PROPOSED_ENTITIES": json.dumps([entity])}]})
+    s = Session({"FROM CORE.MODEL_CHANGE WHERE CHANGE_ID = ? AND MODEL_ID = ?": [{"STATUS": "PROPOSED", "PROPOSED_ENTITIES": json.dumps([entity])}]})
     out = run_link.merge_change(s, "m1", "c1", "ana")
     assert out == {"change_id": "c1", "status": "MERGED", "version": 5, "etag": "e6", "counts": {"ADDITIVE": 1}}
     assert calls["payload"]["etag"] == "e5" and "DIM_CHANNEL" in [e["entity_name"] for e in calls["payload"]["spec"]["design"]["entities"]]
@@ -243,19 +243,19 @@ def test_on_approved_marks_merged_and_stale():
                                                                     "TARGET_ENTITY": "DIM_CUSTOMER"}]})
     out = run_link.on_approved(s, "m1", 5)
     assert out == [{"change_id": "c1", "run_id": "r1", "design_version": 2, "entity": "DIM_CUSTOMER"}]
-    assert s.find("UPDATE GOVERNANCE.MODEL_CHANGE SET STATUS = 'APPROVED'")
+    assert s.find("UPDATE CORE.MODEL_CHANGE SET STATUS = 'APPROVED'")
     assert s.find("SET STATUS = 'STALE'")[0][1] == ["m1", 5]
 
 
 def test_pin_run_points_the_run_at_the_approved_entity():
-    s = Session({"SELECT D.SPEC, D.STATUS FROM GOVERNANCE.MODEL_DESIGNS": [{"SPEC": json.dumps(spec_fixture()), "STATUS": "APPROVED"}]})
+    s = Session({"SELECT D.SPEC, D.STATUS FROM CORE.MODEL_DESIGNS": [{"SPEC": json.dumps(spec_fixture()), "STATUS": "APPROVED"}]})
     out = run_link.pin_run(s, "r1", "m1", 4, "dim_customer", 2)
     assert out["target_model"] == "SILVER.SALES.DIM_CUSTOMER"
     assert s.find("UPDATE CORE.WORKFLOW_RUN SET MODEL_ID = ?")[0][1] == ["m1", 4, "DIM_CUSTOMER", "SILVER.SALES.DIM_CUSTOMER", "r1"]
-    assert s.find("UPDATE MODELING.MODEL_DESIGN SET STATUS = 'APPROVED'")[0][1] == ["r1", 2]
+    assert s.find("UPDATE CORE.MODEL_DESIGN SET STATUS = 'APPROVED'")[0][1] == ["r1", 2]
     with pytest.raises(AssertionError, match="not an active entity"):
         run_link.pin_run(s, "r1", "m1", 4, "LEGACY_TABLE")
-    draft = Session({"SELECT D.SPEC, D.STATUS FROM GOVERNANCE.MODEL_DESIGNS": [{"SPEC": "{}", "STATUS": "DRAFT"}]})
+    draft = Session({"SELECT D.SPEC, D.STATUS FROM CORE.MODEL_DESIGNS": [{"SPEC": "{}", "STATUS": "DRAFT"}]})
     with pytest.raises(AssertionError, match="only use an approved"):
         run_link.pin_run(draft, "r1", "m1", 4, "DIM_CUSTOMER")
 

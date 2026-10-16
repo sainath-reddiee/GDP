@@ -296,23 +296,23 @@ def test_register_from_run_merges_into_a_store_edited_model():
     specs = {1: base, 2: edited}
     session = _Session({
         "FROM CORE.WORKFLOW_RUN": [{"RUN_ID": "r2", "SOURCE_SYSTEM_ID": "s1"}],
-        "FROM SOURCE.SOURCE_REGISTRY": [{"SOURCE_SYSTEM_ID": "s1", "SOURCE_SYSTEM_NAME": "CRM"}],
-        "FROM MODELING.MODEL_DESIGN": [{"DESIGN_JSON": json.dumps(design)}],
-        "SELECT TABLE_MODEL_ID FROM GOVERNANCE.TABLE_MODEL WHERE": [{"TABLE_MODEL_ID": MID}],
-        "FROM GOVERNANCE.TABLE_MODEL M": [header],
-        "SELECT SPEC FROM GOVERNANCE.TABLE_MODEL_VERSION": lambda p: [{"SPEC": json.dumps(specs[int(p[1])])}],
-        "FROM GOVERNANCE.TABLE_MODEL_VERSION WHERE TABLE_MODEL_ID = ? ORDER BY VERSION DESC": versions,
+        "FROM CORE.SOURCE_REGISTRY": [{"SOURCE_SYSTEM_ID": "s1", "SOURCE_SYSTEM_NAME": "CRM"}],
+        "FROM CORE.MODEL_DESIGN": [{"DESIGN_JSON": json.dumps(design)}],
+        "SELECT TABLE_MODEL_ID FROM CORE.TABLE_MODEL WHERE": [{"TABLE_MODEL_ID": MID}],
+        "FROM CORE.TABLE_MODEL M": [header],
+        "SELECT SPEC FROM CORE.TABLE_MODEL_VERSION": lambda p: [{"SPEC": json.dumps(specs[int(p[1])])}],
+        "FROM CORE.TABLE_MODEL_VERSION WHERE TABLE_MODEL_ID = ? ORDER BY VERSION DESC": versions,
         "COALESCE(MAX(VERSION), 0)": [{"V": 2}],
-        "SELECT ETAG FROM GOVERNANCE.TABLE_MODEL": lambda p: [{"ETAG": session.etag}],
-        "UPDATE GOVERNANCE.TABLE_MODEL SET CURRENT_VERSION": lambda p: setattr(session, "etag", p[1]) or [],
+        "SELECT ETAG FROM CORE.TABLE_MODEL": lambda p: [{"ETAG": session.etag}],
+        "UPDATE CORE.TABLE_MODEL SET CURRENT_VERSION": lambda p: setattr(session, "etag", p[1]) or [],
     })
     session.etag = None
     out = tms.register_from_run(session, "r2", 1, "ann")
     assert out[0]["status"] == "UNCHANGED"  # the run brings nothing the store had not already decided
     design["entities"][0]["attributes"].append({"name": "EMAIL", "datatype": "VARCHAR(80)", "source_columns": ["CRM_ACCOUNT.EMAIL"]})
-    session.answers["FROM MODELING.MODEL_DESIGN"] = [{"DESIGN_JSON": json.dumps(design)}]
+    session.answers["FROM CORE.MODEL_DESIGN"] = [{"DESIGN_JSON": json.dumps(design)}]
     out = tms.register_from_run(session, "r2", 2, "ann")
     assert out[0]["status"] == "VERSIONED"
-    stored = next(p for s, p in session.calls if s.startswith("INSERT INTO GOVERNANCE.TABLE_MODEL_VERSION"))
+    stored = next(p for s, p in session.calls if s.startswith("INSERT INTO CORE.TABLE_MODEL_VERSION"))
     spec = json.loads(stored[2])
     assert _attr(spec, "NAME")["datatype"] == "VARCHAR(200)" and _attr(spec, "EMAIL") is not None

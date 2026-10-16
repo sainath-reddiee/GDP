@@ -1,6 +1,6 @@
 import {
-  Activity, Crown, BadgeCheck, Bot, BarChart3, BookOpen, Boxes, ClipboardCheck, Database, FileClock, FlaskConical, FolderGit2, GitCompareArrows, GitPullRequest,
-  LayoutDashboard, ListChecks, Network, Rocket, Settings, ShieldCheck, Siren, Sparkles, SquareTerminal, Store, Ticket,
+  Activity, Crown, BadgeCheck, BarChart3, BookOpen, Boxes, ClipboardCheck, Database, FileClock, FlaskConical, FolderGit2, GitCompareArrows, GitPullRequest,
+  Inbox, LayoutDashboard, ListChecks, Network, Rocket, Settings, ShieldCheck, Siren, Sparkles, SquareTerminal, Store, Ticket, Wrench, BookCheck,
 } from "lucide-react";
 import type { NavCounts } from "@/app/bff/nav/route";
 
@@ -12,7 +12,12 @@ export type NavLink = { href: string; label: string; icon: typeof Database; priv
   /** sub-links shown under the item (expanded sidebar) or in a flyout (collapsed); the item is active on any of them */
   children?: NavLink[];
   /** sub-links start folded (they open on their own on one of their pages, and the chevron choice is remembered) */
-  folded?: boolean };
+  folded?: boolean;
+  /** a workspace: its children are its pages, shown as a tab bar on those pages (components/shell/workspace-tabs) and as
+   *  a flyout when the sidebar is collapsed, never as rows under it. The row opens the first page the caller may see. */
+  tabs?: boolean;
+  /** the pages draw their own tab bar (the stores: components/hub/store-nav), so the shell adds none */
+  ownTabs?: boolean };
 
 /** Incidents shipped with PR O2. */
 const SHOW_INCIDENTS = true;
@@ -54,83 +59,106 @@ export type NavGroup = { label: string; links: NavLink[]; secondary?: boolean; d
   /** a single call to action, drawn as a highlighted entry with no section heading */
   feature?: boolean };
 
-// The lifecycle first: onboard what comes in, build it (the Silver and Gold runs), the six asset stores the runs fill,
-// and the domains and knowledge that give it meaning. Monitor and Govern follow as foldable sections. A group with no visible links is hidden.
+// Nine workspaces in four sections, in the order people work: their own work and the estate; then build (onboard,
+// the pipelines, the stores they fill, the knowledge behind them); then run (quality and operations); then govern.
+// Related pages live inside a workspace as tabs, so the sidebar stays short. A section with no visible links is hidden.
+const n = (v?: number) => v ?? 0;
 export const NAV_GROUPS: NavGroup[] = [
   {
-    label: "Overview",
+    label: "Work",
     links: [
-      { href: "/dashboard", label: "Command Center", icon: LayoutDashboard, exact: true },
-      { href: "/dashboard/copilot", label: "Copilot", icon: Bot, privilege: "AI.USE" },
       {
-        href: "/tickets", label: "Tickets", icon: Ticket, privilege: ["JIRA.READ", "CASE.WORK"],
-        badge: (c) => {
-          const n = (c.jira_open ?? 0) + (c.cases_mine ?? 0);
-          return n ? { value: n, tone: "bg-sky-500 text-white", title: `${n} open tickets assigned to you (Jira and cases)` } : null;
-        },
+        href: "/work", label: "My Work", icon: Inbox, exact: true,
+        badge: (c) => c.approvals ? { value: c.approvals, tone: "bg-human text-white", title: `${c.approvals} change requests waiting for you` } : null,
       },
+      { href: "/dashboard", label: "Overview", icon: LayoutDashboard, exact: true },
     ],
   },
   {
     label: "Onboard", feature: true,
-    links: [{ href: "/dashboard/onboarding", label: "Onboarding", icon: Rocket, hint: "Sources, domains, applications" }],
+    links: [{ href: "/dashboard/onboarding", label: "Onboard", icon: Rocket, hint: "Sources, domains, applications" }],
   },
   {
-    // the run engine: the Silver and Gold pipelines and what they build; first after onboarding, where developers work
+    // the run engine first: the Silver and Gold pipelines and what they build, then the stores and the knowledge
     label: "Build",
     links: [
       {
-        href: "/runs", label: "Pipelines", icon: ListChecks,
-        badge: (c) => c.review ? { value: c.review, tone: "bg-rose-500 text-white", title: `${c.review} waiting on review` }
+        href: "/runs", label: "Pipelines", icon: ListChecks, tabs: true,
+        badge: (c) => c.review ? { value: c.review, tone: "bg-human text-white", title: `${c.review} waiting on review` }
           : c.running ? { value: c.running, tone: "bg-white/10 text-white/70", title: `${c.running} running` } : null,
         children: [
           { href: "/runs", label: "Silver Pipeline", icon: ListChecks },
           { href: "/gold", label: "Gold Pipeline", icon: Crown },
+          { href: "/lineage", label: "Lineage", icon: Network },
+          { href: "/code", label: "Code", icon: FolderGit2, privilege: "CODE.VIEW" },
         ],
       },
-      { href: "/lineage", label: "Lineage", icon: Network },
-      { href: "/code", label: "Code", icon: FolderGit2, privilege: "CODE.VIEW" },
-    ],
-  },
-  {
-    label: "Asset stores",
-    links: [{ href: "/dashboard/store", label: "Store", icon: Store, children: STORES, badge: storeBadge, folded: true }],
-  },
-  {
-    label: "Knowledge",
-    links: [
-      { href: "/domains", label: "Domains", icon: Boxes },
-      { href: "/knowledge", label: "Knowledge", icon: BookOpen },
-      { href: "/skills", label: "Skills", icon: Sparkles },
-    ],
-  },
-  {
-    label: "Monitor", secondary: true, defaultOpen: true,
-    links: [
-      { href: "/dashboard/quality", label: "Quality center", icon: BadgeCheck },
+      { href: "/dashboard/store", label: "Stores", icon: Store, children: STORES, badge: storeBadge, tabs: true, ownTabs: true },
       {
-        href: "/qa", label: "QA testing", icon: FlaskConical, privilege: "QA.EDIT",
+        href: "/domains", label: "Knowledge", icon: BookOpen, tabs: true,
+        children: [
+          { href: "/domains", label: "Domains", icon: Boxes },
+          { href: "/knowledge", label: "Knowledge", icon: BookOpen },
+          { href: "/skills", label: "Skills", icon: Sparkles },
+        ],
       },
-      { href: "/ops", label: "Pipelines", icon: Activity, privilege: "OPS.VIEW" },
-      ...(SHOW_INCIDENTS ? [{
-        href: "/incidents", label: "Incidents", icon: Siren, privilege: "OPS.VIEW",
-        badge: (c: NavCounts) => c.incidents ? { value: c.incidents, tone: "bg-rose-500 text-white", title: `${c.incidents} open or acknowledged` } : null,
-      }] : []),
     ],
   },
   {
-    label: "Govern", secondary: true,
+    label: "Run",
     links: [
       {
-        href: "/approvals", label: "Approvals", icon: ShieldCheck,
-        badge: (c) => c.approvals ? { value: c.approvals, tone: "bg-violet-500 text-white", title: `${c.approvals} waiting for you` } : null,
+        href: "/dashboard/quality", label: "Quality", icon: BadgeCheck, tabs: true,
+        badge: (c) => n(c.dq_failing) ? { value: n(c.dq_failing), tone: "bg-rose-500 text-white", title: `${n(c.dq_failing)} checks failing` } : null,
+        children: [
+          { href: "/dashboard/quality", label: "Quality center", icon: BadgeCheck },
+          { href: "/qa", label: "QA testing", icon: FlaskConical, privilege: "QA.EDIT" },
+        ],
       },
-      { href: "/dashboard/source-control", label: "Source control", icon: GitPullRequest },
-      { href: "/audit", label: "Audit", icon: FileClock, privilege: "AUDIT.VIEW" },
-      { href: "/admin", label: "Admin", icon: Settings, privilege: "ADMIN.VIEW" },
+      {
+        href: "/ops", label: "Operations", icon: Activity, tabs: true,
+        badge: (c) => {
+          const v = c.incidents + n(c.jira_open) + n(c.cases_mine);
+          return v ? { value: v, tone: c.incidents ? "bg-rose-500 text-white" : "bg-sky-500 text-white",
+                       title: `${c.incidents} open incidents; ${n(c.jira_open) + n(c.cases_mine)} tickets assigned to you` } : null;
+        },
+        children: [
+          { href: "/ops", label: "Monitoring", icon: Activity, privilege: "OPS.VIEW" },
+          ...(SHOW_INCIDENTS ? [{ href: "/incidents", label: "Incidents", icon: Siren, privilege: "OPS.VIEW" }] : []),
+          { href: "/ops/resolutions", label: "Resolutions", icon: Wrench, privilege: "OPS.VIEW" },
+          { href: "/ops/fixes", label: "Known fixes", icon: BookCheck, privilege: "OPS.VIEW" },
+          { href: "/tickets", label: "Tickets", icon: Ticket, privilege: ["JIRA.READ", "CASE.WORK"] },
+        ],
+      },
+    ],
+  },
+  {
+    label: "Govern",
+    links: [
+      {
+        href: "/approvals", label: "Governance", icon: ShieldCheck, tabs: true,
+        badge: (c) => c.approvals ? { value: c.approvals, tone: "bg-human text-white", title: `${c.approvals} waiting for you` } : null,
+        children: [
+          { href: "/approvals", label: "Approvals", icon: ShieldCheck },
+          { href: "/dashboard/source-control", label: "Source control", icon: GitPullRequest },
+          { href: "/audit", label: "Audit", icon: FileClock, privilege: "AUDIT.VIEW" },
+          { href: "/admin", label: "Admin", icon: Settings, privilege: "ADMIN.VIEW" },
+        ],
+      },
     ],
   },
 ];
+
+/** The workspace a path belongs to (any of its pages, or a page under one), or null. */
+export function workspaceFor(path: string): NavLink | null {
+  for (const g of NAV_GROUPS) {
+    for (const l of g.links) {
+      if (!l.tabs) continue;
+      if (l.children?.some((c) => path === c.href || path.startsWith(`${c.href}/`))) return l;
+    }
+  }
+  return null;
+}
 
 /** A folded section's badge: its links' badges that need attention (not the grey "in progress" ones), summed. */
 export function groupBadge(links: NavLink[], c: NavCounts): NavBadge | null {

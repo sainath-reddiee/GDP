@@ -12,7 +12,7 @@ database read, caches secrets in a bounded LRU (unknown environments too, for a 
 address and per environment.
 
 Deleting an environment removes its row and its poll lease; its DAG and run history stays in the OPS tables but is
-hidden, because every read joins to OPS.AIRFLOW_ENV.
+hidden, because every read joins to CORE.AIRFLOW_ENV.
 """
 
 from __future__ import annotations
@@ -118,12 +118,14 @@ def _mwaa_http(exc: MwaaError) -> HTTPException:
 
 
 def _mwaa(env: Dict[str, Any]) -> Mwaa:
-    return Mwaa(env["mwaa_env"], env["region"])
+    from services.ops.mwaa import client_for
+
+    return client_for(env)
 
 
 def _env(db: Db, env_id: str) -> Dict[str, Any]:
     found = _q(db, """SELECT ENV_ID, NAME, KIND, MWAA_ENV, REGION, AIRFLOW_URL, API_VERSION, ENABLED, POLL_SECONDS,
-                             PUSH_ENABLED FROM OPS.AIRFLOW_ENV WHERE ENV_ID = %s""", (env_id,))
+                             PUSH_ENABLED FROM CORE.AIRFLOW_ENV WHERE ENV_ID = %s""", (env_id,))
     if not found:
         raise HTTPException(404, f"Airflow environment {env_id} not found")
     return found[0]
@@ -160,8 +162,10 @@ def _forget_secret(env_id: Optional[str] = None) -> None:
 
 class EnvBody(BaseModel):
     name: str = Field(min_length=1, max_length=120)
-    mwaa_env: str = Field(min_length=1, max_length=80)
-    region: str = Field(min_length=6, max_length=32)
+    # MWAA (Amazon managed, IAM) or AIRFLOW (self-hosted: the REST API at airflow_url, credentials from host variables)
+    kind: str = Field(default="MWAA", pattern="^(MWAA|AIRFLOW)$")
+    mwaa_env: Optional[str] = Field(default=None, min_length=1, max_length=80)
+    region: Optional[str] = Field(default=None, min_length=6, max_length=32)
     airflow_url: Optional[str] = Field(default=None, max_length=1024)
     poll_seconds: int = Field(default=300, ge=60, le=3600)
     enabled: bool = True
@@ -197,9 +201,10 @@ def _check_env_fields(values: Dict[str, Any]) -> Dict[str, Any]:
         out["name"] = out["name"].strip()
         if not out["name"]:
             raise HTTPException(422, "name is required")
-    if out.get("mwaa_env") is not None and not _MWAA_NAME.match(out["mwaa_env"].strip()):
+    local = out.get("kind") == "AIRFLOW"
+    if not local and out.get("mwaa_env") is not None and not _MWAA_NAME.match(out["mwaa_env"].strip()):
         raise HTTPException(422, "mwaa_env must be an MWAA environment name (letters, digits, - and _)")
-    if out.get("region") is not None and not _REGION.match(out["region"].strip()):
+    if not local and out.get("region") is not None and not _REGION.match(out["region"].strip()):
         raise HTTPException(422, "region must be an AWS region such as us-east-1")
     if "airflow_url" in out:
         url = (out.get("airflow_url") or "").strip().rstrip("/")
@@ -222,15 +227,15 @@ def slug(name: str) -> str:
 @router.get("/api/ops/summary")
 def ops_summary(db: Db = Depends(current_db)):
     found = _q(db, """
-        SELECT (SELECT COUNT(*) FROM OPS.AIRFLOW_ENV WHERE ENABLED) AS ENVS,
-               (SELECT COUNT(*) FROM OPS.DAG D JOIN OPS.AIRFLOW_ENV E ON E.ENV_ID = D.ENV_ID
+        SELECT (SELECT COUNT(*) FROM CORE.AIRFLOW_ENV WHERE ENABLED) AS ENVS,
+               (SELECT COUNT(*) FROM CORE.DAG D JOIN CORE.AIRFLOW_ENV E ON E.ENV_ID = D.ENV_ID
                  WHERE COALESCE(D.IS_ACTIVE, TRUE)) AS DAGS,
-               (SELECT COUNT(DISTINCT R.ENV_ID, R.DAG_ID) FROM OPS.DAG_RUN R JOIN OPS.AIRFLOW_ENV E ON E.ENV_ID = R.ENV_ID
+               (SELECT COUNT(DISTINCT R.ENV_ID, R.DAG_ID) FROM CORE.DAG_RUN R JOIN CORE.AIRFLOW_ENV E ON E.ENV_ID = R.ENV_ID
                  WHERE R.STATE = 'failed' AND COALESCE(R.ENDED_AT, R.UPDATED_AT) >= DATEADD(hour, -24, CURRENT_TIMESTAMP())) AS FAILING_24H,
-               (SELECT COUNT(*) FROM OPS.DAG_RUN R JOIN OPS.AIRFLOW_ENV E ON E.ENV_ID = R.ENV_ID
+               (SELECT COUNT(*) FROM CORE.DAG_RUN R JOIN CORE.AIRFLOW_ENV E ON E.ENV_ID = R.ENV_ID
                  WHERE R.STATE IN ('running', 'queued')) AS RUNNING,
-               (SELECT MAX(LAST_POLL_AT) FROM OPS.AIRFLOW_ENV) AS LAST_POLL_AT,
-               (SELECT MAX(LAST_RUN_AT) FROM OPS.JOB_LEASE WHERE JOB_NAME = 'worker') AS WORKER_SEEN_AT""")
+               (SELECT MAX(LAST_POLL_AT) FROM CORE.AIRFLOW_ENV) AS LAST_POLL_AT,
+               (SELECT MAX(LAST_RUN_AT) FROM CORE.JOB_LEASE WHERE JOB_NAME = 'worker') AS WORKER_SEEN_AT""")
     row = found[0] if found else {}
     return {"envs": int(row.get("envs") or 0), "dags": int(row.get("dags") or 0),
             "failing_24h": int(row.get("failing_24h") or 0), "running": int(row.get("running") or 0),
@@ -254,8 +259,8 @@ _ENV_SELECT = """
            E.POLL_SECONDS, E.PUSH_ENABLED, E.PUSH_SECRET IS NOT NULL AS HAS_PUSH_SECRET,
            COALESCE(LEFT(HEX_ENCODE(E.PUSH_SECRET), 10) <> '676470313A', FALSE) AS PUSH_SECRET_LEGACY, E.LAST_POLL_AT, E.LAST_ATTEMPT_AT,
            E.LAST_ERROR, COALESCE(D.N, 0) AS DAGS
-      FROM OPS.AIRFLOW_ENV E
-      LEFT JOIN (SELECT ENV_ID, COUNT(*) AS N FROM OPS.DAG WHERE COALESCE(IS_ACTIVE, TRUE) GROUP BY ENV_ID) D
+      FROM CORE.AIRFLOW_ENV E
+      LEFT JOIN (SELECT ENV_ID, COUNT(*) AS N FROM CORE.DAG WHERE COALESCE(IS_ACTIVE, TRUE) GROUP BY ENV_ID) D
         ON D.ENV_ID = E.ENV_ID"""
 
 
@@ -274,14 +279,20 @@ def _one_env_out(db: Db, env_id: str) -> Dict[str, Any]:
 @router.post("/api/ops/envs")
 def create_env(body: EnvBody, db: Db = Depends(current_db)):
     values = _check_env_fields(body.model_dump())
+    if values["kind"] == "AIRFLOW":
+        if not values.get("airflow_url"):
+            raise HTTPException(422, "a self-hosted Airflow needs airflow_url, the base URL of its REST API")
+        values["mwaa_env"], values["region"] = "local", "local"   # NOT NULL columns; unused for this kind
+    elif not values.get("mwaa_env") or not values.get("region"):
+        raise HTTPException(422, "an MWAA environment needs mwaa_env and region")
     base = slug(values["name"])
-    taken = {r["env_id"] for r in _q(db, "SELECT ENV_ID FROM OPS.AIRFLOW_ENV WHERE ENV_ID LIKE %s", (base + "%",))}
+    taken = {r["env_id"] for r in _q(db, "SELECT ENV_ID FROM CORE.AIRFLOW_ENV WHERE ENV_ID LIKE %s", (base + "%",))}
     env_id = next((c for c in [base] + [f"{base}-{i}" for i in range(2, 100)] if c not in taken), None)
     if not env_id:
         raise HTTPException(409, "Too many environments with this name; choose another name")
-    _x(db, """INSERT INTO OPS.AIRFLOW_ENV (ENV_ID, NAME, KIND, MWAA_ENV, REGION, AIRFLOW_URL, ENABLED, POLL_SECONDS, PUSH_ENABLED)
-              SELECT %s, %s, 'MWAA', %s, %s, %s, %s, %s, %s""",
-       (env_id, values["name"], values["mwaa_env"], values["region"], values.get("airflow_url"), values["enabled"],
+    _x(db, """INSERT INTO CORE.AIRFLOW_ENV (ENV_ID, NAME, KIND, MWAA_ENV, REGION, AIRFLOW_URL, ENABLED, POLL_SECONDS, PUSH_ENABLED)
+              SELECT %s, %s, %s, %s, %s, %s, %s, %s, %s""",
+       (env_id, values["name"], values["kind"], values["mwaa_env"], values["region"], values.get("airflow_url"), values["enabled"],
         values["poll_seconds"], values["push_enabled"]))
     return _one_env_out(db, env_id)
 
@@ -299,7 +310,7 @@ def update_env(env_id: str, body: EnvPatch, db: Db = Depends(current_db)):
     if sets:
         if any(c in ("MWAA_ENV", "REGION") for c, _ in sets):
             sets.append(("API_VERSION", None))  # detected again on the next poll or test
-        _x(db, f"UPDATE OPS.AIRFLOW_ENV SET {', '.join(c + ' = %s' for c, _ in sets)}, UPDATED_AT = CURRENT_TIMESTAMP() "
+        _x(db, f"UPDATE CORE.AIRFLOW_ENV SET {', '.join(c + ' = %s' for c, _ in sets)}, UPDATED_AT = CURRENT_TIMESTAMP() "
                "WHERE ENV_ID = %s", tuple(v for _, v in sets) + (env_id,))
     _forget_secret(env_id)
     return _one_env_out(db, env_id)
@@ -308,8 +319,8 @@ def update_env(env_id: str, body: EnvPatch, db: Db = Depends(current_db)):
 @router.delete("/api/ops/envs/{env_id}")
 def delete_env(env_id: str, db: Db = Depends(current_db)):
     _env(db, env_id)
-    _x(db, "DELETE FROM OPS.AIRFLOW_ENV WHERE ENV_ID = %s", (env_id,))
-    _x(db, "DELETE FROM OPS.JOB_LEASE WHERE JOB_NAME = %s", (f"poll:{env_id}",))
+    _x(db, "DELETE FROM CORE.AIRFLOW_ENV WHERE ENV_ID = %s", (env_id,))
+    _x(db, "DELETE FROM CORE.JOB_LEASE WHERE JOB_NAME = %s", (f"poll:{env_id}",))
     _forget_secret(env_id)
     return {"deleted": True, "env_id": env_id,
             "detail": "The environment is removed. Its captured history is kept but no longer shown."}
@@ -326,7 +337,7 @@ def test_env(env_id: str, db: Db = Depends(current_db)):
         if exc.kind in ("credentials", "access_denied"):
             raise _mwaa_http(exc) from exc
         return {"ok": False, "version": None, "api_version": None, "dags_sample": [], "error": str(exc)}
-    _x(db, "UPDATE OPS.AIRFLOW_ENV SET API_VERSION = %s, AIRFLOW_VERSION = %s WHERE ENV_ID = %s",
+    _x(db, "UPDATE CORE.AIRFLOW_ENV SET API_VERSION = %s, AIRFLOW_VERSION = %s WHERE ENV_ID = %s",
        (info["api_version"], info["version"][:32], env_id))
     return {"ok": True, "version": info["version"], "api_version": info["api_version"],
             "dags_sample": [str(d.get("dag_id")) for d in dags if d.get("dag_id")], "error": None}
@@ -358,7 +369,7 @@ def rotate_push_secret(env_id: str, db: Db = Depends(current_db), x_aip_replay: 
     key = _secret_key()
     _env(db, env_id)
     secret = secrets.token_hex(32)
-    _x(db, "UPDATE OPS.AIRFLOW_ENV SET PUSH_SECRET = %s, UPDATED_AT = CURRENT_TIMESTAMP() WHERE ENV_ID = %s",
+    _x(db, "UPDATE CORE.AIRFLOW_ENV SET PUSH_SECRET = %s, UPDATED_AT = CURRENT_TIMESTAMP() WHERE ENV_ID = %s",
        (seal_push_secret(secret, env_id, key), env_id))
     _forget_secret(env_id)
     return {"env_id": env_id, "secret": secret, "header_names": HEADER_NAMES, "url_path": INGEST_PATH}
@@ -369,7 +380,7 @@ def rotate_push_secret(env_id: str, db: Db = Depends(current_db), x_aip_replay: 
 _DAG_SQL = """
 WITH LAST_RUN AS (
     SELECT ENV_ID, DAG_ID, STATE AS LAST_STATE, COALESCE(STARTED_AT, LOGICAL_DATE) AS LAST_RUN_AT, DURATION_S AS LAST_DURATION_S
-      FROM OPS.DAG_RUN WHERE {run_filter}
+      FROM CORE.DAG_RUN WHERE {run_filter}
    QUALIFY ROW_NUMBER() OVER (PARTITION BY ENV_ID, DAG_ID
                               ORDER BY COALESCE(STARTED_AT, LOGICAL_DATE, UPDATED_AT) DESC NULLS LAST) = 1
 ), STATS AS (
@@ -380,7 +391,7 @@ WITH LAST_RUN AS (
            COUNT_IF(STATE = 'success') AS OK_30D, COUNT_IF(STATE = 'failed') AS FAIL_30D,
            PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY IFF(STATE = 'success', DURATION_S, NULL)) AS P50_S,
            PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY IFF(STATE = 'success', DURATION_S, NULL)) AS P95_S
-      FROM (SELECT ENV_ID, DAG_ID, STATE, DURATION_S, COALESCE(STARTED_AT, LOGICAL_DATE) AS AT FROM OPS.DAG_RUN
+      FROM (SELECT ENV_ID, DAG_ID, STATE, DURATION_S, COALESCE(STARTED_AT, LOGICAL_DATE) AS AT FROM CORE.DAG_RUN
              WHERE {run_filter} AND COALESCE(STARTED_AT, LOGICAL_DATE) >= DATEADD(day, -30, CURRENT_TIMESTAMP()))
      GROUP BY ENV_ID, DAG_ID
 )
@@ -388,8 +399,8 @@ SELECT D.ENV_ID, D.DAG_ID, D.OWNERS, D.TAGS, D.SCHEDULE, D.IS_PAUSED, D.IS_ACTIV
        D.FILELOC, D.EXPECTED_BY_CRON, D.MAX_DURATION_MIN, D.REPO_ID, D.REPO_PATH, D.DESCRIPTION, D.TIMEZONE, D.MUTE_UNTIL,
        D.MUTE_REASON, E.AIRFLOW_URL AS ENV_AIRFLOW_URL, E.API_VERSION,
        L.LAST_STATE, L.LAST_RUN_AT, L.LAST_DURATION_S, S.RUNS_7D, S.OK_7D, S.FAIL_7D, S.OK_30D, S.FAIL_30D, S.P50_S, S.P95_S
-  FROM OPS.DAG D
-  JOIN OPS.AIRFLOW_ENV E ON E.ENV_ID = D.ENV_ID
+  FROM CORE.DAG D
+  JOIN CORE.AIRFLOW_ENV E ON E.ENV_ID = D.ENV_ID
   LEFT JOIN LAST_RUN L ON L.ENV_ID = D.ENV_ID AND L.DAG_ID = D.DAG_ID
   LEFT JOIN STATS S ON S.ENV_ID = D.ENV_ID AND S.DAG_ID = D.DAG_ID
  WHERE {dag_filter}
@@ -461,7 +472,7 @@ def open_incident_counts(db: Db, env_id: Optional[str] = None, dag_id: Optional[
         where.append("DAG_ID = %s")
         params.append(dag_id)
     try:
-        found = db.query(f"SELECT ENV_ID, DAG_ID, COUNT(*) AS N FROM OPS.INCIDENT WHERE {' AND '.join(where)} "
+        found = db.query(f"SELECT ENV_ID, DAG_ID, COUNT(*) AS N FROM CORE.INCIDENT WHERE {' AND '.join(where)} "
                          "GROUP BY ENV_ID, DAG_ID", tuple(params))
     except Exception:
         return {}
@@ -497,8 +508,8 @@ def _run_out(r: Dict[str, Any]) -> Dict[str, Any]:
 _RUNS_SQL = """
 SELECT R.RUN_ID, R.RUN_TYPE, R.STATE, R.LOGICAL_DATE, R.STARTED_AT, R.ENDED_AT, R.DURATION_S, R.EXTERNAL_TRIGGER, R.NOTE,
        R.SOURCE, R.UPDATED_AT, COALESCE(F.N, 0) AS FAILED_TASKS
-  FROM OPS.DAG_RUN R
-  LEFT JOIN (SELECT RUN_ID, COUNT(DISTINCT TASK_ID, MAP_INDEX) AS N FROM OPS.TASK_RUN
+  FROM CORE.DAG_RUN R
+  LEFT JOIN (SELECT RUN_ID, COUNT(DISTINCT TASK_ID, MAP_INDEX) AS N FROM CORE.TASK_RUN
               WHERE ENV_ID = %s AND DAG_ID = %s AND STATE IN ('failed', 'upstream_failed') GROUP BY RUN_ID) F
     ON F.RUN_ID = R.RUN_ID
  WHERE R.ENV_ID = %s AND R.DAG_ID = %s {extra}
@@ -518,7 +529,7 @@ def get_dag(env_id: str, dag_id: str, db: Db = Depends(current_db)):
 @router.put("/api/ops/dag")
 def update_dag(env_id: str, dag_id: str, body: DagSettings, db: Db = Depends(current_db)):
     """Platform settings of a DAG. A field left out is kept; a field sent as null or "" is cleared."""
-    if not _q(db, "SELECT 1 AS X FROM OPS.DAG D JOIN OPS.AIRFLOW_ENV E ON E.ENV_ID = D.ENV_ID "
+    if not _q(db, "SELECT 1 AS X FROM CORE.DAG D JOIN CORE.AIRFLOW_ENV E ON E.ENV_ID = D.ENV_ID "
                   "WHERE D.ENV_ID = %s AND D.DAG_ID = %s", (env_id, dag_id)):
         raise HTTPException(404, f"DAG {dag_id} not found in {env_id}")
     values: Dict[str, Any] = {}
@@ -551,7 +562,7 @@ def update_dag(env_id: str, dag_id: str, body: DagSettings, db: Db = Depends(cur
         values["mute_until"] = until
     if values:
         sets = [(k.upper(), v) for k, v in values.items()]
-        _x(db, f"UPDATE OPS.DAG SET {', '.join(c + (' = TRY_TO_TIMESTAMP_LTZ(%s::VARCHAR)' if c == 'MUTE_UNTIL' else ' = %s') for c, _ in sets)}, "
+        _x(db, f"UPDATE CORE.DAG SET {', '.join(c + (' = TRY_TO_TIMESTAMP_LTZ(%s::VARCHAR)' if c == 'MUTE_UNTIL' else ' = %s') for c, _ in sets)}, "
                "UPDATED_AT = CURRENT_TIMESTAMP() "
                "WHERE ENV_ID = %s AND DAG_ID = %s", tuple(v for _, v in sets) + (env_id, dag_id))
     return get_dag(env_id, dag_id, db)
@@ -569,7 +580,7 @@ def get_run(env_id: str, dag_id: str, run_id: str, db: Db = Depends(current_db))
     tasks = _q(db, """
         SELECT TASK_ID, MAP_INDEX, TRY_NUMBER, STATE, OPERATOR, STARTED_AT, ENDED_AT, DURATION_S, ERROR_EXCERPT, HOSTNAME,
                TRY_NUMBER = MAX(TRY_NUMBER) OVER (PARTITION BY TASK_ID, MAP_INDEX) AS IS_LATEST
-          FROM OPS.TASK_RUN WHERE ENV_ID = %s AND DAG_ID = %s AND RUN_ID = %s
+          FROM CORE.TASK_RUN WHERE ENV_ID = %s AND DAG_ID = %s AND RUN_ID = %s
          ORDER BY STARTED_AT NULLS LAST, TASK_ID, MAP_INDEX, TRY_NUMBER LIMIT 5000""", (env_id, dag_id, run_id))
     return {"run": run, "tasks": [{"task_id": t["task_id"], "map_index": int(t["map_index"]), "try_number": int(t["try_number"]),
                                    "state": t.get("state"), "operator": t.get("operator"), "start": _iso(t.get("started_at")),
@@ -584,7 +595,7 @@ def task_log(env_id: str, dag_id: str, run_id: str, task_id: str, try_number: Op
     """The task's log from Airflow, every page up to 256 KB (the end kept), secrets and personal data redacted."""
     env = _env(db, env_id)
     if try_number is None:
-        found = _q(db, """SELECT MAX(TRY_NUMBER) AS T FROM OPS.TASK_RUN WHERE ENV_ID = %s AND DAG_ID = %s AND RUN_ID = %s
+        found = _q(db, """SELECT MAX(TRY_NUMBER) AS T FROM CORE.TASK_RUN WHERE ENV_ID = %s AND DAG_ID = %s AND RUN_ID = %s
                             AND TASK_ID = %s AND MAP_INDEX = %s""", (env_id, dag_id, run_id, task_id, map_index))
         try_number = int(found[0]["t"]) if found and found[0].get("t") is not None else 1
     try:
@@ -603,7 +614,7 @@ PUSH_SECRET_AGAIN = "The stored push secret was saved in an older format or with
 
 
 def seal_push_secret(secret: str, env_id: str, key: Optional[str] = None) -> bytes:
-    """The sealed push secret for OPS.AIRFLOW_ENV.PUSH_SECRET (bound as bytes: only ciphertext reaches Snowflake)."""
+    """The sealed push secret for CORE.AIRFLOW_ENV.PUSH_SECRET (bound as bytes: only ciphertext reaches Snowflake)."""
     return secretbox.seal(secret, key or _secret_key(), secretbox.PUSH_SECRET, env_id)
 
 
@@ -633,7 +644,7 @@ def _push_secret(db: Db, env_id: str) -> Tuple[Optional[str], bool]:
     secret, enabled = None, False
     if key:
         try:
-            found = db.query("SELECT PUSH_SECRET AS S, PUSH_ENABLED FROM OPS.AIRFLOW_ENV WHERE ENV_ID = %s", (env_id,))
+            found = db.query("SELECT PUSH_SECRET AS S, PUSH_ENABLED FROM CORE.AIRFLOW_ENV WHERE ENV_ID = %s", (env_id,))
         except Exception:
             found = []
         if found:

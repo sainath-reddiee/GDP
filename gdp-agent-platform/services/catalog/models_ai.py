@@ -29,7 +29,7 @@ def _docs(session, tables: List[str]) -> Dict[str, Dict[str, Any]]:
     out: Dict[str, Dict[str, Any]] = {}
     for fqn in tables:
         database, schema, table = _split(fqn)
-        found = rows(session, """SELECT PROFILE_STAGE_PATH FROM METADATA.TABLE_PROFILES
+        found = rows(session, """SELECT PROFILE_STAGE_PATH FROM CORE.TABLE_PROFILES
                                   WHERE UPPER(DATABASE_NAME) = UPPER(?) AND UPPER(SCHEMA_NAME) = UPPER(?)
                                     AND UPPER(TABLE_NAME) = UPPER(?) AND SOURCE_FINGERPRINT <> ''
                                   ORDER BY PROFILED_AT DESC LIMIT 1""", [database, schema, table])
@@ -72,22 +72,22 @@ def baseline(docs: Dict[str, Dict[str, Any]]) -> Tuple[Dict[str, Any], List[Dict
 def _domain_context(session, domain: Optional[str]) -> Tuple[List[Dict[str, Any]], List[str]]:
     if not domain:
         return [], []
-    found = rows(session, "SELECT DOMAIN_ID FROM KNOWLEDGE.DOMAIN_REGISTRY WHERE UPPER(DOMAIN_NAME) = UPPER(?) LIMIT 1",
+    found = rows(session, "SELECT DOMAIN_ID FROM CORE.DOMAIN_REGISTRY WHERE UPPER(DOMAIN_NAME) = UPPER(?) LIMIT 1",
                  [domain])
     if not found:
         return [], []
     domain_id = found[0]["DOMAIN_ID"]
     models = []
     for t in rows(session, """SELECT TARGET_TABLE_ID, TARGET_DATABASE, TARGET_SCHEMA, TARGET_TABLE, DESCRIPTION
-                                FROM KNOWLEDGE.TARGET_TABLE_REGISTRY WHERE DOMAIN_ID = ? AND ACTIVE_FLAG AND COALESCE(LAYER, 'SILVER') = 'SILVER'
+                                FROM CORE.TARGET_TABLE_REGISTRY WHERE DOMAIN_ID = ? AND ACTIVE_FLAG AND COALESCE(LAYER, 'SILVER') = 'SILVER'
                                ORDER BY TARGET_TABLE LIMIT 40""", [domain_id]):
         cols = [f"{c['COLUMN_NAME']} {c['DATA_TYPE']}" for c in rows(
-            session, "SELECT COLUMN_NAME, DATA_TYPE FROM KNOWLEDGE.TARGET_COLUMN_REGISTRY WHERE TARGET_TABLE_ID = ? "
+            session, "SELECT COLUMN_NAME, DATA_TYPE FROM CORE.TARGET_COLUMN_REGISTRY WHERE TARGET_TABLE_ID = ? "
                      "ORDER BY ORDINAL_POSITION", [t["TARGET_TABLE_ID"]])]
         models.append({"fqn": f"{t['TARGET_DATABASE']}.{t['TARGET_SCHEMA']}.{t['TARGET_TABLE']}".upper(),
                        "description": t["DESCRIPTION"], "columns": cols})
     knowledge = [f"[{k['KNOWLEDGE_TYPE']}] {k['TITLE']}: {str(k['CONTENT'] or '')[:300]}" for k in rows(
-        session, """SELECT KNOWLEDGE_TYPE, TITLE, CONTENT FROM KNOWLEDGE.DOMAIN_KNOWLEDGE
+        session, """SELECT KNOWLEDGE_TYPE, TITLE, CONTENT FROM CORE.DOMAIN_KNOWLEDGE
                      WHERE DOMAIN_ID = ? AND IS_CURRENT AND COALESCE(STATUS, 'ACTIVE') = 'ACTIVE'
                        AND KNOWLEDGE_TYPE IN ('MODEL_DEFINITION', 'NAMING_STANDARD', 'GLOSSARY', 'MAPPING_PATTERN')
                      ORDER BY IFF(KNOWLEDGE_TYPE = 'MODEL_DEFINITION', 0, 1) LIMIT 40""", [domain_id])]

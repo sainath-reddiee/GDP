@@ -1,6 +1,6 @@
 """AI skill builder: clarifying questions, drafts from four sources, tests before publishing, and creating a skill.
 
-Every AI call uses the SKILLS stage model (Admin, Model per stage) and is recorded in AUDIT.COST_USAGE. Nothing is
+Every AI call uses the SKILLS stage model (Admin, Model per stage) and is recorded in CORE.COST_USAGE. Nothing is
 published here: a new skill or version is saved as the candidate, and production stays a separate, governed step.
 """
 
@@ -76,12 +76,12 @@ def _complete(db: Db, prompt: str, schema: dict, max_tokens: int = 8000, model: 
 
 
 def _names(db: Db) -> list[str]:
-    return [r["skill_name"] for r in db.query("SELECT DISTINCT SKILL_NAME FROM KNOWLEDGE.SKILL_REGISTRY")]
+    return [r["skill_name"] for r in db.query("SELECT DISTINCT SKILL_NAME FROM CORE.SKILL_REGISTRY")]
 
 
 def _production(db: Db, skill: str) -> Optional[dict]:
     pid = (_labels(db, skill).get(skill, {}).get("production") or {}).get("skill_id")
-    sql = ("SELECT SKILL_ID, SKILL_NAME, VERSION, DESCRIPTION, CONTENT, CATEGORY_ID FROM KNOWLEDGE.SKILL_REGISTRY WHERE "
+    sql = ("SELECT SKILL_ID, SKILL_NAME, VERSION, DESCRIPTION, CONTENT, CATEGORY_ID FROM CORE.SKILL_REGISTRY WHERE "
            + ("SKILL_ID = %s" if pid else "SKILL_NAME = %s AND STATUS = 'ACTIVE' ORDER BY REVISION DESC LIMIT 1"))
     found = db.query(sql, (pid or skill,))
     return found[0] if found else None
@@ -127,7 +127,7 @@ def builder_draft(body: Draft, db: Db = Depends(current_db)):
         types = [t for t in (body.knowledge_types or KNOWLEDGE_TYPES) if t in KNOWLEDGE_TYPES]
         knowledge = db.query(
             """SELECT K.KNOWLEDGE_TYPE, K.TITLE, K.CONTENT, K.SOURCE_REFERENCE, D.DOMAIN_NAME
-                 FROM KNOWLEDGE.DOMAIN_KNOWLEDGE K JOIN KNOWLEDGE.DOMAIN_REGISTRY D ON D.DOMAIN_ID = K.DOMAIN_ID
+                 FROM CORE.DOMAIN_KNOWLEDGE K JOIN CORE.DOMAIN_REGISTRY D ON D.DOMAIN_ID = K.DOMAIN_ID
                 WHERE K.IS_CURRENT AND K.STATUS = 'ACTIVE' AND (%s IS NULL OR K.DOMAIN_ID = %s)
                   AND ARRAY_CONTAINS(K.KNOWLEDGE_TYPE::VARIANT, PARSE_JSON(%s))
                   AND COALESCE(K.UPDATED_AT, K.CREATED_AT) >= DATEADD(DAY, -%s, CURRENT_TIMESTAMP())
@@ -154,10 +154,10 @@ def builder_draft(body: Draft, db: Db = Depends(current_db)):
         feedback = []
         try:
             for r in db.query(
-                    """SELECT F.TOOL_NAME, F.ERROR, R.RUN_NAME FROM AUDIT.AGENT_TOOL_CALL F
+                    """SELECT F.TOOL_NAME, F.ERROR, R.RUN_NAME FROM CORE.AGENT_TOOL_CALL F
                          LEFT JOIN CORE.WORKFLOW_RUN R ON R.RUN_ID = F.RUN_ID
                         WHERE F.STATUS = 'FAILED' AND F.CREATED_AT >= DATEADD(DAY, -60, CURRENT_TIMESTAMP())
-                          AND F.RUN_ID IN (SELECT RUN_ID FROM AUDIT.AGENT_TOOL_CALL WHERE TOOL_NAME = 'load_skill'
+                          AND F.RUN_ID IN (SELECT RUN_ID FROM CORE.AGENT_TOOL_CALL WHERE TOOL_NAME = 'load_skill'
                                              AND ARRAY_CONTAINS(UPPER(INPUT_JSON:skill::STRING)::VARIANT, PARSE_JSON(%s)))
                         ORDER BY F.CREATED_AT DESC LIMIT 15""", (variants,)):
                 feedback.append(f"Run {r.get('run_name') or ''} failed in {r['tool_name']}: {r.get('error') or ''}")
@@ -165,7 +165,7 @@ def builder_draft(body: Draft, db: Db = Depends(current_db)):
             pass
         types = FEEDBACK_TYPES.get(prod.get("category_id") or "", [])
         if types:
-            for r in db.query("""SELECT KNOWLEDGE_TYPE, TITLE, CONTENT FROM KNOWLEDGE.DOMAIN_KNOWLEDGE
+            for r in db.query("""SELECT KNOWLEDGE_TYPE, TITLE, CONTENT FROM CORE.DOMAIN_KNOWLEDGE
                                   WHERE ((IS_CURRENT AND STATUS IN ('DRAFT', 'RETIRED')) OR STATUS = 'REJECTED')
                                     AND ARRAY_CONTAINS(KNOWLEDGE_TYPE::VARIANT, PARSE_JSON(%s))
                                     AND COALESCE(UPDATED_AT, CREATED_AT) >= DATEADD(DAY, -60, CURRENT_TIMESTAMP())
@@ -261,7 +261,7 @@ def create_skill(body: NewSkill, db: Db = Depends(current_db)):
     if issues:
         raise HTTPException(400, issues[0]["message"])
     skill_id = str(uuid.uuid4())
-    db.execute("""INSERT INTO KNOWLEDGE.SKILL_REGISTRY (SKILL_ID, SKILL_NAME, SKILL_TYPE, VERSION, STAGE_PATH, CHECKSUM, STATUS,
+    db.execute("""INSERT INTO CORE.SKILL_REGISTRY (SKILL_ID, SKILL_NAME, SKILL_TYPE, VERSION, STAGE_PATH, CHECKSUM, STATUS,
                          DESCRIPTION, CONTENT, IS_CURRENT, CREATED_BY, REVISION, ORIGIN, CATEGORY_ID, CHANGE_NOTE, EVAL_JSON)
                   SELECT %s, %s, %s, '0.1.0', %s, %s, 'DRAFT', %s, %s, FALSE, CURRENT_USER(), 1, %s, %s, %s,
                          PARSE_JSON(NULLIF(%s, ''))""",

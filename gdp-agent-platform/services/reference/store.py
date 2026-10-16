@@ -1,4 +1,4 @@
-"""The reference inputs the engine uses (KNOWLEDGE.REFERENCE_INPUT, V057): the latest ready input of a kind for a domain
+"""The reference inputs the engine uses (CORE.REFERENCE_INPUT, V057): the latest ready input of a kind for a domain
 and layer. `query(sql, params)` -> rows; works from the API (%s) and from Snowpark (?) through the caller's query."""
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ def _get(row: Dict[str, Any], key: str) -> Any:
 def latest(query: Query, domain_id: str, layer: str, kind: str) -> Optional[Dict[str, Any]]:
     """{reference_id, title, parsed} of the newest READY input of `kind` for the layer (or for any layer)."""
     try:
-        found = query("""SELECT REFERENCE_ID, TITLE, PARSED FROM KNOWLEDGE.REFERENCE_INPUT
+        found = query("""SELECT REFERENCE_ID, TITLE, PARSED FROM CORE.REFERENCE_INPUT
                           WHERE DOMAIN_ID = ? AND KIND = ? AND STATUS = 'READY' AND COALESCE(LAYER, 'ANY') IN ('ANY', ?)
                           ORDER BY IFF(LAYER = ?, 0, 1), CREATED_AT DESC LIMIT 1""", [domain_id, kind, layer, layer])
     except Exception:   # before V057
@@ -30,11 +30,11 @@ def latest(query: Query, domain_id: str, layer: str, kind: str) -> Optional[Dict
 
 def record(execute: Callable[[str, list], Any], *, domain_id: str, layer: str, kind: str, reference_id: Optional[str],
            run_id: Optional[str], stage: str, score: Dict[str, Any]) -> None:
-    """Keep one measurement (KNOWLEDGE.REFERENCE_SCORE); silently nothing before V057."""
+    """Keep one measurement (CORE.REFERENCE_SCORE); silently nothing before V057."""
     import uuid
 
     try:
-        execute("""INSERT INTO KNOWLEDGE.REFERENCE_SCORE (SCORE_ID, DOMAIN_ID, LAYER, KIND, REFERENCE_ID, RUN_ID, STAGE, SCORE)
+        execute("""INSERT INTO CORE.REFERENCE_SCORE (SCORE_ID, DOMAIN_ID, LAYER, KIND, REFERENCE_ID, RUN_ID, STAGE, SCORE)
                    SELECT ?, ?, ?, ?, ?, ?, ?, PARSE_JSON(?)""",
                 [str(uuid.uuid4()), domain_id, layer, kind, reference_id, run_id, stage, json.dumps(score, default=str)])
     except Exception:

@@ -1,10 +1,10 @@
 """Skill versions, release labels, categories and stage bindings.
 
-Every skill version is an immutable KNOWLEDGE.SKILL_REGISTRY row. Which version a stage loads:
+Every skill version is an immutable CORE.SKILL_REGISTRY row. Which version a stage loads:
   1. the run's override (CORE.RUN_SKILL_OVERRIDE), set when someone tries a candidate on one run
-  2. the version holding the "production" label (KNOWLEDGE.SKILL_LABEL)
+  2. the version holding the "production" label (CORE.SKILL_LABEL)
   3. the newest ACTIVE revision
-Which skills a stage loads comes from KNOWLEDGE.SKILL_STAGE_BINDING (enabled, ordered), falling back to the built-in
+Which skills a stage loads comes from CORE.SKILL_STAGE_BINDING (enabled, ordered), falling back to the built-in
 STAGE_SKILLS map when no binding exists yet. The pure helpers here are shared by the seed, the procedures and the API.
 """
 
@@ -207,9 +207,9 @@ RESOLVE_SQL = """
 SELECT R.SKILL_ID, R.SKILL_NAME, R.SKILL_TYPE, R.VERSION, R.REVISION, R.STAGE_PATH, R.CHECKSUM, R.DESCRIPTION,
        R.CONTENT, R.CONFIG, R.STATUS,
        CASE WHEN O.SKILL_ID IS NOT NULL THEN 'override' WHEN L.SKILL_ID IS NOT NULL THEN 'production' ELSE 'latest' END AS PICKED_BY
-  FROM KNOWLEDGE.SKILL_REGISTRY R
+  FROM CORE.SKILL_REGISTRY R
   LEFT JOIN CORE.RUN_SKILL_OVERRIDE O ON O.SKILL_ID = R.SKILL_ID AND O.RUN_ID = {run}
-  LEFT JOIN KNOWLEDGE.SKILL_LABEL L ON L.SKILL_ID = R.SKILL_ID AND L.LABEL = 'production'
+  LEFT JOIN CORE.SKILL_LABEL L ON L.SKILL_ID = R.SKILL_ID AND L.LABEL = 'production'
  WHERE R.SKILL_NAME IN ({names}) AND R.STATUS <> 'RETIRED'
    AND (O.SKILL_ID IS NOT NULL OR L.SKILL_ID IS NOT NULL OR R.STATUS = 'ACTIVE')
  ORDER BY (O.SKILL_ID IS NOT NULL) DESC, (L.SKILL_ID IS NOT NULL) DESC, R.REVISION DESC NULLS LAST, R.CREATED_AT DESC
@@ -229,7 +229,7 @@ def resolve(session, name: str, run_id: Optional[str] = None) -> Optional[Dict[s
         found = rows(session, resolve_sql(names), [run_id or ""] + names)
     except Exception:  # before V021: the old "current" row
         found = rows(session, "SELECT SKILL_ID, SKILL_NAME, SKILL_TYPE, VERSION, STAGE_PATH, CHECKSUM, DESCRIPTION, CONTENT, "
-                              "CONFIG, STATUS, 'production' AS PICKED_BY FROM KNOWLEDGE.SKILL_REGISTRY "
+                              "CONFIG, STATUS, 'production' AS PICKED_BY FROM CORE.SKILL_REGISTRY "
                               "WHERE IS_CURRENT AND STATUS = 'ACTIVE' AND SKILL_NAME IN ("
                               + ", ".join(["?"] * len(names)) + ") ORDER BY CREATED_AT DESC LIMIT 1", names)
     return found[0] if found else None
@@ -242,11 +242,11 @@ def domain_skill_rows(session, domain_id: Optional[str]) -> List[Dict[str, Any]]
     if not domain_id:
         return []
     try:
-        found = rows(session, "SELECT STAGE, SKILL_NAME, MODE, REPLACES, POSITION, ENABLED, PIPELINE FROM KNOWLEDGE.DOMAIN_SKILL "
+        found = rows(session, "SELECT STAGE, SKILL_NAME, MODE, REPLACES, POSITION, ENABLED, PIPELINE FROM CORE.DOMAIN_SKILL "
                               "WHERE DOMAIN_ID = ?", [domain_id])
     except Exception:
         try:   # before V055
-            found = rows(session, "SELECT STAGE, SKILL_NAME, MODE, REPLACES, POSITION, ENABLED FROM KNOWLEDGE.DOMAIN_SKILL "
+            found = rows(session, "SELECT STAGE, SKILL_NAME, MODE, REPLACES, POSITION, ENABLED FROM CORE.DOMAIN_SKILL "
                                   "WHERE DOMAIN_ID = ?", [domain_id])
         except Exception:
             return []
@@ -275,7 +275,7 @@ def domain_mdm_role(session, domain_id: Optional[str]) -> Optional[str]:
     if not domain_id:
         return None
     try:
-        return scalar(session, "SELECT CONFIG:mdm:role::STRING FROM KNOWLEDGE.DOMAIN_REGISTRY WHERE DOMAIN_ID = ?", [domain_id])
+        return scalar(session, "SELECT CONFIG:mdm:role::STRING FROM CORE.DOMAIN_REGISTRY WHERE DOMAIN_ID = ?", [domain_id])
     except Exception:
         return None
 
@@ -295,10 +295,10 @@ def _stage_bound(session, stage: str, standard: str = "GDP", pipeline: str = "SI
     fallback = built_in(stage, standard, pipeline)
     try:
         bindings = rows(session, "SELECT STAGE, SKILL_NAME, ENABLED, POSITION, STANDARD, PIPELINE "
-                                 "FROM KNOWLEDGE.SKILL_STAGE_BINDING WHERE STAGE = ?", [stage.upper()])
+                                 "FROM CORE.SKILL_STAGE_BINDING WHERE STAGE = ?", [stage.upper()])
     except Exception:
         try:   # before V055: no pipeline column, so the built-in pipeline split applies
-            bindings = rows(session, "SELECT STAGE, SKILL_NAME, ENABLED, POSITION, STANDARD FROM KNOWLEDGE.SKILL_STAGE_BINDING "
+            bindings = rows(session, "SELECT STAGE, SKILL_NAME, ENABLED, POSITION, STANDARD FROM CORE.SKILL_STAGE_BINDING "
                                      "WHERE STAGE = ?", [stage.upper()])
             bindings = [{**b, "PIPELINE": pipeline_of_skill(b["SKILL_NAME"])} for b in bindings]
         except Exception:

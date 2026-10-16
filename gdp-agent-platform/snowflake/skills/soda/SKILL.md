@@ -7,7 +7,7 @@ description: Design data quality checks from the dataset profile, the approved S
 
 # Data quality checks (Soda first, Great Expectations second)
 
-`CONTRACT.SODA_EXPECTATION_REGISTRY` is authoritative. Every check is stored once in a neutral form
+`CORE.SODA_EXPECTATION_REGISTRY` is authoritative. Every check is stored once in a neutral form
 (`check_type` plus a `definition` with a `kind`) and rendered to SodaCL (primary) and to a GX Core 1.x
 expectation suite (secondary). A person confirms each check; confirmed and rejected decisions become
 `SODA_PATTERN` knowledge and steer the next run.

@@ -14,7 +14,7 @@ def contracts(session) -> Dict[str, Dict[str, Any]]:
     """Every active domain's MDM section, by domain name."""
     out = {}
     for r in rows(session, """SELECT DOMAIN_ID, DOMAIN_NAME, CONFIG:mdm AS MDM, CONFIG:silver_database::STRING AS SILVER_DATABASE
-                                FROM KNOWLEDGE.DOMAIN_REGISTRY WHERE ACTIVE_FLAG"""):
+                                FROM CORE.DOMAIN_REGISTRY WHERE ACTIVE_FLAG"""):
         out[r["DOMAIN_NAME"]] = {"domain_id": r["DOMAIN_ID"], "mdm": variant(r.get("MDM")) or {},
                                  "silver_database": r.get("SILVER_DATABASE")}
     return out
@@ -32,7 +32,7 @@ def env_of(database: Optional[str]) -> str:
 def approved_spec(session, model_id: str, version: int) -> Dict[str, Any]:
     from services.modeling import spec_v2
 
-    found = rows(session, """SELECT D.SPEC, D.STATUS FROM GOVERNANCE.MODEL_DESIGNS D WHERE D.MODEL_ID = ? AND D.VERSION = ?""",
+    found = rows(session, """SELECT D.SPEC, D.STATUS FROM CORE.MODEL_DESIGNS D WHERE D.MODEL_ID = ? AND D.VERSION = ?""",
                  [model_id, int(version)])
     assert found and found[0]["STATUS"] in ("APPROVED", "PUBLISHED"), "the gold model version the run uses is not approved"
     return spec_v2.active(spec_v2.normalize_v2(variant(found[0]["SPEC"]) or {}, model_id))

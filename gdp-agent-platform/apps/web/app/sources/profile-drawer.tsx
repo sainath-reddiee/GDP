@@ -280,7 +280,7 @@ export function TableProfileView({ database, schema, table, initialTab = "overvi
           <h3 className="truncate text-base font-semibold">{table}</h3>
           <p className="truncate font-mono text-[11px] text-muted-foreground">{database}.{schema}</p>
           <p className="truncate font-mono text-[11px] text-muted-foreground">
-            @METADATA.PROFILES_STAGE/{data?.entry.profile_stage_path ?? "…"}
+            @CORE.PROFILES_STAGE/{data?.entry.profile_stage_path ?? "…"}
           </p>
           <div className="mt-1.5"><TagEditor entityType="PROFILE" entityKey={`${database}.${schema}.${table}`} /></div>
         </div>

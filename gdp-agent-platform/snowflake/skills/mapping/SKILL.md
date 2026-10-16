@@ -7,7 +7,7 @@ description: Hybrid source-to-target mapping - features, weights, recommendation
 
 # Hybrid mapping
 
-`MAPPING.GENERATE_MAPPING_CANDIDATES` scores every source column against every target column with seven
+`CORE.GENERATE_MAPPING_CANDIDATES` scores every source column against every target column with seven
 components, each between 0 and 1:
 
 | Component | Evidence |
@@ -20,7 +20,7 @@ components, each between 0 and 1:
 | context | source table entity vs target table entity |
 | historical | previously approved mappings and seeded mapping patterns |
 
-Weights and thresholds come from `MAPPING.MAPPING_SCORING_CONFIG` (never hard-coded). Embedding similarity is one
+Weights and thresholds come from `CORE.MAPPING_SCORING_CONFIG` (never hard-coded). Embedding similarity is one
 component, never the decision. The LLM only explains ambiguous cases; it does not change the ranking.
 
 Reviewers approve, reject, modify the transformation or choose a different target. Anything that needs business

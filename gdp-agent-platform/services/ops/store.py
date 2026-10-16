@@ -13,7 +13,7 @@ import json
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
-from services.ops.mwaa import Mwaa, MwaaError, supports_updated_at
+from services.ops.mwaa import Mwaa, MwaaError, client_for, supports_updated_at
 from services.ops.normalize import ACTIVE, dag_row, dag_run_row, excerpt, newer, task_row, ts
 from services.ops.redact import redact, redact_payload
 
@@ -80,7 +80,7 @@ def upsert_dags(db: Any, rows: List[Dict[str, Any]]) -> int:
     rows = list({(r["env_id"], r["dag_id"]): r for r in rows}.values())
     for chunk in _chunks(rows):
         db.execute(f"""
-            MERGE INTO OPS.DAG T USING (
+            MERGE INTO CORE.DAG T USING (
                 SELECT F.VALUE:env_id::VARCHAR AS ENV_ID, F.VALUE:dag_id::VARCHAR AS DAG_ID,
                        F.VALUE:fileloc::VARCHAR AS FILELOC, F.VALUE:owners::ARRAY AS OWNERS, F.VALUE:tags::ARRAY AS TAGS,
                        F.VALUE:schedule::VARCHAR AS SCHEDULE, F.VALUE:is_paused::BOOLEAN AS IS_PAUSED,
@@ -102,7 +102,7 @@ def ensure_dags(db: Any, env_id: str, dag_ids: Iterable[str]) -> None:
     if not ids:
         return
     db.execute("""
-        MERGE INTO OPS.DAG T USING (SELECT %s AS ENV_ID, F.VALUE::VARCHAR AS DAG_ID FROM TABLE(FLATTEN(INPUT => PARSE_JSON(%s))) F) S
+        MERGE INTO CORE.DAG T USING (SELECT %s AS ENV_ID, F.VALUE::VARCHAR AS DAG_ID FROM TABLE(FLATTEN(INPUT => PARSE_JSON(%s))) F) S
         ON T.ENV_ID = S.ENV_ID AND T.DAG_ID = S.DAG_ID
         WHEN NOT MATCHED THEN INSERT (ENV_ID, DAG_ID, IS_ACTIVE, LAST_SEEN_AT) VALUES (S.ENV_ID, S.DAG_ID, TRUE, CURRENT_TIMESTAMP())""",
                (env_id, json.dumps(ids)))
@@ -110,7 +110,7 @@ def ensure_dags(db: Any, env_id: str, dag_ids: Iterable[str]) -> None:
 
 def mark_missing_inactive(db: Any, env_id: str, seen: List[str]) -> None:
     """DAGs no longer listed by Airflow (deleted files) are kept with their history but marked inactive."""
-    db.execute("UPDATE OPS.DAG SET IS_ACTIVE = FALSE, UPDATED_AT = CURRENT_TIMESTAMP() "
+    db.execute("UPDATE CORE.DAG SET IS_ACTIVE = FALSE, UPDATED_AT = CURRENT_TIMESTAMP() "
                "WHERE ENV_ID = %s AND COALESCE(IS_ACTIVE, TRUE) AND NOT ARRAY_CONTAINS(DAG_ID::VARIANT, PARSE_JSON(%s))",
                (env_id, json.dumps(sorted(seen))))
 
@@ -119,7 +119,7 @@ def upsert_runs(db: Any, rows: List[Dict[str, Any]]) -> int:
     rows = dedupe(rows, RUN_KEYS)
     for chunk in _chunks(rows):
         db.execute(f"""
-            MERGE INTO OPS.DAG_RUN T USING (
+            MERGE INTO CORE.DAG_RUN T USING (
                 SELECT F.VALUE:env_id::VARCHAR AS ENV_ID, F.VALUE:dag_id::VARCHAR AS DAG_ID, F.VALUE:run_id::VARCHAR AS RUN_ID,
                        F.VALUE:run_type::VARCHAR AS RUN_TYPE, F.VALUE:state::VARCHAR AS STATE,
                        TRY_TO_TIMESTAMP_LTZ(F.VALUE:logical_date::VARCHAR) AS LOGICAL_DATE,
@@ -146,7 +146,7 @@ def upsert_tasks(db: Any, rows: List[Dict[str, Any]]) -> int:
     rows = dedupe(rows, TASK_KEYS)
     for chunk in _chunks(rows):
         db.execute(f"""
-            MERGE INTO OPS.TASK_RUN T USING (
+            MERGE INTO CORE.TASK_RUN T USING (
                 SELECT F.VALUE:env_id::VARCHAR AS ENV_ID, F.VALUE:dag_id::VARCHAR AS DAG_ID, F.VALUE:run_id::VARCHAR AS RUN_ID,
                        F.VALUE:task_id::VARCHAR AS TASK_ID, F.VALUE:map_index::NUMBER AS MAP_INDEX,
                        F.VALUE:try_number::NUMBER AS TRY_NUMBER, F.VALUE:state::VARCHAR AS STATE,
@@ -178,19 +178,19 @@ def record_event(db: Any, event_id: str, env_id: Optional[str], source: str, kin
     """Insert the event once. False when the id is already there (a replay): the MERGE is the compare-and-set. The
     payload is stored redacted (error text and log-like fields may carry secrets)."""
     count = db.execute_count("""
-        MERGE INTO OPS.EVENT T USING (SELECT %s AS EVENT_ID) S ON T.EVENT_ID = S.EVENT_ID
+        MERGE INTO CORE.EVENT T USING (SELECT %s AS EVENT_ID) S ON T.EVENT_ID = S.EVENT_ID
         WHEN NOT MATCHED THEN INSERT (EVENT_ID, ENV_ID, SOURCE, KIND, PAYLOAD) VALUES (S.EVENT_ID, %s, %s, %s, PARSE_JSON(%s))""",
                              (event_id, env_id, source, kind, json.dumps(redact_payload(payload), default=str)))
     return count == 1
 
 
 def mark_event(db: Any, event_id: str, error: Optional[str] = None) -> None:
-    db.execute("UPDATE OPS.EVENT SET PROCESSED_AT = CURRENT_TIMESTAMP(), ERROR = %s WHERE EVENT_ID = %s",
+    db.execute("UPDATE CORE.EVENT SET PROCESSED_AT = CURRENT_TIMESTAMP(), ERROR = %s WHERE EVENT_ID = %s",
                ((redact(error)[:2000] if error else None), event_id))
 
 
 def purge_events(db: Any, days: int = 30) -> int:
-    return db.execute_count("DELETE FROM OPS.EVENT WHERE RECEIVED_AT < DATEADD(day, %s, CURRENT_TIMESTAMP())", (-abs(int(days)),))
+    return db.execute_count("DELETE FROM CORE.EVENT WHERE RECEIVED_AT < DATEADD(day, %s, CURRENT_TIMESTAMP())", (-abs(int(days)),))
 
 
 # ---------------------------------------------------------------- polling
@@ -200,7 +200,7 @@ def _stored_runs(db: Any, env_id: str, keys: List[Tuple[str, str]]) -> Dict[Tupl
         return {}
     found = db.query("""
         SELECT R.DAG_ID, R.RUN_ID, R.STATE, TO_VARCHAR(R.UPDATED_AT, 'YYYY-MM-DD"T"HH24:MI:SS.FF6TZH:TZM') AS UPDATED_AT
-          FROM OPS.DAG_RUN R
+          FROM CORE.DAG_RUN R
           JOIN TABLE(FLATTEN(INPUT => PARSE_JSON(%s))) F ON R.DAG_ID = F.VALUE[0]::VARCHAR AND R.RUN_ID = F.VALUE[1]::VARCHAR
          WHERE R.ENV_ID = %s""", (json.dumps([list(k) for k in keys]), env_id))
     return {(r["dag_id"], r["run_id"]): r for r in found}
@@ -227,7 +227,7 @@ def mark_removed(db: Any, env_id: str, keys: List[Tuple[str, str]]) -> None:
     if not keys:
         return
     pairs = json.dumps([list(k) for k in keys])
-    for table in ("OPS.DAG_RUN", "OPS.TASK_RUN"):
+    for table in ("CORE.DAG_RUN", "CORE.TASK_RUN"):
         db.execute(f"""
             UPDATE {table} T SET STATE = 'removed', UPDATED_AT = CURRENT_TIMESTAMP(), LOADED_AT = CURRENT_TIMESTAMP()
               FROM (SELECT F.VALUE[0]::VARCHAR AS DAG_ID, F.VALUE[1]::VARCHAR AS RUN_ID
@@ -247,7 +247,7 @@ def _fetch_tasks(mw: Mwaa, env_id: str, runs: List[Dict[str, Any]]) -> List[Dict
 def fill_error_excerpts(db: Any, mw: Mwaa, env_id: str, limit: int = MAX_ERROR_LOGS) -> int:
     """Failed tasks of the last day without an error excerpt: read the end of their log and store the redacted error."""
     found = db.query("""
-        SELECT DAG_ID, RUN_ID, TASK_ID, MAP_INDEX, TRY_NUMBER FROM OPS.TASK_RUN
+        SELECT DAG_ID, RUN_ID, TASK_ID, MAP_INDEX, TRY_NUMBER FROM CORE.TASK_RUN
          WHERE ENV_ID = %s AND STATE IN ('failed', 'up_for_retry') AND ERROR_EXCERPT IS NULL
            AND COALESCE(ENDED_AT, UPDATED_AT) >= DATEADD(hour, -24, CURRENT_TIMESTAMP())
          ORDER BY COALESCE(ENDED_AT, UPDATED_AT) DESC LIMIT """ + str(int(limit)), (env_id,))
@@ -259,7 +259,7 @@ def fill_error_excerpts(db: Any, mw: Mwaa, env_id: str, limit: int = MAX_ERROR_L
         except MwaaError:
             continue
         text = excerpt(log.get("text")) or "(the log has no error lines)"
-        db.execute("""UPDATE OPS.TASK_RUN SET ERROR_EXCERPT = %s, LOADED_AT = CURRENT_TIMESTAMP() WHERE ENV_ID = %s AND DAG_ID = %s AND RUN_ID = %s
+        db.execute("""UPDATE CORE.TASK_RUN SET ERROR_EXCERPT = %s, LOADED_AT = CURRENT_TIMESTAMP() WHERE ENV_ID = %s AND DAG_ID = %s AND RUN_ID = %s
                          AND TASK_ID = %s AND MAP_INDEX = %s AND TRY_NUMBER = %s AND ERROR_EXCERPT IS NULL""",
                    (text, env_id, t["dag_id"], t["run_id"], t["task_id"], t["map_index"], t["try_number"]))
         filled += 1
@@ -272,7 +272,7 @@ def poll_env(db: Any, env: Dict[str, Any], client: Optional[Mwaa] = None, now: O
     changed, error excerpts of new failures. Stores the cursor and clears LAST_ERROR. MwaaError propagates."""
     env_id = env["env_id"]
     started = ts(now) or utcnow()
-    mw = client or Mwaa(env["mwaa_env"], env["region"])
+    mw = client or client_for(env)
     info = mw.version()
 
     dags, complete = mw.all_dags()
@@ -299,7 +299,7 @@ def poll_env(db: Any, env: Dict[str, Any], client: Optional[Mwaa] = None, now: O
     removed: List[Tuple[str, str]] = []
     if not supports_updated_at(info["version"]):
         have = {(r["dag_id"], r["run_id"]) for r in rows}
-        stale = db.query(f"""SELECT DAG_ID, RUN_ID FROM OPS.DAG_RUN WHERE ENV_ID = %s AND STATE IN {_ACTIVE_SQL}
+        stale = db.query(f"""SELECT DAG_ID, RUN_ID FROM CORE.DAG_RUN WHERE ENV_ID = %s AND STATE IN {_ACTIVE_SQL}
                              ORDER BY LOADED_AT NULLS FIRST, STARTED_AT LIMIT 100""", (env_id,))
         for r in stale:
             if (r["dag_id"], r["run_id"]) not in have:
@@ -340,7 +340,7 @@ def poll_env(db: Any, env: Dict[str, Any], client: Optional[Mwaa] = None, now: O
         cursor = resume or env.get("cursor_value") or since
         if later_than(env.get("cursor_value"), cursor):
             cursor = env.get("cursor_value")   # never move back
-    db.execute("""UPDATE OPS.AIRFLOW_ENV SET API_VERSION = %s, AIRFLOW_VERSION = %s, CURSOR_VALUE = %s,
+    db.execute("""UPDATE CORE.AIRFLOW_ENV SET API_VERSION = %s, AIRFLOW_VERSION = %s, CURSOR_VALUE = %s,
                          LAST_POLL_AT = CURRENT_TIMESTAMP(), LAST_ERROR = NULL WHERE ENV_ID = %s""",
                (info["api_version"], info["version"][:32], cursor, env_id))
     summary = {"env_id": env_id, "version": info["version"], "api_version": info["api_version"], "dags": len(dags),

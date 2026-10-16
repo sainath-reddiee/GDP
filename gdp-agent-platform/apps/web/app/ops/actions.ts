@@ -13,7 +13,8 @@ export type AirflowEnv = {
   last_error: string | null; dags: number;
 };
 export type EnvInput = {
-  name: string; mwaa_env: string; region: string; airflow_url?: string | null; poll_seconds: number; enabled: boolean; push_enabled: boolean;
+  name: string; /** MWAA (default) or a self-hosted Airflow reached over its REST API; set on create only */ kind?: "MWAA" | "AIRFLOW";
+  mwaa_env?: string; region?: string; airflow_url?: string | null; poll_seconds: number; enabled: boolean; push_enabled: boolean;
 };
 export type EnvTest = { ok: boolean; version: string | null; api_version: string | null; dags_sample: string[]; error: string | null };
 export type PushSecret = { secret: string; header_names: string[]; url_path: string };

@@ -1,9 +1,9 @@
 """Data Quality suites: the checks of each table, versioned, reviewed and approved in the app (V040).
 
-  GOVERNANCE.DQ_SUITE          one row per checked table: approved version, open version, domain and domain model
-  GOVERNANCE.DQ_SUITE_VERSION  the versions; CHECKS is the table's list of checks in the neutral form, each with a
+  CORE.DQ_SUITE          one row per checked table: approved version, open version, domain and domain model
+  CORE.DQ_SUITE_VERSION  the versions; CHECKS is the table's list of checks in the neutral form, each with a
                                stable check_id
-  GOVERNANCE.DQ_CHECKS_CATALOG the runtime copy the scanner and the schedules read; written only by an approved
+  CORE.DQ_CHECKS_CATALOG the runtime copy the scanner and the schedules read; written only by an approved
                                version (apply_suite_version, owner's rights)
 
 Lifecycle: DRAFT -> IN_REVIEW -> APPROVED (-> PUBLISHED once its Git pull request is merged), or REJECTED; the version
@@ -29,8 +29,8 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from services.catalog import dq
 from services.common.sql import clip, insert_rows, rows, scalar, variant
 
-SUITES = "GOVERNANCE.DQ_SUITE"
-VERSIONS = "GOVERNANCE.DQ_SUITE_VERSION"
+SUITES = "CORE.DQ_SUITE"
+VERSIONS = "CORE.DQ_SUITE_VERSION"
 CATALOG = dq.CATALOG
 OPEN = ("DRAFT", "IN_REVIEW")
 LIVE = ("APPROVED", "PUBLISHED")
@@ -319,7 +319,7 @@ def _domain_name(session, domain_id: Optional[str]) -> Optional[str]:
     if not domain_id:
         return None
     try:
-        return scalar(session, "SELECT DOMAIN_NAME FROM KNOWLEDGE.DOMAIN_REGISTRY WHERE DOMAIN_ID = ?", [domain_id])
+        return scalar(session, "SELECT DOMAIN_NAME FROM CORE.DOMAIN_REGISTRY WHERE DOMAIN_ID = ?", [domain_id])
     except Exception:
         return None
 
@@ -331,8 +331,8 @@ def model_context(session, table: str, domain_id: Optional[str]) -> Optional[Dic
     if not domain_id:
         return None
     try:
-        found = rows(session, """SELECT M.MODEL_ID, M.APPROVED_VERSION, D.SPEC FROM GOVERNANCE.DOMAIN_MODEL M
-                                   JOIN GOVERNANCE.MODEL_DESIGNS D ON D.MODEL_ID = M.MODEL_ID AND D.VERSION = M.APPROVED_VERSION
+        found = rows(session, """SELECT M.MODEL_ID, M.APPROVED_VERSION, D.SPEC FROM CORE.DOMAIN_MODEL M
+                                   JOIN CORE.MODEL_DESIGNS D ON D.MODEL_ID = M.MODEL_ID AND D.VERSION = M.APPROVED_VERSION
                                   WHERE M.DOMAIN_ID = ? AND M.APPROVED_VERSION IS NOT NULL AND COALESCE(M.LAYER, 'SILVER') = 'SILVER'""", [domain_id])
     except Exception:  # before V039
         return None
@@ -739,7 +739,7 @@ def approve(session, table: str, version: int, user: str, acknowledge_loosened: 
 
 
 def apply_suite_version(session, suite_id: str, version: int) -> Dict[str, Any]:
-    """QUALITY.APPLY_DQ_SUITE (owner's rights): make the catalog hold exactly the approved version's checks. Checks are
+    """CORE.APPLY_DQ_SUITE (owner's rights): make the catalog hold exactly the approved version's checks. Checks are
     merged by CHECK_ID (keeping their run history and schedule), checks the version dropped are RETIRED."""
     found = rows(session, f"""SELECT S.TABLE_NAME, S.DOMAIN_ID, V.STATUS, V.CHECKS FROM {SUITES} S
                                JOIN {VERSIONS} V ON V.SUITE_ID = S.SUITE_ID WHERE S.SUITE_ID = ? AND V.VERSION = ?""",
@@ -781,7 +781,7 @@ def apply_suite_version(session, suite_id: str, version: int) -> Dict[str, Any]:
         retire += f" AND CHECK_ID NOT IN ({', '.join(['?'] * len(keep))})"
     session.sql(retire, params=[table, *keep]).collect()
     try:  # checks new to the catalog follow the table's schedule
-        session.sql(f"""UPDATE {CATALOG} SET SCHEDULE_CRON = (SELECT MAX(CRON) FROM GOVERNANCE.DQ_SCHEDULE WHERE TABLE_NAME = ?)
+        session.sql(f"""UPDATE {CATALOG} SET SCHEDULE_CRON = (SELECT MAX(CRON) FROM CORE.DQ_SCHEDULE WHERE TABLE_NAME = ?)
                          WHERE TABLE_NAME = ? AND SCHEDULE_CRON IS NULL""", params=[table, table]).collect()
     except Exception:
         pass

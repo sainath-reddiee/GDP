@@ -89,7 +89,7 @@ def test_an_issue_is_created_as_the_person_by_type_name_and_logged(api):
     assert extra is None   # no sprint asked
     assert (project, type_id, summary_text, labels) == ("GDPQA", "10002", "Add tier", ["data model"])
     assert "loyalty" in json.dumps(description)
-    logged = [p for s, p in db.executed if "INTO JIRA.ACTION_LOG" in s]
+    logged = [p for s, p in db.executed if "INTO CORE.ACTION_LOG" in s]
     assert logged and logged[0][4] == "CREATE" and logged[0][-1] == "k1"
 
 

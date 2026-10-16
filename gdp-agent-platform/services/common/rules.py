@@ -137,7 +137,7 @@ def load_rules(query: Callable[[str, List[Any]], List[Dict[str, Any]]], domain_i
         platform = platform or {}
     if domain_id:
         try:
-            config = _as_dict(first(query("SELECT CONFIG FROM KNOWLEDGE.DOMAIN_REGISTRY WHERE DOMAIN_ID = ?",
+            config = _as_dict(first(query("SELECT CONFIG FROM CORE.DOMAIN_REGISTRY WHERE DOMAIN_ID = ?",
                                           [domain_id]), "CONFIG"))
             domain = _as_dict(config.get("rules"))
             domain_gold = _as_dict(config.get("rules_gold")) if gold else {}

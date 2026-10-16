@@ -1,4 +1,4 @@
-"""Job leases in OPS.JOB_LEASE: one holder per background job across worker processes and API replicas.
+"""Job leases in CORE.JOB_LEASE: one holder per background job across worker processes and API replicas.
 
 acquire is a compare-and-set: an UPDATE that only matches a free, expired or already-own lease, and execute_count tells
 whether this holder got it. A crashed holder's lease expires after LEASE_SECONDS and another one takes over, resuming
@@ -16,32 +16,32 @@ RENEW_EVERY = 20.0
 
 
 def ensure(db: Any, job: str) -> None:
-    db.execute("MERGE INTO OPS.JOB_LEASE T USING (SELECT %s AS JOB_NAME) S ON T.JOB_NAME = S.JOB_NAME "
+    db.execute("MERGE INTO CORE.JOB_LEASE T USING (SELECT %s AS JOB_NAME) S ON T.JOB_NAME = S.JOB_NAME "
                "WHEN NOT MATCHED THEN INSERT (JOB_NAME) VALUES (S.JOB_NAME)", (job,))
 
 
 def acquire(db: Any, job: str, holder: str, seconds: int = LEASE_SECONDS) -> bool:
     ensure(db, job)
     count = db.execute_count(
-        "UPDATE OPS.JOB_LEASE SET HOLDER = %s, LEASE_UNTIL = DATEADD(second, %s, CURRENT_TIMESTAMP()) "
+        "UPDATE CORE.JOB_LEASE SET HOLDER = %s, LEASE_UNTIL = DATEADD(second, %s, CURRENT_TIMESTAMP()) "
         "WHERE JOB_NAME = %s AND (HOLDER IS NULL OR HOLDER = %s OR LEASE_UNTIL IS NULL OR LEASE_UNTIL < CURRENT_TIMESTAMP())",
         (holder, int(seconds), job, holder))
     if count > 1:
         # two creators raced in ensure() (Snowflake does not enforce keys): every duplicate is ours now, keep one
-        db.execute("DELETE FROM OPS.JOB_LEASE WHERE JOB_NAME = %s AND HOLDER = %s", (job, holder))
-        db.execute("INSERT INTO OPS.JOB_LEASE (JOB_NAME, HOLDER, LEASE_UNTIL) "
+        db.execute("DELETE FROM CORE.JOB_LEASE WHERE JOB_NAME = %s AND HOLDER = %s", (job, holder))
+        db.execute("INSERT INTO CORE.JOB_LEASE (JOB_NAME, HOLDER, LEASE_UNTIL) "
                    "SELECT %s, %s, DATEADD(second, %s, CURRENT_TIMESTAMP())", (job, holder, int(seconds)))
         return True
     return count == 1
 
 
 def renew(db: Any, job: str, holder: str, seconds: int = LEASE_SECONDS) -> bool:
-    return db.execute_count("UPDATE OPS.JOB_LEASE SET LEASE_UNTIL = DATEADD(second, %s, CURRENT_TIMESTAMP()) "
+    return db.execute_count("UPDATE CORE.JOB_LEASE SET LEASE_UNTIL = DATEADD(second, %s, CURRENT_TIMESTAMP()) "
                             "WHERE JOB_NAME = %s AND HOLDER = %s", (int(seconds), job, holder)) >= 1
 
 
 def release(db: Any, job: str, holder: str, cursor: Optional[str] = None) -> None:
-    db.execute("UPDATE OPS.JOB_LEASE SET HOLDER = NULL, LEASE_UNTIL = NULL, LAST_RUN_AT = CURRENT_TIMESTAMP(), "
+    db.execute("UPDATE CORE.JOB_LEASE SET HOLDER = NULL, LEASE_UNTIL = NULL, LAST_RUN_AT = CURRENT_TIMESTAMP(), "
                "CURSOR_VALUE = COALESCE(%s, CURSOR_VALUE) WHERE JOB_NAME = %s AND HOLDER = %s", (cursor, job, holder))
 
 

@@ -51,6 +51,9 @@ PRIVILEGES: Dict[str, Tuple[str, str]] = {
     "JIRA.WRITE": ("Jira", "Link issues to runs and tests, comment on and change the status of Jira issues, as yourself"),
     "OPS.VIEW": ("Operations", "See Airflow pipelines, runs, task logs and incidents"),
     "OPS.OPERATE": ("Operations", "Poll Airflow now, change DAG settings, and acknowledge, assign, resolve, mute or retry incidents"),
+    "OPS.FIX_APPROVE": ("Operations", "Approve or reject running a known fix on an Airflow failure"),
+    "OPS.FIX_PUBLISH": ("Operations", "Review and publish known fixes (never your own), and retire them"),
+    "OPS.RESOLVE_ADMIN": ("Operations", "Turn automatic resolution on or off and set pipeline scopes and fix approvers"),
     "CASE.WORK": ("Cases", "Open, assign, triage, comment on and link cases, and propose fixes"),
     "CASE.RESOLVE": ("Cases", "Verify, resolve, close and mark cases as duplicates"),
     "PACKAGE.EDIT": ("Cases", "Edit domain test packages"),
@@ -63,7 +66,8 @@ ALL = "*"
 SYSTEM_ROLES: Dict[str, Dict[str, Any]] = {
     "SUPER_ADMIN": {"description": "Everything, including governance", "privileges": [ALL], "inherits": []},
     "PLATFORM_ADMIN": {"description": "Platform settings and deployment",
-                       "privileges": ["CONFIG.EDIT", "ADMIN.VIEW", "ADMIN.DEPLOY", "AUDIT.VIEW", "APPROVAL.VIEW", "INTEGRATION.MANAGE"],
+                       "privileges": ["CONFIG.EDIT", "ADMIN.VIEW", "ADMIN.DEPLOY", "AUDIT.VIEW", "APPROVAL.VIEW", "INTEGRATION.MANAGE",
+                                      "OPS.FIX_APPROVE", "OPS.FIX_PUBLISH", "OPS.RESOLVE_ADMIN"],
                        "inherits": ["DATA_ENGINEER"]},
     "GOVERNANCE_ADMIN": {"description": "Users, roles and approval policies",
                          "privileges": ["ROLE.MANAGE", "ADMIN.VIEW", "APPROVAL.VIEW", "AUDIT.VIEW"], "inherits": ["VIEWER"]},
@@ -81,7 +85,8 @@ SYSTEM_ROLES: Dict[str, Dict[str, Any]] = {
                     "privileges": ["QA.EDIT", "AI.USE", "JIRA.READ", "JIRA.WRITE", "CASE.WORK", "PACKAGE.EDIT"],
                     "inherits": ["VIEWER"]},
     "SUPPORT_ENGINEER": {"description": "Watches Airflow pipelines and works incidents and their Jira tickets",
-                         "privileges": ["OPS.VIEW", "OPS.OPERATE", "AI.USE", "JIRA.READ", "JIRA.WRITE", "CASE.WORK"],
+                         "privileges": ["OPS.VIEW", "OPS.OPERATE", "OPS.FIX_APPROVE", "AI.USE", "JIRA.READ", "JIRA.WRITE",
+                                        "CASE.WORK"],
                          "inherits": ["VIEWER"]},
     "CODE_REVIEWER": {"description": "Approves dbt and code review",
                       "privileges": ["REVIEW.APPROVE", "REVIEW.DECIDE", "DBT.EDIT", "AI.USE"], "inherits": ["VIEWER"]},
@@ -93,17 +98,18 @@ SYSTEM_ROLES: Dict[str, Dict[str, Any]] = {
                       "privileges": ["SOURCE.CONNECT", "PROFILE.RUN", "RUN.CREATE", "RUN.OPERATE", "RUN.ARCHIVE",
                                      "MODEL.EDIT", "MAPPING.DECIDE", "QA.EDIT", "DBT.EDIT", "TAG.MANAGE", "SKILL.EDIT",
                                      "REQUEST.CHANGES", "REVIEW.DECIDE", "AI.USE", "JIRA.READ", "JIRA.WRITE", "OPS.VIEW",
-                                     "OPS.OPERATE", "CASE.WORK", "CASE.RESOLVE", "PACKAGE.EDIT"],
+                                     "OPS.OPERATE", "OPS.FIX_PUBLISH", "CASE.WORK", "CASE.RESOLVE", "PACKAGE.EDIT"],
                       "inherits": ["VIEWER"]},
     "VIEWER": {"description": "Read everything, change nothing (no AI calls, no requests)", "privileges": ["AUDIT.VIEW", "CODE.VIEW", "OPS.VIEW"],
                "inherits": []},
 }
 # Privileges added to system roles after their first release: {version: [privilege]}. Bootstrap grants them to the
 # system roles whose spec lists them, once, so existing deployments pick them up without overriding admin edits.
-SYSTEM_VERSION = 7
+SYSTEM_VERSION = 8
 ADDED_PRIVILEGES = {2: ["AI.USE"], 3: ["SKILL.EDIT", "SKILL.RELEASE"], 4: ["INTEGRATION.MANAGE", "CODE.VIEW"],
                     5: ["JIRA.READ", "JIRA.WRITE"], 6: ["OPS.VIEW", "OPS.OPERATE"],
-                    7: ["CASE.WORK", "CASE.RESOLVE", "PACKAGE.EDIT", "PACKAGE.APPROVE"]}
+                    7: ["CASE.WORK", "CASE.RESOLVE", "PACKAGE.EDIT", "PACKAGE.APPROVE"],
+                    8: ["OPS.FIX_APPROVE", "OPS.FIX_PUBLISH", "OPS.RESOLVE_ADMIN"]}
 
 # Actions routed for approval by default: privilege -> approver role. Everything else is privilege-only.
 DEFAULT_POLICIES: Dict[str, str] = {
@@ -272,6 +278,17 @@ RULES: List[Tuple[str, str, Any, str]] = [
     ("PUT", r"/api/ops/routing/[^/]+", "INTEGRATION.MANAGE", "Change an incident routing rule"),
     ("DELETE", r"/api/ops/routing/[^/]+", "INTEGRATION.MANAGE", "Delete an incident routing rule"),
     ("PUT", r"/api/ops/settings", "INTEGRATION.MANAGE", "Change ops incident settings"),
+    # Airflow failure resolution (apps/api/app/resolve_api.py): drafts by operators; publishing, approving and the
+    # guardrails by their own privileges. Publishing and approving are approvals themselves (NO_QUEUE_ROUTES).
+    ("POST", r"/api/ops/resolve/fixes", "OPS.OPERATE", "Write a known fix (draft)"),
+    ("PUT", r"/api/ops/resolve/fixes/[^/]+", "OPS.OPERATE", "Change a draft known fix"),
+    ("POST", r"/api/ops/resolve/fixes/[^/]+/publish", "OPS.FIX_PUBLISH", "Publish a known fix"),
+    ("POST", r"/api/ops/resolve/fixes/[^/]+/retire", "OPS.FIX_PUBLISH", "Retire a known fix"),
+    ("POST", r"/api/ops/resolve/skills", "OPS.OPERATE", "Write a multi-step fix"),
+    ("PUT", r"/api/ops/resolve/skills/[^/]+", "OPS.OPERATE", "Change a multi-step fix"),
+    ("POST", r"/api/ops/resolve/approvals/[^/]+/(approve|reject)", "OPS.FIX_APPROVE", "Approve or reject running a fix"),
+    ("PUT", r"/api/ops/resolve/(preference|scopes|routes)", "OPS.RESOLVE_ADMIN", "Change automatic resolution"),
+    ("DELETE", r"/api/ops/resolve/(scopes|routes)/[^/]+", "OPS.RESOLVE_ADMIN", "Change automatic resolution"),
     # cases (apps/api/app/cases_api.py): reads are open to everyone signed in and filtered by domain visibility; the
     # status route needs CASE.WORK here and CASE.RESOLVE in the handler for VERIFIED, RESOLVED, CLOSED and DUPLICATE
     ("POST", r"/api/cases/[^/]+/merge", "CASE.RESOLVE", "Merge a case into another as its duplicate"),
@@ -451,6 +468,9 @@ NO_QUEUE_ROUTES = [(m, re.compile(p)) for m, p in [
     ("POST", r"^/api/questions/[^/]+/(answer|dismiss)$"),
     # a Gold run's gold model proposal is a draft, reviewed and approved in the Model Workbench (four eyes)
     ("POST", r"^/api/runs/[^/]+/gold/propose$"),
+    # a fix's publish is its review (four eyes in services.resolve.rules); an approval of a fix run is the approval
+    ("POST", r"^/api/ops/resolve/fixes/[^/]+/(publish|retire)$"),
+    ("POST", r"^/api/ops/resolve/approvals/[^/]+/(approve|reject)$"),
 ]]
 
 

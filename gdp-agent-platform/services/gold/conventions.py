@@ -1,4 +1,4 @@
-"""What the connected dbt repository already does for gold (pure), learned from indexed code (CODE.CODE_CHUNK rows:
+"""What the connected dbt repository already does for gold (pure), learned from indexed code (CORE.CODE_CHUNK rows:
 path, kind, name, text), so generated gold uses the project's own macros instead of guessing them.
 
   history_hook   the history post-hook call, taken from an existing gold model, when it is model-independent

@@ -160,7 +160,7 @@ def load_incident(db: Any, incident_id: str) -> Optional[Dict[str, Any]]:
     if not found:
         return None
     try:
-        ai = db.query("SELECT AI FROM OPS.INCIDENT WHERE INCIDENT_ID = %s", (incident_id,))
+        ai = db.query("SELECT AI FROM CORE.INCIDENT WHERE INCIDENT_ID = %s", (incident_id,))
         value = ai[0].get("ai") if ai else None
         found["ai"] = json.loads(value) if isinstance(value, str) else value
     except Exception:
@@ -172,15 +172,15 @@ def _dag(db: Any, env_id: str, dag_id: str) -> Dict[str, Any]:
     columns = """D.ENV_ID, D.DAG_ID, D.FILELOC, D.OWNERS, D.TAGS, D.CRITICALITY, D.TEAM_ID, D.DOMAIN_ID, D.REPO_ID, D.REPO_PATH,
                  D.TIMEZONE"""
     try:
-        found = db.query(f"""SELECT {columns}, R.NAME AS REPO_NAME FROM OPS.DAG D LEFT JOIN CODE.REPO R ON R.REPO_ID = D.REPO_ID
+        found = db.query(f"""SELECT {columns}, R.NAME AS REPO_NAME FROM CORE.DAG D LEFT JOIN CORE.REPO R ON R.REPO_ID = D.REPO_ID
                               WHERE D.ENV_ID = %s AND D.DAG_ID = %s""", (env_id, dag_id))
     except Exception:   # a role that cannot read the code index still gets the DAG's own settings
-        found = db.query(f"SELECT {columns} FROM OPS.DAG D WHERE D.ENV_ID = %s AND D.DAG_ID = %s", (env_id, dag_id))
+        found = db.query(f"SELECT {columns} FROM CORE.DAG D WHERE D.ENV_ID = %s AND D.DAG_ID = %s", (env_id, dag_id))
     return found[0] if found else {"env_id": env_id, "dag_id": dag_id}
 
 
 def _env(db: Any, env_id: str) -> Dict[str, Any]:
-    found = db.query("SELECT ENV_ID, NAME, MWAA_ENV, REGION, AIRFLOW_URL, API_VERSION FROM OPS.AIRFLOW_ENV WHERE ENV_ID = %s",
+    found = db.query("SELECT ENV_ID, NAME, KIND, MWAA_ENV, REGION, AIRFLOW_URL, API_VERSION FROM CORE.AIRFLOW_ENV WHERE ENV_ID = %s",
                      (env_id,))
     return found[0] if found else {"env_id": env_id}
 
@@ -200,7 +200,7 @@ def _task_row(db: Any, incident: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if not incident.get("run_id"):
         return None
     found = db.query(f"""SELECT TASK_ID, MAP_INDEX, TRY_NUMBER, STATE, OPERATOR, STARTED_AT, ENDED_AT, DURATION_S, ERROR_EXCERPT
-                           FROM OPS.TASK_RUN WHERE {where}
+                           FROM CORE.TASK_RUN WHERE {where}
                           ORDER BY IFF(STATE = 'failed', 0, 1), TRY_NUMBER DESC, ENDED_AT DESC NULLS LAST LIMIT 1""", tuple(params))
     return found[0] if found else None
 
@@ -237,9 +237,9 @@ def log_part(db: Any, incident: Dict[str, Any], env: Dict[str, Any], task: Optio
     text, source, note = "", "none", ""
     if fetch and task_id and incident.get("run_id") and env.get("mwaa_env") and env.get("region"):
         try:
-            from services.ops.mwaa import Mwaa
+            from services.ops.mwaa import client_for
 
-            mw = mwaa_factory(env) if mwaa_factory else Mwaa(env["mwaa_env"], env["region"])
+            mw = mwaa_factory(env) if mwaa_factory else client_for(env)
             found = mw.task_log(incident["dag_id"], incident["run_id"], task_id, max(try_number, 1), map_index,
                                 cap=LOG_FETCH_BYTES)
             text = redact(found.get("text") or "")
@@ -276,7 +276,7 @@ def log_part(db: Any, incident: Dict[str, Any], env: Dict[str, Any], task: Optio
 
 def _chunks_for_path(db: Any, repo_id: str, path: str) -> List[Dict[str, Any]]:
     return db.query("""SELECT CHUNK_ID, REPO_ID, PATH, START_LINE, END_LINE, KIND, NAME, TEXT, COMMIT_SHA
-                         FROM CODE.CODE_CHUNK WHERE REPO_ID = %s AND PATH = %s ORDER BY START_LINE LIMIT 200""",
+                         FROM CORE.CODE_CHUNK WHERE REPO_ID = %s AND PATH = %s ORDER BY START_LINE LIMIT 200""",
                     (repo_id, path))
 
 
@@ -383,8 +383,8 @@ def impact_of(db: Any, incident: Dict[str, Any], dag: Dict[str, Any], task: Opti
     out["source"] = "code_graph"
     names = sorted({code_graph.key(n) for n in known + out["downstream"]})
     tables = db.query(f"""SELECT T.TARGET_TABLE_ID, T.TARGET_DATABASE || '.' || T.TARGET_SCHEMA || '.' || T.TARGET_TABLE AS FQN,
-                                 D.DOMAIN_NAME FROM KNOWLEDGE.TARGET_TABLE_REGISTRY T
-                            LEFT JOIN KNOWLEDGE.DOMAIN_REGISTRY D ON D.DOMAIN_ID = T.DOMAIN_ID
+                                 D.DOMAIN_NAME FROM CORE.TARGET_TABLE_REGISTRY T
+                            LEFT JOIN CORE.DOMAIN_REGISTRY D ON D.DOMAIN_ID = T.DOMAIN_ID
                            WHERE COALESCE(T.ACTIVE_FLAG, TRUE) AND UPPER(T.TARGET_TABLE) IN ({', '.join(['%s'] * len(names))})
                            LIMIT 100""", tuple(names)) if names else []
     out["target_tables"] = [{"target_table_id": t["target_table_id"], "fqn": t["fqn"]} for t in tables]
@@ -393,7 +393,7 @@ def impact_of(db: Any, incident: Dict[str, Any], dag: Dict[str, Any], task: Opti
     ids = [t["target_table_id"] for t in tables]
     if ids:
         try:
-            sttm = db.query(f"""SELECT S.RUN_ID, S.TARGET_TABLE_ID FROM CONTRACT.STTM_REGISTRY S
+            sttm = db.query(f"""SELECT S.RUN_ID, S.TARGET_TABLE_ID FROM CORE.STTM_REGISTRY S
                                  WHERE S.TARGET_TABLE_ID IN ({', '.join(['%s'] * len(ids))})
                                 QUALIFY ROW_NUMBER() OVER (PARTITION BY S.TARGET_TABLE_ID, S.RUN_ID ORDER BY S.STTM_VERSION DESC) = 1
                                  ORDER BY S.CREATED_AT DESC LIMIT 20""", tuple(ids))
@@ -403,7 +403,7 @@ def impact_of(db: Any, incident: Dict[str, Any], dag: Dict[str, Any], task: Opti
             out["sttm"] = []
     if dag.get("domain_id"):
         try:
-            found = db.query("SELECT DOMAIN_NAME FROM KNOWLEDGE.DOMAIN_REGISTRY WHERE DOMAIN_ID = %s", (dag["domain_id"],))
+            found = db.query("SELECT DOMAIN_NAME FROM CORE.DOMAIN_REGISTRY WHERE DOMAIN_ID = %s", (dag["domain_id"],))
             if found and found[0].get("domain_name") and found[0]["domain_name"] not in out["domains"]:
                 out["domains"].append(found[0]["domain_name"])
         except Exception:
@@ -464,7 +464,7 @@ def query_part(db: Any, log_text: str) -> Dict[str, Any]:
 
 
 def runs_part(db: Any, incident: Dict[str, Any]) -> Dict[str, Any]:
-    runs = db.query(f"""SELECT RUN_ID, RUN_TYPE, STATE, STARTED_AT, ENDED_AT, DURATION_S FROM OPS.DAG_RUN
+    runs = db.query(f"""SELECT RUN_ID, RUN_TYPE, STATE, STARTED_AT, ENDED_AT, DURATION_S FROM CORE.DAG_RUN
                          WHERE ENV_ID = %s AND DAG_ID = %s
                          ORDER BY COALESCE(STARTED_AT, LOGICAL_DATE, UPDATED_AT) DESC NULLS LAST LIMIT {RUNS_LIMIT}""",
                     (incident["env_id"], incident["dag_id"]))
@@ -497,8 +497,8 @@ def commits_part(db: Any, paths: List[Tuple[Optional[str], Optional[str]]], sinc
     pairs = sorted({(r, p) for r, p in paths if r and p})
     if not pairs or not since:
         return {"text": "", "citations": [], "note": "no mapped files or no earlier successful run"}
-    found = db.query("""SELECT F.REPO_ID, F.PATH, F.COMMIT_SHA, F.INDEXED_AT, R.NAME AS REPO_NAME FROM CODE.CODE_FILE F
-                          LEFT JOIN CODE.REPO R ON R.REPO_ID = F.REPO_ID
+    found = db.query("""SELECT F.REPO_ID, F.PATH, F.COMMIT_SHA, F.INDEXED_AT, R.NAME AS REPO_NAME FROM CORE.CODE_FILE F
+                          LEFT JOIN CORE.REPO R ON R.REPO_ID = F.REPO_ID
                           JOIN TABLE(FLATTEN(INPUT => PARSE_JSON(%s))) X ON F.REPO_ID = X.VALUE[0]::VARCHAR AND F.PATH = X.VALUE[1]::VARCHAR
                          WHERE F.INDEXED_AT > TRY_TO_TIMESTAMP_LTZ(%s::VARCHAR) AND F.COMMIT_SHA IS NOT NULL
                          ORDER BY F.INDEXED_AT DESC LIMIT 20""", (json.dumps([list(p) for p in pairs]), since))
@@ -545,7 +545,7 @@ def qa_part(db: Any, impact: Dict[str, Any]) -> Dict[str, Any]:
     names = sorted({t["fqn"].split(".")[-1].upper() for t in tables})
     try:
         checks = db.query(f"""SELECT RESULT_ID, TARGET_TABLE, TARGET_COLUMN, CHECK_TYPE, OUTCOME, DETAIL, CREATED_AT
-                               FROM QUALITY.CHECK_RESULT
+                               FROM CORE.CHECK_RESULT
                               WHERE UPPER(SPLIT_PART(TARGET_TABLE, '.', -1)) IN ({', '.join(['%s'] * len(names))})
                                 AND OUTCOME IN ('FAIL', 'WARN', 'ERROR') AND CREATED_AT >= DATEADD(day, -7, CURRENT_TIMESTAMP())
                               ORDER BY CREATED_AT DESC LIMIT 10""", tuple(names))
@@ -567,7 +567,7 @@ def similar_incidents(db: Any, incident: Dict[str, Any], limit: int = SIMILAR_LI
     over INCIDENT_RESOLUTION knowledge, else ILIKE over past resolutions of the same DAG and error words."""
     out: List[Dict[str, Any]] = []
     seen = {incident.get("incident_id")}
-    same = db.query("""SELECT INCIDENT_ID, TITLE, RESOLUTION, RESOLVED_AT FROM OPS.INCIDENT
+    same = db.query("""SELECT INCIDENT_ID, TITLE, RESOLUTION, RESOLVED_AT FROM CORE.INCIDENT
                         WHERE FINGERPRINT = %s AND INCIDENT_ID <> %s AND RESOLUTION IS NOT NULL
                         ORDER BY RESOLVED_AT DESC NULLS LAST LIMIT """ + str(int(limit)),
                     (incident.get("fingerprint"), incident.get("incident_id")))
@@ -592,7 +592,7 @@ def similar_incidents(db: Any, incident: Dict[str, Any], limit: int = SIMILAR_LI
             if ref.startswith("ops.incident."):
                 fps.append((ref[len("ops.incident."):], round(max(0.1, 0.9 - 0.1 * i), 2), h))
         for fp, score, h in fps:
-            found = db.query("""SELECT INCIDENT_ID, TITLE, RESOLUTION, RESOLVED_AT FROM OPS.INCIDENT
+            found = db.query("""SELECT INCIDENT_ID, TITLE, RESOLUTION, RESOLVED_AT FROM CORE.INCIDENT
                                  WHERE FINGERPRINT = %s AND RESOLUTION IS NOT NULL ORDER BY RESOLVED_AT DESC NULLS LAST LIMIT 1""",
                              (fp,))
             r = found[0] if found else None
@@ -610,7 +610,7 @@ def similar_incidents(db: Any, incident: Dict[str, Any], limit: int = SIMILAR_LI
              if w.lower() not in {"error", "exception", "failed", "task", "with", "from"}][:3]
     like = [f"%{w}%" for w in words]
     clause = " OR ".join(["RESOLUTION ILIKE %s OR ERROR_EXCERPT ILIKE %s"] * len(like)) if like else "FALSE"
-    found = db.query(f"""SELECT INCIDENT_ID, TITLE, RESOLUTION, RESOLVED_AT, IFF(DAG_ID = %s, 0.6, 0.4) AS SCORE FROM OPS.INCIDENT
+    found = db.query(f"""SELECT INCIDENT_ID, TITLE, RESOLUTION, RESOLVED_AT, IFF(DAG_ID = %s, 0.6, 0.4) AS SCORE FROM CORE.INCIDENT
                           WHERE RESOLUTION IS NOT NULL AND INCIDENT_ID <> %s AND (DAG_ID = %s OR {clause})
                           ORDER BY SCORE DESC, RESOLVED_AT DESC NULLS LAST LIMIT {int(limit)}""",
                      (incident.get("dag_id"), incident.get("incident_id"), incident.get("dag_id"),

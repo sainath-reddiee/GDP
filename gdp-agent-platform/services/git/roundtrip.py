@@ -1,13 +1,13 @@
-"""Source control round trip (V043, GOVERNANCE.GIT_PR): every pull request the app opens for a governed asset, in one
+"""Source control round trip (V043, CORE.GIT_PR): every pull request the app opens for a governed asset, in one
 table, and one sync that reads their state back from GitHub.
 
 An asset version is approved in the app, then published (services/dbt/publish.py renders its files from the approved
 version and opens a pull request). `record` keeps that pull request here; `sync` reads every open one from GitHub
 and applies the outcome to this table and to the asset's own version table:
 
-  MODEL     GOVERNANCE.MODEL_DESIGNS     merged -> the version is PUBLISHED
-  DQ_SUITE  GOVERNANCE.DQ_SUITE_VERSION  merged -> the version is PUBLISHED
-  QA_PACK   GOVERNANCE.DOMAIN_QA_PACKS   merged or closed is recorded (the deploy then sees the pack in step)
+  MODEL     CORE.MODEL_DESIGNS     merged -> the version is PUBLISHED
+  DQ_SUITE  CORE.DQ_SUITE_VERSION  merged -> the version is PUBLISHED
+  QA_PACK   CORE.DOMAIN_QA_PACKS   merged or closed is recorded (the deploy then sees the pack in step)
   STTM      (this table only)            the approved mapping version as sttm/<domain>/<target>.csv
 
 Closed without merging leaves the version APPROVED with its state CLOSED, so it can be published again. Before V043
@@ -21,18 +21,18 @@ from typing import Any, Callable, Dict, List, Optional
 
 from services.common.sql import clip, rows
 
-TABLE = "GOVERNANCE.GIT_PR"
+TABLE = "CORE.GIT_PR"
 OPEN_STATES = ("OPEN", "DRAFT")
 STATES = ("OPEN", "DRAFT", "MERGED", "CLOSED", "FAILED", "NO_CHANGES")
 
 # kind: (label, the asset's version table, its id column, merged marks the version PUBLISHED, Store page)
 KINDS: Dict[str, Dict[str, Any]] = {
-    "MODEL": {"label": "Domain model", "table": "GOVERNANCE.MODEL_DESIGNS", "key": "MODEL_ID", "publishes": True},
-    "DQ_SUITE": {"label": "Data quality suite", "table": "GOVERNANCE.DQ_SUITE_VERSION", "key": "SUITE_ID", "publishes": True},
-    "QA_PACK": {"label": "QA pack", "table": "GOVERNANCE.DOMAIN_QA_PACKS", "key": "PACK_ID", "publishes": False},
+    "MODEL": {"label": "Domain model", "table": "CORE.MODEL_DESIGNS", "key": "MODEL_ID", "publishes": True},
+    "DQ_SUITE": {"label": "Data quality suite", "table": "CORE.DQ_SUITE_VERSION", "key": "SUITE_ID", "publishes": True},
+    "QA_PACK": {"label": "QA pack", "table": "CORE.DOMAIN_QA_PACKS", "key": "PACK_ID", "publishes": False},
     "STTM": {"label": "STTM mapping", "table": None, "key": None, "publishes": False},
     # table model versions are published without an approval of their own (the domain model is the governed asset)
-    "TABLE_MODEL": {"label": "Table model", "table": "GOVERNANCE.TABLE_MODEL_VERSION", "key": "TABLE_MODEL_ID",
+    "TABLE_MODEL": {"label": "Table model", "table": "CORE.TABLE_MODEL_VERSION", "key": "TABLE_MODEL_ID",
                     "publishes": True, "from": ("DRAFT", "PUBLISHED")},
 }
 
@@ -124,7 +124,7 @@ def sync(session, request: Dict[str, Any], status_fn: Callable[[str, int], Dict[
         where.append("(G.SYNCED_AT IS NULL OR G.SYNCED_AT < DATEADD('second', -60, CURRENT_TIMESTAMP()))")
     found = rows(session, f"""SELECT G.KIND, G.ASSET_ID, G.VERSION, G.ASSET_NAME, G.PR_NUMBER, R.GIT_URL, G.DOMAIN_ID,
                                      G.BRANCH, G.PR_URL FROM {TABLE} G
-                               JOIN CODE.REPO R ON R.REPO_ID = G.REPO_ID WHERE {' AND '.join(where)}
+                               JOIN CORE.REPO R ON R.REPO_ID = G.REPO_ID WHERE {' AND '.join(where)}
                               ORDER BY G.OPENED_AT LIMIT 300""", params)
     out: Dict[str, Any] = {"checked": 0, "merged": [], "closed": [], "open": 0, "errors": []}
     for r in found:
@@ -160,8 +160,8 @@ LIST_SQL = f"""SELECT G.KIND, G.ASSET_ID, G.VERSION, G.ASSET_NAME, G.DOMAIN_ID, 
                       R.GIT_URL, G.BRANCH, G.BASE_BRANCH, G.PR_NUMBER, G.PR_URL, G.STATE, G.MERGED_SHA, G.TITLE, G.FILES,
                       G.DETAIL, G.OPENED_BY, G.OPENED_AT::VARCHAR AS OPENED_AT, G.SYNCED_AT::VARCHAR AS SYNCED_AT
                  FROM {TABLE} G
-                 LEFT JOIN CODE.REPO R ON R.REPO_ID = G.REPO_ID
-                 LEFT JOIN KNOWLEDGE.DOMAIN_REGISTRY D ON D.DOMAIN_ID = G.DOMAIN_ID"""
+                 LEFT JOIN CORE.REPO R ON R.REPO_ID = G.REPO_ID
+                 LEFT JOIN CORE.DOMAIN_REGISTRY D ON D.DOMAIN_ID = G.DOMAIN_ID"""
 
 
 def link(kind: str, asset_id: str, version: int) -> str:

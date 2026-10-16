@@ -1,4 +1,4 @@
-"""GOVERNANCE.DATA_PROFILES: every profiling pass of every table, one row per column, so profiles can be searched
+"""CORE.DATA_PROFILES: every profiling pass of every table, one row per column, so profiles can be searched
 across runs by domain, table, run and tags, and a column's history compared pass to pass."""
 
 from __future__ import annotations
@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional, Sequence
 
 from services.common.sql import clip, insert_rows
 
-TABLE = "GOVERNANCE.DATA_PROFILES"
+TABLE = "CORE.DATA_PROFILES"
 TOP_VALUES = 10
 COLUMNS = ["PROFILE_ID", "SOURCE_NAME", "DATABASE_NAME", "SCHEMA_NAME", "TABLE_NAME", "COLUMN_NAME", "ORDINAL",
            "RUN_ID", "DOMAIN_ID", "DATA_TYPE", "FAMILY", "SEMANTIC_TYPE", "PII_CLASSIFICATION", "ROW_COUNT",
@@ -17,7 +17,7 @@ COLUMNS = ["PROFILE_ID", "SOURCE_NAME", "DATABASE_NAME", "SCHEMA_NAME", "TABLE_N
            "POTENTIAL_KEY", "TOP_VALUES", "HISTOGRAM", "DESCRIPTION", "IS_APPROXIMATE", "PROFILER_VERSION"]
 # The run's domain, else the registered source's domain; NULL when neither is known.
 DOMAIN_SQL = ("COALESCE((SELECT MAX(DOMAIN_ID) FROM CORE.WORKFLOW_RUN WHERE RUN_ID = NULLIF(?, '')), "
-              "(SELECT MAX(DOMAIN_ID) FROM SOURCE.SOURCE_REGISTRY WHERE SOURCE_SYSTEM_NAME = ?))")
+              "(SELECT MAX(DOMAIN_ID) FROM CORE.SOURCE_REGISTRY WHERE SOURCE_SYSTEM_NAME = ?))")
 EXPRS = ["?", "?", "?", "?", "?", "?", "?::NUMBER", "NULLIF(?, '')", DOMAIN_SQL, "NULLIF(?, '')", "NULLIF(?, '')",
          "NULLIF(?, '')", "NULLIF(?, '')", "NULLIF(?, '')::NUMBER", "NULLIF(?, '')::NUMBER", "NULLIF(?, '')::FLOAT",
          "NULLIF(?, '')::NUMBER", "NULLIF(?, '')", "NULLIF(?, '')::FLOAT", "NULLIF(?, '')", "NULLIF(?, '')",
@@ -128,7 +128,7 @@ def search_sql(domain: Optional[str] = None, table: Optional[str] = None, run_id
         where.append("ARRAY_CONTAINS(L.TABLE_FQN::VARIANT, PARSE_JSON(%s)::ARRAY)")
         params.append(_json_list(tag_keys))
     if bookmarked_by:
-        where.append("EXISTS (SELECT 1 FROM GOVERNANCE.PROFILE_BOOKMARK B WHERE B.USER_NAME = %s AND B.TABLE_FQN = L.TABLE_FQN)")
+        where.append("EXISTS (SELECT 1 FROM CORE.PROFILE_BOOKMARK B WHERE B.USER_NAME = %s AND B.TABLE_FQN = L.TABLE_FQN)")
         params.append(bookmarked_by)
     clause = ("WHERE " + " AND ".join(where)) if where else ""
     order = SORTS.get(sort, SORTS["recent"])
@@ -141,7 +141,7 @@ def search_sql(domain: Optional[str] = None, table: Optional[str] = None, run_id
                    COUNT_IF(POTENTIAL_KEY) AS KEY_CANDIDATES, COUNT_IF(PII_CLASSIFICATION <> 'NONE') AS PII_COLUMNS,
                    MAX(PROFILED_AT) AS PROFILED_AT, MAX(PROFILED_BY) AS PROFILED_BY,
                    ARRAY_AGG(DISTINCT SEMANTIC_TYPE) AS SEMANTIC_TYPES
-              FROM GOVERNANCE.DATA_PROFILES
+              FROM CORE.DATA_PROFILES
              GROUP BY PROFILE_ID, SOURCE_NAME, DATABASE_NAME, SCHEMA_NAME, TABLE_NAME
         ), L AS (
             SELECT P.*, COUNT(*) OVER (PARTITION BY TABLE_FQN) AS PASSES,
@@ -155,7 +155,7 @@ def search_sql(domain: Optional[str] = None, table: Optional[str] = None, run_id
                L.DOMAIN_ID, D.DOMAIN_NAME, L.ROW_COUNT, L.COLUMN_COUNT, L.AVG_NULL_PCT, L.KEY_CANDIDATES,
                L.PII_COLUMNS, L.PROFILED_AT::VARCHAR AS PROFILED_AT, L.PROFILED_BY, L.SEMANTIC_TYPES, L.PASSES,
                L.NULL_DRIFT, COUNT(*) OVER () AS TOTAL
-          FROM L LEFT JOIN KNOWLEDGE.DOMAIN_REGISTRY D ON D.DOMAIN_ID = L.DOMAIN_ID
+          FROM L LEFT JOIN CORE.DOMAIN_REGISTRY D ON D.DOMAIN_ID = L.DOMAIN_ID
           {clause}
          ORDER BY {order}
          LIMIT {int(max(1, min(limit, 200)))} OFFSET {int(max(0, offset))}"""

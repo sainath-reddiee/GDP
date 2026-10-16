@@ -12,7 +12,7 @@ Rules kept here:
 - publishing a DBT_PATCH is previewed first. The dry run re-reads the file from the Git clone (refused when it changed
   since the patch was proposed) and returns a preview token: HMAC signed, 10 minutes, bound to the case, the artifact,
   the branch, the patch and the person (services/ops/retry.py pattern). The real publish calls the platform's GitHub
-  publisher (CODEGEN.PUBLISH_DBT_PR, case patch mode), which reads the accepted artifact itself, pushes branch
+  publisher (CORE.PUBLISH_DBT_PR, case patch mode), which reads the accepted artifact itself, pushes branch
   fix/<case number> and opens a draft pull request; the PR is linked to the case;
 - resolving writes CASE_RESOLUTION knowledge (always PROPOSED for the domain's stewards; CONTENT_JSON carries case_id
   and resolved_by, so the resolver cannot approve it) and proposes each accepted reproduction test that passed as
@@ -323,7 +323,7 @@ def check_token(token: Optional[str], bound: Dict[str, Any], user: str, now: Opt
 
 
 def _repo(db: Any, repo_id: Optional[str]) -> Dict[str, Any]:
-    found = db.query("""SELECT REPO_ID, NAME, GIT_URL, PROVIDER, BRANCH, GIT_REPOSITORY, ENABLED FROM CODE.REPO
+    found = db.query("""SELECT REPO_ID, NAME, GIT_URL, PROVIDER, BRANCH, GIT_REPOSITORY, ENABLED FROM CORE.REPO
                          WHERE REPO_ID = %s""", (repo_id,)) if repo_id else []
     if not found or not found[0].get("enabled"):
         raise FixError("The repository of this patch is no longer connected.", 409)

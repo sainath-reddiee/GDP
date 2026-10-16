@@ -1,8 +1,8 @@
 """Modeling hub (/dashboard/modeling): design a model by mapping onto, forking or creating a domain, see it as an ER
 diagram, render its domain pack, DDL and dbt files, and publish it to a feature branch with a draft pull request.
 
-Designs are versioned in GOVERNANCE.MODEL_DESIGNS (V036). Finalizing renders and stores the files; publishing calls
-CODEGEN.PUBLISH_DBT_PR with a model_branch request (services/dbt/publish.py publish_model_branch), which reads the
+Designs are versioned in CORE.MODEL_DESIGNS (V036). Finalizing renders and stores the files; publishing calls
+CORE.PUBLISH_DBT_PR with a model_branch request (services/dbt/publish.py publish_model_branch), which reads the
 files back from the table, so only finalized content is ever pushed. The GitHub token never leaves Snowflake.
 """
 
@@ -26,7 +26,7 @@ router = APIRouter()
 
 def _domains(db: Db) -> list[dict]:
     try:
-        return db.query("SELECT DOMAIN_ID, DOMAIN_NAME, DESCRIPTION FROM KNOWLEDGE.DOMAIN_REGISTRY WHERE ACTIVE_FLAG "
+        return db.query("SELECT DOMAIN_ID, DOMAIN_NAME, DESCRIPTION FROM CORE.DOMAIN_REGISTRY WHERE ACTIVE_FLAG "
                         "ORDER BY DOMAIN_NAME")
     except Exception:
         return []
@@ -43,7 +43,7 @@ def _source_index(db: Db, tables: list[str]) -> Optional[dict]:
     names = sorted({t.split(".")[-1].strip('"').upper() for t in tables})
     try:
         found = db.query("""SELECT UPPER(TABLE_NAME) AS T, UPPER(COLUMN_NAME) AS C, MAX(DATA_TYPE) AS D
-                              FROM GOVERNANCE.DATA_PROFILES
+                              FROM CORE.DATA_PROFILES
                              WHERE ARRAY_CONTAINS(UPPER(TABLE_NAME)::VARIANT, PARSE_JSON(%s)::ARRAY) GROUP BY 1, 2""",
                          (json.dumps(names),))
     except Exception:
@@ -60,7 +60,7 @@ def _source_index(db: Db, tables: list[str]) -> Optional[dict]:
 def context(db: Db = Depends(current_db)):
     sql = """SELECT DESIGN_ID, VERSION, DOMAIN_NAME, MODE, PARENT_DOMAIN, STATUS, BRANCH, PR_URL,
                     CREATED_BY, CREATED_AT::VARCHAR AS CREATED_AT
-               FROM GOVERNANCE.MODEL_DESIGNS {where}
+               FROM CORE.MODEL_DESIGNS {where}
             QUALIFY ROW_NUMBER() OVER (PARTITION BY DESIGN_ID ORDER BY VERSION DESC) = 1
               ORDER BY CREATED_AT DESC LIMIT 50"""
     try:
@@ -174,7 +174,7 @@ class SaveIn(SpecIn):
 def _not_canonical(db: Db, design_id: str) -> None:
     """A domain's canonical model is changed through the Model Workbench (draft, review, approval), never here."""
     try:
-        found = db.query("SELECT 1 AS X FROM GOVERNANCE.DOMAIN_MODEL WHERE MODEL_ID = %s", (design_id,))
+        found = db.query("SELECT 1 AS X FROM CORE.DOMAIN_MODEL WHERE MODEL_ID = %s", (design_id,))
     except Exception:
         return  # before V039 there are no canonical models
     if found:
@@ -182,7 +182,7 @@ def _not_canonical(db: Db, design_id: str) -> None:
 
 
 def _next_version(db: Db, design_id: str) -> int:
-    found = db.query("SELECT COALESCE(MAX(VERSION), 0) AS V FROM GOVERNANCE.MODEL_DESIGNS WHERE DESIGN_ID = %s",
+    found = db.query("SELECT COALESCE(MAX(VERSION), 0) AS V FROM CORE.MODEL_DESIGNS WHERE DESIGN_ID = %s",
                      (design_id,))
     return int(found[0]["v"] or 0) + 1 if found else 1
 
@@ -190,7 +190,7 @@ def _next_version(db: Db, design_id: str) -> int:
 def _insert(db: Db, design_id: str, version: int, spec: dict, issues: list, status: str,
             pack: Optional[dict] = None, files: Optional[dict] = None, repo_id: Optional[str] = None) -> None:
     db.execute(
-        """INSERT INTO GOVERNANCE.MODEL_DESIGNS (DESIGN_ID, VERSION, DOMAIN_NAME, MODE, PARENT_DOMAIN, STATUS, SPEC,
+        """INSERT INTO CORE.MODEL_DESIGNS (DESIGN_ID, VERSION, DOMAIN_NAME, MODE, PARENT_DOMAIN, STATUS, SPEC,
                                                 ISSUES, DOMAIN_PACK, ARTIFACTS, REPO_ID, SOURCE_TABLES)
            SELECT %s, %s, %s, %s, %s, %s, PARSE_JSON(%s), PARSE_JSON(%s), PARSE_JSON(%s), PARSE_JSON(%s), %s,
                   PARSE_JSON(%s)::ARRAY""",
@@ -220,7 +220,7 @@ def save(body: SaveIn, db: Db = Depends(current_db)):
 def get_design(design_id: str, version: Optional[int] = None, db: Db = Depends(current_db)):
     sql = """SELECT DESIGN_ID, VERSION, DOMAIN_NAME, MODE, PARENT_DOMAIN, STATUS, SPEC, ISSUES, DOMAIN_PACK, ARTIFACTS,
                     REPO_ID, BRANCH, PR_URL, PUBLISH_RESULT, CREATED_BY, CREATED_AT::VARCHAR AS CREATED_AT
-               FROM GOVERNANCE.MODEL_DESIGNS WHERE DESIGN_ID = %s"""
+               FROM CORE.MODEL_DESIGNS WHERE DESIGN_ID = %s"""
     params: tuple = (design_id,)
     if version:
         sql += " AND VERSION = %s"
@@ -232,7 +232,7 @@ def get_design(design_id: str, version: Optional[int] = None, db: Db = Depends(c
     for key in ("spec", "issues", "domain_pack", "artifacts", "publish_result"):
         row[key] = _json(row.get(key))
     versions = db.query("""SELECT VERSION, STATUS, BRANCH, PR_URL, CREATED_BY, CREATED_AT::VARCHAR AS CREATED_AT
-                             FROM GOVERNANCE.MODEL_DESIGNS WHERE DESIGN_ID = %s ORDER BY VERSION DESC""", (design_id,))
+                             FROM CORE.MODEL_DESIGNS WHERE DESIGN_ID = %s ORDER BY VERSION DESC""", (design_id,))
     return {"design": row, "versions": versions}
 
 
@@ -273,7 +273,7 @@ class PublishIn(BaseModel):
 def publish(design_id: str, body: PublishIn, db: Db = Depends(current_db)):
     """Cut feature/model-<domain>-<timestamp>, commit the finalized files and open a draft pull request."""
     _not_canonical(db, design_id)
-    found = db.query("SELECT DOMAIN_NAME, STATUS FROM GOVERNANCE.MODEL_DESIGNS WHERE DESIGN_ID = %s AND VERSION = %s",
+    found = db.query("SELECT DOMAIN_NAME, STATUS FROM CORE.MODEL_DESIGNS WHERE DESIGN_ID = %s AND VERSION = %s",
                      (design_id, body.version))
     if not found:
         raise HTTPException(404, "model design version not found")
@@ -291,7 +291,7 @@ def publish(design_id: str, body: PublishIn, db: Db = Depends(current_db)):
     request = {"design_id": design_id, "version": body.version, "repo_id": body.repo_id, "head": head,
                "base": body.base or repo.get("branch"), "title": body.title}
     try:
-        result = db.call("CALL CODEGEN.PUBLISH_DBT_PR(%s, %s)", ("", json.dumps({"model_branch": request})))
+        result = db.call("CALL CORE.PUBLISH_DBT_PR(%s, %s)", ("", json.dumps({"model_branch": request})))
     except Exception as exc:
         return {"status": "FAILED", "detail": str(exc)[:1000], "head_branch": head}
     return {**(result or {}), "head_branch": head}

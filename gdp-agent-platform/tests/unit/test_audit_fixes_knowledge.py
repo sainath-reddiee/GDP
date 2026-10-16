@@ -62,7 +62,7 @@ def test_import_reuses_a_domain_created_in_the_ui_with_another_id():
     result = import_pack(lambda sql, params=None: issued.append((sql, params)), "DB", _pack(),
                          query=lambda sql, params: [{"domain_id": "ui-random-id"}])
     assert result["domain_id"] == "ui-random-id"
-    domain_merge = next(p for sql, p in issued if "MERGE INTO DB.KNOWLEDGE.DOMAIN_REGISTRY" in sql)
+    domain_merge = next(p for sql, p in issued if "MERGE INTO DB.CORE.DOMAIN_REGISTRY" in sql)
     assert domain_merge[0] == "ui-random-id"
     fresh = import_pack(lambda sql, params=None: None, "DB", _pack(), query=lambda sql, params: [])
     assert fresh["domain_id"] == domain_id("CLAIMS")
@@ -98,6 +98,6 @@ def test_design_columns_merge_by_name_and_delete_only_removed_ones():
                                         ["new-id2", "t1", "AMOUNT", "NUMBER", 2, True, "x", "", False]])
     (delete, dparams), (merge, mparams) = session.statements
     assert delete.lstrip().startswith("DELETE") and "NOT IN" in delete and dparams == ["t1", "ORDER_ID", "AMOUNT"]
-    assert "MERGE INTO KNOWLEDGE.TARGET_COLUMN_REGISTRY" in merge
+    assert "MERGE INTO CORE.TARGET_COLUMN_REGISTRY" in merge
     assert "UPPER(t.COLUMN_NAME) = UPPER(s.COLUMN_NAME)" in merge and "TARGET_COLUMN_ID =" not in merge.split("WHEN NOT")[0]
     assert len(mparams) == 18 and mparams[:3] == ["new-id", "t1", "Order_Id"]

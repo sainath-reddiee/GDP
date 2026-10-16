@@ -85,9 +85,9 @@ class FakeDb:
         self.repos, self.plan, self.domain = repos, plan or {}, domain
 
     def query(self, sql, params=()):
-        if "FROM CODE.REPO WHERE ENABLED" in sql:
+        if "FROM CORE.REPO WHERE ENABLED" in sql:
             return [dict(r) for r in self.repos]
-        if "FROM KNOWLEDGE.DOMAIN_KNOWLEDGE" in sql:
+        if "FROM CORE.DOMAIN_KNOWLEDGE" in sql:
             return [{"content_json": json.dumps(self.plan)}] if self.plan else []
         if "FROM CORE.WORKFLOW_RUN" in sql:
             return [{"domain_id": self.domain, "run_name": "Orders"}]

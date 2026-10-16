@@ -18,7 +18,7 @@ from services.governance import policy  # noqa: E402
 from services.governance import preview as pv  # noqa: E402
 from test_dq_suites import Session  # noqa: E402
 
-MIGRATION = ROOT / "snowflake" / "database" / "migrations" / "V043__source_control.sql"
+MIGRATION = ROOT / "snowflake" / "database" / "migrations" / "archive" / "V043__source_control.sql"
 
 
 def entry(version=3, status="APPROVED", **extra):
@@ -38,7 +38,7 @@ def entry(version=3, status="APPROVED", **extra):
 
 def test_migration_creates_the_table_and_backfills_each_kind_once():
     sql = MIGRATION.read_text()
-    assert "CREATE TABLE IF NOT EXISTS {{database}}.GOVERNANCE.GIT_PR" in sql
+    assert "CREATE TABLE IF NOT EXISTS {{database}}.GOVERNANCE.GIT_PR" in sql   # V043 is history: names before V061
     assert "PRIMARY KEY (KIND, ASSET_ID, VERSION)" in sql
     for kind, source in (("MODEL", "MODEL_DESIGNS"), ("DQ_SUITE", "DQ_SUITE_VERSION"), ("QA_PACK", "DOMAIN_QA_PACKS")):
         assert f"SELECT '{kind}'" in sql and f"GOVERNANCE.{source}" in sql
@@ -62,7 +62,7 @@ def test_record_merges_one_row_per_version_and_never_raises():
                           asset_name="SILVER.SALES.CUSTOMER", domain_id="d1", repo_id="r1", branch="feature/sttm-customer-v3",
                           title="STTM v3", files=["b.csv", "a.json"])
     assert ok
-    sql, params = s.find("MERGE INTO GOVERNANCE.GIT_PR")[0]
+    sql, params = s.find("MERGE INTO CORE.GIT_PR")[0]
     assert params[:3] == ["STTM", "c1", 3] and params[8:11] == ["8", "https://github.com/a/b/pull/8", "OPEN"]
     assert json.loads(params[12]) == ["a.json", "b.csv"] and params[13] == ""
     failed = Session()
@@ -81,7 +81,7 @@ def test_sync_applies_each_state_to_the_table_and_the_asset():
     open_prs = [{"KIND": k, "ASSET_ID": a, "VERSION": v, "ASSET_NAME": a, "PR_NUMBER": n, "GIT_URL": "https://github.com/a/b"}
                 for k, a, v, n in [("MODEL", "m1", 3, 7), ("DQ_SUITE", "s1", 2, 8), ("QA_PACK", "p1", 4, 9), ("STTM", "c1", 1, 10),
                                    ("MODEL", "m2", 1, 11)]]
-    s = Session({"FROM GOVERNANCE.GIT_PR G JOIN CODE.REPO": open_prs})
+    s = Session({"FROM CORE.GIT_PR G JOIN CORE.REPO": open_prs})
     states = {7: "MERGED", 8: "CLOSED", 9: "MERGED", 10: "OPEN"}
 
     def status(url, number):
@@ -92,15 +92,15 @@ def test_sync_applies_each_state_to_the_table_and_the_asset():
     out = roundtrip.sync(s, {}, status)
     assert out["checked"] == 4 and out["open"] == 1 and len(out["errors"]) == 1 and out["errors"][0]["asset_id"] == "m2"
     assert [m["asset_id"] for m in out["merged"]] == ["m1", "p1"] and out["closed"][0]["kind"] == "DQ_SUITE"
-    assert "DATEADD('second', -60" in s.find("FROM GOVERNANCE.GIT_PR G JOIN CODE.REPO")[0][0]
-    model = s.find("UPDATE GOVERNANCE.MODEL_DESIGNS SET PR_STATE")[0]
+    assert "DATEADD('second', -60" in s.find("FROM CORE.GIT_PR G JOIN CORE.REPO")[0][0]
+    model = s.find("UPDATE CORE.MODEL_DESIGNS SET PR_STATE")[0]
     assert "STATUS = 'PUBLISHED'" in model[0] and model[1] == ["MERGED", "sha7", "m1", 3]
-    suite = s.find("UPDATE GOVERNANCE.DQ_SUITE_VERSION SET PR_STATE")[0]
+    suite = s.find("UPDATE CORE.DQ_SUITE_VERSION SET PR_STATE")[0]
     assert "STATUS = 'PUBLISHED'" not in suite[0] and suite[1][0] == "CLOSED"
-    pack = s.find("UPDATE GOVERNANCE.DOMAIN_QA_PACKS SET PR_STATE")[0]
+    pack = s.find("UPDATE CORE.DOMAIN_QA_PACKS SET PR_STATE")[0]
     assert "STATUS" not in pack[0].split("WHERE")[0].replace("PR_STATE", "")  # a pack version stays APPROVED
     assert not s.find("STTM_CATALOG")  # STTM lives in GIT_PR only
-    assert len(s.find("UPDATE GOVERNANCE.GIT_PR SET STATE")) == 4
+    assert len(s.find("UPDATE CORE.GIT_PR SET STATE")) == 4
     one = Session()
     roundtrip.sync(one, {"kind": "STTM", "asset_id": "c1", "force": True}, status)
     sql, params = one.calls[0]
@@ -113,10 +113,10 @@ def test_asset_syncs_mirror_into_the_table(monkeypatch):
     monkeypatch.setattr(publish, "_token", lambda: "t")
     monkeypatch.setattr(github, "urllib_request", lambda token: "req")
     monkeypatch.setattr(github, "pull_status", lambda req, origin, number: {"state": "MERGED", "merge_commit_sha": "abc"})
-    s = Session({"FROM GOVERNANCE.MODEL_DESIGNS D JOIN CODE.REPO": [{"MODEL_ID": "m1", "VERSION": 3, "PR_NUMBER": 7,
+    s = Session({"FROM CORE.MODEL_DESIGNS D JOIN CORE.REPO": [{"MODEL_ID": "m1", "VERSION": 3, "PR_NUMBER": 7,
                                                                       "GIT_URL": "https://github.com/a/b"}]})
     publish.sync_model_prs(s, {"model_id": "m1"})
-    assert s.find("UPDATE GOVERNANCE.GIT_PR SET STATE")[0][1] == ["MERGED", "abc", "MODEL", "m1", 3]
+    assert s.find("UPDATE CORE.GIT_PR SET STATE")[0][1] == ["MERGED", "abc", "MODEL", "m1", 3]
 
 
 def test_list_filters_shape_and_counts():
@@ -149,11 +149,11 @@ def test_sttm_files():
 
 def _sttm_session(status="APPROVED"):
     e = entry(status=status)
-    return Session({"FROM GOVERNANCE.STTM_CATALOG WHERE CATALOG_ID = ? AND VERSION = ?": [
+    return Session({"FROM CORE.STTM_CATALOG WHERE CATALOG_ID = ? AND VERSION = ?": [
                         {"CATALOG_ID": "c1", "VERSION": 3, "DOMAIN_ID": "d1", "DOMAIN_NAME": "Sales", "SOURCE_SYSTEM": "CRM",
                          "TARGET_ENTITY": e["target_entity"], "STATUS": status, "TABLE_DESIGN": json.dumps(e["table_design"]),
                          "LINES": json.dumps(e["lines"])}],
-                    "FROM CODE.REPO WHERE REPO_ID": [{"GIT_URL": "https://github.com/a/b", "BRANCH": "main", "PROVIDER": "GITHUB"}]})
+                    "FROM CORE.REPO WHERE REPO_ID": [{"GIT_URL": "https://github.com/a/b", "BRANCH": "main", "PROVIDER": "GITHUB"}]})
 
 
 def test_publish_sttm_pushes_the_approved_version_and_records_it(monkeypatch):
@@ -170,7 +170,7 @@ def test_publish_sttm_pushes_the_approved_version_and_records_it(monkeypatch):
     out = publish.publish_dbt_pr(s, "", json.dumps({"sttm": req}))
     assert out["status"] == "PUBLISHED" and out["recorded"] and seen["base"] == "main"
     assert sorted(seen["files"]) == out["files"] == ["sttm/sales/customer.csv", "sttm/sales/customer.design.json"]
-    params = s.find("MERGE INTO GOVERNANCE.GIT_PR")[0][1]
+    params = s.find("MERGE INTO CORE.GIT_PR")[0][1]
     assert params[:4] == ["STTM", "c1", 3, "SILVER.SALES.CUSTOMER"] and params[10] == "OPEN"
     with pytest.raises(AssertionError, match="feature/sttm-"):
         publish.publish_sttm(_sttm_session(), {**req, "head": "feature/dq-x"})
@@ -182,7 +182,7 @@ def test_sync_git_prs_uses_the_table_once_deployed(monkeypatch):
     monkeypatch.setattr(publish, "_token", lambda: "t")
     monkeypatch.setattr(github, "urllib_request", lambda token: "req")
     monkeypatch.setattr(github, "pull_status", lambda req, origin, number: {"state": "MERGED", "merge_commit_sha": "x"})
-    s = Session({"FROM GOVERNANCE.GIT_PR G JOIN CODE.REPO": [{"KIND": "STTM", "ASSET_ID": "c1", "VERSION": 1, "PR_NUMBER": 3,
+    s = Session({"FROM CORE.GIT_PR G JOIN CORE.REPO": [{"KIND": "STTM", "ASSET_ID": "c1", "VERSION": 1, "PR_NUMBER": 3,
                                                                "GIT_URL": "https://github.com/a/b"}]})
     out = publish.sync_git_prs(s, {})
     assert out["source_control"] and out["merged"][0]["asset_id"] == "c1"

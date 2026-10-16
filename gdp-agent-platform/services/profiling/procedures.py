@@ -1,10 +1,10 @@
-"""PROFILE.RUN_PROFILING: LANDING_COMPLETE -> PROFILING_PENDING -> PROFILING_RUNNING -> PROFILING_COMPLETE.
-PROFILE.REFRESH_TABLE_PROFILE: re-profile one table of a run (cache bust), no state change.
+"""CORE.RUN_PROFILING: LANDING_COMPLETE -> PROFILING_PENDING -> PROFILING_RUNNING -> PROFILING_COMPLETE.
+CORE.REFRESH_TABLE_PROFILE: re-profile one table of a run (cache bust), no state change.
 
-Profiles persist per source table, not per run: one JSON document per table on @METADATA.PROFILES_STAGE,
-indexed by METADATA.TABLE_PROFILES. A later run of the same source reuses the document while the table's
+Profiles persist per source table, not per run: one JSON document per table on @CORE.PROFILES_STAGE,
+indexed by CORE.TABLE_PROFILES. A later run of the same source reuses the document while the table's
 fingerprint (columns, landed row count, source LAST_ALTERED) is unchanged, so neither the warehouse scan
-nor the LLM enrichment repeats. PROFILE.PROFILE_REGISTRY still receives run-scoped rows because mapping,
+nor the LLM enrichment repeats. CORE.PROFILE_REGISTRY still receives run-scoped rows because mapping,
 STTM and dbt join on landing column ids.
 """
 
@@ -35,8 +35,8 @@ from services.source.identifiers import fqn, quote
 from services.workflow.procedures import _get_run, _is_closed
 
 PATH = ["LANDING_COMPLETE", "PROFILING_PENDING", "PROFILING_RUNNING"]
-PROFILE_STAGE = "METADATA.PROFILES_STAGE"
-PROFILE_FORMAT = "METADATA.PROFILE_JSON_FORMAT"
+PROFILE_STAGE = "CORE.PROFILES_STAGE"
+PROFILE_FORMAT = "CORE.PROFILE_JSON_FORMAT"
 DEFAULT_CONCURRENCY = 5
 MAX_CONCURRENCY = 16
 OPTION_FIELDS = {"force_refresh", "refresh_tables", "concurrency_limit"}
@@ -185,7 +185,7 @@ def _load_index(session, refs: Sequence[TableRef]) -> Optional[Dict[TableKey, Di
     if not names:
         return {}
     try:
-        found = rows(session, "SELECT * FROM METADATA.TABLE_PROFILES "
+        found = rows(session, "SELECT * FROM CORE.TABLE_PROFILES "
                               "WHERE ARRAY_CONTAINS(SOURCE_NAME::VARIANT, PARSE_JSON(?)::ARRAY)", [json.dumps(names)])
     except Exception:
         return None
@@ -214,7 +214,7 @@ def _write_document(session, stage_path: str, document: Dict[str, Any]) -> None:
 def _upsert_index(session, ref: TableRef, document: Dict[str, Any], run_id: Optional[str]) -> None:
     session.sql(
         """
-        MERGE INTO METADATA.TABLE_PROFILES T
+        MERGE INTO CORE.TABLE_PROFILES T
         USING (SELECT ? AS SOURCE_NAME, ? AS DATABASE_NAME, ? AS SCHEMA_NAME, ? AS TABLE_NAME,
                       ?::NUMBER AS ROW_COUNT, ?::NUMBER AS COLUMN_COUNT, ? AS PROFILE_STAGE_PATH,
                       ? AS PROFILE_CHECKSUM, ? AS SOURCE_FINGERPRINT, ?::BOOLEAN AS IS_APPROXIMATE,
@@ -262,7 +262,7 @@ def _ensure_index_rows(session, refs: Sequence[TableRef]) -> None:
     for ref in refs:
         session.sql(
             """
-            MERGE INTO METADATA.TABLE_PROFILES T
+            MERGE INTO CORE.TABLE_PROFILES T
             USING (SELECT ? AS SOURCE_NAME, ? AS DATABASE_NAME, ? AS SCHEMA_NAME, ? AS TABLE_NAME,
                           ? AS PROFILE_STAGE_PATH) S
                ON T.SOURCE_NAME = S.SOURCE_NAME AND T.DATABASE_NAME = S.DATABASE_NAME
@@ -280,7 +280,7 @@ def _ensure_index_rows(session, refs: Sequence[TableRef]) -> None:
 def _set_status(session, refs: Sequence[TableRef], status: str, error: Optional[str] = None) -> None:
     for ref in refs:
         session.sql(
-            "UPDATE METADATA.TABLE_PROFILES SET STATUS = ?, STATUS_UPDATED_AT = CURRENT_TIMESTAMP(), "
+            "UPDATE CORE.TABLE_PROFILES SET STATUS = ?, STATUS_UPDATED_AT = CURRENT_TIMESTAMP(), "
             "ERROR_MESSAGE = NULLIF(?, '') WHERE SOURCE_NAME = ? AND DATABASE_NAME = ? AND SCHEMA_NAME = ? "
             "AND TABLE_NAME = ?",
             params=[status, clip(error, 4000), *ref.key],
@@ -299,7 +299,7 @@ def profile_tables(session, tables: List[TableRef], concurrency_limit: int = DEF
                    column_rules: Optional[Callable[[TableRef], Dict[str, Dict[str, Any]]]] = None,
                    ) -> Dict[TableKey, TableProfile]:
     """Profile N tables: fresh cached documents are reused, the rest are computed `concurrency_limit`
-    tables at a time, enriched, written to @METADATA.PROFILES_STAGE and upserted into the index. `column_rules`
+    tables at a time, enriched, written to @CORE.PROFILES_STAGE and upserted into the index. `column_rules`
     gives the reviewer-accepted COLUMN_RULEs of a table (by column name); they override the rule result before the
     document is written, so the shared profile documents agree with what reviewers decided."""
     ensure_active(session)
@@ -338,7 +338,7 @@ def profile_tables(session, tables: List[TableRef], concurrency_limit: int = DEF
                 _write_document(session, ref.stage_path, doc)
                 _upsert_index(session, ref, doc, run_id)
                 result.persisted = True
-                catalog_profiles.record(session, ref.key, doc, run_id)  # GOVERNANCE.DATA_PROFILES; never raises
+                catalog_profiles.record(session, ref.key, doc, run_id)  # CORE.DATA_PROFILES; never raises
             except Exception as exc:
                 result.persist_error = clip(exc, 300)
         out[ref.key] = result
@@ -355,17 +355,17 @@ def _run_tables(session, run_id: str) -> List[Dict[str, Any]]:
                L.LANDING_SCHEMA, L.LANDING_TABLE, L.ROW_COUNT,
                COALESCE(S.SOURCE_SYSTEM_NAME, L.SOURCE_SYSTEM_ID) AS SOURCE_SYSTEM_NAME,
                O.LAST_ALTERED
-          FROM SOURCE.LANDING_TABLE_REGISTRY L
-          LEFT JOIN SOURCE.SOURCE_REGISTRY S ON S.SOURCE_SYSTEM_ID = L.SOURCE_SYSTEM_ID
+          FROM CORE.LANDING_TABLE_REGISTRY L
+          LEFT JOIN CORE.SOURCE_REGISTRY S ON S.SOURCE_SYSTEM_ID = L.SOURCE_SYSTEM_ID
           LEFT JOIN (SELECT RUN_ID, OBJECT_NAME, MAX(LAST_ALTERED)::VARCHAR AS LAST_ALTERED
-                       FROM SOURCE.SOURCE_OBJECT GROUP BY RUN_ID, OBJECT_NAME) O
+                       FROM CORE.SOURCE_OBJECT GROUP BY RUN_ID, OBJECT_NAME) O
                  ON O.RUN_ID = L.RUN_ID AND O.OBJECT_NAME = L.SOURCE_TABLE
          WHERE L.RUN_ID = ? AND L.INGESTION_STATUS = 'COMPLETE'
        QUALIFY ROW_NUMBER() OVER (PARTITION BY L.SOURCE_TABLE ORDER BY L.CREATED_AT DESC) = 1
          ORDER BY L.SOURCE_TABLE""", [run_id])
     for t in tables:
         t["COLUMNS"] = rows(session, """
-            SELECT LANDING_COLUMN_ID, COLUMN_NAME, DATA_TYPE FROM SOURCE.LANDING_COLUMN_REGISTRY
+            SELECT LANDING_COLUMN_ID, COLUMN_NAME, DATA_TYPE FROM CORE.LANDING_COLUMN_REGISTRY
              WHERE LANDING_ID = ? ORDER BY ORDINAL_POSITION""", [t["LANDING_ID"]])
         t["REF"] = TableRef(
             source_name=t["SOURCE_SYSTEM_NAME"], database=t["SOURCE_DATABASE"], schema=t["SOURCE_SCHEMA"],
@@ -411,7 +411,7 @@ def _foreign_keys(session, tables: List[Dict[str, Any]], profiles: Dict[str, Lis
 def _column_rules(session, run_id: str, source_table: str) -> Dict[str, Dict[str, Any]]:
     """Accepted COLUMN_RULE knowledge for this run's source table (same source system), by column name."""
     try:
-        found = rows(session, """SELECT K.KNOWLEDGE_ID, K.CONTENT_JSON FROM KNOWLEDGE.DOMAIN_KNOWLEDGE K
+        found = rows(session, """SELECT K.KNOWLEDGE_ID, K.CONTENT_JSON FROM CORE.DOMAIN_KNOWLEDGE K
                                    JOIN CORE.WORKFLOW_RUN R ON R.RUN_ID = ?
                                   WHERE K.IS_CURRENT AND K.STATUS = 'ACTIVE' AND K.KNOWLEDGE_TYPE = 'COLUMN_RULE'
                                     AND K.CONTENT_JSON:source_system_id::STRING = R.SOURCE_SYSTEM_ID
@@ -434,7 +434,7 @@ def _column_rules(session, run_id: str, source_table: str) -> Dict[str, Dict[str
 def _source_column_rules(session, source_system_id: str, source_table: str) -> Dict[str, Dict[str, Any]]:
     """Accepted COLUMN_RULE knowledge for one source system's table, by column name (no run needed)."""
     try:
-        found = rows(session, """SELECT CONTENT_JSON FROM KNOWLEDGE.DOMAIN_KNOWLEDGE
+        found = rows(session, """SELECT CONTENT_JSON FROM CORE.DOMAIN_KNOWLEDGE
                                   WHERE IS_CURRENT AND STATUS = 'ACTIVE' AND KNOWLEDGE_TYPE = 'COLUMN_RULE'
                                     AND CONTENT_JSON:source_system_id::STRING = ?
                                     AND UPPER(CONTENT_JSON:source_table::STRING) = UPPER(?)""",
@@ -452,12 +452,12 @@ def _source_column_rules(session, source_system_id: str, source_table: str) -> D
 def _store(session, run_id: str, table: Dict[str, Any], profiles: List[Dict[str, Any]], model: Optional[str],
            cache: str) -> None:
     profiler.apply_column_rules(profiles, _column_rules(session, run_id, table["SOURCE_TABLE"]))
-    version = (scalar(session, "SELECT MAX(PROFILE_VERSION) FROM PROFILE.PROFILE_REGISTRY WHERE RUN_ID = ? "
+    version = (scalar(session, "SELECT MAX(PROFILE_VERSION) FROM CORE.PROFILE_REGISTRY WHERE RUN_ID = ? "
                                "AND SOURCE_TABLE_ID = ?", [run_id, table["LANDING_ID"]]) or 0) + 1
-    session.sql("UPDATE PROFILE.PROFILE_REGISTRY SET IS_CURRENT = FALSE WHERE RUN_ID = ? AND SOURCE_TABLE_ID = ?",
+    session.sql("UPDATE CORE.PROFILE_REGISTRY SET IS_CURRENT = FALSE WHERE RUN_ID = ? AND SOURCE_TABLE_ID = ?",
                 params=[run_id, table["LANDING_ID"]]).collect()
     insert_rows(
-        session, "PROFILE.PROFILE_REGISTRY",
+        session, "CORE.PROFILE_REGISTRY",
         ["PROFILE_ID", "RUN_ID", "SOURCE_TABLE_ID", "SOURCE_COLUMN_ID", "TABLE_NAME", "COLUMN_NAME", "DATA_TYPE",
          "PROFILE_VERSION", "IS_CURRENT", "ROW_COUNT", "NULL_COUNT", "NULL_PERCENTAGE", "DISTINCT_COUNT",
          "DISTINCT_PERCENTAGE", "CARDINALITY", "MIN_VALUE", "MAX_VALUE", "PATTERN_JSON", "SAMPLE_VALUES",
@@ -560,7 +560,7 @@ def refresh_table_profile(session, run_id: str, source_table: str) -> Dict[str, 
                                          run_standard(run))
         table = target[0]
         result = results[table["REF"].key]
-        profiled = scalar(session, "SELECT COUNT(*) FROM PROFILE.PROFILE_REGISTRY WHERE RUN_ID = ? AND SOURCE_TABLE_ID = ?",
+        profiled = scalar(session, "SELECT COUNT(*) FROM CORE.PROFILE_REGISTRY WHERE RUN_ID = ? AND SOURCE_TABLE_ID = ?",
                           [run_id, table["LANDING_ID"]])
         if profiled:
             _store(session, run_id, table, profiles[table["LANDING_ID"]], result.model, "REFRESHED")
@@ -585,7 +585,7 @@ def source_table_refs(session, source_id: str,
     from services.source.identifiers import format_data_type
 
     found = rows(session, "SELECT SOURCE_SYSTEM_ID, SOURCE_SYSTEM_NAME, SOURCE_TYPE, CONFIGURATION_JSON "
-                          "FROM SOURCE.SOURCE_REGISTRY WHERE SOURCE_SYSTEM_ID = ? AND ACTIVE_FLAG", [source_id])
+                          "FROM CORE.SOURCE_REGISTRY WHERE SOURCE_SYSTEM_ID = ? AND ACTIVE_FLAG", [source_id])
     assert found, f"source {source_id} not found"
     source = found[0]
     config = variant(source["CONFIGURATION_JSON"]) or {}
@@ -608,7 +608,7 @@ def source_table_refs(session, source_id: str,
 
 def profile_source_tables(session, source_id: str, payload_json: str) -> Dict[str, Any]:
     """Profile selected tables of a registered source in place: read-only queries against the source, results
-    written only to @METADATA.PROFILES_STAGE and METADATA.TABLE_PROFILES. Nothing is copied."""
+    written only to @CORE.PROFILES_STAGE and CORE.TABLE_PROFILES. Nothing is copied."""
     payload = json.loads(payload_json or "{}")
     tables = payload.get("tables") or []
     assert isinstance(tables, list) and tables and all(isinstance(t, str) for t in tables), \

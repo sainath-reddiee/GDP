@@ -80,7 +80,7 @@ def relevant(session, domain_id: Optional[str], types: Sequence[str], *, target_
     layer = "SILVER" if layer == "ANY" else layer   # outside a run, the default pipeline's view
 
     sql = f"""SELECT K.KNOWLEDGE_ID, K.KNOWLEDGE_TYPE, K.TITLE, K.CONTENT, K.CONTENT_JSON{{outcome}}
-                FROM KNOWLEDGE.DOMAIN_KNOWLEDGE K{{join}}
+                FROM CORE.DOMAIN_KNOWLEDGE K{{join}}
                WHERE K.DOMAIN_ID = ? AND K.IS_CURRENT AND COALESCE(K.STATUS, 'ACTIVE') = 'ACTIVE'
                  AND K.KNOWLEDGE_TYPE IN ({', '.join(['?'] * len(types))}) AND {NOT_OPERATIONAL_SQL.replace("SOURCE_REFERENCE", "K.SOURCE_REFERENCE")}
                  AND {layer_sql("K.")}
@@ -90,7 +90,7 @@ def relevant(session, domain_id: Optional[str], types: Sequence[str], *, target_
             outcome=", O.HELPFULNESS, O.OBSERVED",
             join=f""" LEFT JOIN (SELECT LINEAGE_ID, SUM(OBSERVED) AS OBSERVED,
                                        (SUM(ACCEPTED) + SUM(CORRECTED) / 2 + 1) / (SUM(OBSERVED) + 2) AS HELPFULNESS
-                                  FROM KNOWLEDGE.KNOWLEDGE_OUTCOME {"WHERE STAGE = ?" if stage else ""} GROUP BY 1) O
+                                  FROM CORE.KNOWLEDGE_OUTCOME {"WHERE STAGE = ?" if stage else ""} GROUP BY 1) O
                              ON O.LINEAGE_ID = K.LINEAGE_ID"""), [*([stage] if stage else []), domain_id, *types, layer])
     except Exception:
         found = rows(session, sql.format(outcome="", join=""), [domain_id, *types, layer])

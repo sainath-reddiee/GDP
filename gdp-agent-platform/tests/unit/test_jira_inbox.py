@@ -176,8 +176,8 @@ def test_jira_errors_map_bad_jql_and_rate_limits(api):
 def test_search_pages_with_linked_counts_and_saved_filter(api):
     client = Jira(search_page=lambda jql, token, n: {"issues": [issue("QA-1"), issue("QA-2")], "next": "n2"})
     module = api(client)
-    db = Db({"COUNT(*) AS N FROM JIRA.ISSUE_LINK": [{"issue_key": "QA-2", "n": 3}],
-             "FROM JIRA.SAVED_FILTER": [{"filter_id": "f1", "user_name": "BOB", "name": "Shared", "jql": "project = QA", "shared": True}]})
+    db = Db({"COUNT(*) AS N FROM CORE.ISSUE_LINK": [{"issue_key": "QA-2", "n": 3}],
+             "FROM CORE.SAVED_FILTER": [{"filter_id": "f1", "user_name": "BOB", "name": "Shared", "jql": "project = QA", "shared": True}]})
     out = module.search(jql="", next_token=None, max_results=500, filter_id=None, db=db)
     assert out["next"] == "n2" and [i["linked"] for i in out["issues"]] == [0, 3] and out["issues"][0]["status"] == "To Do"
     jql, token, size = client.calls[0][1]
@@ -204,7 +204,7 @@ def test_validate_jql(api):
 
 def test_filters_crud_and_owner_check(api):
     module = api(Jira(parse_jql=lambda jql: ["bad"] if "foo" in jql else []))
-    db = Db({"FROM JIRA.SAVED_FILTER\n": [{"filter_id": "f1", "user_name": "ANA", "name": "Mine", "jql": "a", "shared": False},
+    db = Db({"FROM CORE.SAVED_FILTER\n": [{"filter_id": "f1", "user_name": "ANA", "name": "Mine", "jql": "a", "shared": False},
                                           {"filter_id": "f2", "user_name": "BOB", "name": "Team", "jql": "b", "shared": True}]})
     listed = module.filters(db=db)["filters"]
     assert [(f["filter_id"], f["mine"], f["owner"]) for f in listed] == [("f1", True, "ANA"), ("f2", False, "BOB")]
@@ -250,8 +250,8 @@ RESULT = {"test_id": "t1", "title": "No null keys", "outcome": "FAIL", "rows_ret
 
 
 def bug_db(**answers):
-    base = {"FROM KNOWLEDGE.TARGET_TABLE_REGISTRY": [TABLE], "FROM CONTRACT.QA_TEST_CASE": [TEST],
-            "SELECT RESULT_ID FROM QUALITY.QA_RESULT": [{"result_id": "r1"}]}
+    base = {"FROM CORE.TARGET_TABLE_REGISTRY": [TABLE], "FROM CORE.QA_TEST_CASE": [TEST],
+            "SELECT RESULT_ID FROM CORE.QA_RESULT": [{"result_id": "r1"}]}
     return Db({**answers, **base})
 
 
@@ -291,9 +291,9 @@ def test_bug_level_3_label_search_finds_an_open_bug_and_links_it(api, results):
     assert label.startswith("gdp-qa-") and len(label) == 15 and f'labels = "{label}"' in client.calls[0][1][0]
     assert "statusCategory != Done" in client.calls[0][1][0]
     assert not any(name == "create_issue" for name, _ in client.calls)
-    link = [s for s, _ in db.executed if "MERGE INTO JIRA.ISSUE_LINK" in s][0]
+    link = [s for s, _ in db.executed if "MERGE INTO CORE.ISSUE_LINK" in s][0]
     assert "ORIGIN" in link and "SOURCE_RESULT_ID" in link and "TARGET_TABLE_ID" in link and "DOMAIN_ID" in link
-    logged = [p for s, p in db.executed if "INTO JIRA.ACTION_LOG" in s and "IDEMPOTENCY_KEY" in s]
+    logged = [p for s, p in db.executed if "INTO CORE.ACTION_LOG" in s and "IDEMPOTENCY_KEY" in s]
     assert logged and logged[0][-1] == "click-0001"
 
 
@@ -362,10 +362,10 @@ def test_bulk_transition_by_name_and_limits(api):
 def test_bulk_link_records_table_links(api):
     client = Jira(issue=lambda key: issue(key))
     module = api(client)
-    db = Db({"FROM KNOWLEDGE.TARGET_TABLE_REGISTRY": [TABLE]})
+    db = Db({"FROM CORE.TARGET_TABLE_REGISTRY": [TABLE]})
     out = module.bulk(module.BulkIn(action="link", keys=["QA-1", "QA-2"], link={"target_table_id": "tt1"}), db=db)["results"]
     assert all(r["ok"] for r in out)
-    inserts = db.wrote("MERGE INTO JIRA.ISSUE_LINK")
+    inserts = db.wrote("MERGE INTO CORE.ISSUE_LINK")
     assert len(inserts) == 2 and "tt1" in inserts[0] and "DB.S.ORDERS" in inserts[0]
 
 

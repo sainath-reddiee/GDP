@@ -197,7 +197,7 @@ def merge(execute: Callable[..., Any], database: str, data: Dict[str, Any], orig
     if query and data["domains"]:
         ids = [row[0] for row in data["domains"]]
         found = query(f"SELECT DOMAIN_ID, DESCRIPTION, OWNER, ACTIVE_FLAG, VERSION, CONFIG "
-                      f"FROM {database}.KNOWLEDGE.DOMAIN_REGISTRY WHERE DOMAIN_ID IN ({', '.join(['%s'] * len(ids))})",
+                      f"FROM {database}.CORE.DOMAIN_REGISTRY WHERE DOMAIN_ID IN ({', '.join(['%s'] * len(ids))})",
                       tuple(ids)) or []
         for r in found:
             upper = {str(k).upper(): v for k, v in r.items()}
@@ -205,7 +205,7 @@ def merge(execute: Callable[..., Any], database: str, data: Dict[str, Any], orig
     for row in data["domains"]:
         values = domain_values(current.get(row[0]), row, origin)
         execute(
-            f"""MERGE INTO {database}.KNOWLEDGE.DOMAIN_REGISTRY t
+            f"""MERGE INTO {database}.CORE.DOMAIN_REGISTRY t
                 USING (SELECT %s AS DOMAIN_ID, %s AS DOMAIN_NAME, %s AS DESCRIPTION, %s AS OWNER,
                               %s AS ACTIVE_FLAG, %s AS VERSION, PARSE_JSON(%s) AS CONFIG) s
                    ON t.DOMAIN_ID = s.DOMAIN_ID
@@ -219,7 +219,7 @@ def merge(execute: Callable[..., Any], database: str, data: Dict[str, Any], orig
         )
     for row in data["tables"]:
         execute(
-            f"""MERGE INTO {database}.KNOWLEDGE.TARGET_TABLE_REGISTRY t
+            f"""MERGE INTO {database}.CORE.TARGET_TABLE_REGISTRY t
                 USING (SELECT %s AS TARGET_TABLE_ID, %s AS DOMAIN_ID, %s AS TARGET_DATABASE,
                               %s AS TARGET_SCHEMA, %s AS TARGET_TABLE, %s AS TABLE_TYPE, %s AS GRAIN,
                               PARSE_JSON(%s) AS BUSINESS_KEYS, %s AS SCD_TYPE, %s AS DESCRIPTION,
@@ -240,7 +240,7 @@ def merge(execute: Callable[..., Any], database: str, data: Dict[str, Any], orig
         )
     for row in data["columns"]:
         execute(
-            f"""MERGE INTO {database}.KNOWLEDGE.TARGET_COLUMN_REGISTRY t
+            f"""MERGE INTO {database}.CORE.TARGET_COLUMN_REGISTRY t
                 USING (SELECT %s AS TARGET_COLUMN_ID, %s AS TARGET_TABLE_ID, %s AS COLUMN_NAME, %s AS DATA_TYPE,
                               %s AS ORDINAL_POSITION, %s AS NULLABLE, %s AS BUSINESS_DEFINITION,
                               %s AS SEMANTIC_TYPE, %s AS IS_BUSINESS_KEY, %s AS IS_PII,
@@ -267,13 +267,13 @@ def merge(execute: Callable[..., Any], database: str, data: Dict[str, Any], orig
         kept.setdefault(row[1], []).append(str(row[2]).upper())
     for tid, names in kept.items():
         execute(
-            f"""DELETE FROM {database}.KNOWLEDGE.TARGET_COLUMN_REGISTRY WHERE TARGET_TABLE_ID = %s
+            f"""DELETE FROM {database}.CORE.TARGET_COLUMN_REGISTRY WHERE TARGET_TABLE_ID = %s
                    AND UPPER(COLUMN_NAME) NOT IN ({", ".join(["%s"] * len(names))})""",
             (tid, *names),
         )
     for row in data["knowledge"]:
         execute(
-            f"""MERGE INTO {database}.KNOWLEDGE.DOMAIN_KNOWLEDGE t
+            f"""MERGE INTO {database}.CORE.DOMAIN_KNOWLEDGE t
                 USING (SELECT %s AS KNOWLEDGE_ID, %s AS DOMAIN_ID, %s AS KNOWLEDGE_TYPE, %s AS TITLE,
                               %s AS CONTENT, PARSE_JSON(NULLIF(%s, '')) AS CONTENT_JSON,
                               PARSE_JSON(%s) AS TAGS, %s AS SOURCE_REFERENCE, %s AS STATUS,
@@ -343,7 +343,7 @@ def existing_domain_id(query: Optional[Callable[..., List[Dict[str, Any]]]], dat
     """DOMAIN_ID already registered under this name (case-insensitive), if any. `query` uses %s binds."""
     if query is None:
         return None
-    found = query(f"""SELECT DOMAIN_ID FROM {database}.KNOWLEDGE.DOMAIN_REGISTRY WHERE UPPER(DOMAIN_NAME) = UPPER(%s)
+    found = query(f"""SELECT DOMAIN_ID FROM {database}.CORE.DOMAIN_REGISTRY WHERE UPPER(DOMAIN_NAME) = UPPER(%s)
                       ORDER BY CREATED_AT LIMIT 1""", (name,))
     if not found:
         return None
@@ -374,16 +374,16 @@ def export_pack(query: Callable[..., List[Dict[str, Any]]], domain: str) -> Dict
     def js(v):
         return json.loads(v) if isinstance(v, str) and v[:1] in "[{" else v
 
-    found = [low(r) for r in query("SELECT * FROM KNOWLEDGE.DOMAIN_REGISTRY WHERE DOMAIN_ID = %s", (domain,))]
+    found = [low(r) for r in query("SELECT * FROM CORE.DOMAIN_REGISTRY WHERE DOMAIN_ID = %s", (domain,))]
     assert found, "domain not found"
     d = found[0]
     config = {k: v for k, v in (js(d.get("config")) or {}).items() if k != SEEDED}  # the deploy's record is not pack data
     pack: Dict[str, Any] = {"domain": {"name": d["domain_name"], "description": d.get("description") or "",
                                        "owner": d.get("owner") or "", **config}, "targets": [], "knowledge": []}
-    tables = [low(r) for r in query("SELECT * FROM KNOWLEDGE.TARGET_TABLE_REGISTRY WHERE DOMAIN_ID = %s "
+    tables = [low(r) for r in query("SELECT * FROM CORE.TARGET_TABLE_REGISTRY WHERE DOMAIN_ID = %s "
                                     "ORDER BY TARGET_TABLE", (domain,))]
     for t in tables:
-        cols = [low(r) for r in query("SELECT * FROM KNOWLEDGE.TARGET_COLUMN_REGISTRY WHERE TARGET_TABLE_ID = %s "
+        cols = [low(r) for r in query("SELECT * FROM CORE.TARGET_COLUMN_REGISTRY WHERE TARGET_TABLE_ID = %s "
                                       "ORDER BY ORDINAL_POSITION", (t["target_table_id"],))]
         pack["targets"].append({
             "schema": t["target_schema"], "table": t["target_table"], "table_type": t.get("table_type"),
@@ -393,7 +393,7 @@ def export_pack(query: Callable[..., List[Dict[str, Any]]], domain: str) -> Dict
                          "definition": c.get("business_definition"), "semantic_type": c.get("semantic_type"),
                          "business_key": bool(c.get("is_business_key")), "pii": bool(c.get("is_pii")),
                          "accepted_values": js(c.get("accepted_values")) or []} for c in cols]})
-    for k in [low(r) for r in query("SELECT * FROM KNOWLEDGE.DOMAIN_KNOWLEDGE WHERE DOMAIN_ID = %s AND IS_CURRENT "
+    for k in [low(r) for r in query("SELECT * FROM CORE.DOMAIN_KNOWLEDGE WHERE DOMAIN_ID = %s AND IS_CURRENT "
                                     "AND STATUS = 'ACTIVE' ORDER BY SOURCE_REFERENCE", (domain,))]:
         pack["knowledge"].append({"key": k.get("source_reference") or k["knowledge_id"], "type": k["knowledge_type"],
                                   "title": k.get("title"), "content": k.get("content"),

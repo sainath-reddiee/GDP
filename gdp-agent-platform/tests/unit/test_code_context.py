@@ -135,7 +135,7 @@ def test_code_context_with_fake_rows_and_search():
 
     def rows(sql, params):
         calls.append(sql)
-        if "FROM CODE.REPO" in sql:
+        if "FROM CORE.REPO" in sql:
             return [{"REPO_ID": "r1", "NAME": "shop", "DOMAIN_IDS": json.dumps([])},
                     {"REPO_ID": "r2", "NAME": "other", "DOMAIN_IDS": json.dumps(["d9"])}]
         if "UPPER(C.NAME) IN" in sql:
@@ -264,7 +264,7 @@ class _RepoDb:
         self.repo, self.executed = repo, []
 
     def query(self, sql, params=()):
-        if "FROM CODE.REPO WHERE REPO_ID" in sql:
+        if "FROM CORE.REPO WHERE REPO_ID" in sql:
             return [dict(self.repo)]
         if sql.startswith("SHOW GIT BRANCHES"):
             return [{"name": "main", "commit_hash": "a" * 40}, {"name": "feat/x", "commit_hash": "b" * 40}]
@@ -302,7 +302,7 @@ def test_branch_switch_rebuilds_and_unknown_branch_is_refused(monkeypatch):
     monkeypatch.setattr(api, "_start_refresh", lambda db, rid: started.append(rid))
     db = _RepoDb(_repo_row())
     api.update_repo("r1", api.RepoUpdate(branch="feat/x"), db=db)
-    assert any("DELETE FROM CODE.CODE_CHUNK" in s for s in db.executed) and started == ["r1"]
+    assert any("DELETE FROM CORE.CODE_CHUNK" in s for s in db.executed) and started == ["r1"]
     with pytest.raises(HTTPException) as err:
         api.update_repo("r1", api.RepoUpdate(branch="gone"), db=_RepoDb(_repo_row()))
     assert err.value.status_code == 400 and "main" in err.value.detail

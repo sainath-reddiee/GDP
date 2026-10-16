@@ -64,7 +64,7 @@ def spec():
 def test_schedule_sql_validates_and_names_the_task():
     sid = str(uuid.uuid4())
     task, stmts = po.schedule_sql("AIP", sid, "0 5 * * * UTC", "WH")
-    assert task == f"AIP.PROFILE.{po.task_name(sid)}" and "USING CRON 0 5 * * * UTC" in stmts[0]
+    assert task == f"AIP.CORE.{po.task_name(sid)}" and "USING CRON 0 5 * * * UTC" in stmts[0]
     assert f"RUN_SCHEDULED_PROFILE('{sid}')" in stmts[0] and stmts[1].endswith("RESUME")
     for bad in [("AIP;DROP", sid, "0 5 * * *", "WH"), ("AIP", sid, "whenever", "WH"), ("AIP", "x'); DROP", "0 5 * * *", "WH")]:
         with pytest.raises((AssertionError, ValueError)):
@@ -116,19 +116,19 @@ def pending(proposed_by="BEN", column="EMAIL", **fields):
 
 
 def test_propose_replaces_an_older_pending_one():
-    s = Session({"FROM GOVERNANCE.DATA_PROFILES": [{"DESCRIPTION": None, "PII_CLASSIFICATION": "NONE", "SEMANTIC_TYPE": "EMAIL"}]})
+    s = Session({"FROM CORE.DATA_PROFILES": [{"DESCRIPTION": None, "PII_CLASSIFICATION": "NONE", "SEMANTIC_TYPE": "EMAIL"}]})
     out = po.propose(s, json.dumps({"table": "silver.sales.customer", "column": "email", "pii_classification": "PII",
                                     "description": "Where we send invoices"}), "ana")
     assert out["table"] == TABLE and out["column"] == "EMAIL" and out["status"] == "PROPOSED"
     assert s.find("SET STATUS = 'WITHDRAWN'")[0][1] == ["ANA", TABLE, "EMAIL"]
-    row = s.find("INSERT INTO GOVERNANCE.PROFILE_ANNOTATION")[0][1]
+    row = s.find("INSERT INTO CORE.PROFILE_ANNOTATION")[0][1]
     assert row[3] == "Where we send invoices" and row[5] == "PII" and json.loads(row[8])["semantic_type"] == "EMAIL"
     with pytest.raises(AssertionError):
         po.propose(Session(), json.dumps({"table": TABLE, "column": "EMAIL"}), "ana")
 
 
 def test_approve_is_four_eyes_and_proposes_to_the_model(monkeypatch):
-    s = Session({"FROM GOVERNANCE.PROFILE_ANNOTATION WHERE ANNOTATION_ID": [pending(description="Invoice email", pii="PII")]})
+    s = Session({"FROM CORE.PROFILE_ANNOTATION WHERE ANNOTATION_ID": [pending(description="Invoice email", pii="PII")]})
     with pytest.raises(AssertionError, match="your own"):
         po.approve(s, "a1", "ben")
     monkeypatch.setattr(po, "_model_entity", lambda session, table: {
@@ -136,7 +136,7 @@ def test_approve_is_four_eyes_and_proposes_to_the_model(monkeypatch):
     out = po.approve(s, "a1", "lee", "agreed")
     assert out["status"] == "APPROVED" and out["model"]["change_id"] and out["model"]["counts"]["NON_FUNCTIONAL"] >= 1
     assert s.find("SET STATUS = 'SUPERSEDED'")[0][1] == [TABLE, "EMAIL"]
-    change = s.find("INSERT INTO GOVERNANCE.MODEL_CHANGE")[0][1]
+    change = s.find("INSERT INTO CORE.MODEL_CHANGE")[0][1]
     assert change[1] == "m1" and change[3] == "CUSTOMER" and change[8] == "a1"
     patch = json.loads(change[9])
     assert patch == {"entity": "CUSTOMER", "column": "EMAIL",
@@ -145,19 +145,19 @@ def test_approve_is_four_eyes_and_proposes_to_the_model(monkeypatch):
 
 
 def test_approve_without_a_model_or_on_a_retired_column(monkeypatch):
-    s = Session({"FROM GOVERNANCE.PROFILE_ANNOTATION WHERE ANNOTATION_ID": [pending(description="x")]})
+    s = Session({"FROM CORE.PROFILE_ANNOTATION WHERE ANNOTATION_ID": [pending(description="x")]})
     monkeypatch.setattr(po, "_model_entity", lambda session, table: None)
-    assert po.approve(s, "a1", "lee")["model"] is None and not s.find("INSERT INTO GOVERNANCE.MODEL_CHANGE")
+    assert po.approve(s, "a1", "lee")["model"] is None and not s.find("INSERT INTO CORE.MODEL_CHANGE")
     from services.catalog import dq_suite
-    s = Session({"FROM GOVERNANCE.PROFILE_ANNOTATION WHERE ANNOTATION_ID": [pending(column="FAX", description="x")]})
+    s = Session({"FROM CORE.PROFILE_ANNOTATION WHERE ANNOTATION_ID": [pending(column="FAX", description="x")]})
     monkeypatch.setattr(po, "_model_entity", lambda session, table: {"model_id": "m1", "version": 3, "spec": spec(),
                                                                       **dq_suite.model_for_table(spec(), TABLE)})
     out = po.approve(s, "a1", "lee")
-    assert "not an active column" in out["model"]["skipped"] and not s.find("INSERT INTO GOVERNANCE.MODEL_CHANGE")
+    assert "not an active column" in out["model"]["skipped"] and not s.find("INSERT INTO CORE.MODEL_CHANGE")
 
 
 def test_reject_and_withdraw_rules():
-    s = Session({"FROM GOVERNANCE.PROFILE_ANNOTATION WHERE ANNOTATION_ID": [pending()]})
+    s = Session({"FROM CORE.PROFILE_ANNOTATION WHERE ANNOTATION_ID": [pending()]})
     with pytest.raises(AssertionError, match="withdraw it instead"):
         po.reject(s, "a1", "ben", "no")
     with pytest.raises(AssertionError, match="say why"):
@@ -185,7 +185,7 @@ def test_merge_change_applies_an_annotation_patch_to_the_draft(monkeypatch):
     monkeypatch.setattr(domain_model, "get_model", lambda session, mid: {"open": {"version": 4, "status": "DRAFT", "etag": "e"}})
     monkeypatch.setattr(domain_model, "_spec", lambda session, mid, v: draft)
     monkeypatch.setattr(domain_model, "save_draft", lambda session, mid, payload, user: saved.update(json.loads(payload)) or {"etag": "e2", "counts": {}})
-    s = Session({"SELECT STATUS, PROPOSED_ENTITIES, PATCH FROM GOVERNANCE.MODEL_CHANGE": [
+    s = Session({"SELECT STATUS, PROPOSED_ENTITIES, PATCH FROM CORE.MODEL_CHANGE": [
         {"STATUS": "PROPOSED", "PROPOSED_ENTITIES": "[]",
          "PATCH": json.dumps({"entity": "CUSTOMER", "column": "EMAIL", "set": {"pii": {"flag": True, "classification": "PII"}}})}]})
     out = run_link.merge_change(s, "m1", "c1", "ana")
@@ -201,12 +201,12 @@ def test_run_scheduled_records_outcome_and_drift(monkeypatch):
     monkeypatch.setattr(procs, "profile_source_tables", lambda session, sid, payload: {
         "profiled": ["CUSTOMERS"], "cached": ["ORDERS"], "failed": []})
     monkeypatch.setattr(po, "_drifted", lambda session, db, schema, tables: [{"table": "CUSTOMERS", "columns": {"EMAIL": ["nulls 1.0% -> 20.0%"]}}])
-    s = Session({"FROM GOVERNANCE.PROFILE_SCHEDULE WHERE SCHEDULE_ID": [
+    s = Session({"FROM CORE.PROFILE_SCHEDULE WHERE SCHEDULE_ID": [
         {"SOURCE_SYSTEM_ID": "src", "DATABASE_NAME": "RAW", "SCHEMA_NAME": "CRM", "TABLES": '["CUSTOMERS", "ORDERS"]',
          "FORCE_REFRESH": False, "ENABLED": True}]})
     out = po.run_scheduled(s, "s1")
     assert out == {"schedule_id": "s1", "status": "OK", "profiled": 1, "cached": 1, "failed": 0, "drifted": 1}
-    upd = s.find("UPDATE GOVERNANCE.PROFILE_SCHEDULE SET LAST_RUN_AT")[0][1]
+    upd = s.find("UPDATE CORE.PROFILE_SCHEDULE SET LAST_RUN_AT")[0][1]
     assert upd[0] == "OK" and json.loads(upd[1])["drifted"][0]["table"] == "CUSTOMERS"
 
     def boom(*a, **k):
@@ -250,7 +250,7 @@ def client(monkeypatch):
                 pid = params[0]
                 return [{"column_name": "ID", "data_type": "NUMBER", "null_pct": 0, "distinct_count": 100 if pid == "p1" else 120,
                          "row_count": 100 if pid == "p1" else 120, "top_values": None, "histogram": None}]
-            if "SELECT TASK_NAME FROM GOVERNANCE.PROFILE_SCHEDULE" in sql:
+            if "SELECT TASK_NAME FROM CORE.PROFILE_SCHEDULE" in sql:
                 return [{"task_name": f"{main.DATABASE}.PROFILE.PROF_X"}]
             return []
 

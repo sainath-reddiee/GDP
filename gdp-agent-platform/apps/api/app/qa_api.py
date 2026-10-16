@@ -228,12 +228,12 @@ class ResolveIn(BaseModel):
 
 def _ticket_links(db: Db, key: str) -> list[dict]:
     try:
-        return db.query("""SELECT RUN_ID, TARGET_TABLE, TARGET_TABLE_ID, SUITE_ID, QA_TEST_ID FROM JIRA.ISSUE_LINK
+        return db.query("""SELECT RUN_ID, TARGET_TABLE, TARGET_TABLE_ID, SUITE_ID, QA_TEST_ID FROM CORE.ISSUE_LINK
                             WHERE ISSUE_KEY = %s AND NOT IS_DELETED""", (key,))
     except Exception as exc:
         if "invalid identifier" not in str(exc).lower():
             raise _snowflake_error(exc) from exc
-        return db.query("SELECT RUN_ID, TARGET_TABLE, QA_TEST_ID FROM JIRA.ISSUE_LINK WHERE ISSUE_KEY = %s AND NOT IS_DELETED", (key,))
+        return db.query("SELECT RUN_ID, TARGET_TABLE, QA_TEST_ID FROM CORE.ISSUE_LINK WHERE ISSUE_KEY = %s AND NOT IS_DELETED", (key,))
 
 
 @router.post("/api/qa/triage/resolve")
@@ -246,7 +246,7 @@ def triage_resolve(body: ResolveIn, db: Db = Depends(current_db)):
     key = jira._key(body.key)
     info, payload = jira._issue_payload(client, conn, key)
     linked = [{k: v for k, v in r.items() if v} for r in _ticket_links(db, key)]
-    result = _proc(db, "CALL JIRA.RESOLVE_TARGETS(%s)", resolve_entry, json.dumps({"issue": payload, "linked": linked}, default=str)) or {}
+    result = _proc(db, "CALL CORE.RESOLVE_TARGETS(%s)", resolve_entry, json.dumps({"issue": payload, "linked": linked}, default=str)) or {}
     return {"key": key, "summary": info.get("summary") or "", "candidates": result.get("candidates") or [],
             "runs": result.get("runs") or [], "model": result.get("model")}
 
@@ -259,7 +259,7 @@ def table_triage(target_table_id: str, key: str, db: Db = Depends(current_db)):
     client, conn, _ = jira._client(db)
     info, payload = jira._issue_payload(client, conn, key)
     try:
-        result = _proc(db, "CALL JIRA.TRIAGE_TABLE(%s, %s)", triage_table_entry, target_table_id, json.dumps(payload, default=str))
+        result = _proc(db, "CALL CORE.TRIAGE_TABLE(%s, %s)", triage_table_entry, target_table_id, json.dumps(payload, default=str))
     except HTTPException as exc:
         jira._log(db, info["key"], "TRIAGE", "FAILED", conn["cloud_id"], None, {"target_table_id": target_table_id}, str(exc.detail)[:500])
         raise
@@ -281,7 +281,7 @@ class QaLinkIn(BaseModel):
 LINK_SQL = """SELECT L.LINK_ID, L.ISSUE_KEY, L.RUN_ID, L.TARGET_TABLE_ID, L.SUITE_ID, L.QA_TEST_ID, T.TITLE AS TEST_TITLE,
                      L.DOMAIN_ID, L.TARGET_TABLE, L.SUMMARY, L.STATUS, L.STATUS_CATEGORY, COALESCE(L.ORIGIN, 'LINK') AS ORIGIN,
                      COALESCE(L.ISSUE_STATE, 'OK') AS ISSUE_STATE, L.LINKED_BY, L.LINKED_AT::VARCHAR AS LINKED_AT
-                FROM JIRA.ISSUE_LINK L LEFT JOIN CONTRACT.QA_TEST_CASE T ON T.TEST_ID = L.QA_TEST_ID
+                FROM CORE.ISSUE_LINK L LEFT JOIN CORE.QA_TEST_CASE T ON T.TEST_ID = L.QA_TEST_ID
                WHERE NOT L.IS_DELETED AND {where}
                ORDER BY L.LINKED_AT DESC LIMIT 500"""
 
@@ -342,10 +342,10 @@ def links(target_table_id: Optional[str] = None, key: Optional[str] = None, db: 
 
 @router.delete("/api/qa/links/{link_id}")
 def link_delete(link_id: str, db: Db = Depends(current_db)):
-    found = db.query("SELECT ISSUE_KEY, CLOUD_ID, RUN_ID FROM JIRA.ISSUE_LINK WHERE LINK_ID = %s AND NOT IS_DELETED", (link_id,))
+    found = db.query("SELECT ISSUE_KEY, CLOUD_ID, RUN_ID FROM CORE.ISSUE_LINK WHERE LINK_ID = %s AND NOT IS_DELETED", (link_id,))
     if not found:
         raise HTTPException(404, "link not found")
-    db.execute("UPDATE JIRA.ISSUE_LINK SET IS_DELETED = TRUE WHERE LINK_ID = %s", (link_id,))
+    db.execute("UPDATE CORE.ISSUE_LINK SET IS_DELETED = TRUE WHERE LINK_ID = %s", (link_id,))
     jira._log(db, found[0]["issue_key"], "UNLINK", "DONE", found[0].get("cloud_id"), found[0].get("run_id"), {"link_id": link_id})
     return {"unlinked": link_id}
 
@@ -361,7 +361,7 @@ def _domain_id(db: Db, value: Optional[str]) -> Optional[str]:
         return None
     if UUID_LIKE.match(value):
         return value
-    found = db.query("SELECT DOMAIN_ID FROM KNOWLEDGE.DOMAIN_REGISTRY WHERE UPPER(DOMAIN_NAME) = UPPER(%s) LIMIT 1", (value,))
+    found = db.query("SELECT DOMAIN_ID FROM CORE.DOMAIN_REGISTRY WHERE UPPER(DOMAIN_NAME) = UPPER(%s) LIMIT 1", (value,))
     if not found:
         raise HTTPException(404, f"domain {value} not found")
     return found[0]["domain_id"]
@@ -415,10 +415,10 @@ def qa_packs(domain: Optional[str] = None, db: Db = Depends(current_db)):
 
 
 def _run_tests(db: Db, domain_id: Optional[str]) -> int:
-    """Tests saved in runs and tables (CONTRACT.QA_TEST_CASE), shown beside the domain packs."""
+    """Tests saved in runs and tables (CORE.QA_TEST_CASE), shown beside the domain packs."""
     clause = "AND (DOMAIN_ID = %s OR RUN_ID IN (SELECT RUN_ID FROM CORE.WORKFLOW_RUN WHERE DOMAIN_ID = %s))" if domain_id else ""
     try:
-        return int(db.query(f"SELECT COUNT(*) AS N FROM CONTRACT.QA_TEST_CASE WHERE NOT COALESCE(IS_DELETED, FALSE) {clause}",
+        return int(db.query(f"SELECT COUNT(*) AS N FROM CORE.QA_TEST_CASE WHERE NOT COALESCE(IS_DELETED, FALSE) {clause}",
                             (domain_id, domain_id) if domain_id else ())[0]["n"])
     except Exception:
         return 0
@@ -501,7 +501,7 @@ def qa_pack_file(pack_id: str, version: Optional[int] = None, db: Db = Depends(c
 @router.post("/api/qa/execute")
 def execute_qa(body: ExecuteIn, db: Db = Depends(current_db)):
     """Run a pack version (the approved one by default), some of its queries, or one ad-hoc query against Snowflake
-    with the caller's role. Pack runs are stored in QUALITY.QA_RUN / QA_RESULT (SCOPE 'DOMAIN')."""
+    with the caller's role. Pack runs are stored in CORE.QA_RUN / QA_RESULT (SCOPE 'DOMAIN')."""
     if not body.pack_id and not body.sql:
         raise HTTPException(400, "send a pack_id or a sql query")
     return _call(db, _svc("packs").execute, _domain_id(db, body.domain_id), body.pack_id, body.version, body.query_ids,
@@ -556,7 +556,7 @@ def qa_pack_publish(pack_id: str, body: PackPublishIn, db: Db = Depends(current_
     request = {"pack_id": pack_id, "version": int(version), "repo_id": body.repo_id, "head": head,
                "base": body.base or repo.get("branch")}
     try:
-        result = db.call("CALL CODEGEN.PUBLISH_DBT_PR(%s, %s)", ("", json.dumps({"qa_pack": request})))
+        result = db.call("CALL CORE.PUBLISH_DBT_PR(%s, %s)", ("", json.dumps({"qa_pack": request})))
     except Exception as exc:
         return {"status": "FAILED", "detail": str(exc)[:1000], "head_branch": head}
     return {**(result or {}), "head_branch": head}
@@ -573,7 +573,7 @@ def qa_pack_pr_sync(pack_id: str, body: PackSyncIn = PackSyncIn(), db: Db = Depe
     if not _github_publisher_ready(db):
         return {"checked": 0, "merged": [], "closed": [], "errors": [], "detail": "GitHub publishing is not set up"}
     try:
-        return db.call("CALL CODEGEN.PUBLISH_DBT_PR(%s, %s)",
+        return db.call("CALL CORE.PUBLISH_DBT_PR(%s, %s)",
                        ("", json.dumps({"sync_qa_prs": {"pack_id": pack_id, "force": body.force}}))) or {}
     except Exception as exc:
         raise _snowflake_error(exc) from exc

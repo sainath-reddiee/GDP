@@ -1,15 +1,15 @@
 """Domain access: who may see a domain's records (cases, packages, knowledge) and who stewards it.
 
-A domain is visible to a user when one of these holds (the same rule as the CASES.DOMAIN_SCOPE row access policy,
+A domain is visible to a user when one of these holds (the same rule as the CORE.DOMAIN_SCOPE row access policy,
 migration V034):
-- the domain is GENERAL (KNOWLEDGE.DOMAIN_REGISTRY.DOMAIN_NAME, upper case, as services.knowledge.procedures);
-- the user is a member of it (KNOWLEDGE.DOMAIN_MEMBER, any role: OWNER, STEWARD or EXPERT);
+- the domain is GENERAL (CORE.DOMAIN_REGISTRY.DOMAIN_NAME, upper case, as services.knowledge.procedures);
+- the user is a member of it (CORE.DOMAIN_MEMBER, any role: OWNER, STEWARD or EXPERT);
 - the domain has no members at all (nobody claimed it yet, so it stays open);
 - the user is an admin: the SUPER_ADMIN or PLATFORM_ADMIN app role, or the '*' privilege.
 A record without a domain (DOMAIN_ID NULL) is visible to everyone.
 
 Stewards of a domain are its OWNER and STEWARD members. A domain with none falls back to the DATA_STEWARD app role:
-stewards_for lists the users granted that role directly (GOVERNANCE.USER_ROLE, no inheritance: enough to name who to
+stewards_for lists the users granted that role directly (CORE.USER_ROLE, no inheritance: enough to name who to
 ask), while is_steward also accepts a caller whose effective roles (inheritance included) contain DATA_STEWARD.
 
 Membership and the registry are read with the API's Db (%s placeholders) and cached for 60 seconds, like governance.
@@ -62,12 +62,12 @@ def _model(db) -> Dict[str, Any]:
         names: Dict[str, str] = {}
         members: Dict[str, Dict[str, str]] = {}
         try:
-            for r in db.query("SELECT DOMAIN_ID, DOMAIN_NAME FROM KNOWLEDGE.DOMAIN_REGISTRY"):
+            for r in db.query("SELECT DOMAIN_ID, DOMAIN_NAME FROM CORE.DOMAIN_REGISTRY"):
                 names[str(r["domain_id"])] = str(r.get("domain_name") or "")
         except Exception:
             pass
         try:
-            for r in db.query("SELECT DOMAIN_ID, USER_NAME, ROLE FROM KNOWLEDGE.DOMAIN_MEMBER"):
+            for r in db.query("SELECT DOMAIN_ID, USER_NAME, ROLE FROM CORE.DOMAIN_MEMBER"):
                 users = members.setdefault(str(r["domain_id"]), {})
                 user, role = _up(r.get("user_name")), _up(r.get("role"))
                 if user and (user not in users or ROLE_RANK.get(role, 9) < ROLE_RANK.get(users[user], 9)):
@@ -93,7 +93,7 @@ def is_admin(privileges: Iterable[str] = (), roles: Iterable[str] = ()) -> bool:
 
 
 def session_platform_admin(db) -> bool:
-    """Whether the Snowflake session holds the PLATFORM_ADMIN database role, which the CASES.DOMAIN_SCOPE row policy
+    """Whether the Snowflake session holds the PLATFORM_ADMIN database role, which the CORE.DOMAIN_SCOPE row policy
     uses for its "see everything" branch. An app admin without it is still filtered by Snowflake, so the app applies
     the membership rules too instead of creating records the caller cannot read back."""
     key = f"pa:{getattr(db, 'user', '')}:{getattr(db, 'role', '')}"
@@ -154,7 +154,7 @@ def _role_holders(db, role: str) -> List[str]:
     def load():
         try:
             return sorted({_up(r["user_name"]) for r in db.query(
-                "SELECT USER_NAME FROM GOVERNANCE.USER_ROLE WHERE ROLE_NAME = %s", (role,)) if r.get("user_name")})
+                "SELECT USER_NAME FROM CORE.USER_ROLE WHERE ROLE_NAME = %s", (role,)) if r.get("user_name")})
         except Exception:
             return []
     return _cached(f"holders:{role}", load)
@@ -179,7 +179,7 @@ def direct_roles(db, user: str) -> List[str]:
     """App roles granted to the user directly (for checks about someone other than the caller)."""
     try:
         return sorted({_up(r["role_name"]) for r in db.query(
-            "SELECT ROLE_NAME FROM GOVERNANCE.USER_ROLE WHERE USER_NAME = %s", (_up(user),)) if r.get("role_name")})
+            "SELECT ROLE_NAME FROM CORE.USER_ROLE WHERE USER_NAME = %s", (_up(user),)) if r.get("role_name")})
     except Exception:
         return []
 

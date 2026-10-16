@@ -122,7 +122,7 @@ def test_source_tables_are_qualified_with_the_run_source():
 
 
 def test_roundtrip_knows_table_models():
-    assert roundtrip.KINDS["TABLE_MODEL"]["table"] == "GOVERNANCE.TABLE_MODEL_VERSION"
+    assert roundtrip.KINDS["TABLE_MODEL"]["table"] == "CORE.TABLE_MODEL_VERSION"
     assert roundtrip.link("TABLE_MODEL", "abc", 3) == "/dashboard/modeling/tables/abc?version=3"
     s = Session()
     roundtrip.apply_state(s, "TABLE_MODEL", "abc", 3, "MERGED", "sha")
@@ -140,8 +140,8 @@ def test_create_inserts_header_and_version_one():
     s = Session({"SELECT COUNT(*)": [{"C": 0}]})
     out = tm.create(s, {"table_name": "customer", "source_name": "crm", "spec": {"design": {"entities": [ENTITY]}}}, "ann")
     assert out["version"] == 1 and out["table_model_id"] == tm.table_model_id("CRM", "CUSTOMER")
-    assert s.find("INSERT INTO GOVERNANCE.TABLE_MODEL (")
-    sql, params = s.find("INSERT INTO GOVERNANCE.TABLE_MODEL_VERSION")[0]
+    assert s.find("INSERT INTO CORE.TABLE_MODEL (")
+    sql, params = s.find("INSERT INTO CORE.TABLE_MODEL_VERSION")[0]
     assert params[0] == out["table_model_id"] and json.loads(params[2])["design"]["entities"][0]["entity_name"] == "CUSTOMER"
 
 
@@ -158,7 +158,7 @@ def _stored_spec():
 
 
 def test_save_with_a_stale_etag_is_a_conflict():
-    s = Session({"FROM GOVERNANCE.TABLE_MODEL M": [header(ETAG="fresh")]})
+    s = Session({"FROM CORE.TABLE_MODEL M": [header(ETAG="fresh")]})
     with pytest.raises(Conflict):
         tm.save(s, header()["TABLE_MODEL_ID"], {"etag": "old", "spec": ENTITY}, "ann")
 
@@ -173,21 +173,21 @@ def test_save_adds_the_next_version_and_records_the_change():
         etags["new"] = params[1]
         return []
 
-    s = Session({"SELECT ETAG FROM GOVERNANCE.TABLE_MODEL": etag_now,
-                 "UPDATE GOVERNANCE.TABLE_MODEL SET CURRENT_VERSION": update,
-                 "FROM GOVERNANCE.TABLE_MODEL M": [header()],
-                 "SELECT SPEC FROM GOVERNANCE.TABLE_MODEL_VERSION": [{"SPEC": _stored_spec()}],
+    s = Session({"SELECT ETAG FROM CORE.TABLE_MODEL": etag_now,
+                 "UPDATE CORE.TABLE_MODEL SET CURRENT_VERSION": update,
+                 "FROM CORE.TABLE_MODEL M": [header()],
+                 "SELECT SPEC FROM CORE.TABLE_MODEL_VERSION": [{"SPEC": _stored_spec()}],
                  "COALESCE(MAX(VERSION), 0)": [{"V": 1}]})
     changed = {**ENTITY, "attributes": [*ENTITY["attributes"], {"name": "SEGMENT", "datatype": "VARCHAR(20)"}]}
     out = tm.save(s, header()["TABLE_MODEL_ID"], {"etag": "e1", "spec": changed, "change_note": "segment"}, "ann")
     assert out["version"] == 2 and out["counts"]["ADDITIVE"] >= 1
-    sql, params = s.find("INSERT INTO GOVERNANCE.TABLE_MODEL_VERSION")[0]
+    sql, params = s.find("INSERT INTO CORE.TABLE_MODEL_VERSION")[0]
     assert params[1] == "2" and json.loads(params[6])["counts"]["ADDITIVE"] >= 1
 
 
 def test_save_without_changes_adds_no_version():
-    s = Session({"FROM GOVERNANCE.TABLE_MODEL M": [header()],
-                 "SELECT SPEC FROM GOVERNANCE.TABLE_MODEL_VERSION": [{"SPEC": _stored_spec()}]})
+    s = Session({"FROM CORE.TABLE_MODEL M": [header()],
+                 "SELECT SPEC FROM CORE.TABLE_MODEL_VERSION": [{"SPEC": _stored_spec()}]})
     out = tm.save(s, header()["TABLE_MODEL_ID"], {"etag": "e1", "spec": json.loads(_stored_spec())}, "ann")
     assert out.get("unchanged") and not s.find("INSERT INTO")
 
@@ -202,8 +202,8 @@ def test_propose_sends_the_entity_to_the_domain_model(monkeypatch):
         return {"model_id": "dm1", "change_id": "c1", "status": "PROPOSED"}
 
     monkeypatch.setattr(run_link, "propose_entities", fake)
-    s = Session({"FROM GOVERNANCE.TABLE_MODEL M": [header()],
-                 "SELECT SPEC FROM GOVERNANCE.TABLE_MODEL_VERSION": [{"SPEC": _stored_spec()}]})
+    s = Session({"FROM CORE.TABLE_MODEL M": [header()],
+                 "SELECT SPEC FROM CORE.TABLE_MODEL_VERSION": [{"SPEC": _stored_spec()}]})
     out = tm.propose(s, header()["TABLE_MODEL_ID"], 1, "ann")
     assert out["change_id"] == "c1" and seen["domain_id"] == "d1" and seen["primary"] == "CUSTOMER"
     assert seen["kw"]["table_model_version"] == 1
@@ -211,7 +211,7 @@ def test_propose_sends_the_entity_to_the_domain_model(monkeypatch):
 
 
 def test_propose_needs_a_domain():
-    s = Session({"FROM GOVERNANCE.TABLE_MODEL M": [header(DOMAIN_ID=None)]})
+    s = Session({"FROM CORE.TABLE_MODEL M": [header(DOMAIN_ID=None)]})
     with pytest.raises(AssertionError, match="domain"):
         tm.propose(s, header()["TABLE_MODEL_ID"], 1, "ann")
 
@@ -221,13 +221,13 @@ def test_register_from_run_creates_one_model_per_entity():
               "entities": [ENTITY, {**ENTITY, "entity_name": "ACCOUNT"}]}
     s = Session({"FROM CORE.WORKFLOW_RUN": [{"RUN_ID": "r1", "RUN_NAME": "crm", "SOURCE_SYSTEM_ID": "s1",
                                             "SOURCE_DATABASE": "RAW", "SOURCE_SCHEMA": "CRM", "DOMAIN_ID": "d1"}],
-                 "FROM SOURCE.SOURCE_REGISTRY": [{"SOURCE_SYSTEM_ID": "s1", "SOURCE_SYSTEM_NAME": "crm"}],
-                 "FROM MODELING.MODEL_DESIGN": [{"DESIGN_JSON": json.dumps(design)}],
+                 "FROM CORE.SOURCE_REGISTRY": [{"SOURCE_SYSTEM_ID": "s1", "SOURCE_SYSTEM_NAME": "crm"}],
+                 "FROM CORE.MODEL_DESIGN": [{"DESIGN_JSON": json.dumps(design)}],
                  "SELECT COUNT(*)": [{"C": 0}]})
     out = sync.register_from_run(s, "r1", 2, "ann")
     assert [o["status"] for o in out] == ["CREATED", "CREATED"]
     assert {o["table_name"] for o in out} == {"CUSTOMER", "ACCOUNT"}
-    header_insert = s.find("INSERT INTO GOVERNANCE.TABLE_MODEL (")[0][1]
+    header_insert = s.find("INSERT INTO CORE.TABLE_MODEL (")[0][1]
     assert header_insert[3] == "CRM" and "RAW.CRM.CRM_ACCOUNT" in header_insert[4] and header_insert[7] == "r1"
 
 
@@ -237,11 +237,11 @@ def test_register_from_run_skips_an_unchanged_table():
         {**ENTITY, "table_type": "DIMENSION", "description": "Customers"}]}}, tm.table_model_id("CRM", "CUSTOMER"),
         domain="SALES"), None)
     s = Session({"FROM CORE.WORKFLOW_RUN": [{"RUN_ID": "r1", "SOURCE_SYSTEM_ID": "s1"}],
-                 "FROM SOURCE.SOURCE_REGISTRY": [{"SOURCE_SYSTEM_ID": "s1", "SOURCE_SYSTEM_NAME": "CRM"}],
-                 "FROM MODELING.MODEL_DESIGN": [{"DESIGN_JSON": json.dumps(design)}],
-                 "SELECT TABLE_MODEL_ID FROM GOVERNANCE.TABLE_MODEL WHERE": [{"TABLE_MODEL_ID": "x"}],
-                 "FROM GOVERNANCE.TABLE_MODEL M": [header()],
-                 "SELECT SPEC FROM GOVERNANCE.TABLE_MODEL_VERSION": [{"SPEC": json.dumps(stored)}]})
+                 "FROM CORE.SOURCE_REGISTRY": [{"SOURCE_SYSTEM_ID": "s1", "SOURCE_SYSTEM_NAME": "CRM"}],
+                 "FROM CORE.MODEL_DESIGN": [{"DESIGN_JSON": json.dumps(design)}],
+                 "SELECT TABLE_MODEL_ID FROM CORE.TABLE_MODEL WHERE": [{"TABLE_MODEL_ID": "x"}],
+                 "FROM CORE.TABLE_MODEL M": [header()],
+                 "SELECT SPEC FROM CORE.TABLE_MODEL_VERSION": [{"SPEC": json.dumps(stored)}]})
     out = sync.register_from_run(s, "r1", 3, "ann")
     assert out[0]["status"] == "UNCHANGED" and not s.find("INSERT INTO")
 

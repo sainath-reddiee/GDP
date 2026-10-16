@@ -57,10 +57,10 @@ export default async function ProfilingHub({ searchParams }: { searchParams: Par
         ))}
       </nav>
       {section === "schedules" && (schedules ? <SchedulesView schedules={schedules.schedules} canRun={canAct(me, "PROFILE.RUN")} />
-        : <NotDeployed what="Profiling schedules (GOVERNANCE.PROFILE_SCHEDULE, V041)" />)}
+        : <NotDeployed what="Profiling schedules (CORE.PROFILE_SCHEDULE, V041)" />)}
       {section === "annotations" && (notes ? <AnnotationsView annotations={notes.annotations} me={(me?.user ?? "").toUpperCase()} canDecide={canAct(me, "KNOWLEDGE.EDIT")} />
-        : <NotDeployed what="Column annotations (GOVERNANCE.PROFILE_ANNOTATION, V041)" />)}
-      {section === "profiles" && data && !data.deployed && <NotDeployed what="The tenant-wide profile catalog (GOVERNANCE.DATA_PROFILES)" />}
+        : <NotDeployed what="Column annotations (CORE.PROFILE_ANNOTATION, V041)" />)}
+      {section === "profiles" && data && !data.deployed && <NotDeployed what="The tenant-wide profile catalog (CORE.DATA_PROFILES)" />}
       {section !== "profiles" ? null : !data ? <p className="text-sm text-destructive">The profile catalog could not be loaded.</p> : (
         <ProfileBrowser rows={rows} total={data.total} facets={data.facets} page={page} pageSize={PAGE}
                         filters={{ domain: searchParams.domain ?? "", table: searchParams.table ?? "", run: searchParams.run ?? "",

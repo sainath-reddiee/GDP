@@ -43,9 +43,9 @@ export default async function DqStorePage({ searchParams }: { searchParams: Para
       <StoreTabs base="/dashboard/dq-store" current={view} keep={{ domain: searchParams.domain }}
                  tabs={[{ id: "catalog", label: "Store catalog", count: summary?.checks ?? null }, { id: "runs", label: "Run checks" }]} />
       {view === "runs" && (!runChecks ? <p className="text-sm text-destructive">Run checks could not be loaded{domain ? ` for domain ${domain}` : ""}.</p>
-        : !runChecks.deployed ? <NotDeployed what="Run data quality checks (CONTRACT.SODA_EXPECTATION_REGISTRY)" />
+        : !runChecks.deployed ? <NotDeployed what="Run data quality checks (CORE.SODA_EXPECTATION_REGISTRY)" />
         : <RunChecksView checks={runChecks.checks} runs={runChecks.runs} initialRun={searchParams.run ?? ""} canEdit={canAct(me, "SODA.EDIT")} canCase={canAct(me, "CASE.WORK")} />)}
-      {view === "catalog" && catalog && !catalog.deployed && <NotDeployed what="The Data Quality Store (GOVERNANCE.DQ_CHECKS_CATALOG, V037)" />}
+      {view === "catalog" && catalog && !catalog.deployed && <NotDeployed what="The Data Quality Store (CORE.DQ_CHECKS_CATALOG, V037)" />}
       {view === "catalog" && (!catalog ? <p className="text-sm text-destructive">The Data Quality Store could not be loaded{domain ? ` for domain ${domain}` : ""}.</p> : (
         <DqStoreView tables={catalog.tables} initialTable={searchParams.table ?? ""} status={searchParams.status ?? ""} openAdd={searchParams.add === "1"}
                      canEdit={canAct(me, "SODA.EDIT")} canRun={canAct(me, "PROFILE.RUN")} />

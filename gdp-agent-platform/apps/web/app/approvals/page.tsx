@@ -5,6 +5,8 @@ import { PageHeader } from "@/components/page-header";
 import { cn } from "@/lib/utils";
 import type { ChangeRequest } from "../governance-actions";
 import { RequestList } from "./request-list";
+import { FixDecision } from "@/components/ops/fix-decision";
+import type { FixApproval } from "../ops/resolve-actions";
 
 const SCOPES: { key: string; label: string; privilege?: string }[] = [
   { key: "inbox", label: "Waiting for me" },
@@ -23,9 +25,13 @@ export default async function ApprovalsPage({ searchParams }: { searchParams: { 
   } catch (e) {
     error = e instanceof Error ? e.message : "Could not load requests.";
   }
+  // known fixes waiting to run on an Airflow failure (Operations, Resolutions): decided here too
+  const fixes = scope === "inbox" && can(me, "OPS.FIX_APPROVE")
+    ? await api<FixApproval[]>("/api/ops/resolve/approvals?scope=mine").catch(() => [] as FixApproval[])
+    : [];
   return (
     <div className="space-y-5">
-      <PageHeader eyebrow="Govern" title="Approvals"
+      <PageHeader eyebrow="Governance" title="Approvals"
                   description="Changes that need another role's approval. Approving applies the change with your access; every decision is logged." />
       <nav role="tablist" className="flex gap-1 border-b">
         {scopes.map((s) => (
@@ -36,6 +42,20 @@ export default async function ApprovalsPage({ searchParams }: { searchParams: { 
           </Link>
         ))}
       </nav>
+      {fixes.length > 0 && (
+        <section className="space-y-2" data-testid="approvals-fixes">
+          <h2 className="text-sm font-semibold">Known fixes waiting to run</h2>
+          {fixes.map((a) => (
+            <div key={a.approval_id} className="surface space-y-2 p-4">
+              <p className="text-sm font-medium">
+                <Link href={`/ops/resolutions/${encodeURIComponent(a.failure_id)}`} className="hover:text-primary">{a.dag_id} · {a.task_id}</Link>
+                <span className="ml-2 text-xs font-normal text-muted-foreground">{a.exception_class ?? "Airflow failure"}</span>
+              </p>
+              <FixDecision approvalId={a.approval_id} fixTitle={a.issue_title} approver={a.approver} compact />
+            </div>
+          ))}
+        </section>
+      )}
       {error ? (
         <p className="rounded-xl border border-dashed p-8 text-center text-sm text-muted-foreground">{error}</p>
       ) : (

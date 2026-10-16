@@ -225,7 +225,7 @@ def publish(model_id: str, version: int, body: PublishIn, db: Db = Depends(curre
     request = {"table_model_id": model_id, "version": int(version), "repo_id": body.repo_id, "head": head,
                "base": body.base or repo.get("branch"), "title": body.title}
     try:
-        result = db.call("CALL CODEGEN.PUBLISH_DBT_PR(%s, %s)", ("", json.dumps({"table_model": request})))
+        result = db.call("CALL CORE.PUBLISH_DBT_PR(%s, %s)", ("", json.dumps({"table_model": request})))
     except Exception as exc:
         return {"status": "FAILED", "detail": str(exc)[:1000], "head_branch": head}
     return {**(result or {}), "head_branch": head}

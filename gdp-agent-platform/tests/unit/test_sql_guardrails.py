@@ -32,13 +32,14 @@ def test_sql_files_found():
 def test_no_forbidden_statements(path):
     sql = _strip_comments(path.read_text(encoding="utf-8")).upper()
     rules = dict(FORBIDDEN_EVERYWHERE)
-    if "migrations" in path.parts:
+    if "migrations" in path.parts or "baseline" in path.parts:
         rules.update(FORBIDDEN_IN_MIGRATIONS)
     for label, pattern in rules.items():
         assert not re.search(pattern, sql), f"{path.name}: {label}"
 
 
-@pytest.mark.parametrize("path", sorted((SNOWFLAKE_DIR / "database" / "migrations").glob("*.sql")),
+@pytest.mark.parametrize("path", sorted([*(SNOWFLAKE_DIR / "database" / "migrations").rglob("*.sql"),
+                                         *(SNOWFLAKE_DIR / "database" / "baseline").glob("*.sql")]),
                          ids=lambda p: p.name)
 def test_migration_tables_are_idempotent(path):
     sql = _strip_comments(path.read_text(encoding="utf-8")).upper()

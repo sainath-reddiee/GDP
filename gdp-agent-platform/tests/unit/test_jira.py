@@ -149,7 +149,7 @@ def token_row(**changes):
 
 
 def _sealed(value, kind, user="ANA"):
-    """What JIRA.USER_TOKEN holds: the token sealed by the API (never Snowflake ENCRYPT with a bound key)."""
+    """What CORE.USER_TOKEN holds: the token sealed by the API (never Snowflake ENCRYPT with a bound key)."""
     import app.jira_api as api
 
     return api._seal_token(value, kind, user, CLOUD) if value is not None else None
@@ -162,7 +162,7 @@ def _opened(value, kind, user="ANA"):
 
 
 class JiraDb:
-    """One replica's view of JIRA.USER_TOKEN. `row` may be shared between two JiraDb objects to play two replicas."""
+    """One replica's view of CORE.USER_TOKEN. `row` may be shared between two JiraDb objects to play two replicas."""
 
     user = "ANA"
 
@@ -176,7 +176,7 @@ class JiraDb:
     def query(self, sql, params=()):
         if "PLATFORM_CONFIG" in sql:
             return [{"config_value": json.dumps(self.config)}] if self.config else []
-        if "FROM JIRA.USER_TOKEN WHERE USER_NAME = %s ORDER BY" in sql:
+        if "FROM CORE.USER_TOKEN WHERE USER_NAME = %s ORDER BY" in sql:
             return self.token_rows
         if "REFRESH_TOKEN AS T" in sql and "TOKEN_VERSION" in sql:
             if self.legacy:
@@ -188,7 +188,7 @@ class JiraDb:
                      "v": r["version"], "leased": r["lease"] is not None}]
         if "REFRESH_TOKEN AS T" in sql:
             return [{"t": _sealed("refresh-1", "refresh")}]
-        if "FROM JIRA.OAUTH_STATE" in sql:
+        if "FROM CORE.OAUTH_STATE" in sql:
             return self.state_rows
         return []
 
@@ -212,7 +212,7 @@ class JiraDb:
             r.update(refresh=_opened(params[0], "refresh") or r["refresh"], access=_opened(params[1], "access"), ttl=params[2],
                      version=r["version"] + 1, lease=None)
             return 1
-        if "DELETE FROM JIRA.USER_TOKEN" in sql:
+        if "DELETE FROM CORE.USER_TOKEN" in sql:
             if r["version"] == params[2] and r["lease"] == params[3]:
                 r["gone"] = True
                 return 1
@@ -303,7 +303,7 @@ def test_revoked_refresh_token_disconnects(monkeypatch):
     with pytest.raises(HTTPException) as err:
         api._client(db)
     assert err.value.status_code == 428 and db.row.get("gone")
-    assert any("DELETE FROM JIRA.USER_TOKEN" in s and "TOKEN_VERSION" in s for s, _ in db.executed)
+    assert any("DELETE FROM CORE.USER_TOKEN" in s and "TOKEN_VERSION" in s for s, _ in db.executed)
 
 
 def test_no_delete_after_another_replica_rotated_the_token(monkeypatch):
@@ -325,7 +325,7 @@ def test_before_v028_the_old_refresh_still_works(monkeypatch):
     monkeypatch.setattr(api, "_http", http)
     db = JiraDb(legacy=True)
     assert api._client(db)[0].token == "acc-1"
-    stored = [p for s, p in db.executed if "MERGE INTO JIRA.USER_TOKEN" in s]
+    stored = [p for s, p in db.executed if "MERGE INTO CORE.USER_TOKEN" in s]
     assert stored and _opened(stored[0][2], "refresh") == "refresh-2"
 
 

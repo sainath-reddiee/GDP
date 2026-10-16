@@ -97,7 +97,7 @@ def fetch_schema_catalog(session, connection_id: str, database: Optional[str] = 
     """Inspect a registered connection without touching any run: objects, row counts, columns."""
     connection_id = _text(connection_id, "CONNECTION_ID", required=True)
     found = _rows(session, "SELECT SOURCE_SYSTEM_ID, SOURCE_SYSTEM_NAME, SOURCE_TYPE, CONFIGURATION_JSON "
-                           "FROM SOURCE.SOURCE_REGISTRY WHERE SOURCE_SYSTEM_ID = ? AND ACTIVE_FLAG", [connection_id])
+                           "FROM CORE.SOURCE_REGISTRY WHERE SOURCE_SYSTEM_ID = ? AND ACTIVE_FLAG", [connection_id])
     assert found, f"connection {connection_id} not found"
     source = found[0]
     config = json.loads(source["CONFIGURATION_JSON"]) if isinstance(source["CONFIGURATION_JSON"], str) \
@@ -124,7 +124,7 @@ def _require_state(run: Dict[str, Any], *states: str) -> None:
 
 def _source_for_run(session, run: Dict[str, Any]) -> tuple[Dict[str, Any], SourceAdapter]:
     assert run["SOURCE_SYSTEM_ID"], "run has no registered source"
-    rows = _rows(session, "SELECT * FROM SOURCE.SOURCE_REGISTRY WHERE SOURCE_SYSTEM_ID = ?", [run["SOURCE_SYSTEM_ID"]])
+    rows = _rows(session, "SELECT * FROM CORE.SOURCE_REGISTRY WHERE SOURCE_SYSTEM_ID = ?", [run["SOURCE_SYSTEM_ID"]])
     assert rows, f"source {run['SOURCE_SYSTEM_ID']} not found"
     source = rows[0]
     config = json.loads(source["CONFIGURATION_JSON"])
@@ -164,7 +164,7 @@ def register_source(session, run_id: str, payload_json: str) -> Dict[str, Any]:
         raise ValueError(f"SOURCE_NOT_ACCESSIBLE: no tables or views visible in {adapter.database}.{adapter.schema}")
 
     config = {"database": adapter.database, "schema": adapter.schema}
-    existing = _rows(session, "SELECT SOURCE_SYSTEM_ID, SOURCE_TYPE, CONFIGURATION_JSON FROM SOURCE.SOURCE_REGISTRY "
+    existing = _rows(session, "SELECT SOURCE_SYSTEM_ID, SOURCE_TYPE, CONFIGURATION_JSON FROM CORE.SOURCE_REGISTRY "
                               "WHERE SOURCE_SYSTEM_NAME = ? AND ACTIVE_FLAG", [name])
     if existing:
         prior = existing[0]
@@ -177,14 +177,14 @@ def register_source(session, run_id: str, payload_json: str) -> Dict[str, Any]:
 
     def write(_event_id: str) -> None:
         if not existing:
-            _insert(session, "SOURCE.SOURCE_REGISTRY",
+            _insert(session, "CORE.SOURCE_REGISTRY",
                     ["SOURCE_SYSTEM_ID", "SOURCE_SYSTEM_NAME", "SOURCE_TYPE", "DOMAIN_ID", "OWNER", "CONNECTION_TYPE",
                      "SECURITY_CLASSIFICATION", "CONFIGURATION_REFERENCE", "CONFIGURATION_JSON", "CREATED_BY"],
                     ["?", "?", "?", "NULLIF(?, '')", "NULLIF(?, '')", "?", "NULLIF(?, '')", "?", "PARSE_JSON(?)",
                      "CURRENT_USER()"],
                     [[source_id, name, source_type, payload.get("DOMAIN_ID"), payload.get("OWNER"), "SNOWFLAKE",
                       payload.get("SECURITY_CLASSIFICATION"), adapter.database, json.dumps(config)]])
-        _insert(session, "SOURCE.SOURCE_OBJECT",
+        _insert(session, "CORE.SOURCE_OBJECT",
                 ["SOURCE_OBJECT_ID", "RUN_ID", "SOURCE_SYSTEM_ID", "SOURCE_DATABASE", "SOURCE_SCHEMA", "OBJECT_NAME",
                  "OBJECT_TYPE", "ROW_COUNT_ESTIMATE", "BYTES", "LAST_ALTERED", "SELECTED_FLAG"],
                 ["?", "?", "?", "?", "?", "?", "?", "NULLIF(?, '')::NUMBER", "NULLIF(?, '')::NUMBER",
@@ -219,7 +219,7 @@ def validate_source_access(session, run_id: str, selected_json: str) -> Dict[str
     source, adapter = _source_for_run(session, run)
 
     def mark_selection(_event_id: str) -> None:
-        session.sql("UPDATE SOURCE.SOURCE_OBJECT SET SELECTED_FLAG = ARRAY_CONTAINS(OBJECT_NAME::VARIANT, PARSE_JSON(?)::ARRAY) "
+        session.sql("UPDATE CORE.SOURCE_OBJECT SET SELECTED_FLAG = ARRAY_CONTAINS(OBJECT_NAME::VARIANT, PARSE_JSON(?)::ARRAY) "
                     "WHERE RUN_ID = ?", params=[json.dumps(selected), run_id]).collect()
 
     _apply_transition(session, graph, run, "ACCESS_VALIDATION", "SYSTEM", "access validation started",
@@ -242,7 +242,7 @@ def validate_source_access(session, run_id: str, selected_json: str) -> Dict[str
     reason = "all access checks passed" if passed else _clip("; ".join(f"{c.name}: {c.detail}" for c in failed))
 
     def record_checks(_event_id: str) -> None:
-        _insert(session, "SOURCE.SOURCE_ACCESS_CHECK",
+        _insert(session, "CORE.SOURCE_ACCESS_CHECK",
                 ["CHECK_ID", "RUN_ID", "SOURCE_SYSTEM_ID", "CHECK_NAME", "STATUS", "DETAIL", "REMEDIATION"],
                 ["?", "?", "?", "?", "?", "NULLIF(?, '')", "NULLIF(?, '')"],
                 [[str(uuid.uuid4()), run_id, source["SOURCE_SYSTEM_ID"], c.name, c.status, _clip(c.detail),
@@ -268,7 +268,7 @@ def _land_object(session, run_id: str, source: Dict[str, Any], adapter: SourceAd
     try:
         if not spec.copies:
             # Zero-copy: the registry points at the source table itself; row counts come from metadata.
-            estimate = _rows(session, "SELECT ROW_COUNT_ESTIMATE AS N FROM SOURCE.SOURCE_OBJECT WHERE RUN_ID = ? "
+            estimate = _rows(session, "SELECT ROW_COUNT_ESTIMATE AS N FROM CORE.SOURCE_OBJECT WHERE RUN_ID = ? "
                                       "AND OBJECT_NAME = ? ORDER BY DISCOVERED_AT DESC LIMIT 1", [run_id, object_name])
             rows_known = estimate[0]["N"] if estimate else None
             result.update(source_rows=rows_known, landed_rows=rows_known, status="COMPLETE")
@@ -292,7 +292,7 @@ def _land_object(session, run_id: str, source: Dict[str, Any], adapter: SourceAd
         result["error"] = _clip(str(exc))
 
     landing_id = str(uuid.uuid4())
-    _insert(session, "SOURCE.LANDING_TABLE_REGISTRY",
+    _insert(session, "CORE.LANDING_TABLE_REGISTRY",
             ["LANDING_ID", "RUN_ID", "SOURCE_SYSTEM_ID", "SOURCE_DATABASE", "SOURCE_SCHEMA", "SOURCE_TABLE",
              "LANDING_DATABASE", "LANDING_SCHEMA", "LANDING_TABLE", "INGESTION_METHOD", "INGESTION_STATUS",
              "ROW_COUNT", "SOURCE_ROW_COUNT", "INGESTED_AT", "QUERY_ID", "CREATED_BY", "ERROR_MESSAGE"],
@@ -305,7 +305,7 @@ def _land_object(session, run_id: str, source: Dict[str, Any], adapter: SourceAd
               result["landed_rows"], result["source_rows"],
               result["status"], result["query_id"], result["error"]]])
     if result["status"] == "COMPLETE" and columns:
-        _insert(session, "SOURCE.LANDING_COLUMN_REGISTRY",
+        _insert(session, "CORE.LANDING_COLUMN_REGISTRY",
                 ["LANDING_COLUMN_ID", "LANDING_ID", "COLUMN_NAME", "DATA_TYPE", "ORDINAL_POSITION", "NULLABLE",
                  "SOURCE_COMMENT"],
                 ["?", "?", "?", "?", "?::NUMBER", "? = 'YES'", "NULLIF(?, '')"],
@@ -318,14 +318,14 @@ def _land_object(session, run_id: str, source: Dict[str, Any], adapter: SourceAd
 
 
 def execute_landing(session, run_id: str) -> Dict[str, Any]:
-    """SOURCE.EXECUTE_LANDING: land the selected objects with CREATE TABLE AS SELECT. Snowflake matches a handler's
+    """CORE.EXECUTE_LANDING: land the selected objects with CREATE TABLE AS SELECT. Snowflake matches a handler's
     parameter count exactly, so the landing method is not a parameter here (see execute_staged_landing)."""
     return _execute_landing(session, run_id, "CTAS")
 
 
 def _execute_landing(session, run_id: str, method: str) -> Dict[str, Any]:
     """Land the selected objects as-is. CTAS copies with CREATE TABLE AS SELECT; STAGED_PARQUET (Source Hub share
-    onboarding) unloads each object to SOURCE.LANDING_STAGE as Snappy Parquet and loads it with COPY INTO
+    onboarding) unloads each object to CORE.LANDING_STAGE as Snappy Parquet and loads it with COPY INTO
     (services/source/staged.py). STAGED_PARQUET applies to MANAGED targets only; others keep CTAS."""
     run_id = _text(run_id, "RUN_ID", required=True)
     assert method in ("CTAS", staged.METHOD), f"landing method must be CTAS or {staged.METHOD}"
@@ -334,7 +334,7 @@ def _execute_landing(session, run_id: str, method: str) -> Dict[str, Any]:
     _require_state(run, "ACCESS_APPROVED", "LANDING_PENDING")
     source, adapter = _source_for_run(session, run)
     selected = [r["OBJECT_NAME"] for r in _rows(
-        session, "SELECT OBJECT_NAME FROM SOURCE.SOURCE_OBJECT WHERE RUN_ID = ? AND SELECTED_FLAG ORDER BY OBJECT_NAME",
+        session, "SELECT OBJECT_NAME FROM CORE.SOURCE_OBJECT WHERE RUN_ID = ? AND SELECTED_FLAG ORDER BY OBJECT_NAME",
         [run_id])]
     assert selected, "no selected objects for this run"
 
@@ -370,7 +370,7 @@ def _execute_landing(session, run_id: str, method: str) -> Dict[str, Any]:
 
 
 def execute_staged_landing(session, run_id: str) -> Dict[str, Any]:
-    """SOURCE.EXECUTE_STAGED_LANDING: execute_landing through SOURCE.LANDING_STAGE (compressed Parquet + COPY)."""
+    """CORE.EXECUTE_STAGED_LANDING: execute_landing through CORE.LANDING_STAGE (compressed Parquet + COPY)."""
     return _execute_landing(session, run_id, staged.METHOD)
 
 
@@ -426,7 +426,7 @@ def register_connection(session, payload_json: str) -> Dict[str, Any]:
     except Exception as exc:
         raise ValueError(f"SOURCE_NOT_ACCESSIBLE: {adapter.database}.{adapter.schema}: {exc}") from exc
     config = {"database": adapter.database, "schema": adapter.schema}
-    existing = _rows(session, "SELECT SOURCE_SYSTEM_ID, SOURCE_TYPE, CONFIGURATION_JSON FROM SOURCE.SOURCE_REGISTRY "
+    existing = _rows(session, "SELECT SOURCE_SYSTEM_ID, SOURCE_TYPE, CONFIGURATION_JSON FROM CORE.SOURCE_REGISTRY "
                               "WHERE SOURCE_SYSTEM_NAME = ? AND ACTIVE_FLAG", [name])
     if existing:
         prior = existing[0]
@@ -435,7 +435,7 @@ def register_connection(session, payload_json: str) -> Dict[str, Any]:
                              f"{json.loads(prior['CONFIGURATION_JSON'])}")
         return {"source_system_id": prior["SOURCE_SYSTEM_ID"], "created": False, "objects_discovered": len(objects)}
     source_id = str(uuid.uuid4())
-    _insert(session, "SOURCE.SOURCE_REGISTRY",
+    _insert(session, "CORE.SOURCE_REGISTRY",
             ["SOURCE_SYSTEM_ID", "SOURCE_SYSTEM_NAME", "SOURCE_TYPE", "DOMAIN_ID", "OWNER", "CONNECTION_TYPE",
              "SECURITY_CLASSIFICATION", "CONFIGURATION_REFERENCE", "CONFIGURATION_JSON", "CREATED_BY"],
             ["?", "?", "?", "NULLIF(?, '')", "NULLIF(?, '')", "?", "NULLIF(?, '')", "?", "PARSE_JSON(?)",

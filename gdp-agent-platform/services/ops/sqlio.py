@@ -11,7 +11,7 @@ other API requests share). SessionDb is the other way round, for code handed a r
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 
 class Row(dict):
@@ -39,6 +39,24 @@ def to_pyformat(sql: str, has_params: bool) -> str:
 
 def to_qmark(sql: str) -> str:
     return sql.replace("%%", "\x00").replace("%s", "?").replace("\x00", "%")
+
+
+def bind(sql: str, params: Optional[Sequence[Any]]) -> Tuple[str, List[Any]]:
+    """('?' SQL, params) for a Snowpark session, with every None written as a literal NULL instead of bound: inside a
+    Snowflake procedure a bound None can arrive as the text 'None'."""
+    values = list(params or [])
+    pieces = sql.replace("%%", "\x00").split("%s")
+    if not values or len(pieces) - 1 != len(values):
+        return to_qmark(sql), values
+    out, kept = [pieces[0]], []
+    for value, rest in zip(values, pieces[1:]):
+        if value is None:
+            out.append("NULL")
+        else:
+            out.append("?")
+            kept.append(value)
+        out.append(rest)
+    return "".join(out).replace("\x00", "%"), kept
 
 
 class _Result:
@@ -70,14 +88,14 @@ class SessionDb:
         self.session, self.user = session, user
 
     def query(self, sql: str, params: Sequence[Any] = ()) -> List[Dict[str, Any]]:
-        found = self.session.sql(to_qmark(sql), params=list(params or [])).collect()
+        found = self.session.sql(*bind(sql, params)).collect()
         return [{str(k).lower(): v for k, v in (r.as_dict() if hasattr(r, "as_dict") else dict(r)).items()} for r in found]
 
     def execute(self, sql: str, params: Sequence[Any] = ()) -> None:
-        self.session.sql(to_qmark(sql), params=list(params or [])).collect()
+        self.session.sql(*bind(sql, params)).collect()
 
     def execute_count(self, sql: str, params: Sequence[Any] = ()) -> int:
-        found = self.session.sql(to_qmark(sql), params=list(params or [])).collect()
+        found = self.session.sql(*bind(sql, params)).collect()
         if not found:
             return 0
         first = found[0].as_dict() if hasattr(found[0], "as_dict") else dict(found[0])

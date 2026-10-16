@@ -682,12 +682,12 @@ class OutboxDb:
         self.marks, self.merges = [], []
 
     def query(self, sql, params=()):
-        if "FROM OPS.NOTIFICATION WHERE STATUS IN ('PENDING', 'FAILED', 'SENDING')" in sql:
+        if "FROM CORE.NOTIFICATION WHERE STATUS IN ('PENDING', 'FAILED', 'SENDING')" in sql:
             return self.rows
         return []
 
     def execute(self, sql, params=()):
-        if "UPDATE OPS.NOTIFICATION" in sql:
+        if "UPDATE CORE.NOTIFICATION" in sql:
             self.marks.append(params)
 
     def execute_count(self, sql, params=()):

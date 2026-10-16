@@ -196,7 +196,7 @@ def domain_conventions(query, domain_id: Optional[str], pipeline: str = SILVER) 
         return None
     key = "conventions_gold" if str(pipeline or "").upper() == GOLD else "conventions"
     try:
-        found = query(f"SELECT CONFIG:{key} AS V FROM KNOWLEDGE.DOMAIN_REGISTRY WHERE DOMAIN_ID = ?", [domain_id])
+        found = query(f"SELECT CONFIG:{key} AS V FROM CORE.DOMAIN_REGISTRY WHERE DOMAIN_ID = ?", [domain_id])
         value = (found[0].get("V") if "V" in found[0] else found[0].get("v")) if found else None
         value = json.loads(value) if isinstance(value, str) else value
     except Exception:

@@ -46,26 +46,26 @@ export default async function ModelingHub({ searchParams }: { searchParams: Sear
                         { id: "runs", label: "Run models", count: runModels?.models.length },
                         { id: "dbt", label: "dbt projects", count: dbt?.generations.length }]} />
       {view === "models" && (!models ? <p className="text-sm text-destructive">Domain models could not be loaded.</p>
-        : !models.deployed ? <NotDeployed what="The Model Workbench (GOVERNANCE.DOMAIN_MODEL, V039)" />
+        : !models.deployed ? <NotDeployed what="The Model Workbench (CORE.DOMAIN_MODEL, V039)" />
         : <ModelsList rows={rows} canEdit={canAct(me, "MODEL.EDIT")} layer={searchParams.layer === "GOLD" ? "GOLD" : "SILVER"} />)}
       {view === "tables" && (!tableModels ? <p className="text-sm text-destructive">Table models could not be loaded.</p>
-        : !tableModels.deployed ? <NotDeployed what="The Table Model Store (GOVERNANCE.TABLE_MODEL, V044)" />
+        : !tableModels.deployed ? <NotDeployed what="The Table Model Store (CORE.TABLE_MODEL, V044)" />
         : <TableModelsList rows={tableRows} canEdit={canAct(me, "MODEL.EDIT")} openNew={searchParams.new === "1"}
                            filters={{ search: searchParams.q ?? "", source: searchParams.source ?? "", layer: searchParams.layer ?? "", run: searchParams.run ?? "", domain: domain ?? "" }} />)}
       {view === "design" && <>
         <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-100">
           Legacy designs are kept for reference. A domain&apos;s governed model is changed in Domain models (draft, review, approval).
         </p>
-        {ctx && !ctx.deployed && <NotDeployed what="Model design storage (GOVERNANCE.MODEL_DESIGNS)" />}
+        {ctx && !ctx.deployed && <NotDeployed what="Model design storage (CORE.MODEL_DESIGNS)" />}
         {!ctx ? <p className="text-sm text-destructive">The modeling context could not be loaded.</p> : (
           <ModelingWorkspace ctx={ctx} initialTables={(searchParams.tables ?? "").split(",").map((t) => t.trim()).filter(Boolean)}
                              initialDesign={design?.design ?? null} />
         )}
       </>}
       {view === "runs" && (!runModels ? <p className="text-sm text-destructive">Run model designs could not be loaded{domain ? ` for domain ${domain}` : ""}.</p>
-        : !runModels.deployed ? <NotDeployed what="Run model designs (MODELING.MODEL_DESIGN)" /> : <RunModels models={runModels.models} />)}
+        : !runModels.deployed ? <NotDeployed what="Run model designs (CORE.MODEL_DESIGN)" /> : <RunModels models={runModels.models} />)}
       {view === "dbt" && (!dbt ? <p className="text-sm text-destructive">dbt generations could not be loaded{domain ? ` for domain ${domain}` : ""}.</p>
-        : !dbt.deployed ? <NotDeployed what="dbt generations (CODEGEN.DBT_GENERATION_REGISTRY)" /> : <DbtGenerations generations={dbt.generations} />)}
+        : !dbt.deployed ? <NotDeployed what="dbt generations (CORE.DBT_GENERATION_REGISTRY)" /> : <DbtGenerations generations={dbt.generations} />)}
     </div>
   );
 }

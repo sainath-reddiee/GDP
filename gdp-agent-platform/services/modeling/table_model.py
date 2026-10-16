@@ -1,9 +1,9 @@
 """Table Model Store: one persistent, versioned model per modeled table (V044), reopened and edited in the Modeling
 Store at any time.
 
-  GOVERNANCE.TABLE_MODEL          one row per (source system, table): origin (the run that designed it, or ADHOC),
+  CORE.TABLE_MODEL          one row per (source system, table): origin (the run that designed it, or ADHOC),
                                   layer, table type, latest version, diagram layout, the domain model entity it feeds
-  GOVERNANCE.TABLE_MODEL_VERSION  every save is a new immutable version: a single-entity v2 specification, its issues,
+  CORE.TABLE_MODEL_VERSION  every save is a new immutable version: a single-entity v2 specification, its issues,
                                   the change summary against the previous version and the DDL and dbt rendered from it
 
 A table model is created by a run (services/modeling/table_model_sync.register_from_run, on every saved design) or ad
@@ -11,9 +11,9 @@ hoc from a landed source table. Its specification is the domain model's v2 shape
 Model Workbench renderers (render_v2), diff (model_diff) and editors are reused as they are.
 
 A table model never writes the governed domain model: `propose` sends its entity to the domain's model as a
-GOVERNANCE.MODEL_CHANGE (services/modeling/run_link.propose_entities), merged and approved in the Model Workbench.
+CORE.MODEL_CHANGE (services/modeling/run_link.propose_entities), merged and approved in the Model Workbench.
 `publish` pushes the table's DDL and dbt files to a branch feature/model-<table>-v<version> (services/dbt/publish.py
-publish_table_model), recorded in GOVERNANCE.GIT_PR as kind TABLE_MODEL.
+publish_table_model), recorded in CORE.GIT_PR as kind TABLE_MODEL.
 
 Every function takes the caller's user name explicitly, so the rules are testable and the audit columns are right
 whichever session runs the SQL.
@@ -31,8 +31,8 @@ from services.common.sql import clip, insert_rows, rows, scalar, variant
 from services.modeling import model_diff, render_v2, spec_v2
 from services.modeling.domain_model import Conflict
 
-MODELS = "GOVERNANCE.TABLE_MODEL"
-VERSIONS = "GOVERNANCE.TABLE_MODEL_VERSION"
+MODELS = "CORE.TABLE_MODEL"
+VERSIONS = "CORE.TABLE_MODEL_VERSION"
 LAYERS = ("LANDING", "BRONZE", "SILVER", "GOLD")
 TABLE_TYPES = ("ICEBERG", "STANDARD", "DYNAMIC_TABLE")
 ORIGINS = ("RUN", "ADHOC", "IMPORT")
@@ -129,7 +129,7 @@ HEADER_FIELDS = """M.TABLE_MODEL_ID, M.TABLE_NAME, M.SOURCE_ID, M.SOURCE_NAME, M
                    M.DIAGRAM_LAYOUT, M.LINKED_MODEL_ID, M.LINKED_ENTITY, M.LAST_CHANGE_ID, M.CREATED_BY, M.CREATED_AT,
                    M.UPDATED_BY, M.UPDATED_AT, D.DOMAIN_NAME, R.RUN_NAME AS ORIGIN_RUN_NAME"""
 HEADER_FROM = f"""{MODELS} M
-                  LEFT JOIN KNOWLEDGE.DOMAIN_REGISTRY D ON D.DOMAIN_ID = M.DOMAIN_ID
+                  LEFT JOIN CORE.DOMAIN_REGISTRY D ON D.DOMAIN_ID = M.DOMAIN_ID
                   LEFT JOIN CORE.WORKFLOW_RUN R ON R.RUN_ID = M.ORIGIN_RUN_ID"""
 
 
@@ -291,7 +291,7 @@ def create(session, payload: Dict[str, Any], user: str) -> Dict[str, Any]:
     assert origin in ORIGINS, f"origin must be one of {list(ORIGINS)}"
     domain_name = ""
     if payload.get("domain_id"):
-        found = rows(session, "SELECT DOMAIN_NAME FROM KNOWLEDGE.DOMAIN_REGISTRY WHERE DOMAIN_ID = ?", [payload["domain_id"]])
+        found = rows(session, "SELECT DOMAIN_NAME FROM CORE.DOMAIN_REGISTRY WHERE DOMAIN_ID = ?", [payload["domain_id"]])
         domain_name = found[0]["DOMAIN_NAME"] if found else ""
     raw = payload.get("spec") or {"design": {"entities": [{"entity_name": table, "attributes": payload.get("columns") or []}]}}
     spec = single(raw, model_id, domain=domain_name or source, table_type=table_type, table_name=table)
@@ -378,7 +378,7 @@ def set_layout(session, model_id: str, layout: Dict[str, Any], user: str) -> Dic
 def link(session, model_id: str, domain_id: str, user: str) -> Dict[str, Any]:
     """Set the domain the table belongs to (its proposals go to that domain's model)."""
     header = _header(session, model_id)
-    found = rows(session, "SELECT DOMAIN_NAME FROM KNOWLEDGE.DOMAIN_REGISTRY WHERE DOMAIN_ID = ?", [domain_id])
+    found = rows(session, "SELECT DOMAIN_NAME FROM CORE.DOMAIN_REGISTRY WHERE DOMAIN_ID = ?", [domain_id])
     assert found, "domain not found"
     session.sql(f"UPDATE {MODELS} SET DOMAIN_ID = ?, UPDATED_BY = ?, UPDATED_AT = CURRENT_TIMESTAMP() WHERE TABLE_MODEL_ID = ?",
                 params=[domain_id, user.upper(), model_id]).collect()
@@ -414,7 +414,7 @@ def propose(session, model_id: str, version: int, user: str) -> Dict[str, Any]:
 def linked_entities(session, header: Dict[str, Any]) -> Dict[str, Any]:
     """The approved domain model's entities related to this table (for the diagram): the table itself as the domain
     knows it, the entities it references or is referenced by, and those relationships."""
-    model = rows(session, "SELECT MODEL_ID, APPROVED_VERSION FROM GOVERNANCE.DOMAIN_MODEL WHERE DOMAIN_ID = ? "
+    model = rows(session, "SELECT MODEL_ID, APPROVED_VERSION FROM CORE.DOMAIN_MODEL WHERE DOMAIN_ID = ? "
                          "AND COALESCE(LAYER, 'SILVER') = 'SILVER'",
                  [header.get("domain_id") or ""]) if header.get("domain_id") else []
     if not model or not model[0].get("APPROVED_VERSION"):
@@ -445,8 +445,8 @@ def source_tables(session, search: str = "") -> List[Dict[str, Any]]:
     found = rows(session, f"""SELECT L.LANDING_ID, L.RUN_ID, L.SOURCE_SYSTEM_ID, S.SOURCE_SYSTEM_NAME, S.DOMAIN_ID,
                                      L.SOURCE_DATABASE, L.SOURCE_SCHEMA, L.SOURCE_TABLE, L.ROW_COUNT,
                                      L.INGESTED_AT::VARCHAR AS INGESTED_AT
-                                FROM SOURCE.LANDING_TABLE_REGISTRY L
-                                LEFT JOIN SOURCE.SOURCE_REGISTRY S ON S.SOURCE_SYSTEM_ID = L.SOURCE_SYSTEM_ID
+                                FROM CORE.LANDING_TABLE_REGISTRY L
+                                LEFT JOIN CORE.SOURCE_REGISTRY S ON S.SOURCE_SYSTEM_ID = L.SOURCE_SYSTEM_ID
                                WHERE {' AND '.join(where)}
                              QUALIFY ROW_NUMBER() OVER (PARTITION BY L.SOURCE_SYSTEM_ID, L.SOURCE_DATABASE, L.SOURCE_SCHEMA,
                                                                      L.SOURCE_TABLE ORDER BY L.CREATED_AT DESC) = 1
@@ -466,8 +466,8 @@ def create_from_source(session, landing_id: str, payload: Dict[str, Any], user: 
     """An ad hoc table model of a landed source table: one column per landed column (type, nullability, comment)."""
     found = rows(session, """SELECT L.LANDING_ID, L.RUN_ID, L.SOURCE_SYSTEM_ID, S.SOURCE_SYSTEM_NAME, S.DOMAIN_ID,
                                     L.SOURCE_DATABASE, L.SOURCE_SCHEMA, L.SOURCE_TABLE
-                               FROM SOURCE.LANDING_TABLE_REGISTRY L
-                               LEFT JOIN SOURCE.SOURCE_REGISTRY S ON S.SOURCE_SYSTEM_ID = L.SOURCE_SYSTEM_ID
+                               FROM CORE.LANDING_TABLE_REGISTRY L
+                               LEFT JOIN CORE.SOURCE_REGISTRY S ON S.SOURCE_SYSTEM_ID = L.SOURCE_SYSTEM_ID
                               WHERE L.LANDING_ID = ?""", [landing_id])
     assert found, "source table not found"
     t = _low(found[0])
@@ -475,7 +475,7 @@ def create_from_source(session, landing_id: str, payload: Dict[str, Any], user: 
                 "description": c.get("SOURCE_COMMENT") or "",
                 "source_columns": [f"{t['source_table']}.{c['COLUMN_NAME']}".upper()]}
                for c in rows(session, """SELECT COLUMN_NAME, DATA_TYPE, NULLABLE, SOURCE_COMMENT
-                                           FROM SOURCE.LANDING_COLUMN_REGISTRY WHERE LANDING_ID = ?
+                                           FROM CORE.LANDING_COLUMN_REGISTRY WHERE LANDING_ID = ?
                                           ORDER BY ORDINAL_POSITION""", [landing_id])]
     table = _name(payload.get("table_name") or t["source_table"])
     fqn = ".".join(str(p).upper() for p in (t["source_database"], t["source_schema"], t["source_table"]) if p)

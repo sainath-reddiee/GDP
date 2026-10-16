@@ -117,17 +117,17 @@ class DepsMwaa:
 
 
 def test_refresh_merges_every_source_and_is_rate_limited():
-    db = FakeDb([("SELECT DAG_ID FROM OPS.DAG WHERE ENV_ID", [{"dag_id": "orders"}, {"dag_id": "ingest"}]),
-                 ("FROM OPS.TASK_RUN T", [{"dag_id": "orders", "task_id": "kick", "run_id": "r1", "map_index": -1}]),
+    db = FakeDb([("SELECT DAG_ID FROM CORE.DAG WHERE ENV_ID", [{"dag_id": "orders"}, {"dag_id": "ingest"}]),
+                 ("FROM CORE.TASK_RUN T", [{"dag_id": "orders", "task_id": "kick", "run_id": "r1", "map_index": -1}]),
                  ("CURRENT_TIMESTAMP() AS NOW", [{"now": "2026-10-12T10:00:00+00:00"}])])
     out = deps.refresh(db, DepsMwaa(), "prod")
     assert out["by_kind"] == {"DATASET": 1, "TRIGGER": 1} and any("tasks of ingest" in p for p in out["problems"])
-    merge = db.wrote("MERGE INTO OPS.DAG_DEPENDENCY")
+    merge = db.wrote("MERGE INTO CORE.DAG_DEPENDENCY")
     rows = json.loads(merge[0][1][0])
     assert {(r["upstream_dag_id"], r["downstream_dag_id"], r["kind"]) for r in rows} == {
         ("ingest", "orders", "DATASET"), ("orders", "reporting", "TRIGGER")}
     assert "COALESCE(T.KIND, '') <> 'MANUAL'" in merge[0][0]        # hand-made edges are never overwritten
-    prunes = db.wrote("DELETE FROM OPS.DAG_DEPENDENCY")
+    prunes = db.wrote("DELETE FROM CORE.DAG_DEPENDENCY")
     assert prunes and all("MANUAL" not in json.dumps(p[1]) for p in prunes)
 
     class NotDue(FakeDb):
@@ -170,18 +170,18 @@ def context_db():
                   "load = PythonOperator(task_id='load', python_callable=load_orders)\n"
                   "dbt = BashOperator(task_id='dbt_run', bash_command='dbt run --select stg_orders+')\n")
     return FakeDb([
-        ("FROM OPS.AIRFLOW_ENV", [{"env_id": "prod", "name": "Production", "mwaa_env": "mw", "region": "eu-west-1"}]),
-        ("FROM OPS.DAG D LEFT JOIN CODE.REPO R", [{"env_id": "prod", "dag_id": "orders", "fileloc": "/usr/local/airflow/dags/sales/orders.py",
+        ("FROM CORE.AIRFLOW_ENV", [{"env_id": "prod", "name": "Production", "mwaa_env": "mw", "region": "eu-west-1"}]),
+        ("FROM CORE.DAG D LEFT JOIN CORE.REPO R", [{"env_id": "prod", "dag_id": "orders", "fileloc": "/usr/local/airflow/dags/sales/orders.py",
                                     "repo_id": "repo-1", "repo_path": "dags", "repo_name": "pipelines", "domain_id": None,
                                     "criticality": "HIGH", "owners": '["ana"]'}]),
-        ("FROM OPS.TASK_RUN WHERE", [{"task_id": "load", "map_index": -1, "try_number": 2, "state": "failed",
+        ("FROM CORE.TASK_RUN WHERE", [{"task_id": "load", "map_index": -1, "try_number": 2, "state": "failed",
                                       "operator": "PythonOperator", "error_excerpt": "stored excerpt"}]),
-        ("FROM CODE.CODE_CHUNK WHERE REPO_ID", [{"chunk_id": "c1", "repo_id": "repo-1", "path": "dags/sales/orders.py",
+        ("FROM CORE.CODE_CHUNK WHERE REPO_ID", [{"chunk_id": "c1", "repo_id": "repo-1", "path": "dags/sales/orders.py",
                                                   "start_line": 10, "end_line": 16, "kind": "PY_FUNC", "name": "load_orders",
                                                   "text": chunk_text, "commit_sha": "abc"}]),
         ("QUERY_HISTORY", [{"query_id": "01b2c3d4-0000-1234-0000-00012345abcd", "execution_status": "FAIL", "error_code": "002003",
                             "error_message": "Object 'RAW.ORDERS' does not exist", "warehouse_name": "WH"}]),
-        ("FROM OPS.DAG_RUN", [{"run_id": "r9", "state": "failed", "duration_s": 900, "started_at": "2026-10-12T08:45:00+00:00"}]
+        ("FROM CORE.DAG_RUN", [{"run_id": "r9", "state": "failed", "duration_s": 900, "started_at": "2026-10-12T08:45:00+00:00"}]
          + [{"run_id": f"r{i}", "state": "success", "duration_s": 100, "started_at": f"2026-10-0{i}T08:45:00+00:00",
              "ended_at": f"2026-10-0{i}T08:47:00+00:00"} for i in range(1, 6)]),
     ])
@@ -285,8 +285,8 @@ def test_prompts_frame_untrusted_text():
 
 def incident_db(ai=None, extra=None):
     row = {**INCIDENT}
-    db = FakeDb([("SELECT AI FROM OPS.INCIDENT", [{"ai": json.dumps(ai) if ai else None}]),
-                 ("FROM OPS.INCIDENT WHERE INCIDENT_ID", [row])] + list(extra or []))
+    db = FakeDb([("SELECT AI FROM CORE.INCIDENT", [{"ai": json.dumps(ai) if ai else None}]),
+                 ("FROM CORE.INCIDENT WHERE INCIDENT_ID", [row])] + list(extra or []))
     return db
 
 
@@ -321,13 +321,13 @@ def test_diagnosis_is_cached_while_the_fingerprint_is_unchanged():
     db = incident_db(cached)
     out = dg.diagnose(db, "i-1", force=True, actor="ANA", complete=fake, search=lambda q: [], now=NOW)
     assert calls == [("OPS", True)] and not out["cached"]
-    update = db.wrote("UPDATE OPS.INCIDENT SET AI = PARSE_JSON")
+    update = db.wrote("UPDATE CORE.INCIDENT SET AI = PARSE_JSON")
     assert update and SECRET not in json.dumps(update[0][1]) and update[0][1][1].startswith("Credentials or permissions (1.0)")
-    events = [w for w in db.writes if "INSERT INTO OPS.INCIDENT_EVENT" in w[0]]
+    events = [w for w in db.writes if "INSERT INTO CORE.INCIDENT_EVENT" in w[0]]
     assert any(w[1][2] == "diagnosed" and w[1][3] == "ANA" for w in events)
-    jira = [w for w in db.wrote("MERGE INTO OPS.NOTIFICATION") if w[1][5] == "ai"]
+    jira = [w for w in db.wrote("MERGE INTO CORE.NOTIFICATION") if w[1][5] == "ai"]
     assert jira and jira[0][1][4] == "JIRA" and "AI diagnosis" in jira[0][1][7]
-    audit = [q for q in db.queries if "AUDIT.AGENT_TOOL_CALL" in q[0] or "AUDIT.COST_USAGE" in q[0]]
+    audit = [q for q in db.queries if "CORE.AGENT_TOOL_CALL" in q[0] or "CORE.COST_USAGE" in q[0]]
     assert len(audit) >= 2        # one tool call row and one cost row
 
 
@@ -382,7 +382,7 @@ class ClearMwaa:
 
 
 def retry_db(ai=None, human=None):
-    db = incident_db(ai, [("FROM OPS.AIRFLOW_ENV WHERE ENV_ID", [{"env_id": "prod", "mwaa_env": "mw", "region": "eu-west-1"}])])
+    db = incident_db(ai, [("FROM CORE.AIRFLOW_ENV WHERE ENV_ID", [{"env_id": "prod", "mwaa_env": "mw", "region": "eu-west-1"}])])
     if human:
         db.on("KIND = 'retry_marked'", [{"actor": "BOB", "detail": json.dumps(human)}])
     return db
@@ -400,7 +400,7 @@ def test_retry_previews_then_clears_exactly_what_was_previewed():
                  mwaa_factory=lambda env: mw)
     done = rt.retry(db, "i-1", dry_run=False, user="ANA", preview_token=preview["preview_token"], mwaa_factory=lambda env: mw)
     assert done["cleared"] == 1 and mw.calls[-1] == {"dry_run": False, "tasks": ["load"], "downstream": False}
-    kinds = [w[1][2] for w in db.writes if "INSERT INTO OPS.INCIDENT_EVENT" in w[0]]
+    kinds = [w[1][2] for w in db.writes if "INSERT INTO CORE.INCIDENT_EVENT" in w[0]]
     assert kinds == ["retry_requested", "retried"]
 
 
@@ -426,11 +426,11 @@ def test_retry_refused_when_marked_unsafe_unless_overridden():
 def test_resolution_is_remembered_redacted_with_the_dag_domain():
     resolved = {**INCIDENT, "status": "RESOLVED", "resolved_by": "ANA",
                 "resolution": "Granted SELECT on RAW.ORDERS again; token=" + SECRET + " rotated"}
-    db = FakeDb([("SELECT AI FROM OPS.INCIDENT", [{"ai": json.dumps({"category": "credentials_or_permissions",
+    db = FakeDb([("SELECT AI FROM CORE.INCIDENT", [{"ai": json.dumps({"category": "credentials_or_permissions",
                                                                      "probable_cause": "lost grant"})}]),
-                 ("FROM OPS.INCIDENT WHERE INCIDENT_ID", [resolved]),
-                 ("SELECT DOMAIN_ID FROM OPS.DAG", [{"domain_id": "dom-sales"}]),
-                 ("FROM KNOWLEDGE.DOMAIN_REGISTRY WHERE DOMAIN_ID", [{"x": 1}])])
+                 ("FROM CORE.INCIDENT WHERE INCIDENT_ID", [resolved]),
+                 ("SELECT DOMAIN_ID FROM CORE.DAG", [{"domain_id": "dom-sales"}]),
+                 ("FROM CORE.DOMAIN_REGISTRY WHERE DOMAIN_ID", [{"x": 1}])])
     calls = []
 
     def remember(session, **kw):

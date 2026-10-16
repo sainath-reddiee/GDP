@@ -227,6 +227,8 @@ def _candidate(kind: str, dag: Dict[str, Any], env: Dict[str, Any], task_id: Opt
     sig_source = excerpt if kind in ("RETRIES_EXHAUSTED", "UPSTREAM") else kind.lower()
     return {
         "kind": kind, "env_id": env_id, "dag_id": dag_id, "task_id": task_id, "map_index": run.get("map_index"),
+        "try_number": run.get("try_number"),
+        "retrying": bool(retrying),   # up_for_retry on a critical DAG: Airflow will run it again
         "run_id": run.get("run_id"), "at": ts(at) or ts(datetime.now(timezone.utc)), "error_excerpt": excerpt,
         "fingerprint": fingerprint(env_id, dag_id, task_id, sig_source),
         "severity": severity(dag.get("criticality"), kind, (env_id, env.get("name")), run.get("run_type"),
@@ -238,7 +240,7 @@ def _candidate(kind: str, dag: Dict[str, Any], env: Dict[str, Any], task_id: Opt
 
 def from_task(task: Dict[str, Any], dag: Dict[str, Any], env: Dict[str, Any], settings: Dict[str, Any],
               run: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
-    """A task row (lower-case OPS.TASK_RUN columns) -> RETRIES_EXHAUSTED candidate or None."""
+    """A task row (lower-case CORE.TASK_RUN columns) -> RETRIES_EXHAUSTED candidate or None."""
     state = str(task.get("state") or "").lower()
     retrying = False
     if state == "failed":
@@ -248,7 +250,8 @@ def from_task(task: Dict[str, Any], dag: Dict[str, Any], env: Dict[str, Any], se
         retrying = True
     else:
         return None
-    meta = {**(run or {}), "run_id": task.get("run_id"), "map_index": task.get("map_index")}
+    meta = {**(run or {}), "run_id": task.get("run_id"), "map_index": task.get("map_index"),
+            "try_number": task.get("try_number")}
     key = f"task:{task.get('run_id')}:{task.get('task_id')}:{task.get('map_index', -1)}:{task.get('try_number', 0)}"
     return _candidate("RETRIES_EXHAUSTED", dag, env, task.get("task_id"), meta, task.get("error_excerpt"),
                       task.get("ended_at") or task.get("updated_at"), key, retrying)

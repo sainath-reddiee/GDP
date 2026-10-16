@@ -52,17 +52,17 @@ def new_run(cur):
 
 def landed_run(cur, source):
     run_id = new_run(cur)
-    call(cur, "CALL SOURCE.REGISTER_SOURCE(%s, %s)", (run_id, json.dumps(
+    call(cur, "CALL CORE.REGISTER_SOURCE(%s, %s)", (run_id, json.dumps(
         {"SOURCE_SYSTEM_NAME": source, "SOURCE_TYPE": "SNOWFLAKE_DATABASE", "DATABASE": DEMO, "SCHEMA": "CRM"})))
-    assert call(cur, "CALL SOURCE.VALIDATE_SOURCE_ACCESS(%s, %s)", (run_id, '["CRM_CUSTOMER"]'))["passed"]
-    assert call(cur, "CALL SOURCE.EXECUTE_LANDING(%s)", (run_id,))["state"]["current_state"] == "LANDING_COMPLETE"
+    assert call(cur, "CALL CORE.VALIDATE_SOURCE_ACCESS(%s, %s)", (run_id, '["CRM_CUSTOMER"]'))["passed"]
+    assert call(cur, "CALL CORE.EXECUTE_LANDING(%s)", (run_id,))["state"]["current_state"] == "LANDING_COMPLETE"
     return run_id
 
 
 def put_workspace(cur, run_id):
     tmp = Path(tempfile.mkdtemp()) / "stg_dummy.sql"
     tmp.write_text("select 1 as x\n", encoding="utf-8")
-    cur.execute(f"PUT 'file://{tmp.as_posix()}' @CODEGEN.DBT_STAGE/{run_id}/v1/models/ AUTO_COMPRESS = FALSE")
+    cur.execute(f"PUT 'file://{tmp.as_posix()}' @CORE.DBT_STAGE/{run_id}/v1/models/ AUTO_COMPRESS = FALSE")
 
 
 def stage_files(cur, path):
@@ -71,8 +71,8 @@ def stage_files(cur, path):
 
 
 def profile_snapshot(cur):
-    count = rows(cur, "SELECT COUNT(*) AS N, MAX(PROFILED_AT)::VARCHAR AS LATEST FROM METADATA.TABLE_PROFILES")[0]
-    return count["N"], count["LATEST"], len(stage_files(cur, "METADATA.PROFILES_STAGE"))
+    count = rows(cur, "SELECT COUNT(*) AS N, MAX(PROFILED_AT)::VARCHAR AS LATEST FROM CORE.TABLE_PROFILES")[0]
+    return count["N"], count["LATEST"], len(stage_files(cur, "CORE.PROFILES_STAGE"))
 
 
 def cleanup(cur, run_ids, drop=True, workspaces=True, delete=True):
@@ -88,7 +88,7 @@ def test_batch_cleanup_purges_sandbox_but_keeps_profiles_and_audit(cur):
     runs = [landed_run(cur, source) for _ in range(3)]
     for run_id in runs:
         put_workspace(cur, run_id)
-        assert stage_files(cur, f"CODEGEN.DBT_STAGE/{run_id}/")
+        assert stage_files(cur, f"CORE.DBT_STAGE/{run_id}/")
     keeper = landed_run(cur, source)
 
     result = cleanup(cur, runs)
@@ -97,7 +97,7 @@ def test_batch_cleanup_purges_sandbox_but_keeps_profiles_and_audit(cur):
     kept = {k["table"]: k for k in result["landing"]["kept"]}
     assert landing in kept and keeper in kept[landing]["runs"], result["landing"]
     for run_id in runs:
-        assert not stage_files(cur, f"CODEGEN.DBT_STAGE/{run_id}/")
+        assert not stage_files(cur, f"CORE.DBT_STAGE/{run_id}/")
 
     marked = rows(cur, "SELECT RUN_ID, DELETED_AT, IS_ARCHIVED FROM CORE.WORKFLOW_RUN "
                        "WHERE ARRAY_CONTAINS(RUN_ID::VARIANT, PARSE_JSON(%s)::ARRAY)", (json.dumps(runs),))
@@ -114,7 +114,7 @@ def test_batch_cleanup_purges_sandbox_but_keeps_profiles_and_audit(cur):
     assert landing in last["landing"]["dropped"], last
     cur.execute(f"SHOW TABLES LIKE '{source}__CRM_CUSTOMER' IN SCHEMA {DATABASE}.LANDING")
     assert cur.fetchall() == []
-    purged = rows(cur, "SELECT DISTINCT INGESTION_STATUS AS S FROM SOURCE.LANDING_TABLE_REGISTRY WHERE RUN_ID = %s",
+    purged = rows(cur, "SELECT DISTINCT INGESTION_STATUS AS S FROM CORE.LANDING_TABLE_REGISTRY WHERE RUN_ID = %s",
                   (keeper,))
     assert [r["S"] for r in purged] == ["PURGED"]
     assert profile_snapshot(cur) == profiles_before
@@ -136,7 +136,7 @@ def test_archive_freezes_and_restore_unfreezes(cur):
     state = call(cur, "CALL CORE.GET_WORKFLOW_STATE(%s)", (run_id,))
     assert state["lifecycle"] == "ARCHIVED" and state["is_archived"] is True
     with pytest.raises(Exception, match="archived or deleted"):
-        call(cur, "CALL SOURCE.REGISTER_SOURCE(%s, %s)", (run_id, json.dumps(
+        call(cur, "CALL CORE.REGISTER_SOURCE(%s, %s)", (run_id, json.dumps(
             {"SOURCE_SYSTEM_NAME": "ITEST_CRM", "SOURCE_TYPE": "SNOWFLAKE_DATABASE", "DATABASE": DEMO,
              "SCHEMA": "CRM"})))
 

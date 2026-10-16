@@ -141,11 +141,11 @@ def assemble_for_run(session, run: Dict[str, Any], sttm: Dict[str, Any], design:
     assert ctx, ("NO_GOLD_TARGET: this Gold run is not pinned to a table of an approved gold model; choose the gold "
                  "table on the Modeling step and approve the mapping again")
     sttm_lines = [{str(k).lower(): v for k, v in r.items()}
-                  for r in rows(session, "SELECT * FROM CONTRACT.STTM_LINE WHERE STTM_ID = ? ORDER BY TARGET_COLUMN",
+                  for r in rows(session, "SELECT * FROM CORE.STTM_LINE WHERE STTM_ID = ? ORDER BY TARGET_COLUMN",
                                 [sttm["STTM_ID"]])]
     try:
         chunks = [{str(k).lower(): v for k, v in r.items()} for r in rows(session, """
-            SELECT C.PATH, C.KIND, C.NAME, C.TEXT, C.COLUMNS FROM CODE.CODE_CHUNK C JOIN CODE.REPO R ON R.REPO_ID = C.REPO_ID
+            SELECT C.PATH, C.KIND, C.NAME, C.TEXT, C.COLUMNS FROM CORE.CODE_CHUNK C JOIN CORE.REPO R ON R.REPO_ID = C.REPO_ID
              WHERE R.ENABLED AND (C.TEXT ILIKE '%m_insert_history_gold(%' OR LOWER(C.NAME) = 'dim_data_source') LIMIT 200""")]
         for c in chunks:
             c["columns"] = variant(c.get("columns")) or []

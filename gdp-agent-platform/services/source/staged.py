@@ -1,4 +1,4 @@
-"""Staged share landing (pure SQL builders): Snowflake share -> compressed Parquet on SOURCE.LANDING_STAGE -> landing.
+"""Staged share landing (pure SQL builders): Snowflake share -> compressed Parquet on CORE.LANDING_STAGE -> landing.
 
 The share is read once, by one COPY INTO <stage> statement, and every later step works on the platform's own staged
 files, so a long load never holds the provider's objects and a failed load can be retried from the files. The landing
@@ -17,15 +17,15 @@ from typing import List
 from services.source.identifiers import quote
 
 METHOD = "STAGED_PARQUET"
-STAGE = "SOURCE.LANDING_STAGE"
-FILE_FORMAT = "SOURCE.PARQUET_SNAPPY"
+STAGE = "CORE.LANDING_STAGE"
+FILE_FORMAT = "CORE.PARQUET_SNAPPY"
 MAX_FILE_SIZE = 256 * 1024 * 1024
 RUN_ID = re.compile(r"^[A-Za-z0-9-]{1,64}$")
 DB = re.compile(r"^[A-Za-z_][A-Za-z0-9_$]*$")
 
 
 def stage_prefix(platform_database: str, run_id: str, landing_table: str) -> str:
-    """@<db>.SOURCE.LANDING_STAGE/runs/<run_id>/<landing table>/ (quoted stage path, safe for SQL)."""
+    """@<db>.CORE.LANDING_STAGE/runs/<run_id>/<landing table>/ (quoted stage path, safe for SQL)."""
     assert DB.match(platform_database or ""), "unsafe platform database name"
     assert RUN_ID.match(run_id or ""), "unsafe run id"
     assert re.match(r"^[A-Z0-9_]{1,255}$", landing_table or ""), "landing tables are named [A-Z0-9_]"

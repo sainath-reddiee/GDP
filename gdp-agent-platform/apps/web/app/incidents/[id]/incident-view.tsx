@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState, useTransition, type ReactNode } from "react";
 import {
-  BellOff, CheckCheck, CircleCheck, ExternalLink, Loader2, MessageSquarePlus, RotateCcw, RotateCw, Sparkles, Ticket, UserPlus, X,
+  BellOff, CheckCheck, CircleCheck, ExternalLink, Loader2, MessageSquarePlus, RotateCcw, RotateCw, Sparkles, Ticket, UserPlus, Wrench, X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input, Textarea } from "@/components/ui/input";
@@ -17,6 +17,7 @@ import {
   ackIncident, assignIncident, commentIncident, incidentDetail, muteIncident, reopenIncident, resolveIncident, ticketIncident,
   type IncidentDetail,
 } from "../actions";
+import { ResolutionPanel } from "./resolution-panel";
 import { dagRunHref, incidentHref, IncidentStatusPill, KindPill, localInput, SeverityPill, up } from "../incident-shared";
 import { AiPanel, ImpactPanel, RetryBadge, RetryDialog } from "./incident-ai";
 import { caseFromIncident } from "../../qa/cases/actions";
@@ -54,7 +55,9 @@ function detailText(d: unknown): string {
 
 /** One incident: header with status actions, then error, diagnosis, impact, timeline, notifications, runs, children,
  *  Jira and the resolution. Every action returns the full detail, which replaces what is shown. */
-export function IncidentView({ initial, envName, askAck, canOperate, canAI, canCase = false, jiraComment, jiraMe }: {
+export function IncidentView({ initial, envName, askAck, canOperate, canAI, canCase = false, jiraComment, jiraMe, canFixApprove = false }: {
+  /** may approve or reject running a known fix (OPS.FIX_APPROVE) */
+  canFixApprove?: boolean;
   initial: IncidentDetail; envName: string; askAck: boolean; canOperate: boolean; canAI: boolean; /** CASE.WORK */ canCase?: boolean;
   jiraComment: boolean; jiraMe: string;
 }) {
@@ -271,6 +274,10 @@ export function IncidentView({ initial, envName, askAck, canOperate, canAI, canC
           <Section title="AI diagnosis" aside={<Sparkles className="h-4 w-4 text-muted-foreground" />}>
             <AiPanel incidentId={inc.incident_id} ai={inc.ai} summary={inc.ai_summary} canAI={canAI}
                      onAi={(ai) => setData((d) => ({ ...d, incident: { ...d.incident, ai } }))} />
+          </Section>
+
+          <Section title="Automatic resolution" aside={<Wrench className="h-4 w-4 text-muted-foreground" />}>
+            <ResolutionPanel incidentId={inc.incident_id} status={inc.status} canApprove={canFixApprove} canWrite={canOperate} />
           </Section>
 
           <Section title="Impact">

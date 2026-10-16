@@ -52,7 +52,7 @@ def test_sync_remembers_closed_pull_requests(monkeypatch):
                  "PR_URL": "https://github.com/o/r/pull/7"},
                 {"KIND": "MODEL", "ASSET_ID": "m1", "VERSION": 4, "ASSET_NAME": "SALES", "PR_NUMBER": 8,
                  "GIT_URL": "https://github.com/o/r", "DOMAIN_ID": "d1", "BRANCH": "b", "PR_URL": "u"}]
-    session = Session({"FROM GOVERNANCE.GIT_PR G": open_prs})
+    session = Session({"FROM CORE.GIT_PR G": open_prs})
     states = {7: {"state": "CLOSED"}, 8: {"state": "MERGED", "merge_commit_sha": "abc"}}
     out = roundtrip.sync(session, {"force": True}, lambda url, number: states[number])
     assert len(out["closed"]) == 1 and len(out["merged"]) == 1
@@ -82,7 +82,7 @@ def test_a_pass_after_a_failure_teaches_but_a_first_pass_does_not(monkeypatch):
     monkeypatch.setattr(writer, "remember", lambda session, **kw: seen.append(kw))
     run = {"DOMAIN_ID": "d1", "TARGET_MODEL": "DB.SILVER.CUSTOMER"}
     failed = json.dumps({"results": [{"validation_type": "NAMING", "findings": [{"severity": "ERROR", "message": "bad prefix"}]}]})
-    vp._remember_fixed(Session({"CODEGEN.VALIDATION_RUN": [{"RESULT_JSON": failed}]}), run, "r1")
+    vp._remember_fixed(Session({"CORE.VALIDATION_RUN": [{"RESULT_JSON": failed}]}), run, "r1")
     vp._remember_fixed(Session({}), run, "r2")
     assert [kw["key"] for kw in seen] == ["dbt.validation.CUSTOMER"]
 

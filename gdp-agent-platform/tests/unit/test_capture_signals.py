@@ -56,7 +56,7 @@ def test_mapping_knowledge_collects_anti_patterns_and_notes():
 
             class R:
                 def collect(self_inner):
-                    if "FROM KNOWLEDGE.DOMAIN_KNOWLEDGE" in flat and "KNOWLEDGE_USAGE" not in flat:
+                    if "FROM CORE.DOMAIN_KNOWLEDGE" in flat and "KNOWLEDGE_USAGE" not in flat:
                         return [Row(KNOWLEDGE_ID="p1", KNOWLEDGE_TYPE="MAPPING_PATTERN", LINEAGE_ID="L1",
                                     CONTENT_JSON=json.dumps({"source_column": "PHONE_NO", "target_column": None,
                                                              "target_table": "DIM_CUSTOMER", "decision": "REJECTED",

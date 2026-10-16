@@ -86,26 +86,26 @@ def remember(session, *, domain_id: Optional[str], kind: str, key: str, title: s
 
     content = clip(content, 16000)
     where, params = ("DOMAIN_ID = ? AND SOURCE_REFERENCE = ?", [domain_id, key]) if by_domain else ("SOURCE_REFERENCE = ?", [key])
-    current = rows(session, f"""SELECT KNOWLEDGE_ID, CONTENT, CONTENT_JSON, STATUS FROM KNOWLEDGE.DOMAIN_KNOWLEDGE
+    current = rows(session, f"""SELECT KNOWLEDGE_ID, CONTENT, CONTENT_JSON, STATUS FROM CORE.DOMAIN_KNOWLEDGE
                                  WHERE {where} AND IS_CURRENT ORDER BY VERSION DESC LIMIT 1""", params)
     if current and _same(current[0], content, content_json) and (status or "ACTIVE") == current[0].get("STATUS"):
         return None
     if mode != "review":
         mode = "auto" if status else mode_for(config_value(session, "KNOWLEDGE_LEARNING_POLICY", {}), kind, origin)
-    version = (scalar(session, f"SELECT MAX(VERSION) FROM KNOWLEDGE.DOMAIN_KNOWLEDGE WHERE {where}", params) or 0) + 1
+    version = (scalar(session, f"SELECT MAX(VERSION) FROM CORE.DOMAIN_KNOWLEDGE WHERE {where}", params) or 0) + 1
     if mode == "review":
         # one proposal at a time per lineage: a newer proposal replaces the one still waiting
-        session.sql(f"""UPDATE KNOWLEDGE.DOMAIN_KNOWLEDGE SET STATUS = 'SUPERSEDED', UPDATED_AT = CURRENT_TIMESTAMP()
+        session.sql(f"""UPDATE CORE.DOMAIN_KNOWLEDGE SET STATUS = 'SUPERSEDED', UPDATED_AT = CURRENT_TIMESTAMP()
                         WHERE {where} AND STATUS = 'PROPOSED'""", params=params).collect()
         new_status, is_current = "PROPOSED", False
     else:
-        session.sql(f"""UPDATE KNOWLEDGE.DOMAIN_KNOWLEDGE
+        session.sql(f"""UPDATE CORE.DOMAIN_KNOWLEDGE
                            SET IS_CURRENT = FALSE, UPDATED_AT = CURRENT_TIMESTAMP(),
                                STATUS = IFF(STATUS IN ('ACTIVE', 'RETIRED'), 'SUPERSEDED', STATUS)
                          WHERE {where} AND IS_CURRENT""", params=params).collect()
         new_status, is_current = (status or "ACTIVE"), True
     knowledge_id = str(uuid.uuid4())
-    insert_rows(session, "KNOWLEDGE.DOMAIN_KNOWLEDGE",
+    insert_rows(session, "CORE.DOMAIN_KNOWLEDGE",
                 ["KNOWLEDGE_ID", "DOMAIN_ID", "KNOWLEDGE_TYPE", "TITLE", "CONTENT", "CONTENT_JSON", "TAGS",
                  "SOURCE_REFERENCE", "STATUS", "VERSION", "IS_CURRENT", "CREATED_BY", "LINEAGE_ID", "ORIGIN",
                  "SOURCE_RUN_ID", "CONFIDENCE", "CHANGE_NOTE", "LAYER"],
@@ -120,7 +120,7 @@ def remember(session, *, domain_id: Optional[str], kind: str, key: str, title: s
 
 def forget(session, domain_id: Optional[str], key: str) -> None:
     """A reviewer rejected what the current version says: it stops being used (kept for history)."""
-    session.sql("""UPDATE KNOWLEDGE.DOMAIN_KNOWLEDGE SET IS_CURRENT = FALSE, STATUS = 'RETIRED', UPDATED_AT = CURRENT_TIMESTAMP()
+    session.sql("""UPDATE CORE.DOMAIN_KNOWLEDGE SET IS_CURRENT = FALSE, STATUS = 'RETIRED', UPDATED_AT = CURRENT_TIMESTAMP()
                    WHERE DOMAIN_ID = ? AND SOURCE_REFERENCE = ? AND IS_CURRENT""", params=[domain_id, key]).collect()
 
 
@@ -130,10 +130,10 @@ def record_usage(session, run_id: Optional[str], stage: str, knowledge_ids: List
     if not ids:
         return
     try:
-        session.sql("""INSERT INTO KNOWLEDGE.KNOWLEDGE_USAGE (KNOWLEDGE_ID, LINEAGE_ID, RUN_ID, STAGE)
-                       SELECT K.KNOWLEDGE_ID, K.LINEAGE_ID, NULLIF(?, ''), ? FROM KNOWLEDGE.DOMAIN_KNOWLEDGE K
+        session.sql("""INSERT INTO CORE.KNOWLEDGE_USAGE (KNOWLEDGE_ID, LINEAGE_ID, RUN_ID, STAGE)
+                       SELECT K.KNOWLEDGE_ID, K.LINEAGE_ID, NULLIF(?, ''), ? FROM CORE.DOMAIN_KNOWLEDGE K
                         WHERE ARRAY_CONTAINS(K.KNOWLEDGE_ID::VARIANT, PARSE_JSON(?))
-                          AND NOT EXISTS (SELECT 1 FROM KNOWLEDGE.KNOWLEDGE_USAGE U
+                          AND NOT EXISTS (SELECT 1 FROM CORE.KNOWLEDGE_USAGE U
                                            WHERE U.KNOWLEDGE_ID = K.KNOWLEDGE_ID AND U.STAGE = ?
                                              AND COALESCE(U.RUN_ID, '') = ?)""",
                     params=[run_id or "", stage, json.dumps(ids[:500]), stage, run_id or ""]).collect()

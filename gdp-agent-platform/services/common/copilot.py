@@ -111,7 +111,7 @@ def page_context(session, page: Dict[str, Any]) -> Dict[str, Any]:
         run = _safe(lambda: rows(session, """SELECT R.RUN_NAME, R.CURRENT_STATE, R.CURRENT_STAGE, R.DOMAIN_ID,
                                                     D.DOMAIN_NAME, R.CREATED_AT::VARCHAR AS CREATED_AT
                                                FROM CORE.WORKFLOW_RUN R
-                                               LEFT JOIN KNOWLEDGE.DOMAIN_REGISTRY D ON D.DOMAIN_ID = R.DOMAIN_ID
+                                               LEFT JOIN CORE.DOMAIN_REGISTRY D ON D.DOMAIN_ID = R.DOMAIN_ID
                                               WHERE R.RUN_ID = ?""", [run_id]), [])
         if run:
             ctx["RUN"] = {k.lower(): v for k, v in run[0].items()}
@@ -121,9 +121,9 @@ def page_context(session, page: Dict[str, Any]) -> Dict[str, Any]:
             "pii": r["PII_COLUMNS"], "quality": variant(r["QUALITY_JSON"])} for r in rows(session, """
             SELECT L.SOURCE_TABLE AS TABLE_NAME, P.ROW_COUNT, P.COLUMN_COUNT, P.AVG_NULL_PERCENTAGE, P.KEY_CANDIDATES,
                    P.PII_COLUMNS, P.QUALITY_JSON
-              FROM SOURCE.LANDING_TABLE_REGISTRY L
-              LEFT JOIN SOURCE.SOURCE_REGISTRY S ON S.SOURCE_SYSTEM_ID = L.SOURCE_SYSTEM_ID
-              LEFT JOIN METADATA.TABLE_PROFILES P ON P.SOURCE_NAME = S.SOURCE_SYSTEM_NAME
+              FROM CORE.LANDING_TABLE_REGISTRY L
+              LEFT JOIN CORE.SOURCE_REGISTRY S ON S.SOURCE_SYSTEM_ID = L.SOURCE_SYSTEM_ID
+              LEFT JOIN CORE.TABLE_PROFILES P ON P.SOURCE_NAME = S.SOURCE_SYSTEM_NAME
                    AND P.DATABASE_NAME = L.SOURCE_DATABASE AND P.SCHEMA_NAME = L.SOURCE_SCHEMA
                    AND P.TABLE_NAME = L.SOURCE_TABLE
              WHERE L.RUN_ID = ? AND L.INGESTION_STATUS = 'COMPLETE'
@@ -135,18 +135,18 @@ def page_context(session, page: Dict[str, Any]) -> Dict[str, Any]:
                 "type": r["CHECK_TYPE"], "severity": r["SEVERITY"], "status": r["STATUS"], "origin": r["ORIGIN"],
                 "definition": variant(r["CHECK_DEFINITION"])} for r in rows(session, """
                 SELECT EXPECTATION_ID, TARGET_TABLE, TARGET_COLUMN, CHECK_TYPE, SEVERITY, STATUS, ORIGIN, CHECK_DEFINITION
-                  FROM CONTRACT.SODA_EXPECTATION_REGISTRY WHERE RUN_ID = ? AND IS_CURRENT
+                  FROM CORE.SODA_EXPECTATION_REGISTRY WHERE RUN_ID = ? AND IS_CURRENT
                  ORDER BY STATUS, CHECK_TYPE LIMIT 60""", [run_id])], [])
         if page.get("stage") in ("QA", "OVERVIEW", "REVIEW"):
             ctx["QA_TESTS"] = _safe(lambda: [{
                 "key": f"TEST:{r['TEST_ID'][:8]}", "category": r["CATEGORY"], "title": r["TITLE"],
                 "severity": r["SEVERITY"], "sql": clip(r["SQL_TEXT"], 600)} for r in rows(session, """
-                SELECT TEST_ID, CATEGORY, TITLE, SEVERITY, SQL_TEXT FROM CONTRACT.QA_TEST_CASE
+                SELECT TEST_ID, CATEGORY, TITLE, SEVERITY, SQL_TEXT FROM CORE.QA_TEST_CASE
                  WHERE RUN_ID = ? AND NOT COALESCE(IS_DELETED, FALSE) ORDER BY CREATED_AT DESC LIMIT 30""", [run_id])], [])
     if page.get("database") and page.get("schema") and page.get("table"):
         entry = _safe(lambda: rows(session, """SELECT PROFILE_STAGE_PATH, ROW_COUNT, COLUMN_COUNT, AVG_NULL_PERCENTAGE,
                                                       KEY_CANDIDATES, PII_COLUMNS, PROFILED_AT::VARCHAR AS PROFILED_AT
-                                                 FROM METADATA.TABLE_PROFILES
+                                                 FROM CORE.TABLE_PROFILES
                                                 WHERE DATABASE_NAME = ? AND SCHEMA_NAME = ? AND TABLE_NAME = ?
                                                 ORDER BY PROFILED_AT DESC LIMIT 1""",
                                        [page["database"], page["schema"], page["table"]]), [])
@@ -160,8 +160,8 @@ def page_context(session, page: Dict[str, Any]) -> Dict[str, Any]:
             from services.profiling.profiler import STAGE_PATH
 
             if STAGE_PATH.match(path):
-                doc = _safe(lambda: variant(rows(session, f"SELECT $1 AS DOC FROM @METADATA.PROFILES_STAGE/{path} "
-                                                          "(FILE_FORMAT => 'METADATA.PROFILE_JSON_FORMAT')")[0]["DOC"]), None)
+                doc = _safe(lambda: variant(rows(session, f"SELECT $1 AS DOC FROM @CORE.PROFILES_STAGE/{path} "
+                                                          "(FILE_FORMAT => 'CORE.PROFILE_JSON_FORMAT')")[0]["DOC"]), None)
                 if isinstance(doc, dict):
                     profile["column_profiles"] = [{
                         "column": c.get("column_name"), "type": c.get("data_type"), "semantic": c.get("semantic_type"),
@@ -182,18 +182,18 @@ def page_context(session, page: Dict[str, Any]) -> Dict[str, Any]:
     return ctx
 
 
-# The case on a /qa/cases/<id> page, only when the caller may see its domain: the same rule as the CASES.DOMAIN_SCOPE
+# The case on a /qa/cases/<id> page, only when the caller may see its domain: the same rule as the CORE.DOMAIN_SCOPE
 # row policy and services/governance/domains.py (GENERAL, a member, a domain without members, no domain, or admin).
 CASE_SQL = """SELECT C.CASE_NUMBER, C.TITLE, C.KIND, C.STATUS, C.SEVERITY, C.AI_SUMMARY, D.DOMAIN_NAME,
                      T.TARGET_DATABASE || '.' || T.TARGET_SCHEMA || '.' || T.TARGET_TABLE AS TARGET_FQN
-                FROM CASES.CASE_RECORD C
-                LEFT JOIN KNOWLEDGE.DOMAIN_REGISTRY D ON D.DOMAIN_ID = C.DOMAIN_ID
-                LEFT JOIN KNOWLEDGE.TARGET_TABLE_REGISTRY T ON T.TARGET_TABLE_ID = C.TARGET_TABLE_ID
+                FROM CORE.CASE_RECORD C
+                LEFT JOIN CORE.DOMAIN_REGISTRY D ON D.DOMAIN_ID = C.DOMAIN_ID
+                LEFT JOIN CORE.TARGET_TABLE_REGISTRY T ON T.TARGET_TABLE_ID = C.TARGET_TABLE_ID
                WHERE C.CASE_ID = ?
                  AND (C.DOMAIN_ID IS NULL OR UPPER(D.DOMAIN_NAME) = 'GENERAL'
                       OR IS_DATABASE_ROLE_IN_SESSION('PLATFORM_ADMIN')
-                      OR C.DOMAIN_ID IN (SELECT DOMAIN_ID FROM KNOWLEDGE.DOMAIN_MEMBER WHERE UPPER(USER_NAME) = UPPER(CURRENT_USER()))
-                      OR C.DOMAIN_ID NOT IN (SELECT DOMAIN_ID FROM KNOWLEDGE.DOMAIN_MEMBER))"""
+                      OR C.DOMAIN_ID IN (SELECT DOMAIN_ID FROM CORE.DOMAIN_MEMBER WHERE UPPER(USER_NAME) = UPPER(CURRENT_USER()))
+                      OR C.DOMAIN_ID NOT IN (SELECT DOMAIN_ID FROM CORE.DOMAIN_MEMBER))"""
 
 
 def context_keys(ctx: Dict[str, Any], hits: List[Dict[str, Any]]) -> set:

@@ -191,13 +191,13 @@ def _attachment_text(db: Db, session_id: str, attachment_id: str) -> str:
 
 
 def _audit_tool(db: Db, session_id: str, event: Dict[str, Any]) -> None:
-    """AUDIT.AGENT_TOOL_CALL row for one copilot tool call, like the platform's other agents record theirs (redacted
+    """CORE.AGENT_TOOL_CALL row for one copilot tool call, like the platform's other agents record theirs (redacted
     arguments, outcome, duration, the person). Never fails the turn: a role that cannot write the audit table still
     has the call in the conversation's own events."""
     summary = event.get("summary")
     text = json.dumps(summary, default=str)[:3900] if summary is not None else ""
     try:
-        db.execute("""INSERT INTO AUDIT.AGENT_TOOL_CALL (TOOL_CALL_ID, AGENT_RUN_ID, TOOL_NAME, INPUT_JSON, OUTPUT_SUMMARY,
+        db.execute("""INSERT INTO CORE.AGENT_TOOL_CALL (TOOL_CALL_ID, AGENT_RUN_ID, TOOL_NAME, INPUT_JSON, OUTPUT_SUMMARY,
                           STATUS, DURATION_MS, ERROR, CALLED_BY)
                       SELECT %s, %s, %s, PARSE_JSON(%s), NULLIF(%s, ''), %s, %s, NULLIF(%s, ''), CURRENT_USER()""",
                    (str(uuid.uuid4()), session_id, f"copilot.{str(event.get('tool') or '')[:100]}",
@@ -208,7 +208,7 @@ def _audit_tool(db: Db, session_id: str, event: Dict[str, Any]) -> None:
         global _audit_warned
         if not _audit_warned:   # once per process: the role cannot write the audit table (or it is missing)
             _audit_warned = True
-            log.warning("copilot tool calls are not written to AUDIT.AGENT_TOOL_CALL: %s", str(exc)[:300])
+            log.warning("copilot tool calls are not written to CORE.AGENT_TOOL_CALL: %s", str(exc)[:300])
 
 
 def _code_context(db: Db, domain_id: Optional[str], question: str) -> str:

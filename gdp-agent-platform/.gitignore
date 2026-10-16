@@ -14,3 +14,6 @@ docker/.env
 docker/api.env
 docker/secrets/
 apps/web/.env*.local
+
+# Consolidation runbook output (baselines, verification results; may name client tables)
+consolidation_runs/

@@ -40,10 +40,10 @@ export default async function QaStorePage({ searchParams }: { searchParams: Para
       <StoreTabs base="/dashboard/qa-store" current={view} keep={{ domain: searchParams.domain }}
                  tabs={[{ id: "packs", label: "Domain packs", count: summary?.packs ?? null }, { id: "tests", label: "Run tests", count: summary?.run_tests ?? null }]} />
       {view === "tests" && (!runTests ? <p className="text-sm text-destructive">Run tests could not be loaded{domain ? ` for domain ${domain}` : ""}.</p>
-        : !runTests.deployed ? <NotDeployed what="Saved QA tests (CONTRACT.QA_TEST_CASE)" />
+        : !runTests.deployed ? <NotDeployed what="Saved QA tests (CORE.QA_TEST_CASE)" />
         : <RunTestsView tests={runTests.tests} summary={runTests.summary} packs={packs} domains={activeDomains} scope={domain}
                         canPromote={canAct(me, "PACKAGE.EDIT")} canCase={canAct(me, "CASE.WORK")} />)}
-      {view === "packs" && list && !list.deployed && <NotDeployed what="The QA Store (GOVERNANCE.DOMAIN_QA_PACKS, V037)" />}
+      {view === "packs" && list && !list.deployed && <NotDeployed what="The QA Store (CORE.DOMAIN_QA_PACKS, V037)" />}
       {view === "packs" && (!list ? <p className="text-sm text-destructive">The QA Store could not be loaded{domain ? ` for domain ${domain}` : ""}.</p> : (
         <QaStoreView packs={packs} domains={activeDomains}
                      scope={domain} initialPack={searchParams.pack ?? null} openNew={searchParams.new === "1"}

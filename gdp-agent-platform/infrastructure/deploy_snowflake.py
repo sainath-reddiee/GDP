@@ -4,11 +4,22 @@
 
 Steps (idempotent):
   1. bootstrap   CREATE DATABASE/SCHEMA CORE IF NOT EXISTS + CORE.SCHEMA_MIGRATION + CORE.DEPLOY_STATE
-  2. migrations  snowflake/database/migrations/V###__*.sql, each applied once; checksum must not change
+  2. migrations  a new environment (empty ledger): snowflake/database/baseline/B061__platform_core.sql creates the
+                 final CORE layout directly and records V001 to V061 as applied; an existing environment applies what
+                 it has not applied yet from snowflake/database/migrations/archive/ (V001 to V061, history, never
+                 edited). Then snowflake/database/migrations/V###__*.sql (V062 on). Each applied once; checksum must
+                 not change
   3. seed        workflow graph JSON -> CORE.WORKFLOW_STATE / CORE.WORKFLOW_TRANSITION (MERGE)
   4. package     services/ -> content-addressed zip -> PUT @CORE.CODE_STAGE
   5. procedures  snowflake/procedures/*.sql (CREATE OR REPLACE PROCEDURE + grants)
   6. demo        optional, --demo-source <DB>: snowflake/demo/*.sql (demo CRM source system)
+
+Every platform object lives in <database>.PLATFORM_SCHEMA (services/common/platform_schema.py); SQL templates name it
+{{schema}}. The migration ledger (SCHEMA_MIGRATION, DEPLOY_STATE) is pinned to CORE on purpose: it must never follow a
+change of the constant, or every migration would look unapplied. V061 (the consolidation into CORE) is gated: it is
+applied only with --consolidate after a completed baseline (infrastructure/consolidation/README.md), unless the
+environment is new (empty ledger when the deploy began). --rehearsal (a database whose name ends in _REHEARSAL) never touches objects outside that
+database: no Oracle procedure refresh and no publisher task.
 
 Only what changed is applied. CORE.DEPLOY_STATE keeps a checksum of every step's rendered SQL (procedures, views,
 Cortex Search, agents, demo files), of the code package, of the seed inputs and of the publisher refreshes; a step
@@ -33,9 +44,13 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from infrastructure.seed_knowledge import _stage_dir, list_skills, seed_inputs_digest, seed_platform  # noqa: E402
+from services.common.platform_schema import PLATFORM_SCHEMA  # noqa: E402
 from services.workflow.graph import load_graph  # noqa: E402
 
 MIGRATIONS_DIR = ROOT / "snowflake" / "database" / "migrations"
+ARCHIVE_DIR = MIGRATIONS_DIR / "archive"          # V001 to V061: history, kept for environments that predate V061
+BASELINE_FILE = ROOT / "snowflake" / "database" / "baseline" / "B061__platform_core.sql"
+BASELINE_COVERS = "061"                          # the baseline equals V001 to V061 applied in order
 PROCEDURES_DIR = ROOT / "snowflake" / "procedures"
 DEMO_DIR = ROOT / "snowflake" / "demo"
 VIEWS_DIR = ROOT / "snowflake" / "views"
@@ -48,13 +63,20 @@ IDENTIFIER = re.compile(r"^[A-Z][A-Z0-9_]{0,254}$")
 MIGRATION_NAME = re.compile(r"^V(\d{3})__([a-z0-9_]+)\.sql$")
 PLACEHOLDER = re.compile(r"\{\{\s*([a-z_]+)\s*\}\}")
 FIXED_ZIP_TIME = (2020, 1, 1, 0, 0, 0)
+LEDGER_SCHEMA = "CORE"          # SCHEMA_MIGRATION and DEPLOY_STATE; never derived from PLATFORM_SCHEMA
+CONSOLIDATION_MIGRATION = "061"
+REHEARSAL_SUFFIX = "_REHEARSAL"
+AGENT_CREATE = re.compile(
+    r"CREATE\s+OR\s+REPLACE\s+AGENT\s+(?P<name>[A-Za-z0-9_$.\"]+)\s+(?P<props>.*?)\s*FROM\s+SPECIFICATION\s*"
+    r"(?P<spec>\$\$.*?\$\$)\s*;", re.S | re.I)
+AGENT_PROP = re.compile(r"\b(COMMENT|PROFILE)\s*=\s*('(?:[^']|'')*')", re.I)
 
 
 def agent_skills_yaml(database: str) -> str:
     """Stage skills attached to the supervisor. Each path is the folder that contains SKILL.md."""
     lines = ["skills:"]
     for skill in list_skills():
-        path = f"@{database}.KNOWLEDGE.SKILL_STAGE/{skill['folder']}/{_stage_dir(skill)}"
+        path = f"@{database}.{PLATFORM_SCHEMA}.SKILL_STAGE/{skill['folder']}/{_stage_dir(skill)}"
         lines.append(f"  - name: {skill['source_name']}")
         lines.append("    source:")
         lines.append("      type: STAGE")
@@ -78,8 +100,9 @@ def checksum(text: str) -> str:
 
 
 def list_migrations() -> List[Tuple[str, str, Path]]:
+    """Archived (V001 to V061) and active migrations, in version order."""
     found = []
-    for path in sorted(MIGRATIONS_DIR.glob("*.sql")):
+    for path in sorted([*ARCHIVE_DIR.glob("*.sql"), *MIGRATIONS_DIR.glob("*.sql")], key=lambda p: p.name):
         m = MIGRATION_NAME.match(path.name)
         assert m, f"migration file name must match V###__name.sql: {path.name}"
         found.append((m.group(1), m.group(2), path))
@@ -199,7 +222,8 @@ def deploy(args) -> None:
     warehouse = (args.warehouse or "DBT_WH").upper()
     variables = {
         "database": database,
-        "services_import": f"@{database}.CORE.CODE_STAGE/{zip_name}",
+        "schema": PLATFORM_SCHEMA,
+        "services_import": f"@{database}.{PLATFORM_SCHEMA}.CODE_STAGE/{zip_name}",
         "warehouse": warehouse,
         "agent_skills": agent_skills_yaml(database),
     }
@@ -215,6 +239,9 @@ def deploy(args) -> None:
 
     if args.dry_run:
         print(f"-- bootstrap\n{bootstrap_sql(database)}")
+        if BASELINE_FILE.exists() and not args.no_baseline:
+            print(f"-- baseline {BASELINE_FILE.name} (new environment only; existing ones apply the archive below)")
+            print(render(BASELINE_FILE.read_text(encoding="utf-8"), variables))
         for version, name, path in migrations:
             print(f"-- migration V{version} {name} checksum={checksum(path.read_text(encoding='utf-8'))}")
             print(render(path.read_text(encoding="utf-8"), variables))
@@ -255,7 +282,9 @@ def deploy(args) -> None:
     try:
         log = apply_to_connection(con, database, warehouse, variables, zip_name, zip_bytes,
                                   migrations, procedures, extra_sql, graph_version,
-                                  state_rows, transition_rows, demo_files, force=args.force)
+                                  state_rows, transition_rows, demo_files, force=args.force,
+                                  consolidate=args.consolidate, rehearsal=args.rehearsal, through=args.through,
+                                  use_baseline=not args.no_baseline)
         for line in log:
             print(line)
     finally:
@@ -264,7 +293,7 @@ def deploy(args) -> None:
 
 def refresh_github_publisher(cur, database: str, services_import: str, warehouse: str = "",
                              state: "DeployState | None" = None) -> str:
-    """Re-point CODEGEN.PUBLISH_DBT_PR at the new code package once GitHub publishing has been set up, and keep the
+    """Re-point CORE.PUBLISH_DBT_PR at the new code package once GitHub publishing has been set up, and keep the
     task that syncs domain model pull requests (Model Workbench) running. Skipped when neither the package, the
     publisher setup nor the warehouse changed since the last refresh."""
     import json as _json
@@ -304,7 +333,7 @@ def refresh_oracle_sources(cur, database: str, services_import: str, state: "Dep
     from services.source.oracle.procedures import procedure_sql
 
     try:
-        cur.execute(f"SELECT CONFIGURATION_JSON FROM {database}.SOURCE.SOURCE_REGISTRY "
+        cur.execute(f"SELECT CONFIGURATION_JSON FROM {database}.CORE.SOURCE_REGISTRY "
                     "WHERE CONNECTION_TYPE = 'oracle' AND ACTIVE_FLAG")
         configs = [_json.loads(r[0]) if isinstance(r[0], str) else r[0] for r in cur.fetchall()]
     except Exception as exc:
@@ -327,12 +356,56 @@ def refresh_oracle_sources(cur, database: str, services_import: str, state: "Dep
     return f"oracle sources: {done} procedure(s) refreshed" + (f"; failed {failed}" if failed else "")
 
 
+def consolidation_gate(cur, database: str, consolidate: bool, fresh: bool = False) -> str:
+    """V061 moves every platform object into CORE. Allowed in a new environment (the ledger was empty when this deploy
+    began, so every row in it was written by this same run), or with --consolidate after a completed baseline of this
+    database. Raises otherwise, before anything moves."""
+    if fresh:
+        return f"V{CONSOLIDATION_MIGRATION}: new environment (empty ledger at the start of this deploy); no baseline needed"
+    assert consolidate, (
+        f"V{CONSOLIDATION_MIGRATION} moves every platform object of {database} into {PLATFORM_SCHEMA}. It is applied only "
+        "by the consolidation runbook (infrastructure/consolidation/README.md): baseline, then deploy --consolidate. "
+        "Nothing was moved.")
+    cur.execute(f"SELECT COUNT(*) FROM {database}.{LEDGER_SCHEMA}.CONSOLIDATION_RUN "
+                "WHERE PHASE = 'BASELINE' AND STATUS = 'COMPLETED' AND DATABASE_NAME = %s", (database,))
+    assert int(cur.fetchone()[0] or 0) > 0, (
+        f"V{CONSOLIDATION_MIGRATION} needs a completed baseline of {database} "
+        "(python -m infrastructure.consolidation.baseline). Nothing was moved.")
+    return f"V{CONSOLIDATION_MIGRATION}: completed baseline found; --consolidate given"
+
+
+def agent_statements(cur, sql: str) -> str:
+    """Update an existing agent in place (ALTER ... MODIFY LIVE VERSION SET SPECIFICATION) instead of CREATE OR
+    REPLACE, which would start it again at VERSION$1 and unlink its monitoring history. New agents are created."""
+    m = AGENT_CREATE.search(sql)
+    if not m:
+        return sql
+    name = m.group("name")
+    parts = name.replace('"', "").split(".")
+    assert len(parts) == 3, f"agent name must be DATABASE.SCHEMA.NAME: {name}"
+    cur.execute(f"SHOW AGENTS LIKE '{parts[2]}' IN SCHEMA {parts[0]}.{parts[1]}")
+    if not cur.fetchall():
+        return sql
+    # one property per SET: Snowflake refuses ALTER AGENT ... SET COMMENT = ... PROFILE = ... in one statement
+    sets = "".join(f"ALTER AGENT {name} SET {key.upper()} = {value};\n"
+                   for key, value in AGENT_PROP.findall(m.group("props")))
+    alter = sets + f"ALTER AGENT {name} MODIFY LIVE VERSION SET SPECIFICATION = {m.group('spec')};"
+    return sql[:m.start()] + alter + sql[m.end():]
+
+
 def apply_to_connection(con, database: str, warehouse: str, variables: Dict[str, str],
                         zip_name: str, zip_bytes: bytes, migrations, procedures, extra_sql,
-                        graph_version, state_rows, transition_rows, demo_files, force: bool = False) -> List[str]:
+                        graph_version, state_rows, transition_rows, demo_files, force: bool = False,
+                        consolidate: bool = False, rehearsal: bool = False,
+                        through: str | None = None, use_baseline: bool = True) -> List[str]:
     """Apply migrations, seed, package, procedures and extras on an open connection; steps that did not change
-    since their last successful apply are skipped unless `force`."""
+    since their last successful apply are skipped unless `force`. `rehearsal` keeps every change inside `database`
+    (which must end in _REHEARSAL): no Oracle procedure refresh, no publisher task. `through` applies migrations up to
+    and including that version and stops (the consolidation runbook checks the data between V060, V061 and the rest)."""
     log: List[str] = []
+    if rehearsal:
+        assert database.endswith(REHEARSAL_SUFFIX), f"--rehearsal needs a database named *{REHEARSAL_SUFFIX}"
+        log.append(f"rehearsal: changes stay inside {database}")
     cur = con.cursor()
     cur.execute("SELECT CURRENT_USER(), CURRENT_ROLE(), CURRENT_WAREHOUSE()")
     user, role, current_wh = cur.fetchone()
@@ -348,8 +421,26 @@ def apply_to_connection(con, database: str, warehouse: str, variables: Dict[str,
 
     cur.execute(f"SELECT VERSION, CHECKSUM FROM {database}.CORE.SCHEMA_MIGRATION")
     applied = dict(cur.fetchall())
+    fresh = not applied     # a new environment: nothing in it predates this deploy
     migrated = False
+    if not applied and use_baseline and BASELINE_FILE.exists() and (not through or through >= BASELINE_COVERS):
+        con.execute_string(render(BASELINE_FILE.read_text(encoding="utf-8"), variables))
+        for version, name, path in migrations:
+            if version > BASELINE_COVERS:
+                continue
+            digest = checksum(path.read_text(encoding="utf-8"))
+            cur.execute(
+                f"INSERT INTO {database}.CORE.SCHEMA_MIGRATION (VERSION, DESCRIPTION, CHECKSUM, APPLIED_BY) "
+                f"SELECT %s, %s, %s, CURRENT_USER()",
+                (version, name, digest),
+            )
+            applied[version] = digest
+        log.append(f"baseline {BASELINE_FILE.name}: new environment created in {PLATFORM_SCHEMA}; "
+                   f"V001 to V{BASELINE_COVERS} recorded as applied")
+        migrated = True
     for version, name, path in migrations:
+        if through and version > through:
+            break
         raw = path.read_text(encoding="utf-8")
         digest = checksum(raw)
         if version in applied:
@@ -357,6 +448,8 @@ def apply_to_connection(con, database: str, warehouse: str, variables: Dict[str,
                 f"V{version} was modified after being applied (checksum mismatch); add a new migration instead"
             state.skipped["migrations"] = state.skipped.get("migrations", 0) + 1
             continue
+        if version == CONSOLIDATION_MIGRATION:
+            log.append(consolidation_gate(cur, database, consolidate, fresh))
         con.execute_string(render(raw, variables))
         cur.execute(
             f"INSERT INTO {database}.CORE.SCHEMA_MIGRATION (VERSION, DESCRIPTION, CHECKSUM, APPLIED_BY) "
@@ -365,6 +458,9 @@ def apply_to_connection(con, database: str, warehouse: str, variables: Dict[str,
         )
         log.append(f"migration V{version} {name}: applied")
         migrated = True
+    if through:
+        log.append(f"--through {through}: stopped after the migrations")
+        return log
     if migrated:
         log.append("migrations applied: views, Cortex Search, agents and the seed run again")
 
@@ -394,8 +490,11 @@ def apply_to_connection(con, database: str, warehouse: str, variables: Dict[str,
         state.record(key, digest)
         log.append(f"procedures {path.name}: applied")
     log.append(refresh_github_publisher(cur, database, variables["services_import"],
-                                        variables.get("warehouse") or warehouse, state))
-    log.append(refresh_oracle_sources(cur, database, variables["services_import"], state))
+                                        "" if rehearsal else (variables.get("warehouse") or warehouse), state))
+    if rehearsal:
+        log.append("oracle sources: skipped (rehearsal; their procedures live outside this database)")
+    else:
+        log.append(refresh_oracle_sources(cur, database, variables["services_import"], state))
 
     inputs = seed_inputs_digest()
     if migrated or state.changed("seed/platform", inputs):
@@ -409,7 +508,7 @@ def apply_to_connection(con, database: str, warehouse: str, variables: Dict[str,
         if not migrated and not state.changed(key, digest):
             continue
         try:
-            con.execute_string(sql)
+            con.execute_string(agent_statements(cur, sql) if path.parent.name == "agents" else sql)
             state.record(key, digest)
             log.append(f"{path.parent.name} {path.name}: applied")
         except Exception as exc:
@@ -452,12 +551,15 @@ def _seed_graph(cur, database: str, graph_version, state_rows, transition_rows) 
 
 
 def apply_from_session(con, database: str, warehouse: str, demo_source: str | None = None,
-                       force: bool = False) -> List[str]:
+                       force: bool = False, consolidate: bool = False, rehearsal: bool = False,
+                       through: str | None = None, use_baseline: bool = True) -> List[str]:
+    # The Admin deploy never passes consolidate, so it cannot apply V061 on a database that holds data.
     """Deploy using an already-authenticated Snowflake connection (no new SSO); only changed steps unless `force`."""
     zip_name, zip_bytes = build_services_zip()
     variables = {
         "database": database.upper(),
-        "services_import": f"@{database.upper()}.CORE.CODE_STAGE/{zip_name}",
+        "schema": PLATFORM_SCHEMA,
+        "services_import": f"@{database.upper()}.{PLATFORM_SCHEMA}.CODE_STAGE/{zip_name}",
         "warehouse": warehouse.upper(),
         "agent_skills": agent_skills_yaml(database.upper()),
     }
@@ -471,6 +573,7 @@ def apply_from_session(con, database: str, warehouse: str, demo_source: str | No
         list_migrations(), sorted(PROCEDURES_DIR.glob("*.sql")),
         sorted(VIEWS_DIR.glob("*.sql")) + sorted(SEARCH_DIR.glob("*.sql")) + sorted(AGENTS_DIR.glob("*.sql")),
         graph_version, state_rows, transition_rows, demo_files, force=force,
+        consolidate=consolidate, rehearsal=rehearsal, through=through, use_baseline=use_baseline,
     )
 
 
@@ -484,6 +587,13 @@ def main() -> None:
     parser.add_argument("--demo-source", help="also create the demo CRM source in this (separate) database")
     parser.add_argument("--force", action="store_true",
                         help="apply every step, even the ones that did not change since the last deploy")
+    parser.add_argument("--consolidate", action="store_true",
+                        help="allow V061 (move every platform object into CORE) after a completed baseline")
+    parser.add_argument("--no-baseline", action="store_true",
+                        help="new environment: apply the archived V001 to V061 instead of the baseline (checks only)")
+    parser.add_argument("--through", help="apply migrations up to and including this version (e.g. 060), then stop")
+    parser.add_argument("--rehearsal", action="store_true",
+                        help="the database is a *_REHEARSAL clone; change nothing outside it")
     args = parser.parse_args()
     if not args.dry_run and not args.connection:
         parser.error("--connection is required unless --dry-run")

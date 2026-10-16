@@ -110,7 +110,7 @@ def test_mapping_history_is_weighted_by_track_record(monkeypatch):
 
             class R:
                 def collect(self_inner):
-                    if "FROM KNOWLEDGE.DOMAIN_KNOWLEDGE" in flat and "KNOWLEDGE_USAGE" not in flat:
+                    if "FROM CORE.DOMAIN_KNOWLEDGE" in flat and "KNOWLEDGE_USAGE" not in flat:
                         return [Row(KNOWLEDGE_ID="p1", KNOWLEDGE_TYPE="MAPPING_PATTERN", LINEAGE_ID="L1",
                                     CONTENT_JSON=json.dumps({"source_column": "CUST_MAIL", "target_column": "EMAIL"})),
                                 Row(KNOWLEDGE_ID="p2", KNOWLEDGE_TYPE="MAPPING_PATTERN", LINEAGE_ID="L2",

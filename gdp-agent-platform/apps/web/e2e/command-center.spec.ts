@@ -23,17 +23,25 @@ for (const theme of ["light", "dark"] as const) {
       for (const stat of ["Runs, last 7 days", "Awaiting human approval", "Stale landed tables", "Failing checks"]) await expect(ribbon).toContainText(stat);
       for (const store of ["source", "profiling", "models", "sttm", "qa", "dq"]) await expect(page.getByTestId(`store-${store}`)).toBeVisible();
       await expect(page.getByTestId("pipeline-table")).toBeVisible();
-      // one place for the stores: Store in the sidebar with the six stores under it, and no duplicate tab row above the page
+      // nine workspaces in four sections; a workspace's pages are tabs on the page, not rows in the sidebar
       const nav = page.getByRole("navigation", { name: "Main" });
-      await expect(nav.getByText("Asset stores")).toBeVisible();
-      await expect(nav.getByRole("link", { name: "Store", exact: true })).toHaveAttribute("href", "/dashboard/store");
-      // the six stores start folded under Store; the chevron shows them (and the choice is remembered)
-      const show = nav.getByRole("button", { name: "Show Store sections" });
-      if (await show.isVisible()) await show.click();
-      for (const store of ["Source Store", "Profiling Store", "Modeling Store", "STTM Store", "QA Store", "Data Quality Store"]) {
-        await expect(nav.getByRole("link", { name: store })).toBeVisible();
+      for (const section of ["Work", "Build", "Run", "Govern"]) await expect(nav.getByText(section, { exact: true })).toBeVisible();
+      for (const [name, href] of [["My Work", "/work"], ["Overview", "/dashboard"], ["Pipelines", "/runs"], ["Stores", "/dashboard/store"],
+                                  ["Knowledge", "/domains"], ["Quality", "/dashboard/quality"], ["Governance", "/approvals"]]) {
+        await expect(nav.getByRole("link", { name, exact: true })).toHaveAttribute("href", href);
       }
-      await expect(page.getByRole("navigation", { name: "Lifecycle hubs" })).toHaveCount(0);
+      await expect(nav.getByRole("link", { name: "Source Store" })).toHaveCount(0);
+      // the stores' own tab bar lists the six stores on the Store hub
+      await page.goto("/dashboard/store");
+      for (const store of ["sources", "profiling", "modeling", "sttm", "qa", "quality"]) await expect(page.getByTestId(`store-nav-${store}`)).toBeVisible();
+      await expect(nav.getByRole("link", { name: "Stores", exact: true })).toHaveAttribute("aria-current", "page");
+      // other workspaces get the shell's tab bar on their pages
+      await page.goto("/runs");
+      const tabs = page.getByTestId("workspace-tabs");
+      for (const tab of ["Silver Pipeline", "Gold Pipeline", "Lineage"]) await expect(tabs.getByRole("link", { name: tab })).toBeVisible();
+      await tabs.getByRole("link", { name: "Gold Pipeline" }).click();
+      await page.waitForURL(/\/gold$/);
+      await expect(nav.getByRole("link", { name: "Pipelines", exact: true })).toHaveAttribute("aria-current", "page");
       await expect(page.getByTestId("build-stamp")).toContainText("Build");
     });
 

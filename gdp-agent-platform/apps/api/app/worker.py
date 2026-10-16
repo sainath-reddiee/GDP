@@ -1,17 +1,17 @@
 """Ops worker: background jobs for Airflow capture, run apart from the API as `python -m app.worker` (from apps/api,
 on the API host or in its own container with the same environment).
 
-Jobs, each guarded by an OPS.JOB_LEASE so exactly one holder runs it at a time across processes and replicas:
+Jobs, each guarded by an CORE.JOB_LEASE so exactly one holder runs it at a time across processes and replicas:
   poll:<env_id>  incremental capture of one MWAA environment, every POLL_SECONDS (services.ops.store.poll_env)
   detect         incidents for runs and task runs loaded since its cursor (every tick, after the polls)
-  outbox         Jira bot actions from OPS.NOTIFICATION, with retries (every 30 s)
+  outbox         Jira bot actions from CORE.NOTIFICATION, with retries (every 30 s)
   escalate       unacknowledged incidents and ended mutes (every 60 s)
   sla            LATE and LONG_RUNNING detection (every 120 s)
   jira_sync      incidents whose ticket is Done in Jira become MITIGATED (every 5 min)
   diagnose       AI diagnosis of new OPEN incidents (settings ai_auto, ai_severities; at most 5 per run; every 60 s)
   case_triage    AI triage of NEW cases (CORE.PLATFORM_CONFIG CASES: auto_triage, auto_triage_severities, default
                  P1 to P3); at most 3 per run, skipping cases attempted in the last 30 minutes; every 30 s
-  retention      purges raw OPS.EVENT rows after 30 days (every 6 hours)
+  retention      purges raw CORE.EVENT rows after 30 days (every 6 hours)
 The worker uses worker_db(): its own non-shared connection (the named dev connection in dev mode, else the key-pair
 service user from AIP_SERVICE_USER, AIP_SERVICE_KEY_PATH), so incident writes run in transactions. AWS credentials come from the host's default chain (role, AWS_PROFILE). A heartbeat row
 (JOB_NAME 'worker') shows when a worker last looped. SIGINT or SIGTERM stops it after the current job.
@@ -53,15 +53,15 @@ def poll_job(env_id: str) -> str:
 
 
 def load_env(db: Any, env_id: str) -> Optional[Dict[str, Any]]:
-    found = db.query("""SELECT ENV_ID, NAME, MWAA_ENV, REGION, ENABLED, POLL_SECONDS, CURSOR_VALUE
-                          FROM OPS.AIRFLOW_ENV WHERE ENV_ID = %s""", (env_id,))
+    found = db.query("""SELECT ENV_ID, NAME, KIND, MWAA_ENV, REGION, AIRFLOW_URL, ENABLED, POLL_SECONDS, CURSOR_VALUE
+                          FROM CORE.AIRFLOW_ENV WHERE ENV_ID = %s""", (env_id,))
     return found[0] if found else None
 
 
 def due_envs(db: Any) -> List[Dict[str, Any]]:
     """Enabled environments whose last attempt is older than their poll interval (database clock, so every worker
     agrees)."""
-    return db.query("""SELECT ENV_ID, NAME, MWAA_ENV, REGION, POLL_SECONDS, CURSOR_VALUE FROM OPS.AIRFLOW_ENV
+    return db.query("""SELECT ENV_ID, NAME, KIND, MWAA_ENV, REGION, AIRFLOW_URL, POLL_SECONDS, CURSOR_VALUE FROM CORE.AIRFLOW_ENV
                         WHERE ENABLED AND (LAST_ATTEMPT_AT IS NULL
                               OR DATEDIFF(second, LAST_ATTEMPT_AT, CURRENT_TIMESTAMP()) >= COALESCE(POLL_SECONDS, 300))
                         ORDER BY LAST_ATTEMPT_AT NULLS FIRST""")
@@ -84,13 +84,13 @@ def run_poll(db: Any, env_id: str, holder: str = HOLDER, poller: Optional[Callab
         env = load_env(db, env_id)
         if env is None:
             return {"ran": False, "detail": "environment not found"}
-        db.execute("UPDATE OPS.AIRFLOW_ENV SET LAST_ATTEMPT_AT = CURRENT_TIMESTAMP() WHERE ENV_ID = %s", (env_id,))
+        db.execute("UPDATE CORE.AIRFLOW_ENV SET LAST_ATTEMPT_AT = CURRENT_TIMESTAMP() WHERE ENV_ID = %s", (env_id,))
         try:
             summary = poller(db, env)
         except Exception as exc:
             message = _error_text(exc)
             try:
-                db.execute("UPDATE OPS.AIRFLOW_ENV SET LAST_ERROR = %s WHERE ENV_ID = %s", (message[:2000], env_id))
+                db.execute("UPDATE CORE.AIRFLOW_ENV SET LAST_ERROR = %s WHERE ENV_ID = %s", (message[:2000], env_id))
             except Exception:
                 pass
             log.warning("poll %s failed: %s", env_id, message)
@@ -125,7 +125,8 @@ def poll_now(env_id: str, db_factory: Callable[[], Any] = system_db) -> Dict[str
 # ---------------------------------------------------------------- incidents (PR O2)
 
 DETECT_OVERLAP = timedelta(minutes=2)
-INTERVALS = {"outbox": 30, "escalate": 60, "sla": 120, "jira_sync": 300, "diagnose": 60, "case_triage": 30}
+INTERVALS = {"outbox": 30, "escalate": 60, "sla": 120, "jira_sync": 300, "diagnose": 60, "case_triage": 30,
+             "resolve": 15}
 
 
 def _store(db: Any):
@@ -165,14 +166,14 @@ def detect(db: Any) -> Dict[str, Any]:
     from services.ops.incidents import process
 
     store = _store(db)
-    found = db.query("SELECT CURSOR_VALUE FROM OPS.JOB_LEASE WHERE JOB_NAME = 'detect'")
+    found = db.query("SELECT CURSOR_VALUE FROM CORE.JOB_LEASE WHERE JOB_NAME = 'detect'")
     cursor = found[0].get("cursor_value") if found else None
     since, inclusive = detect_window(cursor)
     runs, tasks, newest, truncated = store.changed_since(since, inclusive=inclusive)
     summary = process(store, runs, tasks)   # never raises for one bad candidate: the cursor moves on
     value = (newest + EXACT) if newest and truncated else newest
     if value and value != cursor:
-        db.execute("UPDATE OPS.JOB_LEASE SET CURSOR_VALUE = %s WHERE JOB_NAME = 'detect'", (value,))
+        db.execute("UPDATE CORE.JOB_LEASE SET CURSOR_VALUE = %s WHERE JOB_NAME = 'detect'", (value,))
     return summary
 
 
@@ -239,6 +240,27 @@ def case_triage(db: Any) -> None:
         log.info("case_triage: %s", result)
 
 
+def resolve(db: Any) -> None:
+    """Airflow failure resolution (services.resolve): trigger the Snowflake procedures that claim and resolve failures
+    and resume approved fixes, then clear the Airflow tasks of fixed failures. No Snowflake tasks: the worker is the
+    trigger, and it skips the calls when nothing waits."""
+    from services.resolve import bridge
+
+    work = bridge.has_work(db)
+    if work["resolve"]:
+        result = bridge.trigger(db, HOLDER)
+        if result.get("claimed"):
+            log.info("resolve: %s", result)
+    if work["resume"]:
+        result = bridge.resume(db, HOLDER)
+        if any(result.get(k) for k in ("ran", "rejected", "failed")):
+            log.info("resolve resume: %s", result)
+    if work["clear"]:
+        result = bridge.clear_requested(db)
+        if any(result.values()):
+            log.info("resolve clear: %s", result)
+
+
 def retention(db: Any) -> None:
     from services.ops.store import purge_events
 
@@ -277,7 +299,7 @@ class Worker:
 
     def once(self) -> None:
         db = self.db_factory()
-        db.execute("""MERGE INTO OPS.JOB_LEASE T USING (SELECT 'worker' AS JOB_NAME) S ON T.JOB_NAME = S.JOB_NAME
+        db.execute("""MERGE INTO CORE.JOB_LEASE T USING (SELECT 'worker' AS JOB_NAME) S ON T.JOB_NAME = S.JOB_NAME
                       WHEN MATCHED THEN UPDATE SET LAST_RUN_AT = CURRENT_TIMESTAMP(), CURSOR_VALUE = %s
                       WHEN NOT MATCHED THEN INSERT (JOB_NAME, LAST_RUN_AT, CURSOR_VALUE) VALUES ('worker', CURRENT_TIMESTAMP(), %s)""",
                    (HOLDER, HOLDER))
@@ -289,7 +311,7 @@ class Worker:
                 log.info("poll %s: %s", env["env_id"], "ok" if result.get("ok") else result.get("error"))
         self._safe(db, "detect", detect)
         for name, fn in (("outbox", outbox), ("escalate", escalate), ("sla", sla), ("jira_sync", jira_sync),
-                         ("diagnose", diagnose), ("case_triage", case_triage)):
+                         ("diagnose", diagnose), ("case_triage", case_triage), ("resolve", resolve)):
             if self.stop.is_set():
                 return
             if self._every(name, INTERVALS[name]):
