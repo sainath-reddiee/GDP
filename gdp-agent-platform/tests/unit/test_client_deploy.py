@@ -83,9 +83,10 @@ def test_env_refuses_unsafe_or_unknown_settings(over, message):
         env(**over)
 
 
-def test_example_file_is_valid():
+def test_example_file_is_valid(monkeypatch):
+    monkeypatch.setattr(deploy, "known_connections", lambda: None)
     e = deploy.load_env(str(deploy.ENV_DIR / "example.toml"))
-    assert e["role"] == "PLATFORM_ADMIN" and "DATA_ENGINEER" in e["access"]
+    assert e["role"] == "AODS_PLATFORM_ADMIN" and e["accounts"] and e["access_model"]["prefix"] == "AODS"
 
 
 # ---------------------------------------------------------------- preflight
@@ -238,7 +239,7 @@ def command(monkeypatch, tmp_path):
     monkeypatch.setattr(deploy, "load_env", lambda name: env())
     monkeypatch.setattr(deploy, "LOG_DIR", tmp_path)
     applied = []
-    monkeypatch.setattr(ds, "apply_from_session", lambda con, db, wh, force=False: applied.append((db, wh)) or ["deployed"])
+    monkeypatch.setattr(ds, "apply_from_session", lambda con, db, wh, force=False, access=None: applied.append((db, wh)) or ["deployed"])
     monkeypatch.setattr(deploy, "plan", lambda cur, e: ["migration V068 x"])
     monkeypatch.setattr(deploy, "verify", lambda cur, e: ["verify: ok"])
     return applied, tmp_path
@@ -273,3 +274,54 @@ def test_check_and_plan_change_nothing(command, monkeypatch):
     assert deploy.main(["--env", "client", "--plan"]) == 0
     assert applied == [] and not any(s.startswith(("GRANT", "CREATE")) for s in cur.sql)
     assert not list(tmp.glob("*.log"))
+
+
+# ---------------------------------------------------------------- guided setup
+
+
+def answers(*values):
+    it = iter(values)
+    return lambda prompt: next(it)
+
+
+def test_setup_with_a_saved_connection_writes_a_valid_file(monkeypatch, tmp_path):
+    monkeypatch.setattr(deploy, "ENV_DIR", tmp_path)
+    monkeypatch.setattr(deploy, "known_connections", lambda: ["default_connection_name", "acme"])
+    path = deploy.setup_env("acme-prod", ask=answers("2", "2", "", "", "", "de_role, analyst"))
+    text = path.read_text()
+    assert 'connection = "acme"' in text and 'DATA_ENGINEER = ["DE_ROLE", "ANALYST"]' in text
+    e = deploy.load_env("acme-prod")
+    assert (e["role"], e["warehouse"], e["database"]) == ("PLATFORM_ADMIN", "AI_PLATFORM_WH", "AI_PLATFORM")
+
+
+def test_setup_with_an_account_and_sso_or_key_never_asks_for_a_password(monkeypatch, tmp_path):
+    monkeypatch.setattr(deploy, "ENV_DIR", tmp_path)
+    monkeypatch.setattr(deploy, "known_connections", lambda: [])
+    prompts = []
+
+    def ask(prompt):
+        prompts.append(prompt)
+        return {0: "abc-xy123", 1: "ana@client.com", 2: "1", 3: "2", 4: "my_role", 5: "", 6: "", 7: ""}[len(prompts) - 1]
+    text = deploy.setup_env("client", ask=ask).read_text()
+    assert 'account = "abc-xy123"' in text and 'authenticator = "externalbrowser"' in text and 'role = "MY_ROLE"' in text
+    assert not any("password" in p.lower() for p in prompts)
+    key = deploy.setup_env("client2", ask=answers("abc-xy123", "ana", "2", r"C:\keys\d.p8", "2", "", "", "", "")).read_text()
+    assert 'authenticator = "snowflake_jwt"' in key and 'private_key_file = "C:/keys/d.p8"' in key
+    assert deploy.load_env("client2")["connect"]["authenticator"] == "snowflake_jwt"
+
+
+def test_setup_asks_again_for_an_invalid_answer(monkeypatch, tmp_path):
+    monkeypatch.setattr(deploy, "ENV_DIR", tmp_path)
+    monkeypatch.setattr(deploy, "known_connections", lambda: [])
+    text = deploy.setup_env("c", ask=answers("bad account!", "abc-1", "u", "1", "2", "bad role", "OK_ROLE", "", "", "")).read_text()
+    assert 'account = "abc-1"' in text and 'role = "OK_ROLE"' in text
+
+
+def test_an_unknown_connection_name_is_caught_before_sign_in(monkeypatch, tmp_path):
+    monkeypatch.setattr(deploy, "ENV_DIR", tmp_path)
+    (tmp_path / "x.toml").write_text('[snowflake]\nconnection = "client-prod"\nrole = "R"\nwarehouse = "W"\ndatabase = "D"\n')
+    monkeypatch.setattr(deploy, "known_connections", lambda: ["anblicks"])
+    with pytest.raises(deploy.ConfigError, match="known: anblicks.*--setup"):
+        deploy.load_env("x")
+    monkeypatch.setattr(deploy, "known_connections", lambda: None)   # unreadable file: let the connector decide
+    assert deploy.load_env("x")["connection"] == "client-prod"

@@ -9,21 +9,61 @@ python infrastructure/deploy.py --env client-prod
 
 ## Who does what
 
+## Access model: AODS account roles (default)
+
+There are no database roles. The platform uses ten account roles, created once by the role administrator:
+
+| Account role | Who gets it |
+|---|---|
+| `AODS_PLATFORM_ADMIN` | The deploy role and platform administrators |
+| `AODS_DATA_ENGINEER` | Data engineers who run onboarding |
+| `AODS_QA_ENGINEER` | QA engineers |
+| `AODS_DATA_STEWARD`, `AODS_DOMAIN_OWNER`, `AODS_REVIEWER` | People who review and approve |
+| `AODS_VIEWER` | Read-only users |
+| `AODS_OPS_SERVICE` | The ops worker's service user |
+| `AODS_OPS_VIEWER` | Operations dashboards, read only |
+| `AODS_SERVICE_AGENT` | The Cortex agent's service use |
+
+`--admin-sql` writes the `CREATE ROLE` statements and the 15 links between the roles (for example `AODS_VIEWER`
+inside `AODS_DATA_ENGINEER`), so a person gets everything below their role.
+
+The deploy grants every table, view and procedure privilege straight to these roles. An object's owner may grant it
+to any role, so the deploy needs no MANAGE GRANTS. The platform schemas (`CORE`, `LANDING`, `GDP_SILVER`) are
+**managed access** schemas. That lets the deploy role, as their owner, define future grants, and it means only the
+deploy role decides who gets what in them.
+
+Future grants are deliberately narrow. `AODS_PLATFORM_ADMIN` gets all privileges on future tables, views,
+procedures, functions, stages, sequences and file formats. `AODS_VIEWER` gets SELECT on future views. Tables stay
+granted one by one, because some hold secrets, such as integration settings and the Airflow push secret.
+
+Use `role_prefix = "AODS_PROD"` (giving `AODS_PROD_DATA_ENGINEER` and so on) when two environments share one
+Snowflake account, so a role never reaches the other environment's database.
+
+## Who does what
+
 | Who | What | How often |
 |---|---|---|
-| Your role administrator (your leader's admin role) | Creates the account roles in `[access]` and gives them to people | Once |
+| Your role administrator (your leader's admin role) | Creates the ten `AODS_*` roles, links them, gives them to people | Once |
 | SYSADMIN, or whoever can create databases | Creates the platform database and hands you ownership (or grants your role CREATE DATABASE) | Once |
+| The warehouse owner | Gives the `AODS_*` roles USAGE on the warehouse (unless your role owns it) | Once |
 | ACCOUNTADMIN | Cortex access; optional EXECUTE TASK, GitHub integration, usage views | Once |
-| You (platform admin role) | Everything else: schema, tables, **database roles**, procedures, search services, agents, access grants | Every release |
+| You (`AODS_PLATFORM_ADMIN`) | Everything else: schemas, tables, procedures, search services, agents, all grants, future grants | Every release |
 
-Database roles (`<db>.DATA_ENGINEER`, `<db>.VIEWER` and the rest) need no admin: the deploy creates them as the owner
-of the database, and grants them to the account roles listed in `[access]`. That is why your leader's admin role
-does not need the right to create database roles.
+Nobody creates database roles. Your leader's admin role only needs to create account roles, which it can.
+
+The older model, with database roles inside the platform database granted to account roles you list, is still
+available with `model = "database_roles"`. The DEV environment uses it.
 
 ## First time
 
 1. Install the Python requirements (`pip install -r apps/api/requirements.txt`) on the machine that deploys.
-2. Copy `example.toml` to `client-prod.toml` and fill it in. It is not committed; never put a password in it.
+2. Create the environment file by answering a few questions: a saved connection or the account identifier, your
+   user, browser SSO or a key file, the role, warehouse and database. It is written to `client-prod.toml`, which is
+   not committed, and it never holds a password. Running any command for an environment with no file starts the same
+   questions.
+   ```
+   python infrastructure/deploy.py --env client-prod --setup
+   ```
 3. Check the privileges:
    ```
    python infrastructure/deploy.py --env client-prod --check

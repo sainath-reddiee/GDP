@@ -99,8 +99,11 @@ def session_platform_admin(db) -> bool:
     key = f"pa:{getattr(db, 'user', '')}:{getattr(db, 'role', '')}"
 
     def load() -> bool:
+        from services.common.access import admin_check_sql, load as access_model
+
         try:
-            row = db.query("SELECT IS_DATABASE_ROLE_IN_SESSION('PLATFORM_ADMIN') AS P")
+            model = access_model(db.query, f"db:{getattr(db, 'database', '')}")
+            row = db.query(f"SELECT {admin_check_sql(model)} AS P")
             return bool(row[0].get("p")) if row else True
         except Exception:  # a session that cannot evaluate it (tests, older accounts): trust the app roles
             return True

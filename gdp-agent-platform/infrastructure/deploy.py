@@ -55,18 +55,111 @@ class ConfigError(Exception):
 
 # ---------------------------------------------------------------- the environment file
 
+def env_path(name: str) -> Path:
+    path = Path(name)
+    return path if path.suffix else ENV_DIR / f"{name}.toml"
+
+
 def load_env(name: str) -> Dict[str, Any]:
     """The environment as a dict, validated. `name` is a file name in infrastructure/environments or a path."""
     import tomllib
 
-    path = Path(name)
-    if not path.suffix:
-        path = ENV_DIR / f"{name}.toml"
+    path = env_path(name)
     if not path.exists():
-        raise ConfigError(f"no environment file {path}; copy infrastructure/environments/example.toml")
+        raise ConfigError(f"no environment file {path}; run with --setup to create it")
     with path.open("rb") as fh:
         raw = tomllib.load(fh)
-    return validate_env(raw, path.stem)
+    env = validate_env(raw, path.stem)
+    if env["connection"]:
+        known = known_connections()
+        if known is not None and env["connection"] not in known:
+            raise ConfigError(f"connection '{env['connection']}' is not in your Snowflake connections file "
+                              f"(known: {', '.join(known) or 'none'}); run with --setup to choose one or enter the account")
+    return env
+
+
+def connections_file() -> Path:
+    import os
+
+    home = Path(os.environ.get("SNOWFLAKE_HOME") or Path.home() / ".snowflake")
+    return home / "connections.toml"
+
+
+def known_connections() -> Optional[List[str]]:
+    """Connection names in ~/.snowflake/connections.toml, or None when the file cannot be read."""
+    import tomllib
+
+    path = connections_file()
+    if not path.exists():
+        return []
+    try:
+        with path.open("rb") as fh:
+            data = tomllib.load(fh)
+    except Exception:
+        return None
+    return [k for k, v in data.items() if isinstance(v, dict)]
+
+
+def _ask(prompt: str, default: str = "", check=None, ask=input) -> str:
+    while True:
+        value = ask(f"{prompt}{f' [{default}]' if default else ''}: ").strip() or default
+        if value and (check is None or check(value)):
+            return value
+        print("  not valid, try again")
+
+
+def setup_env(name: str, ask=input) -> Path:
+    """Ask for the few settings an environment needs and write infrastructure/environments/<name>.toml."""
+    path = env_path(name)
+    print(f"Setting up environment '{path.stem}' ({path}). Press Enter to keep a [default].")
+    known = known_connections() or []
+    lines = ["# Written by infrastructure/deploy.py --setup. Not committed. Never put a password here.", "", "[snowflake]"]
+    choice = ""
+    if known:
+        print("Saved Snowflake connections: " + ", ".join(f"{i + 1}) {k}" for i, k in enumerate(known))
+              + f", {len(known) + 1}) enter the account myself")
+        choice = _ask("Choose", str(len(known) + 1), lambda v: v.isdigit() and 1 <= int(v) <= len(known) + 1, ask)
+    if choice and int(choice) <= len(known):
+        lines.append(f'connection = "{known[int(choice) - 1]}"')
+    else:
+        account = _ask("Account identifier (Snowsight: your name > Account > View account details)", "",
+                       lambda v: re.fullmatch(r"[A-Za-z0-9_.\-]{3,255}", v) is not None, ask)
+        user = _ask("Your Snowflake user name", "", lambda v: '"' not in v and len(v) < 256, ask)
+        auth = _ask("Sign-in: 1) browser SSO  2) key pair", "1", lambda v: v in ("1", "2"), ask)
+        lines += [f'account = "{account}"', f'user = "{user}"']
+        if auth == "2":
+            key = _ask("Path to the private key file (.p8)", "", lambda v: '"' not in v, ask)
+            lines += ['authenticator = "snowflake_jwt"', f'private_key_file = "{key.replace(chr(92), "/")}"']
+        else:
+            lines.append('authenticator = "externalbrowser"')
+    from services.common import access as access_model
+
+    ident = lambda v: IDENT.match(v) is not None   # noqa: E731
+    model = _ask("Access: 1) account roles with a prefix, no database roles (AODS_*)  2) database roles", "1",
+                 lambda v: v in ("1", "2"), ask)
+    if model == "1":
+        prefix = _ask("Role prefix (AODS gives AODS_DATA_ENGINEER, ...; use AODS_PROD if environments share an account)",
+                      access_model.DEFAULT_PREFIX, lambda v: access_model.PREFIX.match(v.upper()) is not None, ask).upper()
+        default_role = access_model.role_name(prefix, "PLATFORM_ADMIN")
+    role = _ask("Deploy role (an account role you have)", default_role if model == "1" else "PLATFORM_ADMIN", ident,
+                ask).upper()
+    warehouse = _ask("Warehouse", "AI_PLATFORM_WH", ident, ask).upper()
+    database = _ask("Platform database", "AI_PLATFORM", ident, ask).upper()
+    lines += [f'role = "{role}"', f'warehouse = "{warehouse}"', f'database = "{database}"', "", "[access]"]
+    if model == "1":
+        lines += ['model = "account_roles"', f'role_prefix = "{prefix}"']
+    else:
+        engineers = ask("Account roles of the data engineers, comma separated (Enter to skip for now): ").strip()
+        roles = [r.strip().upper() for r in engineers.split(",") if r.strip() and ident(r.strip())]
+        lines += ['model = "database_roles"',
+                  f"DATA_ENGINEER = [{', '.join(repr(r).replace(chr(39), chr(34)) for r in roles)}]",
+                  "VIEWER = []", "OPS_SERVICE = []"]
+    lines += ["", "[features]", 'llm_model = "claude-sonnet-4-5"', "pr_sync_task = false",
+              "actual_cost_from_account_usage = false", ""]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(lines), encoding="utf-8")
+    print(f"Written {path}. Edit [access] there any time.")
+    return path
 
 
 def validate_env(raw: Dict[str, Any], name: str) -> Dict[str, Any]:
@@ -79,8 +172,21 @@ def validate_env(raw: Dict[str, Any], name: str) -> Dict[str, Any]:
     for key in ("role", "warehouse", "database"):
         if not IDENT.match(str(sf.get(key) or "")):
             problems.append(f"[snowflake] {key} must be a Snowflake identifier")
+    from services.common import access as access_model
+
     access = {}
-    for db_role, roles in (raw.get("access") or {}).items():
+    section = dict(raw.get("access") or {})
+    kind = str(section.pop("model", access_model.DATABASE_ROLES_MODEL)).lower()
+    prefix = str(section.pop("role_prefix", access_model.DEFAULT_PREFIX)).upper()
+    if kind not in access_model.MODELS:
+        problems.append(f"[access] model must be one of {', '.join(access_model.MODELS)}")
+    if not access_model.PREFIX.match(prefix):
+        problems.append("[access] role_prefix must be letters, digits or _ (for example AODS or AODS_PROD)")
+    if kind == access_model.ACCOUNT_ROLES_MODEL and section:
+        problems.append("[access] lists account roles only with model = \"database_roles\"; with account roles, people "
+                        f"get the {prefix}_* roles from your role administrator")
+        section = {}
+    for db_role, roles in section.items():
         if db_role.upper() not in DATABASE_ROLES:
             problems.append(f"[access] {db_role} is not a platform database role ({', '.join(DATABASE_ROLES)})")
             continue
@@ -90,7 +196,8 @@ def validate_env(raw: Dict[str, Any], name: str) -> Dict[str, Any]:
             problems.append(f"[access] {db_role}: {bad[0]} is not a Snowflake identifier")
         access[db_role.upper()] = sorted({str(r).upper() for r in roles})
     role = str(sf.get("role") or "").upper()
-    if role and role not in access.get("PLATFORM_ADMIN", []):   # the deploy role administers the platform
+    accounts = kind == access_model.ACCOUNT_ROLES_MODEL
+    if role and not accounts and role not in access.get("PLATFORM_ADMIN", []):   # the deploy role administers the platform
         access["PLATFORM_ADMIN"] = sorted(set(access.get("PLATFORM_ADMIN", [])) | {role})
     features = dict(raw.get("features") or {})
     integration = str(features.get("github_integration") or "")
@@ -100,7 +207,8 @@ def validate_env(raw: Dict[str, Any], name: str) -> Dict[str, Any]:
         raise ConfigError("; ".join(problems))
     return {"name": name, "role": role, "warehouse": str(sf["warehouse"]).upper(), "database": str(sf["database"]).upper(),
             "connection": sf.get("connection"), "connect": {k: sf[k] for k in CONNECT_KEYS if sf.get(k)},
-            "access": access, "model": str(features.get("llm_model") or "claude-sonnet-4-5"),
+            "access": access, "access_model": {"model": kind, "prefix": prefix}, "accounts": accounts,
+            "model": str(features.get("llm_model") or "claude-sonnet-4-5"),
             "pr_sync_task": bool(features.get("pr_sync_task")), "github_integration": integration.upper() or None,
             "actual_cost": bool(features.get("actual_cost_from_account_usage"))}
 
@@ -198,10 +306,11 @@ def preflight(cur, env: Dict[str, Any]) -> List[Check]:
         else:
             held = {str(g.get("privilege") or "").upper() for g in _safe_rows(cur, f"SHOW GRANTS ON DATABASE {db}")
                     if str(g.get("grantee_name") or "").upper() in grants["roles"]}
-            need = {"USAGE", "CREATE SCHEMA", "CREATE DATABASE ROLE"}
+            need = {"USAGE", "CREATE SCHEMA"} | (set() if env["accounts"] else {"CREATE DATABASE ROLE"})
             if need <= held:
-                checks.append(Check("database", "warn", f"{db} is owned by {owner}; {role} can create schemas and database "
-                                    "roles in it, but objects another role created will not be changeable by the deploy"))
+                checks.append(Check("database", "warn", f"{db} is owned by {owner}; {role} can create its own schemas in it"
+                                    + ("" if env["accounts"] else " and database roles")
+                                    + ", but objects another role created will not be changeable by the deploy"))
             else:
                 checks.append(Check("database", "missing", f"{db} exists, owned by {owner}; {role} does not own it",
                                     who=f"{owner} (the database owner)",
@@ -215,6 +324,8 @@ def preflight(cur, env: Dict[str, Any]) -> List[Check]:
                                  f"GRANT OWNERSHIP ON DATABASE {db} TO ROLE {role} COPY CURRENT GRANTS;"]))
 
     checks.append(cortex_check(cur, role, env["model"]))
+    if env["accounts"]:
+        checks.extend(account_role_checks(cur, env, grants))
 
     for db_role, roles in sorted(env["access"].items()):
         for account_role in roles:
@@ -249,6 +360,39 @@ def preflight(cur, env: Dict[str, Any]) -> List[Check]:
                                        "an estimate", level=OPTIONAL, who="ACCOUNTADMIN",
                                        fix=[f"GRANT DATABASE ROLE SNOWFLAKE.USAGE_VIEWER TO ROLE {role};"]))
     return checks
+
+
+def role_hierarchy() -> List[Tuple[str, str]]:
+    from infrastructure.deploy_snowflake import BASELINE_FILE
+    from services.common.access import role_hierarchy as parse
+
+    return parse(BASELINE_FILE.read_text(encoding="utf-8"))
+
+
+def account_role_checks(cur, env: Dict[str, Any], grants: Dict[str, Any]) -> List[Check]:
+    """Account roles: every <PREFIX>_* role must exist before the deploy grants to it (a grant to a missing role fails).
+    The role administrator creates them and links them once; the deploy never needs to."""
+    from services.common import access as access_model
+
+    prefix, role = env["access_model"]["prefix"], env["role"]
+    names = access_model.account_roles(prefix)
+    missing = [n for n in names if not _show_one(cur, "ROLES", n)]
+    out = [Check("account roles", "ok", f"all {len(names)} {prefix}_* roles exist") if not missing else Check(
+        "account roles", "missing", f"{len(missing)} of the {len(names)} {prefix}_* roles do not exist (or are not "
+        f"visible): {', '.join(missing[:5])}{' ...' if len(missing) > 5 else ''}", who="your role administrator",
+        fix=access_model.setup_sql(prefix, role_hierarchy(), role)
+        + [f"-- then give people their role, for example: GRANT ROLE {prefix}_DATA_ENGINEER TO USER <user>;"])]
+    admin = access_model.role_name(prefix, "PLATFORM_ADMIN")
+    if not missing and admin not in grants["roles"]:
+        out.append(Check("admin role", "warn", f"{role} does not hold {admin}: it can deploy (it owns everything), but in "
+                         f"the app it is not the platform admin", level=OPTIONAL, who="your role administrator",
+                         fix=[f"GRANT ROLE {admin} TO ROLE {role};"]))
+    wh = _show_one(cur, "WAREHOUSES", env["warehouse"])
+    if not (wh and str(wh.get("owner") or "").upper() in grants["roles"]):
+        out.append(Check("warehouse for users", "info", f"people with the {prefix}_* roles need USAGE on {env['warehouse']}; "
+                         f"{role} does not own it, so its owner grants that", level=OPTIONAL, who="the warehouse owner",
+                         fix=[f"GRANT USAGE ON WAREHOUSE {env['warehouse']} TO ROLE {n};" for n in names if n != role]))
+    return out
 
 
 MODEL = re.compile(r"^[a-z0-9][a-z0-9.\-]{1,62}$")
@@ -296,7 +440,9 @@ def admin_sql(checks: Iterable[Check], env: Dict[str, Any]) -> str:
     lines = [f"-- One-time setup for the AI platform in environment '{env['name']}' (database {env['database']}, "
              f"deploy role {env['role']}).",
              f"-- Generated {datetime.now(timezone.utc):%Y-%m-%d %H:%M} UTC by infrastructure/deploy.py --admin-sql.",
-             "-- Database roles are NOT created here: the deploy creates them itself, as the owner of the database.",
+             ("-- No database roles are used: people get the " + env["access_model"]["prefix"] + "_* account roles below."
+              if env["accounts"] else
+              "-- Database roles are NOT created here: the deploy creates them itself, as the owner of the database."),
              "-- Run each block as the role named above it, then run the deploy again.", ""]
     if not by_who:
         lines.append("-- Nothing to do: every privilege the deploy needs is in place.")
@@ -330,18 +476,25 @@ def plan(cur, env: Dict[str, Any]) -> List[str]:
             out.append(f"migration V{version} {name}")
         elif applied[version] != ds.checksum(path.read_text(encoding="utf-8")):
             out.append(f"STOP: V{version} {name} changed after it was applied (checksum mismatch)")
+    from services.common import access as access_model
+
     zip_name, _ = ds.build_services_zip()
+
+    def sql_of(text: str) -> str:   # the same SQL the deploy applies, so unchanged files are not listed
+        out = ds.render(text, variables)
+        return access_model.to_account_roles(out, db, env["access_model"]["prefix"]) if env["accounts"] else out
+
     variables = {"database": db, "schema": PLATFORM_SCHEMA, "services_import": f"@{db}.{PLATFORM_SCHEMA}.CODE_STAGE/{zip_name}",
                  "warehouse": wh, "agent_skills": ds.agent_skills_yaml(db)}
     if state.get("package/services") != zip_name:
         out.append(f"code package {zip_name}")
     for path in sorted(ds.PROCEDURES_DIR.glob("*.sql")):
-        if state.get(f"procedures/{path.name}") != ds.checksum(ds.render(path.read_text(encoding="utf-8"), variables)):
+        if state.get(f"procedures/{path.name}") != ds.checksum(sql_of(path.read_text(encoding="utf-8"))):
             out.append(f"procedures {path.name}")
     if state.get("seed/platform") != seed_inputs_digest():
         out.append("knowledge seed (domain packs, skills, platform config)")
     for path in sorted(ds.VIEWS_DIR.glob("*.sql")) + sorted(ds.SEARCH_DIR.glob("*.sql")) + sorted(ds.AGENTS_DIR.glob("*.sql")):
-        if state.get(f"{path.parent.name}/{path.name}") != ds.checksum(ds.render(path.read_text(encoding="utf-8"), variables)):
+        if state.get(f"{path.parent.name}/{path.name}") != ds.checksum(sql_of(path.read_text(encoding="utf-8"))):
             out.append(f"{path.parent.name} {path.name}")
     return out or ["nothing changed since the last deploy"]
 
@@ -349,7 +502,18 @@ def plan(cur, env: Dict[str, Any]) -> List[str]:
 # ---------------------------------------------------------------- access and verify
 
 def access_statements(env: Dict[str, Any], owns_warehouse: bool) -> List[str]:
+    from services.common import access as access_model
+
     db, out = env["database"], []
+    if env["accounts"]:
+        prefix = env["access_model"]["prefix"]
+        admin = access_model.role_name(prefix, "PLATFORM_ADMIN")
+        # the owner already has everything: future grants to itself are skipped
+        out += [g for g in access_model.future_grants(db, prefix) if not (env["role"] == admin and g.endswith(f"TO ROLE {admin}"))]
+        if owns_warehouse:
+            out += [f"GRANT USAGE ON WAREHOUSE {env['warehouse']} TO ROLE {r}" for r in access_model.account_roles(prefix)
+                    if r != env["role"]]
+        return out
     for db_role, roles in sorted(env["access"].items()):
         for account_role in roles:
             out.append(f"GRANT DATABASE ROLE {db}.{db_role} TO ROLE {account_role}")
@@ -388,6 +552,20 @@ def verify(cur, env: Dict[str, Any]) -> List[str]:
                + "".join(f"; {s.get('name')} {s.get('indexing_state') or s.get('serving_state') or ''}".rstrip() for s in searches))
     agents = _safe_rows(cur, f"SHOW AGENTS IN SCHEMA {db}.CORE")
     out.append(f"verify: {len(agents)} agent(s)")
+    if env["accounts"]:
+        from services.common import access as access_model
+
+        names = access_model.account_roles(env["access_model"]["prefix"])
+        missing = [n for n in names if not _show_one(cur, "ROLES", n)]
+        out.append(f"verify: all {len(names)} account roles exist" if not missing else f"verify: account roles missing: {missing}")
+        core = next((r for r in _safe_rows(cur, f"SHOW SCHEMAS LIKE 'CORE' IN DATABASE {db}")
+                     if str(r.get("name")).upper() == "CORE"), None)
+        managed = "MANAGED ACCESS" in str((core or {}).get("options") or "").upper()
+        out.append("verify: CORE is a managed access schema" if managed else "verify: CORE is NOT managed access  <-- check")
+        roles = _safe_rows(cur, f"SHOW DATABASE ROLES IN DATABASE {db}")
+        out.append("verify: no database roles in the database" if not roles
+                   else f"verify: {len(roles)} database role(s) exist from an earlier model (unused)")
+        return out
     roles = _safe_rows(cur, f"SHOW DATABASE ROLES IN DATABASE {db}")
     missing = sorted(set(DATABASE_ROLES) - {str(r.get("name") or "").upper() for r in roles})
     out.append("verify: all platform database roles exist" if not missing else f"verify: database roles missing: {missing}")
@@ -446,7 +624,14 @@ def main(argv: Optional[List[str]] = None) -> int:
                       help="write the one-time SQL for the account admins (default deploy-logs/<env>-admin.sql)")
     parser.add_argument("--yes", action="store_true", help="do not ask for confirmation")
     parser.add_argument("--force", action="store_true", help="apply every step, even unchanged ones")
+    parser.add_argument("--setup", action="store_true", help="create or redo the environment file by answering questions")
     args = parser.parse_args(argv)
+    interactive = sys.stdin.isatty()
+    if args.setup or (not env_path(args.env).exists() and interactive):
+        setup_env(args.env)
+        if args.setup and not (args.check or args.plan or args.admin_sql is not None):
+            print(f"Next: python infrastructure/deploy.py --env {args.env} --check")
+            return 0
     try:
         env = load_env(args.env)
     except ConfigError as exc:
@@ -495,7 +680,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         from infrastructure.deploy_snowflake import apply_from_session
 
         started = time.time()
-        for line in apply_from_session(con, env["database"], env["warehouse"], force=args.force):
+        for line in apply_from_session(con, env["database"], env["warehouse"], force=args.force,
+                                       access=env["access_model"]):
             log(f"  {line}")
         log(f"  deploy took {time.time() - started:.0f}s")
         log("4. access")

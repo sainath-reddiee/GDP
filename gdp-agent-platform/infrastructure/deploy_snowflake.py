@@ -125,14 +125,14 @@ def build_services_zip() -> Tuple[str, bytes]:
     return f"services-{hashlib.sha256(data).hexdigest()[:16]}.zip", data
 
 
-def bootstrap_sql(database: str, create_database: bool = True) -> str:
+def bootstrap_sql(database: str, create_database: bool = True, managed: bool = False) -> str:
     """The ledger. CREATE DATABASE only when the database does not exist yet: a deploy role that was given an existing
     database (owned, without CREATE DATABASE on the account) must not need that account privilege."""
     create = (f"CREATE DATABASE IF NOT EXISTS {database} COMMENT = 'AI-assisted data engineering platform metadata';"
               if create_database else "")
     return f"""
 {create}
-CREATE SCHEMA IF NOT EXISTS {database}.CORE COMMENT = 'Workflow state machine, runs, reviews';
+CREATE SCHEMA IF NOT EXISTS {database}.CORE{" WITH MANAGED ACCESS" if managed else ""} COMMENT = 'Workflow state machine, runs, reviews';
 CREATE TABLE IF NOT EXISTS {database}.CORE.SCHEMA_MIGRATION (
     VERSION      VARCHAR(8)   NOT NULL,
     DESCRIPTION  VARCHAR(256) NOT NULL,
@@ -410,12 +410,25 @@ def apply_to_connection(con, database: str, warehouse: str, variables: Dict[str,
                         zip_name: str, zip_bytes: bytes, migrations, procedures, extra_sql,
                         graph_version, state_rows, transition_rows, demo_files, force: bool = False,
                         consolidate: bool = False, rehearsal: bool = False,
-                        through: str | None = None, use_baseline: bool = True) -> List[str]:
+                        through: str | None = None, use_baseline: bool = True,
+                        access: Dict[str, str] | None = None) -> List[str]:
     """Apply migrations, seed, package, procedures and extras on an open connection; steps that did not change
     since their last successful apply are skipped unless `force`. `rehearsal` keeps every change inside `database`
     (which must end in _REHEARSAL): no Oracle procedure refresh, no publisher task. `through` applies migrations up to
     and including that version and stops (the consolidation runbook checks the data between V060, V061 and the rest)."""
     log: List[str] = []
+    from services.common import access as access_model
+
+    model = access_model.normalise(access)
+    accounts = model["model"] == access_model.ACCOUNT_ROLES_MODEL
+
+    def sql_of(text: str) -> str:
+        """Rendered, and translated for account roles when the environment uses them."""
+        out = render(text, variables)
+        return access_model.to_account_roles(out, database, model["prefix"]) if accounts else out
+
+    if accounts:
+        log.append(f"access: account roles {model['prefix']}_* (no database roles); platform schemas are managed access")
     if rehearsal:
         assert database.endswith(REHEARSAL_SUFFIX), f"--rehearsal needs a database named *{REHEARSAL_SUFFIX}"
         log.append(f"rehearsal: changes stay inside {database}")
@@ -427,7 +440,7 @@ def apply_to_connection(con, database: str, warehouse: str, variables: Dict[str,
         cur.execute(f"USE WAREHOUSE {warehouse}")
     assert current_wh or warehouse, "no warehouse in session; pass --warehouse"
 
-    con.execute_string(bootstrap_sql(database, create_database=not database_exists(cur, database)))
+    con.execute_string(bootstrap_sql(database, create_database=not database_exists(cur, database), managed=accounts))
     state = DeployState(cur, database, force)
     if force:
         log.append("force: every step is applied")
@@ -437,7 +450,7 @@ def apply_to_connection(con, database: str, warehouse: str, variables: Dict[str,
     fresh = not applied     # a new environment: nothing in it predates this deploy
     migrated = False
     if not applied and use_baseline and BASELINE_FILE.exists() and (not through or through >= BASELINE_COVERS):
-        con.execute_string(render(BASELINE_FILE.read_text(encoding="utf-8"), variables))
+        con.execute_string(sql_of(BASELINE_FILE.read_text(encoding="utf-8")))
         for version, name, path in migrations:
             if version > BASELINE_COVERS:
                 continue
@@ -463,7 +476,7 @@ def apply_to_connection(con, database: str, warehouse: str, variables: Dict[str,
             continue
         if version == CONSOLIDATION_MIGRATION:
             log.append(consolidation_gate(cur, database, consolidate, fresh))
-        con.execute_string(render(raw, variables))
+        con.execute_string(sql_of(raw))
         cur.execute(
             f"INSERT INTO {database}.CORE.SCHEMA_MIGRATION (VERSION, DESCRIPTION, CHECKSUM, APPLIED_BY) "
             f"SELECT %s, %s, %s, CURRENT_USER()",
@@ -476,6 +489,9 @@ def apply_to_connection(con, database: str, warehouse: str, variables: Dict[str,
         return log
     if migrated:
         log.append("migrations applied: views, Cortex Search, agents and the seed run again")
+    if accounts:
+        log.extend(managed_access(cur, database))
+    log.extend(record_access_model(cur, database, model))
 
     graph_digest = seed_digest(state_rows, transition_rows)
     if migrated or state.changed("seed/workflow_graph", graph_digest):
@@ -495,7 +511,7 @@ def apply_to_connection(con, database: str, warehouse: str, variables: Dict[str,
         log.append(f"package {zip_name} uploaded")
 
     for path in procedures:
-        sql = render(path.read_text(encoding="utf-8"), variables)
+        sql = sql_of(path.read_text(encoding="utf-8"))
         key, digest = f"procedures/{path.name}", checksum(sql)
         if not state.changed(key, digest):
             continue
@@ -516,7 +532,7 @@ def apply_to_connection(con, database: str, warehouse: str, variables: Dict[str,
         log.append("seed domain packs, skills, platform config")
 
     for path in extra_sql:
-        sql = render(path.read_text(encoding="utf-8"), variables)
+        sql = sql_of(path.read_text(encoding="utf-8"))
         key, digest = f"{path.parent.name}/{path.name}", checksum(sql)
         if not migrated and not state.changed(key, digest):
             continue
@@ -530,7 +546,7 @@ def apply_to_connection(con, database: str, warehouse: str, variables: Dict[str,
             log.append(f"{path.parent.name} {path.name}: skipped ({exc})")
 
     for path in demo_files:
-        sql = render(path.read_text(encoding="utf-8"), variables)
+        sql = sql_of(path.read_text(encoding="utf-8"))
         key, digest = f"demo/{variables['demo_database']}/{path.name}", checksum(sql)
         if not state.changed(key, digest):
             continue
@@ -539,6 +555,44 @@ def apply_to_connection(con, database: str, warehouse: str, variables: Dict[str,
         log.append(f"demo {path.name}: applied to {variables['demo_database']}")
     log.extend(state.summary())
     return log
+
+
+def managed_access(cur, database: str) -> List[str]:
+    """Account roles: the platform schemas are managed access, so the deploy role (their owner) may define future grants
+    and only it decides who gets what in them. Idempotent; a schema that does not exist is skipped."""
+    from services.common.access import PLATFORM_SCHEMAS
+
+    out = []
+    for schema in PLATFORM_SCHEMAS:
+        try:
+            cur.execute(f"ALTER SCHEMA IF EXISTS {database}.{schema} ENABLE MANAGED ACCESS")
+        except Exception as exc:
+            out.append(f"access: {schema} could not be made managed access ({str(exc).splitlines()[0][:160]})")
+    return out
+
+
+def record_access_model(cur, database: str, model: Dict[str, str]) -> List[str]:
+    """Keep the access model in PLATFORM_CONFIG (ACCESS_MODEL) for the run-time admin checks. Written only when it
+    changes; an environment that never set one is on database roles, the default."""
+    import json as _json
+
+    from services.common.access import DATABASE_ROLES_MODEL, normalise
+
+    try:
+        cur.execute(f"SELECT CONFIG_VALUE FROM {database}.CORE.PLATFORM_CONFIG WHERE CONFIG_KEY = 'ACCESS_MODEL' "
+                    "AND IS_CURRENT ORDER BY VERSION DESC LIMIT 1")
+        row = cur.fetchone()
+    except Exception as exc:
+        return [f"access model: not recorded ({str(exc).splitlines()[0][:160]})"]
+    stored = normalise((_json.loads(row[0]) if isinstance(row[0], str) else row[0]) if row else None)
+    if stored == model or (not row and model["model"] == DATABASE_ROLES_MODEL):
+        return []
+    cur.execute(f"UPDATE {database}.CORE.PLATFORM_CONFIG SET IS_CURRENT = FALSE WHERE CONFIG_KEY = 'ACCESS_MODEL' AND IS_CURRENT")
+    cur.execute(f"""INSERT INTO {database}.CORE.PLATFORM_CONFIG (CONFIG_KEY, CONFIG_VALUE, DESCRIPTION, VERSION, IS_CURRENT, CREATED_BY)
+                    SELECT 'ACCESS_MODEL', PARSE_JSON(%s), 'Snowflake access model (written by the deploy)',
+                           COALESCE((SELECT MAX(VERSION) FROM {database}.CORE.PLATFORM_CONFIG WHERE CONFIG_KEY = 'ACCESS_MODEL'), 0) + 1,
+                           TRUE, CURRENT_USER()""", (_json.dumps(model),))
+    return [f"access model recorded: {model['model']} ({model['prefix']})"]
 
 
 def _seed_graph(cur, database: str, graph_version, state_rows, transition_rows) -> None:
@@ -565,7 +619,8 @@ def _seed_graph(cur, database: str, graph_version, state_rows, transition_rows) 
 
 def apply_from_session(con, database: str, warehouse: str, demo_source: str | None = None,
                        force: bool = False, consolidate: bool = False, rehearsal: bool = False,
-                       through: str | None = None, use_baseline: bool = True) -> List[str]:
+                       through: str | None = None, use_baseline: bool = True,
+                       access: Dict[str, str] | None = None) -> List[str]:
     # The Admin deploy never passes consolidate, so it cannot apply V061 on a database that holds data.
     """Deploy using an already-authenticated Snowflake connection (no new SSO); only changed steps unless `force`."""
     zip_name, zip_bytes = build_services_zip()
@@ -586,7 +641,7 @@ def apply_from_session(con, database: str, warehouse: str, demo_source: str | No
         list_migrations(), sorted(PROCEDURES_DIR.glob("*.sql")),
         sorted(VIEWS_DIR.glob("*.sql")) + sorted(SEARCH_DIR.glob("*.sql")) + sorted(AGENTS_DIR.glob("*.sql")),
         graph_version, state_rows, transition_rows, demo_files, force=force,
-        consolidate=consolidate, rehearsal=rehearsal, through=through, use_baseline=use_baseline,
+        consolidate=consolidate, rehearsal=rehearsal, through=through, use_baseline=use_baseline, access=access,
     )
 
 
