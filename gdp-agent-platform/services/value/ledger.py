@@ -47,14 +47,17 @@ def _basis(act: Dict[str, Any]) -> str:
     return "admin set" if act.get("basis") == "edited" else "assumed default"
 
 
-def net(hours: float, rate_usd: float, credits: Optional[float], credit_price_usd: Optional[float]) -> Dict[str, Any]:
-    """{hours, value_usd, ai_credits, ai_cost_usd, net_usd, needs_price}. Without a credit price the AI cost cannot be
-    put in money, so no net figure is given (needs_price), never a guess."""
-    value = round(float(hours) * float(rate_usd), 2)
+def net(hours: float, rate_usd: float, credits: Optional[float], credit_price_usd: Optional[float],
+        confirmed: bool = True) -> Dict[str, Any]:
+    """{hours, value_usd, ai_credits, ai_cost_usd, net_usd, needs_price, needs_confirmation}. Hours are an estimate
+    (measured counts x assumed minutes). Their money value is given only for confirmed baselines (needs_confirmation),
+    and a net figure only with a credit price as well (needs_price): never a guess presented as an amount. The AI cost
+    is measured, so it is shown whenever there is a price."""
+    value = round(float(hours) * float(rate_usd), 2) if confirmed else None
     cost = None if credit_price_usd is None or credits is None else round(float(credits) * float(credit_price_usd), 2)
     return {"hours": round(float(hours), 1), "value_usd": value, "ai_credits": None if credits is None else round(credits, 3),
-            "ai_cost_usd": cost, "net_usd": None if cost is None else round(value - cost, 2),
-            "needs_price": credit_price_usd is None}
+            "ai_cost_usd": cost, "net_usd": None if cost is None or value is None else round(value - cost, 2),
+            "needs_price": credit_price_usd is None, "needs_confirmation": not confirmed, "estimate": True}
 
 
 def weekly(counts: Dict[str, Optional[List[Dict[str, Any]]]], base: Dict[str, Any],

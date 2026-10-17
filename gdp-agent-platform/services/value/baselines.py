@@ -7,11 +7,16 @@ which an admin set, so a reader never takes an assumption for a measurement.
 
 Partial credit: work a person had to change counts for part of its baseline (a mapping the reviewer modified, a test
 someone edited), and rejected work counts for nothing.
+
+Hours are always an estimate. Money (hours x the blended rate) is shown only once an admin confirms the baselines fit
+this client and says where they come from (`confirmed`, `basis_note`); until then the ledger gives hours and no amount.
+`exclude` keeps test and lab activity out of the counts.
 """
 
 from __future__ import annotations
 
 import copy
+import re
 from typing import Any, Dict, List, Tuple
 
 KEY = "VALUE_BASELINES"
@@ -45,7 +50,13 @@ DEFAULTS: Dict[str, Any] = {
     "credit": {"APPROVED": 1.0, "MODIFIED": 0.5, "ALTERNATIVE_TARGET": 0.25, "REJECTED": 0.0, "EDITED": 0.5},
     "knowledge_weights": {"auto_fix_share": 0.5, "dag_coverage": 0.25, "fix_coverage": 0.25},
     "min_samples": 5,
+    # activity that is not real work: test runs, and the platform's own lab (its failures are injected on purpose)
+    "exclude": {"run_environments": ["TEST"], "airflow_envs": ["local-lab"]},
+    # money is shown only once an admin confirms the minutes and the rate fit this client, saying where they come from
+    "confirmed": False,
+    "basis_note": "",
 }
+NAME = re.compile(r"^[A-Za-z0-9_.:\-]{1,64}$")
 
 
 def _number(value: Any, name: str, problems: List[str], low: float = 0.0, high: float = 1e6) -> Any:
@@ -100,6 +111,30 @@ def validate(value: Any) -> Tuple[Dict[str, Any], List[str]]:
         samples = _number(value["min_samples"], "minimum samples", problems, 1, 1000)
         if samples is not None:
             out["min_samples"] = int(samples)
+    exclude = value.get("exclude")
+    if exclude is not None:
+        if not isinstance(exclude, dict):
+            problems.append("exclude must be an object of lists")
+        else:
+            problems += [f"unknown exclusion {k}" for k in sorted(set(exclude) - set(DEFAULTS["exclude"]))]
+            for key in DEFAULTS["exclude"]:
+                items = exclude.get(key, DEFAULTS["exclude"][key])
+                if not isinstance(items, list) or len(items) > 50:
+                    problems.append(f"{key} must be a list of at most 50 names")
+                    continue
+                bad = [str(i) for i in items if not NAME.match(str(i).strip())]
+                if bad:
+                    problems.append(f"{key}: {bad[0][:40]} is not a valid name")
+                    continue
+                names = [str(i).strip() for i in items]
+                out["exclude"][key] = sorted({n.upper() for n in names} if key == "run_environments" else set(names))
+    if "basis_note" in value:
+        out["basis_note"] = str(value.get("basis_note") or "").strip()[:1000]
+    if "confirmed" in value:
+        out["confirmed"] = value.get("confirmed") is True
+        if out["confirmed"] and len(out["basis_note"]) < 10:
+            problems.append("say where the minutes and the rate come from (a time study, timesheets, the client's "
+                            "estimate) before confirming them")
     return out, problems
 
 

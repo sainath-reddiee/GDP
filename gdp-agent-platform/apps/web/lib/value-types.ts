@@ -7,8 +7,9 @@ export type ValueActivity = {
 };
 
 export type ValueNet = {
-  hours: number; value_usd: number; ai_credits: number | null; ai_cost_usd: number | null; net_usd: number | null;
-  needs_price: boolean;
+  /** hours are always an estimate (measured counts x assumed minutes); money only once the baselines are confirmed */
+  hours: number; value_usd: number | null; ai_credits: number | null; ai_cost_usd: number | null; net_usd: number | null;
+  needs_price: boolean; needs_confirmation?: boolean; estimate?: boolean;
 };
 
 export type RepairSide = { n: number; median_min: number | null };
@@ -34,7 +35,10 @@ export type ValueReport = {
   baselines: {
     blended_rate_usd: number; rate_basis: "default" | "edited"; credit: Record<string, number>; min_samples: number;
     activities: Record<string, BaselineActivity>; version: number | null; changed_by: string | null; changed_at: string | null;
+    confirmed?: boolean; basis_note?: string; confirmed_by?: string | null; confirmed_at?: string | null;
   };
+  /** what every count leaves out */
+  scope?: { excluded_run_environments: string[]; excluded_airflow_envs: string[]; always_counted: string[]; ai_cost: string };
   credit_price_usd: number | null;
 };
 

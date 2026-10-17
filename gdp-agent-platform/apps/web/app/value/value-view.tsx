@@ -4,7 +4,7 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { BookOpen, Clock, Coins, Gauge, Loader2, Pencil, RotateCcw, Save, Timer, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { Input, Textarea } from "@/components/ui/input";
 import { Panel } from "@/components/hub/kpi";
 import { Meter, Sparkline } from "@/app/dashboard/command-center";
 import { cn } from "@/lib/utils";
@@ -43,14 +43,31 @@ export function ValueView({ data, canEdit }: { data: ValueReport; canEdit: boole
   const v = data.value;
   const k = data.knowledge;
   const maxHours = Math.max(1, ...data.weekly.map((w) => w.hours));
+  const unconfirmed = v.needs_confirmation || v.value_usd == null;
+  const scope = data.scope;
+  const aiCost = v.ai_cost_usd != null ? `${usd(v.ai_cost_usd)} AI cost` : v.ai_credits != null ? `${v.ai_credits.toFixed(1)} AI credits` : "AI cost unknown";
   return (
     <div className="space-y-5" data-testid="value-ledger">
+      <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200" data-testid="value-estimate-note">
+        <p><span className="font-semibold">These hours are an estimate.</span> The counts are measured; the minutes each item takes a person are
+          {data.baselines.confirmed ? ` baselines ${data.baselines.confirmed_by ?? "an admin"} confirmed for this client (${data.baselines.basis_note})` : " assumptions nobody has confirmed for this client yet"}.
+          {unconfirmed ? " No money amount is shown until an admin confirms them." : ""}</p>
+        {scope && (
+          <p className="mt-1">Left out of every count: runs in {scope.excluded_run_environments.length ? scope.excluded_run_environments.join(", ") : "no environment"}
+            {" "}and Airflow environment{scope.excluded_airflow_envs.length === 1 ? "" : "s"} {scope.excluded_airflow_envs.length ? scope.excluded_airflow_envs.join(", ") : "none"} (test and lab activity). AI cost includes everything.</p>
+        )}
+      </div>
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <Headline icon={Clock} label={`Hours saved, ${data.window_days} days`} value={hours(v.hours)}
+        <Headline icon={Clock} label={`Estimated hours saved, ${data.window_days} days`} value={hours(v.hours)}
                   hint={`${hours(data.hours_by_group.build)} building pipelines · ${hours(data.hours_by_group.ops)} running them`} />
-        <Headline icon={Coins} label="Net value" value={v.net_usd == null ? usd(v.value_usd) : usd(v.net_usd)}
-                  hint={v.needs_price ? `${usd(v.value_usd)} of time, AI cost not priced: set a credit price in Admin`
-                    : `${usd(v.value_usd)} of time minus ${usd(v.ai_cost_usd)} AI cost (${(v.ai_credits ?? 0).toFixed(1)} credits)`} />
+        {unconfirmed ? (
+          <Headline icon={Coins} label="Value in money" value="Not shown"
+                    hint={`Shown once an admin confirms the baselines fit this client · ${aiCost} so far`} />
+        ) : (
+          <Headline icon={Coins} label="Estimated net value" value={v.net_usd == null ? usd(v.value_usd) : usd(v.net_usd)}
+                    hint={v.needs_price ? `${usd(v.value_usd)} of time at ${usd(data.baselines.blended_rate_usd)}/h; AI cost not priced: set a credit price in Admin`
+                      : `${usd(v.value_usd)} of time minus ${usd(v.ai_cost_usd)} AI cost (${(v.ai_credits ?? 0).toFixed(1)} credits)`} />
+        )}
         <Headline icon={Gauge} label="Failures fixed automatically" value={pct(k?.components.auto_fix_share.value)}
                   hint={k?.components.auto_fix_share.denominator ? `${k.components.auto_fix_share.numerator} of ${k.components.auto_fix_share.denominator} failures handled` : "no failures in this window"} />
         <Headline icon={BookOpen} label="Knowledge score" value={k?.score == null ? "-" : String(k.score)}
@@ -62,7 +79,7 @@ export function ValueView({ data, canEdit }: { data: ValueReport; canEdit: boole
         <p className="mb-3 text-xs text-muted-foreground">
           Each row multiplies what the platform did (measured) by the minutes the same work takes a person (an assumption).
           Work a person changed counts for part of its time; rejected work counts for nothing.
-          Blended rate {usd(data.baselines.blended_rate_usd)} an hour {data.baselines.rate_basis === "edited" ? <Badge tone="edited">admin set</Badge> : <Badge tone="assumed">assumed default</Badge>}
+          {!unconfirmed && <> Blended rate {usd(data.baselines.blended_rate_usd)} an hour {data.baselines.rate_basis === "edited" ? <Badge tone="edited">admin set</Badge> : <Badge tone="assumed">assumed default</Badge>}</>}
           {data.baselines.version ? ` · baselines version ${data.baselines.version}${data.baselines.changed_by ? ` by ${data.baselines.changed_by}` : ""}` : ""}
         </p>
         <div className="overflow-x-auto">
@@ -70,7 +87,7 @@ export function ValueView({ data, canEdit }: { data: ValueReport; canEdit: boole
             <thead className="border-b text-left text-xs text-muted-foreground">
               <tr><th className="py-2 pr-3 font-medium">Activity</th><th className="px-3 py-2 text-right font-medium">Count</th>
                 <th className="px-3 py-2 text-right font-medium">Credited</th><th className="px-3 py-2 text-right font-medium">Minutes each</th>
-                <th className="px-3 py-2 text-right font-medium">Hours</th></tr>
+                <th className="px-3 py-2 text-right font-medium">Estimated hours</th></tr>
             </thead>
             <tbody className="divide-y">
               {data.activities.map((a) => (
@@ -79,7 +96,8 @@ export function ValueView({ data, canEdit }: { data: ValueReport; canEdit: boole
                   <td className="px-3 py-2 text-right tabular-nums">{a.available ? <>{a.count?.toLocaleString()} <Badge tone="measured">measured</Badge></> : <Badge tone="muted">not available</Badge>}</td>
                   <td className="px-3 py-2 text-right tabular-nums">{a.credited ?? "-"}</td>
                   <td className="px-3 py-2 text-right tabular-nums">{a.minutes_each} <Badge tone={a.minutes_basis === "admin set" ? "edited" : "assumed"}>{a.minutes_basis}</Badge></td>
-                  <td className="px-3 py-2 text-right font-semibold tabular-nums">{hours(a.hours)}</td>
+                  <td className="px-3 py-2 text-right font-semibold tabular-nums"
+                      title={a.available ? `${a.credited} x ${a.minutes_each} min / 60` : undefined}>{hours(a.hours)}</td>
                 </tr>
               ))}
             </tbody>
@@ -164,10 +182,19 @@ function BaselineEditor({ data, onClose }: { data: ValueReport; onClose: () => v
   const [rate, setRate] = useState(String(data.baselines.blended_rate_usd));
   const [mins, setMins] = useState<Record<string, string>>(
     Object.fromEntries(Object.entries(data.baselines.activities).map(([k, a]) => [k, String(a.minutes)])));
+  const [runEnvs, setRunEnvs] = useState((data.scope?.excluded_run_environments ?? ["TEST"]).join(", "));
+  const [airflowEnvs, setAirflowEnvs] = useState((data.scope?.excluded_airflow_envs ?? ["local-lab"]).join(", "));
+  const [note, setNote] = useState(data.baselines.basis_note ?? "");
+  const [confirmed, setConfirmed] = useState(!!data.baselines.confirmed);
+  const list = (text: string) => text.split(",").map((x) => x.trim()).filter(Boolean);
   const save = (reset = false) => start(async () => {
     setError("");
     const activities = Object.fromEntries(Object.entries(mins).map(([k, m]) => [k, { minutes: Number(m) }]));
-    const r = await saveBaselines(reset ? {} : { activities, blended_rate_usd: Number(rate) }, reset);
+    // every save sends the whole setting: anything left out would go back to its default
+    const r = await saveBaselines(reset ? {} : {
+      activities, blended_rate_usd: Number(rate), basis_note: note, confirmed,
+      exclude: { run_environments: list(runEnvs), airflow_envs: list(airflowEnvs) },
+    }, reset);
     if (!r.ok) { setError(r.error); return; }
     onClose();
     router.refresh();
@@ -191,6 +218,22 @@ function BaselineEditor({ data, onClose }: { data: ValueReport; onClose: () => v
             </label>
           ))}
         </div>
+        <h3 className="mb-2 mt-5 text-sm font-semibold">Leave out of the counts</h3>
+        <label className="mb-3 block text-sm">Run environments <span className="text-xs text-muted-foreground">comma separated, for example TEST, DEV</span>
+          <Input value={runEnvs} onChange={(e) => setRunEnvs(e.target.value)} className="mt-1" />
+        </label>
+        <label className="mb-3 block text-sm">Airflow environments <span className="text-xs text-muted-foreground">environment ids, for example local-lab</span>
+          <Input value={airflowEnvs} onChange={(e) => setAirflowEnvs(e.target.value)} className="mt-1" />
+        </label>
+        <h3 className="mb-2 mt-5 text-sm font-semibold">Show money amounts</h3>
+        <label className="mb-3 block text-sm">Where these minutes and the rate come from
+          <Textarea value={note} onChange={(e) => setNote(e.target.value)} rows={3} maxLength={1000} className="mt-1"
+                    placeholder="For example: time study with the delivery team, October 2026; rate from the engagement's rate card" />
+        </label>
+        <label className="flex items-start gap-2 text-sm">
+          <input type="checkbox" className="mt-1" checked={confirmed} onChange={(e) => setConfirmed(e.target.checked)} />
+          <span>These baselines fit this client. Show hours in money on the Value page and the tiles.</span>
+        </label>
         {error && <p role="alert" className="mt-3 text-sm text-destructive">{error}</p>}
         <div className="mt-5 flex gap-2">
           <Button onClick={() => save(false)} disabled={pending}>{pending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />} Save</Button>
