@@ -10,18 +10,23 @@ connection = "client-prod"
 # user = "FIRST.LAST@CLIENT.COM"
 # authenticator = "externalbrowser"        # or "snowflake_jwt" with private_key_file = "C:/keys/deploy.p8"
 
-role = "PLATFORM_ADMIN"                   # the account role you deploy with (owns the platform database)
+role = "AODS_PLATFORM_ADMIN"              # the account role you deploy with (owns the platform database)
 warehouse = "AI_PLATFORM_WH"
 database = "AI_PLATFORM"
 
-# Which account roles get which platform database role. The deploy grants these itself (it owns the database roles);
-# your role administrator only creates the account roles and gives them to people. The deploy role always gets
-# PLATFORM_ADMIN. Database roles: PLATFORM_ADMIN, DATA_ENGINEER, DATA_STEWARD, DOMAIN_OWNER, QA_ENGINEER, REVIEWER,
-# VIEWER, OPS_SERVICE, OPS_VIEWER, SERVICE_AGENT.
 [access]
-DATA_ENGINEER = ["DATA_ENGINEER"]
-VIEWER = []
-OPS_SERVICE = []                          # the account role of the ops worker's service user
+# account_roles: no database roles. Your role administrator creates ten account roles <role_prefix>_* once
+# (AODS_PLATFORM_ADMIN, AODS_DATA_ENGINEER, AODS_DATA_STEWARD, AODS_DOMAIN_OWNER, AODS_QA_ENGINEER, AODS_REVIEWER,
+# AODS_VIEWER, AODS_OPS_SERVICE, AODS_OPS_VIEWER, AODS_SERVICE_AGENT) and gives them to people; --admin-sql writes
+# that SQL. The deploy grants every privilege to them directly. Use a prefix such as AODS_PROD when two environments
+# share one Snowflake account.
+model = "account_roles"
+role_prefix = "AODS"
+# database_roles instead: the platform creates database roles <db>.DATA_ENGINEER, ... and grants them to the account
+# roles you list here, for example:
+# model = "database_roles"
+# DATA_ENGINEER = ["MY_ENGINEER_ROLE"]
+# OPS_SERVICE = ["MY_SERVICE_ROLE"]
 
 [features]
 llm_model = "claude-sonnet-4-5"           # checked for Cortex access before deploying

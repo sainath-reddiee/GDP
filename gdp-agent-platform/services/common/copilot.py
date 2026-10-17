@@ -172,7 +172,7 @@ def page_context(session, page: Dict[str, Any]) -> Dict[str, Any]:
             ctx["TABLE"] = profile
     case_id = page.get("case_id")
     if case_id and UUID.match(case_id):
-        found = _safe(lambda: rows(session, CASE_SQL, [case_id]), [])
+        found = _safe(lambda: rows(session, case_sql(session), [case_id]), [])
         if found:
             c = {k.lower(): v for k, v in found[0].items()}
             ctx["CASE"] = {"key": "CASE", "number": f"CASE-{c.get('case_number')}", "title": c.get("title"),
@@ -191,9 +191,16 @@ CASE_SQL = """SELECT C.CASE_NUMBER, C.TITLE, C.KIND, C.STATUS, C.SEVERITY, C.AI_
                 LEFT JOIN CORE.TARGET_TABLE_REGISTRY T ON T.TARGET_TABLE_ID = C.TARGET_TABLE_ID
                WHERE C.CASE_ID = ?
                  AND (C.DOMAIN_ID IS NULL OR UPPER(D.DOMAIN_NAME) = 'GENERAL'
-                      OR IS_DATABASE_ROLE_IN_SESSION('PLATFORM_ADMIN')
+                      OR {admin}
                       OR C.DOMAIN_ID IN (SELECT DOMAIN_ID FROM CORE.DOMAIN_MEMBER WHERE UPPER(USER_NAME) = UPPER(CURRENT_USER()))
                       OR C.DOMAIN_ID NOT IN (SELECT DOMAIN_ID FROM CORE.DOMAIN_MEMBER))"""
+
+
+def case_sql(session) -> str:
+    """CASE_SQL with the admin check of the access model in force (database role, or the AODS_* account role)."""
+    from services.common.access import admin_check_sql, load
+
+    return CASE_SQL.replace("{admin}", admin_check_sql(load(lambda sql: rows(session, sql), "session")))
 
 
 def context_keys(ctx: Dict[str, Any], hits: List[Dict[str, Any]]) -> set:
