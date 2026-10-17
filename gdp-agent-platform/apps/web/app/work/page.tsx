@@ -1,10 +1,13 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
 import {
-  AlertTriangle, ArrowRight, Bot, BookOpen, CircleHelp, Gauge, GitPullRequest, LayoutDashboard, PlugZap, ShieldCheck, Siren, Ticket,
+  AlertTriangle, ArrowRight, Bot, BookOpen, CircleHelp, Gauge, GitPullRequest, LayoutDashboard, PlugZap, Radar, ShieldCheck, Siren, Ticket,
   UserCheck, type LucideIcon,
 } from "lucide-react";
-import { whoami } from "@/lib/api";
+import { api, whoami } from "@/lib/api";
+import { can } from "@/lib/types";
+import type { ValueSummary } from "@/lib/value-types";
+import { ValueTile } from "@/components/value/value-tile";
 import { loadMyWork } from "@/lib/my-work";
 import { ago, runHref } from "@/lib/run-insights";
 import { stateLabel } from "@/lib/run-labels";
@@ -68,10 +71,13 @@ function Tile({ href, label, value, hint, tone }: { href: string; label: string;
  *  proposals, tickets, incidents and pull requests that are theirs. The Command Center stays the estate-wide view. */
 export default async function MyWorkPage() {
   const me = await whoami();
-  const w = await loadMyWork(me);
+  const [w, value] = await Promise.all([
+    loadMyWork(me),
+    can(me, "AUDIT.VIEW") ? api<ValueSummary>("/api/value/summary").catch(() => null) : Promise.resolve(null),
+  ]);
   const user = (me?.user ?? "").split(/[._@ ]/)[0];
   const name = user ? user.charAt(0) + user.slice(1).toLowerCase() : "";
-  const approvals = w.gates.length + w.requests.length + w.fixApprovals.length;
+  const approvals = w.gates.length + w.requests.length + w.fixApprovals.length + w.permanentFixes.length;
   const knowledge = w.questions.length + w.inbox.length;
   const summary = approvals
     ? `${plural(approvals, "decision")} ${approvals === 1 ? "waits" : "wait"} on you.`
@@ -107,13 +113,15 @@ export default async function MyWorkPage() {
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4" data-testid="work-tiles">
         <Tile href="#approve" label="Awaiting your approval" value={approvals} tone="human"
-              hint={`${plural(w.gates.length, "gate")} · ${plural(w.requests.length, "change request")}${w.fixApprovals.length ? ` · ${w.fixApprovals.length} fix${w.fixApprovals.length === 1 ? "" : "es"}` : ""}`} />
+              hint={`${plural(w.gates.length, "gate")} · ${plural(w.requests.length, "change request")}${w.fixApprovals.length ? ` · ${w.fixApprovals.length} fix${w.fixApprovals.length === 1 ? "" : "es"}` : ""}${w.permanentFixes.length ? ` · ${w.permanentFixes.length} permanent fix${w.permanentFixes.length === 1 ? "" : "es"}` : ""}`} />
         <Tile href="#runs" label="Your runs in flight" value={w.running.length} tone="agent"
               hint={`${w.inFlightTotal} in flight across the platform`} />
         <Tile href="#fix" label="Needs a fix" value={w.fix.length} tone="fix" hint="your failed runs, last 14 days" />
         <Tile href="#knowledge" label="Questions and proposals" value={knowledge} tone="knowledge"
               hint={`${plural(w.questions.length, "question")} · ${plural(w.inbox.length, "proposal")}`} />
       </div>
+
+      {value && <ValueTile data={value} />}
 
       <div className="grid gap-6 xl:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]">
         <div className="min-w-0 space-y-6">
@@ -141,6 +149,18 @@ export default async function MyWorkPage() {
                       <span className="truncate group-hover:text-primary">{a.issue_title ?? a.fix_name} on {a.dag_id} · {a.task_id}</span>
                     </p>
                     <p className="mt-0.5 truncate text-xs text-muted-foreground">Airflow failure · waiting since {ago(a.requested_at)} · {a.approver ? `routed to ${a.approver}` : "any fix approver"}</p>
+                  </Row>
+                ))}
+                {w.permanentFixes.map((p) => (
+                  <Row key={p.fix_id} href={`/ops/permanent-fixes/${encodeURIComponent(p.fix_id)}`}
+                       action={<Link href={`/ops/permanent-fixes/${encodeURIComponent(p.fix_id)}`} className="inline-flex items-center gap-1 rounded-lg bg-human px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-human/90">{p.status === "DRAFTED" ? "Review" : "Publish"} <ArrowRight className="h-3 w-3" /></Link>}>
+                    <p className="flex flex-wrap items-center gap-2 text-sm font-medium">
+                      <span className="rounded-full bg-human/10 px-2 py-0.5 text-[11px] font-semibold text-human">Permanent fix</span>
+                      <span className="truncate group-hover:text-primary">{p.title ?? p.issue_title ?? "Permanent fix"}</span>
+                    </p>
+                    <p className="mt-0.5 truncate text-xs text-muted-foreground">
+                      {p.status === "DRAFTED" ? `drafted ${p.trigger_kind === "AUTO" ? "by the agent" : `by ${p.drafted_by}`} · accept or reject` : `accepted by ${p.decided_by} · open its pull request`} · {ago(p.updated_at ?? p.created_at)}
+                    </p>
                   </Row>
                 ))}
                 {w.requests.map((r) => (
@@ -232,6 +252,22 @@ export default async function MyWorkPage() {
               </ul>
             )}
           </Section>
+
+          {w.proposedSkills.length > 0 && (
+            <Section id="skills" title="Skills the scout proposes" icon={Radar} tone="knowledge" count={w.proposedSkills.length}
+                     href="/skills/proposed" hrefLabel="Proposed skills" empty="">
+              <ul className="divide-y">
+                {w.proposedSkills.map((p) => (
+                  <Row key={p.proposal_id} href="/skills/proposed">
+                    <p className="truncate text-sm group-hover:text-primary">{p.title ?? p.skill_name}</p>
+                    <p className="text-xs text-muted-foreground">
+                      {p.stage ?? "any stage"} · {p.evidence_count} items in {p.domain_count} domain{p.domain_count === 1 ? "" : "s"}{p.transfer_label ? ` · ${p.transfer_label}` : ""} · {ago(p.created_at)}
+                    </p>
+                  </Row>
+                ))}
+              </ul>
+            </Section>
+          )}
 
           {w.tickets && (
             <Section id="tickets" title="Your tickets" icon={Ticket} tone="plain" count={w.tickets.length} href="/tickets?assignee=me" hrefLabel="Tickets"

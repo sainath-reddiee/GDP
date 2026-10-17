@@ -151,7 +151,7 @@ def pr_closed(kind: str, asset_id: str, asset_name: Optional[str], version: int,
     if not asset_id:
         return None
     label = {"MODEL": "domain model", "DQ_SUITE": "data quality suite", "QA_PACK": "QA pack", "STTM": "STTM mapping",
-             "TABLE_MODEL": "table model"}.get(str(kind).upper(), str(kind).lower())
+             "TABLE_MODEL": "table model", "PERMANENT_FIX": "permanent fix"}.get(str(kind).upper(), str(kind).lower())
     name = asset_name or asset_id
     return {"kind": "BUSINESS_RULE", "key": f"git.closed.{str(kind).upper()}.{asset_id}",
             "title": f"Pull request for {label} {name} v{int(version)} closed without merging",
@@ -163,6 +163,39 @@ def pr_closed(kind: str, asset_id: str, asset_name: Optional[str], version: int,
                              "version": int(version), "branch": branch, "url": url,
                              "target_table": _name(name) if str(kind).upper() in ("TABLE_MODEL", "DQ_SUITE", "STTM") else None},
             "tags": ["GIT", "PULL_REQUEST", "CLOSED"]}
+
+
+def permanent_fix_merged(fix: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """A permanent fix whose pull request merged: the code change that removed the cause of a recurring known fix.
+    Kept as an incident resolution so the next diagnosis of a similar failure finds the change (one item per known fix)."""
+    from services.ops.redact import redact
+
+    if not fix.get("issue_id"):
+        return None
+    files = fix.get("files")
+    if isinstance(files, str):
+        import json
+
+        try:
+            files = json.loads(files)
+        except ValueError:
+            files = []
+    paths = [str(f.get("path")) for f in files or [] if isinstance(f, dict) and f.get("path")][:10]
+    issue = redact(str(fix.get("issue_title") or fix["issue_id"]))[:300]
+    lines = [f"The recurring failure behind the known fix '{issue}' was removed in code."]
+    if fix.get("dag_id"):
+        lines.append(f"DAG {fix['dag_id']}.")
+    if fix.get("summary"):
+        lines.append(redact(str(fix["summary"]))[:1500])
+    if paths:
+        lines.append("Files changed: " + ", ".join(paths))
+    if fix.get("pr_url"):
+        lines.append(f"Pull request: {fix['pr_url']}")
+    return {"kind": "INCIDENT_RESOLUTION", "key": f"ops.permanent_fix.{fix['issue_id']}",
+            "title": redact(f"Permanent fix: {fix.get('title') or issue}")[:500], "content": "\n".join(lines),
+            "content_json": {"fix_id": fix.get("fix_id"), "issue_id": fix["issue_id"], "dag_id": fix.get("dag_id"),
+                             "files": paths, "pr_url": fix.get("pr_url")},
+            "tags": ["OPS", "PERMANENT_FIX", "PULL_REQUEST"]}
 
 
 def validation_fixed(target: Optional[str], findings: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:

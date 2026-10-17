@@ -102,7 +102,10 @@ def preference(row: Optional[Dict[str, Any]]) -> Dict[str, Any]:
             "rca_mode": mode if mode in ("AGENT", "GROUNDED") else "AGENT",
             # agent-proposed fixes (V063): off unless enabled, and only on objects the scope names
             "agent_proposals_enabled": bool(r.get("agent_proposals_enabled")),
-            "agent_fix_scope": (str(r.get("agent_fix_scope")).strip() or None) if r.get("agent_fix_scope") else None}
+            "agent_fix_scope": (str(r.get("agent_fix_scope")).strip() or None) if r.get("agent_fix_scope") else None,
+            # permanent fixes (V066): drafting only proposes a code change; a pull request needs two people
+            "permanent_fix_enabled": r.get("permanent_fix_enabled") is not False,
+            "permanent_fix_min_runs": int(min(50, max(2, num("permanent_fix_min_runs", 3))))}
 
 
 def _most_specific(rows: Iterable[Dict[str, Any]], dag_id: str, task_id: Optional[str]) -> Optional[Dict[str, Any]]:

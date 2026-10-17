@@ -50,7 +50,8 @@ export type Reliability = {
   teams: { team_id: string | null; name: string | null; incidents: number; p1: number; mttr_min: number | null; mtta_min: number | null; repeats: number }[];
   top_dags: { env_id: string; dag_id: string; failures: number; success_rate: number | null }[];
   repeats: { fingerprint: string; title: string; count: number }[];
-  ai: { diagnoses: number; cost_usd: number | null };
+  /** credits are Snowflake credits; cost_usd only when a credit price is set */
+  ai: { diagnoses: number; credits?: number; credit_price_usd?: number | null; cost_usd: number | null };
   /** known fixes that keep firing; absent on an older API */ recurring_fixes?: RecurringFix[];
 };
 export type DagFilters = { env_id: string; q?: string; state?: string; team_id?: string; owner?: string };

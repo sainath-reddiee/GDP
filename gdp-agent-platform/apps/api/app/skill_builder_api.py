@@ -6,10 +6,8 @@ published here: a new skill or version is saved as the candidate, and production
 
 from __future__ import annotations
 
-import hashlib
 import json
 import time
-import uuid
 from typing import Any, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -19,16 +17,10 @@ from app.db import Db
 from app.main import _account_models, _model_for, _record_cost, _snowflake_error, current_db
 from app.skills_api import STAGES, _categories, _labels, _move, _name
 from services.knowledge import skill_builder as sb
+from services.knowledge import skill_drafts
+from services.knowledge.skill_drafts import FEEDBACK_TYPES, KNOWLEDGE_TYPES
 
 router = APIRouter()
-
-KNOWLEDGE_TYPES = ["MAPPING_PATTERN", "TRANSFORMATION_RULE", "SODA_PATTERN", "MODEL_DEFINITION", "GLOSSARY",
-                   "BUSINESS_RULE", "NAMING_STANDARD", "COLUMN_RULE", "DBT_PATTERN", "EXCEPTION"]
-# knowledge a reviewer's rejections leave behind, per skill category (evidence for "improve")
-FEEDBACK_TYPES = {"data-quality": ["SODA_PATTERN"], "mapping": ["MAPPING_PATTERN"], "sttm": ["TRANSFORMATION_RULE"],
-                  "data-modeling": ["MODEL_DEFINITION"], "profiling": ["COLUMN_RULE"], "dbt": ["DBT_PATTERN", "TRANSFORMATION_RULE"]}
-CATEGORY_TYPE = {"profiling": "PROFILING", "mapping": "MAPPING", "sttm": "STTM", "data-quality": "SODA", "dbt": "DBT",
-                 "validation": "VALIDATION", "source-onboarding": "SOURCE_ONBOARDING"}
 
 
 def _allowed_models(db: Db) -> list[str]:
@@ -76,7 +68,7 @@ def _complete(db: Db, prompt: str, schema: dict, max_tokens: int = 8000, model: 
 
 
 def _names(db: Db) -> list[str]:
-    return [r["skill_name"] for r in db.query("SELECT DISTINCT SKILL_NAME FROM CORE.SKILL_REGISTRY")]
+    return skill_drafts.skill_names(db)
 
 
 def _production(db: Db, skill: str) -> Optional[dict]:
@@ -125,14 +117,7 @@ def builder_draft(body: Draft, db: Db = Depends(current_db)):
         raise HTTPException(400, "Describe the goal of the skill")
     if body.mode == "knowledge":
         types = [t for t in (body.knowledge_types or KNOWLEDGE_TYPES) if t in KNOWLEDGE_TYPES]
-        knowledge = db.query(
-            """SELECT K.KNOWLEDGE_TYPE, K.TITLE, K.CONTENT, K.SOURCE_REFERENCE, D.DOMAIN_NAME
-                 FROM CORE.DOMAIN_KNOWLEDGE K JOIN CORE.DOMAIN_REGISTRY D ON D.DOMAIN_ID = K.DOMAIN_ID
-                WHERE K.IS_CURRENT AND K.STATUS = 'ACTIVE' AND (%s IS NULL OR K.DOMAIN_ID = %s)
-                  AND ARRAY_CONTAINS(K.KNOWLEDGE_TYPE::VARIANT, PARSE_JSON(%s))
-                  AND COALESCE(K.UPDATED_AT, K.CREATED_AT) >= DATEADD(DAY, -%s, CURRENT_TIMESTAMP())
-                ORDER BY COALESCE(K.UPDATED_AT, K.CREATED_AT) DESC LIMIT 80""",
-            (body.domain_id, body.domain_id, json.dumps(types), body.days))
+        knowledge = skill_drafts.knowledge_material(db, body.domain_id, types, body.days)
         if not knowledge:
             raise HTTPException(400, "No approved knowledge matches this domain, type and time window. Widen the filters.")
         keys = [k["source_reference"] for k in knowledge if k.get("source_reference")]
@@ -172,21 +157,14 @@ def builder_draft(body: Draft, db: Db = Depends(current_db)):
                                   ORDER BY COALESCE(UPDATED_AT, CREATED_AT) DESC LIMIT 15""", (json.dumps(types),)):
                 feedback.append(f"Rejected or retired by a reviewer [{r['knowledge_type']}] {r['title']}: {str(r.get('content') or '')[:300]}")
         provenance.update({"base_skill_id": prod["skill_id"], "base_version": prod["version"], "evidence": len(feedback)})
-    prompt = sb.draft_prompt(body.mode, goal=body.goal, answers=body.answers, knowledge=knowledge,
-                             document=body.document_text, document_name=body.document_name, existing=existing,
-                             feedback=feedback, instructions=body.instructions,
-                             categories=categories, stages=STAGES)
-    if body.category_id:
-        prompt += f"\n\nThe user chose the category {body.category_id}."
-    raw, usage, model = _complete(db, prompt, sb.DRAFT_SCHEMA, 12000, body.model)
-    draft = sb.normalize(raw, categories, STAGES, keep_name=existing["name"] if existing else None)
-    if body.category_id and body.category_id in categories:
-        draft["category"] = body.category_id
-    content = sb.assemble(draft)
-    issues = sb.check(draft, content, _names(db), improving=existing["name"] if existing else None, knowledge_keys=keys)
-    provenance["used_knowledge"] = draft.get("used_knowledge")
-    return {"draft": draft, "content": content, "issues": issues, "provenance": provenance, "model": model,
-            "tokens": usage.get("total_tokens"), "feedback": feedback or []}
+    out = skill_drafts.draft(lambda p, schema, tokens: _complete(db, p, schema, tokens, body.model), body.mode,
+                             categories=categories, stages=STAGES, existing_names=_names(db), goal=body.goal,
+                             answers=body.answers, knowledge=knowledge, document=body.document_text,
+                             document_name=body.document_name, existing=existing, feedback=feedback,
+                             instructions=body.instructions, category_id=body.category_id, knowledge_keys=keys)
+    provenance["used_knowledge"] = out["draft"].get("used_knowledge")
+    return {"draft": out["draft"], "content": out["content"], "issues": out["issues"], "provenance": provenance,
+            "model": out["model"], "tokens": out["usage"].get("total_tokens"), "feedback": feedback or []}
 
 
 class Check(BaseModel):
@@ -222,20 +200,8 @@ def builder_test(body: Test, db: Db = Depends(current_db)):
             prod = None
         if prod:
             baseline, label = prod["content"] or "", f"production v{str(prod['version']).split('+')[0]}"
-    started = time.time()
-    cand, u1, model = _complete(db, sb.answer_prompt(body.content, tests), sb.ANSWER_SCHEMA, 6000, body.model)
-    base, u2, _ = _complete(db, sb.answer_prompt(baseline, tests), sb.ANSWER_SCHEMA, 6000, body.model)
-    a = {int(x.get("index", -1)): x.get("answer", "") for x in cand.get("answers") or []}
-    b = {int(x.get("index", -1)): x.get("answer", "") for x in base.get("answers") or []}
-    judged, u3, _ = _complete(db, sb.judge_prompt(tests, a, b), sb.JUDGE_SCHEMA, 4000, body.model)
-    summary = sb.score(tests, judged.get("results") or [], label)
-    for row in summary["rows"]:
-        row["candidate_answer"] = a.get(row["index"], "")
-        row["baseline_answer"] = b.get(row["index"], "")
-    summary.update({"model": model, "ms": int((time.time() - started) * 1000),
-                    "tokens": {"candidate": u1.get("total_tokens"), "baseline": u2.get("total_tokens"), "judge": u3.get("total_tokens")},
-                    "tested_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())})
-    return summary
+    return skill_drafts.evaluate(lambda p, schema, tokens: _complete(db, p, schema, tokens, body.model),
+                                 body.content, tests, baseline, label)
 
 
 class NewSkill(BaseModel):
@@ -260,13 +226,7 @@ def create_skill(body: NewSkill, db: Db = Depends(current_db)):
                                   body.content, []) if i["level"] == "error"]
     if issues:
         raise HTTPException(400, issues[0]["message"])
-    skill_id = str(uuid.uuid4())
-    db.execute("""INSERT INTO CORE.SKILL_REGISTRY (SKILL_ID, SKILL_NAME, SKILL_TYPE, VERSION, STAGE_PATH, CHECKSUM, STATUS,
-                         DESCRIPTION, CONTENT, IS_CURRENT, CREATED_BY, REVISION, ORIGIN, CATEGORY_ID, CHANGE_NOTE, EVAL_JSON)
-                  SELECT %s, %s, %s, '0.1.0', %s, %s, 'DRAFT', %s, %s, FALSE, CURRENT_USER(), 1, %s, %s, %s,
-                         PARSE_JSON(NULLIF(%s, ''))""",
-               (skill_id, name, CATEGORY_TYPE.get(body.category_id, "DOMAIN"), f"ui/{name.lower()}/0.1.0/SKILL.md",
-                hashlib.sha256(body.content.encode("utf-8")).hexdigest(), body.description, body.content, body.origin,
-                body.category_id, body.change_note, json.dumps(body.eval) if body.eval else ""))
+    skill_id = skill_drafts.insert_skill(db, name, body.description, body.category_id, body.content, body.change_note,
+                                         body.origin, body.eval)
     _move(db, name, "candidate", skill_id, body.change_note)
     return {"skill_name": name, "skill_id": skill_id, "version": "0.1.0"}

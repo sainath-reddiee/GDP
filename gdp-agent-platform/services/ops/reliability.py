@@ -118,18 +118,30 @@ def report(db: Any, days: int = 7, team_id: Optional[str] = None, now: Optional[
                           FROM CORE.DAG_RUN R JOIN CORE.AIRFLOW_ENV E ON E.ENV_ID = R.ENV_ID
                           LEFT JOIN CORE.DAG D ON D.ENV_ID = R.ENV_ID AND D.DAG_ID = R.DAG_ID
                          WHERE {run_where} GROUP BY R.ENV_ID, R.DAG_ID""", tuple(run_params))
-    ai = {"diagnoses": 0, "cost_usd": 0.0}
+    ai: Dict[str, Any] = {"diagnoses": 0, "credits": 0.0, "credit_price_usd": None, "cost_usd": None}
     try:
         found = db.query(f"""SELECT COUNT(*) AS N FROM CORE.INCIDENT_EVENT V
                               {"JOIN CORE.INCIDENT I ON I.INCIDENT_ID = V.INCIDENT_ID" if team_id else ""}
                              WHERE V.KIND = 'diagnosed' AND V.CREATED_AT >= TRY_TO_TIMESTAMP_LTZ(%s::VARCHAR)
                              {"AND I.TEAM_ID = %s" if team_id else ""}""", tuple(params[:2]) if team_id else (params[0],))
         ai["diagnoses"] = int(found[0]["n"] or 0) if found else 0
-        cost = db.query("""SELECT COALESCE(SUM(ESTIMATED_COST), 0) AS USD FROM CORE.COST_USAGE
-                            WHERE STAGE = 'OPS' AND CREATED_AT >= TRY_TO_TIMESTAMP_LTZ(%s::VARCHAR)""", (params[0],))
-        ai["cost_usd"] = round(float(cost[0]["usd"] or 0), 4) if cost else 0.0
+        # COST_USAGE holds Snowflake credits (the reconciled actual when known, else the estimate), never dollars:
+        # money needs the credit price an admin set
+        cost = db.query("""SELECT COALESCE(SUM(COALESCE(ACTUAL_CREDITS, ESTIMATED_COST, 0)), 0) AS CREDITS
+                             FROM CORE.COST_USAGE
+                            WHERE STAGE IN ('OPS', 'RESOLVE') AND CREATED_AT >= TRY_TO_TIMESTAMP_LTZ(%s::VARCHAR)""",
+                        (params[0],))
+        ai["credits"] = round(float(cost[0]["credits"] or 0), 4) if cost else 0.0
     except Exception:
         pass
+    try:
+        from services.value.report import _config, _price
+
+        ai["credit_price_usd"] = _price(_config(db, "CREDIT_PRICE_USD").get("value"))
+    except Exception:
+        ai["credit_price_usd"] = None
+    if ai["credit_price_usd"] is not None:
+        ai["cost_usd"] = round(ai["credits"] * ai["credit_price_usd"], 2)
     stats = team_stats(incidents, teams)
     if team_id:
         stats = [t for t in stats if t["team_id"] == team_id]

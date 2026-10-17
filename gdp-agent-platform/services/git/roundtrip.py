@@ -9,6 +9,7 @@ and applies the outcome to this table and to the asset's own version table:
   DQ_SUITE  CORE.DQ_SUITE_VERSION  merged -> the version is PUBLISHED
   QA_PACK   CORE.DOMAIN_QA_PACKS   merged or closed is recorded (the deploy then sees the pack in step)
   STTM      (this table only)            the approved mapping version as sttm/<domain>/<target>.csv
+  PERMANENT_FIX  CORE.PERMANENT_FIX (through its hook)  merged or closed ends the proposal; never retires the fix
 
 Closed without merging leaves the version APPROVED with its state CLOSED, so it can be published again. Before V043
 recording is skipped and the sync falls back to each asset's own table (services.dbt.publish.sync_*_prs).
@@ -34,6 +35,9 @@ KINDS: Dict[str, Dict[str, Any]] = {
     # table model versions are published without an approval of their own (the domain model is the governed asset)
     "TABLE_MODEL": {"label": "Table model", "table": "CORE.TABLE_MODEL_VERSION", "key": "TABLE_MODEL_ID",
                     "publishes": True, "from": ("DRAFT", "PUBLISHED")},
+    # the code change that removes the cause of a recurring known fix (V066); its own table is kept by the hook
+    "PERMANENT_FIX": {"label": "Permanent fix", "table": None, "key": None, "publishes": False,
+                      "hook": "services.resolve.permanent:on_pr_state"},
 }
 
 
@@ -82,6 +86,11 @@ def record(session, kind: str, asset_id: str, version: int, result: Dict[str, An
 def apply_state(session, kind: str, asset_id: str, version: int, state: str, merged_sha: Optional[str]) -> None:
     """A pull request's state on the asset's own version table (nothing for STTM, which lives here only)."""
     k = KINDS[kind]
+    if k.get("hook"):
+        import importlib
+
+        module, _, name = k["hook"].partition(":")
+        getattr(importlib.import_module(module), name)(session, asset_id, state, merged_sha)
     if not k["table"]:
         return
     publish = k["publishes"] and state == "MERGED"
@@ -170,7 +179,8 @@ def link(kind: str, asset_id: str, version: int) -> str:
             "DQ_SUITE": f"/dashboard/dq-store/suite?suite={asset_id}",
             "QA_PACK": "/dashboard/qa-store",
             "STTM": f"/dashboard/sttm/{asset_id}?version={version}",
-            "TABLE_MODEL": f"/dashboard/modeling/tables/{asset_id}?version={version}"}.get(kind, "/dashboard")
+            "TABLE_MODEL": f"/dashboard/modeling/tables/{asset_id}?version={version}",
+            "PERMANENT_FIX": f"/ops/permanent-fixes/{asset_id}"}.get(kind, "/dashboard")
 
 
 def list_sql(kind: Optional[str] = None, state: Optional[str] = None, domain_id: Optional[str] = None,

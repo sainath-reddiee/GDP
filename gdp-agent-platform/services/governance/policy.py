@@ -289,6 +289,12 @@ RULES: List[Tuple[str, str, Any, str]] = [
     ("POST", r"/api/ops/resolve/approvals/[^/]+/(approve|reject)", "OPS.FIX_APPROVE", "Approve or reject running a fix"),
     ("PUT", r"/api/ops/resolve/(preference|scopes|routes)", "OPS.RESOLVE_ADMIN", "Change automatic resolution"),
     ("DELETE", r"/api/ops/resolve/(scopes|routes)/[^/]+", "OPS.RESOLVE_ADMIN", "Change automatic resolution"),
+    # permanent fixes: drafting proposes a code change (AI.USE checked by the endpoint); accepting is the second
+    # person's review (four eyes in services.resolve.permanent); the pull request needs DBT.EDIT and a dry run
+    ("POST", r"/api/ops/permanent-fixes/draft/[^/]+", "OPS.OPERATE", ""),
+    ("POST", r"/api/ops/permanent-fixes/[^/]+/(accept|reject)", "OPS.FIX_PUBLISH", ""),
+    ("POST", r"/api/ops/permanent-fixes/[^/]+/publish", "DBT.EDIT", "Open a permanent fix pull request"),
+    ("POST", r"/api/ops/permanent-fixes/[^/]+/known-fix", "OPS.FIX_PUBLISH", ""),
     # cases (apps/api/app/cases_api.py): reads are open to everyone signed in and filtered by domain visibility; the
     # status route needs CASE.WORK here and CASE.RESOLVE in the handler for VERIFIED, RESOLVED, CLOSED and DUPLICATE
     ("POST", r"/api/cases/[^/]+/merge", "CASE.RESOLVE", "Merge a case into another as its duplicate"),
@@ -373,6 +379,10 @@ RULES: List[Tuple[str, str, Any, str]] = [
     ("POST", r"/api/skills/[^/]+/versions", "SKILL.EDIT", ""),
     ("POST", r"/api/skills/[^/]+/versions/[^/]+/(retire|restore)", "SKILL.EDIT", ""),
     ("PUT", r"/api/skills/[^/]+/category", "SKILL.EDIT", ""),
+    # the skill scout: a dry run reads, a real scan drafts (AI.USE checked by the endpoint); proposals are reviewed
+    # through the skill labels above, so neither is queued
+    ("POST", r"/api/skill-proposals/scan", "SKILL.EDIT", ""),
+    ("POST", r"/api/skill-proposals/[^/]+/dismiss", "SKILL.EDIT", ""),
     ("POST", r"/api/skills/categories", "SKILL.EDIT", ""),
     ("PUT", r"/api/skills/categories/[^/]+", "SKILL.EDIT", ""),
     ("DELETE", r"/api/skills/categories/[^/]+", "SKILL.EDIT", ""),
@@ -426,7 +436,7 @@ READ_RULES = [(re.compile(r"^/api/(admin/.*|config/(rules|platform|models))$"), 
               (re.compile(r"^/api/jira/(issues|search|filters|boards|sprints|projects|summary|sprint-choices)(/.*)?$"), "JIRA.READ"),
               (re.compile(r"^/api/qa/links$"), "JIRA.READ"),
               (re.compile(r"^/api/runs/[^/]+/jira/.*$"), "JIRA.READ"),
-              (re.compile(r"^/api/(audit|costs)(/.*)?$"), "AUDIT.VIEW"),
+              (re.compile(r"^/api/(audit|costs|value)(/.*)?$"), "AUDIT.VIEW"),
               (re.compile(r"^/api/code/setup$"), "INTEGRATION.MANAGE"),
               (re.compile(r"^/api/ops(/.*)?$"), "OPS.VIEW"),
               (re.compile(r"^/api/code/(search|file|lineage|impact|path|neighborhood|usage|summary|repos|repos/[^/]+/(runs|branches|catalog|files))$"), "CODE.VIEW"),
@@ -471,6 +481,10 @@ NO_QUEUE_ROUTES = [(m, re.compile(p)) for m, p in [
     # a fix's publish is its review (four eyes in services.resolve.rules); an approval of a fix run is the approval
     ("POST", r"^/api/ops/resolve/fixes/[^/]+/(publish|retire)$"),
     ("POST", r"^/api/ops/resolve/approvals/[^/]+/(approve|reject)$"),
+    # accepting a permanent fix is the review itself; retiring or keeping the known fix after the merge too
+    ("POST", r"^/api/ops/permanent-fixes/[^/]+/(accept|reject|known-fix)$"),
+    # a skill scout scan only proposes (DRAFT versions nothing loads); a dismissal is the review
+    ("POST", r"^/api/skill-proposals/scan$"), ("POST", r"^/api/skill-proposals/[^/]+/dismiss$"),
 ]]
 
 

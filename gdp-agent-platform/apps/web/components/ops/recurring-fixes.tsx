@@ -1,11 +1,14 @@
 import Link from "next/link";
 import { Repeat } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { PermanentFixStatusPill } from "@/components/ops/status-pill";
 
 /** A known fix that keeps firing (GET /api/ops/resolve/summary `recurring`, /api/ops/reliability `recurring_fixes`). */
 export type RecurringFix = {
   issue_id: string; title: string | null; status: string | null; proposed_by_agent: boolean; runs: number; ok: number;
   success_rate: number | null; dags: number; dag_ids: string[]; last_run_at: string | null;
+  /** the newest permanent fix proposal (V066); absent on an older API */
+  permanent_fix?: { fix_id: string; status: string; pr_url: string | null } | null;
 };
 
 const rate = (v: number | null) => (v === null ? "-" : `${Math.round(v * 100)}%`);
@@ -26,6 +29,9 @@ export function RecurringFixes({ items, days = 30, className }: { items: Recurri
               <Link href={`/ops/fixes/${encodeURIComponent(r.issue_id)}`} className="min-w-0 flex-1 truncate font-medium text-primary hover:underline"
                     title={r.title ?? r.issue_id}>{r.title ?? r.issue_id}</Link>
               {r.proposed_by_agent && <span className="rounded-full bg-agent/10 px-2 py-0.5 text-[10px] font-semibold text-agent">agent</span>}
+              {r.permanent_fix
+                ? <Link href={`/ops/permanent-fixes/${encodeURIComponent(r.permanent_fix.fix_id)}`} className="shrink-0" title="Permanent fix"><PermanentFixStatusPill status={r.permanent_fix.status} /></Link>
+                : r.status === "PUBLISHED" && <Link href={`/ops/fixes/${encodeURIComponent(r.issue_id)}`} className="shrink-0 text-[11px] font-medium text-primary hover:underline">Draft permanent fix</Link>}
               <span className="shrink-0 tabular-nums text-amber-700">{r.runs} runs</span>
               <span className="shrink-0 text-muted-foreground" title={r.dag_ids.join(", ")}>{r.dags} DAG{r.dags === 1 ? "" : "s"}</span>
               <span className={cn("w-10 shrink-0 text-right tabular-nums", r.success_rate !== null && r.success_rate < 1 ? "text-rose-700" : "text-emerald-700")}

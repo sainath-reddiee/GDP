@@ -26,4 +26,16 @@ export const FIX_STATUS: Record<string, { label: string; tone: string }> = {
   RETIRED: { label: "Retired", tone: "bg-muted text-muted-foreground" },
 };
 
-export const score = (v: number | null | undefined) => (v === null || v === undefined ? "-" : `${Math.round(v * 100)}%`);
+/** A permanent fix proposal (V066): what it is waiting for, in plain words. */
+export const PERMANENT_FIX_STATUS: Record<string, { label: string; tone: string; hint: string }> = {
+  UNAVAILABLE: { label: "Needs mapping", tone: "bg-amber-100 text-amber-800", hint: "The platform could not find the files to change" },
+  DRAFTED: { label: "Waiting for review", tone: "bg-human/10 text-human", hint: "A second person accepts or rejects it" },
+  ACCEPTED: { label: "Accepted", tone: "bg-sky-100 text-sky-800", hint: "Ready to open its pull request" },
+  REJECTED: { label: "Rejected", tone: "bg-muted text-muted-foreground", hint: "A reviewer did not take it" },
+  PUBLISHED: { label: "Pull request open", tone: "bg-violet-100 text-violet-800", hint: "Waiting for the repository's reviewers" },
+  MERGED: { label: "Merged", tone: "bg-success/10 text-success", hint: "The change is in the repository" },
+  CLOSED: { label: "Closed", tone: "bg-muted text-muted-foreground", hint: "The pull request closed without merging" },
+  SUPERSEDED: { label: "Replaced", tone: "bg-muted text-muted-foreground", hint: "A newer draft replaced it" },
+};
+
+export const score =(v: number | null | undefined) => (v === null || v === undefined ? "-" : `${Math.round(v * 100)}%`);

@@ -2,6 +2,8 @@ import Link from "next/link";
 import { api, ApiError, whoami } from "@/lib/api";
 import { can } from "@/lib/types";
 import { FixStatusPill } from "@/components/ops/status-pill";
+import { PermanentFixCard } from "@/components/ops/permanent-fix-card";
+import type { PermanentFixRow } from "../../permanent-fix-actions";
 import type { FixInput, FixSkill, KnownFix } from "../../resolve-actions";
 import { FixActions, FixForm } from "../fix-form";
 
@@ -48,6 +50,8 @@ export default async function FixPage({ params, searchParams }: { params: { id: 
     throw e;
   }
   const k = data.issue;
+  const proposals = await api<{ items: PermanentFixRow[] }>(`/api/ops/permanent-fixes?issue_id=${encodeURIComponent(k.issue_id)}&limit=1`)
+    .catch(() => ({ items: [] as PermanentFixRow[] }));
   return (
     <div className="space-y-4">
       <Crumb />
@@ -60,6 +64,8 @@ export default async function FixPage({ params, searchParams }: { params: { id: 
         <FixForm initial={k} issueId={k.issue_id} skills={skills} editable={k.status === "DRAFT" && can(me, "OPS.OPERATE")} />
         <div className="space-y-4">
           <FixActions fix={k} canPublish={can(me, "OPS.FIX_PUBLISH")} me={me?.user ?? ""} />
+          <PermanentFixCard issueId={k.issue_id} published={k.status === "PUBLISHED"} latest={proposals.items[0] ?? null}
+                            canDraft={can(me, "OPS.OPERATE") && can(me, "AI.USE")} runs30d={k.runs_30d} />
           <section className="surface p-4">
             <h2 className="mb-2 text-sm font-semibold">Runs</h2>
             {data.runs.length === 0 ? <p className="text-xs text-muted-foreground">Not run yet.</p> : (

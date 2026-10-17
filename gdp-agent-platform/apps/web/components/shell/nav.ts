@@ -1,6 +1,6 @@
 import {
   Activity, Crown, BadgeCheck, BarChart3, BookOpen, Boxes, ClipboardCheck, Database, FileClock, FlaskConical, FolderGit2, GitCompareArrows, GitPullRequest,
-  Inbox, LayoutDashboard, ListChecks, Network, Rocket, Settings, ShieldCheck, Siren, Sparkles, SquareTerminal, Store, Ticket, Wrench, BookCheck,
+  Inbox, LayoutDashboard, ListChecks, TrendingUp, Network, Rocket, Settings, ShieldCheck, Siren, Sparkles, SquareTerminal, Store, Ticket, Wrench, BookCheck, Hammer,
 } from "lucide-react";
 import type { NavCounts } from "@/app/bff/nav/route";
 
@@ -72,6 +72,7 @@ export const NAV_GROUPS: NavGroup[] = [
         badge: (c) => c.approvals ? { value: c.approvals, tone: "bg-human text-white", title: `${c.approvals} change requests waiting for you` } : null,
       },
       { href: "/dashboard", label: "Overview", icon: LayoutDashboard, exact: true },
+      { href: "/value", label: "Value", icon: TrendingUp, privilege: "AUDIT.VIEW" },
     ],
   },
   {
@@ -127,6 +128,7 @@ export const NAV_GROUPS: NavGroup[] = [
           ...(SHOW_INCIDENTS ? [{ href: "/incidents", label: "Incidents", icon: Siren, privilege: "OPS.VIEW" }] : []),
           { href: "/ops/resolutions", label: "Resolutions", icon: Wrench, privilege: "OPS.VIEW" },
           { href: "/ops/fixes", label: "Known fixes", icon: BookCheck, privilege: "OPS.VIEW" },
+          { href: "/ops/permanent-fixes", label: "Permanent fixes", icon: Hammer, privilege: "OPS.VIEW" },
           { href: "/tickets", label: "Tickets", icon: Ticket, privilege: ["JIRA.READ", "CASE.WORK"] },
         ],
       },

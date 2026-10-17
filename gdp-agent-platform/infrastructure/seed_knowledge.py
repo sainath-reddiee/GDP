@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from services.source.pipelines import DEFAULT_FORM as INTAKE_FORM
 from services.knowledge.skills import category_for
+from services.value.baselines import DEFAULTS as VALUE_BASELINE_DEFAULTS
 from services.knowledge.packs import (GDP_DOMAIN_ID, GDP_TABLE_ID, LiveColumns, _dumps, _stable_id,  # noqa: F401
                                       domain_id, merge, merge_columns, pack_rows)
 
@@ -31,6 +32,8 @@ DEFAULT_THRESHOLDS = {"auto_suggest": 0.78, "human_review": 0.45}
 
 PLATFORM_CONFIG = [
     ("LLM_MODEL", "claude-sonnet-4-5", "Cortex AI_COMPLETE model"),
+    ("VALUE_BASELINES", VALUE_BASELINE_DEFAULTS,
+     "Value ledger effort baselines: Anblicks default assumptions per activity, edited per client on the Value page"),
     ("EMBED_MODEL", "snowflake-arctic-embed-l-v2.0", "1024-d embedding model matching COLUMN_EMBEDDING"),
     ("MAPPING_TOP_K", 3, "Candidates kept per source column"),
     ("SKILLS_AUTO_PROMOTE_REPO", True,
