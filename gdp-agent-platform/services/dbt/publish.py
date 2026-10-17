@@ -185,6 +185,60 @@ def publish_model_branch(session, request: Dict[str, Any]) -> Dict[str, Any]:
     return result
 
 
+def publish_permanent_fix(session, request: Dict[str, Any]) -> Dict[str, Any]:
+    """An accepted permanent fix (services/resolve/permanent.py) as a draft pull request on fix/known-issue-<n>. Only
+    the id, the branch and the text come from the caller: the files, their new content and the repository are read
+    here from CORE.PERMANENT_FIX, which must be ACCEPTED and publishable, and every path must be a file the code index
+    holds for that repository, so the procedure never pushes content two people did not see."""
+    from services.code.indexer import safe_path
+
+    fix_id = str(request.get("fix_id") or "")
+    head = github.check_branch(str(request.get("head") or ""))
+    assert head.startswith("fix/known-issue-"), "a permanent fix branch starts with fix/known-issue-"
+    found = rows(session, """SELECT ISSUE_ID, STATUS, PUBLISHABLE, FILES, REPO_ID, DOMAIN_ID, TITLE
+                               FROM CORE.PERMANENT_FIX WHERE FIX_ID = ?""", [fix_id])
+    assert found, "permanent fix not found"
+    fix = found[0]
+    assert fix["STATUS"] == "ACCEPTED", "only an accepted permanent fix is published"
+    files = variant(fix["FILES"]) or []
+    assert fix["PUBLISHABLE"] and files, "this permanent fix cannot be published"
+    repo_id = str(fix["REPO_ID"] or "")
+    repo = _repo(session, repo_id)
+    content: Dict[str, str] = {}
+    for f in files:
+        path = str(f.get("path") or "")
+        assert path and safe_path(path) and f.get("new_content"), "a permanent fix file has an unsafe path"
+        assert rows(session, "SELECT 1 AS X FROM CORE.CODE_FILE WHERE REPO_ID = ? AND PATH = ?", [repo_id, path]), \
+            f"{path} is not a file of the mapped repository"
+        content[path] = f["new_content"]
+    origin, base = repo["GIT_URL"], str(repo["BRANCH"] or "main")
+    title = clip(request.get("title") or fix.get("TITLE") or f"Permanent fix {fix_id[:8]}", 200)
+    with tool_call(session, None, "publish_permanent_fix", {"fix_id": fix_id, "head": head}) as call:
+        try:
+            result = github.publish(github.urllib_request(_token()), origin, base, head, content, title=title,
+                                    body=clip(request.get("body") or "", 6000), message=title, draft=True)
+            call.summary = f"{result['status']} {head}: PR {(result.get('pull_request') or {}).get('url') or 'none'}"
+        except Exception as exc:
+            result = {**github.explain(exc, origin), "base_branch": base, "head_branch": head}
+            result["detail"] = clip(result.get("detail"), 1000)
+            call.status, call.error = "FAILED", clip(exc)
+    state, pr = roundtrip.outcome(result)
+    status = "PUBLISHED" if state == "OPEN" else "ACCEPTED"   # a failed publish can be tried again
+    session.sql("""UPDATE CORE.PERMANENT_FIX SET STATUS = ?, BRANCH = ?, PR_URL = NULLIF(?, ''),
+                          PR_NUMBER = NULLIF(?, '')::NUMBER, PR_STATE = ?, PUBLISH_RESULT = PARSE_JSON(?),
+                          PUBLISHED_BY = CASE WHEN ? = 'PUBLISHED' THEN ? ELSE PUBLISHED_BY END,
+                          PUBLISHED_AT = CASE WHEN ? = 'PUBLISHED' THEN CURRENT_TIMESTAMP() ELSE PUBLISHED_AT END,
+                          PR_SYNCED_AT = CURRENT_TIMESTAMP(), UPDATED_AT = CURRENT_TIMESTAMP()
+                    WHERE FIX_ID = ? AND STATUS = 'ACCEPTED'""",
+                params=[status, head, pr.get("url") or "", str(pr.get("number") or ""), state or "FAILED",
+                        json.dumps(result, default=str), status, clip(request.get("actor") or "", 256), status,
+                        fix_id]).collect()
+    if state == "OPEN":
+        roundtrip.record(session, "PERMANENT_FIX", fix_id, 1, result, asset_name=title, domain_id=fix.get("DOMAIN_ID"),
+                         repo_id=repo_id, branch=head, title=title, files=list(content))
+    return result
+
+
 def _repo(session, repo_id: str) -> Dict[str, Any]:
     repo = rows(session, "SELECT GIT_URL, BRANCH, PROVIDER FROM CORE.REPO WHERE REPO_ID = ? AND ENABLED", [repo_id])
     assert repo and str(repo[0]["PROVIDER"] or "").upper() == "GITHUB", "the repository is not a connected GitHub repository"
@@ -567,6 +621,8 @@ def publish_dbt_pr(session, run_id: str, payload_json: str = "{}") -> Dict[str, 
     payload = json.loads(payload_json or "{}")
     if not run_id and isinstance(payload.get("case_patch"), dict):
         return publish_case_patch(session, payload["case_patch"])
+    if not run_id and isinstance(payload.get("permanent_fix"), dict):
+        return publish_permanent_fix(session, payload["permanent_fix"])
     if not run_id and isinstance(payload.get("model_branch"), dict):
         return publish_model_branch(session, payload["model_branch"])
     if not run_id and isinstance(payload.get("domain_model"), dict):

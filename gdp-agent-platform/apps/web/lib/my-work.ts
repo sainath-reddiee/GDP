@@ -3,6 +3,8 @@ import { can, type RunSummary, type WhoAmI } from "@/lib/types";
 import { GATES, type Gate } from "@/lib/run-labels";
 import type { ChangeRequest } from "@/app/governance-actions";
 import type { FixApproval } from "@/app/ops/resolve-actions";
+import type { PermanentFixRow } from "@/app/ops/permanent-fix-actions";
+import type { SkillProposal } from "@/app/skills/proposed/actions";
 
 // The signed-in person's work, read from the endpoints the other pages already use (no new backend). Lists the API
 // does not filter per user are filtered here: runs by created_by, gates by the approval privilege, pull requests by
@@ -25,6 +27,10 @@ export type MyWork = {
   requests: ChangeRequest[];
   /** known fixes waiting for this person's approval before they run on an Airflow failure */
   fixApprovals: FixApproval[];
+  /** permanent fixes waiting for this person: drafts someone else asked for (to accept), accepted ones (to publish) */
+  permanentFixes: PermanentFixRow[];
+  /** skills the scout proposed, for people who curate skills */
+  proposedSkills: SkillProposal[];
   inbox: InboxItem[];
   questions: QuestionItem[];
   running: RunSummary[];
@@ -45,7 +51,7 @@ const safe = <T>(p: Promise<T>, fallback: T) => p.catch(() => fallback);
 export async function loadMyWork(me: WhoAmI | null): Promise<MyWork> {
   const user = me?.user ?? "";
   const approves = Object.values(GATES).filter((g) => can(me, g.privilege));
-  const [review, running, failed, requests, inbox, myDomains, tickets, incidents, prs, fixApprovals] = await Promise.all([
+  const [review, running, failed, requests, inbox, myDomains, tickets, incidents, prs, fixApprovals, permanent, proposed] = await Promise.all([
     safe(api<{ runs: RunSummary[] }>("/api/runs?needs_review=true&sort=updated&limit=200"), { runs: [] }),
     safe(api<{ runs: RunSummary[]; total?: number }>("/api/runs?status=running&sort=updated&limit=200"), { runs: [], total: 0 }),
     safe(api<{ runs: RunSummary[] }>("/api/runs?status=failed&sort=updated&limit=100"), { runs: [] }),
@@ -60,7 +66,16 @@ export async function loadMyWork(me: WhoAmI | null): Promise<MyWork> {
       : Promise.resolve(null),
     safe(api<{ prs: PrItem[] }>("/api/source-control/prs?state=OPEN"), { prs: [] }),
     can(me, "OPS.FIX_APPROVE") ? safe(api<FixApproval[]>("/api/ops/resolve/approvals?scope=mine"), []) : Promise.resolve([] as FixApproval[]),
+    can(me, "OPS.FIX_PUBLISH") || can(me, "DBT.EDIT")
+      ? safe(api<{ items: PermanentFixRow[] }>("/api/ops/permanent-fixes?limit=50").then((r) => r.items ?? []), [] as PermanentFixRow[])
+      : Promise.resolve([] as PermanentFixRow[]),
+    can(me, "SKILL.EDIT")
+      ? safe(api<{ items: SkillProposal[] }>("/api/skill-proposals?status=PROPOSED&limit=20").then((r) => r.items ?? []), [] as SkillProposal[])
+      : Promise.resolve([] as SkillProposal[]),
   ]);
+  const permanentFixes = permanent.filter((p) =>
+    (p.status === "DRAFTED" && can(me, "OPS.FIX_PUBLISH") && !same(p.drafted_by, user))
+    || (p.status === "ACCEPTED" && p.publishable && can(me, "DBT.EDIT"))).slice(0, 6);
 
   // gates this person can decide, oldest wait first
   const gates = review.runs
@@ -93,6 +108,8 @@ export async function loadMyWork(me: WhoAmI | null): Promise<MyWork> {
     gates,
     requests: requests.requests ?? [],
     fixApprovals: fixApprovals.slice(0, 8),
+    permanentFixes,
+    proposedSkills: proposed.slice(0, 5),
     inbox: (inbox.items ?? []).filter((i) => !i.own).slice(0, 6),
     questions,
     running: running.runs.filter(mine).slice(0, 8),

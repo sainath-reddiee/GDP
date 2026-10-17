@@ -16,6 +16,8 @@ import { fmt, Meter, PipelineTable, RibbonMetric, Sparkline } from "./command-ce
 import { StoreCards } from "@/components/hub/store-cards";
 import { CountUp } from "@/components/motion/count-up";
 import { TicketsCard, type TicketsCardData } from "./tickets-card";
+import { ValueTile } from "@/components/value/value-tile";
+import type { ValueSummary } from "@/lib/value-types";
 
 /** Below this many finished runs the ribbon shows "n of m finished succeeded" rather than a percentage. */
 const FEW = 5;
@@ -44,11 +46,12 @@ export default async function Dashboard() {
   const runQs = (extra: string) => `/api/runs?${extra}${domainId ? `&domain_id=${domainId}` : ""}`;
   // the table lists the 8 most recently updated runs in flight; every count comes from the overview (exact, not a
   // list length) so the greeting, the chips, the tiles and the table header agree
-  const [active, audit, incidents, jira] = await Promise.all([
+  const [active, audit, incidents, jira, value] = await Promise.all([
     api<{ runs: RunSummary[]; total?: number }>(runQs("status=running&limit=8&sort=updated")).catch(() => ({ runs: [] as RunSummary[], total: undefined })),
     api<{ events: AuditEvent[] }>("/api/audit?limit=6").catch(() => ({ events: [] as AuditEvent[] })),
     can(me, "OPS.VIEW") ? api<IncidentSummary>("/api/ops/incidents/summary").catch(() => null) : Promise.resolve(null),
     can(me, "JIRA.READ") || can(me, "CASE.WORK") ? ticketsCard() : Promise.resolve(null),
+    can(me, "AUDIT.VIEW") ? api<ValueSummary>("/api/value/summary").catch(() => null) : Promise.resolve(null),
   ]);
   const o = overview;
   const user = (me?.user ?? "").split(/[._@ ]/)[0];
@@ -117,6 +120,8 @@ export default async function Dashboard() {
           </RibbonMetric>
         </div>
       </section>
+
+      {value && <ValueTile data={value} />}
 
       {attention.length > 0 && (
         <div className="flex flex-wrap items-center gap-2" data-testid="attention">

@@ -230,7 +230,18 @@ def recurring(db: Any, days: int = RECENT_DAYS, min_runs: int = 2, limit: int = 
         out.append({"issue_id": r["issue_id"], "title": r.get("title"), "status": r.get("status"),
                     "proposed_by_agent": bool(r.get("proposed_by_agent")), "runs": runs, "ok": ok,
                     "success_rate": round(ok / runs, 3) if runs else None, "dags": int(r.get("dags_30d") or 0),
-                    "dag_ids": list(dag_ids or [])[:10], "last_run_at": r.get("last_run_at")})
+                    "dag_ids": list(dag_ids or [])[:10], "last_run_at": r.get("last_run_at"), "permanent_fix": None})
+    if out:
+        try:   # the newest permanent fix proposal of each (V066)
+            from services.resolve.permanent import latest_for
+
+            latest = latest_for(db, [o["issue_id"] for o in out])
+            for o in out:
+                p = latest.get(o["issue_id"])
+                o["permanent_fix"] = ({"fix_id": p["fix_id"], "status": p.get("status"), "pr_url": p.get("pr_url")}
+                                      if p else None)
+        except Exception:
+            pass
     return out
 
 

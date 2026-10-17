@@ -118,7 +118,7 @@ def test_recurring_known_fixes():
     found = publish.recurring(db)
     assert found == [{"issue_id": "k1", "title": "Add AMOUNT_USD", "status": "PUBLISHED", "proposed_by_agent": True,
                       "runs": 4, "ok": 3, "success_rate": 0.75, "dags": 2, "dag_ids": ["a", "b"],
-                      "last_run_at": "2026-10-15"}]
+                      "last_run_at": "2026-10-15", "permanent_fix": None}]
     assert db.sent[0][1] == (30, 2)
 
 

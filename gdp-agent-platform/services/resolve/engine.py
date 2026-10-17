@@ -138,6 +138,14 @@ def load_preference(db: Any) -> Dict[str, Any]:
     try:
         found = db.query("""SELECT AUTO_RESOLVE_ENABLED, SEARCH_SCORE_MIN, MAX_PARALLEL_TASKS, AIRFLOW_CLEAR_ENABLED,
                                    DEFAULT_APPROVAL_REQUIRED, GRAPH_HOPS, NOTIFY_TARGET, RCA_MODE, AGENT_PROPOSALS_ENABLED,
+                                   AGENT_FIX_SCOPE, PERMANENT_FIX_ENABLED, PERMANENT_FIX_MIN_RUNS
+                              FROM CORE.CONTROL_PREFERENCE WHERE IS_ACTIVE ORDER BY UPDATED_AT DESC LIMIT 1""")
+        return rules.preference(found[0] if found else None)
+    except Exception:   # before V066: no permanent fix columns yet
+        pass
+    try:
+        found = db.query("""SELECT AUTO_RESOLVE_ENABLED, SEARCH_SCORE_MIN, MAX_PARALLEL_TASKS, AIRFLOW_CLEAR_ENABLED,
+                                   DEFAULT_APPROVAL_REQUIRED, GRAPH_HOPS, NOTIFY_TARGET, RCA_MODE, AGENT_PROPOSALS_ENABLED,
                                    AGENT_FIX_SCOPE
                               FROM CORE.CONTROL_PREFERENCE WHERE IS_ACTIVE ORDER BY UPDATED_AT DESC LIMIT 1""")
     except Exception:   # before V063: no agent proposal columns yet

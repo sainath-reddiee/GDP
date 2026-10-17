@@ -293,6 +293,8 @@ class PreferenceIn(BaseModel):
     rca_mode: Optional[str] = Field(None, pattern="^(AGENT|GROUNDED)$")
     agent_proposals_enabled: Optional[bool] = None
     agent_fix_scope: Optional[str] = Field(None, max_length=2000, pattern=r"^[A-Za-z0-9_$.*,\s]*$")
+    permanent_fix_enabled: Optional[bool] = None
+    permanent_fix_min_runs: Optional[int] = Field(None, ge=2, le=50)
 
 
 @router.get("/api/ops/resolve/preference")

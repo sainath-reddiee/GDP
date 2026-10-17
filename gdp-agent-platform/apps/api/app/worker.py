@@ -182,7 +182,7 @@ CATALOG_ALL = 2000
 
 DETECT_OVERLAP = timedelta(minutes=2)
 INTERVALS = {"outbox": 30, "escalate": 60, "sla": 120, "jira_sync": 300, "diagnose": 60, "case_triage": 30,
-             "resolve": 15}
+             "resolve": 15, "permanent_fix": 3600, "skill_scout": 3600}
 WAKEABLE = {"resolve"}   # the push ingest wakes it (lease.wake), so a pushed failure is handled in seconds
 STATE_SECONDS = 300
 
@@ -319,6 +319,28 @@ def resolve(db: Any) -> None:
             log.info("resolve clear: %s", result)
 
 
+def permanent_fix(db: Any) -> None:
+    """Draft permanent fixes for known fixes that keep firing (services.resolve.permanent); drafts only, never a pull
+    request, within its own caps."""
+    from services.ops.lease import still_held
+    from services.resolve.permanent import auto_draft
+
+    result = auto_draft(db, HOLDER, still_held=still_held)
+    if result.get("drafted") or result.get("unavailable") or result.get("errors"):
+        log.info("permanent_fix: %s", result)
+
+
+def skill_scout(db: Any) -> None:
+    """Propose reusable skills from repeated, approved work (services.knowledge.scout_run): checked hourly, scans on
+    its own cadence (weekly by default); proposals are DRAFT versions nothing loads until a person promotes one."""
+    from services.knowledge.scout_run import weekly
+    from services.ops.lease import still_held
+
+    result = weekly(db, "skill_scout", still_held=still_held)
+    if result.get("due"):
+        log.info("skill_scout: %s", {k: (len(v) if isinstance(v, list) else v) for k, v in result.items()})
+
+
 def retention(db: Any) -> None:
     from services.ops.store import purge_events
 
@@ -397,7 +419,8 @@ class Worker:
                 log.info("poll %s: %s", env["env_id"], "ok" if result.get("ok") else result.get("error"))
         self._safe(db, "detect", detect)
         for name, fn in (("outbox", outbox), ("escalate", escalate), ("sla", sla), ("jira_sync", jira_sync),
-                         ("diagnose", diagnose), ("case_triage", case_triage), ("resolve", resolve)):
+                         ("diagnose", diagnose), ("case_triage", case_triage), ("resolve", resolve),
+                         ("permanent_fix", permanent_fix), ("skill_scout", skill_scout)):
             if self.stop.is_set():
                 return
             due = self._every(name, INTERVALS[name])

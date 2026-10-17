@@ -6727,3 +6727,12 @@ app.include_router(reference_router)
 from app.learning_api import router as learning_router  # noqa: E402
 
 app.include_router(learning_router)
+from app.value_api import router as value_router  # noqa: E402
+
+app.include_router(value_router)
+from app.permanent_fix_api import router as permanent_fix_router  # noqa: E402
+
+app.include_router(permanent_fix_router)
+from app.skill_scout_api import router as skill_scout_router  # noqa: E402
+
+app.include_router(skill_scout_router)

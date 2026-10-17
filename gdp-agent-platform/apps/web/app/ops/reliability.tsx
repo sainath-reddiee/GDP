@@ -158,7 +158,7 @@ export function ReliabilityView({ initialDays, initialTeam, initial, initialErro
           <section className="surface flex flex-wrap items-center gap-x-6 gap-y-1 px-4 py-3 text-xs">
             <h2 className="text-sm font-semibold">AI diagnoses</h2>
             <span><span className="text-muted-foreground">Runs </span><span className="tabular-nums">{data.ai?.diagnoses ?? 0}</span></span>
-            <span><span className="text-muted-foreground">Cost </span><span className="tabular-nums">{usd(data.ai?.cost_usd)}</span></span>
+            <span><span className="text-muted-foreground">Cost </span><span className="tabular-nums">{data.ai?.cost_usd !== null && data.ai?.cost_usd !== undefined ? usd(data.ai.cost_usd) : `${(data.ai?.credits ?? 0).toFixed(2)} credits`}</span></span>
           </section>
         </>
       )}
