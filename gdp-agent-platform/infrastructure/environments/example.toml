@@ -1,0 +1,30 @@
+# One Snowflake environment for `python infrastructure/deploy.py --env <name>`.
+# Copy this file to <name>.toml (for example client-prod.toml). Real environment files are not committed (.gitignore):
+# they name the client's account and roles. Never put a password here.
+
+[snowflake]
+# Either a connection name from ~/.snowflake/connections.toml ...
+connection = "client-prod"
+# ... or the account and user directly (SSO through the browser by default):
+# account = "orgname-accountname"
+# user = "FIRST.LAST@CLIENT.COM"
+# authenticator = "externalbrowser"        # or "snowflake_jwt" with private_key_file = "C:/keys/deploy.p8"
+
+role = "PLATFORM_ADMIN"                   # the account role you deploy with (owns the platform database)
+warehouse = "AI_PLATFORM_WH"
+database = "AI_PLATFORM"
+
+# Which account roles get which platform database role. The deploy grants these itself (it owns the database roles);
+# your role administrator only creates the account roles and gives them to people. The deploy role always gets
+# PLATFORM_ADMIN. Database roles: PLATFORM_ADMIN, DATA_ENGINEER, DATA_STEWARD, DOMAIN_OWNER, QA_ENGINEER, REVIEWER,
+# VIEWER, OPS_SERVICE, OPS_VIEWER, SERVICE_AGENT.
+[access]
+DATA_ENGINEER = ["DATA_ENGINEER"]
+VIEWER = []
+OPS_SERVICE = []                          # the account role of the ops worker's service user
+
+[features]
+llm_model = "claude-sonnet-4-5"           # checked for Cortex access before deploying
+pr_sync_task = false                      # sync pull requests every 30 minutes (needs EXECUTE TASK on the account)
+# github_integration = "AI_PLATFORM_GITHUB_EAI"   # external access integration for GitHub publishing (an admin creates it)
+actual_cost_from_account_usage = false    # read actual Cortex credits (needs SNOWFLAKE.USAGE_VIEWER)
