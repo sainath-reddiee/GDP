@@ -419,7 +419,9 @@ def apply_to_connection(con, database: str, warehouse: str, variables: Dict[str,
     log: List[str] = []
     from services.common import access as access_model
 
-    model = access_model.normalise(access)
+    # no model given (the Admin page deploy): keep the one this environment was deployed with, never fall back to
+    # database roles in an environment that uses account roles
+    model = access_model.normalise(access if access is not None else recorded_access_model(con.cursor(), database))
     accounts = model["model"] == access_model.ACCOUNT_ROLES_MODEL
 
     def sql_of(text: str) -> str:
@@ -569,6 +571,21 @@ def managed_access(cur, database: str) -> List[str]:
         except Exception as exc:
             out.append(f"access: {schema} could not be made managed access ({str(exc).splitlines()[0][:160]})")
     return out
+
+
+def recorded_access_model(cur, database: str) -> Dict[str, str] | None:
+    """The access model PLATFORM_CONFIG holds for this database (ACCESS_MODEL), or None (database roles)."""
+    import json as _json
+
+    try:
+        cur.execute(f"SELECT CONFIG_VALUE FROM {database}.CORE.PLATFORM_CONFIG WHERE CONFIG_KEY = 'ACCESS_MODEL' "
+                    "AND IS_CURRENT ORDER BY VERSION DESC LIMIT 1")
+        row = cur.fetchone()
+    except Exception:
+        return None
+    if not row:
+        return None
+    return _json.loads(row[0]) if isinstance(row[0], str) else row[0]
 
 
 def record_access_model(cur, database: str, model: Dict[str, str]) -> List[str]:

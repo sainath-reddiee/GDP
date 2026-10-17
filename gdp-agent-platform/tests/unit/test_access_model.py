@@ -81,6 +81,56 @@ def account_env(role="AODS_PLATFORM_ADMIN", prefix=None):
     return deploy.validate_env(raw, "client")
 
 
+def test_a_missing_aods_deploy_role_gets_the_whole_role_setup():
+    class Cur:
+        description, rows = [], []
+
+        def execute(self, sql, params=None):
+            if sql.startswith("USE ROLE"):
+                raise RuntimeError("SQL compilation error:\nObject does not exist, or operation cannot be performed.")
+            self.description = [("U",), ("R",), ("A",), ("AVAILABLE",)]
+            self.rows = [("SATYA@ANBLICKS.COM", "PUBLIC", "ACME", '["SYSADMIN"]')]
+
+        def fetchall(self):
+            return self.rows
+
+    checks = deploy.preflight(Cur(), account_env())
+    fix = checks[0].fix
+    assert checks[0].status == "missing" and fix[0] == "CREATE ROLE IF NOT EXISTS AODS_PLATFORM_ADMIN;"
+    assert "GRANT ROLE AODS_VIEWER TO ROLE AODS_DATA_ENGINEER;" in fix
+    assert fix[-1] == 'GRANT ROLE AODS_PLATFORM_ADMIN TO USER "SATYA@ANBLICKS.COM";'
+    sql = deploy.admin_sql(checks, account_env())
+    assert "-- ===== run as your role administrator =====" in sql and "DATABASE ROLE" not in sql
+
+
+def test_a_deploy_without_a_model_keeps_the_recorded_one():
+    class Cur:
+        def __init__(self, stored):
+            self.stored = stored
+
+        def execute(self, sql, params=None):
+            if "ACCESS_MODEL" not in sql:
+                raise AssertionError("unexpected")
+
+        def fetchone(self):
+            return (self.stored,) if self.stored else None
+
+    assert ds.recorded_access_model(Cur('{"model": "account_roles", "prefix": "AODS"}'), "DB")["model"] == "account_roles"
+    assert ds.recorded_access_model(Cur(None), "DB") is None
+
+    class Broken:
+        def execute(self, sql, params=None):
+            raise RuntimeError("database does not exist")
+    assert ds.recorded_access_model(Broken(), "DB") is None
+
+
+def test_env_without_an_explicit_model_is_refused():
+    with pytest.raises(deploy.ConfigError, match='must say model = "account_roles"'):
+        deploy.validate_env({"snowflake": {"connection": "c", "role": "R", "warehouse": "W", "database": "D"},
+                             "access": {"DATA_ENGINEER": []}}, "old")
+    assert deploy.access_label(account_env()) == "account roles AODS_* (no database roles)"
+
+
 def test_env_with_account_roles():
     e = account_env()
     assert e["accounts"] and e["access_model"] == {"model": "account_roles", "prefix": "AODS"} and e["access"] == {}
@@ -132,6 +182,21 @@ def test_preflight_requires_every_aods_role_and_hands_the_lead_the_sql():
                                            account_env(role="DEPLOYER"), {"roles": {"DEPLOYER"}, "account": set()})
     assert [c.name for c in not_admin] == ["account roles", "admin role", "warehouse for users"]
     assert "GRANT USAGE ON WAREHOUSE WH TO ROLE AODS_VIEWER;" in not_admin[2].fix
+
+
+def test_render_writes_the_exact_aods_sql_without_a_connection(monkeypatch, tmp_path):
+    text = deploy.render_environment(account_env(prefix="AODS_TEST"))
+    assert "-- Access model: account roles AODS_TEST_*" in text
+    assert not re.search(r"(?i)database\s+roles?", text.split("\n", 3)[3])   # not in code, not in comments
+    assert text.count("TO ROLE AODS_TEST_") > 800 and "WITH MANAGED ACCESS" in text
+    assert "GRANT SELECT ON FUTURE VIEWS IN SCHEMA AI_PLATFORM.CORE TO ROLE AODS_TEST_VIEWER;" in text
+    order = [text.index(h) for h in ("1. database", "2. schema", "4. procedures", "5. views", "7. agents", "8. access")]
+    assert order == sorted(order)
+    monkeypatch.setattr(deploy, "load_env", lambda name: account_env())
+    monkeypatch.setattr(deploy, "LOG_DIR", tmp_path)
+    monkeypatch.setattr(deploy, "connect", lambda e: pytest.fail("render must not connect"))
+    assert deploy.main(["--env", "client", "--render"]) == 0
+    assert "TO ROLE AODS_DATA_ENGINEER" in (tmp_path / "client-render.sql").read_text()
 
 
 def test_setup_defaults_to_aods_account_roles(monkeypatch, tmp_path):

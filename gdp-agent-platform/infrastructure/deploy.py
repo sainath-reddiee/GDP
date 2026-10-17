@@ -176,6 +176,9 @@ def validate_env(raw: Dict[str, Any], name: str) -> Dict[str, Any]:
 
     access = {}
     section = dict(raw.get("access") or {})
+    if "model" not in section:   # never a silent default: the two models create different objects
+        problems.append('[access] must say model = "account_roles" (AODS_* account roles, no database roles) or '
+                        'model = "database_roles"; run with --setup to rewrite the file')
     kind = str(section.pop("model", access_model.DATABASE_ROLES_MODEL)).lower()
     prefix = str(section.pop("role_prefix", access_model.DEFAULT_PREFIX)).upper()
     if kind not in access_model.MODELS:
@@ -286,7 +289,7 @@ def preflight(cur, env: Dict[str, Any]) -> List[Check]:
         checks.append(Check("role", "missing", f"cannot use role {role} ({err or 'not the session role'}). Roles this user "
                             f"has: {available or 'unknown'}. Use an account role here, not a database role such as "
                             f"{db}.DATA_ENGINEER", who="your role administrator",
-                            fix=[f"GRANT ROLE {role} TO USER {found.get('u')};"]))
+                            fix=role_fix(env, str(found.get("u") or "<your_user>"))))
         return checks
     _try(cur, "USE SECONDARY ROLES NONE")   # everything the deploy creates is owned by, and checked against, this role
     checks.append(Check("role", "ok", f"connected to {found.get('a')} as {found.get('u')} with role {role}"))
@@ -360,6 +363,18 @@ def preflight(cur, env: Dict[str, Any]) -> List[Check]:
                                        "an estimate", level=OPTIONAL, who="ACCOUNTADMIN",
                                        fix=[f"GRANT DATABASE ROLE SNOWFLAKE.USAGE_VIEWER TO ROLE {role};"]))
     return checks
+
+
+def role_fix(env: Dict[str, Any], user: str) -> List[str]:
+    """What the role administrator runs when the deploy role cannot be used. With account roles the deploy role is
+    usually one of the platform's own roles, which may not exist yet: the whole role set comes first (CREATE ROLE IF
+    NOT EXISTS is harmless when they do), then the deploy role for this user."""
+    lines = []
+    if env["accounts"]:
+        from services.common import access as access_model
+
+        lines += access_model.setup_sql(env["access_model"]["prefix"], role_hierarchy(), env["role"])
+    return lines + [f'GRANT ROLE {env["role"]} TO USER "{user}";']
 
 
 def role_hierarchy() -> List[Tuple[str, str]]:
@@ -499,6 +514,61 @@ def plan(cur, env: Dict[str, Any]) -> List[str]:
     return out or ["nothing changed since the last deploy"]
 
 
+def access_label(env: Dict[str, Any]) -> str:
+    if env["accounts"]:
+        return f"account roles {env['access_model']['prefix']}_* (no database roles)"
+    return f"database roles in {env['database']} (granted to the account roles in [access])"
+
+
+def render_environment(env: Dict[str, Any]) -> str:
+    """Every statement a new environment runs, in deploy order, exactly as this environment's access model applies it
+    (account roles: translated to <PREFIX>_*). For review before deploying; needs no connection. An existing
+    environment runs only the parts its plan lists."""
+    from infrastructure import deploy_snowflake as ds
+    from services.common import access as access_model
+    from services.common.platform_schema import PLATFORM_SCHEMA
+
+    db, wh, prefix = env["database"], env["warehouse"], env["access_model"]["prefix"]
+    zip_name, _ = ds.build_services_zip()
+    variables = {"database": db, "schema": PLATFORM_SCHEMA, "services_import": f"@{db}.{PLATFORM_SCHEMA}.CODE_STAGE/{zip_name}",
+                 "warehouse": wh, "agent_skills": ds.agent_skills_yaml(db)}
+
+    def sql_of(text: str) -> str:
+        out = ds.render(text, variables)
+        if not env["accounts"]:
+            return out
+        out = access_model.to_account_roles(out, db, prefix)
+        # comments written for the database-role model would mislead a reviewer of this environment's SQL
+        return "\n".join(line for line in out.splitlines()
+                         if not (line.lstrip().startswith("--") and re.search(r"(?i)database\s+roles?", line)))
+
+    model = (f"account roles {prefix}_* (no database roles; managed access schemas)" if env["accounts"]
+             else "database roles inside the platform database")
+    parts = [f"-- Rendered by infrastructure/deploy.py --render for environment '{env['name']}': database {db}, "
+             f"deploy role {env['role']}, warehouse {wh}.",
+             f"-- Access model: {model}.",
+             "-- This is exactly what a new environment runs, in order. Nothing here was run.", "",
+             "-- ===== 1. database and migration ledger =====",
+             ds.bootstrap_sql(db, create_database=True, managed=env["accounts"]),
+             f"-- ===== 2. schema and tables (baseline {ds.BASELINE_FILE.name}) =====",
+             sql_of(ds.BASELINE_FILE.read_text(encoding="utf-8"))]
+    for version, name, path in ds.list_migrations():
+        if version > ds.BASELINE_COVERS:
+            parts += [f"-- ===== migration V{version} {name} =====", sql_of(path.read_text(encoding="utf-8"))]
+    parts.append(f"-- ===== 3. workflow seed and code package {zip_name} (data and a file upload, not SQL) =====")
+    for title, files in (("4. procedures", sorted(ds.PROCEDURES_DIR.glob("*.sql"))),
+                         ("5. views", sorted(ds.VIEWS_DIR.glob("*.sql"))),
+                         ("6. Cortex Search services", sorted(ds.SEARCH_DIR.glob("*.sql"))),
+                         ("7. agents", sorted(ds.AGENTS_DIR.glob("*.sql")))):
+        for path in files:
+            parts += [f"-- ===== {title}: {path.name} =====", sql_of(path.read_text(encoding="utf-8"))]
+    access = access_statements(env, owns_warehouse=False)
+    parts += ["-- ===== 8. access =====", *[f"{s};" for s in access]]
+    if not env["accounts"]:
+        parts.append("-- (database roles are granted to the account roles listed in [access])")
+    return "\n".join(parts) + "\n"
+
+
 # ---------------------------------------------------------------- access and verify
 
 def access_statements(env: Dict[str, Any], owns_warehouse: bool) -> List[str]:
@@ -622,6 +692,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     mode.add_argument("--plan", action="store_true", help="preflight and the plan, change nothing")
     mode.add_argument("--admin-sql", nargs="?", const="", metavar="FILE",
                       help="write the one-time SQL for the account admins (default deploy-logs/<env>-admin.sql)")
+    mode.add_argument("--render", nargs="?", const="", metavar="FILE",
+                      help="write the exact SQL a new environment runs, translated for its access model, to review "
+                           "(no connection; default deploy-logs/<env>-render.sql)")
     parser.add_argument("--yes", action="store_true", help="do not ask for confirmation")
     parser.add_argument("--force", action="store_true", help="apply every step, even unchanged ones")
     parser.add_argument("--setup", action="store_true", help="create or redo the environment file by answering questions")
@@ -636,9 +709,17 @@ def main(argv: Optional[List[str]] = None) -> int:
         env = load_env(args.env)
     except ConfigError as exc:
         parser.error(str(exc))
+    if args.render is not None:
+        target = Path(args.render) if args.render else LOG_DIR / f"{env['name']}-render.sql"
+        target.parent.mkdir(exist_ok=True)
+        text = render_environment(env)
+        target.write_text(text, encoding="utf-8")
+        print(f"rendered SQL for {env['name']} written to {target} ({text.count(chr(10)):,} lines); nothing was run")
+        return 0
     writes = not (args.check or args.plan or args.admin_sql is not None)
     log = Log(env["name"], write=writes)
     log(f"environment {env['name']}: database {env['database']}, role {env['role']}, warehouse {env['warehouse']}")
+    log(f"access model: {access_label(env)}")
     try:
         con = connect(env)
     except Exception as exc:
@@ -672,7 +753,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         if args.plan:
             return 0
         if not args.yes:
-            answer = input(f"Deploy to {env['database']} as {env['role']}? Type the database name to continue: ")
+            answer = input(f"Deploy to {env['database']} as {env['role']} with {access_label(env)}? "
+                           "Type the database name to continue: ")
             if answer.strip().upper() != env["database"]:
                 log("not confirmed: nothing was changed")
                 return 1

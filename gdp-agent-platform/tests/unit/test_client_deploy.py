@@ -8,7 +8,7 @@ from infrastructure import deploy
 from infrastructure import deploy_snowflake as ds
 
 ENV_RAW = {"snowflake": {"connection": "client", "role": "platform_admin", "warehouse": "ai_wh", "database": "ai_platform"},
-           "access": {"DATA_ENGINEER": ["DE_ROLE"], "viewer": "ANALYST", "OPS_SERVICE": []},
+           "access": {"model": "database_roles", "DATA_ENGINEER": ["DE_ROLE"], "viewer": "ANALYST", "OPS_SERVICE": []},
            "features": {"pr_sync_task": True}}
 
 
@@ -166,7 +166,7 @@ def test_preflight_switches_role_after_sign_in_and_explains_a_wrong_one():
                        "SELECT CURRENT_USER()": (["U", "R", "A", "AVAILABLE"],
                                                  [("ANA", "PUBLIC", "ACME", '["PUBLIC","ANALYST"]')])})
     checks = deploy.preflight(wrong, env())
-    assert len(checks) == 1 and checks[0].status == "missing" and "GRANT ROLE PLATFORM_ADMIN TO USER ANA;" in checks[0].fix
+    assert len(checks) == 1 and checks[0].status == "missing" and 'GRANT ROLE PLATFORM_ADMIN TO USER "ANA";' in checks[0].fix
     assert "Roles this user has: PUBLIC,ANALYST" in checks[0].detail and "not a database role" in checks[0].detail
     assert not any(s.startswith("USE WAREHOUSE") for s in wrong.sql)   # nothing else runs under the wrong role
 
@@ -319,7 +319,8 @@ def test_setup_asks_again_for_an_invalid_answer(monkeypatch, tmp_path):
 
 def test_an_unknown_connection_name_is_caught_before_sign_in(monkeypatch, tmp_path):
     monkeypatch.setattr(deploy, "ENV_DIR", tmp_path)
-    (tmp_path / "x.toml").write_text('[snowflake]\nconnection = "client-prod"\nrole = "R"\nwarehouse = "W"\ndatabase = "D"\n')
+    (tmp_path / "x.toml").write_text('[snowflake]\nconnection = "client-prod"\nrole = "R"\nwarehouse = "W"\ndatabase = "D"\n'
+                                     '[access]\nmodel = "database_roles"\n')
     monkeypatch.setattr(deploy, "known_connections", lambda: ["anblicks"])
     with pytest.raises(deploy.ConfigError, match="known: anblicks.*--setup"):
         deploy.load_env("x")
