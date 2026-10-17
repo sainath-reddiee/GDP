@@ -125,9 +125,13 @@ def build_services_zip() -> Tuple[str, bytes]:
     return f"services-{hashlib.sha256(data).hexdigest()[:16]}.zip", data
 
 
-def bootstrap_sql(database: str) -> str:
+def bootstrap_sql(database: str, create_database: bool = True) -> str:
+    """The ledger. CREATE DATABASE only when the database does not exist yet: a deploy role that was given an existing
+    database (owned, without CREATE DATABASE on the account) must not need that account privilege."""
+    create = (f"CREATE DATABASE IF NOT EXISTS {database} COMMENT = 'AI-assisted data engineering platform metadata';"
+              if create_database else "")
     return f"""
-CREATE DATABASE IF NOT EXISTS {database} COMMENT = 'AI-assisted data engineering platform metadata';
+{create}
 CREATE SCHEMA IF NOT EXISTS {database}.CORE COMMENT = 'Workflow state machine, runs, reviews';
 CREATE TABLE IF NOT EXISTS {database}.CORE.SCHEMA_MIGRATION (
     VERSION      VARCHAR(8)   NOT NULL,
@@ -145,6 +149,15 @@ CREATE TABLE IF NOT EXISTS {database}.CORE.DEPLOY_STATE (
     CONSTRAINT PK_DEPLOY_STATE PRIMARY KEY (OBJECT_KEY)
 );
 """
+
+
+def database_exists(cur, database: str) -> bool:
+    """Whether the database exists and this role can see it (LIKE treats _ as a wildcard: the name is compared exactly)."""
+    try:
+        cur.execute(f"SHOW DATABASES LIKE '{database}'")
+        return any(str(r[1]).upper() == database.upper() for r in cur.fetchall() or [])
+    except Exception:
+        return False
 
 
 class DeployState:
@@ -414,7 +427,7 @@ def apply_to_connection(con, database: str, warehouse: str, variables: Dict[str,
         cur.execute(f"USE WAREHOUSE {warehouse}")
     assert current_wh or warehouse, "no warehouse in session; pass --warehouse"
 
-    con.execute_string(bootstrap_sql(database))
+    con.execute_string(bootstrap_sql(database, create_database=not database_exists(cur, database)))
     state = DeployState(cur, database, force)
     if force:
         log.append("force: every step is applied")
