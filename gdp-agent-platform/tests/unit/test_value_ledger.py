@@ -60,9 +60,55 @@ def test_entries_credit_human_edits_and_keep_counts_and_minutes_apart():
 def test_net_value_needs_a_credit_price():
     priced = ledger.net(10, 75, 4.0, 3.0)
     assert priced == {"hours": 10.0, "value_usd": 750.0, "ai_credits": 4.0, "ai_cost_usd": 12.0, "net_usd": 738.0,
-                      "needs_price": False}
+                      "needs_price": False, "needs_confirmation": False, "estimate": True}
     unpriced = ledger.net(10, 75, 4.0, None)
     assert unpriced["net_usd"] is None and unpriced["ai_cost_usd"] is None and unpriced["needs_price"] is True
+
+
+def test_no_money_until_the_baselines_are_confirmed():
+    out = ledger.net(10, 75, 4.0, 3.0, confirmed=False)
+    assert out["hours"] == 10.0 and out["value_usd"] is None and out["net_usd"] is None
+    assert out["ai_cost_usd"] == 12.0 and out["needs_confirmation"] is True   # the AI cost is measured: still shown
+    _, problems = baselines.validate({"confirmed": True, "basis_note": "ok"})
+    assert any("where the minutes" in p for p in problems)
+    clean, ok = baselines.validate({"confirmed": True, "basis_note": "Time study with the delivery team, Oct 2026"})
+    assert not ok and clean["confirmed"] is True
+    assert baselines.validate({"confirmed": "yes", "basis_note": "x" * 20})[0]["confirmed"] is False
+
+
+def test_exclusions_are_validated_and_normalised():
+    clean, problems = baselines.validate({"exclude": {"run_environments": ["test", "dev"], "airflow_envs": ["local-lab"]}})
+    assert not problems and clean["exclude"] == {"run_environments": ["DEV", "TEST"], "airflow_envs": ["local-lab"]}
+    assert baselines.DEFAULTS["exclude"] == {"run_environments": ["TEST"], "airflow_envs": ["local-lab"]}
+    _, bad = baselines.validate({"exclude": {"airflow_envs": ["no spaces allowed"], "nope": []}})
+    assert any("not a valid name" in p for p in bad) and any("unknown exclusion nope" in p for p in bad)
+
+
+def test_sources_bind_the_exclusions_in_order():
+    from services.value import sources
+
+    seen = []
+
+    class Rec:
+        def query(self, sql, params=()):
+            seen.append((sql, params))
+            return []
+
+    exclude = {"run_environments": ["test"], "airflow_envs": ["local-lab"]}
+    sources.activity_counts(Rec(), 30, exclude)
+    for sql, params in seen:
+        assert sql.count("%s") == len(params)
+    by_table = {next(t for t in ("MAPPING_DECISION", "RESOLUTION_RUN", "CASE_EVENT", "STTM_LINE", "INCIDENT_EVENT",
+                                 "DBT_GENERATION", "QA_TEST_CASE", "SODA_EXPECTATION") if t in sql): params for sql, params in seen}
+    assert by_table["MAPPING_DECISION"] == (-30, '["TEST"]') and by_table["RESOLUTION_RUN"] == (-30, '["local-lab"]')
+    assert by_table["CASE_EVENT"] == (-30,)
+    seen.clear()
+    sources.knowledge_counts(Rec(), 60, 30, exclude)
+    sources.incident_events(Rec(), 365, exclude)
+    sources.cutover(Rec(), exclude)
+    for sql, params in seen:
+        assert sql.count("%s") == len(params)
+    assert seen[0][1][:3] == ('["local-lab"]', -60, -30)
 
 
 def test_weekly_trend_combines_activities_and_cost():
@@ -151,8 +197,14 @@ def test_report_shows_missing_sources_as_not_available():
     rows = {r["activity"]: r for r in out["activities"]}
     assert rows["mapping_column"]["available"] is False and rows["auto_fix"]["hours"] == 3.0
     assert out["baselines"]["version"] == 2 and out["baselines"]["changed_by"] == "ANA"
-    assert out["value"]["value_usd"] == 300.0
+    assert out["value"]["value_usd"] is None and out["value"]["needs_confirmation"] is True   # not confirmed yet
     assert out["value"]["ai_credits"] == 2.0
+    assert out["scope"]["excluded_airflow_envs"] == ["local-lab"] and out["baselines"]["confirmed_by"] is None
+    confirmed = Db({**db.answers, "FROM CORE.PLATFORM_CONFIG": [{"config_value": json.dumps({
+        "blended_rate_usd": 100, "confirmed": True, "basis_note": "Timesheets of comparable manual work"}),
+        "version": 3, "created_by": "BEN", "created_at": "2026-10-02"}]})
+    priced = report.report(confirmed, 30, now=T0)
+    assert priced["value"]["value_usd"] == 300.0 and priced["baselines"]["confirmed_by"] == "BEN"
 
 
 # ---------------------------------------------------------------- reliability: credits are not dollars

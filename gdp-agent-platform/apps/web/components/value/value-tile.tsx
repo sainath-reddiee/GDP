@@ -13,8 +13,11 @@ export function ValueTile({ data }: { data: ValueSummary }) {
       <span className="grid h-9 w-9 place-items-center rounded-xl bg-emerald-50 text-emerald-600 ring-1 ring-inset ring-emerald-100"><TrendingUp className="h-4 w-4" /></span>
       <div>
         <p className="text-xs font-medium uppercase tracking-[0.1em] text-muted-foreground">Value, last {data.window_days} days</p>
-        <p className="text-lg font-semibold tabular-nums">{v.hours.toLocaleString()} hours saved
-          <span className="ml-2 text-sm font-medium text-muted-foreground">{v.net_usd == null ? `${usd(v.value_usd)} of time` : `${usd(v.net_usd)} net of AI cost`}</span>
+        <p className="text-lg font-semibold tabular-nums">~{v.hours.toLocaleString()} hours saved
+          <span className="ml-2 text-sm font-medium text-muted-foreground">
+            {v.value_usd == null ? "estimate; amounts shown once baselines are confirmed"
+              : v.net_usd == null ? `est. ${usd(v.value_usd)} of time` : `est. ${usd(v.net_usd)} net of AI cost`}
+          </span>
         </p>
       </div>
       <p className="text-sm text-muted-foreground">
