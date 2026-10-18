@@ -1,8 +1,8 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useState, useTransition } from "react";
-import { BrainCircuit, FolderGit2, Loader2, Plus, Search, SquareTerminal } from "lucide-react";
+import { useEffect, useMemo, useRef, useState, useTransition } from "react";
+import { BrainCircuit, FileCode2, FolderGit2, Loader2, Plus, Search, SquareTerminal, Upload } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { PackRow, PackSeverity } from "@/lib/store-types";
 import { Button } from "@/components/ui/button";
@@ -11,7 +11,7 @@ import { Modal } from "@/components/hub/overlay";
 import { EmptyState, StatusPill, explain } from "@/components/hub/states";
 import { SqlEditor, TagChip } from "@/components/quality/sql-editor";
 import { useToast } from "@/components/ui/toast";
-import { createPack } from "./actions";
+import { createPack, importPack, type Imported } from "./actions";
 import { PackDrawer } from "./pack-drawer";
 
 type Domain = { domain_id: string; domain_name: string };
@@ -132,6 +132,85 @@ function NewPackModal({ open, onClose, domains, scope, onCreated }: {
 }
 
 /** Domain-grouped pack cards with search, status and tag filters; a card opens the pack drawer. */
+/** Bring existing SQL in: a .sql file becomes a draft pack, each query guarded as read-only against the domain's
+ *  tables. Statements that are not queries are left out and listed. */
+function ImportPackModal({ onClose, domains, scope, onImported }: {
+  onClose: () => void; domains: Domain[]; scope: string; onImported: (packId: string) => void;
+}) {
+  const initial = domains.find((d) => d.domain_name.toUpperCase() === scope.toUpperCase())?.domain_id ?? domains[0]?.domain_id ?? "";
+  const [domainId, setDomainId] = useState(initial);
+  const [name, setName] = useState("");
+  const [file, setFile] = useState<{ name: string; text: string } | null>(null);
+  const [error, setError] = useState("");
+  const [done, setDone] = useState<Imported | null>(null);
+  const [pending, start] = useTransition();
+  const ref = useRef<HTMLInputElement>(null);
+  const toast = useToast();
+  const router = useRouter();
+  const close = () => { onClose(); if (done) router.refresh(); };
+  const pick = async (f: File | undefined) => {
+    setError("");
+    if (!f) return;
+    if (f.size > 500_000) { setError(`${f.name} is larger than 500 KB`); return; }
+    setFile({ name: f.name, text: await f.text() });
+  };
+  const submit = () => start(async () => {
+    if (!file) return;
+    setError("");
+    const r = await importPack(domainId, { filename: file.name, text: file.text, name: name.trim() || null });
+    if (r.ok) { setDone(r.data); toast("ok", `Imported ${r.data.queries} quer${r.data.queries === 1 ? "y" : "ies"} as a draft`); }
+    else if (r.pending) { toast("info", r.error); onClose(); }
+    else setError(explain(r.error).message);
+  });
+  return (
+    <Modal open onClose={close} title="Import SQL into a QA pack"
+           description="Each query should return the rows that break a rule; it passes when it returns none. The pack starts as a draft."
+           footer={done ? <>
+             <Button variant="ghost" onClick={close}>Close</Button>
+             <Button onClick={() => onImported(done.pack_id)}>Open the pack</Button>
+           </> : <>
+             <Button variant="ghost" onClick={onClose}>Cancel</Button>
+             <Button onClick={submit} disabled={pending || !domainId || !file}>{pending && <Loader2 className="h-4 w-4 animate-spin" />} Import</Button>
+           </>}>
+      {done ? (
+        <div className="space-y-3" data-testid="qa-import-done">
+          <p className="text-sm"><span className="font-semibold">{done.name}</span> was created as a draft with {done.queries} quer{done.queries === 1 ? "y" : "ies"}. Run it, then submit it for approval.</p>
+          {done.skipped.length > 0 && (
+            <div className="rounded-lg border border-dashed p-3">
+              <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Left out ({done.skipped.length})</p>
+              <ul className="mt-1.5 space-y-1 text-xs text-muted-foreground">{done.skipped.map((s) => <li key={s}>{s}</li>)}</ul>
+            </div>
+          )}
+        </div>
+      ) : (
+        <>
+          <div className="grid gap-x-4 sm:grid-cols-2">
+            <div><Label htmlFor="ip-domain">Domain</Label>
+              <Select id="ip-domain" value={domainId} onChange={(e) => setDomainId(e.target.value)}>
+                {domains.map((d) => <option key={d.domain_id} value={d.domain_id}>{d.domain_name}</option>)}
+              </Select></div>
+            <div><Label htmlFor="ip-name">Pack name</Label>
+              <Input id="ip-name" value={name} onChange={(e) => setName(e.target.value)} placeholder={file ? "from the file" : "Customer integrity"} /></div>
+          </div>
+          <button type="button" onClick={() => ref.current?.click()} data-testid="qa-import-pick"
+                  className="mt-4 flex w-full items-center gap-3 rounded-xl border border-dashed border-border p-4 text-left transition hover:border-primary/40 hover:bg-accent/30">
+            <FileCode2 className="h-6 w-6 text-primary" />
+            <span className="min-w-0 flex-1">
+              <span className="block truncate text-sm font-medium">{file?.name ?? "Choose a .sql file"}</span>
+              <span className="block text-xs text-muted-foreground">
+                {file ? `${file.text.split(";").filter((s) => s.trim()).length} statement(s) found; click to replace` : "Plain queries separated by ; (a comment above a query names it), or a pack exported from here"}
+              </span>
+            </span>
+            <Upload className="h-4 w-4 text-muted-foreground" />
+          </button>
+          <input ref={ref} type="file" accept=".sql,text/plain" className="hidden" onChange={(e) => pick(e.target.files?.[0])} />
+          {error && <p className="mt-3 rounded-lg border border-destructive/20 bg-destructive/5 px-3 py-2 text-sm text-destructive">{error}</p>}
+        </>
+      )}
+    </Modal>
+  );
+}
+
 export function QaStoreView({ packs, domains, scope, initialPack, openNew, canEdit, canApprove, canRun }: {
   packs: PackRow[]; domains: Domain[]; scope: string; initialPack: string | null; openNew: boolean;
   canEdit: boolean; canApprove: boolean; canRun: boolean;
@@ -142,6 +221,7 @@ export function QaStoreView({ packs, domains, scope, initialPack, openNew, canEd
   const [tag, setTag] = useState("");
   const [open, setOpen] = useState<string | null>(initialPack);
   const [creating, setCreating] = useState(openNew && canEdit);
+  const [importing, setImporting] = useState(false);
   useEffect(() => { if (openNew && canEdit) setCreating(true); }, [openNew, canEdit]);
 
   const tags = useMemo(() => {
@@ -170,6 +250,7 @@ export function QaStoreView({ packs, domains, scope, initialPack, openNew, canEd
             </button>
           ))}
         </div>
+        {canEdit && <Button variant="outline" onClick={() => setImporting(true)} disabled={!domains.length} data-testid="qa-import"><Upload className="h-4 w-4" /> Import .sql</Button>}
         {canEdit && <Button onClick={() => setCreating(true)} disabled={!domains.length}><Plus className="h-4 w-4" /> New pack</Button>}
         {tags.length > 0 && (
           <div className="flex w-full flex-wrap items-center gap-1.5">
@@ -201,6 +282,10 @@ export function QaStoreView({ packs, domains, scope, initialPack, openNew, canEd
       {creating && (
         <NewPackModal open onClose={() => setCreating(false)} domains={domains} scope={scope}
                       onCreated={(id) => { setCreating(false); setOpen(id); router.refresh(); }} />
+      )}
+      {importing && (
+        <ImportPackModal onClose={() => setImporting(false)} domains={domains} scope={scope}
+                         onImported={(id) => { setImporting(false); setOpen(id); router.refresh(); }} />
       )}
       {open && <PackDrawer packId={open} onClose={close} canEdit={canEdit} canApprove={canApprove} canRun={canRun} />}
     </div>

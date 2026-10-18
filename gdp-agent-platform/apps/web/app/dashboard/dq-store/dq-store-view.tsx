@@ -2,24 +2,24 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useState, useTransition } from "react";
+import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import {
   CalendarClock, ChevronRight, ClipboardCheck, Columns3, GitPullRequestDraft, History, Loader2, MoreHorizontal, Pause, Pencil, Play,
-  Plus, Search, Sparkles, Table2, Trash2, Wand2,
+  Plus, Search, Sparkles, Table2, Trash2, Upload, Wand2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { DqCheck, DqHistory, DqSuiteState, DqTable } from "@/lib/store-types";
 import { Button } from "@/components/ui/button";
-import { Input, Label, Select } from "@/components/ui/input";
+import { Input, Label, Select, Textarea } from "@/components/ui/input";
 import { Modal } from "@/components/hub/overlay";
 import { EmptyState, StatusPill, explain } from "@/components/hub/states";
 import { CheckEditor, cleanDefinition, type Draft } from "@/components/quality/check-editor";
 import { Spark } from "@/components/quality/quality-shared";
 import { useDismiss } from "@/components/shell/use-dismiss";
 import { useToast } from "@/components/ui/toast";
-import { loadHistory, previewCheck, runTable, saveCheck, seedChecks, setCheckStatus, setSchedule, type Parsed, type Staged } from "./actions";
+import { generateChecks, loadHistory, previewCheck, runTable, saveCheck, seedChecks, setCheckStatus, setSchedule, type Generated, type Parsed, type Staged } from "./actions";
 
-const ORIGIN: Record<DqCheck["origin"], string> = { PROFILE: "profile", RUN: "run", USER: "user" };
+const ORIGIN: Record<DqCheck["origin"], string> = { PROFILE: "profile", RUN: "run", USER: "user", REQUIREMENT: "requirement" };
 const PRESETS = [
   { label: "Hourly", cron: "0 * * * * UTC" }, { label: "Daily 06:00", cron: "0 6 * * * UTC" },
   { label: "Weekdays 07:30", cron: "30 7 * * 1-5 UTC" }, { label: "Weekly Monday", cron: "0 6 * * 1 UTC" },
@@ -167,39 +167,118 @@ function ScheduleModal({ table, current, onClose }: { table: string; current: st
 
 function SeedModal({ onClose, tables }: { onClose: () => void; tables: string[] }) {
   const toast = useToast();
-  const [mode, setMode] = useState<"table" | "run">("table");
+  const router = useRouter();
+  const [mode, setMode] = useState<"table" | "run" | "requirement">("table");
   const [value, setValue] = useState("");
+  const [text, setText] = useState("");
+  const [filename, setFilename] = useState("");
+  const [result, setResult] = useState<Generated | null>(null);
   const [pending, start] = useTransition();
+  const fileRef = useRef<HTMLInputElement>(null);
   const seed = () => start(async () => {
+    if (mode === "requirement") {
+      const r = await generateChecks({ table: value.trim(), text, filename });
+      if (r.ok) setResult(r.data);
+      else toast(r.pending ? "info" : "error", r.pending ? r.error : explain(r.error).message);
+      return;
+    }
     const r = await seedChecks(mode === "table" ? { table: value.trim() } : { run_id: value.trim() });
     if (r.ok) { toast("ok", stagedMessage(r.data, `${r.data.added ?? 0} check${r.data.added === 1 ? "" : "s"} added${r.data.skipped ? ` (${r.data.skipped} already there)` : ""}`)); onClose(); }
     else if (r.pending) { toast("info", r.error); onClose(); }
     else toast("error", explain(r.error).message);
   });
+  const readFile = async (file: File | undefined) => {
+    if (!file) return;
+    if (file.size > 200_000) { toast("error", "The requirement is larger than 200 KB; split it or paste the relevant part."); return; }
+    setText(await file.text());
+    setFilename(file.name);
+  };
+  const ready = value.trim().length >= 5 && (mode !== "requirement" || text.trim().length >= 10);
   return (
-    <Modal open onClose={onClose} title="Seed checks"
-           description="Start a table's catalog from what the platform already knows about it."
-           footer={<>
+    <Modal open onClose={() => { onClose(); if (result) router.refresh(); }} title="Seed checks" wide={mode === "requirement"}
+           description="Start a table's checks from what the platform already knows, or from what the client asks for. They land in the table's draft for review."
+           footer={result ? <Button onClick={() => { onClose(); router.refresh(); }}>Done</Button> : <>
              <Button variant="ghost" onClick={onClose}>Cancel</Button>
-             <Button disabled={pending || value.trim().length < 5} onClick={seed}>{pending && <Loader2 className="h-4 w-4 animate-spin" />} Seed checks</Button>
+             <Button disabled={pending || !ready} onClick={seed}>
+               {pending && <Loader2 className="h-4 w-4 animate-spin" />} {mode === "requirement" ? "Generate checks" : "Seed checks"}
+             </Button>
            </>}>
-      <div className="grid grid-cols-2 gap-2">
-        {([["table", "From a profile", "Not-null, uniqueness, valid values and ranges the latest profile suggests."],
-           ["run", "From a run", "A run's approved checks, placed on its built target table."]] as const).map(([id, label, hint]) => (
-          <button key={id} type="button" onClick={() => { setMode(id); setValue(""); }}
-                  className={cn("rounded-xl border p-3 text-left transition", mode === id ? "border-primary/50 bg-primary/5 ring-2 ring-primary/20" : "border-border hover:border-primary/30")}>
-            <span className="block text-sm font-medium">{label}</span>
-            <span className="block text-xs text-muted-foreground">{hint}</span>
-          </button>
-        ))}
-      </div>
-      <Label htmlFor="seed-v">{mode === "table" ? "Profiled table" : "Run id"}</Label>
-      <Input id="seed-v" className="font-mono" list={mode === "table" ? "seed-tables" : undefined} value={value}
-             onChange={(e) => setValue(mode === "table" ? e.target.value.toUpperCase() : e.target.value)}
-             placeholder={mode === "table" ? "DATABASE.SCHEMA.TABLE" : "00000000-0000-0000-0000-000000000000"} />
-      <datalist id="seed-tables">{tables.map((t) => <option key={t} value={t} />)}</datalist>
-      {mode === "run" && <p className="mt-2 text-xs text-muted-foreground">Or pick the run from a list: <a className="font-medium text-primary hover:underline" href="/dashboard/dq-store?view=runs">Run checks</a>, then &quot;Promote approved to the store&quot;.</p>}
+      {result ? <GeneratedSummary result={result} /> : (
+        <>
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+            {([["table", "From a profile", "Not-null, uniqueness, valid values and ranges the latest profile suggests."],
+               ["run", "From a run", "A run's approved checks, placed on its built target table."],
+               ["requirement", "From a requirement", "The client's quality rules: pasted text, or a CSV or JSON file."]] as const).map(([id, label, hint]) => (
+              <button key={id} type="button" onClick={() => { setMode(id); if (id === "run" || mode === "run") setValue(""); }}
+                      data-testid={`seed-${id}`}
+                      className={cn("rounded-xl border p-3 text-left transition", mode === id ? "border-primary/50 bg-primary/5 ring-2 ring-primary/20" : "border-border hover:border-primary/30")}>
+                <span className="block text-sm font-medium">{label}</span>
+                <span className="block text-xs text-muted-foreground">{hint}</span>
+              </button>
+            ))}
+          </div>
+          <Label htmlFor="seed-v">{mode === "run" ? "Run id" : mode === "table" ? "Profiled table" : "Table"}</Label>
+          <Input id="seed-v" className="font-mono" list={mode === "run" ? undefined : "seed-tables"} value={value}
+                 onChange={(e) => setValue(mode === "run" ? e.target.value : e.target.value.toUpperCase())}
+                 placeholder={mode === "run" ? "00000000-0000-0000-0000-000000000000" : "DATABASE.SCHEMA.TABLE"} />
+          <datalist id="seed-tables">{tables.map((t) => <option key={t} value={t} />)}</datalist>
+          {mode === "run" && <p className="mt-2 text-xs text-muted-foreground">Or pick the run from a list: <a className="font-medium text-primary hover:underline" href="/dashboard/dq-store?view=runs">Run checks</a>, then &quot;Promote approved to the store&quot;.</p>}
+          {mode === "requirement" && (
+            <>
+              <div className="mt-3 flex items-end justify-between gap-2">
+                <Label htmlFor="seed-req" className="mt-0">Requirement</Label>
+                <button type="button" onClick={() => fileRef.current?.click()} className="inline-flex items-center gap-1.5 text-xs font-medium text-primary hover:underline">
+                  <Upload className="h-3.5 w-3.5" /> {filename ? `Replace ${filename}` : "Upload a file"}
+                </button>
+              </div>
+              <Textarea id="seed-req" rows={8} value={text} maxLength={200_000} data-testid="seed-requirement"
+                        onChange={(e) => { setText(e.target.value); setFilename(""); }}
+                        placeholder={REQUIREMENT_EXAMPLE} />
+              <input ref={fileRef} type="file" accept=".csv,.json,.txt,.md,text/plain" className="hidden" onChange={(e) => readFile(e.target.files?.[0])} />
+              <p className="mt-2 text-xs text-muted-foreground">
+                CSV or JSON rows (column, check type, values, threshold, severity) become checks as written. Free text is read by AI
+                against the table&apos;s real columns. Either way nothing runs until the draft is reviewed and approved.
+              </p>
+            </>
+          )}
+        </>
+      )}
     </Modal>
+  );
+}
+
+const REQUIREMENT_EXAMPLE = [
+  "Every customer has an email address in a valid format.",
+  "STATUS is ACTIVE or INACTIVE.",
+  "The table is refreshed at least daily.",
+  "",
+  "or CSV: target_column,check_type,valid_values,severity,requirement",
+].join("\n");
+
+function GeneratedSummary({ result }: { result: Generated }) {
+  const leftOut = [...result.left_out, ...(result.problems ?? [])];
+  return (
+    <div className="space-y-3" data-testid="generated-summary">
+      {result.added ? (
+        <p className="text-sm">
+          <span className="font-semibold">{result.added} check{result.added === 1 ? "" : "s"} added</span> to the draft of{" "}
+          <span className="font-mono text-xs">{result.table}</span>
+          {result.skipped ? `, ${result.skipped} already there` : ""}.{" "}
+          {result.source === "brief" ? "Read by AI from the text" : "Mapped from the rows as written"}; review the draft and submit it for approval.
+        </p>
+      ) : (
+        <p className="text-sm">
+          <span className="font-semibold">No checks were added</span> to <span className="font-mono text-xs">{result.table}</span>
+          {result.skipped ? `: ${result.skipped} the table already has` : ""}. Nothing changed{leftOut.length ? "; see what was left out and why" : ""}.
+        </p>
+      )}
+      {leftOut.length > 0 && (
+        <div className="rounded-lg border border-dashed p-3">
+          <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Left out ({leftOut.length})</p>
+          <ul className="mt-1.5 space-y-1 text-xs text-muted-foreground">{leftOut.map((w) => <li key={w}>{w}</li>)}</ul>
+        </div>
+      )}
+    </div>
   );
 }
 

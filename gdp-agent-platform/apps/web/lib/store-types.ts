@@ -61,7 +61,7 @@ export type DqOutcome = "PASS" | "WARN" | "FAIL" | "ERROR" | "NOT_EVALUATED";
 export type DqCheck = {
   check_id: string; table_name: string; column_name: string | null; check_type: string;
   check_definition: Record<string, unknown>; soda_dsl: string; headline: string; severity: "WARN" | "FAIL";
-  status: "ACTIVE" | "PAUSED" | "RETIRED"; origin: "PROFILE" | "RUN" | "USER"; domain_id: string | null;
+  status: "ACTIVE" | "PAUSED" | "RETIRED"; origin: "PROFILE" | "RUN" | "USER" | "REQUIREMENT"; domain_id: string | null;
   schedule_cron: string | null; last_run_status: DqOutcome | null; last_run_at: string | null; last_measured: number | null;
   created_by: string; created_at: string; updated_at: string | null;
   requirement?: string | null; source_run_id?: string | null;  // V038
@@ -81,7 +81,7 @@ export type DqSuiteState = {
 export type DqSuiteCheck = {
   check_id: string; target_column: string | null; check_type: string; severity: "WARN" | "FAIL"; requirement: string | null;
   definition: Record<string, unknown>; soda_dsl: string; headline: string; status: "ACTIVE" | "PAUSED";
-  origin: "PROFILE" | "RUN" | "USER"; source_run_id: string | null;
+  origin: "PROFILE" | "RUN" | "USER" | "REQUIREMENT"; source_run_id: string | null;
 };
 export type DqSuiteChange = {
   check_id: string; kind: "ADDED" | "REMOVED" | "CHANGED"; class: "TIGHTENED" | "LOOSENED" | "CHANGED" | "DOCUMENTATION";

@@ -114,3 +114,94 @@ def render(pack: Dict[str, Any]) -> str:
             out.append(f"-- @tags {', '.join(q['tags'])}")
         out.append(q["sql_expression"].strip())
     return "\n".join(out) + "\n"
+
+
+# ---------------------------------------------------------------- importing a plain .sql file
+
+READ_ONLY = re.compile(r"^\s*(SELECT|WITH)\b", re.IGNORECASE)
+
+
+def split_sql(text: str) -> List[str]:
+    """Statements separated by ';', ignoring semicolons inside quotes and comments (comments are kept)."""
+    out, buf, i, n = [], [], 0, len(text or "")
+    quote: str | None = None
+    while i < n:
+        ch, nxt = text[i], text[i + 1] if i + 1 < n else ""
+        if quote:
+            buf.append(ch)
+            if ch == quote:
+                if nxt == quote:            # an escaped quote: '' or ""
+                    buf.append(nxt)
+                    i += 1
+                else:
+                    quote = None
+        elif ch in ("'", '"'):
+            quote = ch
+            buf.append(ch)
+        elif ch == "-" and nxt == "-":
+            end = text.find("\n", i)
+            end = n if end < 0 else end
+            buf.append(text[i:end])
+            i = end - 1
+        elif ch == "/" and nxt == "*":
+            end = text.find("*/", i + 2)
+            end = n if end < 0 else end + 2
+            buf.append(text[i:end])
+            i = end - 1
+        elif ch == ";":
+            out.append("".join(buf))
+            buf = []
+        else:
+            buf.append(ch)
+        i += 1
+    out.append("".join(buf))
+    return [s.strip() for s in out if s.strip()]
+
+
+def _slug(text: str) -> str:
+    slug = re.sub(r"[^A-Za-z0-9]+", "_", text).strip("_").lower()[:60].rstrip("_")
+    return slug if slug and slug[0].isalpha() else ""
+
+
+def parse_any(text: str, default_name: str = "") -> Dict[str, Any]:
+    """A pack from a .sql file: the platform's annotated format (-- @pack / -- @query), or plain SQL statements
+    separated by ';'. In plain SQL the comment lines just above a query become its description, and its name
+    comes from the first of them (else query_<n>). Statements that are not read-only queries are left out and
+    listed in `skipped`."""
+    if any(DIRECTIVE.match(line) and DIRECTIVE.match(line).group(1).lower() == "query" for line in (text or "").splitlines()):
+        return {**parse(text, default_name), "skipped": []}
+    pack: Dict[str, Any] = {"name": default_name, "description": "", "tags": [], "queries": [], "skipped": []}
+    names = set()
+    for n, statement in enumerate(split_sql(text), start=1):
+        lines = statement.splitlines()
+        notes = []
+        while lines and (lines[0].strip().startswith("--") or not lines[0].strip()):
+            note = lines.pop(0).strip().lstrip("-").strip()
+            if note:
+                notes.append(note)
+        sql = "\n".join(lines).strip()
+        while True:   # a leading /* block comment */ is a note too
+            m = re.match(r"^/\*(.*?)\*/\s*", sql, re.S)
+            if not m:
+                break
+            if m.group(1).strip():
+                notes.append(" ".join(m.group(1).split()))
+            sql = sql[m.end():]
+        if not sql:
+            continue
+        if not READ_ONLY.match(sql):
+            pack["skipped"].append(f"statement {n}: not a read-only query ({' '.join(sql.split())[:60]})")
+            continue
+        name = _slug(notes[0]) if notes else ""
+        name = name or f"query_{len(pack['queries']) + 1}"
+        base, k = name, 2
+        while name.lower() in names:
+            name, k = f"{base}_{k}", k + 1
+        names.add(name.lower())
+        pack["queries"].append({"query_name": name, "severity": "ERROR", "description": " ".join(notes)[:4000],
+                                "expectation": "0 rows", "tags": [], "sql_expression": sql})
+    if not pack["name"].strip():
+        raise ValueError("give the pack a name")
+    if not pack["queries"]:
+        raise ValueError("the file has no read-only queries" + (f" ({len(pack['skipped'])} other statements)" if pack["skipped"] else ""))
+    return pack

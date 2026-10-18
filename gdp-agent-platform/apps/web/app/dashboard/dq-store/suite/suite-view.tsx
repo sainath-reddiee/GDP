@@ -13,6 +13,7 @@ import { Button } from "@/components/ui/button";
 import { Label, Select, Textarea } from "@/components/ui/input";
 import { EmptyState, StatusPill, explain } from "@/components/hub/states";
 import { useToast } from "@/components/ui/toast";
+import { SodaCloudCard } from "@/components/quality/soda-cloud-card";
 import {
   applySuite, approveSuite, diffSuite, loadSuitePublishing, openSuiteDraft, publishSuite, rejectSuite, setCheckStatus,
   submitSuite, syncSuitePrs, withdrawSuite, type SuitePublishing,
@@ -388,6 +389,7 @@ function PublishTab({ table, versions, canPublish }: { table: string; versions: 
         </table>
         {!live.length && <p className="p-4 text-sm text-muted-foreground">No approved version yet.</p>}
       </section>
+      <SodaCloudCard />
     </div>
   );
 }
