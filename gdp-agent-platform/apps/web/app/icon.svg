@@ -1,8 +1,8 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
   <defs>
     <linearGradient id="t" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#5b4bff"/>
-      <stop offset="1" stop-color="#2a1d9e"/>
+      <stop offset="0" stop-color="#1d4ed8"/>
+      <stop offset="1" stop-color="#1e3a8a"/>
     </linearGradient>
   </defs>
   <rect width="32" height="32" rx="8" fill="url(#t)"/>
@@ -11,9 +11,9 @@
   <path d="M8.5 15.2 L17 19.4 L25.5 15.2" fill="none" stroke="#fff" stroke-opacity=".8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
   <path d="M17 6.8 L25.5 11 L17 15.2 L8.5 11 Z" fill="#fff"/>
   <!-- approved: a check on the top layer -->
-  <path d="M14.2 11 L16.2 12.7 L19.9 9.5" fill="none" stroke="#2a1d9e" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M14.2 11 L16.2 12.7 L19.9 9.5" fill="none" stroke="#1e3a8a" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
   <!-- the feedback loop: decisions flow back to the top -->
   <path d="M6.6 23.6 C3.4 18.8 3.9 11 9.6 7.2" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round"/>
   <path d="M7.4 5.9 L9.9 7 L8.9 9.5" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
-  <circle cx="7" cy="24.2" r="2.3" fill="#ff7a3d" stroke="#2a1d9e" stroke-width="1"/>
+  <circle cx="7" cy="24.2" r="2.3" fill="#b45309" stroke="#1e3a8a" stroke-width="1"/>
 </svg>

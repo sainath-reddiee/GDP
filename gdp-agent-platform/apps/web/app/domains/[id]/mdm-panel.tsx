@@ -9,7 +9,7 @@ import { domainMdm, domainMdmCoverage, saveDomainMdm, type DomainMdm, type MdmCo
 
 const LAYER: Record<MdmHop["layer"], { label: string; cls: string; icon: typeof Database }> = {
   SILVER_PRE_MDM: { label: "Silver, pre-MDM", cls: "border-slate-400/40 bg-slate-500/5", icon: Database },
-  MDM: { label: "MDM cross-reference", cls: "border-violet-500/40 bg-violet-500/5", icon: GitMerge },
+  MDM: { label: "MDM cross-reference", cls: "border-blue-500/40 bg-blue-500/5", icon: GitMerge },
   SILVER_POST_MDM: { label: "Silver, post-MDM (golden)", cls: "border-sky-500/40 bg-sky-500/5", icon: ShieldCheck },
   GOLD: { label: "Gold", cls: "border-amber-500/50 bg-amber-500/10", icon: Crown },
 };

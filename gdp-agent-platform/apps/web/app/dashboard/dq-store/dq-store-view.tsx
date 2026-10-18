@@ -243,13 +243,13 @@ function SuiteStrip({ table, suite }: { table: string; suite?: DqSuiteState | nu
   const open = suite.open_version != null;
   return (
     <div className={cn("flex flex-wrap items-center gap-2 border-t border-border/60 px-4 py-2 pl-12 text-xs",
-      suite.open_status === "IN_REVIEW" ? "bg-amber-50/60 dark:bg-amber-950/20" : open ? "bg-violet-50/50 dark:bg-violet-950/20" : "bg-muted/20")}
+      suite.open_status === "IN_REVIEW" ? "bg-amber-50/60 dark:bg-amber-950/20" : open ? "bg-blue-50/50 dark:bg-blue-950/20" : "bg-muted/20")}
          data-testid={`suite-${table.split(".").pop()}`}>
       <History className="h-3.5 w-3.5 text-muted-foreground" />
       <span>{suite.approved_version ? <>Running approved <strong>v{suite.approved_version}</strong>{suite.model_version ? <> · reviewed against domain model v{suite.model_version}</> : null}</> : "No approved version yet"}</span>
       {open && (
         <span className="flex items-center gap-1.5">
-          <GitPullRequestDraft className="h-3.5 w-3.5 text-violet-600" />
+          <GitPullRequestDraft className="h-3.5 w-3.5 text-blue-600" />
           {suite.open_status === "IN_REVIEW"
             ? <>v{suite.open_version} in review{suite.submitted_by ? ` (${suite.submitted_by})` : ""}</>
             : <>Draft v{suite.open_version}{suite.open_authors.length ? ` by ${suite.open_authors.join(", ")}` : ""}</>}
@@ -314,7 +314,7 @@ function TableBlock({ table, defaultOpen, canEdit, canRun, onAdd, onEdit, onSche
           <span className="w-9 text-right text-xs tabular-nums text-muted-foreground">{table.pass_rate == null ? "-" : `${Math.round(table.pass_rate)}%`}</span>
         </div>
         <button type="button" onClick={onSchedule} disabled={!canEdit}
-                className={cn("flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs transition", table.schedule ? "bg-violet-50 text-violet-700 ring-1 ring-inset ring-violet-100" : "text-muted-foreground hover:bg-muted", !canEdit && "cursor-default")}>
+                className={cn("flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs transition", table.schedule ? "bg-blue-50 text-blue-700 ring-1 ring-inset ring-blue-100" : "text-muted-foreground hover:bg-muted", !canEdit && "cursor-default")}>
           <CalendarClock className="h-3.5 w-3.5" /> {table.schedule ? describeCron(table.schedule.cron) : "Not scheduled"}
         </button>
         <div className="flex items-center gap-1">

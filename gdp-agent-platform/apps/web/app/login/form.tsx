@@ -18,7 +18,7 @@ function FloatingField({ label, icon, trailing, className, ...props }: InputHTML
   const id = useId();
   return (
     <div className="group relative">
-      <span className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-500 transition-colors group-focus-within:text-indigo-400">
+      <span className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-500 transition-colors group-focus-within:text-blue-400">
         {icon}
       </span>
       <input
@@ -27,7 +27,7 @@ function FloatingField({ label, icon, trailing, className, ...props }: InputHTML
         className={cn(
           "peer h-[52px] w-full rounded-xl border border-slate-800 bg-slate-950/60 pb-1.5 pl-10 pr-11 pt-5 text-sm text-slate-100",
           "outline-none transition placeholder:text-transparent hover:border-slate-700",
-          "focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/40",
+          "focus:border-blue-500 focus:ring-2 focus:ring-blue-500/40",
           className,
         )}
         {...props}
@@ -36,7 +36,7 @@ function FloatingField({ label, icon, trailing, className, ...props }: InputHTML
         htmlFor={id}
         className={cn(
           "pointer-events-none absolute left-10 top-1/2 -translate-y-1/2 text-sm text-slate-500 transition-all",
-          "peer-focus:top-3.5 peer-focus:text-[11px] peer-focus:text-indigo-300",
+          "peer-focus:top-3.5 peer-focus:text-[11px] peer-focus:text-blue-300",
           "peer-[:not(:placeholder-shown)]:top-3.5 peer-[:not(:placeholder-shown)]:text-[11px]",
         )}
       >
@@ -83,7 +83,7 @@ function TokenForm() {
           <ShieldCheck className="h-3.5 w-3.5 text-emerald-400/80" /> Used for this session only, never stored
         </span>
         <a href={TOKEN_DOCS} target="_blank" rel="noreferrer"
-           className="inline-flex items-center gap-1 font-medium text-indigo-300 transition hover:text-indigo-200">
+           className="inline-flex items-center gap-1 font-medium text-blue-300 transition hover:text-blue-200">
           Need a token? <ExternalLink className="h-3 w-3" />
         </a>
       </div>

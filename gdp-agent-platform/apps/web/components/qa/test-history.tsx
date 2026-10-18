@@ -63,7 +63,7 @@ export function TestHistoryButton({ testId, title, canRestore }: { testId: strin
               <li key={v.version} className="rounded-xl border border-border/80 p-3">
                 <div className="flex flex-wrap items-center gap-2 text-sm">
                   <span className="font-semibold">v{v.version}</span>
-                  <span className={cn("rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase", v.change === "DELETED" ? "bg-rose-100 text-rose-700" : v.change === "RESTORED" ? "bg-violet-100 text-violet-700" : "bg-muted text-muted-foreground")}>{CHANGE[v.change]}</span>
+                  <span className={cn("rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase", v.change === "DELETED" ? "bg-rose-100 text-rose-700" : v.change === "RESTORED" ? "bg-blue-100 text-blue-700" : "bg-muted text-muted-foreground")}>{CHANGE[v.change]}</span>
                   <span className="text-xs text-muted-foreground">{v.changed_by} · {v.changed_at?.slice(0, 16)}</span>
                   {i > 0 && canRestore && !v.is_deleted && (
                     <Button size="sm" variant="outline" className="ml-auto" disabled={pending} onClick={() => restore(v.version)} data-testid={`restore-v${v.version}`}>

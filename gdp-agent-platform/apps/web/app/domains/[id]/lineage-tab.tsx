@@ -11,7 +11,7 @@ import { domainProvenance, type DomainProvenance, type ProvenanceSource } from "
 import { ContractDrawer, LifecycleFlow, NeedsVerification, Readiness } from "./lifecycle";
 
 const TONE: Record<string, string> = {
-  pack: "#6366f1", contract: "#8b5cf6", people: "#0ea5e9", copilot: "#a855f7", ai: "#d946ef", mapping: "#14b8a6",
+  pack: "#1d4ed8", contract: "#475569", people: "#0ea5e9", copilot: "#0369a1", ai: "#b45309", mapping: "#14b8a6",
   dbt: "#f97316", quality: "#22c55e", profiling: "#eab308", modeling: "#3b82f6", qa: "#ef4444", code: "#64748b",
   confluence: "#2563eb", document: "#0891b2", other: "#94a3b8",
 };

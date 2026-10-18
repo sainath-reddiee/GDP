@@ -66,7 +66,7 @@ export default async function Dashboard() {
     { show: reviewCount > 0, href: "/runs?needs_review=1", icon: Eye, text: `${reviewCount} run${reviewCount === 1 ? "" : "s"} awaiting approval`, tone: "text-human bg-human/10 ring-human/30" },
     { show: failedCount > 0, href: "/runs?status=failed", icon: XCircle, text: `${failedCount} run${failedCount === 1 ? "" : "s"} failed this week`, tone: "text-amber-800 bg-amber-50 ring-amber-200" },
     { show: !!openIncidents, href: "/incidents", icon: Siren, text: `${openIncidents} open incident${openIncidents === 1 ? "" : "s"}`, tone: "text-rose-700 bg-rose-50 ring-rose-200" },
-    { show: !!o?.qa?.pending, href: "/dashboard/qa-store", icon: SquareTerminal, text: `${o?.qa?.pending} QA pack${o?.qa?.pending === 1 ? "" : "s"} awaiting approval`, tone: "text-violet-700 bg-violet-50 ring-violet-200" },
+    { show: !!o?.qa?.pending, href: "/dashboard/qa-store", icon: SquareTerminal, text: `${o?.qa?.pending} QA pack${o?.qa?.pending === 1 ? "" : "s"} awaiting approval`, tone: "text-blue-700 bg-blue-50 ring-blue-200" },
     { show: dqFailing > 0, href: "/dashboard/dq-store", icon: ClipboardCheck, text: `${dqFailing} data quality check${dqFailing === 1 ? "" : "s"} failing`, tone: "text-rose-700 bg-rose-50 ring-rose-200" },
     { show: !!o?.profiling?.drift, href: "/dashboard/profiling", icon: BarChart3, text: `${o?.profiling?.drift} drifting column${o?.profiling?.drift === 1 ? "" : "s"}`, tone: "text-amber-800 bg-amber-50 ring-amber-200" },
   ].filter((a) => a.show);
@@ -89,7 +89,7 @@ export default async function Dashboard() {
 
       {/* hero ribbon */}
       <section className="glass aurora-border relative overflow-hidden p-1" data-testid="hero-ribbon">
-        <div className="pointer-events-none absolute inset-0 bg-gradient-to-r from-indigo-500/[0.07] via-transparent to-cyan-500/[0.07]" />
+        <div className="pointer-events-none absolute inset-0 bg-accent" />
         <div className="relative grid divide-y divide-border/60 sm:grid-cols-2 sm:divide-y-0 xl:grid-cols-4 xl:divide-x">
           <RibbonMetric label="Runs, last 7 days" value={<CountUp value={finished == null ? null : finished < FEW ? d!.completed : Math.round(d!.success_rate ?? 0)} />}
                         unit={finished == null ? undefined : finished < FEW ? `of ${finished} finished succeeded` : "% succeeded"}
@@ -154,7 +154,7 @@ export default async function Dashboard() {
           <ol className="relative space-y-3 before:absolute before:left-[5px] before:top-1 before:h-[calc(100%-8px)] before:w-px before:bg-border">
             {audit.events.map((e) => (
               <li key={e.event_id} className="relative pl-5">
-                <span className={cn("absolute left-0 top-1.5 h-[11px] w-[11px] rounded-full border-2 border-card", e.actor_type === "HUMAN" ? "bg-indigo-500" : "bg-emerald-500")} />
+                <span className={cn("absolute left-0 top-1.5 h-[11px] w-[11px] rounded-full border-2 border-card", e.actor_type === "HUMAN" ? "bg-blue-500" : "bg-emerald-500")} />
                 <p className="truncate text-xs"><span className="font-medium">{e.run_name ?? "run"}</span>
                   <span className="text-muted-foreground"> · {(e.to_state ?? "").replace(/_/g, " ").toLowerCase()}</span></p>
                 <p className="truncate text-[11px] text-muted-foreground">{e.actor} · {ago(e.created_at)}</p>

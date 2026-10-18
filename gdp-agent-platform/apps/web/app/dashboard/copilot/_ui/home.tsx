@@ -18,7 +18,7 @@ export function Home({ composer, onStarter, disabled }: { composer: ReactNode; o
     <div className="mx-auto flex min-h-full w-full max-w-3xl flex-col px-6 py-10">
      <div className="my-auto flex flex-col gap-8">
       <div className="space-y-3 text-center">
-        <span className="mx-auto grid h-12 w-12 place-items-center rounded-2xl bg-gradient-to-br from-indigo-500 to-violet-500 text-white shadow-lg shadow-indigo-500/25">
+        <span className="mx-auto grid h-12 w-12 place-items-center rounded-2xl bg-primary text-white shadow-lg shadow-blue-500/25">
           <svg viewBox="0 0 24 24" className="h-6 w-6" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden>
             <path d="M12 3l1.9 4.6L18.5 9.5l-4.6 1.9L12 16l-1.9-4.6L5.5 9.5l4.6-1.9L12 3z" strokeLinejoin="round" />
             <path d="M19 15l.8 2 2 .8-2 .8-.8 2-.8-2-2-.8 2-.8.8-2z" strokeLinejoin="round" />

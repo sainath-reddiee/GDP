@@ -89,7 +89,7 @@ export function SkillsSection({ stages, bindings, skills }: { stages: string[]; 
                       {pretty(b.skill_name)}
                     </Link>
                     <button type="button" disabled={!editable} onClick={() => update(stage, list.map((x) => (x.skill_name === b.skill_name ? { ...x, standard: x.standard === "GDP" ? "ANY" : "GDP" } : x)))}
-                            className={cn("rounded px-1.5 py-0.5 text-[9px] font-medium", b.standard === "GDP" ? "bg-violet-100 text-violet-700 dark:bg-violet-950 dark:text-violet-300" : "bg-muted text-muted-foreground")}
+                            className={cn("rounded px-1.5 py-0.5 text-[9px] font-medium", b.standard === "GDP" ? "bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300" : "bg-muted text-muted-foreground")}
                             title="Load for every run, or only for runs that follow the GDP standard">
                       {b.standard === "GDP" ? "GDP runs" : "all runs"}
                     </button>

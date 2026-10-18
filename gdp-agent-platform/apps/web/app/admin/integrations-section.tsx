@@ -32,7 +32,7 @@ const PRESETS = [
   { label: "Weekdays 06:00 UTC", cron: "0 6 * * MON-FRI UTC" }, { label: "Weekly, Monday 06:00 UTC", cron: "0 6 * * MON UTC" },
 ];
 const STATUS_TONE: Record<string, string> = {
-  READY: "bg-emerald-50 text-emerald-700 ring-emerald-100", INDEXING: "bg-indigo-50 text-indigo-700 ring-indigo-100",
+  READY: "bg-emerald-50 text-emerald-700 ring-emerald-100", INDEXING: "bg-blue-50 text-blue-700 ring-blue-100",
   FAILED: "bg-rose-50 text-rose-700 ring-rose-100", NEW: "bg-slate-100 text-slate-600 ring-slate-200",
   CANCELLED: "bg-amber-50 text-amber-700 ring-amber-100",
 };
@@ -163,7 +163,7 @@ function ReposTab({ repos, domains, may, onMsg, publishing }: {
         <ul className="divide-y">{shown.map((r) => <RepoRow key={r.repo_id} repo={r} domains={domains} may={may} onMsg={onMsg} onOpen={(tab) => setOpen({ id: r.repo_id, tab })} />)}</ul>
       ) : (
         <div className="px-6 py-12 text-center">
-          <span className="mx-auto grid h-12 w-12 place-items-center rounded-2xl bg-indigo-50 text-indigo-600 ring-1 ring-inset ring-indigo-100"><FolderGit2 className="h-6 w-6" /></span>
+          <span className="mx-auto grid h-12 w-12 place-items-center rounded-2xl bg-blue-50 text-blue-600 ring-1 ring-inset ring-blue-100"><FolderGit2 className="h-6 w-6" /></span>
           <p className="mt-3 text-sm font-semibold">No repositories connected yet</p>
           <p className="mx-auto mt-1 max-w-md text-xs text-muted-foreground">GitHub, GitLab, Bitbucket and Azure DevOps work through Snowflake&apos;s Git integration.
             Credentials stay in a Snowflake secret; the platform never keeps a token.</p>
@@ -352,7 +352,7 @@ function RepoDrawer({ repo: r, domains, may, tab, onTab, onClose, onMsg }: {
                     const ok = x.status === "SUCCEEDED";
                     return (
                       <li key={x.index_run_id} className="flex gap-3 rounded-lg border px-3 py-2">
-                        {ok ? <CircleCheck className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600" /> : x.status === "RUNNING" ? <Loader2 className="mt-0.5 h-4 w-4 shrink-0 animate-spin text-indigo-600" />
+                        {ok ? <CircleCheck className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600" /> : x.status === "RUNNING" ? <Loader2 className="mt-0.5 h-4 w-4 shrink-0 animate-spin text-blue-600" />
                           : x.status === "CANCELLED" ? <CircleDashed className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" /> : <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0 text-rose-600" />}
                         <div className="min-w-0 flex-1">
                           <p className="font-medium">{x.status.toLowerCase()} · {ago(x.started_at)}<span className="font-normal text-muted-foreground"> by {x.triggered_by === "SYSTEM" ? "the schedule" : x.triggered_by}</span></p>
@@ -634,7 +634,7 @@ function ConnectDrawer({ domains, onClose, onDone }: { domains: Domain[]; onClos
       <button type="button" aria-label="Close" className="absolute inset-0 bg-black/30" onClick={onClose} />
       <aside className="relative flex h-full w-[620px] max-w-full flex-col border-l bg-background shadow-2xl">
         <header className="flex items-center gap-3 border-b px-5 py-4">
-          <span className="grid h-9 w-9 place-items-center rounded-xl bg-indigo-50 text-indigo-600 ring-1 ring-inset ring-indigo-100"><GitBranch className="h-4 w-4" /></span>
+          <span className="grid h-9 w-9 place-items-center rounded-xl bg-blue-50 text-blue-600 ring-1 ring-inset ring-blue-100"><GitBranch className="h-4 w-4" /></span>
           <div className="flex-1"><h3 className="text-base font-semibold">Connect a code repository</h3>
             <p className="text-xs text-muted-foreground">Snowflake clones it with a Git integration; the token goes straight into a Snowflake secret. You can switch branches any time later.</p></div>
           <button type="button" onClick={onClose} aria-label="Close" className="rounded-md p-1 hover:bg-muted"><X className="h-4 w-4" /></button>

@@ -21,7 +21,7 @@ export type PullRequestRow = {
 const STATE: Record<string, { label: string; tone: string }> = {
   OPEN: { label: "open", tone: "bg-sky-500/10 text-sky-700 ring-sky-500/20 dark:text-sky-300" },
   DRAFT: { label: "draft", tone: "bg-slate-500/10 text-slate-700 ring-slate-500/20 dark:text-slate-300" },
-  MERGED: { label: "merged", tone: "bg-violet-500/10 text-violet-700 ring-violet-500/20 dark:text-violet-300" },
+  MERGED: { label: "merged", tone: "bg-blue-500/10 text-blue-700 ring-blue-500/20 dark:text-blue-300" },
   CLOSED: { label: "closed without merging", tone: "bg-amber-500/10 text-amber-700 ring-amber-500/20 dark:text-amber-300" },
   FAILED: { label: "publish failed", tone: "bg-rose-500/10 text-rose-700 ring-rose-500/20 dark:text-rose-300" },
   NO_CHANGES: { label: "already in repository", tone: "bg-emerald-500/10 text-emerald-700 ring-emerald-500/20 dark:text-emerald-300" },
@@ -117,7 +117,7 @@ export function SourceControlView({ prs, kinds, publisherReady, filters: fromUrl
             return (
               <li key={`${p.kind}-${p.asset_id}-${p.version}`} data-testid={`pr-${p.kind}-${p.version}`}
                   className={cn("rounded-xl border border-l-4 bg-card px-4 py-3",
-                                p.state === "MERGED" ? "border-l-violet-500" : p.state === "FAILED" || p.state === "CLOSED" ? "border-l-rose-500"
+                                p.state === "MERGED" ? "border-l-blue-500" : p.state === "FAILED" || p.state === "CLOSED" ? "border-l-rose-500"
                                   : p.state === "NO_CHANGES" ? "border-l-emerald-500" : "border-l-sky-500")}>
                 <div className="flex flex-wrap items-start gap-x-3 gap-y-1">
                   <div className="min-w-0 flex-1">

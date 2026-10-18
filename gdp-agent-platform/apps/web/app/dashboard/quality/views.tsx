@@ -40,7 +40,7 @@ export function Executions({ rows, kind }: { rows: Execution[]; kind: string }) 
             <TBody>
               {rows.map((e) => (
                 <TR key={`${e.kind}${e.id}`} className="cursor-pointer" onClick={() => show(e)}>
-                  <TD><span className={cn("rounded-full px-2 py-0.5 text-[11px] font-medium", e.kind === "SODA" ? "bg-teal-50 text-teal-700" : "bg-indigo-50 text-indigo-700")}>{e.kind === "SODA" ? "Soda" : "QA"}</span></TD>
+                  <TD><span className={cn("rounded-full px-2 py-0.5 text-[11px] font-medium", e.kind === "SODA" ? "bg-teal-50 text-teal-700" : "bg-blue-50 text-blue-700")}>{e.kind === "SODA" ? "Soda" : "QA"}</span></TD>
                   <TD className="text-xs">{e.run_id ? <Link onClick={(ev) => ev.stopPropagation()} href={`/runs/${e.run_id}/${e.kind === "SODA" ? "soda" : "qa"}`} className="text-primary hover:underline">{e.run_name ?? e.run_id.slice(0, 8)}</Link> : <span className="text-muted-foreground">table suite</span>}</TD>
                   <TD className="max-w-[16rem] truncate font-mono text-[11px]">{e.target ?? "-"}</TD>
                   <TD className="text-right tabular-nums">{e.total ?? "-"}</TD>

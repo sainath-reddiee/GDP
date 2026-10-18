@@ -5,12 +5,12 @@ import { cn } from "@/lib/utils";
 
 // soft tints per state: chip, the faint glow in the corner, and the accent line of a highlighted card
 export const TONES = {
-  blue: { chip: "bg-indigo-50 text-indigo-600 ring-indigo-100", glow: "bg-indigo-400", line: "from-indigo-400 to-violet-400" },
+  blue: { chip: "bg-blue-50 text-blue-600 ring-blue-100", glow: "bg-blue-400", line: "from-blue-400 to-blue-400" },
   rose: { chip: "bg-rose-50 text-rose-600 ring-rose-100", glow: "bg-rose-400", line: "from-rose-400 to-pink-400" },
   slate: { chip: "bg-slate-100 text-slate-600 ring-slate-200", glow: "bg-slate-400", line: "from-slate-300 to-slate-400" },
   emerald: { chip: "bg-emerald-50 text-emerald-600 ring-emerald-100", glow: "bg-emerald-400", line: "from-emerald-400 to-teal-400" },
   amber: { chip: "bg-amber-50 text-amber-600 ring-amber-100", glow: "bg-amber-400", line: "from-amber-400 to-orange-400" },
-  violet: { chip: "bg-violet-50 text-violet-600 ring-violet-100", glow: "bg-violet-400", line: "from-violet-400 to-fuchsia-400" },
+  violet: { chip: "bg-blue-50 text-blue-600 ring-blue-100", glow: "bg-blue-400", line: "from-blue-400 to-blue-400" },
   sky: { chip: "bg-sky-50 text-sky-600 ring-sky-100", glow: "bg-sky-400", line: "from-sky-400 to-cyan-400" },
 } as const;
 
@@ -21,8 +21,7 @@ export function Kpi({ href, label, value, hint, icon: Icon, tone, highlight }: {
   const t = TONES[tone];
   const body = (
     <>
-      {highlight && <div className={cn("absolute inset-x-0 top-0 h-0.5 bg-gradient-to-r", t.line)} />}
-      <div className={cn("absolute -right-10 -top-10 h-28 w-28 rounded-full opacity-[0.07] blur-xl transition-opacity group-hover:opacity-[0.14] dark:opacity-[0.12]", t.glow)} />
+      {highlight && <div className={cn("absolute inset-x-0 top-0 h-0.5", t.glow)} />}
       <div className="flex items-center justify-between">
         <span className={cn("grid h-9 w-9 place-items-center rounded-xl ring-1 ring-inset", t.chip)}><Icon className="h-4 w-4" /></span>
         {href && <ArrowUpRight className="h-4 w-4 text-muted-foreground/60 opacity-0 transition group-hover:opacity-100" />}
@@ -34,7 +33,7 @@ export function Kpi({ href, label, value, hint, icon: Icon, tone, highlight }: {
   );
   const cls = cn("surface group relative overflow-hidden p-4 transition duration-200",
     href && "hover:-translate-y-px hover:border-primary/25 hover:shadow-hover",
-    highlight && "border-rose-200 bg-gradient-to-br from-rose-50/70 via-card to-card");
+    highlight && "border-rose-200 bg-card");
   return href ? <Link href={href} className={cls}>{body}</Link> : <div className={cls}>{body}</div>;
 }
 

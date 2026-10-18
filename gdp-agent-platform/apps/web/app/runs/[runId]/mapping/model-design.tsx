@@ -27,7 +27,7 @@ const PRESETS: { key: Conventions["preset"]; label: string; hint: string }[] = [
 const DECISION: Record<Design["decision"], { label: string; tone: string }> = {
   REUSE_EXISTING: { label: "Reuse an existing model", tone: "border-success/30 bg-success/5 text-success" },
   EXTEND_EXISTING: { label: "Extend an existing model", tone: "border-primary/30 bg-primary/5 text-primary" },
-  NEW: { label: "New model", tone: "border-violet-300 bg-violet-50/60 text-violet-700 dark:bg-violet-950/30 dark:text-violet-300" },
+  NEW: { label: "New model", tone: "border-blue-300 bg-blue-50/60 text-blue-700 dark:bg-blue-950/30 dark:text-blue-300" },
 };
 const KINDS = ["DIMENSION", "FACT", "BRIDGE", "REFERENCE", "TABLE"];
 const EMPTY_CUSTOM: Conventions = {
@@ -182,9 +182,9 @@ function WorkbenchBanner({ wb }: { wb: WorkbenchState }) {
   const model = wb.model_id ?? p?.model_id ?? null;
   const href = (tab: string) => (model ? `/dashboard/modeling/${model}?tab=${tab}` : "/dashboard/modeling");
   return (
-    <div className="space-y-1.5 rounded-lg border border-violet-300/60 bg-violet-50/50 px-3 py-2 text-xs dark:border-violet-800 dark:bg-violet-950/20" data-testid="run-workbench">
+    <div className="space-y-1.5 rounded-lg border border-blue-300/60 bg-blue-50/50 px-3 py-2 text-xs dark:border-blue-800 dark:bg-blue-950/20" data-testid="run-workbench">
       <p className="flex flex-wrap items-center gap-2">
-        <GitPullRequestArrow className="h-3.5 w-3.5 text-violet-600" />
+        <GitPullRequestArrow className="h-3.5 w-3.5 text-blue-600" />
         <span className="font-semibold">The domain model is governed in the Model Workbench.</span>
         <span className="text-muted-foreground">Design here, then propose it; modelers merge, review and approve it, and the run maps to the approved version.</span>
       </p>
@@ -328,7 +328,7 @@ export function ModelDesign({ runId, data, canApply, state, canEdit = true, canA
   return (
     <section className="space-y-4 rounded-xl border bg-card p-4">
       <div className="flex flex-wrap items-center gap-2">
-        <Boxes className="h-5 w-5 text-violet-600" />
+        <Boxes className="h-5 w-5 text-blue-600" />
         <h2 className="text-lg font-semibold">Data model</h2>
         {shown && <Badge variant={shown.status === "APPROVED" ? "success" : "outline"}>v{shown.version} · {shown.status.toLowerCase()}{dirty ? " · edited" : ""}</Badge>}
         {data.target_model && <span className="font-mono text-xs text-muted-foreground">target {data.target_model}</span>}
@@ -365,7 +365,7 @@ export function ModelDesign({ runId, data, canApply, state, canEdit = true, canA
               <div className="flex gap-2">
                 <Textarea rows={2} value={instructions} onChange={(e) => setInstructions(e.target.value)} className="flex-1"
                           placeholder={shown ? "Optional: what to change, e.g. split customer into its own dimension" : "Optional: anything the model must respect"} aria-label="Design instructions" />
-                <Button className="self-stretch bg-gradient-to-r from-violet-600 to-primary text-white" disabled={busy || !canAI} onClick={generate}
+                <Button className="self-stretch bg-primary text-white" disabled={busy || !canAI} onClick={generate}
                         title={canAI ? undefined : "Needs the AI.USE and MODEL.EDIT privileges"}>
                   {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}{instructions && shown ? "Revise" : shown ? "Redesign" : "Design"}
                 </Button>

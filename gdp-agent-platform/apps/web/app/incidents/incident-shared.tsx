@@ -39,7 +39,7 @@ export function IncidentStatusPill({ status, className }: { status: string; clas
 }
 
 export function KindPill({ kind }: { kind: string }) {
-  return <span className={cn(pill, "bg-violet-50 text-violet-700 ring-violet-100")}>{kindLabel(kind)}</span>;
+  return <span className={cn(pill, "bg-blue-50 text-blue-700 ring-blue-100")}>{kindLabel(kind)}</span>;
 }
 
 export const dagRunHref = (envId: string, dagId: string, runId?: string | null) =>

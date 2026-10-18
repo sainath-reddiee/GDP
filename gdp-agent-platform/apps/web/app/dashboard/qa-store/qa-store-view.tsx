@@ -40,7 +40,7 @@ function PackCard({ pack, onOpen }: { pack: PackRow; onOpen: () => void }) {
     <button type="button" onClick={onOpen} data-testid={`pack-${pack.name}`}
             className="surface group flex flex-col p-4 text-left transition duration-200 hover:-translate-y-px hover:border-primary/30 hover:shadow-hover">
       <div className="flex items-start gap-3">
-        <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-gradient-to-br from-indigo-500 to-violet-500 text-white shadow-sm shadow-indigo-500/30">
+        <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-primary text-white shadow-sm shadow-blue-500/30">
           <SquareTerminal className="h-4 w-4" />
         </span>
         <div className="min-w-0 flex-1">
@@ -60,7 +60,7 @@ function PackCard({ pack, onOpen }: { pack: PackRow; onOpen: () => void }) {
         <span className="ml-auto flex items-center gap-2">
           {pack.source === "REPO" && <span className="flex items-center gap-1" title="Seeded from domain/<name>/qa in Git"><FolderGit2 className="h-3.5 w-3.5" /> repo</span>}
           {pack.approved_version && pack.status !== "RETIRED" && (
-            <span className="flex items-center gap-1 text-violet-600" title="The approved queries are QA_TEST knowledge: Cortex Search and the QA prompts read them">
+            <span className="flex items-center gap-1 text-blue-600" title="The approved queries are QA_TEST knowledge: Cortex Search and the QA prompts read them">
               <BrainCircuit className="h-3.5 w-3.5" /> AI context
             </span>
           )}

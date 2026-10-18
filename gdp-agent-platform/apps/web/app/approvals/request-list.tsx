@@ -42,7 +42,7 @@ function Row({ r, me, onResult }: { r: ChangeRequest; me: string; onResult: (m: 
                        r.status === "PENDING" ? "border-l-warning" : r.status === "APPLIED" ? "border-l-success"
                          : r.status === "FAILED" || r.status === "REJECTED" ? "border-l-destructive" : "border-l-muted")}>
       <button type="button" onClick={() => setOpen((v) => !v)} className="flex w-full items-start gap-3 px-4 py-3 text-left">
-        <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-violet-600" />
+        <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-blue-600" />
         <span className="min-w-0 flex-1">
           <span className="flex flex-wrap items-center gap-2">
             <span className="font-medium">{r.title || r.privilege}</span>

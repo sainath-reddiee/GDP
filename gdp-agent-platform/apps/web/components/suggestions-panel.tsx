@@ -156,7 +156,7 @@ export function SuggestionsPanel({ source, summary, effect, intro, canAct = true
     const pill = (
       <button type="button" onClick={() => (data ? setExpanded((v) => !v) : open_())} disabled={pending || (!data && !canAct)}
               aria-expanded={expanded} aria-label={label} title="Runs only when you click it. Shows the earlier review if there is one."
-              className="flex items-center gap-1.5 rounded-full bg-gradient-to-r from-violet-600 to-primary px-3 py-1 text-xs font-medium text-white shadow-sm transition hover:shadow-md disabled:opacity-60">
+              className="flex items-center gap-1.5 rounded-full bg-primary px-3 py-1 text-xs font-medium text-white shadow-sm transition hover:shadow-md disabled:opacity-60">
         {pending && !busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
         {label}
       </button>
@@ -165,11 +165,11 @@ export function SuggestionsPanel({ source, summary, effect, intro, canAct = true
       <>
         {slot ? createPortal(pill, slot) : !expanded && <div className="flex justify-end">{pill}</div>}
         {expanded && (
-          <section className="rounded-xl border border-violet-200 bg-violet-50/40 p-4 dark:border-violet-900 dark:bg-violet-950/20">
+          <section className="rounded-xl border border-blue-200 bg-blue-50/40 p-4 dark:border-blue-900 dark:bg-blue-950/20">
             <div className="flex flex-wrap items-center gap-2">
-              <Bot className="h-4 w-4 text-violet-600" />
+              <Bot className="h-4 w-4 text-blue-600" />
               <h4 className="text-sm font-semibold">AI review</h4>
-              <span className={`text-xs ${open ? "font-medium text-violet-700 dark:text-violet-300" : "text-muted-foreground"}`}>{status}</span>
+              <span className={`text-xs ${open ? "font-medium text-blue-700 dark:text-blue-300" : "text-muted-foreground"}`}>{status}</span>
               {model && <span className="text-[11px] text-muted-foreground">{model}</span>}
               <div className="ml-auto flex gap-1">
                 {generated && (
@@ -189,23 +189,23 @@ export function SuggestionsPanel({ source, summary, effect, intro, canAct = true
   }
 
   return (
-    <section className={`rounded-xl border border-violet-200 bg-violet-50/40 dark:border-violet-900 dark:bg-violet-950/20 ${top ? "px-4 py-2.5" : "p-4"}`}>
+    <section className={`rounded-xl border border-blue-200 bg-blue-50/40 dark:border-blue-900 dark:bg-blue-950/20 ${top ? "px-4 py-2.5" : "p-4"}`}>
       <div className="flex flex-wrap items-center gap-2">
         {top ? (
           <button type="button" onClick={() => (generated ? setExpanded((v) => !v) : open_())}
                   disabled={pending || (!generated && !canAct)} aria-expanded={expanded}
-                  className="flex items-center gap-2 rounded-full bg-gradient-to-r from-violet-600 to-primary px-3 py-1 text-sm font-medium text-white shadow-sm transition hover:shadow-md disabled:opacity-60">
+                  className="flex items-center gap-2 rounded-full bg-primary px-3 py-1 text-sm font-medium text-white shadow-sm transition hover:shadow-md disabled:opacity-60">
             {pending && !busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
             AI review
           </button>
         ) : (
           <>
-            <Bot className="h-4 w-4 text-violet-600" />
+            <Bot className="h-4 w-4 text-blue-600" />
             <h4 className="text-sm font-semibold">AI review</h4>
           </>
         )}
         {top ? (
-          <span className={`text-xs ${open ? "font-medium text-violet-700 dark:text-violet-300" : "text-muted-foreground"}`}>{status}</span>
+          <span className={`text-xs ${open ? "font-medium text-blue-700 dark:text-blue-300" : "text-muted-foreground"}`}>{status}</span>
         ) : generated && <Badge variant="outline">{open} open suggestion{open === 1 ? "" : "s"}</Badge>}
         {model && <span className="text-[11px] text-muted-foreground">{model}</span>}
         <div className="ml-auto flex gap-1">

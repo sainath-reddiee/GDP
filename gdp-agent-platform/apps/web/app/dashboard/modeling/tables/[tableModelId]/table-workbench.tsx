@@ -310,10 +310,10 @@ function ColumnsTab({ id, spec, onChange, editable, issues, canAI, layer, setLay
                     <Input aria-label="Description" className="h-7 min-w-[200px] text-xs" value={a.description} disabled={!editable}
                            onChange={(ev) => set(a, { description: ev.target.value })} placeholder="What it means" />
                     {s && (
-                      <div className="mt-1 rounded-md border border-violet-200 bg-violet-50 px-2 py-1 text-[11px] text-violet-900 dark:border-violet-500/30 dark:bg-violet-500/10 dark:text-violet-100">
+                      <div className="mt-1 rounded-md border border-blue-200 bg-blue-50 px-2 py-1 text-[11px] text-blue-900 dark:border-blue-500/30 dark:bg-blue-500/10 dark:text-blue-100">
                         <Sparkles className="mr-1 inline h-3 w-3" />
                         {s.classification && <b>{CLASS_LABEL[s.classification] ?? s.classification}. </b>}{s.description && <>{s.description} </>}
-                        <span className="text-violet-700/80 dark:text-violet-200/70">{s.reason}</span>
+                        <span className="text-blue-700/80 dark:text-blue-200/70">{s.reason}</span>
                         <span className="ml-2 inline-flex gap-2"><button type="button" className="font-semibold underline" onClick={() => accept(a, s)}>Accept</button>
                           <button type="button" className="underline" onClick={() => setSuggestions((cur) => (cur ?? []).filter((x) => x !== s))}>Dismiss</button></span>
                       </div>

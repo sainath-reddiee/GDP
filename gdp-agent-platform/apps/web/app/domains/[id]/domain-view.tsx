@@ -49,8 +49,8 @@ const TABS = [
 ] as const;
 const KIND_TONE: Record<string, string> = {
   ROLLBACK: "bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300", DELETE: "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300",
-  RULES: "bg-indigo-100 text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300", DEPLOY: "bg-muted text-muted-foreground",
-  SUGGESTION: "bg-violet-100 text-violet-700 dark:bg-violet-950 dark:text-violet-300", IMPORT: "bg-teal-100 text-teal-700 dark:bg-teal-950 dark:text-teal-300",
+  RULES: "bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300", DEPLOY: "bg-muted text-muted-foreground",
+  SUGGESTION: "bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300", IMPORT: "bg-teal-100 text-teal-700 dark:bg-teal-950 dark:text-teal-300",
 };
 type Msg = { tone: "ok" | "info" | "error"; text: string } | null;
 const toneOf = (e: string): "info" | "error" => (/approval|request/i.test(e) ? "info" : "error");

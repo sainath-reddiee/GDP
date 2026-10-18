@@ -20,7 +20,7 @@ const AT: Record<string, number> = {
 };
 const REVIEW = new Set(["MAPPING_REVIEW", "STTM_REVIEW", "SODA_REVIEW", "DBT_REVIEW"]);
 const KIND: Record<string, string> = {
-  FACT: "bg-sky-500/10 text-sky-700 dark:text-sky-300", BRIDGE: "bg-violet-500/10 text-violet-700 dark:text-violet-300",
+  FACT: "bg-sky-500/10 text-sky-700 dark:text-sky-300", BRIDGE: "bg-blue-500/10 text-blue-700 dark:text-blue-300",
 };
 
 /** A Gold run's star schema: one table run per fact and bridge, their progress through the same steps, and the

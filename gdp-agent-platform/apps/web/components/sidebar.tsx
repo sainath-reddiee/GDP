@@ -11,7 +11,6 @@ import { cn } from "@/lib/utils";
 import type { NavCounts } from "@/app/bff/nav/route";
 import { ReportProblemButton } from "@/components/report-problem";
 import { allowedBy, groupBadge, NAV_GROUPS, type NavGroup, type NavLink } from "@/components/shell/nav";
-import { BUILD_SHA, buildLabel } from "@/lib/build";
 
 const COLLAPSE_KEY = "aip.sidebar.collapsed";
 const OPEN_KEY = "aip.sidebar.open";
@@ -48,8 +47,8 @@ function Item({ link, active, counts, collapsed, nested }: {
     <Link href={href} title={collapsed ? label : undefined} aria-label={label} aria-describedby={descId} aria-current={active ? "page" : undefined}
           className={cn(ROW, collapsed ? "justify-center px-0" : nested ? "py-[6px] pl-9 pr-2.5 text-[12.5px]" : "px-2.5", active ? ON : OFF)}>
       {b && <span id={descId} className="sr-only">{b.title}</span>}
-      {active && !nested && <span className="absolute -left-3 top-1/2 h-5 w-1 -translate-y-1/2 rounded-r-full bg-gradient-to-b from-indigo-300 to-violet-400" />}
-      <Icon className={cn("shrink-0", nested ? "h-[15px] w-[15px]" : "h-[17px] w-[17px]", active ? "text-indigo-300" : "text-white/40 group-hover:text-white/80")} />
+      {active && !nested && <span className="absolute -left-3 top-1/2 h-5 w-1 -translate-y-1/2 rounded-r-full bg-primary" />}
+      <Icon className={cn("shrink-0", nested ? "h-[15px] w-[15px]" : "h-[17px] w-[17px]", active ? "text-blue-300" : "text-white/40 group-hover:text-white/80")} />
       {!collapsed && <span className="flex-1 truncate">{label}</span>}
       <Badge b={b} collapsed={collapsed} />
     </Link>
@@ -112,8 +111,8 @@ function ParentItem({ link, kids, path, counts, collapsed }: {
       <div ref={root} className="relative" onMouseEnter={show} onMouseLeave={hide} onFocus={show} onBlur={hide} onKeyDown={keys}>
         <Link href={link.href} aria-current={path === link.href ? "page" : undefined} aria-haspopup="menu"
               aria-expanded={!!fly} title={link.label} aria-label={link.label} className={cn(ROW, "justify-center px-0", active ? ON : OFF)}>
-          {active && <span className="absolute -left-3 top-1/2 h-5 w-1 -translate-y-1/2 rounded-r-full bg-gradient-to-b from-indigo-300 to-violet-400" />}
-          <Icon className={cn("h-[17px] w-[17px] shrink-0", active ? "text-indigo-300" : "text-white/40 group-hover:text-white/80")} />
+          {active && <span className="absolute -left-3 top-1/2 h-5 w-1 -translate-y-1/2 rounded-r-full bg-primary" />}
+          <Icon className={cn("h-[17px] w-[17px] shrink-0", active ? "text-blue-300" : "text-white/40 group-hover:text-white/80")} />
           <Badge b={b} collapsed />
         </Link>
         {/* in a portal: the sticky sidebar is its own stacking context, so a flyout inside it would sit under the page */}
@@ -146,12 +145,12 @@ function ParentItem({ link, kids, path, counts, collapsed }: {
   return (
     <div>
       <div className={cn(ROW, "pl-0 pr-1", path === link.href || (inside && !open) ? ON : inside ? "font-medium text-white" : OFF)}>
-        {active && <span className="absolute -left-3 top-1/2 h-5 w-1 -translate-y-1/2 rounded-r-full bg-gradient-to-b from-indigo-300 to-violet-400" />}
+        {active && <span className="absolute -left-3 top-1/2 h-5 w-1 -translate-y-1/2 rounded-r-full bg-primary" />}
         {/* named by its label alone: the folded count badge inside it is a hint (its title says what waits), not part of the name */}
         <Link href={link.href} aria-current={path === link.href ? "page" : undefined} aria-label={link.label}
               aria-describedby={b && !open ? `${listId}-waiting` : undefined} className="flex flex-1 items-center gap-3 self-stretch pl-2.5">
           {b && !open && <span id={`${listId}-waiting`} className="sr-only">{b.title}</span>}
-          <Icon className={cn("h-[17px] w-[17px] shrink-0", active ? "text-indigo-300" : "text-white/40 group-hover:text-white/80")} />
+          <Icon className={cn("h-[17px] w-[17px] shrink-0", active ? "text-blue-300" : "text-white/40 group-hover:text-white/80")} />
           <span className="flex-1 truncate">{link.label}</span>
           {!open && <Badge b={b} collapsed={false} />}
         </Link>
@@ -178,10 +177,10 @@ function Feature({ link, active, collapsed }: { link: NavLink; active: boolean; 
     <Link href={href} title={collapsed ? label : undefined} aria-label={collapsed ? label : undefined} aria-current={active ? "page" : undefined}
           className={cn("group relative flex items-center gap-3 rounded-xl border py-2 text-[13px] font-medium transition",
             collapsed ? "justify-center px-0" : "px-2.5",
-            active ? "border-indigo-300/40 bg-gradient-to-r from-indigo-500/30 to-violet-500/20 text-white"
-              : "border-indigo-300/20 bg-gradient-to-r from-indigo-500/15 to-violet-500/10 text-white/90 hover:border-indigo-300/40 hover:from-indigo-500/25")}>
-      {active && <span className="absolute -left-3 top-1/2 h-5 w-1 -translate-y-1/2 rounded-r-full bg-gradient-to-b from-indigo-300 to-violet-400" />}
-      <span className="grid h-6 w-6 shrink-0 place-items-center rounded-lg bg-gradient-to-br from-indigo-400 to-violet-500 text-white shadow-sm shadow-indigo-500/30">
+            active ? "border-blue-400/50 bg-white/[0.08] text-white"
+              : "border-white/10 bg-white/[0.04] text-white/90 hover:border-blue-400/40 hover:bg-white/[0.07]")}>
+      {active && <span className="absolute -left-3 top-1/2 h-5 w-1 -translate-y-1/2 rounded-r-full bg-primary" />}
+      <span className="grid h-6 w-6 shrink-0 place-items-center rounded-md bg-primary text-white">
         <Icon className="h-3.5 w-3.5" />
       </span>
       {!collapsed && (
@@ -318,12 +317,6 @@ export function Sidebar({ privileges }: { privileges?: string[] | null }) {
                   collapsed ? "justify-center" : "px-2.5")}>
           {collapsed ? <ChevronsRight className="h-4 w-4" /> : <><ChevronsLeft className="h-4 w-4" /> Collapse</>}
         </button>
-        {/* the build is inlined per bundle: after a pull, a dev server can serve server and browser bundles of different
-            commits for a moment, which must not break the page (npm run doctor reports the mismatch instead) */}
-        <p data-testid="build-stamp" title={buildLabel()} suppressHydrationWarning
-           className={cn("mt-1 truncate font-mono text-[10px] text-white/25", collapsed ? "text-center" : "px-2.5")}>
-          {collapsed ? BUILD_SHA.slice(0, 7) : buildLabel()}
-        </p>
       </div>
     </nav>
   );

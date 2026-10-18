@@ -304,7 +304,7 @@ function Row({ t, checked, toggle, openTicket }: { t: Ticket; checked: boolean; 
             : <Link href={caseHref ?? "#"} className="font-mono text-xs font-semibold text-primary hover:underline">{t.key}</Link>}
         </div>
         <div className="mt-1 flex gap-1">
-          {t.sources.map((s) => <span key={s} className={cn("rounded px-1.5 py-px text-[10px] font-medium", s === "JIRA" ? "bg-sky-500/10 text-sky-700 dark:text-sky-400" : "bg-violet-500/10 text-violet-700 dark:text-violet-400")}>{s === "JIRA" ? "Jira" : "Case"}</span>)}
+          {t.sources.map((s) => <span key={s} className={cn("rounded px-1.5 py-px text-[10px] font-medium", s === "JIRA" ? "bg-sky-500/10 text-sky-700 dark:text-sky-400" : "bg-blue-500/10 text-blue-700 dark:text-blue-400")}>{s === "JIRA" ? "Jira" : "Case"}</span>)}
           {jira && t.case && caseHref && <Link href={caseHref} className="text-[10px] text-muted-foreground hover:text-primary">{t.case.number}</Link>}
         </div>
       </td>

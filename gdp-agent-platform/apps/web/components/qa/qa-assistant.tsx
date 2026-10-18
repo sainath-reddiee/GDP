@@ -108,7 +108,7 @@ export function QaAssistant({ ask: askFn, plan: planFn, save: saveFn, onSaved, c
     <div className="grid gap-5 xl:grid-cols-2">
       <section className="space-y-3 rounded-2xl border bg-card p-5 shadow-sm">
         <div className="flex items-center gap-2">
-          <ListChecks className="h-4 w-4 text-violet-600" />
+          <ListChecks className="h-4 w-4 text-blue-600" />
           <h4 className="text-sm font-semibold">AI test plan</h4>
         </div>
         <p className="text-xs text-muted-foreground">
@@ -118,7 +118,7 @@ export function QaAssistant({ ask: askFn, plan: planFn, save: saveFn, onSaved, c
         <div className="flex gap-2">
           <Input value={focus} onChange={(e) => setFocus(e.target.value)} placeholder="Optional focus, e.g. money columns, late-arriving data"
                  aria-label="Plan focus" className="flex-1" />
-          <Button disabled={planning || !canAI} onClick={makePlan} className="bg-gradient-to-r from-violet-600 to-primary text-white">
+          <Button disabled={planning || !canAI} onClick={makePlan} className="bg-primary text-white">
             {planning ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}{planning ? "Planning…" : "Plan tests"}
           </Button>
         </div>
@@ -140,7 +140,7 @@ export function QaAssistant({ ask: askFn, plan: planFn, save: saveFn, onSaved, c
                     {t.valid ? <span className="text-[11px] text-success">compiles</span> : <span className="text-[11px] text-destructive">needs a fix</span>}
                   </span>
                   <span className="block text-xs text-muted-foreground">{t.objective}</span>
-                  <span className="block text-[11px] text-violet-700 dark:text-violet-300">Why: {t.why}</span>
+                  <span className="block text-[11px] text-blue-700 dark:text-blue-300">Why: {t.why}</span>
                   {!t.valid && <span className="block text-[11px] text-destructive">{[...t.problems, t.compile_error].filter(Boolean).join(" · ")}</span>}
                   <details className="text-xs"><summary className="cursor-pointer text-muted-foreground">SQL · expected {t.expected}</summary>
                     <pre className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap rounded-lg bg-slate-950 p-2 font-mono text-[11px] text-slate-100">{t.sql}</pre>
@@ -160,7 +160,7 @@ export function QaAssistant({ ask: askFn, plan: planFn, save: saveFn, onSaved, c
 
       <section className="space-y-3 rounded-2xl border bg-card p-5 shadow-sm">
         <div className="flex items-center gap-2">
-          <Wand2 className="h-4 w-4 text-violet-600" />
+          <Wand2 className="h-4 w-4 text-blue-600" />
           <h4 className="text-sm font-semibold">Ask for one test</h4>
         </div>
         <div className="flex gap-2">
@@ -174,7 +174,7 @@ export function QaAssistant({ ask: askFn, plan: planFn, save: saveFn, onSaved, c
         <div className="flex flex-wrap gap-1.5">
           {EXAMPLES.map((ex) => (
             <button key={ex} type="button" onClick={() => setQuestion(ex)}
-                    className="rounded-full border px-2.5 py-1 text-[11px] text-muted-foreground hover:border-violet-400 hover:text-foreground">{ex}</button>
+                    className="rounded-full border px-2.5 py-1 text-[11px] text-muted-foreground hover:border-blue-400 hover:text-foreground">{ex}</button>
           ))}
         </div>
         {answer && (

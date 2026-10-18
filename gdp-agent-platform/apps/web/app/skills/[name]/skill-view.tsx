@@ -97,7 +97,7 @@ export function SkillView({ detail, card, categories, tab }: {
             </label>
             <div className="flex flex-wrap justify-end gap-2">
               {can("SKILL.EDIT") && can("AI.USE") && (
-                <Button size="sm" variant="outline" onClick={() => setImproving(true)}><Sparkles className="h-3.5 w-3.5 text-violet-500" />Improve with AI</Button>
+                <Button size="sm" variant="outline" onClick={() => setImproving(true)}><Sparkles className="h-3.5 w-3.5 text-blue-500" />Improve with AI</Button>
               )}
               {can("SKILL.EDIT") && (
                 <Button size="sm" variant="outline" onClick={() => setEditing(true)}><Pencil className="h-3.5 w-3.5" />Edit as new version</Button>
@@ -195,7 +195,7 @@ function Overview({ detail, card, prod, cand, categories, byId, canEdit, onMoveC
                 <span key={b.stage} className={cn("inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs",
                                                   b.enabled ? "bg-card" : "bg-muted text-muted-foreground line-through")}>
                   {STAGE_LABELS[b.stage] ?? b.stage}
-                  {b.standard === "GDP" && <span className="rounded bg-violet-100 px-1 text-[9px] text-violet-700 dark:bg-violet-950 dark:text-violet-300">GDP runs</span>}
+                  {b.standard === "GDP" && <span className="rounded bg-blue-100 px-1 text-[9px] text-blue-700 dark:bg-blue-950 dark:text-blue-300">GDP runs</span>}
                 </span>
               ))}
             </div>

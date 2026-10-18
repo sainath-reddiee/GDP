@@ -209,7 +209,7 @@ export function CatalogExplorer({
                     i === cursor && !active && "bg-muted/60",
                   )}
                 >
-                  {share ? <Share2 className="mt-0.5 h-4 w-4 shrink-0 text-violet-500" /> : <Database className="mt-0.5 h-4 w-4 shrink-0 text-sky-600" />}
+                  {share ? <Share2 className="mt-0.5 h-4 w-4 shrink-0 text-blue-500" /> : <Database className="mt-0.5 h-4 w-4 shrink-0 text-sky-600" />}
                   <span className="min-w-0 flex-1">
                     <span className="block break-all text-sm font-medium leading-tight">{d.database_name}</span>
                     {d.comment && <span className="line-clamp-1 text-[11px] text-muted-foreground">{d.comment}</span>}

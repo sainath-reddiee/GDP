@@ -11,7 +11,7 @@ export async function PendingChanges({ path, what = "change" }: { path: string; 
   const pending = data?.requests ?? [];
   if (!pending.length) return null;
   return (
-    <section className="rounded-xl border border-violet-200 bg-violet-50 p-3 text-sm text-violet-900 dark:border-violet-500/30 dark:bg-violet-500/10 dark:text-violet-100" data-testid="pending-changes">
+    <section className="rounded-xl border border-blue-200 bg-blue-50 p-3 text-sm text-blue-900 dark:border-blue-500/30 dark:bg-blue-500/10 dark:text-blue-100" data-testid="pending-changes">
       <p className="flex items-center gap-2 font-medium">
         <Clock3 className="h-4 w-4" /> {pending.length} {what}{pending.length === 1 ? "" : "s"} waiting for approval
         <Link href="/approvals" className="ml-auto text-xs font-medium underline">Open Approvals</Link>
@@ -20,8 +20,8 @@ export async function PendingChanges({ path, what = "change" }: { path: string; 
         {pending.map((p) => (
           <li key={p.request_id} className="flex flex-wrap items-center gap-x-2 text-xs">
             <span className="font-medium">{p.summary || p.title}</span>
-            <span className="text-violet-700/80 dark:text-violet-300/80">by {p.requested_by} · for {p.approver_role} · {p.created_at.slice(0, 16)}</span>
-            {p.can_decide && <Link href="/approvals" className="rounded-full bg-violet-600 px-2 py-0.5 text-[10px] font-semibold text-white">You can approve</Link>}
+            <span className="text-blue-700/80 dark:text-blue-300/80">by {p.requested_by} · for {p.approver_role} · {p.created_at.slice(0, 16)}</span>
+            {p.can_decide && <Link href="/approvals" className="rounded-full bg-blue-600 px-2 py-0.5 text-[10px] font-semibold text-white">You can approve</Link>}
           </li>
         ))}
       </ul>

@@ -1,4 +1,4 @@
-const COLORS = ["#6366f1", "#14b8a6", "#f59e0b", "#ef4444", "#8b5cf6", "#0ea5e9", "#22c55e", "#ec4899"];
+const COLORS = ["#1d4ed8", "#14b8a6", "#f59e0b", "#ef4444", "#475569", "#0ea5e9", "#22c55e", "#ec4899"];
 export const colorFor = (s: string) => COLORS[[...s].reduce((n, c) => n + c.charCodeAt(0), 0) % COLORS.length];
 const initials = (u: string) => u.split(/[._\s@]+/).filter(Boolean).slice(0, 2).map((p) => p[0]).join("").toUpperCase() || "?";
 

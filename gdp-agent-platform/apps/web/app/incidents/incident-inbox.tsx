@@ -107,7 +107,7 @@ export function IncidentInbox({
       apply: { status: ["ACK"], severity: "", mine: false } },
     { label: "P1 open", value: summary?.p1_open, tone: "text-rose-700", active: sameStatus(nav.status, ["OPEN"]) && nav.severity === "P1",
       apply: { status: ["OPEN"], severity: "P1", mine: false } },
-    { label: "Mine", value: summary?.mine_open, tone: "text-indigo-700", active: nav.mine, apply: { mine: !nav.mine } },
+    { label: "Mine", value: summary?.mine_open, tone: "text-blue-700", active: nav.mine, apply: { mine: !nav.mine } },
     { label: "Unrouted", value: summary?.unrouted, tone: summary?.unrouted ? "text-amber-700" : "text-muted-foreground", active: false },
   ];
 

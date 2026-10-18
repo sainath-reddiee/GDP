@@ -10,7 +10,7 @@ const ICONS: Record<string, LucideIcon> = {
   folder: Folder,
 };
 export const ICON_NAMES = Object.keys(ICONS);
-export const CATEGORY_COLORS = ["#0ea5e9", "#6366f1", "#8b5cf6", "#14b8a6", "#f59e0b", "#22c55e", "#ef4444", "#0891b2", "#a855f7", "#64748b"];
+export const CATEGORY_COLORS = ["#0ea5e9", "#1d4ed8", "#475569", "#14b8a6", "#f59e0b", "#22c55e", "#ef4444", "#0891b2", "#0369a1", "#64748b"];
 
 /** A category's icon on a soft tile of its colour. */
 export function CategoryIcon({ icon, color, size = "md", className }: {

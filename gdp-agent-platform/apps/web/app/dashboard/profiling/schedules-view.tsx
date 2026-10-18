@@ -94,7 +94,7 @@ export function SchedulesView({ schedules, canRun }: { schedules: ProfileSchedul
         return (
           <section key={s.schedule_id} className="surface space-y-2 p-4" data-testid={`schedule-${s.schema_name}`}>
             <div className="flex flex-wrap items-center gap-2">
-              <CalendarClock className="h-4 w-4 text-violet-600" />
+              <CalendarClock className="h-4 w-4 text-blue-600" />
               <span className="font-mono text-sm font-semibold">{s.database_name}.{s.schema_name}</span>
               <span className="text-xs text-muted-foreground">{s.tables.length ? `${s.tables.length} table${s.tables.length === 1 ? "" : "s"}` : "every table"} · {describe(s.cron)}{s.force_refresh ? " · always re-profile" : ""}</span>
               {s.last_status && <StatusPill status={s.last_status === "OK" ? "PASS" : s.last_status === "PARTIAL" ? "WARN" : "FAIL"} />}

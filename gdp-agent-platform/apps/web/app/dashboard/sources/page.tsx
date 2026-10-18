@@ -1,5 +1,8 @@
 import { CloudCog, Database, TableProperties, TriangleAlert, Workflow } from "lucide-react";
-import { api } from "@/lib/api";
+import { api, whoami } from "@/lib/api";
+import { can } from "@/lib/types";
+import type { SourcesOverview } from "@/lib/types";
+import { RegisteredSources } from "@/components/governance/registered-sources";
 import type { IngestionControl, Pipeline } from "@/lib/hub-types";
 import type { Overview } from "@/lib/store-types";
 import { scopedDomain } from "@/lib/domain-scope";
@@ -14,6 +17,10 @@ const n = (v: number | null | undefined) => (v == null ? "-" : v.toLocaleString(
 
 /** The Source Store: what is connected, what has landed and whether it is fresh. Profiles live in the Profiling Store. */
 export default async function SourceHub({ searchParams }: { searchParams: { db?: string; schema?: string; domain?: string } }) {
+  const [me, registeredSources] = await Promise.all([
+    whoami(),
+    api<SourcesOverview>("/api/sources/overview").catch(() => null),
+  ]);
   const domain = scopedDomain(searchParams.domain);
   const [pipes, overview, control] = await Promise.all([
     api<{ pipelines: Pipeline[]; deployed: boolean }>("/api/hub/pipelines").catch(() => ({ pipelines: [] as Pipeline[], deployed: false })),
@@ -65,6 +72,7 @@ export default async function SourceHub({ searchParams }: { searchParams: { db?:
             </Panel>
           ) : null} />
       </section>
+      <RegisteredSources sources={registeredSources?.sources ?? []} canEdit={can(me, "SOURCE.CONNECT") || can(me, "REQUEST.CHANGES")} />
     </div>
   );
 }

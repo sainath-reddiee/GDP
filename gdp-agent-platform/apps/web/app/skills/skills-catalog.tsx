@@ -35,7 +35,7 @@ export function OriginBadge({ origin }: { origin: string | null | undefined }) {
   const o = (origin || "REPOSITORY").toUpperCase();
   return (
     <span className={cn("rounded-full px-1.5 py-0.5 text-[10px] font-medium",
-                        o === "AI" ? "bg-violet-100 text-violet-700 dark:bg-violet-950 dark:text-violet-300"
+                        o === "AI" ? "bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300"
                           : o === "USER" ? "bg-sky-100 text-sky-700 dark:bg-sky-950 dark:text-sky-300"
                           : "bg-muted text-muted-foreground")}>
       {ORIGIN_LABEL[o] ?? o}
@@ -182,7 +182,7 @@ export function SkillsCatalog({ data }: { data: SkillsResponse }) {
                       className={cn("rounded-md p-1.5", view === "list" ? "bg-muted" : "text-muted-foreground")}><List className="h-3.5 w-3.5" /></button>
             </div>
             {editable && can("AI.USE") && (
-              <Button size="sm" onClick={() => setBuilding(true)} className="bg-gradient-to-r from-violet-500 to-primary text-white">
+              <Button size="sm" onClick={() => setBuilding(true)} className="bg-primary text-white">
                 <Sparkles className="h-3.5 w-3.5" />New skill with AI
               </Button>
             )}

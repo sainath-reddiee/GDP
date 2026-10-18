@@ -161,7 +161,7 @@ function CopilotShell({ children }: { children: ReactNode }) {
       {/* the Copilot workspace is the full version of this drawer; its own controls sit where the launcher would */}
       {can("AI.USE") && !pathname.startsWith("/dashboard/copilot") && <button type="button" onClick={() => setShow((v) => !v)} aria-label={show ? "Close copilot" : "Open copilot"}
               title="Copilot (Ctrl+J)" aria-expanded={show} data-copilot-launcher
-              className={cn("fixed bottom-5 right-5 z-[71] grid h-14 w-14 place-items-center rounded-full bg-gradient-to-br from-violet-500 to-primary text-white shadow-lg ring-4 ring-background transition hover:scale-105 hover:shadow-xl",
+              className={cn("fixed bottom-5 right-5 z-[71] grid h-14 w-14 place-items-center rounded-full bg-primary text-white shadow-lg ring-4 ring-background transition hover:scale-105 hover:shadow-xl",
                             show && "max-sm:hidden")}>
         {show ? <X className="h-6 w-6" /> : <Sparkles className="h-6 w-6" />}
         {unread && !show && <span className="absolute right-1 top-1 h-3 w-3 rounded-full bg-destructive ring-2 ring-background" />}
@@ -173,14 +173,19 @@ function CopilotShell({ children }: { children: ReactNode }) {
                              wide
                                ? "sm:inset-y-0 sm:right-0 sm:w-full sm:max-w-[520px] sm:border-l"
                                : "sm:bottom-24 sm:right-5 sm:h-[min(640px,calc(100vh-8rem))] sm:w-[400px] sm:origin-bottom-right sm:rounded-2xl sm:border sm:animate-[copilot-in_160ms_ease-out]")}>
-          <header className="flex items-center gap-3 border-b bg-gradient-to-r from-violet-500/10 to-primary/5 px-4 py-3">
-            <span className="grid h-8 w-8 place-items-center rounded-xl bg-gradient-to-br from-violet-500 to-primary text-white"><Bot className="h-4 w-4" /></span>
+          <header className="flex items-center gap-3 border-b bg-accent px-4 py-3">
+            <span className="grid h-8 w-8 place-items-center rounded-xl bg-primary text-white"><Bot className="h-4 w-4" /></span>
             <div className="min-w-0">
               <p className="text-sm font-semibold">Copilot</p>
               <p className="truncate text-[11px] text-muted-foreground" title={label}>Looking at {label}</p>
             </div>
+            <Link href="/dashboard/copilot" onClick={() => setShow(false)} data-testid="copilot-open-full"
+                  title="Open the full Copilot: saved chats, attachments, Jira issues and drafted changes"
+                  className="ml-auto inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-primary hover:bg-primary/10">
+              Full Copilot <ArrowRight className="h-3 w-3" />
+            </Link>
             <button type="button" aria-label="New conversation" title="New conversation"
-                    onClick={() => { setMessages([]); setConversation(null); }} className="ml-auto rounded-md p-1.5 text-muted-foreground hover:bg-muted">
+                    onClick={() => { setMessages([]); setConversation(null); }} className="rounded-md p-1.5 text-muted-foreground hover:bg-muted">
               <MessageSquarePlus className="h-4 w-4" />
             </button>
             <button type="button" aria-label={wide ? "Make smaller" : "Expand"} title={wide ? "Make smaller" : "Expand"}
@@ -239,7 +244,6 @@ function CopilotShell({ children }: { children: ReactNode }) {
                     )}
                     <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
                       <SaveAnswer data={m.data} question={(messages[i - 1]?.content ?? "").toString()} />
-                      <span className="ml-auto text-[10px] text-muted-foreground">{m.data.model} · {(m.data.duration_ms / 1000).toFixed(1)}s</span>
                     </div>
                     {i === messages.length - 1 && m.data.follow_ups.length > 0 && (
                       <div className="space-y-1 border-t pt-2">

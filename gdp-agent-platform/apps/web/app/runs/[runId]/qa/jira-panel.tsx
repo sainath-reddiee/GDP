@@ -320,7 +320,7 @@ function TriagePane({ issueKey, runId, canAI, canWrite, onSaved }: { issueKey: s
     <div className="space-y-4 text-sm">
       <div className="space-y-2 rounded-lg border bg-muted/20 p-3">
         <p className="flex items-center gap-2 text-xs"><span className={cn("rounded-full px-2 py-0.5 font-medium", result.reproducible ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700")}>
-          {result.reproducible ? "testable" : "needs more detail"}</span><span className="text-muted-foreground">severity {result.severity.toLowerCase()} · {result.model}</span>
+          {result.reproducible ? "testable" : "needs more detail"}</span><span className="text-muted-foreground">severity {result.severity.toLowerCase()}</span>
           <button type="button" onClick={run} disabled={busy} className="ml-auto text-primary hover:underline">{busy ? "Working…" : "Run again"}</button></p>
         <p><span className="font-medium">What is reported: </span>{result.diagnosis}</p>
         <p><span className="font-medium">Likely cause: </span>{result.likely_cause}</p>

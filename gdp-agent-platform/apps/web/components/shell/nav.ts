@@ -37,7 +37,7 @@ export const STORES: (NavLink & { id: string; short: string })[] = [
   },
   {
     id: "qa", short: "QA", href: "/dashboard/qa-store", label: "QA Store", icon: SquareTerminal,
-    badge: (c) => c.qa_pending ? { value: c.qa_pending, tone: "bg-violet-500 text-white", title: `${c.qa_pending} packs awaiting approval` } : null,
+    badge: (c) => c.qa_pending ? { value: c.qa_pending, tone: "bg-blue-500 text-white", title: `${c.qa_pending} packs awaiting approval` } : null,
   },
   {
     id: "quality", short: "Data Quality", href: "/dashboard/dq-store", label: "Data Quality Store", icon: ClipboardCheck,
@@ -72,17 +72,16 @@ export const NAV_GROUPS: NavGroup[] = [
         badge: (c) => c.approvals ? { value: c.approvals, tone: "bg-human text-white", title: `${c.approvals} change requests waiting for you` } : null,
       },
       { href: "/dashboard", label: "Overview", icon: LayoutDashboard, exact: true },
+      { href: "/dashboard/copilot", label: "Copilot", icon: Sparkles, privilege: "AI.USE" },
       { href: "/value", label: "Value", icon: TrendingUp, privilege: "AUDIT.VIEW" },
     ],
   },
   {
-    label: "Onboard", feature: true,
-    links: [{ href: "/dashboard/onboarding", label: "Onboard", icon: Rocket, hint: "Sources, domains, applications" }],
-  },
-  {
-    // the run engine first: the Silver and Gold pipelines and what they build, then the stores and the knowledge
+    // where work starts (onboarding a source or a domain), then the run engine: the Silver and Gold pipelines and what
+    // they build, then the stores and the knowledge. Onboard is an ordinary item, styled like every other one.
     label: "Build",
     links: [
+      { href: "/dashboard/onboarding", label: "Onboard", icon: Rocket },
       {
         href: "/runs", label: "Pipelines", icon: ListChecks, tabs: true,
         badge: (c) => c.review ? { value: c.review, tone: "bg-human text-white", title: `${c.review} waiting on review` }

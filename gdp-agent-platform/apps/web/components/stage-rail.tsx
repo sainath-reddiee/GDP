@@ -32,7 +32,7 @@ const TONE: Record<NodeStatus, { tile: string; text: string; label: string }> = 
   FAILED: { tile: "border-rose-500/40 bg-rose-500/10 text-rose-600", text: "text-rose-600", label: "failed" },
   BLOCKED: { tile: "border-rose-500/40 bg-rose-500/10 text-rose-600", text: "text-rose-600", label: "blocked" },
   CANCELLED: { tile: "border-border bg-muted/60 text-muted-foreground", text: "text-muted-foreground", label: "cancelled" },
-  AVAILABLE: { tile: "border-violet-500/40 bg-violet-500/10 text-violet-600", text: "text-violet-600", label: "ready to use" },
+  AVAILABLE: { tile: "border-blue-500/40 bg-blue-500/10 text-blue-600", text: "text-blue-600", label: "ready to use" },
 };
 
 function Marker({ status }: { status: NodeStatus }) {
@@ -73,7 +73,7 @@ function Edge({ done, active, grow }: { done: boolean; active?: boolean; grow?: 
   return (
     <span aria-hidden className={cn("relative mx-0.5 h-0.5 min-w-[14px] shrink-0 overflow-hidden rounded-full", grow ? "flex-1" : "w-4",
       done ? "bg-emerald-400" : "bg-border")}>
-      {active && <span className="absolute inset-0 animate-pulse bg-gradient-to-r from-emerald-400 to-blue-400" />}
+      {active && <span className="absolute inset-0 animate-pulse bg-primary" />}
     </span>
   );
 }

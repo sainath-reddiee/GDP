@@ -27,7 +27,7 @@ function group(items: ChatItem[]): Turn[] {
 
 export function AgentMark({ className }: { className?: string }) {
   return (
-    <span className={cn("grid h-7 w-7 shrink-0 place-items-center rounded-lg bg-gradient-to-br from-indigo-500 to-violet-500 text-white shadow-sm", className)}>
+    <span className={cn("grid h-7 w-7 shrink-0 place-items-center rounded-lg bg-primary text-white shadow-sm", className)}>
       <Sparkles className="h-3.5 w-3.5" />
     </span>
   );
@@ -153,18 +153,13 @@ function Activity({ items, live }: { items: ChatItem[]; live: boolean }) {
   );
 }
 
+/** One step the copilot took, in words: what it looked at, and why it failed if it did (never the raw tool output). */
 function ToolStep({ item }: { item: Extract<ChatItem, { kind: "TOOL" }> }) {
-  const [open, setOpen] = useState(false);
   return (
-    <li className="text-xs">
-      <button type="button" onClick={() => setOpen(!open)} aria-expanded={open} className="flex items-start gap-2 text-left">
-        {item.ok ? <Check className="mt-0.5 h-3 w-3 shrink-0 text-success" /> : <XCircle className="mt-0.5 h-3 w-3 shrink-0 text-destructive" />}
-        <span><span className="font-medium text-foreground">{TOOL_LABEL[item.tool] ?? item.tool}</span>
-          {!item.ok && item.error && <span className="block text-destructive">{item.error}</span>}</span>
-      </button>
-      {open && item.ok && item.summary != null && (
-        <pre className="ml-5 mt-1 max-h-60 overflow-auto rounded-lg bg-background p-2 text-[11px] text-muted-foreground">{JSON.stringify(item.summary, null, 2)}</pre>
-      )}
+    <li className="flex items-start gap-2 text-xs">
+      {item.ok ? <Check className="mt-0.5 h-3 w-3 shrink-0 text-success" /> : <XCircle className="mt-0.5 h-3 w-3 shrink-0 text-destructive" />}
+      <span><span className="font-medium text-foreground">{TOOL_LABEL[item.tool] ?? item.tool}</span>
+        {!item.ok && item.error && <span className="block text-destructive">{item.error}</span>}</span>
     </li>
   );
 }

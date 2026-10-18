@@ -86,7 +86,7 @@ export function TicketsWorkspace({ initial, filters, openNew, access, jira, me, 
                 <button type="button" role="menuitem" disabled={!access.canCase} onClick={() => { setMenu(false); setCreating("case"); }}
                         title={!access.canCase ? "Needs the CASE.WORK privilege" : undefined}
                         className="flex w-full items-start gap-2 rounded-lg px-2.5 py-2 text-left text-sm hover:bg-muted disabled:opacity-50">
-                  <MessageSquareWarning className="mt-0.5 h-4 w-4 text-violet-600" /><span><b className="block font-medium">Platform case</b><span className="text-xs text-muted-foreground">A data problem tracked here, with an SLA</span></span>
+                  <MessageSquareWarning className="mt-0.5 h-4 w-4 text-blue-600" /><span><b className="block font-medium">Platform case</b><span className="text-xs text-muted-foreground">A data problem tracked here, with an SLA</span></span>
                 </button>
               </div>
             )}

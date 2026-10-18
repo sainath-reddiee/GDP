@@ -9,10 +9,8 @@ import { logout } from "@/app/login/actions";
 import { setDomainScope } from "@/app/scope-actions";
 import { RoleSelector } from "@/components/role-selector";
 import { ThemeSegmented, ThemeToggle } from "@/components/theme/theme-toggle";
-import { buildLabel } from "@/lib/build";
 import { actableBy, QUICK_ACTION_GROUPS, QUICK_ACTIONS } from "./quick-actions";
 import { useDismiss } from "./use-dismiss";
-import { useCopilot } from "@/components/copilot/copilot-provider";
 
 export type DomainOption = { domain_id: string; domain_name: string };
 
@@ -38,7 +36,7 @@ function DomainSwitcher({ domains, scope }: { domains: DomainOption[]; scope: st
     <div ref={ref} className="relative">
       <button type="button" onClick={() => setOpen(!open)} aria-haspopup="listbox" aria-expanded={open} data-testid="domain-switcher"
               className="flex h-9 items-center gap-2 rounded-xl border border-border/80 bg-card/70 pl-2.5 pr-2 text-sm shadow-xs transition hover:border-primary/40">
-        <span className="grid h-5 w-5 place-items-center rounded-md bg-gradient-to-br from-indigo-500 to-violet-500 text-white">
+        <span className="grid h-5 w-5 place-items-center rounded-md bg-primary text-white">
           {pending ? <Loader2 className="h-3 w-3 animate-spin" /> : <Boxes className="h-3 w-3" />}
         </span>
         <span className="max-w-[160px] truncate font-medium">{scope || "All domains"}</span>
@@ -115,7 +113,7 @@ function AccountMenu({ user, role, canLogout, appRoles }: {
     <div ref={ref} className="relative">
       <button type="button" onClick={() => setOpen(!open)} aria-haspopup="menu" aria-expanded={open} aria-label="Account" data-testid="account-menu"
               className="flex h-9 items-center gap-2 rounded-xl pl-1 pr-2 transition hover:bg-muted">
-        <span className="grid h-7 w-7 place-items-center rounded-full bg-gradient-to-br from-indigo-400 to-violet-500 text-[11px] font-bold text-white ring-2 ring-background">
+        <span className="grid h-7 w-7 place-items-center rounded-full bg-primary text-[11px] font-bold text-white ring-2 ring-background">
           {initials(user)}
         </span>
         <span className="hidden max-w-[140px] truncate text-left text-xs leading-tight lg:block">
@@ -127,7 +125,7 @@ function AccountMenu({ user, role, canLogout, appRoles }: {
       {open && (
         <div role="menu" className="popover absolute right-0 top-11 z-50 w-80 animate-pop-in space-y-3 p-3 shadow-pop">
           <div className="flex items-center gap-3">
-            <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-gradient-to-br from-indigo-400 to-violet-500 text-sm font-bold text-white">
+            <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-primary text-sm font-bold text-white">
               {initials(user)}
             </span>
             <div className="min-w-0 flex-1">
@@ -154,7 +152,6 @@ function AccountMenu({ user, role, canLogout, appRoles }: {
               </button>
             </form>
           )}
-          <p className="border-t border-border/70 pt-2 font-mono text-[10px] text-muted-foreground" suppressHydrationWarning>{buildLabel()}</p>
         </div>
       )}
     </div>
@@ -189,17 +186,16 @@ function TicketsShortcut({ privileges }: { privileges?: string[] | null }) {
   );
 }
 
-/** Copilot from any page (it left the sidebar): opens the drawer, like Ctrl+J; the full workspace is one link away
- *  inside it. Shown to people with AI.USE. */
+/** Copilot from any page: the full chat workspace (sessions, attachments, Jira, drafted changes). Ctrl+J, or the round
+ *  button, still opens the quick drawer for a question about the page on screen. Shown to people with AI.USE. */
 function CopilotShortcut({ privileges }: { privileges?: string[] | null }) {
-  const { open } = useCopilot();
   const allowed = !privileges || privileges.includes("*") || privileges.includes("AI.USE");
   if (!allowed) return null;
   return (
-    <button type="button" onClick={() => open()} title="Copilot (Ctrl+J)" data-testid="copilot-shortcut"
-            className="inline-flex h-9 items-center gap-1.5 rounded-xl border border-border/80 bg-card/70 px-3 text-sm font-medium text-muted-foreground shadow-xs transition hover:border-agent/40 hover:text-agent">
+    <Link href="/dashboard/copilot" title="Copilot chat (Ctrl+J for a quick question about this page)" data-testid="copilot-shortcut"
+          className="inline-flex h-9 items-center gap-1.5 rounded-xl border border-border/80 bg-card/70 px-3 text-sm font-medium text-muted-foreground shadow-xs transition hover:border-agent/40 hover:text-agent">
       <Sparkles className="h-4 w-4" /><span className="hidden lg:inline">Copilot</span>
-    </button>
+    </Link>
   );
 }
 

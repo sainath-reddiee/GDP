@@ -398,6 +398,8 @@ RULES: List[Tuple[str, str, Any, str]] = [
     ("POST", r"/api/ingest-jobs/[^/]+/cancel", "PROFILE.RUN", ""),
     ("POST", r"/api/(sources/[^/]+/modeling-run|catalog/modeling-run|runs)", "RUN.CREATE", ""),
     ("POST", r"/api/targets/register", "MODEL.EDIT", ""),
+    ("POST", r"/api/targets/[^/]+/(retire|restore)", "DOMAIN.EDIT", "Remove or restore a domain table"),
+    ("POST", r"/api/sources/[^/]+/(retire|restore)", "SOURCE.CONNECT", "Remove or restore a source"),
     ("POST", r"/api/runs/(batch-archive|batch-cleanup)", "RUN.ARCHIVE", ""),
     ("POST", rf"{R}/(archive|restore)", "RUN.ARCHIVE", ""),
     ("POST", rf"{R}/review", lambda body: REVIEW_TARGETS.get(str((body or {}).get("to_state") or "").upper(), "REVIEW.DECIDE"),
@@ -450,10 +452,14 @@ STORE_ROUTES = [(m, re.compile(p)) for m, p in [
     ("POST", r"^/api/hub/sttm/[^/]+/edit$"),
     ("PUT", r"^/api/dq/schedules$"), ("DELETE", r"^/api/dq/schedules$"),
     ("POST", r"^/api/dq/run-checks/decisions$"),
+    # removing (and restoring) a domain table, a source or a knowledge item always needs another person's approval
+    ("POST", r"^/api/targets/[^/]+/(retire|restore)$"), ("POST", r"^/api/sources/[^/]+/(retire|restore)$"),
+    ("POST", r"^/api/knowledge/[^/]+/(retire|restore)$"),
 ]]
 # approver when a privilege has no approval policy of its own
 STORE_APPROVERS = {"STTM.EDIT": "STTM_APPROVER", "SODA.EDIT": "DQ_APPROVER", "DBT.EDIT": "CODE_REVIEWER",
-                   "MAPPING.DECIDE": "MODEL_APPROVER", "MODEL.EDIT": "MODEL_APPROVER"}
+                   "MAPPING.DECIDE": "MODEL_APPROVER", "MODEL.EDIT": "MODEL_APPROVER",
+                   "DOMAIN.EDIT": "DATA_STEWARD", "KNOWLEDGE.EDIT": "DATA_STEWARD", "SOURCE.CONNECT": "PLATFORM_ADMIN"}
 
 
 # Routes whose own workflow is the approval (Model Workbench and Data Quality suite drafts, reviews and decisions,

@@ -3,16 +3,16 @@
    (theme-compat.css) targets named Tailwind classes, and this page is always light. */
 
 .lp {
-  --paper: #f3f1ea;
-  --panel: #fbfaf6;
-  --ink: #15140f;
-  --ink-2: #3b3934;
-  --muted: #6e6b62;
-  --line: #d9d4c7;
-  --agent: #4b44e8;
-  --human: #e4572e;
-  --cortex: #1c8fc4;
-  --ok: #17794b;
+  --paper: #f8fafc;
+  --panel: #ffffff;
+  --ink: #0f172a;
+  --ink-2: #334155;
+  --muted: #64748b;
+  --line: #e2e8f0;
+  --agent: #1d4ed8;
+  --human: #b45309;
+  --cortex: #0369a1;
+  --ok: #15803d;
   background: var(--paper);
   color: var(--ink);
   color-scheme: light;
@@ -26,8 +26,8 @@
 /* faint graph paper behind the hero */
 .lp-grid {
   background-image:
-    linear-gradient(to right, rgb(21 20 15 / 0.05) 1px, transparent 1px),
-    linear-gradient(to bottom, rgb(21 20 15 / 0.05) 1px, transparent 1px);
+    linear-gradient(to right, rgb(15 23 42 / 0.04) 1px, transparent 1px),
+    linear-gradient(to bottom, rgb(15 23 42 / 0.04) 1px, transparent 1px);
   background-size: 32px 32px;
   mask-image: linear-gradient(to bottom, #000 40%, transparent 100%);
 }

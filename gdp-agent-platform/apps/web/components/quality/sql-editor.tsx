@@ -26,16 +26,16 @@ export function SqlEditor({ value, onChange, readOnly, rows = 12, label = "SQL",
                   onChange?.(`${value.slice(0, s)}  ${value.slice(end)}`);
                   requestAnimationFrame(() => { t.selectionStart = t.selectionEnd = s + 2; });
                 }}
-                className="min-h-0 flex-1 resize-y whitespace-pre bg-transparent px-3 py-3 text-slate-100 caret-indigo-300 outline-none placeholder:text-slate-600" />
+                className="min-h-0 flex-1 resize-y whitespace-pre bg-transparent px-3 py-3 text-slate-100 caret-blue-300 outline-none placeholder:text-slate-600" />
     </div>
   );
 }
 
 /** "#reconciliation" chips; the tone is stable per tag. */
 const TAG_TONES = [
-  "bg-indigo-50 text-indigo-700 ring-indigo-100", "bg-emerald-50 text-emerald-700 ring-emerald-100",
+  "bg-blue-50 text-blue-700 ring-blue-100", "bg-emerald-50 text-emerald-700 ring-emerald-100",
   "bg-amber-50 text-amber-700 ring-amber-100", "bg-sky-50 text-sky-700 ring-sky-100",
-  "bg-violet-50 text-violet-700 ring-violet-100", "bg-rose-50 text-rose-700 ring-rose-100",
+  "bg-blue-50 text-blue-700 ring-blue-100", "bg-rose-50 text-rose-700 ring-rose-100",
 ];
 
 export function TagChip({ tag, onClick, active }: { tag: string; onClick?: () => void; active?: boolean }) {

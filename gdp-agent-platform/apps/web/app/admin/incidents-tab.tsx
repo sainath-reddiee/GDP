@@ -221,7 +221,7 @@ function SupportTeamsCard({ teams, error, may, onMsg, reload }: { teams: OpsTeam
   return (
     <section className="surface overflow-hidden">
       <header className="flex flex-wrap items-center gap-3 border-b px-5 py-4">
-        <span className="grid h-10 w-10 place-items-center rounded-xl bg-indigo-50 text-indigo-600 ring-1 ring-inset ring-indigo-100"><Users className="h-5 w-5" /></span>
+        <span className="grid h-10 w-10 place-items-center rounded-xl bg-blue-50 text-blue-600 ring-1 ring-inset ring-blue-100"><Users className="h-5 w-5" /></span>
         <div className="min-w-[14rem] flex-1">
           <h3 className="text-base font-semibold">Support teams</h3>
           <p className="text-xs text-muted-foreground">Who owns an incident: its Jira project and assignee, its members, and when it escalates.</p>

@@ -120,7 +120,7 @@ export function DbtViewer({ detail, initialFile, canReview }: { detail: DbtGener
             ) : null)}
           {review && review.ok && (
             <div className="surface space-y-2 p-3" data-testid="dbt-review">
-              <p className="flex items-center gap-1.5 text-sm font-semibold"><Sparkles className="h-4 w-4 text-violet-600" /> AI review (advice)</p>
+              <p className="flex items-center gap-1.5 text-sm font-semibold"><Sparkles className="h-4 w-4 text-blue-600" /> AI review (advice)</p>
               <p className="text-sm">{review.data.summary}</p>
               <ul className="space-y-1 text-xs">
                 {review.data.findings.map((f, i) => (

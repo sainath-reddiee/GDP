@@ -41,7 +41,7 @@ export function SttmGit({ catalogId, version, status, canEdit, prs, repos, publi
   return (
     <section className="surface space-y-3 p-4" data-testid="sttm-git">
       <div className="flex flex-wrap items-center gap-2">
-        <GitPullRequest className="h-4 w-4 text-violet-600" />
+        <GitPullRequest className="h-4 w-4 text-blue-600" />
         <h2 className="text-sm font-semibold">Git</h2>
         <span className="text-xs text-muted-foreground">An approved version is published as a pull request; the repository&apos;s owners merge it.</span>
         <span className="flex-1" />

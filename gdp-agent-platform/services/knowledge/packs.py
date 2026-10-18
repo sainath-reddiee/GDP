@@ -228,7 +228,8 @@ def merge(execute: Callable[..., Any], database: str, data: Dict[str, Any], orig
                 WHEN MATCHED THEN UPDATE SET TARGET_DATABASE = s.TARGET_DATABASE, TARGET_SCHEMA = s.TARGET_SCHEMA,
                      TARGET_TABLE = s.TARGET_TABLE, TABLE_TYPE = s.TABLE_TYPE, GRAIN = s.GRAIN,
                      BUSINESS_KEYS = s.BUSINESS_KEYS, SCD_TYPE = s.SCD_TYPE, DESCRIPTION = s.DESCRIPTION,
-                     VERSION = s.VERSION, ACTIVE_FLAG = s.ACTIVE_FLAG, MODEL_SPEC = s.MODEL_SPEC
+                     VERSION = s.VERSION, MODEL_SPEC = s.MODEL_SPEC,
+                     ACTIVE_FLAG = IFF(t.RETIRED_AT IS NULL, s.ACTIVE_FLAG, FALSE)   -- a table people removed stays removed
                 WHEN NOT MATCHED THEN INSERT (TARGET_TABLE_ID, DOMAIN_ID, TARGET_DATABASE, TARGET_SCHEMA,
                      TARGET_TABLE, TABLE_TYPE, GRAIN, BUSINESS_KEYS, SCD_TYPE, DESCRIPTION, VERSION, ACTIVE_FLAG,
                      MODEL_SPEC)
