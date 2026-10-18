@@ -34,7 +34,7 @@ export function Sparkline({ values, className }: { values: number[]; className?:
 /** Thin progress meter with a tone that follows the value. */
 export function Meter({ value, tone }: { value: number | null | undefined; tone?: "auto" | "primary" }) {
   const v = Math.max(0, Math.min(100, value ?? 0));
-  const color = tone === "primary" ? "bg-gradient-to-r from-indigo-500 to-violet-500"
+  const color = tone === "primary" ? "bg-primary"
     : v >= 90 ? "bg-emerald-500" : v >= 70 ? "bg-amber-500" : "bg-rose-500";
   return (
     <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
@@ -50,7 +50,7 @@ export function RibbonMetric({ label, value, unit, hint, href, children }: {
     <Link href={href} className="group relative flex flex-col gap-1 rounded-xl p-4 transition hover:bg-card/60">
       <span className="text-xs font-medium uppercase tracking-[0.1em] text-muted-foreground">{label}</span>
       <span className="flex items-baseline gap-1">
-        <span className="bg-gradient-to-br from-foreground to-foreground/70 bg-clip-text text-[32px] font-semibold leading-none tracking-tight tabular-nums text-transparent">{value}</span>
+        <span className=" text-[32px] font-semibold leading-none tracking-tight tabular-nums">{value}</span>
         {unit && <span className="text-sm font-medium text-muted-foreground">{unit}</span>}
       </span>
       <span className="text-xs text-muted-foreground">{hint}</span>
@@ -60,14 +60,9 @@ export function RibbonMetric({ label, value, unit, hint, href, children }: {
   );
 }
 
-const STORE_TONE = {
-  indigo: "from-indigo-500 to-blue-500 shadow-indigo-500/25",
-  sky: "from-sky-500 to-cyan-500 shadow-sky-500/25",
-  violet: "from-violet-500 to-fuchsia-500 shadow-violet-500/25",
-  emerald: "from-emerald-500 to-teal-500 shadow-emerald-500/25",
-  amber: "from-amber-500 to-orange-500 shadow-amber-500/25",
-  rose: "from-rose-500 to-pink-500 shadow-rose-500/25",
-} as const;
+// one quiet icon tile for every store (slate and blue theme); the keys stay so callers need not change
+const TILE = "bg-accent text-primary ring-1 ring-inset ring-primary/15";
+const STORE_TONE = { indigo: TILE, sky: TILE, violet: TILE, emerald: TILE, amber: TILE, rose: TILE } as const;
 
 /** One asset store: what it holds, what needs action, and one task to start. The whole card opens the store (an
  *  overlay link, so the action button inside stays a separate, valid link). */
@@ -85,9 +80,8 @@ export function StoreCard({ title, subtitle, icon: Icon, tone, href, metrics, me
   return (
     <section data-testid={testId} className="surface card-lift group relative flex flex-col overflow-hidden p-5">
       <Link href={href} aria-label={`Open the ${title}`} className="absolute inset-0 z-0 rounded-2xl focus-visible:ring-2 focus-visible:ring-ring/50" />
-      <div className={cn("pointer-events-none absolute -right-12 -top-12 h-32 w-32 rounded-full bg-gradient-to-br opacity-[0.08] blur-2xl transition-opacity group-hover:opacity-[0.16]", STORE_TONE[tone])} />
       <div className="pointer-events-none relative flex items-start gap-3">
-        <span className={cn("grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-gradient-to-br text-white shadow-lg ring-1 ring-inset ring-white/20 transition duration-300 group-hover:scale-105 group-hover:shadow-xl", STORE_TONE[tone])}>
+        <span className={cn("grid h-10 w-10 shrink-0 place-items-center rounded-lg", STORE_TONE[tone])}>
           <Icon className="h-5 w-5" />
         </span>
         <div className="min-w-0 flex-1">
@@ -121,8 +115,8 @@ export function StoreCard({ title, subtitle, icon: Icon, tone, href, metrics, me
       <div className="relative mt-4 flex items-center gap-3 border-t border-border/60 pt-3">
         {alert && !missing ? (
           <span className={cn("pointer-events-none flex min-w-0 items-center gap-1.5 text-xs font-medium",
-            alert.tone === "rose" ? "text-rose-600" : alert.tone === "violet" ? "text-violet-600" : "text-amber-700")}>
-            <span className={cn("h-1.5 w-1.5 shrink-0 rounded-full", alert.tone === "rose" ? "bg-rose-500" : alert.tone === "violet" ? "bg-violet-500" : "bg-amber-500")} />
+            alert.tone === "rose" ? "text-rose-600" : alert.tone === "violet" ? "text-blue-600" : "text-amber-700")}>
+            <span className={cn("h-1.5 w-1.5 shrink-0 rounded-full", alert.tone === "rose" ? "bg-rose-500" : alert.tone === "violet" ? "bg-blue-500" : "bg-amber-500")} />
             <span className="truncate">{alert.text}</span>
           </span>
         ) : (

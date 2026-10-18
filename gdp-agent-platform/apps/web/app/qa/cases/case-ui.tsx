@@ -23,8 +23,8 @@ const STATUS_TONE: Record<string, string> = {
   NEW: "bg-rose-50 text-rose-700 ring-rose-100",
   TRIAGED: "bg-amber-50 text-amber-700 ring-amber-100",
   IN_PROGRESS: "bg-sky-50 text-sky-700 ring-sky-100",
-  FIX_PROPOSED: "bg-violet-50 text-violet-700 ring-violet-100",
-  FIX_APPLIED: "bg-indigo-50 text-indigo-700 ring-indigo-100",
+  FIX_PROPOSED: "bg-blue-50 text-blue-700 ring-blue-100",
+  FIX_APPLIED: "bg-blue-50 text-blue-700 ring-blue-100",
   VERIFIED: "bg-teal-50 text-teal-700 ring-teal-100",
   RESOLVED: "bg-emerald-50 text-emerald-700 ring-emerald-100",
   CLOSED: "bg-slate-100 text-slate-600 ring-slate-200",
@@ -44,7 +44,7 @@ export function CaseStatusPill({ status, className }: { status: string; classNam
 }
 
 export function CaseKindPill({ kind }: { kind: string }) {
-  return <span className={cn(pill, "bg-violet-50 text-violet-700 ring-violet-100")}>{caseKindLabel(kind)}</span>;
+  return <span className={cn(pill, "bg-blue-50 text-blue-700 ring-blue-100")}>{caseKindLabel(kind)}</span>;
 }
 
 export function SourceChip({ source }: { source: string }) {

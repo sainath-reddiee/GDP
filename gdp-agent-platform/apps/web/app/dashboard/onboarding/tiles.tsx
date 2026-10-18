@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useRef, useState, useTransition } from "react";
-import { AppWindow, CheckCircle2, FileJson, FileText, Loader2, Rocket, Upload, XCircle } from "lucide-react";
+import { AppWindow, CheckCircle2, FileJson, FileText, Loader2, Upload, XCircle } from "lucide-react";
 import type { OnboardingCheck } from "@/lib/hub-types";
 import { Modal } from "@/components/hub/overlay";
 import { ErrorNote } from "@/components/hub/states";
@@ -22,18 +22,14 @@ export function DomainImportCard({ openImport = false }: { openImport?: boolean 
   // "+ New" while already on this page changes only the query, so follow it after mount too
   useEffect(() => { if (openImport) setOpen(true); }, [openImport]);
   return (
-    <article className="surface relative flex flex-col overflow-hidden p-6">
-      <div className="absolute -right-12 -top-12 h-40 w-40 rounded-full bg-indigo-400/10 blur-2xl" />
-      <span className="grid h-11 w-11 place-items-center rounded-2xl bg-primary text-primary-foreground"><Rocket className="h-5 w-5" /></span>
-      <h2 className="mt-4 text-lg font-semibold">Import a domain pack</h2>
-      <p className="mt-1 text-sm text-muted-foreground">
-        Upload a domain_pack.json and its data contract (YAML or the platform&apos;s markdown contract). Both are validated before
-        anything is registered; importing registers targets, columns and knowledge exactly as a deploy would.
-      </p>
-      <div className="mt-5 flex flex-wrap gap-2">
-        <Button onClick={() => setOpen(true)} data-testid="import-domain"><Upload className="h-4 w-4" /> Import a domain pack</Button>
-        <Link href="/dashboard/modeling?view=tables&new=1" className={buttonVariants({ variant: "outline" })}>Design a table model instead</Link>
+    <article className="surface flex flex-wrap items-center gap-4 p-5">
+      <div className="min-w-0 flex-1">
+        <h2 className="text-base font-semibold">domain_pack.json and its data contract</h2>
+        <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
+          The contract can be YAML or the platform&apos;s markdown contract. Both are validated before anything is registered.
+        </p>
       </div>
+      <Button onClick={() => setOpen(true)} data-testid="import-domain"><Upload className="h-4 w-4" /> Choose files</Button>
       <ImportModal open={open} onClose={() => setOpen(false)} />
     </article>
   );
@@ -42,23 +38,16 @@ export function DomainImportCard({ openImport = false }: { openImport?: boolean 
 /** Application onboarding: not available yet; shows what is coming. */
 export function ApplicationCard() {
   return (
-    <article className="surface relative flex flex-col overflow-hidden border-dashed p-6">
-      <div className="flex items-start justify-between">
-        <span className="grid h-11 w-11 place-items-center rounded-2xl bg-slate-100 text-slate-500"><AppWindow className="h-5 w-5" /></span>
-        <span className="inline-flex items-center rounded-full bg-gradient-to-r from-violet-500 to-indigo-500 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide text-white shadow-sm">
-          Coming soon
-        </span>
-      </div>
-      <h2 className="mt-4 text-lg font-semibold text-foreground/80">Application onboarding</h2>
+    <article className="surface flex flex-col border-dashed p-5">
+      <h2 className="flex items-center gap-2 text-base font-semibold">
+        <AppWindow className="h-4 w-4 text-muted-foreground" /> Application onboarding is not available yet
+      </h2>
       <p className="mt-1 text-sm text-muted-foreground">
-        Connect upstream microservices and applications as first-class sources: their owners, data products and contracts,
-        feeding the Source Store and the quality gates.
+        Upstream applications will onboard as sources with their owners, data products and contracts.
       </p>
-      <p className="mt-4 text-xs font-semibold uppercase tracking-wide text-muted-foreground">On the roadmap</p>
-      <ul className="mt-2 space-y-1.5 text-sm text-muted-foreground">
-        {ROADMAP.map((r) => <li key={r} className="flex gap-2"><span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-violet-400" />{r}</li>)}
+      <ul className="mt-4 space-y-1.5 text-sm text-muted-foreground">
+        {ROADMAP.map((r) => <li key={r} className="flex gap-2"><span className="mt-2 h-1 w-1 shrink-0 rounded-full bg-muted-foreground/60" />{r}</li>)}
       </ul>
-      <Button className="mt-5 w-fit" variant="outline" disabled>Not available yet</Button>
     </article>
   );
 }

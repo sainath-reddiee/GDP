@@ -21,9 +21,10 @@ const EXAMPLE = JSON.stringify({
 }, null, 2);
 
 /** Add or update a domain's knowledge pack from the UI: AI draft from any contract, review the JSON, import. */
-export function PackEditor({ domains }: { domains: { domain_id: string; domain_name: string; label: string }[] }) {
+export function PackEditor({ domains, embedded = false }: { domains: { domain_id: string; domain_name: string; label: string }[]; embedded?: boolean }) {
   const router = useRouter();
-  const [open, setOpen] = useState(false);
+  // embedded in onboarding it is the chosen step itself, so it starts open and has no Close
+  const [open, setOpen] = useState(embedded);
   const [mode, setMode] = useState<Mode>("draft");
   const [contract, setContract] = useState("");
   const [standard, setStandard] = useState<"GDP" | "GENERIC">("GENERIC");
@@ -114,7 +115,7 @@ export function PackEditor({ domains }: { domains: { domain_id: string; domain_n
             </button>
           ))}
         </div>
-        <Button size="sm" variant="ghost" onClick={() => setOpen(false)}>Close</Button>
+        {!embedded && <Button size="sm" variant="ghost" onClick={() => setOpen(false)}>Close</Button>}
       </div>
 
       {mode === "draft" ? (

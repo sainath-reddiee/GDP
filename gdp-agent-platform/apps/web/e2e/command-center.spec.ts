@@ -42,7 +42,9 @@ for (const theme of ["light", "dark"] as const) {
       await tabs.getByRole("link", { name: "Gold Pipeline" }).click();
       await page.waitForURL(/\/gold$/);
       await expect(nav.getByRole("link", { name: "Pipelines", exact: true })).toHaveAttribute("aria-current", "page");
-      await expect(page.getByTestId("build-stamp")).toContainText("Build");
+      // the build is not shown to people; support reads it from the page metadata (and /bff/version)
+      await expect(page.getByTestId("build-stamp")).toHaveCount(0);
+      await expect(page.locator('meta[name="aip-build"]')).toHaveAttribute("content", /.+/);
     });
 
     test("a store card's action starts the task, the card opens the store", async ({ page }) => {
@@ -86,17 +88,30 @@ test("the theme toggle switches and remembers the theme", async ({ page, context
   await expect(page.locator("html")).toHaveClass(/dark/);
 });
 
-test("onboarding separates source, domain and application", async ({ page, context }) => {
+test("onboarding is one choice per step, and Change brings the options back", async ({ page, context }) => {
   await devSession(context, "light");
   await page.goto("/dashboard/sources/new?branch=external");
   await page.waitForURL(/\/dashboard\/onboarding\?type=source&branch=external/);
-  await expect(page.getByRole("heading", { name: "What are you onboarding?" })).toBeVisible();
-  await expect(page.getByRole("region", { name: "Source onboarding" })).toBeVisible();
-  await page.getByTestId("onboard-domain").click();
-  await expect(page.getByRole("region", { name: "Domain onboarding" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Onboarding" })).toBeVisible();
+  // a deep link arrives with both choices made: only the chosen ones show, and the route says where you are
+  await expect(page.getByTestId("onboard-kind-chosen")).toContainText("Source");
+  await expect(page.getByTestId("onboard-kind-domain")).toHaveCount(0);
+  await expect(page.getByTestId("onboard-source-chosen")).toContainText("External source");
+  await expect(page.getByTestId("ingestion-wizard")).toBeVisible();
+  await expect(page.getByTestId("onboard-route")).toContainText("onboard/source/external");
+  // Change brings the kinds back; a domain import shows the starter files and every accepted format
+  await page.getByTestId("onboard-kind-change").click();
+  await page.waitForURL(/\/dashboard\/onboarding$/);
+  await page.getByTestId("onboard-kind-domain").click();
+  await page.getByTestId("onboard-domain-import").click();
   await expect(page.getByTestId("import-domain")).toBeVisible();
-  await page.getByTestId("onboard-application").click();
-  await expect(page.getByRole("region", { name: "Application onboarding" }).getByText("Not available yet")).toBeVisible();
+  await expect(page.getByTestId("template-viewer")).toContainText("domain_pack.json");
+  await expect(page.getByTestId("formats-matrix")).toContainText("Erwin .xml");
+  // number keys pick an option
+  await page.getByTestId("onboard-kind-change").click();
+  await page.waitForURL(/\/dashboard\/onboarding$/);
+  await page.keyboard.press("3");
+  await expect(page.getByText("Application onboarding is not available yet")).toBeVisible();
 });
 
 test("an STTM Store edit is staged and sent for approval", async ({ page, context }) => {

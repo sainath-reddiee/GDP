@@ -447,6 +447,34 @@ def create_qa_pack(domain_id: str, body: PackIn, db: Db = Depends(current_db)):
     return _call(db, _svc("packs").create_pack, _domain_id(db, domain_id), json.dumps(body.model_dump()))
 
 
+class PackImportIn(BaseModel):
+    filename: str = Field(default="", max_length=255)
+    text: str = Field(min_length=6, max_length=500_000)
+    name: Optional[str] = Field(default=None, max_length=128)
+
+
+@router.post("/api/domains/{domain_id}/qa-packs/import")
+def import_qa_pack(domain_id: str, body: PackImportIn, db: Db = Depends(current_db)):
+    """A new draft pack from a .sql file: the platform's annotated pack format, or plain read-only queries separated
+    by ';' (a comment above a query names it). Every query passes the same read-only guard as a typed one; the draft
+    is then submitted and approved like any pack."""
+    from services.qa.pack_files import parse_any
+
+    stem = (body.filename or "").rsplit("/", 1)[-1].rsplit("\\", 1)[-1].rsplit(".", 1)[0].replace("_", " ").strip()
+    try:
+        parsed = parse_any(body.text, body.name or stem)
+    except ValueError as exc:
+        raise HTTPException(400, f"could not read {body.filename or 'the file'}: {exc}") from exc
+    if body.name:
+        parsed["name"] = body.name
+    if len(parsed["queries"]) > 200:
+        raise HTTPException(400, f"a pack holds at most 200 queries; the file has {len(parsed['queries'])}")
+    payload = {k: parsed[k] for k in ("name", "description", "tags", "queries")}
+    payload["change_note"] = f"Imported from {body.filename or 'a .sql file'}"
+    created = _call(db, _svc("packs").create_pack, _domain_id(db, domain_id), json.dumps(payload))
+    return {**created, "name": parsed["name"], "skipped": parsed["skipped"]}
+
+
 @router.get("/api/qa-packs/{pack_id}")
 def get_qa_pack(pack_id: str, version: Optional[int] = None, db: Db = Depends(current_db)):
     return _call(db, _svc("packs").get_pack, pack_id, version)

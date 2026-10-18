@@ -143,7 +143,7 @@ export function DomainTools({ domainId, name, deletable, reason, activeRuns, del
                   ))}
                 </div>
               )}
-              <p className="mt-2 text-[11px] text-muted-foreground">Answered from this domain&apos;s pack and knowledge · {answer.model}</p>
+              <p className="mt-2 text-[11px] text-muted-foreground">Answered from this domain&apos;s pack and knowledge</p>
             </div>
           )}
         </div>

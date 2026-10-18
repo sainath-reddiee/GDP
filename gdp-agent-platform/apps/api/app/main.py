@@ -1782,20 +1782,21 @@ def target_suggestions(run_id: str, tables: str = "", db: Db = Depends(current_d
 
 
 @app.get("/api/targets")
-def list_targets(db: Db = Depends(current_db)):
+def list_targets(domain_id: Optional[str] = None, db: Db = Depends(current_db)):
+    """Active registered silver targets; `domain_id` keeps one domain's (the domain page's Registered tables)."""
     from services.source.catalog_display import display_domain_name, is_hidden_target
 
     rows = db.query(
         """
-        SELECT T.TARGET_TABLE_ID, D.DOMAIN_NAME, T.TARGET_DATABASE, T.TARGET_SCHEMA, T.TARGET_TABLE,
+        SELECT T.TARGET_TABLE_ID, T.DOMAIN_ID, D.DOMAIN_NAME, T.TARGET_DATABASE, T.TARGET_SCHEMA, T.TARGET_TABLE,
                T.TABLE_TYPE, T.GRAIN,
                (SELECT COUNT(*) FROM CORE.TARGET_COLUMN_REGISTRY C
                  WHERE C.TARGET_TABLE_ID = T.TARGET_TABLE_ID) AS COLUMNS
           FROM CORE.TARGET_TABLE_REGISTRY T
           JOIN CORE.DOMAIN_REGISTRY D ON D.DOMAIN_ID = T.DOMAIN_ID
-         WHERE T.ACTIVE_FLAG AND COALESCE(T.LAYER, 'SILVER') = 'SILVER'
+         WHERE T.ACTIVE_FLAG AND COALESCE(T.LAYER, 'SILVER') = 'SILVER' AND (%s IS NULL OR T.DOMAIN_ID = %s)
          ORDER BY T.TARGET_TABLE
-        """
+        """, (domain_id, domain_id)
     )
     visible = []
     for row in rows:
@@ -1824,6 +1825,19 @@ def register_target(body: TargetBind, db: Db = Depends(current_db)):
         raise HTTPException(400, f"TARGET_NOT_VISIBLE: {database}.{schema}.{table}: {exc}") from exc
     if not raw:
         raise HTTPException(400, f"TARGET_NOT_VISIBLE: {database}.{schema}.{table}")
+    if body.domain_id:
+        # a table belongs to one domain: registering it here keeps the other domain's row, so say where it is instead
+        from services.source.catalog_display import display_domain_name
+
+        elsewhere = db.query(
+            """SELECT D.DOMAIN_NAME FROM CORE.TARGET_TABLE_REGISTRY T JOIN CORE.DOMAIN_REGISTRY D ON D.DOMAIN_ID = T.DOMAIN_ID
+                WHERE T.TARGET_DATABASE = %s AND T.TARGET_SCHEMA = %s AND T.TARGET_TABLE = %s AND T.ACTIVE_FLAG
+                  AND T.DOMAIN_ID <> %s LIMIT 1""",
+            (database, schema, table, body.domain_id),
+        )
+        if elsewhere:
+            raise HTTPException(409, f"{database}.{schema}.{table} is already in the {display_domain_name(elsewhere[0]['domain_name'])} "
+                                     "domain. Remove it there first, then add it here.")
     # Business keys come from the table's declared primary key; without one the STTM decides. Guessing from names
     # (every NOT NULL *_ID) marked foreign keys as keys and produced the wrong grain.
     try:
@@ -6736,3 +6750,6 @@ app.include_router(permanent_fix_router)
 from app.skill_scout_api import router as skill_scout_router  # noqa: E402
 
 app.include_router(skill_scout_router)
+from app.removal_api import router as removal_router  # noqa: E402
+
+app.include_router(removal_router)

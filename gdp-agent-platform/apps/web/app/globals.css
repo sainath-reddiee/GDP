@@ -3,87 +3,84 @@
 @tailwind utilities;
 
 @layer base {
-  /* SaaS palette: calm indigo primary, cool neutral surfaces, soft semantic tints. */
+  /* Slate and blue: slate surfaces, one blue accent, amber for what waits on a person, green for approved. Flat:
+     no gradients, glows or animated borders. */
   :root {
-    --background: 225 25% 97.5%;
-    --foreground: 224 40% 12%;
+    --background: 210 40% 98%;
+    --foreground: 222 47% 11%;
     --card: 0 0% 100%;
-    --card-foreground: 224 40% 12%;
-    --primary: 243 70% 58%;
+    --card-foreground: 222 47% 11%;
+    --primary: 224 76% 48%;
     --primary-foreground: 0 0% 100%;
-    --secondary: 228 24% 95.5%;
-    --secondary-foreground: 224 34% 18%;
-    --muted: 228 22% 96%;
-    --muted-foreground: 222 11% 45%;
-    --accent: 240 100% 97.5%;
-    --accent-foreground: 243 58% 44%;
-    --destructive: 356 72% 52%;
+    --secondary: 210 40% 96%;
+    --secondary-foreground: 222 47% 16%;
+    --muted: 210 40% 96%;
+    --muted-foreground: 215 16% 42%;
+    --accent: 214 100% 97%;
+    --accent-foreground: 226 71% 40%;
+    --destructive: 0 74% 42%;
     --destructive-foreground: 0 0% 100%;
-    --success: 156 62% 33%;
-    --warning: 30 90% 44%;
-    /* the two actors: indigo for agent work, orange for a human approval (the same pair as the landing page and the icon) */
-    --agent: 243 78% 59%;
-    --human: 14 77% 50%;
-    --border: 226 20% 91%;
-    --input: 226 16% 86%;
-    --ring: 243 70% 58%;
-    --sidebar: 236 36% 11%;
-    --sidebar-foreground: 230 22% 80%;
-    --radius: 0.75rem;
+    --success: 142 72% 29%;
+    --warning: 26 90% 37%;
+    /* the two actors: blue for agent work, amber for a human approval */
+    --agent: 221 83% 53%;
+    --human: 26 90% 37%;
+    --border: 214 32% 91%;
+    --input: 213 27% 84%;
+    --ring: 224 76% 48%;
+    --sidebar: 222 47% 11%;
+    --sidebar-foreground: 213 27% 84%;
+    --radius: 0.5rem;
     --font-sans: "Inter Variable", "Inter";
-    --shadow-xs: 0 1px 2px rgba(17, 24, 54, 0.05);
-    --shadow-card: 0 1px 2px rgba(17, 24, 54, 0.04), 0 2px 6px -1px rgba(17, 24, 54, 0.05);
-    --shadow-hover: 0 2px 4px rgba(17, 24, 54, 0.05), 0 10px 24px -8px rgba(17, 24, 54, 0.12);
-    --shadow-pop: 0 12px 40px -12px rgba(17, 24, 54, 0.28), 0 2px 6px rgba(17, 24, 54, 0.06);
-    --glass: 0 0% 100% / 0.72;
-    --glass-border: 226 20% 88% / 0.7;
-    --wash: 243 100% 96% / 0.7;
-    --wash-2: 190 90% 94% / 0.45;
+    --shadow-xs: 0 1px 2px rgba(15, 23, 42, 0.05);
+    --shadow-card: 0 1px 2px rgba(15, 23, 42, 0.05);
+    --shadow-hover: 0 1px 3px rgba(15, 23, 42, 0.08);
+    --shadow-pop: 0 8px 24px -8px rgba(15, 23, 42, 0.18), 0 1px 3px rgba(15, 23, 42, 0.06);
+    --glass: 0 0% 100% / 0.92;
+    --glass-border: 214 32% 91%;
+    --wash: 0 0% 100% / 0;
+    --wash-2: 0 0% 100% / 0;
     color-scheme: light;
   }
-  /* Dark theme: deep navy surfaces, the same indigo accent lifted for contrast (components/theme). */
+  /* Dark theme: slate-950 surfaces, the same blue lifted for contrast (components/theme). */
   .dark {
-    --background: 228 32% 7%;
-    --foreground: 226 30% 93%;
-    --card: 228 28% 10.5%;
-    --card-foreground: 226 30% 93%;
-    --primary: 243 85% 68%;
+    --background: 222 47% 7%;
+    --foreground: 210 40% 96%;
+    --card: 222 40% 10%;
+    --card-foreground: 210 40% 96%;
+    --primary: 217 91% 60%;
     --primary-foreground: 0 0% 100%;
-    --secondary: 228 22% 15%;
-    --secondary-foreground: 226 26% 88%;
-    --muted: 228 22% 14%;
-    --muted-foreground: 226 14% 62%;
-    --accent: 243 40% 18%;
-    --accent-foreground: 243 90% 84%;
-    --destructive: 356 78% 62%;
+    --secondary: 217 33% 17%;
+    --secondary-foreground: 210 40% 90%;
+    --muted: 217 33% 15%;
+    --muted-foreground: 215 20% 65%;
+    --accent: 217 50% 18%;
+    --accent-foreground: 213 94% 80%;
+    --destructive: 0 72% 60%;
     --destructive-foreground: 0 0% 100%;
-    --success: 156 58% 50%;
-    --warning: 36 92% 58%;
-    --agent: 243 92% 74%;
-    --human: 18 95% 64%;
-    --border: 228 20% 18%;
-    --input: 228 18% 24%;
-    --ring: 243 85% 68%;
-    --sidebar: 230 36% 5.5%;
-    --sidebar-foreground: 230 22% 78%;
+    --success: 142 60% 45%;
+    --warning: 38 92% 55%;
+    --agent: 217 91% 65%;
+    --human: 38 92% 58%;
+    --border: 217 33% 18%;
+    --input: 217 25% 26%;
+    --ring: 217 91% 60%;
+    --sidebar: 222 47% 5%;
+    --sidebar-foreground: 213 27% 80%;
     --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.4);
-    --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.35), 0 0 0 1px rgba(255, 255, 255, 0.015);
-    --shadow-hover: 0 2px 6px rgba(0, 0, 0, 0.4), 0 14px 32px -10px rgba(0, 0, 0, 0.6);
-    --shadow-pop: 0 20px 50px -12px rgba(0, 0, 0, 0.7), 0 0 0 1px rgba(255, 255, 255, 0.04);
-    --glass: 228 28% 11% / 0.66;
-    --glass-border: 226 30% 80% / 0.08;
-    --wash: 243 80% 40% / 0.22;
-    --wash-2: 190 90% 40% / 0.1;
+    --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.35);
+    --shadow-hover: 0 1px 3px rgba(0, 0, 0, 0.45);
+    --shadow-pop: 0 12px 32px -10px rgba(0, 0, 0, 0.7), 0 0 0 1px rgba(255, 255, 255, 0.04);
+    --glass: 222 40% 10% / 0.94;
+    --glass-border: 217 33% 18%;
+    --wash: 0 0% 0% / 0;
+    --wash-2: 0 0% 0% / 0;
     color-scheme: dark;
   }
   * { @apply border-border; }
   html { -webkit-text-size-adjust: 100%; }
   body {
     @apply bg-background text-foreground antialiased;
-    /* a faint indigo and cyan wash behind the top of every page */
-    background-image: radial-gradient(1100px 340px at 25% -140px, hsl(var(--wash)), transparent 70%),
-      radial-gradient(800px 280px at 90% -160px, hsl(var(--wash-2)), transparent 70%);
-    background-repeat: no-repeat;
     font-family: var(--font-sans), "Segoe UI", ui-sans-serif, system-ui, sans-serif;
     font-feature-settings: "cv11", "ss01";
   }
@@ -114,7 +111,7 @@
   /* Menus and popovers: solid, since a backdrop blur does not apply inside the already blurred top bar. */
   .popover { @apply rounded-2xl border border-border bg-card text-card-foreground; box-shadow: var(--shadow-pop); }
   .hairline { @apply border-border/70; }
-  .glow-ring { box-shadow: 0 0 0 1px hsl(var(--primary) / 0.25), 0 8px 30px -10px hsl(var(--primary) / 0.45); }
+  .glow-ring { box-shadow: 0 0 0 1px hsl(var(--primary) / 0.3); }
   .eyebrow { @apply text-[11px] font-semibold uppercase tracking-[0.14em] text-primary/90; }
   .display { @apply text-[30px] font-semibold leading-[1.1] tracking-[-0.025em]; }
   .kbd {
@@ -155,7 +152,7 @@
   0%, 100% { opacity: 0.55; }
   50% { opacity: 1; }
 }
-.animate-glow { animation: glow-pulse 2.2s ease-in-out infinite; }
+.animate-glow { animation: none; }
 
 @keyframes stage-in {
   from { opacity: 0; transform: translateY(8px) scale(0.99); }
@@ -179,31 +176,12 @@
 }
 .animate-pop-in { animation: pop-in 0.16s cubic-bezier(0.2, 0.8, 0.2, 1) both; }
 
-/* Lift and glow on hover, for linked cards (store cards). */
-.card-lift { transition: transform 0.25s cubic-bezier(0.2, 0.8, 0.2, 1), box-shadow 0.25s ease, border-color 0.25s ease; }
-.card-lift:hover {
-  transform: translateY(-3px);
-  border-color: hsl(var(--primary) / 0.35);
-  box-shadow: 0 0 0 1px hsl(var(--primary) / 0.12), 0 22px 44px -22px hsl(var(--primary) / 0.5);
-}
+/* Linked cards (store cards): a firmer border on hover, no lift or glow. */
+.card-lift { transition: border-color 0.15s ease, background-color 0.15s ease; }
+.card-lift:hover { border-color: hsl(var(--primary) / 0.45); }
 
-/* A slowly turning gradient hairline around a band (the Command Center ribbon). */
-@property --aurora-angle { syntax: "<angle>"; initial-value: 0deg; inherits: false; }
-@keyframes aurora-spin { to { --aurora-angle: 360deg; } }
-.aurora-border { position: relative; isolation: isolate; }
-.aurora-border::before {
-  content: ""; position: absolute; inset: 0; z-index: 1; border-radius: inherit; padding: 1px;
-  background: conic-gradient(from var(--aurora-angle), hsl(var(--primary) / 0.1), #22d3ee99, hsl(var(--primary) / 0.1), #a855f799, hsl(var(--primary) / 0.1));
-  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
-  -webkit-mask-composite: xor; mask-composite: exclude;
-  animation: aurora-spin 8s linear infinite;
-  pointer-events: none;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .card-lift:hover { transform: none; }
-  .aurora-border::before { animation: none; }
-}
+/* The Command Center ribbon: a plain hairline (the class name is kept for the components that use it). */
+.aurora-border { position: relative; border: 1px solid hsl(var(--border)); }
 
 /* the theme switch itself should not animate every color on the page */
 html.theme-switching *, html.theme-switching *::before, html.theme-switching *::after { transition: none !important; }

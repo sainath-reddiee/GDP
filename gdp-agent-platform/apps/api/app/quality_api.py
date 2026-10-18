@@ -210,6 +210,33 @@ def seed(body: SeedIn, db: Db = Depends(current_db)):
     return _call(db, dq_suite.seed_run, body.run_id, _user(db))
 
 
+class GenerateIn(BaseModel):
+    table: str = Field(min_length=5, max_length=800)
+    text: str = Field(min_length=10, max_length=200_000)
+    filename: str = Field(default="", max_length=255)
+    domain_id: Optional[str] = Field(default=None, max_length=36)
+
+
+@router.post("/api/dq/catalog/generate")
+def generate_from_requirement(body: GenerateIn, db: Db = Depends(current_db)):
+    """The checks a client requirement asks for, staged into the table's suite draft (reviewed, backtested and approved
+    like any change). CSV or JSON rows are mapped as given; a free-text brief is read by AI, so it also needs AI.USE."""
+    from app.cases_api import _who
+    from services.catalog import dq_requirements
+    from services.soda.extract import parse_client_document
+
+    try:
+        structured = bool(parse_client_document(body.text, body.filename).get("rows"))
+    except Exception as exc:
+        raise HTTPException(400, f"could not read the requirement: {str(exc)[:200]}") from exc
+    if not structured:
+        privileges = _who(db)["privileges"]
+        if "AI.USE" not in privileges and "*" not in privileges:
+            raise HTTPException(403, "Not allowed: reading a free-text requirement with AI needs the AI.USE privilege. "
+                                     "Upload it as CSV or JSON rows instead, or ask for AI.USE.")
+    return _call(db, dq_requirements.generate, body.table, body.text, body.filename, _user(db), body.domain_id)
+
+
 class RunIn(BaseModel):
     table: str = Field(min_length=5, max_length=800)
     check_ids: Optional[list[str]] = Field(default=None, max_length=500)
@@ -445,6 +472,15 @@ class PublishIn(BaseModel):
     repo_id: str = Field(min_length=1, max_length=64)
     base: Optional[str] = Field(default=None, max_length=200)
     title: Optional[str] = Field(default=None, max_length=200)
+
+
+@router.get("/api/dq/soda-cloud/ci")
+def soda_cloud_ci():
+    """The GitHub Actions workflow and scan script that publish merged suites to Soda Cloud (committed once by a
+    person; the platform never holds Soda Cloud keys)."""
+    from services.soda import cloud_ci
+
+    return {"files": cloud_ci.files(), "secrets": cloud_ci.SECRETS}
 
 
 @router.get("/api/dq/suites/publishing")

@@ -182,7 +182,7 @@ function Hero({ onSignIn }: { onSignIn: () => void }) {
                   <span className="lp-mono w-5 text-[11px] text-[color:var(--muted)]">{String(i + 1).padStart(2, "0")}</span>
                   <span className="flex-1 text-[14px]">{m.item}</span>
                   <span className="flex items-center gap-1.5">
-                    <span className="inline-flex items-center gap-1 rounded-full bg-[#4b44e8]/10 px-2 py-0.5 text-[10px] font-semibold text-[color:var(--agent)]"><Bot className="h-3 w-3" /> Agent</span>
+                    <span className="inline-flex items-center gap-1 rounded-full bg-[#1d4ed8]/10 px-2 py-0.5 text-[10px] font-semibold text-[color:var(--agent)]"><Bot className="h-3 w-3" /> Agent</span>
                     {m.human && <span title={m.human} className="inline-flex items-center gap-1 rounded-full bg-[#e4572e]/10 px-2 py-0.5 text-[10px] font-semibold text-[color:var(--human)]"><UserCheck className="h-3 w-3" /> Approval</span>}
                   </span>
                 </li>
@@ -238,7 +238,7 @@ function AgentAtWork() {
         <div className="mt-6 flex flex-wrap gap-x-6 gap-y-2 text-[12px] text-[#9b978c]">
           <span className="flex items-center gap-2"><span className="h-2 w-2 rounded-full bg-[#8b89ff]" /> Agent tool call</span>
           <span className="flex items-center gap-2"><span className="h-2 w-2 rounded-full bg-[#29b5e8]" /> Cortex AI assist</span>
-          <span className="flex items-center gap-2"><span className="h-2 w-2 rounded-full bg-[#ff7a3d]" /> Human approval</span>
+          <span className="flex items-center gap-2"><span className="h-2 w-2 rounded-full bg-[#b45309]" /> Human approval</span>
         </div>
         <NextChapter href="#knowledge" label="Why it gets smarter with every run" dark />
       </div>

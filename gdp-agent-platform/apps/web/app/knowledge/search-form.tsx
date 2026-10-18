@@ -54,11 +54,11 @@ export function KnowledgeSearch({ domains }: { domains: string[] }) {
       </form>
       {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
       {answer && (
-        <div className="rounded-lg border border-violet-200 bg-violet-50/40 p-3 text-sm dark:border-violet-900 dark:bg-violet-950/20">
+        <div className="rounded-lg border border-blue-200 bg-blue-50/40 p-3 text-sm dark:border-blue-900 dark:bg-blue-950/20">
           <p className="whitespace-pre-wrap">{answer.text}</p>
           {answer.citations.length > 0 && (
             <p className="mt-2 text-[11px] text-muted-foreground">
-              From: {answer.citations.map((c) => `${c.DOMAIN_NAME} · ${c.TITLE}`).join("; ")}{answer.model ? ` · ${answer.model}` : ""}
+              From: {answer.citations.map((c) => `${c.DOMAIN_NAME} · ${c.TITLE}`).join("; ")}
             </p>
           )}
         </div>

@@ -32,7 +32,7 @@ export const PERMANENT_FIX_STATUS: Record<string, { label: string; tone: string;
   DRAFTED: { label: "Waiting for review", tone: "bg-human/10 text-human", hint: "A second person accepts or rejects it" },
   ACCEPTED: { label: "Accepted", tone: "bg-sky-100 text-sky-800", hint: "Ready to open its pull request" },
   REJECTED: { label: "Rejected", tone: "bg-muted text-muted-foreground", hint: "A reviewer did not take it" },
-  PUBLISHED: { label: "Pull request open", tone: "bg-violet-100 text-violet-800", hint: "Waiting for the repository's reviewers" },
+  PUBLISHED: { label: "Pull request open", tone: "bg-blue-100 text-blue-800", hint: "Waiting for the repository's reviewers" },
   MERGED: { label: "Merged", tone: "bg-success/10 text-success", hint: "The change is in the repository" },
   CLOSED: { label: "Closed", tone: "bg-muted text-muted-foreground", hint: "The pull request closed without merging" },
   SUPERSEDED: { label: "Replaced", tone: "bg-muted text-muted-foreground", hint: "A newer draft replaced it" },

@@ -34,15 +34,15 @@ const KINDS = [
 ];
 const KIND_TONE: Record<string, string> = {
   DBT_MODEL: "bg-orange-50 text-orange-700 ring-orange-100", DBT_SNAPSHOT: "bg-amber-50 text-amber-700 ring-amber-100",
-  DBT_MACRO: "bg-violet-50 text-violet-700 ring-violet-100", DBT_TEST: "bg-emerald-50 text-emerald-700 ring-emerald-100",
+  DBT_MACRO: "bg-blue-50 text-blue-700 ring-blue-100", DBT_TEST: "bg-emerald-50 text-emerald-700 ring-emerald-100",
   DBT_SCHEMA_YML: "bg-sky-50 text-sky-700 ring-sky-100", DBT_SOURCE: "bg-teal-50 text-teal-700 ring-teal-100",
-  SQL: "bg-indigo-50 text-indigo-700 ring-indigo-100", PY_FUNC: "bg-yellow-50 text-yellow-800 ring-yellow-100",
+  SQL: "bg-blue-50 text-blue-700 ring-blue-100", PY_FUNC: "bg-yellow-50 text-yellow-800 ring-yellow-100",
   DOC: "bg-slate-100 text-slate-600 ring-slate-200", CONFIG: "bg-slate-100 text-slate-600 ring-slate-200",
 };
 const VIA_LABEL: Record<string, string> = {
   REF: "ref", SOURCE: "source", MACRO_USE: "macro", CALLS: "calls", IMPORTS: "imports", READS: "reads table", WRITES: "writes",
 };
-const STATUS_DOT: Record<string, string> = { READY: "bg-emerald-500", INDEXING: "bg-indigo-500 animate-pulse", FAILED: "bg-rose-500", NEW: "bg-slate-400" };
+const STATUS_DOT: Record<string, string> = { READY: "bg-emerald-500", INDEXING: "bg-blue-500 animate-pulse", FAILED: "bg-rose-500", NEW: "bg-slate-400" };
 const kindLabel = (k: string) => k.replace(/^DBT_/, "").replace("SCHEMA_YML", "schema").replace("PY_FUNC", "python").replace(/_/g, " ").toLowerCase();
 const pct = (n: number, d: number) => (d ? Math.round((n / d) * 100) : 0);
 const bytes = (n: number | null) => (n == null ? "" : n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(1)} KB` : `${(n / 1048576).toFixed(1)} MB`);
@@ -153,7 +153,7 @@ export function CodeExplorer({ repos, summary, usage, initial }: {
   if (!repos.length) {
     return (
       <div className="surface flex flex-col items-center px-6 py-14 text-center">
-        <span className="grid h-12 w-12 place-items-center rounded-2xl bg-indigo-50 text-indigo-600 ring-1 ring-inset ring-indigo-100"><FolderGit2 className="h-6 w-6" /></span>
+        <span className="grid h-12 w-12 place-items-center rounded-2xl bg-blue-50 text-blue-600 ring-1 ring-inset ring-blue-100"><FolderGit2 className="h-6 w-6" /></span>
         <p className="mt-3 text-sm font-semibold">No repositories connected</p>
         <p className="mt-1 max-w-md text-xs text-muted-foreground">Connect the client&apos;s dbt or SQL repository in Admin, Integrations. Once indexed, dbt review, QA tests,
           data quality checks, STTM and the copilot reuse its models, macros and tests, and the dbt workspace builds on it.</p>
@@ -265,7 +265,7 @@ function RepoHeader({ repo, catalog }: { repo: CodeRepo; catalog?: Catalog }) {
       <div className="min-w-0">
         <p className="flex items-center gap-2 text-base font-semibold">{repo.name}
           <span className={cn("rounded-full px-2 py-0.5 text-[10px] font-medium ring-1 ring-inset",
-            repo.status === "READY" ? "bg-emerald-50 text-emerald-700 ring-emerald-100" : repo.status === "FAILED" ? "bg-rose-50 text-rose-700 ring-rose-100" : "bg-indigo-50 text-indigo-700 ring-indigo-100")}>
+            repo.status === "READY" ? "bg-emerald-50 text-emerald-700 ring-emerald-100" : repo.status === "FAILED" ? "bg-rose-50 text-rose-700 ring-rose-100" : "bg-blue-50 text-blue-700 ring-blue-100")}>
             {repo.status.toLowerCase()}</span>
           {repo.use_for_dbt !== false && <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-medium text-emerald-700 ring-1 ring-inset ring-emerald-100">dbt workspace{repo.dbt_project_dir ? `: ${repo.dbt_project_dir}/` : ""}</span>}
         </p>
@@ -308,12 +308,12 @@ function AllRepos({ repos, summary, onPick }: { repos: CodeRepo[]; summary: Reco
 function Results({ hits, onOpen }: { hits: CodeHit[]; onOpen: (repo: string, path: string, at?: number, name?: string | null) => void }) {
   return (
     <section className="space-y-2">
-      <p className="text-xs text-muted-foreground">{hits.length} result{hits.length === 1 ? "" : "s"} · <Sparkles className="inline h-3 w-3 text-violet-500" /> marks a match by meaning rather than by name</p>
+      <p className="text-xs text-muted-foreground">{hits.length} result{hits.length === 1 ? "" : "s"} · <Sparkles className="inline h-3 w-3 text-blue-500" /> marks a match by meaning rather than by name</p>
       {hits.map((h) => (
         <button key={h.chunk_id} type="button" onClick={() => onOpen(h.repo_id, h.path, h.start_line, h.name)}
                 className="w-full rounded-xl border border-border/80 bg-card p-3 text-left transition hover:border-primary/30 hover:shadow-card">
           <p className="flex flex-wrap items-center gap-1.5 text-sm font-medium"><KindPill kind={h.kind} />{h.name ?? h.path.split("/").pop()}
-            {h.match === "search" && <Sparkles className="h-3 w-3 text-violet-500" aria-label="semantic match" />}</p>
+            {h.match === "search" && <Sparkles className="h-3 w-3 text-blue-500" aria-label="semantic match" />}</p>
           <p className="truncate font-mono text-[11px] text-muted-foreground">{h.repo_name}:{h.path}:{h.start_line}-{h.end_line}</p>
           <pre className="mt-1.5 line-clamp-3 whitespace-pre-wrap font-mono text-[11px] text-muted-foreground">{h.text}</pre>
         </button>
@@ -373,7 +373,7 @@ function OverviewTab({ repo, catalog, summary, onOpen, onLineage, onSearch }: {
           {langs.length > 0 && (
             <div>
               <div className="flex h-2 overflow-hidden rounded-full">{langs.map(([l, n], i) => (
-                <div key={l} style={{ width: `${pct(n, langTotal)}%` }} className={["bg-indigo-500", "bg-sky-500", "bg-amber-500", "bg-emerald-500", "bg-rose-500", "bg-slate-400"][i % 6]} title={`${l} ${n}`} />
+                <div key={l} style={{ width: `${pct(n, langTotal)}%` }} className={["bg-blue-500", "bg-sky-500", "bg-amber-500", "bg-emerald-500", "bg-rose-500", "bg-slate-400"][i % 6]} title={`${l} ${n}`} />
               ))}</div>
               <p className="mt-1.5 flex flex-wrap gap-x-3 text-[11px] text-muted-foreground">{langs.map(([l, n]) => <span key={l}>{l || "other"} {n} ({pct(n, langTotal)}%)</span>)}</p>
             </div>
@@ -405,7 +405,7 @@ function OverviewTab({ repo, catalog, summary, onOpen, onLineage, onSearch }: {
             <div>
               <p className="mb-1 text-xs font-medium">Most called macros</p>
               <div className="flex flex-wrap gap-1">{summary.dbt.top_macros.slice(0, 8).map((m) => (
-                <button key={m.name} type="button" onClick={() => onSearch(m.name)} className="rounded-md bg-violet-50 px-2 py-0.5 font-mono text-[11px] text-violet-700 hover:bg-violet-100">{m.name} · {m.uses} call{m.uses === 1 ? "" : "s"}</button>
+                <button key={m.name} type="button" onClick={() => onSearch(m.name)} className="rounded-md bg-blue-50 px-2 py-0.5 font-mono text-[11px] text-blue-700 hover:bg-blue-100">{m.name} · {m.uses} call{m.uses === 1 ? "" : "s"}</button>
               ))}</div>
             </div>
           )}
@@ -720,7 +720,7 @@ function ImpactPanel({ imp, repoId, onPick, onLineage }: { imp: Impact; repoId: 
   const chip = (n: GraphNode, tone: string) => (
     <button key={`${n.name}-${n.depth}`} type="button" onClick={() => onPick(short(n.name))} title={`${VIA_LABEL[n.via] ?? n.via} · via ${n.from}${n.path ? ` · ${n.path}` : ""}`}
             className={cn("inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 font-mono hover:border-primary", tone)}>
-      {n.via === "MACRO_USE" ? <Sparkles className="h-2.5 w-2.5 text-violet-500" /> : n.via === "SOURCE" ? <Boxes className="h-2.5 w-2.5 text-teal-600" /> : <Network className="h-2.5 w-2.5 text-orange-600" />}
+      {n.via === "MACRO_USE" ? <Sparkles className="h-2.5 w-2.5 text-blue-500" /> : n.via === "SOURCE" ? <Boxes className="h-2.5 w-2.5 text-teal-600" /> : <Network className="h-2.5 w-2.5 text-orange-600" />}
       {n.name}
     </button>
   );
@@ -802,7 +802,7 @@ function FileView({ file, line, imp, loading, back, onClose, onPick, onLineage }
               const n = i + 1;
               const inChunk = active && active.start_line <= n && n <= active.end_line;
               return (
-                <tr key={n} data-line={n} className={cn(n === line ? "bg-amber-100/70" : inChunk ? "bg-indigo-50/60" : "")}>
+                <tr key={n} data-line={n} className={cn(n === line ? "bg-amber-100/70" : inChunk ? "bg-blue-50/60" : "")}>
                   <td className="w-12 select-none border-r px-2 text-right align-top text-muted-foreground/60">{n}</td>
                   <td className="whitespace-pre px-3">{text || " "}</td>
                 </tr>

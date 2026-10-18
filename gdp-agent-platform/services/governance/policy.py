@@ -227,6 +227,7 @@ RULES: List[Tuple[str, str, Any, str]] = [
     ("DELETE", r"/api/qa/suites/[^/]+", "QA.EDIT", ""),
     # QA Store: domain test packages (services/qa/packs.py); approving a version is four eyes by default policy
     ("POST", r"/api/domains/[^/]+/qa-packs", "PACKAGE.EDIT", "Create a domain QA pack"),
+    ("POST", r"/api/domains/[^/]+/qa-packs/import", "PACKAGE.EDIT", "Import a domain QA pack from a .sql file"),
     ("PUT", r"/api/qa-packs/[^/]+", "PACKAGE.EDIT", "Edit a domain QA pack"),
     ("POST", r"/api/qa-packs/[^/]+/(submit|reject)", "PACKAGE.EDIT", ""),
     ("POST", r"/api/qa-packs/[^/]+/approve", "PACKAGE.APPROVE", "Approve a domain QA pack version"),
@@ -244,7 +245,7 @@ RULES: List[Tuple[str, str, Any, str]] = [
     # suite version is then submitted and approved by a DQ_APPROVER (SODA.APPROVE, four eyes), which is the approval,
     # so these routes are never queued (NO_QUEUE_ROUTES); a scan is read-only
     ("POST", r"/api/dq/parse", None, ""),
-    ("POST", r"/api/dq/catalog(/seed)?", "SODA.EDIT", "Change a data quality suite draft"),
+    ("POST", r"/api/dq/catalog(/seed|/generate)?", "SODA.EDIT", "Change a data quality suite draft"),
     ("POST", r"/api/dq/catalog/[^/]+/status", "SODA.EDIT", "Pause, resume or retire a check in a suite draft"),
     ("POST", r"/api/dq/suites/(draft|submit|withdraw)", "SODA.EDIT", ""),
     ("PUT", r"/api/dq/suites/draft", "SODA.EDIT", ""),
@@ -398,6 +399,8 @@ RULES: List[Tuple[str, str, Any, str]] = [
     ("POST", r"/api/ingest-jobs/[^/]+/cancel", "PROFILE.RUN", ""),
     ("POST", r"/api/(sources/[^/]+/modeling-run|catalog/modeling-run|runs)", "RUN.CREATE", ""),
     ("POST", r"/api/targets/register", "MODEL.EDIT", ""),
+    ("POST", r"/api/targets/[^/]+/(retire|restore)", "DOMAIN.EDIT", "Remove or restore a domain table"),
+    ("POST", r"/api/sources/[^/]+/(retire|restore)", "SOURCE.CONNECT", "Remove or restore a source"),
     ("POST", r"/api/runs/(batch-archive|batch-cleanup)", "RUN.ARCHIVE", ""),
     ("POST", rf"{R}/(archive|restore)", "RUN.ARCHIVE", ""),
     ("POST", rf"{R}/review", lambda body: REVIEW_TARGETS.get(str((body or {}).get("to_state") or "").upper(), "REVIEW.DECIDE"),
@@ -450,10 +453,14 @@ STORE_ROUTES = [(m, re.compile(p)) for m, p in [
     ("POST", r"^/api/hub/sttm/[^/]+/edit$"),
     ("PUT", r"^/api/dq/schedules$"), ("DELETE", r"^/api/dq/schedules$"),
     ("POST", r"^/api/dq/run-checks/decisions$"),
+    # removing (and restoring) a domain table, a source or a knowledge item always needs another person's approval
+    ("POST", r"^/api/targets/[^/]+/(retire|restore)$"), ("POST", r"^/api/sources/[^/]+/(retire|restore)$"),
+    ("POST", r"^/api/knowledge/[^/]+/(retire|restore)$"),
 ]]
 # approver when a privilege has no approval policy of its own
 STORE_APPROVERS = {"STTM.EDIT": "STTM_APPROVER", "SODA.EDIT": "DQ_APPROVER", "DBT.EDIT": "CODE_REVIEWER",
-                   "MAPPING.DECIDE": "MODEL_APPROVER", "MODEL.EDIT": "MODEL_APPROVER"}
+                   "MAPPING.DECIDE": "MODEL_APPROVER", "MODEL.EDIT": "MODEL_APPROVER",
+                   "DOMAIN.EDIT": "DATA_STEWARD", "KNOWLEDGE.EDIT": "DATA_STEWARD", "SOURCE.CONNECT": "PLATFORM_ADMIN"}
 
 
 # Routes whose own workflow is the approval (Model Workbench and Data Quality suite drafts, reviews and decisions,
@@ -463,7 +470,7 @@ STORE_APPROVERS = {"STTM.EDIT": "STTM_APPROVER", "SODA.EDIT": "DQ_APPROVER", "DB
 NO_QUEUE_ROUTES = [(m, re.compile(p)) for m, p in [
     ("POST", r"^/api/hub/domain-models(/.*)?$"), ("PUT", r"^/api/hub/domain-models/.+$"),
     ("POST", r"^/api/hub/table-models(/.*)?$"), ("PUT", r"^/api/hub/table-models/.+$"),
-    ("POST", r"^/api/dq/catalog$"), ("POST", r"^/api/dq/catalog/seed$"), ("POST", r"^/api/dq/catalog/[^/]+/status$"),
+    ("POST", r"^/api/dq/catalog$"), ("POST", r"^/api/dq/catalog/(seed|generate)$"), ("POST", r"^/api/dq/catalog/[^/]+/status$"),
     ("POST", r"^/api/dq/suites/.+$"), ("PUT", r"^/api/dq/suites/.+$"),
     ("POST", r"^/api/hub/profiles/annotations(/.*)?$"),
     ("POST", r"^/api/hub/sttm/[^/]+/publish$"),

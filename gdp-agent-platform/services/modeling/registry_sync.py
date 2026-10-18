@@ -121,11 +121,11 @@ def _write_columns(session, table_id: str, values: List[List[Any]]) -> int:
 
 def _find_table(session, entity: Dict[str, Any], domain_id: str, database: str, schema: str,
                 layer: str = "SILVER") -> Optional[Dict[str, Any]]:
-    found = _rows(session, "SELECT TARGET_TABLE_ID, TARGET_TABLE FROM CORE.TARGET_TABLE_REGISTRY WHERE TARGET_TABLE_ID = ?",
+    found = _rows(session, "SELECT TARGET_TABLE_ID, TARGET_TABLE, RETIRED_AT FROM CORE.TARGET_TABLE_REGISTRY WHERE TARGET_TABLE_ID = ?",
                   [entity["id"]])
     if found:
         return found[0]
-    found = _rows(session, """SELECT TARGET_TABLE_ID, TARGET_TABLE FROM CORE.TARGET_TABLE_REGISTRY
+    found = _rows(session, """SELECT TARGET_TABLE_ID, TARGET_TABLE, RETIRED_AT FROM CORE.TARGET_TABLE_REGISTRY
                                WHERE DOMAIN_ID = ? AND UPPER(TARGET_DATABASE) = UPPER(?) AND UPPER(TARGET_SCHEMA) = UPPER(?)
                                  AND UPPER(TARGET_TABLE) = UPPER(?) AND COALESCE(LAYER, 'SILVER') = ?
                                ORDER BY ACTIVE_FLAG DESC LIMIT 1""", [domain_id, database, schema, entity["entity_name"], layer])
@@ -138,7 +138,7 @@ def apply_spec(session, spec: Dict[str, Any], domain_id: str, model_id: str, ver
     Returns what was registered and deactivated."""
     from services.common.sql import insert_rows
 
-    registered, deactivated, columns = [], [], 0
+    registered, deactivated, kept_removed, columns = [], [], [], 0
     applied_ids = []
     for entity in spec["design"]["entities"]:
         if layer == "GOLD" and entity.get("conformed_from"):
@@ -161,11 +161,16 @@ def apply_spec(session, spec: Dict[str, Any], domain_id: str, model_id: str, ver
                   model_id, int(version), layer]
         if existing:
             table_id = existing["TARGET_TABLE_ID"]
+            # a table removed from the domain through an approval (V068) stays removed when a model version is applied:
+            # its definition is kept current, and only Restore (also approved) brings it back
+            removed = bool(existing.get("RETIRED_AT"))
+            if removed:
+                kept_removed.append(entity["entity_name"])
             session.sql("""UPDATE CORE.TARGET_TABLE_REGISTRY SET TARGET_DATABASE = ?, TARGET_SCHEMA = ?, TARGET_TABLE = ?,
                                   TABLE_TYPE = ?, GRAIN = ?, BUSINESS_KEYS = PARSE_JSON(?), SCD_TYPE = ?, DESCRIPTION = ?,
                                   MODEL_SPEC = PARSE_JSON(?), MODEL_ID = ?, MODEL_VERSION = ?, LAYER = ?,
-                                  ACTIVE_FLAG = TRUE, DOMAIN_ID = ?
-                            WHERE TARGET_TABLE_ID = ?""", params=values + [domain_id, table_id]).collect()
+                                  ACTIVE_FLAG = ?, DOMAIN_ID = ?
+                            WHERE TARGET_TABLE_ID = ?""", params=values + [not removed, domain_id, table_id]).collect()
         else:
             table_id = str(entity["id"])
             insert_rows(session, "CORE.TARGET_TABLE_REGISTRY",
@@ -191,7 +196,7 @@ def apply_spec(session, spec: Dict[str, Any], domain_id: str, model_id: str, ver
             session.sql("UPDATE CORE.TARGET_TABLE_REGISTRY SET ACTIVE_FLAG = FALSE, MODEL_VERSION = ? "
                         "WHERE TARGET_TABLE_ID = ?", params=[int(version), g["TARGET_TABLE_ID"]]).collect()
             deactivated.append(g["TARGET_TABLE"])
-    return {"registered": registered, "deactivated": deactivated, "columns": columns}
+    return {"registered": registered, "deactivated": deactivated, "kept_removed": kept_removed, "columns": columns}
 
 
 def _snapshot(session, domain_id: str, note: str) -> Optional[int]:

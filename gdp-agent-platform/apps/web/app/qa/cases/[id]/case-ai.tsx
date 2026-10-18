@@ -104,7 +104,7 @@ export function CaseAiPanel(p: Props) {
       ) : (
         <div className="space-y-3">
           <div className="flex flex-wrap items-center gap-1.5">
-            {ai.classification && <span className={cn(pill, "bg-violet-50 text-violet-700 ring-violet-100")}>{words(ai.classification)}</span>}
+            {ai.classification && <span className={cn(pill, "bg-blue-50 text-blue-700 ring-blue-100")}>{words(ai.classification)}</span>}
             {repro && <span className={cn(pill, repro.cls)}>{repro.label}</span>}
           </div>
           <dl className="grid grid-cols-[auto_1fr] items-center gap-x-3 gap-y-1.5">
@@ -230,7 +230,7 @@ export function CaseAiPanel(p: Props) {
           )}
 
           <p className="border-t pt-2 text-[11px] text-muted-foreground">
-            {ai.model ? <>By <span className="font-mono">{ai.model}</span></> : "AI generated"}
+            AI generated
             {ai.generated_at && <> · <When iso={ai.generated_at} /></>}
             {parts.length > 0 && <> · context: {parts.map(words).join(", ")}</>}
             . Check it before acting.

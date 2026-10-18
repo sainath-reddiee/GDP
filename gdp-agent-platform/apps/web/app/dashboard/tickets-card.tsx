@@ -27,7 +27,7 @@ export function TicketsCard({ data }: { data: TicketsCardData }) {
               return (
                 <li key={t.id} className="flex items-center gap-3 py-2">
                   <Link href={href} className="font-mono text-xs font-semibold text-primary hover:underline">{t.key}</Link>
-                  <span className={jira ? "rounded bg-sky-500/10 px-1.5 text-[10px] text-sky-700 dark:text-sky-400" : "rounded bg-violet-500/10 px-1.5 text-[10px] text-violet-700 dark:text-violet-400"}>{jira ? "Jira" : "Case"}</span>
+                  <span className={jira ? "rounded bg-sky-500/10 px-1.5 text-[10px] text-sky-700 dark:text-sky-400" : "rounded bg-blue-500/10 px-1.5 text-[10px] text-blue-700 dark:text-blue-400"}>{jira ? "Jira" : "Case"}</span>
                   <span className="min-w-0 flex-1 truncate text-sm" title={t.title}>{t.title}</span>
                   {t.sla_breached && <AlarmClock className="h-3.5 w-3.5 text-rose-600" aria-label="SLA breached" />}
                   {t.priority && <span className="text-[11px] font-semibold text-muted-foreground">{t.priority}</span>}

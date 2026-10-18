@@ -660,6 +660,79 @@ def connect(env: Dict[str, Any]):
     return snowflake.connector.connect(**args)
 
 
+class TimedConnection:
+    """The deploy's connection with every statement timed. A statement over `slow` seconds is reported when it ends,
+    and while one runs past a minute a heartbeat names it, so a long deploy says what it is waiting on instead of
+    going quiet until the step ends."""
+
+    def __init__(self, con, echo, slow: float = 10.0, beat: float = 60.0):
+        import threading
+
+        self.con, self.echo, self.slow, self.beat = con, echo, slow, beat
+        self.running: Optional[Tuple[str, float]] = None
+        self.statements, self.slowest = 0, (0.0, "")
+        self._stop = threading.Event()
+        threading.Thread(target=self._heartbeat, daemon=True).start()
+
+    @staticmethod
+    def head(sql: str) -> str:
+        return " ".join(str(sql).split())[:110]
+
+    def _heartbeat(self) -> None:
+        while not self._stop.wait(self.beat):
+            if self.running and time.time() - self.running[1] >= self.beat:
+                self.echo(f"  ... still running after {time.time() - self.running[1]:.0f}s: {self.running[0]}")
+
+    def timed(self, sql: str, run):
+        self.running, started = (self.head(sql), time.time()), time.time()
+        try:
+            return run()
+        finally:
+            took = time.time() - started
+            self.running, self.statements = None, self.statements + 1
+            if took > self.slowest[0]:
+                self.slowest = (took, self.head(sql))
+            if took >= self.slow:
+                self.echo(f"  ... {took:.0f}s: {self.head(sql)}")
+
+    def cursor(self, *a, **kw):
+        return TimedCursor(self.con.cursor(*a, **kw), self)
+
+    def execute_string(self, sql_text: str, remove_comments: bool = False, **kw):
+        """The connector's execute_string, one statement at a time so each is timed."""
+        import io
+        from snowflake.connector.util_text import split_statements
+
+        out = []
+        for statement, _ in split_statements(io.StringIO(sql_text), remove_comments=remove_comments):
+            cur = self.cursor()
+            cur.execute(statement, **kw)
+            out.append(cur)
+        return out
+
+    def close(self) -> None:
+        self._stop.set()
+        self.con.close()
+
+    def __getattr__(self, name):
+        return getattr(self.con, name)
+
+
+class TimedCursor:
+    def __init__(self, cur, timer: TimedConnection):
+        self._cur, self._timer = cur, timer
+
+    def execute(self, sql, *a, **kw):
+        self._timer.timed(sql, lambda: self._cur.execute(sql, *a, **kw))
+        return self
+
+    def __iter__(self):
+        return iter(self._cur)
+
+    def __getattr__(self, name):
+        return getattr(self._cur, name)
+
+
 class Log:
     def __init__(self, env_name: str, write: bool):
         self.lines: List[str] = []
@@ -762,10 +835,13 @@ def main(argv: Optional[List[str]] = None) -> int:
         from infrastructure.deploy_snowflake import apply_from_session
 
         started = time.time()
-        for line in apply_from_session(con, env["database"], env["warehouse"], force=args.force,
+        timed = TimedConnection(con, log)
+        for line in apply_from_session(timed, env["database"], env["warehouse"], force=args.force,
                                        access=env["access_model"]):
             log(f"  {line}")
-        log(f"  deploy took {time.time() - started:.0f}s")
+        timed._stop.set()
+        log(f"  deploy took {time.time() - started:.0f}s ({timed.statements} statements; slowest "
+            f"{timed.slowest[0]:.0f}s: {timed.slowest[1] or 'none'})")
         log("4. access")
         for line in grant_access(cur, env):
             log(f"  {line}")

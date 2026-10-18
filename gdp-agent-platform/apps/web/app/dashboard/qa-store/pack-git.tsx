@@ -11,7 +11,7 @@ import { cn } from "@/lib/utils";
 import { loadGitRepos, publishPack, resolvePackSync, syncPackPrs } from "./actions";
 
 const PR_TONE: Record<string, string> = {
-  OPEN: "bg-sky-100 text-sky-800", MERGED: "bg-violet-100 text-violet-800", CLOSED: "bg-rose-100 text-rose-700",
+  OPEN: "bg-sky-100 text-sky-800", MERGED: "bg-blue-100 text-blue-800", CLOSED: "bg-rose-100 text-rose-700",
   FAILED: "bg-rose-100 text-rose-700", NO_CHANGES: "bg-slate-100 text-slate-700",
 };
 

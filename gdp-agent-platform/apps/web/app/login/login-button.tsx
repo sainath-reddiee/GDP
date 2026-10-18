@@ -25,10 +25,10 @@ export function LoginButton({
       aria-busy={pending}
       className={cn(
         "group relative inline-flex h-11 w-full items-center justify-center gap-2 overflow-hidden rounded-xl",
-        "bg-gradient-to-r from-indigo-500 via-indigo-600 to-violet-600 px-5 text-sm font-semibold text-white",
+        "bg-primary px-5 text-sm font-semibold text-white",
         "shadow-[0_0_0_1px_rgba(129,140,248,0.35),0_8px_24px_-8px_rgba(99,102,241,0.55)] transition-all duration-200",
         "hover:shadow-[0_0_0_1px_rgba(165,180,252,0.5),0_0_24px_rgba(99,102,241,0.35)] hover:brightness-110",
-        "active:translate-y-px active:scale-[0.985] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400/60",
+        "active:translate-y-px active:scale-[0.985] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400/60",
         "focus-visible:ring-offset-2 focus-visible:ring-offset-[#080B10] disabled:cursor-wait disabled:opacity-80",
         className,
       )}

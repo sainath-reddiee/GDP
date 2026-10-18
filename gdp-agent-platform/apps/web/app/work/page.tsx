@@ -31,7 +31,7 @@ function Section({ id, title, icon: Icon, tone, count, href, hrefLabel, empty, c
   href?: string; hrefLabel?: string; empty: ReactNode; children?: ReactNode;
 }) {
   const toneCls = { human: "bg-human/10 text-human", agent: "bg-agent/10 text-agent", fix: "bg-rose-500/10 text-rose-600",
-    knowledge: "bg-violet-500/10 text-violet-600", plain: "bg-muted text-muted-foreground" }[tone];
+    knowledge: "bg-blue-500/10 text-blue-600", plain: "bg-muted text-muted-foreground" }[tone];
   return (
     <section id={id} className="surface scroll-mt-24 overflow-hidden" data-testid={`work-${id}`}>
       <header className="flex items-center gap-2.5 border-b px-5 py-3.5">
@@ -55,8 +55,8 @@ function Row({ href, children, action }: { href: string; children: ReactNode; ac
 }
 
 function Tile({ href, label, value, hint, tone }: { href: string; label: string; value: number; hint: string; tone: "human" | "agent" | "fix" | "knowledge" }) {
-  const ring = { human: "before:bg-human", agent: "before:bg-agent", fix: "before:bg-rose-500", knowledge: "before:bg-violet-500" }[tone];
-  const text = { human: "text-human", agent: "text-agent", fix: "text-rose-600", knowledge: "text-violet-600" }[tone];
+  const ring = { human: "before:bg-human", agent: "before:bg-agent", fix: "before:bg-rose-500", knowledge: "before:bg-blue-500" }[tone];
+  const text = { human: "text-human", agent: "text-agent", fix: "text-rose-600", knowledge: "text-blue-600" }[tone];
   return (
     <a href={href} className={cn("surface card-lift relative overflow-hidden p-4 before:absolute before:inset-y-0 before:left-0 before:w-1", ring)}>
       <p className="text-xs font-medium uppercase tracking-[0.1em] text-muted-foreground">{label}</p>

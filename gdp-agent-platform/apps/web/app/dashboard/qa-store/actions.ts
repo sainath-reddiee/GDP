@@ -27,6 +27,14 @@ export async function createPack(domainId: string, payload: PackPayload) {
   return r;
 }
 
+/** A new draft pack from a .sql file: annotated pack format, or plain read-only queries separated by ';'. */
+export type Imported = { pack_id: string; version: number; status: string; queries: number; name: string; skipped: string[] };
+
+export async function importPack(domainId: string, body: { filename: string; text: string; name?: string | null }) {
+  // no revalidation here: the dialog shows the outcome and refreshes the page when it closes
+  return storeAction(() => api<Imported>(`/api/domains/${encodeURIComponent(domainId)}/qa-packs/import`, json(body)));
+}
+
 export async function savePack(packId: string, payload: PackPayload) {
   const r = await storeAction(() => api<{ version: number; diff: { added: string[]; removed: string[]; changed: { query_name: string; fields: string[] }[] } | null }>(
     `/api/qa-packs/${packId}`, { method: "PUT", body: JSON.stringify(payload) }));

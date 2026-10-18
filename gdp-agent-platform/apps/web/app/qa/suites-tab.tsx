@@ -237,9 +237,9 @@ function ContextCard({ ctx, data }: { ctx: TableContext | null; data: TableSuite
   const allowed = ctx?.allowed ?? data.allowed ?? [];
   const keys = ctx?.business_keys ?? data.business_keys;
   return (
-    <section className="space-y-3 rounded-2xl border bg-gradient-to-br from-violet-500/10 via-card to-card p-5 shadow-sm">
+    <section className="space-y-3 rounded-2xl border bg-card p-5 shadow-sm">
       <div className="flex flex-wrap items-start gap-3">
-        <span className="grid h-10 w-10 place-items-center rounded-xl bg-violet-50 text-violet-600 ring-1 ring-inset ring-violet-100"><Table2 className="h-5 w-5" /></span>
+        <span className="grid h-10 w-10 place-items-center rounded-xl bg-blue-50 text-blue-600 ring-1 ring-inset ring-blue-100"><Table2 className="h-5 w-5" /></span>
         <div className="min-w-0 flex-1">
           <h3 className="truncate font-mono text-base font-semibold" title={data.target.fqn}>{data.target.fqn}</h3>
           <div className="mt-1.5 flex flex-wrap gap-2 text-xs">

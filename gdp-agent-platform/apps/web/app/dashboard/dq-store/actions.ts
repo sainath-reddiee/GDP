@@ -38,6 +38,14 @@ export async function setCheckStatus(checkId: string, status: "ACTIVE" | "PAUSED
   return r;
 }
 
+/** Checks a client requirement asks for (pasted or uploaded text, CSV or JSON rows), staged into the table's draft. */
+export type Generated = Staged & { source: "rows" | "brief"; proposed: number; left_out: string[]; model: string | null };
+
+export async function generateChecks(body: { table: string; text: string; filename?: string }) {
+  // no revalidation here: the dialog shows the outcome and refreshes the page when it closes
+  return storeAction(() => api<Generated>("/api/dq/catalog/generate", post(body)));
+}
+
 export async function seedChecks(body: { table?: string; run_id?: string }) {
   const r = await storeAction(() => api<Staged>("/api/dq/catalog/seed", post(body)));
   revalidatePath(PATH, "layout");
@@ -122,4 +130,10 @@ export async function runCoverage(runId: string) {
 
 export async function openCase(ref: { qa_result_id?: string; check_result_id?: string }) {
   return storeAction(() => api<{ case: { case_id: string; number: number } }>("/api/cases/from-result", post(ref)));
+}
+
+/** The workflow and scan script that publish merged suites to Soda Cloud from CI (services/soda/cloud_ci). */
+export type SodaCloudCi = { files: Record<string, string>; secrets: string[] };
+export async function loadSodaCloudCi() {
+  return storeAction(() => api<SodaCloudCi>("/api/dq/soda-cloud/ci"));
 }

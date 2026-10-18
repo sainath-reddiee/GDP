@@ -102,7 +102,7 @@ export function DecisionBar({ runId, gate, role, approveTo, approveLabel = "Appr
             </>
           )}
         </div>
-        {error && <p role="alert" className={cn("border-t px-4 py-2 text-sm", error.startsWith("Sent to ") ? "text-violet-700 dark:text-violet-300" : "text-destructive")}>{error}</p>}
+        {error && <p role="alert" className={cn("border-t px-4 py-2 text-sm", error.startsWith("Sent to ") ? "text-blue-700 dark:text-blue-300" : "text-destructive")}>{error}</p>}
       </div>
     </div>
   );

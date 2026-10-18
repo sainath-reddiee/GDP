@@ -279,7 +279,7 @@ function TriageResult({ issueKey, tableId, triage, canSave, onSaved }: {
     <div className="space-y-3 text-sm">
       <div className="space-y-2 rounded-xl border bg-muted/20 p-4">
         <p className="flex flex-wrap items-center gap-2 text-xs"><span className={cn("rounded-full px-2 py-0.5 font-medium", triage.reproducible ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700")}>
-          {triage.reproducible ? "testable" : "needs more detail"}</span><span className="text-muted-foreground">severity {triage.severity.toLowerCase()} · {triage.model}</span></p>
+          {triage.reproducible ? "testable" : "needs more detail"}</span><span className="text-muted-foreground">severity {triage.severity.toLowerCase()}</span></p>
         <p><span className="font-medium">What is reported: </span>{triage.diagnosis}</p>
         <p><span className="font-medium">Likely cause: </span>{triage.likely_cause}</p>
         {triage.affected_columns.length > 0 && <p className="text-xs"><span className="font-medium">Columns: </span><span className="font-mono">{triage.affected_columns.join(", ")}</span></p>}

@@ -87,7 +87,7 @@ export function DagView({ envId, envName, envEnabled, initial, initialRun, canOp
             <StateBadge state={dag.last_state} />
             {dag.is_paused && <span className="rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-600">paused</span>}
             {!dag.is_active && <span className="rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-500">inactive</span>}
-            {dag.criticality && <span className="rounded-full bg-violet-50 px-1.5 py-0.5 text-[10px] text-violet-700">{dag.criticality.toLowerCase()}</span>}
+            {dag.criticality && <span className="rounded-full bg-blue-50 px-1.5 py-0.5 text-[10px] text-blue-700">{dag.criticality.toLowerCase()}</span>}
             <span>Schedule <span className="font-mono">{dag.schedule || "none"}</span></span>
             <span>· Owners {dag.owners?.join(", ") || "none"}</span>
             {dag.tags?.length > 0 && <span>· Tags {dag.tags.join(", ")}</span>}

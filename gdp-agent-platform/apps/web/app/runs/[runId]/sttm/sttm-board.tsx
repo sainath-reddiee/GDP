@@ -35,7 +35,7 @@ const MAPPING_TONE: Record<string, string> = {
   DIRECT: "bg-success/10 text-success border-success/20",
   TRANSFORM: "bg-primary/10 text-primary border-primary/20",
   TRANSFORMED: "bg-primary/10 text-primary border-primary/20",
-  DERIVED: "bg-violet-500/10 text-violet-600 border-violet-500/20",
+  DERIVED: "bg-blue-500/10 text-blue-600 border-blue-500/20",
   UNMAPPED: "bg-muted text-muted-foreground",
 };
 
@@ -227,8 +227,8 @@ export function SttmBoard({
           </div>
 
           {canEdit ? (
-            <div className="space-y-2 rounded-xl border border-violet-200 bg-violet-50/40 p-3 dark:border-violet-900 dark:bg-violet-950/20">
-              <p className="flex items-center gap-1.5 text-sm font-medium"><Sparkles className="h-4 w-4 text-violet-600" />Ask for a change</p>
+            <div className="space-y-2 rounded-xl border border-blue-200 bg-blue-50/40 p-3 dark:border-blue-900 dark:bg-blue-950/20">
+              <p className="flex items-center gap-1.5 text-sm font-medium"><Sparkles className="h-4 w-4 text-blue-600" />Ask for a change</p>
               <Textarea rows={2} value={prompt} onChange={(e) => setPrompt(e.target.value)} aria-label="Ask for a change"
                         placeholder="e.g. Cast END_DATE as DATE using YYYY-MM-DD. Map Y/N to ACTIVE/INACTIVE." />
               <div className="flex flex-wrap gap-2">

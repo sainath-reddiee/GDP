@@ -10,7 +10,7 @@ const LAYER: Record<LineageLayer, { label: string; cls: string }> = {
   SOURCE: { label: "Source", cls: "border-slate-400/40 bg-slate-500/5" },
   BRONZE: { label: "Bronze (landed)", cls: "border-orange-400/40 bg-orange-500/5" },
   SILVER_PRE_MDM: { label: "Silver, pre-MDM", cls: "border-zinc-400/50 bg-zinc-500/5" },
-  MDM: { label: "MDM cross-reference", cls: "border-violet-500/40 bg-violet-500/5" },
+  MDM: { label: "MDM cross-reference", cls: "border-blue-500/40 bg-blue-500/5" },
   SILVER_POST_MDM: { label: "Silver, post-MDM", cls: "border-sky-500/40 bg-sky-500/5" },
   GOLD: { label: "Gold", cls: "border-amber-500/50 bg-amber-500/10" },
 };

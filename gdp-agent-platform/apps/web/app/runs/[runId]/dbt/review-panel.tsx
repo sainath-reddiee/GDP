@@ -249,7 +249,7 @@ export function ReviewPanel({
                       <>
                         <Callout tone={review.findings.some((f) => f.severity === "error") ? "fail" : review.findings.length ? "warn" : "done"}
                           title={review.summary || (review.findings.length ? `${review.findings.length} finding(s)` : "Looks good")}>
-                          Reviewed by {review.model}.
+                          Reviewed by AI.
                         </Callout>
                         <CodeCitations items={review.code_citations} label="Compared with client code" />
                         <ul className="space-y-2">

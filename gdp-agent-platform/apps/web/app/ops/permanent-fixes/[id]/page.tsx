@@ -55,7 +55,7 @@ export default async function PermanentFixPage({ params }: { params: { id: strin
                   <h2 className="text-sm font-semibold">The change</h2>
                   {f.summary && <p className="text-sm">{f.summary}</p>}
                   {f.rationale && <p className="text-xs text-muted-foreground">Why: {f.rationale}</p>}
-                  {f.confidence != null && <p className="text-xs text-muted-foreground">Model confidence {Math.round(f.confidence * 100)}%{f.model ? ` · ${f.model}` : ""}</p>}
+                  {f.confidence != null && <p className="text-xs text-muted-foreground">Model confidence {Math.round(f.confidence * 100)}%</p>}
                   {f.instructions && <p className="text-xs text-muted-foreground">Asked for: {f.instructions}</p>}
                 </section>
               )}

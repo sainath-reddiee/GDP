@@ -15,7 +15,7 @@ const STATE_TONE: Record<string, { badge: string; bar: string }> = {
   restarting: { badge: "bg-sky-50 text-sky-700 ring-sky-100", bar: "bg-sky-400" },
   queued: { badge: "bg-slate-100 text-slate-600 ring-slate-200", bar: "bg-slate-400" },
   scheduled: { badge: "bg-slate-100 text-slate-600 ring-slate-200", bar: "bg-slate-300" },
-  deferred: { badge: "bg-violet-50 text-violet-700 ring-violet-100", bar: "bg-violet-400" },
+  deferred: { badge: "bg-blue-50 text-blue-700 ring-blue-100", bar: "bg-blue-400" },
   skipped: { badge: "bg-slate-100 text-slate-500 ring-slate-200", bar: "bg-slate-300" },
   removed: { badge: "bg-slate-100 text-slate-500 ring-slate-200", bar: "bg-slate-200" },
 };

@@ -10,6 +10,7 @@ import {
   type DomainDataModel, type DomainDocuments,
 } from "../actions";
 import { DocumentReview } from "../document-review";
+import { RegisteredTables } from "@/components/governance/registered-tables";
 
 type Msg = { tone: "ok" | "error"; text: string } | null;
 const note = (m: Msg) => m && (
@@ -215,11 +216,16 @@ function DataModelPanel({ domainId }: { domainId: string }) {
 
 /** The Sources tab: what this domain is defined by beyond its pack: its data model, its documents and its own skills. */
 export function SourcesTab({ domainId }: { domainId: string }) {
+  const { canAct } = useAccess();
   return (
     <div className="grid gap-4 xl:grid-cols-2">
       <div className="space-y-4">
         <DataModelPanel domainId={domainId} />
         <DocumentsPanel domainId={domainId} />
+      </div>
+      <div className="space-y-4">
+        {/* anyone who may edit the domain or request changes can ask; the removal itself waits for an approver */}
+        <RegisteredTables domainId={domainId} canEdit={canAct("DOMAIN.EDIT")} />
       </div>
     </div>
   );

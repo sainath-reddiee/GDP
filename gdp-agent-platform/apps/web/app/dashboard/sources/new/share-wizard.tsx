@@ -150,7 +150,7 @@ export function ShareWizard({ shares, domains, databases, landing }: {
             <div className="grid gap-2 md:grid-cols-2" role="radiogroup" aria-label="Shares">
               {shownEntries.map((e) => (
                 <button key={e.key} type="button" role="radio" aria-checked={entry?.key === e.key} onClick={() => pickEntry(e)} data-testid={`share-${e.share ?? e.database}`}
-                        className={cn("flex items-start gap-3 rounded-xl border p-3 text-left transition",
+                        className={cn("flex min-w-0 items-start gap-3 rounded-xl border p-3 text-left transition",
                           entry?.key === e.key ? "border-primary/50 bg-accent/50 ring-1 ring-primary/20" : "hover:border-primary/30")}>
                   <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-primary/10 text-primary">
                     {e.share ? <Share2 className="h-4 w-4" /> : <Database className="h-4 w-4" />}

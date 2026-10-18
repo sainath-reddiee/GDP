@@ -223,7 +223,7 @@ export function MappingBoard({ runId, data }: { runId: string; data: MappingOver
             <span><span className="mr-1 inline-block h-2 w-2 rounded-full bg-slate-400" />{counts.null} NULL</span>
             <span><span className="mr-1 inline-block h-2 w-2 rounded-full bg-muted-foreground/30" />{counts.pending} pending</span>
             <span>{required.length - data.status.missing_required_targets.length}/{required.length} required targets covered</span>
-            {aiCount > 0 && <span className="text-violet-700"><Bot className="mr-0.5 inline h-3 w-3" />{aiCount} AI suggestions{aiModel ? ` · ${aiModel}` : ""}</span>}
+            {aiCount > 0 && <span className="text-blue-700"><Bot className="mr-0.5 inline h-3 w-3" />{aiCount} AI suggestions{aiModel ? ` · ${aiModel}` : ""}</span>}
           </div>
         </div>
 
@@ -232,7 +232,7 @@ export function MappingBoard({ runId, data }: { runId: string; data: MappingOver
             onClick={() => approveSelected(new Set(rows.filter((r) => r.status === "pending" && r.score >= bands.confident).map((r) => r.id)), bands.confident, "Approved all confident matches")}>
             <CheckCheck className="h-4 w-4" /> Approve all confident ({counts.confident})
           </Button>
-          <Button size="sm" variant="outline" className="border-violet-300 text-violet-700 hover:bg-violet-50" disabled={aiPending || !counts.pending}
+          <Button size="sm" variant="outline" className="border-blue-300 text-blue-700 hover:bg-blue-50" disabled={aiPending || !counts.pending}
             onClick={() => setShowAi((v) => !v)}>
             {aiPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Bot className="h-4 w-4" />} AI copilot
           </Button>
@@ -245,7 +245,7 @@ export function MappingBoard({ runId, data }: { runId: string; data: MappingOver
         </div>
 
         {showAi && (
-          <div className="space-y-2 rounded-lg border border-violet-200 bg-violet-50/60 p-3 dark:bg-violet-950/20">
+          <div className="space-y-2 rounded-lg border border-blue-200 bg-blue-50/60 p-3 dark:bg-blue-950/20">
             <p className="text-sm font-medium">Ask the AI copilot to review columns</p>
             <p className="text-xs text-muted-foreground">
               It reads profile statistics, sample values, scored candidates and target definitions, then proposes approve, remap or NULL for each column.
@@ -340,7 +340,7 @@ export function MappingBoard({ runId, data }: { runId: string; data: MappingOver
                   <Button size="sm" variant="outline" disabled={pending} onClick={() => nullSelected(selected)}>
                     <CircleSlash className="h-3.5 w-3.5" /> Set NULL
                   </Button>
-                  <Button size="sm" variant="outline" className="text-violet-700" disabled={aiPending} onClick={() => askAi([...selected])}>
+                  <Button size="sm" variant="outline" className="text-blue-700" disabled={aiPending} onClick={() => askAi([...selected])}>
                     <Bot className="h-3.5 w-3.5" /> Ask AI
                   </Button>
                   {[...selected].some((id) => suggestions[id]) && (
@@ -408,7 +408,7 @@ export function MappingBoard({ runId, data }: { runId: string; data: MappingOver
                               </span>
                             )}
                             {ai && r.status === "pending" && (
-                              <span className="mt-0.5 flex items-center gap-1 text-[11px] text-violet-700" title={ai.reason}>
+                              <span className="mt-0.5 flex items-center gap-1 text-[11px] text-blue-700" title={ai.reason}>
                                 <Bot className="h-3 w-3" />
                                 {ai.action === "NULL" ? "AI: leave NULL" : ai.target_column_id === r.top.target_column_id ? "AI agrees" : `AI: ${ai.target_column}`}
                                 <span className="text-muted-foreground">· {pct(ai.confidence)}</span>
@@ -429,7 +429,7 @@ export function MappingBoard({ runId, data }: { runId: string; data: MappingOver
                             {r.status === "pending" ? (
                               <span className="inline-flex gap-1">
                                 {ai && (
-                                  <Button size="sm" variant="outline" className="h-7 px-2 text-violet-700" title="Accept AI suggestion" disabled={pending}
+                                  <Button size="sm" variant="outline" className="h-7 px-2 text-blue-700" title="Accept AI suggestion" disabled={pending}
                                     onClick={() => acceptAi(new Set([r.id]))}>
                                     <Sparkles className="h-3.5 w-3.5" />
                                   </Button>
@@ -536,7 +536,7 @@ function TargetCoverage({
                     <span className="flex flex-wrap gap-1">
                       {ai && (
                         <button type="button" onClick={() => onOpen(ai.source_column_id)}
-                          className="rounded-full border border-violet-300 px-2 py-0.5 text-[11px] text-violet-700 hover:bg-violet-50">
+                          className="rounded-full border border-blue-300 px-2 py-0.5 text-[11px] text-blue-700 hover:bg-blue-50">
                           <Bot className="mr-0.5 inline h-3 w-3" />{rows.find((r) => r.id === ai.source_column_id)?.column}
                         </button>
                       )}

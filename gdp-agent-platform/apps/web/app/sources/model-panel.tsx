@@ -374,7 +374,7 @@ const REC_TONE: Record<string, string> = {
   MAP_EXISTING: "border-success/30 bg-success/5 text-success",
   EXTEND_EXISTING: "border-primary/30 bg-primary/5 text-primary",
   REVIEW: "border-warning/30 bg-warning/5 text-warning",
-  NEW: "border-violet-300 bg-violet-50/60 text-violet-700 dark:bg-violet-950/30 dark:text-violet-300",
+  NEW: "border-blue-300 bg-blue-50/60 text-blue-700 dark:bg-blue-950/30 dark:text-blue-300",
 };
 
 function Coverage({ label, value }: { label: string; value: number }) {

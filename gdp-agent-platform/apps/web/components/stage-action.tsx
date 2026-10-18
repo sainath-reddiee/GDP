@@ -32,7 +32,7 @@ export function StageAction({ action, label, pendingLabel, ...props }:
           Working in Snowflake — this tab stays on the step until it finishes.
         </p>
       )}
-      {error && <p role="alert" className={error.startsWith("Sent to ") ? "mt-2 text-sm text-violet-700 dark:text-violet-300" : "mt-2 text-sm text-destructive"}>{error}</p>}
+      {error && <p role="alert" className={error.startsWith("Sent to ") ? "mt-2 text-sm text-blue-700 dark:text-blue-300" : "mt-2 text-sm text-destructive"}>{error}</p>}
     </div>
   );
 }

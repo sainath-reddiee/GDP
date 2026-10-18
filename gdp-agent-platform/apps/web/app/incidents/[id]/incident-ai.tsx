@@ -132,7 +132,7 @@ export function AiPanel({ incidentId, ai, summary, canAI, onAi }: {
       ) : (
         <div className="space-y-3">
           <div className="flex flex-wrap items-center gap-1.5">
-            {ai.category && <span className={cn(pill, "bg-violet-50 text-violet-700 ring-violet-100")}>{words(ai.category)}</span>}
+            {ai.category && <span className={cn(pill, "bg-blue-50 text-blue-700 ring-blue-100")}>{words(ai.category)}</span>}
             <RetryBadge value={ai.safe_to_retry} />
           </div>
           {ai.probable_cause && (
@@ -183,7 +183,7 @@ export function AiPanel({ incidentId, ai, summary, canAI, onAi }: {
             </div>
           )}
           <p className="border-t pt-2 text-[11px] text-muted-foreground">
-            {ai.model ? <>By <span className="font-mono">{ai.model}</span></> : "AI generated"}
+            AI generated
             {ai.generated_at && <> · <When iso={ai.generated_at} /></>}
             {parts.length > 0 && <> · context: {parts.map(words).join(", ")}</>}
             . Check it before acting.

@@ -70,7 +70,7 @@ function VersionsTab({ detail, packId, onView }: { detail: PackDetail; packId: s
         {versions.map((v) => (
           <li key={v.version} className="relative">
             <span className={cn("absolute -left-[27px] top-1.5 h-3 w-3 rounded-full border-2 border-card",
-              v.status === "APPROVED" ? "bg-emerald-500" : v.status === "PENDING_APPROVAL" ? "bg-amber-500" : v.status === "DRAFT" ? "bg-indigo-400" : "bg-slate-300")} />
+              v.status === "APPROVED" ? "bg-emerald-500" : v.status === "PENDING_APPROVAL" ? "bg-amber-500" : v.status === "DRAFT" ? "bg-blue-400" : "bg-slate-300")} />
             <div className="rounded-xl border border-border/80 bg-card p-3">
               <div className="flex items-center gap-2">
                 <span className="font-semibold">v{v.version}</span>
@@ -288,7 +288,7 @@ export function PackDrawer({ packId, onClose, canEdit, canApprove, canRun }: {
                 <span>·</span>
                 <span>{detail.approved_version ? `approved v${detail.approved_version}` : "not approved yet"}</span>
                 {detail.approved_version && detail.pack.status !== "RETIRED" && (
-                  <span className="inline-flex items-center gap-1 text-violet-600"><BrainCircuit className="h-3.5 w-3.5" /> feeds AI context</span>
+                  <span className="inline-flex items-center gap-1 text-blue-600"><BrainCircuit className="h-3.5 w-3.5" /> feeds AI context</span>
                 )}
               </span>
             )}>

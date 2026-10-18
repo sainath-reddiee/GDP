@@ -319,7 +319,8 @@ def snapshot_domains(cur, database: str) -> List[str]:
     from services.knowledge.domain_versions import snapshot
 
     def qualify(sql: str) -> str:
-        return sql.replace("KNOWLEDGE.", f"{database}.KNOWLEDGE.")
+        # the deploy connection has no current database, so every schema-qualified name needs the database too
+        return re.sub(r"(?<![\w.\"])(KNOWLEDGE|CORE)\.", rf"{database}.\1.", sql)
 
     def query(sql: str, params: tuple) -> List[Dict[str, Any]]:
         cur.execute(qualify(sql), params)

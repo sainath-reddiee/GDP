@@ -76,7 +76,7 @@ function Node({ label, sub, status, className }: { label: string; sub?: string; 
   return (
     <div className={cn("relative rounded-xl border px-3 py-2 transition-all duration-500",
       status === "complete" ? "border-emerald-500/40 bg-emerald-500/[0.07]"
-        : status === "review" ? "border-[#ff7a3d]/60 bg-[#ff7a3d]/[0.09] shadow-[0_0_0_3px_rgba(255,122,61,0.14)]"
+        : status === "review" ? "border-[#b45309]/60 bg-[#b45309]/[0.09] shadow-[0_0_0_3px_rgba(255,122,61,0.14)]"
         : status === "progress" ? "border-cyan-400/50 bg-cyan-400/[0.07]"
         : "border-white/[0.07] bg-white/[0.02]", className)}>
       <div className="flex items-start gap-1.5">
@@ -99,8 +99,8 @@ const TAG: Record<Actor, { cls: string; icon: typeof Bot }> = {
   platform: { cls: "bg-white/[0.06] text-slate-300 ring-white/15", icon: Zap },
   agent: { cls: "bg-[#6d6af8]/20 text-[#c7c6ff] ring-[#8b89ff]/40", icon: Bot },
   ai: { cls: "bg-[#29b5e8]/15 text-[#9be3fb] ring-[#29b5e8]/35", icon: Sparkles },
-  human: { cls: "bg-[#ff7a3d]/15 text-[#ffc2a3] ring-[#ff7a3d]/40", icon: UserCheck },
-  gate: { cls: "bg-[#ff7a3d]/10 text-[#ffb68f] ring-[#ff7a3d]/30", icon: Lock },
+  human: { cls: "bg-[#b45309]/15 text-[#ffc2a3] ring-[#b45309]/40", icon: UserCheck },
+  gate: { cls: "bg-[#b45309]/10 text-[#ffb68f] ring-[#b45309]/30", icon: Lock },
 };
 
 export function RunPreview() {
@@ -137,7 +137,7 @@ export function RunPreview() {
         <span key={s.state} className="animate-stage-in rounded-md bg-black/40 px-2 py-0.5 font-mono text-[10px] text-cyan-200 ring-1 ring-inset ring-cyan-400/20">{s.state}</span>
         <span className="ml-auto flex items-center gap-2">
           <span className={cn("inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-[11px] font-semibold transition",
-            autopilotOn ? "bg-indigo-500/20 text-indigo-200 ring-1 ring-inset ring-indigo-400/40" : "bg-white/[0.04] text-slate-500 ring-1 ring-inset ring-white/10")}>
+            autopilotOn ? "bg-blue-500/20 text-blue-200 ring-1 ring-inset ring-blue-400/40" : "bg-white/[0.04] text-slate-500 ring-1 ring-inset ring-white/10")}>
             <Bot className={cn("h-3 w-3", autopilotOn && "animate-glow")} /> {autopilotOn ? "Agent working…" : shown === STEPS.length - 1 ? "Run complete" : "Awaiting human approval"}
           </span>
           <button type="button" onClick={() => setPlaying((p) => !p)} aria-label={playing ? "Pause" : "Play"} disabled={reduced}
@@ -204,7 +204,7 @@ export function RunPreview() {
               return (
                 <li key={g} className="flex items-start gap-2 text-[12px]">
                   <span className={cn("mt-0.5 grid h-4 w-4 shrink-0 place-items-center rounded-full ring-1 ring-inset transition",
-                    done ? "bg-emerald-500 ring-emerald-500" : waiting ? "bg-[#ff7a3d]/20 ring-[#ff7a3d]" : "ring-white/15")}>
+                    done ? "bg-emerald-500 ring-emerald-500" : waiting ? "bg-[#b45309]/20 ring-[#b45309]" : "ring-white/15")}>
                     {done ? <Check className="h-2.5 w-2.5 text-[#191812]" /> : waiting ? <span className="h-1.5 w-1.5 animate-glow rounded-full bg-[#ffb68f]" /> : null}
                   </span>
                   <span className={cn(done ? "text-slate-300" : waiting ? "font-medium text-[#ffc2a3]" : "text-slate-500")}>{g}</span>

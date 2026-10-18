@@ -71,7 +71,9 @@ def clean_queries(queries: Sequence[Dict[str, Any]], allowed: Sequence[str]) -> 
         severity = str(q.get("severity") or "ERROR").upper()
         assert severity in SEVERITIES, f"{name}: severity must be one of {list(SEVERITIES)}"
         ok, problems, sql = check(str(q.get("sql_expression") or ""), allowed)
-        assert ok, f"{name}: " + "; ".join(problems)
+        # the guard is shared with run tests; a pack's allowed tables are its domain's
+        assert ok, f"{name}: " + "; ".join(p.replace("this run's source or target tables", "this domain's tables")
+                                             for p in problems)
         out.append({"query_name": name, "severity": severity, "sql_expression": sql,
                     "description": clip(q.get("description"), 4000) or None,
                     "expectation": clip(q.get("expectation") or "0 rows", 1000), "tags": clean_tags(q.get("tags")),

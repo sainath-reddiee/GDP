@@ -159,7 +159,7 @@ function Roles({ roles, privileges, users }: { roles: GovRole[]; privileges: Gov
                 <span className="truncate text-sm font-medium capitalize">{pretty(r.role)}</span>
                 {r.role === "SUPER_ADMIN" && <Badge variant="destructive" className="px-1.5 py-0 text-[9px]">all</Badge>}
                 {r.read_only && <Badge variant="outline" className="px-1.5 py-0 text-[9px]">view only</Badge>}
-                {r.approves && <Badge variant="outline" className="border-violet-300 px-1.5 py-0 text-[9px] text-violet-700">approver</Badge>}
+                {r.approves && <Badge variant="outline" className="border-blue-300 px-1.5 py-0 text-[9px] text-blue-700">approver</Badge>}
                 <span className="ml-auto text-[10px] text-muted-foreground" title="members">{r.members.length} <Users2 className="inline h-3 w-3" /></span>
               </span>
               <span className="mt-0.5 block truncate text-[11px] text-muted-foreground">{r.description}</span>
@@ -232,7 +232,7 @@ function Roles({ roles, privileges, users }: { roles: GovRole[]; privileges: Gov
                   return (
                     <button key={r.role} type="button" onClick={() => toggleInherit(r.role)} aria-pressed={on}
                             className={cn("inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-[11px] capitalize transition",
-                                          on ? "border-violet-500 bg-violet-500 text-white" : "bg-card text-muted-foreground hover:border-violet-300")}>
+                                          on ? "border-blue-500 bg-blue-500 text-white" : "bg-card text-muted-foreground hover:border-blue-300")}>
                       {on && <Check className="h-3 w-3" />}{pretty(r.role)}
                     </button>
                   );
@@ -264,7 +264,7 @@ function Roles({ roles, privileges, users }: { roles: GovRole[]; privileges: Gov
                           <span className="min-w-0">
                             <span className="font-mono">{p.privilege}</span>
                             {inherited && !own.has(p.privilege) && (
-                              <span className="ml-1.5 rounded-full bg-violet-100 px-1.5 py-0 text-[9px] text-violet-700 dark:bg-violet-950 dark:text-violet-300">via {pretty(inherited)}</span>
+                              <span className="ml-1.5 rounded-full bg-blue-100 px-1.5 py-0 text-[9px] text-blue-700 dark:bg-blue-950 dark:text-blue-300">via {pretty(inherited)}</span>
                             )}
                             <span className="block text-[11px] text-muted-foreground">{p.description}</span>
                           </span>

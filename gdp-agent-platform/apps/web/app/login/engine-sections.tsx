@@ -29,8 +29,8 @@ function useReducedMotion() {
 // ------------------------------------------------------------------------------------------------ knowledge loop
 
 const LOOP = [
-  { title: "Knowledge", sub: ["packs, rules, patterns,", "skills, documents"], color: "#4b44e8" },
-  { title: "Agent proposes", sub: ["reads the knowledge,", "shows its evidence"], color: "#4b44e8" },
+  { title: "Knowledge", sub: ["packs, rules, patterns,", "skills, documents"], color: "#1d4ed8" },
+  { title: "Agent proposes", sub: ["reads the knowledge,", "shows its evidence"], color: "#1d4ed8" },
   { title: "Human approval", sub: ["approve, or send back", "with a reason"], color: "#e4572e" },
   { title: "Signals captured", sub: ["decisions, rejections,", "fixes, answers"], color: "#1c8fc4" },
   { title: "Learning", sub: ["patterns replayed,", "steward approves"], color: "#17794b" },
@@ -154,7 +154,7 @@ export function KnowledgeLoop() {
             <li key={r.kind} className="px-5 py-3">
               <p className="text-[14px] font-semibold">{r.kind} <span className="text-[12px] font-normal text-[color:var(--muted)]">{r.why}</span></p>
               <p className="mt-1.5 flex flex-wrap gap-1.5">
-                {r.stages.map((st) => <span key={st} className="rounded-full bg-[#4b44e8]/10 px-2 py-0.5 text-[11px] font-medium text-[color:var(--agent)]">{st}</span>)}
+                {r.stages.map((st) => <span key={st} className="rounded-full bg-[#1d4ed8]/10 px-2 py-0.5 text-[11px] font-medium text-[color:var(--agent)]">{st}</span>)}
               </p>
             </li>
           ))}
@@ -181,7 +181,7 @@ export function KnowledgeLoop() {
                     const on = r.stages.includes(c);
                     return (
                       <td key={c} onMouseEnter={() => setCol(c)} onMouseLeave={() => setCol(null)}
-                          className={cn("px-2 py-2.5 text-center transition-colors", col === c && "bg-[#4b44e8]/[0.06]")}>
+                          className={cn("px-2 py-2.5 text-center transition-colors", col === c && "bg-[#1d4ed8]/[0.06]")}>
                         {on ? <span className="inline-block h-3 w-3 rounded-[2px] bg-[color:var(--agent)]" aria-label={`${c} reads it`} />
                             : <span className="inline-block h-px w-3 bg-[color:var(--line)]" />}
                       </td>
@@ -223,7 +223,7 @@ function Mock({ title, children }: { title: string; children: ReactNode }) {
 
 const Pill = ({ tone, children }: { tone: "agent" | "human" | "ok" | "muted"; children: ReactNode }) => (
   <span className={cn("inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold",
-    tone === "agent" ? "bg-[#4b44e8]/10 text-[color:var(--agent)]" : tone === "human" ? "bg-[#e4572e]/10 text-[color:var(--human)]"
+    tone === "agent" ? "bg-[#1d4ed8]/10 text-[color:var(--agent)]" : tone === "human" ? "bg-[#e4572e]/10 text-[color:var(--human)]"
       : tone === "ok" ? "bg-[#17794b]/10 text-[color:var(--ok)]" : "bg-[#15140f]/[0.06] text-[color:var(--muted)]")}>{children}</span>
 );
 
@@ -276,7 +276,7 @@ function QuestionMock() {
       <p className="lp-display mt-2 text-[24px] leading-tight">Which target does SRC_STATUS_CD feed?</p>
       <ul className="mt-4 space-y-2 text-[13px]">
         {["CUSTOMER.CUSTOMER_STATUS", "ACCOUNT.ACCOUNT_STATUS", "Not loaded"].map((o, i) => (
-          <li key={o} className={cn("flex items-center gap-2 rounded-[4px] border px-3 py-2", i === 0 ? "border-[color:var(--agent)] bg-[#4b44e8]/[0.05]" : "border-[color:var(--line)]")}>
+          <li key={o} className={cn("flex items-center gap-2 rounded-[4px] border px-3 py-2", i === 0 ? "border-[color:var(--agent)] bg-[#1d4ed8]/[0.05]" : "border-[color:var(--line)]")}>
             <span className={cn("h-3 w-3 rounded-full border", i === 0 ? "border-[color:var(--agent)] bg-[color:var(--agent)]" : "border-[color:var(--muted)]")} /> {o}
           </li>
         ))}

@@ -104,8 +104,8 @@ function LineDrawer({ catalogId, line, original, isNew, context, canEdit, onClos
             <SqlEditor value={draft.transformation ?? ""} readOnly={!canEdit} rows={4} label="Transformation" onChange={(v) => set({ transformation: v || null })} />
           </div>
           {canEdit && context.run_id && (
-            <div className="rounded-xl border border-violet-200 bg-violet-50/60 p-3">
-              <p className="flex items-center gap-1.5 text-xs font-semibold text-violet-800"><Sparkles className="h-3.5 w-3.5" /> Propose SQL with AI</p>
+            <div className="rounded-xl border border-blue-200 bg-blue-50/60 p-3">
+              <p className="flex items-center gap-1.5 text-xs font-semibold text-blue-800"><Sparkles className="h-3.5 w-3.5" /> Propose SQL with AI</p>
               <div className="mt-2 flex gap-2">
                 <Input value={prompt} onChange={(e) => setPrompt(e.target.value)} placeholder="e.g. proper-case the name and trim spaces" className="h-8 text-xs" />
                 <Button size="sm" variant="outline" disabled={pending || prompt.trim().length < 3} onClick={propose}>
@@ -115,7 +115,7 @@ function LineDrawer({ catalogId, line, original, isNew, context, canEdit, onClos
               {proposal && (
                 <div className="mt-2 space-y-1.5">
                   <pre className="overflow-x-auto rounded-lg bg-slate-950 p-2 font-mono text-xs text-emerald-300">{proposal.transformation}</pre>
-                  {proposal.rationale && <p className="text-xs text-violet-900/80">{proposal.rationale}</p>}
+                  {proposal.rationale && <p className="text-xs text-blue-900/80">{proposal.rationale}</p>}
                   <Button size="sm" onClick={() => { set({ transformation: proposal.transformation, mapping_type: draft.mapping_type === "DIRECT" ? "TRANSFORM" : draft.mapping_type }); setProposal(null); }}>Use this</Button>
                 </div>
               )}
@@ -318,7 +318,7 @@ export function SttmWorkbench({ entry, versions, latest, context, graph, preview
                       <td className="px-3 py-2 text-xs">{(l.mapping_type ?? "").toLowerCase()}</td>
                       <td className="max-w-[340px] px-3 py-2">
                         <code className="block truncate font-mono text-xs" title={l.transformation ?? undefined}>{l.transformation ?? <span className="text-muted-foreground">as is</span>}</code>
-                        {l.filter_rule && <span className="mt-0.5 inline-flex items-center gap-1 text-[11px] text-violet-700"><Filter className="h-3 w-3" />{l.filter_rule}</span>}
+                        {l.filter_rule && <span className="mt-0.5 inline-flex items-center gap-1 text-[11px] text-blue-700"><Filter className="h-3 w-3" />{l.filter_rule}</span>}
                       </td>
                       <td className="max-w-[220px] truncate px-3 py-2 text-xs text-muted-foreground" title={l.business_rule ?? undefined}>{l.business_rule ?? "-"}</td>
                       <td className="px-3 py-2 text-right">

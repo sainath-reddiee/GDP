@@ -131,7 +131,7 @@ export function SkillBuilder({ categories, skills, initialSkill, onClose }: {
       <div className="relative flex h-full w-[1040px] max-w-full flex-col border-l bg-background shadow-2xl">
         <header className="border-b px-6 py-4">
           <div className="flex items-center gap-3">
-            <span className="grid h-9 w-9 place-items-center rounded-xl bg-gradient-to-br from-violet-500 to-primary text-white"><Sparkles className="h-4 w-4" /></span>
+            <span className="grid h-9 w-9 place-items-center rounded-xl bg-primary text-white"><Sparkles className="h-4 w-4" /></span>
             <div className="min-w-0 flex-1">
               <h2 className="text-base font-semibold">{improving ? `Improve ${pretty(improving)} with AI` : "New skill with AI"}</h2>
               <p className="text-xs text-muted-foreground">Drafts are grounded in what you give it, checked, and tested before they are saved as a candidate. Production never changes here.</p>

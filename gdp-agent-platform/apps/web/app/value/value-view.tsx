@@ -44,19 +44,9 @@ export function ValueView({ data, canEdit }: { data: ValueReport; canEdit: boole
   const k = data.knowledge;
   const maxHours = Math.max(1, ...data.weekly.map((w) => w.hours));
   const unconfirmed = v.needs_confirmation || v.value_usd == null;
-  const scope = data.scope;
   const aiCost = v.ai_cost_usd != null ? `${usd(v.ai_cost_usd)} AI cost` : v.ai_credits != null ? `${v.ai_credits.toFixed(1)} AI credits` : "AI cost unknown";
   return (
     <div className="space-y-5" data-testid="value-ledger">
-      <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200" data-testid="value-estimate-note">
-        <p><span className="font-semibold">These hours are an estimate.</span> The counts are measured; the minutes each item takes a person are
-          {data.baselines.confirmed ? ` baselines ${data.baselines.confirmed_by ?? "an admin"} confirmed for this client (${data.baselines.basis_note})` : " assumptions nobody has confirmed for this client yet"}.
-          {unconfirmed ? " No money amount is shown until an admin confirms them." : ""}</p>
-        {scope && (
-          <p className="mt-1">Left out of every count: runs in {scope.excluded_run_environments.length ? scope.excluded_run_environments.join(", ") : "no environment"}
-            {" "}and Airflow environment{scope.excluded_airflow_envs.length === 1 ? "" : "s"} {scope.excluded_airflow_envs.length ? scope.excluded_airflow_envs.join(", ") : "none"} (test and lab activity). AI cost includes everything.</p>
-        )}
-      </div>
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <Headline icon={Clock} label={`Estimated hours saved, ${data.window_days} days`} value={hours(v.hours)}
                   hint={`${hours(data.hours_by_group.build)} building pipelines · ${hours(data.hours_by_group.ops)} running them`} />

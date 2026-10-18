@@ -24,7 +24,7 @@ from services.common.platform_schema import fqn
 
 CATALOG = "CORE.DQ_CHECKS_CATALOG"
 STATUSES = ("ACTIVE", "PAUSED", "RETIRED")
-ORIGINS = ("PROFILE", "RUN", "USER")
+ORIGINS = ("PROFILE", "RUN", "USER", "REQUIREMENT")  # REQUIREMENT: from a client requirement (dq_requirements)
 CRON = re.compile(r"^\s*(\S+\s+){4}\S+(\s+[A-Za-z_]+(?:/[A-Za-z_]+)*)?\s*$")  # five fields, optional IANA time zone
 
 _NUM = r"-?\d+(?:\.\d+)?"

@@ -145,8 +145,8 @@ export function MappingDetail({
         )}
 
         {suggestion && (
-          <section className="rounded-lg border border-violet-300 bg-violet-50 p-3 text-sm dark:bg-violet-950/30">
-            <p className="flex items-center gap-1.5 text-xs font-semibold text-violet-700"><Bot className="h-3.5 w-3.5" /> AI copilot · {pct(suggestion.confidence)}</p>
+          <section className="rounded-lg border border-blue-300 bg-blue-50 p-3 text-sm dark:bg-blue-950/30">
+            <p className="flex items-center gap-1.5 text-xs font-semibold text-blue-700"><Bot className="h-3.5 w-3.5" /> AI copilot · {pct(suggestion.confidence)}</p>
             <p className="mt-1 font-medium">
               {suggestion.action === "NULL" ? "Leave unmapped (NULL)" : `Map to ${suggestion.target_column}`}
               {suggestion.transformation && <span className="block font-mono text-xs font-normal">{suggestion.transformation}</span>}

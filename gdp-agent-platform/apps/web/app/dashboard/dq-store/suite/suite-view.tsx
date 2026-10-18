@@ -13,6 +13,7 @@ import { Button } from "@/components/ui/button";
 import { Label, Select, Textarea } from "@/components/ui/input";
 import { EmptyState, StatusPill, explain } from "@/components/hub/states";
 import { useToast } from "@/components/ui/toast";
+import { SodaCloudCard } from "@/components/quality/soda-cloud-card";
 import {
   applySuite, approveSuite, diffSuite, loadSuitePublishing, openSuiteDraft, publishSuite, rejectSuite, setCheckStatus,
   submitSuite, syncSuitePrs, withdrawSuite, type SuitePublishing,
@@ -49,7 +50,7 @@ const CLASS_LABEL: Record<DqSuiteChange["class"], string> = {
   TIGHTENED: "stricter", LOOSENED: "looser", CHANGED: "changed", DOCUMENTATION: "reason only",
 };
 const PR_TONE: Record<string, string> = {
-  OPEN: "bg-sky-100 text-sky-800", MERGED: "bg-violet-100 text-violet-800", CLOSED: "bg-rose-100 text-rose-700",
+  OPEN: "bg-sky-100 text-sky-800", MERGED: "bg-blue-100 text-blue-800", CLOSED: "bg-rose-100 text-rose-700",
   FAILED: "bg-rose-100 text-rose-700", NO_CHANGES: "bg-slate-100 text-slate-700",
 };
 
@@ -388,6 +389,7 @@ function PublishTab({ table, versions, canPublish }: { table: string; versions: 
         </table>
         {!live.length && <p className="p-4 text-sm text-muted-foreground">No approved version yet.</p>}
       </section>
+      <SodaCloudCard />
     </div>
   );
 }

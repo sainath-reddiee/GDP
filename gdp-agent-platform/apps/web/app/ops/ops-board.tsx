@@ -106,7 +106,7 @@ export function OpsBoard({ envs, summary: initialSummary, summaryError, initial,
   return (
     <div className="space-y-4">
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <Card label="DAGs" value={summary?.dags ?? "-"} icon={Workflow} tone="bg-indigo-50 text-indigo-600 ring-indigo-100"
+        <Card label="DAGs" value={summary?.dags ?? "-"} icon={Workflow} tone="bg-blue-50 text-blue-600 ring-blue-100"
               hint={summary ? `${summary.envs} environment${summary.envs === 1 ? "" : "s"}` : undefined} />
         <Card label="Failing in 24 h" value={summary?.failing_24h ?? "-"} icon={AlertTriangle}
               tone={summary?.failing_24h ? "bg-rose-50 text-rose-600 ring-rose-100" : "bg-emerald-50 text-emerald-600 ring-emerald-100"} />
@@ -203,7 +203,7 @@ function DagTable({ dags, filtered }: { dags: DagRow[] | null; filtered: boolean
                 <span className="mt-0.5 flex flex-wrap items-center gap-1">
                   {d.is_paused && <span className="inline-flex items-center gap-0.5 rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-600"><PauseCircle className="h-3 w-3" />paused</span>}
                   {!d.is_active && <span className="rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-500">inactive</span>}
-                  {d.criticality && <span className="rounded-full bg-violet-50 px-1.5 py-0.5 text-[10px] text-violet-700">{d.criticality.toLowerCase()}</span>}
+                  {d.criticality && <span className="rounded-full bg-blue-50 px-1.5 py-0.5 text-[10px] text-blue-700">{d.criticality.toLowerCase()}</span>}
                   {d.open_incidents > 0 && (
                     <Link href={`/incidents?${new URLSearchParams({ dag: d.dag_id, env: d.env_id, status: "OPEN,ACK" })}`}
                           className="rounded-full bg-rose-50 px-1.5 py-0.5 text-[10px] font-semibold text-rose-700 ring-1 ring-inset ring-rose-100 hover:bg-rose-100">
