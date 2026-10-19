@@ -450,13 +450,14 @@ def plan_prompt(ctx: Dict[str, Any], known: Dict[str, Any], existing: List[str],
 
 
 def _plan(session, ctx: Dict[str, Any], run_id: Optional[str], existing: List[Dict[str, Any]],
-          focus: str) -> Dict[str, Any]:
+          tester_focus: str) -> Dict[str, Any]:
+    # the tester's text is `tester_focus`: a parameter named `focus` would hide focus(ctx) below
     known = knowledge(session, ctx.get("domain_id"), run_id, ctx.get("run_id"), **focus(ctx))
     code = _code(session, ctx, run_id)
     known["code"] = code["text"]
     started = time.time()
-    with tool_call(session, run_id, "qa_plan", {"focus": clip(focus, 300)}) as call:
-        output, usage, model = complete_json(session, plan_prompt(ctx, known, [t["title"] for t in existing], focus),
+    with tool_call(session, run_id, "qa_plan", {"focus": clip(tester_focus, 300)}) as call:
+        output, usage, model = complete_json(session, plan_prompt(ctx, known, [t["title"] for t in existing], tester_focus),
                                              PLAN_SCHEMA, max_tokens=6000, stage="QA")
         record_cost(session, run_id, "QA", model, usage, int((time.time() - started) * 1000), tool_calls=1)
         proposals = []
