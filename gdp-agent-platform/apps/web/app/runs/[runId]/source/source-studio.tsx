@@ -3,7 +3,7 @@
 import { useMemo, useState, useTransition } from "react";
 import Link from "next/link";
 import {
-  ArrowRight, CheckCircle2, CircleDashed, Database, Layers, Loader2, ShieldCheck, Sparkles, Table2, XCircle,
+  ArrowRight, CheckCircle2, CircleDashed, Database, HardDriveDownload, Loader2, PlugZap, ShieldCheck, Sparkles, Table2, XCircle,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -47,7 +47,8 @@ function Stat({ icon: Icon, label, value, detail }: {
   );
 }
 
-/** Source stage: executes the plan chosen in the Sources hub. No re-selection, no model choice here. */
+/** Source stage: executes the plan chosen in the Sources hub. Only ingestion lives here (the connection, the tables,
+ *  how they are read or copied, access and profiling); modeling and mapping are the next stage's. */
 export function SourceStudio({
   runId, sourceName, sourceType, database, schema, intent, overview, initialTables = [],
   currentState, failedIn = null, failureReason = null, cachedProfiles = [], landingTargets = null, target,
@@ -150,7 +151,7 @@ export function SourceStudio({
   });
 
   const visible = tables.filter((t) => t.toLowerCase().includes(query.toLowerCase()));
-  const targets = intent?.targets ?? [];
+  const modeLabel = inPlace ? "Read in place" : storageType === "ICEBERG" ? "Copy to Iceberg" : "Copy to managed tables";
   const lastAttempt = overview.checks?.length
     ? overview.checks.filter((c) => c.checked_at === overview.checks[0].checked_at) : [];
 
@@ -161,11 +162,9 @@ export function SourceStudio({
               detail={<span className="font-mono">{database}.{schema} · {sourceType === "SNOWFLAKE_SHARE" ? "share" : "database"}</span>} />
         <Stat icon={Table2} label="Tables in plan" value={`${tables.length} table${tables.length === 1 ? "" : "s"}`}
               detail={cachedCount ? `${cachedCount} already profiled, reused from the profile store` : "None profiled before"} />
-        <Stat icon={Layers} label="Modeling"
-              value={targets.length ? `${targets.length} existing model${targets.length === 1 ? "" : "s"}` : "Decide after profiling"}
-              detail={targets.length
-                ? targets.slice(0, 3).map((t) => t.target_table).join(", ") + (targets.length > 3 ? "…" : "")
-                : "Profiling proposes existing or new models"} />
+        <Stat icon={HardDriveDownload} label="Ingestion mode" value={modeLabel}
+              detail={<span className="font-mono">{inPlace ? `${database}.${schema} · no copy`
+                : `${target.landing_database}.${landingSchema}${landed ? ` · ${landedBy.size} landed` : ""}`}</span>} />
       </div>
 
       <Card>
@@ -179,14 +178,14 @@ export function SourceStudio({
         <CardContent className="space-y-5">
           <ol className="grid gap-3 md:grid-cols-3">
             {([
+              ["register", PlugZap, "Register source", currentState !== "CREATED" ? `Registered as ${name}` : `${name} from ${database}.${schema}`],
               ["land", ShieldCheck, inPlace ? "Validate access" : "Validate & copy", landed
                 ? (inPlace ? `${landedBy.size} tables bound in place` : `${landedBy.size} copied into ${target.landing_schema}`)
                 : inPlace ? "Read-only check; nothing is copied" : `Into ${target.landing_database}.${landingSchema}`],
               ["profile", Sparkles, "Profile & store", profiled
                 ? "Saved to the profile store" : cachedCount ? `${cachedCount} of ${tables.length} reused from cache` : "Statistics, PII, keys, descriptions"],
-              ["model", Layers, "Model", profiled ? "Ready for mapping" : "Unlocks after profiling"],
             ] as const).map(([step, Icon, title, detail], i) => {
-              const s: StepStatus = step === "model" ? (profiled ? "active" : "waiting") : status(step);
+              const s: StepStatus = status(step);
               return (
                 <li key={step} className={cn(
                   "flex items-start gap-3 rounded-xl border p-3",
@@ -272,11 +271,11 @@ export function SourceStudio({
             )}
             {profiled && (
               <>
-                <Link href={`/runs/${runId}/modeling?tab=mapping`} className={buttonVariants({ size: "lg" })}>
-                  Continue to mapping <ArrowRight className="h-4 w-4" />
-                </Link>
+                <span className="inline-flex items-center gap-1.5 text-sm font-medium text-success">
+                  <CheckCircle2 className="h-4 w-4" /> Ingestion complete
+                </span>
                 <Link href={`/runs/${runId}/profile`} className={buttonVariants({ variant: "outline", size: "lg" })}>
-                  View profiles and model suggestions
+                  View profiles <ArrowRight className="h-4 w-4" />
                 </Link>
               </>
             )}
