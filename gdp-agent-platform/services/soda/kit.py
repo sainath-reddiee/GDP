@@ -271,7 +271,8 @@ jobs:
         env:
           SNOWFLAKE_USER: ${{{{ secrets.SNOWFLAKE_USER }}}}
           SNOWFLAKE_PASSWORD: ${{{{ secrets.SNOWFLAKE_PASSWORD }}}}
-        run: soda scan -d {DATA_SOURCE} -c configuration.yml checks.yml
+        # Soda exits 1 when checks only warn, 2 when a check fails and 3 on an error: only 2 and 3 fail the job
+        run: soda scan -d {DATA_SOURCE} -c configuration.yml checks.yml || [ $? -eq 1 ]
 """
 
 

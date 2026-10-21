@@ -120,7 +120,7 @@ def generate(session, table: str, text: str, filename: str, user: str, domain_id
         reqs, model = _extract(session, fqn, doc.get("brief") or "", columns, domain, complete)
     raws, left_out = [], []
     for req in reqs:
-        raw, why = to_check(req, [c.upper() for c in columns])
+        raw, why = to_check(req, list(columns))
         if raw:
             raws.append(raw)
         else:

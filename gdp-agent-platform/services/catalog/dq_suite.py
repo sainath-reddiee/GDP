@@ -85,27 +85,53 @@ def normalize_checks(checks: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]]
     return out, problems
 
 
-def _threshold(definition: Dict[str, Any]) -> Optional[Tuple[str, float]]:
-    """(direction, value) of a single numeric bound, to tell a relaxed threshold from a stricter one: "max" bounds
-    loosen upward, "min" bounds loosen downward."""
-    for key in ("max_percent", "max"):
-        if isinstance(definition.get(key), (int, float)):
-            return "max", float(definition[key])
+BOUND_KEYS = ("max_percent", "max_invalid_percent", "max_failed", "max", "min", "gt", "threshold")
+
+
+def _num(value: Any) -> Optional[float]:
+    return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+
+
+def _bounds(definition: Dict[str, Any]) -> Dict[str, float]:
+    """Every numeric bound of a check, to tell a relaxed check from a stricter one: "max" bounds loosen upward, "min"
+    bounds loosen downward. A range or row count can have both; so can a `between` threshold."""
+    out: Dict[str, float] = {}
+    for key in ("max_percent", "max_invalid_percent", "max_failed", "max"):
+        if _num(definition.get(key)) is not None:
+            out.setdefault("max", _num(definition[key]))
     for key in ("min", "gt"):
-        if isinstance(definition.get(key), (int, float)):
-            return "min", float(definition[key])
+        if _num(definition.get(key)) is not None:
+            out.setdefault("min", _num(definition[key]))
     t = definition.get("threshold")
-    if isinstance(t, dict) and isinstance(t.get("value"), (int, float)):
-        op = str(t.get("op") or "")
-        if op in ("<", "<="):
-            return "max", float(t["value"])
-        if op in (">", ">="):
-            return "min", float(t["value"])
+    if isinstance(t, dict):
+        between = t.get("between")
+        if isinstance(between, list) and len(between) == 2 and all(_num(x) is not None for x in between):
+            out["min"], out["max"] = float(between[0]), float(between[1])
+        elif _num(t.get("value")) is not None:
+            op = str(t.get("op") or "")
+            if op in ("<", "<="):
+                out["max"] = float(t["value"])
+            elif op in (">", ">="):
+                out["min"] = float(t["value"])
     if isinstance(t, str):
-        m = re.match(r"^(\d+(?:\.\d+)?)([mhd])$", t.strip().lower())
+        m = re.match(r"^(\d+(?:\.\d+)?)\s*([mhd])$", t.strip().lower())
         if m:
-            return "max", float(m[1]) * {"m": 1, "h": 60, "d": 1440}[m[2]]
-    return None
+            out["max"] = float(m[1]) * {"m": 1, "h": 60, "d": 1440}[m[2]]
+    return out
+
+
+def _bound_change(a: Dict[str, float], b: Dict[str, float]) -> Optional[str]:
+    """LOOSENED when any bound relaxed or was dropped, TIGHTENED when bounds only got stricter or were added."""
+    looser = tighter = False
+    for side in ("min", "max"):
+        if side in a and side not in b:
+            looser = True
+        elif side in b and side not in a:
+            tighter = True
+        elif side in a and a[side] != b[side]:
+            relaxed = b[side] > a[side] if side == "max" else b[side] < a[side]
+            looser, tighter = looser or relaxed, tighter or not relaxed
+    return "LOOSENED" if looser else "TIGHTENED" if tighter else None
 
 
 def _change_class(a: Dict[str, Any], b: Dict[str, Any]) -> Tuple[str, List[str]]:
@@ -120,12 +146,12 @@ def _change_class(a: Dict[str, Any], b: Dict[str, Any]) -> Tuple[str, List[str]]
         classes.append("CHANGED")
     if "definition" in fields:
         da, db_ = a.get("definition") or {}, b.get("definition") or {}
-        ta, tb = _threshold(da), _threshold(db_)
-        same_shape = {k: v for k, v in da.items() if k not in ("max_percent", "max", "min", "gt", "threshold")} == \
-            {k: v for k, v in db_.items() if k not in ("max_percent", "max", "min", "gt", "threshold")}
-        if ta and tb and ta[0] == tb[0] and same_shape:
-            looser = tb[1] > ta[1] if ta[0] == "max" else tb[1] < ta[1]
-            classes.append("LOOSENED" if looser else "TIGHTENED")
+        same_shape = {k: v for k, v in da.items() if k not in BOUND_KEYS} == \
+            {k: v for k, v in db_.items() if k not in BOUND_KEYS}
+        if da.get("kind") != db_.get("kind"):
+            classes.append("LOOSENED")   # a different check under the same id: the old guarantee is gone
+        elif same_shape:
+            classes.append(_bound_change(_bounds(da), _bounds(db_)) or "CHANGED")
         else:
             classes.append("CHANGED")
     if not classes and fields:
@@ -656,12 +682,20 @@ def stage(session, table: str, user: str, edit: Callable[[List[Dict[str, Any]]],
     current = _open(_versions(session, header["suite_id"]))
     opened = False
     if not current:
+        # the edit runs on the approved checks first: when it is refused, or changes nothing, no draft is opened
+        approved = header.get("approved_version")
+        base = _checks(session, header["suite_id"], approved) if approved else []
+        checks, info = edit(base)
+        if json.dumps(checks, sort_keys=True, default=str) == json.dumps(base, sort_keys=True, default=str):
+            return {"table": table, "version": approved, "status": "UNCHANGED", "draft_opened": False,
+                    "staged": False, **info, **_summary(session, header, checks)}
         open_draft(session, table, user, domain_id=domain_id)
         current = _open(_versions(session, header["suite_id"]))
         opened = True
-    assert current["status"] == "DRAFT", (f"version {current['version']} of {table} is in review; withdraw it or "
-                                          "have it decided before changing the checks")
-    checks, info = edit(_checks(session, header["suite_id"], current["version"]))
+    else:
+        assert current["status"] == "DRAFT", (f"version {current['version']} of {table} is in review; withdraw it or "
+                                              "have it decided before changing the checks")
+        checks, info = edit(_checks(session, header["suite_id"], current["version"]))
     _write_draft(session, header, current, checks, user)
     return {"table": table, "version": current["version"], "status": "DRAFT", "draft_opened": opened, "staged": True,
             **info, **_summary(session, header, checks)}
@@ -760,7 +794,7 @@ def submit(session, table: str, user: str, note: str = "") -> Dict[str, Any]:
                            REVIEW_SUMMARY = PARSE_JSON(?), BASE_VERSION = NULLIF(?, '')::NUMBER,
                            CHANGE_NOTE = COALESCE(NULLIF(?, ''), CHANGE_NOTE), UPDATED_AT = CURRENT_TIMESTAMP()
                      WHERE SUITE_ID = ? AND VERSION = ? AND STATUS = 'DRAFT'""",
-                params=[user.upper(), json.dumps(summary), header.get("approved_version") or "", clip(note, 2000),
+                params=[user.upper(), json.dumps(summary), str(header.get("approved_version") or ""), clip(note, 2000),
                         header["suite_id"], current["version"]]).collect()
     return {"table": table, "version": current["version"], "status": "IN_REVIEW", **summary}
 
@@ -773,7 +807,7 @@ def withdraw(session, table: str, user: str) -> Dict[str, Any]:
     assert current and current["status"] == "IN_REVIEW", "there is no version in review"
     assert _own(current, user), "only the submitter or an author can withdraw the version"
     session.sql(f"""UPDATE {VERSIONS} SET STATUS = 'DRAFT', SUBMITTED_BY = NULL, SUBMITTED_AT = NULL,
-                           UPDATED_AT = CURRENT_TIMESTAMP() WHERE SUITE_ID = ? AND VERSION = ?""",
+                           UPDATED_AT = CURRENT_TIMESTAMP() WHERE SUITE_ID = ? AND VERSION = ? AND STATUS = 'IN_REVIEW'""",
                 params=[header["suite_id"], current["version"]]).collect()
     return {"table": table, "version": current["version"], "status": "DRAFT"}
 
@@ -783,22 +817,26 @@ def _own(found: Dict[str, Any], user: str) -> bool:
     return user.upper() in people
 
 
-def _in_review(session, header: Dict[str, Any], version: int) -> Dict[str, Any]:
+def _in_review(session, header: Dict[str, Any], version: int, etag: Optional[str] = None) -> Dict[str, Any]:
+    """The version in review; with `etag` (what the reviewer read), a version changed since is a Conflict."""
     found = next((v for v in _versions(session, header["suite_id"]) if v["version"] == int(version)), None)
     assert found, f"version {version} not found"
     assert found["status"] == "IN_REVIEW", f"version {version} is {found['status'].lower().replace('_', ' ')}, not in review"
+    if etag and str(found.get("etag") or "") != str(etag):
+        raise Conflict(f"CONFLICT: version {version} changed since you opened it; reload and review it again")
     return found
 
 
-def reject(session, table: str, version: int, user: str, reason: str) -> Dict[str, Any]:
+def reject(session, table: str, version: int, user: str, reason: str, etag: Optional[str] = None) -> Dict[str, Any]:
     table = dq._fqn(table)
     header = _header(session, table)
     assert header, "this table has no data quality suite"
-    found = _in_review(session, header, version)
+    found = _in_review(session, header, version, etag)
     assert not _own(found, user), "you worked on this version; withdraw it instead of rejecting it"
     assert len((reason or "").strip()) >= 3, "say why the version is rejected"
     session.sql(f"""UPDATE {VERSIONS} SET STATUS = 'REJECTED', REJECTED_BY = ?, REJECTED_AT = CURRENT_TIMESTAMP(),
-                           REJECT_REASON = ?, UPDATED_AT = CURRENT_TIMESTAMP() WHERE SUITE_ID = ? AND VERSION = ?""",
+                           REJECT_REASON = ?, UPDATED_AT = CURRENT_TIMESTAMP()
+                     WHERE SUITE_ID = ? AND VERSION = ? AND STATUS = 'IN_REVIEW'""",
                 params=[user.upper(), clip(reason, 2000), header["suite_id"], int(version)]).collect()
     session.sql(f"UPDATE {SUITES} SET OPEN_VERSION = NULL, UPDATED_AT = CURRENT_TIMESTAMP() WHERE SUITE_ID = ?",
                 params=[header["suite_id"]]).collect()
@@ -808,7 +846,8 @@ def reject(session, table: str, version: int, user: str, reason: str) -> Dict[st
     return {"table": table, "version": int(version), "status": "REJECTED"}
 
 
-def approve(session, table: str, version: int, user: str, acknowledge_loosened: bool = False) -> Dict[str, Any]:
+def approve(session, table: str, version: int, user: str, acknowledge_loosened: bool = False,
+            etag: Optional[str] = None) -> Dict[str, Any]:
     """Four eyes: the version becomes the table's approved checks (the previous version is superseded), reviewed
     against the approved domain model, whose version is recorded. The caller then applies it to the catalog
     (apply_suite_version, owner's rights)."""
@@ -817,7 +856,7 @@ def approve(session, table: str, version: int, user: str, acknowledge_loosened: 
     table = dq._fqn(table)
     header = _header(session, table)
     assert header, "this table has no data quality suite"
-    found = _in_review(session, header, version)
+    found = _in_review(session, header, version, etag)
     assert not _own(found, user), "you cannot approve a version you submitted or edited; ask another data quality approver"
     checks = _checks(session, header["suite_id"], int(version))
     issues, model = _validate(session, header, checks)
@@ -835,14 +874,20 @@ def approve(session, table: str, version: int, user: str, acknowledge_loosened: 
     model_version = (model or {}).get("model_version") or ""
 
     def write() -> None:
-        session.sql(f"""UPDATE {VERSIONS} SET STATUS = 'SUPERSEDED', UPDATED_AT = CURRENT_TIMESTAMP()
-                         WHERE SUITE_ID = ? AND STATUS IN ('APPROVED', 'PUBLISHED')""", params=[header["suite_id"]]).collect()
+        # only the content that was reviewed: still in review, and unchanged since it was read
         session.sql(f"""UPDATE {VERSIONS} SET STATUS = 'APPROVED', APPROVED_BY = ?, APPROVED_AT = CURRENT_TIMESTAMP(),
                                REVIEW_SUMMARY = PARSE_JSON(?), MODEL_ID = NULLIF(?, ''),
                                MODEL_VERSION = NULLIF(?, '')::NUMBER, UPDATED_AT = CURRENT_TIMESTAMP()
-                         WHERE SUITE_ID = ? AND VERSION = ?""",
+                         WHERE SUITE_ID = ? AND VERSION = ? AND STATUS = 'IN_REVIEW' AND ETAG = ?""",
                     params=[user.upper(), json.dumps(summary), model_id, str(model_version), header["suite_id"],
-                            int(version)]).collect()
+                            int(version), str(found.get("etag") or "")]).collect()
+        now = scalar(session, f"SELECT STATUS FROM {VERSIONS} WHERE SUITE_ID = ? AND VERSION = ?",
+                     [header["suite_id"], int(version)])
+        if now != "APPROVED":
+            raise Conflict(f"CONFLICT: version {version} changed while it was being approved; reload and review it again")
+        session.sql(f"""UPDATE {VERSIONS} SET STATUS = 'SUPERSEDED', UPDATED_AT = CURRENT_TIMESTAMP()
+                         WHERE SUITE_ID = ? AND VERSION <> ? AND STATUS IN ('APPROVED', 'PUBLISHED')""",
+                    params=[header["suite_id"], int(version)]).collect()
         session.sql(f"""UPDATE {SUITES} SET APPROVED_VERSION = ?, OPEN_VERSION = NULL, MODEL_ID = COALESCE(NULLIF(?, ''), MODEL_ID),
                                UPDATED_BY = ?, UPDATED_AT = CURRENT_TIMESTAMP() WHERE SUITE_ID = ?""",
                     params=[int(version), model_id, user.upper(), header["suite_id"]]).collect()

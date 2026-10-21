@@ -248,10 +248,19 @@ def run(body: RunIn, db: Db = Depends(current_db)):
     return _call(db, dq.run_table, body.table, body.check_ids, "UI")
 
 
+def _table(value: str) -> str:
+    """DATABASE.SCHEMA.TABLE as the catalog stores it (unquoted parts upper case), or 400."""
+    try:
+        return dq._fqn(value)
+    except AssertionError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
 @router.get("/api/dq/history")
 def history(table: str, limit: int = 20, db: Db = Depends(current_db)):
     """The table's recent scans and, per check, its last outcomes (oldest first) for sparklines."""
     limit = max(1, min(int(limit), 60))
+    table = _table(table)
     try:
         scans = db.query(f"""SELECT SCAN_ID, STARTED_AT::VARCHAR AS STARTED_AT, CHECKS, PASSED, WARNED, FAILED, ERRORS,
                                     NOT_EVALUATED, HEALTH, ROWS_SCANNED, TRIGGERED_BY, DURATION_MS
@@ -279,6 +288,7 @@ class ScheduleIn(BaseModel):
 
 @router.put("/api/dq/schedules")
 def set_schedule(body: ScheduleIn, db: Db = Depends(current_db)):
+    body.table = _table(body.table)
     try:
         task, statements = dq.schedule_sql(DATABASE, body.table, body.cron, WAREHOUSE)
     except AssertionError as exc:
@@ -304,6 +314,7 @@ def set_schedule(body: ScheduleIn, db: Db = Depends(current_db)):
 
 @router.delete("/api/dq/schedules")
 def delete_schedule(table: str, db: Db = Depends(current_db)):
+    table = _table(table)
     found = db.query("SELECT TASK_NAME FROM CORE.DQ_SCHEDULE WHERE TABLE_NAME = %s", (table,))
     if not found:
         raise HTTPException(404, "this table has no schedule")
@@ -451,6 +462,7 @@ class DecideIn(BaseModel):
     version: int = Field(ge=1)
     acknowledge_loosened: bool = False
     reason: Optional[str] = Field(default=None, max_length=2000)
+    etag: Optional[str] = Field(default=None, max_length=64)   # the version as the reviewer read it
 
 
 def _apply(db: Db, suite_id: str, version: int) -> dict:
@@ -467,7 +479,7 @@ def _apply(db: Db, suite_id: str, version: int) -> dict:
 def suite_approve(body: DecideIn, db: Db = Depends(current_db)):
     """Four eyes. The approved version is then written to the catalog the scanner reads; if that fails the approval
     stands and the version can be applied again."""
-    out = _call(db, dq_suite.approve, body.table, body.version, _user(db), body.acknowledge_loosened)
+    out = _call(db, dq_suite.approve, body.table, body.version, _user(db), body.acknowledge_loosened, body.etag)
     return {**out, "catalog": _apply(db, out["suite_id"], body.version)}
 
 
@@ -482,7 +494,7 @@ def suite_apply(body: DecideIn, db: Db = Depends(current_db)):
 
 @router.post("/api/dq/suites/reject")
 def suite_reject(body: DecideIn, db: Db = Depends(current_db)):
-    return _call(db, dq_suite.reject, body.table, body.version, _user(db), body.reason or "")
+    return _call(db, dq_suite.reject, body.table, body.version, _user(db), body.reason or "", body.etag)
 
 
 class PublishIn(BaseModel):

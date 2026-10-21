@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import {
   CalendarClock, ChevronRight, ClipboardCheck, Columns3, GitPullRequestDraft, History, Loader2, MoreHorizontal, Pause, Pencil, Play,
@@ -35,6 +35,7 @@ export const suiteHref = (table: string, tab?: string) =>
 
 /** The toast for an edit that landed in a suite draft. */
 export function stagedMessage(d: Staged, what: string) {
+  if (!d.staged) return `Nothing changed on ${d.table.split(".").pop()}: the checks are already as asked, so no draft was opened.`;
   return `${what} in draft v${d.version} of ${d.table.split(".").pop()}${d.draft_opened ? " (draft opened)" : ""}. Submit it for review to put it live.`;
 }
 
@@ -74,13 +75,16 @@ export function CheckModal({ table, check, columns, onClose }: { table: string; 
   const body = () => mode === "dsl"
     ? { check_id: check?.check_id ?? null, table: tableName.trim(), severity: draft.severity, dsl }
     : { check_id: check?.check_id ?? null, table: tableName.trim(), column: draft.target_column || null, severity: draft.severity,
-        requirement: draft.requirement || null, definition: cleanDefinition(draft.definition) };
+        requirement: check ? draft.requirement : draft.requirement || null, definition: cleanDefinition(draft.definition) };
 
   // live preview of the rendered SodaCL
   useEffect(() => {
     if (mode === "dsl" && dsl.trim().length < 4) { setPreview(null); return; }
-    const t = setTimeout(() => { void previewCheck(body()).then((r) => setPreview(r.ok ? r.data : { ok: false, problems: [explain(r.error).message] })); }, 350);
-    return () => clearTimeout(t);
+    let live = true;   // a slower answer to an older edit must not overwrite the newer preview
+    const t = setTimeout(() => {
+      void previewCheck(body()).then((r) => { if (live) setPreview(r.ok ? r.data : { ok: false, problems: [explain(r.error).message] }); });
+    }, 350);
+    return () => { live = false; clearTimeout(t); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode, dsl, draft, tableName]);
 
@@ -221,7 +225,11 @@ function SeedModal({ onClose, tables }: { onClose: () => void; tables: string[] 
   });
   const readFile = async (file: File | undefined) => {
     if (!file) return;
-    if (file.size > 200_000) { toast("error", "The requirement is larger than 200 KB; split it or paste the relevant part."); return; }
+    const limit = mode === "file" ? 1_000_000 : 200_000;
+    if (file.size > limit) {
+      toast("error", mode === "file" ? "The suite file is larger than 1 MB." : "The requirement is larger than 200 KB; split it or paste the relevant part.");
+      return;
+    }
     setText(await file.text());
     setFilename(file.name);
   };
@@ -265,7 +273,7 @@ function SeedModal({ onClose, tables }: { onClose: () => void; tables: string[] 
                   <Upload className="h-3.5 w-3.5" /> {filename ? `Replace ${filename}` : "Upload a file"}
                 </button>
               </div>
-              <Textarea id="seed-req" rows={8} value={text} maxLength={200_000} data-testid="seed-requirement"
+              <Textarea id="seed-req" rows={8} value={text} maxLength={mode === "file" ? 1_000_000 : 200_000} data-testid="seed-requirement"
                         onChange={(e) => { setText(e.target.value); setFilename(""); }}
                         placeholder={mode === "file" ? '{"format": "gdp-dq-suite", "table": "DEV_GDP_SILVER_DB.COMPANY.COMPANY_CORE", ...}' : REQUIREMENT_EXAMPLE} />
               <input ref={fileRef} type="file" accept=".csv,.json,.txt,.md,text/plain" className="hidden" onChange={(e) => readFile(e.target.files?.[0])} />
@@ -340,10 +348,13 @@ function CheckMenu({ check, onEdit, canEdit, locked }: { check: DqCheck; onEdit:
       </button>
       {open && (
         <div className="popover absolute right-0 top-8 z-30 w-40 animate-pop-in p-1 text-sm">
-          <button type="button" onClick={() => { setOpen(false); onEdit(); }} className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 hover:bg-muted"><Pencil className="h-3.5 w-3.5" /> Edit</button>
-          {check.status === "ACTIVE"
-            ? <button type="button" onClick={() => status("PAUSED")} className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 hover:bg-muted"><Pause className="h-3.5 w-3.5" /> Pause</button>
-            : <button type="button" onClick={() => status("ACTIVE")} className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 hover:bg-muted"><Play className="h-3.5 w-3.5" /> Resume</button>}
+          {/* a retired check is in no suite version: it can only be added again as a new check */}
+          {check.status !== "RETIRED" && (
+            <button type="button" onClick={() => { setOpen(false); onEdit(); }} className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 hover:bg-muted"><Pencil className="h-3.5 w-3.5" /> Edit</button>
+          )}
+          {check.status === "ACTIVE" && <button type="button" onClick={() => status("PAUSED")} className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 hover:bg-muted"><Pause className="h-3.5 w-3.5" /> Pause</button>}
+          {check.status === "PAUSED" && <button type="button" onClick={() => status("ACTIVE")} className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 hover:bg-muted"><Play className="h-3.5 w-3.5" /> Resume</button>}
+          {check.status === "RETIRED" && <p className="px-2.5 py-1.5 text-xs text-muted-foreground">Retired. Add it again as a new check.</p>}
           {check.status !== "RETIRED" && (
             <button type="button" onClick={() => status("RETIRED")} className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-destructive hover:bg-destructive/10"><Trash2 className="h-3.5 w-3.5" /> Retire</button>
           )}
@@ -484,6 +495,7 @@ export function DqStoreView({ tables, initialTable, status, openAdd, canEdit, ca
   tables: DqTable[]; initialTable: string; status: string; openAdd?: boolean; canEdit: boolean; canRun: boolean;
 }) {
   const router = useRouter();
+  const params = useSearchParams();
   const [q, setQ] = useState(initialTable);
   const [modal, setModal] = useState<{ kind: "check"; table: string; check?: DqCheck } | { kind: "schedule"; table: string; cron: string | null } | { kind: "seed" } | null>(
     openAdd && canEdit ? { kind: "check", table: initialTable.split(".").length === 3 ? initialTable.toUpperCase() : "" } : null);
@@ -503,7 +515,12 @@ export function DqStoreView({ tables, initialTable, status, openAdd, canEdit, ca
           <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Filter tables, columns or SodaCL" className="pl-9" aria-label="Filter checks" />
         </div>
         <Select aria-label="Status" className="w-auto" value={status}
-                onChange={(e) => router.push(`/dashboard/dq-store${e.target.value ? `?status=${e.target.value}` : ""}`)}>
+                onChange={(e) => {
+                  // keep the domain and table in the URL; only the status changes
+                  const next = new URLSearchParams(params?.toString() ?? "");
+                  if (e.target.value) next.set("status", e.target.value); else next.delete("status");
+                  router.push(`/dashboard/dq-store${next.toString() ? `?${next}` : ""}`);
+                }}>
           <option value="">Active and paused</option><option value="ACTIVE">Active</option><option value="PAUSED">Paused</option><option value="RETIRED">Retired</option>
         </Select>
         {canEdit && <>

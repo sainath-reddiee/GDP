@@ -20,6 +20,24 @@ CHECK_TYPE = {
 NEEDS_COLUMN = {"not_null", "missing_percent", "duplicate_percent", "accepted_values", "regex", "format", "range",
                 "max_length", "reference", "avg", "min", "max", "sum", "stddev"}
 FORMATS = {"email", "phone number", "uuid", "credit card number", "ipv4", "date eu", "date us", "date iso 8601"}
+FRESHNESS = re.compile(r"^(\d+)\s*([mhd])$")   # whole units only: Soda, the GX suite and the kit read 30m, 6h, 1d
+COLUMN_TYPE = re.compile(r"^[A-Za-z][A-Za-z0-9_ ]*(\(\s*\d+(\s*,\s*\d+)?\s*\))?$")
+
+
+def _number(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _columns(values: Any, what: str, problems: List[str]) -> List[str]:
+    """Plain column names, as written (a scan matches them to the table's columns whatever their case)."""
+    out = []
+    for v in values or []:
+        text = str(v or "").strip()
+        if not COLUMN.match(text):
+            problems.append(f"{what}: {text or '(empty)'} is not a plain column name")
+            continue
+        out.append(text)
+    return out
 
 
 def _threshold(t: Any) -> Optional[str]:
@@ -63,22 +81,56 @@ def validate(check: Dict[str, Any]) -> Tuple[Dict[str, Any], List[str]]:
             problems.append(f"the regex does not compile: {exc}")
     if kind == "format" and str(d.get("format") or "").lower() not in FORMATS:
         problems.append(f"format must be one of {sorted(FORMATS)}")
-    if kind == "range" and d.get("min") is None and d.get("max") is None:
-        problems.append("a range needs a min, a max or both")
-    if kind in ("missing_percent", "duplicate_percent"):
-        try:
-            if not 0 <= float(d.get("max_percent", -1)) <= 100:
-                raise ValueError
-        except (TypeError, ValueError):
-            problems.append("max_percent must be between 0 and 100")
+    if kind == "range":
+        if d.get("min") is None and d.get("max") is None:
+            problems.append("a range needs a min, a max or both")
+        elif any(d.get(k) is not None and not _number(d.get(k)) for k in ("min", "max")):
+            problems.append("range min and max must be numbers")
+        elif d.get("min") is not None and d.get("max") is not None and d["min"] > d["max"]:
+            problems.append("range min must not be above max")
+    for key in ("max_percent", "max_invalid_percent"):
+        required = key == "max_percent" and kind in ("missing_percent", "duplicate_percent")
+        if required or d.get(key) not in (None, ""):
+            try:
+                d[key] = float(d.get(key, -1))
+                if not 0 <= d[key] <= 100:
+                    raise ValueError
+            except (TypeError, ValueError):
+                problems.append(f"{key} must be a number between 0 and 100")
     if kind == "max_length" and not isinstance(d.get("max"), int):
         problems.append("max length must be a whole number")
-    if kind == "freshness" and not re.match(r"^\d+(\.\d+)?\s*[mhd]$", str(d.get("threshold") or "")):
-        problems.append("freshness threshold looks like 30m, 6h or 1d")
-    if kind == "reference" and not FQN.match(str(d.get("reference_table") or "")):
-        problems.append("reference table must be DATABASE.SCHEMA.TABLE")
-    if kind == "schema" and not (d.get("required") or d.get("forbidden") or d.get("types")):
-        problems.append("a schema check needs required, forbidden or typed columns")
+    if kind == "freshness":
+        found = FRESHNESS.match(str(d.get("threshold") or "").strip())
+        if found:
+            d["threshold"] = f"{int(found.group(1))}{found.group(2)}"
+        else:
+            problems.append("freshness threshold is a whole number of minutes, hours or days: 30m, 6h or 1d")
+    if kind == "reference":
+        if not FQN.match(str(d.get("reference_table") or "")):
+            problems.append("reference table must be DATABASE.SCHEMA.TABLE")
+        if d.get("reference_column"):
+            found = _columns([d["reference_column"]], "reference column", problems)
+            d["reference_column"] = found[0] if found else d["reference_column"]
+    if kind == "unique" and d.get("columns"):
+        d["columns"] = _columns(d["columns"], "unique columns", problems)
+    if kind == "schema":
+        if not (d.get("required") or d.get("forbidden") or d.get("types")):
+            problems.append("a schema check needs required, forbidden or typed columns")
+        for key in ("required", "forbidden"):
+            if d.get(key):
+                d[key] = _columns(d[key], f"schema {key}", problems)
+        if d.get("types"):
+            types = d["types"] if isinstance(d["types"], dict) else {}
+            if not types:
+                problems.append("schema types must be an object of column -> type")
+            cleaned = {}
+            for name, typ in types.items():
+                found = _columns([name], "schema types", problems)
+                if not COLUMN_TYPE.match(str(typ or "").strip()):
+                    problems.append(f"schema types: {typ!r} is not a column type")
+                elif found:
+                    cleaned[found[0]] = str(typ).strip().upper()   # a type, not a name: case does not matter
+            d["types"] = cleaned
     if kind == "failed_rows":
         if bool(d.get("condition")) == bool(d.get("query")):
             problems.append("give either a fail condition or a fail query")

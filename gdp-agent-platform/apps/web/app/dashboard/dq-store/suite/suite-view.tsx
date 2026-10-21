@@ -138,7 +138,7 @@ function ReviewTab({ table, detail, me, canEdit, canApprove }: { table: string; 
     else toast("error", explain(r.error).message);
   });
   const approve = () => start(async () => {
-    const r = await approveSuite(table, cur.version, ack);
+    const r = await approveSuite(table, cur.version, ack, cur.etag);
     if (!r.ok) { toast("error", explain(r.error).message); return; }
     toast(r.data.catalog.applied ? "ok" : "error", r.data.catalog.applied
       ? `v${cur.version} approved; ${r.data.catalog.checks ?? 0} checks now run on ${table.split(".").pop()}`
@@ -228,7 +228,7 @@ function ReviewTab({ table, detail, me, canEdit, canApprove }: { table: string; 
               </Button>
               <Textarea aria-label="Reject reason" rows={2} value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Why it is rejected" />
               <Button variant="outline" className="w-full text-destructive" disabled={pending || reason.trim().length < 3}
-                      onClick={() => run(() => rejectSuite(table, cur.version, reason), `v${cur.version} rejected`)}>
+                      onClick={() => run(() => rejectSuite(table, cur.version, reason, cur.etag), `v${cur.version} rejected`)}>
                 <X className="h-4 w-4" /> Reject
               </Button>
             </>
@@ -400,7 +400,11 @@ function ExportTab({ table, version }: { table: string; version: number | null }
   const href = `/bff/dq-export?${new URLSearchParams({ table, format, ...(version ? { version: String(version) } : {}) })}`;
   useEffect(() => {
     setText(null);
-    fetch(href).then((r) => (r.ok ? r.text() : Promise.resolve(`Could not render: ${r.status}`))).then(setText, () => setText("Could not reach the API"));
+    const ctrl = new AbortController();   // switching format quickly: only the newest answer is shown
+    fetch(href, { signal: ctrl.signal })
+      .then((r) => (r.ok ? r.text() : Promise.resolve(`Could not render: ${r.status}`)))
+      .then((t) => { if (!ctrl.signal.aborted) setText(t); }, () => { if (!ctrl.signal.aborted) setText("Could not reach the API"); });
+    return () => ctrl.abort();
   }, [href]);
   return (
     <section className="surface space-y-3 p-4" data-testid="suite-export">

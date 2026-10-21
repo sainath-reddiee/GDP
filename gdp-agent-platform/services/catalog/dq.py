@@ -25,7 +25,8 @@ from services.common.platform_schema import fqn
 CATALOG = "CORE.DQ_CHECKS_CATALOG"
 STATUSES = ("ACTIVE", "PAUSED", "RETIRED")
 ORIGINS = ("PROFILE", "RUN", "USER", "REQUIREMENT")  # REQUIREMENT: from a client requirement (dq_requirements)
-CRON = re.compile(r"^\s*(\S+\s+){4}\S+(\s+[A-Za-z_]+(?:/[A-Za-z_]+)*)?\s*$")  # five fields, optional IANA time zone
+# five fields of the cron alphabet, then an optional IANA time zone: nothing that can end the quoted SCHEDULE
+CRON = re.compile(r"^\s*([0-9*/,?#LW-]+\s+){4}[0-9*/,?#LW-]+(\s+[A-Za-z_]+(?:/[A-Za-z_+-]+)*)?\s*$")
 
 _NUM = r"-?\d+(?:\.\d+)?"
 _FN = re.compile(rf"^(?P<fn>[a-z_]+)\((?P<args>[^)]*)\)\s*(?P<op><=|>=|<|>|=|!=)\s*(?P<value>{_NUM})\s*(?P<unit>%|[mhd])?$",
@@ -91,7 +92,8 @@ def parse_dsl(text: str) -> Tuple[Dict[str, Any], List[str]]:
     if fn == "freshness":
         amount = f"{value:g}{unit or 'd'}"
         return ({"target_column": col, "definition": {"kind": "freshness", "threshold": amount}},
-                need(op in ("<", "<=") and unit in ("", "m", "h", "d"), "freshness supports < 30m, 6h or 1d"))
+                need(op in ("<", "<=") and unit in ("", "m", "h", "d") and value.is_integer(),
+                     "freshness supports < 30m, 6h or 1d"))
     if fn in ("min", "max", "avg", "sum", "stddev"):
         return ({"target_column": col, "definition": {"kind": fn, "threshold": {"op": op, "value": value}}},
                 need(bool(col) and op != "!=", f"{fn} needs a column and a comparison"))

@@ -82,7 +82,7 @@ def main(paths):
             code = subprocess.call(["soda", "scan", "-d", DATA_SOURCE, "-c", str(cfg), str(chk)])
             print("::endgroup::")
         print(f"{f}: soda scan exited {code}")
-        worst = max(worst, code)
+        worst = max(worst, 0 if code == 1 else code)   # Soda exits 1 when checks only warn: not a failure
     return worst
 
 

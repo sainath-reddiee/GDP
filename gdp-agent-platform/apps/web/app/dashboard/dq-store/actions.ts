@@ -20,8 +20,9 @@ export async function previewCheck(body: CheckPayload) {
 }
 
 /** What a check edit returns: it lands in the table's suite draft (opened when there was none). */
+/** UNCHANGED (staged false): the edit changed nothing, so no draft was opened; `version` is then the approved one. */
 export type Staged = {
-  table: string; version: number; status: "DRAFT"; draft_opened: boolean; staged: true; check_id?: string; headline?: string;
+  table: string; version: number; status: "DRAFT" | "UNCHANGED"; draft_opened: boolean; staged: boolean; check_id?: string; headline?: string;
   action?: "added" | "changed" | "removed" | "paused" | "resumed"; counts: Record<string, number>; loosened: boolean; changed: number;
   added?: number; skipped?: number; problems?: string[];
 };
@@ -84,13 +85,14 @@ export const openSuiteDraft = async (table: string, fromVersion?: number, note?:
 export const submitSuite = async (table: string, note?: string) =>
   suiteWrite<{ version: number; counts: Record<string, number>; loosened: boolean }>("submit", { table, note: note ?? null });
 export const withdrawSuite = async (table: string) => suiteWrite<{ version: number }>("withdraw", { table });
-export const approveSuite = async (table: string, version: number, acknowledgeLoosened: boolean) =>
+/** `etag` is the version as the reviewer read it: a version changed since is refused (409) rather than approved. */
+export const approveSuite = async (table: string, version: number, acknowledgeLoosened: boolean, etag?: string | null) =>
   suiteWrite<{ version: number; model_version: number | null; catalog: { applied: boolean; error?: string; checks?: number } }>(
-    "approve", { table, version, acknowledge_loosened: acknowledgeLoosened });
+    "approve", { table, version, acknowledge_loosened: acknowledgeLoosened, etag: etag ?? null });
 export const applySuite = async (table: string, version: number) =>
   suiteWrite<{ applied: boolean; error?: string; checks?: number }>("apply", { table, version });
-export const rejectSuite = async (table: string, version: number, reason: string) =>
-  suiteWrite<{ version: number }>("reject", { table, version, reason });
+export const rejectSuite = async (table: string, version: number, reason: string, etag?: string | null) =>
+  suiteWrite<{ version: number }>("reject", { table, version, reason, etag: etag ?? null });
 
 export async function diffSuite(table: string, from: number | null, to: number) {
   const qs = new URLSearchParams({ table, to: String(to), ...(from ? { from: String(from) } : {}) });

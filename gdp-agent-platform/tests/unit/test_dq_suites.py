@@ -161,9 +161,13 @@ def lifecycle(versions, checks_by_version, suite=None):
         writes = s.find("UPDATE CORE.DQ_SUITE_VERSION SET CHECKS = PARSE_JSON(?), ETAG = ?")
         return [{"ETAG": writes[-1][1][1]}] if writes else []
 
+    def status(_params):   # the approval UPDATE is guarded by status and etag; the re-read sees it land
+        return [{"STATUS": "APPROVED"}] if s.find("SET STATUS = 'APPROVED'") else []
+
     s.answers = {
         "FROM CORE.DQ_SUITE WHERE TABLE_NAME = ?": [suite or SUITE],
         "SELECT ETAG FROM CORE.DQ_SUITE_VERSION": etag,
+        "SELECT STATUS FROM CORE.DQ_SUITE_VERSION": status,
         "SELECT CHECKS FROM CORE.DQ_SUITE_VERSION": lambda p: [{"CHECKS": json.dumps(checks_by_version[int(p[1])])}],
         "FROM CORE.DQ_SUITE_VERSION WHERE SUITE_ID = ? AND STATUS IN ('DRAFT', 'IN_REVIEW')": lambda p: [
             {"VERSION": v["VERSION"]} for v in versions if v["STATUS"] in ("DRAFT", "IN_REVIEW")],
@@ -387,7 +391,7 @@ def test_api_routes_stage_approve_and_export(client, monkeypatch):
     assert res.status_code == 200 and 'filename="x.soda.yml"' in res.headers["content-disposition"]
     names = [n for n, _ in calls]
     assert names == ["stage_check", "stage_status", "seed_run", "approve", "export_version"]
-    assert calls[1][1][:3] == (TABLE, "c1", "PAUSED") and calls[3][1][2:] == ("LEE", True)
+    assert calls[1][1][:3] == (TABLE, "c1", "PAUSED") and calls[3][1][2:] == ("LEE", True, None)
 
 
 def test_api_maps_conflict_to_409(client, monkeypatch):

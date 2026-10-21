@@ -25,8 +25,9 @@ SAMPLE_ROWS = 20
 PII_HINT = re.compile(r"(EMAIL|PHONE|MOBILE|SSN|SOCIAL|BIRTH|DOB|PASSPORT|ADDRESS|STREET|FIRST_NAME|LAST_NAME|FULL_NAME|"
                       r"CARD|IBAN|ACCOUNT_NUMBER|TAX_ID|NATIONAL_ID)", re.IGNORECASE)
 PII_SEMANTICS = {"EMAIL", "PHONE", "PERSON_NAME", "NAME", "ADDRESS", "SSN", "DATE_OF_BIRTH", "CREDIT_CARD", "IBAN"}
-UNSAFE_CONDITION = re.compile(r";|--|/\*|\b(INSERT|UPDATE|DELETE|MERGE|TRUNCATE|DROP|CREATE|ALTER|GRANT|REVOKE|CALL|"
-                              r"EXECUTE|COPY|PUT|GET|REMOVE|USE|SET|BEGIN|COMMIT|ROLLBACK)\b|SYSTEM\$", re.IGNORECASE)
+UNSAFE_CONDITION = re.compile(r";|--|/\*|\b(SELECT|INSERT|UPDATE|DELETE|MERGE|TRUNCATE|DROP|CREATE|ALTER|GRANT|REVOKE|"
+                              r"CALL|EXECUTE|COPY|PUT|GET|REMOVE|USE|SET|BEGIN|COMMIT|ROLLBACK|RESULT_SCAN|IDENTIFIER)\b|"
+                              r"SYSTEM\$|@", re.IGNORECASE)   # SELECT: no subquery reads another table
 METRIC_KINDS = {"avg": "AVG", "min": "MIN", "max": "MAX", "sum": "SUM", "stddev": "STDDEV"}
 DIMENSIONS = {
     "row_count": "completeness", "not_null": "completeness", "missing_percent": "completeness",
@@ -119,9 +120,46 @@ def violation(check: Dict[str, Any]) -> Optional[str]:
     return None
 
 
-def plan(checks: List[Dict[str, Any]], fqn: str) -> Tuple[str, Dict[int, Dict[str, Any]], Dict[int, str]]:
-    """(aggregate SQL, {check index: how to read it}, {check index: standalone SQL})."""
+def resolve_columns(checks: List[Dict[str, Any]], actual: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """The checks with their column names matched to the table's columns, ignoring case (an exact match wins), so
+    `email` reads EMAIL and a quoted lowercase "email" column still reads as itself."""
+    if not actual:
+        return checks
+    by_upper: Dict[str, str] = {}
+    for name in actual:
+        by_upper.setdefault(str(name).upper(), str(name))
+
+    def fix(name: Any) -> Any:
+        if not name or name in actual:
+            return name
+        return by_upper.get(str(name).upper(), name)
+
+    out = []
+    for c in checks:
+        d = dict(c.get("definition") or {})
+        if d.get("columns"):
+            d["columns"] = [fix(x) for x in d["columns"]]
+        if d.get("kind") == "freshness" and not c.get("target_column"):
+            d["column"] = fix("LOADED_AT")
+        out.append({**c, "target_column": fix(c.get("target_column")), "definition": d})
+    return out
+
+
+def _freshness_sql(column: str, data_type: Optional[str]) -> str:
+    """Hours since the newest value. TIMESTAMP_LTZ and TIMESTAMP_TZ hold an instant: compare instants. NTZ and DATE
+    columns hold wall-clock time, which the platform writes in UTC."""
+    if str(data_type or "").upper() in ("TIMESTAMP_LTZ", "TIMESTAMP_TZ"):
+        return f"DATEDIFF('minute', MAX({q(column)})::TIMESTAMP_LTZ, CURRENT_TIMESTAMP()) / 60.0"
+    return (f"DATEDIFF('minute', MAX({q(column)})::TIMESTAMP_NTZ, "
+            f"CONVERT_TIMEZONE('UTC', CURRENT_TIMESTAMP())::TIMESTAMP_NTZ) / 60.0")
+
+
+def plan(checks: List[Dict[str, Any]], fqn: str,
+         types: Optional[Dict[str, Any]] = None) -> Tuple[str, Dict[int, Dict[str, Any]], Dict[int, str]]:
+    """(aggregate SQL, {check index: how to read it}, {check index: standalone SQL}). `types` (column -> data type)
+    picks the freshness arithmetic; each aggregate read keeps its own `part` so it can run alone."""
     assert FQN.match(fqn), f"unsafe table name {fqn}"
+    types = types or {}
     parts = ["COUNT(*) AS N"]
     reads: Dict[int, Dict[str, Any]] = {}
     standalone: Dict[int, str] = {}
@@ -137,30 +175,31 @@ def plan(checks: List[Dict[str, Any]], fqn: str) -> Tuple[str, Dict[int, Dict[st
                 cols = d.get("columns") or ([col] if col else [])
                 if len(cols) == 1:
                     parts.append(f"COUNT({q(cols[0])}) - COUNT(DISTINCT {q(cols[0])}) AS {alias}")
-                    reads[i] = {"alias": alias, "measure": "count"}
+                    reads[i] = {"alias": alias, "measure": "count", "part": parts[-1]}
                 elif cols:
                     keys = ", ".join(q(c) for c in cols)
                     standalone[i] = (f"SELECT COALESCE(SUM(C - 1), 0) AS V FROM (SELECT COUNT(*) AS C FROM {fqn} "
                                      f"GROUP BY {keys} HAVING COUNT(*) > 1)")
             elif kind == "duplicate_percent" and col:
                 parts.append(f"COUNT({q(col)}) - COUNT(DISTINCT {q(col)}) AS {alias}")
-                reads[i] = {"alias": alias, "measure": "percent"}
+                reads[i] = {"alias": alias, "measure": "percent", "part": parts[-1]}
             elif kind in METRIC_KINDS and col:
                 parts.append(f"{METRIC_KINDS[kind]}(TRY_TO_DOUBLE({q(col)}::STRING)) AS {alias}")
-                reads[i] = {"alias": alias, "measure": "value"}
+                reads[i] = {"alias": alias, "measure": "value", "part": parts[-1]}
             elif kind == "freshness":
-                target = col or "LOADED_AT"
-                parts.append(f"DATEDIFF('minute', MAX({q(target)})::TIMESTAMP_NTZ, "
-                             f"CONVERT_TIMEZONE('UTC', CURRENT_TIMESTAMP())::TIMESTAMP_NTZ) / 60.0 AS {alias}")
-                reads[i] = {"alias": alias, "measure": "value"}
+                target = col or d.get("column") or "LOADED_AT"
+                parts.append(f"{_freshness_sql(target, types.get(target))} AS {alias}")
+                reads[i] = {"alias": alias, "measure": "value", "part": parts[-1]}
             elif kind == "metric" and d.get("expression"):
                 expression = safe_condition(d["expression"])
                 parts.append(f"({expression}) AS {alias}")
-                reads[i] = {"alias": alias, "measure": "value"}
+                reads[i] = {"alias": alias, "measure": "value", "part": parts[-1]}
             elif kind in ("metric", "failed_rows") and d.get("query"):
                 standalone[i] = "QUERY"  # validated and wrapped by the caller (needs the allow list)
             elif kind == "reference" and col and d.get("reference_table"):
                 ref = str(d["reference_table"])
+                if "." not in ref:   # a model name (a spoke's hub): it lives beside the scanned table
+                    ref = ".".join(fqn.split(".")[:2] + [ref.upper()])
                 assert FQN.match(ref), f"reference table must be DATABASE.SCHEMA.TABLE, got {ref}"
                 ref_col = q(d.get("reference_column") or col)
                 standalone[i] = (f"SELECT COUNT(*) AS V FROM {fqn} T WHERE T.{q(col)} IS NOT NULL AND NOT EXISTS "
@@ -171,7 +210,8 @@ def plan(checks: List[Dict[str, Any]], fqn: str) -> Tuple[str, Dict[int, Dict[st
                 predicate = violation(check)
                 if predicate:
                     parts.append(f"COUNT_IF({predicate}) AS {alias}")
-                    reads[i] = {"alias": alias, "measure": "percent" if kind == "missing_percent" else "count"}
+                    reads[i] = {"alias": alias, "measure": "percent" if kind == "missing_percent" else "count",
+                                "part": parts[-1]}
         except AssertionError as exc:
             reads[i] = {"error": str(exc)}
     return f"SELECT {', '.join(parts)} FROM {fqn}", reads, standalone
@@ -268,6 +308,18 @@ def mask(value: Any) -> Any:
         return None
     text = str(value)
     return text[:1] + "•" * min(6, max(1, len(text) - 1))
+
+
+def profile_pii(session, fqn: str) -> set:
+    """Columns the table's profile classified as PII (upper case); empty when there is no readable profile."""
+    try:
+        found = _rows(session, """SELECT DISTINCT UPPER(COLUMN_NAME) AS C FROM CORE.DATA_PROFILES
+                                   WHERE UPPER(DATABASE_NAME || '.' || SCHEMA_NAME || '.' || TABLE_NAME) = ?
+                                     AND COALESCE(PII_CLASSIFICATION, 'NONE') <> 'NONE'""",
+                      [fqn.replace('"', "").upper()])
+    except Exception:
+        return set()
+    return {r["C"] for r in found if r.get("C")}
 
 
 def pii_columns(lines: List[Dict[str, Any]], columns: List[str]) -> set:
@@ -390,20 +442,26 @@ def _scan_model(session, run_id: Optional[str], checks: List[Dict[str, Any]], li
     without one (Data Quality Store table scans) the caller passes `previous_rows`."""
     from services.source.identifiers import sql_ident
 
-    aggregate, reads, standalone = plan(checks, fqn)
+    db, schema, table = [p.strip('"') for p in re.findall(r'"(?:[^"]|"")+"|[^.]+', fqn)]
+    actual = {r["COLUMN_NAME"]: r["DATA_TYPE"] for r in _rows(
+        session, f"SELECT COLUMN_NAME, DATA_TYPE FROM {sql_ident(db)}.INFORMATION_SCHEMA.COLUMNS "
+                 "WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?", [schema, table])}
+    checks = resolve_columns(checks, actual)
+    aggregate, reads, standalone = plan(checks, fqn, actual)
     t0 = time.time()
     try:
         row = (_rows(session, aggregate) or [{}])[0]
         agg_error = None
     except Exception as exc:
         row, agg_error = {}, str(exc)[:300]
+    if agg_error:   # one bad column fails the shared query: read each check on its own so the others still run
+        try:
+            row = {"N": (_rows(session, f"SELECT COUNT(*) AS N FROM {fqn}") or [{}])[0].get("N")}
+        except Exception:
+            row = {}
     agg_ms = int((time.time() - t0) * 1000)
     total = int(row.get("N") or 0)
-    db, schema, table = [p.strip('"') for p in re.findall(r'"(?:[^"]|"")+"|[^.]+', fqn)]
-    actual = {r["COLUMN_NAME"]: r["DATA_TYPE"] for r in _rows(
-        session, f"SELECT COLUMN_NAME, DATA_TYPE FROM {sql_ident(db)}.INFORMATION_SCHEMA.COLUMNS "
-                 "WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?", [schema, table])}
-    masked = pii_columns(lines, list(actual))
+    masked = pii_columns(lines, list(actual)) | profile_pii(session, fqn)
     allowed = [fqn.replace('"', "")] + [str(c["definition"].get("reference_table")) for c in checks
                                         if (c.get("definition") or {}).get("reference_table")]
     out = []
@@ -417,7 +475,14 @@ def _scan_model(session, run_id: Optional[str], checks: List[Dict[str, Any]], li
                 out.append({**base, "outcome": "ERROR", "detail": reads[i]["error"]})
                 continue
             if i in reads:
-                if agg_error:
+                if agg_error and reads[i].get("part"):
+                    sql_text = f"SELECT {reads[i]['part']} FROM {fqn}"
+                    try:
+                        row = {**row, **((_rows(session, sql_text) or [{}])[0])}
+                    except Exception as exc:
+                        out.append({**base, "outcome": "ERROR", "detail": str(exc)[:300], "sql": sql_text})
+                        continue
+                elif agg_error and "N" not in row:
                     out.append({**base, "outcome": "ERROR", "detail": agg_error, "sql": aggregate})
                     continue
                 raw = row.get(reads[i]["alias"])

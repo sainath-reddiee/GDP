@@ -108,7 +108,7 @@ def test_new_kinds_render_in_both_flavours():
               {"target_column": "TOTAL", "severity": "WARN", "requirement": "",
                "definition": {"kind": "avg", "threshold": {"between": [10, 500]}}}]
     v3 = render_yaml("dim_orders", checks)
-    assert "- failed rows:" in v3 and "fail condition: TOTAL < 0" in v3
+    assert "- failed rows:" in v3 and "fail condition: 'TOTAL < 0'" in v3
     assert "- avg(TOTAL):" in v3 and "warn: when not between 10 and 500" in v3
     v4 = contract_v4("DB", "MART", "DIM_ORDERS", checks)
     assert "- failed_rows:" in v4 and "expression: 'TOTAL < 0'" in v4

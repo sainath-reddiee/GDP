@@ -132,8 +132,18 @@ def requirement_from_row(target_table: str, row: Dict[str, Any]) -> Dict[str, An
     # Blank CSV cells mean "not given", not an empty value.
     row = {k: v for k, v in row.items() if not (v is None or (isinstance(v, str) and not v.strip()))}
     col = row.get("target_column") or row.get("attribute") or row.get("ATTRIBUTE") or row.get("column")
-    kind = normalize_check_type(str(row.get("check_type") or row.get("CHECK_TYPE") or "CUSTOM"))
+    raw_type = re.sub(r"[^A-Z0-9]+", "_", str(row.get("check_type") or row.get("CHECK_TYPE") or "CUSTOM").upper()).strip("_")
+    kind = normalize_check_type(raw_type)
     definition: Dict[str, Any] = {"kind": _kind(kind, row)}
+    percent = _as_number(str(row.get("threshold") or row.get("max_percent") or "").strip().lstrip("<=").rstrip("%").strip())
+    if raw_type in ("EMAIL", "EMAIL_FORMAT"):
+        definition.update(kind="format", format="email")
+    elif raw_type in ("MISSING_PERCENT", "NULL_PERCENT") and isinstance(percent, (int, float)):
+        definition.update(kind="missing_percent", max_percent=percent)
+        kind = "NOT_NULL"
+    elif raw_type in ("DUPLICATE_PERCENT", "UNIQUE_PERCENT") and isinstance(percent, (int, float)):
+        definition.update(kind="duplicate_percent", max_percent=percent)
+        kind = "UNIQUE"
     if row.get("valid_values") or row.get("accepted_values"):
         definition["values"] = _as_list(row.get("valid_values") or row.get("accepted_values"))
         definition["kind"] = "accepted_values"
@@ -155,7 +165,7 @@ def requirement_from_row(target_table: str, row: Dict[str, Any]) -> Dict[str, An
         kind = "FRESHNESS"
     if row.get("missing_values"):
         definition["missing_values"] = _as_list(row["missing_values"])
-    if row.get("threshold") and "threshold" not in definition:
+    if row.get("threshold") and "threshold" not in definition and definition["kind"] not in ("missing_percent", "duplicate_percent"):
         definition["threshold"] = row["threshold"]
     if row.get("reference_table"):
         definition["reference_table"] = row["reference_table"]

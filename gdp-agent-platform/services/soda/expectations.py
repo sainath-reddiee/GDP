@@ -173,13 +173,26 @@ def _yq(value: Any) -> str:
     return "'" + str(value).replace("'", "''") + "'"
 
 
+def _yv(value: Any) -> str:
+    """A list value: numbers bare, everything else a quoted YAML string (never Python repr)."""
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return f"{value:g}" if isinstance(value, float) else str(value)
+    return _yq(value)
+
+
+def _name(requirement: Any) -> str:
+    """The check's name line value: the requirement on one line, quoted so ':' or '#' cannot break the YAML."""
+    text = " ".join(str(requirement or "").split())[:80]
+    return _yq(text) if text else ""
+
+
 def _yaml_check(c: Dict[str, Any]) -> List[str]:
     """One SodaCL v3 check. FAIL checks put the threshold on the check line; WARN checks use an alert
     configuration (`warn: when ...`) because Soda does not allow both on the same check."""
     d = c.get("definition") or {}
     kind = d.get("kind")
     col = c.get("target_column")
-    name = (c.get("requirement") or "")[:80]
+    name = _name(c.get("requirement"))
     warn = str(c.get("severity") or "").upper() == "WARN"
     config: List[str] = []
     metric, fail_line, warn_when = "", "", ""
@@ -192,20 +205,20 @@ def _yaml_check(c: Dict[str, Any]) -> List[str]:
     elif kind == "not_null" and col:
         metric, fail_line, warn_when = f"missing_count({col})", f"missing_count({col}) = 0", "> 0"
         if d.get("missing_values"):
-            config.append(f"missing values: [{', '.join(repr(v) for v in d['missing_values'])}]")
+            config.append(f"missing values: [{', '.join(_yv(v) for v in d['missing_values'])}]")
     elif kind == "missing_percent" and col:
-        limit = f"{d.get('max_percent', 0):g}%"
-        metric, fail_line, warn_when = f"missing_percent({col})", f"missing_percent({col}) < {limit}", f"> {limit}"
+        limit = f"{float(d.get('max_percent', 0) or 0):g}%"
+        metric, fail_line, warn_when = f"missing_percent({col})", f"missing_percent({col}) <= {limit}", f"> {limit}"
     elif kind == "unique":
         joined = ", ".join(d.get("columns") or ([col] if col else []))
         metric, fail_line, warn_when = f"duplicate_count({joined})", f"duplicate_count({joined}) = 0", "> 0"
     elif kind == "accepted_values" and col:
         metric, fail_line, warn_when = f"invalid_count({col})", f"invalid_count({col}) = 0", "> 0"
-        config.append(f"valid values: [{', '.join(repr(v) for v in d.get('values', []))}]")
+        config.append(f"valid values: [{', '.join(_yv(v) for v in d.get('values', []))}]")
     elif kind == "regex" and col:
         if d.get("max_invalid_percent"):
-            limit = f"{d['max_invalid_percent']:g}%"
-            metric, fail_line, warn_when = f"invalid_percent({col})", f"invalid_percent({col}) < {limit}", f"> {limit}"
+            limit = f"{float(d['max_invalid_percent']):g}%"
+            metric, fail_line, warn_when = f"invalid_percent({col})", f"invalid_percent({col}) <= {limit}", f"> {limit}"
         else:
             metric, fail_line, warn_when = f"invalid_count({col})", f"invalid_count({col}) = 0", "> 0"
         config.append(f"valid regex: {_yq(d.get('pattern'))}")
@@ -250,7 +263,7 @@ def _yaml_check(c: Dict[str, Any]) -> List[str]:
             body.append("      fail query: |")
             body += [f"        {line}" for line in str(d["query"]).strip().splitlines()]
         else:
-            body.append(f"      fail condition: {d.get('condition')}")
+            body.append(f"      fail condition: {_yq(' '.join(str(d.get('condition') or '').split()))}")
         limit = d.get("max_failed")
         if warn:
             body.append(f"      warn: when > {limit or 0}")
@@ -267,7 +280,7 @@ def _yaml_check(c: Dict[str, Any]) -> List[str]:
             body.append(f"      {metric_name} query: |")
             body += [f"        {line}" for line in str(d["query"]).strip().splitlines()]
         else:
-            body.append(f"      {metric_name} expression: {d.get('expression')}")
+            body.append(f"      {metric_name} expression: {_yq(' '.join(str(d.get('expression') or '').split()))}")
         if warn:
             body.append(f"      warn: when not {cond}" if cond.startswith("between") else f"      warn: when {_negate(cond)}")
         return body
@@ -276,12 +289,13 @@ def _yaml_check(c: Dict[str, Any]) -> List[str]:
         metric, fail_line = f"{kind}({col})", f"{kind}({col}) {cond}"
         warn_when = f"not {cond}" if cond.startswith("between") else _negate(cond)
     elif kind == "duplicate_percent" and col:
-        limit = f"{float(d.get('max_percent', 0)):g}%"
-        metric, fail_line, warn_when = f"duplicate_percent({col})", f"duplicate_percent({col}) < {limit}", f"> {limit}"
+        limit = f"{float(d.get('max_percent', 0) or 0):g}%"
+        metric, fail_line, warn_when = f"duplicate_percent({col})", f"duplicate_percent({col}) <= {limit}", f"> {limit}"
     elif kind == "change_over_time":
+        # the limits are percents, as the platform's scanner reads them
         low, high = float(d.get("max_decrease_percent", 20)), float(d.get("max_increase_percent", 50))
-        cond = f"between -{low:g} and +{high:g}"
-        body = [f"  - change for row_count {cond}:" if not warn else "  - change for row_count:"]
+        cond = f"between -{low:g}% and +{high:g}%"
+        body = [f"  - change percent for row_count {cond}:" if not warn else "  - change percent for row_count:"]
         if name:
             body.append(f"      name: {name}")
         if warn:
@@ -295,10 +309,9 @@ def _yaml_check(c: Dict[str, Any]) -> List[str]:
             body.append(f"      name: {name}")
         return body
     else:
-        base = kind or "row_count"
-        metric = f"{base}({col})" if col else base
-        threshold = d.get("threshold") or ("= 0" if col else "> 0")
-        fail_line, warn_when = f"{metric} {threshold}", "> 0"
+        # no SodaCL form (an unmapped client check type, or a kind without the column it needs): say so in the file
+        # instead of writing a metric Soda does not know, which would make the whole checks file fail
+        return [f"  # not rendered: {kind or 'unknown'} check{f' on {col}' if col else ''} has no SodaCL form"]
     if name:
         config.append(f"name: {name}")
     if warn:

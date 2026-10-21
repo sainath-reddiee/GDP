@@ -242,7 +242,7 @@ def test_dq_catalog_tree_and_before_deploy(client):
 def test_dq_parse_preview(client):
     c, _ = client
     ok = c.post("/api/dq/parse", json={"table": "DB.S.T", "dsl": "missing_percent(EMAIL) < 2%"}).json()
-    assert ok["ok"] and ok["headline"] == "missing_percent(EMAIL) < 2%"
+    assert ok["ok"] and ok["headline"] == "missing_percent(EMAIL) <= 2%"   # the limit is inclusive, as the scanner reads it
     assert c.post("/api/dq/parse", json={"table": "DB.S.T", "dsl": "nonsense"}).json()["ok"] is False
 
 

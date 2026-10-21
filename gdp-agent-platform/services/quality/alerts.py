@@ -153,11 +153,13 @@ def classify(state: List[Dict[str, Any]], warn_after: int) -> Tuple[List[Dict[st
     stale: List[Dict[str, Any]] = []
     for r in state:
         outcome = r["outcome"]
+        warned = outcome == "WARN" and warn_after > 0 and int(r.get("streak") or 0) >= warn_after
         if is_freshness(r):
-            if outcome in FAILING:
+            # freshness checks are WARN by default: a warning that persists is stale data too
+            if outcome in FAILING or warned:
                 stale.append(r)
             continue
-        if outcome in FAILING or (outcome == "WARN" and warn_after > 0 and int(r.get("streak") or 0) >= warn_after):
+        if outcome in FAILING or warned:
             failing.append(r)
     return failing, stale
 
@@ -237,11 +239,14 @@ def raise_incident(store: Any, cand: Dict[str, Any], dag: Dict[str, Any], rules:
                    settings: Dict[str, Any], now: datetime) -> Dict[str, Any]:
     """Open, reopen or update the table's incident for this sighting. A changed check set updates the title, the
     severity (never less urgent) and the timeline."""
-    before = _active(store, cand["kind"], table_of(cand))
+    latest = store.latest_by_fingerprint(fingerprint(cand["kind"], table_of(cand)))
+    active = latest if latest and latest.get("status") in inc.ACTIVE else None
     result = inc.open_or_update(store, cand, settings, dag, rules, now)
-    if result["action"] == "occurrence" and before:
+    # an occurrence of the open incident, or a resolved one reopened: either way it now describes this check set
+    before = active if result["action"] == "occurrence" else latest if result["action"] == "reopened" else None
+    if before:
         old, new = set_in(before.get("error_excerpt")), set_in(cand["error_excerpt"])
-        if old != new:
+        if old != new or result["action"] == "reopened":
             severity = higher_of(before.get("severity"), cand["severity"])
             store.update(before["incident_id"], {"title": cand["title"], "severity": severity,
                                                  "error_excerpt": cand["error_excerpt"]})
@@ -270,7 +275,9 @@ def evaluate_table(store: Any, scan: Dict[str, Any], history: List[Dict[str, Any
     table = str(scan["table_fqn"])
     state = state_of(history)
     failing, stale = classify(state, route["warn_after_runs"])
-    in_scan = {str(r.get("catalog_check_id")) for r in history if r.get("scan_id") == scan["scan_id"]}
+    # every scan of this table read in this pass counts: a later partial scan must not hide an earlier failure
+    scan_ids = set(scan.get("batch_scan_ids") or []) | {scan["scan_id"]}
+    in_scan = {str(r.get("catalog_check_id")) for r in history if r.get("scan_id") in scan_ids}
     at = inc._iso(scan.get("started_at")) or now.isoformat()
     when = _dt(at) or now
     when = min(when, now)
@@ -303,10 +310,14 @@ def process_scans(store: Any, settings: Optional[Dict[str, Any]] = None, now: Op
     since = store.scan_cursor()
     scans, newest = store.scans_since(since, SCAN_LIMIT)
     latest: Dict[str, Dict[str, Any]] = {}
+    batch: Dict[str, List[str]] = {}
     for s in scans:
         key = str(s.get("table_fqn") or "").upper()
+        if key:
+            batch.setdefault(key, []).append(s["scan_id"])
         if key and (key not in latest or (_dt(s.get("started_at")) or now) >= (_dt(latest[key].get("started_at")) or now)):
             latest[key] = s
+    latest = {k: {**s, "batch_scan_ids": batch.get(k, [])} for k, s in latest.items()}
     actions: Dict[str, int] = {}
     errors: List[str] = []
     if latest:
@@ -399,7 +410,8 @@ def _rate(passed: int, evaluated: int) -> Optional[float]:
 
 
 def _pass_rate(outcomes: Iterable[Optional[str]]) -> Tuple[Optional[float], int]:
-    seen = [str(o).upper() for o in outcomes if o and str(o).upper() in ("PASS", "WARN", "FAIL")]
+    # a check that errors did not pass: it counts against the rate like a failure
+    seen = [str(o).upper() for o in outcomes if o and str(o).upper() in ("PASS", "WARN", "FAIL", "ERROR")]
     return _rate(sum(1 for o in seen if o == "PASS"), len(seen)), len(seen)
 
 
