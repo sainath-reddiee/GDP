@@ -35,13 +35,12 @@ pr_sync_task = false                      # sync pull requests every 30 minutes 
 actual_cost_from_account_usage = false    # read actual Cortex credits (needs SNOWFLAKE.USAGE_VIEWER)
 
 [snaplogic]
-# Optional: onboarding also writes the tables SnapLogic triggers from (one master row per source, one detail row per
-# table). Seeded once into Admin (setting SNAPLOGIC_SYNC); after that it is changed there. Never the live GDP_* tables.
-# The tables belong to their owners: --check says whether the roles that onboard can write them, --admin-sql writes the
-# grants for that owner. writer_roles defaults to <role_prefix>_DATA_ENGINEER and <role_prefix>_PLATFORM_ADMIN.
+# Optional: onboarding also writes the tables SnapLogic triggers from, CORE.AODS_SNAPLOGIC_CONFIG_MASTER (one row per
+# source) and CORE.AODS_SNAPLOGIC_CONFIG_DETAIL (one row per table), created by the platform in this database's CORE.
+# enabled is seeded once into Admin (setting SNAPLOGIC_SYNC) and changed there after that. snaplogic_roles are the
+# Snowflake role(s) SnapLogic connects with: the deploy grants them SELECT and UPDATE on the two tables.
 # enabled = false
-# table_prefix = "DEV_GDP_UTIL_DB.CONFIG.AODS_"
-# writer_roles = ["AODS_DATA_ENGINEER", "AODS_PLATFORM_ADMIN"]
+# snaplogic_roles = ["SNAPLOGIC_ROLE"]
 
 [environment]
 # Optional: which environment this deployment is, and the real database (or DATABASE.SCHEMA) that plays each role

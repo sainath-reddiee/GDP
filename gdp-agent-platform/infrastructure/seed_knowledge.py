@@ -486,8 +486,7 @@ def seed_snaplogic(cur, database: str, snaplogic: Optional[Dict[str, Any]]) -> L
         cur.execute(f"SELECT COUNT(*) FROM {database}.CORE.PLATFORM_CONFIG WHERE CONFIG_KEY = %s", (sc.KEY,))
         if cur.fetchall()[0][0]:
             return ["snaplogic sync: kept the saved setting"]
-        value, problems = sc.validate_setting({**sc.DEFAULT_SETTING, "enabled": snaplogic.get("enabled") is True,
-                                               "table_prefix": snaplogic.get("table_prefix") or sc.DEFAULT_SETTING["table_prefix"]})
+        value, problems = sc.validate_setting({**sc.DEFAULT_SETTING, "enabled": snaplogic.get("enabled") is True})
         if problems:
             return [f"snaplogic sync: not seeded ({'; '.join(problems[:3])})"]
         cur.execute(f"""INSERT INTO {database}.CORE.PLATFORM_CONFIG
@@ -496,7 +495,7 @@ def seed_snaplogic(cur, database: str, snaplogic: Optional[Dict[str, Any]]) -> L
                     (sc.KEY, json.dumps(value), "SnapLogic config tables from the environment file"))
     except Exception as exc:
         return [f"snaplogic sync: skipped ({str(exc)[:120]})"]
-    return [f"snaplogic sync: {'on' if value['enabled'] else 'off'}, writing {sc.tables(value)['master']} and {sc.tables(value)['detail']}"]
+    return [f"snaplogic sync: {'on' if value['enabled'] else 'off'}, writing {database}.{sc.MASTER} and {database}.{sc.DETAIL}"]
 
 
 def seed_dq_suites(cur, database: str) -> List[str]:

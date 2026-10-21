@@ -18,7 +18,7 @@ from typing import Any, Literal, Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
-from app.db import Db
+from app.db import DATABASE, Db
 from app.main import _config, _ident, _put_config, _snowflake_error, _source_call, _table_ident, current_db
 from services.common import secretbox
 from services.source import ingestion_control, pipelines, snaplogic_sync
@@ -260,7 +260,7 @@ def _create_control(db: Db, payload: dict, kind: str, run_id: Optional[str] = No
     header, rows, errors = ingestion_control.validate(payload)
     if errors:
         raise HTTPException(422, {"message": "Some answers need attention", "errors": errors})
-    sync = snaplogic_sync.setting(db)
+    sync = snaplogic_sync.setting(db, DATABASE)
     if sync["enabled"] and not header.get("domain_name"):
         header["domain_name"] = _domain_name(db, header.get("domain_id"))
     try:
@@ -324,8 +324,9 @@ def _create_control(db: Db, payload: dict, kind: str, run_id: Optional[str] = No
 @router.get("/api/hub/snaplogic/status")
 def snaplogic_status(db: Db = Depends(current_db)):
     """Whether onboarding also writes SnapLogic's config tables, and which ones (Admin, SNAPLOGIC_SYNC)."""
-    sync = snaplogic_sync.setting(db)
-    return {"enabled": sync["enabled"], "tables": snaplogic_sync.sc.tables(sync), "defaults": sync["defaults"],
+    sync = snaplogic_sync.setting(db, DATABASE)
+    t = snaplogic_sync.sc.tables(sync)
+    return {"enabled": sync["enabled"], "tables": {"master": t["master_fqn"], "detail": t["detail_fqn"]}, "defaults": sync["defaults"],
             "child_pipeline_by_type": sync["child_pipeline_by_type"]}
 
 
@@ -333,7 +334,7 @@ def snaplogic_status(db: Db = Depends(current_db)):
 def snaplogic_preview(body: ControlIn, db: Db = Depends(current_db)):
     """The master and detail rows an onboarding would write to SnapLogic's tables; nothing is written."""
     header, rows, errors = ingestion_control.validate(body.model_dump())
-    sync = snaplogic_sync.setting(db)
+    sync = snaplogic_sync.setting(db, DATABASE)
     if not header.get("domain_name"):
         header["domain_name"] = _domain_name(db, header.get("domain_id"))
     who = (db.query("SELECT CURRENT_USER() AS U") or [{"u": "UNKNOWN"}])[0]["u"]
@@ -375,7 +376,7 @@ def snaplogic_retry(sync_id: str, body: Optional[RetryIn] = None, db: Db = Depen
             keys = {str(k).upper(): v for k, v in value.items()}
             request["tables"] = [{**t, column: keys.get(str(t.get("source_table_sql") or "").upper(), t.get(column))}
                                  for t in request.get("tables") or []]
-    if not snaplogic_sync.setting(db)["enabled"]:
+    if not snaplogic_sync.setting(db, DATABASE)["enabled"]:
         raise HTTPException(409, "The SnapLogic sync is off (Admin, SNAPLOGIC_SYNC)")
     out = _create_control(db, request, "SHARE", attempt.get("run_id"))
     db.execute(f"UPDATE {snaplogic_sync.LOG} SET STATUS = 'RETRIED' WHERE SYNC_ID = %s", (sync_id,))
@@ -444,7 +445,7 @@ def edit_control(master_id: int, child_id: int, body: ControlEdit, db: Db = Depe
                             WHERE MASTER_ID = %s AND CHILD_ID = %s""",
                        (*[row.get(c) for c in fields], int(master_id), int(child_id)))
             _history(db, master_id, child_id, action, {**{k: current.get(k) for k in ingestion_control.COLUMNS}, **{c: row.get(c) for c in fields}})
-            sync = snaplogic_sync.setting(db)
+            sync = snaplogic_sync.setting(db, DATABASE)
             synced = snaplogic_sync.write_edit(db, current, {**current, **row}, sync) if sync["enabled"] else None
     except Exception as exc:
         raise _snowflake_error(exc) from exc
@@ -559,7 +560,7 @@ def share_control_payload(body: "ShareOnboard", database: str, schema: str, land
 def _share_snaplogic(db: Db, body: "ShareOnboard", database: str, schema: str, run_id: Optional[str], landed: list[dict]) -> Optional[dict]:
     """After a share has landed: its SnapLogic rows, or why not. Never undoes the landing; a failure is kept with what
     to write again (POST /api/hub/snaplogic/sync/<id>/retry)."""
-    sync = snaplogic_sync.setting(db)
+    sync = snaplogic_sync.setting(db, DATABASE)
     if not sync["enabled"]:
         return None
     if not body.snaplogic:

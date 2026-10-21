@@ -1,14 +1,13 @@
 """SnapLogic config tables (pure): what one onboarding writes to the two tables SnapLogic triggers from.
 
-    <prefix>SNAPLOGIC_CONFIG_MASTER   one row per source system   (MASTER_CONFIG_ID autoincrement)
-    <prefix>SNAPLOGIC_CONFIG_DETAIL   one row per table           (CHILD_CONFIG_ID autoincrement, MASTER_CONFIG_ID links)
+    CORE.AODS_SNAPLOGIC_CONFIG_MASTER   one row per source system   (MASTER_CONFIG_ID autoincrement)
+    CORE.AODS_SNAPLOGIC_CONFIG_DETAIL   one row per table           (CHILD_CONFIG_ID autoincrement, MASTER_CONFIG_ID links)
 
-The prefix comes from the SNAPLOGIC_SYNC setting (default DEV_GDP_UTIL_DB.CONFIG.AODS_) and never names the live GDP_*
-tables. Rows follow the live GDP_* conventions (the defaults below were profiled from them): the cron lives on the master
+Both live in the platform's own schema, CORE (V071), like every platform table: one database, one schema. Rows follow the live GDP_* conventions (the defaults below were profiled from them): the cron lives on the master
 row, JOB_TRIGGER_TIME stays NULL (SnapLogic sets it when it runs), CONFIG_TABLE names the detail table itself, the child
 pipeline follows the source type, and TARGET_PREVIOUS_LOAD_TIME, LAST_RUN_TIMESTAMP and COMPLETION_FLAG are starting
-values SnapLogic updates after each run. CORE keeps its own conventions (upper-case names); only these rows use the
-live ones. The tables belong to SnapLogic's owners, so ids are never invented: a source's master row is reused when it
+values SnapLogic updates after each run. The platform's other tables keep their own conventions (upper-case names); only
+these rows use the live ones. The ids are the tables' autoincrement values: a source's master row is reused when it
 exists, and new rows carry an exact creation time that the writer reads their ids back by, inside its transaction.
 """
 
@@ -19,9 +18,8 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 KEY = "SNAPLOGIC_SYNC"
-MASTER = "SNAPLOGIC_CONFIG_MASTER"
-DETAIL = "SNAPLOGIC_CONFIG_DETAIL"
-PREFIX = re.compile(r"^[A-Za-z_][A-Za-z0-9_$]*\.[A-Za-z_][A-Za-z0-9_$]*\.[A-Za-z0-9_$]*$")
+MASTER = "CORE.AODS_SNAPLOGIC_CONFIG_MASTER"
+DETAIL = "CORE.AODS_SNAPLOGIC_CONFIG_DETAIL"
 
 # the live tables' columns, in their DDL order (the identity columns are filled by Snowflake)
 MASTER_COLUMNS = ("SOURCE_SYSTEM", "SOURCE_TYPE", "ACTIVE_FLAG", "CREATED_AT", "SCHEDULE_CRON", "SOURCE_SYSTEM_DESC",
@@ -53,7 +51,6 @@ SOURCE_TYPE_ALIASES = {"POSTGRES": "POSTGRESQL"}
 
 DEFAULT_SETTING: Dict[str, Any] = {
     "enabled": False,
-    "table_prefix": "DEV_GDP_UTIL_DB.CONFIG.AODS_",
     "defaults": {
         "parent_pipeline_name": "GDP_config_driven_framework_parent",
         "snaplogic_project_name": "GLOBAL_DATA_PLATFORM/Global_Data_Ingestion",
@@ -74,27 +71,25 @@ DEFAULT_KEYS = tuple(DEFAULT_SETTING["defaults"])
 
 
 def validate_setting(value: Any) -> Tuple[Dict[str, Any], List[str]]:
-    """(cleaned SNAPLOGIC_SYNC setting, problems). The prefix must name DATABASE.SCHEMA.<table prefix> and never the
-    live GDP_ tables."""
+    """(cleaned SNAPLOGIC_SYNC setting, problems): whether the sync is on, the live defaults and the child pipeline per
+    source type. The tables are not a setting: they are always CORE's two (a table_prefix left in an older value is
+    ignored)."""
     problems: List[str] = []
     raw = value if isinstance(value, dict) else {}
-    prefix = str(raw.get("table_prefix", DEFAULT_SETTING["table_prefix"]) or "").strip()
-    if not PREFIX.match(prefix):
-        problems.append("table_prefix must look like DATABASE.SCHEMA.PREFIX_ (for example DEV_GDP_UTIL_DB.CONFIG.AODS_)")
-    elif prefix.split(".")[-1].upper() in ("", "GDP_"):
-        problems.append("table_prefix must not name the live GDP_* tables (or no prefix at all)")
     defaults = {**DEFAULT_SETTING["defaults"], **{k: v for k, v in dict(raw.get("defaults") or {}).items() if k in DEFAULT_KEYS}}
     unknown = sorted(set(dict(raw.get("defaults") or {})) - set(DEFAULT_KEYS))
     if unknown:
         problems.append(f"unknown defaults: {', '.join(unknown)}")
     children = {str(k).upper(): str(v) for k, v in dict(raw.get("child_pipeline_by_type") or CHILD_PIPELINE_BY_TYPE).items() if v}
-    return {"enabled": raw.get("enabled") is True, "table_prefix": prefix, "defaults": defaults,
-            "child_pipeline_by_type": children}, problems
+    return {"enabled": raw.get("enabled") is True, "defaults": defaults, "child_pipeline_by_type": children}, problems
 
 
-def tables(setting: Dict[str, Any]) -> Dict[str, str]:
-    prefix = setting.get("table_prefix") or DEFAULT_SETTING["table_prefix"]
-    return {"master": f"{prefix}{MASTER}", "detail": f"{prefix}{DETAIL}"}
+def tables(setting: Optional[Dict[str, Any]] = None) -> Dict[str, str]:
+    """The two tables, as SQL names them (CORE.*). `setting["database"]`, when the caller knows it, qualifies them for
+    what SnapLogic is told (CONFIG_TABLE, the preview): SnapLogic reads them from outside the platform's session."""
+    database = (setting or {}).get("database")
+    q = (lambda t: f"{database}.{t}") if database else (lambda t: t)
+    return {"master": MASTER, "detail": DETAIL, "master_fqn": q(MASTER), "detail_fqn": q(DETAIL)}
 
 
 def child_pipeline(source_type: str, setting: Dict[str, Any], given: Optional[str] = None) -> Optional[str]:
@@ -172,7 +167,7 @@ def to_detail(row: Dict[str, Any], header: Dict[str, Any], master_config_id: int
         "SOURCE_DELETE_ACTION": row.get("source_delete_action") or "NOT_REQUIRED",
         "SOURCE_DELETE_KEY": row.get("source_delete_key"), "SOURCE_DELETE_KEY_VALUE": row.get("source_delete_key_value"),
         "SOURCE_DELETE_QUERY": row.get("source_delete_query"), "SOURCE_SHEET_NAME": row.get("source_sheet_name"),
-        "CONFIG_TABLE": tables(setting)["detail"],
+        "CONFIG_TABLE": tables(setting)["detail_fqn"],
         "EXTERNAL_VOLUME": row.get("external_volume") or d["external_volume"],
         "BASE_LOCATION": row.get("base_location") or d["base_location"],
     }

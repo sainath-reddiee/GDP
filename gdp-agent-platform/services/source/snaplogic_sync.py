@@ -25,8 +25,9 @@ class Conflict(Exception):
     """SnapLogic already loads one of these landing tables (HTTP 409)."""
 
 
-def setting(db: Any) -> Dict[str, Any]:
-    """The SNAPLOGIC_SYNC setting, validated (the default, off, when it is missing or unreadable)."""
+def setting(db: Any, database: Optional[str] = None) -> Dict[str, Any]:
+    """The SNAPLOGIC_SYNC setting, validated (the default, off, when it is missing or unreadable). `database` is the
+    platform database, which qualifies the CORE tables for SnapLogic (CONFIG_TABLE)."""
     try:
         found = db.query("SELECT CONFIG_VALUE FROM CORE.PLATFORM_CONFIG WHERE CONFIG_KEY = %s AND IS_CURRENT "
                          "ORDER BY VERSION DESC LIMIT 1", (sc.KEY,))
@@ -41,13 +42,15 @@ def setting(db: Any) -> Dict[str, Any]:
     value, problems = sc.validate_setting(raw if isinstance(raw, dict) else sc.DEFAULT_SETTING)
     if problems:
         value["enabled"] = False      # a broken setting never writes anywhere
+    value["database"] = database
     return value
 
 
 def preview(header: Dict[str, Any], rows: List[Dict[str, Any]], setting_: Dict[str, Any], user: str) -> Dict[str, Any]:
     """The rows an onboarding would write, before it writes them (ids are assigned by SnapLogic's tables)."""
     stamp = sc.created_at()
-    return {"enabled": bool(setting_.get("enabled")), "tables": sc.tables(setting_),
+    t = sc.tables(setting_)
+    return {"enabled": bool(setting_.get("enabled")), "tables": {"master": t["master_fqn"], "detail": t["detail_fqn"]},
             "master": sc.to_master(header, setting_, stamp),
             "details": [sc.to_detail(r, header, 0, setting_, user, stamp) | {"MASTER_CONFIG_ID": None} for r in rows]}
 
@@ -81,7 +84,7 @@ def write_new(db: Any, header: Dict[str, Any], rows: List[Dict[str, Any]], setti
     t = sc.tables(setting_)
     clash = _landed(db, t["detail"], rows)
     if clash:
-        raise Conflict(f"SnapLogic already loads {', '.join(clash)} (active in {t['detail']}); deactivate those rows first")
+        raise Conflict(f"SnapLogic already loads {', '.join(clash)} (active in {t['detail_fqn']}); deactivate those rows first")
     stamp = sc.created_at()
     master = _master_id(db, t["master"], header, setting_, stamp)
     details = [sc.to_detail(r, header, master["id"], setting_, user, stamp) for r in rows]
@@ -104,7 +107,8 @@ def write_new(db: Any, header: Dict[str, Any], rows: List[Dict[str, Any]], setti
                    (header.get("bronze_database") or setting_["defaults"].get("bronze_database"),
                     children[r["landing_table"].upper()], int(master_id), r["landing_table"]))
     return {"master_config_id": master["id"], "master_created": master["created"],
-            "child_config_ids": [children[r["landing_table"].upper()] for r in rows], "tables": t}
+            "child_config_ids": [children[r["landing_table"].upper()] for r in rows],
+            "tables": {"master": t["master_fqn"], "detail": t["detail_fqn"]}}
 
 
 def write_edit(db: Any, current: Dict[str, Any], row: Dict[str, Any], setting_: Dict[str, Any]) -> Dict[str, Any]:
@@ -119,8 +123,8 @@ def write_edit(db: Any, current: Dict[str, Any], row: Dict[str, Any], setting_: 
     count = db.execute_count(sc.update_detail_sql(t["detail"], cols), (*[values[c] for c in cols], int(child))) \
         if hasattr(db, "execute_count") else db.execute(sc.update_detail_sql(t["detail"], cols), (*[values[c] for c in cols], int(child)))
     if count == 0:
-        return {"skipped": f"SnapLogic row {child} is no longer in {t['detail']}"}
-    return {"child_config_id": int(child), "table": t["detail"]}
+        return {"skipped": f"SnapLogic row {child} is no longer in {t['detail_fqn']}"}
+    return {"child_config_id": int(child), "table": t["detail_fqn"]}
 
 
 def log(db: Any, kind: str, status: str, setting_: Dict[str, Any], *, source_id: Optional[str] = None,
@@ -134,7 +138,8 @@ def log(db: Any, kind: str, status: str, setting_: Dict[str, Any], *, source_id:
                                          TARGET_TABLES, REQUEST, ERROR)
                        SELECT %s, %s, %s, %s, %s, %s, %s, PARSE_JSON(%s), PARSE_JSON(%s), PARSE_JSON(%s), %s""",
                    (sync_id, kind, status, source_id, master_id, run_id, result.get("master_config_id"),
-                    json.dumps(result.get("child_config_ids") or []), json.dumps(sc.tables(setting_)),
+                    json.dumps(result.get("child_config_ids") or []),
+                    json.dumps({k: v for k, v in sc.tables(setting_).items() if k.endswith("_fqn")}),
                     json.dumps(request) if request is not None else None, (error or "")[:4000] or None))
     except Exception:
         return None

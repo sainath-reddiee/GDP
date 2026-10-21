@@ -159,15 +159,15 @@ As super admin:
    phase 0).
 7. **Jira**, if in scope: see `docker/README.md`.
 8. **SnapLogic config tables**, if SnapLogic loads the sources. Onboarding can also write the two tables SnapLogic
-   triggers from:
-   - `<prefix>SNAPLOGIC_CONFIG_MASTER` gets one row per source;
-   - `<prefix>SNAPLOGIC_CONFIG_DETAIL` gets one row per table.
+   triggers from. The platform creates both in its own `CORE` schema, like every other platform table:
+   - `CORE.AODS_SNAPLOGIC_CONFIG_MASTER` gets one row per source;
+   - `CORE.AODS_SNAPLOGIC_CONFIG_DETAIL` gets one row per table.
 
    To set it up:
-   1. Put `[snaplogic]` in the environment file (`table_prefix`, for example `DEV_GDP_UTIL_DB.CONFIG.AODS_`).
-   2. Run `--check`, which shows whether the roles that onboard can write those tables.
-   3. Give the `--admin-sql` grants to the owner of that schema.
-   4. Switch the sync on in **Admin, settings, SNAPLOGIC_SYNC**.
+   1. Put `[snaplogic]` in the environment file, with `snaplogic_roles` set to the role SnapLogic connects with. The
+      deploy grants that role SELECT and UPDATE on the two tables.
+   2. Point SnapLogic at `<database>.CORE.AODS_SNAPLOGIC_CONFIG_*`.
+   3. Switch the sync on in **Admin, settings, SNAPLOGIC_SYNC**.
 
    How it behaves:
    - The rows are written in the same transaction as the platform's own, follow the live conventions, and never touch
