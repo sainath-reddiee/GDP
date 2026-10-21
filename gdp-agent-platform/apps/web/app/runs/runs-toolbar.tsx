@@ -7,7 +7,7 @@ import { labelFor, type Pipeline } from "@/lib/stages";
 import { cn } from "@/lib/utils";
 
 const STAGE_IDS = ["SOURCE", "PROFILING", "DOMAIN", "MAPPING", "STTM", "SODA", "DBT", "VALIDATION", "REVIEW"];
-const STEP: Record<string, string> = { DOMAIN: "Domain", MAPPING: "Modeling: field mapping", STTM: "Modeling: transformations" };
+const STEP: Record<string, string> = { DOMAIN: "Domain", MAPPING: "Mapping: fields", STTM: "Mapping: transformations" };
 const SORTS = [["newest", "Newest first"], ["updated", "Recently updated"], ["oldest", "Oldest first"], ["name", "Name"]];
 
 /** Search, filters, sorting and paging for the run list; everything lives in the URL so views can be shared. */

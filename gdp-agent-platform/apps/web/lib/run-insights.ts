@@ -8,8 +8,8 @@ export const REVIEW_STATES = new Set(["MAPPING_REVIEW", "STTM_REVIEW", "SODA_REV
 export const FUNNEL = [
   { stage: "SOURCE", label: "Source Ingestion" },
   { stage: "PROFILING", label: "Profiling" },
-  { stage: "MAPPING", label: "Modeling: field mapping" },
-  { stage: "STTM", label: "Modeling: transformations" },
+  { stage: "MAPPING", label: "Mapping: fields" },
+  { stage: "STTM", label: "Mapping: transformations" },
   { stage: "SODA", label: "Data Quality" },
   { stage: "DBT", label: "Silver Code Generation" },
   { stage: "VALIDATION", label: "Validation" },

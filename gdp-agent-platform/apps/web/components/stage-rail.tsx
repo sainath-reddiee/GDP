@@ -12,7 +12,7 @@ import { byStage, labelFor, type Pipeline } from "@/lib/stages";
 import { cn } from "@/lib/utils";
 
 /** Lineage of a run (Silver Pipeline; a Gold run names its first and code steps Silver Selection and Gold Code
- *  Generation): Source Ingestion, Profiling and Modeling (field mapping plus
+ *  Generation): Source Ingestion, Profiling and Mapping (field mapping plus
  *  transformations and joins), then three parallel lanes built from the approved model (QA tests, Data Quality,
  *  Silver Code Generation then Validation), merging into Code review. Connectors turn green as the stage on their
  *  left completes. */
@@ -121,7 +121,7 @@ export function StageRail({ runId, stages, pipeline = "SILVER" }: { runId: strin
   // QA is a lane once the STTM is approved (status from its sign-off); before that it only previews tests.
   const qaLane = stages.find((s) => s.stage === "QA");
   const qaStatus: NodeStatus = qaLane ? qaLane.status : sttm === "LOCKED" ? "LOCKED" : "AVAILABLE";
-  // Modeling is one node for MAPPING and STTM: approved once the STTM is, else the more urgent of the two
+  // Mapping is one node for MAPPING and STTM: approved once the STTM is, else the more urgent of the two
   const modeling = ((): { status: NodeStatus; note: string } => {
     const m = status("MAPPING"), t = status("STTM");
     if (t === "COMPLETE") return { status: "COMPLETE", note: "approved" };
@@ -129,7 +129,7 @@ export function StageRail({ runId, stages, pipeline = "SILVER" }: { runId: strin
     for (const bad of ["FAILED", "BLOCKED", "CANCELLED"] as const) if (m === bad || t === bad) return { status: bad, note: TONE[bad].label };
     if (m === "REVIEW_REQUIRED") return { status: "REVIEW_REQUIRED", note: "review mapping" };
     if (t === "REVIEW_REQUIRED") return { status: "REVIEW_REQUIRED", note: "review STTM" };
-    return { status: "ACTIVE", note: m === "COMPLETE" ? "transformations" : "field mapping" };
+    return { status: "ACTIVE", note: m === "COMPLETE" ? "transformations" : "fields" };
   })();
   const spine = ["SOURCE", "PROFILING", "MODELING"];
   const overview = path === `/runs/${runId}`;
@@ -168,7 +168,7 @@ export function StageRail({ runId, stages, pipeline = "SILVER" }: { runId: strin
           <div key={stage} className="flex items-center">
             {i > 0 && <Edge done={done(spine[i - 1])} active={done(spine[i - 1]) && (stage === "MODELING" ? ["ACTIVE", "REVIEW_REQUIRED"].includes(modeling.status) : live(stage))} />}
             {stage === "MODELING"
-              ? <Node id="MODELING" label="Modeling" status={modeling.status} note={modeling.note} href={`/runs/${runId}/modeling`}
+              ? <Node id="MODELING" label={pipeline === "GOLD" ? "Modeling" : "Mapping"} status={modeling.status} note={modeling.note} href={`/runs/${runId}/modeling`}
                       current={path === `/runs/${runId}/modeling` || path === `/runs/${runId}/mapping` || path === `/runs/${runId}/sttm`} />
               : node(stage)}
           </div>

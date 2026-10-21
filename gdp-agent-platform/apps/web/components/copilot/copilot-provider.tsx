@@ -25,7 +25,7 @@ const CopilotCtx = createContext<{ setFocus: (f: Focus) => void; open: (question
 export const useCopilot = () => useContext(CopilotCtx);
 
 const STAGE_LABEL: Record<string, string> = {
-  profile: "Profiling", domain: "Domain", modeling: "Modeling", mapping: "Modeling", sttm: "Modeling", soda: "Data Quality", qa: "QA tests",
+  profile: "Profiling", domain: "Domain", modeling: "Mapping", mapping: "Mapping", sttm: "Mapping", soda: "Data Quality", qa: "QA tests",
   dbt: "Silver Code Generation", validation: "Validation", review: "Code review", source: "Source Ingestion", landing: "Landing", access: "Access",
 };
 
@@ -100,7 +100,7 @@ function CopilotShell({ children }: { children: ReactNode }) {
     const search = new URLSearchParams(query);
     const db = focus?.database ?? search.get("db") ?? undefined;
     const schema = focus?.schema ?? search.get("schema") ?? undefined;
-    // Modeling has two steps on one page: the tab tells the copilot which one (field mapping or transformations)
+    // Mapping has two steps on one page: the tab tells the copilot which one (field mapping or transformations)
     const tab = pathname.endsWith("/modeling") ? search.get("tab") : null;
     return { path: tab ? `${pathname}?tab=${tab}` : pathname, database: db || undefined, schema: schema || undefined, table: focus?.table };
   }, [pathname, query, focus]);

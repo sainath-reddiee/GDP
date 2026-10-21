@@ -29,7 +29,7 @@ test("onboard a source: register, validate access, land, with later stages locke
   await expect(page.getByText("Created", { exact: true }).first()).toBeVisible();   // the run console names the state in plain words
   await expect(page.getByRole("button", { name: "SOURCE_REGISTERED" })).toHaveCount(0);
 
-  // Modeling: the old mapping and STTM addresses open the two steps of one screen
+  // Mapping: the old mapping and STTM addresses open the two steps of one screen
   await page.goto(`${runUrl}/mapping`);
   await expect(page).toHaveURL(new RegExp(`${runUrl}/modeling\\?tab=mapping$`));
   await expect(page.getByRole("tab", { name: /1\. Field mapping/ })).toHaveAttribute("aria-selected", "true");
@@ -37,7 +37,7 @@ test("onboard a source: register, validate access, land, with later stages locke
   await expect(page.getByRole("heading", { name: "Stage locked" })).toBeVisible();
   await page.goto(`${runUrl}/sttm`);
   await expect(page).toHaveURL(new RegExp(`${runUrl}/modeling\\?tab=transformations$`));
-  await expect(page.getByRole("link", { name: /Modeling/ }).first()).toBeVisible();
+  await expect(page.getByRole("link", { name: /Mapping/ }).first()).toBeVisible();
 
   await page.goto(runUrl);
   await page.getByRole("link", { name: /Register the source/ }).click();

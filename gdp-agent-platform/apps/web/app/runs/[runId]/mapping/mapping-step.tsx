@@ -12,7 +12,7 @@ import { QuestionsPanel } from "@/components/learning/questions-panel";
 import { ModelDesign } from "./model-design";
 import type { ModelPayload } from "./model-actions";
 
-/** Modeling, step 1: the field mapping (target model design, scored candidates, the mapping gate). A Gold run designs
+/** Mapping, step 1: the field mapping (target model design, scored candidates, the mapping gate). A Gold run designs
  *  the domain's gold model and picks the gold table it builds instead of a silver target design. */
 export async function MappingStep({ runId }: { runId: string }) {
   const params = { runId };

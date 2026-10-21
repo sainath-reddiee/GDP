@@ -25,7 +25,8 @@ const STATUS: Record<StageStatusValue, { label: string; cls: string }> = {
   CANCELLED: { label: "cancelled", cls: "text-muted-foreground" },
 };
 
-/** Modeling: the field mapping and the transformations and joins of one run, as two steps of one screen. Each keeps
+/** Mapping (Modeling on a Gold run, which designs its model here first): the field mapping and the transformations
+ *  and joins of one run, as two steps of one screen. Each keeps
  *  its own approval (MAPPING.APPROVE, then STTM.APPROVE); the run's states are unchanged. */
 export default async function ModelingPage({ params, searchParams }: {
   params: { runId: string }; searchParams: { tab?: string };
@@ -37,9 +38,9 @@ export default async function ModelingPage({ params, searchParams }: {
   const tab: Tab = asked ?? (status("MAPPING") === "COMPLETE" ? "transformations" : "mapping");
   return (
     <div className="space-y-4">
-      <section className="surface p-4" aria-label="Modeling steps">
+      <section className="surface p-4" aria-label={`${state.run.pipeline === "GOLD" ? "Modeling" : "Mapping"} steps`}>
         <div className="mb-3">
-          <h2 className="text-base font-semibold">Modeling</h2>
+          <h2 className="text-base font-semibold">{state.run.pipeline === "GOLD" ? "Modeling" : "Mapping"}</h2>
           <p className="text-xs text-muted-foreground">{state.run.pipeline === "GOLD"
             ? "Design the gold model and pick the gold table this run builds, map the profiled Silver columns to it, then define how every gold column is computed. Gold code generation, QA tests and Data Quality are built from the approved result."
             : "Map the profiled source to the target model, then define how every target column is computed. Silver code generation, QA tests and Data Quality are built from the approved result."}</p>

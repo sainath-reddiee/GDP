@@ -11,7 +11,7 @@ import { SttmBoard, type ProfileCol, type SttmLine } from "./sttm-board";
 import { SttmGate } from "./sttm-gate";
 import { JoinPlan, type JoinGraph } from "./join-plan";
 
-/** Modeling, step 2: transformations and joins (the STTM contract, join plan, STTM gate). */
+/** Mapping, step 2: transformations and joins (the STTM contract, join plan, STTM gate). */
 export async function SttmStep({ runId }: { runId: string }) {
   const params = { runId };
   const [state, me, contract, profile] = await Promise.all([

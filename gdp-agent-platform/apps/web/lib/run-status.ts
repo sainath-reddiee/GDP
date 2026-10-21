@@ -5,7 +5,7 @@ import { stateLabel } from "@/lib/run-labels";
 
 // Run status helpers shared by the run table (client) and the Command Center (server).
 
-/** Pipeline 1 steps as the run table's progress dots; Modeling covers the MAPPING and STTM stages. */
+/** Pipeline 1 steps as the run table's progress dots; Mapping covers the MAPPING and STTM stages. */
 export const STAGE_ORDER = ["SOURCE", "PROFILING", "MODELING", "SODA", "DBT", "VALIDATION", "REVIEW"];
 
 export function stageInfo(r: RunSummary) {
