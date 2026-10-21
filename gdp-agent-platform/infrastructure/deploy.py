@@ -206,6 +206,15 @@ def validate_env(raw: Dict[str, Any], name: str) -> Dict[str, Any]:
     integration = str(features.get("github_integration") or "")
     if integration and not IDENT.match(integration):
         problems.append("[features] github_integration must be a Snowflake identifier")
+    environment = None
+    if raw.get("environment"):   # this deployment's environment bindings (seeded once; Admin, Environments after that)
+        from services.common.environments import validate as validate_bindings
+
+        section = dict(raw["environment"])
+        environment = {"name": str(section.get("name") or "").upper(), "description": str(section.get("description") or ""),
+                       "bindings": dict(section.get("bindings") or {})}
+        _, bad = validate_bindings({"current": environment["name"], "environments": [environment]})
+        problems.extend(f"[environment] {p}" for p in bad)
     if problems:
         raise ConfigError("; ".join(problems))
     return {"name": name, "role": role, "warehouse": str(sf["warehouse"]).upper(), "database": str(sf["database"]).upper(),
@@ -213,7 +222,7 @@ def validate_env(raw: Dict[str, Any], name: str) -> Dict[str, Any]:
             "access": access, "access_model": {"model": kind, "prefix": prefix}, "accounts": accounts,
             "model": str(features.get("llm_model") or "claude-sonnet-4-5"),
             "pr_sync_task": bool(features.get("pr_sync_task")), "github_integration": integration.upper() or None,
-            "actual_cost": bool(features.get("actual_cost_from_account_usage"))}
+            "actual_cost": bool(features.get("actual_cost_from_account_usage")), "environment": environment}
 
 
 # ---------------------------------------------------------------- reading Snowflake
@@ -837,7 +846,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         started = time.time()
         timed = TimedConnection(con, log)
         for line in apply_from_session(timed, env["database"], env["warehouse"], force=args.force,
-                                       access=env["access_model"]):
+                                       access=env["access_model"],
+                                       **({"environment": env["environment"]} if env.get("environment") else {})):
             log(f"  {line}")
         timed._stop.set()
         log(f"  deploy took {time.time() - started:.0f}s ({timed.statements} statements; slowest "

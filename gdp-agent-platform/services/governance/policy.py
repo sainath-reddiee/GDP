@@ -155,6 +155,10 @@ RULES: List[Tuple[str, str, Any, str]] = [
     ("POST", r"/api/dbt/github/check", "ADMIN.VIEW", ""),
     ("PUT", r"/api/config/(platform|rules)", "CONFIG.EDIT", "Change platform settings"),
     ("POST", r"/api/config/models/test", "ADMIN.VIEW", ""),
+    # Environments (apps/api/app/environments_api.py): bindings are a versioned setting; the preview only resolves,
+    # guards and EXPLAINs a pack's queries with the caller's role
+    ("PUT", r"/api/config/environments", "CONFIG.EDIT", "Change environment bindings"),
+    ("POST", r"/api/config/environments/preview", "ADMIN.VIEW", ""),
     ("POST", r"/api/costs/reconcile", "CONFIG.EDIT", "Reconcile AI cost"),
     ("POST", r"/api/(domains|domains/draft|domains/import)", "DOMAIN.EDIT", "Create or import a domain"),
     ("PUT", r"/api/domains/[^/]+/skills", "SKILL.RELEASE", "Change the skills a domain's runs load"),
@@ -247,7 +251,7 @@ RULES: List[Tuple[str, str, Any, str]] = [
     ("POST", r"/api/dq/parse", None, ""),
     ("POST", r"/api/dq/catalog(/seed|/generate)?", "SODA.EDIT", "Change a data quality suite draft"),
     ("POST", r"/api/dq/catalog/[^/]+/status", "SODA.EDIT", "Pause, resume or retire a check in a suite draft"),
-    ("POST", r"/api/dq/suites/(draft|submit|withdraw)", "SODA.EDIT", ""),
+    ("POST", r"/api/dq/suites/(draft|submit|withdraw|import)", "SODA.EDIT", ""),
     ("PUT", r"/api/dq/suites/draft", "SODA.EDIT", ""),
     ("POST", r"/api/dq/suites/(approve|reject|apply)", "SODA.APPROVE", ""),
     ("POST", r"/api/dq/suites/publish", "SODA.EDIT", ""),
@@ -279,6 +283,9 @@ RULES: List[Tuple[str, str, Any, str]] = [
     ("PUT", r"/api/ops/routing/[^/]+", "INTEGRATION.MANAGE", "Change an incident routing rule"),
     ("DELETE", r"/api/ops/routing/[^/]+", "INTEGRATION.MANAGE", "Delete an incident routing rule"),
     ("PUT", r"/api/ops/settings", "INTEGRATION.MANAGE", "Change ops incident settings"),
+    # data quality alerting (apps/api/app/dq_alerts_api.py): which support team owns a domain's DQ incidents and digest
+    ("PUT", r"/api/ops/dq-alerting/routes/[^/]+", "INTEGRATION.MANAGE", "Route a domain's data quality alerts"),
+    ("POST", r"/api/ops/dq-alerting/run", "OPS.OPERATE", ""),
     # Airflow failure resolution (apps/api/app/resolve_api.py): drafts by operators; publishing, approving and the
     # guardrails by their own privileges. Publishing and approving are approvals themselves (NO_QUEUE_ROUTES).
     ("POST", r"/api/ops/resolve/fixes", "OPS.OPERATE", "Write a known fix (draft)"),
@@ -435,7 +442,7 @@ SECRET_BODY = [("POST", re.compile(r"^/api/hub/pipelines$")), ("PATCH", re.compi
 def carries_secret(method: str, path: str) -> bool:
     return any(m == method.upper() and pattern.match(path) for m, pattern in SECRET_BODY)
 
-READ_RULES = [(re.compile(r"^/api/(admin/.*|config/(rules|platform|models))$"), "ADMIN.VIEW"),
+READ_RULES = [(re.compile(r"^/api/(admin/.*|config/(rules|platform|models|environments))$"), "ADMIN.VIEW"),
               (re.compile(r"^/api/jira/(issues|search|filters|boards|sprints|projects|summary|sprint-choices)(/.*)?$"), "JIRA.READ"),
               (re.compile(r"^/api/qa/links$"), "JIRA.READ"),
               (re.compile(r"^/api/runs/[^/]+/jira/.*$"), "JIRA.READ"),

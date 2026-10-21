@@ -395,6 +395,7 @@ def auto_diagnose(db: Any, limit: int = AUTO_LIMIT, diagnose_fn: Optional[Callab
                       WHERE KIND = 'diagnose_failed' AND CREATED_AT >= DATEADD(hour, -2, CURRENT_TIMESTAMP())
                       GROUP BY INCIDENT_ID) F ON F.INCIDENT_ID = I.INCIDENT_ID
          WHERE I.STATUS = 'OPEN' AND I.PARENT_INCIDENT_ID IS NULL
+           AND I.ENV_ID <> 'dq'   -- data quality incidents (services.quality.alerts) have no Airflow logs to read
            AND COALESCE(I.OPENED_AT, I.FIRST_SEEN) >= DATEADD(hour, -{AUTO_HOURS}, CURRENT_TIMESTAMP())
            AND (I.AI IS NULL OR I.AI:fingerprint::VARCHAR IS DISTINCT FROM I.FINGERPRINT)
          ORDER BY I.SEVERITY, I.OPENED_AT LIMIT 100""")

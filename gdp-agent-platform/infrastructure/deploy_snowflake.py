@@ -38,12 +38,12 @@ import sys
 import tempfile
 import zipfile
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Any, Dict, List, Tuple
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from infrastructure.seed_knowledge import _stage_dir, list_skills, seed_inputs_digest, seed_platform  # noqa: E402
+from infrastructure.seed_knowledge import _stage_dir, list_skills, seed_environment, seed_inputs_digest, seed_platform  # noqa: E402
 from services.common.platform_schema import PLATFORM_SCHEMA  # noqa: E402
 from services.workflow.graph import load_graph  # noqa: E402
 
@@ -411,7 +411,7 @@ def apply_to_connection(con, database: str, warehouse: str, variables: Dict[str,
                         graph_version, state_rows, transition_rows, demo_files, force: bool = False,
                         consolidate: bool = False, rehearsal: bool = False,
                         through: str | None = None, use_baseline: bool = True,
-                        access: Dict[str, str] | None = None) -> List[str]:
+                        access: Dict[str, str] | None = None, environment: Dict[str, Any] | None = None) -> List[str]:
     """Apply migrations, seed, package, procedures and extras on an open connection; steps that did not change
     since their last successful apply are skipped unless `force`. `rehearsal` keeps every change inside `database`
     (which must end in _REHEARSAL): no Oracle procedure refresh, no publisher task. `through` applies migrations up to
@@ -527,6 +527,8 @@ def apply_to_connection(con, database: str, warehouse: str, variables: Dict[str,
     else:
         log.append(refresh_oracle_sources(cur, database, variables["services_import"], state))
 
+    # the environment file's [environment] bindings, before the seed resolves repository suite files with them
+    log.extend(seed_environment(cur, database, environment))
     inputs = seed_inputs_digest()
     if migrated or state.changed("seed/platform", inputs):
         log.extend(seed_platform(cur, database) or [])
@@ -637,7 +639,7 @@ def _seed_graph(cur, database: str, graph_version, state_rows, transition_rows) 
 def apply_from_session(con, database: str, warehouse: str, demo_source: str | None = None,
                        force: bool = False, consolidate: bool = False, rehearsal: bool = False,
                        through: str | None = None, use_baseline: bool = True,
-                       access: Dict[str, str] | None = None) -> List[str]:
+                       access: Dict[str, str] | None = None, environment: Dict[str, Any] | None = None) -> List[str]:
     # The Admin deploy never passes consolidate, so it cannot apply V061 on a database that holds data.
     """Deploy using an already-authenticated Snowflake connection (no new SSO); only changed steps unless `force`."""
     zip_name, zip_bytes = build_services_zip()
@@ -659,6 +661,7 @@ def apply_from_session(con, database: str, warehouse: str, demo_source: str | No
         sorted(VIEWS_DIR.glob("*.sql")) + sorted(SEARCH_DIR.glob("*.sql")) + sorted(AGENTS_DIR.glob("*.sql")),
         graph_version, state_rows, transition_rows, demo_files, force=force,
         consolidate=consolidate, rehearsal=rehearsal, through=through, use_baseline=use_baseline, access=access,
+        environment=environment,
     )
 
 

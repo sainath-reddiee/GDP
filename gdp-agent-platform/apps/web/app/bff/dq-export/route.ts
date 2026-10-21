@@ -2,9 +2,10 @@ import { apiRaw } from "@/lib/api";
 
 export const dynamic = "force-dynamic";
 
-const TYPES: Record<string, string> = { soda: "application/x-yaml; charset=utf-8", gx: "application/json" };
+const TYPES: Record<string, string> = { soda: "application/x-yaml; charset=utf-8", gx: "application/json", portable: "application/json" };
 
-/** A data quality suite version as SodaCL or a Great Expectations suite, streamed with the caller's session. */
+/** A data quality suite version as SodaCL, a Great Expectations suite or the portable file (logical table names),
+ *  streamed with the caller's session. */
 export async function GET(req: Request) {
   const url = new URL(req.url);
   const format = url.searchParams.get("format") ?? "soda";

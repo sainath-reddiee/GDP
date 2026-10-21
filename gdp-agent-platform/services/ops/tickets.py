@@ -92,10 +92,18 @@ def _heading(text: str, level: int = 3) -> Dict[str, Any]:
 
 
 def description(incident: Dict[str, Any], link: Dict[str, Optional[str]]) -> Dict[str, Any]:
-    """The ticket body: title, where it failed, the redacted error, links, and an impact placeholder."""
-    facts = [("Environment", incident.get("env_id")), ("DAG", incident.get("dag_id")), ("Task", incident.get("task_id")),
-             ("Run", incident.get("run_id")), ("Kind", incident.get("kind")), ("Severity", incident.get("severity")),
-             ("First seen", incident.get("first_seen"))]
+    """The ticket body: title, where it failed, the redacted error, links, and an impact placeholder. A data quality
+    incident (services.quality.alerts) shows the table, its failing checks and the DQ Store suite page instead."""
+    from services.quality import alerts
+
+    dq = alerts.is_dq(incident)
+    if dq:
+        facts = [("Table", alerts.table_of(incident)), ("Scan", incident.get("run_id")), ("Kind", incident.get("kind")),
+                 ("Severity", incident.get("severity")), ("First seen", incident.get("first_seen"))]
+    else:
+        facts = [("Environment", incident.get("env_id")), ("DAG", incident.get("dag_id")), ("Task", incident.get("task_id")),
+                 ("Run", incident.get("run_id")), ("Kind", incident.get("kind")), ("Severity", incident.get("severity")),
+                 ("First seen", incident.get("first_seen"))]
     content: List[Dict[str, Any]] = [
         _heading(redact(str(incident.get("title") or "Incident"))[:250], 2),
         {"type": "bulletList", "content": [{"type": "listItem", "content": [_para(_text(f"{k}: {redact(str(v))[:250]}"))]}
@@ -103,8 +111,9 @@ def description(incident: Dict[str, Any], link: Dict[str, Optional[str]]) -> Dic
     ]
     excerpt = redact(str(incident.get("error_excerpt") or ""))[-3000:]
     if excerpt:
-        content += [_heading("Error"), {"type": "codeBlock", "content": [_text(excerpt)]}]
-    items = [(title, link.get(key)) for key, title in (("open", "Incident in the data platform"), ("airflow", "Airflow run"))
+        content += [_heading("Failing checks" if dq else "Error"), {"type": "codeBlock", "content": [_text(excerpt)]}]
+    items = [(title, link.get(key)) for key, title in (("open", "Incident in the data platform"), ("airflow", "Airflow run"),
+                                                       ("dq", "Suite in the DQ Store"))
              if link.get(key)]
     if items:
         content += [_heading("Links"), {"type": "bulletList", "content": [
@@ -135,6 +144,11 @@ def _issue_type(client: JiraClient, project: str) -> str:
 
 
 def _links(store: Any, incident: Dict[str, Any], settings: Dict[str, Any]) -> Dict[str, Optional[str]]:
+    from services.quality import alerts
+
+    if alerts.is_dq(incident):
+        base = settings.get("public_base_url")
+        return {**links(incident, base), "dq": alerts.suite_link(base, alerts.table_of(incident)) if base else None}
     env = store.envs().get(incident.get("env_id")) or {}
     return links(incident, settings.get("public_base_url"), None,
                  airflow_link(env.get("airflow_url"), env.get("api_version"), incident.get("dag_id") or "", incident.get("run_id")))
@@ -293,6 +307,8 @@ def handle(store: Any, row: Dict[str, Any], client: Optional[JiraClient], settin
            now: Optional[datetime] = None) -> Tuple[str, str]:
     """The outbox handler for CHANNEL JIRA rows: (SENT | SKIPPED, detail); raises to retry."""
     now = now or datetime.now(timezone.utc)
+    if row.get("kind") == "dq_digest":   # a domain's daily data quality digest (services.quality.alerts), no incident
+        return digest_ticket(store, row, client)
     incident = store.get(row.get("incident_id") or "")
     if not incident:
         return "SKIPPED", "the incident no longer exists"
@@ -324,6 +340,46 @@ def handle(store: Any, row: Dict[str, Any], client: Optional[JiraClient], settin
     if kind == "resolution":   # the resolution engine: an RCA (raises the ticket if needed) or a fix awaiting approval
         return resolution_note(store, incident, row, client, settings)
     return "SKIPPED", f"unknown Jira action {kind}"
+
+
+DIGEST_LABEL = "gdp-dq-digest"
+
+
+def digest_label(domain_id: str, day: str) -> str:
+    return f"gdp-dq-{str(domain_id or '')[:8]}-{str(day or '').replace('-', '')}"
+
+
+def digest_ticket(store: Any, row: Dict[str, Any], client: Optional[JiraClient]) -> Tuple[str, str]:
+    """File a domain's daily data quality digest as a Jira issue in its team's project (else the default project).
+    A label per domain and day makes a retry find the issue it already created instead of filing a second one."""
+    from services.ops.notify import _payload
+    from services.quality.alerts import digest_summary, digest_text
+
+    if client is None:
+        return "SKIPPED", NO_BOT
+    d = _payload(row.get("payload"))
+    if not d.get("domain_id") or not d.get("date"):
+        return "SKIPPED", "the digest is empty"
+    team = store.team(row.get("team_id")) or {}
+    try:
+        project = check_project(team.get("jira_project") or store.jira_config().get("default_project") or "")
+    except ValueError:
+        return "SKIPPED", "no Jira project for the team and no default project"
+    label = digest_label(d["domain_id"], d["date"])
+    found = client.search(f"labels = {jql_string(label)} ORDER BY created DESC", fields=["summary"], page_size=1, max_pages=1)
+    if found and found[0].get("key"):
+        return "SENT", f"the digest is already {found[0]['key']}"
+    body = {"type": "doc", "version": 1,
+            "content": [_para(_text(line)) for line in redact(digest_text(d)).splitlines() if line.strip()][:80]}
+    fields: Dict[str, Any] = {"project": {"key": project}, "issuetype": {"id": _issue_type(client, project)},
+                              "summary": redact(digest_summary(d))[:255], "description": body,
+                              "labels": [LABEL, DIGEST_LABEL, label]}
+    if team.get("jira_component"):
+        fields["components"] = [{"name": str(team["jira_component"])[:255]}]
+    created = client._call("POST", "/rest/api/3/issue", {"fields": fields}) or {}
+    if not created.get("key"):
+        raise JiraError(502, "Jira did not return the new issue key")
+    return "SENT", f"filed the digest as {created['key']} in {project}"
 
 
 def resolution_note(store: Any, incident: Dict[str, Any], row: Dict[str, Any], client: JiraClient,

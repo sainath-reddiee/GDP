@@ -140,9 +140,14 @@ export function IncidentView({ initial, envName, askAck, canOperate, canAI, canC
         <div className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
           <IncidentStatusPill status={inc.status} />
           <KindPill kind={inc.kind} />
-          <span>DAG <Link href={dagRunHref(inc.env_id, inc.dag_id)} className="font-mono text-primary hover:underline">{inc.dag_id}</Link></span>
-          {inc.task_id && <span>· task <span className="font-mono">{inc.task_id}</span></span>}
-          {inc.run_id && <span>· run <Link href={dagRunHref(inc.env_id, inc.dag_id, inc.run_id)} className="font-mono text-primary hover:underline">{inc.run_id}</Link></span>}
+          {inc.dq_table ? (
+            <span>Table <Link href={`/dashboard/dq-store/suite?table=${encodeURIComponent(inc.dq_table)}`} className="font-mono text-primary hover:underline">{inc.dq_table}</Link>
+              {inc.run_id && <> · scan <span className="font-mono">{inc.run_id.slice(0, 8)}</span></>}</span>
+          ) : (<>
+            <span>DAG <Link href={dagRunHref(inc.env_id, inc.dag_id)} className="font-mono text-primary hover:underline">{inc.dag_id}</Link></span>
+            {inc.task_id && <span>· task <span className="font-mono">{inc.task_id}</span></span>}
+            {inc.run_id && <span>· run <Link href={dagRunHref(inc.env_id, inc.dag_id, inc.run_id)} className="font-mono text-primary hover:underline">{inc.run_id}</Link></span>}
+          </>)}
           {inc.airflow_url && (
             <a href={inc.airflow_url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-0.5 text-primary hover:underline">
               · Airflow<ExternalLink className="h-3 w-3" /></a>
@@ -265,7 +270,7 @@ export function IncidentView({ initial, envName, askAck, canOperate, canAI, canC
 
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]">
         <div className="min-w-0 space-y-4">
-          <Section title="Error" aside={inc.error_excerpt ? <CopyButton text={inc.error_excerpt} label="Copy" /> : undefined}>
+          <Section title={inc.dq_table ? "Failing checks" : "Error"} aside={inc.error_excerpt ? <CopyButton text={inc.error_excerpt} label="Copy" /> : undefined}>
             {inc.error_excerpt
               ? <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-all rounded-lg bg-slate-950 p-3 font-mono text-[11px] leading-relaxed text-slate-200">{inc.error_excerpt}</pre>
               : <Muted>No error text was captured. Open the run for the task log.</Muted>}

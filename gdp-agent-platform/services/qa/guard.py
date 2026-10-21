@@ -212,6 +212,8 @@ class _Checker:
         if (tok.kind == "punct" and tok.text == "@") or tok.kind == "str":
             self.add("stage references are not allowed")
             return
+        if tok.kind == "punct" and tok.text == "{":
+            return  # an unresolved {{name}}: reported once by walk()
         if tok.kind == "var":
             self.add("variables are not allowed as table names")
             return
@@ -278,6 +280,9 @@ class _Checker:
                         self.add("unbalanced parentheses")
                 elif tok.text == "@":
                     self.add("stage references are not allowed")
+                elif tok.text == "{":
+                    # services/common/environments.resolve replaces {{name}} before a query reaches the guard
+                    self.add("logical names ({{name}}) must be resolved for an environment before the query runs")
                 continue
             if tok.kind == "qid" and tok.text.upper() in SYSTEM_SCHEMAS:
                 self.add("system views (INFORMATION_SCHEMA, ACCOUNT_USAGE) are not allowed")

@@ -5,6 +5,7 @@ import type { ChangeRequest } from "@/app/governance-actions";
 import type { FixApproval } from "@/app/ops/resolve-actions";
 import type { PermanentFixRow } from "@/app/ops/permanent-fix-actions";
 import type { SkillProposal } from "@/app/skills/proposed/actions";
+import type { DqDigest, FailingChecks } from "@/components/quality/failing-checks";
 
 // The signed-in person's work, read from the endpoints the other pages already use (no new backend). Lists the API
 // does not filter per user are filtered here: runs by created_by, gates by the approval privilege, pull requests by
@@ -37,6 +38,9 @@ export type MyWork = {
   fix: FixItem[];
   tickets: TicketItem[] | null;
   incidents: IncidentItem[] | null;
+  /** data quality checks failing now in the domains this person owns or is a member of, and their latest digests */
+  dqFailing: FailingChecks;
+  dqDigests: DqDigest[];
   prs: PrItem[];
   /** the gate roles this person approves (all four when governance is off) */
   approves: Gate[];
@@ -51,7 +55,7 @@ const safe = <T>(p: Promise<T>, fallback: T) => p.catch(() => fallback);
 export async function loadMyWork(me: WhoAmI | null): Promise<MyWork> {
   const user = me?.user ?? "";
   const approves = Object.values(GATES).filter((g) => can(me, g.privilege));
-  const [review, running, failed, requests, inbox, myDomains, tickets, incidents, prs, fixApprovals, permanent, proposed] = await Promise.all([
+  const [review, running, failed, requests, inbox, myDomains, tickets, incidents, prs, fixApprovals, permanent, proposed, dqFailing, dqDigests] = await Promise.all([
     safe(api<{ runs: RunSummary[] }>("/api/runs?needs_review=true&sort=updated&limit=200"), { runs: [] }),
     safe(api<{ runs: RunSummary[]; total?: number }>("/api/runs?status=running&sort=updated&limit=200"), { runs: [], total: 0 }),
     safe(api<{ runs: RunSummary[] }>("/api/runs?status=failed&sort=updated&limit=100"), { runs: [] }),
@@ -72,6 +76,8 @@ export async function loadMyWork(me: WhoAmI | null): Promise<MyWork> {
     can(me, "SKILL.EDIT")
       ? safe(api<{ items: SkillProposal[] }>("/api/skill-proposals?status=PROPOSED&limit=20").then((r) => r.items ?? []), [] as SkillProposal[])
       : Promise.resolve([] as SkillProposal[]),
+    safe(api<FailingChecks>("/api/dq/failing?mine=true&limit=8"), { checks: [], total: 0, tables: 0, incidents: 0 } as FailingChecks),
+    safe(api<{ digests: DqDigest[] }>("/api/dq/digests?mine=true").then((r) => r.digests ?? []), [] as DqDigest[]),
   ]);
   const permanentFixes = permanent.filter((p) =>
     (p.status === "DRAFTED" && can(me, "OPS.FIX_PUBLISH") && !same(p.drafted_by, user))
@@ -116,6 +122,8 @@ export async function loadMyWork(me: WhoAmI | null): Promise<MyWork> {
     fix,
     tickets: tickets ? tickets.slice(0, 6) : null,
     incidents: incidents ? incidents.slice(0, 5) : null,
+    dqFailing,
+    dqDigests: dqDigests.slice(0, 4),
     prs: (prs.prs ?? []).filter((p) => same(p.opened_by, user)).slice(0, 6),
     approves,
     inFlightTotal: running.total ?? running.runs.length,

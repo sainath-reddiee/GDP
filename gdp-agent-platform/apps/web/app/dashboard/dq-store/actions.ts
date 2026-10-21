@@ -46,6 +46,18 @@ export async function generateChecks(body: { table: string; text: string; filena
   return storeAction(() => api<Generated>("/api/dq/catalog/generate", post(body)));
 }
 
+/** A portable suite file (.dq.json, logical table names) imported into this environment: its checks land in the
+ *  table's draft. `staged` is false when the table already had every check. */
+export type ImportedSuite = Partial<Omit<Staged, "staged">> & {
+  table: string; environment: string | null; checks: number; added: number; skipped: number; staged: boolean;
+};
+
+export async function importSuite(body: { text: string; filename?: string }) {
+  const r = await storeAction(() => api<ImportedSuite>("/api/dq/suites/import", post(body)));
+  revalidatePath(PATH, "layout");
+  return r;
+}
+
 export async function seedChecks(body: { table?: string; run_id?: string }) {
   const r = await storeAction(() => api<Staged>("/api/dq/catalog/seed", post(body)));
   revalidatePath(PATH, "layout");

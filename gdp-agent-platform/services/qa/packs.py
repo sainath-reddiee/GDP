@@ -54,9 +54,12 @@ def clean_tags(tags: Any) -> List[str]:
     return normalize_tags(tags or [])
 
 
-def clean_queries(queries: Sequence[Dict[str, Any]], allowed: Sequence[str]) -> List[Dict[str, Any]]:
+def clean_queries(queries: Sequence[Dict[str, Any]], allowed: Sequence[str],
+                  bindings: Optional[Dict[str, str]] = None) -> List[Dict[str, Any]]:
     """Validated queries in order. Every SQL must pass the read-only guard against the domain's tables; problems
-    raise AssertionError naming the query."""
+    raise AssertionError naming the query. SQL with logical names ({{silver}}.SCHEMA.TABLE) is checked as resolved
+    with `bindings` (the current environment's) and kept as written, so the pack stays portable."""
+    from services.common.environments import is_logical, resolve
     from services.qa.guard import check
 
     assert queries, "a pack needs at least one query"
@@ -70,7 +73,14 @@ def clean_queries(queries: Sequence[Dict[str, Any]], allowed: Sequence[str]) -> 
         seen.add(name.lower())
         severity = str(q.get("severity") or "ERROR").upper()
         assert severity in SEVERITIES, f"{name}: severity must be one of {list(SEVERITIES)}"
-        ok, problems, sql = check(str(q.get("sql_expression") or ""), allowed)
+        written = str(q.get("sql_expression") or "")
+        if is_logical(written):
+            resolved, unbound = resolve(written, bindings or {})
+            assert not unbound, f"{name}: " + "; ".join(unbound)
+            ok, problems, _ = check(resolved, allowed)
+            sql = check(written, [])[2]  # the logical text, trailing semicolons dropped
+        else:
+            ok, problems, sql = check(written, allowed)
         # the guard is shared with run tests; a pack's allowed tables are its domain's
         assert ok, f"{name}: " + "; ".join(p.replace("this run's source or target tables", "this domain's tables")
                                              for p in problems)
@@ -122,6 +132,45 @@ def allowed_tables(session, domain_id: str) -> List[str]:
     except Exception:
         pass
     return list(dict.fromkeys(out))
+
+
+def target(session, domain_id: str, environment: Optional[str] = None,
+           config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Where a domain's queries run: the current environment (no name, or its own name) or another configured one.
+    `config` replaces the saved ENVIRONMENT_BINDINGS (the Admin preview checks bindings before they are saved).
+
+    {name, current, bindings (to resolve {{name}} with, {{domain}} included), source (the current environment's
+     bindings), allowed (the domain's tables in that environment), allowed_current}"""
+    from services.common import environments as envs
+
+    config = config if config is not None else envs.load(session)
+    source = envs.bindings_of(config)
+    allowed_now = allowed_tables(session, domain_id)
+    location = envs.domain_location(session, domain_id)
+    if envs.is_current(config, environment):
+        bindings = {**source, **({envs.DOMAIN: location} if location else {})}
+        return {"name": config.get("current"), "current": True, "bindings": bindings, "source": source,
+                "allowed": allowed_now, "allowed_current": allowed_now}
+    env = envs.environment(config, environment)
+    assert env, f"environment {environment} is not configured; add it in Admin, Environments"
+    assert config.get("current"), "set the current environment in Admin, Environments before running on another one"
+    goal = dict(env.get("bindings") or {})
+    moved = envs.rebase_location(location, source, goal)
+    allowed = envs.rebase_tables(allowed_now, source, goal)
+    assert allowed, (f"no binding of environment {env['name']} covers this domain's tables; bind their databases "
+                     f"in Admin, Environments for both {config.get('current')} and {env['name']}")
+    return {"name": env["name"], "current": False, "bindings": {**goal, **({envs.DOMAIN: moved} if moved else {})},
+            "source": source, "allowed": allowed, "allowed_current": allowed_now}
+
+
+def sql_for(where: Dict[str, Any], sql: str) -> tuple[str, List[str]]:
+    """(the query as it runs in `where`, problems). In the current environment fully qualified SQL is unchanged; in
+    another one it is rewritten through the current environment's bindings first."""
+    from services.common import environments as envs
+
+    if where["current"]:
+        return envs.resolve(sql, where["bindings"], where.get("name") or "")
+    return envs.rebase(sql, where["source"], where["bindings"], where["name"])
 
 
 def _pack_row(r: Dict[str, Any]) -> Dict[str, Any]:
@@ -275,7 +324,8 @@ def create_pack(session, domain_id: str, payload_json: str) -> Dict[str, Any]:
     taken = rows(session, f"SELECT PACK_ID FROM {PACKS} WHERE DOMAIN_ID = ? AND LOWER(NAME) = LOWER(?) LIMIT 1",
                  [domain_id, meta["name"]])
     assert not taken, f"this domain already has a pack named {meta['name']}"
-    queries = clean_queries(payload.get("queries") or [], allowed_tables(session, domain_id))
+    here = target(session, domain_id)
+    queries = clean_queries(payload.get("queries") or [], here["allowed"], here["bindings"])
     pack_id = str(uuid.uuid4())
     _insert_version(session, pack_id, 1, domain_id, meta, queries, "DRAFT", "UI", payload.get("change_note") or "Created")
     return {"pack_id": pack_id, "version": 1, "status": "DRAFT", "queries": len(queries)}
@@ -293,7 +343,8 @@ def save_draft(session, pack_id: str, payload_json: str) -> Dict[str, Any]:
         assert int(payload["base_version"]) == int(newest["version"]), \
             f"version {newest['version']} was saved since you opened version {payload['base_version']}; reload first"
     meta = _meta(payload, newest)
-    queries = clean_queries(payload.get("queries") or [], allowed_tables(session, newest["domain_id"]))
+    here = target(session, newest["domain_id"])
+    queries = clean_queries(payload.get("queries") or [], here["allowed"], here["bindings"])
     from services.common.sql import atomic
 
     note = payload.get("change_note") or ""
@@ -430,20 +481,9 @@ def _pii(session, allowed: Sequence[str]) -> tuple[set, bool]:
     return {r["C"] for r in found if (r["P"] or "NONE") != "NONE"}, False
 
 
-def execute(session, domain_id: str, pack_id: Optional[str] = None, version: Optional[int] = None,
-            query_ids: Optional[List[str]] = None, sql: Optional[str] = None, triggered_by: str = "UI") -> Dict[str, Any]:
-    """Run a pack version (the approved one by default), some of its queries, or one ad-hoc query, with the
-    caller's role. Pack runs are stored (SCOPE 'DOMAIN'); an ad-hoc query is only checked and returned."""
-    from services.qa.run import _store, blocking, execute as run_one, summary as count
-
-    allowed = allowed_tables(session, domain_id)
-    pii, conservative = _pii(session, allowed)
-    if sql is not None:
-        test = {"test_id": "ADHOC", "category": "DOMAIN_PACK", "title": "Ad-hoc query", "severity": "MEDIUM",
-                "origin": "USER", "expected": "0 rows", "sql": sql}
-        result = run_one(session, test, allowed, pii, (), conservative)
-        return {"stored": False, "allowed": allowed, "results": [result]}
-    assert pack_id, "choose a pack or send a query"
+def _pick(session, domain_id: str, pack_id: str, version: Optional[int],
+          query_ids: Optional[List[str]]) -> tuple[Dict[str, Any], List[Dict[str, Any]]]:
+    """(pack version, its chosen queries): the approved version unless a version is named."""
     detail = get_pack(session, pack_id, version if version is not None else None)
     pack = detail["pack"]
     if version is None:
@@ -456,22 +496,110 @@ def execute(session, domain_id: str, pack_id: Optional[str] = None, version: Opt
         wanted = set(query_ids)
         queries = [q for q in queries if q["query_id"] in wanted]
     assert queries, "there are no queries to run"
+    return pack, queries
+
+
+def _elsewhere(where: Dict[str, Any], problems: Sequence[str]) -> List[str]:
+    """Guard problems worded for a run on another environment."""
+    if where["current"]:
+        return list(problems)
+    return [p.replace("is not one of this run's source or target tables",
+                      f"is not one of this domain's tables in environment {where['name']}") for p in problems]
+
+
+def _run_query(session, where: Dict[str, Any], test: Dict[str, Any], pii: set, conservative: bool) -> Dict[str, Any]:
+    from services.qa.run import execute as run_one
+
+    resolved, unbound = sql_for(where, test.get("sql") or "")
+    if unbound:
+        base = {k: test.get(k) for k in ("test_id", "category", "title", "severity", "origin", "expected", "target_column")}
+        return {**base, "outcome": "ERROR", "detail": "; ".join(unbound), "sql": test.get("sql"), "duration_ms": 0}
+    result = run_one(session, {**test, "sql": resolved}, where["allowed"], pii, (), conservative)
+    if result.get("outcome") == "ERROR" and result.get("detail") and not where["current"]:
+        result["detail"] = "; ".join(_elsewhere(where, [result["detail"]]))
+    return result
+
+
+def execute(session, domain_id: str, pack_id: Optional[str] = None, version: Optional[int] = None,
+            query_ids: Optional[List[str]] = None, sql: Optional[str] = None, triggered_by: str = "UI",
+            environment: Optional[str] = None) -> Dict[str, Any]:
+    """Run a pack version (the approved one by default), some of its queries, or one ad-hoc query, with the
+    caller's role, in the current environment or another configured one (`environment`). Pack runs are stored
+    (SCOPE 'DOMAIN', the environment in TRIGGER_DETAIL); an ad-hoc query is only checked and returned."""
+    from services.qa.run import _store, blocking, summary as count
+
+    where = target(session, domain_id, environment)
+    allowed = where["allowed"]
+    # PII is known from the current environment's profiles; the same columns are just as sensitive elsewhere
+    pii, conservative = _pii(session, where["allowed_current"])
+    env = {"environment": where["name"], "current_environment": where["current"]}
+    if sql is not None:
+        test = {"test_id": "ADHOC", "category": "DOMAIN_PACK", "title": "Ad-hoc query", "severity": "MEDIUM",
+                "origin": "USER", "expected": "0 rows", "sql": sql}
+        return {"stored": False, "allowed": allowed, **env,
+                "results": [_run_query(session, where, test, pii, conservative)]}
+    assert pack_id, "choose a pack or send a query"
+    pack, queries = _pick(session, domain_id, pack_id, version, query_ids)
     started = time.time()
     results = []
     for q in queries:
-        r = run_one(session, to_test(pack, q), allowed, pii, (), conservative)
+        r = _run_query(session, where, to_test(pack, q), pii, conservative)
         r["pack_severity"] = q.get("severity")
         results.append(r)
     counts = count(results)
-    qa_run = {"qa_run_id": str(uuid.uuid4()), "run_id": None, "sttm_id": None, "target": f"domain pack {pack['name']}",
+    label = f"domain pack {pack['name']}" + ("" if where["current"] else f" on {where['name']}")
+    detail = {"pack_id": pack_id, "version": int(pack["version"]), "status": pack["status"]}
+    if where["name"]:
+        detail["environment"] = where["name"]
+    qa_run = {"qa_run_id": str(uuid.uuid4()), "run_id": None, "sttm_id": None, "target": label,
               "target_built": True, "tests": len(results), "passed": counts["PASS"], "failed": counts["FAIL"],
               "review": counts["REVIEW"], "not_run": counts["NOT_RUN"], "errors": counts["ERROR"],
               "duration_ms": int((time.time() - started) * 1000), "triggered_by": triggered_by,
               "blocking": len(blocking(results)), "scope": "DOMAIN", "target_table_id": None, "domain_id": domain_id,
-              "suite_id": None, "trigger_detail": {"pack_id": pack_id, "version": int(pack["version"]),
-                                                   "status": pack["status"]}}
+              "suite_id": None, "trigger_detail": detail}
     _store(session, qa_run, results)
-    return {**qa_run, "stored": True, "allowed": allowed, "results": results}
+    return {**qa_run, **env, "stored": True, "allowed": allowed, "results": results}
+
+
+def explain(session, sql: str) -> Dict[str, Any]:
+    """Compile a guarded query without running it: missing tables, columns or grants in the target show here."""
+    try:
+        session.sql(f"EXPLAIN USING TEXT {sql}").collect()
+        return {"ok": True, "error": None}
+    except Exception as exc:
+        return {"ok": False, "error": clip(exc, 600)}
+
+
+def dry_run(session, domain_id: str, pack_id: str, version: Optional[int] = None, environment: Optional[str] = None,
+            query_ids: Optional[List[str]] = None, config_json: Optional[str] = None) -> Dict[str, Any]:
+    """Each query of a pack version as it would run in `environment`: resolved SQL, the read-only guard and an EXPLAIN
+    against the target. Nothing runs and nothing is stored. `config_json` checks unsaved bindings (Admin preview)."""
+    from services.qa.guard import check
+
+    config = None
+    if config_json:
+        from services.common.environments import validate
+
+        config, problems = validate(json.loads(config_json))
+        assert not problems, "; ".join(problems[:5])
+    where = target(session, domain_id, environment, config)
+    pack, queries = _pick(session, domain_id, pack_id, version, query_ids)
+    out = []
+    for q in queries:
+        resolved, problems = sql_for(where, q["sql_expression"])
+        item = {"query_id": q.get("query_id"), "query_name": q["query_name"], "severity": q.get("severity"),
+                "written": q["sql_expression"], "sql": resolved, "rewritten": resolved != q["sql_expression"]}
+        if not problems:
+            ok, guard_problems, cleaned = check(resolved, where["allowed"])
+            problems = _elsewhere(where, guard_problems)
+            item["sql"] = cleaned
+        item["explain"] = explain(session, item["sql"]) if not problems else None
+        item["problems"] = problems
+        item["ok"] = not problems and bool(item["explain"] and item["explain"]["ok"])
+        out.append(item)
+    return {"pack_id": pack_id, "version": int(pack["version"]), "name": pack["name"], "environment": where["name"],
+            "current_environment": where["current"], "allowed": where["allowed"],
+            "bindings": where["bindings"], "queries": out, "ok": all(i["ok"] for i in out)}
 
 
 # ---------------------------------------------------------------- repository packs

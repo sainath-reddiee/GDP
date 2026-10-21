@@ -395,6 +395,10 @@ class ExecuteIn(BaseModel):
     version: Optional[int] = Field(default=None, ge=1)
     query_ids: Optional[list[str]] = Field(default=None, max_length=200)
     sql: Optional[str] = Field(default=None, min_length=6, max_length=16000)
+    # another configured environment (Admin, Environments); none is this deployment's own
+    environment: Optional[str] = Field(default=None, max_length=32)
+    # resolve, guard and EXPLAIN each query without running it (pack runs only; nothing is stored)
+    dry_run: bool = False
 
 
 @router.get("/api/qa-packs")
@@ -513,15 +517,22 @@ def qa_pack_runs(pack_id: str, limit: int = 20, db: Db = Depends(current_db)):
 
 
 @router.get("/api/qa-packs/{pack_id}/file")
-def qa_pack_file(pack_id: str, version: Optional[int] = None, db: Db = Depends(current_db)):
-    """The version as a domain/<name>/qa/<pack>.sql file, ready to commit."""
+def qa_pack_file(pack_id: str, version: Optional[int] = None, logical: bool = False, db: Db = Depends(current_db)):
+    """The version as a domain/<name>/qa/<pack>.sql file, ready to commit. `logical` writes its table names through
+    this environment's bindings ({{silver}}.SCHEMA.TABLE), so the file runs in any environment."""
     from fastapi.responses import PlainTextResponse
-    from services.qa.pack_files import render
+    from services.common import environments as envs
+    from services.qa.pack_files import portable, render
 
     detail = _call(db, _svc("packs").get_pack, pack_id, version)
     pack = detail["pack"]
-    text = render({"name": pack["name"], "description": pack.get("description"), "tags": pack.get("tags") or [],
-                   "queries": detail["queries"]})
+    content = {"name": pack["name"], "description": pack.get("description"), "tags": pack.get("tags") or [],
+               "queries": detail["queries"]}
+    if logical:
+        from app.main import _config
+
+        content = portable(content, envs.bindings_of(envs.validate(_config(db, envs.CONFIG_KEY, None))[0]))
+    text = render(content)
     name = re.sub(r"[^a-z0-9]+", "_", pack["name"].lower()).strip("_") or "pack"
     return PlainTextResponse(text, headers={"Content-Disposition": f'attachment; filename="{name}.sql"'})
 
@@ -532,8 +543,13 @@ def execute_qa(body: ExecuteIn, db: Db = Depends(current_db)):
     with the caller's role. Pack runs are stored in CORE.QA_RUN / QA_RESULT (SCOPE 'DOMAIN')."""
     if not body.pack_id and not body.sql:
         raise HTTPException(400, "send a pack_id or a sql query")
-    return _call(db, _svc("packs").execute, _domain_id(db, body.domain_id), body.pack_id, body.version, body.query_ids,
-                 body.sql)
+    domain_id = _domain_id(db, body.domain_id)
+    if body.dry_run:
+        if not body.pack_id or body.sql:
+            raise HTTPException(400, "a dry run checks a pack: send a pack_id")
+        return _call(db, _svc("packs").dry_run, domain_id, body.pack_id, body.version, body.environment, body.query_ids)
+    return _call(db, _svc("packs").execute, domain_id, body.pack_id, body.version, body.query_ids, body.sql,
+                 **({"environment": body.environment} if body.environment else {}))
 
 
 # ---------------------------------------------------------------- QA packs and Git (V042)

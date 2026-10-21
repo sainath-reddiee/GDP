@@ -31,6 +31,7 @@ from services.ops.diagnose import ai_out
 from services.ops.mwaa import MwaaError
 from services.ops.detect import SEVERITIES, STATUSES
 from services.ops.normalize import ts
+from services.quality import alerts
 
 router = APIRouter()
 LIST_LIMIT = 200
@@ -78,10 +79,14 @@ SELECT I.INCIDENT_ID, I.FINGERPRINT, I.ENV_ID, I.DAG_ID, I.TASK_ID, I.MAP_INDEX,
        I.RESOLVED_BY, I.RESOLVED_AT, I.ACKED_BY, I.ACKED_AT, I.MUTED_UNTIL, I.MUTE_REASON, I.ESCALATIONS,
        E.AIRFLOW_URL, E.API_VERSION
   FROM CORE.INCIDENT I
-  JOIN CORE.AIRFLOW_ENV E ON E.ENV_ID = I.ENV_ID
+  LEFT JOIN CORE.AIRFLOW_ENV E ON E.ENV_ID = I.ENV_ID
   LEFT JOIN CORE.TEAM T ON T.TEAM_ID = I.TEAM_ID
   LEFT JOIN (SELECT PARENT_INCIDENT_ID, COUNT(*) AS N FROM CORE.INCIDENT WHERE PARENT_INCIDENT_ID IS NOT NULL
               GROUP BY PARENT_INCIDENT_ID) C ON C.PARENT_INCIDENT_ID = I.INCIDENT_ID"""
+
+
+# incidents of an Airflow environment that still exists, and data quality incidents (services.quality.alerts, ENV_ID 'dq')
+_KNOWN_ENV = "(E.ENV_ID IS NOT NULL OR I.ENV_ID = 'dq')"
 
 
 def _list_out(r: Dict[str, Any], site: Optional[str]) -> Dict[str, Any]:
@@ -92,7 +97,9 @@ def _list_out(r: Dict[str, Any], site: Optional[str]) -> Dict[str, Any]:
             "occurrences": int(r.get("occurrences") or 1), "parent_incident_id": r.get("parent_incident_id"),
             "children": int(r.get("children") or 0), "jira_key": r.get("jira_key"),
             "jira_url": tickets.jira_url(site, r.get("jira_key")), "jira_state": r.get("jira_state"),
-            "title": r.get("title"), "error_excerpt": r.get("error_excerpt"), "ai_summary": r.get("ai_summary")}
+            "title": r.get("title"), "error_excerpt": r.get("error_excerpt"), "ai_summary": r.get("ai_summary"),
+            # a data quality incident names its table (the DQ Store suite page links to it)
+            "dq_table": alerts.table_of(r) if alerts.is_dq(r) else None}
 
 
 @router.get("/api/ops/incidents")
@@ -102,7 +109,7 @@ def list_incidents(status: Optional[str] = Query(default=None, max_length=200),
                    mine: bool = False, q: Optional[str] = Query(default=None, max_length=200),
                    limit: int = Query(default=50, ge=1, le=LIST_LIMIT), offset: int = Query(default=0, ge=0),
                    db: Db = Depends(current_db)):
-    where: List[str] = []
+    where: List[str] = [_KNOWN_ENV]
     params: List[Any] = []
     if (status or "").strip().lower() != "any":
         statuses = _csv(status, STATUSES, "status") or ["OPEN", "ACK"]
@@ -126,7 +133,8 @@ def list_incidents(status: Optional[str] = Query(default=None, max_length=200),
     clause = (" WHERE " + " AND ".join(where)) if where else ""
     rows = _q(db, _LIST_SELECT + clause + f""" ORDER BY I.SEVERITY, I.LAST_SEEN DESC NULLS LAST
                                               LIMIT {int(limit)} OFFSET {int(offset)}""", tuple(params))
-    total = _q(db, "SELECT COUNT(*) AS N FROM CORE.INCIDENT I JOIN CORE.AIRFLOW_ENV E ON E.ENV_ID = I.ENV_ID" + clause, tuple(params))
+    total = _q(db, "SELECT COUNT(*) AS N FROM CORE.INCIDENT I LEFT JOIN CORE.AIRFLOW_ENV E ON E.ENV_ID = I.ENV_ID" + clause,
+               tuple(params))
     site = _jira_site(db)
     return {"incidents": [_list_out(r, site) for r in rows], "total": int(total[0]["n"] or 0) if total else 0}
 
@@ -139,8 +147,8 @@ def incidents_summary(db: Db = Depends(current_db)):
                COUNT_IF(I.STATUS = 'OPEN' AND I.SEVERITY = 'P1') AS P1_OPEN,
                COUNT_IF(I.STATUS IN ('OPEN', 'ACK') AND UPPER(I.ASSIGNEE) = UPPER(%s)) AS MINE_OPEN,
                COUNT_IF(I.STATUS IN ('OPEN', 'ACK') AND I.TEAM_ID IS NULL AND I.PARENT_INCIDENT_ID IS NULL) AS UNROUTED
-          FROM CORE.INCIDENT I JOIN CORE.AIRFLOW_ENV E ON E.ENV_ID = I.ENV_ID
-         WHERE I.STATUS IN ('OPEN', 'ACK')""", (db.user,))
+          FROM CORE.INCIDENT I LEFT JOIN CORE.AIRFLOW_ENV E ON E.ENV_ID = I.ENV_ID
+         WHERE I.STATUS IN ('OPEN', 'ACK') AND """ + _KNOWN_ENV, (db.user,))
     row = found[0] if found else {}
     return {"open": int(row.get("open_n") or 0), "ack": int(row.get("ack_n") or 0), "p1_open": int(row.get("p1_open") or 0),
             "mine_open": int(row.get("mine_open") or 0), "unrouted": int(row.get("unrouted") or 0)}

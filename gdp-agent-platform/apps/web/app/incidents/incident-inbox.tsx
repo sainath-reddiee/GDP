@@ -252,9 +252,13 @@ export function IncidentInbox({
                           <div className="min-w-0">
                             <Link href={incidentHref(i.incident_id)} className="line-clamp-2 font-medium text-primary hover:underline">{i.title || i.dag_id}</Link>
                             <p className="mt-0.5 flex flex-wrap items-center gap-1 text-[11px] text-muted-foreground">
-                              <span>{envName.get(i.env_id) ?? i.env_id}</span>
-                              <span>·</span>
-                              <Link href={dagRunHref(i.env_id, i.dag_id, i.run_id)} className="font-mono hover:underline">{i.dag_id}</Link>
+                              {i.dq_table ? (
+                                <Link href={`/dashboard/dq-store/suite?table=${encodeURIComponent(i.dq_table)}`} className="font-mono hover:underline">{i.dq_table}</Link>
+                              ) : (<>
+                                <span>{envName.get(i.env_id) ?? i.env_id}</span>
+                                <span>·</span>
+                                <Link href={dagRunHref(i.env_id, i.dag_id, i.run_id)} className="font-mono hover:underline">{i.dag_id}</Link>
+                              </>)}
                               {i.task_id && <><span>·</span><span className="font-mono">{i.task_id}</span></>}
                               <KindPill kind={i.kind} />
                               {i.children > 0 && <span className="rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-600" title="Downstream failures grouped under this one">+{i.children} grouped</span>}

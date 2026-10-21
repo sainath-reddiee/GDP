@@ -404,6 +404,77 @@ def drop_governed(data: Dict[str, Any], governed: Dict[str, Any]) -> List[str]:
             "re-applied (import the pack into a draft in the Model Workbench to change the model)" for i in hit]
 
 
+def load_dq_suite_files() -> List[Tuple[str, str, Path]]:
+    """(domain name, file text, file) for every domain/<dir>/dq/*.dq.json: portable Data Quality suites written with
+    logical table names (services/catalog/dq_suite.portable)."""
+    from services.catalog.dq_suite import parse_portable
+
+    out = []
+    for path in sorted(DOMAIN_DIR.glob("*/dq/*.dq.json")):
+        pack_file = path.parent.parent / "domain_pack.json"
+        name = (json.loads(pack_file.read_text(encoding="utf-8"))["domain"]["name"] if pack_file.exists()
+                else path.parent.parent.name.upper())
+        text = path.read_text(encoding="utf-8")
+        try:
+            parse_portable(text)
+        except ValueError as exc:
+            raise AssertionError(f"{path.relative_to(ROOT)}: {exc}") from exc
+        out.append((name, text, path))
+    return out
+
+
+def seed_dq_suite_files(cur, database: str) -> List[str]:
+    """Repository suite files into this environment: names resolved with its bindings (Admin, Environments, or the
+    environment file's [environment]), new checks added to the table's draft for a DQ approver to approve. A file
+    whose checks the table already has changes nothing."""
+    from services.catalog.dq_suite import import_suite
+    from services.modeling.domain_model import CursorSession
+
+    files = load_dq_suite_files()
+    if not files:
+        return []
+    try:
+        cur.execute(f"USE DATABASE {database}")
+    except Exception as exc:
+        return [f"dq suite files: skipped ({str(exc)[:120]})"]
+    log = []
+    for _, text, path in files:
+        rel = path.relative_to(ROOT).as_posix()
+        try:
+            result = import_suite(CursorSession(cur), text, "DEPLOY")
+            log.append(f"dq suite file {rel}: {result['table']}, {result.get('added', 0)} checks added to the draft"
+                       if result.get("added") else f"dq suite file {rel}: unchanged")
+        except Exception as exc:
+            log.append(f"dq suite file {rel}: skipped ({str(exc)[:160]})")
+    return log
+
+
+def seed_environment(cur, database: str, environment: Optional[Dict[str, Any]]) -> List[str]:
+    """The environment file's [environment] (name and bindings) as ENVIRONMENT_BINDINGS version 1, when no one has
+    saved bindings yet. Bindings edited in Admin, Environments are never replaced by a deploy."""
+    from services.common import environments as envs
+
+    if not environment or not environment.get("name"):
+        return []
+    try:
+        cur.execute(f"SELECT COUNT(*) FROM {database}.CORE.PLATFORM_CONFIG WHERE CONFIG_KEY = %s", (envs.CONFIG_KEY,))
+        if cur.fetchall()[0][0]:
+            return ["environment bindings: kept the saved value"]
+        value, problems = envs.validate({"current": environment["name"],
+                                         "environments": [{"name": environment["name"],
+                                                           "description": environment.get("description") or "",
+                                                           "bindings": environment.get("bindings") or {}}]})
+        if problems:
+            return [f"environment bindings: not seeded ({'; '.join(problems[:3])})"]
+        cur.execute(f"""INSERT INTO {database}.CORE.PLATFORM_CONFIG
+                          (CONFIG_KEY, CONFIG_VALUE, DESCRIPTION, VERSION, IS_CURRENT, CREATED_BY)
+                        SELECT %s, PARSE_JSON(%s), %s, 1, TRUE, CURRENT_USER()""",
+                    (envs.CONFIG_KEY, json.dumps(value), "Environment bindings from the environment file"))
+    except Exception as exc:
+        return [f"environment bindings: skipped ({str(exc)[:120]})"]
+    return [f"environment bindings: {environment['name']} ({len(value['environments'][0]['bindings'])} bindings)"]
+
+
 def seed_dq_suites(cur, database: str) -> List[str]:
     """An approved version 1 for every Data Quality Store table without a suite (V040)."""
     from services.catalog.dq_suite import backfill
@@ -443,8 +514,10 @@ def seed_platform(cur, database: str) -> List[str]:
     merge(cur.execute, database, data, query=_cursor_query(cur))  # keeps domain edits made in the app
     log.extend(snapshot_domains(cur, database))
     log.extend(seed_qa_packs(cur, database))
+    log.extend(check_pack_bindings(cur, database))
     log.extend(seed_domain_models(cur, database))
     log.extend(seed_dq_suites(cur, database))
+    log.extend(seed_dq_suite_files(cur, database))
     log.extend(seed_runbooks(cur, database))
 
     for skill in list_skills():
@@ -568,6 +641,37 @@ def load_qa_packs() -> List[Tuple[str, Dict[str, Any], Path]]:
             raise AssertionError(f"{path.relative_to(ROOT)}: {exc}") from exc
         out.append((name, parsed, path))
     return out
+
+
+def check_pack_bindings(cur, database: str) -> List[str]:
+    """Warn when repository QA packs use logical names ({{silver}}) this deployment has not bound: those queries
+    fail with "not bound" until the binding is saved in Admin, Environments (or the environment file's
+    [environment] seeds it). {{domain}} needs no binding."""
+    from services.common import environments as envs
+
+    used: Dict[str, List[str]] = {}
+    for domain_name, parsed, _ in load_qa_packs():
+        for q in parsed["queries"]:
+            for name in envs.references(q["sql_expression"]):
+                if name != envs.DOMAIN:
+                    used.setdefault(name, []).append(f"{domain_name}/{parsed['name']}")
+    if not used:
+        return []
+    try:
+        cur.execute(f"SELECT CONFIG_VALUE FROM {database}.CORE.PLATFORM_CONFIG WHERE CONFIG_KEY = %s AND IS_CURRENT "
+                    "ORDER BY VERSION DESC LIMIT 1", (envs.CONFIG_KEY,))
+        found = cur.fetchall()
+    except Exception as exc:
+        return [f"qa pack bindings: not checked ({str(exc)[:120]})"]
+    value = found[0][0] if found else None
+    config, _ = envs.validate(json.loads(value) if isinstance(value, str) else value)
+    bound = envs.bindings_of(config)
+    missing = sorted(set(used) - set(bound))
+    if not missing:
+        return [f"qa pack bindings: {', '.join(sorted(used))} bound in {config.get('current')}"]
+    return [f"WARNING qa pack bindings: {{{{{name}}}}} is not bound in {config.get('current') or 'this deployment'}; "
+            f"{len(set(used[name]))} repository pack(s) fail until it is (Admin, Environments, or [environment] in the "
+            "environment file)" for name in missing]
 
 
 def seed_qa_packs(cur, database: str) -> List[str]:

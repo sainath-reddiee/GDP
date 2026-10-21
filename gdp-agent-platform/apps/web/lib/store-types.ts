@@ -49,6 +49,22 @@ export type QaResult = {
 export type QaExecution = {
   stored: boolean; allowed: string[]; results: QaResult[]; qa_run_id?: string; tests?: number; passed?: number;
   failed?: number; errors?: number; review?: number; duration_ms?: number;
+  environment?: string | null; current_environment?: boolean;
+};
+
+// ---------------------------------------------------------------- environments (services/common/environments.py)
+
+/** One environment: logical names ({{silver}}) bound to DATABASE or DATABASE.SCHEMA. */
+export type QaEnvironment = { name: string; description: string; bindings: Record<string, string>; current?: boolean };
+export type EnvironmentConfig = { current: string | null; environments: QaEnvironment[] };
+/** A pack's queries resolved for one environment, checked by the read-only guard and EXPLAIN; nothing ran. */
+export type DryRunQuery = {
+  query_id: string | null; query_name: string; severity: PackSeverity | null; written: string; sql: string; rewritten: boolean;
+  ok: boolean; problems: string[]; explain: { ok: boolean; error: string | null } | null;
+};
+export type DryRun = {
+  pack_id: string; version: number; name: string; environment: string | null; current_environment: boolean; ok: boolean;
+  allowed: string[]; bindings: Record<string, string>; queries: DryRunQuery[];
 };
 export type PackRun = {
   qa_run_id: string; version: number | null; tests: number; passed: number; failed: number; review: number; errors: number;

@@ -6744,6 +6744,9 @@ app.include_router(learning_router)
 from app.value_api import router as value_router  # noqa: E402
 
 app.include_router(value_router)
+from app.environments_api import router as environments_router  # noqa: E402
+
+app.include_router(environments_router)
 from app.permanent_fix_api import router as permanent_fix_router  # noqa: E402
 
 app.include_router(permanent_fix_router)
@@ -6753,3 +6756,6 @@ app.include_router(skill_scout_router)
 from app.removal_api import router as removal_router  # noqa: E402
 
 app.include_router(removal_router)
+from app.dq_alerts_api import router as dq_alerts_router  # noqa: E402
+
+app.include_router(dq_alerts_router)

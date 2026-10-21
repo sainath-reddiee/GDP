@@ -395,7 +395,7 @@ function PublishTab({ table, versions, canPublish }: { table: string; versions: 
 }
 
 function ExportTab({ table, version }: { table: string; version: number | null }) {
-  const [format, setFormat] = useState<"soda" | "gx">("soda");
+  const [format, setFormat] = useState<"soda" | "gx" | "portable">("soda");
   const [text, setText] = useState<string | null>(null);
   const href = `/bff/dq-export?${new URLSearchParams({ table, format, ...(version ? { version: String(version) } : {}) })}`;
   useEffect(() => {
@@ -406,12 +406,16 @@ function ExportTab({ table, version }: { table: string; version: number | null }
     <section className="surface space-y-3 p-4" data-testid="suite-export">
       <div className="flex flex-wrap items-center gap-2">
         <div role="radiogroup" aria-label="Format" className="inline-flex rounded-xl bg-muted p-1">
-          {([["soda", "SodaCL"], ["gx", "Great Expectations"]] as const).map(([id, label]) => (
+          {([["soda", "SodaCL"], ["gx", "Great Expectations"], ["portable", "Portable (any environment)"]] as const).map(([id, label]) => (
             <button key={id} type="button" role="radio" aria-checked={format === id} onClick={() => setFormat(id)}
                     className={cn("rounded-lg px-3 py-1.5 text-xs font-medium", format === id ? "bg-card text-foreground shadow-xs" : "text-muted-foreground")}>{label}</button>
           ))}
         </div>
-        <span className="text-xs text-muted-foreground">Active checks of v{version ?? "?"}; paused checks are left out.</span>
+        <span className="text-xs text-muted-foreground">
+          {format === "portable"
+            ? `Checks of v${version ?? "?"} with logical table names ({{silver}}.SCHEMA.TABLE): import it in another environment's Data Quality Store, or commit it as domain/<name>/dq/<table>.dq.json to seed one at deploy.`
+            : `Active checks of v${version ?? "?"}; paused checks are left out.`}
+        </span>
         <a href={href} className="ml-auto inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-sm hover:bg-muted"><Download className="h-4 w-4" /> Download</a>
       </div>
       <pre className="max-h-[480px] overflow-auto rounded-xl bg-slate-950 p-3 font-mono text-xs text-emerald-300">{text ?? "Rendering..."}</pre>

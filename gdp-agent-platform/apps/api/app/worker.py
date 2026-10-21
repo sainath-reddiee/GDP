@@ -15,6 +15,9 @@ Jobs, each guarded by an CORE.JOB_LEASE so exactly one holder runs it at a time 
                  P1 to P3); at most 3 per run, skipping cases attempted in the last 30 minutes; every 30 s
   resolve        failure resolution (services.resolve.bridge), every 15 s, and at the next tick when a pushed failure
                  sets the wake:resolve flag
+  dq_alerts      data quality incidents from table scans stored since its cursor, and missed scheduled scans
+                 (services.quality.alerts; every 2 min)
+  dq_digest      the daily data quality digest per domain, once a day after dq_digest_hour (checked every 15 min)
   retention      purges raw CORE.EVENT rows after 30 days (every 6 hours)
 The worker uses worker_db(): its own non-shared connection (the named dev connection in dev mode, else the key-pair
 service user from AIP_SERVICE_USER, AIP_SERVICE_KEY_PATH), so incident writes run in transactions. AWS credentials come from the host's default chain (role, AWS_PROFILE). A heartbeat row
@@ -182,7 +185,7 @@ CATALOG_ALL = 2000
 
 DETECT_OVERLAP = timedelta(minutes=2)
 INTERVALS = {"outbox": 30, "escalate": 60, "sla": 120, "jira_sync": 300, "diagnose": 60, "case_triage": 30,
-             "resolve": 15, "permanent_fix": 3600, "skill_scout": 3600}
+             "resolve": 15, "permanent_fix": 3600, "skill_scout": 3600, "dq_alerts": 120, "dq_digest": 900}
 WAKEABLE = {"resolve"}   # the push ingest wakes it (lease.wake), so a pushed failure is handled in seconds
 STATE_SECONDS = 300
 
@@ -341,6 +344,27 @@ def skill_scout(db: Any) -> None:
         log.info("skill_scout: %s", {k: (len(v) if isinstance(v, list) else v) for k, v in result.items()})
 
 
+def dq_alerts(db: Any) -> None:
+    """Data quality incidents: failing checks and stale tables from new scans, then missed scheduled scans."""
+    from services.quality.alerts import DqStore, check_schedules, process_scans
+
+    store = DqStore(db)
+    settings = store.settings()
+    scans = process_scans(store, settings)
+    missed = check_schedules(store, settings)
+    if scans.get("actions") or scans.get("errors") or missed.get("actions"):
+        log.info("dq_alerts: scans %s, schedules %s", scans, missed)
+
+
+def dq_digest(db: Any) -> None:
+    """The daily data quality digest per domain (stored, and filed in Jira where the domain's route asks for it)."""
+    from services.quality.alerts import DqStore, run_digests
+
+    result = run_digests(DqStore(db))
+    if result.get("stored"):
+        log.info("dq_digest: %s", result)
+
+
 def retention(db: Any) -> None:
     from services.ops.store import purge_events
 
@@ -420,7 +444,8 @@ class Worker:
         self._safe(db, "detect", detect)
         for name, fn in (("outbox", outbox), ("escalate", escalate), ("sla", sla), ("jira_sync", jira_sync),
                          ("diagnose", diagnose), ("case_triage", case_triage), ("resolve", resolve),
-                         ("permanent_fix", permanent_fix), ("skill_scout", skill_scout)):
+                         ("permanent_fix", permanent_fix), ("skill_scout", skill_scout), ("dq_alerts", dq_alerts),
+                         ("dq_digest", dq_digest)):
             if self.stop.is_set():
                 return
             due = self._every(name, INTERVALS[name])

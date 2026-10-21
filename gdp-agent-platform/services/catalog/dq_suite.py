@@ -237,6 +237,81 @@ def export(table: str, checks: List[Dict[str, Any]], fmt: str) -> Tuple[str, str
     return f"{base}.soda.yml", "application/x-yaml", render_yaml(table, active)
 
 
+PORTABLE_FORMAT = "gdp-dq-suite"
+PORTABLE_KEYS = ("target_column", "severity", "requirement", "status", "definition")
+
+
+def portable(table: str, domain: Optional[str], checks: List[Dict[str, Any]], bindings: Dict[str, str],
+             environment: Optional[str] = None, version: Optional[int] = None) -> Tuple[str, str, str]:
+    """(file name, media type, content) of a suite as a portable file: the table, reference tables and fail queries
+    written with logical names ({{silver}}.SCHEMA.TABLE) through the current environment's bindings, so the same
+    file imports into another environment (import_suite) or seeds one at deploy (domain/<name>/dq/*.dq.json)."""
+    from services.common.environments import to_logical
+
+    out = []
+    for c in checks:
+        if c.get("status", "ACTIVE") not in CHECK_STATUSES:
+            continue
+        item = {k: c.get(k) for k in PORTABLE_KEYS if c.get(k) not in (None, "")}
+        d = dict(c.get("definition") or {})
+        if d.get("reference_table"):
+            d["reference_table"] = to_logical(str(d["reference_table"]), bindings)
+        if d.get("query"):
+            d["query"] = to_logical(str(d["query"]), bindings)
+        item["definition"] = d
+        out.append(item)
+    doc = {"format": PORTABLE_FORMAT, "format_version": 1, "table": to_logical(table, bindings),
+           "domain": domain or None, "source": {"environment": environment, "suite_version": version},
+           "checks": out}
+    return f"{_slug(table)}.dq.json", "application/json", json.dumps(doc, indent=2, default=str) + "\n"
+
+
+def parse_portable(text: str) -> Dict[str, Any]:
+    """The portable file as {table, domain, source, checks}; raises ValueError on a malformed file."""
+    try:
+        doc = json.loads(text or "")
+    except ValueError as exc:
+        raise ValueError(f"not JSON: {exc}") from exc
+    if not isinstance(doc, dict) or doc.get("format") != PORTABLE_FORMAT:
+        raise ValueError(f"not a {PORTABLE_FORMAT} file (export one from the Data Quality Store)")
+    if int(doc.get("format_version") or 1) > 1:
+        raise ValueError(f"format version {doc.get('format_version')} is newer than this platform reads")
+    if not str(doc.get("table") or "").strip():
+        raise ValueError("the file names no table")
+    checks = doc.get("checks")
+    if not isinstance(checks, list) or not all(isinstance(c, dict) for c in checks):
+        raise ValueError("checks must be a list of objects")
+    return {"table": str(doc["table"]).strip(), "domain": doc.get("domain"), "source": doc.get("source") or {},
+            "checks": checks}
+
+
+def localize(doc: Dict[str, Any], bindings: Dict[str, str], environment: str = "") -> Tuple[str, List[Dict[str, Any]], List[str]]:
+    """(physical table, checks with physical names, problems) of a parsed portable file in one environment."""
+    from services.common.environments import resolve
+
+    problems: List[str] = []
+
+    def physical(text: str) -> str:
+        value, unbound = resolve(text, bindings, environment)
+        problems.extend(p for p in unbound if p not in problems)
+        return value
+
+    table = physical(doc["table"])
+    out = []
+    for c in doc["checks"]:
+        d = dict(c.get("definition") or {})
+        for key in ("reference_table", "query"):
+            if d.get(key):
+                d[key] = physical(str(d[key]))
+        out.append({**{k: c.get(k) for k in PORTABLE_KEYS if k != "definition"}, "definition": d})
+    if not problems:
+        try:
+            table = dq._fqn(table)
+        except AssertionError:
+            problems.append(f"{table}: the table must resolve to DATABASE.SCHEMA.TABLE")
+    return table, out, problems
+
+
 def artifacts(table: str, domain: Optional[str], checks: List[Dict[str, Any]]) -> Dict[str, str]:
     """The files of a suite pull request, under dq/<domain>/: SodaCL and the Great Expectations suite."""
     folder = f"dq/{_slug(domain or 'unassigned')}"
@@ -411,7 +486,46 @@ def export_version(session, table: str, version: Optional[int], fmt: str) -> Tup
     assert header, "this table has no data quality suite"
     pick = int(version or header.get("approved_version") or header.get("open_version") or 0)
     assert pick, "the suite has no version yet"
+    if fmt == "portable":
+        from services.common import environments as envs
+
+        config = envs.load(session)
+        return portable(header["table_name"], _domain_name(session, header.get("domain_id")),
+                        _checks(session, header["suite_id"], pick), envs.bindings_of(config), config.get("current"), pick)
     return export(header["table_name"], _checks(session, header["suite_id"], pick), fmt)
+
+
+def import_suite(session, text: str, user: str, domain_id: Optional[str] = None) -> Dict[str, Any]:
+    """A portable suite file into this environment: its logical names resolved with the current environment's
+    bindings ({{domain}} is the file's domain), its checks added to the table's draft for review and approval like
+    any edit. Checks the table already has (approved or in the draft) are skipped; when none is new no draft opens."""
+    from services.common import environments as envs
+
+    doc = parse_portable(text)
+    config = envs.load(session)
+    if not domain_id and doc.get("domain"):
+        domain_id = scalar(session, "SELECT DOMAIN_ID FROM CORE.DOMAIN_REGISTRY WHERE UPPER(DOMAIN_NAME) = UPPER(?) "
+                                    "LIMIT 1", [str(doc["domain"])])
+    location = envs.domain_location(session, domain_id)
+    bindings = {**envs.bindings_of(config), **({envs.DOMAIN: location} if location else {})}
+    table, raws, problems = localize(doc, bindings, config.get("current") or "")
+    assert not problems, "; ".join(problems[:5])
+    header = _header(session, table)
+    have: List[Dict[str, Any]] = []
+    if header:
+        current = _open(_versions(session, header["suite_id"]))
+        pick = (current or {}).get("version") or header.get("approved_version")
+        have = _checks(session, header["suite_id"], int(pick)) if pick else []
+    fresh = []
+    for raw in raws:
+        record, bad = check_record(raw)
+        if bad or not any(dq.same_check(c, record) for c in have + fresh):
+            fresh.append(raw if bad else record)
+    base = {"table": table, "environment": config.get("current"), "checks": len(raws)}
+    if not fresh:
+        return {**base, "added": 0, "skipped": len(raws), "problems": [], "staged": False}
+    result = stage_many(session, table, [{k: r.get(k) for k in PORTABLE_KEYS} for r in fresh], "USER", user, domain_id)
+    return {**base, **result, "skipped": int(result.get("skipped") or 0) + len(raws) - len(fresh)}
 
 
 # ---------------------------------------------------------------- Snowpark: lifecycle

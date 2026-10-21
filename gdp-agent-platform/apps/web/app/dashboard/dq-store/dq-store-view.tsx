@@ -17,7 +17,7 @@ import { CheckEditor, cleanDefinition, type Draft } from "@/components/quality/c
 import { Spark } from "@/components/quality/quality-shared";
 import { useDismiss } from "@/components/shell/use-dismiss";
 import { useToast } from "@/components/ui/toast";
-import { generateChecks, loadHistory, previewCheck, runTable, saveCheck, seedChecks, setCheckStatus, setSchedule, type Generated, type Parsed, type Staged } from "./actions";
+import { generateChecks, importSuite, loadHistory, previewCheck, runTable, saveCheck, seedChecks, setCheckStatus, setSchedule, type Generated, type Parsed, type Staged } from "./actions";
 
 const ORIGIN: Record<DqCheck["origin"], string> = { PROFILE: "profile", RUN: "run", USER: "user", REQUIREMENT: "requirement" };
 const PRESETS = [
@@ -168,7 +168,7 @@ function ScheduleModal({ table, current, onClose }: { table: string; current: st
 function SeedModal({ onClose, tables }: { onClose: () => void; tables: string[] }) {
   const toast = useToast();
   const router = useRouter();
-  const [mode, setMode] = useState<"table" | "run" | "requirement">("table");
+  const [mode, setMode] = useState<"table" | "run" | "requirement" | "file">("table");
   const [value, setValue] = useState("");
   const [text, setText] = useState("");
   const [filename, setFilename] = useState("");
@@ -176,6 +176,17 @@ function SeedModal({ onClose, tables }: { onClose: () => void; tables: string[] 
   const [pending, start] = useTransition();
   const fileRef = useRef<HTMLInputElement>(null);
   const seed = () => start(async () => {
+    if (mode === "file") {
+      const r = await importSuite({ text, filename });
+      if (r.ok) {
+        toast("ok", r.data.added
+          ? `${r.data.table}: ${r.data.added} check${r.data.added === 1 ? "" : "s"} added to the draft${r.data.skipped ? ` (${r.data.skipped} already there)` : ""}`
+          : `${r.data.table} already has every check in the file`);
+        onClose(); router.refresh();
+      } else if (r.pending) { toast("info", r.error); onClose(); }
+      else toast("error", explain(r.error).message);
+      return;
+    }
     if (mode === "requirement") {
       const r = await generateChecks({ table: value.trim(), text, filename });
       if (r.ok) setResult(r.data);
@@ -193,22 +204,23 @@ function SeedModal({ onClose, tables }: { onClose: () => void; tables: string[] 
     setText(await file.text());
     setFilename(file.name);
   };
-  const ready = value.trim().length >= 5 && (mode !== "requirement" || text.trim().length >= 10);
+  const ready = mode === "file" ? text.trim().length >= 10 : value.trim().length >= 5 && (mode !== "requirement" || text.trim().length >= 10);
   return (
     <Modal open onClose={() => { onClose(); if (result) router.refresh(); }} title="Seed checks" wide={mode === "requirement"}
            description="Start a table's checks from what the platform already knows, or from what the client asks for. They land in the table's draft for review."
            footer={result ? <Button onClick={() => { onClose(); router.refresh(); }}>Done</Button> : <>
              <Button variant="ghost" onClick={onClose}>Cancel</Button>
              <Button disabled={pending || !ready} onClick={seed}>
-               {pending && <Loader2 className="h-4 w-4 animate-spin" />} {mode === "requirement" ? "Generate checks" : "Seed checks"}
+               {pending && <Loader2 className="h-4 w-4 animate-spin" />} {mode === "requirement" ? "Generate checks" : mode === "file" ? "Import checks" : "Seed checks"}
              </Button>
            </>}>
       {result ? <GeneratedSummary result={result} /> : (
         <>
-          <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4">
             {([["table", "From a profile", "Not-null, uniqueness, valid values and ranges the latest profile suggests."],
                ["run", "From a run", "A run's approved checks, placed on its built target table."],
-               ["requirement", "From a requirement", "The client's quality rules: pasted text, or a CSV or JSON file."]] as const).map(([id, label, hint]) => (
+               ["requirement", "From a requirement", "The client's quality rules: pasted text, or a CSV or JSON file."],
+               ["file", "From a suite file", "A portable .dq.json exported from another environment; its logical names resolve here."]] as const).map(([id, label, hint]) => (
               <button key={id} type="button" onClick={() => { setMode(id); if (id === "run" || mode === "run") setValue(""); }}
                       data-testid={`seed-${id}`}
                       className={cn("rounded-xl border p-3 text-left transition", mode === id ? "border-primary/50 bg-primary/5 ring-2 ring-primary/20" : "border-border hover:border-primary/30")}>
@@ -217,27 +229,32 @@ function SeedModal({ onClose, tables }: { onClose: () => void; tables: string[] 
               </button>
             ))}
           </div>
-          <Label htmlFor="seed-v">{mode === "run" ? "Run id" : mode === "table" ? "Profiled table" : "Table"}</Label>
-          <Input id="seed-v" className="font-mono" list={mode === "run" ? undefined : "seed-tables"} value={value}
-                 onChange={(e) => setValue(mode === "run" ? e.target.value : e.target.value.toUpperCase())}
-                 placeholder={mode === "run" ? "00000000-0000-0000-0000-000000000000" : "DATABASE.SCHEMA.TABLE"} />
+          {mode !== "file" && <>
+            <Label htmlFor="seed-v">{mode === "run" ? "Run id" : mode === "table" ? "Profiled table" : "Table"}</Label>
+            <Input id="seed-v" className="font-mono" list={mode === "run" ? undefined : "seed-tables"} value={value}
+                   onChange={(e) => setValue(mode === "run" ? e.target.value : e.target.value.toUpperCase())}
+                   placeholder={mode === "run" ? "00000000-0000-0000-0000-000000000000" : "DATABASE.SCHEMA.TABLE"} />
+          </>}
           <datalist id="seed-tables">{tables.map((t) => <option key={t} value={t} />)}</datalist>
           {mode === "run" && <p className="mt-2 text-xs text-muted-foreground">Or pick the run from a list: <a className="font-medium text-primary hover:underline" href="/dashboard/dq-store?view=runs">Run checks</a>, then &quot;Promote approved to the store&quot;.</p>}
-          {mode === "requirement" && (
+          {(mode === "requirement" || mode === "file") && (
             <>
               <div className="mt-3 flex items-end justify-between gap-2">
-                <Label htmlFor="seed-req" className="mt-0">Requirement</Label>
+                <Label htmlFor="seed-req" className="mt-0">{mode === "file" ? "Suite file" : "Requirement"}</Label>
                 <button type="button" onClick={() => fileRef.current?.click()} className="inline-flex items-center gap-1.5 text-xs font-medium text-primary hover:underline">
                   <Upload className="h-3.5 w-3.5" /> {filename ? `Replace ${filename}` : "Upload a file"}
                 </button>
               </div>
               <Textarea id="seed-req" rows={8} value={text} maxLength={200_000} data-testid="seed-requirement"
                         onChange={(e) => { setText(e.target.value); setFilename(""); }}
-                        placeholder={REQUIREMENT_EXAMPLE} />
+                        placeholder={mode === "file" ? '{"format": "gdp-dq-suite", "table": "{{silver}}.COMPANY.COMPANY_CORE", ...}' : REQUIREMENT_EXAMPLE} />
               <input ref={fileRef} type="file" accept=".csv,.json,.txt,.md,text/plain" className="hidden" onChange={(e) => readFile(e.target.files?.[0])} />
               <p className="mt-2 text-xs text-muted-foreground">
-                CSV or JSON rows (column, check type, values, threshold, severity) become checks as written. Free text is read by AI
-                against the table&apos;s real columns. Either way nothing runs until the draft is reviewed and approved.
+                {mode === "file"
+                  ? <>Export one from a suite&apos;s Export tab (Portable). Logical names such as {"{{silver}}"} resolve with this environment&apos;s
+                    bindings (Admin, Environments); checks the table already has are skipped. Nothing runs until the draft is reviewed and approved.</>
+                  : <>CSV or JSON rows (column, check type, values, threshold, severity) become checks as written. Free text is read by AI
+                    against the table&apos;s real columns. Either way nothing runs until the draft is reviewed and approved.</>}
               </p>
             </>
           )}

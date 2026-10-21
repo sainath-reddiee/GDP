@@ -115,6 +115,37 @@ client's change record.
 
 A failed deploy is safe to run again. Finished steps are skipped and the failed step is retried.
 
+## Environment bindings (QA packs and Data Quality suites)
+
+The repository QA packs (`domain/<name>/qa/*.sql`) name their tables logically, for example
+`{{silver}}.COMPANY.COMPANY_CORE`, so the same file runs in DEV, QA, PROD or a client database. Each deployment
+binds the names to its own databases. Until `silver` is bound, those packs fail with "{{silver}} is not bound", and
+the deploy log says so (`WARNING qa pack bindings: ...`). `{{domain}}` (the pack's own domain) needs no binding.
+
+For DEV, add this to `dev.toml` before the next deploy:
+
+```toml
+[environment]
+name = "DEV"
+description = "Development"
+
+[environment.bindings]
+silver = "DEV_GDP_SILVER_DB"
+```
+
+For another environment, use its own name and databases, for example `name = "PROD"` with
+`silver = "PROD_GDP_SILVER_DB"`. The deploy saves the bindings once, when none are saved yet. After that they belong
+to Admin, Environments: edit them there (every save is a new version), add the other environments a pack can run
+against, and use Preview to resolve a pack and EXPLAIN it against an environment before saving. A deployment that
+already has saved bindings keeps them; a changed `[environment]` section does not overwrite them.
+
+Bindings already deployed without the section can be set in Admin, Environments directly: add an environment
+named DEV, bind `silver` to `DEV_GDP_SILVER_DB` and mark it as this deployment's.
+
+Data Quality suites move between environments as portable files (Export, Portable in a suite; Seed checks, From a
+suite file in the Data Quality Store). Files committed as `domain/<name>/dq/<table>.dq.json` are added to the
+table's suite draft at deploy, resolved with the same bindings, for a DQ approver to approve.
+
 ## Required privileges for the deploy role
 
 - USAGE on the warehouse.

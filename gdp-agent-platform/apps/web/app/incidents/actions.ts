@@ -15,6 +15,8 @@ export type Incident = {
   first_seen: string | null; last_seen: string | null; occurrences: number; parent_incident_id: string | null; children: number;
   jira_key: string | null; jira_url: string | null; jira_state: string | null; title: string; error_excerpt: string | null;
   ai_summary: string | null;
+  /** a data quality incident's table (services/quality/alerts.py); null for Airflow incidents */
+  dq_table?: string | null;
 };
 export type SafeToRetry = "yes" | "no" | "after_fix";
 export type AiEvidence = { kind: string; ref: string; text: string };

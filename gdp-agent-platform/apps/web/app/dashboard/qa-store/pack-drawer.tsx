@@ -3,7 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState, useTransition } from "react";
 import {
-  Archive, BrainCircuit, Check, Download, FlaskConical, GitCompare, GitPullRequest, History, Loader2, Play, Plus, Save, Send, Trash2, Undo2,
+  Archive, BrainCircuit, Check, Download, FileCode2, FlaskConical, GitCompare, GitPullRequest, History, Loader2, Play, Plus, Save, Send, Trash2, Undo2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { PackConflict, PackDetail, PackQuery, PackRun, PackSeverity, QaExecution, QaResult } from "@/lib/store-types";
@@ -15,6 +15,7 @@ import { QaOutcomePill, QaResultCard } from "@/components/quality/qa-result";
 import { SqlEditor, TagChip } from "@/components/quality/sql-editor";
 import { useToast } from "@/components/ui/toast";
 import { executeQa, loadPack, loadPackRuns, loadPackSync, savePack, transitionPack, type PackPayload } from "./actions";
+import { EnvironmentRun } from "./environment-run";
 import { ConflictBanner, GitTab } from "./pack-git";
 import { splitTags } from "./qa-store-view";
 
@@ -234,6 +235,9 @@ export function PackDrawer({ packId, onClose, canEdit, canApprove, canRun }: {
       </Select>
       <a href={`/bff/qa-pack?pack=${packId}&version=${detail.pack.version}`} title="Export this version as domain/<name>/qa/<pack>.sql"
          className="grid h-8 w-8 place-items-center rounded-lg text-muted-foreground hover:bg-muted hover:text-foreground"><Download className="h-4 w-4" /></a>
+      <a href={`/bff/qa-pack?pack=${packId}&version=${detail.pack.version}&logical=1`}
+         title="Export with logical names ({{silver}}.SCHEMA.TABLE) through this environment's bindings, to run or seed in any environment"
+         className="grid h-8 w-8 place-items-center rounded-lg text-muted-foreground hover:bg-muted hover:text-foreground"><FileCode2 className="h-4 w-4" /></a>
     </div>
   );
 
@@ -318,10 +322,18 @@ export function PackDrawer({ packId, onClose, canEdit, canApprove, canRun }: {
           {tab === "runs" && <RunsTab runs={runs} />}
           {tab === "queries" && (
             <>
+              {canRun && (
+                <EnvironmentRun packId={packId} domainId={detail.pack.domain_id} onRan={(r) => { setSuite(r); setRuns(null); router.refresh(); }}
+                                versions={[
+                                  ...(detail.approved_version ? [{ version: detail.approved_version, label: `approved v${detail.approved_version}` }] : []),
+                                  ...(detail.pack.version !== detail.approved_version && detail.pack.status !== "RETIRED" && !dirty
+                                    ? [{ version: detail.pack.version, label: `v${detail.pack.version} (${detail.pack.status.toLowerCase().replace(/_/g, " ")})` }] : []),
+                                ]} />
+              )}
               {suite && (
                 <div className="space-y-2 rounded-xl border border-border/80 bg-muted/30 p-3">
                   <div className="flex items-center gap-2 text-sm">
-                    <b>Suite run</b>
+                    <b>Suite run{suite.environment && suite.current_environment === false ? ` on ${suite.environment}` : ""}</b>
                     <span className="text-muted-foreground">{suite.passed ?? 0} of {suite.tests ?? 0} passed · {((suite.duration_ms ?? 0) / 1000).toFixed(1)}s</span>
                     <button type="button" onClick={() => setSuite(null)} className="ml-auto text-xs text-muted-foreground hover:text-foreground">Dismiss</button>
                   </div>

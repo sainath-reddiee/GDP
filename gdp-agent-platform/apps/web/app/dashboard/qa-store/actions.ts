@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { api } from "@/lib/api";
 import { storeAction } from "@/lib/store-action";
-import type { PackDetail, PackQuery, PackRun, QaExecution } from "@/lib/store-types";
+import type { DryRun, PackDetail, PackQuery, PackRun, QaEnvironment, QaExecution } from "@/lib/store-types";
 
 const PATH = "/dashboard/qa-store";
 const json = (body: unknown) => ({ method: "POST", body: JSON.stringify(body) });
@@ -49,11 +49,23 @@ export async function transitionPack(packId: string, step: "submit" | "reject" |
   return r;
 }
 
-/** Runs a pack version (approved by default), some of its queries, or one ad-hoc query (not stored). */
-export async function executeQa(body: { domain_id: string; pack_id?: string; version?: number | null; query_ids?: string[]; sql?: string }) {
+/** Runs a pack version (approved by default), some of its queries, or one ad-hoc query (not stored), in this
+ *  deployment's environment or another one configured in Admin, Environments. */
+export async function executeQa(body: {
+  domain_id: string; pack_id?: string; version?: number | null; query_ids?: string[]; sql?: string; environment?: string | null;
+}) {
   const r = await storeAction(() => api<QaExecution>("/api/qa/execute", json(body)));
   if (body.pack_id && !body.sql) revalidatePath(PATH);
   return r;
+}
+
+/** The pack's queries resolved for an environment, guarded and EXPLAINed: nothing runs and nothing is stored. */
+export async function dryRunPack(body: { domain_id: string; pack_id: string; version?: number | null; environment?: string | null }) {
+  return storeAction(() => api<DryRun>("/api/qa/execute", json({ ...body, dry_run: true })));
+}
+
+export async function loadQaEnvironments() {
+  return storeAction(() => api<{ current: string | null; environments: QaEnvironment[] }>("/api/qa/environments"));
 }
 
 // ---------------------------------------------------------------- run tests

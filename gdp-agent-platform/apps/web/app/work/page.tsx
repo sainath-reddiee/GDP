@@ -1,7 +1,7 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
 import {
-  AlertTriangle, ArrowRight, Bot, BookOpen, CircleHelp, Gauge, GitPullRequest, LayoutDashboard, PlugZap, Radar, ShieldCheck, Siren, Ticket,
+  AlertTriangle, ArrowRight, Bot, BookOpen, CircleHelp, ClipboardCheck, Gauge, GitPullRequest, LayoutDashboard, PlugZap, Radar, ShieldCheck, Siren, Ticket,
   UserCheck, type LucideIcon,
 } from "lucide-react";
 import { api, whoami } from "@/lib/api";
@@ -15,6 +15,7 @@ import { stageLabel, pipelineOf } from "@/lib/stages";
 import { STAGE_ORDER, stageInfo } from "@/lib/run-status";
 import { buttonVariants } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { FailingCheckList, digestLine } from "@/components/quality/failing-checks";
 
 export const metadata = { title: "My Work" };
 
@@ -298,6 +299,26 @@ export default async function MyWorkPage() {
                   ))}
                 </ul>
               )}
+            </Section>
+          )}
+
+          {(w.dqFailing.total > 0 || w.dqDigests.length > 0) && (
+            <Section id="dq" title="Failing checks in your domains" icon={ClipboardCheck} tone="fix" count={w.dqFailing.total}
+                     href="/dashboard/dq-store" hrefLabel="DQ Store" empty="">
+              <div className="space-y-3 px-5 py-3">
+                {w.dqFailing.total > 0
+                  ? <FailingCheckList checks={w.dqFailing.checks} />
+                  : <p className="text-sm text-muted-foreground">No data quality check is failing in your domains.</p>}
+                {w.dqDigests.length > 0 && (
+                  <ul className="space-y-1 border-t pt-3" data-testid="dq-digests">
+                    {w.dqDigests.map((d) => (
+                      <li key={d.domain_id} className="text-xs text-muted-foreground">
+                        <span className="font-medium text-foreground">{d.domain_name ?? d.domain_id}</span> digest {d.date}: {digestLine(d)}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
             </Section>
           )}
 

@@ -2,6 +2,8 @@
 
 import { revalidatePath } from "next/cache";
 import { api, attemptValue } from "@/lib/api";
+import { storeAction } from "@/lib/store-action";
+import type { DryRun, EnvironmentConfig } from "@/lib/store-types";
 
 /** Deploy what changed since the last deploy; `force` re-applies every step. */
 export async function deployPlatform(force = false) {
@@ -61,4 +63,24 @@ export async function reconcileCosts() {
     revalidatePath("/dashboard");
   }
   return result;
+}
+
+// ---------------------------------------------------------------- environments (apps/api/app/environments_api.py)
+
+export type EnvironmentsState = {
+  config: EnvironmentConfig; saved: boolean; problems: string[]; platform_database: string; reserved: string[];
+  history: { version: number; is_current: boolean; created_by: string | null; created_at: string | null; description: string | null }[];
+};
+
+/** A new version of the bindings (CONFIG.EDIT; under the default policy a platform admin approves it). */
+export async function saveEnvironments(config: EnvironmentConfig, note?: string) {
+  const result = await storeAction(() =>
+    api<EnvironmentsState>("/api/config/environments", { method: "PUT", body: JSON.stringify({ config, note: note || null }) }));
+  if (result.ok) revalidatePath("/admin");
+  return result;
+}
+
+/** A pack's queries resolved with these (unsaved) bindings, guarded and EXPLAINed against the environment. */
+export async function previewEnvironment(body: { config: EnvironmentConfig; environment: string | null; pack_id: string; domain_id: string }) {
+  return storeAction(() => api<DryRun>("/api/config/environments/preview", { method: "POST", body: JSON.stringify(body) }));
 }

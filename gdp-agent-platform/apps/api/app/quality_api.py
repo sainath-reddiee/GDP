@@ -385,9 +385,28 @@ def suite_diff(table: str = Query(min_length=5, max_length=800), to: int = Query
 
 @router.get("/api/dq/suites/export")
 def suite_export(table: str = Query(min_length=5, max_length=800), version: Optional[int] = Query(default=None, ge=1),
-                 format: Literal["soda", "gx"] = "soda", db: Db = Depends(current_db)):  # noqa: A002
+                 format: Literal["soda", "gx", "portable"] = "soda", db: Db = Depends(current_db)):  # noqa: A002
+    """SodaCL, a Great Expectations suite, or the portable file (logical table names through this environment's
+    bindings) that imports into another environment."""
     name, media, content = _call(db, dq_suite.export_version, table, version, format)
     return Response(content, media_type=media, headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
+
+class SuiteImportIn(BaseModel):
+    filename: str = Field(default="", max_length=255)
+    text: str = Field(min_length=2, max_length=1_000_000)
+    domain: Optional[str] = Field(default=None, max_length=128)
+
+
+@router.post("/api/dq/suites/import")
+def suite_import(body: SuiteImportIn, db: Db = Depends(current_db)):
+    """A portable suite file (.dq.json) into this environment: logical names resolved with its bindings, the checks
+    added to the table's draft, which is then submitted and approved like any change."""
+    try:
+        dq_suite.parse_portable(body.text)
+    except ValueError as exc:
+        raise HTTPException(400, f"could not read {body.filename or 'the file'}: {exc}") from exc
+    return _call(db, dq_suite.import_suite, body.text, _user(db), _domain_filter(db, body.domain))
 
 
 class SuiteIn(BaseModel):

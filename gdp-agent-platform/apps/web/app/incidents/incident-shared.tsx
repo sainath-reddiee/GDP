@@ -22,6 +22,7 @@ const SEVERITY_TONE: Record<string, string> = {
 };
 const KIND_LABEL: Record<string, string> = {
   FAILED: "failed", RETRIES_EXHAUSTED: "retries exhausted", LATE: "late", LONG_RUNNING: "long running", UPSTREAM: "upstream",
+  DQ_FAILED: "data quality", DQ_STALE: "stale data",
 };
 
 export const up = (s: string | null | undefined) => (s ?? "").toUpperCase();

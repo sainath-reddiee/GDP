@@ -56,17 +56,27 @@ SELECT ID FROM DB.S.CORE GROUP BY ID HAVING COUNT(*) > 1
 
 
 def test_repository_packs_parse_and_pass_the_guard():
+    """Repository packs name tables logically ({{silver}}.SCHEMA.TABLE) so they run in any environment; resolved
+    with the silver database the domain pack registers, every query passes the guard against its tables."""
+    from services.common.environments import references, resolve
     from services.qa.guard import check
 
     files = sorted((ROOT / "domain").glob("*/qa/*.sql"))
     assert files
     company = json.loads((ROOT / "domain/company/domain_pack.json").read_text())
-    allowed = [f"{company['domain']['silver_database']}.{t['schema']}.{t['table']}" for t in company["targets"]]
+    silver = company["domain"]["silver_database"]
+    allowed = [f"{silver}.{t['schema']}.{t['table']}" for t in company["targets"]]
     for f in files:
-        parsed = pack_files.parse(f.read_text())
+        text = f.read_text()
+        assert silver not in text, f"{f.name}: write {{{{silver}}}} instead of {silver}"
+        parsed = pack_files.parse(text)
         for query in parsed["queries"]:
+            assert references(query["sql_expression"]) == ["silver"], (f.name, query["query_name"])
             ok, problems, _ = check(query["sql_expression"], allowed)
-            assert ok, (f.name, query["query_name"], problems)
+            assert not ok   # unresolved logical names never reach Snowflake
+            sql, unbound = resolve(query["sql_expression"], {"silver": silver})
+            ok, problems, _ = check(sql, allowed)
+            assert ok and not unbound, (f.name, query["query_name"], problems, unbound)
 
 
 # ---------------------------------------------------------------- pure

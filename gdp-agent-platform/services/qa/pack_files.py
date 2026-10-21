@@ -12,11 +12,13 @@ Format: a pack header, then one block per query. Header lines start with "-- @";
     -- @description Addresses whose COMPANY_CORE_SKEY has no hub row
     -- @expect 0 rows
     -- @tags orphan-keys
-    SELECT a.COMPANY_CORE_SKEY FROM DEV_GDP_SILVER_DB.COMPANY.COMPANY_ADDRESS a
-    LEFT JOIN DEV_GDP_SILVER_DB.COMPANY.COMPANY_CORE c ON c.COMPANY_CORE_SKEY = a.COMPANY_CORE_SKEY
+    SELECT a.COMPANY_CORE_SKEY FROM {{silver}}.COMPANY.COMPANY_ADDRESS a
+    LEFT JOIN {{silver}}.COMPANY.COMPANY_CORE c ON c.COMPANY_CORE_SKEY = a.COMPANY_CORE_SKEY
     WHERE c.COMPANY_CORE_SKEY IS NULL
 
-render() writes the same format back, so a pack exported from the UI can be committed as is.
+render() writes the same format back, so a pack exported from the UI can be committed as is. Table names may be
+logical ({{silver}}.COMPANY.COMPANY_CORE, {{domain}}.COMPANY_CORE): they are resolved per environment when the pack
+runs (services/common/environments.py), and portable() writes an exported pack that way.
 """
 
 from __future__ import annotations
@@ -114,6 +116,15 @@ def render(pack: Dict[str, Any]) -> str:
             out.append(f"-- @tags {', '.join(q['tags'])}")
         out.append(q["sql_expression"].strip())
     return "\n".join(out) + "\n"
+
+
+def portable(pack: Dict[str, Any], bindings: Dict[str, str]) -> Dict[str, Any]:
+    """The pack with its fully qualified names written as logical references ({{silver}}.SCHEMA.TABLE) wherever the
+    current environment's bindings cover them, so render() gives a file that runs in any environment."""
+    from services.common.environments import to_logical
+
+    return {**pack, "queries": [{**q, "sql_expression": to_logical(q["sql_expression"], bindings)}
+                                for q in pack.get("queries") or []]}
 
 
 # ---------------------------------------------------------------- importing a plain .sql file

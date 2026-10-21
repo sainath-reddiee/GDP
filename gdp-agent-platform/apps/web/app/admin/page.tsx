@@ -1,13 +1,15 @@
 import Link from "next/link";
 import { Suspense } from "react";
-import { Bot, LayoutDashboard, Plug, Rocket, Ruler, ShieldCheck, SlidersHorizontal, Sparkles } from "lucide-react";
+import { Bot, Layers, LayoutDashboard, Plug, Rocket, Ruler, ShieldCheck, SlidersHorizontal, Sparkles } from "lucide-react";
 import { api, ApiError, whoami } from "@/lib/api";
 import { can } from "@/lib/types";
 import type { GovEvent, GovPolicy, GovPrivilege, GovRole, GovSettings, GovUser } from "../governance-actions";
 import { AccessSection } from "./access-section";
 import { PageHeader } from "@/components/page-header";
 import { cn } from "@/lib/utils";
-import type { ModelsState, PlatformState, RulesState } from "./actions";
+import type { EnvironmentsState, ModelsState, PlatformState, RulesState } from "./actions";
+import { EnvironmentsSection } from "./environments-section";
+import type { PackRow } from "@/lib/store-types";
 import { ToastProvider } from "./admin-ui";
 import { DeployButton } from "./deploy-button";
 import { ModelsSection } from "./models-section";
@@ -30,6 +32,7 @@ const SECTIONS = [
   { id: "skills", label: "Skills per stage", icon: Sparkles, hint: "Which skills each pipeline stage loads, and in what order" },
   { id: "rules", label: "Rules", icon: SlidersHorizontal, hint: "Thresholds and hints" },
   { id: "standards", label: "Modeling standards", icon: Ruler, hint: "Naming and conventions" },
+  { id: "environments", label: "Environments", icon: Layers, hint: "Where logical names in QA packs and Data Quality suites point, per environment" },
   { id: "deploy", label: "Deploy", icon: Rocket, hint: "Push code to Snowflake" },
 ] as const;
 const MODEL_VIEWS = [
@@ -149,6 +152,13 @@ async function Section({ id, view, integrationView }: { id: SectionId; view: Mod
       api<RulesState>("/api/config/rules?pipeline=GOLD").catch(() => null),
     ]);
     return rules ? <RulesSection rules={rules} gold={gold} /> : unavailable;
+  }
+  if (id === "environments") {
+    const [state, packs] = await Promise.all([
+      api<EnvironmentsState>("/api/config/environments").catch(() => null),
+      api<{ packs: PackRow[] }>("/api/qa-packs").catch(() => ({ packs: [] as PackRow[] })),
+    ]);
+    return state ? <EnvironmentsSection state={state} packs={packs.packs.filter((p) => p.status !== "RETIRED")} /> : unavailable;
   }
   if (id === "standards") {
     const platform = await api<PlatformState>("/api/config/platform").catch(() => null);
