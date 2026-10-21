@@ -7,37 +7,49 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input, Label, Select } from "@/components/ui/input";
 import { DryRunResults } from "@/components/quality/dry-run";
-import type { DryRun, EnvironmentConfig, PackRow } from "@/lib/store-types";
+import { roleLabel, type DryRun, type EnvironmentConfig, type PackRow } from "@/lib/store-types";
 import { previewEnvironment, saveEnvironments, type EnvironmentsState } from "./actions";
 import { DirtyBar, useToast } from "./admin-ui";
 import { Panel } from "./section";
 
-type Row = { key: string; value: string };
-type Env = { name: string; description: string; rows: Row[] };
+type Env = { name: string; description: string };
+type Role = { label: string; values: string[] };   // one value per environment, in column order
+type Grid = { envs: Env[]; roles: Role[]; current: string };
 
-const toEnvs = (c: EnvironmentConfig): Env[] =>
-  c.environments.map((e) => ({ name: e.name, description: e.description ?? "", rows: Object.entries(e.bindings).map(([key, value]) => ({ key, value })) }));
+const roleKey = (label: string) => label.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
 
-function toConfig(envs: Env[], current: string): EnvironmentConfig {
+function toGrid(c: EnvironmentConfig): Grid {
+  const keys = Array.from(new Set(c.environments.flatMap((e) => Object.keys(e.bindings))))
+    .sort((a, b) => (a === "silver" ? -1 : b === "silver" ? 1 : a.localeCompare(b)));
+  const envs = c.environments.map((e) => ({ name: e.name, description: e.description ?? "" }));
+  const roles = keys.map((k) => ({ label: roleLabel(k), values: c.environments.map((e) => e.bindings[k] ?? "") }));
+  if (!envs.length) return { envs: [{ name: "DEV", description: "" }], roles: [{ label: "Silver", values: [""] }], current: "DEV" };
+  return { envs, roles: roles.length ? roles : [{ label: "Silver", values: envs.map(() => "") }], current: c.current ?? "" };
+}
+
+function toConfig(g: Grid): EnvironmentConfig {
   return {
-    current: current || null,
-    environments: envs.map((e) => ({
+    current: g.current || null,
+    environments: g.envs.map((e, j) => ({
       name: e.name.trim().toUpperCase(), description: e.description.trim(),
-      bindings: Object.fromEntries(e.rows.filter((r) => r.key.trim() || r.value.trim()).map((r) => [r.key.trim().toLowerCase(), r.value.trim()])),
+      bindings: Object.fromEntries(g.roles.filter((r) => roleKey(r.label) && (r.values[j] ?? "").trim())
+        .map((r) => [roleKey(r.label), r.values[j].trim()])),
     })),
   };
 }
 
-/** Admin, Environments: where this deployment's logical names point, and the other environments a QA pack can run in. */
+/** Admin, Environments: which real database plays each role (Silver, Landing, ...) in each environment, so a QA pack
+ *  written against this deployment's tables also runs in QA, PROD or a client database. */
 export function EnvironmentsSection({ state, packs }: { state: EnvironmentsState; packs: PackRow[] }) {
   const router = useRouter();
   const toast = useToast();
   const [pending, start] = useTransition();
-  const [saved, setSaved] = useState(() => ({ envs: toEnvs(state.config), current: state.config.current ?? "" }));
-  const [envs, setEnvs] = useState(saved.envs);
-  const [current, setCurrent] = useState(saved.current);
-  const config = useMemo(() => toConfig(envs, current), [envs, current]);
-  const dirty = JSON.stringify(config) !== JSON.stringify(toConfig(saved.envs, saved.current));
+  const [saved, setSaved] = useState(() => toGrid(state.config));
+  const [grid, setGrid] = useState(saved);
+  const config = useMemo(() => toConfig(grid), [grid]);
+  const dirty = state.saved
+    ? JSON.stringify(config) !== JSON.stringify(toConfig(saved))
+    : config.environments.some((e) => Object.keys(e.bindings).length > 0);
 
   const [packId, setPackId] = useState(packs[0]?.pack_id ?? "");
   const [target, setTarget] = useState("");
@@ -45,19 +57,28 @@ export function EnvironmentsSection({ state, packs }: { state: EnvironmentsState
   const [previewError, setPreviewError] = useState("");
   const [previewing, startPreview] = useTransition();
 
-  const change = (i: number, fn: (e: Env) => Env) => setEnvs((all) => all.map((e, j) => (j === i ? fn(e) : e)));
-  const addEnv = () => {
-    const first = !envs.length;
-    setEnvs((all) => [...all, { name: first ? "DEV" : "", description: "", rows: [{ key: "silver", value: "" }] }]);
-    if (first) setCurrent("DEV");
-  };
+  const setEnv = (j: number, patch: Partial<Env>) => setGrid((g) => {
+    const was = g.envs[j].name.trim().toUpperCase();
+    const envs = g.envs.map((e, i) => (i === j ? { ...e, ...patch } : e));
+    const current = patch.name !== undefined && was && was === g.current ? patch.name.trim().toUpperCase() : g.current;
+    return { ...g, envs, current };
+  });
+  const setCell = (r: number, j: number, value: string) =>
+    setGrid((g) => ({ ...g, roles: g.roles.map((role, i) => (i === r ? { ...role, values: g.envs.map((_, k) => (k === j ? value : role.values[k] ?? "")) } : role)) }));
+  const addEnv = () => setGrid((g) => ({ ...g, envs: [...g.envs, { name: "", description: "" }], roles: g.roles.map((r) => ({ ...r, values: [...r.values, ""] })) }));
+  const removeEnv = (j: number) => setGrid((g) => ({
+    envs: g.envs.filter((_, i) => i !== j), roles: g.roles.map((r) => ({ ...r, values: r.values.filter((_, i) => i !== j) })),
+    current: g.envs[j].name.trim().toUpperCase() === g.current ? "" : g.current,
+  }));
+  const addRole = () => setGrid((g) => ({ ...g, roles: [...g.roles, { label: "", values: g.envs.map(() => "") }] }));
+  const removeRole = (r: number) => setGrid((g) => ({ ...g, roles: g.roles.filter((_, i) => i !== r) }));
 
   const save = () => start(async () => {
     const r = await saveEnvironments(config);
     if (r.ok) {
-      setSaved({ envs: toEnvs(r.data.config), current: r.data.config.current ?? "" });
-      setEnvs(toEnvs(r.data.config)); setCurrent(r.data.config.current ?? "");
-      toast("ok", "Environment bindings saved. Packs resolve their logical names with them from now on.");
+      const next = toGrid(r.data.config);
+      setSaved(next); setGrid(next);
+      toast("ok", "Environment databases saved. QA packs use them from now on.");
       router.refresh();
     } else if (r.pending) toast("info", r.error);
     else toast("error", r.error);
@@ -75,88 +96,77 @@ export function EnvironmentsSection({ state, packs }: { state: EnvironmentsState
   const names = config.environments.map((e) => e.name).filter(Boolean);
   return (
     <div className="space-y-5">
-      <Panel title="Environment bindings"
-             description={<>QA pack SQL and Data Quality suite files can name tables with logical names instead of a fixed database:{" "}
-               <code className="font-mono">{"{{silver}}"}.COMPANY.COMPANY_CORE</code> when <code className="font-mono">silver</code> is a database,
-               or <code className="font-mono">{"{{company}}"}.COMPANY_CORE</code> when it is a database and schema.{" "}
-               <code className="font-mono">{"{{domain}}"}</code> is always the pack&apos;s own domain. Each environment maps the names to its own
-               databases; fully qualified SQL keeps working as written. Platform database: <span className="font-mono">{state.platform_database}</span>.</>}
+      <Panel title="Environment databases"
+             description={<>Each environment (DEV, QA, PROD or a client database) has its own databases. Enter the database, or
+               DATABASE.SCHEMA, that plays each role in each environment, for example Silver is DEV_GDP_SILVER_DB in DEV and
+               DA_GDP_SILVER_DB in DA. QA packs are written with real table names; run in another environment, a table in a
+               mapped database is read from that environment&apos;s database for the same role. Tables in databases no role
+               covers are read where they are. Platform database: <span className="font-mono">{state.platform_database}</span>.</>}
              actions={<Button size="sm" variant="outline" onClick={addEnv}><Plus className="h-3.5 w-3.5" /> Add environment</Button>}>
         {state.problems.length > 0 && (
           <p className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
-            The saved value has problems: {state.problems.join("; ")}
+            The saved mapping has problems: {state.problems.join("; ")}
           </p>
         )}
-        {!envs.length ? (
-          <p className="text-sm text-muted-foreground">
-            No environments yet. Add this deployment&apos;s environment first (for example DEV), bind its databases, then add the
-            environments packs should also run in (QA, PROD or a client database).
-          </p>
-        ) : (
-          <div className="grid gap-4 lg:grid-cols-2">
-            {envs.map((env, i) => {
-              const upper = env.name.trim().toUpperCase();
-              return (
-                <section key={i} className="rounded-xl border p-4" aria-label={`Environment ${upper || i + 1}`}>
-                  <div className="flex flex-wrap items-end gap-2">
-                    <div className="w-36"><Label htmlFor={`env-name-${i}`}>Name</Label>
-                      <Input id={`env-name-${i}`} value={env.name} placeholder="QA" className="h-8 font-mono uppercase"
-                             onChange={(e) => {
-                               const was = upper;
-                               change(i, (x) => ({ ...x, name: e.target.value }));
-                               if (was && was === current) setCurrent(e.target.value.trim().toUpperCase());
-                             }} /></div>
-                    <div className="min-w-0 flex-1"><Label htmlFor={`env-desc-${i}`}>Description</Label>
-                      <Input id={`env-desc-${i}`} value={env.description} placeholder="Client QA account" className="h-8"
-                             onChange={(e) => change(i, (x) => ({ ...x, description: e.target.value }))} /></div>
-                    <Button size="sm" variant="ghost" aria-label={`Remove ${upper || "environment"}`} className="text-destructive hover:text-destructive"
-                            onClick={() => { setEnvs((all) => all.filter((_, j) => j !== i)); if (upper === current) setCurrent(""); }}>
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </Button>
-                  </div>
-                  <label className="mt-3 flex items-center gap-2 text-xs">
-                    <input type="radio" name="current-environment" checked={!!upper && upper === current} disabled={!upper}
-                           onChange={() => setCurrent(upper)} />
-                    This deployment&apos;s tables live here
-                    {upper && upper === current && <Badge variant="secondary">current</Badge>}
-                  </label>
-                  <table className="mt-3 w-full text-sm">
-                    <thead className="text-left text-xs text-muted-foreground">
-                      <tr><th className="pb-1 font-medium">Logical name</th><th className="pb-1 font-medium">DATABASE or DATABASE.SCHEMA</th><th /></tr>
-                    </thead>
-                    <tbody>
-                      {env.rows.map((row, k) => (
-                        <tr key={k}>
-                          <td className="py-1 pr-2 align-top">
-                            <Input value={row.key} placeholder="silver" aria-label={`${upper} binding ${k + 1} name`} className="h-8 font-mono text-xs"
-                                   onChange={(e) => change(i, (x) => ({ ...x, rows: x.rows.map((r, m) => (m === k ? { ...r, key: e.target.value } : r)) }))} />
-                          </td>
-                          <td className="py-1 pr-2 align-top">
-                            <Input value={row.value} placeholder="DEV_GDP_SILVER_DB" aria-label={`${upper} binding ${k + 1} target`} className="h-8 font-mono text-xs"
-                                   onChange={(e) => change(i, (x) => ({ ...x, rows: x.rows.map((r, m) => (m === k ? { ...r, value: e.target.value } : r)) }))} />
-                          </td>
-                          <td className="w-8 py-1 align-top">
-                            <button type="button" aria-label={`Remove binding ${row.key || k + 1}`} className="mt-2 text-muted-foreground hover:text-destructive"
-                                    onClick={() => change(i, (x) => ({ ...x, rows: x.rows.filter((_, m) => m !== k) }))}>
-                              <Trash2 className="h-3.5 w-3.5" />
-                            </button>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                  <Button size="sm" variant="ghost" className="mt-1" onClick={() => change(i, (x) => ({ ...x, rows: [...x.rows, { key: "", value: "" }] }))}>
-                    <Plus className="h-3.5 w-3.5" /> Add binding
-                  </Button>
-                </section>
-              );
-            })}
-          </div>
-        )}
+        <div className="overflow-x-auto rounded-xl border">
+          <table className="w-full min-w-[560px] text-sm" data-testid="environment-grid">
+            <thead className="bg-muted/40 text-left align-top text-xs text-muted-foreground">
+              <tr>
+                <th className="w-44 px-3 py-2 font-medium">Database role</th>
+                {grid.envs.map((env, j) => {
+                  const upper = env.name.trim().toUpperCase();
+                  return (
+                    <th key={j} className="min-w-[200px] px-3 py-2 font-medium">
+                      <div className="flex items-center gap-1">
+                        <Input value={env.name} placeholder="Environment" aria-label={`Environment ${j + 1} name`}
+                               className="h-8 font-mono text-xs uppercase" onChange={(e) => setEnv(j, { name: e.target.value })} />
+                        <button type="button" aria-label={`Remove ${upper || "environment"}`} className="p-1 text-muted-foreground hover:text-destructive"
+                                onClick={() => removeEnv(j)}><Trash2 className="h-3.5 w-3.5" /></button>
+                      </div>
+                      <Input value={env.description} placeholder="Description" aria-label={`${upper || "Environment"} description`}
+                             className="mt-1 h-7 text-xs font-normal" onChange={(e) => setEnv(j, { description: e.target.value })} />
+                      <label className="mt-1.5 flex items-center gap-1.5 font-normal">
+                        <input type="radio" name="current-environment" checked={!!upper && upper === grid.current} disabled={!upper}
+                               onChange={() => setGrid((g) => ({ ...g, current: upper }))} />
+                        This deployment
+                        {upper && upper === grid.current && <Badge variant="secondary">current</Badge>}
+                      </label>
+                    </th>
+                  );
+                })}
+              </tr>
+            </thead>
+            <tbody className="divide-y">
+              {grid.roles.map((role, r) => (
+                <tr key={r}>
+                  <td className="px-3 py-1.5 align-top">
+                    <div className="flex items-center gap-1">
+                      <Input value={role.label} placeholder="Role name" aria-label={`Database role ${r + 1}`} className="h-8 text-xs"
+                             onChange={(e) => setGrid((g) => ({ ...g, roles: g.roles.map((x, i) => (i === r ? { ...x, label: e.target.value } : x)) }))} />
+                      <button type="button" aria-label={`Remove ${role.label || "role"}`} className="p-1 text-muted-foreground hover:text-destructive"
+                              onClick={() => removeRole(r)}><Trash2 className="h-3.5 w-3.5" /></button>
+                    </div>
+                  </td>
+                  {grid.envs.map((env, j) => (
+                    <td key={j} className="px-3 py-1.5 align-top">
+                      <Input value={role.values[j] ?? ""} aria-label={`${role.label || "Role"} database in ${env.name.trim().toUpperCase() || `environment ${j + 1}`}`}
+                             className="h-8 font-mono text-xs" onChange={(e) => setCell(r, j, e.target.value)} />
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <Button size="sm" variant="ghost" className="mt-2" onClick={addRole}><Plus className="h-3.5 w-3.5" /> Add database role</Button>
+        <p className="mt-2 text-xs text-muted-foreground">
+          Leave a cell empty when the environment has no database for that role. When this deployment maps no Silver database,
+          each domain&apos;s registered Silver database is used.
+        </p>
       </Panel>
 
       <Panel title="Preview a pack"
-             description="Resolves a pack's queries with the bindings above (saved or not) for one environment, then runs the read-only guard and an EXPLAIN against it with your role. Nothing runs and nothing is stored.">
+             description="Shows a pack's queries as they would run in one environment with the databases above (saved or not), then runs the read-only guard and an EXPLAIN there with your role. Nothing runs and nothing is stored.">
         {!packs.length ? <p className="text-sm text-muted-foreground">There are no QA packs to preview yet.</p> : (
           <div className="space-y-4">
             <div className="flex flex-wrap items-end gap-2">
@@ -166,8 +176,8 @@ export function EnvironmentsSection({ state, packs }: { state: EnvironmentsState
                 </Select></div>
               <div className="w-44"><Label htmlFor="pv-env">Environment</Label>
                 <Select id="pv-env" value={target} onChange={(e) => setTarget(e.target.value)}>
-                  <option value="">{current ? `${current} (this deployment)` : "This deployment"}</option>
-                  {names.filter((n) => n !== current).map((n) => <option key={n} value={n}>{n}</option>)}
+                  <option value="">{grid.current ? `${grid.current} (this deployment)` : "This deployment"}</option>
+                  {names.filter((n) => n !== grid.current).map((n) => <option key={n} value={n}>{n}</option>)}
                 </Select></div>
               <Button variant="outline" disabled={previewing || !packId} onClick={runPreview} data-testid="preview-environment">
                 {previewing ? <Loader2 className="h-4 w-4 animate-spin" /> : <ScanSearch className="h-4 w-4" />} Preview
@@ -180,7 +190,7 @@ export function EnvironmentsSection({ state, packs }: { state: EnvironmentsState
       </Panel>
 
       {state.history.length > 0 && (
-        <Panel title="Saved versions" description="Every save is a new version of the setting; the newest current one is used.">
+        <Panel title="Saved versions" description="Every save is a new version of the mapping; the newest current one is used.">
           <ul className="divide-y text-sm">
             {state.history.map((h) => (
               <li key={h.version} className="flex flex-wrap items-center gap-2 py-2">
@@ -193,8 +203,7 @@ export function EnvironmentsSection({ state, packs }: { state: EnvironmentsState
           </ul>
         </Panel>
       )}
-      <DirtyBar count={dirty ? 1 : 0} pending={pending} onSave={save}
-                onDiscard={() => { setEnvs(saved.envs); setCurrent(saved.current); }} what="environment change" />
+      <DirtyBar count={dirty ? 1 : 0} pending={pending} onSave={save} onDiscard={() => setGrid(saved)} what="environment change" />
     </div>
   );
 }

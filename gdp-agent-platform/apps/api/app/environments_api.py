@@ -52,7 +52,7 @@ def put_environments(body: EnvironmentsIn, db: Db = Depends(current_db)):
     cleaned, problems = envs.validate(body.config)
     if problems:
         raise HTTPException(400, "; ".join(problems[:10]))
-    _put_config(db, envs.CONFIG_KEY, cleaned, (body.note or "Environment bindings set from Admin")[:500])
+    _put_config(db, envs.CONFIG_KEY, cleaned, (body.note or "Environment databases saved in Admin")[:500])
     return _state(db)
 
 

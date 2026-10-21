@@ -25,7 +25,7 @@ export function DryRunResults({ result, className }: { result: DryRun; className
                 {q.ok ? <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-600" aria-label="ok" />
                       : <XCircle className="h-4 w-4 shrink-0 text-destructive" aria-label="fails" />}
                 <span className="font-mono text-xs">{q.query_name}</span>
-                {q.rewritten && <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">resolved</span>}
+                {q.rewritten && <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">tables moved</span>}
                 <span className="ml-auto truncate text-xs text-muted-foreground">
                   {q.problems[0] ?? (q.explain && !q.explain.ok ? q.explain.error : "guard and EXPLAIN passed")}
                 </span>
@@ -33,9 +33,17 @@ export function DryRunResults({ result, className }: { result: DryRun; className
               <div className="mt-2 space-y-2 pl-6">
                 {q.problems.length > 1 && <ul className="list-disc pl-4 text-xs text-destructive">{q.problems.map((p) => <li key={p}>{p}</li>)}</ul>}
                 {q.explain && !q.explain.ok && <p className="text-xs text-destructive">EXPLAIN: {q.explain.error}</p>}
+                {q.kept.length > 0 && (
+                  <p className="text-xs text-muted-foreground">
+                    Read where they are (no database role maps them): <span className="font-mono">{q.kept.join(", ")}</span>
+                  </p>
+                )}
                 <pre className="max-h-56 overflow-auto rounded-lg bg-muted/60 p-2 font-mono text-[11px]">{q.sql}</pre>
                 {q.rewritten && (
-                  <pre className="max-h-40 overflow-auto rounded-lg border border-dashed p-2 font-mono text-[11px] text-muted-foreground">{q.written}</pre>
+                  <>
+                    <p className="text-[11px] text-muted-foreground">As written for this deployment:</p>
+                    <pre className="max-h-40 overflow-auto rounded-lg border border-dashed p-2 font-mono text-[11px] text-muted-foreground">{q.written}</pre>
+                  </>
                 )}
               </div>
             </details>

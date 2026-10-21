@@ -7,7 +7,6 @@ import pytest
 
 from services.qa import pack_files, packs
 
-ALLOWED = ["DB.S.CORE", "DB.S.ADDRESS"]
 ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -90,14 +89,15 @@ def test_ids_are_stable_and_scoped():
 
 
 def test_clean_queries_validates_names_severity_and_sql():
-    out = packs.clean_queries([q(severity="warn", tags="SLA, recon"), q("dups", "SELECT ID FROM DB.S.CORE")], ALLOWED)
+    out = packs.clean_queries([q(severity="warn", tags="SLA, recon"), q("dups", "SELECT ID FROM DB.S.CORE"),
+                               q("anywhere", "SELECT * FROM DB.OTHER.T")])   # any fully qualified table
     assert out[0]["severity"] == "WARN" and out[0]["tags"] == ["sla", "recon"] and out[1]["ordinal"] == 2
     cases = [([], "at least one"), ([q("1bad")], "names"), ([q(), q("ORPHANS")], "twice"),
-             ([q(severity="FATAL")], "severity"), ([q(sql="SELECT * FROM DB.OTHER.T")], "orphans:"),
+             ([q(severity="FATAL")], "severity"), ([q(sql="SELECT * FROM OTHER.T")], "orphans:.*fully qualified"),
              ([q(sql="DELETE FROM DB.S.CORE")], "orphans:")]
     for queries, message in cases:
         with pytest.raises(AssertionError, match=message):
-            packs.clean_queries(queries, ALLOWED)
+            packs.clean_queries(queries)
 
 
 def test_to_test_maps_severity_for_the_runner():
@@ -122,7 +122,6 @@ def store(monkeypatch):
     state = {"versions": [], "queries": {}, "inserted": [], "knowledge": [], "forgotten": []}
     monkeypatch.setattr(packs, "_versions", lambda s, pid: list(state["versions"]))
     monkeypatch.setattr(packs, "_query_rows", lambda s, pid, v: list(state["queries"].get(int(v), [])))
-    monkeypatch.setattr(packs, "allowed_tables", lambda s, d: ALLOWED)
 
     def insert(session, pid, version, did, meta, queries, status, source, note):
         state["inserted"].append({"version": version, "status": status, "source": source, "queries": queries})
@@ -187,7 +186,7 @@ def test_execute_stores_domain_scope(store, monkeypatch):
     monkeypatch.setattr(run, "_store", lambda s, qa_run, results: stored.append((qa_run, results)))
     out = packs.execute(Session(), "d1", "p")
     assert out["trigger_detail"] == {"pack_id": "p", "version": 1, "status": "APPROVED"}
-    assert ran[0][0]["severity"] == "HIGH" and ran[0][1] == ALLOWED and ran[0][2] is True
+    assert ran[0][0]["severity"] == "HIGH" and ran[0][1] == [] and ran[0][2] is True   # no table allowlist
     assert stored[0][0]["scope"] == "DOMAIN" and stored[0][0]["domain_id"] == "d1" and stored[0][0]["passed"] == 1
     packs.execute(Session(), "d1", "p", version=2)
     assert ran[-1][0]["severity"] == "MEDIUM"

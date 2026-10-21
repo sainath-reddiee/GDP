@@ -14,6 +14,7 @@ import { Input, Label, Select, Textarea } from "@/components/ui/input";
 import { Modal } from "@/components/hub/overlay";
 import { EmptyState, StatusPill, explain } from "@/components/hub/states";
 import { CheckEditor, cleanDefinition, type Draft } from "@/components/quality/check-editor";
+import { TablePicker } from "@/components/quality/table-picker";
 import { Spark } from "@/components/quality/quality-shared";
 import { useDismiss } from "@/components/shell/use-dismiss";
 import { useToast } from "@/components/ui/toast";
@@ -41,6 +42,20 @@ export function stagedMessage(d: Staged, what: string) {
 
 export type EditableCheck = Pick<DqCheck, "check_id" | "column_name" | "severity" | "check_definition"> & { requirement?: string | null };
 
+/** One-line examples for the chosen table, written with its own columns when they are known. */
+function exampleChecks(columns: string[]): string[] {
+  if (!columns.length) {
+    return ["row_count > 0", "missing_count(EMAIL) = 0", "duplicate_count(CUSTOMER_ID) = 0", "missing_percent(PHONE) < 5%",
+      "invalid_percent(EMAIL) < 1%", "freshness(UPDATED_AT) < 1d", "min(AMOUNT) >= 0"];
+  }
+  const up = columns.map((c) => c.toUpperCase());
+  const key = columns[up.findIndex((c) => /(^|_)(ID|KEY|SKEY)$/.test(c))] ?? columns[0];
+  const time = columns[up.findIndex((c) => /(_AT|_TS|_DATE|_TIME|TIMESTAMP)$/.test(c))];
+  const other = columns.find((c) => c !== key) ?? key;
+  return ["row_count > 0", `missing_count(${key}) = 0`, `duplicate_count(${key}) = 0`, `missing_percent(${other}) < 5%`,
+    ...(time ? [`freshness(${time}) < 1d`] : [])];
+}
+
 export function CheckModal({ table, check, columns, onClose }: { table: string; check?: EditableCheck; columns: string[]; onClose: () => void }) {
   const toast = useToast();
   const [tableName, setTableName] = useState(table);
@@ -51,6 +66,10 @@ export function CheckModal({ table, check, columns, onClose }: { table: string; 
     : { target_column: "", severity: "WARN", requirement: "", definition: { kind: "not_null" } });
   const [preview, setPreview] = useState<Parsed | null>(null);
   const [pending, start] = useTransition();
+  // the picked table's real columns (from Snowflake), else the ones the store already knows for it
+  const [picked, setPicked] = useState<string[]>([]);
+  const cols = picked.length ? picked : columns;
+  const examples = exampleChecks(cols);
 
   const body = () => mode === "dsl"
     ? { check_id: check?.check_id ?? null, table: tableName.trim(), severity: draft.severity, dsl }
@@ -82,9 +101,12 @@ export function CheckModal({ table, check, columns, onClose }: { table: string; 
              </Button>
            </>}>
       <div className="space-y-4">
-        <div><Label htmlFor="ck-table">Table</Label>
-          <Input id="ck-table" className="font-mono" value={tableName} disabled={!!check} placeholder="DATABASE.SCHEMA.TABLE"
-                 onChange={(e) => setTableName(e.target.value.toUpperCase())} /></div>
+        {check ? (
+          <div><Label htmlFor="ck-table">Table</Label>
+            <Input id="ck-table" className="font-mono" value={tableName} disabled /></div>
+        ) : (
+          <TablePicker value={tableName} onChange={setTableName} onColumns={setPicked} />
+        )}
         {!check && (
           <div role="radiogroup" aria-label="Editor" className="inline-flex rounded-xl bg-muted p-1">
             {([["dsl", "One line SodaCL", Wand2], ["guided", "Guided editor", Columns3]] as const).map(([id, label, Icon]) => (
@@ -107,14 +129,13 @@ export function CheckModal({ table, check, columns, onClose }: { table: string; 
                 </Select></div>
             </div>
             <div className="flex flex-wrap gap-1.5 text-xs">
-              {["row_count > 0", "missing_count(EMAIL) = 0", "duplicate_count(CUSTOMER_ID) = 0", "missing_percent(PHONE) < 5%",
-                "invalid_percent(EMAIL) < 1%", "freshness(UPDATED_AT) < 1d", "min(AMOUNT) >= 0"].map((ex) => (
+              {examples.map((ex) => (
                 <button key={ex} type="button" onClick={() => setDsl(ex)} className="rounded-md border border-border bg-muted/50 px-2 py-0.5 font-mono text-muted-foreground transition hover:border-primary/40 hover:text-foreground">{ex}</button>
               ))}
             </div>
           </div>
         ) : (
-          <CheckEditor draft={draft} onChange={setDraft} columns={columns} kindLocked={!!check} />
+          <CheckEditor draft={draft} onChange={setDraft} columns={cols} kindLocked={!!check} />
         )}
         <div className={cn("rounded-xl border p-3", preview && !preview.ok ? "border-destructive/30 bg-destructive/5" : "border-border/70 bg-slate-950")}>
           {!preview ? <p className="text-xs text-slate-400">The rendered SodaCL appears here.</p>
@@ -229,13 +250,12 @@ function SeedModal({ onClose, tables }: { onClose: () => void; tables: string[] 
               </button>
             ))}
           </div>
-          {mode !== "file" && <>
-            <Label htmlFor="seed-v">{mode === "run" ? "Run id" : mode === "table" ? "Profiled table" : "Table"}</Label>
-            <Input id="seed-v" className="font-mono" list={mode === "run" ? undefined : "seed-tables"} value={value}
-                   onChange={(e) => setValue(mode === "run" ? e.target.value : e.target.value.toUpperCase())}
-                   placeholder={mode === "run" ? "00000000-0000-0000-0000-000000000000" : "DATABASE.SCHEMA.TABLE"} />
+          {mode === "run" && <>
+            <Label htmlFor="seed-v">Run id</Label>
+            <Input id="seed-v" className="font-mono" value={value} onChange={(e) => setValue(e.target.value)}
+                   placeholder="00000000-0000-0000-0000-000000000000" />
           </>}
-          <datalist id="seed-tables">{tables.map((t) => <option key={t} value={t} />)}</datalist>
+          {(mode === "table" || mode === "requirement") && <div className="mt-3"><TablePicker value={value} onChange={setValue} /></div>}
           {mode === "run" && <p className="mt-2 text-xs text-muted-foreground">Or pick the run from a list: <a className="font-medium text-primary hover:underline" href="/dashboard/dq-store?view=runs">Run checks</a>, then &quot;Promote approved to the store&quot;.</p>}
           {(mode === "requirement" || mode === "file") && (
             <>
@@ -247,12 +267,12 @@ function SeedModal({ onClose, tables }: { onClose: () => void; tables: string[] 
               </div>
               <Textarea id="seed-req" rows={8} value={text} maxLength={200_000} data-testid="seed-requirement"
                         onChange={(e) => { setText(e.target.value); setFilename(""); }}
-                        placeholder={mode === "file" ? '{"format": "gdp-dq-suite", "table": "{{silver}}.COMPANY.COMPANY_CORE", ...}' : REQUIREMENT_EXAMPLE} />
+                        placeholder={mode === "file" ? '{"format": "gdp-dq-suite", "table": "DEV_GDP_SILVER_DB.COMPANY.COMPANY_CORE", ...}' : REQUIREMENT_EXAMPLE} />
               <input ref={fileRef} type="file" accept=".csv,.json,.txt,.md,text/plain" className="hidden" onChange={(e) => readFile(e.target.files?.[0])} />
               <p className="mt-2 text-xs text-muted-foreground">
                 {mode === "file"
-                  ? <>Export one from a suite&apos;s Export tab (Portable). Logical names such as {"{{silver}}"} resolve with this environment&apos;s
-                    bindings (Admin, Environments); checks the table already has are skipped. Nothing runs until the draft is reviewed and approved.</>
+                  ? <>Export one from a suite&apos;s Export tab. A suite exported from another environment lands on this
+                    environment&apos;s matching database (Admin, Environments); checks the table already has are skipped. Nothing runs until the draft is reviewed and approved.</>
                   : <>CSV or JSON rows (column, check type, values, threshold, severity) become checks as written. Free text is read by AI
                     against the table&apos;s real columns. Either way nothing runs until the draft is reviewed and approved.</>}
               </p>

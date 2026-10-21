@@ -251,9 +251,10 @@ function ContextCard({ ctx, data }: { ctx: TableContext | null; data: TableSuite
       </div>
       <div className="grid gap-3 text-xs md:grid-cols-2">
         <div>
-          <p className="mb-1 flex items-center gap-1.5 font-medium"><Database className="h-3.5 w-3.5 text-muted-foreground" />Tests may read</p>
+          <p className="mb-1 flex items-center gap-1.5 font-medium"><Database className="h-3.5 w-3.5 text-muted-foreground" />Tables in scope</p>
           <ul className="space-y-0.5 font-mono text-[11px] text-muted-foreground">{allowed.map((a) => <li key={a} className="truncate" title={a}>{a}</li>)}</ul>
-          {!allowed.length && <p className="text-muted-foreground">Only the target table.</p>}
+          {!allowed.length && <p className="text-muted-foreground">The target table.</p>}
+          <p className="mt-1 text-muted-foreground">Tests can also read any other table your role can, by its DATABASE.SCHEMA.TABLE name.</p>
         </div>
         <div>
           <p className="mb-1 flex items-center gap-1.5 font-medium"><ShieldCheck className="h-3.5 w-3.5 text-muted-foreground" />Personal data in samples</p>

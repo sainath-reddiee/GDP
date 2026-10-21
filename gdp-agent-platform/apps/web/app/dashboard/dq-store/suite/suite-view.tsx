@@ -413,7 +413,7 @@ function ExportTab({ table, version }: { table: string; version: number | null }
         </div>
         <span className="text-xs text-muted-foreground">
           {format === "portable"
-            ? `Checks of v${version ?? "?"} with logical table names ({{silver}}.SCHEMA.TABLE): import it in another environment's Data Quality Store, or commit it as domain/<name>/dq/<table>.dq.json to seed one at deploy.`
+            ? `Checks of v${version ?? "?"} with this environment's table names and database mapping: import it in another environment's Data Quality Store and its tables move to that environment's databases, or commit it as domain/<name>/dq/<table>.dq.json to seed one at deploy.`
             : `Active checks of v${version ?? "?"}; paused checks are left out.`}
         </span>
         <a href={href} className="ml-auto inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-sm hover:bg-muted"><Download className="h-4 w-4" /> Download</a>

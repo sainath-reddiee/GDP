@@ -517,22 +517,16 @@ def qa_pack_runs(pack_id: str, limit: int = 20, db: Db = Depends(current_db)):
 
 
 @router.get("/api/qa-packs/{pack_id}/file")
-def qa_pack_file(pack_id: str, version: Optional[int] = None, logical: bool = False, db: Db = Depends(current_db)):
-    """The version as a domain/<name>/qa/<pack>.sql file, ready to commit. `logical` writes its table names through
-    this environment's bindings ({{silver}}.SCHEMA.TABLE), so the file runs in any environment."""
+def qa_pack_file(pack_id: str, version: Optional[int] = None, db: Db = Depends(current_db)):
+    """The version as a domain/<name>/qa/<pack>.sql file with this environment's real table names. Imported into
+    another environment, names of a database mapped in Admin, Environments move to that environment's database."""
     from fastapi.responses import PlainTextResponse
-    from services.common import environments as envs
-    from services.qa.pack_files import portable, render
+    from services.qa.pack_files import render
 
     detail = _call(db, _svc("packs").get_pack, pack_id, version)
     pack = detail["pack"]
-    content = {"name": pack["name"], "description": pack.get("description"), "tags": pack.get("tags") or [],
-               "queries": detail["queries"]}
-    if logical:
-        from app.main import _config
-
-        content = portable(content, envs.bindings_of(envs.validate(_config(db, envs.CONFIG_KEY, None))[0]))
-    text = render(content)
+    text = render({"name": pack["name"], "description": pack.get("description"), "tags": pack.get("tags") or [],
+                   "queries": detail["queries"]})
     name = re.sub(r"[^a-z0-9]+", "_", pack["name"].lower()).strip("_") or "pack"
     return PlainTextResponse(text, headers={"Content-Disposition": f'attachment; filename="{name}.sql"'})
 

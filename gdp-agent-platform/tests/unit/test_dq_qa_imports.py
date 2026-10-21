@@ -205,8 +205,13 @@ def test_the_workflow_runs_on_merged_suites_and_names_every_secret():
     assert "python scripts/soda_cloud_scan.py" in workflow and cloud_ci.SCRIPT_PATH in files
 
 
-def test_a_pack_query_outside_the_domain_is_refused_in_domain_terms():
+def test_a_pack_query_on_a_table_outside_the_domain_is_accepted():
+    """QA reads any table the caller's role can read; the read-only guard still refuses writes and short names."""
     from services.qa.packs import clean_queries
 
-    with pytest.raises(AssertionError, match="is not one of this domain's tables"):
-        clean_queries([{"query_name": "q1", "sql_expression": "SELECT 1 FROM OTHER_DB.S.T"}], ["DB.S.CO"])
+    out = clean_queries([{"query_name": "q1", "sql_expression": "SELECT 1 FROM OTHER_DB.S.T"}])
+    assert out[0]["sql_expression"] == "SELECT 1 FROM OTHER_DB.S.T"
+    with pytest.raises(AssertionError, match="fully qualified"):
+        clean_queries([{"query_name": "q1", "sql_expression": "SELECT 1 FROM S.T"}])
+    with pytest.raises(AssertionError, match="not allowed in a read-only test"):
+        clean_queries([{"query_name": "q1", "sql_expression": "SELECT 1 FROM A.B.C; DELETE FROM A.B.C"}])

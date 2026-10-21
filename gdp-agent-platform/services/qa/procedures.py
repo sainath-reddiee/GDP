@@ -311,14 +311,14 @@ def table_context(ctx: Dict[str, Any]) -> str:
         f"Target table: {ctx['target']['fqn']}\nBusiness keys: {', '.join(ctx['business_keys']) or 'none recorded'}\n"
         f"Source tables:\n{sources}\nJoin plan (driving table {ctx['graph'].get('driving_table') or 'n/a'}):\n{joins}\n"
         f"STTM (target column <- source):\n{lines}\n\n"
-        f"Allowed tables: {', '.join(ctx['allowed'])}\n\n"
+        f"Tables in scope: {', '.join(ctx['allowed'])}\n\n"
     )
 
 
 def ask_prompt(ctx: Dict[str, Any], question: str, known: Optional[Dict[str, Any]] = None) -> str:
     return (
         "You are a data QA engineer. Write ONE Snowflake SQL query that tests the requirement below.\n"
-        "Rules: a single SELECT (WITH allowed); never modify data; use only these fully qualified tables; quote "
+        "Rules: a single SELECT (WITH allowed); never modify data; use the tables in scope, or any other table by its fully qualified name; quote "
         "nothing unless needed; list failing rows with LIMIT 100 or return counts that a tester can compare; "
         f"say in `expected` what a passing result looks like. {EXPECTED_RULE}\n\n"
         + table_context(ctx)
@@ -375,7 +375,7 @@ def _ask(session, ctx: Dict[str, Any], run_id: Optional[str], question: str) -> 
         except AssertionError:
             output, usage, model = complete_json(session, prompt, ASK_SCHEMA, max_tokens=4000, stage="QA")
         record_cost(session, run_id, "QA", model, usage, int((time.time() - started) * 1000), tool_calls=1)
-        ok, problems, sql = check(output.get("sql") or "", ctx["allowed"])
+        ok, problems, sql = check(output.get("sql") or "")
         compile_error, note = compile_check(session, sql, ctx) if ok else (None, None)
         call.summary = "valid" if ok and not compile_error else "rejected"
     return {**output, "sql": sql, "valid": ok and not compile_error, "problems": problems,
@@ -399,7 +399,7 @@ def _fields(payload: Dict[str, Any]) -> Tuple[str, str]:
 def qa_save(session, run_id: str, payload_json: str) -> Dict[str, Any]:
     payload = json.loads(payload_json or "{}")
     ctx = context(session, run_id)
-    ok, problems, sql = check(payload.get("sql") or "", ctx["allowed"])
+    ok, problems, sql = check(payload.get("sql") or "")
     assert ok, "; ".join(problems)
     category, severity = _fields(payload)
     test_id = str(uuid.uuid4())
@@ -419,7 +419,7 @@ def qa_update(session, run_id: str, test_id: str, payload_json: str, change: str
     """Edit a saved test in place (SQL, title, expected, severity); the guard checks the new SQL again."""
     payload = json.loads(payload_json or "{}")
     ctx = context(session, run_id)
-    ok, problems, sql = check(payload.get("sql") or "", ctx["allowed"])
+    ok, problems, sql = check(payload.get("sql") or "")
     assert ok, "; ".join(problems)
     severity = str(payload.get("severity") or "MEDIUM").upper()
     severity = severity if severity in SEVERITIES else "MEDIUM"
@@ -442,7 +442,7 @@ def plan_prompt(ctx: Dict[str, Any], known: Dict[str, Any], existing: List[str],
         "Prefer, in order: business rules from the domain knowledge (category BUSINESS_RULE), edge cases such as "
         "late or duplicate records, nulls in keys, boundary dates, negative amounts, orphan references and SCD history "
         "(category EDGE_CASE), then anything a careful tester would add. Each test is one read-only SELECT over the "
-        f"allowed tables. {EXPECTED_RULE} Set severity CRITICAL only for grain or money/regulatory rules. In `why`, "
+        f"tables in scope. {EXPECTED_RULE} Set severity CRITICAL only for grain or money/regulatory rules. In `why`, "
         "name the rule, profile fact or column it comes from.\n\n"
         "Already in the suite (do not repeat):\n" + "\n".join(f"- {t}" for t in existing[:80])
         + (f"\n\nTester focus: {focus.strip()[:1000]}" if focus.strip() else "")
@@ -462,7 +462,7 @@ def _plan(session, ctx: Dict[str, Any], run_id: Optional[str], existing: List[Di
         record_cost(session, run_id, "QA", model, usage, int((time.time() - started) * 1000), tool_calls=1)
         proposals = []
         for t in (output.get("tests") or [])[:8]:
-            ok, problems, sql = check(t.get("sql") or "", ctx["allowed"])
+            ok, problems, sql = check(t.get("sql") or "")
             compile_error, note = compile_check(session, sql, ctx) if ok else (None, None)
             proposals.append({**t, "sql": sql, "valid": ok and not compile_error, "problems": problems,
                               "compile_error": compile_error, "note": note})
@@ -556,7 +556,7 @@ def table_save(session, target_table_id: str, payload_json: str) -> Dict[str, An
     payload = json.loads(payload_json or "{}")
     ctx = _table_ctx(session, target_table_id)
     assert not ctx.get("retired"), "the target table is retired; reactivate it before adding tests"
-    ok, problems, sql = check(payload.get("sql") or "", ctx["allowed"])
+    ok, problems, sql = check(payload.get("sql") or "")
     assert ok, "; ".join(problems)
     category, severity = _fields(payload)
     suite_id = payload.get("suite_id")
@@ -592,7 +592,7 @@ def update_table_test(session, test_id: str, payload_json: str, change: str = "E
     payload = json.loads(payload_json or "{}")
     test = _table_test(session, test_id)
     ctx = _table_ctx(session, test["TARGET_TABLE_ID"])
-    ok, problems, sql = check(payload.get("sql") or "", ctx["allowed"])
+    ok, problems, sql = check(payload.get("sql") or "")
     assert ok, "; ".join(problems)
     _, severity = _fields(payload)
     compile_error, note = compile_check(session, sql, ctx)

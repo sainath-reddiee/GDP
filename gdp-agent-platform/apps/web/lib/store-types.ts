@@ -47,24 +47,32 @@ export type QaResult = {
   sample?: Record<string, unknown>[]; masked?: string[]; sql?: string | null; duration_ms?: number;
 };
 export type QaExecution = {
-  stored: boolean; allowed: string[]; results: QaResult[]; qa_run_id?: string; tests?: number; passed?: number;
+  stored: boolean; results: QaResult[]; qa_run_id?: string; tests?: number; passed?: number;
   failed?: number; errors?: number; review?: number; duration_ms?: number;
   environment?: string | null; current_environment?: boolean;
 };
 
 // ---------------------------------------------------------------- environments (services/common/environments.py)
 
-/** One environment: logical names ({{silver}}) bound to DATABASE or DATABASE.SCHEMA. */
+/** One environment: the real database (or DATABASE.SCHEMA) that plays each database role (silver, landing, ...). */
 export type QaEnvironment = { name: string; description: string; bindings: Record<string, string>; current?: boolean };
 export type EnvironmentConfig = { current: string | null; environments: QaEnvironment[] };
-/** A pack's queries resolved for one environment, checked by the read-only guard and EXPLAIN; nothing ran. */
+/** A pack's queries as they would run in one environment, checked by the read-only guard and EXPLAIN; nothing ran.
+ *  `written` is the query with this deployment's tables, `sql` with the environment's; `kept` lists tables no database
+ *  role maps, which a run elsewhere still reads where they are. */
 export type DryRunQuery = {
   query_id: string | null; query_name: string; severity: PackSeverity | null; written: string; sql: string; rewritten: boolean;
-  ok: boolean; problems: string[]; explain: { ok: boolean; error: string | null } | null;
+  kept: string[]; ok: boolean; problems: string[]; explain: { ok: boolean; error: string | null } | null;
 };
 export type DryRun = {
   pack_id: string; version: number; name: string; environment: string | null; current_environment: boolean; ok: boolean;
-  allowed: string[]; bindings: Record<string, string>; queries: DryRunQuery[];
+  queries: DryRunQuery[];
+};
+
+/** silver -> Silver, gold_mart -> Gold mart: a database role as people read it. */
+export const roleLabel = (role: string) => {
+  const text = role.replace(/_/g, " ").trim();
+  return text.charAt(0).toUpperCase() + text.slice(1);
 };
 export type PackRun = {
   qa_run_id: string; version: number | null; tests: number; passed: number; failed: number; review: number; errors: number;

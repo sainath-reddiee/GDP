@@ -96,8 +96,11 @@ def conflict(session, pack_id: str) -> Optional[Dict[str, Any]]:
         return None
     s = _sync_row(found[0])
     repo = parse(s.get("repo_content") or "", default_name="Repository pack")
-    repo_queries = [{**q, "ordinal": i + 1, "tags": packs.clean_tags(q.get("tags"))} for i, q in enumerate(repo["queries"])]
     app = packs.get_pack(session, pack_id)
+    # both sides as people read them: real names of this environment (a repository file may hold logical ones)
+    repo_queries = packs.shown(session, app["pack"].get("domain_id"),
+                               [{**q, "ordinal": i + 1, "tags": packs.clean_tags(q.get("tags"))}
+                                for i, q in enumerate(repo["queries"])])
     return {"sync": {k: v for k, v in s.items() if k != "repo_content"}, "repo": {**repo, "queries": repo_queries},
             "app": {"version": app["pack"]["version"], "status": app["pack"]["status"], "queries": app["queries"]},
             "diff": packs.diff(app["queries"], repo_queries)}

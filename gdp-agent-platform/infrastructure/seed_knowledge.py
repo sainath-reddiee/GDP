@@ -469,7 +469,7 @@ def seed_environment(cur, database: str, environment: Optional[Dict[str, Any]]) 
         cur.execute(f"""INSERT INTO {database}.CORE.PLATFORM_CONFIG
                           (CONFIG_KEY, CONFIG_VALUE, DESCRIPTION, VERSION, IS_CURRENT, CREATED_BY)
                         SELECT %s, PARSE_JSON(%s), %s, 1, TRUE, CURRENT_USER()""",
-                    (envs.CONFIG_KEY, json.dumps(value), "Environment bindings from the environment file"))
+                    (envs.CONFIG_KEY, json.dumps(value), "Environment databases from the environment file"))
     except Exception as exc:
         return [f"environment bindings: skipped ({str(exc)[:120]})"]
     return [f"environment bindings: {environment['name']} ({len(value['environments'][0]['bindings'])} bindings)"]
@@ -643,43 +643,66 @@ def load_qa_packs() -> List[Tuple[str, Dict[str, Any], Path]]:
     return out
 
 
-def check_pack_bindings(cur, database: str) -> List[str]:
-    """Warn when repository QA packs use logical names ({{silver}}) this deployment has not bound: those queries
-    fail with "not bound" until the binding is saved in Admin, Environments (or the environment file's
-    [environment] seeds it). {{domain}} needs no binding."""
+def _saved_mapping(cur, database: str) -> Dict[str, Any]:
+    """ENVIRONMENT_BINDINGS as saved in this deployment (DEFAULT when none is)."""
     from services.common import environments as envs
 
-    used: Dict[str, List[str]] = {}
-    for domain_name, parsed, _ in load_qa_packs():
-        for q in parsed["queries"]:
-            for name in envs.references(q["sql_expression"]):
-                if name != envs.DOMAIN:
-                    used.setdefault(name, []).append(f"{domain_name}/{parsed['name']}")
-    if not used:
-        return []
     try:
         cur.execute(f"SELECT CONFIG_VALUE FROM {database}.CORE.PLATFORM_CONFIG WHERE CONFIG_KEY = %s AND IS_CURRENT "
                     "ORDER BY VERSION DESC LIMIT 1", (envs.CONFIG_KEY,))
         found = cur.fetchall()
-    except Exception as exc:
-        return [f"qa pack bindings: not checked ({str(exc)[:120]})"]
+    except Exception:
+        return dict(envs.DEFAULT)
     value = found[0][0] if found else None
-    config, _ = envs.validate(json.loads(value) if isinstance(value, str) else value)
-    bound = envs.bindings_of(config)
-    missing = sorted(set(used) - set(bound))
-    if not missing:
-        return [f"qa pack bindings: {', '.join(sorted(used))} bound in {config.get('current')}"]
-    return [f"WARNING qa pack bindings: {{{{{name}}}}} is not bound in {config.get('current') or 'this deployment'}; "
-            f"{len(set(used[name]))} repository pack(s) fail until it is (Admin, Environments, or [environment] in the "
-            "environment file)" for name in missing]
+    return envs.validate(json.loads(value) if isinstance(value, str) else value)[0]
+
+
+def pack_mappings(cur, database: str):
+    """domain name -> the database per role its repository packs read with here (services/common/environments.
+    effective): the saved mapping, Silver falling back to the domain pack's silver database, and its location."""
+    from services.common import environments as envs
+
+    config = _saved_mapping(cur, database)
+    homes: Dict[str, Tuple[Optional[str], Optional[str]]] = {}
+    for path in DOMAIN_DIR.glob("*/domain_pack.json"):
+        domain = json.loads(path.read_text(encoding="utf-8")).get("domain") or {}
+        homes[str(domain.get("name") or "").upper()] = (domain.get("silver_database"), domain.get("silver_schema"))
+
+    def mapping(domain_name: str) -> Dict[str, str]:
+        db, schema = homes.get(str(domain_name or "").upper(), (None, None))
+        location = envs.normalise_location(f"{db}.{schema}") if db and schema else None
+        return envs.effective(config, db, location)
+    return mapping
+
+
+def check_pack_bindings(cur, database: str) -> List[str]:
+    """Warn when repository QA packs use a database role this deployment maps nowhere: those queries fail until the
+    role is mapped in Admin, Environments (or the environment file's [environment] seeds it). Silver falls back to the
+    domain's registered Silver database and the pack's own domain needs no mapping."""
+    from services.common import environments as envs
+
+    mapping = pack_mappings(cur, database)
+    missing: Dict[str, set] = {}
+    for domain_name, parsed, _ in load_qa_packs():
+        known = mapping(domain_name)
+        for q in parsed["queries"]:
+            for name in envs.references(q["sql_expression"]):
+                if name not in known:
+                    missing.setdefault(name, set()).add(f"{domain_name}/{parsed['name']}")
+    return [f"WARNING qa packs: no {envs.label(name)} database is mapped for this deployment; {len(packs)} repository "
+            "pack(s) fail until it is (Admin, Environments, or [environment] in the environment file)"
+            for name, packs in sorted(missing.items())]
 
 
 def seed_qa_packs(cur, database: str) -> List[str]:
     """Repository packs become APPROVED versions (SOURCE REPO) and their queries ACTIVE QA_TEST knowledge. A pack the
     app edited is never overwritten: when the repository file changed since those edits, the deploy records a conflict
     (CORE.QA_PACK_SYNC) for someone to resolve in the QA Store (services/qa/pack_git.sync_decision)."""
+    from services.common.environments import shown
     from services.qa.pack_git import repo_sha, signature, sync_decision
     from services.qa.packs import knowledge_key, query_id_for, seed_rows
+
+    mapping = pack_mappings(cur, database)
 
     try:
         cur.execute(f"SELECT 1 FROM {database}.CORE.DOMAIN_QA_PACKS LIMIT 1")
@@ -777,10 +800,11 @@ def seed_qa_packs(cur, database: str) -> List[str]:
                 (query_id_for(pid, q["query_name"]), pid, version, q["query_name"], q.get("description") or None,
                  q["sql_expression"], q["severity"], q["expectation"], json.dumps(q["tags"]), q["ordinal"]))
             key = knowledge_key(pid, q["query_name"])
+            sql = shown(q["sql_expression"], mapping(domain_name))   # knowledge reads with real table names
             content = (f"{meta['name']}: {q['query_name']}. {q.get('description') or ''} "
-                       f"Passes when: {q['expectation']}. Severity {q['severity']}.\n\n{q['sql_expression']}")
+                       f"Passes when: {q['expectation']}. Severity {q['severity']}.\n\n{sql}")
             knowledge.append((_stable_id("k", key), did, "QA_TEST", f"{meta['name']}: {q['query_name']}", content,
-                              {"pack_id": pid, "pack": meta["name"], "version": version, "sql": q["sql_expression"],
+                              {"pack_id": pid, "pack": meta["name"], "version": version, "sql": sql,
                                "expected": q["expectation"], "severity": q["severity"], "tags": q["tags"]},
                               ["QA", "PACK", *q["tags"]][:20], key, "ACTIVE", version, True))
         log.append(f"{label}: version {version} ({len(queries)} queries)")

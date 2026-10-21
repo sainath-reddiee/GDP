@@ -241,27 +241,24 @@ PORTABLE_FORMAT = "gdp-dq-suite"
 PORTABLE_KEYS = ("target_column", "severity", "requirement", "status", "definition")
 
 
-def portable(table: str, domain: Optional[str], checks: List[Dict[str, Any]], bindings: Dict[str, str],
+def portable(table: str, domain: Optional[str], checks: List[Dict[str, Any]], databases: Dict[str, str],
              environment: Optional[str] = None, version: Optional[int] = None) -> Tuple[str, str, str]:
-    """(file name, media type, content) of a suite as a portable file: the table, reference tables and fail queries
-    written with logical names ({{silver}}.SCHEMA.TABLE) through the current environment's bindings, so the same
-    file imports into another environment (import_suite) or seeds one at deploy (domain/<name>/dq/*.dq.json)."""
-    from services.common.environments import to_logical
-
+    """(file name, media type, content) of a suite as a portable file with real table names, plus the environment it
+    came from and that environment's database per role (`databases`, Admin, Environments). Imported elsewhere
+    (import_suite), or committed as domain/<name>/dq/<table>.dq.json to seed an environment at deploy, the names of
+    a mapped database move to the importing environment's database for the same role."""
     out = []
     for c in checks:
         if c.get("status", "ACTIVE") not in CHECK_STATUSES:
             continue
         item = {k: c.get(k) for k in PORTABLE_KEYS if c.get(k) not in (None, "")}
-        d = dict(c.get("definition") or {})
-        if d.get("reference_table"):
-            d["reference_table"] = to_logical(str(d["reference_table"]), bindings)
-        if d.get("query"):
-            d["query"] = to_logical(str(d["query"]), bindings)
-        item["definition"] = d
+        item["definition"] = dict(c.get("definition") or {})
         out.append(item)
-    doc = {"format": PORTABLE_FORMAT, "format_version": 1, "table": to_logical(table, bindings),
-           "domain": domain or None, "source": {"environment": environment, "suite_version": version},
+    from services.common.environments import DOMAIN
+
+    doc = {"format": PORTABLE_FORMAT, "format_version": 1, "table": table, "domain": domain or None,
+           "source": {"environment": environment, "suite_version": version,
+                      "databases": {k: v for k, v in sorted((databases or {}).items()) if k != DOMAIN}},
            "checks": out}
     return f"{_slug(table)}.dq.json", "application/json", json.dumps(doc, indent=2, default=str) + "\n"
 
@@ -281,18 +278,25 @@ def parse_portable(text: str) -> Dict[str, Any]:
     checks = doc.get("checks")
     if not isinstance(checks, list) or not all(isinstance(c, dict) for c in checks):
         raise ValueError("checks must be a list of objects")
-    return {"table": str(doc["table"]).strip(), "domain": doc.get("domain"), "source": doc.get("source") or {},
-            "checks": checks}
+    source = doc.get("source") if isinstance(doc.get("source"), dict) else {}
+    return {"table": str(doc["table"]).strip(), "domain": doc.get("domain"), "source": source, "checks": checks}
 
 
-def localize(doc: Dict[str, Any], bindings: Dict[str, str], environment: str = "") -> Tuple[str, List[Dict[str, Any]], List[str]]:
-    """(physical table, checks with physical names, problems) of a parsed portable file in one environment."""
-    from services.common.environments import resolve
+def localize(doc: Dict[str, Any], here: Dict[str, str], config: Optional[Dict[str, Any]] = None,
+             environment: str = "") -> Tuple[str, List[Dict[str, Any]], List[str]]:
+    """(table, checks, problems) of a parsed portable file in this environment (`here`: its database per role).
+    Names in a database the file's source environment maps (its own `databases`, else that environment in
+    `config`), or any configured environment maps, become this environment's database for the same role."""
+    from services.common import environments as envs
 
+    source = dict((doc.get("source") or {}).get("databases") or {})
+    if not source and (doc.get("source") or {}).get("environment"):
+        source = envs.bindings_of(config, doc["source"]["environment"])
     problems: List[str] = []
 
     def physical(text: str) -> str:
-        value, unbound = resolve(text, bindings, environment)
+        stored = envs.store_form(envs.to_logical(text, source), config, {k: v for k, v in here.items() if k != envs.DOMAIN})
+        value, unbound = envs.resolve(stored, here, environment)
         problems.extend(p for p in unbound if p not in problems)
         return value
 
@@ -308,7 +312,7 @@ def localize(doc: Dict[str, Any], bindings: Dict[str, str], environment: str = "
         try:
             table = dq._fqn(table)
         except AssertionError:
-            problems.append(f"{table}: the table must resolve to DATABASE.SCHEMA.TABLE")
+            problems.append(f"{table}: the table must be DATABASE.SCHEMA.TABLE")
     return table, out, problems
 
 
@@ -491,14 +495,14 @@ def export_version(session, table: str, version: Optional[int], fmt: str) -> Tup
 
         config = envs.load(session)
         return portable(header["table_name"], _domain_name(session, header.get("domain_id")),
-                        _checks(session, header["suite_id"], pick), envs.bindings_of(config), config.get("current"), pick)
+                        _checks(session, header["suite_id"], pick),
+                        envs.current_mapping(session, header.get("domain_id"), config), config.get("current"), pick)
     return export(header["table_name"], _checks(session, header["suite_id"], pick), fmt)
 
 
 def import_suite(session, text: str, user: str, domain_id: Optional[str] = None) -> Dict[str, Any]:
-    """A portable suite file into this environment: its logical names resolved with the current environment's
-    bindings ({{domain}} is the file's domain), its checks added to the table's draft for review and approval like
-    any edit. Checks the table already has (approved or in the draft) are skipped; when none is new no draft opens."""
+    """A portable suite file into this environment: names of a mapped database moved to this environment's database
+    for the same role (localize), its checks added to the table's draft for review and approval like any edit. Checks the table already has (approved or in the draft) are skipped; when none is new no draft opens."""
     from services.common import environments as envs
 
     doc = parse_portable(text)
@@ -506,9 +510,8 @@ def import_suite(session, text: str, user: str, domain_id: Optional[str] = None)
     if not domain_id and doc.get("domain"):
         domain_id = scalar(session, "SELECT DOMAIN_ID FROM CORE.DOMAIN_REGISTRY WHERE UPPER(DOMAIN_NAME) = UPPER(?) "
                                     "LIMIT 1", [str(doc["domain"])])
-    location = envs.domain_location(session, domain_id)
-    bindings = {**envs.bindings_of(config), **({envs.DOMAIN: location} if location else {})}
-    table, raws, problems = localize(doc, bindings, config.get("current") or "")
+    table, raws, problems = localize(doc, envs.current_mapping(session, domain_id, config), config,
+                                     config.get("current") or "")
     assert not problems, "; ".join(problems[:5])
     header = _header(session, table)
     have: List[Dict[str, Any]] = []

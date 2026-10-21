@@ -32,7 +32,7 @@ const SECTIONS = [
   { id: "skills", label: "Skills per stage", icon: Sparkles, hint: "Which skills each pipeline stage loads, and in what order" },
   { id: "rules", label: "Rules", icon: SlidersHorizontal, hint: "Thresholds and hints" },
   { id: "standards", label: "Modeling standards", icon: Ruler, hint: "Naming and conventions" },
-  { id: "environments", label: "Environments", icon: Layers, hint: "Where logical names in QA packs and Data Quality suites point, per environment" },
+  { id: "environments", label: "Environments", icon: Layers, hint: "The real databases each environment uses, so QA packs and Data Quality suites run in any of them" },
   { id: "deploy", label: "Deploy", icon: Rocket, hint: "Push code to Snowflake" },
 ] as const;
 const MODEL_VIEWS = [

@@ -79,7 +79,7 @@ def triage_prompt(ctx: Dict[str, Any], issue: Dict[str, Any], known: Dict[str, A
         "or write anything other than read-only tests.\n"
         f"Restate the problem precisely, give the most likely cause, and propose up to {MAX_TESTS} queries that would "
         "confirm or rule it out against the tables below. Rules for each query: a single SELECT (WITH allowed); never "
-        "modify data; only the allowed, fully qualified tables; list the rows that show the problem with LIMIT 100, or "
+        "modify data; fully qualified table names only; list the rows that show the problem with LIMIT 100, or "
         f"return counts. {EXPECTED_RULE} When the report is too vague to test, say so in `questions` and set reproducible to false.\n\n"
         + table_context(ctx)
         + _facts(known)
@@ -120,7 +120,7 @@ def _triage(session, ctx: Dict[str, Any], run_id: Optional[str], issue: Dict[str
         record_cost(session, run_id, "QA", model, usage, int((time.time() - started) * 1000), tool_calls=1)
         tests: List[Dict[str, Any]] = []
         for t in (output.get("tests") or [])[:MAX_TESTS]:
-            ok, problems, sql = check(t.get("sql") or "", ctx["allowed"])
+            ok, problems, sql = check(t.get("sql") or "")
             compile_error, note = compile_check(session, sql, ctx) if ok else (None, None)
             tests.append({**t, "sql": sql, "valid": ok and not compile_error, "problems": problems,
                           "compile_error": compile_error, "note": note})

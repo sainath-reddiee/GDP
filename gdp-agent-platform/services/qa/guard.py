@@ -1,7 +1,10 @@
 """Read-only guard for test SQL written by people or by Cortex.
 
 A test query must be one SELECT (optionally WITH ...), must not contain statements or functions that change
-state, and may only read the run's own source tables, its target and the domain hub, by fully qualified name.
+state, and names every table by its fully qualified DATABASE.SCHEMA.TABLE name. Any table may be read: what a person
+can see is decided by their Snowflake role, and an EXPLAIN reports a table the role cannot read. A caller can still
+pass `allowed` to keep a query to a list of tables (check(sql, allowed)); QA tests, packs and ad-hoc queries pass
+none.
 
 The query is read left to right by one tokenizer that follows Snowflake's lexical rules: single-quoted strings
 ('' and backslash escapes), $$ strings, double-quoted names ("" escapes), and --, // and /* */ comments. Comments
@@ -142,11 +145,12 @@ def _matches(ref: Tuple[str, ...], allowed: Tuple[Tuple[str, bool, str], ...]) -
 
 
 class _Checker:
-    def __init__(self, tokens: List[Token], sql: str, allowed: Iterable[str]):
+    def __init__(self, tokens: List[Token], sql: str, allowed: Optional[Iterable[str]]):
         self.t, self.sql = tokens, sql
-        self.allow = [a for a in (_allowed_parts(x) for x in allowed) if a]
+        self.allow = None if allowed is None else [a for a in (_allowed_parts(x) for x in allowed) if a]
         self.ctes: Set[str] = set()
         self.problems: List[str] = []
+        self.read: List[str] = []   # the tables the query reads, as written
 
     def add(self, problem: str) -> None:
         if problem not in self.problems:
@@ -243,8 +247,10 @@ class _Checker:
             return
         if len(parts) != 3 or "" in parts:
             self.add(f"{raw}: use the fully qualified DATABASE.SCHEMA.TABLE name")
-        elif not any(_matches(tuple(parts), a) for a in self.allow):
+        elif self.allow is not None and not any(_matches(tuple(parts), a) for a in self.allow):
             self.add(f"{raw} is not one of this run's source or target tables")
+        else:
+            self.read.append(raw)
 
     def items(self, k: int) -> None:
         """A FROM list from token k: the first item, then every item after a comma at the same depth."""
@@ -282,7 +288,8 @@ class _Checker:
                     self.add("stage references are not allowed")
                 elif tok.text == "{":
                     # services/common/environments.resolve replaces {{name}} before a query reaches the guard
-                    self.add("logical names ({{name}}) must be resolved for an environment before the query runs")
+                    self.add("a database role in the query has no database mapped for this environment "
+                             "(Admin, Environments)")
                 continue
             if tok.kind == "qid" and tok.text.upper() in SYSTEM_SCHEMAS:
                 self.add("system views (INFORMATION_SCHEMA, ACCOUNT_USAGE) are not allowed")
@@ -311,14 +318,27 @@ class _Checker:
             self.add("unbalanced parentheses")
 
 
-def check(sql: str, allowed: Iterable[str]) -> Tuple[bool, List[str], str]:
-    """Returns (ok, problems, cleaned_sql). `allowed` holds fully qualified DB.SCHEMA.TABLE names."""
+def check(sql: str, allowed: Optional[Iterable[str]] = None) -> Tuple[bool, List[str], str]:
+    """Returns (ok, problems, cleaned_sql). `allowed`, when given, holds the only fully qualified DB.SCHEMA.TABLE
+    names the query may read; None allows any fully qualified table."""
+    ok, problems, cleaned, _ = inspect(sql, allowed)
+    return ok, problems, cleaned
+
+
+def tables(sql: str) -> List[str]:
+    """The fully qualified tables a query reads (CTE names left out), as written; empty for SQL the guard refuses."""
+    ok, _, _, read = inspect(sql, None)
+    return read if ok else []
+
+
+def inspect(sql: str, allowed: Optional[Iterable[str]] = None) -> Tuple[bool, List[str], str, List[str]]:
+    """check() plus the tables the query reads."""
     text = (sql or "").strip()
     if not text:
-        return False, ["empty query"], ""
+        return False, ["empty query"], "", []
     tokens, error = tokenize(text)
     if error:
-        return False, [error], text
+        return False, [error], text, []
     # trailing semicolons, and the comments after them, are dropped
     last = len(tokens)
     while last and tokens[last - 1].kind == "punct" and tokens[last - 1].text == ";":
@@ -332,4 +352,4 @@ def check(sql: str, allowed: Iterable[str]) -> Tuple[bool, List[str], str]:
         checker.add("a test query must start with SELECT or WITH")
     checker.collect_ctes()
     checker.walk()
-    return not checker.problems, checker.problems, cleaned
+    return not checker.problems, checker.problems, cleaned, list(dict.fromkeys(checker.read))

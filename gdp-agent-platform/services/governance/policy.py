@@ -157,7 +157,7 @@ RULES: List[Tuple[str, str, Any, str]] = [
     ("POST", r"/api/config/models/test", "ADMIN.VIEW", ""),
     # Environments (apps/api/app/environments_api.py): bindings are a versioned setting; the preview only resolves,
     # guards and EXPLAINs a pack's queries with the caller's role
-    ("PUT", r"/api/config/environments", "CONFIG.EDIT", "Change environment bindings"),
+    ("PUT", r"/api/config/environments", "CONFIG.EDIT", "Change environment databases"),
     ("POST", r"/api/config/environments/preview", "ADMIN.VIEW", ""),
     ("POST", r"/api/costs/reconcile", "CONFIG.EDIT", "Reconcile AI cost"),
     ("POST", r"/api/(domains|domains/draft|domains/import)", "DOMAIN.EDIT", "Create or import a domain"),

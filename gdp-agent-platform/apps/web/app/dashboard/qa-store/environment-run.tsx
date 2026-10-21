@@ -7,7 +7,7 @@ import { Select } from "@/components/ui/input";
 import { explain } from "@/components/hub/states";
 import { DryRunResults } from "@/components/quality/dry-run";
 import { useToast } from "@/components/ui/toast";
-import type { DryRun, QaEnvironment, QaExecution } from "@/lib/store-types";
+import { roleLabel, type DryRun, type QaEnvironment, type QaExecution } from "@/lib/store-types";
 import { dryRunPack, executeQa, loadQaEnvironments } from "./actions";
 
 /** Run a pack version in an environment from Admin, Environments: a dry run (resolved SQL, guard, EXPLAIN) comes
@@ -71,8 +71,8 @@ export function EnvironmentRun({ packId, domainId, versions, onRan }: {
       {chosen && (
         <p className="text-xs text-muted-foreground">
           {Object.keys(chosen.bindings).length
-            ? Object.entries(chosen.bindings).map(([k, v]) => `{{${k}}} = ${v}`).join(" · ")
-            : "No bindings: only logical names this environment binds can run here."}
+            ? Object.entries(chosen.bindings).map(([k, v]) => `${roleLabel(k)}: ${v}`).join(" · ")
+            : "No databases mapped for this environment yet (Admin, Environments)."}
         </p>
       )}
       {dry && <DryRunResults result={dry} />}

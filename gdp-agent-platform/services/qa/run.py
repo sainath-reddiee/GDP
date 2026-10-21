@@ -21,7 +21,7 @@ import uuid
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from services.common.sql import clip, insert_rows, rows
-from services.qa.guard import check
+from services.qa.guard import inspect
 
 SAMPLE_ROWS = 20
 FETCH_ROWS = 101
@@ -197,7 +197,10 @@ def execute(session, test: Dict[str, Any], allowed: Sequence[str], pii: set,
     from services.quality.scan import mask
 
     base = {k: test.get(k) for k in ("test_id", "category", "title", "severity", "origin", "expected", "target_column")}
-    ok, problems, sql = check(test.get("sql") or "", allowed)
+    # any fully qualified table may be read (the caller's role decides); `allowed` is the scope's own tables, whose
+    # name parts are never taken for PII columns, together with the tables this query reads
+    ok, problems, sql, read = inspect(test.get("sql") or "")
+    allowed = list(dict.fromkeys([*allowed, *read]))
     if not ok:
         return {**base, "outcome": "ERROR", "detail": "; ".join(problems), "sql": test.get("sql"), "duration_ms": 0}
     started = time.time()

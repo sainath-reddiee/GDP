@@ -35,13 +35,12 @@ pr_sync_task = false                      # sync pull requests every 30 minutes 
 actual_cost_from_account_usage = false    # read actual Cortex credits (needs SNOWFLAKE.USAGE_VIEWER)
 
 [environment]
-# Optional: which environment this deployment is, and where its tables live. QA packs and Data Quality suite files
-# can name tables as {{silver}}.SCHEMA.TABLE (or {{domain}}.TABLE for the pack's own domain); these bindings resolve
-# them here. Seeded once, when no bindings are saved yet; after that they are edited in Admin, Environments.
-# The repository QA packs (domain/<name>/qa/*.sql) use {{silver}}: bind it, or they fail until it is bound.
-# DEV binds silver = "DEV_GDP_SILVER_DB" (see README.md, Environment bindings).
+# Optional: which environment this deployment is, and the real database (or DATABASE.SCHEMA) that plays each role
+# here, so QA packs and Data Quality suites written in another environment read this one's tables. Saved once, when no
+# mapping is saved yet; after that it is edited in Admin, Environments. Without it, Silver is each domain's registered
+# Silver database (see README.md, Environment databases).
 # name = "PROD"
 # description = "Client production"
 # [environment.bindings]
-# silver = "PROD_GDP_SILVER_DB"              # a database: {{silver}}.COMPANY.COMPANY_CORE
-# landing = "AI_PLATFORM.LANDING"            # or a database and schema: {{landing}}.ORDERS_RAW
+# silver = "PROD_GDP_SILVER_DB"              # a database
+# landing = "AI_PLATFORM.LANDING"            # or a database and schema

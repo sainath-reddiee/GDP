@@ -8,10 +8,7 @@ export async function GET(req: Request) {
   const pack = url.searchParams.get("pack") ?? "";
   const version = url.searchParams.get("version");
   if (!/^[0-9a-f-]{36}$/i.test(pack)) return new Response("unknown pack", { status: 400 });
-  // logical=1: table names through this environment's bindings ({{silver}}.SCHEMA.TABLE), to run in any environment
-  const qs = new URLSearchParams({ ...(version ? { version } : {}), ...(url.searchParams.get("logical") === "1" ? { logical: "true" } : {}) });
-  const query = qs.toString();
-  const res = await apiRaw(`/api/qa-packs/${pack}/file${query ? `?${query}` : ""}`);
+  const res = await apiRaw(`/api/qa-packs/${pack}/file${version ? `?version=${encodeURIComponent(version)}` : ""}`);
   return new Response(await res.text(), {
     status: res.status,
     headers: {

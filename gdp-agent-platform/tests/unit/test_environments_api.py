@@ -115,14 +115,14 @@ def test_execute_on_an_environment_and_dry_run(api):
     assert res.status_code == 400
 
 
-def test_logical_pack_file(api, monkeypatch):
+def test_pack_file_downloads_with_real_names(api, monkeypatch):
     client, _, _ = api
     query = {"query_name": "orphans", "severity": "ERROR", "expectation": "0 rows", "tags": [], "description": None,
-             "sql_expression": "SELECT ID FROM DEV_DB.COMPANY.CORE"}
+             "sql_expression": "SELECT ID FROM DEV_DB.COMPANY.CORE"}   # get_pack returns what people read
     sys.modules["services.qa.packs"].get_pack = lambda *a: {"pack": {"name": "Integrity", "tags": []}, "queries": [query]}
-    plain = client.get(f"/api/qa-packs/{PACK}/file").text
-    logical = client.get(f"/api/qa-packs/{PACK}/file", params={"logical": "true"}).text
-    assert "DEV_DB.COMPANY.CORE" in plain and "{{silver}}.COMPANY.CORE" in logical and "DEV_DB" not in logical
+    for params in ({}, {"logical": "true"}):   # there is no logical export any more
+        text = client.get(f"/api/qa-packs/{PACK}/file", params=params).text
+        assert "DEV_DB.COMPANY.CORE" in text and "{{" not in text
 
 
 def test_environments_router_is_registered():

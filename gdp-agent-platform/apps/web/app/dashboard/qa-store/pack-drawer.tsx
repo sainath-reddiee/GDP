@@ -3,7 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState, useTransition } from "react";
 import {
-  Archive, BrainCircuit, Check, Download, FileCode2, FlaskConical, GitCompare, GitPullRequest, History, Loader2, Play, Plus, Save, Send, Trash2, Undo2,
+  Archive, BrainCircuit, Check, Download, FlaskConical, GitCompare, GitPullRequest, History, Loader2, Play, Plus, Save, Send, Trash2, Undo2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { PackConflict, PackDetail, PackQuery, PackRun, PackSeverity, QaExecution, QaResult } from "@/lib/store-types";
@@ -235,9 +235,6 @@ export function PackDrawer({ packId, onClose, canEdit, canApprove, canRun }: {
       </Select>
       <a href={`/bff/qa-pack?pack=${packId}&version=${detail.pack.version}`} title="Export this version as domain/<name>/qa/<pack>.sql"
          className="grid h-8 w-8 place-items-center rounded-lg text-muted-foreground hover:bg-muted hover:text-foreground"><Download className="h-4 w-4" /></a>
-      <a href={`/bff/qa-pack?pack=${packId}&version=${detail.pack.version}&logical=1`}
-         title="Export with logical names ({{silver}}.SCHEMA.TABLE) through this environment's bindings, to run or seed in any environment"
-         className="grid h-8 w-8 place-items-center rounded-lg text-muted-foreground hover:bg-muted hover:text-foreground"><FileCode2 className="h-4 w-4" /></a>
     </div>
   );
 
@@ -392,7 +389,7 @@ export function PackDrawer({ packId, onClose, canEdit, canApprove, canRun }: {
                           {busy === "test" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />} Test query
                         </Button>
                       )}
-                      <span className="text-xs text-muted-foreground">Read-only, against the domain&apos;s tables only. A test run is not stored.</span>
+                      <span className="text-xs text-muted-foreground">Read-only: any fully qualified table your role can read. A test run is not stored.</span>
                       {editable && working.queries.length > 1 && (
                         <Button size="sm" variant="ghost" className="ml-auto text-destructive hover:text-destructive"
                                 onClick={() => { edit((w) => ({ ...w, queries: w.queries.filter((_, i) => i !== selected) })); setSelected(Math.max(0, selected - 1)); }}>

@@ -170,8 +170,7 @@ def test_save_draft_carries_the_repository_lineage(monkeypatch):
     newest = {"version": 4, "status": "APPROVED", "domain_id": "d1", "name": "Integrity", "description": "", "tags": [],
               "repo_sha": "abc", "repo_path": "domain/sales/qa/integrity.sql", "pack_id": "p1"}
     monkeypatch.setattr(packs, "_versions", lambda s, pid: [newest])
-    monkeypatch.setattr(packs, "allowed_tables", lambda s, d: ["T"])
-    monkeypatch.setattr(packs, "clean_queries", lambda q, allowed, bindings=None: [{**Q1, "ordinal": 1, "tags": []}])
+    monkeypatch.setattr(packs, "clean_queries", lambda q, bindings=None, config=None: [{**Q1, "ordinal": 1, "tags": []}])
     monkeypatch.setattr(packs, "_query_rows", lambda s, pid, v: [])
     monkeypatch.setattr(packs, "_insert_version", lambda *a, **k: inserted.update(k=k, a=a))
     packs.save_draft(Session(), "p1", json.dumps({"queries": [Q1]}))

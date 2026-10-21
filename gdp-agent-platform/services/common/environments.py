@@ -1,22 +1,23 @@
-"""Environment bindings: logical names in stored SQL, resolved per environment (DEV, QA, PROD or a client database).
+"""Environment database mapping: QA SQL written once, run in DEV, QA, PROD or a client database.
 
-QA pack SQL and Data Quality suite files can name tables through a logical reference instead of a fixed database:
+People always read and write real, fully qualified names (DEV_GDP_SILVER_DB.COMPANY.COMPANY_CORE). Admin,
+Environments maps each database role (Silver, Landing, ...) to the real database, or DATABASE.SCHEMA, that plays it
+in each environment. When QA pack SQL is saved, names in a mapped database are kept in an internal logical form
+(store_form: {{silver}}.COMPANY.COMPANY_CORE) and every read turns them back into the current environment's real
+names (resolve), so the braces never reach the screen and the same pack runs anywhere. {{domain}} (the pack's own
+domain Silver DATABASE.SCHEMA) is only written by repository pack files.
 
-    SELECT ... FROM {{silver}}.COMPANY.COMPANY_CORE        silver bound to a database: DEV_GDP_SILVER_DB
-    SELECT ... FROM {{company}}.COMPANY_CORE               company bound to a database and schema: DEV_GDP_SILVER_DB.COMPANY
-    SELECT ... FROM {{domain}}.COMPANY_CORE                the pack's own domain: its Silver DATABASE.SCHEMA
-
-The bindings live in CORE.PLATFORM_CONFIG under ENVIRONMENT_BINDINGS (versioned, edited in Admin, Environments):
+The mapping lives in CORE.PLATFORM_CONFIG under ENVIRONMENT_BINDINGS (versioned, edited in Admin, Environments):
 
     {"current": "DEV",
      "environments": [{"name": "DEV", "description": "...", "bindings": {"silver": "DEV_GDP_SILVER_DB"}},
                       {"name": "DA",  "description": "...", "bindings": {"silver": "DA_GDP_SILVER_DB"}}]}
 
 `current` is the environment this deployment's tables belong to; the others are targets a pack can be run against.
-Fully qualified SQL keeps working as it is: to run it on another environment it is first rewritten to logical names
-with the current environment's bindings (to_logical), then resolved with the target's (resolve). References are
-found with the QA guard's tokenizer, so names inside strings and comments are never rewritten. Pure, apart from
-load() and domain_location(), which read the platform tables.
+When the current environment maps no Silver database, the domain's registered Silver database plays it (effective),
+so packs read correctly before anyone saves a mapping. Names are found with the QA guard's tokenizer, so names inside
+strings and comments are never rewritten. Pure, apart from load(), domain_silver() and domain_location(), which read
+the platform tables.
 """
 
 from __future__ import annotations
@@ -31,10 +32,17 @@ DEFAULT: Dict[str, Any] = {"current": None, "environments": []}
 BINDING = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 ENVIRONMENT = re.compile(r"^[A-Z][A-Z0-9_-]{0,31}$")
 PLAIN = re.compile(r"^[A-Z_][A-Z0-9_$]*$")
-DOMAIN = "domain"           # reserved: the pack's own domain, never bound by hand
+SILVER = "silver"
+DOMAIN = "domain"           # reserved: the pack's own domain, never mapped by hand
 RESERVED = {DOMAIN}
 MAX_ENVIRONMENTS = 20
 MAX_BINDINGS = 50
+
+
+def label(role: str) -> str:
+    """A role as people read it: silver -> Silver, gold_mart -> Gold mart."""
+    text = str(role or "").replace("_", " ").strip()
+    return text[:1].upper() + text[1:]
 
 
 # ---------------------------------------------------------------- locations
@@ -75,7 +83,7 @@ def validate(value: Any) -> Tuple[Dict[str, Any], List[str]]:
     if value in (None, ""):
         return dict(DEFAULT), []
     if not isinstance(value, dict):
-        return dict(DEFAULT), ["environment bindings must be an object with current and environments"]
+        return dict(DEFAULT), ["the environment mapping must be an object with current and environments"]
     problems: List[str] = []
     envs = value.get("environments") or []
     if not isinstance(envs, list):
@@ -99,32 +107,35 @@ def validate(value: Any) -> Tuple[Dict[str, Any], List[str]]:
         seen.add(name)
         raw = env.get("bindings") or {}
         if not isinstance(raw, dict):
-            problems.append(f"{name}: bindings must be an object of name -> DATABASE or DATABASE.SCHEMA")
+            problems.append(f"{name}: the mapping must be an object of role -> DATABASE or DATABASE.SCHEMA")
             continue
         if len(raw) > MAX_BINDINGS:
-            problems.append(f"{name}: at most {MAX_BINDINGS} bindings")
+            problems.append(f"{name}: at most {MAX_BINDINGS} database roles")
         bindings: Dict[str, str] = {}
         for key, target in list(raw.items())[:MAX_BINDINGS]:
             key = str(key or "").strip().lower()
             if not BINDING.match(key):
-                problems.append(f"{name}: binding {key or '(empty)'}: names are lower-case letters, digits and _")
+                problems.append(f"{name}: role {key or '(empty)'}: role names are letters, digits and _, "
+                                "starting with a letter")
                 continue
             if key in RESERVED:
-                problems.append(f"{name}: {{{{{key}}}}} is reserved (it is the pack's own domain)")
+                problems.append(f"{name}: {label(key)} is a reserved role name (the pack's own domain)")
                 continue
             if key in bindings:
-                problems.append(f"{name}: binding {key} appears twice")
+                problems.append(f"{name}: role {label(key)} appears twice")
                 continue
-            where = normalise_location(str(target or ""))
+            if str(target or "").strip() == "":
+                continue  # an empty cell: the role is not mapped in this environment
+            where = normalise_location(str(target))
             if not where:
-                problems.append(f"{name}: {key} must be DATABASE or DATABASE.SCHEMA")
+                problems.append(f"{name}: {label(key)} must be DATABASE or DATABASE.SCHEMA")
                 continue
             bindings[key] = where
         out.append({"name": name, "description": str(env.get("description") or "").strip()[:500],
                     "bindings": dict(sorted(bindings.items()))})
     current = str(value.get("current") or "").strip().upper() or None
     if out and not current:
-        problems.append("choose the environment this deployment's tables belong to (current)")
+        problems.append("choose the environment this deployment's tables belong to")
     elif current and current not in seen:
         problems.append(f"the current environment {current} is not in the list")
     return {"current": current, "environments": out}, problems
@@ -147,6 +158,20 @@ def is_current(config: Optional[Dict[str, Any]], name: Optional[str]) -> bool:
     if not name:
         return True
     return str(name).strip().upper() == str((config or {}).get("current") or "").strip().upper()
+
+
+def effective(config: Optional[Dict[str, Any]], silver: Optional[str] = None,
+              location: Optional[str] = None) -> Dict[str, str]:
+    """The current environment's mapping as reads and writes use it: the saved roles, Silver falling back to the
+    domain's registered Silver database (`silver`), and the pack's own domain location (`location`)."""
+    out = bindings_of(config)
+    if SILVER not in out and silver:
+        where = normalise_location(silver)
+        if where:
+            out[SILVER] = where
+    if location:
+        out[DOMAIN] = location
+    return out
 
 
 # ---------------------------------------------------------------- references in SQL
@@ -174,21 +199,20 @@ def is_logical(sql: str) -> bool:
 
 
 def resolve(sql: str, bindings: Dict[str, str], environment_name: str = "") -> Tuple[str, List[str]]:
-    """(SQL with every {{name}} replaced by its binding, problems). A name with no binding stays as written and is
-    reported, so the guard never sees half-resolved SQL as valid."""
+    """(SQL with every logical name replaced by its real database, problems). A role with no mapping stays as
+    written and is reported, so the guard never sees half-resolved SQL as valid."""
     text = sql or ""
     tokens, error = tokenize(text)
     if error:
         return text, [error]
     known = {k.lower(): v for k, v in (bindings or {}).items()}
     out, last, problems = [], 0, []
-    where = f" in environment {environment_name}" if environment_name else ""
+    where = f" for environment {environment_name}" if environment_name else ""
     for start, end, name in _references(tokens):
         value = known.get(name)
         if value is None:
-            hint = ("the pack has no domain location" if name == DOMAIN
-                    else "add it in Admin, Environments")
-            message = f"{{{{{name}}}}} is not bound{where} ({hint})"
+            message = ("the pack's domain has no Silver location" if name == DOMAIN
+                       else f"no {label(name)} database is mapped{where} (Admin, Environments)")
             if message not in problems:
                 problems.append(message)
             continue
@@ -197,6 +221,12 @@ def resolve(sql: str, bindings: Dict[str, str], environment_name: str = "") -> T
         last = end
     out.append(text[last:])
     return "".join(out), problems
+
+
+def shown(sql: str, bindings: Dict[str, str]) -> str:
+    """SQL as people read it: real names wherever the mapping knows them (an unmapped role is left for the run to
+    report, never guessed)."""
+    return resolve(sql, bindings)[0]
 
 
 def _chains(tokens: List[Token]) -> List[List[Token]]:
@@ -220,7 +250,7 @@ def _chains(tokens: List[Token]) -> List[List[Token]]:
 
 
 def _by_location(bindings: Dict[str, str]) -> List[Tuple[Tuple[str, ...], str]]:
-    """(parts, name), DATABASE.SCHEMA bindings before DATABASE ones, then by name, so the most specific wins."""
+    """(parts, name), DATABASE.SCHEMA mappings before DATABASE ones, then by name, so the most specific wins."""
     found = []
     for name, target in sorted((bindings or {}).items()):
         parts = location_parts(target)
@@ -230,9 +260,9 @@ def _by_location(bindings: Dict[str, str]) -> List[Tuple[Tuple[str, ...], str]]:
 
 
 def to_logical(sql: str, bindings: Dict[str, str]) -> str:
-    """Fully qualified names written with logical references wherever a binding covers their database (or database
-    and schema): DEV_GDP_SILVER_DB.COMPANY.COMPANY_CORE -> {{silver}}.COMPANY.COMPANY_CORE. Only names of three or
-    more parts are rewritten, so an alias.column is never taken for a database."""
+    """Fully qualified names in a mapped database (or database and schema) in the logical form:
+    DEV_GDP_SILVER_DB.COMPANY.COMPANY_CORE -> {{silver}}.COMPANY.COMPANY_CORE. Only names of three or more parts are
+    rewritten, so an alias.column is never taken for a database."""
     text = sql or ""
     tokens, error = tokenize(text)
     if error:
@@ -252,15 +282,24 @@ def to_logical(sql: str, bindings: Dict[str, str]) -> str:
     return text
 
 
+def store_form(sql: str, config: Optional[Dict[str, Any]], current: Optional[Dict[str, str]] = None) -> str:
+    """SQL as it is stored: names in a database mapped for the current environment (`current`, its effective
+    mapping), then for any other environment, in the logical form. Real names pasted from another environment
+    therefore read back as this environment's tables."""
+    text = to_logical(sql, current if current is not None else bindings_of(config))
+    for env in (config or {}).get("environments") or []:
+        text = to_logical(text, env.get("bindings") or {})
+    return text
+
+
 def rebase(sql: str, source: Dict[str, str], target: Dict[str, str], target_name: str = "",
            extra: Optional[Dict[str, str]] = None) -> Tuple[str, List[str]]:
-    """SQL written for the source environment (fully qualified or logical), resolved for the target."""
+    """SQL written for the source environment (real names or logical), resolved for the target."""
     return resolve(to_logical(sql, source), {**(target or {}), **(extra or {})}, target_name)
 
 
 def rebase_tables(tables: Iterable[str], source: Dict[str, str], target: Dict[str, str]) -> List[str]:
-    """The target environment's names of the source environment's tables. A table no binding covers has no name in
-    the target and is left out, so a run on another environment can never read the current one by accident."""
+    """The target environment's names of the source environment's tables; a table no mapping covers is left out."""
     out = []
     for table in tables:
         logical = to_logical(table, source)
@@ -273,7 +312,7 @@ def rebase_tables(tables: Iterable[str], source: Dict[str, str], target: Dict[st
 
 
 def rebase_location(location: Optional[str], source: Dict[str, str], target: Dict[str, str]) -> Optional[str]:
-    """A DATABASE.SCHEMA of the source environment in the target, or None when no binding covers it."""
+    """A DATABASE.SCHEMA of the source environment in the target, or None when no mapping covers it."""
     if not location:
         return None
     moved = rebase_tables([f"{location}.X"], source, target)
@@ -293,6 +332,20 @@ def load(session) -> Dict[str, Any]:
         return dict(DEFAULT)
     cleaned, _ = validate(value)
     return cleaned
+
+
+def domain_silver(session, domain_id: Optional[str]) -> Optional[str]:
+    """The Silver database the domain is registered with (DOMAIN_REGISTRY CONFIG:silver_database)."""
+    from services.common.sql import rows
+
+    if not domain_id:
+        return None
+    try:
+        found = rows(session, "SELECT CONFIG:silver_database::VARCHAR AS DB FROM CORE.DOMAIN_REGISTRY WHERE DOMAIN_ID = ?",
+                     [domain_id])
+    except Exception:
+        return None
+    return normalise_location(found[0]["DB"]) if found and found[0].get("DB") else None
 
 
 def domain_location(session, domain_id: Optional[str]) -> Optional[str]:
@@ -315,3 +368,11 @@ def domain_location(session, domain_id: Optional[str]) -> Optional[str]:
     if found and found[0].get("DB") and found[0].get("SCH"):
         return normalise_location(f"{found[0]['DB']}.{found[0]['SCH']}")
     return None
+
+
+def current_mapping(session, domain_id: Optional[str], config: Optional[Dict[str, Any]] = None) -> Dict[str, str]:
+    """effective() for a domain, read from the platform tables."""
+    config = config if config is not None else load(session)
+    location = domain_location(session, domain_id)
+    silver = domain_silver(session, domain_id) or (location.split(".")[0] if location else None)
+    return effective(config, silver, location)

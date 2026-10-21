@@ -115,14 +115,17 @@ client's change record.
 
 A failed deploy is safe to run again. Finished steps are skipped and the failed step is retried.
 
-## Environment bindings (QA packs and Data Quality suites)
+## Environment databases (QA packs and Data Quality suites)
 
-The repository QA packs (`domain/<name>/qa/*.sql`) name their tables logically, for example
-`{{silver}}.COMPANY.COMPANY_CORE`, so the same file runs in DEV, QA, PROD or a client database. Each deployment
-binds the names to its own databases. Until `silver` is bound, those packs fail with "{{silver}} is not bound", and
-the deploy log says so (`WARNING qa pack bindings: ...`). `{{domain}}` (the pack's own domain) needs no binding.
+People write QA packs and Data Quality checks with real table names, on any table their Snowflake role can read.
+Admin, Environments maps, for each environment (DEV, QA, PROD, a client database), the real database (or
+DATABASE.SCHEMA) that plays each role, for example Silver is `DEV_GDP_SILVER_DB` in DEV and `DA_GDP_SILVER_DB` in DA.
+A pack run in another environment reads that environment's database for the same role; tables in databases no role
+covers are read where they are. The preview there, and the dry run in the QA Store, show the SQL and an EXPLAIN
+before anything runs.
 
-For DEV, add this to `dev.toml` before the next deploy:
+Without a saved mapping, Silver is each domain's registered Silver database, so DEV works out of the box. To save
+the mapping at the first deploy instead of in Admin, add to the environment file:
 
 ```toml
 [environment]
@@ -133,18 +136,15 @@ description = "Development"
 silver = "DEV_GDP_SILVER_DB"
 ```
 
-For another environment, use its own name and databases, for example `name = "PROD"` with
-`silver = "PROD_GDP_SILVER_DB"`. The deploy saves the bindings once, when none are saved yet. After that they belong
-to Admin, Environments: edit them there (every save is a new version), add the other environments a pack can run
-against, and use Preview to resolve a pack and EXPLAIN it against an environment before saving. A deployment that
-already has saved bindings keeps them; a changed `[environment]` section does not overwrite them.
+The deploy saves it once, when no mapping is saved yet; after that it belongs to Admin, Environments (every save is
+a new version) and a changed `[environment]` section does not overwrite it.
 
-Bindings already deployed without the section can be set in Admin, Environments directly: add an environment
-named DEV, bind `silver` to `DEV_GDP_SILVER_DB` and mark it as this deployment's.
-
-Data Quality suites move between environments as portable files (Export, Portable in a suite; Seed checks, From a
-suite file in the Data Quality Store). Files committed as `domain/<name>/dq/<table>.dq.json` are added to the
-table's suite draft at deploy, resolved with the same bindings, for a DQ approver to approve.
+The repository QA pack files (`domain/<name>/qa/*.sql`) write mapped databases as `{{silver}}.COMPANY.COMPANY_CORE`,
+so one file seeds every environment; the app always shows and exports real names. A role the files use that this
+deployment maps nowhere is reported in the deploy log (`WARNING qa packs: ...`). Data Quality suites move between
+environments as portable files with real names and the source environment's mapping (Export, Portable in a suite;
+Seed checks, From a suite file in the Data Quality Store); files committed as `domain/<name>/dq/<table>.dq.json` are
+added to the table's suite draft at deploy, for a DQ approver to approve.
 
 ## Required privileges for the deploy role
 

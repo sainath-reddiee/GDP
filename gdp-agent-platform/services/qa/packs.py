@@ -5,8 +5,10 @@ orphan keys, duplicate business keys, joins that must resolve. Versions move DRA
 (the previous approved version becomes SUPERSEDED). Saving while the newest version is a DRAFT replaces that draft;
 saving on top of a submitted or approved version starts a new DRAFT, so an approved version never changes.
 
-Queries run through the platform's read-only QA guard (services/qa/guard.py) and runner (services/qa/run.execute),
-limited to the domain's tables: its registered target tables and the landing tables of its runs. Results are stored
+Queries run through the platform's read-only QA guard (services/qa/guard.py) and runner (services/qa/run.execute)
+with the caller's role: any fully qualified table that role can read, in this environment or another one mapped in
+Admin, Environments. People read and write real table names; names in a mapped database are stored in the logical
+form (services/common/environments.py), so a pack runs in every environment. Results are stored
 in CORE.QA_RUN / QA_RESULT with SCOPE 'DOMAIN'. Approving a version publishes its queries as ACTIVE QA_TEST
 knowledge, which Cortex Search (CORE.KNOWLEDGE_SEARCH) and the QA ask and plan prompts already read.
 """
@@ -54,12 +56,14 @@ def clean_tags(tags: Any) -> List[str]:
     return normalize_tags(tags or [])
 
 
-def clean_queries(queries: Sequence[Dict[str, Any]], allowed: Sequence[str],
-                  bindings: Optional[Dict[str, str]] = None) -> List[Dict[str, Any]]:
-    """Validated queries in order. Every SQL must pass the read-only guard against the domain's tables; problems
-    raise AssertionError naming the query. SQL with logical names ({{silver}}.SCHEMA.TABLE) is checked as resolved
-    with `bindings` (the current environment's) and kept as written, so the pack stays portable."""
-    from services.common.environments import is_logical, resolve
+def clean_queries(queries: Sequence[Dict[str, Any]], bindings: Optional[Dict[str, str]] = None,
+                  config: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+    """Validated queries in order. Every SQL must pass the read-only guard: one SELECT or WITH, nothing that writes,
+    every table by its fully qualified name (any database, schema or table; the caller's role decides what it can
+    read). Problems raise AssertionError naming the query. People write real names; they are stored through
+    services/common/environments.store_form (`bindings`: the current environment's mapping, `config`: every
+    environment's), so the pack runs in any environment, and checked as they run here."""
+    from services.common.environments import resolve, store_form
     from services.qa.guard import check
 
     assert queries, "a pack needs at least one query"
@@ -73,18 +77,12 @@ def clean_queries(queries: Sequence[Dict[str, Any]], allowed: Sequence[str],
         seen.add(name.lower())
         severity = str(q.get("severity") or "ERROR").upper()
         assert severity in SEVERITIES, f"{name}: severity must be one of {list(SEVERITIES)}"
-        written = str(q.get("sql_expression") or "")
-        if is_logical(written):
-            resolved, unbound = resolve(written, bindings or {})
-            assert not unbound, f"{name}: " + "; ".join(unbound)
-            ok, problems, _ = check(resolved, allowed)
-            sql = check(written, [])[2]  # the logical text, trailing semicolons dropped
-        else:
-            ok, problems, sql = check(written, allowed)
-        # the guard is shared with run tests; a pack's allowed tables are its domain's
-        assert ok, f"{name}: " + "; ".join(p.replace("this run's source or target tables", "this domain's tables")
-                                             for p in problems)
-        out.append({"query_name": name, "severity": severity, "sql_expression": sql,
+        stored = store_form(check(str(q.get("sql_expression") or ""))[2], config, bindings or {})
+        here, unbound = resolve(stored, bindings or {})
+        assert not unbound, f"{name}: " + "; ".join(unbound)
+        ok, problems, _ = check(here)
+        assert ok, f"{name}: " + "; ".join(problems)
+        out.append({"query_name": name, "severity": severity, "sql_expression": stored,
                     "description": clip(q.get("description"), 4000) or None,
                     "expectation": clip(q.get("expectation") or "0 rows", 1000), "tags": clean_tags(q.get("tags")),
                     "ordinal": i + 1})
@@ -117,60 +115,51 @@ def diff(old: Sequence[Dict[str, Any]], new: Sequence[Dict[str, Any]]) -> Dict[s
 # ---------------------------------------------------------------- reads
 
 
-def allowed_tables(session, domain_id: str) -> List[str]:
-    """The domain's tables a query may read: active registered targets and the landing tables of its runs."""
-    out: List[str] = []
-    for r in rows(session, """SELECT TARGET_DATABASE || '.' || TARGET_SCHEMA || '.' || TARGET_TABLE AS FQN
-                                FROM CORE.TARGET_TABLE_REGISTRY WHERE DOMAIN_ID = ? AND ACTIVE_FLAG""", [domain_id]):
-        out.append(r["FQN"])
-    try:
-        for r in rows(session, """SELECT DISTINCT L.LANDING_DATABASE || '.' || L.LANDING_SCHEMA || '.' || L.LANDING_TABLE AS FQN
-                                    FROM CORE.LANDING_TABLE_REGISTRY L
-                                    JOIN CORE.WORKFLOW_RUN R ON R.RUN_ID = L.RUN_ID
-                                   WHERE R.DOMAIN_ID = ? AND L.INGESTION_STATUS = 'COMPLETE'""", [domain_id]):
-            out.append(r["FQN"])
-    except Exception:
-        pass
-    return list(dict.fromkeys(out))
-
-
 def target(session, domain_id: str, environment: Optional[str] = None,
            config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Where a domain's queries run: the current environment (no name, or its own name) or another configured one.
-    `config` replaces the saved ENVIRONMENT_BINDINGS (the Admin preview checks bindings before they are saved).
+    `config` replaces the saved mapping (the Admin preview checks a mapping before it is saved).
 
-    {name, current, bindings (to resolve {{name}} with, {{domain}} included), source (the current environment's
-     bindings), allowed (the domain's tables in that environment), allowed_current}"""
+    {name, current, bindings (the target's mapping, the domain's location included), here (the current environment's
+     effective mapping), config}"""
     from services.common import environments as envs
 
     config = config if config is not None else envs.load(session)
-    source = envs.bindings_of(config)
-    allowed_now = allowed_tables(session, domain_id)
-    location = envs.domain_location(session, domain_id)
+    here = envs.current_mapping(session, domain_id, config)
     if envs.is_current(config, environment):
-        bindings = {**source, **({envs.DOMAIN: location} if location else {})}
-        return {"name": config.get("current"), "current": True, "bindings": bindings, "source": source,
-                "allowed": allowed_now, "allowed_current": allowed_now}
+        return {"name": config.get("current"), "current": True, "bindings": here, "here": here, "config": config}
     env = envs.environment(config, environment)
     assert env, f"environment {environment} is not configured; add it in Admin, Environments"
-    assert config.get("current"), "set the current environment in Admin, Environments before running on another one"
+    assert config.get("current"), "choose this deployment's environment in Admin, Environments before running on another one"
     goal = dict(env.get("bindings") or {})
-    moved = envs.rebase_location(location, source, goal)
-    allowed = envs.rebase_tables(allowed_now, source, goal)
-    assert allowed, (f"no binding of environment {env['name']} covers this domain's tables; bind their databases "
-                     f"in Admin, Environments for both {config.get('current')} and {env['name']}")
+    moved = envs.rebase_location(here.get(envs.DOMAIN), _roles(here), goal)
     return {"name": env["name"], "current": False, "bindings": {**goal, **({envs.DOMAIN: moved} if moved else {})},
-            "source": source, "allowed": allowed, "allowed_current": allowed_now}
+            "here": here, "config": config}
+
+
+def _roles(mapping: Dict[str, str]) -> Dict[str, str]:
+    from services.common.environments import DOMAIN
+
+    return {k: v for k, v in mapping.items() if k != DOMAIN}
 
 
 def sql_for(where: Dict[str, Any], sql: str) -> tuple[str, List[str]]:
-    """(the query as it runs in `where`, problems). In the current environment fully qualified SQL is unchanged; in
-    another one it is rewritten through the current environment's bindings first."""
+    """(the query as it runs in `where`, problems). Stored logical names resolve with the target's mapping; real
+    names of a database mapped here move to the target's database for the same role."""
     from services.common import environments as envs
 
     if where["current"]:
         return envs.resolve(sql, where["bindings"], where.get("name") or "")
-    return envs.rebase(sql, where["source"], where["bindings"], where["name"])
+    return envs.rebase(sql, _roles(where["here"]), where["bindings"], where["name"])
+
+
+def shown(session, domain_id: Optional[str], queries: Sequence[Dict[str, Any]],
+          mapping: Optional[Dict[str, str]] = None) -> List[Dict[str, Any]]:
+    """Queries as people read them: real names of the current environment, never the stored logical form."""
+    from services.common import environments as envs
+
+    mapping = mapping if mapping is not None else envs.current_mapping(session, domain_id)
+    return [{**q, "sql_expression": envs.shown(q.get("sql_expression") or "", mapping)} for q in queries]
 
 
 def _pack_row(r: Dict[str, Any]) -> Dict[str, Any]:
@@ -209,7 +198,7 @@ def get_pack(session, pack_id: str, version: Optional[int] = None) -> Dict[str, 
     else:
         chosen = versions[0]
     approved = next((v for v in versions if v["status"] == "APPROVED"), None)
-    return {"pack": chosen, "queries": _query_rows(session, pack_id, chosen["version"]),
+    return {"pack": chosen, "queries": shown(session, chosen.get("domain_id"), _query_rows(session, pack_id, chosen["version"])),
             "approved_version": approved["version"] if approved else None,
             "versions": [{k: v.get(k) for k in ("version", "status", "source", "change_note", "created_by", "created_at",
                                             "approved_by", "approved_at", "repo_path", "pr_state", "pr_url",
@@ -325,7 +314,7 @@ def create_pack(session, domain_id: str, payload_json: str) -> Dict[str, Any]:
                  [domain_id, meta["name"]])
     assert not taken, f"this domain already has a pack named {meta['name']}"
     here = target(session, domain_id)
-    queries = clean_queries(payload.get("queries") or [], here["allowed"], here["bindings"])
+    queries = clean_queries(payload.get("queries") or [], here["bindings"], here["config"])
     pack_id = str(uuid.uuid4())
     _insert_version(session, pack_id, 1, domain_id, meta, queries, "DRAFT", "UI", payload.get("change_note") or "Created")
     return {"pack_id": pack_id, "version": 1, "status": "DRAFT", "queries": len(queries)}
@@ -344,7 +333,7 @@ def save_draft(session, pack_id: str, payload_json: str) -> Dict[str, Any]:
             f"version {newest['version']} was saved since you opened version {payload['base_version']}; reload first"
     meta = _meta(payload, newest)
     here = target(session, newest["domain_id"])
-    queries = clean_queries(payload.get("queries") or [], here["allowed"], here["bindings"])
+    queries = clean_queries(payload.get("queries") or [], here["bindings"], here["config"])
     from services.common.sql import atomic
 
     note = payload.get("change_note") or ""
@@ -362,7 +351,8 @@ def save_draft(session, pack_id: str, payload_json: str) -> Dict[str, Any]:
 
     atomic(session, write)
     previous = next((v for v in versions if v["status"] == "APPROVED"), None)
-    changes = diff(_query_rows(session, pack_id, previous["version"]), queries) if previous else None
+    changes = (diff(shown(session, None, _query_rows(session, pack_id, previous["version"]), here["bindings"]),
+                    shown(session, None, queries, here["bindings"])) if previous else None)
     return {"pack_id": pack_id, "version": version, "status": "DRAFT", "queries": len(queries), "diff": changes}
 
 
@@ -408,7 +398,7 @@ def approve(session, pack_id: str) -> Dict[str, Any]:
                     ", APPROVED_BY = CURRENT_USER(), APPROVED_AT = CURRENT_TIMESTAMP()")
 
     atomic(session, write)
-    queries = _query_rows(session, pack_id, newest["version"])
+    queries = shown(session, newest.get("domain_id"), _query_rows(session, pack_id, newest["version"]))
     old = _query_rows(session, pack_id, previous["version"]) if previous else []
     published = publish_knowledge(session, newest, queries, old)
     return {"pack_id": pack_id, "version": newest["version"], "status": "APPROVED", "knowledge": published}
@@ -464,16 +454,17 @@ def retire(session, pack_id: str) -> Dict[str, Any]:
 # ---------------------------------------------------------------- execution
 
 
-def _pii(session, allowed: Sequence[str]) -> tuple[set, bool]:
-    """(PII column names, conservative). Without any profile of the domain's tables every non-key value is masked."""
-    if not allowed:
+def _pii(session, tables: Sequence[str]) -> tuple[set, bool]:
+    """(PII column names, conservative) from the profiles of the tables the queries read. Without any profile of
+    them every non-key value is masked."""
+    if not tables:
         return set(), True
     try:
         found = rows(session, """SELECT DISTINCT UPPER(COLUMN_NAME) AS C, PII_CLASSIFICATION AS P
                                    FROM CORE.DATA_PROFILES
                                   WHERE ARRAY_CONTAINS(UPPER(DATABASE_NAME || '.' || SCHEMA_NAME || '.' || TABLE_NAME)::VARIANT,
                                                        PARSE_JSON(?))""",
-                     [json.dumps([a.upper() for a in allowed])])
+                     [json.dumps([str(t).replace('"', "").upper() for t in tables])])
     except Exception:
         return set(), True
     if not found:
@@ -481,30 +472,36 @@ def _pii(session, allowed: Sequence[str]) -> tuple[set, bool]:
     return {r["C"] for r in found if (r["P"] or "NONE") != "NONE"}, False
 
 
+def _read(where: Dict[str, Any], sqls: Sequence[str]) -> List[str]:
+    """The tables the queries read in the current environment (their profiles say which columns are PII; the same
+    columns are just as sensitive in any other environment)."""
+    from services.common.environments import resolve
+    from services.qa.guard import tables
+
+    out: List[str] = []
+    for sql in sqls:
+        out += tables(resolve(sql or "", where["here"])[0])
+    return list(dict.fromkeys(out))
+
+
 def _pick(session, domain_id: str, pack_id: str, version: Optional[int],
           query_ids: Optional[List[str]]) -> tuple[Dict[str, Any], List[Dict[str, Any]]]:
-    """(pack version, its chosen queries): the approved version unless a version is named."""
-    detail = get_pack(session, pack_id, version if version is not None else None)
-    pack = detail["pack"]
+    """(pack version, its chosen queries as stored): the approved version unless a version is named."""
+    versions = _versions(session, pack_id)
+    assert versions, "pack not found"
     if version is None:
-        assert detail["approved_version"], "this pack has no approved version yet; test a draft by its version"
-        detail = get_pack(session, pack_id, detail["approved_version"])
-        pack = detail["pack"]
+        pack = next((v for v in versions if v["status"] == "APPROVED"), None)
+        assert pack, "this pack has no approved version yet; test a draft by its version"
+    else:
+        pack = next((v for v in versions if int(v["version"]) == int(version)), None)
+        assert pack, f"version {version} of this pack does not exist"
     assert pack["domain_id"] == domain_id, "the pack belongs to another domain"
-    queries = detail["queries"]
+    queries = _query_rows(session, pack_id, int(pack["version"]))
     if query_ids:
         wanted = set(query_ids)
         queries = [q for q in queries if q["query_id"] in wanted]
     assert queries, "there are no queries to run"
     return pack, queries
-
-
-def _elsewhere(where: Dict[str, Any], problems: Sequence[str]) -> List[str]:
-    """Guard problems worded for a run on another environment."""
-    if where["current"]:
-        return list(problems)
-    return [p.replace("is not one of this run's source or target tables",
-                      f"is not one of this domain's tables in environment {where['name']}") for p in problems]
 
 
 def _run_query(session, where: Dict[str, Any], test: Dict[str, Any], pii: set, conservative: bool) -> Dict[str, Any]:
@@ -513,11 +510,8 @@ def _run_query(session, where: Dict[str, Any], test: Dict[str, Any], pii: set, c
     resolved, unbound = sql_for(where, test.get("sql") or "")
     if unbound:
         base = {k: test.get(k) for k in ("test_id", "category", "title", "severity", "origin", "expected", "target_column")}
-        return {**base, "outcome": "ERROR", "detail": "; ".join(unbound), "sql": test.get("sql"), "duration_ms": 0}
-    result = run_one(session, {**test, "sql": resolved}, where["allowed"], pii, (), conservative)
-    if result.get("outcome") == "ERROR" and result.get("detail") and not where["current"]:
-        result["detail"] = "; ".join(_elsewhere(where, [result["detail"]]))
-    return result
+        return {**base, "outcome": "ERROR", "detail": "; ".join(unbound), "sql": resolved, "duration_ms": 0}
+    return run_one(session, {**test, "sql": resolved}, [], pii, (), conservative)
 
 
 def execute(session, domain_id: str, pack_id: Optional[str] = None, version: Optional[int] = None,
@@ -529,17 +523,15 @@ def execute(session, domain_id: str, pack_id: Optional[str] = None, version: Opt
     from services.qa.run import _store, blocking, summary as count
 
     where = target(session, domain_id, environment)
-    allowed = where["allowed"]
-    # PII is known from the current environment's profiles; the same columns are just as sensitive elsewhere
-    pii, conservative = _pii(session, where["allowed_current"])
     env = {"environment": where["name"], "current_environment": where["current"]}
     if sql is not None:
         test = {"test_id": "ADHOC", "category": "DOMAIN_PACK", "title": "Ad-hoc query", "severity": "MEDIUM",
                 "origin": "USER", "expected": "0 rows", "sql": sql}
-        return {"stored": False, "allowed": allowed, **env,
-                "results": [_run_query(session, where, test, pii, conservative)]}
+        pii, conservative = _pii(session, _read(where, [sql]))
+        return {"stored": False, **env, "results": [_run_query(session, where, test, pii, conservative)]}
     assert pack_id, "choose a pack or send a query"
     pack, queries = _pick(session, domain_id, pack_id, version, query_ids)
+    pii, conservative = _pii(session, _read(where, [q["sql_expression"] for q in queries]))
     started = time.time()
     results = []
     for q in queries:
@@ -558,11 +550,12 @@ def execute(session, domain_id: str, pack_id: Optional[str] = None, version: Opt
               "blocking": len(blocking(results)), "scope": "DOMAIN", "target_table_id": None, "domain_id": domain_id,
               "suite_id": None, "trigger_detail": detail}
     _store(session, qa_run, results)
-    return {**qa_run, **env, "stored": True, "allowed": allowed, "results": results}
+    return {**qa_run, **env, "stored": True, "results": results}
 
 
 def explain(session, sql: str) -> Dict[str, Any]:
-    """Compile a guarded query without running it: missing tables, columns or grants in the target show here."""
+    """Compile a guarded query without running it: a missing table or column, or one the role cannot read, shows
+    here."""
     try:
         session.sql(f"EXPLAIN USING TEXT {sql}").collect()
         return {"ok": True, "error": None}
@@ -572,34 +565,35 @@ def explain(session, sql: str) -> Dict[str, Any]:
 
 def dry_run(session, domain_id: str, pack_id: str, version: Optional[int] = None, environment: Optional[str] = None,
             query_ids: Optional[List[str]] = None, config_json: Optional[str] = None) -> Dict[str, Any]:
-    """Each query of a pack version as it would run in `environment`: resolved SQL, the read-only guard and an EXPLAIN
-    against the target. Nothing runs and nothing is stored. `config_json` checks unsaved bindings (Admin preview)."""
-    from services.qa.guard import check
+    """Each query of a pack version as it would run in `environment`: its SQL there, the read-only guard and an
+    EXPLAIN against it. Nothing runs and nothing is stored. `config_json` checks an unsaved mapping (Admin preview).
+    `kept` lists the tables a run elsewhere would still read where they are, because no database role maps them."""
+    from services.common import environments as envs
+    from services.qa.guard import inspect, tables
 
     config = None
     if config_json:
-        from services.common.environments import validate
-
-        config, problems = validate(json.loads(config_json))
+        config, problems = envs.validate(json.loads(config_json))
         assert not problems, "; ".join(problems[:5])
     where = target(session, domain_id, environment, config)
     pack, queries = _pick(session, domain_id, pack_id, version, query_ids)
     out = []
     for q in queries:
+        written = envs.shown(q["sql_expression"], where["here"])
         resolved, problems = sql_for(where, q["sql_expression"])
         item = {"query_id": q.get("query_id"), "query_name": q["query_name"], "severity": q.get("severity"),
-                "written": q["sql_expression"], "sql": resolved, "rewritten": resolved != q["sql_expression"]}
+                "written": written, "sql": resolved, "rewritten": resolved != written, "kept": []}
         if not problems:
-            ok, guard_problems, cleaned = check(resolved, where["allowed"])
-            problems = _elsewhere(where, guard_problems)
-            item["sql"] = cleaned
+            ok, problems, item["sql"], read = inspect(resolved)
+            if not where["current"]:
+                here = {t.upper() for t in tables(written)}
+                item["kept"] = [t for t in read if t.upper() in here]
         item["explain"] = explain(session, item["sql"]) if not problems else None
         item["problems"] = problems
         item["ok"] = not problems and bool(item["explain"] and item["explain"]["ok"])
         out.append(item)
     return {"pack_id": pack_id, "version": int(pack["version"]), "name": pack["name"], "environment": where["name"],
-            "current_environment": where["current"], "allowed": where["allowed"],
-            "bindings": where["bindings"], "queries": out, "ok": all(i["ok"] for i in out)}
+            "current_environment": where["current"], "queries": out, "ok": all(i["ok"] for i in out)}
 
 
 # ---------------------------------------------------------------- repository packs
