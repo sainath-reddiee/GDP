@@ -475,6 +475,30 @@ def seed_environment(cur, database: str, environment: Optional[Dict[str, Any]]) 
     return [f"environment bindings: {environment['name']} ({len(value['environments'][0]['bindings'])} bindings)"]
 
 
+def seed_snaplogic(cur, database: str, snaplogic: Optional[Dict[str, Any]]) -> List[str]:
+    """The environment file's [snaplogic] as the SNAPLOGIC_SYNC setting version 1, when no one has saved it yet. The
+    setting edited in Admin is never replaced by a deploy."""
+    from services.source import snaplogic_config as sc
+
+    if not snaplogic:
+        return []
+    try:
+        cur.execute(f"SELECT COUNT(*) FROM {database}.CORE.PLATFORM_CONFIG WHERE CONFIG_KEY = %s", (sc.KEY,))
+        if cur.fetchall()[0][0]:
+            return ["snaplogic sync: kept the saved setting"]
+        value, problems = sc.validate_setting({**sc.DEFAULT_SETTING, "enabled": snaplogic.get("enabled") is True,
+                                               "table_prefix": snaplogic.get("table_prefix") or sc.DEFAULT_SETTING["table_prefix"]})
+        if problems:
+            return [f"snaplogic sync: not seeded ({'; '.join(problems[:3])})"]
+        cur.execute(f"""INSERT INTO {database}.CORE.PLATFORM_CONFIG
+                          (CONFIG_KEY, CONFIG_VALUE, DESCRIPTION, VERSION, IS_CURRENT, CREATED_BY)
+                        SELECT %s, PARSE_JSON(%s), %s, 1, TRUE, CURRENT_USER()""",
+                    (sc.KEY, json.dumps(value), "SnapLogic config tables from the environment file"))
+    except Exception as exc:
+        return [f"snaplogic sync: skipped ({str(exc)[:120]})"]
+    return [f"snaplogic sync: {'on' if value['enabled'] else 'off'}, writing {sc.tables(value)['master']} and {sc.tables(value)['detail']}"]
+
+
 def seed_dq_suites(cur, database: str) -> List[str]:
     """An approved version 1 for every Data Quality Store table without a suite (V040)."""
     from services.catalog.dq_suite import backfill

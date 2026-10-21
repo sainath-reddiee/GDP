@@ -193,7 +193,7 @@ export function ChoiceStep<K extends string>({ n, title, choices, value, onChang
                     <c.icon className="h-[18px] w-[18px]" />
                   </motion.span>
                   <motion.span layout="position" className="relative flex min-w-0 flex-col">
-                    <span className={cn("truncate text-sm", on ? "font-semibold" : "font-medium", c.soon && !on && "text-muted-foreground")}>{c.label}</span>
+                    <span className={cn("line-clamp-2 text-sm", on ? "font-semibold" : "font-medium", c.soon && !on && "text-muted-foreground")}>{c.label}</span>
                     {c.soon && <span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">Coming soon</span>}
                   </motion.span>
                   {on ? (

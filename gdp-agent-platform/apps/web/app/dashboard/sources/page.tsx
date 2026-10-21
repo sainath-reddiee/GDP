@@ -32,7 +32,7 @@ export default async function SourceHub({ searchParams }: { searchParams: { db?:
   const registered = pipes.pipelines.filter((p) => p.status !== "RETIRED");
   const active = registered.filter((p) => p.status === "ACTIVE").length;
   const issues = fresh ? fresh.failed_loads + fresh.stale : null;
-  // External sources appear only once something has been onboarded externally (a SnapLogic configuration or a pipeline)
+  // Other sources (PostgreSQL, Oracle, files... through SnapLogic) appear only once something has been onboarded externally (a SnapLogic configuration or a pipeline)
   const hasIngestion = control.deployed && control.controls.length > 0;
   const hasPipelines = pipes.deployed && pipes.pipelines.length > 0;
   const external = hasIngestion || hasPipelines;
@@ -54,7 +54,7 @@ export default async function SourceHub({ searchParams }: { searchParams: { db?:
       <section className="border-t border-border/70 pt-6">
         <SourcesSection searchParams={searchParams}
           pipelines={external ? (
-            <Panel title="External sources" icon={CloudCog}>
+            <Panel title="Other sources" icon={CloudCog}>
               <div className="space-y-6" data-testid="external-sources">
                 {hasIngestion && (
                   <div className="space-y-2">

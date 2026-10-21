@@ -14,7 +14,7 @@ ITEMS = re.findall(r'label: "([^"]+)".*?href: "([^"]+)".*?privilege: "([^"]+)"',
 
 def test_the_menu_offers_every_create_action():
     labels = [label for label, _, _ in ITEMS]
-    assert labels == ["Snowflake share", "External source", "Import a domain pack", "New table model", "New QA pack",
+    assert labels == ["Snowflake share", "Other sources", "Import a domain pack", "New table model", "New QA pack",
                       "Add a data quality check"]
 
 

@@ -1,17 +1,21 @@
 "use client";
 
 import Link from "next/link";
-import { useState, useTransition, type ReactNode } from "react";
+import { useEffect, useState, useTransition, type ReactNode } from "react";
 import { ArrowLeft, ArrowRight, CheckCircle2, Copy, Loader2, Plus, Save, Trash2 } from "lucide-react";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Input, Label, Select, Textarea } from "@/components/ui/input";
 import { useToast } from "@/components/ui/toast";
 import { explain } from "@/components/hub/states";
 import { cn } from "@/lib/utils";
-import { saveIngestion, validateIngestion, type IngestionPayload } from "../actions";
+import { saveIngestion, snaplogicPreview, snaplogicStatus, validateIngestion, type IngestionPayload } from "../actions";
+import { SnapLogicRows } from "@/components/sources/snaplogic-preview";
+import type { SnapLogicOutcome, SnapLogicPreview, SnapLogicStatus } from "@/lib/hub-types";
 import type { DomainOption } from "./wizard";
 
-const SOURCE_TYPES = ["ORACLE", "SQLSERVER", "POSTGRES", "MYSQL", "SALESFORCE", "REST_API", "S3", "SFTP", "OTHER"];
+// PostgreSQL first; the API still accepts POSTGRES (older configurations) and writes it to SnapLogic as POSTGRESQL
+const SOURCE_TYPES = ["POSTGRESQL", "ORACLE", "SQLSERVER", "MYSQL", "SALESFORCE", "REST_API", "S3", "S3_DEALIQ", "SFTP",
+  "SNOWFLAKE", "SNOWFLAKE_SHARE", "SHAREPOINT", "DNB", "ZOOMINFO_API", "OTHER"];
 const FILE_TYPES = ["TABLE", "CSV", "JSON", "PARQUET", "XLSX"];
 const LOAD_TYPES = ["APPEND", "TRUNCATE", "SCD2"];
 const BRONZE_LOAD_TYPES = ["TRUNCATE", "SCD2", "MERGE"];
@@ -64,16 +68,17 @@ function Toggle({ id, checked, onChange, label, help, col }: { id: string; check
   );
 }
 
-/** Onboard an external source for SnapLogic: six steps, each checked by the API before moving on; saving writes one
+/** Onboard other sources (PostgreSQL, Oracle, SQL Server, Salesforce, APIs, files) for SnapLogic: six steps, each checked by the API before moving on; saving writes one
  * catalog row for the source and one control row per table (CORE.INGESTION_CONTROL_CONFIG) under one
  * master ID. SnapLogic reads the table; nothing is sent to it. */
 export function IngestionWizard({ domains, user }: { domains: DomainOption[]; user: string | null }) {
   const toast = useToast();
   const [step, setStep] = useState(0);
-  const [source, setSource] = useState({ source_name: "", source_type: "ORACLE", domain_id: "", source_account: "",
-                                         source_database_path: "", source_schema_file: "", source_file_type: "TABLE", source_sheet_name: "" });
+  const [source, setSource] = useState({ source_name: "", source_type: "POSTGRESQL", domain_id: "", source_account: "",
+                                         source_database_path: "", source_schema_file: "", source_file_type: "TABLE", source_sheet_name: "",
+                                         source_system_desc: "", airflow_source_system: "", silver_command_name: "" });
   const [tables, setTables] = useState<Table[]>([{ ...EMPTY_TABLE }]);
-  const [target, setTarget] = useState({ target_account: "", landing_database: "", landing_schema: "LANDING", bronze_schema: "BRONZE",
+  const [target, setTarget] = useState({ target_account: "", landing_database: "", landing_schema: "LANDING", bronze_schema: "BRONZE", bronze_database: "",
                                          external_stage: "", iceberg: false, external_volume: "", base_location: "", config_table: "" });
   const [load, setLoad] = useState({ load_type: "APPEND", bronze_load_type: "TRUNCATE", load_frequency: "DAILY",
                                      job_trigger_time: "0 2 * * * UTC", landing_to_bronze_flag: true, is_active: true,
@@ -82,8 +87,33 @@ export function IngestionWizard({ domains, user }: { domains: DomainOption[]; us
   const [comments, setComments] = useState("");
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [preview, setPreview] = useState<Record<string, unknown>[]>([]);
-  const [saved, setSaved] = useState<{ master_id: number; tables: number; parent: string } | null>(null);
+  const [saved, setSaved] = useState<{ master_id: number; tables: number; parent: string; snaplogic?: SnapLogicOutcome } | null>(null);
   const [busy, start] = useTransition();
+  // SnapLogic's config tables (Admin, SNAPLOGIC_SYNC): when the sync is on, the live defaults are filled in, the child
+  // pipeline follows the source type until someone types their own, and the review shows the rows to be written
+  const [sync, setSync] = useState<SnapLogicStatus | null>(null);
+  const [childTyped, setChildTyped] = useState(false);
+  const [snapRows, setSnapRows] = useState<SnapLogicPreview | null>(null);
+  useEffect(() => {
+    void snaplogicStatus().then((r) => {
+      if (!r.ok || !r.data.enabled) return;
+      const d = r.data.defaults;
+      setSync(r.data);
+      setSnap((s) => ({ ...s, snaplogic_project_name: s.snaplogic_project_name || String(d.snaplogic_project_name ?? ""),
+                        parent_pipeline_name: s.parent_pipeline_name || String(d.parent_pipeline_name ?? ""),
+                        child_pipeline_name: s.child_pipeline_name || (r.data.child_pipeline_by_type[source.source_type] ?? "") }));
+      setTarget((t) => ({ ...t, target_account: t.target_account || String(d.target_account ?? ""),
+                          bronze_database: t.bronze_database || String(d.bronze_database ?? "") }));
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  const pickType = (type: string) => {
+    setSource({ ...source, source_type: type });
+    if (sync && !childTyped) {
+      const kind = type === "POSTGRES" ? "POSTGRESQL" : type;
+      setSnap((s) => ({ ...s, child_pipeline_name: sync.child_pipeline_by_type[kind] ?? s.child_pipeline_name }));
+    }
+  };
 
   const payload = (): IngestionPayload => ({
     source, target, load, snaplogic: snap, comments,
@@ -104,6 +134,10 @@ export function IngestionWizard({ domains, user }: { domains: DomainOption[]; us
       return;
     }
     setPreview(r.data.rows);
+    if (sync && STEPS[step + 1]?.id === "review") {
+      const rows = await snaplogicPreview(payload());
+      setSnapRows(rows.ok ? rows.data : null);
+    }
     setStep((s) => Math.min(s + 1, STEPS.length - 1));
   });
   const save = () => start(async () => {
@@ -119,7 +153,7 @@ export function IngestionWizard({ domains, user }: { domains: DomainOption[]; us
     if ("pending_approval" in r.data) { toast("info", r.data.detail); return; }
     const d = r.data;
     toast("ok", `Configuration saved: master ID ${d.master_id}, ${d.children.length} table${d.children.length === 1 ? "" : "s"} registered for ${d.parent_pipeline_name}.`);
-    setSaved({ master_id: d.master_id, tables: d.children.length, parent: d.parent_pipeline_name });
+    setSaved({ master_id: d.master_id, tables: d.children.length, parent: d.parent_pipeline_name, snaplogic: d.snaplogic });
   });
   const setTable = (i: number, patch: Partial<Table>) => setTables((ts) => ts.map((t, k) => (k === i ? { ...t, ...patch } : t)));
 
@@ -132,6 +166,13 @@ export function IngestionWizard({ domains, user }: { domains: DomainOption[]; us
           Master ID {saved.master_id} with {saved.tables} table{saved.tables === 1 ? "" : "s"} is in CORE.INGESTION_CONTROL_CONFIG.
           {" "}{saved.parent} picks it up on its next run{load.is_active ? "" : " once the rows are switched on"}.
         </p>
+        {saved.snaplogic?.master_config_id != null && (
+          <p className="max-w-md text-sm text-muted-foreground" data-testid="snaplogic-saved">
+            SnapLogic: master row {saved.snaplogic.master_config_id}{saved.snaplogic.master_created ? " (new)" : " (reused)"} in{" "}
+            <span className="font-mono text-xs">{saved.snaplogic.tables?.master}</span>, detail rows{" "}
+            {(saved.snaplogic.child_config_ids ?? []).join(", ")} in <span className="font-mono text-xs">{saved.snaplogic.tables?.detail}</span>.
+          </p>
+        )}
         <div className="flex gap-2">
           <Link href="/dashboard/sources" className={buttonVariants()}>Open in the Source Store</Link>
           <Button variant="outline" onClick={() => { setSaved(null); setStep(0); setTables([{ ...EMPTY_TABLE }]); setPreview([]); }}>Onboard another</Button>
@@ -169,7 +210,7 @@ export function IngestionWizard({ domains, user }: { domains: DomainOption[]; us
               <Input id="source_name" value={source.source_name} placeholder="CRM_ORACLE" onChange={(e) => setSource({ ...source, source_name: e.target.value })} />
             </Field>
             <Field id="source_type" label="Source type" error={err("source.source_type")}>
-              <Select id="source_type" value={source.source_type} onChange={(e) => setSource({ ...source, source_type: e.target.value })}>
+              <Select id="source_type" value={source.source_type} onChange={(e) => pickType(e.target.value)}>
                 {SOURCE_TYPES.map((t) => <option key={t}>{t}</option>)}
               </Select>
             </Field>
@@ -197,6 +238,20 @@ export function IngestionWizard({ domains, user }: { domains: DomainOption[]; us
               <Field id="source_sheet_name" col="SOURCE_SHEET_NAME" label="Sheet name" required error={err("source.source_sheet_name")}>
                 <Input id="source_sheet_name" value={source.source_sheet_name} placeholder="Customers" onChange={(e) => setSource({ ...source, source_sheet_name: e.target.value })} />
               </Field>
+            )}
+            {sync && (
+              <>
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground md:col-span-2">For SnapLogic&apos;s master row</p>
+                <Field id="source_system_desc" col="SOURCE_SYSTEM_DESC" label="Description" error={err("source.source_system_desc")}>
+                  <Input id="source_system_desc" value={source.source_system_desc} placeholder="CRM accounts and contacts" onChange={(e) => setSource({ ...source, source_system_desc: e.target.value })} />
+                </Field>
+                <Field id="airflow_source_system" col="AIRFLOW_SOURCE_SYSTEM" label="Airflow source system" error={err("source.airflow_source_system")}>
+                  <Input id="airflow_source_system" value={source.airflow_source_system} placeholder="crm" onChange={(e) => setSource({ ...source, airflow_source_system: e.target.value })} />
+                </Field>
+                <Field id="silver_command_name" col="SILVER_COMMAND_NAME" label="Silver command" error={err("source.silver_command_name")}>
+                  <Input id="silver_command_name" value={source.silver_command_name} onChange={(e) => setSource({ ...source, silver_command_name: e.target.value })} />
+                </Field>
+              </>
             )}
           </div>
         )}
@@ -281,6 +336,11 @@ export function IngestionWizard({ domains, user }: { domains: DomainOption[]; us
             <Field id="bronze_schema" col="BRONZE_SCHEMA" label="Bronze schema" required error={err("target.bronze_schema")}>
               <Input id="bronze_schema" value={target.bronze_schema} onChange={(e) => setTarget({ ...target, bronze_schema: e.target.value })} />
             </Field>
+            {sync && (
+              <Field id="bronze_database" col="BRONZE_DATABASE" label="Bronze database" error={err("target.bronze_database")}>
+                <Input id="bronze_database" value={target.bronze_database} placeholder="DEV_GDP_BRONZE_DB" onChange={(e) => setTarget({ ...target, bronze_database: e.target.value })} />
+              </Field>
+            )}
             <Field id="target_account" col="TARGET_ACCOUNT" label="Target account" error={err("target.target_account")} help="The SnapLogic account that writes to Snowflake">
               <Input id="target_account" value={target.target_account} placeholder="snowflake_ingest" onChange={(e) => setTarget({ ...target, target_account: e.target.value })} />
             </Field>
@@ -351,7 +411,7 @@ export function IngestionWizard({ domains, user }: { domains: DomainOption[]; us
               <Input id="parent_pipeline_name" value={snap.parent_pipeline_name} placeholder="P_INGEST_MASTER" onChange={(e) => setSnap({ ...snap, parent_pipeline_name: e.target.value })} />
             </Field>
             <Field id="child_pipeline_name" col="CHILD_PIPELINE_NAME" label="Child pipeline" required error={err("snaplogic.child_pipeline_name")}>
-              <Input id="child_pipeline_name" value={snap.child_pipeline_name} placeholder="C_ORACLE_TO_LANDING" onChange={(e) => setSnap({ ...snap, child_pipeline_name: e.target.value })} />
+              <Input id="child_pipeline_name" value={snap.child_pipeline_name} placeholder="C_ORACLE_TO_LANDING" onChange={(e) => { setChildTyped(true); setSnap({ ...snap, child_pipeline_name: e.target.value }); }} />
             </Field>
             <Field id="api_url" col="API_URL" label="API URL" error={err("snaplogic.api_url")} help="The pipeline's triggered task URL (https)">
               <Input id="api_url" value={snap.api_url} placeholder="https://elastic.snaplogic.com/api/1/rest/slsched/feed/..." onChange={(e) => setSnap({ ...snap, api_url: e.target.value })} />
@@ -395,6 +455,7 @@ export function IngestionWizard({ domains, user }: { domains: DomainOption[]; us
                 </tbody>
               </table>
             </div>
+            {sync && snapRows && <SnapLogicRows preview={snapRows} />}
             <div className="rounded-xl border p-3" data-testid="assigned-on-save">
               <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Set when you save</p>
               <dl className="grid gap-x-4 gap-y-1 text-xs sm:grid-cols-[200px_1fr]">

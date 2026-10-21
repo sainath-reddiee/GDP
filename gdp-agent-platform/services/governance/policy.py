@@ -331,6 +331,8 @@ RULES: List[Tuple[str, str, Any, str]] = [
     ("POST", r"/api/hub/ingestion-control/validate", None, ""),
     ("POST", r"/api/hub/ingestion-control", "SOURCE.CONNECT", "Onboard an external source for SnapLogic ingestion"),
     ("PATCH", r"/api/hub/ingestion-control/\d+/\d+", "SOURCE.CONNECT", "Change a SnapLogic ingestion configuration"),
+    ("POST", r"/api/hub/snaplogic/preview(-share)?", None, ""),   # builds the rows, writes nothing
+    ("POST", r"/api/hub/snaplogic/sync/[^/]+/retry", "SOURCE.CONNECT", "Write a share's SnapLogic config rows again"),
     ("PUT", r"/api/hub/intake-form", "CONFIG.EDIT", "Change the external source intake questions"),
     ("POST", r"/api/hub/profiles/bookmarks", None, ""),
     ("DELETE", r"/api/hub/profiles/bookmarks", None, ""),

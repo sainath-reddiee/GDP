@@ -3,15 +3,20 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState, useTransition } from "react";
 import { ArrowLeft, ArrowRight, CheckCircle2, Database, Loader2, Play, Search, Share2, XCircle } from "lucide-react";
-import type { CatalogDatabase, LandingDefaults, OnboardResult, ShareList, ShareTable } from "@/lib/hub-types";
+import type { CatalogDatabase, LandingDefaults, OnboardResult, ShareList, ShareTable, SnapLogicPreview, SnapLogicStatus } from "@/lib/hub-types";
+import { SnapLogicRows } from "@/components/sources/snaplogic-preview";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Input, Label, Select } from "@/components/ui/input";
 import { ErrorNote, explain } from "@/components/hub/states";
 import { cn } from "@/lib/utils";
-import { listSchemas, listShareSchemas, mountShare, onboardShare, previewShare, type ShareSchema } from "../actions";
+import { listSchemas, listShareSchemas, mountShare, onboardShare, previewShare, retrySnaplogic, snaplogicPreviewShare, snaplogicStatus,
+  type ShareSchema } from "../actions";
 import type { DomainOption } from "./wizard";
 
-const STEPS = ["Share", "Schema", "Tables", "Landing", "Load"] as const;
+const BASE_STEPS = ["Share", "Schema", "Tables", "Landing", "Load"] as const;
+const LOAD_TYPES = ["APPEND", "TRUNCATE", "SCD2"];
+const BRONZE_LOAD_TYPES = ["TRUNCATE", "SCD2", "MERGE"];
+const FREQUENCIES = ["HOURLY", "DAILY", "WEEKLY", "MONTHLY", "ON_DEMAND"];
 const NAME = /^[A-Za-z][A-Za-z0-9_]{0,63}$/;
 
 /** readable: the database the share is mounted as is one this role can read (listed in INFORMATION_SCHEMA); a share
@@ -66,6 +71,50 @@ export function ShareWizard({ shares, domains, databases, landing }: {
   const [landingSchemas, setLandingSchemas] = useState<string[]>(landing?.schemas ?? []);
   const [landingSchema, setLandingSchema] = useState(landing?.default.landing_schema ?? "LANDING");
   const [result, setResult] = useState<OnboardResult | null>(null);
+  // SnapLogic's config tables (Admin, SNAPLOGIC_SYNC): when the sync is on, a SnapLogic step asks what SnapLogic needs
+  // to keep loading the share, and the rows are written after the data has landed
+  const [sync, setSync] = useState<SnapLogicStatus | null>(null);
+  const [snap, setSnap] = useState({ bronze_database: "", bronze_schema: "BRONZE", load_type: "APPEND", bronze_load_type: "SCD2",
+                                     load_frequency: "DAILY", schedule_cron: "0 2 * * * UTC", is_active: false, source_system_desc: "",
+                                     airflow_source_system: "", silver_command_name: "" });
+  const [pks, setPks] = useState<Record<string, string>>({});
+  const [snapRows, setSnapRows] = useState<SnapLogicPreview | null>(null);
+  const [retried, setRetried] = useState<string | null>(null);
+  useEffect(() => {
+    void snaplogicStatus().then((r) => {
+      if (!r.ok || !r.data.enabled) return;
+      setSync(r.data);
+      const d = r.data.defaults;
+      setSnap((s) => ({ ...s, bronze_database: String(d.bronze_database ?? ""), load_type: String(d.load_type ?? s.load_type),
+                        bronze_load_type: String(d.bronze_load_type ?? s.bronze_load_type), load_frequency: String(d.load_frequency ?? s.load_frequency) }));
+    });
+  }, []);
+  const STEPS: readonly string[] = sync ? ["Share", "Schema", "Tables", "Landing", "SnapLogic", "Load"] : BASE_STEPS;
+  const loadStep = STEPS.length - 1;
+  const snapStep = sync ? 4 : -1;
+  const snaplogicAnswers = () => sync ? {
+    ...snap, schedule_cron: snap.load_frequency === "ON_DEMAND" ? "" : snap.schedule_cron,
+    primary_keys: Object.fromEntries(Object.entries(pks).filter(([, v]) => v.trim())),
+  } : undefined;
+  const shareBody = () => ({
+    database, schema, tables: Array.from(picked), source_system_name: sourceName, run_name: runName || undefined,
+    domain_id: domainId || undefined, landing_database: landingDb || undefined, landing_schema: landingSchema || undefined,
+    snaplogic: snaplogicAnswers(),
+  });
+  const previewSnap = () => start(async () => {
+    const r = await snaplogicPreviewShare(shareBody());
+    if (!r.ok) { setError(explain(r.error).message); return; }
+    setSnapRows(r.data);
+  });
+  const retry = (syncId: string) => start(async () => {
+    const r = await retrySnaplogic(syncId, { target: { bronze_schema: snap.bronze_schema, bronze_database: snap.bronze_database },
+      load: { load_type: snap.load_type, bronze_load_type: snap.bronze_load_type, load_frequency: snap.load_frequency,
+              job_trigger_time: snap.load_frequency === "ON_DEMAND" ? "" : snap.schedule_cron, is_active: snap.is_active },
+      primary_keys: snaplogicAnswers()?.primary_keys ?? {} });
+    if (!r.ok) { setError(explain(r.error).message); return; }
+    if ("pending_approval" in r.data) { setRetried(r.data.detail); return; }
+    setRetried(`SnapLogic rows written: master row ${r.data.snaplogic?.master_config_id}, detail rows ${(r.data.snaplogic?.child_config_ids ?? []).join(", ")}.`);
+  });
 
   const shownEntries = entries.filter((e) => `${e.share ?? ""} ${e.provider ?? ""} ${e.database ?? ""}`.toLowerCase().includes(q.toLowerCase()));
   const shownTables = useMemo(() => (tables ?? []).filter((t) => t.table_name.toLowerCase().includes(filter.toLowerCase())), [tables, filter]);
@@ -107,17 +156,15 @@ export function ShareWizard({ shares, domains, databases, landing }: {
   });
   const run = () => start(async () => {
     setError(null); setResult(null);
-    const r = await onboardShare({
-      database, schema, tables: Array.from(picked), source_system_name: sourceName, run_name: runName || undefined,
-      domain_id: domainId || undefined, landing_database: landingDb || undefined, landing_schema: landingSchema || undefined,
-    });
+    const r = await onboardShare(shareBody());
     if (!r.ok) { setError(explain(r.error).message); return; }
     setResult(r.data);
   });
 
   const unmounted = entry && !entry.database;
   const noAccess = entry && entry.database && !entry.readable;
-  const canNext = [!!entry?.database && !!entry?.readable, !!schema, picked.size > 0, NAME.test(sourceName) && !!landingDb && !!landingSchema, true][step];
+  const canNext = [!!entry?.database && !!entry?.readable, !!schema, picked.size > 0, NAME.test(sourceName) && !!landingDb && !!landingSchema,
+    ...(sync ? [!!snap.bronze_schema.trim()] : []), true][step];
   const next = () => {
     if (step === 0) openSchemas(database);
     else if (step === 1) openTables();
@@ -293,7 +340,68 @@ export function ShareWizard({ shares, domains, databases, landing }: {
         </div>
       )}
 
-      {step === 4 && (
+      {step === snapStep && (
+        <div className="space-y-4" data-testid="share-snaplogic">
+          <p className="text-xs text-muted-foreground">
+            After the data lands, SnapLogic keeps loading it from {sync?.tables.detail}. These answers become its rows; nothing is
+            written until the share has landed.
+          </p>
+          <div className="grid gap-3 md:grid-cols-3">
+            <div className="space-y-1"><Label htmlFor="sl-bdb">Bronze database</Label>
+              <Input id="sl-bdb" value={snap.bronze_database} placeholder="DEV_GDP_BRONZE_DB" onChange={(e) => setSnap({ ...snap, bronze_database: e.target.value })} /></div>
+            <div className="space-y-1"><Label htmlFor="sl-bsc">Bronze schema</Label>
+              <Input id="sl-bsc" value={snap.bronze_schema} onChange={(e) => setSnap({ ...snap, bronze_schema: e.target.value })} /></div>
+            <div className="space-y-1"><Label htmlFor="sl-desc">Description</Label>
+              <Input id="sl-desc" value={snap.source_system_desc} onChange={(e) => setSnap({ ...snap, source_system_desc: e.target.value })} /></div>
+            <div className="space-y-1"><Label htmlFor="sl-lt">Landing load</Label>
+              <Select id="sl-lt" value={snap.load_type} onChange={(e) => setSnap({ ...snap, load_type: e.target.value })}>{LOAD_TYPES.map((t) => <option key={t}>{t}</option>)}</Select></div>
+            <div className="space-y-1"><Label htmlFor="sl-blt">Bronze load</Label>
+              <Select id="sl-blt" value={snap.bronze_load_type} onChange={(e) => setSnap({ ...snap, bronze_load_type: e.target.value })}>{BRONZE_LOAD_TYPES.map((t) => <option key={t}>{t}</option>)}</Select></div>
+            <div className="space-y-1"><Label htmlFor="sl-fq">Frequency</Label>
+              <Select id="sl-fq" value={snap.load_frequency} onChange={(e) => setSnap({ ...snap, load_frequency: e.target.value })}>
+                {FREQUENCIES.map((t) => <option key={t} value={t}>{t.replace("_", " ").toLowerCase()}</option>)}</Select></div>
+            {snap.load_frequency !== "ON_DEMAND" && (
+              <div className="space-y-1"><Label htmlFor="sl-cron">Schedule (cron)</Label>
+                <Input id="sl-cron" className="font-mono text-xs" value={snap.schedule_cron} onChange={(e) => setSnap({ ...snap, schedule_cron: e.target.value })} /></div>
+            )}
+            <div className="space-y-1"><Label htmlFor="sl-af">Airflow source system</Label>
+              <Input id="sl-af" value={snap.airflow_source_system} onChange={(e) => setSnap({ ...snap, airflow_source_system: e.target.value })} /></div>
+            <div className="space-y-1"><Label htmlFor="sl-sc">Silver command</Label>
+              <Input id="sl-sc" value={snap.silver_command_name} onChange={(e) => setSnap({ ...snap, silver_command_name: e.target.value })} /></div>
+          </div>
+          <div className="space-y-1.5">
+            <p className="text-xs font-medium">Primary keys {["SCD2", "MERGE"].includes(snap.bronze_load_type) || snap.load_type === "SCD2"
+              ? <span className="text-destructive">(needed for a {snap.bronze_load_type === "MERGE" ? "MERGE" : "SCD2"} load)</span>
+              : <span className="text-muted-foreground">(optional)</span>}</p>
+            <ul className="grid gap-2 sm:grid-cols-2">
+              {Array.from(picked).map((t) => (
+                <li key={t} className="flex items-center gap-2">
+                  <span className="w-40 shrink-0 truncate font-mono text-xs" title={t}>{t}</span>
+                  <Input aria-label={`Primary keys of ${t}`} className="h-8 text-xs" value={pks[t] ?? ""} placeholder="ID, SOURCE_KEY"
+                         onChange={(e) => setPks({ ...pks, [t]: e.target.value })} />
+                </li>
+              ))}
+            </ul>
+          </div>
+          <label className="flex items-center gap-2 text-sm">
+            <input type="checkbox" checked={snap.is_active} onChange={(e) => setSnap({ ...snap, is_active: e.target.checked })} className="h-4 w-4" />
+            SnapLogic starts loading right away (IS_ACTIVE); leave off to switch it on later
+          </label>
+          <div className="space-y-2">
+            <Button size="sm" variant="outline" disabled={pending} onClick={previewSnap} data-testid="share-snaplogic-preview">
+              {pending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null} Preview the SnapLogic rows
+            </Button>
+            {snapRows && !snapRows.valid && (
+              <ul className="space-y-0.5 text-xs text-destructive" role="alert">
+                {Object.entries(snapRows.errors).map(([k, v]) => <li key={k}><span className="font-mono">{k}</span>: {v}</li>)}
+              </ul>
+            )}
+            {snapRows && snapRows.valid && <SnapLogicRows preview={snapRows} />}
+          </div>
+        </div>
+      )}
+
+      {step === loadStep && (
         <div className="space-y-4">
           <ol className="grid gap-2 text-sm md:grid-cols-5" aria-label="What happens">
             {[["Register", `${sourceName.toUpperCase()} as a share source`], ["Check access", `read ${picked.size} table${picked.size === 1 ? "" : "s"} in ${database}.${schema}`],
@@ -322,6 +430,25 @@ export function ShareWizard({ shares, domains, databases, landing }: {
               ))}
             </ol>
           )}
+          {result?.snaplogic && (
+            <div className={cn("rounded-xl border p-3 text-sm", result.snaplogic.ok ? "border-success/30 bg-success/5" : "border-warning/30 bg-warning/5")}
+                 data-testid="share-snaplogic-result">
+              {result.snaplogic.ok ? (
+                <p>SnapLogic rows written: master row {result.snaplogic.master_config_id}{result.snaplogic.master_created ? " (new)" : " (reused)"},
+                  detail rows {(result.snaplogic.child_config_ids ?? []).join(", ")}.</p>
+              ) : (
+                <div className="space-y-2">
+                  <p>The data landed, but SnapLogic&apos;s rows were not written: {result.snaplogic.detail}</p>
+                  {result.snaplogic.sync_id && !result.snaplogic.skipped && !retried && (
+                    <Button size="sm" variant="outline" disabled={pending} onClick={() => retry(String(result.snaplogic?.sync_id))}>
+                      {pending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null} Write them again with the answers above
+                    </Button>
+                  )}
+                  {retried && <p className="text-muted-foreground">{retried}</p>}
+                </div>
+              )}
+            </div>
+          )}
           {result && (
             <Link href={result.continue_at} className={buttonVariants({ variant: result.ok ? "default" : "outline" })}>
               {result.ok ? "Continue to profiling" : "Open the run to finish"} <ArrowRight className="h-4 w-4" />
@@ -332,7 +459,7 @@ export function ShareWizard({ shares, domains, databases, landing }: {
 
       <div className="mt-6 flex items-center justify-between border-t border-border/70 pt-4">
         <Button variant="ghost" disabled={step === 0 || pending} onClick={() => { setError(null); setStep((s) => s - 1); }}><ArrowLeft className="h-4 w-4" /> Back</Button>
-        {step < 4 ? (
+        {step < loadStep ? (
           <Button disabled={!canNext || pending} onClick={next} data-testid="share-next">
             {pending ? <Loader2 className="h-4 w-4 animate-spin" /> : null} Next <ArrowRight className="h-4 w-4" />
           </Button>

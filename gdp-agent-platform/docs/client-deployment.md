@@ -158,6 +158,23 @@ As super admin:
 6. **Code:** connect the dbt repository; for pull requests, set up GitHub publishing (needs the integration from
    phase 0).
 7. **Jira**, if in scope: see `docker/README.md`.
+8. **SnapLogic config tables**, if SnapLogic loads the sources. Onboarding can also write the two tables SnapLogic
+   triggers from:
+   - `<prefix>SNAPLOGIC_CONFIG_MASTER` gets one row per source;
+   - `<prefix>SNAPLOGIC_CONFIG_DETAIL` gets one row per table.
+
+   To set it up:
+   1. Put `[snaplogic]` in the environment file (`table_prefix`, for example `DEV_GDP_UTIL_DB.CONFIG.AODS_`).
+   2. Run `--check`, which shows whether the roles that onboard can write those tables.
+   3. Give the `--admin-sql` grants to the owner of that schema.
+   4. Switch the sync on in **Admin, settings, SNAPLOGIC_SYNC**.
+
+   How it behaves:
+   - The rows are written in the same transaction as the platform's own, follow the live conventions, and never touch
+     the live `GDP_*` tables.
+   - Share onboarding writes them after the data has landed. A failure there is kept with a retry, and the landing is
+     not undone.
+   - Edits and deactivation follow each row.
 
 ## Phase 7: smoke test (15 minutes)
 

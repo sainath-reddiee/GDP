@@ -2,7 +2,8 @@
 
 import { revalidatePath } from "next/cache";
 import { api, attemptValue } from "@/lib/api";
-import type { IngestionControl, IngestionHistory, OnboardResult, Pipeline, ShareTable } from "@/lib/hub-types";
+import type { IngestionControl, IngestionHistory, OnboardResult, Pipeline, ShareTable, SnapLogicOutcome, SnapLogicPreview,
+  SnapLogicStatus } from "@/lib/hub-types";
 
 const post = (body: unknown, method = "POST") => ({ method, body: JSON.stringify(body) });
 
@@ -25,6 +26,7 @@ export async function previewShare(database: string, schema: string) {
 export async function onboardShare(body: {
   database: string; schema: string; tables: string[]; source_system_name: string; run_name?: string; domain_id?: string;
   provider_account?: string; share_name?: string; mount?: boolean; landing_database?: string; landing_schema?: string;
+  snaplogic?: Record<string, unknown>;
 }) {
   // no revalidatePath: refreshing the onboarding page would reset the wizard before its result shows; the Source
   // Store and the run list read fresh data when opened
@@ -42,10 +44,32 @@ export async function validateIngestion(payload: IngestionPayload) {
     "/api/hub/ingestion-control/validate", post(payload)));
 }
 
+/** Whether onboarding also writes SnapLogic's config tables, which ones, and the live defaults to pre-fill. */
+export async function snaplogicStatus() {
+  return attemptValue(() => api<SnapLogicStatus>("/api/hub/snaplogic/status"));
+}
+
+/** The master and detail rows an onboarding would write to SnapLogic's tables; nothing is written. */
+export async function snaplogicPreview(payload: IngestionPayload) {
+  return attemptValue(() => api<SnapLogicPreview>("/api/hub/snaplogic/preview", post(payload)));
+}
+
+/** The SnapLogic rows a share onboarding would write after it lands; nothing is written. */
+export async function snaplogicPreviewShare(body: Record<string, unknown>) {
+  return attemptValue(() => api<SnapLogicPreview>("/api/hub/snaplogic/preview-share", post(body)));
+}
+
+/** Write a share's SnapLogic rows again after its sync failed, with corrections (blocks merged, tables replaced). */
+export async function retrySnaplogic(syncId: string, changes: Record<string, unknown> = {}) {
+  return attemptValue(() => api<{ snaplogic?: SnapLogicOutcome; master_id: number } | { pending_approval: true; detail: string }>(
+    `/api/hub/snaplogic/sync/${encodeURIComponent(syncId)}/retry`, post({ changes })));
+}
+
 /** Save the configuration: one catalog row for the source and one control row per table under one master ID. */
 export async function saveIngestion(payload: IngestionPayload) {
   const r = await attemptValue(() => api<{ master_id: number; source_id: string; source_name: string; parent_pipeline_name: string;
-                                           children: { child_id: number; landing_table: string }[] } | { pending_approval: true; detail: string }>(
+                                           children: { child_id: number; landing_table: string }[]; snaplogic?: SnapLogicOutcome }
+                                         | { pending_approval: true; detail: string }>(
     "/api/hub/ingestion-control", post(payload)));
   return r;  // no revalidatePath: refreshing the onboarding page would reset the wizard; the Source Store reads fresh data
 }

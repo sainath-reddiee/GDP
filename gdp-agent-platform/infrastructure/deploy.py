@@ -215,6 +215,24 @@ def validate_env(raw: Dict[str, Any], name: str) -> Dict[str, Any]:
                        "bindings": dict(section.get("bindings") or {})}
         _, bad = validate_bindings({"current": environment["name"], "environments": [environment]})
         problems.extend(f"[environment] {p}" for p in bad)
+    snaplogic = None
+    if raw.get("snaplogic"):   # SnapLogic's config tables (seeded once into Admin, SNAPLOGIC_SYNC; granted by their owner)
+        from services.source.snaplogic_config import validate_setting
+
+        section = dict(raw["snaplogic"])
+        value, bad = validate_setting({"enabled": section.get("enabled") is True,
+                                       "table_prefix": section.get("table_prefix") or None})
+        problems.extend(f"[snaplogic] {p}" for p in bad)
+        writers = section.get("writer_roles")
+        writers = [writers] if isinstance(writers, str) else list(writers or [])
+        if not writers:   # the roles that onboard sources (SOURCE.CONNECT): engineers and admins
+            writers = ([f"{prefix}_DATA_ENGINEER", f"{prefix}_PLATFORM_ADMIN"] if kind == access_model.ACCOUNT_ROLES_MODEL
+                       else access.get("DATA_ENGINEER", []) + access.get("PLATFORM_ADMIN", []))
+        bad_roles = [r for r in writers if not IDENT.match(str(r))]
+        if bad_roles:
+            problems.append(f"[snaplogic] writer_roles: {bad_roles[0]} is not a Snowflake identifier")
+        snaplogic = {"enabled": value["enabled"], "table_prefix": value["table_prefix"],
+                     "writer_roles": sorted({str(r).upper() for r in writers})}
     if problems:
         raise ConfigError("; ".join(problems))
     return {"name": name, "role": role, "warehouse": str(sf["warehouse"]).upper(), "database": str(sf["database"]).upper(),
@@ -222,7 +240,8 @@ def validate_env(raw: Dict[str, Any], name: str) -> Dict[str, Any]:
             "access": access, "access_model": {"model": kind, "prefix": prefix}, "accounts": accounts,
             "model": str(features.get("llm_model") or "claude-sonnet-4-5"),
             "pr_sync_task": bool(features.get("pr_sync_task")), "github_integration": integration.upper() or None,
-            "actual_cost": bool(features.get("actual_cost_from_account_usage")), "environment": environment}
+            "actual_cost": bool(features.get("actual_cost_from_account_usage")), "environment": environment,
+            "snaplogic": snaplogic}
 
 
 # ---------------------------------------------------------------- reading Snowflake
@@ -365,6 +384,8 @@ def preflight(cur, env: Dict[str, Any]) -> List[Check]:
                           level=OPTIONAL, who="ACCOUNTADMIN",
                           fix=[f"-- create the GitHub external access integration {name} (see docs), then:",
                                f"GRANT USAGE ON INTEGRATION {name} TO ROLE {role};"]))
+    if env.get("snaplogic"):
+        checks.extend(snaplogic_checks(cur, env))
     if env["actual_cost"]:
         ok, _ = _try(cur, "SELECT 1 FROM SNOWFLAKE.ACCOUNT_USAGE.CORTEX_FUNCTIONS_QUERY_USAGE_HISTORY LIMIT 0")
         checks.append(Check("actual cost", "ok", "Cortex usage history is readable (actual credits)", level=OPTIONAL)
@@ -372,6 +393,43 @@ def preflight(cur, env: Dict[str, Any]) -> List[Check]:
                                        "an estimate", level=OPTIONAL, who="ACCOUNTADMIN",
                                        fix=[f"GRANT DATABASE ROLE SNOWFLAKE.USAGE_VIEWER TO ROLE {role};"]))
     return checks
+
+
+def snaplogic_checks(cur, env: Dict[str, Any]) -> List[Check]:
+    """SnapLogic's config tables live outside the platform database, so the roles that onboard sources need their own
+    grants there (from the owner of those tables). Optional: without them, onboarding works and the sync stays off."""
+    from services.source.snaplogic_config import tables
+
+    snap = env["snaplogic"]
+    names = tables(snap)
+    database, schema = snap["table_prefix"].split(".")[:2]
+    out: List[Check] = []
+    for label, table in (("master", names["master"]), ("detail", names["detail"])):
+        rows = _safe_rows(cur, f"SHOW GRANTS ON TABLE {table}")
+        if not rows:
+            out.append(Check(f"snaplogic {label}", "missing", f"{table} does not exist or {env['role']} cannot see its grants",
+                             level=OPTIONAL, who=f"the owner of {database}.{schema}", fix=snaplogic_grants(snap, table)))
+            continue
+        held: Dict[str, set] = {}
+        for r in rows:
+            held.setdefault(str(r.get("grantee_name") or "").upper(), set()).add(str(r.get("privilege") or "").upper())
+        lacking = [w for w in snap["writer_roles"] if not {"SELECT", "INSERT", "UPDATE"} <= held.get(w, set()) | (
+            {"SELECT", "INSERT", "UPDATE"} if "OWNERSHIP" in held.get(w, set()) else set())]
+        out.append(Check(f"snaplogic {label}", "ok", f"{table}: {', '.join(snap['writer_roles'])} can write it", level=OPTIONAL)
+                   if not lacking else Check(
+                       f"snaplogic {label}", "missing", f"{table}: {', '.join(lacking)} cannot write it yet",
+                       level=OPTIONAL, who=f"the owner of {database}.{schema}", fix=snaplogic_grants({**snap, "writer_roles": lacking}, table)))
+    return out
+
+
+def snaplogic_grants(snap: Dict[str, Any], table: str) -> List[str]:
+    database, schema = snap["table_prefix"].split(".")[:2]
+    lines = []
+    for role in snap["writer_roles"]:
+        lines += [f"GRANT USAGE ON DATABASE {database} TO ROLE {role};",
+                  f"GRANT USAGE ON SCHEMA {database}.{schema} TO ROLE {role};",
+                  f"GRANT SELECT, INSERT, UPDATE ON TABLE {table} TO ROLE {role};"]
+    return lines
 
 
 def role_fix(env: Dict[str, Any], user: str) -> List[str]:
@@ -847,7 +905,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         timed = TimedConnection(con, log)
         for line in apply_from_session(timed, env["database"], env["warehouse"], force=args.force,
                                        access=env["access_model"],
-                                       **({"environment": env["environment"]} if env.get("environment") else {})):
+                                       **({"environment": {**(env.get("environment") or {}), "snaplogic": env.get("snaplogic")}}
+                                          if env.get("environment") or env.get("snaplogic") else {})):
             log(f"  {line}")
         timed._stop.set()
         log(f"  deploy took {time.time() - started:.0f}s ({timed.statements} statements; slowest "

@@ -21,7 +21,7 @@ from pydantic import BaseModel, Field
 from app.db import Db
 from app.main import _config, _ident, _put_config, _snowflake_error, _source_call, _table_ident, current_db
 from services.common import secretbox
-from services.source import ingestion_control, pipelines
+from services.source import ingestion_control, pipelines, snaplogic_sync
 
 router = APIRouter()
 CATALOG = "CORE.INGESTION_PIPELINE_CATALOG"
@@ -239,12 +239,30 @@ def validate_control(body: ControlIn):
 @router.post("/api/hub/ingestion-control")
 def create_control(body: ControlIn, db: Db = Depends(current_db)):
     """Onboard an external source for SnapLogic: one catalog row for the source and one control row per table under
-    one MASTER_ID, with a history row each, all in one transaction. Nothing is sent to SnapLogic; it reads the table."""
+    one MASTER_ID, with a history row each, all in one transaction. With the SNAPLOGIC_SYNC setting on, the same
+    transaction also writes SnapLogic's config tables (services/source/snaplogic_sync); off, nothing else is written."""
+    return _create_control(db, body.model_dump(), "EXTERNAL")
+
+
+def _domain_name(db: Db, domain_id: Optional[str]) -> Optional[str]:
+    if not domain_id:
+        return None
+    try:
+        found = db.query("SELECT DOMAIN_NAME FROM CORE.DOMAIN_REGISTRY WHERE DOMAIN_ID = %s", (domain_id,))
+    except Exception:
+        return None
+    return found[0]["domain_name"] if found else None
+
+
+def _create_control(db: Db, payload: dict, kind: str, run_id: Optional[str] = None) -> dict:
     from app.db import transaction
 
-    header, rows, errors = ingestion_control.validate(body.model_dump())
+    header, rows, errors = ingestion_control.validate(payload)
     if errors:
         raise HTTPException(422, {"message": "Some answers need attention", "errors": errors})
+    sync = snaplogic_sync.setting(db)
+    if sync["enabled"] and not header.get("domain_name"):
+        header["domain_name"] = _domain_name(db, header.get("domain_id"))
     try:
         clash = db.query(f"""SELECT LANDING_TABLE FROM {ingestion_control.TABLE}
                               WHERE IS_ACTIVE AND PARENT_PIPELINE_NAME = %s AND LANDING_DATABASE = %s AND LANDING_SCHEMA = %s
@@ -258,6 +276,8 @@ def create_control(body: ControlIn, db: Db = Depends(current_db)):
         raise HTTPException(409, f"{header['parent_pipeline_name']} already loads {names}; deactivate those rows or choose other landing tables")
     who = (db.query("SELECT CURRENT_USER() AS U") or [{"u": "UNKNOWN"}])[0]["u"]
     source_id = str(uuid.uuid4())
+    synced: Optional[dict] = None
+    master_id: Optional[int] = None
     try:
         with transaction(db):
             schedule = {"frequency": header["load_frequency"], **({"cron": header["job_trigger_time"]} if header["job_trigger_time"] else {})}
@@ -274,16 +294,92 @@ def create_control(body: ControlIn, db: Db = Depends(current_db)):
                        tuple(ingestion_control.insert_params(master_id, source_id, header, rows, who)))
             children = db.query(f"SELECT CHILD_ID, LANDING_TABLE FROM {ingestion_control.TABLE} WHERE MASTER_ID = %s ORDER BY CHILD_ID",
                                 (master_id,))
+            if sync["enabled"]:
+                synced = snaplogic_sync.write_new(db, header, rows, sync, str(who), source_id, master_id)
             by_table = {r["landing_table"]: r for r in rows}
             for c in children:
                 _history(db, master_id, int(c["child_id"]), "CREATED", by_table.get(c["landing_table"], {}))
     except HTTPException:
         raise
+    except snaplogic_sync.Conflict as exc:
+        raise HTTPException(409, str(exc)) from exc
     except Exception as exc:
+        if sync["enabled"]:
+            snaplogic_sync.log(db, kind, "FAILED", sync, run_id=run_id, error=str(exc)[:4000],
+                               request=payload if kind == "SHARE" else None)
         raise _snowflake_error(exc) from exc
-    return {"master_id": master_id, "source_id": source_id, "source_name": header["source_name"],
-            "parent_pipeline_name": header["parent_pipeline_name"],
-            "children": [{"child_id": int(c["child_id"]), "landing_table": c["landing_table"]} for c in children]}
+    out = {"master_id": master_id, "source_id": source_id, "source_name": header["source_name"],
+           "parent_pipeline_name": header["parent_pipeline_name"],
+           "children": [{"child_id": int(c["child_id"]), "landing_table": c["landing_table"]} for c in children]}
+    if synced is not None:
+        snaplogic_sync.log(db, kind, "SYNCED", sync, source_id=source_id, master_id=master_id, run_id=run_id, result=synced)
+        out["snaplogic"] = {"master_config_id": synced["master_config_id"], "master_created": synced["master_created"],
+                            "child_config_ids": synced["child_config_ids"], "tables": synced["tables"]}
+    return out
+
+
+# ---------------------------------------------------------------- SnapLogic config tables (V070)
+
+
+@router.get("/api/hub/snaplogic/status")
+def snaplogic_status(db: Db = Depends(current_db)):
+    """Whether onboarding also writes SnapLogic's config tables, and which ones (Admin, SNAPLOGIC_SYNC)."""
+    sync = snaplogic_sync.setting(db)
+    return {"enabled": sync["enabled"], "tables": snaplogic_sync.sc.tables(sync), "defaults": sync["defaults"],
+            "child_pipeline_by_type": sync["child_pipeline_by_type"]}
+
+
+@router.post("/api/hub/snaplogic/preview")
+def snaplogic_preview(body: ControlIn, db: Db = Depends(current_db)):
+    """The master and detail rows an onboarding would write to SnapLogic's tables; nothing is written."""
+    header, rows, errors = ingestion_control.validate(body.model_dump())
+    sync = snaplogic_sync.setting(db)
+    if not header.get("domain_name"):
+        header["domain_name"] = _domain_name(db, header.get("domain_id"))
+    who = (db.query("SELECT CURRENT_USER() AS U") or [{"u": "UNKNOWN"}])[0]["u"]
+    return {"valid": not errors, "errors": errors, **snaplogic_sync.preview(header, rows, sync, str(who))}
+
+
+class RetryIn(BaseModel):
+    # corrections to the saved answers: blocks merged key by key (source, target, load, snaplogic), tables replaced
+    changes: dict = Field(default_factory=dict)
+
+
+@router.post("/api/hub/snaplogic/preview-share")
+def snaplogic_preview_share(body: "ShareOnboard", db: Db = Depends(current_db)):
+    """The SnapLogic rows a share onboarding would write after it lands; nothing is written."""
+    database, schema = _ident(body.database, "database"), _ident(body.schema_name, "schema")
+    payload = share_control_payload(body, database, schema, [])
+    return snaplogic_preview(ControlIn(**payload), db)
+
+
+@router.post("/api/hub/snaplogic/sync/{sync_id}/retry")
+def snaplogic_retry(sync_id: str, body: Optional[RetryIn] = None, db: Db = Depends(current_db)):
+    """Write a share's SnapLogic rows again after its sync failed (its data had already landed), with any corrections
+    to the answers (for example the primary keys a SCD2 Bronze load needs)."""
+    found = db.query(f"""SELECT SYNC_ID, KIND, STATUS, RUN_ID, REQUEST FROM {snaplogic_sync.LOG}
+                          WHERE SYNC_ID = %s""", (sync_id,))
+    if not found:
+        raise HTTPException(404, "sync attempt not found")
+    attempt = found[0]
+    if attempt["status"] != "FAILED" or attempt["kind"] != "SHARE" or not attempt.get("request"):
+        raise HTTPException(409, "Only a failed share sync can be retried here")
+    request = attempt["request"] if isinstance(attempt["request"], dict) else json.loads(attempt["request"])
+    for block, value in ((body.changes if body else {}) or {}).items():
+        if block == "tables" and isinstance(value, list):
+            request["tables"] = value
+        elif block in ("source", "target", "load", "snaplogic") and isinstance(value, dict):
+            request[block] = {**dict(request.get(block) or {}), **value}
+        elif block in ("primary_keys", "delta_keys") and isinstance(value, dict):
+            column = "source_primary_keys" if block == "primary_keys" else "source_delta_key"
+            keys = {str(k).upper(): v for k, v in value.items()}
+            request["tables"] = [{**t, column: keys.get(str(t.get("source_table_sql") or "").upper(), t.get(column))}
+                                 for t in request.get("tables") or []]
+    if not snaplogic_sync.setting(db)["enabled"]:
+        raise HTTPException(409, "The SnapLogic sync is off (Admin, SNAPLOGIC_SYNC)")
+    out = _create_control(db, request, "SHARE", attempt.get("run_id"))
+    db.execute(f"UPDATE {snaplogic_sync.LOG} SET STATUS = 'RETRIED' WHERE SYNC_ID = %s", (sync_id,))
+    return out
 
 
 @router.get("/api/hub/ingestion-control")
@@ -348,10 +444,18 @@ def edit_control(master_id: int, child_id: int, body: ControlEdit, db: Db = Depe
                             WHERE MASTER_ID = %s AND CHILD_ID = %s""",
                        (*[row.get(c) for c in fields], int(master_id), int(child_id)))
             _history(db, master_id, child_id, action, {**{k: current.get(k) for k in ingestion_control.COLUMNS}, **{c: row.get(c) for c in fields}})
+            sync = snaplogic_sync.setting(db)
+            synced = snaplogic_sync.write_edit(db, current, {**current, **row}, sync) if sync["enabled"] else None
     except Exception as exc:
         raise _snowflake_error(exc) from exc
-    return {"master_id": int(master_id), "child_id": int(child_id), "action": action, "is_active": bool(row.get("is_active")),
-            "changed": fields}
+    out = {"master_id": int(master_id), "child_id": int(child_id), "action": action, "is_active": bool(row.get("is_active")),
+           "changed": fields}
+    if synced is not None:
+        snaplogic_sync.log(db, "EDIT", "SKIPPED" if synced.get("skipped") else "SYNCED", sync, master_id=int(master_id),
+                           error=synced.get("skipped"),
+                           result={"child_config_ids": [synced["child_config_id"]]} if synced.get("child_config_id") else None)
+        out["snaplogic"] = synced
+    return out
 
 
 # ---------------------------------------------------------------- Snowflake shares
@@ -411,6 +515,66 @@ class ShareOnboard(ShareTarget):
     domain_id: Optional[str] = None
     landing_database: Optional[str] = Field(default=None, max_length=255)
     landing_schema: Optional[str] = Field(default=None, max_length=255)
+    # what SnapLogic needs to keep loading the share (written only when the SNAPLOGIC_SYNC setting is on):
+    # bronze_schema, bronze_database, load_type, bronze_load_type, load_frequency, schedule_cron, is_active,
+    # primary_keys {table: "COL1, COL2"}, delta_keys {table: COL}, source_system_desc, airflow_source_system,
+    # silver_command_name, target_account, child_pipeline_name
+    snaplogic: Optional[dict] = None
+
+
+def share_control_payload(body: "ShareOnboard", database: str, schema: str, landed: list[dict]) -> dict:
+    """The ingestion wizard's answers for a landed share, so its SnapLogic rows are written exactly like an external
+    source's (services/source/snaplogic_config: SOURCE_DATABASE_PATH the share, SOURCE_SCHEMA_FILE the schema,
+    SOURCE_TABLE_SQL the table, SOURCE_FILE_TYPE TABLE)."""
+    from services.source import snaplogic_config as sc
+
+    snap = dict(body.snaplogic or {})
+    d = sc.DEFAULT_SETTING["defaults"]
+    where = {str(t.get("object") or "").upper(): str(t.get("landing_table") or "") for t in landed}
+    first = next((w for w in where.values() if w.count(".") == 2), "")
+    landing_db, landing_schema = (first.split(".")[:2] if first else [body.landing_database or "", body.landing_schema or ""])
+    pks, deltas = dict(snap.get("primary_keys") or {}), dict(snap.get("delta_keys") or {})
+    tables = []
+    for t in sorted(where) or sorted({x.upper() for x in body.tables}):
+        landed_as = where.get(t, "")
+        tables.append({"source_table_sql": t, "landing_table": landed_as.split(".")[-1] if landed_as else None,
+                       "source_primary_keys": pks.get(t) or pks.get(t.lower()), "source_delta_key": deltas.get(t) or deltas.get(t.lower())})
+    return {
+        "source": {"source_name": body.source_system_name, "source_type": "SNOWFLAKE_SHARE", "source_file_type": "TABLE",
+                   "source_database_path": database, "source_schema_file": schema, "domain_id": body.domain_id,
+                   "source_system_desc": snap.get("source_system_desc"), "airflow_source_system": snap.get("airflow_source_system"),
+                   "silver_command_name": snap.get("silver_command_name")},
+        "target": {"landing_database": landing_db, "landing_schema": landing_schema, "bronze_schema": snap.get("bronze_schema"),
+                   "bronze_database": snap.get("bronze_database"), "target_account": snap.get("target_account") or d["target_account"]},
+        "load": {"load_type": snap.get("load_type") or d["load_type"], "bronze_load_type": snap.get("bronze_load_type") or d["bronze_load_type"],
+                 "load_frequency": snap.get("load_frequency") or d["load_frequency"], "job_trigger_time": snap.get("schedule_cron"),
+                 "is_active": snap.get("is_active") is True},
+        "snaplogic": {"snaplogic_project_name": d["snaplogic_project_name"], "parent_pipeline_name": d["parent_pipeline_name"],
+                      "child_pipeline_name": snap.get("child_pipeline_name") or sc.child_pipeline("SNOWFLAKE_SHARE", sc.DEFAULT_SETTING)},
+        "tables": tables,
+        "comments": f"Onboarded from share {database}.{schema}",
+    }
+
+
+def _share_snaplogic(db: Db, body: "ShareOnboard", database: str, schema: str, run_id: Optional[str], landed: list[dict]) -> Optional[dict]:
+    """After a share has landed: its SnapLogic rows, or why not. Never undoes the landing; a failure is kept with what
+    to write again (POST /api/hub/snaplogic/sync/<id>/retry)."""
+    sync = snaplogic_sync.setting(db)
+    if not sync["enabled"]:
+        return None
+    if not body.snaplogic:
+        sync_id = snaplogic_sync.log(db, "SHARE", "SKIPPED", sync, run_id=run_id,
+                                     error="no SnapLogic answers were given with the share onboarding")
+        return {"ok": False, "skipped": True, "sync_id": sync_id,
+                "detail": "SnapLogic rows were not written: the onboarding had no SnapLogic answers"}
+    payload = share_control_payload(body, database, schema, landed)
+    try:
+        out = _create_control(db, payload, "SHARE", run_id)
+    except HTTPException as exc:
+        detail = exc.detail if isinstance(exc.detail, str) else json.dumps(exc.detail)
+        sync_id = snaplogic_sync.log(db, "SHARE", "FAILED", sync, run_id=run_id, request=payload, error=detail[:4000])
+        return {"ok": False, "sync_id": sync_id, "detail": detail[:600], "retry": f"/api/hub/snaplogic/sync/{sync_id}/retry"}
+    return {"ok": True, **out.get("snaplogic", {}), "master_id": out["master_id"]}
 
 
 def mount_sql(database: str, provider_account: str, share_name: str) -> str:
@@ -517,8 +681,12 @@ def onboard_share(body: ShareOnboard, db: Db = Depends(current_db)):
         steps.append({"step": name, "ok": ok, "detail": _step_detail(name, result)})
         if not ok:
             return {"run_id": run_id, "ok": False, "steps": steps, "continue_at": f"/runs/{run_id}/source"}
-    return {"run_id": run_id, "ok": True, "steps": steps, "tables": (result or {}).get("tables", []),
-            "continue_at": f"/runs/{run_id}/profile"}
+    landed = (result or {}).get("tables", [])
+    out = {"run_id": run_id, "ok": True, "steps": steps, "tables": landed, "continue_at": f"/runs/{run_id}/profile"}
+    snaplogic = _share_snaplogic(db, body, database, schema, run_id, landed)
+    if snaplogic is not None:
+        out["snaplogic"] = snaplogic
+    return out
 
 
 def _step_ok(name: str, result: Any) -> bool:

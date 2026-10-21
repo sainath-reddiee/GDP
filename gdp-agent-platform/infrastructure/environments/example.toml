@@ -34,6 +34,15 @@ pr_sync_task = false                      # sync pull requests every 30 minutes 
 # github_integration = "AI_PLATFORM_GITHUB_EAI"   # external access integration for GitHub publishing (an admin creates it)
 actual_cost_from_account_usage = false    # read actual Cortex credits (needs SNOWFLAKE.USAGE_VIEWER)
 
+[snaplogic]
+# Optional: onboarding also writes the tables SnapLogic triggers from (one master row per source, one detail row per
+# table). Seeded once into Admin (setting SNAPLOGIC_SYNC); after that it is changed there. Never the live GDP_* tables.
+# The tables belong to their owners: --check says whether the roles that onboard can write them, --admin-sql writes the
+# grants for that owner. writer_roles defaults to <role_prefix>_DATA_ENGINEER and <role_prefix>_PLATFORM_ADMIN.
+# enabled = false
+# table_prefix = "DEV_GDP_UTIL_DB.CONFIG.AODS_"
+# writer_roles = ["AODS_DATA_ENGINEER", "AODS_PLATFORM_ADMIN"]
+
 [environment]
 # Optional: which environment this deployment is, and the real database (or DATABASE.SCHEMA) that plays each role
 # here, so QA packs and Data Quality suites written in another environment read this one's tables. Saved once, when no

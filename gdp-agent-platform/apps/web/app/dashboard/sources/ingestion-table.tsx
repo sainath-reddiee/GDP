@@ -51,7 +51,7 @@ export function IngestionTable({ controls: initial }: { controls: IngestionContr
     return (
       <div className="rounded-xl border border-dashed px-4 py-8 text-center text-sm text-muted-foreground" data-testid="ingestion-empty">
         No SnapLogic ingestion configured yet.{" "}
-        <Link href="/dashboard/onboarding?type=source&branch=external" className="font-medium text-primary hover:underline">Onboard an external source</Link>
+        <Link href="/dashboard/onboarding?type=source&branch=external" className="font-medium text-primary hover:underline">Onboard other sources</Link>
       </div>
     );
   }
@@ -110,7 +110,7 @@ export function IngestionTable({ controls: initial }: { controls: IngestionContr
         );
       })}
       <Link href="/dashboard/onboarding?type=source&branch=external" className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline">
-        <Plus className="h-3.5 w-3.5" /> Onboard another external source
+        <Plus className="h-3.5 w-3.5" /> Onboard another source
       </Link>
       <Drawer open={!!detail} onClose={() => setDetail(null)} wide
               title={detail ? <span className="font-mono">{detail.row.landing_table}</span> : ""}

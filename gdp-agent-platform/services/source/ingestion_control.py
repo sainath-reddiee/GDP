@@ -21,7 +21,10 @@ from services.source.identifiers import landing_table_name
 
 TABLE = "CORE.INGESTION_CONTROL_CONFIG"
 HISTORY = "CORE.INGESTION_CONTROL_HISTORY"
-SOURCE_TYPES = ("ORACLE", "SQLSERVER", "POSTGRES", "MYSQL", "SALESFORCE", "REST_API", "S3", "SFTP", "OTHER")
+SOURCE_TYPES = ("ORACLE", "SQLSERVER", "POSTGRES", "MYSQL", "SALESFORCE", "REST_API", "S3", "SFTP", "OTHER",
+                # the types SnapLogic's config tables use (services/source/snaplogic_config); POSTGRES stays valid and is
+                # written to SnapLogic as POSTGRESQL
+                "SNOWFLAKE_SHARE", "SNOWFLAKE", "POSTGRESQL", "SHAREPOINT", "S3_DEALIQ", "DNB", "ZOOMINFO_API")
 FILE_TYPES = ("TABLE", "CSV", "JSON", "PARQUET", "XLSX")
 LOAD_TYPES = ("APPEND", "TRUNCATE", "SCD2")
 BRONZE_LOAD_TYPES = ("TRUNCATE", "SCD2", "MERGE")
@@ -35,7 +38,7 @@ IDENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_$]{0,127}$")
 OBJECT = re.compile(r"^[A-Za-z_][A-Za-z0-9_$]*(\.[A-Za-z_][A-Za-z0-9_$]*){0,2}$")
 STAGE = re.compile(r"^@?[A-Za-z_][A-Za-z0-9_$]*(\.[A-Za-z_][A-Za-z0-9_$]*){0,2}(/[^\s;']*)?$")
 PIPELINE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 _.\-/]{0,255}$")
-ACCOUNT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 _.\-]{0,255}$")
+ACCOUNT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 _.\-/]{0,255}$")   # SnapLogic accounts are paths: GDP_Integration/Snowflake_GDP_Dev
 CRON = re.compile(r"^\s*(\S+\s+){4}\S+(\s+[A-Za-z_]+(?:/[A-Za-z_]+)*)?\s*$")
 TIMESTAMP = re.compile(r"^\d{4}-\d{2}-\d{2}([ T]\d{2}:\d{2}(:\d{2})?)?$")
 SECRET_REF = re.compile(r"^[A-Za-z][A-Za-z0-9_.:/\-]{0,255}$")
@@ -58,6 +61,11 @@ def looks_like_token(value: str) -> bool:
         return True
     return len(v) >= 32 and re.fullmatch(r"[A-Za-z0-9+/=_\-]+", v) is not None and not re.search(r"[./:]", v) \
         and sum(c.isdigit() for c in v) >= 4 and sum(c.isalpha() for c in v) >= 8
+
+
+def _carries_token(value: str) -> bool:
+    """An account name with a token pasted into it, whole or as one of its parts (the live config has had one)."""
+    return looks_like_token(value) or any(looks_like_token(p) for p in re.split(r"[\s/:;,=?&]+", value) if p)
 
 
 def one_statement(sql: str) -> bool:
@@ -127,8 +135,10 @@ def validate(payload: Dict[str, Any]) -> Tuple[Dict[str, Any], List[Dict[str, An
     if file_type != "XLSX":
         sheet = ""
     source_account = _text(src.get("source_account"), 256)
-    if source_account and not ACCOUNT.match(source_account):
-        errors["source.source_account"] = "Letters, digits, spaces, _ . and -"
+    if source_account and _carries_token(source_account):
+        errors["source.source_account"] = "This holds a token. Enter the SnapLogic account name; tokens belong in the vault"
+    elif source_account and not ACCOUNT.match(source_account):
+        errors["source.source_account"] = "Letters, digits, spaces, _ . - and /"
     schema_file = _text(src.get("source_schema_file"), 256)
     db_path = _text(src.get("source_database_path"), 512)
 
@@ -158,8 +168,13 @@ def validate(payload: Dict[str, Any]) -> Tuple[Dict[str, Any], List[Dict[str, An
     if config_table and not OBJECT.match(config_table):
         errors["target.config_table"] = "A table name such as DB.SCHEMA.TABLE"
     target_account = _text(tgt.get("target_account"), 256)
-    if target_account and not ACCOUNT.match(target_account):
-        errors["target.target_account"] = "Letters, digits, spaces, _ . and -"
+    if target_account and _carries_token(target_account):
+        errors["target.target_account"] = "This holds a token. Enter the SnapLogic account name; tokens belong in the vault"
+    elif target_account and not ACCOUNT.match(target_account):
+        errors["target.target_account"] = "Letters, digits, spaces, _ . - and /"
+    bronze_database = _upper(tgt.get("bronze_database"))
+    if bronze_database and not IDENT.match(bronze_database):
+        errors["target.bronze_database"] = "Bronze database must be a plain Snowflake name"
 
     # load
     load_type = _upper(load.get("load_type"), 32)
@@ -278,10 +293,27 @@ def validate(payload: Dict[str, Any]) -> Tuple[Dict[str, Any], List[Dict[str, An
             "source_delete_key": dkey or None, "source_delete_key_value": dvalue or None,
             "source_delete_query": dquery or None, "api_url": api_url or None, "api_key": api_key or None,
         })
+    description = _text(src.get("source_system_desc"), 1000)
+    airflow = _text(src.get("airflow_source_system"), 128)
+    if airflow and not NAME.match(airflow):
+        errors["source.airflow_source_system"] = "Letters, digits and _; starts with a letter"
+    silver_command = _text(src.get("silver_command_name"), 256)
+    if silver_command and not PIPELINE.match(silver_command):
+        errors["source.silver_command_name"] = "Letters, digits, spaces, _ . - and /"
+    domain_name = _text(src.get("domain_name"), 128)
+    schedule_cron = _text(load.get("schedule_cron"), 64) or trigger
+    if schedule_cron and not CRON.match(schedule_cron):
+        errors["load.schedule_cron"] = "Five cron fields and an optional time zone, such as 0 2 * * * UTC"
+    schedule_frequency = _upper(load.get("schedule_frequency"), 32) or frequency
     header = {"source_name": source_name, "source_type": source_type, "domain_id": _text(src.get("domain_id"), 36) or None,
               "comments": _text(payload.get("comments"), 4000) or None, "parent_pipeline_name": parent,
               "landing_database": landing_db, "landing_schema": landing_schema, "load_frequency": frequency,
-              "job_trigger_time": trigger or None, "is_active": is_active}
+              "job_trigger_time": trigger or None, "is_active": is_active,
+              # read by services/source/snaplogic_config only (CORE stores them only when the SnapLogic sync is on)
+              "source_system_desc": description or None, "airflow_source_system": airflow or None,
+              "silver_command_name": silver_command or None, "domain_name": domain_name or None,
+              "schedule_cron": schedule_cron or None, "schedule_frequency": schedule_frequency or None,
+              "bronze_database": bronze_database or None}
     return header, rows, errors
 
 

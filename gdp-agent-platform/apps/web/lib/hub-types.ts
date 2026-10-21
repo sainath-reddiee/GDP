@@ -41,7 +41,16 @@ export type LandingDefaults = { default: { landing_database: string; landing_sch
 export type ShareList = { shares: { name: string; owner_account: string; database_name: string | null; comment?: string }[]; mounted: string[] };
 export type ShareTable = { table_name: string; table_type?: string; row_count?: number | null; bytes?: number | null; last_altered?: string | null };
 export type OnboardStep = { step: string; ok: boolean; detail: string };
-export type OnboardResult = { run_id: string; ok: boolean; steps: OnboardStep[]; continue_at: string; tables?: unknown[] };
+export type OnboardResult = { run_id: string; ok: boolean; steps: OnboardStep[]; continue_at: string; tables?: unknown[];
+  snaplogic?: SnapLogicOutcome };
+
+/** SnapLogic's config tables (V070, Admin setting SNAPLOGIC_SYNC): what onboarding writes there. */
+export type SnapLogicStatus = { enabled: boolean; tables: { master: string; detail: string };
+  defaults: Record<string, string | null>; child_pipeline_by_type: Record<string, string> };
+export type SnapLogicPreview = { valid: boolean; errors: Record<string, string>; enabled: boolean;
+  tables: { master: string; detail: string }; master: Record<string, unknown>; details: Record<string, unknown>[] };
+export type SnapLogicOutcome = { ok: boolean; skipped?: boolean; sync_id?: string | null; detail?: string; retry?: string;
+  master_config_id?: number; master_created?: boolean; child_config_ids?: number[]; tables?: { master: string; detail: string } };
 
 // ---------------------------------------------------------------- profiles
 

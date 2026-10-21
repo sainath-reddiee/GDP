@@ -43,7 +43,7 @@ from typing import Any, Dict, List, Tuple
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from infrastructure.seed_knowledge import _stage_dir, list_skills, seed_environment, seed_inputs_digest, seed_platform  # noqa: E402
+from infrastructure.seed_knowledge import _stage_dir, list_skills, seed_environment, seed_inputs_digest, seed_platform, seed_snaplogic  # noqa: E402
 from services.common.platform_schema import PLATFORM_SCHEMA  # noqa: E402
 from services.workflow.graph import load_graph  # noqa: E402
 
@@ -529,6 +529,7 @@ def apply_to_connection(con, database: str, warehouse: str, variables: Dict[str,
 
     # the environment file's [environment] bindings, before the seed resolves repository suite files with them
     log.extend(seed_environment(cur, database, environment))
+    log.extend(seed_snaplogic(cur, database, (environment or {}).get("snaplogic")))
     inputs = seed_inputs_digest()
     if migrated or state.changed("seed/platform", inputs):
         log.extend(seed_platform(cur, database) or [])

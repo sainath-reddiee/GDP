@@ -12,7 +12,7 @@ type Branch = "share" | "external";
 
 const BRANCHES: Choice<Branch>[] = [
   { key: "share", label: "Snowflake share", icon: Share2, slug: "snowflake-share" },
-  { key: "external", label: "External source", icon: CloudCog, slug: "external" },
+  { key: "external", label: "Other sources (PostgreSQL, Oracle, SQL Server, Salesforce, APIs, files)", icon: CloudCog, slug: "other-sources" },
 ];
 
 export function OnboardWizard({ initialBranch, shares, domains, databases, landing, user }: {
