@@ -219,6 +219,9 @@ def test_an_edit_follows_its_snaplogic_row_or_is_skipped_when_there_is_none(clie
     assert r.status_code == 200 and r.json()["snaplogic"] == {"child_config_id": 501, "table": TABLES["detail"]}
     update = next((s, p) for s, p in holder["db"].executed if s.startswith(f"UPDATE {DETAIL_T}"))
     assert "IS_ACTIVE = %s" in update[0] and update[1][-1] == 501 and False in update[1]
+    # one clock: an edit's UPDATED_AT is UTC like the CREATED_AT new rows carry (it once came out 7 hours earlier)
+    assert "UPDATED_AT = SYSDATE()" in update[0] and "CURRENT_TIMESTAMP" not in update[0]
+    assert sc.created_at().count(":") == 2 and "UTC" in sc.created_at.__doc__
     holder["db"] = FakeDb({**_setting(ON), "SELECT * FROM CORE.INGESTION_CONTROL_CONFIG": [{**linked, "snaplogic_child_config_id": None}]})
     r = c.patch("/api/hub/ingestion-control/7/11", json={"changes": {"is_active": False}})
     assert r.status_code == 200 and "before the SnapLogic sync was on" in r.json()["snaplogic"]["skipped"]

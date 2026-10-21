@@ -217,4 +217,5 @@ def detail_params(details: List[Dict[str, Any]]) -> List[Any]:
 
 def update_detail_sql(table: str, columns: List[str]) -> str:
     sets = ", ".join(f"{c} = %s::TIMESTAMP_NTZ" if c == "LAST_RUN_TIMESTAMP" else f"{c} = %s" for c in columns)
-    return f"UPDATE {table} SET {sets}, UPDATED_AT = CURRENT_TIMESTAMP()::TIMESTAMP_NTZ WHERE CHILD_CONFIG_ID = %s"
+    # UTC, like the creation time new rows carry (created_at()); CURRENT_TIMESTAMP would be the session's local time
+    return f"UPDATE {table} SET {sets}, UPDATED_AT = SYSDATE() WHERE CHILD_CONFIG_ID = %s"
