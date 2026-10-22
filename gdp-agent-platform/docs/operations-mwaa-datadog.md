@@ -67,7 +67,15 @@ DATADOG_SITE=<your site: datadoghq.com, us3.datadoghq.com, us5.datadoghq.com, da
 DATADOG_API_KEY=<API key>
 DATADOG_APP_KEY=<application key>
 DATADOG_APP_URL=<optional: your custom Datadog web address, for links>
+DATADOG_HOST=<optional: the pipelines' hosts, comma separated, * wildcards>
+DATADOG_SERVICE=<optional: the pipelines' services, comma separated, * wildcards>
 ```
+
+`DATADOG_HOST` and `DATADOG_SERVICE` matter when one Datadog organisation holds many apps: every log search the
+platform makes (failed tasks, incidents, AI diagnosis, the connection test) is kept to those hosts and services, as
+`host:(a OR b)` and `service:(x OR y)`. The app shows only how many are set, never the names. Admin, Integrations,
+Datadog has Hosts and Services fields that replace them when filled, and a log search can place them itself with
+`{host}` and `{service}`.
 
 The application key needs only the scopes `logs_read_data` and `monitors_read`; create a scoped key for the
 platform. Only Datadog's own hosts (`api.<site>`) ever receive the keys, and the app never shows them, even to admins.
@@ -92,6 +100,8 @@ can run together: `--mwaa-env <env> --region <region> --datadog`.
      `dag_id:{dag_id} task_id:{task_id}`, fits the Datadog Airflow integration. `{dag_id}`, `{task_id}`, `{run_id}`,
      `{env_id}` and `{try_number}` are filled in from the incident, and a term whose value is missing is left out.
      Add fixed terms as needed, for example `service:airflow env:prod`.
+   - **Hosts and services.** The pipelines' Datadog hosts and services (comma separated, `*` wildcards). Empty uses
+     `DATADOG_HOST` and `DATADOG_SERVICE` from the API host.
    - **Window and size.** Minutes before the failure, and the most log lines to read.
    - **When a task fails, read its error from.** Airflow, then Datadog when Airflow's log cannot be read (the
      default), or Datadog first. The error is stored with the task run and takes the usual path, described below.

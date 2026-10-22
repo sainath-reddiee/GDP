@@ -111,16 +111,20 @@ def check_datadog() -> bool:
     cfg = dd.config_from_env()
     shown = dd.public(cfg)
     print(f"\nDatadog: site {shown['site']}, web {shown['app_url']}, API key {'set' if shown['api_key_set'] else 'missing'}, "
-          f"application key {'set' if shown['app_key_set'] else 'missing'}")
+          f"application key {'set' if shown['app_key_set'] else 'missing'}, {shown['hosts_set']} host(s), "
+          f"{shown['services_set']} service(s)")
     if cfg["problems"]:
         for p in cfg["problems"]:
             print(f"{FAIL}{p}")
         return False
-    result = dd.Client(cfg).check()
+    scoped = bool(cfg["hosts"] or cfg["services"])
+    # the hosts and services from DATADOG_HOST / DATADOG_SERVICE, so a count of 0 says they match no logs
+    result = dd.Client(cfg).check(dd.scoped_query("", {}, dd.scope({}, cfg)) or "*")
     print(f"{OK if result['api_key'] else FAIL}API key " + ("valid" if result["api_key"] else result["errors"].get("api_key", "invalid")))
     if result["api_key"]:
         logs_ok, mons_ok = "logs" not in result["errors"], "monitors" not in result["errors"]
-        print(f"{OK if logs_ok else FAIL}log search: " + (f"{result['logs']} entries in the last 15 minutes" if logs_ok
+        where = " for the hosts and services set" if scoped else ""
+        print(f"{OK if logs_ok else FAIL}log search: " + (f"{result['logs']} entries in the last 15 minutes{where}" if logs_ok
               else f"{result['errors']['logs']} (the application key needs logs_read_data)"))
         print(f"{OK if mons_ok else FAIL}monitors: " + (f"{result['monitors']} visible" if mons_ok
               else f"{result['errors']['monitors']} (the application key needs monitors_read)"))

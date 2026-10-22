@@ -49,7 +49,7 @@ def test_keys_come_from_the_environment_and_never_leave_it():
     assert dd.default_app_url("datadoghq.eu") == "https://app.datadoghq.eu" and dd.default_app_url("ap1.datadoghq.com") == "https://ap1.datadoghq.com"
     shown = dd.public(cfg)
     assert shown == {"site": "us3.datadoghq.com", "app_url": "https://us3.datadoghq.com", "api_key_set": True,
-                     "app_key_set": True, "configured": True, "problems": []}
+                     "app_key_set": True, "hosts_set": 0, "services_set": 0, "configured": True, "problems": []}
     assert "a" * 32 not in repr(shown) and "b" * 40 not in repr(shown)
     assert dd.normalize_site("https://app.datadoghq.eu/") == "datadoghq.eu" and dd.normalize_site("") == "datadoghq.com"
     missing = dd.config_from_env({})
@@ -416,3 +416,43 @@ def test_a_cut_list_never_resolves_a_monitor_it_did_not_read(monkeypatch):
     monkeypatch.setattr(dd, "MONITOR_PAGES", 1)
     monkeypatch.setattr(dd, "MONITOR_PAGE", 1)
     assert dm.process(store, FakeClient([monitor(99, "OK")]), ON, NOW + timedelta(minutes=2))["resolved"] == 0
+
+
+# ---------------------------------------------------------------- host and service: one organisation, many apps
+
+def test_host_and_service_come_from_the_environment_and_are_never_shown():
+    cfg = dd.config_from_env({**ENV, "DATADOG_HOST": "ip-10-0-1-5, ip-10-0-2-*", "DATADOG_SERVICE": "airflow-gdp"})
+    assert cfg["hosts"] == ["ip-10-0-1-5", "ip-10-0-2-*"] and cfg["services"] == ["airflow-gdp"] and not cfg["problems"]
+    shown = dd.public(cfg)
+    assert shown["hosts_set"] == 2 and shown["services_set"] == 1
+    assert "ip-10-0-1-5" not in repr(shown) and "airflow-gdp" not in repr(shown)
+    bad = dd.config_from_env({**ENV, "DATADOG_SERVICE": "ok, not ok"})
+    assert bad["problems"] == ["DATADOG_SERVICE has 1 name(s) that are not Datadog service names"]
+
+
+def test_the_setting_s_hosts_and_services_win_over_the_environment():
+    value, problems = dd.validate_setting({"hosts": ["mwaa-worker-*", " "], "services": ["bad name!"]})
+    assert value["hosts"] == ["mwaa-worker-*"] and problems == ["'bad name!' is not a Datadog service name"]
+    cfg = {"hosts": ["env-host"], "services": ["env-svc"]}
+    assert dd.scope({"hosts": ["admin-host"], "services": []}, cfg) == {"host": ["admin-host"], "service": ["env-svc"]}
+    assert dd.scope(dd.DEFAULT_SETTING, None) == {"host": [], "service": []}
+
+
+def test_host_and_service_narrow_every_log_search():
+    scopes = {"host": ["i-0abc", "ip-10-*"], "service": ["airflow"]}
+    # added when the search does not name them; * stays a wildcard, other characters are escaped
+    assert dd.scoped_query("dag_id:{dag_id} task_id:{task_id}", {"dag_id": "orders"}, scopes) == \
+        r"dag_id:orders host:(i\-0abc OR ip\-10\-*) service:airflow"
+    # placed where the search names them, and not added twice
+    assert dd.scoped_query("service:{service} dag_id:{dag_id}", {"dag_id": "orders"}, {"host": [], "service": ["mwaa"]}) == \
+        "service:mwaa dag_id:orders"
+    # none set: the search is unchanged, and a {host} term without hosts is left out
+    assert dd.scoped_query("dag_id:{dag_id} host:{host}", {"dag_id": "x"}, {"host": [], "service": []}) == "dag_id:x"
+
+
+def test_an_incident_s_search_carries_the_host_and_service():
+    c, http = client({"/api/v2/logs/events/search": [(200, {"data": []}, {})]})
+    c.cfg = {**c.cfg, "hosts": ["env-host"], "services": ["airflow-gdp"]}
+    dd.incident_logs({"dag_id": "orders", "task_id": "load", "first_seen": "2026-10-22T10:00:00+00:00"},
+                     {**ON, "hosts": ["admin-host"]}, c, now=datetime(2026, 10, 22, 12, tzinfo=timezone.utc))
+    assert http.calls[0]["body"]["filter"]["query"] == "dag_id:orders task_id:load host:admin\\-host service:airflow\\-gdp"

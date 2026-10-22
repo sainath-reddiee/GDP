@@ -6,7 +6,9 @@ import { api, attemptValue } from "@/lib/api";
 
 /** What the API host has; never a key. */
 export type DatadogConnection = {
-  site: string; app_url: string; api_key_set: boolean; app_key_set: boolean; configured: boolean; problems: string[];
+  site: string; app_url: string; api_key_set: boolean; app_key_set: boolean;
+  /** how many DATADOG_HOST / DATADOG_SERVICE names the API host has (never the names) */
+  hosts_set: number; services_set: number; configured: boolean; problems: string[];
 };
 /** The DATADOG platform setting (services/ops/datadog.py DEFAULT_SETTING). */
 export type DatadogSetting = {
@@ -14,6 +16,8 @@ export type DatadogSetting = {
   /** where a failed task's error is read from: Airflow then Datadog, Datadog first, or Airflow only */
   failure_logs: "fallback" | "first" | "off";
   monitors: boolean; monitor_tags: string[]; monitor_states: ("Alert" | "Warn" | "No Data")[]; default_severity: "P1" | "P2" | "P3" | "P4";
+  /** the pipelines' Datadog hosts and services; empty: DATADOG_HOST / DATADOG_SERVICE on the API host */
+  hosts: string[]; services: string[];
 };
 export type DatadogStatus = { connection: DatadogConnection; setting: DatadogSetting };
 export type DatadogTest = {

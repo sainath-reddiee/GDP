@@ -14,8 +14,10 @@ import {
 type Msg = { tone: "ok" | "info" | "error"; text: string } | null;
 const STATES = ["Alert", "Warn", "No Data"] as const;
 const TOKENS: [string, string][] = [["{dag_id}", "the incident's DAG"], ["{task_id}", "its failing task"], ["{run_id}", "the DAG run"],
-  ["{env_id}", "the platform's Airflow environment id"], ["{try_number}", "the task try"]];
-const ENV_LINES = "DATADOG_SITE=\nDATADOG_API_KEY=\nDATADOG_APP_KEY=\nDATADOG_APP_URL=";
+  ["{env_id}", "the platform's Airflow environment id"], ["{try_number}", "the task try"],
+  ["{host}", "the hosts below"], ["{service}", "the services below"]];
+const ENV_LINES = "DATADOG_SITE=\nDATADOG_API_KEY=\nDATADOG_APP_KEY=\nDATADOG_APP_URL=\nDATADOG_HOST=\nDATADOG_SERVICE=";
+const names = (text: string) => text.split(",").map((t) => t.trim()).filter(Boolean);
 
 function Item({ done, title, children }: { done: boolean; title: string; children: React.ReactNode }) {
   return (
@@ -46,13 +48,15 @@ export function DatadogTab({ status, mayEdit, mayTest, mayOperate, onMsg }: {
   const [test, setTest] = useState<DatadogTest | null>(null);
   const [form, setForm] = useState<DatadogSetting | null>(status?.setting ?? null);
   const [tags, setTags] = useState((status?.setting.monitor_tags ?? []).join(", "));
+  const [hosts, setHosts] = useState((status?.setting.hosts ?? []).join(", "));
+  const [services, setServices] = useState((status?.setting.services ?? []).join(", "));
   if (!status || !form) {
     return <section className="surface p-5 text-sm text-muted-foreground">Datadog needs the latest API build (restart the API after updating).</section>;
   }
   const c = status.connection;
   const set = (patch: Partial<DatadogSetting>) => setForm((f) => (f ? { ...f, ...patch } : f));
   const save = () => start(async () => {
-    const value = { ...form, monitor_tags: tags.split(",").map((t) => t.trim()).filter(Boolean) };
+    const value = { ...form, monitor_tags: names(tags), hosts: names(hosts), services: names(services) };
     const r = await savePlatformSetting("DATADOG", value);
     onMsg(r.ok ? { tone: "ok", text: value.enabled ? "Datadog settings saved. Incidents now use Datadog." : "Datadog settings saved (Datadog is off)." }
       : { tone: /approval|request/i.test(r.error) ? "info" : "error", text: r.error });
@@ -101,6 +105,8 @@ export function DatadogTab({ status, mayEdit, mayTest, mayOperate, onMsg }: {
               <div className="flex gap-2"><dt className="text-muted-foreground">Web</dt><dd><a href={c.app_url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-0.5 font-mono text-primary hover:underline">{c.app_url}<ExternalLink className="h-3 w-3" /></a></dd></div>
               <div className="flex gap-2"><dt className="text-muted-foreground">API key</dt><dd className={c.api_key_set ? "text-emerald-700" : "text-rose-700"}>{c.api_key_set ? "set" : "missing"}</dd></div>
               <div className="flex gap-2"><dt className="text-muted-foreground">Application key</dt><dd className={c.app_key_set ? "text-emerald-700" : "text-rose-700"}>{c.app_key_set ? "set" : "missing"}</dd></div>
+              <div className="flex gap-2"><dt className="text-muted-foreground">Hosts</dt><dd>{c.hosts_set ? `${c.hosts_set} set` : "none (optional)"}</dd></div>
+              <div className="flex gap-2"><dt className="text-muted-foreground">Services</dt><dd>{c.services_set ? `${c.services_set} set` : "none (optional)"}</dd></div>
             </dl>
             {c.problems.length > 0 && <ul className="list-disc pl-4 text-xs text-rose-700">{c.problems.map((p) => <li key={p}>{p}</li>)}</ul>}
           </Item>
@@ -132,9 +138,16 @@ export function DatadogTab({ status, mayEdit, mayTest, mayOperate, onMsg }: {
                hint="Off: nothing is read from Datadog." />
         <fieldset className="space-y-2 rounded-lg border p-3" disabled={!mayEdit}>
           <legend className="px-1 text-xs font-semibold">Logs</legend>
+          <div className="grid gap-2 sm:grid-cols-2">
+            <label className="block space-y-1 text-xs font-medium">Hosts
+              <Input value={hosts} onChange={(e) => setHosts(e.target.value)} placeholder={c.hosts_set ? "From DATADOG_HOST on the API host" : "ip-10-0-1-5, mwaa-worker-*"} className="font-mono text-xs" /></label>
+            <label className="block space-y-1 text-xs font-medium">Services
+              <Input value={services} onChange={(e) => setServices(e.target.value)} placeholder={c.services_set ? "From DATADOG_SERVICE on the API host" : "airflow, gdp-pipelines"} className="font-mono text-xs" /></label>
+          </div>
+          <p className="text-[11px] text-muted-foreground">Keep every search to the pipelines&apos; own logs when Datadog holds many apps. Comma separated, <code className="font-mono">*</code> as a wildcard. Empty uses DATADOG_HOST and DATADOG_SERVICE on the API host, which the app never shows.</p>
           <label className="block space-y-1 text-xs font-medium">Log search for an incident
             <Input value={form.log_query} onChange={(e) => set({ log_query: e.target.value })} className="font-mono text-xs" /></label>
-          <p className="text-[11px] text-muted-foreground">Written in Datadog&apos;s log search syntax, using the tags your pipelines send. Each of these is filled in from the incident; a term whose value is missing is left out:</p>
+          <p className="text-[11px] text-muted-foreground">Written in Datadog&apos;s log search syntax, using the tags your pipelines send. Each of these is filled in from the incident; a term whose value is missing is left out. Hosts and services not named in the search are added to it:</p>
           <ul className="grid gap-0.5 text-[11px] sm:grid-cols-2">{TOKENS.map(([t, d]) => <li key={t}><code className="font-mono">{t}</code> <span className="text-muted-foreground">{d}</span></li>)}</ul>
           <div className="grid gap-2 sm:grid-cols-2">
             <label className="block space-y-1 text-xs font-medium">Minutes before the failure

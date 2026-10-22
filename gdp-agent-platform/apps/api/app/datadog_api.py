@@ -35,7 +35,7 @@ def datadog_test(db: Db = Depends(current_db)):
         return {"ok": False, "connection": dd.public(cfg), "api_key": False, "logs": None, "monitors": None,
                 "errors": {"setup": "; ".join(cfg["problems"])}}
     value = dd.setting(db)
-    sample = dd.log_query(value.get("log_query") or "", {}) or "*"
+    sample = dd.scoped_query(value.get("log_query") or "", {}, dd.scope(value, cfg)) or "*"
     result = dd.Client(cfg).check(sample)
     ok = bool(result["api_key"]) and not result["errors"]
     return {"ok": ok, "connection": dd.public(cfg), **result, "query": sample}

@@ -6,6 +6,12 @@ file the platform writes:
   DATADOG_API_KEY   an API key (identifies the organisation)
   DATADOG_APP_KEY   an application key with logs_read_data and monitors_read (a scoped key is best)
   DATADOG_APP_URL   optional, the web address people open (a custom subdomain); links only, it never gets a key
+  DATADOG_HOST      optional, the host(s) whose logs are the pipelines' (comma separated, * wildcards allowed)
+  DATADOG_SERVICE   optional, the service(s) whose logs are the pipelines' (comma separated, * wildcards allowed)
+Host and service keep the log searches to the pipelines' own logs when one Datadog organisation holds many apps. They
+are kept like the keys (the app shows only how many are set, never the names); the DATADOG setting's hosts and
+services, when an admin fills them, are used instead. A log search names them as {host} and {service}, or, when it
+does not, gets 'host:(a OR b)' and 'service:(x OR y)' added.
 Only Datadog's own hosts (api.<site>) receive the keys: an unknown site is refused, so a changed setting can never
 send them elsewhere. Answers are redacted before they leave this module; error messages never hold a key.
 
@@ -31,7 +37,7 @@ from urllib.parse import quote, urlencode
 
 from services.ops.redact import redact
 
-ENV_KEYS = ("DATADOG_SITE", "DATADOG_API_KEY", "DATADOG_APP_KEY", "DATADOG_APP_URL")
+ENV_KEYS = ("DATADOG_SITE", "DATADOG_API_KEY", "DATADOG_APP_KEY", "DATADOG_APP_URL", "DATADOG_HOST", "DATADOG_SERVICE")
 DEFAULT_SITE = "datadoghq.com"
 # datadoghq.com and its regional subdomains (us3, us5, ap1, ...), datadoghq.eu, ddog-gov.com
 SITE = re.compile(r"^(?:[a-z0-9]{2,8}\.)?(?:datadoghq\.com|datadoghq\.eu|ddog-gov\.com)$")
@@ -43,7 +49,11 @@ LOG_LIMIT_MAX = 1000
 MESSAGE_MAX = 4000
 MONITOR_PAGE = 100
 MONITOR_PAGES = 20
-PLACEHOLDERS = ("dag_id", "task_id", "run_id", "env_id", "try_number")
+PLACEHOLDERS = ("dag_id", "task_id", "run_id", "env_id", "try_number", "host", "service")
+SCOPES = ("host", "service")
+# a host or service name: letters, digits, . _ - : / and * as a wildcard
+SCOPE_VALUE = re.compile(r"^[A-Za-z0-9*][\w.:/*-]{0,199}$")
+SCOPE_MAX = 20
 PLACEHOLDER = re.compile(r"\{([a-z_]+)\}")
 STATES = ("Alert", "Warn", "No Data")
 FAILURE_LOGS = ("fallback", "first", "off")   # Datadog after Airflow's own log, before it, or never for failures
@@ -62,6 +72,8 @@ DEFAULT_SETTING: Dict[str, Any] = {
     "monitor_tags": [],
     "monitor_states": ["Alert", "No Data"],
     "default_severity": "P3",
+    "hosts": [],
+    "services": [],
 }
 
 
@@ -106,8 +118,23 @@ def config_from_env(environ: Optional[Mapping[str, str]] = None) -> Dict[str, An
         problems.append("DATADOG_API_KEY is not set on the API host")
     if not app_key:
         problems.append("DATADOG_APP_KEY is not set on the API host")
+    hosts, bad_hosts = scope_list(env.get("DATADOG_HOST"))
+    services, bad_services = scope_list(env.get("DATADOG_SERVICE"))
+    if bad_hosts:
+        problems.append(f"DATADOG_HOST has {len(bad_hosts)} name(s) that are not Datadog host names")
+    if bad_services:
+        problems.append(f"DATADOG_SERVICE has {len(bad_services)} name(s) that are not Datadog service names")
     return {"site": site, "api_key": api_key, "app_key": app_key, "app_url": app_url or default_app_url(site),
-            "problems": problems}
+            "hosts": hosts, "services": services, "problems": problems}
+
+
+def scope_list(value: Any) -> Tuple[List[str], List[str]]:
+    """(valid names, rejected names) from 'a, b' or a list; at most SCOPE_MAX, duplicates dropped."""
+    items = value if isinstance(value, list) else str(value or "").split(",")
+    names = [str(v).strip() for v in items if str(v).strip()]
+    bad = [n for n in names if not SCOPE_VALUE.match(n)]
+    good = list(dict.fromkeys(n for n in names if n not in bad))[:SCOPE_MAX]
+    return good, bad
 
 
 def default_app_url(site: str) -> str:
@@ -119,7 +146,9 @@ def default_app_url(site: str) -> str:
 def public(cfg: Dict[str, Any]) -> Dict[str, Any]:
     """What a page may see: the site and links, and whether each key is present. Never a key or part of one."""
     return {"site": cfg["site"], "app_url": cfg["app_url"], "api_key_set": bool(cfg["api_key"]),
-            "app_key_set": bool(cfg["app_key"]), "configured": not cfg["problems"], "problems": list(cfg["problems"])}
+            "app_key_set": bool(cfg["app_key"]), "hosts_set": len(cfg.get("hosts") or []),
+            "services_set": len(cfg.get("services") or []), "configured": not cfg["problems"],
+            "problems": list(cfg["problems"])}
 
 
 # ---------------------------------------------------------------- the setting
@@ -176,6 +205,14 @@ def validate_setting(value: Any) -> Tuple[Dict[str, Any], List[str]]:
         problems.append(f"default_severity must be one of {', '.join(SEVERITIES)}")
     else:
         out["default_severity"] = severity
+    for key, what in (("hosts", "host"), ("services", "service")):
+        items = value.get(key, [])
+        if not isinstance(items, list) or not all(isinstance(v, str) for v in items):
+            problems.append(f"{key} must be a list of {what} names")
+            continue
+        good, bad = scope_list(items)
+        problems += [f"'{b}' is not a Datadog {what} name" for b in bad]
+        out[key] = good
     return out, problems
 
 
@@ -204,9 +241,36 @@ def escape(value: Any) -> str:
     return _SPECIAL.sub(r"\\\1", str(value))
 
 
-def log_query(template: str, values: Mapping[str, Any]) -> str:
-    """The template with each {name} replaced by its escaped value. A term whose value is missing is left out
-    ('task_id:{task_id}' for a run-level incident), so the query still finds the DAG's logs."""
+def group(names: List[str]) -> str:
+    """'a' or '(a OR b)', each name escaped but its * kept as Datadog's wildcard."""
+    parts = ["*".join(escape(p) for p in str(n).split("*")) for n in names]
+    return parts[0] if len(parts) == 1 else "(" + " OR ".join(parts) + ")"
+
+
+def scope(setting_value: Mapping[str, Any], cfg: Optional[Mapping[str, Any]] = None) -> Dict[str, List[str]]:
+    """{host: [...], service: [...]}: the setting's lists where an admin filled them, else the API host's
+    DATADOG_HOST and DATADOG_SERVICE."""
+    cfg = cfg or {}
+    return {"host": list(setting_value.get("hosts") or cfg.get("hosts") or []),
+            "service": list(setting_value.get("services") or cfg.get("services") or [])}
+
+
+def scoped_query(template: str, values: Mapping[str, Any], scopes: Mapping[str, List[str]]) -> str:
+    """log_query with {host} and {service} filled from `scopes`; a scope the template does not name is added as
+    'host:<names>' / 'service:<names>'. An empty scope leaves its term out."""
+    raw = {k: group(v) for k, v in scopes.items() if v}
+    query = log_query(template, values, raw)
+    named = set(PLACEHOLDER.findall(str(template or "")))
+    extra = [f"{k}:{raw[k]}" for k in SCOPES if k in raw and k not in named]
+    return " ".join(([query] if query else []) + extra)
+
+
+def log_query(template: str, values: Mapping[str, Any], raw: Optional[Mapping[str, str]] = None) -> str:
+    """The template with each {name} replaced by its escaped value (`raw` values go in as they are: host and service
+    groups). A term whose value is missing is left out ('task_id:{task_id}' for a run-level incident), so the query
+    still finds the DAG's logs."""
+    raw = raw or {}
+    values = {**values, **raw}
     terms: List[str] = []
     for term in str(template or "").split():
         names = PLACEHOLDER.findall(term)
@@ -216,7 +280,7 @@ def log_query(template: str, values: Mapping[str, Any]) -> str:
             continue
         if term.upper() in ("AND", "OR") and (not terms or terms[-1].upper() in ("AND", "OR", "NOT")):
             continue
-        terms.append(PLACEHOLDER.sub(lambda m: escape(values[m.group(1)]), term))
+        terms.append(PLACEHOLDER.sub(lambda m: raw[m.group(1)] if m.group(1) in raw else escape(values[m.group(1)]), term))
     while terms and terms[-1].upper() in ("AND", "OR", "NOT"):
         terms.pop()
     return " ".join(terms)
@@ -410,7 +474,8 @@ def incident_logs(incident: Mapping[str, Any], setting_value: Dict[str, Any], cl
     cli = cli or client()
     lookback = minutes or int(setting_value.get("log_lookback_minutes") or DEFAULT_SETTING["log_lookback_minutes"])
     start, end = incident_window(incident, lookback, now)
-    query = log_query(setting_value.get("log_query") or DEFAULT_SETTING["log_query"], incident_values(incident))
+    query = scoped_query(setting_value.get("log_query") or DEFAULT_SETTING["log_query"], incident_values(incident),
+                         scope(setting_value, cli.cfg))
     entries = cli.search_logs(query, start, end, int(setting_value.get("log_limit") or DEFAULT_SETTING["log_limit"]))
     return {"query": query, "from": _iso(start), "to": _iso(end), "link": logs_link(cli.cfg["app_url"], query, start, end),
             "logs": entries}
@@ -429,7 +494,8 @@ def task_log_text(task: Mapping[str, Any], setting_value: Dict[str, Any], cli: O
     started = _dt(task.get("started_at")) or _dt(task.get("ended_at")) or now
     ended = _dt(task.get("ended_at")) or started
     start, end = started - timedelta(minutes=1), min(now, max(ended, started) + timedelta(minutes=2))
-    query = log_query(setting_value.get("log_query") or DEFAULT_SETTING["log_query"], incident_values(task))
+    query = scoped_query(setting_value.get("log_query") or DEFAULT_SETTING["log_query"], incident_values(task),
+                         scope(setting_value, cli.cfg))
     entries = cli.search_logs(query, start, max(end, start + timedelta(minutes=1)),
                               int(setting_value.get("log_limit") or DEFAULT_SETTING["log_limit"]))
     return logs_text(entries)
