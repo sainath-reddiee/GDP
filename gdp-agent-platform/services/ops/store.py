@@ -14,7 +14,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from services.ops.mwaa import Mwaa, MwaaError, client_for, supports_updated_at
-from services.ops.normalize import ACTIVE, dag_row, dag_run_row, excerpt, newer, task_row, ts
+from services.ops.normalize import ACTIVE, dag_row, dag_run_row, excerpt, has_error_lines, newer, task_row, ts
 from services.ops.redact import redact, redact_payload
 
 OVERLAP_MINUTES = 15
@@ -208,9 +208,13 @@ def _stored_runs(db: Any, env_id: str, keys: List[Tuple[str, str]]) -> Dict[Tupl
 
 
 def last_fetched_at(fetched: List[Dict[str, Any]], field: str) -> Optional[str]:
-    """The filter field (updated_at or start_date) of the last run read: the resume point of a truncated poll."""
+    """The filter field (updated_at or start_date) of the last run read: the resume point of a truncated poll. Airflow
+    3 does not return updated_at on a run, so its newest own time (scheduling decision, start, end) stands in: never
+    later than the run's updated_at, so the resume point never skips a run."""
     for raw in reversed(fetched):
         stamp = ts(raw.get(field))
+        if not stamp and field == "updated_at":
+            stamp = dag_run_row("", raw).get("updated_at") if raw.get("dag_id") and raw.get("dag_run_id", raw.get("run_id")) else None
         if stamp:
             return stamp
     return None
@@ -237,39 +241,97 @@ def mark_removed(db: Any, env_id: str, keys: List[Tuple[str, str]]) -> None:
                    (pairs, env_id))
 
 
-def _fetch_tasks(mw: Mwaa, env_id: str, runs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def _fetch_tasks(mw: Mwaa, env_id: str, runs: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """(task rows, runs left unread). Throttling or an unavailable API part way stops the reads there: the runs read
+    so far are stored and the rest wait for the next poll, instead of the whole poll failing and repeating."""
     out: List[Dict[str, Any]] = []
-    for run in runs:
-        for item in mw.task_instances(run["dag_id"], run["run_id"]):
-            out.append(task_row(env_id, item))
-    return out
+    for i, run in enumerate(runs):
+        try:
+            items = mw.task_instances(run["dag_id"], run["run_id"])
+        except MwaaError as exc:
+            if i == 0 or exc.kind not in ("throttled", "unavailable"):
+                raise
+            return out, runs[i:]
+        out += [task_row(env_id, item) for item in items]
+    return out, []
 
 
 _NEEDS_LOG_SQL = ("(ERROR_EXCERPT IS NULL OR (EXCERPT_SOURCE = 'PUSH' "
                   "AND POSITION('Traceback (most recent call last)' IN ERROR_EXCERPT) = 0))")
 
 
+def _datadog_for_failures(db: Any) -> Optional[Dict[str, Any]]:
+    """The DATADOG setting when failed tasks' errors may come from Datadog (on, with FAILURE_LOGS not 'off'), else None."""
+    try:
+        from services.ops import datadog as dd
+
+        value = dd.setting(db)
+    except Exception:
+        return None
+    return value if value.get("enabled") and value.get("failure_logs") in ("fallback", "first") else None
+
+
+def _datadog_text(task: Dict[str, Any], value: Optional[Dict[str, Any]], env_id: str) -> Optional[str]:
+    """The task's error from Datadog, or None (not in use, no error in its logs, or Datadog could not be read). Logs
+    without an error line are not stored: they would stop the Airflow log from being read and mislead the analysis."""
+    if not value:
+        return None
+    from services.ops import datadog as dd
+
+    try:
+        text = dd.task_log_text({**task, "env_id": env_id}, value)
+    except dd.DatadogError:
+        return None
+    return excerpt(text) if has_error_lines(text) else None
+
+
+LOG_SETTLE_MINUTES = 10
+
+
+def _recent(task: Dict[str, Any]) -> bool:
+    """The try ended less than LOG_SETTLE_MINUTES ago: its log may not be complete in CloudWatch yet."""
+    ended = ts(task.get("ended_at"))
+    if not ended:
+        return True
+    return datetime.now(timezone.utc) - datetime.fromisoformat(ended) < timedelta(minutes=LOG_SETTLE_MINUTES)
+
+
 def fill_error_excerpts(db: Any, mw: Mwaa, env_id: str, limit: int = MAX_ERROR_LOGS) -> int:
     """Failed tasks of the last day without a full error: no excerpt yet, or only a short pushed one (an older listener
     plugin sends just 'Class: message'). Read the end of their log, store the redacted error, and let a failure still
-    waiting to be resolved pick up the better error (services.resolve.engine.reparse)."""
+    waiting to be resolved pick up the better error (services.resolve.engine.reparse), so it goes on to a known fix or
+    the root-cause analysis. With Datadog on (DATADOG.failure_logs), the error comes from Datadog when Airflow's log
+    cannot be read or has no error lines ('fallback'), or from Datadog first ('first'); EXCERPT_SOURCE says DATADOG."""
     found = db.query(f"""
-        SELECT DAG_ID, RUN_ID, TASK_ID, MAP_INDEX, TRY_NUMBER FROM CORE.TASK_RUN
+        SELECT DAG_ID, RUN_ID, TASK_ID, MAP_INDEX, TRY_NUMBER, STARTED_AT, ENDED_AT FROM CORE.TASK_RUN
          WHERE ENV_ID = %s AND STATE IN ('failed', 'up_for_retry') AND {_NEEDS_LOG_SQL}
            AND COALESCE(ENDED_AT, UPDATED_AT) >= DATEADD(hour, -24, CURRENT_TIMESTAMP())
          ORDER BY COALESCE(ENDED_AT, UPDATED_AT) DESC LIMIT """ + str(int(limit)), (env_id,))
+    datadog = _datadog_for_failures(db) if found else None
     filled = 0
     for t in found:
-        try:
-            log = mw.task_log(t["dag_id"], t["run_id"], t["task_id"], int(t["try_number"] or 0), int(t["map_index"]),
-                              cap=ERROR_LOG_BYTES)
-        except MwaaError:
-            continue
-        text = excerpt(log.get("text")) or "(the log has no error lines)"
-        db.execute(f"""UPDATE CORE.TASK_RUN SET ERROR_EXCERPT = %s, EXCERPT_SOURCE = 'LOG', LOADED_AT = CURRENT_TIMESTAMP()
+        text, source = None, "LOG"
+        if datadog and datadog["failure_logs"] == "first":
+            text, source = _datadog_text(t, datadog, env_id), "DATADOG"
+        if not text:
+            try:
+                log = mw.task_log(t["dag_id"], t["run_id"], t["task_id"], int(t["try_number"] or 0), int(t["map_index"]),
+                                  cap=ERROR_LOG_BYTES)
+                text, source = excerpt(log.get("text")), "LOG"
+            except MwaaError:
+                log = None
+            if not text or not has_error_lines(log.get("text") if log else ""):
+                from_dd = _datadog_text(t, datadog, env_id) if datadog and datadog["failure_logs"] == "fallback" else None
+                if from_dd:
+                    text, source = from_dd, "DATADOG"
+                elif log is None or _recent(t):
+                    continue   # unreadable, or no error yet (logs reach CloudWatch late): try again on the next poll
+                elif not text:
+                    text, source = "(the log has no error lines)", "LOG"
+        db.execute(f"""UPDATE CORE.TASK_RUN SET ERROR_EXCERPT = %s, EXCERPT_SOURCE = %s, LOADED_AT = CURRENT_TIMESTAMP()
                         WHERE ENV_ID = %s AND DAG_ID = %s AND RUN_ID = %s AND TASK_ID = %s AND MAP_INDEX = %s
                           AND TRY_NUMBER = %s AND {_NEEDS_LOG_SQL}""",
-                   (text, env_id, t["dag_id"], t["run_id"], t["task_id"], t["map_index"], t["try_number"]))
+                   (text, source, env_id, t["dag_id"], t["run_id"], t["task_id"], t["map_index"], t["try_number"]))
         filled += 1
         try:
             from services.resolve.engine import reparse
@@ -353,7 +415,8 @@ def poll_env(db: Any, env: Dict[str, Any], client: Optional[Mwaa] = None, now: O
                 or stored[(r["dag_id"], r["run_id"])].get("state") != r.get("state")
                 or (r.get("state") or "") in ACTIVE)]
     todo, later = changed[:max_task_fetch], changed[max_task_fetch:]
-    tasks = _fetch_tasks(mw, env_id, todo)
+    tasks, unread = _fetch_tasks(mw, env_id, todo)
+    later = unread + later
     if later:  # store only the runs whose tasks were read; the cursor stops before the first one left over
         done = {(r["dag_id"], r["run_id"]) for r in later}
         rows = [r for r in rows if (r["dag_id"], r["run_id"]) not in done]

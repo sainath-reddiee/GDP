@@ -342,7 +342,8 @@ def test_poll_env_upserts_and_stores_the_cursor():
     summary = poll_env(db, env, client=Mwaa("m", "us-east-1", client=client), now="2024-05-02T12:00:00+00:00")
     assert summary["runs"] == 1 and summary["tasks"] == 1 and summary["complete"] and summary["api_version"] == "v1"
     run_call = next(c for c in client.calls if c["Path"] == "/dags/~/dagRuns")
-    assert run_call["QueryParameters"]["updated_at_gte"] == "2024-05-02T11:40:00.000000+00:00"
+    # UTC as ...Z: a '+' in a query string can arrive as a space, which Airflow rejects
+    assert run_call["QueryParameters"]["updated_at_gte"] == "2024-05-02T11:40:00.000000Z"
     task_call = next(c for c in client.calls if c["Path"].endswith("/taskInstances"))
     assert "scheduled__2024-05-01T02%3A00%3A00%2B00%3A00" in task_call["Path"]     # run ids are URL-encoded
     update = next(p for s, p in db.statements if s.startswith("UPDATE CORE.AIRFLOW_ENV"))

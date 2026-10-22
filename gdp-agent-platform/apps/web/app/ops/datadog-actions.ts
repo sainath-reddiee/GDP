@@ -11,6 +11,8 @@ export type DatadogConnection = {
 /** The DATADOG platform setting (services/ops/datadog.py DEFAULT_SETTING). */
 export type DatadogSetting = {
   enabled: boolean; log_query: string; log_lookback_minutes: number; log_limit: number; diagnosis_logs: boolean;
+  /** where a failed task's error is read from: Airflow then Datadog, Datadog first, or Airflow only */
+  failure_logs: "fallback" | "first" | "off";
   monitors: boolean; monitor_tags: string[]; monitor_states: ("Alert" | "Warn" | "No Data")[]; default_severity: "P1" | "P2" | "P3" | "P4";
 };
 export type DatadogStatus = { connection: DatadogConnection; setting: DatadogSetting };

@@ -324,7 +324,8 @@ def refresh(db: Any, mw: Any, env_id: str, offset: int = 0) -> Dict[str, Any]:
             if not run:
                 continue
             try:
-                edges += link_edges(env_id, dag_id, kind, mw.task_links(dag_id, run["run_id"], task_id, int(run.get("map_index") or -1)))
+                edges += link_edges(env_id, dag_id, kind, mw.task_links(dag_id, run["run_id"], task_id,
+                                                              -1 if run.get("map_index") is None else int(run["map_index"])))
             except Exception:
                 continue
 

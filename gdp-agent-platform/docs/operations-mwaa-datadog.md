@@ -17,7 +17,9 @@ The API and the worker call MWAA with `boto3` through the default AWS credential
 3. **An access key of a dedicated IAM user** in `docker/api.env` (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`),
    only when no role can be attached. Never a person's key; rotate it.
 
-Set `AWS_REGION` in `docker/api.env` in every case.
+Set `AWS_REGION` in `docker/api.env` in every case. Temporary keys (an `ASIA...` key with `AWS_SESSION_TOKEN`, as
+the AWS access portal hands out) work for a one-off check, but they expire within hours, so the worker needs a role or a
+refreshing profile. Keys never go into a script or a file in the repository.
 
 ### The IAM policy
 
@@ -91,6 +93,8 @@ can run together: `--mwaa-env <env> --region <region> --datadog`.
      `{env_id}` and `{try_number}` are filled in from the incident, and a term whose value is missing is left out.
      Add fixed terms as needed, for example `service:airflow env:prod`.
    - **Window and size.** Minutes before the failure, and the most log lines to read.
+   - **When a task fails, read its error from.** Airflow, then Datadog when Airflow's log cannot be read (the
+     default), or Datadog first. The error is stored with the task run and takes the usual path, described below.
    - **Give the AI diagnosis Datadog's logs.** Used when the Airflow task log cannot be read (expired, or no AWS access).
    - **Alerting monitors open incidents.**
      - Choose the monitor tags to watch (for example `team:data`) and the states that count: Alert, Warn, No Data.
@@ -98,6 +102,20 @@ can run together: `--mwaa-env <env> --region <region> --datadog`.
      - A monitor's `dag_id:` tag puts its incident with that pipeline.
      - Severity comes from the monitor's priority, else the default you set.
      - Notifications go to Jira and in-app only.
+
+### What happens when a DAG fails
+
+1. The worker polls MWAA. A failed task run is stored, and its error is read from the task log: Airflow's own, or
+   Datadog's for that DAG, task, run and try, as set above.
+2. The failure opens an incident (or adds an occurrence) and a failure record for the resolution engine.
+3. The resolution engine parses the error (exception class, text, query id, dbt node) and searches the knowledge base
+   of known issues.
+   - **Known issue:** its fix runs automatically, or waits for a person's approval when the fix requires one. The
+     task is then cleared in Airflow.
+   - **Not known:** the root-cause analysis runs on the full context (log, code, dbt lineage, recent runs and
+     commits, similar incidents), and a Jira ticket is opened with it.
+4. Recurring known issues later get a permanent fix proposal, and resolved unknown issues can be published as new
+   known fixes, so the next failure of that kind is fixed automatically.
 
 ### Where it shows
 

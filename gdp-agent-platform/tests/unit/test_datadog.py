@@ -45,9 +45,10 @@ def client(answers):
 
 def test_keys_come_from_the_environment_and_never_leave_it():
     cfg = dd.config_from_env(ENV)
-    assert cfg["site"] == "us3.datadoghq.com" and cfg["app_url"] == "https://app.us3.datadoghq.com" and not cfg["problems"]
+    assert cfg["site"] == "us3.datadoghq.com" and cfg["app_url"] == "https://us3.datadoghq.com" and not cfg["problems"]
+    assert dd.default_app_url("datadoghq.eu") == "https://app.datadoghq.eu" and dd.default_app_url("ap1.datadoghq.com") == "https://ap1.datadoghq.com"
     shown = dd.public(cfg)
-    assert shown == {"site": "us3.datadoghq.com", "app_url": "https://app.us3.datadoghq.com", "api_key_set": True,
+    assert shown == {"site": "us3.datadoghq.com", "app_url": "https://us3.datadoghq.com", "api_key_set": True,
                      "app_key_set": True, "configured": True, "problems": []}
     assert "a" * 32 not in repr(shown) and "b" * 40 not in repr(shown)
     assert dd.normalize_site("https://app.datadoghq.eu/") == "datadoghq.eu" and dd.normalize_site("") == "datadoghq.com"
@@ -96,6 +97,10 @@ def test_the_log_query_escapes_values_and_drops_terms_without_one():
                      {"dag_id": "load orders", "task_id": None, "run_id": "scheduled__2026-10-22T00:00:00+00:00"})
     assert q == r"service:airflow dag_id:load\ orders run_id:scheduled__2026\-10\-22T00\:00\:00\+00\:00"
     assert dd.log_query("dag_id:{dag_id}", {"dag_id": 'x" OR *'}) == r'dag_id:x\"\ OR\ \*'
+    # a dropped term never leaves a dangling operator (Datadog answers 400 to 'dag_id:x AND')
+    assert dd.log_query("dag_id:{dag_id} AND task_id:{task_id}", {"dag_id": "x"}) == "dag_id:x"
+    assert dd.log_query("task_id:{task_id} AND dag_id:{dag_id}", {"dag_id": "x"}) == "dag_id:x"
+    assert dd.log_query("a AND task_id:{task_id} AND b", {}) == "a AND b"
 
 
 def test_an_incident_s_logs_are_searched_in_its_window_and_redacted():
@@ -111,7 +116,7 @@ def test_an_incident_s_logs_are_searched_in_its_window_and_redacted():
     assert body["filter"] == {"query": "dag_id:orders task_id:load", "from": "2026-10-22T09:30:00Z", "to": "2026-10-22T10:20:00Z"}
     assert body["page"]["limit"] == 200 and http.calls[0]["headers"]["DD-APPLICATION-KEY"] == "b" * 40
     assert out["logs"][0]["tags"] == ["dag_id:orders"] and "hunter2" not in out["logs"][0]["message"]
-    assert out["link"].startswith("https://app.us3.datadoghq.com/logs?query=dag_id%3Aorders")
+    assert out["link"].startswith("https://us3.datadoghq.com/logs?query=dag_id%3Aorders")
     assert dd.logs_text(out["logs"]).splitlines()[0].startswith("2026-10-22T10:00:00Z INFO starting")
 
 
@@ -266,3 +271,148 @@ def test_governance_worker_and_setup_files(monkeypatch):
     for key in dd.ENV_KEYS:
         monkeypatch.delenv(key, raising=False)
     assert ops_check.main(["--datadog", "--env-file", str(ROOT / "nonexistent.env")]) == 1   # no keys: fails, no call
+
+
+# ---------------------------------------------------------------- a failed task's error from Datadog (the poll)
+
+class PollDb:
+    """CORE.TASK_RUN for fill_error_excerpts: one failed task; records the excerpt written."""
+
+    def __init__(self):
+        self.written = []
+
+    def query(self, sql, params=()):
+        if "FROM CORE.TASK_RUN" in sql:
+            return [{"dag_id": "orders", "run_id": "r1", "task_id": "load", "map_index": -1, "try_number": 1,
+                     "started_at": "2026-10-22T10:00:00+00:00", "ended_at": "2026-10-22T10:02:00+00:00"}]
+        return []
+
+    def execute(self, sql, params=()):
+        if "UPDATE CORE.TASK_RUN SET ERROR_EXCERPT" in sql:
+            self.written.append((params[0], params[1]))
+
+    def execute_count(self, sql, params=()):
+        return 0
+
+
+class FakeMwaa:
+    def __init__(self, text=None, fails=False):
+        self.text, self.fails, self.calls = text, fails, 0
+
+    def task_log(self, *a, **k):
+        from services.ops.mwaa import MwaaError
+
+        self.calls += 1
+        if self.fails:
+            raise MwaaError("access_denied", "no logs:GetLogEvents")
+        return {"text": self.text}
+
+
+TRACE = "Traceback (most recent call last):\n  File \"x.py\", line 1\nsnowflake.connector.errors.ProgrammingError: 002003: Object 'ORDERS' does not exist"
+
+
+def test_a_failed_task_s_error_comes_from_datadog_when_airflow_s_log_cannot_be_read(monkeypatch):
+    from services.ops import store
+
+    seen = []
+    monkeypatch.setattr(dd, "setting", lambda db: ON)
+    monkeypatch.setattr(dd, "task_log_text", lambda task, value, cli=None, now=None: seen.append(task) or TRACE)
+    db = PollDb()
+    assert store.fill_error_excerpts(db, FakeMwaa(fails=True), "prod") == 1
+    (text, source), = db.written
+    assert source == "DATADOG" and "002003" in text and text.startswith("Traceback")
+    assert seen[0]["dag_id"] == "orders" and seen[0]["env_id"] == "prod" and seen[0]["started_at"]
+    # Airflow's log has the error: Datadog is not asked
+    seen.clear()
+    db = PollDb()
+    store.fill_error_excerpts(db, FakeMwaa(TRACE), "prod")
+    assert db.written[0][1] == "LOG" and not seen
+
+
+def test_datadog_first_and_both_unreadable(monkeypatch):
+    from services.ops import store
+
+    monkeypatch.setattr(dd, "setting", lambda db: {**ON, "failure_logs": "first"})
+    monkeypatch.setattr(dd, "task_log_text", lambda task, value, cli=None, now=None: TRACE)
+    db, mw = PollDb(), FakeMwaa(TRACE)
+    store.fill_error_excerpts(db, mw, "prod")
+    assert db.written[0][1] == "DATADOG" and mw.calls == 0
+    # neither can be read: nothing is stored, the next poll tries again
+    def down(*a, **k):
+        raise dd.DatadogError("unavailable", "down")
+    monkeypatch.setattr(dd, "setting", lambda db: ON)
+    monkeypatch.setattr(dd, "task_log_text", down)
+    db = PollDb()
+    assert store.fill_error_excerpts(db, FakeMwaa(fails=True), "prod") == 0 and db.written == []
+    # Datadog off: unchanged behaviour
+    monkeypatch.setattr(dd, "setting", lambda db: dd.DEFAULT_SETTING)
+    db = PollDb()
+    assert store.fill_error_excerpts(db, FakeMwaa(fails=True), "prod") == 0
+    assert dd.validate_setting({"failure_logs": "sometimes"})[1] == ["failure_logs must be one of fallback, first, off"]
+
+
+def test_the_task_window_is_its_run_time():
+    c, http = client({"/api/v2/logs/events/search": [(200, {"data": []}, {})]})
+    task = {"dag_id": "orders", "task_id": "load", "run_id": "r1", "try_number": 2,
+            "started_at": "2026-10-22T10:00:00+00:00", "ended_at": "2026-10-22T10:02:00+00:00"}
+    assert dd.task_log_text(task, ON, c, now=datetime(2026, 10, 22, 12, tzinfo=timezone.utc)) == ""
+    f = http.calls[0]["body"]["filter"]
+    assert f["from"] == "2026-10-22T09:59:00Z" and f["to"] == "2026-10-22T10:04:00Z"   # this try only, not the next
+
+
+def test_airflow_log_without_error_lines_falls_back_and_info_only_datadog_is_not_stored(monkeypatch):
+    from services.ops import store
+
+    monkeypatch.setattr(dd, "setting", lambda db: ON)
+    monkeypatch.setattr(dd, "task_log_text", lambda task, value, cli=None, now=None: TRACE)
+    db = PollDb()
+    store.fill_error_excerpts(db, FakeMwaa("INFO starting\nINFO done"), "prod")
+    assert db.written[0][1] == "DATADOG" and "002003" in db.written[0][0]
+    # Datadog has only INFO lines: Airflow's text is kept, and 'first' still reads Airflow
+    monkeypatch.setattr(dd, "task_log_text", lambda task, value, cli=None, now=None: "2026 INFO airflow starting")
+    db = PollDb()
+    store.fill_error_excerpts(db, FakeMwaa("INFO starting"), "prod")
+    assert db.written[0][1] == "LOG"
+    monkeypatch.setattr(dd, "setting", lambda db: {**ON, "failure_logs": "first"})
+    db, mw = PollDb(), FakeMwaa(TRACE)
+    store.fill_error_excerpts(db, mw, "prod")
+    assert db.written[0][1] == "LOG" and mw.calls == 1
+
+
+def test_a_monitor_still_alerting_reopens_what_this_module_resolved_but_not_what_a_person_did():
+    store = DdMemoryStore()
+    dm.process(store, FakeClient([monitor()]), ON, NOW)
+    # the admin narrows the tags: the monitor leaves the watched set and its incident resolves
+    assert dm.process(store, FakeClient([]), ON, NOW + timedelta(minutes=2))["resolved"] == 1
+    # tags restored, same trigger, still alerting: it reopens
+    assert dm.process(store, FakeClient([monitor()]), ON, NOW + timedelta(minutes=4))["actions"] == {"reopened": 1}
+    (i,) = _dd_incidents(store)
+    assert i["status"] == "OPEN"
+    # a person resolves it while the monitor still alerts: it stays resolved until the monitor triggers again
+    inc.resolve(store, i["incident_id"], "handled by hand", "ana", NOW + timedelta(minutes=5))
+    assert dm.process(store, FakeClient([monitor()]), ON, NOW + timedelta(minutes=6))["actions"] == {"duplicate": 1}
+    assert _dd_incidents(store)[0]["status"] == "RESOLVED"
+
+
+def test_muted_and_downtime_groups_open_nothing_and_groups_are_capped():
+    groups = {"env:prod": {"status": "Alert", "last_triggered_ts": 1792663200},
+              "env:dev": {"status": "Alert", "last_triggered_ts": 1792663300}}
+    muted = monitor(groups=groups, options={"silenced": {"env:dev": None}})
+    assert [g for g, _, _ in dm.alerting_groups(muted, ["Alert"], NOW)] == ["env:prod"]
+    down = monitor(groups=groups, matching_downtimes=[{"active": True, "scope": ["*"]}])
+    assert dm.alerting_groups(down, ["Alert"], NOW) == []
+    expired = monitor(options={"silenced": {"*": int((NOW - timedelta(hours=1)).timestamp())}})
+    assert len(dm.alerting_groups(expired, ["Alert"], NOW)) == 1
+    many = monitor(groups={f"host:{i}": {"status": "Alert", "last_triggered_ts": 1792663200 + i} for i in range(60)})
+    assert len(dm.alerting_groups(many, ["Alert"], NOW)) == dm.MAX_GROUPS
+    # no trigger time anywhere: the key still changes per hour, never constant
+    bare = monitor(overall_state_modified=None)
+    assert dm.alerting_groups(bare, ["Alert"], NOW)[0][2] == NOW.replace(minute=0, second=0, microsecond=0).isoformat()
+
+
+def test_a_cut_list_never_resolves_a_monitor_it_did_not_read(monkeypatch):
+    store = DdMemoryStore()
+    dm.process(store, FakeClient([monitor()]), ON, NOW)
+    monkeypatch.setattr(dd, "MONITOR_PAGES", 1)
+    monkeypatch.setattr(dd, "MONITOR_PAGE", 1)
+    assert dm.process(store, FakeClient([monitor(99, "OK")]), ON, NOW + timedelta(minutes=2))["resolved"] == 0

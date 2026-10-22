@@ -110,9 +110,10 @@ def test_short_pushed_errors_are_read_again_from_the_log(monkeypatch):
     seen = []
     monkeypatch.setattr("services.resolve.engine.reparse", lambda db, env, t, text: seen.append((env, t["task_id"], text)))
     assert store.fill_error_excerpts(db, Client(), "e") == 1
-    select, update = db.sent[0][0], db.sent[1][0]
+    select = db.sent[0][0]
+    (update, params), = [s for s in db.sent if "UPDATE CORE.TASK_RUN SET ERROR_EXCERPT" in s[0]]
     assert "EXCERPT_SOURCE = 'PUSH'" in select and "POSITION('Traceback" in select
-    assert "EXCERPT_SOURCE = 'LOG'" in update
+    assert "EXCERPT_SOURCE = %s" in update and params[1] == "LOG"   # LOG, or DATADOG when Datadog supplied it
     assert seen and seen[0][2].endswith("ValueError: real error")
 
 

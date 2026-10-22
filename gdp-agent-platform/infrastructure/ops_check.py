@@ -94,9 +94,12 @@ def check_mwaa(env_name: str, region: str, dag: str = "") -> bool:
               + (f" ({paused} of them paused)" if paused else ""))
         target = dag or (names[0] if names else "")
         if target:
-            runs, count = mw.dag_runs(target, limit=5)
-            states = ", ".join(f"{r.get('state')} {str(r.get('logical_date') or r.get('execution_date') or '')[:19]}"
-                               for r in runs[-5:]) or "no runs"
+            from urllib.parse import quote
+
+            found = mw.invoke("GET", f"/dags/{quote(target, safe='')}/dagRuns", {"limit": 5, "order_by": "-start_date"}) or {}
+            runs, count = list(found.get("dag_runs") or []), found.get("total_entries", "?")
+            states = ", ".join(f"{r.get('state')} {str(r.get('start_date') or r.get('run_after') or r.get('logical_date') or '')[:19]}"
+                               for r in runs) or "no runs"
             print(f"{OK}{target}: {count} runs; latest {states}")
     except MwaaError as exc:
         print(f"{FAIL}InvokeRestApi: {exc}. {HINTS.get(exc.kind, '')}")

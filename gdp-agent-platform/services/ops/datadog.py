@@ -10,6 +10,9 @@ Only Datadog's own hosts (api.<site>) receive the keys: an unknown site is refus
 send them elsewhere. Answers are redacted before they leave this module; error messages never hold a key.
 
 What the platform does with it (the DATADOG platform setting, Admin, Integrations, Datadog):
+  failures  a failed task's error is read from Datadog (FAILURE_LOGS: when Airflow's own log cannot be read, or
+            first), stored on CORE.TASK_RUN like a log excerpt, so the same flow follows: known fix from the knowledge
+            base when the error matches one, else the root-cause analysis (services.ops.store.fill_error_excerpts);
   logs      an incident's Datadog logs for the failing DAG and task, on the incident page and, when the Airflow log
             cannot be read, in the AI diagnosis (services.ops.context.log_part);
   monitors  monitors in Alert (and No Data, Warn when chosen) open incidents in the ops inbox and resolve them when the
@@ -43,6 +46,7 @@ MONITOR_PAGES = 20
 PLACEHOLDERS = ("dag_id", "task_id", "run_id", "env_id", "try_number")
 PLACEHOLDER = re.compile(r"\{([a-z_]+)\}")
 STATES = ("Alert", "Warn", "No Data")
+FAILURE_LOGS = ("fallback", "first", "off")   # Datadog after Airflow's own log, before it, or never for failures
 SEVERITIES = ("P1", "P2", "P3", "P4")
 # a Datadog query value: characters with a meaning in the query syntax are escaped with a backslash
 _SPECIAL = re.compile(r'([+\-=&|><!(){}\[\]^"~*?:\\/\s])')
@@ -53,6 +57,7 @@ DEFAULT_SETTING: Dict[str, Any] = {
     "log_lookback_minutes": 30,
     "log_limit": 200,
     "diagnosis_logs": True,
+    "failure_logs": "fallback",
     "monitors": True,
     "monitor_tags": [],
     "monitor_states": ["Alert", "No Data"],
@@ -101,8 +106,14 @@ def config_from_env(environ: Optional[Mapping[str, str]] = None) -> Dict[str, An
         problems.append("DATADOG_API_KEY is not set on the API host")
     if not app_key:
         problems.append("DATADOG_APP_KEY is not set on the API host")
-    return {"site": site, "api_key": api_key, "app_key": app_key, "app_url": app_url or f"https://app.{site}",
+    return {"site": site, "api_key": api_key, "app_key": app_key, "app_url": app_url or default_app_url(site),
             "problems": problems}
+
+
+def default_app_url(site: str) -> str:
+    """The web address of a site: app.<site> for US1, EU and gov; the regional sites (us3, us5, ap1, ...) are their own
+    web host."""
+    return f"https://app.{site}" if site in ("datadoghq.com", "datadoghq.eu", "ddog-gov.com") else f"https://{site}"
 
 
 def public(cfg: Dict[str, Any]) -> Dict[str, Any]:
@@ -155,6 +166,11 @@ def validate_setting(value: Any) -> Tuple[Dict[str, Any], List[str]]:
         problems.append(f"monitor_states must list one or more of {', '.join(STATES)}")
     else:
         out["monitor_states"] = [s for s in STATES if s in states]
+    failure_logs = value.get("failure_logs", out["failure_logs"])
+    if failure_logs not in FAILURE_LOGS:
+        problems.append(f"failure_logs must be one of {', '.join(FAILURE_LOGS)}")
+    else:
+        out["failure_logs"] = failure_logs
     severity = value.get("default_severity", out["default_severity"])
     if severity not in SEVERITIES:
         problems.append(f"default_severity must be one of {', '.join(SEVERITIES)}")
@@ -191,12 +207,18 @@ def escape(value: Any) -> str:
 def log_query(template: str, values: Mapping[str, Any]) -> str:
     """The template with each {name} replaced by its escaped value. A term whose value is missing is left out
     ('task_id:{task_id}' for a run-level incident), so the query still finds the DAG's logs."""
-    terms = []
+    terms: List[str] = []
     for term in str(template or "").split():
         names = PLACEHOLDER.findall(term)
         if any(values.get(n) in (None, "") for n in names):
+            if terms and terms[-1].upper() in ("AND", "OR", "NOT"):
+                terms.pop()   # 'a AND task_id:{task_id}' without a task: no dangling AND
+            continue
+        if term.upper() in ("AND", "OR") and (not terms or terms[-1].upper() in ("AND", "OR", "NOT")):
             continue
         terms.append(PLACEHOLDER.sub(lambda m: escape(values[m.group(1)]), term))
+    while terms and terms[-1].upper() in ("AND", "OR", "NOT"):
+        terms.pop()
     return " ".join(terms)
 
 
@@ -343,7 +365,7 @@ class Client:
     def monitors(self, tags: Optional[List[str]] = None, states: Optional[List[str]] = None) -> List[Dict[str, Any]]:
         """Monitors (with the given monitor tags), with each group's state. Needs monitors_read."""
         params: Dict[str, Any] = {"group_states": ",".join(s.lower() for s in (states or STATES)),
-                                  "page_size": MONITOR_PAGE}
+                                  "page_size": MONITOR_PAGE, "with_downtimes": "true"}
         if tags:
             params["monitor_tags"] = ",".join(tags)
         out: List[Dict[str, Any]] = []
@@ -392,3 +414,22 @@ def incident_logs(incident: Mapping[str, Any], setting_value: Dict[str, Any], cl
     entries = cli.search_logs(query, start, end, int(setting_value.get("log_limit") or DEFAULT_SETTING["log_limit"]))
     return {"query": query, "from": _iso(start), "to": _iso(end), "link": logs_link(cli.cfg["app_url"], query, start, end),
             "logs": entries}
+
+
+# ---------------------------------------------------------------- a failed task's error
+
+def task_log_text(task: Mapping[str, Any], setting_value: Dict[str, Any], cli: Optional[Client] = None,
+                  now: Optional[datetime] = None) -> str:
+    """Datadog's logs for one failed task try (CORE.TASK_RUN row: dag_id, task_id, run_id, try_number, started_at,
+    ended_at), oldest first, as one log text; '' when Datadog has none. Raises DatadogError. The window is the try's
+    own run time with a minute before and two after, so the next try or another run of the task is not read instead
+    (add {run_id} and {try_number} to the log search when the pipelines tag their logs with them)."""
+    cli = cli or client()
+    now = now or utcnow()
+    started = _dt(task.get("started_at")) or _dt(task.get("ended_at")) or now
+    ended = _dt(task.get("ended_at")) or started
+    start, end = started - timedelta(minutes=1), min(now, max(ended, started) + timedelta(minutes=2))
+    query = log_query(setting_value.get("log_query") or DEFAULT_SETTING["log_query"], incident_values(task))
+    entries = cli.search_logs(query, start, max(end, start + timedelta(minutes=1)),
+                              int(setting_value.get("log_limit") or DEFAULT_SETTING["log_limit"]))
+    return logs_text(entries)

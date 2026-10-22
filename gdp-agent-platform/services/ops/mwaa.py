@@ -61,12 +61,15 @@ def error_detail_text(details: Any) -> List[str]:
     """Airflow 3 puts a failed task's exception in the message's error_detail ([{exc_type, exc_value, frames, ...}])
     instead of the text: render it as the Python traceback it stands for, so excerpts, signatures and the root-cause
     analysis see the real error ('ProgrammingError: 000904 ... invalid identifier ...')."""
+    # structlog lists the raised exception first and its causes after it, each cause's is_cause saying whether it was
+    # the __cause__ (raise ... from) or the __context__ of the one before; Python prints them the other way round, the
+    # raised one last, which is the one excerpt() and the failure parser read
+    stacks = [d for d in details if isinstance(d, dict)] if isinstance(details, list) else []
     lines: List[str] = []
-    for d in details if isinstance(details, list) else []:
-        if not isinstance(d, dict):
-            continue
-        if lines:
-            lines.append("The above exception was the direct cause of the following exception:" if d.get("is_cause")
+    for i, d in enumerate(reversed(stacks)):
+        if i:
+            cause = stacks[len(stacks) - i]   # the stack just rendered
+            lines.append("The above exception was the direct cause of the following exception:" if cause.get("is_cause")
                          else "During handling of the above exception, another exception occurred:")
         frames = [f for f in (d.get("frames") or []) if isinstance(f, dict)]
         if frames:
@@ -235,7 +238,8 @@ class Mwaa:
         field = self.run_order_field()
         params["order_by"] = field
         if updated_since:
-            params[f"{field}_gte"] = updated_since
+            since = str(updated_since)
+            params[f"{field}_gte"] = since[:-6] + "Z" if since.endswith("+00:00") else since
         found = self.invoke("GET", f"/dags/{_seg(dag_id)}/dagRuns", params) or {}
         runs = list(found.get("dag_runs") or [])
         return runs, int(found.get("total_entries") or len(runs))
@@ -333,6 +337,8 @@ class Mwaa:
         TriggerDagRunOperator link to the other DAG this way."""
         params = {"map_index": int(map_index)} if map_index is not None and int(map_index) >= 0 else None
         found = self.invoke("GET", f"/dags/{_seg(dag_id)}/dagRuns/{_seg(run_id)}/taskInstances/{_seg(task_id)}/links", params)
+        if isinstance(found, dict) and isinstance(found.get("extra_links"), dict):
+            return found["extra_links"]   # REST v2 (Airflow 3)
         return found if isinstance(found, dict) else {}
 
 

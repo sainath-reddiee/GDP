@@ -206,6 +206,13 @@ def push_row(env_id: str, body: Dict[str, Any]) -> tuple[str, Dict[str, Any]]:
 _STATEMENT = re.compile(r"(Running statement|Executing statement|Executing query|Running query|Executing SQL)\s*:", re.I)
 
 
+def has_error_lines(text: Any) -> bool:
+    """True when a log has a traceback or ERROR / Error / Exception lines (what excerpt() keeps as the error)."""
+    body = str(text or "")
+    return "Traceback (most recent call last)" in body or any(
+        (" ERROR " in ln or "Error" in ln or "Exception" in ln) and not _STATEMENT.search(ln) for ln in body.splitlines())
+
+
 def excerpt(text: Any, limit: int = EXCERPT_MAX) -> Optional[str]:
     """The useful end of an error: the last traceback (or ERROR lines) of a log, redacted and capped. The last SQL
     statement the task logged before it (SQL operators log 'Running statement: ...') is kept in front, so the analysis

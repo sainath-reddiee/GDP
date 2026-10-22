@@ -86,10 +86,17 @@ def clear_requested(db: Any, mwaa_factory: Optional[Callable[[Dict[str, Any]], A
                 client = client_for(r)
             # downstream too: the tasks the failure left upstream_failed must run again, or the DAG run ends failed
             # (only_failed keeps tasks that already succeeded as they are)
-            client.clear_task_instances(r["dag_id"], [r["task_id"]], r["run_id"], dry_run=False, only_failed=True,
-                                        include_downstream=True)
-            state, detail = "DONE", f"cleared {r['task_id']} in run {r['run_id']}"
-            counts["cleared"] += 1
+            answer = client.clear_task_instances(r["dag_id"], [r["task_id"]], r["run_id"], dry_run=False, only_failed=True,
+                                                 include_downstream=True)
+            cleared = answer.get("task_instances") if isinstance(answer, dict) else None
+            if isinstance(cleared, list) and not cleared:
+                # only_failed matched nothing: the task is retrying, running or already succeeded, so no rerun follows
+                state, detail = "FAILED", (f"Airflow cleared nothing: {r['task_id']} in run {r['run_id']} is no longer "
+                                           "failed (retrying, running or already rerun)")
+                counts["failed"] += 1
+            else:
+                state, detail = "DONE", f"cleared {r['task_id']} in run {r['run_id']}"
+                counts["cleared"] += 1
         except Exception as exc:
             state, detail = "FAILED", redact(f"{type(exc).__name__}: {exc}")[:1000]
             counts["failed"] += 1

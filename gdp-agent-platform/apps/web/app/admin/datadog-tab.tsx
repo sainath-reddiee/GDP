@@ -142,6 +142,13 @@ export function DatadogTab({ status, mayEdit, mayTest, mayOperate, onMsg }: {
             <label className="block space-y-1 text-xs font-medium">Most log lines
               <Input type="number" min={10} max={1000} value={form.log_limit} onChange={(e) => set({ log_limit: Number(e.target.value) })} /></label>
           </div>
+          <label className="block space-y-1 text-xs font-medium">When a task fails, read its error from
+            <Select value={form.failure_logs} onChange={(e) => set({ failure_logs: e.target.value as DatadogSetting["failure_logs"] })}>
+              <option value="fallback">Airflow, then Datadog when Airflow&apos;s log cannot be read</option>
+              <option value="first">Datadog first, then Airflow</option>
+              <option value="off">Airflow only</option>
+            </Select></label>
+          <p className="text-[11px] text-muted-foreground">The error then goes through the usual flow: a known fix from the knowledge base when it matches one, otherwise the root-cause analysis and a ticket.</p>
           <Check label="Give the AI diagnosis Datadog's logs" checked={form.diagnosis_logs} disabled={!mayEdit} onChange={(v) => set({ diagnosis_logs: v })}
                  hint="When the Airflow task log cannot be read (expired, or no AWS access)." />
         </fieldset>

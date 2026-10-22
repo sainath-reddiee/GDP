@@ -25,7 +25,7 @@ export function DatadogLogs({ incidentId }: { incidentId: string }) {
     setLoading(true);
     incidentDatadogLogs(incidentId, minutes).then((r) => {
       if (!live) return;
-      if (r.ok) { setData(r.data); setError(null); } else setError(r.error);
+      if (r.ok) { setData(r.data); setError(null); } else { setData(null); setError(r.error); }
       setLoading(false);
     });
     return () => { live = false; };

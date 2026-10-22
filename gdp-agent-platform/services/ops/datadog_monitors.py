@@ -4,14 +4,20 @@ recovers. Incidents ride on the ops incident engine (services.ops.incidents), so
 escalation, reopen window, routing and Jira ticket as Airflow failures. No Teams: Jira and in-app only.
 
 One incident per monitor and group (the fingerprint). Each trigger of a group is one sighting, claimed once (monitor,
-group, state and the time Datadog says it triggered), so a poll that reads the same trigger again changes nothing, and
-a group that recovers and triggers again later is an occurrence or a reopen.
+group, state and the time Datadog says it triggered; No Data by the monitor's last state change, which Datadog does not
+move on every evaluation), so a poll that reads the same trigger again changes nothing, and a group that recovers and
+triggers again later is an occurrence or a reopen. An incident this module resolved (recovered, or the monitor left
+the watched set) reopens when the group is seen alerting again, even without a new trigger; one a person resolved
+stays resolved until the monitor triggers again.
+Silenced: a group muted in Datadog (options.silenced) or under an active downtime opens nothing. A monitor with many
+alerting groups opens at most MAX_GROUPS of them per poll (a multi-alert monitor over every host is not 1000 tickets).
 The incident's DAG_ID is the monitor's dag_id tag when it has one (so it sits with the pipeline's own incidents and its
 routing rules), else 'datadog: <monitor name>'; the monitor's tags are the DAG tags routing rules match (team:data).
 Severity: the monitor's priority (P1 to P4, P5 counts as P4), else the setting's default_severity; one level less for
 Warn and No Data.
 Resolve: an open incident whose group is no longer in a chosen state resolves as 'system'; one whose monitor is gone
-(deleted, or no longer has the monitor tags) resolves too, with that reason. Nothing resolves when the read failed.
+(deleted, or no longer has the monitor tags) resolves too, with that reason, but only when the whole list was read.
+Nothing resolves when the read failed.
 """
 
 from __future__ import annotations
@@ -32,6 +38,8 @@ DD_ENV = "datadog"
 KIND = "DD_MONITOR"
 DAG_ID_MAX = 250
 NO_GROUP = "*"
+MAX_GROUPS = 25
+RESOLVED_HERE = ("Datadog monitor recovered", "the Datadog monitor no longer exists or no longer has the watched tags")
 
 
 def utcnow() -> datetime:
@@ -69,19 +77,50 @@ def _stamp(value: Any) -> Optional[str]:
     return parsed.isoformat() if parsed else None
 
 
-def alerting_groups(monitor: Dict[str, Any], states: List[str]) -> List[Tuple[str, str, Optional[str]]]:
-    """(group, state, triggered at) of each group in one of `states`; a monitor without groups is one group '*'."""
+def _scope_covers(scope: Any, group: str) -> bool:
+    """A mute or downtime scope ('*', 'env:prod', ['env:prod', 'host:a']) covers the group when each of its tags is
+    one of the group's ('env:prod,host:a')."""
+    items = scope if isinstance(scope, list) else [scope]
+    tags = set(str(group).split(",")) if group != NO_GROUP else set()
+    for item in items:
+        wanted = [t.strip() for t in str(item or "*").split(",") if t.strip()]
+        if not wanted or wanted == ["*"] or set(wanted) <= tags:
+            return True
+    return False
+
+
+def silenced(monitor: Dict[str, Any], group: str, now: datetime) -> bool:
+    """Muted in Datadog (options.silenced: scope -> until, None for ever) or under an active downtime."""
+    for scope, until in ((monitor.get("options") or {}).get("silenced") or {}).items():
+        if (until is None or (isinstance(until, (int, float)) and until > now.timestamp())) and _scope_covers(scope, group):
+            return True
+    for d in monitor.get("matching_downtimes") or []:
+        if isinstance(d, dict) and d.get("active") and _scope_covers(d.get("scope") or "*", group):
+            return True
+    return False
+
+
+def alerting_groups(monitor: Dict[str, Any], states: List[str], now: Optional[datetime] = None
+                    ) -> List[Tuple[str, str, Optional[str]]]:
+    """(group, state, triggered at) of each group in one of `states` that is not silenced, at most MAX_GROUPS (most
+    recently triggered first); a monitor without groups is one group '*'. The trigger time falls back to the monitor's
+    last state change, then to the current hour, so a sighting key is never empty."""
+    now = now or utcnow()
+    changed = _stamp(monitor.get("overall_state_modified"))
+    bucket = now.replace(minute=0, second=0, microsecond=0).isoformat()
     groups = (monitor.get("state") or {}).get("groups") or {}
     out: List[Tuple[str, str, Optional[str]]] = []
     if groups:
         for name, g in groups.items():
             status = (g or {}).get("status")
             if status in states:
-                at = _stamp(g.get("last_nodata_ts") if status == "No Data" else g.get("last_triggered_ts"))
-                out.append((str(name or NO_GROUP), status, at))
+                at = changed if status == "No Data" else _stamp(g.get("last_triggered_ts"))
+                out.append((str(name or NO_GROUP), status, at or changed or bucket))
     elif monitor.get("overall_state") in states:
-        out.append((NO_GROUP, monitor["overall_state"], _stamp(monitor.get("overall_state_modified"))))
-    return out
+        out.append((NO_GROUP, monitor["overall_state"], changed or bucket))
+    out = [g for g in out if not silenced(monitor, g[0], now)]
+    out.sort(key=lambda g: g[2] or "", reverse=True)
+    return out[:MAX_GROUPS]
 
 
 def severity_for(monitor: Dict[str, Any], state: str, setting: Dict[str, Any]) -> str:
@@ -95,8 +134,10 @@ def severity_for(monitor: Dict[str, Any], state: str, setting: Dict[str, Any]) -
 
 
 def candidate(monitor: Dict[str, Any], group: str, state: str, at: Optional[str], setting: Dict[str, Any],
-              app_url: str, now: datetime) -> Dict[str, Any]:
-    """The incident candidate (the shape services.ops.incidents.open_or_update takes) for one alerting group."""
+              app_url: str, now: datetime, reopen_after: Optional[str] = None) -> Dict[str, Any]:
+    """The incident candidate (the shape services.ops.incidents.open_or_update takes) for one alerting group. It is
+    seen now (the monitor is alerting now); `reopen_after` (when this module resolved the group's last incident) makes
+    it a new sighting of the same trigger, so that incident reopens."""
     mid = monitor.get("id")
     name = str(monitor.get("name") or f"monitor {mid}")
     tags = [str(t) for t in monitor.get("tags") or []]
@@ -114,7 +155,8 @@ def candidate(monitor: Dict[str, Any], group: str, state: str, at: Optional[str]
             "run_id": None, "kind": KIND, "fingerprint": fingerprint(mid, group),
             "severity": severity_for(monitor, state, setting),
             "title": f"Datadog {state}: {name}{where}"[:500], "error_excerpt": redact("\n".join(lines))[:4000],
-            "at": at or now.isoformat(), "occurrence_key": f"{mid}:{group}:{state}:{at or ''}"}
+            "at": now.isoformat(),
+            "occurrence_key": f"{mid}:{group}:{state}:{at or ''}" + (f":after:{reopen_after}" if reopen_after else "")}
 
 
 def owner_dag(monitor: Dict[str, Any], cand: Dict[str, Any]) -> Dict[str, Any]:
@@ -132,6 +174,7 @@ def process(store: Any, cli: Optional[dd.Client] = None, setting: Optional[Dict[
         return {"disabled": True}
     cli = cli or dd.client()
     monitors = cli.monitors(setting.get("monitor_tags") or [], setting.get("monitor_states"))   # raises: nothing resolves
+    complete = len(monitors) < dd.MONITOR_PAGE * dd.MONITOR_PAGES   # the whole list: a missing monitor is really gone
     settings, rules = store.settings(), store.rules()
     states = list(setting.get("monitor_states") or dd.DEFAULT_SETTING["monitor_states"])
     alerting: Dict[str, Dict[str, Any]] = {}
@@ -139,11 +182,16 @@ def process(store: Any, cli: Optional[dd.Client] = None, setting: Optional[Dict[
     actions: Dict[str, int] = {}
     errors: List[str] = []
     for m in monitors:
-        for group, state, at in alerting_groups(m, states):
-            cand = candidate(m, group, state, at, setting, cli.cfg["app_url"], now)
-            alerting[cand["fingerprint"]] = cand
+        for group, state, at in alerting_groups(m, states, now):
+            fp = fingerprint(m.get("id"), group)
+            alerting[fp] = {}   # alerting: never resolved below, even when this sighting fails to apply
             try:
-                before = store.latest_by_fingerprint(cand["fingerprint"])
+                before = store.latest_by_fingerprint(fp)
+                again = bool(before and before.get("status") == "RESOLVED" and before.get("resolved_by") == inc.SYSTEM
+                             and before.get("resolution") in RESOLVED_HERE)
+                cand = candidate(m, group, state, at, setting, cli.cfg["app_url"], now,
+                                 reopen_after=str(before.get("resolved_at")) if again else None)
+                alerting[fp] = cand
                 result = inc.open_or_update(store, cand, settings, owner_dag(m, cand), rules, now)
                 if result["action"] == "occurrence" and before and before.get("title") != cand["title"]:
                     # Alert after No Data (or the other way): the incident now says what the monitor says
@@ -161,13 +209,16 @@ def process(store: Any, cli: Optional[dd.Client] = None, setting: Optional[Dict[
         if row.get("fingerprint") in alerting:
             continue
         monitor_id = str(row.get("monitor_id") or "")
-        reason = ("Datadog monitor recovered" if monitor_id in watched or not monitor_id
-                  else "the Datadog monitor no longer exists or no longer has the watched tags")
+        if monitor_id and monitor_id not in watched and not complete:
+            continue   # the list was cut at the page cap: the monitor may be on a page not read
+        reason = RESOLVED_HERE[0] if monitor_id in watched or not monitor_id else RESOLVED_HERE[1]
         try:
             inc.resolve(store, row["incident_id"], reason, inc.SYSTEM, now, auto=True)
             resolved += 1
         except inc.ActionError:
             pass
+        except Exception as exc:   # one incident never holds up the others
+            errors.append(redact(f"resolve {row.get('incident_id')}: {type(exc).__name__}: {exc}")[:300])
     summary: Dict[str, Any] = {"monitors": len(monitors), "alerting": len(alerting), "actions": actions, "resolved": resolved}
     if errors:
         summary.update({"skipped": len(errors), "errors": errors[:5]})
