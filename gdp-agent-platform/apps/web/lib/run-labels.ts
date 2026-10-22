@@ -17,8 +17,8 @@ const STATE_LABEL: Record<string, string> = {
   MAPPING_REVIEW: "Field mapping awaits approval",
   MAPPING_APPROVED: "Field mapping approved",
   STTM_PENDING: "Ready for transformations and joins",
-  STTM_REVIEW: "STTM awaits approval",
-  STTM_APPROVED: "STTM approved",
+  STTM_REVIEW: "Data Mapping awaits approval",
+  STTM_APPROVED: "Data Mapping approved",
   SODA_PENDING: "Data quality checks in progress",
   SODA_REVIEW: "Data quality awaits approval",
   SODA_APPROVED: "Data quality approved",
@@ -62,7 +62,7 @@ export type Gate = { name: string; role: string; privilege: string; slug: string
 
 export const GATES: Record<string, Gate> = {
   MAPPING_REVIEW: { name: "Field mapping", role: "Model approver", privilege: "MAPPING.APPROVE", slug: "modeling?tab=mapping", approveTo: "MAPPING_APPROVED" },
-  STTM_REVIEW: { name: "Transformations and joins (STTM)", role: "STTM approver", privilege: "STTM.APPROVE", slug: "modeling?tab=transformations", approveTo: "STTM_APPROVED" },
+  STTM_REVIEW: { name: "Transformations and joins (Data Mapping)", role: "Data Mapping approver", privilege: "STTM.APPROVE", slug: "modeling?tab=transformations", approveTo: "STTM_APPROVED" },
   SODA_REVIEW: { name: "Data quality checks", role: "DQ approver", privilege: "SODA.APPROVE", slug: "soda", approveTo: "SODA_APPROVED" },
   DBT_REVIEW: { name: "Code review", role: "Code reviewer", privilege: "REVIEW.APPROVE", slug: "review", approveTo: "DBT_APPROVED" },
 };

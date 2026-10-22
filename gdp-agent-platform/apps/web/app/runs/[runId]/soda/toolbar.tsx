@@ -113,7 +113,7 @@ export function DownloadMenu({ yaml, gxSuite }: { yaml: string; gxSuite?: Record
 
 export function ApproveRemaining({ runId, ids }: { runId: string; ids: string[] }) {
   const [open, setOpen] = useState(false);
-  const [note, setNote] = useState("Checks match the approved STTM and the client quality need.");
+  const [note, setNote] = useState("Checks match the approved Data Mapping and the client quality need.");
   const [error, setError] = useState("");
   const [pending, start] = useTransition();
   if (!ids.length) return null;
@@ -142,7 +142,7 @@ export function PackGate({ runId, currentState, complete }: { runId: string; cur
   if (currentState !== "SODA_REVIEW" || !complete) return null;
   return (
     <DecisionBar runId={runId} gate="Data quality checks" role="DQ approver" approveTo="SODA_APPROVED" approveLabel="Approve pack"
-                 sendBack={["SODA_PENDING"]} defaultNote="Data Quality checks match the STTM and the client quality need."
+                 sendBack={["SODA_PENDING"]} defaultNote="Data Quality checks match the Data Mapping and the client quality need."
                  detail="Every check is decided." />
   );
 }

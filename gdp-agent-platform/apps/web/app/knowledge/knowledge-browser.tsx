@@ -233,7 +233,7 @@ export function ItemEditor({ domains, item, onClose, onSaved, defaultLayer = "AN
           <textarea value={content} onChange={(e) => setContent(e.target.value)} rows={5} className="mt-1 w-full rounded-md border bg-card p-2 text-sm" />
         </label>
         <label className="text-xs font-medium">
-          Structured content (what mapping, STTM and quality read){TEMPLATE[type] ? "" : " (optional for this type)"}
+          Structured content (what mapping, Data Mapping and quality read){TEMPLATE[type] ? "" : " (optional for this type)"}
           <textarea value={structured} onChange={(e) => setStructured(e.target.value)} rows={7} spellCheck={false}
                     className={cn("mt-1 w-full rounded-md border bg-card p-2 font-mono text-xs")} />
           {type === "TRANSFORMATION_RULE" && <span className="text-[11px] text-muted-foreground">Write the source column as {"{col}"}.</span>}

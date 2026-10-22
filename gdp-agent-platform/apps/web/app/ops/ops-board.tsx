@@ -10,7 +10,7 @@ import { Alert, Empty, Notice, useSeq } from "../qa/qa-shared";
 import { listDags, opsSummary, pollEnv, type AirflowEnv, type DagRow, type OpsSummary } from "./actions";
 import { duration, explain, pct, pctTone, StateBadge, When } from "./ops-shared";
 
-export type OpsNav = { env: string; q: string; state: string; owner: string; team: string };
+export type OpsNav = { env: string; q: string; state: string; owner: string; team: string; tag: string };
 
 const STATES = ["failed", "running", "success", "queued", "up_for_retry", "upstream_failed"];
 
@@ -46,8 +46,8 @@ export function OpsBoard({ envs, summary: initialSummary, summaryError, initial,
   const [reload, setReload] = useState(0);
   const seq = useSeq();
   const first = useRef(true);
-  // owners and teams seen so far, so filtering by one keeps the others choosable
-  const [seen, setSeen] = useState(() => collect(initialDags ?? [], { owners: new Set<string>(), teams: new Set<string>() }));
+  // owners, teams and tags seen so far, so filtering by one keeps the others choosable
+  const [seen, setSeen] = useState(() => collect(initialDags ?? [], { owners: new Set<string>(), teams: new Set<string>(), tags: new Set<string>() }));
 
   const go = (patch: Partial<OpsNav>) => setNav((n) => {
     const next = { ...n, ...patch };
@@ -63,7 +63,7 @@ export function OpsBoard({ envs, summary: initialSummary, summaryError, initial,
     const ticket = seq.next();
     setLoading(true);
     const timer = setTimeout(() => {
-      listDags({ env_id: nav.env, q: nav.q.trim(), state: nav.state, owner: nav.owner, team_id: nav.team }).then((r) => {
+      listDags({ env_id: nav.env, q: nav.q.trim(), state: nav.state, owner: nav.owner, team_id: nav.team, tag: nav.tag }).then((r) => {
         if (!seq.current(ticket)) return;
         setLoading(false);
         if (r.ok) { setDags(r.data.dags); setError(""); setSeen((s) => collect(r.data.dags, s)); }
@@ -76,7 +76,7 @@ export function OpsBoard({ envs, summary: initialSummary, summaryError, initial,
     }, nav.q ? 300 : 0);
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [nav.env, nav.q, nav.state, nav.owner, nav.team, reload]);
+  }, [nav.env, nav.q, nav.state, nav.owner, nav.team, nav.tag, reload]);
 
   const env = envs.find((e) => e.env_id === nav.env) ?? null;
   const poll = () => startPoll(async () => {
@@ -102,7 +102,8 @@ export function OpsBoard({ envs, summary: initialSummary, summaryError, initial,
 
   const owners = Array.from(seen.owners).sort();
   const teams = Array.from(seen.teams).sort();
-  const filtered = !!(nav.q || nav.state || nav.owner || nav.team);
+  const tags = Array.from(new Set([...seen.tags, ...(nav.tag ? [nav.tag] : [])])).sort();
+  const filtered = !!(nav.q || nav.state || nav.owner || nav.team || nav.tag);
   return (
     <div className="space-y-4">
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
@@ -115,10 +116,11 @@ export function OpsBoard({ envs, summary: initialSummary, summaryError, initial,
               tone="bg-slate-100 text-slate-600 ring-slate-200" hint={env?.last_error ? "Last poll reported an error" : undefined} />
       </div>
       {summaryError && <Alert>The summary did not load: {explain(summaryError)}</Alert>}
+      <NeedsAttention dags={dags} />
 
       <section className="surface overflow-hidden">
         <header className="flex flex-wrap items-center gap-2 border-b px-4 py-3">
-          <Select value={nav.env} onChange={(e) => go({ env: e.target.value, owner: "", team: "" })} aria-label="Airflow environment" className="w-56">
+          <Select value={nav.env} onChange={(e) => go({ env: e.target.value, owner: "", team: "", tag: "" })} aria-label="Airflow environment" className="w-56">
             {envs.map((e) => <option key={e.env_id} value={e.env_id}>{e.name}{e.enabled ? "" : " (disabled)"}</option>)}
           </Select>
           <div className="relative">
@@ -133,13 +135,19 @@ export function OpsBoard({ envs, summary: initialSummary, summaryError, initial,
             <option value="">Any owner</option>
             {owners.map((o) => <option key={o} value={o}>{o}</option>)}
           </Select>
+          {tags.length > 0 && (
+            <Select value={nav.tag} onChange={(e) => go({ tag: e.target.value })} aria-label="Tag" className="w-40 text-xs">
+              <option value="">Any tag</option>
+              {tags.map((t) => <option key={t} value={t}>{t}</option>)}
+            </Select>
+          )}
           {(teams.length > 0 || nav.team) && (
             <Select value={nav.team} onChange={(e) => go({ team: e.target.value })} aria-label="Team" className="w-40 text-xs">
               <option value="">Any team</option>
               {[...new Set([...teams, ...(nav.team ? [nav.team] : [])])].map((t) => <option key={t} value={t}>{t}</option>)}
             </Select>
           )}
-          {filtered && <Button variant="ghost" size="sm" onClick={() => go({ q: "", state: "", owner: "", team: "" })}>Clear</Button>}
+          {filtered && <Button variant="ghost" size="sm" onClick={() => go({ q: "", state: "", owner: "", team: "", tag: "" })}>Clear</Button>}
           {loading && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" aria-label="Loading" />}
           <span className="ml-auto flex items-center gap-2 text-xs text-muted-foreground">
             {env && <>Polled <When iso={env.last_poll_at} rel /></>}
@@ -161,14 +169,65 @@ export function OpsBoard({ envs, summary: initialSummary, summaryError, initial,
   );
 }
 
-function collect(dags: DagRow[], prev: { owners: Set<string>; teams: Set<string> }) {
+const ATTENTION_MAX = 6;
+const FAILED_STATES = new Set(["failed", "upstream_failed"]);
+
+/** What a developer looks at first: DAGs whose last run failed or that have open incidents, most incidents first,
+ *  then the most recent failure. Everything else is in the table below. */
+function NeedsAttention({ dags }: { dags: DagRow[] | null }) {
+  const rows = (dags ?? [])
+    .filter((d) => d.open_incidents > 0 || FAILED_STATES.has(String(d.last_state ?? "").toLowerCase()))
+    .sort((a, b) => (b.open_incidents - a.open_incidents) || String(b.last_run_at ?? "").localeCompare(String(a.last_run_at ?? "")));
+  if (!dags) return null;
+  if (!rows.length) {
+    return (
+      <p className="flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50/60 px-4 py-2.5 text-sm text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/30 dark:text-emerald-200">
+        <Activity className="h-4 w-4" />Nothing needs attention: no DAG in this view is failing or has an open incident.
+      </p>
+    );
+  }
+  return (
+    <section className="surface overflow-hidden" aria-label="Needs attention">
+      <header className="flex items-center gap-2 border-b px-4 py-2.5">
+        <AlertTriangle className="h-4 w-4 text-rose-600" />
+        <h2 className="text-sm font-semibold">Needs attention</h2>
+        <span className="text-xs text-muted-foreground">{rows.length} DAG{rows.length === 1 ? "" : "s"} failing or with open incidents</span>
+        <Link href="/incidents" className="ml-auto text-xs font-medium text-primary hover:underline">All incidents</Link>
+      </header>
+      <ul className="grid divide-y md:grid-cols-2 md:divide-y-0 xl:grid-cols-3">
+        {rows.slice(0, ATTENTION_MAX).map((d) => (
+          <li key={`${d.env_id}:${d.dag_id}`} className="space-y-1 px-4 py-3 md:border-b">
+            <Link href={dagHref(d.env_id, d.dag_id)} className="block truncate font-mono text-xs font-semibold text-primary hover:underline" title={d.dag_id}>{d.dag_id}</Link>
+            <p className="flex flex-wrap items-center gap-1.5 text-xs">
+              <StateBadge state={d.last_state} />
+              {d.last_run_at && <span className="text-muted-foreground"><When iso={d.last_run_at} rel /></span>}
+              {d.criticality && <span className="rounded-full bg-blue-50 px-1.5 py-0.5 text-[10px] text-blue-700">{d.criticality.toLowerCase()}</span>}
+            </p>
+            <p className="flex flex-wrap items-center gap-3 text-xs">
+              {d.open_incidents > 0
+                ? <Link href={`/incidents?${new URLSearchParams({ dag: d.dag_id, env: d.env_id, status: "OPEN,ACK" })}`} className="font-semibold text-rose-700 hover:underline">
+                    {d.open_incidents} open incident{d.open_incidents === 1 ? "" : "s"}</Link>
+                : <span className="text-muted-foreground">no open incident yet</span>}
+              {d.success_7d != null && <span className={cn("tabular-nums", pctTone(d.success_7d))}>{pct(d.success_7d)} success 7 d</span>}
+            </p>
+          </li>
+        ))}
+      </ul>
+      {rows.length > ATTENTION_MAX && <p className="border-t px-4 py-2 text-xs text-muted-foreground">{rows.length - ATTENTION_MAX} more in the table below (filter by state: failed).</p>}
+    </section>
+  );
+}
+
+function collect(dags: DagRow[], prev: { owners: Set<string>; teams: Set<string>; tags: Set<string> }) {
   const owners = new Set(prev.owners);
   const teams = new Set(prev.teams);
+  const tags = new Set(prev.tags);
   for (const d of dags) {
     for (const o of d.owners ?? []) if (o) owners.add(o);
+    for (const t of d.tags ?? []) if (t) tags.add(t);
     if (d.team_id) teams.add(d.team_id);
   }
-  return { owners, teams };
+  return { owners, teams, tags };
 }
 
 function DagTable({ dags, filtered }: { dags: DagRow[] | null; filtered: boolean }) {

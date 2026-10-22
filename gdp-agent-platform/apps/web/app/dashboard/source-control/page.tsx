@@ -19,7 +19,7 @@ export default async function SourceControlPage({ searchParams }: { searchParams
   return (
     <div className="space-y-6">
       <PageHeader eyebrow="Governance" title="Source control"
-                  description="Every pull request the app opened for an approved asset version: domain models, data quality suites, QA packs and STTM mappings. The repository's owners merge them in GitHub; their state is read back here and onto each asset." />
+                  description="Every pull request the app opened for an approved asset version: domain models, data quality suites, QA packs and data mappings. The repository's owners merge them in GitHub; their state is read back here and onto each asset." />
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <Kpi href={base("open")} label="Open" value={c?.open ?? 0} hint="waiting for review or merge in GitHub" icon={GitPullRequest} tone="blue" />
         <Kpi href={base("merged")} label="Merged" value={c?.merged ?? 0} hint="the repository holds the approved version" icon={GitMerge} tone="emerald" />

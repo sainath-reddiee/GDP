@@ -84,7 +84,7 @@
     font-family: var(--font-sans), "Segoe UI", ui-sans-serif, system-ui, sans-serif;
     font-feature-settings: "cv11", "ss01";
   }
-  h1 { @apply text-[26px] font-semibold leading-tight tracking-[-0.02em]; }
+  h1 { @apply text-[22px] font-semibold leading-tight tracking-[-0.01em]; }
   h2 { @apply text-xl font-semibold tracking-tight; }
   h3 { @apply text-base font-semibold; }
   ::selection { background: hsl(var(--primary) / 0.16); }

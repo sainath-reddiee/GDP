@@ -13,7 +13,7 @@ export default async function Skills() {
   const waiting = proposals?.available ? proposals.counts.PROPOSED ?? 0 : null;
   return (
     <div className="space-y-5">
-      <PageHeader eyebrow="Knowledge" title="Skills"
+      <PageHeader eyebrow="Enterprise Memory" title="Agent Skills"
                   description="Playbooks the agents load before each stage. Every change is a new version; the production label decides what runs use, and a candidate can be tried on one run first."
                   actions={<>
                     {waiting !== null && (

@@ -9,7 +9,7 @@ from __future__ import annotations
 from typing import Any, Dict, Iterable, List, Set
 
 CHECKS = [("model", "Model definition"), ("keys", "Business keys"), ("glossary", "Glossary for key columns"),
-          ("sttm", "STTM mapping"), ("qa", "QA tests"), ("dq", "Data quality checks")]
+          ("sttm", "Data Mapping"), ("qa", "QA tests"), ("dq", "Data quality checks")]
 
 
 def _low(row: Dict[str, Any]) -> Dict[str, Any]:

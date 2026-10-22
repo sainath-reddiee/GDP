@@ -21,6 +21,21 @@ from services.sttm.join_graph import filter_conditions
 
 ENGINE = "dbt-onboard-source/engine-v1"
 SIMPLE = re.compile(r"^[A-Z_][A-Z0-9_$]*$")
+YAML_PLAIN = re.compile(r"^[a-z_][a-z0-9_]*$")
+YAML_WORDS = {"y", "n", "yes", "no", "on", "off", "true", "false", "null"}
+
+
+def yaml_name(value: Any) -> str:
+    """A name as a YAML scalar: plain when it is a simple lower-case name, else a JSON (= YAML) quoted string, so
+    names such as '@timestamp', '% done', 'a: b' or 'yes' stay text."""
+    text = str(value)
+    return text if YAML_PLAIN.match(text) and text not in YAML_WORDS else json.dumps(text)
+
+
+def yaml_text(value: Any, limit: Optional[int] = None) -> str:
+    """Free text (a description) as a quoted YAML string; backslashes and quotes are escaped, never broken."""
+    text = str(value if value is not None else "")
+    return json.dumps(text[:limit] if limit else text)
 AUDIT_SUFFIXES = ("IS_ACTIVE", "INSERTED_TS", "INSERTED_BY", "UPDATED_TS", "UPDATED_BY", "ROW_HASH")
 TODO_HINTS = {
     "STANDARDIZATION": re.compile(r"standardi[sz]|geocod|downstream", re.I),
@@ -205,7 +220,7 @@ def _unique_key(cols: List[Dict[str, Any]], business_keys: List[str], sources: D
                                      str(c["target_column"])))
         picked = measured[:1]
         reason = f"profiled as unique: {picked[0]['source_column']} (confirm business keys in the STTM)" if picked else ""
-    if not picked and not key_candidates:
+    if not picked and key_candidates is None:
         named = [c for c in on_primary if ends_with_hint(c["target_column"], "hints.identifier_suffixes")]
         picked = named[:1]
         reason = f"inferred from {picked[0]['target_column']} (no profiles; confirm business keys in the STTM)" \
@@ -317,11 +332,11 @@ def _sources_yml(name: str, source_key: str, sources: Dict[str, Dict[str, Any]],
         if not SIMPLE.match(str(info.get("identifier") or "")):
             lines += ["        quoting:", "          identifier: true"]  # keep lower/mixed-case table names exact
         lines += [
-                  f"        description: \"{system} {table.lower()} (landed copy)\""]
+                  f"        description: {yaml_text(f'{system} {table.lower()} (landed copy)')}"]
         if info.get("columns"):
             lines.append("        columns:")
             for col, dtype in info["columns"].items():
-                lines += [f"          - name: {col.lower()}", f"            data_type: {dtype.lower()}"]
+                lines += [f"          - name: {yaml_name(col.lower())}", f"            data_type: {yaml_name(dtype.lower())}"]
     return "\n".join(lines) + "\n"
 
 
@@ -728,18 +743,18 @@ def generate(inputs: Dict[str, Any], skeleton: Optional[Dict[str, str]] = None) 
     # schema yml, macros, sources, project, watermark --------------------------------------------------
     pii = {str(c["target_column"]).upper() for c in cols if (c.get("_registry") or {}).get("is_pii")}
     yml = ["version: 2", "", "models:", f"  - name: {target}",
-           f"    description: \"{(inputs.get('grain') or target).replace(chr(34), chr(39))}\"", "    columns:",
-           "      - name: source_unique_id", f"        description: \"{key_reason}\"",
+           f"    description: {yaml_text(inputs.get('grain') or target)}", "    columns:",
+           "      - name: source_unique_id", f"        description: {yaml_text(key_reason)}",
            "        tests:", "          - not_null", "          - unique"]
     for c in cols:
         name = str(c["target_column"]).upper()
         if name == "SOURCE_UNIQUE_ID":
             continue
         reg = c.get("_registry") or {}
-        entry = [f"      - name: {name.lower()}"]
+        entry = [f"      - name: {yaml_name(name.lower())}"]
         definition = c.get("business_definition") or reg.get("business_definition") or reg.get("definition")
         if definition:
-            entry.append(f"        description: \"{str(definition).replace(chr(34), chr(39))[:300]}\"")
+            entry.append(f"        description: {yaml_text(definition, 300)}")
         if name in pii:
             entry += ["        meta:", "          pii: true"]
         tests = []

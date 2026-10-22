@@ -22,7 +22,7 @@ OUTCOMES = ("SUCCESS", "FAILED", "TICKETED")
 
 # Slide 4, FAILURE_EVENT.STATUS: every allowed move. Anything else is refused.
 TRANSITIONS: Dict[str, Tuple[str, ...]] = {
-    "PENDING": ("IN_PROGRESS",),
+    "PENDING": ("IN_PROGRESS", "OUT_OF_SCOPE"),   # OUT_OF_SCOPE: set aside before a claim (engine.set_aside)
     "IN_PROGRESS": ("OUT_OF_SCOPE", "AWAITING_APPROVAL", "RESOLVED", "TICKETED"),
     "AWAITING_APPROVAL": ("RESOLVED", "REJECTED", "TICKETED"),   # approved fix ran, approver said no, approved fix failed
     "OUT_OF_SCOPE": (), "REJECTED": (), "RESOLVED": (), "TICKETED": (),

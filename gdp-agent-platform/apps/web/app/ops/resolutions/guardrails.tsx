@@ -30,9 +30,12 @@ function Toggle({ label, hint, checked, disabled, onChange }: { label: string; h
 
 /** The guardrails the resolver reads before anything else: the control preference (one active row), the pipeline
  *  scopes (which DAGs and tasks are in, and how) and the fix approvers. */
-export function Guardrails({ preference, scopes, routes, canEdit }: { preference: Preference; scopes: Scope[]; routes: Route[]; canEdit: boolean }) {
+export function Guardrails({ preference, scopes, routes, canEdit, queued = 0 }: {
+  preference: Preference; scopes: Scope[]; routes: Route[]; canEdit: boolean; /** failures waiting (PENDING) */ queued?: number;
+}) {
   const router = useRouter();
   const [pref, setPref] = useState(preference);
+  const [confirmOn, setConfirmOn] = useState(false);
   const [error, setError] = useState("");
   const [pending, start] = useTransition();
   const [scope, setScope] = useState({ dag_id: "", task_id: "", flow_mode: "AUTO" as FlowMode });
@@ -58,7 +61,26 @@ export function Guardrails({ preference, scopes, routes, canEdit }: { preference
 
       <Card title="Control preference" hint="Read first on every claim. With automatic resolution off, failures stay queued and nothing runs.">
         <Toggle label="Automatic resolution" hint="Claim queued failures and resolve them (the ops worker triggers the Snowflake procedures)."
-                checked={pref.auto_resolve_enabled} disabled={ro} onChange={(v) => patch({ auto_resolve_enabled: v })} />
+                checked={pref.auto_resolve_enabled || confirmOn} disabled={ro}
+                onChange={(v) => (v ? setConfirmOn(true) : (setConfirmOn(false), patch({ auto_resolve_enabled: false })))} />
+        {confirmOn && !pref.auto_resolve_enabled && (
+          <div role="alertdialog" aria-label="Turn on automatic resolution" className="space-y-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-3 text-xs text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200">
+            <p className="text-sm font-semibold">Before you turn it on</p>
+            <p>{queued ? `${queued} failure${queued === 1 ? " is" : "s are"} queued from while it was off.` : "No failures are queued."} Only
+              failures that are still safe to act on are handled. A failure is set aside for a person, with the reason, when:</p>
+            <ul className="list-disc space-y-0.5 pl-5">
+              <li>it waited more than 6 hours;</li>
+              <li>its incident was already resolved by a person;</li>
+              <li>the task has succeeded since it failed.</li>
+            </ul>
+            <p>The rest are matched to known fixes: a fix runs (or waits for approval){pref.airflow_clear_enabled
+              ? ", and the Airflow task is then cleared, so Airflow runs it again" : ""}. No match: the cause is analysed and a ticket is opened.</p>
+            <div className="flex gap-2 pt-1">
+              <Button size="sm" disabled={ro} onClick={() => { setConfirmOn(false); patch({ auto_resolve_enabled: true }); }}>Turn it on</Button>
+              <Button size="sm" variant="outline" onClick={() => setConfirmOn(false)}>Cancel</Button>
+            </div>
+          </div>
+        )}
         <Toggle label="Clear the Airflow task after a successful fix" hint="Airflow then runs the task again; the incident resolves when it succeeds."
                 checked={pref.airflow_clear_enabled} disabled={ro} onChange={(v) => patch({ airflow_clear_enabled: v })} />
         <Toggle label="Fixes need approval unless they say otherwise" hint="Applies to a published fix that does not set its own approval flag."

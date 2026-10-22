@@ -15,6 +15,7 @@ show each one on its step and field.
 from __future__ import annotations
 
 import re
+from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 from services.source.identifiers import landing_table_name
@@ -79,6 +80,11 @@ def _timestamp(value: Any) -> Tuple[Optional[str], bool]:
     v = str(value or "").strip().replace("T", " ")
     if not v:
         return None, True
+    if TIMESTAMP.match(v):
+        try:
+            datetime.strptime(v if len(v) > 10 else v + " 00:00", "%Y-%m-%d %H:%M:%S" if v.count(":") == 2 else "%Y-%m-%d %H:%M")
+        except ValueError:
+            return v, False
     if not TIMESTAMP.match(v):
         return None, False
     if len(v) == 10:

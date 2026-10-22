@@ -19,6 +19,7 @@ import {
 } from "../actions";
 import { ResolutionPanel } from "./resolution-panel";
 import { DatadogLogs } from "./datadog-logs";
+import { IncidentSummary } from "./incident-summary";
 import { dagRunHref, incidentHref, IncidentStatusPill, KindPill, localInput, SeverityPill, up } from "../incident-shared";
 import { AiPanel, ImpactPanel, RetryBadge, RetryDialog } from "./incident-ai";
 import { caseFromIncident } from "../../qa/cases/actions";
@@ -29,9 +30,9 @@ type Busy = "ack" | "assign" | "resolve" | "mute" | "reopen" | "ticket" | "note"
 const MAX_MUTE_DAYS = 30;
 const toneOf = (e: string): "info" | "error" => (/approval|request/i.test(e) ? "info" : "error");
 
-function Section({ title, aside, children, className }: { title: string; aside?: ReactNode; children: ReactNode; className?: string }) {
+function Section({ title, aside, children, className, id }: { title: string; aside?: ReactNode; children: ReactNode; className?: string; id?: string }) {
   return (
-    <section className={cn("surface overflow-hidden", className)}>
+    <section id={id} className={cn("surface scroll-mt-4 overflow-hidden", className)}>
       <header className="flex items-center gap-2 border-b px-4 py-3">
         <h2 className="flex-1 text-sm font-semibold">{title}</h2>
         {aside}
@@ -166,6 +167,9 @@ export function IncidentView({ initial, envName, askAck, canOperate, canAI, canC
         </dl>
       </div>
 
+      <IncidentSummary data={data} canOperate={canOperate} canFixApprove={canFixApprove}
+                       onJump={(id) => document.getElementById(`incident-${id}`)?.scrollIntoView({ behavior: "smooth", block: "start" })} />
+
       {ackAsk && (
         <div role="alertdialog" aria-label="Acknowledge this incident" className="flex flex-wrap items-center gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-100">
           {status !== "OPEN" ? (
@@ -271,7 +275,7 @@ export function IncidentView({ initial, envName, askAck, canOperate, canAI, canC
 
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]">
         <div className="min-w-0 space-y-4">
-          <Section title={inc.dq_table ? "Failing checks" : "Error"} aside={inc.error_excerpt ? <CopyButton text={inc.error_excerpt} label="Copy" /> : undefined}>
+          <Section id="incident-error" title={inc.dq_table ? "Failing checks" : "Error"} aside={inc.error_excerpt ? <CopyButton text={inc.error_excerpt} label="Copy" /> : undefined}>
             {inc.error_excerpt
               ? <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-all rounded-lg bg-slate-950 p-3 font-mono text-[11px] leading-relaxed text-slate-200">{inc.error_excerpt}</pre>
               : <Muted>No error text was captured. Open the run for the task log.</Muted>}
@@ -279,12 +283,12 @@ export function IncidentView({ initial, envName, askAck, canOperate, canAI, canC
 
           {!inc.dq_table && <DatadogLogs incidentId={inc.incident_id} />}
 
-          <Section title="AI diagnosis" aside={<Sparkles className="h-4 w-4 text-muted-foreground" />}>
+          <Section id="incident-ai" title="AI diagnosis" aside={<Sparkles className="h-4 w-4 text-muted-foreground" />}>
             <AiPanel incidentId={inc.incident_id} ai={inc.ai} summary={inc.ai_summary} canAI={canAI}
                      onAi={(ai) => setData((d) => ({ ...d, incident: { ...d.incident, ai } }))} />
           </Section>
 
-          <Section title="Automatic resolution" aside={<Wrench className="h-4 w-4 text-muted-foreground" />}>
+          <Section id="incident-resolution" title="Automatic resolution" aside={<Wrench className="h-4 w-4 text-muted-foreground" />}>
             <ResolutionPanel incidentId={inc.incident_id} status={inc.status} canApprove={canFixApprove} canWrite={canOperate} />
           </Section>
 

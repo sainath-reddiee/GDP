@@ -69,7 +69,7 @@ function TableRow({ t, active, onPick }: { t: QaTable; active: boolean; onPick: 
       <button type="button" onClick={onPick} className={cn("w-full px-3 py-2.5 text-left hover:bg-muted/40", active && "bg-primary/5")}>
         <p className="truncate font-mono text-xs font-medium" title={t.fqn}>{t.fqn}</p>
         <p className="mt-1 flex flex-wrap items-center gap-1.5 text-[10px] text-muted-foreground">
-          {t.has_sttm ? <span className="rounded bg-emerald-50 px-1.5 text-emerald-700">STTM</span> : <span className="rounded bg-muted px-1.5">no STTM</span>}
+          {t.has_sttm ? <span className="rounded bg-emerald-50 px-1.5 text-emerald-700">Data Mapping</span> : <span className="rounded bg-muted px-1.5">no Data Mapping</span>}
           <span>{plural(t.tests, "test")}</span>
           {!t.active && <span className="rounded bg-amber-50 px-1.5 text-amber-800">retired</span>}
           {o ? <span className="ml-auto">{o.failed + o.errors ? <span className="text-destructive">{o.failed + o.errors} failing</span> : <span className={o.passed === o.tests ? "text-success" : undefined}>{o.passed}/{o.tests} pass</span>}</span>
@@ -154,7 +154,7 @@ function TableView({ tableId, suiteId, go, access, onChanged }: { tableId: strin
   const tests = data.tests.filter((t) => !suiteId || t.suite_id === suiteId);
   const groups: { id: string; name: string; tests: TableTest[] }[] = [];
   const generated = tests.filter((t) => t.origin === "GENERATED" || !t.suite_id);
-  if (generated.length) groups.push({ id: "generated", name: "Generated from the STTM", tests: generated });
+  if (generated.length) groups.push({ id: "generated", name: "Generated from the Data Mapping", tests: generated });
   for (const s of suites) {
     const inSuite = tests.filter((t) => t.origin !== "GENERATED" && t.suite_id === s.suite_id);
     if (inSuite.length || s.suite_id === suiteId) groups.push({ id: s.suite_id, name: s.name, tests: inSuite });
@@ -218,7 +218,7 @@ function TableView({ tableId, suiteId, go, access, onChanged }: { tableId: strin
               {!g.tests.length && <p className="rounded-xl border border-dashed p-4 text-center text-xs text-muted-foreground">No tests in this suite yet. Ask AI to add some.</p>}
             </section>
           ))}
-          {!groups.length && <div className="rounded-2xl border border-dashed p-10 text-center text-sm text-muted-foreground">No tests yet. {data.sttm_id ? "" : "This table has no STTM, so nothing is generated. "}Ask AI to propose some.</div>}
+          {!groups.length && <div className="rounded-2xl border border-dashed p-10 text-center text-sm text-muted-foreground">No tests yet. {data.sttm_id ? "" : "This table has no Data Mapping, so nothing is generated. "}Ask AI to propose some.</div>}
         </div>
       )}
       {view === "ai" && (
@@ -243,7 +243,7 @@ function ContextCard({ ctx, data }: { ctx: TableContext | null; data: TableSuite
         <div className="min-w-0 flex-1">
           <h3 className="truncate font-mono text-base font-semibold" title={data.target.fqn}>{data.target.fqn}</h3>
           <div className="mt-1.5 flex flex-wrap gap-2 text-xs">
-            {data.sttm_id ? <Badge variant="success">has an STTM{ctx?.lines ? `, ${plural(ctx.lines, "line")}` : ""}</Badge> : <Badge variant="outline">no STTM: only saved tests</Badge>}
+            {data.sttm_id ? <Badge variant="success">has a Data Mapping{ctx?.lines ? `, ${plural(ctx.lines, "line")}` : ""}</Badge> : <Badge variant="outline">no Data Mapping: only saved tests</Badge>}
             <span className="inline-flex items-center gap-1 rounded-full border bg-card px-2.5 py-0.5"><KeyRound className="h-3.5 w-3.5 text-muted-foreground" />{keys.length ? keys.join(", ") : "no business key"}</span>
             <span className="inline-flex items-center gap-1 rounded-full border bg-card px-2.5 py-0.5"><ListChecks className="h-3.5 w-3.5 text-muted-foreground" />{plural(data.tests.length, "test")}</span>
           </div>

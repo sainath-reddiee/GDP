@@ -287,7 +287,7 @@ export function ReviewPanel({
                 {tab === "enhance" && (
                   <div className="space-y-3">
                     <p className="text-xs text-muted-foreground">
-                      Describe a change. Cortex gets the skill rules and the STTM, rewrites the file, and you review the diff before applying it.
+                      Describe a change. Cortex gets the skill rules and the Data Mapping, rewrites the file, and you review the diff before applying it.
                     </p>
                     <Textarea rows={3} value={prompt} onChange={(e) => setPrompt(e.target.value)}
                       placeholder="e.g. resolve COUNTY_SKEY with a ref CTE on REF_COUNTY, add a not_null test on zip" />

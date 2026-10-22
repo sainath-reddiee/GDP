@@ -23,7 +23,7 @@ export function MappingGate({
             <span className="text-sm font-normal text-muted-foreground">{decided}/{total} decided · {pct}%</span>
           </CardTitle>
           <CardDescription>
-            STTM unlocks when every source column is approved or set to NULL and every required target has a source.
+            Data Mapping unlocks when every source column is approved or set to NULL and every required target has a source.
             Use bulk approve or the AI copilot below to move faster.
           </CardDescription>
         </CardHeader>
@@ -51,9 +51,9 @@ export function MappingGate({
 
   return (
     <DecisionBar runId={runId} gate="Field mapping" role="Model approver" approveTo="MAPPING_APPROVED"
-                 approveLabel="Approve mapping and continue to STTM" sendBack={["MAPPING_PENDING"]}
+                 approveLabel="Approve mapping and continue to Data Mapping" sendBack={["MAPPING_PENDING"]}
                  defaultNote="All source columns reviewed. Required target columns are covered."
-                 detail="Every column is decided. Approving unlocks transformations and joins (STTM)."
+                 detail="Every column is decided. Approving unlocks transformations and joins (Data Mapping)."
                  afterApprove={`/runs/${runId}/modeling?tab=transformations`} />
   );
 }

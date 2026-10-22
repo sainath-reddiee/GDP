@@ -124,7 +124,7 @@ export default async function SodaPage({ params, searchParams }: {
         {tab === "checks" && (
           soda.status.total === 0 && contract.lines.length === 0 ? (
             <p className="rounded-xl border border-dashed p-8 text-center text-sm text-muted-foreground">
-              No checks yet. Generate them from the approved STTM, or import a client brief.
+              No checks yet. Generate them from the approved Data Mapping, or import a client brief.
             </p>
           ) : (
             <ColumnChecks runId={params.runId} checks={soda.checks} sttmLines={contract.lines}

@@ -193,7 +193,7 @@ function IssueTriage({ issueKey, go, access, me }: { issueKey: string; go: Go; a
                     <span className="min-w-0 flex-1">
                       <span className="flex flex-wrap items-center gap-2 text-xs">
                         <span className="truncate font-mono font-medium">{c.fqn}</span>
-                        {c.has_sttm ? <span className="rounded bg-emerald-50 px-1.5 text-[10px] text-emerald-700">STTM</span> : <span className="rounded bg-muted px-1.5 text-[10px] text-muted-foreground">no STTM</span>}
+                        {c.has_sttm ? <span className="rounded bg-emerald-50 px-1.5 text-[10px] text-emerald-700">Data Mapping</span> : <span className="rounded bg-muted px-1.5 text-[10px] text-muted-foreground">no Data Mapping</span>}
                         {!c.active && <span className="rounded bg-amber-50 px-1.5 text-[10px] text-amber-800">retired</span>}
                         <span className="ml-auto tabular-nums text-muted-foreground">score {c.score}</span>
                       </span>

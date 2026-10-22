@@ -409,18 +409,121 @@ def test_ingestion_secret_seals_per_row():
 
 def test_staged_landing_statements():
     run = str(uuid.uuid4())
-    stmts = staged.landing_statements("AI_PLATFORM", run, '"SHARE_DB"."S"."T"', '"AI_PLATFORM"."LANDING"."X__T"',
-                                      "X__T", "As-is landing of 'T'")
+    steps = staged.landing_steps("AI_PLATFORM", run, '"SHARE_DB"."S"."T"', '"AI_PLATFORM"."LANDING"."X__T"',
+                                 "X__T", "As-is landing of 'T'")
     location = f"@AI_PLATFORM.CORE.LANDING_STAGE/runs/{run}/X__T/"
-    assert stmts[0] == f"REMOVE {location}"
-    assert stmts[1].startswith(f"COPY INTO {location}data_ FROM (SELECT * FROM \"SHARE_DB\".\"S\".\"T\")")
-    assert "COMPRESSION = 'SNAPPY'" in stmts[1] and "HEADER = TRUE" in stmts[1]
-    assert "LIMIT 0" in stmts[2] and "'T''" in stmts[2]
-    assert "MATCH_BY_COLUMN_NAME = CASE_INSENSITIVE" in stmts[3] and "AI_PLATFORM.CORE.PARQUET_SNAPPY" in stmts[3]
+    names = [n for n, _ in steps]
+    assert names == ["clear the stage", "unload", "create", "load", "swap", "swap", "swap", "clean up the stage"]
+    sql = dict(steps)
+    assert steps[0][1] == f"REMOVE {location}" and steps[-1][1] == f"REMOVE {location}"
+    assert sql["unload"].startswith(f"COPY INTO {location}data_ FROM (SELECT * FROM \"SHARE_DB\".\"S\".\"T\")")
+    assert "COMPRESSION = 'SNAPPY'" in sql["unload"] and "HEADER = TRUE" in sql["unload"]
+    # rows go into the loading table, never straight into the landing table a reader may be using
+    assert sql["create"].startswith('CREATE OR REPLACE TABLE "AI_PLATFORM"."LANDING"."X__T__LOADING"')
+    assert "LIMIT 0" in sql["create"] and "'T''" in sql["create"]
+    assert sql["load"].startswith('COPY INTO "AI_PLATFORM"."LANDING"."X__T__LOADING"')
+    assert "MATCH_BY_COLUMN_NAME = CASE_INSENSITIVE" in sql["load"] and "AI_PLATFORM.CORE.PARQUET_SNAPPY" in sql["load"]
+    assert [q for n, q in steps if n == "swap"] == [
+        'CREATE TABLE IF NOT EXISTS "AI_PLATFORM"."LANDING"."X__T" LIKE "AI_PLATFORM"."LANDING"."X__T__LOADING"',
+        'ALTER TABLE "AI_PLATFORM"."LANDING"."X__T__LOADING" SWAP WITH "AI_PLATFORM"."LANDING"."X__T"',
+        'DROP TABLE IF EXISTS "AI_PLATFORM"."LANDING"."X__T__LOADING"']
+    assert staged.landing_statements("AI_PLATFORM", run, '"S"."T"', '"A"."L"."X"', "X", "c") == \
+        [q for _, q in staged.landing_steps("AI_PLATFORM", run, '"S"."T"', '"A"."L"."X"', "X", "c")]
     with pytest.raises(AssertionError):
         staged.stage_prefix("AI_PLATFORM", "../x", "T")
     with pytest.raises(AssertionError):
         staged.stage_prefix("AI_PLATFORM", run, "t'; drop")
+
+
+@pytest.mark.parametrize("types, safe, why", [
+    (["NUMBER", "TEXT", "DATE", "TIMESTAMP_NTZ", "BOOLEAN", "FLOAT", "TIME"], True, ""),
+    (["NUMBER", "TIMESTAMP_TZ"], False, "TIMESTAMP_TZ"),            # Snowflake 100171 on the unload
+    (["TIMESTAMP_LTZ"], False, "TIMESTAMP_LTZ"),
+    (["VARIANT", "OBJECT", "ARRAY"], False, "ARRAY, OBJECT, VARIANT"),  # would come back as JSON text
+    (["BINARY", "GEOGRAPHY", "GEOMETRY", "VECTOR"], False, "BINARY, GEOGRAPHY, GEOMETRY, VECTOR"),
+])
+def test_only_tables_whose_types_round_trip_go_through_parquet(types, safe, why):
+    cols = [{"COLUMN_NAME": f"C{i}", "DATA_TYPE": t} for i, t in enumerate(types)]
+    ok, reason = staged.parquet_safe(cols)
+    assert ok is safe and why in reason
+    assert staged.parquet_safe([{"COLUMN_NAME": "id", "DATA_TYPE": "NUMBER"},
+                                {"COLUMN_NAME": "ID", "DATA_TYPE": "NUMBER"}]) == (False, "it has column names that differ only by case")
+    assert staged.parquet_safe([])[0] is False
+
+
+def test_copy_results_give_the_counts():
+    assert staged.count_from([Row({"rows_unloaded": 7, "input_bytes": 1})], "rows_unloaded") == 7
+    assert staged.count_from([Row({"file": "a", "ROWS_LOADED": 3}), Row({"file": "b", "ROWS_LOADED": 4})], "rows_loaded") == 7
+    assert staged.count_from([Row({"status": "ok"})], "rows_unloaded") is None and staged.count_from([], "x") is None
+
+
+class _Spec:
+    copies, landing_database, landing_schema = True, "AI_PLATFORM", "LANDING"
+
+    def create_sql(self, name, select, comment):
+        return f"CREATE OR REPLACE TABLE AI_PLATFORM.LANDING.{name} AS {select}"
+
+
+class _Adapter:
+    database, schema = "SHARE_DB", "S"
+
+    def count_sql(self, name):
+        return f"SELECT COUNT(*) AS N FROM SOURCE_{name}"
+
+    def select_sql(self, name):
+        return f"SELECT * FROM SOURCE_{name}"
+
+
+def _land(session, columns, method="STAGED_PARQUET"):
+    from services.source.procedures import _land_object
+
+    return _land_object(session, "11111111-1111-1111-1111-111111111111", {"SOURCE_SYSTEM_NAME": "NVIDIA", "SOURCE_SYSTEM_ID": "s1"},
+                        _Adapter(), _Spec(), "CONTACTS", columns, method)
+
+
+COLS = [{"COLUMN_NAME": "ID", "DATA_TYPE": "NUMBER", "CHARACTER_MAXIMUM_LENGTH": None, "NUMERIC_PRECISION": 38,
+         "NUMERIC_SCALE": 0, "ORDINAL_POSITION": 1, "IS_NULLABLE": "NO", "COMMENT": "x" * 5000}]
+
+
+def test_a_table_with_tz_columns_lands_by_ctas_with_the_reason():
+    tz = COLS + [{"COLUMN_NAME": "UPDATED_AT", "DATA_TYPE": "TIMESTAMP_TZ", "CHARACTER_MAXIMUM_LENGTH": None,
+                  "NUMERIC_PRECISION": None, "NUMERIC_SCALE": None, "ORDINAL_POSITION": 2, "IS_NULLABLE": "YES", "COMMENT": None}]
+    session = Session({"CURRENT_DATABASE": [{"D": "AI_PLATFORM"}], "COUNT(*)": [{"N": 5}], "LAST_QUERY_ID": [{"Q": "q1"}]})
+    out = _land(session, tz)
+    assert out["status"] == "COMPLETE" and out["method"] == "CTAS" and "TIMESTAMP_TZ" in out["note"]
+    sqls = [q for q, _ in session.calls]
+    assert not any("PARQUET" in q for q in sqls) and any(q.startswith("CREATE OR REPLACE TABLE AI_PLATFORM.LANDING.") for q in sqls)
+
+
+def test_a_staged_table_counts_the_rows_the_unload_read_and_clips_long_comments():
+    session = Session({"CURRENT_DATABASE": [{"D": "AI_PLATFORM"}], "COPY INTO @": [{"rows_unloaded": 5}],
+                       'SELECT COUNT(*) AS N FROM "AI_PLATFORM"': [{"N": 5}], "LAST_QUERY_ID": [{"Q": "q1"}]})
+    out = _land(session, COLS)
+    sqls = [q for q, _ in session.calls]
+    assert out["status"] == "COMPLETE" and out["method"] == "STAGED_PARQUET" and out["source_rows"] == 5
+    assert not any("FROM SOURCE_CONTACTS" in q and "COUNT" in q for q in sqls)   # no second read of the share
+    assert any("SWAP WITH" in q for q in sqls)
+    registered = [p for q, p in session.calls if "LANDING_COLUMN_REGISTRY" in q]
+    assert registered and all(len(v) <= 4000 for v in registered[0] if isinstance(v, str))
+
+
+def test_a_failed_step_is_named_and_the_stage_cleanup_never_fails_a_landed_table():
+    session = Session({"CURRENT_DATABASE": [{"D": "AI_PLATFORM"}], "LAST_QUERY_ID": [{"Q": "q"}]}, fail=("SWAP WITH",))
+    out = _land(session, COLS)
+    assert out["status"] == "FAILED" and out["error"].startswith("swap failed:")
+    session = Session({"CURRENT_DATABASE": [{"D": "AI_PLATFORM"}], "COPY INTO @": [{"rows_unloaded": 2}],
+                       'SELECT COUNT(*) AS N FROM "AI_PLATFORM"': [{"N": 2}], "LAST_QUERY_ID": [{"Q": "q"}]})
+    original = session.sql
+    removes = []
+
+    def sql(q, params=None):
+        if q.startswith("REMOVE"):
+            removes.append(q)
+            if len(removes) == 2:
+                raise RuntimeError("stage busy")
+        return original(q, params)
+    session.sql = sql
+    assert _land(session, COLS)["status"] == "COMPLETE"
 
 
 def test_execute_landing_rejects_unknown_method():

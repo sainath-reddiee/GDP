@@ -349,7 +349,7 @@ RULES: List[Tuple[str, str, Any, str]] = [
     ("POST", r"/api/hub/profiles/annotations/[^/]+/(approve|reject)", "KNOWLEDGE.EDIT", ""),
     ("POST", r"/api/hub/profiles/expectations", None, ""),
     ("POST", r"/api/hub/sttm/diff", None, ""),
-    ("POST", r"/api/hub/sttm/[^/]+/edit", "STTM.EDIT", "Edit a mapping in the STTM catalog"),
+    ("POST", r"/api/hub/sttm/[^/]+/edit", "STTM.EDIT", "Edit a mapping in the Data Mapping catalog"),
     # Source control (V043): an approved mapping version opened as a pull request (never queued: only approved
     # versions are published and nothing changes in the app); reading pull request state back is open to anyone
     ("POST", r"/api/hub/sttm/[^/]+/publish", "STTM.EDIT", "Publish an approved mapping to Git"),

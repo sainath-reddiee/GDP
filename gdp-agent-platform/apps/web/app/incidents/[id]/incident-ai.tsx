@@ -362,7 +362,7 @@ export function ImpactPanel({ incidentId, envId, dagId }: { incidentId: string; 
       <Chips label="Tables" items={impact.tables ?? []} mono />
       <Chips label="Domains" items={impact.domains ?? []} />
       {impact.sttm?.length > 0 && (
-        <div><p className="font-medium">Mappings (STTM)</p>
+        <div><p className="font-medium">Mappings (Data Mapping)</p>
           <ul className="mt-1 space-y-0.5">
             {impact.sttm.map((s) => (
               <li key={`${s.run_id}:${s.target}`}>

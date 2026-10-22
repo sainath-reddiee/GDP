@@ -369,7 +369,7 @@ function Settings({ settings, roles }: { settings: GovSettings; roles: GovRole[]
       </label>
       <label className="flex items-center justify-between gap-3">
         <span>Asset store edits always need another person&apos;s approval
-          <span className="block text-xs text-muted-foreground">STTM and data quality changes made in the stores, even by holders of the privilege</span>
+          <span className="block text-xs text-muted-foreground">Data Mapping and data quality changes made in the stores, even by holders of the privilege</span>
         </span>
         <input type="checkbox" checked={s.STORE_EDITS_REQUIRE_APPROVAL ?? true} onChange={(e) => setS({ ...s, STORE_EDITS_REQUIRE_APPROVAL: e.target.checked })} />
       </label>

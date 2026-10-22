@@ -8,7 +8,7 @@ export const FAILURE_STATUS: Record<string, { label: string; tone: string; hint:
   RESOLVED: { label: "Fixed", tone: "bg-success/10 text-success", hint: "A known fix ran and succeeded" },
   TICKETED: { label: "Ticketed", tone: "bg-amber-100 text-amber-800", hint: "No known fix: the cause was analysed and a ticket opened" },
   REJECTED: { label: "Rejected", tone: "bg-rose-100 text-rose-700", hint: "The approver decided the fix should not run" },
-  OUT_OF_SCOPE: { label: "Out of scope", tone: "bg-muted text-muted-foreground", hint: "The pipeline is not in scope for automatic resolution" },
+  OUT_OF_SCOPE: { label: "Left to a person", tone: "bg-muted text-muted-foreground", hint: "Not handled automatically: the pipeline is out of scope, or it was not safe to act on by itself (the reason is shown)" },
 };
 
 export const FLOW_MODES: { value: "AUTO" | "APPROVAL_ALWAYS" | "TICKET_ONLY" | "DISABLED"; label: string; hint: string }[] = [

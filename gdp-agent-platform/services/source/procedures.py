@@ -264,7 +264,7 @@ def _land_object(session, run_id: str, source: Dict[str, Any], adapter: SourceAd
     target = fqn(database, schema, landing_name)
     result: Dict[str, Any] = {"object": object_name, "landing_table": f"{database}.{schema}.{landing_name}",
                               "status": "FAILED", "source_rows": None, "landed_rows": None, "query_id": None,
-                              "error": None}
+                              "error": None, "method": "IN_PLACE"}
     try:
         if not spec.copies:
             # Zero-copy: the registry points at the source table itself; row counts come from metadata.
@@ -273,16 +273,34 @@ def _land_object(session, run_id: str, source: Dict[str, Any], adapter: SourceAd
             rows_known = estimate[0]["N"] if estimate else None
             result.update(source_rows=rows_known, landed_rows=rows_known, status="COMPLETE")
         else:
-            result["source_rows"] = _rows(session, adapter.count_sql(object_name))[0]["N"]
             comment = f"As-is landing of {adapter.database}.{adapter.schema}.{object_name} by run {run_id}"
-            if method == staged.METHOD:
-                for statement in staged.landing_statements(
+            safe, why = staged.parquet_safe(columns) if method == staged.METHOD else (False, "")
+            if method == staged.METHOD and not safe:
+                result["note"] = f"landed with CREATE TABLE AS SELECT because {why}"
+            if safe:
+                result["method"] = staged.METHOD
+                unloaded = None
+                for step, statement in staged.landing_steps(
                         _platform_database(session), run_id, fqn(adapter.database, adapter.schema, object_name),
                         target, landing_name, comment):
-                    session.sql(statement).collect()
+                    try:
+                        found = session.sql(statement).collect()
+                    except Exception as exc:
+                        if step == "clean up the stage":
+                            continue   # the table has landed; the files go with the next landing of this run
+                        raise RuntimeError(f"{step} failed: {exc}") from exc
+                    if step == "unload":
+                        unloaded = staged.count_from(found, "rows_unloaded")
+                    if step == "load":
+                        result["query_id"] = _rows(session, "SELECT LAST_QUERY_ID() AS Q")[0]["Q"]
+                # the rows the unload read, in the same read: a share that changes meanwhile is not a mismatch
+                result["source_rows"] = (unloaded if unloaded is not None
+                                         else _rows(session, adapter.count_sql(object_name))[0]["N"])
             else:
+                result["method"] = "CTAS"
+                result["source_rows"] = _rows(session, adapter.count_sql(object_name))[0]["N"]
                 session.sql(spec.create_sql(landing_name, adapter.select_sql(object_name), comment)).collect()
-            result["query_id"] = _rows(session, "SELECT LAST_QUERY_ID() AS Q")[0]["Q"]
+                result["query_id"] = _rows(session, "SELECT LAST_QUERY_ID() AS Q")[0]["Q"]
             result["landed_rows"] = _rows(session, f"SELECT COUNT(*) AS N FROM {target}")[0]["N"]
             if result["landed_rows"] == result["source_rows"]:
                 result["status"] = "COMPLETE"
@@ -300,21 +318,30 @@ def _land_object(session, run_id: str, source: Dict[str, Any], adapter: SourceAd
              "NULLIF(?, '')::NUMBER", "IFF(? = 'COMPLETE', CURRENT_TIMESTAMP(), NULL)", "NULLIF(?, '')",
              "CURRENT_USER()", "NULLIF(?, '')"],
             [[landing_id, run_id, source["SOURCE_SYSTEM_ID"], adapter.database, adapter.schema, object_name,
-              database, schema, landing_name, ("COPY" if method == staged.METHOD else "CTAS") if spec.copies else "IN_PLACE",
+              database, schema, landing_name,
+              {"IN_PLACE": "IN_PLACE", staged.METHOD: "COPY"}.get(result["method"], "CTAS") if spec.copies else "IN_PLACE",
               result["status"],
               result["landed_rows"], result["source_rows"],
               result["status"], result["query_id"], result["error"]]])
     if result["status"] == "COMPLETE" and columns:
-        _insert(session, "CORE.LANDING_COLUMN_REGISTRY",
-                ["LANDING_COLUMN_ID", "LANDING_ID", "COLUMN_NAME", "DATA_TYPE", "ORDINAL_POSITION", "NULLABLE",
-                 "SOURCE_COMMENT"],
-                ["?", "?", "?", "?", "?::NUMBER", "? = 'YES'", "NULLIF(?, '')"],
-                [[str(uuid.uuid4()), landing_id, c["COLUMN_NAME"],
-                  format_data_type(c["DATA_TYPE"], c["CHARACTER_MAXIMUM_LENGTH"], c["NUMERIC_PRECISION"],
-                                   c["NUMERIC_SCALE"]),
-                  c["ORDINAL_POSITION"], c["IS_NULLABLE"], c["COMMENT"]] for c in columns])
+        try:
+            _register_columns(session, landing_id, columns)
+        except Exception as exc:   # the table has landed: a column the registry cannot hold never fails the run
+            result["warning"] = _clip(f"the landed columns were not all recorded: {exc}")
     result["landing_id"] = landing_id
     return result
+
+
+def _register_columns(session, landing_id: str, columns: List[Dict[str, Any]]) -> None:
+    """CORE.LANDING_COLUMN_REGISTRY rows for a landed table (SOURCE_COMMENT is VARCHAR(4000))."""
+    _insert(session, "CORE.LANDING_COLUMN_REGISTRY",
+            ["LANDING_COLUMN_ID", "LANDING_ID", "COLUMN_NAME", "DATA_TYPE", "ORDINAL_POSITION", "NULLABLE",
+             "SOURCE_COMMENT"],
+            ["?", "?", "?", "?", "?::NUMBER", "? = 'YES'", "NULLIF(?, '')"],
+            [[str(uuid.uuid4()), landing_id, c["COLUMN_NAME"],
+              format_data_type(c["DATA_TYPE"], c["CHARACTER_MAXIMUM_LENGTH"], c["NUMERIC_PRECISION"],
+                               c["NUMERIC_SCALE"]),
+              c["ORDINAL_POSITION"], c["IS_NULLABLE"], (c.get("COMMENT") or "")[:4000]] for c in columns])
 
 
 def execute_landing(session, run_id: str) -> Dict[str, Any]:

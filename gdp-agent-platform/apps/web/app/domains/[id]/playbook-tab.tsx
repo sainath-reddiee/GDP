@@ -15,7 +15,7 @@ import {
 } from "../actions";
 
 type Pipeline = "SILVER" | "GOLD";
-const STAGE_NAMES: Record<string, string> = { STTM: "STTM", DBT: "Code (dbt)", QA: "QA", SODA: "Data Quality" };
+const STAGE_NAMES: Record<string, string> = { STTM: "Data Mapping", DBT: "Code (dbt)", QA: "QA", SODA: "Data Quality" };
 const STAGE_LABEL = (s: string) => STAGE_NAMES[s] ?? s.charAt(0) + s.slice(1).toLowerCase();
 const EDITABLE_CONVENTIONS = ["model_dir", "layer_tag", "project_name", "branch_prefix", "pr_title", "commit_message", "codegen_prefix",
   "scd_type", "key_strategy", "prefix", "watermark_table", "skill", "convention"];

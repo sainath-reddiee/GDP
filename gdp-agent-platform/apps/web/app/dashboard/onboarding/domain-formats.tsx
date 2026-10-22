@@ -129,7 +129,7 @@ const MATRIX: { what: string; formats: string[]; limit: string; where: string }[
   { what: "Business documents", formats: [".pdf", ".docx", ".pptx", ".xlsx", ".html", ".md", ".txt", ".csv", ".json", ".yaml", ".xml", ".sql"], limit: "10 files, 50 MB each", where: "Domain, Sources tab" },
   { what: "Scans, diagrams, screenshots (OCR)", formats: [".png", ".jpg", ".tiff", ".webp", ".gif", ".bmp"], limit: "50 MB", where: "Domain, Sources tab" },
   { what: "Confluence", formats: ["page or space link"], limit: "20 pages per space", where: "Domain, Sources tab" },
-  { what: "Reference material", formats: ["data models", "MDM schemas", "STTM sheets", "dbt .zip/.yml", "sample rows"], limit: "10 files, 50 MB each", where: "Domain, References tab" },
+  { what: "Reference material", formats: ["data models", "MDM schemas", "Data Mapping sheets", "dbt .zip/.yml", "sample rows"], limit: "10 files, 50 MB each", where: "Domain, References tab" },
   { what: "Live Snowflake schema as reference", formats: ["DATABASE.SCHEMA"], limit: "", where: "Domain, References tab" },
   { what: "Examples of correct output", formats: [".csv", ".tsv", ".txt", ".xlsx"], limit: "10 MB", where: "Domain, Data model, Examples" },
 ];

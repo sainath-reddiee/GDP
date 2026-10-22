@@ -1,6 +1,6 @@
 import pytest
 
-from services.source.prepare import prepare_plan
+from services.source.prepare import INTERRUPTED, prepare_plan
 
 
 @pytest.mark.parametrize("state, failed_from, steps", [
@@ -19,3 +19,10 @@ def test_prepare_resumes_from_current_state(state, failed_from, steps):
 def test_prepare_rejects_states_outside_source(state, failed_from):
     with pytest.raises(ValueError):
         prepare_plan(state, failed_from)
+
+
+def test_a_landing_that_died_is_failed_and_landed_again_once_it_has_not_moved_for_a_while():
+    assert prepare_plan("LANDING_RUNNING", None, 45) == [INTERRUPTED, "retry:LANDING_PENDING", "landing"]
+    for idle in (None, 5):
+        with pytest.raises(ValueError, match="still running"):
+            prepare_plan("LANDING_RUNNING", None, idle)

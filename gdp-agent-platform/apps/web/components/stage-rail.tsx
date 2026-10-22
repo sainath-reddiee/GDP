@@ -128,7 +128,7 @@ export function StageRail({ runId, stages, pipeline = "SILVER" }: { runId: strin
     if (m === "LOCKED") return { status: "LOCKED", note: "locked" };
     for (const bad of ["FAILED", "BLOCKED", "CANCELLED"] as const) if (m === bad || t === bad) return { status: bad, note: TONE[bad].label };
     if (m === "REVIEW_REQUIRED") return { status: "REVIEW_REQUIRED", note: "review mapping" };
-    if (t === "REVIEW_REQUIRED") return { status: "REVIEW_REQUIRED", note: "review STTM" };
+    if (t === "REVIEW_REQUIRED") return { status: "REVIEW_REQUIRED", note: "review Data Mapping" };
     return { status: "ACTIVE", note: m === "COMPLETE" ? "transformations" : "fields" };
   })();
   const spine = ["SOURCE", "PROFILING", "MODELING"];

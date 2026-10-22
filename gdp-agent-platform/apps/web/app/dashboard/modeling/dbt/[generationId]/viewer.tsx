@@ -70,7 +70,7 @@ export function DbtViewer({ detail, initialFile, canReview }: { detail: DbtGener
     <div className="space-y-4">
       <p className="flex items-start gap-2 rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-sm text-sky-900 dark:border-sky-500/30 dark:bg-sky-500/10 dark:text-sky-100" data-testid="dbt-readonly">
         <Info className="mt-0.5 h-4 w-4 shrink-0" />
-        <span>dbt is generated from the approved domain model and the STTM, so it is read-only here. Change the model in the Model Workbench or the mapping in the STTM Store, then regenerate dbt on the run.</span>
+        <span>dbt is generated from the approved domain model and the Data Mapping, so it is read-only here. Change the model in the Model Workbench or the mapping in the Data Mapping Store, then regenerate dbt on the run.</span>
       </p>
       <div className="grid gap-4 lg:grid-cols-[280px_minmax(0,1fr)]">
         <aside className="surface space-y-2 p-3" aria-label="Files">
@@ -128,7 +128,7 @@ export function DbtViewer({ detail, initialFile, canReview }: { detail: DbtGener
                     {f.message}{f.line_hint ? <span className="text-muted-foreground"> ({f.line_hint})</span> : null}</li>
                 ))}
               </ul>
-              <p className="text-xs text-muted-foreground">To act on a finding, change the model or the STTM and regenerate dbt.</p>
+              <p className="text-xs text-muted-foreground">To act on a finding, change the model or the Data Mapping and regenerate dbt.</p>
             </div>
           )}
         </section>

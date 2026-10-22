@@ -111,7 +111,8 @@ export function IngestionWizard({ domains, user }: { domains: DomainOption[]; us
     setSource({ ...source, source_type: type });
     if (sync && !childTyped) {
       const kind = type === "POSTGRES" ? "POSTGRESQL" : type;
-      setSnap((s) => ({ ...s, child_pipeline_name: sync.child_pipeline_by_type[kind] ?? s.child_pipeline_name }));
+      // no mapping for this type: empty, so the previous type's pipeline is never saved for it
+      setSnap((s) => ({ ...s, child_pipeline_name: sync.child_pipeline_by_type[kind] ?? "" }));
     }
   };
 

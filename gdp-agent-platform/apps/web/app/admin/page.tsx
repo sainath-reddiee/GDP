@@ -30,7 +30,7 @@ const SECTIONS = [
   { id: "models", label: "AI models", icon: Bot, hint: "Models in this account, the model per stage and the rate card" },
   { id: "access", label: "Access and governance", icon: ShieldCheck, hint: "Users, roles, privileges and approval policies" },
   { id: "integrations", label: "Integrations", icon: Plug, hint: "Connections to the client's tools, configured once and used by every run" },
-  { id: "skills", label: "Skills per stage", icon: Sparkles, hint: "Which skills each pipeline stage loads, and in what order" },
+  { id: "skills", label: "Agent Skills per stage", icon: Sparkles, hint: "Which skills each pipeline stage loads, and in what order" },
   { id: "rules", label: "Rules", icon: SlidersHorizontal, hint: "Thresholds and hints" },
   { id: "standards", label: "Modeling standards", icon: Ruler, hint: "Naming and conventions" },
   { id: "environments", label: "Environments", icon: Layers, hint: "The real databases each environment uses, so QA packs and Data Quality suites run in any of them" },

@@ -17,6 +17,7 @@ from services.common.rules import rule
 
 NULL_PLACEHOLDERS = ("", "N/A", "NA", "NULL", "NONE", "<NULL>", ".")
 TOP_VALUES = 10
+VALUE_CHARS = 256   # values kept in a profile (min, max, top values, patterns) are cut to this length
 TOP_PATTERNS = 5
 
 PROFILER_VERSION = "3"   # 3: spread, quartiles, zeros, blanks, padding, type-like text, duplicate rows
@@ -97,7 +98,8 @@ def stats_sql(table_fqn: str, columns: Sequence[Tuple[str, str]], approximate: b
                       f"APPROX_PERCENTILE({q}, 0.75)::FLOAT AS P75{i}",
                       f"COUNT_IF({q} = 0) AS ZERO{i}", f"COUNT_IF({q} < 0) AS NEG{i}"]
         count_distinct = f"APPROX_COUNT_DISTINCT({q})" if approximate else f"COUNT(DISTINCT {q})"
-        parts += [f"{count_distinct} AS D{i}", f"MIN({q})::VARCHAR AS MIN{i}", f"MAX({q})::VARCHAR AS MAX{i}"]
+        parts += [f"{count_distinct} AS D{i}", f"LEFT(MIN({q})::VARCHAR, {VALUE_CHARS}) AS MIN{i}",
+                  f"LEFT(MAX({q})::VARCHAR, {VALUE_CHARS}) AS MAX{i}"]
     return f"SELECT {', '.join(parts)} FROM {table_fqn}"
 
 
@@ -110,7 +112,7 @@ def frequencies_sql(table_fqn: str, columns: Sequence[Tuple[str, str]], limit: i
         if type_family(data_type) == "OTHER":
             continue
         q = quote(name)
-        parts.append(f"SELECT {i} AS C, V, N FROM (SELECT {q}::VARCHAR AS V, COUNT(*) AS N FROM {source} "
+        parts.append(f"SELECT {i} AS C, V, N FROM (SELECT LEFT({q}::VARCHAR, {VALUE_CHARS}) AS V, COUNT(*) AS N FROM {source} "
                      f"WHERE {q} IS NOT NULL GROUP BY 1 ORDER BY 2 DESC, 1 LIMIT {int(limit)})")
     return " UNION ALL ".join(parts) or None
 
@@ -123,7 +125,8 @@ def patterns_sql(table_fqn: str, columns: Sequence[Tuple[str, str]], limit: int 
         if type_family(data_type) != "TEXT":
             continue
         q = quote(name)
-        shape = f"REGEXP_REPLACE(REGEXP_REPLACE(REGEXP_REPLACE({q}::VARCHAR, '[A-Z]', 'A'), '[a-z]', 'a'), '[0-9]', '9')"
+        shape = (f"REGEXP_REPLACE(REGEXP_REPLACE(REGEXP_REPLACE(LEFT({q}::VARCHAR, {VALUE_CHARS}), '[A-Z]', 'A'), "
+                 "'[a-z]', 'a'), '[0-9]', '9')")
         parts.append(f"SELECT {i} AS C, P, N FROM (SELECT {shape} AS P, COUNT(*) AS N FROM {source} "
                      f"WHERE {q} IS NOT NULL GROUP BY 1 ORDER BY 2 DESC, 1 LIMIT {int(limit)})")
     return " UNION ALL ".join(parts) or None
@@ -207,7 +210,7 @@ def column_stats(row: Dict[str, Any], i: int, row_count: int, approximate: bool 
                      ("zero_count", "ZERO"), ("negative_count", "NEG"), ("blank_count", "BLANK"),
                      ("padded_count", "PAD"), ("numeric_like_count", "NUMLIKE"), ("date_like_count", "DATELIKE")):
         if f"{col}{i}" in row and row[f"{col}{i}"] is not None:
-            stats[key] = float(row[f"{col}{i}"]) if key in floats else int(row[f"{col}{i}"])
+            stats[key] = _finite(row[f"{col}{i}"]) if key in floats else int(row[f"{col}{i}"])
     return stats
 
 

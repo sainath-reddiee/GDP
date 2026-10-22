@@ -35,10 +35,10 @@ const STEPS: Step[] = [
   { state: "MAPPING_APPROVED", nodes: { source: "complete", profiling: "complete", modeling: "progress" }, gate: 0,
     lines: [{ actor: "human", who: "Human approval", text: "model approver approved the mapping, justification logged" }] },
   { state: "STTM_REVIEW", nodes: { source: "complete", profiling: "complete", modeling: "review" }, gate: 1, hold: true,
-    lines: [{ actor: "agent", who: "Agent", text: "generate_sttm(): STTM v1 with transformations and joins" },
-            { actor: "gate", who: "Awaiting approval", text: "STTM · STTM.APPROVE · STTM approver" }] },
+    lines: [{ actor: "agent", who: "Agent", text: "generate_sttm(): Data Mapping v1 with transformations and joins" },
+            { actor: "gate", who: "Awaiting approval", text: "Data Mapping · STTM.APPROVE · Data Mapping approver" }] },
   { state: "STTM_APPROVED", nodes: { source: "complete", profiling: "complete", modeling: "complete", qa: "progress", dq: "progress", code: "progress" }, gate: 1,
-    lines: [{ actor: "human", who: "Human approval", text: "STTM approver approved; three lanes start in parallel" }] },
+    lines: [{ actor: "human", who: "Human approval", text: "Data Mapping approver approved; three lanes start in parallel" }] },
   { state: "VALIDATION_PASSED", nodes: { source: "complete", profiling: "complete", modeling: "complete", qa: "review", dq: "review", code: "complete", validation: "complete" },
     gate: 2, hold: true,
     lines: [{ actor: "agent", who: "Agent", text: "generate_soda(): SodaCL checks and a Great Expectations suite" },
@@ -161,7 +161,7 @@ export function RunPreview() {
           <span className="hidden lg:block"><Fork active={["complete", "progress", "review"].includes(st("qa"))} /></span>
           <div className="space-y-2 rounded-xl border border-dashed border-white/10 p-2 lg:border-0 lg:p-0">
             <p className="font-mono text-[10px] uppercase tracking-[0.16em] text-slate-500 lg:hidden">in parallel</p>
-            <Node label="QA tests" sub="SQL tests from the STTM" status={st("qa")} />
+            <Node label="QA tests" sub="SQL tests from the Data Mapping" status={st("qa")} />
             <Node label="Data Quality" sub="SodaCL and GX checks" status={st("dq")} />
             <div className="grid gap-2 sm:grid-cols-2">
               <Node label="Silver Code Generation" sub="dbt models" status={st("code")} />

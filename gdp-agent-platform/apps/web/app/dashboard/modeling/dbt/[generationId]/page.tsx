@@ -20,7 +20,7 @@ export default async function DbtGenerationPage({ params, searchParams }: { para
       <p className="eyebrow"><Link href="/dashboard/modeling?view=dbt" className="hover:underline">Modeling Store · dbt projects</Link></p>
       <PageHeader title={<span className="font-mono">{g.target_model ?? "dbt project"}</span>}
                   description={<>Generation v{g.generation_version} of <Link className="text-primary hover:underline" href={`/runs/${g.run_id}/dbt`}>{data.run?.run_name ?? "the run"}</Link>
-                    {g.sttm_version ? ` · STTM v${g.sttm_version}` : ""} · read-only, regenerated from the model and STTM</>}
+                    {g.sttm_version ? ` · Data Mapping v${g.sttm_version}` : ""} · read-only, regenerated from the model and Data Mapping</>}
                   actions={<span className="flex items-center gap-2"><StatusPill status={g.generation_status} />{data.published && <StatusPill status="PUBLISHED" />}</span>} />
       {latest && (
         <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-100">

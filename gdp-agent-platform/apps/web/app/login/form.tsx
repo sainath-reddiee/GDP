@@ -129,7 +129,7 @@ export function LoginForm({ mode, compact = false }: { mode: AuthMode; compact?:
       </div>
       <ul className="grid gap-2 text-xs text-slate-400">
         <li className="flex items-center gap-2"><span className="h-1.5 w-1.5 rounded-full bg-cyan-400" /> Profiling and modeling run in your Snowflake account with Cortex</li>
-        <li className="flex items-center gap-2"><span className="h-1.5 w-1.5 rounded-full bg-emerald-400" /> Every mapping, STTM and code change is approved by a person</li>
+        <li className="flex items-center gap-2"><span className="h-1.5 w-1.5 rounded-full bg-emerald-400" /> Every mapping, Data Mapping and code change is approved by a person</li>
       </ul>
     </div>
   );

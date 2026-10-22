@@ -20,7 +20,7 @@ import {
 
 const MODES: { id: BuilderMode; title: string; body: string; icon: typeof Sparkles }[] = [
   { id: "interview", title: "Guided interview", body: "Describe the goal, answer a few clarifying questions, get a draft.", icon: MessageSquareText },
-  { id: "knowledge", title: "From platform knowledge", body: "Distil approved mappings, STTM rules, quality patterns and models of a domain.", icon: BookOpen },
+  { id: "knowledge", title: "From platform knowledge", body: "Distil approved mappings, Data Mapping rules, quality patterns and models of a domain.", icon: BookOpen },
   { id: "document", title: "From a document", body: "Turn a standards document, runbook or contract into a playbook.", icon: FileUp },
   { id: "improve", title: "Improve a skill", body: "Propose the next version from recent failures and reviewer rejections.", icon: Wand2 },
 ];

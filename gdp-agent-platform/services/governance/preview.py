@@ -130,7 +130,7 @@ def sttm_preview(base: Dict[str, Any], latest: Dict[str, Any], payload: Dict[str
         plan = cat_sttm.plan_edit(base, plan_payload, {})
     except (AssertionError, ValueError) as exc:
         out = generic("POST", "", payload)
-        out.update(kind="STTM_EDIT", headline=f"STTM edit of {target}", link=link,
+        out.update(kind="STTM_EDIT", headline=f"Data Mapping edit of {target}", link=link,
                    warnings=warnings + [f"This change no longer applies to v{base.get('version')}: {exc}"])
         return out
     d = plan["diff"]
@@ -162,7 +162,7 @@ def sttm_preview(base: Dict[str, Any], latest: Dict[str, Any], payload: Dict[str
                                                                      "set", "the join plan is unchanged")]})
     if payload.get("note"):
         sections.append({"title": "Requester's note", "rows": [row("note", after=payload["note"], change="set")]})
-    return {"kind": "STTM_EDIT", "headline": f"STTM edit of {target} on v{base.get('version')}: {d['summary']}",
+    return {"kind": "STTM_EDIT", "headline": f"Data Mapping edit of {target} on v{base.get('version')}: {d['summary']}",
             "warnings": warnings, "link": link, "sections": sections}
 
 

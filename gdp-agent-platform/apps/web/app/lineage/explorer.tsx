@@ -15,7 +15,7 @@ const LAYER: Record<LineageLayer, { label: string; cls: string }> = {
   GOLD: { label: "Gold", cls: "border-amber-500/50 bg-amber-500/10" },
 };
 const KIND: Record<LineageEdge["kind"], string> = {
-  INGEST: "landed", MAP: "mapped (STTM)", MDM_MATCH: "MDM match", MDM_GOLDEN: "golden record", BUILD: "built", RESOLVE: "resolved key",
+  INGEST: "landed", MAP: "mapped (Data Mapping)", MDM_MATCH: "MDM match", MDM_GOLDEN: "golden record", BUILD: "built", RESOLVE: "resolved key",
 };
 const short = (o: string) => o.split(".").slice(-1)[0];
 

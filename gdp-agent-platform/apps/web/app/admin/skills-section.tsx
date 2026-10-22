@@ -60,7 +60,7 @@ export function SkillsSection({ stages, bindings, skills }: { stages: string[]; 
     <div className="space-y-4 pb-16">
       <p className="text-sm text-muted-foreground">
         Every stage loads its enabled skills, in this order, before it acts. A skill always loads its production version
-        (or the version a run is trying). Versions and releases live on <Link href="/skills" className="text-primary hover:underline">Skills</Link>.
+        (or the version a run is trying). Versions and releases live on <Link href="/skills" className="text-primary hover:underline">Agent Skills</Link>.
         &ldquo;GDP runs&rdquo; skills load only when the run follows the GDP standard.
       </p>
       <div className="grid gap-3 lg:grid-cols-2 2xl:grid-cols-3">

@@ -109,7 +109,7 @@ export function KnowledgeDrawer({ item: initial, onClose, onEdit, onChange }: {
               <p className="whitespace-pre-wrap text-sm leading-relaxed">{item.content}</p>
               {item.content_json != null && (
                 <div>
-                  <p className="mb-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Structured (what mapping, STTM and quality read)</p>
+                  <p className="mb-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Structured (what mapping, Data Mapping and quality read)</p>
                   <pre className="overflow-x-auto rounded-lg bg-muted/50 p-3 font-mono text-[11px]">{JSON.stringify(item.content_json, null, 2)}</pre>
                 </div>
               )}

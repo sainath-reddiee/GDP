@@ -1,67 +1,18 @@
 "use client";
 
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import { AnimatePresence, LayoutGroup, MotionConfig, motion, type Transition } from "framer-motion";
 import { ArrowRight, Check, X, type LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-// The onboarding page reads like a pipeline run: each step is a node on a rail, a finished step fills its edge down
-// to the next one, and the path chosen so far is shown as a route in the header.
+// The onboarding page reads like a pipeline run: each step is a node on a rail, and a finished step fills its edge
+// down to the next one.
 
 const SPRING: Transition = { type: "spring", stiffness: 420, damping: 36, mass: 0.8 };
 const SOFT: Transition = { type: "spring", stiffness: 260, damping: 30 };
 
-/* ------------------------------------------------------------------ route trail */
-
-type TrailCtx = { segments: (string | null)[]; set: (depth: number, segment: string | null) => void };
-const Trail = createContext<TrailCtx>({ segments: [], set: () => {} });
-
 export function OnboardingShell({ children }: { children: ReactNode }) {
-  const [segments, setSegments] = useState<(string | null)[]>([]);
-  const set = useCallback((depth: number, segment: string | null) => setSegments((s) => {
-    if (s[depth] === segment && (segment !== null || s.length <= depth)) return s;
-    const next = s.slice(0, depth);
-    if (segment) next[depth] = segment;
-    return next;
-  }), []);
-  const value = useMemo(() => ({ segments, set }), [segments, set]);
-  return (
-    <MotionConfig reducedMotion="user">
-      <Trail.Provider value={value}>{children}</Trail.Provider>
-    </MotionConfig>
-  );
-}
-
-/** Publish this level of the route (null clears it and everything after it). */
-export function useTrailSegment(depth: number, segment: string | null) {
-  const { set } = useContext(Trail);
-  useEffect(() => { set(depth, segment); }, [depth, segment, set]);
-  useEffect(() => () => set(depth, null), [depth, set]);
-}
-
-/** ~/onboard/source/snowflake-share, built segment by segment as choices are made. */
-export function RouteTrail() {
-  const { segments } = useContext(Trail);
-  const parts = segments.filter((s): s is string => !!s);
-  return (
-    <div className="mt-3 inline-flex h-8 max-w-full items-center overflow-hidden rounded-md border bg-card px-2.5 font-mono text-xs shadow-xs"
-         aria-label={`Onboarding path: ${["onboard", ...parts].join(" / ")}`} data-testid="onboard-route">
-      <span className="text-muted-foreground">~/</span>
-      <span className="text-foreground/80">onboard</span>
-      <AnimatePresence initial={false}>
-        {parts.map((p, i) => (
-          <motion.span key={`${i}-${p}`} layout className="inline-flex items-center whitespace-nowrap"
-                       initial={{ opacity: 0, x: -6, filter: "blur(3px)" }} animate={{ opacity: 1, x: 0, filter: "blur(0px)" }}
-                       exit={{ opacity: 0, x: -4, filter: "blur(3px)", transition: { duration: 0.12 } }} transition={SOFT}>
-            <span className="px-0.5 text-muted-foreground/60">/</span>
-            <span className={i === parts.length - 1 ? "font-medium text-primary" : "text-foreground/80"}>{p}</span>
-          </motion.span>
-        ))}
-      </AnimatePresence>
-      <motion.span layout aria-hidden className="ml-0.5 inline-block h-3.5 w-[7px] rounded-[1px] bg-primary/70"
-                   animate={{ opacity: [1, 1, 0, 0] }} transition={{ duration: 1.1, repeat: Infinity, times: [0, 0.5, 0.5, 1] }} />
-    </div>
-  );
+  return <MotionConfig reducedMotion="user">{children}</MotionConfig>;
 }
 
 /* ------------------------------------------------------------------ rail */
@@ -130,11 +81,10 @@ const editable = (el: EventTarget | null) => el instanceof HTMLElement && (el.is
 
 /** One decision on the rail. Every option shows as a tile (number keys pick one); once chosen, the other tiles step
  *  away, the chosen one settles into a single row, and Change brings the rest back. */
-export function ChoiceStep<K extends string>({ n, title, choices, value, onChange, testId, depth }: {
-  n: number; title: string; choices: Choice<K>[]; value: K | null; onChange: (key: K | null) => void; testId: string; depth: number;
+export function ChoiceStep<K extends string>({ n, title, choices, value, onChange, testId }: {
+  n: number; title: string; choices: Choice<K>[]; value: K | null; onChange: (key: K | null) => void; testId: string;
 }) {
   const chosen = choices.find((c) => c.key === value) ?? null;
-  useTrailSegment(depth, chosen ? chosen.slug ?? chosen.key : null);
 
   useEffect(() => {
     if (chosen) return;

@@ -24,7 +24,7 @@ export default async function SttmCatalog({ searchParams }: { searchParams: Para
   const versions = data.mappings.reduce((n, m) => n + Number(m.versions || 0), 0);
   return (
     <div className="space-y-6">
-      <PageHeader eyebrow="Asset store" title="STTM Store"
+      <PageHeader eyebrow="Asset store" title="Data Mapping Store"
                   description="Every source-to-target mapping with its full version history, independent of the run that produced it. Search, review rules, adjust business transformations inline and re-export as dbt models." />
       <StoreNav current="sttm" domain={searchParams.domain} />
       <div className="grid gap-3 sm:grid-cols-3">
@@ -32,10 +32,10 @@ export default async function SttmCatalog({ searchParams }: { searchParams: Para
         <Kpi label="Versions" value={versions} hint="on record for the mappings shown" icon={History} tone="slate" />
         <Kpi label="Approved" value={data.mappings.filter((m) => m.status === "APPROVED").length} hint="latest version approved" icon={Layers} tone="emerald" />
       </div>
-      {!data.deployed && <NotDeployed what="The STTM catalog (CORE.STTM_CATALOG)" />}
+      {!data.deployed && <NotDeployed what="The Data Mapping catalog (CORE.STTM_CATALOG)" />}
       <SttmFilters initial={{ q: searchParams.q ?? "", source: searchParams.source ?? "", target: searchParams.target ?? "", status: searchParams.status ?? "" }} />
       {!data.mappings.length ? (
-        <EmptyState icon={GitCompareArrows} title="No mappings yet">Generate an STTM in a run; each version lands here automatically.</EmptyState>
+        <EmptyState icon={GitCompareArrows} title="No mappings yet">Generate a Data Mapping in a run; each version lands here automatically.</EmptyState>
       ) : (
         <div className="surface overflow-hidden">
           <Table>

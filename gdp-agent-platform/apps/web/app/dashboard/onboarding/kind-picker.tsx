@@ -26,7 +26,7 @@ export function KindPicker({ value }: { value: Kind | null }) {
   };
   return (
     <>
-      <ChoiceStep n={1} title="What are you onboarding" choices={KINDS} value={shown} onChange={pick} testId="onboard-kind" depth={0} />
+      <ChoiceStep n={1} title="What are you onboarding" choices={KINDS} value={shown} onChange={pick} testId="onboard-kind" />
       {pending && shown && shown !== value && (
         <Reveal>
           <RailStep n={2} title="Loading" last>

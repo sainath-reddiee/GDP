@@ -163,7 +163,7 @@ export function SttmBoard({
               ))}
             </div>
           </div>
-          <div role="listbox" aria-label="STTM lines" className="max-h-[50vh] flex-1 overflow-y-auto p-1.5 lg:max-h-none">
+          <div role="listbox" aria-label="Data Mapping lines" className="max-h-[50vh] flex-1 overflow-y-auto p-1.5 lg:max-h-none">
             {visible.length === 0 && <p className="p-3 text-xs text-muted-foreground">No lines match.</p>}
             {visible.map((l) => {
               const active = l.sttm_line_id === line.sttm_line_id;
@@ -239,7 +239,7 @@ export function SttmBoard({
               </div>
             </div>
           ) : (
-            <p className="text-xs text-muted-foreground">Reopen STTM review to change logic. Export still works.</p>
+            <p className="text-xs text-muted-foreground">Reopen Data Mapping review to change logic. Export still works.</p>
           )}
           {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
 

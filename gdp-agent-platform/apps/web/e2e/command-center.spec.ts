@@ -53,7 +53,7 @@ for (const theme of ["light", "dark"] as const) {
       await page.waitForURL(/\/dashboard\/qa-store\?new=1/);
       await expect(page.getByRole("dialog").getByText("New QA pack")).toBeVisible();
       await page.goto("/dashboard");
-      await page.getByRole("link", { name: "Open the STTM Store" }).click();
+      await page.getByRole("link", { name: "Open the Data Mapping Store" }).click();
       await page.waitForURL(/\/dashboard\/sttm$/);
     });
 
@@ -98,7 +98,6 @@ test("onboarding is one choice per step, and Change brings the options back", as
   await expect(page.getByTestId("onboard-kind-domain")).toHaveCount(0);
   await expect(page.getByTestId("onboard-source-chosen")).toContainText("Other sources");
   await expect(page.getByTestId("ingestion-wizard")).toBeVisible();
-  await expect(page.getByTestId("onboard-route")).toContainText("onboard/source/other-sources");
   // Change brings the kinds back; a domain import shows the starter files and every accepted format
   await page.getByTestId("onboard-kind-change").click();
   await page.waitForURL(/\/dashboard\/onboarding$/);
@@ -114,7 +113,7 @@ test("onboarding is one choice per step, and Change brings the options back", as
   await expect(page.getByText("Application onboarding is not available yet")).toBeVisible();
 });
 
-test("an STTM Store edit is staged and sent for approval", async ({ page, context }) => {
+test("a Data Mapping Store edit is staged and sent for approval", async ({ page, context }) => {
   await devSession(context, "light");
   await page.goto("/dashboard/sttm/c1");
   await expect(page.getByTestId("pending-changes")).toContainText("1 mapping change waiting for approval");
@@ -137,7 +136,7 @@ test("the Modeling Store shows run models and dbt read-only with its changes", a
   await page.goto("/dashboard/modeling?view=runs");
   await expect(page.getByTestId("run-models")).toContainText("CRM customers to silver");
   await page.getByTestId("store-tab-dbt").click();
-  await expect(page.getByTestId("dbt-generations")).toContainText("STTM changed since; regenerate");
+  await expect(page.getByTestId("dbt-generations")).toContainText("Data Mapping changed since; regenerate");
   await page.getByTestId("dbt-g1").click();
   await page.waitForURL(/\/dashboard\/modeling\/dbt\/g1/);
   await expect(page.getByTestId("dbt-readonly")).toBeVisible();
@@ -152,7 +151,7 @@ test("the DQ Store decides run checks through approval", async ({ page, context 
   await page.goto("/dashboard/dq-store?view=runs&run=r1");
   await expect(page.getByTestId("run-checks")).toContainText("2 approved · 2 proposed");
   await page.getByRole("button", { name: "Coverage" }).click();
-  await expect(page.getByTestId("coverage")).toContainText("80% of 5 STTM columns");
+  await expect(page.getByTestId("coverage")).toContainText("80% of 5 Data Mapping columns");
   await page.getByTestId("check-e1").click();
   await expect(page.getByText("4100 rows with a null EMAIL")).toBeVisible();
   await page.keyboard.press("Escape");

@@ -15,7 +15,7 @@ import {
 const KIND: Record<ReferenceKind, { label: string; use: string }> = {
   DATA_MODEL: { label: "Data model", use: "The layer's reference model: Gold proposals align to it and output is scored against it" },
   MDM_SCHEMA: { label: "Post-MDM model", use: "Reltio's output: the MDM contract and resolution come from it" },
-  STTM: { label: "STTM sheet", use: "Mapping ranks its lines first; the STTM pre-fills its transformations" },
+  STTM: { label: "Data Mapping sheet", use: "Mapping ranks its lines first; the Data Mapping pre-fills its transformations" },
   DBT_CODE: { label: "dbt code", use: "Generated code follows its folders, naming, materializations and macros" },
   SAMPLE_ROWS: { label: "Sample rows", use: "A table's correct output examples (after review)" },
   DOCUMENT: { label: "Document", use: "Read for knowledge, proposed for this layer (after review)" },
@@ -88,13 +88,13 @@ export function ReferencesTab({ domainId, layer }: { domainId: string; layer: La
         <div className="grid gap-4 lg:grid-cols-2">
           <section className="surface space-y-2 p-4">
             <h3 className="flex items-center gap-2 text-sm font-semibold"><Upload className="h-4 w-4 text-primary" />Files</h3>
-            <p className="text-xs text-muted-foreground">Any type: Erwin XML, DDL, an Excel or CSV dictionary, an STTM sheet, a zip of a dbt project, sample rows, PDFs, Word, images. Up to 10 files of 50 MB.</p>
+            <p className="text-xs text-muted-foreground">Any type: Erwin XML, DDL, an Excel or CSV dictionary, a Data Mapping sheet, a zip of a dbt project, sample rows, PDFs, Word, images. Up to 10 files of 50 MB.</p>
             <div className="flex flex-wrap items-center gap-2">
               <select aria-label="Kind" value={kind} onChange={(e) => setKind(e.target.value as "" | ReferenceKind)} className="h-8 rounded-lg border bg-background px-2 text-xs">
                 <option value="">Detect what it is</option>
                 {(Object.keys(KIND) as ReferenceKind[]).map((k) => <option key={k} value={k}>{KIND[k].label}</option>)}
               </select>
-              <input aria-label="Table (sample rows or STTM)" value={table} onChange={(e) => setTable(e.target.value)} placeholder="Table (for rows or an STTM sheet)"
+              <input aria-label="Table (sample rows or Data Mapping)" value={table} onChange={(e) => setTable(e.target.value)} placeholder="Table (for rows or a Data Mapping sheet)"
                      className="h-8 w-56 rounded-lg border bg-background px-2 font-mono text-xs" />
               <input ref={input} type="file" multiple aria-label="Files" onChange={(e) => upload(e.target.files)} disabled={pending}
                      className="text-xs file:mr-2 file:rounded-md file:border-0 file:bg-primary file:px-3 file:py-1.5 file:text-xs file:font-medium file:text-primary-foreground" />
@@ -231,7 +231,7 @@ export function Accuracy({ domainId, layer, scores, onScored, detailed = false }
                   {detailed && now.score.missing?.length ? ` · missing ${now.score.missing.slice(0, 4).join(", ")}${now.score.missing.length > 4 ? " ..." : ""}` : ""}</p>
               </li>);
           })}</ul>
-        ) : <p className="mt-1 text-xs text-muted-foreground">Give this layer a reference model or STTM: each proposal and mapping is then measured against it.</p>}
+        ) : <p className="mt-1 text-xs text-muted-foreground">Give this layer a reference model or Data Mapping: each proposal and mapping is then measured against it.</p>}
       {msg && <p role="status" className="mt-2 text-xs text-muted-foreground">{msg}</p>}
       {!detailed && <Link href={`/domains/${domainId}?tab=references&layer=${layer}`} className="mt-2 inline-block text-xs text-primary hover:underline">References</Link>}
     </section>

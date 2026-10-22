@@ -66,7 +66,7 @@ export default async function Knowledge({ searchParams }: {
 
   return (
     <div className="space-y-5">
-      <PageHeader eyebrow="Knowledge" title="Knowledge hub"
+      <PageHeader eyebrow="Enterprise Memory" title="Enterprise Memory"
                   description="Everything the agents know: glossary, rules, patterns, approved mappings and models. Every approval and decision teaches it; every change is a version you can compare and roll back." />
       <HubShell tab={tab} overview={overview}>{body}</HubShell>
     </div>

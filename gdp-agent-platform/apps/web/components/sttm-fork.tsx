@@ -36,14 +36,14 @@ export function SttmFork({
   return (
     <figure className="rounded-xl border bg-card p-5 shadow-sm">
       <figcaption className="mb-4 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-        Lineage from the STTM — two parallel flows
+        Lineage from the Data Mapping — two parallel flows
       </figcaption>
       <div className="flex flex-col items-center">
         <Link
           href={`/runs/${runId}/modeling?tab=transformations`}
           className={cn("w-full max-w-xs rounded-lg border px-4 py-3 text-center", tone(unlocked ? "done" : "active"))}
         >
-          <p className="text-sm font-semibold">STTM</p>
+          <p className="text-sm font-semibold">Data Mapping</p>
           <p className="text-xs text-muted-foreground">Approved source-to-target contract</p>
         </Link>
 
@@ -59,7 +59,7 @@ export function SttmFork({
           >
             <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Flow A</p>
             <p className="text-sm font-semibold">Data Quality</p>
-            <p className="mt-1 text-xs text-muted-foreground">STTM columns → SodaCL checks → pack review</p>
+            <p className="mt-1 text-xs text-muted-foreground">Data Mapping columns → SodaCL checks → pack review</p>
           </Link>
           <Link
             href={`/runs/${runId}/dbt`}
@@ -67,7 +67,7 @@ export function SttmFork({
           >
             <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Flow B</p>
             <p className="text-sm font-semibold">dbt</p>
-            <p className="mt-1 text-xs text-muted-foreground">STTM + domain skill → models → branch / project</p>
+            <p className="mt-1 text-xs text-muted-foreground">Data Mapping + domain skill → models → branch / project</p>
           </Link>
         </div>
         <p className="mt-3 text-center text-xs text-muted-foreground">

@@ -35,7 +35,7 @@ export function StoreCards({ o, domain }: { o: Overview | null; domain?: string 
                      note={o?.models ? [`${fmt(o.models.tables_published)} table model${o.models.tables_published === 1 ? "" : "s"} published`,
                                         o.models.legacy_designs ? `${fmt(o.models.legacy_designs)} legacy design${o.models.legacy_designs === 1 ? "" : "s"}` : ""]
                                         .filter(Boolean).join(" · ") : undefined} />
-          <StoreCard testId="store-sttm" title="STTM Store" subtitle="Versioned source to target mappings" icon={GitCompareArrows} tone="emerald" missing={!o?.sttm}
+          <StoreCard testId="store-sttm" title="Data Mapping Store" subtitle="Versioned source to target mappings" icon={GitCompareArrows} tone="emerald" missing={!o?.sttm}
                      metrics={[{ label: "Approved", value: <CountUp value={o?.sttm?.approved} />, tone: "text-emerald-600" }, { label: "In review", value: <CountUp value={o?.sttm?.pending} /> },
                                { label: "Mappings", value: <CountUp value={o?.sttm?.mappings} /> }]}
                      meter={{ label: "Approved share", value: o?.sttm ? pct(o.sttm.approved, o.sttm.mappings) : null, tone: "primary" }}

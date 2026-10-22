@@ -18,7 +18,7 @@ export function SttmGate({
     return (
       <Card className="border-primary/30">
         <CardHeader>
-          <CardTitle>STTM approved</CardTitle>
+          <CardTitle>Data Mapping approved</CardTitle>
           <CardDescription>Data Quality and dbt both open from this contract. Run them in either order.</CardDescription>
         </CardHeader>
         <CardContent className="flex flex-wrap gap-2">
@@ -32,9 +32,9 @@ export function SttmGate({
   if (currentState !== "STTM_REVIEW" || lineCount === 0) return null;
 
   return (
-    <DecisionBar runId={runId} gate="Transformations and joins (STTM)" role="STTM approver" approveTo="STTM_APPROVED"
-                 approveLabel="Approve STTM" sendBack={["STTM_PENDING", "MAPPING_REVIEW"]}
-                 defaultNote="STTM matches the approved mappings and is ready for Data Quality checks."
+    <DecisionBar runId={runId} gate="Transformations and joins (Data Mapping)" role="Data Mapping approver" approveTo="STTM_APPROVED"
+                 approveLabel="Approve Data Mapping" sendBack={["STTM_PENDING", "MAPPING_REVIEW"]}
+                 defaultNote="Data Mapping matches the approved mappings and is ready for Data Quality checks."
                  detail="Approving opens QA, Data Quality and code generation in parallel." afterApprove={`/runs/${runId}/soda`} />
   );
 }

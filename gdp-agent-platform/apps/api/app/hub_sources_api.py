@@ -495,9 +495,12 @@ def _share_tables(db: Db, database: str, schema: str) -> list[dict]:
                                  "for IMPORTED PRIVILEGES.")
     if kind[0]["type"] != "IMPORTED DATABASE":
         raise HTTPException(400, f"{database} is a regular database, not a mounted share. Use Sources to onboard it.")
+    # the kinds discovery lands (services.source.adapters): an external or dynamic table offered here would fail the
+    # whole run at access validation
     return db.query(f"""SELECT TABLE_NAME, TABLE_TYPE, ROW_COUNT, BYTES, LAST_ALTERED::VARCHAR AS LAST_ALTERED
                           FROM {quote(database)}.INFORMATION_SCHEMA.TABLES
-                         WHERE TABLE_SCHEMA = %s ORDER BY TABLE_NAME""", (schema,))
+                         WHERE TABLE_SCHEMA = %s AND TABLE_TYPE IN ('BASE TABLE', 'VIEW', 'MATERIALIZED VIEW')
+                         ORDER BY TABLE_NAME""", (schema,))
 
 
 @router.post("/api/hub/sources/share/preview")
@@ -534,12 +537,13 @@ def share_control_payload(body: "ShareOnboard", database: str, schema: str, land
     where = {str(t.get("object") or "").upper(): str(t.get("landing_table") or "") for t in landed}
     first = next((w for w in where.values() if w.count(".") == 2), "")
     landing_db, landing_schema = (first.split(".")[:2] if first else [body.landing_database or "", body.landing_schema or ""])
-    pks, deltas = dict(snap.get("primary_keys") or {}), dict(snap.get("delta_keys") or {})
+    pks = {str(k).upper(): v for k, v in dict(snap.get("primary_keys") or {}).items()}
+    deltas = {str(k).upper(): v for k, v in dict(snap.get("delta_keys") or {}).items()}
     tables = []
     for t in sorted(where) or sorted({x.upper() for x in body.tables}):
         landed_as = where.get(t, "")
         tables.append({"source_table_sql": t, "landing_table": landed_as.split(".")[-1] if landed_as else None,
-                       "source_primary_keys": pks.get(t) or pks.get(t.lower()), "source_delta_key": deltas.get(t) or deltas.get(t.lower())})
+                       "source_primary_keys": pks.get(t), "source_delta_key": deltas.get(t)})
     return {
         "source": {"source_name": body.source_system_name, "source_type": "SNOWFLAKE_SHARE", "source_file_type": "TABLE",
                    "source_database_path": database, "source_schema_file": schema, "domain_id": body.domain_id,

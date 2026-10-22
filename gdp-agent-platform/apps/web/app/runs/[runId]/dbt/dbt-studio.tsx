@@ -204,7 +204,7 @@ function Studio({
   const gold = pipeline === "GOLD";
   const engine = gold ? "GDP gold engine" : "DBT-ONBOARD-SOURCE";
   const timeline: { title: string; detail: string; tone: Tone; href?: string }[] = [
-    { title: "Read approved STTM", detail: `${engine} rules engine`, tone: generation ? "done" : "idle" },
+    { title: "Read approved Data Mapping", detail: `${engine} rules engine`, tone: generation ? "done" : "idle" },
     {
       title: `Read skeleton from ${where}`,
       detail: !generation ? (fetchSkeleton ? "Every file on the cut-from branch is kept as is" : "Off: models only")

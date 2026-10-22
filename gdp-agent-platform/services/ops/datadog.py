@@ -358,7 +358,10 @@ def _httpx(method: str, url: str, headers: Dict[str, str], body: Optional[Dict[s
     try:
         r = httpx.request(method, url, headers=headers, json=body, params=params or None, timeout=TIMEOUT)
     except httpx.HTTPError as exc:
-        raise DatadogError("unavailable", f"Datadog could not be reached ({type(exc).__name__})") from None
+        raise DatadogError("unavailable", f"Datadog could not be reached ({type(exc).__name__}: check the host's "
+                                          "outbound HTTPS, proxy and DATADOG_SITE)") from None
+    except Exception as exc:   # a proxy setting httpx cannot use, a TLS library problem: never a bare 500
+        raise DatadogError("unavailable", f"Datadog could not be called from this host ({type(exc).__name__})") from None
     try:
         data = r.json()
     except ValueError:

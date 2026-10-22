@@ -1975,17 +1975,26 @@ def prepare_source(run_id: str, body: AccessRequest, db: Db = Depends(current_db
     """One action for the Source stage: validate access to the selection, then land it as-is."""
     from services.source.prepare import ACCESS, LANDING, prepare_plan
 
-    rows = db.query("SELECT CURRENT_STATE, FAILED_FROM_STATE FROM CORE.WORKFLOW_RUN WHERE RUN_ID = %s", (run_id,))
+    rows = db.query("""SELECT CURRENT_STATE, FAILED_FROM_STATE,
+                              DATEDIFF(second, UPDATED_AT, CURRENT_TIMESTAMP()) / 60 AS IDLE_MINUTES
+                         FROM CORE.WORKFLOW_RUN WHERE RUN_ID = %s""", (run_id,))
     if not rows:
         raise HTTPException(404, "run not found")
     try:
-        steps = prepare_plan(rows[0]["current_state"], rows[0].get("failed_from_state"))
+        idle = rows[0].get("idle_minutes")
+        steps = prepare_plan(rows[0]["current_state"], rows[0].get("failed_from_state"),
+                             float(idle) if idle is not None else None)
     except ValueError as exc:
         raise HTTPException(409, str(exc)) from exc
 
     out: dict = {"passed": True, "checks": [], "tables": [], "steps": steps, "state": None}
     for step in steps:
-        if step.startswith("retry:"):
+        if step.startswith("fail:"):
+            try:
+                db.call("CALL CORE.TRANSITION_RUN(%s, %s, %s, %s)", (run_id, "FAILED", step.split(":", 1)[1], "{}"))
+            except Exception as exc:
+                raise _snowflake_error(exc) from exc
+        elif step.startswith("retry:"):
             try:
                 db.call("CALL CORE.TRANSITION_RUN(%s, %s, %s, %s)",
                         (run_id, step.split(":", 1)[1], "retry from Validate & land", "{}"))
@@ -5192,17 +5201,31 @@ class RulesUpdate(BaseModel):
 
 
 def _put_config(db: Db, key: str, value: dict, description: str) -> None:
-    with transaction(db):
-        db.execute("UPDATE CORE.PLATFORM_CONFIG SET IS_CURRENT = FALSE WHERE CONFIG_KEY = %s AND IS_CURRENT", (key,))
-        db.execute(
-            """
-            INSERT INTO CORE.PLATFORM_CONFIG (CONFIG_KEY, CONFIG_VALUE, DESCRIPTION, VERSION, IS_CURRENT, CREATED_BY)
-            SELECT %s, PARSE_JSON(%s), %s,
-                   COALESCE((SELECT MAX(VERSION) FROM CORE.PLATFORM_CONFIG WHERE CONFIG_KEY = %s), 0) + 1,
-                   TRUE, CURRENT_USER()
-            """,
-            (key, json.dumps(value), description, key),
-        )
+    """A new current version of a CORE.PLATFORM_CONFIG setting. A role that may not write the table (before V072, or
+    a role without DATA_ENGINEER) gets a 403 that says so, not a bare 500."""
+    try:
+        with transaction(db):
+            db.execute("UPDATE CORE.PLATFORM_CONFIG SET IS_CURRENT = FALSE WHERE CONFIG_KEY = %s AND IS_CURRENT", (key,))
+            db.execute(
+                """
+                INSERT INTO CORE.PLATFORM_CONFIG (CONFIG_KEY, CONFIG_VALUE, DESCRIPTION, VERSION, IS_CURRENT, CREATED_BY)
+                SELECT %s, PARSE_JSON(%s), %s,
+                       COALESCE((SELECT MAX(VERSION) FROM CORE.PLATFORM_CONFIG WHERE CONFIG_KEY = %s), 0) + 1,
+                       TRUE, CURRENT_USER()
+                """,
+                (key, json.dumps(value), description, key),
+            )
+    except (HTTPException, SnowflakeSessionError):
+        raise
+    except Exception as exc:
+        text = str(exc)
+        if "insufficient privileges" in text.lower() or "not authorized" in text.lower():
+            raise HTTPException(403, f"Your Snowflake role cannot save platform settings ({key}): it needs INSERT and "
+                                     "UPDATE on CORE.PLATFORM_CONFIG. Deploy the latest release (V072 grants them to "
+                                     "DATA_ENGINEER) or sign in with a role that has them.") from exc
+        from services.ops.redact import redact
+
+        raise HTTPException(400, f"Saving {key} failed: {redact(text)[:300]}") from exc
 
 
 def _clean_overrides(overrides: dict) -> dict:

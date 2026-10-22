@@ -54,7 +54,7 @@ export type Reliability = {
   ai: { diagnoses: number; credits?: number; credit_price_usd?: number | null; cost_usd: number | null };
   /** known fixes that keep firing; absent on an older API */ recurring_fixes?: RecurringFix[];
 };
-export type DagFilters = { env_id: string; q?: string; state?: string; team_id?: string; owner?: string };
+export type DagFilters = { env_id: string; q?: string; state?: string; team_id?: string; owner?: string; tag?: string };
 
 const json = (body: unknown) => JSON.stringify(body);
 const enc = encodeURIComponent;

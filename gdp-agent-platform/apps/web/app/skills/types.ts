@@ -61,11 +61,11 @@ export type RunSkills = {
 
 export const STAGE_LABELS: Record<string, string> = {
   LANDING: "Landing", PROFILING: "Profiling", DOMAIN: "Domain", MODELING: "Modeling", MAPPING: "Mapping",
-  STTM: "STTM", SODA: "Data quality", DBT: "dbt", VALIDATION: "Validation",
+  STTM: "Data Mapping", SODA: "Data quality", DBT: "dbt", VALIDATION: "Validation",
 };
 
 export const pretty = (name: string) => name.replace(/[_-]+/g, " ").toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase())
-  .replace(/\bAi\b/g, "AI").replace(/\bGdp\b/g, "GDP").replace(/\bDbt\b/g, "dbt").replace(/\bSttm\b/g, "STTM")
+  .replace(/\bAi\b/g, "AI").replace(/\bGdp\b/g, "GDP").replace(/\bDbt\b/g, "dbt").replace(/\bSttm\b/g, "Data Mapping")
   .replace(/\bDdl\b/g, "DDL").replace(/\bQa\b/g, "QA").replace(/\bNl\b/g, "NL").replace(/\bJson\b/g, "JSON");
 
 export const versionLabel = (v: { version: string; revision?: number | null } | null | undefined) =>

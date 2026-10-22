@@ -81,8 +81,11 @@ def _convert(values: List[Any], spec: ColumnType, notes: Dict[str, int]) -> List
         if kind.startswith("decimal:"):
             scale = int(kind.split(",")[1])
             d = v if isinstance(v, decimal.Decimal) else decimal.Decimal(str(v))
-            q_ = d.quantize(decimal.Decimal(1).scaleb(-scale), rounding=decimal.ROUND_HALF_EVEN) if scale else \
-                d.to_integral_value(rounding=decimal.ROUND_HALF_EVEN)
+            # Python's default 28 digits are too few for NUMBER(38,s): a 19-digit id at scale 10 would raise
+            with decimal.localcontext() as ctx:
+                ctx.prec = 60
+                q_ = d.quantize(decimal.Decimal(1).scaleb(-scale), rounding=decimal.ROUND_HALF_EVEN) if scale else \
+                    d.to_integral_value(rounding=decimal.ROUND_HALF_EVEN)
             if q_ != d:
                 notes["rounded"] = notes.get("rounded", 0) + 1
             out.append(q_)

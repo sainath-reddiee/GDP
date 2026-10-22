@@ -49,7 +49,7 @@ export function DbtGenerations({ generations }: { generations: DbtGeneration[] }
           {generations.map((g) => (
             <TR key={g.generation_id} className="align-top">
               <TD><Link href={`/dashboard/modeling/dbt/${g.generation_id}`} className="font-medium text-primary hover:underline" data-testid={`dbt-${g.generation_id}`}>{g.run_name ?? g.run_id.slice(0, 8)}</Link>
-                {g.sttm_changed && <p className="mt-0.5 flex items-center gap-1 text-[11px] text-amber-700 dark:text-amber-300"><AlertTriangle className="h-3 w-3" /> STTM changed since; regenerate</p>}</TD>
+                {g.sttm_changed && <p className="mt-0.5 flex items-center gap-1 text-[11px] text-amber-700 dark:text-amber-300"><AlertTriangle className="h-3 w-3" /> Data Mapping changed since; regenerate</p>}</TD>
               <TD className="font-mono text-xs">{g.target_model ?? "-"}</TD>
               <TD><span className="flex items-center gap-2"><StatusPill status={g.generation_status} /> v{g.generation_version}</span></TD>
               <TD className="tabular-nums">{g.files_generated ?? "-"}</TD>

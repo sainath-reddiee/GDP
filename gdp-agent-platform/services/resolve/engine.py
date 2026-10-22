@@ -26,6 +26,19 @@ CLAIM_STALE_MINUTES = 30   # a claim whose procedure died goes back to PENDING a
 CLAIM_GRACE_SECONDS = 120  # a failure without an exception class waits this long for its log
 MAX_ATTEMPTS = 3           # claims that end in an error before the failure is handed to a person (V065)
 MAX_FIXES_PER_RUN = 2      # automatic runs of one fix for one task in one DAG run before it counts as not repairing it
+STALE_PENDING_HOURS = 6    # a failure that waited longer (automatic resolution was off) is left to a person
+# PENDING failures that are no longer safe to fix and retry by themselves, and why (set_aside). Switching automatic
+# resolution on after it was off must never run fixes on, and rerun in Airflow, failures a person already handled,
+# tasks that have succeeded since, or a backlog of old runs.
+SET_ASIDE = (
+    ("its incident was resolved by a person",
+     "EXISTS (SELECT 1 FROM CORE.INCIDENT I WHERE I.INCIDENT_ID = F.INCIDENT_ID AND I.STATUS = 'RESOLVED')"),
+    ("the task has succeeded since it failed",
+     "EXISTS (SELECT 1 FROM CORE.TASK_RUN T WHERE T.ENV_ID = F.ENV_ID AND T.DAG_ID = F.DAG_ID AND T.TASK_ID = F.TASK_ID "
+     "AND T.STATE = 'success' AND COALESCE(T.ENDED_AT, T.UPDATED_AT) > F.CREATED_AT)"),
+    (f"it waited more than {STALE_PENDING_HOURS} hours, so a person decides whether to fix and rerun it",
+     f"F.CREATED_AT < DATEADD(hour, -{STALE_PENDING_HOURS}, CURRENT_TIMESTAMP())"),
+)
 
 FAILURE_COLUMNS = ("failure_id", "env_id", "incident_id", "dag_id", "task_id", "run_id", "map_index", "try_number",
                    "exception_class", "exception_text", "error_signature", "log_url", "query_id", "dbt_node_id", "status",
@@ -215,6 +228,20 @@ def retry_or_give_up(db: Any, failure_id: str, reason: str) -> str:
                      "A person needs to look at it.")[:4000], raise_ticket=True)
         _incident_event(db, failure.get("incident_id"), "resolution_gave_up", {"attempts": attempts, "error": text[:500]})
     return status
+
+
+def set_aside(db: Any) -> Dict[str, int]:
+    """Before any claim: PENDING failures matching SET_ASIDE become OUT_OF_SCOPE with the reason in DETAIL, so they are
+    never fixed or rerun automatically ({reason: count}). The incident and the failure stay visible for a person."""
+    out: Dict[str, int] = {}
+    for why, condition in SET_ASIDE:
+        n = db.execute_count(f"""UPDATE CORE.FAILURE_EVENT F SET STATUS = 'OUT_OF_SCOPE', DETAIL = %s,
+                                        UPDATED_AT = CURRENT_TIMESTAMP()
+                                  WHERE F.STATUS = 'PENDING' AND {condition}""",
+                             (f"Not handled automatically: {why}.",))
+        if n:
+            out[why] = n
+    return out
 
 
 def claim(db: Any, holder: str, limit: int) -> List[Dict[str, Any]]:
@@ -652,6 +679,7 @@ def claim_and_resolve(db: Any, holder: str, executor: Any, analyst: Any,
     if not prefs["auto_resolve_enabled"]:
         return {"enabled": False, "claimed": 0, "actions": {}}
     release_stale_claims(db)
+    aside = set_aside(db)
     scopes, routes = load_scopes(db), load_routes(db)
     claimed = claim(db, holder, min(int(limit or prefs["max_parallel_tasks"]), prefs["max_parallel_tasks"]))
     actions: Dict[str, int] = {}
@@ -666,6 +694,8 @@ def claim_and_resolve(db: Any, holder: str, executor: Any, analyst: Any,
             if retry_or_give_up(db, failure["failure_id"], text) == "TICKETED":
                 actions["gave_up"] = actions.get("gave_up", 0) + 1
     out: Dict[str, Any] = {"enabled": True, "claimed": len(claimed), "actions": actions}
+    if aside:
+        out["set_aside"] = aside
     if errors:
         out["errors"] = errors[:5]
     return out

@@ -31,7 +31,7 @@ export function OnboardWizard({ initialBranch, shares, domains, databases, landi
   };
   return (
     <>
-      <ChoiceStep n={2} title="Source type" choices={BRANCHES} value={branch} onChange={choose} testId="onboard-source" depth={1} />
+      <ChoiceStep n={2} title="Source type" choices={BRANCHES} value={branch} onChange={choose} testId="onboard-source" />
       {branch && (
         <Reveal key={branch}>
           <RailStep n={3} title={branch === "share" ? "Onboard the share" : "Configure the SnapLogic ingestion"} last>

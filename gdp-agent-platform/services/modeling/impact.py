@@ -22,7 +22,7 @@ def _low(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
 SOURCES: List[Tuple[str, str, str]] = [
     # (key, label, SQL with {table} and {column} predicates over the entity and column binds)
-    ("sttm", "STTM lines", """
+    ("sttm", "Data Mapping lines", """
         SELECT L.TARGET_TABLE AS ENTITY, L.TARGET_COLUMN AS COLUMN_NAME, S.RUN_ID, S.STTM_ID, S.STATUS,
                L.SOURCE_TABLE || '.' || COALESCE(L.SOURCE_COLUMN, '') AS DETAIL
           FROM CORE.STTM_LINE L JOIN CORE.STTM_REGISTRY S ON S.STTM_ID = L.STTM_ID

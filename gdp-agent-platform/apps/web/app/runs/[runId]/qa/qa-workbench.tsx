@@ -94,7 +94,7 @@ export function QaWorkbench({ runId, suite, results, canRun, canAI = true, canEd
           <span className="grid h-11 w-11 place-items-center rounded-xl bg-blue-50 text-blue-600 ring-1 ring-inset ring-blue-100"><FlaskConical className="h-5 w-5" /></span>
           <div className="min-w-0 flex-1">
             <h3 className="text-lg font-semibold tracking-tight">Functional QA tests</h3>
-            <p className="text-sm text-muted-foreground">Read-only SQL tests from the STTM, your domain rules and AI. Run them in Snowflake and sign off on the results.</p>
+            <p className="text-sm text-muted-foreground">Read-only SQL tests from the Data Mapping, your domain rules and AI. Run them in Snowflake and sign off on the results.</p>
             <div className="mt-2 flex flex-wrap gap-2 text-xs">
               <span className="inline-flex items-center gap-1 rounded-full border bg-card px-2.5 py-1"><Table2 className="h-3.5 w-3.5 text-muted-foreground" /><span className="font-mono">{suite.target.fqn}</span></span>
               <span className="inline-flex items-center gap-1 rounded-full border bg-card px-2.5 py-1"><KeyRound className="h-3.5 w-3.5 text-muted-foreground" />{suite.business_keys.length ? suite.business_keys.join(", ") : "no business key"}</span>

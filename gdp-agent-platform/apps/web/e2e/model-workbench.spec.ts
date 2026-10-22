@@ -49,7 +49,7 @@ test("a modeler edits the draft, sees the change classes and submits it", async 
 test("a reviewer sees the diff and impact, comments, and approves with the breaking change acknowledged", async ({ page }) => {
   await page.goto("/dashboard/modeling/m-company");
   await expect(page.getByTestId("model-diff")).toContainText("1 breaking");
-  await expect(page.getByTestId("model-impact")).toContainText("STTM lines: 1");
+  await expect(page.getByTestId("model-impact")).toContainText("Data Mapping lines: 1");
   await page.getByLabel("Comment kind").selectOption("COMMENT");
   await page.getByLabel("Comment", { exact: true }).fill("Narrowing is fine, the longest name is 42 characters");
   await page.getByTestId("post-comment").click();

@@ -6,6 +6,8 @@ PUT /api/config/platform (CONFIG.EDIT).
 
 Governance (services.governance.policy): reads need OPS.VIEW, the connection test INTEGRATION.MANAGE (like the
 Airflow test), and checking monitors now OPS.OPERATE (like polling Airflow now). Calls run on the caller's session.
+Every failure comes back as a message the Admin page can show (failed(): Snowflake privileges, Datadog, the host),
+never as a bare 500.
 """
 
 from __future__ import annotations
@@ -14,17 +16,35 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from app.db import Db
+from app.db import Db, SnowflakeSessionError
 from app.main import current_db
 from services.ops import datadog as dd
+from services.ops.redact import redact
 
 router = APIRouter()
+
+
+def failed(what: str, exc: Exception) -> HTTPException:
+    """A readable HTTP error for an unexpected failure: 403 for a Snowflake privilege, 502 for Datadog, else 400."""
+    if isinstance(exc, HTTPException):
+        return exc
+    if isinstance(exc, dd.DatadogError):
+        return HTTPException(502 if exc.kind in ("unavailable", "throttled") else 400, f"{what}: {exc}")
+    text = redact(str(exc))[:300]
+    if "insufficient privileges" in text.lower() or "not authorized" in text.lower():
+        return HTTPException(403, f"{what}: your Snowflake role lacks a privilege it needs ({text})")
+    return HTTPException(400, f"{what}: {type(exc).__name__}: {text}")
 
 
 @router.get("/api/ops/datadog")
 def datadog_status(db: Db = Depends(current_db)):
     """Whether the host has the keys (never the keys), and the saved setting."""
-    return {"connection": dd.public(dd.config_from_env()), "setting": dd.setting(db)}
+    try:
+        return {"connection": dd.public(dd.config_from_env()), "setting": dd.setting(db)}
+    except SnowflakeSessionError:
+        raise
+    except Exception as exc:
+        raise failed("Reading the Datadog status failed", exc) from exc
 
 
 @router.post("/api/ops/datadog/test")
@@ -34,9 +54,14 @@ def datadog_test(db: Db = Depends(current_db)):
     if cfg["problems"]:
         return {"ok": False, "connection": dd.public(cfg), "api_key": False, "logs": None, "monitors": None,
                 "errors": {"setup": "; ".join(cfg["problems"])}}
-    value = dd.setting(db)
-    sample = dd.scoped_query(value.get("log_query") or "", {}, dd.scope(value, cfg)) or "*"
-    result = dd.Client(cfg).check(sample)
+    try:
+        value = dd.setting(db)
+        sample = dd.scoped_query(value.get("log_query") or "", {}, dd.scope(value, cfg)) or "*"
+        result = dd.Client(cfg).check(sample)
+    except SnowflakeSessionError:
+        raise
+    except Exception as exc:
+        raise failed("The Datadog test failed", exc) from exc
     ok = bool(result["api_key"]) and not result["errors"]
     return {"ok": ok, "connection": dd.public(cfg), **result, "query": sample}
 
@@ -57,6 +82,8 @@ def incident_datadog_logs(incident_id: str, minutes: Optional[int] = Query(None,
         found = dd.incident_logs(incident, value, minutes=minutes)
     except dd.DatadogError as exc:
         return {"enabled": True, "logs": [], "error": str(exc), "kind": exc.kind}
+    except Exception as exc:   # shown in the logs panel, the rest of the incident page is unaffected
+        return {"enabled": True, "logs": [], "error": failed("Datadog logs could not be read", exc).detail}
     return {"enabled": True, **found, "error": None}
 
 
@@ -67,5 +94,7 @@ def datadog_monitors_now(db: Db = Depends(current_db)):
 
     try:
         return process(DatadogStore(db))
-    except dd.DatadogError as exc:
-        raise HTTPException(502 if exc.kind in ("unavailable", "throttled") else 400, str(exc)) from exc
+    except SnowflakeSessionError:
+        raise
+    except Exception as exc:
+        raise failed("Checking the Datadog monitors failed", exc) from exc

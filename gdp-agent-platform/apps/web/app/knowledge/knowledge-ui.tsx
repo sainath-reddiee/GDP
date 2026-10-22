@@ -5,7 +5,7 @@ import {
 import { cn } from "@/lib/utils";
 
 export const prettyType = (t: string) => t.replace(/_/g, " ").toLowerCase().replace(/^\w/, (c) => c.toUpperCase())
-  .replace(/\bdbt\b/i, "dbt").replace(/\bsttm\b/i, "STTM").replace(/\bqa\b/i, "QA").replace(/\bsoda\b/i, "Soda");
+  .replace(/\bdbt\b/i, "dbt").replace(/\bsttm\b/i, "Data Mapping").replace(/\bqa\b/i, "QA").replace(/\bsoda\b/i, "Soda");
 
 const TYPE_ICON: Record<string, LucideIcon> = {
   GLOSSARY: BookOpen, BUSINESS_RULE: Ruler, TRANSFORMATION_RULE: Wand2, MAPPING_PATTERN: GitCompare, MODEL_DEFINITION: Boxes,
@@ -26,7 +26,7 @@ export const ORIGINS: Record<string, { label: string; icon: LucideIcon; tone: st
   PACK_IMPORT: { label: "Imported pack", icon: Package, tone: "bg-muted text-muted-foreground" },
   COPILOT: { label: "Copilot", icon: MessageSquare, tone: "bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300" },
   MAPPING: { label: "Learned in mapping", icon: GitCompare, tone: "bg-teal-100 text-teal-700 dark:bg-teal-950 dark:text-teal-300" },
-  STTM: { label: "Learned in STTM", icon: Layers, tone: "bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300" },
+  STTM: { label: "Learned in Data Mapping", icon: Layers, tone: "bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300" },
   SODA: { label: "Learned in data quality", icon: ShieldCheck, tone: "bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300" },
   PROFILING: { label: "Learned in profiling", icon: ScanSearch, tone: "bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300" },
   MODELING: { label: "Learned in modeling", icon: Boxes, tone: "bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300" },

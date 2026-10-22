@@ -450,7 +450,7 @@ def _dag_out(r: Dict[str, Any], detail: bool = False) -> Dict[str, Any]:
 
 def _dags(db: Db, env_id: Optional[str] = None, dag_id: Optional[str] = None, q: Optional[str] = None,
           state: Optional[str] = None, team_id: Optional[str] = None, owner: Optional[str] = None,
-          limit: int = DAG_LIMIT) -> List[Dict[str, Any]]:
+          tag: Optional[str] = None, limit: int = DAG_LIMIT) -> List[Dict[str, Any]]:
     run_filter, run_params = "TRUE", []
     dag_filter, dag_params = ["TRUE"], []
     if env_id:
@@ -474,6 +474,9 @@ def _dags(db: Db, env_id: Optional[str] = None, dag_id: Optional[str] = None, q:
     if owner:
         dag_filter.append("ARRAY_CONTAINS(%s::VARIANT, D.OWNERS)")
         dag_params.append(owner)
+    if tag:
+        dag_filter.append("ARRAY_CONTAINS(%s::VARIANT, D.TAGS)")
+        dag_params.append(tag)
     sql = _DAG_SQL.format(run_filter=run_filter, dag_filter=" AND ".join(dag_filter), limit=int(limit))
     # LAST_RUN and STATS both use run_filter, in that order
     return _q(db, sql, tuple(run_params) + tuple(run_params) + tuple(dag_params))
@@ -510,9 +513,11 @@ def _with_counts(db: Db, rows: List[Dict[str, Any]], detail: bool = False, env_i
 @router.get("/api/ops/dags")
 def list_dags(env_id: Optional[str] = None, q: Optional[str] = Query(default=None, max_length=200),
               state: Optional[str] = Query(default=None, max_length=32), team_id: Optional[str] = None,
-              owner: Optional[str] = Query(default=None, max_length=200), db: Db = Depends(current_db)):
+              owner: Optional[str] = Query(default=None, max_length=200),
+              tag: Optional[str] = Query(default=None, max_length=200), db: Db = Depends(current_db)):
     return {"dags": _with_counts(db, _dags(db, env_id=env_id or None, q=q or None, state=state or None,
-                                           team_id=team_id or None, owner=owner or None), env_id=env_id or None)}
+                                           team_id=team_id or None, owner=owner or None, tag=tag or None),
+                                 env_id=env_id or None)}
 
 
 def _run_out(r: Dict[str, Any]) -> Dict[str, Any]:

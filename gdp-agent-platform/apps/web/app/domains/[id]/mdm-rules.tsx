@@ -33,7 +33,7 @@ export function MdmRules({ domainId }: { domainId: string }) {
           <h3 className="text-sm font-semibold">MDM rules ({data.data.rules.length})</h3>
           <Link href={`/knowledge?tab=items&domain_id=${domainId}&type=EXCEPTION`} className="text-xs text-primary hover:underline">Edit or add in Knowledge</Link>
         </div>
-        <p className="text-xs text-muted-foreground">Read by every mapping, STTM and code step that resolves this domain&apos;s mastered keys, in both pipelines.</p>
+        <p className="text-xs text-muted-foreground">Read by every mapping, Data Mapping and code step that resolves this domain&apos;s mastered keys, in both pipelines.</p>
         <ul className="mt-2 divide-y">
           {data.data.rules.map((r) => (
             <li key={r.knowledge_id} className="py-2 text-xs"><p className="font-medium">{r.title}</p><p className="line-clamp-2 text-muted-foreground">{r.content}</p></li>

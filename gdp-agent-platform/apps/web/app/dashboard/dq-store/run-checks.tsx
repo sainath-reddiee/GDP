@@ -140,7 +140,7 @@ export function RunChecksView({ checks, runs, initialRun, canEdit, canCase }: { 
           </span>
           {coverage && (
             <p className="w-full text-xs" data-testid="coverage">
-              {coverage.coverage == null ? "No STTM columns." : <><span className="font-semibold">{coverage.coverage}%</span> of {coverage.columns} STTM columns have a check.</>}
+              {coverage.coverage == null ? "No Data Mapping columns." : <><span className="font-semibold">{coverage.coverage}%</span> of {coverage.columns} Data Mapping columns have a check.</>}
               {coverage.missing.length > 0 && <> Without one: <span className="font-mono">{coverage.missing.slice(0, 12).map((m) => m.target_column).join(", ")}{coverage.missing.length > 12 ? ` +${coverage.missing.length - 12}` : ""}</span></>}
             </p>
           )}

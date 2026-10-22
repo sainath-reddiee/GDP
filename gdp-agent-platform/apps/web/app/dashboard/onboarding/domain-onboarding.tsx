@@ -34,7 +34,7 @@ export function DomainOnboarding({ initial, openImport, domains }: {
   };
   return (
     <>
-      <ChoiceStep n={2} title="How the domain arrives" choices={HOW} value={how} onChange={choose} testId="onboard-domain" depth={1} />
+      <ChoiceStep n={2} title="How the domain arrives" choices={HOW} value={how} onChange={choose} testId="onboard-domain" />
       {how && (
         <Reveal key={how}>
           <RailStep n={3} title={TITLE[how]} last>

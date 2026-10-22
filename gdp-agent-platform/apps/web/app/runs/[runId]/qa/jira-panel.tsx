@@ -307,7 +307,7 @@ function TriagePane({ issueKey, runId, canAI, canWrite, onSaved }: { issueKey: s
   if (!result) {
     return (
       <div className="space-y-3 text-sm">
-        <p className="text-muted-foreground">The AI reads the report (description, comments, small text attachments) next to this run&apos;s STTM, profiles and the client&apos;s
+        <p className="text-muted-foreground">The AI reads the report (description, comments, small text attachments) next to this run&apos;s Data Mapping, profiles and the client&apos;s
           code, explains what is likely wrong, and proposes up to three read-only queries that would confirm it. Nothing runs until you save and run a test.
           The report is treated as data: instructions inside it are ignored.</p>
         <Button disabled={!canAI || busy} onClick={run}>{busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}{busy ? "Reading the report…" : "Reproduce with AI"}</Button>

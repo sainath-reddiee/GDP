@@ -150,7 +150,7 @@ def pr_closed(kind: str, asset_id: str, asset_name: Optional[str], version: int,
     the version. Kept so the next publish of the asset, and the people preparing it, know (one item per asset)."""
     if not asset_id:
         return None
-    label = {"MODEL": "domain model", "DQ_SUITE": "data quality suite", "QA_PACK": "QA pack", "STTM": "STTM mapping",
+    label = {"MODEL": "domain model", "DQ_SUITE": "data quality suite", "QA_PACK": "QA pack", "STTM": "Data Mapping",
              "TABLE_MODEL": "table model", "PERMANENT_FIX": "permanent fix"}.get(str(kind).upper(), str(kind).lower())
     name = asset_name or asset_id
     return {"kind": "BUSINESS_RULE", "key": f"git.closed.{str(kind).upper()}.{asset_id}",

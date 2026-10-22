@@ -217,7 +217,7 @@ export function ColumnChecks({ runId, checks, sttmLines, latest, history, canRev
                     {c.key === DATASET && <Database className="h-3.5 w-3.5 text-muted-foreground" />}{c.name}
                   </span>
                   <span className="block truncate text-[11px] text-muted-foreground">
-                    {c.key === DATASET ? "table-level checks" : c.line ? `${c.line.mapping_type.toLowerCase()} · ${c.line.target_datatype}` : "not in STTM"}
+                    {c.key === DATASET ? "table-level checks" : c.line ? `${c.line.mapping_type.toLowerCase()} · ${c.line.target_datatype}` : "not in Data Mapping"}
                   </span>
                 </span>
                 <span className="flex shrink-0 items-center gap-1">
@@ -303,7 +303,7 @@ function ColumnPane({ runId, column, results, history, canReview, columnNames, o
           {canReview && (
             <div className="flex shrink-0 gap-2">
               {proposed.length > 1 && (
-                <Button size="sm" variant="outline" disabled={pending} onClick={() => setBulkNote(bulkNote == null ? "Checks match the STTM and the client quality need." : null)}>
+                <Button size="sm" variant="outline" disabled={pending} onClick={() => setBulkNote(bulkNote == null ? "Checks match the Data Mapping and the client quality need." : null)}>
                   <CheckIcon className="h-3.5 w-3.5" />Approve all {proposed.length}
                 </Button>
               )}

@@ -238,7 +238,7 @@ export default async function MyWorkPage() {
             )}
           </Section>
 
-          <Section id="proposals" title="Knowledge proposals to review" icon={BookOpen} tone="knowledge" count={w.inbox.length}
+          <Section id="proposals" title="Enterprise Memory proposals to review" icon={BookOpen} tone="knowledge" count={w.inbox.length}
                    href="/knowledge?tab=inbox" hrefLabel="Inbox" empty="No proposals wait for you in the knowledge inbox.">
             {w.inbox.length > 0 && (
               <ul className="divide-y">
@@ -255,7 +255,7 @@ export default async function MyWorkPage() {
           </Section>
 
           {w.proposedSkills.length > 0 && (
-            <Section id="skills" title="Skills the scout proposes" icon={Radar} tone="knowledge" count={w.proposedSkills.length}
+            <Section id="skills" title="Agent skills the scout proposes" icon={Radar} tone="knowledge" count={w.proposedSkills.length}
                      href="/skills/proposed" hrefLabel="Proposed skills" empty="">
               <ul className="divide-y">
                 {w.proposedSkills.map((p) => (

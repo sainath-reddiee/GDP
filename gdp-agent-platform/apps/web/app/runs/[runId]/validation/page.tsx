@@ -24,7 +24,7 @@ export default async function ValidationPage({ params }: { params: { runId: stri
         <CardHeader>
           <CardTitle>Validation</CardTitle>
           <CardDescription>
-            Data Quality review and dbt compile run as two tracks. Naming, required columns, STTM
+            Data Quality review and dbt compile run as two tracks. Naming, required columns, Data Mapping
             consistency, schema.yml and SodaCL are checked here. dbt compile uses WRITEBACK=FALSE.
             You can run this while Data Quality is still in review.
           </CardDescription>

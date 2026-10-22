@@ -10,18 +10,18 @@ async function devSession(context: BrowserContext) {
 
 test.beforeEach(async ({ context }) => devSession(context));
 
-test("an STTM edit request shows each line, design change and the requester's note before approval", async ({ page }) => {
+test("a Data Mapping edit request shows each line, design change and the requester's note before approval", async ({ page }) => {
   await page.goto("/approvals?scope=inbox");
-  await page.getByRole("button", { name: /Edit a mapping in the STTM catalog/ }).click();
+  await page.getByRole("button", { name: /Edit a mapping in the Data Mapping catalog/ }).click();
   const preview = page.getByTestId("request-preview");
-  await expect(preview).toContainText("STTM edit of SILVER.COMPANY.DIM_CUSTOMER on v3: 1 added, 1 removed, 1 changed");
+  await expect(preview).toContainText("Data Mapping edit of SILVER.COMPANY.DIM_CUSTOMER on v3: 1 added, 1 removed, 1 changed");
   await expect(page.getByTestId("preview-Lines changed")).toContainText("FULL_NAME · transformation");
   await expect(page.getByTestId("preview-Lines changed")).toContainText("INITCAP(TRIM(NAME)) || ''");
   await expect(page.getByTestId("preview-Lines added")).toContainText("CUSTOMERS.EMAIL");
   await expect(page.getByTestId("preview-Lines removed")).toContainText("COUNTRY_CODE");
   await expect(page.getByTestId("preview-Table design")).toContainText("one row per customer and source");
   await expect(page.getByTestId("preview-Requester's note")).toContainText("Align with the CRM contract");
-  await expect(preview.getByRole("link", { name: "Open in STTM Store" })).toHaveAttribute("href", "/dashboard/sttm/c1");
+  await expect(preview.getByRole("link", { name: "Open in Data Mapping Store" })).toHaveAttribute("href", "/dashboard/sttm/c1");
   await expect(preview.locator("pre").first()).toBeHidden();  // the stored call stays collapsed
 });
 
@@ -46,7 +46,7 @@ test("an applied request shows the decisions beside the checks and the result in
 test("every pull request is listed and filtered, and checking them reads merges back", async ({ page }) => {
   await page.goto("/dashboard/source-control");
   await expect(page.getByTestId("pr-list").locator(":scope > li")).toHaveCount(4);
-  await page.getByRole("tab", { name: "STTM mapping" }).click();
+  await page.getByRole("tab", { name: "Data Mapping" }).click();
   await expect(page.getByTestId("pr-list").locator(":scope > li")).toHaveCount(1);
   await expect(page.getByTestId("pr-STTM-1")).toContainText("Publishing failed: GitHub refused the push (403)");
   await page.getByRole("tab", { name: "All assets" }).click();
@@ -59,7 +59,7 @@ test("every pull request is listed and filtered, and checking them reads merges 
   await expect(page.getByTestId("pr-MODEL-3")).toContainText("merged 77aa01b");
 });
 
-test("an approved mapping version is published to Git from the STTM Store", async ({ page }) => {
+test("an approved mapping version is published to Git from the Data Mapping Store", async ({ page }) => {
   await page.goto("/dashboard/sttm/c1");
   const git = page.getByTestId("sttm-git");
   await expect(git.getByLabel("Repository")).toHaveValue("repo-1");

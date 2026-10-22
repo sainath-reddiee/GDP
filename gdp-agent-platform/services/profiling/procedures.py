@@ -91,9 +91,11 @@ class TableProfile:
     persist_error: Optional[str] = None
 
 
-def _gather(session, statements: Sequence[Optional[str]], limit: int) -> List[List[Dict[str, Any]]]:
+def _gather(session, statements: Sequence[Optional[str]], limit: int,
+            errors: Optional[Dict[int, str]] = None) -> List[List[Dict[str, Any]]]:
     """Run independent statements with up to `limit` in flight as Snowpark async jobs.
-    Falls back to sequential execution where async submission is unavailable."""
+    Falls back to sequential execution where async submission is unavailable. With `errors`, a failing statement
+    gives [] and its error under its index instead of raising."""
     results: List[List[Dict[str, Any]]] = [[] for _ in statements]
     pending = [(i, sql) for i, sql in enumerate(statements) if sql]
     for start in range(0, len(pending), limit):
@@ -104,7 +106,13 @@ def _gather(session, statements: Sequence[Optional[str]], limit: int) -> List[Li
             except Exception:
                 jobs.append((i, sql, None))
         for i, sql, job in jobs:
-            raw = job.result() if job is not None else session.sql(sql).collect()
+            try:
+                raw = job.result() if job is not None else session.sql(sql).collect()
+            except Exception as exc:
+                if errors is None:
+                    raise
+                errors[i] = clip(exc, 300)   # this statement only; the others still count
+                continue
             results[i] = [r.as_dict() for r in raw]
     return results
 
@@ -115,14 +123,19 @@ def _compute(session, refs: Sequence[TableRef], limit: int) -> Dict[TableKey, Tu
     out: Dict[TableKey, Tuple[List[Dict[str, Any]], int]] = {}
     for start in range(0, len(refs), limit):
         chunk = refs[start:start + limit]
-        stats = _gather(session, [profiler.stats_sql(r.landing_fqn, r.columns, r.approximate) for r in chunk], limit)
+        failed: Dict[int, str] = {}
+        stats = _gather(session, [profiler.stats_sql(r.landing_fqn, r.columns, r.approximate) for r in chunk], limit,
+                        failed)
+        if failed:
+            i = min(failed)
+            raise RuntimeError(f"profiling {chunk[i].table} failed: {failed[i]}")
         details: List[Optional[str]] = []
         for ref, found in zip(chunk, stats):
             specs = profiler.histogram_specs(ref.columns, found[0])
             details += [profiler.frequencies_sql(ref.landing_fqn, ref.columns, approximate=ref.approximate),
                         profiler.patterns_sql(ref.landing_fqn, ref.columns, approximate=ref.approximate),
                         profiler.histogram_sql(ref.landing_fqn, specs, approximate=ref.approximate)]
-        detail_rows = _gather(session, details, limit * 3)
+        detail_rows = _gather(session, details, limit * 3, {})
         for n, (ref, found) in enumerate(zip(chunk, stats)):
             row = found[0]
             row_count = int(row["ROW_COUNT"])

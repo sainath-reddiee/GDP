@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { ArrowRight, BookCheck, Bot, CircleCheck, ShieldCheck, Ticket, UserCheck } from "lucide-react";
+import { ArrowRight, BookCheck, Bot, Hand, Inbox, Search, ShieldCheck, Ticket } from "lucide-react";
 import { api, ApiError, whoami } from "@/lib/api";
 import { can } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -40,12 +40,57 @@ function Tabs({ view, approvals }: { view: View; approvals: number }) {
   );
 }
 
-function Stat({ label, value, icon: Icon, tone }: { label: string; value: number; icon: typeof Bot; tone: string }) {
+type FlowStep = { n: number; title: string; what: string; icon: typeof Bot; counts: { label: string; value: number; href: string; tone?: string }[] };
+
+/** How every failed Airflow task is handled, in order, with how many failures sit at each step: what a developer
+ *  needs to know first on this page. Each count opens the failures at that step. */
+function HandlingFlow({ s, enabled }: { s: ResolveSummary; enabled: boolean }) {
+  const st = (k: string) => s.statuses[k as keyof typeof s.statuses] ?? 0;
+  const at = (status: string) => `/ops/resolutions?status=${status}`;
+  const steps: FlowStep[] = [
+    { n: 1, title: "Detected", what: enabled ? "A failed task is queued as soon as detection sees it." : "Queued. Automatic resolution is off, so nothing is picked up.",
+      icon: Inbox, counts: [{ label: "queued", value: st("PENDING"), href: at("PENDING") }] },
+    { n: 2, title: "Checked", what: "Guardrails and scope first. Old, already fixed or out-of-scope failures are left to a person.",
+      icon: ShieldCheck, counts: [{ label: "working", value: st("IN_PROGRESS"), href: at("IN_PROGRESS") },
+                                   { label: "left to a person", value: st("OUT_OF_SCOPE"), href: at("OUT_OF_SCOPE"), tone: "text-human" }] },
+    { n: 3, title: "Known fix", what: "Searched in Enterprise Memory. A match runs, or waits for approval, then Airflow reruns the task.",
+      icon: Search, counts: [{ label: "need approval", value: s.approvals_open, href: "/ops/resolutions?view=approvals", tone: "text-human" },
+                              { label: "fixed (30 days)", value: st("RESOLVED"), href: at("RESOLVED"), tone: "text-success" }] },
+    { n: 4, title: "No known fix", what: "The root cause is analysed and a Jira ticket opened. Fixed by hand, it becomes a known fix.",
+      icon: Ticket, counts: [{ label: "ticketed (30 days)", value: st("TICKETED"), href: at("TICKETED") },
+                              { label: "published fixes", value: s.fixes.PUBLISHED ?? 0, href: "/ops/fixes" }] },
+  ];
+  const waiting = s.approvals_open + st("OUT_OF_SCOPE");
   return (
-    <div className="surface flex items-center gap-3 px-4 py-3">
-      <span className={cn("grid h-9 w-9 place-items-center rounded-lg", tone)}><Icon className="h-4 w-4" /></span>
-      <div><p className="text-xl font-semibold tabular-nums">{value}</p><p className="text-xs text-muted-foreground">{label}</p></div>
-    </div>
+    <section className="space-y-3" aria-label="How a failed task is handled">
+      {waiting > 0 && (
+        <p className="flex flex-wrap items-center gap-2 rounded-xl border border-human/30 bg-human/5 px-4 py-2.5 text-sm">
+          <Hand className="h-4 w-4 text-human" /><span className="font-medium">Needs a person:</span>
+          {s.approvals_open > 0 && <Link href="/ops/resolutions?view=approvals" className="text-primary hover:underline">{s.approvals_open} fix{s.approvals_open === 1 ? "" : "es"} to approve</Link>}
+          {s.approvals_open > 0 && st("OUT_OF_SCOPE") > 0 && <span className="text-muted-foreground">·</span>}
+          {st("OUT_OF_SCOPE") > 0 && <Link href={at("OUT_OF_SCOPE")} className="text-primary hover:underline">{st("OUT_OF_SCOPE")} failure{st("OUT_OF_SCOPE") === 1 ? "" : "s"} left to a person</Link>}
+        </p>
+      )}
+      <ol className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+        {steps.map((step) => (
+          <li key={step.n} className="surface flex flex-col gap-2 p-4">
+            <div className="flex items-center gap-2">
+              <span className="grid h-7 w-7 place-items-center rounded-lg bg-primary/10 text-primary"><step.icon className="h-3.5 w-3.5" /></span>
+              <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{step.n}. {step.title}</span>
+            </div>
+            <p className="flex-1 text-xs leading-snug text-muted-foreground">{step.what}</p>
+            <div className="flex flex-wrap gap-x-4 gap-y-1">
+              {step.counts.map((c) => (
+                <Link key={c.label} href={c.href} className="group">
+                  <span className={cn("text-lg font-semibold tabular-nums group-hover:underline", c.tone)}>{c.value}</span>
+                  <span className="ml-1 text-xs text-muted-foreground">{c.label}</span>
+                </Link>
+              ))}
+            </div>
+          </li>
+        ))}
+      </ol>
+    </section>
   );
 }
 
@@ -102,7 +147,8 @@ export default async function ResolutionsPage({ searchParams }: { searchParams?:
       load(() => api<Route[]>("/api/ops/resolve/routes")),
     ]);
     body = pref.error !== null ? <p role="alert" className="text-sm text-destructive">{pref.error}</p>
-      : <Guardrails preference={pref.data} scopes={scopes.data ?? []} routes={routes.data ?? []} canEdit={can(me, "OPS.RESOLVE_ADMIN")} />;
+      : <Guardrails preference={pref.data} scopes={scopes.data ?? []} routes={routes.data ?? []} canEdit={can(me, "OPS.RESOLVE_ADMIN")}
+                    queued={st("PENDING")} />;
   } else {
     const status = sp.status && FAILURE_STATUS[sp.status] ? sp.status : "";
     const q = new URLSearchParams({ limit: "100", ...(status ? { status } : {}), ...(sp.dag ? { dag: sp.dag } : {}) });
@@ -133,6 +179,7 @@ export default async function ResolutionsPage({ searchParams }: { searchParams?:
                       <td className="max-w-[28rem] px-4 py-2.5">
                         <p className="font-medium">{f.dag_id} <span className="text-muted-foreground">·</span> {f.task_id}</p>
                         <p className="truncate text-xs text-muted-foreground" title={f.exception_text ?? ""}>{f.exception_class ?? "Error"}: {f.exception_text ?? "no error text"}</p>
+                        {f.status === "OUT_OF_SCOPE" && f.detail && <p className="mt-0.5 text-xs text-human">{f.detail}</p>}
                       </td>
                       <td className="px-3 py-2.5"><FailureStatusPill status={f.status} /></td>
                       <td className="px-3 py-2.5 text-xs">{f.flow_mode ? flowLabel(f.flow_mode) : "-"}</td>
@@ -153,13 +200,8 @@ export default async function ResolutionsPage({ searchParams }: { searchParams?:
   return (
     <div className="space-y-5">
       {header}
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <Stat label="Fixed by a known fix (30 days)" value={st("RESOLVED")} icon={CircleCheck} tone="bg-success/10 text-success" />
-        <Stat label="Waiting for approval" value={s.approvals_open} icon={UserCheck} tone="bg-human/10 text-human" />
-        <Stat label="Analysed and ticketed (30 days)" value={st("TICKETED")} icon={Ticket} tone="bg-amber-100 text-amber-800" />
-        <Stat label="Published known fixes" value={s.fixes.PUBLISHED ?? 0} icon={BookCheck} tone="bg-agent/10 text-agent" />
-      </div>
       {banner}
+      <HandlingFlow s={s} enabled={s.enabled} />
       {view === "queue" && (s.recurring?.length ?? 0) > 0 && <RecurringFixes items={s.recurring ?? []} />}
       <Tabs view={view} approvals={s.approvals_open} />
       {body}

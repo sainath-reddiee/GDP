@@ -65,7 +65,7 @@ function Examples({ domainId, table, data, may, onChange }: {
           <p className="text-muted-foreground">{active.row_count} accepted row{active.row_count === 1 ? "" : "s"}{active.file ? ` from ${active.file}` : ""}{active.verified_by ? ` · verified by ${active.verified_by}` : ""}</p>
           <Preview ex={active} />
         </>
-      ) : !proposed && <p className="text-muted-foreground">None yet. A few rows exactly as this table should hold them are the strongest context a run gets: STTM and code generation follow their formats.</p>}
+      ) : !proposed && <p className="text-muted-foreground">None yet. A few rows exactly as this table should hold them are the strongest context a run gets: Data Mapping and code generation follow their formats.</p>}
       {proposed && (
         <p className="text-amber-600">{proposed.row_count} row{proposed.row_count === 1 ? "" : "s"} waiting for review{proposed.file ? ` (${proposed.file})` : ""}:{" "}
           <Link href={`/knowledge?tab=inbox&domain_id=${encodeURIComponent(domainId)}`} className="underline">review inbox</Link></p>
@@ -241,13 +241,13 @@ export function DataModel({ domainId, domainName }: { domainId: string; domainNa
                           <button type="button" onClick={() => setSelected(e.entity_name)} className="flex w-full items-center gap-2 rounded-md px-1.5 py-1 text-left hover:bg-muted">
                             <span className={cn("min-w-0 flex-1 truncate font-mono", mark && MARK[mark])}>{e.entity_name}</span>
                             <span title="knowledge items" className={cn("tabular-nums", c?.knowledge ? "text-foreground" : "text-muted-foreground")}>{c?.knowledge ?? 0}</span>
-                            <span title={c?.sttm ? "STTM exists" : "no STTM yet"} className={cn("h-2 w-2 rounded-full", c?.sttm ? "bg-emerald-500" : "bg-muted-foreground/30")} />
+                            <span title={c?.sttm ? "Data Mapping exists" : "no Data Mapping yet"} className={cn("h-2 w-2 rounded-full", c?.sttm ? "bg-emerald-500" : "bg-muted-foreground/30")} />
                           </button>
                         </li>
                       );
                     })}
                   </ul>
-                  <p className="text-[11px] text-muted-foreground">Number: active knowledge items about the table. Dot: green when an STTM exists.</p>
+                  <p className="text-[11px] text-muted-foreground">Number: active knowledge items about the table. Dot: green when a Data Mapping exists.</p>
                   {draft && (changes.length > 0 || d.highlight.removed_entities.length > 0) && (
                     <div>
                       <p className="mb-1 font-medium">What the draft changes</p>

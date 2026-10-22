@@ -43,7 +43,7 @@ const MANIFEST: { item: string; human?: string }[] = [
   { item: "Column profiles and PII hints" },
   { item: "Domain match" },
   { item: "Source-to-target mapping", human: "Model approver" },
-  { item: "STTM: transformations and joins", human: "STTM approver" },
+  { item: "Data Mapping: transformations and joins", human: "Data Mapping approver" },
   { item: "SodaCL and Great Expectations checks", human: "DQ approver" },
   { item: "QA test suite", human: "QA lead" },
   { item: "Silver dbt models, compiled" },
@@ -52,7 +52,7 @@ const MANIFEST: { item: string; human?: string }[] = [
 
 const FACTS = [
   { value: "4", label: "human approval gates in every run" },
-  { value: "3", label: "agent lanes in parallel after the STTM" },
+  { value: "3", label: "agent lanes in parallel after the Data Mapping" },
   { value: "0", label: "auto-approvals by any agent" },
   { value: "100%", label: "of AI calls on Snowflake Cortex" },
 ];
@@ -69,8 +69,8 @@ const STAGES: { name: string; does: string; gives: string; ai?: string; human?: 
     gives: "The matching business domain", ai: "Searches your team's knowledge", human: "Confirmed by a person if unsure" },
   { name: "Map the fields", does: "Suggests which source column feeds each target column, and shows the evidence for every match.",
     gives: "A source-to-target map", ai: "Explains the uncertain matches", human: "Model approver" },
-  { name: "Write the transformation rules", does: "Writes how source data becomes target data: calculations, joins and business rules (the STTM).",
-    gives: "Versioned transformation rules", ai: "Turns plain-English instructions into rules", human: "STTM approver" },
+  { name: "Write the transformation rules", does: "Writes how source data becomes target data: calculations, joins and business rules (the Data Mapping).",
+    gives: "Versioned transformation rules", ai: "Turns plain-English instructions into rules", human: "Data Mapping approver" },
   { name: "Add data quality checks", does: "Writes checks that catch bad data, and tries them on real data before anyone approves them.",
     gives: "Data quality checks", human: "Data quality approver", parallel: true },
   { name: "Test the results", does: "Writes tests that prove the target data matches the source: counts, keys, totals and joins.",
@@ -85,8 +85,8 @@ const VALUE: { task: string; before: string; now: string }[] = [
   { task: "Source discovery", before: "Ad hoc profiling queries, table by table", now: "Every column profiled by the agent, reused while the table is unchanged" },
   { task: "Source-to-target mapping", before: "Spreadsheets maintained by hand", now: "Ranked candidates with evidence; the approver decides each column" },
   { task: "STTM", before: "Transformations and joins written and versioned manually", now: "Generated from the approved mapping, versioned and editable" },
-  { task: "Data quality", before: "Soda and GX rules written one by one", now: "Checks generated from the STTM and profile, backtested before approval" },
-  { task: "QA testing", before: "Reconciliation SQL copied between projects", now: "Tests in 8 categories traced to the STTM, plus reusable domain packs" },
+  { task: "Data quality", before: "Soda and GX rules written one by one", now: "Checks generated from the Data Mapping and profile, backtested before approval" },
+  { task: "QA testing", before: "Reconciliation SQL copied between projects", now: "Tests in 8 categories traced to the Data Mapping, plus reusable domain packs" },
   { task: "dbt engineering", before: "Models, sources and schema files by hand", now: "Silver dbt generated and compiled on Snowflake before review" },
   { task: "Gold modeling", before: "Star schemas designed from scratch", now: "Proposed from mastered Silver, built table by table into one PR" },
   { task: "Governance", before: "Approvals in chat and email", now: "Role-based human approval, written justifications, full audit trail" },
@@ -158,7 +158,7 @@ function Hero({ onSignIn }: { onSignIn: () => void }) {
           <motion.p initial={{ opacity: 0, y: 18 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.7, delay: 0.12 }}
                     className="mt-7 max-w-xl text-[17px] leading-relaxed text-[color:var(--ink-2)]">
             The {PRODUCT} takes any source from onboarding to a reviewed dbt pull request. A supervisor agent on Snowflake
-            Cortex orchestrates profiling, mapping, STTM, data quality, QA and code generation, and stops at every human
+            Cortex orchestrates profiling, mapping, Data Mapping, data quality, QA and code generation, and stops at every human
             approval gate. Governed, explainable and auditable by design.
           </motion.p>
           <motion.div initial={{ opacity: 0, y: 18 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.7, delay: 0.18 }}
@@ -307,7 +307,7 @@ function Governance() {
     { icon: Bot, title: "Supervisor agent", tag: "Snowflake Cortex Agent",
       body: "Orchestrates the run through ten tools: knowledge search, workflow state, versioned skills and every stage engine. It plans, calls tools and recommends. It cannot approve." },
     { icon: Sparkles, title: "Copilot", tag: "33 tools",
-      body: "An agentic assistant across sources, models, STTM, QA packs, Soda checks, Jira and Git. It drafts changes; a human publishes them, through the same governance as a click." },
+      body: "An agentic assistant across sources, models, Data Mapping, QA packs, Soda checks, Jira and Git. It drafts changes; a human publishes them, through the same governance as a click." },
     { icon: Cpu, title: "Cortex AI in the stages", tag: "AI_COMPLETE · embeddings · search",
       body: "Explains, enriches and suggests: profile descriptions, mapping explanations, test and transformation drafting, advisory code review. Rules decide; if a call fails, the engine result stands." },
   ];

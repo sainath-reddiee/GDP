@@ -163,8 +163,10 @@ export function ShareWizard({ shares, domains, databases, landing }: {
 
   const unmounted = entry && !entry.database;
   const noAccess = entry && entry.database && !entry.readable;
+  const keysNeeded = ["SCD2", "MERGE"].includes(snap.bronze_load_type) || snap.load_type === "SCD2";
+  const keysMissing = keysNeeded ? Array.from(picked).filter((t) => !(pks[t] ?? "").trim()) : [];
   const canNext = [!!entry?.database && !!entry?.readable, !!schema, picked.size > 0, NAME.test(sourceName) && !!landingDb && !!landingSchema,
-    ...(sync ? [!!snap.bronze_schema.trim()] : []), true][step];
+    ...(sync ? [!!snap.bronze_schema.trim() && keysMissing.length === 0] : []), true][step];
   const next = () => {
     if (step === 0) openSchemas(database);
     else if (step === 1) openTables();
@@ -373,6 +375,9 @@ export function ShareWizard({ shares, domains, databases, landing }: {
             <p className="text-xs font-medium">Primary keys {["SCD2", "MERGE"].includes(snap.bronze_load_type) || snap.load_type === "SCD2"
               ? <span className="text-destructive">(needed for a {snap.bronze_load_type === "MERGE" ? "MERGE" : "SCD2"} load)</span>
               : <span className="text-muted-foreground">(optional)</span>}</p>
+            {keysMissing.length > 0 && (
+              <p className="text-xs text-destructive">Add the keys of {keysMissing.join(", ")}, or choose a TRUNCATE bronze load and an APPEND or TRUNCATE load.</p>
+            )}
             <ul className="grid gap-2 sm:grid-cols-2">
               {Array.from(picked).map((t) => (
                 <li key={t} className="flex items-center gap-2">

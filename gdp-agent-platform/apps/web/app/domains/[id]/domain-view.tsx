@@ -44,7 +44,7 @@ export type DomainDetail = {
 };
 
 const TABS = [
-  { id: "overview", label: "Overview" }, { id: "playbook", label: "Playbook" }, { id: "references", label: "References" }, { id: "models", label: "Models" }, { id: "knowledge", label: "Knowledge" },
+  { id: "overview", label: "Overview" }, { id: "playbook", label: "Playbook" }, { id: "references", label: "References" }, { id: "models", label: "Models" }, { id: "knowledge", label: "Enterprise Memory" },
   { id: "rules", label: "Rules" }, { id: "sources", label: "Sources" }, { id: "lineage", label: "Lineage" }, { id: "versions", label: "Versions" },
 ] as const;
 const KIND_TONE: Record<string, string> = {

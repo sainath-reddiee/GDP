@@ -37,7 +37,7 @@ test("Stores stays highlighted inside any store", async ({ page }) => {
   await page.goto("/dashboard/sttm/c1");
   const nav = page.getByRole("navigation", { name: "Main" });
   await expect(nav.getByRole("link", { name: "Stores", exact: true })).toHaveAttribute("aria-current", "page");
-  await expect(page.getByRole("navigation", { name: "Breadcrumb" })).toContainText("Store›STTM Store›DIM_CUSTOMER");
+  await expect(page.getByRole("navigation", { name: "Breadcrumb" })).toContainText("Store›Data Mapping Store›DIM_CUSTOMER");
 });
 
 test("collapsed, a workspace icon opens a flyout of its pages", async ({ page }) => {

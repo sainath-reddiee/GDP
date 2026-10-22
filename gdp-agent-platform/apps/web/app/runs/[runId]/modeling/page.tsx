@@ -12,7 +12,7 @@ const STEPS: { tab: Tab; stage: "MAPPING" | "STTM"; n: number; title: string; hi
   { tab: "mapping", stage: "MAPPING", n: 1, title: "Field mapping",
     hint: "Which target column each source column feeds, scored and approved by a modeler." },
   { tab: "transformations", stage: "STTM", n: 2, title: "Transformations and joins",
-    hint: "How each target column is computed, and how the source tables join (the STTM)." },
+    hint: "How each target column is computed, and how the source tables join (the Data Mapping)." },
 ];
 
 const STATUS: Record<StageStatusValue, { label: string; cls: string }> = {

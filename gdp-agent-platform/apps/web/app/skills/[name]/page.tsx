@@ -27,7 +27,7 @@ export default async function SkillPage({ params, searchParams }: {
   return (
     <div className="space-y-4">
       <p className="eyebrow">
-        <Link href="/skills" className="hover:underline">Skills</Link>
+        <Link href="/skills" className="hover:underline">Agent Skills</Link>
         <span className="mx-1.5 text-muted-foreground">/</span>
         <span className="font-mono normal-case tracking-normal text-muted-foreground">{detail.skill_name}</span>
       </p>

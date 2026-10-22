@@ -89,7 +89,7 @@ export function StarSchema({ runId, approved, items }: { runId: string; approved
         )}
         {waiting("STTM_REVIEW") > 0 && canAct("STTM.APPROVE") && (
           <button type="button" onClick={() => approveAll("STTM_REVIEW", "STTM_APPROVED", "STTM")} disabled={pending}
-                  className="h-7 rounded-md border px-2.5 text-[11px] font-medium hover:bg-muted">Approve {waiting("STTM_REVIEW")} STTM(s)</button>
+                  className="h-7 rounded-md border px-2.5 text-[11px] font-medium hover:bg-muted">Approve {waiting("STTM_REVIEW")} Data Mapping(s)</button>
         )}
         {items.every((c) => (AT[c.current_state] ?? -1) >= 4) && canAct("DBT.EDIT") && (
           <button type="button" onClick={publish} disabled={pending}

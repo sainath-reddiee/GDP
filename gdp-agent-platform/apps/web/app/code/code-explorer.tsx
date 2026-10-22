@@ -156,7 +156,7 @@ export function CodeExplorer({ repos, summary, usage, initial }: {
         <span className="grid h-12 w-12 place-items-center rounded-2xl bg-blue-50 text-blue-600 ring-1 ring-inset ring-blue-100"><FolderGit2 className="h-6 w-6" /></span>
         <p className="mt-3 text-sm font-semibold">No repositories connected</p>
         <p className="mt-1 max-w-md text-xs text-muted-foreground">Connect the client&apos;s dbt or SQL repository in Admin, Integrations. Once indexed, dbt review, QA tests,
-          data quality checks, STTM and the copilot reuse its models, macros and tests, and the dbt workspace builds on it.</p>
+          data quality checks, Data Mapping and the copilot reuse its models, macros and tests, and the dbt workspace builds on it.</p>
         <Link href="/admin?section=integrations" className="mt-4 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground">Connect a repository</Link>
       </div>
     );

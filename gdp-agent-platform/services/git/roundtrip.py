@@ -31,7 +31,7 @@ KINDS: Dict[str, Dict[str, Any]] = {
     "MODEL": {"label": "Domain model", "table": "CORE.MODEL_DESIGNS", "key": "MODEL_ID", "publishes": True},
     "DQ_SUITE": {"label": "Data quality suite", "table": "CORE.DQ_SUITE_VERSION", "key": "SUITE_ID", "publishes": True},
     "QA_PACK": {"label": "QA pack", "table": "CORE.DOMAIN_QA_PACKS", "key": "PACK_ID", "publishes": False},
-    "STTM": {"label": "STTM mapping", "table": None, "key": None, "publishes": False},
+    "STTM": {"label": "Data Mapping", "table": None, "key": None, "publishes": False},
     # table model versions are published without an approval of their own (the domain model is the governed asset)
     "TABLE_MODEL": {"label": "Table model", "table": "CORE.TABLE_MODEL_VERSION", "key": "TABLE_MODEL_ID",
                     "publishes": True, "from": ("DRAFT", "PUBLISHED")},

@@ -58,7 +58,7 @@ function ImpactView({ impact }: { impact: DmImpact }) {
   return (
     <div className="space-y-2 text-xs" data-testid="model-impact">
       {!impact.items.length ? <p className="text-muted-foreground">No breaking changes, so nothing downstream is affected.</p>
-        : !touched.length ? <p className="text-muted-foreground">No STTM line, check, test, dbt file or open run uses what this version breaks.</p>
+        : !touched.length ? <p className="text-muted-foreground">No Data Mapping line, check, test, dbt file or open run uses what this version breaks.</p>
         : touched.map((i, n) => (
           <div key={n} className="rounded-lg border border-rose-200 p-2 dark:border-rose-500/30">
             <p className="font-mono font-semibold">{i.entity}{i.column ? `.${i.column}` : ""} <span className="font-sans font-normal text-muted-foreground">({i.kind.toLowerCase().replace(/_/g, " ")})</span></p>
@@ -151,7 +151,7 @@ export function ReviewPanel({ modelId, version, approvedVersion, comments: initi
         {diff?.breaking && (
           <section className="surface space-y-2 p-4">
             <h3 className="flex items-center gap-1.5 text-sm font-semibold"><Radar className="h-4 w-4 text-rose-600" /> Impact of the breaking changes</h3>
-            {!impact ? <p className="text-sm text-muted-foreground"><Loader2 className="mr-1 inline h-3.5 w-3.5 animate-spin" />Looking for STTM lines, checks, tests, dbt files and runs...</p> : <ImpactView impact={impact} />}
+            {!impact ? <p className="text-sm text-muted-foreground"><Loader2 className="mr-1 inline h-3.5 w-3.5 animate-spin" />Looking for Data Mapping lines, checks, tests, dbt files and runs...</p> : <ImpactView impact={impact} />}
           </section>
         )}
       </div>

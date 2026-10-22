@@ -32,7 +32,7 @@ export const STORES: (NavLink & { id: string; short: string })[] = [
   { id: "profiling", short: "Profiling", href: "/dashboard/profiling", label: "Profiling Store", icon: BarChart3 },
   { id: "modeling", short: "Modeling", href: "/dashboard/modeling", label: "Modeling Store", icon: Network },
   {
-    id: "sttm", short: "Mapping (STTM)", href: "/dashboard/sttm", label: "STTM Store", icon: GitCompareArrows,
+    id: "sttm", short: "Data Mapping", href: "/dashboard/sttm", label: "Data Mapping Store", icon: GitCompareArrows,
     badge: (c) => c.sttm_pending ? { value: c.sttm_pending, tone: "bg-amber-400 text-amber-950", title: `${c.sttm_pending} mappings waiting for review` } : null,
   },
   {
@@ -95,11 +95,11 @@ export const NAV_GROUPS: NavGroup[] = [
       },
       { href: "/dashboard/store", label: "Stores", icon: Store, children: STORES, badge: storeBadge, tabs: true, ownTabs: true },
       {
-        href: "/domains", label: "Knowledge", icon: BookOpen, tabs: true,
+        href: "/domains", label: "Enterprise Memory", icon: BookOpen, tabs: true,
         children: [
           { href: "/domains", label: "Domains", icon: Boxes },
-          { href: "/knowledge", label: "Knowledge", icon: BookOpen },
-          { href: "/skills", label: "Skills", icon: Sparkles },
+          { href: "/knowledge", label: "Enterprise Memory", icon: BookOpen },
+          { href: "/skills", label: "Agent Skills", icon: Sparkles },
         ],
       },
     ],

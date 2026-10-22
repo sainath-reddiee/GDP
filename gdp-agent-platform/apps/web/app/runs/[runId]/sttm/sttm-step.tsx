@@ -41,7 +41,7 @@ export async function SttmStep({ runId }: { runId: string }) {
       <AiSuggestions runId={params.runId} stage="STTM" canAct={canEdit} />
       <Card>
         <CardHeader>
-          <CardTitle>Transformations and joins (STTM)</CardTitle>
+          <CardTitle>Transformations and joins (Data Mapping)</CardTitle>
           <CardDescription>
             The source-to-target contract assembled from the approved field mapping: one line per target column with
             its transformation, plus the join plan. Refine a line in plain language; Cortex sees the profile, the
@@ -52,8 +52,8 @@ export async function SttmStep({ runId }: { runId: string }) {
         <CardContent>
           {canGenerate && (
             <StageAction
-              label="Generate STTM"
-              pendingLabel="Assembling STTM…"
+              label="Generate Data Mapping"
+              pendingLabel="Assembling Data Mapping…"
               action={generateSttm.bind(null, params.runId)}
             />
           )}

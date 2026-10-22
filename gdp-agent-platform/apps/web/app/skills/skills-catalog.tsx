@@ -115,7 +115,7 @@ export function SkillsCatalog({ data }: { data: SkillsResponse }) {
   return (
     <div className="space-y-5">
       <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
-        <Kpi label="Skills" value={st.skills ?? data.skills.length} hint={`${cats.length} categories`} />
+        <Kpi label="Agent skills" value={st.skills ?? data.skills.length} hint={`${cats.length} categories`} />
         <Kpi label="In production" value={st.in_production ?? 0} hint="loaded by every run" tone="success" />
         <Kpi label="Candidates" value={st.candidates ?? 0} hint="waiting for review" tone={st.candidates ? "warning" : undefined}
              onClick={() => setStatus(status === "candidate" ? "all" : "candidate")} active={status === "candidate"} />

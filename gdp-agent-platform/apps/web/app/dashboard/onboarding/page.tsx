@@ -11,7 +11,7 @@ import { DomainOnboarding } from "./domain-onboarding";
 import { FormatsMatrix } from "./domain-formats";
 import { KindPicker, type Kind } from "./kind-picker";
 import { PipelinePreview } from "./pipeline-preview";
-import { OnboardingShell, RailStep, Reveal, RouteTrail } from "./rail";
+import { OnboardingShell, RailStep, Reveal } from "./rail";
 
 type DomainRow = { domain_id: string; domain_name: string; active_flag?: boolean; target_tables?: number; knowledge_items?: number };
 
@@ -40,7 +40,7 @@ export default async function Onboarding({ searchParams }: { searchParams: { typ
   return (
     <OnboardingShell>
       <div className="space-y-8">
-        <PageHeader eyebrow="Build" title="Onboarding"><RouteTrail /></PageHeader>
+        <PageHeader eyebrow="Build" title="Onboarding" />
 
         <div>
           <KindPicker value={kind} />

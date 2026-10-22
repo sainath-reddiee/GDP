@@ -11,7 +11,7 @@ export const CATEGORY_META: Record<string, { label: string; hint: string }> = {
   GRAIN: { label: "Grain & keys", hint: "Duplicate and missing business keys" },
   COMPLETENESS: { label: "Completeness", hint: "Required columns populated" },
   SOURCE_TO_TARGET: { label: "Source to target", hint: "Direct columns moved unchanged" },
-  TRANSFORMATION: { label: "Transformations", hint: "STTM rules applied correctly" },
+  TRANSFORMATION: { label: "Transformations", hint: "Data Mapping rules applied correctly" },
   LOOKUP: { label: "Lookups & references", hint: "Resolved keys and hub orphans" },
   VALUES: { label: "Values", hint: "Accepted values and constants" },
   JOINS: { label: "Joins", hint: "No unexpected fan-out" },

@@ -228,8 +228,8 @@ const Pill = ({ tone, children }: { tone: "agent" | "human" | "ok" | "muted"; ch
 );
 
 function PlaybookMock() {
-  const rows = [["Glossary", 42, "Mapping"], ["Mapping patterns", 118, "Mapping"], ["Business rules", 17, "STTM · DQ · QA"],
-                ["Soda patterns", 9, "Data quality"], ["Examples", 0, "STTM · QA"], ["Naming standards", 6, "Code gen · Validation"]] as const;
+  const rows = [["Glossary", 42, "Mapping"], ["Mapping patterns", 118, "Mapping"], ["Business rules", 17, "Data Mapping · DQ · QA"],
+                ["Soda patterns", 9, "Data quality"], ["Examples", 0, "Data Mapping · QA"], ["Naming standards", 6, "Code gen · Validation"]] as const;
   return (
     <Mock title="Domain · CUSTOMER · Playbook (Silver)">
       <ul className="divide-y divide-dashed divide-[color:var(--line)]">
@@ -304,9 +304,9 @@ function LearningMock() {
 
 function VersionsMock() {
   const items = [
-    { v: "STTM v1", what: "sent back: \"join on the active address only\"", tone: "human" as const, tag: "Send-back" },
-    { v: "STTM v2", what: "approved by STTM approver, justification recorded", tone: "ok" as const, tag: "Approved" },
-    { v: "dbt v2", what: "generated from STTM v2, compiled on Snowflake", tone: "agent" as const, tag: "Validated" },
+    { v: "Data Mapping v1", what: "sent back: \"join on the active address only\"", tone: "human" as const, tag: "Send-back" },
+    { v: "Data Mapping v2", what: "approved by Data Mapping approver, justification recorded", tone: "ok" as const, tag: "Approved" },
+    { v: "dbt v2", what: "generated from Data Mapping v2, compiled on Snowflake", tone: "agent" as const, tag: "Validated" },
     { v: "PR", what: "branch and pull request opened on GitHub", tone: "agent" as const, tag: "Published" },
   ];
   return (
@@ -330,7 +330,7 @@ function AuditMock() {
     ["10:03", "agent", "tool_call generate_mapping_candidates", "SUCCEEDED · 9s"],
     ["10:41", "human", "MAPPING_REVIEW → MAPPING_APPROVED", "model approver · justification"],
     ["10:42", "agent", "tool_call generate_sttm", "SUCCEEDED · 6s"],
-    ["11:15", "human", "STTM_REVIEW → STTM_APPROVED", "STTM approver · justification"],
+    ["11:15", "human", "STTM_REVIEW → STTM_APPROVED", "Data Mapping approver · justification"],
   ] as const;
   return (
     <Mock title="Audit trail">

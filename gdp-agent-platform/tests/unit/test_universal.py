@@ -1,5 +1,7 @@
 """Onboarding an unfamiliar source: shapes, identifiers and rules must never crash a stage."""
 
+import pytest
+
 from services.knowledge.validate import normalize_content, validate_pack
 from services.mapping.features import domain_score, propose_transformation
 from services.source.identifiers import apply_col, sql_ident
@@ -231,3 +233,24 @@ def test_product_tokens_are_stripped_only_as_whole_tokens():
         assert source_system_name(schema="ACME_ERP") == "ERP" and source_system_name(schema="GDP_CRM") == "GDP_CRM"
     finally:
         configure({"strip_tokens": ["GDP"]})
+
+
+def test_profiled_tables_without_a_unique_column_never_get_a_guessed_key():
+    # profiled, nothing measured unique: a guessed *_ID key would make the dedup drop rows silently
+    from services.dbt.onboard import NoUniqueKey, _unique_key
+
+    cols = [{"source_table": "ORDERS", "source_column": "ORDER_ID", "target_column": "ORDER_ID"}]
+    with pytest.raises(NoUniqueKey):
+        _unique_key(cols, [], {}, "ORDERS", {})
+    picked, reason = _unique_key(cols, [], {}, "ORDERS", None)   # no profiles at all: inferred, and said so
+    assert picked and "no profiles" in reason
+
+
+def test_generated_yaml_quotes_names_and_text_that_would_break_it():
+    from services.dbt.onboard import yaml_name, yaml_text
+
+    assert yaml_name("order_id") == "order_id"
+    for raw in ("@timestamp", "% done", "a: b", "yes", "on", "order date", "1st"):
+        assert yaml_name(raw).startswith('"'), raw
+    assert yaml_text('C:\\path "quoted"') == '"C:\\\\path \\"quoted\\""'
+    assert yaml_text("x" * 500, 300) == '"' + "x" * 300 + '"'

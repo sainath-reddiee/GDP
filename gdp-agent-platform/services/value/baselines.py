@@ -25,7 +25,7 @@ KEY = "VALUE_BASELINES"
 ACTIVITIES: Dict[str, Dict[str, Any]] = {
     "mapping_column": {"label": "Column mappings", "group": "build", "unit": "column", "minutes": 8,
                        "source": "reviewed mapping decisions (modified ones count half)"},
-    "sttm_line": {"label": "STTM lines", "group": "build", "unit": "line", "minutes": 5,
+    "sttm_line": {"label": "Data Mapping lines", "group": "build", "unit": "line", "minutes": 5,
                   "source": "STTM lines approved by a person"},
     "dbt_file": {"label": "dbt files", "group": "build", "unit": "file", "minutes": 60,
                  "source": "files of the latest dbt generation of each run"},

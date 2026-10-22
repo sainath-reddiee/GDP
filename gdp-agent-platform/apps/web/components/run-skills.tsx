@@ -83,7 +83,7 @@ export function RunSkills({ runId, disabled }: { runId: string; disabled?: boole
                       {can("SKILL.EDIT") && !disabled && <button type="button" disabled={pending} onClick={() => set(c.skill_name, c.skill_id)} className="text-primary hover:underline">Try it</button>}
                     </div>
                   ))}
-                  {!trials.length && !data.candidates.length && <p className="text-muted-foreground">No candidate versions are waiting. Create one on <Link href="/skills" className="text-primary hover:underline">Skills</Link>.</p>}
+                  {!trials.length && !data.candidates.length && <p className="text-muted-foreground">No candidate versions are waiting. Create one on <Link href="/skills" className="text-primary hover:underline">Agent Skills</Link>.</p>}
                 </div>
               </>
             )}

@@ -11,7 +11,7 @@ import { ReliabilityView } from "./reliability";
 
 const PERIODS = [7, 30];
 
-type Params = { env?: string; q?: string; state?: string; owner?: string; team?: string; view?: string; days?: string };
+type Params = { env?: string; q?: string; state?: string; owner?: string; team?: string; tag?: string; view?: string; days?: string };
 
 /** Only API errors become messages; anything else (a sign-out redirect included) keeps propagating. */
 async function load<T>(fn: () => Promise<T>): Promise<{ data: T; error: null; status: 0 } | { data: null; error: string; status: number }> {
@@ -90,10 +90,10 @@ export default async function OpsPage({ searchParams }: { searchParams?: Params 
   }
   const list = envs.data.envs;
   const env = list.find((e) => e.env_id === sp.env)?.env_id ?? list.find((e) => e.enabled)?.env_id ?? list[0]?.env_id ?? "";
-  const nav: OpsNav = { env, q: sp.q ?? "", state: sp.state ?? "", owner: sp.owner ?? "", team: sp.team ?? "" };
+  const nav: OpsNav = { env, q: sp.q ?? "", state: sp.state ?? "", owner: sp.owner ?? "", team: sp.team ?? "", tag: sp.tag ?? "" };
   const dags = env
     ? await load(() => api<{ dags: DagRow[] }>(`/api/ops/dags?${new URLSearchParams(Object.entries({
-      env_id: env, q: nav.q, state: nav.state, owner: nav.owner, team_id: nav.team,
+      env_id: env, q: nav.q, state: nav.state, owner: nav.owner, team_id: nav.team, tag: nav.tag,
     }).filter(([, v]) => v))}`))
     : null;
   return (
