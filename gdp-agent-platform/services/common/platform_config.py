@@ -11,6 +11,7 @@ import re
 from typing import Any, Dict, List, Tuple
 
 from services.common.standard import GOLD, PIPELINE_PRESETS, PRESETS
+from services.ops.datadog import DEFAULT_SETTING as DATADOG_DEFAULTS, validate_setting as validate_datadog
 from services.knowledge.scout import DEFAULTS as SCOUT_DEFAULTS, validate as validate_scout
 from services.source.snaplogic_config import DEFAULT_SETTING as SNAPLOGIC_DEFAULTS, validate_setting as validate_snaplogic
 from services.value.baselines import DEFAULTS as VALUE_DEFAULTS, validate as validate_baselines
@@ -25,7 +26,7 @@ CATALOG_KEYS = ("hidden_target_tables", "hidden_target_databases", "hidden_targe
 SETTINGS = ("LLM_MODEL", "LLM_MODEL_BY_STAGE", "RATE_CARD", "CREDIT_PRICE_USD", "CREDITS_PER_MILLION_TOKENS",
             "CATALOG_DISPLAY", "MODELING_STANDARD.GDP", "MODELING_STANDARD.GENERIC",
             "MODELING_STANDARD.GDP.GOLD", "MODELING_STANDARD.GENERIC.GOLD", "VALUE_BASELINES", "SKILL_SCOUT",
-            "SNAPLOGIC_SYNC")
+            "SNAPLOGIC_SYNC", "DATADOG")
 # What the Admin page lists; CATALOG_DISPLAY is still read by the app but no longer edited there, the value
 # baselines have their own editor on the Value page, and the skill scout's on the Proposed skills page.
 ADMIN_SETTINGS = tuple(k for k in SETTINGS if k not in ("CATALOG_DISPLAY", "VALUE_BASELINES", "SKILL_SCOUT"))
@@ -45,6 +46,8 @@ DEFAULTS: Dict[str, Any] = {
     "SKILL_SCOUT": SCOUT_DEFAULTS,
     # onboarding writes SnapLogic's config tables too (services/source/snaplogic_config); off until an admin turns it on
     "SNAPLOGIC_SYNC": SNAPLOGIC_DEFAULTS,
+    # Datadog logs and monitors for Operations (services/ops/datadog); the keys stay in the host's environment
+    "DATADOG": DATADOG_DEFAULTS,
 }
 
 
@@ -140,6 +143,8 @@ def validate(key: str, value: Any) -> Tuple[Any, List[str]]:
         return validate_scout(value)
     if key == "SNAPLOGIC_SYNC":
         return validate_snaplogic(value)
+    if key == "DATADOG":
+        return validate_datadog(value)
     if key == "CATALOG_DISPLAY":
         if not isinstance(value, dict):
             return None, ["catalog display must be an object of lists"]

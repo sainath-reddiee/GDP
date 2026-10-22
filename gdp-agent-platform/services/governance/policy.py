@@ -267,6 +267,8 @@ RULES: List[Tuple[str, str, Any, str]] = [
     ("PUT", r"/api/ops/envs/[^/]+", "INTEGRATION.MANAGE", "Change an Airflow environment"),
     ("DELETE", r"/api/ops/envs/[^/]+", "INTEGRATION.MANAGE", "Remove an Airflow environment"),
     ("POST", r"/api/ops/envs/[^/]+/test", "INTEGRATION.MANAGE", ""),
+    ("POST", r"/api/ops/datadog/test", "INTEGRATION.MANAGE", ""),
+    ("POST", r"/api/ops/datadog/monitors/check", "OPS.OPERATE", ""),
     ("POST", r"/api/ops/envs/[^/]+/push-secret", "INTEGRATION.MANAGE", "Rotate an Airflow push secret"),
     ("POST", r"/api/ops/envs/[^/]+/poll", "OPS.OPERATE", ""),
     ("PUT", r"/api/ops/dag", "OPS.OPERATE", "Change a DAG's ops settings"),

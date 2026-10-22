@@ -127,7 +127,8 @@ AIP_SERVICE_ROLE=AODS_OPS_SERVICE
 AIP_SERVICE_WAREHOUSE=AI_PLATFORM_WH
 ```
 
-Leave the Jira lines empty unless Jira is in scope. Then:
+Leave the Jira lines empty unless Jira is in scope. For Operations, set `AWS_REGION` (the MWAA access comes from the
+host's role) and, if Datadog is in scope, the four `DATADOG_*` lines: see `docs/operations-mwaa-datadog.md`. Then:
 
 ```
 docker compose -f docker/docker-compose.yml --env-file docker/.env up -d --build
@@ -154,7 +155,9 @@ As super admin:
 3. **Admin, cost:** set the credit price, so AI cost shows in money.
 4. **Value page:** keep the effort baselines as assumptions until the delivery team confirms them; money stays hidden
    until then.
-5. **Operations:** add the Airflow environment(s), then refresh the task catalogue.
+5. **Operations:** prove the connections from the host with `python infrastructure/ops_check.py --mwaa-env <env>
+   --region <region> --datadog`, then add the Airflow environment(s), refresh the task catalogue, and switch Datadog
+   on in Admin, Integrations, Datadog (`docs/operations-mwaa-datadog.md`).
 6. **Code:** connect the dbt repository; for pull requests, set up GitHub publishing (needs the integration from
    phase 0).
 7. **Jira**, if in scope: see `docker/README.md`.
@@ -185,6 +188,7 @@ As super admin:
 | AI | Copilot: ask a question about a domain | An answer within a minute (proves Cortex, model and region) |
 | Onboarding | Start a run on a small source | The run moves through profiling |
 | Operations | Operations page | The Airflow environment polls without error |
+| Datadog | An incident page, if Datadog is on | The Datadog logs panel lists the task's logs |
 | Worker | `docker compose logs worker` | Regular job lines, no repeated failures |
 | Value | Value page (AUDIT.VIEW) | Estimated hours, no money until confirmed |
 

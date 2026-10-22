@@ -16,6 +16,7 @@ import { ModelsSection } from "./models-section";
 import { RateCardEditor } from "./rate-card";
 import { RulesSection } from "./rules-section";
 import { IntegrationsSection, type IntegrationView } from "./integrations-section";
+import type { DatadogStatus } from "../ops/datadog-actions";
 import type { CodeRepo, PublishingStatus } from "../code/actions";
 import type { JiraStatus } from "../jira/actions";
 import type { AirflowEnv } from "../ops/actions";
@@ -42,7 +43,7 @@ const MODEL_VIEWS = [
 ] as const;
 type ModelView = (typeof MODEL_VIEWS)[number]["id"];
 type SectionId = (typeof SECTIONS)[number]["id"];
-const INTEGRATION_VIEWS: IntegrationView[] = ["repos", "jira", "airflow", "incidents", "cases"];
+const INTEGRATION_VIEWS: IntegrationView[] = ["repos", "jira", "airflow", "incidents", "cases", "datadog"];
 
 const unavailable = <p className="text-sm text-muted-foreground">Not available from the API yet. Restart the API after pulling.</p>;
 
@@ -126,7 +127,7 @@ async function Section({ id, view, integrationView }: { id: SectionId; view: Mod
     );
   }
   if (id === "integrations") {
-    const [repos, domains, publishing, jira, airflow] = await Promise.all([
+    const [repos, domains, publishing, jira, airflow, datadog] = await Promise.all([
       api<{ repos: CodeRepo[]; ready: boolean }>("/api/code/repos").catch(() => null),
       api<{ domains: { domain_id: string; domain_name: string; active_flag: boolean }[] }>("/api/domains").catch(() => ({ domains: [] })),
       api<PublishingStatus>("/api/dbt/github").catch(() => ({ ready: false, config: null })),
@@ -136,10 +137,11 @@ async function Section({ id, view, integrationView }: { id: SectionId; view: Mod
         if (e instanceof ApiError) return { envs: e.status === 404 ? null : [], error: e.status === 404 ? null : e.message };
         throw e;
       }),
+      api<DatadogStatus>("/api/ops/datadog").catch(() => null),
     ]);
     if (!repos) return unavailable;
     if (!repos.ready) return <p className="text-sm text-muted-foreground">Code repositories need the latest deploy (migration V024).</p>;
-    return <IntegrationsSection repos={repos.repos} publishing={publishing} jira={jira} airflow={airflow.envs} airflowError={airflow.error} view={integrationView}
+    return <IntegrationsSection repos={repos.repos} publishing={publishing} jira={jira} airflow={airflow.envs} airflowError={airflow.error} datadog={datadog} view={integrationView}
                                 domains={domains.domains.filter((d) => d.active_flag).map((d) => ({ domain_id: d.domain_id, domain_name: d.domain_name }))} />;
   }
   if (id === "skills") {

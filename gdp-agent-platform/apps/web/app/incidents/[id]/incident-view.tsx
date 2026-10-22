@@ -18,6 +18,7 @@ import {
   type IncidentDetail,
 } from "../actions";
 import { ResolutionPanel } from "./resolution-panel";
+import { DatadogLogs } from "./datadog-logs";
 import { dagRunHref, incidentHref, IncidentStatusPill, KindPill, localInput, SeverityPill, up } from "../incident-shared";
 import { AiPanel, ImpactPanel, RetryBadge, RetryDialog } from "./incident-ai";
 import { caseFromIncident } from "../../qa/cases/actions";
@@ -275,6 +276,8 @@ export function IncidentView({ initial, envName, askAck, canOperate, canAI, canC
               ? <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-all rounded-lg bg-slate-950 p-3 font-mono text-[11px] leading-relaxed text-slate-200">{inc.error_excerpt}</pre>
               : <Muted>No error text was captured. Open the run for the task log.</Muted>}
           </Section>
+
+          {!inc.dq_table && <DatadogLogs incidentId={inc.incident_id} />}
 
           <Section title="AI diagnosis" aside={<Sparkles className="h-4 w-4 text-muted-foreground" />}>
             <AiPanel incidentId={inc.incident_id} ai={inc.ai} summary={inc.ai_summary} canAI={canAI}

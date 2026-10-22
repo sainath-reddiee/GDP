@@ -185,7 +185,8 @@ CATALOG_ALL = 2000
 
 DETECT_OVERLAP = timedelta(minutes=2)
 INTERVALS = {"outbox": 30, "escalate": 60, "sla": 120, "jira_sync": 300, "diagnose": 60, "case_triage": 30,
-             "resolve": 15, "permanent_fix": 3600, "skill_scout": 3600, "dq_alerts": 120, "dq_digest": 900}
+             "resolve": 15, "permanent_fix": 3600, "skill_scout": 3600, "dq_alerts": 120, "dq_digest": 900,
+             "datadog_monitors": 120}
 WAKEABLE = {"resolve"}   # the push ingest wakes it (lease.wake), so a pushed failure is handled in seconds
 STATE_SECONDS = 300
 
@@ -365,6 +366,16 @@ def dq_digest(db: Any) -> None:
         log.info("dq_digest: %s", result)
 
 
+def datadog_monitors(db: Any) -> None:
+    """Datadog monitors in Alert (or the other chosen states) as incidents, resolved when they recover. Off until the
+    DATADOG setting is on with monitors; the keys come from this host's environment."""
+    from services.ops.datadog_monitors import DatadogStore, process
+
+    result = process(DatadogStore(db))
+    if result.get("actions") or result.get("resolved") or result.get("errors"):
+        log.info("datadog_monitors: %s", result)
+
+
 def retention(db: Any) -> None:
     from services.ops.store import purge_events
 
@@ -445,7 +456,7 @@ class Worker:
         for name, fn in (("outbox", outbox), ("escalate", escalate), ("sla", sla), ("jira_sync", jira_sync),
                          ("diagnose", diagnose), ("case_triage", case_triage), ("resolve", resolve),
                          ("permanent_fix", permanent_fix), ("skill_scout", skill_scout), ("dq_alerts", dq_alerts),
-                         ("dq_digest", dq_digest)):
+                         ("dq_digest", dq_digest), ("datadog_monitors", datadog_monitors)):
             if self.stop.is_set():
                 return
             due = self._every(name, INTERVALS[name])
