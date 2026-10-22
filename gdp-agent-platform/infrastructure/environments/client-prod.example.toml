@@ -19,6 +19,15 @@ llm_model = "claude-sonnet-4-5"           # a model Cortex offers in the client'
 pr_sync_task = false
 actual_cost_from_account_usage = false
 
+[snaplogic]
+# Onboarding also writes the tables SnapLogic triggers from: CORE.AODS_SNAPLOGIC_CONFIG_MASTER (one row per source)
+# and CORE.AODS_SNAPLOGIC_CONFIG_DETAIL (one row per table), in this database's CORE. enabled is seeded once into Admin
+# (setting SNAPLOGIC_SYNC) when the database has no saved value; after that, switch it there.
+enabled = true
+# The Snowflake role(s) SnapLogic connects with: the deploy grants them USAGE on the database and CORE, and SELECT and
+# UPDATE on the two tables. Leave it out if SnapLogic's role is granted another way.
+snaplogic_roles = ["<SnapLogic's Snowflake role>"]
+
 [environment]
 # Which environment this is and the real database that plays each role here. Saved to Admin, Environments on the
 # first deploy that finds no saved mapping; after that, change it there.
