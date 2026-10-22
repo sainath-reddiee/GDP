@@ -256,8 +256,20 @@ def _try(cur, sql: str) -> Tuple[bool, str]:
         return False, " ".join(line.strip() for line in str(exc).splitlines() if line.strip())[:300]
 
 
+_ROLE_GRANTS: Dict[Tuple[int, str], Dict[str, Any]] = {}
+
+
 def role_grants(cur, role: str, limit: int = 50) -> Dict[str, Any]:
-    """{roles: every role `role` inherits (itself included), account: privileges on the account, of any of them}."""
+    """{roles: every role `role` inherits (itself included), account: privileges on the account, of any of them}.
+    One SHOW GRANTS per inherited role, so it is read once per cursor (one deploy): preflight and the access step
+    share it."""
+    key = (id(cur), role.upper())
+    if key not in _ROLE_GRANTS:
+        _ROLE_GRANTS[key] = _walk_role_grants(cur, role, limit)
+    return _ROLE_GRANTS[key]
+
+
+def _walk_role_grants(cur, role: str, limit: int) -> Dict[str, Any]:
     seen, todo, account = set(), [role.upper()], set()
     while todo and len(seen) < limit:
         current = todo.pop()
@@ -889,8 +901,18 @@ def main(argv: Optional[List[str]] = None) -> int:
     log = Log(env["name"], write=writes)
     log(f"environment {env['name']}: database {env['database']}, role {env['role']}, warehouse {env['warehouse']}")
     log(f"access model: {access_label(env)}")
+    begun = mark = time.time()
+
+    def took() -> str:
+        """Seconds since the previous phase ended, for its line in the log."""
+        nonlocal mark
+        now, last = time.time(), mark
+        mark = now
+        return f"({now - last:.0f}s)"
+
     try:
         con = connect(env)
+        log(f"signed in {took()}")
     except Exception as exc:
         log(f"could not connect: {str(exc).splitlines()[0][:400]}")
         log("Check the [snowflake] connection settings and complete the sign-in in the browser window. Nothing was changed.")
@@ -900,6 +922,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         log("1. preflight")
         checks = preflight(cur, env)
         print_checks(log, checks)
+        log(f"  preflight {took()}")
         if args.admin_sql is not None:
             target = Path(args.admin_sql) if args.admin_sql else LOG_DIR / f"{env['name']}-admin.sql"
             target.parent.mkdir(exist_ok=True)
@@ -916,6 +939,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         steps = plan(cur, env)
         for line in steps:
             log(f"  {line}")
+        log(f"  plan {took()}")
         if any(s.startswith("STOP:") for s in steps):
             log("stopped: an applied migration was changed; add a new migration instead")
             return 3
@@ -927,6 +951,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             if answer.strip().upper() != env["database"]:
                 log("not confirmed: nothing was changed")
                 return 1
+            took()   # the time spent typing the confirmation is not the deploy's
         log("3. deploy")
         from infrastructure.deploy_snowflake import apply_from_session
 
@@ -940,12 +965,16 @@ def main(argv: Optional[List[str]] = None) -> int:
         timed._stop.set()
         log(f"  deploy took {time.time() - started:.0f}s ({timed.statements} statements; slowest "
             f"{timed.slowest[0]:.0f}s: {timed.slowest[1] or 'none'})")
+        took()
         log("4. access")
         for line in grant_access(cur, env):
             log(f"  {line}")
+        log(f"  access {took()}")
         log("5. verify")
         for line in verify(cur, env):
             log(f"  {line}")
+        log(f"  verify {took()}")
+        log(f"total {time.time() - begun:.0f}s (sign-in included)")
         optional = [c for c in checks if c.status == "missing"]
         if optional:
             log(f"note: {len(optional)} optional item(s) still need an admin (features stay off until then): "
