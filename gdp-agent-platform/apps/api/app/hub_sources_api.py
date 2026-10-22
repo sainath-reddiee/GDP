@@ -19,7 +19,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from app.db import DATABASE, Db
-from app.main import _config, _ident, _put_config, _snowflake_error, _source_call, _table_ident, current_db
+from app.main import _config, _ident, _put_config, _snowflake_error, _source_call, _table_ident, current_db, procedure_error
 from services.common import secretbox
 from services.source import ingestion_control, pipelines, snaplogic_sync
 
@@ -680,7 +680,7 @@ def onboard_share(body: ShareOnboard, db: Db = Depends(current_db)):
         try:
             result = _source_call(db, proc, handler, *args)
         except Exception as exc:
-            steps.append({"step": name, "ok": False, "detail": str(exc)[:600]})
+            steps.append({"step": name, "ok": False, "detail": procedure_error(exc)[:600]})
             return {"run_id": run_id, "ok": False, "steps": steps, "continue_at": f"/runs/{run_id}/source"}
         ok = _step_ok(name, result)
         steps.append({"step": name, "ok": ok, "detail": _step_detail(name, result)})

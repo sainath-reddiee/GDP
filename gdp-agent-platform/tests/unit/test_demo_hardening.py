@@ -148,3 +148,20 @@ def test_dags_filter_by_tag():
     finally:
         ops_api._q = original
     assert "ARRAY_CONTAINS(%s::VARIANT, D.TAGS)" in seen["sql"] and "gdp-silver" in seen["params"]
+
+
+def test_a_procedure_traceback_shows_the_error_that_failed_not_its_first_lines():
+    from app.main import procedure_error
+
+    trace = ("100357 (P0000): Python Interpreter Error:\nTraceback (most recent call last):\n"
+             '  File "/home/udf/1/services.zip/services/source/procedures.py", line 201, in register_source\n'
+             "    _apply_transition(session, graph, run)\n"
+             '  File "<site-packages>/snowflake/snowpark/dataframe.py", line 854, in collect\n'
+             "    return self._internal_collect_with_tag_no_telemetry(\n"
+             "snowflake.snowpark.exceptions.SnowparkSQLException: (1304): q1: 003001 (42501): SQL access control error:\n"
+             "Insufficient privileges to operate on table 'WORKFLOW_RUN'\n in function REGISTER_SOURCE")
+    out = procedure_error(trace)
+    assert out.startswith("100357 (P0000): Python Interpreter Error: SnowparkSQLException:")
+    assert "Insufficient privileges to operate on table 'WORKFLOW_RUN'" in out and "File " not in out
+    assert procedure_error(trace.replace("\n", " ")) == out           # the same when the lines were joined
+    assert procedure_error("plain message") == "plain message"

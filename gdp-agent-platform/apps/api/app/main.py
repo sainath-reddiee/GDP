@@ -274,11 +274,31 @@ PROCEDURE_OWNED_STATES = {
 }
 
 PROC_ERROR = re.compile(r"(?:ValueError|AssertionError): (.+?)(?:\n|$)")
+# the exceptions of a Python traceback a Snowflake procedure returns ("Python Interpreter Error: Traceback ..."): the
+# last one is what failed, often a SQL error from inside the procedure; frames ('File "...", line n') are skipped
+TRACEBACK_EXC = re.compile(r"([A-Za-z_][\w.]*(?:Error|Exception)): (.+?)(?=\s+File \"|\s+Traceback \(most recent|\Z)", re.S)
+
+
+def procedure_error(text: Any) -> str:
+    """What a person needs from a procedure failure: the last exception of its Python traceback, with the SQL
+    error it carries, instead of the traceback's first lines. Text without a traceback comes back unchanged."""
+    message = str(text)
+    if "Traceback (most recent call last)" not in message:
+        return message
+    found = TRACEBACK_EXC.findall(message.split("Traceback (most recent call last)", 1)[1])
+    if not found:
+        return message
+    kind, detail = found[-1]
+    head = message.split("Traceback (most recent call last)", 1)[0].strip().rstrip(":").strip()
+    short = kind.rsplit(".", 1)[-1]
+    return f"{head + ': ' if head else ''}{short}: {' '.join(detail.split())}"
 
 
 def _snowflake_error(exc: Exception) -> HTTPException:
     message = str(exc)
     found = PROC_ERROR.findall(message)
+    if not found and "Traceback (most recent call last)" in message:
+        message = procedure_error(message)
     if found:
         message = found[-1].strip()
     lower = message.lower()
