@@ -1,0 +1,29 @@
+# The client production environment for `python infrastructure/deploy.py --env client-prod`, with placeholders.
+# Copy it to client-prod.toml (not committed: .gitignore) and replace each <...> with the client's names, or run
+# `python infrastructure/deploy.py --env client-prod --setup` to write that file. Never put a password here.
+
+[snowflake]
+# A connection name from ~/.snowflake/connections.toml (or account and user directly: see example.toml)
+connection = "<snowflake connection name>"
+role = "AODS_PLATFORM_ADMIN"              # the account role you deploy with (owns the platform database)
+warehouse = "<warehouse>"
+database = "<platform database>"
+
+[access]
+# account roles AODS_* (see example.toml): the role administrator creates them once; --admin-sql writes that SQL
+model = "account_roles"
+role_prefix = "AODS"
+
+[features]
+llm_model = "claude-sonnet-4-5"           # a model Cortex offers in the client's region
+pr_sync_task = false
+actual_cost_from_account_usage = false
+
+[environment]
+# Which environment this is and the real database that plays each role here. Saved to Admin, Environments on the
+# first deploy that finds no saved mapping; after that, change it there.
+name = "PROD"
+description = "Client production"
+
+[environment.bindings]
+silver = "<silver database>"

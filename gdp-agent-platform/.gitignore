@@ -24,4 +24,5 @@ airflow_lab/last_run.json
 # Client deploys: environment files name client accounts and roles; logs and admin SQL too
 infrastructure/environments/*.toml
 !infrastructure/environments/example.toml
+!infrastructure/environments/client-prod.example.toml
 deploy-logs/
