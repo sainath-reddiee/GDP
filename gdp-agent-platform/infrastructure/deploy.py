@@ -521,11 +521,17 @@ def plan(cur, env: Dict[str, Any]) -> List[str]:
     if not applied:
         return [f"{db} exists but has no platform ledger: the baseline creates the schema, then every step runs"]
     out = []
+    reshapes = False
     for version, name, path in ds.list_migrations():
         if version not in applied:
-            out.append(f"migration V{version} {name}")
+            text = path.read_text(encoding="utf-8")
+            shape = ds.changes_shape(text)
+            reshapes = reshapes or shape
+            out.append(f"migration V{version} {name}" + ("" if shape else " (grants or data only)"))
         elif applied[version] != ds.checksum(path.read_text(encoding="utf-8")):
             out.append(f"STOP: V{version} {name} changed after it was applied (checksum mismatch)")
+    if reshapes:
+        out.append("a migration changes tables: views, Cortex Search, agents and the seed run again")
     from services.common import access as access_model
 
     zip_name, _ = ds.build_services_zip()
@@ -744,6 +750,61 @@ class TimedConnection:
             cur.execute(statement, **kw)
             out.append(cur)
         return out
+
+    PARALLEL = 8          # procedure statements in flight at once
+    _CREATE_PROC = re.compile(r"^CREATE\s+OR\s+REPLACE\s+(?:SECURE\s+)?PROCEDURE\b", re.I)
+    _GRANT = re.compile(r"^GRANT\b", re.I)
+    _DROP_PROC = re.compile(r"^DROP\s+PROCEDURE\s+IF\s+EXISTS\b", re.I)
+
+    @staticmethod
+    def _kind(statement: str) -> Optional[str]:
+        body = re.sub(r"^(?:\s*--[^\n]*\n)*\s*", "", statement)
+        if TimedConnection._CREATE_PROC.match(body):
+            return "create"
+        if TimedConnection._GRANT.match(body):
+            return "grant"
+        if TimedConnection._DROP_PROC.match(body):
+            return "drop"
+        return None
+
+    def execute_parallel(self, sql_text: str):
+        """A procedures file faster: DROP PROCEDURE IF EXISTS of old signatures run first, one at a time; then its
+        CREATE OR REPLACE PROCEDURE statements, which are independent, run PARALLEL at a time as asynchronous
+        queries; then its GRANT statements the same way (a grant never runs before its procedure exists). A file with
+        any other kind of statement, or a connection without asynchronous queries, runs one statement at a time, in
+        order, as execute_string does."""
+        import io
+        from snowflake.connector.util_text import split_statements
+
+        statements = [st for st, _ in split_statements(io.StringIO(sql_text), remove_comments=False) if st.strip()]
+        kinds = [self._kind(st) for st in statements]
+        if not statements or None in kinds or not hasattr(self.con.cursor(), "execute_async"):
+            return self.execute_string(sql_text)
+        for st in (st for st, k in zip(statements, kinds) if k == "drop"):
+            self.cursor().execute(st)
+        for kind in ("create", "grant"):
+            batch = [st for st, k in zip(statements, kinds) if k == kind]
+            for start in range(0, len(batch), self.PARALLEL):
+                self._run_async(batch[start:start + self.PARALLEL])
+        return []
+
+    def _run_async(self, statements: List[str]) -> None:
+        """Submit the statements together, then wait for every one; the first error stops the deploy, as before."""
+        started = time.time()
+        queries = []
+        for st in statements:
+            cur = self.con.cursor()
+            cur.execute_async(st)
+            queries.append((cur.sfqid, st))
+        for qid, st in queries:
+            while self.con.is_still_running(self.con.get_query_status_throw_if_error(qid)):
+                time.sleep(0.3)
+        took = time.time() - started
+        self.statements += len(statements)
+        if took > self.slowest[0]:
+            self.slowest = (took, f"{len(statements)} statements in parallel: {self.head(statements[-1])}")
+        if took >= self.slow:
+            self.echo(f"  ... {took:.0f}s: {len(statements)} statements in parallel")
 
     def close(self) -> None:
         self._stop.set()

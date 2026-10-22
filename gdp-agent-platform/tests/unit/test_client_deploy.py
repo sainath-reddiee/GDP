@@ -204,7 +204,7 @@ def test_plan_lists_pending_work_and_stops_on_an_edited_migration(monkeypatch):
                   "SELECT VERSION, CHECKSUM": (["VERSION", "CHECKSUM"], applied),
                   "SELECT OBJECT_KEY": (["OBJECT_KEY", "CHECKSUM"], [])})
     steps = deploy.plan(cur, env())
-    assert f"migration V{last[0]} {last[1]}" in steps and any(s.startswith("code package") for s in steps)
+    assert any(s.startswith(f"migration V{last[0]} {last[1]}") for s in steps) and any(s.startswith("code package") for s in steps)
     edited = Cursor({**cur.rules, "SELECT VERSION, CHECKSUM": (["VERSION", "CHECKSUM"], [(first[0], "changed")])})
     assert any(s.startswith(f"STOP: V{first[0]}") for s in deploy.plan(edited, env()))
     new = Cursor({"SHOW DATABASES LIKE": (["created_on", "name"], [])})

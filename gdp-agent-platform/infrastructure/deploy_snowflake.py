@@ -24,8 +24,10 @@ database: no Oracle procedure refresh and no publisher task.
 Only what changed is applied. CORE.DEPLOY_STATE keeps a checksum of every step's rendered SQL (procedures, views,
 Cortex Search, agents, demo files), of the code package, of the seed inputs and of the publisher refreshes; a step
 whose checksum matches the last successful apply is skipped. A procedure file changes when its SQL or the code
-package changes. When a migration is applied, views, Cortex Search, agents and the seed run again so they pick up the
-new tables. --force (or "Re-apply everything" in Admin) applies every step regardless.
+package changes. When a migration that changes table shapes is applied (CREATE/ALTER/DROP of a table or view),
+views, Cortex Search, agents and the seed run again so they pick up the new tables; a migration of grants or data only
+leaves them as they are (changes_shape). Procedure files run their CREATE statements in parallel, then their grants
+(TimedConnection.execute_parallel). --force (or "Re-apply everything" in Admin) applies every step regardless.
 """
 
 from __future__ import annotations
@@ -36,6 +38,7 @@ import io
 import re
 import sys
 import tempfile
+import time
 import zipfile
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
@@ -64,6 +67,16 @@ MIGRATION_NAME = re.compile(r"^V(\d{3})__([a-z0-9_]+)\.sql$")
 PLACEHOLDER = re.compile(r"\{\{\s*([a-z_]+)\s*\}\}")
 FIXED_ZIP_TIME = (2020, 1, 1, 0, 0, 0)
 LEDGER_SCHEMA = "CORE"          # SCHEMA_MIGRATION and DEPLOY_STATE; never derived from PLATFORM_SCHEMA
+# what makes a migration change table shapes, so views, search services, agents and the seed must run again
+SHAPE = re.compile(r"\b(?:CREATE\s+(?:OR\s+REPLACE\s+)?(?:TRANSIENT\s+|TEMPORARY\s+)?(?:DYNAMIC\s+|ICEBERG\s+)?"
+                   r"(?:TABLE|VIEW|SEQUENCE)|ALTER\s+(?:TABLE|VIEW)|DROP\s+(?:TABLE|VIEW|COLUMN)|RENAME\s+(?:TO|COLUMN))\b",
+                   re.I)
+
+
+def changes_shape(sql: str) -> bool:
+    """True when a migration creates, alters or drops a table or view (comments ignored). A migration of grants or
+    data only (GRANT, INSERT, UPDATE of settings) does not, and the steps built on the tables need not run again."""
+    return bool(SHAPE.search(re.sub(r"--[^\n]*", "", sql)))
 CONSOLIDATION_MIGRATION = "061"
 REHEARSAL_SUFFIX = "_REHEARSAL"
 AGENT_CREATE = re.compile(
@@ -450,7 +463,7 @@ def apply_to_connection(con, database: str, warehouse: str, variables: Dict[str,
     cur.execute(f"SELECT VERSION, CHECKSUM FROM {database}.CORE.SCHEMA_MIGRATION")
     applied = dict(cur.fetchall())
     fresh = not applied     # a new environment: nothing in it predates this deploy
-    migrated = False
+    migrated = reshaped = False
     if not applied and use_baseline and BASELINE_FILE.exists() and (not through or through >= BASELINE_COVERS):
         con.execute_string(sql_of(BASELINE_FILE.read_text(encoding="utf-8")))
         for version, name, path in migrations:
@@ -465,7 +478,7 @@ def apply_to_connection(con, database: str, warehouse: str, variables: Dict[str,
             applied[version] = digest
         log.append(f"baseline {BASELINE_FILE.name}: new environment created in {PLATFORM_SCHEMA}; "
                    f"V001 to V{BASELINE_COVERS} recorded as applied")
-        migrated = True
+        migrated = reshaped = True   # a new environment: every table is new
     for version, name, path in migrations:
         if through and version > through:
             break
@@ -486,17 +499,20 @@ def apply_to_connection(con, database: str, warehouse: str, variables: Dict[str,
         )
         log.append(f"migration V{version} {name}: applied")
         migrated = True
+        reshaped = reshaped or changes_shape(raw)
     if through:
         log.append(f"--through {through}: stopped after the migrations")
         return log
-    if migrated:
-        log.append("migrations applied: views, Cortex Search, agents and the seed run again")
+    if reshaped:
+        log.append("migrations changed table shapes: views, Cortex Search, agents and the seed run again")
+    elif migrated:
+        log.append("migrations of grants or data only: views, Cortex Search, agents and the seed run only if changed")
     if accounts:
         log.extend(managed_access(cur, database))
     log.extend(record_access_model(cur, database, model))
 
     graph_digest = seed_digest(state_rows, transition_rows)
-    if migrated or state.changed("seed/workflow_graph", graph_digest):
+    if reshaped or state.changed("seed/workflow_graph", graph_digest):
         _seed_graph(cur, database, graph_version, state_rows, transition_rows)
         state.record("seed/workflow_graph", graph_digest)
         log.append(f"seed graph {graph_version}: {len(state_rows)} states, {len(transition_rows)} transitions")
@@ -512,14 +528,16 @@ def apply_to_connection(con, database: str, warehouse: str, variables: Dict[str,
         state.record("package/services", zip_name)
         log.append(f"package {zip_name} uploaded")
 
+    parallel = getattr(con, "execute_parallel", None)
     for path in procedures:
         sql = sql_of(path.read_text(encoding="utf-8"))
         key, digest = f"procedures/{path.name}", checksum(sql)
         if not state.changed(key, digest):
             continue
-        con.execute_string(sql)
+        started = time.time()
+        (parallel or con.execute_string)(sql)
         state.record(key, digest)
-        log.append(f"procedures {path.name}: applied")
+        log.append(f"procedures {path.name}: applied ({time.time() - started:.0f}s)")
     log.append(refresh_github_publisher(cur, database, variables["services_import"],
                                         "" if rehearsal else (variables.get("warehouse") or warehouse), state))
     if rehearsal:
@@ -531,15 +549,16 @@ def apply_to_connection(con, database: str, warehouse: str, variables: Dict[str,
     log.extend(seed_environment(cur, database, environment))
     log.extend(seed_snaplogic(cur, database, (environment or {}).get("snaplogic")))
     inputs = seed_inputs_digest()
-    if migrated or state.changed("seed/platform", inputs):
+    if reshaped or state.changed("seed/platform", inputs):
+        started = time.time()
         log.extend(seed_platform(cur, database) or [])
         state.record("seed/platform", inputs)
-        log.append("seed domain packs, skills, platform config")
+        log.append(f"seed domain packs, skills, platform config ({time.time() - started:.0f}s)")
 
     for path in extra_sql:
         sql = sql_of(path.read_text(encoding="utf-8"))
         key, digest = f"{path.parent.name}/{path.name}", checksum(sql)
-        if not migrated and not state.changed(key, digest):
+        if not reshaped and not state.changed(key, digest):
             continue
         try:
             con.execute_string(agent_statements(cur, sql) if path.parent.name == "agents" else sql)

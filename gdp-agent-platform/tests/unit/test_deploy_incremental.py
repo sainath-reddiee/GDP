@@ -1,5 +1,6 @@
 """The deploy applies only what changed since its last successful apply (CORE.DEPLOY_STATE)."""
 
+import re
 from pathlib import Path
 
 import pytest
@@ -63,10 +64,11 @@ def files(tmp_path, monkeypatch):
 def _apply(con, root: Path, zip_name="services-1.zip", force=False, use_baseline=False):
     variables = {"database": "DB", "services_import": f"@DB.CORE.CODE_STAGE/{zip_name}", "warehouse": "WH"}
     migrations = [(m.name[1:4], m.name[6:-4], m) for m in sorted((root / "migrations").glob("*.sql"))]
-    return deploy.apply_to_connection(
+    log = deploy.apply_to_connection(
         con, "DB", "WH", variables, zip_name, b"zip", migrations, sorted((root / "procedures").glob("*.sql")),
         sorted((root / "views").glob("*.sql")), "1.0", [("CREATED", "SOURCE", "PENDING", 1, 1, True, None, "1.0")],
         [("CREATED", "FAILED", "SYSTEM", None, True, "1.0")], [], force=force, use_baseline=use_baseline)
+    return [re.sub(r" \(\d+s\)$", "", line) for line in log]   # durations vary; what ran does not
 
 
 def test_first_deploy_applies_everything_then_a_repeat_skips_everything(files):
@@ -115,6 +117,18 @@ def test_a_new_migration_reruns_views_and_the_seed(files):
     log = _apply(con, root)
     assert "migration V002 second: applied" in log and "views v.sql: applied" in log
     assert seeded == ["DB"] and "procedures a.sql: applied" not in log
+
+
+def test_a_migration_of_grants_only_leaves_views_and_the_seed_alone(files):
+    root, seeded = files
+    con = FakeCon()
+    _apply(con, root)
+    seeded.clear()
+    (root / "migrations" / "V002__grants.sql").write_text(
+        "-- a grant; CREATE TABLE in a comment changes nothing\nGRANT SELECT ON TABLE {{database}}.CORE.T TO DATABASE ROLE R;")
+    log = _apply(con, root)
+    assert "migration V002 grants: applied" in log and "views v.sql: applied" not in log
+    assert seeded == [] and any(line.startswith("migrations of grants or data only") for line in log)
 
 
 def test_force_applies_everything(files):
