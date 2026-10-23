@@ -1,0 +1,29 @@
+import type { ReactNode } from "react";
+import { Send } from "lucide-react";
+import { ACTIONS, actMode, type ActionId } from "@/lib/os/access";
+import type { OsAccess } from "@/lib/os/session";
+import { Btn } from "./ui";
+
+/** A button that changes something, shown by governance: as itself when the person holds the privilege, as
+ *  "Request ..." (routed to the approver role, as the classic pages do) when they may raise change requests, and not
+ *  at all otherwise. The page it opens enforces the same privilege. */
+export function Action({ access, id, privilege, href, label, icon, variant = "default", external }: {
+  access: OsAccess; id: ActionId; privilege?: string; href: string; label?: string; icon?: ReactNode;
+  variant?: "default" | "primary" | "mint" | "warn" | "red"; external?: boolean;
+}) {
+  const def = ACTIONS[id];
+  const need = privilege ?? def.privilege;
+  const text = label ?? def.label;
+  const mode = actMode(access, need);
+  if (mode === "none") return null;
+  if (mode === "request") {
+    const to = access.approvers[need];
+    return (
+      <Btn href={href} variant="warn" external={external}
+           title={`You do not hold ${need}. Your change goes to ${to ? `the ${to.replace(/_/g, " ").toLowerCase()} role` : "an approver"} for approval.`}>
+        <Send className="h-3.5 w-3.5" /> Request: {text.charAt(0).toLowerCase() + text.slice(1)}
+      </Btn>
+    );
+  }
+  return <Btn href={href} variant={variant} external={external}>{icon}{text}</Btn>;
+}

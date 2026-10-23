@@ -1,7 +1,9 @@
 import Link from "next/link";
 import { ArrowRight, CheckCircle2, CircleDashed, Database, Plug, ShieldCheck, Workflow, Wrench, X } from "lucide-react";
 import { stateLabel } from "@/lib/run-labels";
-import { currentPersona, loadIngestion, loadRuns, loadSources, type IngestionControl } from "@/lib/os/data";
+import { loadIngestion, loadRuns, loadSources, type IngestionControl } from "@/lib/os/data";
+import { guard } from "@/lib/os/session";
+import { Action } from "@/components/os/action";
 import { ActivityRow, Banner, Btn, Card, Empty, Kpi, PageHeader, SourceError, Tag, ago, pretty, type Tone } from "@/components/os/ui";
 import { cn } from "@/lib/utils";
 
@@ -26,7 +28,8 @@ const HEALTH: Record<string, { tone: Tone; label: string }> = {
 };
 
 export default async function SourceReadiness({ searchParams }: { searchParams: { config?: string } }) {
-  const persona = currentPersona();
+  const access = await guard("enable");
+  const persona = access.persona;
   const [sources, runs, ingestion] = await Promise.all([loadSources(), loadRuns("sort=updated&limit=150"), loadIngestion()]);
   const list = sources.data.sources;
   const ready = list.filter((s) => s.health === "HEALTHY" && (s.staged_tables > 0 || (s.landed_tables ?? 0) > 0));
@@ -40,10 +43,10 @@ export default async function SourceReadiness({ searchParams }: { searchParams: 
     <>
       <PageHeader eyebrow={`${persona.label} / Enablement`} title="Source readiness"
                   subtitle="Design-time access for profiling and runtime ingestion configuration, reusing the connectors and the config-driven framework already in place."
-                  actions={<><Btn href="/dashboard/sources">Source store</Btn><Btn href="/dashboard/onboarding?type=source" variant="primary"><Plug className="h-3.5 w-3.5" /> Connect a source</Btn></>} />
+                  actions={<><Btn href="/dashboard/sources">Source store</Btn><Action access={access} id="connectSource" href="/dashboard/onboarding?type=source" variant="primary" icon={<Plug className="h-3.5 w-3.5" />} /></>} />
       <SourceError what="Sources" error={sources.error} />
       {waiting.length
-        ? <Banner tone="amber" icon={Wrench} action={<Btn href={`/runs/${waiting[0].run_id}/source`} variant="warn">Open the first</Btn>}><b>{waiting.length} run{waiting.length === 1 ? "" : "s"} wait on enablement</b>: access, landing or configuration before the designer can start.</Banner>
+        ? <Banner tone="amber" icon={Wrench} action={<Action access={access} id="connectSource" label="Open the first" href={`/runs/${waiting[0].run_id}/source`} variant="warn" />}><b>{waiting.length} run{waiting.length === 1 ? "" : "s"} wait on enablement</b>: access, landing or configuration before the designer can start.</Banner>
         : <Banner icon={ShieldCheck}>No run is waiting on enablement. Sources that are already connected and landed skip this step automatically.</Banner>}
 
       <div className="mb-4 grid grid-cols-2 gap-3 xl:grid-cols-4">
@@ -81,7 +84,7 @@ export default async function SourceReadiness({ searchParams }: { searchParams: 
           </Card>
 
           <Card title="Framework configuration" subtitle="Runtime ingestion through the config-driven SnapLogic framework (CORE.INGESTION_CONTROL_CONFIG)"
-                action={<Btn href="/dashboard/sources">Manage pipelines</Btn>}>
+                action={<Action access={access} id="manageIngestion" href="/dashboard/sources" />}>
             <SourceError what="Ingestion configuration" error={ingestion.error} />
             {configs.length ? (
               <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.15fr)]">

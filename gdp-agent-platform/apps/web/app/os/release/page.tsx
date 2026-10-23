@@ -2,8 +2,10 @@ import Link from "next/link";
 import { ArrowRight, CheckCircle2, CircleDashed, FileCode2, FlaskConical, GitPullRequest, Hand, Rocket, ShieldCheck, Sparkles, X } from "lucide-react";
 import { stateLabel } from "@/lib/run-labels";
 import {
-  PASS_THRESHOLD, currentPersona, defaultRun, loadKnowledgeFeed, loadPrs, loadRunBundle, loadRunQa, loadRuns, runOptions, scoreOf, tableOf,
+  PASS_THRESHOLD, defaultRun, loadKnowledgeFeed, loadPrs, loadRunBundle, loadRunQa, loadRuns, runOptions, scoreOf, tableOf,
 } from "@/lib/os/data";
+import { guard } from "@/lib/os/session";
+import { Action } from "@/components/os/action";
 import { ActivityRow, Banner, Btn, Card, Empty, Field, Kpi, PageHeader, SourceError, Tag, ago, pretty, type Tone } from "@/components/os/ui";
 import { RunPicker } from "@/components/os/run-picker";
 import { cn } from "@/lib/utils";
@@ -18,7 +20,8 @@ const GATE_STYLE: Record<Gate["state"], { tone: Tone; icon: typeof CheckCircle2 
 const AFTER_REVIEW = ["DBT_APPROVED", "COMPLETED", "DEPLOYMENT_PENDING", "DEPLOYED", "PIPELINE_ENABLED"];
 
 export default async function CodeAndRelease({ searchParams }: { searchParams: { run?: string } }) {
-  const persona = currentPersona();
+  const access = await guard("release");
+  const persona = access.persona;
   const [runs, prs] = await Promise.all([loadRuns("sort=updated&limit=150"), loadPrs()]);
   const runId = searchParams.run ?? defaultRun(runs.data.runs, ["DBT_REVIEW", "DBT_APPROVED", "COMPLETED", "VALIDATION_PASSED"])?.run_id;
   const [bundle, qa, feed] = runId
@@ -64,9 +67,9 @@ export default async function CodeAndRelease({ searchParams }: { searchParams: {
         subtitle="Agent-generated code enters the normal SDLC: a pull request, CI evidence, QA and UAT signoff, then a controlled release. Nothing is merged or deployed automatically."
         actions={<>
           <RunPicker base="/os/release" current={run.run_id} runs={runOptions(runs.data.runs)} />
-          <Btn href={`/runs/${run.run_id}/dbt`}><FileCode2 className="h-3.5 w-3.5" /> dbt studio</Btn>
+          <Action access={access} id="openDbtStudio" label="dbt studio" href={`/runs/${run.run_id}/dbt`} icon={<FileCode2 className="h-3.5 w-3.5" />} />
           {run.current_state === "DBT_REVIEW"
-            ? <Btn href={`/runs/${run.run_id}/review`} variant="primary">Review and approve <ArrowRight className="h-3.5 w-3.5" /></Btn>
+            ? <Action access={access} id="reviewCode" label="Review and approve" href={`/runs/${run.run_id}/review`} variant="primary" />
             : <Btn href="/dashboard/source-control" variant="primary"><GitPullRequest className="h-3.5 w-3.5" /> Source control</Btn>}
         </>}
       />
@@ -102,7 +105,7 @@ export default async function CodeAndRelease({ searchParams }: { searchParams: {
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]">
         <div className="flex min-w-0 flex-col gap-4">
           <Card title="Pull request" subtitle={repo ? `${repo.name} · ${repo.git_url.replace(/^https?:\/\//, "")}` : "No repository connected"}
-                action={runPrs[0]?.pr_url ? <Btn href={runPrs[0].pr_url} external>Open on Git</Btn> : <Btn href={`/runs/${run.run_id}/dbt`}>Publish from dbt studio</Btn>}>
+                action={runPrs[0]?.pr_url ? <Btn href={runPrs[0].pr_url} external>Open on Git</Btn> : <Action access={access} id="publishPr" href={`/runs/${run.run_id}/dbt`} />}>
             {runPrs.length ? (
               <div className="os-divide">
                 {runPrs.map((p, i) => (
@@ -151,7 +154,7 @@ export default async function CodeAndRelease({ searchParams }: { searchParams: {
         </div>
 
         <div className="flex min-w-0 flex-col gap-4">
-          <Card title="QA and UAT workbench" subtitle="The generated test pack and its signoff" action={<Btn href={`/runs/${run.run_id}/qa`}>Open QA</Btn>}>
+          <Card title="QA and UAT workbench" subtitle="The generated test pack and its signoff" action={<Action access={access} id="runQa" href={`/runs/${run.run_id}/qa`} />}>
             {qa.tests.length ? (
               <>
                 <div className="flex flex-wrap gap-1.5">

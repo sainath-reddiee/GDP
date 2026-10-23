@@ -1,6 +1,9 @@
 import Link from "next/link";
 import { Activity, BadgeCheck, BookOpenCheck, Bot, CheckCircle2, FlaskConical, Siren, Sparkles, TriangleAlert } from "lucide-react";
-import { currentPersona, loadDags, loadExecutions, loadIncidents, loadKnowledge, loadOps, loadQuality } from "@/lib/os/data";
+import { loadDags, loadExecutions, loadIncidents, loadKnowledge, loadOps, loadQuality } from "@/lib/os/data";
+import { guard } from "@/lib/os/session";
+import { has } from "@/lib/os/access";
+import { Action } from "@/components/os/action";
 import { ActivityRow, Banner, Bar, Btn, Card, Empty, Kpi, PageHeader, SourceError, Tag, ago, pretty, type Tone } from "@/components/os/ui";
 
 export const dynamic = "force-dynamic";
@@ -13,7 +16,8 @@ const DAG_STATE: Record<string, { tone: Tone; label: string }> = {
 const pct = (v: number | null | undefined) => (v === null || v === undefined ? "–" : `${Math.round(v * 100)}%`);
 
 export default async function RunAndQuality() {
-  const persona = currentPersona();
+  const access = await guard("run");
+  const persona = access.persona;
   const [ops, quality, dags, executions, incidents, learned] = await Promise.all([
     loadOps(), loadQuality(), loadDags(), loadExecutions(), loadIncidents(), loadKnowledge({ q: "" }),
   ]);
@@ -30,11 +34,11 @@ export default async function RunAndQuality() {
     <>
       <PageHeader eyebrow={`${persona.label} / Run and quality`} title="Production operations"
                   subtitle="Runtime health, data quality and incidents, connected back to the code, mapping and knowledge that produced them."
-                  actions={<><Btn href="/dashboard/quality">Quality center</Btn><Btn href="/ops" variant="primary"><Activity className="h-3.5 w-3.5" /> Operations</Btn></>} />
+                  actions={<><Btn href="/dashboard/quality">Quality center</Btn><Action access={access} id="viewOps" href="/ops" variant="primary" icon={<Activity className="h-3.5 w-3.5" />} /></>} />
       <SourceError what="Operations" error={ops.error} />
       <SourceError what="Quality" error={quality.error} />
       {open.length
-        ? <Banner tone="red" icon={Siren} action={<Btn href="/incidents" variant="red">Open incidents</Btn>}><b>{open.length} open incident{open.length === 1 ? "" : "s"}</b> across {new Set(open.map((i) => i.dag_id)).size} pipeline{new Set(open.map((i) => i.dag_id)).size === 1 ? "" : "s"}. The RCA agent proposes a cause; a person approves any fix.</Banner>
+        ? <Banner tone="red" icon={Siren} action={<Action access={access} id="viewOps" label="Open incidents" href="/incidents" variant="red" />}><b>{open.length} open incident{open.length === 1 ? "" : "s"}</b> across {new Set(open.map((i) => i.dag_id)).size} pipeline{new Set(open.map((i) => i.dag_id)).size === 1 ? "" : "s"}. The RCA agent proposes a cause; a person approves any fix.</Banner>
         : <Banner icon={CheckCircle2}>No open incident. Pipelines and quality checks are within policy.</Banner>}
 
       <div className="mb-4 grid grid-cols-2 gap-3 xl:grid-cols-4">
@@ -46,7 +50,9 @@ export default async function RunAndQuality() {
 
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]">
         <div className="flex min-w-0 flex-col gap-4">
-          <Card title="Operational pipeline health" subtitle="Every monitored DAG: last state, reliability and latency" action={<Btn href="/ops">All pipelines</Btn>} pad={false}>
+          {/* Airflow pipelines and their incidents are for people who hold OPS.VIEW */}
+          {has(access, "OPS.VIEW") && (
+          <Card title="Operational pipeline health" subtitle="Every monitored DAG: last state, reliability and latency" action={<Action access={access} id="viewOps" label="All pipelines" href="/ops" />} pad={false}>
             {dags.data.length ? (
               <div className="max-h-[440px] overflow-auto">
                 <table className="os-table">
@@ -72,6 +78,7 @@ export default async function RunAndQuality() {
               </div>
             ) : <div className="p-5"><Empty icon={Activity} title="No pipeline is monitored yet">Connect an Airflow environment in Operations.</Empty></div>}
           </Card>
+          )}
 
           <Card title="Live data quality" subtitle="The latest Soda scans and QA runs, by target" action={<Btn href="/dashboard/quality">Quality center</Btn>} pad={false}>
             {executions.data.length ? (
@@ -108,8 +115,8 @@ export default async function RunAndQuality() {
                   <b>{pretty(worst.kind)}</b> first seen {ago(worst.first_seen)}{worst.assignee ? `, assigned to ${worst.assignee}` : ", unassigned"}. The RCA agent reads the task log, the DAG and the code that produced it, and drafts a resolution for approval.
                 </div>
                 <div className="flex flex-wrap gap-2">
-                  <Btn href={`/incidents/${worst.incident_id}`} variant="primary"><Bot className="h-3.5 w-3.5" /> Investigate</Btn>
-                  <Btn href="/ops/resolutions">Resolutions</Btn>
+                  <Action access={access} id="operateIncident" href={`/incidents/${worst.incident_id}`} variant="primary" icon={<Bot className="h-3.5 w-3.5" />} />
+                  <Action access={access} id="viewOps" label="Resolutions" href="/ops/resolutions" />
                 </div>
                 <div className="os-divide mt-3">
                   {open.slice(0, 5).map((i) => (
@@ -124,7 +131,7 @@ export default async function RunAndQuality() {
             ) : <Empty icon={CheckCircle2} title="Nothing to investigate" />}
           </Card>
 
-          <Card title="Learning from operations" subtitle="Runbooks, exceptions and fixes captured from runtime" action={<Btn href="/ops/fixes">Known fixes</Btn>}>
+          <Card title="Learning from operations" subtitle="Runbooks, exceptions and fixes captured from runtime" action={<Action access={access} id="viewOps" label="Known fixes" href="/ops/fixes" />}>
             {opsLearning.length ? (
               <div className="os-divide">
                 {opsLearning.slice(0, 6).map((k) => (

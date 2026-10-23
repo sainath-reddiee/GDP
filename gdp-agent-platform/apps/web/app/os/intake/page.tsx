@@ -1,7 +1,9 @@
 import Link from "next/link";
 import { ArrowRight, Bot, Boxes, CheckCircle2, CircleDashed, Crown, Database, GitMerge, Layers, Route, Wrench } from "lucide-react";
 import { stateLabel } from "@/lib/run-labels";
-import { currentPersona, loadDomainModel, loadDomains, loadRuns, loadSources } from "@/lib/os/data";
+import { loadDomainModel, loadDomains, loadRuns, loadSources } from "@/lib/os/data";
+import { guard } from "@/lib/os/session";
+import { Action } from "@/components/os/action";
 import { ActivityRow, Btn, Card, Empty, PageHeader, SourceError, Tag, ago, pretty } from "@/components/os/ui";
 import { AutoForm } from "@/components/os/client";
 import { cn } from "@/lib/utils";
@@ -16,7 +18,8 @@ const TYPES = [
 ] as const;
 
 export default async function Intake({ searchParams }: { searchParams: { type?: string; domain?: string; source?: string | string[] } }) {
-  const persona = currentPersona();
+  const access = await guard("intake");
+  const persona = access.persona;
   const type = TYPES.find((t) => t.key === searchParams.type) ?? TYPES[0];
   const [domains, sources, runs] = await Promise.all([loadDomains(), loadSources(), loadRuns("sort=updated&limit=150")]);
   const picked = new Set(([] as string[]).concat(searchParams.source ?? []));
@@ -75,7 +78,7 @@ export default async function Intake({ searchParams }: { searchParams: { type?: 
             </AutoForm>
             <div className="mt-5 flex flex-wrap items-center justify-between gap-3 border-t border-[var(--os-line)] pt-4">
               <span className="os-muted text-[12px]">The request starts in the onboarding workflow; access, profiling and mapping then run as agents with human gates.</span>
-              <Btn href={startHref} variant="primary">Start {type.label.toLowerCase()} <ArrowRight className="h-3.5 w-3.5" /></Btn>
+              <Action access={access} id="startOnboarding" privilege={type.key === "domain" ? "DOMAIN.EDIT" : "RUN.CREATE"} label={`Start ${type.label.toLowerCase()}`} href={startHref} variant="primary" />
             </div>
           </Card>
 

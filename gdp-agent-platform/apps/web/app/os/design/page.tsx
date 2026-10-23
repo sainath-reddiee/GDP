@@ -2,8 +2,11 @@ import Link from "next/link";
 import { ArrowRight, Boxes, CircleHelp, FileText, GitBranch, Layers, ListChecks, Network, Sparkles } from "lucide-react";
 import { GATES, stateLabel } from "@/lib/run-labels";
 import {
-  currentPersona, loadDomainContract, loadDomainModel, loadDomainQuestions, loadDomains, loadKnowledge, loadMapping, loadRuns, loadSources,
+  loadDomainContract, loadDomainModel, loadDomainQuestions, loadDomains, loadKnowledge, loadMapping, loadRuns, loadSources,
 } from "@/lib/os/data";
+import { guard } from "@/lib/os/session";
+import { actMode } from "@/lib/os/access";
+import { Action } from "@/components/os/action";
 import { Banner, Bar, Btn, Card, Empty, Field, Kpi, PageHeader, SourceError, Tag, ago, pretty } from "@/components/os/ui";
 import { DomainEr } from "@/components/os/client";
 import { cn } from "@/lib/utils";
@@ -16,12 +19,13 @@ const MAPPED = ["MAPPING_REVIEW", "MAPPING_APPROVED", "STTM_PENDING", "STTM_REVI
   "DBT_PENDING", "DBT_GENERATING", "VALIDATION_PENDING", "VALIDATION_RUNNING", "VALIDATION_PASSED", "VALIDATION_FAILED", "DBT_REVIEW", "DBT_APPROVED", "COMPLETED"];
 
 export default async function DesignerStudio({ searchParams }: { searchParams: { domain?: string } }) {
-  const persona = currentPersona();
+  const access = await guard("design");
+  const persona = access.persona;
   const [domains, runs, sources] = await Promise.all([loadDomains(), loadRuns("sort=updated&limit=150"), loadSources()]);
   const designable = domains.data.filter((d) => d.target_tables > 0);
   const domain = designable.find((d) => d.domain_id === searchParams.domain) ?? designable.find((d) => d.domain_name === "COMPANY") ?? designable[0];
   if (!domain) {
-    return (<><PageHeader eyebrow={`${persona.label} / Design studio`} title="Profile, model and map" /><SourceError what="Domains" error={domains.error} /><Empty icon={Boxes} title="No domain model yet" action={<Btn href="/dashboard/onboarding?type=domain" variant="primary">Onboard a domain</Btn>} /></>);
+    return (<><PageHeader eyebrow={`${persona.label} / Design studio`} title="Profile, model and map" /><SourceError what="Domains" error={domains.error} /><Empty icon={Boxes} title="No domain model yet" action={<Action access={access} id="startOnboarding" privilege="DOMAIN.EDIT" label="Onboard a domain" href="/dashboard/onboarding?type=domain" variant="primary" />} /></>);
   }
   const domainRuns = runs.data.runs.filter((r) => !r.is_archived && r.domain_name === domain.domain_name);
   // the run whose mapping is shown: the newest mapped one, preferring the multi-table parent (its proposals cover every table)
@@ -50,7 +54,7 @@ export default async function DesignerStudio({ searchParams }: { searchParams: {
         subtitle="Profile only the source tables the domain needs, reuse its approved model, and approve mappings before the build agent generates code."
         actions={<>
           <Btn href={`/domains/${domain.domain_id}`}>Domain workspace</Btn>
-          {atGate[0] && <Btn href={`/runs/${atGate[0].run_id}/${GATES[atGate[0].current_state].slug}`} variant="primary">Approve model and mappings <ArrowRight className="h-3.5 w-3.5" /></Btn>}
+          {atGate[0] && <Action access={access} id="decideGate" privilege={GATES[atGate[0].current_state].privilege} label="Approve model and mappings" href={`/runs/${atGate[0].run_id}/${GATES[atGate[0].current_state].slug}`} variant="primary" />}
         </>}
       />
       <div className="mb-4 flex flex-wrap gap-2">
@@ -78,14 +82,14 @@ export default async function DesignerStudio({ searchParams }: { searchParams: {
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1.65fr)_minmax(0,1fr)]">
         <div className="flex min-w-0 flex-col gap-4">
           <Card title="Business model and relationships" subtitle={diagram ? `${domain.domain_name} model v${diagram.version} · ${pretty(diagram.status)}${diagram.approved_by ? ` · approved by ${diagram.approved_by}` : ""}` : "No model yet"}
-                action={<Btn href={`/domains/${domain.domain_id}`}>Edit model</Btn>}>
+                action={<Action access={access} id="editModel" href={`/domains/${domain.domain_id}`} />}>
             {diagram?.entities.length
               ? <DomainEr className="h-[420px] rounded-xl border border-[var(--os-line)]" entities={diagram.entities} relationships={diagram.relationships} />
               : <Empty icon={Network} title="The domain has no data model yet" />}
           </Card>
 
           <Card title="Source-to-domain mappings" subtitle={mapRun ? <>Best proposal per source column from <Link className="underline" href={`/os/build?run=${mapRun.run_id}`}>{mapRun.run_name}</Link></> : "No run of this domain has reached mapping"}
-                action={mapRun ? <Btn href={`/runs/${mapRun.run_id}/modeling?tab=mapping`}>Open mapping</Btn> : undefined} pad={false}>
+                action={mapRun ? <Action access={access} id="answerQuestion" label="Open mapping" href={`/runs/${mapRun.run_id}/modeling?tab=mapping`} /> : undefined} pad={false}>
             {top.length ? (
               <div className="max-h-[460px] overflow-auto">
                 <table className="os-table">
@@ -142,7 +146,7 @@ export default async function DesignerStudio({ searchParams }: { searchParams: {
                     <div className="text-[12.5px] font-semibold leading-snug">{q.question}</div>
                     <div className="os-faint mt-0.5 flex items-center gap-2 text-[11px]">
                       <span>{pretty(q.stage ?? q.kind)} · {ago(q.created_at)}</span>
-                      {q.run_id && <Link className="underline" href={`/runs/${q.run_id}/modeling?tab=mapping`}>answer</Link>}
+                      {q.run_id && actMode(access, "MAPPING.DECIDE") !== "none" && <Link className="underline" href={`/runs/${q.run_id}/modeling?tab=mapping`}>answer</Link>}
                     </div>
                   </div>
                 ))}

@@ -1,7 +1,10 @@
 import Link from "next/link";
 import { ArrowRight, BookOpen, BookmarkCheck, Inbox, Search, Sparkles, TrendingUp } from "lucide-react";
 import { stateLabel } from "@/lib/run-labels";
-import { currentPersona, loadDomains, loadKnowledge, loadKnowledgeOverview, loadKnowledgeRecord } from "@/lib/os/data";
+import { loadDomains, loadKnowledge, loadKnowledgeOverview, loadKnowledgeRecord } from "@/lib/os/data";
+import { guard } from "@/lib/os/session";
+import { canSee } from "@/lib/os/access";
+import { Action } from "@/components/os/action";
 import { Btn, Card, Empty, Field, Kpi, PageHeader, SourceError, Tag, ago, pretty, type Tone } from "@/components/os/ui";
 import { cn } from "@/lib/utils";
 
@@ -23,7 +26,8 @@ const ORIGIN: Record<string, string> = {
 };
 
 export default async function KnowledgeHub({ searchParams }: { searchParams: { q?: string; family?: string; domain?: string; id?: string } }) {
-  const persona = currentPersona();
+  const access = await guard("knowledge");
+  const persona = access.persona;
   const family = FAMILIES.find((f) => f.key === searchParams.family);
   const params: Record<string, string> = {};
   if (searchParams.q) params.q = searchParams.q;
@@ -47,7 +51,7 @@ export default async function KnowledgeHub({ searchParams }: { searchParams: { q
     <>
       <PageHeader eyebrow={`${persona.label} / Knowledge service`} title="Knowledge hub"
                   subtitle="Enterprise Memory: governed knowledge for sources, domains and products, learned from every run, review and incident and reused by the agents."
-                  actions={<><Btn href="/knowledge">Curate in Enterprise Memory</Btn><Btn href="/skills" variant="primary">Open skills registry</Btn></>} />
+                  actions={<><Action access={access} id="curateKnowledge" href="/knowledge" />{canSee(access, "skills") && <Btn href="/os/skills" variant="primary">Open skills</Btn>}</>} />
       <SourceError what="Enterprise Memory" error={overview.error ?? list.error} />
 
       <div className="mb-4 grid grid-cols-2 gap-3 xl:grid-cols-4">

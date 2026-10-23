@@ -1,9 +1,11 @@
-// The personas of the Agentic Data OS experience. A persona only changes what /os puts first (the action queue, the
-// landing emphasis); it never changes privileges, which still come from the governance role (aip_role).
+import { PERSONA_REQUIRES, hasAny, type Grants } from "./access";
+
+// The personas of the Agentic Data OS experience. A person is offered only the personas their governance roles
+// qualify them for (lib/os/access PERSONA_REQUIRES); the chosen one changes what /os puts first, never what they may do.
 
 export const PERSONA_COOKIE = "ados_persona";
 
-export type PersonaId = "forward_lead" | "product_owner" | "admin" | "designer" | "developer" | "qa" | "reliability";
+export type PersonaId = "forward_lead" | "product_owner" | "admin" | "designer" | "developer" | "qa" | "reliability" | "curator" | "governance" | "viewer";
 
 export type Persona = {
   id: PersonaId; label: string; short: string; responsibility: string;
@@ -36,7 +38,22 @@ export const PERSONAS: Persona[] = [
   { id: "reliability", label: "Data Reliability Engineer", short: "Reliability", home: "/os/run",
     responsibility: "Runtime observability, DQ checks, incidents and RCA",
     states: ["COMPLETED", "DEPLOYED", "PIPELINE_ENABLED", "FAILED"] },
+  { id: "curator", label: "Knowledge & Skills Curator", short: "Curator", home: "/os/knowledge",
+    responsibility: "Verify Enterprise Memory and release reviewed skill versions",
+    states: [] },
+  { id: "governance", label: "Governance Lead", short: "Governance", home: "/os/review",
+    responsibility: "Roles, approval policies, change requests and the audit trail",
+    states: ["MAPPING_REVIEW", "STTM_REVIEW", "SODA_REVIEW", "DBT_REVIEW"] },
+  { id: "viewer", label: "Viewer", short: "Viewer", home: "/os",
+    responsibility: "Read the platform; no changes, no AI calls",
+    states: [] },
 ];
 
 export const DEFAULT_PERSONA: PersonaId = "forward_lead";
 export const personaById = (id: string | null | undefined) => PERSONAS.find((p) => p.id === id) ?? PERSONAS[0];
+
+/** The personas a person's privileges qualify them for, in list order; Viewer when none does. */
+export function personasFor(g: Grants): Persona[] {
+  const fit = PERSONAS.filter((p) => p.id !== "viewer" && hasAny(g, PERSONA_REQUIRES[p.id]));
+  return fit.length ? fit : PERSONAS.filter((p) => p.id === "viewer");
+}

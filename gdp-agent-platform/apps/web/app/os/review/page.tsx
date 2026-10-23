@@ -2,9 +2,12 @@ import Link from "next/link";
 import { ArrowRight, CheckCircle2, CircleDashed, ClipboardList, Flag, Hand, ShieldAlert, ShieldCheck, Sparkles, TriangleAlert } from "lucide-react";
 import { GATES, stateLabel } from "@/lib/run-labels";
 import {
-  PASS_THRESHOLD, checkPassed, checkSkipped, currentPersona, defaultRun, findingsOf, loadRunBundle, loadRuns, runOptions, scoreOf, tableOf,
+  PASS_THRESHOLD, checkPassed, checkSkipped, defaultRun, findingsOf, loadRunBundle, loadRuns, runOptions, scoreOf, tableOf,
   type ValidationCheck,
 } from "@/lib/os/data";
+import { guard } from "@/lib/os/session";
+import { actMode, has } from "@/lib/os/access";
+import { Action } from "@/components/os/action";
 import { lifecycleOfRun, classicHref } from "@/lib/os/lifecycle";
 import { ActivityRow, Banner, Bar, Btn, Card, Empty, Field, Kpi, PageHeader, SourceError, Stepper, Tag, ago, pretty } from "@/components/os/ui";
 import { RunPicker } from "@/components/os/run-picker";
@@ -13,15 +16,15 @@ export const dynamic = "force-dynamic";
 export const metadata = { title: "Validation gate" };
 
 /** Where a failing check is fixed in the classic run workspace. */
-const FIX_AT: Record<string, { slug: string; label: string }> = {
-  NAMING: { slug: "modeling?tab=mapping", label: "Field mapping" },
-  REQUIRED_COLUMNS: { slug: "modeling?tab=mapping", label: "Field mapping" },
-  DATATYPE: { slug: "modeling?tab=mapping", label: "Field mapping" },
-  SCHEMA: { slug: "modeling?tab=mapping", label: "Field mapping" },
-  STTM_CONSISTENCY: { slug: "modeling?tab=transformations", label: "Transformations" },
-  SODA_CONFIG: { slug: "soda", label: "Data quality" },
-  DBT_COMPILE: { slug: "dbt", label: "dbt studio" },
-  SKILL: { slug: "dbt", label: "dbt studio" },
+const FIX_AT: Record<string, { slug: string; label: string; privilege: string }> = {
+  NAMING: { slug: "modeling?tab=mapping", label: "Field mapping", privilege: "MAPPING.DECIDE" },
+  REQUIRED_COLUMNS: { slug: "modeling?tab=mapping", label: "Field mapping", privilege: "MAPPING.DECIDE" },
+  DATATYPE: { slug: "modeling?tab=mapping", label: "Field mapping", privilege: "MAPPING.DECIDE" },
+  SCHEMA: { slug: "modeling?tab=mapping", label: "Field mapping", privilege: "MAPPING.DECIDE" },
+  STTM_CONSISTENCY: { slug: "modeling?tab=transformations", label: "Transformations", privilege: "STTM.EDIT" },
+  SODA_CONFIG: { slug: "soda", label: "Data quality", privilege: "SODA.EDIT" },
+  DBT_COMPILE: { slug: "dbt", label: "dbt studio", privilege: "DBT.EDIT" },
+  SKILL: { slug: "dbt", label: "dbt studio", privilege: "DBT.EDIT" },
 };
 
 function severity(c: ValidationCheck): { label: string; tone: "red" | "amber" | "neutral" | "green" } {
@@ -32,9 +35,14 @@ function severity(c: ValidationCheck): { label: string; tone: "red" | "amber" | 
 }
 
 export default async function ReviewGate({ searchParams }: { searchParams: { run?: string } }) {
-  const persona = currentPersona();
+  const access = await guard("review");
+  const persona = access.persona;
   const runs = await loadRuns("sort=updated&limit=150");
-  const gated = runs.data.runs.filter((r) => !r.is_archived && (r.current_state in GATES || r.current_state === "VALIDATION_FAILED"));
+  // the gates this person decides (or may request a decision on); governance leads see them all
+  const oversees = has(access, "APPROVAL.VIEW");
+  const gated = runs.data.runs.filter((r) => !r.is_archived && (
+    r.current_state in GATES ? oversees || actMode(access, GATES[r.current_state].privilege) !== "none"
+      : r.current_state === "VALIDATION_FAILED" && (oversees || has(access, "RUN.OPERATE"))));
   const runId = searchParams.run ?? defaultRun(runs.data.runs, ["VALIDATION_FAILED", "DBT_REVIEW", "VALIDATION_PASSED"])?.run_id;
   const bundle = runId ? await loadRunBundle(runId) : { data: null, error: null };
   const b = bundle.data;
@@ -89,9 +97,9 @@ export default async function ReviewGate({ searchParams }: { searchParams: { run
           <RunPicker base="/os/review" current={run.run_id} runs={runOptions(runs.data.runs)} />
           <Btn href={`/os/build?run=${run.run_id}`}>Build workbench</Btn>
           {failed
-            ? <Btn href={`/os/skills${validationSkill ? `?skill=${encodeURIComponent(validationSkill.skill_name)}` : ""}`} variant="primary"><Sparkles className="h-3.5 w-3.5" /> Improve skill and regenerate</Btn>
-            : run.current_state === "DBT_REVIEW" ? <Btn href={`/runs/${run.run_id}/review`} variant="primary">Review code <ArrowRight className="h-3.5 w-3.5" /></Btn>
-            : gate ? <Btn href={`/runs/${run.run_id}/${gate.slug}`} variant="primary">Open {gate.name.toLowerCase()} <ArrowRight className="h-3.5 w-3.5" /></Btn> : null}
+            ? <Action access={access} id="editSkill" label="Improve skill and regenerate" href={`/os/skills${validationSkill ? `?skill=${encodeURIComponent(validationSkill.skill_name)}` : ""}`} variant="primary" icon={<Sparkles className="h-3.5 w-3.5" />} />
+            : run.current_state === "DBT_REVIEW" ? <Action access={access} id="reviewCode" href={`/runs/${run.run_id}/review`} variant="primary" />
+            : gate ? <Action access={access} id="decideGate" privilege={gate.privilege} label={`Open ${gate.name.toLowerCase()}`} href={`/runs/${run.run_id}/${gate.slug}`} variant="primary" /> : null}
         </>}
       />
 
@@ -133,7 +141,7 @@ export default async function ReviewGate({ searchParams }: { searchParams: { run
                             <div className="os-muted line-clamp-2 text-[11.5px]" title={msg}>{msg ? msg.split("\n")[0] : `${c.error_count} errors · ${c.warning_count} warnings`}</div>
                             {findings.length > 1 && <div className="os-faint text-[10.5px]">+{findings.length - 1} more finding{findings.length > 2 ? "s" : ""}</div>}
                           </td>
-                          <td>{fix && !checkPassed(c) ? <Btn href={`/runs/${run.run_id}/${fix.slug}`}>{fix.label}</Btn> : <span className="os-faint">–</span>}</td>
+                          <td>{fix && !checkPassed(c) ? <Action access={access} id="workStep" privilege={fix.privilege} label={fix.label} href={`/runs/${run.run_id}/${fix.slug}`} /> : <span className="os-faint">–</span>}</td>
                         </tr>
                       );
                     })}
@@ -172,9 +180,9 @@ export default async function ReviewGate({ searchParams }: { searchParams: { run
                 : "Validation has not run yet for this run."}
             </div>
             <div className="mt-4 flex flex-wrap gap-2">
-              <Btn href={`/runs/${run.run_id}/validation`} variant={failed ? "primary" : "default"}>Open validation</Btn>
-              {run.current_state === "DBT_REVIEW" && <Btn href={`/runs/${run.run_id}/review`} variant="mint">Review the code</Btn>}
-              {failed && validationSkill && <Btn href={`/os/skills?skill=${encodeURIComponent(validationSkill.skill_name)}`} variant="warn">Open skill studio</Btn>}
+              <Action access={access} id="revalidate" href={`/runs/${run.run_id}/validation`} variant={failed ? "primary" : "default"} />
+              {run.current_state === "DBT_REVIEW" && <Action access={access} id="reviewCode" label="Review the code" href={`/runs/${run.run_id}/review`} variant="mint" />}
+              {failed && validationSkill && <Action access={access} id="editSkill" label="Open skill studio" href={`/os/skills?skill=${encodeURIComponent(validationSkill.skill_name)}`} variant="warn" />}
             </div>
           </Card>
 

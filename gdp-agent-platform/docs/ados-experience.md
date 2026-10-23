@@ -13,8 +13,26 @@ Every screen reads live platform data through the endpoints the classic pages al
 | `apps/web/components/os/**` | Shell (header, rail, persona), UI primitives, run picker, interactive bits |
 | `apps/web/lib/os/data.ts` | Read-only adapters over the API, validation score, artifact grouping |
 | `apps/web/lib/os/lifecycle.ts` | Workflow states mapped onto Intake, Enable, Ingest, Design, Generate, Validate, PR, Release |
-| `apps/web/lib/os/personas.ts` | Seven personas (a view preference in the `ados_persona` cookie; privileges are unchanged) |
+| `apps/web/lib/os/access.ts` | The access list: screens, actions and personas against governance privileges |
+| `apps/web/lib/os/session.ts` | The person's effective grants (or a previewed role's), approvers and the page guard |
+| `apps/web/lib/os/personas.ts` | Ten personas, offered by privilege; the choice is kept in the `ados_persona` cookie |
 | `apps/web/e2e/ados.spec.ts` | Read-only walk of every screen, plus a check that the classic shell is intact |
+
+## Governance
+
+The experience uses the platform's governance as it is: 48 privileges, 14 system roles and the approval policies (`services/governance/policy.py`). It creates no role and grants nothing. One file decides what each person is shown, `apps/web/lib/os/access.ts`:
+
+- **Screens:** each screen lists the privileges that open it (any of them). The rail shows only screens the person may open. Opening any other screen by URL sends the person back to My Work with the reason, before the page reads anything.
+- **Actions:** each button that changes something names the privilege it needs (`ACTIONS`).
+  - A person who holds that privilege sees the button as normal.
+  - A person who lacks it but holds `REQUEST.CHANGES` sees "Request: ...", and the tooltip names the approver role from the active policy. The classic page then routes the change to that role, as it always has.
+  - Anyone else does not see the button.
+- **Personas:** a person's privileges decide which personas they are offered (`PERSONA_REQUIRES`). A person with none of them gets Viewer. The chosen persona only orders the queue and the landing page.
+- **Work queue:** My Work and Review list only the runs this person decides, may request a decision on, or operates. Holders of `APPROVAL.VIEW` see every gate.
+- **Preview as role:** super admins and governance admins can switch the UI to any role's effective privileges (cookie `ados_preview_role`). A banner shows while a preview is on. A preview changes only what is shown: data still loads as the signed-in person, and actions still run as them.
+- **The API still enforces everything.** Hiding a screen or a button controls what people see; it is not the security boundary. Reads are not restricted per role in the API (the Viewer role reads everything by design). Restricting reads by domain membership is a later backend step.
+
+The Help screen (`/os/help`) prints the access list, marked for the person reading it.
 
 ## Screens and their sources
 

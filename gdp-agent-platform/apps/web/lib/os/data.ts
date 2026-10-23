@@ -1,11 +1,9 @@
-import { cookies } from "next/headers";
 import { api, getRun } from "@/lib/api";
 import type { AuditEvent, RunState, RunSummary, SourcesOverview } from "@/lib/types";
 import type { ModelEntity, ModelRelationship, QualitySummary } from "@/lib/hub-types";
 import type { KnowledgeItem } from "@/app/knowledge/actions";
 import type { SkillVersion, SkillsResponse } from "@/app/skills/types";
 import type { DagRow, OpsSummary } from "@/app/ops/actions";
-import { DEFAULT_PERSONA, PERSONA_COOKIE, personaById } from "./personas";
 
 // Every /os screen reads the platform through these adapters, over the endpoints the classic pages already use (no new
 // backend). There is no sample data: a source that fails or is not deployed comes back empty with its error, and the
@@ -17,8 +15,6 @@ async function load<T>(p: Promise<T>, empty: T): Promise<Loaded<T>> {
   try { return { data: await p, error: null }; }
   catch (e) { return { data: empty, error: e instanceof Error ? e.message : String(e) }; }
 }
-
-export const currentPersona = () => personaById(cookies().get(PERSONA_COOKIE)?.value ?? DEFAULT_PERSONA);
 
 /** Runs, newest activity first. Test runs are left out, as on the classic lists. */
 export const loadRuns = (query = "sort=updated&limit=60") =>

@@ -1,7 +1,9 @@
 import Link from "next/link";
 import { ArrowRight, Boxes, FlaskConical, GitCompareArrows, History, Lightbulb, RotateCcw, ShieldCheck, Sparkles, TrendingUp } from "lucide-react";
 import { stateLabel } from "@/lib/run-labels";
-import { currentPersona, loadRuns, loadSkill, loadSkillDiff, loadSkillProposalFor, loadSkills } from "@/lib/os/data";
+import { loadRuns, loadSkill, loadSkillDiff, loadSkillProposalFor, loadSkills } from "@/lib/os/data";
+import { guard } from "@/lib/os/session";
+import { Action } from "@/components/os/action";
 import { ActivityRow, Banner, Bar, Btn, Card, Empty, Kpi, PageHeader, SourceError, Tag, ago, pretty } from "@/components/os/ui";
 import { cn } from "@/lib/utils";
 
@@ -11,7 +13,8 @@ export const metadata = { title: "Skill studio" };
 const rate = (n: number | undefined) => (n === undefined ? null : Math.round((n <= 1 ? n * 100 : n)));
 
 export default async function SkillStudio({ searchParams }: { searchParams: { skill?: string } }) {
-  const persona = currentPersona();
+  const access = await guard("skills");
+  const persona = access.persona;
   const [skills, runs] = await Promise.all([loadSkills(), loadRuns("sort=updated&limit=150")]);
   const list = skills.data.skills;
   const name = searchParams.skill
@@ -38,11 +41,11 @@ export default async function SkillStudio({ searchParams }: { searchParams: { sk
                   subtitle="Versioned, tested engineering skills the agents load at each stage. A fix becomes a reviewed skill version, then the affected steps rerun without redoing discovery."
                   actions={<>
                     <Btn href="/skills/proposed">Proposed skills</Btn>
-                    {name && <Btn href={`/skills/${encodeURIComponent(name)}`} variant="primary"><Sparkles className="h-3.5 w-3.5" /> Edit and version in the registry</Btn>}
+                    {name && <Action access={access} id="editSkill" label="Edit and version in the registry" href={`/skills/${encodeURIComponent(name)}`} variant="primary" icon={<Sparkles className="h-3.5 w-3.5" />} />}
                   </>} />
       <SourceError what="Skills registry" error={skills.error ?? detail?.error ?? null} />
       {after?.labels.includes("candidate") && (
-        <Banner tone="amber" icon={Lightbulb} action={name ? <Btn href={`/skills/${encodeURIComponent(name)}`} variant="warn">Review candidate</Btn> : undefined}>
+        <Banner tone="amber" icon={Lightbulb} action={name ? <Action access={access} id="releaseSkill" href={`/skills/${encodeURIComponent(name)}`} variant="warn" /> : undefined}>
           <b>Candidate v{after.version} (rev {after.revision}) is waiting for review</b> against production v{prod?.version}. It is promoted only after its tests pass and an owner approves.
         </Banner>
       )}
@@ -102,7 +105,7 @@ export default async function SkillStudio({ searchParams }: { searchParams: { sk
         </div>
 
         <div className="flex min-w-0 flex-col gap-4">
-          <Card title="Skill test bench" subtitle="The candidate against the baseline on the skill's evaluation set" action={name ? <Btn href={`/skills/${encodeURIComponent(name)}`}>Run tests</Btn> : undefined}>
+          <Card title="Skill test bench" subtitle="The candidate against the baseline on the skill's evaluation set" action={name ? <Action access={access} id="editSkill" label="Run tests" href={`/skills/${encodeURIComponent(name)}`} /> : undefined}>
             {testRun ? (
               <>
                 {[["Baseline", rate(testRun.baseline_rate), testRun.baseline_passed], ["Candidate", rate(testRun.candidate_rate), testRun.candidate_passed]].map(([l, r, p]) => (

@@ -44,6 +44,45 @@ test("the rail marks the current screen and the persona reorders the queue", asy
   await expect(page.getByText("Mission control / Forward Engineering Lead")).toBeVisible();
 });
 
+// Governance: the dev user is a super admin, so it can preview what each role is shown (a cookie the UI honours only
+// for super and governance admins). These read only; a preview never changes privileges in the API.
+async function previewAs(page: import("@playwright/test").Page, role: string) {
+  await page.context().addCookies([{ name: "ados_preview_role", value: role, url: BASE }]);
+}
+const railLinks = (page: import("@playwright/test").Page) =>
+  page.getByRole("navigation", { name: "Agentic Data OS" }).first().getByRole("link");
+
+test("a viewer sees only the screens their role opens, and is turned back from the rest", async ({ page }) => {
+  await previewAs(page, "VIEWER");
+  await page.goto("/os");
+  await expect(page.getByRole("status").filter({ hasText: "Previewing as viewer" })).toBeVisible();
+  await expect(railLinks(page)).toHaveText(["My Work", "Knowledge", "Run & DQ", "Classic", "Help"]);
+  await expect(page.getByLabel("Persona")).toHaveText("Viewer");
+  await page.goto("/os/build");
+  await page.waitForURL(/\/os\?denied=build$/);
+  await expect(page.getByText("Build is not part of your role.")).toBeVisible();
+});
+
+test("a code reviewer gets the build, review and release screens and the developer persona", async ({ page }) => {
+  await previewAs(page, "CODE_REVIEWER");
+  await page.goto("/os");
+  await expect(railLinks(page)).toHaveText(["My Work", "Build", "Review", "Release", "Knowledge", "Run & DQ", "Classic", "Help"]);
+  await expect(page.getByLabel("Persona")).toHaveText("Data Developer");
+});
+
+test("without the privilege, an action becomes a change request to the approver role", async ({ page }) => {
+  // a data engineer builds but does not approve code: "Review code" is never offered as their own action
+  await previewAs(page, "DATA_ENGINEER");
+  await page.goto("/os/build");
+  await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Review code", exact: true })).toHaveCount(0);
+  const request = page.getByRole("link", { name: /^Request: / });
+  for (const link of await request.all()) await expect(link).toHaveAttribute("title", /You do not hold [A-Z.]+\. Your change goes to/);
+  await page.goto("/os/help");
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText("One workflow, many personas");
+  await expect(page.getByText("Access list")).toBeVisible();
+});
+
 test("the classic shell still frames the classic pages and links to /os", async ({ page }) => {
   await page.goto("/work");
   const nav = page.getByRole("navigation", { name: "Main" });

@@ -4,8 +4,10 @@ import { stateLabel } from "@/lib/run-labels";
 import { labelFor, pipelineOf } from "@/lib/stages";
 import type { StageStatusValue } from "@/lib/types";
 import {
-  PASS_THRESHOLD, artifactGroups, currentPersona, defaultRun, loadRunBundle, loadRuns, runOptions, scoreOf, tableOf,
+  PASS_THRESHOLD, artifactGroups, defaultRun, loadRunBundle, loadRuns, runOptions, scoreOf, tableOf,
 } from "@/lib/os/data";
+import { guard } from "@/lib/os/session";
+import { Action } from "@/components/os/action";
 import { classicHref, currentStep, lifecycleOfRun } from "@/lib/os/lifecycle";
 import { ActivityRow, Banner, Bar, Btn, Card, Empty, Field, PageHeader, SourceError, Stepper, Tag, ago, pretty, type Tone } from "@/components/os/ui";
 import { RunPicker } from "@/components/os/run-picker";
@@ -20,7 +22,8 @@ const STAGE_TONE: Record<StageStatusValue, { tone: Tone; label: string }> = {
 };
 
 export default async function BuildWorkbench({ searchParams }: { searchParams: { run?: string } }) {
-  const persona = currentPersona();
+  const access = await guard("build");
+  const persona = access.persona;
   const runs = await loadRuns("sort=updated&limit=150");
   const runId = searchParams.run
     ?? defaultRun(runs.data.runs, ["DBT_REVIEW", "VALIDATION_FAILED", "VALIDATION_PASSED", "DBT_GENERATING", "DBT_PENDING", "DBT_APPROVED"])?.run_id;
@@ -29,7 +32,7 @@ export default async function BuildWorkbench({ searchParams }: { searchParams: {
       <>
         <PageHeader eyebrow={`${persona.label} / Build workbench`} title="Build workbench" />
         <SourceError what="Workflow runs" error={runs.error} />
-        <Empty icon={Hammer} title="No workflow to build yet" action={<Btn href="/os/intake" variant="primary">Start an onboarding</Btn>}>
+        <Empty icon={Hammer} title="No workflow to build yet" action={<Action access={access} id="startOnboarding" href="/os/intake" variant="primary" />}>
           Once a run has an approved mapping, its generated code, tests and validation appear here.
         </Empty>
       </>
@@ -68,8 +71,8 @@ export default async function BuildWorkbench({ searchParams }: { searchParams: {
   const primary = validationFailed
     ? <Btn href={`/os/review?run=${runId}`} variant="red"><ShieldAlert className="h-3.5 w-3.5" /> See validation findings</Btn>
     : run.current_state === "DBT_REVIEW"
-      ? <Btn href={`/runs/${runId}/review`} variant="primary">Review code <ArrowRight className="h-3.5 w-3.5" /></Btn>
-      : <Btn href={classicHref(runId, now)} variant="primary">Open {now.label.toLowerCase()} <ArrowRight className="h-3.5 w-3.5" /></Btn>;
+      ? <Action access={access} id="reviewCode" href={`/runs/${runId}/review`} variant="primary" />
+      : <Action access={access} id="workStep" href={classicHref(runId, now)} label={`Open ${now.label.toLowerCase()}`} variant="primary" />;
 
   return (
     <>
@@ -141,7 +144,7 @@ export default async function BuildWorkbench({ searchParams }: { searchParams: {
 
         <div className="flex min-w-0 flex-col gap-4">
           <Card title="Generated artifacts" subtitle="Every file the build agent wrote, from the run's latest generation"
-                action={<Btn href={`/runs/${runId}/dbt`}><FileCode2 className="h-3.5 w-3.5" /> Open dbt studio</Btn>} pad={false}>
+                action={<Action access={access} id="openDbtStudio" href={`/runs/${runId}/dbt`} icon={<FileCode2 className="h-3.5 w-3.5" />} />} pad={false}>
             {groups.length ? (
               <table className="os-table">
                 <thead><tr><th>Asset</th><th>Type</th><th className="text-right">Files</th><th>State</th></tr></thead>

@@ -1,26 +1,32 @@
 import Link from "next/link";
-import { ArrowRight } from "lucide-react";
+import { ArrowRight, Lock } from "lucide-react";
 import { LIFECYCLE } from "@/lib/os/lifecycle";
 import { PERSONAS } from "@/lib/os/personas";
+import { PERSONA_REQUIRES, SCREENS, canSee, type ScreenKey } from "@/lib/os/access";
+import { osAccess } from "@/lib/os/session";
 import { Card, PageHeader, Tag } from "@/components/os/ui";
 
+export const dynamic = "force-dynamic";
 export const metadata = { title: "How it works" };
 
-const TOUR = [
-  { href: "/os", title: "My Work", what: "Decisions waiting on a person, autonomous runs, knowledge pulse and the onboarded domains." },
-  { href: "/os/intake", title: "Intake", what: "Link a domain and its sources; see what is reused and where the request routes." },
-  { href: "/os/enable", title: "Enable", what: "Source readiness and the config-driven ingestion framework." },
-  { href: "/os/design", title: "Design", what: "The domain model, mapping proposals with confidence, open questions and the contract." },
-  { href: "/os/build", title: "Build", what: "One run end to end: lifecycle, agents, generated artifacts, pinned skills and gates." },
-  { href: "/os/review", title: "Review", what: "The independent validation gate and every human gate across domains." },
-  { href: "/os/skills", title: "Skills", what: "Versioned skills, real version diffs, tests and controlled recovery." },
-  { href: "/os/release", title: "Release", what: "Pull request, promotion stages, QA and UAT signoff and what the run taught memory." },
-  { href: "/os/knowledge", title: "Knowledge", what: "Enterprise Memory with provenance, reuse by runs and the curation lifecycle." },
-  { href: "/os/run", title: "Run & DQ", what: "Pipeline health, live data quality, incidents with RCA and operational learning." },
+const TOUR: { key: ScreenKey; href: string; title: string; what: string }[] = [
+  { key: "work", href: "/os", title: "My Work", what: "Decisions waiting on a person, autonomous runs, knowledge pulse and the onboarded domains." },
+  { key: "intake", href: "/os/intake", title: "Intake", what: "Link a domain and its sources; see what is reused and where the request routes." },
+  { key: "enable", href: "/os/enable", title: "Enable", what: "Source readiness and the config-driven ingestion framework." },
+  { key: "design", href: "/os/design", title: "Design", what: "The domain model, mapping proposals with confidence, open questions and the contract." },
+  { key: "build", href: "/os/build", title: "Build", what: "One run end to end: lifecycle, agents, generated artifacts, pinned skills and gates." },
+  { key: "review", href: "/os/review", title: "Review", what: "The independent validation gate and every human gate across domains." },
+  { key: "skills", href: "/os/skills", title: "Skills", what: "Versioned skills, real version diffs, tests and controlled recovery." },
+  { key: "release", href: "/os/release", title: "Release", what: "Pull request, promotion stages, QA and UAT signoff and what the run taught memory." },
+  { key: "knowledge", href: "/os/knowledge", title: "Knowledge", what: "Enterprise Memory with provenance, reuse by runs and the curation lifecycle." },
+  { key: "run", href: "/os/run", title: "Run & DQ", what: "Pipeline health, live data quality, incidents with RCA and operational learning." },
 ];
 
-/** How the Agentic Data OS experience is organised: the lifecycle, the personas and a walk through the screens. */
-export default function Help() {
+/** How the Agentic Data OS experience is organised: the lifecycle, the personas, a walk through the screens and the
+ *  access list that decides who sees what (lib/os/access), marked for the person reading it. */
+export default async function Help() {
+  const access = await osAccess();
+  const mine = new Set(access.personas.map((p) => p.id));
   return (
     <>
       <PageHeader eyebrow="Agentic Data OS / How it works" title="One workflow, many personas"
@@ -40,26 +46,48 @@ export default function Help() {
       <div className="grid gap-4 xl:grid-cols-2">
         <Card title="Walk the platform" subtitle="The screens in the order work flows" pad={false}>
           <div className="os-divide">
-            {TOUR.map((t, i) => (
-              <Link key={t.href} href={t.href} className="flex items-center gap-3 px-5 py-3 os-hover">
-                <span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-[var(--os-green-bg)] text-[11px] font-extrabold text-[var(--os-green-ink)]">{i + 1}</span>
-                <span className="min-w-0 flex-1"><span className="block text-[13px] font-bold">{t.title}</span><span className="os-faint block text-[11.5px]">{t.what}</span></span>
-                <ArrowRight className="os-faint h-4 w-4" />
-              </Link>
-            ))}
+            {TOUR.map((t, i) => {
+              const inner = (
+                <>
+                  <span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-[var(--os-green-bg)] text-[11px] font-extrabold text-[var(--os-green-ink)]">{i + 1}</span>
+                  <span className="min-w-0 flex-1"><span className="block text-[13px] font-bold">{t.title}</span><span className="os-faint block text-[11.5px]">{t.what}</span></span>
+                </>
+              );
+              return canSee(access, t.key)
+                ? <Link key={t.href} href={t.href} className="flex items-center gap-3 px-5 py-3 os-hover">{inner}<ArrowRight className="os-faint h-4 w-4" /></Link>
+                : <div key={t.href} className="flex items-center gap-3 px-5 py-3 opacity-55" title="Not part of your role">{inner}<Lock className="os-faint h-4 w-4" /></div>;
+            })}
           </div>
         </Card>
-        <Card title="Personas" subtitle="“View as” changes what comes first, never what you may do: privileges still come from your governance role." pad={false}>
+        <Card title="Personas" subtitle="Offered by your governance roles. A persona changes what comes first, never what you may do." pad={false}>
           <div className="os-divide">
             {PERSONAS.map((p) => (
               <div key={p.id} className="flex items-center justify-between gap-3 px-5 py-3">
-                <span className="min-w-0"><span className="block text-[13px] font-bold">{p.label}</span><span className="os-faint block text-[11.5px]">{p.responsibility}</span></span>
-                <Link href={p.home}><Tag tone="green">{p.home.replace("/os/", "").replace("/os", "my work")}</Tag></Link>
+                <span className="min-w-0"><span className="block text-[13px] font-bold">{p.label}</span>
+                  <span className="os-faint block text-[11.5px]">{p.responsibility}</span>
+                  <span className="os-faint block text-[10.5px]">{PERSONA_REQUIRES[p.id] ? `Any of ${PERSONA_REQUIRES[p.id].join(", ")}` : "When no other persona fits"}</span></span>
+                {mine.has(p.id) ? <Tag tone="green">Yours</Tag> : <Tag>Not your role</Tag>}
               </div>
             ))}
           </div>
         </Card>
       </div>
+
+      <Card className="mt-4" title="Access list" subtitle="Who each screen is open to. Actions inside a screen need their own privilege; without it, people who may raise change requests send the action to the approver role." pad={false}>
+        <table className="os-table">
+          <thead><tr><th>Screen</th><th>Open to</th><th>Privileges (any of)</th><th>You</th></tr></thead>
+          <tbody>
+            {SCREENS.map((s) => (
+              <tr key={s.key}>
+                <td className="font-bold">{s.label}</td>
+                <td className="os-muted">{s.why}</td>
+                <td className="font-mono text-[11px]">{s.view?.join(", ") ?? "any signed-in person"}</td>
+                <td>{canSee(access, s.key) ? <Tag tone="green">Open</Tag> : <Tag>Hidden</Tag>}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </Card>
     </>
   );
 }
