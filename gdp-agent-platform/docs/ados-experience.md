@@ -1,8 +1,29 @@
 # Agentic Data OS experience (`/os`)
 
-A persona-led front end for the platform, built from the CBRE ADOS UX package (ten screens, one shell, one eight-step lifecycle). It sits beside the classic app and changes none of it: the root layout hides the classic sidebar, top bar and tabs only under `/os`, and the classic sidebar gains one "Agentic Data OS" entry.
+A persona-led front end for the platform, built from the CBRE ADOS UX package (ten screens, one shell, one eight-step lifecycle). Every signed-in page, the ten `/os` screens and all the classic pages alike, opens in the same shell with one sectioned, privilege-filtered rail. No classic feature was rebuilt or removed: the classic pages render unchanged inside the new frame, with their own workspace tabs.
 
 Every screen reads live platform data through the endpoints the classic pages already use. There is no sample data. When an endpoint fails or has nothing to return, the screen shows the reason or an empty state.
+
+## One shell, five sections
+
+| Section | Rail entries (each shown only to the privileges in the access list) | Classic pages it covers |
+|---|---|---|
+| Work | My Work, Inbox, Overview, Copilot | `/os`, `/work`, `/dashboard`, `/dashboard/copilot` |
+| Workflow | Intake, Enable, Design, Build, Review, Skills, Release | onboarding wizards, every `/runs/[id]` workspace (under Build), `/skills`, source control |
+| Assets | Pipelines, Stores, Knowledge | `/runs`, `/gold`, lineage, code, the six stores, `/domains`, Enterprise Memory |
+| Operate | Run & DQ, Quality, Operations | quality center, QA testing, monitoring, incidents, fixes, tickets, Jira |
+| Govern | Approvals, Audit, Value, Admin | `/approvals`, `/audit`, `/value`, `/admin` |
+
+The header carries what the classic top bar did: the domain scope, global search (Ctrl K), the "New" menu, and the account menu (work-role switch, appearance, sign out). It also has "View as" and, for admins, "Preview as role".
+
+**How it is wired**
+- `middleware.ts` passes each signed-in request's path to the root layout (header `x-ados-path`, set by the server, never taken from the client).
+- The root layout looks the path up in the access list. A page outside the person's role (or the previewed role) goes back to My Work with the reason, before it renders.
+- `components/os/chrome.tsx` draws the frame. The classic page components themselves are unchanged.
+
+**Classic layout (admins only).** Admin has a "Classic layout" switch (cookie `ados_classic`). The root layout honours it only for holders of `ADMIN.VIEW` or super admins. With it on, the classic pages get the old sidebar and top bar; `/os` keeps its shell either way. The e2e checks of the classic layout (`command-center.spec.ts`) set this cookie.
+
+**Landing.** With `ADOS_LANDING=1`, signing in and opening `/` land on `/os` (mission control). The default is off, so people land on the classic My Work (`/work`), which now also opens in the new shell.
 
 ## Where things live
 

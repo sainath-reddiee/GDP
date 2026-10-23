@@ -2,6 +2,7 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { cache } from "react";
 import { api, whoami } from "@/lib/api";
+import type { WhoAmI } from "@/lib/types";
 import { canPreview, canSee, type Grants, type ScreenKey } from "./access";
 import { DEFAULT_PERSONA, PERSONA_COOKIE, personaById, personasFor, type Persona } from "./personas";
 
@@ -14,6 +15,8 @@ export const PREVIEW_COOKIE = "ados_preview_role";
 export type RoleInfo = { role: string; description: string; effective: string[]; members: unknown[] };
 export type OsAccess = Grants & {
   user: string | null;
+  /** the signed-in person as the API sees them */
+  me: WhoAmI | null;
   /** the signed-in person's own grants, whatever is previewed */
   own: Grants;
   /** the role being previewed, or null */
@@ -45,6 +48,7 @@ export const osAccess = cache(async (): Promise<OsAccess> => {
   return {
     ...grants,
     user: me?.user ?? null,
+    me,
     own,
     preview: previewed?.role ?? null,
     roles: roles.map((r) => ({ role: r.role, description: r.description, members: Array.isArray(r.members) ? r.members.length : 0 })),

@@ -5,7 +5,8 @@ import { expect, test, type BrowserContext } from "@playwright/test";
 const BASE = process.env.AIP_WEB_URL ?? "http://localhost:3000";
 
 async function devSession(context: BrowserContext, theme: "light" | "dark") {
-  await context.addCookies([{ name: "aip_dev", value: "1", url: BASE }]);
+  // these checks are of the classic layout, which admins keep behind the "Classic layout" switch (ados_classic)
+  await context.addCookies([{ name: "aip_dev", value: "1", url: BASE }, { name: "ados_classic", value: "1", url: BASE }]);
   // seeds the theme once; a choice made on the page survives reloads
   await context.addInitScript((t) => {
     try { if (!localStorage.getItem("aip.theme")) localStorage.setItem("aip.theme", t); } catch { /* none */ }

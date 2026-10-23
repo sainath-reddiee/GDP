@@ -6,6 +6,7 @@ import { can } from "@/lib/types";
 import type { GovEvent, GovPolicy, GovPrivilege, GovRole, GovSettings, GovUser } from "../governance-actions";
 import { AccessSection } from "./access-section";
 import { PageHeader } from "@/components/page-header";
+import { ClassicLayoutSwitch } from "@/components/os/classic-switch";
 import { cn } from "@/lib/utils";
 import type { EnvironmentsState, ModelsState, PlatformState, RulesState } from "./actions";
 import { EnvironmentsSection } from "./environments-section";
@@ -64,7 +65,8 @@ export default async function Admin({ searchParams }: { searchParams?: { section
     <ToastProvider>
       <div className="space-y-5">
         <PageHeader eyebrow="Governance" title="Admin"
-                    description="AI models and cost, rules, modeling standards and deployment. Changes are versioned and survive deploys." />
+                    description="AI models and cost, rules, modeling standards and deployment. Changes are versioned and survive deploys."
+                    actions={<ClassicLayoutSwitch />} />
         <nav aria-label="Admin sections" className="flex gap-1 overflow-x-auto border-b">
           {SECTIONS.map((s) => (
             <Link key={s.id} href={`/admin?section=${s.id}`} aria-current={s.id === section ? "page" : undefined} title={s.hint}

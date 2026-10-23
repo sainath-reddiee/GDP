@@ -22,7 +22,7 @@ export function initials(user: string | null) {
 /** Opens the command palette from anywhere (components/shell/command-palette listens). */
 export const openPalette = () => window.dispatchEvent(new Event("aip:palette"));
 
-function DomainSwitcher({ domains, scope }: { domains: DomainOption[]; scope: string }) {
+export function DomainSwitcher({ domains, scope }: { domains: DomainOption[]; scope: string }) {
   const { open, setOpen, ref } = useDismiss();
   const [pending, start] = useTransition();
   const [filter, setFilter] = useState("");
@@ -70,7 +70,7 @@ function DomainSwitcher({ domains, scope }: { domains: DomainOption[]; scope: st
   );
 }
 
-function NewMenu({ privileges }: { privileges?: string[] | null }) {
+export function NewMenu({ privileges }: { privileges?: string[] | null }) {
   const { open, setOpen, ref } = useDismiss();
   const allowed = actableBy(privileges);
   const groups = QUICK_ACTION_GROUPS.map((g) => ({ g, items: QUICK_ACTIONS.filter((a) => a.group === g && allowed(a.privilege)) }))
@@ -105,7 +105,7 @@ function NewMenu({ privileges }: { privileges?: string[] | null }) {
   );
 }
 
-function AccountMenu({ user, role, canLogout, appRoles }: {
+export function AccountMenu({ user, role, canLogout, appRoles }: {
   user: string | null; role: string | null; canLogout: boolean; appRoles?: string[] | null;
 }) {
   const { open, setOpen, ref } = useDismiss();

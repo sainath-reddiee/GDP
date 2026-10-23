@@ -56,17 +56,23 @@ test("a viewer sees only the screens their role opens, and is turned back from t
   await previewAs(page, "VIEWER");
   await page.goto("/os");
   await expect(page.getByRole("status").filter({ hasText: "Previewing as viewer" })).toBeVisible();
-  await expect(railLinks(page)).toHaveText(["My Work", "Knowledge", "Run & DQ", "Classic", "Help"]);
+  await expect(railLinks(page)).toHaveText(["My Work", "Inbox", "Overview", "Knowledge", "Run & DQ", "Quality", "Operations", "Audit", "Value", "Help"]);
   await expect(page.getByLabel("Persona")).toHaveText("Viewer");
   await page.goto("/os/build");
   await page.waitForURL(/\/os\?denied=build$/);
   await expect(page.getByText("Build is not part of your role.")).toBeVisible();
+  // the classic pages are gated by the same list
+  await page.goto("/runs");
+  await page.waitForURL(/\/os\?denied=pipelines$/);
+  await page.goto("/admin");
+  await page.waitForURL(/\/os\?denied=admin$/);
 });
 
 test("a code reviewer gets the build, review and release screens and the developer persona", async ({ page }) => {
   await previewAs(page, "CODE_REVIEWER");
   await page.goto("/os");
-  await expect(railLinks(page)).toHaveText(["My Work", "Build", "Review", "Release", "Knowledge", "Run & DQ", "Classic", "Help"]);
+  await expect(railLinks(page)).toHaveText(["My Work", "Inbox", "Overview", "Copilot", "Build", "Review", "Release", "Pipelines", "Stores", "Knowledge",
+                                          "Run & DQ", "Quality", "Operations", "Approvals", "Audit", "Value", "Help"]);
   await expect(page.getByLabel("Persona")).toHaveText("Data Developer");
 });
 
@@ -83,10 +89,26 @@ test("without the privilege, an action becomes a change request to the approver 
   await expect(page.getByText("Access list")).toBeVisible();
 });
 
-test("the classic shell still frames the classic pages and links to /os", async ({ page }) => {
-  await page.goto("/work");
-  const nav = page.getByRole("navigation", { name: "Main" });
-  await expect(nav).toBeVisible();
-  await expect(nav.getByRole("link", { name: "Agentic Data OS", exact: true })).toHaveAttribute("href", "/os");
-  await expect(page.getByRole("navigation", { name: "Agentic Data OS" })).toHaveCount(0);
+test("classic pages open inside the Agentic Data OS shell, with their own tabs", async ({ page }) => {
+  await page.goto("/runs");
+  await expect(page.getByRole("navigation", { name: "Agentic Data OS" })).toBeVisible();
+  await expect(page.getByRole("navigation", { name: "Main" })).toHaveCount(0);
+  await expect(railLinks(page).filter({ hasText: "Pipelines" })).toHaveAttribute("aria-current", "page");
+  await expect(page.getByTestId("workspace-tabs").getByRole("link", { name: "Gold Pipeline" })).toBeVisible();
+  await page.goto("/dashboard/store");
+  await expect(railLinks(page).filter({ hasText: "Stores" })).toHaveAttribute("aria-current", "page");
+});
+
+test("admins can switch the classic pages back to the classic layout", async ({ page }) => {
+  await page.goto("/admin");
+  await expect(page.getByTestId("classic-layout-switch")).toHaveAttribute("aria-checked", "false");
+  await page.getByTestId("classic-layout-switch").click();
+  await expect(page.getByRole("navigation", { name: "Main" })).toBeVisible();
+  await expect(page.getByRole("navigation", { name: "Main" }).getByRole("link", { name: "Agentic Data OS", exact: true })).toHaveAttribute("href", "/os");
+  // /os keeps its own shell either way
+  await page.goto("/os");
+  await expect(page.getByRole("navigation", { name: "Agentic Data OS" })).toBeVisible();
+  await page.goto("/admin");
+  await page.getByTestId("classic-layout-switch").click();
+  await expect(page.getByRole("navigation", { name: "Main" })).toHaveCount(0);
 });
