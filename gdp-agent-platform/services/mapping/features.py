@@ -219,6 +219,16 @@ def all_features(source: Dict[str, Any], target: Dict[str, Any], knowledge: Dict
     }
 
 
+REFERENCE_KEY = re.compile(r"^REF_[A-Z0-9_]+_SKEY$")
+
+
+def lookup_key(column_name: Any) -> bool:
+    """A reference lookup key (REF_<NAME>_SKEY): filled by the model's reference joins in the generated code, from a
+    source value, never mapped from a source column directly (pure)."""
+    return bool(REFERENCE_KEY.match(str(column_name or "").upper()))
+
+
 def mappable_targets(targets: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Targets a source column can map to; system-derived columns are filled by the STTM, not by sources."""
-    return [t for t in targets if t.get("semantic_type") not in SYSTEM_DERIVED]
+    """Targets a source column can map to; system-derived columns and reference lookup keys are filled by the STTM and
+    the generated code, not by sources."""
+    return [t for t in targets if t.get("semantic_type") not in SYSTEM_DERIVED and not lookup_key(t.get("column_name"))]

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import time
 import uuid
 from typing import Any, Dict, List, Optional, Set, Tuple
@@ -279,7 +280,7 @@ def _adjudicate(session, run_id: str, ambiguous: List[Tuple[Dict[str, Any], List
                            + (f" [{extra}]" if extra else "") + ")")
         related = [f"{h.get('TITLE')}: {str(h.get('CONTENT') or '')[:200]}"
                    for h in (hits or {}).get(str(source["column_name"]).upper(), [])[:3] if h.get("TITLE")]
-        blocks.append(f"- {source['column_name']} ({source['data_type']}, {source['semantic_type']}, null "
+        blocks.append(f"- {source_label(source)} ({source['data_type']}, {source['semantic_type']}, null "
                       f"{source['null_percentage']}%, distinct {source['distinct_percentage']}%): "
                       f"{source.get('description') or ''}\n  candidates: {'; '.join(options)}"
                       + (f"\n  related domain knowledge: {' | '.join(related)}" if related else ""))
@@ -287,7 +288,8 @@ def _adjudicate(session, run_id: str, ambiguous: List[Tuple[Dict[str, Any], List
     if reviewer_notes:
         prior = "Prior reviewer decisions on this domain:\n- " + "\n- ".join(reviewer_notes[:12]) + "\n"
     prompt = ("You review source-to-target column mappings for a data warehouse. For each source column pick the "
-              "best candidate target (or NONE) and give a one-sentence reason grounded in the evidence. "
+              "best candidate target (or NONE) and give a one-sentence reason grounded in the evidence. Answer "
+              "source_column exactly as listed (TABLE.COLUMN). "
               "Do not invent columns. Ranking is already fixed; you only explain the top candidates.\n"
               + prior
               + (f"\nLoaded skills:\n{skill_excerpt}\n" if skill_excerpt else "")
@@ -298,9 +300,20 @@ def _adjudicate(session, run_id: str, ambiguous: List[Tuple[Dict[str, Any], List
     except Exception:
         return {}
     record_cost(session, run_id, "MAPPING", model, usage, int((time.time() - started) * 1000), tool_calls=1)
-    return {str(c["source_column"]).upper(): {**c, "model": model} for c in (result.get("columns") or [])
+    return {str(c["source_column"]).strip().upper(): {**c, "model": model} for c in (result.get("columns") or [])
             if isinstance(c, dict) and isinstance(c.get("source_column"), str)
             and isinstance(c.get("preferred_target"), str)}
+
+
+def source_label(source: Dict[str, Any]) -> str:
+    """How a source column is named to the adjudicator: TABLE.COLUMN, since two source tables can share a column name."""
+    return f"{source.get('table_name') or 'SOURCE'}.{source['column_name']}"
+
+
+def verdict_for(verdicts: Dict[str, Dict[str, Any]], source: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """The adjudicator's answer for one source column (pure): by TABLE.COLUMN, or by the bare column name when the
+    model answered with that."""
+    return verdicts.get(source_label(source).upper()) or verdicts.get(str(source["column_name"]).upper())
 
 
 def _scoring_config(session, domain_id: str) -> Dict[str, Any]:
@@ -386,15 +399,43 @@ def promote(cands: List[Dict[str, Any]], ranked: List[Dict[str, Any]], rule: Dic
     return out
 
 
-def tables_for_source(ranked_by_table: Dict[str, List[Dict[str, Any]]], promoted: Set[str]) -> List[str]:
-    """The target tables one source column is proposed for (pure): every table whose best candidate is worth a review
-    (AUTO_SUGGEST or HUMAN_REVIEW) or was set by a reference or gold rule, and always the table where it scores best,
-    so each source column is decided at least once. With one target table that table is always kept."""
+HUB_TIE = 0.03   # within this of the best score, the earlier table of the target set (the hub first) counts as best
+
+
+def best_table(ranked_by_table: Dict[str, List[Dict[str, Any]]]) -> Optional[str]:
+    """The table a source column scores best in (pure); a near tie goes to the earlier table, the hub before its
+    spokes. ranked_by_table is in the run's target order."""
     scored = {t: r for t, r in ranked_by_table.items() if r}
     if not scored:
+        return None
+    top = max(float(r[0]["final_score"]) for r in scored.values())
+    return next(t for t, r in scored.items() if float(r[0]["final_score"]) >= top - HUB_TIE)
+
+
+def tables_for_source(ranked_by_table: Dict[str, List[Dict[str, Any]]], promoted: Set[str], source_name: str = "") -> List[str]:
+    """The target tables one source column is proposed for (pure). Always its best table (best_table), so each source
+    column is decided once; besides it only a table where the evidence is strong: a confident match (AUTO_SUGGEST),
+    a reference or gold rule, a target column with the source column's own name, or the business key the column feeds
+    in its best table (a key lands in the hub and every spoke). With one target table that table is kept."""
+    best = best_table(ranked_by_table)
+    if best is None:
         return []
-    best = max(scored, key=lambda t: (scored[t][0]["final_score"], t))
-    return [t for t, r in scored.items() if t == best or t in promoted or r[0]["recommendation"] != "MANUAL"]
+    top_of = {t: r[0] for t, r in ranked_by_table.items() if r}
+    best_target = top_of[best]["target"]
+    key = str(best_target["column_name"]).upper() if best_target.get("is_business_key") else None
+    name = str(source_name or "").upper()
+    keep = []
+    for t, c in top_of.items():
+        target = str(c["target"]["column_name"]).upper()
+        if (t == best or t in promoted or c["recommendation"] == "AUTO_SUGGEST" or (name and target == name)
+                or (key and target == key and c["recommendation"] != "MANUAL")):
+            keep.append(t)
+    return keep
+
+
+def ai_rejects(verdict: Optional[Dict[str, Any]]) -> bool:
+    """The adjudicator said the source column has no target in this table (pure)."""
+    return bool(verdict) and str(verdict.get("preferred_target") or "").strip().upper() in ("NONE", "NULL")
 
 
 def generate_mapping_candidates(session, run_id: str) -> Dict[str, Any]:
@@ -456,6 +497,8 @@ def generate_mapping_candidates(session, run_id: str) -> Dict[str, Any]:
             # kept for the tables where it is worth a decision (tables_for_source)
             ranked_by_table: Dict[str, List[Tuple[Dict[str, Any], List[Dict[str, Any]]]]] = {t["TARGET_TABLE_ID"]: [] for t in tables}
             hits_by_source: Dict[str, List[Dict[str, Any]]] = {}
+            best_of: Dict[str, Optional[str]] = {}
+            promoted_of: Dict[str, Set[str]] = {}
             search_calls = 0
             for s in sources:
                 name = str(s["column_name"]).upper()
@@ -478,7 +521,9 @@ def generate_mapping_candidates(session, run_id: str) -> Dict[str, Any]:
                             promoted.add(tid)
                         ranked = promoted_list
                     per_table[tid] = ranked
-                keep = tables_for_source(per_table, promoted)
+                keep = tables_for_source(per_table, promoted, name)
+                best_of[s["source_column_id"]] = best_table(per_table)
+                promoted_of[s["source_column_id"]] = promoted
                 try:
                     hits = ks.search(session, database, f"{s['column_name']} {s.get('description') or ''}",
                                      domain=domain_name, limit=3)
@@ -512,12 +557,16 @@ def generate_mapping_candidates(session, run_id: str) -> Dict[str, Any]:
                 ambiguous_count += len(ambiguous)
                 verdicts[tid] = _adjudicate(session, run_id, ambiguous, guidance, knowledge_by_table[tid]["notes"],
                                             knowledge_by_table[tid], hits_by_source)
+                # a row beyond the column's best table that the adjudicator says has no target here is not proposed
+                ranked_by_table[tid] = [(s, r) for s, r in ranked_by_table[tid]
+                                        if tid == best_of.get(s["source_column_id"]) or tid in promoted_of.get(s["source_column_id"], set())
+                                        or not ai_rejects(verdict_for(verdicts[tid], s))]
             version = (scalar(session, "SELECT MAX(CANDIDATE_VERSION) FROM CORE.MAPPING_CANDIDATE WHERE RUN_ID = ?",
                               [run_id]) or 0) + 1
             knowledge_version = current_knowledge_version(session, run["DOMAIN_ID"])
             values = []
             for tid, s, ranked in ((t["TARGET_TABLE_ID"], s, r) for t in tables for s, r in ranked_by_table[t["TARGET_TABLE_ID"]]):
-                verdict = verdicts[tid].get(s["column_name"].upper())
+                verdict = verdict_for(verdicts[tid], s)
                 for c in ranked:
                     reason = scoring.explain(c)
                     gr = (c.get("evidence") or {}).get("gold_rule")
@@ -587,12 +636,32 @@ def generate_mapping_candidates(session, run_id: str) -> Dict[str, Any]:
     return {"summary": summary, "state": stage.payload()}
 
 
-def minimum_mapping(hub: Dict[str, Any]) -> List[str]:
-    """The hub's model_spec.minimum_mapping (domain_pack.json) as column names (pure): the columns a load of the
-    domain must fill, wherever in the hub or its spokes they live."""
+IDENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def minimum_rule(text: Any) -> List[str]:
+    """One minimum_mapping entry as the column names that satisfy it (pure). Packs write them as prose: "`company_name`",
+    "`source_unique_id` (often compound, e.g., `Name1 || '||' || Country`)" (the first quoted column; the rest is an
+    example) or "One of: `duns_number`, `trade_name`, or `alias_name`" (any of them)."""
+    raw = str(text or "").strip()
+    quoted = [q.strip() for q in re.findall(r"`([^`]+)`", raw)]
+    names = [q.upper() for q in quoted if IDENT.match(q)]
+    if not quoted:
+        return [raw.upper()] if IDENT.match(raw) else []
+    if re.match(r"^\s*one\s+of\b", raw, re.IGNORECASE):
+        return names
+    return names[:1]
+
+
+def minimum_mapping(hub: Dict[str, Any]) -> List[List[str]]:
+    """The hub's model_spec.minimum_mapping (domain_pack.json) as rules, each the column names that satisfy it (pure):
+    what a load of the domain must fill, wherever in the hub or its spokes the columns live."""
     spec = variant(hub.get("MODEL_SPEC")) or {}
-    names = [str(c).strip().strip("`").strip().upper() for c in (spec.get("minimum_mapping") or [])]
-    return [n for n in names if n]
+    return [rule for rule in (minimum_rule(c) for c in (spec.get("minimum_mapping") or [])) if rule]
+
+
+def rule_label(rule: List[str]) -> str:
+    return rule[0] if len(rule) == 1 else "one of " + ", ".join(rule)
 
 
 def mapping_status(session, run_id: str) -> Dict[str, Any]:
@@ -631,12 +700,12 @@ def mapping_status(session, run_id: str) -> Dict[str, Any]:
                          "undecided": sorted({p["COLUMN_NAME"] for p in open_pairs if (p.get("TARGET_TABLE_ID") or first) == tid})})
     minimum_missing, minimum_unavailable = [], []
     if multi:
-        for name in minimum_mapping(tables[0]):
-            ids = columns_by_name.get(name)
+        for rule in minimum_mapping(tables[0]):
+            ids = [i for name in rule for i in columns_by_name.get(name, [])]
             if not ids:
-                minimum_unavailable.append(name)
+                minimum_unavailable.append(rule_label(rule))
             elif not any(i in mapped_targets for i in ids):
-                minimum_missing.append(name)
+                minimum_missing.append(rule_label(rule))
     sources = {p["SOURCE_COLUMN_ID"]: p["COLUMN_NAME"] for p in pairs}
     undecided_sources = {p["SOURCE_COLUMN_ID"] for p in open_pairs}
     undecided = [n for s, n in sources.items() if s in undecided_sources]

@@ -17,6 +17,9 @@ import { MappingDetail, pct, ScoreBar } from "./mapping-detail";
 
 /** Target columns the platform fills (keys, record source, audit, hub reference); never mapped from a source. */
 const SYSTEM_DERIVED: (string | null)[] = ["SURROGATE_KEY", "RECORD_SOURCE", "AUDIT_TIMESTAMP", "DERIVED_KEY"];
+/** Filled by the platform, not mapped: system columns and reference lookup keys (REF_<NAME>_SKEY, from the model's lookups). */
+const isDerived = (t: { semantic_type: string | null; column_name: string }) =>
+  SYSTEM_DERIVED.includes(t.semantic_type) || /^REF_[A-Z0-9_]+_SKEY$/i.test(t.column_name);
 import {
   buildRows, firstTableId, planAcceptAi, planApproveTop, planNull, savedKeys, suggestionKey, withJustification,
   type BulkPlan, type MappingRow,
@@ -208,7 +211,7 @@ export function MappingBoard({ runId, data }: { runId: string; data: MappingOver
   }, [focus]);
 
   const total = rows.length || 1;
-  const required = data.targets.filter((t) => !t.nullable && !SYSTEM_DERIVED.includes(t.semantic_type));
+  const required = data.targets.filter((t) => !t.nullable && !isDerived(t));
   const aiCount = Object.keys(suggestions).length;
 
   return (
@@ -572,7 +575,6 @@ function TargetCoverage({
       .sort((a, b) => b.score - a.score)
       .slice(0, 3);
   const aiFor = (targetId: string) => Object.entries(suggestions).find(([, s]) => s.target_column_id === targetId);
-  const systemDerived = SYSTEM_DERIVED;
 
   return (
     <div className="max-h-[44rem] overflow-y-auto">
@@ -584,7 +586,7 @@ function TargetCoverage({
           {data.targets.map((t, i) => {
             const source = takenBy.get(t.target_column_id);
             const heading = multi && (i === 0 || data.targets[i - 1].target_table_id !== t.target_table_id);
-            const derived = systemDerived.includes(t.semantic_type);
+            const derived = isDerived(t);
             const required = !t.nullable && !derived;
             const ai = aiFor(t.target_column_id);
             return (

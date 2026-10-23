@@ -19,8 +19,9 @@ from services.mapping import procedures as mp  # noqa: E402
 from test_model_workbench import Session  # noqa: E402
 
 
-def ranked(score, recommendation):
-    return [{"final_score": score, "recommendation": recommendation, "rank": 1}]
+def ranked(score, recommendation, target="X", key=False):
+    return [{"final_score": score, "recommendation": recommendation, "rank": 1,
+             "target": {"column_name": target, "is_business_key": key}}]
 
 
 # ---------------------------------------------------------------- which tables a source column is proposed for
@@ -29,10 +30,26 @@ def test_one_table_is_always_kept():
     assert mp.tables_for_source({"t-core": ranked(0.1, "MANUAL")}, set()) == ["t-core"]
 
 
-def test_a_source_feeds_every_table_where_it_is_worth_a_review():
-    per_table = {"t-core": ranked(0.92, "AUTO_SUGGEST"), "t-addr": ranked(0.61, "HUMAN_REVIEW"),
-                 "t-use": ranked(0.2, "MANUAL"), "t-own": []}
-    assert mp.tables_for_source(per_table, set()) == ["t-core", "t-addr"]
+def test_beyond_its_best_table_a_source_needs_strong_evidence():
+    per_table = {"t-core": ranked(0.92, "AUTO_SUGGEST", "COMPANY_NAME"), "t-addr": ranked(0.61, "HUMAN_REVIEW", "STREET_NAME"),
+                 "t-ind": ranked(0.88, "AUTO_SUGGEST", "INDUSTRY_NAME"), "t-use": ranked(0.2, "MANUAL"), "t-own": []}
+    # a review-level match in another table is noise (CLIENT_NAME -> STREET_NAME); a confident one is kept
+    assert mp.tables_for_source(per_table, set(), "CLIENT_NAME") == ["t-core", "t-ind"]
+
+
+def test_a_business_key_lands_in_every_table_and_a_same_named_column_is_kept():
+    key = {"t-core": ranked(0.51, "HUMAN_REVIEW", "SOURCE_UNIQUE_ID", key=True),
+           "t-addr": ranked(0.50, "HUMAN_REVIEW", "SOURCE_UNIQUE_ID", key=True),
+           "t-seg": ranked(0.46, "MANUAL", "SOURCE_UNIQUE_ID", key=True), "t-ind": ranked(0.49, "HUMAN_REVIEW", "SOURCE_NAME")}
+    assert mp.tables_for_source(key, set(), "ZOOMINFO_ID") == ["t-core", "t-addr"]
+    same = {"t-core": ranked(0.55, "HUMAN_REVIEW", "COMPANY_NAME"), "t-hier": ranked(0.62, "HUMAN_REVIEW", "COMPANY_NAME"),
+            "t-seg": ranked(0.50, "HUMAN_REVIEW", "SOURCE_SEGMENT_NAME")}
+    assert mp.tables_for_source(same, set(), "COMPANY_NAME") == ["t-core", "t-hier"]
+
+
+def test_a_near_tie_goes_to_the_hub():
+    assert mp.best_table({"t-core": ranked(0.60, "HUMAN_REVIEW"), "t-hier": ranked(0.62, "HUMAN_REVIEW")}) == "t-core"
+    assert mp.best_table({"t-core": ranked(0.50, "HUMAN_REVIEW"), "t-hier": ranked(0.62, "HUMAN_REVIEW")}) == "t-hier"
 
 
 def test_a_weak_source_still_gets_its_best_table_and_rules_keep_theirs():
@@ -40,6 +57,31 @@ def test_a_weak_source_still_gets_its_best_table_and_rules_keep_theirs():
     assert mp.tables_for_source(per_table, set()) == ["t-addr"]
     assert mp.tables_for_source(per_table, {"t-use"}) == ["t-addr", "t-use"]
     assert mp.tables_for_source({"t-core": []}, set()) == []
+
+
+# ---------------------------------------------------------------- the adjudicator's answers
+
+def test_verdicts_match_qualified_or_bare_names():
+    src = {"table_name": "COMPANY_DIM", "column_name": "CLIENT_NAME"}
+    assert mp.source_label(src) == "COMPANY_DIM.CLIENT_NAME"
+    assert mp.verdict_for({"COMPANY_DIM.CLIENT_NAME": {"preferred_target": "COMPANY_NAME"}}, src)["preferred_target"] == "COMPANY_NAME"
+    assert mp.verdict_for({"CLIENT_NAME": {"preferred_target": "COMPANY_NAME"}}, src)["preferred_target"] == "COMPANY_NAME"
+    # the other table's column of the same name is not this one
+    assert mp.verdict_for({"COMPANY.CLIENT_NAME": {"preferred_target": "X"}}, src) is None
+
+
+@pytest.mark.parametrize("verdict, rejects", [({"preferred_target": "NONE"}, True), ({"preferred_target": "null"}, True),
+                                              ({"preferred_target": "COMPANY_NAME"}, False), (None, False), ({}, False)])
+def test_ai_rejects(verdict, rejects):
+    assert mp.ai_rejects(verdict) is rejects
+
+
+def test_reference_lookup_keys_are_not_mapped():
+    from services.mapping import features
+
+    cols = [{"column_name": "REF_INDUSTRY_NAME_SKEY", "semantic_type": "KEY"}, {"column_name": "INDUSTRY_NAME", "semantic_type": "TEXT"},
+            {"column_name": "COMPANY_CORE_HKEY", "semantic_type": "SURROGATE_KEY"}, {"column_name": "REFERENCE_CODE", "semantic_type": "TEXT"}]
+    assert [c["column_name"] for c in features.mappable_targets(cols)] == ["INDUSTRY_NAME", "REFERENCE_CODE"]
 
 
 # ---------------------------------------------------------------- the table a decision is for
@@ -76,9 +118,22 @@ def test_the_last_decision_wins_per_source_and_table():
 
 
 def test_minimum_mapping_reads_the_hub_spec():
-    hub = {"MODEL_SPEC": json.dumps({"minimum_mapping": ["`source_unique_id`", " `property_address` ", ""]})}
-    assert mp.minimum_mapping(hub) == ["SOURCE_UNIQUE_ID", "PROPERTY_ADDRESS"]
+    hub = {"MODEL_SPEC": json.dumps({"minimum_mapping": ["`source_unique_id`", " `property_address` ", "", "company_name"]})}
+    assert mp.minimum_mapping(hub) == [["SOURCE_UNIQUE_ID"], ["PROPERTY_ADDRESS"], ["COMPANY_NAME"]]
     assert mp.minimum_mapping({}) == []
+
+
+@pytest.mark.parametrize("text, rule", [
+    ("`source_unique_id` (often compound, e.g., `Name1 || '||' || Country`)", ["SOURCE_UNIQUE_ID"]),
+    ("One of: `duns_number`, `legal_entity_name`, `trade_name`, or `alias_name` (for HKEY uniqueness)",
+     ["DUNS_NUMBER", "LEGAL_ENTITY_NAME", "TRADE_NAME", "ALIAS_NAME"]),
+    ("`company_name`", ["COMPANY_NAME"]),
+    ("a free sentence with no column", []),
+])
+def test_prose_minimum_rules(text, rule):
+    assert mp.minimum_rule(text) == rule
+    if len(rule) > 1:
+        assert mp.rule_label(rule) == "one of DUNS_NUMBER, LEGAL_ENTITY_NAME, TRADE_NAME, ALIAS_NAME"
 
 
 # ---------------------------------------------------------------- the gate
@@ -395,3 +450,16 @@ def test_the_copilot_reviews_the_rows_asked_for(copilot):
     body = client.post("/api/runs/r1/mapping/assist", json={"pairs": [
         {"source_column_id": "s-id", "target_table_id": "t-core"}, {"source_column_id": "nope", "target_table_id": "t-addr"}]}).json()
     assert len(calls) == 1 and [(s["source_column_id"], s["target_table_id"]) for s in body["suggestions"]] == [("s-id", "t-core")]
+
+
+def test_a_row_the_ai_rejects_beyond_the_best_table_is_not_proposed(generating, monkeypatch):
+    def adjudicate(session, run_id, ambiguous, *a, **k):
+        # the spoke's adjudicator says the key has no target there; the hub keeps it (its best table)
+        return {"PARCELS.SOURCE_UNIQUE_ID": {"preferred_target": "NONE", "reason": "no", "model": "m"}}
+
+    monkeypatch.setattr(mp, "_adjudicate", adjudicate)
+    mp.generate_mapping_candidates(generating, "r1")
+    params = generating.find("INSERT INTO CORE.MAPPING_CANDIDATE")[0][1]
+    rows = {(params[i + 2], params[i + 23]) for i in range(0, len(params), 24)}
+    assert ("s-source_unique_id", "t-core") in rows and ("s-source_unique_id", "t-addr") not in rows
+    assert ("s-property_address", "t-addr") in rows                       # its best table, kept whatever the AI says
