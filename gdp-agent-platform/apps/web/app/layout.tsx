@@ -10,6 +10,7 @@ import { CatalogDisplayProvider } from "@/components/catalog-display-provider";
 import { configureCatalogDisplay, type CatalogDisplayConfig } from "@/lib/catalog-display";
 import { CopilotProvider } from "@/components/copilot/copilot-provider";
 import { NavProgress } from "@/components/nav-progress";
+import { HideOnOs, LegacyFrame } from "@/components/os/chrome";
 import { Sidebar } from "@/components/sidebar";
 import { CommandPalette } from "@/components/shell/command-palette";
 import { TopBar, type DomainOption } from "@/components/shell/top-bar";
@@ -51,17 +52,22 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
         <ToastProvider>
           <NavProgress />
           <div className="flex min-h-screen">
-            <Sidebar privileges={privileges} />
+            {/* the classic shell; /os (the Agentic Data OS experience) draws its own */}
+            <HideOnOs><Sidebar privileges={privileges} /></HideOnOs>
             <main className="min-w-0 flex-1">
               <AccessProvider value={{ governance: Boolean(me?.governance), privileges: me?.privileges ?? [], readOnly: Boolean(me?.read_only) }}>
               <CopilotProvider>
-                <TopBar user={me?.user ?? null} role={me?.role ?? null} canLogout appRoles={me?.governance ? me.granted_roles ?? [] : null}
-                        privileges={privileges} domains={domains} scope={getDomainScope()} />
-                <div className="mx-auto w-full max-w-[1600px] px-6 py-7 lg:px-10">
-                  <ReadOnlyBanner />
-                  <WorkspaceTabs privileges={privileges} />
+                <HideOnOs>
+                  <TopBar user={me?.user ?? null} role={me?.role ?? null} canLogout appRoles={me?.governance ? me.granted_roles ?? [] : null}
+                          privileges={privileges} domains={domains} scope={getDomainScope()} />
+                </HideOnOs>
+                <LegacyFrame className="mx-auto w-full max-w-[1600px] px-6 py-7 lg:px-10">
+                  <HideOnOs>
+                    <ReadOnlyBanner />
+                    <WorkspaceTabs privileges={privileges} />
+                  </HideOnOs>
                   <CatalogDisplayProvider config={catalog}>{children}</CatalogDisplayProvider>
-                </div>
+                </LegacyFrame>
                 <CommandPalette privileges={privileges} domains={domains} />
               </CopilotProvider>
               </AccessProvider>
