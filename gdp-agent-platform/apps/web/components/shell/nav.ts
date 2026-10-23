@@ -1,6 +1,6 @@
 import {
   Activity, Crown, BadgeCheck, BarChart3, BookOpen, Boxes, ClipboardCheck, Database, FileClock, FlaskConical, FolderGit2, GitCompareArrows, GitPullRequest,
-  Inbox, LayoutDashboard, ListChecks, TrendingUp, Network, Rocket, Settings, ShieldCheck, Siren, Sparkles, SquareTerminal, Store, Ticket, Wrench, BookCheck, Hammer,
+  Inbox, LayoutDashboard, ListChecks, Orbit, TrendingUp, Network, Rocket, Settings, ShieldCheck, Siren, Sparkles, SquareTerminal, Store, Ticket, Wrench, BookCheck, Hammer,
 } from "lucide-react";
 import type { NavCounts } from "@/app/bff/nav/route";
 
@@ -72,6 +72,8 @@ export const NAV_GROUPS: NavGroup[] = [
         badge: (c) => c.approvals ? { value: c.approvals, tone: "bg-human text-white", title: `${c.approvals} change requests waiting for you` } : null,
       },
       { href: "/dashboard", label: "Overview", icon: LayoutDashboard, exact: true },
+      // the persona-led experience (app/os), with its own shell
+      { href: "/os", label: "Agentic Data OS", icon: Orbit },
       { href: "/dashboard/copilot", label: "Copilot", icon: Sparkles, privilege: "AI.USE" },
       { href: "/value", label: "Value", icon: TrendingUp, privilege: "AUDIT.VIEW" },
     ],

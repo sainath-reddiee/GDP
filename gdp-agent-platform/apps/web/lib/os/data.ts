@@ -1,10 +1,10 @@
 import { cookies } from "next/headers";
 import { api, getRun } from "@/lib/api";
 import type { AuditEvent, RunState, RunSummary, SourcesOverview } from "@/lib/types";
-import type { QualitySummary } from "@/lib/hub-types";
+import type { ModelEntity, ModelRelationship, QualitySummary } from "@/lib/hub-types";
 import type { KnowledgeItem } from "@/app/knowledge/actions";
-import type { SkillsResponse } from "@/app/skills/types";
-import type { OpsSummary } from "@/app/ops/actions";
+import type { SkillVersion, SkillsResponse } from "@/app/skills/types";
+import type { DagRow, OpsSummary } from "@/app/ops/actions";
 import { DEFAULT_PERSONA, PERSONA_COOKIE, personaById } from "./personas";
 
 // Every /os screen reads the platform through these adapters, over the endpoints the classic pages already use (no new
@@ -67,6 +67,20 @@ export const loadKnowledgeInbox = () =>
 export const loadSkills = () =>
   load(api<SkillsResponse>("/api/skills"), { categories: [], skills: [], stats: {} } as SkillsResponse);
 
+export type SkillDetail = { skill_name: string; versions: SkillVersion[];
+  labels: Record<string, { skill_id: string; moved_by: string; moved_at: string; note: string | null }>;
+  selected: { skill_id: string; files: { path: string; content: string }[] } | null };
+export const loadSkill = (name: string) => load(api<SkillDetail>(`/api/skills/${encodeURIComponent(name)}`), null as SkillDetail | null);
+
+export type SkillDiff = { base: { version: string; revision: number }; head: { version: string; revision: number }; added: number; removed: number;
+  files: { path: string; status: string; added: number; removed: number; ops: [string, number | null, number | null, string | number][] }[] };
+export const loadSkillDiff = (name: string, base: string, head: string) =>
+  load(api<SkillDiff>(`/api/skills/${encodeURIComponent(name)}/diff?base=${base}&head=${head}`), null as SkillDiff | null);
+
+/** The scout's open improvement proposal for one skill, if any. */
+export const loadSkillProposalFor = (name: string) =>
+  load(api<{ proposal: SkillProposal | null }>(`/api/skill-proposals/for-skill/${encodeURIComponent(name)}`).then((r) => r.proposal), null as SkillProposal | null);
+
 export type SkillProposal = { proposal_id?: string; skill_name?: string; title?: string; status?: string; rationale?: string | null;
   created_at?: string; [k: string]: unknown };
 export const loadSkillProposals = () =>
@@ -78,13 +92,16 @@ export const loadSources = () =>
 export const loadQuality = () => load(api<QualitySummary>("/api/hub/quality/summary?days=30"), null as QualitySummary | null);
 export const loadOps = () => load(api<OpsSummary>("/api/ops/summary"), null as OpsSummary | null);
 
+export const loadDags = () => load(api<{ dags: DagRow[] }>("/api/ops/dags?limit=50").then((r) => r.dags ?? []), [] as DagRow[]);
+
 export type Execution = { id: string; kind: "SODA" | "QA"; run_id: string | null; run_name: string | null; target: string | null;
   total: number | null; passed: number | null; warned: number | null; failed: number | null; errors: number | null; health: number | null;
   started_at: string; duration_ms: number | null };
 export const loadExecutions = () =>
   load(api<{ executions: Execution[] }>("/api/hub/quality/executions?limit=12").then((r) => r.executions ?? []), [] as Execution[]);
 
-export type Incident = { incident_id: string; title: string; severity: string; status: string; dag_id: string; last_seen: string };
+export type Incident = { incident_id: string; title?: string | null; kind: string; severity: string; status: string; dag_id: string; task_id?: string | null;
+  first_seen: string; last_seen?: string | null; assignee?: string | null };
 export const loadIncidents = () =>
   load(api<{ incidents: Incident[] }>("/api/ops/incidents?limit=12").then((r) => r.incidents ?? []), [] as Incident[]);
 
@@ -94,6 +111,49 @@ export type PrListing = { prs: PullRequest[]; counts: { total: number; open: num
   repos: { repo_id: string; name: string; git_url: string; branch: string }[]; publisher_ready?: boolean };
 export const loadPrs = () =>
   load(api<PrListing>("/api/source-control/prs"), { prs: [], counts: { total: 0, open: 0, merged: 0, attention: 0 }, repos: [] } as PrListing);
+
+/* design: a domain's data model, its open questions and a run's mapping proposals */
+
+export type DomainDiagram = {
+  model_id: string; version: number; status: string; approved_by: string | null; approved_at: string | null; updated_at: string | null;
+  entities: ModelEntity[]; relationships: (ModelRelationship & { from_optional?: boolean })[];
+};
+export const loadDomainModel = (domainId: string) =>
+  load(api<{ model: { model_id: string; approved_version: number | null; open_version: number | null } | null; diagram: DomainDiagram | null }>(
+    `/api/domains/${domainId}/data-model`), { model: null, diagram: null });
+
+export type DomainQuestion = { question_id: string; run_id: string | null; stage: string | null; kind: string; question: string; created_at: string };
+export const loadDomainQuestions = (domainId: string) =>
+  load(api<{ questions: DomainQuestion[] }>(`/api/domains/${domainId}/questions?status=OPEN`).then((r) => r.questions ?? []), [] as DomainQuestion[]);
+
+export const loadDomainContract = (domainId: string) =>
+  load(api<{ file: string; format: string; skill?: { name: string; version: string } | null; text: string }>(`/api/domains/${domainId}/contract`), null);
+
+export type MappingCandidate = { candidate_id: string; source_column: string; source_table: string; source_datatype: string; target_column: string;
+  target_datatype: string; confidence: number; final_score: number; rank: number; recommendation: string; generated_reason: string | null;
+  target_table_id?: string | null };
+export type MappingDecision = { decision_id: string; candidate_id: string | null; source_column_id: string; decision: string; reviewer: string; reviewed_at: string };
+export type MappingView = { candidates: MappingCandidate[]; decisions: MappingDecision[];
+  targets: { target_table_id: string; target_table: string; role: string }[];
+  status: { source_columns: number; decided: number; complete: boolean } | null; bands: { confident: number; weak: number } | null };
+export const loadMapping = (runId: string) =>
+  load(api<MappingView>(`/api/runs/${runId}/mapping`), { candidates: [], decisions: [], targets: [], status: null, bands: null } as MappingView);
+
+export type IngestionControl = Record<string, string | number | boolean | null> & {
+  child_id: number; source_name: string | null; source_type: string | null; domain_name: string | null; source_account: string | null;
+  source_table_sql: string | null; parent_pipeline_name: string | null; child_pipeline_name: string | null; is_active: boolean;
+  load_type: string | null; load_frequency: string | null; landing_table: string | null; bronze_table: string | null;
+};
+export type IngestionPipeline = { source_id: string; source_name: string; source_type: string; status: string;
+  schedule: { cron?: string; frequency?: string } | null; target_landing_table: string | null; snaplogic_pipeline_name: string | null;
+  created_by: string; created_at: string; has_secret: boolean };
+export const loadIngestion = async () => {
+  const [controls, pipelines] = await Promise.all([
+    load(api<{ controls: IngestionControl[]; deployed: boolean }>("/api/hub/ingestion-control"), { controls: [], deployed: false }),
+    load(api<{ pipelines: IngestionPipeline[] }>("/api/hub/pipelines").then((r) => r.pipelines ?? []), [] as IngestionPipeline[]),
+  ]);
+  return { controls: controls.data.controls ?? [], pipelines: pipelines.data, error: controls.error ?? pipelines.error };
+};
 
 /* QA for one run: the planned test pack, the latest results and the signoff */
 

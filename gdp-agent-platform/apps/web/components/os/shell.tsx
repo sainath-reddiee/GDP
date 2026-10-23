@@ -54,6 +54,11 @@ export function OsShell({ user, persona, environment, children }: { user: string
         </Link>
       ))}
       <div className="mt-auto flex flex-col items-center gap-1.5">
+        {/* below lg the header has no room for "View as": it lives in the slide-out rail */}
+        <select value={persona} onChange={(e) => choose(e.target.value)} aria-label="View as persona (menu)"
+                className="os-input w-[78px] px-1 py-1 text-[10px] font-bold lg:hidden">
+          {PERSONAS.map((p) => <option key={p.id} value={p.id}>{p.short}</option>)}
+        </select>
         <Link href="/work" title="Open the classic workspace" className="os-rail-item flex h-[52px] w-[70px] flex-col items-center justify-center gap-1 text-center text-[10px] font-semibold">
           <LayoutGrid className="h-4 w-4" />Classic
         </Link>
@@ -87,7 +92,7 @@ export function OsShell({ user, persona, environment, children }: { user: string
           <kbd className="ml-auto rounded border border-[var(--os-line)] px-1.5 text-[10px]">Ctrl K</kbd>
         </button>
         <div className="flex items-center gap-3 text-[12px]">
-          <span className="os-tag os-tag-green hidden border border-[var(--os-green-line)] sm:inline-flex" title="The workspace this platform runs in">
+          <span className="os-tag os-tag-green hidden border border-[var(--os-green-line)] md:inline-flex" title="The workspace this platform runs in">
             <span className="h-1.5 w-1.5 rounded-full bg-current" /> {environment} WORKSPACE
           </span>
           <ThemeToggle />
@@ -122,14 +127,3 @@ export function OsShell({ user, persona, environment, children }: { user: string
   );
 }
 
-/** The persona picker for narrow screens (the header one hides below lg). */
-export function PersonaInline({ persona }: { persona: PersonaId }) {
-  const router = useRouter();
-  const [, start] = useTransition();
-  return (
-    <select value={persona} aria-label="View as persona" className="os-input w-auto py-1.5 text-[12px] font-bold lg:hidden"
-            onChange={(e) => { document.cookie = `${PERSONA_COOKIE}=${e.target.value}; path=/; max-age=31536000; samesite=lax`; start(() => router.refresh()); }}>
-      {PERSONAS.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
-    </select>
-  );
-}
