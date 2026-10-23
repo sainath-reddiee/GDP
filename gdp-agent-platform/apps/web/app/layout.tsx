@@ -56,9 +56,8 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
   configureCatalogDisplay(catalog);
   // the classic pages see the grants on show: a previewed role's, so they hide what that role cannot do
   const privileges = access.governance ? access.privileges : null;
-  const readOnly = access.preview ? access.preview === "VIEWER" : Boolean(me?.read_only);
+  const readOnly = access.preview ? false : Boolean(me?.read_only);
   const classic = mayUseClassic(access.own) && jar.get(CLASSIC_COOKIE)?.value === "1";
-  const ownRole = access.own.privileges.includes("*") ? "super admin" : "governance admin";
   // the rail: the entries with at least one tab the person may open; each opens its first such tab
   const open = SCREENS.filter((s) => s.rail !== false && canSee(access, s.key));
   const sections = SECTIONS.flatMap((sec) => {
@@ -85,7 +84,7 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
                 screens: open.map(({ key, href, label, exact, section }) => ({ key, href, label, exact, section })),
                 personas: access.personas.map(({ id, label, short }) => ({ id, label, short })),
                 persona: access.persona.id,
-                preview: access.roles.length ? { current: access.preview, own: ownRole, roles: access.roles } : null,
+                preview: access.preview ? { current: access.preview.label } : null,
                 headerStart: <DomainSwitcher domains={domains} scope={getDomainScope()} />,
                 headerEnd: <><NewMenu privileges={privileges} />{account}</>,
               }}

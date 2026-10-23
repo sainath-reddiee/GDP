@@ -103,10 +103,42 @@ The experience uses the platform's governance as it is: 48 privileges, 14 system
   - Anyone else does not see the button.
 - **Personas:** a person's privileges decide which personas they are offered (`PERSONA_REQUIRES`). A person with none of them gets Viewer. The chosen persona only orders the queue and the landing page.
 - **Work queue:** My Work and Review list only the runs this person decides, may request a decision on, or operates. Holders of `APPROVAL.VIEW` see every gate.
-- **Preview as role:** super admins and governance admins can switch the UI to any role's effective privileges (cookie `ados_preview_role`). A banner shows while a preview is on. A preview changes only what is shown: data still loads as the signed-in person, and actions still run as them.
+- **Preview:** super admins only, by persona, from Admin → People (cookie `ados_preview_persona`; see Personas below). A preview changes only what is shown: data still loads as the signed-in person, and decisions are off.
 - **The API still enforces everything.** Hiding a screen or a button controls what people see; it is not the security boundary. Reads are not restricted per role in the API (the Viewer role reads everything by design). Restricting reads by domain membership is a later backend step.
 
 The Help screen (`/os/help`) prints the access list, marked for the person reading it.
+
+## Personas and super-admin-only governance (V076)
+
+People get **personas**, named bundles of the governance roles, instead of role toggles. A super admin assigns them in **Admin → People & personas** (`/os/people`). The platform grants the roles in those bundles (`CORE.USER_ROLE` stays where privileges come from), and "View as" offers each person only the personas they were given.
+
+| Persona | Roles it grants |
+|---|---|
+| GDP Product Owner (data owner) | DATA_STEWARD |
+| Data OS Administrator | PLATFORM_ADMIN |
+| Data Designer | DATA_ENGINEER, MODEL_APPROVER, STTM_APPROVER, DQ_APPROVER |
+| Forward Engineering Lead | DATA_ENGINEER, SKILL_OWNER |
+| Data Developer | CODE_REVIEWER |
+| QA & UAT Lead | QA_LEAD |
+| Data Reliability Engineer | SUPPORT_ENGINEER |
+| Knowledge & Skills Curator | DATA_STEWARD, SKILL_OWNER |
+| Super admin | SUPER_ADMIN |
+
+**Rules** (`services/governance/personas.py`, `tests/unit/test_personas.py`)
+- Assigning personas grants every role their bundles hold. Removing a persona drops a role only when no other persona the person keeps still grants it. A role given directly, outside any persona, is kept.
+- Editing a bundle moves everyone who holds it the same way. SUPER_ADMIN belongs only to the Super admin persona. GOVERNANCE_ADMIN is retired and cannot be put in a bundle.
+- The last super admin cannot lose the Super admin persona.
+- People from before personas keep their roles. People lists the personas their roles match, with a one-click "Give the matching persona". Anyone without a persona is a Viewer.
+
+**Admin is a super admin's alone, enforced in the API** (`policy.SUPER_ONLY`)
+- These privileges are honoured only alongside `*`: `ADMIN.VIEW`, `ADMIN.DEPLOY`, `CONFIG.EDIT`, `INTEGRATION.MANAGE`, `ROLE.MANAGE`, `AUDIT.VIEW` and `APPROVAL.VIEW`. Whatever role lists them, `effective_privileges` drops them for everyone else.
+- A call that needs one of them is refused outright, never queued as a change request.
+- The Admin rail entry (People & personas, Platform settings, Audit) shows to super admins only. Value is super-admin only too, because it reads the audit trail.
+- Approvers still see their own Approvals queue.
+
+**Preview moved off the top bar.** The "Preview as role" picker is gone. A super admin opens "See as <persona>" (or Viewer) in People. The same banner shows, decisions are off, and "Stop preview" returns to People.
+
+**Existing people.** Deploying V076 gave nobody a persona. Their access is unchanged until a super admin assigns personas in People.
 
 ## Decisions taken in place
 

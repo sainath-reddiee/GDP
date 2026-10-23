@@ -48,17 +48,19 @@ test("the rail marks the current screen and the persona reorders the queue", asy
 // Governance: the dev user is a super admin, so it can preview what each role is shown (a cookie the UI honours only
 // for super and governance admins). These read only; a preview never changes privileges in the API.
 async function previewAs(page: import("@playwright/test").Page, role: string) {
-  await page.context().addCookies([{ name: "ados_preview_role", value: role, url: BASE }]);
+  // a super admin previews a persona (Admin, People); the cookie is honoured for super admins only
+  await page.context().addCookies([{ name: "ados_preview_persona", value: role, url: BASE }]);
 }
 const railLinks = (page: import("@playwright/test").Page) =>
   page.getByRole("navigation", { name: "Agentic Data OS" }).first().getByRole("link");
 
 test("a viewer sees only the screens their role opens, and is turned back from the rest", async ({ page }) => {
-  await previewAs(page, "VIEWER");
+  await previewAs(page, "viewer");
   await page.goto("/os");
   await expect(page.getByRole("status").filter({ hasText: "Previewing as viewer" })).toBeVisible();
   // the package's ten entries, filtered: a viewer reads requests, domains, the audit trail, knowledge and operations
-  await expect(railLinks(page)).toHaveText(["My Work", "Intake", "Design", "Review", "Knowledge", "Run & DQ", "Help"]);
+  // the package's entries a viewer may open; Admin, governance and the audit trail are a super admin's alone
+  await expect(railLinks(page)).toHaveText(["My Work", "Intake", "Design", "Knowledge", "Run & DQ", "Help"]);
   await expect(page.getByLabel("Persona")).toHaveText("Viewer");
   await page.goto("/os/build");
   await page.waitForURL(/\/os\?denied=build$/);
@@ -71,7 +73,7 @@ test("a viewer sees only the screens their role opens, and is turned back from t
 });
 
 test("a code reviewer gets the build, review and release screens and the developer persona", async ({ page }) => {
-  await previewAs(page, "CODE_REVIEWER");
+  await previewAs(page, "developer");
   await page.goto("/os");
   await expect(railLinks(page)).toHaveText(["My Work", "Intake", "Design", "Build", "Review", "Release", "Knowledge", "Run & DQ", "Help"]);
   await expect(page.getByLabel("Persona")).toHaveText("Data Developer");
@@ -79,7 +81,7 @@ test("a code reviewer gets the build, review and release screens and the develop
 
 test("without the privilege, an action becomes a change request to the approver role", async ({ page }) => {
   // a data engineer builds but does not approve code: "Review code" is never offered as their own action
-  await previewAs(page, "DATA_ENGINEER");
+  await previewAs(page, "forward_lead");
   await page.goto("/os/build");
   await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
   await expect(page.getByRole("link", { name: "Review code", exact: true })).toHaveCount(0);
@@ -111,7 +113,7 @@ test("a gate is decided in place on Review, with a written justification", async
 });
 
 test("previewing another role turns the decisions off", async ({ page }) => {
-  await previewAs(page, "DATA_ENGINEER");
+  await previewAs(page, "forward_lead");
   await page.goto("/os/review");
   const decision = page.getByTestId("gate-decision");
   test.skip(!(await decision.count()), "no gate this role may act on is open");
@@ -123,7 +125,7 @@ test("knowledge stewards verify records and decide the inbox in place; viewers d
   await page.goto("/os/knowledge");
   await expect(page.getByTestId("verify-knowledge")).toBeVisible();
   await expect(page.getByRole("heading", { name: "Steward inbox" })).toBeVisible();
-  await previewAs(page, "VIEWER");
+  await previewAs(page, "viewer");
   await page.goto("/os/knowledge");
   await expect(page.getByTestId("verify-knowledge")).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "Steward inbox" })).toHaveCount(0);
@@ -166,4 +168,35 @@ test("admins can switch the classic pages back to the classic layout", async ({ 
   await page.goto("/admin");
   await page.getByTestId("classic-layout-switch").click();
   await expect(page.getByRole("navigation", { name: "Main" })).toHaveCount(0);
+});
+
+
+// Phase 11: Admin and governance belong to super admins; people get personas, not role toggles.
+test("only a super admin reaches Admin, people and the audit trail", async ({ page }) => {
+  test.setTimeout(420_000);
+  for (const persona of ["admin", "forward_lead", "developer", "viewer"]) {
+    await page.context().clearCookies();
+    await page.context().addCookies([{ name: "aip_dev", value: "1", url: BASE }]);
+    await previewAs(page, persona);
+    await page.goto("/os");
+    await expect(railLinks(page).filter({ hasText: "Admin" })).toHaveCount(0);
+    for (const [path, key] of [["/os/people", "people"], ["/admin", "admin"], ["/audit", "audit"]]) {
+      // the guard turns the visit around before it finishes, which Playwright reports as an aborted navigation
+      await page.goto(path).catch(() => undefined);
+      await page.waitForURL(new RegExp(`/os\\?denied=${key}$`));
+    }
+  }
+});
+
+test("a super admin gives personas in People and the header has no role picker", async ({ page }) => {
+  await page.goto("/os/people");
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText("People and personas");
+  await expect(page.getByTestId("bundle-designer")).toBeVisible();
+  await expect(page.getByTestId("preview-forward_lead")).toBeVisible();
+  await expect(page.getByLabel("Preview as role")).toHaveCount(0);
+  // previewing from People shows the banner, and Stop preview returns to People
+  await page.getByTestId("preview-developer").click();
+  await expect(page.getByRole("status").filter({ hasText: "Previewing as Data Developer" })).toBeVisible();
+  await page.getByRole("button", { name: "Stop preview" }).click();
+  await page.waitForURL(/\/os\/people$/);
 });

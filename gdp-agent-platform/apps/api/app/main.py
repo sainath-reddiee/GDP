@@ -6965,3 +6965,6 @@ app.include_router(datadog_router)
 from app.requests_api import router as requests_router  # noqa: E402
 
 app.include_router(requests_router)
+from app.personas_api import router as personas_router  # noqa: E402
+
+app.include_router(personas_router)

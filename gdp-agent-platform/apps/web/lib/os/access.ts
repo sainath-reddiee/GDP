@@ -10,7 +10,7 @@ export const PATH_HEADER = "x-ados-path";
 /** The admin-only switch back to the classic layout (sidebar and top bar). */
 export const CLASSIC_COOKIE = "ados_classic";
 /** May use the classic layout: platform and governance admins (everyone while governance is off). */
-export const mayUseClassic = (g: Grants) => !g.governance || g.privileges.includes("*") || g.privileges.includes("ADMIN.VIEW");
+export const mayUseClassic = (g: Grants) => !g.governance || g.privileges.includes("*");
 
 /** Holds the privilege (everything is allowed until governance is deployed, as in lib/types `can`). */
 export const has = (g: Grants, privilege: string) => !g.governance || g.privileges.includes("*") || g.privileges.includes(privilege);
@@ -35,7 +35,7 @@ export type ScreenKey =
   | "release" | "sourceControl" | "qa"
   | "knowledge" | "memory"
   | "run" | "quality" | "operations" | "incidents" | "resolutions" | "fixes" | "permanentFixes" | "tickets"
-  | "admin"
+  | "people" | "admin"
   | "help";
 export type Screen = {
   key: ScreenKey; href: string; label: string; section?: SectionKey; exact?: boolean; paths?: readonly string[];
@@ -53,6 +53,8 @@ const GATE_DECIDERS = ["MAPPING.APPROVE", "STTM.APPROVE", "SODA.APPROVE", "QA.SI
 const BUILDERS = ["RUN.CREATE", "RUN.OPERATE", "SOURCE.CONNECT", "PROFILE.RUN", "MODEL.EDIT", "MODEL.APPROVE", "MAPPING.DECIDE", "STTM.EDIT",
   "SODA.EDIT", "QA.EDIT", "DBT.EDIT", ...GATE_DECIDERS, "APPROVAL.VIEW"] as const;
 const OPERATORS = ["OPS.VIEW", "JIRA.READ", "CASE.WORK"] as const;
+/** Super admins only: Admin and governance (the API enforces the same, policy.SUPER_ONLY). */
+const SUPER = ["*"] as const;
 
 export const SCREENS: Screen[] = [
   // My Work: the person's own work, the estate overview, the copilot and the value ledger
@@ -60,7 +62,7 @@ export const SCREENS: Screen[] = [
   { key: "inbox", section: "work", href: "/work", label: "Inbox", why: "everyone signed in (requests, questions, tickets)" },
   { key: "overview", section: "work", href: "/dashboard", label: "Overview", exact: true, why: "everyone signed in" },
   { key: "copilot", section: "work", href: "/dashboard/copilot", label: "Copilot", view: ["AI.USE"], why: "people who may use AI" },
-  { key: "value", section: "work", href: "/value", label: "Value", view: ["AUDIT.VIEW"], why: "people who read the audit trail" },
+  { key: "value", section: "work", href: "/value", label: "Value", view: SUPER, why: "super admins only (it reads the audit trail)" },
 
   // Intake: asking for something, and the onboarding wizards that start it
   { key: "intake", section: "intake", href: "/os/intake", label: "New request",
@@ -91,7 +93,7 @@ export const SCREENS: Screen[] = [
   { key: "review", section: "review", href: "/os/review", label: "Gates", view: [...GATE_DECIDERS, "RUN.OPERATE", "APPROVAL.VIEW", "REQUEST.CHANGES"], why: "people who decide a gate or raise change requests" },
   { key: "governance", section: "review", href: "/approvals", label: "Approvals",
     view: ["APPROVAL.VIEW", "ROLE.MANAGE", "REQUEST.CHANGES", ...GATE_DECIDERS, "MODEL.APPROVE"], why: "people who raise or decide change requests" },
-  { key: "audit", section: "review", href: "/audit", label: "Audit", view: ["AUDIT.VIEW"], why: "people who read the audit trail" },
+
 
   { key: "skills", section: "skills", href: "/os/skills", label: "Skill studio", view: ["SKILL.EDIT", "SKILL.RELEASE"], why: "skill authors and owners" },
   { key: "registry", section: "skills", href: "/skills", label: "Registry", view: ["SKILL.EDIT", "SKILL.RELEASE"], why: "skill authors and owners" },
@@ -114,7 +116,10 @@ export const SCREENS: Screen[] = [
   { key: "permanentFixes", section: "run", href: "/ops/permanent-fixes", label: "Permanent fixes", view: ["OPS.VIEW"], why: "pipeline support" },
   { key: "tickets", section: "run", href: "/tickets", label: "Tickets", paths: ["/jira"], view: ["JIRA.READ", "CASE.WORK"], why: "people who work Jira issues and cases" },
 
-  { key: "admin", section: "admin", href: "/admin", label: "Admin", view: ["ADMIN.VIEW"], why: "platform and governance admins" },
+  // Admin: a super admin's alone, people and their personas first
+  { key: "people", section: "admin", href: "/os/people", label: "People & personas", view: SUPER, why: "super admins only" },
+  { key: "admin", section: "admin", href: "/admin", label: "Platform settings", view: SUPER, why: "super admins only" },
+  { key: "audit", section: "admin", href: "/audit", label: "Audit", view: SUPER, why: "super admins only" },
 
   { key: "help", href: "/os/help", label: "Help", why: "everyone signed in" },
 ];
@@ -192,8 +197,8 @@ export const PERSONA_REQUIRES: Record<string, readonly string[]> = {
   qa: ["QA.EDIT", "QA.SIGNOFF", "SODA.EDIT", "SODA.APPROVE"],
   reliability: ["OPS.OPERATE", "OPS.FIX_APPROVE"],
   curator: ["KNOWLEDGE.EDIT", "SKILL.RELEASE"],
-  governance: ["ROLE.MANAGE", "APPROVAL.VIEW"],
+  super: ["*"],
 };
 
 /** May see the UI as another role (super admins and governance admins). */
-export const canPreview = (g: Grants) => g.governance && (g.privileges.includes("*") || g.privileges.includes("ROLE.MANAGE"));
+export const canPreview = (g: Grants) => g.governance && g.privileges.includes("*");

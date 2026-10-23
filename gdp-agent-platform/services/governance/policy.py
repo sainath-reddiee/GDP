@@ -62,6 +62,11 @@ PRIVILEGES: Dict[str, Tuple[str, str]] = {
 # Privileges a viewer-style role never needs: holding none of the others means the user can only look.
 READ_ONLY = {"AUDIT.VIEW", "ADMIN.VIEW", "APPROVAL.VIEW", "CODE.VIEW", "OPS.VIEW"}
 ALL = "*"
+# Admin and governance are a super admin's alone: platform settings, integrations, deploy, users, roles, personas and
+# policies, the audit trail and every change request. Whatever role lists them, these are honoured only alongside "*"
+# (effective_privileges drops them otherwise), and a call that needs one is refused outright for anyone else, never
+# queued as a change request (decide).
+SUPER_ONLY = {"ADMIN.VIEW", "ADMIN.DEPLOY", "CONFIG.EDIT", "INTEGRATION.MANAGE", "ROLE.MANAGE", "AUDIT.VIEW", "APPROVAL.VIEW"}
 
 SYSTEM_ROLES: Dict[str, Dict[str, Any]] = {
     "SUPER_ADMIN": {"description": "Everything, including governance", "privileges": [ALL], "inherits": []},
@@ -152,6 +157,9 @@ RULES: List[Tuple[str, str, Any, str]] = [
     ("POST", r"/api/governance/roles/[^/]+/members", "ROLE.MANAGE", "Change role members"),
     ("PUT", r"/api/governance/(users|roles|policies)/[^/]+", "ROLE.MANAGE", "Change access or an approval policy"),
     ("DELETE", r"/api/governance/roles/[^/]+", "ROLE.MANAGE", "Delete a role"),
+    # personas (apps/api/app/personas_api.py): bundles of roles a super admin gives people; ROLE.MANAGE is "*" only
+    ("PUT", r"/api/governance/personas/[^/]+", "ROLE.MANAGE", "Change the roles a persona grants"),
+    ("PUT", r"/api/governance/people/[^/]+/personas", "ROLE.MANAGE", "Give a person personas"),
     ("PUT", r"/api/governance/settings", "ROLE.MANAGE", "Change governance settings"),
     ("POST", r"/api/admin/apply", "ADMIN.DEPLOY", "Redeploy procedures and the agent"),
     ("POST", r"/api/dbt/(github/setup|github/token|git-repository)", "ADMIN.DEPLOY", "Change the GitHub integration"),
@@ -452,6 +460,8 @@ def carries_secret(method: str, path: str) -> bool:
     return any(m == method.upper() and pattern.match(path) for m, pattern in SECRET_BODY)
 
 READ_RULES = [(re.compile(r"^/api/(admin/.*|config/(rules|platform|models|environments))$"), "ADMIN.VIEW"),
+              # who holds which persona and role is governance: super admins only
+              (re.compile(r"^/api/governance/(people|personas)$"), "ROLE.MANAGE"),
               (re.compile(r"^/api/jira/(issues|search|filters|boards|sprints|projects|summary|sprint-choices)(/.*)?$"), "JIRA.READ"),
               (re.compile(r"^/api/qa/links$"), "JIRA.READ"),
               (re.compile(r"^/api/runs/[^/]+/jira/.*$"), "JIRA.READ"),
@@ -560,6 +570,8 @@ def effective_privileges(user_roles: Iterable[str], role_privileges: Dict[str, I
         privs.update(role_privileges.get(role, []))
     if ALL in privs:
         privs = set(PRIVILEGES) | {ALL}
+    else:
+        privs -= SUPER_ONLY
     return roles, privs
 
 
@@ -567,6 +579,8 @@ def decide(privilege: Optional[str], privileges: Set[str], policy: Optional[Dict
     """('ALLOW' | 'REQUEST' | 'FORBID', reason)."""
     if not privilege:
         return "ALLOW", ""
+    if privilege in SUPER_ONLY and ALL not in privileges:
+        return "FORBID", f"{privilege} is for super admins only ({PRIVILEGES.get(privilege, ('', privilege))[1]})"
     active = bool(policy and policy.get("active", True) and policy.get("requires_approval", True))
     holds = privilege in privileges or ALL in privileges
     if holds and not (active and policy.get("four_eyes")):

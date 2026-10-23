@@ -4,57 +4,90 @@ import { cache } from "react";
 import { api, whoami } from "@/lib/api";
 import type { WhoAmI } from "@/lib/types";
 import { canPreview, canSee, type Grants, type ScreenKey } from "./access";
-import { DEFAULT_PERSONA, PERSONA_COOKIE, personaById, personasFor, type Persona } from "./personas";
+import { DEFAULT_PERSONA, PERSONAS, PERSONA_COOKIE, personaById, personasFor, type Persona } from "./personas";
 
-// Who is looking at /os and what they are shown. The grants are the signed-in person's governance privileges, or,
-// when a super or governance admin previews a role, that role's effective privileges. A preview only changes what
-// the UI shows: the API still answers as the signed-in person.
+// Who is looking at /os and what they are shown. A person is offered the personas a super admin gave them (Admin,
+// People; V076); someone from before personas gets the ones their roles match, and a super admin all of them. The
+// grants are the person's own governance privileges, or, while a super admin previews a persona from Admin, People,
+// that persona's bundle (its roles' effective privileges, worked out by the API). A preview only changes what the UI
+// shows: the API still answers as the signed-in person.
 
-export const PREVIEW_COOKIE = "ados_preview_role";
+export const PREVIEW_COOKIE = "ados_preview_persona";
 
-export type RoleInfo = { role: string; description: string; effective: string[]; members: unknown[] };
+export type PersonaInfo = { persona_id: string; label: string; description: string | null; roles: string[]; effective: string[]; holders: string[] };
 export type OsAccess = Grants & {
   user: string | null;
   /** the signed-in person as the API sees them */
   me: WhoAmI | null;
   /** the signed-in person's own grants, whatever is previewed */
   own: Grants;
-  /** the role being previewed, or null */
-  preview: string | null;
-  /** the roles an admin may preview (empty for everyone else) */
-  roles: { role: string; description: string; members: number }[];
+  /** the persona a super admin is previewing, or null */
+  preview: { id: string; label: string } | null;
   /** privilege -> the role its change requests go to, from the active approval policies */
   approvers: Record<string, string>;
+  /** how the personas on offer were found: given by a super admin, matched from roles, or every one (super admin) */
+  personaSource: "assigned" | "matched" | "all";
   personas: Persona[];
   persona: Persona;
 };
 
+const known = (ids: string[]) => PERSONAS.filter((p) => ids.includes(p.id));
+
 export const osAccess = cache(async (): Promise<OsAccess> => {
   const me = await whoami();
   const own: Grants = { governance: Boolean(me?.governance), privileges: me?.privileges ?? [] };
-  const admin = canPreview(own);
-  const [roles, policies] = await Promise.all([
-    admin ? api<{ roles: RoleInfo[] }>("/api/governance/roles").then((r) => r.roles ?? []).catch(() => [] as RoleInfo[]) : Promise.resolve([] as RoleInfo[]),
+  const superAdmin = canPreview(own);
+  const [mine, policies, catalogue, viewerRole] = await Promise.all([
+    own.governance
+      ? api<{ personas: string[]; matching: string[]; deployed: boolean }>("/api/me/personas").catch(() => ({ personas: [], matching: [], deployed: false }))
+      : Promise.resolve({ personas: [] as string[], matching: [] as string[], deployed: false }),
     own.governance
       ? api<{ policies: { privilege: string; requires_approval: boolean; approver_role: string | null; active: boolean }[] }>("/api/governance/policies")
           .then((r) => r.policies ?? []).catch(() => [])
       : Promise.resolve([]),
+    superAdmin ? api<{ personas: PersonaInfo[] }>("/api/governance/personas").then((r) => r.personas ?? []).catch(() => [] as PersonaInfo[])
+      : Promise.resolve([] as PersonaInfo[]),
+    // a Viewer is anyone without a persona: previewing it uses the VIEWER role's grants
+    superAdmin && cookies().get(PREVIEW_COOKIE)?.value === "viewer"
+      ? api<{ roles: { role: string; effective: string[] }[] }>("/api/governance/roles").then((r) => r.roles.find((x) => x.role === "VIEWER") ?? null).catch(() => null)
+      : Promise.resolve(null),
   ]);
-  const wanted = admin ? cookies().get(PREVIEW_COOKIE)?.value ?? null : null;
-  const previewed = wanted ? roles.find((r) => r.role === wanted) ?? null : null;
+
+  const wanted = superAdmin ? cookies().get(PREVIEW_COOKIE)?.value ?? null : null;
+  const previewed: PersonaInfo | null = wanted === "viewer" && viewerRole
+    ? { persona_id: "viewer", label: "Viewer", description: null, roles: ["VIEWER"], effective: viewerRole.effective, holders: [] }
+    : wanted ? catalogue.find((p) => p.persona_id === wanted && p.persona_id !== "super") ?? null : null;
   const grants: Grants = previewed ? { governance: true, privileges: previewed.effective } : own;
-  const personas = personasFor(grants);
+
+  let personas: Persona[];
+  let personaSource: OsAccess["personaSource"];
+  if (previewed) {
+    personas = known([previewed.persona_id]);
+    personaSource = "assigned";
+  } else if (!own.governance || superAdmin) {
+    personas = PERSONAS.filter((p) => p.id !== "viewer");
+    personaSource = "all";
+  } else if (mine.personas.length) {
+    personas = known(mine.personas);
+    personaSource = "assigned";
+  } else {
+    // nobody gave this person a persona yet: offer what their roles match (or, before V076, their privileges)
+    const matched = known(mine.matching);
+    personas = matched.length ? matched : personasFor(grants);
+    personaSource = "matched";
+  }
+  if (!personas.length) personas = [personaById("viewer")];
   const chosen = cookies().get(PERSONA_COOKIE)?.value ?? DEFAULT_PERSONA;
   return {
     ...grants,
     user: me?.user ?? null,
     me,
     own,
-    preview: previewed?.role ?? null,
-    roles: roles.map((r) => ({ role: r.role, description: r.description, members: Array.isArray(r.members) ? r.members.length : 0 })),
+    preview: previewed ? { id: previewed.persona_id, label: previewed.label } : null,
     approvers: Object.fromEntries(policies.filter((p) => p.active && p.requires_approval && p.approver_role).map((p) => [p.privilege, p.approver_role as string])),
+    personaSource,
     personas,
-    persona: personas.find((p) => p.id === chosen) ?? personas[0] ?? personaById("viewer"),
+    persona: personas.find((p) => p.id === chosen) ?? personas[0],
   };
 });
 

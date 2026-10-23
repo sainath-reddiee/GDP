@@ -19,12 +19,13 @@ const ICONS: Record<SectionKey, ComponentType<{ className?: string }>> = {
   work: Home, intake: Plus, enable: Wrench, design: SquareStack, build: Hammer, review: ShieldCheck, skills: Sparkles,
   release: Rocket, knowledge: BookOpen, run: Gauge, admin: Settings,
 };
-const PREVIEW_COOKIE = "ados_preview_role";
+const PREVIEW_COOKIE = "ados_preview_persona";
 
 export type ShellScreen = { key: ScreenKey; href: string; label: string; exact?: boolean; section?: SectionKey };
 export type ShellSection = { key: SectionKey; label: string; href: string };
 export type ShellPersona = { id: string; label: string; short: string };
-export type ShellPreview = { current: string | null; own: string; roles: { role: string; description: string; members: number }[] };
+/** the persona a super admin is previewing (started from Admin, People) */
+export type ShellPreview = { current: string };
 
 function initials(user: string | null) {
   if (!user) return "?";
@@ -56,8 +57,7 @@ export function OsShell({ user, environment, sections, screens, personas, person
   useEffect(() => setMenu(false), [path]);
 
   const choose = (id: string) => { setCookie(PERSONA_COOKIE, id); start(() => router.refresh()); };
-  // a preview starts from that role's first persona, so the persona cookie is cleared with it
-  const previewAs = (role: string) => { setCookie(PREVIEW_COOKIE, role || null); setCookie(PERSONA_COOKIE, null); start(() => router.refresh()); };
+  const stopPreview = () => { setCookie(PREVIEW_COOKIE, null); setCookie(PERSONA_COOKIE, null); start(() => router.push("/os/people")); };
   // the page on show: its own tab, or the one it sits under (a run's workspace is under Build's Workbench)
   const here = screenOfPath(path);
   const current = here?.under ?? here?.key ?? null;
@@ -122,19 +122,6 @@ export function OsShell({ user, environment, sections, screens, personas, person
           <span className="os-tag os-tag-green hidden border border-[var(--os-green-line)] xl:inline-flex" title="The workspace this platform runs in">
             <span className="h-1.5 w-1.5 rounded-full bg-current" /> {environment} WORKSPACE
           </span>
-          {preview && (
-            <label className="hidden items-center gap-2 xl:flex" title="See the screens, personas and actions a role sees">
-              <Eye className="h-3.5 w-3.5 opacity-60" />
-              <span className="relative">
-                <select value={preview.current ?? ""} onChange={(e) => previewAs(e.target.value)} aria-label="Preview as role"
-                        className={cn("os-input appearance-none py-1.5 pl-3 pr-8 text-[12px] font-bold", preview.current && "border-[var(--os-amber-line)] bg-[var(--os-amber-bg)]")}>
-                  <option value="">Myself ({preview.own})</option>
-                  {preview.roles.map((r) => <option key={r.role} value={r.role}>{r.role.replace(/_/g, " ").toLowerCase()}{r.members ? ` · ${r.members}` : ""}</option>)}
-                </select>
-                <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 opacity-60" />
-              </span>
-            </label>
-          )}
           <label className="hidden items-center gap-2 lg:flex">
             <span className="os-muted hidden 2xl:inline">View as</span>
             <span className="relative">
@@ -152,8 +139,8 @@ export function OsShell({ user, environment, sections, screens, personas, person
       {preview?.current && (
         <div role="status" className="sticky top-[58px] z-30 flex flex-wrap items-center justify-center gap-x-3 gap-y-1 border-b border-[var(--os-amber-line)] bg-[var(--os-amber-bg)] px-4 py-1.5 text-[12px] text-[var(--os-amber-ink)]">
           <Eye className="h-3.5 w-3.5" />
-          <span><b>Previewing as {preview.current.replace(/_/g, " ").toLowerCase()}</b>: the screens, personas and actions this role is shown. Data still loads as you, and the classic pages still act as you.</span>
-          <button type="button" className="font-bold underline" onClick={() => previewAs("")}>Stop preview</button>
+          <span><b>Previewing as {preview.current}</b>: the screens and actions this persona is shown. Data still loads as you; decisions are off.</span>
+          <button type="button" className="font-bold underline" onClick={stopPreview}>Stop preview</button>
         </div>
       )}
       <div className="flex">

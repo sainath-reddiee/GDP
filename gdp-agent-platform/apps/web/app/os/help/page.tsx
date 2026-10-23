@@ -2,7 +2,7 @@ import Link from "next/link";
 import { ArrowRight, Lock } from "lucide-react";
 import { LIFECYCLE } from "@/lib/os/lifecycle";
 import { PERSONAS } from "@/lib/os/personas";
-import { PERSONA_REQUIRES, SCREENS, canSee, type ScreenKey } from "@/lib/os/access";
+import { SCREENS, canSee, type ScreenKey } from "@/lib/os/access";
 import { osAccess } from "@/lib/os/session";
 import { Card, PageHeader, Tag } from "@/components/os/ui";
 
@@ -59,13 +59,13 @@ export default async function Help() {
             })}
           </div>
         </Card>
-        <Card title="Personas" subtitle="Offered by your governance roles. A persona changes what comes first, never what you may do." pad={false}>
+        <Card title="Personas" subtitle="A super admin gives you personas; each grants a bundle of roles. The one you view as changes what comes first, never what you may do." pad={false}>
           <div className="os-divide">
             {PERSONAS.map((p) => (
               <div key={p.id} className="flex items-center justify-between gap-3 px-5 py-3">
                 <span className="min-w-0"><span className="block text-[13px] font-bold">{p.label}</span>
                   <span className="os-faint block text-[11.5px]">{p.responsibility}</span>
-                  <span className="os-faint block text-[10.5px]">{PERSONA_REQUIRES[p.id] ? `Any of ${PERSONA_REQUIRES[p.id].join(", ")}` : "When no other persona fits"}</span></span>
+                  <span className="os-faint block text-[10.5px]">{p.id === "viewer" ? "Anyone without a persona" : p.id === "super" ? "Super admins only" : "Given by a super admin in Admin, People"}</span></span>
                 {mine.has(p.id) ? <Tag tone="green">Yours</Tag> : <Tag>Not your role</Tag>}
               </div>
             ))}

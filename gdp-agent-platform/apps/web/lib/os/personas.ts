@@ -1,11 +1,13 @@
 import { PERSONA_REQUIRES, hasAny, type Grants } from "./access";
 
-// The personas of the Agentic Data OS experience. A person is offered only the personas their governance roles
-// qualify them for (lib/os/access PERSONA_REQUIRES); the chosen one changes what /os puts first, never what they may do.
+// The personas of the Agentic Data OS experience; their ids are CORE.PERSONA's (V076). A super admin gives people
+// personas in Admin, People, and each grants a bundle of governance roles. A person is offered the personas they were
+// given (lib/os/session); PERSONA_REQUIRES only places people from before personas. The chosen one changes what /os
+// puts first, never what they may do.
 
 export const PERSONA_COOKIE = "ados_persona";
 
-export type PersonaId = "forward_lead" | "product_owner" | "admin" | "designer" | "developer" | "qa" | "reliability" | "curator" | "governance" | "viewer";
+export type PersonaId = "forward_lead" | "product_owner" | "admin" | "designer" | "developer" | "qa" | "reliability" | "curator" | "super" | "viewer";
 
 export type Persona = {
   id: PersonaId; label: string; short: string; responsibility: string;
@@ -41,9 +43,9 @@ export const PERSONAS: Persona[] = [
   { id: "curator", label: "Knowledge & Skills Curator", short: "Curator", home: "/os/knowledge",
     responsibility: "Verify Enterprise Memory and release reviewed skill versions",
     states: [] },
-  { id: "governance", label: "Governance Lead", short: "Governance", home: "/os/review",
-    responsibility: "Roles, approval policies, change requests and the audit trail",
-    states: ["MAPPING_REVIEW", "STTM_REVIEW", "SODA_REVIEW", "DBT_REVIEW"] },
+  { id: "super", label: "Super admin", short: "Super admin", home: "/os/people",
+    responsibility: "Everything, and the only one who sees Admin and governance: people, personas, settings, audit",
+    states: ["MAPPING_REVIEW", "STTM_REVIEW", "SODA_REVIEW", "DBT_REVIEW", "VALIDATION_FAILED", "FAILED"] },
   { id: "viewer", label: "Viewer", short: "Viewer", home: "/os",
     responsibility: "Read the platform; no changes, no AI calls",
     states: [] },
