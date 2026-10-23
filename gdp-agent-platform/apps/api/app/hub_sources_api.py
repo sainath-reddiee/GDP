@@ -285,7 +285,8 @@ def _create_control(db: Db, payload: dict, kind: str, run_id: Optional[str] = No
                                                   SCHEDULE, TARGET_LANDING_TABLE, SNAPLOGIC_PIPELINE_NAME, DOMAIN_ID, STATUS, NOTES)
                            SELECT %s, %s, %s, NULL, PARSE_JSON(%s), PARSE_JSON(%s), %s, %s, %s, %s, %s""",
                        (source_id, header["source_name"], header["source_type"],
-                        json.dumps({"tables": len(rows), "control": "CORE.INGESTION_CONTROL_CONFIG"}),
+                        json.dumps({"tables": len(rows), "control": "CORE.INGESTION_CONTROL_CONFIG",
+                                    **({"kind": header["source_kind"]} if header.get("source_kind") else {})}),
                         json.dumps(schedule), f"{header['landing_database']}.{header['landing_schema']}.{rows[0]['landing_table']}",
                         header["parent_pipeline_name"], header["domain_id"],
                         "ACTIVE" if header["is_active"] else "REGISTERED", header["comments"]))

@@ -298,7 +298,7 @@ export function Sidebar({ privileges }: { privileges?: string[] | null }) {
         {!collapsed && (
           <div className="min-w-0">
             <div className="truncate text-sm font-semibold tracking-tight text-white">{PRODUCT_SHORT}</div>
-            <div className="truncate whitespace-nowrap text-[10px] font-medium uppercase tracking-[0.1em] text-white/40">Agentic Data Operating System</div>
+            <div className="text-[10px] font-medium uppercase leading-snug tracking-[0.08em] text-white/50">Agentic Data Operating System</div>
           </div>
         )}
       </Link>

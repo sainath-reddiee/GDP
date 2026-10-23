@@ -97,7 +97,9 @@ test("onboarding is one choice per step, and Change brings the options back", as
   await expect(page.getByTestId("onboard-kind-chosen")).toContainText("Source");
   await expect(page.getByTestId("onboard-kind-domain")).toHaveCount(0);
   await expect(page.getByTestId("onboard-source-chosen")).toContainText("Other sources");
-  await expect(page.getByTestId("ingestion-wizard")).toBeVisible();
+  // other sources then ask which kind of source it is, before the wizard
+  await expect(page.getByTestId("onboard-kind-of-source-database")).toBeVisible();
+  await expect(page.getByTestId("onboard-kind-of-source-file")).toBeVisible();
   // Change brings the kinds back; a domain import shows the starter files and every accepted format
   await page.getByTestId("onboard-kind-change").click();
   await page.waitForURL(/\/dashboard\/onboarding$/);

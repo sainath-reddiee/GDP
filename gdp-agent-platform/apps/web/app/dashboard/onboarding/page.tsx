@@ -19,9 +19,10 @@ const KINDS: Kind[] = ["source", "domain", "application"];
 
 /** One place to bring something onto the platform: a source, a domain, or (soon) an application. The steps run down a
  *  rail like a pipeline: each is one choice, and once made the other options step away until Change brings them back. */
-export default async function Onboarding({ searchParams }: { searchParams: { type?: string; branch?: string; how?: string; import?: string } }) {
+export default async function Onboarding({ searchParams }: { searchParams: { type?: string; branch?: string; kind?: string; how?: string; import?: string } }) {
   const kind = KINDS.find((k) => k === searchParams.type) ?? null;
   const branch = searchParams.branch === "share" || searchParams.branch === "external" ? searchParams.branch : null;
+  const sourceKind = searchParams.kind === "database" || searchParams.kind === "file" ? searchParams.kind : null;
   const how = searchParams.import === "1" ? "import"
     : searchParams.how === "import" || searchParams.how === "draft" || searchParams.how === "design" ? searchParams.how : null;
   const { domains } = kind && kind !== "application"
@@ -46,7 +47,7 @@ export default async function Onboarding({ searchParams }: { searchParams: { typ
           <KindPicker value={kind} />
 
           {kind === "source" && (
-            <OnboardWizard key="source" initialBranch={branch} shares={shares} databases={databases} landing={landing} user={me?.user ?? null}
+            <OnboardWizard key="source" initialBranch={branch} initialKind={sourceKind} shares={shares} databases={databases} landing={landing} user={me?.user ?? null}
                            domains={active.map((d) => ({ domain_id: d.domain_id, domain_name: d.domain_name }))} />
           )}
 

@@ -147,7 +147,9 @@ def to_detail(row: Dict[str, Any], header: Dict[str, Any], master_config_id: int
         "SNAPLOGIC_PROJECT_NAME": row.get("snaplogic_project_name") or d["snaplogic_project_name"],
         "SOURCE_ACCOUNT": row.get("source_account"), "SOURCE_DATABASE_PATH": row.get("source_database_path"),
         "SOURCE_SCHEMA_FILE": row.get("source_schema_file"), "SOURCE_TABLE_SQL": row.get("source_table_sql"),
-        "SOURCE_FILE_TYPE": row.get("source_file_type") or "TABLE", "SOURCE_DELTA_KEY": row.get("source_delta_key"),
+        # a relational database onboarded as one has no file type (the workbook: null); a share keeps TABLE
+        "SOURCE_FILE_TYPE": None if header.get("source_kind") == "DATABASE" else row.get("source_file_type") or "TABLE",
+        "SOURCE_DELTA_KEY": row.get("source_delta_key"),
         "SOURCE_PRIMARY_KEYS": row.get("source_primary_keys"), "SOURCE_WHERE_CLAUSE": row.get("source_where_clause"),
         "TARGET_ACCOUNT": row.get("target_account") or d["target_account"],
         "LANDING_DATABASE": row.get("landing_database"), "LANDING_SCHEMA": row.get("landing_schema"),

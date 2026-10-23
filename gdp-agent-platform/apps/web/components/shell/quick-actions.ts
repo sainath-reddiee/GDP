@@ -21,7 +21,7 @@ export const QUICK_ACTION_GROUPS: QuickActionGroup[] = ["Onboard", "Model", "Qua
 export const QUICK_ACTIONS: QuickAction[] = [
   { group: "Onboard", label: "Snowflake share", hint: "Mount an inbound share and profile it in place",
     href: "/dashboard/onboarding?type=source&branch=share", icon: Share2, privilege: "SOURCE.CONNECT" },
-  { group: "Onboard", label: "Other sources", hint: "PostgreSQL, Oracle, SQL Server, Salesforce, APIs or files, landed into Snowflake by SnapLogic",
+  { group: "Onboard", label: "Other sources", hint: "A relational database (PostgreSQL, Oracle, SQL Server) or files (Amazon S3, SharePoint), landed into Snowflake by SnapLogic",
     href: "/dashboard/onboarding?type=source&branch=external", icon: CloudCog, privilege: "SOURCE.CONNECT" },
   { group: "Model", label: "Import a domain pack", hint: "Register a domain from domain_pack.json and its contract",
     href: "/dashboard/onboarding?type=domain&import=1", icon: Boxes, privilege: "DOMAIN.EDIT" },

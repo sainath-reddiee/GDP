@@ -27,6 +27,11 @@ SOURCE_TYPES = ("ORACLE", "SQLSERVER", "POSTGRES", "MYSQL", "SALESFORCE", "REST_
                 # written to SnapLogic as POSTGRESQL
                 "SNOWFLAKE_SHARE", "SNOWFLAKE", "POSTGRESQL", "SHAREPOINT", "S3_DEALIQ", "DNB", "ZOOMINFO_API")
 FILE_TYPES = ("TABLE", "CSV", "JSON", "PARQUET", "XLSX")
+# Other sources, split by kind (the onboarding configuration workbook): each kind has its own source types and
+# questions. A payload without source_kind (share onboarding, edits, older callers) keeps the rules for any type.
+SOURCE_KINDS: Dict[str, Tuple[str, ...]] = {"DATABASE": ("POSTGRESQL", "ORACLE", "SQLSERVER"), "FILE": ("S3", "SHAREPOINT")}
+KIND_LABELS = {"DATABASE": "relational database", "FILE": "file based"}
+FILE_FORMATS = ("CSV", "JSON", "PARQUET", "XLSX")
 LOAD_TYPES = ("APPEND", "TRUNCATE", "SCD2")
 BRONZE_LOAD_TYPES = ("TRUNCATE", "SCD2", "MERGE")
 FREQUENCIES = ("HOURLY", "DAILY", "WEEKLY", "MONTHLY", "ON_DEMAND")
@@ -147,6 +152,33 @@ def validate(payload: Dict[str, Any]) -> Tuple[Dict[str, Any], List[Dict[str, An
         errors["source.source_account"] = "Letters, digits, spaces, _ . - and /"
     schema_file = _text(src.get("source_schema_file"), 256)
     db_path = _text(src.get("source_database_path"), 512)
+    domain_id = _text(src.get("domain_id"), 36)
+
+    # the kind's own questions: a relational database names its database and schema and keys every table; a file
+    # source names its path, file and format. Neither asks a previous load time or an API (they stay empty).
+    kind = _upper(src.get("source_kind"), 16) or None
+    if kind and kind not in SOURCE_KINDS:
+        errors["source.source_kind"] = "Choose Relational database or File based"
+        kind = None
+    if kind:
+        if source_type == "POSTGRES":
+            source_type = "POSTGRESQL"
+        allowed = SOURCE_KINDS[kind]
+        if source_type not in allowed:
+            errors["source.source_type"] = f"A {KIND_LABELS[kind]} source is one of {', '.join(allowed)}"
+        need("source.domain_id", domain_id, "Domain")
+        need("source.source_account", source_account, "Source account")
+        if kind == "DATABASE":
+            need("source.source_database_path", db_path, "Source database")
+            need("source.source_schema_file", schema_file, "Source schema")
+            file_type, sheet = "TABLE", ""
+            errors.pop("source.source_file_type", None)
+            errors.pop("source.source_sheet_name", None)
+        else:
+            need("source.source_database_path", db_path, "Source path")
+            need("source.source_schema_file", schema_file, "Source file")
+            if file_type not in FILE_FORMATS:
+                errors["source.source_file_type"] = f"Choose the file type: {', '.join(FILE_FORMATS)}"
 
     # target
     landing_db = _upper(tgt.get("landing_database"))
@@ -224,6 +256,10 @@ def validate(payload: Dict[str, Any]) -> Tuple[Dict[str, Any], List[Dict[str, An
         errors["snaplogic.api_key"] = "This looks like a token. Enter the name of the secret in your vault, never the token itself"
     elif api_key and not SECRET_REF.match(api_key):
         errors["snaplogic.api_key"] = "A secret name or path, such as vault:snaplogic/ingestion"
+    if kind:   # neither kind is an API source: no URL or key is asked or stored
+        api_url = api_key = ""
+        errors.pop("snaplogic.api_url", None)
+        errors.pop("snaplogic.api_key", None)
 
     # tables
     if not tables:
@@ -236,7 +272,10 @@ def validate(payload: Dict[str, Any]) -> Tuple[Dict[str, Any], List[Dict[str, An
         p = f"tables.{i}"
         sql = _text(t.get("source_table_sql"), 100_000).rstrip().rstrip(";").rstrip()
         if not sql:
-            errors[f"{p}.source_table_sql"] = "The source table or query is required"
+            errors[f"{p}.source_table_sql"] = ("The table name is required" if kind == "FILE"
+                                               else "The source table or query is required")
+        elif kind == "FILE" and not OBJECT.match(sql):
+            errors[f"{p}.source_table_sql"] = "A table name for the file's rows, such as CUSTOMERS (a file is not queried)"
         elif not one_statement(sql):
             errors[f"{p}.source_table_sql"] = "One table name or one query, without ';'"
         elif not OBJECT.match(sql) and (not re.match(r"^\s*(SELECT|WITH)\b", sql, re.I) or WRITES.search(STRING_LITERAL.sub("''", sql))):
@@ -257,6 +296,8 @@ def validate(payload: Dict[str, Any]) -> Tuple[Dict[str, Any], List[Dict[str, An
         if load_type == "SCD2" or bronze_load in ("SCD2", "MERGE"):
             if not pks:
                 errors[f"{p}.source_primary_keys"] = f"{'SCD2' if 'SCD2' in (load_type, bronze_load) else 'MERGE'} needs the primary key columns"
+        if kind == "DATABASE" and not pks and f"{p}.source_primary_keys" not in errors:
+            errors[f"{p}.source_primary_keys"] = "Primary keys are required for a relational database table"
         obj = _object_name(sql, file_type, schema_file) if sql else "DATA"
         landing = _upper(t.get("landing_table")) or (landing_table_name(source_name, obj)[:128] if source_name else "")
         bronze = _upper(t.get("bronze_table")) or landing
@@ -268,6 +309,8 @@ def validate(payload: Dict[str, Any]) -> Tuple[Dict[str, Any], List[Dict[str, An
                 errors[f"{p}.landing_table"] = f"Table {seen[landing] + 1} already loads {landing}"
             seen.setdefault(landing, i)
         watermark, ok = _timestamp(t.get("target_previous_load_time"))
+        if kind:   # not asked for either kind
+            watermark, ok = None, True
         if not ok:
             errors[f"{p}.target_previous_load_time"] = "A date and time, such as 2026-10-01 00:00"
         deletes = bool(t.get("deletes")) or _upper(t.get("source_delete_action"), 32) == "REQUIRED"
@@ -311,7 +354,8 @@ def validate(payload: Dict[str, Any]) -> Tuple[Dict[str, Any], List[Dict[str, An
     if schedule_cron and not CRON.match(schedule_cron):
         errors["load.schedule_cron"] = "Five cron fields and an optional time zone, such as 0 2 * * * UTC"
     schedule_frequency = _upper(load.get("schedule_frequency"), 32) or frequency
-    header = {"source_name": source_name, "source_type": source_type, "domain_id": _text(src.get("domain_id"), 36) or None,
+    header = {"source_name": source_name, "source_type": source_type, "domain_id": domain_id or None,
+              "source_kind": kind,
               "comments": _text(payload.get("comments"), 4000) or None, "parent_pipeline_name": parent,
               "landing_database": landing_db, "landing_schema": landing_schema, "load_frequency": frequency,
               "job_trigger_time": trigger or None, "is_active": is_active,

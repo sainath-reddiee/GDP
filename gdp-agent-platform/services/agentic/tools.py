@@ -925,6 +925,12 @@ def onboarding_catalog() -> Dict[str, Any]:
     req, opt = "required", "optional"
     return {
         "source": {"source_name": f"{req}: letters, digits and _, starts with a letter",
+                   "source_kind": (f"{opt}: DATABASE (source_type one of {list(ic.SOURCE_KINDS['DATABASE'])}; source_account, "
+                                   "source_database_path as the database, source_schema_file as the schema, domain_id and "
+                                   "every table's source_primary_keys are required) or FILE (source_type one of "
+                                   f"{list(ic.SOURCE_KINDS['FILE'])}; source_account, source_database_path as the path, "
+                                   f"source_schema_file as the file, domain_id and source_file_type one of {list(ic.FILE_FORMATS)} "
+                                   "are required; each table is a table name; keys only for SCD2 or MERGE)"),
                    "source_type": f"{req}: one of {list(ic.SOURCE_TYPES)}",
                    "source_file_type": f"{opt}: one of {list(ic.FILE_TYPES)} (TABLE for a database)",
                    "source_sheet_name": "required when source_file_type is XLSX",
