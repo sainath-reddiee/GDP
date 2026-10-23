@@ -116,6 +116,26 @@ export function planNull(rows: MappingRow[], selected: Set<string>): BulkPlan {
   };
 }
 
+/** The adjudicator said this source column has no target in its table. */
+export function aiSaysNone(c: Candidate) {
+  return ["NONE", "NULL"].includes(String(c.llm_preferred ?? "").trim().toUpperCase());
+}
+
+/** Pending rows the engine found no good match for (MANUAL) and the AI says have no target: NULL with one confirmation. */
+export function aiNullRows(rows: MappingRow[]) {
+  return rows.filter((r) => r.status === "pending" && r.top.recommendation === "MANUAL" && aiSaysNone(r.top));
+}
+
+/** Where the AI prefers a column the row's own table does not have: the run's other table that has it (by name). */
+export function aiElsewhere(row: MappingRow, targets: MappingOverview["targets"]) {
+  const preferred = String(row.top.llm_preferred ?? "").trim().toUpperCase();
+  if (!preferred || aiSaysNone(row.top) || preferred === String(row.top.target_column).toUpperCase()) return null;
+  const here = targets.some((t) => (t.target_table_id || row.tableId) === row.tableId && t.column_name.toUpperCase() === preferred);
+  if (here) return null;
+  const there = targets.find((t) => t.target_table_id && t.target_table_id !== row.tableId && t.column_name.toUpperCase() === preferred);
+  return there ? { column: there.column_name, table: there.target_table ?? "" } : null;
+}
+
 /** The row a suggestion is for. */
 export function suggestionKey(s: MappingSuggestion, first: string) {
   return rowKey(s.source_column_id, s.target_table_id || first);

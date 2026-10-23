@@ -21,7 +21,8 @@ const SYSTEM_DERIVED: (string | null)[] = ["SURROGATE_KEY", "RECORD_SOURCE", "AU
 const isDerived = (t: { semantic_type: string | null; column_name: string }) =>
   SYSTEM_DERIVED.includes(t.semantic_type) || /^REF_[A-Z0-9_]+_SKEY$/i.test(t.column_name);
 import {
-  buildRows, firstTableId, planAcceptAi, planApproveTop, planNull, savedKeys, suggestionKey, withJustification,
+  aiElsewhere, aiNullRows, buildRows, firstTableId, planAcceptAi, planApproveTop, planNull, savedKeys, suggestionKey,
+  withJustification,
   type BulkPlan, type MappingRow,
 } from "./mapping-plan";
 
@@ -154,6 +155,14 @@ export function MappingBoard({ runId, data }: { runId: string; data: MappingOver
 
   const approveSelected = (ids: Set<string>, minScore = 0, label = "Approved suggested targets") =>
     runPlan(label, planApproveTop(rows, ids, minScore), "Reviewed the ranked evidence; the top candidate is the correct target.");
+
+  // rows with no good match that the AI also says have no target: NULL in one go, after one confirmation
+  const aiNulls = useMemo(() => aiNullRows(rows), [rows]);
+  const applyAiNulls = () => {
+    const note = "No good candidate, and the AI copilot found no target column in this table: load this source field as NULL.";
+    setNote(note);
+    setConfirm({ title: "Apply AI NULLs", plan: { ...planNull(rows, new Set(aiNulls.map((r) => r.id))), needsReason: false }, defaultNote: note });
+  };
 
   const nullSelected = (ids: Set<string>) =>
     commit(withJustification(planNull(rows, ids), "No matching target column; load this source field as NULL."),
@@ -301,6 +310,12 @@ export function MappingBoard({ runId, data }: { runId: string; data: MappingOver
             onClick={() => setShowAi((v) => !v)}>
             {aiPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Bot className="h-4 w-4" />} AI copilot
           </Button>
+          {aiNulls.length > 0 && (
+            <Button size="sm" variant="outline" disabled={pending} onClick={applyAiNulls} data-testid="apply-ai-nulls"
+              title="Rows with no good match (manual) that the AI review says have no target in their table">
+              <CircleSlash className="h-4 w-4" /> Apply AI NULLs ({aiNulls.length})
+            </Button>
+          )}
           {aiCount > 0 && (
             <Button size="sm" variant="outline" disabled={pending} onClick={() => acceptAi()}>
               <Sparkles className="h-4 w-4" /> Accept all AI suggestions ({aiCount})
@@ -339,6 +354,12 @@ export function MappingBoard({ runId, data }: { runId: string; data: MappingOver
         {confirm && (
           <div className="space-y-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm">
             <p className="font-medium">{confirm.title}: {confirm.plan.decisions.length} column(s)</p>
+            {confirm.title === "Apply AI NULLs" && (
+              <p className="text-xs text-muted-foreground">
+                {aiNulls.slice(0, 12).map((r) => `${tables.length > 1 ? `${r.table}.` : ""}${r.column}${multi ? ` → ${r.targetTable}` : ""}`).join(", ")}{aiNulls.length > 12 ? ", …" : ""} load as NULL.
+                You can still change any of them afterwards.
+              </p>
+            )}
             {confirm.plan.skipped.length > 0 && (
               <ul className="list-inside list-disc text-xs text-amber-800">
                 {confirm.plan.skipped.slice(0, 8).map((s) => <li key={s.column}>{s.column} skipped: {s.reason}</li>)}
@@ -491,9 +512,18 @@ export function MappingBoard({ runId, data }: { runId: string; data: MappingOver
                                 <span className="text-muted-foreground">· {pct(ai.confidence)}</span>
                               </span>
                             )}
-                            {!ai && r.top.llm_agrees === false && r.status === "pending" && (
-                              <span className="mt-0.5 block text-[11px] text-amber-700">AI preferred {r.top.llm_preferred}</span>
-                            )}
+                            {!ai && r.top.llm_agrees === false && r.status === "pending" && (() => {
+                              const elsewhere = aiElsewhere(r, data.targets);
+                              return elsewhere ? (
+                                <span className="mt-0.5 block text-[11px] text-violet-700" data-testid="ai-elsewhere">
+                                  AI: {elsewhere.column} in {elsewhere.table}, another of this run&apos;s tables
+                                </span>
+                              ) : (
+                                <span className="mt-0.5 block text-[11px] text-amber-700">
+                                  {["NONE", "NULL"].includes(String(r.top.llm_preferred).toUpperCase()) ? "AI: no target here" : `AI preferred ${r.top.llm_preferred}`}
+                                </span>
+                              );
+                            })()}
                             {multi && <span className="mt-0.5 block text-[11px] text-muted-foreground">in {r.targetTable}</span>}
                             {conflict && <span className="mt-0.5 block text-[11px] text-amber-700">target taken by {conflict}</span>}
                           </td>
