@@ -4,7 +4,7 @@ applied to the target registry and knowledge on approval.
 The design is grounded only in what the platform knows: the run's profiled source columns, the domain's registered
 target models and its MODEL_DEFINITION / NAMING_STANDARD / GLOSSARY / MAPPING_PATTERN knowledge, and the modeling
 skills (AI-MODEL-GENERATION, SEMANTIC-COLUMN-CLUSTERING). Conventions (audit columns, surrogate keys, naming, SCD)
-are the developer's choice per design: GDP, the company standard, custom toggles, or none at all.
+are the developer's choice per design: GDP, the organisation standard, custom toggles, or none at all.
 
 Every save is a new row in CORE.MODEL_DESIGN; approval registers the model's entities as targets (columns set
 exactly to the design), writes MODEL_SPEC, points the run at the primary entity and stores MODEL_DEFINITION knowledge.
@@ -61,10 +61,15 @@ def conventions(preset: str, custom: Optional[Dict[str, Any]] = None, company: O
             "scd_type": scd if scd in (1, 2) else None, "soft_delete": bool(c.get("soft_delete"))}
 
 
+# how a preset is named to people and to the model: COMPANY is the organisation's standard, never the COMPANY domain
+PRESET_NAMES = {"GDP": "GDP standard", "COMPANY": "organisation standard (the organisation's generic standard)",
+                "CUSTOM": "custom conventions"}
+
+
 def describe_conventions(c: Dict[str, Any]) -> str:
     if c.get("preset") == "NONE":
         return "No conventions: model freely from the source and domain context. Do not add audit or surrogate columns."
-    parts = [f"Convention preset: {c['preset']}."]
+    parts = [f"Convention preset: {PRESET_NAMES.get(c['preset'], c['preset'])}."]
     if c.get("audit_columns"):
         parts.append(f"Every entity ends with these audit columns: {', '.join(c['audit_columns'])} (derived, no source).")
     if c.get("surrogate_key") != "none":

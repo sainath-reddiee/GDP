@@ -13,14 +13,15 @@ import { cn } from "@/lib/utils";
 import { TagEditor } from "@/components/tag-editor";
 import { useToast } from "@/components/ui/toast";
 import {
-  approveDesign, checkDesign, diffDesigns, generateDesign, proposeDesign, saveDesign,
-  type Attribute, type Conventions, type Design, type DesignVersion, type DiffChange, type Entity, type Issue,
-  type ModelPayload, type StoredTable, type WorkbenchState,
+  applyDomainModel, approveDesign, checkDesign, diffDesigns, generateDesign, proposeDesign, saveDesign,
+  type Attribute, type Conventions, type Design, type DesignVersion, type DiffChange, type DomainModelSummary, type Entity,
+  type Issue, type ModelPayload, type StoredTable, type WorkbenchState,
 } from "./model-actions";
 
 const PRESETS: { key: Conventions["preset"]; label: string; hint: string }[] = [
   { key: "NONE", label: "Free modeling", hint: "No conventions injected; shape the model as you like" },
-  { key: "COMPANY", label: "Company standard", hint: "Your organisation's generic standard (Admin settings)" },
+  // COMPANY is the stored key; the name avoids any confusion with the COMPANY domain
+  { key: "COMPANY", label: "Organisation standard", hint: "Your organisation's generic standard (Admin settings, Standards); the same for every domain" },
   { key: "GDP", label: "GDP standard", hint: "Hub/spoke, GDP keys and audit columns" },
   { key: "CUSTOM", label: "Custom", hint: "Pick audit columns, keys, naming and history yourself" },
 ];
@@ -177,6 +178,47 @@ function EntityCard({ entity, index, issues, editable, onChange, onRemove }: {
   );
 }
 
+/** Use the domain's approved model as it is: no AI design and no proposal; the run maps to its hub and every
+ * spoke with columns. */
+function UseDomainModel({ dm, inUse, canApply, busy, onUse }: {
+  dm: DomainModelSummary; inUse: boolean; canApply: boolean; busy: boolean; onUse: () => void;
+}) {
+  const usable = dm.entities.filter((e) => e.columns > 0);
+  const empty = dm.entities.filter((e) => e.columns === 0);
+  return (
+    <div className="space-y-2 rounded-lg border border-emerald-300/60 bg-emerald-50/40 p-3 dark:border-emerald-900 dark:bg-emerald-950/20" data-testid="use-domain-model">
+      <div className="flex flex-wrap items-start gap-2">
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-semibold">Use the {dm.domain_name ?? "domain"} model as it is</p>
+          <p className="text-xs text-muted-foreground">
+            The source maps to the approved model v{dm.version}: its hub and every table below. No design and no proposal;
+            anything the source has that the model does not is left unmapped.
+          </p>
+        </div>
+        {inUse ? <Badge variant="success">In use</Badge> : (
+          <Button size="sm" onClick={onUse} disabled={busy || !canApply || !dm.hub} data-testid="use-domain-model-button"
+                  title={!canApply ? "The run is past mapping, or you lack MODEL.EDIT" : !dm.hub ? "No table with columns" : undefined}>
+            {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}Use v{dm.version} as it is
+          </Button>
+        )}
+      </div>
+      <div className="flex flex-wrap gap-1.5">
+        {usable.map((e) => (
+          <span key={e.entity} className="inline-flex items-center gap-1 rounded-md border bg-card px-2 py-0.5 text-[11px]" title={e.fqn}>
+            <span className="font-mono font-medium">{e.entity}</span>
+            <span className="text-muted-foreground">{e.role.toLowerCase()} · {e.columns} col{e.columns === 1 ? "" : "s"}</span>
+          </span>
+        ))}
+      </div>
+      {empty.length > 0 && (
+        <p className="text-[11px] text-amber-700">
+          {empty.map((e) => e.entity).join(", ")} {empty.length === 1 ? "has" : "have"} no columns in v{dm.version}, so nothing maps to {empty.length === 1 ? "it" : "them"} until a modeler adds them.
+        </p>
+      )}
+    </div>
+  );
+}
+
 function WorkbenchBanner({ wb }: { wb: WorkbenchState }) {
   const p = wb.proposal;
   const model = wb.model_id ?? p?.model_id ?? null;
@@ -325,6 +367,16 @@ export function ModelDesign({ runId, data, canApply, state, canEdit = true, canA
     }
     router.refresh();
   });
+  const useAsIs = () => start(async () => {
+    setMessage(null);
+    const r = await applyDomainModel(runId);
+    if (!r.ok) { say(false, r.error); return; }
+    const tables = r.data.entities.filter((e) => e.columns > 0).length;
+    say(true, `The run maps to domain model v${r.data.version} as it is: ${r.data.entity}${tables > 1 ? ` and ${tables - 1} more table${tables === 2 ? "" : "s"}` : ""}. Generate mapping candidates next.`
+      + (r.data.withdrawn ? ` ${r.data.withdrawn} pending proposal${r.data.withdrawn === 1 ? " was" : "s were"} withdrawn.` : "")
+      + (r.data.mapping_reset ? " Mapping was sent back so candidates are regenerated for it." : ""));
+    router.refresh();
+  });
   const compare = () => start(async () => {
     const prev = versions.find((v) => v.version < (shown?.version ?? 0));
     if (!shown || !prev) return;
@@ -360,6 +412,12 @@ export function ModelDesign({ runId, data, canApply, state, canEdit = true, canA
       {!collapsed && (
         <>
           {wb?.enforced && <WorkbenchBanner wb={wb} />}
+          {wb?.domain_model && (
+            <UseDomainModel dm={wb.domain_model} busy={busy} onUse={useAsIs}
+              canApply={canEdit && ["PROFILING_COMPLETE", "DOMAIN_IDENTIFIED", "MAPPING_PENDING", "MAPPING_REVIEW"].includes(state)}
+              inUse={wb.model_id === wb.domain_model.model_id && wb.model_version === wb.domain_model.version
+                     && wb.model_entity === wb.domain_model.hub && !wb.proposal} />
+          )}
           {versions.length > 0 && (
             <p className="text-xs text-muted-foreground">
               Every saved version keeps its tables in the Model Store, where they can be reopened and edited after this run moves on.{" "}

@@ -1015,16 +1015,60 @@ def _workbench_enforced(db: Db) -> bool:
 def _workbench_state(db: Db, run_id: str) -> dict:
     from services.modeling.run_link import pending_for_run
 
+    from services.modeling.run_link import domain_model_summary
+
     out: dict = {"enforced": _workbench_enforced(db), "model_id": None, "model_version": None, "model_entity": None,
-                 "proposal": None}
+                 "proposal": None, "domain_model": None}
     try:
-        found = db.query("SELECT MODEL_ID, MODEL_VERSION, MODEL_ENTITY FROM CORE.WORKFLOW_RUN WHERE RUN_ID = %s", (run_id,))
+        found = db.query("SELECT MODEL_ID, MODEL_VERSION, MODEL_ENTITY, DOMAIN_ID FROM CORE.WORKFLOW_RUN WHERE RUN_ID = %s",
+                         (run_id,))
         if found:
             out.update({k: found[0].get(k) for k in ("model_id", "model_version", "model_entity")})
         out["proposal"] = invoke_source(db, pending_for_run, run_id)
+        if found and found[0].get("domain_id"):   # what "use the domain model as it is" would map to
+            out["domain_model"] = invoke_source(db, domain_model_summary, found[0]["domain_id"])
     except Exception:
         pass  # before V039
     return out
+
+
+@app.post("/api/runs/{run_id}/model/use-domain-model")
+def use_domain_model(run_id: str, db: Db = Depends(current_db)):
+    """Map the run to the domain's approved model as it is: pinned to its hub, every active entity (hub and spokes)
+    its target set, with no AI design and no proposal (any undecided proposal of the run is withdrawn)."""
+    from services.modeling.run_link import domain_model_summary, withdraw_run_proposals
+
+    found = db.query("SELECT DOMAIN_ID, CURRENT_STATE FROM CORE.WORKFLOW_RUN WHERE RUN_ID = %s", (run_id,))
+    if not found:
+        raise HTTPException(404, "run not found")
+    if not found[0].get("domain_id"):
+        raise HTTPException(409, "Identify the run's domain first; its model belongs to that domain.")
+    if found[0]["current_state"] not in MODEL_APPLY_STATES:
+        raise HTTPException(409, f"The run is at {found[0]['current_state']}. Reopen mapping before changing the target model.")
+    try:
+        summary = invoke_source(db, domain_model_summary, found[0]["domain_id"])
+    except Exception as exc:
+        raise _snowflake_error(exc) from exc
+    if not summary:
+        raise HTTPException(409, "The domain has no approved model yet: design one here and propose it, or approve one in "
+                                 "the Model Workbench.")
+    if not summary["hub"]:
+        raise HTTPException(409, f"Domain model v{summary['version']} has no table with columns to map to.")
+    try:
+        pin = pin_run_model(db, run_id, summary["model_id"], summary["version"], summary["hub"], 0)
+    except AssertionError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except Exception as exc:
+        raise _snowflake_error(exc) from exc
+    if not pin.get("pinned"):
+        raise HTTPException(409, pin.get("detail") or "the run could not use the domain model")
+    withdrawn = 0
+    try:
+        withdrawn = invoke_source(db, withdraw_run_proposals, run_id, str(db.user or ""))
+    except Exception:
+        pass  # before V039: no proposals to withdraw
+    return {**pin, "model_id": summary["model_id"], "version": summary["version"], "entity": summary["hub"],
+            "entities": summary["entities"], "withdrawn": withdrawn}
 
 
 def pin_run_model(db: Db, run_id: str, model_id: str, version: int, entity: str, design_version: int = 0) -> dict:
@@ -2537,12 +2581,35 @@ def _mapping_target_table(db: Db, run_id: str) -> Optional[dict]:
     return found[0] if found else None
 
 
+def _mapping_target_tables(db: Db, run_id: str) -> list[dict]:
+    """The run's target tables (CORE.RUN_TARGET, V074), hub first, each with its role; the one target table when the
+    run has no target set."""
+    try:
+        found = db.query(
+            """
+            SELECT TB.TARGET_TABLE_ID, TB.TARGET_TABLE, TB.TARGET_DATABASE, TB.TARGET_SCHEMA, TB.GRAIN, R.ROLE, R.ORDINAL
+              FROM CORE.RUN_TARGET R
+              JOIN CORE.TARGET_TABLE_REGISTRY TB ON TB.TARGET_TABLE_ID = R.TARGET_TABLE_ID AND TB.ACTIVE_FLAG
+             WHERE R.RUN_ID = %s AND R.IS_CURRENT AND R.INCLUDED
+             ORDER BY R.ORDINAL
+            """,
+            (run_id,),
+        )
+    except Exception:
+        found = []  # before V074
+    if found:
+        return found
+    table = _mapping_target_table(db, run_id)
+    return [{**table, "role": "TABLE", "ordinal": 1}] if table else []
+
+
 def _mapping_targets(db: Db, target_table_id: str) -> list[dict]:
     return db.query(
         """
         SELECT T.TARGET_COLUMN_ID, T.COLUMN_NAME, T.DATA_TYPE, T.NULLABLE, T.IS_BUSINESS_KEY, T.SEMANTIC_TYPE,
-               T.IS_PII, T.BUSINESS_DEFINITION AS DEFINITION
+               T.IS_PII, T.BUSINESS_DEFINITION AS DEFINITION, T.TARGET_TABLE_ID, TB.TARGET_TABLE
           FROM CORE.TARGET_COLUMN_REGISTRY T
+          JOIN CORE.TARGET_TABLE_REGISTRY TB ON TB.TARGET_TABLE_ID = T.TARGET_TABLE_ID
          WHERE T.TARGET_TABLE_ID = %s
          ORDER BY T.ORDINAL_POSITION
         """,
@@ -2622,28 +2689,55 @@ def get_mapping(run_id: str, db: Db = Depends(current_db)):
                C.GENERATED_REASON, C.TRANSFORMATION, C.SEMANTIC_SCORE, C.KEYWORD_SCORE, C.DATATYPE_SCORE,
                C.STATISTICAL_SCORE, C.DOMAIN_SCORE, C.CONTEXT_SCORE, C.HISTORICAL_SCORE,
                C.EVIDENCE_JSON:llm:preferred_target::VARCHAR AS LLM_PREFERRED,
-               C.EVIDENCE_JSON:llm:agrees::BOOLEAN AS LLM_AGREES
+               C.EVIDENCE_JSON:llm:agrees::BOOLEAN AS LLM_AGREES,
+               T.TARGET_TABLE_ID, TT.TARGET_TABLE
           FROM CORE.MAPPING_CANDIDATE C
           JOIN CORE.LANDING_COLUMN_REGISTRY L ON L.LANDING_COLUMN_ID = C.SOURCE_COLUMN_ID
           JOIN CORE.LANDING_TABLE_REGISTRY TBL ON TBL.LANDING_ID = L.LANDING_ID
           JOIN CORE.TARGET_COLUMN_REGISTRY T ON T.TARGET_COLUMN_ID = C.TARGET_COLUMN_ID
+          JOIN CORE.TARGET_TABLE_REGISTRY TT ON TT.TARGET_TABLE_ID = T.TARGET_TABLE_ID
          WHERE C.RUN_ID = %s AND C.IS_CURRENT
-         ORDER BY TBL.SOURCE_TABLE, L.COLUMN_NAME, C.RANK
+         ORDER BY TBL.SOURCE_TABLE, L.COLUMN_NAME, TT.TARGET_TABLE, C.RANK
         """,
         (run_id,),
     )
-    decisions = db.query(
-        """
+    decision_sql = """
         SELECT D.DECISION_ID, D.SOURCE_COLUMN_ID, D.TARGET_COLUMN_ID, D.CANDIDATE_ID, D.DECISION,
-               D.TRANSFORMATION, D.BUSINESS_JUSTIFICATION, D.REVIEWER, D.REVIEWED_AT::VARCHAR AS REVIEWED_AT
-          FROM CORE.MAPPING_DECISION D
+               D.TRANSFORMATION, D.BUSINESS_JUSTIFICATION, D.REVIEWER, D.REVIEWED_AT::VARCHAR AS REVIEWED_AT{table}
+          FROM CORE.MAPPING_DECISION D{join}
          WHERE D.RUN_ID = %s AND D.IS_CURRENT
-        """,
-        (run_id,),
-    )
-    table = _mapping_target_table(db, run_id)
-    targets = _mapping_targets(db, table["target_table_id"]) if table else []
+        """
+    try:   # a decision is per source column and target table (V074)
+        decisions = db.query(decision_sql.format(
+            table=", COALESCE(D.TARGET_TABLE_ID, TC.TARGET_TABLE_ID) AS TARGET_TABLE_ID",
+            join=" LEFT JOIN CORE.TARGET_COLUMN_REGISTRY TC ON TC.TARGET_COLUMN_ID = D.TARGET_COLUMN_ID"), (run_id,))
+    except Exception:
+        decisions = db.query(decision_sql.format(table="", join=""), (run_id,))
+    tables = _mapping_target_tables(db, run_id)
+    targets = [t for table in tables for t in _mapping_targets(db, table["target_table_id"])]
     profile = _mapping_profile(db, run_id) if candidates else {}
+    # a run mapped to several tables continues in one table run per table (services/mapping/children)
+    table_runs = db.query("""SELECT RUN_ID, RUN_NAME, MODEL_ENTITY, TARGET_MODEL, CURRENT_STATE FROM CORE.WORKFLOW_RUN
+                              WHERE PARENT_RUN_ID = %s AND DELETED_AT IS NULL AND COALESCE(PIPELINE, 'SILVER') = 'SILVER'
+                              ORDER BY CREATED_AT""", (run_id,))
+    return {
+        "candidates": candidates, "decisions": decisions, "targets": targets,
+        "target_table": tables[0] if tables else None, "target_tables": tables, "profile": profile,
+        "bands": _ui_bands(db, run_id), "status": _mapping_status(db, run_id, candidates, decisions, targets),
+        "table_runs": table_runs,
+    }
+
+
+def _mapping_status(db: Db, run_id: str, candidates: list, decisions: list, targets: list) -> dict:
+    """The gate's own status (services/mapping mapping_status: per source column and table, required columns of each
+    table, the hub's minimum mapping), or the single-table status computed here when it cannot be read."""
+    from services.mapping.procedures import mapping_status
+
+    if candidates:
+        try:
+            return invoke_source(db, mapping_status, run_id)
+        except Exception:
+            pass
     from services.common.standard import SYSTEM_DERIVED as system_derived
     sources = {c["source_column_id"] for c in candidates}
     decided = {d["source_column_id"] for d in decisions}
@@ -2651,19 +2745,41 @@ def get_mapping(run_id: str, db: Db = Depends(current_db)):
     missing = [t["column_name"] for t in targets
                if not t["nullable"] and t["semantic_type"] not in system_derived and t["target_column_id"] not in mapped]
     undecided = sorted({c["source_column"] for c in candidates if c["source_column_id"] not in decided})
-    return {
-        "candidates": candidates, "decisions": decisions, "targets": targets,
-        "target_table": table, "profile": profile, "bands": _ui_bands(db, run_id),
-        "status": {
-            "source_columns": len(sources), "decided": len(sources & decided),
-            "undecided": undecided, "missing_required_targets": missing,
-            "complete": bool(sources) and sources <= decided and not missing,
-        },
-    }
+    return {"source_columns": len(sources), "decided": len(sources & decided), "undecided": undecided,
+            "missing_required_targets": missing, "complete": bool(sources) and sources <= decided and not missing}
+
+
+class TableRunsPublish(BaseModel):
+    base_branch: Optional[str] = Field(default=None, max_length=200)
+    cut_branch: Optional[str] = Field(default=None, max_length=200)
+    draft: bool = False
+
+
+@app.post("/api/runs/{run_id}/table-runs/publish")
+def publish_table_runs(run_id: str, body: TableRunsPublish, db: Db = Depends(current_db)):
+    """A Silver run mapped to a hub and its spokes: every table run's latest code as one branch and one pull request
+    (CORE.PUBLISH_DBT_PR, services/dbt/publish.publish_table_runs)."""
+    found = db.query("SELECT PARENT_RUN_ID, COALESCE(PIPELINE, 'SILVER') AS PIPELINE FROM CORE.WORKFLOW_RUN WHERE RUN_ID = %s",
+                     (run_id,))
+    if not found:
+        raise HTTPException(404, "run not found")
+    if found[0].get("parent_run_id"):
+        raise HTTPException(400, "this is a table run; publish all target tables from the run they came from")
+    if str(found[0]["pipeline"]).upper() == "GOLD":
+        raise HTTPException(400, "publish a Gold run's star schema from its Gold panel")
+    if not db.query("SELECT 1 FROM CORE.WORKFLOW_RUN WHERE PARENT_RUN_ID = %s AND DELETED_AT IS NULL LIMIT 1", (run_id,)):
+        raise HTTPException(409, "this run has no table runs: approve a mapping that targets several tables first")
+    return _publish_dbt(db, run_id, {"table_runs": True, **body.model_dump(exclude_none=True)})
+
+
+class MappingPair(BaseModel):
+    source_column_id: str
+    target_table_id: Optional[str] = None
 
 
 class MappingAssist(BaseModel):
     source_column_ids: list[str] = Field(default_factory=list, max_length=200)
+    pairs: list[MappingPair] = Field(default_factory=list, max_length=400)   # (source column, target table) rows
     instructions: str = Field(default="", max_length=2000)
 
 
@@ -2687,36 +2803,72 @@ def _mapping_assist_knowledge(db: Db, run_id: str, table: dict, targets: list) -
 
 @app.post("/api/runs/{run_id}/mapping/assist")
 def mapping_assist(run_id: str, body: MappingAssist, db: Db = Depends(current_db)):
-    """AI copilot: proposes a decision per column. Read-only — nothing is saved until the reviewer accepts."""
+    """AI copilot: proposes a decision per column and target table, one call per table (each with that table's
+    columns, candidates and knowledge). Read-only — nothing is saved until the reviewer accepts."""
     from services.mapping import assist
 
     data = get_mapping(run_id, db)
-    table = data["target_table"]
-    if not table or not data["candidates"]:
+    tables = data.get("target_tables") or ([data["target_table"]] if data["target_table"] else [])
+    if not tables or not data["candidates"]:
         raise HTTPException(409, "Generate mapping candidates first")
-    decided = {d["source_column_id"] for d in data["decisions"]}
-    wanted = set(body.source_column_ids) or {c["source_column_id"] for c in data["candidates"]} - decided
-    by_source: dict[str, list] = {}
-    for c in data["candidates"]:
-        by_source.setdefault(c["source_column_id"], []).append(c)
-    sources = []
-    for sid in sorted(wanted, key=lambda s: (by_source.get(s, [{}])[0].get("source_table") or "",
-                                             by_source.get(s, [{}])[0].get("source_column") or "")):
-        if sid not in by_source:
-            continue
-        first = by_source[sid][0]
-        sources.append(data["profile"].get(sid) or {
-            "source_column_id": sid, "source_table": first["source_table"], "column_name": first["source_column"],
-            "data_type": first["source_datatype"]})
-    sources = sources[:assist.MAX_COLUMNS]
-    if not sources:
-        return {"suggestions": [], "model": None, "skipped": 0}
+    first = tables[0]["target_table_id"]
+
+    def table_of(row: dict) -> str:
+        return row.get("target_table_id") or first
+
+    proposed = {(c["source_column_id"], table_of(c)) for c in data["candidates"]}
+    decided = {(d["source_column_id"], table_of(d)) for d in data["decisions"]}
+    if body.pairs:
+        wanted = {(p.source_column_id, p.target_table_id or first) for p in body.pairs} & proposed
+    elif body.source_column_ids:
+        wanted = {p for p in proposed if p[0] in set(body.source_column_ids)}
+    else:
+        wanted = proposed - decided
     taken = {d["target_column_id"]: d["source_column_id"] for d in data["decisions"]
-             if d["decision"] != "REJECTED" and d["target_column_id"] and d["source_column_id"] not in wanted}
-    notes, target_notes = _mapping_assist_knowledge(db, run_id, table, data["targets"])
-    prompt = assist.build_prompt(sources, by_source, data["targets"], table["target_table"], taken, body.instructions,
-                                 notes, target_notes)
+             if d["decision"] != "REJECTED" and d["target_column_id"] and (d["source_column_id"], table_of(d)) not in wanted}
     model = _model_for(db, "MAPPING")
+    suggestions: list = []
+    budget, skipped, used_model = assist.MAX_COLUMNS, 0, None
+    for table in tables:
+        tid = table["target_table_id"]
+        ids = {s for s, t in wanted if t == tid}
+        if not ids:
+            continue
+        by_source: dict[str, list] = {}
+        for c in data["candidates"]:
+            if table_of(c) == tid:
+                by_source.setdefault(c["source_column_id"], []).append(c)
+        sources = []
+        for sid in sorted(ids, key=lambda s: (by_source.get(s, [{}])[0].get("source_table") or "",
+                                              by_source.get(s, [{}])[0].get("source_column") or "")):
+            if sid not in by_source:
+                continue
+            top = by_source[sid][0]
+            sources.append(data["profile"].get(sid) or {
+                "source_column_id": sid, "source_table": top["source_table"], "column_name": top["source_column"],
+                "data_type": top["source_datatype"]})
+        skipped += max(0, len(sources) - budget)
+        sources = sources[:budget]
+        if not sources:
+            continue
+        budget -= len(sources)
+        targets = [t for t in data["targets"] if table_of(t) == tid]
+        notes, target_notes = _mapping_assist_knowledge(db, run_id, table, targets)
+        prompt = assist.build_prompt(sources, by_source, targets, table["target_table"], taken, body.instructions,
+                                     notes, target_notes)
+        raw, used_model = _mapping_assist_call(db, run_id, model, prompt)
+        for s in assist.normalize(raw, sources, by_source, targets, taken):
+            s["target_table_id"] = tid
+            s["target_table"] = table["target_table"]
+            s["decision"] = assist.to_decision(s)
+            suggestions.append(s)
+    return {"suggestions": suggestions, "model": used_model or (model if suggestions else None), "skipped": skipped}
+
+
+def _mapping_assist_call(db: Db, run_id: str, model: str, prompt: str) -> tuple:
+    """One structured Cortex call of the mapping copilot: (its JSON answer, the model that answered)."""
+    from services.mapping import assist
+
     started = time.time()
     try:
         result, query_id = db.query_with_id(
@@ -2739,11 +2891,7 @@ def mapping_assist(run_id: str, body: MappingAssist, db: Db = Depends(current_db
         raw = json.loads(raw) if isinstance(raw, str) else (raw or {})
     except ValueError as exc:
         raise HTTPException(502, "Cortex returned an answer that was not valid JSON. Try again.") from exc
-    suggestions = assist.normalize(raw, sources, by_source, data["targets"], taken)
-    for s in suggestions:
-        s["decision"] = assist.to_decision(s)
-    return {"suggestions": suggestions, "model": details.get("model", model),
-            "skipped": max(0, len(wanted) - len(sources))}
+    return raw, details.get("model", model)
 
 
 @app.post("/api/runs/{run_id}/sttm")

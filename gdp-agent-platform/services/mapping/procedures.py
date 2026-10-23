@@ -10,7 +10,7 @@ import hashlib
 import json
 import time
 import uuid
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from services.common.audit import record_cost, tool_call
 from services.common.llm import complete_json
@@ -64,13 +64,33 @@ def target_table(session, run: Dict[str, Any]) -> Dict[str, Any]:
     return found[0]
 
 
+def target_tables(session, run: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """The run's target tables (CORE.RUN_TARGET, V074): every included entity of its pinned domain model, hub first,
+    each a registry row with ROLE, ORDINAL and ENTITY_NAME. A run without a target set (single target, a child or gold
+    run, or before V074) has its one target table."""
+    try:
+        found = rows(session, """SELECT T.*, R.ROLE, R.ORDINAL, R.ENTITY_NAME FROM CORE.RUN_TARGET R
+                                   JOIN CORE.TARGET_TABLE_REGISTRY T ON T.TARGET_TABLE_ID = R.TARGET_TABLE_ID
+                                  WHERE R.RUN_ID = ? AND R.IS_CURRENT AND R.INCLUDED AND T.ACTIVE_FLAG
+                                  ORDER BY R.ORDINAL""", [run["RUN_ID"]])
+    except Exception as exc:
+        if not ("RUN_TARGET" in str(exc).upper() and "DOES NOT EXIST" in str(exc).upper()):
+            raise
+        found = []  # before V074
+    if found:
+        return found
+    single = target_table(session, run)
+    return [{**single, "ROLE": "TABLE", "ORDINAL": 1, "ENTITY_NAME": single["TARGET_TABLE"]}]
+
+
 def target_columns(session, target_table_id: str) -> List[Dict[str, Any]]:
     out = []
     for c in rows(session, """SELECT C.*, T.TARGET_TABLE FROM CORE.TARGET_COLUMN_REGISTRY C
                               JOIN CORE.TARGET_TABLE_REGISTRY T ON T.TARGET_TABLE_ID = C.TARGET_TABLE_ID
                               WHERE C.TARGET_TABLE_ID = ? ORDER BY C.ORDINAL_POSITION""", [target_table_id]):
         out.append({"target_column_id": c["TARGET_COLUMN_ID"], "column_name": c["COLUMN_NAME"],
-                    "table_name": c["TARGET_TABLE"], "data_type": c["DATA_TYPE"], "nullable": c["NULLABLE"],
+                    "table_name": c["TARGET_TABLE"], "target_table_id": c.get("TARGET_TABLE_ID") or target_table_id,
+                    "data_type": c["DATA_TYPE"], "nullable": c["NULLABLE"],
                     "semantic_type": c["SEMANTIC_TYPE"], "is_business_key": c["IS_BUSINESS_KEY"],
                     "is_pii": c["IS_PII"], "accepted_values": variant(c["ACCEPTED_VALUES"]) or [],
                     "definition": c["BUSINESS_DEFINITION"]})
@@ -366,6 +386,17 @@ def promote(cands: List[Dict[str, Any]], ranked: List[Dict[str, Any]], rule: Dic
     return out
 
 
+def tables_for_source(ranked_by_table: Dict[str, List[Dict[str, Any]]], promoted: Set[str]) -> List[str]:
+    """The target tables one source column is proposed for (pure): every table whose best candidate is worth a review
+    (AUTO_SUGGEST or HUMAN_REVIEW) or was set by a reference or gold rule, and always the table where it scores best,
+    so each source column is decided at least once. With one target table that table is always kept."""
+    scored = {t: r for t, r in ranked_by_table.items() if r}
+    if not scored:
+        return []
+    best = max(scored, key=lambda t: (scored[t][0]["final_score"], t))
+    return [t for t, r in scored.items() if t == best or t in promoted or r[0]["recommendation"] != "MANUAL"]
+
+
 def generate_mapping_candidates(session, run_id: str) -> Dict[str, Any]:
     stage = Stage(session, run_id)
     if stage.state == "PROFILING_COMPLETE":
@@ -379,20 +410,31 @@ def generate_mapping_candidates(session, run_id: str) -> Dict[str, Any]:
         try:
             guidance = use_stage(session, "MAPPING", run_standard(stage.run), run_id=run_id)
             run = stage.run
-            target = target_table(session, run)
-            targets = target_columns(session, target["TARGET_TABLE_ID"])
-            assert targets, (f"TARGET_EMPTY: {target['TARGET_DATABASE']}.{target['TARGET_SCHEMA']}."
-                             f"{target['TARGET_TABLE']} has no registered columns. Register the table again from "
-                             "Sources so its columns are captured, or pick another target.")
+            # every table of the run's target set (a hub and its spokes), hub first; one table for a single target
+            tables = target_tables(session, run)
+            columns_by_table = {t["TARGET_TABLE_ID"]: target_columns(session, t["TARGET_TABLE_ID"]) for t in tables}
+            if len(tables) == 1:
+                only = tables[0]
+                assert columns_by_table[only["TARGET_TABLE_ID"]], (
+                    f"TARGET_EMPTY: {only['TARGET_DATABASE']}.{only['TARGET_SCHEMA']}.{only['TARGET_TABLE']} has no "
+                    "registered columns. Register the table again from Sources so its columns are captured, or pick "
+                    "another target.")
+            tables = [t for t in tables if columns_by_table[t["TARGET_TABLE_ID"]]]
+            assert tables, ("TARGET_EMPTY: none of the run's target tables has registered columns. Approve the domain "
+                            "model version that defines them, or pick another target.")
+            target = tables[0]   # the hub: the one target of what reads a single table
             try:
                 guidance += "\n\n" + domain_context(session, run["DOMAIN_ID"], target["TARGET_TABLE"], 4000,
                                                      run_standard(run), run_pipeline(run))
             except Exception:
                 pass
-            mappable = features.mappable_targets(targets)
+            mappable_by_table = {t["TARGET_TABLE_ID"]: features.mappable_targets(columns_by_table[t["TARGET_TABLE_ID"]])
+                                 for t in tables}
+            mappable = [m for t in tables for m in mappable_by_table[t["TARGET_TABLE_ID"]]]
             sources = source_columns(session, run_id)
             assert sources, "no current profile for this run"
-            knowledge = domain_knowledge(session, run["DOMAIN_ID"], run_id, target)
+            # learned evidence is scoped to each table: a column name means different things in two tables
+            knowledge_by_table = {t["TARGET_TABLE_ID"]: domain_knowledge(session, run["DOMAIN_ID"], run_id, t) for t in tables}
             cfg = _scoring_config(session, run["DOMAIN_ID"])
             top_k = int(config_value(session, "MAPPING_TOP_K", 3))
             model = config_value(session, "EMBED_MODEL", EMBED_MODEL_DEFAULT)
@@ -401,58 +443,81 @@ def generate_mapping_candidates(session, run_id: str) -> Dict[str, Any]:
             cosines = cosine_matrix(session, src_emb, tgt_emb)
             domain_name = scalar(session, "SELECT DOMAIN_NAME FROM CORE.DOMAIN_REGISTRY WHERE DOMAIN_ID = ?",
                                  [run["DOMAIN_ID"]])
-            gold_rules = _gold_rules(session, run, sources)
-            try:   # the person's own STTM for this layer ranks first (a reference input); gold model rules fill the rest
-                reference = _reference_sttm(session, run, target, sources)
-            except Exception:
-                reference = {"rules": {}, "lines": {}, "reference": None}
-            reference_rules = reference["rules"]
+            gold_rules = _gold_rules(session, run, sources)   # a gold run has one target table
+            references: Dict[str, Dict[str, Any]] = {}
+            for t in tables:
+                try:   # the person's own STTM for this layer ranks first (a reference input); gold model rules fill the rest
+                    references[t["TARGET_TABLE_ID"]] = _reference_sttm(session, run, t, sources)
+                except Exception:
+                    references[t["TARGET_TABLE_ID"]] = {"rules": {}, "lines": {}, "reference": None}
             engine_first: Dict[str, str] = {}
 
-            ranked_by_source: List[Tuple[Dict[str, Any], List[Dict[str, Any]]]] = []
+            # each source column is ranked against each table on its own (a source can feed the hub and a spoke), and
+            # kept for the tables where it is worth a decision (tables_for_source)
+            ranked_by_table: Dict[str, List[Tuple[Dict[str, Any], List[Dict[str, Any]]]]] = {t["TARGET_TABLE_ID"]: [] for t in tables}
             hits_by_source: Dict[str, List[Dict[str, Any]]] = {}
             search_calls = 0
             for s in sources:
-                cands = []
-                for t in mappable:
-                    f = features.all_features(s, t, knowledge, cosines.get((s["source_column_id"], t["target_column_id"])))
-                    cands.append({"target": t, **f})
-                ranked = scoring.rank_candidates(cands, cfg["weights"], cfg["thresholds"], top_k)
-                if ranked:
-                    engine_first[str(s["column_name"]).upper()] = str(ranked[0]["target"]["column_name"]).upper()
-                rule = reference_rules.get(str(s["column_name"]).upper()) or gold_rules.get(str(s["column_name"]).upper())
-                if rule:
-                    ranked = promote(cands, ranked, rule, top_k)
+                name = str(s["column_name"]).upper()
+                per_table: Dict[str, List[Dict[str, Any]]] = {}
+                promoted: Set[str] = set()
+                for t in tables:
+                    tid = t["TARGET_TABLE_ID"]
+                    cands = []
+                    for m in mappable_by_table[tid]:
+                        f = features.all_features(s, m, knowledge_by_table[tid],
+                                                  cosines.get((s["source_column_id"], m["target_column_id"])))
+                        cands.append({"target": m, **f})
+                    ranked = scoring.rank_candidates(cands, cfg["weights"], cfg["thresholds"], top_k)
+                    if ranked and tid == target["TARGET_TABLE_ID"]:
+                        engine_first[name] = str(ranked[0]["target"]["column_name"]).upper()
+                    rule = references[tid]["rules"].get(name) or (gold_rules.get(name) if tid == target["TARGET_TABLE_ID"] else None)
+                    if rule:
+                        promoted_list = promote(cands, ranked, rule, top_k)
+                        if promoted_list is not ranked:
+                            promoted.add(tid)
+                        ranked = promoted_list
+                    per_table[tid] = ranked
+                keep = tables_for_source(per_table, promoted)
                 try:
                     hits = ks.search(session, database, f"{s['column_name']} {s.get('description') or ''}",
                                      domain=domain_name, limit=3)
                     search_calls += 1
                 except Exception:
                     hits = []
-                for c in ranked:
-                    c["evidence"]["knowledge"] = [h.get("TITLE") for h in hits]
-                hits_by_source[str(s["column_name"]).upper()] = hits
-                ranked_by_source.append((s, ranked))
+                for tid in keep:
+                    for c in per_table[tid]:
+                        c["evidence"]["knowledge"] = [h.get("TITLE") for h in hits]
+                    ranked_by_table[tid].append((s, per_table[tid]))
+                hits_by_source[name] = hits
 
             try:
-                _score_mapping(session, run_id, run, reference, engine_first, sources)
+                _score_mapping(session, run_id, run, references[target["TARGET_TABLE_ID"]], engine_first, sources)
             except Exception:
                 pass
             try:   # ask the domain owner where the engine is unsure (services/learning/questions.py)
                 from services.learning import questions
 
-                questions.ask(session, run["DOMAIN_ID"], run_pipeline(run), run_id, "MAPPING",
-                              questions.mapping_questions(ranked_by_source, target["TARGET_TABLE"]))
+                for t in tables:
+                    questions.ask(session, run["DOMAIN_ID"], run_pipeline(run), run_id, "MAPPING",
+                                  questions.mapping_questions(ranked_by_table[t["TARGET_TABLE_ID"]], t["TARGET_TABLE"]))
             except Exception:
                 pass
-            ambiguous = [(s, r) for s, r in ranked_by_source if r and r[0]["ambiguous"]]
-            llm = _adjudicate(session, run_id, ambiguous, guidance, knowledge["notes"], knowledge, hits_by_source)
+            # the adjudicator sees one table at a time, with that table's knowledge
+            verdicts: Dict[str, Dict[str, Dict]] = {}
+            ambiguous_count = 0
+            for t in tables:
+                tid = t["TARGET_TABLE_ID"]
+                ambiguous = [(s, r) for s, r in ranked_by_table[tid] if r and r[0]["ambiguous"]]
+                ambiguous_count += len(ambiguous)
+                verdicts[tid] = _adjudicate(session, run_id, ambiguous, guidance, knowledge_by_table[tid]["notes"],
+                                            knowledge_by_table[tid], hits_by_source)
             version = (scalar(session, "SELECT MAX(CANDIDATE_VERSION) FROM CORE.MAPPING_CANDIDATE WHERE RUN_ID = ?",
                               [run_id]) or 0) + 1
             knowledge_version = current_knowledge_version(session, run["DOMAIN_ID"])
             values = []
-            for s, ranked in ranked_by_source:
-                verdict = llm.get(s["column_name"].upper())
+            for tid, s, ranked in ((t["TARGET_TABLE_ID"], s, r) for t in tables for s, r in ranked_by_table[t["TARGET_TABLE_ID"]]):
+                verdict = verdicts[tid].get(s["column_name"].upper())
                 for c in ranked:
                     reason = scoring.explain(c)
                     gr = (c.get("evidence") or {}).get("gold_rule")
@@ -475,7 +540,7 @@ def generate_mapping_candidates(session, run_id: str) -> Dict[str, Any]:
                                    {**c["evidence"], "margin": c["margin"], "weights": cfg["weights"]},
                                    clip(reason), c["transformation"], cfg["config_id"],
                                    verdict["model"] if verdict and c["rank"] == 1 else "hybrid-scoring-v1",
-                                   knowledge_version, version])
+                                   knowledge_version, version, tid])
 
             def write(_event_id: str) -> None:
                 session.sql("UPDATE CORE.MAPPING_CANDIDATE SET IS_CURRENT = FALSE WHERE RUN_ID = ? AND IS_CURRENT",
@@ -486,20 +551,32 @@ def generate_mapping_candidates(session, run_id: str) -> Dict[str, Any]:
                              "CONTEXT_SCORE", "HISTORICAL_SCORE", "FINAL_SCORE", "RANK", "CONFIDENCE",
                              "RECOMMENDATION", "EVIDENCE_JSON", "GENERATED_REASON", "TRANSFORMATION",
                              "SCORING_CONFIG_ID", "MODEL_VERSION", "KNOWLEDGE_VERSION", "CANDIDATE_VERSION",
-                             "IS_CURRENT"],
+                             "TARGET_TABLE_ID", "IS_CURRENT"],
                             ["?", "?", "?", "?", "?"] + ["?::FLOAT"] * 8 + ["?::NUMBER", "?::FLOAT", "?",
-                             "PARSE_JSON(?)", "?", "NULLIF(?, '')", "?", "?", "?", "?::NUMBER", "TRUE"],
+                             "PARSE_JSON(?)", "?", "NULLIF(?, '')", "?", "?", "?", "?::NUMBER", "?", "TRUE"],
                             values)
 
-            covered = {r[0]["target"]["column_name"] for _, r in ranked_by_source if r and r[0]["recommendation"] != "MANUAL"}
-            unmapped = [t["column_name"] for t in mappable if t["column_name"] not in covered]
+            pairs = [(t, s, r) for t in tables for s, r in ranked_by_table[t["TARGET_TABLE_ID"]]]
+            by_table = []
+            for t in tables:
+                tid = t["TARGET_TABLE_ID"]
+                covered = {r[0]["target"]["column_name"] for s, r in ranked_by_table[tid]
+                           if r and r[0]["recommendation"] != "MANUAL"}
+                by_table.append({"target_table_id": tid, "table": t["TARGET_TABLE"], "role": t.get("ROLE") or "TABLE",
+                                 "targets": len(mappable_by_table[tid]), "source_columns": len(ranked_by_table[tid]),
+                                 "unmapped_targets": [m["column_name"] for m in mappable_by_table[tid]
+                                                      if m["column_name"] not in covered]})
+            unmapped = (by_table[0]["unmapped_targets"] if len(tables) == 1
+                        else [f"{b['table']}.{c}" for b in by_table for c in b["unmapped_targets"]])
             summary = {"source_columns": len(sources), "targets": len(mappable), "candidates": len(values),
-                       "auto_suggest": sum(1 for _, r in ranked_by_source if r and r[0]["recommendation"] == "AUTO_SUGGEST"),
-                       "ambiguous": len(ambiguous), "llm_adjudicated": len(llm), "search_calls": search_calls,
-                       "unmapped_targets": unmapped, "candidate_version": version}
+                       "auto_suggest": sum(1 for _, _, r in pairs if r and r[0]["recommendation"] == "AUTO_SUGGEST"),
+                       "ambiguous": ambiguous_count, "llm_adjudicated": sum(len(v) for v in verdicts.values()),
+                       "search_calls": search_calls, "unmapped_targets": unmapped, "candidate_version": version,
+                       "tables": by_table}
             record_cost(session, run_id, "MAPPING", model, {}, int((time.time() - started) * 1000),
                         tool_calls=1, search_calls=search_calls)
-            call.summary = (f"{summary['candidates']} candidates for {summary['source_columns']} source columns; "
+            call.summary = (f"{summary['candidates']} candidates for {summary['source_columns']} source columns"
+                            + (f" across {len(tables)} target tables" if len(tables) > 1 else "") + "; "
                             f"{summary['auto_suggest']} auto-suggested, {summary['ambiguous']} need review; "
                             f"Cortex Search {search_calls} calls")
         except Exception as exc:
@@ -510,31 +587,70 @@ def generate_mapping_candidates(session, run_id: str) -> Dict[str, Any]:
     return {"summary": summary, "state": stage.payload()}
 
 
+def minimum_mapping(hub: Dict[str, Any]) -> List[str]:
+    """The hub's model_spec.minimum_mapping (domain_pack.json) as column names (pure): the columns a load of the
+    domain must fill, wherever in the hub or its spokes they live."""
+    spec = variant(hub.get("MODEL_SPEC")) or {}
+    names = [str(c).strip().strip("`").strip().upper() for c in (spec.get("minimum_mapping") or [])]
+    return [n for n in names if n]
+
+
 def mapping_status(session, run_id: str) -> Dict[str, Any]:
-    """Progress towards the mapping gate: every proposed source column decided, every required target covered."""
-    sources = rows(session, """SELECT DISTINCT C.SOURCE_COLUMN_ID, L.COLUMN_NAME
+    """Progress towards the mapping gate: every proposed (source column, target table) decided, every required target
+    column of each table covered, and on a run with several tables the hub's minimum mapping covered somewhere (a
+    minimum column none of the run's tables has is reported, not blocking)."""
+    pairs = rows(session, """SELECT DISTINCT C.SOURCE_COLUMN_ID, L.COLUMN_NAME,
+                                    COALESCE(C.TARGET_TABLE_ID, T.TARGET_TABLE_ID) AS TARGET_TABLE_ID
                                FROM CORE.MAPPING_CANDIDATE C
                                JOIN CORE.LANDING_COLUMN_REGISTRY L ON L.LANDING_COLUMN_ID = C.SOURCE_COLUMN_ID
-                               WHERE C.RUN_ID = ? AND C.IS_CURRENT""", [run_id])
-    decisions = rows(session, """SELECT SOURCE_COLUMN_ID, DECISION, TARGET_COLUMN_ID FROM CORE.MAPPING_DECISION
-                                 WHERE RUN_ID = ? AND IS_CURRENT""", [run_id])
-    decided = {d["SOURCE_COLUMN_ID"] for d in decisions}
-    mapped_targets = {d["TARGET_COLUMN_ID"] for d in decisions if d["DECISION"] != "REJECTED"}
+                               LEFT JOIN CORE.TARGET_COLUMN_REGISTRY T ON T.TARGET_COLUMN_ID = C.TARGET_COLUMN_ID
+                              WHERE C.RUN_ID = ? AND C.IS_CURRENT""", [run_id])
+    decisions = rows(session, """SELECT D.SOURCE_COLUMN_ID, D.DECISION, D.TARGET_COLUMN_ID,
+                                        COALESCE(D.TARGET_TABLE_ID, T.TARGET_TABLE_ID) AS TARGET_TABLE_ID
+                                   FROM CORE.MAPPING_DECISION D
+                                   LEFT JOIN CORE.TARGET_COLUMN_REGISTRY T ON T.TARGET_COLUMN_ID = D.TARGET_COLUMN_ID
+                                  WHERE D.RUN_ID = ? AND D.IS_CURRENT""", [run_id])
     run = rows(session, "SELECT * FROM CORE.WORKFLOW_RUN WHERE RUN_ID = ?", [run_id])[0]
-    missing_required: List[str] = []
-    if sources and run["DOMAIN_ID"]:
-        for t in features.mappable_targets(target_columns(session, target_table(session, run)["TARGET_TABLE_ID"])):
-            if not t["nullable"] and t["target_column_id"] not in mapped_targets:
-                missing_required.append(t["column_name"])
-    undecided = [s["COLUMN_NAME"] for s in sources if s["SOURCE_COLUMN_ID"] not in decided]
+    tables = target_tables(session, run) if pairs and run["DOMAIN_ID"] else []
+    first = tables[0]["TARGET_TABLE_ID"] if tables else None
+    multi = len(tables) > 1
+    decided = {(d["SOURCE_COLUMN_ID"], d.get("TARGET_TABLE_ID") or first) for d in decisions}
+    mapped_targets = {d["TARGET_COLUMN_ID"] for d in decisions if d["DECISION"] != "REJECTED"}
+    open_pairs = [p for p in pairs if (p["SOURCE_COLUMN_ID"], p.get("TARGET_TABLE_ID") or first) not in decided]
+    by_table, missing_required, columns_by_name = [], [], {}
+    for t in tables:
+        tid = t["TARGET_TABLE_ID"]
+        columns = target_columns(session, tid)
+        for c in columns:
+            columns_by_name.setdefault(str(c["column_name"]).upper(), []).append(c["target_column_id"])
+        missing = [c["column_name"] for c in features.mappable_targets(columns)
+                   if not c["nullable"] and c["target_column_id"] not in mapped_targets]
+        missing_required += [f"{t['TARGET_TABLE']}.{m}" for m in missing] if multi else missing
+        by_table.append({"target_table_id": tid, "table": t["TARGET_TABLE"], "role": t.get("ROLE") or "TABLE",
+                         "missing_required_targets": missing,
+                         "undecided": sorted({p["COLUMN_NAME"] for p in open_pairs if (p.get("TARGET_TABLE_ID") or first) == tid})})
+    minimum_missing, minimum_unavailable = [], []
+    if multi:
+        for name in minimum_mapping(tables[0]):
+            ids = columns_by_name.get(name)
+            if not ids:
+                minimum_unavailable.append(name)
+            elif not any(i in mapped_targets for i in ids):
+                minimum_missing.append(name)
+    sources = {p["SOURCE_COLUMN_ID"]: p["COLUMN_NAME"] for p in pairs}
+    undecided_sources = {p["SOURCE_COLUMN_ID"] for p in open_pairs}
+    undecided = [n for s, n in sources.items() if s in undecided_sources]
     return {"source_columns": len(sources), "decided": len(sources) - len(undecided), "undecided": undecided,
-            "missing_required_targets": missing_required,
-            "complete": bool(sources) and not undecided and not missing_required}
+            "missing_required_targets": missing_required, "minimum_mapping_missing": minimum_missing,
+            "minimum_mapping_unavailable": minimum_unavailable, "tables": by_table,
+            "complete": bool(sources) and not undecided and not missing_required and not minimum_missing}
 
 
 def _store_feedback(session, run: Dict[str, Any], targets: Dict[str, Dict[str, Any]],
-                    candidates: Dict[str, Dict[str, Any]], prepared: List[tuple]) -> None:
-    """Write each decision into domain knowledge so the next run's score and Cortex prompt see it."""
+                    candidates: Dict[str, Dict[str, Any]], prepared: List[tuple],
+                    table_names: Optional[Dict[str, str]] = None) -> None:
+    """Write each decision into domain knowledge so the next run's score and Cortex prompt see it, under the table the
+    decision is for."""
     if not run.get("DOMAIN_ID"):
         return
     names = {r["LANDING_COLUMN_ID"]: r for r in rows(session, """
@@ -545,20 +661,21 @@ def _store_feedback(session, run: Dict[str, Any], targets: Dict[str, Dict[str, A
         [p[0] for p in prepared])}
     proposed = {}
     rank1 = rows(session, """
-        SELECT C.SOURCE_COLUMN_ID, T.COLUMN_NAME
+        SELECT C.SOURCE_COLUMN_ID, T.COLUMN_NAME, COALESCE(C.TARGET_TABLE_ID, T.TARGET_TABLE_ID) AS TARGET_TABLE_ID
           FROM CORE.MAPPING_CANDIDATE C
           JOIN CORE.TARGET_COLUMN_REGISTRY T ON T.TARGET_COLUMN_ID = C.TARGET_COLUMN_ID
          WHERE C.RUN_ID = ? AND C.IS_CURRENT AND C.RANK = 1""", [run["RUN_ID"]])
-    for r in rank1:
-        proposed[r["SOURCE_COLUMN_ID"]] = r["COLUMN_NAME"]
-    target_table_name = (next(iter(targets.values()), {}).get("table_name")
-                         or (run.get("TARGET_MODEL") or "").split(".")[-1] or "TARGET")
-    for source_id, decision, _candidate, target_id, transformation, justification, comments in prepared:
+    for r in rank1:   # the proposal per source column and table
+        proposed[(r["SOURCE_COLUMN_ID"], r.get("TARGET_TABLE_ID"))] = r["COLUMN_NAME"]
+    default_table = (next(iter(targets.values()), {}).get("table_name")
+                     or (run.get("TARGET_MODEL") or "").split(".")[-1] or "TARGET")
+    for source_id, decision, _candidate, target_id, transformation, justification, comments, *rest in prepared:
+        table_id = rest[0] if rest else None
         src = names.get(source_id) or {}
         target_name = targets.get(target_id, {}).get("column_name") if target_id else None
         item = feedback_pattern(src.get("COLUMN_NAME") or source_id, src.get("SOURCE_TABLE") or "SOURCE",
-                                target_name, target_table_name, decision, transformation, justification,
-                                proposed.get(source_id), comments)
+                                target_name, (table_names or {}).get(table_id) or default_table, decision, transformation,
+                                justification, proposed.get((source_id, table_id)), comments)
         if not item["active"]:
             forget(session, run["DOMAIN_ID"], item["source_reference"])
             continue
@@ -568,9 +685,26 @@ def _store_feedback(session, run: Dict[str, Any], targets: Dict[str, Dict[str, A
 
 
 def last_per_source(prepared: List[tuple]) -> List[tuple]:
-    """One decision per source column (the first tuple item); a later decision in the same payload wins."""
-    latest = {p[0]: p for p in prepared}
+    """One decision per source column and target table (the first and, when present, eighth tuple items); a later
+    decision in the same payload wins."""
+    latest = {(p[0], p[7] if len(p) > 7 else None): p for p in prepared}
     return list(latest.values())
+
+
+def decision_table(decision: str, candidate: Optional[Dict[str, Any]], target: Optional[Dict[str, Any]],
+                   given: Optional[str], tables: List[str]) -> str:
+    """The target table a decision is for (pure): an alternative target's own table, else the candidate's table, else
+    the table the request names; a rejection without a candidate on a run with one table is for that table."""
+    if decision == "ALTERNATIVE_TARGET" and target:
+        table = target["target_table_id"]
+    elif candidate:
+        table = candidate["TARGET_TABLE_ID"]
+    else:
+        table = given or (tables[0] if len(tables) == 1 else None)
+        assert table, "say which target table the decision is for (target_table_id)"
+    assert table in tables, "the target table is not one of the run's target tables"
+    assert not given or given == table, "target_table_id does not match the candidate's or target column's table"
+    return table
 
 
 def save_mapping_decisions(session, run_id: str, decisions_json: str) -> Dict[str, Any]:
@@ -580,12 +714,23 @@ def save_mapping_decisions(session, run_id: str, decisions_json: str) -> Dict[st
     if isinstance(decisions, dict):
         decisions = [decisions]
     assert isinstance(decisions, list) and decisions, "provide one or more decisions"
-    candidates = {c["CANDIDATE_ID"]: c for c in rows(session, """SELECT CANDIDATE_ID, SOURCE_COLUMN_ID, TARGET_COLUMN_ID,
-        RECOMMENDATION, TRANSFORMATION FROM CORE.MAPPING_CANDIDATE WHERE RUN_ID = ? AND IS_CURRENT""", [run_id])}
     run = stage.run
-    valid_targets = {t["target_column_id"]: t for t in target_columns(session, target_table(session, run)["TARGET_TABLE_ID"])}
-    current = {d["SOURCE_COLUMN_ID"]: d for d in rows(session, """SELECT SOURCE_COLUMN_ID, TARGET_COLUMN_ID, DECISION,
-        VERSION FROM CORE.MAPPING_DECISION WHERE RUN_ID = ? AND IS_CURRENT""", [run_id])}
+    # a decision is per source column and target table: one source column can feed the hub and each spoke. Rows
+    # written before V074 have no table; they belong to the run's one (first) table.
+    tables = target_tables(session, run)
+    first = tables[0]["TARGET_TABLE_ID"]
+    table_names = {t["TARGET_TABLE_ID"]: t["TARGET_TABLE"] for t in tables}
+    candidates = {c["CANDIDATE_ID"]: {**c, "TARGET_TABLE_ID": c.get("TARGET_TABLE_ID") or first} for c in rows(session, """
+        SELECT C.CANDIDATE_ID, C.SOURCE_COLUMN_ID, C.TARGET_COLUMN_ID, C.RECOMMENDATION, C.TRANSFORMATION,
+               COALESCE(C.TARGET_TABLE_ID, T.TARGET_TABLE_ID) AS TARGET_TABLE_ID
+          FROM CORE.MAPPING_CANDIDATE C LEFT JOIN CORE.TARGET_COLUMN_REGISTRY T ON T.TARGET_COLUMN_ID = C.TARGET_COLUMN_ID
+         WHERE C.RUN_ID = ? AND C.IS_CURRENT""", [run_id])}
+    valid_targets = {t["target_column_id"]: t for tbl in tables for t in target_columns(session, tbl["TARGET_TABLE_ID"])}
+    current = {(d["SOURCE_COLUMN_ID"], d.get("TARGET_TABLE_ID") or first): d for d in rows(session, """
+        SELECT D.SOURCE_COLUMN_ID, D.TARGET_COLUMN_ID, D.DECISION, D.VERSION,
+               COALESCE(D.TARGET_TABLE_ID, T.TARGET_TABLE_ID) AS TARGET_TABLE_ID
+          FROM CORE.MAPPING_DECISION D LEFT JOIN CORE.TARGET_COLUMN_REGISTRY T ON T.TARGET_COLUMN_ID = D.TARGET_COLUMN_ID
+         WHERE D.RUN_ID = ? AND D.IS_CURRENT""", [run_id])}
 
     prepared = []
     for raw in decisions:
@@ -611,39 +756,47 @@ def save_mapping_decisions(session, run_id: str, decisions_json: str) -> Dict[st
         elif decision == "ALTERNATIVE_TARGET":
             target_id = d.get("target_column_id")
             assert target_id in valid_targets, "ALTERNATIVE_TARGET needs a target_column_id of the target model"
+        table_id = decision_table(decision, candidate, valid_targets.get(target_id) if target_id else None,
+                                  d.get("target_table_id"), list(table_names))
         needs_reason = decision in ("MODIFIED", "ALTERNATIVE_TARGET") or (
             decision == "APPROVED" and candidate["RECOMMENDATION"] != "AUTO_SUGGEST")
         if needs_reason and not justification:
             raise ValueError(f"BUSINESS_JUSTIFICATION is required for a {decision} decision on a mapping that needs "
                              "business interpretation")
         prepared.append((source_id, decision, candidate, target_id, transformation, justification,
-                         (d.get("comments") or "").strip() or None))
+                         (d.get("comments") or "").strip() or None, table_id))
 
     prepared = last_per_source(prepared)
-    claimed: Dict[str, str] = {d["TARGET_COLUMN_ID"]: s for s, d in current.items()
-                               if d["DECISION"] != "REJECTED" and d["TARGET_COLUMN_ID"]}
-    for source_id, decision, _, target_id, *_ in prepared:
-        claimed = {t: s for t, s in claimed.items() if s != source_id}
+    multi = len(tables) > 1
+    claimed: Dict[str, Tuple[str, str]] = {d["TARGET_COLUMN_ID"]: key for key, d in current.items()
+                                           if d["DECISION"] != "REJECTED" and d["TARGET_COLUMN_ID"]}
+    for source_id, decision, _, target_id, *rest in prepared:
+        key = (source_id, rest[-1])
+        claimed = {t: k for t, k in claimed.items() if k != key}
         if target_id:
-            assert target_id not in claimed, (f"target {valid_targets[target_id]['column_name']} is already mapped "
-                                              "from another source column; reject that decision first")
-            claimed[target_id] = source_id
+            column = valid_targets[target_id]
+            assert target_id not in claimed, (
+                f"target {(column['table_name'] + '.') if multi else ''}{column['column_name']} is already mapped "
+                "from another source column; reject that decision first")
+            claimed[target_id] = key
 
     session.sql("BEGIN TRANSACTION").collect()
     try:
         values = []
-        for source_id, decision, candidate, target_id, transformation, justification, comments in prepared:
+        for source_id, decision, candidate, target_id, transformation, justification, comments, table_id in prepared:
             session.sql("UPDATE CORE.MAPPING_DECISION SET IS_CURRENT = FALSE WHERE RUN_ID = ? AND SOURCE_COLUMN_ID = ? "
-                        "AND IS_CURRENT", params=[run_id, source_id]).collect()
-            version = (current.get(source_id, {}).get("VERSION") or 0) + 1
+                        "AND COALESCE(TARGET_TABLE_ID, ?) = ? AND IS_CURRENT",
+                        params=[run_id, source_id, first, table_id]).collect()
+            version = (current.get((source_id, table_id), {}).get("VERSION") or 0) + 1
             values.append([str(uuid.uuid4()), run_id, (candidate or {}).get("CANDIDATE_ID"), source_id, target_id,
-                           decision, clip(transformation), clip(justification), clip(comments), version])
+                           decision, clip(transformation), clip(justification), clip(comments), version, table_id])
         insert_rows(session, "CORE.MAPPING_DECISION",
                     ["DECISION_ID", "RUN_ID", "CANDIDATE_ID", "SOURCE_COLUMN_ID", "TARGET_COLUMN_ID", "DECISION",
-                     "TRANSFORMATION", "BUSINESS_JUSTIFICATION", "COMMENTS", "REVIEWER", "VERSION", "IS_CURRENT"],
+                     "TRANSFORMATION", "BUSINESS_JUSTIFICATION", "COMMENTS", "REVIEWER", "VERSION", "TARGET_TABLE_ID",
+                     "IS_CURRENT"],
                     ["?", "?", "NULLIF(?, '')", "?", "NULLIF(?, '')", "?", "NULLIF(?, '')", "NULLIF(?, '')",
-                     "NULLIF(?, '')", "CURRENT_USER()", "?::NUMBER", "TRUE"], values)
-        _store_feedback(session, run, valid_targets, candidates, prepared)
+                     "NULLIF(?, '')", "CURRENT_USER()", "?::NUMBER", "?", "TRUE"], values)
+        _store_feedback(session, run, valid_targets, candidates, prepared, table_names)
         session.sql("COMMIT").collect()
     except Exception:
         session.sql("ROLLBACK").collect()

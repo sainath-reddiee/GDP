@@ -102,3 +102,9 @@ def test_baseline_turns_the_registered_copy_into_version_one():
                   {"name": "Notes", "type": "TEXT"}], "DIM_RAW_ORDERS", {"naming_case": "as_is"})
     attrs = b["entities"][0]["attributes"]
     assert b["entities"][0]["entity_name"] == "DIM_RAW_ORDERS" and attrs[1]["name"] == "Notes" and attrs[1]["derived"]
+
+
+def test_the_organisation_preset_is_never_named_like_the_company_domain():
+    text = describe_conventions(conventions("COMPANY", company={"audit_columns": ["LOAD_TS"]}))
+    assert "Convention preset: organisation standard" in text and "preset: COMPANY" not in text
+    assert "Convention preset: GDP standard" in describe_conventions(conventions("GDP"))

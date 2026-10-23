@@ -36,6 +36,42 @@ def _model_for(session, domain_id: str) -> Optional[Dict[str, Any]]:
     return found[0] if found else None
 
 
+def domain_model_summary(session, domain_id: str) -> Optional[Dict[str, Any]]:
+    """The domain's approved silver model as a run can use it as it is: its version, its hub (the entity a run is
+    pinned to) and every active entity with its role and column count, hub first. None without an approved model."""
+    model = _model_for(session, domain_id) if domain_id else None
+    if not model or not model.get("APPROVED_VERSION"):
+        return None
+    version = int(model["APPROVED_VERSION"])
+    found = rows(session, "SELECT SPEC FROM CORE.MODEL_DESIGNS WHERE MODEL_ID = ? AND VERSION = ?", [model["MODEL_ID"], version])
+    if not found:
+        return None
+    spec = spec_v2.normalize_v2(variant(found[0]["SPEC"]) or {}, model["MODEL_ID"])
+    entities = []
+    for e in spec["design"]["entities"]:
+        if e.get("status") == "RETIRED":
+            continue
+        role = str(e.get("table_type") or "TABLE").upper()
+        entities.append({"entity": e["entity_name"], "role": role,
+                         "columns": sum(1 for a in e.get("attributes") or [] if a.get("status") != "RETIRED"),
+                         "fqn": ".".join(p for p in (*spec_v2.placement(spec, e), e["entity_name"]) if p)})
+    entities.sort(key=lambda t: ({"HUB": 0, "SPOKE": 1}.get(t["role"], 2), t["entity"]))
+    usable = [t for t in entities if t["columns"]]
+    hub = next((t for t in usable if t["role"] == "HUB"), usable[0] if usable else None)
+    return {"model_id": model["MODEL_ID"], "version": version, "domain_name": model.get("DOMAIN_NAME"),
+            "hub": hub["entity"] if hub else None, "entities": entities}
+
+
+def withdraw_run_proposals(session, run_id: str, user: str) -> int:
+    """The run's undecided proposals, withdrawn: the run uses the domain model as it is."""
+    found = rows(session, f"SELECT CHANGE_ID FROM {CHANGES} WHERE RUN_ID = ? AND STATUS = 'PROPOSED'", [run_id])
+    if found:
+        session.sql(f"""UPDATE {CHANGES} SET STATUS = 'WITHDRAWN', DECIDED_BY = ?, DECIDED_AT = CURRENT_TIMESTAMP(),
+                               NOTE = 'The run uses the domain model as it is' WHERE RUN_ID = ? AND STATUS = 'PROPOSED'""",
+                    params=[user.upper(), run_id]).collect()
+    return len(found)
+
+
 def run_entities(design: Dict[str, Any]) -> Dict[str, Any]:
     """A run design (services/modeling/design.py shape) as a raw v2 specification of its entities."""
     db, schema = str(design.get("target_database") or "").upper(), str(design.get("target_schema") or "").upper()
@@ -283,5 +319,66 @@ def pin_run(session, run_id: str, model_id: str, version: int, entity: str, desi
         session.sql("""UPDATE CORE.MODEL_DESIGN SET STATUS = 'APPROVED', APPROVED_BY = CURRENT_USER(),
                               APPROVED_AT = CURRENT_TIMESTAMP() WHERE RUN_ID = ? AND VERSION = ?""",
                     params=[run_id, int(design_version)]).collect()
-    return {"run_id": run_id, "model_id": model_id, "model_version": int(version), "entity": ent["entity_name"],
-            "target_model": fqn}
+    out = {"run_id": run_id, "model_id": model_id, "model_version": int(version), "entity": ent["entity_name"],
+           "target_model": fqn}
+    targets = record_targets(session, run_id, model_id, int(version), spec, ent["entity_name"])
+    if targets is not None:
+        out["targets"] = targets
+    return out
+
+
+ROLE_ORDER = {"HUB": 0, "SPOKE": 1}
+
+
+def target_set(session, spec: Dict[str, Any], pinned: str) -> List[Dict[str, Any]]:
+    """Every active entity of an approved model version as the run's targets: hub first, then the pinned entity, then
+    by name. An entity without columns, or without an active registry row, is listed but not included."""
+    out = []
+    for e in spec["design"]["entities"]:
+        if e.get("status") == "RETIRED":
+            continue
+        db, schema = spec_v2.placement(spec, e)
+        found = rows(session, """SELECT TARGET_TABLE_ID, ACTIVE_FLAG FROM CORE.TARGET_TABLE_REGISTRY
+                                  WHERE UPPER(TARGET_DATABASE) = UPPER(?) AND UPPER(TARGET_SCHEMA) = UPPER(?)
+                                    AND UPPER(TARGET_TABLE) = UPPER(?) ORDER BY IFF(ACTIVE_FLAG, 0, 1), CREATED_AT LIMIT 1""",
+                     [db or "", schema or "", e["entity_name"]])
+        reg = found[0] if found else {}
+        live = [a for a in e.get("attributes") or [] if a.get("status") != "RETIRED"]
+        reason = ("no columns in the approved model" if not live
+                  else "not registered as a target table" if not reg
+                  else "the target table is not active in the registry" if not reg.get("ACTIVE_FLAG") else None)
+        role = str(e.get("table_type") or "TABLE").upper()
+        out.append({"entity": e["entity_name"], "target_fqn": ".".join(p for p in (db, schema, e["entity_name"]) if p),
+                    "target_table_id": reg.get("TARGET_TABLE_ID"), "role": role if role in ROLE_ORDER else "TABLE",
+                    "included": reason is None, "excluded_reason": reason})
+    out.sort(key=lambda t: (ROLE_ORDER.get(t["role"], 2), t["entity"] != pinned, t["entity"]))
+    for i, t in enumerate(out, 1):
+        t["ordinal"] = i
+    return out
+
+
+def record_targets(session, run_id: str, model_id: str, version: int, spec: Dict[str, Any],
+                   pinned: str) -> Optional[List[Dict[str, Any]]]:
+    """CORE.RUN_TARGET (V074): the target set of a silver run with no parent run. A gold model, and a child run that
+    loads one entity of its parent's set, keep the single pinned entity (None). The previous set stays, not current."""
+    if str(spec.get("layer") or "SILVER").upper() != "SILVER":
+        return None
+    try:
+        run = rows(session, "SELECT PARENT_RUN_ID FROM CORE.WORKFLOW_RUN WHERE RUN_ID = ?", [run_id])
+        if run and run[0].get("PARENT_RUN_ID"):
+            return None
+        targets = target_set(session, spec, pinned)
+        session.sql("UPDATE CORE.RUN_TARGET SET IS_CURRENT = FALSE WHERE RUN_ID = ? AND IS_CURRENT",
+                    params=[run_id]).collect()
+    except Exception as exc:
+        if "RUN_TARGET" in str(exc).upper() and "DOES NOT EXIST" in str(exc).upper():
+            return None  # before V074: the run maps to the pinned entity alone
+        raise
+    insert_rows(session, "CORE.RUN_TARGET",
+                ["RUN_TARGET_ID", "RUN_ID", "MODEL_ID", "MODEL_VERSION", "ENTITY_NAME", "TARGET_FQN", "TARGET_TABLE_ID",
+                 "ROLE", "ORDINAL", "INCLUDED", "EXCLUDED_REASON", "IS_CURRENT"],
+                ["?", "?", "?", "?", "?", "?", "NULLIF(?, '')", "?", "?", "?", "NULLIF(?, '')", "TRUE"],
+                [[str(uuid.uuid4()), run_id, model_id, int(version), t["entity"], t["target_fqn"],
+                  t["target_table_id"] or "", t["role"], t["ordinal"], t["included"], t["excluded_reason"] or ""]
+                 for t in targets])
+    return targets

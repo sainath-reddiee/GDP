@@ -75,10 +75,19 @@ export async function saveMappingDecisions(runId: string, decisions: Record<stri
 }
 
 /** AI copilot review. Read-only: returns proposals; nothing is saved until the reviewer accepts them. */
-export async function assistMapping(runId: string, sourceColumnIds: string[], instructions: string) {
+/** A run mapped to a hub and its spokes: every table run's latest code as one branch and one pull request. */
+export async function publishTableRuns(runId: string) {
+  return attemptValue(() => api<{ status: string; detail?: string; pull_request?: { url?: string; number?: number } | null;
+                                  tables?: string[]; conflicts?: string[] }>(
+    `/api/runs/${encodeURIComponent(runId)}/table-runs/publish`, { method: "POST", body: JSON.stringify({}) }));
+}
+
+export async function assistMapping(runId: string, pairs: { source_column_id: string; target_table_id: string | null }[],
+                                    instructions: string) {
+  // each pair is a row (a source column for one target table); none means every pending row
   return attemptValue(() => api<{ suggestions: MappingSuggestion[]; model: string | null; skipped: number }>(
     `/api/runs/${runId}/mapping/assist`,
-    { method: "POST", body: JSON.stringify({ source_column_ids: sourceColumnIds, instructions }) },
+    { method: "POST", body: JSON.stringify({ pairs, instructions }) },
   ));
 }
 

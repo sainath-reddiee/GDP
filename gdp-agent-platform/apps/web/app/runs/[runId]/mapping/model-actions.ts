@@ -30,9 +30,14 @@ export type RunProposal = {
   /** the run already maps to the approved version this proposal builds on, so mapping does not wait for it */
   maps_existing?: boolean;
 };
+export type DomainModelEntity = { entity: string; role: string; columns: number; fqn: string };
+/** The domain's approved model, as a run can use it as it is (hub first). */
+export type DomainModelSummary = {
+  model_id: string; version: number; domain_name: string | null; hub: string | null; entities: DomainModelEntity[];
+};
 export type WorkbenchState = {
   enforced: boolean; model_id: string | null; model_version: number | null; model_entity: string | null;
-  proposal: RunProposal | null;
+  proposal: RunProposal | null; domain_model?: DomainModelSummary | null;
 };
 export type ModelPayload = {
   run_id: string; target_model: string | null; standard: string | null; versions: DesignVersion[];
@@ -84,6 +89,16 @@ export async function approveDesign(runId: string, version: number) {
 /** Propose a run design to the domain's governed model (the Model Workbench). */
 export async function proposeDesign(runId: string, version: number) {
   const r = await attemptValue(() => api<ProposeResult>(`/api/runs/${runId}/model/${version}/propose`, { method: "POST" }));
+  if (r.ok) revalidatePath(`/runs/${runId}`, "layout");
+  return r;
+}
+
+/** Map the run to the domain's approved model as it is: pinned to its hub, every active table its target set; no AI
+ * design and no proposal. */
+export async function applyDomainModel(runId: string) {
+  const r = await attemptValue(() => api<{ model_id: string; version: number; entity: string; target_model?: string;
+                                           entities: DomainModelEntity[]; withdrawn: number; mapping_reset?: boolean }>(
+    `/api/runs/${runId}/model/use-domain-model`, { method: "POST" }));
   if (r.ok) revalidatePath(`/runs/${runId}`, "layout");
   return r;
 }

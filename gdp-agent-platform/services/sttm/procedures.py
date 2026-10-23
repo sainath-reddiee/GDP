@@ -43,6 +43,11 @@ def _gold_shape(session, run: Dict[str, Any], contract: Dict[str, Any]) -> bool:
 def generate_sttm(session, run_id: str) -> Dict[str, Any]:
     stage = Stage(session, run_id)
     stage.require("MAPPING_APPROVED", "STTM_PENDING")
+    from services.mapping.children import children
+
+    if children(session, run_id):   # a run mapped to several tables continues in one table run per table
+        raise ValueError("RUN_HAS_TABLE_RUNS: this run's target tables continue in their own table runs; generate "
+                         "the STTM on each table run.")
     stage.walk(["MAPPING_APPROVED", "STTM_PENDING"], "STTM generation started")
     with tool_call(session, run_id, "generate_sttm", {"run_id": run_id}) as call:
         try:

@@ -7,6 +7,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { generateMapping } from "../pipeline-actions";
 import { MappingBoard } from "./mapping-board";
 import { MappingGate } from "./mapping-gate";
+import { TableRunsPanel } from "./table-runs";
 import { GoldModelPanel } from "./gold-model";
 import { QuestionsPanel } from "@/components/learning/questions-panel";
 import { ModelDesign } from "./model-design";
@@ -60,6 +61,9 @@ export async function MappingStep({ runId }: { runId: string }) {
           missing={data.status.missing_required_targets}
           undecided={data.status.undecided}
         />
+      )}
+      {(data.table_runs?.length ?? 0) > 0 && (
+        <TableRunsPanel runId={params.runId} runs={data.table_runs!} canPublish={canAct(me, "DBT.EDIT")} />
       )}
       {data.candidates.length > 0 && <MappingBoard runId={params.runId} data={data} />}
     </StageGate>

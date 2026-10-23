@@ -126,16 +126,21 @@ def normalize(raw: Dict[str, Any], sources: List[Dict[str, Any]], candidates: Di
 
 
 def to_decision(s: Dict[str, Any], justification: Optional[str] = None) -> Dict[str, Any]:
-    """Map an accepted suggestion onto the SAVE_MAPPING_DECISIONS contract."""
+    """Map an accepted suggestion onto the SAVE_MAPPING_DECISIONS contract; a suggestion made for one of several
+    target tables (target_table_id) is decided for that table."""
     why = justification or f"AI copilot: {s['reason']}"
     if s["action"] == "NULL":
-        return {"decision": "REJECTED", "source_column_id": s["source_column_id"], "business_justification": why}
-    if s["action"] == "MODIFY":
-        return {"decision": "MODIFIED", "source_column_id": s["source_column_id"], "candidate_id": s["candidate_id"],
-                "transformation": s["transformation"], "business_justification": why}
-    if s["action"] == "ALTERNATIVE":
-        return {"decision": "ALTERNATIVE_TARGET", "source_column_id": s["source_column_id"],
-                "target_column_id": s["target_column_id"], "transformation": s["transformation"],
-                "business_justification": why}
-    return {"decision": "APPROVED", "source_column_id": s["source_column_id"], "candidate_id": s["candidate_id"],
-            "business_justification": why}
+        out = {"decision": "REJECTED", "source_column_id": s["source_column_id"], "business_justification": why}
+    elif s["action"] == "MODIFY":
+        out = {"decision": "MODIFIED", "source_column_id": s["source_column_id"], "candidate_id": s["candidate_id"],
+               "transformation": s["transformation"], "business_justification": why}
+    elif s["action"] == "ALTERNATIVE":
+        out = {"decision": "ALTERNATIVE_TARGET", "source_column_id": s["source_column_id"],
+               "target_column_id": s["target_column_id"], "transformation": s["transformation"],
+               "business_justification": why}
+    else:
+        out = {"decision": "APPROVED", "source_column_id": s["source_column_id"], "candidate_id": s["candidate_id"],
+               "business_justification": why}
+    if s.get("target_table_id"):
+        out["target_table_id"] = s["target_table_id"]
+    return out

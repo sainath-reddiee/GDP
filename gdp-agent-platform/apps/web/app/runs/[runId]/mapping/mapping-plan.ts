@@ -3,8 +3,13 @@ import type { MappingOverview, MappingSuggestion } from "@/lib/types";
 export type Candidate = MappingOverview["candidates"][number];
 export type Decision = MappingOverview["decisions"][number];
 
+/** One source column for one target table: a run maps to a hub and its spokes, so a source column can have a row in
+ * each table it was proposed for, decided on its own. */
 export type MappingRow = {
   id: string;
+  sourceId: string;
+  tableId: string;
+  targetTable: string;
   table: string;
   column: string;
   datatype: string;
@@ -23,23 +28,47 @@ export type BulkPlan = {
   needsReason: boolean;
 };
 
+/** The key of a row: its source column and target table. */
+export function rowKey(sourceId: string, tableId: string | null | undefined) {
+  return `${sourceId}::${tableId ?? ""}`;
+}
+
+/** The table a candidate, decision or target belongs to; rows written before a run had several tables have none and
+ * belong to the run's first table. */
+export function firstTableId(data: MappingOverview) {
+  return data.target_tables?.[0]?.target_table_id ?? data.target_table?.target_table_id ?? "";
+}
+
 export function buildRows(data: MappingOverview): MappingRow[] {
+  const first = firstTableId(data);
   const names = Object.fromEntries(data.targets.map((t) => [t.target_column_id, t.column_name]));
-  const ids = [...new Set(data.candidates.map((c) => c.source_column_id))];
-  return ids.map((id) => {
-    const ranked = data.candidates.filter((c) => c.source_column_id === id).sort((a, b) => a.rank - b.rank);
+  const tableNames = Object.fromEntries((data.target_tables ?? (data.target_table ? [data.target_table] : []))
+    .map((t) => [t.target_table_id, t.target_table]));
+  const order = new Map((data.target_tables ?? []).map((t, i) => [t.target_table_id, i]));
+  const groups = new Map<string, Candidate[]>();
+  for (const c of data.candidates) {
+    const key = rowKey(c.source_column_id, c.target_table_id || first);
+    groups.set(key, [...(groups.get(key) ?? []), c]);
+  }
+  const rows = [...groups.entries()].map(([id, cands]) => {
+    const ranked = [...cands].sort((a, b) => a.rank - b.rank);
     const top = ranked[0];
-    const decision = data.decisions.find((d) => d.source_column_id === id);
+    const tableId = top.target_table_id || first;
+    const decision = data.decisions.find((d) => d.source_column_id === top.source_column_id && (d.target_table_id || first) === tableId);
     const mappedTargetId = decision && decision.decision !== "REJECTED" ? decision.target_column_id : null;
-    return {
-      id, table: top.source_table, column: top.source_column, datatype: top.source_datatype,
+    const row: MappingRow = {
+      id, sourceId: top.source_column_id, tableId, targetTable: top.target_table || tableNames[tableId] || "",
+      table: top.source_table, column: top.source_column, datatype: top.source_datatype,
       ranked, top, score: Number(top.final_score), decision, mappedTargetId,
       mappedName: mappedTargetId
         ? names[mappedTargetId] || ranked.find((c) => c.target_column_id === mappedTargetId)?.target_column
         : undefined,
       status: !decision ? "pending" : decision.decision === "REJECTED" ? "null" : "mapped",
     };
+    return row;
   });
+  // hub first, then each spoke, in the order the run's target set gives
+  return rows.sort((a, b) => (order.get(a.tableId) ?? 0) - (order.get(b.tableId) ?? 0));
 }
 
 /** Targets already claimed by decided rows outside `excluding`. */
@@ -69,8 +98,8 @@ export function planApproveTop(rows: MappingRow[], selected: Set<string>, minSco
     claimed.set(r.top.target_column_id, r.column);
     if (r.top.recommendation !== "AUTO_SUGGEST") plan.needsReason = true;
     plan.decisions.push({
-      decision: "APPROVED", source_column_id: r.id, candidate_id: r.top.candidate_id,
-      transformation: r.top.transformation || undefined,
+      decision: "APPROVED", source_column_id: r.sourceId, target_table_id: r.tableId || undefined,
+      candidate_id: r.top.candidate_id, transformation: r.top.transformation || undefined,
       _needs_reason: r.top.recommendation !== "AUTO_SUGGEST",
     });
   }
@@ -80,22 +109,27 @@ export function planApproveTop(rows: MappingRow[], selected: Set<string>, minSco
 export function planNull(rows: MappingRow[], selected: Set<string>): BulkPlan {
   return {
     decisions: rows.filter((r) => selected.has(r.id) && r.status !== "null").map((r) => ({
-      decision: "REJECTED", source_column_id: r.id,
+      decision: "REJECTED", source_column_id: r.sourceId, target_table_id: r.tableId || undefined,
     })),
     skipped: [],
     needsReason: false,
   };
 }
 
-/** Accept AI suggestions; collisions with existing decisions outside the batch are skipped. */
-export function planAcceptAi(rows: MappingRow[], suggestions: MappingSuggestion[], selected?: Set<string>): BulkPlan {
-  const picked = suggestions.filter((s) => !selected || selected.has(s.source_column_id));
-  const ids = new Set(picked.map((s) => s.source_column_id));
+/** The row a suggestion is for. */
+export function suggestionKey(s: MappingSuggestion, first: string) {
+  return rowKey(s.source_column_id, s.target_table_id || first);
+}
+
+/** Accept AI suggestions (keyed by row); collisions with existing decisions outside the batch are skipped. */
+export function planAcceptAi(rows: MappingRow[], suggestions: Record<string, MappingSuggestion>, selected?: Set<string>): BulkPlan {
+  const picked = Object.entries(suggestions).filter(([key]) => !selected || selected.has(key));
+  const ids = new Set(picked.map(([key]) => key));
   const claimed = claimedTargets(rows, ids);
   const byId = new Map(rows.map((r) => [r.id, r]));
   const plan: BulkPlan = { decisions: [], skipped: [], needsReason: false };
-  for (const s of [...picked].sort((a, b) => b.confidence - a.confidence)) {
-    const column = byId.get(s.source_column_id)?.column ?? s.source_column_id;
+  for (const [key, s] of [...picked].sort((a, b) => b[1].confidence - a[1].confidence)) {
+    const column = byId.get(key)?.column ?? s.source_column_id;
     if (s.target_column_id) {
       const holder = claimed.get(s.target_column_id);
       if (holder) {
@@ -115,4 +149,9 @@ export function withJustification(plan: BulkPlan, note: string): Record<string, 
     const reason = String(d.business_justification || "").trim() || note.trim();
     return reason ? { ...d, business_justification: reason } : d;
   });
+}
+
+/** The row each saved decision was for. */
+export function savedKeys(decisions: Record<string, unknown>[], first: string) {
+  return new Set(decisions.map((d) => rowKey(String(d.source_column_id), (d.target_table_id as string | undefined) || first)));
 }

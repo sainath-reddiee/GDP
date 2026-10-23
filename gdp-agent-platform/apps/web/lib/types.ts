@@ -161,19 +161,37 @@ export type MappingOverview = {
     semantic_score: number; keyword_score: number; datatype_score: number; statistical_score: number;
     domain_score: number; context_score: number; historical_score: number;
     llm_preferred?: string | null; llm_agrees?: boolean | null;
+    /** the target table this candidate ranks in (a run maps to a hub and its spokes) */
+    target_table_id?: string; target_table?: string;
   }[];
   decisions: {
     decision_id: string; source_column_id: string; target_column_id: string | null; candidate_id: string | null;
     decision: string; transformation: string | null; business_justification: string | null; reviewer: string;
     reviewed_at: string;
+    target_table_id?: string | null;
   }[];
   targets: {
     target_column_id: string; column_name: string; data_type: string; nullable: boolean;
     is_business_key: boolean; semantic_type: string; is_pii?: boolean | null; definition?: string | null;
+    target_table_id?: string; target_table?: string;
   }[];
-  target_table?: { target_table_id: string; target_table: string; target_database: string; target_schema: string; grain?: string | null } | null;
+  target_table?: MappingTargetTable | null;
+  /** every table the run maps to, hub first (one for a single-target run) */
+  target_tables?: MappingTargetTable[];
+  /** after its mapping is approved, a run mapped to several tables continues in one table run per table */
+  table_runs?: { run_id: string; run_name: string; model_entity: string | null; target_model: string | null; current_state: string }[];
   profile?: Record<string, MappingProfile>;
-  status: { source_columns: number; decided: number; undecided: string[]; missing_required_targets: string[]; complete: boolean };
+  status: {
+    source_columns: number; decided: number; undecided: string[]; missing_required_targets: string[]; complete: boolean;
+    /** the hub's minimum mapping: columns not mapped yet, and columns none of the run's tables has (not blocking) */
+    minimum_mapping_missing?: string[]; minimum_mapping_unavailable?: string[];
+    tables?: { target_table_id: string; table: string; role: string; missing_required_targets: string[]; undecided: string[] }[];
+  };
+};
+
+export type MappingTargetTable = {
+  target_table_id: string; target_table: string; target_database: string; target_schema: string; grain?: string | null;
+  role?: string; ordinal?: number;
 };
 
 export type MappingProfile = {
@@ -193,6 +211,7 @@ export type MappingSuggestion = {
   reason: string;
   note: string | null;
   decision: Record<string, unknown>;
+  target_table_id?: string | null; target_table?: string;
 };
 
 export type WhoAmI = {

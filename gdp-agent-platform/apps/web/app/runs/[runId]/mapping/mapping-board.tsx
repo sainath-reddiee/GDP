@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState, useTransition } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import {
   ArrowRight, Bot, Check, CheckCheck, CircleSlash, KeyRound, ListChecks, Loader2, Search, Sparkles, Target, X,
@@ -18,7 +18,8 @@ import { MappingDetail, pct, ScoreBar } from "./mapping-detail";
 /** Target columns the platform fills (keys, record source, audit, hub reference); never mapped from a source. */
 const SYSTEM_DERIVED: (string | null)[] = ["SURROGATE_KEY", "RECORD_SOURCE", "AUDIT_TIMESTAMP", "DERIVED_KEY"];
 import {
-  buildRows, planAcceptAi, planApproveTop, planNull, withJustification, type BulkPlan, type MappingRow,
+  buildRows, firstTableId, planAcceptAi, planApproveTop, planNull, savedKeys, suggestionKey, withJustification,
+  type BulkPlan, type MappingRow,
 } from "./mapping-plan";
 
 type Filter = "all" | "pending" | "confident" | "weak" | "ai" | "disagree" | "mapped" | "null";
@@ -39,6 +40,11 @@ export function MappingBoard({ runId, data }: { runId: string; data: MappingOver
   const bands = data.bands ?? DEFAULT_BANDS;
   const router = useRouter();
   const rows = useMemo(() => buildRows(data), [data]);
+  const first = firstTableId(data);
+  // a run that maps to a hub and its spokes: the board groups rows by target table and shows each table's progress
+  const targetTables = data.target_tables ?? (data.target_table ? [data.target_table] : []);
+  const multi = targetTables.length > 1;
+  const [targetTable, setTargetTable] = useState("");
   const [filter, setFilter] = useState<Filter>("pending");
   const [query, setQuery] = useState("");
   const [table, setTable] = useState("");
@@ -62,6 +68,17 @@ export function MappingBoard({ runId, data }: { runId: string; data: MappingOver
     rows.forEach((r) => { if (r.mappedTargetId) m.set(r.mappedTargetId, r.column); });
     return m;
   }, [rows]);
+  const takenRow = useMemo(() => {
+    const m = new Map<string, string>();
+    rows.forEach((r) => { if (r.mappedTargetId) m.set(r.mappedTargetId, r.id); });
+    return m;
+  }, [rows]);
+  const perTable = useMemo(() => targetTables.map((t) => {
+    const mine = rows.filter((r) => r.tableId === t.target_table_id);
+    const status = data.status.tables?.find((s) => s.target_table_id === t.target_table_id);
+    return { ...t, rows: mine.length, decided: mine.filter((r) => r.status !== "pending").length,
+             missing: status?.missing_required_targets ?? [] };
+  }), [rows, targetTables, data.status.tables]);
   const counts = useMemo(() => ({
     mapped: rows.filter((r) => r.status === "mapped").length,
     null: rows.filter((r) => r.status === "null").length,
@@ -73,6 +90,7 @@ export function MappingBoard({ runId, data }: { runId: string; data: MappingOver
     const q = query.trim().toLowerCase();
     const out = rows.filter((r) => {
       if (table && r.table !== table) return false;
+      if (targetTable && r.tableId !== targetTable) return false;
       if (q && !`${r.column} ${r.top.target_column} ${r.mappedName ?? ""}`.toLowerCase().includes(q)) return false;
       switch (filter) {
         case "pending": return r.status === "pending";
@@ -89,7 +107,7 @@ export function MappingBoard({ runId, data }: { runId: string; data: MappingOver
     if (sort === "score_desc") out.sort((a, b) => b.score - a.score);
     if (sort === "score_asc") out.sort((a, b) => a.score - b.score);
     return out;
-  }, [rows, filter, query, table, sort, suggestions]);
+  }, [rows, filter, query, table, targetTable, sort, suggestions]);
 
   const focused = rows.find((r) => r.id === focus);
   const allVisibleSelected = visible.length > 0 && visible.every((r) => selected.has(r.id));
@@ -111,7 +129,7 @@ export function MappingBoard({ runId, data }: { runId: string; data: MappingOver
       }
       const result = await saveMappingDecisions(runId, decisions);
       if (!result.ok) { setMessage({ tone: "error", text: result.error }); return; }
-      const saved = new Set(decisions.map((d) => String(d.source_column_id)));
+      const saved = savedKeys(decisions, first);
       setSelected(new Set());
       setSuggestions((prev) => Object.fromEntries(Object.entries(prev).filter(([id]) => !saved.has(id))));
       setConfirm(null);
@@ -138,11 +156,15 @@ export function MappingBoard({ runId, data }: { runId: string; data: MappingOver
     commit(withJustification(planNull(rows, ids), "No matching target column; load this source field as NULL."),
       `Set ${[...ids].length} column(s) to NULL`);
 
+  // the copilot reviews rows (a source column for a target table); an empty list means every pending row
   const askAi = (ids: string[]) => startAi(async () => {
     setMessage(null);
-    const result = await assistMapping(runId, ids, aiNote);
+    const byId = new Map(rows.map((r) => [r.id, r]));
+    const pairs = ids.map((id) => byId.get(id)).filter((r): r is MappingRow => Boolean(r))
+      .map((r) => ({ source_column_id: r.sourceId, target_table_id: r.tableId || null }));
+    const result = await assistMapping(runId, pairs, aiNote);
     if (!result.ok) { setMessage({ tone: "error", text: result.error }); return; }
-    setSuggestions((prev) => ({ ...prev, ...Object.fromEntries(result.data.suggestions.map((s) => [s.source_column_id, s])) }));
+    setSuggestions((prev) => ({ ...prev, ...Object.fromEntries(result.data.suggestions.map((s) => [suggestionKey(s, first), s])) }));
     setAiModel(result.data.model);
     setFilter("ai");
     setMessage({
@@ -152,7 +174,7 @@ export function MappingBoard({ runId, data }: { runId: string; data: MappingOver
   });
 
   const acceptAi = (ids?: Set<string>) => {
-    const plan = planAcceptAi(rows, Object.values(suggestions), ids);
+    const plan = planAcceptAi(rows, suggestions, ids);
     commit(plan.decisions, `Accepted ${plan.decisions.length} AI suggestion(s)`, plan.skipped);
   };
 
@@ -195,10 +217,11 @@ export function MappingBoard({ runId, data }: { runId: string; data: MappingOver
         <div className="flex flex-wrap items-start gap-3">
           <div className="min-w-0 flex-1">
             <CardTitle className="flex items-center gap-2">
-              Source → {data.target_table?.target_table ?? "target"} mapping
+              {multi ? `Source → ${targetTables.length} target tables` : `Source → ${data.target_table?.target_table ?? "target"} mapping`}
             </CardTitle>
             <CardDescription>
-              {data.status.decided}/{data.status.source_columns} columns decided · {data.targets.length} target columns
+              {multi ? `${counts.mapped + counts.null}/${rows.length} rows decided across the hub and its spokes`
+                : `${data.status.decided}/${data.status.source_columns} columns decided`} · {data.targets.length} target columns
               {data.target_table ? ` in ${data.target_table.target_database}.${data.target_table.target_schema}` : ""}
             </CardDescription>
           </div>
@@ -226,6 +249,45 @@ export function MappingBoard({ runId, data }: { runId: string; data: MappingOver
             {aiCount > 0 && <span className="text-blue-700"><Bot className="mr-0.5 inline h-3 w-3" />{aiCount} AI suggestions{aiModel ? ` · ${aiModel}` : ""}</span>}
           </div>
         </div>
+
+        {multi && (
+          <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4" data-testid="mapping-tables">
+            {perTable.map((t) => {
+              const done = t.rows > 0 && t.decided === t.rows && !t.missing.length;
+              const active = targetTable === t.target_table_id;
+              return (
+                <button key={t.target_table_id} type="button" data-testid={`mapping-table-${t.target_table}`}
+                  onClick={() => setTargetTable(active ? "" : t.target_table_id)}
+                  className={cn("rounded-lg border p-2.5 text-left transition-colors",
+                    active ? "border-primary bg-primary/5" : "hover:bg-muted/50")}>
+                  <span className="flex items-center gap-1.5">
+                    <span className="min-w-0 flex-1 truncate text-sm font-medium">{t.target_table}</span>
+                    {t.role && <Badge variant={t.role === "HUB" ? "default" : "outline"} className="text-[10px]">{t.role.toLowerCase()}</Badge>}
+                  </span>
+                  <span className="mt-1.5 flex h-1.5 overflow-hidden rounded-full bg-muted">
+                    <span className={done ? "bg-emerald-500" : "bg-sky-500"} style={{ width: `${t.rows ? (t.decided / t.rows) * 100 : 0}%` }} />
+                  </span>
+                  <span className="mt-1 block text-[11px] text-muted-foreground">
+                    {t.rows ? `${t.decided}/${t.rows} decided` : "no source column proposed"}
+                    {t.missing.length > 0 && <span className="text-rose-600"> · {t.missing.length} required open</span>}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+        {multi && ((data.status.minimum_mapping_missing?.length ?? 0) > 0 || (data.status.minimum_mapping_unavailable?.length ?? 0) > 0) && (
+          <div className="space-y-0.5 rounded-lg border border-amber-200 bg-amber-50/70 px-3 py-2 text-xs dark:bg-amber-950/20" data-testid="minimum-mapping">
+            {(data.status.minimum_mapping_missing?.length ?? 0) > 0 && (
+              <p><span className="font-medium">Minimum mapping:</span> map {data.status.minimum_mapping_missing!.join(", ")} before approving.</p>
+            )}
+            {(data.status.minimum_mapping_unavailable?.length ?? 0) > 0 && (
+              <p className="text-muted-foreground">
+                The hub expects {data.status.minimum_mapping_unavailable!.join(", ")}, which none of this run&apos;s tables has; add it to the domain model to load it.
+              </p>
+            )}
+          </div>
+        )}
 
         <div className="flex flex-wrap items-center gap-2">
           <Button size="sm" disabled={pending || !counts.confident}
@@ -299,7 +361,7 @@ export function MappingBoard({ runId, data }: { runId: string; data: MappingOver
 
       <CardContent className="p-0">
         {view === "targets" ? (
-          <TargetCoverage data={data} rows={rows} takenBy={takenBy} suggestions={suggestions}
+          <TargetCoverage data={data} rows={rows} takenBy={takenBy} takenRow={takenRow} suggestions={suggestions}
             onOpen={(id) => { setView("sources"); setFilter("all"); setFocus(id); }} />
         ) : (
           <div className={cn("grid", focused ? "lg:grid-cols-[minmax(0,1fr)_400px]" : "")}>
@@ -376,13 +438,25 @@ export function MappingBoard({ runId, data }: { runId: string; data: MappingOver
                         {filter === "pending" && counts.pending === 0 ? "Every column has a decision. Approve the mapping pack above." : "No columns match these filters."}
                       </td></tr>
                     )}
-                    {visible.map((r) => {
+                    {visible.map((r, i) => {
                       const ai = suggestions[r.id];
-                      const profile = data.profile?.[r.id];
+                      const profile = data.profile?.[r.sourceId];
+                      const heading = multi && sort === "table" && (i === 0 || visible[i - 1].tableId !== r.tableId);
                       const showTarget = r.status === "mapped" ? r.mappedName : r.status === "null" ? null : r.top.target_column;
                       const conflict = r.status === "pending" && takenBy.get(r.top.target_column_id);
                       return (
-                        <tr key={r.id} data-row={r.id} onClick={() => setFocus(r.id)}
+                        <Fragment key={r.id}>
+                        {heading && (
+                          <tr className="bg-muted/40" data-testid={`mapping-group-${r.targetTable}`}>
+                            <td colSpan={5} className="px-3 py-1.5 text-xs font-semibold">
+                              {r.targetTable}
+                              <span className="ml-2 font-normal text-muted-foreground">
+                                {perTable.find((t) => t.target_table_id === r.tableId)?.role?.toLowerCase() ?? ""}
+                              </span>
+                            </td>
+                          </tr>
+                        )}
+                        <tr data-row={r.id} onClick={() => setFocus(r.id)}
                           className={cn("cursor-pointer border-b last:border-0",
                             r.id === focus ? "bg-primary/5" : "hover:bg-muted/40",
                             selected.has(r.id) && "bg-sky-50/60")}>
@@ -417,6 +491,7 @@ export function MappingBoard({ runId, data }: { runId: string; data: MappingOver
                             {!ai && r.top.llm_agrees === false && r.status === "pending" && (
                               <span className="mt-0.5 block text-[11px] text-amber-700">AI preferred {r.top.llm_preferred}</span>
                             )}
+                            {multi && <span className="mt-0.5 block text-[11px] text-muted-foreground">in {r.targetTable}</span>}
                             {conflict && <span className="mt-0.5 block text-[11px] text-amber-700">target taken by {conflict}</span>}
                           </td>
                           <td className="whitespace-nowrap px-2 py-2">
@@ -450,6 +525,7 @@ export function MappingBoard({ runId, data }: { runId: string; data: MappingOver
                             )}
                           </td>
                         </tr>
+                        </Fragment>
                       );
                     })}
                   </tbody>
@@ -460,7 +536,7 @@ export function MappingBoard({ runId, data }: { runId: string; data: MappingOver
             {focused && (
               <aside className="border-t lg:max-h-[48rem] lg:border-l lg:border-t-0">
                 <MappingDetail
-                  runId={runId} row={focused} data={data} profile={data.profile?.[focused.id]}
+                  runId={runId} row={focused} data={data} profile={data.profile?.[focused.sourceId]}
                   suggestion={suggestions[focused.id]} takenBy={takenBy}
                   onSaved={() => {
                     const next = visible.find((r) => r.id !== focused.id && r.status === "pending");
@@ -480,21 +556,22 @@ export function MappingBoard({ runId, data }: { runId: string; data: MappingOver
 }
 
 function TargetCoverage({
-  data, rows, takenBy, suggestions, onOpen,
+  data, rows, takenBy, takenRow, suggestions, onOpen,
 }: {
   data: MappingOverview;
   rows: MappingRow[];
   takenBy: Map<string, string>;
+  takenRow: Map<string, string>;
   suggestions: Record<string, MappingSuggestion>;
-  onOpen: (sourceId: string) => void;
+  onOpen: (rowId: string) => void;
 }) {
-  const byColumn = new Map(rows.map((r) => [r.column, r]));
+  const multi = (data.target_tables?.length ?? 0) > 1;
   const candidatesFor = (targetId: string) =>
     rows.filter((r) => r.status === "pending" && r.ranked.some((c) => c.target_column_id === targetId))
       .map((r) => ({ row: r, score: Number(r.ranked.find((c) => c.target_column_id === targetId)?.final_score ?? 0) }))
       .sort((a, b) => b.score - a.score)
       .slice(0, 3);
-  const aiFor = (targetId: string) => Object.values(suggestions).find((s) => s.target_column_id === targetId);
+  const aiFor = (targetId: string) => Object.entries(suggestions).find(([, s]) => s.target_column_id === targetId);
   const systemDerived = SYSTEM_DERIVED;
 
   return (
@@ -504,13 +581,18 @@ function TargetCoverage({
           <tr><th className="px-3 py-2">Target column</th><th className="px-2 py-2">Mapped from</th><th className="px-2 py-2">Best open candidates</th></tr>
         </thead>
         <tbody>
-          {data.targets.map((t) => {
+          {data.targets.map((t, i) => {
             const source = takenBy.get(t.target_column_id);
+            const heading = multi && (i === 0 || data.targets[i - 1].target_table_id !== t.target_table_id);
             const derived = systemDerived.includes(t.semantic_type);
             const required = !t.nullable && !derived;
             const ai = aiFor(t.target_column_id);
             return (
-              <tr key={t.target_column_id} className={cn("border-b last:border-0", required && !source && "bg-rose-50/60")}>
+              <Fragment key={t.target_column_id}>
+              {heading && (
+                <tr className="bg-muted/40"><td colSpan={3} className="px-3 py-1.5 text-xs font-semibold">{t.target_table}</td></tr>
+              )}
+              <tr className={cn("border-b last:border-0", required && !source && "bg-rose-50/60")}>
                 <td className="px-3 py-2">
                   <span className="flex items-center gap-1.5 font-medium">
                     {t.column_name}
@@ -522,7 +604,7 @@ function TargetCoverage({
                 </td>
                 <td className="px-2 py-2">
                   {source ? (
-                    <button type="button" className="font-medium text-emerald-700 hover:underline" onClick={() => onOpen(byColumn.get(source)!.id)}>
+                    <button type="button" className="font-medium text-emerald-700 hover:underline" onClick={() => onOpen(takenRow.get(t.target_column_id)!)}>
                       ← {source}
                     </button>
                   ) : derived ? (
@@ -535,9 +617,9 @@ function TargetCoverage({
                   {!source && !derived && (
                     <span className="flex flex-wrap gap-1">
                       {ai && (
-                        <button type="button" onClick={() => onOpen(ai.source_column_id)}
+                        <button type="button" onClick={() => onOpen(ai[0])}
                           className="rounded-full border border-blue-300 px-2 py-0.5 text-[11px] text-blue-700 hover:bg-blue-50">
-                          <Bot className="mr-0.5 inline h-3 w-3" />{rows.find((r) => r.id === ai.source_column_id)?.column}
+                          <Bot className="mr-0.5 inline h-3 w-3" />{rows.find((r) => r.id === ai[0])?.column}
                         </button>
                       )}
                       {candidatesFor(t.target_column_id).map(({ row, score }) => (
@@ -550,6 +632,7 @@ function TargetCoverage({
                   )}
                 </td>
               </tr>
+              </Fragment>
             );
           })}
         </tbody>

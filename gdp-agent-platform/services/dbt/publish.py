@@ -645,6 +645,8 @@ def publish_dbt_pr(session, run_id: str, payload_json: str = "{}") -> Dict[str, 
         return sync_git_prs(session, payload["sync_git_prs"])
     if run_id and payload.get("star_schema"):
         return publish_star_schema(session, run_id, payload)
+    if run_id and payload.get("table_runs"):
+        return publish_table_runs(session, run_id, payload)
     plan = _plan(session, run_id, payload) if run_id else dict(payload)
     if payload.get("check_only"):
         try:
@@ -702,8 +704,30 @@ def publish_dbt_pr(session, run_id: str, payload_json: str = "{}") -> Dict[str, 
 def publish_star_schema(session, run_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
     """A Gold run's star schema as one branch and one pull request: the latest generation of every table run, merged
     (services/gold/star.merge_files). Pushed to the repository the table runs were generated for."""
-    from services.dbt.procedures import branch_slug
     from services.gold.star import merge_files
+
+    return _publish_children(session, run_id, payload, merge_files, "build the star schema first: this Gold run has no table runs",
+                             tool="publish_star_schema", title_suffix="star schema", body_label="Star schema",
+                             message_label="gold star schema")
+
+
+def publish_table_runs(session, run_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    """A Silver run mapped to a hub and its spokes, as one branch and one pull request: the latest generation of every
+    table run, hub first, merged with a path per table for the files a generation writes at one fixed path
+    (services/dbt/table_runs.merge_files)."""
+    from services.dbt.table_runs import merge_files
+
+    return _publish_children(session, run_id, payload, merge_files,
+                             "approve the mapping first: its target tables continue in table runs created then",
+                             tool="publish_table_runs", title_suffix="hub and spokes", body_label="Target tables",
+                             message_label="silver hub and spokes")
+
+
+def _publish_children(session, run_id: str, payload: Dict[str, Any], merge_files: Any, no_children: str, *, tool: str,
+                      title_suffix: str, body_label: str, message_label: str) -> Dict[str, Any]:
+    """A parent run's table runs as one branch and one pull request: the latest generation of every table run, in the
+    order they were created, merged by `merge_files`."""
+    from services.dbt.procedures import branch_slug
 
     run = rows(session, "SELECT * FROM CORE.WORKFLOW_RUN WHERE RUN_ID = ?", [run_id])
     assert run, f"run not found: {run_id}"
@@ -713,7 +737,7 @@ def publish_star_schema(session, run_id: str, payload: Dict[str, Any]) -> Dict[s
                                          ORDER BY G.GENERATION_VERSION DESC LIMIT 1) AS GENERATION_ID
                                   FROM CORE.WORKFLOW_RUN R WHERE R.PARENT_RUN_ID = ? AND R.DELETED_AT IS NULL
                                  ORDER BY R.CREATED_AT""", [run_id])
-    assert children, "build the star schema first: this Gold run has no table runs"
+    assert children, no_children
     missing = [c["MODEL_ENTITY"] for c in children if not c["GENERATION_ID"]]
     assert not missing, "generate the code of every table first: " + ", ".join(str(m) for m in missing)
     conv = conventions_for(lambda sql, params: rows(session, sql, params), run_standard(run[0]), run_pipeline(run[0]),
@@ -731,22 +755,24 @@ def publish_star_schema(session, run_id: str, payload: Dict[str, Any]) -> Dict[s
         if payload.get(key) not in (None, ""):
             plan[key] = payload[key]
     tables = ", ".join(str(c["MODEL_ENTITY"]) for c in children)
-    with tool_call(session, run_id, "publish_star_schema", {"cut_branch": plan.get("cut_branch"), "tables": tables}) as call:
+    with tool_call(session, run_id, tool, {"cut_branch": plan.get("cut_branch"), "tables": tables}) as call:
         try:
             assert plan.get("origin") or plan.get("git_repository"), "the table runs were generated without a repository"
             result = github.publish(
                 github.urllib_request(_token()),
                 plan.get("origin") or "", plan.get("base_branch") or "main", plan["cut_branch"], merged["files"],
-                title=plan.get("title") or f"{fill(conv['pr_title'], name=name, version=len(children))}: star schema",
+                title=plan.get("title") or f"{fill(conv['pr_title'], name=name, version=len(children))}: {title_suffix}",
                 body=github.pr_body(name, run_id, sorted(merged["files"]), None)
-                     + f"\n\nStar schema: {tables}."
+                     + f"\n\n{body_label}: {tables}."
                      + (f"\nDiffering copies kept once: {', '.join(merged['conflicts'])}." if merged["conflicts"] else ""),
-                message=f"{name}: gold star schema ({tables})",
+                message=f"{name}: {message_label} ({tables})",
                 draft=bool(plan.get("draft")),
                 root=plan.get("project_dir") or "",
             )
             result["tables"] = [c["MODEL_ENTITY"] for c in children]
             result["conflicts"] = merged["conflicts"]
+            if merged.get("moved"):
+                result["moved"] = merged["moved"]
             call.summary = f"{result['status']} {plan.get('cut_branch')}: PR {(result.get('pull_request') or {}).get('url') or 'none'}"
         except Exception as exc:
             result = {**github.explain(exc, plan.get("origin") or ""), "base_branch": plan.get("base_branch"),

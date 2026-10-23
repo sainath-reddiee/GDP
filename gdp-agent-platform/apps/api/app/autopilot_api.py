@@ -49,6 +49,13 @@ def _facts(db: Db, run_id: str) -> Tuple[str, Dict[str, Any], Dict[str, Any]]:
         model = _gold_model(db, r["domain_id"]) if r.get("domain_id") else None
         facts["gold_model"] = {"approved": bool(model and model.get("approved_version")), "open": bool(model and model.get("open_version"))}
         facts["has_children"] = bool(_children(db, run_id))
+    elif not r.get("parent_run_id"):   # a Silver run mapped to several tables continues in its table runs
+        from services.mapping.children import progress
+
+        states = [c["current_state"] for c in db.query("""SELECT CURRENT_STATE FROM CORE.WORKFLOW_RUN
+                                                           WHERE PARENT_RUN_ID = %s AND DELETED_AT IS NULL""", (run_id,))]
+        facts["has_children"] = bool(states)
+        facts["table_runs"] = progress(states)
     sttm = db.query("""SELECT STTM_ID FROM CORE.STTM_REGISTRY WHERE RUN_ID = %s AND STATUS = 'APPROVED'
                         ORDER BY STTM_VERSION DESC LIMIT 1""", (run_id,))
     facts["soda_generated"] = bool(db.query("""SELECT 1 FROM CORE.SODA_EXPECTATION_REGISTRY WHERE RUN_ID = %s AND IS_CURRENT

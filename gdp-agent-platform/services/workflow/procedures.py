@@ -311,7 +311,10 @@ def review_transition(session, run_id: str, to_state: str, decision: str,
             assert status["complete"], (
                 "MAPPING_INCOMPLETE: decide every source column and cover required targets. "
                 f"undecided={status['undecided']} missing_required={status['missing_required_targets']}"
+                + (f" minimum_mapping={status['minimum_mapping_missing']}" if status.get("minimum_mapping_missing") else "")
             )
+
+    fanned: Dict[str, Any] = {}
 
     def record_review(event_id: str) -> None:
         session.sql(
@@ -326,6 +329,12 @@ def review_transition(session, run_id: str, to_state: str, decision: str,
         ).collect()
         if decision != "APPROVE":
             return
+        if from_state == "MAPPING_REVIEW" and to_state == "MAPPING_APPROVED":
+            # a run mapped to a hub and its spokes continues as one table run per table (services/mapping/children)
+            from services.mapping.children import fan_out
+
+            fanned.update(fan_out(session, run, graph.states["MAPPING_APPROVED"].stage,
+                                  run_status_for(graph, "MAPPING_APPROVED"), graph.version))
         if from_state == "STTM_REVIEW" and to_state == "STTM_APPROVED":
             session.sql(
                 "UPDATE CORE.STTM_REGISTRY SET STATUS = 'APPROVED', REVIEWED_BY = CURRENT_USER(), "
@@ -368,6 +377,8 @@ def review_transition(session, run_id: str, to_state: str, decision: str,
         _apply_transition(session, graph, _get_run(session, run_id), "COMPLETED", "SYSTEM",
                           "phase 1 complete after dbt approval", {})
     result["state"] = _state_payload(graph, _get_run(session, run_id))
+    if any(fanned.values()):
+        result["table_runs"] = fanned
     return result
 
 

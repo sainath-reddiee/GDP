@@ -77,7 +77,7 @@ export function MappingDetail({
 
   const save = (decision: Record<string, unknown>) => start(async () => {
     setError("");
-    const result = await saveMappingDecisions(runId, [{ source_column_id: row.id, ...decision }]);
+    const result = await saveMappingDecisions(runId, [{ source_column_id: row.sourceId, target_table_id: row.tableId || undefined, ...decision }]);
     if (!result.ok) { setError(result.error); return; }
     onSaved();
   });
@@ -86,7 +86,8 @@ export function MappingDetail({
     const why = justification.trim();
     if (needsReason && !why) { setError("Add a business justification for this decision."); return; }
     if (alt) {
-      save({ decision: "ALTERNATIVE_TARGET", target_column_id: alt.target_column_id, transformation: transformation || undefined, business_justification: why });
+      save({ decision: "ALTERNATIVE_TARGET", target_column_id: alt.target_column_id, target_table_id: alt.target_table_id || undefined,
+             transformation: transformation || undefined, business_justification: why });
     } else if ((transformation || "") !== (chosen.transformation || "")) {
       save({ decision: "MODIFIED", candidate_id: chosen.candidate_id, transformation, business_justification: why });
     } else {
@@ -107,12 +108,18 @@ export function MappingDetail({
   };
 
   const target = data.targets.find((t) => t.target_column_id === effectiveTargetId);
+  // alternative targets grouped by table, this row's table first
+  const multi = (data.target_tables?.length ?? 0) > 1;
+  const targetGroups = (data.target_tables ?? [{ target_table_id: row.tableId, target_table: row.targetTable }])
+    .map((t) => ({ id: t.target_table_id, name: t.target_table,
+                   targets: data.targets.filter((c) => (c.target_table_id || row.tableId) === t.target_table_id || !multi) }))
+    .sort((a, b) => Number(b.id === row.tableId) - Number(a.id === row.tableId));
 
   return (
     <div className="flex h-full flex-col">
       <div className="flex items-start gap-2 border-b p-4">
         <div className="min-w-0 flex-1">
-          <p className="font-mono text-[11px] text-muted-foreground">{row.table}</p>
+          <p className="font-mono text-[11px] text-muted-foreground">{row.table}{multi && row.targetTable ? ` → ${row.targetTable}` : ""}</p>
           <h3 className="break-all text-base font-semibold leading-tight">{row.column}</h3>
           <p className="mt-0.5 text-xs text-muted-foreground">
             {row.datatype}
@@ -210,15 +217,23 @@ export function MappingDetail({
           <Label htmlFor="alt" className="mt-0">Or map to another target</Label>
           <Select id="alt" value={targetId} onChange={(e) => setTargetId(e.target.value)}>
             <option value="">Use selected candidate ({chosen.target_column})</option>
-            {data.targets.map((t) => {
-              const owner = takenBy.get(t.target_column_id);
-              return (
-                <option key={t.target_column_id} value={t.target_column_id}>
-                  {t.column_name} · {t.data_type}{t.nullable ? "" : " · required"}{owner && owner !== row.column ? ` · taken by ${owner}` : ""}
-                </option>
-              );
+            {targetGroups.map((g) => {
+              const options = g.targets.map((t) => {
+                const owner = takenBy.get(t.target_column_id);
+                return (
+                  <option key={t.target_column_id} value={t.target_column_id}>
+                    {t.column_name} · {t.data_type}{t.nullable ? "" : " · required"}{owner && owner !== row.column ? ` · taken by ${owner}` : ""}
+                  </option>
+                );
+              });
+              return multi ? <optgroup key={g.id} label={g.id === row.tableId ? `${g.name} (this row's table)` : g.name}>{options}</optgroup> : options;
             })}
           </Select>
+          {multi && alt && (alt.target_table_id || "") !== row.tableId && (
+            <p className="text-[11px] text-muted-foreground">
+              This maps the column into {alt.target_table} as well; the row for {row.targetTable} still needs its own decision.
+            </p>
+          )}
           {target?.definition && <p className="text-[11px] text-muted-foreground">{target.definition}</p>}
           {conflict && (
             <p className="rounded-md bg-amber-50 px-2 py-1.5 text-xs text-amber-800">

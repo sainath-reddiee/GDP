@@ -8,7 +8,8 @@ runs the step through the same functions and governance checks a person's click 
 
 next_action(state, facts) -> {"kind": ACTION | GATE | WAIT | BLOCKED | DONE, "action"?, "label"}
 facts: pipeline (SILVER | GOLD), has_target, planned_tables (count), gold_model {approved, open} (Gold), has_children
-(a Gold run that built its star schema), soda_generated, dbt_generated (for the current STTM), validated (the current
+(a Gold run that built its star schema, or a Silver run mapped to several tables), table_runs {total, done, failed}
+(a Silver parent's table runs), soda_generated, dbt_generated (for the current STTM), validated (the current
 generation), validation_failed, failure_reason.
 """
 
@@ -74,6 +75,13 @@ def next_action(state: str, facts: Dict[str, Any]) -> Dict[str, Any]:
         return _act("generate_mapping")
     if state == "MAPPING_REVIEW":
         return _gate("Review and approve the field mapping", "mapping")
+    if state in ("MAPPING_APPROVED", "STTM_PENDING") and facts.get("has_children") and not gold:
+        runs = facts.get("table_runs") or {}
+        if runs.get("total") and runs.get("done") == runs.get("total"):
+            return {"kind": "DONE", "label": f"All {runs['total']} table runs have approved code"}
+        return _gate(f"Each target table continues in its own table run ({runs.get('done', 0)} of "
+                     f"{runs.get('total', 0)} done" + (f", {runs['failed']} failed" if runs.get("failed") else "") + ")",
+                     "table runs")
     if state in ("MAPPING_APPROVED", "STTM_PENDING"):
         return _act("generate_sttm")
     if state == "STTM_REVIEW":
