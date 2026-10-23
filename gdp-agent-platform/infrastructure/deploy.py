@@ -258,26 +258,74 @@ def _try(cur, sql: str) -> Tuple[bool, str]:
 
 _ROLE_GRANTS: Dict[Tuple[int, str], Dict[str, Any]] = {}
 TIMINGS: Dict[str, float] = {}   # seconds of the slow preflight parts, for the log line after preflight
+NOTES: List[str] = []            # why a slower path was taken, for the same line
+
+
+class SessionRoles:
+    """The deploy role's hierarchy as Snowflake knows it: `name in roles` is IS_ROLE_IN_SESSION(name). The deploy's
+    session runs the deploy role with secondary roles off (preflight), so the session's hierarchy is that role's.
+    Each name is asked once; check() asks many in one query."""
+
+    BATCH = 100
+
+    def __init__(self, cur, role: str):
+        self.cur, self.known = cur, {role.upper(): True}
+
+    @staticmethod
+    def _key(name: Any) -> str:
+        return str(name or "").upper().strip('"')
+
+    def check(self, names: Iterable[Any]) -> None:
+        todo = [k for k in dict.fromkeys(self._key(n) for n in names) if k and k not in self.known]
+        for start in range(0, len(todo), self.BATCH):
+            chunk = todo[start:start + self.BATCH]
+            row = _rows(self.cur, "SELECT " + ", ".join(f"IS_ROLE_IN_SESSION(%s) AS R{i}" for i in range(len(chunk))),
+                        tuple(chunk))[0]
+            for i, name in enumerate(chunk):
+                self.known[name] = bool(row.get(f"r{i}"))
+
+    def __contains__(self, name: Any) -> bool:
+        key = self._key(name)
+        if not key:
+            return False
+        if key not in self.known:
+            try:
+                self.check([key])
+            except Exception:
+                self.known[key] = False   # a database role or a name Snowflake rejects: not an inherited role
+        return self.known[key]
+
+
+def _session_role_grants(cur, role: str) -> Dict[str, Any]:
+    """role_grants in three queries: the account privileges of every role (SHOW GRANTS ON ACCOUNT, filtered in
+    Snowflake), then which of those roles this role holds, in one IS_ROLE_IN_SESSION query."""
+    roles = SessionRoles(cur, role)
+    cur.execute("SHOW GRANTS ON ACCOUNT")
+    grants = _rows(cur, 'SELECT "privilege", "grantee_name" FROM TABLE(RESULT_SCAN(LAST_QUERY_ID())) '
+                        "WHERE \"granted_to\" = 'ROLE'")
+    roles.check(g.get("grantee_name") for g in grants)
+    account = {str(g.get("privilege") or "").upper() for g in grants if g.get("grantee_name") in roles}
+    return {"roles": roles, "account": account}
 
 
 def role_grants(cur, role: str, limit: int = 50) -> Dict[str, Any]:
-    """{roles: every role `role` inherits (itself included), account: privileges on the account, of any of them}.
-    One SHOW GRANTS per inherited role, so it is read once per cursor (one deploy): preflight and the access step
-    share it."""
+    """{roles: the roles `role` inherits, itself included (supports `in`), account: privileges on the account, of
+    any of them}. Asked of Snowflake directly (_session_role_grants); when that fails, read role by role. Read once
+    per cursor (one deploy): preflight and the access step share it."""
     key = (id(cur), role.upper())
     if key not in _ROLE_GRANTS:
         started = time.time()
-        _ROLE_GRANTS[key] = _walk_role_grants(cur, role, limit)
+        try:
+            _ROLE_GRANTS[key] = _session_role_grants(cur, role)
+        except Exception as exc:
+            NOTES.append(f"role hierarchy read role by role ({' '.join(str(exc).split())[:160]})")
+            _ROLE_GRANTS[key] = _walk_role_grants(cur, role, limit)
         TIMINGS["role hierarchy"] = time.time() - started
     return _ROLE_GRANTS[key]
 
 
 def _walk_role_grants(cur, role: str, limit: int) -> Dict[str, Any]:
-    if hasattr(cur, "execute_async") and hasattr(cur, "connection"):
-        try:
-            return _walk_by_level(cur, role, limit)
-        except Exception:
-            pass   # one role at a time below gives the same answer, more slowly
+    """The fallback: one SHOW GRANTS TO ROLE per inherited role (two round trips each, filtered in Snowflake)."""
     seen, todo, account = set(), [role.upper()], set()
     while todo and len(seen) < limit:
         current = todo.pop()
@@ -299,49 +347,6 @@ def _walk_role_grants(cur, role: str, limit: int) -> Dict[str, Any]:
                 todo.append(name)
             elif on == "ACCOUNT":
                 account.add(privilege)
-    return {"roles": seen, "account": account}
-
-
-def _walk_by_level(cur, role: str, limit: int) -> Dict[str, Any]:
-    """role_grants, one level of the hierarchy at a time: the level's SHOW GRANTS run together as asynchronous
-    queries, then one query reads the ROLE and ACCOUNT grants of all of them through RESULT_SCAN(<query id>). A few
-    round trips per level instead of two per role (SYSADMIN on an account can inherit dozens of roles)."""
-    con = cur.connection
-    seen: set = set()
-    account: set = set()
-    level = [role.upper()]
-    while level and len(seen) < limit:
-        level = [r for r in dict.fromkeys(level) if r not in seen][:limit - len(seen)]
-        if not level:
-            break
-        seen.update(level)
-        submitted = []
-        for name in level:
-            c = con.cursor()
-            c.execute_async(f'SHOW GRANTS TO ROLE "{name}"')
-            submitted.append(c.sfqid)
-        done = []
-        for qid in submitted:
-            try:
-                while con.is_still_running(con.get_query_status_throw_if_error(qid)):
-                    time.sleep(0.2)
-                done.append(qid)
-            except Exception:
-                continue   # a role this role cannot see is skipped, as one at a time does
-        if not done:
-            break
-        rows = _rows(cur, " UNION ALL ".join(
-            f"SELECT \"privilege\", \"granted_on\", \"name\" FROM TABLE(RESULT_SCAN('{qid}')) "
-            "WHERE \"granted_on\" IN ('ROLE', 'ACCOUNT')" for qid in done))
-        nxt = []
-        for g in rows:
-            on, privilege, name = str(g.get("granted_on") or "").upper(), str(g.get("privilege") or "").upper(), \
-                str(g.get("name") or "").upper().strip('"')
-            if on == "ROLE" and privilege == "USAGE":
-                nxt.append(name)
-            elif on == "ACCOUNT":
-                account.add(privilege)
-        level = nxt
     return {"roles": seen, "account": account}
 
 
@@ -978,10 +983,13 @@ def main(argv: Optional[List[str]] = None) -> int:
         cur = con.cursor()
         log("1. preflight")
         TIMINGS.clear()
+        NOTES.clear()
         checks = preflight(cur, env)
         print_checks(log, checks)
         parts = ", ".join(f"{name} {seconds:.0f}s" for name, seconds in TIMINGS.items())
         log(f"  preflight {took()}" + (f": {parts}" if parts else ""))
+        for note in NOTES:
+            log(f"  note: {note}")
         if args.admin_sql is not None:
             target = Path(args.admin_sql) if args.admin_sql else LOG_DIR / f"{env['name']}-admin.sql"
             target.parent.mkdir(exist_ok=True)

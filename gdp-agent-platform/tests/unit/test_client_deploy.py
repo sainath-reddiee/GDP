@@ -28,6 +28,9 @@ class Cursor:
 
     def execute(self, sql, params=None):
         self.sql.append(sql)
+        if sql.startswith("SHOW GRANTS ON ACCOUNT") and not any(sql.startswith(p) for p in self.rules):
+            # these tests describe roles by their SHOW GRANTS TO ROLE: the role-by-role path reads them
+            raise RuntimeError("SHOW GRANTS ON ACCOUNT is not answered by this fake")
         if "RESULT_SCAN(LAST_QUERY_ID())" in sql and "granted_on" in sql:
             # as Snowflake does: the previous SHOW's rows, only the role and account grants
             names = [d[0] for d in self.description]

@@ -78,52 +78,55 @@ def test_a_file_with_other_statements_runs_in_order():
     assert all(mode == "sync" for mode, _ in con.log) and con.log[0][1].startswith("CREATE STAGE")
 
 
-class LevelCon:
-    """A Snowflake connection for the level-by-level role walk: SHOW GRANTS run as async queries, RESULT_SCAN reads
-    them back. The hierarchy: SYSADMIN -> A, B; A -> C; C has an account privilege."""
+class RoleCursor:
+    """A Snowflake cursor for the direct role check: SHOW GRANTS ON ACCOUNT, RESULT_SCAN of it, IS_ROLE_IN_SESSION.
+    The deploy role SYSADMIN holds A and C; B is someone else's."""
 
-    GRANTS = {"SYSADMIN": [("USAGE", "ROLE", "A"), ("USAGE", "ROLE", "B"), ("OWNERSHIP", "TABLE", "T")],
-              "A": [("USAGE", "ROLE", "C")], "B": [], "C": [("EXECUTE TASK", "ACCOUNT", "ACME")]}
+    ACCOUNT = [("EXECUTE TASK", "ROLE", "C"), ("CREATE DATABASE", "ROLE", "B"), ("MONITOR USAGE", "ROLE", "SYSADMIN")]
+    HELD = {"SYSADMIN", "A", "C"}
 
-    def __init__(self):
-        self.queries, self.shows, self.sql = {}, [], []
-
-    def cursor(self):
-        return LevelCursor(self)
-
-    def get_query_status_throw_if_error(self, qid):
-        return "done"
-
-    def is_still_running(self, status):
-        return False
-
-
-class LevelCursor:
-    def __init__(self, con):
-        self.connection, self.sfqid, self.description, self._rows = con, None, [], []
-
-    def execute_async(self, sql):
-        role = sql.split('"')[1]
-        self.sfqid = f"q-{role}"
-        self.connection.queries[self.sfqid] = role
-        self.connection.shows.append(role)
+    def __init__(self, fail_show=False):
+        self.sql, self.description, self._rows, self.fail_show = [], [], [], fail_show
 
     def execute(self, sql, params=None):
-        self.connection.sql.append(sql)
-        rows = []
-        for qid in [part.split("'")[1] for part in sql.split("RESULT_SCAN(")[1:]]:
-            rows += [g for g in LevelCon.GRANTS[self.connection.queries[qid]] if g[1] in ("ROLE", "ACCOUNT")]
-        self.description = [("privilege",), ("granted_on",), ("name",)]
-        self._rows = rows
+        self.sql.append(sql)
+        if sql.startswith("SHOW GRANTS ON ACCOUNT"):
+            if self.fail_show:
+                raise RuntimeError("Insufficient privileges to operate on account")
+            self.description, self._rows = [], []
+        elif "RESULT_SCAN" in sql:
+            self.description = [("privilege",), ("grantee_name",)]
+            self._rows = [(p, g) for p, to, g in self.ACCOUNT if to == "ROLE"]
+        elif "IS_ROLE_IN_SESSION" in sql:
+            self.description = [(f"R{i}",) for i in range(len(params))]
+            self._rows = [tuple(name in self.HELD for name in params)]
+        elif sql.startswith('SHOW GRANTS TO ROLE "SYSADMIN"'):   # the fallback walk
+            self.description = [("privilege",), ("granted_on",), ("name",)]
+            self._rows = [("USAGE", "ROLE", "A")]
+        else:
+            self.description, self._rows = [("x",)], []
 
     def fetchall(self):
         return self._rows
 
 
-def test_the_role_hierarchy_is_read_one_level_at_a_time():
+def test_the_role_hierarchy_is_asked_of_snowflake_in_a_few_queries():
     from infrastructure import deploy
 
-    con = LevelCon()
-    found = deploy._walk_role_grants(con.cursor(), "SYSADMIN", 50)
-    assert found == {"roles": {"SYSADMIN", "A", "B", "C"}, "account": {"EXECUTE TASK"}}
-    assert len(con.sql) == 3     # one read per level (SYSADMIN; A and B; C), not two queries per role
+    deploy._ROLE_GRANTS.clear()
+    deploy.NOTES.clear()
+    cur = RoleCursor()
+    found = deploy.role_grants(cur, "SYSADMIN")
+    assert found["account"] == {"EXECUTE TASK", "MONITOR USAGE"}          # B's CREATE DATABASE is not ours
+    assert "A" in found["roles"] and "SYSADMIN" in found["roles"] and "B" not in found["roles"]
+    assert len(cur.sql) == 4 and not deploy.NOTES                         # SHOW, RESULT_SCAN, one batch, A on demand
+    assert deploy.role_grants(cur, "SYSADMIN") is found and len(cur.sql) == 4   # once per deploy
+
+
+def test_without_show_grants_on_account_it_reads_role_by_role_and_says_so():
+    from infrastructure import deploy
+
+    deploy._ROLE_GRANTS.clear()
+    deploy.NOTES.clear()
+    found = deploy.role_grants(RoleCursor(fail_show=True), "SYSADMIN")
+    assert "SYSADMIN" in found["roles"] and deploy.NOTES and deploy.NOTES[0].startswith("role hierarchy read role by role")
