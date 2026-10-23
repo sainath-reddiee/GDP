@@ -28,6 +28,12 @@ class Cursor:
 
     def execute(self, sql, params=None):
         self.sql.append(sql)
+        if "RESULT_SCAN(LAST_QUERY_ID())" in sql and "granted_on" in sql:
+            # as Snowflake does: the previous SHOW's rows, only the role and account grants
+            names = [d[0] for d in self.description]
+            at = names.index("granted_on") if "granted_on" in names else None
+            self._rows = [r for r in self._rows if at is None or r[at] in ("ROLE", "ACCOUNT")]
+            return
         for prefix, answer in self.rules.items():
             if sql.startswith(prefix):
                 if isinstance(answer, Exception):

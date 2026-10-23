@@ -257,6 +257,7 @@ def _try(cur, sql: str) -> Tuple[bool, str]:
 
 
 _ROLE_GRANTS: Dict[Tuple[int, str], Dict[str, Any]] = {}
+TIMINGS: Dict[str, float] = {}   # seconds of the slow preflight parts, for the log line after preflight
 
 
 def role_grants(cur, role: str, limit: int = 50) -> Dict[str, Any]:
@@ -265,7 +266,9 @@ def role_grants(cur, role: str, limit: int = 50) -> Dict[str, Any]:
     share it."""
     key = (id(cur), role.upper())
     if key not in _ROLE_GRANTS:
+        started = time.time()
         _ROLE_GRANTS[key] = _walk_role_grants(cur, role, limit)
+        TIMINGS["role hierarchy"] = time.time() - started
     return _ROLE_GRANTS[key]
 
 
@@ -277,7 +280,11 @@ def _walk_role_grants(cur, role: str, limit: int) -> Dict[str, Any]:
             continue
         seen.add(current)
         try:
-            grants = _rows(cur, f'SHOW GRANTS TO ROLE "{current}"')
+            # a role such as SYSADMIN owns thousands of objects: SHOW GRANTS lists every one of them. Only the roles
+            # it inherits and its account privileges matter here, so Snowflake filters the list and sends just those.
+            cur.execute(f'SHOW GRANTS TO ROLE "{current}"')
+            grants = _rows(cur, 'SELECT "privilege", "granted_on", "name" FROM TABLE(RESULT_SCAN(LAST_QUERY_ID())) '
+                                "WHERE \"granted_on\" IN ('ROLE', 'ACCOUNT')")
         except Exception:
             continue
         for g in grants:
@@ -466,8 +473,10 @@ def cortex_check(cur, role: str, model: str) -> Check:
     this account. COUNT_TOKENS cannot stand in for it: it does not know every model AI_COMPLETE serves. A privilege
     error and a model or region error need different admins' fixes."""
     assert MODEL.match(model), f"unsafe model name {model}"
+    started = time.time()
     ok, err = _try(cur, f"SELECT AI_COMPLETE(model => '{model}', prompt => 'Reply with OK', "
                         "model_parameters => {'temperature': 0, 'max_tokens': 1}) AS R")
+    TIMINGS["cortex"] = time.time() - started
     if ok:
         return Check("cortex", "ok", f"{role} can call {model} through Cortex")
     if NOT_ALLOWED.search(err):
@@ -920,9 +929,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     try:
         cur = con.cursor()
         log("1. preflight")
+        TIMINGS.clear()
         checks = preflight(cur, env)
         print_checks(log, checks)
-        log(f"  preflight {took()}")
+        parts = ", ".join(f"{name} {seconds:.0f}s" for name, seconds in TIMINGS.items())
+        log(f"  preflight {took()}" + (f": {parts}" if parts else ""))
         if args.admin_sql is not None:
             target = Path(args.admin_sql) if args.admin_sql else LOG_DIR / f"{env['name']}-admin.sql"
             target.parent.mkdir(exist_ok=True)
