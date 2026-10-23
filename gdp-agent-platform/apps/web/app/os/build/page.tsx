@@ -71,7 +71,7 @@ export default async function BuildWorkbench({ searchParams }: { searchParams: {
   const primary = validationFailed
     ? <Btn href={`/os/review?run=${runId}`} variant="red"><ShieldAlert className="h-3.5 w-3.5" /> See validation findings</Btn>
     : run.current_state === "DBT_REVIEW"
-      ? <Action access={access} id="reviewCode" href={`/runs/${runId}/review`} variant="primary" />
+      ? <Action access={access} id="reviewCode" label="Review and decide" href={`/os/review?run=${runId}`} variant="primary" />
       : <Action access={access} id="workStep" href={classicHref(runId, now)} label={`Open ${now.label.toLowerCase()}`} variant="primary" />;
 
   return (

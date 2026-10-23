@@ -123,6 +123,8 @@ export const ACTIONS = {
   editSkill: { privilege: "SKILL.EDIT", label: "Edit and version the skill" },
   releaseSkill: { privilege: "SKILL.RELEASE", label: "Review candidate" },
   curateKnowledge: { privilege: "KNOWLEDGE.EDIT", label: "Curate in Enterprise Memory" },
+  verifyKnowledge: { privilege: "KNOWLEDGE.EDIT", label: "Verify" },
+  decideInbox: { privilege: "KNOWLEDGE.EDIT", label: "Approve" },
   operateIncident: { privilege: "OPS.OPERATE", label: "Investigate" },
   viewOps: { privilege: "OPS.VIEW", label: "Operations" },
   viewApprovals: { privilege: "APPROVAL.VIEW", label: "All approvals" },

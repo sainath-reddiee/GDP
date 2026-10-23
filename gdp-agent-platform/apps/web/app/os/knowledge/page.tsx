@@ -1,9 +1,10 @@
 import Link from "next/link";
 import { ArrowRight, BookOpen, BookmarkCheck, Inbox, Search, Sparkles, TrendingUp } from "lucide-react";
 import { stateLabel } from "@/lib/run-labels";
-import { loadDomains, loadKnowledge, loadKnowledgeOverview, loadKnowledgeRecord } from "@/lib/os/data";
+import { loadDomains, loadKnowledge, loadKnowledgeInbox, loadKnowledgeOverview, loadKnowledgeRecord } from "@/lib/os/data";
 import { guard } from "@/lib/os/session";
-import { canSee } from "@/lib/os/access";
+import { ACTIONS, actMode, canSee } from "@/lib/os/access";
+import { InboxDecision, VerifyKnowledge } from "@/components/os/decide";
 import { Action } from "@/components/os/action";
 import { Btn, Card, Empty, Field, Kpi, PageHeader, SourceError, Tag, ago, pretty, type Tone } from "@/components/os/ui";
 import { cn } from "@/lib/utils";
@@ -32,7 +33,9 @@ export default async function KnowledgeHub({ searchParams }: { searchParams: { q
   const params: Record<string, string> = {};
   if (searchParams.q) params.q = searchParams.q;
   if (searchParams.domain) params.domain_id = searchParams.domain;
-  const [overview, domains, list] = await Promise.all([loadKnowledgeOverview(), loadDomains(), loadKnowledge(params)]);
+  const [overview, domains, list, inbox] = await Promise.all([loadKnowledgeOverview(), loadDomains(), loadKnowledge(params), loadKnowledgeInbox()]);
+  // curating memory is a steward's decision (KNOWLEDGE.EDIT); others who may raise change requests send it for approval
+  const curate = actMode(access, ACTIONS.verifyKnowledge.privilege);
   const items = list.data.items.filter((i) => !family || family.types.includes(i.knowledge_type));
   const selectedId = searchParams.id ?? items[0]?.knowledge_id;
   const record = selectedId ? await loadKnowledgeRecord(selectedId) : null;
@@ -127,6 +130,12 @@ export default async function KnowledgeHub({ searchParams }: { searchParams: { q
                   <Field label="Trust">{sel.verified_by ? `Verified by ${sel.verified_by}` : sel.editable ? "Not yet verified" : "Repository pack (governed)"}</Field>
                   <Field label="Versions">{record?.versions.length ?? 1} version{(record?.versions.length ?? 1) === 1 ? "" : "s"}{sel.change_note ? ` · ${sel.change_note}` : ""}</Field>
                 </div>
+                {curate !== "none" && sel.status === "ACTIVE" && (
+                  <div className="mt-3 flex items-center justify-between gap-3 rounded-xl border border-[var(--os-line)] p-3">
+                    <span className="os-muted text-[11.5px]">{sel.verified_at ? `Verified ${ago(sel.verified_at)}${sel.review_due ? `; next review ${sel.review_due.slice(0, 10)}` : ""}.` : "A steward has not verified this record yet."}</span>
+                    <VerifyKnowledge id={sel.knowledge_id} mode={curate} previewing={!!access.preview} />
+                  </div>
+                )}
                 <div className="os-muted mb-1.5 mt-4 text-[10.5px] font-bold uppercase tracking-wide">Reused by runs</div>
                 {record?.usage.length ? (
                   <div className="os-divide">
@@ -141,6 +150,26 @@ export default async function KnowledgeHub({ searchParams }: { searchParams: { q
               </>
             ) : <Empty icon={BookmarkCheck} title="Pick a record" />}
           </Card>
+
+          {curate !== "none" && (
+            <Card title="Steward inbox" subtitle="Agent proposals waiting to become trusted memory" pad={false}
+                  action={<Tag tone={inbox.data.length ? "amber" : "green"}>{inbox.data.length} waiting</Tag>}>
+              <SourceError what="The inbox" error={inbox.error} />
+              {inbox.data.length ? (
+                <div className="os-divide max-h-[360px] overflow-auto">
+                  {inbox.data.slice(0, 12).map((i) => (
+                    <div key={i.knowledge_id} className="flex items-center justify-between gap-3 px-5 py-2.5">
+                      <span className="min-w-0">
+                        <Link href={href({ id: i.knowledge_id })} scroll={false} className="block truncate text-[12.5px] font-bold hover:underline">{i.title}</Link>
+                        <span className="os-faint text-[10.5px]">{i.domain_name ?? "No domain"} · {pretty(i.knowledge_type)} · from {ORIGIN[i.origin ?? ""] ?? (pretty(i.origin) || "an agent")} · {ago(i.created_at)}</span>
+                      </span>
+                      <InboxDecision id={i.knowledge_id} mode={curate} previewing={!!access.preview} />
+                    </div>
+                  ))}
+                </div>
+              ) : <div className="p-5"><Empty icon={Inbox} title="Nothing waits for curation" /></div>}
+            </Card>
+          )}
 
           <Card title="Contribution lifecycle" subtitle="How memory grows: captured automatically, trusted only after review">
             {o ? (

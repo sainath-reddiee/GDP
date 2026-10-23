@@ -89,6 +89,50 @@ test("without the privilege, an action becomes a change request to the approver 
   await expect(page.getByText("Access list")).toBeVisible();
 });
 
+// In-place decisions (Phase 9). These never submit: approving a gate, signing off QA, publishing a PR, promoting a
+// skill or verifying knowledge are real writes on the platform. They check the controls appear for the right people,
+// stay locked until a reason is written, and are off while an admin previews another role.
+test("a gate is decided in place on Review, with a written justification", async ({ page }) => {
+  await page.goto("/os/review");
+  await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+  if (!(await page.getByTestId("gate-decision").count())) {
+    // the default run is not at a gate: open the first one waiting
+    const waiting = page.locator('a[href^="/os/review?run="]').first();
+    test.skip(!(await waiting.count()), "no run is waiting at a gate");
+    await waiting.click();
+  }
+  const decision = page.getByTestId("gate-decision");
+  await expect(decision).toBeVisible();
+  await expect(page.getByTestId("gate-approve")).toBeDisabled();
+  await decision.getByRole("textbox").fill("Checked against the domain contract");
+  await expect(page.getByTestId("gate-approve")).toBeEnabled();
+  await expect(decision.getByRole("combobox", { name: "Send back to" }).getByRole("option", { name: /cancel/i })).toHaveCount(0);
+});
+
+test("previewing another role turns the decisions off", async ({ page }) => {
+  await previewAs(page, "DATA_ENGINEER");
+  await page.goto("/os/review");
+  const decision = page.getByTestId("gate-decision");
+  test.skip(!(await decision.count()), "no gate this role may act on is open");
+  await expect(decision.getByText("Decisions are off while you preview another role")).toBeVisible();
+  await expect(page.getByTestId("gate-approve")).toBeDisabled();
+});
+
+test("knowledge stewards verify records and decide the inbox in place; viewers do not", async ({ page }) => {
+  await page.goto("/os/knowledge");
+  await expect(page.getByTestId("verify-knowledge")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Steward inbox" })).toBeVisible();
+  await previewAs(page, "VIEWER");
+  await page.goto("/os/knowledge");
+  await expect(page.getByTestId("verify-knowledge")).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "Steward inbox" })).toHaveCount(0);
+});
+
+test("skill versions can be made candidate or promoted in place", async ({ page }) => {
+  await page.goto("/os/skills?skill=SODA_SKILL");
+  await expect(page.getByRole("button", { name: /^(Promote|Make candidate)$/ }).first()).toBeVisible();
+});
+
 test("classic pages open inside the Agentic Data OS shell, with their own tabs", async ({ page }) => {
   await page.goto("/runs");
   await expect(page.getByRole("navigation", { name: "Agentic Data OS" })).toBeVisible();

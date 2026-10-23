@@ -6,6 +6,8 @@ import { guard } from "@/lib/os/session";
 import { Action } from "@/components/os/action";
 import { ActivityRow, Banner, Bar, Btn, Card, Empty, Kpi, PageHeader, SourceError, Tag, ago, pretty } from "@/components/os/ui";
 import { cn } from "@/lib/utils";
+import { SkillLabel } from "@/components/os/decide";
+import { ACTIONS, actMode } from "@/lib/os/access";
 
 export const dynamic = "force-dynamic";
 export const metadata = { title: "Skill studio" };
@@ -135,9 +137,18 @@ export default async function SkillStudio({ searchParams }: { searchParams: { sk
                   <div key={v.skill_id} className="flex items-center justify-between gap-2 px-5 py-2.5">
                     <span className="min-w-0"><span className="block text-[12.5px] font-bold">v{v.version} <span className="os-faint font-semibold">rev {v.revision}</span></span>
                       <span className="os-faint block truncate text-[10.5px]">{v.change_note ?? pretty(v.origin)} · {v.created_by} · {ago(v.created_at)}</span></span>
-                    <span className="flex shrink-0 gap-1">
+                    <span className="flex shrink-0 flex-wrap items-start justify-end gap-1">
                       {v.labels.map((l) => <Tag key={l} tone={l === "production" ? "green" : l === "candidate" ? "amber" : "blue"}>{l}</Tag>)}
                       {!v.labels.length && <Tag tone={v.status === "RETIRED" ? "neutral" : "blue"}>{pretty(v.status)}</Tag>}
+                      {/* a label move in place: candidate (SKILL.EDIT), production (SKILL.RELEASE; on an older version it is the rollback) */}
+                      {name && v.status !== "RETIRED" && !v.labels.includes("production") && actMode(access, ACTIONS.releaseSkill.privilege) !== "none" && (
+                        <SkillLabel name={name} skillId={v.skill_id} version={v.version} label="production" mode={actMode(access, ACTIONS.releaseSkill.privilege) as "do" | "request"}
+                                    previewing={!!access.preview} approver={access.approvers[ACTIONS.releaseSkill.privilege]} />
+                      )}
+                      {name && v.status !== "RETIRED" && !v.labels.length && actMode(access, ACTIONS.editSkill.privilege) !== "none" && (
+                        <SkillLabel name={name} skillId={v.skill_id} version={v.version} label="candidate" mode={actMode(access, ACTIONS.editSkill.privilege) as "do" | "request"}
+                                    previewing={!!access.preview} approver={access.approvers[ACTIONS.editSkill.privilege]} />
+                      )}
                     </span>
                   </div>
                 ))}

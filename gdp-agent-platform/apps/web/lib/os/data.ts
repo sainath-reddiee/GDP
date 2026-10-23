@@ -186,6 +186,9 @@ export type RunBundle = {
   generation: DbtGeneration | null;
   artifacts: DbtArtifact[];
   skills: RunSkill[];
+  /** where the generated code goes (the plan stored at generation) and what was published, if anything */
+  branch: { base_branch?: string; cut_branch?: string; repo?: string; origin?: string } | null;
+  publication: { status: string; pr_number?: number | null; pr_url?: string | null; head_branch?: string | null; detail?: string | null; created_at?: string } | null;
   errors: string[];
 };
 
@@ -215,7 +218,8 @@ export async function loadRunBundle(runId: string): Promise<Loaded<RunBundle | n
   const [audit, validation, dbt, skills] = await Promise.all([
     load(api<{ events: AuditEvent[]; reviews: RunBundle["reviews"] }>(`/api/runs/${runId}/audit`), { events: [], reviews: [] }),
     load(api<{ runs: ValidationCheck[] }>(`/api/runs/${runId}/validation`).then((r) => r.runs ?? []), [] as ValidationCheck[]),
-    load(api<{ generation: DbtGeneration | null; artifacts: DbtArtifact[] }>(`/api/runs/${runId}/dbt`), { generation: null, artifacts: [] }),
+    load(api<{ generation: DbtGeneration | null; artifacts: DbtArtifact[]; branch?: RunBundle["branch"]; publication?: RunBundle["publication"] }>(
+      `/api/runs/${runId}/dbt`), { generation: null, artifacts: [] }),
     load(api<{ loaded: RunSkill[] }>(`/api/runs/${runId}/skills`).then((r) => r.loaded ?? []), [] as RunSkill[]),
   ]);
   return {
@@ -228,6 +232,8 @@ export async function loadRunBundle(runId: string): Promise<Loaded<RunBundle | n
       // the file bodies are not needed on the overview screens
       artifacts: (dbt.data.artifacts ?? []).map(({ content: _content, ...a }) => a),
       skills: skills.data,
+      branch: dbt.data.branch ?? null,
+      publication: dbt.data.publication ?? null,
       errors: [audit.error, validation.error, dbt.error, skills.error].filter((x): x is string => !!x),
     },
     error: null,

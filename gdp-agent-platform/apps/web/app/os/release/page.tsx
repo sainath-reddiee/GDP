@@ -8,6 +8,8 @@ import { guard } from "@/lib/os/session";
 import { Action } from "@/components/os/action";
 import { ActivityRow, Banner, Btn, Card, Empty, Field, Kpi, PageHeader, SourceError, Tag, ago, pretty, type Tone } from "@/components/os/ui";
 import { RunPicker } from "@/components/os/run-picker";
+import { PublishPr, QaSignoffPanel } from "@/components/os/decide";
+import { ACTIONS, actMode } from "@/lib/os/access";
 import { cn } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
@@ -50,6 +52,8 @@ export default async function CodeAndRelease({ searchParams }: { searchParams: {
   const qaFailed = qa.results.filter((r) => r.outcome === "FAILED" || r.outcome === "ERROR").length;
   const learned = feed.data.filter((k) => k.source_run_id === run.run_id);
   const repo = prs.data.repos[0];
+  const publishMode = actMode(access, ACTIONS.publishPr.privilege);
+  const signoffMode = actMode(access, ACTIONS.signoffQa.privilege);
 
   const gates: Gate[] = [
     { label: "Validation", sub: score.score === null ? "not run" : `${score.score}% · ${score.critical} errors`, state: score.score === null ? "pending" : validated ? "done" : "blocked" },
@@ -69,7 +73,7 @@ export default async function CodeAndRelease({ searchParams }: { searchParams: {
           <RunPicker base="/os/release" current={run.run_id} runs={runOptions(runs.data.runs)} />
           <Action access={access} id="openDbtStudio" label="dbt studio" href={`/runs/${run.run_id}/dbt`} icon={<FileCode2 className="h-3.5 w-3.5" />} />
           {run.current_state === "DBT_REVIEW"
-            ? <Action access={access} id="reviewCode" label="Review and approve" href={`/runs/${run.run_id}/review`} variant="primary" />
+            ? <Action access={access} id="reviewCode" label="Review and decide" href={`/os/review?run=${run.run_id}`} variant="primary" />
             : <Btn href="/dashboard/source-control" variant="primary"><GitPullRequest className="h-3.5 w-3.5" /> Source control</Btn>}
         </>}
       />
@@ -116,10 +120,17 @@ export default async function CodeAndRelease({ searchParams }: { searchParams: {
                 ))}
               </div>
             ) : (
-              <Empty icon={GitPullRequest} title="No pull request published for this run">
-                {validated ? "Validation passed, so the generated code can be published as a pull request from the dbt studio." : "A pull request is published only after validation passes."}
-                {repo && <> The target repository is <b>{repo.name}</b>{repo.branch ? <> (branch {repo.branch})</> : null}.</>}
-              </Empty>
+              <>
+                <Empty icon={GitPullRequest} title={b.publication?.status && b.publication.status !== "NOT_REQUESTED" ? `Last publication: ${pretty(b.publication.status)}` : "No pull request published for this run"}>
+                  {b.publication?.detail ?? (validated ? "Validation passed, so the generated code can be published as a pull request." : "A pull request is published only after validation passes.")}
+                </Empty>
+                {validated && b.generation && publishMode !== "none" && (
+                  <div className="mt-3 rounded-xl border border-[var(--os-line)] p-3">
+                    <PublishPr runId={run.run_id} mode={publishMode} previewing={!!access.preview}
+                               repo={b.branch?.repo ?? b.branch?.origin} base={b.branch?.base_branch} cut={b.branch?.cut_branch} />
+                  </div>
+                )}
+              </>
             )}
             <div className="os-muted mb-1.5 mt-4 text-[10.5px] font-bold uppercase tracking-wide">Change summary</div>
             <div className="max-h-[300px] overflow-auto rounded-lg border border-[var(--os-line)]">
@@ -173,6 +184,9 @@ export default async function CodeAndRelease({ searchParams }: { searchParams: {
               </>
             ) : <Empty icon={FlaskConical} title="No QA pack yet" />}
             <div className="mt-3">
+              {!qa.signoff && qa.tests.length > 0 && signoffMode !== "none" && (
+                <div className="mb-3"><QaSignoffPanel runId={run.run_id} mode={signoffMode} previewing={!!access.preview} /></div>
+              )}
               <Field label="Signoff">{qa.signoff ? <>{pretty(qa.signoff.decision)} by {qa.signoff.decided_by} · {ago(qa.signoff.decided_at)}{qa.signoff.note ? <div className="os-faint mt-0.5 text-[11px]">{qa.signoff.note}</div> : null}</> : "Waiting on the QA and UAT lead"}</Field>
             </div>
           </Card>

@@ -55,6 +55,24 @@ The experience uses the platform's governance as it is: 48 privileges, 14 system
 
 The Help screen (`/os/help`) prints the access list, marked for the person reading it.
 
+## Decisions taken in place
+
+The five decisions people take most often happen on the `/os` screens themselves, in `components/os/decide.tsx`. Each one calls the server action the classic page already uses, so the API applies the same governance and keeps the same audit trail. Nothing new was added to the backend.
+
+| Decision | Screen | Server action (existing) | Privilege (`ACTIONS`) |
+|---|---|---|---|
+| Approve or send back a gate (mapping, Data Mapping, data quality, code review), with a written justification | Review | `approveStage` (`app/runs/[runId]/actions.ts`) | the gate's own (`MAPPING.APPROVE`, `STTM.APPROVE`, `SODA.APPROVE`, `REVIEW.APPROVE`) |
+| Sign off or reject QA (a rejection needs a note) | Release | `signOffQa` | `QA.SIGNOFF` |
+| Publish the generated code as a pull request (draft by default), to the branch plan stored at generation | Release | `publishDbt` | `DBT.EDIT` |
+| Make a skill version the candidate, or promote it to production (on an older version, that is the rollback) | Skills | `moveLabel` | `SKILL.EDIT` / `SKILL.RELEASE` |
+| Verify a knowledge record; approve or reject agent proposals in the steward inbox | Knowledge | `verifyKnowledge`, `decideInbox` | `KNOWLEDGE.EDIT` |
+
+How these behave:
+- **People without the privilege:** if they may raise change requests, the button reads "Request …". The API's reply "Sent to <role> for approval" is shown as routed, in blue, not as an error. Anyone else does not see the control.
+- **Gate send-back targets:** these come from the run's own allowed human transitions, so they always match the workflow graph. Cancelling a run is never offered as a send-back.
+- **Previews:** every decision is disabled while an admin previews another role, because the API would act as the admin.
+- **Creating a new skill version:** writing new content stays in the skills registry editor. Skill Studio links to it.
+
 ## Screens and their sources
 
 | Screen | Reads |

@@ -11,6 +11,7 @@ import { Action } from "@/components/os/action";
 import { lifecycleOfRun, classicHref } from "@/lib/os/lifecycle";
 import { ActivityRow, Banner, Bar, Btn, Card, Empty, Field, Kpi, PageHeader, SourceError, Stepper, Tag, ago, pretty } from "@/components/os/ui";
 import { RunPicker } from "@/components/os/run-picker";
+import { GateDecision } from "@/components/os/decide";
 
 export const dynamic = "force-dynamic";
 export const metadata = { title: "Validation gate" };
@@ -86,6 +87,12 @@ export default async function ReviewGate({ searchParams }: { searchParams: { run
   const lastValidation = b.events.filter((e) => e.to_state.startsWith("VALIDATION_")).pop();
   const validationSkill = b.skills.find((s) => /VALIDATION|READINESS/.test(s.skill_name)) ?? b.skills[0];
   const title = `${run.run.domain_name ?? "Run"} · ${tableOf(run.run.target_model) ?? run.run.run_name}`;
+  // the gate decision, from the run's own allowed human transitions (as the run console derives them)
+  // (a person's transitions only: cancelling a run, open to anyone, is not a send-back)
+  const human = run.allowed_transitions.filter((t) => t.actor === "HUMAN" && t.to_state !== "CANCELLED");
+  const approveTo = human.find((t) => t.to_state.endsWith("_APPROVED"))?.to_state ?? gate?.approveTo;
+  const sendBack = human.filter((t) => !t.to_state.endsWith("_APPROVED")).map((t) => t.to_state);
+  const gateMode = gate ? actMode(access, gate.privilege) : "none";
 
   return (
     <>
@@ -162,6 +169,13 @@ export default async function ReviewGate({ searchParams }: { searchParams: { run
         </div>
 
         <div className="flex min-w-0 flex-col gap-4">
+          {gate && approveTo && gateMode !== "none" && (
+            <Card title={<>{gate.name}: your decision</>} subtitle={`Human gate · ${gate.role}. The agents prepared the proposal; it continues only once a person approves.`}
+                  className="border-[var(--os-amber-line)]" action={<Btn href={`/runs/${run.run_id}/${gate.slug}`}>Read the evidence</Btn>}>
+              <GateDecision runId={run.run_id} gate={gate.name} role={gate.role} approveTo={approveTo} sendBack={sendBack}
+                            mode={gateMode} approver={access.approvers[gate.privilege]} previewing={!!access.preview} />
+            </Card>
+          )}
           <Card title="Human decision" subtitle="Policy-based gate. A score alone never bypasses a critical check.">
             <div className="flex items-end justify-between">
               <div className={`text-[34px] font-extrabold leading-none tracking-tight tabular-nums ${failed ? "text-[var(--os-red-ink)]" : passed ? "text-[var(--os-emerald)]" : "os-faint"}`}>
