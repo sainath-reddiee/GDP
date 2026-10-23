@@ -27,6 +27,8 @@ export type DesignVersion = {
 export type RunProposal = {
   change_id: string; model_id: string; status: "PROPOSED" | "MERGED" | "STALE"; merged_into_version: number | null;
   created_at: string | null;
+  /** the run already maps to the approved version this proposal builds on, so mapping does not wait for it */
+  maps_existing?: boolean;
 };
 export type WorkbenchState = {
   enforced: boolean; model_id: string | null; model_version: number | null; model_entity: string | null;
@@ -40,6 +42,8 @@ export type ProposeResult = {
   model_id: string; pinned: boolean; status?: "PROPOSED" | "MERGED"; change_id?: string; merged_into?: number;
   version?: number; entity?: string; target_model?: string | null;
   counts?: Record<string, number>; breaking?: boolean;
+  /** a reuse or extension of an existing model: the approved entity the run maps to while the additions wait */
+  use_existing?: { version: number; entity: string; target_model: string };
   pin?: { pinned: boolean; mapping_reset?: boolean; detail?: string; target_model?: string };
 };
 export type DiffChange = { entity: string; change: string; column?: string; columns?: string[]; fields?: string[]; from?: unknown; to?: unknown };

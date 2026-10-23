@@ -186,7 +186,7 @@ function WorkbenchBanner({ wb }: { wb: WorkbenchState }) {
       <p className="flex flex-wrap items-center gap-2">
         <GitPullRequestArrow className="h-3.5 w-3.5 text-blue-600" />
         <span className="font-semibold">The domain model is governed in the Model Workbench.</span>
-        <span className="text-muted-foreground">Design here, then propose it; modelers merge, review and approve it, and the run maps to the approved version.</span>
+        <span className="text-muted-foreground">Design here, then propose it. A design that reuses or extends an existing model maps to it at once; anything it adds, or a new model, waits for modelers to merge, review and approve it.</span>
       </p>
       {wb.model_id && wb.model_version != null && (
         <p className="flex flex-wrap items-center gap-2">
@@ -199,8 +199,10 @@ function WorkbenchBanner({ wb }: { wb: WorkbenchState }) {
         <p className="flex flex-wrap items-center gap-2" role="status">
           <Badge variant={p.status === "STALE" ? "warning" : "outline"}>{({ PROPOSED: "proposal pending", MERGED: "merged into a draft", STALE: "proposal out of date" } as const)[p.status]}</Badge>
           <span className="text-muted-foreground">
-            {p.status === "PROPOSED" && "Waiting for a modeler to merge it into a draft."}
-            {p.status === "MERGED" && `Merged into draft v${p.merged_into_version ?? "?"}; mapping starts once that version is approved.`}
+            {p.status === "PROPOSED" && (p.maps_existing ? "Waiting for a modeler to merge it; mapping uses the approved model meanwhile."
+              : "Waiting for a modeler to merge it into a draft.")}
+            {p.status === "MERGED" && (p.maps_existing ? `Merged into draft v${p.merged_into_version ?? "?"}; mapping uses the approved model until that version is approved.`
+              : `Merged into draft v${p.merged_into_version ?? "?"}; mapping starts once that version is approved.`)}
             {p.status === "STALE" && "The domain model was approved without it. Propose again, or ask a modeler to merge it into the new draft."}
           </span>
           <Link className="text-primary underline-offset-2 hover:underline" href={href(p.status === "MERGED" ? "review" : "changes")}>
@@ -310,7 +312,16 @@ export function ModelDesign({ runId, data, canApply, state, canEdit = true, canA
       say(true, "The domain had no model yet: this design is now its first draft (v1). Submit it for review in the Model Workbench.");
     } else {
       const n = d.counts ? Object.values(d.counts).reduce((a, b) => a + b, 0) : 0;
-      say(true, `Proposed ${n} change${n === 1 ? "" : "s"} to the domain model${d.breaking ? ", including breaking ones" : ""}. A modeler merges and approves it; the run maps once it is approved.`);
+      const changes = `${n} change${n === 1 ? "" : "s"}${d.breaking ? ", including breaking ones," : ""}`;
+      if (d.use_existing && d.pin?.pinned) {
+        say(true, `Mapping can start now: the run maps to ${d.use_existing.entity} of domain model v${d.use_existing.version}. `
+          + `The design's ${changes} went to the modelers as a proposal; once approved, the run moves to the new version.`
+          + (d.pin.mapping_reset ? " Mapping was sent back so candidates are regenerated for it." : ""));
+      } else if (d.use_existing) {
+        say(false, `Proposed ${changes} to the domain model, but the run could not map to ${d.use_existing.entity} yet: ${d.pin?.detail ?? "reopen mapping"}.`);
+      } else {
+        say(true, `Proposed ${changes} to the domain model. A modeler merges and approves it; the run maps once it is approved.`);
+      }
     }
     router.refresh();
   });

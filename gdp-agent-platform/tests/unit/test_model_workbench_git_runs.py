@@ -146,13 +146,13 @@ def test_sync_task_sql():
 # ---------------------------------------------------------------- run proposals
 
 
-def run_design(extra_column=False, errors=False):
+def run_design(extra_column=False, errors=False, decision="EXTEND_EXISTING", target=""):
     cols = [{"name": "CUSTOMER_ID", "datatype": "NUMBER(38,0)", "nullable": False, "is_pk": True, "source_columns": ["CRM.ID"]},
             {"name": "EMAIL", "datatype": "VARCHAR(200)", "source_columns": ["CRM.EMAIL"]},
             {"name": "COUNTRY", "datatype": "VARCHAR(2)", "source_columns": ["CRM.COUNTRY"]}]
     if extra_column:
         cols.append({"name": "LOYALTY_TIER", "datatype": "VARCHAR(20)", "source_columns": ["CRM.TIER"]})
-    design = {"decision": "EXTEND_EXISTING", "primary_entity": "DIM_CUSTOMER", "target_database": "SILVER", "target_schema": "SALES",
+    design = {"decision": decision, "decision_target": target, "primary_entity": "DIM_CUSTOMER", "target_database": "SILVER", "target_schema": "SALES",
               "entities": [{"entity_name": "DIM_CUSTOMER", "kind": "DIMENSION", "purpose": "Customers", "grain": "one row per customer",
                             "business_keys": ["CUSTOMER_ID"], "attributes": cols}]}
     issues = [{"severity": "ERROR", "message": "bad type"}] if errors else []
@@ -192,6 +192,42 @@ def test_a_design_with_changes_becomes_a_proposal():
     assert insert[1] == "m1" and str(insert[2]) == "4" and insert[5] == "DIM_CUSTOMER" and "PROPOSED" in insert
     assert [e["entity_name"] for e in entities] == ["DIM_CUSTOMER"]
     assert any(a["name"] == "LOYALTY_TIER" for a in entities[0]["attributes"])
+
+
+@pytest.mark.parametrize("decision, target", [("EXTEND_EXISTING", "SILVER.SALES.DIM_CUSTOMER"),
+                                              ("REUSE_EXISTING", "dim_customer")])
+def test_extending_an_existing_model_maps_to_it_while_the_additions_wait(decision, target):
+    s = run_session(run_design(extra_column=True, decision=decision, target=target))
+    out = run_link.propose(s, "r1", 2, "ana")
+    # the additions are a proposal for the modelers, and the run can map to the approved entity now
+    assert out["status"] == "PROPOSED" and s.find("INSERT INTO CORE.MODEL_CHANGE")
+    assert out["use_existing"] == {"version": 4, "entity": "DIM_CUSTOMER", "target_model": "SILVER.SALES.DIM_CUSTOMER"}
+
+
+@pytest.mark.parametrize("decision, target", [("NEW", "SILVER.SALES.DIM_CUSTOMER"), ("EXTEND_EXISTING", ""),
+                                              ("EXTEND_EXISTING", "SILVER.SALES.DIM_SUPPLIER")])
+def test_a_new_model_or_an_unknown_target_waits_for_approval(decision, target):
+    out = run_link.propose(run_session(run_design(extra_column=True, decision=decision, target=target)), "r1", 2, "ana")
+    assert out["status"] == "PROPOSED" and "use_existing" not in out
+
+
+def test_existing_entity_matches_the_full_name_or_a_unique_table_name():
+    spec = approved_customer_spec()
+    assert run_link.existing_entity(spec, "silver.sales.dim_customer")["entity_name"] == "DIM_CUSTOMER"
+    assert run_link.existing_entity(spec, "OTHER_DB.OTHER.DIM_CUSTOMER")["entity_name"] == "DIM_CUSTOMER"
+    assert run_link.existing_entity(spec, "DIM_NOPE") is None and run_link.existing_entity(spec, "") is None
+
+
+@pytest.mark.parametrize("run, maps", [
+    ({"MODEL_ID": "m1", "MODEL_VERSION": 4, "TARGET_MODEL": "SILVER.SALES.DIM_CUSTOMER"}, True),
+    ({"MODEL_ID": "m1", "MODEL_VERSION": 3, "TARGET_MODEL": "SILVER.SALES.DIM_CUSTOMER"}, False),
+    ({"MODEL_ID": None, "MODEL_VERSION": None, "TARGET_MODEL": None}, False),
+])
+def test_pending_proposal_says_whether_the_run_already_maps_to_its_base(run, maps):
+    s = Session({"MERGED_INTO_VERSION, BASE_VERSION, CREATED_AT": [{"CHANGE_ID": "c1", "MODEL_ID": "m1", "STATUS": "PROPOSED",
+                                                                   "MERGED_INTO_VERSION": None, "BASE_VERSION": 4, "CREATED_AT": None}],
+                 "SELECT MODEL_ID, MODEL_VERSION, TARGET_MODEL FROM CORE.WORKFLOW_RUN": [run]})
+    assert run_link.pending_for_run(s, "r1")["maps_existing"] is maps
 
 
 def test_proposal_rules():
@@ -311,6 +347,25 @@ def test_api_propose_pins_and_sends_mapping_back(api):
     pin = body["pin"]
     assert pin["pinned"] and pin["mapping_reset"] and pin["args"] == ["r1", "m1", 4, "DIM_CUSTOMER", 2]
     assert "PIN_RUN_MODEL" in pin["proc"] and "REVIEW_TRANSITION" in db.calls[0][0]
+
+
+def test_api_propose_of_an_extension_pins_the_existing_entity(api):
+    c, main, db, mp = api
+    mp.setattr(main, "invoke_source", lambda d, fn, *a: {"model_id": "m1", "pinned": False, "status": "PROPOSED", "change_id": "c1",
+                                                         "use_existing": {"version": 4, "entity": "DIM_CUSTOMER",
+                                                                          "target_model": "SILVER.SALES.DIM_CUSTOMER"}})
+    mp.setattr(main, "_source_call", lambda d, proc, fn, *a: {"target_model": "SILVER.SALES.DIM_CUSTOMER", "args": a})
+    body = c.post("/api/runs/r1/model/2/propose").json()
+    # pinned to the approved version, and the design version is not marked approved (it waits for the modelers)
+    assert body["status"] == "PROPOSED" and body["pin"]["pinned"] and body["pin"]["args"] == ["r1", "m1", 4, "DIM_CUSTOMER", 0]
+
+
+def test_api_mapping_goes_ahead_when_the_run_maps_to_the_existing_model(api):
+    c, main, db, mp = api
+    mp.setattr(main, "_workbench_enforced", lambda d: True)
+    mp.setattr(main, "invoke_source", lambda d, fn, *a: {"change_id": "c1", "status": "PROPOSED", "maps_existing": True})
+    assert c.post("/api/runs/r1/mapping").status_code == 200
+    assert "GENERATE_MAPPING_CANDIDATES" in db.calls[-1][0]
 
 
 def test_api_mapping_waits_for_a_pending_proposal(api):

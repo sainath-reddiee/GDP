@@ -1069,7 +1069,8 @@ def get_model_design(run_id: str, db: Db = Depends(current_db)):
 def propose_model_design(run_id: str, version: int, db: Db = Depends(current_db)):
     """Propose this design to the domain's governed model. When it adds nothing to the approved model the run uses
     the approved model at once; otherwise modelers merge, review and approve it in the Model Workbench, and the run
-    is pointed at the approved version then."""
+    is pointed at the approved version then. A design that reuses or extends an existing model maps to that model's
+    entity now (approved version), so mapping need not wait for its additions."""
     from services.modeling.run_link import propose
 
     current = db.query("SELECT CURRENT_STATE FROM CORE.WORKFLOW_RUN WHERE RUN_ID = %s", (run_id,))
@@ -1088,6 +1089,14 @@ def propose_model_design(run_id: str, version: int, db: Db = Depends(current_db)
             result["pin"] = pin_run_model(db, run_id, result["model_id"], result["version"], result["entity"], version)
         except AssertionError as exc:
             raise HTTPException(409, str(exc)) from exc
+        except Exception as exc:
+            raise _snowflake_error(exc) from exc
+    elif result.get("use_existing"):
+        use = result["use_existing"]
+        try:  # the design itself waits for the modelers, so no design version is marked approved
+            result["pin"] = pin_run_model(db, run_id, result["model_id"], use["version"], use["entity"], 0)
+        except AssertionError as exc:
+            result["pin"] = {"pinned": False, "detail": str(exc)}  # the proposal is recorded either way
         except Exception as exc:
             raise _snowflake_error(exc) from exc
     return result
@@ -2489,7 +2498,7 @@ def generate_mapping(run_id: str, db: Db = Depends(current_db)):
             pending = invoke_source(db, pending_for_run, run_id)
         except Exception:
             pending = None  # before V039
-        if pending:
+        if pending and not pending.get("maps_existing"):  # mapped to the existing model while its additions wait
             raise HTTPException(409, "The run's model change is waiting in the Model Workbench; mapping starts once a model "
                                      "approver approves it (or withdraw the proposal to map to the current target).")
     try:

@@ -57,16 +57,36 @@ def propose(session, run_id: str, design_version: int, user: str) -> Dict[str, A
     assert not errors, f"fix {len(errors)} problem(s) before proposing: {errors[0]['message']}"
     assert design.get("entities"), "the design has no entities"
     primary = str(design.get("primary_entity") or design["entities"][0]["entity_name"]).upper()
+    # a design that reuses or extends a registered model names it; the run maps to that model while its additions wait
+    existing = design.get("decision_target") if design.get("decision") in ("REUSE_EXISTING", "EXTEND_EXISTING") else None
     return propose_entities(session, run["DOMAIN_ID"], run_entities(design), primary, user, run_id=run_id,
-                            design_version=design_version, label=f"run {run.get('RUN_NAME') or run_id}")
+                            design_version=design_version, label=f"run {run.get('RUN_NAME') or run_id}",
+                            existing_target=existing)
+
+
+def existing_entity(spec: Dict[str, Any], target: Optional[str]) -> Optional[Dict[str, Any]]:
+    """The approved model's active entity a design reuses or extends: its DB.SCHEMA.TABLE, or the table name alone
+    when exactly one entity has it."""
+    target = str(target or "").strip().upper()
+    if not target:
+        return None
+    active = [e for e in (spec.get("design") or {}).get("entities") or [] if e.get("status") != "RETIRED"]
+    for e in active:
+        if ".".join(p for p in (*spec_v2.placement(spec, e), e["entity_name"]) if p).upper() == target:
+            return e
+    named = [e for e in active if str(e["entity_name"]).upper() == target.split(".")[-1]]
+    return named[0] if len(named) == 1 else None
 
 
 def propose_entities(session, domain_id: str, incoming: Dict[str, Any], primary: str, user: str, *,
                      run_id: Optional[str] = None, design_version: int = 0, table_model_id: Optional[str] = None,
-                     table_model_version: Optional[int] = None, label: str = "") -> Dict[str, Any]:
+                     table_model_version: Optional[int] = None, label: str = "",
+                     existing_target: Optional[str] = None) -> Dict[str, Any]:
     """Raw v2 entities (`incoming`) proposed to the domain's model, from a run's design or from a table model of the
     Model Store. No change means the proposer can use the approved model now (pinned); otherwise a MODEL_CHANGE is
-    recorded for the modelers (an earlier undecided proposal from the same run or table model is withdrawn)."""
+    recorded for the modelers (an earlier undecided proposal from the same run or table model is withdrawn). When the
+    design reuses or extends an entity of the approved model (`existing_target`), `use_existing` names it so the run
+    maps to it now; the additions stay a proposal, and the run moves to the new version once it is approved."""
     model = _model_for(session, domain_id)
     if not model:
         domain_model.baseline(session, domain_id, user)
@@ -98,8 +118,13 @@ def propose_entities(session, domain_id: str, incoming: Dict[str, Any], primary:
         session.sql(f"""UPDATE {CHANGES} SET STATUS = 'WITHDRAWN', DECIDED_BY = ?, DECIDED_AT = CURRENT_TIMESTAMP()
                          WHERE RUN_ID = ? AND STATUS = 'PROPOSED'""", params=[user.upper(), run_id]).collect()
     change_id = _record(session, model_id, approved, primary, proposed, changes, "PROPOSED", None, **source)
-    return {"model_id": model_id, "change_id": change_id, "status": "PROPOSED", "pinned": False,
-            "counts": changes["counts"], "breaking": changes["breaking"]}
+    out = {"model_id": model_id, "change_id": change_id, "status": "PROPOSED", "pinned": False,
+           "counts": changes["counts"], "breaking": changes["breaking"]}
+    current = existing_entity(base, existing_target) if base and existing_target else None
+    if current:
+        out["use_existing"] = {"version": int(approved), "entity": current["entity_name"],
+                               "target_model": ".".join(p for p in (*spec_v2.placement(base, current), current["entity_name"]) if p)}
+    return out
 
 
 def _record(session, model_id: str, base: Optional[int], primary: str, spec: Dict[str, Any], changes: Dict[str, Any],
@@ -223,14 +248,20 @@ def on_approved(session, model_id: str, version: int) -> List[Dict[str, Any]]:
 
 
 def pending_for_run(session, run_id: str) -> Optional[Dict[str, Any]]:
-    """The run's newest proposal that is not decided yet (PROPOSED or MERGED into an unapproved draft)."""
-    found = rows(session, f"""SELECT CHANGE_ID, MODEL_ID, STATUS, MERGED_INTO_VERSION, CREATED_AT FROM {CHANGES}
+    """The run's newest proposal that is not decided yet (PROPOSED or MERGED into an unapproved draft).
+    `maps_existing`: the run already maps to the approved version the proposal builds on, so mapping need not wait."""
+    found = rows(session, f"""SELECT CHANGE_ID, MODEL_ID, STATUS, MERGED_INTO_VERSION, BASE_VERSION, CREATED_AT FROM {CHANGES}
                                WHERE RUN_ID = ? AND STATUS IN ('PROPOSED', 'MERGED', 'STALE')
                                ORDER BY CREATED_AT DESC LIMIT 1""", [run_id])
     if not found:
         return None
     r = {str(k).lower(): v for k, v in found[0].items()}
     r["created_at"] = str(r["created_at"])[:19] if r.get("created_at") else None
+    run = rows(session, "SELECT MODEL_ID, MODEL_VERSION, TARGET_MODEL FROM CORE.WORKFLOW_RUN WHERE RUN_ID = ?", [run_id])
+    pinned = run[0] if run else {}
+    r["maps_existing"] = bool(pinned.get("TARGET_MODEL") and pinned.get("MODEL_ID") == r.get("model_id")
+                              and r.get("base_version") is not None and pinned.get("MODEL_VERSION") is not None
+                              and int(pinned["MODEL_VERSION"]) == int(r["base_version"]))
     return r
 
 

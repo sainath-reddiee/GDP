@@ -30,8 +30,9 @@ EMBED_MODEL_DEFAULT = "snowflake-arctic-embed-l-v2.0"
 EMBED_MODELS = {EMBED_MODEL_DEFAULT}
 
 
-NO_TARGET = ("NO_TARGET_MODEL: this run has no target model. In Sources, open the modeling panel and pick an "
-             "existing model or propose a new one before mapping.")
+NO_TARGET = ("NO_TARGET_MODEL: this run has no target model yet. On the run's Mapping step, under Data model, click "
+             "Propose to domain model (or Approve and use for mapping when the Model Workbench is off). A design that "
+             "reuses or extends an existing model maps to it at once; a new model waits for a modeler's approval.")
 
 
 def target_table(session, run: Dict[str, Any]) -> Dict[str, Any]:
