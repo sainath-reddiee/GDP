@@ -273,6 +273,11 @@ def role_grants(cur, role: str, limit: int = 50) -> Dict[str, Any]:
 
 
 def _walk_role_grants(cur, role: str, limit: int) -> Dict[str, Any]:
+    if hasattr(cur, "execute_async") and hasattr(cur, "connection"):
+        try:
+            return _walk_by_level(cur, role, limit)
+        except Exception:
+            pass   # one role at a time below gives the same answer, more slowly
     seen, todo, account = set(), [role.upper()], set()
     while todo and len(seen) < limit:
         current = todo.pop()
@@ -294,6 +299,49 @@ def _walk_role_grants(cur, role: str, limit: int) -> Dict[str, Any]:
                 todo.append(name)
             elif on == "ACCOUNT":
                 account.add(privilege)
+    return {"roles": seen, "account": account}
+
+
+def _walk_by_level(cur, role: str, limit: int) -> Dict[str, Any]:
+    """role_grants, one level of the hierarchy at a time: the level's SHOW GRANTS run together as asynchronous
+    queries, then one query reads the ROLE and ACCOUNT grants of all of them through RESULT_SCAN(<query id>). A few
+    round trips per level instead of two per role (SYSADMIN on an account can inherit dozens of roles)."""
+    con = cur.connection
+    seen: set = set()
+    account: set = set()
+    level = [role.upper()]
+    while level and len(seen) < limit:
+        level = [r for r in dict.fromkeys(level) if r not in seen][:limit - len(seen)]
+        if not level:
+            break
+        seen.update(level)
+        submitted = []
+        for name in level:
+            c = con.cursor()
+            c.execute_async(f'SHOW GRANTS TO ROLE "{name}"')
+            submitted.append(c.sfqid)
+        done = []
+        for qid in submitted:
+            try:
+                while con.is_still_running(con.get_query_status_throw_if_error(qid)):
+                    time.sleep(0.2)
+                done.append(qid)
+            except Exception:
+                continue   # a role this role cannot see is skipped, as one at a time does
+        if not done:
+            break
+        rows = _rows(cur, " UNION ALL ".join(
+            f"SELECT \"privilege\", \"granted_on\", \"name\" FROM TABLE(RESULT_SCAN('{qid}')) "
+            "WHERE \"granted_on\" IN ('ROLE', 'ACCOUNT')" for qid in done))
+        nxt = []
+        for g in rows:
+            on, privilege, name = str(g.get("granted_on") or "").upper(), str(g.get("privilege") or "").upper(), \
+                str(g.get("name") or "").upper().strip('"')
+            if on == "ROLE" and privilege == "USAGE":
+                nxt.append(name)
+            elif on == "ACCOUNT":
+                account.add(privilege)
+        level = nxt
     return {"roles": seen, "account": account}
 
 

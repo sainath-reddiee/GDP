@@ -76,3 +76,54 @@ def test_a_file_with_other_statements_runs_in_order():
     timed = TimedConnection(con, lambda line: None)
     timed.execute_parallel("CREATE STAGE IF NOT EXISTS S; " + SQL)
     assert all(mode == "sync" for mode, _ in con.log) and con.log[0][1].startswith("CREATE STAGE")
+
+
+class LevelCon:
+    """A Snowflake connection for the level-by-level role walk: SHOW GRANTS run as async queries, RESULT_SCAN reads
+    them back. The hierarchy: SYSADMIN -> A, B; A -> C; C has an account privilege."""
+
+    GRANTS = {"SYSADMIN": [("USAGE", "ROLE", "A"), ("USAGE", "ROLE", "B"), ("OWNERSHIP", "TABLE", "T")],
+              "A": [("USAGE", "ROLE", "C")], "B": [], "C": [("EXECUTE TASK", "ACCOUNT", "ACME")]}
+
+    def __init__(self):
+        self.queries, self.shows, self.sql = {}, [], []
+
+    def cursor(self):
+        return LevelCursor(self)
+
+    def get_query_status_throw_if_error(self, qid):
+        return "done"
+
+    def is_still_running(self, status):
+        return False
+
+
+class LevelCursor:
+    def __init__(self, con):
+        self.connection, self.sfqid, self.description, self._rows = con, None, [], []
+
+    def execute_async(self, sql):
+        role = sql.split('"')[1]
+        self.sfqid = f"q-{role}"
+        self.connection.queries[self.sfqid] = role
+        self.connection.shows.append(role)
+
+    def execute(self, sql, params=None):
+        self.connection.sql.append(sql)
+        rows = []
+        for qid in [part.split("'")[1] for part in sql.split("RESULT_SCAN(")[1:]]:
+            rows += [g for g in LevelCon.GRANTS[self.connection.queries[qid]] if g[1] in ("ROLE", "ACCOUNT")]
+        self.description = [("privilege",), ("granted_on",), ("name",)]
+        self._rows = rows
+
+    def fetchall(self):
+        return self._rows
+
+
+def test_the_role_hierarchy_is_read_one_level_at_a_time():
+    from infrastructure import deploy
+
+    con = LevelCon()
+    found = deploy._walk_role_grants(con.cursor(), "SYSADMIN", 50)
+    assert found == {"roles": {"SYSADMIN", "A", "B", "C"}, "account": {"EXECUTE TASK"}}
+    assert len(con.sql) == 3     # one read per level (SYSADMIN; A and B; C), not two queries per role
