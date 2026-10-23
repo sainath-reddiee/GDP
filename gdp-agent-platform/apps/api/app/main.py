@@ -6962,3 +6962,6 @@ app.include_router(dq_alerts_router)
 from app.datadog_api import router as datadog_router  # noqa: E402
 
 app.include_router(datadog_router)
+from app.requests_api import router as requests_router  # noqa: E402
+
+app.include_router(requests_router)

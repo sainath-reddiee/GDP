@@ -6,6 +6,7 @@ import { guard } from "@/lib/os/session";
 import { Action } from "@/components/os/action";
 import { ActivityRow, Btn, Card, Empty, PageHeader, SourceError, Tag, ago, pretty } from "@/components/os/ui";
 import { AutoForm } from "@/components/os/client";
+import { SubmitRequest } from "@/components/os/request-ui";
 import { cn } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
@@ -16,6 +17,8 @@ const TYPES = [
   { key: "domain", label: "New domain", icon: Boxes, start: "/dashboard/onboarding?type=domain", hint: "Define a new business domain: its model, contract and memory" },
   { key: "product", label: "New data product", icon: Crown, start: "/gold", hint: "Build a governed Gold product from mastered Silver domains" },
 ] as const;
+
+const REQUEST_TYPE = { source: "SOURCE", domain: "DOMAIN", product: "PRODUCT" } as const;
 
 export default async function Intake({ searchParams }: { searchParams: { type?: string; domain?: string; source?: string | string[] } }) {
   const access = await guard("intake");
@@ -76,9 +79,15 @@ export default async function Intake({ searchParams }: { searchParams: { type?: 
                 </fieldset>
               )}
             </AutoForm>
-            <div className="mt-5 flex flex-wrap items-center justify-between gap-3 border-t border-[var(--os-line)] pt-4">
-              <span className="os-muted text-[12px]">The request starts in the onboarding workflow; access, profiling and mapping then run as agents with human gates.</span>
-              <Action access={access} id="startOnboarding" privilege={type.key === "domain" ? "DOMAIN.EDIT" : "RUN.CREATE"} label={`Start ${type.label.toLowerCase()}`} href={startHref} variant="primary" />
+          </Card>
+
+          <Card title="Request details" subtitle="Filing the request routes it: the platform checks what exists and sends it to whoever acts first">
+            <SubmitRequest type={REQUEST_TYPE[type.key]} domainId={domain?.domain_id ?? null} domainName={domain?.domain_name ?? null}
+                           picked={chosen.map((s) => ({ source_system_id: s.source_system_id, source_name: s.source_system_name }))}
+                           previewing={!!access.preview} />
+            <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-[var(--os-line)] pt-3">
+              <span className="os-faint text-[11.5px]">Onboarding it yourself instead? The wizard registers the source and starts the run directly.</span>
+              <Action access={access} id="startOnboarding" privilege={type.key === "domain" ? "DOMAIN.EDIT" : "RUN.CREATE"} label="Open the onboarding wizard" href={startHref} />
             </div>
           </Card>
 

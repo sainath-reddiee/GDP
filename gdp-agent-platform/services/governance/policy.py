@@ -145,6 +145,9 @@ RULES: List[Tuple[str, str, Any, str]] = [
     ("POST", rf"{R}/(mapping/assist|qa/ask|qa/plan|sttm/refine)", "AI.USE", ""),
     ("POST", rf"{R}/soda/backtest", "RUN.OPERATE", ""),
     ("POST", r"/api/governance/requests/[^/]+/(approve|reject|cancel)", None, ""),  # checked by the endpoint
+    # onboarding requests (apps/api/app/requests_api.py): who may file, link, cancel or reject depends on the request
+    # (its requester, the domain's owners) as much as on privileges, so every write is checked by the endpoint
+    ("POST", r"/api/onboarding-requests(/[^/]+/(sources(/[^/]+/(source|run|remove))?|domain|comment|cancel|reject|reopen))?", None, ""),
     ("POST", r"/api/governance/roles", "ROLE.MANAGE", "Create a role"),
     ("POST", r"/api/governance/roles/[^/]+/members", "ROLE.MANAGE", "Change role members"),
     ("PUT", r"/api/governance/(users|roles|policies)/[^/]+", "ROLE.MANAGE", "Change access or an approval policy"),

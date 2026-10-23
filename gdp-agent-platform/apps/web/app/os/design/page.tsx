@@ -5,6 +5,8 @@ import {
   loadDomainContract, loadDomainModel, loadDomainQuestions, loadDomains, loadKnowledge, loadMapping, loadRuns, loadSources,
 } from "@/lib/os/data";
 import { guard } from "@/lib/os/session";
+import { loadRequests } from "@/lib/os/data";
+import { RequestQueue } from "@/components/os/request-queue";
 import { actMode } from "@/lib/os/access";
 import { Action } from "@/components/os/action";
 import { Banner, Bar, Btn, Card, Empty, Field, Kpi, PageHeader, SourceError, Tag, ago, pretty } from "@/components/os/ui";
@@ -31,7 +33,8 @@ export default async function DesignerStudio({ searchParams }: { searchParams: {
   // the run whose mapping is shown: the newest mapped one, preferring the multi-table parent (its proposals cover every table)
   const mapped = domainRuns.filter((r) => MAPPED.includes(r.current_state));
   const mapRun = mapped.find((r) => !/: [A-Z_]+$/.test(r.run_name)) ?? mapped[0] ?? null;
-  const [model, questions, contract, memory, mapping] = await Promise.all([
+  const [requests, model, questions, contract, memory, mapping] = await Promise.all([
+    loadRequests("all", "OPEN", domain.domain_id),
     loadDomainModel(domain.domain_id), loadDomainQuestions(domain.domain_id), loadDomainContract(domain.domain_id),
     loadKnowledge({ domain_id: domain.domain_id }), mapRun ? loadMapping(mapRun.run_id) : Promise.resolve(null),
   ]);
@@ -136,6 +139,9 @@ export default async function DesignerStudio({ searchParams }: { searchParams: {
               </table>
             ) : <div className="p-5"><Empty title="No source feeds this domain yet" /></div>}
           </Card>
+
+          <RequestQueue title={`Requests for ${domain.domain_name}`} subtitle="Open onboarding requests of this domain and the part each waits on"
+                        requests={requests.data.requests} access={access} error={requests.error} empty="No open request for this domain" max={5} />
 
           <Card title="Open design questions" subtitle="Ambiguities the agents could not settle on their own">
             <SourceError what="Questions" error={questions.error} />

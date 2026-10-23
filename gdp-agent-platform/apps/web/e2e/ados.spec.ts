@@ -7,6 +7,7 @@ const BASE = process.env.AIP_WEB_URL ?? "http://localhost:3000";
 const SCREENS: [string, RegExp][] = [
   ["/os", /Good (morning|afternoon|evening)/],
   ["/os/intake", /Create an onboarding request/],
+  ["/os/requests", /Onboarding requests/],
   ["/os/enable", /Source readiness/],
   ["/os/design", /Profile, model and map/],
   ["/os/build", /build|Build workbench/i],
@@ -56,11 +57,12 @@ test("a viewer sees only the screens their role opens, and is turned back from t
   await previewAs(page, "VIEWER");
   await page.goto("/os");
   await expect(page.getByRole("status").filter({ hasText: "Previewing as viewer" })).toBeVisible();
-  await expect(railLinks(page)).toHaveText(["My Work", "Inbox", "Overview", "Knowledge", "Run & DQ", "Quality", "Operations", "Audit", "Value", "Help"]);
+  // the package's ten entries, filtered: a viewer reads requests, domains, the audit trail, knowledge and operations
+  await expect(railLinks(page)).toHaveText(["My Work", "Intake", "Design", "Review", "Knowledge", "Run & DQ", "Help"]);
   await expect(page.getByLabel("Persona")).toHaveText("Viewer");
   await page.goto("/os/build");
   await page.waitForURL(/\/os\?denied=build$/);
-  await expect(page.getByText("Build is not part of your role.")).toBeVisible();
+  await expect(page.getByText("Build: Workbench is not part of your role.")).toBeVisible();
   // the classic pages are gated by the same list
   await page.goto("/runs");
   await page.waitForURL(/\/os\?denied=pipelines$/);
@@ -71,8 +73,7 @@ test("a viewer sees only the screens their role opens, and is turned back from t
 test("a code reviewer gets the build, review and release screens and the developer persona", async ({ page }) => {
   await previewAs(page, "CODE_REVIEWER");
   await page.goto("/os");
-  await expect(railLinks(page)).toHaveText(["My Work", "Inbox", "Overview", "Copilot", "Build", "Review", "Release", "Pipelines", "Stores", "Knowledge",
-                                          "Run & DQ", "Quality", "Operations", "Approvals", "Audit", "Value", "Help"]);
+  await expect(railLinks(page)).toHaveText(["My Work", "Intake", "Design", "Build", "Review", "Release", "Knowledge", "Run & DQ", "Help"]);
   await expect(page.getByLabel("Persona")).toHaveText("Data Developer");
 });
 
@@ -133,14 +134,24 @@ test("skill versions can be made candidate or promoted in place", async ({ page 
   await expect(page.getByRole("button", { name: /^(Promote|Make candidate)$/ }).first()).toBeVisible();
 });
 
-test("classic pages open inside the Agentic Data OS shell, with their own tabs", async ({ page }) => {
+test("the rail is the package's ten entries and every page is a tab of one", async ({ page }) => {
+  await page.goto("/os");
+  await expect(railLinks(page)).toHaveText(["My Work", "Intake", "Enable", "Design", "Build", "Review", "Skills", "Release", "Knowledge", "Run & DQ", "Admin", "Help"]);
+  // classic pages open inside the shell, under their entry, as one of its tabs
   await page.goto("/runs");
-  await expect(page.getByRole("navigation", { name: "Agentic Data OS" })).toBeVisible();
   await expect(page.getByRole("navigation", { name: "Main" })).toHaveCount(0);
-  await expect(railLinks(page).filter({ hasText: "Pipelines" })).toHaveAttribute("aria-current", "page");
-  await expect(page.getByTestId("workspace-tabs").getByRole("link", { name: "Gold Pipeline" })).toBeVisible();
-  await page.goto("/dashboard/store");
-  await expect(railLinks(page).filter({ hasText: "Stores" })).toHaveAttribute("aria-current", "page");
+  await expect(railLinks(page).filter({ hasText: "Build" })).toHaveAttribute("aria-current", "page");
+  const tabs = page.getByTestId("section-tabs");
+  await expect(tabs.getByRole("link")).toHaveText(["Workbench", "Silver pipeline", "Gold pipeline", "Lineage", "Code"]);
+  await expect(tabs.getByRole("link", { name: "Silver pipeline" })).toHaveAttribute("aria-current", "page");
+  await page.goto("/dashboard/sttm");
+  await expect(railLinks(page).filter({ hasText: "Design" })).toHaveAttribute("aria-current", "page");
+  await expect(tabs.getByRole("link", { name: "Stores" })).toHaveAttribute("aria-current", "page");
+  await page.goto("/incidents");
+  await expect(railLinks(page).filter({ hasText: "Run & DQ" })).toHaveAttribute("aria-current", "page");
+  await page.goto("/os/requests");
+  await expect(railLinks(page).filter({ hasText: "Intake" })).toHaveAttribute("aria-current", "page");
+  await expect(tabs.getByRole("link")).toHaveText(["New request", "Requests", "Onboarding wizard"]);
 });
 
 test("admins can switch the classic pages back to the classic layout", async ({ page }) => {

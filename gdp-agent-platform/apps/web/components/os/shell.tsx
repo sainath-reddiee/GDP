@@ -4,27 +4,25 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState, useTransition, type ComponentType, type ReactNode } from "react";
 import {
-  Activity, BadgeCheck, BookOpen, ChevronDown, CircleHelp, ClipboardCheck, Eye, FileClock, Gauge, Hammer, Home, Inbox, LayoutDashboard, ListChecks,
-  Menu, MessageSquareText, Plus, Rocket, Search, Settings, ShieldCheck, Sparkles, SquareStack, Store, TrendingUp, Wrench, X,
+  BookOpen, ChevronDown, CircleHelp, Eye, Gauge, Hammer, Home, Menu, Plus, Rocket, Search, Settings, ShieldCheck, Sparkles, SquareStack, Wrench, X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { SECTIONS, screenOfPath, type ScreenKey, type Section } from "@/lib/os/access";
+import { screenOfPath, type ScreenKey, type SectionKey } from "@/lib/os/access";
 import { PERSONA_COOKIE } from "@/lib/os/personas";
 
 // The Agentic Data OS shell, around every signed-in page: CBRE header (brand, domain scope, global search, workspace
-// pill, "Preview as role", "View as" persona, new menu, account) and the sectioned icon rail. The root layout passes
-// only what the person's governance privileges allow: the rail's screens and the personas of "View as".
+// pill, "Preview as role", "View as" persona, new menu, account), the UX package's ten-entry icon rail (plus Admin for
+// admins) and, above the page, the tabs of the entry on show: every page of that entry, /os and classic alike. The
+// root layout passes only what the person's governance privileges allow: the entries, their tabs, and the personas.
 
-const ICONS: Record<ScreenKey, ComponentType<{ className?: string }>> = {
-  work: Home, inbox: Inbox, overview: LayoutDashboard, copilot: MessageSquareText,
-  intake: Plus, enable: Wrench, design: SquareStack, build: Hammer, runs: Hammer, review: ShieldCheck, skills: Sparkles, release: Rocket,
-  pipelines: ListChecks, stores: Store, knowledge: BookOpen,
-  run: Gauge, quality: BadgeCheck, operations: Activity,
-  governance: ClipboardCheck, audit: FileClock, admin: Settings, value: TrendingUp, help: CircleHelp,
+const ICONS: Record<SectionKey, ComponentType<{ className?: string }>> = {
+  work: Home, intake: Plus, enable: Wrench, design: SquareStack, build: Hammer, review: ShieldCheck, skills: Sparkles,
+  release: Rocket, knowledge: BookOpen, run: Gauge, admin: Settings,
 };
 const PREVIEW_COOKIE = "ados_preview_role";
 
-export type ShellScreen = { key: ScreenKey; href: string; label: string; exact?: boolean; section?: Section };
+export type ShellScreen = { key: ScreenKey; href: string; label: string; exact?: boolean; section?: SectionKey };
+export type ShellSection = { key: SectionKey; label: string; href: string };
 export type ShellPersona = { id: string; label: string; short: string };
 export type ShellPreview = { current: string | null; own: string; roles: { role: string; description: string; members: number }[] };
 
@@ -41,14 +39,16 @@ const setCookie = (name: string, value: string | null) => {
 };
 
 export type ShellProps = {
-  user: string | null; environment: string; screens: ShellScreen[]; personas: ShellPersona[]; persona: string;
+  user: string | null; environment: string;
+  /** the rail entries the person may open (each opens its first open tab), and every open tab */
+  sections: ShellSection[]; screens: ShellScreen[]; personas: ShellPersona[]; persona: string;
   preview: ShellPreview | null;
   /** beside the brand (the domain scope) and at the end of the header (new menu, account) */
   headerStart?: ReactNode; headerEnd?: ReactNode;
   children: ReactNode;
 };
 
-export function OsShell({ user, environment, screens, personas, persona, preview, headerStart, headerEnd, children }: ShellProps) {
+export function OsShell({ user, environment, sections, screens, personas, persona, preview, headerStart, headerEnd, children }: ShellProps) {
   const path = usePathname();
   const router = useRouter();
   const [pending, start] = useTransition();
@@ -58,10 +58,11 @@ export function OsShell({ user, environment, screens, personas, persona, preview
   const choose = (id: string) => { setCookie(PERSONA_COOKIE, id); start(() => router.refresh()); };
   // a preview starts from that role's first persona, so the persona cookie is cleared with it
   const previewAs = (role: string) => { setCookie(PREVIEW_COOKIE, role || null); setCookie(PERSONA_COOKIE, null); start(() => router.refresh()); };
-  // the rail entry of the page on show: its own screen, or the one it sits under (a run's workspace is under Build)
+  // the page on show: its own tab, or the one it sits under (a run's workspace is under Build's Workbench)
   const here = screenOfPath(path);
   const current = here?.under ?? here?.key ?? null;
-  const active = (key: ScreenKey) => key === current;
+  const section = here?.section ?? null;
+  const tabs = screens.filter((s) => s.section && s.section === section);
   const help = screens.find((s) => s.key === "help");
   const personaPicker = (compact: boolean) => personas.length > 1 ? (
     <select value={persona} onChange={(e) => choose(e.target.value)} aria-label={compact ? "View as persona (menu)" : "View as persona"}
@@ -71,30 +72,22 @@ export function OsShell({ user, environment, screens, personas, persona, preview
   ) : compact ? null : <span className="os-tag os-tag-green" aria-label="Persona">{personas[0]?.label}</span>;
 
   const rail = (
-    <nav aria-label="Agentic Data OS" className="flex min-h-full flex-col items-center gap-0.5 px-1.5 py-2">
-      {SECTIONS.map((section) => {
-        const items = screens.filter((s) => s.section === section);
-        if (!items.length) return null;
+    <nav aria-label="Agentic Data OS" className="flex min-h-full flex-col items-center gap-1 px-1.5 py-3">
+      {sections.map(({ key, label, href }) => {
+        const I = ICONS[key];
         return (
-          <div key={section} role="group" aria-label={section} className="flex w-full flex-col items-center gap-0.5 border-b border-[var(--os-line-soft)] pb-1.5 pt-1 last:border-b-0">
-            <span className="os-faint w-full px-1 text-center text-[8.5px] font-extrabold uppercase tracking-[0.12em]">{section}</span>
-            {items.map(({ key, href, label }) => {
-              const I = ICONS[key];
-              return (
-                <Link key={key} href={href} aria-current={active(key) ? "page" : undefined}
-                      className="os-rail-item flex h-[46px] w-[70px] flex-col items-center justify-center gap-1 text-center text-[10px] font-semibold leading-tight">
-                  <I className="h-[17px] w-[17px]" />{label}
-                </Link>
-              );
-            })}
-          </div>
+          <Link key={key} href={href} aria-current={key === section ? "page" : undefined}
+                className={cn("os-rail-item flex h-[54px] w-[70px] flex-col items-center justify-center gap-1.5 text-center text-[10.5px] font-semibold leading-tight",
+                              key === "admin" && "mt-2 border-t border-[var(--os-line-soft)] pt-1")}>
+            <I className="h-[18px] w-[18px]" />{label}
+          </Link>
         );
       })}
       <div className="mt-auto flex flex-col items-center gap-1 pt-2">
         {/* below lg the header has no room for "View as": it lives in the slide-out rail */}
         {personaPicker(true)}
         {help && (
-          <Link href={help.href} aria-current={active("help") ? "page" : undefined} className="os-rail-item flex h-[46px] w-[70px] flex-col items-center justify-center gap-1 text-center text-[10px] font-semibold">
+          <Link href={help.href} aria-current={current === "help" ? "page" : undefined} className="os-rail-item flex h-[48px] w-[70px] flex-col items-center justify-center gap-1 text-center text-[10px] font-semibold">
             <CircleHelp className="h-4 w-4" />Help
           </Link>
         )}
@@ -173,7 +166,17 @@ export function OsShell({ user, environment, screens, personas, persona, preview
           </div>
         )}
         <main className={cn("min-w-0 flex-1 px-4 pb-10 pt-5 sm:px-6 xl:px-8", pending && "opacity-70 transition-opacity")}>
-          <div className="mx-auto w-full max-w-[1500px]">{children}</div>
+          <div className="mx-auto w-full max-w-[1500px]">
+            {tabs.length > 1 && (
+              <nav aria-label="Section" data-testid="section-tabs" className="-mt-1 mb-4 flex gap-x-5 overflow-x-auto border-b border-[var(--os-line)]">
+                {tabs.map((t) => (
+                  <Link key={t.key} href={t.href} aria-current={t.key === current ? "page" : undefined}
+                        className={cn("os-tab whitespace-nowrap", t.key === current && "!text-[var(--os-accent-ink)] !border-[var(--os-accent-ink)]")}>{t.label}</Link>
+                ))}
+              </nav>
+            )}
+            {children}
+          </div>
         </main>
       </div>
     </div>

@@ -4,6 +4,7 @@ import type { ModelEntity, ModelRelationship, QualitySummary } from "@/lib/hub-t
 import type { KnowledgeItem } from "@/app/knowledge/actions";
 import type { SkillVersion, SkillsResponse } from "@/app/skills/types";
 import type { DagRow, OpsSummary } from "@/app/ops/actions";
+import type { OnboardingRequest, RequestDetail } from "./requests";
 
 // Every /os screen reads the platform through these adapters, over the endpoints the classic pages already use (no new
 // backend). There is no sample data: a source that fails or is not deployed comes back empty with its error, and the
@@ -107,6 +108,14 @@ export type PrListing = { prs: PullRequest[]; counts: { total: number; open: num
   repos: { repo_id: string; name: string; git_url: string; branch: string }[]; publisher_ready?: boolean };
 export const loadPrs = () =>
   load(api<PrListing>("/api/source-control/prs"), { prs: [], counts: { total: 0, open: 0, merged: 0, attention: 0 }, repos: [] } as PrListing);
+
+/* onboarding requests (V075) */
+
+export type RequestList = { requests: OnboardingRequest[]; counts: Record<string, number>; user: string };
+export const loadRequests = (scope: "all" | "mine" | "waiting" = "all", status: "OPEN" | "CLOSED" | "ALL" = "OPEN", domainId?: string) =>
+  load(api<RequestList>(`/api/onboarding-requests?${new URLSearchParams({ scope, status, ...(domainId ? { domain_id: domainId } : {}) })}`),
+       { requests: [], counts: {}, user: "" } as RequestList);
+export const loadRequest = (id: string) => load(api<RequestDetail>(`/api/onboarding-requests/${encodeURIComponent(id)}`), null as RequestDetail | null);
 
 /* design: a domain's data model, its open questions and a run's mapping proposals */
 

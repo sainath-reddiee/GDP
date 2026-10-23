@@ -1,18 +1,26 @@
 # Agentic Data OS experience (`/os`)
 
-A persona-led front end for the platform, built from the CBRE ADOS UX package (ten screens, one shell, one eight-step lifecycle). Every signed-in page, the ten `/os` screens and all the classic pages alike, opens in the same shell with one sectioned, privilege-filtered rail. No classic feature was rebuilt or removed: the classic pages render unchanged inside the new frame, with their own workspace tabs.
+A persona-led front end for the platform, built from the CBRE ADOS UX package (ten screens, one shell, one eight-step lifecycle). Every signed-in page, the `/os` screens and all the classic pages alike, opens in the same shell. The rail has the package's ten entries, plus Admin for admins. Every page is a tab under one of them. No classic feature was rebuilt or removed: the classic pages render unchanged inside the new frame.
 
 Every screen reads live platform data through the endpoints the classic pages already use. There is no sample data. When an endpoint fails or has nothing to return, the screen shows the reason or an empty state.
 
-## One shell, five sections
+## The rail: ten entries, every page a tab
 
-| Section | Rail entries (each shown only to the privileges in the access list) | Classic pages it covers |
-|---|---|---|
-| Work | My Work, Inbox, Overview, Copilot | `/os`, `/work`, `/dashboard`, `/dashboard/copilot` |
-| Workflow | Intake, Enable, Design, Build, Review, Skills, Release | onboarding wizards, every `/runs/[id]` workspace (under Build), `/skills`, source control |
-| Assets | Pipelines, Stores, Knowledge | `/runs`, `/gold`, lineage, code, the six stores, `/domains`, Enterprise Memory |
-| Operate | Run & DQ, Quality, Operations | quality center, QA testing, monitoring, incidents, fixes, tickets, Jira |
-| Govern | Approvals, Audit, Value, Admin | `/approvals`, `/audit`, `/value`, `/admin` |
+| Entry | Tabs |
+|---|---|
+| My Work | My Work (`/os`), Inbox (`/work`), Overview, Copilot, Value |
+| Intake | New request, Requests, Onboarding wizard |
+| Enable | Source readiness |
+| Design | Designer studio, Domains, Stores (the six stores, with their own store tabs) |
+| Build | Workbench (and every `/runs/[id]` workspace), Silver pipeline, Gold pipeline, Lineage, Code |
+| Review | Gates, Approvals, Audit |
+| Skills | Skill studio, Registry (including proposed skills) |
+| Release | Release, Source control, QA testing |
+| Knowledge | Knowledge hub, Enterprise Memory |
+| Run & DQ | Run & DQ, Quality center, Monitoring, Incidents, Resolutions, Known fixes, Permanent fixes, Tickets (and Jira) |
+| Admin | Admin (admins only) |
+
+Each person sees only the entries and tabs their privileges open; an entry opens its first open tab. Every one of the 79 page routes belongs to exactly one tab (checked against the access list). In the new shell, the tab bar replaces the classic workspace tabs, so a page never shows two tab bars.
 
 The header carries what the classic top bar did: the domain scope, global search (Ctrl K), the "New" menu, and the account menu (work-role switch, appearance, sign out). It also has "View as" and, for admins, "Preview as role".
 
@@ -24,6 +32,51 @@ The header carries what the classic top bar did: the domain scope, global search
 **Classic layout (admins only).** Admin has a "Classic layout" switch (cookie `ados_classic`). The root layout honours it only for holders of `ADMIN.VIEW` or super admins. With it on, the classic pages get the old sidebar and top bar; `/os` keeps its shell either way. The e2e checks of the classic layout (`command-center.spec.ts`) set this cookie.
 
 **Landing.** With `ADOS_LANDING=1`, signing in and opening `/` land on `/os` (mission control). The default is off, so people land on the classic My Work (`/work`), which now also opens in the new shell.
+
+## Onboarding requests (V075)
+
+A data owner files a request on Intake: a source, a new domain, or a data product, for a domain. The request then travels to whoever acts next. Nobody types its stage in. Every read works it out again from the domain, each source's registration and health, and the runs that onboard them (`services/onboarding/requests.py`).
+
+| Stage | When | Who acts (privilege) |
+|---|---|---|
+| Domain | the domain does not exist yet, or was deleted or retired | Data steward (`DOMAIN.EDIT`) |
+| Enable | a source is not registered, is unreachable, or is not landed | Data OS Administrator (`SOURCE.CONNECT`, `PROFILE.RUN`) |
+| Design | no approved domain model, no run yet, or a run being profiled and mapped | Data Designer (`RUN.CREATE`, `RUN.OPERATE`) and the gate approvers (`MAPPING.APPROVE`, `STTM.APPROVE`, `SODA.APPROVE`) |
+| Build | code generation and validation | Forward Engineering Lead (`RUN.OPERATE`) |
+| Review | code review | Data Developer (`REVIEW.APPROVE`) |
+| Done | every source's run is approved or completed | nobody; the request closes itself |
+
+**Edge cases covered (unit tested, `tests/unit/test_onboarding_requests.py`)**
+- **Sources by name.** A named source matches its registration, ignoring case and spaces. A name with no registration waits on the administrator, who links it to the registration once it exists. A source that is deleted or retired after filing needs attention.
+- **Linking runs.**
+  - The existing run that onboards a source into the domain is linked automatically. It must be top level, not archived, cancelled or failed, and in the same domain; the most advanced one is chosen.
+  - Linking by hand refuses a run of another source, a run of another domain, and a table run of a multi-table run.
+- **Multi-table runs.** A hub-and-spokes run stands where its slowest live table run stands ("2 of 6 table runs done"). Every role with a table at its step is in the waits, with the earliest step named first.
+- **Runs that stop.**
+  - A failed run needs attention at the step it failed.
+  - A failed validation needs attention at Build.
+  - A cancelled, archived or vanished run asks for another run.
+  - A run of another domain is flagged.
+- **Several sources.** A request with several sources is at its earliest part, and every role with work on any part sees it as its turn.
+- **Request types.**
+  - A request for a new domain links itself once a domain of that name exists. Filing one for a name that already exists is refused.
+  - A domain-only request finishes when the model is approved.
+  - A data product waits on a Gold run, so it is never done the moment it is filed.
+- **Validation and duplicates.** Validation covers the title, the type, the priority, at least one source for a source request, and no source named twice. An open request for the same source and domain is reported, with links (409), unless "file it anyway".
+- **Closing and reopening.**
+  - Reject needs a reason and cannot be your own request.
+  - Cancelled and rejected requests reopen; a finished request does not (file a new one).
+  - A closed request cannot be edited, and the last source of a source request cannot be removed.
+- **Before deployment.** Until V075 is deployed, the API answers 503 with "apply V075" instead of a Snowflake error.
+
+**Who may do what** (checked by the API; `policy.RULES` marks these routes as checked by the endpoint):
+- **File a request:** the domain's owners and stewards, or `DOMAIN.EDIT`, `RUN.CREATE` or `REQUEST.CHANGES`.
+- **Link a registration:** `SOURCE.CONNECT`.
+- **Link a run:** `RUN.CREATE` or `RUN.OPERATE`.
+- **Cancel:** the requester or `ROLE.MANAGE`.
+- **Reject:** `SOURCE.CONNECT`, `DOMAIN.EDIT` or `ROLE.MANAGE`.
+
+Reads follow domain membership (`domains.can_see`). Requests waiting on a role appear in that role's My Work, in Enable (sources to enable) and in Design (the domain's requests). Notifications stay in-app.
 
 ## Where things live
 

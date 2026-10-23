@@ -1,7 +1,8 @@
 import Link from "next/link";
 import { ArrowRight, CheckCircle2, CircleDashed, Database, Plug, ShieldCheck, Workflow, Wrench, X } from "lucide-react";
 import { stateLabel } from "@/lib/run-labels";
-import { loadIngestion, loadRuns, loadSources, type IngestionControl } from "@/lib/os/data";
+import { loadIngestion, loadRequests, loadRuns, loadSources, type IngestionControl } from "@/lib/os/data";
+import { RequestQueue } from "@/components/os/request-queue";
 import { guard } from "@/lib/os/session";
 import { Action } from "@/components/os/action";
 import { ActivityRow, Banner, Btn, Card, Empty, Kpi, PageHeader, SourceError, Tag, ago, pretty, type Tone } from "@/components/os/ui";
@@ -30,7 +31,9 @@ const HEALTH: Record<string, { tone: Tone; label: string }> = {
 export default async function SourceReadiness({ searchParams }: { searchParams: { config?: string } }) {
   const access = await guard("enable");
   const persona = access.persona;
-  const [sources, runs, ingestion] = await Promise.all([loadSources(), loadRuns("sort=updated&limit=150"), loadIngestion()]);
+  const [sources, runs, ingestion, requests] = await Promise.all([loadSources(), loadRuns("sort=updated&limit=150"), loadIngestion(), loadRequests("all", "OPEN")]);
+  // requests with a source to register, reach or land: the administrator's part of them
+  const enabling = requests.data.requests.filter((r) => r.waits.some((w) => w.privilege === "SOURCE.CONNECT" || w.privilege === "PROFILE.RUN"));
   const list = sources.data.sources;
   const ready = list.filter((s) => s.health === "HEALTHY" && (s.staged_tables > 0 || (s.landed_tables ?? 0) > 0));
   const needs = list.filter((s) => s.health !== "HEALTHY");
@@ -116,6 +119,9 @@ export default async function SourceReadiness({ searchParams }: { searchParams: 
                            sub={`${ingestion.pipelines.length} pipeline${ingestion.pipelines.length === 1 ? "" : "s"} registered · ${ingestion.pipelines.filter((p) => p.status === "ACTIVE").length} active`} />
             </div>
           </Card>
+
+          <RequestQueue title="Requests needing sources" subtitle="Data owners asked for these; a source is not registered, reachable or landed yet"
+                        requests={enabling} access={access} error={requests.error} empty="No request waits on enablement" />
 
           <Card title="Admin handoff" subtitle="Runs waiting on access, landing or configuration" pad={false}>
             {waiting.length ? (

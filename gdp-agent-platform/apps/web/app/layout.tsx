@@ -13,7 +13,7 @@ import { configureCatalogDisplay, type CatalogDisplayConfig } from "@/lib/catalo
 import { CopilotProvider } from "@/components/copilot/copilot-provider";
 import { NavProgress } from "@/components/nav-progress";
 import { AppChrome } from "@/components/os/chrome";
-import { CLASSIC_COOKIE, PATH_HEADER, SCREENS, canSee, mayUseClassic, screenOfPath } from "@/lib/os/access";
+import { CLASSIC_COOKIE, PATH_HEADER, SCREENS, SECTIONS, canSee, mayUseClassic, screenOfPath } from "@/lib/os/access";
 import { osAccess } from "@/lib/os/session";
 import { Sidebar } from "@/components/sidebar";
 import { CommandPalette } from "@/components/shell/command-palette";
@@ -59,6 +59,12 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
   const readOnly = access.preview ? access.preview === "VIEWER" : Boolean(me?.read_only);
   const classic = mayUseClassic(access.own) && jar.get(CLASSIC_COOKIE)?.value === "1";
   const ownRole = access.own.privileges.includes("*") ? "super admin" : "governance admin";
+  // the rail: the entries with at least one tab the person may open; each opens its first such tab
+  const open = SCREENS.filter((s) => s.rail !== false && canSee(access, s.key));
+  const sections = SECTIONS.flatMap((sec) => {
+    const first = open.find((s) => s.section === sec.key);
+    return first ? [{ key: sec.key, label: sec.label, href: first.href }] : [];
+  });
   const account = <AccountMenu user={me?.user ?? null} role={me?.role ?? null} canLogout appRoles={me?.governance ? me.granted_roles ?? [] : null} />;
 
   return (
@@ -75,8 +81,8 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
               shell={{
                 user: access.user,
                 environment: (process.env.AIP_ENVIRONMENT ?? "DEV").toUpperCase(),
-                screens: SCREENS.filter((s) => s.rail !== false && canSee(access, s.key))
-                  .map(({ key, href, label, exact, section }) => ({ key, href, label, exact, section })),
+                sections,
+                screens: open.map(({ key, href, label, exact, section }) => ({ key, href, label, exact, section })),
                 personas: access.personas.map(({ id, label, short }) => ({ id, label, short })),
                 persona: access.persona.id,
                 preview: access.roles.length ? { current: access.preview, own: ownRole, roles: access.roles } : null,

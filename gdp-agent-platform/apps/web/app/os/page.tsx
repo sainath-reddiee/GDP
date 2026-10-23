@@ -2,9 +2,10 @@ import Link from "next/link";
 import { ArrowRight, BookOpen, Bot, CheckCircle2, Hand, Layers, Rocket, ShieldCheck, Sparkles, TriangleAlert } from "lucide-react";
 import { GATES, stateLabel } from "@/lib/run-labels";
 import type { RunSummary } from "@/lib/types";
-import { loadDomains, loadKnowledgeOverview, loadRuns } from "@/lib/os/data";
+import { loadDomains, loadKnowledgeOverview, loadRequests, loadRuns } from "@/lib/os/data";
+import { RequestQueue } from "@/components/os/request-queue";
 import { currentStep, lifecycleOf, progressOf } from "@/lib/os/lifecycle";
-import { actMode, canSee, has, screenByKey, type ScreenKey } from "@/lib/os/access";
+import { SECTIONS, actMode, canSee, has, screenByKey, type ScreenKey } from "@/lib/os/access";
 import { osAccess, type OsAccess } from "@/lib/os/session";
 import { Banner, Bar, Card, Empty, Kpi, SourceError, Stepper, Tag, ago, parseTs, pretty, type Tone } from "@/components/os/ui";
 import { Action } from "@/components/os/action";
@@ -55,10 +56,17 @@ export default async function MissionControl({ searchParams }: { searchParams: {
   const access = await osAccess();
   const persona = access.persona;
   const denied = searchParams.denied ? screenByKeySafe(searchParams.denied) : null;
+  // the rail entry and its tab ("Build: Workbench"), or the entry alone when they share a name
+  const deniedSection = denied ? SECTIONS.find((x) => x.key === denied.section)?.label : null;
+  const deniedName = denied ? (deniedSection && deniedSection !== denied.label ? `${deniedSection}: ${denied.label}` : denied.label) : "";
   const seeHref = (key: ScreenKey, href: string) => (canSee(access, key) ? href : undefined);
   // where a run opens for this person: the workbench, else the gate, else nowhere (runs are not part of their role)
   const runScreen = canSee(access, "build") ? "build" : canSee(access, "review") ? "review" : null;
-  const [runs, domains, knowledge] = await Promise.all([loadRuns("sort=updated&limit=150"), loadDomains(), loadKnowledgeOverview()]);
+  const [runs, domains, knowledge, waiting] = await Promise.all([loadRuns("sort=updated&limit=150"), loadDomains(), loadKnowledgeOverview(),
+    loadRequests("waiting", "OPEN")]);
+  // the API answers "waiting" for the signed-in person; the screen keeps only what the grants on show cover (a
+  // preview of another role shows that role's queue)
+  const mineNow = waiting.data.requests.filter((r) => r.waits.some((w) => has(access, w.privilege)));
   const live = runs.data.runs.filter((r) => !r.is_archived);
   const queue = live.map((r) => queueRow(r, access)).filter((x): x is QueueRow => !!x)
     .sort((a, b) => Number(b.mine) - Number(a.mine) || a.rank - b.rank || (b.run.updated_at ?? b.run.created_at).localeCompare(a.run.updated_at ?? a.run.created_at));
@@ -96,7 +104,7 @@ export default async function MissionControl({ searchParams }: { searchParams: {
 
       {denied && (
         <Banner tone="amber" icon={ShieldCheck}>
-          <b>{denied.label} is not part of your role.</b> It is open to {denied.why}{denied.view ? ` (any of ${denied.view.join(", ")})` : ""}. Ask a governance admin if you need it.
+          <b>{deniedName} is not part of your role.</b> It is open to {denied.why}{denied.view ? ` (any of ${denied.view.join(", ")})` : ""}. Ask a governance admin if you need it.
         </Banner>
       )}
       <SourceError what="Workflow runs" error={runs.error} />
@@ -110,6 +118,10 @@ export default async function MissionControl({ searchParams }: { searchParams: {
 
       <div className="grid gap-4 xl:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
         <div className="flex min-w-0 flex-col gap-4">
+          {(mineNow.length > 0 || waiting.error) && (
+            <RequestQueue title="Onboarding requests waiting on you" subtitle="Requests whose next step is your role's: a source to register, a run to start, a gate to decide"
+                          requests={mineNow} access={access} error={waiting.error} empty="Nothing waits on you" />
+          )}
           <Card id="queue" title="My action queue" subtitle={`Decisions and blocked work, ${persona.short.toLowerCase()} items first`}
                 action={<Action access={access} id="viewApprovals" href="/approvals" />} pad={false}>
             {queue.length ? (

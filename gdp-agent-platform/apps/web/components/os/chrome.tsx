@@ -8,7 +8,7 @@ import { OsShell, type ShellProps } from "./shell";
 export const isOsPath = (path: string | null) => !!path && (path === "/os" || path.startsWith("/os/"));
 
 /** The frame of every signed-in page. The Agentic Data OS shell by default, around its own screens and around every
- *  classic page (with the page's workspace tabs and read-only notice above it). Admins who switched to the classic
+ *  classic page (with the read-only notice above it; the shell's tab bar replaces the classic workspace tabs). Admins who switched to the classic
  *  layout get the classic sidebar and top bar on the classic pages, exactly as before; /os keeps its own shell. */
 export function AppChrome({ classic, shell, sidebar, topBar, banner, tabs, children }: {
   classic: boolean; shell: Omit<ShellProps, "children">;
@@ -32,7 +32,8 @@ export function AppChrome({ classic, shell, sidebar, topBar, banner, tabs, child
   }
   return (
     <OsShell {...shell}>
-      {os ? children : <div data-classic-page>{banner}{tabs}{children}</div>}
+      {/* the shell draws the entry's tabs, so the classic workspace tabs are not drawn twice */}
+      {os ? children : <div data-classic-page>{banner}{children}</div>}
     </OsShell>
   );
 }

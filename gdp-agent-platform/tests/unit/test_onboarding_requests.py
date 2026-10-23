@@ -1,0 +1,387 @@
+"""Onboarding requests (V075): where a request stands and who acts next (services/onboarding/requests.py), and the
+API's validation, permissions, duplicate and link checks (apps/api/app/requests_api.py) with a fake database."""
+
+import sys
+from pathlib import Path
+
+import pytest
+
+from services.governance.policy import privilege_for
+from services.onboarding import requests as rq
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "apps" / "api"))
+
+DOMAIN = {"domain_id": "d1", "domain_name": "OPPORTUNITY", "active_flag": True, "approved_version": 1}
+HEALTHY = {"source_system_id": "s1", "source_system_name": "SALESFORCE", "health": "HEALTHY", "health_detail": ""}
+
+
+def req(**over):
+    return {"request_id": "r1", "request_type": "SOURCE", "domain_id": "d1", "status": "OPEN", "stage": "NEW", **over}
+
+
+def item(**over):
+    return {"item_id": "i1", "request_id": "r1", "source_system_id": "s1", "source_name": "SALESFORCE", "run_id": None, **over}
+
+
+def run(state, **over):
+    return {"run_id": "run1", "run_name": "SALESFORCE opportunity", "domain_id": "d1", "source_system_id": "s1",
+            "current_state": state, "parent_run_id": None, **over}
+
+
+def assess(items, sources=None, runs=None, domain=DOMAIN, children=None, **r):
+    return rq.assess(req(**r), items, domain, {"s1": HEALTHY} if sources is None else sources, runs or {}, children or {})
+
+
+# ---------------------------------------------------------------- a source on its way through the platform
+
+
+def test_a_source_not_registered_waits_on_the_administrator():
+    a = assess([item(source_system_id=None, source_name="Yardi")])
+    assert a["stage"] == "ENABLE" and a["waiting_on"] == "SOURCE.CONNECT" and a["items"]["i1"]["status"] == "MISSING"
+    assert "register and connect Yardi" in a["waiting_label"]
+
+
+def test_an_unreachable_or_unlanded_source_stays_with_the_administrator():
+    down = assess([item()], sources={"s1": {**HEALTHY, "health": "UNREACHABLE", "health_detail": "SQL access denied"}})
+    assert down["stage"] == "ENABLE" and down["items"]["i1"]["status"] == "UNREACHABLE" and "SQL access denied" in down["items"]["i1"]["detail"]
+    file = assess([item()], sources={"s1": {**HEALTHY, "health": "NOT_LANDED"}})
+    assert file["stage"] == "ENABLE" and file["waiting_on"] == "PROFILE.RUN" and file["items"]["i1"]["status"] == "NOT_LANDED"
+
+
+def test_a_source_that_is_no_longer_registered_needs_attention():
+    a = assess([item()], sources={})
+    assert a["stage"] == "ENABLE" and a["items"]["i1"]["status"] == "ATTENTION" and "no longer registered" in a["attention"]
+
+
+def test_a_ready_source_without_a_run_goes_to_the_designer_to_start_one():
+    a = assess([item()])
+    assert a["stage"] == "DESIGN" and a["waiting_on"] == "RUN.CREATE" and a["items"]["i1"]["status"] == "NO_RUN"
+
+
+@pytest.mark.parametrize("state,stage,privilege", [
+    ("SOURCE_REGISTERED", "ENABLE", "SOURCE.CONNECT"),
+    ("LANDING_RUNNING", "ENABLE", "PROFILE.RUN"),
+    ("PROFILING_RUNNING", "DESIGN", "RUN.OPERATE"),
+    ("MAPPING_REVIEW", "DESIGN", "MAPPING.APPROVE"),
+    ("STTM_REVIEW", "DESIGN", "STTM.APPROVE"),
+    ("SODA_REVIEW", "DESIGN", "SODA.APPROVE"),
+    ("SODA_APPROVED", "BUILD", "RUN.OPERATE"),
+    ("VALIDATION_RUNNING", "BUILD", "RUN.OPERATE"),
+    ("DBT_REVIEW", "REVIEW", "REVIEW.APPROVE"),
+])
+def test_a_linked_run_decides_the_stage_and_who_acts(state, stage, privilege):
+    a = assess([item(run_id="run1")], runs={"run1": run(state)})
+    assert (a["stage"], a["waiting_on"]) == (stage, privilege)
+
+
+def test_every_workflow_state_is_placed():
+    # a state the graph adds later must be placed here too, or a request would sit in DESIGN with a vague label
+    import json
+    graph = json.loads((Path(__file__).resolve().parents[2] / "snowflake/database/seed/workflow_graph.json").read_text())
+    states = [s if isinstance(s, str) else s.get("state") for s in graph["states"]]
+    unplaced = [s for s in states if s not in rq.RUN_STATES and s not in rq.DONE_STATES and s not in ("FAILED", "CANCELLED")]
+    assert unplaced == []
+
+
+def test_a_completed_run_finishes_the_request():
+    for state in ("COMPLETED", "DBT_APPROVED"):
+        a = assess([item(run_id="run1")], runs={"run1": run(state)})
+        assert a["stage"] == "DONE" and a["status"] == "DONE"
+
+
+def test_a_failed_run_needs_attention_at_the_step_it_failed():
+    a = assess([item(run_id="run1")], runs={"run1": run("FAILED", failed_from_state="MAPPING_PENDING", failure_reason="Cortex timed out")})
+    assert a["stage"] == "DESIGN" and a["items"]["i1"]["status"] == "ATTENTION" and "Cortex timed out" in a["attention"]
+    assert a["waiting_on"] == "RUN.OPERATE"
+
+
+def test_a_failed_validation_is_build_with_attention():
+    a = assess([item(run_id="run1")], runs={"run1": run("VALIDATION_FAILED")})
+    assert a["stage"] == "BUILD" and a["attention"] and a["items"]["i1"]["status"] == "ATTENTION"
+
+
+def test_a_cancelled_archived_or_missing_run_asks_for_another():
+    for r in (run("CANCELLED"), run("DBT_REVIEW", is_archived=True)):
+        a = assess([item(run_id="run1")], runs={"run1": r})
+        assert a["items"]["i1"]["status"] == "ATTENTION" and a["waiting_on"] == "RUN.CREATE"
+    gone = assess([item(run_id="run1")], runs={})
+    assert gone["items"]["i1"]["status"] == "ATTENTION" and "no longer exists" in gone["attention"]
+
+
+def test_a_run_of_another_domain_is_flagged():
+    a = assess([item(run_id="run1")], runs={"run1": run("DBT_REVIEW", domain_id="d2")})
+    assert a["items"]["i1"]["status"] == "ATTENTION" and "another domain" in a["attention"]
+
+
+def test_a_multi_table_run_stands_where_its_slowest_table_run_stands():
+    kids = {"run1": [run("COMPLETED", run_id="c1", parent_run_id="run1"), run("STTM_REVIEW", run_id="c2", parent_run_id="run1"),
+                     run("CANCELLED", run_id="c3", parent_run_id="run1")]}
+    a = assess([item(run_id="run1")], runs={"run1": run("MAPPING_APPROVED")}, children=kids)
+    assert a["stage"] == "DESIGN" and a["waiting_on"] == "STTM.APPROVE" and "1 of 2 table runs done" in a["items"]["i1"]["detail"]
+    done = {"run1": [run("COMPLETED", run_id="c1", parent_run_id="run1"), run("DBT_APPROVED", run_id="c2", parent_run_id="run1")]}
+    assert assess([item(run_id="run1")], runs={"run1": run("MAPPING_APPROVED")}, children=done)["stage"] == "DONE"
+
+
+# ---------------------------------------------------------------- the request as a whole
+
+
+def test_the_request_is_at_its_earliest_part_and_every_role_with_work_is_listed():
+    items = [item(), item(item_id="i2", source_system_id=None, source_name="Yardi")]
+    a = assess(items)
+    assert a["stage"] == "ENABLE" and a["waiting_on"] == "SOURCE.CONNECT"
+    assert {w["privilege"] for w in a["waits"]} == {"SOURCE.CONNECT", "RUN.CREATE"}   # the designer can start on the ready one
+
+
+def test_a_new_domain_waits_on_a_steward_and_a_retired_one_needs_attention():
+    new = rq.assess(req(request_type="DOMAIN", domain_id=None, proposed_domain="TENANT"), [], None, {}, {})
+    assert new["stage"] == "DOMAIN" and new["waiting_on"] == "DOMAIN.EDIT" and "TENANT" in new["waiting_label"]
+    retired = assess([item()], domain={**DOMAIN, "active_flag": False})
+    assert retired["stage"] == "DOMAIN" and "retired" in retired["attention"]
+
+
+def test_a_domain_without_an_approved_model_needs_the_designer():
+    a = assess([item(run_id="run1")], runs={"run1": run("DBT_REVIEW")}, domain={**DOMAIN, "approved_version": None})
+    assert a["stage"] == "DESIGN" and a["waiting_on"] == "MODEL.APPROVE"
+
+
+def test_removed_sources_are_ignored_and_a_domain_only_request_finishes_when_the_model_is_approved():
+    a = assess([item(), item(item_id="i2", removed_at="2026-10-23")], runs={})
+    assert a["items"]["i2"]["status"] == "REMOVED" and a["stage"] == "DESIGN"
+    assert rq.assess(req(request_type="DOMAIN"), [], DOMAIN, {}, {})["status"] == "DONE"
+
+
+def test_a_data_product_waits_on_a_gold_run():
+    a = rq.assess(req(request_type="PRODUCT"), [item(source_system_id=None, source_name="Gold: OPPORTUNITY")], DOMAIN, {}, {})
+    assert a["stage"] == "BUILD" and a["waiting_on"] == "RUN.CREATE" and a["items"]["i1"]["status"] == "NO_RUN"
+
+
+def test_a_closed_request_waits_on_nobody():
+    for status, stage in (("CANCELLED", "CLOSED"), ("REJECTED", "CLOSED"), ("DONE", "DONE")):
+        a = assess([item()], status=status)
+        assert (a["stage"], a["status"], a["waiting_on"], a["waits"]) == (stage, status, None, [])
+
+
+# ---------------------------------------------------------------- linking what already exists
+
+
+def test_a_named_source_matches_its_registration_ignoring_case_and_spaces():
+    sources = [{"source_system_id": "s1", "source_system_name": "ZOOMINFO_DEV"}, {"source_system_id": "s2", "source_system_name": "OLD", "active_flag": False}]
+    assert rq.match_source("zoominfo_dev ", sources)["source_system_id"] == "s1"
+    assert rq.match_source("old", sources) is None and rq.match_source("Yardi", sources) is None
+
+
+def test_the_existing_run_is_picked_only_when_it_fits():
+    runs = [run("MAPPING_REVIEW", run_id="a", created_at="2026-10-01"), run("DBT_REVIEW", run_id="b", created_at="2026-09-01"),
+            run("COMPLETED", run_id="kid", parent_run_id="b"), run("COMPLETED", run_id="arch", is_archived=True),
+            run("COMPLETED", run_id="other", domain_id="d2"), run("CANCELLED", run_id="c"), run("FAILED", run_id="f")]
+    assert rq.pick_run("s1", "d1", runs)["run_id"] == "b"     # most advanced top-level run of the domain
+    assert rq.pick_run("s9", "d1", runs) is None
+
+
+# ---------------------------------------------------------------- validation and governance routes
+
+
+@pytest.mark.parametrize("body,needle", [
+    ({"request_type": "NOPE", "title": "x", "domain_id": "d1"}, "Choose what is requested"),
+    ({"request_type": "SOURCE", "title": " ", "domain_id": "d1", "sources": [{"source_name": "A"}]}, "title"),
+    ({"request_type": "SOURCE", "title": "x", "domain_id": "d1", "sources": []}, "at least one source"),
+    ({"request_type": "SOURCE", "title": "x", "domain_id": "d1", "sources": [{"source_name": "A"}, {"source_name": "a"}]}, "named once"),
+    ({"request_type": "SOURCE", "title": "x", "sources": [{"source_name": "A"}]}, "Pick the domain"),
+    ({"request_type": "DOMAIN", "title": "x"}, "name the new domain"),
+    ({"request_type": "SOURCE", "title": "x", "domain_id": "d1", "priority": "URGENT", "sources": [{"source_name": "A"}]}, "Priority"),
+])
+def test_validation_says_what_is_wrong(body, needle):
+    assert any(needle in p for p in rq.validate(body, domain_exists=True))
+
+
+def test_a_retired_domain_is_refused():
+    assert any("retired" in p for p in rq.validate({"request_type": "SOURCE", "title": "x", "domain_id": "d1", "sources": [{"source_name": "A"}]}, False))
+    assert rq.validate({"request_type": "SOURCE", "title": "x", "domain_id": "d1", "sources": [{"source_name": "A"}]}, True) == []
+
+
+def test_request_writes_are_checked_by_the_endpoint_and_nothing_else_slips_through():
+    for path in ("/api/onboarding-requests", "/api/onboarding-requests/r1/sources", "/api/onboarding-requests/r1/sources/i1/run",
+                 "/api/onboarding-requests/r1/sources/i1/source", "/api/onboarding-requests/r1/sources/i1/remove",
+                 "/api/onboarding-requests/r1/domain", "/api/onboarding-requests/r1/reject", "/api/onboarding-requests/r1/reopen"):
+        assert privilege_for("POST", path)[:1] == (None,), path
+    assert privilege_for("POST", "/api/onboarding-requests/r1/delete")[0] == "RUN.OPERATE"
+
+
+# ---------------------------------------------------------------- the API, with a fake database
+
+
+class FakeDb:
+    user = "ANA"
+
+    def __init__(self):
+        self.handlers, self.writes = [], []
+
+    def on(self, marker, value):
+        self.handlers.insert(0, (marker, value))
+        return self
+
+    def query(self, sql, params=()):
+        for marker, value in self.handlers:
+            if marker in sql:
+                return [dict(r) for r in (value(sql, params) if callable(value) else value)]
+        return []
+
+    def execute(self, sql, params=()):
+        self.writes.append((" ".join(sql.split()), params))
+
+    def wrote(self, needle):
+        return [p for s, p in self.writes if needle in s]
+
+
+@pytest.fixture
+def api(monkeypatch):
+    from fastapi.testclient import TestClient
+
+    import app.governance as gov
+    import app.main as main
+    import app.requests_api as api_mod
+
+    async def open_door(request, call_next):
+        return await call_next(request)
+    monkeypatch.setattr(gov, "middleware", open_door)
+    who = {"user": "ANA", "roles": set(), "privileges": {"DOMAIN.EDIT"}}
+    monkeypatch.setattr(api_mod, "_who", lambda db: who)
+    monkeypatch.setattr(api_mod, "_sources", lambda db: {"s1": HEALTHY})
+    monkeypatch.setattr(api_mod.domain_access, "can_see", lambda db, user, domain_id, privs=(), roles=(): domain_id != "secret")
+    monkeypatch.setattr(api_mod.domain_access, "named_stewards", lambda db, domain_id: ["OWNER1"] if domain_id == "d1" else [])
+    db = FakeDb().on("FROM CORE.DOMAIN_REGISTRY D", [DOMAIN])
+    main.app.dependency_overrides[main.current_db] = lambda: db
+    try:
+        yield TestClient(main.app), db, who
+    finally:
+        main.app.dependency_overrides.pop(main.current_db, None)
+
+
+NEW = {"request_type": "SOURCE", "title": "Opportunity from Salesforce", "domain_id": "d1", "sources": [{"source_name": "SALESFORCE"}]}
+
+
+def test_filing_needs_ownership_or_a_builder_privilege(api):
+    client, db, who = api
+    who["privileges"] = {"AUDIT.VIEW", "OPS.VIEW"}          # a viewer, not an owner of the domain
+    res = client.post("/api/onboarding-requests", json=NEW)
+    assert res.status_code == 403 and "owner or steward" in res.json()["detail"]
+    assert not db.wrote("INSERT INTO CORE.ONBOARDING_REQUEST")
+    who["user"] = "OWNER1"                                   # the domain's owner may file without a privilege
+    db.on("FROM CORE.ONBOARDING_REQUEST WHERE", [req(requested_by="OWNER1")])
+    assert client.post("/api/onboarding-requests", json=NEW).status_code == 200
+    assert db.wrote("INSERT INTO CORE.ONBOARDING_REQUEST (")
+
+
+def test_filing_validates_and_hides_domains_the_caller_cannot_see(api):
+    client, db, _ = api
+    assert client.post("/api/onboarding-requests", json={**NEW, "sources": []}).status_code == 422
+    db.on("FROM CORE.DOMAIN_REGISTRY D", [{**DOMAIN, "domain_id": "secret"}])
+    assert client.post("/api/onboarding-requests", json={**NEW, "domain_id": "secret"}).status_code == 404
+
+
+def test_a_request_for_a_new_domain_that_already_exists_is_refused(api):
+    client, db, _ = api
+    db.on("UPPER(DOMAIN_NAME) = UPPER", [{"domain_id": "d1", "domain_name": "OPPORTUNITY"}])
+    res = client.post("/api/onboarding-requests", json={"request_type": "DOMAIN", "title": "x", "proposed_domain": "opportunity"})
+    assert res.status_code == 422 and "already exists" in res.json()["detail"]
+
+
+def test_a_duplicate_open_request_is_reported_unless_allowed(api):
+    client, db, _ = api
+    db.on("SELECT DISTINCT R.REQUEST_ID", [{"request_id": "r0", "title": "Earlier", "stage": "ENABLE", "requested_by": "BO", "source_name": "SALESFORCE"}])
+    res = client.post("/api/onboarding-requests", json=NEW)
+    assert res.status_code == 409 and res.json()["detail"]["duplicates"][0]["request_id"] == "r0"
+    db.on("FROM CORE.ONBOARDING_REQUEST WHERE", [req()])
+    assert client.post("/api/onboarding-requests", json={**NEW, "allow_duplicate": True}).status_code == 200
+
+
+def test_a_run_is_linked_only_when_it_fits(api):
+    client, db, who = api
+    who["privileges"] = {"RUN.CREATE"}
+    db.on("FROM CORE.ONBOARDING_REQUEST WHERE", [req(requested_by="BO")])
+    db.on("WHERE ITEM_ID = %s AND REQUEST_ID", [item()])
+    url = "/api/onboarding-requests/r1/sources/i1/run"
+    for bad, needle in ((run("DBT_REVIEW", parent_run_id="p"), "multi-table"), (run("DBT_REVIEW", source_system_id="s2"), "another source"),
+                        (run("DBT_REVIEW", domain_id="d2"), "another domain")):
+        db.on("WHERE RUN_ID = %s AND DELETED_AT IS NULL", [bad])
+        res = client.post(url, json={"run_id": "run1"})
+        assert res.status_code == 422 and needle in res.json()["detail"]
+    db.on("WHERE RUN_ID = %s AND DELETED_AT IS NULL", [run("DBT_REVIEW")])
+    assert client.post(url, json={"run_id": "run1"}).status_code == 200 and db.wrote("SET RUN_ID = %s")
+    who["privileges"] = {"SOURCE.CONNECT"}
+    assert client.post(url, json={"run_id": "run1"}).status_code == 403
+
+
+def test_only_the_administrator_links_a_registration(api):
+    client, db, who = api
+    db.on("FROM CORE.ONBOARDING_REQUEST WHERE", [req(requested_by="BO")])
+    db.on("WHERE ITEM_ID = %s AND REQUEST_ID", [item(source_system_id=None, source_name="Salesforce prod")])
+    url = "/api/onboarding-requests/r1/sources/i1/source"
+    assert client.post(url, json={"source_system_id": "s1"}).status_code == 403
+    who["privileges"] = {"SOURCE.CONNECT"}
+    assert client.post(url, json={"source_system_id": "nope"}).status_code == 422
+    assert client.post(url, json={"source_system_id": "s1"}).status_code == 200 and db.wrote("SET SOURCE_SYSTEM_ID = %s")
+
+
+def test_reject_needs_a_reason_and_not_your_own_request_and_a_closed_request_is_read_only(api):
+    client, db, who = api
+    db.on("FROM CORE.ONBOARDING_REQUEST WHERE", [req(requested_by="ANA")])
+    assert client.post("/api/onboarding-requests/r1/reject", json={"note": ""}).status_code == 422
+    assert client.post("/api/onboarding-requests/r1/reject", json={"note": "not allowed"}).status_code == 403
+    db.on("FROM CORE.ONBOARDING_REQUEST WHERE", [req(requested_by="ANA", status="CANCELLED")])
+    assert client.post("/api/onboarding-requests/r1/sources", json={"source_name": "X"}).status_code == 409
+    db.on("FROM CORE.ONBOARDING_REQUEST WHERE", [req(requested_by="ANA", status="DONE")])
+    assert client.post("/api/onboarding-requests/r1/reopen", json={}).status_code == 409
+
+
+def test_the_last_source_of_a_source_request_cannot_be_removed(api):
+    client, db, _ = api
+    db.on("FROM CORE.ONBOARDING_REQUEST WHERE", [req(requested_by="ANA")])
+    db.on("WHERE ITEM_ID = %s AND REQUEST_ID", [item()])
+    db.on("FROM CORE.ONBOARDING_REQUEST_ITEM WHERE REQUEST_ID IN", [item()])
+    res = client.post("/api/onboarding-requests/r1/sources/i1/remove")
+    assert res.status_code == 409 and "cancel the request" in res.json()["detail"]
+
+
+def test_before_the_migration_the_api_says_to_deploy_it(api):
+    client, db, _ = api
+
+    def missing(sql, params):
+        raise RuntimeError("SQL compilation error: Object 'DEV_AI_PLATFORM.CORE.ONBOARDING_REQUEST' does not exist or not authorized.")
+    db.on("FROM CORE.ONBOARDING_REQUEST WHERE", missing)
+    res = client.get("/api/onboarding-requests")
+    assert res.status_code == 503 and "V075" in res.json()["detail"]
+
+
+def test_a_data_product_request_gets_a_gold_run_item_so_it_is_not_done_on_filing(api):
+    client, db, _ = api
+    db.on("FROM CORE.ONBOARDING_REQUEST WHERE", [req(request_type="PRODUCT")])
+    res = client.post("/api/onboarding-requests", json={"request_type": "PRODUCT", "title": "Pipeline forecast", "domain_id": "d1"})
+    assert res.status_code == 200
+    added = [p for p in db.wrote("INSERT INTO CORE.ONBOARDING_REQUEST_ITEM")]
+    assert added and added[0][3] == "Gold run: Pipeline forecast" and added[0][2] is None
+
+
+def test_a_run_linked_during_a_refresh_is_judged_with_its_table_runs(monkeypatch):
+    import app.requests_api as api_mod
+
+    monkeypatch.setattr(api_mod, "_sources", lambda db: {"s1": HEALTHY})
+    parent = run("MAPPING_APPROVED", created_at="2026-10-23")
+    kids = [run("STTM_REVIEW", run_id="c1", parent_run_id="run1"), run("COMPLETED", run_id="c2", parent_run_id="run1")]
+
+    def runs_query(sql, params):
+        if "SOURCE_SYSTEM_ID IN" in sql:
+            return [parent]
+        return ([parent] if "run1" in params else []) + [k for k in kids if "run1" in params]
+    db = FakeDb().on("FROM CORE.WORKFLOW_RUN WHERE", runs_query).on("FROM CORE.ONBOARDING_REQUEST_ITEM WHERE REQUEST_ID IN", [item()]) \
+        .on("FROM CORE.DOMAIN_REGISTRY D", [DOMAIN])
+    out = api_mod.refresh(db, [req()])[0]
+    assert out["items"][0]["run_id"] == "run1" and out["stage"] == "DESIGN" and out["waiting_on"] == "STTM.APPROVE"
+    assert "1 of 2 table runs done" in out["items"][0]["status_detail"]
+
+
+def test_a_multi_table_run_names_the_step_of_its_earliest_table_first():
+    kids = {"run1": [run("DBT_REVIEW", run_id="c1", parent_run_id="run1"), run("STTM_REVIEW", run_id="c2", parent_run_id="run1")]}
+    a = assess([item(run_id="run1")], runs={"run1": run("MAPPING_APPROVED")}, children=kids)
+    assert a["stage"] == "DESIGN" and a["waiting_on"] == "STTM.APPROVE"
+    assert [w["privilege"] for w in a["waits"]] == ["STTM.APPROVE", "REVIEW.APPROVE"]   # both roles still see their part
