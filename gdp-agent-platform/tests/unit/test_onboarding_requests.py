@@ -668,3 +668,26 @@ def test_an_open_request_is_never_cut_by_the_limit(api):
     assert not any(i.startswith("c") for i in ids)         # the limit is spent on open ones first
     db.on("FROM CORE.ONBOARDING_REQUEST WHERE", closed)     # the fake ignores the status filter the query applies
     assert len(client.get("/api/onboarding-requests", params={"status": "CLOSED", "limit": 10}).json()["requests"]) == 10
+
+
+def test_source_health_is_read_once_for_many_reads_and_fresh_after_a_link(monkeypatch):
+    import app.main as main
+    import app.requests_api as api_mod
+
+    calls = []
+    monkeypatch.setattr(main, "sources_overview", lambda db=None, fresh=False: calls.append(1) or {"sources": [HEALTHY]})
+    api_mod.invalidate_sources()
+    for _ in range(5):
+        assert api_mod._sources(None) == {"s1": HEALTHY}
+    assert len(calls) == 1                       # five Home loads, one sources overview
+    api_mod.invalidate_sources()                 # a link: the next read sees the change
+    api_mod._sources(None)
+    assert len(calls) == 2
+
+
+def test_new_domain_requests_look_their_domains_up_in_one_query():
+    import app.requests_api as api_mod
+
+    db = FakeDb().on("UPPER(DOMAIN_NAME) IN", [{"domain_id": "d9", "domain_name": "TENANT"}])
+    out = api_mod._domains_named(db, ["tenant", " Lease ", "TENANT"])
+    assert out == {"TENANT": {"domain_id": "d9", "domain_name": "TENANT"}}

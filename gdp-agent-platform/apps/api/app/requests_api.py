@@ -29,6 +29,8 @@ Notifications stay in-app: a request waiting on a role is in that role's My Work
 from __future__ import annotations
 
 import functools
+import threading
+import time
 import uuid
 from datetime import date
 from typing import Any, Dict, List, Optional
@@ -113,7 +115,30 @@ def _event(db: Db, request_id: str, kind: str, note: Optional[str] = None, item_
 # ---------------------------------------------------------------- facts the assessment reads
 
 
+SOURCES_TTL = 30.0   # seconds the source registrations and health are reused across reads (Home, Intake, the boards)
+_sources_cache: Dict[str, Any] = {"at": 0.0, "data": None}
+_sources_lock = threading.Lock()
+
+
+def invalidate_sources() -> None:
+    """A source was registered, linked or named: the next read works the requests out from fresh source data."""
+    with _sources_lock:
+        _sources_cache.update(at=0.0, data=None)
+
+
 def _sources(db: Db) -> Dict[str, Dict[str, Any]]:
+    """Every source's registration and health (main.sources_overview, the heaviest read of a request list), reused for
+    SOURCES_TTL: it is the same for every reader, and a list read on every Home load would otherwise recompute it."""
+    with _sources_lock:
+        if _sources_cache["data"] is not None and time.monotonic() - _sources_cache["at"] < SOURCES_TTL:
+            return _sources_cache["data"]
+    data = _read_sources(db)
+    with _sources_lock:
+        _sources_cache.update(at=time.monotonic(), data=data)
+    return data
+
+
+def _read_sources(db: Db) -> Dict[str, Dict[str, Any]]:
     from app.main import sources_overview
 
     try:
@@ -133,6 +158,17 @@ def _domains(db: Db, ids: List[str]) -> Dict[str, Dict[str, Any]]:
                         LEFT JOIN CORE.DOMAIN_MODEL M ON M.DOMAIN_ID = D.DOMAIN_ID AND COALESCE(M.LAYER, 'SILVER') = 'SILVER'
                         WHERE D.DOMAIN_ID IN ({marks})""", tuple(ids))
     return {r["domain_id"]: r for r in rows}
+
+
+def _domains_named(db: Db, names: List[str]) -> Dict[str, Dict[str, Any]]:
+    """Active domains by upper-case name, for every name at once (one query, not one per request)."""
+    wanted = sorted({n.strip().upper() for n in names if n and n.strip()})
+    if not wanted:
+        return {}
+    marks = ", ".join(["%s"] * len(wanted))
+    rows = db.query(f"SELECT DOMAIN_ID, DOMAIN_NAME FROM CORE.DOMAIN_REGISTRY WHERE UPPER(DOMAIN_NAME) IN ({marks}) "
+                    "AND COALESCE(ACTIVE_FLAG, TRUE)", tuple(wanted))
+    return {str(r["domain_name"]).upper(): r for r in rows}
 
 
 def _domain_named(db: Db, name: str) -> Optional[Dict[str, Any]]:
@@ -211,19 +247,20 @@ def refresh(db: Db, requests: List[Dict[str, Any]], write: bool = True) -> List[
                        item_id=it["item_id"], to=hit["source_system_id"], automatic=True)
                 it["source_system_id"], it["source_name"] = hit["source_system_id"], hit["source_system_name"]
 
-    # requests for a domain still to create: link it once a domain of that name exists
-    for r in requests:
-        if write and not r.get("domain_id") and r.get("proposed_domain") and r.get("status") == rq.OPEN:
-            hit = _domain_named(db, r["proposed_domain"])
-            if hit:
-                db.execute("UPDATE CORE.ONBOARDING_REQUEST SET DOMAIN_ID = %s, UPDATED_AT = CURRENT_TIMESTAMP() WHERE REQUEST_ID = %s "
-                           "AND DOMAIN_ID IS NULL", (hit["domain_id"], r["request_id"]))
-                _event(db, r["request_id"], "DOMAIN_LINKED", f"The {hit['domain_name']} domain now exists", to=hit["domain_id"], automatic=True)
-                r["domain_id"] = hit["domain_id"]
-                try:   # the files follow the domain; a failure here never breaks reading the requests
-                    hand_over(db, r["request_id"], hit["domain_id"])
-                except Exception:
-                    pass
+    # requests for a domain still to create: link it once a domain of that name exists (one lookup for all of them)
+    waiting = [r for r in requests if write and not r.get("domain_id") and r.get("proposed_domain") and r.get("status") == rq.OPEN]
+    named = _domains_named(db, [r["proposed_domain"] for r in waiting]) if waiting else {}
+    for r in waiting:
+        hit = named.get(str(r["proposed_domain"]).strip().upper())
+        if hit:
+            db.execute("UPDATE CORE.ONBOARDING_REQUEST SET DOMAIN_ID = %s, UPDATED_AT = CURRENT_TIMESTAMP() WHERE REQUEST_ID = %s "
+                       "AND DOMAIN_ID IS NULL", (hit["domain_id"], r["request_id"]))
+            _event(db, r["request_id"], "DOMAIN_LINKED", f"The {hit['domain_name']} domain now exists", to=hit["domain_id"], automatic=True)
+            r["domain_id"] = hit["domain_id"]
+            try:   # the files follow the domain; a failure here never breaks reading the requests
+                hand_over(db, r["request_id"], hit["domain_id"])
+            except Exception:
+                pass
 
     run_ids = sorted({i["run_id"] for i in all_items if i.get("run_id")})
     source_ids = sorted({i["source_system_id"] for i in all_items if i.get("source_system_id")})
@@ -454,6 +491,7 @@ def _add_item(db: Db, request_id: str, row: Dict[str, Any]) -> str:
 @_guard_deployed
 def create_request(body: NewRequest, db: Db = Depends(current_db)):
     """File a request. 409 with the open requests that already ask for one of the sources, unless allow_duplicate."""
+    invalidate_sources()   # what a source is linked to changes the next read
     who = _who(db)
     kind = body.request_type.upper()
     intent = body.intent.upper()
@@ -510,6 +548,7 @@ def create_request(body: NewRequest, db: Db = Depends(current_db)):
 @_guard_deployed
 def add_source(request_id: str, body: SourceIn, db: Db = Depends(current_db)):
     """Name one more source the request needs."""
+    invalidate_sources()   # what a source is linked to changes the next read
     who = _who(db)
     r = _one(db, who, request_id)
     _open(r)
@@ -534,6 +573,7 @@ class LinkSource(BaseModel):
 @_guard_deployed
 def link_source(request_id: str, item_id: str, body: LinkSource, db: Db = Depends(current_db)):
     """The Data OS Administrator links a named source to its registration (or clears a wrong link)."""
+    invalidate_sources()   # what a source is linked to changes the next read
     who = _who(db)
     r = _one(db, who, request_id)
     _open(r)

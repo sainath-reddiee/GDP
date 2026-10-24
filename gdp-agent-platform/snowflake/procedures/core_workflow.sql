@@ -41,6 +41,19 @@ CREATE OR REPLACE PROCEDURE {{database}}.{{schema}}.REVIEW_TRANSITION(RUN_ID VAR
   COMMENT = 'HUMAN review gate transition; records the reviewer and justification'
   EXECUTE AS OWNER;
 
+-- Build end to end approves the data quality checks on behalf of the DQ approver: owner's rights, so the Forward
+-- Engineering Lead's role needs usage on this alone (not on REVIEW_TRANSITION); it approves nothing but the checks, and
+-- only while the AUTOPILOT_APPROVES_DQ setting is on.
+CREATE OR REPLACE PROCEDURE {{database}}.{{schema}}.AUTOPILOT_APPROVE_DQ(RUN_ID VARCHAR, JUSTIFICATION VARCHAR)
+  RETURNS VARIANT
+  LANGUAGE PYTHON
+  RUNTIME_VERSION = '3.11'
+  PACKAGES = ('snowflake-snowpark-python')
+  IMPORTS = ('{{services_import}}')
+  HANDLER = 'services.workflow.procedures.autopilot_approve_dq'
+  COMMENT = 'Autopilot approves a run''s data quality checks (AUTOPILOT_APPROVES_DQ); records the caller as reviewer'
+  EXECUTE AS OWNER;
+
 CREATE OR REPLACE PROCEDURE {{database}}.{{schema}}.SET_RUN_ARCHIVED(RUN_IDS_JSON VARCHAR, ARCHIVED BOOLEAN)
   RETURNS VARIANT
   LANGUAGE PYTHON
@@ -80,4 +93,5 @@ GRANT USAGE ON PROCEDURE {{database}}.{{schema}}.SP_CLEANUP_PIPELINE_RUNS(ARRAY,
 GRANT USAGE ON PROCEDURE {{database}}.{{schema}}.SP_CLEANUP_PIPELINE_RUNS(ARRAY, BOOLEAN, BOOLEAN, BOOLEAN) TO DATABASE ROLE {{database}}.DATA_ENGINEER;
 GRANT USAGE ON PROCEDURE {{database}}.{{schema}}.CREATE_RUN(VARCHAR) TO DATABASE ROLE {{database}}.DATA_ENGINEER;
 GRANT USAGE ON PROCEDURE {{database}}.{{schema}}.REVIEW_TRANSITION(VARCHAR, VARCHAR, VARCHAR, VARCHAR, VARCHAR) TO DATABASE ROLE {{database}}.REVIEWER;
+GRANT USAGE ON PROCEDURE {{database}}.{{schema}}.AUTOPILOT_APPROVE_DQ(VARCHAR, VARCHAR) TO DATABASE ROLE {{database}}.DATA_ENGINEER;
 GRANT USAGE ON PROCEDURE {{database}}.{{schema}}.TRANSITION_RUN(VARCHAR, VARCHAR, VARCHAR, VARCHAR) TO DATABASE ROLE {{database}}.PLATFORM_ADMIN;

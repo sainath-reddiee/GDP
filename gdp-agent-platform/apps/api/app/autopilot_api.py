@@ -99,7 +99,16 @@ def _approve_mapping(db: Db, run_id: str):
 
 
 def _approve_soda(db: Db, run_id: str, on_behalf: bool = False):
-    """At the checks gate: approve it. Past it (the code moved the run on): approve the checks still proposed."""
+    """At the checks gate: approve it. Past it (the code moved the run on): approve the checks still proposed.
+    On behalf of the DQ approver (AUTOPILOT_APPROVES_DQ), through CORE.AUTOPILOT_APPROVE_DQ: owner's rights, so a
+    Forward Engineering Lead's own Snowflake role (sign-in mode) needs no REVIEWER database role for it."""
+    if on_behalf:
+        try:
+            return db.call("CALL CORE.AUTOPILOT_APPROVE_DQ(%s, %s)", (run_id, ap.JUSTIFICATION.format(what=DQ_ON_BEHALF)))
+        except Exception as exc:
+            if "does not exist" not in str(exc).lower() and "not authorized" not in str(exc).lower():
+                raise   # the procedure refused (setting off, wrong state): autopilot stops with its reason
+            # before the procedure is deployed: the gate as a person's review, as before
     state = db.query("SELECT CURRENT_STATE FROM CORE.WORKFLOW_RUN WHERE RUN_ID = %s", (run_id,))[0]["current_state"]
     if state == "SODA_REVIEW":
         return _approve(db, run_id, "SODA_APPROVED", DQ_ON_BEHALF if on_behalf else "proposed Data Quality checks accepted")

@@ -382,6 +382,48 @@ def review_transition(session, run_id: str, to_state: str, decision: str,
     return result
 
 
+AUTOPILOT_DQ_SETTING = "AUTOPILOT_APPROVES_DQ"
+
+
+def autopilot_approves_dq(value: Any) -> bool:
+    """The setting's stored value (a VARIANT, JSON text or nothing): on unless it is explicitly false (pure)."""
+    if value is None:
+        return True
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except ValueError:
+            return value.strip().lower() not in ("false", "0", "off")
+    return bool(value)
+
+
+def autopilot_approve_dq(session, run_id: str, justification: str) -> Dict[str, Any]:
+    """Build end to end approves a run's data quality checks on behalf of the DQ approver (CORE.AUTOPILOT_APPROVE_DQ).
+    Owner's rights, so a Forward Engineering Lead's Snowflake role needs usage on this procedure only, not on
+    REVIEW_TRANSITION: it approves nothing but the checks, and only while the AUTOPILOT_APPROVES_DQ setting is on. The
+    caller is recorded as the reviewer, with a justification saying autopilot decided. At the checks gate the run moves
+    to SODA_APPROVED; past it (the code moved the run on), the checks still proposed are approved in place."""
+    run_id = _text(run_id, "RUN_ID", required=True)
+    justification = _text(justification, "JUSTIFICATION") or "Autopilot: data quality checks approved (AUTOPILOT_APPROVES_DQ)"
+    stored = _rows(session, "SELECT SETTING_VALUE FROM CORE.SETTING WHERE SETTING_KEY = ?", [AUTOPILOT_DQ_SETTING])
+    assert autopilot_approves_dq(stored[0]["SETTING_VALUE"] if stored else None), \
+        "AUTOPILOT_APPROVES_DQ is off: a DQ approver decides the checks"
+    run = _get_run(session, run_id)
+    if run["CURRENT_STATE"] == "SODA_REVIEW":
+        return review_transition(session, run_id, "SODA_APPROVED", "APPROVE", justification,
+                                 "Approved by Build end to end (AUTOPILOT_APPROVES_DQ)")
+    session.sql("""UPDATE CORE.SODA_EXPECTATION_REGISTRY SET STATUS = 'APPROVED', REVIEWED_BY = CURRENT_USER(),
+                          REVIEWED_AT = CURRENT_TIMESTAMP()
+                    WHERE RUN_ID = ? AND IS_CURRENT AND STATUS = 'PROPOSED'""", params=[run_id]).collect()
+    try:  # kept in the DQ store, as a person's approval does; a by-product that never fails the approval
+        from services.soda.procedures import store_approved_set
+
+        store_approved_set(session, run_id)
+    except Exception:
+        pass
+    return {"run_id": run_id, "approved_in_place": True}
+
+
 def _record_run_event(session, run: Dict[str, Any], actor_type: str, reason: str, details: Dict[str, Any]) -> None:
     """Lifecycle event that does not change workflow state (FROM_STATE = TO_STATE)."""
     session.sql(

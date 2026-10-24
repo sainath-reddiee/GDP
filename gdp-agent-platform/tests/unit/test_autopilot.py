@@ -260,3 +260,32 @@ def test_publish_step_stops_with_the_reason_unless_the_pr_is_there(monkeypatch, 
     assert ("error" not in out) == ok
     if not ok:
         assert out["error"] == f"{status} detail"
+
+
+def test_dq_on_behalf_goes_through_the_narrow_procedure(monkeypatch):
+    """Sign-in mode runs calls as the person's Snowflake role: the on-behalf approval uses CORE.AUTOPILOT_APPROVE_DQ
+    (owner's rights, DATA_ENGINEER usage), never REVIEW_TRANSITION, which only REVIEWER may call."""
+    import app.main  # noqa: F401
+    from app import autopilot_api as api
+
+    class Db:
+        def __init__(self):
+            self.calls = []
+
+        def call(self, sql, params=()):
+            self.calls.append(sql)
+            return {"ok": True}
+
+        def query(self, sql, params=()):
+            raise AssertionError("no direct reads or reviews on behalf")
+
+    db = Db()
+    assert api._approve_soda(db, "run-1", on_behalf=True) == {"ok": True}
+    assert db.calls == ["CALL CORE.AUTOPILOT_APPROVE_DQ(%s, %s)"]
+
+
+def test_the_procedure_refuses_when_the_setting_is_off():
+    from services.workflow.procedures import autopilot_approves_dq
+
+    assert autopilot_approves_dq(None) and autopilot_approves_dq("true") and autopilot_approves_dq(True)
+    assert not autopilot_approves_dq("false") and not autopilot_approves_dq(False)
