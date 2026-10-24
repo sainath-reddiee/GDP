@@ -5,7 +5,7 @@ import { osAccess, type OsAccess } from "@/lib/os/session";
 import { intentOf, overdue, type OnboardingRequest, type RequestType } from "@/lib/os/requests";
 import { Banner, Btn, Empty, SourceError } from "@/components/os/ui";
 import { OnboardedDomains, StartPanel, WorkflowRow } from "@/components/os/home";
-import { workflowHref } from "@/lib/os/work";
+import { inflight, workflowHref } from "@/lib/os/work";
 import { Segmented } from "@/components/os/stage-board";
 import { HomeSearch } from "@/components/os/home-search";
 
@@ -15,7 +15,7 @@ export const metadata = { title: "Home" };
 // Home, where everyone lands whatever their role: every build workflow (an onboarding request), the actions first,
 // with the step it is at and who it waits on, filtered in the URL (?view=active|action|all&type=
 // &intent=&q=), the panel that starts a new one or enhances what exists (a data product among them), and the onboarded domains below. A workflow
-// opens on the stage board it is at, selected (lib/os/work workflowHref).
+// opens on Intake, selected (lib/os/work workflowHref); from there "Open where it is" goes to its stage.
 
 const screenByKeySafe = (key: string) => {
   try { return screenByKey(key as ScreenKey) ?? null; } catch { return null; }
@@ -121,7 +121,7 @@ export default async function Home({ searchParams }: { searchParams: Params }) {
         </section>
 
         <aside>
-          <div className="xl:sticky xl:top-[76px]"><StartPanel access={access} /></div>
+          <div className="xl:sticky xl:top-[76px]"><StartPanel access={access} inflight={inflight(all)} /></div>
         </aside>
       </div>
       {/* the domains come after the work: actions first */}

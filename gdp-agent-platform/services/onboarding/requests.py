@@ -66,8 +66,9 @@ _ORDER = list(RUN_STATES) + sorted(DONE_STATES)
 # phase what has happened: the domain is awaited, the admin is onboarding the source (registering, reaching and landing
 # it, and starting its run in the domain: onboarding is the administrator's alone), the source is onboarded and its run
 # waits for the designer, the designer profiles and models, the approved design is stored (profiles, model, mapping and
-# checks in the stores) and waits for the build, the build runs, validation flagged it, review, done
-PHASES = ("DOMAIN", "ENABLE", "ONBOARDED", "READY", "DESIGN", "STORED", "BUILD", "FLAGGED", "REVIEW", "DONE", "CLOSED")
+# checks in the stores) and waits for the build, the build runs, validation flagged it, review, done. An Enhance source
+# request (V078) has its own design phase: IMPACT, the designer mapping only what the enhancement adds
+PHASES = ("DOMAIN", "ENABLE", "ONBOARDED", "READY", "IMPACT", "DESIGN", "STORED", "BUILD", "FLAGGED", "REVIEW", "DONE", "CLOSED")
 _STORED_STATES = {"SODA_APPROVED", "DBT_PENDING"}
 # a run the administrator started, landed and waiting for the designer to profile it
 _ONBOARDED_STATES = {"LANDING_COMPLETE", "PROFILING_PENDING"}
@@ -76,12 +77,14 @@ _ONBOARDED_STATES = {"LANDING_COMPLETE", "PROFILING_PENDING"}
 ENABLE_STATUSES = {"MISSING", "UNREACHABLE", "NOT_LANDED", "NO_RUN"}
 
 
-def phase(part: Dict[str, Any], product: bool = False) -> str:
+def phase(part: Dict[str, Any], product: bool = False, enhance: bool = False) -> str:
     """The phase of one part of a request (an item's status, or the domain's part) from its stage, status and the
-    state of its run."""
+    state of its run. `enhance`: an Enhance source request, whose sources are already onboarded."""
     stage, status, state = part.get("stage"), part.get("status"), _up(part.get("state"))
     if stage in ("DOMAIN", "ENABLE", "REVIEW", "DONE"):
         return stage
+    if enhance and status and stage == "DESIGN":
+        return "IMPACT"
     if status == "NO_RUN":
         return "READY" if product else "ENABLE"
     if stage == "DESIGN" and not product and state in _ONBOARDED_STATES:
@@ -94,6 +97,11 @@ def phase(part: Dict[str, Any], product: bool = False) -> str:
 def intent(request: Dict[str, Any]) -> str:
     """NEW or ENHANCE; a request filed before V078 is NEW."""
     return "ENHANCE" if _up(request.get("intent")) == "ENHANCE" else "NEW"
+
+
+def enhances_source(request: Dict[str, Any]) -> bool:
+    """An Enhance source request: more from sources already onboarded (the delta flow)."""
+    return intent(request) == "ENHANCE" and _up(request.get("request_type")) == "SOURCE"
 
 
 def _newer(approved: Any, base: Any) -> bool:
@@ -175,6 +183,9 @@ def item_status(item: Dict[str, Any], request: Dict[str, Any], sources: Dict[str
     if item.get("removed_at"):
         return {"stage": "DONE", "status": "REMOVED", "detail": "Removed from the request", "waits": [], "attention": None}
     product = _up(request.get("request_type")) == "PRODUCT"
+    # an Enhance source request: the source is already onboarded, so the administrator only lands what is added, and
+    # the Data Designer starts the enhancement run and maps the delta
+    enhance = enhances_source(request)
     sid = item.get("source_system_id")
     if not product:
         if not sid:
@@ -192,13 +203,19 @@ def item_status(item: Dict[str, Any], request: Dict[str, Any], sources: Dict[str
                     "waits": [_wait("SOURCE.CONNECT", f"{_ENABLE}: restore access to {name}", iid)], "attention": None}
         if health == "NOT_LANDED":
             return {"stage": "ENABLE", "status": "NOT_LANDED", "detail": f"{name} is registered but not landed in Snowflake",
-                    "waits": [_wait("SOURCE.CONNECT", f"{_ENABLE}: land {name}", iid)], "attention": None}
+                    "waits": [_wait("SOURCE.CONNECT", f"{_ENABLE}: land the added tables of {name}" if enhance else f"{_ENABLE}: land {name}", iid)],
+                    "attention": None}
     rid = item.get("run_id")
     # starting the run that onboards a source into the domain is part of onboarding: the administrator's (the
     # onboarding wizard is theirs); a data product's Gold run is the Forward Engineering Lead's
     restart = (_wait("RUN.CREATE", f"{_BUILD}: start a new Gold run, or link another", iid) if product
+               else _wait("RUN.CREATE", f"{_DESIGN}: start a new enhancement run for {name}, or link another", iid) if enhance
                else _wait("SOURCE.CONNECT", f"{_ENABLE}: start a new run for {name}, or link another", iid))
     if not rid:
+        if enhance:
+            return {"stage": "DESIGN", "status": "NO_RUN", "detail": f"{name} is onboarded; the enhancement run is not started yet",
+                    "waits": [_wait("RUN.CREATE", f"{_DESIGN}: start the enhancement run for {name} (only what is added)", iid)],
+                    "attention": None}
         if product:
             return {"stage": "BUILD", "status": "NO_RUN", "detail": "Ready; no run yet (start the Gold run for this product)",
                     "waits": [_wait("RUN.CREATE", f"{_BUILD}: start the Gold run for this product", iid)], "attention": None}
@@ -225,9 +242,10 @@ def assess(request: Dict[str, Any], items: List[Dict[str, Any]], domain: Optiona
     children = children or {}
     status = _up(request.get("status")) or OPEN
     product = _up(request.get("request_type")) == "PRODUCT"
+    enhance = enhances_source(request)
     per_item = {i["item_id"]: item_status(i, request, sources, runs, children) for i in items}
     for st in per_item.values():
-        st["phase"] = "DONE" if st["status"] == "REMOVED" else phase(st, product)
+        st["phase"] = "DONE" if st["status"] == "REMOVED" else phase(st, product, enhance)
     if status != OPEN:
         return {"stage": "DONE" if status == DONE else "CLOSED", "status": status, "waiting_on": None, "waiting_label": None,
                 "waits": [], "attention": None, "items": per_item, "phase": "DONE" if status == DONE else "CLOSED"}
@@ -266,13 +284,13 @@ def assess(request: Dict[str, Any], items: List[Dict[str, Any]], domain: Optiona
     # the phase of the part that holds the request at its stage (the earliest one: a source still with the admin
     # before one already onboarded)
     at = [p for p in parts if p["stage"] == stage]
-    shown = min((phase(p, product) for p in at), key=PHASES.index)
+    shown = min((phase(p, product, enhance) for p in at), key=PHASES.index)
     return {"stage": stage, "status": OPEN, "waiting_on": first["privilege"] if first else None,
             "waiting_label": first["label"] if first else None, "waits": waits, "attention": attention, "items": per_item,
             "phase": shown}
 
 
-def milestones(item: Dict[str, Any], now: Dict[str, Any], product: bool = False) -> List[tuple]:
+def milestones(item: Dict[str, Any], now: Dict[str, Any], product: bool = False, enhance: bool = False) -> List[tuple]:
     """The events an item's new status earns, as (kind, note): SOURCE_ONBOARDED when a source the administrator had
     (missing, unreachable, not landed or its run not started) is registered, reachable, landed and its run started, so
     the designer can start; DESIGN_STORED when its run's design is approved and the build can start. A data product's
@@ -283,6 +301,11 @@ def milestones(item: Dict[str, Any], now: Dict[str, Any], product: bool = False)
     name = item.get("source_name") or "the source"
     out = []
     if product:
+        return out
+    if enhance:
+        # the source was onboarded before the request; its enhancement's design is the milestone that matters
+        if before in ("NO_RUN", "DESIGN") and now.get("stage") in ("BUILD", "REVIEW", "DONE") and after != "REMOVED":
+            out.append(("DESIGN_STORED", f"The delta mapping for {name} is approved. {_BUILD}: regenerate and run the regression checks"))
         return out
     if before in ENABLE_STATUSES and now.get("stage") != "ENABLE" and after != "REMOVED":
         out.append(("SOURCE_ONBOARDED", f"{name} is onboarded: registered, reachable, landed and its run started. {_DESIGN}: profile and model it"))
@@ -309,10 +332,15 @@ def _key(name: Optional[str]) -> str:
     return "".join(ch for ch in _up(name) if ch.isalnum())
 
 
-def pick_run(source_id: str, domain_id: Optional[str], runs: Iterable[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+def pick_run(source_id: str, domain_id: Optional[str], runs: Iterable[Dict[str, Any]],
+             after: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """The run that onboards this source into this domain, when one already exists: a top-level run (not a table run
-    of a multi-table run), not archived, cancelled or deleted, of the same domain; the most advanced, then the newest."""
+    of a multi-table run), not archived, cancelled or deleted, of the same domain; the most advanced, then the newest.
+    `after` (an Enhance request's filing time): only a run started after it, never the run that first onboarded the
+    source."""
     fit = [r for r in runs
+           if not after or str(r.get("created_at") or "") > str(after)]
+    fit = [r for r in fit
            if r.get("source_system_id") == source_id and not r.get("parent_run_id") and not r.get("is_archived")
            and not r.get("deleted_at") and _up(r.get("current_state")) not in ("CANCELLED", "FAILED")
            and (not domain_id or r.get("domain_id") == domain_id)]

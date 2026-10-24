@@ -40,6 +40,8 @@ export const linkRequestSource = async (id: string, itemId: string, sourceId: st
 export const linkRequestRun = async (id: string, itemId: string, runId: string | null) =>
   call(`/api/onboarding-requests/${id}/sources/${itemId}/run`, { run_id: runId });
 export const removeRequestSource = async (id: string, itemId: string) => call(`/api/onboarding-requests/${id}/sources/${itemId}/remove`, {});
+/** An Enhance source request: the Data Designer starts the enhancement run of an onboarded source (the delta flow). */
+export const startEnhancementRun = async (id: string, itemId: string) => call(`/api/onboarding-requests/${id}/sources/${itemId}/enhance-run`, {});
 export const linkRequestDomain = async (id: string, domainId: string) => call(`/api/onboarding-requests/${id}/domain`, { domain_id: domainId });
 export const commentRequest = async (id: string, note: string) => call(`/api/onboarding-requests/${id}/comment`, { note });
 export const cancelRequest = async (id: string, note: string) => call(`/api/onboarding-requests/${id}/cancel`, { note });

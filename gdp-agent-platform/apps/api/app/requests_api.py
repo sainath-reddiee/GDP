@@ -12,7 +12,7 @@ routes as checked by the endpoint):
 - file a request: the domain's owners and stewards, or DOMAIN.EDIT, RUN.CREATE or REQUEST.CHANGES;
 - add a source: the requester, or SOURCE.CONNECT, or the domain's owners and stewards;
 - link or unlink a registered source: SOURCE.CONNECT (the Data OS Administrator);
-- link or unlink a run: RUN.CREATE or RUN.OPERATE;
+- link or unlink a run: RUN.CREATE or RUN.OPERATE; start an Enhance source request's enhancement run: RUN.CREATE;
 - link the domain once it exists: DOMAIN.ONBOARD or DOMAIN.EDIT, or the requester;
 - remove a source: the requester or SOURCE.CONNECT;
 - cancel: the requester, or ROLE.MANAGE; reject (with a reason): SOURCE.CONNECT, DOMAIN.ONBOARD, DOMAIN.EDIT or ROLE.MANAGE;
@@ -223,7 +223,10 @@ def refresh(db: Db, requests: List[Dict[str, Any]], write: bool = True) -> List[
     for it in all_items:
         req = by_id[it["request_id"]]
         if write and not it.get("run_id") and it.get("source_system_id") and not it.get("removed_at") and req.get("status") == rq.OPEN:
-            run = rq.pick_run(it["source_system_id"], req.get("domain_id"), by_source.get(it["source_system_id"], []))
+            # an Enhance source request links only a run started after it was filed, never the run that first
+            # onboarded the source (that one is done, and would close the request at once)
+            run = rq.pick_run(it["source_system_id"], req.get("domain_id"), by_source.get(it["source_system_id"], []),
+                              after=str(req.get("created_at") or "") if rq.enhances_source(req) else None)
             if run:
                 db.execute("UPDATE CORE.ONBOARDING_REQUEST_ITEM SET RUN_ID = %s, UPDATED_AT = CURRENT_TIMESTAMP() WHERE ITEM_ID = %s AND RUN_ID IS NULL",
                            (run["run_id"], it["item_id"]))
@@ -264,7 +267,7 @@ def _persist(db: Db, r: Dict[str, Any], items: List[Dict[str, Any]], a: Dict[str
         if (i.get("status"), i.get("status_detail")) != (s["status"], (s.get("detail") or "")[:1000] or None):
             db.execute("UPDATE CORE.ONBOARDING_REQUEST_ITEM SET STATUS = %s, STATUS_DETAIL = %s, UPDATED_AT = CURRENT_TIMESTAMP() WHERE ITEM_ID = %s",
                        (s["status"], (s.get("detail") or "")[:1000] or None, i["item_id"]))
-            for kind, note in rq.milestones(i, s, (r.get("request_type") or "").upper() == "PRODUCT"):
+            for kind, note in rq.milestones(i, s, (r.get("request_type") or "").upper() == "PRODUCT", rq.enhances_source(r)):
                 _event(db, r["request_id"], kind, note, item_id=i["item_id"], frm=i.get("status"), to=s["status"], automatic=True)
     if r.get("status") == rq.OPEN and a["status"] == rq.DONE:
         db.execute("UPDATE CORE.ONBOARDING_REQUEST SET STATUS = 'DONE', STAGE = 'DONE', WAITING_ON = NULL, WAITING_LABEL = NULL, ATTENTION = NULL, "
@@ -565,6 +568,45 @@ def link_run(request_id: str, item_id: str, body: LinkRun, db: Db = Depends(curr
     else:
         db.execute("UPDATE CORE.ONBOARDING_REQUEST_ITEM SET RUN_ID = NULL, UPDATED_AT = CURRENT_TIMESTAMP() WHERE ITEM_ID = %s", (item_id,))
         _event(db, request_id, "RUN_UNLINKED", None, item_id=item_id, frm=it.get("run_id"))
+    return _detail(db, request_id)
+
+
+@router.post("/api/onboarding-requests/{request_id}/sources/{item_id}/enhance-run")
+@_guard_deployed
+def start_enhance_run(request_id: str, item_id: str, db: Db = Depends(current_db)):
+    """The Data Designer starts the enhancement run of an Enhance source request: a new run of the source already
+    onboarded, in the request's domain, carrying what the request asks to add. The run is linked to the source."""
+    from app.main import CreateRun, create_run
+
+    who = _who(db)
+    r = _one(db, who, request_id)
+    _open(r)
+    _need(_holds(who, "RUN.CREATE"), "starting an enhancement run", "the RUN.CREATE privilege")
+    if not rq.enhances_source(r):
+        raise HTTPException(422, "Only an Enhance source request starts an enhancement run.")
+    it = _item(db, request_id, item_id)
+    if it.get("removed_at"):
+        raise HTTPException(409, f"{it['source_name']} was removed from this request.")
+    if it.get("run_id"):
+        raise HTTPException(409, f"{it['source_name']} already has a run on this request: unlink it first.")
+    src = _sources(db).get(it.get("source_system_id") or "")
+    if not src:
+        raise HTTPException(422, f"{it['source_name']} is not registered: enhancing needs a source already on the platform.")
+    domain = _domains(db, [r["domain_id"]]).get(r["domain_id"]) if r.get("domain_id") else None
+    name = f"{src['source_system_name']} {domain['domain_name'] if domain else ''} enhancement".replace("  ", " ")[:256]
+    intent = {
+        "source": {"origin": "snowflake", "source_system_name": src["source_system_name"], "source_type": src.get("source_type"),
+                   "database": src.get("database_name"), "schema": src.get("schema_name")},
+        "domain_id": r.get("domain_id"),
+        "enhance": {"request_id": request_id, "scope": it.get("source_note")},
+    }
+    created = create_run(CreateRun(run_name=name, domain_id=r.get("domain_id"), intent=intent), db)
+    run_id = (created or {}).get("run_id") or (created or {}).get("RUN_ID")
+    if not run_id:
+        raise HTTPException(502, "The run could not be created.")
+    db.execute("UPDATE CORE.ONBOARDING_REQUEST_ITEM SET RUN_ID = %s, UPDATED_AT = CURRENT_TIMESTAMP() WHERE ITEM_ID = %s", (run_id, item_id))
+    note = "Enhancement run started" + (f"; the source could not be attached yet: {created['registration_error']}" if created.get("registration_error") else "")
+    _event(db, request_id, "RUN_LINKED", note[:4000], item_id=item_id, to=run_id)
     return _detail(db, request_id)
 
 

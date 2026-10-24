@@ -8,7 +8,7 @@ export type RequestType = "SOURCE" | "DOMAIN" | "PRODUCT";
 export type RequestIntent = "NEW" | "ENHANCE";
 export type Wait = { privilege: string; label: string; item_id?: string | null };
 /** What a request (or one of its sources) is doing, in its owner's words (services/onboarding/requests.py PHASES). */
-export type RequestPhase = "DOMAIN" | "ENABLE" | "ONBOARDED" | "READY" | "DESIGN" | "STORED" | "BUILD" | "FLAGGED" | "REVIEW" | "DONE" | "CLOSED";
+export type RequestPhase = "DOMAIN" | "ENABLE" | "ONBOARDED" | "READY" | "IMPACT" | "DESIGN" | "STORED" | "BUILD" | "FLAGGED" | "REVIEW" | "DONE" | "CLOSED";
 
 export type RequestItem = {
   item_id: string; source_system_id: string | null; source_name: string; source_note: string | null; run_id: string | null;
@@ -43,6 +43,17 @@ export const REQUEST_STEPS: { stage: RequestStage; label: string; owner: string 
   { stage: "DONE", label: "Done", owner: "" },
 ];
 
+/** An Enhance source request's own path, the delta flow: the source is already onboarded, so the administrator only
+ *  lands what is added (Land the delta, shown only while it is needed) and the Data Designer maps only the delta. */
+export const ENHANCE_SOURCE_STEPS: { stage: RequestStage; label: string; owner: string }[] = [
+  { stage: "NEW", label: "Scope", owner: "Requester" },
+  { stage: "ENABLE", label: "Land the delta", owner: "Data OS Administrator" },
+  { stage: "DESIGN", label: "Impact & delta mapping", owner: "Data Designer" },
+  { stage: "BUILD", label: "Regenerate & regression", owner: "Forward Engineering Lead" },
+  { stage: "REVIEW", label: "Review", owner: "Data Developer" },
+  { stage: "DONE", label: "Done", owner: "" },
+];
+
 export const stageOwner = (stage: RequestStage) => REQUEST_STEPS.find((s) => s.stage === stage)?.owner ?? "";
 
 export const TYPE_LABEL: Record<RequestType, string> = { DOMAIN: "Domain", SOURCE: "Source", PRODUCT: "Data product" };
@@ -50,12 +61,16 @@ export const intentOf = (r: Pick<OnboardingRequest, "intent">): RequestIntent =>
 /** "New source", "Enhance domain". */
 export const intentLabel = (r: Pick<OnboardingRequest, "intent" | "request_type">) =>
   `${intentOf(r) === "ENHANCE" ? "Enhance" : "New"} ${(TYPE_LABEL[r.request_type] ?? r.request_type).toLowerCase()}`;
+/** An Enhance source request: more from sources already onboarded (the delta flow). */
+export const enhancesSource = (r: Pick<OnboardingRequest, "intent" | "request_type">) => intentOf(r) === "ENHANCE" && r.request_type === "SOURCE";
 
 /** Steps with a status for a request: done before its stage, current at it (attention when blocked), pending after.
  *  The Domain step shows only while the domain is to be created (a request for a new one, or one without a domain). */
 export function requestSteps(r: Pick<OnboardingRequest, "stage" | "status" | "attention" | "domain_id" | "request_type" | "intent">) {
   const newDomain = r.request_type === "DOMAIN" && intentOf(r) === "NEW";
-  const steps = REQUEST_STEPS.filter((s) => s.stage !== "DOMAIN" || !r.domain_id || newDomain);
+  const steps = enhancesSource(r)
+    ? ENHANCE_SOURCE_STEPS.filter((s) => s.stage !== "ENABLE" || (r.status === "OPEN" && r.stage === "ENABLE"))
+    : REQUEST_STEPS.filter((s) => s.stage !== "DOMAIN" || !r.domain_id || newDomain);
   const at = r.status === "DONE" ? steps.length - 1 : steps.findIndex((s) => s.stage === r.stage);
   return steps.map((s, i) => ({
     ...s,
@@ -69,6 +84,7 @@ export const PHASE: Record<RequestPhase, { label: string; tone: "neutral" | "blu
   ENABLE: { label: "Waiting on admin", tone: "amber" },
   ONBOARDED: { label: "Source onboarded", tone: "blue" },
   READY: { label: "Ready to build", tone: "blue" },
+  IMPACT: { label: "Impact and delta mapping", tone: "blue" },
   DESIGN: { label: "Designer profiling and modelling", tone: "blue" },
   STORED: { label: "Design stored", tone: "purple" },
   BUILD: { label: "Building", tone: "purple" },
@@ -92,7 +108,10 @@ export const overdue = (r: Pick<OnboardingRequest, "needed_by" | "status">) =>
   r.status === "OPEN" && !!r.needed_by && new Date(`${r.needed_by.slice(0, 10)}T23:59:59`) < new Date();
 
 /** Where the person a wait names does the work. */
-export function actHref(w: Wait, item: RequestItem | undefined, domainId: string | null, product: boolean, requestId: string): string | null {
+export function actHref(w: Wait, item: RequestItem | undefined, domainId: string | null, product: boolean, requestId: string,
+                        enhance = false): string | null {
+  // an Enhance source request's enhancement run is started from the request itself (Intake, the request selected)
+  if (enhance && w.privilege === "RUN.CREATE" && item && !item.run_id) return `/os/intake?${new URLSearchParams({ view: "selected", request: requestId })}`;
   // a domain to onboard opens the administrator's domain wizard for this request; a retired one is restored in Domains
   if (w.privilege === "DOMAIN.ONBOARD") return `/os/enable/new-domain?${new URLSearchParams({ request: requestId })}`;
   if (w.privilege === "DOMAIN.EDIT") return "/os/knowledge?view=domains";

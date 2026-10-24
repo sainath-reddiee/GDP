@@ -4,7 +4,7 @@ import { stateLabel } from "@/lib/run-labels";
 import { loadDomains, loadRequest, loadRuns, loadSources } from "@/lib/os/data";
 import { guard } from "@/lib/os/session";
 import { has } from "@/lib/os/access";
-import { PRIORITY_TONE, actHref, intentLabel, overdue, phaseOf, requestSteps, type RequestEvent, type RequestItem } from "@/lib/os/requests";
+import { PRIORITY_TONE, actHref, enhancesSource, intentLabel, overdue, phaseOf, requestSteps, type RequestEvent, type RequestItem } from "@/lib/os/requests";
 import { ActivityRow, Banner, Btn, Card, Empty, Field, PageHeader, SourceError, Tag, ago, pretty, type Tone } from "@/components/os/ui";
 import { AddSource, ItemControls, LinkDomain, RequestControls } from "@/components/os/request-ui";
 import { cn } from "@/lib/utils";
@@ -167,7 +167,7 @@ export default async function RequestPage({ params }: { params: { id: string } }
               <div className="os-divide">
                 {r.waits.map((w) => {
                   const item = r.items.find((i) => i.item_id === w.item_id);
-                  const href = actHref(w, item, r.domain_id, product, r.request_id);
+                  const href = actHref(w, item, r.domain_id, product, r.request_id, enhancesSource(r));
                   const you = has(access, w.privilege);
                   return (
                     <div key={`${w.privilege}-${w.label}-${w.item_id ?? ""}`} className="flex items-start justify-between gap-3 py-2.5">

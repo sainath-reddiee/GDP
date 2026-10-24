@@ -168,6 +168,41 @@ def test_an_enhance_domain_request_waits_on_the_designer_until_a_newer_model_is_
     assert rq.intent({}) == "NEW" and rq.intent({"intent": "enhance"}) == "ENHANCE"
 
 
+def test_an_enhance_source_skips_the_administrator_and_waits_on_the_designer_to_start_its_run():
+    a = assess([item()], intent="ENHANCE")
+    assert a["stage"] == "DESIGN" and a["waiting_on"] == "RUN.CREATE" and "enhancement run for SALESFORCE" in a["waiting_label"]
+    assert a["items"]["i1"]["status"] == "NO_RUN" and a["items"]["i1"]["phase"] == "IMPACT" and a["phase"] == "IMPACT"
+    # a new source request with the same ready source waits on the administrator to start its run, as before
+    assert assess([item()])["waiting_on"] == "SOURCE.CONNECT"
+
+
+def test_an_enhance_source_not_landed_waits_on_the_administrator_to_land_the_delta():
+    a = assess([item()], sources={"s1": {**HEALTHY, "health": "NOT_LANDED"}}, intent="ENHANCE")
+    assert a["stage"] == "ENABLE" and a["waiting_on"] == "SOURCE.CONNECT" and "land the added tables of SALESFORCE" in a["waiting_label"]
+
+
+def test_an_enhance_source_run_is_designed_as_impact_then_built_as_usual():
+    a = assess([item(run_id="run1")], runs={"run1": run("MAPPING_REVIEW")}, intent="ENHANCE")
+    assert a["stage"] == "DESIGN" and a["waiting_on"] == "MAPPING.APPROVE" and a["items"]["i1"]["phase"] == "IMPACT"
+    b = assess([item(run_id="run1")], runs={"run1": run("DBT_REVIEW")}, intent="ENHANCE")
+    assert b["stage"] == "REVIEW"
+
+
+def test_an_enhance_request_links_only_a_run_started_after_it_was_filed():
+    old = run("COMPLETED", created_at="2026-10-01T00:00:00")
+    new = run("PROFILING_RUNNING", run_id="run2", created_at="2026-10-20T00:00:00")
+    assert rq.pick_run("s1", "d1", [old])["run_id"] == "run1"
+    assert rq.pick_run("s1", "d1", [old], after="2026-10-10T00:00:00") is None
+    assert rq.pick_run("s1", "d1", [old, new], after="2026-10-10T00:00:00")["run_id"] == "run2"
+
+
+def test_an_enhance_source_earns_no_onboarded_milestone():
+    now = {"stage": "DESIGN", "status": "DESIGN"}
+    assert rq.milestones({"status": "NO_RUN", "source_name": "SALESFORCE"}, now, enhance=True) == []
+    built = rq.milestones({"status": "DESIGN", "source_name": "SALESFORCE"}, {"stage": "BUILD", "status": "BUILD"}, enhance=True)
+    assert [k for k, _ in built] == ["DESIGN_STORED"]
+
+
 def test_a_data_product_waits_on_a_gold_run():
     a = rq.assess(req(request_type="PRODUCT"), [item(source_system_id=None, source_name="Gold: OPPORTUNITY")], DOMAIN, {}, {})
     assert a["stage"] == "BUILD" and a["waiting_on"] == "RUN.CREATE" and a["items"]["i1"]["status"] == "NO_RUN"
@@ -232,7 +267,8 @@ def test_a_retired_domain_is_refused():
 def test_request_writes_are_checked_by_the_endpoint_and_nothing_else_slips_through():
     for path in ("/api/onboarding-requests", "/api/onboarding-requests/r1/sources", "/api/onboarding-requests/r1/sources/i1/run",
                  "/api/onboarding-requests/r1/sources/i1/source", "/api/onboarding-requests/r1/sources/i1/remove",
-                 "/api/onboarding-requests/r1/domain", "/api/onboarding-requests/r1/reject", "/api/onboarding-requests/r1/reopen"):
+                 "/api/onboarding-requests/r1/domain", "/api/onboarding-requests/r1/reject", "/api/onboarding-requests/r1/reopen",
+                 "/api/onboarding-requests/r1/sources/i1/enhance-run"):
         assert privilege_for("POST", path)[:1] == (None,), path
     assert privilege_for("POST", "/api/onboarding-requests/r1/delete")[0] == "RUN.OPERATE"
 
@@ -413,6 +449,30 @@ def test_before_v077_every_request_reads_as_new(api):
     db.on("FROM CORE.ONBOARDING_REQUEST WHERE", legacy)
     res = client.get("/api/onboarding-requests")
     assert res.status_code == 200 and res.json()["requests"][0]["intent"] == "NEW"
+
+
+def test_the_designer_starts_the_enhancement_run_of_an_enhance_source_request(api, monkeypatch):
+    client, db, who = api
+    import app.main as main
+    made = {}
+
+    def fake_create_run(body, db):
+        made["body"] = body
+        return {"run_id": "run9"}
+    monkeypatch.setattr(main, "create_run", fake_create_run)
+    db.on("FROM CORE.ONBOARDING_REQUEST WHERE", [req(intent="ENHANCE", requested_by="ANA")])
+    db.on("FROM CORE.ONBOARDING_REQUEST_ITEM WHERE ITEM_ID", [item(source_note="Add the campaign tables")])
+    who["privileges"] = {"AUDIT.VIEW"}
+    res = client.post("/api/onboarding-requests/r1/sources/i1/enhance-run")
+    assert res.status_code == 403 and "RUN.CREATE" in res.json()["detail"]
+    who["privileges"] = {"RUN.CREATE"}
+    assert client.post("/api/onboarding-requests/r1/sources/i1/enhance-run").status_code == 200
+    assert made["body"].intent["enhance"] == {"request_id": "r1", "scope": "Add the campaign tables"}
+    assert made["body"].domain_id == "d1"
+    assert db.wrote("UPDATE CORE.ONBOARDING_REQUEST_ITEM SET RUN_ID") and db.wrote("UPDATE CORE.ONBOARDING_REQUEST_ITEM SET RUN_ID")[0][0] == "run9"
+    # only an Enhance source request has one
+    db.on("FROM CORE.ONBOARDING_REQUEST WHERE", [req(requested_by="ANA")])
+    assert client.post("/api/onboarding-requests/r1/sources/i1/enhance-run").status_code == 422
 
 
 def test_a_data_product_request_gets_a_gold_run_item_so_it_is_not_done_on_filing(api):

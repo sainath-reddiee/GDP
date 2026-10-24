@@ -45,17 +45,26 @@ export function requestRun(r: OnboardingRequest): string | null {
   return (live.find((i) => i.stage === r.stage) ?? live[0])?.run_id ?? null;
 }
 
-/** Where Home sends a workflow: the stage board it is at, with it selected. */
-export function workflowHref(r: OnboardingRequest): string {
+/** Where Home sends a workflow: Intake, with it selected (the request's steps, who acts now, its sources). */
+export const workflowHref = (r: Pick<OnboardingRequest, "request_id">) =>
+  `/os/intake?${new URLSearchParams({ view: "selected", request: r.request_id })}`;
+
+/** The stage board an open workflow is worked on, with its run selected (Design, Build), or the screen of its stage
+ *  (Enable, Review); null when it is at Intake or closed. */
+export function stageHref(r: OnboardingRequest): string | null {
+  if (r.status !== "OPEN") return null;
   const run = requestRun(r);
-  const pick = (board: string, key: "run" | "request", id: string) => `/os/${board}?${new URLSearchParams({ view: "selected", [key]: id })}`;
-  if (r.status === "OPEN") {
-    if (r.stage === "ENABLE") return "/os/enable";
-    if (r.stage === "DESIGN" && run) return pick("design", "run", run);
-    if (r.stage === "BUILD" && run) return pick("build", "run", run);
-    if (r.stage === "REVIEW" && run) return `/os/review?run=${encodeURIComponent(run)}`;
-  }
-  return pick("intake", "request", r.request_id);
+  if (r.stage === "ENABLE") return "/os/enable";
+  if (r.stage === "DESIGN" && run) return `/os/design?${new URLSearchParams({ view: "selected", run })}`;
+  if (r.stage === "BUILD" && run) return `/os/build?${new URLSearchParams({ view: "selected", run })}`;
+  if (r.stage === "REVIEW" && run) return `/os/review?run=${encodeURIComponent(run)}`;
+  return null;
+}
+
+/** Open requests by intent, for the in-flight counts beside New and Enhance. */
+export function inflight(requests: Pick<OnboardingRequest, "status" | "intent">[], active: "new" | "enhance" | null = null) {
+  const open = requests.filter((r) => r.status === "OPEN");
+  return { new: open.filter((r) => r.intent !== "ENHANCE").length, enhance: open.filter((r) => r.intent === "ENHANCE").length, active };
 }
 
 /** The view a board opens on: the selected item when one is named, else the viewer's queue when it has any, else Active. */

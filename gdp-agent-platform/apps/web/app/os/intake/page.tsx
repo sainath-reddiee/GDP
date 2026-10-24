@@ -1,8 +1,8 @@
 import { has } from "@/lib/os/access";
 import { loadRequest, loadRequests } from "@/lib/os/data";
 import { guard } from "@/lib/os/session";
-import { boardView } from "@/lib/os/work";
-import type { OnboardingRequest } from "@/lib/os/requests";
+import { boardView, inflight } from "@/lib/os/work";
+import { intentOf, type OnboardingRequest } from "@/lib/os/requests";
 import { SourceError } from "@/components/os/ui";
 import { BoardList, BoardTabs } from "@/components/os/stage-board";
 import { RequestFocus, StartPanel, WorkflowRow } from "@/components/os/home";
@@ -14,11 +14,13 @@ export const metadata = { title: "Intake" };
 // Intake: every onboarding request by Selected, Action required, Active and Completed, and New or Enhance on the right.
 // The form that files one is /os/intake/new.
 
-export default async function IntakeBoard({ searchParams }: { searchParams: { view?: string; request?: string; q?: string } }) {
+export default async function IntakeBoard({ searchParams }: { searchParams: { view?: string; request?: string; q?: string; intent?: string } }) {
   const access = await guard("intake");
   const [list, picked] = await Promise.all([loadRequests("all", "ALL"), searchParams.request ? loadRequest(searchParams.request) : null]);
   const q = (searchParams.q ?? "").trim().toLowerCase();
-  const all = list.data.requests.filter((r) => !q || r.title.toLowerCase().includes(q));
+  // New or Enhance, from the in-flight counts on the right
+  const intent = searchParams.intent === "new" || searchParams.intent === "enhance" ? searchParams.intent : null;
+  const all = list.data.requests.filter((r) => (!q || r.title.toLowerCase().includes(q)) && (!intent || intentOf(r) === intent.toUpperCase()));
   const yours = (r: OnboardingRequest) => r.status === "OPEN" && r.waits.some((w) => has(access, w.privilege));
   const lists = {
     action: all.filter(yours),
@@ -28,7 +30,7 @@ export default async function IntakeBoard({ searchParams }: { searchParams: { vi
   const selected = picked?.data ?? null;
   const view = boardView(searchParams.view, !!selected, lists.action.length);
   const rows = view === "selected" ? [] : lists[view];
-  const select = (id: string) => `/os/intake?${new URLSearchParams({ view: "selected", request: id })}`;
+  const select = (id: string) => `/os/intake?${new URLSearchParams({ view: "selected", request: id, ...(intent ? { intent } : {}) })}`;
 
   return (
     <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_320px]" data-testid="intake-board">
@@ -36,12 +38,12 @@ export default async function IntakeBoard({ searchParams }: { searchParams: { vi
         <div className="mb-3 flex flex-wrap items-end justify-between gap-3">
           <div>
             <div className="os-eyebrow">Intake</div>
-            <h1 id="intake-title" className="text-[22px] font-extrabold tracking-[-0.03em]">Requests</h1>
+            <h1 id="intake-title" className="text-[22px] font-extrabold tracking-[-0.03em]">Requests{intent && <span className="os-muted text-[15px] font-bold"> · {intent === "new" ? "New" : "Enhance"} only</span>}</h1>
           </div>
           <HomeSearch />
         </div>
         <div className="mb-4">
-          <BoardTabs base="/os/intake" view={view} selection={selected ? ["request", selected.request_id] : null}
+          <BoardTabs base="/os/intake" view={view} selection={selected ? ["request", selected.request_id] : null} extra={intent ? { intent } : undefined}
                      counts={{ action: lists.action.length, active: lists.active.length, completed: lists.completed.length }} />
         </div>
         <SourceError what="Requests" error={list.error} />
@@ -54,8 +56,8 @@ export default async function IntakeBoard({ searchParams }: { searchParams: { vi
           </BoardList>
         )}
       </section>
-      <aside className="order-first xl:order-none">
-        <div className="xl:sticky xl:top-[76px]"><StartPanel access={access} /></div>
+      <aside>
+        <div className="xl:sticky xl:top-[76px]"><StartPanel access={access} inflight={inflight(list.data.requests, intent)} /></div>
       </aside>
     </div>
   );

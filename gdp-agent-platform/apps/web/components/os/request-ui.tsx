@@ -3,10 +3,10 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState, useTransition, type ReactNode } from "react";
-import { Ban, Check, Link2, Loader2, MessageSquare, Plus, RotateCcw, Send, Trash2, Unlink, X } from "lucide-react";
+import { Ban, Check, Link2, Loader2, MessageSquare, Play, Plus, RotateCcw, Send, Trash2, Unlink, X } from "lucide-react";
 import {
   addRequestSource, cancelRequest, commentRequest, createRequest, linkRequestDomain, linkRequestRun, linkRequestSource, rejectRequest,
-  removeRequestSource, reopenRequest, type NewRequestInput, type RequestResult,
+  removeRequestSource, reopenRequest, startEnhancementRun, type NewRequestInput, type RequestResult,
 } from "@/app/os/requests/actions";
 import type { Duplicate, RequestDetail, RequestItem } from "@/lib/os/requests";
 import { cn } from "@/lib/utils";
@@ -17,7 +17,7 @@ import { cn } from "@/lib/utils";
 
 type Outcome = { tone: "done" | "fail"; text: string } | null;
 
-function useRequestCall() {
+export function useRequestCall() {
   const router = useRouter();
   const [pending, start] = useTransition();
   const [outcome, setOutcome] = useState<Outcome>(null);
@@ -31,12 +31,12 @@ function useRequestCall() {
   return { pending, outcome, run, setOutcome };
 }
 
-function Line({ outcome }: { outcome: Outcome }) {
+export function Line({ outcome }: { outcome: Outcome }) {
   if (!outcome) return null;
   return <div role={outcome.tone === "fail" ? "alert" : "status"} className={cn("os-banner mt-2 text-[12px]", outcome.tone === "fail" && "os-banner-red")}>{outcome.text}</div>;
 }
 
-function B({ children, onClick, disabled, variant = "default", title, testId, type = "button" }: {
+export function B({ children, onClick, disabled, variant = "default", title, testId, type = "button" }: {
   children: ReactNode; onClick?: () => void; disabled?: boolean; variant?: "default" | "primary" | "warn" | "red" | "mint";
   title?: string; testId?: string; type?: "button" | "submit";
 }) {
@@ -46,7 +46,24 @@ function B({ children, onClick, disabled, variant = "default", title, testId, ty
   );
 }
 
-const Off = () => <p className="os-faint mt-1 text-[11px]">Off while you preview another role: it would run as you.</p>;
+export const Off = () => <p className="os-faint mt-1 text-[11px]">Off while you preview another role: it would run as you.</p>;
+
+/** An Enhance source request's next step for the Data Designer: start the enhancement run of the onboarded source,
+ *  carrying what the request asks to add. Shown only to holders of RUN.CREATE while the source has no run. */
+export function StartEnhancementRun({ requestId, itemId, source, previewing }: { requestId: string; itemId: string; source: string; previewing: boolean }) {
+  const { pending, outcome, run } = useRequestCall();
+  return (
+    <span className="flex flex-col items-end">
+      <B variant="primary" disabled={pending || previewing} testId={`start-enhancement-${itemId.slice(0, 8)}`}
+         title={`Start a new run of ${source} in this domain for what the request adds`}
+         onClick={() => run(() => startEnhancementRun(requestId, itemId), "Enhancement run started. The Data Designer maps the delta next.")}>
+        {pending ? <Loader2 className="os-spin h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />} Start enhancement run
+      </B>
+      {previewing && <Off />}
+      <Line outcome={outcome} />
+    </span>
+  );
+}
 
 /* ---------------------------------------------------------------- filing a request (Intake) */
 

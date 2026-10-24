@@ -6,11 +6,12 @@ import { canSee, has } from "@/lib/os/access";
 import type { Domain } from "@/lib/os/data";
 import type { OsAccess } from "@/lib/os/session";
 import {
-  PRIORITY_TONE, actHref, intentOf, intentLabel, overdue, phaseOf, requestSteps, type OnboardingRequest, type RequestDetail, type RequestType,
+  PRIORITY_TONE, actHref, enhancesSource, intentOf, intentLabel, overdue, phaseOf, requestSteps, type OnboardingRequest, type RequestDetail, type RequestType,
 } from "@/lib/os/requests";
 import { Btn, Tag, ago, pretty } from "./ui";
 import { Track, type TrackStep } from "./stage-board";
-import { workflowHref } from "@/lib/os/work";
+import { stageHref } from "@/lib/os/work";
+import { StartEnhancementRun } from "./request-ui";
 import { cn } from "@/lib/utils";
 
 // Home and the Intake board: the build workflows (onboarding requests) with the step each one is at and who it waits on,
@@ -46,7 +47,7 @@ export function WorkflowRow({ r, access, href }: { r: OnboardingRequest; access:
   const open = r.status === "OPEN";
   const mine = open ? r.waits.find((w) => has(access, w.privilege)) : undefined;
   const item = mine ? r.items.find((i) => i.item_id === mine.item_id) : undefined;
-  const next = mine ? actHref(mine, item, r.domain_id, r.request_type === "PRODUCT", r.request_id) : null;
+  const next = mine ? actHref(mine, item, r.domain_id, r.request_type === "PRODUCT", r.request_id, enhancesSource(r)) : null;
   const sources = r.items.filter((i) => !i.removed_at);
   const domain = r.domain_name ?? (r.proposed_domain ? `${r.proposed_domain} (new)` : null);
   return (
@@ -125,7 +126,11 @@ const FILE_REQUEST = "Filing a workflow needs RUN.CREATE, SOURCE.CONNECT, DOMAIN
 
 /** New or Enhance for a domain, a source or a data product: one compact row each. Everyone sees it; the buttons follow
  *  the viewer's role. */
-export function StartPanel({ access }: { access: OsAccess }) {
+export function StartPanel({ access, inflight }: {
+  access: OsAccess;
+  /** open requests by intent; each count filters the Intake board to that intent (`active` is the one on show) */
+  inflight?: { new: number; enhance: number; active: "new" | "enhance" | null };
+}) {
   const may = canSee(access, "intakeNew");
   return (
     <section className="os-card os-rise px-4 pb-3 pt-3.5" data-testid="start-panel" aria-labelledby="start-title">
@@ -164,6 +169,19 @@ export function StartPanel({ access }: { access: OsAccess }) {
           );
         })}
       </div>
+      {inflight && (
+        <div className="mt-1 flex items-center gap-1.5 border-t border-[var(--os-line-soft)] pt-2 text-[11px]" data-testid="inflight">
+          <span className="os-faint font-bold">In flight</span>
+          {(["new", "enhance"] as const).map((k) => (
+            <Link key={k} href={inflight.active === k ? "/os/intake?view=active" : `/os/intake?view=active&intent=${k}`} scroll={false}
+                  aria-current={inflight.active === k ? "true" : undefined} data-testid={`inflight-${k}`}
+                  className={cn("rounded-full px-2 py-0.5 font-bold transition", inflight.active === k
+                    ? "bg-[var(--os-forest)] text-white" : k === "new" ? "bg-[var(--os-blue-bg)] text-[var(--os-blue-ink)]" : "bg-[var(--os-purple-bg)] text-[var(--os-purple-ink)]")}>
+              {k === "new" ? "New" : "Enhance"} {k === "new" ? inflight.new : inflight.enhance}
+            </Link>
+          ))}
+        </div>
+      )}
       {!may && (
         <p className="os-faint mt-1 flex items-center gap-1.5 border-t border-[var(--os-line-soft)] pt-2 text-[10.5px]" title={FILE_REQUEST}>
           <Lock className="h-3 w-3 shrink-0" />View only: filing needs a builder role
@@ -179,7 +197,8 @@ export function RequestFocus({ r, access }: { r: RequestDetail; access: OsAccess
   const I = TYPE_ICON[r.request_type] ?? Database;
   const product = r.request_type === "PRODUCT";
   const sources = r.items.filter((i) => !i.removed_at);
-  const at = workflowHref(r);
+  const enhance = enhancesSource(r);
+  const at = stageHref(r);
   return (
     <section className="os-card os-rise p-5" data-testid="request-focus">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -197,7 +216,7 @@ export function RequestFocus({ r, access }: { r: RequestDetail; access: OsAccess
           </div>
         </div>
         <div className="flex flex-wrap gap-2">
-          {at !== `/os/intake?view=selected&request=${r.request_id}` && <Btn href={at} variant="primary">Open where it is <ArrowRight className="h-3.5 w-3.5" /></Btn>}
+          {at && <Btn href={at} variant="primary">Open where it is <ArrowRight className="h-3.5 w-3.5" /></Btn>}
           <Btn href={`/os/requests/${r.request_id}`}>Full request</Btn>
         </div>
       </div>
@@ -214,13 +233,15 @@ export function RequestFocus({ r, access }: { r: RequestDetail; access: OsAccess
             <div className="os-divide rounded-xl border border-[var(--os-line)] px-3">
               {r.waits.map((w) => {
                 const item = r.items.find((i) => i.item_id === w.item_id);
-                const href = actHref(w, item, r.domain_id, product, r.request_id);
+                const href = actHref(w, item, r.domain_id, product, r.request_id, enhancesSource(r));
                 const you = has(access, w.privilege);
                 return (
                   <div key={`${w.privilege}-${w.label}-${w.item_id ?? ""}`} className="flex items-center justify-between gap-3 py-2.5">
                     <span className="min-w-0 text-[12px]"><b className="block leading-snug">{w.label}</b>
                       <span className="os-faint text-[10.5px]">{item ? `${item.source_name} · ` : ""}needs {w.privilege}</span></span>
-                    {you && href ? <Btn href={href} variant="primary">Do it <ArrowRight className="h-3.5 w-3.5" /></Btn> : you ? <Tag tone="green">You</Tag> : <Tag>Another role</Tag>}
+                    {you && enhance && w.privilege === "RUN.CREATE" && item && !item.run_id && item.source_system_id
+                      ? <StartEnhancementRun requestId={r.request_id} itemId={item.item_id} source={item.source_name} previewing={!!access.preview} />
+                      : you && href ? <Btn href={href} variant="primary">Do it <ArrowRight className="h-3.5 w-3.5" /></Btn> : you ? <Tag tone="green">You</Tag> : <Tag>Another role</Tag>}
                   </div>
                 );
               })}
@@ -232,15 +253,18 @@ export function RequestFocus({ r, access }: { r: RequestDetail; access: OsAccess
           {sources.length ? (
             <div className="os-divide rounded-xl border border-[var(--os-line)] px-3">
               {sources.map((i) => (
-                <div key={i.item_id} className="flex items-center justify-between gap-3 py-2.5 text-[12px]">
-                  <span className="min-w-0"><b className="block truncate">{i.source_name}</b>
-                    <span className="os-faint block truncate text-[10.5px]">{i.run_name ? `${i.run_name}: ${stateLabel(i.run_state).toLowerCase()}` : i.status_detail ?? "no run yet"}</span></span>
+                <div key={i.item_id} className="py-2.5 text-[12px]">
+                  <div className="flex flex-wrap items-start justify-between gap-2">
+                  <span className="min-w-0 flex-1"><b className="block break-words">{i.source_name}</b>
+                    <span className="os-faint block text-[10.5px]">{i.run_name ? `${i.run_name}: ${stateLabel(i.run_state).toLowerCase()}` : i.status_detail ?? "no run yet"}</span></span>
                   <span className="flex shrink-0 items-center gap-2">
                     <Tag tone={i.status === "ATTENTION" ? "red" : phaseOf(i).tone}>{phaseOf(i).label}</Tag>
                     {i.run_id && ["DESIGN", "BUILD"].includes(i.stage) && (
                       <Link href={`/os/${i.stage === "DESIGN" ? "design" : "build"}?view=selected&run=${i.run_id}`} className="os-btn px-2 py-1 text-[11px]">Open</Link>
                     )}
                   </span>
+                  </div>
+                  {i.source_note && <p className="os-muted mt-1 text-[11.5px]" data-testid="item-scope"><b>{enhance ? "To add" : "Needed"}:</b> {i.source_note}</p>}
                 </div>
               ))}
             </div>

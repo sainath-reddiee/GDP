@@ -47,6 +47,32 @@ test("the rail marks the current screen", async ({ page }) => {
   await expect(page.getByRole("navigation", { name: "Agentic Data OS" }).getByRole("link", { name: "Home" })).toHaveAttribute("aria-current", "page");
 });
 
+// Intake: a workflow opened from Home lands on Intake, selected; the in-flight counts filter New and Enhance; the
+// source form asks for the request first, then the sources grouped by domain, and shows where the request goes.
+test("Home opens a workflow on Intake, and Intake filters New and Enhance", async ({ page }) => {
+  await page.goto("/os?view=all");
+  const open = page.getByTestId("workflow-row").first().getByRole("link", { name: /^Open / });
+  test.skip(!(await open.count()), "no workflow on record");
+  await expect(open).toHaveAttribute("href", /^\/os\/intake\?view=selected&request=/);
+  await page.goto("/os/intake?view=active");
+  await page.getByTestId("inflight-enhance").click();
+  await page.waitForURL(/intent=enhance/);
+  for (const row of await page.getByTestId("workflow-row").all()) await expect(row).toContainText(/Enhance /);
+});
+
+test("the source form puts the request first, groups sources by domain and shows the route", async ({ page }) => {
+  await page.goto("/os/intake/new?type=source&intent=new");
+  const details = page.getByRole("heading", { name: "Request details" });
+  const sources = page.getByRole("heading", { name: "Sources", exact: true });
+  await expect(details).toBeVisible();
+  expect((await details.boundingBox())!.y).toBeLessThan((await sources.boundingBox())!.y);
+  await expect(page.getByTestId("flow-preview")).toContainText("New source flow");
+  await page.goto("/os/intake/new?type=source&intent=enhance");
+  await expect(page.getByTestId("flow-preview")).toContainText("Enhance flow");
+  await expect(page.getByTestId("flow-preview")).toContainText("Impact & delta mapping");
+  await expect(page.getByTestId("sources-registered")).toHaveCount(0);   // Enhance widens a source the domain already has
+});
+
 // The stage boards: Selected, Action required, Active and Completed; a workflow opened from Home lands selected.
 test("Intake, Design and Build are boards, and a workflow opens selected", async ({ page }) => {
   for (const [path, testId] of [["/os/intake", "intake-board"], ["/os/design", "design-board"], ["/os/build", "build-board"]] as const) {
