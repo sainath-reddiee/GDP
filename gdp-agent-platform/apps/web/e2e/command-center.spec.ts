@@ -89,31 +89,26 @@ test("the theme toggle switches and remembers the theme", async ({ page, context
   await expect(page.locator("html")).toHaveClass(/dark/);
 });
 
-test("onboarding is one choice per step, and Change brings the options back", async ({ page, context }) => {
+test("source onboarding is the administrator's wizard, one choice per step; domains are onboarded from Design", async ({ page, context }) => {
   await devSession(context, "light");
   await page.goto("/dashboard/sources/new?branch=external");
   await page.waitForURL(/\/dashboard\/onboarding\?type=source&branch=external/);
-  await expect(page.getByRole("heading", { name: "Onboarding" })).toBeVisible();
-  // a deep link arrives with both choices made: only the chosen ones show, and the route says where you are
-  await expect(page.getByTestId("onboard-kind-chosen")).toContainText("Source");
+  await expect(page.getByRole("heading", { name: "Onboard a source" })).toBeVisible();
+  // sources only: no kind picker, and a deep link arrives with its choice made
   await expect(page.getByTestId("onboard-kind-domain")).toHaveCount(0);
   await expect(page.getByTestId("onboard-source-chosen")).toContainText("Other sources");
   // other sources then ask which kind of source it is, before the wizard
   await expect(page.getByTestId("onboard-kind-of-source-database")).toBeVisible();
   await expect(page.getByTestId("onboard-kind-of-source-file")).toBeVisible();
-  // Change brings the kinds back; a domain import shows the starter files and every accepted format
-  await page.getByTestId("onboard-kind-change").click();
-  await page.waitForURL(/\/dashboard\/onboarding$/);
-  await page.getByTestId("onboard-kind-domain").click();
-  await page.getByTestId("onboard-domain-import").click();
+  // the page without a kind is the source wizard
+  await page.goto("/dashboard/onboarding");
+  await page.waitForURL(/\/dashboard\/onboarding\?type=source$/);
+  // a domain (and an old link to one) opens Design, Onboard a domain: the starter files and every accepted format
+  await page.goto("/dashboard/onboarding?type=domain&import=1");
+  await page.waitForURL(/\/os\/design\/new-domain\?import=1$/);
   await expect(page.getByTestId("import-domain")).toBeVisible();
   await expect(page.getByTestId("template-viewer")).toContainText("domain_pack.json");
   await expect(page.getByTestId("formats-matrix")).toContainText("Erwin .xml");
-  // number keys pick an option
-  await page.getByTestId("onboard-kind-change").click();
-  await page.waitForURL(/\/dashboard\/onboarding$/);
-  await page.keyboard.press("3");
-  await expect(page.getByText("Application onboarding is not available yet")).toBeVisible();
 });
 
 test("a Data Mapping Store edit is staged and sent for approval", async ({ page, context }) => {

@@ -11,7 +11,7 @@ import { Action } from "@/components/os/action";
 import { lifecycleOfRun, classicHref } from "@/lib/os/lifecycle";
 import { ActivityRow, Banner, Bar, Btn, Card, Empty, Field, Kpi, PageHeader, SourceError, Stepper, Tag, ago, pretty } from "@/components/os/ui";
 import { RunPicker } from "@/components/os/run-picker";
-import { GateDecision, ValidateAgain } from "@/components/os/decide";
+import { GateDecision, ReviewStandards, ValidateAgain } from "@/components/os/decide";
 
 export const dynamic = "force-dynamic";
 export const metadata = { title: "Validation gate" };
@@ -27,6 +27,8 @@ const FIX_AT: Record<string, { slug: string; label: string; privilege: string }>
   DBT_COMPILE: { slug: "dbt", label: "dbt studio", privilege: "DBT.EDIT" },
   SKILL: { slug: "dbt", label: "dbt studio", privilege: "DBT.EDIT" },
 };
+// the code standards agent's areas: fixed in the generated code (dbt studio) or in the playbook that produced it
+const fixAt = (kind: string) => FIX_AT[kind] ?? (kind.startsWith("STANDARDS") ? { slug: "dbt", label: "dbt studio", privilege: "DBT.EDIT" } : undefined);
 
 function severity(c: ValidationCheck): { label: string; tone: "red" | "amber" | "neutral" | "green" } {
   if (c.error_count > 0 || c.status === "FAILED" || c.status === "ERROR") return { label: "Critical", tone: "red" };
@@ -93,7 +95,10 @@ export default async function ReviewGate({ searchParams }: { searchParams: { run
   const rows = b.checks.map((c) => ({ c, sev: severity(c), findings: findingsOf(c) }))
     .sort((x, y) => ["Critical", "Warning", "Skipped", "Passed"].indexOf(x.sev.label) - ["Critical", "Warning", "Skipped", "Passed"].indexOf(y.sev.label));
   const lastValidation = b.events.filter((e) => e.to_state.startsWith("VALIDATION_")).pop();
-  const validationSkill = b.skills.find((s) => /VALIDATION|READINESS/.test(s.skill_name)) ?? b.skills[0];
+  // the skill to improve: the code standards agent's when its areas failed, else the validation playbook
+  const standardsFailed = b.checks.some((c) => c.validation_type.startsWith("STANDARDS") && c.status === "FAILED");
+  const validationSkill = (standardsFailed ? b.skills.find((s) => s.skill_name === "CODE-STANDARDS-REVIEW") : undefined)
+    ?? b.skills.find((s) => /VALIDATION|READINESS/.test(s.skill_name)) ?? b.skills[0];
   const title = `${run.run.domain_name ?? "Run"} · ${tableOf(run.run.target_model) ?? run.run.run_name}`;
   // the gate decision, from the run's own allowed human transitions (as the run console derives them)
   // (a person's transitions only: cancelling a run, open to anyone, is not a send-back)
@@ -146,7 +151,7 @@ export default async function ReviewGate({ searchParams }: { searchParams: { run
                   <thead><tr><th>Severity</th><th>Check</th><th>Evidence</th><th>Fix in</th></tr></thead>
                   <tbody>
                     {rows.map(({ c, sev, findings }) => {
-                      const fix = FIX_AT[c.validation_type];
+                      const fix = fixAt(c.validation_type);
                       const msg = findings.map((f) => String(f.message ?? f.detail ?? "")).find(Boolean);
                       return (
                         <tr key={c.validation_id}>
@@ -169,7 +174,7 @@ export default async function ReviewGate({ searchParams }: { searchParams: { run
           <Card title="Run trace and evidence" subtitle="Immutable inputs the reviewer used">
             <div className="grid gap-3 sm:grid-cols-2">
               <Field label="Validation run">{lastValidation ? `${stateLabel(lastValidation.to_state)} · ${ago(lastValidation.created_at)}` : "None yet"}</Field>
-              <Field label="Reviewer">{b.skills.filter((s) => /VALIDATION|READINESS/.test(s.skill_name)).map((s) => `${s.skill_name.toLowerCase()}@${s.version}`).join(", ") || "Independent review agent"}</Field>
+              <Field label="Reviewer">{b.skills.filter((s) => /STANDARDS|VALIDATION|READINESS/.test(s.skill_name)).map((s) => `${s.skill_name.toLowerCase()}@${s.version}`).join(", ") || "Independent review agent"}</Field>
               <Field label="Evidence">{b.generation ? <code className="text-[11px]">{b.generation.stage_path}</code> : "No generation yet"}</Field>
               <Field label="Decision history">{b.reviews.length ? b.reviews.map((r) => `${pretty(r.stage)}: ${pretty(r.decision)} by ${r.reviewer}`).join(" · ") : "No human decision yet"}</Field>
             </div>
@@ -206,6 +211,16 @@ export default async function ReviewGate({ searchParams }: { searchParams: { run
                 ? <ValidateAgain runId={run.run_id} mode={validateMode} previewing={!!access.preview} variant={failed ? "primary" : "default"} />
                 : null}
               <Action access={access} id="revalidate" href={`/runs/${run.run_id}/validation`} />
+            </div>
+            {b.generation && actMode(access, ACTIONS.reviewStandards.privilege) !== "none" && (
+              <div className="mt-3 border-t border-[var(--os-line)] pt-3">
+                <div className="os-faint mb-2 text-[11px]">
+                  Code standards agent{b.gate.standards_review === false ? " (off for this run's domain: it is not part of the gate)" : b.gate.standards_block === false ? " (advisory for this domain)" : ""}: reviews the generated code against the written standards, area by area.
+                </div>
+                <ReviewStandards runId={run.run_id} mode={actMode(access, ACTIONS.reviewStandards.privilege) as "do" | "request"} previewing={!!access.preview} />
+              </div>
+            )}
+            <div className="mt-3 flex flex-wrap gap-2">
               {run.current_state === "DBT_REVIEW" && <Action access={access} id="reviewCode" label="Review the code" href={`/runs/${run.run_id}/review`} variant="mint" />}
               {failed && validationSkill && <Action access={access} id="editSkill" label="Open skill studio" href={`/os/skills?skill=${encodeURIComponent(validationSkill.skill_name)}`} variant="warn" />}
             </div>

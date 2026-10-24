@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
-import { api } from "@/lib/api";
+import { api, whoami } from "@/lib/api";
+import { can } from "@/lib/types";
 import type { Overview } from "@/lib/store-types";
 import { scopedDomain } from "@/lib/domain-scope";
 import { PageHeader } from "@/components/page-header";
@@ -19,14 +20,15 @@ export default async function StoreHub({ searchParams }: { searchParams: Params 
     redirect(`${target.href}${qs ? `?${qs}` : ""}`);
   }
   const domain = scopedDomain(searchParams.domain);
-  const overview = await api<Overview>(`/api/hub/overview${domain ? `?domain=${encodeURIComponent(domain)}` : ""}`).catch(() => null);
+  const [overview, me] = await Promise.all([
+    api<Overview>(`/api/hub/overview${domain ? `?domain=${encodeURIComponent(domain)}` : ""}`).catch(() => null), whoami()]);
   return (
     <div className="space-y-6">
       <PageHeader eyebrow="Asset stores" title="Store"
                   description={`Every governed asset in one place: sources, profiles, domain models, mappings, QA packs and data quality checks${overview?.domain ? ` for ${overview.domain.domain_name}` : ""}. Open a store to work in it; each store keeps its own versions, reviews and Git history.`} />
       <StoreNav current={null} domain={searchParams.domain} />
       {!overview && <p className="text-sm text-destructive">Store summaries could not be loaded; the stores themselves are still available above.</p>}
-      <StoreCards o={overview} domain={searchParams.domain} />
+      <StoreCards o={overview} domain={searchParams.domain} onboard={can(me, "SOURCE.CONNECT")} />
     </div>
   );
 }

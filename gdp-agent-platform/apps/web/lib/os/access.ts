@@ -25,11 +25,11 @@ export const hasAny = (g: Grants, privileges?: readonly string[]) => !privileges
 // pages only (a run's workspace), shown as the tab `under` it. An entry is on the rail when any of its tabs is open.
 export type SectionKey = "work" | "intake" | "enable" | "design" | "build" | "review" | "skills" | "release" | "knowledge" | "run" | "admin";
 export type ScreenKey =
-  | "work" | "inbox" | "overview" | "copilot" | "value"
-  | "intake" | "requests" | "onboarding"
+  | "work" | "inbox" | "overview" | "copilot"
+  | "intake" | "requests" | "requestHistory" | "onboarding"
   | "enable"
-  | "design" | "domains" | "stores"
-  | "build" | "pipelines" | "gold" | "lineage" | "code" | "runs"
+  | "design" | "newDomain" | "domains" | "stores"
+  | "build" | "pipelines" | "gold" | "lineage" | "code" | "history" | "runs"
   | "review" | "governance" | "audit"
   | "skills" | "registry"
   | "release" | "sourceControl" | "qa"
@@ -57,25 +57,27 @@ const OPERATORS = ["OPS.VIEW", "JIRA.READ", "CASE.WORK"] as const;
 const SUPER = ["*"] as const;
 
 export const SCREENS: Screen[] = [
-  // My Work: the person's own work, the estate overview, the copilot and the value ledger
+  // My Work: the person's own work, the estate overview and the copilot
   { key: "work", section: "work", href: "/os", label: "My Work", exact: true, why: "everyone signed in" },
   { key: "inbox", section: "work", href: "/work", label: "Inbox", why: "everyone signed in (requests, questions, tickets)" },
   { key: "overview", section: "work", href: "/dashboard", label: "Overview", exact: true, why: "everyone signed in" },
   { key: "copilot", section: "work", href: "/dashboard/copilot", label: "Copilot", view: ["AI.USE"], why: "people who may use AI" },
-  { key: "value", section: "work", href: "/value", label: "Value", view: SUPER, why: "super admins only (it reads the audit trail)" },
 
   // Intake: asking for something, and the onboarding wizards that start it
   { key: "intake", section: "intake", href: "/os/intake", label: "New request",
     view: ["RUN.CREATE", "SOURCE.CONNECT", "DOMAIN.EDIT", "REQUEST.CHANGES"], why: "people who start onboarding or file requests" },
   { key: "requests", section: "intake", href: "/os/requests", label: "Requests", why: "everyone signed in (each sees the requests of the domains they may see)" },
-  { key: "onboarding", section: "intake", href: "/dashboard/onboarding", label: "Onboarding wizard", paths: ["/dashboard/sources/new", "/onboarding"],
-    view: ["RUN.CREATE", "SOURCE.CONNECT", "DOMAIN.EDIT"], why: "people who onboard sources and domains" },
+  { key: "requestHistory", section: "intake", href: "/os/requests/history", label: "Request history", why: "everyone signed in (finished, cancelled and rejected requests, read only)" },
 
-  { key: "enable", section: "enable", href: "/os/enable", label: "Source readiness", view: ["SOURCE.CONNECT", "PROFILE.RUN", "CONFIG.EDIT", "INTEGRATION.MANAGE"], why: "people who connect sources and configure ingestion" },
+  // Enable: onboarding sources is the Data OS Administrator's alone (registering, landing and starting the run)
+  { key: "enable", section: "enable", href: "/os/enable", label: "Source readiness", view: ["SOURCE.CONNECT", "CONFIG.EDIT", "INTEGRATION.MANAGE"], why: "the Data OS Administrator (connecting, landing and configuring sources)" },
+  { key: "onboarding", section: "enable", href: "/dashboard/onboarding?type=source", label: "Onboard a source", paths: ["/dashboard/onboarding", "/dashboard/sources/new", "/onboarding"],
+    view: ["SOURCE.CONNECT"], why: "the Data OS Administrator (onboarding a source registers it, lands it and starts its run)" },
 
   // Design: the domain model and the stores the design is kept in
   { key: "design", section: "design", href: "/os/design", label: "Designer studio",
     view: ["MODEL.EDIT", "MODEL.APPROVE", "MAPPING.DECIDE", "MAPPING.APPROVE", "STTM.EDIT", "STTM.APPROVE", "DOMAIN.EDIT"], why: "people who model and map" },
+  { key: "newDomain", section: "design", href: "/os/design/new-domain", label: "Onboard a domain", view: ["DOMAIN.EDIT"], why: "data stewards and product owners (a domain's model, contract and memory)" },
   { key: "domains", section: "design", href: "/domains", label: "Domains", why: "everyone signed in (stewards edit)" },
   { key: "stores", section: "design", href: "/dashboard/store", label: "Stores",
     paths: ["/dashboard/sources", "/dashboard/profiling", "/dashboard/modeling", "/dashboard/sttm", "/dashboard/qa-store", "/dashboard/dq-store"], view: BUILDERS, why: "people who build runs or decide their gates" },
@@ -86,6 +88,7 @@ export const SCREENS: Screen[] = [
   { key: "gold", section: "build", href: "/gold", label: "Gold pipeline", view: BUILDERS, why: "people who build runs or decide their gates" },
   { key: "lineage", section: "build", href: "/lineage", label: "Lineage", view: BUILDERS, why: "people who build runs or decide their gates" },
   { key: "code", section: "build", href: "/code", label: "Code", view: BUILDERS, why: "people who build runs or decide their gates" },
+  { key: "history", section: "build", href: "/os/history", label: "Run history", why: "everyone signed in (every run of both pipelines, read only)" },
   // a run's own workspace is where every gate is decided, so it is open to every builder and approver
   { key: "runs", section: "build", href: "/runs/", label: "Run workspace", paths: ["/runs/"], rail: false, under: "build", view: BUILDERS, why: "people who build runs or decide their gates" },
 
@@ -160,6 +163,7 @@ export const ACTIONS = {
   workStep: { privilege: "RUN.OPERATE", label: "Work this step" },
   revalidate: { privilege: "RUN.OPERATE", label: "Open validation" },
   validateAgain: { privilege: "RUN.OPERATE", label: "Validate again" },
+  reviewStandards: { privilege: "RUN.OPERATE", label: "Review standards" },
   openDbtStudio: { privilege: "DBT.EDIT", label: "Open dbt studio" },
   publishPr: { privilege: "DBT.EDIT", label: "Publish from dbt studio" },
   reviewCode: { privilege: "REVIEW.APPROVE", label: "Review code" },

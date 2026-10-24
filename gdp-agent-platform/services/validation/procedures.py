@@ -13,7 +13,7 @@ from services.common.stage import Stage
 from services.common.standard import run_pipeline, run_standard
 from services.soda.expectations import render_yaml
 from services.knowledge.usage import use_stage
-from services.validation import checks
+from services.validation import checks, standards
 
 
 def _current_generation(session, run_id: str) -> Dict[str, Any]:
@@ -154,9 +154,13 @@ def validate_dbt(session, run_id: str) -> Dict[str, Any]:
             soda = files.get("soda/checks.yml") or ""
             results = checks.run(files, _sttm_lines(session, generation["STTM_ID"]), soda)
             results.append(gold_compile(_compile(session, generation, run_id), run_pipeline(stage.run), files))
-            results.append({"validation_type": "SKILL", "status": "PASSED", "error_count": 0,
-                            "warning_count": 0, "findings": [{"severity": "INFO", "message": guidance[:500]}],
-                            "query_id": None})
+            if rule("validation.standards_review"):
+                # the code standards agent judges the project, one check per area (it replaces the skill note)
+                results.extend(_review_standards(session, stage.run, run_id, files, generation)["checks"])
+            else:
+                results.append({"validation_type": "SKILL", "status": "PASSED", "error_count": 0,
+                                "warning_count": 0, "findings": [{"severity": "INFO", "message": guidance[:500]}],
+                                "query_id": None})
             # the gate (rules validation.*, active for this run's domain and pipeline since Stage loaded them)
             verdict = checks.gate(results, float(rule("validation.min_score")), bool(rule("validation.block_on_errors")))
             status, errors, warnings = verdict["status"], verdict["errors"], verdict["warnings"]
@@ -195,3 +199,59 @@ def validate_dbt(session, run_id: str) -> Dict[str, Any]:
     return {"status": status, "errors": errors, "warnings": warnings, "score": verdict["score"],
             "min_score": verdict["min_score"], "reasons": verdict["reasons"], "results": results,
             "state": stage.payload()}
+
+
+def _load(session, names: List[str], run_id: str) -> List[Dict[str, Any]]:
+    """Each skill the run would load (its override, else production), skipping one that is not registered."""
+    from services.knowledge.procedures import load_skill_for
+
+    out = []
+    for name in names:
+        try:
+            out.append(load_skill_for(session, name, run_id))
+        except AssertionError:
+            continue
+    return out
+
+
+def _review_standards(session, run: Dict[str, Any], run_id: str, files: Dict[str, str],
+                      generation: Dict[str, Any]) -> Dict[str, Any]:
+    """The code standards agent on one generation (services/validation/standards.py): its own skill and any
+    standards bound to the STANDARDS stage, against the generation playbooks bound to the run's DBT stage. Records
+    its tool call and Cortex cost; never raises (a failed review is one SKIPPED check with the reason)."""
+    from services.common.audit import record_cost
+    from services.common.llm import complete_json
+    from services.knowledge.usage import bound_skills, prompt_excerpt
+
+    standard = run_standard(run)
+    with tool_call(session, run_id, "review_standards", {"run_id": run_id, "generation_id": generation["GENERATION_ID"]}) as call:
+        bound = _load(session, bound_skills(session, standards.STAGE, standard, run_id), run_id)
+        own = [s for s in bound if s["skill_name"] == standards.SKILL]
+        extra = [s for s in bound if s["skill_name"] != standards.SKILL]
+        playbooks = _load(session, bound_skills(session, "DBT", standard, run_id), run_id) + extra
+        skill = prompt_excerpt(own[0].get("content") or "", 8000) if own else "(the CODE-STANDARDS-REVIEW skill is not registered)"
+        result = standards.review(
+            lambda text, schema, max_tokens: complete_json(session, text, schema, max_tokens=max_tokens, stage="DBT"),
+            files, skill, standards.standards_text(playbooks, prompt_excerpt), _sttm_lines(session, generation["STTM_ID"]),
+            run_pipeline(run), int(rule("validation.standards_max_files")), bool(rule("validation.standards_block")))
+        result["skills"] = [f"{s['skill_name']}@{s['version']}" for s in (own + playbooks)]
+        call.summary = standards.gate_note(result)
+    if result.get("model"):
+        record_cost(session, run_id, "VALIDATION", result["model"], result["usage"], result["duration_ms"],
+                    agent="CODE_STANDARDS")
+    return result
+
+
+def review_standards(session, run_id: str) -> Dict[str, Any]:
+    """CORE.REVIEW_STANDARDS: the code standards agent alone on the run's current generation. It reports and records
+    its tool call and cost, but writes no validation and never moves the run (Validate again does that)."""
+    stage = Stage(session, run_id)  # activates the rules of the run's domain and pipeline
+    generation = _current_generation(session, run_id)
+    files = _files(session, generation["GENERATION_ID"])
+    result = _review_standards(session, stage.run, run_id, files, generation)
+    exact = checks.score(result["checks"])
+    return {"run_id": run_id, "generation_id": generation["GENERATION_ID"],
+            "generation_version": generation.get("GENERATION_VERSION"), "summary": result["summary"],
+            "score": None if exact is None else round(exact, 1), "checks": result["checks"],
+            "reviewed": result["reviewed"], "left_out": result["left_out"], "skills": result.get("skills", []),
+            "model": result.get("model"), "block": bool(rule("validation.standards_block"))}

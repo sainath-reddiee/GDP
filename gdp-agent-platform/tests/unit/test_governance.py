@@ -191,3 +191,17 @@ def test_admin_and_governance_are_for_super_admins_only():
     verdict, reason = decide("CONFIG.EDIT", {"REQUEST.CHANGES", "CONFIG.EDIT"}, {"active": True, "requires_approval": True, "approver_role": "PLATFORM_ADMIN"})
     assert verdict == "FORBID" and "super admins only" in reason
     assert decide("CONFIG.EDIT", {"*"}, None)[0] == "ALLOW"
+
+
+def test_onboarding_sources_is_the_platform_administrators():
+    from services.governance.policy import MOVED_PRIVILEGES, SYSTEM_ROLES, SYSTEM_VERSION, effective_privileges
+
+    assert SYSTEM_VERSION == 9 and MOVED_PRIVILEGES[9] == [("SOURCE.CONNECT", "DATA_ENGINEER", "PLATFORM_ADMIN")]
+    assert "SOURCE.CONNECT" not in SYSTEM_ROLES["DATA_ENGINEER"]["privileges"]
+    privileges = {n: s["privileges"] for n, s in SYSTEM_ROLES.items()}
+    grants = {n: s["inherits"] for n, s in SYSTEM_ROLES.items()}
+    # a data engineer still lands and profiles (PROFILE.RUN) and builds runs, but no longer connects sources
+    _, engineer = effective_privileges(["DATA_ENGINEER"], privileges, grants)
+    assert "SOURCE.CONNECT" not in engineer and {"PROFILE.RUN", "RUN.CREATE", "RUN.OPERATE"} <= engineer
+    _, admin = effective_privileges(["PLATFORM_ADMIN"], privileges, grants)
+    assert "SOURCE.CONNECT" in admin

@@ -251,7 +251,7 @@ def _persist(db: Db, r: Dict[str, Any], items: List[Dict[str, Any]], a: Dict[str
         if (i.get("status"), i.get("status_detail")) != (s["status"], (s.get("detail") or "")[:1000] or None):
             db.execute("UPDATE CORE.ONBOARDING_REQUEST_ITEM SET STATUS = %s, STATUS_DETAIL = %s, UPDATED_AT = CURRENT_TIMESTAMP() WHERE ITEM_ID = %s",
                        (s["status"], (s.get("detail") or "")[:1000] or None, i["item_id"]))
-            for kind, note in rq.milestones(i, s):
+            for kind, note in rq.milestones(i, s, (r.get("request_type") or "").upper() == "PRODUCT"):
                 _event(db, r["request_id"], kind, note, item_id=i["item_id"], frm=i.get("status"), to=s["status"], automatic=True)
     if r.get("status") == rq.OPEN and a["status"] == rq.DONE:
         db.execute("UPDATE CORE.ONBOARDING_REQUEST SET STATUS = 'DONE', STAGE = 'DONE', WAITING_ON = NULL, WAITING_LABEL = NULL, ATTENTION = NULL, "

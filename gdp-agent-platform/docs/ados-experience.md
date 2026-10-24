@@ -8,11 +8,11 @@ Every screen reads live platform data through the endpoints the classic pages al
 
 | Entry | Tabs |
 |---|---|
-| My Work | My Work (`/os`), Inbox (`/work`), Overview, Copilot, Value |
-| Intake | New request, Requests, Onboarding wizard |
-| Enable | Source readiness |
-| Design | Designer studio, Domains, Stores (the six stores, with their own store tabs) |
-| Build | Workbench (and every `/runs/[id]` workspace), Silver pipeline, Gold pipeline, Lineage, Code |
+| My Work | My Work (`/os`), Inbox (`/work`), Overview, Copilot |
+| Intake | New request, Requests, Request history |
+| Enable | Source readiness, Onboard a source (the onboarding wizard, the Data OS Administrator's alone) |
+| Design | Designer studio, Onboard a domain, Domains, Stores (the six stores, with their own store tabs) |
+| Build | Workbench (and every `/runs/[id]` workspace), Silver pipeline, Gold pipeline, Lineage, Code, Run history |
 | Review | Gates, Approvals, Audit |
 | Skills | Skill studio, Registry (including proposed skills) |
 | Release | Release, Source control, QA testing |
@@ -40,8 +40,8 @@ A data owner files a request on Intake: a source, a new domain, or a data produc
 | Stage | When | Who acts (privilege) |
 |---|---|---|
 | Domain | the domain does not exist yet, or was deleted or retired | Data steward (`DOMAIN.EDIT`) |
-| Enable | a source is not registered, is unreachable, or is not landed | Data OS Administrator (`SOURCE.CONNECT`, `PROFILE.RUN`) |
-| Design | no approved domain model, no run yet, or a run being profiled and mapped | Data Designer (`RUN.CREATE`, `RUN.OPERATE`) and the gate approvers (`MAPPING.APPROVE`, `STTM.APPROVE`, `SODA.APPROVE`) |
+| Enable | a source is not registered, is unreachable, is not landed, or its run in the domain is not started | Data OS Administrator (`SOURCE.CONNECT`) |
+| Design | no approved domain model, or a run being profiled and mapped | Data Designer (`RUN.OPERATE`) and the gate approvers (`MAPPING.APPROVE`, `STTM.APPROVE`, `SODA.APPROVE`) |
 | Build | code generation and validation | Forward Engineering Lead (`RUN.OPERATE`) |
 | Review | code review | Data Developer (`REVIEW.APPROVE`) |
 | Done | every source's run is approved or completed | nobody; the request closes itself |
@@ -96,7 +96,8 @@ A request shows the earliest phase of the parts at its stage. Two milestones are
 
 **Who does what.**
 - The **data owner** files the request on Intake. Intake lists the sources already feeding the domain (from its runs), then the other registered sources, ready ones first. A source not on the platform is named under "Request a new source" and goes to the administrator.
-- The **Data OS Administrator** works from Enable. Enable is configuration only, with no table catalog. Each source shows its connection, credential reference (only whether one is set), landing target, schedule, SnapLogic master and child pipelines, and status. Sources asked for by requests come first, with "Onboard as" buttons for the wizard's three ways in (Snowflake share, relational database, files). The wizard opens with the request named and the source name filled in (`YARDI_VOYAGER` for "Yardi Voyager"); a source registered under that name is attached to the request on its own (names match ignoring case, spacing and punctuation).
+- The **Data OS Administrator** onboards sources, alone: registering a source, landing it and starting its run in the domain. The onboarding wizard (`/dashboard/onboarding`) is a tab of Enable and opens only for `SOURCE.CONNECT`, which only `PLATFORM_ADMIN` holds (system roles version 9 moved it from `DATA_ENGINEER`, once, with a `PRIVILEGE_MOVED` governance event). Everyone else asks for a source on Intake; the classic "Onboard source" buttons become "Request a source" for them. Domains are onboarded from Design, Onboard a domain (`/os/design/new-domain`, `DOMAIN.EDIT`); old wizard links to a domain go there.
+- The administrator works from Enable. Enable is configuration only, with no table catalog. Each source shows its connection, credential reference (only whether one is set), landing target, schedule, SnapLogic master and child pipelines, and status. Sources asked for by requests come first, with "Onboard as" buttons for the wizard's three ways in (Snowflake share, relational database, files). The wizard opens with the request named and the source name filled in (`YARDI_VOYAGER` for "Yardi Voyager"); a source registered under that name is attached to the request on its own (names match ignoring case, spacing and punctuation).
 - The **Data Designer** profiles and models; the approved design is kept in the stores.
 - The **Forward Engineering Lead** builds end to end and must pass the validation gate.
 
@@ -155,7 +156,7 @@ People get **personas**, named bundles of the governance roles, instead of role 
 **Admin is a super admin's alone, enforced in the API** (`policy.SUPER_ONLY`)
 - These privileges are honoured only alongside `*`: `ADMIN.VIEW`, `ADMIN.DEPLOY`, `CONFIG.EDIT`, `INTEGRATION.MANAGE`, `ROLE.MANAGE`, `AUDIT.VIEW` and `APPROVAL.VIEW`. Whatever role lists them, `effective_privileges` drops them for everyone else.
 - A call that needs one of them is refused outright, never queued as a change request.
-- The Admin rail entry (People & personas, Platform settings, Audit) shows to super admins only. Value is super-admin only too, because it reads the audit trail.
+- The Admin rail entry (People & personas, Platform settings, Audit) shows to super admins only.
 - Approvers still see their own Approvals queue.
 
 **Preview moved off the top bar.** The "Preview as role" picker is gone. A super admin opens "See as <persona>" (or Viewer) in People. The same banner shows, decisions are off, and "Stop preview" returns to People.
@@ -185,11 +186,13 @@ How these behave:
 | Screen | Reads |
 |---|---|
 | My Work `/os` | `/api/runs`, `/api/domains`, `/api/knowledge/overview` |
-| Intake `/os/intake` | domains, `/api/sources/overview`, runs, `/api/domains/{id}/data-model`; starts the existing onboarding wizard |
+| Intake `/os/intake` | domains, `/api/sources/overview`, runs, `/api/domains/{id}/data-model`; files a request (sources go to the administrator) |
 | Enable `/os/enable` | `/api/sources/overview`, `/api/hub/ingestion-control` (secrets never shown), `/api/hub/pipelines` |
 | Design `/os/design` | domain data model (shared `ErCanvas`), `/api/runs/{id}/mapping`, domain questions and contract |
 | Build `/os/build?run=` | run state, `/audit`, `/validation`, `/dbt`, `/skills` of one run |
 | Review `/os/review?run=` | the same bundle, the gate from `/validation` (`gate`), every attempt's score, Validate again in place; every human gate across domains |
+| Run history `/os/history` | `/api/runs` (all pipelines), `/api/run-history` |
+| Request history `/os/requests/history` | `/api/onboarding-requests?status=CLOSED` |
 | Skills `/os/skills?skill=` | `/api/skills`, `/api/skills/{name}`, `/api/skills/{name}/diff`, skill proposals |
 | Release `/os/release?run=` | run bundle, `/api/runs/{id}/qa*`, `/api/source-control/prs`, knowledge feed |
 | Knowledge `/os/knowledge` | `/api/knowledge*` (overview, list, versions, usage) |
@@ -206,7 +209,31 @@ The score is the share of the evaluated checks that passed (`SUMMARY` is exclude
 
 `VALIDATE_DBT` enforces it (`checks.gate`): below the minimum, or with an error while errors block, the run moves to `VALIDATION_FAILED` with the reasons ("score 72% is below the 80% minimum") in its event, its tool call and the `SUMMARY` row (`RESULT_JSON.gate`). The comparison uses the exact score, so 79.96% does not pass an 80% gate. `GET /api/runs/{id}/validation` returns the run's gate, so the pages draw the same line. Review shows every attempt's score ("Improved 72% → 93% over 3 attempts") and "Validate again" runs the checks on the current generation in place (`RUN.OPERATE`; others can request it).
 
-Until the code package and procedures are redeployed, `VALIDATE_DBT` still passes on zero errors alone; the pages already show the rule.
+## Code standards agent
+
+An independent agent reviews every generated dbt project against the written standards (`services/validation/standards.py`). It never edits code.
+
+- **What it reads:** the generated project (models, macros, tests, YAML, Soda checks; the STTM exports are left out), at most `validation.standards_max_files` files (default 40) within a character budget. It reads them against its own skill, `CODE-STANDARDS-REVIEW` (`snowflake/skills/code-standards`), plus the generation playbooks bound to the run's DBT stage and any standards a domain binds to the `STANDARDS` stage in Admin.
+- **What it reports:** a verdict for each of six areas: naming and layering, casts and data types, keys and joins, tests, documentation and sources, and SQL style and safety. Each finding cites the rule, the file and a line.
+- **How it moves the gate:** inside `VALIDATE_DBT`, each area is one check (`STANDARDS_NAMING`, ...), replacing the old always-passing `SKILL` row, so the agent's findings move the score and the minimum-score rule applies. With `validation.standards_block` off, its errors are recorded as warnings. With `validation.standards_review` off, the agent does not run and the `SKILL` row is recorded as before.
+- **When Cortex fails:** the review becomes one `SKIPPED` check with the reason. Skipped checks are not evaluated, so the gate stands on the other checks.
+- **Running it alone:** `CORE.REVIEW_STANDARDS` (`POST /api/runs/{id}/standards`, "Review standards" on Review, `RUN.OPERATE`) reports the areas without recording a validation or moving the run. Every review records its tool call and its Cortex cost (agent `CODE_STANDARDS`).
+- **Improving it:** a new version of `CODE-STANDARDS-REVIEW` in Skill Studio, promoted, changes how the next review judges. A better generation playbook, after regenerating, changes the code it judges. Review links to the standards skill when a standards area failed.
+
+## Run and request history
+
+- **Build, Run history** (`/os/history`): every run of both pipelines, finished or not, filtered by outcome, pipeline, domain and text. Each row shows how the run ended, its latest validation score with the number of attempts and where it started, and who decided its gates (`GET /api/run-history`). "Recovered" counts runs whose latest attempt passed after an earlier one failed. It is open to everyone signed in; viewers read it without links into the Workbench.
+- **Intake, Request history** (`/os/requests/history`): finished requests (done, cancelled, rejected), with how they ended, who closed them and how long they took. Each opens its whole timeline.
+- The full audit trail stays in Admin, Audit (super admins only).
+
+## Demo paths
+
+Help shows two walkthroughs built from live records, with no fixtures:
+
+1. **Forward Engineering Lead, happy path:** the most advanced run that passed validation, from My Work through the Workbench and the validation gate to the pull request and code review.
+2. **Onboarding with people in the loop:** the open request furthest along, from filing through the administrator (skipped on its own when the sources are already onboarded), the designer, build and validation, improving a skill and validating again when flagged, to the pull request, QA and release.
+
+Each step names the persona who acts and opens the real run or request. Scores are whatever the agents find.
 
 ## Gaps for a later backend step
 

@@ -119,8 +119,11 @@ def validate(monkeypatch):
     monkeypatch.setattr(vp, "_compile", lambda *a: {})
     monkeypatch.setattr(vp, "_remember_fixed", lambda *a: None)
     monkeypatch.setattr(vp, "insert_rows", lambda session, table, cols, exprs, rows: written.extend(rows))
+    # the code standards agent (tested in test_code_standards.py) judges nothing here unless a test says so
+    monkeypatch.setattr(vp, "_review_standards", lambda *a: {"checks": stage_box.get("standards", [])})
 
-    def run(results, rules=None):
+    def run(results, rules=None, standards=None):
+        stage_box["standards"] = standards or []
         monkeypatch.setattr(vp.checks, "run", lambda files, lines, soda: [dict(r) for r in results])
         monkeypatch.setattr(vp, "gold_compile", lambda result, pipeline, files: _check("DBT_COMPILE", "PASSED"))
         with using(merged(rules or {})):
@@ -142,17 +145,35 @@ def test_validate_dbt_flags_a_run_below_the_minimum_with_the_reason(validate):
     results = [_check("NAMING", "PASSED"), _check("SCHEMA", "FAILED", errors=1), _check("SODA_CONFIG", "FAILED", errors=1),
                _check("DATATYPE", "FAILED", errors=1)]
     out, stage, written = validate(results, {"validation.block_on_errors": False})
-    # 3 of 6 evaluated (with the compile and skill checks) pass: 50%
-    assert out["status"] == "FAILED" and out["score"] == 50.0
-    assert out["reasons"] == ["score 50% is below the 80% minimum"]
+    # 2 of 5 evaluated (with the compile check) pass: 40%
+    assert out["status"] == "FAILED" and out["score"] == 40.0
+    assert out["reasons"] == ["score 40% is below the 80% minimum"]
     to, reason, payload = stage.moves[-1]
-    assert to == "VALIDATION_FAILED" and "below the 80% minimum" in reason and payload["score"] == 50.0
+    assert to == "VALIDATION_FAILED" and "below the 80% minimum" in reason and payload["score"] == 40.0
     summary = [r for r in written if r[3] == "SUMMARY"][0]
     assert summary[4] == "FAILED" and summary[-1]["gate"]["reasons"] == out["reasons"]
 
 
 def test_validate_dbt_reads_the_minimum_from_the_rules(validate):
     out, stage, _ = validate(PASSING + [_check("DATATYPE", "FAILED")], {"validation.min_score": 90})
-    # 6 of 7 (with the compile and skill checks) = 85.7%: enough for the default, not for a domain that asks for 90%
+    # 5 of 6 (with the compile check) = 83.3%: enough for the default, not for a domain that asks for 90%
     assert out["status"] == "FAILED" and out["min_score"] == 90.0
     assert stage.moves[-1][0] == "VALIDATION_FAILED"
+
+
+def test_the_standards_agent_counts_in_the_score_and_replaces_the_skill_note(validate):
+    agent = [_check("STANDARDS_NAMING", "PASSED"), _check("STANDARDS_TYPES", "FAILED", errors=2),
+             _check("STANDARDS_KEYS", "FAILED", errors=1)]
+    out, stage, _ = validate(PASSING, standards=agent)
+    kinds = [r["validation_type"] for r in out["results"]]
+    # the agent's areas are checks of their own: 6 of 8 pass (with the compile check), 75%, and its errors block
+    assert "STANDARDS_TYPES" in kinds and kinds.count("SKILL") == 1  # PASSING carries one SKILL row of its own
+    assert out["status"] == "FAILED" and out["score"] == 75.0 and stage.moves[-1][0] == "VALIDATION_FAILED"
+    assert "3 errors must be fixed" in out["reasons"]
+
+
+def test_with_the_agent_off_the_skill_note_is_recorded_as_before(validate):
+    out, _, _ = validate([_check("NAMING", "PASSED")], {"validation.standards_review": False},
+                         standards=[_check("STANDARDS_TYPES", "FAILED", errors=1)])
+    kinds = [r["validation_type"] for r in out["results"]]
+    assert "STANDARDS_TYPES" not in kinds and kinds[-1] == "SKILL" and out["status"] == "PASSED"

@@ -71,8 +71,8 @@ SUPER_ONLY = {"ADMIN.VIEW", "ADMIN.DEPLOY", "CONFIG.EDIT", "INTEGRATION.MANAGE",
 SYSTEM_ROLES: Dict[str, Dict[str, Any]] = {
     "SUPER_ADMIN": {"description": "Everything, including governance", "privileges": [ALL], "inherits": []},
     "PLATFORM_ADMIN": {"description": "Platform settings and deployment",
-                       "privileges": ["CONFIG.EDIT", "ADMIN.VIEW", "ADMIN.DEPLOY", "AUDIT.VIEW", "APPROVAL.VIEW", "INTEGRATION.MANAGE",
-                                      "OPS.FIX_APPROVE", "OPS.FIX_PUBLISH", "OPS.RESOLVE_ADMIN"],
+                       "privileges": ["SOURCE.CONNECT", "CONFIG.EDIT", "ADMIN.VIEW", "ADMIN.DEPLOY", "AUDIT.VIEW", "APPROVAL.VIEW",
+                                      "INTEGRATION.MANAGE", "OPS.FIX_APPROVE", "OPS.FIX_PUBLISH", "OPS.RESOLVE_ADMIN"],
                        "inherits": ["DATA_ENGINEER"]},
     "GOVERNANCE_ADMIN": {"description": "Users, roles and approval policies",
                          "privileges": ["ROLE.MANAGE", "ADMIN.VIEW", "APPROVAL.VIEW", "AUDIT.VIEW"], "inherits": ["VIEWER"]},
@@ -99,8 +99,9 @@ SYSTEM_ROLES: Dict[str, Dict[str, Any]] = {
                      "privileges": ["KNOWLEDGE.EDIT", "DOMAIN.EDIT", "TAG.MANAGE", "SKILL.EDIT", "AI.USE"], "inherits": ["VIEWER"]},
     "SKILL_OWNER": {"description": "Owns agent skills: versions, releases and stage bindings",
                     "privileges": ["SKILL.EDIT", "SKILL.RELEASE", "AI.USE"], "inherits": ["VIEWER"]},
+    # onboarding sources (SOURCE.CONNECT) is the platform administrator's: a data engineer works the runs it starts
     "DATA_ENGINEER": {"description": "Builds runs end to end; approvals go to the owning roles",
-                      "privileges": ["SOURCE.CONNECT", "PROFILE.RUN", "RUN.CREATE", "RUN.OPERATE", "RUN.ARCHIVE",
+                      "privileges": ["PROFILE.RUN", "RUN.CREATE", "RUN.OPERATE", "RUN.ARCHIVE",
                                      "MODEL.EDIT", "MAPPING.DECIDE", "QA.EDIT", "DBT.EDIT", "TAG.MANAGE", "SKILL.EDIT",
                                      "REQUEST.CHANGES", "REVIEW.DECIDE", "AI.USE", "JIRA.READ", "JIRA.WRITE", "OPS.VIEW",
                                      "OPS.OPERATE", "OPS.FIX_PUBLISH", "CASE.WORK", "CASE.RESOLVE", "PACKAGE.EDIT"],
@@ -110,11 +111,14 @@ SYSTEM_ROLES: Dict[str, Dict[str, Any]] = {
 }
 # Privileges added to system roles after their first release: {version: [privilege]}. Bootstrap grants them to the
 # system roles whose spec lists them, once, so existing deployments pick them up without overriding admin edits.
-SYSTEM_VERSION = 8
+SYSTEM_VERSION = 9
 ADDED_PRIVILEGES = {2: ["AI.USE"], 3: ["SKILL.EDIT", "SKILL.RELEASE"], 4: ["INTEGRATION.MANAGE", "CODE.VIEW"],
                     5: ["JIRA.READ", "JIRA.WRITE"], 6: ["OPS.VIEW", "OPS.OPERATE"],
                     7: ["CASE.WORK", "CASE.RESOLVE", "PACKAGE.EDIT", "PACKAGE.APPROVE"],
                     8: ["OPS.FIX_APPROVE", "OPS.FIX_PUBLISH", "OPS.RESOLVE_ADMIN"]}
+# Privileges moved between system roles after their first release: {version: [(privilege, from role, to role)]}.
+# Bootstrap applies each once (revoked from the one, granted to the other), like ADDED_PRIVILEGES.
+MOVED_PRIVILEGES = {9: [("SOURCE.CONNECT", "DATA_ENGINEER", "PLATFORM_ADMIN")]}
 
 # Actions routed for approval by default: privilege -> approver role. Everything else is privilege-only.
 DEFAULT_POLICIES: Dict[str, str] = {
@@ -465,7 +469,7 @@ READ_RULES = [(re.compile(r"^/api/(admin/.*|config/(rules|platform|models|enviro
               (re.compile(r"^/api/jira/(issues|search|filters|boards|sprints|projects|summary|sprint-choices)(/.*)?$"), "JIRA.READ"),
               (re.compile(r"^/api/qa/links$"), "JIRA.READ"),
               (re.compile(r"^/api/runs/[^/]+/jira/.*$"), "JIRA.READ"),
-              (re.compile(r"^/api/(audit|costs|value)(/.*)?$"), "AUDIT.VIEW"),
+              (re.compile(r"^/api/(audit|costs)(/.*)?$"), "AUDIT.VIEW"),
               (re.compile(r"^/api/code/setup$"), "INTEGRATION.MANAGE"),
               (re.compile(r"^/api/ops(/.*)?$"), "OPS.VIEW"),
               (re.compile(r"^/api/code/(search|file|lineage|impact|path|neighborhood|usage|summary|repos|repos/[^/]+/(runs|branches|catalog|files))$"), "CODE.VIEW"),

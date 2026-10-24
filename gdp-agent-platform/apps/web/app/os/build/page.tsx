@@ -53,6 +53,8 @@ export default async function BuildWorkbench({ searchParams }: { searchParams: {
   const steps = lifecycleOfRun(run);
   const now = currentStep(steps);
   const score = scoreOf(b.checks);
+  // the code standards agent's areas in the latest validation (STANDARDS_<AREA>, or STANDARDS when it could not run)
+  const standardsAreas = b.checks.filter((c) => c.validation_type.startsWith("STANDARDS"));
   const passed = gatePassed(score, b.gate);
   const stage = (s: string) => run.stages.find((x) => x.stage === s);
   const groups = artifactGroups(b.artifacts);
@@ -66,6 +68,10 @@ export default async function BuildWorkbench({ searchParams }: { searchParams: {
     { n: "02", title: "Design agent", actor: "Agent + approval", stage: "MAPPING", what: "Domain model and field mapping" },
     { n: "03", title: "Build agent", actor: "Agent", stage: "DBT", what: b.generation ? `dbt v${b.generation.generation_version}: ${b.generation.files_generated} files` : "dbt models, tests and config" },
     { n: "04", title: "Review agent", actor: "Independent agent", stage: "VALIDATION", what: score.total ? `${score.passed}/${score.total} checks · gate ${b.gate.min_score}%` : `Policy threshold ${b.gate.min_score}%` },
+    { n: "05", title: "Standards agent", actor: "Independent agent", stage: "VALIDATION",
+      what: standardsAreas.length
+        ? `${standardsAreas.filter((c) => c.status === "PASSED").length}/${standardsAreas.filter((c) => c.status !== "SKIPPED").length} standard areas pass`
+        : b.gate.standards_review === false ? "Off for this domain" : "Reviews the code against the written standards at validation" },
   ];
 
   const primary = validationFailed
@@ -109,7 +115,7 @@ export default async function BuildWorkbench({ searchParams }: { searchParams: {
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1.55fr)_minmax(0,1fr)]">
         <Card title="Live workflow canvas" subtitle="Hybrid orchestration: deterministic tools plus agent decisions"
               action={<Btn href={`/os/review?run=${runId}`}>See validation details</Btn>}>
-          <div className="grid gap-3 sm:grid-cols-2 2xl:grid-cols-4">
+          <div className="grid gap-3 sm:grid-cols-2 2xl:grid-cols-3">
             {canvas.map((c) => {
               const s = stage(c.stage)?.status;
               const st = s ? STAGE_TONE[s] : { tone: "neutral" as Tone, label: "Not started" };

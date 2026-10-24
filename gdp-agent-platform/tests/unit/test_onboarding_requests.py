@@ -45,7 +45,7 @@ def test_an_unreachable_or_unlanded_source_stays_with_the_administrator():
     down = assess([item()], sources={"s1": {**HEALTHY, "health": "UNREACHABLE", "health_detail": "SQL access denied"}})
     assert down["stage"] == "ENABLE" and down["items"]["i1"]["status"] == "UNREACHABLE" and "SQL access denied" in down["items"]["i1"]["detail"]
     file = assess([item()], sources={"s1": {**HEALTHY, "health": "NOT_LANDED"}})
-    assert file["stage"] == "ENABLE" and file["waiting_on"] == "PROFILE.RUN" and file["items"]["i1"]["status"] == "NOT_LANDED"
+    assert file["stage"] == "ENABLE" and file["waiting_on"] == "SOURCE.CONNECT" and file["items"]["i1"]["status"] == "NOT_LANDED"
 
 
 def test_a_source_that_is_no_longer_registered_needs_attention():
@@ -53,14 +53,19 @@ def test_a_source_that_is_no_longer_registered_needs_attention():
     assert a["stage"] == "ENABLE" and a["items"]["i1"]["status"] == "ATTENTION" and "no longer registered" in a["attention"]
 
 
-def test_a_ready_source_without_a_run_goes_to_the_designer_to_start_one():
+def test_a_ready_source_without_a_run_waits_on_the_administrator_to_start_it():
+    # starting the run that onboards a source into the domain is part of onboarding: the administrator's
     a = assess([item()])
-    assert a["stage"] == "DESIGN" and a["waiting_on"] == "RUN.CREATE" and a["items"]["i1"]["status"] == "NO_RUN"
+    assert a["stage"] == "ENABLE" and a["waiting_on"] == "SOURCE.CONNECT" and a["items"]["i1"]["status"] == "NO_RUN"
+    assert "start the run that onboards SALESFORCE" in a["waiting_label"]
+    # a data product's Gold run stays with the Forward Engineering Lead
+    product = assess([item(source_system_id=None, source_name="Gold run: pipeline")], request_type="PRODUCT")
+    assert product["stage"] == "BUILD" and product["waiting_on"] == "RUN.CREATE"
 
 
 @pytest.mark.parametrize("state,stage,privilege", [
     ("SOURCE_REGISTERED", "ENABLE", "SOURCE.CONNECT"),
-    ("LANDING_RUNNING", "ENABLE", "PROFILE.RUN"),
+    ("LANDING_RUNNING", "ENABLE", "SOURCE.CONNECT"),
     ("PROFILING_RUNNING", "DESIGN", "RUN.OPERATE"),
     ("MAPPING_REVIEW", "DESIGN", "MAPPING.APPROVE"),
     ("STTM_REVIEW", "DESIGN", "STTM.APPROVE"),
@@ -103,7 +108,8 @@ def test_a_failed_validation_is_build_with_attention():
 def test_a_cancelled_archived_or_missing_run_asks_for_another():
     for r in (run("CANCELLED"), run("DBT_REVIEW", is_archived=True)):
         a = assess([item(run_id="run1")], runs={"run1": r})
-        assert a["items"]["i1"]["status"] == "ATTENTION" and a["waiting_on"] == "RUN.CREATE"
+        assert a["items"]["i1"]["status"] == "ATTENTION" and a["waiting_on"] == "SOURCE.CONNECT"
+        assert "start a new run for SALESFORCE, or link another" in a["waiting_label"]
     gone = assess([item(run_id="run1")], runs={})
     assert gone["items"]["i1"]["status"] == "ATTENTION" and "no longer exists" in gone["attention"]
 
@@ -129,7 +135,8 @@ def test_the_request_is_at_its_earliest_part_and_every_role_with_work_is_listed(
     items = [item(), item(item_id="i2", source_system_id=None, source_name="Yardi")]
     a = assess(items)
     assert a["stage"] == "ENABLE" and a["waiting_on"] == "SOURCE.CONNECT"
-    assert {w["privilege"] for w in a["waits"]} == {"SOURCE.CONNECT", "RUN.CREATE"}   # the designer can start on the ready one
+    # both sources are with the administrator: one to register, one whose run is to start
+    assert {w["privilege"] for w in a["waits"]} == {"SOURCE.CONNECT"} and len(a["waits"]) == 2
 
 
 def test_a_new_domain_waits_on_a_steward_and_a_retired_one_needs_attention():
@@ -146,7 +153,7 @@ def test_a_domain_without_an_approved_model_needs_the_designer():
 
 def test_removed_sources_are_ignored_and_a_domain_only_request_finishes_when_the_model_is_approved():
     a = assess([item(), item(item_id="i2", removed_at="2026-10-23")], runs={})
-    assert a["items"]["i2"]["status"] == "REMOVED" and a["stage"] == "DESIGN"
+    assert a["items"]["i2"]["status"] == "REMOVED" and a["stage"] == "ENABLE"
     assert rq.assess(req(request_type="DOMAIN"), [], DOMAIN, {}, {})["status"] == "DONE"
 
 
@@ -395,7 +402,12 @@ def test_a_multi_table_run_names_the_step_of_its_earliest_table_first():
 
 def test_phases_follow_a_source_from_the_administrator_to_done():
     assert assess([item(source_system_id=None, source_name="Yardi")])["phase"] == "ENABLE"
-    assert assess([item()])["phase"] == "ONBOARDED"
+    # registered and landed, its run not started: still with the administrator
+    assert assess([item()])["phase"] == "ENABLE"
+    # the administrator started the run and it landed: onboarded, waiting for the designer
+    assert assess([item(run_id="run1")], runs={"run1": run("LANDING_COMPLETE")})["phase"] == "ONBOARDED"
+    assert assess([item(run_id="run1")], runs={"run1": run("PROFILING_PENDING")})["phase"] == "ONBOARDED"
+    assert assess([item(run_id="run1")], runs={"run1": run("PROFILING_RUNNING")})["phase"] == "DESIGN"
     assert assess([item(run_id="run1")], runs={"run1": run("MAPPING_REVIEW")})["phase"] == "DESIGN"
     assert assess([item(run_id="run1")], runs={"run1": run("SODA_APPROVED")})["phase"] == "STORED"
     assert assess([item(run_id="run1")], runs={"run1": run("VALIDATION_RUNNING")})["phase"] == "BUILD"
@@ -406,10 +418,10 @@ def test_phases_follow_a_source_from_the_administrator_to_done():
 
 
 def test_the_request_phase_is_the_earliest_part_at_its_stage():
-    a = assess([item(), item(item_id="i2", source_system_id="s2", source_name="ZOOMINFO", run_id="run2")],
+    a = assess([item(run_id="run1"), item(item_id="i2", source_system_id="s2", source_name="ZOOMINFO", run_id="run2")],
                sources={"s1": HEALTHY, "s2": {**HEALTHY, "source_system_id": "s2"}},
-               runs={"run2": run("PROFILING_RUNNING", run_id="run2", source_system_id="s2")})
-    # both are in DESIGN: one onboarded and waiting for its run, one being profiled
+               runs={"run1": run("LANDING_COMPLETE"), "run2": run("PROFILING_RUNNING", run_id="run2", source_system_id="s2")})
+    # both are in DESIGN: one onboarded and waiting for the designer, one being profiled
     assert a["stage"] == "DESIGN" and a["phase"] == "ONBOARDED"
     assert a["items"]["i2"]["phase"] == "DESIGN"
 
@@ -418,7 +430,9 @@ def test_phases_of_a_domain_still_to_design_a_product_and_a_closed_request():
     unapproved = {**DOMAIN, "approved_version": None}
     assert assess([], domain=unapproved)["phase"] == "DESIGN"
     # the source is onboarded while the designer still models the domain: the earlier phase shows
-    assert assess([item()], domain=unapproved)["phase"] == "ONBOARDED"
+    assert assess([item(run_id="run1")], runs={"run1": run("LANDING_COMPLETE")}, domain=unapproved)["phase"] == "ONBOARDED"
+    # a source still with the administrator holds the request at Enable
+    assert assess([item()], domain=unapproved)["phase"] == "ENABLE"
     assert assess([], domain=None, domain_id=None, proposed_domain="LEASE")["phase"] == "DOMAIN"
     product = assess([item(source_system_id=None, source_name="Gold run: pipeline")], request_type="PRODUCT")
     assert product["stage"] == "BUILD" and product["phase"] == "READY"
@@ -440,11 +454,16 @@ def test_milestones_mark_a_source_onboarded_and_a_design_stored():
     # a source last seen with the administrator and now already building: onboarded (its design was never seen open)
     both = rq.milestones({"status": "UNREACHABLE"}, {"stage": "BUILD", "status": "BUILD"})
     assert [k for k, _ in both] == ["SOURCE_ONBOARDED"]
-    assert [k for k, _ in rq.milestones({"status": "NO_RUN"}, {"stage": "REVIEW", "status": "REVIEW"})] == ["DESIGN_STORED"]
+    # a run started for a registered source: onboarded (and, seen only once it is in review, its design stored)
+    assert [k for k, _ in rq.milestones({"status": "NO_RUN"}, {"stage": "DESIGN", "status": "DESIGN"})] == ["SOURCE_ONBOARDED"]
+    assert [k for k, _ in rq.milestones({"status": "NO_RUN"}, {"stage": "REVIEW", "status": "REVIEW"})] == ["SOURCE_ONBOARDED", "DESIGN_STORED"]
+    # a data product's Gold run earns neither
+    assert rq.milestones({"status": "NO_RUN"}, {"stage": "BUILD", "status": "BUILD"}, product=True) == []
 
 
 def test_no_milestone_while_still_with_the_administrator_or_when_removed_or_first_seen():
     assert rq.milestones({"status": "MISSING"}, {"stage": "ENABLE", "status": "NOT_LANDED"}) == []
     assert rq.milestones({"status": "MISSING"}, {"stage": "DONE", "status": "REMOVED"}) == []
     assert rq.milestones({"status": None}, {"stage": "DESIGN", "status": "NO_RUN"}) == []
+    assert rq.milestones({"status": "MISSING"}, {"stage": "ENABLE", "status": "NO_RUN"}) == []
     assert rq.milestones({"status": "BUILD"}, {"stage": "REVIEW", "status": "REVIEW"}) == []

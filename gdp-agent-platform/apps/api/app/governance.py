@@ -28,7 +28,7 @@ from pydantic import BaseModel, Field
 from app.db import AUTH_MODE, Db, dev_db, lookup_session
 from services.common.platform_schema import PLATFORM_SCHEMA
 from services.governance.policy import (
-    ADDED_PRIVILEGES, ALL, DEFAULT_FOUR_EYES, DEFAULT_POLICIES, PRIVILEGES, SYSTEM_ROLES, SYSTEM_VERSION, can_approve, carries_secret, creates_cycle,
+    ADDED_PRIVILEGES, ALL, MOVED_PRIVILEGES, DEFAULT_FOUR_EYES, DEFAULT_POLICIES, PRIVILEGES, SYSTEM_ROLES, SYSTEM_VERSION, can_approve, carries_secret, creates_cycle,
     decide, effective_privileges, no_queue, privilege_for, read_only, store_policy, store_queue, summarize,
 )
 
@@ -142,6 +142,14 @@ def bootstrap(db: Db) -> None:
                     for p in privs:
                         if p in spec["privileges"]:
                             _merge(db, "ROLE_PRIVILEGE", {"ROLE_NAME": name, "PRIVILEGE": p})
+            # privileges a system role gave up to another (onboarding sources became the platform administrator's)
+            for version, moves in sorted(MOVED_PRIVILEGES.items()):
+                if version <= stored:
+                    continue
+                for priv, frm, to in moves:
+                    db.execute("DELETE FROM CORE.ROLE_PRIVILEGE WHERE ROLE_NAME = %s AND PRIVILEGE = %s", (frm, priv))
+                    _merge(db, "ROLE_PRIVILEGE", {"ROLE_NAME": to, "PRIVILEGE": priv})
+                    _event(db, "PRIVILEGE_MOVED", "BOOTSTRAP", {"privilege": priv, "from": frm, "to": to, "version": version})
             db.execute("""MERGE INTO CORE.SETTING T USING (SELECT 'SYSTEM_VERSION' AS K) S ON T.SETTING_KEY = S.K
                           WHEN MATCHED THEN UPDATE SET SETTING_VALUE = PARSE_JSON(%s)
                           WHEN NOT MATCHED THEN INSERT (SETTING_KEY, SETTING_VALUE) VALUES (S.K, PARSE_JSON(%s))""",

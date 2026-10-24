@@ -243,6 +243,15 @@ CREATE OR REPLACE PROCEDURE {{database}}.{{schema}}.VALIDATE_DBT(RUN_ID VARCHAR)
   COMMENT = 'Deterministic validation plus optional dbt compile WRITEBACK=FALSE'
   EXECUTE AS OWNER;
 
+-- the code standards agent alone on a run's current generation: reports, records its tool call and cost, moves nothing
+CREATE OR REPLACE PROCEDURE {{database}}.{{schema}}.REVIEW_STANDARDS(RUN_ID VARCHAR)
+  RETURNS VARIANT LANGUAGE PYTHON RUNTIME_VERSION = '3.11'
+  PACKAGES = ('snowflake-snowpark-python')
+  IMPORTS = ('{{services_import}}')
+  HANDLER = 'services.validation.procedures.review_standards'
+  COMMENT = 'Code standards agent: review the generated dbt project against the written standards'
+  EXECUTE AS OWNER;
+
 GRANT USAGE ON PROCEDURE {{database}}.{{schema}}.RUN_PROFILING(VARCHAR) TO DATABASE ROLE {{database}}.DATA_ENGINEER;
 GRANT USAGE ON PROCEDURE {{database}}.{{schema}}.RUN_PROFILING(VARCHAR) TO DATABASE ROLE {{database}}.SERVICE_AGENT;
 GRANT USAGE ON PROCEDURE {{database}}.{{schema}}.RUN_PROFILING(VARCHAR, VARCHAR) TO DATABASE ROLE {{database}}.DATA_ENGINEER;
@@ -302,6 +311,8 @@ GRANT USAGE ON PROCEDURE {{database}}.{{schema}}.GENERATE_DBT(VARCHAR, VARCHAR) 
 GRANT USAGE ON PROCEDURE {{database}}.{{schema}}.GENERATE_DBT(VARCHAR, VARCHAR) TO DATABASE ROLE {{database}}.SERVICE_AGENT;
 GRANT USAGE ON PROCEDURE {{database}}.{{schema}}.VALIDATE_DBT(VARCHAR) TO DATABASE ROLE {{database}}.DATA_ENGINEER;
 GRANT USAGE ON PROCEDURE {{database}}.{{schema}}.VALIDATE_DBT(VARCHAR) TO DATABASE ROLE {{database}}.SERVICE_AGENT;
+GRANT USAGE ON PROCEDURE {{database}}.{{schema}}.REVIEW_STANDARDS(VARCHAR) TO DATABASE ROLE {{database}}.DATA_ENGINEER;
+GRANT USAGE ON PROCEDURE {{database}}.{{schema}}.REVIEW_STANDARDS(VARCHAR) TO DATABASE ROLE {{database}}.SERVICE_AGENT;
 
 -- Data Quality Store (V037): scan one table's ACTIVE catalog checks. Called by the per-table Snowflake tasks the DQ
 -- Store schedules create (CORE.DQ_<hash>). Owner's rights: the owner role needs SELECT on scheduled tables.

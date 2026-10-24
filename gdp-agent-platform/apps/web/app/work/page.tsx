@@ -6,8 +6,6 @@ import {
 } from "lucide-react";
 import { api, whoami } from "@/lib/api";
 import { can } from "@/lib/types";
-import type { ValueSummary } from "@/lib/value-types";
-import { ValueTile } from "@/components/value/value-tile";
 import { loadMyWork } from "@/lib/my-work";
 import { ago, runHref } from "@/lib/run-insights";
 import { stateLabel } from "@/lib/run-labels";
@@ -72,10 +70,9 @@ function Tile({ href, label, value, hint, tone }: { href: string; label: string;
  *  proposals, tickets, incidents and pull requests that are theirs. The Command Center stays the estate-wide view. */
 export default async function MyWorkPage() {
   const me = await whoami();
-  const [w, value] = await Promise.all([
-    loadMyWork(me),
-    can(me, "AUDIT.VIEW") ? api<ValueSummary>("/api/value/summary").catch(() => null) : Promise.resolve(null),
-  ]);
+  const w = await loadMyWork(me);
+  // onboarding a source is the Data OS Administrator's; everyone else files a request on Intake
+  const mayOnboard = can(me, "SOURCE.CONNECT");
   const user = (me?.user ?? "").split(/[._@ ]/)[0];
   const name = user ? user.charAt(0) + user.slice(1).toLowerCase() : "";
   const approvals = w.gates.length + w.requests.length + w.fixApprovals.length + w.permanentFixes.length;
@@ -108,7 +105,9 @@ export default async function MyWorkPage() {
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <Link href="/dashboard" className={buttonVariants({ variant: "outline" })}><LayoutDashboard className="h-4 w-4" />Command Center</Link>
-          <Link href="/dashboard/onboarding?type=source" className={buttonVariants()}><PlugZap className="h-4 w-4" />Onboard source</Link>
+          {mayOnboard
+            ? <Link href="/dashboard/onboarding?type=source" className={buttonVariants()}><PlugZap className="h-4 w-4" />Onboard source</Link>
+            : <Link href="/os/intake" className={buttonVariants()}><PlugZap className="h-4 w-4" />Request a source</Link>}
         </div>
       </div>
 
@@ -121,8 +120,6 @@ export default async function MyWorkPage() {
         <Tile href="#knowledge" label="Questions and proposals" value={knowledge} tone="knowledge"
               hint={`${plural(w.questions.length, "question")} · ${plural(w.inbox.length, "proposal")}`} />
       </div>
-
-      {value && <ValueTile data={value} />}
 
       <div className="grid gap-6 xl:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]">
         <div className="min-w-0 space-y-6">
@@ -179,7 +176,9 @@ export default async function MyWorkPage() {
           </Section>
 
           <Section id="runs" title="Your runs the agent is working on" icon={Bot} tone="agent" count={w.running.length} href="/runs?status=running" hrefLabel="All runs"
-                   empty={<span>You have no runs in flight. <Link href="/dashboard/onboarding?type=source" className="font-medium text-primary hover:underline">Onboard a source</Link> to start one.</span>}>
+                   empty={<span>You have no runs in flight. {mayOnboard
+                     ? <><Link href="/dashboard/onboarding?type=source" className="font-medium text-primary hover:underline">Onboard a source</Link> to start one.</>
+                     : <><Link href="/os/intake" className="font-medium text-primary hover:underline">Request a source</Link> and the Data OS Administrator onboards it.</>}</span>}>
             {w.running.length > 0 && (
               <ul className="divide-y">
                 {w.running.map((r) => {

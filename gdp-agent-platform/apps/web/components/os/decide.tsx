@@ -2,12 +2,13 @@
 
 import { useRouter } from "next/navigation";
 import { useState, useTransition, type ReactNode } from "react";
-import { BadgeCheck, Check, GitPullRequest, Loader2, RefreshCw, Send, ShieldCheck, Undo2, X } from "lucide-react";
+import { BadgeCheck, Check, GitPullRequest, Loader2, RefreshCw, ScanSearch, Send, ShieldCheck, Undo2, X } from "lucide-react";
 import { approveStage } from "@/app/runs/[runId]/actions";
 import { signOffQa } from "@/app/runs/[runId]/qa/qa-actions";
 import { publishDbt, validateDbt } from "@/app/runs/[runId]/pipeline-actions";
 import { moveLabel } from "@/app/skills/actions";
 import { decideInbox, verifyKnowledge } from "@/app/knowledge/actions";
+import { reviewStandards, type StandardsReview } from "@/app/os/review/actions";
 import { stateLabel } from "@/lib/run-labels";
 import { cn } from "@/lib/utils";
 
@@ -167,6 +168,65 @@ export function PublishPr({ runId, mode, previewing, repo, base, cut }: {
       </div>
       {previewing && <PreviewNote />}
       <OutcomeLine outcome={outcome} />
+    </div>
+  );
+}
+
+/* the code standards agent alone: reviews the current generation and shows its verdict per area, without recording a
+   validation or moving the run (Validate again puts the same review into the gate) */
+
+const AREA_LABEL: Record<string, string> = {
+  STANDARDS_NAMING: "Naming and layering", STANDARDS_TYPES: "Casts and data types", STANDARDS_KEYS: "Keys, joins and dedup",
+  STANDARDS_TESTS: "Tests and data quality", STANDARDS_DOCS: "Documentation and sources", STANDARDS_SQL: "SQL style and safety",
+  STANDARDS: "Standards review",
+};
+
+export function ReviewStandards({ runId, mode, previewing }: { runId: string; mode: Mode; previewing: boolean }) {
+  const [pending, start] = useTransition();
+  const [result, setResult] = useState<StandardsReview | null>(null);
+  const [outcome, setOutcome] = useState<Outcome>(null);
+  const go = () => start(async () => {
+    setOutcome(null); setResult(null);
+    const r = await reviewStandards(runId);
+    if (!r.ok) { setOutcome(r.error.startsWith("Sent to ") ? { tone: "routed", text: r.error } : { tone: "fail", text: r.error }); return; }
+    setResult(r.data);
+  });
+  return (
+    <div data-testid="review-standards">
+      <Btn variant="default" disabled={pending || previewing} onClick={go} testId="review-standards-button"
+           title="The code standards agent reviews the current generated code against the written standards. Nothing is recorded as a validation.">
+        {pending ? <Loader2 className="h-3.5 w-3.5 os-spin" /> : <ScanSearch className="h-3.5 w-3.5" />}
+        {pending ? "Reviewing" : mode === "do" ? "Review standards" : "Request a standards review"}
+      </Btn>
+      {previewing && <PreviewNote />}
+      <OutcomeLine outcome={outcome} />
+      {result && (
+        <div className="mt-3 rounded-lg border border-[var(--os-line)] p-3 text-[12px]" role="status">
+          <div className="flex flex-wrap items-baseline justify-between gap-2">
+            <b>Standards score {result.score === null ? "not available" : `${Math.round(result.score)}%`}</b>
+            <span className="os-faint text-[10.5px]">generation v{result.generation_version ?? "?"} · {result.reviewed.length} files{result.left_out.length ? ` (${result.left_out.length} over budget)` : ""}{result.block ? "" : " · advisory"}</span>
+          </div>
+          {result.summary && <p className="os-muted mt-1">{result.summary}</p>}
+          <ul className="mt-2 grid gap-1.5">
+            {result.checks.map((c) => {
+              const top = c.findings.filter((f) => f.severity !== "INFO");
+              return (
+                <li key={c.validation_type}>
+                  <span className={cn("os-tag mr-1.5", c.status === "FAILED" ? "os-tag-red" : c.status === "SKIPPED" ? "" : c.warning_count ? "os-tag-amber" : "os-tag-green")}>
+                    {c.status === "FAILED" ? `${c.error_count} error${c.error_count === 1 ? "" : "s"}` : c.status === "SKIPPED" ? "Skipped" : c.warning_count ? `${c.warning_count} warning${c.warning_count === 1 ? "" : "s"}` : "Pass"}
+                  </span>
+                  <b>{AREA_LABEL[c.validation_type] ?? c.validation_type}</b>
+                  {top.slice(0, 3).map((f, i) => (
+                    <div key={i} className="os-muted ml-1 mt-0.5 text-[11px]">{f.file ? <code className="text-[10.5px]">{f.file}</code> : null} {f.message}{f.rule ? <span className="os-faint"> ({f.rule})</span> : null}</div>
+                  ))}
+                  {top.length > 3 && <div className="os-faint ml-1 text-[10.5px]">+{top.length - 3} more</div>}
+                </li>
+              );
+            })}
+          </ul>
+          <p className="os-faint mt-2 text-[10.5px]">Judged by {result.skills.join(", ") || "the standards agent"}. Validate again to put this review into the gate.</p>
+        </div>
+      )}
     </div>
   );
 }

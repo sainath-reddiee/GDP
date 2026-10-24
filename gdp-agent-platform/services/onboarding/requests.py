@@ -32,9 +32,9 @@ RUN_STATES: Dict[str, tuple] = {
     "CREATED": ("ENABLE", "SOURCE.CONNECT", f"{_ENABLE}: choose and register the source for the run"),
     "SOURCE_REGISTERED": ("ENABLE", "SOURCE.CONNECT", f"{_ENABLE}: validate access to the source"),
     "ACCESS_VALIDATION": ("ENABLE", "SOURCE.CONNECT", f"{_ENABLE}: source access is being checked"),
-    "ACCESS_APPROVED": ("ENABLE", "PROFILE.RUN", f"{_ENABLE}: land the tables"),
-    "LANDING_PENDING": ("ENABLE", "PROFILE.RUN", f"{_ENABLE}: land the tables"),
-    "LANDING_RUNNING": ("ENABLE", "PROFILE.RUN", f"{_ENABLE}: tables are landing"),
+    "ACCESS_APPROVED": ("ENABLE", "SOURCE.CONNECT", f"{_ENABLE}: land the tables"),
+    "LANDING_PENDING": ("ENABLE", "SOURCE.CONNECT", f"{_ENABLE}: land the tables"),
+    "LANDING_RUNNING": ("ENABLE", "SOURCE.CONNECT", f"{_ENABLE}: tables are landing"),
     "LANDING_COMPLETE": ("DESIGN", "RUN.OPERATE", f"{_DESIGN}: profile the landed tables"),
     "PROFILING_PENDING": ("DESIGN", "RUN.OPERATE", f"{_DESIGN}: profile the landed tables"),
     "PROFILING_RUNNING": ("DESIGN", "RUN.OPERATE", f"{_DESIGN}: profiling is running"),
@@ -61,13 +61,17 @@ DONE_STATES = {"DBT_APPROVED", "COMPLETED", "DEPLOYMENT_PENDING", "DEPLOYED", "P
 _ORDER = list(RUN_STATES) + sorted(DONE_STATES)
 
 # what a request (or one of its sources) is doing, in the words its owner uses; the stage says whose turn it is, the
-# phase what has happened: the domain is awaited, the admin is onboarding the source, the source is onboarded and
-# waits for the designer's run, the designer profiles and models, the approved design is stored (profiles, model,
-# mapping and checks in the stores) and waits for the build, the build runs, validation flagged it, review, done
+# phase what has happened: the domain is awaited, the admin is onboarding the source (registering, reaching and landing
+# it, and starting its run in the domain: onboarding is the administrator's alone), the source is onboarded and its run
+# waits for the designer, the designer profiles and models, the approved design is stored (profiles, model, mapping and
+# checks in the stores) and waits for the build, the build runs, validation flagged it, review, done
 PHASES = ("DOMAIN", "ENABLE", "ONBOARDED", "READY", "DESIGN", "STORED", "BUILD", "FLAGGED", "REVIEW", "DONE", "CLOSED")
 _STORED_STATES = {"SODA_APPROVED", "DBT_PENDING"}
-# item statuses that mean the Data OS Administrator still has the source; leaving them is "source onboarded"
-ENABLE_STATUSES = {"MISSING", "UNREACHABLE", "NOT_LANDED"}
+# a run the administrator started, landed and waiting for the designer to profile it
+_ONBOARDED_STATES = {"LANDING_COMPLETE", "PROFILING_PENDING"}
+# item statuses that mean the Data OS Administrator still has the source (NO_RUN: registered and landed, its run in
+# the domain not started yet); leaving them is "source onboarded"
+ENABLE_STATUSES = {"MISSING", "UNREACHABLE", "NOT_LANDED", "NO_RUN"}
 
 
 def phase(part: Dict[str, Any], product: bool = False) -> str:
@@ -77,7 +81,9 @@ def phase(part: Dict[str, Any], product: bool = False) -> str:
     if stage in ("DOMAIN", "ENABLE", "REVIEW", "DONE"):
         return stage
     if status == "NO_RUN":
-        return "READY" if product else "ONBOARDED"
+        return "READY" if product else "ENABLE"
+    if stage == "DESIGN" and not product and state in _ONBOARDED_STATES:
+        return "ONBOARDED"
     if stage == "BUILD":
         return "FLAGGED" if state == "VALIDATION_FAILED" else "STORED" if state in _STORED_STATES else "BUILD"
     return "DESIGN"
@@ -172,20 +178,25 @@ def item_status(item: Dict[str, Any], request: Dict[str, Any], sources: Dict[str
                     "waits": [_wait("SOURCE.CONNECT", f"{_ENABLE}: restore access to {name}", iid)], "attention": None}
         if health == "NOT_LANDED":
             return {"stage": "ENABLE", "status": "NOT_LANDED", "detail": f"{name} is registered but not landed in Snowflake",
-                    "waits": [_wait("PROFILE.RUN", f"{_ENABLE}: land {name}", iid)], "attention": None}
+                    "waits": [_wait("SOURCE.CONNECT", f"{_ENABLE}: land {name}", iid)], "attention": None}
     rid = item.get("run_id")
+    # starting the run that onboards a source into the domain is part of onboarding: the administrator's (the
+    # onboarding wizard is theirs); a data product's Gold run is the Forward Engineering Lead's
+    restart = (_wait("RUN.CREATE", f"{_BUILD}: start a new Gold run, or link another", iid) if product
+               else _wait("SOURCE.CONNECT", f"{_ENABLE}: start a new run for {name}, or link another", iid))
     if not rid:
-        stage = "BUILD" if product else "DESIGN"
-        what = "start the Gold run for this product" if product else f"start the run that profiles and maps {name}"
-        who = _BUILD if product else _DESIGN
-        return {"stage": stage, "status": "NO_RUN", "detail": f"Ready; no run yet ({what})",
-                "waits": [_wait("RUN.CREATE", f"{who}: {what}", iid)], "attention": None}
+        if product:
+            return {"stage": "BUILD", "status": "NO_RUN", "detail": "Ready; no run yet (start the Gold run for this product)",
+                    "waits": [_wait("RUN.CREATE", f"{_BUILD}: start the Gold run for this product", iid)], "attention": None}
+        return {"stage": "ENABLE", "status": "NO_RUN", "detail": f"Registered and landed; its run in the domain is not started yet",
+                "waits": [_wait("SOURCE.CONNECT", f"{_ENABLE}: start the run that onboards {name} into the domain", iid)],
+                "attention": None}
     run = runs.get(rid)
     if not run:
         return {"stage": "DESIGN", "status": "ATTENTION", "detail": "The linked run no longer exists",
-                "waits": [_wait("RUN.CREATE", "Start a new run for this source, or link another", iid)],
-                "attention": f"The run linked for {name} no longer exists"}
+                "waits": [restart], "attention": f"The run linked for {name} no longer exists"}
     st = run_status(run, children.get(rid, ()))
+    st = {**st, "waits": [restart if w["privilege"] == "RUN.CREATE" else w for w in st["waits"]]}
     if request.get("domain_id") and run.get("domain_id") and run["domain_id"] != request["domain_id"]:
         st = {**st, "status": "ATTENTION", "attention": f"The run for {name} belongs to another domain"}
     return {**st, "waits": [{**w, "item_id": iid} for w in st["waits"]]}
@@ -243,17 +254,20 @@ def assess(request: Dict[str, Any], items: List[Dict[str, Any]], domain: Optiona
             "phase": shown}
 
 
-def milestones(item: Dict[str, Any], now: Dict[str, Any]) -> List[tuple]:
+def milestones(item: Dict[str, Any], now: Dict[str, Any], product: bool = False) -> List[tuple]:
     """The events an item's new status earns, as (kind, note): SOURCE_ONBOARDED when a source the administrator had
-    (missing, unreachable or not landed) is registered, reachable and landed, so the designer can start; DESIGN_STORED
-    when its run's design is approved and the build can start. `item` is the stored row (its last status), `now` the
+    (missing, unreachable, not landed or its run not started) is registered, reachable, landed and its run started, so
+    the designer can start; DESIGN_STORED when its run's design is approved and the build can start. A data product's
+    Gold run earns neither (no source is onboarded and the design is the Gold run's own). `item` is the stored row (its last status), `now` the
     assessment. A status seen for the first time (no stored status) earns nothing: attaching an onboarded source is
     its own event (SOURCE_ADDED)."""
     before, after = _up(item.get("status")), _up(now.get("status"))
     name = item.get("source_name") or "the source"
     out = []
+    if product:
+        return out
     if before in ENABLE_STATUSES and now.get("stage") != "ENABLE" and after != "REMOVED":
-        out.append(("SOURCE_ONBOARDED", f"{name} is onboarded: registered, reachable and landed. {_DESIGN}: profile and model it"))
+        out.append(("SOURCE_ONBOARDED", f"{name} is onboarded: registered, reachable, landed and its run started. {_DESIGN}: profile and model it"))
     if before in ("NO_RUN", "DESIGN") and now.get("stage") in ("BUILD", "REVIEW", "DONE") and after != "REMOVED":
         out.append(("DESIGN_STORED", f"The design for {name} is approved: its profiles, model, mapping and checks are in the "
                                      f"stores for reuse. {_BUILD}: build it"))

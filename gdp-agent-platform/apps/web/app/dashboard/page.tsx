@@ -16,8 +16,6 @@ import { fmt, Meter, PipelineTable, RibbonMetric, Sparkline } from "./command-ce
 import { StoreCards } from "@/components/hub/store-cards";
 import { CountUp } from "@/components/motion/count-up";
 import { TicketsCard, type TicketsCardData } from "./tickets-card";
-import { ValueTile } from "@/components/value/value-tile";
-import type { ValueSummary } from "@/lib/value-types";
 import { FailingCheckList, type FailingChecks } from "@/components/quality/failing-checks";
 
 /** Below this many finished runs the ribbon shows "n of m finished succeeded" rather than a percentage. */
@@ -47,12 +45,11 @@ export default async function Dashboard() {
   const runQs = (extra: string) => `/api/runs?${extra}${domainId ? `&domain_id=${domainId}` : ""}`;
   // the table lists the 8 most recently updated runs in flight; every count comes from the overview (exact, not a
   // list length) so the greeting, the chips, the tiles and the table header agree
-  const [active, audit, incidents, jira, value, failingChecks] = await Promise.all([
+  const [active, audit, incidents, jira, failingChecks] = await Promise.all([
     api<{ runs: RunSummary[]; total?: number }>(runQs("status=running&limit=8&sort=updated")).catch(() => ({ runs: [] as RunSummary[], total: undefined })),
     api<{ events: AuditEvent[] }>("/api/audit?limit=6").catch(() => ({ events: [] as AuditEvent[] })),
     can(me, "OPS.VIEW") ? api<IncidentSummary>("/api/ops/incidents/summary").catch(() => null) : Promise.resolve(null),
     can(me, "JIRA.READ") || can(me, "CASE.WORK") ? ticketsCard() : Promise.resolve(null),
-    can(me, "AUDIT.VIEW") ? api<ValueSummary>("/api/value/summary").catch(() => null) : Promise.resolve(null),
     api<FailingChecks>(`/api/dq/failing?limit=6${domainId ? `&domain=${encodeURIComponent(domainId)}` : ""}`).catch(() => null),
   ]);
   const o = overview;
@@ -86,7 +83,7 @@ export default async function Dashboard() {
                   description={`${inFlightCount} run${inFlightCount === 1 ? "" : "s"} in flight${reviewCount ? `, ${reviewCount} at a review step` : ", none at a review step"}. Your data estate at a glance.`}
                   actions={<>
                     <Link href="/runs" className={buttonVariants({ variant: "outline" })}>All runs</Link>
-                    <Link href="/dashboard/onboarding?type=source" className={buttonVariants()}><PlugZap className="h-4 w-4" /> Onboard source</Link>
+                    {can(me, "SOURCE.CONNECT") && <Link href="/dashboard/onboarding?type=source" className={buttonVariants()}><PlugZap className="h-4 w-4" /> Onboard source</Link>}
                   </>} />
 
       {/* hero ribbon */}
@@ -123,8 +120,6 @@ export default async function Dashboard() {
         </div>
       </section>
 
-      {value && <ValueTile data={value} />}
-
       {attention.length > 0 && (
         <div className="flex flex-wrap items-center gap-2" data-testid="attention">
           <span className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-[0.1em] text-muted-foreground"><AlertTriangle className="h-3.5 w-3.5" /> Attention</span>
@@ -137,7 +132,7 @@ export default async function Dashboard() {
       )}
 
       {/* six asset stores */}
-      <StoreCards o={o} />
+      <StoreCards o={o} onboard={can(me, "SOURCE.CONNECT")} />
 
       {jira && <TicketsCard data={jira} />}
 

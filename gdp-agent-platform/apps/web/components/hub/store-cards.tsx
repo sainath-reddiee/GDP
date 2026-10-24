@@ -8,7 +8,7 @@ const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : word.e
 
 /** The six asset stores as cards (what each holds, what needs action, one task to start), from /api/hub/overview.
  * Shown on the Command Center and the Store hub; `domain` (an explicit ?domain=) is carried onto every link. */
-export function StoreCards({ o, domain }: { o: Overview | null; domain?: string }) {
+export function StoreCards({ o, domain, onboard = false }: { o: Overview | null; domain?: string; onboard?: boolean }) {
   const idle = o?.sources ? o.sources.external - o.sources.external_active : 0;
   const h = (href: string) => (domain ? `${href}${href.includes("?") ? "&" : "?"}domain=${encodeURIComponent(domain)}` : href);
   return (
@@ -16,7 +16,7 @@ export function StoreCards({ o, domain }: { o: Overview | null; domain?: string 
           <StoreCard testId="store-source" title="Source Store" subtitle="Shares, databases, files and external pipelines" icon={Database} tone="indigo" missing={!o?.sources}
                      metrics={[{ label: "Shares", value: <CountUp value={o?.sources?.shares} /> }, { label: "Databases", value: <CountUp value={o?.sources?.databases} /> },
                                { label: "Files, other", value: <CountUp value={o?.sources?.other} /> }, { label: "Pipelines", value: <CountUp value={o?.sources?.external} /> }]}
-                     href={h("/dashboard/sources")} action={{ label: "Onboard source", href: "/dashboard/onboarding?type=source", icon: PlugZap }}
+                     href={h("/dashboard/sources")} action={onboard ? { label: "Onboard source", href: "/dashboard/onboarding?type=source", icon: PlugZap } : { label: "Request a source", href: "/os/intake", icon: PlugZap }}
                      alert={idle ? { text: `${plural(idle, "external pipeline")} not active yet`, tone: "amber" } : null} />
           <StoreCard testId="store-profiling" title="Profiling Store" subtitle="Distributions, nulls, cardinality and drift" icon={BarChart3} tone="sky" missing={!o?.profiling}
                      metrics={[{ label: "Tables profiled", value: <CountUp value={o?.profiling?.tables} /> },

@@ -5,6 +5,8 @@ import { PERSONAS } from "@/lib/os/personas";
 import { SCREENS, canSee, type ScreenKey } from "@/lib/os/access";
 import { osAccess } from "@/lib/os/session";
 import { Card, PageHeader, Tag } from "@/components/os/ui";
+import { DemoPaths } from "@/components/os/demo-paths";
+import { loadRequests, loadRuns } from "@/lib/os/data";
 
 export const dynamic = "force-dynamic";
 export const metadata = { title: "How it works" };
@@ -14,8 +16,8 @@ const TOUR: { key: ScreenKey; href: string; title: string; what: string }[] = [
   { key: "intake", href: "/os/intake", title: "Intake", what: "Link a domain and its sources; see what is reused and where the request routes." },
   { key: "enable", href: "/os/enable", title: "Enable", what: "Source readiness and the config-driven ingestion framework." },
   { key: "design", href: "/os/design", title: "Design", what: "The domain model, mapping proposals with confidence, open questions and the contract." },
-  { key: "build", href: "/os/build", title: "Build", what: "One run end to end: lifecycle, agents, generated artifacts, pinned skills and gates." },
-  { key: "review", href: "/os/review", title: "Review", what: "The independent validation gate and every human gate across domains." },
+  { key: "build", href: "/os/build", title: "Build", what: "One run end to end: lifecycle, agents, generated artifacts, pinned skills and gates. Run history lists every run." },
+  { key: "review", href: "/os/review", title: "Review", what: "The validation gate (review and code standards agents, minimum score) and every human gate across domains." },
   { key: "skills", href: "/os/skills", title: "Skills", what: "Versioned skills, real version diffs, tests and controlled recovery." },
   { key: "release", href: "/os/release", title: "Release", what: "Pull request, promotion stages, QA and UAT signoff and what the run taught memory." },
   { key: "knowledge", href: "/os/knowledge", title: "Knowledge", what: "Enterprise Memory with provenance, reuse by runs and the curation lifecycle." },
@@ -26,6 +28,7 @@ const TOUR: { key: ScreenKey; href: string; title: string; what: string }[] = [
  *  access list that decides who sees what (lib/os/access), marked for the person reading it. */
 export default async function Help() {
   const access = await osAccess();
+  const [runs, requests] = await Promise.all([loadRuns("sort=updated&limit=100"), loadRequests("all", "OPEN")]);
   const mine = new Set(access.personas.map((p) => p.id));
   return (
     <>
@@ -72,6 +75,8 @@ export default async function Help() {
           </div>
         </Card>
       </div>
+
+      <DemoPaths runs={runs.data.runs} requests={requests.data.requests} />
 
       <Card className="mt-4" title="Access list" subtitle="Who each screen is open to. Actions inside a screen need their own privilege; without it, people who may raise change requests send the action to the approver role." pad={false}>
         <table className="os-table">

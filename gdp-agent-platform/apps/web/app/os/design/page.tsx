@@ -27,7 +27,7 @@ export default async function DesignerStudio({ searchParams }: { searchParams: {
   const designable = domains.data.filter((d) => d.target_tables > 0);
   const domain = designable.find((d) => d.domain_id === searchParams.domain) ?? designable.find((d) => d.domain_name === "COMPANY") ?? designable[0];
   if (!domain) {
-    return (<><PageHeader eyebrow={`${persona.label} / Design studio`} title="Profile, model and map" /><SourceError what="Domains" error={domains.error} /><Empty icon={Boxes} title="No domain model yet" action={<Action access={access} id="startOnboarding" privilege="DOMAIN.EDIT" label="Onboard a domain" href="/dashboard/onboarding?type=domain" variant="primary" />} /></>);
+    return (<><PageHeader eyebrow={`${persona.label} / Design studio`} title="Profile, model and map" /><SourceError what="Domains" error={domains.error} /><Empty icon={Boxes} title="No domain model yet" action={<Action access={access} id="startOnboarding" privilege="DOMAIN.EDIT" label="Onboard a domain" href="/os/design/new-domain" variant="primary" />} /></>);
   }
   const domainRuns = runs.data.runs.filter((r) => !r.is_archived && r.domain_name === domain.domain_name);
   // the run whose mapping is shown: the newest mapped one, preferring the multi-table parent (its proposals cover every table)

@@ -14,7 +14,6 @@ from services.common.standard import GOLD, PIPELINE_PRESETS, PRESETS
 from services.ops.datadog import DEFAULT_SETTING as DATADOG_DEFAULTS, validate_setting as validate_datadog
 from services.knowledge.scout import DEFAULTS as SCOUT_DEFAULTS, validate as validate_scout
 from services.source.snaplogic_config import DEFAULT_SETTING as SNAPLOGIC_DEFAULTS, validate_setting as validate_snaplogic
-from services.value.baselines import DEFAULTS as VALUE_DEFAULTS, validate as validate_baselines
 
 KNOWN_MODELS = [
     "claude-sonnet-4-5", "claude-4-sonnet", "claude-3-7-sonnet", "claude-4-opus", "openai-gpt-4.1",
@@ -25,11 +24,11 @@ CATALOG_KEYS = ("hidden_target_tables", "hidden_target_databases", "hidden_targe
                 "hidden_domain_names", "strip_tokens")
 SETTINGS = ("LLM_MODEL", "LLM_MODEL_BY_STAGE", "RATE_CARD", "CREDIT_PRICE_USD", "CREDITS_PER_MILLION_TOKENS",
             "CATALOG_DISPLAY", "MODELING_STANDARD.GDP", "MODELING_STANDARD.GENERIC",
-            "MODELING_STANDARD.GDP.GOLD", "MODELING_STANDARD.GENERIC.GOLD", "VALUE_BASELINES", "SKILL_SCOUT",
+            "MODELING_STANDARD.GDP.GOLD", "MODELING_STANDARD.GENERIC.GOLD", "SKILL_SCOUT",
             "SNAPLOGIC_SYNC", "DATADOG")
-# What the Admin page lists; CATALOG_DISPLAY is still read by the app but no longer edited there, the value
-# baselines have their own editor on the Value page, and the skill scout's on the Proposed skills page.
-ADMIN_SETTINGS = tuple(k for k in SETTINGS if k not in ("CATALOG_DISPLAY", "VALUE_BASELINES", "SKILL_SCOUT"))
+# What the Admin page lists; CATALOG_DISPLAY is still read by the app but no longer edited there, and the skill
+# scout has its own editor on the Proposed skills page.
+ADMIN_SETTINGS = tuple(k for k in SETTINGS if k not in ("CATALOG_DISPLAY", "SKILL_SCOUT"))
 DEFAULTS: Dict[str, Any] = {
     "LLM_MODEL": "claude-sonnet-4-5",
     "LLM_MODEL_BY_STAGE": {},
@@ -42,7 +41,6 @@ DEFAULTS: Dict[str, Any] = {
     "MODELING_STANDARD.GENERIC": {},
     "MODELING_STANDARD.GDP.GOLD": {},
     "MODELING_STANDARD.GENERIC.GOLD": {},
-    "VALUE_BASELINES": VALUE_DEFAULTS,
     "SKILL_SCOUT": SCOUT_DEFAULTS,
     # onboarding writes SnapLogic's config tables too (services/source/snaplogic_config); off until an admin turns it on
     "SNAPLOGIC_SYNC": SNAPLOGIC_DEFAULTS,
@@ -137,8 +135,6 @@ def validate(key: str, value: Any) -> Tuple[Any, List[str]]:
             out[str(model).strip()] = rate
         out.setdefault("default", 0.0)
         return out, problems
-    if key == "VALUE_BASELINES":
-        return validate_baselines(value)
     if key == "SKILL_SCOUT":
         return validate_scout(value)
     if key == "SNAPLOGIC_SYNC":

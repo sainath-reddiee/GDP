@@ -1,6 +1,6 @@
 import {
   Activity, Crown, BadgeCheck, BarChart3, BookOpen, Boxes, ClipboardCheck, Database, FileClock, FlaskConical, FolderGit2, GitCompareArrows, GitPullRequest,
-  Inbox, LayoutDashboard, ListChecks, Orbit, TrendingUp, Network, Rocket, Settings, ShieldCheck, Siren, Sparkles, SquareTerminal, Store, Ticket, Wrench, BookCheck, Hammer,
+  Inbox, LayoutDashboard, ListChecks, Orbit, Network, Rocket, Settings, ShieldCheck, Siren, Sparkles, SquareTerminal, Store, Ticket, Wrench, BookCheck, Hammer,
 } from "lucide-react";
 import type { NavCounts } from "@/app/bff/nav/route";
 
@@ -75,7 +75,6 @@ export const NAV_GROUPS: NavGroup[] = [
       // the persona-led experience (app/os), with its own shell
       { href: "/os", label: "Agentic Data OS", icon: Orbit },
       { href: "/dashboard/copilot", label: "Copilot", icon: Sparkles, privilege: "AI.USE" },
-      { href: "/value", label: "Value", icon: TrendingUp, privilege: "AUDIT.VIEW" },
     ],
   },
   {
@@ -83,7 +82,7 @@ export const NAV_GROUPS: NavGroup[] = [
     // they build, then the stores and the knowledge. Onboard is an ordinary item, styled like every other one.
     label: "Build",
     links: [
-      { href: "/dashboard/onboarding", label: "Onboard", icon: Rocket },
+      { href: "/dashboard/onboarding?type=source", label: "Onboard source", icon: Rocket, privilege: "SOURCE.CONNECT" },
       {
         href: "/runs", label: "Pipelines", icon: ListChecks, tabs: true,
         badge: (c) => c.review ? { value: c.review, tone: "bg-human text-white", title: `${c.review} waiting on review` }

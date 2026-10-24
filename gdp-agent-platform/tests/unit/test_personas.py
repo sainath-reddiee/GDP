@@ -172,3 +172,41 @@ def test_editing_a_bundle_moves_its_holders(client, monkeypatch):
     assert db.bundles["forward_lead"] == {"SKILL_OWNER", "CODE_REVIEWER"} and db.user_roles["BO"] == {"SKILL_OWNER", "CODE_REVIEWER"}
     assert c.put("/api/governance/personas/forward_lead", json={"roles": ["SUPER_ADMIN"]}).status_code == 422
     assert c.put("/api/governance/personas/ghost", json={"roles": ["SKILL_OWNER"]}).status_code == 404
+
+
+# ---------------------------------------------------------------- skills: who promotes a version (SKILL.RELEASE)
+
+def _persona_privileges(roles):
+    from services.governance.policy import SYSTEM_ROLES, effective_privileges
+
+    privileges = {n: s["privileges"] for n, s in SYSTEM_ROLES.items()}
+    grants = {n: s["inherits"] for n, s in SYSTEM_ROLES.items()}
+    return effective_privileges(roles, privileges, grants)[1]
+
+
+SKILL_POLICY = {"active": True, "requires_approval": True, "approver_role": "SKILL_OWNER", "four_eyes": False}
+
+
+def test_the_forward_engineering_lead_promotes_and_makes_candidates_directly():
+    from services.governance.policy import DEFAULT_POLICIES, decide, privilege_for
+
+    migration = (Path(__file__).resolve().parents[2] / "snowflake" / "database" / "migrations" / "V076__personas.sql").read_text()
+    assert "('forward_lead', 'DATA_ENGINEER'), ('forward_lead', 'SKILL_OWNER')" in migration
+    assert privilege_for("POST", "/api/skills/SODA_SKILL/labels/production")[0] == "SKILL.RELEASE"
+    assert privilege_for("POST", "/api/skills/SODA_SKILL/labels/candidate")[0] == "SKILL.EDIT"
+    assert DEFAULT_POLICIES["SKILL.RELEASE"] == "SKILL_OWNER"
+    lead = _persona_privileges(["DATA_ENGINEER", "SKILL_OWNER"])
+    # the lead is a skill owner: promoting is theirs, not a change request
+    assert decide("SKILL.RELEASE", lead, SKILL_POLICY) == ("ALLOW", "")
+    assert decide("SKILL.EDIT", lead, None) == ("ALLOW", "")
+
+
+def test_others_route_a_promotion_to_the_skill_owner_or_may_not_ask():
+    from services.governance.policy import decide
+
+    designer = _persona_privileges(["DATA_ENGINEER", "MODEL_APPROVER", "STTM_APPROVER", "DQ_APPROVER"])
+    assert decide("SKILL.RELEASE", designer, SKILL_POLICY) == ("REQUEST", "needs SKILL_OWNER approval")
+    developer = _persona_privileges(["CODE_REVIEWER"])
+    assert decide("SKILL.RELEASE", developer, SKILL_POLICY)[0] == "FORBID"
+    # four eyes on the policy: even the skill owner's own promotion goes to another owner
+    assert decide("SKILL.RELEASE", _persona_privileges(["DATA_ENGINEER", "SKILL_OWNER"]), {**SKILL_POLICY, "four_eyes": True})[0] == "REQUEST"

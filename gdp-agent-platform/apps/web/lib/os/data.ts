@@ -271,7 +271,7 @@ export function scoreOf(checks: ValidationCheck[]) {
   return { score: exact === null ? null : Math.round(exact), exact, passed, total, skipped, critical, warnings };
 }
 
-export type ValidationGate = { min_score: number; block_on_errors: boolean };
+export type ValidationGate = { min_score: number; block_on_errors: boolean; standards_review?: boolean; standards_block?: boolean };
 /** Only when the API does not say (services.common.rules DEFAULTS): the gate itself is a platform rule. */
 export const DEFAULT_GATE: ValidationGate = { min_score: 80, block_on_errors: true };
 

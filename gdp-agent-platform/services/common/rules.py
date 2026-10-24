@@ -41,6 +41,11 @@ DEFAULTS: Dict[str, Any] = {
     # reports an error; below it the run is VALIDATION_FAILED with the reason, to be improved and validated again
     "validation.min_score": 80.0,
     "validation.block_on_errors": True,
+    # the code standards agent (services/validation/standards.py): reviews every generation against the written
+    # standards, one check per area; with standards_block off its errors are advisory warnings
+    "validation.standards_review": True,
+    "validation.standards_block": True,
+    "validation.standards_max_files": 40,
     # confidence bands the UI shows (read from the API, never hardcoded in pages)
     "ui.confident": 0.8,
     "ui.weak": 0.45,

@@ -285,7 +285,7 @@ def test_resolution_note_raises_the_ticket_and_stores_the_key(monkeypatch):
 def test_resolution_privileges_and_routes():
     from services.governance.policy import ADDED_PRIVILEGES, PRIVILEGES, SYSTEM_VERSION, no_queue, privilege_for
 
-    assert SYSTEM_VERSION == 8 and set(ADDED_PRIVILEGES[8]) == {"OPS.FIX_APPROVE", "OPS.FIX_PUBLISH", "OPS.RESOLVE_ADMIN"}
+    assert SYSTEM_VERSION >= 8 and set(ADDED_PRIVILEGES[8]) == {"OPS.FIX_APPROVE", "OPS.FIX_PUBLISH", "OPS.RESOLVE_ADMIN"}
     assert all(p in PRIVILEGES for p in ADDED_PRIVILEGES[8])
     assert privilege_for("POST", "/api/ops/resolve/approvals/a1/approve")[0] == "OPS.FIX_APPROVE"
     assert privilege_for("POST", "/api/ops/resolve/fixes/k1/publish")[0] == "OPS.FIX_PUBLISH"

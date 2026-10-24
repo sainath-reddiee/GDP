@@ -17,6 +17,9 @@ const SCREENS: [string, RegExp][] = [
   ["/os/knowledge", /Knowledge hub/],
   ["/os/run", /Production operations/],
   ["/os/help", /One workflow, many personas/],
+  ["/os/history", /Run history/],
+  ["/os/requests/history", /Request history/],
+  ["/os/design/new-domain", /Onboard a domain/],
 ];
 
 test.beforeEach(async ({ context }) => {
@@ -60,7 +63,9 @@ test("a viewer sees only the screens their role opens, and is turned back from t
   await expect(page.getByRole("status").filter({ hasText: "Previewing as viewer" })).toBeVisible();
   // the package's ten entries, filtered: a viewer reads requests, domains, the audit trail, knowledge and operations
   // the package's entries a viewer may open; Admin, governance and the audit trail are a super admin's alone
-  await expect(railLinks(page)).toHaveText(["My Work", "Intake", "Design", "Knowledge", "Run & DQ", "Help"]);
+  // Build appears for its read-only Run history tab
+  await expect(railLinks(page)).toHaveText(["My Work", "Intake", "Design", "Build", "Knowledge", "Run & DQ", "Help"]);
+  await expect(railLinks(page).filter({ hasText: "Build" })).toHaveAttribute("href", "/os/history");
   await expect(page.getByLabel("Persona")).toHaveText("Viewer");
   await page.goto("/os/build");
   await page.waitForURL(/\/os\?denied=build$/);
@@ -144,7 +149,7 @@ test("the rail is the package's ten entries and every page is a tab of one", asy
   await expect(page.getByRole("navigation", { name: "Main" })).toHaveCount(0);
   await expect(railLinks(page).filter({ hasText: "Build" })).toHaveAttribute("aria-current", "page");
   const tabs = page.getByTestId("section-tabs");
-  await expect(tabs.getByRole("link")).toHaveText(["Workbench", "Silver pipeline", "Gold pipeline", "Lineage", "Code"]);
+  await expect(tabs.getByRole("link")).toHaveText(["Workbench", "Silver pipeline", "Gold pipeline", "Lineage", "Code", "Run history"]);
   await expect(tabs.getByRole("link", { name: "Silver pipeline" })).toHaveAttribute("aria-current", "page");
   await page.goto("/dashboard/sttm");
   await expect(railLinks(page).filter({ hasText: "Design" })).toHaveAttribute("aria-current", "page");
@@ -153,7 +158,7 @@ test("the rail is the package's ten entries and every page is a tab of one", asy
   await expect(railLinks(page).filter({ hasText: "Run & DQ" })).toHaveAttribute("aria-current", "page");
   await page.goto("/os/requests");
   await expect(railLinks(page).filter({ hasText: "Intake" })).toHaveAttribute("aria-current", "page");
-  await expect(tabs.getByRole("link")).toHaveText(["New request", "Requests", "Onboarding wizard"]);
+  await expect(tabs.getByRole("link")).toHaveText(["New request", "Requests", "Request history"]);
 });
 
 test("admins can switch the classic pages back to the classic layout", async ({ page }) => {
@@ -213,7 +218,7 @@ test("Enable is configuration first: requests on top, the wizard's ways in, no t
   await expect(ways.nth(2)).toHaveAttribute("href", /branch=external&kind=file$/);
   // configuration cards, never a table catalog or a secret value
   await expect(page.getByTestId("source-config").first()).toBeVisible();
-  await expect(page.getByRole("columnheader", { name: "Staged" })).toHaveCount(0);
+  await expect(page.locator("th", { hasText: "Staged" })).toHaveCount(0);
   await expect(page.getByText(/password\s*:/i)).toHaveCount(0);
   // a source a request asks for opens the wizard for that request
   const ask = page.getByTestId("enable-asks").getByRole("link", { name: /^Onboard as/ }).first();
@@ -248,4 +253,89 @@ test("the validation gate shows the minimum from the rules and validates again i
   // never submitted here: validating is a real write on the platform
   const again = page.getByTestId("validate-again-button");
   if (await again.count()) await expect(again).toHaveText(/Validate again|Request validation/);
+});
+
+// Phase 13: history, the code standards agent and the demo paths.
+test("Run history lists every run with its validation, and viewers read it without the workbench", async ({ page }) => {
+  await page.goto("/os/history");
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText("Run history");
+  const table = page.getByTestId("run-history");
+  test.skip(!(await table.count()), "no run on record");
+  await expect(table.locator("th", { hasText: "Validation" })).toBeVisible();
+  await expect(table.locator('a[href^="/os/build?run="]').first()).toBeVisible();
+  await page.goto("/os/history?status=completed&pipeline=SILVER");
+  await expect(page.locator("#h-status")).toHaveValue("completed");
+  await previewAs(page, "viewer");
+  await page.goto("/os/history");
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText("Run history");
+  await expect(page.locator('a[href^="/os/build?run="]')).toHaveCount(0);
+});
+
+test("Request history shows finished requests and opens each one's timeline", async ({ page }) => {
+  await page.goto("/os/requests/history");
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText("Request history");
+  const rows = page.getByTestId("request-history").locator('a[href^="/os/requests/"]');
+  if (await rows.count()) await expect(rows.first()).toHaveAttribute("href", /\/os\/requests\/[0-9a-f-]+$/);
+});
+
+test("the code standards agent can be run alone from Review, and never in a preview", async ({ page }) => {
+  await page.goto("/os/review");
+  const button = page.getByTestId("review-standards-button");
+  test.skip(!(await button.count()), "no generated run to review");
+  // not clicked: it calls Cortex on the platform
+  await expect(button).toHaveText(/Review standards|Request a standards review/);
+  await previewAs(page, "forward_lead");
+  await page.goto("/os/review");
+  if (await page.getByTestId("review-standards-button").count()) await expect(page.getByTestId("review-standards-button")).toBeDisabled();
+});
+
+test("Help walks the two demos on live records", async ({ page }) => {
+  await page.goto("/os/help");
+  const demos = page.getByTestId("demo-paths");
+  await expect(demos).toBeVisible();
+  await expect(demos.getByText("1 · Forward Engineering Lead, happy path")).toBeVisible();
+  await expect(demos.getByText("2 · Onboarding with people in the loop")).toBeVisible();
+  await expect(demos.getByText("File the request")).toBeVisible();
+});
+
+// Onboarding a source is the Data OS Administrator's alone, in Enable; domains are onboarded from Design.
+test("only the administrator onboards sources, from Enable; others request them", async ({ page }) => {
+  await page.goto("/dashboard/onboarding?type=source");
+  await expect(page.getByRole("heading", { name: "Onboard a source" })).toBeVisible();
+  const tabs = page.getByTestId("section-tabs");
+  await expect(tabs.getByRole("link")).toHaveText(["Source readiness", "Onboard a source"]);
+  await expect(railLinks(page).filter({ hasText: "Enable" })).toHaveAttribute("aria-current", "page");
+  await page.goto("/os/intake?type=source");
+  await expect(page.getByRole("link", { name: "Open the onboarding wizard" })).toHaveCount(0);
+  await expect(page.getByText("Sources are onboarded by the Data OS Administrator")).toBeVisible();
+  for (const persona of ["designer", "product_owner", "forward_lead"]) {
+    await previewAs(page, persona);
+    await page.goto("/os");
+    await expect(railLinks(page).filter({ hasText: "Enable" })).toHaveCount(0);
+    await page.goto("/dashboard/onboarding?type=source").catch(() => undefined);
+    await page.waitForURL(/\/os\?denied=onboarding$/);
+  }
+  await previewAs(page, "admin");
+  await page.goto("/os");
+  await expect(railLinks(page).filter({ hasText: "Enable" })).toBeVisible();
+});
+
+// Skills: the Forward Engineering Lead (a skill owner) promotes directly; a designer's promotion goes to a skill owner;
+// a developer has no Skill studio. A preview never submits: the buttons are shown and disabled.
+test("skill promotion follows the persona: the lead promotes, a designer requests, a developer has none", async ({ page }) => {
+  await previewAs(page, "forward_lead");
+  await page.goto("/os/skills?skill=SODA_SKILL");
+  const promote = page.getByRole("button", { name: /^(Promote|Make candidate)$/ });
+  test.skip(!(await promote.count()), "no SODA_SKILL version to move");
+  await expect(promote.first()).toBeDisabled();
+  await expect(page.getByRole("button", { name: /^Request promotion$/ })).toHaveCount(0);
+  await previewAs(page, "designer");
+  await page.goto("/os/skills?skill=SODA_SKILL").catch(() => undefined);
+  // a designer edits skills (SKILL.EDIT) but does not release them: promotion becomes a request to the skill owner
+  if (page.url().includes("/os/skills")) {
+    await expect(page.getByRole("button", { name: /^Promote$/ })).toHaveCount(0);
+  }
+  await previewAs(page, "developer");
+  await page.goto("/os/skills").catch(() => undefined);
+  await page.waitForURL(/\/os\?denied=skills$/);
 });

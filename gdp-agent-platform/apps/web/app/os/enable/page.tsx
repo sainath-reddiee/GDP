@@ -151,7 +151,7 @@ export default async function SourceReadiness({ searchParams }: { searchParams: 
                   </div>
                   <div className="flex shrink-0 flex-wrap gap-2">
                     {registered
-                      ? <Action access={access} id="connectSource" privilege={i.status === "NOT_LANDED" ? "PROFILE.RUN" : "SOURCE.CONNECT"}
+                      ? <Action access={access} id="connectSource" privilege="SOURCE.CONNECT"
                                 label={i.status === "NOT_LANDED" ? "Land it" : "Restore access"} href="/dashboard/sources" variant="primary" />
                       : WAYS.map((w, n) => (
                           <Action key={w.key} access={access} id="connectSource" label={n === 0 ? `Onboard as ${w.label.toLowerCase()}` : w.label}

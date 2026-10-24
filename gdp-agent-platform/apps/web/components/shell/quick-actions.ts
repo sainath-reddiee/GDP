@@ -24,7 +24,7 @@ export const QUICK_ACTIONS: QuickAction[] = [
   { group: "Onboard", label: "Other sources", hint: "A relational database (PostgreSQL, Oracle, SQL Server) or files (Amazon S3, SharePoint), landed into Snowflake by SnapLogic",
     href: "/dashboard/onboarding?type=source&branch=external", icon: CloudCog, privilege: "SOURCE.CONNECT" },
   { group: "Model", label: "Import a domain pack", hint: "Register a domain from domain_pack.json and its contract",
-    href: "/dashboard/onboarding?type=domain&import=1", icon: Boxes, privilege: "DOMAIN.EDIT" },
+    href: "/os/design/new-domain?import=1", icon: Boxes, privilege: "DOMAIN.EDIT" },
   { group: "Model", label: "New table model", hint: "Design one target table, versioned and reviewed",
     href: "/dashboard/modeling?view=tables&new=1", icon: TableProperties, privilege: "MODEL.EDIT" },
   { group: "Quality", label: "New QA pack", hint: "A set of deterministic domain assertions in the QA Store",

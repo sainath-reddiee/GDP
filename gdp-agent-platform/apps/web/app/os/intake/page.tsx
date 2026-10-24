@@ -14,8 +14,8 @@ export const dynamic = "force-dynamic";
 export const metadata = { title: "Request and define" };
 
 const TYPES = [
-  { key: "source", label: "New source", icon: Database, start: "/dashboard/onboarding?type=source", hint: "Bring a source system onto the platform and map it to a domain" },
-  { key: "domain", label: "New domain", icon: Boxes, start: "/dashboard/onboarding?type=domain", hint: "Define a new business domain: its model, contract and memory" },
+  { key: "source", label: "New source", icon: Database, start: null, hint: "Ask for a source system for a domain: attach one already on the platform, or request a new one from the Data OS Administrator" },
+  { key: "domain", label: "New domain", icon: Boxes, start: "/os/design/new-domain", hint: "Define a new business domain: its model, contract and memory" },
   { key: "product", label: "New data product", icon: Crown, start: "/gold", hint: "Build a governed Gold product from mastered Silver domains" },
 ] as const;
 
@@ -70,7 +70,7 @@ export default async function Intake({ searchParams }: { searchParams: { type?: 
     <>
       <PageHeader eyebrow={`${persona.label} / Request and define`} title="Create an onboarding request"
                   subtitle="One intake for a source, a domain or a data product. Link what already exists so the agents reuse it instead of re-entering it."
-                  actions={<Btn href="/dashboard/onboarding">Classic onboarding</Btn>} />
+                  actions={<Btn href="/os/requests">Requests</Btn>} />
       <div className="mb-4 flex flex-wrap gap-2" role="tablist">
         {TYPES.map((t) => (
           <Link key={t.key} href={`/os/intake?type=${t.key}`} role="tab" aria-selected={t.key === type.key} className={cn("os-btn", t.key === type.key && "os-btn-primary")}>
@@ -123,10 +123,17 @@ export default async function Intake({ searchParams }: { searchParams: { type?: 
             <SubmitRequest type={REQUEST_TYPE[type.key]} domainId={domain?.domain_id ?? null} domainName={domain?.domain_name ?? null}
                            picked={chosen.map((s) => ({ source_system_id: s.source_system_id, source_name: s.source_system_name }))}
                            previewing={!!access.preview} />
-            <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-[var(--os-line)] pt-3">
-              <span className="os-faint text-[11.5px]">Onboarding it yourself instead? The wizard registers the source and starts the run directly.</span>
-              <Action access={access} id="startOnboarding" privilege={type.key === "domain" ? "DOMAIN.EDIT" : "RUN.CREATE"} label="Open the onboarding wizard" href={startHref} />
-            </div>
+            {startHref ? (
+              <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-[var(--os-line)] pt-3">
+                <span className="os-faint text-[11.5px]">{type.key === "domain" ? "Onboarding the domain yourself instead? Design has the domain wizard." : "Starting the Gold run yourself instead? The Gold pipeline starts it directly."}</span>
+                <Action access={access} id="startOnboarding" privilege={type.key === "domain" ? "DOMAIN.EDIT" : "RUN.CREATE"}
+                        label={type.key === "domain" ? "Onboard a domain" : "Start a Gold run"} href={startHref} />
+              </div>
+            ) : (
+              <p className="os-faint mt-4 border-t border-[var(--os-line)] pt-3 text-[11.5px]">
+                Sources are onboarded by the Data OS Administrator: they register the source, land it and start its run, and the request moves on to the Data Designer.
+              </p>
+            )}
           </Card>
 
           <Card title="Related workflows" subtitle={domain || chosen.length ? "Runs that already touch this domain or these sources" : "Pick a domain or a source to see what already exists"} pad={false}>
