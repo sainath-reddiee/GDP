@@ -199,6 +199,16 @@ def test_admin_and_governance_are_for_super_admins_only():
     assert decide("CONFIG.EDIT", {"*"}, None)[0] == "ALLOW"
 
 
+def test_integrations_are_the_data_os_administrators():
+    from services.governance.policy import SUPER_ONLY, decide
+    assert "INTEGRATION.MANAGE" not in SUPER_ONLY
+    _, privs = effective_privileges(["PLATFORM_ADMIN"], ROLE_PRIVS, GRANTS)
+    assert "INTEGRATION.MANAGE" in privs and "ADMIN.DEPLOY" not in privs
+    assert decide("INTEGRATION.MANAGE", privs, None)[0] == "ALLOW"
+    for role in ("DATA_ENGINEER", "VIEWER", "DATA_DESIGNER"):
+        assert "INTEGRATION.MANAGE" not in effective_privileges([role], ROLE_PRIVS, GRANTS)[1], role
+
+
 def test_onboarding_sources_is_the_platform_administrators():
     from services.governance.policy import MOVED_PRIVILEGES, SYSTEM_ROLES, SYSTEM_VERSION, effective_privileges
 

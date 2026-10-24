@@ -1,6 +1,6 @@
 import Link from "next/link";
 import type { ComponentType } from "react";
-import { AlertTriangle, ArrowRight, ArrowUpRight, Boxes, Crown, Database, Lock, Plus, Wand2 } from "lucide-react";
+import { AlertTriangle, ArrowRight, ArrowUpRight, BookOpen, Boxes, Crown, Database, Lock, Plus, ShieldCheck, Siren, Stamp, Wand2 } from "lucide-react";
 import { stateLabel } from "@/lib/run-labels";
 import { canSee, has } from "@/lib/os/access";
 import type { Domain } from "@/lib/os/data";
@@ -10,7 +10,7 @@ import {
 } from "@/lib/os/requests";
 import { Btn, Tag, ago, pretty } from "./ui";
 import { Track, type TrackStep } from "./stage-board";
-import { stageHref } from "@/lib/os/work";
+import { RUNNING_STATES, stageHref } from "@/lib/os/work";
 import { RequestFiles } from "@/components/os/request-files";
 import { StartEnhancementRun } from "./request-ui";
 import type { ActionItem } from "@/lib/os/actions";
@@ -47,7 +47,9 @@ export function RequestTrack({ r, className }: { r: OnboardingRequest; className
 export function WorkflowRow({ r, access, href }: { r: OnboardingRequest; access: OsAccess; href?: string }) {
   const I = TYPE_ICON[r.request_type] ?? Database;
   const open = r.status === "OPEN";
-  const mine = open ? r.waits.find((w) => has(access, w.privilege)) : undefined;
+  // the viewer's next step, unless an agent is still running it (as requestNeedsMe)
+  const mine = open ? r.waits.find((w) => has(access, w.privilege)
+    && !RUNNING_STATES.has(r.items.find((i) => i.item_id === w.item_id)?.run_state ?? "")) : undefined;
   const item = mine ? r.items.find((i) => i.item_id === mine.item_id) : undefined;
   const next = mine ? actHref(mine, item, r.domain_id, r.request_type === "PRODUCT", r.request_id, enhancesSource(r)) : null;
   const sources = r.items.filter((i) => !i.removed_at);
@@ -358,41 +360,39 @@ export function OnboardedDomains({ domains, requests, access, max = 5 }: {
 }
 
 
-/** Everything else that waits on the viewer (lib/os/actions.ts): run gates and failures no workflow covers, approvals,
- *  models and checks in review, knowledge and skill proposals, incidents. Grouped, the most urgent first. */
-export function ActionsPanel({ items, errors, max = 8 }: { items: ActionItem[]; errors: number; max?: number }) {
-  const shown = items.slice(0, max);
-  const groups = [...new Set(shown.map((i) => i.group))];
-  const TONE = { red: "bg-[var(--os-red-ink)]", amber: "bg-[var(--os-amber-ink)]", purple: "bg-[var(--os-purple-ink)]", blue: "bg-[var(--os-blue-ink)]" };
+const GROUP: Record<ActionItem["group"], { icon: Icon; tint: string; where: string }> = {
+  "Gates": { icon: ShieldCheck, tint: "bg-[var(--os-amber-bg)] text-[var(--os-amber-ink)]", where: "Run gate" },
+  "Approvals": { icon: Stamp, tint: "bg-[var(--os-amber-bg)] text-[var(--os-amber-ink)]", where: "Approval" },
+  "Models and quality": { icon: Boxes, tint: "bg-[var(--os-purple-bg)] text-[var(--os-purple-ink)]", where: "Review" },
+  "Knowledge and skills": { icon: BookOpen, tint: "bg-[var(--os-blue-bg)] text-[var(--os-blue-ink)]", where: "Knowledge" },
+  "Operations": { icon: Siren, tint: "bg-[var(--os-red-bg)] text-[var(--os-red-ink)]", where: "Operations" },
+};
+
+/** One action from across the platform in Home's queue (lib/os/actions.ts): a run gate or failure no workflow covers, an
+ *  approval, a model or check in review, knowledge or a skill to review, an incident. Always the viewer's to act on. */
+export function PlatformActionRow({ a }: { a: ActionItem }) {
+  const g = GROUP[a.group];
+  const I = a.tone === "red" && a.group === "Gates" ? AlertTriangle : g.icon;
   return (
-    <section className="os-card os-rise px-4 pb-3 pt-3.5" data-testid="actions-panel" aria-labelledby="actions-title">
-      <div className="flex items-baseline justify-between gap-2">
-        <h2 id="actions-title" className="text-[14.5px] font-extrabold tracking-[-0.01em]">Also waiting on you</h2>
-        <span className={cn("rounded-full px-2 py-0.5 text-[11px] font-extrabold", items.length ? "bg-[var(--os-amber-bg)] text-[var(--os-amber-ink)]" : "bg-[var(--os-green-bg)] text-[var(--os-green-ink)]")}
-              data-testid="actions-count">{items.length}</span>
-      </div>
-      <p className="os-faint mt-0.5 text-[11px]">Gates, approvals and reviews outside the workflows</p>
-      {shown.length ? groups.map((g) => (
-        <div key={g} className="mt-2.5">
-          <div className="os-eyebrow mb-1">{g}</div>
-          <ul className="os-divide">
-            {shown.filter((i) => i.group === g).map((i) => (
-              <li key={i.key}>
-                <Link href={i.href} title={`${i.cta}: ${i.title}`} className="group flex items-start gap-2 rounded-md py-2 os-hover" data-testid={`action-${i.key}`}>
-                  <span className={cn("mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full", TONE[i.tone])} aria-hidden />
-                  <span className="min-w-0 flex-1">
-                    <span className="block text-[12px] font-bold leading-snug">{i.title}</span>
-                    <span className="os-faint block truncate text-[10.5px]">{i.detail}{i.since ? ` · ${ago(i.since)}` : ""}</span>
-                  </span>
-                  <span className="os-accent shrink-0 self-center text-[11px] font-bold opacity-80 group-hover:opacity-100">{i.cta}</span>
-                </Link>
-              </li>
-            ))}
-          </ul>
+    <article data-testid="platform-action" className={cn("os-card os-rise p-3.5 transition hover:shadow-[var(--os-shadow-pop)] border-l-[3px]",
+                                                          a.tone === "red" ? "border-l-[var(--os-red-ink)]" : "border-l-[var(--os-forest)]")}>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex min-w-[min(100%,260px)] flex-1 items-start gap-3">
+          <span className={cn("grid h-9 w-9 shrink-0 place-items-center rounded-lg", a.tone === "red" ? "bg-[var(--os-red-bg)] text-[var(--os-red-ink)]" : g.tint)}><I className="h-4 w-4" /></span>
+          <div className="min-w-0">
+            <Link href={a.href} className="block truncate text-[14px] font-extrabold tracking-[-0.01em] hover:underline" title={a.title}>{a.title}</Link>
+            <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px]">
+              <Tag tone={a.tone === "red" ? "red" : a.tone === "purple" ? "purple" : a.tone === "blue" ? "blue" : "amber"}>{g.where}</Tag>
+              <span className="os-muted">{a.detail}</span>
+              {a.since && <span className="os-faint">· {ago(a.since)}</span>}
+            </div>
+          </div>
         </div>
-      )) : <p className="os-faint mt-2 text-[12px]">Nothing else waits on you.</p>}
-      {items.length > max && <p className="os-faint mt-2 text-[11px]">and {items.length - max} more in Review and the stores</p>}
-      {errors > 0 && <p className="mt-2 text-[10.5px] text-[var(--os-amber-ink)]">Some sources could not be read; the list may be incomplete.</p>}
-    </section>
+        <div className="flex shrink-0 items-center gap-2">
+          <Tag tone="green">Your turn</Tag>
+          <Btn href={a.href} variant="primary">{a.cta} <ArrowRight className="h-3.5 w-3.5" /></Btn>
+        </div>
+      </div>
+    </article>
   );
 }

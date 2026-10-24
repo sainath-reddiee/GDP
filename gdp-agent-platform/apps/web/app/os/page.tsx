@@ -4,9 +4,9 @@ import { SECTIONS, screenByKey, type ScreenKey } from "@/lib/os/access";
 import { osAccess, type OsAccess } from "@/lib/os/session";
 import { intentOf, overdue, type OnboardingRequest, type RequestType } from "@/lib/os/requests";
 import { Banner, Btn, Empty, SourceError } from "@/components/os/ui";
-import { ActionsPanel, OnboardedDomains, StartPanel, WorkflowRow } from "@/components/os/home";
+import { OnboardedDomains, PlatformActionRow, StartPanel, WorkflowRow } from "@/components/os/home";
 import { inflight, requestNeedsMe, workflowHref } from "@/lib/os/work";
-import { loadActions } from "@/lib/os/actions";
+import { loadActions, type ActionItem } from "@/lib/os/actions";
 import { Segmented } from "@/components/os/stage-board";
 import { PlatformSearch } from "@/components/os/platform-search";
 
@@ -27,9 +27,10 @@ const VIEWS = [
   { key: "action", label: "Action required" },
   { key: "all", label: "All" },
 ] as const;
+// workflows by type, and "Platform": every other action across the platform (gates, approvals, reviews, operations)
 const TYPES: { key: string; label: string; type?: RequestType }[] = [
   { key: "all", label: "All" }, { key: "domain", label: "Domain", type: "DOMAIN" }, { key: "source", label: "Source", type: "SOURCE" },
-  { key: "product", label: "Product", type: "PRODUCT" },
+  { key: "product", label: "Product", type: "PRODUCT" }, { key: "platform", label: "Platform" },
 ];
 const INTENTS = [{ key: "all", label: "Any" }, { key: "new", label: "New" }, { key: "enhance", label: "Enhance" }] as const;
 const PRIORITY = { HIGH: 0, MEDIUM: 1, LOW: 2 } as const;
@@ -60,8 +61,9 @@ export default async function Home({ searchParams }: { searchParams: Params }) {
   const query = (searchParams.q ?? "").trim();
   const [list, domains, searched] = await Promise.all([loadRequests("all", "ALL"), loadDomains(),
     query ? loadWorkflowSearch(query) : Promise.resolve(null)]);
-  // what else waits on the viewer (gates no workflow covers, approvals, reviews, fixes, incidents)
-  const elsewhere = await loadActions(access, list.data.requests);
+  // every other action across the platform waiting on the viewer (gates no workflow covers, approvals, models and checks
+  // in review, knowledge and skill proposals, fixes, incidents): listed with the workflows, one queue for everything
+  const platform = await loadActions(access, list.data.requests);
   const all = list.data.requests;
   const active = all.filter((r) => r.status === "OPEN");
   const action = active.filter((r) => yours(r, access));
@@ -75,7 +77,7 @@ export default async function Home({ searchParams }: { searchParams: Params }) {
   const q = query.toLowerCase();
   const rank = searched?.data ? new Map(searched.data.results.map((x, i) => [x.id, i])) : null;
   const matches = (r: OnboardingRequest) => !q || (rank ? rank.has(r.request_id) : r.title.toLowerCase().includes(q));
-  const filteredRows = views[view].filter((r) =>
+  const filteredRows = type.key === "platform" ? [] : views[view].filter((r) =>
     (!type.type || r.request_type === type.type)
     && (intent.key === "all" || intentOf(r) === intent.key.toUpperCase())
     && matches(r));
@@ -83,6 +85,23 @@ export default async function Home({ searchParams }: { searchParams: Params }) {
   const elsewhereMatches = q ? all.filter((r) => matches(r) && (!type.type || r.request_type === type.type)
     && (intent.key === "all" || intentOf(r) === intent.key.toUpperCase())).length : 0;
   const rows = rank ? [...filteredRows].sort((a, b) => (rank.get(a.request_id) ?? 0) - (rank.get(b.request_id) ?? 0)) : order(filteredRows, access);
+  // platform actions: all of them wait on the viewer; a workflow type or New/Enhance filter leaves them out, and the
+  // search keeps those whose words match (the intent words, "waiting on me", keep them all)
+  const terms = searched?.data ? searched.data.intent.terms : q.split(/\s+/).filter(Boolean);
+  const failedOnly = !!searched?.data?.intent.failed;
+  const platformRows = (type.key === "all" || type.key === "platform") && intent.key === "all"
+    ? platform.items.filter((a) => (!failedOnly || a.tone === "red")
+      && terms.every((t) => `${a.title} ${a.detail} ${a.group}`.toLowerCase().includes(t.toLowerCase().replace(/s$/, ""))))
+    : [];
+  const counts = { action: action.length + platform.items.length, active: active.length + platform.items.length, all: all.length + platform.items.length };
+  // one queue: what needs attention first (failed runs and validations), then the viewer's workflows, then the other
+  // actions by urgency; outside Action required the remaining workflows follow
+  type Entry = { kind: "workflow"; r: OnboardingRequest } | { kind: "platform"; a: ActionItem };
+  const urgency = (e: Entry) => e.kind === "platform"
+    ? ({ red: 0, amber: 2, purple: 3, blue: 4 } as const)[e.a.tone]
+    : e.r.attention ? 0 : yours(e.r, access) ? 1 : 5;
+  const entries: Entry[] = [...rows.map((r) => ({ kind: "workflow" as const, r })), ...platformRows.map((a) => ({ kind: "platform" as const, a }))];
+  const queue = rank ? entries : entries.map((e, i) => ({ e, i })).sort((x, y) => urgency(x.e) - urgency(y.e) || x.i - y.i).map((x) => x.e);
 
   const href = (patch: Partial<Params>) => {
     const next = { view, type: type.key, intent: intent.key, q: searchParams.q ?? "", ...patch };
@@ -106,20 +125,21 @@ export default async function Home({ searchParams }: { searchParams: Params }) {
           {/* the toolbar stays in reach while the workflows scroll under it */}
           <div className="sticky top-[58px] z-30 -mx-1 mb-4 bg-[var(--os-bg)]/95 px-1 pb-3 pt-1 backdrop-blur supports-[backdrop-filter]:bg-[var(--os-bg)]/80" data-testid="home-toolbar">
             <div className="mb-2.5 flex flex-wrap items-center gap-x-4 gap-y-2">
-              <h1 id="workflows-title" className="shrink-0 text-[20px] font-extrabold tracking-[-0.03em]">Build workflows</h1>
+              <h1 id="workflows-title" className="shrink-0 text-[20px] font-extrabold tracking-[-0.03em]">Platform actions</h1>
               <div className="min-w-[260px] flex-1"><PlatformSearch /></div>
             </div>
             <div className="flex flex-wrap items-center gap-2">
-              <Segmented label="Workflows to show" testId="home-views" options={VIEWS.map((v) => ({
-                key: v.key, label: v.label, href: href({ view: v.key }), active: v.key === view, count: views[v.key].length,
-                dot: v.key === "action" && action.length > 0,
+              <Segmented label="Actions to show" testId="home-views" options={VIEWS.map((v) => ({
+                key: v.key, label: v.label, href: href({ view: v.key }), active: v.key === view, count: counts[v.key],
+                dot: v.key === "action" && counts.action > 0,
               }))} />
               <span className="mx-1 hidden h-5 w-px bg-[var(--os-line)] sm:block" aria-hidden />
-              <Segmented label="Type" testId="home-types" options={TYPES.map((t) => ({ key: t.key, label: t.label, href: href({ type: t.key }), active: t.key === type.key }))} />
+              <Segmented label="Type" testId="home-types" options={TYPES.map((t) => ({ key: t.key, label: t.label, href: href({ type: t.key }), active: t.key === type.key,
+                ...(t.key === "platform" ? { count: platform.items.length } : {}) }))} />
               <Segmented label="New or enhance" testId="home-intents" options={INTENTS.map((i) => ({ key: i.key, label: i.label, href: href({ intent: i.key }), active: i.key === intent.key }))} />
               {q && (
                 <span className="os-faint text-[11px]" data-testid="search-mode">
-                  {rank ? `${rows.length} matching "${query}" by meaning` : `${rows.length} with "${query}" in the name`}
+                  {rank ? `${queue.length} matching "${query}" by meaning` : `${queue.length} with "${query}" in the name`}
                   {elsewhereMatches > rows.length && view !== "all" && (
                     <> · <a className="os-accent font-bold" href={href({ view: "all" })}>show all {elsewhereMatches}</a></>
                   )}
@@ -128,15 +148,20 @@ export default async function Home({ searchParams }: { searchParams: Params }) {
             </div>
           </div>
 
-          {rows.length ? (
-            <div className="flex flex-col gap-3">
-              {rows.map((r) => <WorkflowRow key={r.request_id} r={r} access={access} href={workflowHref(r)} />)}
+          {platform.errors > 0 && (
+            <p className="mb-3 text-[11px] text-[var(--os-amber-ink)]">Some platform queues could not be read; the list may be incomplete.</p>
+          )}
+          {queue.length ? (
+            <div className="flex flex-col gap-3" data-testid="platform-queue">
+              {queue.map((e) => e.kind === "workflow"
+                ? <WorkflowRow key={e.r.request_id} r={e.r} access={access} href={workflowHref(e.r)} />
+                : <PlatformActionRow key={e.a.key} a={e.a} />)}
             </div>
           ) : filtered ? (
-            <Empty icon={SearchX} title={q ? `No workflow matches "${searchParams.q?.trim()}"` : "No workflow matches these filters"}
+            <Empty icon={SearchX} title={q ? `Nothing matches "${searchParams.q?.trim()}"` : "Nothing matches these filters"}
                    action={<Btn href={href({ type: "all", intent: "all", q: "" })}>Clear filters</Btn>} />
           ) : view === "action" ? (
-            <Empty icon={CheckCircle2} title="Nothing waits on you">When a workflow reaches a step your role owns, it shows here with what to do.</Empty>
+            <Empty icon={CheckCircle2} title="Nothing waits on you">When a workflow, a gate, an approval or a review reaches your role, it shows here with what to do.</Empty>
           ) : (
             <Empty icon={Inbox} title={view === "active" ? "No active workflows" : "No workflows yet"}>
               Start one from <b>Start a workflow</b>: a new domain, source or data product, or more from one already on the platform.
@@ -147,7 +172,6 @@ export default async function Home({ searchParams }: { searchParams: Params }) {
         <aside className="min-w-0">
           <div className="flex flex-col gap-4 lg:sticky lg:top-[76px]">
             <StartPanel access={access} inflight={inflight(all)} />
-            <ActionsPanel items={elsewhere.items} errors={elsewhere.errors} />
           </div>
         </aside>
       </div>

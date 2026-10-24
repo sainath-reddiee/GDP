@@ -27,7 +27,7 @@ export type SectionKey = "work" | "intake" | "enable" | "design" | "build" | "re
 export type ScreenKey =
   | "work" | "inbox" | "overview" | "copilot"
   | "intake" | "intakeNew" | "requests" | "requestHistory" | "onboarding"
-  | "enable"
+  | "enable" | "integrations"
   | "design" | "newDomain" | "domains" | "stores"
   | "ready" | "build" | "pipelines" | "gold" | "lineage" | "code" | "history" | "runs"
   | "review" | "governance" | "audit"
@@ -81,6 +81,8 @@ export const SCREENS: Screen[] = [
     view: ["SOURCE.CONNECT"], why: "the Data OS Administrator (onboarding a source registers it, lands it and starts its run)" },
   { key: "newDomain", section: "enable", href: "/os/enable/new-domain", label: "Onboard domain", paths: ["/os/design/new-domain"], view: ["DOMAIN.ONBOARD"],
     why: "the Data OS Administrator (a domain's model, contract and memory); data owners request one on Intake" },
+  { key: "integrations", section: "enable", href: "/os/enable/integrations", label: "Integrations", view: ["INTEGRATION.MANAGE"],
+    why: "the Data OS Administrator (code repositories, Jira, Airflow, Datadog, incident routing and cases)" },
 
   // Design: the domain model and the stores the design is kept in
   { key: "design", section: "design", href: "/os/design", label: "Designer studio",

@@ -63,11 +63,12 @@ PRIVILEGES: Dict[str, Tuple[str, str]] = {
 # Privileges a viewer-style role never needs: holding none of the others means the user can only look.
 READ_ONLY = {"AUDIT.VIEW", "ADMIN.VIEW", "APPROVAL.VIEW", "CODE.VIEW", "OPS.VIEW"}
 ALL = "*"
-# Admin and governance are a super admin's alone: platform settings, integrations, deploy, users, roles, personas and
-# policies, the audit trail and every change request. Whatever role lists them, these are honoured only alongside "*"
+# Admin and governance are a super admin's alone: platform settings, deploy, users, roles, personas and policies, the
+# audit trail and every change request. Whatever role lists them, these are honoured only alongside "*"
 # (effective_privileges drops them otherwise), and a call that needs one is refused outright for anyone else, never
-# queued as a change request (decide).
-SUPER_ONLY = {"ADMIN.VIEW", "ADMIN.DEPLOY", "CONFIG.EDIT", "INTEGRATION.MANAGE", "ROLE.MANAGE", "AUDIT.VIEW", "APPROVAL.VIEW"}
+# queued as a change request (decide). Integrations (INTEGRATION.MANAGE: code repositories, Jira, Airflow, Datadog,
+# incident routing, cases) are not among them: the Data OS Administrator (PLATFORM_ADMIN) manages them on Enable.
+SUPER_ONLY = {"ADMIN.VIEW", "ADMIN.DEPLOY", "CONFIG.EDIT", "ROLE.MANAGE", "AUDIT.VIEW", "APPROVAL.VIEW"}
 
 SYSTEM_ROLES: Dict[str, Dict[str, Any]] = {
     "SUPER_ADMIN": {"description": "Everything, including governance", "privileges": [ALL], "inherits": []},

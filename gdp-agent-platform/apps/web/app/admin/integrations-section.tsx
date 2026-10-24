@@ -68,9 +68,12 @@ function Badge({ tone, children }: { tone: "good" | "warn" | "idle" | "bad"; chi
 
 /** Admin, Integrations: one tab per integration. Code repositories (configured once, used by the dbt workspace and every
  *  AI step), dbt publishing to GitHub, Jira, Airflow (Amazon MWAA) for Pipelines, and Datadog logs and monitors. */
-export function IntegrationsSection({ repos, domains, publishing, jira, airflow, airflowError, datadog, view }: {
+export function IntegrationsSection({ repos, domains, publishing, jira, airflow, airflowError, datadog, view,
+  base = "/os/admin/settings?section=integrations" }: {
   repos: CodeRepo[]; domains: Domain[]; publishing: PublishingStatus; jira: JiraStatus | null; airflow: AirflowEnv[] | null;
   airflowError: string | null; datadog: DatadogStatus | null; view: IntegrationView;
+  /** where the tabs link: Platform settings (super admins) or Enable, Integrations (the Data OS Administrator) */
+  base?: string;
 }) {
   const router = useRouter();
   const { can, canAct } = useAccess();
@@ -109,7 +112,7 @@ export function IntegrationsSection({ repos, domains, publishing, jira, airflow,
     <div className="space-y-4">
       <nav aria-label="Integrations" className="grid gap-2 md:grid-cols-3 2xl:grid-cols-6">
         {tabs.map((t) => (
-          <Link key={t.id} href={`/os/admin/settings?section=integrations&view=${t.id}`} aria-current={view === t.id ? "page" : undefined}
+          <Link key={t.id} href={`${base}${base.includes("?") ? "&" : "?"}view=${t.id}`} aria-current={view === t.id ? "page" : undefined}
                 className={cn("flex items-start gap-3 rounded-xl border p-3 transition",
                   view === t.id ? "border-primary/40 bg-primary/5 shadow-card" : "bg-card hover:border-primary/30 hover:shadow-card")}>
             <span className={cn("grid h-9 w-9 shrink-0 place-items-center rounded-lg", view === t.id ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground")}>
@@ -130,10 +133,10 @@ export function IntegrationsSection({ repos, domains, publishing, jira, airflow,
       )}
       {view === "repos" && <ReposTab repos={repos} domains={domains} may={canAct("INTEGRATION.MANAGE")} onMsg={setMsg}
                                      publishing={<PublishingStrip status={publishing} githubRepos={repos.filter((r) => r.provider === "GITHUB")} may={canAct("ADMIN.DEPLOY")} onMsg={setMsg} />} />}
-      {view === "jira" && <JiraTab status={jira} may={canAct("INTEGRATION.MANAGE")} onMsg={setMsg} />}
+      {view === "jira" && <JiraTab status={jira} may={canAct("INTEGRATION.MANAGE")} onMsg={setMsg} returnTo={`${base}${base.includes("?") ? "&" : "?"}view=jira`} />}
       {view === "incidents" && <IncidentsTab envs={airflow ?? []} may={canAct("INTEGRATION.MANAGE")} onMsg={setMsg} />}
       {view === "cases" && <CasesTab may={canAct("INTEGRATION.MANAGE")} onMsg={setMsg} />}
-      {view === "datadog" && <DatadogTab status={datadog} mayEdit={canAct("CONFIG.EDIT")} mayTest={canAct("INTEGRATION.MANAGE")}
+      {view === "datadog" && <DatadogTab status={datadog} mayEdit={canAct("INTEGRATION.MANAGE") || canAct("CONFIG.EDIT")} mayTest={canAct("INTEGRATION.MANAGE")}
                                          mayOperate={can("OPS.OPERATE")} onMsg={setMsg} />}
       {view === "airflow" && <AirflowTab envs={airflow} error={airflowError} may={canAct("INTEGRATION.MANAGE")} canPoll={can("OPS.OPERATE")} onMsg={setMsg} />}
     </div>
@@ -589,7 +592,7 @@ function PublishingStrip({ status, githubRepos, may, onMsg }: { status: Publishi
           <span className="w-full text-[11px] text-muted-foreground">A fine-grained token limited to the client&apos;s repositories, with Contents and Pull requests: read and write.</span>
         </div>
       )}
-      {!may && !status.ready && <p className="mt-1.5 text-muted-foreground">A platform admin (ADMIN.DEPLOY) sets this up.</p>}
+      {!may && !status.ready && <p className="mt-1.5 text-muted-foreground">A super admin sets this up (it deploys a procedure and stores the GitHub token: ADMIN.DEPLOY).</p>}
       {check && (
         <p className={cn("mt-2 flex items-center gap-2 rounded-md px-2.5 py-1.5", check.status === "OK" && check.push !== false ? "bg-success/10 text-success" : "bg-amber-50 text-amber-800")}>
           {check.status === "OK" ? `Connected to ${check.repository}; ${check.push === false ? "this token cannot push to it" : "push allowed"}.` : check.detail || check.status}

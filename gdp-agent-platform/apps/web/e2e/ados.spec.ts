@@ -5,7 +5,7 @@ import { expect, test } from "@playwright/test";
 const BASE = process.env.AIP_WEB_URL ?? "http://localhost:3000";
 
 const SCREENS: [string, RegExp][] = [
-  ["/os", /Build workflows/],
+  ["/os", /Platform actions/],
   ["/os/intake", /Requests/],
   ["/os/intake/new", /Create an onboarding request/],
   ["/os/requests", /Onboarding requests/],
@@ -299,10 +299,10 @@ test("Enable is configuration first: requests on top, one way in per object, no 
   await page.goto("/os/enable");
   await expect(page.getByRole("heading", { level: 1 })).toHaveText("Source readiness");
   await expect(page.getByText("Requests waiting on a source")).toBeVisible();
-  // one button each for the Source Store, onboarding a domain and onboarding a source; no duplicate kind tiles
+  // onboarding a source or a domain is reached once, from Enable's tabs; no header copies or duplicate kind tiles
   await expect(page.getByRole("link", { name: "Open Source Store" })).toHaveCount(1);
-  await expect(page.getByRole("link", { name: "Onboard source", exact: true })).toHaveAttribute("href", /onboarding\?type=source$/);
-  await expect(page.getByRole("link", { name: "Onboard domain", exact: true })).toHaveAttribute("href", /new-domain$/);
+  await expect(page.getByRole("link", { name: "Onboard source", exact: true })).toHaveCount(1);
+  await expect(page.getByRole("link", { name: "Onboard domain", exact: true })).toHaveCount(1);
   await expect(page.getByTestId("onboard-ways")).toHaveCount(0);
   // configuration cards, never a table catalog or a secret value
   await expect(page.getByTestId("source-config").first()).toBeVisible();
@@ -391,7 +391,7 @@ test("only the administrator onboards sources, from Enable; others request them"
   await page.goto("/dashboard/onboarding?type=source");
   await expect(page.getByRole("heading", { name: "Onboard source" })).toBeVisible();
   const tabs = page.getByTestId("section-tabs");
-  await expect(tabs.getByRole("link")).toHaveText(["Source readiness", "Onboard source", "Onboard domain"]);
+  await expect(tabs.getByRole("link")).toHaveText(["Source readiness", "Onboard source", "Onboard domain", "Integrations"]);
   await expect(railLinks(page).filter({ hasText: "Enable" })).toHaveAttribute("aria-current", "page");
   await page.goto("/os/intake/new?type=source");
   await expect(page.getByRole("link", { name: "Open the onboarding wizard" })).toHaveCount(0);

@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { Suspense } from "react";
 import { Bot, Layers, LayoutDashboard, Plug, Rocket, Ruler, ShieldCheck, SlidersHorizontal, Sparkles } from "lucide-react";
-import { api, ApiError, whoami } from "@/lib/api";
+import { api, whoami } from "@/lib/api";
 import { can } from "@/lib/types";
 import type { GovEvent, GovPolicy, GovPrivilege, GovRole, GovSettings, GovUser } from "../governance-actions";
 import { AccessSection } from "./access-section";
@@ -17,10 +17,7 @@ import { ModelsSection } from "./models-section";
 import { RateCardEditor } from "./rate-card";
 import { RulesSection } from "./rules-section";
 import { IntegrationsSection, type IntegrationView } from "./integrations-section";
-import type { DatadogStatus } from "../ops/datadog-actions";
-import type { CodeRepo, PublishingStatus } from "../code/actions";
-import type { JiraStatus } from "../jira/actions";
-import type { AirflowEnv } from "../ops/actions";
+import { loadIntegrations } from "./integrations-data";
 import { SkillsSection } from "./skills-section";
 import type { SkillBinding } from "../skills/types";
 import { Panel, SectionSkeleton, Stat } from "./section";
@@ -129,22 +126,10 @@ async function Section({ id, view, integrationView }: { id: SectionId; view: Mod
     );
   }
   if (id === "integrations") {
-    const [repos, domains, publishing, jira, airflow, datadog] = await Promise.all([
-      api<{ repos: CodeRepo[]; ready: boolean }>("/api/code/repos").catch(() => null),
-      api<{ domains: { domain_id: string; domain_name: string; active_flag: boolean }[] }>("/api/domains").catch(() => ({ domains: [] })),
-      api<PublishingStatus>("/api/dbt/github").catch(() => ({ ready: false, config: null })),
-      api<JiraStatus>("/api/jira/status").catch(() => null),
-      // 404: the ops API is not deployed yet; other API errors are shown on the Airflow tab
-      api<{ envs: AirflowEnv[] }>("/api/ops/envs").then((r) => ({ envs: r.envs as AirflowEnv[] | null, error: null as string | null }), (e: unknown) => {
-        if (e instanceof ApiError) return { envs: e.status === 404 ? null : [], error: e.status === 404 ? null : e.message };
-        throw e;
-      }),
-      api<DatadogStatus>("/api/ops/datadog").catch(() => null),
-    ]);
-    if (!repos) return unavailable;
-    if (!repos.ready) return <p className="text-sm text-muted-foreground">Code repositories need the latest deploy (migration V024).</p>;
-    return <IntegrationsSection repos={repos.repos} publishing={publishing} jira={jira} airflow={airflow.envs} airflowError={airflow.error} datadog={datadog} view={integrationView}
-                                domains={domains.domains.filter((d) => d.active_flag).map((d) => ({ domain_id: d.domain_id, domain_name: d.domain_name }))} />;
+    const data = await loadIntegrations();
+    if (!data) return unavailable;
+    if ("notReady" in data) return <p className="text-sm text-muted-foreground">Code repositories need the latest deploy (migration V024).</p>;
+    return <IntegrationsSection {...data} view={integrationView} />;
   }
   if (id === "skills") {
     const data = await api<{ stages: string[]; bindings: SkillBinding[]; skills: string[] }>("/api/skills/bindings").catch(() => null);

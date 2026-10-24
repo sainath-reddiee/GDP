@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { Boxes, CheckCircle2, CircleDashed, CloudCog, Database, Inbox, KeyRound, Plug, ShieldCheck, Workflow, Wrench, X } from "lucide-react";
+import { CheckCircle2, CircleDashed, CloudCog, Database, Inbox, KeyRound, ShieldCheck, Workflow, Wrench, X } from "lucide-react";
 import { stateLabel } from "@/lib/run-labels";
 import { loadIngestion, loadRequests, loadRuns, loadSources, type IngestionControl, type IngestionPipeline } from "@/lib/os/data";
 import type { OnboardingRequest, RequestItem } from "@/lib/os/requests";
@@ -111,14 +111,10 @@ export default async function SourceReadiness({ searchParams }: { searchParams: 
 
   return (
     <>
-      {/* the one place for each entry: the Source Store, onboarding a domain, onboarding a source */}
+      {/* onboarding a source or a domain are Enable's own tabs above, not repeated here */}
       <PageHeader eyebrow="Enable / Data OS Administrator" title="Source readiness"
-                  subtitle="The Data OS Administrator onboards domains and sources: connection, credential reference, landing target, schedule and SnapLogic configuration. Tables and profiles live in the Source Store; this page is configuration."
-                  actions={<>
-                    <Btn href="/os/design/sources">Open Source Store</Btn>
-                    <Action access={access} id="onboardDomain" href="/os/enable/new-domain" denied="explain" icon={<Boxes className="h-3.5 w-3.5" />} />
-                    <Action access={access} id="connectSource" href="/os/enable/onboarding?type=source" variant="primary" denied="explain" icon={<Plug className="h-3.5 w-3.5" />} />
-                  </>} />
+                  subtitle="The Data OS Administrator onboards domains and sources (the Onboard source and Onboard domain tabs) and manages integrations: connection, credential reference, landing target, schedule and SnapLogic configuration. Tables and profiles live in the Source Store; this page is configuration."
+                  actions={<Btn href="/os/design/sources">Open Source Store</Btn>} />
       <SourceError what="Sources" error={sources.error} />
       <SourceError what="Requests" error={requests.error} />
       {asks.length || domainAsks.length
@@ -193,7 +189,7 @@ export default async function SourceReadiness({ searchParams }: { searchParams: 
               <div className="grid max-h-[720px] gap-3 overflow-auto p-4 lg:grid-cols-2">
                 {ordered.map((s) => <SourceConfig key={s.source_system_id} s={s} controls={controlsOf(s)} pipeline={pipelineOf(s)} />)}
               </div>
-            ) : <div className="p-5"><Empty icon={Database} title="No sources registered">Use Onboard source above.</Empty></div>}
+            ) : <div className="p-5"><Empty icon={Database} title="No sources registered">Onboard the first one from the Onboard source tab.</Empty></div>}
           </Card>
 
           <Card title="Framework configuration" subtitle="Runtime ingestion through the config-driven SnapLogic framework (CORE.INGESTION_CONTROL_CONFIG); secrets are never shown. Edit it in the Source Store.">

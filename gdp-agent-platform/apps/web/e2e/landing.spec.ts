@@ -59,7 +59,7 @@ test("Home is where everyone lands: the onboarded domains, the build workflows a
   await context.addCookies([{ name: "aip_dev", value: "1", url: process.env.AIP_WEB_URL ?? "http://localhost:3000" }]);
   await page.goto("/");
   await page.waitForURL(/\/os$/);
-  await expect(page.getByRole("heading", { level: 1 })).toHaveText("Build workflows");
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText("Platform actions");
   await expect(page.getByTestId("home-views")).toBeVisible();
   await expect(page.getByTestId("start-panel")).toBeVisible();
   await expect(page.getByTestId("onboarded-domains")).toBeVisible();

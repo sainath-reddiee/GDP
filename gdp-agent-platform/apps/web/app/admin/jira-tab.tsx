@@ -23,7 +23,9 @@ function Item({ done, title, children }: { done: boolean; title: string; childre
 }
 
 /** Admin, Integrations, Jira: the one-time setup an admin does, and each engineer's own connection. */
-export function JiraTab({ status, may, onMsg }: { status: JiraStatus | null; may: boolean; onMsg: (m: Msg) => void }) {
+export function JiraTab({ status, may, onMsg, returnTo = "/os/admin/settings?section=integrations&view=jira" }: {
+  status: JiraStatus | null; may: boolean; onMsg: (m: Msg) => void; returnTo?: string;
+}) {
   const router = useRouter();
   const params = useSearchParams();
   const [pending, start] = useTransition();
@@ -47,7 +49,7 @@ export function JiraTab({ status, may, onMsg }: { status: JiraStatus | null; may
     if (r.ok) { setClientId(""); router.refresh(); }
   });
   const connect = () => start(async () => {
-    const r = await connectJira("/os/admin/settings?section=integrations&view=jira");
+    const r = await connectJira(returnTo);
     if (r.ok) window.location.href = r.data.url;
     else onMsg({ tone: "error", text: r.error });
   });
