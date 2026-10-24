@@ -73,7 +73,7 @@ test("Home lists the build workflows by view, type, intent and name, and starts 
   // a clean header: no domain filter, no search; Copilot opens its page, Ctrl J the quick drawer
   await expect(page.getByTestId("domain-switcher")).toHaveCount(0);
   await expect(page.getByText(/Search runs, domains/)).toHaveCount(0);
-  await expect(page.getByTestId("stage-strip")).toBeVisible();
+  await expect(page.getByTestId("onboarded-domains")).toBeVisible();
   await expect(page.getByRole("navigation", { name: "Section" })).toHaveCount(0);   // no Inbox or Overview tabs
   const copilot = page.locator("header [data-copilot-launcher]");
   await expect(copilot).toHaveAttribute("href", "/os/work/copilot");

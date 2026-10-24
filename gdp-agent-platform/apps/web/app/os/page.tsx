@@ -4,7 +4,7 @@ import { SECTIONS, has, screenByKey, type ScreenKey } from "@/lib/os/access";
 import { osAccess, type OsAccess } from "@/lib/os/session";
 import { intentOf, overdue, type OnboardingRequest, type RequestType } from "@/lib/os/requests";
 import { Banner, Btn, Empty, SourceError } from "@/components/os/ui";
-import { DomainsPanel, ProductsPanel, StageStrip, StartPanel, WorkflowRow } from "@/components/os/home";
+import { OnboardedDomains, ProductsPanel, StartPanel, WorkflowRow } from "@/components/os/home";
 import { workflowHref } from "@/lib/os/work";
 import { Segmented } from "@/components/os/stage-board";
 import { HomeSearch } from "@/components/os/home-search";
@@ -12,9 +12,9 @@ import { HomeSearch } from "@/components/os/home-search";
 export const dynamic = "force-dynamic";
 export const metadata = { title: "Home" };
 
-// Home, where everyone lands whatever their role: the studio at a glance (workflows by stage), every build workflow (an
-// onboarding request) with the step it is at and who it waits on, filtered in the URL (?view=active|action|all&type=
-// &intent=&q=), the panel that starts a new one or enhances what exists, and the domains and data products. A workflow
+// Home, where everyone lands whatever their role: every build workflow (an onboarding request), the actions first,
+// with the step it is at and who it waits on, filtered in the URL (?view=active|action|all&type=
+// &intent=&q=), the panel that starts a new one or enhances what exists, the data products, and the onboarded domains below. A workflow
 // opens on the stage board it is at, selected (lib/os/work workflowHref).
 
 const screenByKeySafe = (key: string) => {
@@ -87,7 +87,6 @@ export default async function Home({ searchParams }: { searchParams: Params }) {
         </Banner>
       )}
       <SourceError what="Workflows" error={list.error} />
-      <StageStrip requests={all} access={access} />
 
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_320px]">
         <section className="min-w-0" aria-labelledby="workflows-title">
@@ -121,20 +120,19 @@ export default async function Home({ searchParams }: { searchParams: Params }) {
           )}
         </section>
 
-        <aside className="order-first xl:order-none">
+        <aside>
           <div className="flex flex-col gap-4">
             <StartPanel access={access} />
-            <div className="hidden flex-col gap-4 xl:flex">
-              <DomainsPanel domains={domains.data} requests={all} />
-              <ProductsPanel domains={domains.data} />
-            </div>
+            <div className="hidden xl:block"><ProductsPanel domains={domains.data} /></div>
           </div>
         </aside>
       </div>
-      {/* below xl the domains and products follow the workflows */}
-      <div className="mt-5 grid gap-4 sm:grid-cols-2 xl:hidden">
-        <DomainsPanel domains={domains.data} requests={all} />
-        <ProductsPanel domains={domains.data} />
+      {/* below xl the data products follow the workflows */}
+      <div className="mt-5 xl:hidden"><ProductsPanel domains={domains.data} /></div>
+      {/* the domains come after the work: actions first */}
+      <div className="mt-8">
+        <SourceError what="Domains" error={domains.error} />
+        <OnboardedDomains domains={domains.data} requests={all} access={access} />
       </div>
     </div>
   );

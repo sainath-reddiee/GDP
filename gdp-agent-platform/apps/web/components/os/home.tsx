@@ -1,10 +1,8 @@
 import Link from "next/link";
 import type { ComponentType } from "react";
-import {
-  AlertTriangle, ArrowRight, ArrowUpRight, Boxes, CheckCircle2, ChevronRight, Crown, Database, Hammer, Inbox, Lock, Plus, ShieldCheck, SquareStack, Wand2, Wrench,
-} from "lucide-react";
+import { AlertTriangle, ArrowRight, ArrowUpRight, Boxes, Crown, Database, Lock, Plus, Wand2 } from "lucide-react";
 import { stateLabel } from "@/lib/run-labels";
-import { canSee, has, type ScreenKey } from "@/lib/os/access";
+import { canSee, has } from "@/lib/os/access";
 import type { Domain } from "@/lib/os/data";
 import type { OsAccess } from "@/lib/os/session";
 import {
@@ -12,11 +10,11 @@ import {
 } from "@/lib/os/requests";
 import { Btn, Tag, ago, pretty } from "./ui";
 import { Track, type TrackStep } from "./stage-board";
-import { workflowHref, type Stage } from "@/lib/os/work";
+import { workflowHref } from "@/lib/os/work";
 import { cn } from "@/lib/utils";
 
 // Home and the Intake board: the build workflows (onboarding requests) with the step each one is at and who it waits on,
-// the stage strip, the panel that starts a new one, and the domains and data products. Server-safe, like ./ui.
+// the onboarded domains, the panel that starts a new one, and the data products. Server-safe, like ./ui.
 
 type Icon = ComponentType<{ className?: string }>;
 
@@ -265,72 +263,67 @@ export function RequestFocus({ r, access }: { r: RequestDetail; access: OsAccess
   );
 }
 
-const FLOW: { stage: Stage; label: string; icon: Icon; screen: ScreenKey; href: (view: "action" | "active") => string }[] = [
-  { stage: "intake", label: "Intake", icon: Inbox, screen: "intake", href: (v) => `/os/intake?view=${v}` },
-  { stage: "enable", label: "Enable", icon: Wrench, screen: "enable", href: () => "/os/enable" },
-  { stage: "design", label: "Design", icon: SquareStack, screen: "design", href: (v) => `/os/design?view=${v}` },
-  { stage: "build", label: "Build", icon: Hammer, screen: "build", href: (v) => `/os/build?view=${v}` },
-  { stage: "review", label: "Review", icon: ShieldCheck, screen: "review", href: () => "/os/review" },
-  { stage: "done", label: "Done", icon: CheckCircle2, screen: "intake", href: () => "/os/intake?view=completed" },
-];
-const REQUEST_STAGE: Record<string, Stage> = { NEW: "intake", DOMAIN: "intake", ENABLE: "enable", DESIGN: "design", BUILD: "build", REVIEW: "review", DONE: "done" };
-
-/** The studio at a glance: every workflow by the stage it is at, and how many wait on the viewer there. Each stage
- *  opens its board, on the viewer's queue when they have work there. */
-export function StageStrip({ requests, access }: { requests: OnboardingRequest[]; access: OsAccess }) {
-  const stats = FLOW.map((f) => {
-    const here = requests.filter((r) => (r.status === "OPEN" ? REQUEST_STAGE[r.stage] : r.status === "DONE" ? "done" : null) === f.stage);
-    const mine = here.filter((r) => r.status === "OPEN" && r.waits.some((w) => has(access, w.privilege))).length;
-    return { ...f, count: here.length, mine };
-  });
+/** The onboarded domains, as a row of cards below the workflows on Home: what each holds and what is moving in it. Domains with
+ *  work for the viewer come first, then those with open workflows, then the largest. */
+export function OnboardedDomains({ domains, requests, access, max = 5 }: {
+  domains: Domain[]; requests: OnboardingRequest[]; access: OsAccess; max?: number;
+}) {
+  const open = (d: Domain) => requests.filter((r) => r.status === "OPEN" && r.domain_id === d.domain_id);
+  const mine = (d: Domain) => open(d).filter((r) => r.waits.some((w) => has(access, w.privilege))).length;
+  const shown = [...domains]
+    .sort((a, b) => mine(b) - mine(a) || open(b).length - open(a).length || b.target_tables - a.target_tables || a.domain_name.localeCompare(b.domain_name))
+    .slice(0, max);
   return (
-    <nav aria-label="Workflows by stage" data-testid="stage-strip"
-         className="os-rise mb-5 grid grid-cols-3 overflow-hidden rounded-2xl bg-[#003f2d] text-white shadow-[0_10px_30px_rgba(0,63,45,0.22)] sm:grid-cols-6">
-      {stats.map((s, i) => {
-        const I = s.icon;
-        const body = (
-          <>
-            <span className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-[0.08em] text-[#80bbad]"><I className="h-3.5 w-3.5" />{s.label}</span>
-            <span className="mt-1.5 block text-[28px] font-extrabold leading-none tabular-nums tracking-[-0.03em]">{s.count}</span>
-            <span className="mt-2 block h-5">
-              {s.mine > 0 && <span className="inline-flex items-center gap-1 rounded-full bg-[#17e88f] px-2 py-0.5 text-[10.5px] font-extrabold text-[#003f2d]">{s.mine} need{s.mine === 1 ? "s" : ""} you</span>}
-            </span>
-            {i < stats.length - 1 && <ChevronRight className="absolute right-1.5 top-1/2 hidden h-4 w-4 -translate-y-1/2 text-white/25 sm:block" aria-hidden />}
-          </>
-        );
-        const cls = "relative block px-4 py-3.5 transition border-white/10 [&:not(:last-child)]:border-r";
-        return canSee(access, s.screen)
-          ? <Link key={s.stage} href={s.href(s.mine ? "action" : "active")} className={cn(cls, "hover:bg-white/10")} data-testid={`stage-${s.stage}`}>{body}</Link>
-          : <span key={s.stage} className={cls} data-testid={`stage-${s.stage}`}>{body}</span>;
-      })}
-    </nav>
-  );
-}
-
-/** The domains on the platform and what is moving in each. */
-export function DomainsPanel({ domains, requests }: { domains: Domain[]; requests: OnboardingRequest[] }) {
-  const open = (d: Domain) => requests.filter((r) => r.status === "OPEN" && r.domain_id === d.domain_id).length;
-  const shown = [...domains].sort((a, b) => open(b) - open(a) || b.target_tables - a.target_tables).slice(0, 6);
-  return (
-    <section className="os-card os-rise p-4" data-testid="domains-panel">
-      <div className="flex items-baseline justify-between gap-2">
-        <h2 className="text-[14px] font-extrabold tracking-[-0.01em]">Active data domains</h2>
-        <Link href="/os/knowledge?view=domains" className="os-faint text-[11px] font-bold hover:text-[var(--os-accent-ink)]">All {domains.length}</Link>
+    <section aria-labelledby="domains-title" data-testid="onboarded-domains">
+      <div className="mb-2.5 flex items-baseline justify-between gap-3">
+        <h2 id="domains-title" className="text-[15px] font-extrabold tracking-[-0.01em]">
+          Onboarded domains <span className="os-faint ml-1 text-[12px] font-bold tabular-nums">{domains.length}</span>
+        </h2>
+        <Link href="/os/knowledge?view=domains" className="os-faint inline-flex items-center gap-1 text-[11.5px] font-bold hover:text-[var(--os-accent-ink)]">
+          All domains <ArrowRight className="h-3 w-3" />
+        </Link>
       </div>
       {shown.length ? (
-        <div className="mt-2.5 flex flex-col gap-1.5">
-          {shown.map((d) => (
-            <Link key={d.domain_id} href={`/os/knowledge/domains/${d.domain_id}`} className="os-hover flex items-center gap-2.5 rounded-lg px-2 py-1.5">
-              <span className={cn("grid h-7 w-7 shrink-0 place-items-center rounded-lg", TYPE_TINT.DOMAIN)}><Boxes className="h-3.5 w-3.5" /></span>
-              <span className="min-w-0 flex-1">
-                <span className="block truncate text-[12.5px] font-bold">{d.domain_name}</span>
-                <span className="os-faint block truncate text-[10.5px]">{d.target_tables} tables · {d.knowledge_items} memory</span>
-              </span>
-              {open(d) > 0 && <Tag tone="blue">{open(d)} open</Tag>}
-            </Link>
-          ))}
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
+          {shown.map((d) => {
+            const n = open(d).length;
+            const you = mine(d);
+            return (
+              <Link key={d.domain_id} href={`/os/knowledge/domains/${d.domain_id}`} data-testid="domain-card"
+                    className={cn("os-card os-rise group flex flex-col gap-2.5 p-3.5 transition hover:-translate-y-0.5 hover:shadow-[var(--os-shadow-pop)]",
+                                  you > 0 && "border-l-[3px] border-l-[var(--os-accent)]")}>
+                <div className="flex items-start gap-3">
+                  <span className={cn("grid h-8 w-8 shrink-0 place-items-center rounded-lg", TYPE_TINT.DOMAIN)}><Boxes className="h-4 w-4" /></span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-[13px] font-extrabold tracking-[-0.01em]">{d.domain_name}</span>
+                    <span className="os-faint block truncate text-[11px]">{d.description || (d.mdm_role ? `${pretty(d.mdm_role)} domain` : "Business domain")}</span>
+                  </span>
+                  <ArrowUpRight className="os-faint h-3.5 w-3.5 shrink-0 opacity-0 transition group-hover:opacity-100" />
+                </div>
+                <div className="grid grid-cols-3 gap-2 border-t border-[var(--os-line-soft)] pt-2 text-[10.5px]">
+                  <span><b className="block text-[14px] font-extrabold tabular-nums">{d.target_tables}</b><span className="os-faint">tables</span></span>
+                  <span><b className="block text-[14px] font-extrabold tabular-nums">{d.knowledge_items}</b><span className="os-faint">memory</span></span>
+                  <span><b className="block text-[14px] font-extrabold tabular-nums">{n}</b><span className="os-faint">open</span></span>
+                </div>
+                {(you > 0 || (d.gold_tables ?? 0) > 0 || d.mdm_role) && (
+                  <div className="flex flex-wrap gap-1.5">
+                    {you > 0 && <Tag tone="green">{you} need{you === 1 ? "s" : ""} you</Tag>}
+                    {(d.gold_tables ?? 0) > 0 && <Tag tone="amber">{d.gold_tables} Gold</Tag>}
+                    {d.mdm_role && <Tag>{pretty(d.mdm_role)}</Tag>}
+                  </div>
+                )}
+              </Link>
+            );
+          })}
         </div>
-      ) : <p className="os-faint mt-2 text-[12px]">No domain is onboarded yet.</p>}
+      ) : (
+        <div className="os-card p-5 text-[12.5px]"><span className="os-muted">No domain is onboarded yet. Start one with <b>Data domain, New</b>.</span></div>
+      )}
+      {domains.length > shown.length && (
+        <Link href="/os/knowledge?view=domains" className="os-faint mt-2 inline-block text-[11.5px] font-bold hover:text-[var(--os-accent-ink)]">
+          +{domains.length - shown.length} more domain{domains.length - shown.length === 1 ? "" : "s"}
+        </Link>
+      )}
     </section>
   );
 }

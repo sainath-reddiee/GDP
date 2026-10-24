@@ -37,12 +37,12 @@ The header holds the brand, Copilot, "View as" (and, for admins, "Preview as rol
 
 The studio at a glance, with no hero. Everything on it opens the stage it is at with that workflow selected.
 
-- **Stage strip.** Intake, Enable, Design, Build, Review, Done: how many workflows are at each stage and "N need you" where the viewer has work. Each opens that stage's board, on Action required when the viewer has work there.
+- **Onboarded domains.** A row of cards below the workflows (the actions come first): each domain's tables, memory and open workflows, "N need you" where the viewer has work, Gold tables and MDM role. Domains with work for the viewer come first; each opens its domain workspace.
 
 - **Workflows.** Each row is a request: its type and intent ("Enhance source"), domain, priority, overdue, and a step track (Domain, Enable, Design, Build, Review, Done) with the step it is at and "Waiting on <role> · 2d". The role is the one the wait names ("Model approver: approve the field mapping"). When the viewer's role acts next the row says "Your turn" with "Do it", which opens where that step is worked. A row expands to its sources and their runs. "Open", the title and the step track go to the stage board the workflow is at, selected (`lib/os/work.ts` `workflowHref`: Design and Build open its run; Enable and Review their screens; anything else Intake).
 - **Views and filters**, all in the URL so a view can be shared: Active (open), Action required (open and waiting on a privilege the viewer holds; the default when it has any), All; type (Domain, Source, Product); New or Enhance; search by workflow name.
 - **Start a workflow.** Data domain, Data source and Data product, each New or Enhance, open the Intake form (`/os/intake/new`) with the type and intent chosen. Everyone sees the panel; the buttons open for people who may file a request (the Intake screen's privileges) and are disabled with the reason for the rest. Administrators also get "Onboard directly". Data products are coming soon.
-- **Active data domains** (with their open workflows) and **Data products** (the domains' Gold sets so far; product requests are coming soon).
+- **Data products** (the domains' Gold sets so far; product requests are coming soon).
 
 ## Stage boards: Intake, Design, Build
 
