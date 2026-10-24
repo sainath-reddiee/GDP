@@ -55,14 +55,15 @@ test("an ended session opens the dialog with a notice", async ({ page }) => {
   await expect(page.getByTestId("sign-in-dialog")).toContainText("Your session ended");
 });
 
-test("Home is where everyone lands: the build workflows, Start a workflow, and the Inbox a tab away", async ({ page, context }) => {
+test("Home is where everyone lands: the stage strip, the build workflows and Start a workflow; the Inbox keeps its address", async ({ page, context }) => {
   await context.addCookies([{ name: "aip_dev", value: "1", url: process.env.AIP_WEB_URL ?? "http://localhost:3000" }]);
   await page.goto("/");
   await page.waitForURL(/\/os$/);
   await expect(page.getByRole("heading", { level: 1 })).toHaveText("Build workflows");
   await expect(page.getByTestId("home-views")).toBeVisible();
   await expect(page.getByTestId("start-panel")).toBeVisible();
-  await page.getByRole("navigation", { name: "Section" }).getByRole("link", { name: "Inbox" }).click();
-  await page.waitForURL(/\/os\/work\/inbox$/);
+  await expect(page.getByTestId("stage-strip")).toBeVisible();
+  // the Inbox is no longer a tab of Home, and keeps its address
+  await page.goto("/os/work/inbox");
   for (const id of ["tiles", "approve", "runs", "fix", "knowledge", "proposals", "prs"]) await expect(page.getByTestId(`work-${id}`)).toBeVisible();
 });

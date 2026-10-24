@@ -26,7 +26,7 @@ export const hasAny = (g: Grants, privileges?: readonly string[]) => !privileges
 export type SectionKey = "work" | "intake" | "enable" | "design" | "build" | "review" | "skills" | "release" | "knowledge" | "run" | "admin";
 export type ScreenKey =
   | "work" | "inbox" | "overview" | "copilot"
-  | "intake" | "requests" | "requestHistory" | "onboarding"
+  | "intake" | "intakeNew" | "requests" | "requestHistory" | "onboarding"
   | "enable"
   | "design" | "newDomain" | "domains" | "stores"
   | "ready" | "build" | "pipelines" | "gold" | "lineage" | "code" | "history" | "runs"
@@ -57,18 +57,23 @@ const OPERATORS = ["OPS.VIEW", "JIRA.READ", "CASE.WORK"] as const;
 const SUPER = ["*"] as const;
 
 export const SCREENS: Screen[] = [
-  // Home: the workflows in flight, the inbox and the estate overview
+  // Home: the studio overview, where everyone lands
   { key: "work", section: "work", href: "/os", label: "Home", exact: true, why: "everyone signed in" },
-  { key: "inbox", section: "work", href: "/os/work/inbox", label: "Inbox", why: "everyone signed in (requests, questions, tickets)" },
-  { key: "overview", section: "work", href: "/os/work/overview", label: "Overview", exact: true, why: "everyone signed in" },
+  // Home is one page: the inbox and the estate overview keep their addresses but are not tabs
+  { key: "inbox", section: "work", href: "/os/work/inbox", label: "Inbox", rail: false, why: "everyone signed in (requests, questions, tickets)" },
+  { key: "overview", section: "work", href: "/os/work/overview", label: "Overview", exact: true, rail: false, why: "everyone signed in" },
   // Copilot opens from the header; its full page is reached from the drawer, not a tab
   { key: "copilot", section: "work", href: "/os/work/copilot", label: "Copilot", rail: false, view: ["AI.USE"], why: "people who may use AI" },
 
-  // Intake: asking for something, and the onboarding wizards that start it
-  { key: "intake", section: "intake", href: "/os/intake", label: "New request",
+  // Intake: the requests board (Selected, Action required, Active, Completed) and the form that files a new one; the
+  // older request lists keep their addresses under the board
+  { key: "intake", section: "intake", href: "/os/intake", label: "Requests", exact: true, why: "everyone signed in (each sees the requests of the domains they may see)" },
+  { key: "intakeNew", section: "intake", href: "/os/intake/new", label: "New request", paths: ["/os/intake/new"], rail: false, under: "intake",
     view: ["RUN.CREATE", "SOURCE.CONNECT", "DOMAIN.EDIT", "REQUEST.CHANGES"], why: "people who start onboarding or file requests" },
-  { key: "requests", section: "intake", href: "/os/requests", label: "Requests", why: "everyone signed in (each sees the requests of the domains they may see)" },
-  { key: "requestHistory", section: "intake", href: "/os/requests/history", label: "Request history", why: "everyone signed in (finished, cancelled and rejected requests, read only)" },
+  { key: "requests", section: "intake", href: "/os/requests", label: "Requests", paths: ["/os/requests"], rail: false, under: "intake",
+    why: "everyone signed in (each sees the requests of the domains they may see)" },
+  { key: "requestHistory", section: "intake", href: "/os/requests/history", label: "Request history", paths: ["/os/requests/history"], rail: false, under: "intake",
+    why: "everyone signed in (finished, cancelled and rejected requests, read only)" },
 
   // Enable: onboarding sources is the Data OS Administrator's alone (registering, landing and starting the run)
   { key: "enable", section: "enable", href: "/os/enable", label: "Source readiness", view: ["SOURCE.CONNECT", "DOMAIN.ONBOARD", "CONFIG.EDIT", "INTEGRATION.MANAGE"], why: "the Data OS Administrator (onboarding sources and domains, configuring ingestion)" },

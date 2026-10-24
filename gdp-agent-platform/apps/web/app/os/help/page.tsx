@@ -12,11 +12,11 @@ export const dynamic = "force-dynamic";
 export const metadata = { title: "How it works" };
 
 const TOUR: { key: ScreenKey; href: string; title: string; what: string }[] = [
-  { key: "work", href: "/os", title: "Home", what: "Every build workflow with the step it is at and who it waits on (Active, Action required, All), and New or Enhance for a domain, source or data product." },
-  { key: "intake", href: "/os/intake", title: "Intake", what: "Link a domain and its sources; see what is reused and where the request routes." },
+  { key: "work", href: "/os", title: "Home", what: "The studio at a glance: workflows by stage, every build workflow with the step it is at and who it waits on, New or Enhance, and the domains and data products. A workflow opens on its stage, selected." },
+  { key: "intake", href: "/os/intake", title: "Intake", what: "Every request by Selected, Action required, Active and Completed, and New or Enhance for a domain, source or data product." },
   { key: "enable", href: "/os/enable", title: "Enable", what: "Source readiness and the config-driven ingestion framework." },
-  { key: "design", href: "/os/design", title: "Design", what: "The domain model, mapping proposals with confidence, open questions and the contract." },
-  { key: "ready", href: "/os/build/ready", title: "Build", what: "Ready to build: every run whose design is done, built end to end by autopilot up to code review; the Workbench shows one run; Run history lists every run." },
+  { key: "design", href: "/os/design", title: "Design", what: "Runs in design by Selected, Action required, Active and Completed; a selected run opens on Profile, Model or Map." },
+  { key: "build", href: "/os/build", title: "Build", what: "Runs being generated and validated by Selected, Action required, Active and Completed; a selected run opens the workbench with its eight steps. Ready to build and Run history sit beside it." },
   { key: "review", href: "/os/review", title: "Review", what: "The validation gate (review and code standards agents, minimum score) and every human gate across domains." },
   { key: "skills", href: "/os/skills", title: "Skills", what: "Versioned skills, real version diffs, tests and controlled recovery." },
   { key: "release", href: "/os/release", title: "Release", what: "Pull request, promotion stages, QA and UAT signoff and what the run taught memory." },
@@ -33,7 +33,7 @@ export default async function Help() {
   return (
     <>
       <PageHeader eyebrow="Agentic Data OS / How it works" title="One workflow, many personas"
-                  subtitle="Every screen reads the live platform: the onboarded domains, their runs, validation, skills and Enterprise Memory. Agents work autonomously; people own the gates." />
+                  subtitle="Every screen reads the live platform: the onboarded domains, their runs, validation, skills and Enterprise Memory. Agents do the work; people own the gates." />
       <Card className="mb-4" title="The lifecycle" subtitle="Eight steps, mapped from each run's real workflow state">
         <ol className="grid gap-2 sm:grid-cols-4 xl:grid-cols-8">
           {LIFECYCLE.map((s, i) => (

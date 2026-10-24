@@ -7,7 +7,6 @@ import { cookies, headers } from "next/headers";
 import { redirect } from "next/navigation";
 import type { ReactNode } from "react";
 import { api, AUTH_MODE, DEV_COOKIE, SESSION_COOKIE } from "@/lib/api";
-import { getDomainScope } from "@/lib/domain-scope";
 import { CatalogDisplayProvider } from "@/components/catalog-display-provider";
 import { configureCatalogDisplay, type CatalogDisplayConfig } from "@/lib/catalog-display";
 import { CopilotProvider } from "@/components/copilot/copilot-provider";
@@ -16,8 +15,7 @@ import { AppChrome } from "@/components/os/chrome";
 import { CLASSIC_COOKIE, PATH_HEADER, SCREENS, SECTIONS, canSee, mayUseClassic, screenOfPath } from "@/lib/os/access";
 import { osAccess } from "@/lib/os/session";
 import { Sidebar } from "@/components/sidebar";
-import { CommandPalette } from "@/components/shell/command-palette";
-import { AccountMenu, DomainSwitcher, NewMenu, TopBar, type DomainOption } from "@/components/shell/top-bar";
+import { AccountMenu, NewMenu, TopBar } from "@/components/shell/top-bar";
 import { WorkspaceTabs } from "@/components/shell/workspace-tabs";
 import { THEME_SCRIPT, ThemeProvider } from "@/components/theme/theme-provider";
 import { ToastProvider } from "@/components/ui/toast";
@@ -39,17 +37,14 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
       </html>
     );
   }
-  const [access, catalog, domains] = await Promise.all([
+  const [access, catalog] = await Promise.all([
     osAccess(),
     api<CatalogDisplayConfig>("/api/config/catalog-display").catch(() => null),
-    api<{ domains: (DomainOption & { active_flag?: boolean })[] }>("/api/domains")
-      .then((r) => (r.domains ?? []).filter((d) => d.active_flag !== false).map(({ domain_id, domain_name }) => ({ domain_id, domain_name })))
-      .catch(() => [] as DomainOption[]),
   ]);
   const me = access.me;
 
   // every page is gated by the person's privileges (or the previewed role's): a page outside the role goes back to
-  // My Work with the reason, before it reads anything (lib/os/access)
+  // Home with the reason, before it reads anything (lib/os/access)
   const screen = screenOfPath(headers().get(PATH_HEADER) ?? "");
   if (screen && !canSee(access, screen.key)) redirect(`/os?denied=${screen.key}`);
 
@@ -90,18 +85,16 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
                       ownPrivileges: access.own.privileges.length, full: access.privileges.includes("*") }
                   : null,
                 preview: access.preview ? { current: access.preview.label } : null,
-                headerStart: <DomainSwitcher domains={domains} scope={getDomainScope()} />,
                 headerEnd: <><NewMenu privileges={privileges} />{account}</>,
               }}
               sidebar={<Sidebar privileges={privileges} />}
               topBar={<TopBar user={me?.user ?? null} role={me?.role ?? null} canLogout appRoles={me?.governance ? me.granted_roles ?? [] : null}
-                              privileges={privileges} domains={domains} scope={getDomainScope()} />}
+                              privileges={privileges} />}
               banner={<ReadOnlyBanner />}
               tabs={<WorkspaceTabs privileges={privileges} />}
             >
               <CatalogDisplayProvider config={catalog}>{children}</CatalogDisplayProvider>
             </AppChrome>
-            <CommandPalette privileges={privileges} domains={domains} />
           </CopilotProvider>
           </AccessProvider>
         </ToastProvider>

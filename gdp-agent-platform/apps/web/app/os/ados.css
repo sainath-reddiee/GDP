@@ -6,17 +6,21 @@
   --os-surface: #ffffff;
   --os-subtle: #f8faf9;
   --os-hover: #f3faf7;
-  --os-ink: #142c28;
-  --os-ink-2: #1f342e;
-  --os-muted: #657a74;
+  --os-ink: #032842;
+  --os-ink-2: #1a2e3b;
+  --os-muted: #435254;
   --os-faint: #83968c;
   --os-line: #e1eae6;
   --os-line-soft: #edf1ef;
-  --os-forest: #004c3b;
-  --os-forest-2: #006348;
+  --os-forest: #003f2d;
+  --os-forest-2: #0b5940;
   --os-emerald: #058763;
   --os-leaf: #15a778;
   --os-accent-ink: #006247;
+  /* CBRE accent green, and celadon for completed steps */
+  --os-accent: #17e88f;
+  --os-step-done: #80bbad;
+  --os-step-done-ink: #538184;
   --os-green-bg: #e7f8ee; --os-green-ink: #008559; --os-green-line: #c9ead7;
   --os-blue-bg: #eaf4ff; --os-blue-ink: #2974bd; --os-blue-line: #d2e3fa;
   --os-amber-bg: #fff4dd; --os-amber-ink: #a2670b; --os-amber-line: #efd9ae;
@@ -47,6 +51,9 @@
   --os-emerald: #2fbf8d;
   --os-leaf: #2fbf8d;
   --os-accent-ink: #5fd8aa;
+  --os-accent: #17e88f;
+  --os-step-done: #538184;
+  --os-step-done-ink: #80bbad;
   --os-green-bg: #12352a; --os-green-ink: #6fe0b4; --os-green-line: #1d4c3c;
   --os-blue-bg: #132a40; --os-blue-ink: #7fb8ec; --os-blue-line: #1f3d5a;
   --os-amber-bg: #3a2a0e; --os-amber-ink: #f0c26a; --os-amber-line: #574117;
@@ -80,7 +87,7 @@
 .ados .os-btn:focus-visible { outline: 2px solid var(--os-emerald); outline-offset: 2px; }
 .ados .os-btn:disabled { opacity: 0.5; cursor: default; transform: none; }
 .ados .os-btn-primary { background: var(--os-forest); color: #fff; border-color: var(--os-forest); }
-.ados .os-btn-primary:hover { background: var(--os-forest-2); box-shadow: 0 4px 12px rgba(0, 76, 59, 0.25); }
+.ados .os-btn-primary:hover { background: var(--os-forest-2); box-shadow: 0 4px 12px rgba(0, 63, 45, 0.25); }
 .ados .os-btn-mint { background: var(--os-green-bg); color: var(--os-green-ink); border-color: var(--os-green-line); }
 .ados .os-btn-mint:hover { background: var(--os-green-bg); filter: brightness(0.97); }
 .ados .os-btn-warn { background: var(--os-amber-bg); color: var(--os-amber-ink); border-color: var(--os-amber-line); }
@@ -126,7 +133,11 @@
 .ados .os-code .del { color: #f39a9a; text-decoration: line-through; opacity: 0.8; }
 .ados .os-code .cmt { color: #7fa497; }
 
-/* the hero on My Work */
+/* the step a workflow is at: CBRE accent green with a soft glow */
+@keyframes os-step-glow { 0%, 100% { box-shadow: 0 0 0 0 rgba(23, 232, 143, 0.45); } 50% { box-shadow: 0 0 0 4px rgba(23, 232, 143, 0); } }
+.ados .os-step-now { animation: os-step-glow 2.2s ease-in-out infinite; }
+
+/* the hero (no longer on Home) */
 .ados .os-hero { background: linear-gradient(110deg, #004937 0%, #006347 53%, #208e67 100%); color: #fff; border-radius: 14px; position: relative; overflow: hidden; }
 .ados .os-hero .shape1 { position: absolute; right: 60px; top: -103px; width: 360px; height: 280px; border: 1px solid #86d5b5; border-radius: 90px; transform: rotate(28deg); opacity: 0.4; }
 .ados .os-hero .shape2 { position: absolute; right: 140px; top: -75px; width: 260px; height: 240px; border: 2px solid #97dfc2; border-radius: 100px; transform: rotate(28deg); opacity: 0.3; }
@@ -135,7 +146,7 @@
 /* the icon rail */
 .ados .os-rail-item { color: var(--os-muted); border-radius: 10px; transition: background 0.15s, color 0.15s; }
 .ados .os-rail-item:hover { background: var(--os-hover); color: var(--os-ink); }
-.ados .os-rail-item[aria-current="page"] { background: var(--os-forest); color: #fff; box-shadow: 0 6px 14px rgba(0, 76, 59, 0.25); }
+.ados .os-rail-item[aria-current="page"] { background: var(--os-forest); color: #fff; box-shadow: inset 0 -3px 0 var(--os-accent), 0 6px 14px rgba(0, 63, 45, 0.25); }
 
 /* tabs */
 .ados .os-tab { font-size: 12px; font-weight: 700; color: var(--os-muted); padding: 9px 0; border-bottom: 2px solid transparent; }
@@ -149,6 +160,6 @@
 @keyframes os-spin { to { transform: rotate(360deg); } }
 .ados .os-spin { animation: os-spin 0.9s linear infinite; }
 @media (prefers-reduced-motion: reduce) {
-  .ados .os-rise, .ados .os-pulse, .ados .os-spin { animation: none; }
+  .ados .os-rise, .ados .os-pulse, .ados .os-spin, .ados .os-step-now { animation: none; }
   .ados .os-bar > div { transition: none; }
 }

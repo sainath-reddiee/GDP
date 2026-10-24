@@ -16,7 +16,7 @@ export function StoreCards({ o, domain, onboard = false }: { o: Overview | null;
           <StoreCard testId="store-source" title="Source Store" subtitle="Shares, databases, files and external pipelines" icon={Database} tone="indigo" missing={!o?.sources}
                      metrics={[{ label: "Shares", value: <CountUp value={o?.sources?.shares} /> }, { label: "Databases", value: <CountUp value={o?.sources?.databases} /> },
                                { label: "Files, other", value: <CountUp value={o?.sources?.other} /> }, { label: "Pipelines", value: <CountUp value={o?.sources?.external} /> }]}
-                     href={h("/os/design/sources")} action={onboard ? { label: "Onboard source", href: "/os/enable/onboarding?type=source", icon: PlugZap } : { label: "Request a source", href: "/os/intake", icon: PlugZap }}
+                     href={h("/os/design/sources")} action={onboard ? { label: "Onboard source", href: "/os/enable/onboarding?type=source", icon: PlugZap } : { label: "Request a source", href: "/os/intake/new", icon: PlugZap }}
                      alert={idle ? { text: `${plural(idle, "external pipeline")} not active yet`, tone: "amber" } : null} />
           <StoreCard testId="store-profiling" title="Profiling Store" subtitle="Distributions, nulls, cardinality and drift" icon={BarChart3} tone="sky" missing={!o?.profiling}
                      metrics={[{ label: "Tables profiled", value: <CountUp value={o?.profiling?.tables} /> },

@@ -17,28 +17,25 @@ type Message =
   | { role: "assistant"; content: string; data?: CopilotAnswer; error?: boolean }
   | { role: "divider"; content: string };
 
-const CopilotCtx = createContext<{ setFocus: (f: Focus) => void; open: (question?: string) => void; toggle: () => void; shown: boolean; unread: boolean }>({
-  setFocus: () => undefined, open: () => undefined, toggle: () => undefined, shown: false, unread: false,
+const CopilotCtx = createContext<{ setFocus: (f: Focus) => void; open: (question?: string) => void; shown: boolean }>({
+  setFocus: () => undefined, open: () => undefined, shown: false,
 });
 
 /** Pages tell the copilot which table is in view (e.g. an open profile) and can open it with a question. */
 export const useCopilot = () => useContext(CopilotCtx);
 
-/** The header's Copilot button: opens the drawer (Ctrl+J does the same). Not on the full Copilot page, which is the
- *  drawer's big version, nor for people who may not use AI. */
+/** The header's Copilot button: opens the Copilot page (the chat workspace). Ctrl+J still opens the quick drawer for a
+ *  question about the page on screen. Not on the Copilot page itself, nor for people who may not use AI. */
 export function CopilotButton({ className }: { className?: string }) {
-  const { toggle, shown, unread } = useCopilot();
   const { can } = useAccess();
   const pathname = usePathname() ?? "";
   if (!can("AI.USE") || pathname.startsWith("/os/work/copilot")) return null;
   return (
-    <button type="button" onClick={toggle} aria-label={shown ? "Close copilot" : "Open copilot"} title="Copilot (Ctrl+J)"
-            aria-expanded={shown} data-copilot-launcher className={cn("relative", className)}>
+    <Link href="/os/work/copilot" title="Copilot: chat, saved conversations, attachments (Ctrl+J for a quick question)" data-copilot-launcher
+          className={className}>
       <Sparkles className="h-4 w-4" />
       <span className="hidden lg:inline">Copilot</span>
-      <kbd className="hidden rounded border border-current/20 px-1 text-[10px] font-semibold opacity-60 xl:inline">Ctrl J</kbd>
-      {unread && !shown && <span className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full bg-destructive ring-2 ring-background" />}
-    </button>
+    </Link>
   );
 }
 
@@ -101,9 +98,6 @@ function CopilotShell({ children }: { children: ReactNode }) {
   const [show, setShow] = useState(false);
   const { can } = useAccess();
   const [wide, setWide] = useState(false);
-  const [unread, setUnread] = useState(false);
-  const showRef = useRef(show);
-  showRef.current = show;
   const [messages, setMessages] = useState<Message[]>([]);
   const [conversation, setConversation] = useState<string | null>(null);
   const [input, setInput] = useState("");
@@ -143,7 +137,7 @@ function CopilotShell({ children }: { children: ReactNode }) {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
-  useEffect(() => { if (show) { setUnread(false); setTimeout(() => inputRef.current?.focus(), 50); } }, [show]);
+  useEffect(() => { if (show) setTimeout(() => inputRef.current?.focus(), 50); }, [show]);
   useEffect(() => { listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: "smooth" }); }, [messages, busy]);
 
   const send = useCallback(async (text: string) => {
@@ -163,7 +157,6 @@ function CopilotShell({ children }: { children: ReactNode }) {
     if (r.ok) {
       setConversation(r.data.conversation_id);
       setMessages((m) => [...m, { role: "assistant", content: r.data.answer, data: r.data }]);
-      if (!showRef.current) setUnread(true);
     } else {
       setMessages((m) => [...m, { role: "assistant", content: r.error, error: true }]);
     }
@@ -175,7 +168,7 @@ function CopilotShell({ children }: { children: ReactNode }) {
   }, [send]);
 
   return (
-    <CopilotCtx.Provider value={{ setFocus, open, toggle: () => setShow((v) => !v), shown: show, unread }}>
+    <CopilotCtx.Provider value={{ setFocus, open, shown: show }}>
       {children}
       {show && can("AI.USE") && (
         <aside role="dialog" aria-label="Copilot"

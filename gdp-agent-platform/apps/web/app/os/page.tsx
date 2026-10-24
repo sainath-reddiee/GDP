@@ -1,19 +1,21 @@
 import { CheckCircle2, Inbox, SearchX, ShieldCheck } from "lucide-react";
-import { loadRequests } from "@/lib/os/data";
+import { loadDomains, loadRequests } from "@/lib/os/data";
 import { SECTIONS, has, screenByKey, type ScreenKey } from "@/lib/os/access";
 import { osAccess, type OsAccess } from "@/lib/os/session";
-import { getDomainScope } from "@/lib/domain-scope";
 import { intentOf, overdue, type OnboardingRequest, type RequestType } from "@/lib/os/requests";
 import { Banner, Btn, Empty, SourceError } from "@/components/os/ui";
-import { Segmented, StartPanel, WorkflowRow } from "@/components/os/home";
+import { DomainsPanel, ProductsPanel, StageStrip, StartPanel, WorkflowRow } from "@/components/os/home";
+import { workflowHref } from "@/lib/os/work";
+import { Segmented } from "@/components/os/stage-board";
 import { HomeSearch } from "@/components/os/home-search";
 
 export const dynamic = "force-dynamic";
 export const metadata = { title: "Home" };
 
-// Home, where everyone lands whatever their role: every build workflow (an onboarding request) with the step it is at
-// and who it waits on, filtered in the URL (?view=active|action|all&type=&intent=&q=), and the panel that starts a new
-// one or enhances what is already on the platform.
+// Home, where everyone lands whatever their role: the studio at a glance (workflows by stage), every build workflow (an
+// onboarding request) with the step it is at and who it waits on, filtered in the URL (?view=active|action|all&type=
+// &intent=&q=), the panel that starts a new one or enhances what exists, and the domains and data products. A workflow
+// opens on the stage board it is at, selected (lib/os/work workflowHref).
 
 const screenByKeySafe = (key: string) => {
   try { return screenByKey(key as ScreenKey) ?? null; } catch { return null; }
@@ -54,13 +56,11 @@ export default async function Home({ searchParams }: { searchParams: Params }) {
   const deniedSection = denied ? SECTIONS.find((x) => x.key === denied.section)?.label : null;
   const deniedName = denied ? (deniedSection && deniedSection !== denied.label ? `${deniedSection}: ${denied.label}` : denied.label) : "";
 
-  const list = await loadRequests("all", "ALL");
-  // the header's domain scope (a domain name) narrows the list, as it does the classic pages
-  const scope = getDomainScope().toUpperCase();
-  const scoped = list.data.requests.filter((r) => !scope || (r.domain_name ?? r.proposed_domain ?? "").toUpperCase() === scope);
-  const active = scoped.filter((r) => r.status === "OPEN");
+  const [list, domains] = await Promise.all([loadRequests("all", "ALL"), loadDomains()]);
+  const all = list.data.requests;
+  const active = all.filter((r) => r.status === "OPEN");
   const action = active.filter((r) => yours(r, access));
-  const views = { active, action, all: scoped };
+  const views = { active, action, all };
 
   const view = VIEWS.find((v) => v.key === searchParams.view)?.key ?? (action.length ? "action" : "active");
   const type = TYPES.find((t) => t.key === searchParams.type) ?? TYPES[0];
@@ -87,14 +87,12 @@ export default async function Home({ searchParams }: { searchParams: Params }) {
         </Banner>
       )}
       <SourceError what="Workflows" error={list.error} />
+      <StageStrip requests={all} access={access} />
 
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_320px]">
         <section className="min-w-0" aria-labelledby="workflows-title">
           <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-            <div className="flex min-w-0 items-baseline gap-2">
-              <h1 id="workflows-title" className="text-[20px] font-extrabold tracking-[-0.03em]">Build workflows</h1>
-              {scope && <span className="os-faint truncate text-[12px]">in {getDomainScope()}</span>}
-            </div>
+            <h1 id="workflows-title" className="text-[20px] font-extrabold tracking-[-0.03em]">Build workflows</h1>
             <HomeSearch />
           </div>
           <div className="mb-4 flex flex-wrap items-center gap-2">
@@ -109,7 +107,7 @@ export default async function Home({ searchParams }: { searchParams: Params }) {
 
           {rows.length ? (
             <div className="flex flex-col gap-3">
-              {rows.map((r) => <WorkflowRow key={r.request_id} r={r} access={access} />)}
+              {rows.map((r) => <WorkflowRow key={r.request_id} r={r} access={access} href={workflowHref(r)} />)}
             </div>
           ) : filtered ? (
             <Empty icon={SearchX} title={q ? `No workflow matches "${searchParams.q?.trim()}"` : "No workflow matches these filters"}
@@ -124,8 +122,19 @@ export default async function Home({ searchParams }: { searchParams: Params }) {
         </section>
 
         <aside className="order-first xl:order-none">
-          <div className="xl:sticky xl:top-[76px]"><StartPanel access={access} /></div>
+          <div className="flex flex-col gap-4">
+            <StartPanel access={access} />
+            <div className="hidden flex-col gap-4 xl:flex">
+              <DomainsPanel domains={domains.data} requests={all} />
+              <ProductsPanel domains={domains.data} />
+            </div>
+          </div>
         </aside>
+      </div>
+      {/* below xl the domains and products follow the workflows */}
+      <div className="mt-5 grid gap-4 sm:grid-cols-2 xl:hidden">
+        <DomainsPanel domains={domains.data} requests={all} />
+        <ProductsPanel domains={domains.data} />
       </div>
     </div>
   );

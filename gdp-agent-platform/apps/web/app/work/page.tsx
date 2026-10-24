@@ -108,7 +108,7 @@ export default async function MyWorkPage() {
           <Link href="/os/work/overview" className={buttonVariants({ variant: "outline" })}><LayoutDashboard className="h-4 w-4" />Command Center</Link>
           {mayOnboard
             ? <Link href="/os/enable/onboarding?type=source" className={buttonVariants()}><PlugZap className="h-4 w-4" />Onboard source</Link>
-            : <Link href="/os/intake" className={buttonVariants()}><PlugZap className="h-4 w-4" />Request a source</Link>}
+            : <Link href="/os/intake/new" className={buttonVariants()}><PlugZap className="h-4 w-4" />Request a source</Link>}
         </div>
       </div>
 
@@ -179,7 +179,7 @@ export default async function MyWorkPage() {
           <Section id="runs" title="Your runs the agent is working on" icon={Bot} tone="agent" count={w.running.length} href="/os/build/runs?status=running" hrefLabel="All runs"
                    empty={<span>You have no runs in flight. {mayOnboard
                      ? <><Link href="/os/enable/onboarding?type=source" className="font-medium text-primary hover:underline">Onboard a source</Link> to start one.</>
-                     : <><Link href="/os/intake" className="font-medium text-primary hover:underline">Request a source</Link> and the Data OS Administrator onboards it.</>}</span>}>
+                     : <><Link href="/os/intake/new" className="font-medium text-primary hover:underline">Request a source</Link> and the Data OS Administrator onboards it.</>}</span>}>
             {w.running.length > 0 && (
               <ul className="divide-y">
                 {w.running.map((r) => {

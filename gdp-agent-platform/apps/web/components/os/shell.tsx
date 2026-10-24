@@ -4,15 +4,15 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState, useTransition, type ComponentType, type ReactNode } from "react";
 import {
-  BookOpen, ChevronDown, CircleHelp, Eye, Gauge, Hammer, Home, Menu, Plus, Rocket, Search, Settings, ShieldCheck, Sparkles, SquareStack, Wrench, X,
+  BookOpen, ChevronDown, CircleHelp, Eye, Gauge, Hammer, Home, Menu, Plus, Rocket, Settings, ShieldCheck, Sparkles, SquareStack, Wrench, X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { screenOfPath, type ScreenKey, type SectionKey } from "@/lib/os/access";
 import { PERSONA_COOKIE } from "@/lib/os/personas";
 import { CopilotButton } from "@/components/copilot/copilot-provider";
 
-// The Agentic Data OS shell, around every signed-in page: CBRE header (brand, domain scope, global search, Copilot,
-// "Preview as role", "View as" persona, new menu, account), the UX package's ten-entry icon rail (plus Admin for
+// The Agentic Data OS shell, around every signed-in page: CBRE header (brand, Copilot, "Preview as role", "View as"
+// persona, new menu, account), the UX package's ten-entry icon rail (plus Admin for
 // admins) and, above the page, the tabs of the entry on show: every page of that entry, /os and classic alike. The
 // root layout passes only what the person's governance privileges allow: the entries, their tabs, and the personas.
 
@@ -47,12 +47,12 @@ export type ShellProps = {
   /** the rail entries the person may open (each opens its first open tab), and every open tab */
   sections: ShellSection[]; screens: ShellScreen[]; personas: ShellPersona[]; persona: string;
   preview: ShellPreview | null; scope?: ShellScope | null;
-  /** beside the brand (the domain scope) and at the end of the header (new menu, account) */
-  headerStart?: ReactNode; headerEnd?: ReactNode;
+  /** at the end of the header (new menu, account) */
+  headerEnd?: ReactNode;
   children: ReactNode;
 };
 
-export function OsShell({ user, sections, screens, personas, persona, preview, scope, headerStart, headerEnd, children }: ShellProps) {
+export function OsShell({ user, sections, screens, personas, persona, preview, scope, headerEnd, children }: ShellProps) {
   const path = usePathname();
   const router = useRouter();
   const [pending, start] = useTransition();
@@ -117,19 +117,13 @@ export function OsShell({ user, sections, screens, personas, persona, preview, s
             </button>
           </span>
           <Link href="/os" className="flex items-center gap-2.5">
-            <span className="grid h-8 w-8 place-items-center rounded-lg bg-[#004735] text-white shadow-sm">
+            <span className="grid h-8 w-8 place-items-center rounded-lg bg-[#003f2d] text-[#17e88f] shadow-sm">
               <svg viewBox="0 0 24 24" className="h-4 w-4" aria-hidden><path fill="currentColor" d="M12 2 22 12 12 22 2 12Z M12 7.5 7.5 12 12 16.5 16.5 12Z" fillRule="evenodd" /></svg>
             </span>
-            <span className="text-[19px] font-black tracking-[-0.04em] text-[#004535] dark:text-[#5fd8aa]">CBRE</span>
+            <span className="text-[19px] font-black tracking-[-0.04em] text-[#003f2d] dark:text-[#17e88f]">CBRE</span>
             <span className="hidden border-l border-[var(--os-line)] pl-3 text-[15px] font-bold tracking-[-0.02em] sm:inline">Agentic Data OS</span>
           </Link>
-          {headerStart && <div className="ml-2 hidden xl:block">{headerStart}</div>}
         </div>
-        <button type="button" onClick={() => window.dispatchEvent(new Event("aip:palette"))}
-                className="hidden h-9 min-w-0 max-w-[440px] flex-1 items-center gap-2 truncate rounded-lg border border-[var(--os-line)] bg-[var(--os-subtle)] px-3 text-left text-[12px] text-[var(--os-faint)] md:flex">
-          <Search className="h-3.5 w-3.5" /> Search runs, domains, sources, knowledge...
-          <kbd className="ml-auto rounded border border-[var(--os-line)] px-1.5 text-[10px]">Ctrl K</kbd>
-        </button>
         <div className="flex shrink-0 items-center gap-2.5 text-[12px]">
           <CopilotButton className="os-btn inline-flex h-9 items-center gap-2 px-2.5 text-[12px] font-bold lg:px-3" />
           <label className="hidden items-center gap-2 lg:flex">

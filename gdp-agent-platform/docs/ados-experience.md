@@ -8,11 +8,11 @@ Every screen reads live platform data through the endpoints the classic pages al
 
 | Entry | Tabs |
 |---|---|
-| Home | Home (`/os`), Inbox (`/os/work/inbox`), Overview (`/os/work/overview`) |
-| Intake | New request, Requests, Request history |
+| Home | Home (`/os`); Inbox (`/os/work/inbox`) and Overview (`/os/work/overview`) keep their addresses but are not tabs |
+| Intake | Requests board (`/os/intake`); the form is `/os/intake/new`; the older Requests and Request history lists keep their addresses |
 | Enable | Source readiness, Onboard a source, Onboard a domain (the Data OS Administrator's alone) |
-| Design | Designer studio, Domains, Stores (the six stores, with their own store tabs) |
-| Build | Ready to build, Workbench (and every `/runs/[id]` workspace), Lineage, Code, Run history (with the Silver and Gold pipeline lists) |
+| Design | Designer studio (the Design board), Domains, Stores (the six stores, with their own store tabs) |
+| Build | Ready to build, Workbench (the Build board; and every `/runs/[id]` workspace), Lineage, Code, Run history (with the Silver and Gold pipeline lists) |
 | Review | Gates, Approvals, Audit |
 | Skills | Skill studio, Registry (including proposed skills) |
 | Release | Release, Source control, QA testing |
@@ -22,7 +22,7 @@ Every screen reads live platform data through the endpoints the classic pages al
 
 Each person sees only the entries and tabs their privileges open; an entry opens its first open tab. Every one of the 79 page routes belongs to exactly one tab (checked against the access list). In the new shell, the tab bar replaces the classic workspace tabs, so a page never shows two tab bars.
 
-The header carries what the classic top bar did: the domain scope, global search (Ctrl K), Copilot, the "New" menu, and the account menu (work-role switch, appearance, sign out). It also has "View as" and, for admins, "Preview as role". Copilot (for `AI.USE`) opens its drawer from the header button or Ctrl J; the drawer links to the full Copilot page (`/os/work/copilot`), which is no longer a tab. There is no floating launcher and no workspace pill.
+The header holds the brand, Copilot, "View as" (and, for admins, "Preview as role"), the "New" menu and the account menu (work-role switch, appearance, sign out). There is no domain filter, no search and no Ctrl K palette: the domain scope is retired (`lib/domain-scope.ts` always answers "all"; pages narrow by `?domain=` alone). The Copilot button (for `AI.USE`) opens the Copilot page, the chat workspace (`/os/work/copilot`); Ctrl J still opens the quick drawer for a question about the page on screen. There is no floating launcher and no workspace pill.
 
 **How it is wired**
 - `middleware.ts` passes each signed-in request's path to the root layout (header `x-ados-path`, set by the server, never taken from the client).
@@ -35,11 +35,22 @@ The header carries what the classic top bar did: the domain scope, global search
 
 ## Home (`/os`)
 
-A developer studio, with no hero: the build workflows (onboarding requests) and how to start one.
+The studio at a glance, with no hero. Everything on it opens the stage it is at with that workflow selected.
 
-- **Workflows.** Each row is a request: its type and intent ("Enhance source"), domain, priority, overdue, and a step track (Domain, Enable, Design, Build, Review, Done) with the step it is at and "Waiting on <role> · 2d". The role is the one the wait names ("Model approver: approve the field mapping"). When the viewer's role acts next the row says "Your turn" with "Do it", which opens where that step is worked. A row expands to its sources and their runs.
-- **Views and filters**, all in the URL so a view can be shared: Active (open), Action required (open and waiting on a privilege the viewer holds; the default when it has any), All; type (Domain, Source, Product); New or Enhance; search by workflow name. The header's domain scope narrows the list.
-- **Start a workflow.** Data domain, Data source and Data product, each New or Enhance, open Intake with the type and intent chosen. Everyone sees the panel; the buttons open for people who may file a request (the Intake screen's privileges) and are disabled with the reason for the rest. Administrators also get "Onboard directly". Data products are coming soon.
+- **Stage strip.** Intake, Enable, Design, Build, Review, Done: how many workflows are at each stage and "N need you" where the viewer has work. Each opens that stage's board, on Action required when the viewer has work there.
+
+- **Workflows.** Each row is a request: its type and intent ("Enhance source"), domain, priority, overdue, and a step track (Domain, Enable, Design, Build, Review, Done) with the step it is at and "Waiting on <role> · 2d". The role is the one the wait names ("Model approver: approve the field mapping"). When the viewer's role acts next the row says "Your turn" with "Do it", which opens where that step is worked. A row expands to its sources and their runs. "Open", the title and the step track go to the stage board the workflow is at, selected (`lib/os/work.ts` `workflowHref`: Design and Build open its run; Enable and Review their screens; anything else Intake).
+- **Views and filters**, all in the URL so a view can be shared: Active (open), Action required (open and waiting on a privilege the viewer holds; the default when it has any), All; type (Domain, Source, Product); New or Enhance; search by workflow name.
+- **Start a workflow.** Data domain, Data source and Data product, each New or Enhance, open the Intake form (`/os/intake/new`) with the type and intent chosen. Everyone sees the panel; the buttons open for people who may file a request (the Intake screen's privileges) and are disabled with the reason for the rest. Administrators also get "Onboard directly". Data products are coming soon.
+- **Active data domains** (with their open workflows) and **Data products** (the domains' Gold sets so far; product requests are coming soon).
+
+## Stage boards: Intake, Design, Build
+
+One pattern on each stage: tabs **Selected | Action required | Active | Completed** in the URL (`?view=&run=` or `&request=`), workflow cards with their step track and what the current step is doing, and the selected workflow below (`components/os/stage-board.tsx`, `lib/os/work.ts`).
+- **Intake** lists requests (Action required: waiting on a privilege the viewer holds; Completed: done, cancelled or rejected). Selected shows the request's steps, who acts now with "Do it", its sources (each opening its run on Design or Build) and the latest history. New or Enhance sits on the right.
+- **Design** lists runs whose step is Design; Completed are past it. Selected shows the run's eight steps and **Profile | Model | Map** for its domain (opening on the one its state is at): the source profile, the domain model with open questions and artifacts, and the mapping proposals with the gate decision. `?domain=` still selects that domain's run.
+- **Build** lists runs at Generate or Validate; Completed are past it. Selected is the workbench: "N of 8 steps done", the steps, the agents, the artifacts, run context, and Gates and quality.
+- Action required on runs: a gate the viewer decides or may request (all gates for `APPROVAL.VIEW`), a failed validation or run for `RUN.OPERATE`, or a running step the persona works.
 
 ## Onboarding requests (V075)
 
@@ -198,11 +209,12 @@ How these behave:
 
 | Screen | Reads |
 |---|---|
-| Home `/os` | `/api/onboarding-requests?status=ALL` |
-| Intake `/os/intake` | domains, `/api/sources/overview`, runs, `/api/domains/{id}/data-model`; files a request (sources go to the administrator) |
+| Home `/os` | `/api/onboarding-requests?status=ALL`, `/api/domains` |
+| Intake `/os/intake` | `/api/onboarding-requests?status=ALL`, `/api/onboarding-requests/{id}` |
+| New request `/os/intake/new` | domains, `/api/sources/overview`, runs, `/api/domains/{id}/data-model`; files a request (sources go to the administrator) |
 | Enable `/os/enable` | `/api/sources/overview`, `/api/hub/ingestion-control` (secrets never shown), `/api/hub/pipelines` |
-| Design `/os/design` | domain data model (shared `ErCanvas`), `/api/runs/{id}/mapping`, domain questions and contract |
-| Build `/os/build?run=` | run state, `/audit`, `/validation`, `/dbt`, `/skills` of one run |
+| Design `/os/design` | runs, `/api/sources/overview`, domain data model (shared `ErCanvas`), `/api/runs/{id}/mapping`, domain questions and contract |
+| Build `/os/build` | runs; for the selected run its state, `/audit`, `/validation`, `/dbt`, `/skills` of one run |
 | Review `/os/review?run=` | the same bundle, the gate from `/validation` (`gate`), every attempt's score, Validate again in place; every human gate across domains |
 | Run history `/os/history` | `/api/runs` (all pipelines), `/api/run-history` |
 | Request history `/os/requests/history` | `/api/onboarding-requests?status=CLOSED` |

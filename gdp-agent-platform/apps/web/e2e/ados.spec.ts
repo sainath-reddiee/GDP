@@ -6,11 +6,12 @@ const BASE = process.env.AIP_WEB_URL ?? "http://localhost:3000";
 
 const SCREENS: [string, RegExp][] = [
   ["/os", /Build workflows/],
-  ["/os/intake", /Create an onboarding request/],
+  ["/os/intake", /Requests/],
+  ["/os/intake/new", /Create an onboarding request/],
   ["/os/requests", /Onboarding requests/],
   ["/os/enable", /Source readiness/],
   ["/os/design", /Profile, model and map/],
-  ["/os/build", /build|Build workbench/i],
+  ["/os/build", /Generate, validate and hand off/],
   ["/os/review", /Validation gate/],
   ["/os/skills", /Improve skill/],
   ["/os/release", /Code, test and release/],
@@ -46,16 +47,40 @@ test("the rail marks the current screen", async ({ page }) => {
   await expect(page.getByRole("navigation", { name: "Agentic Data OS" }).getByRole("link", { name: "Home" })).toHaveAttribute("aria-current", "page");
 });
 
+// The stage boards: Selected, Action required, Active and Completed; a workflow opened from Home lands selected.
+test("Intake, Design and Build are boards, and a workflow opens selected", async ({ page }) => {
+  for (const [path, testId] of [["/os/intake", "intake-board"], ["/os/design", "design-board"], ["/os/build", "build-board"]] as const) {
+    await page.goto(path);
+    await expect(page.getByTestId(testId)).toBeVisible();
+    const tabs = page.getByTestId("board-tabs");
+    for (const t of ["Action required", "Active", "Completed"]) await expect(tabs.getByRole("link", { name: new RegExp(t) })).toBeVisible();
+  }
+  // a run card on Design opens it selected, on Profile, Model or Map
+  await page.goto("/os/design?view=active");
+  const card = page.getByTestId("run-card").first();
+  test.skip(!(await card.isVisible()), "no run is in design");
+  await card.getByRole("link", { name: /^Open / }).click();
+  await page.waitForURL(/\/os\/design\?view=selected&run=/);
+  await expect(page.getByTestId("design-selected")).toBeVisible();
+  await expect(page.getByRole("navigation", { name: "Design step" })).toContainText("Profile");
+});
+
 // Home: no hero, no workspace pill; Copilot in the header; workflows filtered in the URL; New or Enhance per kind.
 test("Home lists the build workflows by view, type, intent and name, and starts new or enhanced ones", async ({ page }) => {
   await page.goto("/os");
   await expect(page.getByText(/Good (morning|afternoon|evening)/)).toHaveCount(0);
   await expect(page.getByText(/WORKSPACE$/)).toHaveCount(0);
-  // Copilot opens from the header (no floating launcher)
+  // a clean header: no domain filter, no search; Copilot opens its page, Ctrl J the quick drawer
+  await expect(page.getByTestId("domain-switcher")).toHaveCount(0);
+  await expect(page.getByText(/Search runs, domains/)).toHaveCount(0);
+  await expect(page.getByTestId("stage-strip")).toBeVisible();
+  await expect(page.getByRole("navigation", { name: "Section" })).toHaveCount(0);   // no Inbox or Overview tabs
   const copilot = page.locator("header [data-copilot-launcher]");
-  await expect(copilot).toHaveCount(1);
-  await copilot.click();
-  await expect(page.getByRole("dialog", { name: "Copilot" })).toBeVisible();
+  await expect(copilot).toHaveAttribute("href", "/os/work/copilot");
+  await expect(async () => {
+    await page.keyboard.press("Control+j");
+    await expect(page.getByRole("dialog", { name: "Copilot" })).toBeVisible({ timeout: 3000 });
+  }).toPass({ timeout: 20_000 });
   await page.keyboard.press("Escape");
   // views and filters are links that keep each other
   const views = page.getByTestId("home-views");
@@ -73,13 +98,13 @@ test("Home lists the build workflows by view, type, intent and name, and starts 
   await expect(page.getByTestId("start-product-new")).toHaveAttribute("aria-disabled", "true");
   await expect(page.getByTestId("start-product-enhance")).toHaveAttribute("aria-disabled", "true");
   await page.getByTestId("start-domain-enhance").click();
-  await page.waitForURL(/\/os\/intake\?type=domain&intent=enhance$/);
+  await page.waitForURL(/\/os\/intake\/new\?type=domain&intent=enhance$/);
   await expect(page.getByTestId("domain-enhance")).toBeVisible();
   await expect(page.locator("#domain")).toBeVisible();
   await expect(page.locator("#rq-domain")).toHaveCount(0);
   await page.goto("/os");
   await page.getByTestId("start-source-new").click();
-  await page.waitForURL(/\/os\/intake\?type=source&intent=new$/);
+  await page.waitForURL(/\/os\/intake\/new\?type=source&intent=new$/);
   await expect(page.getByTestId("intake-intent").getByRole("tab", { name: "New" })).toHaveAttribute("aria-selected", "true");
 });
 
@@ -194,7 +219,8 @@ test("the rail is the package's ten entries and every page is a tab of one", asy
   await expect(railLinks(page).filter({ hasText: "Run & DQ" })).toHaveAttribute("aria-current", "page");
   await page.goto("/os/requests");
   await expect(railLinks(page).filter({ hasText: "Intake" })).toHaveAttribute("aria-current", "page");
-  await expect(tabs.getByRole("link")).toHaveText(["New request", "Requests", "Request history"]);
+  // Intake is one board (its form and the older lists sit under it), so it has no tab bar
+  await expect(tabs).toHaveCount(0);
 });
 
 test("admins can switch the classic pages back to the classic layout", async ({ page }) => {
@@ -268,13 +294,13 @@ test("the wizard opened for a request says so and starts from the request's sour
 });
 
 test("Intake offers the sources already feeding the domain, the other registered ones and a new one", async ({ page }) => {
-  await page.goto("/os/intake?type=source");
+  await page.goto("/os/intake/new?type=source");
   await expect(page.getByTestId("sources-feeding")).toHaveCount(0);
   await expect(page.getByTestId("sources-registered")).toBeVisible();
   const domain = page.locator("#domain");
   const first = await domain.locator("option").nth(1).getAttribute("value");
   test.skip(!first, "no domain is onboarded");
-  await page.goto(`/os/intake?type=source&domain=${first}`);
+  await page.goto(`/os/intake/new?type=source&domain=${first}`);
   await expect(page.getByTestId("sources-feeding")).toBeVisible();
   await expect(page.getByTestId("sources-registered")).toBeVisible();
   await expect(page.getByText("Request a new source", { exact: true })).toBeVisible();
@@ -341,7 +367,7 @@ test("only the administrator onboards sources, from Enable; others request them"
   const tabs = page.getByTestId("section-tabs");
   await expect(tabs.getByRole("link")).toHaveText(["Source readiness", "Onboard a source", "Onboard a domain"]);
   await expect(railLinks(page).filter({ hasText: "Enable" })).toHaveAttribute("aria-current", "page");
-  await page.goto("/os/intake?type=source");
+  await page.goto("/os/intake/new?type=source");
   await expect(page.getByRole("link", { name: "Open the onboarding wizard" })).toHaveCount(0);
   await expect(page.getByText("Sources are onboarded by the Data OS Administrator")).toBeVisible();
   for (const persona of ["designer", "product_owner", "forward_lead"]) {
@@ -378,14 +404,14 @@ test("skill promotion follows the persona: the lead promotes, a designer request
 
 // A new domain is a request to the administrator, who onboards it in Enable; data products are coming soon.
 test("a new domain is requested by name and onboarded by the administrator; data products are coming soon", async ({ page }) => {
-  await page.goto("/os/intake?type=domain");
+  await page.goto("/os/intake/new?type=domain");
   const form = page.getByTestId("domain-request");
   await expect(form).toBeVisible();
   // no list of the domains that exist: a new domain is named
   await expect(page.locator("#domain")).toHaveCount(0);
   await expect(page.locator("#rq-domain")).toBeVisible();
   await expect(page.getByText("Domains are onboarded by the Data OS Administrator")).toBeVisible();
-  await page.goto("/os/intake?type=product");
+  await page.goto("/os/intake/new?type=product");
   await expect(page.getByTestId("product-coming-soon")).toContainText("Coming soon");
   await expect(page.getByTestId("submit-request")).toHaveCount(0);
   // the old Design address lands on Enable, Onboard a domain

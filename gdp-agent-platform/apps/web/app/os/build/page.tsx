@@ -1,21 +1,23 @@
 import Link from "next/link";
-import { ArrowRight, Bot, CheckCircle2, CircleDashed, FileCode2, Hand, Hammer, ShieldAlert, ShieldCheck, Wrench, X } from "lucide-react";
+import { Bot, CheckCircle2, CircleDashed, FileCode2, Hand, ShieldAlert, ShieldCheck, Wrench, X } from "lucide-react";
 import { stateLabel } from "@/lib/run-labels";
 import { labelFor, pipelineOf } from "@/lib/stages";
 import type { StageStatusValue } from "@/lib/types";
 import {
-  artifactGroups, gatePassed, gateText, defaultRun, loadRunBundle, loadRuns, runOptions, scoreOf, tableOf,
+  artifactGroups, gatePassed, gateText, defaultRun, loadRunBundle, loadRuns, scoreOf, tableOf,
 } from "@/lib/os/data";
-import { guard } from "@/lib/os/session";
+import { guard, type OsAccess } from "@/lib/os/session";
+import { boardView, pastStage, runNeedsMe, stageOfRun } from "@/lib/os/work";
+import { BoardList, BoardTabs, RunCard } from "@/components/os/stage-board";
+import { HomeSearch } from "@/components/os/home-search";
 import { BuildEndToEnd } from "@/components/os/build-run";
 import { actMode } from "@/lib/os/access";
 import { Action } from "@/components/os/action";
 import { currentStep, gateHref, lifecycleOfRun, osHref } from "@/lib/os/lifecycle";
 import { ActivityRow, Banner, Bar, Btn, Card, Empty, Field, PageHeader, SourceError, Stepper, Tag, ago, pretty, type Tone } from "@/components/os/ui";
-import { RunPicker } from "@/components/os/run-picker";
 
 export const dynamic = "force-dynamic";
-export const metadata = { title: "Build workbench" };
+export const metadata = { title: "Build" };
 
 const STAGE_TONE: Record<StageStatusValue, { tone: Tone; label: string }> = {
   COMPLETE: { tone: "green", label: "Completed" }, ACTIVE: { tone: "blue", label: "Ready" }, REVIEW_REQUIRED: { tone: "amber", label: "Needs review" },
@@ -27,23 +29,55 @@ const WORKING = new Set(["PROFILING_RUNNING", "DBT_GENERATING", "VALIDATION_RUNN
 const DONE: { tone: Tone; label: string } = { tone: "green", label: "Completed" };
 const FAIL: { tone: Tone; label: string } = { tone: "red", label: "Failed" };
 
-export default async function BuildWorkbench({ searchParams }: { searchParams: { run?: string } }) {
+type Params = { view?: string; run?: string; q?: string };
+
+/** Build: the runs being generated and validated, by Selected, Action required, Active and Completed. A selected run
+ *  opens the workbench: its eight steps, the agents, the artifacts and the gates. */
+export default async function BuildBoard({ searchParams }: { searchParams: Params }) {
   const access = await guard("build");
+  const runs = await loadRuns("sort=updated&limit=200");
+  const q = (searchParams.q ?? "").trim().toLowerCase();
+  const live = runs.data.runs.filter((r) => !r.is_archived && r.current_state !== "CANCELLED");
+  const listed = live.filter((r) => !q || r.run_name.toLowerCase().includes(q) || (r.domain_name ?? "").toLowerCase().includes(q));
+  const active = listed.filter((r) => stageOfRun(r) === "build");
+  const lists = { action: active.filter((r) => runNeedsMe(r, access)), active, completed: listed.filter((r) => pastStage(r, "build")) };
+  // a run named in the URL is selected, any run (older links name runs at every step); Selected alone opens the latest build
+  const run = live.find((r) => r.run_id === searchParams.run)
+    ?? (searchParams.view === "selected" ? defaultRun(live, ["DBT_REVIEW", "VALIDATION_FAILED", "VALIDATION_PASSED", "DBT_GENERATING", "DBT_PENDING", "DBT_APPROVED"]) : null)
+    ?? null;
+  const view = boardView(searchParams.view ?? (searchParams.run && run ? "selected" : undefined), !!run, lists.action.length);
+  const rows = view === "selected" ? [] : lists[view];
+  const select = (id: string) => `/os/build?${new URLSearchParams({ view: "selected", run: id })}`;
+
+  return (
+    <div data-testid="build-board">
+      <div className="mb-3 flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <div className="os-eyebrow">Build</div>
+          <h1 className="text-[22px] font-extrabold tracking-[-0.03em]">Generate, validate and hand off</h1>
+        </div>
+        <HomeSearch />
+      </div>
+      <div className="mb-4">
+        <BoardTabs base="/os/build" view={view} selection={run ? ["run", run.run_id] : null}
+                   counts={{ action: lists.action.length, active: lists.active.length, completed: lists.completed.length }} />
+      </div>
+      <SourceError what="Workflow runs" error={runs.error} />
+      {view === "selected" && run ? <Workbench runId={run.run_id} access={access} /> : (
+        <BoardList count={rows.length} empty={view === "action"
+          ? { title: "No build waits on you", body: <>Runs whose design is done are on <Link className="underline" href="/os/build/ready">Ready to build</Link>.</> }
+          : view === "active" ? { title: "No run is building", body: <>See <Link className="underline" href="/os/build/ready">Ready to build</Link>.</> }
+          : { title: "No run has finished its build yet" }}>
+          {rows.map((r) => <RunCard key={r.run_id} run={r} href={select(r.run_id)} mine={runNeedsMe(r, access)} />)}
+        </BoardList>
+      )}
+    </div>
+  );
+}
+
+/** The selected run: today's workbench. */
+async function Workbench({ runId, access }: { runId: string; access: OsAccess }) {
   const persona = access.persona;
-  const runs = await loadRuns("sort=updated&limit=150");
-  const runId = searchParams.run
-    ?? defaultRun(runs.data.runs, ["DBT_REVIEW", "VALIDATION_FAILED", "VALIDATION_PASSED", "DBT_GENERATING", "DBT_PENDING", "DBT_APPROVED"])?.run_id;
-  if (!runId) {
-    return (
-      <>
-        <PageHeader eyebrow={`${persona.label} / Build workbench`} title="Build workbench" />
-        <SourceError what="Workflow runs" error={runs.error} />
-        <Empty icon={Hammer} title="No workflow to build yet" action={<Btn href="/os/build/ready" variant="primary">See what is ready to build</Btn>}>
-          Once a run's design is done, its generated code, tests and validation appear here.
-        </Empty>
-      </>
-    );
-  }
   const bundle = await loadRunBundle(runId);
   const b = bundle.data;
   if (!b) {
@@ -106,11 +140,10 @@ export default async function BuildWorkbench({ searchParams }: { searchParams: {
   return (
     <>
       <PageHeader
-        eyebrow={`${persona.label} / Build workbench`}
+        eyebrow="Selected workflow · build workbench"
         title={<>{run.run.domain_name ?? "No domain"}{table && <span className="os-muted"> · </span>}{table}<span className="os-muted text-[18px] font-bold"> · {pipeline === "GOLD" ? "Gold" : "Silver"} build</span></>}
         subtitle="Deterministic tools, specialised agents, independent validation and the delivery handoff, in one workspace."
         actions={<>
-          <RunPicker base="/os/build" current={runId} runs={runOptions(runs.data.runs)} />
           {primary}
         </>}
         meta={<>
@@ -137,6 +170,10 @@ export default async function BuildWorkbench({ searchParams }: { searchParams: {
         </Banner>
       )}
 
+      <p className="os-muted mb-1.5 text-[12px]" data-testid="build-steps-summary">
+        <b className="os-ink">{steps.filter((x) => x.status === "done").length} of {steps.length} steps done</b>
+        {steps.some((x) => x.status !== "done") && <> · {steps.filter((x) => x.status !== "done").length} pending · now at {now.label.toLowerCase()} ({now.owner})</>}
+      </p>
       <div className="mb-4"><Stepper steps={steps} hrefOf={(s) => s.status === "pending" ? null : osHref(runId, s, domainId)} /></div>
 
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1.55fr)_minmax(0,1fr)]">
@@ -214,7 +251,7 @@ export default async function BuildWorkbench({ searchParams }: { searchParams: {
         </div>
       </div>
 
-      <Card className="mt-4" title="Autonomy and gates" subtitle="Who owns the next decision, and what has to be true before a pull request"
+      <Card className="mt-4" title="Gates and quality" subtitle="Who owns the next decision, and what has to be true before a pull request"
             action={<Btn href="/os/knowledge"><Bot className="h-3.5 w-3.5" /> Knowledge used</Btn>}>
         <div className="flex items-end justify-between gap-3">
           <h3 className="text-[14px] font-extrabold">Build confidence</h3>

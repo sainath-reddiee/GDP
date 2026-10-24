@@ -71,7 +71,7 @@ export function DemoPaths({ runs, requests }: { runs: RunSummary[]; requests: On
   const state = (i: number): Step["state"] => (!req ? "next" : at > i ? "done" : at === i ? "now" : "next");
   const onboarding: Step[] = [
     { who: "GDP Product Owner", title: "File the request", what: req ? `${req.title} · ${req.domain_name ?? req.proposed_domain ?? "no domain"}` : "Intake: a domain and the sources it needs",
-      href: req ? `/os/requests/${req.request_id}` : "/os/intake", state: req ? "done" : "now" },
+      href: req ? `/os/requests/${req.request_id}` : "/os/intake/new", state: req ? "done" : "now" },
     { who: "Data OS Administrator", title: "Onboard the sources", what: "skipped on its own when the sources are already onboarded", href: "/os/enable", state: state(1) },
     { who: "Data Designer", title: "Profile, model and map", what: "approved design kept in the stores", href: runId ? `/os/review?run=${runId}` : "/os/design", state: state(2) },
     { who: "Forward Engineering Lead", title: "Build end to end", what: "from Ready to build: code generated and scored by the review and standards agents", href: "/os/build/ready", state: flagged ? "done" : state(3) },

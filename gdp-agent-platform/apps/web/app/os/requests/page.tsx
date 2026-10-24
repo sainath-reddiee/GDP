@@ -31,7 +31,7 @@ export default async function Requests({ searchParams }: { searchParams: { view?
     <>
       <PageHeader eyebrow={`${access.persona.label} / Onboarding requests`} title="Onboarding requests"
                   subtitle="What data owners asked for, where each request is, and whose turn it is. The stage is worked out from the domain, the sources and their runs; nobody types it in."
-                  actions={files ? <Btn href="/os/intake" variant="primary"><Plus className="h-3.5 w-3.5" /> New request</Btn> : undefined} />
+                  actions={files ? <Btn href="/os/intake/new" variant="primary"><Plus className="h-3.5 w-3.5" /> New request</Btn> : undefined} />
       <SourceError what="Requests" error={list.error} />
 
       <div className="mb-4 grid grid-cols-2 gap-3 xl:grid-cols-5">
@@ -83,7 +83,7 @@ export default async function Requests({ searchParams }: { searchParams: { view?
         ) : (
           <div className="p-5">
             <Empty icon={Inbox} title={view.key === "waiting" ? "Nothing waits on you" : "No requests here"}
-                   action={files ? <Btn href="/os/intake" variant="primary">File a request</Btn> : undefined}>
+                   action={files ? <Btn href="/os/intake/new" variant="primary">File a request</Btn> : undefined}>
               {view.key === "waiting" ? "When a request needs your role (a source to register, a run to start, a gate to decide), it shows here and under Action required on Home." : undefined}
             </Empty>
           </div>

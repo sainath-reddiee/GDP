@@ -48,7 +48,7 @@ export async function RunsList({ pipeline, searchParams }: { pipeline: Pipeline;
       <Link href="/os/enable/onboarding?type=source" className={cn("inline-flex h-9 items-center gap-1.5 rounded-lg px-3 text-sm font-medium hover:opacity-90", p.accent.solid)}>
         <Plus className="h-4 w-4" />New {PIPELINES.SILVER.run}</Link>
     ) : (
-      <Link href="/os/intake" className="inline-flex h-9 items-center gap-1.5 rounded-lg border px-3 text-sm font-medium hover:bg-accent">
+      <Link href="/os/intake/new" className="inline-flex h-9 items-center gap-1.5 rounded-lg border px-3 text-sm font-medium hover:bg-accent">
         <Plus className="h-4 w-4" />Request a source</Link>
     );
   const kpis: [string, string, string?][] = summary.deployed ? [
