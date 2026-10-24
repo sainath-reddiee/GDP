@@ -1,6 +1,7 @@
 "use server";
 
 import { api, attemptValue } from "@/lib/api";
+import type { LearnedRunbooks } from "@/components/ops/runbook-solutions";
 
 // ---------------------------------------------------------------- types (the /api/ops/datadog contract)
 
@@ -28,6 +29,8 @@ export type DatadogLog = { id: string; at: string | null; status: string | null;
 export type IncidentDatadogLogs = {
   enabled: boolean; logs: DatadogLog[]; error: string | null; kind?: string;
   query?: string; from?: string; to?: string; link?: string;
+  /** the runbooks these logs matched, and errors proposed for review (services/ops/runbook_learning.py) */
+  runbooks?: LearnedRunbooks;
 };
 export type MonitorCheck = { disabled?: boolean; monitors?: number; alerting?: number; actions?: Record<string, number>; resolved?: number; errors?: string[] };
 

@@ -137,6 +137,15 @@ def facts(db: Any, env_id: Optional[str], dag_id: Optional[str], task_id: Option
                             "content": redact(str(r.get("content") or ""))[:900]} for r in runbooks(db, error_text)]
     except Exception:
         pass
+    try:   # how often each runbook's error was seen and which fix last resolved it (services.ops.runbook_learning)
+        from services.ops.runbook_learning import stats
+
+        known = stats(db, [r["key"] for r in out["runbooks"]])
+        for r in out["runbooks"]:
+            if known.get(r["key"]):
+                r["history"] = known[r["key"]]
+    except Exception:
+        pass
     return out
 
 

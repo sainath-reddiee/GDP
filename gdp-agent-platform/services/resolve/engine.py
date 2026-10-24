@@ -465,6 +465,9 @@ def run_fix(db: Any, failure: Dict[str, Any], issue: Dict[str, Any], prefs: Dict
                     {"issue_id": issue["issue_id"], "fix": fix_name(issue), "resolution_id": resolution_id,
                      "airflow_clear": clear})
     _mitigate(db, failure.get("incident_id"))
+    from services.ops.runbook_learning import record_fix_safe
+
+    record_fix_safe(db, failure, issue)   # the runbook knowledge learns which fix resolved this error; never raises
     if _ops_setting(db, "ticket_auto_fixes", True):   # on record in Jira: raised now, closed when the rerun succeeds
         _jira(db, failure, "fixed", failure["failure_id"], fixed_text(failure, issue, clear), raise_ticket=True,
               record=True)

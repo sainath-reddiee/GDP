@@ -14,6 +14,7 @@ import {
 } from "../actions";
 import { duration, explain, parseTs, pct, pctTone, RunStrip, StateBadge, When } from "../ops-shared";
 import { localInput } from "../../incidents/incident-shared";
+import { RunbookSolutions } from "@/components/ops/runbook-solutions";
 
 type Option = { id: string; name: string };
 const CRITICALITY: Criticality[] = ["CRITICAL", "HIGH", "MEDIUM", "LOW"];
@@ -417,6 +418,7 @@ function LogViewer({ envId, dagId, runId, task }: { envId: string; dagId: string
           {log.detail && <li>{log.detail}</li>}
         </ul>
       )}
+      <RunbookSolutions data={log.runbooks} />
       {log.text ? (
         <pre className="max-h-[28rem] overflow-auto rounded-lg bg-slate-950 p-3 font-mono text-[11px] leading-relaxed text-slate-200">
           {lines.map((line, i) => {

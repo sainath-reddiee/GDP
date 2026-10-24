@@ -5,6 +5,7 @@ import { Activity, ExternalLink, Loader2, RefreshCw } from "lucide-react";
 import { Select } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { incidentDatadogLogs, type IncidentDatadogLogs } from "../../ops/datadog-actions";
+import { RunbookSolutions } from "@/components/ops/runbook-solutions";
 
 const WINDOWS = [15, 30, 60, 180, 720];
 const TONE: Record<string, string> = {
@@ -47,6 +48,7 @@ export function DatadogLogs({ incidentId }: { incidentId: string }) {
       <div className="space-y-2 p-4">
         {(error || data?.error) && <p role="alert" className="rounded-lg bg-destructive/10 px-3 py-2 text-xs text-destructive">{error ?? data?.error}</p>}
         {data?.query && <p className="text-[11px] text-muted-foreground">Search <code className="font-mono">{data.query}</code> from {data.from?.replace("T", " ").replace("Z", " UTC")} to {data.to?.replace("T", " ").replace("Z", " UTC")}</p>}
+        {data && !data.error && <RunbookSolutions data={data.runbooks} />}
         {data && !data.error && (data.logs.length
           ? (
             <pre className="max-h-96 overflow-auto rounded-lg bg-slate-950 p-3 font-mono text-[11px] leading-relaxed text-slate-200">

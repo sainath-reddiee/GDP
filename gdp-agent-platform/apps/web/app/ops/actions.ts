@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { api, attemptValue } from "@/lib/api";
 import type { RecurringFix } from "@/components/ops/recurring-fixes";
+import type { LearnedRunbooks } from "@/components/ops/runbook-solutions";
 
 // ---------------------------------------------------------------- types (the /api/ops contract)
 
@@ -39,7 +40,9 @@ export type TaskRun = {
   task_id: string; map_index: number; try_number: number; state: string | null; operator: string | null; start: string | null;
   end: string | null; duration_s: number | null; error_excerpt: string | null; hostname: string | null;
 };
-export type TaskLog = { text: string; truncated: boolean; redacted: boolean; source: string | null; detail: string | null };
+export type TaskLog = { text: string; truncated: boolean; redacted: boolean; source: string | null; detail: string | null;
+  /** the runbooks this log matched, and errors proposed for review (services/ops/runbook_learning.py) */
+  runbooks?: LearnedRunbooks };
 export type DagSettings = {
   team_id?: string | null; criticality?: Criticality | null; expected_by_cron?: string | null; max_duration_min?: number | null;
   domain_id?: string | null; repo_id?: string | null; repo_path?: string | null;

@@ -84,7 +84,13 @@ def incident_datadog_logs(incident_id: str, minutes: Optional[int] = Query(None,
         return {"enabled": True, "logs": [], "error": str(exc), "kind": exc.kind}
     except Exception as exc:   # shown in the logs panel, the rest of the incident page is unaffected
         return {"enabled": True, "logs": [], "error": failed("Datadog logs could not be read", exc).detail}
-    return {"enabled": True, **found, "error": None}
+    from services.ops.runbook_learning import learn_safe
+
+    # oldest first, as the task log reads; the runbooks they match, never failing the request
+    text = "\n".join(str(l.get("message") or "") for l in reversed(found.get("logs") or []))
+    learned = learn_safe(db, text, "DATADOG", incident.get("dag_id"), incident.get("task_id"),
+                         f"incident|{incident_id}")
+    return {"enabled": True, **found, "error": None, "runbooks": learned}
 
 
 @router.post("/api/ops/datadog/monitors/check")

@@ -648,8 +648,12 @@ def task_log(env_id: str, dag_id: str, run_id: str, task_id: str, try_number: Op
         return {"text": "", "truncated": False, "redacted": False, "source": "unavailable", "detail": str(exc)}
     text, count = redact_count(log.get("text") or "")
     detail = "" if text else "Airflow returned an empty log (it may have expired from CloudWatch)."
+    from services.ops.runbook_learning import learn_safe
+
+    # the runbooks this log matches (and an error no runbook knows proposed for review); never fails the request
+    learned = learn_safe(db, text, "AIRFLOW", dag_id, task_id, f"{env_id}|{dag_id}|{run_id}|{task_id}|{map_index}|{try_number}")
     return {"text": text, "truncated": bool(log.get("truncated")), "redacted": count > 0, "source": "airflow",
-            "detail": detail, "try_number": try_number}
+            "detail": detail, "try_number": try_number, "runbooks": learned}
 
 
 # ---------------------------------------------------------------- signed push from the Airflow listener plugin

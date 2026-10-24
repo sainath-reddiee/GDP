@@ -18,6 +18,7 @@ ROOT = Path(__file__).resolve().parents[1]
 DOMAIN_DIR = ROOT / "domain"
 DOMAIN_PACK = DOMAIN_DIR / "gdp" / "domain_pack.json"
 RUNBOOK_PACK = DOMAIN_DIR / "general" / "airflow_runbook_pack.json"
+GDP_RUNBOOK_PACK = DOMAIN_DIR / "general" / "gdp_airflow_runbook_pack.json"
 SKILLS_DIR = ROOT / "snowflake" / "skills"
 FRONTMATTER = re.compile(r"^---\n(.*?)\n---\n(.*)$", re.S)
 
@@ -698,10 +699,12 @@ def seed_platform(cur, database: str) -> List[str]:
 
 
 def load_runbooks() -> List[Dict[str, Any]]:
-    """The shipped AIRFLOW_RUNBOOK items (the Airflow knowledge pack's runbooks)."""
-    if not RUNBOOK_PACK.exists():
-        return []
-    return list(json.loads(RUNBOOK_PACK.read_text(encoding="utf-8")).get("knowledge") or [])
+    """The shipped AIRFLOW_RUNBOOK items: the generic Airflow runbook pack, then the GDP DAG runbook pack."""
+    items: List[Dict[str, Any]] = []
+    for pack in (RUNBOOK_PACK, GDP_RUNBOOK_PACK):
+        if pack.exists():
+            items.extend(json.loads(pack.read_text(encoding="utf-8")).get("knowledge") or [])
+    return items
 
 
 class _CursorDb:

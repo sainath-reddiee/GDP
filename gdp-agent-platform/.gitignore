@@ -26,3 +26,4 @@ infrastructure/environments/*.toml
 !infrastructure/environments/example.toml
 !infrastructure/environments/client-prod.example.toml
 deploy-logs/
+.venv/

@@ -1,0 +1,325 @@
+{
+  "description": "GDP Airflow runbooks: how the failures of the GDP (Global Data Platform) MWAA DAGs read in the Airflow task logs and in Datadog, what causes them and what repairs them. Covers the source DAGs (SnapLogic -> bronze -> Soda -> dbt silver), gold, MDM property coordinator, master status board, post-MDM gold + Kafka, OpenSearch engine pods, Akeyless secrets and the DAG factory. Seeded into the GENERAL domain as AIRFLOW_RUNBOOK knowledge (origin SEED) next to the generic Airflow runbook pack; a runbook a person edited in Knowledge is never overwritten by the deploy.",
+  "knowledge": [
+    {
+      "key": "ops.runbook.gdp.snaplogic-trigger-failed",
+      "type": "AIRFLOW_RUNBOOK",
+      "title": "GDP: SnapLogic trigger call failed (trigger_snaplogic)",
+      "content": "Signals: task trigger_snaplogic fails before any RUID is logged, HTTP 401/403/404/429 or a connection error on the SnapLogic trigger_path POST, 'bearer_token', 'snaplogic' secret missing. Meaning: the triggered task in SnapLogic was never started (or Airflow cannot tell). Usual causes: an expired or rotated SnapLogic bearer token in Akeyless (<env>/airflow/snaplogic), a changed trigger_path, the Snaplex down, rate limiting (429 is retried in place; timeouts and 5xx are not, because the pipeline may have started). Repair: check the batch master row for this BATCH_ID: if SNAPLOGIC_RUID is set and SNAPLOGIC_STATUS=RUNNING the pipeline did start and a rerun resumes it (GDP_SNAPLOGIC_INFLIGHT_MODE=resume). Otherwise fix the token or URL in Akeyless and clear trigger_snaplogic. The task has retries=0 on purpose: never add retries.",
+      "content_json": {"signals": ["trigger_snaplogic", "trigger_path", "bearer_token", "snaplogic-secrets", "SnapLogic trigger"], "meaning": "The SnapLogic triggered task was not started or the outcome is unknown.", "usual_cause": "Rotated token, changed trigger path, Snaplex down, rate limit.", "action": "RERUN_ONLY", "human_steps": ["Check GDP_BATCH_MASTER SNAPLOGIC_RUID / SNAPLOGIC_STATUS for the BATCH_ID.", "Update the snaplogic secret in Akeyless if the token or URL changed.", "Clear trigger_snaplogic (it resumes an in-flight RUID instead of re-triggering)."]},
+      "tags": ["AIRFLOW", "RUNBOOK", "GDP", "SNAPLOGIC"]
+    },
+    {
+      "key": "ops.runbook.gdp.snaplogic-pipeline-terminal-failure",
+      "type": "AIRFLOW_RUNBOOK",
+      "title": "GDP: SnapLogic pipeline ended failed / stopped / aborted (status polling)",
+      "content": "Signals: the SnapLogic failure report in the trigger_snaplogic log, state 'failed', 'stopped', 'aborted', 'cancelled' or 'skipped', 'error_count' above GDP_SNAPLOGIC_MAX_ERROR_COUNT, a failing child pipeline, snaplogic_end failing and the source DAG stopping. Meaning: the SnapLogic pipeline (or one of its children) finished but not successfully, so bronze was not loaded. Usual causes: a source endpoint or credential failure inside SnapLogic, a bad source file, a pipeline change, too many record errors. Repair: open the RUID from the log in SnapLogic Manager, fix the failing snap / account / file, then clear trigger_snaplogic and downstream. 'skipped' is a failure unless GDP_SNAPLOGIC_TREAT_SKIPPED_AS_SUCCESS is set.",
+      "content_json": {"signals": ["SnapLogic failure report", "error_count", "GDP_SNAPLOGIC_MAX_ERROR_COUNT", "aborted", "child pipeline", "snaplogic_end"], "meaning": "The SnapLogic run reached a failure state.", "usual_cause": "Endpoint/account failure, bad file, pipeline change, record errors over the threshold.", "action": null, "human_steps": ["Open the RUID in SnapLogic Manager.", "Fix the failing snap, account or source file.", "Clear trigger_snaplogic and its downstream tasks."]},
+      "tags": ["AIRFLOW", "RUNBOOK", "GDP", "SNAPLOGIC"]
+    },
+    {
+      "key": "ops.runbook.gdp.snaplogic-poll-timeout",
+      "type": "AIRFLOW_RUNBOOK",
+      "title": "GDP: SnapLogic run exceeded the task timeout or polling failed",
+      "content": "Signals: AirflowTaskTimeout on trigger_snaplogic, 'GDP_SNAPLOGIC_TASK_TIMEOUT_HOURS', 'status_url', 'snaplogic-polling', repeated poll errors, a run that never reaches 'completed' twice. Meaning: the pipeline is still running (or the status API cannot be read) when the 24h + 15 min deadline passes. Usual causes: a very large source load, a hung Snaplex, an expired polling token (UAT reuses the QA polling secret), the status URL changed. Repair: check the RUID in SnapLogic. If it is still running, let it finish and clear the task (the in-flight RUID is resumed, not re-triggered). If polling auth fails, fix the snaplogic-polling secret. Raise GDP_SNAPLOGIC_TASK_TIMEOUT_HOURS only for a known large load.",
+      "content_json": {"signals": ["GDP_SNAPLOGIC_TASK_TIMEOUT_HOURS", "status_url", "snaplogic-polling", "status_token"], "meaning": "SnapLogic did not finish in time or its status could not be read.", "usual_cause": "Large load, hung Snaplex, polling token expired.", "action": "RERUN_ONLY", "human_steps": ["Check the RUID state in SnapLogic Manager.", "Fix the snaplogic-polling secret on auth errors.", "Clear trigger_snaplogic once the pipeline finished (resume mode)."]},
+      "tags": ["AIRFLOW", "RUNBOOK", "GDP", "SNAPLOGIC"]
+    },
+    {
+      "key": "ops.runbook.gdp.source-not-active",
+      "type": "AIRFLOW_RUNBOOK",
+      "title": "GDP: validate_source failed - source not ACTIVE in GDP_SNAPLOGIC_CONFIG_MASTER",
+      "content": "Signals: validate_source fails, 'not active', 'ACTIVE_FLAG', 'GDP_SNAPLOGIC_CONFIG_MASTER'. Meaning: the source of this DAG has no ACTIVE row in <ENV>_GDP_UTIL_DB.CONFIG.GDP_SNAPLOGIC_CONFIG_MASTER. Usual causes: the source was deactivated on purpose, a config change in one env only, the AIRFLOW_SOURCE_SYSTEM value changed. Repair: a human decision. If the source should run, set ACTIVE_FLAG on its rows (one per domain) and rerun; if it was retired, pause the DAG (it disappears on the next parse once the row is gone).",
+      "content_json": {"signals": ["validate_source", "GDP_SNAPLOGIC_CONFIG_MASTER", "ACTIVE_FLAG"], "meaning": "The source is not active in the source registry.", "usual_cause": "Deactivated source, env config drift.", "action": null, "human_steps": ["Query GDP_SNAPLOGIC_CONFIG_MASTER for the SOURCE_SYSTEM.", "Reactivate the rows or pause the DAG.", "Rerun from init_batch."]},
+      "tags": ["AIRFLOW", "RUNBOOK", "GDP", "CONFIG"]
+    },
+    {
+      "key": "ops.runbook.gdp.stale-run-skipped",
+      "type": "AIRFLOW_RUNBOOK",
+      "title": "GDP: init_batch skipped a stale scheduled run (not a failure)",
+      "content": "Signals: init_batch skipped, 'skip_if_stale_run', 'GDP_MAX_RUN_AGE_SEC', 'stale', every downstream task skipped. Meaning: a scheduled run started too long after its logical date (scheduler backlog, unpause, MWAA restart) and was skipped deliberately so old ticks do not reload data. Failure emails are suppressed for it. Repair: nothing. If a load is really needed now, trigger the DAG manually; raise GDP_MAX_RUN_AGE_SEC / GDP_SCHEDULE_GRACE_SEC only if real runs are being skipped.",
+      "content_json": {"signals": ["skip_if_stale_run", "GDP_MAX_RUN_AGE_SEC", "stale scheduled run"], "meaning": "Intentional skip of an old scheduled run.", "usual_cause": "Scheduler backlog, unpause, MWAA restart.", "action": null, "human_steps": ["Confirm the run is old.", "Trigger manually if the load is needed.", "Tune GDP_MAX_RUN_AGE_SEC if valid runs are skipped."]},
+      "tags": ["AIRFLOW", "RUNBOOK", "GDP", "SCHEDULING"]
+    },
+    {
+      "key": "ops.runbook.gdp.dbt-rate-limit",
+      "type": "AIRFLOW_RUNBOOK",
+      "title": "GDP: dbt 'Operations rate limit exceeded' / git repository fetch 093563",
+      "content": "Signals: 'Operations rate limit exceeded', 093563, 'GIT REPOSITORY', 'FETCH', 'GDP_DBT_TRANSIENT_RETRIES' exhausted in a dbt_silver_* / dbt_gold_* task. Meaning: Snowflake throttled the git repository or dbt project operations; many dbt tasks started together. Usual causes: several source DAGs and gold running dbt at once, the cache missing so every task fetched, too small a gdp_heavy pool. dbt_run_task already retries in place with linear backoff (45s base). Repair: rerun the task (RERUN_ONLY) once the burst is over. If it recurs, lower the gdp_heavy pool slots or raise GDP_DBT_TRANSIENT_RETRIES; check /tmp/.gdp_dbt_project_cache is reused (the 'dir' GET mode avoids most 093563).",
+      "content_json": {"signals": ["Operations rate limit exceeded", "093563", "GDP_DBT_TRANSIENT_RETRIES"], "meaning": "Snowflake throttled dbt/git operations.", "usual_cause": "Concurrent dbt tasks, cold project cache.", "action": "RERUN_ONLY", "human_steps": ["Rerun the failed dbt task.", "Reduce gdp_heavy pool concurrency if it recurs.", "Check the dbt project cache is reused."]},
+      "tags": ["AIRFLOW", "RUNBOOK", "GDP", "DBT"]
+    },
+    {
+      "key": "ops.runbook.gdp.dbt-model-failed",
+      "type": "AIRFLOW_RUNBOOK",
+      "title": "GDP: EXECUTE DBT PROJECT finished with failed models",
+      "content": "Signals: 'EXECUTE DBT PROJECT', 'SYSTEM$GET_DBT_LOG', 'execute_via_snowflake', 'Database Error in model', 'ERROR=' in the per-model summary of a dbt_silver_<domain> / dbt_gold_<domain> / dbt_<d>_es_doc task. Meaning: the dbt run on Snowflake ran and one or more models failed; the per-model lines in the task log name them. Usual causes: the Snowflake error inside the model (002003, 000904, 100090 ... see the matching generic runbook), a bronze load that delivered unexpected data, a model merged before its upstream. Repair: read the failing model and its Snowflake error from the SYSTEM$GET_DBT_LOG lines, apply the matching runbook, then clear the dbt task and its downstream (silver chain order: company -> property -> contact -> opportunity/finance -> lease -> sale).",
+      "content_json": {"signals": ["EXECUTE DBT PROJECT", "SYSTEM$GET_DBT_LOG", "execute_via_snowflake", "Database Error in model"], "meaning": "dbt ran on Snowflake and models failed.", "usual_cause": "A Snowflake error in a model, unexpected bronze data, deploy order.", "action": null, "human_steps": ["Find the failed model lines in the task log.", "Apply the runbook for its Snowflake error code.", "Clear the dbt task and the downstream silver chain."]},
+      "tags": ["AIRFLOW", "RUNBOOK", "GDP", "DBT"]
+    },
+    {
+      "key": "ops.runbook.gdp.dbt-run-timeout",
+      "type": "AIRFLOW_RUNBOOK",
+      "title": "GDP: dbt run exceeded GDP_DBT_RUN_TIMEOUT_SEC",
+      "content": "Signals: 'GDP_DBT_RUN_TIMEOUT_SEC', 'deadline', 'dbt-ol' killed, AirflowTaskTimeout on a dbt task, 000630 inside the dbt log. Meaning: the dbt run passed its 6h wall-clock deadline (or the statement timeout). Usual causes: a full-load volume (first load, reindex), lost pruning in a model, warehouse queueing behind other GDP DAGs. Repair: check the Snowflake query history for the job id in the log; if the warehouse was queued, rerun (RERUN_ONLY). Persistent slowness needs the model or the warehouse size changed by a person.",
+      "content_json": {"signals": ["GDP_DBT_RUN_TIMEOUT_SEC", "dbt-ol", "deadline exceeded"], "meaning": "dbt ran past its deadline.", "usual_cause": "Volume growth, lost pruning, warehouse queueing.", "action": "RERUN_ONLY", "human_steps": ["Open the query profile for the dbt job.", "Check warehouse queueing on <ENV>_GDP_DATA_ENGINEER_WHS.", "Rerun or tune the model."]},
+      "tags": ["AIRFLOW", "RUNBOOK", "GDP", "DBT", "PERFORMANCE"]
+    },
+    {
+      "key": "ops.runbook.gdp.dbt-project-fetch",
+      "type": "AIRFLOW_RUNBOOK",
+      "title": "GDP: dbt project fetch / cache / profiles failure before dbt starts",
+      "content": "Signals: '.gdp_dbt_project_cache', 'file lock', 'GDP_DBT_GIT_', 'profiles.yml', 'private_key', 'GDP_DBT_OL_BIN', 'No such file or directory: dbt-ol'. Meaning: the task failed while preparing dbt (fetching the project from the Snowflake GIT REPOSITORY, materializing the key pair or finding the dbt-ol venv), before any model ran. Usual causes: the git repository branch/sha missing, a worker with a broken cache directory, the dbt-ol venv not built by env-conf/startup.sh after an MWAA update, a Snowflake key secret change. Repair: a rerun lands on another worker and often passes (RERUN_ONLY). If dbt-ol is missing, check the MWAA startup script log; if the branch is missing, fix GDP_DBT_GIT_* variables.",
+      "content_json": {"signals": [".gdp_dbt_project_cache", "GDP_DBT_GIT_", "GDP_DBT_OL_BIN", "dbt-ol", "profiles.yml"], "meaning": "dbt preparation failed on the worker.", "usual_cause": "Broken cache, missing venv, git branch or key secret change.", "action": "RERUN_ONLY", "human_steps": ["Rerun the task.", "Check the MWAA startup script log for the dbt-ol venv.", "Verify GDP_DBT_GIT_* branch settings."]},
+      "tags": ["AIRFLOW", "RUNBOOK", "GDP", "DBT", "INFRASTRUCTURE"]
+    },
+    {
+      "key": "ops.runbook.gdp.soda-scan-issue",
+      "type": "AIRFLOW_RUNBOOK",
+      "title": "GDP: Soda contract scan failed, errored or timed out (warn-and-continue)",
+      "content": "Signals: 'soda contract verify', 'GDP_SODA_TIMEOUT_SEC', 'soda-secrets', 'Soda Cloud', outcome FAILED / ERROR / WARN in soda_bronze, soda_silver, soda_post_mdm or soda_gold. Meaning: a data quality contract failed or the scan itself could not run. Soda tasks never fail the DAG by design, so the pipeline continued. Usual causes: real data issues in the dataset (FAILED), Soda Cloud credentials expired in Akeyless, the 600s timeout on a large table, a dataset renamed outside the curated allow-lists. Repair: FAILED is a data finding - review the check in Soda Cloud and fix the source or the contract. ERROR/timeout - fix the soda-secrets or raise GDP_SODA_TIMEOUT_SEC; rerunning the Soda task alone is safe.",
+      "content_json": {"signals": ["soda contract verify", "GDP_SODA_TIMEOUT_SEC", "soda-secrets", "Soda Cloud"], "meaning": "A Soda check failed or the scan errored; the pipeline continued.", "usual_cause": "Data issue, expired Soda creds, timeout, renamed dataset.", "action": "RERUN_ONLY", "human_steps": ["Open the scan in Soda Cloud.", "Fix data or contract for FAILED checks.", "Fix soda-secrets or the timeout for ERROR."]},
+      "tags": ["AIRFLOW", "RUNBOOK", "GDP", "SODA", "DATA_QUALITY"]
+    },
+    {
+      "key": "ops.runbook.gdp.akeyless-secret",
+      "type": "AIRFLOW_RUNBOOK",
+      "title": "GDP: Akeyless authentication or secret read failed",
+      "content": "Signals: 'akeyless', 'GDP_AKEYLESS_ACCESS_ID', 'cloud-id', 'global-data-platform-gdp', 'item not found', 'Unauthorized' from the Akeyless API, any GDP task failing while loading snowflake-secrets / soda-secrets / snaplogic / kafka-secrets. Meaning: the worker could not authenticate to Akeyless (AWS IAM cloud-id) or the secret path does not exist for this env. Usual causes: the MWAA execution role changed, the access id for the env changed, a secret moved or renamed, prod vs nonprod path (/teams vs /teams-nonprod) mismatch. Repair: a human step. Verify the path /{teams-nonprod|teams}/global-data-platform-gdp/<env>/airflow/<leaf> exists and the MWAA role is bound to the access id, then rerun. At parse time this shows as an Import Error and the last-good DAGs stay.",
+      "content_json": {"signals": ["akeyless", "GDP_AKEYLESS_ACCESS_ID", "global-data-platform-gdp", "cloud-id"], "meaning": "Secrets could not be read from Akeyless.", "usual_cause": "IAM role or access id change, moved secret, env path mismatch.", "action": null, "human_steps": ["Check the secret path for the env.", "Check the MWAA role binding to the access id.", "Rerun the task."]},
+      "tags": ["AIRFLOW", "RUNBOOK", "GDP", "AUTH", "SECRETS"]
+    },
+    {
+      "key": "ops.runbook.gdp.parse-failure-canary",
+      "type": "AIRFLOW_RUNBOOK",
+      "title": "GDP: gdp_PARSE_FAILURE_<env> canary or Import Error in gdp_dags.py",
+      "content": "Signals: DAG 'gdp_PARSE_FAILURE_', 'Import Error', 'Broken DAG', 'gdp_dags.py', 'reset_registered_dag_ids', 'already registered'. Meaning: the DAG factory could not build the env. With an Import Error Airflow keeps the last-good DAGs; the canary DAG appears when an env built 0 DAGs (empty config). Usual causes: Snowflake or Akeyless unreachable at parse time, GDP_SNAPLOGIC_CONFIG_MASTER empty for the env, a syntax/import error in a library module after deploy, a new library module not added to .airflowignore. Repair: read the Import Error traceback in the Airflow UI or the DAG processor logs in Datadog. Fix config / connectivity / code and redeploy; the next parse replaces the canary. Nothing to rerun.",
+      "content_json": {"signals": ["gdp_PARSE_FAILURE_", "Broken DAG", "gdp_dags.py", "already registered"], "meaning": "The GDP DAG factory failed for an env.", "usual_cause": "Config read failure, empty source registry, code error after deploy, missing .airflowignore entry.", "action": null, "human_steps": ["Read the DAG processor traceback.", "Check GDP_SNAPLOGIC_CONFIG_MASTER rows for the env.", "Fix and redeploy the dags folder."]},
+      "tags": ["AIRFLOW", "RUNBOOK", "GDP", "DEPLOYMENT"]
+    },
+    {
+      "key": "ops.runbook.gdp.env-mismatch",
+      "type": "AIRFLOW_RUNBOOK",
+      "title": "GDP: gdp_ENV_MISMATCH canary or prod-guard error",
+      "content": "Signals: DAG 'gdp_ENV_MISMATCH', 'prod-guard', '_resolve_env', 'GDP_ENVS', 'GDP_ENV', 'AIRFLOW_ENV_NAME'. Meaning: the instance looks like prod but prod is not in the env build list (or 'prod' was seen without a strict match), so no prod DAGs were built. Usual causes: GDP_ENV/GDP_ENVS missing on the prod MWAA environment, DAGs deployed outside the /prod/ folder, an env name containing 'prod' as part of another word. Repair: a human config change: set GDP_ENVS=prod (or deploy under /prod/) and let the DAG processor reparse.",
+      "content_json": {"signals": ["gdp_ENV_MISMATCH", "prod-guard", "GDP_ENVS", "AIRFLOW_ENV_NAME"], "meaning": "Env resolution refused to build prod.", "usual_cause": "Missing GDP_ENV(S) on prod or wrong deploy folder.", "action": null, "human_steps": ["Check GDP_ENV / GDP_ENVS on the MWAA environment.", "Check the S3 dags folder path.", "Let the DAG processor reparse."]},
+      "tags": ["AIRFLOW", "RUNBOOK", "GDP", "CONFIG"]
+    },
+    {
+      "key": "ops.runbook.gdp.dataset-gate-stuck",
+      "type": "AIRFLOW_RUNBOOK",
+      "title": "GDP: gold / MDM / DNB_API DAG never triggers (Dataset/Asset gate waiting)",
+      "content": "Signals: gdp_gold_<env>, gdp_mdm_property_<env> or gdp_dnb_api_<env> not running, 'silver_done', 'gdp://', 'queued asset events', 'Dataset', 'admin_reset_dataset_dependencies'. Meaning: the DAG is scheduled on the AND of several sources' silver_done Assets and at least one has not been produced since the last run. Usual causes: one gating source failed or is paused, a source finished silver with skipped/failed markers, stale queued events from an old cycle pairing wrongly. Repair: check which gating source's silver_end / dbt_<domain>_silver_end has not succeeded (master board gdp_master_<env> shows it) and rerun that source. To drop stale events, trigger admin_reset_dataset_dependencies with target_dag_id and dry_run=true first.",
+      "content_json": {"signals": ["silver_done", "gdp://", "queued asset", "admin_reset_dataset_dependencies"], "meaning": "A Dataset-gated DAG is waiting on an upstream source.", "usual_cause": "A failed or paused gating source, stale queued events.", "action": null, "human_steps": ["Find the gating source missing silver_done.", "Rerun that source DAG.", "Clear stale events with admin_reset_dataset_dependencies (dry_run first)."]},
+      "tags": ["AIRFLOW", "RUNBOOK", "GDP", "DEPENDENCY"]
+    },
+    {
+      "key": "ops.runbook.gdp.pool-missing",
+      "type": "AIRFLOW_RUNBOOK",
+      "title": "GDP: task queued forever - pool gdp_heavy or GDP_ENGINE_MUTEX_POOL missing / full",
+      "content": "Signals: task stuck in 'queued' or 'scheduled', 'pool', 'gdp_heavy', 'GDP_ENGINE_MUTEX_POOL', 'Not scheduling since there are 0 open slots'. Meaning: the task waits for a pool slot that does not exist or never frees. Usual causes: the pool not created in a new MWAA env, slots held by zombie tasks, too many dbt tasks for the pool size. Repair: a human step. Create the pool (Admin > Pools) or free slots by clearing dead tasks; tasks start on their own afterwards.",
+      "content_json": {"signals": ["gdp_heavy", "GDP_ENGINE_MUTEX_POOL", "open slots"], "meaning": "No pool slot available.", "usual_cause": "Pool missing, held by zombies, undersized.", "action": null, "human_steps": ["Check Admin > Pools.", "Create the pool or free slots.", "Watch the task leave queued."]},
+      "tags": ["AIRFLOW", "RUNBOOK", "GDP", "INFRASTRUCTURE"]
+    },
+    {
+      "key": "ops.runbook.gdp.master-sensor-failed",
+      "type": "AIRFLOW_RUNBOOK",
+      "title": "GDP: master status board sensor failed (status_gdp_<source>)",
+      "content": "Signals: gdp_master_<env>, 'status_gdp_', ExternalTaskSensor, 'pipeline_done', 'failed_states', 'check_existence', 'GDP_MASTER_TIMEOUT_SEC'. Meaning: the master board only observes: a status sensor fails when the watched DAG's latest pipeline_done is failed/upstream_failed/skipped, or times out when it never finished. Usual causes: the observed source/gold DAG failed (the real failure is there), pipeline_done renamed, the DAG was not built for the env (check_existence). Repair: open the observed DAG's latest run and resolve its failure; then clear the status sensor (RERUN_ONLY). Never fix it in the master DAG.",
+      "content_json": {"signals": ["status_gdp_", "pipeline_done", "gdp_master_", "GDP_MASTER_TIMEOUT_SEC"], "meaning": "An observed GDP DAG did not succeed.", "usual_cause": "Failure in the observed DAG, renamed task, unbuilt DAG.", "action": "RERUN_ONLY", "human_steps": ["Open the observed DAG's latest run.", "Resolve the failure there.", "Clear the status sensor."]},
+      "tags": ["AIRFLOW", "RUNBOOK", "GDP", "DEPENDENCY"]
+    },
+    {
+      "key": "ops.runbook.gdp.engine-mutex",
+      "type": "AIRFLOW_RUNBOOK",
+      "title": "GDP: OpenSearch engine mutex_gate skipped or lock stuck (GDP_DAG_MUTEX)",
+      "content": "Signals: mutex_gate skipped, AirflowSkipException, '_es_sync', 'GDP_DAG_MUTEX', 'lock held', 'GDP_ENGINE_MUTEX_TTL_SEC'. Meaning: another engine run (incremental, bulk or reindex) for the same domain holds the advisory lock, so this run skipped. A skip is expected; a lock whose holder is gone is the problem. Usual causes: a bulk/reindex running in parallel, a run killed before finalize released the lock (it then expires after the TTL, 8h). Repair: confirm in <ENV>_GDP_UTIL_DB.CONFIG.GDP_DAG_MUTEX who holds <domain>_es_sync. If the holder run is dead, a person deletes that row (or waits for the TTL) and reruns. Never delete a lock of a live run.",
+      "content_json": {"signals": ["mutex_gate", "GDP_DAG_MUTEX", "_es_sync", "GDP_ENGINE_MUTEX_TTL_SEC"], "meaning": "The per-domain engine lock is held.", "usual_cause": "Parallel engine run, or a killed run that left its lock.", "action": null, "human_steps": ["Read the lock row in GDP_DAG_MUTEX.", "Check whether the holding run is alive.", "Remove a dead holder's lock and rerun."]},
+      "tags": ["AIRFLOW", "RUNBOOK", "GDP", "OPENSEARCH"]
+    },
+    {
+      "key": "ops.runbook.gdp.engine-pod-exit",
+      "type": "AIRFLOW_RUNBOOK",
+      "title": "GDP: gdp_engine pod failed (exit code 1 / 2 / 130, engine_failure_details)",
+      "content": "Signals: GdpEnginePodOperator, 'gdp_engine_', 'sync_property_es', 'sync_company_es', 'engine_failure_details', 'Pod returned a failure', exit code 1, 2 or 130. Meaning: the OpenSearch sync engine container ended unsuccessfully. Exit 1 = systemic error, no progress kept (fix then rerun from scratch); exit 2 = partial, progress kept (a rerun continues); exit 130 = interrupted (pod deleted, node drained). The engine's JSON error lines are parsed into the failure email. Usual causes: OpenSearch cluster unreachable or rejecting writes, bad documents from the es_doc model, a node drain. Repair: read engine_failure_details; for exit 2 or 130 rerun the engine task (RERUN_ONLY); for exit 1 fix the cause first. On the incremental DAG signal_es_sync_failed already told post-MDM to stop.",
+      "content_json": {"signals": ["GdpEnginePodOperator", "engine_failure_details", "sync_property_es", "sync_company_es", "Pod returned a failure"], "meaning": "The OpenSearch sync engine pod failed.", "usual_cause": "OpenSearch unreachable, bad documents, node drain.", "action": "RERUN_ONLY", "human_steps": ["Read engine_failure_details in the log/email.", "Exit 2/130: rerun; exit 1: fix first.", "Check OpenSearch cluster health."]},
+      "tags": ["AIRFLOW", "RUNBOOK", "GDP", "OPENSEARCH", "KUBERNETES"]
+    },
+    {
+      "key": "ops.runbook.gdp.engine-pod-not-started",
+      "type": "AIRFLOW_RUNBOOK",
+      "title": "GDP: engine pod cannot start (ImagePullBackOff, quota, OOMKilled, kubeconfig)",
+      "content": "Signals: ImagePullBackOff, ErrImagePull, 'exceeded quota', 'FailedScheduling', OOMKilled, 'GDP_ENGINE_VERSION', ':latest', 'kubeconfig', 'gdp-nonprod-', 'gdp-prod-ns', 'memorymax'. Meaning: Kubernetes (Rafay) could not run or keep the engine pod. Usual causes: GDP_ENGINE_VERSION unset, ':latest' (refused) or a tag not pushed to the registry; the namespace quota (req 40 CPU/80Gi, lim 80 CPU/320Gi, 20 pods) exhausted by other pods; no 'memorymax' node available; the pod exceeded its memory limit; the kubeconfig secret in Akeyless expired. Repair: a human step. Set a pushed GDP_ENGINE_VERSION, free quota or wait for other pods, resize only via ENGINE_POD[domain][mode] in gdp_opensearch.py (run tests/verify_engine_autosize.py), refresh the kubeconfig secret. Then rerun.",
+      "content_json": {"signals": ["ImagePullBackOff", "ErrImagePull", "exceeded quota", "FailedScheduling", "OOMKilled", "GDP_ENGINE_VERSION", "kubeconfig"], "meaning": "The engine pod could not be scheduled, pulled or kept alive.", "usual_cause": "Bad image tag, quota, node selector, memory limit, kubeconfig.", "action": null, "human_steps": ["Check GDP_ENGINE_VERSION and the registry tag.", "Check namespace quota and memorymax nodes.", "Resize via ENGINE_POD only; refresh kubeconfig secret."]},
+      "tags": ["AIRFLOW", "RUNBOOK", "GDP", "OPENSEARCH", "KUBERNETES"]
+    },
+    {
+      "key": "ops.runbook.gdp.wait-es-sync",
+      "type": "AIRFLOW_RUNBOOK",
+      "title": "GDP: post-MDM wait_es_sync timed out, failed or skipped",
+      "content": "Signals: wait_es_sync, 'es_sync_done', 'post_mdm_run_ids', 'GDP_POST_MDM_ES_SYNC_WAIT_MIN', PythonSensor timeout in gdp_post_mdm_to_gold_<domain>_<env>. Meaning: post-MDM gold finished but the OpenSearch incremental sync did not report success for this run within 180 min. status=failed -> the engine failed (see the engine runbooks); status=skipped -> the engine DAG skipped (mutex or paused); timeout -> the engine DAG never ran. Kafka tasks wait behind it on purpose; nothing is lost (watermark + outbox). Repair: open gdp_engine_<domain>_incremental_<env>; fix and rerun it, or unpause it. Then clear wait_es_sync. If the engine is intentionally off for the env, remove the env from GDP_POST_MDM_ES_SYNC_ENVS.",
+      "content_json": {"signals": ["wait_es_sync", "es_sync_done", "post_mdm_run_ids", "GDP_POST_MDM_ES_SYNC_WAIT_MIN"], "meaning": "Search sync did not confirm this post-MDM run.", "usual_cause": "Engine failed, skipped, paused or never triggered.", "action": "RERUN_ONLY", "human_steps": ["Open the engine incremental DAG run.", "Fix/unpause it.", "Clear wait_es_sync."]},
+      "tags": ["AIRFLOW", "RUNBOOK", "GDP", "OPENSEARCH", "DEPENDENCY"]
+    },
+    {
+      "key": "ops.runbook.gdp.kafka-publish",
+      "type": "AIRFLOW_RUNBOOK",
+      "title": "GDP: publish_kafka failed (Confluent REST 401/429/5xx, outbox ERROR rows)",
+      "content": "Signals: publish_kafka, 'kafka/v3/clusters', 'KAFKA_OUTBOX_', 'KAFKA_PUBLISH_LOG', 'kafka-secrets', 'GDP_KAFKA_MAX_RETRIES', 'Azure AD', 'oauth'. Meaning: records from the outbox could not be produced to the Confluent topic. Chunks already committed are not resent; failed rows stay PENDING or ERROR and are claimed by the next run until GDP_KAFKA_MAX_RETRIES. Usual causes: the Azure AD client secret in kafka-secrets expired (401), Confluent throttling (429, retried by urllib3) or outage (5xx), the topic missing ({account}-gdp-{env}-{domain}-batch), messages too large. Repair: fix the credential or topic, then rerun publish_kafka (RERUN_ONLY) - it is safe because the outbox status makes it idempotent. Never re-run the outbox dbt to resend; ERROR rows over the retry limit need a person to reset them.",
+      "content_json": {"signals": ["publish_kafka", "kafka/v3/clusters", "KAFKA_OUTBOX_", "KAFKA_PUBLISH_LOG", "GDP_KAFKA_MAX_RETRIES"], "meaning": "Kafka publish from the outbox failed.", "usual_cause": "Expired OAuth secret, throttling/outage, missing topic.", "action": "RERUN_ONLY", "human_steps": ["Check KAFKA_PUBLISH_LOG for the HTTP status.", "Fix kafka-secrets or the topic.", "Rerun publish_kafka; reset ERROR rows over the retry limit."]},
+      "tags": ["AIRFLOW", "RUNBOOK", "GDP", "KAFKA"]
+    },
+    {
+      "key": "ops.runbook.gdp.kafka-bulk-parked",
+      "type": "AIRFLOW_RUNBOOK",
+      "title": "GDP: publish_kafka switched to BULK mode (records parked, alert sent)",
+      "content": "Signals: 'BULK mode', 'GDP_POST_MDM_PUBLISH_MAX', 'parked', 'kafka_bulk_view'. Meaning: more than GDP_POST_MDM_PUBLISH_MAX (20000) records were pending, so streaming was skipped, the rows were parked and an alert sent; the task succeeded. Usual causes: a large MDM merge, a backlog after an outage, a full reload. Repair: a human decision: run the bulk load path from the kafka bulk view with the consumers informed, or raise the limit for a one-off. No rerun is needed.",
+      "content_json": {"signals": ["BULK mode", "GDP_POST_MDM_PUBLISH_MAX", "kafka_bulk_view"], "meaning": "Too many records for streaming; parked for bulk.", "usual_cause": "Large MDM change or backlog.", "action": null, "human_steps": ["Count the parked rows.", "Agree a bulk load with consumers.", "Raise the limit only for a one-off."]},
+      "tags": ["AIRFLOW", "RUNBOOK", "GDP", "KAFKA"]
+    },
+    {
+      "key": "ops.runbook.gdp.incremental-check-stale",
+      "type": "AIRFLOW_RUNBOOK",
+      "title": "GDP: post-MDM check_incremental_data short-circuited or stale-run gate",
+      "content": "Signals: check_incremental_data, 'ShortCircuit', 'VW_GOLD_', '_INC_CHECK', 'GDP_POST_MDM_STALE_RUN_MAX_MIN'. Meaning: the */15 post-MDM DAG found no new MDM data (normal: downstream skipped) or its run was older than 30 min and was skipped. Usual causes: no MDM changes, scheduler backlog, the previous run still active (max_active_runs=1). Repair: nothing for normal no-data runs. If data is expected but the check is empty, query VW_GOLD_<D>_INC_CHECK and the MDM load watermark; a person checks the Reltio/MDM feed.",
+      "content_json": {"signals": ["check_incremental_data", "_INC_CHECK", "GDP_POST_MDM_STALE_RUN_MAX_MIN"], "meaning": "No new MDM data or a stale run was skipped.", "usual_cause": "No changes, backlog, overlapping run.", "action": null, "human_steps": ["Query VW_GOLD_<D>_INC_CHECK.", "Check the MDM feed watermark.", "Do nothing for normal no-data runs."]},
+      "tags": ["AIRFLOW", "RUNBOOK", "GDP", "MDM"]
+    },
+    {
+      "key": "ops.runbook.gdp.mdm-trigger",
+      "type": "AIRFLOW_RUNBOOK",
+      "title": "GDP: MDM property coordinator cannot trigger the Reltio MDM DAG",
+      "content": "Signals: gdp_mdm_property_, TriggerDagRunOperator, 'mdm_trigger_by_source', 'DagNotFound', 'is paused', 'GDP_MDM_PROPERTY_GATE_'. Meaning: the coordinator fired but the target Reltio MDM property DAG id (from mdm_trigger_by_source with {env}) does not exist, is paused or rejected the run. Usual causes: the MDM DAG renamed or not deployed in this env, a paused target, a wrong {env} placeholder. Repair: a human step. Confirm the target DAG id in the env and unpause it or fix mdm_trigger_by_source in gdp_pipelines.py; then rerun the trigger task (RERUN_ONLY).",
+      "content_json": {"signals": ["gdp_mdm_property_", "TriggerDagRunOperator", "mdm_trigger_by_source", "DagNotFound"], "meaning": "The MDM DAG trigger failed.", "usual_cause": "Missing, renamed or paused MDM DAG.", "action": "RERUN_ONLY", "human_steps": ["Check the target MDM DAG id exists in the env.", "Unpause it or fix mdm_trigger_by_source.", "Rerun the trigger task."]},
+      "tags": ["AIRFLOW", "RUNBOOK", "GDP", "MDM", "DEPENDENCY"]
+    },
+    {
+      "key": "ops.runbook.gdp.batch-master-write",
+      "type": "AIRFLOW_RUNBOOK",
+      "title": "GDP: init_batch / update_stage / pipeline_done failed writing GDP_BATCH_MASTER",
+      "content": "Signals: init_batch, update_stage_task, pipeline_done, reconcile_batch_status, 'GDP_BATCH_MASTER', 'ORCHESTRATION_ID', 'BATCH_ID'. Meaning: an audit write to <ENV>_GDP_UTIL_DB.CONFIG.GDP_BATCH_MASTER failed. Usual causes: Snowflake connection/session errors (see the auth and network runbooks), a column added to the table but not to the code (000904), a lock/contention error. The batch master is write-only audit except for SnapLogic in-flight resume. Repair: fix the underlying Snowflake error and clear the task (RERUN_ONLY); pipeline_done is watched by the master board, so clear it last.",
+      "content_json": {"signals": ["GDP_BATCH_MASTER", "init_batch", "update_stage_task", "pipeline_done", "ORCHESTRATION_ID"], "meaning": "An audit write to the batch master failed.", "usual_cause": "Snowflake session error, schema change, contention.", "action": "RERUN_ONLY", "human_steps": ["Read the Snowflake error code in the log.", "Apply its runbook.", "Clear the task (pipeline_done last)."]},
+      "tags": ["AIRFLOW", "RUNBOOK", "GDP", "SNOWFLAKE"]
+    },
+    {
+      "key": "ops.runbook.gdp.alert-email",
+      "type": "AIRFLOW_RUNBOOK",
+      "title": "GDP: failure / recovery emails missing, duplicated or not threaded",
+      "content": "Signals: 'GDP_ALERT_EMAILS', 'gdp_alert_thread__', 'failure_alert_sent', 'notify_dag_failure', 'SMTP', 'SES', 'parse_email_list'. Meaning: a pipeline failed or recovered but the alert email did not arrive as expected. Alerts never fail a task, so the only evidence is in the callback log lines. Usual causes: SMTP/SES connection or sender issue, an empty or malformed GDP_ALERT_EMAILS, a stale thread Variable, dedupe suppressing an intermediate retry or a stale-skipped run (by design). Repair: check the callback lines in the task log (DAG-level callbacks log in the DAG processor on Airflow 3), fix GDP_ALERT_EMAILS or SMTP, delete the gdp_alert_thread__<dag_id> Variable to start a fresh thread. No rerun needed.",
+      "content_json": {"signals": ["GDP_ALERT_EMAILS", "gdp_alert_thread__", "failure_alert_sent", "notify_dag_failure"], "meaning": "Alert email delivery or threading problem.", "usual_cause": "SMTP/SES issue, bad recipient list, stale thread, dedupe.", "action": null, "human_steps": ["Read the callback log lines.", "Fix GDP_ALERT_EMAILS / SMTP.", "Reset the gdp_alert_thread__ Variable."]},
+      "tags": ["AIRFLOW", "RUNBOOK", "GDP", "ALERTING"]
+    },
+    {
+      "key": "ops.runbook.gdp.airflow3-orm-access",
+      "type": "AIRFLOW_RUNBOOK",
+      "title": "GDP: Airflow 3 Task SDK - direct ORM / metadata DB access refused in a task or callback",
+      "content": "Signals: 'Direct database access via the ORM is not allowed', 'airflow.settings.Session', 'create_session', 'get_task_instances', \"'DagRun' object has no attribute\", 'RuntimeTaskInstance'. Meaning: task or callback code used the Airflow 2 ORM, which the Airflow 3 Task SDK on MWAA blocks. Usual causes: a new helper that queries TaskInstance/DagRun, a DAG-level on_failure_callback that expects the failed ti (on Airflow 3 it runs in the DAG processor and its ti is not the failed task). Repair: a code change: use ti.get_task_states / the Task SDK context, XCom for dedupe (failure_alert_sent) and task-level callbacks for failure emails (pipeline_failure_callback, gdp_notify.notify_failure). Rerun after the deploy.",
+      "content_json": {"signals": ["Direct database access via the ORM is not allowed", "create_session", "get_task_instances", "RuntimeTaskInstance"], "meaning": "Airflow 2 ORM code ran under the Airflow 3 Task SDK.", "usual_cause": "ORM helper in a task, DAG-level callback expecting the failed ti.", "action": null, "human_steps": ["Find the ORM call in the traceback.", "Replace it with the Task SDK API (ti.get_task_states, XCom).", "Move failure emails to task-level callbacks; redeploy."]},
+      "tags": ["AIRFLOW", "RUNBOOK", "GDP", "PYTHON", "AIRFLOW3"]
+    },
+    {
+      "key": "ops.runbook.gdp.task-execution-timeout",
+      "type": "AIRFLOW_RUNBOOK",
+      "title": "GDP: AirflowTaskTimeout on a non-dbt task (default execution_timeout 2h)",
+      "content": "Signals: AirflowTaskTimeout, 'Timeout, PID', 'execution_timeout', in init_batch, validate_source, soda_*, update_stage_task or notify tasks. Meaning: a task that normally takes seconds ran past DEFAULT_ARGS execution_timeout (2h). Usual causes: a Snowflake query queued behind other work or blocked on a lock on GDP_BATCH_MASTER, a hung network call (Akeyless, SMTP, Soda Cloud) without its own timeout, the warehouse suspended by a resource monitor. Repair: check query history for the task's queries and the warehouse; one rerun (RERUN_ONLY) when it was queueing. A repeat needs the call given its own timeout (a code change).",
+      "content_json": {"signals": ["AirflowTaskTimeout", "Timeout, PID", "execution_timeout"], "meaning": "A short task hung past 2h.", "usual_cause": "Queued/locked query, hung external call, suspended warehouse.", "action": "RERUN_ONLY", "human_steps": ["Check Snowflake query history for the task.", "Check warehouse state and resource monitors.", "Add a timeout to the hanging call if it repeats."]},
+      "tags": ["AIRFLOW", "RUNBOOK", "GDP", "PERFORMANCE"]
+    },
+    {
+      "key": "ops.runbook.gdp.snowflake-keypair",
+      "type": "AIRFLOW_RUNBOOK",
+      "title": "GDP: Snowflake key-pair login failed (_get_sf_connection, snowflake-secrets)",
+      "content": "Signals: '_get_sf_connection', 'Could not deserialize key data', 'private_key', 'JWT token is invalid', 390144, 'snowflake-secrets', '<ENV>_GDP_DATA_ENGINEER_ROLE'. Meaning: the GDP service user's key pair from Akeyless was rejected or unreadable. Usual causes: the private key rotated in Akeyless but the public key not set on the Snowflake user (or the reverse), a passphrase change, a malformed PEM (newlines lost), the role or warehouse in the secret no longer granted. Repair: a human step. Compare RSA_PUBLIC_KEY_FP on the user (DESC USER) with the key in snowflake-secrets, fix the PEM or the grant, then rerun. At parse time this is an Import Error and the last-good DAGs remain.",
+      "content_json": {"signals": ["_get_sf_connection", "Could not deserialize key data", "390144", "snowflake-secrets"], "meaning": "Snowflake key-pair auth failed.", "usual_cause": "Key rotation mismatch, passphrase change, malformed PEM, lost grant.", "action": null, "human_steps": ["DESC USER and compare the key fingerprint.", "Fix the PEM / passphrase in snowflake-secrets.", "Check role and warehouse grants; rerun."]},
+      "tags": ["AIRFLOW", "RUNBOOK", "GDP", "AUTH", "SNOWFLAKE"]
+    },
+    {
+      "key": "ops.runbook.gdp.sf-dml-retried",
+      "type": "AIRFLOW_RUNBOOK",
+      "title": "GDP: duplicate or inconsistent audit rows after a retried Snowflake write (_sf_run)",
+      "content": "Signals: '_sf_run', 'retries=', 'GDP_BATCH_MASTER' with two rows for one ORCHESTRATION_ID / BATCH_ID, 100090 'Duplicate row detected' on a MERGE into the batch master. Meaning: a DML statement was retried after a network or session error and ran twice. _sf_run retries are only safe for reads. Usual causes: a new call site passing retries to an INSERT/UPDATE/MERGE, a cached connection that dropped mid-statement. Repair: remove the duplicate audit row by hand (it is audit only; DEDUP_ON_KEY applies only inside the resolution scope and with approval), and change the call site to retries=0. Rerun pipeline_done if its update was lost.",
+      "content_json": {"signals": ["_sf_run", "Duplicate row detected", "100090", "ORCHESTRATION_ID"], "meaning": "A Snowflake write ran twice.", "usual_cause": "Retries on DML, a dropped cached connection.", "action": "DEDUP_ON_KEY", "human_steps": ["Find the duplicate rows for the BATCH_ID.", "Remove the duplicate (with approval).", "Make the DML call site non-retrying."]},
+      "tags": ["AIRFLOW", "RUNBOOK", "GDP", "SNOWFLAKE", "DATA_QUALITY"]
+    },
+    {
+      "key": "ops.runbook.gdp.dbt-partial-parse",
+      "type": "AIRFLOW_RUNBOOK",
+      "title": "GDP: dbt partial parse / manifest corrupt in the shared project cache",
+      "content": "Signals: 'partial_parse.msgpack', 'msgpack', 'Unable to do partial parsing', 'manifest', 'UnpicklingError', 'ExtraData'. Meaning: the partial-parse file reused from /tmp/.gdp_dbt_project_cache on this worker is unreadable or from another dbt version. Usual causes: two runs writing the cache together after a lock timeout, a dbt-ol upgrade in env-conf/requirements.txt, a worker disk filling up. Repair: rerun (RERUN_ONLY) - a new (branch, sha) cache or another worker usually passes. If it repeats on one worker, delete that worker's cache directory or bump GDP_DBT_CACHE_* so the cache is rebuilt.",
+      "content_json": {"signals": ["partial_parse.msgpack", "Unable to do partial parsing", "UnpicklingError"], "meaning": "The cached dbt parse state is unusable.", "usual_cause": "Concurrent cache write, dbt upgrade, full disk.", "action": "RERUN_ONLY", "human_steps": ["Rerun the dbt task.", "Rebuild the worker's dbt project cache if it repeats.", "Check the dbt-ol version in requirements."]},
+      "tags": ["AIRFLOW", "RUNBOOK", "GDP", "DBT"]
+    },
+    {
+      "key": "ops.runbook.gdp.soda-binary",
+      "type": "AIRFLOW_RUNBOOK",
+      "title": "GDP: Soda CLI missing or data source not found (soda contract verify cannot start)",
+      "content": "Signals: 'soda: command not found', 'No such file or directory: soda', 'GDP_SODA_RUNNER_FLAG', 'data source', 'not found in configuration', '_SODA_DATA_SOURCE_BY_ENV'. Meaning: the Soda subprocess could not start, or the env's Soda data source prefix is not in the Soda configuration. Usual causes: the soda package missing from the MWAA image after a requirements change, --use-runner sent to a runner that is not registered, a new env without its data source in _SODA_DATA_SOURCE_BY_ENV. The DAG continues (warn-and-continue) but no checks ran. Repair: a human change: fix requirements / the runner flag / the data source mapping and redeploy; then rerun the Soda task.",
+      "content_json": {"signals": ["soda: command not found", "GDP_SODA_RUNNER_FLAG", "_SODA_DATA_SOURCE_BY_ENV", "not found in configuration"], "meaning": "Soda could not start for this env.", "usual_cause": "Missing package, runner flag, unmapped data source.", "action": null, "human_steps": ["Check the Soda package in requirements.", "Check GDP_SODA_RUNNER_FLAG and the runner.", "Add the env to _SODA_DATA_SOURCE_BY_ENV."]},
+      "tags": ["AIRFLOW", "RUNBOOK", "GDP", "SODA"]
+    },
+    {
+      "key": "ops.runbook.gdp.engine-image-token",
+      "type": "AIRFLOW_RUNBOOK",
+      "title": "GDP: engine image tag unresolved ({RECENT_PUSHED_VERSION} / {CONTAINER_REGISTRY_HOST})",
+      "content": "Signals: '{RECENT_PUSHED_VERSION}', '{CONTAINER_REGISTRY_HOST}', 'GDP_ENGINE_REGISTRY', 'invalid reference format', 'InvalidImageName'. Meaning: the engine DAG was deployed with the Jenkins placeholder tokens still in the image name, or the per-env fallback is empty. Usual causes: a deploy outside the Jenkins pipeline, the token replacement step failing, GDP_ENGINE_REGISTRY unset. Repair: a human step. Set GDP_ENGINE_VERSION / GDP_ENGINE_REGISTRY to a pushed image (never :latest) or redeploy through Jenkins; then rerun the engine task.",
+      "content_json": {"signals": ["{RECENT_PUSHED_VERSION}", "{CONTAINER_REGISTRY_HOST}", "InvalidImageName", "invalid reference format"], "meaning": "The engine image name has unreplaced tokens.", "usual_cause": "Manual deploy, failed token replacement, unset registry.", "action": null, "human_steps": ["Check the image in the pod spec.", "Set GDP_ENGINE_VERSION / GDP_ENGINE_REGISTRY.", "Redeploy via Jenkins and rerun."]},
+      "tags": ["AIRFLOW", "RUNBOOK", "GDP", "OPENSEARCH", "DEPLOYMENT"]
+    },
+    {
+      "key": "ops.runbook.gdp.engine-cleanup-logs",
+      "type": "AIRFLOW_RUNBOOK",
+      "title": "GDP: engine failure email without details (cleanup could not read pod logs)",
+      "content": "Signals: 'engine_failure_details' empty, 'cleanup', 'read_namespaced_pod_log', 'base container', 'pods ... not found', 'Forbidden'. Meaning: the engine pod failed but cleanup could not read its base-container logs, so the failure email has no engine error lines. Usual causes: the pod was already deleted (is_delete_operator_pod / eviction), the kubeconfig role cannot read logs in the namespace, the engine crashed before printing JSON lines. Repair: read the pod logs in Rafay / kubectl by pod name from the task log, or in Datadog by the gdp-engine service; apply the engine exit-code runbook. Grant log read to the role if Forbidden.",
+      "content_json": {"signals": ["read_namespaced_pod_log", "engine_failure_details", "base container"], "meaning": "Engine error details could not be collected.", "usual_cause": "Pod deleted, no log permission, early crash.", "action": null, "human_steps": ["Read the pod logs in Rafay/Datadog by pod name.", "Apply the engine exit-code runbook.", "Grant pods/log read if Forbidden."]},
+      "tags": ["AIRFLOW", "RUNBOOK", "GDP", "OPENSEARCH", "KUBERNETES"]
+    },
+    {
+      "key": "ops.runbook.gdp.engine-dag-paused",
+      "type": "AIRFLOW_RUNBOOK",
+      "title": "GDP: engine reindex/bulk not running - DAG paused, disabled env or domain",
+      "content": "Signals: 'gdp_engine_', '_reindex_', 'paused', 'GDP_ENGINE_DAGS_ENABLED', 'GDP_ENGINE_ENABLED_ENVS', 'GDP_ENGINE_DOMAINS', DAG missing from the UI. Meaning: the engine DAG does not exist for this env/domain or exists but is paused. Reindex DAGs are paused on creation on purpose. The builder is fail-soft, so a build error shows only as missing DAGs. Usual causes: the env or domain not listed in GDP_ENGINE_ENABLED_ENVS / GDP_ENGINE_DOMAINS, GDP_ENGINE_DAGS_ENABLED off, GDP_ENGINE_VERSION unset (DAGs not built). Repair: set the variables, check the DAG processor log for the engine builder warning, unpause the DAG deliberately.",
+      "content_json": {"signals": ["GDP_ENGINE_DAGS_ENABLED", "GDP_ENGINE_ENABLED_ENVS", "GDP_ENGINE_DOMAINS", "_reindex_"], "meaning": "The engine DAG is missing or paused.", "usual_cause": "Disabled env/domain, missing version, paused by design.", "action": null, "human_steps": ["Check GDP_ENGINE_* variables.", "Read the DAG processor log for the engine builder.", "Unpause the DAG when intended."]},
+      "tags": ["AIRFLOW", "RUNBOOK", "GDP", "OPENSEARCH", "CONFIG"]
+    },
+    {
+      "key": "ops.runbook.gdp.kafka-topic-or-size",
+      "type": "AIRFLOW_RUNBOOK",
+      "title": "GDP: Kafka topic not found or record too large (404 / 413 from Confluent REST)",
+      "content": "Signals: 'UNKNOWN_TOPIC_OR_PARTITION', 40403, 'RECORD_TOO_LARGE', 413, 'MESSAGE_TOO_LARGE', '-batch' topic name in publish_kafka. Meaning: Confluent rejected the produce request permanently: the topic does not exist for this env/domain, or a record is larger than the topic allows. Retries do not help. Usual causes: a new env or domain whose topic {account}-gdp-{env}-{domain}-batch was never created, the prod topic name in kafka-secrets wrong, a gold record with a very large array. Repair: a human step. Create the topic or fix the secret; for size, raise max.message.bytes on the topic or trim the outbox payload. Then reset the ERROR rows and rerun publish_kafka.",
+      "content_json": {"signals": ["UNKNOWN_TOPIC_OR_PARTITION", "RECORD_TOO_LARGE", "MESSAGE_TOO_LARGE", "40403"], "meaning": "Kafka rejected the records permanently.", "usual_cause": "Missing topic, wrong topic name, oversized record.", "action": null, "human_steps": ["Check the topic exists in Confluent.", "Fix kafka-secrets or the topic size limit.", "Reset ERROR rows and rerun publish_kafka."]},
+      "tags": ["AIRFLOW", "RUNBOOK", "GDP", "KAFKA"]
+    },
+    {
+      "key": "ops.runbook.gdp.signal-es-sync-failed",
+      "type": "AIRFLOW_RUNBOOK",
+      "title": "GDP: signal_es_sync_failed ran (incremental engine failed, post-MDM told to stop)",
+      "content": "Signals: signal_es_sync_failed, 'status=failed', 'es_sync_done', 'ONE_FAILED'. Meaning: this task succeeding is the symptom, not the problem: an upstream task of the incremental engine DAG (mutex_gate, dbt_<d>_es_doc or the engine pod) failed, so the Asset was emitted with status=failed and the post-MDM wait_es_sync fails fast instead of waiting 180 min. Repair: find the failed upstream task in the same run and apply its runbook (dbt, engine pod, mutex). After it is fixed, rerun the engine DAG and then clear wait_es_sync in the post-MDM DAG.",
+      "content_json": {"signals": ["signal_es_sync_failed", "status=failed"], "meaning": "The incremental engine failed and told post-MDM.", "usual_cause": "A failure in mutex_gate, es_doc dbt or the engine pod.", "action": null, "human_steps": ["Find the failed upstream task in the engine run.", "Apply its runbook and rerun the engine.", "Clear wait_es_sync in post-MDM."]},
+      "tags": ["AIRFLOW", "RUNBOOK", "GDP", "OPENSEARCH", "DEPENDENCY"]
+    },
+    {
+      "key": "ops.runbook.gdp.master-layout",
+      "type": "AIRFLOW_RUNBOOK",
+      "title": "GDP: master status board not built (_resolve_layout failed)",
+      "content": "Signals: '_resolve_layout', 'gdp_master_', 'GDP_MASTER_INCLUDE_BRONZE_ONLY', 'Import Error' mentioning gdp_master.py. Meaning: the master DAG could not resolve which source DAGs to observe; it fails hard so a wrong board is never shown. Usual causes: the source registry unreadable at parse time, a source configured for both full and bronze-only, a builder error in gdp_master.py after a deploy. Repair: read the DAG processor traceback, fix the config or the code and redeploy. The source DAGs themselves are not affected.",
+      "content_json": {"signals": ["_resolve_layout", "GDP_MASTER_INCLUDE_BRONZE_ONLY", "gdp_master.py"], "meaning": "The master board layout could not be resolved.", "usual_cause": "Registry read failure, conflicting source config, code error.", "action": null, "human_steps": ["Read the DAG processor traceback.", "Check the source registry rows.", "Fix and redeploy."]},
+      "tags": ["AIRFLOW", "RUNBOOK", "GDP", "DEPLOYMENT"]
+    },
+    {
+      "key": "ops.runbook.gdp.admin-reset-failed",
+      "type": "AIRFLOW_RUNBOOK",
+      "title": "GDP: admin_reset_dataset_dependencies failed (MWAA invoke_rest_api)",
+      "content": "Signals: admin_reset_dataset_dependencies, 'invoke_rest_api', 'AccessDeniedException', 'target_dag_id', 'queuedEvent'. Meaning: the admin DAG could not list or clear the queued Asset events through the MWAA REST API. Usual causes: the MWAA execution role lacks airflow:InvokeRestApi, a wrong target_dag_id (env suffix missing), the API path changed with the Airflow version. Repair: check the role policy and the conf passed (run dry_run=true first); fix and rerun the admin DAG. Nothing in the pipelines is changed by a failed reset.",
+      "content_json": {"signals": ["admin_reset_dataset_dependencies", "invoke_rest_api", "AccessDeniedException"], "meaning": "The Asset queue reset could not call MWAA.", "usual_cause": "Missing IAM permission, wrong target_dag_id.", "action": null, "human_steps": ["Check airflow:InvokeRestApi on the role.", "Check target_dag_id includes the env suffix.", "Rerun with dry_run=true."]},
+      "tags": ["AIRFLOW", "RUNBOOK", "GDP", "ADMIN"]
+    },
+    {
+      "key": "ops.runbook.gdp.dnb-gate",
+      "type": "AIRFLOW_RUNBOOK",
+      "title": "GDP: DNB_API waits forever or DNB_FILE does not trigger anything",
+      "content": "Signals: 'gdp_dnb_api_', 'gdp_dnb_file_', '_dnb_gate_schedule', 'GDP_DNB_GATE_EXCLUDE', 'GDP_DNB_SOURCES', 'company/silver_done'. Meaning: DNB_API is gated on every other company source's company/silver_done, so one missing company source blocks it; DNB_FILE is isolated and manual by design (no outlets, never gates gold or MDM). Usual causes: a company source failed, paused or is quarterly/manual and should be excluded; expecting DNB_FILE to feed downstream. Repair: rerun the missing company source, or add a slow source to GDP_DNB_GATE_EXCLUDE (a config decision). For DNB_FILE nothing is wrong.",
+      "content_json": {"signals": ["_dnb_gate_schedule", "GDP_DNB_GATE_EXCLUDE", "GDP_DNB_SOURCES", "gdp_dnb_api_"], "meaning": "The DNB gate is waiting on a company source.", "usual_cause": "Failed/paused/slow company source; DNB_FILE isolated by design.", "action": null, "human_steps": ["Find the company source without silver_done.", "Rerun it or exclude it via GDP_DNB_GATE_EXCLUDE.", "Do not expect DNB_FILE to trigger downstream."]},
+      "tags": ["AIRFLOW", "RUNBOOK", "GDP", "DEPENDENCY", "SCHEDULING"]
+    }
+  ]
+}
