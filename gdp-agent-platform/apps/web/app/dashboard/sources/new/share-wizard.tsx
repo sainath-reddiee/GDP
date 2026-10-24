@@ -31,8 +31,8 @@ const n = (v: number | null | undefined) => (v == null ? "-" : Number(v).toLocal
 /** Onboard tables from a Snowflake share: pick the share (mount it if needed), one of its schemas and its tables,
  * choose where they land, then land them (each table unloaded once to Parquet, copied into landing) and continue to
  * profiling. Every choice is listed from Snowflake; changing one clears the choices made after it. */
-export function ShareWizard({ shares, domains, databases, landing }: {
-  shares: ShareList; domains: DomainOption[]; databases: CatalogDatabase[]; landing: LandingDefaults | null;
+export function ShareWizard({ shares, domains, databases, landing, initialName = "" }: {
+  shares: ShareList; domains: DomainOption[]; databases: CatalogDatabase[]; landing: LandingDefaults | null; initialName?: string;
 }) {
   const entries = useMemo<ShareEntry[]>(() => {
     const seen = new Set<string>();
@@ -61,7 +61,7 @@ export function ShareWizard({ shares, domains, databases, landing }: {
   const [tables, setTables] = useState<ShareTable[] | null>(null);
   const [picked, setPicked] = useState<Set<string>>(new Set());
   const [filter, setFilter] = useState("");
-  const [sourceName, setSourceName] = useState("");
+  const [sourceName, setSourceName] = useState(initialName);
   const [autoName, setAutoName] = useState("");
   const [runName, setRunName] = useState("");
   const [domainId, setDomainId] = useState("");

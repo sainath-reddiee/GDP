@@ -183,7 +183,7 @@ function DataModelPanel({ domainId }: { domainId: string }) {
   useEffect(() => { void domainDataModel(domainId).then((r) => (r.ok ? setData(r.data) : setError(r.error))); }, [domainId]);
   const m = data?.model;
   const d = data?.diagram;
-  const workbench = m ? `/dashboard/modeling/${encodeURIComponent(m.model_id)}` : "/dashboard/modeling";
+  const workbench = m ? `/os/design/modeling/${encodeURIComponent(m.model_id)}` : "/os/design/modeling";
   return (
     <section className="surface space-y-3 p-4" data-testid="domain-model-source">
       <div>
@@ -207,7 +207,7 @@ function DataModelPanel({ domainId }: { domainId: string }) {
           <Link href={`${workbench}?import=file`} className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-primary px-3 text-sm font-medium text-primary-foreground">
             <FileInput className="h-4 w-4" />Import a model file</Link>
         )}
-        <Link href={`/domains/${encodeURIComponent(domainId)}?tab=lineage`} className="inline-flex h-9 items-center gap-1.5 rounded-lg border px-3 text-sm hover:bg-muted">
+        <Link href={`/os/knowledge/domains/${encodeURIComponent(domainId)}?tab=lineage`} className="inline-flex h-9 items-center gap-1.5 rounded-lg border px-3 text-sm hover:bg-muted">
           See the diagram<ArrowRight className="h-4 w-4" /></Link>
       </div>
     </section>

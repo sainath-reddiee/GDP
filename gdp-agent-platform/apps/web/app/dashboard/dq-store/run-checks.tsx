@@ -43,7 +43,7 @@ function CheckDrawer({ check, onClose, canCase }: { check: RunCheck; onClose: ()
       <div className="space-y-4 text-sm">
         <div className="flex flex-wrap items-center gap-2"><StatusPill status={check.status} />{check.outcome && <StatusPill status={check.outcome} />}
           <span className="text-xs text-muted-foreground">{check.origin?.toLowerCase()}{check.reviewed_by ? ` · reviewed by ${check.reviewed_by}` : ""}</span>
-          <Link href={`/runs/${check.run_id}/soda`} className="ml-auto inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline">Open in the run <ArrowUpRight className="h-3 w-3" /></Link></div>
+          <Link href={`/os/build/runs/${check.run_id}/soda`} className="ml-auto inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline">Open in the run <ArrowUpRight className="h-3 w-3" /></Link></div>
         {check.sodacl && <div><p className="mb-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">SodaCL</p><pre className="overflow-auto rounded-lg bg-muted p-2 font-mono text-[11px]">{check.sodacl}</pre></div>}
         {check.client_requirement && <div><p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Client requirement</p><p>{check.client_requirement}</p></div>}
         {evidence && <div><p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Evidence</p><p className="text-muted-foreground">{evidence}</p></div>}

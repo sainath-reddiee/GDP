@@ -20,7 +20,7 @@ import { Callout, Section, StatusPill, StepIcon, ToastProvider, type Tone, useTo
 
 const snake = (v: string) => v.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "");
 const TOKEN_FAIL = new Set(["TOKEN_SCOPE", "AUTH"]);
-const ADMIN_LINK = "/admin?section=integrations";
+const ADMIN_LINK = "/os/admin/settings?section=integrations";
 
 function friendly(raw: string) {
   if (/too many arguments|expected 1, got 2/i.test(raw)) {
@@ -497,7 +497,7 @@ function ImpactNote({ repo, target }: { repo: DbtRunRepo; target: string }) {
           <p className="font-medium">In {repo.name}, {imp.total} item{imp.total === 1 ? "" : "s"} depend on {target} ({imp.direct} directly). Check them before merging:</p>
           <div className="mt-1.5 flex flex-wrap gap-1">
             {direct.map((n) => (
-              <Link key={n.name} href={`/code?repo=${repo.repo_id}&q=${encodeURIComponent(n.name.split(".").pop() ?? n.name)}`}
+              <Link key={n.name} href={`/os/build/code?repo=${repo.repo_id}&q=${encodeURIComponent(n.name.split(".").pop() ?? n.name)}`}
                     className="rounded-md border bg-card px-1.5 py-0.5 font-mono hover:border-primary">{n.name}</Link>
             ))}
             {imp.total > direct.length && <span className="text-muted-foreground">and {imp.total - direct.length} further downstream</span>}

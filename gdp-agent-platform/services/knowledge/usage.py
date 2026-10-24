@@ -25,6 +25,8 @@ STAGE_SKILLS: Dict[str, List[str]] = {
     "SODA": ["SODA_SKILL", "DEV-DATAREADINESS-CHECK", "QA-DATAREADINESS-CHECK"],
     "DBT": ["GOLD-MODEL", "GDP-DBT-ONBOARD-SOURCE", "SILVER-MODEL", "GDP_DOMAIN_SKILL"],
     "VALIDATION": ["MAPPING-VALIDATION", "DEV-DATAREADINESS-CHECK", "QA-DATAREADINESS-CHECK", "GOLD-MODEL"],
+    # the code standards agent's own skill; a domain can bind its standards here too (services/validation/standards.py)
+    "STANDARDS": ["CODE-STANDARDS-REVIEW"],
 }
 
 GDP_ONLY_SKILLS = {"GDP-DBT-ONBOARD-SOURCE", "GDP_DOMAIN_SKILL", "GOLD-MODEL"}

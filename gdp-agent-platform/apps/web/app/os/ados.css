@@ -1,0 +1,165 @@
+/* Agentic Data OS experience (/os): the CBRE palette from the UX package, scoped under .ados so no other page changes.
+   Every class here starts with os- and only applies inside the .ados root the /os layout draws. */
+
+.ados {
+  --os-bg: #f5f8f7;
+  --os-surface: #ffffff;
+  --os-subtle: #f8faf9;
+  --os-hover: #f3faf7;
+  --os-ink: #032842;
+  --os-ink-2: #1a2e3b;
+  --os-muted: #435254;
+  --os-faint: #83968c;
+  --os-line: #e1eae6;
+  --os-line-soft: #edf1ef;
+  --os-forest: #003f2d;
+  --os-forest-2: #0b5940;
+  --os-emerald: #058763;
+  --os-leaf: #15a778;
+  --os-accent-ink: #006247;
+  /* CBRE accent green, and celadon for completed steps */
+  --os-accent: #17e88f;
+  --os-step-done: #80bbad;
+  --os-step-done-ink: #538184;
+  --os-green-bg: #e7f8ee; --os-green-ink: #008559; --os-green-line: #c9ead7;
+  --os-blue-bg: #eaf4ff; --os-blue-ink: #2974bd; --os-blue-line: #d2e3fa;
+  --os-amber-bg: #fff4dd; --os-amber-ink: #a2670b; --os-amber-line: #efd9ae;
+  --os-red-bg: #ffeded; --os-red-ink: #b94747; --os-red-line: #f0c9c4;
+  --os-purple-bg: #f1eafb; --os-purple-ink: #7a5ab0; --os-purple-line: #e8d9f9;
+  --os-neutral-bg: #eff3f1; --os-neutral-ink: #64756e;
+  --os-code-bg: #0f2a23; --os-code-ink: #d6f5e7;
+  --os-shadow: 0 1px 3px rgba(16, 64, 46, 0.04);
+  --os-shadow-pop: 0 12px 32px rgba(16, 64, 46, 0.14);
+  background: var(--os-bg);
+  color: var(--os-ink);
+  min-height: 100vh;
+}
+
+.dark .ados {
+  --os-bg: #0b1512;
+  --os-surface: #111e1a;
+  --os-subtle: #15241f;
+  --os-hover: #172a24;
+  --os-ink: #e4efeb;
+  --os-ink-2: #d2e2dc;
+  --os-muted: #93a8a1;
+  --os-faint: #7b918a;
+  --os-line: #22352f;
+  --os-line-soft: #1b2c27;
+  --os-forest: #0e7a5c;
+  --os-forest-2: #109069;
+  --os-emerald: #2fbf8d;
+  --os-leaf: #2fbf8d;
+  --os-accent-ink: #5fd8aa;
+  --os-accent: #17e88f;
+  --os-step-done: #538184;
+  --os-step-done-ink: #80bbad;
+  --os-green-bg: #12352a; --os-green-ink: #6fe0b4; --os-green-line: #1d4c3c;
+  --os-blue-bg: #132a40; --os-blue-ink: #7fb8ec; --os-blue-line: #1f3d5a;
+  --os-amber-bg: #3a2a0e; --os-amber-ink: #f0c26a; --os-amber-line: #574117;
+  --os-red-bg: #3c1a1a; --os-red-ink: #f19a9a; --os-red-line: #5a2626;
+  --os-purple-bg: #2a2140; --os-purple-ink: #c1a6ef; --os-purple-line: #3d3060;
+  --os-neutral-bg: #1c2c27; --os-neutral-ink: #a3b5af;
+  --os-code-bg: #08120f; --os-code-ink: #c8efdd;
+  --os-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+  --os-shadow-pop: 0 12px 32px rgba(0, 0, 0, 0.45);
+}
+
+.ados .os-card { background: var(--os-surface); border: 1px solid var(--os-line); border-radius: 12px; box-shadow: var(--os-shadow); }
+.ados .os-subtle { background: var(--os-subtle); }
+.ados .os-muted { color: var(--os-muted); }
+.ados .os-faint { color: var(--os-faint); }
+.ados .os-ink { color: var(--os-ink); }
+.ados .os-accent { color: var(--os-accent-ink); }
+.ados .os-line { border-color: var(--os-line); }
+.ados .os-divide > * + * { border-top: 1px solid var(--os-line-soft); }
+.ados .os-eyebrow { color: var(--os-emerald); text-transform: uppercase; letter-spacing: 0.1em; font-size: 10.5px; font-weight: 800; }
+.ados .os-hover:hover { background: var(--os-hover); }
+
+/* buttons */
+.ados .os-btn {
+  display: inline-flex; align-items: center; gap: 6px; padding: 8px 13px; border-radius: 8px; font-size: 12px; font-weight: 700;
+  border: 1px solid var(--os-line); color: var(--os-ink-2); background: var(--os-surface); white-space: nowrap;
+  transition: background 0.15s, border-color 0.15s, transform 0.1s, box-shadow 0.15s;
+}
+.ados .os-btn:hover { background: var(--os-hover); }
+.ados .os-btn:active { transform: translateY(1px); }
+.ados .os-btn:focus-visible { outline: 2px solid var(--os-emerald); outline-offset: 2px; }
+.ados .os-btn:disabled { opacity: 0.5; cursor: default; transform: none; }
+.ados .os-btn-primary { background: var(--os-forest); color: #fff; border-color: var(--os-forest); }
+.ados .os-btn-primary:hover { background: var(--os-forest-2); box-shadow: 0 4px 12px rgba(0, 63, 45, 0.25); }
+.ados .os-btn-mint { background: var(--os-green-bg); color: var(--os-green-ink); border-color: var(--os-green-line); }
+.ados .os-btn-mint:hover { background: var(--os-green-bg); filter: brightness(0.97); }
+.ados .os-btn-warn { background: var(--os-amber-bg); color: var(--os-amber-ink); border-color: var(--os-amber-line); }
+.ados .os-btn-warn:hover { background: var(--os-amber-bg); filter: brightness(0.97); }
+.ados .os-btn-red { background: var(--os-red-bg); color: var(--os-red-ink); border-color: var(--os-red-line); }
+
+/* tags */
+.ados .os-tag { display: inline-flex; align-items: center; gap: 4px; border-radius: 999px; padding: 3px 9px; font-size: 10.5px; font-weight: 700; white-space: nowrap; background: var(--os-neutral-bg); color: var(--os-neutral-ink); }
+.ados .os-tag-green { background: var(--os-green-bg); color: var(--os-green-ink); }
+.ados .os-tag-blue { background: var(--os-blue-bg); color: var(--os-blue-ink); }
+.ados .os-tag-amber { background: var(--os-amber-bg); color: var(--os-amber-ink); }
+.ados .os-tag-red { background: var(--os-red-bg); color: var(--os-red-ink); }
+.ados .os-tag-purple { background: var(--os-purple-bg); color: var(--os-purple-ink); }
+
+/* banners */
+.ados .os-banner { padding: 12px 15px; border-radius: 10px; font-size: 12.5px; border: 1px solid var(--os-green-line); background: var(--os-green-bg); color: var(--os-green-ink); }
+.ados .os-banner-amber { border-color: var(--os-amber-line); background: var(--os-amber-bg); color: var(--os-amber-ink); }
+.ados .os-banner-red { border-color: var(--os-red-line); background: var(--os-red-bg); color: var(--os-red-ink); }
+.ados .os-banner-blue { border-color: var(--os-blue-line); background: var(--os-blue-bg); color: var(--os-blue-ink); }
+
+/* tables */
+.ados .os-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.ados .os-table th { background: var(--os-subtle); color: var(--os-muted); text-transform: uppercase; letter-spacing: 0.05em; font-size: 9.5px; font-weight: 800; padding: 10px 12px; text-align: left; border-bottom: 1px solid var(--os-line); white-space: nowrap; }
+.ados .os-table td { padding: 11px 12px; border-bottom: 1px solid var(--os-line-soft); vertical-align: middle; }
+.ados .os-table tr:last-child td { border-bottom: none; }
+.ados .os-table tbody tr { transition: background 0.12s; }
+.ados .os-table tbody tr:hover { background: var(--os-hover); }
+
+/* form fields */
+.ados .os-input { background: var(--os-surface); border: 1px solid var(--os-line); border-radius: 8px; padding: 9px 11px; width: 100%; color: var(--os-ink); font-size: 12.5px; }
+.ados .os-input:focus { outline: none; border-color: var(--os-emerald); box-shadow: 0 0 0 3px color-mix(in srgb, var(--os-emerald) 18%, transparent); }
+.ados .os-label { display: block; font-size: 11px; color: var(--os-muted); margin-bottom: 6px; font-weight: 700; }
+
+/* progress */
+.ados .os-bar { height: 8px; background: var(--os-line-soft); border-radius: 999px; overflow: hidden; }
+.ados .os-bar > div { height: 100%; border-radius: 999px; background: var(--os-leaf); transition: width 0.9s cubic-bezier(0.22, 1, 0.36, 1); }
+.ados .os-bar-red > div { background: #d85b52; }
+.ados .os-bar-amber > div { background: #dfa94b; }
+
+/* code */
+.ados .os-code { background: var(--os-code-bg); color: var(--os-code-ink); border-radius: 10px; padding: 14px 16px; font-family: "JetBrains Mono", ui-monospace, monospace; font-size: 11.5px; line-height: 1.7; overflow-x: auto; white-space: pre; }
+.ados .os-code .add { color: #7ef0b6; }
+.ados .os-code .del { color: #f39a9a; text-decoration: line-through; opacity: 0.8; }
+.ados .os-code .cmt { color: #7fa497; }
+
+/* the step a workflow is at: CBRE accent green with a soft glow */
+@keyframes os-step-glow { 0%, 100% { box-shadow: 0 0 0 0 rgba(23, 232, 143, 0.45); } 50% { box-shadow: 0 0 0 4px rgba(23, 232, 143, 0); } }
+.ados .os-step-now { animation: os-step-glow 2.2s ease-in-out infinite; }
+
+/* the hero (no longer on Home) */
+.ados .os-hero { background: linear-gradient(110deg, #004937 0%, #006347 53%, #208e67 100%); color: #fff; border-radius: 14px; position: relative; overflow: hidden; }
+.ados .os-hero .shape1 { position: absolute; right: 60px; top: -103px; width: 360px; height: 280px; border: 1px solid #86d5b5; border-radius: 90px; transform: rotate(28deg); opacity: 0.4; }
+.ados .os-hero .shape2 { position: absolute; right: 140px; top: -75px; width: 260px; height: 240px; border: 2px solid #97dfc2; border-radius: 100px; transform: rotate(28deg); opacity: 0.3; }
+.ados .os-hero .shape3 { position: absolute; right: -45px; bottom: -120px; width: 260px; height: 260px; border-radius: 50%; background: #5cb391; opacity: 0.22; }
+
+/* the icon rail */
+.ados .os-rail-item { color: var(--os-muted); border-radius: 10px; transition: background 0.15s, color 0.15s; }
+.ados .os-rail-item:hover { background: var(--os-hover); color: var(--os-ink); }
+.ados .os-rail-item[aria-current="page"] { background: var(--os-forest); color: #fff; box-shadow: inset 0 -3px 0 var(--os-accent), 0 6px 14px rgba(0, 63, 45, 0.25); }
+
+/* tabs */
+.ados .os-tab { font-size: 12px; font-weight: 700; color: var(--os-muted); padding: 9px 0; border-bottom: 2px solid transparent; }
+.ados .os-tab[aria-selected="true"] { color: var(--os-accent-ink); border-bottom-color: var(--os-accent-ink); }
+
+/* entrance */
+@keyframes os-rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+.ados .os-rise { animation: os-rise 0.35s cubic-bezier(0.22, 1, 0.36, 1) both; }
+@keyframes os-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+.ados .os-pulse { animation: os-pulse 1.4s ease-in-out infinite; }
+@keyframes os-spin { to { transform: rotate(360deg); } }
+.ados .os-spin { animation: os-spin 0.9s linear infinite; }
+@media (prefers-reduced-motion: reduce) {
+  .ados .os-rise, .ados .os-pulse, .ados .os-spin, .ados .os-step-now { animation: none; }
+  .ados .os-bar > div { transition: none; }
+}

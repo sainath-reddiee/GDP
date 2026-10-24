@@ -27,7 +27,7 @@ export function FixForm({ initial, issueId, skills, editable }: {
     setError("");
     const r = await saveFix(issueId, v);
     if (!r.ok) { setError(r.error); return; }
-    if (!issueId) router.push(`/ops/fixes/${encodeURIComponent(r.data.issue_id)}`);
+    if (!issueId) router.push(`/os/run/ops/fixes/${encodeURIComponent(r.data.issue_id)}`);
     else router.refresh();
   });
 

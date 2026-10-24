@@ -10,6 +10,7 @@ Until migration V020 is deployed the middleware lets everything through (nothing
 
 from __future__ import annotations
 
+import contextvars
 import hashlib
 import hmac
 import json
@@ -28,7 +29,7 @@ from pydantic import BaseModel, Field
 from app.db import AUTH_MODE, Db, dev_db, lookup_session
 from services.common.platform_schema import PLATFORM_SCHEMA
 from services.governance.policy import (
-    ADDED_PRIVILEGES, ALL, DEFAULT_FOUR_EYES, DEFAULT_POLICIES, PRIVILEGES, SYSTEM_ROLES, SYSTEM_VERSION, can_approve, carries_secret, creates_cycle,
+    ADDED_PRIVILEGES, ALL, MOVED_PRIVILEGES, DEFAULT_FOUR_EYES, DEFAULT_POLICIES, PRIVILEGES, SYSTEM_ROLES, SYSTEM_VERSION, can_approve, carries_secret, creates_cycle,
     decide, effective_privileges, no_queue, privilege_for, read_only, store_policy, store_queue, summarize,
 )
 
@@ -38,7 +39,7 @@ _lock = threading.Lock()
 _cache: dict[str, tuple[float, Any]] = {}
 TTL = 60.0
 DEFAULT_SETTINGS = {"DEFAULT_ROLE": "VIEWER", "SUPER_SELF_APPROVE": True, "ENFORCE": True,
-                    "STORE_EDITS_REQUIRE_APPROVAL": True, "MODEL_WORKBENCH_ENFORCED": True}
+                    "STORE_EDITS_REQUIRE_APPROVAL": True, "MODEL_WORKBENCH_ENFORCED": True, "AUTOPILOT_AUTONOMOUS": True}
 
 
 def _cached(key: str, loader, ttl: float = TTL):
@@ -56,6 +57,49 @@ def _cached(key: str, loader, ttl: float = TTL):
 def invalidate() -> None:
     with _lock:
         _cache.clear()
+
+
+# The persona the caller works as on this request (header X-AIP-Persona, set by the middleware). Working as a persona
+# narrows the caller's privileges to what that persona's role bundle allows: never more than they hold (a super admin,
+# who holds everything, gets exactly the bundle). No persona, or the super admin persona, keeps the full set.
+PERSONA_HEADER = "x-aip-persona"
+_persona: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar("aip_persona", default=None)
+FULL_PERSONAS = {"", "super"}
+
+
+def current_persona() -> Optional[str]:
+    return _persona.get()
+
+
+def persona_privileges(db: "Db", persona_id: str) -> Optional[set]:
+    """The privileges a persona's role bundle adds up to (Viewer: the VIEWER role), None when unknown or before V076."""
+    def load():
+        try:
+            rows = db.query("SELECT P.PERSONA_ID, R.ROLE_NAME FROM CORE.PERSONA P LEFT JOIN CORE.PERSONA_ROLE R "
+                            "ON R.PERSONA_ID = P.PERSONA_ID WHERE COALESCE(P.ACTIVE, TRUE)")
+        except Exception:
+            return {}
+        out: dict[str, set] = {}
+        for r in rows:
+            out.setdefault(r["persona_id"], set())
+            if r.get("role_name"):
+                out[r["persona_id"]].add(r["role_name"])
+        return out
+    bundles = _cached("persona_bundles", load)
+    roles = {"VIEWER"} if persona_id == "viewer" else bundles.get(persona_id)
+    if roles is None:
+        return None
+    role_privs, grants = role_model(db)
+    return set(effective_privileges(sorted(roles), role_privs, grants)[1])
+
+
+def narrow(own: set, persona: Optional[set]) -> set:
+    """What a person may do working as a persona (pure): the persona's bundle within their own privileges."""
+    if persona is None or ALL in persona:
+        return set(own)
+    if ALL in own:
+        return set(persona)
+    return own & persona
 
 
 def _json(value: Any) -> Any:
@@ -142,6 +186,14 @@ def bootstrap(db: Db) -> None:
                     for p in privs:
                         if p in spec["privileges"]:
                             _merge(db, "ROLE_PRIVILEGE", {"ROLE_NAME": name, "PRIVILEGE": p})
+            # privileges a system role gave up to another (onboarding sources became the platform administrator's)
+            for version, moves in sorted(MOVED_PRIVILEGES.items()):
+                if version <= stored:
+                    continue
+                for priv, frm, to in moves:
+                    db.execute("DELETE FROM CORE.ROLE_PRIVILEGE WHERE ROLE_NAME = %s AND PRIVILEGE = %s", (frm, priv))
+                    _merge(db, "ROLE_PRIVILEGE", {"ROLE_NAME": to, "PRIVILEGE": priv})
+                    _event(db, "PRIVILEGE_MOVED", "BOOTSTRAP", {"privilege": priv, "from": frm, "to": to, "version": version})
             db.execute("""MERGE INTO CORE.SETTING T USING (SELECT 'SYSTEM_VERSION' AS K) S ON T.SETTING_KEY = S.K
                           WHEN MATCHED THEN UPDATE SET SETTING_VALUE = PARSE_JSON(%s)
                           WHEN NOT MATCHED THEN INSERT (SETTING_KEY, SETTING_VALUE) VALUES (S.K, PARSE_JSON(%s))""",
@@ -199,7 +251,12 @@ def identity(db: Db) -> dict:
         role_privs, grants = role_model(db)
         all_roles, privs = effective_privileges(roles, role_privs, grants)
         return {"user": user, "granted": sorted(roles), "roles": sorted(all_roles), "privileges": sorted(privs)}
-    return _cached(f"user:{user}", load)
+    who = _cached(f"user:{user}", load)
+    persona = (current_persona() or "").strip().lower()
+    if persona in FULL_PERSONAS:
+        return who
+    narrowed = narrow(set(who["privileges"]), persona_privileges(db, persona))
+    return {**who, "privileges": sorted(narrowed), "persona": persona, "own_privileges": who["privileges"]}
 
 
 # ---------------------------------------------------------------- middleware
@@ -252,6 +309,7 @@ def _valid_replay(token: Optional[str]) -> Optional[str]:
 
 async def middleware(request: Request, call_next):
     path, method = request.url.path, request.method.upper()
+    _persona.set((request.headers.get(PERSONA_HEADER) or "").strip().lower()[:64] or None)
     if not path.startswith("/api/") or method == "OPTIONS" or path.startswith("/api/auth/"):
         return await call_next(request)
     if path == "/api/ops/ingest":  # Airflow push: no user session; the endpoint checks size and the HMAC signature
@@ -331,7 +389,8 @@ def summary(db: Db) -> dict:
     except Exception:
         pass
     return {"governance": True, "roles": who["roles"], "granted_roles": who["granted"],
-            "privileges": who["privileges"], "pending_for_me": pending, "read_only": read_only(who["privileges"])}
+            "privileges": who["privileges"], "pending_for_me": pending, "read_only": read_only(who["privileges"]),
+            "persona": who.get("persona"), "own_privileges": who.get("own_privileges", who["privileges"])}
 
 
 def _requests(db: Db, where: str = "1 = 1", params: tuple = ()) -> list[dict]:
@@ -413,7 +472,7 @@ async def approve_request(request_id: str, body: Decision, request: Request):
     if not claimed:  # someone else decided (or the requester cancelled) in the meantime: never replay twice
         raise HTTPException(409, "This request is no longer pending.")
     headers = {"x-aip-replay": _replay_token(request_id), "content-type": "application/json"}
-    for h in ("x-aip-session", "x-aip-role"):
+    for h in ("x-aip-session", "x-aip-role", PERSONA_HEADER):
         if request.headers.get(h):
             headers[h] = request.headers[h]
     from app.main import app as api_app
@@ -734,6 +793,7 @@ class SettingsIn(BaseModel):
     ENFORCE: Optional[bool] = None
     STORE_EDITS_REQUIRE_APPROVAL: Optional[bool] = None
     MODEL_WORKBENCH_ENFORCED: Optional[bool] = None
+    AUTOPILOT_AUTONOMOUS: Optional[bool] = None
 
 
 @router.put("/api/governance/settings")

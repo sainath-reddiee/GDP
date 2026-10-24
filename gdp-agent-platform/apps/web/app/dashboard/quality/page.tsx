@@ -41,9 +41,9 @@ export default async function QualityCenter({ searchParams }: { searchParams: { 
       <PageHeader eyebrow="Quality" title="QA and Data Quality Center"
                   description="Monitoring for every Soda scan, Great Expectations suite, QA test run, readiness gate and Jira incident. Manage domain SQL packs in the QA Store and attribute checks in the DQ Store."
                   actions={<>
-                    <Link href="/dashboard/qa-store" className={buttonVariants({ variant: "outline" })}><SquareTerminal className="h-4 w-4" /> QA Store</Link>
-                    <Link href="/dashboard/dq-store" className={buttonVariants({ variant: "outline" })}><ClipboardCheck className="h-4 w-4" /> DQ Store</Link>
-                    <Link href="/qa" className={buttonVariants({ variant: "outline" })}><FlaskConical className="h-4 w-4" /> QA testing</Link>
+                    <Link href="/os/design/qa-store" className={buttonVariants({ variant: "outline" })}><SquareTerminal className="h-4 w-4" /> QA Store</Link>
+                    <Link href="/os/design/dq-store" className={buttonVariants({ variant: "outline" })}><ClipboardCheck className="h-4 w-4" /> DQ Store</Link>
+                    <Link href="/os/release/qa" className={buttonVariants({ variant: "outline" })}><FlaskConical className="h-4 w-4" /> QA testing</Link>
                   </>} />
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <Kpi label="Data quality health" value={s?.data_quality.avg_health == null ? "-" : `${Math.round(Number(s.data_quality.avg_health))}`}
@@ -51,11 +51,11 @@ export default async function QualityCenter({ searchParams }: { searchParams: { 
         <Kpi label="Failed checks" value={s?.data_quality.failed_checks ?? 0} hint={`${s?.data_quality.warned_checks ?? 0} warnings`} icon={BadgeCheck}
              tone={s?.data_quality.failed_checks ? "rose" : "slate"} highlight={!!s?.data_quality.failed_checks} />
         <Kpi label="QA pass rate" value={s?.qa.pass_rate == null ? "-" : `${s.qa.pass_rate}%`} hint={`${s?.qa.tests ?? 0} tests in ${s?.qa.runs ?? 0} runs`} icon={FlaskConical} tone="blue" />
-        <Kpi label="Open incidents" value={s?.incidents.open ?? 0} hint="linked Jira issues not done" icon={Siren} tone={s?.incidents.open ? "amber" : "slate"} href="/dashboard/quality?tab=incidents" />
+        <Kpi label="Open incidents" value={s?.incidents.open ?? 0} hint="linked Jira issues not done" icon={Siren} tone={s?.incidents.open ? "amber" : "slate"} href="/os/run/quality?tab=incidents" />
       </div>
       <nav className="flex gap-1 rounded-xl bg-muted/60 p-1" aria-label="Quality views">
         {TABS.map((t) => (
-          <Link key={t.key} href={`/dashboard/quality?tab=${t.key}`} aria-current={tab === t.key ? "page" : undefined}
+          <Link key={t.key} href={`/os/run/quality?tab=${t.key}`} aria-current={tab === t.key ? "page" : undefined}
                 className={cn("rounded-lg px-3 py-1.5 text-sm", tab === t.key ? "bg-card font-medium shadow-card" : "text-muted-foreground hover:text-foreground")}>{t.label}</Link>
         ))}
       </nav>

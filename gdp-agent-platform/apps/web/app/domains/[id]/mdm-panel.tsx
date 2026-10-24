@@ -91,7 +91,7 @@ export function MdmPanel({ domainId }: { domainId: string }) {
         {(() => {
           const hops = data.chain ?? data.consumes?.find((c) => c.chain?.length)?.chain;
           const end = hops?.[hops.length - 1]?.object;
-          return end ? <Link href={`/lineage?object=${encodeURIComponent(end)}&direction=up`} className="text-xs text-primary hover:underline">Trace lineage</Link> : null;
+          return end ? <Link href={`/os/build/lineage?object=${encodeURIComponent(end)}&direction=up`} className="text-xs text-primary hover:underline">Trace lineage</Link> : null;
         })()}
         {may && data.role !== "MASTERED" && !editing && (
           <button type="button" onClick={startEdit} className="inline-flex h-8 items-center gap-1.5 rounded-lg border px-2.5 text-xs font-medium hover:bg-muted">
@@ -104,7 +104,7 @@ export function MdmPanel({ domainId }: { domainId: string }) {
           <Chain hops={data.chain} note="Match on the source key and the upper-cased source-system name; ids collide across sources. Unresolved records get -1." />
           {!!data.consumers?.length && (
             <p className="text-xs"><span className="text-muted-foreground">Consumed by </span>
-              {data.consumers.map((c, i) => <Fragment key={c.domain_id}>{i > 0 && ", "}<Link href={`/domains/${c.domain_id}?tab=lineage`} className="font-medium text-primary hover:underline">{c.domain_name}</Link>
+              {data.consumers.map((c, i) => <Fragment key={c.domain_id}>{i > 0 && ", "}<Link href={`/os/knowledge/domains/${c.domain_id}?tab=lineage`} className="font-medium text-primary hover:underline">{c.domain_name}</Link>
                 <span className="text-muted-foreground"> ({c.via.map((v) => `${v.silver_column} to ${v.gold_column}`).join(", ")})</span></Fragment>)}</p>
           )}
           <div className="flex flex-wrap items-center gap-2">
@@ -152,7 +152,7 @@ export function MdmPanel({ domainId }: { domainId: string }) {
       {data.role === "CONSUMER" && !editing && (data.consumes ?? []).map((c) => (
         <div key={c.domain} className="space-y-1">
           <p className="text-xs"><span className="font-mono font-medium">{c.silver_column}</span> resolves to <span className="font-mono font-medium">{c.gold_column}</span> through{" "}
-            {c.domain_id ? <Link href={`/domains/${c.domain_id}?tab=lineage`} className="font-medium text-primary hover:underline">{c.domain}</Link> : <span className="text-amber-600">{c.domain} (not a mastered domain here)</span>}</p>
+            {c.domain_id ? <Link href={`/os/knowledge/domains/${c.domain_id}?tab=lineage`} className="font-medium text-primary hover:underline">{c.domain}</Link> : <span className="text-amber-600">{c.domain} (not a mastered domain here)</span>}</p>
           {c.chain && <Chain hops={c.chain} />}
         </div>
       ))}

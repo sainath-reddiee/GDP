@@ -108,7 +108,7 @@ export function StarSchema({ runId, approved, items }: { runId: string; approved
               return (
                 <tr key={c.run_id} className="border-t">
                   <td className="py-1.5 pr-2">
-                    <Link href={`/runs/${c.run_id}`} className="font-mono font-semibold text-primary hover:underline">{c.entity}</Link>
+                    <Link href={`/os/build/runs/${c.run_id}`} className="font-mono font-semibold text-primary hover:underline">{c.entity}</Link>
                     {c.table_type && <span className={cn("ml-1.5 rounded px-1 py-0.5 text-[9px] font-semibold", KIND[c.table_type] ?? "bg-muted")}>{c.table_type}</span>}
                   </td>
                   {COLUMNS.map((col, i) => {
@@ -118,7 +118,7 @@ export function StarSchema({ runId, approved, items }: { runId: string; approved
                     const failed = here && c.current_state === "VALIDATION_FAILED";
                     return (
                       <td key={col} className="px-1 py-1.5 text-center">
-                        <Link href={`/runs/${c.run_id}/${SLUG[i]}`} title={`${col}: ${c.current_state.replace(/_/g, " ").toLowerCase()}`}
+                        <Link href={`/os/build/runs/${c.run_id}/${SLUG[i]}`} title={`${col}: ${c.current_state.replace(/_/g, " ").toLowerCase()}`}
                               className={cn("inline-grid h-5 w-5 place-items-center rounded-full",
                                 done ? "bg-emerald-500 text-white" : failed ? "bg-rose-500 text-white" : review ? "bg-amber-500 text-white"
                                   : here ? "bg-blue-500 text-white" : "bg-muted")}>

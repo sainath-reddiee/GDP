@@ -43,7 +43,7 @@ export default async function SttmCatalog({ searchParams }: { searchParams: Para
             <TBody>
               {data.mappings.map((m) => (
                 <TR key={m.catalog_id}>
-                  <TD><Link href={`/dashboard/sttm/${m.catalog_id}`} className="font-medium text-primary hover:underline">{m.target_entity.split(".").pop()}</Link>
+                  <TD><Link href={`/os/design/sttm/${m.catalog_id}`} className="font-medium text-primary hover:underline">{m.target_entity.split(".").pop()}</Link>
                     <div className="font-mono text-[11px] text-muted-foreground">{m.target_entity}</div></TD>
                   <TD className="text-xs"><span className="font-medium">{m.source_system ?? "-"}</span>
                     <div className="text-muted-foreground">{m.source_entities.slice(0, 3).join(", ")}{m.source_entities.length > 3 ? ` +${m.source_entities.length - 3}` : ""}</div></TD>

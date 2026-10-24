@@ -26,12 +26,12 @@ export function RecurringFixes({ items, days = 30, className }: { items: Recurri
         <ul className="divide-y text-xs">
           {items.map((r) => (
             <li key={r.issue_id} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2">
-              <Link href={`/ops/fixes/${encodeURIComponent(r.issue_id)}`} className="min-w-0 flex-1 truncate font-medium text-primary hover:underline"
+              <Link href={`/os/run/ops/fixes/${encodeURIComponent(r.issue_id)}`} className="min-w-0 flex-1 truncate font-medium text-primary hover:underline"
                     title={r.title ?? r.issue_id}>{r.title ?? r.issue_id}</Link>
               {r.proposed_by_agent && <span className="rounded-full bg-agent/10 px-2 py-0.5 text-[10px] font-semibold text-agent">agent</span>}
               {r.permanent_fix
-                ? <Link href={`/ops/permanent-fixes/${encodeURIComponent(r.permanent_fix.fix_id)}`} className="shrink-0" title="Permanent fix"><PermanentFixStatusPill status={r.permanent_fix.status} /></Link>
-                : r.status === "PUBLISHED" && <Link href={`/ops/fixes/${encodeURIComponent(r.issue_id)}`} className="shrink-0 text-[11px] font-medium text-primary hover:underline">Draft permanent fix</Link>}
+                ? <Link href={`/os/run/ops/permanent-fixes/${encodeURIComponent(r.permanent_fix.fix_id)}`} className="shrink-0" title="Permanent fix"><PermanentFixStatusPill status={r.permanent_fix.status} /></Link>
+                : r.status === "PUBLISHED" && <Link href={`/os/run/ops/fixes/${encodeURIComponent(r.issue_id)}`} className="shrink-0 text-[11px] font-medium text-primary hover:underline">Draft permanent fix</Link>}
               <span className="shrink-0 tabular-nums text-amber-700">{r.runs} runs</span>
               <span className="shrink-0 text-muted-foreground" title={r.dag_ids.join(", ")}>{r.dags} DAG{r.dags === 1 ? "" : "s"}</span>
               <span className={cn("w-10 shrink-0 text-right tabular-nums", r.success_rate !== null && r.success_rate < 1 ? "text-rose-700" : "text-emerald-700")}

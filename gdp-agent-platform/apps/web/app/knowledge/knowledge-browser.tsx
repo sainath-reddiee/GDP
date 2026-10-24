@@ -5,6 +5,7 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Archive, BadgeCheck, Loader2, Lock, Plus, Save, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useAccess } from "@/components/access";
+import { Portal } from "@/components/portal";
 import { cn } from "@/lib/utils";
 import { ago } from "../skills/types";
 import { addKnowledge, editKnowledge, setKnowledgeStatus, verifyKnowledge, type ItemInput, type KnowledgeItem } from "./actions";
@@ -201,6 +202,7 @@ export function ItemEditor({ domains, item, onClose, onSaved, defaultLayer = "AN
   });
 
   return (
+    <Portal>
     <div className="fixed inset-0 z-50 flex justify-end">
       <button type="button" aria-label="Close" className="absolute inset-0 bg-black/30" onClick={onClose} />
       <aside role="dialog" aria-label={item ? "Edit knowledge" : "Add knowledge"}
@@ -250,5 +252,6 @@ export function ItemEditor({ domains, item, onClose, onSaved, defaultLayer = "AN
         </div>
       </aside>
     </div>
+    </Portal>
   );
 }

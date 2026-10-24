@@ -37,9 +37,9 @@ def test_route_mapping():
 
 def test_inheritance_like_snowflake():
     roles, privs = effective_privileges(["DATA_ENGINEER"], ROLE_PRIVS, GRANTS)
-    assert "VIEWER" in roles and "AUDIT.VIEW" in privs and "RUN.OPERATE" in privs and "STTM.APPROVE" not in privs
+    assert "VIEWER" in roles and "CODE.VIEW" in privs and "RUN.OPERATE" in privs and "STTM.APPROVE" not in privs
     roles, privs = effective_privileges(["PLATFORM_ADMIN"], ROLE_PRIVS, GRANTS)
-    assert {"PLATFORM_ADMIN", "DATA_ENGINEER", "VIEWER"} <= roles and "CONFIG.EDIT" in privs
+    assert {"PLATFORM_ADMIN", "DATA_ENGINEER", "VIEWER"} <= roles and "OPS.FIX_APPROVE" in privs
     _, privs = effective_privileges(["SUPER_ADMIN"], ROLE_PRIVS, GRANTS)
     assert set(PRIVILEGES) <= privs
     # cycles do not loop forever
@@ -177,3 +177,45 @@ def test_store_routes_and_policy():
     assert store_policy("STTM.EDIT", {"approver_role": "X", "allow_self": True})["approver_role"] == "X"
     assert store_policy("STTM.EDIT", {"approver_role": "X", "allow_self": True})["allow_self"] is False
     assert store_policy("DBT.EDIT", None)["approver_role"] == "CODE_REVIEWER"
+
+
+def test_admin_and_governance_are_for_super_admins_only():
+    from services.governance.policy import SUPER_ONLY, decide
+    # whatever role lists them, admin and governance privileges are dropped without "*"
+    for role in ("PLATFORM_ADMIN", "GOVERNANCE_ADMIN", "VIEWER", "DATA_ENGINEER"):
+        _, privs = effective_privileges([role], ROLE_PRIVS, GRANTS)
+        assert not (privs & SUPER_ONLY), role
+    _, privs = effective_privileges(["SUPER_ADMIN"], ROLE_PRIVS, GRANTS)
+    assert SUPER_ONLY <= privs
+    # and a call that needs one is refused, never queued for an approver, even with a policy and REQUEST.CHANGES
+    verdict, reason = decide("CONFIG.EDIT", {"REQUEST.CHANGES", "CONFIG.EDIT"}, {"active": True, "requires_approval": True, "approver_role": "PLATFORM_ADMIN"})
+    assert verdict == "FORBID" and "super admins only" in reason
+    assert decide("CONFIG.EDIT", {"*"}, None)[0] == "ALLOW"
+
+
+def test_onboarding_sources_is_the_platform_administrators():
+    from services.governance.policy import MOVED_PRIVILEGES, SYSTEM_ROLES, SYSTEM_VERSION, effective_privileges
+
+    assert SYSTEM_VERSION >= 9 and MOVED_PRIVILEGES[9] == [("SOURCE.CONNECT", "DATA_ENGINEER", "PLATFORM_ADMIN")]
+    assert "SOURCE.CONNECT" not in SYSTEM_ROLES["DATA_ENGINEER"]["privileges"]
+    privileges = {n: s["privileges"] for n, s in SYSTEM_ROLES.items()}
+    grants = {n: s["inherits"] for n, s in SYSTEM_ROLES.items()}
+    # a data engineer still lands and profiles (PROFILE.RUN) and builds runs, but no longer connects sources
+    _, engineer = effective_privileges(["DATA_ENGINEER"], privileges, grants)
+    assert "SOURCE.CONNECT" not in engineer and {"PROFILE.RUN", "RUN.CREATE", "RUN.OPERATE"} <= engineer
+    _, admin = effective_privileges(["PLATFORM_ADMIN"], privileges, grants)
+    assert "SOURCE.CONNECT" in admin
+
+
+def test_onboarding_a_domain_is_the_platform_administrators_and_stewards_keep_editing():
+    from services.governance.policy import ADDED_PRIVILEGES, SYSTEM_ROLES, SYSTEM_VERSION, effective_privileges, privilege_for
+
+    assert SYSTEM_VERSION == 10 and ADDED_PRIVILEGES[10] == ["DOMAIN.ONBOARD"]
+    for path in ("/api/domains", "/api/domains/draft", "/api/domains/import"):
+        assert privilege_for("POST", path)[0] == "DOMAIN.ONBOARD"
+    assert privilege_for("PUT", "/api/domains/d1/conventions")[0] == "DOMAIN.EDIT"
+    privileges = {n: s["privileges"] for n, s in SYSTEM_ROLES.items()}
+    grants = {n: s["inherits"] for n, s in SYSTEM_ROLES.items()}
+    holders = {n for n in SYSTEM_ROLES if "DOMAIN.ONBOARD" in effective_privileges([n], privileges, grants)[1]}
+    assert holders == {"PLATFORM_ADMIN", "SUPER_ADMIN"}
+    assert "DOMAIN.EDIT" in effective_privileges(["DATA_STEWARD"], privileges, grants)[1]

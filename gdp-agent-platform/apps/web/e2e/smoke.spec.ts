@@ -180,7 +180,7 @@ test("pipelines and lineage: both pipelines list runs, and the lineage explorer 
   const errors = watchHydration(page);
   await signIn(page);
   await page.goto("/runs");
-  await expect(page.getByRole("link", { name: /New Silver run/ })).toHaveAttribute("href", "/dashboard/onboarding");
+  await expect(page.getByRole("link", { name: /New Silver run/ })).toHaveAttribute("href", "/dashboard/onboarding?type=source");
   await expect(page.getByRole("heading", { name: "Silver Pipeline" })).toBeVisible();
   await expect(page.getByRole("list", { name: "Silver Pipeline steps" })).toContainText("Source Ingestion");
   await page.goto("/gold");

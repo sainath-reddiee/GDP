@@ -12,7 +12,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Literal, Optional
 
-from fastapi import Depends, FastAPI, File, Header, HTTPException, Request, UploadFile
+from fastapi import Depends, FastAPI, File, Header, HTTPException, Query, Request, UploadFile
 
 _ROOT = Path(__file__).resolve().parents[3]
 if str(_ROOT) not in sys.path:
@@ -2150,7 +2150,7 @@ def audit(run_id: str, db: Db = Depends(current_db)):
     )
     reviews = db.query(
         """
-        SELECT REVIEW_ID, STAGE, DECISION, BUSINESS_JUSTIFICATION, REVIEWER,
+        SELECT REVIEW_ID, STAGE, TO_STATE, DECISION, BUSINESS_JUSTIFICATION, REVIEWER,
                REVIEWED_AT::VARCHAR AS REVIEWED_AT
           FROM CORE.REVIEW_DECISION
          WHERE RUN_ID = %s
@@ -4199,6 +4199,76 @@ def validate_dbt(run_id: str, db: Db = Depends(current_db)):
         raise _snowflake_error(exc) from exc
 
 
+@app.get("/api/run-history")
+def run_history(ids: str = Query(..., max_length=4000), db: Db = Depends(current_db)):
+    """Run history at a glance (the Run history tab): for each run asked for (at most 100, comma separated), its
+    validation attempts with their scores and the people who decided its gates."""
+    from services.validation.history import summarize
+
+    run_ids = list(dict.fromkeys(i.strip() for i in ids.split(",") if i.strip()))[:100]
+    if not run_ids:
+        return {"runs": {}}
+    marks = ", ".join(["%s"] * len(run_ids))
+    summaries = db.query(
+        f"""SELECT RUN_ID, STATUS, ERROR_COUNT, RESULT_JSON, STARTED_AT::VARCHAR AS STARTED_AT,
+                   COMPLETED_AT::VARCHAR AS COMPLETED_AT
+              FROM CORE.VALIDATION_RUN WHERE VALIDATION_TYPE = 'SUMMARY' AND RUN_ID IN ({marks})""", tuple(run_ids))
+    reviews = db.query(
+        f"""SELECT RUN_ID, STAGE, DECISION, REVIEWER, REVIEWED_AT::VARCHAR AS REVIEWED_AT
+              FROM CORE.REVIEW_DECISION WHERE RUN_ID IN ({marks})""", tuple(run_ids))
+    return {"runs": summarize(run_ids, summaries, reviews)}
+
+
+@app.get("/api/build/readiness")
+def build_readiness(include_test: bool = False, db: Db = Depends(current_db)):
+    """Ready to build (services/workflow/readiness.py): every live Silver run, table by table, with its design
+    readiness (domain model, mapping and STTM approved), its build status, its latest validation score and the
+    onboarding request it serves, grouped by domain."""
+    from services.validation.history import summarize
+    from services.workflow.readiness import board
+
+    runs = db.query(
+        """SELECT R.RUN_ID, R.RUN_NAME, R.DOMAIN_ID, R.CURRENT_STATE, R.FAILED_FROM_STATE, R.FAILURE_REASON, R.PARENT_RUN_ID,
+                  R.TARGET_MODEL, R.UPDATED_AT::VARCHAR AS UPDATED_AT, S.SOURCE_SYSTEM_NAME
+             FROM CORE.WORKFLOW_RUN R
+             LEFT JOIN CORE.SOURCE_REGISTRY S ON S.SOURCE_SYSTEM_ID = R.SOURCE_SYSTEM_ID
+            WHERE R.DELETED_AT IS NULL AND NOT COALESCE(R.IS_ARCHIVED, FALSE) AND COALESCE(R.PIPELINE, 'SILVER') = 'SILVER'
+              AND (COALESCE(R.ENVIRONMENT, '') <> 'TEST' OR %s)""", (bool(include_test),))
+    domains = {r["domain_id"]: r for r in db.query(
+        """SELECT D.DOMAIN_ID, D.DOMAIN_NAME, M.APPROVED_VERSION
+             FROM CORE.DOMAIN_REGISTRY D
+             LEFT JOIN CORE.DOMAIN_MODEL M ON M.DOMAIN_ID = D.DOMAIN_ID AND COALESCE(M.LAYER, 'SILVER') = 'SILVER'
+            WHERE COALESCE(D.ACTIVE_FLAG, TRUE)""")}
+    ids = [r["run_id"] for r in runs]
+    history: dict = {}
+    requests: dict = {}
+    for i in range(0, len(ids), 200):
+        chunk = ids[i:i + 200]
+        marks = ", ".join(["%s"] * len(chunk))
+        history.update(summarize(chunk, db.query(
+            f"""SELECT RUN_ID, STATUS, ERROR_COUNT, RESULT_JSON, STARTED_AT::VARCHAR AS STARTED_AT,
+                       COMPLETED_AT::VARCHAR AS COMPLETED_AT
+                  FROM CORE.VALIDATION_RUN WHERE VALIDATION_TYPE = 'SUMMARY' AND RUN_ID IN ({marks})""", tuple(chunk)), []))
+        try:   # before V075 there are no requests to link
+            for r in db.query(f"""SELECT I.RUN_ID, Q.REQUEST_ID, Q.TITLE FROM CORE.ONBOARDING_REQUEST_ITEM I
+                                    JOIN CORE.ONBOARDING_REQUEST Q ON Q.REQUEST_ID = I.REQUEST_ID
+                                   WHERE I.RUN_ID IN ({marks}) AND I.REMOVED_AT IS NULL AND Q.STATUS = 'OPEN'""", tuple(chunk)):
+                requests.setdefault(r["run_id"], {"request_id": r["request_id"], "title": r["title"]})
+        except Exception:
+            pass
+    return board(runs, domains, history, requests)
+
+
+@app.post("/api/runs/{run_id}/standards")
+def review_standards(run_id: str, db: Db = Depends(current_db)):
+    """The code standards agent alone on the run's current generation (CORE.REVIEW_STANDARDS): findings per area,
+    nothing recorded as a validation and the run does not move."""
+    try:
+        return db.call("CALL CORE.REVIEW_STANDARDS(%s)", (run_id,))
+    except Exception as exc:
+        raise _snowflake_error(exc) from exc
+
+
 @app.get("/api/runs/{run_id}/validation")
 def get_validation(run_id: str, db: Db = Depends(current_db)):
     return {"runs": db.query(
@@ -4209,7 +4279,22 @@ def get_validation(run_id: str, db: Db = Depends(current_db)):
          ORDER BY STARTED_AT DESC
         """,
         (run_id,),
-    )}
+    ), "gate": _validation_gate(db, run_id)}
+
+
+def _validation_gate(db: Db, run_id: Optional[str] = None) -> dict:
+    """The validation gate's rules for a run (its domain and pipeline), or the platform's without a run: what
+    VALIDATE_DBT enforces, so the pages draw the same line."""
+    from services.common.rules import DEFAULTS
+    from services.common.standard import run_pipeline
+
+    try:
+        run = db.query("SELECT DOMAIN_ID, PIPELINE FROM CORE.WORKFLOW_RUN WHERE RUN_ID = %s", (run_id,)) if run_id else []
+        rules = _rules(db, run[0].get("domain_id") if run else None, run_pipeline(run[0]) if run else "SILVER")
+    except Exception:
+        rules = DEFAULTS
+    return {"min_score": rules["validation.min_score"], "block_on_errors": rules["validation.block_on_errors"],
+            "standards_review": rules["validation.standards_review"], "standards_block": rules["validation.standards_block"]}
 
 
 @app.post("/api/knowledge/search")
@@ -6941,9 +7026,6 @@ app.include_router(reference_router)
 from app.learning_api import router as learning_router  # noqa: E402
 
 app.include_router(learning_router)
-from app.value_api import router as value_router  # noqa: E402
-
-app.include_router(value_router)
 from app.environments_api import router as environments_router  # noqa: E402
 
 app.include_router(environments_router)
@@ -6962,3 +7044,9 @@ app.include_router(dq_alerts_router)
 from app.datadog_api import router as datadog_router  # noqa: E402
 
 app.include_router(datadog_router)
+from app.requests_api import router as requests_router  # noqa: E402
+
+app.include_router(requests_router)
+from app.personas_api import router as personas_router  # noqa: E402
+
+app.include_router(personas_router)

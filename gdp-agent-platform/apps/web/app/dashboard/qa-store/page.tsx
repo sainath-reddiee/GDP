@@ -37,7 +37,7 @@ export default async function QaStorePage({ searchParams }: { searchParams: Para
         <Kpi label="Waiting for approval" value={summary?.pending ?? 0} hint="submitted versions" icon={Clock3} tone="amber" highlight={!!summary?.pending} />
         <Kpi label="Latest pass rate" value={summary?.pass_rate == null ? "-" : `${summary.pass_rate}%`} hint="last execution of each approved pack" icon={summary?.pass_rate != null && summary.pass_rate >= 95 ? CheckCircle2 : Gauge} tone="emerald" />
       </div>
-      <StoreTabs base="/dashboard/qa-store" current={view} keep={{ domain: searchParams.domain }}
+      <StoreTabs base="/os/design/qa-store" current={view} keep={{ domain: searchParams.domain }}
                  tabs={[{ id: "packs", label: "Domain packs", count: summary?.packs ?? null }, { id: "tests", label: "Run tests", count: summary?.run_tests ?? null }]} />
       {view === "tests" && (!runTests ? <p className="text-sm text-destructive">Run tests could not be loaded{domain ? ` for domain ${domain}` : ""}.</p>
         : !runTests.deployed ? <NotDeployed what="Saved QA tests (CORE.QA_TEST_CASE)" />

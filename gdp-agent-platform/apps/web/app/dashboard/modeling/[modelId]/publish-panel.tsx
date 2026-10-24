@@ -130,10 +130,10 @@ export function ChangesPanel({ modelId, canEdit, openStatus }: { modelId: string
           <div className="flex flex-wrap items-center gap-2">
             <Workflow className="h-4 w-4 text-muted-foreground" />
             {c.source === "ANNOTATION"
-              ? <Link href="/dashboard/profiling?section=annotations" className="font-medium text-primary hover:underline">Profiling annotation{c.patch ? ` of ${c.patch.column}` : ""}</Link>
+              ? <Link href="/os/design/profiling?section=annotations" className="font-medium text-primary hover:underline">Profiling annotation{c.patch ? ` of ${c.patch.column}` : ""}</Link>
               : c.source === "TABLE_MODEL" && c.table_model_id
-              ? <Link href={`/dashboard/modeling/tables/${c.table_model_id}?version=${c.table_model_version ?? ""}`} className="font-medium text-primary hover:underline">Table model</Link>
-              : c.run_id ? <Link href={`/runs/${c.run_id}/modeling?tab=mapping`} className="font-medium text-primary hover:underline">{c.run_name ?? c.run_id.slice(0, 8)}</Link> : <span>run</span>}
+              ? <Link href={`/os/design/modeling/tables/${c.table_model_id}?version=${c.table_model_version ?? ""}`} className="font-medium text-primary hover:underline">Table model</Link>
+              : c.run_id ? <Link href={`/os/build/runs/${c.run_id}/modeling?tab=mapping`} className="font-medium text-primary hover:underline">{c.run_name ?? c.run_id.slice(0, 8)}</Link> : <span>run</span>}
             <span className="font-mono text-xs">{c.target_entity}</span>
             <StatusPill status={c.status === "PROPOSED" ? "PENDING" : c.status} />
             <span className="text-xs text-muted-foreground">{c.source === "ANNOTATION" ? "approved column annotation" : c.source === "TABLE_MODEL" ? `table model v${c.table_model_version}` : `design v${c.run_design_version}`} · against model v{c.base_version ?? "none"} · {c.created_at?.slice(0, 16)} by {c.created_by}</span>

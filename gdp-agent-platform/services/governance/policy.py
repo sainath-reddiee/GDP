@@ -33,7 +33,8 @@ PRIVILEGES: Dict[str, Tuple[str, str]] = {
     "REVIEW.APPROVE": ("Code review", "Approve code review"),
     "REVIEW.DECIDE": ("Code review", "Send a stage back or request changes"),
     "KNOWLEDGE.EDIT": ("Knowledge", "Add, edit, retire and restore knowledge"),
-    "DOMAIN.EDIT": ("Knowledge", "Create, import, edit and delete domains"),
+    "DOMAIN.EDIT": ("Knowledge", "Edit and delete domains"),
+    "DOMAIN.ONBOARD": ("Knowledge", "Onboard a new domain (create, draft or import it): the platform administrator's"),
     "TAG.MANAGE": ("Knowledge", "Tag profiles, runs and models"),
     "SKILL.EDIT": ("Skills", "Create skill versions and categories, set a candidate, try a version on a run"),
     "SKILL.RELEASE": ("Skills", "Promote a skill version to production and change which skills each stage loads"),
@@ -62,12 +63,17 @@ PRIVILEGES: Dict[str, Tuple[str, str]] = {
 # Privileges a viewer-style role never needs: holding none of the others means the user can only look.
 READ_ONLY = {"AUDIT.VIEW", "ADMIN.VIEW", "APPROVAL.VIEW", "CODE.VIEW", "OPS.VIEW"}
 ALL = "*"
+# Admin and governance are a super admin's alone: platform settings, integrations, deploy, users, roles, personas and
+# policies, the audit trail and every change request. Whatever role lists them, these are honoured only alongside "*"
+# (effective_privileges drops them otherwise), and a call that needs one is refused outright for anyone else, never
+# queued as a change request (decide).
+SUPER_ONLY = {"ADMIN.VIEW", "ADMIN.DEPLOY", "CONFIG.EDIT", "INTEGRATION.MANAGE", "ROLE.MANAGE", "AUDIT.VIEW", "APPROVAL.VIEW"}
 
 SYSTEM_ROLES: Dict[str, Dict[str, Any]] = {
     "SUPER_ADMIN": {"description": "Everything, including governance", "privileges": [ALL], "inherits": []},
     "PLATFORM_ADMIN": {"description": "Platform settings and deployment",
-                       "privileges": ["CONFIG.EDIT", "ADMIN.VIEW", "ADMIN.DEPLOY", "AUDIT.VIEW", "APPROVAL.VIEW", "INTEGRATION.MANAGE",
-                                      "OPS.FIX_APPROVE", "OPS.FIX_PUBLISH", "OPS.RESOLVE_ADMIN"],
+                       "privileges": ["SOURCE.CONNECT", "DOMAIN.ONBOARD", "CONFIG.EDIT", "ADMIN.VIEW", "ADMIN.DEPLOY", "AUDIT.VIEW", "APPROVAL.VIEW",
+                                      "INTEGRATION.MANAGE", "OPS.FIX_APPROVE", "OPS.FIX_PUBLISH", "OPS.RESOLVE_ADMIN"],
                        "inherits": ["DATA_ENGINEER"]},
     "GOVERNANCE_ADMIN": {"description": "Users, roles and approval policies",
                          "privileges": ["ROLE.MANAGE", "ADMIN.VIEW", "APPROVAL.VIEW", "AUDIT.VIEW"], "inherits": ["VIEWER"]},
@@ -94,22 +100,33 @@ SYSTEM_ROLES: Dict[str, Dict[str, Any]] = {
                      "privileges": ["KNOWLEDGE.EDIT", "DOMAIN.EDIT", "TAG.MANAGE", "SKILL.EDIT", "AI.USE"], "inherits": ["VIEWER"]},
     "SKILL_OWNER": {"description": "Owns agent skills: versions, releases and stage bindings",
                     "privileges": ["SKILL.EDIT", "SKILL.RELEASE", "AI.USE"], "inherits": ["VIEWER"]},
+    # onboarding sources (SOURCE.CONNECT) is the platform administrator's: a data engineer works the runs it starts
     "DATA_ENGINEER": {"description": "Builds runs end to end; approvals go to the owning roles",
-                      "privileges": ["SOURCE.CONNECT", "PROFILE.RUN", "RUN.CREATE", "RUN.OPERATE", "RUN.ARCHIVE",
+                      "privileges": ["PROFILE.RUN", "RUN.CREATE", "RUN.OPERATE", "RUN.ARCHIVE",
                                      "MODEL.EDIT", "MAPPING.DECIDE", "QA.EDIT", "DBT.EDIT", "TAG.MANAGE", "SKILL.EDIT",
                                      "REQUEST.CHANGES", "REVIEW.DECIDE", "AI.USE", "JIRA.READ", "JIRA.WRITE", "OPS.VIEW",
                                      "OPS.OPERATE", "OPS.FIX_PUBLISH", "CASE.WORK", "CASE.RESOLVE", "PACKAGE.EDIT"],
                       "inherits": ["VIEWER"]},
     "VIEWER": {"description": "Read everything, change nothing (no AI calls, no requests)", "privileges": ["AUDIT.VIEW", "CODE.VIEW", "OPS.VIEW"],
                "inherits": []},
+    # the Data Designer persona's working role: starts and profiles runs and designs them (model, mapping), without
+    # building code, operating pipelines or editing skills (those are the Forward Engineering Lead's DATA_ENGINEER)
+    "DATA_DESIGNER": {"description": "Starts and profiles runs, models and maps them; no code, operations or skills",
+                      "privileges": ["PROFILE.RUN", "RUN.CREATE", "MODEL.EDIT", "MAPPING.DECIDE", "REQUEST.CHANGES", "AI.USE"],
+                      "inherits": ["VIEWER"]},
 }
 # Privileges added to system roles after their first release: {version: [privilege]}. Bootstrap grants them to the
 # system roles whose spec lists them, once, so existing deployments pick them up without overriding admin edits.
-SYSTEM_VERSION = 8
+SYSTEM_VERSION = 10
 ADDED_PRIVILEGES = {2: ["AI.USE"], 3: ["SKILL.EDIT", "SKILL.RELEASE"], 4: ["INTEGRATION.MANAGE", "CODE.VIEW"],
                     5: ["JIRA.READ", "JIRA.WRITE"], 6: ["OPS.VIEW", "OPS.OPERATE"],
                     7: ["CASE.WORK", "CASE.RESOLVE", "PACKAGE.EDIT", "PACKAGE.APPROVE"],
-                    8: ["OPS.FIX_APPROVE", "OPS.FIX_PUBLISH", "OPS.RESOLVE_ADMIN"]}
+                    8: ["OPS.FIX_APPROVE", "OPS.FIX_PUBLISH", "OPS.RESOLVE_ADMIN"],
+                    # onboarding a domain became the platform administrator's (stewards keep editing domains)
+                    10: ["DOMAIN.ONBOARD"]}
+# Privileges moved between system roles after their first release: {version: [(privilege, from role, to role)]}.
+# Bootstrap applies each once (revoked from the one, granted to the other), like ADDED_PRIVILEGES.
+MOVED_PRIVILEGES = {9: [("SOURCE.CONNECT", "DATA_ENGINEER", "PLATFORM_ADMIN")]}
 
 # Actions routed for approval by default: privilege -> approver role. Everything else is privilege-only.
 DEFAULT_POLICIES: Dict[str, str] = {
@@ -145,10 +162,16 @@ RULES: List[Tuple[str, str, Any, str]] = [
     ("POST", rf"{R}/(mapping/assist|qa/ask|qa/plan|sttm/refine)", "AI.USE", ""),
     ("POST", rf"{R}/soda/backtest", "RUN.OPERATE", ""),
     ("POST", r"/api/governance/requests/[^/]+/(approve|reject|cancel)", None, ""),  # checked by the endpoint
+    # onboarding requests (apps/api/app/requests_api.py): who may file, link, cancel or reject depends on the request
+    # (its requester, the domain's owners) as much as on privileges, so every write is checked by the endpoint
+    ("POST", r"/api/onboarding-requests(/[^/]+/(sources(/[^/]+/(source|run|remove))?|domain|comment|cancel|reject|reopen))?", None, ""),
     ("POST", r"/api/governance/roles", "ROLE.MANAGE", "Create a role"),
     ("POST", r"/api/governance/roles/[^/]+/members", "ROLE.MANAGE", "Change role members"),
     ("PUT", r"/api/governance/(users|roles|policies)/[^/]+", "ROLE.MANAGE", "Change access or an approval policy"),
     ("DELETE", r"/api/governance/roles/[^/]+", "ROLE.MANAGE", "Delete a role"),
+    # personas (apps/api/app/personas_api.py): bundles of roles a super admin gives people; ROLE.MANAGE is "*" only
+    ("PUT", r"/api/governance/personas/[^/]+", "ROLE.MANAGE", "Change the roles a persona grants"),
+    ("PUT", r"/api/governance/people/[^/]+/personas", "ROLE.MANAGE", "Give a person personas"),
     ("PUT", r"/api/governance/settings", "ROLE.MANAGE", "Change governance settings"),
     ("POST", r"/api/admin/apply", "ADMIN.DEPLOY", "Redeploy procedures and the agent"),
     ("POST", r"/api/dbt/(github/setup|github/token|git-repository)", "ADMIN.DEPLOY", "Change the GitHub integration"),
@@ -160,7 +183,7 @@ RULES: List[Tuple[str, str, Any, str]] = [
     ("PUT", r"/api/config/environments", "CONFIG.EDIT", "Change environment databases"),
     ("POST", r"/api/config/environments/preview", "ADMIN.VIEW", ""),
     ("POST", r"/api/costs/reconcile", "CONFIG.EDIT", "Reconcile AI cost"),
-    ("POST", r"/api/(domains|domains/draft|domains/import)", "DOMAIN.EDIT", "Create or import a domain"),
+    ("POST", r"/api/(domains|domains/draft|domains/import)", "DOMAIN.ONBOARD", "Onboard a domain (create, draft or import it)"),
     ("PUT", r"/api/domains/[^/]+/skills", "SKILL.RELEASE", "Change the skills a domain's runs load"),
     ("PUT", r"/api/domains/[^/]+/mdm", "DOMAIN.EDIT", "Change which mastered domains a domain consumes"),
     ("PUT", r"/api/domains/[^/]+/conventions", "DOMAIN.EDIT", "Change how a domain's code is built in a layer"),
@@ -449,10 +472,12 @@ def carries_secret(method: str, path: str) -> bool:
     return any(m == method.upper() and pattern.match(path) for m, pattern in SECRET_BODY)
 
 READ_RULES = [(re.compile(r"^/api/(admin/.*|config/(rules|platform|models|environments))$"), "ADMIN.VIEW"),
+              # who holds which persona and role is governance: super admins only
+              (re.compile(r"^/api/governance/(people|personas)$"), "ROLE.MANAGE"),
               (re.compile(r"^/api/jira/(issues|search|filters|boards|sprints|projects|summary|sprint-choices)(/.*)?$"), "JIRA.READ"),
               (re.compile(r"^/api/qa/links$"), "JIRA.READ"),
               (re.compile(r"^/api/runs/[^/]+/jira/.*$"), "JIRA.READ"),
-              (re.compile(r"^/api/(audit|costs|value)(/.*)?$"), "AUDIT.VIEW"),
+              (re.compile(r"^/api/(audit|costs)(/.*)?$"), "AUDIT.VIEW"),
               (re.compile(r"^/api/code/setup$"), "INTEGRATION.MANAGE"),
               (re.compile(r"^/api/ops(/.*)?$"), "OPS.VIEW"),
               (re.compile(r"^/api/code/(search|file|lineage|impact|path|neighborhood|usage|summary|repos|repos/[^/]+/(runs|branches|catalog|files))$"), "CODE.VIEW"),
@@ -557,6 +582,8 @@ def effective_privileges(user_roles: Iterable[str], role_privileges: Dict[str, I
         privs.update(role_privileges.get(role, []))
     if ALL in privs:
         privs = set(PRIVILEGES) | {ALL}
+    else:
+        privs -= SUPER_ONLY
     return roles, privs
 
 
@@ -564,6 +591,8 @@ def decide(privilege: Optional[str], privileges: Set[str], policy: Optional[Dict
     """('ALLOW' | 'REQUEST' | 'FORBID', reason)."""
     if not privilege:
         return "ALLOW", ""
+    if privilege in SUPER_ONLY and ALL not in privileges:
+        return "FORBID", f"{privilege} is for super admins only ({PRIVILEGES.get(privilege, ('', privilege))[1]})"
     active = bool(policy and policy.get("active", True) and policy.get("requires_approval", True))
     holds = privilege in privileges or ALL in privileges
     if holds and not (active and policy.get("four_eyes")):

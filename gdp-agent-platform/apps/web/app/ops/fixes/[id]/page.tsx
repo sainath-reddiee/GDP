@@ -11,7 +11,7 @@ type Detail = { issue: KnownFix; skill: FixSkill | null; runs: { resolution_id: 
   started_at: string; dag_id: string; task_id: string | null; run_id: string | null }[] };
 
 function Crumb() {
-  return <p className="eyebrow"><Link href="/ops/fixes" className="hover:underline">Known fixes</Link></p>;
+  return <p className="eyebrow"><Link href="/os/run/ops/fixes" className="hover:underline">Known fixes</Link></p>;
 }
 
 /** A known fix: `new` (optionally `?incident=` to start from a solved incident) or an existing one. */
@@ -58,7 +58,7 @@ export default async function FixPage({ params, searchParams }: { params: { id: 
       <h1 className="flex flex-wrap items-center gap-2 text-xl font-semibold">{k.title} <FixStatusPill status={k.status} /></h1>
       <p className="text-sm text-muted-foreground">
         v{k.version_no} · written by {k.created_by}{k.published_by ? ` · published by ${k.published_by}` : ""}
-        {k.source_incident_id && <> · from <Link href={`/incidents/${encodeURIComponent(k.source_incident_id)}`} className="text-primary hover:underline">this incident</Link></>}
+        {k.source_incident_id && <> · from <Link href={`/os/run/incidents/${encodeURIComponent(k.source_incident_id)}`} className="text-primary hover:underline">this incident</Link></>}
       </p>
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]">
         <FixForm initial={k} issueId={k.issue_id} skills={skills} editable={k.status === "DRAFT" && can(me, "OPS.OPERATE")} />
@@ -73,7 +73,7 @@ export default async function FixPage({ params, searchParams }: { params: { id: 
                 {data.runs.map((r) => (
                   <li key={r.resolution_id} className="flex items-center gap-2 py-1.5">
                     <span className={r.outcome === "SUCCESS" ? "font-semibold text-success" : "font-semibold text-destructive"}>{r.outcome.toLowerCase()}</span>
-                    <Link href={`/ops/resolutions/${encodeURIComponent(r.failure_id)}`} className="min-w-0 flex-1 truncate hover:text-primary">{r.dag_id} · {r.task_id}</Link>
+                    <Link href={`/os/run/ops/resolutions/${encodeURIComponent(r.failure_id)}`} className="min-w-0 flex-1 truncate hover:text-primary">{r.dag_id} · {r.task_id}</Link>
                     <span className="text-muted-foreground">{r.started_at?.slice(0, 16).replace("T", " ")}</span>
                   </li>
                 ))}

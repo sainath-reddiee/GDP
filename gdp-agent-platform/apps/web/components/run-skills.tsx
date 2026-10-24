@@ -59,7 +59,7 @@ export function RunSkills({ runId, disabled }: { runId: string; disabled?: boole
                     <ul className="space-y-1">
                       {data.loaded.map((l) => (
                         <li key={`${l.skill_name}-${l.skill_id}`} className="flex items-center gap-2">
-                          <Link href={`/skills/${encodeURIComponent(l.skill_name)}`} className="min-w-0 flex-1 truncate hover:text-primary">{pretty(l.skill_name)}</Link>
+                          <Link href={`/os/skills/registry/${encodeURIComponent(l.skill_name)}`} className="min-w-0 flex-1 truncate hover:text-primary">{pretty(l.skill_name)}</Link>
                           <span className="font-mono text-[10px] text-muted-foreground">v{(l.version ?? "").split("+")[0]}</span>
                           {l.picked_by === "override" && <FlaskConical className="h-3 w-3 text-amber-600" />}
                         </li>
@@ -83,7 +83,7 @@ export function RunSkills({ runId, disabled }: { runId: string; disabled?: boole
                       {can("SKILL.EDIT") && !disabled && <button type="button" disabled={pending} onClick={() => set(c.skill_name, c.skill_id)} className="text-primary hover:underline">Try it</button>}
                     </div>
                   ))}
-                  {!trials.length && !data.candidates.length && <p className="text-muted-foreground">No candidate versions are waiting. Create one on <Link href="/skills" className="text-primary hover:underline">Agent Skills</Link>.</p>}
+                  {!trials.length && !data.candidates.length && <p className="text-muted-foreground">No candidate versions are waiting. Create one on <Link href="/os/skills/registry" className="text-primary hover:underline">Agent Skills</Link>.</p>}
                 </div>
               </>
             )}

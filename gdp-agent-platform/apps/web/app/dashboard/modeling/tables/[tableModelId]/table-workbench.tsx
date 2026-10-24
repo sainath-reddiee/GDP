@@ -104,7 +104,7 @@ export function TableWorkbench({ detail, initialTab, canEdit, canAI, domains }: 
     else toast(r.data.issues.some((i) => i.severity === "ERROR") ? "error" : "ok",
       `Saved as v${r.data.version}${r.data.issues.some((i) => i.severity === "ERROR") ? " (has errors to fix before publishing)" : ""}`);
     setNote("");
-    router.replace(`/dashboard/modeling/tables/${id}?tab=${tab}`);
+    router.replace(`/os/design/modeling/tables/${id}?tab=${tab}`);
     router.refresh();
   });
 
@@ -112,7 +112,7 @@ export function TableWorkbench({ detail, initialTab, canEdit, canAI, domains }: 
     <div className="space-y-4" data-testid="table-workbench">
       {!latest && (
         <p className="flex items-center gap-2 rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-sm text-sky-900 dark:border-sky-500/30 dark:bg-sky-500/10 dark:text-sky-100">
-          <History className="h-4 w-4" /> You are looking at v{current.version}. <Link href={`/dashboard/modeling/tables/${id}?tab=${tab}`} className="font-medium underline">Open the latest (v{m.current_version})</Link> to edit.
+          <History className="h-4 w-4" /> You are looking at v{current.version}. <Link href={`/os/design/modeling/tables/${id}?tab=${tab}`} className="font-medium underline">Open the latest (v{m.current_version})</Link> to edit.
         </p>
       )}
       {conflict && (
@@ -188,7 +188,7 @@ function DiagramTab({ id, spec, layout }: { id: string; spec: DmSpec; layout: Re
       <p className="text-xs text-muted-foreground">
         {related === null ? "Loading related tables of the domain model..."
           : others.length ? <>Faded tables are the related entities of the approved domain model (v{related.version}); relationships are governed there.{" "}
-            {related.model_id && <Link href={`/dashboard/modeling/${related.model_id}?tab=relationships`} className="text-primary hover:underline">Open the domain model</Link>}</>
+            {related.model_id && <Link href={`/os/design/modeling/${related.model_id}?tab=relationships`} className="text-primary hover:underline">Open the domain model</Link>}</>
           : related.model_id ? "The approved domain model has no relationships to this table yet." : "Assign a domain in Publish to see the table among its related domain entities."}
         {" "}Drag tables to arrange them; the layout is saved without a new version.
       </p>
@@ -394,7 +394,7 @@ function VersionsTab({ id, detail }: { id: string; detail: TmDetail }) {
             {v.change_note && <p className="text-xs">{v.change_note}</p>}
             {v.change_summary && v.version > 1 && <p className="text-[11px] text-muted-foreground">{v.change_summary.counts.BREAKING ?? 0} breaking · {v.change_summary.counts.ADDITIVE ?? 0} additive · {v.change_summary.counts.NON_FUNCTIONAL ?? 0} documentation</p>}
             <div className="flex flex-wrap gap-3 text-xs">
-              <Link href={`/dashboard/modeling/tables/${id}?version=${v.version}&tab=columns`} className="text-primary hover:underline">Open</Link>
+              <Link href={`/os/design/modeling/tables/${id}?version=${v.version}&tab=columns`} className="text-primary hover:underline">Open</Link>
               {v.version > 1 && <button type="button" className="text-primary hover:underline" onClick={() => compare(v.version, v.version - 1)} disabled={pending}>Compare with v{v.version - 1}</button>}
               {detail.model.current_version && v.version !== detail.model.current_version &&
                 <button type="button" className="text-primary hover:underline" onClick={() => compare(detail.model.current_version as number, v.version)} disabled={pending}>Compare with latest</button>}
@@ -470,7 +470,7 @@ function PublishTab({ id, detail, canEdit, domains, errors, dirty }: {
         </div>
         {canEdit && <Button onClick={propose} disabled={pending || blocked || !m.domain_id || domain !== (m.domain_id ?? "")} data-testid="tm-propose">
           {pending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />} Propose v{v.version}</Button>}
-        {m.linked_model_id && <p className="text-xs">Last proposed as <span className="font-mono">{m.linked_entity}</span>. <Link href={`/dashboard/modeling/${m.linked_model_id}?tab=changes`} className="text-primary hover:underline">See it in the domain model&apos;s proposals</Link></p>}
+        {m.linked_model_id && <p className="text-xs">Last proposed as <span className="font-mono">{m.linked_entity}</span>. <Link href={`/os/design/modeling/${m.linked_model_id}?tab=changes`} className="text-primary hover:underline">See it in the domain model&apos;s proposals</Link></p>}
       </section>
 
       <section className="surface space-y-3 p-4">

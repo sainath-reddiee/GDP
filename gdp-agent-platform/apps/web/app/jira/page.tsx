@@ -7,5 +7,5 @@ export default function JiraPage({ searchParams }: { searchParams?: { tab?: stri
   if (sp.key) { p.set("tab", "ticket"); p.set("key", sp.key); }
   else if (sp.tab === "inbox") p.set("tab", "jira");
   if (sp.new) p.set("new", sp.new);
-  redirect(`/tickets${p.size ? `?${p}` : ""}`);
+  redirect(`/os/run/tickets${p.size ? `?${p}` : ""}`);
 }

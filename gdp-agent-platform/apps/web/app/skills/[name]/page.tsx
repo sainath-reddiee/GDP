@@ -27,12 +27,12 @@ export default async function SkillPage({ params, searchParams }: {
   return (
     <div className="space-y-4">
       <p className="eyebrow">
-        <Link href="/skills" className="hover:underline">Agent Skills</Link>
+        <Link href="/os/skills/registry" className="hover:underline">Agent Skills</Link>
         <span className="mx-1.5 text-muted-foreground">/</span>
         <span className="font-mono normal-case tracking-normal text-muted-foreground">{detail.skill_name}</span>
       </p>
       {proposal && (
-        <Link href="/skills/proposed" className="flex items-center gap-2 rounded-xl border border-agent/30 bg-agent/5 px-4 py-2.5 text-sm" data-testid="scout-banner">
+        <Link href="/os/skills/registry/proposed" className="flex items-center gap-2 rounded-xl border border-agent/30 bg-agent/5 px-4 py-2.5 text-sm" data-testid="scout-banner">
           <Radar className="h-4 w-4 text-agent" />
           <span>Proposed by the skill scout from {proposal.evidence_count} approved knowledge items in {proposal.domain_count} domain{proposal.domain_count === 1 ? "" : "s"}
             {proposal.transfer_label ? ` · ${proposal.transfer_label}` : ""}. Nothing loads it until it is promoted and bound to a stage.</span>

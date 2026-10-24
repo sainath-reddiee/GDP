@@ -102,8 +102,8 @@ export function ProfileDrawer({ row, onClose, bookmarked, onBookmark }: {
       <div className="mb-4 flex flex-wrap gap-2">
         <Button size="sm" variant="outline" onClick={rerun} disabled={pending}><RefreshCw className="h-3.5 w-3.5" /> Re-profile</Button>
         <Button size="sm" variant="outline" onClick={openExpectations} disabled={pending}><FileCode2 className="h-3.5 w-3.5" /> Soda and GX checks</Button>
-        <Link href={`/dashboard/sttm?source=${encodeURIComponent(row.table_name)}`} className={buttonVariants({ size: "sm", variant: "outline" })}><GitCompareArrows className="h-3.5 w-3.5" /> Mappings</Link>
-        <Link href={`/dashboard/modeling?tables=${encodeURIComponent(row.table_fqn)}`} className={buttonVariants({ size: "sm" })}><Network className="h-3.5 w-3.5" /> Model this table</Link>
+        <Link href={`/os/design/sttm?source=${encodeURIComponent(row.table_name)}`} className={buttonVariants({ size: "sm", variant: "outline" })}><GitCompareArrows className="h-3.5 w-3.5" /> Mappings</Link>
+        <Link href={`/os/design/modeling?tables=${encodeURIComponent(row.table_fqn)}`} className={buttonVariants({ size: "sm" })}><Network className="h-3.5 w-3.5" /> Model this table</Link>
       </div>
       {error && <div className="mb-3"><ErrorNote>{error}</ErrorNote></div>}
       {notice && <p className="mb-3 rounded-lg bg-accent px-3 py-2 text-sm text-accent-foreground">{notice}</p>}

@@ -96,7 +96,7 @@ export function TicketList({ initial, domains, canJiraWrite, openTicket }: {
   useEffect(() => {
     const p = filtersToQuery(f);
     p.set("tab", "list");
-    window.history.replaceState(window.history.state, "", `/tickets?${p}`);
+    window.history.replaceState(window.history.state, "", `/os/run/tickets?${p}`);
     void load(f);
   }, [f]);   // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -239,7 +239,7 @@ export function TicketList({ initial, domains, canJiraWrite, openTicket }: {
       </div>
 
       {/* where each source stands */}
-      {data?.jira.connect && <ConnectJira returnTo="/tickets" text="Connect your Jira account to see your Jira tickets here with your cases." />}
+      {data?.jira.connect && <ConnectJira returnTo="/os/run/tickets" text="Connect your Jira account to see your Jira tickets here with your cases." />}
       {data && !data.jira.connect && data.jira.reason && !data.jira.skipped && <p className="text-xs text-muted-foreground">Jira: {data.jira.reason}</p>}
       {data?.cases.deployed === false && <p className="text-xs text-muted-foreground">Cases are not deployed yet (migration V034).</p>}
       {notice && <p role="status" className="rounded-lg border bg-muted/40 px-3 py-2 text-xs">{notice}</p>}
@@ -294,7 +294,7 @@ export function TicketList({ initial, domains, canJiraWrite, openTicket }: {
 
 function Row({ t, checked, toggle, openTicket }: { t: Ticket; checked: boolean; toggle: () => void; openTicket: (key: string) => void }) {
   const jira = t.sources.includes("JIRA");
-  const caseHref = t.case ? `/qa/cases/${encodeURIComponent(t.case.case_id)}` : null;
+  const caseHref = t.case ? `/os/release/qa/cases/${encodeURIComponent(t.case.case_id)}` : null;
   return (
     <tr className={cn("border-t align-top hover:bg-muted/30", checked && "bg-primary/5", t.done && "text-muted-foreground")}>
       <td className="px-3 py-2">{jira && <input type="checkbox" aria-label={`Select ${t.key}`} checked={checked} onChange={toggle} />}</td>
@@ -324,7 +324,7 @@ function Row({ t, checked, toggle, openTicket }: { t: Ticket; checked: boolean; 
       <td className="whitespace-nowrap px-2 py-2 text-right">
         {t.url && <a href={t.url} target="_blank" rel="noreferrer" aria-label={`Open ${t.key} in Jira`} className="mr-1 inline-grid h-7 w-7 place-items-center rounded-md text-muted-foreground hover:bg-muted"><ExternalLink className="h-3.5 w-3.5" /></a>}
         {jira && (
-          <Link href={t.copilot ? `/dashboard/copilot/${t.copilot.session_id}` : `/dashboard/copilot?jira=${encodeURIComponent(t.key)}`}
+          <Link href={t.copilot ? `/os/work/copilot/${t.copilot.session_id}` : `/os/work/copilot?jira=${encodeURIComponent(t.key)}`}
                 aria-label={`Work on ${t.key} in the Copilot`} title={t.copilot ? `Open the Copilot conversation${t.copilot.drafts ? ` (${t.copilot.drafts} drafts)` : ""}` : "Work on it in the Copilot"}
                 className="inline-flex h-7 items-center gap-1 rounded-md px-2 text-xs font-medium text-primary hover:bg-primary/10">
             <Bot className="h-3.5 w-3.5" /> {t.copilot ? `Copilot${t.copilot.drafts ? ` · ${t.copilot.drafts}` : ""}` : "Copilot"}

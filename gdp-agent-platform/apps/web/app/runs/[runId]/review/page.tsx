@@ -34,15 +34,15 @@ export default async function ReviewPage({ params }: { params: { runId: string }
   const failedChecks = checks.filter((r) => r.status === "FAILED");
   const prUrl = dbt?.publication?.pr_url;
   const rows: Row[] = [
-    { label: "QA tests", href: `/runs/${params.runId}/qa`, done: !!lanes?.QA.done,
+    { label: "QA tests", href: `/os/build/runs/${params.runId}/qa`, done: !!lanes?.QA.done,
       failed: lanes?.QA.status === "BLOCKED", detail: lanes?.QA.note ?? "sign off on the QA page" },
-    { label: "Data Quality", href: `/runs/${params.runId}/soda`, done: !!lanes?.SODA.done,
+    { label: "Data Quality", href: `/os/build/runs/${params.runId}/soda`, done: !!lanes?.SODA.done,
       detail: lanes?.SODA.note ?? "confirm the checks" },
-    { label: "dbt project", href: `/runs/${params.runId}/dbt`, done: !!dbt?.generation,
+    { label: "dbt project", href: `/os/build/runs/${params.runId}/dbt`, done: !!dbt?.generation,
       detail: dbt?.generation
         ? `${dbt.artifacts.length} files${dbt.branch?.cut_branch ? ` · branch ${dbt.branch.cut_branch}` : ""}${prUrl ? " · PR opened" : ""}`
         : "not generated" },
-    { label: "Validation", href: `/runs/${params.runId}/validation`, done: !!lanes?.VALIDATION.done,
+    { label: "Validation", href: `/os/build/runs/${params.runId}/validation`, done: !!lanes?.VALIDATION.done,
       failed: failedChecks.length > 0,
       detail: checks.length
         ? `${checks.length - failedChecks.length}/${checks.length} checks passed${failedChecks.length ? ` · failed: ${failedChecks.map((c) => c.validation_type).join(", ")}` : ""}`

@@ -210,7 +210,7 @@ export function ModelingWorkspace({ ctx, initialTables, initialDesign }: { ctx: 
               <Select aria-label="Repository" value={repoId} onChange={(e) => setRepoId(e.target.value)}>
                 {ctx.repos.map((r) => <option key={r.repo_id} value={r.repo_id}>{r.name} ({r.branch})</option>)}
               </Select>
-            ) : <p className="text-xs text-muted-foreground">No repository is connected for dbt. Connect one in <Link href="/admin" className="text-primary hover:underline">Admin, Integrations</Link>.</p>}
+            ) : <p className="text-xs text-muted-foreground">No repository is connected for dbt. Connect one in <Link href="/os/admin/settings" className="text-primary hover:underline">Admin, Integrations</Link>.</p>}
             {!ctx.publisher_ready && <p className="text-xs text-amber-800">GitHub publishing is not set up yet; finalized designs are stored and can be published later.</p>}
             <p className="text-xs text-muted-foreground">Finalize, then publish: a branch feature/model-{spec.domain.toLowerCase().replace(/_/g, "-") || "domain"}-&lt;timestamp&gt; with domain_pack.json, DDL and dbt models, and a draft pull request.</p>
             <Button className="w-full" onClick={doPublish} disabled={pending || !status || !["FINALIZED", "PUBLISH_FAILED"].includes(status.status) || !repoId || !ctx.publisher_ready}>
@@ -226,7 +226,7 @@ export function ModelingWorkspace({ ctx, initialTables, initialDesign }: { ctx: 
               <ul className="mt-2 space-y-1.5 text-xs">
                 {ctx.designs.slice(0, 8).map((d) => (
                   <li key={d.design_id} className="flex items-center gap-2">
-                    <Link href={`/dashboard/modeling?design=${d.design_id}`} className="flex-1 truncate font-mono text-primary hover:underline">{d.domain_name}</Link>
+                    <Link href={`/os/design/modeling?design=${d.design_id}`} className="flex-1 truncate font-mono text-primary hover:underline">{d.domain_name}</Link>
                     <span className="text-muted-foreground">{d.mode.toLowerCase()} v{d.version}</span><StatusPill status={d.status} />
                   </li>
                 ))}

@@ -211,7 +211,7 @@ export function NeedsVerification({ items, proposed }: { items: DomainProvenance
     <section className="surface space-y-2 p-4" aria-label="Needs verification" data-testid="needs-verification">
       <div className="flex items-baseline gap-2">
         <h3 className="text-sm font-semibold">Needs verification</h3>
-        <span className="text-xs text-muted-foreground">{left.length} shown{proposed ? ` · ${proposed} proposed items in the ` : ""}{proposed ? <Link href="/knowledge?tab=inbox" className="text-primary hover:underline">review inbox</Link> : null}</span>
+        <span className="text-xs text-muted-foreground">{left.length} shown{proposed ? ` · ${proposed} proposed items in the ` : ""}{proposed ? <Link href="/os/knowledge?view=inbox" className="text-primary hover:underline">review inbox</Link> : null}</span>
       </div>
       <p className="text-xs text-muted-foreground">Knowledge the stages use that no person has confirmed. Verify what is right; open the item to correct what is not.</p>
       {error && <p className="text-xs text-destructive">{error}</p>}

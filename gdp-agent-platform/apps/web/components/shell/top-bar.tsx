@@ -1,76 +1,22 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { useEffect, useState, useTransition } from "react";
-import { Boxes, Check, ChevronDown, Loader2, LogOut, Plus, Search, Sparkles, Ticket } from "lucide-react";
+import { useEffect, useState } from "react";
+import { ChevronDown, LogOut, Plus, Ticket } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { logout } from "@/app/login/actions";
-import { setDomainScope } from "@/app/scope-actions";
 import { RoleSelector } from "@/components/role-selector";
 import { ThemeSegmented, ThemeToggle } from "@/components/theme/theme-toggle";
 import { actableBy, QUICK_ACTION_GROUPS, QUICK_ACTIONS } from "./quick-actions";
 import { useDismiss } from "./use-dismiss";
-
-export type DomainOption = { domain_id: string; domain_name: string };
+import { CopilotButton } from "@/components/copilot/copilot-provider";
 
 export function initials(user: string | null) {
   const name = (user ?? "?").replace(/[^A-Za-z ]/g, " ").trim();
   return (name.split(/\s+/).map((p) => p[0]).join("") || "?").slice(0, 2).toUpperCase();
 }
 
-/** Opens the command palette from anywhere (components/shell/command-palette listens). */
-export const openPalette = () => window.dispatchEvent(new Event("aip:palette"));
-
-function DomainSwitcher({ domains, scope }: { domains: DomainOption[]; scope: string }) {
-  const { open, setOpen, ref } = useDismiss();
-  const [pending, start] = useTransition();
-  const [filter, setFilter] = useState("");
-  const router = useRouter();
-  const pick = (name: string) => {
-    setOpen(false);
-    start(async () => { await setDomainScope(name); router.refresh(); });
-  };
-  const shown = domains.filter((d) => d.domain_name.toLowerCase().includes(filter.toLowerCase()));
-  return (
-    <div ref={ref} className="relative">
-      <button type="button" onClick={() => setOpen(!open)} aria-haspopup="listbox" aria-expanded={open} data-testid="domain-switcher"
-              className="flex h-9 items-center gap-2 rounded-xl border border-border/80 bg-card/70 pl-2.5 pr-2 text-sm shadow-xs transition hover:border-primary/40">
-        <span className="grid h-5 w-5 place-items-center rounded-md bg-primary text-white">
-          {pending ? <Loader2 className="h-3 w-3 animate-spin" /> : <Boxes className="h-3 w-3" />}
-        </span>
-        <span className="max-w-[160px] truncate font-medium">{scope || "All domains"}</span>
-        <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
-      </button>
-      {open && (
-        <div className="popover absolute left-0 top-11 z-50 w-72 animate-pop-in p-1.5 shadow-pop" role="listbox" aria-label="Domain scope">
-          <p className="px-2.5 pb-1 pt-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">Domain scope</p>
-          {domains.length > 6 && (
-            <input autoFocus value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="Filter domains"
-                   className="mb-1 h-8 w-full rounded-lg border border-input bg-card px-2.5 text-xs outline-none focus:border-primary/60" />
-          )}
-          <div className="max-h-72 overflow-y-auto">
-            {[{ domain_id: "", domain_name: "" }, ...shown].map((d) => {
-              const active = (scope || "").toUpperCase() === d.domain_name.toUpperCase();
-              return (
-                <button key={d.domain_id || "all"} type="button" role="option" aria-selected={active} onClick={() => pick(d.domain_name)}
-                        className={cn("flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm transition hover:bg-muted",
-                          active && "bg-accent text-accent-foreground")}>
-                  <span className="flex-1 truncate">{d.domain_name || "All domains"}</span>
-                  {active && <Check className="h-3.5 w-3.5" />}
-                </button>
-              );
-            })}
-            {!domains.length && <p className="px-2.5 py-2 text-xs text-muted-foreground">No domains registered yet.</p>}
-          </div>
-          <p className="border-t border-border/70 px-2.5 pb-1 pt-2 text-[11px] text-muted-foreground">Hubs, stores and the dashboard filter to this domain.</p>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function NewMenu({ privileges }: { privileges?: string[] | null }) {
+export function NewMenu({ privileges }: { privileges?: string[] | null }) {
   const { open, setOpen, ref } = useDismiss();
   const allowed = actableBy(privileges);
   const groups = QUICK_ACTION_GROUPS.map((g) => ({ g, items: QUICK_ACTIONS.filter((a) => a.group === g && allowed(a.privilege)) }))
@@ -105,7 +51,7 @@ function NewMenu({ privileges }: { privileges?: string[] | null }) {
   );
 }
 
-function AccountMenu({ user, role, canLogout, appRoles }: {
+export function AccountMenu({ user, role, canLogout, appRoles }: {
   user: string | null; role: string | null; canLogout: boolean; appRoles?: string[] | null;
 }) {
   const { open, setOpen, ref } = useDismiss();
@@ -174,7 +120,7 @@ function TicketsShortcut({ privileges }: { privileges?: string[] | null }) {
   if (!allowed) return null;
   const label = open ? `Tickets: ${open} open ticket${open === 1 ? "" : "s"} assigned to you` : "Tickets";
   return (
-    <Link href="/tickets" aria-label={label} title={label} data-testid="tickets-shortcut"
+    <Link href="/os/run/tickets" aria-label={label} title={label} data-testid="tickets-shortcut"
           className="relative grid h-9 w-9 place-items-center rounded-xl border border-border/80 bg-card/70 text-muted-foreground shadow-xs transition hover:border-primary/40 hover:text-foreground">
       <Ticket className="h-4 w-4" />
       {!!open && (
@@ -186,38 +132,15 @@ function TicketsShortcut({ privileges }: { privileges?: string[] | null }) {
   );
 }
 
-/** Copilot from any page: the full chat workspace (sessions, attachments, Jira, drafted changes). Ctrl+J, or the round
- *  button, still opens the quick drawer for a question about the page on screen. Shown to people with AI.USE. */
-function CopilotShortcut({ privileges }: { privileges?: string[] | null }) {
-  const allowed = !privileges || privileges.includes("*") || privileges.includes("AI.USE");
-  if (!allowed) return null;
-  return (
-    <Link href="/dashboard/copilot" title="Copilot chat (Ctrl+J for a quick question about this page)" data-testid="copilot-shortcut"
-          className="inline-flex h-9 items-center gap-1.5 rounded-xl border border-border/80 bg-card/70 px-3 text-sm font-medium text-muted-foreground shadow-xs transition hover:border-agent/40 hover:text-agent">
-      <Sparkles className="h-4 w-4" /><span className="hidden lg:inline">Copilot</span>
-    </Link>
-  );
-}
-
-/** Sticky frosted bar above every signed-in page: domain scope, search (Ctrl/Cmd+K), quick actions, theme, account. */
-export function TopBar({ user, role, canLogout, appRoles, privileges, domains, scope }: {
+/** Sticky frosted bar above every signed-in page: Copilot, quick actions, theme, account. */
+export function TopBar({ user, role, canLogout, appRoles, privileges }: {
   user: string | null; role: string | null; canLogout: boolean; appRoles?: string[] | null; privileges?: string[] | null;
-  domains: DomainOption[]; scope: string;
 }) {
-  const [mac, setMac] = useState(false);
-  useEffect(() => { setMac(/Mac|iPhone|iPad/.test(navigator.platform)); }, []);
   return (
     <header className="sticky top-0 z-40 border-b border-border/60 bg-background/95 backdrop-blur-xl backdrop-saturate-150">
       <div className="mx-auto flex h-14 w-full max-w-[1600px] items-center gap-2 px-6 lg:px-10">
-        <DomainSwitcher domains={domains} scope={scope} />
-        <button type="button" onClick={openPalette} data-testid="open-palette"
-                className="group ml-1 flex h-9 min-w-0 flex-1 items-center gap-2 rounded-xl border border-border/80 bg-card/70 px-3 text-sm text-muted-foreground shadow-xs transition hover:border-primary/40 sm:max-w-md">
-          <Search className="h-4 w-4 shrink-0" />
-          <span className="truncate">Search runs, tables, mappings, packs...</span>
-          <span className="ml-auto hidden items-center gap-0.5 sm:flex"><kbd className="kbd">{mac ? "⌘" : "Ctrl"}</kbd><kbd className="kbd">K</kbd></span>
-        </button>
         <div className="ml-auto flex items-center gap-1.5">
-          <CopilotShortcut privileges={privileges} />
+          <CopilotButton className="inline-flex h-9 items-center gap-1.5 rounded-xl border border-border/80 bg-card/70 px-3 text-sm font-medium text-muted-foreground shadow-xs transition hover:border-agent/40 hover:text-agent" />
           <TicketsShortcut privileges={privileges} />
           <NewMenu privileges={privileges} />
           <ThemeToggle />

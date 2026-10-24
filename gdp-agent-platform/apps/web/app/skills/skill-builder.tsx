@@ -121,7 +121,7 @@ export function SkillBuilder({ categories, skills, initialSkill, onClose }: {
   }, () => {
     const name = improving || draft!.name;
     onClose();
-    router.push(`/skills/${encodeURIComponent(name)}?tab=versions`);
+    router.push(`/os/skills/registry/${encodeURIComponent(name)}?tab=versions`);
     router.refresh();
   });
 

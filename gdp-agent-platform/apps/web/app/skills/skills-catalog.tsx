@@ -270,7 +270,7 @@ function Card({ skill: s, kids, cats, editable }: { skill: SkillCard; kids: Skil
   const [open, setOpen] = useState(false);
   const [pending, start] = useTransition();
   const [error, setError] = useState("");
-  const href = `/skills/${encodeURIComponent(s.skill_name)}`;
+  const href = `/os/skills/registry/${encodeURIComponent(s.skill_name)}`;
   const stages = s.stages.filter((b) => b.enabled);
   return (
     <div className="group flex flex-col rounded-xl border bg-card p-4 shadow-sm transition hover:-translate-y-0.5 hover:border-primary/40 hover:shadow-md">
@@ -292,7 +292,7 @@ function Card({ skill: s, kids, cats, editable }: { skill: SkillCard; kids: Skil
           <span key={b.stage} className="rounded-md bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">{STAGE_LABELS[b.stage] ?? b.stage}</span>
         )) : <span className="text-[10px] text-muted-foreground">{s.domains?.length ? "Loaded by domains only" : "Not bound to a stage (reference only)"}</span>}
         {(s.domains ?? []).map((d) => (
-          <Link key={`${d.domain_id}-${d.stage}`} href={`/domains/${encodeURIComponent(d.domain_id)}?tab=sources`}
+          <Link key={`${d.domain_id}-${d.stage}`} href={`/os/knowledge/domains/${encodeURIComponent(d.domain_id)}?tab=sources`}
                 title={d.mode === "REPLACE" ? `In ${d.domain_name}'s ${d.stage} stage, instead of ${d.replaces}` : `Added to ${d.domain_name}'s ${d.stage} stage`}
                 className="rounded-md bg-sky-500/10 px-1.5 py-0.5 text-[10px] text-sky-700 hover:underline dark:text-sky-300">
             {d.domain_name} · {STAGE_LABELS[d.stage] ?? d.stage}{d.mode === "REPLACE" ? " (replaces)" : ""}
@@ -326,7 +326,7 @@ function Card({ skill: s, kids, cats, editable }: { skill: SkillCard; kids: Skil
             <ul className="space-y-0.5 border-t px-1.5 py-1.5">
               {kids.map((k) => (
                 <li key={k.skill_name}>
-                  <Link href={`/skills/${encodeURIComponent(k.skill_name)}`}
+                  <Link href={`/os/skills/registry/${encodeURIComponent(k.skill_name)}`}
                         className="flex items-center gap-2 rounded-md px-1.5 py-1 text-[11px] hover:bg-card">
                     <span className="min-w-0 flex-1 truncate">{pretty(k.skill_name)}</span>
                     {k.candidate && <FlaskConical className="h-3 w-3 text-amber-600" />}
@@ -354,7 +354,7 @@ function ListView({ skills }: { skills: SkillCard[] }) {
           {skills.map((s) => (
             <tr key={s.skill_name} className="hover:bg-muted/30">
               <td className="px-4 py-2">
-                <Link href={`/skills/${encodeURIComponent(s.skill_name)}`} className="font-medium hover:text-primary">
+                <Link href={`/os/skills/registry/${encodeURIComponent(s.skill_name)}`} className="font-medium hover:text-primary">
                   {s.parent_skill && <span className="mr-1 text-muted-foreground">↳</span>}{pretty(s.skill_name)}
                 </Link>
                 <p className="line-clamp-1 max-w-md text-[11px] text-muted-foreground">{s.description}</p>

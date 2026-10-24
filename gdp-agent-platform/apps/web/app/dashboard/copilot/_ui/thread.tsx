@@ -216,7 +216,7 @@ function PublishCard({ results }: { results: PublishResult[] }) {
         ))}
       </ul>
       {results.some((r) => r.status === "PENDING_APPROVAL") && (
-        <a href="/approvals" className="block border-t px-3.5 py-2 text-xs font-medium text-primary hover:underline">Open Approvals</a>
+        <a href="/os/review/approvals" className="block border-t px-3.5 py-2 text-xs font-medium text-primary hover:underline">Open Approvals</a>
       )}
     </div>
   );

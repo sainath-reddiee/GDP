@@ -53,7 +53,7 @@ export function NewGoldRun({ domains }: { domains: { domain_id: string; domain_n
     const r = await startGoldRun({ domain_id: domain, database: schema.database, schema: schema.schema, tables: picked,
                                    ...(name.trim() ? { run_name: name.trim() } : {}) });
     if (!r.ok) { setError(r.error); return; }
-    router.push(r.data.stage === "MODELING" ? `/runs/${r.data.run_id}/modeling` : `/runs/${r.data.run_id}`);
+    router.push(r.data.stage === "MODELING" ? `/os/build/runs/${r.data.run_id}/modeling` : `/os/build/runs/${r.data.run_id}`);
   });
 
   return (
@@ -85,7 +85,7 @@ export function NewGoldRun({ domains }: { domains: { domain_id: string; domain_n
           {loading && <p className="text-sm text-muted-foreground"><Loader2 className="mr-1 inline h-4 w-4 animate-spin" />Reading the domain&apos;s Silver tables…</p>}
           {inputs && !ready && (
             <p role="status" className="rounded-lg border bg-muted/50 px-3 py-2 text-sm">
-              {inputs.domain_name} is not linked to MDM yet. On its <Link className="font-medium underline" href={`/domains/${inputs.domain_id}?tab=lineage`}>Lineage tab</Link>, mark which mastered domains (Company, Property) it consumes, then start the Gold run.
+              {inputs.domain_name} is not linked to MDM yet. On its <Link className="font-medium underline" href={`/os/knowledge/domains/${inputs.domain_id}?tab=lineage`}>Lineage tab</Link>, mark which mastered domains (Company, Property) it consumes, then start the Gold run.
             </p>
           )}
           {inputs && ready && (

@@ -16,8 +16,6 @@ import { fmt, Meter, PipelineTable, RibbonMetric, Sparkline } from "./command-ce
 import { StoreCards } from "@/components/hub/store-cards";
 import { CountUp } from "@/components/motion/count-up";
 import { TicketsCard, type TicketsCardData } from "./tickets-card";
-import { ValueTile } from "@/components/value/value-tile";
-import type { ValueSummary } from "@/lib/value-types";
 import { FailingCheckList, type FailingChecks } from "@/components/quality/failing-checks";
 
 /** Below this many finished runs the ribbon shows "n of m finished succeeded" rather than a percentage. */
@@ -47,12 +45,11 @@ export default async function Dashboard() {
   const runQs = (extra: string) => `/api/runs?${extra}${domainId ? `&domain_id=${domainId}` : ""}`;
   // the table lists the 8 most recently updated runs in flight; every count comes from the overview (exact, not a
   // list length) so the greeting, the chips, the tiles and the table header agree
-  const [active, audit, incidents, jira, value, failingChecks] = await Promise.all([
+  const [active, audit, incidents, jira, failingChecks] = await Promise.all([
     api<{ runs: RunSummary[]; total?: number }>(runQs("status=running&limit=8&sort=updated")).catch(() => ({ runs: [] as RunSummary[], total: undefined })),
     api<{ events: AuditEvent[] }>("/api/audit?limit=6").catch(() => ({ events: [] as AuditEvent[] })),
     can(me, "OPS.VIEW") ? api<IncidentSummary>("/api/ops/incidents/summary").catch(() => null) : Promise.resolve(null),
     can(me, "JIRA.READ") || can(me, "CASE.WORK") ? ticketsCard() : Promise.resolve(null),
-    can(me, "AUDIT.VIEW") ? api<ValueSummary>("/api/value/summary").catch(() => null) : Promise.resolve(null),
     api<FailingChecks>(`/api/dq/failing?limit=6${domainId ? `&domain=${encodeURIComponent(domainId)}` : ""}`).catch(() => null),
   ]);
   const o = overview;
@@ -65,12 +62,12 @@ export default async function Dashboard() {
   const openIncidents = incidents ? incidents.open + incidents.ack : null;
   const dqFailing = o?.dq?.failed ?? 0;
   const attention = [
-    { show: reviewCount > 0, href: "/runs?needs_review=1", icon: Eye, text: `${reviewCount} run${reviewCount === 1 ? "" : "s"} awaiting approval`, tone: "text-human bg-human/10 ring-human/30" },
-    { show: failedCount > 0, href: "/runs?status=failed", icon: XCircle, text: `${failedCount} run${failedCount === 1 ? "" : "s"} failed this week`, tone: "text-amber-800 bg-amber-50 ring-amber-200" },
-    { show: !!openIncidents, href: "/incidents", icon: Siren, text: `${openIncidents} open incident${openIncidents === 1 ? "" : "s"}`, tone: "text-rose-700 bg-rose-50 ring-rose-200" },
-    { show: !!o?.qa?.pending, href: "/dashboard/qa-store", icon: SquareTerminal, text: `${o?.qa?.pending} QA pack${o?.qa?.pending === 1 ? "" : "s"} awaiting approval`, tone: "text-blue-700 bg-blue-50 ring-blue-200" },
-    { show: dqFailing > 0, href: "/dashboard/dq-store", icon: ClipboardCheck, text: `${dqFailing} data quality check${dqFailing === 1 ? "" : "s"} failing`, tone: "text-rose-700 bg-rose-50 ring-rose-200" },
-    { show: !!o?.profiling?.drift, href: "/dashboard/profiling", icon: BarChart3, text: `${o?.profiling?.drift} drifting column${o?.profiling?.drift === 1 ? "" : "s"}`, tone: "text-amber-800 bg-amber-50 ring-amber-200" },
+    { show: reviewCount > 0, href: "/os/build/runs?needs_review=1", icon: Eye, text: `${reviewCount} run${reviewCount === 1 ? "" : "s"} awaiting approval`, tone: "text-human bg-human/10 ring-human/30" },
+    { show: failedCount > 0, href: "/os/build/runs?status=failed", icon: XCircle, text: `${failedCount} run${failedCount === 1 ? "" : "s"} failed this week`, tone: "text-amber-800 bg-amber-50 ring-amber-200" },
+    { show: !!openIncidents, href: "/os/run/incidents", icon: Siren, text: `${openIncidents} open incident${openIncidents === 1 ? "" : "s"}`, tone: "text-rose-700 bg-rose-50 ring-rose-200" },
+    { show: !!o?.qa?.pending, href: "/os/design/qa-store", icon: SquareTerminal, text: `${o?.qa?.pending} QA pack${o?.qa?.pending === 1 ? "" : "s"} awaiting approval`, tone: "text-blue-700 bg-blue-50 ring-blue-200" },
+    { show: dqFailing > 0, href: "/os/design/dq-store", icon: ClipboardCheck, text: `${dqFailing} data quality check${dqFailing === 1 ? "" : "s"} failing`, tone: "text-rose-700 bg-rose-50 ring-rose-200" },
+    { show: !!o?.profiling?.drift, href: "/os/design/profiling", icon: BarChart3, text: `${o?.profiling?.drift} drifting column${o?.profiling?.drift === 1 ? "" : "s"}`, tone: "text-amber-800 bg-amber-50 ring-amber-200" },
   ].filter((a) => a.show);
   const d = o?.delivery;
   // with only a few finished runs a percentage misleads (one failure reads "0% succeeded"): show the count instead
@@ -85,8 +82,8 @@ export default async function Dashboard() {
                   title={`${greeting()}${name ? `, ${name}` : ""}`}
                   description={`${inFlightCount} run${inFlightCount === 1 ? "" : "s"} in flight${reviewCount ? `, ${reviewCount} at a review step` : ", none at a review step"}. Your data estate at a glance.`}
                   actions={<>
-                    <Link href="/runs" className={buttonVariants({ variant: "outline" })}>All runs</Link>
-                    <Link href="/dashboard/onboarding?type=source" className={buttonVariants()}><PlugZap className="h-4 w-4" /> Onboard source</Link>
+                    <Link href="/os/build/runs" className={buttonVariants({ variant: "outline" })}>All runs</Link>
+                    {can(me, "SOURCE.CONNECT") && <Link href="/os/enable/onboarding?type=source" className={buttonVariants()}><PlugZap className="h-4 w-4" /> Onboard source</Link>}
                   </>} />
 
       {/* hero ribbon */}
@@ -95,18 +92,18 @@ export default async function Dashboard() {
         <div className="relative grid divide-y divide-border/60 sm:grid-cols-2 sm:divide-y-0 xl:grid-cols-4 xl:divide-x">
           <RibbonMetric label="Runs, last 7 days" value={<CountUp value={finished == null ? null : finished < FEW ? d!.completed : Math.round(d!.success_rate ?? 0)} />}
                         unit={finished == null ? undefined : finished < FEW ? `of ${finished} finished succeeded` : "% succeeded"}
-                        href="/runs" hint={d ? `${fmt(d.completed)} completed · ${fmt(d.failed)} failed · ${fmt(inFlightCount)} in flight now` : "run history not available"}>
+                        href="/os/build/runs" hint={d ? `${fmt(d.completed)} completed · ${fmt(d.failed)} failed · ${fmt(inFlightCount)} in flight now` : "run history not available"}>
             <Sparkline values={(d?.daily ?? []).map((x) => x.completed + x.failed)} />
             <p className="mt-1.5 text-[11px] text-muted-foreground">
               {d?.lead_minutes == null ? "No run completed this week" : `Median lead time ${duration(d.lead_minutes)}, start to completion`}
               {o?.runs?.drafts ? ` · ${fmt(o.runs.drafts)} draft${o.runs.drafts === 1 ? "" : "s"} not started` : ""}
             </p>
           </RibbonMetric>
-          <RibbonMetric label="Awaiting human approval" value={<CountUp value={w?.total} />} href={w?.requests ? "/approvals" : "/runs?needs_review=1"}
+          <RibbonMetric label="Awaiting human approval" value={<CountUp value={w?.total} />} href={w?.requests ? "/os/review/approvals" : "/os/build/runs?needs_review=1"}
                         hint={w ? `${count(w.runs, "run")} at review · ${count(w.requests, "approval")} · ${count(w.versions, "version")} in review` : "not available"}>
             <p className="text-[11px] text-muted-foreground">{w?.oldest_minutes == null ? "Nothing is waiting" : `Oldest has waited ${duration(w.oldest_minutes)}`}</p>
           </RibbonMetric>
-          <RibbonMetric label="Stale landed tables" value={<CountUp value={f?.stale} />} href="/dashboard/sources"
+          <RibbonMetric label="Stale landed tables" value={<CountUp value={f?.stale} />} href="/os/design/sources"
                         hint={f ? `of ${fmt(f.tables)} landed · ${fmt(f.fresh)} in the last 24 hours · ${fmt(f.aging)} from 1 to 7 days ago` : "landing registry not available"}>
             <Meter value={f && f.tables ? pct(f.fresh, f.tables) : null} tone="primary" />
             <p className="mt-1.5 text-[11px] text-muted-foreground">
@@ -115,15 +112,13 @@ export default async function Dashboard() {
                     f.oldest_hours != null ? `oldest load ${duration(f.oldest_hours * 60)} ago` : ""].filter(Boolean).join(" · ") : ""}
             </p>
           </RibbonMetric>
-          <RibbonMetric label="Failing checks" value={<CountUp value={x?.total} />} href="/dashboard/quality"
+          <RibbonMetric label="Failing checks" value={<CountUp value={x?.total} />} href="/os/run/quality"
                         hint={x ? `${fmt(x.dq_checks)} data quality · ${count(x.qa_tests, "QA test")} · ${count(x.tables, "table")} affected` : "no check results readable"}>
             <Meter value={o?.dq?.pass_rate} />
             <p className="mt-1.5 text-[11px] text-muted-foreground">{o?.dq?.pass_rate == null ? "No data quality results yet" : `${o.dq.pass_rate}% of data quality checks passing`}</p>
           </RibbonMetric>
         </div>
       </section>
-
-      {value && <ValueTile data={value} />}
 
       {attention.length > 0 && (
         <div className="flex flex-wrap items-center gap-2" data-testid="attention">
@@ -137,13 +132,13 @@ export default async function Dashboard() {
       )}
 
       {/* six asset stores */}
-      <StoreCards o={o} />
+      <StoreCards o={o} onboard={can(me, "SOURCE.CONNECT")} />
 
       {jira && <TicketsCard data={jira} />}
 
       {!!failingChecks?.total && (
         <Panel title="Failing data quality checks" icon={ClipboardCheck}
-               action={<Link href="/dashboard/dq-store" className="text-xs font-medium text-primary hover:underline">
+               action={<Link href="/os/design/dq-store" className="text-xs font-medium text-primary hover:underline">
                  {failingChecks.total > failingChecks.checks.length ? `All ${failingChecks.total}` : "DQ Store"}</Link>}>
           <p className="-mt-2 mb-2 text-xs text-muted-foreground" data-testid="failing-checks-summary">
             {count(failingChecks.total, "check")} failing on {count(failingChecks.tables, "table")}
@@ -159,12 +154,12 @@ export default async function Dashboard() {
             <h3 className="text-sm font-semibold">Active pipeline runs and SLA</h3>
             <span className="rounded-full bg-muted px-2 py-0.5 text-xs tabular-nums text-muted-foreground">{inFlightCount}</span>
             {inFlightCount > inFlight.length && <span className="text-xs text-muted-foreground">latest {inFlight.length} shown</span>}
-            <Link href="/runs?status=running" className="ml-auto text-xs font-medium text-primary hover:underline">All runs in flight</Link>
+            <Link href="/os/build/runs?status=running" className="ml-auto text-xs font-medium text-primary hover:underline">All runs in flight</Link>
           </div>
           <PipelineTable runs={inFlight.slice(0, 8)} />
         </section>
 
-        <Panel title="Recent activity" icon={Clock} action={<Link href="/audit" className="text-xs font-medium text-primary hover:underline">Audit</Link>}>
+        <Panel title="Recent activity" icon={Clock} action={<Link href="/os/admin/audit" className="text-xs font-medium text-primary hover:underline">Audit</Link>}>
           <ol className="relative space-y-3 before:absolute before:left-[5px] before:top-1 before:h-[calc(100%-8px)] before:w-px before:bg-border">
             {audit.events.map((e) => (
               <li key={e.event_id} className="relative pl-5">

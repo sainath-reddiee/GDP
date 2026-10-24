@@ -54,6 +54,6 @@ export function MappingGate({
                  approveLabel="Approve mapping and continue to Data Mapping" sendBack={["MAPPING_PENDING"]}
                  defaultNote="All source columns reviewed. Required target columns are covered."
                  detail="Every column is decided. Approving unlocks transformations and joins (Data Mapping)."
-                 afterApprove={`/runs/${runId}/modeling?tab=transformations`} />
+                 afterApprove={`/os/build/runs/${runId}/modeling?tab=transformations`} />
   );
 }

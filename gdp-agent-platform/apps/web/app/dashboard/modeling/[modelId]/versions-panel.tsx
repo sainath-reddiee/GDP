@@ -36,7 +36,7 @@ export function VersionsPanel({ modelId, versions, approved, canRollback, onRoll
           <tbody>
             {versions.map((v) => (
               <tr key={v.version} className="border-t border-border/60 align-top">
-                <td className="px-3 py-2"><Link href={`/dashboard/modeling/${modelId}?version=${v.version}`} className="font-medium text-primary hover:underline">v{v.version}</Link>
+                <td className="px-3 py-2"><Link href={`/os/design/modeling/${modelId}?version=${v.version}`} className="font-medium text-primary hover:underline">v{v.version}</Link>
                   {v.version === approved && <span className="ml-1 text-[10px] font-semibold uppercase text-success">current</span>}</td>
                 <td className="px-3 py-2"><StatusPill status={v.status} /><p className="text-[11px] text-muted-foreground">{(v.origin ?? "").toLowerCase()}</p></td>
                 <td className="px-3 py-2 text-xs">{v.change_note || "-"}

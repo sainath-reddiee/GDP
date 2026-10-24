@@ -1,12 +1,12 @@
 import Link from "next/link";
 import { ChevronRight, Crown, Database, Plus } from "lucide-react";
-import { api } from "@/lib/api";
+import { api, whoami } from "@/lib/api";
 import { RunTable } from "@/components/run-table";
 import { displayDomain } from "@/lib/catalog-display";
 import { parseStatusFilter } from "@/lib/run-filters";
 import { PIPELINES, type Pipeline } from "@/lib/stages";
 import { cn } from "@/lib/utils";
-import type { RunSummary } from "@/lib/types";
+import { can, type RunSummary } from "@/lib/types";
 import { NewGoldRun } from "../gold/new-run";
 import { RunsToolbar } from "./runs-toolbar";
 
@@ -31,20 +31,25 @@ export async function RunsList({ pipeline, searchParams }: { pipeline: Pipeline;
   if (searchParams.needs_review === "1") query.set("needs_review", "true");
   const p = PIPELINES[pipeline];
   const Icon = pipeline === "GOLD" ? Crown : Database;
-  const [{ runs, total }, { domains }, tagList, summary] = await Promise.all([
+  const [{ runs, total }, { domains }, tagList, summary, me] = await Promise.all([
     api<{ runs: RunSummary[]; total?: number }>(`/api/runs?${query.toString()}`),
     api<{ domains: { domain_id: string; domain_name: string; active_flag?: boolean }[] }>("/api/domains")
       .catch(() => ({ domains: [] })),
     api<{ tags: { tag: string; count: number }[] }>("/api/tags?entity_type=RUN").catch(() => ({ tags: [] })),
     api<Summary>(`/api/pipelines/${pipeline}/summary`).catch(() => ({ deployed: false } as Summary)),
+    whoami(),
   ]);
   const options = domains.filter((d) => d.active_flag !== false && displayDomain(d.domain_name))
     .map((d) => ({ domain_id: d.domain_id, domain_name: displayDomain(d.domain_name) as string }));
+  // a Silver run starts with onboarding its source, the Data OS Administrator's (Enable); others request one on Intake
   const action = pipeline === "GOLD"
     ? <NewGoldRun domains={options} />
-    : (
-      <Link href="/dashboard/onboarding" className={cn("inline-flex h-9 items-center gap-1.5 rounded-lg px-3 text-sm font-medium hover:opacity-90", p.accent.solid)}>
+    : can(me, "SOURCE.CONNECT") ? (
+      <Link href="/os/enable/onboarding?type=source" className={cn("inline-flex h-9 items-center gap-1.5 rounded-lg px-3 text-sm font-medium hover:opacity-90", p.accent.solid)}>
         <Plus className="h-4 w-4" />New {PIPELINES.SILVER.run}</Link>
+    ) : (
+      <Link href="/os/intake/new" className="inline-flex h-9 items-center gap-1.5 rounded-lg border px-3 text-sm font-medium hover:bg-accent">
+        <Plus className="h-4 w-4" />Request a source</Link>
     );
   const kpis: [string, string, string?][] = summary.deployed ? [
     ["In flight", String(summary.in_flight ?? 0)],

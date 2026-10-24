@@ -44,7 +44,7 @@ export default async function DbtPage({ params }: { params: { runId: string } })
       )}
       {data.generation && (
         <p className="mb-3 text-xs text-muted-foreground">Column lineage from the approved Data Mapping, Source to Silver and on to Gold, is in the{" "}
-          <Link href={`/lineage?q=${encodeURIComponent(state.run.domain_name ?? "")}`} className="font-medium text-primary hover:underline">Lineage explorer</Link>.</p>
+          <Link href={`/os/build/lineage?q=${encodeURIComponent(state.run.domain_name ?? "")}`} className="font-medium text-primary hover:underline">Lineage explorer</Link>.</p>
       )}
       <AiSuggestions runId={params.runId} stage="DBT" canAct={!state.is_archived} />
       <DbtStudio

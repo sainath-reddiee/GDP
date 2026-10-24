@@ -31,7 +31,7 @@ function describeCron(cron: string) {
 }
 
 export const suiteHref = (table: string, tab?: string) =>
-  `/dashboard/dq-store/suite?table=${encodeURIComponent(table)}${tab ? `&tab=${tab}` : ""}`;
+  `/os/design/dq-store/suite?table=${encodeURIComponent(table)}${tab ? `&tab=${tab}` : ""}`;
 
 /** The toast for an edit that landed in a suite draft. */
 export function stagedMessage(d: Staged, what: string) {
@@ -264,7 +264,7 @@ function SeedModal({ onClose, tables }: { onClose: () => void; tables: string[] 
                    placeholder="00000000-0000-0000-0000-000000000000" />
           </>}
           {(mode === "table" || mode === "requirement") && <div className="mt-3"><TablePicker value={value} onChange={setValue} /></div>}
-          {mode === "run" && <p className="mt-2 text-xs text-muted-foreground">Or pick the run from a list: <a className="font-medium text-primary hover:underline" href="/dashboard/dq-store?view=runs">Run checks</a>, then &quot;Promote approved to the store&quot;.</p>}
+          {mode === "run" && <p className="mt-2 text-xs text-muted-foreground">Or pick the run from a list: <a className="font-medium text-primary hover:underline" href="/os/design/dq-store?view=runs">Run checks</a>, then &quot;Promote approved to the store&quot;.</p>}
           {(mode === "requirement" || mode === "file") && (
             <>
               <div className="mt-3 flex items-end justify-between gap-2">
@@ -465,7 +465,7 @@ function TableBlock({ table, defaultOpen, canEdit, canRun, onAdd, onEdit, onSche
                   ck.status !== "ACTIVE" && "opacity-60")}>
                   <div className="min-w-0">
                     <code className="block truncate font-mono text-[12.5px]" title={ck.soda_dsl}>{ck.headline || ck.soda_dsl}</code>
-                    <span className="text-[11px] text-muted-foreground">{ck.check_type.toLowerCase().replace(/_/g, " ")} · from {ORIGIN[ck.origin]}{ck.source_run_id ? <> (<a className="text-primary hover:underline" href={`/runs/${ck.source_run_id}/soda`}>run</a>)</> : null}{ck.status !== "ACTIVE" ? ` · ${ck.status.toLowerCase()}` : ""}</span>
+                    <span className="text-[11px] text-muted-foreground">{ck.check_type.toLowerCase().replace(/_/g, " ")} · from {ORIGIN[ck.origin]}{ck.source_run_id ? <> (<a className="text-primary hover:underline" href={`/os/build/runs/${ck.source_run_id}/soda`}>run</a>)</> : null}{ck.status !== "ACTIVE" ? ` · ${ck.status.toLowerCase()}` : ""}</span>
                     {ck.requirement && <span className="block truncate text-[11px] text-muted-foreground" title={ck.requirement}>Why: {ck.requirement}</span>}
                   </div>
                   <span className={cn("hidden text-xs font-medium md:block", ck.severity === "FAIL" ? "text-rose-600" : "text-amber-600")}>{ck.severity === "FAIL" ? "blocks" : "alerts"}</span>
@@ -519,7 +519,7 @@ export function DqStoreView({ tables, initialTable, status, openAdd, canEdit, ca
                   // keep the domain and table in the URL; only the status changes
                   const next = new URLSearchParams(params?.toString() ?? "");
                   if (e.target.value) next.set("status", e.target.value); else next.delete("status");
-                  router.push(`/dashboard/dq-store${next.toString() ? `?${next}` : ""}`);
+                  router.push(`/os/design/dq-store${next.toString() ? `?${next}` : ""}`);
                 }}>
           <option value="">Active and paused</option><option value="ACTIVE">Active</option><option value="PAUSED">Paused</option><option value="RETIRED">Retired</option>
         </Select>

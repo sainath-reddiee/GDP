@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { DiffView } from "@/components/diff-view";
 import { TagEditor } from "@/components/tag-editor";
 import { useAccess } from "@/components/access";
+import { Portal } from "@/components/portal";
 import { useScrollLock } from "@/components/use-scroll-lock";
 import { cn } from "@/lib/utils";
 
@@ -67,6 +68,7 @@ export function KnowledgeDrawer({ item: initial, onClose, onEdit, onChange }: {
   });
 
   return (
+    <Portal>
     <div className="fixed inset-0 z-50 flex justify-end" role="dialog" aria-modal="true" aria-label={item.title}>
       <button type="button" aria-label="Close" className="absolute inset-0 bg-black/30" onClick={onClose} />
       <aside className="relative flex h-full w-[760px] max-w-full flex-col border-l bg-background shadow-2xl">
@@ -140,7 +142,7 @@ export function KnowledgeDrawer({ item: initial, onClose, onEdit, onChange }: {
                         <div className="rounded-xl border bg-card p-3 shadow-sm">
                           <p className="flex flex-wrap items-center gap-2 font-medium">v{v.version} <StatusPill status={v.status} />{v.is_current && <span className="text-emerald-600">in use</span>}
                             <OriginChip origin={v.origin} short /></p>
-                          <p className="mt-0.5 text-muted-foreground">{v.created_by} · {ago(v.created_at)}{v.run_name ? <> · from run <Link className="text-primary hover:underline" href={`/runs/${v.source_run_id}`}>{v.run_name}</Link></> : ""}</p>
+                          <p className="mt-0.5 text-muted-foreground">{v.created_by} · {ago(v.created_at)}{v.run_name ? <> · from run <Link className="text-primary hover:underline" href={`/os/build/runs/${v.source_run_id}`}>{v.run_name}</Link></> : ""}</p>
                           {v.change_note && <p className="mt-1">{v.change_note}</p>}
                           {v.review_note && <p className="mt-1 text-muted-foreground">Reviewer: {v.review_note}</p>}
                           <p className="mt-1 line-clamp-2 text-muted-foreground">{v.content}</p>
@@ -165,7 +167,7 @@ export function KnowledgeDrawer({ item: initial, onClose, onEdit, onChange }: {
           {tab === "Provenance" && (
             <dl className="grid gap-3 text-sm sm:grid-cols-2">
               <Fact label="Where it came from"><OriginChip origin={item.origin} /></Fact>
-              <Fact label="Taught by run">{item.source_run_id ? <Link href={`/runs/${item.source_run_id}`} className="text-primary hover:underline">{item.source_run_id.slice(0, 8)}</Link> : "None"}</Fact>
+              <Fact label="Taught by run">{item.source_run_id ? <Link href={`/os/build/runs/${item.source_run_id}`} className="text-primary hover:underline">{item.source_run_id.slice(0, 8)}</Link> : "None"}</Fact>
               <Fact label="Written by">{item.created_by} · {ago(item.created_at)}</Fact>
               <Fact label="Confidence">{item.confidence != null ? `${Math.round(item.confidence * 100)}%` : "Not recorded"}</Fact>
               <Fact label="Verified">{item.verified_at ? `${item.verified_by} · ${ago(item.verified_at)}` : "Not yet"}</Fact>
@@ -217,7 +219,7 @@ export function KnowledgeDrawer({ item: initial, onClose, onEdit, onChange }: {
                     <tbody className="divide-y">
                       {usage.runs.map((r, i) => (
                         <tr key={i}>
-                          <td className="py-1.5">{r.run_id ? <Link href={`/runs/${r.run_id}`} className="font-medium hover:text-primary">{r.run_name ?? r.run_id.slice(0, 8)}</Link> : "Outside a run"}</td>
+                          <td className="py-1.5">{r.run_id ? <Link href={`/os/build/runs/${r.run_id}`} className="font-medium hover:text-primary">{r.run_name ?? r.run_id.slice(0, 8)}</Link> : "Outside a run"}</td>
                           <td>{r.stage.toLowerCase()}</td><td>v{r.version}</td><td className="text-right tabular-nums">{r.uses}</td><td className="text-right text-muted-foreground">{ago(r.last_used)}</td>
                         </tr>
                       ))}
@@ -230,6 +232,7 @@ export function KnowledgeDrawer({ item: initial, onClose, onEdit, onChange }: {
         </div>
       </aside>
     </div>
+    </Portal>
   );
 }
 

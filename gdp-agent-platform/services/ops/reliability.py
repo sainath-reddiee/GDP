@@ -35,6 +35,16 @@ def _mean(values: Iterable[Optional[float]]) -> Optional[float]:
     return round(sum(found) / len(found), 1) if found else None
 
 
+def _price(value: Any) -> Optional[float]:
+    """The credit price in USD from its config value (a number, or JSON text of one); None when unset or not a number."""
+    if isinstance(value, str):
+        value = value.strip().strip('"')
+    try:
+        return None if value in (None, "", "null") else float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def team_stats(incidents: List[Dict[str, Any]], teams: Dict[str, str]) -> List[Dict[str, Any]]:
     """[{team_id, name, incidents, p1, mttr_min, mtta_min, repeats}] from incident rows (lower-case CORE.INCIDENT
     columns), one entry per team that has incidents (and every named team), most incidents first."""
@@ -134,10 +144,10 @@ def report(db: Any, days: int = 7, team_id: Optional[str] = None, now: Optional[
         ai["credits"] = round(float(cost[0]["credits"] or 0), 4) if cost else 0.0
     except Exception:
         pass
-    try:
-        from services.value.report import _config, _price
-
-        ai["credit_price_usd"] = _price(_config(db, "CREDIT_PRICE_USD").get("value"))
+    try:   # the credit price an admin set (Admin, CREDIT_PRICE_USD), to show the credits as money
+        found = db.query("""SELECT CONFIG_VALUE FROM CORE.PLATFORM_CONFIG WHERE CONFIG_KEY = 'CREDIT_PRICE_USD' AND IS_CURRENT
+                             ORDER BY VERSION DESC LIMIT 1""")
+        ai["credit_price_usd"] = _price(found[0].get("config_value")) if found else None
     except Exception:
         ai["credit_price_usd"] = None
     if ai["credit_price_usd"] is not None:

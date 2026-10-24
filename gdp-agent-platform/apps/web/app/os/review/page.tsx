@@ -1,0 +1,279 @@
+import Link from "next/link";
+import { ArrowRight, CheckCircle2, CircleDashed, ClipboardList, Flag, Hand, ShieldAlert, ShieldCheck, Sparkles, TriangleAlert } from "lucide-react";
+import { GATES, stateLabel } from "@/lib/run-labels";
+import {
+  checkPassed, checkSkipped, defaultRun, findingsOf, gatePassed, gateText, loadRunBundle, loadRuns, runOptions, scoreOf, tableOf,
+  type ValidationAttempt, type ValidationCheck,
+} from "@/lib/os/data";
+import { guard } from "@/lib/os/session";
+import { ACTIONS, actMode, has } from "@/lib/os/access";
+import { Action } from "@/components/os/action";
+import { gateHref, lifecycleOfRun, osHref } from "@/lib/os/lifecycle";
+import { ActivityRow, Banner, Bar, Btn, Card, Empty, Field, Kpi, PageHeader, SourceError, Stepper, Tag, ago, pretty } from "@/components/os/ui";
+import { RunPicker } from "@/components/os/run-picker";
+import { GateDecision, ReviewStandards, ValidateAgain } from "@/components/os/decide";
+
+export const dynamic = "force-dynamic";
+export const metadata = { title: "Validation gate" };
+
+/** Where a failing check is fixed in the classic run workspace. */
+const FIX_AT: Record<string, { slug: string; label: string; privilege: string }> = {
+  NAMING: { slug: "modeling?tab=mapping", label: "Field mapping", privilege: "MAPPING.DECIDE" },
+  REQUIRED_COLUMNS: { slug: "modeling?tab=mapping", label: "Field mapping", privilege: "MAPPING.DECIDE" },
+  DATATYPE: { slug: "modeling?tab=mapping", label: "Field mapping", privilege: "MAPPING.DECIDE" },
+  SCHEMA: { slug: "modeling?tab=mapping", label: "Field mapping", privilege: "MAPPING.DECIDE" },
+  STTM_CONSISTENCY: { slug: "modeling?tab=transformations", label: "Transformations", privilege: "STTM.EDIT" },
+  SODA_CONFIG: { slug: "soda", label: "Data quality", privilege: "SODA.EDIT" },
+  DBT_COMPILE: { slug: "dbt", label: "dbt studio", privilege: "DBT.EDIT" },
+  SKILL: { slug: "dbt", label: "dbt studio", privilege: "DBT.EDIT" },
+};
+// the code standards agent's areas: fixed in the generated code (dbt studio) or in the playbook that produced it
+const fixAt = (kind: string) => FIX_AT[kind] ?? (kind.startsWith("STANDARDS") ? { slug: "dbt", label: "dbt studio", privilege: "DBT.EDIT" } : undefined);
+
+function severity(c: ValidationCheck): { label: string; tone: "red" | "amber" | "neutral" | "green" } {
+  if (c.error_count > 0 || c.status === "FAILED" || c.status === "ERROR") return { label: "Critical", tone: "red" };
+  if (checkSkipped(c)) return { label: "Skipped", tone: "neutral" };
+  if (c.warning_count > 0) return { label: "Warning", tone: "amber" };
+  return { label: "Passed", tone: "green" };
+}
+
+export default async function ReviewGate({ searchParams }: { searchParams: { run?: string } }) {
+  const access = await guard("review");
+  const persona = access.persona;
+  const runs = await loadRuns("sort=updated&limit=150");
+  // the gates this person decides (or may request a decision on); governance leads see them all
+  const oversees = has(access, "APPROVAL.VIEW");
+  const gated = runs.data.runs.filter((r) => !r.is_archived && (
+    r.current_state in GATES ? oversees || actMode(access, GATES[r.current_state].privilege) !== "none"
+      : r.current_state === "VALIDATION_FAILED" && (oversees || has(access, "RUN.OPERATE"))));
+  const runId = searchParams.run ?? defaultRun(runs.data.runs, ["VALIDATION_FAILED", "DBT_REVIEW", "VALIDATION_PASSED"])?.run_id;
+  const bundle = runId ? await loadRunBundle(runId) : { data: null, error: null };
+  const b = bundle.data;
+
+  const queue = (
+    <Card title="Gates waiting on people" subtitle="Every human gate across the domains, oldest first" pad={false}>
+      {gated.length ? (
+        <div className="os-divide">
+          {[...gated].reverse().slice(0, 10).map((r) => (
+            <Link key={r.run_id} href={`/os/review?run=${r.run_id}`} className="flex items-center justify-between gap-3 px-5 py-2.5 os-hover">
+              <span className="min-w-0">
+                <span className="block truncate text-[12.5px] font-bold">{r.run_name}</span>
+                <span className="os-faint text-[11px]">{r.domain_name ?? "No domain"} · {GATES[r.current_state]?.role ?? "Forward Engineering Lead"} · {ago(r.updated_at ?? r.created_at)}</span>
+              </span>
+              <Tag tone={r.current_state === "VALIDATION_FAILED" ? "red" : "amber"}>{GATES[r.current_state]?.name ?? "Validation failed"}</Tag>
+            </Link>
+          ))}
+        </div>
+      ) : <div className="p-5"><Empty icon={CheckCircle2} title="No gate is waiting">Every run is moving or done.</Empty></div>}
+    </Card>
+  );
+
+  if (!b) {
+    return (
+      <>
+        <PageHeader eyebrow={`${persona.label} / Human in the loop`} title="Validation gate" />
+        <SourceError what="This run" error={bundle.error ?? runs.error} />
+        {queue}
+      </>
+    );
+  }
+
+  const { run } = b;
+  const score = scoreOf(b.checks);
+  const passed = gatePassed(score, b.gate);
+  const steps = lifecycleOfRun(run, { generated: !!b.generation, validated: score.total > 0, validationPassed: passed });
+  const failed = run.current_state === "VALIDATION_FAILED" || (score.score !== null && !passed);
+  const min = b.gate.min_score;
+  // why the gate held the run: the reasons VALIDATE_DBT recorded on its latest attempt, else worked out here
+  const latest = b.attempts[0];
+  const reasons = latest?.reasons.length ? latest.reasons : [
+    ...(score.exact !== null && score.exact < min ? [`score ${score.score}% is below the ${min}% minimum`] : []),
+    ...(b.gate.block_on_errors && score.critical ? [`${score.critical} error${score.critical === 1 ? "" : "s"} must be fixed`] : []),
+  ];
+  const validateMode = actMode(access, ACTIONS.validateAgain.privilege);
+  const gate = GATES[run.current_state];
+  const rows = b.checks.map((c) => ({ c, sev: severity(c), findings: findingsOf(c) }))
+    .sort((x, y) => ["Critical", "Warning", "Skipped", "Passed"].indexOf(x.sev.label) - ["Critical", "Warning", "Skipped", "Passed"].indexOf(y.sev.label));
+  const lastValidation = b.events.filter((e) => e.to_state.startsWith("VALIDATION_")).pop();
+  // the skill to improve: the code standards agent's when its areas failed, else the validation playbook
+  const standardsFailed = b.checks.some((c) => c.validation_type.startsWith("STANDARDS") && c.status === "FAILED");
+  const validationSkill = (standardsFailed ? b.skills.find((s) => s.skill_name === "CODE-STANDARDS-REVIEW") : undefined)
+    ?? b.skills.find((s) => /VALIDATION|READINESS/.test(s.skill_name)) ?? b.skills[0];
+  const title = `${run.run.domain_name ?? "Run"} · ${tableOf(run.run.target_model) ?? run.run.run_name}`;
+  // the gate decision, from the run's own allowed human transitions (as the run console derives them)
+  // (a person's transitions only: cancelling a run, open to anyone, is not a send-back)
+  const human = run.allowed_transitions.filter((t) => t.actor === "HUMAN" && t.to_state !== "CANCELLED");
+  const approveTo = human.find((t) => t.to_state.endsWith("_APPROVED"))?.to_state ?? gate?.approveTo;
+  const sendBack = human.filter((t) => !t.to_state.endsWith("_APPROVED")).map((t) => t.to_state);
+  const gateMode = gate ? actMode(access, gate.privilege) : "none";
+
+  return (
+    <>
+      <PageHeader
+        eyebrow={`${persona.label} / Human in the loop`}
+        title={<>Validation gate · <span className={failed ? "text-[var(--os-red-ink)]" : passed ? "text-[var(--os-emerald)]" : "os-muted"}>{failed ? "Needs attention" : passed ? "Passed" : "Not validated"}</span></>}
+        subtitle={<>{title}. A separate reviewer agent checks the generated code, mapping consistency, data quality config and naming before any pull request.</>}
+        actions={<>
+          <RunPicker base="/os/review" current={run.run_id} runs={runOptions(runs.data.runs)} />
+          <Btn href={`/os/build?run=${run.run_id}`}>Build workbench</Btn>
+          {failed
+            ? <Action access={access} id="editSkill" label="Improve skill and regenerate" href={`/os/skills${validationSkill ? `?skill=${encodeURIComponent(validationSkill.skill_name)}` : ""}`} variant="primary" icon={<Sparkles className="h-3.5 w-3.5" />} />
+            : run.current_state === "DBT_REVIEW" ? <Action access={access} id="reviewCode" href={`/os/build/runs/${run.run_id}/review`} variant="primary" />
+            : gate ? <Action access={access} id="decideGate" privilege={gate.privilege} label={`Open ${gate.name.toLowerCase()}`} href={gateHref(run.run_id, gate.slug)} variant="primary" /> : null}
+        </>}
+      />
+
+      {failed && (
+        <Banner tone="red" icon={ShieldAlert}>
+          <b>Validation flagged.</b> {reasons.length ? `${reasons.join("; ")}.` : `Score ${score.score ?? 0}%.`} The gate needs {gateText(b.gate)}, so the pull request is held: improve the failing checks at their source or the skill that produced them, then validate again.
+        </Banner>
+      )}
+      {!failed && gate && (
+        <Banner tone="amber" icon={Hand}><b>{gate.name} waits on a {gate.role.toLowerCase()}.</b> Agents prepared the proposal. Approve it here, or run Build end to end and autopilot decides it on the evidence; you can reopen it later from the store.</Banner>
+      )}
+      {b.errors.length > 0 && <SourceError what="Part of this run" error={b.errors.join(" · ")} />}
+
+      <div className="mb-4"><Stepper steps={steps} hrefOf={(s) => s.status === "pending" ? null : osHref(run.run_id, s, run.run.domain_id)} /></div>
+
+      <div className="mb-4 grid grid-cols-2 gap-3 xl:grid-cols-4">
+        <Kpi label="Validation score" value={score.score === null ? "–" : `${score.score}%`} hint={`Gate ${gateText(b.gate)}`} icon={passed ? ShieldCheck : ShieldAlert} tone={score.score === null ? "neutral" : passed ? "green" : "red"} />
+        <Kpi label="Critical findings" value={score.critical} hint={score.critical ? "must be fixed" : "none blocking"} icon={Flag} tone={score.critical ? "red" : "green"} />
+        <Kpi label="Warnings" value={score.warnings} hint="advisory, not blocking" icon={TriangleAlert} tone={score.warnings ? "amber" : "green"} />
+        <Kpi label="Checks evaluated" value={`${score.passed}/${score.total}`} hint={score.skipped ? `${score.skipped} skipped` : "all evaluated"} icon={ClipboardList} tone="blue" />
+      </div>
+
+      <div className="grid gap-4 xl:grid-cols-[minmax(0,1.7fr)_minmax(0,1fr)]">
+        <div className="flex min-w-0 flex-col gap-4">
+          <Card title="Reviewer agent findings" subtitle="The latest result of each independent check, with its evidence" pad={false}>
+            {rows.length ? (
+              <div className="overflow-x-auto">
+                <table className="os-table">
+                  <thead><tr><th>Severity</th><th>Check</th><th>Evidence</th><th>Fix in</th></tr></thead>
+                  <tbody>
+                    {rows.map(({ c, sev, findings }) => {
+                      const fix = fixAt(c.validation_type);
+                      const msg = findings.map((f) => String(f.message ?? f.detail ?? "")).find(Boolean);
+                      return (
+                        <tr key={c.validation_id}>
+                          <td><Tag tone={sev.tone}>{sev.label}</Tag></td>
+                          <td className="whitespace-nowrap font-semibold">{pretty(c.validation_type)}</td>
+                          <td className="max-w-[440px]">
+                            <div className="os-muted line-clamp-2 text-[11.5px]" title={msg}>{msg ? msg.split("\n")[0] : `${c.error_count} errors · ${c.warning_count} warnings`}</div>
+                            {findings.length > 1 && <div className="os-faint text-[10.5px]">+{findings.length - 1} more finding{findings.length > 2 ? "s" : ""}</div>}
+                          </td>
+                          <td>{fix && !checkPassed(c) ? <Action access={access} id="workStep" privilege={fix.privilege} label={fix.label} href={`/os/build/runs/${run.run_id}/${fix.slug}`} /> : <span className="os-faint">–</span>}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            ) : <div className="p-5"><Empty icon={CircleDashed} title="Not validated yet">Validation runs after the build agent generates code.</Empty></div>}
+          </Card>
+
+          <Card title="Run trace and evidence" subtitle="Immutable inputs the reviewer used">
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Field label="Validation run">{lastValidation ? `${stateLabel(lastValidation.to_state)} · ${ago(lastValidation.created_at)}` : "None yet"}</Field>
+              <Field label="Reviewer">{b.skills.filter((s) => /STANDARDS|VALIDATION|READINESS/.test(s.skill_name)).map((s) => `${s.skill_name.toLowerCase()}@${s.version}`).join(", ") || "Independent review agent"}</Field>
+              <Field label="Evidence">{b.generation ? <code className="text-[11px]">{b.generation.stage_path}</code> : "No generation yet"}</Field>
+              <Field label="Decision history">{b.reviews.length ? b.reviews.map((r) => `${pretty(r.stage)}: ${pretty(r.decision)} by ${/^Autopilot:/.test(r.business_justification ?? "") ? `autopilot (as ${r.reviewer})` : r.reviewer}`).join(" · ") : "No decision yet"}</Field>
+            </div>
+          </Card>
+        </div>
+
+        <div className="flex min-w-0 flex-col gap-4">
+          {gate && approveTo && gateMode !== "none" && (
+            <Card title={<>{gate.name}: your decision</>} subtitle={`Human gate · ${gate.role}. The agents prepared the proposal; it continues only once a person approves.`}
+                  className="border-[var(--os-amber-line)]" action={<Btn href={gateHref(run.run_id, gate.slug)}>Read the evidence</Btn>}>
+              <GateDecision runId={run.run_id} gate={gate.name} role={gate.role} approveTo={approveTo} sendBack={sendBack}
+                            mode={gateMode} approver={access.approvers[gate.privilege]} previewing={!!access.preview} />
+            </Card>
+          )}
+          <Card title="Human decision" subtitle="Policy-based gate. A score alone never bypasses a critical check.">
+            <div className="flex items-end justify-between">
+              <div className={`text-[34px] font-extrabold leading-none tracking-tight tabular-nums ${failed ? "text-[var(--os-red-ink)]" : passed ? "text-[var(--os-emerald)]" : "os-faint"}`}>
+                {score.score ?? "–"}<span className="text-[15px]">%</span>
+              </div>
+              <span className="os-faint text-[11px]">required {min}%{b.gate.block_on_errors ? ", no errors" : ""}</span>
+            </div>
+            <div className="relative mt-2">
+              <Bar className="h-2.5" value={score.score ?? 0} tone={failed ? "red" : "green"} />
+              <span className="absolute top-[-3px] h-4 w-0.5 bg-[var(--os-ink)]" style={{ left: `${Math.min(100, Math.max(0, min))}%` }} title={`Gate ${min}%`} />
+            </div>
+            <div className="os-subtle mt-4 rounded-lg p-3 text-[12px] leading-relaxed">
+              <b>Recommendation.</b>{" "}
+              {failed ? "Fix the critical checks at their source (mapping, transformations or data quality), or improve the skill that produced them, then regenerate and validate again. Approved steps stay approved."
+                : passed ? (run.current_state === "DBT_REVIEW" ? "The gate passed. A data developer reviews the generated code before it is merged." : "The gate passed; the workflow continues on its own.")
+                : "Validation has not run yet for this run."}
+            </div>
+            <div className="mt-4 flex flex-wrap gap-2">
+              {b.generation && validateMode !== "none"
+                ? <ValidateAgain runId={run.run_id} mode={validateMode} previewing={!!access.preview} variant={failed ? "primary" : "default"} />
+                : null}
+              <Action access={access} id="revalidate" href={`/os/build/runs/${run.run_id}/validation`} />
+            </div>
+            {b.generation && actMode(access, ACTIONS.reviewStandards.privilege) !== "none" && (
+              <div className="mt-3 border-t border-[var(--os-line)] pt-3">
+                <div className="os-faint mb-2 text-[11px]">
+                  Code standards agent{b.gate.standards_review === false ? " (off for this run's domain: it is not part of the gate)" : b.gate.standards_block === false ? " (advisory for this domain)" : ""}: reviews the generated code against the written standards, area by area.
+                </div>
+                <ReviewStandards runId={run.run_id} mode={actMode(access, ACTIONS.reviewStandards.privilege) as "do" | "request"} previewing={!!access.preview} />
+              </div>
+            )}
+            <div className="mt-3 flex flex-wrap gap-2">
+              {run.current_state === "DBT_REVIEW" && <Action access={access} id="reviewCode" label="Review the code" href={`/os/build/runs/${run.run_id}/review`} variant="mint" />}
+              {failed && validationSkill && <Action access={access} id="editSkill" label="Open skill studio" href={`/os/skills?skill=${encodeURIComponent(validationSkill.skill_name)}`} variant="warn" />}
+            </div>
+          </Card>
+
+          <Attempts attempts={b.attempts} min={min} />
+          <Card title="What happens next" subtitle="Controlled recovery, no work redone">
+            <div className="os-divide">
+              <ActivityRow tone={failed ? "amber" : "green"} icon={Sparkles} title="Skill or source fix" sub="A versioned skill change or a corrected mapping, owned by a person" />
+              <ActivityRow tone="blue" icon={ArrowRight} title="Regenerate affected outputs" sub="Only generation and validation rerun; approved mapping and DQ stay approved" />
+              <ActivityRow tone="green" icon={ShieldCheck} title="Independent validation" sub={`Must reach ${gateText(b.gate)} before code review`} />
+            </div>
+          </Card>
+          {queue}
+        </div>
+      </div>
+    </>
+  );
+}
+
+/** Every validation of the run, newest first: its score against the gate of the time, and how far the run came. */
+function Attempts({ attempts, min }: { attempts: ValidationAttempt[]; min: number }) {
+  if (!attempts.length) return null;
+  const scored = attempts.filter((a) => a.score !== null);
+  const first = scored[scored.length - 1];
+  const last = scored[0];
+  const from = scored.length > 1 ? first?.score ?? null : null;
+  const to = last?.score ?? null;
+  const trend = from === null || to === null ? `${attempts.length} attempt${attempts.length === 1 ? "" : "s"}`
+    : to > from ? `Improved ${from}% → ${to}% over ${attempts.length} attempts`
+    : to < from ? `Went from ${from}% to ${to}% over ${attempts.length} attempts`
+    : `Steady at ${to}% over ${attempts.length} attempts`;
+  return (
+    <Card title="Validation attempts" subtitle={trend} pad={false}>
+      <div className="os-divide" data-testid="validation-attempts">
+        {attempts.slice(0, 8).map((a, i) => {
+          const gate = a.min_score ?? min;
+          const ok = a.status === "PASSED";
+          return (
+            <div key={a.validation_id} className="flex items-start justify-between gap-3 px-5 py-2.5">
+              <div className="min-w-0">
+                <div className="text-[12.5px] font-bold tabular-nums">
+                  {a.score === null ? "No score" : `${a.score}%`}
+                  <span className="os-faint ml-1.5 text-[10.5px] font-normal">gate {gate}% · {a.errors} error{a.errors === 1 ? "" : "s"} · {a.warnings} warning{a.warnings === 1 ? "" : "s"}{i === 0 ? " · latest" : ""}</span>
+                </div>
+                {a.reasons.length > 0 && <div className="os-muted text-[11px]">{a.reasons.join("; ")}</div>}
+                <div className="os-faint text-[10.5px]">{ago(a.at)}</div>
+              </div>
+              <Tag tone={ok ? "green" : "red"}>{ok ? "Passed" : "Flagged"}</Tag>
+            </div>
+          );
+        })}
+      </div>
+    </Card>
+  );
+}

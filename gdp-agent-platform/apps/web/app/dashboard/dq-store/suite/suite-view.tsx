@@ -175,7 +175,7 @@ function ReviewTab({ table, detail, me, canEdit, canApprove }: { table: string; 
         <section className="surface space-y-2 p-4 text-sm" data-testid="suite-model">
           <h3 className="text-sm font-semibold">Domain model</h3>
           {cur.model?.entity ? (
-            <p>Checked against <Link className="font-medium text-primary hover:underline" href={`/dashboard/modeling/${cur.model.model_id}`}>{cur.model.entity}</Link> in the approved model v{cur.model.model_version}.</p>
+            <p>Checked against <Link className="font-medium text-primary hover:underline" href={`/os/design/modeling/${cur.model.model_id}`}>{cur.model.entity}</Link> in the approved model v{cur.model.model_version}.</p>
           ) : cur.model ? <p className="text-muted-foreground">The domain has an approved model (v{cur.model.model_version}), but this table is not one of its entities, so columns are not checked.</p>
             : <p className="text-muted-foreground">The table&apos;s domain has no approved model yet, so columns are not checked.</p>}
           {cur.issues.length > 0 && (
@@ -282,7 +282,7 @@ function VersionsTab({ table, versions, canEdit, canApprove, hasOpen }: { table:
           <tbody>
             {versions.map((v) => (
               <tr key={v.version} className="border-t border-border/60 align-top">
-                <td className="px-3 py-2 font-medium"><Link className="text-primary hover:underline" href={`/dashboard/dq-store/suite?table=${encodeURIComponent(table)}&version=${v.version}`}>v{v.version}</Link></td>
+                <td className="px-3 py-2 font-medium"><Link className="text-primary hover:underline" href={`/os/design/dq-store/suite?table=${encodeURIComponent(table)}&version=${v.version}`}>v{v.version}</Link></td>
                 <td className="px-3 py-2"><StatusPill status={v.status} /></td>
                 <td className="px-3 py-2 text-xs text-muted-foreground">{v.authors.join(", ") || v.created_by}{v.submitted_by ? ` · submitted ${v.submitted_by}` : ""}{v.approved_by ? ` · approved ${v.approved_by}` : ""}{v.rejected_by ? ` · rejected ${v.rejected_by}` : ""}</td>
                 <td className="px-3 py-2 text-xs">{v.model_version ? `v${v.model_version}` : "-"}</td>
@@ -442,7 +442,7 @@ export function SuiteView({ table, detail, me, initialTab, canEdit, canApprove }
       <div className="flex flex-wrap items-center gap-2">
         {options.length > 0 && (
           <Select aria-label="Version" className="h-9 w-56" value={picked ?? ""}
-                  onChange={(e) => router.push(`/dashboard/dq-store/suite?table=${encodeURIComponent(table)}&version=${e.target.value}&tab=${tab}`)}>
+                  onChange={(e) => router.push(`/os/design/dq-store/suite?table=${encodeURIComponent(table)}&version=${e.target.value}&tab=${tab}`)}>
             {options.map((o) => <option key={o.v} value={o.v}>{o.label}</option>)}
           </Select>
         )}

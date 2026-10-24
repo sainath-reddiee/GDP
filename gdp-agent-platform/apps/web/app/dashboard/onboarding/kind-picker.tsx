@@ -22,7 +22,7 @@ export function KindPicker({ value }: { value: Kind | null }) {
   useEffect(() => setShown(value), [value]);
   const pick = (k: Kind | null) => {
     setShown(k);
-    start(() => router.push(k ? `/dashboard/onboarding?type=${k}` : "/dashboard/onboarding", { scroll: false }));
+    start(() => router.push(k ? `/os/enable/onboarding?type=${k}` : "/os/enable/onboarding", { scroll: false }));
   };
   return (
     <>

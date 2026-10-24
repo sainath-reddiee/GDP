@@ -1,0 +1,90 @@
+---
+name: CODE-STANDARDS-REVIEW
+type: VALIDATION
+version: 1.0.2
+description: How the code standards agent reviews a generated dbt project against the platform's written standards, area by area, before code review.
+---
+
+# Code standards review
+
+The code standards agent reviews every generated dbt project independently of the agent that wrote it. It reads the
+whole project and judges it against written standards only: this skill and the generation playbooks bound to the run
+(GDP-DBT-ONBOARD-SOURCE, SILVER-MODEL or GOLD-MODEL, and the domain's own skill). It never edits code and never
+reports a preference the standards do not state.
+
+## How to judge
+
+- Give every area a verdict: PASS (no violation), WARN (only deviations the standards discourage) or FAIL (at least
+  one violation the standards require).
+- Every finding cites the standard it breaks (skill name and rule), the file and a short excerpt.
+- An **error** breaks a rule written as a requirement ("must", "always", "never", a rule numbered in a playbook).
+  A **warning** is a deviation from guidance ("prefer", "should", "avoid").
+- When the generated code follows a documented exception (an STTM anomaly, a domain contract override), it is not
+  a finding.
+- Do not invent files, tables or columns. Judge only what is in the project and the approved mapping.
+- Read `release/generation-report.json` first: it records the run's standard (GDP or generic), each target column's
+  source type, target type and the cast the generator applied. Judge types and layout against it, not against a guess.
+
+## Areas
+
+### NAMING: naming and layering
+- Judge the layout by the run's standard. A generic (non-GDP) run lands each table in
+  `models/<domain>/landing/landing_<table>.sql`, builds `models/<domain>/<table>.sql` from a snapshot in
+  `snapshots/<table>_snapshot.sql`: that layout is correct, `landing_` is its staging prefix. A GDP run follows its
+  playbook's Silver hub and HIST naming. `stg_`, `int_`, `dim_` and `fct_` apply only where a playbook uses them.
+- Column names are the approved target names from the mapping, upper or lower case as the playbook says, never a
+  source name left in place.
+- One SQL model per file, file name equals model name. Schema YAML follows the dbt convention `_<model>.yml`
+  (one file documents its model); that is not a naming violation.
+
+### TYPES: casts and data types
+- Casts only on a type mismatch (GDP-DBT-ONBOARD-SOURCE Rule 2, the generator's rulebook): a column whose source
+  type equals its target type is passed through, and that is correct. A mismatch is a different type family (DATE to
+  TIMESTAMP_NTZ, NUMBER to FLOAT, TEXT to NUMBER or DATE) or a different numeric precision or scale.
+- Every mismatch must be converted explicitly in the model; a mismatch left unconverted is an error.
+- A text column carried into a target with a declared length (TEXT to VARCHAR(100)) is not a mismatch under Rule 2:
+  it is passed through, and the Soda length checks guard the values. Mention it as a warning only when no Soda
+  length check covers the column.
+- Text columns are trimmed and empty strings turned into NULL (`NULLIF(TRIM(col), '')`) where the playbook requires it.
+- Dates, timestamps and numbers use the playbook's safe conversion (`TRY_TO_*`) where source values can be invalid.
+
+### KEYS: keys, joins and dedup
+- The business key and the hash key are built from the columns the playbook lists, never from audit or surrogate
+  key columns.
+- Joins to reference data are LEFT joins unless the playbook says otherwise; join conditions use keys, not names.
+- Deduplication keeps the latest record by the playbook's ordering; SCD1 and HIST handling follow the playbook.
+
+### TESTS: tests and data quality
+- The business key (`source_unique_id`) carries `not_null` and `unique` (or the combination test the playbook names).
+- `not_null` is required only on columns the approved mapping marks required (a nullable rule or required flag). A
+  column the mapping leaves nullable needs none; the Soda missing checks watch it.
+- Columns with accepted values in the mapping carry `accepted_values`.
+- A Soda duplicate check on the business key, on top of the dbt `unique` test, is recommended: its absence is a
+  warning, not an error.
+
+### DOCS: documentation and sources
+- Every model and its columns are described in YAML.
+- Sources are declared once in a sources file and read through `source()`; models read each other through `ref()`.
+- No hardcoded database or schema names in model SQL.
+
+### SQL: SQL style and safety
+- No DDL or DML (`DROP`, `DELETE`, `TRUNCATE`, `ALTER`, `GRANT`, `INSERT`, `MERGE`) in models.
+- No `SELECT *` in a final model; CTEs named for what they hold.
+- Jinja delimiters balance and only use the project's macros.
+
+## Reading the result
+
+Each area is one validation check (`STANDARDS_NAMING`, `STANDARDS_TYPES`, ...). A FAIL area is a failed check, so it
+lowers the validation score and, while `validation.standards_block` holds, its errors block code review. Improving
+this skill (a new version in Skill Studio, then promoted) changes how the next review judges; improving a generation
+playbook and regenerating changes the code it judges.
+
+## Changes
+
+- 1.0.2: text-length narrowing follows Rule 2 exactly: not a type mismatch (the generator passes text through and
+  the Soda length checks guard it), a warning only without a Soda length check. 1.0.1 had made it an error, which
+  the rulebook does not.
+- 1.0.1: naming judged by the run's standard (the generic `landing_` layout and `_<model>.yml` are correct); casts only
+  on a type mismatch, with text narrowing named as one; `not_null` only where the mapping requires it; a Soda
+  duplicate check on the key is a recommendation. Grounded in the generator's rulebook, after v1.0.0 flagged correct
+  code on a generic run.

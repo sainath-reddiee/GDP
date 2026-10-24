@@ -5,7 +5,7 @@ import { api } from "@/lib/api";
 import { storeAction } from "@/lib/store-action";
 import type { DqHistory, DqScan, DqSuiteDetail, DqSuiteDiff } from "@/lib/store-types";
 
-const PATH = "/dashboard/dq-store";
+const PATH = "/os/design/dq-store";
 const post = (body: unknown) => ({ method: "POST", body: JSON.stringify(body) });
 
 export type CheckPayload = {

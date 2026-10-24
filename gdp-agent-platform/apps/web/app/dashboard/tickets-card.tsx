@@ -14,16 +14,16 @@ export function TicketsCard({ data }: { data: TicketsCardData }) {
   const shown = data.tickets.slice(0, 6);
   return (
     <Panel title="My tickets" icon={Ticket}
-           action={<Link href="/tickets?assignee=me" className="text-xs font-medium text-primary hover:underline">
+           action={<Link href="/os/run/tickets?assignee=me" className="text-xs font-medium text-primary hover:underline">
              {data.tickets.length > shown.length ? `All ${data.tickets.length}` : "Open Tickets"}</Link>}>
       <div data-testid="tickets-card" className="space-y-2">
-        {data.jiraConnect && <p className="text-xs text-muted-foreground">Connect your Jira account to see your Jira tickets here too. <Link href="/tickets" className="font-medium text-primary hover:underline">Connect Jira</Link></p>}
+        {data.jiraConnect && <p className="text-xs text-muted-foreground">Connect your Jira account to see your Jira tickets here too. <Link href="/os/run/tickets" className="font-medium text-primary hover:underline">Connect Jira</Link></p>}
         {data.error ? <p className="text-sm text-muted-foreground">Tickets could not be loaded right now.</p>
           : !shown.length ? <p className="text-sm text-muted-foreground">No open tickets assigned to you.</p> : (
           <ul className="divide-y divide-border/60">
             {shown.map((t) => {
               const jira = t.sources.includes("JIRA");
-              const href = jira ? `/tickets?tab=ticket&key=${encodeURIComponent(t.key)}` : `/qa/cases/${encodeURIComponent(t.case?.case_id ?? "")}`;
+              const href = jira ? `/os/run/tickets?tab=ticket&key=${encodeURIComponent(t.key)}` : `/os/release/qa/cases/${encodeURIComponent(t.case?.case_id ?? "")}`;
               return (
                 <li key={t.id} className="flex items-center gap-3 py-2">
                   <Link href={href} className="font-mono text-xs font-semibold text-primary hover:underline">{t.key}</Link>
@@ -33,7 +33,7 @@ export function TicketsCard({ data }: { data: TicketsCardData }) {
                   {t.priority && <span className="text-[11px] font-semibold text-muted-foreground">{t.priority}</span>}
                   {jira ? <StatusPill name={t.status} category={t.done ? "done" : null} /> : <span className="text-xs text-muted-foreground">{t.status}</span>}
                   {jira && (
-                    <Link href={`/dashboard/copilot?jira=${encodeURIComponent(t.key)}`} aria-label={`Work on ${t.key} in the Copilot`}
+                    <Link href={`/os/work/copilot?jira=${encodeURIComponent(t.key)}`} aria-label={`Work on ${t.key} in the Copilot`}
                           className="inline-flex h-7 items-center gap-1 rounded-md px-2 text-xs font-medium text-primary hover:bg-primary/10">
                       <Bot className="h-3.5 w-3.5" /> Copilot
                     </Link>

@@ -17,7 +17,7 @@ export default async function FixesPage({ searchParams }: { searchParams?: { sta
     <PageHeader eyebrow="Operations" title="Known fixes"
                 description="Fixes written from solved tickets and published by a second person. Only published fixes are ever run, and only on failures they match."
                 actions={can(me, "OPS.OPERATE") ? (
-                  <Link href="/ops/fixes/new" className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary/90"><Plus className="h-4 w-4" />New fix</Link>
+                  <Link href="/os/run/ops/fixes/new" className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary/90"><Plus className="h-4 w-4" />New fix</Link>
                 ) : undefined} />
   );
   if (!can(me, "OPS.VIEW")) return <div className="space-y-5">{header}<p className="rounded-xl border border-dashed p-6 text-sm text-muted-foreground">Known fixes need the OPS.VIEW privilege.</p></div>;
@@ -41,7 +41,7 @@ export default async function FixesPage({ searchParams }: { searchParams?: { sta
         <>
           <div className="flex flex-wrap gap-1.5" aria-label="Filter by status">
             {FILTERS.map((f) => (
-              <Link key={f || "all"} href={f ? `/ops/fixes?status=${f}` : "/ops/fixes"}
+              <Link key={f || "all"} href={f ? `/os/run/ops/fixes?status=${f}` : "/os/run/ops/fixes"}
                     className={cn("rounded-full border px-2.5 py-1 text-xs font-medium", status === f ? "border-primary bg-primary/10 text-primary" : "hover:bg-muted")}>
                 {f ? f.charAt(0) + f.slice(1).toLowerCase() : "All"}
               </Link>
@@ -62,7 +62,7 @@ export default async function FixesPage({ searchParams }: { searchParams?: { sta
                   {fixes.map((k) => (
                     <tr key={k.issue_id} className="align-top hover:bg-muted/30">
                       <td className="px-4 py-2.5">
-                        <Link href={`/ops/fixes/${encodeURIComponent(k.issue_id)}`} className="font-medium hover:text-primary">{k.title}</Link>
+                        <Link href={`/os/run/ops/fixes/${encodeURIComponent(k.issue_id)}`} className="font-medium hover:text-primary">{k.title}</Link>
                         {k.proposed_by_agent && <span className="ml-2 rounded-full bg-agent/10 px-2 py-0.5 text-[10px] font-semibold text-agent">Proposed by the agent</span>}
                         <p className="text-xs text-muted-foreground">{k.fix_type === "SKILL" ? `Skill ${k.skill_name ?? ""}` : k.procedure_fqn} · v{k.version_no} · by {k.created_by}{k.published_by ? `, published by ${k.published_by}` : ""}</p>
                       </td>

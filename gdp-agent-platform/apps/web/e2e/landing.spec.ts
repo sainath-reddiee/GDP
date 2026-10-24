@@ -37,7 +37,7 @@ test("a protected page visited signed out goes to sign-in", async ({ page }) => 
   await expect(page.getByTestId("sign-in-dialog")).toBeVisible();
 });
 
-test("sign in opens a small dialog and lands on My Work", async ({ page }) => {
+test("sign in opens a small dialog and lands on Home", async ({ page }) => {
   await page.goto("/");
   await page.getByTestId("open-sign-in").click();
   const dialog = page.getByTestId("sign-in-dialog");
@@ -46,8 +46,8 @@ test("sign in opens a small dialog and lands on My Work", async ({ page }) => {
   await expect(dialog).toHaveCount(0);
   await page.getByTestId("open-sign-in").click();
   await dialog.getByRole("button", { name: /Continue with Snowflake SSO/ }).click();
-  await page.waitForURL(/\/work$/);
-  await expect(page.getByRole("navigation", { name: "Main" }).getByText("Build", { exact: true }).first()).toBeVisible();
+  await page.waitForURL(/\/os$/);
+  await expect(page.getByRole("navigation", { name: "Agentic Data OS" }).first().getByRole("link", { name: "Home" })).toHaveAttribute("aria-current", "page");
 });
 
 test("an ended session opens the dialog with a notice", async ({ page }) => {
@@ -55,13 +55,15 @@ test("an ended session opens the dialog with a notice", async ({ page }) => {
   await expect(page.getByTestId("sign-in-dialog")).toContainText("Your session ended");
 });
 
-test("My Work is home after sign-in: what waits on you, your runs, and links into the Command Center", async ({ page, context }) => {
+test("Home is where everyone lands: the onboarded domains, the build workflows and Start a workflow; the Inbox keeps its address", async ({ page, context }) => {
   await context.addCookies([{ name: "aip_dev", value: "1", url: process.env.AIP_WEB_URL ?? "http://localhost:3000" }]);
   await page.goto("/");
-  await page.waitForURL(/\/work$/);
-  await expect(page.getByRole("heading", { level: 1 })).toContainText(/Good (morning|afternoon|evening)/);
+  await page.waitForURL(/\/os$/);
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText("Build workflows");
+  await expect(page.getByTestId("home-views")).toBeVisible();
+  await expect(page.getByTestId("start-panel")).toBeVisible();
+  await expect(page.getByTestId("onboarded-domains")).toBeVisible();
+  // the Inbox is no longer a tab of Home, and keeps its address
+  await page.goto("/os/work/inbox");
   for (const id of ["tiles", "approve", "runs", "fix", "knowledge", "proposals", "prs"]) await expect(page.getByTestId(`work-${id}`)).toBeVisible();
-  await expect(page.getByRole("navigation", { name: "Main" }).getByRole("link", { name: "My Work" })).toHaveAttribute("aria-current", "page");
-  await page.getByRole("link", { name: "Command Center" }).first().click();
-  await page.waitForURL(/\/dashboard$/);
 });

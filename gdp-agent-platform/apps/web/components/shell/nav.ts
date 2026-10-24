@@ -1,6 +1,6 @@
 import {
   Activity, Crown, BadgeCheck, BarChart3, BookOpen, Boxes, ClipboardCheck, Database, FileClock, FlaskConical, FolderGit2, GitCompareArrows, GitPullRequest,
-  Inbox, LayoutDashboard, ListChecks, TrendingUp, Network, Rocket, Settings, ShieldCheck, Siren, Sparkles, SquareTerminal, Store, Ticket, Wrench, BookCheck, Hammer,
+  Inbox, LayoutDashboard, ListChecks, Orbit, Network, Rocket, Settings, ShieldCheck, Siren, Sparkles, SquareTerminal, Store, Ticket, Wrench, BookCheck, Hammer,
 } from "lucide-react";
 import type { NavCounts } from "@/app/bff/nav/route";
 
@@ -25,22 +25,22 @@ const SHOW_INCIDENTS = true;
 /** The six asset stores, one entry under Store in the sidebar and one tab of the Store hub (components/hub/store-nav). */
 export const STORES: (NavLink & { id: string; short: string })[] = [
   {
-    id: "sources", short: "Sources", href: "/dashboard/sources", label: "Source Store", icon: Database,
+    id: "sources", short: "Sources", href: "/os/design/sources", label: "Source Store", icon: Database,
     badge: (c) => c.profiling ? { value: c.profiling, tone: "bg-amber-400 text-amber-950", title: `${c.profiling} profiling now` }
       : c.staged ? { value: c.staged, tone: "bg-white/10 text-white/70", title: `${c.staged} tables staged` } : null,
   },
-  { id: "profiling", short: "Profiling", href: "/dashboard/profiling", label: "Profiling Store", icon: BarChart3 },
-  { id: "modeling", short: "Modeling", href: "/dashboard/modeling", label: "Modeling Store", icon: Network },
+  { id: "profiling", short: "Profiling", href: "/os/design/profiling", label: "Profiling Store", icon: BarChart3 },
+  { id: "modeling", short: "Modeling", href: "/os/design/modeling", label: "Modeling Store", icon: Network },
   {
-    id: "sttm", short: "Data Mapping", href: "/dashboard/sttm", label: "Data Mapping Store", icon: GitCompareArrows,
+    id: "sttm", short: "Data Mapping", href: "/os/design/sttm", label: "Data Mapping Store", icon: GitCompareArrows,
     badge: (c) => c.sttm_pending ? { value: c.sttm_pending, tone: "bg-amber-400 text-amber-950", title: `${c.sttm_pending} mappings waiting for review` } : null,
   },
   {
-    id: "qa", short: "QA", href: "/dashboard/qa-store", label: "QA Store", icon: SquareTerminal,
+    id: "qa", short: "QA", href: "/os/design/qa-store", label: "QA Store", icon: SquareTerminal,
     badge: (c) => c.qa_pending ? { value: c.qa_pending, tone: "bg-blue-500 text-white", title: `${c.qa_pending} packs awaiting approval` } : null,
   },
   {
-    id: "quality", short: "Data Quality", href: "/dashboard/dq-store", label: "Data Quality Store", icon: ClipboardCheck,
+    id: "quality", short: "Data Quality", href: "/os/design/dq-store", label: "Data Quality Store", icon: ClipboardCheck,
     badge: (c) => c.dq_failing ? { value: c.dq_failing, tone: "bg-rose-500 text-white", title: `${c.dq_failing} checks failing` } : null,
   },
 ];
@@ -68,12 +68,13 @@ export const NAV_GROUPS: NavGroup[] = [
     label: "Work",
     links: [
       {
-        href: "/work", label: "My Work", icon: Inbox, exact: true,
+        href: "/os/work/inbox", label: "My Work", icon: Inbox, exact: true,
         badge: (c) => c.approvals ? { value: c.approvals, tone: "bg-human text-white", title: `${c.approvals} change requests waiting for you` } : null,
       },
-      { href: "/dashboard", label: "Overview", icon: LayoutDashboard, exact: true },
-      { href: "/dashboard/copilot", label: "Copilot", icon: Sparkles, privilege: "AI.USE" },
-      { href: "/value", label: "Value", icon: TrendingUp, privilege: "AUDIT.VIEW" },
+      { href: "/os/work/overview", label: "Overview", icon: LayoutDashboard, exact: true },
+      // the persona-led experience (app/os), with its own shell
+      { href: "/os", label: "Agentic Data OS", icon: Orbit },
+      { href: "/os/work/copilot", label: "Copilot", icon: Sparkles, privilege: "AI.USE" },
     ],
   },
   {
@@ -81,25 +82,25 @@ export const NAV_GROUPS: NavGroup[] = [
     // they build, then the stores and the knowledge. Onboard is an ordinary item, styled like every other one.
     label: "Build",
     links: [
-      { href: "/dashboard/onboarding", label: "Onboard", icon: Rocket },
+      { href: "/os/enable/onboarding?type=source", label: "Onboard source", icon: Rocket, privilege: "SOURCE.CONNECT" },
       {
-        href: "/runs", label: "Pipelines", icon: ListChecks, tabs: true,
+        href: "/os/build/runs", label: "Pipelines", icon: ListChecks, tabs: true,
         badge: (c) => c.review ? { value: c.review, tone: "bg-human text-white", title: `${c.review} waiting on review` }
           : c.running ? { value: c.running, tone: "bg-white/10 text-white/70", title: `${c.running} running` } : null,
         children: [
-          { href: "/runs", label: "Silver Pipeline", icon: ListChecks },
-          { href: "/gold", label: "Gold Pipeline", icon: Crown },
-          { href: "/lineage", label: "Lineage", icon: Network },
-          { href: "/code", label: "Code", icon: FolderGit2, privilege: "CODE.VIEW" },
+          { href: "/os/build/runs", label: "Silver Pipeline", icon: ListChecks },
+          { href: "/os/build/gold", label: "Gold Pipeline", icon: Crown },
+          { href: "/os/build/lineage", label: "Lineage", icon: Network },
+          { href: "/os/build/code", label: "Code", icon: FolderGit2, privilege: "CODE.VIEW" },
         ],
       },
-      { href: "/dashboard/store", label: "Stores", icon: Store, children: STORES, badge: storeBadge, tabs: true, ownTabs: true },
+      { href: "/os/design/store", label: "Stores", icon: Store, children: STORES, badge: storeBadge, tabs: true, ownTabs: true },
       {
-        href: "/domains", label: "Enterprise Memory", icon: BookOpen, tabs: true,
+        href: "/os/knowledge?view=domains", label: "Enterprise Memory", icon: BookOpen, tabs: true,
         children: [
-          { href: "/domains", label: "Domains", icon: Boxes },
-          { href: "/knowledge", label: "Enterprise Memory", icon: BookOpen },
-          { href: "/skills", label: "Agent Skills", icon: Sparkles },
+          { href: "/os/knowledge?view=domains", label: "Domains", icon: Boxes },
+          { href: "/os/knowledge", label: "Enterprise Memory", icon: BookOpen },
+          { href: "/os/skills/registry", label: "Agent Skills", icon: Sparkles },
         ],
       },
     ],
@@ -108,27 +109,27 @@ export const NAV_GROUPS: NavGroup[] = [
     label: "Run",
     links: [
       {
-        href: "/dashboard/quality", label: "Quality", icon: BadgeCheck, tabs: true,
+        href: "/os/run/quality", label: "Quality", icon: BadgeCheck, tabs: true,
         badge: (c) => n(c.dq_failing) ? { value: n(c.dq_failing), tone: "bg-rose-500 text-white", title: `${n(c.dq_failing)} checks failing` } : null,
         children: [
-          { href: "/dashboard/quality", label: "Quality center", icon: BadgeCheck },
-          { href: "/qa", label: "QA testing", icon: FlaskConical, privilege: "QA.EDIT" },
+          { href: "/os/run/quality", label: "Quality center", icon: BadgeCheck },
+          { href: "/os/release/qa", label: "QA testing", icon: FlaskConical, privilege: "QA.EDIT" },
         ],
       },
       {
-        href: "/ops", label: "Operations", icon: Activity, tabs: true,
+        href: "/os/run/ops", label: "Operations", icon: Activity, tabs: true,
         badge: (c) => {
           const v = c.incidents + n(c.jira_open) + n(c.cases_mine);
           return v ? { value: v, tone: c.incidents ? "bg-rose-500 text-white" : "bg-sky-500 text-white",
                        title: `${c.incidents} open incidents; ${n(c.jira_open) + n(c.cases_mine)} tickets assigned to you` } : null;
         },
         children: [
-          { href: "/ops", label: "Monitoring", icon: Activity, privilege: "OPS.VIEW" },
-          ...(SHOW_INCIDENTS ? [{ href: "/incidents", label: "Incidents", icon: Siren, privilege: "OPS.VIEW" }] : []),
-          { href: "/ops/resolutions", label: "Resolutions", icon: Wrench, privilege: "OPS.VIEW" },
-          { href: "/ops/fixes", label: "Known fixes", icon: BookCheck, privilege: "OPS.VIEW" },
-          { href: "/ops/permanent-fixes", label: "Permanent fixes", icon: Hammer, privilege: "OPS.VIEW" },
-          { href: "/tickets", label: "Tickets", icon: Ticket, privilege: ["JIRA.READ", "CASE.WORK"] },
+          { href: "/os/run/ops", label: "Monitoring", icon: Activity, privilege: "OPS.VIEW" },
+          ...(SHOW_INCIDENTS ? [{ href: "/os/run/incidents", label: "Incidents", icon: Siren, privilege: "OPS.VIEW" }] : []),
+          { href: "/os/run/ops/resolutions", label: "Resolutions", icon: Wrench, privilege: "OPS.VIEW" },
+          { href: "/os/run/ops/fixes", label: "Known fixes", icon: BookCheck, privilege: "OPS.VIEW" },
+          { href: "/os/run/ops/permanent-fixes", label: "Permanent fixes", icon: Hammer, privilege: "OPS.VIEW" },
+          { href: "/os/run/tickets", label: "Tickets", icon: Ticket, privilege: ["JIRA.READ", "CASE.WORK"] },
         ],
       },
     ],
@@ -137,13 +138,13 @@ export const NAV_GROUPS: NavGroup[] = [
     label: "Govern",
     links: [
       {
-        href: "/approvals", label: "Governance", icon: ShieldCheck, tabs: true,
+        href: "/os/review/approvals", label: "Governance", icon: ShieldCheck, tabs: true,
         badge: (c) => c.approvals ? { value: c.approvals, tone: "bg-human text-white", title: `${c.approvals} waiting for you` } : null,
         children: [
-          { href: "/approvals", label: "Approvals", icon: ShieldCheck },
-          { href: "/dashboard/source-control", label: "Source control", icon: GitPullRequest },
-          { href: "/audit", label: "Audit", icon: FileClock, privilege: "AUDIT.VIEW" },
-          { href: "/admin", label: "Admin", icon: Settings, privilege: "ADMIN.VIEW" },
+          { href: "/os/review/approvals", label: "Approvals", icon: ShieldCheck },
+          { href: "/os/release/source-control", label: "Source control", icon: GitPullRequest },
+          { href: "/os/admin/audit", label: "Audit", icon: FileClock, privilege: "AUDIT.VIEW" },
+          { href: "/os/admin/settings", label: "Admin", icon: Settings, privilege: "ADMIN.VIEW" },
         ],
       },
     ],

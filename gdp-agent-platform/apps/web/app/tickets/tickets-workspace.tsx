@@ -43,7 +43,7 @@ export function TicketsWorkspace({ initial, filters, openNew, access, jira, me, 
     setTab(next); setKey(nextKey);
     if (next !== "list") {   // the list keeps its own filters in the URL
       const p = new URLSearchParams({ tab: next, ...(next === "ticket" && nextKey ? { key: nextKey } : {}) });
-      window.history.replaceState(window.history.state, "", `/tickets?${p}`);
+      window.history.replaceState(window.history.state, "", `/os/run/tickets?${p}`);
     }
   };
   // the reused QA views speak in their own tab names: inbox (Jira search) and triage (one ticket)
@@ -68,7 +68,7 @@ export function TicketsWorkspace({ initial, filters, openNew, access, jira, me, 
           ))}
         </nav>
         <div className="mb-1.5 ml-auto flex gap-2">
-          <Link href="/dashboard/copilot" className="inline-flex h-8 items-center gap-1.5 rounded-lg border px-3 text-xs font-medium hover:bg-muted">
+          <Link href="/os/work/copilot" className="inline-flex h-8 items-center gap-1.5 rounded-lg border px-3 text-xs font-medium hover:bg-muted">
             <Bot className="h-3.5 w-3.5 text-primary" /> Ask the Copilot
           </Link>
           <div className="relative" ref={menuRef}>

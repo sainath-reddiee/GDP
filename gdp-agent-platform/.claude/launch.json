@@ -2,16 +2,85 @@
   "version": "0.0.1",
   "configurations": [
     {
+      "name": "ados-api",
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": ["/c", "C:\\Users\\SATYAS~1.P\\AppData\\Local\\Temp\\claude\\C--Users-satyasainath-p-OneDrive---Anblicks-Agent---code-GDP-gdp-agent-platform\\51461ba9-5117-4705-a7a2-fdfd6762c46b\\scratchpad\\ados_api.cmd"],
+      "port": 8001
+    },
+    {
+      "name": "ados-web-prod",
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": ["/c", "C:\\Users\\SATYAS~1.P\\AppData\\Local\\Temp\\claude\\C--Users-satyasainath-p-OneDrive---Anblicks-Agent---code-GDP-gdp-agent-platform\\51461ba9-5117-4705-a7a2-fdfd6762c46b\\scratchpad\\ados_web_prod.cmd"],
+      "port": 3000
+    },
+    {
+      "name": "ados-web",
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": ["/c", "C:\\Users\\SATYAS~1.P\\AppData\\Local\\Temp\\claude\\C--Users-satyasainath-p-OneDrive---Anblicks-Agent---code-GDP-gdp-agent-platform\\51461ba9-5117-4705-a7a2-fdfd6762c46b\\scratchpad\\ados_web.cmd"],
+      "port": 3000
+    },
+    {
+      "name": "api-local",
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": [
+        "/c",
+        "C:\\Users\\SATYAS~1.P\\AppData\\Local\\Temp\\claude\\C--Users-satyasainath-p-OneDrive---Anblicks-Agent---code-GDP-gdp-agent-platform\\6b08263d-9901-4c3a-bf92-7bf7159c7122\\scratchpad\\api_local.cmd"
+      ],
+      "port": 8021
+    },
+    {
       "name": "worktree-api",
       "runtimeExecutable": "cmd",
-      "runtimeArgs": ["/c", "cd /d C:\\Users\\satyasainath.p\\gdp-dev\\gdp-agent-platform\\apps\\api && python -m uvicorn app.main:app --host 127.0.0.1 --port 8011"],
+      "runtimeArgs": [
+        "/c",
+        "cd /d C:\\Users\\satyasainath.p\\gdp-dev\\gdp-agent-platform\\apps\\api && python -m uvicorn app.main:app --host 127.0.0.1 --port 8011"
+      ],
       "port": 8011
     },
     {
       "name": "worktree-web",
       "runtimeExecutable": "cmd",
-      "runtimeArgs": ["/c", "cd /d C:\\Users\\satyasainath.p\\gdp-dev\\gdp-agent-platform\\apps\\web && npx next dev -p 3011"],
+      "runtimeArgs": [
+        "/c",
+        "cd /d C:\\Users\\satyasainath.p\\gdp-dev\\gdp-agent-platform\\apps\\web && npx next dev -p 3011"
+      ],
       "port": 3011
+    },
+    {
+      "name": "resolve-api-rehearsal",
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": [
+        "/c",
+        "C:\\Users\\SATYAS~1.P\\AppData\\Local\\Temp\\claude\\C--Users-satyasainath-p-OneDrive---Anblicks-Agent---code-GDP-gdp-agent-platform\\6b08263d-9901-4c3a-bf92-7bf7159c7122\\scratchpad\\lab_api.cmd"
+      ],
+      "port": 8021
+    },
+    {
+      "name": "resolve-web-rehearsal",
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": [
+        "/c",
+        "C:\\Users\\SATYAS~1.P\\AppData\\Local\\Temp\\claude\\C--Users-satyasainath-p-OneDrive---Anblicks-Agent---code-GDP-gdp-agent-platform\\6b08263d-9901-4c3a-bf92-7bf7159c7122\\scratchpad\\web3021.cmd"
+      ],
+      "port": 3021
+    },
+    {
+      "name": "lab-airflow",
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": [
+        "/c",
+        "C:\\Users\\SATYAS~1.P\\AppData\\Local\\Temp\\claude\\C--Users-satyasainath-p-OneDrive---Anblicks-Agent---code-GDP-gdp-agent-platform\\6b08263d-9901-4c3a-bf92-7bf7159c7122\\scratchpad\\lab_airflow.cmd"
+      ],
+      "port": 8080
+    },
+    {
+      "name": "lab-worker",
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": [
+        "/c",
+        "C:\\Users\\SATYAS~1.P\\AppData\\Local\\Temp\\claude\\C--Users-satyasainath-p-OneDrive---Anblicks-Agent---code-GDP-gdp-agent-platform\\6b08263d-9901-4c3a-bf92-7bf7159c7122\\scratchpad\\lab_worker.cmd"
+      ],
+      "port": 8099
     }
   ]
 }

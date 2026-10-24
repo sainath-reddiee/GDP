@@ -24,6 +24,21 @@ const CopilotCtx = createContext<{ setFocus: (f: Focus) => void; open: (question
 /** Pages tell the copilot which table is in view (e.g. an open profile) and can open it with a question. */
 export const useCopilot = () => useContext(CopilotCtx);
 
+/** The header's Copilot button: opens the Copilot page (the chat workspace). Ctrl+J still opens the quick drawer for a
+ *  question about the page on screen. Not on the Copilot page itself, nor for people who may not use AI. */
+export function CopilotButton({ className }: { className?: string }) {
+  const { can } = useAccess();
+  const pathname = usePathname() ?? "";
+  if (!can("AI.USE") || pathname.startsWith("/os/work/copilot")) return null;
+  return (
+    <Link href="/os/work/copilot" title="Copilot: chat, saved conversations, attachments (Ctrl+J for a quick question)" data-copilot-launcher
+          className={className}>
+      <Sparkles className="h-4 w-4" />
+      <span className="hidden lg:inline">Copilot</span>
+    </Link>
+  );
+}
+
 const STAGE_LABEL: Record<string, string> = {
   profile: "Profiling", domain: "Domain", modeling: "Mapping", mapping: "Mapping", sttm: "Mapping", soda: "Data Quality", qa: "QA tests",
   dbt: "Silver Code Generation", validation: "Validation", review: "Code review", source: "Source Ingestion", landing: "Landing", access: "Access",
@@ -31,9 +46,10 @@ const STAGE_LABEL: Record<string, string> = {
 
 function describe(page: CopilotPage): string {
   if (page.table) return `${page.database}.${page.schema}.${page.table}`;
+  if (page.path === "/os") return "Home";
   const run = page.path.match(/^\/runs\/[0-9a-f-]{36}(?:\/([a-z]+))?/);
   if (run) return `Run · ${run[1] ? STAGE_LABEL[run[1]] ?? run[1] : "Overview"}`;
-  if (page.path.startsWith("/sources") || page.path.startsWith("/dashboard/sources")) return page.schema ? `Sources · ${page.database}.${page.schema}` : "Sources";
+  if (page.path.startsWith("/sources") || page.path.startsWith("/os/design/sources")) return page.schema ? `Sources · ${page.database}.${page.schema}` : "Sources";
   return (page.path.split("/")[1] || "dashboard").replace(/^\w/, (c) => c.toUpperCase());
 }
 
@@ -82,9 +98,6 @@ function CopilotShell({ children }: { children: ReactNode }) {
   const [show, setShow] = useState(false);
   const { can } = useAccess();
   const [wide, setWide] = useState(false);
-  const [unread, setUnread] = useState(false);
-  const showRef = useRef(show);
-  showRef.current = show;
   const [messages, setMessages] = useState<Message[]>([]);
   const [conversation, setConversation] = useState<string | null>(null);
   const [input, setInput] = useState("");
@@ -124,7 +137,7 @@ function CopilotShell({ children }: { children: ReactNode }) {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
-  useEffect(() => { if (show) { setUnread(false); setTimeout(() => inputRef.current?.focus(), 50); } }, [show]);
+  useEffect(() => { if (show) setTimeout(() => inputRef.current?.focus(), 50); }, [show]);
   useEffect(() => { listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: "smooth" }); }, [messages, busy]);
 
   const send = useCallback(async (text: string) => {
@@ -144,7 +157,6 @@ function CopilotShell({ children }: { children: ReactNode }) {
     if (r.ok) {
       setConversation(r.data.conversation_id);
       setMessages((m) => [...m, { role: "assistant", content: r.data.answer, data: r.data }]);
-      if (!showRef.current) setUnread(true);
     } else {
       setMessages((m) => [...m, { role: "assistant", content: r.error, error: true }]);
     }
@@ -158,28 +170,20 @@ function CopilotShell({ children }: { children: ReactNode }) {
   return (
     <CopilotCtx.Provider value={{ setFocus, open, shown: show }}>
       {children}
-      {/* the Copilot workspace is the full version of this drawer; its own controls sit where the launcher would */}
-      {can("AI.USE") && !pathname.startsWith("/dashboard/copilot") && <button type="button" onClick={() => setShow((v) => !v)} aria-label={show ? "Close copilot" : "Open copilot"}
-              title="Copilot (Ctrl+J)" aria-expanded={show} data-copilot-launcher
-              className={cn("fixed bottom-5 right-5 z-[71] grid h-14 w-14 place-items-center rounded-full bg-primary text-white shadow-lg ring-4 ring-background transition hover:scale-105 hover:shadow-xl",
-                            show && "max-sm:hidden")}>
-        {show ? <X className="h-6 w-6" /> : <Sparkles className="h-6 w-6" />}
-        {unread && !show && <span className="absolute right-1 top-1 h-3 w-3 rounded-full bg-destructive ring-2 ring-background" />}
-      </button>}
       {show && can("AI.USE") && (
         <aside role="dialog" aria-label="Copilot"
                className={cn("fixed z-[70] flex flex-col overflow-hidden bg-background shadow-2xl",
                              "max-sm:inset-0",
                              wide
                                ? "sm:inset-y-0 sm:right-0 sm:w-full sm:max-w-[520px] sm:border-l"
-                               : "sm:bottom-24 sm:right-5 sm:h-[min(640px,calc(100vh-8rem))] sm:w-[400px] sm:origin-bottom-right sm:rounded-2xl sm:border sm:animate-[copilot-in_160ms_ease-out]")}>
+                               : "sm:right-5 sm:top-[66px] sm:h-[min(640px,calc(100vh-5.5rem))] sm:w-[400px] sm:origin-top-right sm:rounded-2xl sm:border sm:animate-[copilot-in_160ms_ease-out]")}>
           <header className="flex items-center gap-3 border-b bg-accent px-4 py-3">
             <span className="grid h-8 w-8 place-items-center rounded-xl bg-primary text-white"><Bot className="h-4 w-4" /></span>
             <div className="min-w-0">
               <p className="text-sm font-semibold">Copilot</p>
               <p className="truncate text-[11px] text-muted-foreground" title={label}>Looking at {label}</p>
             </div>
-            <Link href="/dashboard/copilot" onClick={() => setShow(false)} data-testid="copilot-open-full"
+            <Link href="/os/work/copilot" onClick={() => setShow(false)} data-testid="copilot-open-full"
                   title="Open the full Copilot: saved chats, attachments, Jira issues and drafted changes"
                   className="ml-auto inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-primary hover:bg-primary/10">
               Full Copilot <ArrowRight className="h-3 w-3" />

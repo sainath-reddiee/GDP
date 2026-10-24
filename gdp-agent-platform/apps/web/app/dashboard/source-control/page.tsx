@@ -15,7 +15,7 @@ export default async function SourceControlPage({ searchParams }: { searchParams
   const qs = new URLSearchParams(Object.entries(searchParams).filter(([, v]) => !!v) as [string, string][]).toString();
   const data = await api<Listing>(`/api/source-control/prs${qs ? `?${qs}` : ""}`).catch(() => null);
   const c = data?.counts;
-  const base = (state?: string) => `/dashboard/source-control${state ? `?state=${state}` : ""}`;
+  const base = (state?: string) => `/os/release/source-control${state ? `?state=${state}` : ""}`;
   return (
     <div className="space-y-6">
       <PageHeader eyebrow="Governance" title="Source control"

@@ -69,9 +69,9 @@ function linkHref(l: CaseLink): string | null {
   if (own) return own;
   switch (up(l.kind)) {
     case "INCIDENT": return incidentHref(l.ref);
-    case "RUN": return `/runs/${encodeURIComponent(l.ref)}`;
+    case "RUN": return `/os/build/runs/${encodeURIComponent(l.ref)}`;
     case "CASE": return caseHref(l.ref);
-    case "JIRA": return `/tickets?tab=ticket&key=${encodeURIComponent(l.ref)}`;
+    case "JIRA": return `/os/run/tickets?tab=ticket&key=${encodeURIComponent(l.ref)}`;
     default: return null;
   }
 }
@@ -224,7 +224,7 @@ export function CaseView({ initial, canWork, canResolve, canAI, canDbt, canJira,
     <div className="space-y-5">
       <div className="space-y-2">
         <p className="eyebrow">
-          <Link href="/tickets?source=case" className="hover:underline">Tickets</Link>
+          <Link href="/os/run/tickets?source=case" className="hover:underline">Tickets</Link>
           <span className="mx-1.5 text-muted-foreground">/</span>
           <span className="font-mono normal-case tracking-normal text-muted-foreground">{c.number}</span>
         </p>
@@ -253,7 +253,7 @@ export function CaseView({ initial, canWork, canResolve, canAI, canDbt, canJira,
           <SourceChip source={c.source} />
           <span>· {c.domain_name ?? "General"}</span>
           {c.target_fqn && <span>· <span className="font-mono">{c.target_fqn}</span></span>}
-          {c.run_id && <span>· run <Link href={`/runs/${encodeURIComponent(c.run_id)}`} className="font-mono text-primary hover:underline">{c.run_id.slice(0, 8)}</Link></span>}
+          {c.run_id && <span>· run <Link href={`/os/build/runs/${encodeURIComponent(c.run_id)}`} className="font-mono text-primary hover:underline">{c.run_id.slice(0, 8)}</Link></span>}
         </div>
         <dl className="flex flex-wrap gap-x-5 gap-y-1 text-xs">
           <div><dt className="inline text-muted-foreground">Assignee </dt><dd className="inline">{c.assignee ?? "nobody"}</dd></div>

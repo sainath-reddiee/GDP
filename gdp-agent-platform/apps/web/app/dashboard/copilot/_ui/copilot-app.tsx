@@ -119,7 +119,7 @@ export function CopilotApp({ sessions: initialSessions, initial, disabled, initi
         createdHere.current = true;
         setSessionId(id); setTitle(name);
         setSessions((xs) => [{ session_id: id, title: name, status: "OPEN", updated_at: new Date().toISOString() }, ...xs]);
-        window.history.replaceState(null, "", `/dashboard/copilot/${id}`);
+        window.history.replaceState(null, "", `/os/work/copilot/${id}`);
         return id;
       } catch {
         creating.current = null;
@@ -135,7 +135,7 @@ export function CopilotApp({ sessions: initialSessions, initial, disabled, initi
   const settleRoute = useCallback((id: string) => {
     if (!createdHere.current) return;
     createdHere.current = false;
-    router.replace(`/dashboard/copilot/${id}`, { scroll: false });
+    router.replace(`/os/work/copilot/${id}`, { scroll: false });
   }, [router]);
 
   const attach = useCallback(async (files: File[]) => {
@@ -286,8 +286,8 @@ export function CopilotApp({ sessions: initialSessions, initial, disabled, initi
   const open = changes.filter((c) => c.status === "PROPOSED");
   const started = items.length > 0 || busy;
   const newConversation = () => {
-    if (!initial && sessionId) { window.location.assign("/dashboard/copilot"); return; }  // started here: start clean
-    router.push("/dashboard/copilot");
+    if (!initial && sessionId) { window.location.assign("/os/work/copilot"); return; }  // started here: start clean
+    router.push("/os/work/copilot");
   };
   const composer = (hero: boolean) => (
     <Composer value={draft} onChange={setDraft} onSend={() => void send()} busy={busy || publishing} disabled={disabled} hero={hero} autoFocus
@@ -308,7 +308,7 @@ export function CopilotApp({ sessions: initialSessions, initial, disabled, initi
     const r = await deleteCopilotSession(id).catch(() => null);
     if (!r?.ok) { sayError(r ? r.error : "The conversation could not be deleted."); return false; }
     setSessions((xs) => xs.filter((s) => s.session_id !== id));
-    if (id === sessionId) window.location.assign("/dashboard/copilot");
+    if (id === sessionId) window.location.assign("/os/work/copilot");
     return true;
   };
   const list = (

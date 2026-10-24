@@ -131,7 +131,7 @@ export function IncidentView({ initial, envName, askAck, canOperate, canAI, canC
     <div className="space-y-5">
       <div className="space-y-2">
         <p className="eyebrow">
-          <Link href="/incidents" className="hover:underline">Incidents</Link>
+          <Link href="/os/run/incidents" className="hover:underline">Incidents</Link>
           <span className="mx-1.5 text-muted-foreground">/</span>
           <span className="normal-case tracking-normal text-muted-foreground">{envName}</span>
         </p>
@@ -143,7 +143,7 @@ export function IncidentView({ initial, envName, askAck, canOperate, canAI, canC
           <IncidentStatusPill status={inc.status} />
           <KindPill kind={inc.kind} />
           {inc.dq_table ? (
-            <span>Table <Link href={`/dashboard/dq-store/suite?table=${encodeURIComponent(inc.dq_table)}`} className="font-mono text-primary hover:underline">{inc.dq_table}</Link>
+            <span>Table <Link href={`/os/design/dq-store/suite?table=${encodeURIComponent(inc.dq_table)}`} className="font-mono text-primary hover:underline">{inc.dq_table}</Link>
               {inc.run_id && <> · scan <span className="font-mono">{inc.run_id.slice(0, 8)}</span></>}</span>
           ) : (<>
             <span>DAG <Link href={dagRunHref(inc.env_id, inc.dag_id)} className="font-mono text-primary hover:underline">{inc.dag_id}</Link></span>

@@ -96,7 +96,7 @@ export function JiraGate({ jira, returnTo, children }: { jira: JiraStatus | null
   if (!jira.installed) return <Empty title="Jira is not installed" text="It needs the latest deploy (migration V027). Ask a platform admin." />;
   if (!jira.ready) {
     return <Empty title="Jira is not set up yet" text="A platform admin connects the Jira site once in Admin, Integrations, Jira; then each engineer signs in with their own account."
-                  action={<Link href="/admin?section=integrations&view=jira" className="text-sm text-primary hover:underline">Open Jira setup</Link>} />;
+                  action={<Link href="/os/admin/settings?section=integrations&view=jira" className="text-sm text-primary hover:underline">Open Jira setup</Link>} />;
   }
   if (!jira.connected) {
     return <ConnectJira returnTo={returnTo}

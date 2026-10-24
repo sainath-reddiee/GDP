@@ -29,7 +29,7 @@ import { ReferencesTab } from "./references-tab";
 import { MdmRules } from "./mdm-rules";
 import { SourcesTab } from "./sources-tab";
 import { Avatar, cleanDescription, DomainMark } from "../domain-ui";
-import type { DomainCard } from "../page";
+import type { DomainCard } from "../domains-screen";
 
 export type DomainDetail = {
   domain: { domain_id: string; domain_name: string; description: string | null; owner: string | null };
@@ -169,7 +169,7 @@ export function DomainView({ detail, versions, unrecorded, members, rules, targe
             <div><dt className="text-xs text-muted-foreground">Mastered keys</dt><dd className="text-xs">{String(meta.mdm_role ?? "").toUpperCase() === "MASTERED"
               ? "Its gold is the conformed dimension in gdp-dbt" : meta.consumes ? `Resolves ${meta.consumes.toLowerCase().replace(",", " and ")} through Reltio's cross-reference` : "Not linked to MDM"}</dd></div>
           </dl>
-          <div className="mt-3 flex gap-3 text-xs"><Link href="/gold" className="text-primary hover:underline">Gold Pipeline</Link>
+          <div className="mt-3 flex gap-3 text-xs"><Link href="/os/build/gold" className="text-primary hover:underline">Gold Pipeline</Link>
             <button type="button" onClick={() => go("playbook")} className="text-primary hover:underline">Gold playbook</button></div>
         </Panel>
       )}
@@ -386,7 +386,7 @@ function KnowledgeTab({ domainId, mix, feed, card, layer }: { domainId: string; 
               <p className="flex flex-wrap items-center gap-1.5"><OriginChip origin={f.origin} short /><span className="font-medium">{f.title}</span>
                 <span className="text-muted-foreground">{prettyType(f.knowledge_type)} · v{f.version}</span>{f.status !== "ACTIVE" && <StatusPill status={f.status} />}
                 {(f.layer === "SILVER" || f.layer === "GOLD") && <span className={cn("rounded px-1 py-0.5 text-[9px] font-semibold", LAYER_META[f.layer].chip)}>{LAYER_META[f.layer].label}</span>}</p>
-              <p className="text-muted-foreground">{f.created_by} · {ago(f.created_at)}{f.source_run_id && <> · run <Link className="text-primary hover:underline" href={`/runs/${f.source_run_id}`}>{f.run_name ?? f.source_run_id.slice(0, 8)}</Link></>}</p>
+              <p className="text-muted-foreground">{f.created_by} · {ago(f.created_at)}{f.source_run_id && <> · run <Link className="text-primary hover:underline" href={`/os/build/runs/${f.source_run_id}`}>{f.run_name ?? f.source_run_id.slice(0, 8)}</Link></>}</p>
             </li>
           ))}
           {!feed.length && <li className="text-sm text-muted-foreground">Nothing learned for this domain yet.</li>}

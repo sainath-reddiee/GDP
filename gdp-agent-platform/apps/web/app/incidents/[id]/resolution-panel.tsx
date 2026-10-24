@@ -33,7 +33,7 @@ export function ResolutionPanel({ incidentId, status, canApprove, canWrite }: {
 
   if (data === undefined) return <p className="flex items-center gap-2 text-xs text-muted-foreground"><Loader2 className="h-3.5 w-3.5 animate-spin" />Loading</p>;
   const write = canWrite && (status === "RESOLVED" || data?.failure.status === "TICKETED") && (
-    <Link href={`/ops/fixes/new?incident=${encodeURIComponent(incidentId)}`} className="inline-flex items-center gap-1.5 text-xs font-medium text-primary hover:underline">
+    <Link href={`/os/run/ops/fixes/new?incident=${encodeURIComponent(incidentId)}`} className="inline-flex items-center gap-1.5 text-xs font-medium text-primary hover:underline">
       <BookCheck className="h-3.5 w-3.5" />Write a known fix from this incident
     </Link>
   );
@@ -54,7 +54,7 @@ export function ResolutionPanel({ incidentId, status, canApprove, canWrite }: {
         <span className="text-xs text-muted-foreground">{f.task_id} · try {f.try_number ?? "-"} · scope {flowLabel(f.flow_mode)}</span>
         {count > 1 && <span className="text-xs text-muted-foreground">· {count} failures</span>}
       </p>
-      {data.issue && <p className="text-xs">Known fix: <Link href={`/ops/fixes/${encodeURIComponent(data.issue.issue_id)}`} className="font-medium text-primary hover:underline">{data.issue.title}</Link> ({score(f.search_score)} match)</p>}
+      {data.issue && <p className="text-xs">Known fix: <Link href={`/os/run/ops/fixes/${encodeURIComponent(data.issue.issue_id)}`} className="font-medium text-primary hover:underline">{data.issue.title}</Link> ({score(f.search_score)} match)</p>}
       {open && (canApprove
         ? <FixDecision approvalId={open.approval_id} fixTitle={data.issue?.title} approver={open.approver} compact
                        proposal={open.kind === "PROPOSAL" ? { cause: f.rca?.cause, rationale: f.rca?.proposal?.rationale, steps: f.rca?.proposal?.steps } : null} />
@@ -62,7 +62,7 @@ export function ResolutionPanel({ incidentId, status, canApprove, canWrite }: {
       {f.rca?.cause && <p className="text-xs"><span className="font-medium">Root cause ({f.rca.mode}):</span> {f.rca.cause}</p>}
       {f.status === "RESOLVED" && <p className="text-xs text-success">Fixed automatically{f.clear_state === "DONE" ? "; the Airflow task was cleared to run again" : ""}.</p>}
       <div className="flex flex-wrap items-center gap-4">
-        <Link href={`/ops/resolutions/${encodeURIComponent(f.failure_id)}`} className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline">
+        <Link href={`/os/run/ops/resolutions/${encodeURIComponent(f.failure_id)}`} className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline">
           Full path <ArrowRight className="h-3 w-3" />
         </Link>
         {write}

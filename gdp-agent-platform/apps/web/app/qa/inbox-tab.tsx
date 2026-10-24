@@ -30,7 +30,7 @@ type Source = { kind: "jql"; jql: string; label: string } | { kind: "filter"; fi
 const MINE_JQL = "";
 const MAX_BULK = 50;
 const COMMON_TRANSITIONS = ["To Do", "In Progress", "In Review", "Ready for QA", "In QA", "QA Passed", "QA Failed", "Reopened", "Done"];
-const RETURN_TO = "/tickets?tab=jira";
+const RETURN_TO = "/os/run/tickets?tab=jira";
 
 export function InboxTab({ jira, access, go }: { jira: JiraStatus | null; access: Access; go: Go }) {
   return (
@@ -146,7 +146,7 @@ function Inbox({ access, go, who }: { access: Access; go: Go; who: string }) {
                   <td className="px-2 py-2 text-right text-xs tabular-nums">{i.linked ? <span className="inline-flex items-center gap-1 text-primary"><Link2 className="h-3 w-3" />{i.linked}</span> : <span className="text-muted-foreground">0</span>}</td>
                   {access.canCase && <td className="whitespace-nowrap px-2 py-2 text-right"><OpenCaseButton variant="ghost" open={() => caseFromJira(i.key)} /></td>}
                   <td className="whitespace-nowrap px-2 py-2 text-right">
-                    <Link href={`/dashboard/copilot?jira=${encodeURIComponent(i.key)}`} title="Work on it in the Copilot"
+                    <Link href={`/os/work/copilot?jira=${encodeURIComponent(i.key)}`} title="Work on it in the Copilot"
                           aria-label={`Work on ${i.key} in the Copilot`}
                           className="inline-flex h-7 items-center gap-1 rounded-md px-2 text-xs font-medium text-primary hover:bg-primary/10">
                       <Bot className="h-3.5 w-3.5" /> Copilot

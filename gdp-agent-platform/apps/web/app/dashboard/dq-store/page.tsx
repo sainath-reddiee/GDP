@@ -40,7 +40,7 @@ export default async function DqStorePage({ searchParams }: { searchParams: Para
         <Kpi label="Scheduled tables" value={summary?.scheduled_tables ?? 0} hint="each one a Snowflake task" icon={CalendarClock} tone="sky" />
       </div>
       <PendingChanges path="/api/dq/" what="data quality change" />
-      <StoreTabs base="/dashboard/dq-store" current={view} keep={{ domain: searchParams.domain }}
+      <StoreTabs base="/os/design/dq-store" current={view} keep={{ domain: searchParams.domain }}
                  tabs={[{ id: "catalog", label: "Store catalog", count: summary?.checks ?? null }, { id: "runs", label: "Run checks" }]} />
       {view === "runs" && (!runChecks ? <p className="text-sm text-destructive">Run checks could not be loaded{domain ? ` for domain ${domain}` : ""}.</p>
         : !runChecks.deployed ? <NotDeployed what="Run data quality checks (CORE.SODA_EXPECTATION_REGISTRY)" />

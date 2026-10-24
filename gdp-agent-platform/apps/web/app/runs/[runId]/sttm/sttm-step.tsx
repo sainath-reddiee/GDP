@@ -10,6 +10,8 @@ import { generateSttm } from "../pipeline-actions";
 import { SttmBoard, type ProfileCol, type SttmLine } from "./sttm-board";
 import { SttmGate } from "./sttm-gate";
 import { JoinPlan, type JoinGraph } from "./join-plan";
+import type { MappingOverview } from "@/lib/types";
+import { TableRunsPanel } from "../mapping/table-runs";
 
 /** Mapping, step 2: transformations and joins (the STTM contract, join plan, STTM gate). */
 export async function SttmStep({ runId }: { runId: string }) {
@@ -22,6 +24,17 @@ export async function SttmStep({ runId }: { runId: string }) {
         }>(`/api/runs/${params.runId}/sttm`),
     api<{ columns: ProfileCol[] }>(`/api/runs/${params.runId}/profile`).catch(() => ({ columns: [] })),
   ]);
+  // a run mapped to a hub and its spokes continues in one table run per table: each generates its own Data Mapping
+  const tableRuns = ["MAPPING_APPROVED", "STTM_PENDING"].includes(state.current_state)
+    ? (await api<MappingOverview>(`/api/runs/${params.runId}/mapping`).catch(() => null))?.table_runs ?? []
+    : [];
+  if (tableRuns.length) {
+    return (
+      <StageGate state={state} stage="STTM">
+        <TableRunsPanel runId={params.runId} runs={tableRuns} canPublish={canAct(me, "DBT.EDIT")} />
+      </StageGate>
+    );
+  }
   const canGenerate = can(me, "RUN.OPERATE") && ["MAPPING_APPROVED", "STTM_PENDING"].includes(state.current_state);
   const canEdit = canAct(me, "STTM.EDIT") && can(me, "AI.USE") && ["STTM_REVIEW", "STTM_PENDING"].includes(state.current_state);
   const raw = contract.sttm?.table_design;

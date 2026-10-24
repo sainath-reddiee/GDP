@@ -27,7 +27,7 @@ export function Executions({ rows, kind }: { rows: Execution[]; kind: string }) 
     <div className="space-y-3">
       <div className="flex gap-1">
         {(["all", "soda", "qa"] as const).map((k) => (
-          <Link key={k} href={`/dashboard/quality?tab=executions${k === "all" ? "" : `&kind=${k}`}`}
+          <Link key={k} href={`/os/run/quality?tab=executions${k === "all" ? "" : `&kind=${k}`}`}
                 className={cn("rounded-full border px-3 py-1 text-xs", kind === k ? "border-primary bg-primary text-primary-foreground" : "border-border text-muted-foreground hover:text-foreground")}>
             {k === "all" ? "All" : k === "soda" ? "Data quality (Soda)" : "QA tests"}
           </Link>
@@ -41,7 +41,7 @@ export function Executions({ rows, kind }: { rows: Execution[]; kind: string }) 
               {rows.map((e) => (
                 <TR key={`${e.kind}${e.id}`} className="cursor-pointer" onClick={() => show(e)}>
                   <TD><span className={cn("rounded-full px-2 py-0.5 text-[11px] font-medium", e.kind === "SODA" ? "bg-teal-50 text-teal-700" : "bg-blue-50 text-blue-700")}>{e.kind === "SODA" ? "Soda" : "QA"}</span></TD>
-                  <TD className="text-xs">{e.run_id ? <Link onClick={(ev) => ev.stopPropagation()} href={`/runs/${e.run_id}/${e.kind === "SODA" ? "soda" : "qa"}`} className="text-primary hover:underline">{e.run_name ?? e.run_id.slice(0, 8)}</Link> : <span className="text-muted-foreground">table suite</span>}</TD>
+                  <TD className="text-xs">{e.run_id ? <Link onClick={(ev) => ev.stopPropagation()} href={`/os/build/runs/${e.run_id}/${e.kind === "SODA" ? "soda" : "qa"}`} className="text-primary hover:underline">{e.run_name ?? e.run_id.slice(0, 8)}</Link> : <span className="text-muted-foreground">table suite</span>}</TD>
                   <TD className="max-w-[16rem] truncate font-mono text-[11px]">{e.target ?? "-"}</TD>
                   <TD className="text-right tabular-nums">{e.total ?? "-"}</TD>
                   <TD className={cn("text-right tabular-nums", Number(e.failed) > 0 && "font-semibold text-rose-700")}>{(e.failed ?? 0) + (e.errors ?? 0)}</TD>
@@ -89,7 +89,7 @@ export function GatesTable({ runs }: { runs: GateRun[] }) {
         <TBody>
           {runs.map((r) => (
             <TR key={r.run_id}>
-              <TD><Link href={`/runs/${r.run_id}`} className="font-medium text-primary hover:underline">{r.run_name}</Link><div className="font-mono text-[11px] text-muted-foreground">{r.target_model ?? ""}</div></TD>
+              <TD><Link href={`/os/build/runs/${r.run_id}`} className="font-medium text-primary hover:underline">{r.run_name}</Link><div className="font-mono text-[11px] text-muted-foreground">{r.target_model ?? ""}</div></TD>
               <TD><StatusPill status={r.status} /><span className="ml-2 text-xs tabular-nums text-muted-foreground">{r.score}%</span></TD>
               {Object.keys(GATE_LABEL).map((key) => {
                 const g = r.gates.find((x) => x.gate === key);
@@ -130,7 +130,7 @@ export function SuitesView({ suites }: { suites: Suites }) {
           <ul className="mt-3 divide-y divide-border/60">
             {suites.qa_suites.map((s) => (
               <li key={s.suite_id} className="flex items-center gap-2 py-2 text-sm">
-                <Link href={`/qa?tab=suites&suite=${s.suite_id}`} className="flex-1 truncate font-medium text-primary hover:underline">{s.name}</Link>
+                <Link href={`/os/release/qa?tab=suites&suite=${s.suite_id}`} className="flex-1 truncate font-medium text-primary hover:underline">{s.name}</Link>
                 {s.is_default && <span className="rounded-full bg-accent px-2 text-[10px] text-accent-foreground">default</span>}
                 <span className="font-mono text-[11px] text-muted-foreground">{s.target_table ?? ""}</span>
                 <span className="w-16 text-right text-xs tabular-nums">{s.tests} tests</span>
@@ -145,7 +145,7 @@ export function SuitesView({ suites }: { suites: Suites }) {
           <ul className="mt-3 divide-y divide-border/60">
             {suites.check_packs.map((p) => (
               <li key={p.run_id} className="flex items-center gap-2 py-2 text-sm">
-                <Link href={`/runs/${p.run_id}/soda`} className="flex-1 truncate font-medium text-primary hover:underline">{p.run_name ?? p.run_id.slice(0, 8)}</Link>
+                <Link href={`/os/build/runs/${p.run_id}/soda`} className="flex-1 truncate font-medium text-primary hover:underline">{p.run_name ?? p.run_id.slice(0, 8)}</Link>
                 <span className="text-xs tabular-nums text-muted-foreground">{p.approved}/{p.checks} approved</span>
                 <a href={`/bff/soda-kit/${p.run_id}`} className="text-xs text-primary hover:underline">Soda kit</a>
                 <Button size="sm" variant="ghost" className="h-7" onClick={() => openGx(p.run_id)} disabled={pending}><FileCode2 className="h-3.5 w-3.5" /> GX</Button>
@@ -170,10 +170,10 @@ export function IncidentsTable({ rows }: { rows: Incident[] }) {
         <TBody>
           {rows.map((i) => (
             <TR key={i.link_id}>
-              <TD><Link href={`/tickets?tab=ticket&key=${encodeURIComponent(i.issue_key)}`} className="inline-flex items-center gap-1 font-mono text-xs font-medium text-primary hover:underline">{i.issue_key}<ExternalLink className="h-3 w-3" /></Link></TD>
+              <TD><Link href={`/os/run/tickets?tab=ticket&key=${encodeURIComponent(i.issue_key)}`} className="inline-flex items-center gap-1 font-mono text-xs font-medium text-primary hover:underline">{i.issue_key}<ExternalLink className="h-3 w-3" /></Link></TD>
               <TD className="max-w-md truncate text-sm">{i.summary ?? "-"}</TD>
               <TD className="text-xs">{i.status ?? "-"}</TD>
-              <TD className="text-xs">{i.run_id ? <Link href={`/runs/${i.run_id}/qa?tab=jira`} className="text-primary hover:underline">{i.run_name ?? i.run_id.slice(0, 8)}</Link> : <span className="font-mono">{i.target_table ?? "-"}</span>}</TD>
+              <TD className="text-xs">{i.run_id ? <Link href={`/os/build/runs/${i.run_id}/qa?tab=jira`} className="text-primary hover:underline">{i.run_name ?? i.run_id.slice(0, 8)}</Link> : <span className="font-mono">{i.target_table ?? "-"}</span>}</TD>
               <TD className="whitespace-nowrap text-xs text-muted-foreground">{i.linked_at?.slice(0, 16)}</TD>
             </TR>
           ))}

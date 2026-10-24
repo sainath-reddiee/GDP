@@ -52,7 +52,7 @@ export default async function ModelingPage({ params, searchParams }: {
             const Icon = st === "COMPLETE" ? Check : st === "LOCKED" ? Lock : st === "REVIEW_REQUIRED" ? Eye : null;
             return (
               <li key={s.tab}>
-                <Link href={`/runs/${params.runId}/modeling?tab=${s.tab}`} role="tab" aria-selected={on} scroll={false}
+                <Link href={`/os/build/runs/${params.runId}/modeling?tab=${s.tab}`} role="tab" aria-selected={on} scroll={false}
                       className={cn("flex items-start gap-3 rounded-xl border px-3 py-2.5 transition",
                         on ? "border-primary/50 bg-primary/5 ring-1 ring-primary/20" : "hover:bg-muted")}>
                   <span className={cn("grid h-7 w-7 shrink-0 place-items-center rounded-full text-xs font-semibold",

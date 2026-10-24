@@ -58,8 +58,8 @@ export function DomainOnboarding({ initial, openImport, domains }: {
             {how === "design" && (
               <div className="space-y-3">
                 <div className="grid gap-2 sm:grid-cols-2">
-                  <DesignLink href="/dashboard/modeling?view=tables&new=1" title="New table model" text="Columns, keys and types, published to the domain" />
-                  <DesignLink href="/dashboard/modeling" title="Modeling Store" text="Every model on a canvas, with its relationships" />
+                  <DesignLink href="/os/design/modeling?view=tables&new=1" title="New table model" text="Columns, keys and types, published to the domain" />
+                  <DesignLink href="/os/design/modeling" title="Modeling Store" text="Every model on a canvas, with its relationships" />
                 </div>
                 <Accepts label="Or import a model" items={["Erwin .xml", ".sql DDL", ".xlsx", ".csv", "pack .json"]}
                          text="Up to 25 MB, in the Model Workbench. Changes are merged into a draft that is reviewed before any run uses it." />

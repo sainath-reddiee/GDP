@@ -74,7 +74,7 @@ export function TableModelsList({ rows, canEdit, filters, openNew = false }: {
       </div>
       {filters.run && (
         <p className="flex items-center gap-2 text-xs text-muted-foreground">
-          <Workflow className="h-3.5 w-3.5" /> Tables from run <Link href={`/runs/${filters.run}/modeling?tab=mapping`} className="font-medium text-primary hover:underline">{runName ?? filters.run.slice(0, 8)}</Link>
+          <Workflow className="h-3.5 w-3.5" /> Tables from run <Link href={`/os/build/runs/${filters.run}/modeling?tab=mapping`} className="font-medium text-primary hover:underline">{runName ?? filters.run.slice(0, 8)}</Link>
           <button type="button" onClick={() => go({ run: "" })} className="underline">show all</button>
         </p>
       )}
@@ -91,7 +91,7 @@ export function TableModelsList({ rows, canEdit, filters, openNew = false }: {
               {rows.map((r) => (
                 <TR key={r.table_model_id} className="align-top" data-testid={`table-model-${r.table_name}`}>
                   <TD>
-                    <Link href={`/dashboard/modeling/tables/${r.table_model_id}`} className="font-mono text-sm font-semibold text-primary hover:underline">{r.table_name}</Link>
+                    <Link href={`/os/design/modeling/tables/${r.table_model_id}`} className="font-mono text-sm font-semibold text-primary hover:underline">{r.table_name}</Link>
                     <p className="text-[11px] text-muted-foreground">v{r.current_version ?? "-"}{r.errors ? <span className="ml-1 text-destructive">{r.errors} error(s)</span> : null}</p>
                   </TD>
                   <TD><span className="font-mono text-xs">{r.source_name}</span>
@@ -108,8 +108,8 @@ export function TableModelsList({ rows, canEdit, filters, openNew = false }: {
                   <TD className="whitespace-nowrap text-[11px] text-muted-foreground">{(r.updated_at ?? "").slice(0, 16)}<br />{r.updated_by}</TD>
                   <TD className="whitespace-nowrap">
                     <span className="flex items-center gap-2 text-xs">
-                      <Link href={`/dashboard/modeling/tables/${r.table_model_id}?tab=diagram`} className="text-primary hover:underline">Canvas</Link>
-                      <Link href={`/dashboard/modeling/tables/${r.table_model_id}?tab=ddl`} className="text-primary hover:underline">DDL</Link>
+                      <Link href={`/os/design/modeling/tables/${r.table_model_id}?tab=diagram`} className="text-primary hover:underline">Canvas</Link>
+                      <Link href={`/os/design/modeling/tables/${r.table_model_id}?tab=ddl`} className="text-primary hover:underline">DDL</Link>
                       <a href={`/bff/table-model-export/${r.table_model_id}?format=dbt`} className="inline-flex items-center gap-0.5 text-muted-foreground hover:text-foreground" title="Download the dbt files"><Download className="h-3 w-3" /> dbt</a>
                     </span>
                   </TD>
@@ -119,7 +119,7 @@ export function TableModelsList({ rows, canEdit, filters, openNew = false }: {
           </Table>
         </section>
       )}
-      {creating && <NewTableModel onClose={() => setCreating(false)} onCreated={(id) => { toast("ok", "Table model created"); router.push(`/dashboard/modeling/tables/${id}?tab=columns`); }} />}
+      {creating && <NewTableModel onClose={() => setCreating(false)} onCreated={(id) => { toast("ok", "Table model created"); router.push(`/os/design/modeling/tables/${id}?tab=columns`); }} />}
     </div>
   );
 }

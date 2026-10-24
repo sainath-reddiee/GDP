@@ -52,7 +52,7 @@ async function RunShell({ runId, children }: { runId: string; children: ReactNod
         <span className="text-sm text-muted-foreground">
           {targetLabel ? `${targetLabel} · ` : ""}{state.run.environment}
         </span>
-        <Link href={`/runs/${runId}/domain`} className="text-sm font-medium text-primary hover:underline">
+        <Link href={`/os/build/runs/${runId}/domain`} className="text-sm font-medium text-primary hover:underline">
           Knowledge pack{packLabel ? `: ${packLabel}` : ""}
         </Link>
         <TagEditor entityType="RUN" entityKey={runId} canEdit={!state.is_archived} />

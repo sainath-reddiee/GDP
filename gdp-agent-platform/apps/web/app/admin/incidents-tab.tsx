@@ -138,7 +138,7 @@ function SettingsForm({ state, may, onMsg, onSaved }: { state: OpsSettings; may:
         <span className="grid h-10 w-10 place-items-center rounded-xl bg-rose-50 text-rose-600 ring-1 ring-inset ring-rose-100"><Siren className="h-5 w-5" /></span>
         <div className="min-w-[14rem] flex-1">
           <h3 className="text-base font-semibold">Incident settings</h3>
-          <p className="text-xs text-muted-foreground">How incidents reopen, alert and close. Shown in <Link href="/incidents" className="text-primary hover:underline">Incidents</Link>.</p>
+          <p className="text-xs text-muted-foreground">How incidents reopen, alert and close. Shown in <Link href="/os/run/incidents" className="text-primary hover:underline">Incidents</Link>.</p>
         </div>
       </header>
       <div className="grid gap-4 p-5 xl:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]">

@@ -20,17 +20,17 @@ export const QUICK_ACTION_GROUPS: QuickActionGroup[] = ["Onboard", "Model", "Qua
  * flow it names: the onboarding wizard, the Source Store connect dialog on the right connectors, or a store's modal. */
 export const QUICK_ACTIONS: QuickAction[] = [
   { group: "Onboard", label: "Snowflake share", hint: "Mount an inbound share and profile it in place",
-    href: "/dashboard/onboarding?type=source&branch=share", icon: Share2, privilege: "SOURCE.CONNECT" },
+    href: "/os/enable/onboarding?type=source&branch=share", icon: Share2, privilege: "SOURCE.CONNECT" },
   { group: "Onboard", label: "Other sources", hint: "A relational database (PostgreSQL, Oracle, SQL Server) or files (Amazon S3, SharePoint), landed into Snowflake by SnapLogic",
-    href: "/dashboard/onboarding?type=source&branch=external", icon: CloudCog, privilege: "SOURCE.CONNECT" },
+    href: "/os/enable/onboarding?type=source&branch=external", icon: CloudCog, privilege: "SOURCE.CONNECT" },
   { group: "Model", label: "Import a domain pack", hint: "Register a domain from domain_pack.json and its contract",
-    href: "/dashboard/onboarding?type=domain&import=1", icon: Boxes, privilege: "DOMAIN.EDIT" },
+    href: "/os/enable/new-domain?import=1", icon: Boxes, privilege: "DOMAIN.ONBOARD" },
   { group: "Model", label: "New table model", hint: "Design one target table, versioned and reviewed",
-    href: "/dashboard/modeling?view=tables&new=1", icon: TableProperties, privilege: "MODEL.EDIT" },
+    href: "/os/design/modeling?view=tables&new=1", icon: TableProperties, privilege: "MODEL.EDIT" },
   { group: "Quality", label: "New QA pack", hint: "A set of deterministic domain assertions in the QA Store",
-    href: "/dashboard/qa-store?new=1", icon: PackagePlus, privilege: "PACKAGE.EDIT" },
+    href: "/os/design/qa-store?new=1", icon: PackagePlus, privilege: "PACKAGE.EDIT" },
   { group: "Quality", label: "Add a data quality check", hint: "A Soda check on a table in the Data Quality Store",
-    href: "/dashboard/dq-store?add=1", icon: ShieldCheck, privilege: "SODA.EDIT" },
+    href: "/os/design/dq-store?add=1", icon: ShieldCheck, privilege: "SODA.EDIT" },
 ];
 
 /** The same rule the pages use (lib/types canAct): the privilege itself, or REQUEST.CHANGES to raise a change

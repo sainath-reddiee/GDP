@@ -40,7 +40,7 @@ export default async function ModelingHub({ searchParams }: { searchParams: Sear
       <PageHeader eyebrow="Asset store" title="Modeling Store"
                   description="One governed model per domain: design, version, review and approve it here before anything downstream moves. Every table a run models (or you model from a source) stays here as a versioned table model you can reopen, edit and push to Git." />
       <StoreNav current="modeling" domain={searchParams.domain} />
-      <StoreTabs base="/dashboard/modeling" current={view} keep={{ domain: searchParams.domain }}
+      <StoreTabs base="/os/design/modeling" current={view} keep={{ domain: searchParams.domain }}
                  tabs={[{ id: "models", label: "Domain models", count: models ? rows.length : null },
                         { id: "tables", label: "Table models", count: tableModels ? tableRows.length : null }, { id: "design", label: "Legacy designs" },
                         { id: "runs", label: "Run models", count: runModels?.models.length },

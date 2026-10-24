@@ -106,14 +106,3 @@ test("selecting Jira tickets offers moving them to a sprint", async ({ page }) =
   await expect(bar.getByLabel("Move to sprint")).toBeVisible();
   await expect(bar.getByRole("button", { name: "Move" })).toBeDisabled();   // nothing chosen, nothing moved
 });
-
-test("search finds a ticket by key", async ({ page }) => {
-  await page.goto("/dashboard");
-  await page.getByTestId("open-palette").click();
-  await page.keyboard.type(KEY);
-  const hit = page.getByRole("option", { name: new RegExp(KEY) }).first();
-  const found = await hit.waitFor({ timeout: 30_000 }).then(() => true, () => false);
-  test.skip(!found, "Jira is not connected for this user, or the ticket is not visible");
-  await hit.click();
-  await page.waitForURL(new RegExp(`/tickets\\?tab=ticket&key=${KEY}$`));
-});

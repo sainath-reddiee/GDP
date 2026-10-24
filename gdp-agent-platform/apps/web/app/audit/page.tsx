@@ -98,7 +98,7 @@ async function Cost({ sp }: { sp: Params }) {
               <TR key={r.key ?? "none"}>
                 <TD>
                   {groupBy === "run" && r.key
-                    ? <Link href={`/runs/${r.key}`} className="text-primary hover:underline">{r.run_name ?? r.key.slice(0, 8)}</Link>
+                    ? <Link href={`/os/build/runs/${r.key}`} className="text-primary hover:underline">{r.run_name ?? r.key.slice(0, 8)}</Link>
                     : (r.key ?? "not linked to a run")}
                 </TD>
                 <TD className="tabular-nums">{n(r.calls).toLocaleString()}</TD>

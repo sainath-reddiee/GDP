@@ -8,7 +8,7 @@ import type { PermanentFix } from "../../permanent-fix-actions";
 import { PermanentFixReview } from "./review";
 
 function Crumb() {
-  return <p className="eyebrow"><Link href="/ops/permanent-fixes" className="hover:underline">Permanent fixes</Link></p>;
+  return <p className="eyebrow"><Link href="/os/run/ops/permanent-fixes" className="hover:underline">Permanent fixes</Link></p>;
 }
 
 const when = (v: string | null | undefined) => (v ? String(v).slice(0, 16).replace("T", " ") : "");
@@ -31,7 +31,7 @@ export default async function PermanentFixPage({ params }: { params: { id: strin
       <Crumb />
       <h1 className="flex flex-wrap items-center gap-2 text-xl font-semibold">{f.title ?? "Permanent fix"} <PermanentFixStatusPill status={f.status} /></h1>
       <p className="text-sm text-muted-foreground">
-        For the known fix <Link href={`/ops/fixes/${encodeURIComponent(f.issue_id)}`} className="text-primary hover:underline">{f.issue.title ?? f.issue_id}</Link>
+        For the known fix <Link href={`/os/run/ops/fixes/${encodeURIComponent(f.issue_id)}`} className="text-primary hover:underline">{f.issue.title ?? f.issue_id}</Link>
         {f.dag_id ? ` · ${f.dag_id}${f.task_id ? `.${f.task_id}` : ""}` : ""} · drafted {f.trigger_kind === "AUTO" ? "by the agent" : `by ${f.drafted_by}`} {when(f.created_at)}
         {f.decided_by ? ` · ${f.status === "REJECTED" ? "rejected" : "accepted"} by ${f.decided_by}` : ""}
       </p>

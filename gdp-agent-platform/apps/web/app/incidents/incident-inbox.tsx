@@ -93,7 +93,7 @@ export function IncidentInbox({
       <Empty icon={<Workflow className="h-6 w-6" />} title="No Airflow environment connected"
              text="Incidents are raised from Airflow runs. Connect Amazon MWAA in Admin, Integrations, Airflow first."
              action={canManage
-               ? <Link href="/admin?section=integrations&view=airflow" className="text-sm text-primary hover:underline">Open Airflow setup</Link>
+               ? <Link href="/os/admin/settings?section=integrations&view=airflow" className="text-sm text-primary hover:underline">Open Airflow setup</Link>
                : <span className="text-xs text-muted-foreground">Ask an admin with the INTEGRATION.MANAGE privilege to connect it.</span>} />
     );
   }
@@ -253,7 +253,7 @@ export function IncidentInbox({
                             <Link href={incidentHref(i.incident_id)} className="line-clamp-2 font-medium text-primary hover:underline">{i.title || i.dag_id}</Link>
                             <p className="mt-0.5 flex flex-wrap items-center gap-1 text-[11px] text-muted-foreground">
                               {i.dq_table ? (
-                                <Link href={`/dashboard/dq-store/suite?table=${encodeURIComponent(i.dq_table)}`} className="font-mono hover:underline">{i.dq_table}</Link>
+                                <Link href={`/os/design/dq-store/suite?table=${encodeURIComponent(i.dq_table)}`} className="font-mono hover:underline">{i.dq_table}</Link>
                               ) : (<>
                                 <span>{envName.get(i.env_id) ?? i.env_id}</span>
                                 <span>·</span>

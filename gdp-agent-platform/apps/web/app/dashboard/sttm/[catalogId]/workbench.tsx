@@ -258,7 +258,7 @@ export function SttmWorkbench({ entry, versions, latest, context, graph, preview
       {!editable && canEdit && (
         <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
           Viewing v{entry.version}. Changes start from the latest version, v{latest}.{" "}
-          <button className="font-medium underline" onClick={() => router.push(`/dashboard/sttm/${entry.catalog_id}`)}>Open v{latest}</button>
+          <button className="font-medium underline" onClick={() => router.push(`/os/design/sttm/${entry.catalog_id}`)}>Open v{latest}</button>
         </p>
       )}
       <nav className="flex flex-wrap gap-1 border-b border-border/70" aria-label="Mapping sections">
@@ -441,7 +441,7 @@ export function SttmWorkbench({ entry, versions, latest, context, graph, preview
           <ol className="space-y-2">
             {versions.map((v) => (
               <li key={v.version}>
-                <button onClick={() => router.push(`/dashboard/sttm/${entry.catalog_id}?version=${v.version}`)}
+                <button onClick={() => router.push(`/os/design/sttm/${entry.catalog_id}?version=${v.version}`)}
                         className={cn("w-full rounded-lg border px-3 py-2 text-left text-xs transition", v.version === entry.version ? "border-primary/40 bg-accent" : "border-border/70 hover:bg-muted/50")}>
                   <span className="font-semibold">v{v.version}</span> <StatusPill status={v.status} className="ml-1" />
                   <span className="ml-2 text-muted-foreground">{v.origin.toLowerCase().replace(/_/g, " ")}</span>

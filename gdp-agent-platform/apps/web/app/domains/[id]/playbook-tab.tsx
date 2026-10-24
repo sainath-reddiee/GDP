@@ -53,7 +53,7 @@ export function PlaybookTab({ domainId, domainName, layer }: { domainId: string;
                 <li key={r.key} className="flex gap-2"><span className="font-mono">{r.key}</span><span className="ml-auto font-mono">{String(r.value)}</span>
                   <span className="text-muted-foreground">(was {String(r.base ?? "default")})</span></li>))}</ul>
             ) : <p className="mt-1 text-xs text-muted-foreground">None: this layer uses the {layer === "GOLD" ? "Silver values and the platform's Gold rules" : "platform rules"}.</p>}
-            <Link href={`/domains/${domainId}?tab=rules&layer=${layer}`} className="mt-2 inline-block text-xs text-primary hover:underline">Change rules</Link>
+            <Link href={`/os/knowledge/domains/${domainId}?tab=rules&layer=${layer}`} className="mt-2 inline-block text-xs text-primary hover:underline">Change rules</Link>
           </section>
         </aside>
       </div>
@@ -109,7 +109,7 @@ function Skills({ domainId, layer, data, onSaved }: { domainId: string; layer: P
             <span className="flex min-w-0 flex-1 flex-wrap gap-1">
               {s.standard_skills.map((k) => {
                 const replaced = s.domain_skills.find((m) => m.mode === "REPLACE" && (m.replaces ?? "").toUpperCase() === k.toUpperCase());
-                return <Link key={k} href={`/skills/${encodeURIComponent(k)}`} title={replaced ? `Replaced here by ${replaced.skill_name}` : "From the platform"}
+                return <Link key={k} href={`/os/skills/registry/${encodeURIComponent(k)}`} title={replaced ? `Replaced here by ${replaced.skill_name}` : "From the platform"}
                              className={cn("rounded bg-muted px-1.5 py-0.5 font-mono hover:text-primary", replaced && "line-through opacity-60")}>{k}</Link>;
               })}
               {s.domain_skills.map((m) => (

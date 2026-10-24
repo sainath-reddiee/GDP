@@ -34,7 +34,7 @@ export function AirflowTab({ envs, error, may, canPoll, onMsg }: {
           <span className="grid h-10 w-10 place-items-center rounded-xl bg-teal-50 text-teal-600 ring-1 ring-inset ring-teal-100"><Workflow className="h-5 w-5" /></span>
           <div className="min-w-[14rem] flex-1">
             <h3 className="text-base font-semibold">Amazon MWAA environments</h3>
-            <p className="text-xs text-muted-foreground">Polled for DAGs, runs, tasks and logs; shown in <Link href="/ops" className="text-primary hover:underline">Pipelines</Link>.</p>
+            <p className="text-xs text-muted-foreground">Polled for DAGs, runs, tasks and logs; shown in <Link href="/os/run/ops" className="text-primary hover:underline">Pipelines</Link>.</p>
           </div>
           {may && editing === null && <Button onClick={() => setEditing("new")}><Plus className="h-4 w-4" />Add environment</Button>}
         </header>

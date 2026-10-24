@@ -18,9 +18,19 @@ def test_the_menu_offers_every_create_action():
                       "Add a data quality check"]
 
 
+def _served_by(path: str) -> str:
+    """The file route that serves an /os URL (apps/web/os-routes.js), or the path itself."""
+    routes = (WEB / "os-routes.js").read_text(encoding="utf-8")
+    pairs = re.findall(r'\["(/[^"]*)", "(/os[^"]*)"\]', routes)
+    for old, new in sorted(pairs, key=lambda p: -len(p[1])):
+        if path == new or path.startswith(new + "/"):
+            return old + path[len(new):]
+    return path
+
+
 def test_every_href_is_a_page():
     for label, href, _ in ITEMS:
-        path = href.split("?")[0].strip("/")
+        path = _served_by(href.split("?")[0]).strip("/")
         assert (WEB / "app" / path / "page.tsx").exists(), f"{label}: no page at /{path}"
 
 

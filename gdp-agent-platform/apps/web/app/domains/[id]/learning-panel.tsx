@@ -46,7 +46,7 @@ export function LearningPanel({ domainId, layer }: { domainId: string; layer: "S
         <p className="text-xs text-muted-foreground">
           {data.decisions} reviewer decision(s) in this layer. Habits that repeat across tables and runs (a transformation shape, a corrected pick,
           a rename) become proposed rules. Each is replayed on past runs first: one that makes mapping worse is held back, the rest wait in the{" "}
-          <Link href="/knowledge?tab=inbox" className="text-primary hover:underline">knowledge inbox</Link> for a steward.</p>
+          <Link href="/os/knowledge?view=inbox" className="text-primary hover:underline">knowledge inbox</Link> for a steward.</p>
         {!data.deployed && <p className="text-xs text-muted-foreground">Needs migration V058 (Admin, Deploy).</p>}
         {error && <p role="alert" className="text-xs text-destructive">{error}</p>}
         {result && (

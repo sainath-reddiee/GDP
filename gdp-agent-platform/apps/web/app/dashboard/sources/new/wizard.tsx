@@ -21,9 +21,11 @@ const KINDS: Choice<SourceKind>[] = [
   { key: "file", label: "File based", icon: FileSpreadsheet, slug: "file-based" },
 ];
 
-export function OnboardWizard({ initialBranch, initialKind = null, shares, domains, databases, landing, user }: {
+export function OnboardWizard({ initialBranch, initialKind = null, shares, domains, databases, landing, user, initialName = "" }: {
   initialBranch: Branch | null; initialKind?: SourceKind | null; shares: ShareList; domains: DomainOption[];
   databases: CatalogDatabase[]; landing: LandingDefaults | null; user: string | null;
+  /** the source name to start from (an onboarding request hands it over) */
+  initialName?: string;
 }) {
   const [branch, setBranch] = useState<Branch | null>(initialBranch);
   const [kind, setKind] = useState<SourceKind | null>(initialKind);
@@ -48,7 +50,7 @@ export function OnboardWizard({ initialBranch, initialKind = null, shares, domai
       {branch === "share" && (
         <Reveal key="share">
           <RailStep n={3} title="Onboard the share" last>
-            <ShareWizard shares={shares} domains={domains} databases={databases} landing={landing} />
+            <ShareWizard shares={shares} domains={domains} databases={databases} landing={landing} initialName={initialName} />
           </RailStep>
         </Reveal>
       )}
@@ -60,7 +62,7 @@ export function OnboardWizard({ initialBranch, initialKind = null, shares, domai
       {branch === "external" && kind && (
         <Reveal key={kind}>
           <RailStep n={4} title={kind === "database" ? "Configure the database ingestion" : "Configure the file ingestion"} last>
-            <IngestionWizard key={kind} kind={kind} domains={domains} user={user} />
+            <IngestionWizard key={kind} kind={kind} domains={domains} user={user} initialName={initialName} />
           </RailStep>
         </Reveal>
       )}

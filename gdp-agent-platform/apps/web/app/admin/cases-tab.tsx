@@ -74,7 +74,7 @@ function CasesForm({ state, may, onMsg, onSaved }: { state: CaseSettings; may: b
         <span className="grid h-10 w-10 place-items-center rounded-xl bg-sky-50 text-sky-600 ring-1 ring-inset ring-sky-100"><LifeBuoy className="h-5 w-5" /></span>
         <div className="min-w-[14rem] flex-1">
           <h3 className="text-base font-semibold">Case settings</h3>
-          <p className="text-xs text-muted-foreground">Automatic AI triage and response times for <Link href="/tickets?source=case" className="text-primary hover:underline">cases on the Tickets page</Link>.</p>
+          <p className="text-xs text-muted-foreground">Automatic AI triage and response times for <Link href="/os/run/tickets?source=case" className="text-primary hover:underline">cases on the Tickets page</Link>.</p>
         </div>
       </header>
       <fieldset disabled={!may || pending} className="grid gap-4 p-5 md:grid-cols-2">

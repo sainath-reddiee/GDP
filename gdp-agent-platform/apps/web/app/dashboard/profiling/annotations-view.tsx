@@ -91,7 +91,7 @@ export function AnnotationsView({ annotations, me, canDecide }: { annotations: C
                   <td className="px-3 py-2 font-mono text-xs">{a.table_fqn}.{a.column_name}</td>
                   <td className="px-3 py-2"><StatusPill status={a.status} /></td>
                   <td className="px-3 py-2 text-xs text-muted-foreground">{a.proposed_by}{a.decided_by ? ` · ${a.decided_by}` : ""}{a.decision_note ? `: ${a.decision_note}` : ""}</td>
-                  <td className="px-3 py-2 text-xs">{a.model_id ? <Link className="text-primary hover:underline" href={`/dashboard/modeling/${a.model_id}?tab=changes`}>Proposed to the model</Link> : "-"}</td>
+                  <td className="px-3 py-2 text-xs">{a.model_id ? <Link className="text-primary hover:underline" href={`/os/design/modeling/${a.model_id}?tab=changes`}>Proposed to the model</Link> : "-"}</td>
                 </tr>
               ))}
             </tbody>

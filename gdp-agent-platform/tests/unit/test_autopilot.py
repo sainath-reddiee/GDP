@@ -44,6 +44,58 @@ def test_stops_at_every_human_gate(state, facts, where):
     assert out["kind"] == "GATE" and out["where"] == where
 
 
+AUTO = {**SILVER, "autonomous": True}
+BUILT = {**AUTO, "soda_generated": True, "dbt_generated": True, "validated": True}
+
+
+@pytest.mark.parametrize("state,facts,expected", [
+    ("MAPPING_REVIEW", AUTO, "approve_mapping"),
+    ("STTM_REVIEW", AUTO, "approve_sttm"),
+    ("STTM_APPROVED", AUTO, "generate_soda"),
+    ("SODA_REVIEW", {**AUTO, "soda_generated": True, "soda_proposed": True}, "approve_soda"),
+    # the screenshot case: code generated and validated while the run waited at the checks gate
+    ("SODA_REVIEW", {**BUILT, "soda_proposed": True}, "approve_soda"),
+    ("SODA_APPROVED", BUILT, "validate"),
+    ("SODA_APPROVED", {**AUTO, "soda_generated": True}, "generate_dbt"),
+    ("DBT_REVIEW", {**BUILT, "soda_proposed": True}, "approve_soda"),
+    ("DBT_REVIEW", BUILT, "signoff_qa"),
+    ("DBT_REVIEW", {**BUILT, "qa_signed": True}, "approve_code"),
+])
+def test_autonomous_decides_every_table_gate(state, facts, expected):
+    out = next_action(state, facts)
+    assert out["kind"] == "ACTION" and out["action"] == expected
+
+
+def test_autonomous_still_stops_where_only_a_person_can_act():
+    assert next_action("VALIDATION_FAILED", AUTO)["kind"] == "BLOCKED"
+    assert next_action("DOMAIN_IDENTIFIED", {**AUTO, "has_target": False})["where"] == "target model"
+    gold = {"pipeline": "GOLD", "has_target": False, "autonomous": True, "gold_model": {"open": True}}
+    assert next_action("DOMAIN_IDENTIFIED", gold)["where"] == "gold model"
+    assert next_action("COMPLETED", AUTO)["kind"] == "DONE"
+
+
+def test_auto_mapping_decisions_best_first_and_one_source_per_target():
+    from services.workflow.autopilot import auto_mapping_decisions
+
+    cands = [
+        {"candidate_id": "a", "source_column_id": "S1", "target_column_id": "T1", "target_table_id": "TB", "rank": 1,
+         "final_score": 0.6, "recommendation": "MANUAL"},
+        {"candidate_id": "b", "source_column_id": "S2", "target_column_id": "T1", "target_table_id": "TB", "rank": 1,
+         "final_score": 0.9, "recommendation": "AUTO_SUGGEST"},
+        {"candidate_id": "c", "source_column_id": "S3", "target_column_id": "T3", "target_table_id": "TB", "rank": 1,
+         "final_score": 0.8, "recommendation": "AUTO_SUGGEST"},
+        {"candidate_id": "d", "source_column_id": "S3", "target_column_id": "T4", "target_table_id": "TB", "rank": 2,
+         "final_score": 0.7, "recommendation": "MANUAL"},
+        {"candidate_id": "e", "source_column_id": "S4", "target_column_id": "T5", "target_table_id": "TB", "rank": 1,
+         "final_score": 0.9, "recommendation": "AUTO_SUGGEST"},
+    ]
+    out = {d["candidate_id"]: d["decision"] for d in auto_mapping_decisions(cands, [("S4", "TB")], [])}
+    assert out == {"b": "APPROVED", "c": "APPROVED", "a": "REJECTED"}
+    every = auto_mapping_decisions(cands, [], [("T3", "TB")])
+    assert {d["candidate_id"]: d["decision"] for d in every}["c"] == "REJECTED"
+    assert all(d["business_justification"].startswith("Autopilot:") for d in every)
+
+
 def test_gold_run_proposes_waits_for_approval_then_builds_its_star_schema():
     g = {"pipeline": "GOLD", "has_target": False, "planned_tables": 1}
     assert next_action("DOMAIN_IDENTIFIED", {**g, "gold_model": {}})["action"] == "propose_gold_model"

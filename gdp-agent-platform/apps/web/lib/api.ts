@@ -8,6 +8,9 @@ export const AUTH_MODE = process.env.AIP_AUTH ?? "dev";
 export const SESSION_COOKIE = "aip_session";
 export const DEV_COOKIE = "aip_dev";
 export const ROLE_COOKIE = "aip_role";
+/** The persona the person works as (top bar "View as"), and the one a super admin previews from Admin, People. */
+export const PERSONA_COOKIE = "ados_persona";
+export const PREVIEW_PERSONA_COOKIE = "ados_preview_persona";
 /** Where an ended session goes: clears the cookies, then shows the login page. */
 export const SIGN_OUT = "/bff/signout";
 
@@ -24,6 +27,9 @@ function sessionHeaders(withRole = true): Record<string, string> {
   const headers: Record<string, string> = {};
   if (session) headers["X-AIP-Session"] = session;
   if (role) headers["X-AIP-Role"] = role;
+  // the API narrows every privilege check to this persona's bundle (never above the person's own privileges)
+  const persona = cookies().get(PREVIEW_PERSONA_COOKIE)?.value || cookies().get(PERSONA_COOKIE)?.value;
+  if (persona && /^[a-z_]{1,64}$/.test(persona)) headers["X-AIP-Persona"] = persona;
   return headers;
 }
 

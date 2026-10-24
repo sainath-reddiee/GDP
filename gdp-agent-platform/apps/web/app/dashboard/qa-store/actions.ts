@@ -5,7 +5,7 @@ import { api } from "@/lib/api";
 import { storeAction } from "@/lib/store-action";
 import type { DryRun, PackDetail, PackQuery, PackRun, QaEnvironment, QaExecution } from "@/lib/store-types";
 
-const PATH = "/dashboard/qa-store";
+const PATH = "/os/design/qa-store";
 const json = (body: unknown) => ({ method: "POST", body: JSON.stringify(body) });
 
 export type PackPayload = {

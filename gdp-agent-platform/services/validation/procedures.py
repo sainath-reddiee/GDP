@@ -7,12 +7,13 @@ from typing import Any, Dict, List
 
 from services.common.audit import tool_call
 from services.common.platform_schema import fqn, resolve
+from services.common.rules import rule
 from services.common.sql import clip, insert_rows, rows, scalar, variant
 from services.common.stage import Stage
 from services.common.standard import run_pipeline, run_standard
 from services.soda.expectations import render_yaml
 from services.knowledge.usage import use_stage
-from services.validation import checks
+from services.validation import checks, standards
 
 
 def _current_generation(session, run_id: str) -> Dict[str, Any]:
@@ -144,6 +145,13 @@ def validate_dbt(session, run_id: str) -> Dict[str, Any]:
     if stage.state in ("VALIDATION_FAILED", "VALIDATION_PENDING", "VALIDATION_RUNNING"):
         stage.walk(["VALIDATION_FAILED", "VALIDATION_PENDING", "VALIDATION_RUNNING"], "validation started")
         walked = True
+    elif stage.state in ("SODA_APPROVED", "DBT_PENDING", "DBT_GENERATING"):
+        # the code was generated while the run waited at the Data Quality gate: once the checks are approved, the
+        # same generation goes on to validation instead of being generated again
+        _current_generation(session, run_id)
+        stage.walk(["SODA_APPROVED", "DBT_PENDING", "DBT_GENERATING", "VALIDATION_PENDING", "VALIDATION_RUNNING"],
+                   "validation started on the generated code")
+        walked = True
     with tool_call(session, run_id, "validate_dbt", {"run_id": run_id}) as call:
         try:
             generation = _current_generation(session, run_id)
@@ -153,10 +161,16 @@ def validate_dbt(session, run_id: str) -> Dict[str, Any]:
             soda = files.get("soda/checks.yml") or ""
             results = checks.run(files, _sttm_lines(session, generation["STTM_ID"]), soda)
             results.append(gold_compile(_compile(session, generation, run_id), run_pipeline(stage.run), files))
-            results.append({"validation_type": "SKILL", "status": "PASSED", "error_count": 0,
-                            "warning_count": 0, "findings": [{"severity": "INFO", "message": guidance[:500]}],
-                            "query_id": None})
-            status, errors, warnings = checks.summary(results)
+            if rule("validation.standards_review"):
+                # the code standards agent judges the project, one check per area (it replaces the skill note)
+                results.extend(_review_standards(session, stage.run, run_id, files, generation)["checks"])
+            else:
+                results.append({"validation_type": "SKILL", "status": "PASSED", "error_count": 0,
+                                "warning_count": 0, "findings": [{"severity": "INFO", "message": guidance[:500]}],
+                                "query_id": None})
+            # the gate (rules validation.*, active for this run's domain and pipeline since Stage loaded them)
+            verdict = checks.gate(results, float(rule("validation.min_score")), bool(rule("validation.block_on_errors")))
+            status, errors, warnings = verdict["status"], verdict["errors"], verdict["warnings"]
             validation_id = str(uuid.uuid4())
 
             def write(_event_id: str) -> None:
@@ -169,9 +183,11 @@ def validate_dbt(session, run_id: str) -> Dict[str, Any]:
                               r["status"], r["error_count"], r["warning_count"],
                               {"findings": r.get("findings", [])}] for r in results] +
                             [[validation_id, run_id, generation["GENERATION_ID"], "SUMMARY", status,
-                              errors, warnings, {"results": results}]])
+                              errors, warnings, {"results": results, "gate": verdict}]])
 
-            call.summary = f"{status}: {errors} errors, {warnings} warnings across {len(results)} checks"
+            scored = "no score" if verdict["score"] is None else f"score {verdict['score']:g}% (minimum {verdict['min_score']:g}%)"
+            call.summary = (f"{status}: {scored}, {errors} errors, {warnings} warnings across {len(results)} checks"
+                            + (f"; {'; '.join(verdict['reasons'])}" if verdict["reasons"] else ""))
         except Exception as exc:
             call.status, call.error = "FAILED", clip(exc)
             stage.fail(exc)
@@ -180,9 +196,69 @@ def validate_dbt(session, run_id: str) -> Dict[str, Any]:
     if status == "PASSED":
         _remember_fixed(session, stage.run, run_id)
     if walked:
-        stage.move(next_state, call.summary, {"errors": errors, "warnings": warnings}, in_transaction=write)
+        stage.move(next_state, call.summary, {"errors": errors, "warnings": warnings, "score": verdict["score"],
+                                              "min_score": verdict["min_score"], "reasons": verdict["reasons"]},
+                   in_transaction=write)
         if next_state == "VALIDATION_PASSED":
             stage.move("DBT_REVIEW", "validation passed; ready for code review", {"validation_id": validation_id})
     else:
         write("")
-    return {"status": status, "errors": errors, "warnings": warnings, "results": results, "state": stage.payload()}
+    return {"status": status, "errors": errors, "warnings": warnings, "score": verdict["score"],
+            "min_score": verdict["min_score"], "reasons": verdict["reasons"], "results": results,
+            "state": stage.payload()}
+
+
+def _load(session, names: List[str], run_id: str) -> List[Dict[str, Any]]:
+    """Each skill the run would load (its override, else production), skipping one that is not registered."""
+    from services.knowledge.procedures import load_skill_for
+
+    out = []
+    for name in names:
+        try:
+            out.append(load_skill_for(session, name, run_id))
+        except AssertionError:
+            continue
+    return out
+
+
+def _review_standards(session, run: Dict[str, Any], run_id: str, files: Dict[str, str],
+                      generation: Dict[str, Any]) -> Dict[str, Any]:
+    """The code standards agent on one generation (services/validation/standards.py): its own skill and any
+    standards bound to the STANDARDS stage, against the generation playbooks bound to the run's DBT stage. Records
+    its tool call and Cortex cost; never raises (a failed review is one SKIPPED check with the reason)."""
+    from services.common.audit import record_cost
+    from services.common.llm import complete_json
+    from services.knowledge.usage import bound_skills, prompt_excerpt
+
+    standard = run_standard(run)
+    with tool_call(session, run_id, "review_standards", {"run_id": run_id, "generation_id": generation["GENERATION_ID"]}) as call:
+        bound = _load(session, bound_skills(session, standards.STAGE, standard, run_id), run_id)
+        own = [s for s in bound if s["skill_name"] == standards.SKILL]
+        extra = [s for s in bound if s["skill_name"] != standards.SKILL]
+        playbooks = _load(session, bound_skills(session, "DBT", standard, run_id), run_id) + extra
+        skill = prompt_excerpt(own[0].get("content") or "", 8000) if own else "(the CODE-STANDARDS-REVIEW skill is not registered)"
+        result = standards.review(
+            lambda text, schema, max_tokens: complete_json(session, text, schema, max_tokens=max_tokens, stage="DBT"),
+            files, skill, standards.standards_text(playbooks, prompt_excerpt), _sttm_lines(session, generation["STTM_ID"]),
+            run_pipeline(run), int(rule("validation.standards_max_files")), bool(rule("validation.standards_block")))
+        result["skills"] = [f"{s['skill_name']}@{s['version']}" for s in (own + playbooks)]
+        call.summary = standards.gate_note(result)
+    if result.get("model"):
+        record_cost(session, run_id, "VALIDATION", result["model"], result["usage"], result["duration_ms"],
+                    agent="CODE_STANDARDS")
+    return result
+
+
+def review_standards(session, run_id: str) -> Dict[str, Any]:
+    """CORE.REVIEW_STANDARDS: the code standards agent alone on the run's current generation. It reports and records
+    its tool call and cost, but writes no validation and never moves the run (Validate again does that)."""
+    stage = Stage(session, run_id)  # activates the rules of the run's domain and pipeline
+    generation = _current_generation(session, run_id)
+    files = _files(session, generation["GENERATION_ID"])
+    result = _review_standards(session, stage.run, run_id, files, generation)
+    exact = checks.score(result["checks"])
+    return {"run_id": run_id, "generation_id": generation["GENERATION_ID"],
+            "generation_version": generation.get("GENERATION_VERSION"), "summary": result["summary"],
+            "score": None if exact is None else round(exact, 1), "checks": result["checks"],
+            "reviewed": result["reviewed"], "left_out": result["left_out"], "skills": result.get("skills", []),
+            "model": result.get("model"), "block": bool(rule("validation.standards_block"))}

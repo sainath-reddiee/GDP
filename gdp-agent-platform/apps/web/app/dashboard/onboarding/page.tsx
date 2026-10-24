@@ -1,92 +1,54 @@
-import Link from "next/link";
-import { Boxes } from "lucide-react";
+import { redirect } from "next/navigation";
 import { api, whoami } from "@/lib/api";
 import type { CatalogDatabase, LandingDefaults, ShareList } from "@/lib/hub-types";
-import { displayDomain } from "@/lib/catalog-display";
 import { PageHeader } from "@/components/page-header";
-import { Panel } from "@/components/hub/kpi";
 import { OnboardWizard } from "../sources/new/wizard";
-import { ApplicationCard } from "./tiles";
-import { DomainOnboarding } from "./domain-onboarding";
-import { FormatsMatrix } from "./domain-formats";
-import { KindPicker, type Kind } from "./kind-picker";
-import { PipelinePreview } from "./pipeline-preview";
-import { OnboardingShell, RailStep, Reveal } from "./rail";
+import { RequestHandoff, sourceNameFor } from "./request-handoff";
+import { OnboardingShell, RailStep } from "./rail";
 
-type DomainRow = { domain_id: string; domain_name: string; active_flag?: boolean; target_tables?: number; knowledge_items?: number };
+type DomainRow = { domain_id: string; domain_name: string; active_flag?: boolean };
 
-const KINDS: Kind[] = ["source", "domain", "application"];
-
-/** One place to bring something onto the platform: a source, a domain, or (soon) an application. The steps run down a
- *  rail like a pipeline: each is one choice, and once made the other options step away until Change brings them back. */
-export default async function Onboarding({ searchParams }: { searchParams: { type?: string; branch?: string; kind?: string; how?: string; import?: string } }) {
-  const kind = KINDS.find((k) => k === searchParams.type) ?? null;
+/** Onboarding a source: the Data OS Administrator's alone (Enable). The steps run down a rail like a pipeline: each is
+ *  one choice, and once made the other options step away until Change brings them back. Onboarding registers the
+ *  source, lands it and starts its run in the chosen domain; the Data Designer takes it from there. A domain is
+ *  onboarded in Enable too (/os/enable/new-domain); links from before keep working. */
+export default async function Onboarding({ searchParams }: { searchParams: { type?: string; branch?: string; kind?: string; how?: string; import?: string; request?: string; item?: string; name?: string } }) {
+  if (searchParams.type === "domain" || searchParams.import === "1") {
+    const keep = new URLSearchParams(Object.entries({ how: searchParams.how, import: searchParams.import }).filter((e): e is [string, string] => !!e[1]));
+    redirect(`/os/enable/new-domain${keep.size ? `?${keep}` : ""}`);
+  }
+  if (searchParams.type !== "source") {
+    // no kind (or the application kind, not available): sources are what this page onboards
+    const keep = new URLSearchParams(Object.entries(searchParams).filter((e): e is [string, string] => !!e[1] && e[0] !== "type"));
+    redirect(`/os/enable/onboarding?type=source${keep.size ? `&${keep}` : ""}`);
+  }
   const branch = searchParams.branch === "share" || searchParams.branch === "external" ? searchParams.branch : null;
   const sourceKind = searchParams.kind === "database" || searchParams.kind === "file" ? searchParams.kind : null;
-  const how = searchParams.import === "1" ? "import"
-    : searchParams.how === "import" || searchParams.how === "draft" || searchParams.how === "design" ? searchParams.how : null;
-  const { domains } = kind && kind !== "application"
-    ? await api<{ domains: DomainRow[] }>("/api/domains").catch(() => ({ domains: [] as DomainRow[] }))
-    : { domains: [] as DomainRow[] };
+  const [{ domains }, shares, databases, landing, me] = await Promise.all([
+    api<{ domains: DomainRow[] }>("/api/domains").catch(() => ({ domains: [] as DomainRow[] })),
+    api<ShareList>("/api/hub/sources/shares").catch(() => ({ shares: [], mounted: [] } as ShareList)),
+    api<{ databases: CatalogDatabase[] }>("/api/sources/databases").then((r) => r.databases).catch(() => [] as CatalogDatabase[]),
+    api<LandingDefaults>("/api/landing/targets").catch(() => null),
+    whoami(),
+  ]);
   const active = domains.filter((d) => d.active_flag !== false);
-  const [shares, databases, landing, me] = kind === "source"
-    ? await Promise.all([
-        api<ShareList>("/api/hub/sources/shares").catch(() => ({ shares: [], mounted: [] } as ShareList)),
-        api<{ databases: CatalogDatabase[] }>("/api/sources/databases").then((r) => r.databases).catch(() => [] as CatalogDatabase[]),
-        api<LandingDefaults>("/api/landing/targets").catch(() => null),
-        whoami(),
-      ])
-    : [{ shares: [], mounted: [] } as ShareList, [] as CatalogDatabase[], null, null];
 
   return (
     <OnboardingShell>
       <div className="space-y-8">
-        <PageHeader eyebrow="Build" title="Onboarding" />
+        <PageHeader eyebrow="Enable · Data OS Administrator" title="Onboard a source" />
+        {searchParams.request && <RequestHandoff requestId={searchParams.request} itemId={searchParams.item} />}
 
         <div>
-          <KindPicker value={kind} />
-
-          {kind === "source" && (
-            <OnboardWizard key="source" initialBranch={branch} initialKind={sourceKind} shares={shares} databases={databases} landing={landing} user={me?.user ?? null}
-                           domains={active.map((d) => ({ domain_id: d.domain_id, domain_name: d.domain_name }))} />
-          )}
-
-          {kind === "domain" && (
-            <DomainOnboarding key="domain" initial={how} openImport={searchParams.import === "1"}
-                              domains={active.filter((d) => displayDomain(d.domain_name) && d.domain_name !== "GDP")
-                                .map((d) => ({ domain_id: d.domain_id, domain_name: d.domain_name, label: displayDomain(d.domain_name) ?? d.domain_name }))} />
-          )}
-
-          {kind === "application" && (
-            <Reveal>
-              <RailStep n={2} title="What comes next" last>
-                <div className="max-w-3xl"><ApplicationCard /></div>
-              </RailStep>
-            </Reveal>
-          )}
+          <RailStep n={1} title="Onboarding a source" done>
+            <p className="max-w-3xl text-sm text-muted-foreground">
+              Register the source, land its tables and start its run in the domain. The Data Designer profiles and models it from there.
+            </p>
+          </RailStep>
+          <OnboardWizard key="source" initialBranch={branch} initialKind={sourceKind} shares={shares} databases={databases} landing={landing} user={me?.user ?? null}
+                         initialName={searchParams.name ? sourceNameFor(searchParams.name) : ""}
+                         domains={active.map((d) => ({ domain_id: d.domain_id, domain_name: d.domain_name }))} />
         </div>
-
-        {!kind && <PipelinePreview />}
-
-        {kind === "domain" && (
-          <>
-            <FormatsMatrix />
-            <Panel title="Domains on the platform" icon={Boxes} action={<Link href="/domains" className="text-xs font-medium text-primary hover:underline">Manage domains</Link>}>
-              {!active.length ? <p className="text-sm text-muted-foreground">No domains registered yet.</p> : (
-                <ul className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
-                  {active.map((d) => (
-                    <li key={d.domain_id}>
-                      <Link href={`/domains/${d.domain_id}`} className="block rounded-lg border px-3 py-2 transition hover:border-primary/40 hover:bg-accent/40">
-                        <p className="font-mono text-sm font-medium">{d.domain_name}</p>
-                        <p className="text-xs text-muted-foreground">{d.target_tables ?? 0} tables · {d.knowledge_items ?? 0} knowledge items</p>
-                      </Link>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </Panel>
-          </>
-        )}
       </div>
     </OnboardingShell>
   );

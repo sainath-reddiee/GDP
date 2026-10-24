@@ -59,7 +59,7 @@ export default async function ProfilePage({ params }: { params: { runId: string 
         )}
       </Card>
       {cachedCount > 0 && (
-        <Link href={`/runs/${params.runId}/domain`} className="flex items-center gap-2 rounded-xl border bg-card px-4 py-3 text-sm hover:border-primary/40">
+        <Link href={`/os/build/runs/${params.runId}/domain`} className="flex items-center gap-2 rounded-xl border bg-card px-4 py-3 text-sm hover:border-primary/40">
           <span className="font-medium">Next: choose the target model</span>
           <span className="text-muted-foreground">
             {graph?.suggestions.length ? `${graph.suggestions.length} model${graph.suggestions.length === 1 ? "" : "s"} suggested from this profile (${graph.suggestions.slice(0, 2).map((x) => x.target_table).join(", ")})` : "the knowledge pack and the models it maps to"}
