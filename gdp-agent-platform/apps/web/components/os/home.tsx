@@ -14,7 +14,7 @@ import { workflowHref } from "@/lib/os/work";
 import { cn } from "@/lib/utils";
 
 // Home and the Intake board: the build workflows (onboarding requests) with the step each one is at and who it waits on,
-// the onboarded domains, the panel that starts a new one, and the data products. Server-safe, like ./ui.
+// the onboarded domains, and the panel that starts a new one. Server-safe, like ./ui.
 
 type Icon = ComponentType<{ className?: string }>;
 
@@ -328,26 +328,3 @@ export function OnboardedDomains({ domains, requests, access, max = 5 }: {
   );
 }
 
-/** Data products: the Gold sets built so far (a domain with Gold tables); product requests are coming soon. */
-export function ProductsPanel({ domains }: { domains: Domain[] }) {
-  const gold = domains.filter((d) => (d.gold_tables ?? 0) > 0);
-  return (
-    <section className="os-card os-rise p-4" data-testid="products-panel">
-      <div className="flex items-center justify-between gap-2">
-        <h2 className="text-[14px] font-extrabold tracking-[-0.01em]">Data products</h2>
-        <Tag tone="amber">Coming soon</Tag>
-      </div>
-      {gold.length ? (
-        <div className="mt-2.5 flex flex-col gap-1.5">
-          {gold.map((d) => (
-            <Link key={d.domain_id} href={`/os/knowledge/domains/${d.domain_id}`} className="os-hover flex items-center gap-2.5 rounded-lg px-2 py-1.5">
-              <span className={cn("grid h-7 w-7 shrink-0 place-items-center rounded-lg", TYPE_TINT.PRODUCT)}><Crown className="h-3.5 w-3.5" /></span>
-              <span className="min-w-0 flex-1"><span className="block truncate text-[12.5px] font-bold">{d.domain_name} Gold</span>
-                <span className="os-faint block text-[10.5px]">{d.gold_tables} Gold table{d.gold_tables === 1 ? "" : "s"}</span></span>
-            </Link>
-          ))}
-        </div>
-      ) : <p className="os-faint mt-2 text-[12px] leading-relaxed">Governed Gold products built from mastered Silver domains will be listed and requested here.</p>}
-    </section>
-  );
-}

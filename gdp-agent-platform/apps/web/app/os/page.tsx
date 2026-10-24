@@ -4,7 +4,7 @@ import { SECTIONS, has, screenByKey, type ScreenKey } from "@/lib/os/access";
 import { osAccess, type OsAccess } from "@/lib/os/session";
 import { intentOf, overdue, type OnboardingRequest, type RequestType } from "@/lib/os/requests";
 import { Banner, Btn, Empty, SourceError } from "@/components/os/ui";
-import { OnboardedDomains, ProductsPanel, StartPanel, WorkflowRow } from "@/components/os/home";
+import { OnboardedDomains, StartPanel, WorkflowRow } from "@/components/os/home";
 import { workflowHref } from "@/lib/os/work";
 import { Segmented } from "@/components/os/stage-board";
 import { HomeSearch } from "@/components/os/home-search";
@@ -14,7 +14,7 @@ export const metadata = { title: "Home" };
 
 // Home, where everyone lands whatever their role: every build workflow (an onboarding request), the actions first,
 // with the step it is at and who it waits on, filtered in the URL (?view=active|action|all&type=
-// &intent=&q=), the panel that starts a new one or enhances what exists, the data products, and the onboarded domains below. A workflow
+// &intent=&q=), the panel that starts a new one or enhances what exists (a data product among them), and the onboarded domains below. A workflow
 // opens on the stage board it is at, selected (lib/os/work workflowHref).
 
 const screenByKeySafe = (key: string) => {
@@ -121,14 +121,9 @@ export default async function Home({ searchParams }: { searchParams: Params }) {
         </section>
 
         <aside>
-          <div className="flex flex-col gap-4">
-            <StartPanel access={access} />
-            <div className="hidden xl:block"><ProductsPanel domains={domains.data} /></div>
-          </div>
+          <StartPanel access={access} />
         </aside>
       </div>
-      {/* below xl the data products follow the workflows */}
-      <div className="mt-5 xl:hidden"><ProductsPanel domains={domains.data} /></div>
       {/* the domains come after the work: actions first */}
       <div className="mt-8">
         <SourceError what="Domains" error={domains.error} />
