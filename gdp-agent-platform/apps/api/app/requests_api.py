@@ -13,9 +13,9 @@ routes as checked by the endpoint):
 - add a source: the requester, or SOURCE.CONNECT, or the domain's owners and stewards;
 - link or unlink a registered source: SOURCE.CONNECT (the Data OS Administrator);
 - link or unlink a run: RUN.CREATE or RUN.OPERATE;
-- link the domain once it exists: DOMAIN.EDIT, or the requester;
+- link the domain once it exists: DOMAIN.ONBOARD or DOMAIN.EDIT, or the requester;
 - remove a source: the requester or SOURCE.CONNECT;
-- cancel: the requester, or ROLE.MANAGE; reject (with a reason): SOURCE.CONNECT, DOMAIN.EDIT or ROLE.MANAGE;
+- cancel: the requester, or ROLE.MANAGE; reject (with a reason): SOURCE.CONNECT, DOMAIN.ONBOARD, DOMAIN.EDIT or ROLE.MANAGE;
 - reopen: the requester or ROLE.MANAGE; comment: anyone who may see it.
 Notifications stay in-app: a request waiting on a role is in that role's My Work queue.
 """
@@ -345,10 +345,10 @@ def get_request(request_id: str, db: Db = Depends(current_db)):
         "add_source": d["status"] == rq.OPEN and (mine or owner or _holds(who, "SOURCE.CONNECT")),
         "link_source": d["status"] == rq.OPEN and _holds(who, "SOURCE.CONNECT"),
         "link_run": d["status"] == rq.OPEN and _holds(who, "RUN.CREATE", "RUN.OPERATE"),
-        "link_domain": d["status"] == rq.OPEN and not d.get("domain_id") and (mine or _holds(who, "DOMAIN.EDIT")),
+        "link_domain": d["status"] == rq.OPEN and not d.get("domain_id") and (mine or _holds(who, "DOMAIN.ONBOARD", "DOMAIN.EDIT")),
         "remove_source": d["status"] == rq.OPEN and (mine or _holds(who, "SOURCE.CONNECT")),
         "cancel": d["status"] == rq.OPEN and (mine or _holds(who, "ROLE.MANAGE")),
-        "reject": d["status"] == rq.OPEN and _holds(who, "SOURCE.CONNECT", "DOMAIN.EDIT", "ROLE.MANAGE"),
+        "reject": d["status"] == rq.OPEN and _holds(who, "SOURCE.CONNECT", "DOMAIN.ONBOARD", "DOMAIN.EDIT", "ROLE.MANAGE"),
         # a finished request stays finished (a new need is a new request); a cancelled or rejected one can reopen
         "reopen": d["status"] in (rq.CANCELLED, rq.REJECTED) and (mine or _holds(who, "ROLE.MANAGE")),
         "comment": True,
@@ -570,8 +570,8 @@ def link_domain(request_id: str, body: LinkDomain, db: Db = Depends(current_db))
     who = _who(db)
     r = _one(db, who, request_id)
     _open(r)
-    _need(str(r.get("requested_by") or "").upper() == who["user"].upper() or _holds(who, "DOMAIN.EDIT"),
-          "linking the domain", "being the requester, or DOMAIN.EDIT")
+    _need(str(r.get("requested_by") or "").upper() == who["user"].upper() or _holds(who, "DOMAIN.ONBOARD", "DOMAIN.EDIT"),
+          "linking the domain", "being the requester, or DOMAIN.ONBOARD or DOMAIN.EDIT")
     if r.get("domain_id"):
         raise HTTPException(409, "The request already has its domain.")
     domain = _domains(db, [body.domain_id]).get(body.domain_id)
@@ -623,7 +623,8 @@ def reject(request_id: str, body: Note, db: Db = Depends(current_db)):
     who = _who(db)
     r = _one(db, who, request_id)
     _open(r)
-    _need(_holds(who, "SOURCE.CONNECT", "DOMAIN.EDIT", "ROLE.MANAGE"), "rejecting a request", "SOURCE.CONNECT, DOMAIN.EDIT or ROLE.MANAGE")
+    _need(_holds(who, "SOURCE.CONNECT", "DOMAIN.ONBOARD", "DOMAIN.EDIT", "ROLE.MANAGE"), "rejecting a request",
+          "SOURCE.CONNECT, DOMAIN.ONBOARD, DOMAIN.EDIT or ROLE.MANAGE")
     if not (body.note or "").strip():
         raise HTTPException(422, "Say why the request is rejected; the requester sees it.")
     if str(r.get("requested_by") or "").upper() == who["user"].upper() and "*" not in who["privileges"]:

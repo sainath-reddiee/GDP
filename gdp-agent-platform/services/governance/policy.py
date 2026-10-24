@@ -33,7 +33,8 @@ PRIVILEGES: Dict[str, Tuple[str, str]] = {
     "REVIEW.APPROVE": ("Code review", "Approve code review"),
     "REVIEW.DECIDE": ("Code review", "Send a stage back or request changes"),
     "KNOWLEDGE.EDIT": ("Knowledge", "Add, edit, retire and restore knowledge"),
-    "DOMAIN.EDIT": ("Knowledge", "Create, import, edit and delete domains"),
+    "DOMAIN.EDIT": ("Knowledge", "Edit and delete domains"),
+    "DOMAIN.ONBOARD": ("Knowledge", "Onboard a new domain (create, draft or import it): the platform administrator's"),
     "TAG.MANAGE": ("Knowledge", "Tag profiles, runs and models"),
     "SKILL.EDIT": ("Skills", "Create skill versions and categories, set a candidate, try a version on a run"),
     "SKILL.RELEASE": ("Skills", "Promote a skill version to production and change which skills each stage loads"),
@@ -71,7 +72,7 @@ SUPER_ONLY = {"ADMIN.VIEW", "ADMIN.DEPLOY", "CONFIG.EDIT", "INTEGRATION.MANAGE",
 SYSTEM_ROLES: Dict[str, Dict[str, Any]] = {
     "SUPER_ADMIN": {"description": "Everything, including governance", "privileges": [ALL], "inherits": []},
     "PLATFORM_ADMIN": {"description": "Platform settings and deployment",
-                       "privileges": ["SOURCE.CONNECT", "CONFIG.EDIT", "ADMIN.VIEW", "ADMIN.DEPLOY", "AUDIT.VIEW", "APPROVAL.VIEW",
+                       "privileges": ["SOURCE.CONNECT", "DOMAIN.ONBOARD", "CONFIG.EDIT", "ADMIN.VIEW", "ADMIN.DEPLOY", "AUDIT.VIEW", "APPROVAL.VIEW",
                                       "INTEGRATION.MANAGE", "OPS.FIX_APPROVE", "OPS.FIX_PUBLISH", "OPS.RESOLVE_ADMIN"],
                        "inherits": ["DATA_ENGINEER"]},
     "GOVERNANCE_ADMIN": {"description": "Users, roles and approval policies",
@@ -111,11 +112,13 @@ SYSTEM_ROLES: Dict[str, Dict[str, Any]] = {
 }
 # Privileges added to system roles after their first release: {version: [privilege]}. Bootstrap grants them to the
 # system roles whose spec lists them, once, so existing deployments pick them up without overriding admin edits.
-SYSTEM_VERSION = 9
+SYSTEM_VERSION = 10
 ADDED_PRIVILEGES = {2: ["AI.USE"], 3: ["SKILL.EDIT", "SKILL.RELEASE"], 4: ["INTEGRATION.MANAGE", "CODE.VIEW"],
                     5: ["JIRA.READ", "JIRA.WRITE"], 6: ["OPS.VIEW", "OPS.OPERATE"],
                     7: ["CASE.WORK", "CASE.RESOLVE", "PACKAGE.EDIT", "PACKAGE.APPROVE"],
-                    8: ["OPS.FIX_APPROVE", "OPS.FIX_PUBLISH", "OPS.RESOLVE_ADMIN"]}
+                    8: ["OPS.FIX_APPROVE", "OPS.FIX_PUBLISH", "OPS.RESOLVE_ADMIN"],
+                    # onboarding a domain became the platform administrator's (stewards keep editing domains)
+                    10: ["DOMAIN.ONBOARD"]}
 # Privileges moved between system roles after their first release: {version: [(privilege, from role, to role)]}.
 # Bootstrap applies each once (revoked from the one, granted to the other), like ADDED_PRIVILEGES.
 MOVED_PRIVILEGES = {9: [("SOURCE.CONNECT", "DATA_ENGINEER", "PLATFORM_ADMIN")]}
@@ -175,7 +178,7 @@ RULES: List[Tuple[str, str, Any, str]] = [
     ("PUT", r"/api/config/environments", "CONFIG.EDIT", "Change environment databases"),
     ("POST", r"/api/config/environments/preview", "ADMIN.VIEW", ""),
     ("POST", r"/api/costs/reconcile", "CONFIG.EDIT", "Reconcile AI cost"),
-    ("POST", r"/api/(domains|domains/draft|domains/import)", "DOMAIN.EDIT", "Create or import a domain"),
+    ("POST", r"/api/(domains|domains/draft|domains/import)", "DOMAIN.ONBOARD", "Onboard a domain (create, draft or import it)"),
     ("PUT", r"/api/domains/[^/]+/skills", "SKILL.RELEASE", "Change the skills a domain's runs load"),
     ("PUT", r"/api/domains/[^/]+/mdm", "DOMAIN.EDIT", "Change which mastered domains a domain consumes"),
     ("PUT", r"/api/domains/[^/]+/conventions", "DOMAIN.EDIT", "Change how a domain's code is built in a layer"),

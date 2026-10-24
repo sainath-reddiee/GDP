@@ -141,7 +141,8 @@ def test_the_request_is_at_its_earliest_part_and_every_role_with_work_is_listed(
 
 def test_a_new_domain_waits_on_a_steward_and_a_retired_one_needs_attention():
     new = rq.assess(req(request_type="DOMAIN", domain_id=None, proposed_domain="TENANT"), [], None, {}, {})
-    assert new["stage"] == "DOMAIN" and new["waiting_on"] == "DOMAIN.EDIT" and "TENANT" in new["waiting_label"]
+    # onboarding a domain is the Data OS Administrator's
+    assert new["stage"] == "DOMAIN" and new["waiting_on"] == "DOMAIN.ONBOARD" and "onboard the TENANT domain" in new["waiting_label"]
     retired = assess([item()], domain={**DOMAIN, "active_flag": False})
     assert retired["stage"] == "DOMAIN" and "retired" in retired["attention"]
 
@@ -197,7 +198,8 @@ def test_the_existing_run_is_picked_only_when_it_fits():
     ({"request_type": "SOURCE", "title": "x", "domain_id": "d1", "sources": []}, "at least one source"),
     ({"request_type": "SOURCE", "title": "x", "domain_id": "d1", "sources": [{"source_name": "A"}, {"source_name": "a"}]}, "named once"),
     ({"request_type": "SOURCE", "title": "x", "sources": [{"source_name": "A"}]}, "Pick the domain"),
-    ({"request_type": "DOMAIN", "title": "x"}, "name the new domain"),
+    ({"request_type": "DOMAIN", "title": "x"}, "Name the new domain"),
+    ({"request_type": "DOMAIN", "title": "x", "domain_id": "d1"}, "A domain request is for a new domain"),
     ({"request_type": "SOURCE", "title": "x", "domain_id": "d1", "priority": "URGENT", "sources": [{"source_name": "A"}]}, "Priority"),
 ])
 def test_validation_says_what_is_wrong(body, needle):

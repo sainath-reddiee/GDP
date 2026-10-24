@@ -70,14 +70,15 @@ export const SCREENS: Screen[] = [
   { key: "requestHistory", section: "intake", href: "/os/requests/history", label: "Request history", why: "everyone signed in (finished, cancelled and rejected requests, read only)" },
 
   // Enable: onboarding sources is the Data OS Administrator's alone (registering, landing and starting the run)
-  { key: "enable", section: "enable", href: "/os/enable", label: "Source readiness", view: ["SOURCE.CONNECT", "CONFIG.EDIT", "INTEGRATION.MANAGE"], why: "the Data OS Administrator (connecting, landing and configuring sources)" },
+  { key: "enable", section: "enable", href: "/os/enable", label: "Source readiness", view: ["SOURCE.CONNECT", "DOMAIN.ONBOARD", "CONFIG.EDIT", "INTEGRATION.MANAGE"], why: "the Data OS Administrator (onboarding sources and domains, configuring ingestion)" },
   { key: "onboarding", section: "enable", href: "/dashboard/onboarding?type=source", label: "Onboard a source", paths: ["/dashboard/onboarding", "/dashboard/sources/new", "/onboarding"],
     view: ["SOURCE.CONNECT"], why: "the Data OS Administrator (onboarding a source registers it, lands it and starts its run)" },
+  { key: "newDomain", section: "enable", href: "/os/enable/new-domain", label: "Onboard a domain", paths: ["/os/design/new-domain"], view: ["DOMAIN.ONBOARD"],
+    why: "the Data OS Administrator (a domain's model, contract and memory); data owners request one on Intake" },
 
   // Design: the domain model and the stores the design is kept in
   { key: "design", section: "design", href: "/os/design", label: "Designer studio",
     view: ["MODEL.EDIT", "MODEL.APPROVE", "MAPPING.DECIDE", "MAPPING.APPROVE", "STTM.EDIT", "STTM.APPROVE", "DOMAIN.EDIT"], why: "people who model and map" },
-  { key: "newDomain", section: "design", href: "/os/design/new-domain", label: "Onboard a domain", view: ["DOMAIN.EDIT"], why: "data stewards and product owners (a domain's model, contract and memory)" },
   { key: "domains", section: "design", href: "/domains", label: "Domains", why: "everyone signed in (stewards edit)" },
   { key: "stores", section: "design", href: "/dashboard/store", label: "Stores",
     paths: ["/dashboard/sources", "/dashboard/profiling", "/dashboard/modeling", "/dashboard/sttm", "/dashboard/qa-store", "/dashboard/dq-store"], view: BUILDERS, why: "people who build runs or decide their gates" },
@@ -159,6 +160,7 @@ export function screenOfPath(path: string): Screen | null {
 export const ACTIONS = {
   startOnboarding: { privilege: "RUN.CREATE", label: "Start onboarding" },
   connectSource: { privilege: "SOURCE.CONNECT", label: "Connect a source" },
+  onboardDomain: { privilege: "DOMAIN.ONBOARD", label: "Onboard a domain" },
   manageIngestion: { privilege: "SOURCE.CONNECT", label: "Manage pipelines" },
   workStep: { privilege: "RUN.OPERATE", label: "Work this step" },
   revalidate: { privilege: "RUN.OPERATE", label: "Open validation" },

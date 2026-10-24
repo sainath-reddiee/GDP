@@ -196,7 +196,7 @@ def test_admin_and_governance_are_for_super_admins_only():
 def test_onboarding_sources_is_the_platform_administrators():
     from services.governance.policy import MOVED_PRIVILEGES, SYSTEM_ROLES, SYSTEM_VERSION, effective_privileges
 
-    assert SYSTEM_VERSION == 9 and MOVED_PRIVILEGES[9] == [("SOURCE.CONNECT", "DATA_ENGINEER", "PLATFORM_ADMIN")]
+    assert SYSTEM_VERSION >= 9 and MOVED_PRIVILEGES[9] == [("SOURCE.CONNECT", "DATA_ENGINEER", "PLATFORM_ADMIN")]
     assert "SOURCE.CONNECT" not in SYSTEM_ROLES["DATA_ENGINEER"]["privileges"]
     privileges = {n: s["privileges"] for n, s in SYSTEM_ROLES.items()}
     grants = {n: s["inherits"] for n, s in SYSTEM_ROLES.items()}
@@ -205,3 +205,17 @@ def test_onboarding_sources_is_the_platform_administrators():
     assert "SOURCE.CONNECT" not in engineer and {"PROFILE.RUN", "RUN.CREATE", "RUN.OPERATE"} <= engineer
     _, admin = effective_privileges(["PLATFORM_ADMIN"], privileges, grants)
     assert "SOURCE.CONNECT" in admin
+
+
+def test_onboarding_a_domain_is_the_platform_administrators_and_stewards_keep_editing():
+    from services.governance.policy import ADDED_PRIVILEGES, SYSTEM_ROLES, SYSTEM_VERSION, effective_privileges, privilege_for
+
+    assert SYSTEM_VERSION == 10 and ADDED_PRIVILEGES[10] == ["DOMAIN.ONBOARD"]
+    for path in ("/api/domains", "/api/domains/draft", "/api/domains/import"):
+        assert privilege_for("POST", path)[0] == "DOMAIN.ONBOARD"
+    assert privilege_for("PUT", "/api/domains/d1/conventions")[0] == "DOMAIN.EDIT"
+    privileges = {n: s["privileges"] for n, s in SYSTEM_ROLES.items()}
+    grants = {n: s["inherits"] for n, s in SYSTEM_ROLES.items()}
+    holders = {n for n in SYSTEM_ROLES if "DOMAIN.ONBOARD" in effective_privileges([n], privileges, grants)[1]}
+    assert holders == {"PLATFORM_ADMIN", "SUPER_ADMIN"}
+    assert "DOMAIN.EDIT" in effective_privileges(["DATA_STEWARD"], privileges, grants)[1]

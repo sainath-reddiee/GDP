@@ -42,7 +42,9 @@ const EVENT: Record<string, (e: RequestEvent) => string> = {
 
 /** Where the person a wait names does the work. */
 function actHref(w: Wait, item: RequestItem | undefined, domainId: string | null, product: boolean, requestId: string): string | null {
-  if (w.privilege === "DOMAIN.EDIT") return "/os/design/new-domain";
+  // a domain to onboard opens the administrator's domain wizard for this request; a retired one is restored in Domains
+  if (w.privilege === "DOMAIN.ONBOARD") return `/os/enable/new-domain?${new URLSearchParams({ request: requestId })}`;
+  if (w.privilege === "DOMAIN.EDIT") return "/domains";
   if (w.privilege === "MODEL.APPROVE" || w.privilege === "MODEL.EDIT") return domainId ? `/domains/${domainId}` : "/domains";
   if (item?.run_id) {
     return ["MAPPING.APPROVE", "STTM.APPROVE", "SODA.APPROVE", "REVIEW.APPROVE"].includes(w.privilege)

@@ -68,7 +68,7 @@ export function SubmitRequest({ type, domainId, domainName, picked, previewing }
   const sources = [...picked.map((p) => ({ source_system_id: p.source_system_id })), ...named.map((n) => ({ source_name: n.name, note: n.note || undefined }))];
   const ready = !!title.trim() && (type === "DOMAIN" ? !!(domainId || proposed.trim()) : !!domainId) && (type !== "SOURCE" || sources.length > 0);
   const missing = !title.trim() ? "Give the request a title." : type !== "DOMAIN" && !domainId ? "Choose the domain above."
-    : type === "DOMAIN" && !domainId && !proposed.trim() ? "Choose a domain above, or name the new one." : type === "SOURCE" && !sources.length ? "Pick or name at least one source." : "";
+    : type === "DOMAIN" && !domainId && !proposed.trim() ? "Name the new domain." : type === "SOURCE" && !sources.length ? "Pick or name at least one source." : "";
 
   const submit = (allowDuplicate = false) => {
     const body: NewRequestInput = {
@@ -89,7 +89,7 @@ export function SubmitRequest({ type, domainId, domainName, picked, previewing }
       <div className="grid gap-3 sm:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,1fr)]">
         <div><label className="os-label" htmlFor="rq-title">Request title</label>
           <input id="rq-title" value={title} onChange={(e) => setTitle(e.target.value)} maxLength={256} disabled={previewing}
-                 placeholder={type === "PRODUCT" ? "e.g. Pipeline forecast by region" : `e.g. ${domainName ?? "Opportunity"} from Salesforce`} className="os-input" /></div>
+                 placeholder={type === "PRODUCT" ? "e.g. Pipeline forecast by region" : type === "DOMAIN" ? "e.g. Tenant domain for leasing" : `e.g. ${domainName ?? "Opportunity"} from Salesforce`} className="os-input" /></div>
         <div><label className="os-label" htmlFor="rq-priority">Priority</label>
           <select id="rq-priority" value={priority} onChange={(e) => setPriority(e.target.value as typeof priority)} disabled={previewing} className="os-input">
             <option value="LOW">Low</option><option value="MEDIUM">Medium</option><option value="HIGH">High</option>
@@ -103,7 +103,7 @@ export function SubmitRequest({ type, domainId, domainName, picked, previewing }
       {type === "DOMAIN" && !domainId && (
         <div><label className="os-label" htmlFor="rq-domain">New domain name</label>
           <input id="rq-domain" value={proposed} onChange={(e) => setProposed(e.target.value)} maxLength={128} disabled={previewing}
-                 placeholder="e.g. TENANT (or choose an existing domain above)" className="os-input" /></div>
+                 placeholder="e.g. TENANT" className="os-input" /></div>
       )}
       {type !== "PRODUCT" && (
         <div>

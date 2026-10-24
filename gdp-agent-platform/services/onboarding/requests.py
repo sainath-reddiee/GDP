@@ -222,7 +222,7 @@ def assess(request: Dict[str, Any], items: List[Dict[str, Any]], domain: Optiona
     kind = _up(request.get("request_type"))
     if not request.get("domain_id"):
         name = request.get("proposed_domain") or "the domain"
-        parts.append({"stage": "DOMAIN", "waits": [_wait("DOMAIN.EDIT", f"Data steward: create the {name} domain and its model")],
+        parts.append({"stage": "DOMAIN", "waits": [_wait("DOMAIN.ONBOARD", f"{_ENABLE}: onboard the {name} domain")],
                       "attention": None})
     elif not domain or domain.get("active_flag") is False:
         parts.append({"stage": "DOMAIN", "waits": [_wait("DOMAIN.EDIT", "Data steward: the domain was deleted or retired; restore it or pick another")],
@@ -316,10 +316,12 @@ def validate(body: Dict[str, Any], domain_exists: bool) -> List[str]:
         problems.append("Priority is LOW, MEDIUM or HIGH.")
     sources = [s for s in body.get("sources") or [] if (s.get("source_system_id") or (s.get("source_name") or "").strip())]
     if kind == "DOMAIN":
-        if not body.get("domain_id") and not (body.get("proposed_domain") or "").strip():
-            problems.append("Pick the domain, or name the new domain to create.")
-        elif body.get("domain_id") and not domain_exists:
-            problems.append("That domain does not exist or is retired.")
+        # a domain request asks the Data OS Administrator to onboard a new domain; one already on the platform needs
+        # a source request instead
+        if body.get("domain_id"):
+            problems.append("A domain request is for a new domain. For a domain already on the platform, request its sources.")
+        elif not (body.get("proposed_domain") or "").strip():
+            problems.append("Name the new domain to onboard.")
     elif not body.get("domain_id"):
         problems.append("Pick the domain the request is for.")
     elif not domain_exists:

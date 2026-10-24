@@ -19,7 +19,7 @@ const SCREENS: [string, RegExp][] = [
   ["/os/help", /One workflow, many personas/],
   ["/os/history", /Run history/],
   ["/os/requests/history", /Request history/],
-  ["/os/design/new-domain", /Onboard a domain/],
+  ["/os/enable/new-domain", /Onboard a domain/],
 ];
 
 test.beforeEach(async ({ context }) => {
@@ -303,7 +303,7 @@ test("only the administrator onboards sources, from Enable; others request them"
   await page.goto("/dashboard/onboarding?type=source");
   await expect(page.getByRole("heading", { name: "Onboard a source" })).toBeVisible();
   const tabs = page.getByTestId("section-tabs");
-  await expect(tabs.getByRole("link")).toHaveText(["Source readiness", "Onboard a source"]);
+  await expect(tabs.getByRole("link")).toHaveText(["Source readiness", "Onboard a source", "Onboard a domain"]);
   await expect(railLinks(page).filter({ hasText: "Enable" })).toHaveAttribute("aria-current", "page");
   await page.goto("/os/intake?type=source");
   await expect(page.getByRole("link", { name: "Open the onboarding wizard" })).toHaveCount(0);
@@ -338,4 +338,27 @@ test("skill promotion follows the persona: the lead promotes, a designer request
   await previewAs(page, "developer");
   await page.goto("/os/skills").catch(() => undefined);
   await page.waitForURL(/\/os\?denied=skills$/);
+});
+
+// A new domain is a request to the administrator, who onboards it in Enable; data products are coming soon.
+test("a new domain is requested by name and onboarded by the administrator; data products are coming soon", async ({ page }) => {
+  await page.goto("/os/intake?type=domain");
+  const form = page.getByTestId("domain-request");
+  await expect(form).toBeVisible();
+  // no list of the domains that exist: a new domain is named
+  await expect(page.locator("#domain")).toHaveCount(0);
+  await expect(page.locator("#rq-domain")).toBeVisible();
+  await expect(page.getByText("Domains are onboarded by the Data OS Administrator")).toBeVisible();
+  await page.goto("/os/intake?type=product");
+  await expect(page.getByTestId("product-coming-soon")).toContainText("Coming soon");
+  await expect(page.getByTestId("submit-request")).toHaveCount(0);
+  // the old Design address lands on Enable, Onboard a domain
+  await page.goto("/os/design/new-domain?import=1");
+  await page.waitForURL(/\/os\/enable\/new-domain\?import=1$/);
+  await expect(railLinks(page).filter({ hasText: "Enable" })).toHaveAttribute("aria-current", "page");
+  for (const persona of ["product_owner", "designer"]) {
+    await previewAs(page, persona);
+    await page.goto("/os/enable/new-domain").catch(() => undefined);
+    await page.waitForURL(/\/os\?denied=newDomain$/);
+  }
 });

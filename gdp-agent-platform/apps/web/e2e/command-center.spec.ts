@@ -89,7 +89,7 @@ test("the theme toggle switches and remembers the theme", async ({ page, context
   await expect(page.locator("html")).toHaveClass(/dark/);
 });
 
-test("source onboarding is the administrator's wizard, one choice per step; domains are onboarded from Design", async ({ page, context }) => {
+test("source onboarding is the administrator's wizard, one choice per step; domains are onboarded in Enable too", async ({ page, context }) => {
   await devSession(context, "light");
   await page.goto("/dashboard/sources/new?branch=external");
   await page.waitForURL(/\/dashboard\/onboarding\?type=source&branch=external/);
@@ -103,9 +103,9 @@ test("source onboarding is the administrator's wizard, one choice per step; doma
   // the page without a kind is the source wizard
   await page.goto("/dashboard/onboarding");
   await page.waitForURL(/\/dashboard\/onboarding\?type=source$/);
-  // a domain (and an old link to one) opens Design, Onboard a domain: the starter files and every accepted format
+  // a domain (and an old link to one) opens Enable, Onboard a domain: the starter files and every accepted format
   await page.goto("/dashboard/onboarding?type=domain&import=1");
-  await page.waitForURL(/\/os\/design\/new-domain\?import=1$/);
+  await page.waitForURL(/\/os\/enable\/new-domain\?import=1$/);
   await expect(page.getByTestId("import-domain")).toBeVisible();
   await expect(page.getByTestId("template-viewer")).toContainText("domain_pack.json");
   await expect(page.getByTestId("formats-matrix")).toContainText("Erwin .xml");

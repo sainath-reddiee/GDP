@@ -2,7 +2,7 @@
   "domain": {
     "name": "PROPERTY",
     "standard": "GDP",
-    "description": "Real estate properties and buildings: PROPERTY_CORE with usage, address and owner tables.",
+    "description": "Real estate properties and buildings (Silver PROPERTY schema, pre-MDM): PROPERTY_CORE hub with PROPERTY_USAGE, PROPERTY_ADDRESS",
     "owner": "GDP Data Office",
     "silver_database": "DEV_GDP_SILVER_DB",
     "silver_schema": "PROPERTY",
@@ -77,23 +77,348 @@
         "REF_GDP_SOURCE_SYSTEM_SKEY"
       ],
       "scd_type": "1+HIST",
-      "description": "Hub PROPERTY_CORE of PROPERTY.",
+      "description": "Property hub: one row per source property/building, unioned from EDP, LIGHTBOX, MTA and DIQ ephemeral models.",
       "model_spec": {
         "role": "hub",
         "hub": "PROPERTY_CORE",
         "hub_fk": null,
-        "hkey_columns": [],
-        "reference_ctes": {},
-        "reference_joins": [],
+        "hkey_columns": [
+          "REF_PROPERTY_KIND_SKEY",
+          "REF_PROPERTY_STATUS_SKEY",
+          "PROPERTY_NAME",
+          "BUSINESS_PARK_NAME",
+          "PARCEL_NUMBER",
+          "GROSS_AREA",
+          "GROSS_AREA_UOM",
+          "NET_RENTABLE_AREA",
+          "NET_RENTABLE_AREA_UOM",
+          "NUMBER_OF_UNITS",
+          "NUMBER_OF_FLOORS",
+          "YEAR_BUILT",
+          "YEAR_RENOVATED",
+          "OWNER_OCCUPIED",
+          "TENANCY_TYPE",
+          "BUILDING_IDENTIFIER",
+          "SINGLE_ONSITE_FLAG",
+          "STATISTICAL_FLAG",
+          "CURRENT_IN_SOURCE_FLAG",
+          "GEOMETRY",
+          "YEAR_BUILT_AFTER_1980",
+          "YEAR_BUILT_BEFORE_1950",
+          "YEAR_BUILT_BETWEEN_1950_1979",
+          "PROPERTY_CLASS",
+          "PROPERTY_LEGAL_OWNERSHIP_NAME_1",
+          "PROPERTY_LEGAL_OWNERSHIP_NAME_2",
+          "PROPERTY_LEGAL_OWNERSHIP_NAME_3",
+          "PROPERTY_LEGAL_OWNERSHIP_NAME_4",
+          "PROPERTY_LEGAL_OWNERSHIP_NAME_5",
+          "PROPERTY_LEGAL_OWNERSHIP_NAME_6"
+        ],
+        "reference_ctes": {
+          "ref_source_system": "ref_source_system as (\n    {{ m_get_source_system_skey_property('<SOURCE_SYSTEM_NAME>') }}\n)",
+          "ref_property_kind": "ref_property_kind as (\n    select property_kind_skey, property_kind_value\n    from {{ source('property_reference', 'ref_property_kind') }}\n)",
+          "ref_property_status": "ref_property_status as (\n    select property_status_skey, property_status_value\n    from {{ source('property_reference', 'ref_property_status') }}\n)"
+        },
+        "reference_joins": [
+          {
+            "cte": "ref_property_kind",
+            "alias": "pk",
+            "condition": "upper(trim({{ map_property_kind('o.usage_type_desc') }})) = upper(trim(pk.property_kind_value))"
+          },
+          {
+            "cte": "ref_property_status",
+            "alias": "ps",
+            "condition": "upper(trim({{ map_property_status('o.status_desc') }})) = upper(trim(ps.property_status_value))"
+          }
+        ],
         "minimum_mapping": [
           "`source_unique_id`",
-          "`property_name`",
-          "`property_address`",
-          "`property_usage_desc`"
+          "`property_name`"
         ],
-        "casts": []
+        "casts": [
+          {
+            "target_column": "SOURCE_UNIQUE_ID",
+            "target_type": "TEXT",
+            "source_type": "NUMBER or TEXT",
+            "cast": "o.col::varchar"
+          }
+        ]
       },
-      "columns": []
+      "columns": [
+        {
+          "name": "PROPERTY_CORE_SKEY",
+          "type": "NUMBER(19,0)",
+          "nullable": false,
+          "definition": "Surrogate key from sequence SEQ_PROPERTY_CORE_SKEY.NEXTVAL; existing key preserved on update.",
+          "business_key": false
+        },
+        {
+          "name": "SOURCE_UNIQUE_ID",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "Source record identifier (LIGHTBOX: BUILDING_LID; EDP: EDP_PROPERTY_BUILDING_SKEY::string).",
+          "business_key": true
+        },
+        {
+          "name": "REF_GDP_SOURCE_SYSTEM_SKEY",
+          "type": "NUMBER(19,0)",
+          "nullable": false,
+          "definition": "FK to SHARED.REF_GDP_SOURCE_SYSTEM.GDP_SOURCE_SYSTEM_SKEY.",
+          "business_key": true
+        },
+        {
+          "name": "REF_PROPERTY_KIND_SKEY",
+          "type": "NUMBER(19,0)",
+          "nullable": true,
+          "definition": "FK to PROPERTY.REF_PROPERTY_KIND.PROPERTY_KIND_SKEY (resolved via map_property_kind on PROPERTY_KIND_VALUE).",
+          "business_key": false
+        },
+        {
+          "name": "REF_PROPERTY_STATUS_SKEY",
+          "type": "NUMBER(19,0)",
+          "nullable": true,
+          "definition": "FK to PROPERTY.REF_PROPERTY_STATUS.PROPERTY_STATUS_SKEY (resolved via map_property_status on PROPERTY_STATUS_VALUE).",
+          "business_key": false
+        },
+        {
+          "name": "PROPERTY_NAME",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "Property Name.",
+          "business_key": false
+        },
+        {
+          "name": "BUSINESS_PARK_NAME",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "Business Park Name.",
+          "business_key": false
+        },
+        {
+          "name": "PARCEL_NUMBER",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "Parcel Number.",
+          "business_key": false
+        },
+        {
+          "name": "GROSS_AREA",
+          "type": "NUMBER(19,0)",
+          "nullable": true,
+          "definition": "Gross area; NULL when <= 0.",
+          "business_key": false
+        },
+        {
+          "name": "GROSS_AREA_UOM",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "'Square Foot' when GROSS_AREA > 0 else NULL.",
+          "business_key": false
+        },
+        {
+          "name": "NET_RENTABLE_AREA",
+          "type": "NUMBER(19,0)",
+          "nullable": true,
+          "definition": "Net rentable area; NULL when <= 0.",
+          "business_key": false
+        },
+        {
+          "name": "NET_RENTABLE_AREA_UOM",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "'Square Foot' when NET_RENTABLE_AREA > 0 else NULL.",
+          "business_key": false
+        },
+        {
+          "name": "NUMBER_OF_UNITS",
+          "type": "NUMBER(19,0)",
+          "nullable": true,
+          "definition": "Number of units; 0 mapped to NULL.",
+          "business_key": false
+        },
+        {
+          "name": "NUMBER_OF_FLOORS",
+          "type": "NUMBER(19,0)",
+          "nullable": true,
+          "definition": "Number of floors; NULL when <= 0.",
+          "business_key": false
+        },
+        {
+          "name": "YEAR_BUILT",
+          "type": "NUMBER(19,0)",
+          "nullable": true,
+          "definition": "Year built, valid range 1700-4000 else NULL.",
+          "business_key": false
+        },
+        {
+          "name": "YEAR_RENOVATED",
+          "type": "NUMBER(19,0)",
+          "nullable": true,
+          "definition": "Year renovated, valid range 1700-4000 else NULL.",
+          "business_key": false
+        },
+        {
+          "name": "OWNER_OCCUPIED",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "'Y'/'N' normalised from source flag (Y/1, N/0).",
+          "business_key": false
+        },
+        {
+          "name": "TENANCY_TYPE",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "Normalised via map_property_tenancy_type.",
+          "business_key": false
+        },
+        {
+          "name": "BUILDING_IDENTIFIER",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "Extracted via extract_building_identifier macro.",
+          "business_key": false
+        },
+        {
+          "name": "SINGLE_ONSITE_FLAG",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "'Y'/'N' from YES/NO.",
+          "business_key": false
+        },
+        {
+          "name": "STATISTICAL_FLAG",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "Statistical property flag (Y/N).",
+          "business_key": false
+        },
+        {
+          "name": "CURRENT_IN_SOURCE_FLAG",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "'Y' when the property is current/active in source (EDP: lease/sale/availability, usage record set, user tag, or modified since 2024-01-01).",
+          "business_key": false
+        },
+        {
+          "name": "GEOMETRY",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "Geometry.",
+          "business_key": false
+        },
+        {
+          "name": "PROPERTY_CORE_HKEY",
+          "type": "TEXT",
+          "nullable": false,
+          "definition": "SHA2 change-detection hash; row merges only when hash or GDP_IS_ACTIVE changes.",
+          "business_key": false
+        },
+        {
+          "name": "GDP_IS_ACTIVE",
+          "type": "BOOLEAN",
+          "nullable": false,
+          "definition": "Soft-delete flag; FALSE for hard-deleted (orphaned) source rows.",
+          "business_key": false
+        },
+        {
+          "name": "GDP_INSERTED_TS",
+          "type": "TIMESTAMP_NTZ(6)",
+          "nullable": false,
+          "definition": "Insert timestamp (excluded from MERGE update).",
+          "business_key": false
+        },
+        {
+          "name": "GDP_INSERTED_BY",
+          "type": "TEXT",
+          "nullable": false,
+          "definition": "Inserting user (excluded from MERGE update).",
+          "business_key": false
+        },
+        {
+          "name": "GDP_UPDATED_TS",
+          "type": "TIMESTAMP_NTZ(6)",
+          "nullable": false,
+          "definition": "Last update timestamp; drives Silver watermark.",
+          "business_key": false
+        },
+        {
+          "name": "GDP_UPDATED_BY",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "Last updating user.",
+          "business_key": false
+        },
+        {
+          "name": "YEAR_BUILT_AFTER_1980",
+          "type": "NUMBER(19,0)",
+          "nullable": true,
+          "definition": "YEAR_BUILT when >= 1980 else NULL.",
+          "business_key": false
+        },
+        {
+          "name": "YEAR_BUILT_BEFORE_1950",
+          "type": "NUMBER(19,0)",
+          "nullable": true,
+          "definition": "YEAR_BUILT when < 1950 else NULL.",
+          "business_key": false
+        },
+        {
+          "name": "YEAR_BUILT_BETWEEN_1950_1979",
+          "type": "NUMBER(19,0)",
+          "nullable": true,
+          "definition": "YEAR_BUILT when 1950-1979 else NULL.",
+          "business_key": false
+        },
+        {
+          "name": "PROPERTY_CLASS",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "Normalised via m_map_property_class_type_desc.",
+          "business_key": false
+        },
+        {
+          "name": "PROPERTY_LEGAL_OWNERSHIP_NAME_1",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "Property Legal Ownership Name 1.",
+          "business_key": false
+        },
+        {
+          "name": "PROPERTY_LEGAL_OWNERSHIP_NAME_2",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "Property Legal Ownership Name 2.",
+          "business_key": false
+        },
+        {
+          "name": "PROPERTY_LEGAL_OWNERSHIP_NAME_3",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "Property Legal Ownership Name 3.",
+          "business_key": false
+        },
+        {
+          "name": "PROPERTY_LEGAL_OWNERSHIP_NAME_4",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "Property Legal Ownership Name 4.",
+          "business_key": false
+        },
+        {
+          "name": "PROPERTY_LEGAL_OWNERSHIP_NAME_5",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "Property Legal Ownership Name 5.",
+          "business_key": false
+        },
+        {
+          "name": "PROPERTY_LEGAL_OWNERSHIP_NAME_6",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "Property Legal Ownership Name 6.",
+          "business_key": false
+        }
+      ]
     },
     {
       "schema": "PROPERTY",
@@ -105,20 +430,181 @@
         "REF_GDP_SOURCE_SYSTEM_SKEY"
       ],
       "scd_type": "1+HIST",
-      "description": "Property usage (Pattern A: dim_property_building + dim_property_usage + country + fact_aar).",
+      "description": "Property usage spoke (usage type, NRA, units, subtype, class) per source property.",
       "model_spec": {
         "role": "spoke",
         "hub": "PROPERTY_CORE",
         "hub_fk": "PROPERTY_CORE_SKEY",
-        "hkey_columns": [],
-        "reference_ctes": {},
-        "reference_joins": [],
-        "minimum_mapping": [
-          "source_unique_id"
+        "hkey_columns": [
+          "REF_USAGE_TYPE_SKEY",
+          "GEOGRAPHY_HIERARCHY_SKEY",
+          "IS_PRIMARY_USAGE",
+          "NET_RENTABLE_AREA",
+          "NET_RENTABLE_AREA_UOM",
+          "STATISTICAL_FLAG",
+          "NUMBER_OF_UNITS",
+          "PROPERTY_SUBTYPE",
+          "PROPERTY_CLASS"
         ],
-        "casts": []
+        "reference_ctes": {
+          "ref_source_system": "ref_source_system as (\n    {{ m_get_source_system_skey_property('<SOURCE_SYSTEM_NAME>') }}\n)",
+          "ref_usage_type": "ref_usage_type as (\n    select usage_type_skey, usage_type_value\n    from {{ source('property_reference', 'ref_usage_type') }}\n)"
+        },
+        "reference_joins": [
+          {
+            "cte": "ref_usage_type",
+            "alias": "ut",
+            "condition": "upper(trim(o.usage_type_desc)) = upper(trim(ut.usage_type_value))"
+          }
+        ],
+        "minimum_mapping": [
+          "`source_unique_id`",
+          "`ref_usage_type_skey`"
+        ],
+        "casts": [
+          {
+            "target_column": "SOURCE_UNIQUE_ID",
+            "target_type": "TEXT",
+            "source_type": "NUMBER or TEXT",
+            "cast": "o.col::varchar"
+          }
+        ]
       },
-      "columns": []
+      "columns": [
+        {
+          "name": "PROPERTY_USAGE_SKEY",
+          "type": "NUMBER(19,0)",
+          "nullable": false,
+          "definition": "Surrogate key from sequence SEQ_PROPERTY_USAGE_SKEY.NEXTVAL; existing key preserved on update.",
+          "business_key": false
+        },
+        {
+          "name": "SOURCE_UNIQUE_ID",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "Source record identifier (business key with REF_GDP_SOURCE_SYSTEM_SKEY).",
+          "business_key": true
+        },
+        {
+          "name": "REF_GDP_SOURCE_SYSTEM_SKEY",
+          "type": "NUMBER(19,0)",
+          "nullable": false,
+          "definition": "FK to SHARED.REF_GDP_SOURCE_SYSTEM.GDP_SOURCE_SYSTEM_SKEY.",
+          "business_key": true
+        },
+        {
+          "name": "PROPERTY_CORE_SKEY",
+          "type": "NUMBER(19,0)",
+          "nullable": false,
+          "definition": "FK to PROPERTY_CORE.PROPERTY_CORE_SKEY (hub).",
+          "business_key": false
+        },
+        {
+          "name": "REF_USAGE_TYPE_SKEY",
+          "type": "NUMBER(19,0)",
+          "nullable": true,
+          "definition": "FK to PROPERTY.REF_USAGE_TYPE.USAGE_TYPE_SKEY.",
+          "business_key": false
+        },
+        {
+          "name": "GEOGRAPHY_HIERARCHY_SKEY",
+          "type": "NUMBER(19,0)",
+          "nullable": true,
+          "definition": "Geography hierarchy key, derived post-hook by m_silver_geography_derivation_for_batch (excluded from MERGE update).",
+          "business_key": false
+        },
+        {
+          "name": "IS_PRIMARY_USAGE",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "Is Primary Usage.",
+          "business_key": false
+        },
+        {
+          "name": "NET_RENTABLE_AREA",
+          "type": "NUMBER(19,0)",
+          "nullable": true,
+          "definition": "Net rentable area; NULL when <= 0.",
+          "business_key": false
+        },
+        {
+          "name": "NET_RENTABLE_AREA_UOM",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "'Square Foot' when NET_RENTABLE_AREA > 0 else NULL.",
+          "business_key": false
+        },
+        {
+          "name": "STATISTICAL_FLAG",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "Statistical property flag (Y/N).",
+          "business_key": false
+        },
+        {
+          "name": "PROPERTY_USAGE_HKEY",
+          "type": "TEXT",
+          "nullable": false,
+          "definition": "SHA2 change-detection hash; row merges only when hash or GDP_IS_ACTIVE changes.",
+          "business_key": false
+        },
+        {
+          "name": "GDP_IS_ACTIVE",
+          "type": "BOOLEAN",
+          "nullable": false,
+          "definition": "Soft-delete flag; FALSE for hard-deleted (orphaned) source rows.",
+          "business_key": false
+        },
+        {
+          "name": "GDP_INSERTED_TS",
+          "type": "TIMESTAMP_NTZ(6)",
+          "nullable": false,
+          "definition": "Insert timestamp (excluded from MERGE update).",
+          "business_key": false
+        },
+        {
+          "name": "GDP_INSERTED_BY",
+          "type": "TEXT",
+          "nullable": false,
+          "definition": "Inserting user (excluded from MERGE update).",
+          "business_key": false
+        },
+        {
+          "name": "GDP_UPDATED_TS",
+          "type": "TIMESTAMP_NTZ(6)",
+          "nullable": false,
+          "definition": "Last update timestamp; drives Silver watermark.",
+          "business_key": false
+        },
+        {
+          "name": "GDP_UPDATED_BY",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "Last updating user.",
+          "business_key": false
+        },
+        {
+          "name": "NUMBER_OF_UNITS",
+          "type": "NUMBER(19,0)",
+          "nullable": true,
+          "definition": "Number of units; 0 mapped to NULL.",
+          "business_key": false
+        },
+        {
+          "name": "PROPERTY_SUBTYPE",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "Property Subtype.",
+          "business_key": false
+        },
+        {
+          "name": "PROPERTY_CLASS",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "Normalised via m_map_property_class_type_desc.",
+          "business_key": false
+        }
+      ]
     },
     {
       "schema": "PROPERTY",
@@ -130,45 +616,517 @@
         "REF_GDP_SOURCE_SYSTEM_SKEY"
       ],
       "scd_type": "1+HIST",
-      "description": "Property address (Pattern A).",
+      "description": "Property address spoke: standardised address, raw SOURCE_* address, and geocode attributes.",
       "model_spec": {
         "role": "spoke",
         "hub": "PROPERTY_CORE",
         "hub_fk": "PROPERTY_CORE_SKEY",
-        "hkey_columns": [],
-        "reference_ctes": {},
-        "reference_joins": [],
-        "minimum_mapping": [
-          "source_unique_id"
+        "hkey_columns": [
+          "REF_ADDRESS_TYPE_SKEY",
+          "ADDRESS_LINE_1",
+          "ADDRESS_LINE_2",
+          "STREET_NAME",
+          "STREET_NUMBER_1",
+          "STREET_NUMBER_2",
+          "PRE_STREET_DIRECTION_NAME",
+          "STREET_TYPE",
+          "POST_STREET_DIRECTION_NAME",
+          "CITY",
+          "STATE_PROVINCE",
+          "COUNTRY",
+          "COUNTY",
+          "POSTAL_CODE",
+          "STATE",
+          "POSTAL_CODE_EXTENSION",
+          "STREET_NUMBER_3",
+          "LATITUDE",
+          "LONGITUDE",
+          "SOURCE_ADDRESS_LINE_1",
+          "SOURCE_ADDRESS_LINE_2",
+          "SOURCE_STREET_NAME",
+          "SOURCE_STREET_NUMBER_1",
+          "SOURCE_STREET_NUMBER_2",
+          "SOURCE_PRE_STREET_DIRECTION_NAME",
+          "SOURCE_STREET_TYPE",
+          "SOURCE_POST_STREET_DIRECTION_NAME",
+          "SOURCE_CITY",
+          "SOURCE_COUNTY",
+          "SOURCE_STATE",
+          "SOURCE_POSTAL_CODE",
+          "SOURCE_POSTAL_CODE_EXTENSION",
+          "SOURCE_COUNTRY_NAME",
+          "SOURCE_STREET_NUMBER_3",
+          "SOURCE_GEOCODE_OUTPUT",
+          "SOURCE_LATITUDE",
+          "SOURCE_LONGITUDE",
+          "SOURCE_LATITUDE_OVERRIDE",
+          "SOURCE_LONGITUDE_OVERRIDE",
+          "SOURCE_GEOCODE_OVERRIDE_SOURCE",
+          "ADDRESS_MATCH_SCORE",
+          "ADDRESS_MATCH_CODE",
+          "GEOCODE_OUTPUT",
+          "ADDRESS_PRECISION_CODE",
+          "GEOCODE_PROVIDER_NAME",
+          "GEOMETRY",
+          "SOURCE_STREET_NAME_PRE_TYPE",
+          "STREET_NAME_PRE_TYPE"
         ],
-        "casts": []
-      },
-      "columns": []
-    },
-    {
-      "schema": "PROPERTY",
-      "table": "PROPERTY_OWNER",
-      "table_type": "SPOKE",
-      "grain": "one row per SOURCE_UNIQUE_ID per REF_GDP_SOURCE_SYSTEM_SKEY",
-      "business_keys": [
-        "SOURCE_UNIQUE_ID",
-        "REF_GDP_SOURCE_SYSTEM_SKEY"
-      ],
-      "scd_type": "1+HIST",
-      "description": "Property owners (Pattern B: dim_property_building + fact_property_role + dim_party_role + dim_organization, filtered to party_role_type_desc IN ('Legal Owner','True Owner')).",
-      "model_spec": {
-        "role": "spoke",
-        "hub": "PROPERTY_CORE",
-        "hub_fk": "PROPERTY_CORE_SKEY",
-        "hkey_columns": [],
-        "reference_ctes": {},
-        "reference_joins": [],
-        "minimum_mapping": [
-          "source_unique_id"
+        "reference_ctes": {
+          "ref_source_system": "ref_source_system as (\n    {{ m_get_source_system_skey_property('<SOURCE_SYSTEM_NAME>') }}\n)",
+          "ref_address_type": "ref_address_type as (\n    select ref_address_type_skey, address_type_value\n    from {{ source('property_reference', 'ref_address_type') }}\n)"
+        },
+        "reference_joins": [
+          {
+            "cte": "ref_address_type",
+            "alias": "adt",
+            "condition": "upper(trim(o.address_type)) = upper(trim(adt.address_type_value))"
+          }
         ],
-        "casts": []
+        "minimum_mapping": [
+          "`source_unique_id`",
+          "`ref_address_type_skey`",
+          "`street_name`",
+          "`state`",
+          "`country`"
+        ],
+        "casts": [
+          {
+            "target_column": "SOURCE_UNIQUE_ID",
+            "target_type": "TEXT",
+            "source_type": "NUMBER or TEXT",
+            "cast": "o.col::varchar"
+          }
+        ]
       },
-      "columns": []
+      "columns": [
+        {
+          "name": "PROPERTY_ADDRESS_SKEY",
+          "type": "NUMBER(19,0)",
+          "nullable": false,
+          "definition": "Surrogate key from sequence SEQ_PROPERTY_ADDRESS_SKEY.NEXTVAL; existing key preserved on update.",
+          "business_key": false
+        },
+        {
+          "name": "SOURCE_UNIQUE_ID",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "Source record identifier (business key with REF_GDP_SOURCE_SYSTEM_SKEY).",
+          "business_key": true
+        },
+        {
+          "name": "REF_GDP_SOURCE_SYSTEM_SKEY",
+          "type": "NUMBER(19,0)",
+          "nullable": true,
+          "definition": "FK to SHARED.REF_GDP_SOURCE_SYSTEM.GDP_SOURCE_SYSTEM_SKEY.",
+          "business_key": true
+        },
+        {
+          "name": "PROPERTY_CORE_SKEY",
+          "type": "NUMBER(19,0)",
+          "nullable": false,
+          "definition": "FK to PROPERTY_CORE.PROPERTY_CORE_SKEY (hub).",
+          "business_key": false
+        },
+        {
+          "name": "REF_ADDRESS_TYPE_SKEY",
+          "type": "NUMBER(19,0)",
+          "nullable": true,
+          "definition": "FK to PROPERTY.REF_ADDRESS_TYPE (address type).",
+          "business_key": false
+        },
+        {
+          "name": "ADDRESS_LINE_1",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "Address Line 1.",
+          "business_key": false
+        },
+        {
+          "name": "ADDRESS_LINE_2",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "Address Line 2.",
+          "business_key": false
+        },
+        {
+          "name": "STREET_NAME",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "Street Name.",
+          "business_key": false
+        },
+        {
+          "name": "STREET_NUMBER_1",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "Street Number 1.",
+          "business_key": false
+        },
+        {
+          "name": "STREET_NUMBER_2",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "Street Number 2.",
+          "business_key": false
+        },
+        {
+          "name": "PRE_STREET_DIRECTION_NAME",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "Pre Street Direction Name.",
+          "business_key": false
+        },
+        {
+          "name": "STREET_TYPE",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "Street Type.",
+          "business_key": false
+        },
+        {
+          "name": "POST_STREET_DIRECTION_NAME",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "Post Street Direction Name.",
+          "business_key": false
+        },
+        {
+          "name": "CITY",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "City.",
+          "business_key": false
+        },
+        {
+          "name": "STATE_PROVINCE",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "State Province. Emitted by the model and in the hkey, but not present in PROD_GDP_SILVER_DB.PROPERTY.PROPERTY_ADDRESS at time of capture (verify DDL).",
+          "business_key": false
+        },
+        {
+          "name": "COUNTRY",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "Country.",
+          "business_key": false
+        },
+        {
+          "name": "COUNTY",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "County.",
+          "business_key": false
+        },
+        {
+          "name": "POSTAL_CODE",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "Postal Code.",
+          "business_key": false
+        },
+        {
+          "name": "STATE",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "State.",
+          "business_key": false
+        },
+        {
+          "name": "POSTAL_CODE_EXTENSION",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "Postal Code Extension.",
+          "business_key": false
+        },
+        {
+          "name": "STREET_NUMBER_3",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "Street Number 3.",
+          "business_key": false
+        },
+        {
+          "name": "LATITUDE",
+          "type": "NUMBER(18,15)",
+          "nullable": true,
+          "definition": "Geocoded latitude (ESRI post-hook may update).",
+          "business_key": false
+        },
+        {
+          "name": "LONGITUDE",
+          "type": "NUMBER(18,15)",
+          "nullable": true,
+          "definition": "Geocoded longitude (ESRI post-hook may update).",
+          "business_key": false
+        },
+        {
+          "name": "SOURCE_ADDRESS_LINE_1",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "Source Address Line 1.",
+          "business_key": false
+        },
+        {
+          "name": "SOURCE_ADDRESS_LINE_2",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "Source Address Line 2.",
+          "business_key": false
+        },
+        {
+          "name": "SOURCE_STREET_NAME",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "Source Street Name.",
+          "business_key": false
+        },
+        {
+          "name": "SOURCE_STREET_NUMBER_1",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "Source Street Number 1.",
+          "business_key": false
+        },
+        {
+          "name": "SOURCE_STREET_NUMBER_2",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "Source Street Number 2.",
+          "business_key": false
+        },
+        {
+          "name": "SOURCE_PRE_STREET_DIRECTION_NAME",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "Source Pre Street Direction Name.",
+          "business_key": false
+        },
+        {
+          "name": "SOURCE_STREET_TYPE",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "Source Street Type.",
+          "business_key": false
+        },
+        {
+          "name": "SOURCE_POST_STREET_DIRECTION_NAME",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "Source Post Street Direction Name.",
+          "business_key": false
+        },
+        {
+          "name": "SOURCE_CITY",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "Source City.",
+          "business_key": false
+        },
+        {
+          "name": "SOURCE_COUNTY",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "Source County.",
+          "business_key": false
+        },
+        {
+          "name": "SOURCE_STATE",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "Source State.",
+          "business_key": false
+        },
+        {
+          "name": "SOURCE_POSTAL_CODE",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "Source Postal Code.",
+          "business_key": false
+        },
+        {
+          "name": "SOURCE_POSTAL_CODE_EXTENSION",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "Source Postal Code Extension.",
+          "business_key": false
+        },
+        {
+          "name": "SOURCE_COUNTRY_NAME",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "Source Country Name.",
+          "business_key": false
+        },
+        {
+          "name": "SOURCE_STREET_NUMBER_3",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "Source Street Number 3.",
+          "business_key": false
+        },
+        {
+          "name": "SOURCE_GEOCODE_OUTPUT",
+          "type": "NUMBER(10,0)",
+          "nullable": true,
+          "definition": "Source Geocode Output.",
+          "business_key": false
+        },
+        {
+          "name": "SOURCE_LATITUDE",
+          "type": "NUMBER(18,15)",
+          "nullable": true,
+          "definition": "Source Latitude.",
+          "business_key": false
+        },
+        {
+          "name": "SOURCE_LONGITUDE",
+          "type": "NUMBER(18,15)",
+          "nullable": true,
+          "definition": "Source Longitude.",
+          "business_key": false
+        },
+        {
+          "name": "SOURCE_LATITUDE_OVERRIDE",
+          "type": "NUMBER(18,15)",
+          "nullable": true,
+          "definition": "Source Latitude Override.",
+          "business_key": false
+        },
+        {
+          "name": "SOURCE_LONGITUDE_OVERRIDE",
+          "type": "NUMBER(18,15)",
+          "nullable": true,
+          "definition": "Source Longitude Override.",
+          "business_key": false
+        },
+        {
+          "name": "SOURCE_GEOCODE_OVERRIDE_SOURCE",
+          "type": "NUMBER(10,0)",
+          "nullable": true,
+          "definition": "Source Geocode Override Source.",
+          "business_key": false
+        },
+        {
+          "name": "ADDRESS_MATCH_SCORE",
+          "type": "NUMBER(38,2)",
+          "nullable": true,
+          "definition": "Address Match Score.",
+          "business_key": false
+        },
+        {
+          "name": "ADDRESS_MATCH_CODE",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "Address Match Code.",
+          "business_key": false
+        },
+        {
+          "name": "GEOCODE_OUTPUT",
+          "type": "NUMBER(10,0)",
+          "nullable": true,
+          "definition": "Geocode Output.",
+          "business_key": false
+        },
+        {
+          "name": "ADDRESS_PRECISION_CODE",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "Address Precision Code.",
+          "business_key": false
+        },
+        {
+          "name": "GEOCODE_PROVIDER_NAME",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "Geocode Provider Name.",
+          "business_key": false
+        },
+        {
+          "name": "GEOMETRY",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "Geometry.",
+          "business_key": false
+        },
+        {
+          "name": "PROPERTY_ADDRESS_HKEY",
+          "type": "TEXT",
+          "nullable": false,
+          "definition": "SHA2 change-detection hash; row merges only when hash or GDP_IS_ACTIVE changes.",
+          "business_key": false
+        },
+        {
+          "name": "GDP_IS_ACTIVE",
+          "type": "BOOLEAN",
+          "nullable": true,
+          "definition": "Soft-delete flag; FALSE for hard-deleted (orphaned) source rows.",
+          "business_key": false
+        },
+        {
+          "name": "GDP_INSERTED_TS",
+          "type": "TIMESTAMP_NTZ(6)",
+          "nullable": false,
+          "definition": "Insert timestamp (excluded from MERGE update).",
+          "business_key": false
+        },
+        {
+          "name": "GDP_INSERTED_BY",
+          "type": "TEXT",
+          "nullable": false,
+          "definition": "Inserting user (excluded from MERGE update).",
+          "business_key": false
+        },
+        {
+          "name": "GDP_UPDATED_TS",
+          "type": "TIMESTAMP_NTZ(6)",
+          "nullable": false,
+          "definition": "Last update timestamp; drives Silver watermark.",
+          "business_key": false
+        },
+        {
+          "name": "GDP_UPDATED_BY",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "Last updating user.",
+          "business_key": false
+        },
+        {
+          "name": "SOURCE_STREET_NAME_PRE_TYPE",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "Source Street Name Pre Type; NULL for EDP, LIGHTBOX, MTA and DIQ.",
+          "business_key": false
+        },
+        {
+          "name": "STREET_NAME_PRE_TYPE",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "Street Name Pre Type; NULL for EDP, LIGHTBOX, MTA and DIQ.",
+          "business_key": false
+        },
+        {
+          "name": "COUNTRY_ISO2_CODE",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "Populated by LIGHTBOX only; NULL for other sources.",
+          "business_key": false
+        },
+        {
+          "name": "COUNTRY_ISO3_CODE",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "Populated by LIGHTBOX only; NULL for other sources.",
+          "business_key": false
+        },
+        {
+          "name": "STATE_ISO_CODE",
+          "type": "TEXT",
+          "nullable": true,
+          "definition": "Populated by LIGHTBOX only; NULL for other sources.",
+          "business_key": false
+        }
+      ]
     }
   ],
   "knowledge": [
@@ -176,59 +1134,502 @@
       "key": "property.model.property_core",
       "type": "MODEL_DEFINITION",
       "title": "PROPERTY_CORE (hub)",
-      "content": "Hub PROPERTY_CORE of PROPERTY. Grain: one row per SOURCE_UNIQUE_ID per REF_GDP_SOURCE_SYSTEM_SKEY. ",
+      "content": "Property hub: one row per source property/building, unioned from EDP, LIGHTBOX, MTA and DIQ ephemeral models. Grain: one row per SOURCE_UNIQUE_ID per REF_GDP_SOURCE_SYSTEM_SKEY. LIGHTBOX SOURCE_UNIQUE_ID = BUILDING_LID; EDP = EDP_PROPERTY_BUILDING_SKEY::string. Hard deletes: active target rows of a source whose id is in that source's *_property_entity_ids delta but absent from source are re-emitted with GDP_IS_ACTIVE = FALSE.",
       "content_json": {
         "target_table": "PROPERTY_CORE",
         "role": "hub",
         "hub_fk": null,
-        "hkey_columns": [],
-        "column_count": 0
+        "hkey_columns": [
+          "REF_PROPERTY_KIND_SKEY",
+          "REF_PROPERTY_STATUS_SKEY",
+          "PROPERTY_NAME",
+          "BUSINESS_PARK_NAME",
+          "PARCEL_NUMBER",
+          "GROSS_AREA",
+          "GROSS_AREA_UOM",
+          "NET_RENTABLE_AREA",
+          "NET_RENTABLE_AREA_UOM",
+          "NUMBER_OF_UNITS",
+          "NUMBER_OF_FLOORS",
+          "YEAR_BUILT",
+          "YEAR_RENOVATED",
+          "OWNER_OCCUPIED",
+          "TENANCY_TYPE",
+          "BUILDING_IDENTIFIER",
+          "SINGLE_ONSITE_FLAG",
+          "STATISTICAL_FLAG",
+          "CURRENT_IN_SOURCE_FLAG",
+          "GEOMETRY",
+          "YEAR_BUILT_AFTER_1980",
+          "YEAR_BUILT_BEFORE_1950",
+          "YEAR_BUILT_BETWEEN_1950_1979",
+          "PROPERTY_CLASS",
+          "PROPERTY_LEGAL_OWNERSHIP_NAME_1",
+          "PROPERTY_LEGAL_OWNERSHIP_NAME_2",
+          "PROPERTY_LEGAL_OWNERSHIP_NAME_3",
+          "PROPERTY_LEGAL_OWNERSHIP_NAME_4",
+          "PROPERTY_LEGAL_OWNERSHIP_NAME_5",
+          "PROPERTY_LEGAL_OWNERSHIP_NAME_6"
+        ],
+        "column_count": 39
+      }
+    },
+    {
+      "key": "property.pattern.property_core.references",
+      "type": "DBT_PATTERN",
+      "title": "PROPERTY_CORE reference lookups",
+      "content": "Reference CTEs:\nref_source_system as (\n    {{ m_get_source_system_skey_property('<SOURCE_SYSTEM_NAME>') }}\n),\n\nref_property_kind as (\n    select property_kind_skey, property_kind_value\n    from {{ source('property_reference', 'ref_property_kind') }}\n),\n\nref_property_status as (\n    select property_status_skey, property_status_value\n    from {{ source('property_reference', 'ref_property_status') }}\n)\n\nJoins:\nleft join ref_property_kind as pk on upper(trim({{ map_property_kind('o.usage_type_desc') }})) = upper(trim(pk.property_kind_value))\nleft join ref_property_status as ps on upper(trim({{ map_property_status('o.status_desc') }})) = upper(trim(ps.property_status_value))"
+    },
+    {
+      "key": "property.glossary.property_core.gross_area",
+      "type": "GLOSSARY",
+      "title": "PROPERTY_CORE.GROSS_AREA",
+      "content": "Gross area; NULL when <= 0.",
+      "content_json": {
+        "target_column": "GROSS_AREA",
+        "target_table": "PROPERTY_CORE",
+        "definition": "Gross area; NULL when <= 0.",
+        "synonyms": []
+      }
+    },
+    {
+      "key": "property.glossary.property_core.gross_area_uom",
+      "type": "GLOSSARY",
+      "title": "PROPERTY_CORE.GROSS_AREA_UOM",
+      "content": "'Square Foot' when GROSS_AREA > 0 else NULL.",
+      "content_json": {
+        "target_column": "GROSS_AREA_UOM",
+        "target_table": "PROPERTY_CORE",
+        "definition": "'Square Foot' when GROSS_AREA > 0 else NULL.",
+        "synonyms": []
+      }
+    },
+    {
+      "key": "property.glossary.property_core.net_rentable_area",
+      "type": "GLOSSARY",
+      "title": "PROPERTY_CORE.NET_RENTABLE_AREA",
+      "content": "Net rentable area; NULL when <= 0.",
+      "content_json": {
+        "target_column": "NET_RENTABLE_AREA",
+        "target_table": "PROPERTY_CORE",
+        "definition": "Net rentable area; NULL when <= 0.",
+        "synonyms": []
+      }
+    },
+    {
+      "key": "property.glossary.property_core.net_rentable_area_uom",
+      "type": "GLOSSARY",
+      "title": "PROPERTY_CORE.NET_RENTABLE_AREA_UOM",
+      "content": "'Square Foot' when NET_RENTABLE_AREA > 0 else NULL.",
+      "content_json": {
+        "target_column": "NET_RENTABLE_AREA_UOM",
+        "target_table": "PROPERTY_CORE",
+        "definition": "'Square Foot' when NET_RENTABLE_AREA > 0 else NULL.",
+        "synonyms": []
+      }
+    },
+    {
+      "key": "property.glossary.property_core.number_of_units",
+      "type": "GLOSSARY",
+      "title": "PROPERTY_CORE.NUMBER_OF_UNITS",
+      "content": "Number of units; 0 mapped to NULL.",
+      "content_json": {
+        "target_column": "NUMBER_OF_UNITS",
+        "target_table": "PROPERTY_CORE",
+        "definition": "Number of units; 0 mapped to NULL.",
+        "synonyms": []
+      }
+    },
+    {
+      "key": "property.glossary.property_core.number_of_floors",
+      "type": "GLOSSARY",
+      "title": "PROPERTY_CORE.NUMBER_OF_FLOORS",
+      "content": "Number of floors; NULL when <= 0.",
+      "content_json": {
+        "target_column": "NUMBER_OF_FLOORS",
+        "target_table": "PROPERTY_CORE",
+        "definition": "Number of floors; NULL when <= 0.",
+        "synonyms": []
+      }
+    },
+    {
+      "key": "property.glossary.property_core.year_built",
+      "type": "GLOSSARY",
+      "title": "PROPERTY_CORE.YEAR_BUILT",
+      "content": "Year built, valid range 1700-4000 else NULL.",
+      "content_json": {
+        "target_column": "YEAR_BUILT",
+        "target_table": "PROPERTY_CORE",
+        "definition": "Year built, valid range 1700-4000 else NULL.",
+        "synonyms": []
+      }
+    },
+    {
+      "key": "property.glossary.property_core.year_renovated",
+      "type": "GLOSSARY",
+      "title": "PROPERTY_CORE.YEAR_RENOVATED",
+      "content": "Year renovated, valid range 1700-4000 else NULL.",
+      "content_json": {
+        "target_column": "YEAR_RENOVATED",
+        "target_table": "PROPERTY_CORE",
+        "definition": "Year renovated, valid range 1700-4000 else NULL.",
+        "synonyms": []
+      }
+    },
+    {
+      "key": "property.glossary.property_core.owner_occupied",
+      "type": "GLOSSARY",
+      "title": "PROPERTY_CORE.OWNER_OCCUPIED",
+      "content": "'Y'/'N' normalised from source flag (Y/1, N/0).",
+      "content_json": {
+        "target_column": "OWNER_OCCUPIED",
+        "target_table": "PROPERTY_CORE",
+        "definition": "'Y'/'N' normalised from source flag (Y/1, N/0).",
+        "synonyms": []
+      }
+    },
+    {
+      "key": "property.glossary.property_core.tenancy_type",
+      "type": "GLOSSARY",
+      "title": "PROPERTY_CORE.TENANCY_TYPE",
+      "content": "Normalised via map_property_tenancy_type.",
+      "content_json": {
+        "target_column": "TENANCY_TYPE",
+        "target_table": "PROPERTY_CORE",
+        "definition": "Normalised via map_property_tenancy_type.",
+        "synonyms": []
+      }
+    },
+    {
+      "key": "property.glossary.property_core.building_identifier",
+      "type": "GLOSSARY",
+      "title": "PROPERTY_CORE.BUILDING_IDENTIFIER",
+      "content": "Extracted via extract_building_identifier macro.",
+      "content_json": {
+        "target_column": "BUILDING_IDENTIFIER",
+        "target_table": "PROPERTY_CORE",
+        "definition": "Extracted via extract_building_identifier macro.",
+        "synonyms": []
+      }
+    },
+    {
+      "key": "property.glossary.property_core.single_onsite_flag",
+      "type": "GLOSSARY",
+      "title": "PROPERTY_CORE.SINGLE_ONSITE_FLAG",
+      "content": "'Y'/'N' from YES/NO.",
+      "content_json": {
+        "target_column": "SINGLE_ONSITE_FLAG",
+        "target_table": "PROPERTY_CORE",
+        "definition": "'Y'/'N' from YES/NO.",
+        "synonyms": []
+      }
+    },
+    {
+      "key": "property.glossary.property_core.statistical_flag",
+      "type": "GLOSSARY",
+      "title": "PROPERTY_CORE.STATISTICAL_FLAG",
+      "content": "Statistical property flag (Y/N).",
+      "content_json": {
+        "target_column": "STATISTICAL_FLAG",
+        "target_table": "PROPERTY_CORE",
+        "definition": "Statistical property flag (Y/N).",
+        "synonyms": []
+      }
+    },
+    {
+      "key": "property.glossary.property_core.current_in_source_flag",
+      "type": "GLOSSARY",
+      "title": "PROPERTY_CORE.CURRENT_IN_SOURCE_FLAG",
+      "content": "'Y' when the property is current/active in source (EDP: lease/sale/availability, usage record set, user tag, or modified since 2024-01-01).",
+      "content_json": {
+        "target_column": "CURRENT_IN_SOURCE_FLAG",
+        "target_table": "PROPERTY_CORE",
+        "definition": "'Y' when the property is current/active in source (EDP: lease/sale/availability, usage record set, user tag, or modified since 2024-01-01).",
+        "synonyms": []
+      }
+    },
+    {
+      "key": "property.glossary.property_core.year_built_after_1980",
+      "type": "GLOSSARY",
+      "title": "PROPERTY_CORE.YEAR_BUILT_AFTER_1980",
+      "content": "YEAR_BUILT when >= 1980 else NULL.",
+      "content_json": {
+        "target_column": "YEAR_BUILT_AFTER_1980",
+        "target_table": "PROPERTY_CORE",
+        "definition": "YEAR_BUILT when >= 1980 else NULL.",
+        "synonyms": []
+      }
+    },
+    {
+      "key": "property.glossary.property_core.year_built_before_1950",
+      "type": "GLOSSARY",
+      "title": "PROPERTY_CORE.YEAR_BUILT_BEFORE_1950",
+      "content": "YEAR_BUILT when < 1950 else NULL.",
+      "content_json": {
+        "target_column": "YEAR_BUILT_BEFORE_1950",
+        "target_table": "PROPERTY_CORE",
+        "definition": "YEAR_BUILT when < 1950 else NULL.",
+        "synonyms": []
+      }
+    },
+    {
+      "key": "property.glossary.property_core.year_built_between_1950_1979",
+      "type": "GLOSSARY",
+      "title": "PROPERTY_CORE.YEAR_BUILT_BETWEEN_1950_1979",
+      "content": "YEAR_BUILT when 1950-1979 else NULL.",
+      "content_json": {
+        "target_column": "YEAR_BUILT_BETWEEN_1950_1979",
+        "target_table": "PROPERTY_CORE",
+        "definition": "YEAR_BUILT when 1950-1979 else NULL.",
+        "synonyms": []
+      }
+    },
+    {
+      "key": "property.glossary.property_core.property_class",
+      "type": "GLOSSARY",
+      "title": "PROPERTY_CORE.PROPERTY_CLASS",
+      "content": "Normalised via m_map_property_class_type_desc.",
+      "content_json": {
+        "target_column": "PROPERTY_CLASS",
+        "target_table": "PROPERTY_CORE",
+        "definition": "Normalised via m_map_property_class_type_desc.",
+        "synonyms": []
       }
     },
     {
       "key": "property.model.property_usage",
       "type": "MODEL_DEFINITION",
       "title": "PROPERTY_USAGE (spoke)",
-      "content": "Property usage (Pattern A: dim_property_building + dim_property_usage + country + fact_aar). Grain: one row per SOURCE_UNIQUE_ID per REF_GDP_SOURCE_SYSTEM_SKEY. Spoke of PROPERTY_CORE through PROPERTY_CORE_SKEY. ",
+      "content": "Property usage spoke (usage type, NRA, units, subtype, class) per source property. Grain: one row per SOURCE_UNIQUE_ID per REF_GDP_SOURCE_SYSTEM_SKEY. Spoke of PROPERTY_CORE through PROPERTY_CORE_SKEY. Only rows with src.GDP_IS_ACTIVE = TRUE are merged from source; orphans per source are soft-deleted by PROPERTY_CORE_SKEY in the delta.",
       "content_json": {
         "target_table": "PROPERTY_USAGE",
         "role": "spoke",
         "hub_fk": "PROPERTY_CORE_SKEY",
-        "hkey_columns": [],
-        "column_count": 0
+        "hkey_columns": [
+          "REF_USAGE_TYPE_SKEY",
+          "GEOGRAPHY_HIERARCHY_SKEY",
+          "IS_PRIMARY_USAGE",
+          "NET_RENTABLE_AREA",
+          "NET_RENTABLE_AREA_UOM",
+          "STATISTICAL_FLAG",
+          "NUMBER_OF_UNITS",
+          "PROPERTY_SUBTYPE",
+          "PROPERTY_CLASS"
+        ],
+        "column_count": 19
+      }
+    },
+    {
+      "key": "property.pattern.property_usage.references",
+      "type": "DBT_PATTERN",
+      "title": "PROPERTY_USAGE reference lookups",
+      "content": "Reference CTEs:\nref_source_system as (\n    {{ m_get_source_system_skey_property('<SOURCE_SYSTEM_NAME>') }}\n),\n\nref_usage_type as (\n    select usage_type_skey, usage_type_value\n    from {{ source('property_reference', 'ref_usage_type') }}\n)\n\nJoins:\nleft join ref_usage_type as ut on upper(trim(o.usage_type_desc)) = upper(trim(ut.usage_type_value))"
+    },
+    {
+      "key": "property.glossary.property_usage.net_rentable_area",
+      "type": "GLOSSARY",
+      "title": "PROPERTY_USAGE.NET_RENTABLE_AREA",
+      "content": "Net rentable area; NULL when <= 0.",
+      "content_json": {
+        "target_column": "NET_RENTABLE_AREA",
+        "target_table": "PROPERTY_USAGE",
+        "definition": "Net rentable area; NULL when <= 0.",
+        "synonyms": []
+      }
+    },
+    {
+      "key": "property.glossary.property_usage.net_rentable_area_uom",
+      "type": "GLOSSARY",
+      "title": "PROPERTY_USAGE.NET_RENTABLE_AREA_UOM",
+      "content": "'Square Foot' when NET_RENTABLE_AREA > 0 else NULL.",
+      "content_json": {
+        "target_column": "NET_RENTABLE_AREA_UOM",
+        "target_table": "PROPERTY_USAGE",
+        "definition": "'Square Foot' when NET_RENTABLE_AREA > 0 else NULL.",
+        "synonyms": []
+      }
+    },
+    {
+      "key": "property.glossary.property_usage.statistical_flag",
+      "type": "GLOSSARY",
+      "title": "PROPERTY_USAGE.STATISTICAL_FLAG",
+      "content": "Statistical property flag (Y/N).",
+      "content_json": {
+        "target_column": "STATISTICAL_FLAG",
+        "target_table": "PROPERTY_USAGE",
+        "definition": "Statistical property flag (Y/N).",
+        "synonyms": []
+      }
+    },
+    {
+      "key": "property.glossary.property_usage.number_of_units",
+      "type": "GLOSSARY",
+      "title": "PROPERTY_USAGE.NUMBER_OF_UNITS",
+      "content": "Number of units; 0 mapped to NULL.",
+      "content_json": {
+        "target_column": "NUMBER_OF_UNITS",
+        "target_table": "PROPERTY_USAGE",
+        "definition": "Number of units; 0 mapped to NULL.",
+        "synonyms": []
+      }
+    },
+    {
+      "key": "property.glossary.property_usage.property_class",
+      "type": "GLOSSARY",
+      "title": "PROPERTY_USAGE.PROPERTY_CLASS",
+      "content": "Normalised via m_map_property_class_type_desc.",
+      "content_json": {
+        "target_column": "PROPERTY_CLASS",
+        "target_table": "PROPERTY_USAGE",
+        "definition": "Normalised via m_map_property_class_type_desc.",
+        "synonyms": []
       }
     },
     {
       "key": "property.model.property_address",
       "type": "MODEL_DEFINITION",
       "title": "PROPERTY_ADDRESS (spoke)",
-      "content": "Property address (Pattern A). Grain: one row per SOURCE_UNIQUE_ID per REF_GDP_SOURCE_SYSTEM_SKEY. Spoke of PROPERTY_CORE through PROPERTY_CORE_SKEY. ",
+      "content": "Property address spoke: standardised address, raw SOURCE_* address, and geocode attributes. Grain: one row per SOURCE_UNIQUE_ID per REF_GDP_SOURCE_SYSTEM_SKEY. Spoke of PROPERTY_CORE through PROPERTY_CORE_SKEY. Every address must carry REF_ADDRESS_TYPE_SKEY, STREET_NAME, STATE and COUNTRY. ESRI post-hooks geocode and may overwrite standardised address/lat/long. STATE_PROVINCE is emitted by the model and included in the hkey but was not present in PROD_GDP_SILVER_DB.PROPERTY.PROPERTY_ADDRESS at time of capture (verify DDL).",
       "content_json": {
         "target_table": "PROPERTY_ADDRESS",
         "role": "spoke",
         "hub_fk": "PROPERTY_CORE_SKEY",
-        "hkey_columns": [],
-        "column_count": 0
+        "hkey_columns": [
+          "REF_ADDRESS_TYPE_SKEY",
+          "ADDRESS_LINE_1",
+          "ADDRESS_LINE_2",
+          "STREET_NAME",
+          "STREET_NUMBER_1",
+          "STREET_NUMBER_2",
+          "PRE_STREET_DIRECTION_NAME",
+          "STREET_TYPE",
+          "POST_STREET_DIRECTION_NAME",
+          "CITY",
+          "STATE_PROVINCE",
+          "COUNTRY",
+          "COUNTY",
+          "POSTAL_CODE",
+          "STATE",
+          "POSTAL_CODE_EXTENSION",
+          "STREET_NUMBER_3",
+          "LATITUDE",
+          "LONGITUDE",
+          "SOURCE_ADDRESS_LINE_1",
+          "SOURCE_ADDRESS_LINE_2",
+          "SOURCE_STREET_NAME",
+          "SOURCE_STREET_NUMBER_1",
+          "SOURCE_STREET_NUMBER_2",
+          "SOURCE_PRE_STREET_DIRECTION_NAME",
+          "SOURCE_STREET_TYPE",
+          "SOURCE_POST_STREET_DIRECTION_NAME",
+          "SOURCE_CITY",
+          "SOURCE_COUNTY",
+          "SOURCE_STATE",
+          "SOURCE_POSTAL_CODE",
+          "SOURCE_POSTAL_CODE_EXTENSION",
+          "SOURCE_COUNTRY_NAME",
+          "SOURCE_STREET_NUMBER_3",
+          "SOURCE_GEOCODE_OUTPUT",
+          "SOURCE_LATITUDE",
+          "SOURCE_LONGITUDE",
+          "SOURCE_LATITUDE_OVERRIDE",
+          "SOURCE_LONGITUDE_OVERRIDE",
+          "SOURCE_GEOCODE_OVERRIDE_SOURCE",
+          "ADDRESS_MATCH_SCORE",
+          "ADDRESS_MATCH_CODE",
+          "GEOCODE_OUTPUT",
+          "ADDRESS_PRECISION_CODE",
+          "GEOCODE_PROVIDER_NAME",
+          "GEOMETRY",
+          "SOURCE_STREET_NAME_PRE_TYPE",
+          "STREET_NAME_PRE_TYPE"
+        ],
+        "column_count": 61
       }
     },
     {
-      "key": "property.model.property_owner",
-      "type": "MODEL_DEFINITION",
-      "title": "PROPERTY_OWNER (spoke)",
-      "content": "Property owners (Pattern B: dim_property_building + fact_property_role + dim_party_role + dim_organization, filtered to party_role_type_desc IN ('Legal Owner','True Owner')). Grain: one row per SOURCE_UNIQUE_ID per REF_GDP_SOURCE_SYSTEM_SKEY. Spoke of PROPERTY_CORE through PROPERTY_CORE_SKEY. ",
+      "key": "property.pattern.property_address.references",
+      "type": "DBT_PATTERN",
+      "title": "PROPERTY_ADDRESS reference lookups",
+      "content": "Reference CTEs:\nref_source_system as (\n    {{ m_get_source_system_skey_property('<SOURCE_SYSTEM_NAME>') }}\n),\n\nref_address_type as (\n    select ref_address_type_skey, address_type_value\n    from {{ source('property_reference', 'ref_address_type') }}\n)\n\nJoins:\nleft join ref_address_type as adt on upper(trim(o.address_type)) = upper(trim(adt.address_type_value))"
+    },
+    {
+      "key": "property.glossary.property_address.latitude",
+      "type": "GLOSSARY",
+      "title": "PROPERTY_ADDRESS.LATITUDE",
+      "content": "Geocoded latitude (ESRI post-hook may update).",
       "content_json": {
-        "target_table": "PROPERTY_OWNER",
-        "role": "spoke",
-        "hub_fk": "PROPERTY_CORE_SKEY",
-        "hkey_columns": [],
-        "column_count": 0
+        "target_column": "LATITUDE",
+        "target_table": "PROPERTY_ADDRESS",
+        "definition": "Geocoded latitude (ESRI post-hook may update).",
+        "synonyms": []
+      }
+    },
+    {
+      "key": "property.glossary.property_address.longitude",
+      "type": "GLOSSARY",
+      "title": "PROPERTY_ADDRESS.LONGITUDE",
+      "content": "Geocoded longitude (ESRI post-hook may update).",
+      "content_json": {
+        "target_column": "LONGITUDE",
+        "target_table": "PROPERTY_ADDRESS",
+        "definition": "Geocoded longitude (ESRI post-hook may update).",
+        "synonyms": []
+      }
+    },
+    {
+      "key": "property.glossary.property_address.country_iso2_code",
+      "type": "GLOSSARY",
+      "title": "PROPERTY_ADDRESS.COUNTRY_ISO2_CODE",
+      "content": "Populated by LIGHTBOX only; NULL for other sources.",
+      "content_json": {
+        "target_column": "COUNTRY_ISO2_CODE",
+        "target_table": "PROPERTY_ADDRESS",
+        "definition": "Populated by LIGHTBOX only; NULL for other sources.",
+        "synonyms": []
+      }
+    },
+    {
+      "key": "property.glossary.property_address.country_iso3_code",
+      "type": "GLOSSARY",
+      "title": "PROPERTY_ADDRESS.COUNTRY_ISO3_CODE",
+      "content": "Populated by LIGHTBOX only; NULL for other sources.",
+      "content_json": {
+        "target_column": "COUNTRY_ISO3_CODE",
+        "target_table": "PROPERTY_ADDRESS",
+        "definition": "Populated by LIGHTBOX only; NULL for other sources.",
+        "synonyms": []
+      }
+    },
+    {
+      "key": "property.glossary.property_address.state_iso_code",
+      "type": "GLOSSARY",
+      "title": "PROPERTY_ADDRESS.STATE_ISO_CODE",
+      "content": "Populated by LIGHTBOX only; NULL for other sources.",
+      "content_json": {
+        "target_column": "STATE_ISO_CODE",
+        "target_table": "PROPERTY_ADDRESS",
+        "definition": "Populated by LIGHTBOX only; NULL for other sources.",
+        "synonyms": []
+      }
+    },
+    {
+      "key": "property.transform.source_unique_id",
+      "type": "TRANSFORMATION_RULE",
+      "title": "SOURCE_UNIQUE_ID cast",
+      "content": "NUMBER or TEXT to TEXT: o.col::varchar",
+      "content_json": {
+        "target_column": "SOURCE_UNIQUE_ID",
+        "transformation": "o.col::varchar",
+        "expression": "{col}::varchar",
+        "target_type": "TEXT"
       }
     },
     {
       "key": "property.pattern.join_graph",
       "type": "DBT_PATTERN",
       "title": "Per-Target Join Graph",
-      "content": "## Per-Target Join Graph (third pattern)\n\nWhen targets within a single STTM share most bronze tables but require distinct join shapes, generate per-target extraction CTEs (NOT a shared CTE).\n\n**Detection signals** (any one):\n- STTM `Join` cell contains target-name section markers (e.g., `------ PROPERTY_OWNER`).\n- Different targets reference disjoint sets of bronze tables.\n- A subset of targets requires a filter not applicable to others (e.g., `party_role_type_desc IN ('Legal Owner','True Owner')` for PROPERTY_OWNER only).\n\n**Code pattern**: each ephemeral model has its own `sp_<target>` extraction CTE with its own bronze JOIN graph; the contract documents Pattern A / Pattern B / etc. per target.\n\n**Reference example**: EDP property domain \u2014 PROPERTY_CORE/USAGE/ADDRESS use Pattern A (`dim_property_building` + `dim_property_usage` + `country` + `fact_aar`); PROPERTY_OWNER uses Pattern B (`dim_property_building` + `fact_property_role` + `dim_party_role` + `dim_organization`).\n\n---"
+      "content": "## Per-Target Join Graph (third pattern)\n\nWhen targets within a single STTM share most bronze tables but require distinct join shapes, generate per-target extraction CTEs (NOT a shared CTE).\n\n**Detection signals** (any one):\n- STTM `Join` cell contains target-name section markers (e.g., `------ PROPERTY_ADDRESS`).\n- Different targets reference disjoint sets of bronze tables.\n- A subset of targets requires a filter not applicable to others.\n\n**Code pattern**: each ephemeral model has its own `sp_<target>` extraction CTE with its own bronze JOIN graph; the contract documents Pattern A / Pattern B / etc. per target.\n\n**Reference example**: EDP property domain — PROPERTY_CORE/USAGE/ADDRESS use Pattern A (`dim_property_building` + `dim_property_usage` + `country` + `fact_aar`)."
     },
     {
       "key": "property.guide.minimum_mapping",
@@ -248,7 +1649,114 @@
       "key": "property.guide.known_sources",
       "type": "ONBOARDING_GUIDE",
       "title": "PROPERTY sources",
-      "content": "## Known Sources to Onboard\n\nPer `AGENTS.md` source registry:\n\n| SKEY | Source | Status |\n|---|---|---|\n| 100 | EDP | Planned |\n| 102 | LIGHTBOX | Planned |\n| 200 | DIQ | Planned |\n| 201 | MTA | Planned (shared with company) |"
+      "content": "## Known Sources\n\n| SKEY | Source | Silver models |\n|---|---|---|\n| 100 | EDP | core, usage, address |\n| 102 | LIGHTBOX | core, usage, address |\n| 200 | DIQ | core, usage, address |\n| 201 | MTA | core, usage, address (shared with company) |"
+    },
+    {
+      "key": "property.pattern.merged_union_pipeline",
+      "type": "DBT_PATTERN",
+      "title": "Merged per-source union pipeline",
+      "content": "Each unified Silver PROPERTY model unions per-source ephemeral models, each guarded by m_is_source_active('<src>'). Steps: unioned -> source_data -> filtered (left join {{ this }} on SOURCE_UNIQUE_ID + REF_GDP_SOURCE_SYSTEM_SKEY; keep rows where NVL(hkey) differs or GDP_IS_ACTIVE differs) -> hard_deletes (active target rows for ids in the source's *_property_entity_ids delta that no longer exist in source, emitted with GDP_IS_ACTIVE = FALSE) -> final select with coalesce(existing_skey, SEQ_<TABLE>_SKEY.NEXTVAL). Post-hook m_insert_history writes <TABLE>_HIST. To onboard a new source: add <src>_property_<entity>.sql + <src>_property_entity_ids.sql, add a union branch and an orphan branch to each unified model."
+    },
+    {
+      "key": "property.guide.hkey_columns",
+      "type": "ONBOARDING_GUIDE",
+      "title": "PROPERTY hash-key columns",
+      "content": "Hash keys use generate_sha2_hash_key via macros property_core_hkey/property_usage_hkey/property_address_hkey (lightbox_utils.sql). Every source must produce all hkey input columns (NULL where unavailable) so hashes are comparable.",
+      "content_json": {
+        "PROPERTY_CORE": [
+          "REF_PROPERTY_KIND_SKEY",
+          "REF_PROPERTY_STATUS_SKEY",
+          "PROPERTY_NAME",
+          "BUSINESS_PARK_NAME",
+          "PARCEL_NUMBER",
+          "GROSS_AREA",
+          "GROSS_AREA_UOM",
+          "NET_RENTABLE_AREA",
+          "NET_RENTABLE_AREA_UOM",
+          "NUMBER_OF_UNITS",
+          "NUMBER_OF_FLOORS",
+          "YEAR_BUILT",
+          "YEAR_RENOVATED",
+          "OWNER_OCCUPIED",
+          "TENANCY_TYPE",
+          "BUILDING_IDENTIFIER",
+          "SINGLE_ONSITE_FLAG",
+          "STATISTICAL_FLAG",
+          "CURRENT_IN_SOURCE_FLAG",
+          "GEOMETRY",
+          "YEAR_BUILT_AFTER_1980",
+          "YEAR_BUILT_BEFORE_1950",
+          "YEAR_BUILT_BETWEEN_1950_1979",
+          "PROPERTY_CLASS",
+          "PROPERTY_LEGAL_OWNERSHIP_NAME_1",
+          "PROPERTY_LEGAL_OWNERSHIP_NAME_2",
+          "PROPERTY_LEGAL_OWNERSHIP_NAME_3",
+          "PROPERTY_LEGAL_OWNERSHIP_NAME_4",
+          "PROPERTY_LEGAL_OWNERSHIP_NAME_5",
+          "PROPERTY_LEGAL_OWNERSHIP_NAME_6"
+        ],
+        "PROPERTY_USAGE": [
+          "REF_USAGE_TYPE_SKEY",
+          "GEOGRAPHY_HIERARCHY_SKEY",
+          "IS_PRIMARY_USAGE",
+          "NET_RENTABLE_AREA",
+          "NET_RENTABLE_AREA_UOM",
+          "STATISTICAL_FLAG",
+          "NUMBER_OF_UNITS",
+          "PROPERTY_SUBTYPE",
+          "PROPERTY_CLASS"
+        ],
+        "PROPERTY_ADDRESS": [
+          "REF_ADDRESS_TYPE_SKEY",
+          "ADDRESS_LINE_1",
+          "ADDRESS_LINE_2",
+          "STREET_NAME",
+          "STREET_NUMBER_1",
+          "STREET_NUMBER_2",
+          "PRE_STREET_DIRECTION_NAME",
+          "STREET_TYPE",
+          "POST_STREET_DIRECTION_NAME",
+          "CITY",
+          "STATE_PROVINCE",
+          "COUNTRY",
+          "COUNTY",
+          "POSTAL_CODE",
+          "STATE",
+          "POSTAL_CODE_EXTENSION",
+          "STREET_NUMBER_3",
+          "LATITUDE",
+          "LONGITUDE",
+          "SOURCE_ADDRESS_LINE_1",
+          "SOURCE_ADDRESS_LINE_2",
+          "SOURCE_STREET_NAME",
+          "SOURCE_STREET_NUMBER_1",
+          "SOURCE_STREET_NUMBER_2",
+          "SOURCE_PRE_STREET_DIRECTION_NAME",
+          "SOURCE_STREET_TYPE",
+          "SOURCE_POST_STREET_DIRECTION_NAME",
+          "SOURCE_CITY",
+          "SOURCE_COUNTY",
+          "SOURCE_STATE",
+          "SOURCE_POSTAL_CODE",
+          "SOURCE_POSTAL_CODE_EXTENSION",
+          "SOURCE_COUNTRY_NAME",
+          "SOURCE_STREET_NUMBER_3",
+          "SOURCE_GEOCODE_OUTPUT",
+          "SOURCE_LATITUDE",
+          "SOURCE_LONGITUDE",
+          "SOURCE_LATITUDE_OVERRIDE",
+          "SOURCE_LONGITUDE_OVERRIDE",
+          "SOURCE_GEOCODE_OVERRIDE_SOURCE",
+          "ADDRESS_MATCH_SCORE",
+          "ADDRESS_MATCH_CODE",
+          "GEOCODE_OUTPUT",
+          "ADDRESS_PRECISION_CODE",
+          "GEOCODE_PROVIDER_NAME",
+          "GEOMETRY",
+          "SOURCE_STREET_NAME_PRE_TYPE",
+          "STREET_NAME_PRE_TYPE"
+        ]
+      }
     }
   ]
 }

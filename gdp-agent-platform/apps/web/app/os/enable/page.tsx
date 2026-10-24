@@ -38,7 +38,8 @@ const WAYS = [
 
 const ITEM_STATUS: Record<string, { tone: Tone; label: string }> = {
   MISSING: { tone: "amber", label: "Not registered" }, UNREACHABLE: { tone: "red", label: "Unreachable" },
-  NOT_LANDED: { tone: "amber", label: "Not landed" }, ATTENTION: { tone: "red", label: "No longer registered" },
+  NOT_LANDED: { tone: "amber", label: "Not landed" }, ATTENTION: { tone: "red", label: "Needs a new run" },
+  NO_RUN: { tone: "blue", label: "Run not started" },
 };
 
 /** Names compared the way requests match them: case, spacing and punctuation ignored. */
@@ -98,6 +99,9 @@ export default async function SourceReadiness({ searchParams }: { searchParams: 
   const asks = requests.data.requests
     .flatMap((r) => r.items.filter((i) => !i.removed_at && i.stage === "ENABLE").map((i) => ({ r, i })))
     .sort((a, b) => a.r.created_at.localeCompare(b.r.created_at));
+  // and each new domain a data owner asked for, still to onboard
+  const domainAsks = requests.data.requests.filter((r) => r.stage === "DOMAIN" && !r.domain_id && r.proposed_domain)
+    .sort((a, b) => a.created_at.localeCompare(b.created_at));
   const list = sources.data.sources;
   const ready = list.filter((s) => s.health === "HEALTHY" && (s.staged_tables > 0 || (s.landed_tables ?? 0) > 0));
   const needs = list.filter((s) => s.health !== "HEALTHY");
@@ -117,8 +121,8 @@ export default async function SourceReadiness({ searchParams }: { searchParams: 
                   actions={<><Btn href="/dashboard/sources">Source store</Btn><Action access={access} id="connectSource" label="Onboard a source" href="/dashboard/onboarding?type=source" variant="primary" icon={<Plug className="h-3.5 w-3.5" />} /></>} />
       <SourceError what="Sources" error={sources.error} />
       <SourceError what="Requests" error={requests.error} />
-      {asks.length
-        ? <Banner tone="amber" icon={Inbox}><b>{asks.length} source{asks.length === 1 ? "" : "s"} asked for by data owners</b> wait on onboarding. Once a source is registered, reachable and landed, its request reads Source onboarded and goes to the Data Designer.</Banner>
+      {asks.length || domainAsks.length
+        ? <Banner tone="amber" icon={Inbox}><b>{[domainAsks.length ? `${domainAsks.length} domain${domainAsks.length === 1 ? "" : "s"}` : "", asks.length ? `${asks.length} source${asks.length === 1 ? "" : "s"}` : ""].filter(Boolean).join(" and ")} asked for by data owners</b> wait on onboarding. Once onboarded, each request moves on to the Data Designer on its own.</Banner>
         : waiting.length
           ? <Banner tone="amber" icon={Wrench} action={<Action access={access} id="connectSource" label="Open the first" href={`/runs/${waiting[0].run_id}/source`} variant="warn" />}><b>{waiting.length} run{waiting.length === 1 ? "" : "s"} wait on enablement</b>: access, landing or configuration before the designer can start.</Banner>
           : <Banner icon={ShieldCheck}>Nothing waits on onboarding. Sources already connected and landed skip this step automatically.</Banner>}
@@ -130,12 +134,30 @@ export default async function SourceReadiness({ searchParams }: { searchParams: 
         <Kpi label="Framework entries" value={configs.length} hint={`${ingestion.pipelines.length} pipelines registered`} icon={Workflow} tone="purple" />
       </div>
 
+      {domainAsks.length > 0 && (
+        <Card className="mb-4" title="Requests waiting on a domain" subtitle="Data owners asked for these new domains. Onboard one for its request: a domain of the requested name is attached to the request on its own." pad={false}>
+          <div className="os-divide" data-testid="enable-domain-asks">
+            {domainAsks.map((r) => (
+              <div key={r.request_id} className="flex flex-wrap items-start justify-between gap-3 px-5 py-3">
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2"><span className="text-[13px] font-extrabold">{r.proposed_domain}</span><Tag tone="amber">New domain</Tag></div>
+                  <div className="os-faint mt-0.5 text-[11px]">For <Link href={`/os/requests/${r.request_id}`} className="font-semibold underline">{r.title}</Link> · filed by {r.requested_by} {ago(r.created_at)}</div>
+                  {r.business_outcome && <div className="os-muted mt-0.5 text-[11.5px]">{r.business_outcome}</div>}
+                </div>
+                <Action access={access} id="onboardDomain" label="Onboard this domain" href={`/os/enable/new-domain?${new URLSearchParams({ request: r.request_id })}`} variant="primary" />
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
+
       <Card className="mb-4" title="Requests waiting on a source" subtitle="Data owners asked for these sources. Onboard one for its request and the request picks it up on its own." pad={false}>
         {asks.length ? (
           <div className="os-divide" data-testid="enable-asks">
             {asks.map(({ r, i }) => {
               const st = ITEM_STATUS[i.status] ?? { tone: "neutral" as Tone, label: pretty(i.status) };
-              const registered = !!i.source_system_id && i.status !== "ATTENTION";
+              // registered but unreachable or not landed: fixed in the source store; anything else opens the wizard
+              const registered = !!i.source_system_id && (i.status === "UNREACHABLE" || i.status === "NOT_LANDED");
               return (
                 <div key={i.item_id} className="flex flex-wrap items-start justify-between gap-3 px-5 py-3">
                   <div className="min-w-0 flex-1">

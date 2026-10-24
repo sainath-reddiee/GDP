@@ -10,8 +10,8 @@ Every screen reads live platform data through the endpoints the classic pages al
 |---|---|
 | My Work | My Work (`/os`), Inbox (`/work`), Overview, Copilot |
 | Intake | New request, Requests, Request history |
-| Enable | Source readiness, Onboard a source (the onboarding wizard, the Data OS Administrator's alone) |
-| Design | Designer studio, Onboard a domain, Domains, Stores (the six stores, with their own store tabs) |
+| Enable | Source readiness, Onboard a source, Onboard a domain (the Data OS Administrator's alone) |
+| Design | Designer studio, Domains, Stores (the six stores, with their own store tabs) |
 | Build | Workbench (and every `/runs/[id]` workspace), Silver pipeline, Gold pipeline, Lineage, Code, Run history |
 | Review | Gates, Approvals, Audit |
 | Skills | Skill studio, Registry (including proposed skills) |
@@ -35,11 +35,11 @@ The header carries what the classic top bar did: the domain scope, global search
 
 ## Onboarding requests (V075)
 
-A data owner files a request on Intake: a source, a new domain, or a data product, for a domain. The request then travels to whoever acts next. Nobody types its stage in. Every read works it out again from the domain, each source's registration and health, and the runs that onboard them (`services/onboarding/requests.py`).
+A data owner files a request on Intake: sources for a domain, or a new domain (named, never picked from the domains that exist; for those, a source request). Data product requests are a "coming soon" placeholder on Intake. The request then travels to whoever acts next. Nobody types its stage in. Every read works it out again from the domain, each source's registration and health, and the runs that onboard them (`services/onboarding/requests.py`).
 
 | Stage | When | Who acts (privilege) |
 |---|---|---|
-| Domain | the domain does not exist yet, or was deleted or retired | Data steward (`DOMAIN.EDIT`) |
+| Domain | the domain does not exist yet (Data OS Administrator, `DOMAIN.ONBOARD`), or was deleted or retired (Data steward, `DOMAIN.EDIT`, restores it) | as named |
 | Enable | a source is not registered, is unreachable, is not landed, or its run in the domain is not started | Data OS Administrator (`SOURCE.CONNECT`) |
 | Design | no approved domain model, or a run being profiled and mapped | Data Designer (`RUN.OPERATE`) and the gate approvers (`MAPPING.APPROVE`, `STTM.APPROVE`, `SODA.APPROVE`) |
 | Build | code generation and validation | Forward Engineering Lead (`RUN.OPERATE`) |
@@ -74,7 +74,7 @@ A data owner files a request on Intake: a source, a new domain, or a data produc
 - **Link a registration:** `SOURCE.CONNECT`.
 - **Link a run:** `RUN.CREATE` or `RUN.OPERATE`.
 - **Cancel:** the requester or `ROLE.MANAGE`.
-- **Reject:** `SOURCE.CONNECT`, `DOMAIN.EDIT` or `ROLE.MANAGE`.
+- **Reject:** `SOURCE.CONNECT`, `DOMAIN.ONBOARD`, `DOMAIN.EDIT` or `ROLE.MANAGE`.
 
 Reads follow domain membership (`domains.can_see`). Requests waiting on a role appear in that role's My Work, in Enable (sources to enable) and in Design (the domain's requests). Notifications stay in-app.
 
@@ -96,7 +96,7 @@ A request shows the earliest phase of the parts at its stage. Two milestones are
 
 **Who does what.**
 - The **data owner** files the request on Intake. Intake lists the sources already feeding the domain (from its runs), then the other registered sources, ready ones first. A source not on the platform is named under "Request a new source" and goes to the administrator.
-- The **Data OS Administrator** onboards sources, alone: registering a source, landing it and starting its run in the domain. The onboarding wizard (`/dashboard/onboarding`) is a tab of Enable and opens only for `SOURCE.CONNECT`, which only `PLATFORM_ADMIN` holds (system roles version 9 moved it from `DATA_ENGINEER`, once, with a `PRIVILEGE_MOVED` governance event). Everyone else asks for a source on Intake; the classic "Onboard source" buttons become "Request a source" for them. Domains are onboarded from Design, Onboard a domain (`/os/design/new-domain`, `DOMAIN.EDIT`); old wizard links to a domain go there.
+- The **Data OS Administrator** onboards sources, alone: registering a source, landing it and starting its run in the domain. The onboarding wizard (`/dashboard/onboarding`) is a tab of Enable and opens only for `SOURCE.CONNECT`, which only `PLATFORM_ADMIN` holds (system roles version 9 moved it from `DATA_ENGINEER`, once, with a `PRIVILEGE_MOVED` governance event). Everyone else asks for a source on Intake; the classic "Onboard source" buttons become "Request a source" for them. Domains are the administrator's too: Enable, Onboard a domain (`/os/enable/new-domain`), opens only for `DOMAIN.ONBOARD`, a privilege only `PLATFORM_ADMIN` holds (system roles version 10 grants it once). Creating, drafting or importing a domain (`POST /api/domains`, `/draft`, `/import`) needs it; data stewards keep `DOMAIN.EDIT` for editing domains that exist. Enable lists the domain requests waiting, with "Onboard this domain", which opens the wizard with the request named; a domain of the requested name is attached to the request on its own. Old links to the domain wizard (`/dashboard/onboarding?type=domain`, `/os/design/new-domain`) go there.
 - The administrator works from Enable. Enable is configuration only, with no table catalog. Each source shows its connection, credential reference (only whether one is set), landing target, schedule, SnapLogic master and child pipelines, and status. Sources asked for by requests come first, with "Onboard as" buttons for the wizard's three ways in (Snowflake share, relational database, files). The wizard opens with the request named and the source name filled in (`YARDI_VOYAGER` for "Yardi Voyager"); a source registered under that name is attached to the request on its own (names match ignoring case, spacing and punctuation).
 - The **Data Designer** profiles and models; the approved design is kept in the stores.
 - The **Forward Engineering Lead** builds end to end and must pass the validation gate.

@@ -1,11 +1,10 @@
 import Link from "next/link";
-import { ArrowRight, Bot, Boxes, CheckCircle2, CircleDashed, Crown, Database, GitMerge, Layers, Route, Wrench } from "lucide-react";
+import { Bot, Boxes, CheckCircle2, CircleDashed, Clock, Crown, Database, GitMerge, Layers, Route, Wrench } from "lucide-react";
 import type { RunSummary, SourceOverviewItem } from "@/lib/types";
 import { stateLabel } from "@/lib/run-labels";
 import { loadDomainModel, loadDomains, loadRuns, loadSources } from "@/lib/os/data";
 import { guard } from "@/lib/os/session";
-import { Action } from "@/components/os/action";
-import { ActivityRow, Btn, Card, Empty, PageHeader, SourceError, Tag, ago, pretty } from "@/components/os/ui";
+import { ActivityRow, Card, Empty, PageHeader, SourceError, Tag, ago, pretty } from "@/components/os/ui";
 import { AutoForm } from "@/components/os/client";
 import { SubmitRequest } from "@/components/os/request-ui";
 import { cn } from "@/lib/utils";
@@ -14,10 +13,18 @@ export const dynamic = "force-dynamic";
 export const metadata = { title: "Request and define" };
 
 const TYPES = [
-  { key: "source", label: "New source", icon: Database, start: null, hint: "Ask for a source system for a domain: attach one already on the platform, or request a new one from the Data OS Administrator" },
-  { key: "domain", label: "New domain", icon: Boxes, start: "/os/design/new-domain", hint: "Define a new business domain: its model, contract and memory" },
-  { key: "product", label: "New data product", icon: Crown, start: "/gold", hint: "Build a governed Gold product from mastered Silver domains" },
+  { key: "source", label: "New source", icon: Database, soon: false, hint: "Ask for a source system for a domain: attach one already on the platform, or request a new one from the Data OS Administrator" },
+  { key: "domain", label: "New domain", icon: Boxes, soon: false, hint: "Ask for a business domain that is not on the platform yet: the Data OS Administrator onboards its model, contract and memory" },
+  { key: "product", label: "New data product", icon: Crown, soon: true, hint: "Governed Gold products from mastered Silver domains" },
 ] as const;
+
+/** How a request for a new domain travels, in order. */
+const DOMAIN_ROUTE = [
+  { t: "File the request", s: "Name the new domain and what the business gets from it" },
+  { t: "Data OS Administrator onboards it", s: "Its model, contract and memory, from a pack, a draft or a design session; the request attaches the domain of that name on its own" },
+  { t: "Data Designer approves the model", s: "The domain's model is reviewed before any run maps into it" },
+  { t: "Its sources follow", s: "Sources named here go to the administrator too; once onboarded, the designer profiles and maps them" },
+];
 
 const REQUEST_TYPE = { source: "SOURCE", domain: "DOMAIN", product: "PRODUCT" } as const;
 
@@ -64,20 +71,66 @@ export default async function Intake({ searchParams }: { searchParams: { type?: 
     && (chosen.length === 0 || chosen.some((s) => s.source_system_name === r.source_system_name)));
   const notReady = chosen.filter((s) => s.health !== "HEALTHY" || (s.staged_tables === 0 && !(s.landed_tables ?? 0)));
   const entities = model?.data.diagram?.entities ?? [];
-  const startHref = type.start;
 
-  return (
+  const head = (
     <>
       <PageHeader eyebrow={`${persona.label} / Request and define`} title="Create an onboarding request"
-                  subtitle="One intake for a source, a domain or a data product. Link what already exists so the agents reuse it instead of re-entering it."
-                  actions={<Btn href="/os/requests">Requests</Btn>} />
+                  subtitle="One intake for a source, a domain or a data product. Link what already exists so the agents reuse it instead of re-entering it." />
       <div className="mb-4 flex flex-wrap gap-2" role="tablist">
         {TYPES.map((t) => (
           <Link key={t.key} href={`/os/intake?type=${t.key}`} role="tab" aria-selected={t.key === type.key} className={cn("os-btn", t.key === type.key && "os-btn-primary")}>
-            <t.icon className="h-3.5 w-3.5" /> {t.label}
+            <t.icon className="h-3.5 w-3.5" /> {t.label}{t.soon && <Tag className="ml-1">Soon</Tag>}
           </Link>
         ))}
       </div>
+    </>
+  );
+
+  if (type.key === "product") {
+    return (
+      <>
+        {head}
+        <Card title="Data product requests" subtitle="Coming soon">
+          <div data-testid="product-coming-soon"><Empty icon={Clock} title="Coming soon">
+            Requesting a governed Gold data product from mastered Silver domains will open here. Until then, ask for the domains and sources it needs with a domain or source request.
+          </Empty></div>
+        </Card>
+      </>
+    );
+  }
+
+  if (type.key === "domain") {
+    // a domain not on the platform yet: named, never picked from the domains that exist (those take source requests)
+    return (
+      <>
+        {head}
+        <div className="grid gap-4 xl:grid-cols-[minmax(0,1.45fr)_minmax(0,1fr)]">
+          <Card title="New domain" subtitle={type.hint}>
+            <div data-testid="domain-request">
+              <SubmitRequest type="DOMAIN" domainId={null} domainName={null} picked={[]} previewing={!!access.preview} />
+            </div>
+            <p className="os-faint mt-4 border-t border-[var(--os-line)] pt-3 text-[11.5px]">
+              Domains are onboarded by the Data OS Administrator. For a domain already on the platform, file a <Link href="/os/intake?type=source" className="underline">source request</Link> instead.
+            </p>
+          </Card>
+          <Card title="Where the request goes" subtitle="Routed by the platform, step by step">
+            <ol className="flex flex-col gap-2.5 text-[12px]">
+              {DOMAIN_ROUTE.map((x, i) => (
+                <li key={x.t} className="flex gap-2.5">
+                  <span className="os-faint grid h-6 w-6 shrink-0 place-items-center rounded-full bg-[var(--os-neutral-bg)] text-[11px] font-extrabold">{i + 1}</span>
+                  <span><b>{x.t}</b><span className="os-faint block text-[11px]">{x.s}</span></span>
+                </li>
+              ))}
+            </ol>
+          </Card>
+        </div>
+      </>
+    );
+  }
+
+  return (
+    <>
+      {head}
       <SourceError what="Domains" error={domains.error} />
       <SourceError what="Sources" error={sources.error} />
 
@@ -93,7 +146,7 @@ export default async function Intake({ searchParams }: { searchParams: { type?: 
                   {domains.data.map((d) => <option key={d.domain_id} value={d.domain_id}>{d.domain_name}{d.description ? ` · ${d.description.slice(0, 60)}` : ""}</option>)}
                 </select>
               </div>
-              {type.key !== "domain" && (
+              {(
                 <div className="grid gap-3" data-testid="attach-sources">
                   {domain && (
                     <fieldset data-testid="sources-feeding">
@@ -123,17 +176,9 @@ export default async function Intake({ searchParams }: { searchParams: { type?: 
             <SubmitRequest type={REQUEST_TYPE[type.key]} domainId={domain?.domain_id ?? null} domainName={domain?.domain_name ?? null}
                            picked={chosen.map((s) => ({ source_system_id: s.source_system_id, source_name: s.source_system_name }))}
                            previewing={!!access.preview} />
-            {startHref ? (
-              <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-[var(--os-line)] pt-3">
-                <span className="os-faint text-[11.5px]">{type.key === "domain" ? "Onboarding the domain yourself instead? Design has the domain wizard." : "Starting the Gold run yourself instead? The Gold pipeline starts it directly."}</span>
-                <Action access={access} id="startOnboarding" privilege={type.key === "domain" ? "DOMAIN.EDIT" : "RUN.CREATE"}
-                        label={type.key === "domain" ? "Onboard a domain" : "Start a Gold run"} href={startHref} />
-              </div>
-            ) : (
-              <p className="os-faint mt-4 border-t border-[var(--os-line)] pt-3 text-[11.5px]">
-                Sources are onboarded by the Data OS Administrator: they register the source, land it and start its run, and the request moves on to the Data Designer.
-              </p>
-            )}
+            <p className="os-faint mt-4 border-t border-[var(--os-line)] pt-3 text-[11.5px]">
+              Sources are onboarded by the Data OS Administrator: they register the source, land it and start its run, and the request moves on to the Data Designer.
+            </p>
           </Card>
 
           <Card title="Related workflows" subtitle={domain || chosen.length ? "Runs that already touch this domain or these sources" : "Pick a domain or a source to see what already exists"} pad={false}>

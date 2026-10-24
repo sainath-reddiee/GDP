@@ -11,11 +11,11 @@ type DomainRow = { domain_id: string; domain_name: string; active_flag?: boolean
 /** Onboarding a source: the Data OS Administrator's alone (Enable). The steps run down a rail like a pipeline: each is
  *  one choice, and once made the other options step away until Change brings them back. Onboarding registers the
  *  source, lands it and starts its run in the chosen domain; the Data Designer takes it from there. A domain is
- *  onboarded from Design (/os/design/new-domain); links from before keep working. */
+ *  onboarded in Enable too (/os/enable/new-domain); links from before keep working. */
 export default async function Onboarding({ searchParams }: { searchParams: { type?: string; branch?: string; kind?: string; how?: string; import?: string; request?: string; item?: string; name?: string } }) {
   if (searchParams.type === "domain" || searchParams.import === "1") {
     const keep = new URLSearchParams(Object.entries({ how: searchParams.how, import: searchParams.import }).filter((e): e is [string, string] => !!e[1]));
-    redirect(`/os/design/new-domain${keep.size ? `?${keep}` : ""}`);
+    redirect(`/os/enable/new-domain${keep.size ? `?${keep}` : ""}`);
   }
   if (searchParams.type !== "source") {
     // no kind (or the application kind, not available): sources are what this page onboards
