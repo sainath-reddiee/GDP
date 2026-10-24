@@ -2,11 +2,11 @@ import { CheckCircle2, Inbox, SearchX, ShieldCheck } from "lucide-react";
 import { loadDomains, loadRequests, loadWorkflowSearch } from "@/lib/os/data";
 import { SECTIONS, screenByKey, type ScreenKey } from "@/lib/os/access";
 import { osAccess, type OsAccess } from "@/lib/os/session";
-import { intentOf, overdue, type OnboardingRequest, type RequestType } from "@/lib/os/requests";
+import { intentOf, overdue, type OnboardingRequest } from "@/lib/os/requests";
 import { Banner, Btn, Empty, SourceError } from "@/components/os/ui";
 import { OnboardedDomains, PlatformActionRow, StartPanel, WorkflowRow } from "@/components/os/home";
 import { inflight, requestNeedsMe, workflowHref } from "@/lib/os/work";
-import { loadActions, type ActionItem } from "@/lib/os/actions";
+import { loadActions, type ActionItem, type ActionType } from "@/lib/os/actions";
 import { Segmented } from "@/components/os/stage-board";
 import { PlatformSearch } from "@/components/os/platform-search";
 
@@ -27,10 +27,11 @@ const VIEWS = [
   { key: "action", label: "Action required" },
   { key: "all", label: "All" },
 ] as const;
-// workflows by type, and "Platform": every other action across the platform (gates, approvals, reviews, operations)
-const TYPES: { key: string; label: string; type?: RequestType }[] = [
+// what an action is about: a domain (domain workflows, models, checks, knowledge), a source (source workflows, Silver
+// runs), a data product (product workflows, Gold runs), or the platform (approvals, fixes, skills, incidents)
+const TYPES: { key: string; label: string; type?: ActionType }[] = [
   { key: "all", label: "All" }, { key: "domain", label: "Domain", type: "DOMAIN" }, { key: "source", label: "Source", type: "SOURCE" },
-  { key: "product", label: "Product", type: "PRODUCT" }, { key: "platform", label: "Platform" },
+  { key: "product", label: "Product", type: "PRODUCT" }, { key: "platform", label: "Platform", type: "PLATFORM" },
 ];
 const INTENTS = [{ key: "all", label: "Any" }, { key: "new", label: "New" }, { key: "enhance", label: "Enhance" }] as const;
 const PRIORITY = { HIGH: 0, MEDIUM: 1, LOW: 2 } as const;
@@ -61,47 +62,53 @@ export default async function Home({ searchParams }: { searchParams: Params }) {
   const query = (searchParams.q ?? "").trim();
   const [list, domains, searched] = await Promise.all([loadRequests("all", "ALL"), loadDomains(),
     query ? loadWorkflowSearch(query) : Promise.resolve(null)]);
-  // every other action across the platform waiting on the viewer (gates no workflow covers, approvals, models and checks
-  // in review, knowledge and skill proposals, fixes, incidents): listed with the workflows, one queue for everything
-  const platform = await loadActions(access, list.data.requests);
   const all = list.data.requests;
   const active = all.filter((r) => r.status === "OPEN");
   const action = active.filter((r) => yours(r, access));
   const views = { active, action, all };
+  // every other action across the platform waiting on the viewer: each run the Design and Build boards count as theirs
+  // (unless one of their workflows here already shows it), approvals, models and checks in review, knowledge and skill
+  // proposals, fixes, incidents. One queue with the workflows; these wait on the viewer, so they are in every view.
+  const covered = new Set(action.flatMap((r) => r.items.map((i) => i.run_id)).filter(Boolean) as string[]);
+  const platform = await loadActions(access, covered);
 
-  const view = VIEWS.find((v) => v.key === searchParams.view)?.key ?? (action.length ? "action" : "active");
+  const view = VIEWS.find((v) => v.key === searchParams.view)?.key ?? (action.length + platform.items.length ? "action" : "active");
   const type = TYPES.find((t) => t.key === searchParams.type) ?? TYPES[0];
   const intent = INTENTS.find((i) => i.key === searchParams.intent) ?? INTENTS[0];
   // the search bar matches workflows by meaning (synonyms, intent such as "waiting on me"), best first; when the search
-  // is not reachable, by their title
+  // is not reachable, by their title. Other actions match on their words (intent words alone keep them all).
   const q = query.toLowerCase();
   const rank = searched?.data ? new Map(searched.data.results.map((x, i) => [x.id, i])) : null;
   const matches = (r: OnboardingRequest) => !q || (rank ? rank.has(r.request_id) : r.title.toLowerCase().includes(q));
-  const filteredRows = type.key === "platform" ? [] : views[view].filter((r) =>
-    (!type.type || r.request_type === type.type)
-    && (intent.key === "all" || intentOf(r) === intent.key.toUpperCase())
-    && matches(r));
-  // matches the current view leaves out (a finished workflow, one not waiting on you), offered as "show all"
-  const elsewhereMatches = q ? all.filter((r) => matches(r) && (!type.type || r.request_type === type.type)
-    && (intent.key === "all" || intentOf(r) === intent.key.toUpperCase())).length : 0;
-  const rows = rank ? [...filteredRows].sort((a, b) => (rank.get(a.request_id) ?? 0) - (rank.get(b.request_id) ?? 0)) : order(filteredRows, access);
-  // platform actions: all of them wait on the viewer; a workflow type or New/Enhance filter leaves them out, and the
-  // search keeps those whose words match (the intent words, "waiting on me", keep them all)
   const terms = searched?.data ? searched.data.intent.terms : q.split(/\s+/).filter(Boolean);
   const failedOnly = !!searched?.data?.intent.failed;
-  const platformRows = (type.key === "all" || type.key === "platform") && intent.key === "all"
-    ? platform.items.filter((a) => (!failedOnly || a.tone === "red")
-      && terms.every((t) => `${a.title} ${a.detail} ${a.group}`.toLowerCase().includes(t.toLowerCase().replace(/s$/, ""))))
-    : [];
-  const counts = { action: action.length + platform.items.length, active: active.length + platform.items.length, all: all.length + platform.items.length };
-  // one queue: what needs attention first (failed runs and validations), then the viewer's workflows, then the other
-  // actions by urgency; outside Action required the remaining workflows follow
+  const platformMatches = (a: ActionItem) => (!failedOnly || a.tone === "red")
+    && terms.every((t) => `${a.title} ${a.detail} ${a.group}`.toLowerCase().includes(t.toLowerCase().replace(/s$/, "")));
+  const intentOk = (r: OnboardingRequest) => intent.key === "all" || intentOf(r) === intent.key.toUpperCase();
+
+  // the queue for a view before the type filter: its workflows and every matching platform action (New and Enhance are
+  // about workflows, so they leave the platform actions out)
   type Entry = { kind: "workflow"; r: OnboardingRequest } | { kind: "platform"; a: ActionItem };
+  const typeOf = (e: Entry): ActionType => (e.kind === "workflow" ? e.r.request_type : e.a.type);
+  const poolFor = (v: keyof typeof views): Entry[] => [
+    ...order(views[v].filter((r) => intentOk(r) && matches(r)), access).map((r) => ({ kind: "workflow" as const, r })),
+    ...(intent.key === "all" ? platform.items.filter(platformMatches).map((a) => ({ kind: "platform" as const, a })) : []),
+  ];
+  const pool = poolFor(view);
+  const ofType = (k: (typeof TYPES)[number]) => (k.type ? pool.filter((e) => typeOf(e) === k.type) : pool);
+  // one queue: what needs attention first (failed runs and validations), then the viewer's workflows, then the other
+  // actions by urgency; outside Action required the remaining workflows follow. A search keeps its best match first.
   const urgency = (e: Entry) => e.kind === "platform"
     ? ({ red: 0, amber: 2, purple: 3, blue: 4 } as const)[e.a.tone]
     : e.r.attention ? 0 : yours(e.r, access) ? 1 : 5;
-  const entries: Entry[] = [...rows.map((r) => ({ kind: "workflow" as const, r })), ...platformRows.map((a) => ({ kind: "platform" as const, a }))];
-  const queue = rank ? entries : entries.map((e, i) => ({ e, i })).sort((x, y) => urgency(x.e) - urgency(y.e) || x.i - y.i).map((x) => x.e);
+  const entries = ofType(type).map((e, i) => ({ e, i }));
+  const queue = (rank
+    ? entries.sort((x, y) => (x.e.kind === "workflow" ? rank.get(x.e.r.request_id) ?? 0 : 1e6 + x.i) - (y.e.kind === "workflow" ? rank.get(y.e.r.request_id) ?? 0 : 1e6 + y.i))
+    : entries.sort((x, y) => urgency(x.e) - urgency(y.e) || x.i - y.i)).map((x) => x.e);
+  // the view counts are everything in each view (the filters below narrow the list, and show their own counts)
+  const counts = { action: action.length + platform.items.length, active: active.length + platform.items.length, all: all.length + platform.items.length };
+  // matches the current view leaves out (a finished workflow, one not waiting on you), offered as "show all"
+  const elsewhereMatches = q ? (type.type ? poolFor("all").filter((e) => typeOf(e) === type.type) : poolFor("all")).length : 0;
 
   const href = (patch: Partial<Params>) => {
     const next = { view, type: type.key, intent: intent.key, q: searchParams.q ?? "", ...patch };
@@ -135,12 +142,13 @@ export default async function Home({ searchParams }: { searchParams: Params }) {
               }))} />
               <span className="mx-1 hidden h-5 w-px bg-[var(--os-line)] sm:block" aria-hidden />
               <Segmented label="Type" testId="home-types" options={TYPES.map((t) => ({ key: t.key, label: t.label, href: href({ type: t.key }), active: t.key === type.key,
-                ...(t.key === "platform" ? { count: platform.items.length } : {}) }))} />
-              <Segmented label="New or enhance" testId="home-intents" options={INTENTS.map((i) => ({ key: i.key, label: i.label, href: href({ intent: i.key }), active: i.key === intent.key }))} />
+                count: ofType(t).length }))} />
+              <Segmented label="New or enhance" testId="home-intents" options={INTENTS.map((i) => ({ key: i.key, label: i.label, href: href({ intent: i.key }), active: i.key === intent.key,
+                ...(i.key === "all" ? {} : { count: views[view].filter((r) => intentOf(r) === i.key.toUpperCase() && matches(r) && (!type.type || r.request_type === type.type)).length }) }))} />
               {q && (
                 <span className="os-faint text-[11px]" data-testid="search-mode">
                   {rank ? `${queue.length} matching "${query}" by meaning` : `${queue.length} with "${query}" in the name`}
-                  {elsewhereMatches > rows.length && view !== "all" && (
+                  {elsewhereMatches > queue.length && view !== "all" && (
                     <> · <a className="os-accent font-bold" href={href({ view: "all" })}>show all {elsewhereMatches}</a></>
                   )}
                 </span>

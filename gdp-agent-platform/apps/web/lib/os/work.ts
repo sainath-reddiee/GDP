@@ -1,7 +1,7 @@
 import type { RunSummary } from "@/lib/types";
 import { GATES } from "@/lib/run-labels";
 import { LIFECYCLE, type StepKey } from "@/lib/os/lifecycle";
-import { actMode, has, type Grants } from "@/lib/os/access";
+import { has, type Grants } from "@/lib/os/access";
 import type { OnboardingRequest } from "@/lib/os/requests";
 
 // Which stage board a workflow belongs on, whether it waits on the viewer, and where Home sends a click. Shared by Home
@@ -29,11 +29,15 @@ const ORDER: Stage[] = ["intake", "enable", "design", "build", "review", "done"]
 export const pastStage = (run: Pick<RunSummary, "current_state" | "current_stage">, stage: Stage) =>
   run.current_state !== "FAILED" && run.current_state !== "CANCELLED" && ORDER.indexOf(stageOfRun(run)) > ORDER.indexOf(stage);
 
-/** A run waits on the viewer: a gate they decide (or may ask a decision on), a failed validation or run they operate,
- *  or a step their persona works. Governance leads (APPROVAL.VIEW) see every gate. */
+/** The runs every board and Home read: the same list, so their counts agree. */
+export const RUNS_QUERY = "sort=updated&limit=500";
+
+/** A run waits on the viewer: a gate they decide, a failed validation or run they operate, or a step their persona
+ *  works. One rule for Home and the Design and Build boards (a gate the viewer may only raise a change request on is
+ *  not theirs to act on, so it is not "Action required"). */
 export function runNeedsMe(run: Pick<RunSummary, "current_state" | "lifecycle">, access: Grants & { persona?: { states: string[] } }): boolean {
   const s = run.current_state;
-  if (s in GATES) return actMode(access, GATES[s].privilege) !== "none" || has(access, "APPROVAL.VIEW");
+  if (s in GATES) return has(access, GATES[s].privilege);
   if (s === "VALIDATION_FAILED" || s === "FAILED") return has(access, "RUN.OPERATE");
   // a step the viewer's persona works (the Data Designer profiles and maps without RUN.OPERATE), while no agent runs it
   return !!access.persona?.states.includes(s) && run.lifecycle === "RUNNING" && !RUNNING_STATES.has(s);

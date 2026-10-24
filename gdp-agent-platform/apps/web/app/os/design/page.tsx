@@ -8,7 +8,7 @@ import { guard } from "@/lib/os/session";
 import { actMode } from "@/lib/os/access";
 import { Action } from "@/components/os/action";
 import { gateHref } from "@/lib/os/lifecycle";
-import { boardView, pastStage, runNeedsMe, stageOfRun } from "@/lib/os/work";
+import { RUNS_QUERY, boardView, pastStage, runNeedsMe, stageOfRun } from "@/lib/os/work";
 import { Bar, Btn, Card, Empty, Field, SourceError, Tag, ago, pretty } from "@/components/os/ui";
 import { BoardList, BoardTabs, RunCard, Segmented, Track, runTrack } from "@/components/os/stage-board";
 import { HomeSearch } from "@/components/os/home-search";
@@ -30,7 +30,7 @@ type Params = { view?: string; run?: string; domain?: string; tab?: string; q?: 
 
 export default async function DesignBoard({ searchParams }: { searchParams: Params }) {
   const access = await guard("design");
-  const [domains, runs, sources] = await Promise.all([loadDomains(), loadRuns("sort=updated&limit=200"), loadSources()]);
+  const [domains, runs, sources] = await Promise.all([loadDomains(), loadRuns(RUNS_QUERY), loadSources()]);
   const q = (searchParams.q ?? "").trim().toLowerCase();
   const live = runs.data.runs.filter((r) => !r.is_archived && r.current_state !== "CANCELLED");
   const listed = live.filter((r) => !q || r.run_name.toLowerCase().includes(q) || (r.domain_name ?? "").toLowerCase().includes(q));
