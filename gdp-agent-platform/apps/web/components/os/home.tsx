@@ -50,7 +50,7 @@ export function WorkflowRow({ r, access, href }: { r: OnboardingRequest; access:
   const sources = r.items.filter((i) => !i.removed_at);
   const domain = r.domain_name ?? (r.proposed_domain ? `${r.proposed_domain} (new)` : null);
   return (
-    <article data-testid="workflow-row" className={cn("os-card os-rise p-4 transition hover:shadow-[var(--os-shadow-pop)]",
+    <article data-testid="workflow-row" className={cn("os-card os-rise p-3.5 transition hover:shadow-[var(--os-shadow-pop)]",
                                                        mine && "border-l-[3px] border-l-[var(--os-forest)]")}>
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="flex min-w-[min(100%,260px)] flex-1 items-start gap-3">
@@ -81,14 +81,14 @@ export function WorkflowRow({ r, access, href }: { r: OnboardingRequest; access:
           {href && <Link href={href} className={cn("os-btn", mine && "max-sm:!hidden")} aria-label={`Open ${r.title}`}>Open <ArrowRight className="h-3.5 w-3.5" /></Link>}
         </div>
       </div>
-      {href ? <Link href={href} className="block rounded-lg" aria-label={`${r.title}: steps`}><RequestTrack r={r} className="mt-3.5" /></Link>
-        : <RequestTrack r={r} className="mt-3.5" />}
+      {href ? <Link href={href} className="block rounded-lg" aria-label={`${r.title}: steps`}><RequestTrack r={r} className="mt-3" /></Link>
+        : <RequestTrack r={r} className="mt-3" />}
       {open && r.attention && (
-        <p className="mt-2.5 flex items-start gap-1.5 text-[11.5px] text-[var(--os-red-ink)]"><AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />{r.attention}</p>
+        <p className="mt-2 flex items-start gap-1.5 text-[11.5px] text-[var(--os-red-ink)]"><AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />{r.attention}</p>
       )}
-      {open && mine && <p className="os-muted mt-2.5 text-[11.5px]"><b className="text-[var(--os-ink)]">Next for you:</b> {mine.label}</p>}
+      {open && mine && <p className="os-muted mt-2 text-[11.5px]"><b className="text-[var(--os-ink)]">Next for you:</b> {mine.label}</p>}
       {sources.length > 0 && r.request_type !== "PRODUCT" && (
-        <details className="group mt-2.5">
+        <details className="group mt-2">
           <summary className="os-faint cursor-pointer select-none text-[11px] font-bold hover:text-[var(--os-ink)]">
             {sources.length === 1 ? "The source" : `Its ${sources.length} sources`}
           </summary>
@@ -109,63 +109,66 @@ export function WorkflowRow({ r, access, href }: { r: OnboardingRequest; access:
   );
 }
 
-const START: { type: "domain" | "source" | "product"; label: string; what: string; icon: Icon; tint: string; soon?: boolean;
+const START: { type: "domain" | "source" | "product"; label: string; short: string; what: string; icon: Icon; tint: string; soon?: boolean;
   new: string; enhance: string; direct?: { privilege: string; href: string } }[] = [
-  { type: "domain", label: "Data domain", what: "A business area's model, contract and memory", icon: Boxes, tint: TYPE_TINT.DOMAIN,
+  { type: "domain", label: "Data domain", short: "Domain", what: "A business area's model, contract and memory", icon: Boxes, tint: TYPE_TINT.DOMAIN,
     new: "A business domain not on the platform yet", enhance: "Extend an existing domain's model: entities, attributes, rules",
     direct: { privilege: "DOMAIN.ONBOARD", href: "/os/enable/new-domain" } },
-  { type: "source", label: "Data source", what: "A system that feeds a domain", icon: Database, tint: TYPE_TINT.SOURCE,
+  { type: "source", label: "Data source", short: "Source", what: "A system that feeds a domain", icon: Database, tint: TYPE_TINT.SOURCE,
     new: "Onboard a system that is not on the platform yet", enhance: "More tables or scope from a source already registered",
     direct: { privilege: "SOURCE.CONNECT", href: "/os/enable/onboarding?type=source" } },
-  { type: "product", label: "Data product", what: "Governed Gold products from mastered Silver domains", icon: Crown, tint: TYPE_TINT.PRODUCT, soon: true,
+  { type: "product", label: "Data product", short: "Product", what: "Governed Gold products from mastered Silver domains", icon: Crown, tint: TYPE_TINT.PRODUCT, soon: true,
     new: "A new governed data product", enhance: "Change a data product already published" },
 ];
 
 const FILE_REQUEST = "Filing a workflow needs RUN.CREATE, SOURCE.CONNECT, DOMAIN.EDIT or REQUEST.CHANGES: ask a governance admin.";
 
-/** New or Enhance for a domain, a source or a data product. Everyone sees it; the buttons follow the viewer's role. */
+/** New or Enhance for a domain, a source or a data product: one compact row each. Everyone sees it; the buttons follow
+ *  the viewer's role. */
 export function StartPanel({ access }: { access: OsAccess }) {
   const may = canSee(access, "intakeNew");
   return (
-    <section className="os-card os-rise p-4" data-testid="start-panel" aria-labelledby="start-title">
-      <div className="os-eyebrow">Build</div>
-      <h2 id="start-title" className="mt-0.5 text-[15px] font-extrabold tracking-[-0.01em]">Start a workflow</h2>
-      <p className="os-muted mt-0.5 hidden text-[11.5px] sm:block">Something new, or more from what is already on the platform.</p>
-      <div className="mt-3 grid gap-2.5 sm:grid-cols-3 xl:grid-cols-1">
+    <section className="os-card os-rise px-4 pb-3 pt-3.5" data-testid="start-panel" aria-labelledby="start-title">
+      <h2 id="start-title" className="text-[14.5px] font-extrabold tracking-[-0.01em]">Start a workflow</h2>
+      <div className="os-divide mt-1.5">
         {START.map((t) => {
           const I = t.icon;
           const button = (intent: "new" | "enhance") => {
             const text = intent === "new" ? "New" : "Enhance";
             const B = intent === "new" ? Plus : Wand2;
             const why = t.soon ? "Data products are coming soon" : !may ? FILE_REQUEST : intent === "new" ? t.new : t.enhance;
+            const cls = "os-btn justify-center px-2.5 py-1.5 text-[11.5px]";
             return t.soon || !may ? (
               <span aria-disabled="true" title={why} data-testid={`start-${t.type}-${intent}`}
-                    className="os-btn cursor-not-allowed justify-center opacity-50"><B className="h-3.5 w-3.5" />{text}</span>
+                    className={cn(cls, "cursor-not-allowed opacity-50")}><B className="h-3 w-3" />{text}</span>
             ) : (
               <Link href={`/os/intake/new?${new URLSearchParams({ type: t.type, intent })}`} title={why} data-testid={`start-${t.type}-${intent}`}
-                    className={cn("os-btn justify-center", intent === "new" && "os-btn-primary")}><B className="h-3.5 w-3.5" />{text}</Link>
+                    className={cn(cls, intent === "new" && "os-btn-primary")}><B className="h-3 w-3" />{text}</Link>
             );
           };
           return (
-            <div key={t.type} className="rounded-xl border border-[var(--os-line)] p-2.5 sm:p-3">
-              <div className="flex items-start gap-2.5">
-                <span className={cn("grid h-8 w-8 shrink-0 place-items-center rounded-lg", t.tint)}><I className="h-4 w-4" /></span>
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-1.5 text-[13px] font-extrabold">{t.label}{t.soon && <Tag tone="amber">Coming soon</Tag>}</div>
-                  <div className="os-faint hidden text-[11px] leading-snug sm:block">{t.what}</div>
-                </div>
-              </div>
-              <div className="mt-2 grid grid-cols-2 gap-2 sm:mt-2.5">{button("new")}{button("enhance")}</div>
+            <div key={t.type} className="flex items-center gap-2 py-2" title={`${t.label}: ${t.what}`} data-testid={`start-${t.type}`}>
+              <span className={cn("grid h-7 w-7 shrink-0 place-items-center rounded-lg", t.tint)}><I className="h-3.5 w-3.5" /></span>
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-[12.5px] font-extrabold">{t.short}</span>
+                {t.soon && <span className="block text-[10px] font-bold text-[var(--os-amber-ink)]">Coming soon</span>}
+              </span>
               {t.direct && has(access, t.direct.privilege) && (
-                <Link href={t.direct.href} className="os-faint mt-2 inline-flex items-center gap-1 text-[10.5px] font-bold hover:text-[var(--os-accent-ink)]">
-                  Onboard directly as administrator <ArrowUpRight className="h-3 w-3" />
+                <Link href={t.direct.href} title="Onboard directly as administrator" aria-label={`Onboard a ${t.type} directly`}
+                      className="os-faint grid h-7 w-7 place-items-center rounded-md hover:bg-[var(--os-hover)] hover:text-[var(--os-accent-ink)]">
+                  <ArrowUpRight className="h-3.5 w-3.5" />
                 </Link>
               )}
+              <span className="flex shrink-0 gap-1.5">{button("new")}{button("enhance")}</span>
             </div>
           );
         })}
       </div>
-      {!may && <p className="os-faint mt-3 flex items-start gap-1.5 text-[11px]"><Lock className="mt-0.5 h-3 w-3 shrink-0" />Your role can follow every workflow here. {FILE_REQUEST}</p>}
+      {!may && (
+        <p className="os-faint mt-1 flex items-center gap-1.5 border-t border-[var(--os-line-soft)] pt-2 text-[10.5px]" title={FILE_REQUEST}>
+          <Lock className="h-3 w-3 shrink-0" />View only: filing needs a builder role
+        </p>
+      )}
     </section>
   );
 }
@@ -290,20 +293,15 @@ export function OnboardedDomains({ domains, requests, access, max = 5 }: {
             const you = mine(d);
             return (
               <Link key={d.domain_id} href={`/os/knowledge/domains/${d.domain_id}`} data-testid="domain-card"
-                    className={cn("os-card os-rise group flex flex-col gap-2.5 p-3.5 transition hover:-translate-y-0.5 hover:shadow-[var(--os-shadow-pop)]",
+                    className={cn("os-card os-rise group flex flex-col gap-2 p-3 transition hover:-translate-y-0.5 hover:shadow-[var(--os-shadow-pop)]",
                                   you > 0 && "border-l-[3px] border-l-[var(--os-accent)]")}>
-                <div className="flex items-start gap-3">
-                  <span className={cn("grid h-8 w-8 shrink-0 place-items-center rounded-lg", TYPE_TINT.DOMAIN)}><Boxes className="h-4 w-4" /></span>
+                <div className="flex items-start gap-2.5">
+                  <span className={cn("grid h-7 w-7 shrink-0 place-items-center rounded-lg", TYPE_TINT.DOMAIN)}><Boxes className="h-3.5 w-3.5" /></span>
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-[13px] font-extrabold tracking-[-0.01em]">{d.domain_name}</span>
-                    <span className="os-faint block truncate text-[11px]">{d.description || (d.mdm_role ? `${pretty(d.mdm_role)} domain` : "Business domain")}</span>
+                    <span className="os-faint line-clamp-2 text-[11px] leading-snug" title={d.description ?? undefined}>{d.description || (d.mdm_role ? `${pretty(d.mdm_role)} domain` : "Business domain")}</span>
                   </span>
                   <ArrowUpRight className="os-faint h-3.5 w-3.5 shrink-0 opacity-0 transition group-hover:opacity-100" />
-                </div>
-                <div className="grid grid-cols-3 gap-2 border-t border-[var(--os-line-soft)] pt-2 text-[10.5px]">
-                  <span><b className="block text-[14px] font-extrabold tabular-nums">{d.target_tables}</b><span className="os-faint">tables</span></span>
-                  <span><b className="block text-[14px] font-extrabold tabular-nums">{d.knowledge_items}</b><span className="os-faint">memory</span></span>
-                  <span><b className="block text-[14px] font-extrabold tabular-nums">{n}</b><span className="os-faint">open</span></span>
                 </div>
                 {(you > 0 || (d.gold_tables ?? 0) > 0 || d.mdm_role) && (
                   <div className="flex flex-wrap gap-1.5">
@@ -312,6 +310,11 @@ export function OnboardedDomains({ domains, requests, access, max = 5 }: {
                     {d.mdm_role && <Tag>{pretty(d.mdm_role)}</Tag>}
                   </div>
                 )}
+                <div className="os-faint mt-auto flex flex-wrap items-baseline gap-x-1.5 border-t border-[var(--os-line-soft)] pt-2 text-[11px]">
+                  <span><b className="text-[var(--os-ink)] tabular-nums">{d.target_tables}</b> tables</span><span>·</span>
+                  <span><b className="text-[var(--os-ink)] tabular-nums">{d.knowledge_items}</b> memory</span><span>·</span>
+                  <span><b className="text-[var(--os-ink)] tabular-nums">{n}</b> open</span>
+                </div>
               </Link>
             );
           })}

@@ -121,11 +121,11 @@ export default async function Home({ searchParams }: { searchParams: Params }) {
         </section>
 
         <aside>
-          <StartPanel access={access} />
+          <div className="xl:sticky xl:top-[76px]"><StartPanel access={access} /></div>
         </aside>
       </div>
       {/* the domains come after the work: actions first */}
-      <div className="mt-8">
+      <div className="mt-6">
         <SourceError what="Domains" error={domains.error} />
         <OnboardedDomains domains={domains.data} requests={all} access={access} />
       </div>
