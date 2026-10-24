@@ -15,6 +15,8 @@ docker/api.env
 docker/secrets/
 apps/web/.env*.local
 
+tests/ui/artifacts
+
 # Consolidation runbook output (baselines, verification results; may name client tables)
 consolidation_runs/
 
@@ -27,3 +29,5 @@ infrastructure/environments/*.toml
 !infrastructure/environments/client-prod.example.toml
 deploy-logs/
 .venv/
+
+tests/ui/artifacts/
