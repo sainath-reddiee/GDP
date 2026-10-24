@@ -27,7 +27,7 @@ export const PERSONAS: Persona[] = [
     responsibility: "Describe intent, link sources and domains, sign off UAT",
     states: ["CREATED"] },
   { id: "admin", label: "Data OS Administrator", short: "Administrator", home: "/os/enable",
-    responsibility: "Source access, profiling handles and ingestion configuration",
+    responsibility: "Domain and source onboarding: access, landing and ingestion configuration",
     states: ["SOURCE_REGISTERED", "ACCESS_VALIDATION", "ACCESS_APPROVED", "LANDING_PENDING", "LANDING_RUNNING"] },
   { id: "designer", label: "Data Designer", short: "Designer", home: "/os/design",
     responsibility: "Profiling, domain model, source mapping and transformations (STTM)",

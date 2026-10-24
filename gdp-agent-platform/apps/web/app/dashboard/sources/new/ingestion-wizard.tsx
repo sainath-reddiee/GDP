@@ -249,10 +249,10 @@ export function IngestionWizard({ kind, domains, user, initialName = "" }: { kin
           })}
         </nav>
         <Button size="sm" variant="outline" disabled={busy} onClick={check} data-testid="check-ingestion" title="Check every field">
-          {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ListChecks className="h-3.5 w-3.5" />}<span className="hidden sm:inline">Check</span>
+          {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ListChecks className="h-3.5 w-3.5" />}<span className="hidden sm:inline">Check configuration</span>
         </Button>
         <Button size="sm" disabled={busy} onClick={save} data-testid="save-ingestion" title="Save configuration">
-          {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}<span className="hidden sm:inline">Save</span>
+          {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}<span className="hidden sm:inline">Save configuration</span>
         </Button>
       </div>
       <div className="space-y-6 p-5">
@@ -555,7 +555,7 @@ export function IngestionWizard({ kind, domains, user, initialName = "" }: { kin
         </p>
         <div className="flex gap-2 xl:mr-20">
           <Button variant="outline" disabled={busy} onClick={check} data-testid="check-ingestion-end">
-            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <ListChecks className="h-4 w-4" />} Check
+            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <ListChecks className="h-4 w-4" />} Check configuration
           </Button>
           <Button disabled={busy} onClick={save} data-testid="save-ingestion-end">
             {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />} Save configuration

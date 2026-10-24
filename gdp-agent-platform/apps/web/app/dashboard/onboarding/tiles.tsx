@@ -29,7 +29,7 @@ export function DomainImportCard({ openImport = false }: { openImport?: boolean 
           The contract can be YAML or the platform&apos;s markdown contract. Both are validated before anything is registered.
         </p>
       </div>
-      <Button onClick={() => setOpen(true)} data-testid="import-domain"><Upload className="h-4 w-4" /> Choose files</Button>
+      <Button onClick={() => setOpen(true)} data-testid="import-domain"><Upload className="h-4 w-4" /> Upload pack and contract</Button>
       <ImportModal open={open} onClose={() => setOpen(false)} />
     </article>
   );
@@ -106,8 +106,8 @@ function ImportModal({ open, onClose }: { open: boolean; onClose: () => void }) 
   return (
     <Modal open={open} onClose={close} wide title="Import a domain" description="Validated first: nothing is registered until you import."
            footer={done ? <Button onClick={close}>Close</Button> : <>
-             <Button variant="outline" onClick={validate} disabled={pending || (!pack && !contract)}>{pending ? <Loader2 className="h-4 w-4 animate-spin" /> : null} Validate</Button>
-             <Button onClick={doImport} disabled={pending || !pack || !check?.pack?.ok || (check.contract ? !check.contract.ok : false)}>Import domain</Button>
+             <Button variant="outline" onClick={validate} disabled={pending || (!pack && !contract)}>{pending ? <Loader2 className="h-4 w-4 animate-spin" /> : null} Validate pack</Button>
+             <Button onClick={doImport} disabled={pending || !pack || !check?.pack?.ok || (check.contract ? !check.contract.ok : false)}>Import domain pack</Button>
            </>}>
       {done ? (
         <div className="flex flex-col items-center py-6 text-center">

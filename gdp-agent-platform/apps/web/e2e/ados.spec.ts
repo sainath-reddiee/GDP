@@ -21,7 +21,7 @@ const SCREENS: [string, RegExp][] = [
   ["/os/history", /Run history/],
   ["/os/build/ready", /Ready to build/],
   ["/os/requests/history", /Request history/],
-  ["/os/enable/new-domain", /Onboard a domain/],
+  ["/os/enable/new-domain", /Onboard domain/],
 ];
 
 test.beforeEach(async ({ context }) => {
@@ -176,7 +176,7 @@ test("without the privilege, an action becomes a change request to the approver 
   await page.goto("/os/build");
   await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
   await expect(page.getByRole("link", { name: "Review code", exact: true })).toHaveCount(0);
-  const request = page.getByRole("link", { name: /^Request: / });
+  const request = page.getByRole("link", { name: /^Request approval: / });
   for (const link of await request.all()) await expect(link).toHaveAttribute("title", /You do not hold [A-Z.]+\. Your change goes to/);
   await page.goto("/os/help");
   await expect(page.getByRole("heading", { level: 1 })).toHaveText("One workflow, many personas");
@@ -295,22 +295,22 @@ test("a super admin gives personas in People and the header has no role picker",
 });
 
 // Phase 12: the administrator onboards sources as configuration, owners attach what exists, the gate has a minimum score.
-test("Enable is configuration first: requests on top, the wizard's ways in, no table catalog", async ({ page }) => {
+test("Enable is configuration first: requests on top, one way in per object, no table catalog", async ({ page }) => {
   await page.goto("/os/enable");
   await expect(page.getByRole("heading", { level: 1 })).toHaveText("Source readiness");
   await expect(page.getByText("Requests waiting on a source")).toBeVisible();
-  const ways = page.getByTestId("onboard-ways").getByRole("link");
-  await expect(ways).toHaveCount(3);
-  await expect(ways.nth(0)).toHaveAttribute("href", /\/dashboard\/onboarding\?type=source&branch=share$/);
-  await expect(ways.nth(1)).toHaveAttribute("href", /branch=external&kind=database$/);
-  await expect(ways.nth(2)).toHaveAttribute("href", /branch=external&kind=file$/);
+  // one button each for the Source Store, onboarding a domain and onboarding a source; no duplicate kind tiles
+  await expect(page.getByRole("link", { name: "Open Source Store" })).toHaveCount(1);
+  await expect(page.getByRole("link", { name: "Onboard source", exact: true })).toHaveAttribute("href", /onboarding\?type=source$/);
+  await expect(page.getByRole("link", { name: "Onboard domain", exact: true })).toHaveAttribute("href", /new-domain$/);
+  await expect(page.getByTestId("onboard-ways")).toHaveCount(0);
   // configuration cards, never a table catalog or a secret value
   await expect(page.getByTestId("source-config").first()).toBeVisible();
   await expect(page.locator("th", { hasText: "Staged" })).toHaveCount(0);
   await expect(page.getByText(/password\s*:/i)).toHaveCount(0);
   // a source a request asks for opens the wizard for that request
-  const ask = page.getByTestId("enable-asks").getByRole("link", { name: /^Onboard as/ }).first();
-  if (await ask.count()) await expect(ask).toHaveAttribute("href", /request=[0-9a-f-]+&item=[0-9a-f-]+&name=/);
+  const ask = page.getByTestId("enable-asks").getByRole("link", { name: "Onboard source for request" }).first();
+  if (await ask.count()) await expect(ask).toHaveAttribute("href", /type=source&request=[0-9a-f-]+&item=[0-9a-f-]+&name=/);
 });
 
 test("the wizard opened for a request says so and starts from the request's source name", async ({ page }) => {
@@ -389,9 +389,9 @@ test("Help walks the two demos on live records", async ({ page }) => {
 // Onboarding a source is the Data OS Administrator's alone, in Enable; domains are onboarded from Design.
 test("only the administrator onboards sources, from Enable; others request them", async ({ page }) => {
   await page.goto("/dashboard/onboarding?type=source");
-  await expect(page.getByRole("heading", { name: "Onboard a source" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Onboard source" })).toBeVisible();
   const tabs = page.getByTestId("section-tabs");
-  await expect(tabs.getByRole("link")).toHaveText(["Source readiness", "Onboard a source", "Onboard a domain"]);
+  await expect(tabs.getByRole("link")).toHaveText(["Source readiness", "Onboard source", "Onboard domain"]);
   await expect(railLinks(page).filter({ hasText: "Enable" })).toHaveAttribute("aria-current", "page");
   await page.goto("/os/intake/new?type=source");
   await expect(page.getByRole("link", { name: "Open the onboarding wizard" })).toHaveCount(0);

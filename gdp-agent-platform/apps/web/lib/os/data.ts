@@ -372,3 +372,8 @@ export type BuildDomain = { domain_id: string | null; domain_name: string; model
   percent: number; runs: BuildRun[]; counts: Record<BuildStatus, number> };
 export type Readiness = { domains: BuildDomain[]; totals: Record<BuildStatus, number> };
 export const loadReadiness = () => load(api<Readiness>("/api/build/readiness"), null as Readiness | null);
+
+/** Workflows matching a search by meaning, best first (GET /api/search, kinds=WORKFLOW); null on error. */
+export const loadWorkflowSearch = (q: string) =>
+  load(api<import("./search").SearchResponse>(`/api/search?${new URLSearchParams({ q: q.slice(0, 500), kinds: "WORKFLOW", limit: "50" })}`),
+    null as import("./search").SearchResponse | null);

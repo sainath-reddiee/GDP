@@ -49,7 +49,7 @@ export default async function NewDomain({ searchParams }: { searchParams: { how?
   return (
     <OnboardingShell>
       <div className="space-y-8">
-        <PageHeader eyebrow="Enable · Data OS Administrator" title="Onboard a domain" />
+        <PageHeader eyebrow="Enable / Data OS Administrator" title="Onboard domain" />
         {searchParams.request && <DomainHandoff requestId={searchParams.request} />}
         <div>
           <RailStep n={1} title="Onboarding a domain" done>

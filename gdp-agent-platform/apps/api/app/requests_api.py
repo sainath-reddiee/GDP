@@ -347,14 +347,17 @@ def list_requests(scope: str = Query("all", pattern="^(all|mine|waiting)$"), sta
         where.append("DOMAIN_ID = %s"); params.append(domain_id)
     if scope == "mine":
         where.append("UPPER(REQUESTED_BY) = %s"); params.append(who["user"].upper())
-    rows = _visible(db, who, _load(db, " AND ".join(where), tuple(params))[: limit * 2])
-    out = refresh(db, [r for r in rows if r.get("status") == rq.OPEN]) + [
-        {**_out(r), "items": [], "waits": []} for r in rows if r.get("status") != rq.OPEN]
+    # visibility first, then the limit, and only on closed requests: an open request waits on someone whatever its age,
+    # so it is never cut (a request that waited unchanged for weeks sorts last by activity and used to drop off)
+    rows = _visible(db, who, _load(db, " AND ".join(where), tuple(params)))
+    live = [r for r in rows if r.get("status") == rq.OPEN]
+    closed = [r for r in rows if r.get("status") != rq.OPEN][: max(0, limit - len(live)) if status == "ALL" else limit]
+    out = refresh(db, live) + [{**_out(r), "items": [], "waits": []} for r in closed]
     if scope == "waiting":
         out = [r for r in out if r.get("status") == rq.OPEN and any(_holds(who, w["privilege"]) for w in r.get("waits", []))]
-    out.sort(key=lambda r: str(r.get("updated_at") or ""), reverse=True)
+    out.sort(key=lambda r: (r.get("status") == rq.OPEN, str(r.get("updated_at") or "")), reverse=True)
     counts = {s: sum(r.get("stage") == s for r in out if r.get("status") == rq.OPEN) for s in rq.STAGES}
-    return {"requests": out[:limit], "counts": counts, "user": who["user"]}
+    return {"requests": out, "counts": counts, "user": who["user"]}
 
 
 @router.get("/api/onboarding-requests/{request_id}")

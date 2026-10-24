@@ -4,7 +4,7 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useRef, useState, useTransition } from "react";
 import { Loader2, Search, X } from "lucide-react";
 
-/** Home's "Search workflow name": filters as you type (the page filters on the server, from ?q=). */
+/** The boards' request search: filters as you type (the page matches ?q= on the server, by meaning through GET /api/search). */
 export function HomeSearch() {
   const router = useRouter();
   const path = usePathname();
@@ -27,10 +27,10 @@ export function HomeSearch() {
 
   return (
     <label className="relative block w-full sm:w-[280px]">
-      <span className="sr-only">Search workflow name</span>
+      <span className="sr-only">Search requests by meaning</span>
       {pending ? <Loader2 className="os-faint os-spin absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2" />
         : <Search className="os-faint absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2" />}
-      <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search workflow name" data-testid="home-search"
+      <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search requests by meaning" data-testid="home-search"
              className="os-input h-9 !py-0 !pl-8 !pr-8" />
       {q && (
         <button type="button" onClick={() => setQ("")} aria-label="Clear search" className="os-faint absolute right-2.5 top-1/2 -translate-y-1/2 hover:text-[var(--os-ink)]">

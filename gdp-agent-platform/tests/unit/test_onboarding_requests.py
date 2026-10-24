@@ -510,7 +510,8 @@ def test_a_multi_table_run_names_the_step_of_its_earliest_table_first():
     kids = {"run1": [run("DBT_REVIEW", run_id="c1", parent_run_id="run1"), run("STTM_REVIEW", run_id="c2", parent_run_id="run1")]}
     a = assess([item(run_id="run1")], runs={"run1": run("MAPPING_APPROVED")}, children=kids)
     assert a["stage"] == "DESIGN" and a["waiting_on"] == "STTM.APPROVE"
-    assert [w["privilege"] for w in a["waits"]] == ["STTM.APPROVE", "REVIEW.APPROVE"]   # both roles still see their part
+    # every role still sees its part, QA's sign-off at code review among them
+    assert [w["privilege"] for w in a["waits"]] == ["STTM.APPROVE", "REVIEW.APPROVE", "QA.SIGNOFF"]
 
 
 # ---------------------------------------------------------------- phases and milestones (the owner's words)
@@ -647,3 +648,23 @@ def test_only_the_requester_or_the_domain_side_adds_files(api, monkeypatch):
     assert res.status_code == 403
     who["privileges"] = {"DOMAIN.ONBOARD"}                 # the Data OS Administrator may
     assert client.post("/api/onboarding-requests/r1/files", files=[("files", ("a.csv", b"a,b", "text/csv"))]).status_code == 200
+
+
+def test_qa_and_dq_approvers_also_have_work_at_their_gates():
+    review = assess([item(run_id="run1")], runs={"run1": run("DBT_REVIEW")})
+    assert review["waiting_on"] == "REVIEW.APPROVE" and [w["privilege"] for w in review["waits"]] == ["REVIEW.APPROVE", "QA.SIGNOFF"]
+    checks = assess([item(run_id="run1")], runs={"run1": run("SODA_REVIEW")})
+    assert checks["waiting_on"] == "RUN.OPERATE" and "SODA.APPROVE" in [w["privilege"] for w in checks["waits"]]
+
+
+def test_an_open_request_is_never_cut_by_the_limit(api):
+    client, db, who = api
+    old = [req(request_id=f"o{n}", status="OPEN", stage="ENABLE", updated_at=f"2026-01-{n % 28 + 1:02d}") for n in range(30)]
+    closed = [req(request_id=f"c{n}", status="DONE", stage="DONE", updated_at="2026-10-01") for n in range(30)]
+    db.on("FROM CORE.ONBOARDING_REQUEST WHERE", old + closed)
+    out = client.get("/api/onboarding-requests", params={"status": "ALL", "limit": 10}).json()["requests"]
+    ids = [r["request_id"] for r in out]
+    assert all(f"o{n}" in ids for n in range(30))          # every open request, however old
+    assert not any(i.startswith("c") for i in ids)         # the limit is spent on open ones first
+    db.on("FROM CORE.ONBOARDING_REQUEST WHERE", closed)     # the fake ignores the status filter the query applies
+    assert len(client.get("/api/onboarding-requests", params={"status": "CLOSED", "limit": 10}).json()["requests"]) == 10

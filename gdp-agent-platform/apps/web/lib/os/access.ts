@@ -77,9 +77,9 @@ export const SCREENS: Screen[] = [
 
   // Enable: onboarding sources is the Data OS Administrator's alone (registering, landing and starting the run)
   { key: "enable", section: "enable", href: "/os/enable", label: "Source readiness", view: ["SOURCE.CONNECT", "DOMAIN.ONBOARD", "CONFIG.EDIT", "INTEGRATION.MANAGE"], why: "the Data OS Administrator (onboarding sources and domains, configuring ingestion)" },
-  { key: "onboarding", section: "enable", href: "/os/enable/onboarding?type=source", label: "Onboard a source", paths: ["/os/enable/onboarding", "/os/design/sources/new"],
+  { key: "onboarding", section: "enable", href: "/os/enable/onboarding?type=source", label: "Onboard source", paths: ["/os/enable/onboarding", "/os/design/sources/new"],
     view: ["SOURCE.CONNECT"], why: "the Data OS Administrator (onboarding a source registers it, lands it and starts its run)" },
-  { key: "newDomain", section: "enable", href: "/os/enable/new-domain", label: "Onboard a domain", paths: ["/os/design/new-domain"], view: ["DOMAIN.ONBOARD"],
+  { key: "newDomain", section: "enable", href: "/os/enable/new-domain", label: "Onboard domain", paths: ["/os/design/new-domain"], view: ["DOMAIN.ONBOARD"],
     why: "the Data OS Administrator (a domain's model, contract and memory); data owners request one on Intake" },
 
   // Design: the domain model and the stores the design is kept in
@@ -166,10 +166,9 @@ export function screenOfPath(path: string): Screen | null {
 /* actions: what each button on the /os screens needs (the page that performs it enforces the same privilege) */
 
 export const ACTIONS = {
-  startOnboarding: { privilege: "RUN.CREATE", label: "Start onboarding" },
-  connectSource: { privilege: "SOURCE.CONNECT", label: "Connect a source" },
-  onboardDomain: { privilege: "DOMAIN.ONBOARD", label: "Onboard a domain" },
-  manageIngestion: { privilege: "SOURCE.CONNECT", label: "Manage pipelines" },
+  // one verb per object on Enable: "Onboard source", "Onboard domain" (not connect, register or add)
+  connectSource: { privilege: "SOURCE.CONNECT", label: "Onboard source" },
+  onboardDomain: { privilege: "DOMAIN.ONBOARD", label: "Onboard domain" },
   workStep: { privilege: "RUN.OPERATE", label: "Work this step" },
   revalidate: { privilege: "RUN.OPERATE", label: "Open validation" },
   validateAgain: { privilege: "RUN.OPERATE", label: "Validate again" },

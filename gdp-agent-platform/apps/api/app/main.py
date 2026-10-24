@@ -7050,3 +7050,6 @@ app.include_router(requests_router)
 from app.personas_api import router as personas_router  # noqa: E402
 
 app.include_router(personas_router)
+from app.search_api import router as search_router  # noqa: E402
+
+app.include_router(search_router)

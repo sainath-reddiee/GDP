@@ -61,6 +61,12 @@ RUN_STATES: Dict[str, tuple] = {
     "VALIDATION_FAILED": ("BUILD", "RUN.OPERATE", f"{_BUILD}: validation failed; fix and validate again"),
     "DBT_REVIEW": ("REVIEW", "REVIEW.APPROVE", "Data Developer: review and approve the code"),
 }
+# roles that also have work at a state, after the one the request waits on: the QA & UAT Lead signs off the QA tests
+# while the code is in review, and a DQ approver may approve the checks themselves while Build end to end has not
+ALSO_WAITS: Dict[str, List[tuple]] = {
+    "DBT_REVIEW": [("QA.SIGNOFF", "QA & UAT Lead: run and sign off the QA tests")],
+    "SODA_REVIEW": [("SODA.APPROVE", "DQ approver: approve the data quality checks (Build end to end approves them otherwise)")],
+}
 DONE_STATES = {"DBT_APPROVED", "COMPLETED", "DEPLOYMENT_PENDING", "DEPLOYED", "PIPELINE_ENABLED"}
 _ORDER = list(RUN_STATES) + sorted(DONE_STATES)
 
@@ -161,7 +167,8 @@ def run_status(run: Dict[str, Any], children: Iterable[Dict[str, Any]] = ()) -> 
     stage, privilege, label = RUN_STATES.get(state, ("DESIGN", "RUN.OPERATE", f"{_DESIGN}: continue the run ({state.lower()})"))
     status = {"ENABLE": "NOT_LANDED", "DESIGN": "DESIGN", "BUILD": "BUILD", "REVIEW": "REVIEW"}[stage]
     attention = f"Validation failed on {name}" if state == "VALIDATION_FAILED" else None
-    return {"stage": stage, "status": "ATTENTION" if attention else status, "detail": label, "waits": [_wait(privilege, label)],
+    waits = [_wait(privilege, label)] + [_wait(p, text) for p, text in ALSO_WAITS.get(state, [])]
+    return {"stage": stage, "status": "ATTENTION" if attention else status, "detail": label, "waits": waits,
             "attention": attention, "state": state}
 
 

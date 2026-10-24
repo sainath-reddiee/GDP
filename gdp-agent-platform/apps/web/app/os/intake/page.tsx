@@ -1,7 +1,6 @@
-import { has } from "@/lib/os/access";
-import { loadRequest, loadRequests } from "@/lib/os/data";
+import { loadRequest, loadRequests, loadWorkflowSearch } from "@/lib/os/data";
 import { guard } from "@/lib/os/session";
-import { boardView, inflight } from "@/lib/os/work";
+import { boardView, inflight, requestNeedsMe } from "@/lib/os/work";
 import { intentOf, type OnboardingRequest } from "@/lib/os/requests";
 import { SourceError } from "@/components/os/ui";
 import { BoardList, BoardTabs } from "@/components/os/stage-board";
@@ -16,12 +15,16 @@ export const metadata = { title: "Intake" };
 
 export default async function IntakeBoard({ searchParams }: { searchParams: { view?: string; request?: string; q?: string; intent?: string } }) {
   const access = await guard("intake");
-  const [list, picked] = await Promise.all([loadRequests("all", "ALL"), searchParams.request ? loadRequest(searchParams.request) : null]);
-  const q = (searchParams.q ?? "").trim().toLowerCase();
+  const query = (searchParams.q ?? "").trim();
+  const [list, picked, searched] = await Promise.all([loadRequests("all", "ALL"), searchParams.request ? loadRequest(searchParams.request) : null,
+    query ? loadWorkflowSearch(query) : null]);
+  const q = query.toLowerCase();
+  // by meaning when the search answers ("waiting on me", synonyms), else by title
+  const hits = searched?.data ? new Set(searched.data.results.map((x) => x.id)) : null;
   // New or Enhance, from the in-flight counts on the right
   const intent = searchParams.intent === "new" || searchParams.intent === "enhance" ? searchParams.intent : null;
-  const all = list.data.requests.filter((r) => (!q || r.title.toLowerCase().includes(q)) && (!intent || intentOf(r) === intent.toUpperCase()));
-  const yours = (r: OnboardingRequest) => r.status === "OPEN" && r.waits.some((w) => has(access, w.privilege));
+  const all = list.data.requests.filter((r) => (!q || (hits ? hits.has(r.request_id) : r.title.toLowerCase().includes(q))) && (!intent || intentOf(r) === intent.toUpperCase()));
+  const yours = (r: OnboardingRequest) => requestNeedsMe(r, access);
   const lists = {
     action: all.filter(yours),
     active: all.filter((r) => r.status === "OPEN"),
@@ -33,7 +36,7 @@ export default async function IntakeBoard({ searchParams }: { searchParams: { vi
   const select = (id: string) => `/os/intake?${new URLSearchParams({ view: "selected", request: id, ...(intent ? { intent } : {}) })}`;
 
   return (
-    <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_320px]" data-testid="intake-board">
+    <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_330px] xl:grid-cols-[minmax(0,1fr)_364px] 2xl:grid-cols-[minmax(0,1fr)_420px]" data-testid="intake-board">
       <section className="min-w-0" aria-labelledby="intake-title">
         <div className="mb-3 flex flex-wrap items-end justify-between gap-3">
           <div>
@@ -57,7 +60,7 @@ export default async function IntakeBoard({ searchParams }: { searchParams: { vi
         )}
       </section>
       <aside>
-        <div className="xl:sticky xl:top-[76px]"><StartPanel access={access} inflight={inflight(list.data.requests, intent)} /></div>
+        <div className="lg:sticky lg:top-[76px]"><StartPanel access={access} inflight={inflight(list.data.requests, intent)} /></div>
       </aside>
     </div>
   );

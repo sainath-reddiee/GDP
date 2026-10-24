@@ -6,13 +6,14 @@ import { canSee, has } from "@/lib/os/access";
 import type { Domain } from "@/lib/os/data";
 import type { OsAccess } from "@/lib/os/session";
 import {
-  PRIORITY_TONE, actHref, enhancesSource, intentOf, intentLabel, overdue, phaseOf, requestSteps, type OnboardingRequest, type RequestDetail, type RequestType,
+  PRIORITY_TONE, actHref, enhancesSource, intentOf, intentLabel, overdue, phaseOf, requestSteps, waitCta, waitRole, type OnboardingRequest, type RequestDetail, type RequestType,
 } from "@/lib/os/requests";
 import { Btn, Tag, ago, pretty } from "./ui";
 import { Track, type TrackStep } from "./stage-board";
 import { stageHref } from "@/lib/os/work";
 import { RequestFiles } from "@/components/os/request-files";
 import { StartEnhancementRun } from "./request-ui";
+import type { ActionItem } from "@/lib/os/actions";
 import { cn } from "@/lib/utils";
 
 // Home and the Intake board: the build workflows (onboarding requests) with the step each one is at and who it waits on,
@@ -73,7 +74,7 @@ export function WorkflowRow({ r, access, href }: { r: OnboardingRequest; access:
           {mine ? (
             <>
               <Tag tone="green">Your turn</Tag>
-              <Btn href={next ?? `/os/requests/${r.request_id}`} variant="primary" title={mine.label}>{next ? "Do it" : "Open"} <ArrowRight className="h-3.5 w-3.5" /></Btn>
+              <Btn href={next ?? `/os/requests/${r.request_id}`} variant="primary" title={mine.label}>{next ? waitCta(mine) : "Open request"} <ArrowRight className="h-3.5 w-3.5" /></Btn>
             </>
           ) : open ? (
             <Tag tone={r.attention ? "red" : phaseOf(r).tone}>{r.attention ? "Needs attention" : phaseOf(r).label}</Tag>
@@ -112,13 +113,11 @@ export function WorkflowRow({ r, access, href }: { r: OnboardingRequest; access:
 }
 
 const START: { type: "domain" | "source" | "product"; label: string; short: string; what: string; icon: Icon; tint: string; soon?: boolean;
-  new: string; enhance: string; direct?: { privilege: string; href: string } }[] = [
+  new: string; enhance: string }[] = [
   { type: "domain", label: "Data domain", short: "Domain", what: "A business area's model, contract and memory", icon: Boxes, tint: TYPE_TINT.DOMAIN,
-    new: "A business domain not on the platform yet", enhance: "Extend an existing domain's model: entities, attributes, rules",
-    direct: { privilege: "DOMAIN.ONBOARD", href: "/os/enable/new-domain" } },
+    new: "A business domain not on the platform yet", enhance: "Extend an existing domain's model: entities, attributes, rules" },
   { type: "source", label: "Data source", short: "Source", what: "A system that feeds a domain", icon: Database, tint: TYPE_TINT.SOURCE,
-    new: "Onboard a system that is not on the platform yet", enhance: "More tables or scope from a source already registered",
-    direct: { privilege: "SOURCE.CONNECT", href: "/os/enable/onboarding?type=source" } },
+    new: "Onboard a system that is not on the platform yet", enhance: "More tables or scope from a source already registered" },
   { type: "product", label: "Data product", short: "Product", what: "Governed Gold products from mastered Silver domains", icon: Crown, tint: TYPE_TINT.PRODUCT, soon: true,
     new: "A new governed data product", enhance: "Change a data product already published" },
 ];
@@ -159,12 +158,6 @@ export function StartPanel({ access, inflight }: {
                 <span className="block truncate text-[12.5px] font-extrabold">{t.short}</span>
                 {t.soon && <span className="block text-[10px] font-bold text-[var(--os-amber-ink)]">Coming soon</span>}
               </span>
-              {t.direct && has(access, t.direct.privilege) && (
-                <Link href={t.direct.href} title="Onboard directly as administrator" aria-label={`Onboard a ${t.type} directly`}
-                      className="os-faint grid h-7 w-7 place-items-center rounded-md hover:bg-[var(--os-hover)] hover:text-[var(--os-accent-ink)]">
-                  <ArrowUpRight className="h-3.5 w-3.5" />
-                </Link>
-              )}
               <span className="flex shrink-0 gap-1.5">{button("new")}{button("enhance")}</span>
             </div>
           );
@@ -242,7 +235,7 @@ export function RequestFocus({ r, access }: { r: RequestDetail; access: OsAccess
                       <span className="os-faint text-[10.5px]">{item ? `${item.source_name} · ` : ""}needs {w.privilege}</span></span>
                     {you && enhance && w.privilege === "RUN.CREATE" && item && !item.run_id && item.source_system_id
                       ? <StartEnhancementRun requestId={r.request_id} itemId={item.item_id} source={item.source_name} previewing={!!access.preview} />
-                      : you && href ? <Btn href={href} variant="primary">Do it <ArrowRight className="h-3.5 w-3.5" /></Btn> : you ? <Tag tone="green">You</Tag> : <Tag>Another role</Tag>}
+                      : you && href ? <Btn href={href} variant="primary" title={w.label}>{waitCta(w)} <ArrowRight className="h-3.5 w-3.5" /></Btn> : you ? <Tag tone="green">Yours</Tag> : <Tag>Waiting on {waitRole(w) ?? "another role"}</Tag>}
                   </div>
                 );
               })}
@@ -364,3 +357,42 @@ export function OnboardedDomains({ domains, requests, access, max = 5 }: {
   );
 }
 
+
+/** Everything else that waits on the viewer (lib/os/actions.ts): run gates and failures no workflow covers, approvals,
+ *  models and checks in review, knowledge and skill proposals, incidents. Grouped, the most urgent first. */
+export function ActionsPanel({ items, errors, max = 8 }: { items: ActionItem[]; errors: number; max?: number }) {
+  const shown = items.slice(0, max);
+  const groups = [...new Set(shown.map((i) => i.group))];
+  const TONE = { red: "bg-[var(--os-red-ink)]", amber: "bg-[var(--os-amber-ink)]", purple: "bg-[var(--os-purple-ink)]", blue: "bg-[var(--os-blue-ink)]" };
+  return (
+    <section className="os-card os-rise px-4 pb-3 pt-3.5" data-testid="actions-panel" aria-labelledby="actions-title">
+      <div className="flex items-baseline justify-between gap-2">
+        <h2 id="actions-title" className="text-[14.5px] font-extrabold tracking-[-0.01em]">Also waiting on you</h2>
+        <span className={cn("rounded-full px-2 py-0.5 text-[11px] font-extrabold", items.length ? "bg-[var(--os-amber-bg)] text-[var(--os-amber-ink)]" : "bg-[var(--os-green-bg)] text-[var(--os-green-ink)]")}
+              data-testid="actions-count">{items.length}</span>
+      </div>
+      <p className="os-faint mt-0.5 text-[11px]">Gates, approvals and reviews outside the workflows</p>
+      {shown.length ? groups.map((g) => (
+        <div key={g} className="mt-2.5">
+          <div className="os-eyebrow mb-1">{g}</div>
+          <ul className="os-divide">
+            {shown.filter((i) => i.group === g).map((i) => (
+              <li key={i.key}>
+                <Link href={i.href} title={`${i.cta}: ${i.title}`} className="group flex items-start gap-2 rounded-md py-2 os-hover" data-testid={`action-${i.key}`}>
+                  <span className={cn("mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full", TONE[i.tone])} aria-hidden />
+                  <span className="min-w-0 flex-1">
+                    <span className="block text-[12px] font-bold leading-snug">{i.title}</span>
+                    <span className="os-faint block truncate text-[10.5px]">{i.detail}{i.since ? ` · ${ago(i.since)}` : ""}</span>
+                  </span>
+                  <span className="os-accent shrink-0 self-center text-[11px] font-bold opacity-80 group-hover:opacity-100">{i.cta}</span>
+                </Link>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )) : <p className="os-faint mt-2 text-[12px]">Nothing else waits on you.</p>}
+      {items.length > max && <p className="os-faint mt-2 text-[11px]">and {items.length - max} more in Review and the stores</p>}
+      {errors > 0 && <p className="mt-2 text-[10.5px] text-[var(--os-amber-ink)]">Some sources could not be read; the list may be incomplete.</p>}
+    </section>
+  );
+}

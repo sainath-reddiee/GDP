@@ -34,9 +34,23 @@ export const pastStage = (run: Pick<RunSummary, "current_state" | "current_stage
 export function runNeedsMe(run: Pick<RunSummary, "current_state" | "lifecycle">, access: Grants & { persona?: { states: string[] } }): boolean {
   const s = run.current_state;
   if (s in GATES) return actMode(access, GATES[s].privilege) !== "none" || has(access, "APPROVAL.VIEW");
-  if (!has(access, "RUN.OPERATE")) return false;
-  if (s === "VALIDATION_FAILED" || s === "FAILED") return true;
-  return !!access.persona?.states.includes(s) && run.lifecycle === "RUNNING";
+  if (s === "VALIDATION_FAILED" || s === "FAILED") return has(access, "RUN.OPERATE");
+  // a step the viewer's persona works (the Data Designer profiles and maps without RUN.OPERATE), while no agent runs it
+  return !!access.persona?.states.includes(s) && run.lifecycle === "RUNNING" && !RUNNING_STATES.has(s);
+}
+
+/** States where an agent is working: nobody has anything to do until it finishes. */
+export const RUNNING_STATES = new Set(["ACCESS_VALIDATION", "LANDING_RUNNING", "PROFILING_RUNNING", "DBT_GENERATING", "VALIDATION_RUNNING"]);
+
+/** A workflow whose next step is the viewer's: open, a wait on a privilege they hold, and not a step an agent is still
+ *  running (a landing or validation in progress is shown as active, not as something to do). */
+export function requestNeedsMe(r: Pick<OnboardingRequest, "status" | "waits" | "items">, access: Grants): boolean {
+  if (r.status !== "OPEN") return false;
+  return r.waits.some((w) => {
+    if (!has(access, w.privilege)) return false;
+    const item = w.item_id ? r.items.find((i) => i.item_id === w.item_id) : undefined;
+    return !(item?.run_state && RUNNING_STATES.has(item.run_state));
+  });
 }
 
 /** The run holding a request at its stage: the first live source whose run is at that stage, else any linked run. */

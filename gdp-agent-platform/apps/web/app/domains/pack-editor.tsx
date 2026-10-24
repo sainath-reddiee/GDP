@@ -171,7 +171,7 @@ export function PackEditor({ domains, embedded = false }: { domains: { domain_id
           <div className="flex justify-end">
             <Button size="sm" disabled={pending || !parsed.pack} onClick={save}>
               {pending ? <Loader2 className="h-4 w-4 animate-spin" /> : <PackagePlus className="h-4 w-4" />}
-              Import pack
+              Import domain pack
             </Button>
           </div>
         </div>

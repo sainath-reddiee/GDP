@@ -122,10 +122,15 @@ export function actHref(w: Wait, item: RequestItem | undefined, domainId: string
   // a domain to onboard opens the administrator's domain wizard for this request; a retired one is restored in Domains
   if (w.privilege === "DOMAIN.ONBOARD") return `/os/enable/new-domain?${new URLSearchParams({ request: requestId })}`;
   if (w.privilege === "DOMAIN.EDIT") return "/os/knowledge?view=domains";
-  if (w.privilege === "MODEL.APPROVE" || w.privilege === "MODEL.EDIT") return domainId ? `/os/knowledge/domains/${domainId}` : "/domains";
+  if (w.privilege === "MODEL.APPROVE" || w.privilege === "MODEL.EDIT") return domainId ? `/os/knowledge/domains/${domainId}` : "/os/knowledge?view=domains";
   if (item?.run_id) {
-    return ["MAPPING.APPROVE", "STTM.APPROVE", "SODA.APPROVE", "REVIEW.APPROVE"].includes(w.privilege)
-      ? `/os/review?run=${item.run_id}` : `/os/build?run=${item.run_id}`;
+    const run = encodeURIComponent(item.run_id);
+    if (["MAPPING.APPROVE", "STTM.APPROVE", "SODA.APPROVE", "REVIEW.APPROVE", "QA.SIGNOFF"].includes(w.privilege)) {
+      return w.privilege === "QA.SIGNOFF" ? `/os/release?run=${run}` : `/os/review?run=${run}`;
+    }
+    // the Data Designer's own steps are worked on Design (Build is not theirs: it would refuse them)
+    if (["PROFILE.RUN", "MAPPING.DECIDE", "STTM.EDIT", "MODEL.EDIT"].includes(w.privilege)) return `/os/design?view=selected&run=${run}`;
+    return `/os/build?view=selected&run=${run}`;
   }
   if (w.privilege === "RUN.CREATE") return product ? "/os/build/gold" : "/os/build";
   if (w.privilege === "SOURCE.CONNECT" || w.privilege === "PROFILE.RUN") {
@@ -137,4 +142,18 @@ export function actHref(w: Wait, item: RequestItem | undefined, domainId: string
     return item?.source_system_id ? "/os/design/sources" : "/os/enable";
   }
   return null;
+}
+
+/** The role a wait names ("Model approver: approve the field mapping" is the Model approver), else null. */
+export function waitRole(w: Pick<Wait, "label">): string | null {
+  const head = w.label.split(":")[0];
+  return head !== w.label && head.length <= 40 ? head.trim() : null;
+}
+
+/** The button for a wait, in its own words ("Approve the field mapping"), short enough for a button; the whole label
+ *  is the button's title. */
+export function waitCta(w: Pick<Wait, "label">, max = 34): string {
+  const tail = (waitRole(w) ? w.label.slice(w.label.indexOf(":") + 1) : w.label).trim();
+  const text = tail.charAt(0).toUpperCase() + tail.slice(1);
+  return text.length > max ? `${text.slice(0, max - 1).replace(/\s+\S*$/, "")}…` : text;
 }

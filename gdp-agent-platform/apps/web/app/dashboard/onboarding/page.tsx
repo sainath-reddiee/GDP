@@ -36,7 +36,7 @@ export default async function Onboarding({ searchParams }: { searchParams: { typ
   return (
     <OnboardingShell>
       <div className="space-y-8">
-        <PageHeader eyebrow="Enable · Data OS Administrator" title="Onboard a source" />
+        <PageHeader eyebrow="Enable / Data OS Administrator" title="Onboard source" />
         {searchParams.request && <RequestHandoff requestId={searchParams.request} itemId={searchParams.item} />}
 
         <div>

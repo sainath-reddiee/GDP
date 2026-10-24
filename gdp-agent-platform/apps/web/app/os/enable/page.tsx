@@ -1,10 +1,11 @@
 import Link from "next/link";
-import { ArrowRight, CheckCircle2, CircleDashed, CloudCog, Database, FileSpreadsheet, Inbox, KeyRound, Plug, Share2, ShieldCheck, Workflow, Wrench, X } from "lucide-react";
+import { Boxes, CheckCircle2, CircleDashed, CloudCog, Database, Inbox, KeyRound, Plug, ShieldCheck, Workflow, Wrench, X } from "lucide-react";
 import { stateLabel } from "@/lib/run-labels";
 import { loadIngestion, loadRequests, loadRuns, loadSources, type IngestionControl, type IngestionPipeline } from "@/lib/os/data";
 import type { OnboardingRequest, RequestItem } from "@/lib/os/requests";
 import type { SourceOverviewItem } from "@/lib/types";
 import { guard } from "@/lib/os/session";
+import { has } from "@/lib/os/access";
 import { Action } from "@/components/os/action";
 import { ActivityRow, Banner, Btn, Card, Empty, Kpi, PageHeader, SourceError, Tag, ago, pretty, type Tone } from "@/components/os/ui";
 import { cn } from "@/lib/utils";
@@ -29,13 +30,6 @@ const HEALTH: Record<string, { tone: Tone; label: string }> = {
   HEALTHY: { tone: "green", label: "Ready" }, NOT_LANDED: { tone: "amber", label: "Not landed" }, UNREACHABLE: { tone: "red", label: "Unreachable" },
 };
 
-// the classic wizard's ways in (dashboard/sources/new/wizard.tsx): a Snowflake share, or another source as a database or files
-const WAYS = [
-  { key: "share", label: "Snowflake share", sub: "Mount a share and land its tables", icon: Share2, query: "branch=share" },
-  { key: "database", label: "Relational database", sub: "PostgreSQL, Oracle, SQL Server through the ingestion framework", icon: Database, query: "branch=external&kind=database" },
-  { key: "file", label: "File based", sub: "S3 or SharePoint files through the ingestion framework", icon: FileSpreadsheet, query: "branch=external&kind=file" },
-] as const;
-
 const ITEM_STATUS: Record<string, { tone: Tone; label: string }> = {
   MISSING: { tone: "amber", label: "Not registered" }, UNREACHABLE: { tone: "red", label: "Unreachable" },
   NOT_LANDED: { tone: "amber", label: "Not landed" }, ATTENTION: { tone: "red", label: "Needs a new run" },
@@ -45,8 +39,9 @@ const ITEM_STATUS: Record<string, { tone: Tone; label: string }> = {
 /** Names compared the way requests match them: case, spacing and punctuation ignored. */
 const nameKey = (s: string | null | undefined) => (s ?? "").toUpperCase().replace(/[^A-Z0-9]/g, "");
 
-const wizardHref = (query: string, r?: OnboardingRequest, i?: RequestItem) =>
-  `/os/enable/onboarding?type=source&${query}${r && i ? `&${new URLSearchParams({ request: r.request_id, item: i.item_id, name: i.source_name })}` : ""}`;
+/** The onboarding wizard for a request's source (the wizard asks how the source arrives: a share, a database, files). */
+const wizardHref = (r: OnboardingRequest, i: RequestItem) =>
+  `/os/enable/onboarding?${new URLSearchParams({ type: "source", request: r.request_id, item: i.item_id, name: i.source_name })}`;
 
 /** One source as configuration: how it is reached, with which credential reference, where it lands, when it runs, which
  *  SnapLogic pipelines carry it and whether it is ready. No table catalog: that lives in the source store. */
@@ -62,7 +57,7 @@ function SourceConfig({ s, controls, pipeline }: { s: SourceOverviewItem; contro
   const schedule = pipeline?.schedule?.frequency ? `${pretty(pipeline.schedule.frequency)}${pipeline.schedule.cron ? ` (${pipeline.schedule.cron})` : ""}`
     : c?.load_frequency ? pretty(String(c.load_frequency)) : s.oracle?.schedule ?? null;
   const rows: [string, React.ReactNode][] = [
-    ["Connection", <>{pretty(s.source_type)}{s.connection_type ? ` · ${pretty(s.connection_type)}` : ""}<span className="os-faint block font-mono text-[10.5px]">{s.oracle ? `${s.oracle.host}:${s.oracle.port}/${s.oracle.service}` : s.location ?? `${s.database_name}.${s.schema_name}`}</span></>],
+    ["Connection", <>{pretty(s.source_type)}{s.connection_type ? ` · ${pretty(s.connection_type)}` : ""}<span className="os-faint block font-mono text-[10.5px]">{s.oracle ? `${s.oracle.host}:${s.oracle.port}/${s.oracle.service}` : s.location ?? ([s.database_name, s.schema_name].filter(Boolean).join(".") || "location not recorded")}</span></>],
     ["Credential", s.oracle ? `Runs on ${s.oracle.runtime === "api_host" ? "the API host" : "Snowflake"}` : secretSet ? <span className="inline-flex items-center gap-1"><KeyRound className="h-3 w-3" />Secret reference set</span> : "Snowflake role access"],
     ["Lands in", landing ?? <span className="os-faint">not landed yet</span>],
     ["Schedule", schedule ?? <span className="os-faint">on demand</span>],
@@ -93,7 +88,7 @@ function SourceConfig({ s, controls, pipeline }: { s: SourceOverviewItem; contro
 
 export default async function SourceReadiness({ searchParams }: { searchParams: { config?: string } }) {
   const access = await guard("enable");
-  const persona = access.persona;
+  const mayConnect = has(access, "SOURCE.CONNECT");
   const [sources, runs, ingestion, requests] = await Promise.all([loadSources(), loadRuns("sort=updated&limit=150"), loadIngestion(), loadRequests("all", "OPEN")]);
   // the administrator's part of the open requests: each source still to register, reach or land, oldest request first
   const asks = requests.data.requests
@@ -116,15 +111,20 @@ export default async function SourceReadiness({ searchParams }: { searchParams: 
 
   return (
     <>
-      <PageHeader eyebrow={`${persona.label} / Enablement`} title="Source readiness"
-                  subtitle="The Data OS Administrator onboards sources: their connection, credential reference, landing target, schedule and SnapLogic configuration. Tables and profiles live in the source store; this page is configuration."
-                  actions={<><Btn href="/os/design/sources">Source store</Btn><Action access={access} id="connectSource" label="Onboard a source" href="/os/enable/onboarding?type=source" variant="primary" icon={<Plug className="h-3.5 w-3.5" />} /></>} />
+      {/* the one place for each entry: the Source Store, onboarding a domain, onboarding a source */}
+      <PageHeader eyebrow="Enable / Data OS Administrator" title="Source readiness"
+                  subtitle="The Data OS Administrator onboards domains and sources: connection, credential reference, landing target, schedule and SnapLogic configuration. Tables and profiles live in the Source Store; this page is configuration."
+                  actions={<>
+                    <Btn href="/os/design/sources">Open Source Store</Btn>
+                    <Action access={access} id="onboardDomain" href="/os/enable/new-domain" denied="explain" icon={<Boxes className="h-3.5 w-3.5" />} />
+                    <Action access={access} id="connectSource" href="/os/enable/onboarding?type=source" variant="primary" denied="explain" icon={<Plug className="h-3.5 w-3.5" />} />
+                  </>} />
       <SourceError what="Sources" error={sources.error} />
       <SourceError what="Requests" error={requests.error} />
       {asks.length || domainAsks.length
         ? <Banner tone="amber" icon={Inbox}><b>{[domainAsks.length ? `${domainAsks.length} domain${domainAsks.length === 1 ? "" : "s"}` : "", asks.length ? `${asks.length} source${asks.length === 1 ? "" : "s"}` : ""].filter(Boolean).join(" and ")} asked for by data owners</b> wait on onboarding. Once onboarded, each request moves on to the Data Designer on its own.</Banner>
         : waiting.length
-          ? <Banner tone="amber" icon={Wrench} action={<Action access={access} id="connectSource" label="Open the first" href={`/os/build/runs/${waiting[0].run_id}/source`} variant="warn" />}><b>{waiting.length} run{waiting.length === 1 ? "" : "s"} wait on enablement</b>: access, landing or configuration before the designer can start.</Banner>
+          ? <Banner tone="amber" icon={Wrench} action={<Action access={access} id="connectSource" label="Open next waiting run" href={`/os/build/runs/${waiting[0].run_id}/source`} variant="primary" />}><b>{waiting.length} run{waiting.length === 1 ? "" : "s"} wait on enablement</b>: access, landing or configuration before the designer can start.</Banner>
           : <Banner icon={ShieldCheck}>Nothing waits on onboarding. Sources already connected and landed skip this step automatically.</Banner>}
 
       <div className="mb-4 grid grid-cols-2 gap-3 xl:grid-cols-4">
@@ -144,7 +144,7 @@ export default async function SourceReadiness({ searchParams }: { searchParams: 
                   <div className="os-faint mt-0.5 text-[11px]">For <Link href={`/os/requests/${r.request_id}`} className="font-semibold underline">{r.title}</Link> · filed by {r.requested_by} {ago(r.created_at)}</div>
                   {r.business_outcome && <div className="os-muted mt-0.5 text-[11.5px]">{r.business_outcome}</div>}
                 </div>
-                <Action access={access} id="onboardDomain" label="Onboard this domain" href={`/os/enable/new-domain?${new URLSearchParams({ request: r.request_id })}`} variant="primary" />
+                <Action access={access} id="onboardDomain" label="Onboard domain for request" href={`/os/enable/new-domain?${new URLSearchParams({ request: r.request_id })}`} variant="primary" />
               </div>
             ))}
           </div>
@@ -156,8 +156,10 @@ export default async function SourceReadiness({ searchParams }: { searchParams: 
           <div className="os-divide" data-testid="enable-asks">
             {asks.map(({ r, i }) => {
               const st = ITEM_STATUS[i.status] ?? { tone: "neutral" as Tone, label: pretty(i.status) };
-              // registered but unreachable or not landed: fixed in the source store; anything else opens the wizard
+              // registered but unreachable or not landed: resumed on its run's source step (access check and landing),
+              // or in the Source Store when it has no run yet; anything else opens the wizard for the request
               const registered = !!i.source_system_id && (i.status === "UNREACHABLE" || i.status === "NOT_LANDED");
+              const resume = i.run_id ? `/os/build/runs/${encodeURIComponent(i.run_id)}/source` : "/os/design/sources";
               return (
                 <div key={i.item_id} className="flex flex-wrap items-start justify-between gap-3 px-5 py-3">
                   <div className="min-w-0 flex-1">
@@ -173,12 +175,9 @@ export default async function SourceReadiness({ searchParams }: { searchParams: 
                   </div>
                   <div className="flex shrink-0 flex-wrap gap-2">
                     {registered
-                      ? <Action access={access} id="connectSource" privilege="SOURCE.CONNECT"
-                                label={i.status === "NOT_LANDED" ? "Land it" : "Restore access"} href="/os/design/sources" variant="primary" />
-                      : WAYS.map((w, n) => (
-                          <Action key={w.key} access={access} id="connectSource" label={n === 0 ? `Onboard as ${w.label.toLowerCase()}` : w.label}
-                                  href={wizardHref(w.query, r, i)} variant={n === 0 ? "primary" : "default"} />
-                        ))}
+                      ? <Action access={access} id="connectSource" variant="primary" href={resume}
+                                label={!i.run_id ? "Open in Source Store" : i.status === "NOT_LANDED" ? "Resume landing" : "Recheck access"} />
+                      : <Action access={access} id="connectSource" label="Onboard source for request" href={wizardHref(r, i)} variant="primary" />}
                   </div>
                 </div>
               );
@@ -189,28 +188,15 @@ export default async function SourceReadiness({ searchParams }: { searchParams: 
 
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]">
         <div className="flex min-w-0 flex-col gap-4">
-          <Card title="Onboard a source" subtitle="The onboarding wizard's ways in; each registers the source, its landing and its framework configuration">
-            <div className="grid gap-2 sm:grid-cols-3" data-testid="onboard-ways">
-              {WAYS.map((w) => (
-                <Link key={w.key} href={wizardHref(w.query)} className="os-hover flex flex-col gap-1 rounded-xl border border-[var(--os-line)] p-3">
-                  <w.icon className="h-4 w-4 text-[var(--os-emerald)]" />
-                  <span className="text-[12.5px] font-extrabold">{w.label}</span>
-                  <span className="os-faint text-[11px]">{w.sub}</span>
-                </Link>
-              ))}
-            </div>
-          </Card>
-
           <Card title="Source configurations" subtitle="Every registered source as configuration; the ones needing work first. Credentials show only whether a reference is set." pad={false}>
             {ordered.length ? (
               <div className="grid max-h-[720px] gap-3 overflow-auto p-4 lg:grid-cols-2">
                 {ordered.map((s) => <SourceConfig key={s.source_system_id} s={s} controls={controlsOf(s)} pipeline={pipelineOf(s)} />)}
               </div>
-            ) : <div className="p-5"><Empty icon={Database} title="No sources registered">Onboard the first one above.</Empty></div>}
+            ) : <div className="p-5"><Empty icon={Database} title="No sources registered">Use Onboard source above.</Empty></div>}
           </Card>
 
-          <Card title="Framework configuration" subtitle="Runtime ingestion through the config-driven SnapLogic framework (CORE.INGESTION_CONTROL_CONFIG); secrets are never shown"
-                action={<Action access={access} id="manageIngestion" href="/os/design/sources" />}>
+          <Card title="Framework configuration" subtitle="Runtime ingestion through the config-driven SnapLogic framework (CORE.INGESTION_CONTROL_CONFIG); secrets are never shown. Edit it in the Source Store.">
             <SourceError what="Ingestion configuration" error={ingestion.error} />
             {configs.length ? (
               <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.15fr)]">
@@ -244,16 +230,22 @@ export default async function SourceReadiness({ searchParams }: { searchParams: 
             </div>
           </Card>
 
-          <Card title="Admin handoff" subtitle="Runs waiting on access, landing or configuration" pad={false}>
+          <Card title="Runs waiting on enablement" subtitle="Access, landing or configuration before the designer can start" pad={false}>
             {waiting.length ? (
               <div className="os-divide">
-                {waiting.map((r) => (
-                  <Link key={r.run_id} href={`/os/build/runs/${r.run_id}/source`} className="flex items-center justify-between gap-2 px-5 py-2.5 os-hover">
-                    <span className="min-w-0"><span className="block truncate text-[12px] font-bold">{r.run_name}</span>
-                      <span className="os-faint text-[10.5px]">{r.source_system_name ?? "no source"} · {ago(r.updated_at ?? r.created_at)}</span></span>
-                    <Tag tone="amber">{stateLabel(r.current_state)}</Tag>
-                  </Link>
-                ))}
+                {waiting.map((r) => {
+                  const row = (
+                    <>
+                      <span className="min-w-0"><span className="block truncate text-[12px] font-bold">{r.run_name}</span>
+                        <span className="os-faint text-[10.5px]">{r.source_system_name ?? "no source"} · {ago(r.updated_at ?? r.created_at)}</span></span>
+                      <Tag tone="amber">{stateLabel(r.current_state)}</Tag>
+                    </>
+                  );
+                  // the run's source step is the administrator's (SOURCE.CONNECT); others see the row without a link
+                  return mayConnect
+                    ? <Link key={r.run_id} href={`/os/build/runs/${r.run_id}/source`} title="Open the run's source step" className="flex items-center justify-between gap-2 px-5 py-2.5 os-hover">{row}</Link>
+                    : <div key={r.run_id} className="flex items-center justify-between gap-2 px-5 py-2.5">{row}</div>;
+                })}
               </div>
             ) : <div className="p-5"><Empty icon={CheckCircle2} title="Nothing to hand off" /></div>}
           </Card>
@@ -270,7 +262,6 @@ export default async function SourceReadiness({ searchParams }: { searchParams: 
                 ))}
               </div>
             ) : <div className="p-5"><Empty icon={X} title="No pipelines registered" /></div>}
-            <div className="border-t border-[var(--os-line)] px-5 py-3"><Link href="/os/design/sources" className="os-accent inline-flex items-center gap-1 text-[12px] font-bold">Open source store <ArrowRight className="h-3 w-3" /></Link></div>
           </Card>
         </div>
       </div>
