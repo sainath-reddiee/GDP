@@ -4,10 +4,10 @@ import { stateLabel } from "@/lib/run-labels";
 import { labelFor, pipelineOf } from "@/lib/stages";
 import type { StageStatusValue } from "@/lib/types";
 import {
-  artifactGroups, gatePassed, gateText, defaultRun, loadRunBundle, loadRuns, scoreOf, tableOf,
+  artifactGroups, gatePassed, gateText, defaultRun, loadBoardRuns, loadRunBundle, loadRuns, scoreOf, tableOf,
 } from "@/lib/os/data";
 import { guard, type OsAccess } from "@/lib/os/session";
-import { RUNS_QUERY, boardView, pastStage, runNeedsMe, stageOfRun } from "@/lib/os/work";
+import { boardView, pastStage, runNeedsMe, stageOfRun } from "@/lib/os/work";
 import { BoardList, BoardTabs, RunCard } from "@/components/os/stage-board";
 import { HomeSearch } from "@/components/os/home-search";
 import { BuildEndToEnd } from "@/components/os/build-run";
@@ -35,7 +35,7 @@ type Params = { view?: string; run?: string; q?: string };
  *  opens the workbench: its eight steps, the agents, the artifacts and the gates. */
 export default async function BuildBoard({ searchParams }: { searchParams: Params }) {
   const access = await guard("build");
-  const runs = await loadRuns(RUNS_QUERY);
+  const runs = await loadBoardRuns();
   const q = (searchParams.q ?? "").trim().toLowerCase();
   const live = runs.data.runs.filter((r) => !r.is_archived && r.current_state !== "CANCELLED");
   const listed = live.filter((r) => !q || r.run_name.toLowerCase().includes(q) || (r.domain_name ?? "").toLowerCase().includes(q));

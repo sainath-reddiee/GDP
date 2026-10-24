@@ -20,10 +20,14 @@ export default async function IntakeBoard({ searchParams }: { searchParams: { vi
     query ? loadWorkflowSearch(query) : null]);
   const q = query.toLowerCase();
   // by meaning when the search answers ("waiting on me", synonyms), else by title
-  const hits = searched?.data ? new Set(searched.data.results.map((x) => x.id)) : null;
+  // "waiting on me" or "failed" alone: the board's own rule over every request (the search sees only a request's first wait)
+  const only = searched?.data && !searched.data.intent.terms.length && (searched.data.intent.mine || searched.data.intent.failed)
+    ? searched.data.intent : null;
+  const hits = searched?.data && !only ? new Set(searched.data.results.map((x) => x.id)) : null;
   // New or Enhance, from the in-flight counts on the right
   const intent = searchParams.intent === "new" || searchParams.intent === "enhance" ? searchParams.intent : null;
-  const all = list.data.requests.filter((r) => (!q || (hits ? hits.has(r.request_id) : r.title.toLowerCase().includes(q))) && (!intent || intentOf(r) === intent.toUpperCase()));
+  const all = list.data.requests.filter((r) => (!q || (only ? (!only.mine || requestNeedsMe(r, access)) && (!only.failed || !!r.attention)
+    : hits ? hits.has(r.request_id) : r.title.toLowerCase().includes(q))) && (!intent || intentOf(r) === intent.toUpperCase()));
   const yours = (r: OnboardingRequest) => requestNeedsMe(r, access);
   const lists = {
     action: all.filter(yours),

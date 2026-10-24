@@ -54,9 +54,9 @@ SYNONYMS: Tuple[Tuple[str, ...], ...] = (
 )
 
 # intent words: what they filter on; they are not searched for
-_MINE = re.compile(r"\b(waiting on me|waiting for me|assigned to me|for me|my (?:actions?|approvals?|reviews?|work|turn|queue)"
-                   r"|i (?:need|have) to|to do|todo)\b")
-_FAILED = re.compile(r"\b(failed|failing|failure|broken|errors?|needs attention|stuck)\b")
+# only phrases that cannot be part of a topic ("how to do X" is not intent, nor "error handling rule")
+_MINE = re.compile(r"\b(waiting on me|waiting for me|assigned to me|my (?:actions?|approvals?|reviews?|work|turn|queue))\b")
+_FAILED = re.compile(r"\b(failed|failing|failures?|broken|needs attention)\b")
 _KIND_WORDS = {
     "WORKFLOW": r"workflows?|requests?",
     "DOMAIN": r"domains?",
@@ -115,7 +115,7 @@ def parse(query: str) -> Dict[str, Any]:
             text = re.sub(rf"\b(?:{pat})\b", " ", text)
     terms = [t for t in tokens(text) if t not in _STOP]
     if failed:
-        terms = [t for t in terms if stem(t) not in {stem(w) for w in ("failed", "failing", "failure", "broken", "error", "errors", "stuck")}]
+        terms = [t for t in terms if stem(t) not in {stem(w) for w in ("failed", "failing", "failure", "failures", "broken")}]
     return {"text": " ".join(terms) or q, "terms": terms, "kinds": kinds, "mine": mine, "failed": failed}
 
 
@@ -207,7 +207,10 @@ def href(kind: str, resource_id: str, domain_id: Optional[str] = None, state: Op
     if kind == "SOURCE":
         return "/os/design/sources"
     if kind == "RUN":
-        design = state and re.search(r"PROFIL|DOMAIN_IDENTIFIED|MAPPING|STTM_(PENDING|REVIEW)", state)
+        # where the run is worked, as the boards' stage rule puts it: being onboarded on Enable, designed, built
+        if state and re.match(r"(CREATED|SOURCE_REGISTERED|ACCESS_|LANDING_(PENDING|RUNNING))", state):
+            return "/os/enable"
+        design = state and re.search(r"LANDING_COMPLETE|PROFIL|DOMAIN_IDENTIFIED|MAPPING|STTM_(PENDING|REVIEW)", state)
         return f"/os/{'design' if design else 'build'}?view=selected&run={resource_id}"
     if kind == "TABLE":
         return f"/os/knowledge/domains/{domain_id}" if domain_id else "/os/knowledge"

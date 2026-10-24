@@ -72,8 +72,17 @@ def current_persona() -> Optional[str]:
     return _persona.get()
 
 
-def persona_privileges(db: "Db", persona_id: str) -> Optional[set]:
-    """The privileges a persona's role bundle adds up to (Viewer: the VIEWER role), None when unknown or before V076."""
+def persona_roles(db: "Db", persona_id: str) -> Optional[set]:
+    """The roles a persona's bundle adds up to with the roles they inherit (Viewer: VIEWER), None when unknown or
+    before V076."""
+    bundle = _persona_bundle(db, persona_id)
+    if bundle is None:
+        return None
+    role_privs, grants = role_model(db)
+    return set(effective_privileges(sorted(bundle), role_privs, grants)[0])
+
+
+def _persona_bundle(db: "Db", persona_id: str) -> Optional[set]:
     def load():
         try:
             rows = db.query("SELECT P.PERSONA_ID, R.ROLE_NAME FROM CORE.PERSONA P LEFT JOIN CORE.PERSONA_ROLE R "
@@ -87,11 +96,27 @@ def persona_privileges(db: "Db", persona_id: str) -> Optional[set]:
                 out[r["persona_id"]].add(r["role_name"])
         return out
     bundles = _cached("persona_bundles", load)
-    roles = {"VIEWER"} if persona_id == "viewer" else bundles.get(persona_id)
+    return {"VIEWER"} if persona_id == "viewer" else bundles.get(persona_id)
+
+
+def persona_privileges(db: "Db", persona_id: str) -> Optional[set]:
+    """The privileges a persona's role bundle adds up to (Viewer: the VIEWER role), None when unknown or before V076."""
+    roles = _persona_bundle(db, persona_id)
     if roles is None:
         return None
     role_privs, grants = role_model(db)
     return set(effective_privileges(sorted(roles), role_privs, grants)[1])
+
+
+def narrow_roles(own: set, persona: Optional[set]) -> set:
+    """The roles a person acts with working as a persona (pure), as `narrow` does for privileges: role-based decisions
+    (who approves a change request, who decides proposed knowledge) follow the persona too, never above their own. A
+    super admin working as a persona has that persona's roles."""
+    if persona is None or "SUPER_ADMIN" in persona:
+        return set(own)
+    if "SUPER_ADMIN" in own:
+        return set(persona)
+    return own & persona
 
 
 def narrow(own: set, persona: Optional[set]) -> set:
@@ -257,7 +282,9 @@ def identity(db: Db) -> dict:
     if persona in FULL_PERSONAS:
         return who
     narrowed = narrow(set(who["privileges"]), persona_privileges(db, persona))
-    return {**who, "privileges": sorted(narrowed), "persona": persona, "own_privileges": who["privileges"]}
+    roles = narrow_roles(set(who["roles"]), persona_roles(db, persona))
+    return {**who, "privileges": sorted(narrowed), "roles": sorted(roles), "persona": persona,
+            "own_privileges": who["privileges"], "own_roles": who["roles"]}
 
 
 # ---------------------------------------------------------------- middleware
@@ -391,7 +418,8 @@ def summary(db: Db) -> dict:
         pass
     return {"governance": True, "roles": who["roles"], "granted_roles": who["granted"],
             "privileges": who["privileges"], "pending_for_me": pending, "read_only": read_only(who["privileges"]),
-            "persona": who.get("persona"), "own_privileges": who.get("own_privileges", who["privileges"])}
+            "persona": who.get("persona"), "own_privileges": who.get("own_privileges", who["privileges"]),
+            "own_roles": who.get("own_roles", who["roles"])}
 
 
 def _requests(db: Db, where: str = "1 = 1", params: tuple = ()) -> list[dict]:

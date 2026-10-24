@@ -220,7 +220,10 @@ def refresh(db: Db, requests: List[Dict[str, Any]], write: bool = True) -> List[
                            "AND DOMAIN_ID IS NULL", (hit["domain_id"], r["request_id"]))
                 _event(db, r["request_id"], "DOMAIN_LINKED", f"The {hit['domain_name']} domain now exists", to=hit["domain_id"], automatic=True)
                 r["domain_id"] = hit["domain_id"]
-                hand_over(db, r["request_id"], hit["domain_id"])
+                try:   # the files follow the domain; a failure here never breaks reading the requests
+                    hand_over(db, r["request_id"], hit["domain_id"])
+                except Exception:
+                    pass
 
     run_ids = sorted({i["run_id"] for i in all_items if i.get("run_id")})
     source_ids = sorted({i["source_system_id"] for i in all_items if i.get("source_system_id")})

@@ -122,9 +122,14 @@ def _publish_pr(db: Db, run_id: str):
 
     result = m.publish_dbt(run_id, m.DbtPublish(), db) or {}
     status = str(result.get("status") or "").upper()
-    if status in ("NOT_CONFIGURED", "FAILED"):
-        return {"error": result.get("detail") or f"publishing {status.lower()}"}
+    # PUBLISHED, or NO_CHANGES (this generation is already on the branch): the PR is there. Anything else (FAILED,
+    # NOT_CONFIGURED, AUTH, TOKEN_SCOPE) stops autopilot with its reason instead of retrying the step
+    if status not in PUBLISHED:
+        return {"error": result.get("detail") or f"publishing {status.lower() or 'failed'}"}
     return result
+
+
+PUBLISHED = ("PUBLISHED", "NO_CHANGES")
 
 
 def _signoff_qa(db: Db, run_id: str):
@@ -141,6 +146,16 @@ def _publish_ready(db: Db) -> bool:
         from app.main import _github_publisher_ready
 
         return _github_publisher_ready(db)
+    except Exception:
+        return False
+
+
+def _has_repository(db: Db, run_id: str) -> bool:
+    try:
+        from app.main import _stored_dbt_plan
+
+        plan = _stored_dbt_plan(db, run_id) or {}
+        return bool(plan.get("origin") or plan.get("code_repo_id"))
     except Exception:
         return False
 
@@ -185,9 +200,11 @@ def _facts(db: Db, run_id: str) -> Tuple[str, Dict[str, Any], Dict[str, Any]]:
                         AND GENERATION_STATUS IN ('GENERATED', 'APPROVED') ORDER BY GENERATION_VERSION DESC LIMIT 1""",
                    (run_id, sttm[0]["sttm_id"] if sttm else ""))
     facts["dbt_generated"] = bool(gen)
-    facts["publish_ready"] = _publish_ready(db)
+    # a pull request needs GitHub publishing set up and a repository this run was generated for; without one the code
+    # waits for review on the platform (stage only)
+    facts["publish_ready"] = _publish_ready(db) and _has_repository(db, run_id)
     facts["published"] = bool(gen) and bool(db.query("""SELECT 1 FROM CORE.GIT_PUBLICATION WHERE RUN_ID = %s
-                                                          AND GENERATION_ID = %s AND STATUS = 'PUBLISHED' LIMIT 1""",
+                                                          AND GENERATION_ID = %s AND STATUS IN ('PUBLISHED', 'NO_CHANGES') LIMIT 1""",
                                                        (run_id, gen[0]["generation_id"])))
     facts["may_signoff_qa"] = _allowed(db, "POST", f"/api/runs/{run_id}/qa/signoff")
     facts["may_approve_code"] = _allowed(db, "POST", f"/api/runs/{run_id}/review", {"to_state": "DBT_APPROVED", "decision": "APPROVE"})

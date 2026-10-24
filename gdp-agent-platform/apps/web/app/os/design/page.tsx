@@ -2,13 +2,13 @@ import Link from "next/link";
 import { ArrowRight, CircleHelp, FileText, GitBranch, Network, ScanSearch } from "lucide-react";
 import { GATES, stateLabel } from "@/lib/run-labels";
 import {
-  loadDomainContract, loadDomainModel, loadDomainQuestions, loadDomains, loadKnowledge, loadMapping, loadRuns, loadSources,
+  loadDomainContract, loadDomainModel, loadDomainQuestions, loadDomains, loadKnowledge, loadMapping, loadBoardRuns, loadRuns, loadSources,
 } from "@/lib/os/data";
 import { guard } from "@/lib/os/session";
 import { actMode } from "@/lib/os/access";
 import { Action } from "@/components/os/action";
 import { gateHref } from "@/lib/os/lifecycle";
-import { RUNS_QUERY, boardView, pastStage, runNeedsMe, stageOfRun } from "@/lib/os/work";
+import { boardView, pastStage, runNeedsMe, stageOfRun } from "@/lib/os/work";
 import { Bar, Btn, Card, Empty, Field, SourceError, Tag, ago, pretty } from "@/components/os/ui";
 import { BoardList, BoardTabs, RunCard, Segmented, Track, runTrack } from "@/components/os/stage-board";
 import { HomeSearch } from "@/components/os/home-search";
@@ -30,14 +30,20 @@ type Params = { view?: string; run?: string; domain?: string; tab?: string; q?: 
 
 export default async function DesignBoard({ searchParams }: { searchParams: Params }) {
   const access = await guard("design");
-  const [domains, runs, sources] = await Promise.all([loadDomains(), loadRuns(RUNS_QUERY), loadSources()]);
+  const [domains, runs, sources] = await Promise.all([loadDomains(), loadBoardRuns(), loadSources()]);
   const q = (searchParams.q ?? "").trim().toLowerCase();
   const live = runs.data.runs.filter((r) => !r.is_archived && r.current_state !== "CANCELLED");
   const listed = live.filter((r) => !q || r.run_name.toLowerCase().includes(q) || (r.domain_name ?? "").toLowerCase().includes(q));
   const step = TABS.find((t) => t.key === searchParams.tab)?.key ?? null;
-  const atStep = (r: (typeof live)[number]) => !step || tabOf(r.current_state) === step;
-  const active = listed.filter((r) => stageOfRun(r) === "design" && atStep(r));
-  const lists = { action: active.filter((r) => runNeedsMe(r, access)), active, completed: listed.filter((r) => pastStage(r, "design")) };
+  // a failed run is at the step it failed in (its stage name), else the step of its state
+  const stepOf = (r: (typeof live)[number]): Tab => r.current_state === "FAILED"
+    ? (/profil|landing/i.test(r.current_stage ?? "") ? "profile" : /mapping|sttm|soda|dq/i.test(r.current_stage ?? "") ? "map" : "model")
+    : tabOf(r.current_state);
+  const inDesign = listed.filter((r) => stageOfRun(r) === "design");
+  const all = { action: inDesign.filter((r) => runNeedsMe(r, access)), active: inDesign, completed: listed.filter((r) => pastStage(r, "design")) };
+  const atStep = (r: (typeof live)[number]) => !step || stepOf(r) === step;
+  const lists = { action: all.action.filter(atStep), active: all.active.filter(atStep), completed: all.completed.filter(atStep) };
+  const active = lists.active;
   // ?domain= (older links) selects that domain's newest run in design, else its newest run
   const byDomain = searchParams.domain ? domains.data.find((d) => d.domain_id === searchParams.domain)?.domain_name : null;
   const run = live.find((r) => r.run_id === searchParams.run)
@@ -47,6 +53,7 @@ export default async function DesignBoard({ searchParams }: { searchParams: Para
   const picked = run ?? (searchParams.view === "selected" ? fallback : null);
   const view = boardView(searchParams.view ?? (byDomain && run ? "selected" : undefined), !!picked, lists.action.length);
   const rows = view === "selected" ? [] : lists[view];
+  const viewList = view === "selected" ? all.active : all[view];
   const select = (id: string) => `/os/design?${new URLSearchParams({ view: "selected", run: id, ...(step ? { tab: step } : {}) })}`;
   // Profile, Model, Map: on a selected run, its tab; on a list, the runs at that step (again to show every step)
   const stepHref = (k: Tab) => view === "selected" && picked
@@ -70,7 +77,8 @@ export default async function DesignBoard({ searchParams }: { searchParams: Para
         <span className="mx-1 hidden h-5 w-px bg-[var(--os-line)] sm:block" aria-hidden />
         <Segmented label="Design step" testId="design-steps" options={TABS.map((x) => ({
           key: x.key, label: x.label, href: stepHref(x.key), active: x.key === shownStep,
-          ...(view !== "selected" ? { count: listed.filter((r) => stageOfRun(r) === "design" && tabOf(r.current_state) === x.key).length } : {}),
+          // the runs of the list on show at each step (failed runs count where they failed)
+          ...(view !== "selected" ? { count: viewList.filter((r) => stepOf(r) === x.key).length } : {}),
         }))} />
       </div>
       <SourceError what="Workflow runs" error={runs.error} />

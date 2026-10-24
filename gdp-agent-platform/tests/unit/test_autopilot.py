@@ -247,3 +247,16 @@ def test_drive_stops_at_dq_when_autopilot_may_not_approve_it(monkeypatch):
     grants = LEAD | {privilege_for("POST", f"/api/runs/r/{p}", None)[0] for p in ("soda", "dbt", "validation", "dbt/publish")}
     stop, calls = _drive(monkeypatch, grants, approves_dq=False)
     assert calls == ["generate_soda"] and stop["kind"] == "BLOCKED" and "SODA.APPROVE" in stop["label"]
+
+
+@pytest.mark.parametrize("status,ok", [("PUBLISHED", True), ("NO_CHANGES", True), ("AUTH", False), ("TOKEN_SCOPE", False),
+                                       ("NOT_CONFIGURED", False), ("FAILED", False)])
+def test_publish_step_stops_with_the_reason_unless_the_pr_is_there(monkeypatch, status, ok):
+    import app.main as m
+    from app import autopilot_api as api
+
+    monkeypatch.setattr(m, "publish_dbt", lambda run_id, body, db: {"status": status, "detail": f"{status} detail"})
+    out = api._publish_pr(None, "run-1")
+    assert ("error" not in out) == ok
+    if not ok:
+        assert out["error"] == f"{status} detail"

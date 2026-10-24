@@ -146,3 +146,10 @@ def test_waiting_on_me_lists_my_gates_and_failed_runs_i_operate(client):
     out = c.get("/api/search", params={"q": "waiting on me"}).json()
     assert out["mode"] == "filter"
     assert {(r["kind"], r["id"]) for r in out["results"]} == {("RUN", "r1"), ("RUN", "r2")}
+
+
+def test_topic_words_are_not_mistaken_for_intent():
+    assert not rs.parse("error handling rule")["failed"] and rs.parse("error handling rule")["terms"] == ["error", "handling", "rule"]
+    assert not rs.parse("how to do a lease mapping")["mine"]
+    assert rs.href("RUN", "r", state="LANDING_RUNNING") == "/os/enable"
+    assert rs.href("RUN", "r", state="LANDING_COMPLETE").startswith("/os/design?")

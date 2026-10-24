@@ -5,6 +5,7 @@ import type { KnowledgeItem } from "@/app/knowledge/actions";
 import type { SkillVersion, SkillsResponse } from "@/app/skills/types";
 import type { DagRow, OpsSummary } from "@/app/ops/actions";
 import type { OnboardingRequest, RequestDetail } from "./requests";
+import { RUNS_QUERY, RUNS_WAITING, mergeRuns } from "./work";
 
 // Every /os screen reads the platform through these adapters, over the endpoints the classic pages already use (no new
 // backend). There is no sample data: a source that fails or is not deployed comes back empty with its error, and the
@@ -377,3 +378,11 @@ export const loadReadiness = () => load(api<Readiness>("/api/build/readiness"), 
 export const loadWorkflowSearch = (q: string) =>
   load(api<import("./search").SearchResponse>(`/api/search?${new URLSearchParams({ q: q.slice(0, 500), kinds: "WORKFLOW", limit: "50" })}`),
     null as import("./search").SearchResponse | null);
+
+/** The runs the Design and Build boards and Home read (lib/os/work RUNS_QUERY and RUNS_WAITING, merged): the latest,
+ *  plus every gate and failure however old, so the three always count the same runs. */
+export async function loadBoardRuns(): Promise<Loaded<{ runs: RunSummary[] }>> {
+  const [latest, ...waiting] = await Promise.all([loadRuns(RUNS_QUERY), ...RUNS_WAITING.map((q) => loadRuns(q))]);
+  return { data: { runs: mergeRuns(latest.data.runs, ...waiting.map((w) => w.data.runs)) },
+           error: latest.error ?? waiting.find((w) => w.error)?.error ?? null };
+}

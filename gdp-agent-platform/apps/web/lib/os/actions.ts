@@ -4,7 +4,8 @@ import { GATES, stateLabel } from "@/lib/run-labels";
 import { gateHref } from "@/lib/os/lifecycle";
 import { has } from "@/lib/os/access";
 import type { OsAccess } from "@/lib/os/session";
-import { RUNS_QUERY, runNeedsMe, stageOfRun } from "@/lib/os/work";
+import { runNeedsMe, stageOfRun } from "@/lib/os/work";
+import { loadBoardRuns } from "@/lib/os/data";
 
 // Everything that waits on the viewer besides the build workflows (onboarding requests) Home lists: run gates and
 // failed runs no request covers, change requests to approve, Airflow fixes to approve, domain models and data quality
@@ -47,7 +48,7 @@ export async function loadActions(access: OsAccess, covered: Set<string>): Promi
   let errors = 0;
   const tracked = <T>(p: Promise<T>, fallback: T) => p.catch(() => { errors += 1; return fallback; });
   const [runs, changes, fixes, models, suites, packs, inbox, proposals, incidents] = await Promise.all([
-    tracked(api<{ runs: RunSummary[] }>(`/api/runs?${RUNS_QUERY}`), { runs: [] }),
+    loadBoardRuns().then((r) => { if (r.error) errors += 1; return r.data; }),
     safe(api<{ requests: Change[] }>("/api/governance/requests?scope=inbox"), { requests: [] }),
     has(access, "OPS.FIX_APPROVE") ? safe(api<FixApproval[]>("/api/ops/resolve/approvals?scope=mine"), []) : Promise.resolve([] as FixApproval[]),
     has(access, "MODEL.APPROVE") || has(access, "MODEL.EDIT") ? safe(api<{ models: ModelRow[] }>("/api/hub/domain-models?layer=SILVER"), { models: [] }) : Promise.resolve({ models: [] as ModelRow[] }),

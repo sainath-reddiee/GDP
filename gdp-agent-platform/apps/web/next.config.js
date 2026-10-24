@@ -17,7 +17,7 @@ module.exports = {
     NEXT_PUBLIC_BUILD_TIME: new Date().toISOString(),
   },
   // External file sources are uploaded through a server action to the API, which stages them in Snowflake.
-  experimental: { serverActions: { bodySizeLimit: "200mb" } },
+  experimental: { serverActions: { bodySizeLimit: "520mb" } },   // request files: 10 of 50 MB
   // The lifecycle hubs live under /dashboard; old links keep working (the query string is carried over).
   async redirects() {
     return [

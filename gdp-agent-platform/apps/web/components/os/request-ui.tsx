@@ -105,8 +105,16 @@ export function SubmitRequest({ type, intent = "NEW", domainId, domainName, pick
     run(async () => {
       const r = await createRequest(body);
       if (!r.ok && r.duplicates) setDupes(r.duplicates);
-      // the files go up once the request exists; one that fails can be attached again from the request
-      if (r.ok && files.length) await uploadRequestFiles(r.data.request_id, formOf(files));
+      // the files go up once the request exists; when they do not, the request page says so and takes them again
+      if (r.ok && files.length) {
+        const up = await uploadRequestFiles(r.data.request_id, formOf(files));
+        const kept = up.ok ? up.files.filter((f) => f.file_id).length : 0;
+        if (kept < files.length) {
+          const why = up.ok ? up.files.filter((f) => !f.file_id).map((f) => `${f.file_name}: ${f.error ?? f.note ?? "not kept"}`).join("; ") : up.error;
+          router.push(`/os/requests/${r.data.request_id}?${new URLSearchParams({ files: `${kept} of ${files.length} files attached. ${why}`.slice(0, 400) })}`);
+          return { ok: false, error: `Request filed, but ${files.length - kept} file(s) were not attached: ${why}. Attach them on the request.` };
+        }
+      }
       return r;
     }, files.length ? "Request filed with its files. Routing it now..." : "Request filed. Routing it now...",
     (r) => router.push(`/os/requests/${r.data.request_id}`));

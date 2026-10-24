@@ -69,7 +69,10 @@ export default async function Home({ searchParams }: { searchParams: Params }) {
   // every other action across the platform waiting on the viewer: each run the Design and Build boards count as theirs
   // (unless one of their workflows here already shows it), approvals, models and checks in review, knowledge and skill
   // proposals, fixes, incidents. One queue with the workflows; these wait on the viewer, so they are in every view.
-  const covered = new Set(action.flatMap((r) => r.items.map((i) => i.run_id)).filter(Boolean) as string[]);
+  // a run is shown through its workflow only when that workflow's wait on it is the viewer's; the runs of its other
+  // sources that wait on the viewer still get their own rows (else the boards would count them and Home would not)
+  const covered = new Set(action.flatMap((r) => r.waits.filter((w) => w.item_id && requestNeedsMe({ ...r, waits: [w] }, access))
+    .map((w) => r.items.find((i) => i.item_id === w.item_id)?.run_id)).filter(Boolean) as string[]);
   const platform = await loadActions(access, covered);
 
   const view = VIEWS.find((v) => v.key === searchParams.view)?.key ?? (action.length + platform.items.length ? "action" : "active");
@@ -78,8 +81,14 @@ export default async function Home({ searchParams }: { searchParams: Params }) {
   // the search bar matches workflows by meaning (synonyms, intent such as "waiting on me"), best first; when the search
   // is not reachable, by their title. Other actions match on their words (intent words alone keep them all).
   const q = query.toLowerCase();
-  const rank = searched?.data ? new Map(searched.data.results.map((x, i) => [x.id, i])) : null;
-  const matches = (r: OnboardingRequest) => !q || (rank ? rank.has(r.request_id) : r.title.toLowerCase().includes(q));
+  // a query that is only intent ("waiting on me", "failed") filters with Home's own rule over every workflow: the
+  // search sees only a request's first wait and caps its results
+  const only = searched?.data && !searched.data.intent.terms.length && (searched.data.intent.mine || searched.data.intent.failed)
+    ? searched.data.intent : null;
+  const rank = searched?.data && !only ? new Map(searched.data.results.map((x, i) => [x.id, i])) : null;
+  const matches = (r: OnboardingRequest) => !q
+    || (only ? (!only.mine || yours(r, access)) && (!only.failed || !!r.attention)
+      : rank ? rank.has(r.request_id) : r.title.toLowerCase().includes(q));
   const terms = searched?.data ? searched.data.intent.terms : q.split(/\s+/).filter(Boolean);
   const failedOnly = !!searched?.data?.intent.failed;
   const platformMatches = (a: ActionItem) => (!failedOnly || a.tone === "red")

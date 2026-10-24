@@ -394,17 +394,30 @@ def _shape(spec: Dict[str, Any]) -> Dict[str, List[str]]:
 
 
 def pack_changes(approved: Dict[str, Any], pack: Dict[str, Any], model_id: str) -> Optional[Dict[str, Any]]:
-    """The approved model with the pack applied, when the pack adds, drops or reshapes a table; None when its tables
-    and columns are what the approved model has (pure). Tables the pack no longer has are retired in the result
-    (shown in the review, never deleted). Descriptions alone do not count: a deploy would otherwise open a draft for
-    every wording difference between a pack and the model people approved."""
+    """The approved model with the pack applied, when the pack adds a table or a column, or no longer has a table; None
+    otherwise (pure). Tables the pack no longer has are retired in the result (shown in the review, never deleted).
+    Columns are never taken away: a column the approved model has and the pack does not (a live Silver column the
+    contract does not list, say) is kept as it is, so a draft never drops a column nobody asked to drop. Descriptions
+    alone do not count either: a deploy would otherwise open a draft for every wording difference."""
     from services.modeling import importers, spec_v2
 
     base = spec_v2.normalize_v2(approved, model_id)
     incoming = spec_v2.spec_from_pack(pack, model_id)
-    if _shape(base) == _shape(incoming):
+    have, want = _shape(base), _shape(incoming)
+    added = any(t not in have or set(cols) - set(have[t]) for t, cols in want.items())
+    dropped_tables = set(have) - set(want)
+    if not added and not dropped_tables:
         return None
-    return importers.merge(base, incoming, model_id, replace=True)
+    merged = importers.merge(base, incoming, model_id, replace=True)
+    # keep every column of a table both have that the pack does not list, as the approved model has it
+    before = {e["entity_name"]: e for e in base["design"]["entities"]}
+    for e in merged["design"]["entities"]:
+        old = before.get(e["entity_name"])
+        if not old or e.get("status") == "RETIRED":
+            continue
+        names = {a["name"] for a in e["attributes"]}
+        e["attributes"] += [a for a in old["attributes"] if a["name"] not in names]
+    return merged
 
 
 def pack_digest(pack: Dict[str, Any]) -> str:

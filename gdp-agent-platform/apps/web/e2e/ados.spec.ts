@@ -118,7 +118,7 @@ test("Home lists the build workflows by view, type, intent and name, and starts 
   for (const row of await page.getByTestId("workflow-row").all()) await expect(row).toContainText(/(New|Enhance) source/);
   await page.getByTestId("home-search").fill("zz-no-such-workflow");
   await page.waitForURL(/q=zz-no-such-workflow/);
-  await expect(page.getByText('No workflow matches "zz-no-such-workflow"')).toBeVisible();
+  await expect(page.getByText('Nothing matches "zz-no-such-workflow"')).toBeVisible();
   // Start a workflow: New and Enhance for a domain and a source open Intake; data products are coming soon
   await page.goto("/os");
   await expect(page.getByTestId("start-product-new")).toHaveAttribute("aria-disabled", "true");
@@ -454,7 +454,7 @@ test("a new domain is requested by name and onboarded by the administrator; data
 // Build: what is ready (design done), built end to end by autopilot up to code review.
 test("Ready to build shows each domain's design readiness and builds ready runs end to end", async ({ page }) => {
   await page.goto("/os");
-  await expect(railLinks(page).filter({ hasText: "Build" })).toHaveAttribute("href", "/os/build/ready");
+  await expect(railLinks(page).filter({ hasText: "Build" })).toHaveAttribute("href", "/os/build");
   await page.goto("/os/build/ready");
   await expect(page.getByRole("heading", { level: 1 })).toHaveText("Ready to build");
   await expect(page.getByRole("list", { name: "Flow" }).getByRole("link")).toHaveText([/Intake/, /Enable/, /Design/, /Build/, /Review/]);

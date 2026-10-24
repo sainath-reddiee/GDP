@@ -29,18 +29,28 @@ const ORDER: Stage[] = ["intake", "enable", "design", "build", "review", "done"]
 export const pastStage = (run: Pick<RunSummary, "current_state" | "current_stage">, stage: Stage) =>
   run.current_state !== "FAILED" && run.current_state !== "CANCELLED" && ORDER.indexOf(stageOfRun(run)) > ORDER.indexOf(stage);
 
-/** The runs every board and Home read: the same list, so their counts agree. */
+/** The runs every board and Home read: the same list, so their counts agree. The most recently updated runs, plus
+ *  every run at a gate and every failed run however long they have waited (a gate untouched for weeks would otherwise
+ *  sort past the limit and drop off). */
 export const RUNS_QUERY = "sort=updated&limit=500";
+export const RUNS_WAITING = ["needs_review=true&sort=updated&limit=500", "status=failed&sort=updated&limit=500"];
+export function mergeRuns<T extends { run_id: string }>(...lists: T[][]): T[] {
+  const seen = new Set<string>();
+  return lists.flat().filter((r) => (seen.has(r.run_id) ? false : (seen.add(r.run_id), true)));
+}
 
 /** A run waits on the viewer: a gate they decide, a failed validation or run they operate, or a step their persona
  *  works. One rule for Home and the Design and Build boards (a gate the viewer may only raise a change request on is
  *  not theirs to act on, so it is not "Action required"). */
 export function runNeedsMe(run: Pick<RunSummary, "current_state" | "lifecycle">, access: Grants & { persona?: { states: string[] } }): boolean {
   const s = run.current_state;
+  // the data quality checks are approved by Build end to end too (AUTOPILOT_APPROVES_DQ), as the request routes them
+  if (s === "SODA_REVIEW") return has(access, GATES[s].privilege) || has(access, "RUN.OPERATE");
   if (s in GATES) return has(access, GATES[s].privilege);
   if (s === "VALIDATION_FAILED" || s === "FAILED") return has(access, "RUN.OPERATE");
-  // a step the viewer's persona works (the Data Designer profiles and maps without RUN.OPERATE), while no agent runs it
-  return !!access.persona?.states.includes(s) && run.lifecycle === "RUNNING" && !RUNNING_STATES.has(s);
+  // a step the viewer's persona works (the Data Designer profiles and maps without RUN.OPERATE), while no agent runs
+  // it; a run not started yet (CREATED) is a draft, still somebody's step
+  return !!access.persona?.states.includes(s) && (run.lifecycle === "RUNNING" || run.lifecycle === "DRAFT") && !RUNNING_STATES.has(s);
 }
 
 /** States where an agent is working: nobody has anything to do until it finishes. */

@@ -106,3 +106,18 @@ def test_an_open_version_is_left_alone():
     cur = Cur([{"version": 2, "status": "DRAFT"}, {"version": 1, "status": "APPROVED"}])
     log = pack_drafts(cur, "DEV", {did: 1})
     assert len(log) == 1 and "version 2 is already open" in log[0]
+
+
+def test_a_draft_never_drops_a_column_the_pack_does_not_list():
+    # the approved model has a live column the contract does not list: no draft for that alone, and a draft opened for
+    # another reason keeps it
+    approved = spec_v2.spec_from_pack(NEW, "m1")
+    first = approved["design"]["entities"][0]
+    first["attributes"].append({**first["attributes"][0], "name": "LIVE_ONLY_COLUMN", "id": "x-live"})
+    approved = spec_v2.normalize_v2(approved, "m1")
+    assert pack_changes(approved, NEW, "m1") is None
+    grown = json.loads(json.dumps(NEW))
+    grown["targets"][1]["columns"].append({"name": "NEW_COL", "type": "VARCHAR", "nullable": True})
+    merged = pack_changes(approved, grown, "m1")
+    names = {a["name"] for e in merged["design"]["entities"] if e["entity_name"] == first["entity_name"] for a in e["attributes"]}
+    assert "LIVE_ONLY_COLUMN" in names

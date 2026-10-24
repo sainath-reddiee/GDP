@@ -44,7 +44,7 @@ const EVENT: Record<string, (e: RequestEvent) => string> = {
   FILES_HANDED_OVER: () => "Files added to the domain's documents",
 };
 
-export default async function RequestPage({ params }: { params: { id: string } }) {
+export default async function RequestPage({ params, searchParams }: { params: { id: string }; searchParams?: { files?: string } }) {
   const access = await guard("requests");
   const [detail, sources, runs, domains] = await Promise.all([loadRequest(params.id), loadSources(), loadRuns("sort=updated&limit=200"), loadDomains()]);
   const r = detail.data;
@@ -85,6 +85,7 @@ export default async function RequestPage({ params }: { params: { id: string } }
         </>}
       />
       <SourceError what="Part of the request" error={sources.error ?? runs.error} />
+      {searchParams?.files && <Banner tone="amber" icon={AlertTriangle}><b>Not every file was attached.</b> {searchParams.files} Attach them again under Files.</Banner>}
       {r.status === "DONE" && <Banner icon={CheckCircle2}><b>Done.</b> The domain is ready and every source is onboarded{r.closed_at ? ` (${ago(r.closed_at)})` : ""}.</Banner>}
       {(r.status === "CANCELLED" || r.status === "REJECTED") && (
         <Banner tone="amber" icon={r.status === "REJECTED" ? X : Ban}><b>{pretty(r.status)} by {r.closed_by}</b>{r.close_reason ? `: ${r.close_reason}` : "."}</Banner>
